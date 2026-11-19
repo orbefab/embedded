@@ -74,8 +74,8 @@ A command does what it names and nothing in the background. Where `orbe` could g
 - `parts.lock` keeps one line per part id, so a project takes each id from one registry. Its registry field is the registry's name, such as `@orbefab`, not a URL, so a registry that moves changes one line of config and no lock. [registry.md](registry.md) is the client contract.
 
 ## Scenes (Nov 4 2026)
-- A scene is its own kind of file, usually `scene.jsonc`. Its keys are `format`, `parts`, `wires`, `layout`, `sim` and `nets`. It has no `pins` or `params`, and no file can use a scene as a part.
-- Scenes and part files are JSONC: JSON plus `//` comments and trailing commas, nothing more. `orbe` generates a JSON Schema, `parts/schema.json`, from the project's parts. A file's `$schema` key points editors at it for completion and value checks.
+- A scene is its own kind of file, usually `scene.jsonc`. Its keys are `format`, `$schema`, `parts`, `wires`, `layout`, `ground`, `nets`, `sim` and `world`. It has no `pins` or `params`, and no file can use a scene as a part.
+- Scenes and part files are JSONC: JSON plus `//` comments and trailing commas, nothing more. A file may carry a `$schema` key, which `orbe` ignores. No schema file is generated.
 - An instance has a `type` (a catalog id, or a `./` path to a part of your own), its params, and an optional `not_simulated` reason.
 - `wires` lists pin pairs, such as `["nano.D2", "btn1.a"]`, and `orbe` works out the nets. Every wire has a kind. `jumper` is the default and is drawn. `trace` (copper on a board) and `contact` (two pins touching, such as a leg in a breadboard hole) are not drawn. Drawing traces comes later.
 - `layout` sits in the parent, keyed by name, with `{ "at": [x, y, z], "rotate": [rx, ry, rz] }` in mm and degrees. The rotation is about the parent's fixed X, then Y, then Z, URDF's order. In a scene, `on` plugs a part into a board's holes in place of `at`, as [Breadboards](#breadboards-nov-8-2026) says. `mate` is reserved for later.

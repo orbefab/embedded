@@ -293,7 +293,7 @@ An LED behind 10 kohm from 5 V carries about 0.35 mA and reads `dim`. When `step
 - An input lands at the session's time or later, and its reply gives the time. A `set` also lands after the last change the scene's `steps` schedule, so it never undoes one.
 - `step --until <condition> [--timeout <duration>]` first reads the condition now. If it holds, it takes no time. Otherwise it steps until it holds, up to the timeout, 10s by default. A pin condition stops 1 ps after the exact edge. `@led1.i` shows that current there, and the light state follows the average over 20 ms. Other conditions are read every 1 ms, so the reply says `by 104ms`. A timeout is the error `until_timeout`.
 - Serial can reach orbe up to one engine step (10 ms) after the chip sends it. Step a little past a print before you expect it.
-- A session stops at 2 hours of simulated time. Reads still work there, and `press`, `release`, `set` and `step` fail with `ended`. A `step` that would pass the stop fails with `past_stop`. Run `orbe open` to start again.
+- A session stops at 2 hours of simulated time. Reads still work there, and `press`, `release`, `set`, `step` and `play` fail with `ended`. Run `orbe open` to start again. A `step` by a time that would pass the stop fails with `past_stop`, and its hint names the time left. A `step --until` whose timeout passes the stop runs to the stop, and fails with `ended` if its condition has not held by then.
 
 A switch with `bounce` set bounces up to `max_bounces` times within that window after each `press` and `release`, and an input on it lands after the window of the one before. With this one-line change to the worked example's `scene.jsonc`,
 
@@ -413,9 +413,11 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 | `session_crashed` | The session's process died. Run `orbe open` again. |
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |
 | `not_settable` | `press` and `release` work only on a switch, by its part name. `set` works only on a quantity the scene's `world` names or a part reads. |
+| `wrong_setting` | `press` and `release` do not apply: the part takes a different input, such as a trimmer's `position`. Set that param in the scene and run `orbe open` again. |
 | `no_change` | The input asks for the state already there, such as `set light 50` when the light is already 50. |
 | `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`. When an LED timeout covers a full 20 ms, the hint names the measured average, the state, and the range the wanted state needs, and says to check the circuit with `snapshot`. A shorter window says to step longer. Otherwise fix the circuit or the firmware, or step longer. |
-| `ended`, `past_stop` | The session reached its 2-hour stop. Run `orbe open`. |
+| `ended` | The session reached its 2-hour stop. Reads still work. Run `orbe open` before `press`, `release`, `set`, `step` or `play`. |
+| `past_stop` | A `step` would end past the stop, or an input would land past it. Step at most the time the hint names. When the message says the input would land past the stop, run `orbe open`. |
 | `cancelled` | Ctrl-C stopped a `step`. The session stays at the time it reached. Step again. |
 | `faulted` | The engine stopped the session. The message names why. Fix it and run `orbe open`. |
 
