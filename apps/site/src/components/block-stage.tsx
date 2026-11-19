@@ -65,7 +65,6 @@ export function BlockStage({
       <div className="mt-3">
         <div data-testid="view-preview-panel" hidden={view !== "preview"}>
           {children}
-          <p className="mt-3 text-muted-foreground text-sm">The real engine runs the firmware in your browser. Use the controls in the view.</p>
         </div>
         <div data-testid="view-code-panel" hidden={view !== "code"}>
           {sources.length === 0 ? (

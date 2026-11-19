@@ -738,6 +738,18 @@ test.describe("nano-button-led", () => {
     await waitGlow(page, false);
   });
 
+  test("a click still presses after a hold the window losing focus cut short", async () => {
+    await page.getByTestId("hold-to-press").focus();
+    await page.keyboard.down("Space");
+    await waitGlow(page, true);
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    await waitGlow(page, false);
+    await page.keyboard.up("Space");
+    await page.evaluate(() => (document.querySelector("[data-testid='hold-to-press']") as HTMLButtonElement).click());
+    await waitGlow(page, true);
+    await waitGlow(page, false);
+  });
+
   test("a mouse click on the hold control presses once, not twice", async () => {
     await page.getByTestId("hold-to-press").click();
     // A second, click-driven press would hold for 300 ms.
