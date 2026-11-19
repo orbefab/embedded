@@ -6,7 +6,7 @@
 # `full tier`. `orbe-avr` and `orbe-microchip` are in that workspace run. `full` runs the
 # microchip tests once, in their `port-skip-check` build, instead of in the workspace run.
 # `web` runs the viewer unit tests and the viewer and site checks, each once: `check-viewer.sh`,
-# `check-viewer-e2e.sh`, `check-block.sh`, `check-headed.sh` and `check-site.sh`.
+# `check-viewer-e2e.sh`, `check-block.sh`, `check-headed.sh`, `check-site.sh` and `check-engines.sh`.
 # `check-assets.sh` stays separate, because it needs a models checkout.
 # `full` runs `fast`, then the chip models' skip checks, the engine's Python checks,
 # `ngspice_refs.py --check`, `orbe-run` for WASI against native, the wasm package check, the
@@ -14,7 +14,10 @@
 # the speed check run once, not again in `web`.
 # `lint` needs uv and shellcheck, and `fast` and `full` need cargo-nextest too.
 # `web` needs Node 24, pnpm, the repo's Node dependencies, a Chromium as
-# scripts/check-viewer-e2e.sh finds it, and what scripts/wasm.sh and scripts/site.sh need.
+# scripts/check-viewer-e2e.sh finds it, the Firefox and WebKit scripts/check-engines.sh
+# finds, and what scripts/wasm.sh and scripts/site.sh need. Install the browsers with
+# `pnpm exec playwright install chromium firefox webkit`. On Ubuntu, Firefox and WebKit
+# also need `sudo pnpm exec playwright install-deps firefox webkit`.
 # `full` also needs ngspice-42, rustup with the wasm32-wasip1 target, and the wasm-bindgen CLI
 # that scripts/wasm.sh names.
 set -euo pipefail
@@ -140,6 +143,7 @@ web() {
   scripts/check-block.sh
   scripts/check-headed.sh
   scripts/check-site.sh
+  scripts/check-engines.sh
 }
 
 [[ $# -eq 1 ]] || usage
