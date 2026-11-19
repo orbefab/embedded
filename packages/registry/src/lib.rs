@@ -277,11 +277,12 @@ fn manifest(src: &Path) -> Result<Manifest, Error> {
 /// part or a Block.
 pub fn build(src: &Path, previous: Option<&Path>) -> Result<Registry, Error> {
     match fs::metadata(src) {
+        Ok(meta) if meta.is_dir() => {}
+        Ok(_) => return Err(Error::Invalid(format!("no folder at {}", src.display()))),
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             return Err(Error::Invalid(format!("no folder at {}", src.display())));
         }
         Err(error) => return Err(io_error(src, error)),
-        Ok(_) => {}
     }
     let manifest = manifest(src)?;
     let parts = folders(src, "parts")?;

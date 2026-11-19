@@ -115,23 +115,26 @@ fn a_missing_manifest_or_source_folder_names_what_is_missing() {
     );
     assert!(!out.exists());
 
-    let missing = dir.path().join("missing-src");
-    let (code, stdout, stderr) = orbe(&[
-        "registry",
-        "build",
-        missing.to_str().unwrap(),
-        out.to_str().unwrap(),
-    ]);
-    assert_eq!(code, Some(1), "{stdout}{stderr}");
-    assert_eq!(stdout, "");
-    assert_eq!(
-        stderr,
-        format!(
-            "error[registry_invalid]: no folder at {}\n  hint: name the folder that holds registry.jsonc, parts/ and blocks/\n",
-            missing.display()
-        )
-    );
-    assert!(!out.exists());
+    let file = dir.path().join("a-file");
+    std::fs::write(&file, "").unwrap();
+    for not_a_folder in [dir.path().join("missing-src"), file] {
+        let (code, stdout, stderr) = orbe(&[
+            "registry",
+            "build",
+            not_a_folder.to_str().unwrap(),
+            out.to_str().unwrap(),
+        ]);
+        assert_eq!(code, Some(1), "{stdout}{stderr}");
+        assert_eq!(stdout, "");
+        assert_eq!(
+            stderr,
+            format!(
+                "error[registry_invalid]: no folder at {}\n  hint: name the folder that holds registry.jsonc, parts/ and blocks/\n",
+                not_a_folder.display()
+            )
+        );
+        assert!(!out.exists());
+    }
 }
 
 #[test]
