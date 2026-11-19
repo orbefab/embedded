@@ -581,6 +581,19 @@ test.describe("nano-button-led", () => {
     expect(await ledGlow(page)).toBeLessThan(0.05);
   });
 
+  test("a click with no key or pointer before it, as a screen reader sends, presses briefly", async () => {
+    await page.evaluate(() => (document.querySelector("[data-testid='hold-to-press']") as HTMLButtonElement).click());
+    await waitGlow(page, true);
+    await waitGlow(page, false);
+  });
+
+  test("a mouse click on the hold control presses once, not twice", async () => {
+    await page.getByTestId("hold-to-press").click();
+    // A second, click-driven press would hold for 300 ms.
+    await page.waitForTimeout(150);
+    expect(await ledGlow(page)).toBeLessThan(0.05);
+  });
+
   test("hiding the page releases a hold", async () => {
     const control = page.getByTestId("hold-to-press");
     await control.focus();
@@ -740,6 +753,22 @@ test("every part page draws with no viewer error", async ({ browser, host }) => 
     if (id === "led-5mm") await expect(page.getByTestId("shown-at")).toHaveText("Shown at red.");
     if (id === "trimmer-3362p") await expect(page.getByTestId("shown-at")).toHaveCount(0);
   }
+  await context.close();
+});
+
+test("with no WebGL 2 a part page says so and does not say which value it shows", async ({ browser, host }) => {
+  const context = await browser.newContext();
+  await context.addInitScript(() => {
+    const real = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, kind: string, ...rest: unknown[]) {
+      if (kind === "webgl2") return null;
+      return (real as (...args: unknown[]) => unknown).call(this, kind, ...rest);
+    } as typeof real;
+  });
+  const page = await context.newPage();
+  await page.goto(`${host.base}/embedded/parts/resistor-axial/`);
+  await expect(page.getByTestId("no-webgl")).toBeVisible();
+  await expect(page.getByTestId("shown-at")).toHaveCount(0);
   await context.close();
 });
 

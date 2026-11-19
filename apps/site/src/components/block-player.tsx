@@ -17,6 +17,8 @@ function PressControl({ hold }: { hold: { readonly current: ButtonHold | null } 
   const down = useRef(0);
   const keys = useRef(new Set<string>());
   const pointers = useRef(new Set<number>());
+  // A key or pointer gesture also fires a click when it ends; that click is not a second press.
+  const gesture = useRef(false);
 
   const press = () => {
     down.current += 1;
@@ -54,20 +56,35 @@ function PressControl({ hold }: { hold: { readonly current: ButtonHold | null } 
     event.preventDefault();
     if (event.repeat || keys.current.has(event.key)) return;
     keys.current.add(event.key);
+    gesture.current = true;
     press();
   };
   const onKeyUp = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (!keys.current.delete(event.key)) return;
+    endGesture();
     releaseOne();
   };
   const onPointerDown = (event: PointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0 || pointers.current.has(event.pointerId)) return;
     pointers.current.add(event.pointerId);
+    gesture.current = true;
     press();
   };
   const onPointerEnd = (event: PointerEvent<HTMLButtonElement>) => {
     if (!pointers.current.delete(event.pointerId)) return;
+    endGesture();
     releaseOne();
+  };
+  const endGesture = () => {
+    setTimeout(() => {
+      gesture.current = false;
+    }, 0);
+  };
+  // A click with no key or pointer gesture before it, as a screen reader sends, presses briefly.
+  const onClick = () => {
+    if (gesture.current || down.current > 0) return;
+    press();
+    setTimeout(releaseOne, 300);
   };
 
   return (
@@ -75,6 +92,7 @@ function PressControl({ hold }: { hold: { readonly current: ButtonHold | null } 
       className="mt-3 touch-none rounded-md border border-border px-3 py-1.5 text-sm outline-none hover:border-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
       data-testid="hold-to-press"
       onBlur={drop}
+      onClick={onClick}
       onKeyDown={onKeyDown}
       onKeyUp={onKeyUp}
       onPointerCancel={onPointerEnd}

@@ -92,12 +92,7 @@ export function PartPage({ part }: { part: PartView }) {
       )}
 
       <div className="mt-8">
-        <PartModel url={at.partView(record.name)} />
-        {part.shown === undefined ? null : (
-          <p className="mt-3 text-muted-foreground text-sm" data-testid="shown-at">
-            {part.shown}
-          </p>
-        )}
+        <PartModel shown={part.shown} url={at.partView(record.name)} />
       </div>
 
       <Section title="Pins">
