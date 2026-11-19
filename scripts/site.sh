@@ -6,7 +6,8 @@
 # nothing. Pass `--previous <dir>`, the registry the live site serves, so the build keeps every
 # version it served (docs/registry.md, Versions). Pass `--first-deploy` when there is no earlier
 # registry. One of the two is required. ORBE_SITE_INSTALL=1 shows install lines, once the repo
-# and the binaries are public, and copies scripts/install.sh to /embedded/install.sh.
+# and the binaries are public, and copies scripts/install.sh to /embedded/install.sh. The footer
+# links the repo either way.
 #
 # The Block firmware links the AVR runtime under the LGPL, so the site serves the runtime's source
 # beside it, at /embedded/sources/. The archive is the one packages/engine/scripts/sketches.sh

@@ -21,10 +21,13 @@ export function Stage({
   label,
   children,
   onWebgl,
+  fill = false,
 }: {
   label: string;
   children: () => ReactNode;
   onWebgl?: (webgl: boolean) => void;
+  /** Fill the parent instead of the fixed stage height. The embed route uses this. */
+  fill?: boolean;
 }) {
   const [webgl, setWebgl] = useState<boolean | null>(null);
   const report = useRef(onWebgl);
@@ -35,7 +38,9 @@ export function Stage({
     report.current?.(ok);
   }, []);
   return (
-    <div className="relative h-[min(62vh,560px)] overflow-hidden rounded-lg border border-border bg-[#1b1d21]">
+    <div
+      className={`relative overflow-hidden border border-border bg-[var(--stage,#1b1d21)] ${fill ? "h-full min-h-0" : "h-[min(62vh,560px)]"}`}
+    >
       {webgl === false ? (
         <p className="absolute inset-0 grid place-items-center px-6 text-center text-sm" data-testid="no-webgl">
           This browser has no WebGL, so this view stays blank.

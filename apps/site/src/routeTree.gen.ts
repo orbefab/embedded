@@ -15,6 +15,7 @@ import { Route as BlocksIndexRouteImport } from './routes/blocks/index'
 import { Route as BlocksIdRouteImport } from './routes/blocks/$id'
 import { Route as PartsIndexRouteImport } from './routes/parts/index'
 import { Route as PartsIdRouteImport } from './routes/parts/$id'
+import { Route as BlocksIdEmbedRouteImport } from './routes/blocks/$id_.embed'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -46,6 +47,11 @@ const PartsIdRoute = PartsIdRouteImport.update({
   path: '/parts/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const BlocksIdEmbedRoute = BlocksIdEmbedRouteImport.update({
+  id: '/blocks/$id_/embed',
+  path: '/blocks/$id/embed',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -54,6 +60,7 @@ export interface FileRoutesByFullPath {
   '/parts/$id': typeof PartsIdRoute
   '/blocks/': typeof BlocksIndexRoute
   '/parts/': typeof PartsIndexRoute
+  '/blocks/$id/embed': typeof BlocksIdEmbedRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -62,6 +69,7 @@ export interface FileRoutesByTo {
   '/parts/$id': typeof PartsIdRoute
   '/blocks': typeof BlocksIndexRoute
   '/parts': typeof PartsIndexRoute
+  '/blocks/$id/embed': typeof BlocksIdEmbedRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -71,13 +79,27 @@ export interface FileRoutesById {
   '/parts/$id': typeof PartsIdRoute
   '/blocks/': typeof BlocksIndexRoute
   '/parts/': typeof PartsIndexRoute
+  '/blocks/$id_/embed': typeof BlocksIdEmbedRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    '/' | '/404' | '/blocks/$id' | '/parts/$id' | '/blocks/' | '/parts/'
+    | '/'
+    | '/404'
+    | '/blocks/$id'
+    | '/parts/$id'
+    | '/blocks/'
+    | '/parts/'
+    | '/blocks/$id/embed'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/404' | '/blocks/$id' | '/parts/$id' | '/blocks' | '/parts'
+  to:
+    | '/'
+    | '/404'
+    | '/blocks/$id'
+    | '/parts/$id'
+    | '/blocks'
+    | '/parts'
+    | '/blocks/$id/embed'
   id:
     | '__root__'
     | '/'
@@ -86,6 +108,7 @@ export interface FileRouteTypes {
     | '/parts/$id'
     | '/blocks/'
     | '/parts/'
+    | '/blocks/$id_/embed'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -95,6 +118,7 @@ export interface RootRouteChildren {
   PartsIdRoute: typeof PartsIdRoute
   BlocksIndexRoute: typeof BlocksIndexRoute
   PartsIndexRoute: typeof PartsIndexRoute
+  BlocksIdEmbedRoute: typeof BlocksIdEmbedRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -141,6 +165,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof PartsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/blocks/$id_/embed': {
+      id: '/blocks/$id_/embed'
+      path: '/blocks/$id/embed'
+      fullPath: '/blocks/$id/embed'
+      preLoaderRoute: typeof BlocksIdEmbedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -151,6 +182,7 @@ const rootRouteChildren: RootRouteChildren = {
   PartsIdRoute: PartsIdRoute,
   BlocksIndexRoute: BlocksIndexRoute,
   PartsIndexRoute: PartsIndexRoute,
+  BlocksIdEmbedRoute: BlocksIdEmbedRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

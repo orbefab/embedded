@@ -9,6 +9,8 @@ export interface BlockPlayerProps {
   readonly blocks: readonly { readonly name: string; readonly title: string; readonly button: boolean }[];
   readonly registry: string;
   readonly wasm: string;
+  /** Fill the frame: the stage grows, and the caption and hold control sit under it. */
+  readonly fill?: boolean;
 }
 
 /** Holds the circuit's button while a pointer, Space or Enter is down on this control, and
@@ -109,7 +111,7 @@ function PressControl({ hold }: { hold: { readonly current: ButtonHold | null } 
 
 /** The first Block live in 3D, with a tab for each other Block. Switching a tab frees the
  * Block before it. A Block whose scene places a part with a press input gets the hold control. */
-export function BlockPlayer({ blocks, registry, wasm }: BlockPlayerProps) {
+export function BlockPlayer({ blocks, registry, wasm, fill = false }: BlockPlayerProps) {
   const [shown, setShown] = useState(blocks[0]?.name ?? "");
   const [webgl, setWebgl] = useState<boolean | null>(null);
   const hold = useRef<ButtonHold | null>(null);
@@ -119,7 +121,7 @@ export function BlockPlayer({ blocks, registry, wasm }: BlockPlayerProps) {
   const pressable = block?.button === true && webgl === true;
 
   return (
-    <div>
+    <div className={fill ? "flex h-full min-h-0 min-w-0 flex-col" : undefined}>
       {blocks.length > 1 ? (
         <div className="mb-3 flex flex-wrap gap-2" role="tablist">
           {blocks.map((item) => (
@@ -137,8 +139,8 @@ export function BlockPlayer({ blocks, registry, wasm }: BlockPlayerProps) {
           ))}
         </div>
       ) : null}
-      <div data-testid="block-stage">
-        <Stage label="Loading the Block" onWebgl={setWebgl}>
+      <div className={fill ? "min-h-0 min-w-0 flex-1" : undefined} data-testid="block-stage">
+        <Stage fill={fill} label="Loading the Block" onWebgl={setWebgl}>
           {() => (
             <Suspense fallback={null}>
               <BlockView hold={hold} id={shown} key={shown} registry={registry} wasm={wasm} />
@@ -147,11 +149,15 @@ export function BlockPlayer({ blocks, registry, wasm }: BlockPlayerProps) {
         </Stage>
       </div>
       {webgl === false ? null : (
-        <p className="mt-3 text-muted-foreground text-sm" data-testid="block-caption">
+        <p className={`text-muted-foreground text-sm ${fill ? "shrink-0 px-3 pt-3 break-words" : "mt-3"}`} data-testid="block-caption">
           {caption}
         </p>
       )}
-      {pressable ? <PressControl hold={hold} key={shown} /> : null}
+      {pressable ? (
+        <div className={fill ? "shrink-0 px-3 pb-3" : undefined} key={shown}>
+          <PressControl hold={hold} />
+        </div>
+      ) : null}
     </div>
   );
 }

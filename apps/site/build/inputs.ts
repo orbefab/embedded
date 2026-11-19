@@ -85,7 +85,7 @@ async function assemble(install: boolean): Promise<SiteData> {
   return siteData(catalog, { registry: catalog.name, engine: { version: engine.version, commit } }, shown);
 }
 
-/** `install` is ORBE_SITE_INSTALL=1: install lines and repo links show. */
+/** `install` is ORBE_SITE_INSTALL=1: install lines show. The footer links the repo either way. */
 export function siteInputs(install: boolean): Plugin {
   let data: SiteData | null = null;
   return {

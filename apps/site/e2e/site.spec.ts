@@ -6,7 +6,7 @@ import { collectLogs, expect, ledGlow, orbeJson, rendersDir, REPO, repoBlocks, s
 import { captionOf } from "../src/captions";
 import { parseJsonc } from "../src/jsonc";
 
-const INSTALL = /orbe add|cargo install|github\.com\/orbefab\/embedded|orbefab\.com\/embedded\/install\.sh/;
+const INSTALL = /orbe add|cargo install|orbefab\.com\/embedded\/install\.sh/;
 const VIEW = { width: 1280, height: 900 };
 const QUERIES = ["led", "5 mm", "kingbright", "board", "resistor 0603", "smd", "avr usb", "nano-board", "Push", "MICROCHIP"];
 
@@ -236,87 +236,61 @@ test.describe("landing", () => {
   let page: Page;
   let errors: string[] = [];
   let urls: string[] = [];
-  let weight: () => Promise<Weight> = async () => ({ requests: 0, bytes: 0, gzip: 0, wasm: false });
 
   test.beforeAll(async ({ browser, host }) => {
-    ({ context, page, errors, urls, weight } = await openTracked(browser, `${host.base}/embedded/`));
+    ({ context, page, errors, urls } = await openTracked(browser, `${host.base}/embedded/`));
   });
 
   test.afterAll(async () => {
     await context?.close();
   });
 
-  test("the landing page says what orbe is", async () => {
-    expect(await page.textContent("h1")).toBe("orbe");
+  test("the start page says what orbe is", async () => {
+    expect(await page.textContent("h1")).toBe("A hardware simulator for the AI agent you already use.");
+    expect(await page.title()).toBe("Get orbe | Orbefab");
+    const body = await bodyText(page);
+    expect(body).toContain("GET ORBE");
+    expect(body).toContain("orbe runs real firmware on simulated Arduino boards, so your agent can test a circuit before you build it.");
+    expect(body).toContain("Use the AI agent you already have, on your own subscription.");
+    expect(body).toContain("Every step is a command an agent can run, and orbe skills get core tells it how.");
+    expect(body).toContain("In a terminal for the agent, or live in 3D for you, on every Block page.");
+    expect(body).toContain("Boards today:");
   });
 
-  test("the first Block plays on the landing page", async () => {
-    await page.waitForFunction(() => window.orbeViewer?.get().scene.getObjectByName("@btn1") !== undefined, null, { timeout: 30_000 });
-    await page.waitForFunction(() => performance.getEntriesByName("orbe:first-frame:nano-button-led").length > 0, null, { timeout: 30_000 });
-    await waitState(page, "playing");
-    expect(await page.locator('[data-testid="state"]').textContent()).toBe("playing");
-    await expect(page.getByTestId("block-caption")).toHaveText(captionOf("nano-button-led"));
-    await expect(page.getByTestId("hold-to-press")).toHaveText("Hold to press");
-    expect(await page.getByTestId("block-stage").getAttribute("tabindex")).toBeNull();
+  test("the start page has no player and no Block cards", async () => {
+    await expect(page.getByTestId("block-stage")).toHaveCount(0);
+    await expect(page.locator("canvas")).toHaveCount(0);
+    await expect(page.locator("[data-scene-parts]")).toHaveCount(0);
   });
 
-  test("the landing page shows no install command", async () => {
-    const first = await page.evaluate(
-      (name) => performance.getEntriesByName(name)[0]?.startTime ?? null,
-      "orbe:first-frame:nano-button-led",
-    );
-    await page.waitForTimeout(500);
-    const loaded = await weight();
-    console.log(
-      `     landing: first Block frame at ${Math.round(first ?? 0)} ms; ${loaded.requests} requests, ${loaded.bytes} bytes, ${loaded.gzip} gzipped, the Worker's wasm ${loaded.wasm ? "included" : "missing"}`,
-    );
+  test("the start page shows no install command", async () => {
     const body = await bodyText(page);
     expect(INSTALL.test(body), body.match(INSTALL)?.[0] ?? "").toBe(false);
+    await expect(page.getByTestId("scene-file")).toHaveCount(0);
   });
 
-  test("it says the CLI is coming", async () => {
-    expect(await page.locator('[data-testid="cli-coming"]').count()).toBe(1);
+  test("each step says the CLI is coming", async () => {
+    expect(await page.locator('[data-testid="cli-coming"]').count()).toBe(4);
     await shot(page, "site-landing");
   });
 
-  test("a card counts the parts the scene places", async () => {
-    expect(await cardCounts(page)).toEqual(sceneCards());
-  });
-
-  test("switching to nano-led-fade terminates the first Worker and revokes every object URL it made", async () => {
-    await page.click('[data-block="nano-led-fade"]');
-    await page.waitForFunction(() => performance.getEntriesByName("orbe:first-frame:nano-led-fade").length > 0, null, { timeout: 30_000 });
-    const freed = await page.evaluate(() => {
-      const { workers, created, revoked } = window.orbeTrack;
-      const [one, two] = workers;
-      const before = created.slice(0, two.created);
-      return {
-        workers: workers.length,
-        firstTerminated: one.terminated,
-        secondTerminated: two.terminated,
-        firstUrls: before.length,
-        firstRevoked: before.filter((url) => revoked.has(url)).length,
-        secondRevoked: created.slice(two.created).filter((url) => revoked.has(url)).length,
-      };
-    });
-    expect(
-      freed.workers === 2 &&
-        freed.firstTerminated &&
-        !freed.secondTerminated &&
-        freed.firstUrls > 0 &&
-        freed.firstRevoked === freed.firstUrls &&
-        freed.secondRevoked === 0,
-      JSON.stringify(freed),
-    ).toBe(true);
-  });
-
-  test("nano-led-fade plays after the switch", async () => {
-    await waitState(page, "playing");
-    expect(await page.locator('[data-testid="state"]').textContent()).toBe("playing");
-    await expect(page.getByTestId("block-caption")).toHaveText(captionOf("nano-led-fade"));
-    await expect(page.getByTestId("hold-to-press")).toHaveCount(0);
-    await page.waitForTimeout(1500);
-    await shot(page, "site-landing-switched");
+  test("the header and footer are the shared ones", async () => {
+    const header = page.locator("header");
+    await expect(header.getByRole("link", { name: "Blocks" })).toHaveAttribute("href", "/embedded/blocks/");
+    await expect(header.getByRole("link", { name: "Parts" })).toHaveAttribute("href", "/embedded/parts/");
+    await expect(header.getByRole("link", { name: "Get orbe" })).toHaveAttribute("href", "/embedded/");
+    await expect(header.getByRole("link", { name: "Get orbe" })).toHaveAttribute("aria-current", "page");
+    await expect(header.locator("a").first()).toHaveAttribute("href", "/");
+    expect(await header.innerText()).not.toMatch(/embedded/i);
+    const footer = await page.locator("footer").innerText();
+    expect(footer.startsWith("© 2026 Orbefab")).toBe(true);
+    expect(footer).toContain("orbe and its catalog are open source under MIT or Apache-2.0, unless a file says otherwise. Each file lists its own license.");
+    expect(footer).toContain("Maker names say which real part a model matches. Orbefab is not affiliated with or endorsed by those makers, and the models carry no logos.");
+    await expect(page.locator('footer a[href="https://github.com/orbefab/embedded/releases"]')).toHaveText("Releases");
+    await expect(page.locator('footer a[href="https://github.com/orbefab/embedded"]')).toHaveText("GitHub");
+    await expect(page.locator('footer a[href="/brand"]')).toHaveText("Brand");
+    await expect(page.locator('footer a[href="https://github.com/orbefab/embedded/blob/main/LICENSE-MIT"]')).toHaveText("License");
+    expect(await bodyText(page)).toContain("Catalog @orbefab at /embedded/r/index.json");
   });
 
   test("the landing page logged no error", () => {
@@ -945,7 +919,7 @@ test("a touch drag on empty stage space does not press the button", async ({ bro
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });
   const page = await context.newPage();
   const errors = collectLogs(page, "errors");
-  await page.goto(`${host.base}/embedded/`);
+  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
   await page.waitForFunction(() => window.orbeViewer?.get().scene.getObjectByName("@btn1") !== undefined, null, { timeout: 30_000 });
   await waitState(page, "playing");
   await waitGlow(page, false);
@@ -1019,6 +993,9 @@ test("every part page draws with no viewer error", async ({ browser, host }) => 
     expect(errors, `${id} ${JSON.stringify(errors)}`).toEqual([]);
     if (id === "resistor-axial") {
       await expect(page.getByTestId("shown-at")).toHaveText("Shown at 220 Ω.");
+      const sentence = await bodyText(page);
+      expect(sentence, id).toContain("above 0 Ω");
+      expect(sentence, id).not.toContain("0 pΩ");
       const bands = await page.evaluate(() => {
         const root = window.orbeViewer.get().scene.getObjectByName("@resistor_axial");
         return ["band1-brown", "band2-black", "band3-orange", "band4-gold"].map((node) => {
@@ -1062,15 +1039,148 @@ test("an unknown path answers 404 with the site's page and logs no page error", 
     expect(
       response?.status() === 404 &&
         (await page.textContent("h1")) === "Nothing moves here." &&
-        (await page.title()) === "Not found | orbe" &&
+        (await page.title()) === "Not found | Orbefab" &&
         (await bodyText(page)).includes("404 NOT FOUND") &&
         (await bodyText(page)).includes("Try the parts or the Blocks.") &&
-        (await page.locator('a[href="/"]').textContent()) === "Back home" &&
+        (await page.getByRole("link", { name: "Back home" }).textContent()) === "Back home" &&
         pageErrors.length === 0,
       JSON.stringify({ path, status: response?.status(), title: await page.title(), pageErrors }),
     ).toBe(true);
     await context.close();
   }
+});
+
+function lumaOf(hex: string): number {
+  const value = Number.parseInt(hex, 16);
+  const red = (value >> 16) & 255;
+  const green = (value >> 8) & 255;
+  const blue = value & 255;
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}
+
+async function stageHex(page: Page): Promise<string> {
+  return page.evaluate(() => window.orbeViewer.get().scene.background.getHexString());
+}
+
+test("the theme choice persists across a reload and between pages", async ({ browser, host }) => {
+  const context = await browser.newContext();
+  await context.addInitScript(() => {
+    const seen = [];
+    localStorage.setItem("theme", "light");
+    const watch = (el) => {
+      const note = () => seen.push(el.className);
+      note();
+      new MutationObserver(note).observe(el, { attributes: true, attributeFilter: ["class"] });
+    };
+    const root = document.documentElement;
+    if (root) watch(root);
+    else {
+      new MutationObserver((_records, observer) => {
+        const el = document.documentElement;
+        if (!el) return;
+        observer.disconnect();
+        watch(el);
+      }).observe(document, { childList: true });
+    }
+    Object.assign(window, { themeClasses: seen });
+  });
+  const page = await context.newPage();
+  await page.goto(`${host.base}/embedded/parts/`);
+  await page.waitForTimeout(300);
+  const seen = await page.evaluate(() => (window as unknown as { themeClasses: string[] }).themeClasses);
+  expect(seen.every((name) => !name.split(/\s+/).includes("dark")), JSON.stringify(seen)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.classList.contains("light"))).toBe(true);
+  await page.reload();
+  expect(await page.evaluate(() => localStorage.getItem("theme"))).toBe("light");
+  expect(await page.evaluate(() => document.documentElement.classList.contains("light"))).toBe(true);
+  await page.goto(`${host.base}/embedded/blocks/`);
+  expect(await page.evaluate(() => document.documentElement.classList.contains("light"))).toBe(true);
+  expect(await page.evaluate(() => localStorage.getItem("theme"))).toBe("light");
+  await context.close();
+});
+
+test("the viewer background follows the theme on a Block, a part and the embed", async ({ browser, host }) => {
+  test.setTimeout(180_000);
+  const context = await browser.newContext({ viewport: VIEW });
+  const page = await context.newPage();
+  const ready = (name: string) =>
+    page.waitForFunction((objectName) => window.orbeViewer?.get().scene.getObjectByName(objectName) !== undefined, name, { timeout: 60_000 });
+
+  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+  await ready("@btn1");
+  const dark = await stageHex(page);
+  expect(dark).toBe("1b1d21");
+  const darkMat = await page.evaluate(() => {
+    const mesh = window.orbeViewer.get().scene.getObjectByName("stage-mat");
+    const canvas = mesh?.material?.map?.image as HTMLCanvasElement | undefined;
+    const pixel = canvas?.getContext("2d")?.getImageData(32, 32, 1, 1).data;
+    return pixel === undefined ? "" : `${pixel[0]},${pixel[1]},${pixel[2]}`;
+  });
+  expect(darkMat).toBe("50,54,60");
+  await page.getByRole("button", { name: "Switch to light mode" }).click();
+  await page.waitForFunction(() => window.orbeViewer.get().scene.background.getHexString() !== "1b1d21");
+  const light = await stageHex(page);
+  expect(lumaOf(light)).toBeGreaterThan(lumaOf(dark));
+  const lightControls = await page.getByTestId("controls").evaluate((element) => getComputedStyle(element).color);
+  expect(lightControls).not.toBe("");
+
+  await page.goto(`${host.base}/embedded/parts/resistor-axial/`);
+  await ready("@resistor_axial");
+  expect(lumaOf(await stageHex(page))).toBeGreaterThan(lumaOf(dark));
+
+  await page.goto(`${host.base}/embedded/blocks/nano-button-led/embed/`);
+  await ready("@btn1");
+  expect(lumaOf(await stageHex(page))).toBeGreaterThan(lumaOf(dark));
+  await page.evaluate(() => {
+    localStorage.setItem("theme", "dark");
+    window.dispatchEvent(new StorageEvent("storage", { key: "theme" }));
+  });
+  await page.waitForFunction(() => window.orbeViewer.get().scene.background.getHexString() === "1b1d21");
+  expect(await stageHex(page)).toBe("1b1d21");
+  await context.close();
+});
+
+test("the embed route is the player alone and does not overflow at 320px", async ({ browser, host }) => {
+  const context = await browser.newContext({ viewport: { width: 320, height: 640 } });
+  const page = await context.newPage();
+  const response = await page.goto(`${host.base}/embedded/blocks/nano-button-led/embed/`);
+  expect(response?.ok()).toBe(true);
+  const headers = response?.headers() ?? {};
+  expect((headers["x-frame-options"] ?? "").toLowerCase()).not.toContain("deny");
+  expect(headers["content-security-policy"] ?? "").not.toContain("frame-ancestors 'none'");
+  expect(await page.locator('meta[name="robots"]').getAttribute("content")).toBe("noindex");
+  await expect(page.locator("header")).toHaveCount(0);
+  await expect(page.locator("footer")).toHaveCount(0);
+  await expect(page.getByTestId("block-embed")).toBeVisible();
+  await page.waitForFunction(() => window.orbeViewer?.get().scene.getObjectByName("@btn1") !== undefined, null, { timeout: 60_000 });
+  await expect(page.getByTestId("block-caption")).toBeVisible();
+  await expect(page.getByTestId("hold-to-press")).toBeVisible();
+  const wide = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
+  expect(wide).toBe(false);
+  await context.close();
+});
+
+test("every page title ends with | Orbefab", async ({ browser, host }) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const pages: readonly (readonly [string, string])[] = [
+    ["/embedded/", "Get orbe | Orbefab"],
+    ["/embedded/blocks/", "Blocks | Orbefab"],
+    ["/embedded/parts/", "Parts | Orbefab"],
+    ["/embedded/blocks/nano-button-led/", "Button and LED on a Nano | Orbefab"],
+    ["/embedded/blocks/nano-button-led/embed/", "Button and LED on a Nano | Orbefab"],
+    ["/embedded/parts/resistor-axial/", ""],
+    ["/embedded/no-such-page", "Not found | Orbefab"],
+  ];
+  for (const [path, exact] of pages) {
+    const response = await page.goto(`${host.base}${path}`);
+    expect(response !== null, path).toBe(true);
+    const title = await page.title();
+    expect(title.endsWith(" | Orbefab"), `${path} ${title}`).toBe(true);
+    if (exact !== "") expect(title, path).toBe(exact);
+    if (path.endsWith("/embed/")) expect(title.startsWith("Button and LED"), title).toBe(true);
+  }
+  await context.close();
 });
 
 test.describe("cache", () => {

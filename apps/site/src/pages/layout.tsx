@@ -1,61 +1,109 @@
 import { Wordmark } from "@orbe/brand/mark";
+import { useRouterState } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { CopyButton } from "../components/copy-button";
-import { at } from "../paths";
+import { ThemeToggle } from "../components/theme-toggle";
+import { at, sitePath } from "../paths";
 import type { Site } from "../records";
 
-export function Header() {
+type Section = "blocks" | "parts" | "get";
+
+function sectionOf(pathname: string): Section | null {
+  const path = sitePath(pathname);
+  if (/^\/blocks\/[^/]+\/embed\/?$/.test(path)) return null;
+  if (path === "/blocks" || path.startsWith("/blocks/")) return "blocks";
+  if (path === "/parts" || path.startsWith("/parts/")) return "parts";
+  if (path === "/" || path === "") return "get";
+  return null;
+}
+
+function NavLink({ href, label, current, accent }: { href: string; label: string; current: boolean; accent?: boolean }) {
   return (
-    <header className="border-border border-b">
-      <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-4 px-6 py-4">
-        <a className="flex items-center gap-3" href={at.home}>
-          <Wordmark className="text-[1.25rem]" />
-          <span className="font-mono text-muted-foreground text-xs uppercase tracking-[0.16em]">embedded</span>
+    <a
+      aria-current={current ? "page" : undefined}
+      className={`relative inline-flex min-h-11 items-center px-3 font-mono text-[0.6875rem] uppercase tracking-[0.16em] hover:text-foreground ${
+        current ? "text-foreground" : accent ? "text-brand" : "text-muted-foreground"
+      }`}
+      href={href}
+    >
+      {label}
+      {current ? <span className="absolute inset-x-3 bottom-2 h-0.5 bg-brand" /> : null}
+    </a>
+  );
+}
+
+/** The header both sites share. The wordmark goes to the Orbefab home. Get orbe is the one
+ * orange link. The open section keeps an orange underline. On a phone the links drop to a
+ * second row. */
+export function Header() {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const section = sectionOf(pathname);
+  return (
+    <header className="sticky top-0 z-50 border-border border-b bg-[color-mix(in_srgb,var(--background)_86%,transparent)] backdrop-blur-[8px]">
+      <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-3 max-sm:flex-wrap max-sm:gap-0 max-sm:py-1.5">
+        <a className="inline-flex min-h-11 min-w-0 items-center max-sm:order-1 max-sm:flex-1" href="/">
+          <Wordmark className="text-[1.35rem]" />
         </a>
-        <nav className="flex items-center gap-5 font-mono text-muted-foreground text-xs uppercase tracking-[0.16em]">
-          <a className="transition-colors hover:text-foreground" href={at.parts}>
-            Parts
-          </a>
-          <a className="transition-colors hover:text-foreground" href={at.blocks}>
-            Blocks
-          </a>
-          <a className="transition-colors hover:text-foreground" href={at.website}>
-            Orbefab
-          </a>
-        </nav>
+        <div className="flex items-center gap-1 max-sm:contents">
+          <nav aria-label="Main" className="flex items-center max-sm:order-3 max-sm:-mx-6 max-sm:mt-1.5 max-sm:w-[calc(100%+3rem)] max-sm:border-border max-sm:border-t max-sm:px-3">
+            <NavLink current={section === "blocks"} href={at.blocks} label="Blocks" />
+            <NavLink current={section === "parts"} href={at.parts} label="Parts" />
+            <NavLink accent current={section === "get"} href={at.home} label="Get orbe" />
+          </nav>
+          <ThemeToggle className="max-sm:order-2" />
+        </div>
       </div>
     </header>
   );
 }
 
+function FooterLink({ href, children }: { href: string; children: string }) {
+  return (
+    <li>
+      <a className="inline-flex min-h-[1.9rem] items-center text-sm hover:text-brand" href={href}>
+        {children}
+      </a>
+    </li>
+  );
+}
+
+const footerLabel = "font-mono text-[0.6875rem] text-muted-foreground uppercase tracking-[0.16em]";
+
+/** The footer both sites share. orbe pages add the catalog address. */
 export function Footer({ site }: { site: Site }) {
   return (
     <footer className="mt-24 border-border border-t">
-      <div className="mx-auto grid max-w-5xl gap-3 px-6 py-10 text-muted-foreground text-sm">
-        <p>
-          orbe and this catalog are open source under MIT OR Apache-2.0, unless a file says otherwise. Each file lists its own license.
-          {__ORBE_SITE_INSTALL__ ? (
-            <>
-              {" "}
-              The source is at{" "}
-              <a className="underline hover:text-foreground" href="https://github.com/orbefab/embedded">
-                github.com/orbefab/embedded
-              </a>
-              .
-            </>
-          ) : null}
-        </p>
-        <p>
-          Maker names on these pages say which real part a model matches. Orbefab is not affiliated with or endorsed by those makers, and the models
-          carry no logos.
-        </p>
-        <p className="font-mono text-xs">
-          Catalog {site.registry} at{" "}
-          <a className="underline hover:text-foreground" href={at.index}>
-            {at.index}
-          </a>
-        </p>
+      <div className="mx-auto grid max-w-7xl gap-x-12 gap-y-8 px-6 pt-10 pb-6 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,0.6fr)_minmax(0,0.6fr)]">
+        <div className="grid max-w-[34rem] content-start gap-2.5 text-[0.8125rem] text-muted-foreground max-sm:col-span-2 sm:col-span-1">
+          <p className="font-mono text-foreground text-xs">© 2026 Orbefab</p>
+          <p>orbe and its catalog are open source under MIT or Apache-2.0, unless a file says otherwise. Each file lists its own license.</p>
+          <p>Maker names say which real part a model matches. Orbefab is not affiliated with or endorsed by those makers, and the models carry no logos.</p>
+        </div>
+        <div>
+          <p className={footerLabel}>orbe</p>
+          <ul className="mt-2.5">
+            <FooterLink href={at.home}>Get orbe</FooterLink>
+            <FooterLink href={at.blocks}>Blocks</FooterLink>
+            <FooterLink href={at.parts}>Parts</FooterLink>
+            <FooterLink href="https://github.com/orbefab/embedded/releases">Releases</FooterLink>
+            <FooterLink href="https://github.com/orbefab/embedded">GitHub</FooterLink>
+          </ul>
+        </div>
+        <div>
+          <p className={footerLabel}>Orbefab</p>
+          <ul className="mt-2.5">
+            <FooterLink href="/">Home</FooterLink>
+            <FooterLink href="/brand">Brand</FooterLink>
+            <FooterLink href="https://github.com/orbefab/embedded/blob/main/LICENSE-MIT">License</FooterLink>
+          </ul>
+        </div>
       </div>
+      <p className="mx-auto max-w-7xl px-6 pb-10 font-mono text-[0.6875rem] text-muted-foreground">
+        Catalog {site.registry} at{" "}
+        <a className="underline underline-offset-[3px] hover:text-brand" href={at.index}>
+          {at.index}
+        </a>
+      </p>
     </footer>
   );
 }

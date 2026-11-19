@@ -13,6 +13,8 @@ const PREFIXES: readonly (readonly [number, string])[] = [
  * of `1` is a bare number. */
 export function si(value: number, unit = "1"): string {
   if (unit === "1") return String(value);
+  // Zero is not above any prefix, and "0 pΩ" is not how a lower bound reads.
+  if (value === 0) return `0 ${unit === "ohm" ? "Ω" : unit}`;
   const [scale, prefix] = PREFIXES.find(([scale]) => Math.abs(value) >= scale) ?? [1e-12, "p"];
   const scaled = (value / scale).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
   return `${scaled} ${prefix}${unit === "ohm" ? "Ω" : unit}`;

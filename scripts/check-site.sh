@@ -2,8 +2,9 @@
 # Checks the site. It runs the type check, the circuit unit tests and the brand check, then a
 # build with ORBE_SITE_INSTALL=1 that must give every part and Block a page with its install
 # line. Playwright drives that build once, on `vite preview`, for the checks that need the
-# install line. Then it runs the build as it deploys, whose own files must show no install line
-# and no repo link, and which must serve the AVR runtime source every Block's NOTICE names.
+# install line. Then it runs the build as it deploys, whose own files must show no install line.
+# The footer links the repo either way. The build must serve the AVR runtime source every
+# Block's NOTICE names.
 # Playwright then drives that build in headless Chromium twice: on `vite preview`, and on
 # `wrangler dev --local`.
 #
@@ -73,7 +74,7 @@ pnpm --filter @orbe/site test
 scripts/brand.sh check
 dist=apps/site/dist/client
 own() { grep -rlE "$1" "$dist" --exclude-dir=r --exclude-dir=orbe-wasm --exclude-dir=sources || true; }
-pages() { find "$dist/$1" -mindepth 2 -name index.html | wc -l; }
+pages() { find "$dist/$1" -mindepth 2 -maxdepth 2 -name index.html | wc -l; }
 listed() {
   # console.log colors a number when FORCE_COLOR is set, and [[ ]] then rejects the count.
   node -e 'const index = require(process.argv[1]); process.stdout.write(String(new Set(index.items.filter((row) => row.type === process.argv[2]).map((row) => row.name)).size) + "\n")' \
@@ -83,18 +84,19 @@ listed() {
 ORBE_SITE_INSTALL=1 scripts/site.sh "${site[@]}" >/dev/null
 parts=$(pages parts)
 blocks=$(pages blocks)
-[[ $parts -eq $(listed part) && $blocks -eq $(listed block) ]] ||
-  fail "the build has $parts part and $blocks Block pages, and the registry lists $(listed part) and $(listed block)"
+embeds=$(find "$dist/blocks" -mindepth 3 -maxdepth 3 -name index.html | wc -l)
+[[ $parts -eq $(listed part) && $blocks -eq $(listed block) && $embeds -eq $blocks ]] ||
+  fail "the build has $parts part, $blocks Block and $embeds embed pages, and the registry lists $(listed part) and $(listed block)"
 [[ $(grep -rlE 'orbe add [a-z]' "$dist/parts" "$dist/blocks" --include=index.html | wc -l) -eq $((parts + blocks)) ]] ||
   fail "with ORBE_SITE_INSTALL=1, not every part and Block page shows its orbe add line"
 grep -q 'curl -fsSL https://orbefab.com/embedded/install.sh | sh' "$dist/index.html" ||
-  fail "with ORBE_SITE_INSTALL=1, the landing page shows no install line"
+  fail "with ORBE_SITE_INSTALL=1, Get orbe shows no install line"
 [[ -f $dist/install.sh ]] || fail "with ORBE_SITE_INSTALL=1, the build does not serve install.sh"
 cmp -s scripts/install.sh "$dist/install.sh" ||
   fail "with ORBE_SITE_INSTALL=1, install.sh is not scripts/install.sh"
 grep -q 'href="https://github.com/orbefab/embedded"' "$dist/index.html" ||
-  fail "with ORBE_SITE_INSTALL=1, the landing page links no repo"
-echo "check-site: ORBE_SITE_INSTALL=1 shows orbe add on $parts part and $blocks Block pages, and the install script and the repo on the landing page"
+  fail "with ORBE_SITE_INSTALL=1, Get orbe links no repo"
+echo "check-site: ORBE_SITE_INSTALL=1 shows orbe add on $parts part and $blocks Block pages, and the install script and the repo on Get orbe"
 
 # 8787 is wrangler's default and may already be taken. Ask the OS for a free port.
 free_port() {
@@ -111,9 +113,13 @@ unset ORBE_SITE_INSTALL_E2E ORBE_SITE_SERVERS
 
 scripts/site.sh "${site[@]}"
 [[ ! -e $dist/install.sh ]] || fail "install.sh is served with ORBE_SITE_INSTALL unset"
-shown=$(own 'orbe add|cargo install|github\.com/orbefab/embedded|orbefab\.com/embedded/install\.sh')
-[[ -z $shown ]] || fail "these files of the site's own show an install line or a repo link with ORBE_SITE_INSTALL unset: $shown"
-echo "check-site: no file of the site's own shows an install line or a repo link with ORBE_SITE_INSTALL unset"
+shown=$(own 'orbe add|cargo install|orbefab\.com/embedded/install\.sh')
+[[ -z $shown ]] || fail "these files of the site's own show an install line with ORBE_SITE_INSTALL unset: $shown"
+grep -q 'href="https://github.com/orbefab/embedded"' "$dist/index.html" ||
+  fail "the footer does not link the repo"
+grep -q 'name="robots" content="noindex"' "$dist/blocks/nano-button-led/embed/index.html" ||
+  fail "the embed page is not noindex"
+echo "check-site: no file of the site's own shows an install line with ORBE_SITE_INSTALL unset, and the footer links the repo"
 
 pin() { sed -n "s/^$1=//p" packages/engine/scripts/sketches.sh; }
 archive=$(pin runtime_url)
