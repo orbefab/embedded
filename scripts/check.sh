@@ -110,7 +110,7 @@ full() {
   run_check st77916-replay render_st77916.py packages/engine/tests/circuits/st77916-replay/events.json
   run_check esp32s3-blink esp32s3_blink.py
   run_check esp32s3-pattern render_st77916.py --pattern packages/engine/tests/firmware/esp32s3/pattern.json
-  for name in hello screen encoder touch dualcore echo ring uart pulls timers; do
+  for name in hello screen encoder touch dualcore echo ring uart pulls adc timers; do
     run_check "esp32s3-$name" "esp32s3_$name.py"
   done
   knob_dir=$(mktemp -d "${TMPDIR:-/tmp}/knob-script.XXXXXX")
