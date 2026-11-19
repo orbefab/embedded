@@ -2,6 +2,7 @@
 //! with its fix when it failed. Text by default, one JSON envelope with `--json`.
 
 use std::fmt::{self, Write as _};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -124,6 +125,15 @@ impl Error {
             message: message.into(),
             hint: hint.into(),
         }
+    }
+
+    /// The refusal for a path that is not a scene file. `open` and `check` both use it.
+    pub fn missing_scene(scene: &Path) -> Error {
+        Error::new(
+            Code::IoError,
+            format!("no scene file at {}", scene.display()),
+            "write the scene, or name its path",
+        )
     }
 }
 

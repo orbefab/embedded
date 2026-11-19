@@ -314,3 +314,52 @@ fn a_ref_with_nothing_to_read_says_what_can_be_read() {
     assert_eq!(error["code"], "no_reading", "{error}");
     assert_eq!(error["hint"], "name one of its parts: r, sw");
 }
+
+#[test]
+fn a_folder_named_like_a_test_file_is_skipped_and_the_run_summarizes() {
+    let dir = project("open\nexpect @led1 off\n");
+    fs::create_dir(dir.path().join("tests/mid.test")).unwrap();
+    fs::write(dir.path().join("tests/z.test"), "open\nexpect @led1 off\n").unwrap();
+    let run = orbe(dir.path(), &["test"]);
+    assert_eq!(
+        (run.code, run.stdout.as_str(), run.stderr.as_str()),
+        (
+            0,
+            "PASS tests/a.test\nPASS tests/z.test\n2 passed, 0 failed\n",
+            ""
+        )
+    );
+
+    fs::remove_file(dir.path().join("tests/a.test")).unwrap();
+    fs::remove_file(dir.path().join("tests/z.test")).unwrap();
+    let run = orbe(dir.path(), &["test"]);
+    assert_eq!(run.code, 2, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stderr.starts_with("error[usage]: no tests in tests\n"),
+        "{}",
+        run.stderr
+    );
+    assert!(!run.stderr.contains("Is a directory"), "{}", run.stderr);
+}
+
+#[test]
+fn a_utf8_byte_order_mark_on_a_scene_or_a_test_is_accepted() {
+    let dir = project("open\nexpect @led1 off\n");
+    for name in ["scene.jsonc", "tests/a.test"] {
+        let path = dir.path().join(name);
+        let text = fs::read_to_string(&path).unwrap();
+        fs::write(&path, format!("\u{feff}{text}")).unwrap();
+    }
+    let check = orbe(dir.path(), &["check", "scene.jsonc"]);
+    assert_eq!(check.code, 0, "{}{}", check.stdout, check.stderr);
+    assert!(
+        check.stdout.starts_with("scene.jsonc: ok"),
+        "{}",
+        check.stdout
+    );
+    let run = orbe(dir.path(), &["test"]);
+    assert_eq!(
+        (run.code, run.stdout.as_str(), run.stderr.as_str()),
+        (0, "PASS tests/a.test\n1 passed, 0 failed\n", "")
+    );
+}
