@@ -1,6 +1,17 @@
 nextest-version = "0.9.148"
 
 # scripts/check.sh selects this profile. The embedded default stops at the first failure.
+# A test that runs for five minutes is terminated, so a hang cannot hold the run open.
+# The long tests start first. A late start would otherwise set the wall time.
 [profile.ci]
 fail-fast = false
 retries = 0
+slow-timeout = { period = "60s", terminate-after = 5 }
+
+[[profile.ci.overrides]]
+filter = 'test(printed_add_hints_leave_a_check_that_is_clean_or_only_newer) or test(bytes_put_in_a_half_deleted_staging_folder_are_never_deleted) or test(a_kill_in_the_add_then_a_kill_in_recovery_keeps_every_edit) or test(a_failure_at_any_point_rolls_every_move_back) or test(every_hinted_path_moves_its_entry_in_sh_and_bash_from_where_the_user_ran) or test(serial_contains_searches_everything_since_open)'
+priority = 100
+
+[[profile.ci.overrides]]
+filter = 'test(every_bad_fixture) or test(the_dualcore_probe_runs_the_same_however_the_run_splits) or test(arithmetic_flags_match) or test(tran::tests::limits::) or test(counted_runs::)'
+priority = 50
