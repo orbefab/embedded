@@ -44,6 +44,8 @@ export interface BlockView {
   readonly links: Readonly<Record<string, Linked>>;
   readonly circuit: BlockCircuit;
   readonly readme: readonly (readonly ReadmeRun[])[];
+  /** The scene places a part with a press input, so the page shows the hold control. */
+  readonly button: boolean;
 }
 
 /** Where a README link goes. `firmware/NOTICE` opens the license box. A web or mail address
@@ -121,16 +123,35 @@ function SceneParts({ circuit, links }: { circuit: BlockCircuit; links: BlockVie
   );
 }
 
-function CodeWord({ text, word }: { text: string; word: string }) {
-  const at = text.indexOf(word);
-  if (at < 0) return text;
-  return (
-    <>
-      {text.slice(0, at)}
-      <Code>{word}</Code>
-      {text.slice(at + word.length)}
-    </>
-  );
+function CodeWords({ text, words }: { text: string; words: readonly string[] }) {
+  const sorted = [...words].filter((word) => word.length > 0).sort((a, b) => b.length - a.length);
+  const nodes: ReactNode[] = [];
+  let rest = text;
+  let key = 0;
+  while (rest.length > 0) {
+    let foundAt = -1;
+    let found = "";
+    for (const word of sorted) {
+      const at = rest.indexOf(word);
+      if (at < 0) continue;
+      const before = at === 0 || /[^A-Za-z0-9_-]/.test(rest[at - 1] ?? "");
+      const after = at + word.length === rest.length || /[^A-Za-z0-9_-]/.test(rest[at + word.length] ?? "");
+      if (!before || !after) continue;
+      if (foundAt < 0 || at < foundAt) {
+        foundAt = at;
+        found = word;
+      }
+    }
+    if (foundAt < 0 || found === "") {
+      nodes.push(rest);
+      break;
+    }
+    if (foundAt > 0) nodes.push(rest.slice(0, foundAt));
+    nodes.push(<Code key={key}>{found}</Code>);
+    key += 1;
+    rest = rest.slice(foundAt + found.length);
+  }
+  return <>{nodes}</>;
 }
 
 function BoardFold({ circuit, links }: { circuit: BlockCircuit; links: BlockView["links"] }) {
@@ -145,7 +166,7 @@ function BoardFold({ circuit, links }: { circuit: BlockCircuit; links: BlockView
             <Code>orbe add</Code> copies them too.{" "}
           </>
         ) : null}
-        <CodeWord text={lists} word="parts.lock" />
+        <CodeWords text={lists} words={["parts.lock", ...new Set(circuit.placed.map((part) => part.id))]} />
       </summary>
       <ul className="mt-2 columns-1 gap-8 sm:columns-2">
         {board.own.map((part) => (
@@ -234,7 +255,7 @@ export function BlockPage({ block }: { block: BlockView }) {
       </p>
 
       <BlockStage install={<InstallSlot name={record.name} tests={circuit.tests} />} sources={circuit.sources}>
-        <BlockPlayer blocks={[{ name: record.name, title: record.title }]} registry={at.registry} wasm={at.wasm} />
+        <BlockPlayer blocks={[{ name: record.name, title: record.title, button: block.button }]} registry={at.registry} wasm={at.wasm} />
       </BlockStage>
 
       <Section title="How it works">

@@ -273,8 +273,28 @@ export function glanceLine(use: PartUse): { readonly label: string; readonly val
   return { label: "used in", value: "no Block yet", href: undefined };
 }
 
-/** The two sentences under the board. `brings` is the board's own parts. `lists` is why
- * `parts.lock` has the count it has, from the rows above and those parts. */
+const COUNT_WORD = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"] as const;
+
+function countWord(count: number): string {
+  return COUNT_WORD[count] ?? String(count);
+}
+
+/** The common name of a catalog part, from the id's first word: `resistor-axial` is "resistors". */
+function catalogNoun(id: string): string {
+  const stem = id.split("-")[0] ?? id;
+  if (/(?:s|x|z|ch|sh)$/.test(stem)) return `${stem}es`;
+  if (/[^aeiou]y$/.test(stem)) return `${stem.slice(0, -1)}ies`;
+  return `${stem}s`;
+}
+
+function boardShort(title: string): string {
+  return /^[A-Za-z0-9]+/.exec(title)?.[0] ?? title;
+}
+
+/** The two sentences under the board. `brings` counts the physical parts the board includes.
+ * `lists` says why `parts.lock` has its count. A placed part is one physical part. A catalog
+ * part is its type, and the lock lists each type once. Sharing is named only when the scene
+ * places one catalog part more than once. */
 export function lockSentences(circuit: BlockCircuit): { readonly brings: string; readonly lists: string } {
   const rows = circuit.placed.length;
   const counts = new Map<string, number>();
@@ -288,23 +308,28 @@ export function lockSentences(circuit: BlockCircuit): { readonly brings: string;
   const lock = circuit.lockCount;
   const word = (count: number) => (count === 1 ? "part" : "parts");
   const brings = `The ${circuit.board.title} brings ${own} ${word(own)} of its own.`;
-  const because =
-    repeats.length === 0
-      ? ""
-      : ` because ${repeats.map(([id, count]) => `the ${count} ${id} rows are one part`).join(" and ")}`;
-  const shared =
-    overlap === 0 ? "" : overlap === 1 ? " One of those parts is already on the board." : ` ${overlap} of those parts are already on the board.`;
   const sums = kinds + own - overlap === lock;
-  let lists: string;
-  if (repeats.length === 0 && overlap === 0) {
-    lists = `With the ${kinds} ${word(kinds)} above, parts.lock lists ${lock}.`;
-  } else if (repeats.length > 0 && overlap === 0 && sums) {
-    lists = `The ${rows} rows above are ${kinds} parts,${because}, so parts.lock lists ${lock}.`;
-  } else {
-    const reason = because === "" ? "" : `,${because}`;
-    lists = `The ${rows} rows above are ${kinds} parts${reason}.${shared} parts.lock lists ${lock}.`;
+  if (repeats.length === 0) {
+    const listed = `With the ${rows} ${word(rows)} above, parts.lock lists ${lock}.`;
+    if (overlap === 0) return { brings, lists: listed };
+    const already = overlap === 1 ? "One catalog part is already on the board." : `${overlap} catalog parts are already on the board.`;
+    return { brings, lists: `${listed} ${already}` };
   }
-  return { brings, lists };
+  const clauses = repeats.map(([id, count]) => `the ${countWord(count)} ${catalogNoun(id)} share one catalog part, ${id}`);
+  const first = clauses[0] ?? "";
+  const share = `${first.charAt(0).toUpperCase()}${first.slice(1)}${clauses
+    .slice(1)
+    .map((clause) => `, and ${clause}`)
+    .join("")}`;
+  const once = repeats.length === 1 ? "it" : "each";
+  const name = boardShort(circuit.board.title);
+  const already =
+    overlap === 0 ? "" : overlap === 1 ? " One catalog part is already on the board." : ` ${overlap} catalog parts are already on the board.`;
+  if (own > 0 && sums) {
+    return { brings, lists: `${share}, so parts.lock lists ${once} once.${already} With the ${name}'s own ${own}, it lists ${lock}.` };
+  }
+  if (sums) return { brings, lists: `${share}, so parts.lock lists ${lock}.` };
+  return { brings, lists: `${share}.${already} parts.lock lists ${lock}.` };
 }
 
 /** The index card's place line. A scene placement wins over a board the part only sits inside. */

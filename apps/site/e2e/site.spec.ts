@@ -850,7 +850,8 @@ test("each Block lists its scene files, its board's parts, its lock count and it
     const note = await summary.innerText();
     expect(note, id).toContain(`brings ${own.length}`);
     expect(note, id).toContain(`lists ${lock}`);
-    for (const [partId, count] of repeats) expect(note, id).toContain(`${count} ${partId} rows are one part`);
+    if (repeats.length === 0) expect(note, id).not.toContain("catalog part");
+    for (const [partId] of repeats) expect(note, id).toContain(`share one catalog part, ${partId}`);
     const tests = existsSync(join(REPO, "blocks", id, "tests"))
       ? readdirSync(join(REPO, "blocks", id, "tests")).filter((name) => name.endsWith(".test")).length
       : 0;

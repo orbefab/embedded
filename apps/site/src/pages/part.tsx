@@ -14,6 +14,8 @@ export interface PartView {
   readonly links: Readonly<Record<string, Linked>>;
   readonly use: PartUse;
   readonly where: string;
+  /** The value the 3D view is drawn at, when the part file names one the view shows. */
+  readonly shown?: string;
 }
 
 const QUANTITY: Readonly<Record<string, string>> = { i: "current", v: "voltage", p: "power" };
@@ -196,7 +198,9 @@ export function PartPage({ part }: { part: PartView }) {
       )}
 
       <div className="mt-8 grid grid-cols-[minmax(0,1fr)] items-start gap-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-        <PartModel url={at.partView(record.name)} />
+        <div className="min-w-0">
+          <PartModel shown={part.shown} url={at.partView(record.name)} />
+        </div>
         <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-8">
           <div>
             <Label>Install</Label>

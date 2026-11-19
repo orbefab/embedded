@@ -243,7 +243,9 @@ describe("lockSentences", () => {
     const own = Array.from({ length: 14 }, (_, index) => `child-${index}`);
     const { brings, lists } = lockSentences(circuit(rows, own, 21));
     expect(brings).toBe("The Nano (CH340 clone) brings 14 parts of its own.");
-    expect(lists).toBe("The 10 rows above are 7 parts, because the 4 resistor-axial rows are one part, so parts.lock lists 21.");
+    expect(lists).toBe(
+      "The four resistors share one catalog part, resistor-axial, so parts.lock lists it once. With the Nano's own 14, it lists 21.",
+    );
   });
 
   it("states the count when every row is its own part", () => {
@@ -254,16 +256,16 @@ describe("lockSentences", () => {
 
   it("says when a row is already one of the board's parts", () => {
     const { lists } = lockSentences(circuit([placed("nano", "nano-board"), placed("led", "led-0603")], ["led-0603", "cap", "resistor"], 4));
-    expect(lists).toBe("The 2 rows above are 2 parts. One of those parts is already on the board. parts.lock lists 4.");
+    expect(lists).toBe("With the 2 parts above, parts.lock lists 4. One catalog part is already on the board.");
   });
 
   it("names every repeated part and still states a lock the rows do not add up to", () => {
     const rows = [placed("a1", "aaa"), placed("a2", "aaa"), placed("a3", "aaa"), placed("a4", "aaa"), placed("b1", "bbb"), placed("b2", "bbb"), placed("c", "ccc")];
     expect(lockSentences(circuit(rows, [], 3)).lists).toBe(
-      "The 7 rows above are 3 parts, because the 4 aaa rows are one part and the 2 bbb rows are one part, so parts.lock lists 3.",
+      "The four aaas share one catalog part, aaa, and the two bbbs share one catalog part, bbb, so parts.lock lists 3.",
     );
     expect(lockSentences(circuit(rows, [], 99)).lists).toBe(
-      "The 7 rows above are 3 parts, because the 4 aaa rows are one part and the 2 bbb rows are one part. parts.lock lists 99.",
+      "The four aaas share one catalog part, aaa, and the two bbbs share one catalog part, bbb. parts.lock lists 99.",
     );
   });
 });
