@@ -56,7 +56,7 @@ The scene names `build/button.ino.hex`, the program alone:
 "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
 ```
 
-- Not `button.ino.eep`. It is EEPROM data. `orbe check` accepts it because it is a hex file, but the chip then runs no program.
+- Not `button.ino.eep`. It is EEPROM data, and for a sketch with no EEPROM data it holds no data record. `orbe check` refuses it with `error[scene.param]`, which says the firmware `has no data record, so the flash would be erased`.
 - Not `.elf` or `.bin`. `orbe check` refuses them as "not text".
 - Not `button.ino.with_bootloader.hex`. It runs, but it carries the bootloader too.
 
@@ -75,3 +75,7 @@ The path starts from the scene's folder. After each change to the sketch, compil
 - `Serial` output reaches orbe as text. After `Serial.begin(115200)` and `Serial.println("ready")`, `expect serial contains "ready"` passes. `println` ends a line with `\r\n`, and `step` lists the D1 edges it makes. Serial can reach orbe up to 10 ms after the chip sends it. A `println` in `loop` prints on every pass, so its text repeats.
 - Nothing sends serial into the chip. `Serial.read()` never gets a byte.
 - The program starts at t = 0 with no bootloader delay.
+- `SPI.transfer` returns what MISO (D12) reads, so wire D12 to the part that answers. With D12 tied to GND it returns 0, tied to 5V it returns 255, and wired to MOSI (D11) it returns the byte it sent.
+- `analogRead` of the chip's temperature sensor (`ADMUX` channel 8) reads the scene's `world` temperature, and 25 °C when the scene sets none.
+- A sketch that reaches a part of the chip the simulation does not run stops the run with an error that names the peripheral and the setting, such as `error[chip.unsupported_setting]` with `#nano__mcu read the AC output while the comparator is on`. The rows before it stand. The analog comparator (`ACSR` read, or its interrupt, capture or bandgap set), Timer2 on a 32 kHz crystal (`ASSR`), self-programming (`SPMCSR`), moving the vectors (`IVSEL`), synchronous or reserved USART modes, reserved ADC references or channels, a reserved sleep mode, and a flash word that is no instruction each stop it.
+- `Wire.begin(address)` makes the chip an I2C slave, which the simulation does not run. `step` warns `chip.unmodeled_register` on `TWAR` once, and nothing answers that address. `Wire.begin()` with no address is a master and runs. A write to `OSCCAL`, `analogRead(A6)` or `analogRead(A7)`, which read 0, and an I2C clock below about 18 kHz each warn the same way once, on `OSCCAL`, `ADMUX` or `TWBR`, and the run goes on.

@@ -156,7 +156,8 @@ fn a_pull_up_under_a_host_high_still_reports_its_drive() {
         timeline.run_until(100),
         Some(Halt {
             at: 2,
-            sample: false
+            sample: false,
+            refused: false
         })
     );
     assert_eq!(timeline.drives()[PB5 as usize], PinDrive::PullUp);

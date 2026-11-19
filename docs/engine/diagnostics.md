@@ -150,6 +150,7 @@ The message is `{ref} firmware line {line} {what}`, or `{ref} firmware {what}` w
 - `record_type`: the type is not 00 to 05.
 - `after_end`: a record follows the end-of-file record.
 - `no_end`: the text has no end-of-file record. `line` is `null`.
+- `empty`: the text has no data record, so the flash would be all erased. `line` is `null`. The `.eep` file a build writes beside the `.hex` holds only the end-of-file record when the sketch has no EEPROM data.
 - `past_flash`: a data byte lands at or past byte 32768, the end of the ATmega328P's flash.
 - `overlap`: a data byte lands where an earlier record placed one. `line` is the later record's.
 
@@ -447,6 +448,8 @@ The message is `{part} reached {what} at {pc}, which the model does not run, at 
 - `litbase`: an `l32r` while `LITBASE` is enabled.
 - `loop_end`: the op is the last of a zero-overhead loop and loops back, and it is a call, `isync`, `waiti` or `rsr.lcount`, which the ISA rules out there.
 
+On an `atmega328p`, `op` is `unknown`, a flash word that decodes to no instruction, and `reason` is `op`. The message reads `a word that decodes to no instruction` for `{what}`. `pc` is the word's byte address. An erased flash is all such words, so a firmware that runs off its end stops at the first one.
+
 ## chip.unsupported_setting
 
 Severity `error`. Refs are the chip. `t_ps` is the time of the store that started the transfer or set the setting. It ends the run.
@@ -494,6 +497,18 @@ The message is `{part} started a {peripheral} transfer with setting {setting} at
 - `ulp_controller`, `channels`, `pad_no_net`, `power`, `clock_off`, `held_in_reset`, `clk_div`, `arbiter`, `calibration`, `initial_code`, `dref`, `sample_cycle`, `internal_ground` and `test_mux`, with `peripheral` `SENS`: the store raised `MEASn_START_SAR` and the first of these held. `MEASn_START_FORCE` or `SARn_EN_PAD_FORCE` was clear, so the ULP would drive the start. `SARn_EN_PAD` named no channel, more than one, or one above 9. The channel's GPIO, `n + 1` on ADC1 and `n + 11` on ADC2, has no net. `FORCE_XPD_SAR` was not 3. `SARADC_CLK_EN` was clear. `SARADC_RESET` was set. `SARn_CLK_DIV` was 0. ADC2's arbiter had `ADC_ARB_GRANT_FORCE` set and `ADC_ARB_RTC_FORCE` clear. The chip's eFuse set gives IDF no calibration, or a `digi` of 0, as [esp32s3.md](esp32s3.md#the-sar-adcs) says. The unit's initial code in the analog I2C was not the one IDF works out from the set for the channel's attenuation. `DREF` was not 4. ADC1's `SAMPLE_CYCLE` was not 0. The unit's `ENCAL_GND` was set. A bit of the analog test mux, bits 0 to 4 of the SAR block's register 7, was set.
 
 The access writes nothing, apart from an `app_cpu_without_reset` or `pro_cpu_stall` store, whose word keeps the value it stored. An `app_cpu_without_reset` at the 1,000-cycle bound is not a store. The run keeps every row before it, as [esp32s3.md](esp32s3.md#what-it-models) says.
+
+An `atmega328p` ends the run on these, each a firmware store unless it says otherwise. `pc` is the instruction's byte address. The store completes, and nothing the chip does after it shows. [avr.md](avr.md#not-yet-modelled) gives each one's datasheet reason.
+
+- `aco_read`, with `peripheral` `AC`: a load of `ACSR` while `ACD` is clear. The message reads `read the AC output while the comparator is on` and ends `which the model works out from the logic level on each input pin, not its voltage`. A store that sets `ACD` within 1024 CPU cycles of the load shows it was `ACSR |= _BV(ACD)`, and clears it. A second load, a store that leaves `ACD` clear, or the 1024 cycles passing end the run at the load. The 1024 cycles are the model's bound, not a chip figure.
+- `ACIE`, `ACIC` and `ACBG`, with `peripheral` `AC`: the store left `ACD` clear and set that bit.
+- `ADTS`, with `peripheral` `ADC`: the store wrote `ADTS` 001, the comparator trigger, while `ACD` was clear.
+- `REFS` and `MUX`, with `peripheral` `ADC`: the store wrote `REFS` 10, or `MUX` 1001 to 1101.
+- `IVSEL`, with `peripheral` `CPU`: the store set `MCUCR.IVSEL`.
+- `SPMCSR`, with `peripheral` `BOOT_LOAD`: the store set a bit of `SPMCSR` below `SPMIE`. With `SPMIE` set, `setting` is `interrupt`.
+- `AS2` and `EXCLK`, with `peripheral` `TC2`: the store set that bit of `ASSR`.
+- `synchronous`, `UMSEL` and `UPM`, with `peripheral` `USART0`: the store wrote `UMSEL0` 01 or 10, or `UPM0` 01, to `UCSR0C`.
+- `sleep`, with `peripheral` `CPU`: a `SLEEP` with `SE` set in `SM` 100 or 101. The message reads `put the chip to sleep in a reserved sleep mode`, and `pc` is the `SLEEP`'s.
 
 ## chip.halted
 
@@ -595,6 +610,13 @@ Severity `warning`. Refs are the chip. `t_ps` is the time of the first access to
 The message is `{part} read {register} at {address}, which the model does not keep, first at {t_ps} ps from {pc}`, with `wrote` for a write and ` in {symbol}` after the PC when the firmware has a symbol at or below it. For a register the model keeps without running its effect, it reads `{part} wrote {register} at {address}, whose effect the model does not run, at {t_ps} ps from {pc}`.
 
 `data` holds `address`, `kept`, `pc`, `register`, `symbol` and `write`. `address` is the register's word address. `register` names it by its block and the offset into the block, such as `PCNT+0x0` or `TIMG0+0x24`. `pc` is the address of the instruction that made the access, and `symbol` is written as `chip.unsupported_instruction` writes it. `write` is true for a store. A read of such a register gives 0 and a store is dropped. The run reports each register once per chip, at its first access, whatever later accesses do. The registers whose writes change the slow clock or SPI0's read command, and the clock gate and reset bits of the peripherals the model keeps without running, are kept, and their effect does not run. `kept` is true for those and false for every other register. The run reports each write that changes one of those, every time, as [esp32s3.md](esp32s3.md#what-it-models) lists. For the peripherals' gate and reset words that is a write that changes a bit of SYSTIMER, TIMG0, TIMG1, SPI0 and SPI1, the eFuse controller, the USB Serial/JTAG unit, `SYSTEM_TIMERS` or `SYSTEM_WDG`. Such a write is listed once, when it lands, so a write that the core never runs again after it stops there is not listed. The list is the work queue of registers a firmware needs, as [esp32s3.md](esp32s3.md#unmodeled-registers) says.
+
+An `atmega328p` keeps every register, so each of its notes has `kept` true and `write` true, and the run lists each once, at the first store that makes it. `address` is the register's data address, and `register` is its datasheet name. [avr.md](avr.md#not-yet-modelled) gives each one's datasheet reason.
+
+- `TWAR`, at `0xba`: a store to `TWAR` while `TWCR` held `TWEN` and `TWEA`, or a store to `TWCR` that set both after a store to `TWAR` since the last reset. The TWI would answer as a slave, and the model has no slave modes.
+- `TWBR`, at `0xb8`: a store to `TWCR` that started a START at a bit rate whose data hold time passes Table 29-14's maximum, below about 18 kHz. The store is to `TWCR`, and the note names the register that sets the rate.
+- `OSCCAL`, at `0x66`: any store.
+- `ADMUX`, at `0x7c`: a store that selects ADC6 or ADC7, each listed once. The 28-pin package has no pad for them, so a conversion reads 0 V.
 
 ## trace.too_large
 

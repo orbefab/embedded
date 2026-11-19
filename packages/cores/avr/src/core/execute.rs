@@ -242,6 +242,9 @@ impl Core {
             }
             Op::Unknown(word) => {
                 self.unknown = Some(word);
+                if self.first_unknown.is_none() {
+                    self.first_unknown = Some((pc, self.cycles));
+                }
                 self.finish(next, 1);
             }
             bus_op!() => unreachable!("{op:?} is not free"),

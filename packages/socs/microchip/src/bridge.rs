@@ -1,11 +1,12 @@
 //! The ATmega328P on the `orbe-mcu` contract. Its port pins become the image and the watches
 //! around [`Timeline`], in package order, and its oscillator converts between picoseconds and
-//! cycles.
+//! cycles. What the firmware reached that the model does not run becomes the contract's fault
+//! and notes.
 
-use orbe_mcu::{Frame, I2cPhase, Mcu, Phase};
+use orbe_mcu::{Fault, Frame, I2cPhase, Mcu, Note, Pc, Phase, Setting, Unsupported};
 use orbe_model::{Drive, Stop, Time};
 
-use crate::{Channel, Cpu, FuseBytes, I2cNote, PinDrive, Port, Timeline};
+use crate::{Channel, Cpu, FuseBytes, I2cNote, PinDrive, Port, Refused, Timeline};
 
 /// What a package pin is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +104,8 @@ pub struct Bridge {
     levels: Vec<bool>,
     /// How many TWI phases `deliver` has taken, which numbers the next one.
     phases: u64,
+    /// When the chip stopped on its refusal, once a stop has given it.
+    refused: Option<Time>,
 }
 
 clone_fields!(Bridge {
@@ -110,7 +113,8 @@ clone_fields!(Bridge {
     clock_hz,
     image,
     levels,
-    phases
+    phases,
+    refused
 });
 
 impl Bridge {
@@ -127,6 +131,7 @@ impl Bridge {
             image: [Drive::Off; PORT_PINS.len()],
             levels: Vec::new(),
             phases: 0,
+            refused: None,
         };
         bridge.refresh();
         bridge
@@ -134,6 +139,11 @@ impl Bridge {
 
     pub fn cpu(&self) -> &Cpu {
         self.timeline.cpu()
+    }
+
+    /// The die temperature the §24.8 sensor reads from here on.
+    pub fn set_temperature_c(&mut self, celsius: f64) {
+        self.timeline.set_temperature_c(celsius as f32);
     }
 
     /// The last oscillator cycle at or before `at`.
@@ -169,6 +179,9 @@ impl Mcu for Bridge {
     fn run_until(&mut self, limit: Time) -> Option<Stop> {
         let halt = self.timeline.run_until(self.cycle(limit))?;
         self.refresh();
+        if halt.refused {
+            self.refused = Some(self.time(halt.at));
+        }
         Some(Stop {
             at: self.time(halt.at),
             sample: halt.sample,
@@ -258,5 +271,60 @@ impl Mcu for Bridge {
             });
             self.phases += 1;
         }
+    }
+
+    /// The instruction or setting the chip refused, from the stop that gave it. The checks
+    /// and their datasheet reasons are in the bus and the CPU.
+    fn fault(&self) -> Option<(Time, Fault)> {
+        let at = self.refused?;
+        let refusal = self.cpu().refusal()?;
+        let pc = Pc {
+            pc: u32::from(refusal.pc) * 2,
+            core: 0,
+        };
+        let setting = |peripheral, setting| Fault::UnsupportedSetting {
+            peripheral,
+            setting,
+            pc,
+        };
+        let fault = match refusal.what {
+            Refused::Instruction(op) => Fault::UnsupportedInstruction {
+                op,
+                reason: Unsupported::Op,
+                pc,
+            },
+            Refused::Setting {
+                peripheral,
+                setting: name,
+            } => setting(peripheral, Setting::Register(name)),
+            Refused::Interrupt { peripheral } => setting(peripheral, Setting::Interrupt),
+            Refused::Sleep => setting("CPU", Setting::Sleep),
+        };
+        Some((at, fault))
+    }
+
+    /// Each register the firmware reached by `through` that the model keeps without running
+    /// what it does, once per run.
+    fn notes(&self, through: Time) -> Vec<(Time, Note)> {
+        self.cpu()
+            .noted()
+            .iter()
+            .take_while(|noted| self.cpu().refusal().is_none_or(|r| noted.at <= r.at))
+            .map(|noted| (self.time(noted.at), noted))
+            .filter(|&(at, _)| at <= through)
+            .map(|(at, noted)| {
+                let note = Note::UnmodeledRegister {
+                    address: u32::from(noted.what.address()),
+                    register: noted.what.register().to_string(),
+                    pc: Pc {
+                        pc: u32::from(noted.pc) * 2,
+                        core: 0,
+                    },
+                    write: noted.write,
+                    kept: true,
+                };
+                (at, note)
+            })
+            .collect()
     }
 }

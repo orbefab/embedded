@@ -115,7 +115,7 @@ A name the table lacks is `netlist.world` with rule `unknown`, field `world`. Ea
 
 Every change is a jump, as a `steps` source's is. A row at its time holds the value from before it, and the restart solve there holds the new one. A run writes one trace column per declared quantity, `#world.<quantity>` in its unit, after every part's quantities, and the operating point holds it too. A netlist that declares none writes the trace it wrote before the world existed.
 
-A part whose device reads the world, such as a [`dht22`](#dht22), reads each quantity its device declares. A netlist with such a part must declare those quantities. One it leaves out is `netlist.world` with rule `undeclared` on the part and field `kind`, and the part is dropped.
+A part whose device reads the world, such as a [`dht22`](#dht22), reads each quantity its device declares. A netlist with such a part must declare those quantities. One it leaves out is `netlist.world` with rule `undeclared` on the part and field `kind`, and the part is dropped. An [`atmega328p`](#atmega328p) reads `temperature` at each sample of its temperature sensor when the netlist declares it, and 25 °C when it does not, so it needs none.
 
 ### World-driven fields
 
