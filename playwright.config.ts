@@ -5,8 +5,9 @@ import { resolve } from "node:path";
 import { defineConfig, type PlaywrightTestConfig } from "@playwright/test";
 import { bundledBrowser, chromiumPath, enginesLaunch, LAUNCH_ARGS } from "./e2e/support";
 
-const executablePath = chromiumPath();
 const suite = process.env.ORBE_E2E;
+// The engines suite drives only Firefox and WebKit, so it does not need a Chromium.
+const executablePath = suite === "engines" ? undefined : chromiumPath();
 
 const VIEWER = "http://127.0.0.1:4174";
 const SITE_VITE_PORT = process.env.ORBE_SITE_VITE_PORT ?? "4173";

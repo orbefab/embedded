@@ -75,6 +75,7 @@ test("the site's main pages load", async ({ page }, info) => {
     const response = await page.goto(`${site}${path}`);
     expect(response?.ok(), path).toBe(true);
     await expect(page.locator("h1")).toHaveText(heading);
+    await page.waitForLoadState("networkidle");
     if (path !== "/embedded/") {
       expect(errors, `${path} ${JSON.stringify(errors)}`).toEqual([]);
       continue;
