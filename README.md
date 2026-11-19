@@ -51,7 +51,7 @@ orbe open
 
 ## Contribute
 
-You need Rust (pinned in `rust-toolchain.toml`), cargo-nextest at the version `.config/nextest.toml` names, uv, shellcheck, Node 24 and pnpm.
+You need Rust (pinned in `rust-toolchain.toml`), cargo-nextest at the version `.config/nextest.toml` names, uv, shellcheck, Node 24 and pnpm. `scripts/check.sh web` also needs the Chromium, Firefox and WebKit that Playwright 1.64.1 expects, installed with `pnpm exec playwright install chromium firefox webkit`. On Ubuntu, Firefox and WebKit also need their system libraries: `sudo pnpm exec playwright install-deps firefox webkit`.
 
 ```sh
 pnpm install --frozen-lockfile
@@ -60,7 +60,7 @@ cargo install --locked --path apps/orbe
 scripts/check.sh fast
 ```
 
-`scripts/check.sh web` runs the viewer unit tests and the viewer and site browser checks. `scripts/check.sh full` runs `fast`, the engine checks, and `web`. `cargo install` puts `orbe` on `PATH`. An `orbe` built without the viewer page still runs every headless command, and `orbe show` then says how to build the page.
+`scripts/check.sh web` runs the viewer unit tests, the viewer and site checks in Chromium, and a smoke of the viewer and the site in Firefox and WebKit. `scripts/check.sh full` runs `fast`, the engine checks, and `web`. `cargo install` puts `orbe` on `PATH`. An `orbe` built without the viewer page still runs every headless command, and `orbe show` then says how to build the page.
 
 ## Skills for agents
 

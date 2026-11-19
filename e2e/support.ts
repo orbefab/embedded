@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { test as base, expect, chromium, type Page } from "@playwright/test";
+import { test as base, expect, chromium, firefox, webkit, type Page } from "@playwright/test";
 
 export { expect };
 // Playwright compiles this file as CommonJS, because the root package has no "type": "module".
@@ -30,6 +30,55 @@ export function chromiumPath(): string {
     process.exit(2);
   }
   return executable;
+}
+
+const ENGINES_FIX = [
+  "This check installs no browser. Install the Firefox and WebKit Playwright 1.64.1 expects with `pnpm exec playwright install firefox webkit`.",
+  "On Ubuntu, a missing system library needs `sudo pnpm exec playwright install-deps firefox webkit`.",
+];
+
+function enginesStop(intro: string): never {
+  console.error(intro);
+  for (const line of ENGINES_FIX) console.error(line);
+  process.exit(2);
+}
+
+export function bundledBrowser(label: "Firefox" | "WebKit", install: "firefox" | "webkit"): string {
+  let executable: string;
+  try {
+    executable = install === "firefox" ? firefox.executablePath() : webkit.executablePath();
+  } catch {
+    executable = "~/.cache/ms-playwright";
+  }
+  if (!existsSync(executable)) enginesStop(`No ${label} at ${executable}.`);
+  return executable;
+}
+
+// A missing system library makes Playwright exit 1 with its own install-deps line, which names
+// neither browser. Launching here turns that into the same exit 2 as a missing Chromium.
+const LIBRARY_MISSING = /Host system is missing dependencies|Missing libraries:|cannot open shared object file|error while loading shared libraries|Missing system dependencies/i;
+
+export function enginesLaunch(label: "Firefox" | "WebKit", executablePath: string): void {
+  const browser = label === "Firefox" ? "firefox" : "webkit";
+  const script = `const { ${browser}: browserType } = require("@playwright/test");
+browserType.launch({ executablePath: process.argv[1], headless: true }).then((browser) => browser.close()).catch((error) => {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+});`;
+  try {
+    execFileSync(process.execPath, ["-e", script, executablePath], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 30_000,
+      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+    });
+  } catch (error) {
+    const failed = error as { stdout?: string; stderr?: string; message?: string };
+    const text = `${failed.stdout ?? ""}\n${failed.stderr ?? ""}`;
+    if (LIBRARY_MISSING.test(text)) enginesStop(`${label} at ${executablePath} cannot start. A system library is missing.`);
+    console.error(text.trim() || failed.message);
+    process.exit(1);
+  }
 }
 
 export function rendersDir(): string | undefined {

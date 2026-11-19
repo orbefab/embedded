@@ -3,10 +3,11 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { defineConfig, type PlaywrightTestConfig } from "@playwright/test";
-import { chromiumPath, LAUNCH_ARGS } from "./e2e/support";
+import { bundledBrowser, chromiumPath, enginesLaunch, LAUNCH_ARGS } from "./e2e/support";
 
-const executablePath = chromiumPath();
 const suite = process.env.ORBE_E2E;
+// The engines suite drives only Firefox and WebKit, so it does not need a Chromium.
+const executablePath = suite === "engines" ? undefined : chromiumPath();
 
 const VIEWER = "http://127.0.0.1:4174";
 const SITE_VITE_PORT = process.env.ORBE_SITE_VITE_PORT ?? "4173";
@@ -121,8 +122,65 @@ const suites: Record<string, PlaywrightTestConfig> = {
   },
 };
 
-if (suite === undefined || !(suite in suites)) {
-  console.error("usage: ORBE_E2E=viewer|block|headed|world|site pnpm exec playwright test");
+function enginesSuite(): PlaywrightTestConfig {
+  const firefoxExecutable = bundledBrowser("Firefox", "firefox");
+  const webkitExecutable = bundledBrowser("WebKit", "webkit");
+  enginesLaunch("Firefox", firefoxExecutable);
+  enginesLaunch("WebKit", webkitExecutable);
+  for (const [path, how] of [
+    [resolve("apps/viewer/dist/index.html"), "pnpm --filter @orbe/viewer-page build"],
+    [resolve("apps/site/dist/client/index.html"), "scripts/site.sh --first-deploy"],
+  ] as const) {
+    if (!existsSync(path)) {
+      console.error(`No ${path}. Run \`${how}\` first.`);
+      process.exit(2);
+    }
+  }
+  const viewerPort = process.env.ORBE_VIEWER_PORT ?? "4174";
+  const sitePort = process.env.ORBE_SITE_PORT ?? "4175";
+  const viewer = `http://127.0.0.1:${viewerPort}`;
+  const site = `http://127.0.0.1:${sitePort}`;
+  return {
+    outputDir: "test-results",
+    reporter: shared.reporter,
+    timeout: 60_000,
+    workers: 1,
+    fullyParallel: false,
+    retries: 0,
+    testDir: "e2e",
+    testMatch: "engines.spec.ts",
+    use: {
+      headless: true,
+      trace: "retain-on-failure",
+      viewport: { width: 1280, height: 720 },
+    },
+    projects: [
+      { name: "firefox", use: { browserName: "firefox", launchOptions: { executablePath: firefoxExecutable } } },
+      { name: "webkit", use: { browserName: "webkit", launchOptions: { executablePath: webkitExecutable } } },
+    ],
+    webServer: [
+      {
+        command: `pnpm exec vite preview --strictPort --host 127.0.0.1 --port ${viewerPort}`,
+        cwd: "apps/viewer",
+        url: `${viewer}/`,
+        reuseExistingServer: false,
+        stdout: "ignore",
+        timeout: 60_000,
+      },
+      {
+        command: `pnpm exec vite preview --strictPort --host 127.0.0.1 --port ${sitePort}`,
+        cwd: "apps/site",
+        url: `${site}/embedded/`,
+        reuseExistingServer: false,
+        stdout: "ignore",
+        timeout: 120_000,
+      },
+    ],
+  };
+}
+
+if (suite === undefined || (suite !== "engines" && !(suite in suites))) {
+  console.error("usage: ORBE_E2E=viewer|block|headed|world|site|engines pnpm exec playwright test");
   process.exit(2);
 }
 
@@ -155,4 +213,4 @@ if (suite === "headed" || suite === "world") {
   }
 }
 
-export default defineConfig(suites[suite]);
+export default defineConfig(suite === "engines" ? enginesSuite() : suites[suite]);
