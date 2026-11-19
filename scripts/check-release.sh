@@ -461,6 +461,7 @@ if [[ $input == *.tar.gz ]]; then
   fi
   printf '%s\n' "$cmd_out"
   [[ -x $work/bin/orbe ]] || fail "install.sh did not write an executable orbe"
+  cmp -s "$work/bin/orbe" "$work/root/orbe" || fail "install.sh installed an orbe that is not the one in the archive"
   orbe_bin=$work/bin/orbe
 else
   [[ -x $input ]] || fail "$input is not executable"
