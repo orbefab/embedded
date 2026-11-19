@@ -5,6 +5,7 @@ from pathlib import Path
 from esp32s3_uart import (
     bit_lengths,
     board_tolerance,
+    burst_span,
     check_board,
     check_console,
     check_uart_rows,
@@ -202,21 +203,57 @@ def test_board_intervals() -> None:
         )
 
 
-def _with_burst(spec: dict) -> list[str]:
-    """The closed-form console with the burst inserted where the app prints it."""
-    lines = _console(spec)
-    burst = spec["bursts"][0]
-    baud, div, frag = next(item for item in spec["bauds"] if item[0] == burst["baud"])
-    edges = frame_edges(burst["cfg"], burst["byte"], burst["count"], div, frag, spec["apb_hz"], spec["cpu_hz"])
-    block = ["burst"]
-    block += [f"edge {at} {level}" for at, level in edges]
-    for _ in range(burst["count"]):
-        block.append(f"tx {burst['byte']:02x}")
-        block.append(f"rx {burst['byte']:02x}")
-    next_baud = next(item[0] for item in spec["bauds"] if item[0] != baud)
-    at = lines.index(f"baud {next_baud}")
-    lines[at:at] = block
+def _with_burst(spec: dict, *, div_delta: int = 0, frag_delta: int = 0) -> list[str]:
+    """The closed-form console, with the burst where the app prints it.
+
+    `div_delta` and `frag_delta` retime every edge at the burst's baud. The other baud stays.
+    """
+    lines = ["I (59) cpu_start: Unicore app"]
+    for baud, div, frag in spec["bauds"]:
+        use_div, use_frag = div, frag
+        if any(item["baud"] == baud for item in spec["bursts"]):
+            use_div += div_delta
+            use_frag += frag_delta
+        lines.append(f"baud {baud}")
+        for cfg, values in spec["cases"]:
+            lines.append(f"cfg {cfg}")
+            for byte in values:
+                lines.append(f"tx {byte:02x}")
+                lines.append(f"rx {byte:02x}")
+                for at, level in expected_edges(cfg, byte, use_div, use_frag, spec["apb_hz"], spec["cpu_hz"]):
+                    lines.append(f"edge {at} {level}")
+        for burst in spec["bursts"]:
+            if burst["baud"] != baud:
+                continue
+            edges = frame_edges(
+                burst["cfg"], burst["byte"], burst["count"], use_div, use_frag, spec["apb_hz"], spec["cpu_hz"]
+            )
+            lines.append("burst")
+            lines += [f"edge {at} {level}" for at, level in edges]
+            for _ in range(burst["count"]):
+                lines.append(f"tx {burst['byte']:02x}")
+                lines.append(f"rx {burst['byte']:02x}")
+    lines.append("UART DONE")
     return lines
+
+
+def _burst_edges(lines: list[str]) -> list[tuple[int, int]]:
+    start = lines.index("burst") + 1
+    edges = []
+    for line in lines[start:]:
+        if not line.startswith("edge "):
+            break
+        at, level = line.split()[1:]
+        edges.append((int(at), int(level)))
+    return edges
+
+
+def _refusal(fn) -> str:
+    try:
+        fn()
+    except ValueError as error:
+        return str(error)
+    return ""
 
 
 def _nudge(lines: list[str], after: str, index: int, delta: int) -> list[str]:
@@ -254,10 +291,74 @@ def test_poll_entry_is_not_a_uart_interval() -> None:
     expect("the burst console passes", not raises(lambda: body(lines)))
     cold = _slide(lines, 115200, 0x00, 2082, edge=1)
     expect("the cold frame's stop is not an interval", not raises(lambda: body(cold)))
+    start = _nudge(lines, "burst", 0, 2082)
+    expect("the burst's first start is the entry", not raises(lambda: body(start)))
+    near = _nudge(lines, "burst", 1, tolerance - 1)
+    expect("the first stop can sit one cycle inside the allowance", not raises(lambda: body(near)))
     entered = _nudge(lines, "burst", 1, 2082)
-    expect("the burst's first frame is the entry", not raises(lambda: body(entered)))
+    expect("the first stop is in the burst span", "first stop" in _refusal(lambda: body(entered)))
     later = _nudge(lines, "burst", 3, tolerance)
     expect("the burst's next frame is the UART", raises(lambda: body(later)))
+
+
+def test_divider_one_high_fails_the_console_and_the_burst_span() -> None:
+    spec = program(SOURCE.read_text())
+    sent = transfers(spec)
+    tolerance = board_tolerance(spec["bound"])
+    burst = spec["bursts"][0]
+    good = _with_burst(spec)
+    bad = _with_burst(spec, div_delta=1)
+    grew = burst_span(_burst_edges(bad), burst["cfg"], burst["byte"]) - burst_span(
+        _burst_edges(good), burst["cfg"], burst["byte"]
+    )
+    expect("a divider one high lengthens the burst span by 210", grew == 210)
+    expect("the closed form rejects a divider one high", raises(lambda: check_console(bad, sent, spec["bound"])))
+    refused = _refusal(lambda: check_board(good, "\n".join(bad) + "\n", spec, tolerance))
+    expect("the burst span rejects a divider one high", "first stop" in refused)
+
+
+def test_only_the_burst_span_catches_a_divider_one_high() -> None:
+    spec = program(SOURCE.read_text())
+    sent = transfers(spec)
+    tolerance = board_tolerance(spec["bound"])
+    burst = spec["bursts"][0]
+    baud, div, frag = next(item for item in spec["bauds"] if item[0] == burst["baud"])
+    base = frame_edges(burst["cfg"], burst["byte"], burst["count"], div, frag, spec["apb_hz"], spec["cpu_hz"])
+    high = frame_edges(burst["cfg"], burst["byte"], burst["count"], div + 1, frag, spec["apb_hz"], spec["cpu_hz"])
+    wide = max(got - want for (want, _), (got, _) in zip(base, high, strict=True)) + 1
+    good = _with_burst(spec)
+    bad = _with_burst(spec, div_delta=1)
+    expect("the widened window is past the console bound", wide > spec["bound"])
+    expect(
+        "a widened console window accepts a divider one high",
+        not raises(lambda: check_console(bad, sent, wide)),
+    )
+    refused = _refusal(lambda: check_board(good, "\n".join(bad) + "\n", spec, tolerance))
+    expect("only the burst span rejects a divider one high", "first stop" in refused)
+
+
+def test_fraction_one_high_passes_both_checks() -> None:
+    spec = program(SOURCE.read_text())
+    sent = transfers(spec)
+    tolerance = board_tolerance(spec["bound"])
+    burst = spec["bursts"][0]
+    good = _with_burst(spec)
+    bad = _with_burst(spec, frag_delta=1)
+    base = _burst_edges(good)
+    moved = _burst_edges(bad)
+    expect(
+        "a fraction one high moves the burst's last edge by 24",
+        moved[-1][0] - base[-1][0] == 24,
+    )
+    expect(
+        "a fraction one high lengthens the burst span by 21",
+        burst_span(moved, burst["cfg"], burst["byte"]) - burst_span(base, burst["cfg"], burst["byte"]) == 21,
+    )
+    expect("a fraction one high passes the console", not raises(lambda: check_console(bad, sent, spec["bound"])))
+    expect(
+        "a fraction one high passes the board compare",
+        not raises(lambda: check_board(good, "\n".join(bad) + "\n", spec, tolerance)),
+    )
 
 
 def test_a_bit_is_past_two_polls() -> None:

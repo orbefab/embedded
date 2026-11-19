@@ -24,7 +24,9 @@ capture of the same app. The bytes must match. Each later edge of a frame is com
 by its offset from that frame's start bit, within two polls. The start bit is the CPU's
 latency from the `CCOUNT` sample, and the compare leaves it out. The first frame and
 the burst's first frame open on the entry into the poll, so their intervals are left
-out as well. A missing file skips that compare.
+out as well. The span from the burst's first stop to its last edge is compared within
+the same two polls. Both of those stamps are taken once the poll is in its loop. A
+missing file skips that compare.
 """
 
 import argparse
@@ -118,6 +120,34 @@ def edges_in_frame(cfg: str, byte: int) -> int:
             count += 1
             previous = level
     return count
+
+
+def _stop_edge_index(cfg: str, byte: int) -> int:
+    """Index within one frame of the edge that begins the stop bit.
+
+    The bit before the stop is low on the burst byte, so that edge exists.
+    A frame whose bit before the stop is already high has none.
+    """
+    levels = levels_of(cfg, byte)
+    stop_at = 10 if cfg == "8E1" else 9
+    previous = 1
+    index = 0
+    for bit, level in enumerate(levels):
+        if level == previous:
+            continue
+        if bit == stop_at:
+            return index
+        index += 1
+        previous = level
+    raise ValueError(f"{cfg} byte {byte:02x} has no edge at the stop bit")
+
+
+def burst_span(edges: list[tuple[int, int]], cfg: str, byte: int) -> int:
+    """Cycles from the first frame's stop edge to the last edge of the burst."""
+    stop = _stop_edge_index(cfg, byte)
+    if not edges or stop >= len(edges):
+        raise ValueError(f"the burst has no stop edge among {len(edges)} edges")
+    return edges[-1][0] - edges[stop][0]
 
 
 def board_tolerance(poll: int) -> int:
@@ -396,6 +426,8 @@ def _compare_frames(
 def check_board(sim_lines: list[str], board_text: str, spec: dict, tolerance: int) -> None:
     """The capture's bytes match. Each later edge agrees, from its frame's start bit, within `tolerance`.
 
+    The burst's span, from its first stop to its last edge, agrees within `tolerance` too.
+
     The first edge of a frame is the start bit. Its offset is the time from the
     `CCOUNT` sample before the FIFO store to the poll that sees the pin fall.
     That is CPU latency, instruction timing and misses in the 80 MHz instruction
@@ -425,8 +457,30 @@ def check_board(sim_lines: list[str], board_text: str, spec: dict, tolerance: in
     every bit. The ninth edge of a frame moves 27 cycles, inside the allowance.
     From the burst's first start bit the same error moves the last edge 237
     cycles. The compare uses each frame's own start, so that sum is not what it
-    holds. A fraction one count off moves a 115200 edge by at most one APB
-    clock, 3 CPU cycles.
+    holds.
+
+    The burst's first stop is the first stamp after the poll is in its loop. On
+    the 2026-11-18 capture that stop is 97 cycles after the model's, and the
+    first start is 612, so the interval between them is the entry. The last edge
+    is a later pass of the same loop. The span from the first stop to the last
+    edge subtracts two stamps of that loop, and the allowance is the same two
+    polls. The span is the seven frames between those edges. This burst's frame
+    is ten bits, so a divider one count off lengthens the span by 7 * 10 * 3,
+    210 CPU cycles, past the allowance. On that capture the span is 4 cycles
+    short of the model's.
+
+    A fraction one count off adds one long bit in a ten-bit frame. `frag` 7
+    makes four long bits and `frag` 8 makes five, and one frame's edges move by
+    at most that one extra clock, 3 CPU cycles. The long bits add across the
+    burst. The last edge is seven full frames plus the nine bits to the eighth
+    stop. Each of the seven frames contributes one extra clock, and the ninth
+    bit is long at `frag` 8 and short at `frag` 7, which is one clock more.
+    Eight clocks are 24 CPU cycles from the burst's first start bit. The span
+    drops the shared nine-bit prefix, so it moves by the seven frames only, 21
+    CPU cycles. 24 is inside the 64-cycle console window, and 3 and 21 are
+    inside the board allowance, so a fraction one count off passes both checks.
+    Neither the 64-cycle console window nor the board compare resolves a
+    fraction error of one count.
     """
     board_lines = [line.strip() for line in board_text.splitlines() if line.strip()]
     sim_body = transcript(sim_lines)
@@ -458,6 +512,14 @@ def check_board(sim_lines: list[str], board_text: str, spec: dict, tolerance: in
             else:
                 raise ValueError("edges come before a frame")
             _compare_frames(sim_edges, board_edges, per_frame, tolerance, where, entry_frames)
+            if previous == "burst":
+                sim_span = burst_span(sim_edges, burst["cfg"], burst["byte"])
+                board_span = burst_span(board_edges, burst["cfg"], burst["byte"])
+                if abs(sim_span - board_span) >= tolerance:
+                    raise ValueError(
+                        f"the burst spans {sim_span} cycles from its first stop to its last edge"
+                        f" in the run and {board_span} on the board, tolerance {tolerance}"
+                    )
             cursor = sim_end
             continue
         if sim_line != board_line:
@@ -501,7 +563,7 @@ def check(run: Path, board: Path | None = None) -> None:
     if board_path.is_file():
         tolerance = board_tolerance(spec["bound"])
         check_board(lines, board_path.read_text(), spec, tolerance)
-        compared = f", frame intervals within {tolerance} cycles of the board"
+        compared = f", frame intervals and the burst span within {tolerance} cycles of the board"
     else:
         compared = ""
     print(f"esp32s3-uart: {len(sent)} bytes, edges inside {spec['bound']} cycles{compared}")
