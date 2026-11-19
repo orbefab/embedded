@@ -61,7 +61,8 @@ object = { version = "=0.40.0", default-features = false, features = ["read_core
 unsafe_code = "forbid"
 
 # The chip models run firmware instruction by instruction, so builds without optimisation still
-# optimise the solver, the cores and the chips.
+# optimise the solver, the cores and the chips. Adding a part hashes the built-in catalog on
+# this path, so `sha2` is optimised too.
 [profile.dev.package.orbe-engine]
 opt-level = 3
 
@@ -75,4 +76,7 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.orbe-espressif]
+opt-level = 3
+
+[profile.dev.package.sha2]
 opt-level = 3
