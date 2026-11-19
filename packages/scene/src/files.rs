@@ -123,16 +123,19 @@ impl Files {
         }
     }
 
-    pub(crate) fn read_to_string(&self, path: &Path) -> io::Result<String> {
-        match &self.store {
-            Store::Disk => fs::read_to_string(path),
+    /// The file as UTF-8 text. A leading byte order mark is dropped, so a scene or a test
+    /// an editor saved with one still parses.
+    pub fn read_to_string(&self, path: &Path) -> io::Result<String> {
+        let text = match &self.store {
+            Store::Disk => fs::read_to_string(path)?,
             Store::Memory(_) => String::from_utf8(self.read(path)?).map_err(|_| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     "stream did not contain valid UTF-8",
                 )
-            }),
-        }
+            })?,
+        };
+        Ok(strip_bom(text))
     }
 
     /// The paths of what a folder holds, in no set order.
@@ -170,6 +173,15 @@ impl Files {
                 }
             }
         }
+    }
+}
+
+/// Drops one leading U+FEFF. Editors write those bytes as a UTF-8 byte order mark, and they
+/// are not part of the file.
+pub(crate) fn strip_bom(text: String) -> String {
+    match text.strip_prefix('\u{feff}') {
+        Some(rest) => rest.to_string(),
+        None => text,
     }
 }
 

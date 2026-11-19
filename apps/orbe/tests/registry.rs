@@ -93,6 +93,48 @@ fn a_folder_with_no_parts_and_no_blocks_is_invalid() {
 }
 
 #[test]
+fn a_missing_manifest_or_source_folder_names_what_is_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    std::fs::create_dir(&src).unwrap();
+    let out = dir.path().join("out");
+    let (code, stdout, stderr) = orbe(&[
+        "registry",
+        "build",
+        src.to_str().unwrap(),
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert_eq!(stdout, "");
+    assert_eq!(
+        stderr,
+        format!(
+            "error[registry_invalid]: {} has no registry.jsonc, which names the registry: {{ \"format\": 1, \"name\": \"@<id>\" }}\n  hint: write registry.jsonc in that folder\n",
+            src.display()
+        )
+    );
+    assert!(!out.exists());
+
+    let missing = dir.path().join("missing-src");
+    let (code, stdout, stderr) = orbe(&[
+        "registry",
+        "build",
+        missing.to_str().unwrap(),
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert_eq!(stdout, "");
+    assert_eq!(
+        stderr,
+        format!(
+            "error[registry_invalid]: no folder at {}\n  hint: name the folder that holds registry.jsonc, parts/ and blocks/\n",
+            missing.display()
+        )
+    );
+    assert!(!out.exists());
+}
+
+#[test]
 fn previous_carries_a_build_forward_and_refuses_a_changed_version() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("src");

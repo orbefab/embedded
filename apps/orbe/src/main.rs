@@ -526,11 +526,12 @@ fn test_files(paths: &[PathBuf]) -> Result<Vec<(PathBuf, PathBuf)>, (u8, String,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(error) => return Err(unreadable(error)),
         };
+        // A directory may be named `name.test`. It is not a test file.
         let mut found: Vec<PathBuf> = entries
             .into_iter()
             .map(|entry| entry.path())
-            .filter(|p| p.extension().is_some_and(|e| e == "test"))
-            .map(|p| test::shown(&p, &cwd))
+            .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "test"))
+            .map(|path| test::shown(&path, &cwd))
             .collect();
         if found.is_empty() {
             return Err((
@@ -568,7 +569,7 @@ fn run_tests(paths: &[PathBuf], verbose: bool, json: bool) -> ExitCode {
     };
     let mut reports = Vec::new();
     for (file, root) in &files {
-        let text = match std::fs::read_to_string(file) {
+        let text = match Files::disk().read_to_string(file) {
             Ok(text) => text,
             Err(error) => return io_exit(&format!("{}: {error}", file.display()), json),
         };
@@ -777,11 +778,23 @@ fn no_scene(scene: &Path, json: bool) -> Option<ExitCode> {
     if scene.is_file() {
         return None;
     }
-    let message = format!("no scene file at {}", scene.display());
+    let error = orbe_session::Error::missing_scene(scene);
     if json {
-        print_json(&json!({ "ok": false, "error": { "code": "io_error", "message": message } }));
+        print_json(&json!({
+            "ok": false,
+            "error": {
+                "code": error.code.as_str(),
+                "message": error.message,
+                "hint": error.hint,
+            }
+        }));
     } else {
-        eprintln!("error[io_error]: {message}");
+        eprintln!(
+            "error[{}]: {}\n  hint: {}",
+            error.code.as_str(),
+            error.message,
+            error.hint
+        );
     }
     Some(ExitCode::from(IO))
 }
@@ -946,21 +959,14 @@ fn build_registry(src: &Path, out: &Path, previous: Option<&Path>, json: bool) -
     let registry = match built {
         Ok(registry) => registry,
         Err(error) => {
-            let (code, exit, hint) = match &error {
+            let (code, exit) = match &error {
                 orbe_registry::Error::Check(errors) => return scene_refused(errors, json),
-                orbe_registry::Error::Invalid(_) => (
-                    "registry_invalid",
-                    FAILED,
-                    "fix the part or Block it names. docs/registry.md says what a registry holds",
-                ),
-                orbe_registry::Error::NotEmpty(_) => (
-                    "registry_out_not_empty",
-                    FAILED,
-                    "name a new folder, or empty this one first",
-                ),
-                orbe_registry::Error::Io(_) => ("io_error", IO, ""),
+                orbe_registry::Error::Invalid(_) => ("registry_invalid", FAILED),
+                orbe_registry::Error::NotEmpty(_) => ("registry_out_not_empty", FAILED),
+                orbe_registry::Error::Io(_) => ("io_error", IO),
             };
             let message = error.to_string();
+            let hint = error.hint();
             if json {
                 print_json(&json!({
                     "ok": false,

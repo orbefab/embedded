@@ -1441,3 +1441,30 @@ fn a_scene_named_like_a_flag_opens_as_dot_slash_or_after_dashes() {
         runtime.orbe(root, &["test"]).ok();
     }
 }
+
+#[test]
+fn check_on_a_missing_scene_uses_the_same_hint_as_open() {
+    let runtime = Runtime::new();
+    let dir = project("open\n");
+    let text = "error[io_error]: no scene file at missing.jsonc\n  hint: write the scene, or name its path\n";
+    let check = runtime.orbe(dir.path(), &["check", "missing.jsonc"]);
+    assert_eq!(
+        (check.code, check.stdout.as_str(), check.stderr.as_str()),
+        (3, "", text)
+    );
+    let open = runtime.orbe(dir.path(), &["open", "missing.jsonc"]);
+    assert_eq!(
+        (open.code, open.stdout.as_str(), open.stderr.as_str()),
+        (3, text, "")
+    );
+    let check_json = runtime.orbe(dir.path(), &["check", "missing.jsonc", "--json"]);
+    assert_eq!(check_json.code, 3, "{}", check_json.stdout);
+    let check_error = &check_json.json()["error"];
+    let open_json = runtime.orbe(dir.path(), &["open", "missing.jsonc", "--json"]);
+    assert_eq!(open_json.code, 3, "{}", open_json.stdout);
+    let open_error = &open_json.json()["error"];
+    assert_eq!(check_error, open_error);
+    assert_eq!(check_error["code"], "io_error");
+    assert_eq!(check_error["message"], "no scene file at missing.jsonc");
+    assert_eq!(check_error["hint"], "write the scene, or name its path");
+}

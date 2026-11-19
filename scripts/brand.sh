@@ -9,8 +9,10 @@
 #     at that commit there.
 #   scripts/brand.sh copy WEBSITE_CHECKOUT [PATH...]
 #     Copies each PATH, by default every listed one, from the checkout's HEAD commit, then
-#     rewrites the commit and the list. It reads the commit with git, so the checkout's
-#     uncommitted changes are never copied and the checkout is never written.
+#     rewrites the commit and the list. It checks that every path is a file at that commit
+#     before replacing the copy, and deletes nothing when one is missing. It reads the
+#     commit with git, so the checkout's uncommitted changes are never copied and the
+#     checkout is never written.
 set -euo pipefail
 cd "$(dirname "$0")/../packages/brand"
 
@@ -67,12 +69,20 @@ check() {
 }
 
 copy() {
-  local checkout=$1 commit path
+  local checkout=$1 commit path kind missing=0
   shift
   local paths=("$@")
   if [[ ${#paths[@]} -eq 0 ]]; then mapfile -t paths < <(listed); fi
   commit=$(git -C "$checkout" rev-parse HEAD)
   need_commit "$checkout" "$commit"
+  for path in "${paths[@]}"; do
+    kind=$(git -C "$checkout" cat-file -t "$commit:$path" 2>/dev/null || true)
+    if [[ "$kind" != blob ]]; then
+      echo "brand: $checkout has no file $path at $commit." >&2
+      missing=1
+    fi
+  done
+  if [[ $missing -ne 0 ]]; then exit 1; fi
   rm -rf website
   for path in "${paths[@]}"; do
     mkdir -p "website/$(dirname "$path")"

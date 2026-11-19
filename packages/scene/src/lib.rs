@@ -81,9 +81,8 @@ pub fn block_findings(id: &str, files: &Folder) -> Vec<Diagnostic> {
 }
 
 fn utf8_file(files: &Folder, rel: &str) -> Option<String> {
-    std::str::from_utf8(files.get(rel)?)
-        .ok()
-        .map(str::to_string)
+    let text = std::str::from_utf8(files.get(rel)?).ok()?;
+    Some(files::strip_bom(text.to_string()))
 }
 
 /// Type-checks a scene and every part file it reaches. On success, the netlist the engine

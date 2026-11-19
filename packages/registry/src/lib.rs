@@ -76,6 +76,25 @@ impl fmt::Display for Error {
     }
 }
 
+impl Error {
+    /// What to try next. Empty when the message is the whole failure.
+    pub fn hint(&self) -> &'static str {
+        match self {
+            Error::Invalid(message) if message.contains(" has no registry.jsonc,") => {
+                "write registry.jsonc in that folder"
+            }
+            Error::Invalid(message) if message.starts_with("no folder at ") => {
+                "name the folder that holds registry.jsonc, parts/ and blocks/"
+            }
+            Error::Invalid(_) => {
+                "fix the part or Block it names. docs/registry.md says what a registry holds"
+            }
+            Error::NotEmpty(_) => "name a new folder, or empty this one first",
+            Error::Check(_) | Error::Io(_) => "",
+        }
+    }
+}
+
 fn io_error(path: &Path, error: io::Error) -> Error {
     Error::Io(format!("{}: {error}", path.display()))
 }
@@ -257,6 +276,13 @@ fn manifest(src: &Path) -> Result<Manifest, Error> {
 /// says what does not read, or the findings `orbe check` would print for an installed copy of a
 /// part or a Block.
 pub fn build(src: &Path, previous: Option<&Path>) -> Result<Registry, Error> {
+    match fs::metadata(src) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(Error::Invalid(format!("no folder at {}", src.display())));
+        }
+        Err(error) => return Err(io_error(src, error)),
+        Ok(_) => {}
+    }
     let manifest = manifest(src)?;
     let parts = folders(src, "parts")?;
     let blocks = folders(src, "blocks")?;
