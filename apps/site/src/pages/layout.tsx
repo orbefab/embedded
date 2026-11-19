@@ -99,9 +99,9 @@ export function CliComing() {
 export function Install({ lines, note }: { lines: readonly string[]; note?: ReactNode }) {
   const text = lines.join("\n");
   return (
-    <div data-testid="install">
+    <div data-copy-root data-testid="install">
       <div className="flex min-w-0 items-stretch overflow-hidden rounded-lg border border-border bg-muted font-mono text-sm">
-        <pre className="min-w-0 flex-1 overflow-x-auto p-4">{text}</pre>
+        <pre className="min-w-0 flex-1 overflow-x-auto p-4" data-copy-text>{text}</pre>
         <CopyButton boxed text={text} />
       </div>
       {note === undefined ? null : <p className="mt-3 text-muted-foreground text-sm">{note}</p>}

@@ -95,7 +95,7 @@ export function BlockStage({
               </nav>
               <div className="min-w-0">
                 {sources.map((source) => (
-                  <div data-path={source.path} data-testid="code-file" hidden={source.path !== path} key={source.path}>
+                  <div data-copy-root data-path={source.path} data-testid="code-file" hidden={source.path !== path} key={source.path}>
                     <div className="flex flex-wrap items-center justify-between gap-2 border-border border-b px-3 py-2 font-mono text-xs">
                       <span className="min-w-0">
                         <span className="break-all">{source.path}</span>{" "}
@@ -110,7 +110,7 @@ export function BlockStage({
                         </a>
                       </span>
                     </div>
-                    <pre className="max-h-[34rem] max-w-full overflow-auto p-4 font-mono text-xs leading-relaxed">{source.text}</pre>
+                    <pre className="max-h-[34rem] max-w-full overflow-auto p-4 font-mono text-xs leading-relaxed" data-copy-text>{source.text}</pre>
                   </div>
                 ))}
               </div>
@@ -119,15 +119,15 @@ export function BlockStage({
           <p className="mt-3 text-muted-foreground text-sm">
             {__ORBE_SITE_INSTALL__ ? (
               <>
-                Sketch, scene and test are what <code className="font-mono">orbe add</code> writes. The firmware image and its licenses are under{" "}
+                <code className="font-mono">orbe add</code> writes these files, plus the README, REUSE.toml, the firmware image and{" "}
                 <a className="underline hover:text-foreground" href="#files">
-                  License and files
+                  its licenses
                 </a>
                 .
               </>
             ) : (
               <>
-                Sketch, scene and test. The firmware image and its licenses are under{" "}
+                Sketch, scene and tests. The firmware image and its licenses are under{" "}
                 <a className="underline hover:text-foreground" href="#files">
                   License and files
                 </a>

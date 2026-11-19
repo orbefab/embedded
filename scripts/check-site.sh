@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Checks the site. It runs the type check and the brand check, then a build with
-# ORBE_SITE_INSTALL=1 that must give every part and Block a page with its install line. Then it
-# runs the build as it deploys, whose own files must show no install line and no repo link, and
-# which must serve the AVR runtime source every Block's NOTICE names. Playwright then drives that
-# build in headless Chromium twice: on `vite preview`, and on `wrangler dev --local`.
+# Checks the site. It runs the type check, the circuit unit tests and the brand check, then a
+# build with ORBE_SITE_INSTALL=1 that must give every part and Block a page with its install
+# line. Playwright drives that build once, on `vite preview`, for the checks that need the
+# install line. Then it runs the build as it deploys, whose own files must show no install line
+# and no repo link, and which must serve the AVR runtime source every Block's NOTICE names.
+# Playwright then drives that build in headless Chromium twice: on `vite preview`, and on
+# `wrangler dev --local`.
 #
 # The flag gates the site's own text and links: the pages, the build's scripts and styles, the
 # brand files and the part views. The registry under r/, orbe-wasm and the runtime source are data
@@ -67,6 +69,7 @@ fail() {
   exit 1
 }
 pnpm --filter @orbe/site typecheck
+pnpm --filter @orbe/site test
 scripts/brand.sh check
 dist=apps/site/dist/client
 own() { grep -rlE "$1" "$dist" --exclude-dir=r --exclude-dir=orbe-wasm --exclude-dir=sources || true; }
@@ -92,6 +95,19 @@ cmp -s scripts/install.sh "$dist/install.sh" ||
 grep -q 'href="https://github.com/orbefab/embedded"' "$dist/index.html" ||
   fail "with ORBE_SITE_INSTALL=1, the landing page links no repo"
 echo "check-site: ORBE_SITE_INSTALL=1 shows orbe add on $parts part and $blocks Block pages, and the install script and the repo on the landing page"
+
+# 8787 is wrangler's default and may already be taken. Ask the OS for a free port.
+free_port() {
+  node -e 'const s = require("node:net").createServer().listen(0, "127.0.0.1", () => { process.stdout.write(String(s.address().port) + "\n"); s.close(); })'
+}
+install_port=$(free_port)
+export ORBE_E2E=site
+export ORBE_SITE_INSTALL_E2E=1
+export ORBE_SITE_SERVERS=vite
+export ORBE_SITE_VITE_PORT=$install_port
+echo "check-site: install-on browser checks on 127.0.0.1:$install_port"
+pnpm exec playwright test apps/site/e2e/install.spec.ts
+unset ORBE_SITE_INSTALL_E2E ORBE_SITE_SERVERS
 
 scripts/site.sh "${site[@]}"
 [[ ! -e $dist/install.sh ]] || fail "install.sh is served with ORBE_SITE_INSTALL unset"
@@ -124,10 +140,6 @@ target=$(cargo metadata --format-version 1 --no-deps |
 export ORBE=$target/debug/orbe
 export ORBE_E2E=site
 export WRANGLER_SEND_METRICS=false
-# 8787 is wrangler's default and may already be taken. Ask the OS for two free ports.
-free_port() {
-  node -e 'const s = require("node:net").createServer().listen(0, "127.0.0.1", () => { process.stdout.write(String(s.address().port) + "\n"); s.close(); })'
-}
 vite_port=$(free_port)
 wrangler_port=$(free_port)
 export ORBE_SITE_VITE_PORT=$vite_port

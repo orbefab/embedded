@@ -44,8 +44,8 @@ export interface BlockCircuit {
   readonly board: BoardFold;
   /** Lines `parts.lock` gets: the Block record's registry dependencies. */
   readonly lockCount: number;
-  /** `expect` lines in the Block's tests. */
-  readonly checks: number;
+  /** `tests/*.test` files. `orbe test` reports one result per file. */
+  readonly tests: number;
   readonly sources: readonly SourceFile[];
 }
 
@@ -113,7 +113,8 @@ function parseAmount(text: string, unit: string): number | undefined {
 
 function formatValue(raw: string | number, param: Param | undefined): string {
   const text = String(raw);
-  if (text.includes("/")) return text.slice(text.lastIndexOf("/") + 1);
+  // A file param is a path (`firmware/fade.hex`). A value such as `1/4` is the value itself.
+  if (param?.file !== undefined && text.includes("/")) return text.slice(text.lastIndexOf("/") + 1);
   if (param?.choices?.some((choice) => choice.name === text)) return text;
   const unit = param?.unit;
   if (unit !== undefined && unit !== "") {
@@ -134,20 +135,32 @@ function valueTexts(id: string, fields: Readonly<Record<string, unknown>>, parts
   return shown.map((entry, index) => (index === 0 ? entry.text : `${entry.name} ${entry.text}`));
 }
 
+function sceneError(name: string, detail: string): Error {
+  return new Error(`${name} scene.jsonc ${detail}`);
+}
+
 function placedParts(record: BlockRecord, texts: Readonly<Record<string, string>>, parts: readonly Item<PartRecord>[]): readonly PlacedPart[] {
   const file = record.files.find((entry) => entry.path === "scene.jsonc");
   const text = file === undefined ? undefined : texts[file.sha256];
-  if (text === undefined) throw new Error(`${record.name} has no scene.jsonc`);
-  const scene = parseJsonc(text);
+  if (text === undefined) throw new Error(`${record.name} scene.jsonc is missing`);
+  let scene: unknown;
+  try {
+    scene = parseJsonc(text);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${record.name} scene.jsonc: ${message}`);
+  }
   const raw = scene !== null && typeof scene === "object" && "parts" in scene ? scene.parts : undefined;
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`${record.name} scene has no parts`);
-  return Object.entries(raw).map(([ref, body]) => {
-    if (body === null || typeof body !== "object" || Array.isArray(body)) throw new Error(`${record.name} scene part ${ref} is not an object`);
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw sceneError(record.name, "parts is not an object");
+  const placed = Object.entries(raw).map(([ref, body]) => {
+    if (body === null || typeof body !== "object" || Array.isArray(body)) throw sceneError(record.name, `part ${ref} is not an object`);
     const fields = body as Record<string, unknown>;
     const id = fields.type;
-    if (typeof id !== "string") throw new Error(`${record.name} scene part ${ref} has no type`);
+    if (typeof id !== "string") throw sceneError(record.name, `part ${ref} has no type`);
     return { ref, id, values: valueTexts(id, fields, parts) };
   });
+  if (!placed.some((part) => part.id === record.board)) throw sceneError(record.name, `does not place its board ${record.board}`);
+  return placed;
 }
 
 function boardFold(id: string, parts: readonly Item<PartRecord>[]): BoardFold {
@@ -167,7 +180,7 @@ function boardFold(id: string, parts: readonly Item<PartRecord>[]): BoardFold {
 function sourceGroup(path: string): SourceFile["group"] | undefined {
   if (path === "scene.jsonc") return "Scene";
   if (path.startsWith("tests/")) return "Test";
-  if (/^firmware\/.+\.ino$/.test(path)) return "Sketch";
+  if (/^firmware\/.+\.(?:ino|c|cpp|h)$/.test(path)) return "Sketch";
   return undefined;
 }
 
@@ -188,15 +201,9 @@ function sourcesOf(record: BlockRecord, texts: Readonly<Record<string, string>>)
   return sources.sort((a, b) => groupOrder(a.group) - groupOrder(b.group) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
-function checkCount(record: BlockRecord, texts: Readonly<Record<string, string>>): number {
-  let count = 0;
-  for (const file of record.files) {
-    if (!file.path.startsWith("tests/")) continue;
-    const text = texts[file.sha256];
-    if (text === undefined) continue;
-    for (const line of text.split("\n")) if (/^\s*expect\b/.test(line)) count += 1;
-  }
-  return count;
+/** One result per `tests/*.test` file, which is what `orbe test` counts. */
+function testCount(record: BlockRecord): number {
+  return record.files.filter((file) => file.path.startsWith("tests/") && file.path.endsWith(".test")).length;
 }
 
 function circuitOf(record: BlockRecord, texts: Readonly<Record<string, string>>, parts: readonly Item<PartRecord>[]): BlockCircuit {
@@ -204,7 +211,7 @@ function circuitOf(record: BlockRecord, texts: Readonly<Record<string, string>>,
     placed: placedParts(record, texts, parts),
     board: boardFold(record.board, parts),
     lockCount: record.registryDependencies.length,
-    checks: checkCount(record, texts),
+    tests: testCount(record),
     sources: sourcesOf(record, texts),
   };
 }
@@ -253,6 +260,51 @@ export function matchLine(real: Real): string {
   const named = [real.maker, real.number].filter((value): value is string => value !== undefined && value !== null && value !== "").join(" ");
   if (named === "") return "Generic";
   return real.generic ? `Generic, follows ${named}` : `Matches ${named}`;
+}
+
+/** The glance row. The label keeps "used in" or "on boards", and the value does not repeat it. */
+export function glanceLine(use: PartUse): { readonly label: string; readonly value: string; readonly href: string | undefined } {
+  const count = use.blocks.length;
+  if (count === 1) return { label: "used in", value: "1 Block", href: "#used" };
+  if (count > 1) return { label: "used in", value: `${count} Blocks`, href: "#used" };
+  const board = use.boards[0];
+  if (use.boards.length === 1 && board !== undefined) return { label: "on boards", value: board.title, href: "#boards" };
+  if (use.boards.length > 1) return { label: "on boards", value: `${use.boards.length} boards`, href: "#boards" };
+  return { label: "used in", value: "no Block yet", href: undefined };
+}
+
+/** The two sentences under the board. `brings` is the board's own parts. `lists` is why
+ * `parts.lock` has the count it has, from the rows above and those parts. */
+export function lockSentences(circuit: BlockCircuit): { readonly brings: string; readonly lists: string } {
+  const rows = circuit.placed.length;
+  const counts = new Map<string, number>();
+  for (const placed of circuit.placed) counts.set(placed.id, (counts.get(placed.id) ?? 0) + 1);
+  const kinds = counts.size;
+  const ownIds = new Set(circuit.board.own.map((part) => part.id));
+  let overlap = 0;
+  for (const id of counts.keys()) if (ownIds.has(id)) overlap += 1;
+  const repeats = [...counts.entries()].filter((entry): entry is [string, number] => entry[1] > 1).sort((a, b) => (a[0] < b[0] ? -1 : 1));
+  const own = circuit.board.own.length;
+  const lock = circuit.lockCount;
+  const word = (count: number) => (count === 1 ? "part" : "parts");
+  const brings = `The ${circuit.board.title} brings ${own} ${word(own)} of its own.`;
+  const because =
+    repeats.length === 0
+      ? ""
+      : ` because ${repeats.map(([id, count]) => `the ${count} ${id} rows are one part`).join(" and ")}`;
+  const shared =
+    overlap === 0 ? "" : overlap === 1 ? " One of those parts is already on the board." : ` ${overlap} of those parts are already on the board.`;
+  const sums = kinds + own - overlap === lock;
+  let lists: string;
+  if (repeats.length === 0 && overlap === 0) {
+    lists = `With the ${kinds} ${word(kinds)} above, parts.lock lists ${lock}.`;
+  } else if (repeats.length > 0 && overlap === 0 && sums) {
+    lists = `The ${rows} rows above are ${kinds} parts,${because}, so parts.lock lists ${lock}.`;
+  } else {
+    const reason = because === "" ? "" : `,${because}`;
+    lists = `The ${rows} rows above are ${kinds} parts${reason}.${shared} parts.lock lists ${lock}.`;
+  }
+  return { brings, lists };
 }
 
 /** The index card's place line. A scene placement wins over a board the part only sits inside. */

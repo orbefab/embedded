@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { BlockPlayer } from "../components/block-player";
 import { BlockStage } from "../components/block-stage";
-import type { BlockCircuit } from "../circuit";
+import { lockSentences, type BlockCircuit } from "../circuit";
 import type { BlockCard, Linked } from "../data";
 import { at } from "../paths";
 import type { ReadmeRun } from "../readme";
@@ -121,24 +121,31 @@ function SceneParts({ circuit, links }: { circuit: BlockCircuit; links: BlockVie
   );
 }
 
+function CodeWord({ text, word }: { text: string; word: string }) {
+  const at = text.indexOf(word);
+  if (at < 0) return text;
+  return (
+    <>
+      {text.slice(0, at)}
+      <Code>{word}</Code>
+      {text.slice(at + word.length)}
+    </>
+  );
+}
+
 function BoardFold({ circuit, links }: { circuit: BlockCircuit; links: BlockView["links"] }) {
-  const { board, lockCount } = circuit;
-  const count = board.own.length;
+  const { board } = circuit;
+  const { brings, lists } = lockSentences(circuit);
   return (
     <details className="mt-3 text-muted-foreground text-sm">
       <summary className="cursor-pointer">
-        The {board.title} brings {count} {count === 1 ? "part" : "parts"} of its own.
+        {brings}{" "}
         {__ORBE_SITE_INSTALL__ ? (
           <>
-            {" "}
-            <Code>orbe add</Code> copies them too, so <Code>parts.lock</Code> lists {lockCount}.
+            <Code>orbe add</Code> copies them too.{" "}
           </>
-        ) : (
-          <>
-            {" "}
-            <Code>parts.lock</Code> lists {lockCount}.
-          </>
-        )}
+        ) : null}
+        <CodeWord text={lists} word="parts.lock" />
       </summary>
       <ul className="mt-2 columns-1 gap-8 sm:columns-2">
         {board.own.map((part) => (
@@ -158,9 +165,13 @@ function BoardFold({ circuit, links }: { circuit: BlockCircuit; links: BlockView
   );
 }
 
-function InstallSlot({ name, checks }: { name: string; checks: number }) {
+function testText(tests: number): string {
+  return tests === 1 ? "1 test" : `${tests} tests`;
+}
+
+function InstallSlot({ name, tests }: { name: string; tests: number }) {
   if (!__ORBE_SITE_INSTALL__) return <CliComing />;
-  const checksText = checks === 1 ? "1 check" : `${checks} checks`;
+  const checksText = testText(tests);
   return (
     <div>
       <Install lines={[`orbe add ${name}`]} />
@@ -218,11 +229,11 @@ export function BlockPage({ block }: { block: BlockView }) {
           </a>
         </span>
         <span data-scene-parts={circuit.placed.length}>{circuit.placed.length} parts</span>
-        <span>{circuit.checks === 1 ? "1 check" : `${circuit.checks} checks`}</span>
+        <span>{testText(circuit.tests)}</span>
         <span>v{record.version}</span>
       </p>
 
-      <BlockStage install={<InstallSlot checks={circuit.checks} name={record.name} />} sources={circuit.sources}>
+      <BlockStage install={<InstallSlot name={record.name} tests={circuit.tests} />} sources={circuit.sources}>
         <BlockPlayer blocks={[{ name: record.name, title: record.title }]} registry={at.registry} wasm={at.wasm} />
       </BlockStage>
 

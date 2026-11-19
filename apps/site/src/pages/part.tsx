@@ -1,7 +1,7 @@
 import { stripText } from "@orbe/viewer/refs";
 import type { ReactNode } from "react";
 import { PartModel } from "../components/part-model";
-import type { PartUse } from "../circuit";
+import { glanceLine, type PartUse } from "../circuit";
 import type { Linked } from "../data";
 import { paramSentence, si, sourceText } from "../format";
 import { at } from "../paths";
@@ -74,11 +74,10 @@ function SourceCell({ rating, docs }: { rating: Rating; docs: PartRecord["docs"]
 }
 
 function Glance({ part }: { part: PartView }) {
-  const { use, where } = part;
   const { record } = part.item;
   const holes = new Set(record.holes?.strips.flat());
   const pins = record.pins.filter((pin) => !holes.has(pin.name));
-  const place = use.blocks.length > 0 ? "#used" : use.boards.length > 0 ? "#boards" : undefined;
+  const place = glanceLine(part.use);
   return (
     <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
       <dt className="font-mono text-muted-foreground text-xs">pins</dt>
@@ -95,13 +94,13 @@ function Glance({ part }: { part: PartView }) {
           <dd>above {si(record.lit.above, record.lit.unit)}</dd>
         </>
       )}
-      <dt className="font-mono text-muted-foreground text-xs">{use.blocks.length > 0 ? "used in" : use.boards.length > 0 ? "on boards" : "used in"}</dt>
+      <dt className="font-mono text-muted-foreground text-xs">{place.label}</dt>
       <dd>
-        {place === undefined ? (
-          where
+        {place.href === undefined ? (
+          place.value
         ) : (
-          <a className="underline hover:text-brand" href={place}>
-            {where}
+          <a className="underline hover:text-brand" href={place.href}>
+            {place.value}
           </a>
         )}
       </dd>
@@ -113,8 +112,8 @@ function Glance({ part }: { part: PartView }) {
 
 function UsedIn({ part }: { part: PartView }) {
   const { use } = part;
-  if (use.blocks.length > 0) {
-    return (
+  const blocks =
+    use.blocks.length > 0 ? (
       <Section id="used" title="Used in Blocks">
         <ul className="grid gap-3 sm:grid-cols-2" data-testid="used-in">
           {use.blocks.map((block) => (
@@ -132,10 +131,13 @@ function UsedIn({ part }: { part: PartView }) {
           ))}
         </ul>
       </Section>
-    );
-  }
-  if (use.boards.length > 0) {
-    return (
+    ) : use.boards.length === 0 ? (
+      <Section id="used" title="Used in Blocks">
+        <None>In no Block yet.</None>
+      </Section>
+    ) : null;
+  const boards =
+    use.boards.length > 0 ? (
       <Section id="boards" title="On boards">
         <ul className="grid gap-1" data-testid="on-boards">
           {use.boards.map((board) => (
@@ -148,12 +150,12 @@ function UsedIn({ part }: { part: PartView }) {
           ))}
         </ul>
       </Section>
-    );
-  }
+    ) : null;
   return (
-    <Section id="used" title="Used in Blocks">
-      <None>In no Block yet.</None>
-    </Section>
+    <>
+      {blocks}
+      {boards}
+    </>
   );
 }
 
@@ -193,9 +195,9 @@ export function PartPage({ part }: { part: PartView }) {
         </p>
       )}
 
-      <div className="mt-8 grid items-start gap-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      <div className="mt-8 grid grid-cols-[minmax(0,1fr)] items-start gap-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         <PartModel url={at.partView(record.name)} />
-        <div className="grid min-w-0 gap-8">
+        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-8">
           <div>
             <Label>Install</Label>
             <div className="mt-3">
