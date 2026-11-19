@@ -5,6 +5,7 @@
 //! core now runs.
 
 use std::fs;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use orbe_model::Time;
@@ -14,12 +15,30 @@ use common::{repo, run_netlist};
 use orbe_engine::blob::{Blobs, Sha256};
 use orbe_engine::{Refused, Session};
 
-fn scratch(name: &str) -> PathBuf {
+/// A temp folder this test removes when it ends, including when an assertion fails.
+/// Nextest runs each test in its own process, so nothing later reuses the path.
+struct Scratch(PathBuf);
+
+impl Deref for Scratch {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch(name: &str) -> Scratch {
     let path =
         std::env::temp_dir().join(format!("orbe-engine-esp32s3-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&path);
     fs::create_dir_all(&path).unwrap();
-    path
+    Scratch(path)
 }
 
 fn example() -> serde_json::Value {
