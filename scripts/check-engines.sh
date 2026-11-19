@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Drives a smoke in headless Firefox and headless WebKit. The viewer's fixture plays and
 # the time reading changes. WebKit draws the board. Headless Firefox on Linux cannot create
-# a WebGL context, so the page shows that error instead of the board, and those console
-# lines are the expected ones. The site's landing page, parts page and Blocks page load on
-# vite preview. The landing page draws its Block in WebKit and shows the same WebGL error
-# in Firefox. Any other page error or console error fails the check.
+# a WebGL context, so the viewer fixture shows that error instead of the board, and those
+# console lines are the expected ones. The site's landing page, parts page and Blocks page
+# load on vite preview. The landing page draws its Block in WebKit. In Firefox it shows one
+# sentence in place of the view and starts no renderer, so it logs none of those lines. Any
+# other page error or console error fails the check.
 # Needs the built viewer page, the built site, Node 24, pnpm, and the Firefox and WebKit
 # Playwright 1.64.1 expects under ~/.cache/ms-playwright. It installs nothing. A missing
 # browser or a missing system library exits 2. Install the browsers with

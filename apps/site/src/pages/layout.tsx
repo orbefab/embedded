@@ -32,7 +32,7 @@ export function Footer({ site }: { site: Site }) {
     <footer className="mt-24 border-border border-t">
       <div className="mx-auto grid max-w-5xl gap-3 px-6 py-10 text-muted-foreground text-sm">
         <p>
-          orbe and this catalog are open source under MIT OR Apache-2.0, unless a file says otherwise. Each file lists its own licence.
+          orbe and this catalog are open source under MIT OR Apache-2.0, unless a file says otherwise. Each file lists its own license.
           {__ORBE_SITE_INSTALL__ ? (
             <>
               {" "}
@@ -49,7 +49,7 @@ export function Footer({ site }: { site: Site }) {
           carry no logos.
         </p>
         <p className="font-mono text-xs">
-          Registry {site.registry} at{" "}
+          Catalog {site.registry} at{" "}
           <a className="underline hover:text-foreground" href={at.index}>
             {at.index}
           </a>

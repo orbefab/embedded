@@ -4,7 +4,7 @@
   "part": "breadboard-400",
   "version": "0.1.0",
   "title": "Breadboard, 400 points",
-  "summary": "Half-size solderless breadboard: 30 columns of two 5-hole strips across a centre channel, rows a to j, and four 25-hole power rails, W and Y for +, X and Z for -, each hole numbered by its column.",
+  "summary": "Half-size solderless breadboard: 30 columns of two 5-hole strips across a center channel, rows a to j, and four 25-hole power rails, W and Y for +, X and Z for -, each hole numbered by its column.",
   "tags": ["breadboard", "prototyping", "solderless"],
   "license": "MIT OR Apache-2.0",
   "real": { "generic": true, "maker": null, "number": null, "datasheet": null },
@@ -27,7 +27,7 @@
   },
   "holes": {
     "depth": 8, // a leg goes this far in, in mm: an estimate, as the model's holes are
-    // Each strip is one clip: five holes of a column on one side of the centre channel, or a
+    // Each strip is one clip: five holes of a column on one side of the center channel, or a
     // whole rail. Every other pair of holes is apart.
     "strips": [
       ["a1", "b1", "c1", "d1", "e1"],

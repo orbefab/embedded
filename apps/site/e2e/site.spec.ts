@@ -1,8 +1,10 @@
-import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { BrowserContext, Page } from "@playwright/test";
-import { collectLogs, expect, orbeJson, rendersDir, REPO, repoBlocks, shot, showBlock, test, waitState } from "../../../e2e/support";
+import { collectLogs, expect, ledGlow, orbeJson, rendersDir, REPO, repoBlocks, shot, showBlock, test, waitGlow, waitState } from "../../../e2e/support";
+import { captionOf } from "../src/captions";
+import { parseJsonc } from "../src/jsonc";
 
 const INSTALL = /orbe add|cargo install|github\.com\/orbefab\/embedded|orbefab\.com\/embedded\/install\.sh/;
 const VIEW = { width: 1280, height: 900 };
@@ -93,6 +95,25 @@ function searchNames(query: string): string[] {
   return orbeJson(process.env.ORBE ?? "", ["search", ...query.split(" ")]).data?.parts?.map((part) => part.name) ?? [];
 }
 
+/** A top-level scene part whose part file has a press input. A board's reset switch is a child
+ * of the board, so it does not count. */
+function sceneHasPress(id: string): boolean {
+  const scene = parseJsonc(readFileSync(join(REPO, "blocks", id, "scene.jsonc"), "utf8"));
+  if (scene === null || typeof scene !== "object" || !("parts" in scene) || scene.parts === null || typeof scene.parts !== "object") {
+    throw new Error(`${id} scene has no parts`);
+  }
+  return Object.values(scene.parts).some((part) => {
+    if (part === null || typeof part !== "object" || !("type" in part) || typeof part.type !== "string") return false;
+    const file = join(REPO, "parts", part.type, "part.jsonc");
+    if (!existsSync(file)) return false;
+    const record = parseJsonc(readFileSync(file, "utf8"));
+    if (record === null || typeof record !== "object" || !("controls" in record) || record.controls === null || typeof record.controls !== "object") {
+      return false;
+    }
+    return "press" in record.controls;
+  });
+}
+
 test.describe("landing", () => {
   let context: BrowserContext;
   let page: Page;
@@ -117,6 +138,9 @@ test.describe("landing", () => {
     await page.waitForFunction(() => performance.getEntriesByName("orbe:first-frame:nano-button-led").length > 0, null, { timeout: 30_000 });
     await waitState(page, "playing");
     expect(await page.locator('[data-testid="state"]').textContent()).toBe("playing");
+    await expect(page.getByTestId("block-caption")).toHaveText(captionOf("nano-button-led"));
+    await expect(page.getByTestId("hold-to-press")).toHaveText("Hold to press");
+    expect(await page.getByTestId("block-stage").getAttribute("tabindex")).toBeNull();
   });
 
   test("the landing page shows no install command", async () => {
@@ -185,6 +209,8 @@ test.describe("landing", () => {
   test("nano-led-fade plays after the switch", async () => {
     await waitState(page, "playing");
     expect(await page.locator('[data-testid="state"]').textContent()).toBe("playing");
+    await expect(page.getByTestId("block-caption")).toHaveText(captionOf("nano-led-fade"));
+    await expect(page.getByTestId("hold-to-press")).toHaveCount(0);
     await page.waitForTimeout(1500);
     await shot(page, "site-landing-switched");
   });
@@ -432,6 +458,8 @@ test.describe("uno-board", () => {
 });
 
 for (const block of repoBlocks()) {
+  const caption = captionOf(block.id);
+  const presses = sceneHasPress(block.id);
   test.describe(`${block.id} on its page`, () => {
     let context: BrowserContext;
     let page: Page;
@@ -475,6 +503,12 @@ for (const block of repoBlocks()) {
     test("opens, plays and shows what it does", async () => {
       await showBlock(page, block, true, `site-${block.id}-playing`);
       expect(await page.locator('[data-testid="errors"]').count()).toBe(0);
+    });
+
+    test("shows its caption, and the hold control only when the scene has a button", async () => {
+      await expect(page.getByTestId("block-caption")).toHaveText(caption);
+      if (presses) await expect(page.getByTestId("hold-to-press")).toHaveText("Hold to press");
+      else await expect(page.getByTestId("hold-to-press")).toHaveCount(0);
     });
 
     test("the page logged no error", () => {
@@ -522,6 +556,58 @@ test.describe("nano-button-led", () => {
     ).toBe(true);
   });
 
+  test("Space on the hold control presses the button, and the window losing focus releases it", async () => {
+    const control = page.getByTestId("hold-to-press");
+    await control.focus();
+    await page.keyboard.down("Space");
+    await waitGlow(page, true);
+    expect(await ledGlow(page)).toBeGreaterThan(0.5);
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    await waitGlow(page, false);
+    expect(await ledGlow(page)).toBeLessThan(0.05);
+    await page.keyboard.up("Space");
+  });
+
+  test("a pointer on the hold control presses, and leaving the control releases", async () => {
+    const control = page.getByTestId("hold-to-press");
+    const box = await control.boundingBox();
+    if (box === null) throw new Error("the hold control has no box");
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await waitGlow(page, true);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height + 48);
+    await waitGlow(page, false);
+    await page.mouse.up();
+    expect(await ledGlow(page)).toBeLessThan(0.05);
+  });
+
+  test("a click with no key or pointer before it, as a screen reader sends, presses briefly", async () => {
+    await page.evaluate(() => (document.querySelector("[data-testid='hold-to-press']") as HTMLButtonElement).click());
+    await waitGlow(page, true);
+    await waitGlow(page, false);
+  });
+
+  test("a mouse click on the hold control presses once, not twice", async () => {
+    await page.getByTestId("hold-to-press").click();
+    // A second, click-driven press would hold for 300 ms.
+    await page.waitForTimeout(150);
+    expect(await ledGlow(page)).toBeLessThan(0.05);
+  });
+
+  test("hiding the page releases a hold", async () => {
+    const control = page.getByTestId("hold-to-press");
+    await control.focus();
+    await page.keyboard.down("Space");
+    await waitGlow(page, true);
+    await page.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await waitGlow(page, false);
+    expect(await ledGlow(page)).toBeLessThan(0.05);
+    await page.keyboard.up("Space");
+  });
+
   test("the session refused no command", async () => {
     expect(await page.locator('[data-testid="errors"]').count()).toBe(0);
   });
@@ -535,7 +621,7 @@ const README = {
   "/embedded/blocks/nano-button-led/": "A 10k pull-down holds D2 low",
   "/embedded/blocks/nano-led-fade/": "fades up and down about every 3 seconds",
   "/embedded/blocks/nano-light-comparator/": "prints dark and a count",
-  "/embedded/blocks/uno-button-led/": "the Uno's L LED",
+  "/embedded/blocks/uno-button-led/": "A 10k pull-down holds D2 low",
 } as const;
 
 test("every Block page shows its README and no install line", async ({ browser, host }) => {
@@ -544,9 +630,13 @@ test("every Block page shows its README and no install line", async ({ browser, 
     const page = await context.newPage();
     await page.goto(`${host.base}${path}`);
     const body = await bodyText(page);
-    expect(body.includes(sentence) && !body.includes("Install it into a project") && !INSTALL.test(body), `${path} ${body.match(INSTALL)?.[0] ?? ""}`).toBe(
-      true,
-    );
+    expect(
+      body.includes(sentence) &&
+        body.includes("Check it with orbe check scene.jsonc and run its tests with orbe test.") &&
+        !body.includes("Install it into a project") &&
+        !INSTALL.test(body),
+      `${path} ${body.match(INSTALL)?.[0] ?? ""}`,
+    ).toBe(true);
     await context.close();
   }
 });
@@ -572,6 +662,116 @@ test("the Blocks page counts the parts each scene places", async ({ browser, hos
   await context.close();
 });
 
+test("a touch drag on empty stage space does not press the button", async ({ browser, host }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });
+  const page = await context.newPage();
+  const errors = collectLogs(page, "errors");
+  await page.goto(`${host.base}/embedded/`);
+  await page.waitForFunction(() => window.orbeViewer?.get().scene.getObjectByName("@btn1") !== undefined, null, { timeout: 30_000 });
+  await waitState(page, "playing");
+  await waitGlow(page, false);
+  const spot = await page.evaluate(() => {
+    const canvas = document.querySelector("canvas");
+    if (canvas === null) return null;
+    canvas.scrollIntoView({ block: "center" });
+    const rect = canvas.getBoundingClientRect();
+    const candidates = [
+      [rect.left + 24, rect.bottom - 28],
+      [rect.right - 28, rect.bottom - 28],
+      [rect.left + rect.width * 0.5, rect.top + rect.height * 0.72],
+    ];
+    for (const [x, y] of candidates) {
+      if (document.elementFromPoint(x, y) === canvas) return { x, y };
+    }
+    return null;
+  });
+  if (spot === null) throw new Error("no empty canvas point");
+  const before = await page.evaluate(() => window.orbeViewer.get().camera.position.toArray() as number[]);
+  const session = await context.newCDPSession(page);
+  await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ ...spot, id: 1 }] });
+  await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: spot.x + 110, y: spot.y - 70, id: 1 }] });
+  await page.waitForTimeout(400);
+  expect(await ledGlow(page)).toBeLessThan(0.05);
+  const after = await page.evaluate(() => window.orbeViewer.get().camera.position.toArray() as number[]);
+  expect(
+    before.some((value, index) => Math.abs(value - (after[index] ?? value)) > 0.5),
+    JSON.stringify({ before, after }),
+  ).toBe(true);
+  await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  const hold = page.getByTestId("hold-to-press");
+  await hold.scrollIntoViewIfNeeded();
+  const holdBox = await hold.boundingBox();
+  if (holdBox === null) throw new Error("the hold control has no box");
+  const hx = holdBox.x + holdBox.width / 2;
+  const hy = holdBox.y + holdBox.height / 2;
+  await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x: hx, y: hy, id: 2 }] });
+  await waitGlow(page, true);
+  expect(await ledGlow(page)).toBeGreaterThan(0.5);
+  await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await waitGlow(page, false);
+  expect(errors, JSON.stringify(errors)).toEqual([]);
+  await context.close();
+});
+
+test("every part page draws with no viewer error", async ({ browser, host }) => {
+  test.setTimeout(600_000);
+  const ids = readdirSync(join(REPO, "parts"))
+    .filter((id) => existsSync(join(REPO, "parts", id, "part.jsonc")))
+    .sort();
+  expect(ids.length).toBeGreaterThan(0);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const errors = collectLogs(page, "errors");
+  for (const id of ids) {
+    errors.length = 0;
+    const response = await page.goto(`${host.base}/embedded/parts/${id}/`);
+    expect(response?.ok(), id).toBe(true);
+    const ref = `@${id.replaceAll("-", "_")}`;
+    await page.waitForFunction(
+      (name) => {
+        if (document.querySelector("[data-testid='no-webgl']") !== null) return true;
+        if (document.querySelector("[data-testid='errors']") !== null) return true;
+        return window.orbeViewer?.get().scene.getObjectByName(name) !== undefined;
+      },
+      ref,
+      { timeout: 60_000 },
+    );
+    expect(await page.locator('[data-testid="errors"]').count(), id).toBe(0);
+    expect(errors, `${id} ${JSON.stringify(errors)}`).toEqual([]);
+    if (id === "resistor-axial") {
+      await expect(page.getByTestId("shown-at")).toHaveText("Shown at 220 Ω.");
+      const bands = await page.evaluate(() => {
+        const root = window.orbeViewer.get().scene.getObjectByName("@resistor_axial");
+        return ["band1-brown", "band2-black", "band3-orange", "band4-gold"].map((node) => {
+          const mesh = root?.getObjectByName(node);
+          const material = mesh?.material;
+          return material && "color" in material ? `#${material.color.getHexString()}` : "";
+        });
+      });
+      expect(bands, id).toEqual(["#d12b2b", "#d12b2b", "#6b3a1f", "#d4af37"]);
+    }
+    if (id === "led-5mm") await expect(page.getByTestId("shown-at")).toHaveText("Shown at red.");
+    if (id === "trimmer-3362p") await expect(page.getByTestId("shown-at")).toHaveCount(0);
+  }
+  await context.close();
+});
+
+test("with no WebGL 2 a part page says so and does not say which value it shows", async ({ browser, host }) => {
+  const context = await browser.newContext();
+  await context.addInitScript(() => {
+    const real = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement, kind: string, ...rest: unknown[]) {
+      if (kind === "webgl2") return null;
+      return (real as (...args: unknown[]) => unknown).call(this, kind, ...rest);
+    } as typeof real;
+  });
+  const page = await context.newPage();
+  await page.goto(`${host.base}/embedded/parts/resistor-axial/`);
+  await expect(page.getByTestId("no-webgl")).toBeVisible();
+  await expect(page.getByTestId("shown-at")).toHaveCount(0);
+  await context.close();
+});
+
 test("an unknown path answers 404 with the site's page and logs no page error", async ({ browser, host }) => {
   for (const path of ["/embedded/no-such-page", "/embedded/parts/no-such-part/"]) {
     const context = await browser.newContext();
@@ -581,7 +781,13 @@ test("an unknown path answers 404 with the site's page and logs no page error", 
     const response = await page.goto(`${host.base}${path}`);
     await page.waitForTimeout(1000);
     expect(
-      response?.status() === 404 && (await page.textContent("h1")) === "Not here" && (await page.title()) === "Not here | orbe" && pageErrors.length === 0,
+      response?.status() === 404 &&
+        (await page.textContent("h1")) === "Nothing moves here." &&
+        (await page.title()) === "Not found | orbe" &&
+        (await bodyText(page)).includes("404 NOT FOUND") &&
+        (await bodyText(page)).includes("Try the parts or the Blocks.") &&
+        (await page.locator('a[href="/"]').textContent()) === "Back home" &&
+        pageErrors.length === 0,
       JSON.stringify({ path, status: response?.status(), title: await page.title(), pageErrors }),
     ).toBe(true);
     await context.close();

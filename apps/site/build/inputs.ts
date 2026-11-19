@@ -69,9 +69,11 @@ async function assemble(install: boolean): Promise<SiteData> {
   cpSync(registry, join(PUBLIC, "r"), { recursive: true });
   for (const file of engine.files) cpSync(join(wasm, file), join(PUBLIC, "orbe-wasm", file));
   cpSync(sources, join(PUBLIC, "sources"), { recursive: true });
+  const shown: Record<string, string> = {};
   for (const [id, view] of views) {
     mkdirSync(join(PUBLIC, "parts", id), { recursive: true });
-    writeFileSync(join(PUBLIC, "parts", id, "view.json"), view);
+    writeFileSync(join(PUBLIC, "parts", id, "view.json"), view.scene);
+    if (view.shown !== undefined) shown[id] = view.shown;
   }
   if (install) cpSync(join(REPO, "scripts/install.sh"), join(PUBLIC, "install.sh"));
   writeFileSync(join(PUBLIC, "_headers"), HEADERS);
@@ -80,7 +82,7 @@ async function assemble(install: boolean): Promise<SiteData> {
   console.log(`site: ${catalog.parts.length} parts and ${catalog.blocks.length} Blocks from ${catalog.name}, sources ${readdirSync(sources).join(", ")}`);
   console.log(`site: install lines ${install ? "shown" : "hidden, the CLI is coming"}; orbe-wasm ${engine.version} from ${commit ?? "no commit"}`);
   if (commit === null || commit.endsWith("-dirty")) console.warn("site: warning: orbe-wasm was not built from a clean commit. Deploy a build of a clean checkout.");
-  return siteData(catalog, { registry: catalog.name, engine: { version: engine.version, commit } });
+  return siteData(catalog, { registry: catalog.name, engine: { version: engine.version, commit } }, shown);
 }
 
 /** `install` is ORBE_SITE_INSTALL=1: install lines and repo links show. */

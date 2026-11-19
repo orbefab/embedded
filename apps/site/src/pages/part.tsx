@@ -10,6 +10,8 @@ import { CliComing, Code, Install, None, Section, Table } from "./layout";
 export interface PartView {
   readonly item: Item<PartRecord>;
   readonly links: Readonly<Record<string, Linked>>;
+  /** The value the 3D view is drawn at, when the part file names one the view shows. */
+  readonly shown?: string;
 }
 
 /** The brightness ranges an LED's page states. */
@@ -90,7 +92,7 @@ export function PartPage({ part }: { part: PartView }) {
       )}
 
       <div className="mt-8">
-        <PartModel url={at.partView(record.name)} />
+        <PartModel shown={part.shown} url={at.partView(record.name)} />
       </div>
 
       <Section title="Pins">

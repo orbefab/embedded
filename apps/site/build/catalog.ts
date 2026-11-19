@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { at } from "../src/paths.ts";
 import { type BlockRecord, dependencyId, type IndexRow, type Item, type ItemRecord, type PartRecord, type Site, type SiteData } from "../src/records.ts";
+import { supplyPartScene } from "../src/shown.ts";
 
 export interface Catalog {
   readonly name: string;
@@ -51,21 +52,22 @@ export function readCatalog(dir: string): Catalog {
 export const isText = (path: string) =>
   path === "scene.jsonc" || path === "README.md" || path.startsWith("tests/") || /^firmware\/.+\.(ino|c|cpp|h)$/.test(path);
 
-export function siteData(catalog: Catalog, site: Site): SiteData {
+export function siteData(catalog: Catalog, site: Site, shown: Readonly<Record<string, string>>): SiteData {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const texts: Record<string, string> = {};
   for (const { record } of catalog.blocks) {
     for (const file of record.files) if (isText(file.path)) texts[file.sha256] = decoder.decode(catalog.bytes(file.sha256));
   }
-  return { site, parts: catalog.parts, blocks: catalog.blocks, texts };
+  return { site, parts: catalog.parts, blocks: catalog.blocks, texts, shown };
 }
 
 /** Draws one part on its own: orbe-wasm's `partScene` on the part's files and those of every
  * part it is built from, each as `[parts/<id>/<path>, bytes]`. */
 export type DrawPart = (id: string, files: readonly (readonly [string, Uint8Array])[]) => string;
 
-/** Each part's scene message, by part id, with each model pointed at its file in the registry. */
-export function partViews(catalog: Catalog, draw: DrawPart): Map<string, string> {
+/** Each part's scene message, by part id, with each model pointed at its file in the registry,
+ * and the sentence naming a value the view draws when the part file supplies one. */
+export function partViews(catalog: Catalog, draw: DrawPart): Map<string, { scene: string; shown?: string }> {
   const byName = new Map(catalog.parts.map((item) => [item.record.name, item.record]));
   const closure = (name: string, seen = new Set<string>()): Set<string> => {
     if (seen.has(name)) return seen;
@@ -73,7 +75,7 @@ export function partViews(catalog: Catalog, draw: DrawPart): Map<string, string>
     for (const dependency of byName.get(name)?.registryDependencies ?? []) closure(dependencyId(dependency), seen);
     return seen;
   };
-  const views = new Map<string, string>();
+  const views = new Map<string, { scene: string; shown?: string }>();
   for (const { record } of catalog.parts) {
     const files: [string, Uint8Array][] = [];
     const urls = new Map<string, string>();
@@ -91,7 +93,7 @@ export function partViews(catalog: Catalog, draw: DrawPart): Map<string, string>
         part.model = url;
       }
     }
-    views.set(record.name, JSON.stringify(scene));
+    views.set(record.name, supplyPartScene(JSON.stringify(scene), record));
   }
   return views;
 }

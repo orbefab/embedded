@@ -12,5 +12,5 @@
       "pins": { "p": "VBUS", "n": "GND" },
     },
   },
-  "not_simulated": [{ "what": "USB data and shield", "pins": ["DM", "DP", "SHIELD"], "why": "The host's 5 V stands in for a plugged cable. USB data is not modelled." }],
+  "not_simulated": [{ "what": "USB data and shield", "pins": ["DM", "DP", "SHIELD"], "why": "The host's 5 V stands in for a plugged cable. USB data is not modeled." }],
 }

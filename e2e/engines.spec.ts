@@ -12,9 +12,11 @@ const PAGES = [
   ["/embedded/blocks/", "Blocks"],
 ] as const;
 
-// Headless Firefox on Linux refuses a WebGL context. three.js logs the first three lines and the
-// thrown Error is logged as "Error". The fixture still plays. WebKit creates a WebGL 2 context
-// and draws the board. The same refusal in WebKit fails the check.
+// Headless Firefox on Linux refuses a WebGL context. The viewer fixture still starts three.js,
+// which logs the first three lines, and the thrown Error is logged as "Error". The fixture
+// still plays. The site detects the refusal first and draws one sentence instead, so it never
+// starts the renderer and logs none of those lines. WebKit creates a WebGL 2 context and draws
+// the board. The same refusal in WebKit fails the check.
 const FIREFOX_WEBGL = [
   "THREE.WebGLRenderer: A WebGL context could not be created. Reason:  WebGL creation failed: \n* AllowWebgl2:false restricts context creation on this system. ()",
   "THREE.WebGLRenderer: A WebGL context could not be created. Reason:  WebGL creation failed: \n* AllowWebgl2:false restricts context creation on this system. ()",
@@ -27,6 +29,7 @@ function drawnOrRefused(page: Page): Promise<"board" | "refused"> {
     .waitForFunction(
       () => {
         if (window.orbeViewer?.get().scene.getObjectByName("@nano") !== undefined) return "board";
+        if (document.querySelector("[data-testid='no-webgl']") !== null) return "refused";
         if (document.body.textContent?.includes("Error creating WebGL context")) return "refused";
         return false;
       },
@@ -86,6 +89,9 @@ test("the site's main pages load", async ({ page }, info) => {
       continue;
     }
     expect(info.project.name).toBe("firefox");
-    expect(errors, JSON.stringify(errors)).toEqual(FIREFOX_WEBGL);
+    await expect(page.getByTestId("no-webgl")).toHaveText("This browser has no WebGL, so this view stays blank.");
+    await expect(page.getByTestId("block-caption")).toHaveCount(0);
+    await expect(page.getByTestId("hold-to-press")).toHaveCount(0);
+    expect(errors, JSON.stringify(errors)).toEqual([]);
   }
 });

@@ -5,7 +5,7 @@
   "name": "led-5mm",
   "version": "0.1.0",
   "title": "5 mm LED",
-  "description": "Round 5 mm through-hole LED, two leads on 2.54 mm. The longer lead is the anode. Pick its colour.",
+  "description": "Round 5 mm through-hole LED, two leads on 2.54 mm. The longer lead is the anode. Pick its color.",
   "categories": [
     "led",
     "light",

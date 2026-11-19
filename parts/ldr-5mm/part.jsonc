@@ -24,7 +24,7 @@
       "curve": {
         "kind": "power",
         "x": { "value": 10.0, "unit": "lx", "source": { "datasheet": { "doc": "Senba GL55 Series CdS Photoresistor Manual", "at": "p2 table, light resistance column header (10Lux), and Test Conditions, light resistance: 10 lx of standard light source A, 2856 K, after two hours at 400 to 600 lx", "basis": "nominal" } } },
-        "y": { "value": 15000.0, "unit": "ohm", "source": { "closed_form": { "note": "p2 table, GL5528 row, light resistance 10 to 20 kohm at 10 lx. The table has no typical, so the fit takes the centre of the range" } } },
+        "y": { "value": 15000.0, "unit": "ohm", "source": { "closed_form": { "note": "p2 table, GL5528 row, light resistance 10 to 20 kohm at 10 lx. The table has no typical, so the fit takes the center of the range" } } },
         "exponent": { "value": -0.6, "unit": "1", "source": { "closed_form": { "note": "minus gamma. p2 table, GL5528 row, gamma 0.6, which Test Conditions defines as lg(R10 / R100) / lg(100 / 10). So R100 is R10 / 10^0.6, and the power law through both points falls 0.6 decades per decade of light" } } },
         "max": { "value": 1000000.0, "unit": "ohm", "source": { "datasheet": { "doc": "Senba GL55 Series CdS Photoresistor Manual", "at": "p2 table, GL5528 row, dark resistance 1 Mohm, which Test Conditions defines as the resistance ten seconds after 10 lx is shut off. The table gives one value, with no minimum or typical", "basis": "nominal" } } },
       },
@@ -35,8 +35,8 @@
   },
   "not_simulated": [
     { "what": "response time", "why": "The resistance follows the light at once. The sheet gives 20 ms to rise and 30 ms to fall, and longer in the dark: the dark resistance is the one ten seconds after the light goes off." },
-    { "what": "spread between cells", "why": "Every cell is the centre of the sheet's 10 to 20 kΩ at 10 lx, so a real one can read up to a third higher or lower." },
-    { "what": "light history and colour", "why": "The fit is the sheet's test: light source A at 2856 K, after two hours at 400 to 600 lx. The cell peaks at 540 nm, and the engine's `light` is lux with no colour." },
+    { "what": "spread between cells", "why": "Every cell is the center of the sheet's 10 to 20 kΩ at 10 lx, so a real one can read up to a third higher or lower." },
+    { "what": "light history and color", "why": "The fit is the sheet's test: light source A at 2856 K, after two hours at 400 to 600 lx. The cell peaks at 540 nm, and the engine's `light` is lux with no color." },
     { "what": "temperature", "why": "The fit is at 25 C. The sheet's p3 curve moves the resistance by about 20 % between -20 C and 40 C." },
     { "what": "maximum voltage", "why": "The sheet allows 150 V in the dark. The engine checks only the power rating." },
   ],
