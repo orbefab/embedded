@@ -67,7 +67,7 @@
     "tint": [{ "node": "body", "by": "color" }],
   },
   "not_simulated": [
-    { "what": "light", "why": "The engine reports current, not luminous intensity. The drawing scales current by 10 mA, so the glow is 1 at 10 mA and blooms above that. The colors' intensities differ and are not modelled. Each color's forward curve is fitted from 2 mA to 20 mA through the three points named on its fit. Below 2 mA and above 20 mA the current is that curve extended. A threshold at 1 mA would sit outside the fit. Luminous intensity versus forward current is drawn as a straight line from 0 mA on each datasheet, so the extended current still glows in proportion." },
+    { "what": "light", "why": "The engine reports current, not luminous intensity. The drawing scales current by 10 mA, so the glow is 1 at 10 mA and blooms above that. The colors' intensities differ and are not modeled. Each color's forward curve is fitted from 2 mA to 20 mA through the three points named on its fit. Below 2 mA and above 20 mA the current is that curve extended. A threshold at 1 mA would sit outside the fit. Luminous intensity versus forward current is drawn as a straight line from 0 mA on each datasheet, so the extended current still glows in proportion." },
     { "what": "temperature", "why": "The fits are at 25 C and the engine has no temperature." },
     { "what": "reverse breakdown", "why": "The engine's LED has no breakdown voltage. The datasheets rate 5 V reverse." },
   ],

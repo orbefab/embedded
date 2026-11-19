@@ -19,6 +19,8 @@ export interface BlockCard {
   readonly description?: string;
   readonly board: string;
   readonly parts: number;
+  /** The scene places a part with a press input, so the page shows the hold control. */
+  readonly button: boolean;
 }
 
 /** A part as the parts list shows it and the search reads it. */
@@ -37,15 +39,25 @@ function linked(names: readonly string[]): Record<string, Linked> {
   return Object.fromEntries(names.map((name) => [name, entry(name)]));
 }
 
-/** How many parts the scene places. A board's own parts are the board, not more parts of the scene. */
-function sceneParts(record: BlockRecord): number {
+/** The scene's own parts. A board's own parts are the board, not more parts of the scene. */
+function sceneParts(record: BlockRecord): Record<string, unknown> {
   const file = record.files.find((entry) => entry.path === "scene.jsonc");
   const text = file === undefined ? undefined : data.texts[file.sha256];
   if (text === undefined) throw new Error(`${record.name} has no scene.jsonc`);
   const scene = parseJsonc(text);
   const parts = scene !== null && typeof scene === "object" && "parts" in scene ? scene.parts : undefined;
   if (parts === null || typeof parts !== "object" || Array.isArray(parts)) throw new Error(`${record.name} scene has no parts`);
-  return Object.keys(parts).length;
+  return parts as Record<string, unknown>;
+}
+
+/** A top-level scene part whose catalog record has a press input. A board's reset switch is a
+ * child of the board, so it does not count. */
+function sceneHasButton(record: BlockRecord): boolean {
+  const pressable = new Set(data.parts.filter((item) => item.record.pressable === true).map((item) => item.record.name));
+  return Object.values(sceneParts(record)).some((part) => {
+    if (part === null || typeof part !== "object" || !("type" in part)) return false;
+    return typeof part.type === "string" && pressable.has(part.type);
+  });
 }
 
 const card = ({ record }: Item<BlockRecord>): BlockCard => ({
@@ -53,7 +65,8 @@ const card = ({ record }: Item<BlockRecord>): BlockCard => ({
   title: record.title,
   description: record.description,
   board: record.board,
-  parts: sceneParts(record),
+  parts: Object.keys(sceneParts(record)).length,
+  button: sceneHasButton(record),
 });
 
 const dependencyIds = (record: PartRecord | BlockRecord) => record.registryDependencies.map((dependency) => dependency.slice(0, dependency.lastIndexOf("@")));
@@ -82,7 +95,7 @@ export const parts = (): Listed[] =>
 export function part(id: string) {
   const item = data.parts.find((entry) => entry.record.name === id);
   if (item === undefined) return null;
-  return { item, links: linked([...dependencyIds(item.record), ...item.usedBy]) };
+  return { item, links: linked([...dependencyIds(item.record), ...item.usedBy]), shown: data.shown[id] };
 }
 
 /** A Block's text files the page shows: the scene, the firmware's sources and the tests. The
@@ -99,5 +112,11 @@ export function block(id: string) {
   const readmeFile = item.record.files.find((file) => file.path === "README.md");
   const readmeText = readmeFile === undefined ? undefined : data.texts[readmeFile.sha256];
   if (readmeText === undefined) throw new Error(`${id} has no README.md`);
-  return { item, links: linked(dependencyIds(item.record)), texts, readme: readmeParagraphs(readmeText, __ORBE_SITE_INSTALL__) };
+  return {
+    item,
+    links: linked(dependencyIds(item.record)),
+    texts,
+    readme: readmeParagraphs(readmeText, __ORBE_SITE_INSTALL__),
+    button: sceneHasButton(item.record),
+  };
 }

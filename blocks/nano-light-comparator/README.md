@@ -8,4 +8,6 @@ On USB the Nano's 5V pin is 4.76 V, one Schottky drop under the host's 5.0 V, an
 
 `orbe set light 10` darkens the room and the LED comes on. `orbe set light 300` brings the room back and the LED goes out.
 
+Check it with `orbe check scene.jsonc` and run its tests with `orbe test`.
+
 `firmware/light.hex` is built from `firmware/light/light.ino` and links the LGPL AVR runtime. [`firmware/NOTICE`](firmware/NOTICE) says where its source is and how to rebuild it.

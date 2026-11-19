@@ -3,7 +3,7 @@
   "part": "capacitor-ceramic-disc",
   "version": "0.1.0",
   "title": "Capacitor, ceramic disc",
-  "summary": "Small unpolarised disc capacitor with two leads on 5 mm, for decoupling, filtering and debouncing. Set its capacitance. The 3D model always reads 104 (100 nF). It starts where the circuit's DC solution puts it, which on a pin that is still an input is not 0 V. Set `initial`, such as \"0\", to start it at that voltage.",
+  "summary": "Small unpolarized disc capacitor with two leads on 5 mm, for decoupling, filtering and debouncing. Set its capacitance. The 3D model always reads 104 (100 nF). It starts where the circuit's DC solution puts it, which on a pin that is still an input is not 0 V. Set `initial`, such as \"0\", to start it at that voltage.",
   "tags": ["capacitor", "ceramic", "passive", "decoupling", "filter", "debounce", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "real": { "generic": true, "maker": null, "number": null, "datasheet": null },

@@ -1,11 +1,11 @@
 import { type ReactNode, useLayoutEffect, useRef, useState } from "react";
 
-/** True when this browser can create a WebGL context. A failed probe is a blank view, not a
- * scene that is still loading. */
+/** True when this browser can create a WebGL 2 context. The current three.js needs WebGL 2, so a
+ * WebGL 1 context is a blank view, not a scene that is still loading. */
 function hasWebgl(): boolean {
   try {
     const canvas = document.createElement("canvas");
-    const gl = canvas.getContext("webgl2") ?? canvas.getContext("webgl");
+    const gl = canvas.getContext("webgl2");
     if (gl === null) return false;
     gl.getExtension("WEBGL_lose_context")?.loseContext();
     return true;

@@ -44,6 +44,7 @@ export interface BlockView {
   readonly links: Readonly<Record<string, Linked>>;
   readonly texts: readonly { readonly path: string; readonly text: string }[];
   readonly readme: readonly (readonly ReadmeRun[])[];
+  readonly button: boolean;
 }
 
 /** Where a README link goes: a web or mail address as written, or a file of the Block. Any
@@ -115,7 +116,7 @@ export function BlockPage({ block }: { block: BlockView }) {
       </p>
 
       <div className="mt-8">
-        <BlockPlayer blocks={[{ name: record.name, title: record.title }]} registry={at.registry} wasm={at.wasm} />
+        <BlockPlayer blocks={[{ name: record.name, title: record.title, button: block.button }]} registry={at.registry} wasm={at.wasm} />
         <Readme files={record.files} paragraphs={block.readme} />
       </div>
 

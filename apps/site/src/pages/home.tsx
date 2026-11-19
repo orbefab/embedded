@@ -31,7 +31,7 @@ export function HomePage({ home }: { home: Home }) {
           </p>
         </div>
         <div>
-          <BlockPlayer blocks={home.blocks.map(({ name, title }) => ({ name, title }))} registry={at.registry} wasm={at.wasm} />
+          <BlockPlayer blocks={home.blocks.map(({ name, title, button }) => ({ name, title, button }))} registry={at.registry} wasm={at.wasm} />
         </div>
       </section>
 

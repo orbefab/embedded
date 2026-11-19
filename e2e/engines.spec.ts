@@ -90,6 +90,8 @@ test("the site's main pages load", async ({ page }, info) => {
     }
     expect(info.project.name).toBe("firefox");
     await expect(page.getByTestId("no-webgl")).toHaveText("This browser has no WebGL, so this view stays blank.");
+    await expect(page.getByTestId("block-caption")).toHaveCount(0);
+    await expect(page.getByTestId("hold-to-press")).toHaveCount(0);
     expect(errors, JSON.stringify(errors)).toEqual([]);
   }
 });

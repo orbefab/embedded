@@ -177,9 +177,6 @@ function drawBody(builder: Builder, group: Group, instance: InstanceBase, path: 
   }
   for (const { nodes, by } of part.view.recolour ?? []) {
     const ohms = instance.params[by];
-    // A part drawn on its own omits a required number. That is not a broken scene: the bands
-    // stay as the model drew them. A value that is present and not a number still is.
-    if (ohms === undefined) continue;
     if (typeof ohms !== "number") throw new Error(`param "${by}" is not a number`);
     const bands = fourBands(ohms);
     if (bands === undefined) {

@@ -73,12 +73,10 @@ afterEach(() => {
 });
 
 describe("buildScene", () => {
-  test("a resistor drawn with no resistance keeps the model's band colours and is not an error", () => {
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  test("a resistor drawn with no resistance is an error on that part", () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
     const built = buildScene(scene([{ name: "r1", part: "resistor", params: {}, placement: at, children: [] }]), models);
-    expect(built.errors).toEqual([]);
-    expect(BANDS.map((band) => colourOf(built.root, "@r1", band))).toEqual(BANDS.map(() => GLB_COLOUR));
-    expect(error).not.toHaveBeenCalled();
+    expect(built.errors).toEqual(['@r1: param "resistance" is not a number']);
   });
 
   test("a resistance that is present and not a number is an error on that part", () => {

@@ -1,5 +1,5 @@
 {
-  "format": 1, "part": "capacitor-electrolytic-smd", "version": "0.1.0", "title": "Capacitor, SMD aluminium electrolytic, case D", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "capacitor-electrolytic-smd", "version": "0.1.0", "title": "Capacitor, SMD aluminum electrolytic, case D", "license": "MIT OR Apache-2.0",
   "real": { "generic": true, "maker": "Panasonic", "number": "EEE-1EA470WP", "datasheet": null },
   "pins": { "pos": [1], "neg": [2] },
   "params": {
@@ -7,5 +7,5 @@
     "initial": { "unit": "V", "default": null, "sets": "/initial" },
   },
   "model": { "kind": "capacitor", "pins": { "a": "pos", "b": "neg" } },
-  "not_simulated": [{ "what": "polarity", "why": "The engine's capacitor is not polarised, so a reverse voltage never warns." }],
+  "not_simulated": [{ "what": "polarity", "why": "The engine's capacitor is not polarized, so a reverse voltage never warns." }],
 }

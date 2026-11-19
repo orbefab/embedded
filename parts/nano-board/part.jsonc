@@ -54,8 +54,8 @@
     "r_rxd": { "type": "resistor-0603", "resistance": "1k", "not_simulated": "Its far end is the CH340G's RXD, which its model does not cover." },
     "c_reset": { "type": "capacitor-0603", "not_simulated": "It carries the CH340G's DTR pulse to RESET for an upload, and upload is not simulated, so DTR never moves. Left in, it would only settle RESET by microvolts after each move of the 5V rail.", "capacitance": { "value": 1e-7, "unit": "F", "source": { "datasheet": { "doc": "development board schematic, revision 3", "at": "C5, 100 nF", "basis": "nominal" } } } },
     "r_reset": { "type": "resistor-0603", "resistance": { "value": 10000, "unit": "ohm", "source": { "datasheet": { "doc": "development board schematic, revision 3", "at": "RN1D, 10K", "basis": "nominal" } } } },
-    "c_bulk_reg": { "type": "capacitor-tantalum-3216", "capacitance": "10u", "not_simulated": "It sits on the AMS1117 path, which is not modelled." },
-    "c_reg": { "type": "capacitor-0603", "capacitance": "100n", "not_simulated": "It sits on the AMS1117 path, which is not modelled." },
+    "c_bulk_reg": { "type": "capacitor-tantalum-3216", "capacitance": "10u", "not_simulated": "It sits on the AMS1117 path, which is not modeled." },
+    "c_reg": { "type": "capacitor-0603", "capacitance": "100n", "not_simulated": "It sits on the AMS1117 path, which is not modeled." },
   },
   // Every wire is copper on the board, so each is a trace, which the viewer does not draw.
   "wires": [
