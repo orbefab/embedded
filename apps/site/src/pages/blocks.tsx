@@ -3,7 +3,7 @@ import { BlockPlayer } from "../components/block-player";
 import type { BlockCard, Linked } from "../data";
 import { at } from "../paths";
 import type { ReadmeRun } from "../readme";
-import { type BlockRecord, dependencyId, type FileEntry, type Item, type Site } from "../records";
+import { type BlockRecord, dependencyId, type FileEntry, type Item } from "../records";
 import { Files } from "./files";
 import { CliComing, Install, None, Section, Table } from "./layout";
 
@@ -92,7 +92,7 @@ function Readme({ paragraphs, files }: { paragraphs: BlockView["readme"]; files:
   );
 }
 
-export function BlockPage({ site, block }: { site: Site; block: BlockView }) {
+export function BlockPage({ block }: { block: BlockView }) {
   const { item, links, texts } = block;
   const { record } = item;
   const title = (id: string) => links[id]?.title ?? id;
@@ -116,9 +116,6 @@ export function BlockPage({ site, block }: { site: Site; block: BlockView }) {
 
       <div className="mt-8">
         <BlockPlayer blocks={[{ name: record.name, title: record.title }]} registry={at.registry} wasm={at.wasm} />
-        <p className="mt-3 text-muted-foreground text-sm">
-          This is the real engine: orbe-wasm {site.engine.version} runs the Block's firmware in a Worker in your browser. Use the controls in the view.
-        </p>
         <Readme files={record.files} paragraphs={block.readme} />
       </div>
 

@@ -8,8 +8,4 @@ On USB the Nano's 5V pin is 4.76 V, one Schottky drop under the host's 5.0 V, an
 
 `orbe set light 10` darkens the room and the LED comes on. `orbe set light 300` brings the room back and the LED goes out.
 
-Run it here with `orbe check scene.jsonc` and `orbe test`. In this repo a Block reads its parts from the catalog built into `orbe`, so it has no `parts/` and no `parts.lock`.
-
-Install it into a project of your own with `orbe add nano-light-comparator`, in an empty folder. That copies the parts into `parts/` and records them in `parts.lock`, as `orbe add <part>` does, then writes `scene.jsonc`, `firmware/` and `tests/`.
-
 `firmware/light.hex` is built from `firmware/light/light.ino` and links the LGPL AVR runtime. [`firmware/NOTICE`](firmware/NOTICE) says where its source is and how to rebuild it.

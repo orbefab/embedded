@@ -529,8 +529,15 @@ fn the_build_refuses_what_a_client_could_not_trust() {
 #[test]
 fn every_item_is_a_part_or_a_block_of_the_repo() {
     let registry = build(&repo(), None).unwrap();
-    let parts = fs::read_dir(repo().join("parts")).unwrap().count();
-    let blocks = fs::read_dir(repo().join("blocks")).unwrap().count();
+    // A file beside the folders, such as blocks/README.md, is not an item.
+    let folders = |kind: &str| {
+        fs::read_dir(repo().join(kind))
+            .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().path().is_dir())
+            .count()
+    };
+    let parts = folders("parts");
+    let blocks = folders("blocks");
     let (mut p, mut b) = (0, 0);
     for item in &registry.items {
         match item {

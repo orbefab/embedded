@@ -370,7 +370,9 @@ fn the_core_skill_names_each_block() {
     assert!(skill.contains(&listed), "{listed}");
     let mut found: Vec<String> = fs::read_dir(common::repo().join("blocks"))
         .unwrap()
-        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .map(|e| e.unwrap().path())
+        .filter(|path| path.is_dir())
+        .map(|path| path.file_name().unwrap().to_str().unwrap().to_string())
         .collect();
     found.sort();
     let mut want = BLOCKS.map(String::from).to_vec();

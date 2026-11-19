@@ -12,7 +12,9 @@ use live::{common, failed, orbe, project, replies};
 fn each_block_passes() {
     let mut ids: Vec<String> = fs::read_dir(common::repo().join("blocks"))
         .unwrap()
-        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_dir())
+        .map(|path| path.file_name().unwrap().to_str().unwrap().to_string())
         .collect();
     ids.sort();
     assert_eq!(

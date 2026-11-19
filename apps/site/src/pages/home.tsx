@@ -1,7 +1,6 @@
 import { BlockPlayer } from "../components/block-player";
 import type { BlockCard, Linked } from "../data";
 import { at } from "../paths";
-import type { Site } from "../records";
 import { BlockCards } from "./blocks";
 import { CliComing, Install, Section } from "./layout";
 
@@ -11,7 +10,7 @@ export interface Home {
   readonly parts: number;
 }
 
-export function HomePage({ site, home }: { site: Site; home: Home }) {
+export function HomePage({ home }: { home: Home }) {
   return (
     <>
       <section className="grid gap-10 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)] lg:items-center">
@@ -33,9 +32,6 @@ export function HomePage({ site, home }: { site: Site; home: Home }) {
         </div>
         <div>
           <BlockPlayer blocks={home.blocks.map(({ name, title }) => ({ name, title }))} registry={at.registry} wasm={at.wasm} />
-          <p className="mt-3 text-muted-foreground text-sm">
-            The real engine, orbe-wasm {site.engine.version}, runs each Block's firmware in your browser. Click the button to press it.
-          </p>
         </div>
       </section>
 
@@ -86,9 +82,10 @@ export function HomePage({ site, home }: { site: Site; home: Home }) {
 export function NotFoundPage() {
   return (
     <>
-      <h1 className="font-semibold text-3xl tracking-tight">Not here</h1>
+      <p className="font-mono text-muted-foreground text-xs tracking-[0.16em]">404 NOT FOUND</p>
+      <h1 className="mt-3 font-semibold text-3xl tracking-tight">Nothing moves here.</h1>
       <p className="mt-4 text-muted-foreground">
-        Nothing is at this address. Try the{" "}
+        Try the{" "}
         <a className="underline hover:text-foreground" href={at.parts}>
           parts
         </a>{" "}
@@ -98,6 +95,9 @@ export function NotFoundPage() {
         </a>
         .
       </p>
+      <a className="mt-6 inline-block rounded-md border border-border px-3 py-1.5 text-sm hover:border-foreground" href="/">
+        Back home
+      </a>
     </>
   );
 }

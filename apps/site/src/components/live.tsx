@@ -1,14 +1,31 @@
 // The 3D views, in a chunk of their own that a page loads once it shows one, so a page without
 // one never loads three.js.
-import { loadBlock, type SceneMessage, type SessionSource, Viewer, type ViewerProps, workerSource } from "@orbe/viewer";
+import { loadBlock, type Ref, type SceneMessage, type SessionSource, Viewer, type ViewerProps, workerSource } from "@orbe/viewer";
 import { useEffect, useState } from "react";
 
 /** The canvas's live state, for the site's own browser checks, as the viewer page does. */
 const expose: NonNullable<ViewerProps["onCreated"]> = (state) => Object.assign(window, { orbeViewer: { get: state.get } });
 
+/** Press and release of the Block's own button, the switch ref with no dot. The board's reset
+ * switch is left to a click on that button. */
+export interface ButtonHold {
+  press: () => void;
+  release: () => void;
+}
+
 /** A Block from the registry, live in orbe-wasm's Worker, playing as soon as it opens. The
  * Worker and its object URLs are freed when the view unmounts or shows another Block. */
-export function BlockView({ id, registry, wasm }: { id: string; registry: string; wasm: string }) {
+export function BlockView({
+  id,
+  registry,
+  wasm,
+  hold,
+}: {
+  id: string;
+  registry: string;
+  wasm: string;
+  hold: { current: ButtonHold | null };
+}) {
   const [source, setSource] = useState<SessionSource | null>(null);
   useEffect(() => {
     const base = new URL(wasm, document.baseURI);
@@ -17,21 +34,53 @@ export function BlockView({ id, registry, wasm }: { id: string; registry: string
       () => loadBlock(new URL("index.json", new URL(registry, document.baseURI)), id)
     );
     let started = false;
+    let button: Ref | null = null;
+    let held = false;
+    let want = false;
+    const pressButton = () => {
+      if (button === null || held) return;
+      held = true;
+      opened.send({ cmd: "press", ref: button }).catch(() => {
+        held = false;
+      });
+    };
+    const api: ButtonHold = {
+      press() {
+        want = true;
+        pressButton();
+      },
+      release() {
+        want = false;
+        if (!held || button === null) return;
+        const ref = button;
+        held = false;
+        opened.send({ cmd: "release", ref }).catch(() => {});
+      },
+    };
     const off = opened.subscribe((message) => {
-      if (message.type === "scene" && !started) {
-        started = true;
-        opened.send({ cmd: "play" }).catch(() => {});
+      if (message.type === "scene") {
+        // A new scene follows an open, which restarts the session and drops a held press.
+        button = message.channels.switches.find((ref) => !ref.includes(".")) ?? null;
+        held = false;
+        if (!started) {
+          started = true;
+          opened.send({ cmd: "play" }).catch(() => {});
+        }
+        if (want) pressButton();
       }
       if (message.type === "frame" && performance.getEntriesByName(`orbe:first-frame:${id}`).length === 0) {
         performance.mark(`orbe:first-frame:${id}`);
       }
     });
+    hold.current = api;
     setSource(opened);
     return () => {
+      api.release();
+      if (hold.current === api) hold.current = null;
       off();
       opened.close();
     };
-  }, [id, registry, wasm]);
+  }, [hold, id, registry, wasm]);
   return source === null ? null : <Viewer onCreated={expose} source={source} />;
 }
 

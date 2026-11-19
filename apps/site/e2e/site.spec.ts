@@ -581,7 +581,13 @@ test("an unknown path answers 404 with the site's page and logs no page error", 
     const response = await page.goto(`${host.base}${path}`);
     await page.waitForTimeout(1000);
     expect(
-      response?.status() === 404 && (await page.textContent("h1")) === "Not here" && (await page.title()) === "Not here | orbe" && pageErrors.length === 0,
+      response?.status() === 404 &&
+        (await page.textContent("h1")) === "Nothing moves here." &&
+        (await page.title()) === "Not found | orbe" &&
+        (await bodyText(page)).includes("404 NOT FOUND") &&
+        (await bodyText(page)).includes("Try the parts or the Blocks.") &&
+        (await page.locator('a[href="/"]').textContent()) === "Back home" &&
+        pageErrors.length === 0,
       JSON.stringify({ path, status: response?.status(), title: await page.title(), pageErrors }),
     ).toBe(true);
     await context.close();
