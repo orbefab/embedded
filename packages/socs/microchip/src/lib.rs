@@ -10,8 +10,10 @@
 //! and the start-up, `CLKPR`, watchdog, and brown-out values read out of them.
 //! `MCUCR.IVSEL` does not move the vectors. `image` parses Intel HEX and ELF
 //! into flash bytes. `timeline` runs the core on a host's clock, in oscillator
-//! cycles, and stops it at each change of a pin's drive. `bridge` is the chip on
-//! the `orbe-mcu` contract: its package pins, and the timeline in picoseconds.
+//! cycles, and stops it at each change of a pin's drive. `gaps` holds what the
+//! firmware reached that the model does not run, which stops the timeline or is
+//! noted. `bridge` is the chip on the `orbe-mcu` contract: its package pins, the
+//! timeline in picoseconds, and those gaps as its fault and notes.
 
 /// `Clone` for a struct, field by field, with a `clone_from` that reuses each field's buffers.
 /// The derived `clone_from` clones a fresh value and drops the old one. The patterns name every
@@ -38,6 +40,7 @@ mod bus;
 mod chip;
 mod cpu;
 mod fuses;
+mod gaps;
 mod image;
 mod irq;
 mod mux;
@@ -48,6 +51,7 @@ mod timeline;
 pub use bridge::{Bridge, PACKAGE, PORT_PINS, Pad, port_index};
 pub use cpu::{Channel, Cpu, LoadError, Parity, ResetKind, SerialFrame, SpiClock, SupplyChannel};
 pub use fuses::FuseBytes;
+pub use gaps::{Noted, Refusal, Refused, Unmodeled};
 pub use image::{IgnoredRegion, IgnoredSegment, Image, ImageError, parse_elf, parse_hex};
 pub use periph::twi::{I2cNote, I2cStamp};
 pub use periph::usart::Sent;

@@ -5,6 +5,7 @@ mod common;
 mod counted_runs;
 mod cycles;
 mod free_runs;
+mod gaps;
 mod gpio_in;
 mod instructions;
 mod mspim;

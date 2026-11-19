@@ -16,7 +16,7 @@ use crate::image::Image;
 use crate::irq;
 use crate::periph::system::{BORF, EXTRF, PORF, WDRF};
 use crate::periph::usart::Sent;
-use crate::{IoWrite, Level, PinLevels, PinReport};
+use crate::{IoWrite, Level, Noted, PinLevels, PinReport, Refusal, Refused};
 
 mod seam;
 
@@ -65,12 +65,8 @@ pub enum Channel {
     /// [`Cpu::set_host_serial`] set another. A byte supplied while `RXEN`
     /// is clear is still driven, and the receiver misses it.
     Usart0,
-    /// MOSI from a master chip.
-    ///
-    /// [`Cpu::supply`] queues the bytes the host slave returns on `MISO`, one
-    /// per frame, and `0xFF` when the queue is empty. [`Cpu::take`] yields
-    /// each MOSI byte at the cycle `SPIF` is set. That slave shifts on every
-    /// master frame and does not look at `SS`.
+    /// MOSI from a master chip. [`Cpu::take`] yields each byte at the cycle `SPIF` is set. The
+    /// master reads `MISO` from its pad, which [`Cpu::drive_pin`] drives.
     Spi,
     /// MISO sampled by a host master.
     ///
@@ -82,11 +78,11 @@ pub enum Channel {
 
 /// A channel [`Cpu::supply`] accepts.
 ///
-/// [`Channel::SpiHostMaster`] is absent: the host master has no inbound bytes.
+/// No SPI channel is here. A master chip reads `MISO` from its pad, and the host master has no
+/// inbound bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SupplyChannel {
     Usart0,
-    Spi,
 }
 
 /// Host-master clock for [`Cpu::queue_spi_master`].
@@ -443,6 +439,56 @@ impl Cpu {
         self.core.unknown()
     }
 
+    /// Turns on the checks for what the model does not run, for a host that hands the pads over
+    /// as levels, as [`crate::Timeline`] does. From here on the chip stops at the first such
+    /// instruction or setting, which [`Self::refusal`] gives, and lists in [`Self::noted`] the
+    /// registers it keeps without running. A reset keeps it on.
+    pub fn watch_gaps(&mut self) {
+        self.bus.watch_gaps();
+    }
+
+    /// What stopped the chip: an instruction or a setting the model does not run. A run ends
+    /// at the first instruction boundary it reaches after it, and steps no further. Free ops
+    /// inside that run can pass it, and [`crate::Timeline`] shows nothing past it. An in-run
+    /// reset keeps it.
+    pub fn refusal(&self) -> Option<Refusal> {
+        self.bus.refusal()
+    }
+
+    /// The registers the firmware reached that the model keeps without running, each once, in
+    /// the order reached. An in-run reset keeps them.
+    pub fn noted(&self) -> &[Noted] {
+        &self.bus.gaps().noted
+    }
+
+    /// The oscillator cycle of a load of `ACSR` whose check waits on what the firmware does
+    /// next. The chip may yet refuse at it, so a host shows nothing past it until it resolves.
+    pub fn gap_pending(&self) -> Option<u64> {
+        self.bus.gaps().acsr_read.map(|(_, refusal)| refusal.at)
+    }
+
+    /// Files a refusal for a word that decodes to nothing, and for a load of `ACSR` whose
+    /// bound passed. Whether the chip is refused.
+    #[inline(always)]
+    fn gaps_due(&mut self) -> bool {
+        if self.bus.gaps().on
+            && (self.core.first_unknown().is_some() || self.bus.gaps().acsr_read.is_some())
+        {
+            self.check_gaps();
+        }
+        self.bus.refusal().is_some()
+    }
+
+    #[cold]
+    fn check_gaps(&mut self) {
+        // §37 lists the instruction set. A word outside it does nothing the datasheet names,
+        // and the model runs it as a one-cycle no-op.
+        if let Some((pc, cycle)) = self.core.first_unknown() {
+            self.bus.refuse(Refused::Instruction("unknown"), cycle, pc);
+        }
+        self.bus.gap_deadline(self.cycles());
+    }
+
     /// Plant a data-space byte without logging it.
     pub fn poke(&mut self, addr: u16, value: u8) {
         self.bus.poke(&mut self.core, addr, value);
@@ -488,7 +534,7 @@ impl Cpu {
 
     fn run(&mut self, limit: u64, until_news: bool) {
         let div = self.clock_div();
-        while self.cycles() < limit && !self.core.is_stopped() {
+        while self.cycles() < limit && !self.core.is_stopped() && !self.gaps_due() {
             if self.core.can_fetch() {
                 if !self.run_free(limit, until_news, div) {
                     self.step();
@@ -507,6 +553,7 @@ impl Cpu {
                 break;
             }
         }
+        self.gaps_due();
     }
 
     /// Run `n` cycles, or until the core stops.
@@ -628,6 +675,8 @@ impl Cpu {
 
     fn perform_reset(&mut self, kind: ResetKind, when: ResetWhen) {
         let now = self.cycles();
+        self.check_gaps();
+        let gaps = self.bus.take_gaps_across_reset();
         // §8.4.2. The write finishes when VCC is still sufficient. A brown-out
         // means it was not, and the datasheet leaves that byte undefined.
         // This model keeps the old value in that case.
@@ -677,7 +726,11 @@ impl Cpu {
         self.apply_host_serial();
         self.core.set_program(program);
         match when {
-            ResetWhen::Restart => {}
+            ResetWhen::Restart => {
+                if gaps.on {
+                    self.watch_gaps();
+                }
+            }
             ResetWhen::Delay => {
                 self.core.set_cycles(now);
                 self.bus.set_cycle(now);
@@ -685,6 +738,7 @@ impl Cpu {
                 self.bus.restore_epochs(epochs, now);
                 self.bus.restore_sent_across_reset(sent);
                 self.bus.restore_i2c_across_reset(i2c);
+                self.bus.restore_gaps(gaps);
                 self.begin_reset_delay();
             }
             ResetWhen::Hold => {
@@ -694,6 +748,7 @@ impl Cpu {
                 self.bus.restore_epochs(epochs, now);
                 self.bus.restore_sent_across_reset(sent);
                 self.bus.restore_i2c_across_reset(i2c);
+                self.bus.restore_gaps(gaps);
                 self.core.set_activity(Activity::Held);
             }
         }
@@ -759,7 +814,7 @@ impl Cpu {
     /// before it (§7.7).
     #[inline(always)]
     pub fn step(&mut self) {
-        if self.core.is_stopped() {
+        if self.core.is_stopped() || self.gaps_due() {
             return;
         }
         if !self.core.can_fetch() {
@@ -773,6 +828,7 @@ impl Cpu {
         self.core.step(&mut self.bus);
         let spent = self.core.cycles().wrapping_sub(before);
         self.retire(spent);
+        self.gaps_due();
     }
 
     /// Runs free ops, steady loads and idle stores from here while the bus is quiet and no
@@ -841,7 +897,14 @@ impl Cpu {
     #[inline(never)]
     fn finish_step(&mut self) {
         if self.bus.take_sleep_arm() && !self.bus.begin_sleep() {
+            // Table 10-2 marks `SM` 100 and 101 reserved, so no sleep mode says what the chip
+            // does. `SLEEP` is one word and one cycle.
             self.core.set_activity(Activity::Fetch);
+            let (cycle, pc) = (
+                self.cycles().saturating_sub(1),
+                self.core.pc().wrapping_sub(1),
+            );
+            self.bus.refuse(Refused::Sleep, cycle, pc);
         }
         if self.bus.take_wdt_reset() {
             self.perform_reset(ResetKind::Watchdog, ResetWhen::Delay);
@@ -972,7 +1035,6 @@ impl Cpu {
     pub fn supply(&mut self, channel: SupplyChannel, bytes: &[u8]) {
         match channel {
             SupplyChannel::Usart0 => self.bus.supply_usart(USART0, bytes),
-            SupplyChannel::Spi => self.bus.supply_spi(bytes),
         }
     }
 

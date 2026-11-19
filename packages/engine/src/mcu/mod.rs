@@ -237,7 +237,14 @@ impl Mcu {
         each!(self, host => host.mcu.held())
     }
 
-    pub(crate) fn sample(&mut self, at: Time, volts: &[f64]) {
+    /// The volts of its samples at `at`. The ATmega328P's §24.8 sensor also reads the world's
+    /// temperature there, when the scene declares one, and its 25 °C default when not.
+    pub(crate) fn sample(&mut self, world: &crate::world::World, at: Time, volts: &[f64]) {
+        if let Mcu::Atmega328p(host) = self
+            && let Some(celsius) = world.before(crate::world::Quantity::Temperature, at)
+        {
+            host.mcu.set_temperature_c(celsius);
+        }
         each!(self, host => host.mcu.sample(at, volts))
     }
 

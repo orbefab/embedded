@@ -429,7 +429,8 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 - USB, and serial into the chip. The chip's serial out (TX, D1) is read as text.
 - The chip's clamp diodes. A pin pulled past VCC or GND draws no clamp current, and `rating.voltage` names it.
 - The chips' own supply current as the sketch changes it. The ATmega328P draws its datasheet typical for 16 MHz, 11.4 mA at 5 V while it runs and 2.0 mA while RESET is held low, and the Nano's and Uno's CH340G 12 mA at 5 V, both as resistances, whatever the sketch does and in sleep too.
-- A switch's force and travel, and part tolerances. An LED's `brightness` is its average forward current over the last 20 ms. It reads `lit` above 2 mA, `dim` above 100 uA and at or below 2 mA, and `off` at or below 100 uA. Light, temperature and humidity reach only a part whose file reads them from the scene's `world`.
+- A switch's force and travel, and part tolerances. An LED's `brightness` is its average forward current over the last 20 ms. It reads `lit` above 2 mA, `dim` above 100 uA and at or below 2 mA, and `off` at or below 100 uA. Light, temperature and humidity reach only a part whose file reads them from the scene's `world`, and the ATmega328P's own temperature sensor, which reads `temperature`.
 - Turning a potentiometer during a session. Its `position` param sets the wiper for the whole run, so run `orbe open` again after you change it.
+- Parts of the ATmega328P, such as its analog comparator, Timer2's 32 kHz crystal and self-programming, which stop the run with `chip.unsupported_setting` or `chip.unsupported_instruction` when a sketch reaches one. I2C slave mode, `OSCCAL`, A6 and A7, and an I2C clock below about 18 kHz warn `chip.unmodeled_register` once instead, and the run goes on. The arduino skill lists them.
 - Any part the catalog above does not list.
 - orbe never builds firmware. Build it with your toolchain and name the output file in the scene.
