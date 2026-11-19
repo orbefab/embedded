@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Runs a newcomer's first path on a release orbe. Pass the orbe binary, or the
 # archive scripts/release-build.sh wrote. An archive is checked against the
-# sha256 file beside it, then unpacked. The commands run in an empty temp
-# folder, and the script stops at the first one that fails. It removes that
-# folder when it exits.
+# sha256 file beside it, then unpacked. `sh scripts/install.sh --tarball`
+# installs that archive into the temp folder. It downloads nothing. A checksum
+# that does not match is refused, and the installed `orbe --version` must be
+# the version in the archive name. The commands then run on that installed
+# binary. They run in an empty temp folder, and the script stops at the first
+# one that fails. It removes that folder when it exits.
 #
 # The same script runs on Linux and on macOS. It uses mktemp with a template,
 # and sha256sum or shasum -a 256. It needs bash and curl. wget can fetch the
@@ -21,6 +24,8 @@
 # bash loop that kills the command when the time is up. Stopping this script
 # stops that command too, then closes the session and removes the work folder.
 set -euo pipefail
+
+scripts_dir=$(cd "$(dirname "$0")" && pwd)
 
 usage() {
   cat <<'EOF'
@@ -234,6 +239,23 @@ run_in() {
   fi
 }
 
+# Runs `sh scripts/install.sh --tarball` on $1 into $2. The installer's own
+# temp folder is under $work, so cleanup removes it even when the deadline
+# kills the script. Stdout and stderr are left in $cmd_out. Returns 0, the
+# installer's status, or 124 when the deadline passes.
+run_install() {
+  local archive=$1 dest=$2
+  local status=0
+  mkdir -p "$work/install-tmp"
+  echo "scripts/check-release.sh: sh scripts/install.sh --tarball $(basename "$archive") --dir $dest --version $want_version" >&2
+  # TMPDIR is only for this command. A later orbe command keeps the caller's temp folder.
+  await_orbe 60 quiet 0 \
+    env TMPDIR="$work/install-tmp" \
+    sh "$scripts_dir/install.sh" \
+    --tarball "$archive" --dir "$dest" --version "$want_version" || status=$?
+  return "$status"
+}
+
 # A URL on the viewer origin, with a relative ref resolved against base.
 resolve_url() {
   local base=$1 ref=$2 origin
@@ -396,7 +418,50 @@ if [[ $input == *.tar.gz ]]; then
   tar -xzf "$input" -C "$work/root" || fail "could not extract the archive"
   [[ -f $work/root/orbe ]] || fail "the archive has no orbe binary at its top"
   chmod 755 "$work/root/orbe" || fail "could not mark the unpacked orbe executable"
-  orbe_bin=$work/root/orbe
+
+  # A copy whose checksum file does not match. install.sh must refuse it and write no binary.
+  refused=$work/refused
+  mkdir -p "$refused"
+  if ! ln "$input" "$refused/$base" 2>/dev/null; then
+    cp "$input" "$refused/$base"
+  fi
+  case $want in
+    0*) bad_sum=1${want#0} ;;
+    *) bad_sum=0${want#?} ;;
+  esac
+  printf '%s  %s\n' "$bad_sum" "$base" >"$refused/$base.sha256"
+  status=0
+  run_install "$refused/$base" "$work/refused-bin" || status=$?
+  if [[ $status -eq 0 ]]; then
+    printf '%s\n' "$cmd_out" >&2
+    fail "install.sh installed an archive whose checksum does not match"
+  fi
+  if [[ $status -eq 124 ]]; then
+    fail "install.sh did not refuse a wrong checksum within 60 s"
+  fi
+  case $cmd_out in
+    *"sha256 mismatch"*) ;;
+    *)
+      printf '%s\n' "$cmd_out" >&2
+      fail "install.sh did not refuse a wrong checksum (exit $status)"
+      ;;
+  esac
+  [[ ! -e $work/refused-bin/orbe ]] || fail "install.sh wrote orbe for an archive whose checksum does not match"
+  echo "scripts/check-release.sh: a wrong checksum was refused" >&2
+
+  status=0
+  run_install "$input" "$work/bin" || status=$?
+  if [[ $status -eq 124 ]]; then
+    printf '%s\n' "$cmd_out" >&2
+    fail "install.sh did not finish within 60 s"
+  fi
+  if [[ $status -ne 0 ]]; then
+    printf '%s\n' "$cmd_out" >&2
+    fail "install.sh did not install the archive (exit $status)"
+  fi
+  printf '%s\n' "$cmd_out"
+  [[ -x $work/bin/orbe ]] || fail "install.sh did not write an executable orbe"
+  orbe_bin=$work/bin/orbe
 else
   [[ -x $input ]] || fail "$input is not executable"
   orbe_bin=$input
