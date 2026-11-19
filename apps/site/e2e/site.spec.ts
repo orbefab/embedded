@@ -75,6 +75,7 @@ async function instrument(page: Page): Promise<void> {
 
 async function openTracked(browser: { newContext(options: { viewport: { width: number; height: number } }): Promise<BrowserContext> }, url: string) {
   const context = await browser.newContext({ viewport: VIEW });
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   const page = await context.newPage();
   const tracked = track(page);
   await instrument(page);
@@ -86,9 +87,26 @@ const bodyText = (page: Page) => page.evaluate(() => document.body.innerText);
 
 function licences(page: Page): Promise<Record<string, string | null>> {
   return page
-    .locator("section", { has: page.locator("h2", { hasText: /^Files$/ }) })
-    .locator("tbody tr")
-    .evaluateAll((rows) => Object.fromEntries(rows.map((row) => [row.cells[0].textContent, row.cells[2].textContent])));
+    .locator('[data-testid="license-files"] tbody tr')
+    .evaluateAll((rows) => Object.fromEntries(rows.map((row) => [row.cells[0]?.textContent ?? "", row.cells[2]?.textContent ?? null])));
+}
+
+const CARD_COUNTS = {
+  "/embedded/blocks/nano-button-led/": "Nano (CH340 clone), 6 parts",
+  "/embedded/blocks/nano-led-fade/": "Nano (CH340 clone), 4 parts",
+  "/embedded/blocks/nano-light-comparator/": "Nano (CH340 clone), 10 parts",
+  "/embedded/blocks/uno-button-led/": "Uno R3 compatible board, 6 parts",
+};
+
+async function cardCounts(page: Page): Promise<Record<string, string>> {
+  return page.locator('a[href^="/embedded/blocks/"]').evaluateAll((links) =>
+    Object.fromEntries(
+      links.flatMap((link) => {
+        const count = link.querySelector("span.font-mono")?.textContent?.trim();
+        return count?.endsWith(" parts") ? [[link.getAttribute("href"), count]] : [];
+      }),
+    ),
+  );
 }
 
 function searchNames(query: string): string[] {
@@ -163,20 +181,7 @@ test.describe("landing", () => {
   });
 
   test("a card counts the parts the scene places", async () => {
-    const counts = await page.locator('a[href^="/embedded/blocks/"]').evaluateAll((links) =>
-      Object.fromEntries(
-        links.flatMap((link) => {
-          const count = link.querySelector("span.font-mono")?.textContent;
-          return count?.endsWith(" parts") ? [[link.getAttribute("href"), count]] : [];
-        }),
-      ),
-    );
-    expect(counts).toEqual({
-      "/embedded/blocks/nano-button-led/": "nano-board, 6 parts",
-      "/embedded/blocks/nano-led-fade/": "nano-board, 4 parts",
-      "/embedded/blocks/nano-light-comparator/": "nano-board, 10 parts",
-      "/embedded/blocks/uno-button-led/": "uno-board, 6 parts",
-    });
+    expect(await cardCounts(page)).toEqual(CARD_COUNTS);
   });
 
   test("switching to nano-led-fade terminates the first Worker and revokes every object URL it made", async () => {
@@ -255,6 +260,15 @@ test.describe("parts search", () => {
     expect(await page.locator("[data-part]").count()).toBe(catalog);
   });
 
+  test("a card says where the part is used", async () => {
+    const line = (id: string) => page.locator(`[data-part="${id}"]`).innerText();
+    expect(await line("led-5mm")).toContain("in 4 Blocks");
+    expect(await line("resistor-axial")).toContain("in 4 Blocks");
+    expect(await line("lm358-dip8")).toContain("in 1 Block");
+    expect(await line("nano-board")).toContain("in 3 Blocks");
+    expect(await line("led-0603")).toContain("on the Nano (CH340 clone)");
+  });
+
   for (const query of QUERIES) {
     test(`"${query}" finds what orbe search finds, in its order`, async () => {
       await page.fill('input[name="q"]', query);
@@ -299,20 +313,19 @@ test.describe("led-5mm", () => {
   });
 
   test("it lists all five files as downloads", async () => {
-    const files = await page.locator("section a[download]").evaluateAll((links) => links.map((link) => [link.textContent, link.getAttribute("href")]));
+    const files = await page
+      .locator('[data-testid="license-files"] a[download]')
+      .evaluateAll((links) => links.map((link) => [link.textContent, link.getAttribute("href")]));
     expect(files.length === 5 && files.some(([path]) => path === "led-5mm.glb"), JSON.stringify(files)).toBe(true);
   });
 
   test("every file shows its licence", async () => {
-    const shown = await page
-      .locator("section", { has: page.locator("h2", { hasText: /^Files$/ }) })
-      .locator("td:nth-child(3)")
-      .allTextContents();
+    const shown = await page.locator('[data-testid="license-files"] td:nth-child(3)').allTextContents();
     expect(shown.length === 5 && shown.every((licence) => licence === "MIT OR Apache-2.0"), JSON.stringify(shown)).toBe(true);
   });
 
   test("a download serves the file's bytes, by the record's SHA-256", async () => {
-    const href = await page.locator("section a[download]", { hasText: /^part\.jsonc$/ }).getAttribute("href");
+    const href = await page.locator('[data-testid="license-files"] a[download]', { hasText: /^part\.jsonc$/ }).getAttribute("href");
     const download = await page.evaluate(async (href) => {
       const record = await (await fetch("/embedded/r/led-5mm@0.1.0.json")).json();
       const bytes = new Uint8Array(await (await fetch(href)).arrayBuffer());
@@ -330,6 +343,17 @@ test.describe("led-5mm", () => {
   test("it shows the ratings with their sources", async () => {
     const body = await bodyText(page);
     expect(/30 mA/.test(body) && /Absolute Maximum Ratings/.test(body)).toBe(true);
+    expect(body).toContain("Brightness is the average current over 20 ms.");
+  });
+
+  test("it links the Blocks that place it", async () => {
+    const hrefs = await page.locator('[data-testid="used-in"] a').evaluateAll((links) => links.map((link) => link.getAttribute("href")).sort());
+    expect(hrefs).toEqual([
+      "/embedded/blocks/nano-button-led/",
+      "/embedded/blocks/nano-led-fade/",
+      "/embedded/blocks/nano-light-comparator/",
+      "/embedded/blocks/uno-button-led/",
+    ]);
   });
 
   test("it shows what is not simulated", async () => {
@@ -346,7 +370,10 @@ test.describe("led-5mm", () => {
     const loaded = await weight();
     console.log(`     led-5mm: ${loaded.requests} requests, ${loaded.bytes} bytes, ${loaded.gzip} gzipped`);
     await shot(page, "site-part-led-5mm");
-    await page.evaluate(() => [...document.querySelectorAll("h2")].find((heading) => heading.textContent === "Files")?.scrollIntoView());
+    await page.locator('[data-testid="license-files"]').evaluate((box) => {
+      box.setAttribute("open", "");
+      box.scrollIntoView();
+    });
     await shot(page, "site-part-led-5mm-files");
     expect(errors, JSON.stringify(errors)).toEqual([]);
   });
@@ -367,7 +394,7 @@ test.describe("breadboard-830", () => {
   });
 
   test("its pins are only its holes", async () => {
-    expect(/Pins\s*Only its holes\./i.test(await bodyText(page))).toBe(true);
+    expect(/Pins\s*No pins yet\./i.test(await bodyText(page))).toBe(true);
   });
 
   test("it lists each strip: two of five holes in each of 63 columns, and four rails", async () => {
@@ -418,7 +445,10 @@ test.describe("nano-board", () => {
   });
 
   test("it lists the Blocks that use it", async () => {
-    expect(/Used by[\s\S]*Button and LED on a Nano/i.test(await bodyText(page))).toBe(true);
+    const body = await bodyText(page);
+    expect(/Used in Blocks[\s\S]*Button and LED on a Nano/i.test(body), body.match(/Used in Blocks[\s\S]{0,200}/i)?.[0] ?? body).toBe(true);
+    const href = await page.locator('[data-testid="used-in"] a', { hasText: "Button and LED on a Nano" }).getAttribute("href");
+    expect(href).toBe("/embedded/blocks/nano-button-led/");
   });
 
   test("the Nano's page logged no error", async () => {
@@ -531,9 +561,27 @@ test.describe("nano-button-led", () => {
     await context?.close();
   });
 
-  test("the page shows the scene and the firmware source", async () => {
+  test("Code shows the sketch and the scene, and Copy copies the sketch", async () => {
+    await expect(page.locator('[data-testid="view-preview-panel"]')).toBeVisible();
+    await expect(page.locator('[data-testid="view-code-panel"]')).toBeHidden();
+    await page.locator('[data-testid="view-code"]').click();
+    await expect(page.locator('[data-testid="view-code-panel"]')).toBeVisible();
+    await expect(page.locator('[data-testid="view-preview-panel"]')).toBeHidden();
     const body = await bodyText(page);
     expect(/scene\.jsonc/.test(body) && /firmware\/button\/button\.ino/.test(body)).toBe(true);
+    const file = page.locator('[data-testid="code-file"][data-path="firmware/button/button.ino"]');
+    const sketch = await file.locator("pre").textContent();
+    await file.locator('[data-testid="copy"]').click();
+    await expect(file.locator('[data-testid="copy"]')).toHaveText("Copied");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(sketch);
+    await page.locator('[data-testid="view-preview"]').click();
+    await expect(page.locator('[data-testid="view-preview-panel"]')).toBeVisible();
+  });
+
+  test("the card's part count is the number of parts in the circuit", async () => {
+    const listed = await page.locator('[data-testid="scene-parts"] li[data-ref]').count();
+    const shown = await page.locator("[data-scene-parts]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-scene-parts")));
+    expect(shown.length > 0 && shown.every((count) => count === String(listed)), JSON.stringify({ shown, listed })).toBe(true);
   });
 
   test("it shows the README and no install command", async () => {
@@ -645,20 +693,37 @@ test("the Blocks page counts the parts each scene places", async ({ browser, hos
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(`${host.base}/embedded/blocks/`);
-  const counts = await page.locator('a[href^="/embedded/blocks/"]').evaluateAll((links) =>
-    Object.fromEntries(
-      links.flatMap((link) => {
-        const count = link.querySelector("span.font-mono")?.textContent;
-        return count?.endsWith(" parts") ? [[link.getAttribute("href"), count]] : [];
-      }),
-    ),
-  );
-  expect(counts).toEqual({
-    "/embedded/blocks/nano-button-led/": "nano-board, 6 parts",
-    "/embedded/blocks/nano-led-fade/": "nano-board, 4 parts",
-    "/embedded/blocks/nano-light-comparator/": "nano-board, 10 parts",
-    "/embedded/blocks/uno-button-led/": "uno-board, 6 parts",
-  });
+  const counts = await cardCounts(page);
+  expect(counts).toEqual(CARD_COUNTS);
+  const card = counts["/embedded/blocks/nano-led-fade/"];
+  await page.goto(`${host.base}/embedded/blocks/nano-led-fade/`);
+  const listed = await page.locator('[data-testid="scene-parts"] li[data-ref]').count();
+  expect(card).toBe(`Nano (CH340 clone), ${listed} parts`);
+  await context.close();
+});
+
+test("a part that only sits inside a board names that board", async ({ browser, host }) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`${host.base}/embedded/parts/led-0603/`);
+  const body = await bodyText(page);
+  expect(/on boards[\s\S]*on the nano \(ch340 clone\)/i.test(body), body.slice(body.toLowerCase().indexOf("on board"), body.toLowerCase().indexOf("on board") + 180)).toBe(true);
+  expect(await page.locator('[data-testid="used-in"]').count()).toBe(0);
+  const href = await page.locator('[data-testid="on-boards"] a').getAttribute("href");
+  expect(href).toBe("/embedded/parts/nano-board/");
+  await context.close();
+});
+
+test("a long hash and the code view stay inside a phone width", async ({ browser, host }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  const fits = () => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1);
+  await page.goto(`${host.base}/embedded/parts/led-5mm/`);
+  await page.locator('[data-testid="license-files"] summary').click();
+  expect(await fits(), "led-5mm").toBe(true);
+  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+  await page.locator('[data-testid="view-code"]').click();
+  expect(await fits(), "nano-button-led code").toBe(true);
   await context.close();
 });
 

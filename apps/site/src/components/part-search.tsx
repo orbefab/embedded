@@ -30,21 +30,20 @@ export function PartSearch({ parts }: { parts: readonly Listed[] }) {
       <p className="mt-3 font-mono text-muted-foreground text-xs" data-testid="count">
         {shown.length === parts.length ? `${parts.length} parts` : `${shown.length} of ${parts.length} parts`}
       </p>
-      <ul className="mt-4 divide-y divide-border border-border border-y">
+      <ul className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {shown.map((part) => (
           <li data-part={part.name} key={part.name}>
-            <a className="grid gap-1 py-4 transition-colors hover:text-brand sm:grid-cols-[minmax(0,1fr)_auto]" href={part.href}>
-              <span>
-                <span className="font-medium">{part.title}</span>
-                <span className="block text-muted-foreground text-sm">
-                  {part.description ?? "No summary yet."}
-                </span>
+            <a
+              className="flex h-full min-w-0 flex-col gap-1 rounded-lg border border-border p-4 transition-colors hover:border-brand max-sm:flex-row max-sm:items-center max-sm:justify-between max-sm:gap-3"
+              href={part.href}
+            >
+              <span className="min-w-0">
+                <span className="block font-medium">{part.title}</span>
+                <span className="mt-1 block text-muted-foreground text-sm">{part.match}</span>
               </span>
-              <span className="font-mono text-muted-foreground text-xs sm:text-right">
-                {part.name}
-                {part.maker || part.number ? (
-                  <span className="block">{[part.maker, part.number].filter(Boolean).join(" ")}</span>
-                ) : null}
+              <span className="flex shrink-0 justify-between gap-3 font-mono text-muted-foreground text-xs max-sm:flex-col max-sm:items-end sm:mt-auto">
+                <span className="break-all">{part.name}</span>
+                <span className={part.use === "in no Block yet" ? "" : "text-foreground"}>{part.use}</span>
               </span>
             </a>
           </li>

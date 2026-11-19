@@ -1,11 +1,13 @@
 import type { ReactNode } from "react";
 import { BlockPlayer } from "../components/block-player";
+import { BlockStage } from "../components/block-stage";
+import type { BlockCircuit } from "../circuit";
 import type { BlockCard, Linked } from "../data";
 import { at } from "../paths";
 import type { ReadmeRun } from "../readme";
-import { type BlockRecord, dependencyId, type FileEntry, type Item } from "../records";
-import { Files } from "./files";
-import { CliComing, Install, None, Section, Table } from "./layout";
+import { type BlockRecord, type FileEntry, type Item } from "../records";
+import { Files, LicenseBox } from "./files";
+import { CliComing, Code, Install, Section } from "./layout";
 
 export function BlockCards({ blocks }: { blocks: readonly BlockCard[] }) {
   return (
@@ -15,9 +17,7 @@ export function BlockCards({ blocks }: { blocks: readonly BlockCard[] }) {
           <a className="block h-full rounded-lg border border-border p-5 transition-colors hover:border-brand" href={at.block(block.name)}>
             <span className="font-medium">{block.title}</span>
             <span className="mt-2 block text-muted-foreground text-sm">{block.description ?? "No summary yet."}</span>
-            <span className="mt-4 block font-mono text-muted-foreground text-xs">
-              {block.board}, {block.parts} parts
-            </span>
+            <span className="mt-4 block font-mono text-muted-foreground text-xs" data-scene-parts={block.parts}>{`${block.board}, ${block.parts} parts`}</span>
           </a>
         </li>
       ))}
@@ -42,14 +42,14 @@ export function BlocksPage({ blocks }: { blocks: readonly BlockCard[] }) {
 export interface BlockView {
   readonly item: Item<BlockRecord>;
   readonly links: Readonly<Record<string, Linked>>;
-  readonly texts: readonly { readonly path: string; readonly text: string }[];
+  readonly circuit: BlockCircuit;
   readonly readme: readonly (readonly ReadmeRun[])[];
-  readonly button: boolean;
 }
 
-/** Where a README link goes: a web or mail address as written, or a file of the Block. Any
- * other target, such as a `javascript:` URL, a protocol-relative URL or a missing file, is no link. */
+/** Where a README link goes. `firmware/NOTICE` opens the license box. A web or mail address
+ * stays as written. Any other target is a file of the Block, or no link. */
 function fileHref(href: string, files: readonly FileEntry[]): string | undefined {
+  if (href === "firmware/NOTICE" || href.endsWith("/firmware/NOTICE")) return "#files";
   if (/^(https?:\/\/|mailto:)/i.test(href)) return href;
   const file = files.find((entry) => entry.path === href);
   return file === undefined ? undefined : at.file(file.sha256);
@@ -57,7 +57,7 @@ function fileHref(href: string, files: readonly FileEntry[]): string | undefined
 
 function Readme({ paragraphs, files }: { paragraphs: BlockView["readme"]; files: readonly FileEntry[] }) {
   return (
-    <div className="mt-8 grid max-w-3xl gap-4 leading-relaxed" data-testid="readme">
+    <div className="grid max-w-3xl gap-4 leading-relaxed" data-testid="readme">
       {paragraphs.map((paragraph) => (
         <p key={paragraph.map((run) => run.text).join("")}>
           {paragraph.map((run, index): ReactNode => {
@@ -93,12 +93,115 @@ function Readme({ paragraphs, files }: { paragraphs: BlockView["readme"]; files:
   );
 }
 
-export function BlockPage({ block }: { block: BlockView }) {
-  const { item, links, texts } = block;
-  const { record } = item;
+function SceneParts({ circuit, links }: { circuit: BlockCircuit; links: BlockView["links"] }) {
+  const { board, placed } = circuit;
   const title = (id: string) => links[id]?.title ?? id;
   return (
-    <article>
+    <div>
+      <ul className="border-border border-t" data-scene-parts={placed.length} data-testid="scene-parts">
+        {placed.map((part) => (
+          <li className="border-border border-b py-3" data-ref={part.ref} key={part.ref}>
+            <div className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-baseline gap-x-4">
+              <span className="font-mono text-brand text-sm">{part.ref}</span>
+              <span className="min-w-0">
+                <a className="underline hover:text-brand" href={at.part(part.id)}>
+                  {title(part.id)}
+                </a>
+                {part.values.length === 0 ? null : (
+                  <span className="ml-2 break-words font-mono text-xs">{part.values.join(", ")}</span>
+                )}
+                <span className="mt-0.5 block font-mono text-muted-foreground text-xs">{part.id}</span>
+              </span>
+            </div>
+            {part.id === board.id ? <BoardFold circuit={circuit} links={links} /> : null}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function BoardFold({ circuit, links }: { circuit: BlockCircuit; links: BlockView["links"] }) {
+  const { board, lockCount } = circuit;
+  const count = board.own.length;
+  return (
+    <details className="mt-3 text-muted-foreground text-sm">
+      <summary className="cursor-pointer">
+        The {board.title} brings {count} {count === 1 ? "part" : "parts"} of its own.
+        {__ORBE_SITE_INSTALL__ ? (
+          <>
+            {" "}
+            <Code>orbe add</Code> copies them too, so <Code>parts.lock</Code> lists {lockCount}.
+          </>
+        ) : (
+          <>
+            {" "}
+            <Code>parts.lock</Code> lists {lockCount}.
+          </>
+        )}
+      </summary>
+      <ul className="mt-2 columns-1 gap-8 sm:columns-2">
+        {board.own.map((part) => (
+          <li className="break-inside-avoid py-0.5" key={part.id}>
+            <a className="underline hover:text-foreground" href={links[part.id]?.href ?? at.part(part.id)}>
+              {links[part.id]?.title ?? part.title}
+            </a>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2">
+        <a className="underline hover:text-foreground" href={at.part(board.id)}>
+          See them on the board's page
+        </a>
+      </p>
+    </details>
+  );
+}
+
+function InstallSlot({ name, checks }: { name: string; checks: number }) {
+  if (!__ORBE_SITE_INSTALL__) return <CliComing />;
+  const checksText = checks === 1 ? "1 check" : `${checks} checks`;
+  return (
+    <div>
+      <Install lines={[`orbe add ${name}`]} />
+      <details className="mt-2 text-muted-foreground text-sm">
+        <summary className="cursor-pointer">
+          Run it in an empty folder. <span className="underline">New to orbe?</span>
+        </summary>
+        <ol className="mt-2 list-decimal space-y-1 pl-5 text-foreground">
+          <li>
+            Get orbe from the{" "}
+            <a className="underline hover:text-brand" href={at.home}>
+              home page
+            </a>
+            .
+          </li>
+          <li>
+            Make an empty folder and run <Code>orbe add {name}</Code> in it.
+          </li>
+          <li>
+            Run <Code>orbe test</Code>. It runs {checksText}.
+          </li>
+        </ol>
+        <p className="mt-2">
+          The files are under Code, and under{" "}
+          <a className="underline hover:text-foreground" href="#files">
+            License and files
+          </a>
+          .
+        </p>
+      </details>
+    </div>
+  );
+}
+
+export function BlockPage({ block }: { block: BlockView }) {
+  const { item, links, circuit } = block;
+  const { record } = item;
+  const title = (id: string) => links[id]?.title ?? id;
+  const notice = record.files.find((file) => file.path === "firmware/NOTICE");
+  return (
+    <article className="min-w-0">
       <p className="font-mono text-muted-foreground text-xs">
         <a className="hover:text-foreground" href={at.blocks}>
           blocks
@@ -107,79 +210,49 @@ export function BlockPage({ block }: { block: BlockView }) {
       </p>
       <h1 className="mt-3 font-semibold text-3xl tracking-tight md:text-4xl">{record.title}</h1>
       <p className="mt-4 max-w-3xl text-lg">{record.description ?? <span className="text-muted-foreground">No summary yet.</span>}</p>
-      <p className="mt-3 font-mono text-muted-foreground text-xs">
-        on{" "}
-        <a className="underline hover:text-foreground" href={at.part(record.board)}>
-          {title(record.board)}
-        </a>
-        , {record.license}
+      <p className="mt-3 flex flex-wrap gap-x-4 gap-y-1 font-mono text-muted-foreground text-xs">
+        <span>
+          on{" "}
+          <a className="underline hover:text-foreground" href={at.part(record.board)}>
+            {title(record.board)}
+          </a>
+        </span>
+        <span data-scene-parts={circuit.placed.length}>{circuit.placed.length} parts</span>
+        <span>{circuit.checks === 1 ? "1 check" : `${circuit.checks} checks`}</span>
+        <span>v{record.version}</span>
       </p>
 
-      <div className="mt-8">
-        <BlockPlayer blocks={[{ name: record.name, title: record.title, button: block.button }]} registry={at.registry} wasm={at.wasm} />
+      <BlockStage install={<InstallSlot checks={circuit.checks} name={record.name} />} sources={circuit.sources}>
+        <BlockPlayer blocks={[{ name: record.name, title: record.title }]} registry={at.registry} wasm={at.wasm} />
+      </BlockStage>
+
+      <Section title="How it works">
         <Readme files={record.files} paragraphs={block.readme} />
-      </div>
-
-      <Section title="Install">
-        {__ORBE_SITE_INSTALL__ ? (
-          <Install lines={[`orbe add ${record.name}`]} note="Run it in an empty folder. It copies the parts, then writes the scene, the firmware and the tests." />
-        ) : (
-          <CliComing />
-        )}
       </Section>
 
-      <Section title="Parts">
-        <Table
-          head={["Part", "Id", "Version"]}
-          rows={record.registryDependencies.map((dependency) => {
-            const id = dependencyId(dependency);
-            return [
-              <a className="underline hover:text-brand" href={at.part(id)} key="title">
-                {title(id)}
-              </a>,
-              <span className="font-mono text-muted-foreground" key="id">
-                {id}
-                {id === record.board ? ", the board" : ""}
-              </span>,
-              <span className="font-mono text-muted-foreground" key="version">
-                {dependency.slice(id.length + 1)}
-              </span>,
-            ];
-          })}
-        />
+      <Section title="Parts in this circuit">
+        <SceneParts circuit={circuit} links={links} />
       </Section>
 
-      <Section title="Scene, firmware and tests">
-        {texts.length === 0 ? (
-          <None>The Block has no text files to show.</None>
-        ) : (
-          <div className="grid gap-3">
-            {texts.map((file) => (
-              <details className="rounded-lg border border-border" key={file.path} open={file.path === "scene.jsonc"}>
-                <summary className="cursor-pointer px-4 py-2 font-mono text-sm">{file.path}</summary>
-                <pre className="overflow-x-auto border-border border-t p-4 font-mono text-xs leading-relaxed">
-                  {file.text}
-                </pre>
-              </details>
-            ))}
-          </div>
-        )}
-      </Section>
-
-      <Section title="Licence">
-        <p className="max-w-3xl">
-          The Block is under <span className="font-mono">{record.license}</span>. Its scene and sources are MIT OR Apache-2.0. Its firmware images
-          link the Arduino AVR core, which is LGPL-2.1-or-later, and <span className="font-mono">firmware/NOTICE</span> says where that source is
-          and how to rebuild the image. Each file below lists its own licence.
+      <LicenseBox
+        expression={record.license}
+        identity={`${record.name}@${record.version}, ${record.hash}, versions ${item.versions.join(", ")}`}
+        recordHref={`${at.registry}${record.name}@${record.version}.json`}
+      >
+        <p className="max-w-3xl text-sm">
+          The scene and sources are MIT or Apache-2.0. The firmware image links the Arduino AVR core, which is LGPL-2.1-or-later.
+          {notice === undefined ? null : (
+            <>
+              {" "}
+              <a className="font-mono underline hover:text-brand" href={at.file(notice.sha256)}>
+                firmware/NOTICE
+              </a>{" "}
+              says where that source is and how to rebuild the image.
+            </>
+          )}
         </p>
-      </Section>
-
-      <Section title="Files">
         <Files files={record.files} />
-        <p className="mt-3 font-mono text-muted-foreground text-xs">
-          {record.name}@{record.version}, {record.hash}, versions {item.versions.join(", ")}
-        </p>
-      </Section>
+      </LicenseBox>
     </article>
   );
 }
