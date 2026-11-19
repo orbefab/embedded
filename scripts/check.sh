@@ -8,9 +8,10 @@
 # `web` runs the viewer unit tests and the viewer and site checks, each once: `check-viewer.sh`,
 # `check-viewer-e2e.sh`, `check-block.sh`, `check-headed.sh` and `check-site.sh`.
 # `check-assets.sh` stays separate, because it needs a models checkout.
-# `full` runs `fast`, then the chip models' skip checks, the engine's Python checks, `orbe-run`
-# for WASI against native, the wasm package check, the browser speed check on the package that
-# check built, and `web`. The wasm package check and the speed check run once, not again in `web`.
+# `full` runs `fast`, then the chip models' skip checks, the engine's Python checks,
+# `ngspice_refs.py --check`, `orbe-run` for WASI against native, the wasm package check, the
+# browser speed check on the package that check built, and `web`. The wasm package check and
+# the speed check run once, not again in `web`.
 # `lint` needs uv and shellcheck, and `fast` and `full` need cargo-nextest too.
 # `web` needs Node 24, pnpm, the repo's Node dependencies, a Chromium as
 # scripts/check-viewer-e2e.sh finds it, and what scripts/wasm.sh and scripts/site.sh need.
@@ -107,6 +108,7 @@ full() {
   uv run --project packages/engine/scripts --frozen pytest --rootdir=packages/engine/scripts packages/engine/scripts/tests
   uv run packages/engine/scripts/st77916_example.py --check
   uv run packages/engine/scripts/pattern_header.py --check
+  uv run packages/engine/scripts/ngspice_refs.py --check
   run_check st77916-replay render_st77916.py packages/engine/tests/circuits/st77916-replay/events.json
   run_check esp32s3-blink esp32s3_blink.py
   run_check esp32s3-pattern render_st77916.py --pattern packages/engine/tests/firmware/esp32s3/pattern.json
