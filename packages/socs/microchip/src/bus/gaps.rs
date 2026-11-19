@@ -207,8 +207,8 @@ impl Bus {
             }
             SPMCSR => {
                 // §27.9.1. Every `SPM` that acts follows a store here, since `SPMEN` enables
-                // it, so this check covers `SPM` too. `SPMIE` enables the SPM ready interrupt. The other bits pick what
-                // the next `SPM` or `LPM` does: fill the page buffer, program, erase, write the
+                // it, so this check covers `SPM` too. `SPMIE` enables the SPM ready interrupt.
+                // The other bits pick what the next `SPM` or `LPM` does: fill the page buffer, program, erase, write the
                 // lock bits, or read the signature, fuse or lock bits, and `SPMEN` clears
                 // itself four cycles on. The model keeps the register as plain memory, so an
                 // `LPM` after it reads flash and a poll of `SPMEN` never ends.

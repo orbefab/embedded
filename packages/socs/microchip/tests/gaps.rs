@@ -270,26 +270,34 @@ fn osccal_is_noted_and_the_run_goes_on() {
     assert_eq!(cpu.reg(17), 1);
 }
 
-/// `Wire.begin(address)`: `TWAR = address << 1`, then `TWCR = TWEN | TWIE | TWEA`.
-fn wire_begin(address: Option<u8>) -> Vec<u16> {
-    let mut words = vec![];
+/// A `TWAR` store of `address << 1` and Wire's `TWCR = TWEN | TWIE | TWEA`, in either order.
+/// Wire 1.8.6's `begin(address)` stores `TWCR` first, in `twi_init`, then `TWAR`.
+fn wire_begin(address: Option<u8>, twar_first: bool) -> Vec<u16> {
+    let mut twar = vec![];
     if let Some(address) = address {
-        words.push(ldi(16, u16::from(address) << 1));
-        words.extend(sts(16, TWAR));
+        twar.push(ldi(16, u16::from(address) << 1));
+        twar.extend(sts(16, TWAR));
     }
-    words.push(ldi(16, 0x45));
-    words.extend(sts(16, TWCR));
+    let mut twcr = vec![ldi(16, 0x45)];
+    twcr.extend(sts(16, TWCR));
+    let mut words = if twar_first {
+        [twar, twcr].concat()
+    } else {
+        [twcr, twar].concat()
+    };
     words.push(spin());
     words
 }
 
 #[test]
 fn a_twi_slave_address_is_noted_and_a_master_is_not() {
-    let cpu = run(&wire_begin(Some(0x42)), 100);
-    let noted: Vec<Unmodeled> = cpu.noted().iter().map(|noted| noted.what).collect();
-    assert_eq!(noted, [Unmodeled::TwiSlave]);
-    assert_eq!(cpu.refusal(), None);
-    assert!(run(&wire_begin(None), 100).noted().is_empty());
+    for twar_first in [false, true] {
+        let cpu = run(&wire_begin(Some(0x42), twar_first), 100);
+        let noted: Vec<Unmodeled> = cpu.noted().iter().map(|noted| noted.what).collect();
+        assert_eq!(noted, [Unmodeled::TwiSlave], "twar_first {twar_first}");
+        assert_eq!(cpu.refusal(), None);
+        assert!(run(&wire_begin(None, twar_first), 100).noted().is_empty());
+    }
 }
 
 #[test]
