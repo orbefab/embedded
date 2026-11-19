@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import type { BrowserContext, Page } from "@playwright/test";
@@ -75,6 +75,7 @@ async function instrument(page: Page): Promise<void> {
 
 async function openTracked(browser: { newContext(options: { viewport: { width: number; height: number } }): Promise<BrowserContext> }, url: string) {
   const context = await browser.newContext({ viewport: VIEW });
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   const page = await context.newPage();
   const tracked = track(page);
   await instrument(page);
@@ -86,9 +87,125 @@ const bodyText = (page: Page) => page.evaluate(() => document.body.innerText);
 
 function licences(page: Page): Promise<Record<string, string | null>> {
   return page
-    .locator("section", { has: page.locator("h2", { hasText: /^Files$/ }) })
-    .locator("tbody tr")
-    .evaluateAll((rows) => Object.fromEntries(rows.map((row) => [row.cells[0].textContent, row.cells[2].textContent])));
+    .locator('[data-testid="license-files"] tbody tr')
+    .evaluateAll((rows) => Object.fromEntries(rows.map((row) => [row.cells[0]?.textContent ?? "", row.cells[2]?.textContent ?? null])));
+}
+
+function blockIds(): string[] {
+  return readdirSync(join(REPO, "blocks"))
+    .filter((id) => existsSync(join(REPO, "blocks", id, "scene.jsonc")))
+    .sort();
+}
+
+function readJsonc(path: string): unknown {
+  return parseJsonc(readFileSync(path, "utf8"));
+}
+
+function sceneParts(id: string): Record<string, { type?: string }> {
+  const scene = readJsonc(join(REPO, "blocks", id, "scene.jsonc")) as { parts?: Record<string, { type?: string }> };
+  return scene.parts ?? {};
+}
+
+function sceneCards(): Record<string, string> {
+  const cards: Record<string, string> = {};
+  for (const id of blockIds()) {
+    const block = readJsonc(join(REPO, "blocks", id, "block.jsonc")) as { board: string };
+    const part = readJsonc(join(REPO, "parts", block.board, "part.jsonc")) as { title: string };
+    cards[`/embedded/blocks/${id}/`] = `${part.title}, ${Object.keys(sceneParts(id)).length} parts`;
+  }
+  return cards;
+}
+
+/** Sketch, scene and test files the Code view lists, from the Block's folder. */
+function codePaths(id: string): string[] {
+  const root = join(REPO, "blocks", id);
+  const paths = ["scene.jsonc"];
+  const walk = (dir: string) => {
+    if (!existsSync(dir)) return;
+    for (const name of readdirSync(dir)) {
+      const path = join(dir, name);
+      if (statSync(path).isDirectory()) {
+        walk(path);
+        continue;
+      }
+      const rel = path.slice(root.length + 1);
+      if (rel.startsWith("firmware/") && /\.(?:ino|c|cpp|h)$/.test(rel)) paths.push(rel);
+      if (rel.startsWith("tests/")) paths.push(rel);
+    }
+  };
+  walk(join(root, "firmware"));
+  walk(join(root, "tests"));
+  return paths.sort();
+}
+
+function catalogLock(id: string): { own: string[]; lock: number; repeats: [string, number][] } {
+  const block = readJsonc(join(REPO, "blocks", id, "block.jsonc")) as { board: string };
+  const part = readJsonc(join(REPO, "parts", block.board, "part.jsonc")) as { uses?: Record<string, string> };
+  const counts = new Map<string, number>();
+  for (const body of Object.values(sceneParts(id))) {
+    if (body.type === undefined) continue;
+    counts.set(body.type, (counts.get(body.type) ?? 0) + 1);
+  }
+  const own = Object.keys(part.uses ?? {}).sort();
+  return {
+    own,
+    lock: new Set([...counts.keys(), ...own]).size,
+    repeats: [...counts.entries()].filter((entry): entry is [string, number] => entry[1] > 1),
+  };
+}
+
+const VALUES: Record<string, Record<string, readonly string[]>> = {
+  "nano-button-led": { r1: ["220 Ω"], r2: ["10 kΩ"], led1: ["red"], nano: ["button.hex"] },
+  "nano-led-fade": { r1: ["220 Ω"], led1: ["red"], nano: ["fade.hex"] },
+  "nano-light-comparator": {
+    rbot: ["2.2 kΩ"],
+    rset: ["4.7 kΩ"],
+    rhys: ["68 kΩ"],
+    rled: ["220 Ω"],
+    led1: ["red"],
+    trim: ["10 kΩ", "position 0.5"],
+    nano: ["light.hex"],
+  },
+  "uno-button-led": { r1: ["220 Ω"], r2: ["10 kΩ"], led1: ["red"], uno: ["button.hex"] },
+};
+
+async function hydrated(page: Page): Promise<void> {
+  await page.waitForFunction(() => {
+    for (const node of document.querySelectorAll("body *")) {
+      if (Object.keys(node).some((key) => key.startsWith("__reactFiber") || key.startsWith("__reactContainer"))) return true;
+    }
+    return false;
+  });
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(undefined)))));
+}
+
+/** A click that stays on this page must not ask the static host for a server function. */
+async function noServerCall(page: Page, act: () => Promise<void>): Promise<void> {
+  const title = await page.locator("h1").innerText();
+  const urls: string[] = [];
+  const errors: string[] = [];
+  const onRequest = (request: { url: () => string }) => {
+    if (/_serverFn|__tsr\//.test(request.url())) urls.push(request.url());
+  };
+  page.on("request", onRequest);
+  page.on("pageerror", (error) => errors.push(error.message));
+  await act();
+  page.off("request", onRequest);
+  expect(urls, "a navigation called a server function").toEqual([]);
+  expect(errors, JSON.stringify(errors)).toEqual([]);
+  await expect(page.locator("h1")).toHaveText(title);
+  await expect(page.locator("body")).not.toContainText("Something went wrong");
+}
+
+async function cardCounts(page: Page): Promise<Record<string, string>> {
+  return page.locator('a[href^="/embedded/blocks/"]').evaluateAll((links) =>
+    Object.fromEntries(
+      links.flatMap((link) => {
+        const count = link.querySelector("span.font-mono")?.textContent?.trim();
+        return count?.endsWith(" parts") ? [[link.getAttribute("href"), count]] : [];
+      }),
+    ),
+  );
 }
 
 function searchNames(query: string): string[] {
@@ -163,20 +280,7 @@ test.describe("landing", () => {
   });
 
   test("a card counts the parts the scene places", async () => {
-    const counts = await page.locator('a[href^="/embedded/blocks/"]').evaluateAll((links) =>
-      Object.fromEntries(
-        links.flatMap((link) => {
-          const count = link.querySelector("span.font-mono")?.textContent;
-          return count?.endsWith(" parts") ? [[link.getAttribute("href"), count]] : [];
-        }),
-      ),
-    );
-    expect(counts).toEqual({
-      "/embedded/blocks/nano-button-led/": "nano-board, 6 parts",
-      "/embedded/blocks/nano-led-fade/": "nano-board, 4 parts",
-      "/embedded/blocks/nano-light-comparator/": "nano-board, 10 parts",
-      "/embedded/blocks/uno-button-led/": "uno-board, 6 parts",
-    });
+    expect(await cardCounts(page)).toEqual(sceneCards());
   });
 
   test("switching to nano-led-fade terminates the first Worker and revokes every object URL it made", async () => {
@@ -255,6 +359,15 @@ test.describe("parts search", () => {
     expect(await page.locator("[data-part]").count()).toBe(catalog);
   });
 
+  test("a card says where the part is used", async () => {
+    const line = (id: string) => page.locator(`[data-part="${id}"]`).innerText();
+    expect(await line("led-5mm")).toContain("in 4 Blocks");
+    expect(await line("resistor-axial")).toContain("in 4 Blocks");
+    expect(await line("lm358-dip8")).toContain("in 1 Block");
+    expect(await line("nano-board")).toContain("in 3 Blocks");
+    expect(await line("led-0603")).toContain("on the Nano (CH340 clone)");
+  });
+
   for (const query of QUERIES) {
     test(`"${query}" finds what orbe search finds, in its order`, async () => {
       await page.fill('input[name="q"]', query);
@@ -299,20 +412,19 @@ test.describe("led-5mm", () => {
   });
 
   test("it lists all five files as downloads", async () => {
-    const files = await page.locator("section a[download]").evaluateAll((links) => links.map((link) => [link.textContent, link.getAttribute("href")]));
+    const files = await page
+      .locator('[data-testid="license-files"] a[download]')
+      .evaluateAll((links) => links.map((link) => [link.textContent, link.getAttribute("href")]));
     expect(files.length === 5 && files.some(([path]) => path === "led-5mm.glb"), JSON.stringify(files)).toBe(true);
   });
 
   test("every file shows its licence", async () => {
-    const shown = await page
-      .locator("section", { has: page.locator("h2", { hasText: /^Files$/ }) })
-      .locator("td:nth-child(3)")
-      .allTextContents();
+    const shown = await page.locator('[data-testid="license-files"] td:nth-child(3)').allTextContents();
     expect(shown.length === 5 && shown.every((licence) => licence === "MIT OR Apache-2.0"), JSON.stringify(shown)).toBe(true);
   });
 
   test("a download serves the file's bytes, by the record's SHA-256", async () => {
-    const href = await page.locator("section a[download]", { hasText: /^part\.jsonc$/ }).getAttribute("href");
+    const href = await page.locator('[data-testid="license-files"] a[download]', { hasText: /^part\.jsonc$/ }).getAttribute("href");
     const download = await page.evaluate(async (href) => {
       const record = await (await fetch("/embedded/r/led-5mm@0.1.0.json")).json();
       const bytes = new Uint8Array(await (await fetch(href)).arrayBuffer());
@@ -330,6 +442,19 @@ test.describe("led-5mm", () => {
   test("it shows the ratings with their sources", async () => {
     const body = await bodyText(page);
     expect(/30 mA/.test(body) && /Absolute Maximum Ratings/.test(body)).toBe(true);
+    expect(body).toContain("Brightness is the average current over 20 ms.");
+  });
+
+  test("it links the Blocks that place it", async () => {
+    const place = await page.locator("dt", { hasText: /^used in$/ }).locator("xpath=following-sibling::dd[1]").innerText();
+    expect(place.trim()).toBe("4 Blocks");
+    const hrefs = await page.locator('[data-testid="used-in"] a').evaluateAll((links) => links.map((link) => link.getAttribute("href")).sort());
+    expect(hrefs).toEqual([
+      "/embedded/blocks/nano-button-led/",
+      "/embedded/blocks/nano-led-fade/",
+      "/embedded/blocks/nano-light-comparator/",
+      "/embedded/blocks/uno-button-led/",
+    ]);
   });
 
   test("it shows what is not simulated", async () => {
@@ -346,7 +471,10 @@ test.describe("led-5mm", () => {
     const loaded = await weight();
     console.log(`     led-5mm: ${loaded.requests} requests, ${loaded.bytes} bytes, ${loaded.gzip} gzipped`);
     await shot(page, "site-part-led-5mm");
-    await page.evaluate(() => [...document.querySelectorAll("h2")].find((heading) => heading.textContent === "Files")?.scrollIntoView());
+    await page.locator('[data-testid="license-files"]').evaluate((box) => {
+      box.setAttribute("open", "");
+      box.scrollIntoView();
+    });
     await shot(page, "site-part-led-5mm-files");
     expect(errors, JSON.stringify(errors)).toEqual([]);
   });
@@ -367,7 +495,7 @@ test.describe("breadboard-830", () => {
   });
 
   test("its pins are only its holes", async () => {
-    expect(/Pins\s*Only its holes\./i.test(await bodyText(page))).toBe(true);
+    expect(/Pins\s*No pins yet\./i.test(await bodyText(page))).toBe(true);
   });
 
   test("it lists each strip: two of five holes in each of 63 columns, and four rails", async () => {
@@ -418,7 +546,10 @@ test.describe("nano-board", () => {
   });
 
   test("it lists the Blocks that use it", async () => {
-    expect(/Used by[\s\S]*Button and LED on a Nano/i.test(await bodyText(page))).toBe(true);
+    const body = await bodyText(page);
+    expect(/Used in Blocks[\s\S]*Button and LED on a Nano/i.test(body), body.match(/Used in Blocks[\s\S]{0,200}/i)?.[0] ?? body).toBe(true);
+    const href = await page.locator('[data-testid="used-in"] a', { hasText: "Button and LED on a Nano" }).getAttribute("href");
+    expect(href).toBe("/embedded/blocks/nano-button-led/");
   });
 
   test("the Nano's page logged no error", async () => {
@@ -531,9 +662,29 @@ test.describe("nano-button-led", () => {
     await context?.close();
   });
 
-  test("the page shows the scene and the firmware source", async () => {
-    const body = await bodyText(page);
-    expect(/scene\.jsonc/.test(body) && /firmware\/button\/button\.ino/.test(body)).toBe(true);
+  test("Code shows the sketch and the scene, and Copy copies the sketch", async () => {
+    await expect(page.locator('[data-testid="view-preview-panel"]')).toBeVisible();
+    await expect(page.locator('[data-testid="view-code-panel"]')).toBeHidden();
+    await page.locator('[data-testid="view-code"]').click();
+    await expect(page.locator('[data-testid="view-code-panel"]')).toBeVisible();
+    await expect(page.locator('[data-testid="view-preview-panel"]')).toBeHidden();
+    const shown = await page.locator('[data-testid="code-file"]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-path")).sort());
+    expect(shown).toEqual(codePaths("nano-button-led"));
+    const file = page.locator('[data-testid="code-file"][data-path="firmware/button/button.ino"]');
+    const sketch = await file.locator("pre").textContent();
+    await file.locator('[data-testid="copy"]').click();
+    await expect(file.locator('[data-testid="copy"]')).toHaveText("Copied");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(sketch);
+    await page.locator('[data-testid="view-preview"]').click();
+    await expect(page.locator('[data-testid="view-preview-panel"]')).toBeVisible();
+  });
+
+  test("the card's part count is the number of parts in the scene file", async () => {
+    const refs = Object.keys(sceneParts("nano-button-led"));
+    const listed = await page.locator('[data-testid="scene-parts"] li[data-ref]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-ref")));
+    expect(listed).toEqual(refs);
+    const shown = await page.locator("[data-scene-parts]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-scene-parts")));
+    expect(shown.length > 0 && shown.every((count) => count === String(refs.length)), JSON.stringify({ shown, refs })).toBe(true);
   });
 
   test("it shows the README and no install command", async () => {
@@ -582,6 +733,18 @@ test.describe("nano-button-led", () => {
   });
 
   test("a click with no key or pointer before it, as a screen reader sends, presses briefly", async () => {
+    await page.evaluate(() => (document.querySelector("[data-testid='hold-to-press']") as HTMLButtonElement).click());
+    await waitGlow(page, true);
+    await waitGlow(page, false);
+  });
+
+  test("a click still presses after a hold the window losing focus cut short", async () => {
+    await page.getByTestId("hold-to-press").focus();
+    await page.keyboard.down("Space");
+    await waitGlow(page, true);
+    await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+    await waitGlow(page, false);
+    await page.keyboard.up("Space");
     await page.evaluate(() => (document.querySelector("[data-testid='hold-to-press']") as HTMLButtonElement).click());
     await waitGlow(page, true);
     await waitGlow(page, false);
@@ -645,20 +808,136 @@ test("the Blocks page counts the parts each scene places", async ({ browser, hos
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(`${host.base}/embedded/blocks/`);
-  const counts = await page.locator('a[href^="/embedded/blocks/"]').evaluateAll((links) =>
-    Object.fromEntries(
-      links.flatMap((link) => {
-        const count = link.querySelector("span.font-mono")?.textContent;
-        return count?.endsWith(" parts") ? [[link.getAttribute("href"), count]] : [];
-      }),
-    ),
-  );
-  expect(counts).toEqual({
-    "/embedded/blocks/nano-button-led/": "nano-board, 6 parts",
-    "/embedded/blocks/nano-led-fade/": "nano-board, 4 parts",
-    "/embedded/blocks/nano-light-comparator/": "nano-board, 10 parts",
-    "/embedded/blocks/uno-button-led/": "uno-board, 6 parts",
+  expect(await cardCounts(page)).toEqual(sceneCards());
+  await page.goto(`${host.base}/embedded/blocks/nano-led-fade/`);
+  const refs = Object.keys(sceneParts("nano-led-fade"));
+  const listed = await page.locator('[data-testid="scene-parts"] li[data-ref]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-ref")));
+  expect(listed).toEqual(refs);
+  await context.close();
+});
+
+test("a part that only sits inside a board names that board", async ({ browser, host }) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`${host.base}/embedded/parts/led-0603/`);
+  const value = await page.locator("dt", { hasText: /^on boards$/ }).locator("xpath=following-sibling::dd[1]").innerText();
+  expect(value.trim()).toBe("Nano (CH340 clone)");
+  expect(await page.locator('[data-testid="used-in"]').count()).toBe(0);
+  const href = await page.locator('[data-testid="on-boards"] a').getAttribute("href");
+  expect(href).toBe("/embedded/parts/nano-board/");
+  await context.close();
+});
+
+test("a long hash and the code view stay inside a phone width", async ({ browser, host }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  const fits = () => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1);
+  await page.goto(`${host.base}/embedded/parts/led-5mm/`);
+  await page.locator('[data-testid="license-files"] summary').click();
+  expect(await fits(), "led-5mm").toBe(true);
+  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+  await page.locator('[data-testid="view-code"]').click();
+  expect(await fits(), "nano-button-led code").toBe(true);
+  await context.close();
+});
+
+test("each Block lists its scene files, its board's parts, its lock count and its values", async ({ browser, host }) => {
+  test.setTimeout(180_000);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  for (const id of blockIds()) {
+    await page.goto(`${host.base}/embedded/blocks/${id}/`);
+    await page.locator('[data-testid="view-code"]').click();
+    const shown = await page.locator('[data-testid="code-file"]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-path")).sort());
+    expect(shown, id).toEqual(codePaths(id));
+    const refs = Object.keys(sceneParts(id));
+    const listed = await page.locator('[data-testid="scene-parts"] li[data-ref]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-ref")));
+    expect(listed, id).toEqual(refs);
+    for (const [ref, texts] of Object.entries(VALUES[id] ?? {})) {
+      const row = await page.locator(`[data-testid="scene-parts"] li[data-ref="${ref}"]`).innerText();
+      for (const text of texts) expect(row, `${id} ${ref}`).toContain(text);
+    }
+    const { own, lock, repeats } = catalogLock(id);
+    const summary = page.locator("details summary", { hasText: "brings" });
+    const note = await summary.innerText();
+    expect(note, id).toContain(`brings ${own.length}`);
+    expect(note, id).toContain(`lists ${lock}`);
+    if (repeats.length === 0) expect(note, id).not.toContain("catalog part");
+    for (const [partId] of repeats) expect(note, id).toContain(`share one catalog part, ${partId}`);
+    const tests = existsSync(join(REPO, "blocks", id, "tests"))
+      ? readdirSync(join(REPO, "blocks", id, "tests")).filter((name) => name.endsWith(".test")).length
+      : 0;
+    expect(await bodyText(page), id).toContain(tests === 1 ? "1 test" : `${tests} tests`);
+    await summary.click();
+    const hrefs = await page.locator("details ul a").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("href")).sort());
+    expect(hrefs, id).toEqual(own.map((partId) => `/embedded/parts/${partId}/`).sort());
+  }
+  await context.close();
+});
+
+test("a same-page hash stays on the page, including a second click and a page opened on the hash", async ({ browser, host }) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+  await hydrated(page);
+  await page.locator('[data-testid="view-code"]').click();
+  const caption = page.locator('[data-testid="view-code-panel"] a[href="#files"]');
+  await noServerCall(page, async () => {
+    await caption.click();
+    await caption.click();
   });
+  await expect(page.locator("#files")).toHaveJSProperty("open", true);
+
+  const readme = page.locator('[data-testid="readme"] a[href="#files"]');
+  await noServerCall(page, async () => {
+    await readme.click();
+    await readme.click();
+  });
+  await expect(page.locator("#files")).toHaveJSProperty("open", true);
+
+  await page.goto(`${host.base}/embedded/blocks/nano-button-led/#files`);
+  await hydrated(page);
+  await expect(page.locator("#files")).toHaveJSProperty("open", true);
+  const again = page.locator('[data-testid="readme"] a[href="#files"]');
+  await noServerCall(page, () => again.click());
+  await expect(page.locator("#files")).toHaveJSProperty("open", true);
+
+  await page.goto(`${host.base}/embedded/parts/led-5mm/`);
+  await hydrated(page);
+  const used = page.locator('a[href="#used"]');
+  await noServerCall(page, async () => {
+    await used.click();
+    await used.click();
+  });
+  await expect(page.locator("#used")).toBeVisible();
+
+  await page.goto(`${host.base}/embedded/parts/led-0603/`);
+  await hydrated(page);
+  const boards = page.locator('a[href="#boards"]');
+  await noServerCall(page, async () => {
+    await boards.click();
+    await boards.click();
+  });
+  await expect(page.locator("#boards")).toBeVisible();
+
+  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+  await hydrated(page);
+  const urls: string[] = [];
+  const errors: string[] = [];
+  page.on("request", (request) => {
+    if (/_serverFn|__tsr\//.test(request.url())) urls.push(request.url());
+  });
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.locator('a[href="/embedded/parts/led-5mm/"]').first().click();
+  await page.waitForURL(/\/embedded\/parts\/led-5mm\/$/);
+  await expect(page.locator("h1")).toHaveText("5 mm LED");
+  await hydrated(page);
+  await page.locator('a[href="/embedded/blocks/nano-button-led/"]').first().click();
+  await page.waitForURL(/\/embedded\/blocks\/nano-button-led\/$/);
+  await expect(page.locator("h1")).toHaveText("Button and LED on a Nano");
+  expect(urls, JSON.stringify(urls)).toEqual([]);
+  expect(errors, JSON.stringify(errors)).toEqual([]);
+  await expect(page.locator("body")).not.toContainText("Something went wrong");
   await context.close();
 });
 

@@ -1,7 +1,7 @@
 // What each page renders, read from the catalog the build gave the server side. Only the server
 // functions in data.ts call these, so none of it reaches the browser.
 import data from "virtual:orbe-site";
-import { parseJsonc } from "./jsonc";
+import { type BlockCircuit, matchLine, type PartUse, readCatalogUse, whereLine } from "./circuit";
 import { at } from "./paths";
 import { readmeParagraphs } from "./readme";
 import type { BlockRecord, Item, PartRecord } from "./records";
@@ -17,7 +17,9 @@ export interface BlockCard {
   readonly name: string;
   readonly title: string;
   readonly description?: string;
+  /** The board's title, the same name the Block page uses. */
   readonly board: string;
+  /** How many parts the scene places. The Block page's list is this long. */
   readonly parts: number;
   /** The scene places a part with a press input, so the page shows the hold control. */
   readonly button: boolean;
@@ -26,9 +28,31 @@ export interface BlockCard {
 /** A part as the parts list shows it and the search reads it. */
 export interface Listed extends Searchable {
   readonly href: string;
+  /** "Matches …", "Generic, follows …", or "Generic". */
+  readonly match: string;
+  /** "in N Blocks", "on the …", or "in no Block yet". */
+  readonly use: string;
 }
 
 export const site = () => data.site;
+
+let catalogUse: ReturnType<typeof readCatalogUse> | undefined;
+
+/** One pass over the scenes. The card, the Block page and every part page read this. */
+function catalog() {
+  catalogUse ??= readCatalogUse(data.blocks, data.parts, data.texts);
+  return catalogUse;
+}
+
+function circuitOf(name: string): BlockCircuit {
+  const circuit = catalog().circuits[name];
+  if (circuit === undefined) throw new Error(`${name} has no scene`);
+  return circuit;
+}
+
+function useOf(name: string): PartUse {
+  return catalog().uses[name] ?? { blocks: [], boards: [] };
+}
 
 function linked(names: readonly string[]): Record<string, Linked> {
   const entry = (name: string): Linked => {
@@ -39,35 +63,24 @@ function linked(names: readonly string[]): Record<string, Linked> {
   return Object.fromEntries(names.map((name) => [name, entry(name)]));
 }
 
-/** The scene's own parts. A board's own parts are the board, not more parts of the scene. */
-function sceneParts(record: BlockRecord): Record<string, unknown> {
-  const file = record.files.find((entry) => entry.path === "scene.jsonc");
-  const text = file === undefined ? undefined : data.texts[file.sha256];
-  if (text === undefined) throw new Error(`${record.name} has no scene.jsonc`);
-  const scene = parseJsonc(text);
-  const parts = scene !== null && typeof scene === "object" && "parts" in scene ? scene.parts : undefined;
-  if (parts === null || typeof parts !== "object" || Array.isArray(parts)) throw new Error(`${record.name} scene has no parts`);
-  return parts as Record<string, unknown>;
-}
-
 /** A top-level scene part whose catalog record has a press input. A board's reset switch is a
  * child of the board, so it does not count. */
-function sceneHasButton(record: BlockRecord): boolean {
+function sceneHasButton(circuit: BlockCircuit): boolean {
   const pressable = new Set(data.parts.filter((item) => item.record.pressable === true).map((item) => item.record.name));
-  return Object.values(sceneParts(record)).some((part) => {
-    if (part === null || typeof part !== "object" || !("type" in part)) return false;
-    return typeof part.type === "string" && pressable.has(part.type);
-  });
+  return circuit.placed.some((part) => pressable.has(part.id));
 }
 
-const card = ({ record }: Item<BlockRecord>): BlockCard => ({
-  name: record.name,
-  title: record.title,
-  description: record.description,
-  board: record.board,
-  parts: Object.keys(sceneParts(record)).length,
-  button: sceneHasButton(record),
-});
+const card = ({ record }: Item<BlockRecord>): BlockCard => {
+  const circuit = circuitOf(record.name);
+  return {
+    name: record.name,
+    title: record.title,
+    description: record.description,
+    board: circuit.board.title,
+    parts: circuit.placed.length,
+    button: sceneHasButton(circuit),
+  };
+};
 
 const dependencyIds = (record: PartRecord | BlockRecord) => record.registryDependencies.map((dependency) => dependency.slice(0, dependency.lastIndexOf("@")));
 
@@ -82,41 +95,38 @@ export const home = () => ({
 export const parts = (): Listed[] =>
   [...data.parts]
     .sort((a, b) => a.record.title.localeCompare(b.record.title))
-    .map(({ record }) => ({
-      name: record.name,
-      title: record.title,
-      maker: record.real.maker,
-      number: record.real.number,
-      description: record.description,
-      categories: record.categories,
-      href: at.part(record.name),
-    }));
+    .map(({ record }) => {
+      const use = useOf(record.name);
+      return {
+        name: record.name,
+        title: record.title,
+        maker: record.real.maker,
+        number: record.real.number,
+        description: record.description,
+        categories: record.categories,
+        href: at.part(record.name),
+        match: matchLine(record.real),
+        use: whereLine(use),
+      };
+    });
 
 export function part(id: string) {
   const item = data.parts.find((entry) => entry.record.name === id);
   if (item === undefined) return null;
-  return { item, links: linked([...dependencyIds(item.record), ...item.usedBy]), shown: data.shown[id] };
+  const use = useOf(id);
+  const names = [...dependencyIds(item.record), ...use.blocks.map((block) => block.id), ...use.boards.map((board) => board.id)];
+  return { item, links: linked(names), use, where: whereLine(use), shown: data.shown[id] };
 }
 
-/** A Block's text files the page shows: the scene, the firmware's sources and the tests. The
- * README is prose, and its install paragraph is kept only when install lines can show. */
+/** A Block's page: its scene's parts, the sketch, scene and test, and the README. The README's
+ * install paragraph is kept only when install lines can show. */
 export function block(id: string) {
   const item = data.blocks.find((entry) => entry.record.name === id);
   if (item === undefined) return null;
-  const texts = item.record.files
-    .filter((file) => file.path !== "README.md")
-    .flatMap((file) => {
-      const text = data.texts[file.sha256];
-      return text === undefined ? [] : [{ path: file.path, text }];
-    });
+  const circuit = circuitOf(id);
   const readmeFile = item.record.files.find((file) => file.path === "README.md");
   const readmeText = readmeFile === undefined ? undefined : data.texts[readmeFile.sha256];
   if (readmeText === undefined) throw new Error(`${id} has no README.md`);
-  return {
-    item,
-    links: linked(dependencyIds(item.record)),
-    texts,
-    readme: readmeParagraphs(readmeText, __ORBE_SITE_INSTALL__),
-    button: sceneHasButton(item.record),
-  };
+  const names = [...circuit.placed.map((placed) => placed.id), ...circuit.board.own.map((part) => part.id)];
+  return { item, links: linked(names), circuit, readme: readmeParagraphs(readmeText, __ORBE_SITE_INSTALL__), button: sceneHasButton(circuit) };
 }

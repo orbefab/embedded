@@ -1,26 +1,33 @@
 import { stripText } from "@orbe/viewer/refs";
+import type { ReactNode } from "react";
 import { PartModel } from "../components/part-model";
+import { glanceLine, type PartUse } from "../circuit";
 import type { Linked } from "../data";
 import { paramSentence, si, sourceText } from "../format";
 import { at } from "../paths";
-import { dependencyId, type Item, type PartRecord } from "../records";
-import { Files } from "./files";
+import { dependencyId, type Item, type PartRecord, type Pin, type Rating } from "../records";
+import { Files, LicenseBox } from "./files";
 import { CliComing, Code, Install, None, Section, Table } from "./layout";
 
 export interface PartView {
   readonly item: Item<PartRecord>;
   readonly links: Readonly<Record<string, Linked>>;
+  readonly use: PartUse;
+  readonly where: string;
   /** The value the 3D view is drawn at, when the part file names one the view shows. */
   readonly shown?: string;
 }
 
-/** The brightness ranges an LED's page states. */
+const QUANTITY: Readonly<Record<string, string>> = { i: "current", v: "voltage", p: "power" };
+
+/** The brightness ranges an LED's page states. `i` is current, not the symbol. */
 function brightnessText(record: PartRecord): string | null {
   const lit = record.lit;
   const dim = record.dim;
   if (lit === undefined && dim === undefined) return null;
-  const of = lit?.of ?? dim?.of;
-  let text = `brightness is the average ${of} over 20 ms.`;
+  const of = lit?.of ?? dim?.of ?? "";
+  const name = QUANTITY[of] ?? of;
+  let text = `Brightness is the average ${name} over 20 ms.`;
   if (lit !== undefined) {
     text += ` It reads lit while that average is above ${si(lit.above, lit.unit)}.`;
   }
@@ -43,20 +50,119 @@ export function matches(record: PartRecord): string {
   return generic ? `Generic part. ${named} is the one its values and model follow` : `Matches ${named}`;
 }
 
-/** Links to the items named, each to its own page. */
-function Links({ links, names }: { links: PartView["links"]; names: readonly string[] }) {
+function pinGlance(pins: readonly Pin[]): string {
+  if (pins.length === 0) return "No pins yet.";
+  if (pins.length > 8) return `${pins.length} pins`;
+  return pins.map((pin) => pin.name).join(", ");
+}
+
+function SourceCell({ rating, docs }: { rating: Rating; docs: PartRecord["docs"] }) {
+  const source = rating.source;
+  const text = sourceText(source);
+  if (source !== undefined && source !== "user" && "datasheet" in source) {
+    const match = docs?.find((doc) => doc.name === source.datasheet.doc && doc.url !== undefined);
+    if (match?.url !== undefined) {
+      return (
+        <span className="text-muted-foreground">
+          {text}{" "}
+          <a className="underline hover:text-brand" href={match.url} rel="noopener" target="_blank">
+            Datasheet
+          </a>
+        </span>
+      );
+    }
+  }
+  return <span className="text-muted-foreground">{text}</span>;
+}
+
+function Glance({ part }: { part: PartView }) {
+  const { record } = part.item;
+  const holes = new Set(record.holes?.strips.flat());
+  const pins = record.pins.filter((pin) => !holes.has(pin.name));
+  const place = glanceLine(part.use);
   return (
-    <ul className="grid gap-1 sm:grid-cols-2">
-      {names.map((name) => (
-        <li key={name}>
-          <a className="underline hover:text-brand" href={links[name]?.href ?? at.part(name)}>
-            {links[name]?.title ?? name}
-          </a>{" "}
-          <span className="font-mono text-muted-foreground text-xs">{name}</span>
-        </li>
+    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
+      <dt className="font-mono text-muted-foreground text-xs">pins</dt>
+      <dd>{pinGlance(pins)}</dd>
+      {record.ratings.map((rating) => (
+        <span className="contents" key={rating.name}>
+          <dt className="font-mono text-muted-foreground text-xs">{rating.name}</dt>
+          <dd className="font-mono">{rating.value === null ? "unrated" : si(rating.value, rating.unit)}</dd>
+        </span>
       ))}
-    </ul>
+      {record.lit === undefined ? null : (
+        <>
+          <dt className="font-mono text-muted-foreground text-xs">lit</dt>
+          <dd>above {si(record.lit.above, record.lit.unit)}</dd>
+        </>
+      )}
+      <dt className="font-mono text-muted-foreground text-xs">{place.label}</dt>
+      <dd>
+        {place.href === undefined ? (
+          place.value
+        ) : (
+          <a className="underline hover:text-brand" href={place.href}>
+            {place.value}
+          </a>
+        )}
+      </dd>
+      <dt className="font-mono text-muted-foreground text-xs">version</dt>
+      <dd className="break-all font-mono text-xs">{record.version}</dd>
+    </dl>
   );
+}
+
+function UsedIn({ part }: { part: PartView }) {
+  const { use } = part;
+  const blocks =
+    use.blocks.length > 0 ? (
+      <Section id="used" title="Used in Blocks">
+        <ul className="grid gap-3 sm:grid-cols-2" data-testid="used-in">
+          {use.blocks.map((block) => (
+            <li key={block.id}>
+              <a className="block h-full rounded-lg border border-border p-4 transition-colors hover:border-brand" href={block.href}>
+                <span className="font-medium">{block.title}</span>
+                {block.refs.map((ref) => (
+                  <span className="mt-1 block text-muted-foreground text-sm" key={ref.ref}>
+                    <span className="font-mono text-brand">{ref.ref}</span>
+                    {ref.values.length === 0 ? null : `, ${ref.values.join(", ")}`}
+                  </span>
+                ))}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </Section>
+    ) : use.boards.length === 0 ? (
+      <Section id="used" title="Used in Blocks">
+        <None>In no Block yet.</None>
+      </Section>
+    ) : null;
+  const boards =
+    use.boards.length > 0 ? (
+      <Section id="boards" title="On boards">
+        <ul className="grid gap-1" data-testid="on-boards">
+          {use.boards.map((board) => (
+            <li key={board.id}>
+              On the{" "}
+              <a className="underline hover:text-brand" href={board.href}>
+                {board.title}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </Section>
+    ) : null;
+  return (
+    <>
+      {blocks}
+      {boards}
+    </>
+  );
+}
+
+function Label({ children }: { children: ReactNode }) {
+  return <h2 className="font-mono text-muted-foreground text-xs uppercase tracking-[0.16em]">{children}</h2>;
 }
 
 export function PartPage({ part }: { part: PartView }) {
@@ -66,7 +172,7 @@ export function PartPage({ part }: { part: PartView }) {
   const holes = new Set(record.holes?.strips.flat());
   const pins = record.pins.filter((pin) => !holes.has(pin.name));
   return (
-    <article>
+    <article className="min-w-0">
       <p className="font-mono text-muted-foreground text-xs">
         <a className="hover:text-foreground" href={at.parts}>
           parts
@@ -91,13 +197,42 @@ export function PartPage({ part }: { part: PartView }) {
         </p>
       )}
 
-      <div className="mt-8">
-        <PartModel shown={part.shown} url={at.partView(record.name)} />
+      <div className="mt-8 grid grid-cols-[minmax(0,1fr)] items-start gap-8 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+        <div className="min-w-0">
+          <PartModel shown={part.shown} url={at.partView(record.name)} />
+        </div>
+        <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-8">
+          <div>
+            <Label>Install</Label>
+            <div className="mt-3">
+              {__ORBE_SITE_INSTALL__ ? (
+                <Install
+                  lines={[`orbe add ${record.name}`]}
+                  note={
+                    <>
+                      It copies the part into the project's <Code>parts/</Code> and records it in <Code>parts.lock</Code>.
+                    </>
+                  }
+                />
+              ) : (
+                <CliComing />
+              )}
+            </div>
+          </div>
+          <div>
+            <Label>At a glance</Label>
+            <div className="mt-3">
+              <Glance part={part} />
+            </div>
+          </div>
+        </div>
       </div>
 
+      <UsedIn part={part} />
+
       <Section title="Pins">
-        {pins.length === 0 && record.holes ? (
-          <None>Only its holes.</None>
+        {pins.length === 0 ? (
+          <None>No pins yet.</None>
         ) : (
           <Table
             head={["Pin", pins.some((pin) => pin.refs) ? "Reaches" : "Leads"]}
@@ -135,7 +270,7 @@ export function PartPage({ part }: { part: PartView }) {
 
       <Section title="Params">
         {record.params.length === 0 ? (
-          <None>It takes no params.</None>
+          <None>No params yet.</None>
         ) : (
           <Table
             head={["Param", "Takes"]}
@@ -173,22 +308,16 @@ export function PartPage({ part }: { part: PartView }) {
               <span className="whitespace-nowrap font-mono" key="value">
                 {rating.value === null ? "unrated" : si(rating.value, rating.unit)}
               </span>,
-              <span className="text-muted-foreground" key="source">
-                {sourceText(rating.source)}
-              </span>,
+              <SourceCell docs={record.docs} key="source" rating={rating} />,
             ])}
           />
         )}
-        {record.lit === undefined && record.dim === undefined ? null : (
-          <p className="mt-4 text-muted-foreground text-sm">
-            {brightnessText(record)}
-          </p>
-        )}
+        {record.lit === undefined && record.dim === undefined ? null : <p className="mt-4 max-w-3xl text-muted-foreground text-sm">{brightnessText(record)}</p>}
       </Section>
 
       <Section title="Not simulated">
         {record.notSimulated.length === 0 ? (
-          <None>The part file lists nothing the engine leaves out.</None>
+          <None>Nothing left out yet.</None>
         ) : (
           <ul className="grid gap-3">
             {record.notSimulated.map((entry) => (
@@ -203,23 +332,22 @@ export function PartPage({ part }: { part: PartView }) {
 
       {children.length === 0 ? null : (
         <Section title="Built from">
-          <Links links={links} names={[...new Set(children)]} />
+          <ul className="grid gap-1 sm:grid-cols-2">
+            {[...new Set(children)].map((name) => (
+              <li key={name}>
+                <a className="underline hover:text-brand" href={links[name]?.href ?? at.part(name)}>
+                  {links[name]?.title ?? name}
+                </a>{" "}
+                <span className="font-mono text-muted-foreground text-xs">{name}</span>
+              </li>
+            ))}
+          </ul>
         </Section>
       )}
-      <Section title="Used by">
-        {item.usedBy.length === 0 ? <None>Nothing in the catalog uses it yet.</None> : <Links links={links} names={item.usedBy} />}
-      </Section>
-
-      <Section title="Files">
-        <Files files={record.files} />
-        <p className="mt-3 font-mono text-muted-foreground text-xs">
-          {record.name}@{record.version}, {record.hash}
-        </p>
-      </Section>
 
       <Section title="Docs">
         {record.docs === undefined ? (
-          <None>No docs linked yet.</None>
+          <None>No docs yet.</None>
         ) : (
           <ul className="grid gap-1">
             {record.docs.map((doc) => (
@@ -239,7 +367,7 @@ export function PartPage({ part }: { part: PartView }) {
 
       <Section title="Where to buy">
         {record.buy === undefined ? (
-          <None>No sellers listed yet.</None>
+          <None>No sellers yet.</None>
         ) : (
           <>
             <Table
@@ -258,21 +386,13 @@ export function PartPage({ part }: { part: PartView }) {
         )}
       </Section>
 
-      <Section title="Install">
-        {__ORBE_SITE_INSTALL__ ? (
-          <Install
-            lines={[`orbe add ${record.name}`]}
-            note={
-              <>
-                It copies the part into the project's <Code>parts/</Code> and records it in <Code>parts.lock</Code>.
-              </>
-            }
-          />
-        ) : (
-          <CliComing />
-        )}
-        <p className="mt-3 font-mono text-muted-foreground text-xs">versions {item.versions.join(", ")}</p>
-      </Section>
+      <LicenseBox
+        expression={record.license}
+        identity={`${record.name}@${record.version}, ${record.hash}, versions ${item.versions.join(", ")}`}
+        recordHref={`${at.registry}${record.name}@${record.version}.json`}
+      >
+        <Files files={record.files} />
+      </LicenseBox>
     </article>
   );
 }

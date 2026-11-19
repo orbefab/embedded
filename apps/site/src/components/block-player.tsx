@@ -34,6 +34,7 @@ function PressControl({ hold }: { hold: { readonly current: ButtonHold | null } 
     down.current = 0;
     keys.current.clear();
     pointers.current.clear();
+    gesture.current = false;
     if (held) hold.current?.release();
   };
 

@@ -90,37 +90,43 @@ const suites: Record<string, PlaywrightTestConfig> = {
       reuseExistingServer: false,
     },
   },
-  site: {
+  site: siteSuite(),
+};
+
+function siteSuite(): PlaywrightTestConfig {
+  const viteOnly = process.env.ORBE_SITE_SERVERS === "vite";
+  const viteServer = {
+    command: `pnpm exec vite preview --strictPort --host 127.0.0.1 --port ${SITE_VITE_PORT}`,
+    cwd: "apps/site",
+    url: `${SITE_VITE}/embedded/`,
+    name: "vite preview",
+    reuseExistingServer: false,
+    stdout: "ignore" as const,
+    timeout: 120_000,
+  };
+  const wranglerServer = {
+    command: `pnpm exec wrangler dev --local --ip 127.0.0.1 --port ${SITE_WRANGLER_PORT}`,
+    cwd: "apps/site",
+    url: `${SITE_WRANGLER}/embedded/`,
+    name: "wrangler dev --local",
+    reuseExistingServer: false,
+    stdout: "ignore" as const,
+    timeout: 180_000,
+  };
+  return {
     ...shared,
     testDir: "apps/site/e2e",
     testMatch: "*.spec.ts",
     use: { ...shared.use, viewport: { width: 1280, height: 900 } },
-    webServer: [
-      {
-        command: `pnpm exec vite preview --strictPort --host 127.0.0.1 --port ${SITE_VITE_PORT}`,
-        cwd: "apps/site",
-        url: `${SITE_VITE}/embedded/`,
-        name: "vite preview",
-        reuseExistingServer: false,
-        stdout: "ignore",
-        timeout: 120_000,
-      },
-      {
-        command: `pnpm exec wrangler dev --local --ip 127.0.0.1 --port ${SITE_WRANGLER_PORT}`,
-        cwd: "apps/site",
-        url: `${SITE_WRANGLER}/embedded/`,
-        name: "wrangler dev --local",
-        reuseExistingServer: false,
-        stdout: "ignore",
-        timeout: 180_000,
-      },
-    ],
-    projects: [
-      { name: "vite preview", use: { baseURL: SITE_VITE } },
-      { name: "wrangler dev --local", dependencies: ["vite preview"], use: { baseURL: SITE_WRANGLER } },
-    ],
-  },
-};
+    webServer: viteOnly ? viteServer : [viteServer, wranglerServer],
+    projects: viteOnly
+      ? [{ name: "vite preview", use: { baseURL: SITE_VITE } }]
+      : [
+          { name: "vite preview", use: { baseURL: SITE_VITE } },
+          { name: "wrangler dev --local", dependencies: ["vite preview"], use: { baseURL: SITE_WRANGLER } },
+        ],
+  };
+}
 
 function enginesSuite(): PlaywrightTestConfig {
   const firefoxExecutable = bundledBrowser("Firefox", "firefox");

@@ -1,5 +1,6 @@
 import { Wordmark } from "@orbe/brand/mark";
 import type { ReactNode } from "react";
+import { CopyButton } from "../components/copy-button";
 import { at } from "../paths";
 import type { Site } from "../records";
 
@@ -63,7 +64,7 @@ export function Shell({ site, children }: { site: Site; children: ReactNode }) {
   return (
     <div className="flex min-h-screen flex-col">
       <Header />
-      <main className="mx-auto w-full max-w-5xl flex-1 px-6 pt-12">{children}</main>
+      <main className="mx-auto w-full min-w-0 max-w-5xl flex-1 px-6 pt-12">{children}</main>
       <Footer site={site} />
     </div>
   );
@@ -93,12 +94,16 @@ export function CliComing() {
   );
 }
 
-/** Install lines. Each page shows them only under `__ORBE_SITE_INSTALL__`, so a build without
- * the flag holds none of them. */
+/** Install lines, with one Copy button for the whole block. Each page shows them only under
+ * `__ORBE_SITE_INSTALL__`, so a build without the flag holds none of them. */
 export function Install({ lines, note }: { lines: readonly string[]; note?: ReactNode }) {
+  const text = lines.join("\n");
   return (
-    <div data-testid="install">
-      <pre className="overflow-x-auto rounded-lg border border-border bg-muted p-4 font-mono text-sm">{lines.join("\n")}</pre>
+    <div data-copy-root data-testid="install">
+      <div className="flex min-w-0 items-stretch overflow-hidden rounded-lg border border-border bg-muted font-mono text-sm">
+        <pre className="min-w-0 flex-1 overflow-x-auto p-4" data-copy-text>{text}</pre>
+        <CopyButton boxed text={text} />
+      </div>
       {note === undefined ? null : <p className="mt-3 text-muted-foreground text-sm">{note}</p>}
     </div>
   );
