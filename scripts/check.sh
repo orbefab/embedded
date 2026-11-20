@@ -6,7 +6,8 @@
 # `full tier`. `orbe-avr` and `orbe-microchip` are in that workspace run. `full` runs the
 # microchip tests once, in their `port-skip-check` build, instead of in the workspace run.
 # `web` runs the viewer unit tests and the viewer and site checks, each once: `check-viewer.sh`,
-# `check-viewer-e2e.sh`, `check-block.sh`, `check-headed.sh`, `check-site.sh` and `check-engines.sh`.
+# `check-viewer-e2e.sh`, `check-block.sh`, `check-headed.sh`, `site-previous.test.sh`,
+# `check-site.sh` and `check-engines.sh`.
 # `check-assets.sh` stays separate, because it needs a models checkout.
 # `full` runs `fast`, then the chip models' skip checks, the engine's Python checks,
 # `ngspice_refs.py --check`, `orbe-run` for WASI against native, the wasm package check, the
@@ -142,6 +143,7 @@ web() {
   scripts/check-viewer-e2e.sh
   scripts/check-block.sh
   scripts/check-headed.sh
+  scripts/site-previous.test.sh
   scripts/check-site.sh
   scripts/check-engines.sh
 }

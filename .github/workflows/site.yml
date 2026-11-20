@@ -1,16 +1,14 @@
 # Builds the site and, when the repository asks, deploys it to orbefab.com/embedded.
 #
-# A push to main starts the job only when the repository variable SITE_DEPLOY is `on`.
+# A push to main starts the job only when the repository variable SITE_DEPLOY is `1`.
 # Until then the job is skipped, so the push spends no minutes. A workflow_dispatch
-# run always builds. It deploys only when SITE_DEPLOY is `on` and the deploy input
-# is true. The input defaults to false, which is a build and a check with no deploy.
+# run always builds. It deploys only when SITE_DEPLOY is `1`, the ref is main, and
+# the deploy input is true. The input defaults to false, which is a build and a check
+# with no deploy.
 #
-# The workflow does not run on pull_request. The deploy secrets are on the deploy
-# step only.
-#
-# SITE_FIRST_DEPLOY=1 is the first deploy, and only when the live index.json answers
-# 404. ORBE_SITE_INSTALL=1 shows install lines on the build that is uploaded.
-# docs/site.md says what the two secrets allow.
+# The site environment, limited to main, holds the two deploy secrets. That is what
+# keeps them from other branches and from pull requests. ORBE_SITE_INSTALL=1 shows
+# install lines on the build that is uploaded. docs/site.md says what the secrets allow.
 name: Site
 
 on:
@@ -20,21 +18,24 @@ on:
   workflow_dispatch:
     inputs:
       deploy:
-        description: Deploy after the build. Also needs SITE_DEPLOY set to on.
+        description: Deploy after the build. Also needs SITE_DEPLOY set to 1, on main.
         type: boolean
         default: false
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
-  group: site-deploy
+  group: "${{ (github.event_name == 'push' || inputs.deploy) && 'site-deploy' || format('site-build-{0}', github.run_id) }}"
   cancel-in-progress: false
 
 jobs:
   site:
-    if: github.event_name == 'workflow_dispatch' || vars.SITE_DEPLOY == 'on'
+    if: github.event_name == 'workflow_dispatch' || vars.SITE_DEPLOY == '1'
     runs-on: ubuntu-24.04
+    environment: site
+    timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: "4"
       NO_COLOR: "1"
@@ -45,6 +46,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Read pinned tool versions
         id: pins
@@ -112,11 +115,11 @@ jobs:
       - name: Cache pnpm
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ${{ github.workspace }}/.pnpm-store
+          path: ${{ github.workspace }}/.scratch/pnpm-store
           key: pnpm-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Install Node dependencies
-        run: pnpm install --frozen-lockfile --store-dir "${{ github.workspace }}/.pnpm-store"
+        run: pnpm install --frozen-lockfile --store-dir "${{ github.workspace }}/.scratch/pnpm-store"
 
       - name: Install wasm-bindgen
         env:
@@ -140,61 +143,24 @@ jobs:
 
       - name: Fetch the registry the live site serves
         id: previous
-        env:
-          SITE_FIRST_DEPLOY: ${{ vars.SITE_FIRST_DEPLOY }}
         run: |
           set -euo pipefail
-          args=(--url https://orbefab.com/embedded/r/ --out "$RUNNER_TEMP/site-previous")
-          if [[ ${SITE_FIRST_DEPLOY:-} == 1 ]]; then
-            args+=(--allow-first)
-          fi
-          set +e
-          scripts/site-previous.sh "${args[@]}"
-          code=$?
-          set -e
-          case $code in
-            0)
-              echo "mode=previous" >> "$GITHUB_OUTPUT"
-              echo "dir=$RUNNER_TEMP/site-previous" >> "$GITHUB_OUTPUT"
-              ;;
-            10)
-              echo "mode=first" >> "$GITHUB_OUTPUT"
-              ;;
-            *)
-              exit "$code"
-              ;;
-          esac
+          scripts/site-previous.sh --url https://orbefab.com/embedded/r/ --out "$RUNNER_TEMP/site-previous"
+          echo "dir=$RUNNER_TEMP/site-previous" >> "$GITHUB_OUTPUT"
 
       - name: Check the site
-        env:
-          PREVIOUS_MODE: ${{ steps.previous.outputs.mode }}
-          PREVIOUS_DIR: ${{ steps.previous.outputs.dir }}
-        run: |
-          set -euo pipefail
-          if [[ $PREVIOUS_MODE == first ]]; then
-            scripts/check-site.sh --first-deploy
-          elif [[ $PREVIOUS_MODE == previous ]]; then
-            scripts/check-site.sh --previous "$PREVIOUS_DIR"
-          else
-            echo "unknown registry mode: $PREVIOUS_MODE" >&2
-            exit 1
-          fi
+        run: scripts/check-site.sh --previous "${{ steps.previous.outputs.dir }}"
 
       - name: Rebuild with install lines
         if: vars.ORBE_SITE_INSTALL == '1'
-        env:
-          PREVIOUS_MODE: ${{ steps.previous.outputs.mode }}
-          PREVIOUS_DIR: ${{ steps.previous.outputs.dir }}
-        run: |
-          set -euo pipefail
-          if [[ $PREVIOUS_MODE == first ]]; then
-            ORBE_SITE_INSTALL=1 scripts/site.sh --first-deploy
-          else
-            ORBE_SITE_INSTALL=1 scripts/site.sh --previous "$PREVIOUS_DIR"
-          fi
+        run: ORBE_SITE_INSTALL=1 scripts/site.sh --previous "${{ steps.previous.outputs.dir }}"
+
+      - name: Check the install lines
+        if: vars.ORBE_SITE_INSTALL == '1'
+        run: scripts/site-install.sh
 
       - name: Deploy
-        if: vars.SITE_DEPLOY == 'on' && (github.event_name != 'workflow_dispatch' || inputs.deploy == true)
+        if: vars.SITE_DEPLOY == '1' && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.deploy == true)
         working-directory: apps/site
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -202,7 +168,16 @@ jobs:
         run: pnpm exec wrangler deploy
 
       - name: Check the deployed site
-        if: vars.SITE_DEPLOY == 'on' && (github.event_name != 'workflow_dispatch' || inputs.deploy == true)
+        if: vars.SITE_DEPLOY == '1' && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.deploy == true)
         env:
           ORBE_SITE_INSTALL: ${{ vars.ORBE_SITE_INSTALL }}
         run: scripts/site-deployed.sh
+
+      - name: Keep a copy of the registry
+        if: vars.SITE_DEPLOY == '1' && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.deploy == true)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: registry-${{ github.sha }}
+          path: apps/site/dist/client/r
+          retention-days: 90
+          if-no-files-found: error

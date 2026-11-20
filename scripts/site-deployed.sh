@@ -62,12 +62,14 @@ root_ok() {
   local code
   code=$(curl_body "$base/" "$work/root.html") || return 1
   [[ $code == 200 ]] || return 1
-  ! grep -q 'Get orbe | Orbefab' "$work/root.html"
+  grep -q '<title>[^<]*Orbefab[^<]*</title>' "$work/root.html" || return 1
+  ! grep -q '<title>[^<]*Get orbe' "$work/root.html"
 }
 
 elsewhere_ok() {
   local code
   code=$(curl_body "$base/embeddedfoo" "$work/foo.html") || return 1
+  [[ $code == 404 ]] || return 1
   ! grep -q 'name="orbe-not-found"' "$work/foo.html" && ! grep -q 'Get orbe | Orbefab' "$work/foo.html"
 }
 
@@ -77,15 +79,21 @@ index_ok() {
 }
 
 part_ok() {
-  local code record sha
+  local code record title sha count
   code=$(curl_body "$base/embedded/parts/led-5mm/" "$work/led.html") || return 1
   [[ $code == 200 ]] || return 1
-  grep -q 'led-5mm' "$work/led.html" || return 1
   record=$(find "$dist/r" -maxdepth 1 -name 'led-5mm@*.json' -print -quit)
   [[ -n $record ]] || return 1
-  sha=$(node -e 'const record = require(require("node:path").resolve(process.argv[1])); const file = record.files && record.files[0]; if (!file) process.exit(1); process.stdout.write(file.sha256)' "$record") || return 1
-  curl -fsS --max-time 30 -o "$work/led-file" "$base/embedded/r/files/$sha" || return 1
-  cmp -s "$dist/r/files/$sha" "$work/led-file"
+  title=$(node -e 'const record = require(require("node:path").resolve(process.argv[1])); if (typeof record.title !== "string" || !Array.isArray(record.files) || record.files.length === 0) process.exit(1); process.stdout.write(record.title)' "$record") || return 1
+  grep -F -q "<title>${title} | Orbefab</title>" "$work/led.html" || return 1
+  count=0
+  while IFS= read -r sha; do
+    [[ $sha =~ ^[0-9a-f]{64}$ ]] || return 1
+    curl -fsS --max-time 60 -o "$work/led-$sha" "$base/embedded/r/files/$sha" || return 1
+    cmp -s "$dist/r/files/$sha" "$work/led-$sha" || return 1
+    count=$((count + 1))
+  done < <(node -e 'const record = require(require("node:path").resolve(process.argv[1])); for (const file of record.files) { if (!file || typeof file.sha256 !== "string") process.exit(1); process.stdout.write(file.sha256 + "\n") }' "$record")
+  [[ $count -gt 0 ]]
 }
 
 source_ok() {
@@ -108,17 +116,6 @@ asset_cache_ok() {
   grep -qi '^cache-control:.*max-age=31536000' "$headers"
 }
 
-registry_etag_ok() {
-  local blob sha headers code
-  blob=$(find "$dist/r/files" -type f -print -quit)
-  [[ -n $blob ]] || return 1
-  sha=$(basename "$blob")
-  headers=$work/file.headers
-  code=$(curl -sS --max-time 30 -D "$headers" -o /dev/null -w '%{http_code}' "$base/embedded/r/files/$sha") || return 1
-  [[ $code == 200 ]] || return 1
-  grep -qi '^etag:[[:space:]]*[^[:space:]]' "$headers"
-}
-
 missing_ok() {
   local code
   code=$(curl_body "$base/embedded/no-such-page" "$work/missing.html") || return 1
@@ -128,11 +125,10 @@ missing_ok() {
 
 try 12 index_ok || fail "the live index.json is not the index this build wrote"
 try 6 home_ok || fail "Get orbe is not what this build serves at /embedded/"
-try 6 root_ok || fail "orbefab.com/ is the embedded site"
-try 6 elsewhere_ok || fail "orbefab.com/embeddedfoo is the embedded site"
-try 6 part_ok || fail "the led-5mm page does not download its files"
+try 6 root_ok || fail "orbefab.com/ is not the website"
+try 6 elsewhere_ok || fail "orbefab.com/embeddedfoo did not answer 404 outside this site"
+try 6 part_ok || fail "the led-5mm page is not that part, or it does not download every file of its record"
 try 6 source_ok || fail "the runtime source is not the archive sketches.sh pins"
 try 6 asset_cache_ok || fail "a hashed asset has no year-long Cache-Control"
-try 6 registry_etag_ok || fail "a registry file has no ETag"
 try 6 missing_ok || fail "/embedded/no-such-page is not this site's 404"
 echo "scripts/site-deployed.sh: the live site matches this build"

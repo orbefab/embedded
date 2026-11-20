@@ -20,10 +20,11 @@ Sparse parts render as they are. A missing summary, tag, doc or seller shows as 
 
 ```sh
 pnpm install --frozen-lockfile
-scripts/site.sh --first-deploy
+scripts/site-previous.sh --url https://orbefab.com/embedded/r/ --out .scratch/site/previous
+scripts/site.sh --previous .scratch/site/previous
 ```
 
-`scripts/site.sh` fetches the AVR runtime's source into the blob cache, builds `orbe`, writes this repo's registry with `orbe registry build . .scratch/site/registry`, builds orbe-wasm with `scripts/wasm.sh .scratch/site/wasm`, then runs `vite build` in `apps/site`. It needs what [wasm.md](wasm.md#build) needs, Node 24 and pnpm, and installs nothing. It requires either `--previous <dir>` or `--first-deploy`. `--previous <dir>` is the registry the live site serves, and the build keeps every version that registry served, as [registry.md](registry.md#versions) says. `scripts/site-previous.sh` downloads that registry. `--first-deploy` is the first deploy, which has no earlier registry.
+`scripts/site.sh` fetches the AVR runtime's source into the blob cache, builds `orbe`, writes this repo's registry with `orbe registry build . .scratch/site/registry`, builds orbe-wasm with `scripts/wasm.sh .scratch/site/wasm`, then runs `vite build` in `apps/site`. It needs what [wasm.md](wasm.md#build) needs, Node 24 and pnpm, and installs nothing. It requires either `--previous <dir>` or `--first-deploy`. `--previous <dir>` is the registry the live site serves, and the build keeps every version that registry served, as [registry.md](registry.md#versions) says. `scripts/site-previous.sh` downloads that registry into the directory passed as `--out`. `--first-deploy` is only the local build, when there is no registry to download.
 
 The site is a [TanStack Start](https://tanstack.com/start/latest) app, set up as the website is: file routes in `src/routes`, `@cloudflare/vite-plugin`, Tailwind 4 and `@vitejs/plugin-react`.
 
@@ -36,7 +37,7 @@ The site is a [TanStack Start](https://tanstack.com/start/latest) app, set up as
 
 ### Install lines
 
-Until the repo and the binaries are public, an install command would fail, so the site shows none. `ORBE_SITE_INSTALL=1 scripts/site.sh --first-deploy` shows them: `orbe add <id>` on each part and Block page, each with a Copy button, and on Get orbe the install line, `orbe skills get core`, `orbe add nano-led-fade` with that Block's `scene.jsonc`, `orbe check scene.jsonc` and `orbe test`. That build also serves `scripts/install.sh` at `/embedded/install.sh`. A build without the flag does not, and each of those steps says the CLI is coming. The footer links the repo either way. A Block's README shows either way. The paragraph that says `orbe add <block>` shows only with the flag, and without the flag that paragraph is left out. The build defines the flag as a literal, `__ORBE_SITE_INSTALL__`, so a build without it holds none of the install text, in its pages or in its scripts.
+Until the repo and the binaries are public, an install command would fail, so the site shows none. `ORBE_SITE_INSTALL=1 scripts/site.sh --previous .scratch/site/previous` shows them: `orbe add <id>` on each part and Block page, each with a Copy button, and on Get orbe the install line, `orbe skills get core`, `orbe add nano-led-fade` with that Block's `scene.jsonc`, `orbe check scene.jsonc` and `orbe test`. That build also serves `scripts/install.sh` at `/embedded/install.sh`. A build without the flag does not, and each of those steps says the CLI is coming. The footer links the repo either way. A Block's README shows either way. The paragraph that says `orbe add <block>` shows only with the flag, and without the flag that paragraph is left out. The build defines the flag as a literal, `__ORBE_SITE_INSTALL__`, so a build without it holds none of the install text, in its pages or in its scripts. On a local build with no registry to download, the same flag is `ORBE_SITE_INSTALL=1 scripts/site.sh --first-deploy`.
 
 The flag gates the site's own text and links. The registry's files are data, served as `orbe registry build` wrote them, so a Block's `README.md` and `block.jsonc` still say `orbe add`, and its `firmware/NOTICE` names the repo. `scripts/check-site.sh` checks every file under `dist/client` except `r/`, `orbe-wasm/` and `sources/`.
 
@@ -57,7 +58,7 @@ pnpm exec wrangler dev --local            # the same build, under wrangler
 
 ## Check it
 
-`scripts/check-site.sh` runs the type check, `pnpm --filter @orbe/site test` (the circuit readers and the value formatter) and the brand check. It builds the site with `ORBE_SITE_INSTALL=1` and fails unless every part and Block in the registry has a page with its `orbe add` line, each Block also has an embed page, the Get orbe page shows the install script line and links the repo, and `/embedded/install.sh` is `scripts/install.sh`. Playwright then drives that build on `vite preview` (`apps/site/e2e/install.spec.ts`): every part page and every Block page fits a phone width with the install line on screen, Get orbe shows the five commands and the scene, and Copy says when the write worked and when it did not. It builds the site again without the flag. That build fails the check if it serves `install.sh`, or if a file of the site's own shows `orbe add`, `cargo install` or the install script URL, or if the footer does not link the repo, or if it does not serve the runtime source that sketches.sh pins and every Block's NOTICE names. Then `@playwright/test` (`apps/site/e2e/site.spec.ts`) drives that build in headless Chromium, once on `vite preview` and once on `wrangler dev --local`:
+`scripts/check-site.sh` runs the type check, `pnpm --filter @orbe/site test` (the circuit readers and the value formatter) and the brand check. It builds the site with `ORBE_SITE_INSTALL=1` and fails unless every part and Block in the registry has a page, each Block also has an embed page, and `scripts/site-install.sh` passes: every part and Block page shows its `orbe add` line, the Get orbe page shows the install command and links the repo, and `/embedded/install.sh` is `scripts/install.sh`. Playwright then drives that build on `vite preview` (`apps/site/e2e/install.spec.ts`): every part page and every Block page fits a phone width with the install line on screen, Get orbe shows the five commands and the scene, and Copy says when the write worked and when it did not. It builds the site again without the flag. That build fails the check if it serves `install.sh`, or if a file of the site's own shows `orbe add`, `cargo install` or the install script URL, or if the footer does not link the repo, or if it does not serve the runtime source that sketches.sh pins and every Block's NOTICE names. Then `@playwright/test` (`apps/site/e2e/site.spec.ts`) drives that build in headless Chromium, once on `vite preview` and once on `wrangler dev --local`:
 
 - Get orbe says what orbe is, shows the three points and four steps, and plays no Block. With install lines off, each step says the CLI is coming. The page asks no server for data, loads every file from under `/embedded/`, and draws the wordmark in Syne from `/embedded/fonts/`. The header and footer are the ones shared with orbefab.com;
 - the parts search lists every part, and for ten queries shows the parts `orbe search --json` gives, in its order;
@@ -80,36 +81,36 @@ It prints each page's requests and bytes, uncompressed and gzipped, and the time
 
 ## Deploy
 
-A push to `main` runs [`.github/workflows/site.yml`](../.github/workflows/site.yml) on GitHub's `ubuntu-24.04` runner. The workflow also runs when someone starts it by hand. It does not run on a pull request, so a pull request never receives the deploy secrets. The hand run has one input, `deploy`, which defaults to false.
+A push to `main` runs [`.github/workflows/site.yml`](../.github/workflows/site.yml) on GitHub's `ubuntu-24.04` runner. The workflow also runs when someone starts it by hand. The hand run has one input, `deploy`, which defaults to false. The `site` environment, limited to the `main` branch, holds the two secrets. That is what keeps them from other branches and from pull requests.
 
-The push starts a job only when the repository variable `SITE_DEPLOY` is `on`. Until then the push skips the job and spends nothing. A hand run always builds and checks. It deploys only when `SITE_DEPLOY` is `on` and `deploy` is true. Deploys share one concurrency group and do not cancel each other, so two deploys never overlap.
+The push starts a job only when the repository variable `SITE_DEPLOY` is `1`. Until then the push skips the job and spends nothing. A hand run always builds and checks. It deploys only when `SITE_DEPLOY` is `1`, the ref is `main`, and `deploy` is true. A run on another branch does not deploy. Runs that can deploy share one concurrency group, and a build that does not deploy does not. A newer pending deploy replaces an older pending one, so the latest commit wins. A deploy that has started is left to finish.
 
-`scripts/site-previous.sh` downloads `https://orbefab.com/embedded/r/` into the directory passed as `--previous`. It starts at `index.json` and fetches every record and every `files/<sha256>` that record lists. It writes a path only when a record's URL is `<name>@<version>.json` and a file's URL is `files/` plus 64 lowercase hex. `orbe registry build --previous` verifies everything that download contains. A network error, a status other than 200, or a redirect that leaves that directory fails the job.
+`scripts/site-previous.sh` downloads `https://orbefab.com/embedded/r/` into the directory passed as `--out`. That directory must be missing or empty. It starts at `index.json` and fetches every record and every `files/<sha256>` that record lists, requesting a record with `@` encoded as `%40` and following a redirect that stays in that directory. It writes a path only when a record's URL is `<name>@<version>.json` and a file's URL is `files/` plus 64 lowercase hex. A bad entry fails the whole download, and nothing is written. `orbe registry build --previous` verifies everything that download contains. A network error, a timeout or a 5xx is tried three times. A 404, any other status, or a redirect that leaves that directory fails the download.
 
-The first deploy has no earlier registry. Set the repository variable `SITE_FIRST_DEPLOY` to `1` for that run. The workflow then passes `--first-deploy` only when `index.json` answers 404. A 404 with the variable unset fails. A 200 with the variable set also fails, so the variable is unset after the first deploy. The website has to answer that URL with 404 until the Worker exists. Any other status fails the job, and the manual path below is the fallback.
+Set the repository variable `ORBE_SITE_INSTALL` to `1` to deploy with install lines. `scripts/check-site.sh` builds the site both ways and leaves the build with the lines off. When the variable is `1`, the workflow runs `scripts/site.sh` once more with `ORBE_SITE_INSTALL=1` and `scripts/site-install.sh` checks that build before it is uploaded: every part and Block page shows its `orbe add` line, Get orbe shows the install command and the repo link, and `install.sh` is served and equals `scripts/install.sh`.
 
-Set the repository variable `ORBE_SITE_INSTALL` to `1` to deploy with install lines. `scripts/check-site.sh` builds the site both ways and leaves the build with the lines off. When the variable is `1`, the workflow runs `scripts/site.sh` once more with `ORBE_SITE_INSTALL=1` and uploads that build.
-
-The deploy step reads two secrets.
+The deploy step reads two secrets from the `site` environment.
 
 | Secret | What it is |
 | --- | --- |
 | `CLOUDFLARE_API_TOKEN` | An account API token for the account in `CLOUDFLARE_ACCOUNT_ID`. |
 | `CLOUDFLARE_ACCOUNT_ID` | The account that owns the Worker `orbefab-embedded`. |
 
-The token deploys that Worker and its two routes on the `orbefab.com` zone. That is Workers Editor on the Worker `orbefab-embedded`, and zone Workers Routes Write on the zone `orbefab.com`. The first deploy creates the Worker, and a token cannot be scoped to a Worker that does not exist yet, so that first token is Workers Admin on the account. After the Worker exists, replace the Admin with Editor on `orbefab-embedded`. The same access under the older token names is account Workers Scripts Edit and zone Workers Routes Edit on `orbefab.com`. The account permission is not limited to this Worker. [Workers roles](https://developers.cloudflare.com/workers/authorization/workers/) names the current roles.
+The token is Workers Editor on the Worker `orbefab-embedded`, plus zone Workers Routes Write on the zone `orbefab.com`. The same access under the older token names is account Workers Scripts Edit and zone Workers Routes Edit on `orbefab.com`. The account permission is not limited to this Worker. [Workers roles](https://developers.cloudflare.com/workers/authorization/workers/) names the current roles.
 
 `wrangler deploy` runs in `apps/site`. It follows `.wrangler/deploy/config.json`, which the build wrote, to `dist/client/wrangler.json`, and uploads `dist/client` as assets and no Worker code. Do not pass `--config wrangler.jsonc`, which skips the built config. `scripts/site-deployed.sh` then requests the live site and fails the job unless:
 
-- `https://orbefab.com/embedded/` shows Get orbe, and `https://orbefab.com/` and `https://orbefab.com/embeddedfoo` still go to the website.
-- `https://orbefab.com/embedded/r/index.json` is this build's index, and `https://orbefab.com/embedded/parts/led-5mm/` downloads its files.
+- `https://orbefab.com/embedded/` shows Get orbe. `https://orbefab.com/` answers 200 with the website's title, which says Orbefab and not Get orbe. `https://orbefab.com/embeddedfoo` answers 404.
+- `https://orbefab.com/embedded/r/index.json` is this build's index, and `https://orbefab.com/embedded/parts/led-5mm/` is that part's page and downloads every file of its record.
 - `https://orbefab.com/embedded/sources/avr-1.8.6.tar.bz2` downloads, with the SHA-256 every Block NOTICE names.
-- `https://orbefab.com/embedded/assets/<file>` has the year-long `Cache-Control`, and `https://orbefab.com/embedded/r/files/<sha256>` has an `ETag`.
+- `https://orbefab.com/embedded/assets/<file>` has the year-long `Cache-Control`.
 - `https://orbefab.com/embedded/no-such-page` answers 404 with this site's page, not the website's.
 
-With install lines on, Get orbe shows the install command and `/embedded/install.sh` is `scripts/install.sh`. With them off, Get orbe says the CLI is coming and that URL answers 404.
+With install lines on, Get orbe shows the install command and `/embedded/install.sh` is `scripts/install.sh`. With them off, Get orbe says the CLI is coming and that URL answers 404. When the live check fails after a deploy, run `pnpm exec wrangler rollback` in `apps/site`, then fix forward.
 
-The same steps, run by hand from a clean checkout of `main`, are the fallback when the workflow cannot:
+After a deploy and a live check that pass, the workflow uploads `apps/site/dist/client/r` as an artifact named for the commit, kept for 90 days. That artifact is the copy to restore from if the live registry is ever lost or shrunk.
+
+The same steps, run by hand from a clean checkout of `main`, are the fallback when the workflow cannot. The manual deploy always uses `--previous`.
 
 ```sh
 git status --short                 # nothing
@@ -120,4 +121,4 @@ cd apps/site
 pnpm exec wrangler deploy          # reads dist/client/wrangler.json, which the build wrote
 ```
 
-The first deploy uses `scripts/check-site.sh --first-deploy` and skips `scripts/site-previous.sh`. A directory saved from the last deploy's `dist/client/r` can stand in for the download. `ORBE_SITE_INSTALL=1 scripts/site.sh --previous .scratch/site/previous` rebuilds with install lines before `wrangler deploy` when those lines should show. `scripts/site-deployed.sh` runs the live checks.
+The uploaded artifact, or any directory saved from a build's `dist/client/r`, can stand in for the download. `ORBE_SITE_INSTALL=1 scripts/site.sh --previous .scratch/site/previous` rebuilds with install lines before `wrangler deploy` when those lines should show, and `scripts/site-install.sh` checks that build. `scripts/site-deployed.sh` runs the live checks. `--first-deploy` on `scripts/site.sh` and `scripts/check-site.sh` is only the local build, when no registry has been downloaded.

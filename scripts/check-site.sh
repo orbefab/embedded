@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Checks the site. It runs the type check, the circuit unit tests and the brand check, then a
-# build with ORBE_SITE_INSTALL=1 that must give every part and Block a page with its install
-# line. Playwright drives that build once, on `vite preview`, for the checks that need the
-# install line. Then it runs the build as it deploys, whose own files must show no install line.
+# build with ORBE_SITE_INSTALL=1. scripts/site-install.sh checks that build: every part and
+# Block page shows its orbe add line, and Get orbe shows the install command, the repo link
+# and install.sh. The site workflow runs the same script on the build it uploads. Playwright
+# drives that build once, on `vite preview`, for the checks that need the install line. Then
+# it runs the build as it deploys, whose own files must show no install line.
 # The footer links the repo either way. The build must serve the AVR runtime source every
 # Block's NOTICE names.
 # Playwright then drives that build in headless Chromium twice: on `vite preview`, and on
@@ -14,8 +16,8 @@
 #
 # Needs what scripts/site.sh needs, and a Chromium found as check-viewer-e2e.sh finds it. It
 # installs nothing. scripts/check.sh web runs this. `--previous <dir>` builds the registry on
-# the one the live site serves. With no `--previous`, the build is a first deploy
-# (`scripts/site.sh --first-deploy`). `--renders <dir>` saves screenshots there. The
+# the one the live site serves. With no `--previous`, the build is local and passes
+# `--first-deploy`, when there is no registry to download. `--renders <dir>` saves screenshots there. The
 # arguments can be in any order. An unknown argument is an error.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -87,16 +89,7 @@ blocks=$(pages blocks)
 embeds=$(find "$dist/blocks" -mindepth 3 -maxdepth 3 -name index.html | wc -l)
 [[ $parts -eq $(listed part) && $blocks -eq $(listed block) && $embeds -eq $blocks ]] ||
   fail "the build has $parts part, $blocks Block and $embeds embed pages, and the registry lists $(listed part) and $(listed block)"
-[[ $(grep -rlE 'orbe add [a-z]' "$dist/parts" "$dist/blocks" --include=index.html | wc -l) -eq $((parts + blocks)) ]] ||
-  fail "with ORBE_SITE_INSTALL=1, not every part and Block page shows its orbe add line"
-grep -q 'curl -fsSL https://orbefab.com/embedded/install.sh | sh' "$dist/index.html" ||
-  fail "with ORBE_SITE_INSTALL=1, Get orbe shows no install line"
-[[ -f $dist/install.sh ]] || fail "with ORBE_SITE_INSTALL=1, the build does not serve install.sh"
-cmp -s scripts/install.sh "$dist/install.sh" ||
-  fail "with ORBE_SITE_INSTALL=1, install.sh is not scripts/install.sh"
-grep -q 'href="https://github.com/orbefab/embedded"' "$dist/index.html" ||
-  fail "with ORBE_SITE_INSTALL=1, Get orbe links no repo"
-echo "check-site: ORBE_SITE_INSTALL=1 shows orbe add on $parts part and $blocks Block pages, and the install script and the repo on Get orbe"
+scripts/site-install.sh
 
 # 8787 is wrangler's default and may already be taken. Ask the OS for a free port.
 free_port() {
