@@ -104,8 +104,12 @@ impl Folder {
 
     /// Whether `meta` describes this folder.
     pub(super) fn is(&self, meta: &std::fs::Metadata) -> bool {
-        rustix::fs::fstat(&self.0)
-            .is_ok_and(|stat| stat.st_dev == meta.dev() && stat.st_ino == meta.ino())
+        // `st_dev` is a `u64` on Linux and an `i32` on macOS. `Metadata::dev()` widens it with
+        // `as`, so this does the same.
+        #[allow(clippy::unnecessary_cast)]
+        let same =
+            |stat: rustix::fs::Stat| stat.st_dev as u64 == meta.dev() && stat.st_ino == meta.ino();
+        rustix::fs::fstat(&self.0).is_ok_and(same)
     }
 
     pub(super) fn names(&self) -> io::Result<Vec<OsString>> {
