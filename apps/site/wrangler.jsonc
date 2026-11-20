@@ -7,10 +7,11 @@
   "name": "orbefab-embedded",
   "compatibility_date": "2026-11-01",
   // Routes, not a Custom Domain: the website's Worker holds orbefab.com, and a route runs before
-  // it for the paths it matches. `orbefab.com/embedded*` would also match /embeddedfoo.
+  // it for the paths it matches. `orbefab.com/embedded*` would also match /embeddedfoo. The zone is
+  // named by its ID, the zone orbefab.com, so the deploy token needs no access to look it up.
   "routes": [
-    { "pattern": "orbefab.com/embedded", "zone_name": "orbefab.com" },
-    { "pattern": "orbefab.com/embedded/*", "zone_name": "orbefab.com" },
+    { "pattern": "orbefab.com/embedded", "zone_id": "82bb63ff17adeced8bd3f19a7409b505" },
+    { "pattern": "orbefab.com/embedded/*", "zone_id": "82bb63ff17adeced8bd3f19a7409b505" },
   ],
   "workers_dev": false,
   "preview_urls": false,

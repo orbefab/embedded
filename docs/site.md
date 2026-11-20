@@ -97,7 +97,7 @@ The deploy step reads two secrets from the `site` environment.
 | `CLOUDFLARE_API_TOKEN` | An account API token for the account in `CLOUDFLARE_ACCOUNT_ID`. |
 | `CLOUDFLARE_ACCOUNT_ID` | The account that owns the Worker `orbefab-embedded`. |
 
-The token is Workers Editor on the Worker `orbefab-embedded`, plus zone Workers Routes Write on the zone `orbefab.com`. The same access under the older token names is account Workers Scripts Edit and zone Workers Routes Edit on `orbefab.com`. The account permission is not limited to this Worker. [Workers roles](https://developers.cloudflare.com/workers/authorization/workers/) names the current roles.
+The token is Workers Editor on the Worker `orbefab-embedded`. `apps/site/wrangler.jsonc` names the zone `orbefab.com` by its ID, so a deploy that leaves the routes as they are needs no zone permission. A deploy that adds, changes or removes a route also needs zone Workers Routes Write on `orbefab.com`. Under the older token names the same access is account Workers Scripts Edit, which is not limited to this Worker, and zone Workers Routes Edit. [Workers roles](https://developers.cloudflare.com/workers/authorization/workers/) names the current roles.
 
 `wrangler deploy` runs in `apps/site`. It follows `.wrangler/deploy/config.json`, which the build wrote, to `dist/client/wrangler.json`, and uploads `dist/client` as assets and no Worker code. Do not pass `--config wrangler.jsonc`, which skips the built config. `scripts/site-deployed.sh` then requests the live site and fails the job unless:
 
