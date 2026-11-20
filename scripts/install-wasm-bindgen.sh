@@ -40,9 +40,21 @@ esac
 
 asset=wasm-bindgen-$version-$triple.tar.gz
 url=https://github.com/rustwasm/wasm-bindgen/releases/download/$version/$asset
+# SHA-256 of the published Linux x86_64 tarball. CI is that platform.
+sum=
+case $version-$triple in
+  0.2.129-x86_64-unknown-linux-musl) sum=82d12bb940e2d4e72e0d5605387fc1b8ca179044e012b620f0ce4e7440e8320e ;;
+esac
+if [[ -z $sum && $triple == x86_64-unknown-linux-musl ]]; then
+  echo "install-wasm-bindgen: no SHA-256 pinned for $asset" >&2
+  exit 1
+fi
 work=$(mktemp -d "${TMPDIR:-/tmp}/wasm-bindgen.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 curl --proto '=https' --tlsv1.2 -fsSL "$url" -o "$work/$asset"
+if [[ -n $sum ]]; then
+  echo "$sum  $work/$asset" | sha256sum -c -
+fi
 tar -xzf "$work/$asset" -C "$work"
 mkdir -p "$root/bin"
 install -m 755 "$work/wasm-bindgen-$version-$triple/wasm-bindgen" "$bindgen"
