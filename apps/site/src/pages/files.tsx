@@ -38,7 +38,7 @@ export function LicenseBox({
   recordHref: string;
 }) {
   return (
-    <details className="mt-14 rounded-lg border border-border" data-testid="license-files" id="files">
+    <details className="mt-14 border border-border" data-testid="license-files" id="files">
       <summary className="flex cursor-pointer flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-4 py-3">
         <span className="font-mono text-muted-foreground text-xs uppercase tracking-[0.16em]">License and files</span>
         <span className="min-w-0 break-words font-mono text-xs">{expression}</span>

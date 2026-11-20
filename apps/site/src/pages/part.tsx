@@ -120,7 +120,7 @@ function UsedIn({ part }: { part: PartView }) {
         <ul className="grid gap-3 sm:grid-cols-2" data-testid="used-in">
           {use.blocks.map((block) => (
             <li key={block.id}>
-              <a className="block h-full rounded-lg border border-border p-4 transition-colors hover:border-brand" href={block.href}>
+              <a className="block h-full border border-border p-4 transition-colors hover:border-brand" href={block.href}>
                 <span className="font-medium">{block.title}</span>
                 {block.refs.map((ref) => (
                   <span className="mt-1 block text-muted-foreground text-sm" key={ref.ref}>
@@ -190,7 +190,7 @@ export function PartPage({ part }: { part: PartView }) {
       {record.categories === undefined ? null : (
         <p className="mt-3 flex flex-wrap gap-2 font-mono text-xs">
           {record.categories.map((tag) => (
-            <a className="rounded border border-border px-2 py-0.5 hover:border-foreground" href={`${at.parts}?q=${encodeURIComponent(tag)}`} key={tag}>
+            <a className="border border-border px-2 py-0.5 hover:border-foreground" href={`${at.parts}?q=${encodeURIComponent(tag)}`} key={tag}>
               {tag}
             </a>
           ))}
@@ -283,7 +283,7 @@ export function PartPage({ part }: { part: PartView }) {
                 {param.choices?.map((choice) => (
                   <span className="mt-1 flex items-center gap-2 font-mono text-muted-foreground text-xs" key={choice.name}>
                     {choice.tint === undefined ? null : (
-                      <span className="inline-block size-3 rounded-sm border border-border" style={{ background: choice.tint }} />
+                      <span className="inline-block size-3 border border-border" style={{ background: choice.tint }} />
                     )}
                     {choice.name}
                     {choice.number === undefined ? null : `, ${choice.number}`}

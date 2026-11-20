@@ -92,7 +92,7 @@ function PressControl({ hold }: { hold: { readonly current: ButtonHold | null } 
 
   return (
     <button
-      className="mt-3 touch-none rounded-md border border-border px-3 py-1.5 text-sm outline-none hover:border-foreground focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand"
+      className="mt-3 touch-none border border-border px-3 py-1.5 text-sm hover:border-foreground focus-visible:[outline:2px_solid_var(--brand)] focus-visible:outline-offset-2"
       data-testid="hold-to-press"
       onBlur={drop}
       onClick={onClick}
@@ -127,7 +127,7 @@ export function BlockPlayer({ blocks, registry, wasm, fill = false }: BlockPlaye
           {blocks.map((item) => (
             <button
               aria-selected={item.name === shown}
-              className="rounded-md border border-border px-3 py-1.5 font-mono text-xs transition-colors hover:border-foreground aria-selected:border-brand aria-selected:text-brand"
+              className="border border-border px-3 py-1.5 font-mono text-xs transition-colors hover:border-foreground aria-selected:border-brand aria-selected:text-brand"
               data-block={item.name}
               key={item.name}
               onClick={() => setShown(item.name)}

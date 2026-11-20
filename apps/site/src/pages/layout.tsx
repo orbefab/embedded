@@ -39,8 +39,8 @@ export function Header() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const section = sectionOf(pathname);
   return (
-    <header className="sticky top-0 z-50 border-border border-b bg-[color-mix(in_srgb,var(--background)_86%,transparent)] backdrop-blur-[8px]">
-      <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-3 max-sm:flex-wrap max-sm:gap-0 max-sm:py-1.5">
+    <header className="sticky top-0 z-50 border-border border-b bg-[color-mix(in_srgb,var(--background)_82%,transparent)] backdrop-blur-[8px]">
+      <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-3 max-sm:flex-wrap max-sm:gap-y-0 max-sm:py-1.5">
         <a className="inline-flex min-h-11 min-w-0 items-center max-sm:order-1 max-sm:flex-1" href="/">
           <Wordmark className="text-[1.35rem]" />
         </a>
@@ -57,10 +57,13 @@ export function Header() {
   );
 }
 
+const FOOTER_LINK =
+  "inline-flex min-h-[1.9rem] items-center text-sm text-[color-mix(in_srgb,var(--foreground)_80%,transparent)] hover:text-foreground";
+
 function FooterLink({ href, children }: { href: string; children: string }) {
   return (
     <li>
-      <a className="inline-flex min-h-[1.9rem] items-center text-sm hover:text-brand" href={href}>
+      <a className={FOOTER_LINK} href={href}>
         {children}
       </a>
     </li>
@@ -70,18 +73,18 @@ function FooterLink({ href, children }: { href: string; children: string }) {
 const footerLabel = "font-mono text-[0.6875rem] text-muted-foreground uppercase tracking-[0.16em]";
 
 /** The footer both sites share. orbe pages add the catalog address. */
-export function Footer({ site }: { site: Site }) {
+export function Footer({ site, className = "mt-24" }: { site: Site; className?: string }) {
   return (
-    <footer className="mt-24 border-border border-t">
-      <div className="mx-auto grid max-w-7xl gap-x-12 gap-y-8 px-6 pt-10 pb-6 sm:grid-cols-[minmax(0,1.4fr)_minmax(0,0.6fr)_minmax(0,0.6fr)]">
-        <div className="grid max-w-[34rem] content-start gap-2.5 text-[0.8125rem] text-muted-foreground max-sm:col-span-2 sm:col-span-1">
+    <footer className={`${className} border-border border-t`}>
+      <div className="mx-auto grid max-w-7xl grid-cols-2 gap-x-8 gap-y-8 px-6 pt-10 pb-10 md:grid-cols-[minmax(0,1.4fr)_minmax(0,0.6fr)_minmax(0,0.6fr)] md:gap-x-12">
+        <div className="col-span-2 grid max-w-[34rem] content-start gap-2.5 text-[0.8125rem] text-muted-foreground md:col-span-1">
           <p className="font-mono text-foreground text-xs">© 2026 Orbefab</p>
           <p>orbe and its catalog are open source under MIT or Apache-2.0, unless a file says otherwise. Each file lists its own license.</p>
           <p>Maker names say which real part a model matches. Orbefab is not affiliated with or endorsed by those makers, and the models carry no logos.</p>
         </div>
         <div>
           <p className={footerLabel}>orbe</p>
-          <ul className="mt-2.5">
+          <ul className="mt-2.5 grid gap-0.5">
             <FooterLink href={at.home}>Get orbe</FooterLink>
             <FooterLink href={at.blocks}>Blocks</FooterLink>
             <FooterLink href={at.parts}>Parts</FooterLink>
@@ -91,29 +94,37 @@ export function Footer({ site }: { site: Site }) {
         </div>
         <div>
           <p className={footerLabel}>Orbefab</p>
-          <ul className="mt-2.5">
+          <ul className="mt-2.5 grid gap-0.5">
             <FooterLink href="/">Home</FooterLink>
             <FooterLink href="/brand">Brand</FooterLink>
             <FooterLink href="https://github.com/orbefab/embedded/blob/main/LICENSE-MIT">License</FooterLink>
           </ul>
         </div>
+        <p className="col-span-full font-mono text-[0.6875rem] text-muted-foreground">
+          Catalog {site.registry} at{" "}
+          <a className="underline underline-offset-[3px] hover:text-foreground" href={at.index}>
+            {at.index}
+          </a>
+        </p>
       </div>
-      <p className="mx-auto max-w-7xl px-6 pb-10 font-mono text-[0.6875rem] text-muted-foreground">
-        Catalog {site.registry} at{" "}
-        <a className="underline underline-offset-[3px] hover:text-brand" href={at.index}>
-          {at.index}
-        </a>
-      </p>
     </footer>
   );
 }
 
-export function Shell({ site, children }: { site: Site; children: ReactNode }) {
+export function Shell({ site, children, missing = false }: { site: Site; children: ReactNode; missing?: boolean }) {
   return (
     <div className="flex min-h-screen flex-col">
       <Header />
-      <main className="mx-auto w-full min-w-0 max-w-5xl flex-1 px-6 pt-12">{children}</main>
-      <Footer site={site} />
+      <main
+        className={
+          missing
+            ? "mx-auto flex w-full min-w-0 max-w-7xl flex-1 flex-col justify-center px-6 py-16"
+            : "mx-auto w-full min-w-0 max-w-5xl flex-1 px-6 pt-12"
+        }
+      >
+        {children}
+      </main>
+      <Footer className={missing ? "mt-auto" : "mt-24"} site={site} />
     </div>
   );
 }
@@ -128,7 +139,7 @@ export function Section({ title, id, children }: { title: string; id?: string; c
 }
 
 export function Code({ children }: { children: ReactNode }) {
-  return <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.9em]">{children}</code>;
+  return <code className="bg-muted px-1.5 py-0.5 font-mono text-[0.9em]">{children}</code>;
 }
 
 /** Says the CLI is coming, where install lines show once it is public, so a page never shows a
@@ -148,7 +159,7 @@ export function Install({ lines, note }: { lines: readonly string[]; note?: Reac
   const text = lines.join("\n");
   return (
     <div data-copy-root data-testid="install">
-      <div className="flex min-w-0 items-stretch overflow-hidden rounded-lg border border-border bg-muted font-mono text-sm">
+      <div className="flex min-w-0 items-stretch overflow-hidden border border-border bg-muted font-mono text-sm">
         <pre className="min-w-0 flex-1 overflow-x-auto p-4" data-copy-text>{text}</pre>
         <CopyButton boxed text={text} />
       </div>

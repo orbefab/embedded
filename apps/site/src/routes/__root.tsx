@@ -37,7 +37,7 @@ function RootView() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   if (isEmbed(pathname)) return <Outlet />;
   return (
-    <Shell site={Route.useLoaderData()}>
+    <Shell missing={/^\/404\/?$/.test(sitePath(pathname))} site={Route.useLoaderData()}>
       <Outlet />
     </Shell>
   );

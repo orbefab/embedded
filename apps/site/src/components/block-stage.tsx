@@ -41,7 +41,7 @@ export function BlockStage({
   return (
     <div className="mt-8">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="inline-flex self-start rounded-lg border border-border p-0.5" role="group" aria-label="View">
+        <div className="inline-flex self-start border border-border p-0.5" role="group" aria-label="View">
           {(
             [
               ["preview", "Preview"],
@@ -50,7 +50,7 @@ export function BlockStage({
           ).map(([name, label]) => (
             <button
               aria-pressed={view === name}
-              className="rounded-md px-3 py-1.5 text-sm text-muted-foreground aria-pressed:bg-muted aria-pressed:text-foreground"
+              className="px-3 py-1.5 text-sm text-muted-foreground aria-pressed:bg-muted aria-pressed:text-foreground"
               data-testid={`view-${name}`}
               key={name}
               onClick={() => setView(name)}
@@ -70,7 +70,7 @@ export function BlockStage({
           {sources.length === 0 ? (
             <p className="text-muted-foreground">No files yet.</p>
           ) : (
-            <div className="grid min-w-0 overflow-hidden rounded-lg border border-border md:grid-cols-[13rem_minmax(0,1fr)]">
+            <div className="grid min-w-0 overflow-hidden border border-border md:grid-cols-[13rem_minmax(0,1fr)]">
               <nav className="flex gap-1 overflow-x-auto border-border border-b p-2 md:block md:overflow-visible md:border-r md:border-b-0">
                 {groups.map((group) => (
                   <div key={group}>
@@ -80,7 +80,7 @@ export function BlockStage({
                       .map((source) => (
                         <button
                           aria-pressed={source.path === path}
-                          className="shrink-0 rounded px-2 py-1 text-left font-mono text-muted-foreground text-xs aria-pressed:bg-muted aria-pressed:text-foreground md:block md:w-full"
+                          className="shrink-0 px-2 py-1 text-left font-mono text-muted-foreground text-xs aria-pressed:bg-muted aria-pressed:text-foreground md:block md:w-full"
                           data-testid="code-file-tab"
                           key={source.path}
                           onClick={() => setPath(source.path)}

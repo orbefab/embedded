@@ -14,7 +14,7 @@ export function BlockCards({ blocks }: { blocks: readonly BlockCard[] }) {
     <ul className="grid gap-4 sm:grid-cols-2">
       {blocks.map((block) => (
         <li key={block.name}>
-          <a className="block h-full rounded-lg border border-border p-5 transition-colors hover:border-brand" href={at.block(block.name)}>
+          <a className="block h-full border border-border p-5 transition-colors hover:border-brand" href={at.block(block.name)}>
             <span className="font-medium">{block.title}</span>
             <span className="mt-2 block text-muted-foreground text-sm">{block.description ?? "No summary yet."}</span>
             <span className="mt-4 block font-mono text-muted-foreground text-xs" data-scene-parts={block.parts}>{`${block.board}, ${block.parts} parts`}</span>

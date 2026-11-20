@@ -1,20 +1,20 @@
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { applyTheme, themeName, type ThemeName } from "../theme";
 
+function subscribe(onChange: () => void): () => void {
+  if (typeof document === "undefined") return () => {};
+  const observer = new MutationObserver(onChange);
+  observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+  return () => observer.disconnect();
+}
+
 /** The dark/light switch, the same control as the main site: a moon or sun, the word Dark or
- * Light, and a short dot sweep. The label waits until mount, because the server cannot see
- * the stored choice. */
+ * Light, and a short dot sweep. The label reads the class on `<html>`, including a change
+ * another tab made. The server render is dark, because it cannot see the stored choice. */
 export function ThemeToggle({ className = "" }: { className?: string }) {
-  const [mounted, setMounted] = useState(false);
-  const [theme, setTheme] = useState<ThemeName>("dark");
+  const theme = useSyncExternalStore(subscribe, themeName, () => "dark" as const);
   const [sweeping, setSweeping] = useState(false);
-
-  useEffect(() => {
-    setTheme(themeName());
-    setMounted(true);
-  }, []);
-
-  const isDark = mounted ? theme !== "light" : true;
+  const isDark = theme !== "light";
   return (
     <button
       aria-label={`Switch to ${isDark ? "light" : "dark"} mode`}
@@ -23,7 +23,6 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
         const next: ThemeName = isDark ? "light" : "dark";
         setSweeping(true);
         applyTheme(next);
-        setTheme(next);
         window.setTimeout(() => setSweeping(false), 360);
       }}
       type="button"

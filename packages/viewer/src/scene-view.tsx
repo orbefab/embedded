@@ -144,6 +144,7 @@ export function SceneView({
   onBuilt,
   mat,
   line,
+  pageScroll = false,
 }: {
   scene: SceneMessage;
   frame: RefObject<FrameMessage | null>;
@@ -154,6 +155,8 @@ export function SceneView({
   /** Cutting-mat fill and grid line. Without theme tokens these are the viewer's own dark colours. */
   mat: string;
   line: string;
+  /** One finger scrolls the page. Two fingers orbit and zoom. */
+  pageScroll?: boolean;
 }) {
   const urls = useMemo(() => modelUrls(scene), [scene]);
   const gltfs = useLoader(GLTFLoader, urls);
@@ -249,7 +252,7 @@ export function SceneView({
 
   return (
     <>
-      <CameraRig boxes={built.boxes} mode={mode} />
+      <CameraRig boxes={built.boxes} mode={mode} pageScroll={pageScroll} />
       <primitive
         object={built.root}
         onPointerDown={press}

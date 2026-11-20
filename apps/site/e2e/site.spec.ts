@@ -939,17 +939,29 @@ test("a touch drag on empty stage space does not press the button", async ({ bro
     return null;
   });
   if (spot === null) throw new Error("no empty canvas point");
+  await expect(page.getByText("Loading the Block")).toHaveCount(0);
+  const touchAction = await page.evaluate(() => ({
+    box: getComputedStyle(document.querySelector('[data-testid="viewer"]')!).touchAction,
+    canvas: getComputedStyle(document.querySelector("canvas")!).touchAction,
+  }));
+  expect(touchAction).toEqual({ box: "pan-y", canvas: "pan-y" });
   const before = await page.evaluate(() => window.orbeViewer.get().camera.position.toArray() as number[]);
   const session = await context.newCDPSession(page);
   await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ ...spot, id: 1 }] });
-  await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: spot.x + 110, y: spot.y - 70, id: 1 }] });
-  await page.waitForTimeout(400);
+  for (let step = 1; step <= 6; step += 1) {
+    await session.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [{ x: spot.x + step * 18, y: spot.y - step * 12, id: 1 }],
+    });
+  }
+  await page.waitForTimeout(200);
   expect(await ledGlow(page)).toBeLessThan(0.05);
   const after = await page.evaluate(() => window.orbeViewer.get().camera.position.toArray() as number[]);
   expect(
-    before.some((value, index) => Math.abs(value - (after[index] ?? value)) > 0.5),
+    before.every((value, index) => Math.abs(value - (after[index] ?? value)) < 0.5),
     JSON.stringify({ before, after }),
   ).toBe(true);
+  await expect(page.getByTestId("gesture-hint")).toHaveText("Use two fingers to move the view");
   await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   const hold = page.getByTestId("hold-to-press");
   await hold.scrollIntoViewIfNeeded();
@@ -963,6 +975,148 @@ test("a touch drag on empty stage space does not press the button", async ({ bro
   await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   await waitGlow(page, false);
   expect(errors, JSON.stringify(errors)).toEqual([]);
+  await context.close();
+});
+
+async function viewDistance(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const { camera, controls } = window.orbeViewer.get();
+    const position = camera.position.toArray() as number[];
+    const target = controls.target.toArray() as number[];
+    return Math.hypot(position[0] - target[0], position[1] - target[1], position[2] - target[2]);
+  });
+}
+
+test("a plain wheel over the stage scrolls the page and Ctrl + wheel zooms", async ({ browser, host }) => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+  await page.waitForFunction(() => window.orbeViewer?.get().scene.getObjectByName("@btn1") !== undefined, null, { timeout: 60_000 });
+  const canvas = page.locator("canvas");
+  await canvas.scrollIntoViewIfNeeded();
+  const box = await canvas.boundingBox();
+  if (box === null) throw new Error("the stage has no box");
+  const beforeScroll = await page.evaluate(() => window.scrollY);
+  const beforeDistance = await viewDistance(page);
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  // A trusted wheel. page.mouse.wheel does not scroll this page. Reading the hint through a
+  // locator would scroll it back into view and undo the wheel.
+  const session = await context.newCDPSession(page);
+  const ctrl = 2;
+  await session.send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: 0, deltaY: 480 });
+  await page.waitForFunction((start) => window.scrollY > start + 20, beforeScroll);
+  const scrolled = await page.evaluate(() => ({
+    scrollY: window.scrollY,
+    hint: document.querySelector("[data-testid=gesture-hint]")?.textContent ?? "",
+  }));
+  expect(scrolled.hint).toBe("Ctrl + scroll to zoom");
+  const afterDistance = await viewDistance(page);
+  expect(Math.abs(afterDistance - beforeDistance), JSON.stringify({ beforeDistance, afterDistance })).toBeLessThan(0.5);
+  const zoomBox = await canvas.boundingBox();
+  if (zoomBox === null) throw new Error("the stage has no box");
+  const zx = zoomBox.x + zoomBox.width / 2;
+  const zy = zoomBox.y + zoomBox.height / 2;
+  await session.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: zx, y: zy, deltaX: 0, deltaY: -240, modifiers: ctrl });
+  await session.send("Input.dispatchMouseEvent", { type: "mouseWheel", x: zx, y: zy, deltaX: 0, deltaY: -240, modifiers: ctrl });
+  await page.waitForTimeout(200);
+  const zoomed = await viewDistance(page);
+  expect(Math.abs(zoomed - afterDistance), JSON.stringify({ afterDistance, zoomed })).toBeGreaterThan(afterDistance * 0.05);
+  await context.close();
+});
+
+test("two fingers orbit the stage", async ({ browser, host }) => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });
+  const page = await context.newPage();
+  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+  await page.waitForFunction(() => window.orbeViewer?.get().scene.getObjectByName("@btn1") !== undefined, null, { timeout: 60_000 });
+  const spot = await page.evaluate(() => {
+    const canvas = document.querySelector("canvas");
+    if (canvas === null) return null;
+    canvas.scrollIntoView({ block: "center" });
+    const rect = canvas.getBoundingClientRect();
+    return { x: rect.left + rect.width * 0.55, y: rect.top + rect.height * 0.45 };
+  });
+  if (spot === null) throw new Error("no canvas");
+  const before = await page.evaluate(() => window.orbeViewer.get().camera.position.toArray() as number[]);
+  const session = await context.newCDPSession(page);
+  const finger = (id: number, x: number, y: number) => ({ x, y, id });
+  await session.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [finger(1, spot.x, spot.y), finger(2, spot.x + 48, spot.y + 12)],
+  });
+  for (let step = 1; step <= 8; step += 1) {
+    await session.send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: [finger(1, spot.x - step * 14, spot.y + step * 6), finger(2, spot.x + 48 - step * 14, spot.y + 12 + step * 6)],
+    });
+    await page.waitForTimeout(16);
+  }
+  await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await page.waitForTimeout(300);
+  const after = await page.evaluate(() => window.orbeViewer.get().camera.position.toArray() as number[]);
+  expect(
+    before.some((value, index) => Math.abs(value - (after[index] ?? value)) > 0.5),
+    JSON.stringify({ before, after }),
+  ).toBe(true);
+  await context.close();
+});
+
+test("the theme button follows a change from another tab, and the next click switches", async ({ browser, host }) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`${host.base}/embedded/blocks/`);
+  const toggle = page.getByRole("button", { name: /Switch to (light|dark) mode/ });
+  await expect(toggle).toHaveAttribute("aria-label", "Switch to light mode");
+  const other = await context.newPage();
+  await other.goto(`${host.base}/embedded/parts/`);
+  await other.getByRole("button", { name: "Switch to light mode" }).click();
+  await expect(toggle).toHaveAttribute("aria-label", "Switch to dark mode");
+  await toggle.click();
+  await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+  await expect(page.locator("html")).not.toHaveClass(/\blight\b/);
+  await expect(toggle).toHaveAttribute("aria-label", "Switch to light mode");
+  await context.close();
+});
+
+test("hold to press shows the brand outline on keyboard focus", async ({ browser, host }) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+  await page.waitForFunction(() => window.orbeViewer?.get().scene.getObjectByName("@btn1") !== undefined, null, { timeout: 60_000 });
+  const hold = page.getByTestId("hold-to-press");
+  await hold.evaluate((element) => (element as HTMLElement).focus({ focusVisible: true }));
+  const outline = await hold.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { style: style.outlineStyle, width: style.outlineWidth, color: style.outlineColor };
+  });
+  expect(outline).toEqual({ style: "solid", width: "2px", color: "rgb(232, 93, 4)" });
+  await context.close();
+});
+
+test("sitemap.xml lists the site pages and no embed route", async ({ browser, host }) => {
+  const blockIds = readdirSync(join(REPO, "blocks"))
+    .filter((id) => existsSync(join(REPO, "blocks", id, "block.jsonc")))
+    .sort();
+  const partIds = readdirSync(join(REPO, "parts"))
+    .filter((id) => existsSync(join(REPO, "parts", id, "part.jsonc")))
+    .sort();
+  expect(blockIds.length).toBeGreaterThan(0);
+  expect(partIds.length).toBeGreaterThan(0);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const response = await page.goto(`${host.base}/embedded/sitemap.xml`);
+  expect(response?.ok(), String(response?.status())).toBe(true);
+  expect(response?.headers()["content-type"] ?? "").toMatch(/xml/);
+  const xml = (await response?.text()) ?? "";
+  const locs = [...xml.matchAll(/<loc>([^<]*)<\/loc>/g)].map((match) => match[1]);
+  expect(locs).toContain("https://orbefab.com/embedded/");
+  expect(locs).toContain("https://orbefab.com/embedded/blocks/");
+  expect(locs).toContain("https://orbefab.com/embedded/parts/");
+  for (const id of blockIds) expect(locs, id).toContain(`https://orbefab.com/embedded/blocks/${id}/`);
+  for (const id of partIds) expect(locs, id).toContain(`https://orbefab.com/embedded/parts/${id}/`);
+  expect(xml).not.toContain("/embed/");
+  expect(locs).toHaveLength(3 + blockIds.length + partIds.length);
   await context.close();
 });
 

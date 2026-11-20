@@ -197,22 +197,30 @@ export function HomePage({ home }: { home: Home }) {
 export function NotFoundPage() {
   return (
     <>
-      <p className="font-mono text-muted-foreground text-xs tracking-[0.16em]">404 NOT FOUND</p>
-      <h1 className="mt-3 font-semibold text-3xl tracking-tight">Nothing moves here.</h1>
-      <p className="mt-4 text-muted-foreground">
+      <div className="flex items-center gap-4">
+        <p className="font-mono text-[0.625rem] text-brand uppercase tracking-[0.22em]">404 NOT FOUND</p>
+        <span className="h-px max-w-24 flex-1 bg-border" />
+      </div>
+      <h1 className="mt-6 font-display font-normal text-[clamp(2.75rem,8vw,5.5rem)] leading-[0.98] tracking-[-0.04em]">Nothing moves here.</h1>
+      <p className="mt-5 max-w-xl text-lg text-muted-foreground">
         Try the{" "}
-        <a className="underline hover:text-foreground" href={at.parts}>
+        <a className="text-foreground underline decoration-input underline-offset-[3px] hover:text-brand hover:decoration-brand" href={at.parts}>
           parts
         </a>{" "}
         or the{" "}
-        <a className="underline hover:text-foreground" href={at.blocks}>
+        <a className="text-foreground underline decoration-input underline-offset-[3px] hover:text-brand hover:decoration-brand" href={at.blocks}>
           Blocks
         </a>
         .
       </p>
-      <a className="mt-6 inline-block border border-border px-3 py-1.5 text-sm hover:border-foreground" href="/">
-        Back home
-      </a>
+      <div className="mt-10">
+        <a
+          className="inline-flex h-12 items-center justify-center border border-brand bg-brand px-6 font-mono font-bold text-[0.8125rem] text-brand-foreground uppercase tracking-[0.06em] transition-transform [transition-timing-function:steps(3,end)] hover:translate-y-px active:translate-y-0.5"
+          href="/"
+        >
+          Back home
+        </a>
+      </div>
     </>
   );
 }
