@@ -43,8 +43,11 @@ def sk68xxmini_hs_shape():
     bx, by, bh = BODY
     px, py = PAD
     top = PAD_T + bh
+    # The lens sits in a pocket cut from the body, so the two tops never overlap and fight
+    # for the same pixels.
+    lens = cyl_z(0, 0, top - 0.45, top, LENS_R)
     children = [
-        paint(box(0, 0, PAD_T + bh / 2.0, bx, by, bh), "body", _BLACK),
+        paint(box(0, 0, PAD_T + bh / 2.0, bx, by, bh) - lens, "body", _BLACK),
         paint(cyl_z(0, 0, top - 0.45, top, LENS_R), "lens", _LENS),
     ]
     for lead, x, y in PADS:

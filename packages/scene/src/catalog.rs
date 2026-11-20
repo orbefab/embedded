@@ -468,7 +468,9 @@ mod tests {
         assert_eq!(catalog.ids(), want);
         for id in ids {
             let entry = catalog.newest(&id).unwrap();
-            assert_eq!(entry.version.to_string(), "0.1.0");
+            let text = fs::read_to_string(parts.join(&id).join("part.jsonc")).unwrap();
+            let line = format!("\"version\": \"{}\"", entry.version);
+            assert!(text.contains(&line), "{id}");
             assert_eq!(entry.hash, folder_hash(&parts.join(&id)).unwrap(), "{id}");
         }
         assert!(catalog.newest("led-5mm").unwrap().sealed);
