@@ -8,8 +8,8 @@ export const Route = createFileRoute("/")({
   loader: () => getHome(),
   head: () =>
     head({
-      title: "orbe, a hardware simulator for AI agents",
-      description: "Describe a circuit as a scene file, flash it with real firmware, and drive it from the command line. Blocks play live in 3D here.",
+      title: "Get orbe",
+      description: "orbe runs real firmware on simulated Arduino boards, so your agent can test a circuit before you build it.",
       path: at.home,
     }),
   component: () => <HomePage home={Route.useLoaderData()} />,

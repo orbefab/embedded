@@ -1,3 +1,35 @@
 @import "@orbe/brand/styles.css";
 
 @source "./";
+
+/* Square corners, and the stage colours the viewer reads. Light is :root. .dark replaces it. */
+:root {
+  --radius: 0px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  color-scheme: light;
+  --stage: #e7e7ea;
+  --stage-mat: #dedee2;
+  --stage-line: #c8c8ce;
+  --stage-label-bg: rgba(244, 244, 245, 0.94);
+  --stage-label-fg: #111111;
+  --stage-label-muted: #3f3f46;
+  --stage-label-border: rgba(17, 17, 17, 0.16);
+  --stage-field: #f4f4f5;
+  --stage-field-border: rgba(17, 17, 17, 0.22);
+}
+
+.dark {
+  color-scheme: dark;
+  --stage: #1b1d21;
+  --stage-mat: #32363c;
+  --stage-line: #4a5058;
+  --stage-label-bg: rgba(20, 22, 26, 0.92);
+  --stage-label-fg: #e6ebf2;
+  --stage-label-muted: #c9ced6;
+  --stage-label-border: #3a3f47;
+  --stage-field: #2a2f37;
+  --stage-field-border: #4a5058;
+}

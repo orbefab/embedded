@@ -81,7 +81,7 @@ export function BlockView({
       opened.close();
     };
   }, [hold, id, registry, wasm]);
-  return source === null ? null : <Viewer onCreated={expose} source={source} />;
+  return source === null ? null : <Viewer onCreated={expose} pageScroll source={source} />;
 }
 
 /** A source that shows one scene and runs nothing. */
@@ -111,5 +111,5 @@ export function PartView({ url }: { url: string }) {
     };
   }, [url]);
   if (failed !== null) return <p className="p-6 font-mono text-destructive text-sm">The model did not load: {failed}</p>;
-  return source === null ? null : <Viewer onCreated={expose} source={source} />;
+  return source === null ? null : <Viewer onCreated={expose} pageScroll source={source} />;
 }

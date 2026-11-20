@@ -16,15 +16,15 @@ import { WireMesh } from "./wire-mesh";
 
 const MAT_CELL_MM = 10;
 
-function matTexture(): CanvasTexture {
+function matTexture(fill: string, line: string): CanvasTexture {
   const canvas = document.createElement("canvas");
   canvas.width = 64;
   canvas.height = 64;
   const context = canvas.getContext("2d");
   if (context !== null) {
-    context.fillStyle = "#32363c";
+    context.fillStyle = fill;
     context.fillRect(0, 0, 64, 64);
-    context.strokeStyle = "#4a5058";
+    context.strokeStyle = line;
     context.strokeRect(0.5, 0.5, 63, 63);
   }
   const texture = new CanvasTexture(canvas);
@@ -35,18 +35,19 @@ function matTexture(): CanvasTexture {
 }
 
 /** A cutting mat just under the lowest lead or wire. */
-function Mat({ boxes }: { boxes: readonly Box[] }) {
+function Mat({ boxes, fill, line }: { boxes: readonly Box[]; fill: string; line: string }) {
   const box = useMemo(() => union(boxes), [boxes]);
   const width = Math.max(240, (box.max[0] - box.min[0]) * 2);
   const depth = Math.max(160, (box.max[2] - box.min[2]) * 2);
   const texture = useMemo(() => {
-    const made = matTexture();
+    const made = matTexture(fill, line);
     made.repeat.set(width / MAT_CELL_MM, depth / MAT_CELL_MM);
     return made;
-  }, [width, depth]);
+  }, [width, depth, fill, line]);
   useEffect(() => () => texture.dispose(), [texture]);
   return (
     <mesh
+      name="stage-mat"
       position={[(box.min[0] + box.max[0]) / 2, box.min[1] - 0.5, (box.min[2] + box.max[2]) / 2]}
       rotation={[-Math.PI / 2, 0, 0]}
     >
@@ -141,6 +142,9 @@ export function SceneView({
   hover,
   mode,
   onBuilt,
+  mat,
+  line,
+  pageScroll = false,
 }: {
   scene: SceneMessage;
   frame: RefObject<FrameMessage | null>;
@@ -148,6 +152,11 @@ export function SceneView({
   hover: HoverStore;
   mode: CameraMode;
   onBuilt: (built: BuiltScene) => void;
+  /** Cutting-mat fill and grid line. Without theme tokens these are the viewer's own dark colours. */
+  mat: string;
+  line: string;
+  /** One finger scrolls the page. Two fingers orbit and zoom. */
+  pageScroll?: boolean;
 }) {
   const urls = useMemo(() => modelUrls(scene), [scene]);
   const gltfs = useLoader(GLTFLoader, urls);
@@ -243,7 +252,7 @@ export function SceneView({
 
   return (
     <>
-      <CameraRig boxes={built.boxes} mode={mode} />
+      <CameraRig boxes={built.boxes} mode={mode} pageScroll={pageScroll} />
       <primitive
         object={built.root}
         onPointerDown={press}
@@ -253,7 +262,7 @@ export function SceneView({
       {built.wires.map((wire, index) => (
         <WireMesh key={index} wire={wire} />
       ))}
-      <Mat boxes={built.boxes} />
+      <Mat boxes={built.boxes} fill={mat} line={line} />
       <Effects hover={hover} />
     </>
   );

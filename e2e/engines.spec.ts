@@ -7,7 +7,7 @@ const viewer = `http://127.0.0.1:${viewerPort}`;
 const site = `http://127.0.0.1:${sitePort}`;
 
 const PAGES = [
-  ["/embedded/", "orbe"],
+  ["/embedded/", "A hardware simulator for the AI agent you already use."],
   ["/embedded/parts/", "Parts"],
   ["/embedded/blocks/", "Blocks"],
 ] as const;
@@ -16,7 +16,7 @@ const PAGES = [
 // which logs the first three lines, and the thrown Error is logged as "Error". The fixture
 // still plays. The site detects the refusal first and draws one sentence instead, so it never
 // starts the renderer and logs none of those lines. WebKit creates a WebGL 2 context and draws
-// the board. The same refusal in WebKit fails the check.
+// the board on a Block page. The same refusal in WebKit fails the check.
 const FIREFOX_WEBGL = [
   "THREE.WebGLRenderer: A WebGL context could not be created. Reason:  WebGL creation failed: \n* AllowWebgl2:false restricts context creation on this system. ()",
   "THREE.WebGLRenderer: A WebGL context could not be created. Reason:  WebGL creation failed: \n* AllowWebgl2:false restricts context creation on this system. ()",
@@ -79,19 +79,23 @@ test("the site's main pages load", async ({ page }, info) => {
     expect(response?.ok(), path).toBe(true);
     await expect(page.locator("h1")).toHaveText(heading);
     await page.waitForLoadState("networkidle");
-    if (path !== "/embedded/") {
-      expect(errors, `${path} ${JSON.stringify(errors)}`).toEqual([]);
-      continue;
-    }
-    const outcome = await drawnOrRefused(page);
-    if (outcome === "board") {
-      expect(errors, JSON.stringify(errors)).toEqual([]);
-      continue;
-    }
-    expect(info.project.name).toBe("firefox");
-    await expect(page.getByTestId("no-webgl")).toHaveText("This browser has no WebGL, so this view stays blank.");
-    await expect(page.getByTestId("block-caption")).toHaveCount(0);
-    await expect(page.getByTestId("hold-to-press")).toHaveCount(0);
-    expect(errors, JSON.stringify(errors)).toEqual([]);
+    expect(errors, `${path} ${JSON.stringify(errors)}`).toEqual([]);
   }
+});
+
+test("a Block page draws in WebKit", async ({ page }, info) => {
+  const errors = collectLogs(page, "errors");
+  const response = await page.goto(`${site}/embedded/blocks/nano-button-led/`);
+  expect(response?.ok()).toBe(true);
+  await expect(page.locator("h1")).toHaveText("Button and LED on a Nano");
+  const outcome = await drawnOrRefused(page);
+  if (outcome === "board") {
+    expect(errors, JSON.stringify(errors)).toEqual([]);
+    return;
+  }
+  expect(info.project.name).toBe("firefox");
+  await expect(page.getByTestId("no-webgl")).toHaveText("This browser has no WebGL, so this view stays blank.");
+  await expect(page.getByTestId("block-caption")).toHaveCount(0);
+  await expect(page.getByTestId("hold-to-press")).toHaveCount(0);
+  expect(errors, JSON.stringify(errors)).toEqual([]);
 });

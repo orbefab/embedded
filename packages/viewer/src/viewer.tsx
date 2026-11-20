@@ -1,21 +1,24 @@
 // Adapted from maker-sandbox (MIT, Copyright 2026 Alwurts).
-import { Canvas, type RootState } from "@react-three/fiber";
+import { Canvas, type RootState, useThree } from "@react-three/fiber";
 import {
   Component,
   type ReactNode,
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
 } from "react";
+import { Color } from "three";
 import type { BuiltScene } from "./build";
 import type { CameraMode } from "./camera-frame";
 import { createHoverStore, type HoverStore } from "./hover";
 import type { Command, FrameMessage, FrameState, Reply, SceneMessage, WorldName, WorldQuantity } from "./protocol";
 import { SceneView } from "./scene-view";
+import { useStageTheme } from "./stage-theme";
 import { applySerial, EMPTY_SERIAL, serialShown, type SerialView } from "./serial";
 import { commandLine, errorText, type SessionSource } from "./session";
 import { formatValue, IDLE, nearest, nextThumb, parseValue, shownValue, stops, type Thumb, type ThumbEvent } from "./world";
@@ -53,17 +56,17 @@ function HoverLabel({ hover }: { hover: HoverStore }) {
         top: hovered.y + 14,
         pointerEvents: "none",
         padding: "2px 8px",
-        borderRadius: 6,
-        background: "rgba(20, 22, 26, 0.92)",
-        border: "1px solid #3a3f47",
+        borderRadius: "var(--radius, 6px)",
+        background: "var(--stage-label-bg, rgba(20, 22, 26, 0.92))",
+        border: "1px solid var(--stage-label-border, #3a3f47)",
         maxWidth: 360,
-        color: "#e6ebf2",
+        color: "var(--stage-label-fg, #e6ebf2)",
         font: "12px ui-monospace, monospace",
       }}
     >
       <div>{hovered.ref}</div>
-      {hovered.strip === undefined ? null : <div style={{ color: "#c9ced6" }}>{hovered.strip}</div>}
-      {hovered.why === undefined ? null : <div style={{ color: "#c9ced6" }}>not simulated: {hovered.why}</div>}
+      {hovered.strip === undefined ? null : <div style={{ color: "var(--stage-label-muted, #c9ced6)" }}>{hovered.strip}</div>}
+      {hovered.why === undefined ? null : <div style={{ color: "var(--stage-label-muted, #c9ced6)" }}>not simulated: {hovered.why}</div>}
       {hovered.error === undefined ? null : <div style={{ color: "#ff8a80" }}>error: {hovered.error}</div>}
     </div>
   );
@@ -105,7 +108,7 @@ function SerialStrip({ source }: { source: SessionSource }) {
         boxSizing: "border-box",
         margin: 0,
         padding: "6px 8px",
-        borderRadius: 6,
+        borderRadius: "var(--radius, 6px)",
         border: "1px solid var(--border, #3a3f47)",
         background: "var(--background, rgba(20, 22, 26, 0.92))",
         color: "var(--foreground, #e6ebf2)",
@@ -141,9 +144,9 @@ const SETTLE_MS = 300;
 const field = {
   font: "inherit",
   color: "inherit",
-  background: "#2a2f37",
-  border: "1px solid #4a5058",
-  borderRadius: 4,
+  background: "var(--stage-field, #2a2f37)",
+  border: "1px solid var(--stage-field-border, #4a5058)",
+  borderRadius: "var(--radius, 4px)",
   padding: "1px 4px",
 } as const;
 
@@ -320,10 +323,10 @@ function WorldPanel({
         flexDirection: "column",
         gap: 6,
         padding: "8px 10px",
-        borderRadius: 6,
-        background: "rgba(20, 22, 26, 0.92)",
-        border: "1px solid #3a3f47",
-        color: "#e6ebf2",
+        borderRadius: "var(--radius, 6px)",
+        background: "var(--stage-label-bg, rgba(20, 22, 26, 0.92))",
+        border: "1px solid var(--stage-label-border, #3a3f47)",
+        color: "var(--stage-label-fg, #e6ebf2)",
         font: "12px ui-monospace, monospace",
         pointerEvents: "auto",
       }}
@@ -338,7 +341,7 @@ function WorldPanel({
         />
       ))}
       {off ? (
-        <div data-testid="world-off" style={{ color: "#c9ced6" }}>
+        <div data-testid="world-off" style={{ color: "var(--stage-label-muted, #c9ced6)" }}>
           {`The session ${now.state}, so the world stays as it is.`}
         </div>
       ) : null}
@@ -369,10 +372,10 @@ function Controls({ source, send }: { source: SessionSource; send: (command: Com
           gap: 10,
           alignItems: "center",
           padding: "4px 6px 4px 10px",
-          borderRadius: 6,
-          background: "rgba(20, 22, 26, 0.92)",
-          border: "1px solid #3a3f47",
-          color: "#e6ebf2",
+          borderRadius: "var(--radius, 6px)",
+          background: "var(--stage-label-bg, rgba(20, 22, 26, 0.92))",
+          border: "1px solid var(--stage-label-border, #3a3f47)",
+          color: "var(--stage-label-fg, #e6ebf2)",
           font: "12px ui-monospace, monospace",
           pointerEvents: "auto",
         }}
@@ -386,9 +389,9 @@ function Controls({ source, send }: { source: SessionSource; send: (command: Com
           style={{
             font: "inherit",
             color: "inherit",
-            background: "#2a2f37",
-            border: "1px solid #4a5058",
-            borderRadius: 4,
+            background: "var(--stage-field, #2a2f37)",
+            border: "1px solid var(--stage-field-border, #4a5058)",
+            borderRadius: "var(--radius, 4px)",
             padding: "2px 10px",
             cursor: ended ? "default" : "pointer",
           }}
@@ -406,15 +409,51 @@ function Controls({ source, send }: { source: SessionSource; send: (command: Com
   );
 }
 
+/** Paints the canvas clear color and the scene background from the page theme. */
+function StageBackdrop({ color }: { color: string }) {
+  const gl = useThree((state) => state.gl);
+  const scene = useThree((state) => state.scene);
+  useLayoutEffect(() => {
+    const next = new Color(color);
+    scene.background = next;
+    gl.setClearColor(next);
+  }, [color, gl, scene]);
+  return null;
+}
+
 export interface ViewerProps {
   readonly source: SessionSource;
   /** Called once the canvas has its renderer, scene and camera. */
   readonly onCreated?: (state: RootState) => void;
+  /** A wheel scrolls the page, and zooms only with Ctrl or ⌘. One finger scrolls the page.
+   * Two fingers orbit and zoom. The viewer's own page leaves this off. */
+  readonly pageScroll?: boolean;
 }
+
+const HINT_MS = 1600;
+
+const hintStyle = {
+  position: "absolute",
+  left: "50%",
+  bottom: 16,
+  transform: "translateX(-50%)",
+  zIndex: 2,
+  maxWidth: "calc(100% - 24px)",
+  pointerEvents: "none",
+  padding: "6px 10px",
+  background: "var(--stage-label-bg, rgba(20, 22, 26, 0.92))",
+  color: "var(--stage-label-fg, #e6ebf2)",
+  border: "1px solid var(--stage-label-border, #3a3f47)",
+  font: "12px ui-monospace, monospace",
+  whiteSpace: "nowrap",
+} as const;
 
 /** Draws the session's scene and its frames, and sends presses, `set`, `play` and `pause` back. `T`
  * toggles the top view. */
-export function Viewer({ source, onCreated }: ViewerProps) {
+export function Viewer({ source, onCreated, pageScroll = false }: ViewerProps) {
+  const stage = useStageTheme();
+  const box = useRef<HTMLDivElement>(null);
+  const [hint, setHint] = useState<string | null>(null);
   const [scene, setScene] = useState<SceneMessage | null>(null);
   const [mode, setMode] = useState<CameraMode>("tilted");
   const frame = useRef<FrameMessage | null>(null);
@@ -468,17 +507,93 @@ export function Viewer({ source, onCreated }: ViewerProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  useEffect(() => {
+    if (!pageScroll) return;
+    const node = box.current;
+    if (node === null) return;
+    let timer = 0;
+    const show = (text: string) => {
+      setHint(text);
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setHint(null), HINT_MS);
+    };
+    // Capture runs before OrbitControls' listener on the canvas, which would cancel the scroll.
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.metaKey) return;
+      event.stopPropagation();
+      show("Ctrl + scroll to zoom");
+    };
+    let finger: { id: number; x: number; y: number } | null = null;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.pointerType !== "touch") return;
+      if (!event.isPrimary) {
+        finger = null;
+        return;
+      }
+      finger = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (finger === null || event.pointerId !== finger.id) return;
+      const dx = event.clientX - finger.x;
+      const dy = event.clientY - finger.y;
+      if (dx * dx + dy * dy < 64) return;
+      finger = null;
+      show("Use two fingers to move the view");
+    };
+    const onPointerEnd = (event: PointerEvent) => {
+      if (finger?.id === event.pointerId) finger = null;
+    };
+    // The canvas does not inherit touch-action. OrbitControls sets none on its element, not always
+    // on the canvas, so a finger on the canvas would still miss the page.
+    const paintCanvas = () => {
+      for (const canvas of node.querySelectorAll("canvas")) {
+        if (canvas.style.touchAction !== "pan-y") canvas.style.touchAction = "pan-y";
+      }
+    };
+    paintCanvas();
+    const observer = new MutationObserver(paintCanvas);
+    observer.observe(node, { childList: true, subtree: true });
+    node.addEventListener("wheel", onWheel, { capture: true });
+    node.addEventListener("pointerdown", onPointerDown, { capture: true });
+    node.addEventListener("pointermove", onPointerMove, { capture: true });
+    node.addEventListener("pointerup", onPointerEnd, { capture: true });
+    node.addEventListener("pointercancel", onPointerEnd, { capture: true });
+    return () => {
+      observer.disconnect();
+      window.clearTimeout(timer);
+      node.removeEventListener("wheel", onWheel, { capture: true });
+      node.removeEventListener("pointerdown", onPointerDown, { capture: true });
+      node.removeEventListener("pointermove", onPointerMove, { capture: true });
+      node.removeEventListener("pointerup", onPointerEnd, { capture: true });
+      node.removeEventListener("pointercancel", onPointerEnd, { capture: true });
+    };
+  }, [pageScroll]);
+
   return (
-    <div data-testid="viewer" style={{ position: "relative", width: "100%", height: "100%", touchAction: "none" }}>
+    <div
+      data-testid="viewer"
+      ref={box}
+      style={{ position: "relative", width: "100%", height: "100%", touchAction: pageScroll ? "pan-y" : "none" }}
+    >
       <ShowError>
         <Canvas dpr={[1, 1.75]} gl={{ antialias: true, alpha: false }} onCreated={onCreated}>
-          <color args={["#1b1d21"]} attach="background" />
+          <StageBackdrop color={stage.background} />
           <hemisphereLight args={["#e6ebf2", "#2a2c30", 0.9]} />
           <ambientLight intensity={0.25} />
           <directionalLight intensity={1.35} position={[40, 90, 24]} />
           {scene === null ? null : (
             <Suspense fallback={null}>
-              <SceneView frame={frame} hover={hover} mode={mode} onBuilt={onBuilt} scene={scene} send={send} />
+              <SceneView
+                frame={frame}
+                hover={hover}
+                line={stage.line}
+                mat={stage.mat}
+                mode={mode}
+                onBuilt={onBuilt}
+                pageScroll={pageScroll}
+                scene={scene}
+                send={send}
+              />
             </Suspense>
           )}
         </Canvas>
@@ -512,6 +627,11 @@ export function Viewer({ source, onCreated }: ViewerProps) {
         </div>
       )}
       <HoverLabel hover={hover} />
+      {hint === null ? null : (
+        <div data-testid="gesture-hint" style={hintStyle}>
+          {hint}
+        </div>
+      )}
     </div>
   );
 }

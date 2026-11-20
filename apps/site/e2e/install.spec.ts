@@ -12,6 +12,25 @@ function ids(dir: string, file: string): string[] {
     .sort();
 }
 
+test("the start page shows each command and the Block's scene", async ({ browser, host }) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`${host.base}/embedded/`);
+  const installs = page.locator('[data-testid="install"]');
+  await expect(installs).toHaveCount(5);
+  const texts = (await installs.locator("[data-copy-text]").allInnerTexts()).map((text) => text.trim());
+  expect(texts).toEqual([
+    "curl -fsSL https://orbefab.com/embedded/install.sh | sh",
+    "orbe skills get core",
+    "orbe add nano-led-fade",
+    "orbe check scene.jsonc",
+    "orbe test",
+  ]);
+  await expect(page.getByTestId("scene-file")).toContainText("breadboard-400");
+  await expect(page.getByTestId("cli-coming")).toHaveCount(0);
+  await context.close();
+});
+
 test("every part and Block page fits a phone width with its install line", async ({ browser, host }) => {
   test.skip(host.name !== "vite preview", "one pass covers every page");
   test.setTimeout(600_000);

@@ -23,3 +23,7 @@ export const getPart = createServerFn({ method: "GET" })
 export const getBlock = createServerFn({ method: "GET" })
   .validator((id: string) => id)
   .handler(({ data }) => found(server.block(data)));
+
+export const getBlockPlayer = createServerFn({ method: "GET" })
+  .validator((id: string) => id)
+  .handler(({ data }) => found(server.blockPlayer(data)));

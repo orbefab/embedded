@@ -86,11 +86,18 @@ const dependencyIds = (record: PartRecord | BlockRecord) => record.registryDepen
 
 export const blockCards = () => data.blocks.map(card);
 
-export const home = () => ({
-  blocks: blockCards(),
-  boards: data.parts.filter((item) => item.record.categories?.includes("board")).map(({ record }) => ({ title: record.title, href: at.part(record.name) })),
-  parts: data.parts.length,
-});
+export const home = () => {
+  const fade = data.blocks.find((entry) => entry.record.name === "nano-led-fade");
+  const sceneFile = fade?.record.files.find((file) => file.path === "scene.jsonc");
+  const scene = sceneFile === undefined ? undefined : data.texts[sceneFile.sha256];
+  if (scene === undefined) throw new Error("nano-led-fade has no scene.jsonc");
+  return {
+    blocks: blockCards(),
+    boards: data.parts.filter((item) => item.record.categories?.includes("board")).map(({ record }) => ({ title: record.title, href: at.part(record.name) })),
+    parts: data.parts.length,
+    scene,
+  };
+};
 
 export const parts = (): Listed[] =>
   [...data.parts]
@@ -116,6 +123,18 @@ export function part(id: string) {
   const use = useOf(id);
   const names = [...dependencyIds(item.record), ...use.blocks.map((block) => block.id), ...use.boards.map((board) => board.id)];
   return { item, links: linked(names), use, where: whereLine(use), shown: data.shown[id] };
+}
+
+/** What the embed route draws: the player, and nothing else. */
+export function blockPlayer(id: string) {
+  const item = data.blocks.find((entry) => entry.record.name === id);
+  if (item === undefined) return null;
+  return {
+    name: item.record.name,
+    title: item.record.title,
+    description: item.record.description,
+    button: sceneHasButton(circuitOf(id)),
+  };
 }
 
 /** A Block's page: its scene's parts, the sketch, scene and test, and the README. The README's
