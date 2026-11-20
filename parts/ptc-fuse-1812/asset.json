@@ -2,13 +2,13 @@
   "part": "ptc-fuse-1812",
   "source": {
     "script": "model.py",
-    "sha256": "54bd36e16712b2774977476898a33e29a94114d61681853194d3d7990f4a1203",
-    "bytes": 1077
+    "sha256": "417f281c2b269836071263cb20da0588d7fde5f357f55aae4ade99721058011e",
+    "bytes": 1083
   },
   "files": {
     "ptc-fuse-1812.glb": {
-      "sha256": "5be64e864b6791d3477569f53385e524adb33d2cc921aa4e2646b51f5989b901",
-      "bytes": 3800
+      "sha256": "a71052a4e97903fb09b35b29cbce1c0e4d03c565a85e51ebd78cfcb665b29a86",
+      "bytes": 3884
     },
     "ptc-fuse-1812.anchors.json": {
       "sha256": "acc43a309871d7d7f1440dfce4bcbf3280e6c21bf661ac02272e62a60b229b5d",

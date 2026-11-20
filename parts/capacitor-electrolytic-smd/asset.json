@@ -2,13 +2,13 @@
   "part": "capacitor-electrolytic-smd",
   "source": {
     "script": "model.py",
-    "sha256": "450e1cb2bb43863aa4de5cb22618ad3ce9ab5ba6858f76d68f4a09d3a07808b6",
-    "bytes": 2318
+    "sha256": "7711932f60f40943a6571ebf05975898f9c66c88811252f5988992fa2a2fae0e",
+    "bytes": 2330
   },
   "files": {
     "capacitor-electrolytic-smd.glb": {
-      "sha256": "5f27931ff0bb9cabe7aee3c1cc053823b46f84560e6b6b98ac8f6cfdcc5f2809",
-      "bytes": 10504
+      "sha256": "96571e1e9ae1d8ed619c548da93539585d0fb6865b039858e8b285fc260d8a8a",
+      "bytes": 10672
     },
     "capacitor-electrolytic-smd.anchors.json": {
       "sha256": "3f0f64fc467f8562434d7112c0c55e40681459e56a9a7be9e0b61ac8fb7b6766",

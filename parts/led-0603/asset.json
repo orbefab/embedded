@@ -2,13 +2,13 @@
   "part": "led-0603",
   "source": {
     "script": "model.py",
-    "sha256": "4238b295f7c1d0a17613241602b85566cec497bc3f77de4026cc1f7fb399bd77",
-    "bytes": 1020
+    "sha256": "408183606b95d249a3b2fbe658ce14c6c37a04ad1dc3357e3113641b87e61cb2",
+    "bytes": 1026
   },
   "files": {
     "led-0603.glb": {
-      "sha256": "5dc5f95bc294ea77a043be782c7e2012306d343cc4b6fc1eb34374b5401bb123",
-      "bytes": 3820
+      "sha256": "9dea766b7a5a6d8586be676f053fba4bcf6a56155c61769c42396b8a33be2126",
+      "bytes": 3904
     },
     "led-0603.anchors.json": {
       "sha256": "80024bf82c5ae09770ac947e450df447a04a7dfe3f934d94955df9a54cc50739",

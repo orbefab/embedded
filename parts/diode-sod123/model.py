@@ -13,11 +13,11 @@ import build123d as bd
 
 from cad import glb
 from cad.chip import chip, chip_anchors
-from cad.color import srgb
+from cad.color import plastic
 
 SIZE = (2.6, 1.5, 1.05)  # length, width, height  # verify height
 
-_BLACK = srgb("#1A1A1A")
+_BLACK = plastic("#1A1A1A")
 
 
 def diode_sod123_shape():

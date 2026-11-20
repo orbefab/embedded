@@ -2,13 +2,13 @@
   "part": "capacitor-ceramic-disc",
   "source": {
     "script": "model.py",
-    "sha256": "b5fd0b3af089847c5ad0cf63ffe5dcce9634837fd53a3b7254dac554a844e0d7",
-    "bytes": 2098
+    "sha256": "71073aef2327c91a3d189d88bce933bbe51f4a3b07d108878d1225d4de3a78ea",
+    "bytes": 2102
   },
   "files": {
     "capacitor-ceramic-disc.glb": {
-      "sha256": "6c699f2d24443cd889b31032d7d78ea32ce9d5bb21d5ed46e064726c32049055",
-      "bytes": 39424
+      "sha256": "efb8996615ff2ae955b01cff398ee759409f6bc9d38bf8a89e30cd00ef5f5383",
+      "bytes": 39548
     },
     "capacitor-ceramic-disc.anchors.json": {
       "sha256": "f6bb7b823499867fa2f7d433baac921dca67fd0459594945c017fbfeac6bad92",

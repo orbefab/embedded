@@ -7,10 +7,10 @@ the top; lead 1 is the cap at -X, lead 2 the cap at +X.
 """
 
 from cad import glb, paint
-from cad.color import srgb
+from cad.color import tin
 from cad.geom import box
 
-TIN = srgb("#C5C8CE")
+TIN = tin()
 CAP_PROUD = 0.03
 
 

@@ -13,12 +13,12 @@ is the middle of its underside on z = 0. A DIP leg's anchor is its tip.
 """
 
 from cad import glb, paint
-from cad.color import srgb
+from cad.color import plastic, tin
 from cad.geom import box
 
-BLACK = srgb("#1A1A1A")
-TIN = srgb("#C5C8CE")
-DOT = srgb("#8A8D93")
+BLACK = plastic("#1A1A1A")
+TIN = tin()
+DOT = plastic("#8A8D93")
 
 
 def dual_row(count, pitch):

@@ -19,7 +19,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint, tht
-from cad.color import srgb
+from cad.color import plastic, tin
 from cad.geom import box, fuse
 
 DHT_BODY = (15.4, 7.8, 25.3)  # wide, deep, tall
@@ -29,9 +29,9 @@ DHT_PITCH = 2.54
 DHT_HOLE = (2.7, 2.8)  # Φ, its centre below the top  # verify, below
 DHT_GRILLE = (8, 11.0, 1.0, 0.6, 2.2)  # slots, long, wide, deep, pitch
 
-_WHITE = srgb("#EEEDE6")
-_SLOT = srgb("#2B2B2B")
-_TIN = srgb("#C5C8CE")
+_WHITE = plastic("#EEEDE6")
+_SLOT = plastic("#2B2B2B")
+_TIN = tin()
 
 
 def _x(lead):

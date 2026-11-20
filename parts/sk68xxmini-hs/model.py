@@ -19,7 +19,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint
-from cad.color import srgb
+from cad.color import plastic, tin
 from cad.geom import box, cyl_z
 
 BODY = (3.7, 3.50, 1.80)  # above the pads, so the overall height is 1.95
@@ -34,9 +34,9 @@ PADS = (
     (4, -1.39, -0.89),  # DOUT
 )
 
-_BLACK = srgb("#1A1A1A")
-_LENS = srgb("#E7E4DC")
-_TIN = srgb("#C5C8CE")
+_BLACK = plastic("#1A1A1A")
+_LENS = plastic("#E7E4DC")
+_TIN = tin()
 
 
 def sk68xxmini_hs_shape():

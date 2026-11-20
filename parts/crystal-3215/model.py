@@ -13,11 +13,11 @@ import build123d as bd
 
 from cad import glb
 from cad.chip import chip, chip_anchors
-from cad.color import srgb
+from cad.color import tin
 
 SIZE = (3.2, 1.5, 0.7)  # length, width, height  # verify height
 
-_TIN = srgb("#C5C8CE")
+_TIN = tin()
 
 
 def crystal_3215_shape():

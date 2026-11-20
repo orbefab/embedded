@@ -16,7 +16,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint, tht
-from cad.color import srgb
+from cad.color import plastic, tin
 
 D_LENGTH = 5.2
 D_DIA = 2.7
@@ -24,9 +24,9 @@ D_LEAD_D = 0.8
 D_BAND = (0.8, 0.4)  # wide, in from the +X end  # verify
 D_BELOW = 8.0
 
-_BODY = srgb("#1A1A1A")
-_BAND = srgb("#C9CCD1")
-_TIN = srgb("#C5C8CE")
+_BODY = plastic("#1A1A1A")
+_BAND = plastic("#C9CCD1")
+_TIN = tin()
 
 
 def _segment(x0, x1):

@@ -2,13 +2,13 @@
   "part": "capacitor-tantalum-3216",
   "source": {
     "script": "model.py",
-    "sha256": "4dae1b65de758e87ec44279433c189a5c92f0b174ec1e1f861ba392f87988120",
-    "bytes": 1198
+    "sha256": "c3634e867887137fa425e510ba45e15ffff0e42acaf2a24bf076f69bf0e496ab",
+    "bytes": 1204
   },
   "files": {
     "capacitor-tantalum-3216.glb": {
-      "sha256": "4005c30c7e1a76e65b255e40f0a757f3ee20719be6633a96884509d1ebac392f",
-      "bytes": 3804
+      "sha256": "36d38feeef22c48e2a3d66a6f1b212acb359e06241872c8bde12e5b783aef097",
+      "bytes": 3888
     },
     "capacitor-tantalum-3216.anchors.json": {
       "sha256": "b4f2571c0ae6aca703b3be324ff39d03bf157043ef3cc3938f1690aaf8ea4c5d",

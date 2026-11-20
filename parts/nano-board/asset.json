@@ -2,13 +2,13 @@
   "part": "nano-board",
   "source": {
     "script": "model.py",
-    "sha256": "a64f25b705a0456c1717919a2369f68ec95bf959b2e0c7f0ab2236fdddd7f4cf",
-    "bytes": 2439
+    "sha256": "7d222099b58486912252382beab90d5ea5ee44711f7b05619bd9a5dec97eac5e",
+    "bytes": 2448
   },
   "files": {
     "nano-board.glb": {
-      "sha256": "f872772f03d0fa1b46afbc1562ccf0bc073405e3cdbac5d9a550a15831dd2aab",
-      "bytes": 59800
+      "sha256": "6da16f2f4365c4990644e50d22ace671c220140a47d0a9abc6507eed45d86732",
+      "bytes": 59884
     }
   },
   "box": {
@@ -40,7 +40,7 @@
       "children": 28,
       "lowest_node": "usb_serial/(unnamed)",
       "z_mm": 0.68,
-      "draw_calls": 118
+      "draw_calls": 121
     }
   }
 }

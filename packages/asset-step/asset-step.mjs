@@ -189,7 +189,7 @@ async function step(part, src, models, partsDir) {
     const composed = composition(model, await childModels(models, partsDir, part));
     checks.composition = { ...composed.detail, draw_calls: composed.drawCalls };
   }
-  const glb = Buffer.from(await io.writeBinary(doc));
+  const glb = stampFactors(Buffer.from(await io.writeBinary(doc)), doc);
   const files = { [`${part.id}.glb`]: digest(glb) };
   if (src.anchors) files[`${part.id}.anchors.json`] = digest(src.anchors);
   const asset = {
@@ -204,6 +204,45 @@ async function step(part, src, models, partsDir) {
     checks,
   };
   return { glb, asset };
+}
+
+/** Put metallicFactor and roughnessFactor on every material that declares one.
+
+gltf-transform omits a factor that equals glTF's default (metallic 1, roughness 1).
+A metal lead would then lose metallicFactor and a loader could not tell a declared
+1 from a factor the writer never wrote. Synthetic fixtures that leave both at the
+default are unchanged. */
+function stampFactors(bytes, doc) {
+  const specs = new Map(
+    doc.getRoot().listMaterials().map((material) => [
+      material.getName(),
+      { metallic: material.getMetallicFactor(), roughness: material.getRoughnessFactor() },
+    ]),
+  );
+  const declared = [...specs.values()].some((spec) => spec.metallic !== 1 || spec.roughness !== 1);
+  if (!declared) return bytes;
+  const jsonLength = bytes.readUInt32LE(12);
+  if (bytes.readUInt32LE(16) !== 0x4e4f534a) throw new Error('GLB JSON chunk missing');
+  const json = JSON.parse(bytes.subarray(20, 20 + jsonLength).toString('utf8'));
+  for (const mat of json.materials ?? []) {
+    const spec = specs.get(mat.name);
+    if (!spec) throw new Error(`GLB material ${mat.name} is not in the document`);
+    mat.pbrMetallicRoughness ??= {};
+    mat.pbrMetallicRoughness.metallicFactor = spec.metallic;
+    mat.pbrMetallicRoughness.roughnessFactor = spec.roughness;
+  }
+  let text = Buffer.from(JSON.stringify(json));
+  const pad = (4 - (text.length % 4)) % 4;
+  if (pad) text = Buffer.concat([text, Buffer.alloc(pad, 0x20)]);
+  const rest = bytes.subarray(20 + jsonLength);
+  const total = 12 + 8 + text.length + rest.length;
+  const header = Buffer.alloc(20);
+  header.writeUInt32LE(0x46546c67, 0);
+  header.writeUInt32LE(2, 4);
+  header.writeUInt32LE(total, 8);
+  header.writeUInt32LE(text.length, 12);
+  header.writeUInt32LE(0x4e4f534a, 16);
+  return Buffer.concat([header, text, rest]);
 }
 
 /** JSON with two-space indents and each list of numbers or names on one line. */

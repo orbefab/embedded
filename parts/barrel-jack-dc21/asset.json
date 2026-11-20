@@ -2,13 +2,13 @@
   "part": "barrel-jack-dc21",
   "source": {
     "script": "model.py",
-    "sha256": "c57928f1a3d095eeb812c592f376acf332227c48dbcd8c36f47ab5bb3c04ad44",
-    "bytes": 2218
+    "sha256": "832ca6b7ad938587657b52012de2c21aa5c45bb058c91f7a1b24c0a251b759c2",
+    "bytes": 2219
   },
   "files": {
     "barrel-jack-dc21.glb": {
-      "sha256": "bd7898acaed57c431510aa29a3694198bb8ebc2365f48e117aec8e456974a841",
-      "bytes": 14132
+      "sha256": "0c60c68abd885a22b7d008780ed822c3dae7905056b399c466d3a5edbfc5209d",
+      "bytes": 14216
     },
     "barrel-jack-dc21.anchors.json": {
       "sha256": "a79391aed0518271718c9c5660155af67643806ad45c62483940d239254c46f5",

@@ -19,7 +19,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint
-from cad.color import srgb
+from cad.color import plastic, tin
 from cad.geom import box
 
 SOT223_BODY = (3.5, 6.5, 1.6)  # E, D, A2, midpoints
@@ -29,8 +29,8 @@ SOT223_LEAD = (0.75, 0.75, 0.29, 2.125, 0.0)  # L, b, c
 SOT223_TAB = (2.75, 3.0, 0.29, -3.125, 0.0)  # length, b1, c, centre x
 SOT223_PITCH = 2.3
 
-_BLACK = srgb("#1A1A1A")
-_TIN = srgb("#C5C8CE")
+_BLACK = plastic("#1A1A1A")
+_TIN = tin()
 
 
 def _pads():

@@ -2,13 +2,13 @@
   "part": "potentiometer-wh148",
   "source": {
     "script": "model.py",
-    "sha256": "2bff2feca1a20635307168adf2daab93b682c0795c084059805f11e833b5bd26",
-    "bytes": 3647
+    "sha256": "dc3b50f0cdcac63a0be8bac9a007bcbac8ce82ef3627bdd2aa6609fb88a9524b",
+    "bytes": 3676
   },
   "files": {
     "potentiometer-wh148.glb": {
-      "sha256": "16fd139e80307cdacfbb66b212a996a5111e6f90d1f02807b6ce69d492f27601",
-      "bytes": 56788
+      "sha256": "49fd35e0b2baaeaf08c75e4a945d3a2f77e35ffbdc6c1295bde604fcec7bff7f",
+      "bytes": 57080
     },
     "potentiometer-wh148.anchors.json": {
       "sha256": "1d7e5ca7b5044e0ab166e6856ec21191a180703e0abca9897f6acc0420935cc7",

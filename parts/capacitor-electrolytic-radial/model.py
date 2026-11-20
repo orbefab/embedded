@@ -17,7 +17,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint, tht
-from cad.color import srgb
+from cad.color import metal, plastic, tin
 from cad.geom import cyl_z
 
 CE_CAN = (6.3, 11.0)  # Φ, tall
@@ -27,10 +27,10 @@ CE_LEAD_D = 0.5
 CE_PITCH = 2.5
 CE_LEADS = ((1, -1.25, 20.0), (2, 1.25, 17.5))  # lead (+, -), x, below z = 0  # verify
 
-_SLEEVE = srgb("#1B1B1D")
-_STRIPE = srgb("#B9BCC2")
-_FOIL = srgb("#D3D6DB")
-_TIN = srgb("#C5C8CE")
+_SLEEVE = plastic("#1B1B1D")
+_STRIPE = plastic("#B9BCC2")
+_FOIL = metal("#D3D6DB")
+_TIN = tin()
 
 
 def _wedge(r, h):

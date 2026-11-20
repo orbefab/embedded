@@ -26,7 +26,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint
-from cad.color import srgb
+from cad.color import plastic
 from cad.geom import cyl_z
 from cad.mark import print_face
 
@@ -63,8 +63,8 @@ LEGEND_SIZE = 0.9
 LEDS = (("ON", 42.2), ("RX", 35.8), ("TX", 29.4), ("L", 23.2))  # measured, beside the LED column
 LED_LEGEND_U = 27.9
 
-_BLUE = srgb("#1458A8")
-_WHITE = srgb("#F4F1E8")
+_BLUE = plastic("#1458A8")
+_WHITE = plastic("#F4F1E8")
 
 
 def _xy(u, w):

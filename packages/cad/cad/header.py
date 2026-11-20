@@ -10,7 +10,7 @@ the top of one housing.
 import build123d as bd
 
 from cad import glb, paint
-from cad.color import srgb
+from cad.color import gold, plastic, tin
 from cad.geom import box, cyl_z
 from cad.tht import socket_liner
 
@@ -27,9 +27,9 @@ STRIP_SOCKET = (1.0, 6.0)  # square opening, deep  # verify
 STRIP_WALL = 0.1
 STRIP_TAIL = (0.64, 3.0)  # square, below z = 0  # verify
 
-_BLACK = srgb("#1A1A1A")
-_TIN = srgb("#C5C8CE")
-_GOLD = srgb("#D9B44A")
+_BLACK = plastic("#1A1A1A")
+_TIN = tin()
+_GOLD = gold()
 
 
 def _x(lead, count):

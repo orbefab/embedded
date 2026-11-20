@@ -16,11 +16,11 @@ import build123d as bd
 
 from cad import glb
 from cad.chip import chip, chip_anchors
-from cad.color import srgb
+from cad.color import plastic
 
 SIZE = (3.2, 1.6, 1.6)  # length, width, height: KEMET T491 case A (EIA 3216-18)
 
-_BLACK = srgb("#1A1A1A")
+_BLACK = plastic("#1A1A1A")
 
 
 def capacitor_tantalum_3216_shape():

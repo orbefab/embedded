@@ -17,14 +17,14 @@ import build123d as bd
 
 from cad import glb, paint
 from cad.chip import CAP_PROUD, cap_length, chip, chip_anchors
-from cad.color import srgb
+from cad.color import plastic
 from cad.geom import box
 
 SIZE = (3.2, 1.5, 0.85)  # length, width, height
 BAND = 0.5  # wide, beside the cathode cap
 
-_BODY = srgb("#1A1A1A")
-_BAND = srgb("#C9CCD1")
+_BODY = plastic("#1A1A1A")
+_BAND = plastic("#C9CCD1")
 
 
 def _band():

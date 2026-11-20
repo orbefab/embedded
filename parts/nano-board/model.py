@@ -18,7 +18,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint
-from cad.color import srgb
+from cad.color import plastic
 from cad.geom import box, cyl_z
 from cad.header import PLASTIC
 from cad.mark import text
@@ -34,8 +34,8 @@ NANO_LEGEND_X = 12.9
 NANO_LEGEND_SIZE = 0.9
 NANO_LEGEND = (("L", 3.3), ("PWR", 1.1), ("TX", -1.1), ("RX", -3.3))
 
-_BLUE = srgb("#164E86")
-_WHITE = srgb("#F4F1E8")
+_BLUE = plastic("#164E86")
+_WHITE = plastic("#F4F1E8")
 
 
 def _board():

@@ -21,7 +21,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint
-from cad.color import srgb
+from cad.color import plastic, tin
 from cad.geom import box
 
 CAN = (4.2, 3.2, 1.8)  # x, y, height, the side view's 1.8
@@ -40,9 +40,9 @@ LEGS = (
     (4, 1, -1),
 )  # lead, side in x, side in y
 
-_BLACK = srgb("#1A1A1A")
-_BUTTON = srgb("#4A4E55")
-_TIN = srgb("#C5C8CE")
+_BLACK = plastic("#1A1A1A")
+_BUTTON = plastic("#4A4E55")
+_TIN = tin()
 
 
 def _leg_xy(sx, sy):

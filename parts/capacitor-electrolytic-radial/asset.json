@@ -2,13 +2,13 @@
   "part": "capacitor-electrolytic-radial",
   "source": {
     "script": "model.py",
-    "sha256": "1101619eaee4ec883057aaedca87dc4c40a36deff5e064b521c0a2057da3e66b",
-    "bytes": 2498
+    "sha256": "1e26d262ee5c88038c1c1430d3bb1fab569394f4708c76152369d529de8358f8",
+    "bytes": 2510
   },
   "files": {
     "capacitor-electrolytic-radial.glb": {
-      "sha256": "2798ee8cd5b413d35293b3fd5c56875411f4e2d8ec8f2a83d049851b9bfc4282",
-      "bytes": 28420
+      "sha256": "3887855a6d3c69a7ba27ba2d02948682f12fbd5a9b2746a3accf2ebf6837701b",
+      "bytes": 28588
     },
     "capacitor-electrolytic-radial.anchors.json": {
       "sha256": "2ec0c742ade106f3904f0fe22ee96be593e8d78ab329f5de38e35975bc1b9a54",
