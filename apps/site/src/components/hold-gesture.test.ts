@@ -21,7 +21,7 @@ describe("hold gesture", () => {
     vi.useFakeTimers();
     const { target, events } = recording();
     const hold = holdGesture(target);
-    hold.click();
+    hold.click(false);
     expect(events).toEqual(["press"]);
     vi.advanceTimersByTime(299);
     expect(events).toEqual(["press"]);
@@ -35,13 +35,14 @@ describe("hold gesture", () => {
     const hold = holdGesture(target);
     hold.pointerDown(4, 0);
     hold.pointerEnd(4);
-    hold.click();
+    // The browser's click is trusted and arrives before the timer that clears the gesture.
+    hold.click(true);
     expect(events).toEqual(["press", "release"]);
     vi.advanceTimersByTime(300);
     expect(events).toEqual(["press", "release"]);
   });
 
-  it("releases on blur and still presses for a later click", async () => {
+  it("releases on blur and still presses for a later click", () => {
     vi.useFakeTimers();
     const { target, events } = recording();
     const hold = holdGesture(target);
@@ -49,12 +50,25 @@ describe("hold gesture", () => {
     expect(events).toEqual(["press"]);
     hold.drop();
     expect(events).toEqual(["press", "release"]);
-    // The browser's click for the Space key arrives with keyup, before the microtask.
     hold.keyUp(" ");
-    hold.click();
+    // Space's own click, when the browser sends one, is trusted and is not a new press.
+    hold.click(true);
     expect(events).toEqual(["press", "release"]);
-    await Promise.resolve();
-    hold.click();
+    // A script click can arrive before the timer when the page is busy. It still presses.
+    hold.click(false);
+    expect(events).toEqual(["press", "release", "press"]);
+    vi.advanceTimersByTime(300);
+    expect(events).toEqual(["press", "release", "press", "release"]);
+  });
+
+  it("presses for a trusted click once the gesture's timer has cleared it", () => {
+    vi.useFakeTimers();
+    const { target, events } = recording();
+    const hold = holdGesture(target);
+    hold.keyDown(" ", false);
+    hold.keyUp(" ");
+    vi.advanceTimersByTime(0);
+    hold.click(true);
     expect(events).toEqual(["press", "release", "press"]);
     vi.advanceTimersByTime(300);
     expect(events).toEqual(["press", "release", "press", "release"]);

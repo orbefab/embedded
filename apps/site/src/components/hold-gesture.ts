@@ -11,13 +11,14 @@ export interface HoldGesture {
   pointerEnd(id: number): void;
   /** The control blurred, the window blurred, or the page was hidden. */
   drop(): void;
-  click(): void;
+  /** `trusted` is the click event's `isTrusted`. */
+  click(trusted: boolean): void;
 }
 
 /** Holds the circuit button while Space, Enter or a pointer is down, and releases it when that
- * gesture ends or {@link HoldGesture.drop} runs. A key or pointer gesture also fires a click
- * when it ends. That click is not a second press, including when a blur released the hold
- * before the key or pointer came up. A click with no such gesture, as a screen reader sends,
+ * gesture ends or {@link HoldGesture.drop} runs. A key or pointer gesture also fires a trusted
+ * click when it ends. That click is not a second press, including when a blur released the hold
+ * before the key or pointer came up. A click that is not trusted, as a screen reader sends,
  * presses for a short time. */
 export function holdGesture(target: HoldTarget): HoldGesture {
   let down = 0;
@@ -36,12 +37,13 @@ export function holdGesture(target: HoldTarget): HoldGesture {
   };
   const endIfIdle = () => {
     if (keys.size > 0 || pointers.size > 0) return;
-    // The browser fires this gesture's click after keyup or pointerup returns, and before
-    // microtasks. A timer can lose that race when the main thread is busy: the next click
-    // arrives first, still sees the flag, and is dropped. A microtask runs before that click.
-    queueMicrotask(() => {
+    // The browser fires this gesture's trusted click after the keyup or pointerup microtasks
+    // and before a timer. A script click can also arrive before that timer when the page is
+    // busy. Leave the flag set until the timer so the trusted click is ignored. An untrusted
+    // click does not wait for the timer.
+    setTimeout(() => {
       if (keys.size === 0 && pointers.size === 0) gesture = false;
-    });
+    }, 0);
   };
 
   return {
@@ -78,8 +80,13 @@ export function holdGesture(target: HoldTarget): HoldGesture {
       down = 0;
       target.release();
     },
-    click() {
-      if (gesture || down > 0) return;
+    click(trusted) {
+      if (down > 0) return;
+      // The key or pointer already pressed. This click is the browser's, not a new one.
+      if (trusted && gesture) {
+        gesture = false;
+        return;
+      }
       press();
       setTimeout(releaseOne, 300);
     },

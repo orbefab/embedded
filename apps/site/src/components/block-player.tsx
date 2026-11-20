@@ -67,7 +67,7 @@ function PressControl({ hold }: { hold: { readonly current: ButtonHold | null } 
       className="mt-3 touch-none border border-border px-3 py-1.5 text-sm hover:border-foreground focus-visible:[outline:2px_solid_var(--brand)] focus-visible:outline-offset-2"
       data-testid="hold-to-press"
       onBlur={() => gesture.current?.drop()}
-      onClick={() => gesture.current?.click()}
+      onClick={(event) => gesture.current?.click(event.nativeEvent.isTrusted)}
       onKeyDown={onKeyDown}
       onPointerDown={onPointerDown}
       onPointerLeave={onPointerLeave}
