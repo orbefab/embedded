@@ -11,7 +11,6 @@ on:
       - main
   schedule:
     - cron: "0 6 * * *"
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -82,7 +81,7 @@ jobs:
         with:
           workspaces: ". -> target"
           cache-workspace-crates: "true"
-          save-if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Lint
         run: scripts/check.sh lint
@@ -107,7 +106,7 @@ jobs:
         with:
           workspaces: ". -> target"
           cache-workspace-crates: "true"
-          save-if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Nextest version
         id: nextest
@@ -172,7 +171,7 @@ jobs:
         with:
           workspaces: ". -> target"
           cache-workspace-crates: "true"
-          save-if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install wasm-bindgen
         run: scripts/install-wasm-bindgen.sh
@@ -230,7 +229,7 @@ jobs:
         with:
           workspaces: ". -> target"
           cache-workspace-crates: "true"
-          save-if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install wasm-bindgen
         run: scripts/install-wasm-bindgen.sh
@@ -267,7 +266,7 @@ jobs:
         with:
           workspaces: ". -> target"
           cache-workspace-crates: "true"
-          save-if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Nextest version
         id: nextest
@@ -321,7 +320,7 @@ jobs:
         with:
           workspaces: ". -> target"
           cache-workspace-crates: "true"
-          save-if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Nextest version
         id: nextest
@@ -378,7 +377,7 @@ jobs:
         with:
           workspaces: ". -> target"
           cache-workspace-crates: "true"
-          save-if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install wasm-bindgen
         run: scripts/install-wasm-bindgen.sh
@@ -388,7 +387,7 @@ jobs:
 
   site-vite:
     name: site vite
-    if: github.event_name == 'schedule' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'schedule' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -433,7 +432,7 @@ jobs:
         with:
           workspaces: ". -> target"
           cache-workspace-crates: "true"
-          save-if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install wasm-bindgen
         run: scripts/install-wasm-bindgen.sh
@@ -443,7 +442,7 @@ jobs:
 
   engines:
     name: engines
-    if: github.event_name == 'schedule' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'schedule' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -490,7 +489,7 @@ jobs:
         with:
           workspaces: ". -> target"
           cache-workspace-crates: "true"
-          save-if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install wasm-bindgen
         run: scripts/install-wasm-bindgen.sh
