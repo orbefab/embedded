@@ -24,7 +24,7 @@ if [[ ! -f apps/viewer/dist/index.html ]]; then
   exit 2
 fi
 if [[ ! -f apps/site/dist/client/index.html ]]; then
-  echo "check-engines: no site build at apps/site/dist/client. Run \`scripts/site.sh --first-deploy\` first, or scripts/check-site.sh." >&2
+  echo "check-engines: no site build at apps/site/dist/client. Run \`scripts/site.sh --first-deploy\` first, or \`scripts/check-site.sh --first-deploy\`." >&2
   exit 2
 fi
 free_port() {

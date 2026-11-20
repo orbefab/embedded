@@ -144,7 +144,7 @@ web() {
   scripts/check-block.sh
   scripts/check-headed.sh
   scripts/site-previous.test.sh
-  scripts/check-site.sh
+  scripts/check-site.sh --first-deploy
   scripts/check-engines.sh
 }
 

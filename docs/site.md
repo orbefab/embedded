@@ -20,6 +20,7 @@ Sparse parts render as they are. A missing summary, tag, doc or seller shows as 
 
 ```sh
 pnpm install --frozen-lockfile
+rm -rf .scratch/site/previous
 scripts/site-previous.sh --url https://orbefab.com/embedded/r/ --out .scratch/site/previous
 scripts/site.sh --previous .scratch/site/previous
 ```
@@ -83,11 +84,11 @@ It prints each page's requests and bytes, uncompressed and gzipped, and the time
 
 A push to `main` runs [`.github/workflows/site.yml`](../.github/workflows/site.yml) on GitHub's `ubuntu-24.04` runner. The workflow also runs when someone starts it by hand. The hand run has one input, `deploy`, which defaults to false. The `site` environment, limited to the `main` branch, holds the two secrets. That is what keeps them from other branches and from pull requests.
 
-The push starts a job only when the repository variable `SITE_DEPLOY` is `1`. Until then the push skips the job and spends nothing. A hand run always builds and checks. It deploys only when `SITE_DEPLOY` is `1`, the ref is `main`, and `deploy` is true. A run on another branch does not deploy. Runs that can deploy share one concurrency group, and a build that does not deploy does not. A newer pending deploy replaces an older pending one, so the latest commit wins. A deploy that has started is left to finish.
+The push starts a job only when the repository variable `SITE_DEPLOY` is `1`. Until then the push skips the job and spends nothing. A hand run works on `main` only, because the job uses the `site` environment, which allows only `main`. It always builds and checks, and deploys only when `SITE_DEPLOY` is `1` and `deploy` is true. Deploy runs on `main` share one concurrency group, and a build that does not deploy does not. A newer pending deploy replaces an older pending one, so the latest commit wins. A deploy that has started is left to finish.
 
 `scripts/site-previous.sh` downloads `https://orbefab.com/embedded/r/` into the directory passed as `--out`. That directory must be missing or empty. It starts at `index.json` and fetches every record and every `files/<sha256>` that record lists, requesting a record with `@` encoded as `%40` and following a redirect that stays in that directory. It writes a path only when a record's URL is `<name>@<version>.json` and a file's URL is `files/` plus 64 lowercase hex. A bad entry fails the whole download, and nothing is written. `orbe registry build --previous` verifies everything that download contains. A network error, a timeout or a 5xx is tried three times. A 404, any other status, or a redirect that leaves that directory fails the download.
 
-Set the repository variable `ORBE_SITE_INSTALL` to `1` to deploy with install lines. `scripts/check-site.sh` builds the site both ways and leaves the build with the lines off. When the variable is `1`, the workflow runs `scripts/site.sh` once more with `ORBE_SITE_INSTALL=1` and `scripts/site-install.sh` checks that build before it is uploaded: every part and Block page shows its `orbe add` line, Get orbe shows the install command and the repo link, and `install.sh` is served and equals `scripts/install.sh`.
+Set the repository variable `ORBE_SITE_INSTALL` to `1` to deploy with install lines. `scripts/check-site.sh` builds the site both ways and leaves the build with the lines off. When the variable is `1`, the workflow runs `scripts/site.sh` once more with `ORBE_SITE_INSTALL=1` and `scripts/site-install.sh` checks that build before it is uploaded: every part and Block in the registry has a page and each Block an embed page, every part and Block page shows its `orbe add` line, Get orbe shows the install command and the repo link, and `install.sh` is served and equals `scripts/install.sh`.
 
 The deploy step reads two secrets from the `site` environment.
 
@@ -108,13 +109,14 @@ The token is Workers Editor on the Worker `orbefab-embedded`, plus zone Workers 
 
 With install lines on, Get orbe shows the install command and `/embedded/install.sh` is `scripts/install.sh`. With them off, Get orbe says the CLI is coming and that URL answers 404. When the live check fails after a deploy, run `pnpm exec wrangler rollback` in `apps/site`, then fix forward.
 
-After a deploy and a live check that pass, the workflow uploads `apps/site/dist/client/r` as an artifact named for the commit, kept for 90 days. That artifact is the copy to restore from if the live registry is ever lost or shrunk.
+After a deploy that succeeds, the workflow uploads `apps/site/dist/client/r` as an artifact named for the commit, even when the live check after it fails. Re-running that run replaces the artifact. An artifact is kept for 90 days, so after 90 days with no deploy there is none. That artifact is the copy to restore from if the live registry is ever lost or shrunk. Re-running an older run deploys that older commit's pages again.
 
 The same steps, run by hand from a clean checkout of `main`, are the fallback when the workflow cannot. The manual deploy always uses `--previous`.
 
 ```sh
 git status --short                 # nothing
 pnpm install --frozen-lockfile
+rm -rf .scratch/site/previous
 scripts/site-previous.sh --url https://orbefab.com/embedded/r/ --out .scratch/site/previous
 scripts/check-site.sh --previous .scratch/site/previous
 cd apps/site

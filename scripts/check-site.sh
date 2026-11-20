@@ -15,10 +15,11 @@
 # the site serves unchanged, so a Block's README or block.jsonc still says `orbe add`.
 #
 # Needs what scripts/site.sh needs, and a Chromium found as check-viewer-e2e.sh finds it. It
-# installs nothing. scripts/check.sh web runs this. `--previous <dir>` builds the registry on
-# the one the live site serves. With no `--previous`, the build is local and passes
-# `--first-deploy`, when there is no registry to download. `--renders <dir>` saves screenshots there. The
-# arguments can be in any order. An unknown argument is an error.
+# installs nothing. scripts/check.sh web runs this with `--first-deploy`. One of two arguments is
+# required: `--previous <dir>` builds the registry on the one the live site serves, and
+# `--first-deploy` is a local build with no registry to download. A build for a deploy always
+# passes `--previous`. `--renders <dir>` saves screenshots there. The arguments can be in any
+# order. An unknown argument is an error.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 previous=()
@@ -60,8 +61,11 @@ if [[ $first -eq 1 && ${#previous[@]} -gt 0 ]]; then
 fi
 if [[ ${#previous[@]} -gt 0 ]]; then
   site=("${previous[@]}")
-else
+elif [[ $first -eq 1 ]]; then
   site=(--first-deploy)
+else
+  echo "check-site: pass --previous <dir>, the registry the live site serves, or --first-deploy for a local build with no registry" >&2
+  exit 2
 fi
 if [[ $saw_renders -eq 1 ]]; then
   export ORBE_RENDERS=$renders
@@ -77,18 +81,8 @@ scripts/brand.sh check
 dist=apps/site/dist/client
 own() { grep -rlE "$1" "$dist" --exclude-dir=r --exclude-dir=orbe-wasm --exclude-dir=sources || true; }
 pages() { find "$dist/$1" -mindepth 2 -maxdepth 2 -name index.html | wc -l; }
-listed() {
-  # console.log colors a number when FORCE_COLOR is set, and [[ ]] then rejects the count.
-  node -e 'const index = require(process.argv[1]); process.stdout.write(String(new Set(index.items.filter((row) => row.type === process.argv[2]).map((row) => row.name)).size) + "\n")' \
-    "$PWD/$dist/r/index.json" "$1"
-}
 
 ORBE_SITE_INSTALL=1 scripts/site.sh "${site[@]}" >/dev/null
-parts=$(pages parts)
-blocks=$(pages blocks)
-embeds=$(find "$dist/blocks" -mindepth 3 -maxdepth 3 -name index.html | wc -l)
-[[ $parts -eq $(listed part) && $blocks -eq $(listed block) && $embeds -eq $blocks ]] ||
-  fail "the build has $parts part, $blocks Block and $embeds embed pages, and the registry lists $(listed part) and $(listed block)"
 scripts/site-install.sh
 
 # 8787 is wrangler's default and may already be taken. Ask the OS for a free port.

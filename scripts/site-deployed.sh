@@ -82,8 +82,10 @@ part_ok() {
   local code record title sha count
   code=$(curl_body "$base/embedded/parts/led-5mm/" "$work/led.html") || return 1
   [[ $code == 200 ]] || return 1
-  record=$(find "$dist/r" -maxdepth 1 -name 'led-5mm@*.json' -print -quit)
-  [[ -n $record ]] || return 1
+  # The page shows the newest version, so read the newest led-5mm row of this build's index.
+  record=$(node -e 'const index = require(require("node:path").resolve(process.argv[1])); const key = (v) => v.split(".").map(Number); const rows = index.items.filter((row) => row.name === "led-5mm").sort((a, b) => { const x = key(a.version), y = key(b.version); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return y[i] - x[i]; return 0; }); if (rows.length === 0) process.exit(1); process.stdout.write(rows[0].url)' "$dist/r/index.json") || return 1
+  record=$dist/r/$record
+  [[ -f $record ]] || return 1
   title=$(node -e 'const record = require(require("node:path").resolve(process.argv[1])); if (typeof record.title !== "string" || !Array.isArray(record.files) || record.files.length === 0) process.exit(1); process.stdout.write(record.title)' "$record") || return 1
   grep -F -q "<title>${title} | Orbefab</title>" "$work/led.html" || return 1
   count=0

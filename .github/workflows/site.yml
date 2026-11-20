@@ -2,9 +2,9 @@
 #
 # A push to main starts the job only when the repository variable SITE_DEPLOY is `1`.
 # Until then the job is skipped, so the push spends no minutes. A workflow_dispatch
-# run always builds. It deploys only when SITE_DEPLOY is `1`, the ref is main, and
-# the deploy input is true. The input defaults to false, which is a build and a check
-# with no deploy.
+# run works on main only, because the job uses the site environment, which allows only
+# main. It deploys only when SITE_DEPLOY is `1` and the deploy input is true. The input
+# defaults to false, which is a build and a check with no deploy.
 #
 # The site environment, limited to main, holds the two deploy secrets. That is what
 # keeps them from other branches and from pull requests. ORBE_SITE_INSTALL=1 shows
@@ -24,10 +24,9 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 concurrency:
-  group: "${{ (github.event_name == 'push' || inputs.deploy) && 'site-deploy' || format('site-build-{0}', github.run_id) }}"
+  group: "${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.deploy) && 'site-deploy' || format('site-build-{0}', github.run_id) }}"
   cancel-in-progress: false
 
 jobs:
@@ -160,6 +159,7 @@ jobs:
         run: scripts/site-install.sh
 
       - name: Deploy
+        id: deploy
         if: vars.SITE_DEPLOY == '1' && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.deploy == true)
         working-directory: apps/site
         env:
@@ -174,10 +174,11 @@ jobs:
         run: scripts/site-deployed.sh
 
       - name: Keep a copy of the registry
-        if: vars.SITE_DEPLOY == '1' && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.deploy == true)
+        if: ${{ !cancelled() && steps.deploy.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: registry-${{ github.sha }}
           path: apps/site/dist/client/r
           retention-days: 90
+          overwrite: true
           if-no-files-found: error
