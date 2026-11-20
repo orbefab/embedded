@@ -7,9 +7,9 @@
 import { useSyncExternalStore } from "react";
 import { type CameraStyle, DEFAULT_CAMERA } from "./camera-frame";
 
-export type LookName = "current" | "studio" | "toon" | "ink" | "clay";
+export type LookName = "current" | "studio" | "lite" | "toon" | "ink" | "clay";
 
-export const LOOK_NAMES: readonly LookName[] = ["current", "studio", "toon", "ink", "clay"];
+export const LOOK_NAMES: readonly LookName[] = ["current", "studio", "lite", "toon", "ink", "clay"];
 
 /** How a part's surfaces are redrawn. */
 export type Surface =
@@ -79,6 +79,22 @@ export const LOOKS: Readonly<Record<LookName, Look>> = {
     shadows: "map",
     ao: { radius: 2.5, intensity: 2 },
     multisampling: 4,
+    mat: "grid",
+    hover: BRAND,
+    camera: FRONT_LEFT,
+  },
+  // Studio for a machine with no GPU: about 3x studio's frame rate in software rendering, since
+  // ambient occlusion and MSAA cost most of studio's time there and the shadow map little.
+  lite: {
+    name: "lite",
+    label: "Studio lite",
+    surface: "pbr",
+    outline: null,
+    lights: "studio",
+    environment: 0.55,
+    shadows: "map",
+    ao: null,
+    multisampling: 0,
     mat: "grid",
     hover: BRAND,
     camera: FRONT_LEFT,

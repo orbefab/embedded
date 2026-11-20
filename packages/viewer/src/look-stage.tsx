@@ -44,6 +44,7 @@ export function stageColours(look: Look, page: StageColours, dark: boolean): Sta
         ? { background: "#24221f", mat: "#2b2925", line: "#2b2925" }
         : { background: "#ebe6de", mat: "#e4ded5", line: "#e4ded5" };
     case "studio":
+    case "lite":
       return dark
         ? { background: "#17191c", mat: "#202327", line: "#2c3036" }
         : { background: "#e9e9ec", mat: "#e2e2e6", line: "#d2d2d8" };
