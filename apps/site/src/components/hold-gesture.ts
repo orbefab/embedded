@@ -22,7 +22,6 @@ export interface HoldGesture {
 export function holdGesture(target: HoldTarget): HoldGesture {
   let down = 0;
   let gesture = false;
-  let clear: ReturnType<typeof setTimeout> | undefined;
   const keys = new Set<string>();
   const pointers = new Set<number>();
 
@@ -37,12 +36,12 @@ export function holdGesture(target: HoldTarget): HoldGesture {
   };
   const endIfIdle = () => {
     if (keys.size > 0 || pointers.size > 0) return;
-    clearTimeout(clear);
     // The browser fires this gesture's click after keyup or pointerup returns, and before
-    // a timer. Clearing the flag here would let that click start a new press.
-    clear = setTimeout(() => {
-      gesture = false;
-    }, 0);
+    // microtasks. A timer can lose that race when the main thread is busy: the next click
+    // arrives first, still sees the flag, and is dropped. A microtask runs before that click.
+    queueMicrotask(() => {
+      if (keys.size === 0 && pointers.size === 0) gesture = false;
+    });
   };
 
   return {

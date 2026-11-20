@@ -118,6 +118,11 @@ jobs:
         with:
           tool: cargo-nextest@${{ steps.nextest.outputs.version }}
 
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Rust tests
         run: scripts/check.sh rust
 
@@ -272,6 +277,11 @@ jobs:
         uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
           tool: cargo-nextest@${{ steps.nextest.outputs.version }}
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Chip skip checks
         run: scripts/check.sh engine-chips

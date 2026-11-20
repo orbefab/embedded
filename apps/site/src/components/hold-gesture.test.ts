@@ -41,7 +41,7 @@ describe("hold gesture", () => {
     expect(events).toEqual(["press", "release"]);
   });
 
-  it("releases on blur and still presses for a later click", () => {
+  it("releases on blur and still presses for a later click", async () => {
     vi.useFakeTimers();
     const { target, events } = recording();
     const hold = holdGesture(target);
@@ -49,11 +49,11 @@ describe("hold gesture", () => {
     expect(events).toEqual(["press"]);
     hold.drop();
     expect(events).toEqual(["press", "release"]);
-    // The browser's click for the Space key arrives with keyup, before the flag clears.
+    // The browser's click for the Space key arrives with keyup, before the microtask.
     hold.keyUp(" ");
     hold.click();
     expect(events).toEqual(["press", "release"]);
-    vi.advanceTimersByTime(0);
+    await Promise.resolve();
     hold.click();
     expect(events).toEqual(["press", "release", "press"]);
     vi.advanceTimersByTime(300);
