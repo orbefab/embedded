@@ -138,22 +138,6 @@ function codePaths(id: string): string[] {
   return paths.sort();
 }
 
-function catalogLock(id: string): { own: string[]; lock: number; repeats: [string, number][] } {
-  const block = readJsonc(join(REPO, "blocks", id, "block.jsonc")) as { board: string };
-  const part = readJsonc(join(REPO, "parts", block.board, "part.jsonc")) as { uses?: Record<string, string> };
-  const counts = new Map<string, number>();
-  for (const body of Object.values(sceneParts(id))) {
-    if (body.type === undefined) continue;
-    counts.set(body.type, (counts.get(body.type) ?? 0) + 1);
-  }
-  const own = Object.keys(part.uses ?? {}).sort();
-  return {
-    own,
-    lock: new Set([...counts.keys(), ...own]).size,
-    repeats: [...counts.entries()].filter((entry): entry is [string, number] => entry[1] > 1),
-  };
-}
-
 const VALUES: Record<string, Record<string, readonly string[]>> = {
   "nano-button-led": { r1: ["220 Ω"], r2: ["10 kΩ"], led1: ["red"], nano: ["button.hex"] },
   "nano-led-fade": { r1: ["220 Ω"], led1: ["red"], nano: ["fade.hex"] },
@@ -254,7 +238,8 @@ test.describe("landing", () => {
     expect(body).toContain("Use the AI agent you already have, on your own subscription.");
     expect(body).toContain("Every step is a command an agent can run, and orbe skills get core tells it how.");
     expect(body).toContain("In a terminal for the agent, or live in 3D for you, on every Block page.");
-    expect(body).toContain("Boards today:");
+    expect(body).toContain("Boards:");
+    expect(body).not.toContain("Boards today:");
   });
 
   test("the start page has no player and no Block cards", async () => {
@@ -284,13 +269,14 @@ test.describe("landing", () => {
     expect(await header.innerText()).not.toMatch(/embedded/i);
     const footer = await page.locator("footer").innerText();
     expect(footer.startsWith("© 2026 Orbefab")).toBe(true);
-    expect(footer).toContain("orbe and its catalog are open source under MIT or Apache-2.0, unless a file says otherwise. Each file lists its own license.");
-    expect(footer).toContain("Maker names say which real part a model matches. Orbefab is not affiliated with or endorsed by those makers, and the models carry no logos.");
+    expect(footer).toContain("Open source under MIT or Apache-2.0.");
+    expect(footer).not.toContain("unless a file says otherwise");
+    expect(footer).not.toContain("not affiliated");
     await expect(page.locator('footer a[href="https://github.com/orbefab/embedded/releases"]')).toHaveText("Releases");
     await expect(page.locator('footer a[href="https://github.com/orbefab/embedded"]')).toHaveText("GitHub");
     await expect(page.locator('footer a[href="/brand"]')).toHaveText("Brand");
     await expect(page.locator('footer a[href="https://github.com/orbefab/embedded/blob/main/LICENSE-MIT"]')).toHaveText("License");
-    expect(await bodyText(page)).toContain("Catalog @orbefab at /embedded/r/index.json");
+    expect(await bodyText(page)).not.toContain("Catalog @orbefab");
   });
 
   test("the landing page logged no error", () => {
@@ -335,11 +321,15 @@ test.describe("parts search", () => {
 
   test("a card says where the part is used", async () => {
     const line = (id: string) => page.locator(`[data-part="${id}"]`).innerText();
+    expect(await page.locator("main")).toContainText("Real parts with their pins, ratings and 3D models.");
     expect(await line("led-5mm")).toContain("in 4 Blocks");
+    expect(await line("led-5mm")).not.toContain("led-5mm");
     expect(await line("resistor-axial")).toContain("in 4 Blocks");
     expect(await line("lm358-dip8")).toContain("in 1 Block");
     expect(await line("nano-board")).toContain("in 3 Blocks");
     expect(await line("led-0603")).toContain("on the Nano (CH340 clone)");
+    const unused = await page.locator("[data-part]").evaluateAll((nodes) => nodes.some((node) => (node.textContent ?? "").includes("in no Block yet") || (node.textContent ?? "").includes("Generic")));
+    expect(unused).toBe(false);
   });
 
   for (const query of QUERIES) {
@@ -381,10 +371,6 @@ test.describe("led-5mm", () => {
     expect(await page.evaluate(() => window.orbeViewer?.get().scene.getObjectByName("@led_5mm") !== undefined)).toBe(true);
   });
 
-  test("it says Orbefab is not affiliated with Kingbright", async () => {
-    expect(/not affiliated with or endorsed by Kingbright/.test(await bodyText(page))).toBe(true);
-  });
-
   test("it lists all five files as downloads", async () => {
     const files = await page
       .locator('[data-testid="license-files"] a[download]')
@@ -392,9 +378,11 @@ test.describe("led-5mm", () => {
     expect(files.length === 5 && files.some(([path]) => path === "led-5mm.glb"), JSON.stringify(files)).toBe(true);
   });
 
-  test("every file shows its licence", async () => {
-    const shown = await page.locator('[data-testid="license-files"] td:nth-child(3)').allTextContents();
-    expect(shown.length === 5 && shown.every((licence) => licence === "MIT OR Apache-2.0"), JSON.stringify(shown)).toBe(true);
+  test("the license box names the shared licence and lists no per-file column", async () => {
+    const box = page.locator('[data-testid="license-files"]');
+    await expect(box.locator("summary")).toContainText("MIT OR Apache-2.0");
+    await expect(box.locator("th", { hasText: "License" })).toHaveCount(0);
+    await expect(box).not.toContainText("Registry record");
   });
 
   test("a download serves the file's bytes, by the record's SHA-256", async () => {
@@ -413,10 +401,17 @@ test.describe("led-5mm", () => {
     expect(/DigiKey\s*2026-11-08/.test(body), body.match(/Where to buy[\s\S]{0,120}/i)?.[0] ?? "").toBe(true);
   });
 
-  test("it shows the ratings with their sources", async () => {
+  test("it shows the ratings as names, with a Datasheet link and no citation", async () => {
+    const section = page.locator("section", { has: page.getByRole("heading", { name: "Ratings" }) });
+    await expect(section).toContainText("Current");
+    await expect(section).toContainText("30 mA");
+    await expect(section.getByRole("link", { name: "Datasheet" }).first()).toBeVisible();
     const body = await bodyText(page);
-    expect(/30 mA/.test(body) && /Absolute Maximum Ratings/.test(body)).toBe(true);
-    expect(body).toContain("Brightness is the average current over 20 ms.");
+    expect(body).not.toContain("Brightness is the average");
+    expect(body).not.toContain("Absolute Maximum Ratings");
+    await expect(page.getByRole("heading", { name: "Docs" })).toHaveCount(0);
+    expect(body).not.toContain("not affiliated");
+    expect(body).not.toContain("No summary yet");
   });
 
   test("it links the Blocks that place it", async () => {
@@ -468,18 +463,13 @@ test.describe("breadboard-830", () => {
     await context?.close();
   });
 
-  test("its pins are only its holes", async () => {
-    expect(/Pins\s*No pins yet\./i.test(await bodyText(page))).toBe(true);
-  });
-
-  test("it lists each strip: two of five holes in each of 63 columns, and four rails", async () => {
-    const strips = page.locator("section", { has: page.locator("h2", { hasText: /^Holes$/ }) }).locator("tbody tr");
-    expect(await strips.count()).toBe(63 * 2 + 4);
-  });
-
-  test("a column's strip and a whole rail are among them", async () => {
+  test("it says holes in a strip are connected and hides the empty pin list", async () => {
+    const holes = page.locator("section", { has: page.getByRole("heading", { name: "Holes" }) });
+    await expect(holes).toContainText("Holes in a strip are connected.");
+    await expect(holes.locator("tbody tr")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Pins" })).toHaveCount(0);
     const body = await bodyText(page);
-    expect(/a1 to e1\s*a1, b1, c1, d1, e1/.test(body) && /W3 to W7, W9 to W13, .*, W57 to W61\s*W3, W4/.test(body)).toBe(true);
+    expect(body).not.toMatch(/No pins yet|No params yet|No ratings yet|Nothing left out yet|No docs yet|No sellers yet|In no Block yet/);
   });
 
   test("breadboard-830's page logged no error", async () => {
@@ -511,8 +501,11 @@ test.describe("nano-board", () => {
     expect(await page.textContent("h1")).toBe("Nano (CH340 clone)");
   });
 
-  test("it says Orbefab is not affiliated with Arduino", async () => {
-    expect(/not affiliated with or endorsed by Arduino/.test(await bodyText(page))).toBe(true);
+  test("its pins are names, with no Reaches column", async () => {
+    const pins = page.locator("section", { has: page.getByRole("heading", { name: "Pins" }) });
+    await expect(pins).toContainText("D13");
+    await expect(pins.getByRole("columnheader", { name: "Reaches" })).toHaveCount(0);
+    expect(await bodyText(page)).not.toContain("not affiliated");
   });
 
   test("it lists the parts it is built from", async () => {
@@ -549,12 +542,12 @@ test.describe("uno-board", () => {
     expect(await page.textContent("h1")).toBe("Uno R3 compatible board");
   });
 
-  test("every file of the Uno, its model.py and part.jsonc too, is MIT OR Apache-2.0", async () => {
-    const unoFiles = await licences(page);
-    expect(
-      ["part.jsonc", "model.py", "uno-board.glb"].every((path) => unoFiles[path] === "MIT OR Apache-2.0"),
-      JSON.stringify(unoFiles),
-    ).toBe(true);
+  test("the Uno's files share the box's licence", async () => {
+    const box = page.locator('[data-testid="license-files"]');
+    await expect(box.locator("summary")).toContainText("MIT OR Apache-2.0");
+    await expect(box.locator("th", { hasText: "License" })).toHaveCount(0);
+    const names = await box.locator("a[download]").allTextContents();
+    expect(["part.jsonc", "model.py", "uno-board.glb"].every((path) => names.includes(path)), JSON.stringify(names)).toBe(true);
   });
 
   test("the Uno's page links the clone schematic it is drawn from", async () => {
@@ -767,10 +760,15 @@ test("every Block page shows its README and no install line", async ({ browser, 
     const page = await context.newPage();
     await page.goto(`${host.base}${path}`);
     const body = await bodyText(page);
+    const readme = await page.getByTestId("readme").innerText();
     expect(
       body.includes(sentence) &&
         body.includes("Check it with orbe check scene.jsonc and run its tests with orbe test.") &&
         !body.includes("Install it into a project") &&
+        !readme.includes("LGPL AVR") &&
+        !readme.includes("firmware/NOTICE") &&
+        !readme.includes("490 Hz") &&
+        !(path.endsWith("nano-light-comparator/") && (readme.includes("4.76 V") || !readme.includes("2.52 V") || !readme.includes("orbe set light 10"))) &&
         !INSTALL.test(body),
       `${path} ${body.match(INSTALL)?.[0] ?? ""}`,
     ).toBe(true);
@@ -782,6 +780,7 @@ test("the Blocks page counts the parts each scene places", async ({ browser, hos
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto(`${host.base}/embedded/blocks/`);
+  await expect(page.locator("main")).toContainText("Small circuits that work. Play each one live in your browser.");
   expect(await cardCounts(page)).toEqual(sceneCards());
   await page.goto(`${host.base}/embedded/blocks/nano-led-fade/`);
   const refs = Object.keys(sceneParts("nano-led-fade"));
@@ -815,7 +814,7 @@ test("a long hash and the code view stay inside a phone width", async ({ browser
   await context.close();
 });
 
-test("each Block lists its scene files, its board's parts, its lock count and its values", async ({ browser, host }) => {
+test("each Block lists its scene files and its values", async ({ browser, host }) => {
   test.setTimeout(180_000);
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -830,21 +829,19 @@ test("each Block lists its scene files, its board's parts, its lock count and it
     for (const [ref, texts] of Object.entries(VALUES[id] ?? {})) {
       const row = await page.locator(`[data-testid="scene-parts"] li[data-ref="${ref}"]`).innerText();
       for (const text of texts) expect(row, `${id} ${ref}`).toContain(text);
+      expect(row, `${id} ${ref}`).not.toContain(sceneParts(id)[ref]?.type ?? "missing-type");
     }
-    const { own, lock, repeats } = catalogLock(id);
-    const summary = page.locator("details summary", { hasText: "brings" });
-    const note = await summary.innerText();
-    expect(note, id).toContain(`brings ${own.length}`);
-    expect(note, id).toContain(`lists ${lock}`);
-    if (repeats.length === 0) expect(note, id).not.toContain("catalog part");
-    for (const [partId] of repeats) expect(note, id).toContain(`share one catalog part, ${partId}`);
+    await expect(page.locator("details summary", { hasText: "brings" }), id).toHaveCount(0);
+    await expect(page.getByText("See them on the board's page"), id).toHaveCount(0);
     const tests = existsSync(join(REPO, "blocks", id, "tests"))
       ? readdirSync(join(REPO, "blocks", id, "tests")).filter((name) => name.endsWith(".test")).length
       : 0;
-    expect(await bodyText(page), id).toContain(tests === 1 ? "1 test" : `${tests} tests`);
-    await summary.click();
-    const hrefs = await page.locator("details ul a").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("href")).sort());
-    expect(hrefs, id).toEqual(own.map((partId) => `/embedded/parts/${partId}/`).sort());
+    const body = await bodyText(page);
+    expect(body, id).toContain(tests === 1 ? "1 test" : `${tests} tests`);
+    expect(body, id).not.toContain("parts.lock");
+    expect(body, id).toContain("Sketch, scene and tests.");
+    const header = page.locator('[data-testid="code-file"][data-path="scene.jsonc"] .border-b');
+    await expect(header, id).not.toContainText("MIT");
   }
   await context.close();
 });
@@ -852,29 +849,10 @@ test("each Block lists its scene files, its board's parts, its lock count and it
 test("a same-page hash stays on the page, including a second click and a page opened on the hash", async ({ browser, host }) => {
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
-  await hydrated(page);
-  await page.locator('[data-testid="view-code"]').click();
-  const caption = page.locator('[data-testid="view-code-panel"] a[href="#files"]');
-  await noServerCall(page, async () => {
-    await caption.click();
-    await caption.click();
-  });
-  await expect(page.locator("#files")).toHaveJSProperty("open", true);
-
-  const readme = page.locator('[data-testid="readme"] a[href="#files"]');
-  await noServerCall(page, async () => {
-    await readme.click();
-    await readme.click();
-  });
-  await expect(page.locator("#files")).toHaveJSProperty("open", true);
-
   await page.goto(`${host.base}/embedded/blocks/nano-button-led/#files`);
   await hydrated(page);
   await expect(page.locator("#files")).toHaveJSProperty("open", true);
-  const again = page.locator('[data-testid="readme"] a[href="#files"]');
-  await noServerCall(page, () => again.click());
-  await expect(page.locator("#files")).toHaveJSProperty("open", true);
+  await expect(page.locator('a[href="#files"]')).toHaveCount(0);
 
   await page.goto(`${host.base}/embedded/parts/led-5mm/`);
   await hydrated(page);
@@ -1148,8 +1126,10 @@ test("every part page draws with no viewer error", async ({ browser, host }) => 
     if (id === "resistor-axial") {
       await expect(page.getByTestId("shown-at")).toHaveText("Shown at 220 Ω.");
       const sentence = await bodyText(page);
-      expect(sentence, id).toContain("above 0 Ω");
+      expect(sentence, id).toContain("above 0 Ω (required)");
+      await expect(page.getByRole("heading", { name: "Settings" }), id).toBeVisible();
       expect(sentence, id).not.toContain("0 pΩ");
+      expect(sentence, id).not.toContain(", required");
       const bands = await page.evaluate(() => {
         const root = window.orbeViewer.get().scene.getObjectByName("@resistor_axial");
         return ["band1-brown", "band2-black", "band3-orange", "band4-gold"].map((node) => {
@@ -1160,7 +1140,7 @@ test("every part page draws with no viewer error", async ({ browser, host }) => 
       });
       expect(bands, id).toEqual(["#d12b2b", "#d12b2b", "#6b3a1f", "#d4af37"]);
     }
-    if (id === "led-5mm") await expect(page.getByTestId("shown-at")).toHaveText("Shown at red.");
+    if (id === "led-5mm") await expect(page.getByTestId("shown-at")).toHaveCount(0);
     if (id === "trimmer-3362p") await expect(page.getByTestId("shown-at")).toHaveCount(0);
   }
   await context.close();
@@ -1177,7 +1157,7 @@ test("with no WebGL 2 a part page says so and does not say which value it shows"
   });
   const page = await context.newPage();
   await page.goto(`${host.base}/embedded/parts/resistor-axial/`);
-  await expect(page.getByTestId("no-webgl")).toBeVisible();
+  await expect(page.getByTestId("no-webgl")).toHaveText("Your browser can't show 3D here.");
   await expect(page.getByTestId("shown-at")).toHaveCount(0);
   await context.close();
 });
@@ -1190,16 +1170,15 @@ test("an unknown path answers 404 with the site's page and logs no page error", 
     page.on("pageerror", (error) => pageErrors.push(error.message));
     const response = await page.goto(`${host.base}${path}`);
     await page.waitForTimeout(1000);
-    expect(
-      response?.status() === 404 &&
-        (await page.textContent("h1")) === "Nothing moves here." &&
-        (await page.title()) === "Not found | Orbefab" &&
-        (await bodyText(page)).includes("404 NOT FOUND") &&
-        (await bodyText(page)).includes("Try the parts or the Blocks.") &&
-        (await page.getByRole("link", { name: "Back home" }).textContent()) === "Back home" &&
-        pageErrors.length === 0,
-      JSON.stringify({ path, status: response?.status(), title: await page.title(), pageErrors }),
-    ).toBe(true);
+    const main = page.locator("main");
+    expect(response?.status(), path).toBe(404);
+    await expect(page.locator("h1")).toHaveText("Page not found.");
+    expect(await page.title(), path).toBe("Page not found | Orbefab");
+    await expect(main.getByRole("link", { name: "Get orbe" })).toHaveAttribute("href", "/embedded/");
+    await expect(main.getByRole("link", { name: "Blocks" })).toHaveAttribute("href", "/embedded/blocks/");
+    await expect(main.getByRole("link", { name: "Parts" })).toHaveAttribute("href", "/embedded/parts/");
+    await expect(main.getByRole("link", { name: "Orbefab home" })).toHaveAttribute("href", "/");
+    expect(pageErrors, path).toEqual([]);
     await context.close();
   }
 });
@@ -1324,7 +1303,7 @@ test("every page title ends with | Orbefab", async ({ browser, host }) => {
     ["/embedded/blocks/nano-button-led/", "Button and LED on a Nano | Orbefab"],
     ["/embedded/blocks/nano-button-led/embed/", "Button and LED on a Nano | Orbefab"],
     ["/embedded/parts/resistor-axial/", ""],
-    ["/embedded/no-such-page", "Not found | Orbefab"],
+    ["/embedded/no-such-page", "Page not found | Orbefab"],
   ];
   for (const [path, exact] of pages) {
     const response = await page.goto(`${host.base}${path}`);

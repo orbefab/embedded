@@ -5,7 +5,7 @@
 import { si } from "./format";
 import { parseJsonc } from "./jsonc";
 import { at } from "./paths";
-import { dependencyId, type BlockRecord, type Item, type Param, type PartRecord, type Real } from "./records";
+import { dependencyId, type BlockRecord, type Item, type Param, type PartRecord } from "./records";
 
 /** One reference a Block's scene places. */
 export interface PlacedPart {
@@ -15,17 +15,10 @@ export interface PlacedPart {
   readonly values: readonly string[];
 }
 
-/** A catalog part folded under a board. */
-export interface FoldedPart {
-  readonly id: string;
-  readonly title: string;
-}
-
-/** The board a Block runs on, and the parts that board brings with it. */
+/** The board a Block runs on. */
 export interface BoardFold {
   readonly id: string;
   readonly title: string;
-  readonly own: readonly FoldedPart[];
 }
 
 /** A text file the Code view shows. Sketch, scene and test, in that order. */
@@ -42,8 +35,6 @@ export interface SourceFile {
 export interface BlockCircuit {
   readonly placed: readonly PlacedPart[];
   readonly board: BoardFold;
-  /** Lines `parts.lock` gets: the Block record's registry dependencies. */
-  readonly lockCount: number;
   /** `tests/*.test` files. `orbe test` reports one result per file. */
   readonly tests: number;
   readonly sources: readonly SourceFile[];
@@ -166,15 +157,7 @@ function placedParts(record: BlockRecord, texts: Readonly<Record<string, string>
 function boardFold(id: string, parts: readonly Item<PartRecord>[]): BoardFold {
   const record = parts.find((item) => item.record.name === id)?.record;
   if (record === undefined) throw new Error(`board ${id} is not a part`);
-  const seen = new Set<string>();
-  const own: FoldedPart[] = [];
-  for (const dependency of record.registryDependencies) {
-    const partId = dependencyId(dependency);
-    if (seen.has(partId)) continue;
-    seen.add(partId);
-    own.push({ id: partId, title: parts.find((item) => item.record.name === partId)?.record.title ?? partId });
-  }
-  return { id, title: record.title, own };
+  return { id, title: record.title };
 }
 
 function sourceGroup(path: string): SourceFile["group"] | undefined {
@@ -210,7 +193,6 @@ function circuitOf(record: BlockRecord, texts: Readonly<Record<string, string>>,
   return {
     placed: placedParts(record, texts, parts),
     board: boardFold(record.board, parts),
-    lockCount: record.registryDependencies.length,
     tests: testCount(record),
     sources: sourcesOf(record, texts),
   };
@@ -255,84 +237,20 @@ export function readCatalogUse(
   return { circuits, uses };
 }
 
-/** The index card's maker line: "Matches …", "Generic, follows …", or "Generic". */
-export function matchLine(real: Real): string {
-  const named = [real.maker, real.number].filter((value): value is string => value !== undefined && value !== null && value !== "").join(" ");
-  if (named === "") return "Generic";
-  return real.generic ? `Generic, follows ${named}` : `Matches ${named}`;
-}
-
-/** The glance row. The label keeps "used in" or "on boards", and the value does not repeat it. */
-export function glanceLine(use: PartUse): { readonly label: string; readonly value: string; readonly href: string | undefined } {
+/** The glance row. The label keeps "used in" or "on boards", and the value does not repeat it.
+ * Nothing, when the part is in no Block and on no board. */
+export function glanceLine(use: PartUse): { readonly label: string; readonly value: string; readonly href: string | undefined } | undefined {
   const count = use.blocks.length;
   if (count === 1) return { label: "used in", value: "1 Block", href: "#used" };
   if (count > 1) return { label: "used in", value: `${count} Blocks`, href: "#used" };
   const board = use.boards[0];
   if (use.boards.length === 1 && board !== undefined) return { label: "on boards", value: board.title, href: "#boards" };
   if (use.boards.length > 1) return { label: "on boards", value: `${use.boards.length} boards`, href: "#boards" };
-  return { label: "used in", value: "no Block yet", href: undefined };
+  return undefined;
 }
 
-const COUNT_WORD = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"] as const;
-
-function countWord(count: number): string {
-  return COUNT_WORD[count] ?? String(count);
-}
-
-/** The common name of a catalog part, from the id's first word: `resistor-axial` is "resistors". */
-function catalogNoun(id: string): string {
-  const stem = id.split("-")[0] ?? id;
-  if (/(?:s|x|z|ch|sh)$/.test(stem)) return `${stem}es`;
-  if (/[^aeiou]y$/.test(stem)) return `${stem.slice(0, -1)}ies`;
-  return `${stem}s`;
-}
-
-function boardShort(title: string): string {
-  return /^[A-Za-z0-9]+/.exec(title)?.[0] ?? title;
-}
-
-/** The two sentences under the board. `brings` counts the physical parts the board includes.
- * `lists` says why `parts.lock` has its count. A placed part is one physical part. A catalog
- * part is its type, and the lock lists each type once. Sharing is named only when the scene
- * places one catalog part more than once. */
-export function lockSentences(circuit: BlockCircuit): { readonly brings: string; readonly lists: string } {
-  const rows = circuit.placed.length;
-  const counts = new Map<string, number>();
-  for (const placed of circuit.placed) counts.set(placed.id, (counts.get(placed.id) ?? 0) + 1);
-  const kinds = counts.size;
-  const ownIds = new Set(circuit.board.own.map((part) => part.id));
-  let overlap = 0;
-  for (const id of counts.keys()) if (ownIds.has(id)) overlap += 1;
-  const repeats = [...counts.entries()].filter((entry): entry is [string, number] => entry[1] > 1).sort((a, b) => (a[0] < b[0] ? -1 : 1));
-  const own = circuit.board.own.length;
-  const lock = circuit.lockCount;
-  const word = (count: number) => (count === 1 ? "part" : "parts");
-  const brings = `The ${circuit.board.title} brings ${own} ${word(own)} of its own.`;
-  const sums = kinds + own - overlap === lock;
-  if (repeats.length === 0) {
-    const listed = `With the ${rows} ${word(rows)} above, parts.lock lists ${lock}.`;
-    if (overlap === 0) return { brings, lists: listed };
-    const already = overlap === 1 ? "One catalog part is already on the board." : `${overlap} catalog parts are already on the board.`;
-    return { brings, lists: `${listed} ${already}` };
-  }
-  const clauses = repeats.map(([id, count]) => `the ${countWord(count)} ${catalogNoun(id)} share one catalog part, ${id}`);
-  const first = clauses[0] ?? "";
-  const share = `${first.charAt(0).toUpperCase()}${first.slice(1)}${clauses
-    .slice(1)
-    .map((clause) => `, and ${clause}`)
-    .join("")}`;
-  const once = repeats.length === 1 ? "it" : "each";
-  const name = boardShort(circuit.board.title);
-  const already =
-    overlap === 0 ? "" : overlap === 1 ? " One catalog part is already on the board." : ` ${overlap} catalog parts are already on the board.`;
-  if (own > 0 && sums) {
-    return { brings, lists: `${share}, so parts.lock lists ${once} once.${already} With the ${name}'s own ${own}, it lists ${lock}.` };
-  }
-  if (sums) return { brings, lists: `${share}, so parts.lock lists ${lock}.` };
-  return { brings, lists: `${share}.${already} parts.lock lists ${lock}.` };
-}
-
-/** The index card's place line. A scene placement wins over a board the part only sits inside. */
+/** The index card's place line. A scene placement wins over a board the part only sits inside.
+ * Empty when the part is in no Block and on no board. */
 export function whereLine(use: PartUse): string {
   const count = use.blocks.length;
   if (count === 1) return "in 1 Block";
@@ -340,5 +258,5 @@ export function whereLine(use: PartUse): string {
   const board = use.boards[0];
   if (use.boards.length === 1 && board !== undefined) return `on the ${board.title}`;
   if (use.boards.length > 1) return `on ${use.boards.length} boards`;
-  return "in no Block yet";
+  return "";
 }

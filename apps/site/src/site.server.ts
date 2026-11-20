@@ -1,7 +1,7 @@
 // What each page renders, read from the catalog the build gave the server side. Only the server
 // functions in data.ts call these, so none of it reaches the browser.
 import data from "virtual:orbe-site";
-import { type BlockCircuit, matchLine, type PartUse, readCatalogUse, whereLine } from "./circuit";
+import { type BlockCircuit, type PartUse, readCatalogUse, whereLine } from "./circuit";
 import { at } from "./paths";
 import { readmeParagraphs } from "./readme";
 import type { BlockRecord, Item, PartRecord } from "./records";
@@ -28,13 +28,9 @@ export interface BlockCard {
 /** A part as the parts list shows it and the search reads it. */
 export interface Listed extends Searchable {
   readonly href: string;
-  /** "Matches …", "Generic, follows …", or "Generic". */
-  readonly match: string;
-  /** "in N Blocks", "on the …", or "in no Block yet". */
+  /** "in N Blocks", "on the …", or empty when neither applies. */
   readonly use: string;
 }
-
-export const site = () => data.site;
 
 let catalogUse: ReturnType<typeof readCatalogUse> | undefined;
 
@@ -112,7 +108,6 @@ export const parts = (): Listed[] =>
         description: record.description,
         categories: record.categories,
         href: at.part(record.name),
-        match: matchLine(record.real),
         use: whereLine(use),
       };
     });
@@ -146,6 +141,6 @@ export function block(id: string) {
   const readmeFile = item.record.files.find((file) => file.path === "README.md");
   const readmeText = readmeFile === undefined ? undefined : data.texts[readmeFile.sha256];
   if (readmeText === undefined) throw new Error(`${id} has no README.md`);
-  const names = [...circuit.placed.map((placed) => placed.id), ...circuit.board.own.map((part) => part.id)];
+  const names = circuit.placed.map((placed) => placed.id);
   return { item, links: linked(names), circuit, readme: readmeParagraphs(readmeText, __ORBE_SITE_INSTALL__), button: sceneHasButton(circuit) };
 }

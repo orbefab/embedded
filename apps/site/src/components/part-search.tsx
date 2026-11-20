@@ -37,14 +37,8 @@ export function PartSearch({ parts }: { parts: readonly Listed[] }) {
               className="flex h-full min-w-0 flex-col gap-1 border border-border p-4 transition-colors hover:border-brand max-sm:flex-row max-sm:items-center max-sm:justify-between max-sm:gap-3"
               href={part.href}
             >
-              <span className="min-w-0">
-                <span className="block font-medium">{part.title}</span>
-                <span className="mt-1 block text-muted-foreground text-sm">{part.match}</span>
-              </span>
-              <span className="flex shrink-0 justify-between gap-3 font-mono text-muted-foreground text-xs max-sm:flex-col max-sm:items-end sm:mt-auto">
-                <span className="break-all">{part.name}</span>
-                <span className={part.use === "in no Block yet" ? "" : "text-foreground"}>{part.use}</span>
-              </span>
+              <span className="min-w-0 font-medium">{part.title}</span>
+              {part.use === "" ? null : <span className="font-mono text-foreground text-xs sm:mt-auto">{part.use}</span>}
             </a>
           </li>
         ))}

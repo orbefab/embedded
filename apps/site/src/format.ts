@@ -1,4 +1,4 @@
-import type { Param, Source } from "./records";
+import type { Param } from "./records";
 
 const PREFIXES: readonly (readonly [number, string])[] = [
   [1e6, "M"],
@@ -22,39 +22,29 @@ export function si(value: number, unit = "1"): string {
 
 const value = (v: number | string, unit?: string) => (typeof v === "number" ? si(v, unit) : `\`${v}\``);
 
-/** What a param takes, as `orbe part` says it. */
+/** A rating's name in words: `pin_current` is "Pin current". */
+export function ratingName(name: string): string {
+  const words = name.replaceAll("_", " ").toLowerCase();
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+/** What a param takes, as the part page says it. */
 export function paramSentence(param: Param): string {
   let takes: string;
-  if (param.choices !== undefined) takes = `one of ${param.choices.map((choice) => choice.name).join(", ")}`;
-  else if (param.file !== undefined) takes = param.file === "" ? "the path of a file" : `the path of a .${param.file} file`;
-  else {
+  if (param.choices !== undefined) {
+    const names = param.choices.map((choice) => choice.name);
+    takes = names.length === 1 ? (names[0] ?? "") : `one of ${names.join(", ")}`;
+  } else if (param.file !== undefined) {
+    takes = param.file === "" ? "a file" : `.${param.file} file`;
+  } else {
     takes = param.unit === undefined || param.unit === "1" ? "a number" : `a value in ${param.unit === "ohm" ? "Ω" : param.unit}`;
     if (param.above !== undefined) takes += ` above ${si(param.above, param.unit)}`;
     if (param.below !== undefined) takes += `${param.above === undefined ? "" : " and"} below ${si(param.below, param.unit)}`;
   }
-  if (param.required) return `${takes}, required`;
+  if (param.required) return `${takes} (required)`;
   if (param.default === null) return `${takes}, not set by default`;
   if (param.default !== undefined) return `${takes}, ${value(param.default, param.unit)} by default`;
   return takes;
-}
-
-const BASIS: Readonly<Record<string, string>> = {
-  absolute_max: "absolute maximum",
-  typical: "typical",
-  nominal: "nominal",
-  min: "minimum",
-  max: "maximum",
-};
-
-/** Where a value comes from, in words. */
-export function sourceText(source: Source | undefined): string {
-  if (source === undefined) return "no source";
-  if (source === "user") return "the scene sets it";
-  if ("datasheet" in source) {
-    const { doc, at, basis } = source.datasheet;
-    return `${doc}, ${at} (${BASIS[basis] ?? basis.replaceAll("_", " ")})`;
-  }
-  return source.closed_form.note;
 }
 
 /** A byte count in B, kB or MB. */

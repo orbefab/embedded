@@ -4,7 +4,6 @@ import type { ReactNode } from "react";
 import { CopyButton } from "../components/copy-button";
 import { ThemeToggle } from "../components/theme-toggle";
 import { at, sitePath } from "../paths";
-import type { Site } from "../records";
 
 type Section = "blocks" | "parts" | "get";
 
@@ -72,15 +71,14 @@ function FooterLink({ href, children }: { href: string; children: string }) {
 
 const footerLabel = "font-mono text-[0.6875rem] text-muted-foreground uppercase tracking-[0.16em]";
 
-/** The footer both sites share. orbe pages add the catalog address. */
-export function Footer({ site, className = "mt-24" }: { site: Site; className?: string }) {
+/** The footer both sites share. */
+export function Footer({ className = "mt-24" }: { className?: string }) {
   return (
     <footer className={`${className} border-border border-t`}>
       <div className="mx-auto grid max-w-7xl grid-cols-2 gap-x-8 gap-y-8 px-6 pt-10 pb-10 md:grid-cols-[minmax(0,1.4fr)_minmax(0,0.6fr)_minmax(0,0.6fr)] md:gap-x-12">
         <div className="col-span-2 grid max-w-[34rem] content-start gap-2.5 text-[0.8125rem] text-muted-foreground md:col-span-1">
           <p className="font-mono text-foreground text-xs">© 2026 Orbefab</p>
-          <p>orbe and its catalog are open source under MIT or Apache-2.0, unless a file says otherwise. Each file lists its own license.</p>
-          <p>Maker names say which real part a model matches. Orbefab is not affiliated with or endorsed by those makers, and the models carry no logos.</p>
+          <p>Open source under MIT or Apache-2.0.</p>
         </div>
         <div>
           <p className={footerLabel}>orbe</p>
@@ -100,18 +98,12 @@ export function Footer({ site, className = "mt-24" }: { site: Site; className?: 
             <FooterLink href="https://github.com/orbefab/embedded/blob/main/LICENSE-MIT">License</FooterLink>
           </ul>
         </div>
-        <p className="col-span-full font-mono text-[0.6875rem] text-muted-foreground">
-          Catalog {site.registry} at{" "}
-          <a className="underline underline-offset-[3px] hover:text-foreground" href={at.index}>
-            {at.index}
-          </a>
-        </p>
       </div>
     </footer>
   );
 }
 
-export function Shell({ site, children, missing = false }: { site: Site; children: ReactNode; missing?: boolean }) {
+export function Shell({ children, missing = false }: { children: ReactNode; missing?: boolean }) {
   return (
     <div className="flex min-h-screen flex-col">
       <Header />
@@ -124,7 +116,7 @@ export function Shell({ site, children, missing = false }: { site: Site; childre
       >
         {children}
       </main>
-      <Footer className={missing ? "mt-auto" : "mt-24"} site={site} />
+      <Footer className={missing ? "mt-auto" : "mt-24"} />
     </div>
   );
 }
@@ -198,7 +190,3 @@ export function Table({ head, rows }: { head: readonly string[]; rows: readonly 
   );
 }
 
-/** Absent data, shown as absent and never made up. */
-export function None({ children }: { children: ReactNode }) {
-  return <p className="text-muted-foreground">{children}</p>;
-}
