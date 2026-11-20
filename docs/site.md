@@ -5,16 +5,16 @@
 | Path | What it shows |
 | --- | --- |
 | `/embedded/` | Get orbe: what it is, the three points, and the four steps. With install lines off, each step says the CLI is coming. |
-| `/embedded/parts/` | Every part as a card: its title, whether it matches a maker's number, its id, and how many Blocks place it (or which board it sits on). A search over the fields `orbe search` reads, in its order. `?q=` holds the query. |
-| `/embedded/parts/<id>/` | The part in 3D beside its install line and a short glance, the Blocks whose scenes place it and the boards it sits inside (a part can be both), its pins, params, ratings with their sources, what is not simulated, what it is built from, its docs, where to buy it with the date each link was checked, and a closed license box with every file, its size and its license. A part that names a maker says Orbefab is not affiliated with or endorsed by that maker. |
-| `/embedded/blocks/` | Every Block, with the board's name and how many parts its scene places. |
-| `/embedded/blocks/<id>/` | The Block live in 3D, or its sketch, scene and tests, on a Preview / Code toggle. The install line sits beside the toggle. Below: the README, the parts the scene places (a board's own parts folded under the board), and a closed license box with every file and its license. The part count is the scene's, the same number as the card. The test count is the number of `tests/*.test` files, which is what `orbe test` reports. |
+| `/embedded/parts/` | Every part as a card: its title, and where it is used when a Block or a board carries it. A search over the fields `orbe search` reads, in its order. `?q=` holds the query. |
+| `/embedded/parts/<id>/` | The part in 3D beside its install line and a short glance of its pins and where it is used. Below, when each has something to show: the Blocks whose scenes place it, the boards it sits inside, its pins, its settings, its ratings, what is not simulated, what it is built from, its docs, and where to buy it with the date each link was checked. A rating's source is a Datasheet link. A board's pins are names. A breadboard says that holes in a strip are connected. A closed license box lists every file and its size, and the license expression. |
+| `/embedded/blocks/` | Every Block. Each card names the board and how many parts its scene places. |
+| `/embedded/blocks/<id>/` | The Block live in 3D, or its sketch, scene and tests, on a Preview / Code toggle. The install line sits beside the toggle. Below: the README, the parts the scene places, and a closed license box with the license expression and every file. The part count is the scene's, the same number as the card. The test count is the number of `tests/*.test` files, which is what `orbe test` reports. |
 | `/embedded/blocks/<id>/embed/` | That Block's player only: the stage, its caption and Hold to press. No header or footer. `noindex`. The home frames `nano-button-led` from here. |
 | `/embedded/r/` | The registry `orbe registry build` writes, so `@orbefab`'s template is `https://orbefab.com/embedded/r/{name}.json`. |
 | `/embedded/sources/` | The AVR runtime's source archive, which every Block's `firmware/NOTICE` names. |
 | `/embedded/install.sh` | The install script, copied from `scripts/install.sh` when install lines are on. |
 
-Sparse parts render as they are. A missing summary, tag, doc or seller shows as missing, never made up.
+A section with nothing in it is left out. A missing summary is left out, never made up.
 
 ## How it builds
 
@@ -63,8 +63,8 @@ pnpm exec wrangler dev --local            # the same build, under wrangler
 
 - Get orbe says what orbe is, shows the three points and four steps, and plays no Block. With install lines off, each step says the CLI is coming. The page asks no server for data, loads every file from under `/embedded/`, and draws the wordmark in Syne from `/embedded/fonts/`. The header and footer are the ones shared with orbefab.com;
 - the parts search lists every part, and for ten queries shows the parts `orbe search --json` gives, in its order;
-- led-5mm's page draws its model, lists its five files with their licenses inside License and files, serves a download whose SHA-256 is the record's, lists the Blocks that place it, and lists DigiKey with its checked date and the not-affiliated line;
-- nano-board's page draws the board with its children and lists the Blocks that place it. The Uno is titled as a compatible board, shows `MIT OR Apache-2.0` on its `part.jsonc`, `model.py` and GLB, and links the clone schematic it is drawn from;
+- led-5mm's page draws its model, lists its five files inside License and files under the shared license expression, serves a download whose SHA-256 is the record's, lists the Blocks that place it, and lists DigiKey with its checked date;
+- nano-board's page draws the board with its children and lists the Blocks that place it. The Uno is titled as a compatible board, shows `MIT OR Apache-2.0` on the license box, lists `part.jsonc`, `model.py` and the GLB, and links the clone schematic it is drawn from;
 - every Block's page plays it in the Worker. A button lights `@led1` while it is held, the fade's LED changes brightness as it plays, and the light comparator's slider lights `@led1` in the dark and turns it off in the light. Preview and Code switch the view. The Code view lists the sketch, the scene and every file under `tests/`. nano-button-led's files show their own licenses: the image and `LICENSE-runtime` LGPL-2.1-or-later, `LICENSE-libc` BSD-3-Clause, the scene and the sketch MIT OR Apache-2.0. A card's part count is the number of parts in that Block's `scene.jsonc`. A same-page `#` link, clicked again or opened already on that hash, stays on the page and calls no server function;
 - an unknown path answers 404 with the site's page and logs no page error, and `/embeddedfoo` is not the site's;
 - a registry file answers 304 to its own ETag, a missing one answers 404 with no immutable cache, a hashed build file keeps for a year, and a record's `@` path answers 307.

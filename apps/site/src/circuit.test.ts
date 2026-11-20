@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { glanceLine, lockSentences, readCatalogUse, whereLine, type BlockCircuit, type PartUse } from "./circuit";
+import { glanceLine, readCatalogUse, whereLine, type PartUse } from "./circuit";
 import type { BlockRecord, FileEntry, Item, PartRecord } from "./records";
 
 function file(path: string, sha256: string): FileEntry {
@@ -59,8 +59,6 @@ function useOf(name: string, board: string, scene: string, parts: readonly Item<
   const { item, texts } = blockItem(name, board, scene, extra, deps);
   return readCatalogUse([item], parts, texts);
 }
-
-const placed = (ref: string, id: string): BlockCircuit["placed"][number] => ({ ref, id, values: [] });
 
 describe("readCatalogUse", () => {
   it("keeps a part that a scene places and a board carries on both lists", () => {
@@ -210,62 +208,10 @@ describe("glanceLine", () => {
     const onBoard: PartUse = { blocks: [], boards: [board] };
     expect(glanceLine(onBoard)).toEqual({ label: "on boards", value: "Nano (CH340 clone)", href: "#boards" });
     expect(whereLine(onBoard)).toBe("on the Nano (CH340 clone)");
-    expect(glanceLine({ blocks: [], boards: [] })).toEqual({ label: "used in", value: "no Block yet", href: undefined });
+    expect(glanceLine({ blocks: [], boards: [] })).toBeUndefined();
+    expect(whereLine({ blocks: [], boards: [] })).toBe("");
     expect(glanceLine({ blocks: [block("a")], boards: [] })).toEqual({ label: "used in", value: "1 Block", href: "#used" });
-    expect(glanceLine({ blocks: [], boards: [board, { ...board, id: "uno-board", title: "Uno" }] }).value).toBe("2 boards");
-  });
-});
-
-describe("lockSentences", () => {
-  function circuit(placedRows: BlockCircuit["placed"], own: readonly string[], lockCount: number, title = "Nano (CH340 clone)"): BlockCircuit {
-    return {
-      placed: placedRows,
-      board: { id: "nano-board", title, own: own.map((id) => ({ id, title: id })) },
-      lockCount,
-      tests: 1,
-      sources: [],
-    };
-  }
-
-  it("adds the repeated rows to the board's own parts", () => {
-    const rows = [
-      placed("rbot", "resistor-axial"),
-      placed("rset", "resistor-axial"),
-      placed("rhys", "resistor-axial"),
-      placed("rled", "resistor-axial"),
-      placed("bb", "breadboard-830"),
-      placed("nano", "nano-board"),
-      placed("u1", "lm358-dip8"),
-      placed("ldr", "ldr-5mm"),
-      placed("trim", "trimmer-3362p"),
-      placed("led1", "led-5mm"),
-    ];
-    const own = Array.from({ length: 14 }, (_, index) => `child-${index}`);
-    const { brings, lists } = lockSentences(circuit(rows, own, 21));
-    expect(brings).toBe("The Nano (CH340 clone) brings 14 parts of its own.");
-    expect(lists).toBe(
-      "The four resistors share one catalog part, resistor-axial, so parts.lock lists it once. With the Nano's own 14, it lists 21.",
-    );
-  });
-
-  it("states the count when every row is its own part", () => {
-    const { brings, lists } = lockSentences(circuit([placed("a", "a"), placed("b", "b")], ["c", "d", "e"], 5, "Board"));
-    expect(brings).toBe("The Board brings 3 parts of its own.");
-    expect(lists).toBe("With the 2 parts above, parts.lock lists 5.");
-  });
-
-  it("says when a row is already one of the board's parts", () => {
-    const { lists } = lockSentences(circuit([placed("nano", "nano-board"), placed("led", "led-0603")], ["led-0603", "cap", "resistor"], 4));
-    expect(lists).toBe("With the 2 parts above, parts.lock lists 4. One catalog part is already on the board.");
-  });
-
-  it("names every repeated part and still states a lock the rows do not add up to", () => {
-    const rows = [placed("a1", "aaa"), placed("a2", "aaa"), placed("a3", "aaa"), placed("a4", "aaa"), placed("b1", "bbb"), placed("b2", "bbb"), placed("c", "ccc")];
-    expect(lockSentences(circuit(rows, [], 3)).lists).toBe(
-      "The four aaas share one catalog part, aaa, and the two bbbs share one catalog part, bbb, so parts.lock lists 3.",
-    );
-    expect(lockSentences(circuit(rows, [], 99)).lists).toBe(
-      "The four aaas share one catalog part, aaa, and the two bbbs share one catalog part, bbb. parts.lock lists 99.",
-    );
+    const many = glanceLine({ blocks: [], boards: [board, { ...board, id: "uno-board", title: "Uno" }] });
+    expect(many?.value).toBe("2 boards");
   });
 });

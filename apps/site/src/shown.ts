@@ -88,26 +88,25 @@ function pickedValues(record: PartRecord): Map<string, Picked> {
   return picked;
 }
 
-function drawnParams(part: SceneMessage["parts"][string] | undefined): Set<string> {
+function recolourParams(part: SceneMessage["parts"][string] | undefined): Set<string> {
   const names = new Set<string>();
-  for (const entry of part?.view?.tint ?? []) if (typeof entry.by === "string") names.add(entry.by);
   for (const entry of part?.view?.recolour ?? []) if (typeof entry.by === "string") names.add(entry.by);
   return names;
 }
 
-/** Writes each picked value onto the part page's one instance. The sentence names the values
- * the view actually draws, such as a resistor's bands or an LED's tint. */
+/** Writes each picked value onto the part page's one instance. The sentence names a resistor
+ * value the view draws. A color is drawn and not named. */
 export function supplyPartScene(sceneText: string, record: PartRecord): { scene: string; shown?: string } {
   const scene = JSON.parse(sceneText) as SceneMessage;
   const root = scene.instances[0];
   if (root === undefined) throw new Error(`${record.name}: the part scene has no instance`);
   root.params ??= {};
-  const drawn = drawnParams(scene.parts[root.part]);
+  const named = recolourParams(scene.parts[root.part]);
   const labels: string[] = [];
   for (const [name, value] of pickedValues(record)) {
     if (!needsValue(record, name) || root.params[name] !== undefined) continue;
     root.params[name] = value.raw;
-    if (drawn.has(name)) labels.push(value.label);
+    if (named.has(name)) labels.push(value.label);
   }
   return { scene: JSON.stringify(scene), shown: labels.length === 0 ? undefined : `Shown at ${labels.join(" and ")}.` };
 }

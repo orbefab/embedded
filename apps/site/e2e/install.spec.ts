@@ -28,6 +28,16 @@ test("the start page shows each command and the Block's scene", async ({ browser
   ]);
   await expect(page.getByTestId("scene-file")).toContainText("breadboard-400");
   await expect(page.getByTestId("cli-coming")).toHaveCount(0);
+  const body = await page.locator("main").innerText();
+  expect(body).toContain("For Linux x86_64 and macOS arm64.");
+  expect(body).toContain("Run this once so your agent knows how to use orbe.");
+  expect(body).toContain("A Block is a small circuit that works: a scene file, its firmware and its tests. In an empty folder, orbe add copies one in.");
+  expect(body).toContain("The scene file describes the circuit:");
+  expect(body).toContain("Runs the firmware and the Block's tests.");
+  expect(body).toContain("Boards:");
+  expect(body).not.toContain("Boards today:");
+  expect(body).not.toContain("parts.lock");
+  expect(body).not.toContain("releases page");
   await context.close();
 });
 
@@ -106,7 +116,7 @@ test("Copy selects the command when the write is refused", async ({ browser, hos
   await context.close();
 });
 
-test("the New to orbe hash stays on the page when clicked twice", async ({ browser, host }) => {
+test("a same-page hash stays on the page when clicked twice", async ({ browser, host }) => {
   const context = await browser.newContext();
   const page = await context.newPage();
   const urls: string[] = [];
@@ -115,16 +125,14 @@ test("the New to orbe hash stays on the page when clicked twice", async ({ brows
     if (/_serverFn|__tsr\//.test(request.url())) urls.push(request.url());
   });
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+  await page.goto(`${host.base}/embedded/parts/led-5mm/`);
   await page.waitForFunction(() => {
     for (const node of document.querySelectorAll("body *")) {
       if (Object.keys(node).some((key) => key.startsWith("__reactFiber") || key.startsWith("__reactContainer"))) return true;
     }
     return false;
   });
-  const details = page.locator("details", { hasText: "New to orbe?" });
-  await details.locator("summary").click();
-  const link = details.locator('a[href="#files"]');
+  const link = page.locator('main a[href="#used"]');
   const title = await page.locator("h1").innerText();
   await link.click();
   await link.click();
@@ -132,6 +140,18 @@ test("the New to orbe hash stays on the page when clicked twice", async ({ brows
   expect(errors, JSON.stringify(errors)).toEqual([]);
   await expect(page.locator("h1")).toHaveText(title);
   await expect(page.locator("body")).not.toContainText("Something went wrong");
-  await expect(page.locator("#files")).toHaveJSProperty("open", true);
+  await expect(page.locator("#used")).toBeVisible();
+  await context.close();
+});
+
+test("a Block page keeps the install line and the short code note", async ({ browser, host }) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+  await expect(page.locator('[data-testid="install"]')).toContainText("orbe add nano-button-led");
+  await expect(page.getByText("New to orbe?")).toHaveCount(0);
+  await page.locator('[data-testid="view-code"]').click();
+  await expect(page.locator('[data-testid="view-code-panel"]')).toContainText("orbe add writes these files.");
+  await expect(page.locator('[data-testid="view-code-panel"]')).not.toContainText("REUSE.toml");
   await context.close();
 });

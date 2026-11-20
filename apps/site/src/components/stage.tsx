@@ -55,7 +55,7 @@ export function Stage({
     >
       {webgl === false ? (
         <p className="absolute inset-0 grid place-items-center px-6 text-center text-sm" data-testid="no-webgl">
-          This browser has no WebGL, so this view stays blank.
+          Your browser can't show 3D here.
         </p>
       ) : (
         <>

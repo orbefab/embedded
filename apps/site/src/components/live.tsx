@@ -99,17 +99,17 @@ function stillSource(scene: SceneMessage): SessionSource {
 /** One part on its own, from the scene message the build wrote with orbe-wasm's `partScene`. */
 export function PartView({ url }: { url: string }) {
   const [source, setSource] = useState<SessionSource | null>(null);
-  const [failed, setFailed] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
     let current = true;
     fetch(url)
-      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`${url} answered ${response.status}`))))
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error("load"))))
       .then((scene: SceneMessage) => current && setSource(stillSource(scene)))
-      .catch((error: unknown) => current && setFailed(error instanceof Error ? error.message : String(error)));
+      .catch(() => current && setFailed(true));
     return () => {
       current = false;
     };
   }, [url]);
-  if (failed !== null) return <p className="p-6 font-mono text-destructive text-sm">The model did not load: {failed}</p>;
+  if (failed) return <p className="p-6 font-mono text-destructive text-sm">The 3D model could not load.</p>;
   return source === null ? null : <Viewer onCreated={expose} pageScroll source={source} />;
 }

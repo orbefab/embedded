@@ -58,7 +58,7 @@ fn the_schemas_refuse_what_the_contract_forbids_and_allow_new_fields() {
     let items = validator(&registry.output, ITEM_SCHEMA);
     let index = validator(&registry.output, INDEX_SCHEMA);
     let led = record(&registry.output, "led-5mm@0.1.0");
-    let block = record(&registry.output, "nano-button-led@0.1.0");
+    let block = record(&registry.output, "nano-button-led@0.1.1");
     let row: Value = serde_json::from_slice::<Value>(&registry.output["index.json"]).unwrap();
 
     let mutated = |base: &Value, pointer: &str, value: Value| {

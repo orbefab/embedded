@@ -59,7 +59,7 @@ function Boards({ boards }: { boards: readonly Linked[] }) {
   const sorted = [...boards].sort((a, b) => a.title.localeCompare(b.title));
   return (
     <p className="mt-8 text-muted-foreground">
-      Boards today:{" "}
+      Boards:{" "}
       {sorted.map((board, index) => (
         <span key={board.href}>
           {index === 0 ? "" : index === sorted.length - 1 ? " and " : ", "}
@@ -117,16 +117,7 @@ export function HomePage({ home }: { home: Home }) {
           {__ORBE_SITE_INSTALL__ ? (
             <Install
               lines={["curl -fsSL https://orbefab.com/embedded/install.sh | sh"]}
-              note={
-                <>
-                  The script installs a prebuilt <code className="font-mono">orbe</code> with the viewer, for Linux x86_64 and macOS arm64, into ~/.local/bin.
-                  The archives are on the{" "}
-                  <a className="underline hover:text-foreground" href="https://github.com/orbefab/embedded/releases">
-                    releases page
-                  </a>
-                  .
-                </>
-              }
+              note="For Linux x86_64 and macOS arm64."
             />
           ) : (
             <CliComing />
@@ -136,7 +127,7 @@ export function HomePage({ home }: { home: Home }) {
           {__ORBE_SITE_INSTALL__ ? (
             <>
               <Install lines={["orbe skills get core"]} />
-              <p className="text-muted-foreground">It prints how an agent uses orbe. Your agent can run it, or you can read it first.</p>
+              <p className="text-muted-foreground">Run this once so your agent knows how to use orbe.</p>
             </>
           ) : (
             <CliComing />
@@ -150,11 +141,7 @@ export function HomePage({ home }: { home: Home }) {
                 copies one in.
               </p>
               <Install lines={["orbe add nano-led-fade"]} />
-              <p className="text-muted-foreground text-sm">
-                It copies the parts into <code className="font-mono">parts/</code>, records them in <code className="font-mono">parts.lock</code>, then writes{" "}
-                <code className="font-mono">scene.jsonc</code>, <code className="font-mono">firmware/</code> and <code className="font-mono">tests/</code>. The
-                scene file describes the circuit:
-              </p>
+              <p className="text-muted-foreground text-sm">The scene file describes the circuit:</p>
               <SceneFile text={home.scene} />
             </>
           ) : (
@@ -166,10 +153,7 @@ export function HomePage({ home }: { home: Home }) {
             <>
               <Install lines={["orbe check scene.jsonc"]} />
               <Install lines={["orbe test"]} />
-              <p className="text-muted-foreground">
-                orbe flashes the real firmware onto the simulated Nano and runs the Block&apos;s tests, headless. Your agent can run the same two commands after
-                each change.
-              </p>
+              <p className="text-muted-foreground">Runs the firmware and the Block&apos;s tests.</p>
             </>
           ) : (
             <CliComing />
@@ -195,21 +179,26 @@ export function HomePage({ home }: { home: Home }) {
 }
 
 export function NotFoundPage() {
+  const link = "text-foreground underline decoration-input underline-offset-[3px] hover:text-brand hover:decoration-brand";
   return (
     <>
       <div className="flex items-center gap-4">
         <p className="font-mono text-[0.625rem] text-brand uppercase tracking-[0.22em]">404 NOT FOUND</p>
         <span className="h-px max-w-24 flex-1 bg-border" />
       </div>
-      <h1 className="mt-6 font-display font-normal text-[clamp(2.75rem,8vw,5.5rem)] leading-[0.98] tracking-[-0.04em]">Nothing moves here.</h1>
+      <h1 className="mt-6 font-display font-normal text-[clamp(2.75rem,8vw,5.5rem)] leading-[0.98] tracking-[-0.04em]">Page not found.</h1>
       <p className="mt-5 max-w-xl text-lg text-muted-foreground">
-        Try the{" "}
-        <a className="text-foreground underline decoration-input underline-offset-[3px] hover:text-brand hover:decoration-brand" href={at.parts}>
-          parts
+        Try{" "}
+        <a className={link} href={at.home}>
+          Get orbe
+        </a>
+        ,{" "}
+        <a className={link} href={at.blocks}>
+          the Blocks
         </a>{" "}
-        or the{" "}
-        <a className="text-foreground underline decoration-input underline-offset-[3px] hover:text-brand hover:decoration-brand" href={at.blocks}>
-          Blocks
+        or{" "}
+        <a className={link} href={at.parts}>
+          the parts
         </a>
         .
       </p>

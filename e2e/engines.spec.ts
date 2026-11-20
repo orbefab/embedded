@@ -94,7 +94,7 @@ test("a Block page draws in WebKit", async ({ page }, info) => {
     return;
   }
   expect(info.project.name).toBe("firefox");
-  await expect(page.getByTestId("no-webgl")).toHaveText("This browser has no WebGL, so this view stays blank.");
+  await expect(page.getByTestId("no-webgl")).toHaveText("Your browser can't show 3D here.");
   await expect(page.getByTestId("block-caption")).toHaveCount(0);
   await expect(page.getByTestId("hold-to-press")).toHaveCount(0);
   expect(errors, JSON.stringify(errors)).toEqual([]);

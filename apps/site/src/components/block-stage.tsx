@@ -5,7 +5,7 @@ import { at } from "../paths";
 import { CopyButton } from "./copy-button";
 
 /** Preview shows the live player. Code shows the sketch, scene and test. Both are in the HTML,
- * so a reader that does not run the toggle still has the files. A link to `#files` opens the
+ * so a reader that does not run the toggle still has the files. Opening `#files` opens the
  * license box. */
 export function BlockStage({
   sources,
@@ -22,19 +22,9 @@ export function BlockStage({
     const open = () => {
       if (window.location.hash === "#files") document.getElementById("files")?.setAttribute("open", "");
     };
-    const onClick = (event: MouseEvent) => {
-      const target = event.target;
-      if (!(target instanceof Element)) return;
-      if (target.closest("a[href='#files']") === null) return;
-      document.getElementById("files")?.setAttribute("open", "");
-    };
     open();
     window.addEventListener("hashchange", open);
-    document.addEventListener("click", onClick);
-    return () => {
-      window.removeEventListener("hashchange", open);
-      document.removeEventListener("click", onClick);
-    };
+    return () => window.removeEventListener("hashchange", open);
   }, []);
   const groups: SourceFile["group"][] = [];
   for (const source of sources) if (!groups.includes(source.group)) groups.push(source.group);
@@ -98,9 +88,7 @@ export function BlockStage({
                     <div className="flex flex-wrap items-center justify-between gap-2 border-border border-b px-3 py-2 font-mono text-xs">
                       <span className="min-w-0">
                         <span className="break-all">{source.path}</span>{" "}
-                        <span className="text-muted-foreground">
-                          {size(source.bytes)}, {source.license}
-                        </span>
+                        <span className="text-muted-foreground">{size(source.bytes)}</span>
                       </span>
                       <span className="flex items-center gap-3">
                         <CopyButton text={source.text} />
@@ -118,20 +106,10 @@ export function BlockStage({
           <p className="mt-3 text-muted-foreground text-sm">
             {__ORBE_SITE_INSTALL__ ? (
               <>
-                <code className="font-mono">orbe add</code> writes these files, plus the README, REUSE.toml, the firmware image and{" "}
-                <a className="underline hover:text-foreground" href="#files">
-                  its licenses
-                </a>
-                .
+                <code className="font-mono">orbe add</code> writes these files.
               </>
             ) : (
-              <>
-                Sketch, scene and tests. The firmware image and its licenses are under{" "}
-                <a className="underline hover:text-foreground" href="#files">
-                  License and files
-                </a>
-                .
-              </>
+              "Sketch, scene and tests."
             )}
           </p>
         </div>

@@ -1,6 +1,5 @@
 import { createRootRoute, HeadContent, Outlet, Scripts, useRouterState } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { getSite } from "../data";
 import { NotFoundPage } from "../pages/home";
 import { Shell } from "../pages/layout";
 import { at, sitePath } from "../paths";
@@ -11,7 +10,6 @@ import { THEME_INIT } from "../theme";
 const isEmbed = (pathname: string) => /^\/blocks\/[^/]+\/embed\/?$/.test(sitePath(pathname));
 
 export const Route = createRootRoute({
-  loader: () => getSite(),
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -37,7 +35,7 @@ function RootView() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   if (isEmbed(pathname)) return <Outlet />;
   return (
-    <Shell missing={/^\/404\/?$/.test(sitePath(pathname))} site={Route.useLoaderData()}>
+    <Shell missing={/^\/404\/?$/.test(sitePath(pathname))}>
       <Outlet />
     </Shell>
   );
