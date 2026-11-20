@@ -16,6 +16,8 @@ import { Color } from "three";
 import type { BuiltScene } from "./build";
 import type { CameraMode } from "./camera-frame";
 import { createHoverStore, type HoverStore } from "./hover";
+import { cycleLook, useLook } from "./look";
+import { isDark, stageColours } from "./look-stage";
 import type { Command, FrameMessage, FrameState, Reply, SceneMessage, WorldName, WorldQuantity } from "./protocol";
 import { SceneView } from "./scene-view";
 import { useStageTheme } from "./stage-theme";
@@ -451,7 +453,10 @@ const hintStyle = {
 /** Draws the session's scene and its frames, and sends presses, `set`, `play` and `pause` back. `T`
  * toggles the top view. */
 export function Viewer({ source, onCreated, pageScroll = false }: ViewerProps) {
-  const stage = useStageTheme();
+  const page = useStageTheme();
+  const look = useLook();
+  const stage = useMemo(() => stageColours(look, page, isDark(page.background)), [look, page]);
+  const [lookShown, setLookShown] = useState(false);
   const box = useRef<HTMLDivElement>(null);
   const [hint, setHint] = useState<string | null>(null);
   const [scene, setScene] = useState<SceneMessage | null>(null);
@@ -502,6 +507,10 @@ export function Viewer({ source, onCreated, pageScroll = false }: ViewerProps) {
     const onKey = (event: KeyboardEvent) => {
       if (event.target instanceof HTMLInputElement) return;
       if (event.key === "t" || event.key === "T") setMode((current) => (current === "top" ? "tilted" : "top"));
+      if (event.key === "l" || event.key === "L") {
+        cycleLook();
+        setLookShown(true);
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -578,16 +587,13 @@ export function Viewer({ source, onCreated, pageScroll = false }: ViewerProps) {
       <ShowError>
         <Canvas dpr={[1, 1.75]} gl={{ antialias: true, alpha: false }} onCreated={onCreated}>
           <StageBackdrop color={stage.background} />
-          <hemisphereLight args={["#e6ebf2", "#2a2c30", 0.9]} />
-          <ambientLight intensity={0.25} />
-          <directionalLight intensity={1.35} position={[40, 90, 24]} />
           {scene === null ? null : (
             <Suspense fallback={null}>
               <SceneView
+                colours={stage}
                 frame={frame}
                 hover={hover}
-                line={stage.line}
-                mat={stage.mat}
+                look={look}
                 mode={mode}
                 onBuilt={onBuilt}
                 pageScroll={pageScroll}
@@ -627,6 +633,11 @@ export function Viewer({ source, onCreated, pageScroll = false }: ViewerProps) {
         </div>
       )}
       <HoverLabel hover={hover} />
+      {lookShown ? (
+        <div data-testid="look" style={{ ...hintStyle, left: "auto", right: 12, bottom: 12, transform: "none" }}>
+          look: {look.label} (L for the next)
+        </div>
+      ) : null}
       {hint === null ? null : (
         <div data-testid="gesture-hint" style={hintStyle}>
           {hint}

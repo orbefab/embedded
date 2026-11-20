@@ -1,86 +1,47 @@
 // Adapted from maker-sandbox (MIT, Copyright 2026 Alwurts).
 import { type ThreeEvent, useFrame, useLoader, useThree } from "@react-three/fiber";
-import { Bloom, EffectComposer, Outline } from "@react-three/postprocessing";
-import { type RefObject, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { CanvasTexture, type Group, Mesh, type Object3D, RepeatWrapping, SRGBColorSpace } from "three";
+import { type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { Box3, type Group, type Material, Mesh, type Object3D } from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { type BuiltScene, buildScene, fromGltf, type Tag, tagOf } from "./build";
-import { type CameraMode, union } from "./camera-frame";
+import type { CameraMode } from "./camera-frame";
 import { CameraRig } from "./camera-rig";
 import { glowIntensity, litColour } from "./glow";
 import type { Hovered, HoverStore } from "./hover";
+import type { Look } from "./look";
+import { type Applied, applyLook, createKit, DecorCache } from "./look-materials";
+import { isDark, LookEffects, LookLights, LookMat, roomTexture, type StageColours } from "./look-stage";
 import type { Command, FrameMessage, Ref, SceneMessage, Vec3 } from "./protocol";
 import { holeAt, instanceAt, refOf, stripText } from "./refs";
 import type { Box } from "./wire-geometry";
 import { WireMesh } from "./wire-mesh";
 
-const MAT_CELL_MM = 10;
-
-function matTexture(fill: string, line: string): CanvasTexture {
-  const canvas = document.createElement("canvas");
-  canvas.width = 64;
-  canvas.height = 64;
-  const context = canvas.getContext("2d");
-  if (context !== null) {
-    context.fillStyle = fill;
-    context.fillRect(0, 0, 64, 64);
-    context.strokeStyle = line;
-    context.strokeRect(0.5, 0.5, 63, 63);
-  }
-  const texture = new CanvasTexture(canvas);
-  texture.wrapS = RepeatWrapping;
-  texture.wrapT = RepeatWrapping;
-  texture.colorSpace = SRGBColorSpace;
-  return texture;
-}
-
-/** A cutting mat just under the lowest lead or wire. */
-function Mat({ boxes, fill, line }: { boxes: readonly Box[]; fill: string; line: string }) {
-  const box = useMemo(() => union(boxes), [boxes]);
-  const width = Math.max(240, (box.max[0] - box.min[0]) * 2);
-  const depth = Math.max(160, (box.max[2] - box.min[2]) * 2);
-  const texture = useMemo(() => {
-    const made = matTexture(fill, line);
-    made.repeat.set(width / MAT_CELL_MM, depth / MAT_CELL_MM);
-    return made;
-  }, [width, depth, fill, line]);
-  useEffect(() => () => texture.dispose(), [texture]);
-  return (
-    <mesh
-      name="stage-mat"
-      position={[(box.min[0] + box.max[0]) / 2, box.min[1] - 0.5, (box.min[2] + box.max[2]) / 2]}
-      rotation={[-Math.PI / 2, 0, 0]}
-    >
-      <planeGeometry args={[width, depth]} />
-      <meshStandardMaterial map={texture} roughness={1} />
-    </mesh>
-  );
-}
-
-function Effects({ hover }: { hover: HoverStore }) {
+/** The meshes under the hovered object, for its outline. */
+function useSelection(hover: HoverStore): Object3D[] {
   const hovered = useSyncExternalStore(hover.subscribe, hover.get);
   const target = hovered?.object;
-  const selection = useMemo(() => {
+  return useMemo(() => {
     const meshes: Object3D[] = [];
     target?.traverse((object) => {
-      if (object instanceof Mesh) meshes.push(object);
+      if (object instanceof Mesh && object.userData.lookDecor !== true) meshes.push(object);
     });
     return meshes;
   }, [target]);
-  return (
-    <EffectComposer autoClear={false} multisampling={0}>
-      <Bloom intensity={1.2} luminanceSmoothing={0.2} luminanceThreshold={1} mipmapBlur />
-      <Outline
-        blur
-        edgeStrength={6}
-        hiddenEdgeColor="#7dff67"
-        pulseSpeed={0}
-        selection={selection}
-        visibleEdgeColor="#7dff67"
-        xRay
-      />
-    </EffectComposer>
-  );
+}
+
+/** One box per drawn mesh, and one per wire, in the viewer's world. */
+function drawnBoxes(built: BuiltScene): Box[] {
+  const boxes: Box[] = [];
+  const box = new Box3();
+  built.root.updateMatrixWorld(true);
+  built.root.traverse((object) => {
+    if (!(object instanceof Mesh) || object.userData.lookDecor === true) return;
+    object.geometry.boundingBox ?? object.geometry.computeBoundingBox();
+    if (object.geometry.boundingBox === null) return;
+    box.copy(object.geometry.boundingBox).applyMatrix4(object.matrixWorld);
+    boxes.push({ min: box.min.toArray(), max: box.max.toArray() });
+  });
+  return [...boxes, ...built.boxes.slice(built.boxes.length - built.wires.length)];
 }
 
 /** The nearest object at or above `object` whose tag passes `test`. */
@@ -142,8 +103,8 @@ export function SceneView({
   hover,
   mode,
   onBuilt,
-  mat,
-  line,
+  look,
+  colours,
   pageScroll = false,
 }: {
   scene: SceneMessage;
@@ -152,9 +113,9 @@ export function SceneView({
   hover: HoverStore;
   mode: CameraMode;
   onBuilt: (built: BuiltScene) => void;
-  /** Cutting-mat fill and grid line. Without theme tokens these are the viewer's own dark colours. */
-  mat: string;
-  line: string;
+  look: Look;
+  /** The stage's background, mat fill and grid line, in the look's colours. */
+  colours: StageColours;
   /** One finger scrolls the page. Two fingers orbit and zoom. */
   pageScroll?: boolean;
 }) {
@@ -176,13 +137,32 @@ export function SceneView({
   }, [gltfs, scene, urls]);
   useEffect(() => onBuilt(built), [built, onBuilt]);
 
-  useFrame(() => {
+  const dark = isDark(colours.background);
+  const gl = useThree((state) => state.gl);
+  const kit = useMemo(() => createKit(look, dark, look.environment > 0 ? roomTexture(gl) : null), [look, dark, gl]);
+  useEffect(() => () => kit.dispose(), [kit]);
+  const decor = useMemo(() => new DecorCache(), [built]);
+  useEffect(() => () => decor.dispose(), [decor]);
+  const applied = useRef<Applied | null>(null);
+  useLayoutEffect(() => {
+    const glows = new Set<Material>(built.glows.map((glow) => glow.material));
+    const next = applyLook(built.root, kit, glows, decor);
+    applied.current = next;
+    return () => {
+      next.dispose();
+      if (applied.current === next) applied.current = null;
+    };
+  }, [built, kit, decor]);
+
+  useFrame((state) => {
     const live = frame.current;
     for (const glow of built.glows) {
       const intensity = glowIntensity(live?.led_a[glow.channel] ?? 0, glow.full);
       glow.material.emissiveIntensity = intensity;
       litColour(glow.base, intensity, glow.material.color);
     }
+    applied.current?.sync();
+    kit.setResolution(state.size.width, state.size.height, state.viewport.dpr);
     for (const slide of built.slides) {
       slide.node.position.copy(slide.rest);
       if (live?.switches[slide.channel] === 1) slide.node.position.add(slide.delta);
@@ -250,9 +230,14 @@ export function SceneView({
     hover.set(hole ?? { ref: found.tag.ref, why: found.tag.why, error: found.tag.error, ...at });
   };
 
+  const selection = useSelection(hover);
+  // `current` frames each part's box. The other looks frame what is drawn: each mesh's own box,
+  // so a tall part's empty corners do not push the camera back.
+  const frameBoxes = useMemo(() => (look.name === "current" ? built.boxes : drawnBoxes(built)), [built, look.name]);
   return (
     <>
-      <CameraRig boxes={built.boxes} mode={mode} pageScroll={pageScroll} />
+      <CameraRig boxes={frameBoxes} mode={mode} pageScroll={pageScroll} style={look.camera} />
+      <LookLights boxes={built.boxes} dark={dark} look={look} />
       <primitive
         object={built.root}
         onPointerDown={press}
@@ -260,10 +245,10 @@ export function SceneView({
         onPointerOut={() => hover.set(null)}
       />
       {built.wires.map((wire, index) => (
-        <WireMesh key={index} wire={wire} />
+        <WireMesh key={index} kit={kit} wire={wire} />
       ))}
-      <Mat boxes={built.boxes} fill={mat} line={line} />
-      <Effects hover={hover} />
+      <LookMat boxes={built.boxes} colours={colours} look={look} />
+      <LookEffects dark={dark} look={look} selection={selection} />
     </>
   );
 }

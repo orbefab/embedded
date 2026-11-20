@@ -7,9 +7,10 @@ import { useEffect } from "react";
 import { MOUSE, OrthographicCamera as OrthoImpl, TOUCH } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three/addons/controls/OrbitControls.js";
 import {
-  CAMERA_FOV_DEG,
   type CameraMode,
+  type CameraStyle,
   cameraPosition,
+  DEFAULT_CAMERA,
   frameView,
   MIN_DISTANCE_MM,
   TOP_VIEW_ZOOM,
@@ -50,24 +51,34 @@ const TOP_UP = [0, 0, -1] as const;
 /** Orbit in 3D, or pan and zoom straight down in the top view. Each mode, and each new
  * scene, starts framed on `boxes`. With `pageScroll`, one finger scrolls the page and two
  * fingers orbit and zoom (or pan and zoom, in the top view). */
-export function CameraRig({ mode, boxes, pageScroll = false }: { mode: CameraMode; boxes: readonly Box[]; pageScroll?: boolean }) {
+export function CameraRig({
+  mode,
+  boxes,
+  pageScroll = false,
+  style = DEFAULT_CAMERA,
+}: {
+  mode: CameraMode;
+  boxes: readonly Box[];
+  pageScroll?: boolean;
+  style?: CameraStyle;
+}) {
   const camera = useThree((state) => state.camera);
   const controls = useThree((state) => state.controls) as OrbitControlsImpl | null;
   const get = useThree((state) => state.get);
-  const [ox, oy, oz] = tiltedOffset();
+  const [ox, oy, oz] = tiltedOffset(style);
 
   useEffect(() => {
     if (controls === null) return;
     const { size } = get();
-    const view = frameView(mode, boxes, size);
-    const [px, py, pz] = cameraPosition(view);
+    const view = frameView(mode, boxes, size, style);
+    const [px, py, pz] = cameraPosition(view, style);
     camera.position.set(px, py, pz);
     if (camera instanceof OrthoImpl && view.mode === "top") camera.zoom = view.zoom;
     camera.updateProjectionMatrix();
     if (view.mode === "tilted") controls.maxDistance = view.distance * 4;
     controls.target.set(...view.target);
     controls.update();
-  }, [boxes, camera, controls, get, mode]);
+  }, [boxes, camera, controls, get, mode, style]);
 
   useEffect(() => {
     if (!pageScroll || controls === null || !(controls.domElement instanceof HTMLElement)) return;
@@ -86,7 +97,7 @@ export function CameraRig({ mode, boxes, pageScroll = false }: { mode: CameraMod
           zoom={TOP_VIEW_ZOOM}
         />
       ) : (
-        <PerspectiveCamera far={4000} fov={CAMERA_FOV_DEG} makeDefault near={0.1} position={[ox, oy, oz]} />
+        <PerspectiveCamera far={4000} fov={style.fovDeg} makeDefault near={0.1} position={[ox, oy, oz]} />
       )}
       <OrbitControls
         dampingFactor={0.12}

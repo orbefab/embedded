@@ -11,10 +11,28 @@ const CAMERA_TILT_DEG = 25;
 const CAMERA_DISTANCE_MM = 110;
 const FRAME_INSET_PX = 56;
 const MIN_FRAME_MM = 60;
-
-const TILT = (CAMERA_TILT_DEG * Math.PI) / 180;
-const AZIMUTH = (35 * Math.PI) / 180;
 const TOP_CAMERA_Y = 400;
+
+/** How the tilted camera looks at a scene. */
+export interface CameraStyle {
+  /** Vertical field of view. */
+  readonly fovDeg: number;
+  /** The angle from straight down. */
+  readonly tiltDeg: number;
+  /** The turn about the vertical, from +Z toward +X. */
+  readonly azimuthDeg: number;
+  /** The narrowest span the view frames, so a lone part keeps room around it. */
+  readonly minFrameMm: number;
+}
+
+export const DEFAULT_CAMERA: CameraStyle = {
+  fovDeg: CAMERA_FOV_DEG,
+  tiltDeg: CAMERA_TILT_DEG,
+  azimuthDeg: 35,
+  minFrameMm: MIN_FRAME_MM,
+};
+
+const radians = (deg: number) => (deg * Math.PI) / 180;
 
 export type CameraMode = "tilted" | "top";
 
@@ -33,8 +51,10 @@ interface Basis {
   readonly up: Vec3;
 }
 
-function basis(): Basis {
-  const back: Vec3 = [Math.sin(TILT) * Math.sin(AZIMUTH), Math.cos(TILT), Math.sin(TILT) * Math.cos(AZIMUTH)];
+function basis(style: CameraStyle): Basis {
+  const tilt = radians(style.tiltDeg);
+  const azimuth = radians(style.azimuthDeg);
+  const back: Vec3 = [Math.sin(tilt) * Math.sin(azimuth), Math.cos(tilt), Math.sin(tilt) * Math.cos(azimuth)];
   const raw: Vec3 = [back[2], 0, -back[0]];
   const length = Math.hypot(raw[0], raw[1], raw[2]);
   const right: Vec3 = [raw[0] / length, raw[1] / length, raw[2] / length];
@@ -62,20 +82,22 @@ function corners(box: Box): Vec3[] {
   return points;
 }
 
-export function tiltedOffset(): Vec3 {
-  const horizontal = CAMERA_DISTANCE_MM * Math.sin(TILT);
-  return [horizontal * Math.sin(AZIMUTH), CAMERA_DISTANCE_MM * Math.cos(TILT), horizontal * Math.cos(AZIMUTH)];
+export function tiltedOffset(style: CameraStyle = DEFAULT_CAMERA): Vec3 {
+  const tilt = radians(style.tiltDeg);
+  const azimuth = radians(style.azimuthDeg);
+  const horizontal = CAMERA_DISTANCE_MM * Math.sin(tilt);
+  return [horizontal * Math.sin(azimuth), CAMERA_DISTANCE_MM * Math.cos(tilt), horizontal * Math.cos(azimuth)];
 }
 
 function usableSpan(length: number): number {
   return Math.max(length - 2 * FRAME_INSET_PX, length / 2);
 }
 
-export function cameraPosition(view: CameraView): Vec3 {
+export function cameraPosition(view: CameraView, style: CameraStyle = DEFAULT_CAMERA): Vec3 {
   if (view.mode === "top") {
     return [view.target[0], TOP_CAMERA_Y, view.target[2]];
   }
-  const { back } = basis();
+  const { back } = basis(style);
   return [
     view.target[0] + back[0] * view.distance,
     view.target[1] + back[1] * view.distance,
@@ -93,12 +115,17 @@ export function union(boxes: readonly Box[]): Box {
   };
 }
 
-export function frameView(mode: CameraMode, boxes: readonly Box[], viewport: Viewport): CameraView {
+export function frameView(
+  mode: CameraMode,
+  boxes: readonly Box[],
+  viewport: Viewport,
+  style: CameraStyle = DEFAULT_CAMERA
+): CameraView {
   const points = boxes.flatMap(corners);
   const all = union(boxes);
   // A lone LED would otherwise fill the screen. Keep some room around it.
-  const padX = Math.max(0, MIN_FRAME_MM - (all.max[0] - all.min[0])) / 2;
-  const padZ = Math.max(0, MIN_FRAME_MM - (all.max[2] - all.min[2])) / 2;
+  const padX = Math.max(0, style.minFrameMm - (all.max[0] - all.min[0])) / 2;
+  const padZ = Math.max(0, style.minFrameMm - (all.max[2] - all.min[2])) / 2;
   const min: Vec3 = [all.min[0] - padX, all.min[1], all.min[2] - padZ];
   const max: Vec3 = [all.max[0] + padX, all.max[1], all.max[2] + padZ];
   const target: Vec3 = [(min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2];
@@ -109,8 +136,8 @@ export function frameView(mode: CameraMode, boxes: readonly Box[], viewport: Vie
     const spanZ = Math.max(max[2] - min[2], 1);
     return { mode: "top", target, zoom: Math.min(usableW / spanX, usableH / spanZ) };
   }
-  const { back, right, up } = basis();
-  const tanHalf = Math.tan((CAMERA_FOV_DEG * Math.PI) / 180 / 2);
+  const { back, right, up } = basis(style);
+  const tanHalf = Math.tan(radians(style.fovDeg) / 2);
   const height = Math.max(viewport.height, 1);
   const tanV = tanHalf * (usableH / height);
   const tanH = tanHalf * (usableW / height);
