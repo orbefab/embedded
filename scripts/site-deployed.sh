@@ -83,7 +83,7 @@ part_ok() {
   grep -q 'led-5mm' "$work/led.html" || return 1
   record=$(find "$dist/r" -maxdepth 1 -name 'led-5mm@*.json' -print -quit)
   [[ -n $record ]] || return 1
-  sha=$(node -e 'const record = require(process.argv[1]); const file = record.files && record.files[0]; if (!file) process.exit(1); process.stdout.write(file.sha256)' "$record") || return 1
+  sha=$(node -e 'const record = require(require("node:path").resolve(process.argv[1])); const file = record.files && record.files[0]; if (!file) process.exit(1); process.stdout.write(file.sha256)' "$record") || return 1
   curl -fsS --max-time 30 -o "$work/led-file" "$base/embedded/r/files/$sha" || return 1
   cmp -s "$dist/r/files/$sha" "$work/led-file"
 }

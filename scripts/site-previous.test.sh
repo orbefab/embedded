@@ -1,16 +1,10 @@
 #!/usr/bin/env bash
-# Proves scripts/site-previous.sh against the registry in apps/site/dist/client/r.
-# The happy path, a tampered file and a missing file go through vite preview on port 4173.
-# A second server on that same port, started after preview stops, answers 307 for @,
-# a redirect off the registry, 404 and 500. Needs the site build and a free port 4173.
+# Proves scripts/site-previous.sh. orbe builds a small registry and a fixture server on
+# port 4173 serves it. Exit codes, redirects and an unsafe URL are the downloader's.
+# A downloaded file with one byte changed is refused by `orbe registry build --previous`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-registry=apps/site/dist/client/r
-[[ -f $registry/index.json ]] || {
-  echo "scripts/site-previous.test.sh: build the site first (scripts/site.sh --first-deploy)" >&2
-  exit 1
-}
 if curl -sS -o /dev/null --max-time 1 "http://127.0.0.1:4173/"; then
   echo "scripts/site-previous.test.sh: port 4173 is already in use" >&2
   exit 1
@@ -18,10 +12,7 @@ fi
 
 work=$(mktemp -d)
 server_pid=
-orig=
-orig_target=
 cleanup() {
-  [[ -z ${orig:-} ]] || cp -a "$orig" "$orig_target" || true
   if [[ -n ${server_pid:-} ]] && kill -0 "$server_pid" 2>/dev/null; then
     kill -TERM -"$server_pid" 2>/dev/null || kill -TERM "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
@@ -58,25 +49,6 @@ expect_fail() {
   fi
 }
 
-wait_url() {
-  local url=$1
-  local _
-  for _ in $(seq 1 150); do
-    if curl -fsS -o /dev/null --max-time 1 "$url"; then
-      return 0
-    fi
-    if ! kill -0 "$server_pid" 2>/dev/null; then
-      echo "scripts/site-previous.test.sh: the server exited" >&2
-      cat "$work/server.log" >&2
-      exit 1
-    fi
-    sleep 0.2
-  done
-  echo "scripts/site-previous.test.sh: $url did not answer" >&2
-  cat "$work/server.log" >&2
-  exit 1
-}
-
 stop_server() {
   if [[ -n ${server_pid:-} ]] && kill -0 "$server_pid" 2>/dev/null; then
     kill -TERM -"$server_pid" 2>/dev/null || kill -TERM "$server_pid" 2>/dev/null || true
@@ -92,44 +64,56 @@ start_group() {
   set +m
 }
 
+part() {
+  local root=$1 id=$2
+  mkdir -p "$root/parts/$id"
+  printf '%s\n' '{ "format": 1, "name": "@acme" }' >"$root/registry.jsonc"
+  cat >"$root/parts/$id/part.jsonc" <<EOF
+{
+  "format": 1,
+  "part": "$id",
+  "version": "1.2.0",
+  "title": "Lamp",
+  "license": "MIT",
+  "pins": { "a": [1], "b": [2] },
+  "params": { "resistance": { "unit": "ohm", "default": "220", "min_exclusive": 0, "sets": "/resistance" } },
+  "model": { "kind": "resistor", "ratings": { "power": null } }
+}
+EOF
+}
+
+same() {
+  local got=$1 want=$2 file rel
+  while IFS= read -r -d '' file; do
+    rel=${file#"$want/"}
+    [[ $rel == *.schema.json ]] && continue
+    cmp -s "$file" "$got/$rel" || {
+      echo "scripts/site-previous.test.sh: $rel differs" >&2
+      exit 1
+    }
+  done < <(find "$want" -type f -print0)
+  while IFS= read -r -d '' file; do
+    rel=${file#"$got/"}
+    if [[ ! -f $want/$rel ]]; then
+      echo "scripts/site-previous.test.sh: $rel is an extra download" >&2
+      exit 1
+    fi
+  done < <(find "$got" -type f -print0)
+}
+
 echo "scripts/site-previous.test.sh: usage"
 expect_code 2 scripts/site-previous.sh
 expect_code 2 scripts/site-previous.sh --url http://127.0.0.1:4173/embedded/r/
 expect_code 2 scripts/site-previous.sh --not-a-flag
 
-url=http://127.0.0.1:4173/embedded/r/
-echo "scripts/site-previous.test.sh: vite preview"
-start_group pnpm --dir apps/site exec vite preview --strictPort --host 127.0.0.1 --port 4173
-wait_url "$url/index.json"
-scripts/site-previous.sh --url "$url" --out "$work/preview"
-diff -rq "$registry" "$work/preview"
-expect_fail "answered 200 and --allow-first" scripts/site-previous.sh --allow-first --url "$url" --out "$work/allow-live"
-[[ ! -e $work/allow-live ]]
-
-sample=$(find "$registry/files" -type f -print -quit)
-[[ -n $sample ]]
-orig=$(mktemp)
-orig_target=$sample
-cp -a "$sample" "$orig"
-printf x >>"$sample"
-stop_server
-start_group pnpm --dir apps/site exec vite preview --strictPort --host 127.0.0.1 --port 4173
-wait_url "$url/index.json"
-expect_fail "SHA-256" scripts/site-previous.sh --url "$url" --out "$work/tampered"
-[[ ! -e $work/tampered ]]
-cp -a "$orig" "$sample"
-
-rm -f "$sample"
-stop_server
-start_group pnpm --dir apps/site exec vite preview --strictPort --host 127.0.0.1 --port 4173
-wait_url "$url/index.json"
-expect_fail "$(basename "$sample")" scripts/site-previous.sh --url "$url" --out "$work/missing"
-[[ ! -e $work/missing ]]
-cp -a "$orig" "$sample"
-rm -f "$orig"
-orig=
-orig_target=
-stop_server
+echo "scripts/site-previous.test.sh: orbe"
+export CARGO_BUILD_JOBS=4
+cargo build -p orbe --locked
+target=$(cargo metadata --format-version 1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
+orbe=$target/debug/orbe
+part "$work/src" lamp
+part "$work/next" wire
+"$orbe" registry build "$work/src" "$work/www/r"
 
 cat >"$work/serve.mjs" <<'EOF'
 import { createServer } from "node:http";
@@ -140,6 +124,13 @@ const root = process.argv[2];
 const mode = process.argv[3];
 const server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", "http://127.0.0.1:4173");
+  if (mode === "unsafe" && url.pathname.endsWith("/index.json")) {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({
+      items: [{ name: "lamp", version: "1.0.0", url: "../../etc/passwd" }],
+    }));
+    return;
+  }
   if (mode === "off-host" && url.pathname.includes("/files/")) {
     response.writeHead(307, { Location: "http://127.0.0.1:1/secret" });
     response.end();
@@ -182,18 +173,11 @@ EOF
 serve() {
   local mode=$1
   stop_server
-  start_group node "$work/serve.mjs" apps/site/dist/client "$mode"
+  start_group node "$work/serve.mjs" "$work/www" "$mode"
   local _
   for _ in $(seq 1 50); do
     if curl -sS -o /dev/null --max-time 1 "http://127.0.0.1:4173/embedded/r/index.json"; then
       return 0
-    fi
-    if [[ $mode == missing-index || $mode == status-500 ]]; then
-      local code
-      code=$(curl -sS -o /dev/null --max-time 1 -w '%{http_code}' "http://127.0.0.1:4173/embedded/r/index.json" || true)
-      if [[ $code == 404 || $code == 500 ]]; then
-        return 0
-      fi
     fi
     sleep 0.1
   done
@@ -202,14 +186,31 @@ serve() {
   exit 1
 }
 
+url=http://127.0.0.1:4173/embedded/r/
 echo "scripts/site-previous.test.sh: redirect @ to %40"
 serve redirect
+expect_fail "answered 200 and --allow-first" scripts/site-previous.sh --allow-first --url "$url" --out "$work/allow-live"
+[[ ! -e $work/allow-live ]]
 scripts/site-previous.sh --url "$url" --out "$work/redirected"
-diff -rq "$registry" "$work/redirected"
+same "$work/redirected" "$work/www/r"
+
+echo "scripts/site-previous.test.sh: a tampered file is refused by the registry build"
+"$orbe" registry build "$work/next" "$work/carried" --previous "$work/redirected" >"$work/carry.out"
+sample=$(find "$work/redirected/files" -type f -print -quit)
+[[ -n $sample ]]
+printf x >>"$sample"
+expect_fail "does not match the hash and size" "$orbe" registry build "$work/next" "$work/refused" --previous "$work/redirected"
+[[ ! -e $work/refused ]]
 
 echo "scripts/site-previous.test.sh: redirect outside the registry"
 serve off-host
 expect_fail "outside" scripts/site-previous.sh --url "$url" --out "$work/outside"
+[[ ! -e $work/outside ]]
+
+echo "scripts/site-previous.test.sh: unsafe url"
+serve unsafe
+expect_fail "../../etc/passwd" scripts/site-previous.sh --url "$url" --out "$work/unsafe"
+[[ ! -e $work/unsafe ]]
 
 echo "scripts/site-previous.test.sh: first deploy"
 serve missing-index
