@@ -1,31 +1,37 @@
 #!/usr/bin/env bash
-# Checks the repo. `lint` is what CI runs: shellcheck on every tracked shell script, ruff on every
-# tracked Python file, `scripts/core-deps.sh`, rustfmt, clippy, and clippy on orbe-model,
-# orbe-scene, orbe-session and orbe-wasm for wasm32.
-# `fast` runs `lint`, then the Rust tests through cargo-nextest, except the engine tests marked
-# `full tier`. `orbe-avr` and `orbe-microchip` are in that workspace run. `full` runs the
-# microchip tests once, in their `port-skip-check` build, instead of in the workspace run.
-# `web` runs the viewer unit tests and the viewer and site checks, each once: `check-viewer.sh`,
-# `check-viewer-e2e.sh`, `check-block.sh`, `check-headed.sh`, `site-previous.test.sh`,
-# `check-site.sh` and `check-engines.sh`.
+# Checks the repo. `lint` runs shellcheck on every tracked shell script, ruff on every tracked
+# Python file, `scripts/core-deps.sh`, rustfmt, clippy, and clippy on orbe-model, orbe-scene,
+# orbe-session and orbe-wasm for wasm32.
+# `fast` runs `lint`, then `rust`. `rust` is the Rust tests through cargo-nextest, except the
+# engine tests marked `full tier`. `orbe-avr` and `orbe-microchip` are in that workspace run.
+# `full` runs the microchip tests once, in their `port-skip-check` build, instead of in the
+# workspace run. CI calls `rust` on its own, without `lint`.
+# `viewer` runs `check-viewer.sh`, `check-viewer-e2e.sh`, `check-block.sh` and `check-headed.sh`.
+# `web` runs `viewer`, then `site-previous.test.sh`, `check-site.sh --first-deploy` and
+# `check-engines.sh`, each once.
 # `check-assets.sh` stays separate, because it needs a models checkout.
-# `full` runs `fast`, then the chip models' skip checks, the engine's Python checks,
-# `ngspice_refs.py --check`, `orbe-run` for WASI against native, the wasm package check, the
-# browser speed check on the package that check built, and `web`. The wasm package check and
-# the speed check run once, not again in `web`.
-# `lint` needs uv and shellcheck, and `fast` and `full` need cargo-nextest too.
-# `web` needs Node 24, pnpm, the repo's Node dependencies, a Chromium as
-# scripts/check-viewer-e2e.sh finds it, the Firefox and WebKit scripts/check-engines.sh
-# finds, and what scripts/wasm.sh and scripts/site.sh need. Install the browsers with
+# `engine-chips`, `engine-circuits` and `engine-wasm` are the steps of `full` beyond `fast` and
+# `web`, except `scripts/check-speed.sh`. `full` runs those steps in the order below, then the
+# speed check on the package `engine-wasm` built, then `web`. CI runs the three engine commands
+# in parallel and does not run the speed check. The wasm package check and the speed check run
+# once, not again in `web`.
+# `lint` needs uv and shellcheck. `fast`, `rust`, `full`, `engine-chips` and `engine-circuits`
+# need cargo-nextest too.
+# `viewer` needs Node 24, pnpm, the repo's Node dependencies, cargo, a Chromium as
+# scripts/check-viewer-e2e.sh finds it, and the wasm-bindgen CLI that scripts/wasm.sh names.
+# `web` needs those, and the Firefox and WebKit scripts/check-engines.sh finds, and what
+# scripts/site.sh needs. Install the browsers with
 # `pnpm exec playwright install chromium firefox webkit`. On Ubuntu, Firefox and WebKit
 # also need `sudo pnpm exec playwright install-deps firefox webkit`.
-# `full` also needs ngspice-42, rustup with the wasm32-wasip1 target, and the wasm-bindgen CLI
-# that scripts/wasm.sh names.
+# `full` and `engine-circuits` also need ngspice-42. `full` and `engine-wasm` need rustup with
+# the wasm32-wasip1 target and that wasm-bindgen CLI.
+# `scripts/check-site.sh --servers vite|wrangler` drives one host, and `--shard N/M` runs one
+# Playwright shard. With neither, `web` and `full` behave as they always have.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 usage() {
-  echo "usage: scripts/check.sh lint|fast|full|web" >&2
+  echo "usage: scripts/check.sh lint|fast|rust|full|web|viewer|engine-chips|engine-circuits|engine-wasm" >&2
   exit 2
 }
 
@@ -81,11 +87,35 @@ lint() {
     --target wasm32-unknown-unknown --locked -- -D warnings
 }
 
+rust() {
+  blobs=$(packages/engine/scripts/blobs.sh)
+  rust_tests --workspace "$@"
+}
+
 fast() {
   need_nextest
   lint
-  blobs=$(packages/engine/scripts/blobs.sh)
-  rust_tests --workspace "$@"
+  rust "$@"
+}
+
+engine_microchip() {
+  rust_tests -p orbe-microchip --features port-skip-check
+}
+
+engine_ignored() {
+  rust_tests -p orbe-engine --test circuit --run-ignored only
+}
+
+engine_poll() {
+  cargo clippy -p orbe-xtensa -p orbe-espressif -p orbe-engine --all-targets --locked \
+    --features orbe-xtensa/poll-skip-check -- -D warnings
+  rust_tests -p orbe-xtensa -p orbe-espressif --features orbe-xtensa/poll-skip-check
+  rust_tests -p orbe-engine --test circuit -E 'test(/^runs::/)' --features orbe-xtensa/poll-skip-check
+}
+
+engine_wasm() {
+  packages/engine/scripts/wasi-check.sh
+  scripts/check-wasm.sh "$@"
 }
 
 run_check() {
@@ -99,15 +129,7 @@ run_check() {
   rm -rf "$run"
 }
 
-full() {
-  # The microchip tests run once, with the port skip check built in.
-  fast --exclude orbe-microchip
-  rust_tests -p orbe-microchip --features port-skip-check
-  rust_tests -p orbe-engine --test circuit --run-ignored only
-  cargo clippy -p orbe-xtensa -p orbe-espressif -p orbe-engine --all-targets --locked \
-    --features orbe-xtensa/poll-skip-check -- -D warnings
-  rust_tests -p orbe-xtensa -p orbe-espressif --features orbe-xtensa/poll-skip-check
-  rust_tests -p orbe-engine --test circuit -E 'test(/^runs::/)' --features orbe-xtensa/poll-skip-check
+engine_python() {
   local name knob_dir
   uv run --project packages/engine/scripts --frozen pytest --rootdir=packages/engine/scripts packages/engine/scripts/tests
   uv run packages/engine/scripts/st77916_example.py --check
@@ -128,21 +150,33 @@ full() {
       "$knob_dir/netlist.json"
     cmp packages/engine/tests/firmware/esp32s3/arduino/checks/knob/netlist.json "$knob_dir/netlist.json"
   )
-  packages/engine/scripts/wasi-check.sh
+}
+
+full() {
+  # The microchip tests run once, with the port skip check built in.
+  fast --exclude orbe-microchip
+  engine_microchip
+  engine_ignored
+  engine_poll
+  engine_python
   local wasm=.scratch/wasm/full
   (
     trap 'rm -rf "$wasm"' EXIT
-    scripts/check-wasm.sh "$wasm"
+    engine_wasm "$wasm"
     scripts/check-speed.sh "$wasm/pkg" "$wasm/registry"
   )
   web
 }
 
-web() {
+viewer() {
   scripts/check-viewer.sh
   scripts/check-viewer-e2e.sh
   scripts/check-block.sh
   scripts/check-headed.sh
+}
+
+web() {
+  viewer
   scripts/site-previous.test.sh
   scripts/check-site.sh --first-deploy
   scripts/check-engines.sh
@@ -152,7 +186,22 @@ web() {
 case "$1" in
   lint) lint ;;
   fast) fast ;;
+  rust) need_nextest; rust ;;
   full) full ;;
   web) web ;;
+  viewer) viewer ;;
+  engine-chips)
+    need_nextest
+    packages/engine/scripts/blobs.sh >/dev/null
+    engine_microchip
+    engine_poll
+    ;;
+  engine-circuits)
+    need_nextest
+    blobs=$(packages/engine/scripts/blobs.sh)
+    engine_ignored
+    engine_python
+    ;;
+  engine-wasm) engine_wasm ;;
   *) usage ;;
 esac

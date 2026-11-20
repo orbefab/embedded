@@ -69,7 +69,7 @@ pnpm exec wrangler dev --local            # the same build, under wrangler
 - an unknown path answers 404 with the site's page and logs no page error, and `/embeddedfoo` is not the site's;
 - a registry file answers 304 to its own ETag, a missing one answers 404 with no immutable cache, a hashed build file keeps for a year, and a record's `@` path answers 307.
 
-It prints each page's requests and bytes, uncompressed and gzipped, and the time to the first Block frame. It finds Chromium as `check-viewer-e2e.sh` does. `--renders <dir>` saves screenshots. `scripts/check.sh web` runs it, then `scripts/check-engines.sh`, which loads this build's Get orbe page, parts page and Blocks page in headless Firefox and headless WebKit on `vite preview` only. WebKit draws a Block page's Block. Headless Firefox shows the WebGL error described in [viewer.md](viewer.md#run-it).
+It prints each page's requests and bytes, uncompressed and gzipped, and the time to the first Block frame. It finds Chromium as `check-viewer-e2e.sh` does. `--renders <dir>` saves screenshots. `--servers vite` or `--servers wrangler` drives the suite on that one host. `--servers wrangler` skips the install-line build, which needs `vite preview`. `--shard N/M` runs that Playwright shard of the suite. With neither of those flags the check runs both hosts. `scripts/check.sh web` runs it with `--first-deploy`, then `scripts/check-engines.sh`, which loads this build's Get orbe page, parts page and Blocks page in headless Firefox and headless WebKit on `vite preview` only. WebKit draws a Block page's Block. Headless Firefox shows the WebGL error described in [viewer.md](viewer.md#run-it).
 
 ## Hosting
 

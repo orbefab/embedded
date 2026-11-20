@@ -1,5 +1,6 @@
 import { lazy, type KeyboardEvent, type PointerEvent, Suspense, useEffect, useRef, useState } from "react";
 import { captionOf } from "../captions";
+import { holdGesture, type HoldGesture } from "./hold-gesture";
 import type { ButtonHold } from "./live";
 import { Stage } from "./stage";
 
@@ -16,92 +17,60 @@ export interface BlockPlayerProps {
 /** Holds the circuit's button while a pointer, Space or Enter is down on this control, and
  * releases when that gesture ends, the control blurs, the window blurs, or the page is hidden. */
 function PressControl({ hold }: { hold: { readonly current: ButtonHold | null } }) {
-  const down = useRef(0);
-  const keys = useRef(new Set<string>());
-  const pointers = useRef(new Set<number>());
-  // A key or pointer gesture also fires a click when it ends; that click is not a second press.
-  const gesture = useRef(false);
-
-  const press = () => {
-    down.current += 1;
-    if (down.current === 1) hold.current?.press();
-  };
-  const releaseOne = () => {
-    if (down.current === 0) return;
-    down.current -= 1;
-    if (down.current === 0) hold.current?.release();
-  };
-  const drop = () => {
-    const held = down.current > 0;
-    down.current = 0;
-    keys.current.clear();
-    pointers.current.clear();
-    gesture.current = false;
-    if (held) hold.current?.release();
-  };
+  const gesture = useRef<HoldGesture | null>(null);
+  if (gesture.current === null) {
+    gesture.current = holdGesture({
+      press: () => hold.current?.press(),
+      release: () => hold.current?.release(),
+    });
+  }
 
   useEffect(() => {
-    const onWindowBlur = () => drop();
+    const current = gesture.current;
+    if (current === null) return;
+    const onWindowBlur = () => current.drop();
     const onVisibility = () => {
-      if (document.visibilityState === "hidden") drop();
+      if (document.visibilityState === "hidden") current.drop();
     };
+    // keyup and pointerup can land on another element after this control blurs.
+    const onKeyUp = (event: globalThis.KeyboardEvent) => current.keyUp(event.key);
+    const onPointerUp = (event: globalThis.PointerEvent) => current.pointerEnd(event.pointerId);
     window.addEventListener("blur", onWindowBlur);
     document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
     return () => {
       window.removeEventListener("blur", onWindowBlur);
       document.removeEventListener("visibilitychange", onVisibility);
-      drop();
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+      current.drop();
     };
   }, [hold]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (event.key !== " " && event.key !== "Enter") return;
     event.preventDefault();
-    if (event.repeat || keys.current.has(event.key)) return;
-    keys.current.add(event.key);
-    gesture.current = true;
-    press();
-  };
-  const onKeyUp = (event: KeyboardEvent<HTMLButtonElement>) => {
-    if (!keys.current.delete(event.key)) return;
-    endGesture();
-    releaseOne();
+    gesture.current?.keyDown(event.key, event.repeat);
   };
   const onPointerDown = (event: PointerEvent<HTMLButtonElement>) => {
-    if (event.button !== 0 || pointers.current.has(event.pointerId)) return;
-    pointers.current.add(event.pointerId);
-    gesture.current = true;
-    press();
+    gesture.current?.pointerDown(event.pointerId, event.button);
   };
-  const onPointerEnd = (event: PointerEvent<HTMLButtonElement>) => {
-    if (!pointers.current.delete(event.pointerId)) return;
-    endGesture();
-    releaseOne();
-  };
-  const endGesture = () => {
-    setTimeout(() => {
-      gesture.current = false;
-    }, 0);
-  };
-  // A click with no key or pointer gesture before it, as a screen reader sends, presses briefly.
-  const onClick = () => {
-    if (gesture.current || down.current > 0) return;
-    press();
-    setTimeout(releaseOne, 300);
+  const onPointerLeave = (event: PointerEvent<HTMLButtonElement>) => {
+    gesture.current?.pointerEnd(event.pointerId);
   };
 
   return (
     <button
       className="mt-3 touch-none border border-border px-3 py-1.5 text-sm hover:border-foreground focus-visible:[outline:2px_solid_var(--brand)] focus-visible:outline-offset-2"
       data-testid="hold-to-press"
-      onBlur={drop}
-      onClick={onClick}
+      onBlur={() => gesture.current?.drop()}
+      onClick={() => gesture.current?.click()}
       onKeyDown={onKeyDown}
-      onKeyUp={onKeyUp}
-      onPointerCancel={onPointerEnd}
       onPointerDown={onPointerDown}
-      onPointerLeave={onPointerEnd}
-      onPointerUp={onPointerEnd}
+      onPointerLeave={onPointerLeave}
       type="button"
     >
       Hold to press

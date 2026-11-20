@@ -1,4 +1,5 @@
-// ORBE_E2E picks the suite. Site runs the same checks twice, once per server.
+// ORBE_E2E picks the suite. Site runs the same checks on vite preview and on
+// wrangler dev --local, unless ORBE_SITE_SERVERS names one of them.
 // A failed check keeps its trace in test-results/.
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
@@ -94,7 +95,13 @@ const suites: Record<string, PlaywrightTestConfig> = {
 };
 
 function siteSuite(): PlaywrightTestConfig {
-  const viteOnly = process.env.ORBE_SITE_SERVERS === "vite";
+  const which = process.env.ORBE_SITE_SERVERS ?? "both";
+  if (which !== "both" && which !== "vite" && which !== "wrangler") {
+    console.error(`ORBE_SITE_SERVERS must be both, vite or wrangler, not ${which}`);
+    process.exit(2);
+  }
+  const wantVite = which === "both" || which === "vite";
+  const wantWrangler = which === "both" || which === "wrangler";
   const viteServer = {
     command: `pnpm exec vite preview --strictPort --host 127.0.0.1 --port ${SITE_VITE_PORT}`,
     cwd: "apps/site",
@@ -113,18 +120,23 @@ function siteSuite(): PlaywrightTestConfig {
     stdout: "ignore" as const,
     timeout: 180_000,
   };
+  const webServer = [...(wantVite ? [viteServer] : []), ...(wantWrangler ? [wranglerServer] : [])];
+  const projects = [];
+  if (wantVite) projects.push({ name: "vite preview", use: { baseURL: SITE_VITE } });
+  if (wantWrangler) {
+    projects.push({
+      name: "wrangler dev --local",
+      ...(wantVite ? { dependencies: ["vite preview"] } : {}),
+      use: { baseURL: SITE_WRANGLER },
+    });
+  }
   return {
     ...shared,
     testDir: "apps/site/e2e",
     testMatch: "*.spec.ts",
     use: { ...shared.use, viewport: { width: 1280, height: 900 } },
-    webServer: viteOnly ? viteServer : [viteServer, wranglerServer],
-    projects: viteOnly
-      ? [{ name: "vite preview", use: { baseURL: SITE_VITE } }]
-      : [
-          { name: "vite preview", use: { baseURL: SITE_VITE } },
-          { name: "wrangler dev --local", dependencies: ["vite preview"], use: { baseURL: SITE_WRANGLER } },
-        ],
+    webServer: webServer.length === 1 ? webServer[0] : webServer,
+    projects,
   };
 }
 
