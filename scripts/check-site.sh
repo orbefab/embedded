@@ -18,14 +18,19 @@
 # installs nothing. scripts/check.sh web runs this with `--first-deploy`. One of two arguments is
 # required: `--previous <dir>` builds the registry on the one the live site serves, and
 # `--first-deploy` is a local build with no registry to download. A build for a deploy always
-# passes `--previous`. `--renders <dir>` saves screenshots there. The arguments can be in any
-# order. An unknown argument is an error.
+# passes `--previous`. `--renders <dir>` saves screenshots there.
+# `--servers vite` or `--servers wrangler` drives the suite on that one host. `wrangler` skips
+# the install-line build, which Playwright drives on `vite preview`. `--shard N/M` passes that
+# shard to the suite. The arguments can be in any order. With none of `--servers` or `--shard`,
+# the check runs both hosts, as `scripts/check.sh web` does. An unknown argument is an error.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 previous=()
 first=0
 renders=""
 saw_renders=0
+servers=both
+shard=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --first-deploy)
@@ -47,6 +52,30 @@ while [[ $# -gt 0 ]]; do
       fi
       renders=$2
       saw_renders=1
+      shift 2
+      ;;
+    --servers)
+      case ${2:-} in
+        both | vite | wrangler) servers=$2 ;;
+        *)
+          echo "check-site: --servers needs both, vite or wrangler" >&2
+          exit 2
+          ;;
+      esac
+      shift 2
+      ;;
+    --shard)
+      if [[ $# -lt 2 || ! ${2:-} =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]]; then
+        echo "check-site: --shard needs N/M, such as 1/2" >&2
+        exit 2
+      fi
+      shard_n=${2%/*}
+      shard_m=${2#*/}
+      if ((shard_n > shard_m)); then
+        echo "check-site: --shard $2 is out of range" >&2
+        exit 2
+      fi
+      shard=$2
       shift 2
       ;;
     *)
@@ -80,15 +109,16 @@ pnpm --filter @orbe/site test
 scripts/brand.sh check
 dist=apps/site/dist/client
 own() { grep -rlE "$1" "$dist" --exclude-dir=r --exclude-dir=orbe-wasm --exclude-dir=sources || true; }
-pages() { find "$dist/$1" -mindepth 2 -maxdepth 2 -name index.html | wc -l; }
-
-ORBE_SITE_INSTALL=1 scripts/site.sh "${site[@]}" >/dev/null
-scripts/site-install.sh
 
 # 8787 is wrangler's default and may already be taken. Ask the OS for a free port.
 free_port() {
   node -e 'const s = require("node:net").createServer().listen(0, "127.0.0.1", () => { process.stdout.write(String(s.address().port) + "\n"); s.close(); })'
 }
+
+if [[ $servers != wrangler ]]; then
+ORBE_SITE_INSTALL=1 scripts/site.sh "${site[@]}" >/dev/null
+scripts/site-install.sh
+
 install_port=$(free_port)
 export ORBE_E2E=site
 export ORBE_SITE_INSTALL_E2E=1
@@ -97,6 +127,7 @@ export ORBE_SITE_VITE_PORT=$install_port
 echo "check-site: install-on browser checks on 127.0.0.1:$install_port"
 pnpm exec playwright test apps/site/e2e/install.spec.ts
 unset ORBE_SITE_INSTALL_E2E ORBE_SITE_SERVERS
+fi
 
 scripts/site.sh "${site[@]}"
 [[ ! -e $dist/install.sh ]] || fail "install.sh is served with ORBE_SITE_INSTALL unset"
@@ -137,4 +168,11 @@ vite_port=$(free_port)
 wrangler_port=$(free_port)
 export ORBE_SITE_VITE_PORT=$vite_port
 export ORBE_SITE_WRANGLER_PORT=$wrangler_port
-pnpm exec playwright test
+if [[ $servers != both ]]; then
+  export ORBE_SITE_SERVERS=$servers
+fi
+if [[ -n $shard ]]; then
+  pnpm exec playwright test --shard="$shard"
+else
+  pnpm exec playwright test
+fi
