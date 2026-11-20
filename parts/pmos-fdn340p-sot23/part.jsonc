@@ -2,7 +2,12 @@
 // part `usb_switch`.
 {
   "format": 1, "part": "pmos-fdn340p-sot23", "version": "0.1.0", "title": "FDN340P P-channel MOSFET, SOT-23", "license": "MIT OR Apache-2.0",
-  "docs": { "FDN340P Rev E1": null },
+  "summary": "onsemi FDN340P P-channel MOSFET in SOT-23. Lead 1 is the gate, lead 2 the source and lead 3 the drain. The dot marks lead 1.",
+  "tags": ["transistor", "mosfet", "pmos", "sot-23"],
+  "docs": {
+    "FDN340P Rev E1": null,
+    "onsemi FDN340P/D, Rev. 9, May 2025": "https://www.onsemi.com/download/data-sheet/pdf/fdn340p-d.pdf",
+  },
   "real": { "maker": "onsemi", "number": "FDN340P", "datasheet": "FDN340P Rev E1" },
   "pins": { "G": [1], "S": [2], "D": [3] },
   "model": {

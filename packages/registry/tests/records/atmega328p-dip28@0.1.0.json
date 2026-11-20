@@ -5,6 +5,12 @@
   "name": "atmega328p-dip28",
   "version": "0.1.0",
   "title": "ATmega328P, PDIP-28",
+  "description": "ATmega328P-PU in a 300 mil PDIP-28. The notch is at one end and marks the lead-1 corner. The part needs firmware.",
+  "categories": [
+    "microcontroller",
+    "avr",
+    "dip"
+  ],
   "license": "MIT OR Apache-2.0",
   "registryDependencies": [],
   "files": [
@@ -300,7 +306,8 @@
   ],
   "docs": [
     {
-      "name": "DS40002061B"
+      "name": "DS40002061B",
+      "url": "https://ww1.microchip.com/downloads/en/DeviceDoc/ATmega48A-PA-88A-PA-168A-PA-328-P-DS-DS40002061B.pdf"
     },
     {
       "name": "avr-1.8.6 boards.txt"

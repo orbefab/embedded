@@ -2,7 +2,9 @@
 // TI SLVS522S, from packages/engine/tests/circuits/atmega-board-button/netlist.json, part `reg_3v3`.
 {
   "format": 1, "part": "lp2985-sot23-5", "version": "0.1.0", "title": "LP2985 3.3 V regulator, SOT-23-5", "license": "MIT OR Apache-2.0",
-  "docs": { "TI SLVS522S": null },
+  "summary": "TI LP2985-33DBVR, a fixed 3.3 V regulator in SOT-23-5. Leads 1 IN, 2 GND and 3 ON/OFF on one side; 4 BYPASS and 5 OUT on the other. The dot marks lead 1.",
+  "tags": ["regulator", "ldo", "sot-23", "power"],
+  "docs": { "TI SLVS522S": "https://www.ti.com/lit/ds/symlink/lp2985.pdf" },
   "real": { "maker": "Texas Instruments", "number": "LP2985-33DBVR", "datasheet": "TI SLVS522S" },
   "pins": { "IN": [1], "GND": [2], "ON_OFF": [3], "BYPASS": [4], "OUT": [5] },
   "model": {

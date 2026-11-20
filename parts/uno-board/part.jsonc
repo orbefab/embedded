@@ -22,11 +22,11 @@
   "docs": {
     "RobotDyn UNO R3 CH340G schematic": "https://robotdyn.com/pub/media/0G-00004029%3D%3DUNO-R3-CH340G/DOCS/Schematic%3D%3D0G-00004029%3D%3DUNO-R3-CH340G.pdf",
     "RobotDyn UNO R3 CH340G dimension diagram": "https://robotdyn.com/pub/media/0G-00004029%3D%3DUNO-R3-CH340G/DOCS/DIM%3D%3D0G-00004029%3D%3DUNO-R3-CH340G.pdf",
-    "CH340 clone schematic, mischianti.org": "https://mischianti.org/wp-content/uploads/2023/11/Arduino-UNO-Rev-3-CH340-SMD-clone-schema.pdf",
-    "WCH CH340 datasheet": "https://cdn.sparkfun.com/datasheets/Dev/Arduino/Other/CH340DS1.PDF",
-    "CH340G clone, top photo": "https://commons.wikimedia.org/wiki/File:Noname_clone_of_Arduino_Uno_-_top.jpg",
-    "Maker Portal, CH340 board": "https://makersportal.com/blog/2019/3/12/testing-the-arduino-ch340-board",
-    "Joy-IT ARD_R3DIP": "https://joy-it.net/en/products/ARD_R3DIP",
+    "CH340 clone schematic, mischianti.org": null,
+    "WCH CH340 datasheet": "https://www.wch-ic.com/download/file?id=79",
+    "CH340G clone, top photo": null,
+    "Maker Portal, CH340 board": null,
+    "Joy-IT ARD_R3DIP": null,
   },
   // A clone has no maker's sheet. RobotDyn's CH340G board, whose maker publishes its schematic and
   // dimensions, is the representative for the circuit and the interface.

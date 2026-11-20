@@ -5,6 +5,8 @@
 // at a fixed 0.8 V below vcc. The stage keeps comparing above the headroom, and the run warns.
 {
   "format": 1, "part": "lm358-dip8", "version": "0.1.0", "title": "LM358 dual op-amp, DIP-8", "license": "MIT OR Apache-2.0",
+  "summary": "TI LM358P dual op-amp in PDIP-8. The notch marks lead 1. Two amplifiers share the supply pins.",
+  "tags": ["op-amp", "amplifier", "through-hole"],
   "docs": { "TI SLOS068AB": "https://www.ti.com/lit/ds/symlink/lm358.pdf" },
   "real": { "maker": "Texas Instruments", "number": "LM358P", "datasheet": "TI SLOS068AB" },
   "pins": { "OUT1": [1], "IN1_N": [2], "IN1_P": [3], "GND": [4], "IN2_P": [5], "IN2_N": [6], "OUT2": [7], "VCC": [8] },

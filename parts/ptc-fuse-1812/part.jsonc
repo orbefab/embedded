@@ -2,7 +2,9 @@
 // part `usb_fuse`.
 {
   "format": 1, "part": "ptc-fuse-1812", "version": "0.1.0", "title": "Resettable fuse, 500 mA, 1812", "license": "MIT OR Apache-2.0",
-  "docs": { "Bourns MF-MSMF Series": null },
+  "summary": "Bourns MF-MSMF050-2 resettable PTC fuse in 1812, 500 mA hold. Not polarized.",
+  "tags": ["fuse", "ptc", "protection", "smd"],
+  "docs": { "Bourns MF-MSMF Series": "https://www.bourns.com/docs/Product-Datasheets/mf-msmf.pdf" },
   "real": { "maker": "Bourns", "number": "MF-MSMF050-2", "datasheet": "Bourns MF-MSMF Series" },
   "pins": { "1": [1], "2": [2] },
   "model": {

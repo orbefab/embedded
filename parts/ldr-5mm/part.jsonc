@@ -10,7 +10,7 @@
   "summary": "Light-dependent resistor: a 5 mm cadmium-sulphide cell whose resistance falls as the scene's `light` rises. 15 kΩ at 10 lx, 3.8 kΩ at 100 lx, 0.95 kΩ at 1000 lx and 1 MΩ in the dark. The curve follows the datasheet table (10 to 20 kΩ at 10 lx, gamma 0.6); the sheet's own graph reads about 17 to 49 kΩ at 10 lx, and the value at 1000 lx extends the curve past anything the sheet gives. Two leads on 3 mm, either way round. Set the light with the scene's `world`, or live with `orbe set light 50`.",
   "tags": ["ldr", "photoresistor", "light sensor", "light", "sensor", "voltage divider", "analog", "through-hole"],
   "license": "MIT OR Apache-2.0",
-  "docs": { "Senba GL55 Series CdS Photoresistor Manual": "https://cdn.shopify.com/s/files/1/0699/1344/4452/files/GL55_Series_Photoresistor.pdf" },
+  "docs": { "Senba GL55 Series CdS Photoresistor Manual": null },
   "real": { "generic": true, "maker": "Senba", "number": "GL5528", "datasheet": "Senba GL55 Series CdS Photoresistor Manual" },
   "buy": [
     { "seller": "LCSC", "url": "https://www.lcsc.com/product-detail/Photoresistors_Senba-Sensing-Tech-GL5528_C125627.html", "checked": "2026-11-16" },

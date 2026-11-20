@@ -19,6 +19,9 @@
     {
       "name": "Arduino Nano schematic, revision 3.0",
       "url": "https://www.arduino.cc/en/uploads/Main/ArduinoNano30Schematic.pdf"
+    },
+    {
+      "name": "development board schematic, revision 3"
     }
   ],
   "files": [

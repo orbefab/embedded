@@ -11,8 +11,9 @@
   "tags": ["dht22", "am2302", "temperature", "humidity", "sensor", "one-wire", "digital", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "docs": {
-    "Aosong AM2302 product manual v1.1": "https://atta.szlcsc.com/upload/public/pdf/source/20161123/1479873083101.pdf",
-    "Aosong DHT22 datasheet": "https://cdn.sparkfun.com/assets/f/7/d/9/c/DHT22.pdf",
+    "Aosong AM2302 product manual v1.1": null,
+    "Aosong DHT22 datasheet": null,
+    "Aosong AM2302 Technical Manual": "https://www.aosong.com/uploadfiles/2025/04/20250417105409216.pdf",
   },
   "real": { "maker": "Aosong", "number": "AM2302", "datasheet": "Aosong AM2302 product manual v1.1" },
   "buy": [

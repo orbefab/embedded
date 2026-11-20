@@ -14,6 +14,8 @@
     "Arduino Nano A000005 datasheet": "https://docs.arduino.cc/resources/datasheets/A000005-datasheet.pdf",
     "Arduino Nano A000005 full pinout": "https://docs.arduino.cc/resources/pinouts/A000005-full-pinout.pdf",
     "Arduino Nano schematic, revision 3.0": "https://www.arduino.cc/en/uploads/Main/ArduinoNano30Schematic.pdf",
+    // The CH340 clone's resistor values cite this name. It is not the official schematic above.
+    "development board schematic, revision 3": null,
   },
   // A clone has no maker's sheet. The official board is the representative for size and pinout.
   "real": { "generic": true, "maker": "Arduino", "number": "A000005", "datasheet": "Arduino Nano A000005 datasheet" },

@@ -1,6 +1,9 @@
 {
   "format": 1, "part": "inductor-0805", "version": "0.1.0", "title": "Inductor, 0805 chip", "license": "MIT OR Apache-2.0",
-  "real": { "generic": true, "maker": "Murata", "number": "BLM21", "datasheet": null },
+  "summary": "Unpolarized 0805 chip, 2.0 x 1.25 mm, used as a ferrite bead or a chip inductor. Lead 1 and lead 2 are the end caps.",
+  "tags": ["inductor", "ferrite", "passive", "smd"],
+  "docs": { "Murata BLM21": null },
+  "real": { "generic": true, "maker": "Murata", "number": "BLM21", "datasheet": "Murata BLM21" },
   "pins": { "1": [1], "2": [2] },
   "params": {
     "inductance": { "unit": "H", "required": true, "min_exclusive": 0, "sets": "/inductance" },

@@ -1,6 +1,11 @@
 {
   "format": 1, "part": "ch340g", "version": "0.1.0", "title": "CH340G USB to serial, SOIC-16", "license": "MIT OR Apache-2.0",
-  "docs": { "WCH CH340 datasheet (the first), English, version 1D": "https://cdn.sparkfun.com/datasheets/Dev/Arduino/Other/CH340DS1.PDF" },
+  "summary": "WCH CH340G USB-to-serial bridge in SOIC-16. The dot marks lead 1.",
+  "tags": ["usb", "uart", "bridge", "soic"],
+  "docs": {
+    "WCH CH340 datasheet (the first), English, version 1D": null,
+    "WCH CH340 datasheet, version 3D": "https://www.wch-ic.com/download/file?id=79",
+  },
   "real": { "maker": "WCH", "number": "CH340G", "datasheet": "WCH CH340 datasheet (the first), English, version 1D" },
   "pins": {
     "GND": [1], "TXD": [2], "RXD": [3], "V3": [4], "UDP": [5], "UDM": [6], "XI": [7], "XO": [8],
