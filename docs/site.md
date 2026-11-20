@@ -23,7 +23,7 @@ pnpm install --frozen-lockfile
 scripts/site.sh --first-deploy
 ```
 
-`scripts/site.sh` fetches the AVR runtime's source into the blob cache, builds `orbe`, writes this repo's registry with `orbe registry build . .scratch/site/registry`, builds orbe-wasm with `scripts/wasm.sh .scratch/site/wasm`, then runs `vite build` in `apps/site`. It needs what [wasm.md](wasm.md#build) needs, Node 24 and pnpm, and installs nothing. It requires either `--previous <dir>` or `--first-deploy`. `--previous <dir>` is the registry the live site serves, and the build keeps every version that registry served, as [registry.md](registry.md#versions) says. `--first-deploy` is the first deploy, which has no earlier registry.
+`scripts/site.sh` fetches the AVR runtime's source into the blob cache, builds `orbe`, writes this repo's registry with `orbe registry build . .scratch/site/registry`, builds orbe-wasm with `scripts/wasm.sh .scratch/site/wasm`, then runs `vite build` in `apps/site`. It needs what [wasm.md](wasm.md#build) needs, Node 24 and pnpm, and installs nothing. It requires either `--previous <dir>` or `--first-deploy`. `--previous <dir>` is the registry the live site serves, and the build keeps every version that registry served, as [registry.md](registry.md#versions) says. `scripts/site-previous.sh` downloads that registry. `--first-deploy` is the first deploy, which has no earlier registry.
 
 The site is a [TanStack Start](https://tanstack.com/start/latest) app, set up as the website is: file routes in `src/routes`, `@cloudflare/vite-plugin`, Tailwind 4 and `@vitejs/plugin-react`.
 
@@ -80,22 +80,44 @@ It prints each page's requests and bytes, uncompressed and gzipped, and the time
 
 ## Deploy
 
-The first deploy and every later one run from a clean checkout of `main`, with Cloudflare credentials for the `orbefab.com` zone.
+A push to `main` runs [`.github/workflows/site.yml`](../.github/workflows/site.yml) on GitHub's `ubuntu-24.04` runner. The workflow also runs when someone starts it by hand. It does not run on a pull request, so a pull request never receives the deploy secrets. The hand run has one input, `deploy`, which defaults to false.
+
+The push starts a job only when the repository variable `SITE_DEPLOY` is `on`. Until then the push skips the job and spends nothing. A hand run always builds and checks. It deploys only when `SITE_DEPLOY` is `on` and `deploy` is true. Deploys share one concurrency group and do not cancel each other, so two deploys never overlap.
+
+`scripts/site-previous.sh` downloads `https://orbefab.com/embedded/r/` into the directory passed as `--previous`. It starts at `index.json` and fetches every record, schema and file that document names, checking each record and file against its hash and size. A network error, a status other than 200, a redirect that leaves that directory, or a hash or size that does not match fails the job.
+
+The first deploy has no earlier registry. Set the repository variable `SITE_FIRST_DEPLOY` to `1` for that run. The workflow then passes `--first-deploy` only when `index.json` answers 404. A 404 with the variable unset fails. A 200 with the variable set also fails, so the variable is unset after the first deploy. The website has to answer that URL with 404 until the Worker exists. Any other status fails the job, and the manual path below is the fallback.
+
+Set the repository variable `ORBE_SITE_INSTALL` to `1` to deploy with install lines. `scripts/check-site.sh` builds the site both ways and leaves the build with the lines off. When the variable is `1`, the workflow runs `scripts/site.sh` once more with `ORBE_SITE_INSTALL=1` and uploads that build.
+
+The deploy step reads two secrets.
+
+| Secret | What it is |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | An account API token for the account in `CLOUDFLARE_ACCOUNT_ID`. |
+| `CLOUDFLARE_ACCOUNT_ID` | The account that owns the Worker `orbefab-embedded`. |
+
+The token deploys that Worker and its two routes on the `orbefab.com` zone. That is Workers Editor on the Worker `orbefab-embedded`, and zone Workers Routes Write on the zone `orbefab.com`. The first deploy creates the Worker, and a token cannot be scoped to a Worker that does not exist yet, so that first token is Workers Admin on the account. After the Worker exists, replace the Admin with Editor on `orbefab-embedded`. The same access under the older token names is account Workers Scripts Edit and zone Workers Routes Edit on `orbefab.com`. The account permission is not limited to this Worker. [Workers roles](https://developers.cloudflare.com/workers/authorization/workers/) names the current roles.
+
+`wrangler deploy` runs in `apps/site`. It follows `.wrangler/deploy/config.json`, which the build wrote, to `dist/client/wrangler.json`, and uploads `dist/client` as assets and no Worker code. Do not pass `--config wrangler.jsonc`, which skips the built config. `scripts/site-deployed.sh` then requests the live site and fails the job unless:
+
+- `https://orbefab.com/embedded/` shows Get orbe, and `https://orbefab.com/` and `https://orbefab.com/embeddedfoo` still go to the website.
+- `https://orbefab.com/embedded/r/index.json` is this build's index, and `https://orbefab.com/embedded/parts/led-5mm/` downloads its files.
+- `https://orbefab.com/embedded/sources/avr-1.8.6.tar.bz2` downloads, with the SHA-256 every Block NOTICE names.
+- `https://orbefab.com/embedded/assets/<file>` has the year-long `Cache-Control`, and `https://orbefab.com/embedded/r/files/<sha256>` has an `ETag`.
+- `https://orbefab.com/embedded/no-such-page` answers 404 with this site's page, not the website's.
+
+With install lines on, Get orbe shows the install command and `/embedded/install.sh` is `scripts/install.sh`. With them off, Get orbe says the CLI is coming and that URL answers 404.
+
+The same steps, run by hand from a clean checkout of `main`, are the fallback when the workflow cannot:
 
 ```sh
 git status --short                 # nothing
 pnpm install --frozen-lockfile
-scripts/check-site.sh              # builds dist/ as it deploys, and checks it
+scripts/site-previous.sh --url https://orbefab.com/embedded/r/ --out .scratch/site/previous
+scripts/check-site.sh --previous .scratch/site/previous
 cd apps/site
 pnpm exec wrangler deploy          # reads dist/client/wrangler.json, which the build wrote
 ```
 
-`check-site.sh` leaves the deploy build, without install lines, in `apps/site/dist`. `wrangler deploy` in `apps/site` follows `.wrangler/deploy/config.json`, which the build wrote, to `dist/client/wrangler.json`, so it uploads `dist/client` as assets and no Worker code. Do not pass `--config wrangler.jsonc`, which skips the built config. Keep a copy of `dist/client/r` from each deploy, and pass it to the next one as `scripts/check-site.sh --previous <copy>`, so the registry keeps serving every version it served. The first deploy passes no `--previous`, and the build runs as `scripts/site.sh --first-deploy`.
-
-After a deploy:
-
-- `https://orbefab.com/embedded/` shows Get orbe, and `https://orbefab.com/` and `https://orbefab.com/embeddedfoo` still go to the website.
-- `https://orbefab.com/embedded/r/index.json` is the registry's index, and `https://orbefab.com/embedded/parts/led-5mm/` downloads its files.
-- `https://orbefab.com/embedded/sources/avr-1.8.6.tar.bz2` downloads, with the SHA-256 every Block NOTICE names.
-- `curl -sI https://orbefab.com/embedded/assets/<file>` shows the year-long `Cache-Control`, and `curl -sI https://orbefab.com/embedded/r/files/<sha256>` shows an `ETag`.
-- `https://orbefab.com/embedded/no-such-page` answers 404 with this site's page, not the website's.
+The first deploy uses `scripts/check-site.sh --first-deploy` and skips `scripts/site-previous.sh`. A directory saved from the last deploy's `dist/client/r` can stand in for the download. `ORBE_SITE_INSTALL=1 scripts/site.sh --previous .scratch/site/previous` rebuilds with install lines before `wrangler deploy` when those lines should show. `scripts/site-deployed.sh` runs the live checks.
