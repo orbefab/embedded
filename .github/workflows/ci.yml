@@ -101,6 +101,14 @@ jobs:
       - name: Lint
         run: scripts/check.sh lint
 
+      # Release builds also target macOS arm64, where some libc types differ (`st_dev` is an
+      # `i32`). Clippy for that target catches a build that breaks only there. It needs no Mac,
+      # since it type-checks without linking.
+      - name: Lint for macOS
+        run: |
+          rustup target add aarch64-apple-darwin
+          cargo clippy --workspace --all-targets --locked --target aarch64-apple-darwin -- -D warnings
+
   rust-tests:
     name: rust-tests
     runs-on: ubuntu-24.04
