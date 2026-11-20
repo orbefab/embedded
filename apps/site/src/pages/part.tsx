@@ -22,16 +22,11 @@ function pinNames(pins: readonly Pin[]): string {
   return pins.map((pin) => pin.name).join(", ");
 }
 
-function SourceCell({ rating, docs }: { rating: Rating; docs: PartRecord["docs"] }) {
+/** The datasheet link a rating cites, when its doc has a URL. */
+function sourceUrl(rating: Rating, docs: PartRecord["docs"]): string | undefined {
   const source = rating.source;
-  if (source === undefined || source === "user" || !("datasheet" in source)) return null;
-  const match = docs?.find((doc) => doc.name === source.datasheet.doc && doc.url !== undefined);
-  if (match?.url === undefined) return null;
-  return (
-    <a className="underline hover:text-brand" href={match.url} rel="noopener" target="_blank">
-      Datasheet
-    </a>
-  );
+  if (source === undefined || source === "user" || !("datasheet" in source)) return undefined;
+  return docs?.find((doc) => doc.name === source.datasheet.doc && doc.url !== undefined)?.url;
 }
 
 function datasheetDocs(record: PartRecord): Set<string> {
@@ -132,7 +127,7 @@ function Pins({ pins }: { pins: readonly Pin[] }) {
   if (reaches) {
     return (
       <Section title="Pins">
-        <ul className="grid gap-1 font-mono text-sm">
+        <ul className="grid grid-cols-4 gap-x-6 gap-y-1 font-mono text-sm sm:grid-cols-8">
           {pins.map((pin) => (
             <li key={pin.name}>{pin.name}</li>
           ))}
@@ -165,6 +160,7 @@ export function PartPage({ part }: { part: PartView }) {
   const pins = record.pins.filter((pin) => !holes.has(pin.name));
   const showGlance = pins.length > 0 || glanceLine(part.use) !== undefined;
   const linkedDocs = datasheetDocs(record);
+  const sourced = record.ratings.some((rating) => sourceUrl(rating, record.docs) !== undefined);
   const docs = record.docs?.filter((doc) => !linkedDocs.has(doc.name));
   return (
     <article className="min-w-0">
@@ -221,7 +217,7 @@ export function PartPage({ part }: { part: PartView }) {
       {record.params.length === 0 ? null : (
         <Section title="Settings">
           <Table
-            head={["Param", "Takes"]}
+            head={["Setting", "Takes"]}
             rows={record.params.map((param) => [
               <span className="font-mono" key="name">
                 {param.name}
@@ -246,14 +242,25 @@ export function PartPage({ part }: { part: PartView }) {
       {record.ratings.length === 0 ? null : (
         <Section title="Ratings">
           <Table
-            head={["Rating", "Value", "Source"]}
-            rows={record.ratings.map((rating) => [
-              <span key="name">{ratingName(rating.name)}</span>,
-              <span className="whitespace-nowrap font-mono" key="value">
-                {rating.value === null ? "unrated" : si(rating.value, rating.unit)}
-              </span>,
-              <SourceCell docs={record.docs} key="source" rating={rating} />,
-            ])}
+            head={sourced ? ["Rating", "Value", "Source"] : ["Rating", "Value"]}
+            rows={record.ratings.map((rating) => {
+              const url = sourceUrl(rating, record.docs);
+              const cells = [
+                <span key="name">{ratingName(rating.name)}</span>,
+                <span className="whitespace-nowrap font-mono" key="value">
+                  {rating.value === null ? "unrated" : si(rating.value, rating.unit)}
+                </span>,
+              ];
+              if (!sourced) return cells;
+              return [
+                ...cells,
+                url === undefined ? null : (
+                  <a className="underline hover:text-brand" href={url} key="source" rel="noopener" target="_blank">
+                    Datasheet
+                  </a>
+                ),
+              ];
+            })}
           />
         </Section>
       )}

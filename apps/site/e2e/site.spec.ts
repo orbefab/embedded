@@ -1175,9 +1175,9 @@ test("an unknown path answers 404 with the site's page and logs no page error", 
     await expect(page.locator("h1")).toHaveText("Page not found.");
     expect(await page.title(), path).toBe("Page not found | Orbefab");
     await expect(main.getByRole("link", { name: "Get orbe" })).toHaveAttribute("href", "/embedded/");
-    await expect(main.getByRole("link", { name: "Blocks" })).toHaveAttribute("href", "/embedded/blocks/");
-    await expect(main.getByRole("link", { name: "Parts" })).toHaveAttribute("href", "/embedded/parts/");
-    await expect(main.getByRole("link", { name: "Orbefab home" })).toHaveAttribute("href", "/");
+    await expect(main.getByRole("link", { name: "the Blocks" })).toHaveAttribute("href", "/embedded/blocks/");
+    await expect(main.getByRole("link", { name: "the parts" })).toHaveAttribute("href", "/embedded/parts/");
+    await expect(main.getByRole("link", { name: "Back home" })).toHaveAttribute("href", "/");
     expect(pageErrors, path).toEqual([]);
     await context.close();
   }

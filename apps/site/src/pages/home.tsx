@@ -182,24 +182,32 @@ export function NotFoundPage() {
   const link = "text-foreground underline decoration-input underline-offset-[3px] hover:text-brand hover:decoration-brand";
   return (
     <>
-      <h1 className="font-semibold text-3xl tracking-tight md:text-4xl">Page not found.</h1>
-      <p className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-lg">
+      <div className="flex items-center gap-4">
+        <p className="font-mono text-[0.625rem] text-brand uppercase tracking-[0.22em]">404 NOT FOUND</p>
+        <span className="h-px max-w-24 flex-1 bg-border" />
+      </div>
+      <h1 className="mt-6 font-display font-normal text-[clamp(2.75rem,8vw,5.5rem)] leading-[0.98] tracking-[-0.04em]">Page not found.</h1>
+      <p className="mt-5 max-w-xl text-lg text-muted-foreground">
+        Try{" "}
         <a className={link} href={at.home}>
           Get orbe
         </a>
+        ,{" "}
         <a className={link} href={at.blocks}>
-          Blocks
-        </a>
+          the Blocks
+        </a>{" "}
+        or{" "}
         <a className={link} href={at.parts}>
-          Parts
+          the parts
         </a>
+        .
       </p>
       <div className="mt-10">
         <a
           className="inline-flex h-12 items-center justify-center border border-brand bg-brand px-6 font-mono font-bold text-[0.8125rem] text-brand-foreground uppercase tracking-[0.06em] transition-transform [transition-timing-function:steps(3,end)] hover:translate-y-px active:translate-y-0.5"
           href="/"
         >
-          Orbefab home
+          Back home
         </a>
       </div>
     </>
