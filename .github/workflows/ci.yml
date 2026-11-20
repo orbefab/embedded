@@ -1,10 +1,12 @@
 # Lint, the Rust tests, the viewer and the site run in parallel on every pull
 # request and on every push to main. A pull request runs the site suite on
 # wrangler. The vite host, which includes the install-line build, and the
-# Firefox and WebKit smoke run on main and nightly, and when the workflow is
-# started by hand. The engine checks run on main and nightly, and on a pull
+# Firefox and WebKit smoke run on main and nightly. The engine checks run on
+# main and nightly, and on a pull
 # request unless every changed file is under apps/site/, docs/ or .github/
-# other than this workflow, or is a markdown file. scripts/check-speed.sh stays
+# other than this workflow, or is a markdown file. The cargo cache keeps
+# dependencies only. Caching the workspace crates still rebuilt them after
+# checkout, so those artifacts are left out. scripts/check-speed.sh stays
 # a local check.
 name: CI
 
@@ -15,7 +17,6 @@ on:
       - main
   schedule:
     - cron: "0 6 * * *"
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -31,7 +32,7 @@ env:
   CARGO_BUILD_JOBS: "4"
   NO_COLOR: "1"
   COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
-  CACHE_SAVE: ${{ github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request' }}
+  CACHE_SAVE: ${{ github.ref == 'refs/heads/main' }}
 
 jobs:
   scope:
@@ -60,11 +61,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Restore source mtimes
-        run: scripts/ci-restore-mtimes.sh
 
       - name: Install shellcheck
         run: |
@@ -100,7 +96,6 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: ". -> target"
-          cache-workspace-crates: "true"
           save-if: ${{ env.CACHE_SAVE }}
 
       - name: Lint
@@ -113,11 +108,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Restore source mtimes
-        run: scripts/ci-restore-mtimes.sh
 
       - name: Install Rust
         run: |
@@ -136,7 +126,6 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: ". -> target"
-          cache-workspace-crates: "true"
           save-if: ${{ env.CACHE_SAVE }}
 
       - name: Nextest version
@@ -220,11 +209,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Restore source mtimes
-        run: scripts/ci-restore-mtimes.sh
 
       - name: Install Node
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -287,7 +271,6 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: ". -> target"
-          cache-workspace-crates: "true"
           shared-key: web
           save-if: ${{ env.CACHE_SAVE }}
 
@@ -310,11 +293,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Restore source mtimes
-        run: scripts/ci-restore-mtimes.sh
 
       - name: Install Node
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -377,7 +355,6 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: ". -> target"
-          cache-workspace-crates: "true"
           shared-key: web
           save-if: ${{ env.CACHE_SAVE }}
 
@@ -403,11 +380,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Restore source mtimes
-        run: scripts/ci-restore-mtimes.sh
 
       - name: Install Rust
         run: |
@@ -426,7 +398,6 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: ". -> target"
-          cache-workspace-crates: "true"
           save-if: ${{ env.CACHE_SAVE }}
 
       - name: Nextest version
@@ -458,11 +429,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Restore source mtimes
-        run: scripts/ci-restore-mtimes.sh
 
       - name: Install ngspice
         run: |
@@ -491,7 +457,6 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: ". -> target"
-          cache-workspace-crates: "true"
           save-if: ${{ env.CACHE_SAVE }}
 
       - name: Nextest version
@@ -518,11 +483,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Restore source mtimes
-        run: scripts/ci-restore-mtimes.sh
 
       - name: Install Node
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -568,7 +528,6 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: ". -> target"
-          cache-workspace-crates: "true"
           save-if: ${{ env.CACHE_SAVE }}
 
       - name: Install wasm-bindgen
@@ -579,17 +538,12 @@ jobs:
 
   site-vite:
     name: site vite
-    if: github.event_name == 'schedule' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'schedule' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Restore source mtimes
-        run: scripts/ci-restore-mtimes.sh
 
       - name: Install Node
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -652,7 +606,6 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: ". -> target"
-          cache-workspace-crates: "true"
           shared-key: web
           save-if: ${{ env.CACHE_SAVE }}
 
@@ -664,17 +617,12 @@ jobs:
 
   engines:
     name: engines
-    if: github.event_name == 'schedule' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'schedule' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Restore source mtimes
-        run: scripts/ci-restore-mtimes.sh
 
       - name: Install Node
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
@@ -739,7 +687,6 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: ". -> target"
-          cache-workspace-crates: "true"
           shared-key: web
           save-if: ${{ env.CACHE_SAVE }}
 
