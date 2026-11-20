@@ -216,10 +216,14 @@ function stampFactors(bytes, doc) {
   const specs = new Map(
     doc.getRoot().listMaterials().map((material) => [
       material.getName(),
-      { metallic: material.getMetallicFactor(), roughness: material.getRoughnessFactor() },
+      {
+        metallic: material.getMetallicFactor(),
+        roughness: material.getRoughnessFactor(),
+        alpha: material.getBaseColorFactor()[3],
+      },
     ]),
   );
-  const declared = [...specs.values()].some((spec) => spec.metallic !== 1 || spec.roughness !== 1);
+  const declared = [...specs.values()].some((spec) => spec.metallic !== 1 || spec.roughness !== 1 || spec.alpha < 0.999);
   if (!declared) return bytes;
   const jsonLength = bytes.readUInt32LE(12);
   if (bytes.readUInt32LE(16) !== 0x4e4f534a) throw new Error('GLB JSON chunk missing');
@@ -230,6 +234,11 @@ function stampFactors(bytes, doc) {
     mat.pbrMetallicRoughness ??= {};
     mat.pbrMetallicRoughness.metallicFactor = spec.metallic;
     mat.pbrMetallicRoughness.roughnessFactor = spec.roughness;
+    if (spec.alpha < 0.999) {
+      const color = mat.pbrMetallicRoughness.baseColorFactor ?? [1, 1, 1, 1];
+      mat.pbrMetallicRoughness.baseColorFactor = color.length < 4 ? [...color, spec.alpha] : [...color.slice(0, 3), spec.alpha];
+      mat.alphaMode = 'BLEND';
+    }
   }
   let text = Buffer.from(JSON.stringify(json));
   const pad = (4 - (text.length % 4)) % 4;

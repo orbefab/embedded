@@ -2,13 +2,13 @@
   "part": "capacitor-electrolytic-smd",
   "source": {
     "script": "model.py",
-    "sha256": "7711932f60f40943a6571ebf05975898f9c66c88811252f5988992fa2a2fae0e",
-    "bytes": 2330
+    "sha256": "64252d74692cb0236f5fe5c9f0e9ebe03a02d98faa252f7e8e3856908fc441fc",
+    "bytes": 2501
   },
   "files": {
     "capacitor-electrolytic-smd.glb": {
-      "sha256": "96571e1e9ae1d8ed619c548da93539585d0fb6865b039858e8b285fc260d8a8a",
-      "bytes": 10672
+      "sha256": "c3f45d07f41fc20edcc3a3636828d148408ebdd1c54c2150765e6efb007b1fe4",
+      "bytes": 13220
     },
     "capacitor-electrolytic-smd.anchors.json": {
       "sha256": "3f0f64fc467f8562434d7112c0c55e40681459e56a9a7be9e0b61ac8fb7b6766",
@@ -17,7 +17,7 @@
   },
   "box": {
     "min": [-3.6, -3.3, 0],
-    "max": [3.6, 3.3, 5.44]
+    "max": [3.6, 3.3, 5.445]
   },
   "kept_nodes": [],
   "draw_calls": 4,

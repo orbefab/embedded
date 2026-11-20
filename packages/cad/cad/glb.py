@@ -103,7 +103,7 @@ def _declared(node, found: list[tuple[tuple[float, float, float], tuple[float, f
         rgba = getattr(node, "orbe_rgba", None)
         if factors is None or rgba is None:
             raise RuntimeError(f"{getattr(node, 'label', None) or 'unlabelled'}: material has no declared finish")
-        found.append((rgba[:3], factors))
+        found.append((rgba[:3], (*factors, rgba[3])))
     for child in node.children or ():
         _declared(child, found)
 
@@ -155,7 +155,18 @@ def _stamp_factors(glb: Path, table) -> None:
         factors = _nearest(raw, table)
         if factors is None:
             raise RuntimeError(f"{glb.name}: material {mat.get('name')!r} {raw} has no declared finish")
-        pbr["metallicFactor"], pbr["roughnessFactor"] = factors
+        metallic, roughness, alpha = factors
+        pbr["metallicFactor"] = metallic
+        pbr["roughnessFactor"] = roughness
+        # OCCT drops an alpha below 1, and without alphaMode a loader treats
+        # the surface as opaque. A clear lens needs both.
+        if alpha < 0.999:
+            color = list(pbr.get("baseColorFactor", [1.0, 1.0, 1.0, 1.0]))
+            if len(color) < 4:
+                color.extend([1.0] * (4 - len(color)))
+            color[3] = alpha
+            pbr["baseColorFactor"] = color
+            mat["alphaMode"] = "BLEND"
     new_json = json.dumps(doc, separators=(",", ":")).encode()
     pad = (4 - (len(new_json) % 4)) % 4
     new_json += b" " * pad

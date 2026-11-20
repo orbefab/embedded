@@ -10,7 +10,8 @@ The sizes are from the drawing on page 1 of the AM2302 manual v1.1: a
 body 15.4 wide, 7.8 deep and 25.3 tall, leads 0.5 across the front and 0.3
 deep, and a Φ2.7 mounting hole near the top. The drawing gives no lead
 length or hole height, so 6.5 below the seating plane and 2.8 below the
-top are `# verify`. The grille is eight slots across the front.
+top are `# verify`. The grille is a lattice of square openings across the
+front, below that hole.
 """
 
 import sys
@@ -27,7 +28,7 @@ DHT_LEAD = (0.5, 0.3)  # across the front, deep
 DHT_BELOW = 6.5  # verify
 DHT_PITCH = 2.54
 DHT_HOLE = (2.7, 2.8)  # Φ, its centre below the top  # verify, below
-DHT_GRILLE = (8, 11.0, 1.0, 0.6, 2.2)  # slots, long, wide, deep, pitch
+DHT_LATTICE = (0.72, 1.22, 0.6, 10, 12)  # opening, pitch, deep, columns, rows
 
 _WHITE = plastic("#EEEDE6")
 _SLOT = plastic("#2B2B2B")
@@ -48,21 +49,29 @@ def _hole():
     return bd.Pos(0, 0, z) * bd.Rot(90, 0, 0) * bd.Cylinder(d / 2.0, DHT_BODY[1] + 1.0)
 
 
-def _slots():
-    count, long, wide, deep, pitch = DHT_GRILLE
+def _lattice():
+    opening, pitch, deep, cols, rows = DHT_LATTICE
     front = -DHT_BODY[1] / 2.0
-    first = DHT_BODY[2] - DHT_HOLE[1] - DHT_HOLE[0] - 1.5
-    return fuse([box(0, front + deep / 2.0, first - k * pitch, long, deep, wide) for k in range(count)])
+    x0 = -((cols - 1) / 2.0) * pitch
+    z0 = 3.4
+    holes = [
+        box(x0 + c * pitch, front + deep / 2.0, z0 + r * pitch, opening, deep, opening)
+        for c in range(cols)
+        for r in range(rows)
+    ]
+    return fuse(holes), (x0, z0, cols, rows, opening, pitch, deep)
 
 
 def dht22_shape():
     wide, deep, tall = DHT_BODY
     shell = box(0, 0, tall / 2.0, wide, deep, tall)
-    slots = _slots()
-    body = (shell - _hole() - slots).clean()
-    # Each slot's floor is dark, so the grille reads as open.
-    floor = -deep / 2.0 + DHT_GRILLE[3] + 0.05
-    backs = fuse([box(0, floor, s.center().Z, DHT_GRILLE[1], 0.1, DHT_GRILLE[2]) for s in slots.solids()])
+    holes, (x0, z0, cols, rows, opening, pitch, grille_deep) = _lattice()
+    body = (shell - _hole() - holes).clean()
+    # One dark floor behind the openings, so the lattice reads as open.
+    floor = -deep / 2.0 + grille_deep + 0.05
+    span_x = (cols - 1) * pitch + opening
+    span_z = (rows - 1) * pitch + opening
+    backs = box(x0 + (cols - 1) * pitch / 2.0, floor, z0 + (rows - 1) * pitch / 2.0, span_x, 0.1, span_z)
     children = [paint(body, "body", _WHITE), paint(backs, "grille", _SLOT)]
     for lead in range(1, 5):
         children.append(paint(tht.square_lead(_x(lead), 0, -DHT_BELOW, 0.0, *DHT_LEAD), f"lead-{lead}", _TIN))

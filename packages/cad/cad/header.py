@@ -11,13 +11,12 @@ import build123d as bd
 
 from cad import glb, paint
 from cad.color import gold, plastic, tin
-from cad.geom import box, cyl_z
+from cad.geom import box
 from cad.tht import socket_liner
 
 PITCH = 2.54
 PIN = 0.64
 PLASTIC = 2.54  # verify
-HOUSING_R = 1.12
 PIN_BELOW = 8.0  # verify, tip below the plastic's underside
 PIN_ABOVE = 3.0  # verify, the tail above the plastic, through a 1.6 board
 ICSP_PIN_ABOVE = 3.2  # verify
@@ -37,13 +36,12 @@ def _x(lead, count):
 
 
 def row_shape(count):
-    """One round housing per pin. Each pin runs `PIN_BELOW` under the
-    plastic and stands `PIN_ABOVE` proud of its top."""
+    """One square plastic bar. Each pin runs `PIN_BELOW` under the plastic
+    and stands `PIN_ABOVE` proud of its top."""
     top = PLASTIC + PIN_ABOVE
-    children = []
+    children = [paint(box(0, 0, PLASTIC / 2.0, count * PITCH, PITCH, PLASTIC), "housing", _BLACK)]
     for lead in range(1, count + 1):
         x = _x(lead, count)
-        children.append(paint(cyl_z(x, 0, 0, PLASTIC, HOUSING_R), f"housing-{lead}", _BLACK))
         children.append(
             paint(
                 box(x, 0, (top - PIN_BELOW) / 2.0, PIN, PIN, top + PIN_BELOW),
@@ -56,7 +54,7 @@ def row_shape(count):
 
 def row_anchors(count):
     return [
-        glb.Anchor(lead, f"pin-{lead}", (_x(lead, count), 0.0, -PIN_BELOW), also=(f"housing-{lead}",))
+        glb.Anchor(lead, f"pin-{lead}", (_x(lead, count), 0.0, -PIN_BELOW), also=("housing",))
         for lead in range(1, count + 1)
     ]
 

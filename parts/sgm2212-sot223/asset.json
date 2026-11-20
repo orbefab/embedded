@@ -2,13 +2,13 @@
   "part": "sgm2212-sot223",
   "source": {
     "script": "model.py",
-    "sha256": "8c190f975053f7df41227d4e11c30cad0da63f9cb4e6860c025433aff26ef1df",
-    "bytes": 2221
+    "sha256": "5743221f0c5fbd466fb07d01ef7aa2515569326b6504b03eb171b919aa99a486",
+    "bytes": 2504
   },
   "files": {
     "sgm2212-sot223.glb": {
-      "sha256": "502987649805b02083a2636a0883df8ac5aec1d185360ff54e5b7bfffa642f5c",
-      "bytes": 5188
+      "sha256": "da0cbe0b643f5a23113f7ca32b5e9a22e3081da00abcebb94ebfce8a91e3154c",
+      "bytes": 9160
     },
     "sgm2212-sot223.anchors.json": {
       "sha256": "4a397241418e44fc274872177c58fb48fa84280108301726643ea7fc19c3c551",

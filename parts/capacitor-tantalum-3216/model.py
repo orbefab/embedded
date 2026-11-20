@@ -14,17 +14,26 @@ from pathlib import Path
 
 import build123d as bd
 
-from cad import glb
-from cad.chip import chip, chip_anchors
+from cad import glb, paint
+from cad.chip import cap_length, chip, chip_anchors
 from cad.color import plastic
+from cad.geom import box
 
 SIZE = (3.2, 1.6, 1.6)  # length, width, height: KEMET T491 case A (EIA 3216-18)
 
 _BLACK = plastic("#1A1A1A")
+_STRIPE = plastic("#D5D8DE")
 
 
 def capacitor_tantalum_3216_shape():
-    return bd.Compound(children=chip(*SIZE, _BLACK), label="capacitor_tantalum_3216")
+    length, width, height = SIZE
+    cap = cap_length(length)
+    # The anode is lead 1, at -X. The stripe sits on the body just inboard of that cap.
+    stripe = box(-length / 2.0 + cap + 0.2, 0, height + 0.015, 0.24, width * 0.7, 0.04)
+    return bd.Compound(
+        children=[*chip(*SIZE, _BLACK), paint(stripe, "stripe", _STRIPE)],
+        label="capacitor_tantalum_3216",
+    )
 
 
 def capacitor_tantalum_3216_anchors():

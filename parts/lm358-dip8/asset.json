@@ -7,8 +7,8 @@
   },
   "files": {
     "lm358-dip8.glb": {
-      "sha256": "779249919e642e2f2d6468689e9ceed1faa10cbc32298ffeaf0dc4a15c6a7ff0",
-      "bytes": 11820
+      "sha256": "78bde1b614dd1a719a893b1d5b0f662870e95903b2c3ade5c8ef29e4e05fbbe6",
+      "bytes": 12556
     },
     "lm358-dip8.anchors.json": {
       "sha256": "262e6742f9d25bb9c014c25d760773ccf4b558c2bfc7f1c6d6be1ee9e40475b2",
@@ -17,10 +17,10 @@
   },
   "box": {
     "min": [-4.795, -3.935, -3.3],
-    "max": [4.795, 3.935, 5.12]
+    "max": [4.795, 3.935, 5.08]
   },
   "kept_nodes": ["lead-1", "lead-2", "lead-3", "lead-4", "lead-5", "lead-6", "lead-7", "lead-8"],
-  "draw_calls": 10,
+  "draw_calls": 9,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -37,8 +37,8 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 10,
-      "primitives_out": 10
+      "primitives_in": 9,
+      "primitives_out": 9
     }
   }
 }

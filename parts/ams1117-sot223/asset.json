@@ -2,13 +2,13 @@
   "part": "ams1117-sot223",
   "source": {
     "script": "model.py",
-    "sha256": "fa33a5da17857ce6ea607f367f6b29f8af8144f5fbd92773fe0ba0eee35db50a",
-    "bytes": 1896
+    "sha256": "24b84b1790f82f61a64116e1f0d8915546c907995042f716b870e90dd3697651",
+    "bytes": 2179
   },
   "files": {
     "ams1117-sot223.glb": {
-      "sha256": "f39807e5b49c85c9eea2ede85e1a00adab90a79327eabae1127819fe69e720a9",
-      "bytes": 5192
+      "sha256": "7ec007017cff145c968833b8e1c7382c3fb3af82195883057d58170505324f29",
+      "bytes": 9180
     },
     "ams1117-sot223.anchors.json": {
       "sha256": "68084bb48473f9456504133524ea9adae100333001ade572b817fa7c1eb4b6b7",

@@ -13,7 +13,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb
-from cad.chip import chip, chip_anchors
+from cad.chip import chip_anchors, led
 from cad.color import plastic
 
 SIZE = (1.6, 0.8, 0.55)  # length, width, height  # verify height
@@ -22,7 +22,7 @@ _LENS = plastic("#E8C56A")
 
 
 def led_0603_shape(lens=_LENS):
-    return bd.Compound(children=chip(*SIZE, lens), label="led_0603")
+    return bd.Compound(children=led(*SIZE, lens), label="led_0603")
 
 
 def led_0603_anchors():

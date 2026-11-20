@@ -2,13 +2,13 @@
   "part": "capacitor-electrolytic-radial",
   "source": {
     "script": "model.py",
-    "sha256": "1e26d262ee5c88038c1c1430d3bb1fab569394f4708c76152369d529de8358f8",
-    "bytes": 2510
+    "sha256": "47f1aaacf70f29a3cf1e2f018f8296e8cf71f93d6f4f90dd391500f56de321b3",
+    "bytes": 3030
   },
   "files": {
     "capacitor-electrolytic-radial.glb": {
-      "sha256": "3887855a6d3c69a7ba27ba2d02948682f12fbd5a9b2746a3accf2ebf6837701b",
-      "bytes": 28588
+      "sha256": "4aa2170391d6086424f5342c7a9364f87bd493b7c8d51be3e5d2dd8c8218401c",
+      "bytes": 32524
     },
     "capacitor-electrolytic-radial.anchors.json": {
       "sha256": "2ec0c742ade106f3904f0fe22ee96be593e8d78ab329f5de38e35975bc1b9a54",
@@ -17,7 +17,7 @@
   },
   "box": {
     "min": [-3.15, -3.142989, -20],
-    "max": [3.142747, 3.142989, 11]
+    "max": [3.22, 3.142989, 11]
   },
   "kept_nodes": ["lead-1", "lead-2"],
   "draw_calls": 5,
@@ -37,7 +37,7 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 5,
+      "primitives_in": 7,
       "primitives_out": 5
     }
   }

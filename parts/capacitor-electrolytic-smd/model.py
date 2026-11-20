@@ -45,11 +45,14 @@ def capacitor_electrolytic_smd_shape():
     side, base_h = BASE
     wide, span, inner, thick = TERMINAL
     can = cyl_z(0, 0, base_h, h, d / 2.0)
-    mark = box(d / 4.0, 0, h + 0.02, d / 2.0 - 0.6, d * 0.5, 0.04)
+    # A half-moon on the negative (+X) half of the top, in place of a square.
+    radius = d * 0.22
+    cx = d * 0.15
+    moon = cyl_z(cx, 0, h - 0.01, h + 0.045, radius) - box(cx - radius, 0, h + 0.02, 2 * radius, 2 * radius + 0.4, 0.2)
     children = [
         paint(box(0, 0, thick + (base_h - thick) / 2.0, side, side, base_h - thick), "base", _BASE),
         paint(can, "can", _CAN),
-        paint(mark, "mark", _MARK),
+        paint(moon, "mark", _MARK),
     ]
     for lead in (1, 2):
         long = span / 2.0 - inner
