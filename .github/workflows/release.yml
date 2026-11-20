@@ -4,12 +4,12 @@
 # It runs on a push of a v* tag, or on a manual run that names an existing v* tag.
 # It does not run on pull requests or on main. Deleting a tag does not run it.
 #
-# Linux x86_64 uses the CI runner, blacksmith-4vcpu-ubuntu-2404.
-# macOS arm64 uses the repository variable ORBE_MACOS_RUNNER when that names a
-# runner. Otherwise it uses macos-15, a hosted Apple Silicon runner. macos-14
-# was retired on 2026-11-02. Hosted macOS minutes cost more than Linux minutes.
-# Set the variable to choose another runner, including a self-hosted Mac,
-# before the first tag.
+# Linux x86_64 uses ubuntu-24.04, the runner CI uses. macOS arm64 uses the
+# repository variable ORBE_MACOS_RUNNER when that names a runner. Otherwise it
+# uses macos-15, a hosted Apple Silicon runner. macos-14 was retired on
+# 2026-11-02. Both are GitHub-hosted standard runners, which are free on a public
+# repository. Set the variable to choose another runner, including a self-hosted
+# Mac, before the first tag.
 name: Release
 
 on:
@@ -41,7 +41,7 @@ jobs:
         include:
           - name: Linux x86_64
             target: x86_64-unknown-linux-gnu
-            runner: blacksmith-4vcpu-ubuntu-2404
+            runner: ubuntu-24.04
           - name: macOS arm64
             target: aarch64-apple-darwin
             runner: ${{ vars.ORBE_MACOS_RUNNER || 'macos-15' }}
@@ -98,7 +98,7 @@ jobs:
     name: Draft release
     needs: build
     if: github.event_name != 'push' || github.event.deleted != true
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
