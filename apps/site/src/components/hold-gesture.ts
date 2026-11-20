@@ -9,6 +9,8 @@ export interface HoldGesture {
   keyUp(key: string): void;
   pointerDown(id: number, button: number): void;
   pointerEnd(id: number): void;
+  /** The pointer left the control while down. Its pointerup can still land on the control. */
+  pointerLeave(id: number): void;
   /** The control blurred, the window blurred, or the page was hidden. */
   drop(): void;
   /** `trusted` is the click event's `isTrusted`. */
@@ -25,8 +27,9 @@ const CLICK_MS = 300;
  * click. On Chrome for Android that click can arrive in a later task than touchend, so the
  * gesture stays set until the click arrives or for {@link GESTURE_MS}. The next key or pointer
  * starts a new gesture. VoiceOver, NVDA and TalkBack send a trusted click with no gesture, and
- * that click presses. A blur moves the held keys and pointers aside, so a later press or click
- * is a new one. */
+ * that click presses. A blur, or a pointer leaving the control, moves the held keys and pointers
+ * aside: a later press or a click with no key or pointer is a new one, and the key-up or
+ * pointerup that ends a moved-aside one owns its click again. */
 export function holdGesture(target: HoldTarget): HoldGesture {
   let down = 0;
   let gesture = false;
@@ -35,6 +38,7 @@ export function holdGesture(target: HoldTarget): HoldGesture {
   const droppedKeys = new Set<string>();
   const droppedPointers = new Set<number>();
   let gestureTimer: ReturnType<typeof setTimeout> | undefined;
+  let clickTimer: ReturnType<typeof setTimeout> | undefined;
 
   const press = () => {
     down += 1;
@@ -74,6 +78,7 @@ export function holdGesture(target: HoldTarget): HoldGesture {
     },
     keyUp(key) {
       if (droppedKeys.delete(key)) {
+        beginGesture();
         endIfIdle();
         return;
       }
@@ -90,10 +95,17 @@ export function holdGesture(target: HoldTarget): HoldGesture {
     },
     pointerEnd(id) {
       if (droppedPointers.delete(id)) {
+        beginGesture();
         endIfIdle();
         return;
       }
       if (!pointers.delete(id)) return;
+      releaseOne();
+      endIfIdle();
+    },
+    pointerLeave(id) {
+      if (!pointers.delete(id)) return;
+      droppedPointers.add(id);
       releaseOne();
       endIfIdle();
     },
@@ -103,6 +115,8 @@ export function holdGesture(target: HoldTarget): HoldGesture {
       for (const id of pointers) droppedPointers.add(id);
       pointers.clear();
       clearGestureTimer();
+      clearTimeout(clickTimer);
+      clickTimer = undefined;
       gesture = false;
       if (down === 0) return;
       down = 0;
@@ -116,7 +130,10 @@ export function holdGesture(target: HoldTarget): HoldGesture {
         return;
       }
       press();
-      setTimeout(releaseOne, CLICK_MS);
+      clickTimer = setTimeout(() => {
+        clickTimer = undefined;
+        releaseOne();
+      }, CLICK_MS);
     },
   };
 }

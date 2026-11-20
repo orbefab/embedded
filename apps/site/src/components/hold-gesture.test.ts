@@ -50,7 +50,7 @@ describe("hold gesture", () => {
     expect(events).toEqual(["press", "release"]);
   });
 
-  it("still ignores a trusted click that arrives after the zero-delay timer", () => {
+  it("ignores a trusted click that arrives in a later task, and presses after the window", () => {
     vi.useFakeTimers();
     const { target, events } = recording();
     const hold = holdGesture(target);
@@ -98,6 +98,49 @@ describe("hold gesture", () => {
     hold.drop();
     hold.pointerEnd(1);
     expect(events).toEqual(["press", "release"]);
+  });
+
+  it("ignores the click that ends a hold a blur cut short", () => {
+    vi.useFakeTimers();
+    const { target, events } = recording();
+    const hold = holdGesture(target);
+    hold.pointerDown(1, 0);
+    vi.advanceTimersByTime(100);
+    hold.drop();
+    vi.advanceTimersByTime(100);
+    hold.pointerEnd(1);
+    hold.click(true);
+    vi.advanceTimersByTime(500);
+    expect(events).toEqual(["press", "release"]);
+  });
+
+  it("ignores the click after a pointer leaves, comes back later and lifts", () => {
+    vi.useFakeTimers();
+    const { target, events } = recording();
+    const hold = holdGesture(target);
+    hold.pointerDown(1, 0);
+    vi.advanceTimersByTime(200);
+    hold.pointerLeave(1);
+    expect(events).toEqual(["press", "release"]);
+    vi.advanceTimersByTime(1000);
+    hold.pointerEnd(1);
+    hold.click(true);
+    vi.advanceTimersByTime(500);
+    expect(events).toEqual(["press", "release"]);
+  });
+
+  it("a blur cancels a click's release, so a later held key stays down", () => {
+    vi.useFakeTimers();
+    const { target, events } = recording();
+    const hold = holdGesture(target);
+    hold.click(true);
+    vi.advanceTimersByTime(100);
+    hold.drop();
+    hold.keyDown(" ", false);
+    vi.advanceTimersByTime(1000);
+    expect(events).toEqual(["press", "release", "press"]);
+    hold.keyUp(" ");
+    expect(events).toEqual(["press", "release", "press", "release"]);
   });
 
   it("presses for a screen reader click after a blur", () => {

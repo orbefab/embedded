@@ -108,7 +108,6 @@ fn rejected_netlist_exits_one_and_still_writes_diagnostics() {
 }
 
 /// The pages that state the version state this one.
-#[ignore = "full tier"]
 #[test]
 fn the_docs_name_the_engine_version() {
     let version = orbe_engine::run_folder::ENGINE_VERSION;

@@ -59,7 +59,7 @@ function PressControl({ hold }: { hold: { readonly current: ButtonHold | null } 
     gesture.current?.pointerDown(event.pointerId, event.button);
   };
   const onPointerLeave = (event: PointerEvent<HTMLButtonElement>) => {
-    gesture.current?.pointerEnd(event.pointerId);
+    gesture.current?.pointerLeave(event.pointerId);
   };
 
   return (
