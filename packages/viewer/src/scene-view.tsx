@@ -1,61 +1,23 @@
 // Adapted from maker-sandbox (MIT, Copyright 2026 Alwurts).
 import { type ThreeEvent, useFrame, useLoader, useThree } from "@react-three/fiber";
 import { Bloom, EffectComposer, Outline } from "@react-three/postprocessing";
-import { type RefObject, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { CanvasTexture, type Group, Mesh, type Object3D, RepeatWrapping, SRGBColorSpace } from "three";
+import { type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { BackSide, Box3, type Group, Mesh, MeshStandardMaterial, type Object3D } from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { type BuiltScene, buildScene, fromGltf, type Tag, tagOf } from "./build";
-import { type CameraMode, union } from "./camera-frame";
+import type { CameraMode } from "./camera-frame";
 import { CameraRig } from "./camera-rig";
 import { glowIntensity, litColour } from "./glow";
 import type { Hovered, HoverStore } from "./hover";
 import type { Command, FrameMessage, Ref, SceneMessage, Vec3 } from "./protocol";
 import { holeAt, instanceAt, refOf, stripText } from "./refs";
+import { applyPlasticRoom, roomTexture, StageFloor, StageLights, StageRoom } from "./stage";
+import type { StageTheme } from "./stage-theme";
 import type { Box } from "./wire-geometry";
 import { WireMesh } from "./wire-mesh";
 
-const MAT_CELL_MM = 10;
-
-function matTexture(fill: string, line: string): CanvasTexture {
-  const canvas = document.createElement("canvas");
-  canvas.width = 64;
-  canvas.height = 64;
-  const context = canvas.getContext("2d");
-  if (context !== null) {
-    context.fillStyle = fill;
-    context.fillRect(0, 0, 64, 64);
-    context.strokeStyle = line;
-    context.strokeRect(0.5, 0.5, 63, 63);
-  }
-  const texture = new CanvasTexture(canvas);
-  texture.wrapS = RepeatWrapping;
-  texture.wrapT = RepeatWrapping;
-  texture.colorSpace = SRGBColorSpace;
-  return texture;
-}
-
-/** A cutting mat just under the lowest lead or wire. */
-function Mat({ boxes, fill, line }: { boxes: readonly Box[]; fill: string; line: string }) {
-  const box = useMemo(() => union(boxes), [boxes]);
-  const width = Math.max(240, (box.max[0] - box.min[0]) * 2);
-  const depth = Math.max(160, (box.max[2] - box.min[2]) * 2);
-  const texture = useMemo(() => {
-    const made = matTexture(fill, line);
-    made.repeat.set(width / MAT_CELL_MM, depth / MAT_CELL_MM);
-    return made;
-  }, [width, depth, fill, line]);
-  useEffect(() => () => texture.dispose(), [texture]);
-  return (
-    <mesh
-      name="stage-mat"
-      position={[(box.min[0] + box.max[0]) / 2, box.min[1] - 0.5, (box.min[2] + box.max[2]) / 2]}
-      rotation={[-Math.PI / 2, 0, 0]}
-    >
-      <planeGeometry args={[width, depth]} />
-      <meshStandardMaterial map={texture} roughness={1} />
-    </mesh>
-  );
-}
+/** orbefab.com's brand orange. */
+const HOVER = "#e85d04";
 
 function Effects({ hover }: { hover: HoverStore }) {
   const hovered = useSyncExternalStore(hover.subscribe, hover.get);
@@ -73,14 +35,31 @@ function Effects({ hover }: { hover: HoverStore }) {
       <Outline
         blur
         edgeStrength={6}
-        hiddenEdgeColor="#7dff67"
+        hiddenEdgeColor={HOVER}
         pulseSpeed={0}
         selection={selection}
-        visibleEdgeColor="#7dff67"
+        visibleEdgeColor={HOVER}
         xRay
       />
     </EffectComposer>
   );
+}
+
+/** One box per drawn mesh, plus one per wire. A part's own box has empty corners, and those
+ * would push the camera back. */
+function drawnBoxes(built: BuiltScene): readonly Box[] {
+  const boxes: Box[] = [];
+  const box = new Box3();
+  built.root.updateMatrixWorld(true);
+  built.root.traverse((object) => {
+    if (!(object instanceof Mesh)) return;
+    object.geometry.boundingBox ?? object.geometry.computeBoundingBox();
+    if (object.geometry.boundingBox === null) return;
+    box.copy(object.geometry.boundingBox).applyMatrix4(object.matrixWorld);
+    boxes.push({ min: [box.min.x, box.min.y, box.min.z], max: [box.max.x, box.max.y, box.max.z] });
+  });
+  if (boxes.length === 0) return built.boxes;
+  return [...boxes, ...built.boxes.slice(built.boxes.length - built.wires.length)];
 }
 
 /** The nearest object at or above `object` whose tag passes `test`. */
@@ -142,8 +121,7 @@ export function SceneView({
   hover,
   mode,
   onBuilt,
-  mat,
-  line,
+  colours,
   pageScroll = false,
 }: {
   scene: SceneMessage;
@@ -152,9 +130,8 @@ export function SceneView({
   hover: HoverStore;
   mode: CameraMode;
   onBuilt: (built: BuiltScene) => void;
-  /** Cutting-mat fill and grid line. Without theme tokens these are the viewer's own dark colours. */
-  mat: string;
-  line: string;
+  /** Background, floor fill and grid line, from the page theme. */
+  colours: StageTheme;
   /** One finger scrolls the page. Two fingers orbit and zoom. */
   pageScroll?: boolean;
 }) {
@@ -175,6 +152,26 @@ export function SceneView({
     return buildScene(scene, models);
   }, [gltfs, scene, urls]);
   useEffect(() => onBuilt(built), [built, onBuilt]);
+
+  const gl = useThree((state) => state.gl);
+  const stage = useThree((state) => state.scene);
+  useLayoutEffect(() => {
+    const texture = roomTexture(gl);
+    const visit = (object: Object3D) => {
+      if (!(object instanceof Mesh)) return;
+      object.castShadow = true;
+      object.receiveShadow = true;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        if (!(material instanceof MeshStandardMaterial)) continue;
+        // A pin or a shell is open. The back faces cast, so the shadow keeps the part's shape.
+        material.shadowSide = BackSide;
+        applyPlasticRoom(material, texture);
+      }
+    };
+    built.root.traverse(visit);
+    stage.getObjectByName("stage-wires")?.traverse(visit);
+  }, [built, gl, stage]);
 
   useFrame(() => {
     const live = frame.current;
@@ -250,19 +247,24 @@ export function SceneView({
     hover.set(hole ?? { ref: found.tag.ref, why: found.tag.why, error: found.tag.error, ...at });
   };
 
+  const frameBoxes = useMemo(() => drawnBoxes(built), [built]);
   return (
     <>
-      <CameraRig boxes={built.boxes} mode={mode} pageScroll={pageScroll} />
+      <StageRoom />
+      <StageLights background={colours.background} boxes={built.boxes} />
+      <CameraRig boxes={frameBoxes} mode={mode} pageScroll={pageScroll} />
       <primitive
         object={built.root}
         onPointerDown={press}
         onPointerMove={move}
         onPointerOut={() => hover.set(null)}
       />
-      {built.wires.map((wire, index) => (
-        <WireMesh key={index} wire={wire} />
-      ))}
-      <Mat boxes={built.boxes} fill={mat} line={line} />
+      <group name="stage-wires">
+        {built.wires.map((wire, index) => (
+          <WireMesh key={index} wire={wire} />
+        ))}
+      </group>
+      <StageFloor boxes={built.boxes} colours={colours} />
       <Effects hover={hover} />
     </>
   );

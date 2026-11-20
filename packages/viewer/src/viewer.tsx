@@ -576,18 +576,15 @@ export function Viewer({ source, onCreated, pageScroll = false }: ViewerProps) {
       style={{ position: "relative", width: "100%", height: "100%", touchAction: pageScroll ? "pan-y" : "none" }}
     >
       <ShowError>
-        <Canvas dpr={[1, 1.75]} gl={{ antialias: true, alpha: false }} onCreated={onCreated}>
+        {/* `flat` leaves tone mapping off. A lit LED reaches luminance 1 and blooms; the scene stays under it. */}
+        <Canvas dpr={[1, 1.75]} flat gl={{ antialias: true, alpha: false }} onCreated={onCreated}>
           <StageBackdrop color={stage.background} />
-          <hemisphereLight args={["#e6ebf2", "#2a2c30", 0.9]} />
-          <ambientLight intensity={0.25} />
-          <directionalLight intensity={1.35} position={[40, 90, 24]} />
           {scene === null ? null : (
             <Suspense fallback={null}>
               <SceneView
+                colours={stage}
                 frame={frame}
                 hover={hover}
-                line={stage.line}
-                mat={stage.mat}
                 mode={mode}
                 onBuilt={onBuilt}
                 pageScroll={pageScroll}

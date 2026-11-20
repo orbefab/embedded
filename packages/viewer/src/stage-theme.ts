@@ -1,10 +1,10 @@
 import { useSyncExternalStore } from "react";
 
-/** The stage when no page has set the colours. The same values the viewer drew before themes. */
+/** The stage when no page has set the colours. The studio's dark ground. */
 export const STAGE_DARK = {
-  background: "#1b1d21",
-  mat: "#32363c",
-  line: "#4a5058",
+  background: "#17191c",
+  mat: "#202327",
+  line: "#2c3036",
 } as const;
 
 export interface StageTheme {

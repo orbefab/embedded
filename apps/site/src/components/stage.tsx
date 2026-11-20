@@ -51,7 +51,7 @@ export function Stage({
   }, [webgl]);
   return (
     <div
-      className={`relative overflow-hidden border border-border bg-[var(--stage,#1b1d21)] ${fill ? "h-full min-h-0" : "h-[min(62vh,560px)]"}`}
+      className={`relative overflow-hidden border border-border bg-[var(--stage,#17191c)] ${fill ? "h-full min-h-0" : "h-[min(62vh,560px)]"}`}
     >
       {webgl === false ? (
         <p className="absolute inset-0 grid place-items-center px-6 text-center text-sm" data-testid="no-webgl">
