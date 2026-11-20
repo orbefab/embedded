@@ -4,8 +4,8 @@
 # comes from the blob cache. All three go to .scratch/site, and `vite build` in apps/site renders
 # every page from them. Needs what scripts/wasm.sh needs, Node 24, pnpm and cargo. It installs
 # nothing. Pass `--previous <dir>`, the registry the live site serves, so the build keeps every
-# version it served (docs/registry.md, Versions). Pass `--first-deploy` when there is no earlier
-# registry. One of the two is required. ORBE_SITE_INSTALL=1 shows install lines, once the repo
+# version it served (docs/registry.md, Versions). Pass `--first-deploy` for a local build
+# when there is no registry to download. One of the two is required. ORBE_SITE_INSTALL=1 shows install lines, once the repo
 # and the binaries are public, and copies scripts/install.sh to /embedded/install.sh. The footer
 # links the repo either way.
 #
@@ -25,7 +25,7 @@ Build the site into apps/site/dist.
 
 --previous <dir>  The registry the live site serves. The build keeps every version
                   that registry served.
---first-deploy    This is the first deploy, so there is no earlier registry.
+--first-deploy    Local build with no earlier registry to pass as --previous.
 
 One of the two is required.
 EOF
@@ -65,7 +65,7 @@ if [[ $first -eq 1 && ${#previous[@]} -gt 0 ]]; then
   exit 2
 fi
 if [[ $first -eq 0 && ${#previous[@]} -eq 0 ]]; then
-  echo "scripts/site.sh: pass --previous <dir>, the registry the live site serves, or --first-deploy for the first deploy" >&2
+  echo "scripts/site.sh: pass --previous <dir>, the registry the live site serves, or --first-deploy when there is no registry to download" >&2
   usage >&2
   exit 2
 fi
