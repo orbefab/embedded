@@ -274,6 +274,43 @@ fn a_version_that_is_not_three_numbers_shows_the_shape() {
 }
 
 #[test]
+fn open_prints_a_missing_part_once() {
+    let project = tempfile::tempdir().unwrap();
+    let (output, stdout, stderr) = orbe_in(project.path(), &["add", "nano-button-led"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    fs::remove_dir_all(project.path().join("parts/nano-board")).unwrap();
+    let (output, stdout, stderr) = orbe_in(project.path(), &["open"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    assert_eq!(
+        stdout,
+        "scene.jsonc:8:23: error[part_missing]: part `nano-board` has a parts.lock line but no folder\n  hint: run `orbe add nano-board`\n"
+    );
+    assert_eq!(stdout.matches("error[part_missing]").count(), 1, "{stdout}");
+
+    let (output, stdout, stderr) =
+        orbe_in(project.path(), &["open", "--json", "--session", "once"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    assert_eq!(stdout.lines().count(), 1, "{stdout}");
+    let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["error"]["code"], "part_missing");
+    assert_eq!(
+        reply["error"]["message"],
+        "part `nano-board` has a parts.lock line but no folder"
+    );
+    assert_eq!(reply["error"]["hint"], "run `orbe add nano-board`");
+    let found = reply["data"]["diagnostics"].as_array().unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0]["code"], "part_missing");
+    assert_eq!(found[0]["line"], 8);
+    assert_eq!(found[0]["column"], 23);
+    assert_eq!(found[0]["message"], reply["error"]["message"]);
+    assert_eq!(found[0]["hint"], reply["error"]["hint"]);
+}
+
+#[test]
 fn every_bad_fixture_exits_1_and_prints_its_findings() {
     for case in common::cases("bad") {
         let name = case.file_name().unwrap().to_string_lossy().to_string();

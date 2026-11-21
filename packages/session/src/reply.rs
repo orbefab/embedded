@@ -963,6 +963,16 @@ impl Reply {
                 for d in found {
                     let _ = writeln!(out, "{d}");
                 }
+                // One finding whose code, message and hint are this error is already
+                // printed above. A second line would repeat it.
+                if let [one] = found.as_slice()
+                    && one.code == error.code.as_str()
+                    && one.message == error.message
+                    && one.hint == error.hint
+                {
+                    out.pop();
+                    return out;
+                }
             }
             Data::Stepped(_) => {
                 let _ = writeln!(out, "{}", self.data.text(self.t_ps));
