@@ -10,9 +10,9 @@
   --radius-lg: 0px;
   --radius-xl: 0px;
   color-scheme: light;
-  --stage: #e7e7ea;
-  --stage-mat: #dedee2;
-  --stage-line: #c8c8ce;
+  --stage: #e9e9ec;
+  --stage-mat: #e2e2e6;
+  --stage-line: #d2d2d8;
   --stage-label-bg: rgba(244, 244, 245, 0.94);
   --stage-label-fg: #111111;
   --stage-label-muted: #3f3f46;
@@ -23,9 +23,9 @@
 
 .dark {
   color-scheme: dark;
-  --stage: #1b1d21;
-  --stage-mat: #32363c;
-  --stage-line: #4a5058;
+  --stage: #17191c;
+  --stage-mat: #202327;
+  --stage-line: #2c3036;
   --stage-label-bg: rgba(20, 22, 26, 0.92);
   --stage-label-fg: #e6ebf2;
   --stage-label-muted: #c9ced6;

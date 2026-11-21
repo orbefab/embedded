@@ -2,9 +2,9 @@
 import { OrbitControls } from "@react-three/drei/core/OrbitControls";
 import { OrthographicCamera } from "@react-three/drei/core/OrthographicCamera";
 import { PerspectiveCamera } from "@react-three/drei/core/PerspectiveCamera";
-import { useThree } from "@react-three/fiber";
+import { useFrame, useThree } from "@react-three/fiber";
 import { useEffect } from "react";
-import { MOUSE, OrthographicCamera as OrthoImpl, TOUCH } from "three";
+import { MOUSE, OrthographicCamera as OrthoImpl, PerspectiveCamera as PerspImpl, TOUCH } from "three";
 import type { OrbitControls as OrbitControlsImpl } from "three/addons/controls/OrbitControls.js";
 import {
   CAMERA_FOV_DEG,
@@ -73,6 +73,17 @@ export function CameraRig({ mode, boxes, pageScroll = false }: { mode: CameraMod
     if (!pageScroll || controls === null || !(controls.domElement instanceof HTMLElement)) return;
     return pageTouches(controls.domElement);
   }, [controls, pageScroll]);
+
+  // At the far end of the orbit the depth step is wider than the shadow plane's 0.3 mm
+  // clearance, and the shadow fails the depth test. distance/200 keeps the step under that
+  // clearance. Up close the plane stays at 0.1.
+  useFrame(() => {
+    if (!(camera instanceof PerspImpl) || controls === null) return;
+    const near = Math.max(0.1, camera.position.distanceTo(controls.target) / 200);
+    if (Math.abs(camera.near - near) < 1e-4) return;
+    camera.near = near;
+    camera.updateProjectionMatrix();
+  });
 
   return (
     <>

@@ -457,6 +457,7 @@ export function Viewer({ source, onCreated, pageScroll = false }: ViewerProps) {
   const [scene, setScene] = useState<SceneMessage | null>(null);
   const [mode, setMode] = useState<CameraMode>("tilted");
   const frame = useRef<FrameMessage | null>(null);
+  const ledPeak = useRef<number[]>([]);
   const hover = useMemo(createHoverStore, []);
   const [partErrors, setPartErrors] = useState<readonly string[]>([]);
   const [sendErrors, setSendErrors] = useState<readonly string[]>([]);
@@ -488,9 +489,14 @@ export function Viewer({ source, onCreated, pageScroll = false }: ViewerProps) {
       source.subscribe((message) => {
         if (message.type === "scene") {
           frame.current = null;
+          ledPeak.current = [];
           setSendErrors([]);
           setScene(message);
         } else if (message.type === "frame") {
+          const peaks = ledPeak.current;
+          for (let channel = 0; channel < message.led_a.length; channel += 1) {
+            peaks[channel] = Math.max(peaks[channel] ?? 0, message.led_a[channel] ?? 0);
+          }
           frame.current = message;
         } else {
           setClosed(message.reason);
@@ -576,18 +582,16 @@ export function Viewer({ source, onCreated, pageScroll = false }: ViewerProps) {
       style={{ position: "relative", width: "100%", height: "100%", touchAction: pageScroll ? "pan-y" : "none" }}
     >
       <ShowError>
-        <Canvas dpr={[1, 1.75]} gl={{ antialias: true, alpha: false }} onCreated={onCreated}>
+        {/* The effect composer forces tone mapping off. Bloom reads only the LED glow meshes. */}
+        <Canvas dpr={[1, 1.75]} flat gl={{ antialias: false, alpha: false }} onCreated={onCreated}>
           <StageBackdrop color={stage.background} />
-          <hemisphereLight args={["#e6ebf2", "#2a2c30", 0.9]} />
-          <ambientLight intensity={0.25} />
-          <directionalLight intensity={1.35} position={[40, 90, 24]} />
           {scene === null ? null : (
             <Suspense fallback={null}>
               <SceneView
+                colours={stage}
                 frame={frame}
                 hover={hover}
-                line={stage.line}
-                mat={stage.mat}
+                ledPeak={ledPeak}
                 mode={mode}
                 onBuilt={onBuilt}
                 pageScroll={pageScroll}

@@ -21,3 +21,10 @@ export function glowColour(base: Color): Color {
 export function litColour(base: Color, intensity: number, into: Color): Color {
   return into.copy(base).multiplyScalar(Math.max(0, 1 - intensity));
 }
+
+/** The current to draw. `peak` is the brightest current since the previous drawn frame.
+ * A pulse that has already fallen still shows once, so a short press cannot land between
+ * frames and disappear. A current that is still near that peak draws as it is. */
+export function shownCurrent(live: number, peak: number): number {
+  return live < peak * 0.5 ? peak : live;
+}

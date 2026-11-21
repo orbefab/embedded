@@ -924,6 +924,15 @@ test("a touch drag on empty stage space does not press the button", async ({ bro
   }));
   expect(touchAction).toEqual({ box: "pan-y", canvas: "pan-y" });
   const before = await page.evaluate(() => window.orbeViewer.get().camera.position.toArray() as number[]);
+  // The hint shows for 1.6 s, and a slow page can take longer than that to reach the check below,
+  // so record it when it appears.
+  await page.evaluate(() => {
+    const seen = window as unknown as { hintSeen?: string };
+    new MutationObserver(() => {
+      const text = document.querySelector("[data-testid=gesture-hint]")?.textContent;
+      if (text) seen.hintSeen = text;
+    }).observe(document.body, { childList: true, subtree: true, characterData: true });
+  });
   const session = await context.newCDPSession(page);
   await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ ...spot, id: 1 }] });
   for (let step = 1; step <= 6; step += 1) {
@@ -939,7 +948,9 @@ test("a touch drag on empty stage space does not press the button", async ({ bro
     before.every((value, index) => Math.abs(value - (after[index] ?? value)) < 0.5),
     JSON.stringify({ before, after }),
   ).toBe(true);
-  await expect(page.getByTestId("gesture-hint")).toHaveText("Use two fingers to move the view");
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { hintSeen?: string }).hintSeen))
+    .toBe("Use two fingers to move the view");
   await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   const hold = page.getByTestId("hold-to-press");
   await hold.scrollIntoViewIfNeeded();
@@ -1194,34 +1205,34 @@ test("the viewer background follows the theme on a Block, a part and the embed",
   await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
   await ready("@btn1");
   const dark = await stageHex(page);
-  expect(dark).toBe("1b1d21");
+  expect(dark).toBe("17191c");
   const darkMat = await page.evaluate(() => {
     const mesh = window.orbeViewer.get().scene.getObjectByName("stage-mat");
-    const canvas = mesh?.material?.map?.image as HTMLCanvasElement | undefined;
-    const pixel = canvas?.getContext("2d")?.getImageData(32, 32, 1, 1).data;
-    return pixel === undefined ? "" : `${pixel[0]},${pixel[1]},${pixel[2]}`;
+    const fill = mesh?.material?.uniforms?.fill?.value;
+    return typeof fill?.getHexString === "function" ? fill.getHexString() : "";
   });
-  expect(darkMat).toBe("50,54,60");
+  expect(darkMat).toBe("202327");
   await page.getByRole("button", { name: "Switch to light mode" }).click();
-  await page.waitForFunction(() => window.orbeViewer.get().scene.background.getHexString() !== "1b1d21");
+  await page.waitForFunction(() => window.orbeViewer.get().scene.background.getHexString() === "e9e9ec");
   const light = await stageHex(page);
+  expect(light).toBe("e9e9ec");
   expect(lumaOf(light)).toBeGreaterThan(lumaOf(dark));
   const lightControls = await page.getByTestId("controls").evaluate((element) => getComputedStyle(element).color);
   expect(lightControls).not.toBe("");
 
   await page.goto(`${host.base}/embedded/parts/resistor-axial/`);
   await ready("@resistor_axial");
-  expect(lumaOf(await stageHex(page))).toBeGreaterThan(lumaOf(dark));
+  expect(await stageHex(page)).toBe("e9e9ec");
 
   await page.goto(`${host.base}/embedded/blocks/nano-button-led/embed/`);
   await ready("@btn1");
-  expect(lumaOf(await stageHex(page))).toBeGreaterThan(lumaOf(dark));
+  expect(await stageHex(page)).toBe("e9e9ec");
   await page.evaluate(() => {
     localStorage.setItem("theme", "dark");
     window.dispatchEvent(new StorageEvent("storage", { key: "theme" }));
   });
-  await page.waitForFunction(() => window.orbeViewer.get().scene.background.getHexString() === "1b1d21");
-  expect(await stageHex(page)).toBe("1b1d21");
+  await page.waitForFunction(() => window.orbeViewer.get().scene.background.getHexString() === "17191c");
+  expect(await stageHex(page)).toBe("17191c");
   await context.close();
 });
 
