@@ -18,6 +18,7 @@ use super::analog::Analog;
 use super::app::{self, AppControl, Hold, Steer};
 use super::calibration::{self, Calibration};
 use super::clock::{CpuClock, Source, Tick};
+use super::code::Code;
 use super::efuse::{Efuse, EfuseSet};
 use super::extmem;
 use super::flash::{self, Flash};
@@ -87,7 +88,9 @@ pub(crate) struct Soc {
     rtc_slow: PagedRam,
     /// The mask ROM, on a chip booted from flash.
     rom: Option<Arc<[u8]>>,
-    pub(crate) flash: Option<Flash>,
+    flash: Option<Flash>,
+    /// The code version the cores' decode tables run on, and the lines it watches.
+    code: Code,
     /// Registers kept as plain words, by address.
     plain: BTreeMap<u32, u32>,
     pub(crate) gpio: Gpio,
@@ -326,6 +329,7 @@ impl Soc {
             rtc_slow: PagedRam::new(RTC_SLOW.start, (RTC_SLOW.end - RTC_SLOW.start) as usize),
             rom: None,
             flash: None,
+            code: Code::default(),
             plain: BTreeMap::new(),
             gpio: Gpio::new(netted),
             systimer: Systimer::new(),
@@ -471,6 +475,26 @@ impl Soc {
     /// Adds the ROM and the flash, as a chip booted from flash has them.
     pub(crate) fn attach_rom(&mut self, rom: Arc<[u8]>) {
         self.rom = Some(rom);
+        self.code.moved();
+    }
+
+    /// Gives the chip `flash`, which fetches then read through its MMU.
+    pub(crate) fn attach_flash(&mut self, flash: Flash) {
+        self.flash = Some(flash);
+        self.code.moved();
+    }
+
+    /// The whole flash, on a chip that has it.
+    pub(crate) fn flash_bytes(&self) -> Option<&[u8]> {
+        self.flash.as_ref().map(Flash::bytes)
+    }
+
+    /// Maps `size` bytes of flash from `offset` at bus address `vaddr`, as the bootloader maps
+    /// an app's segment.
+    pub(crate) fn map_flash(&mut self, vaddr: u32, offset: u32, size: u32) {
+        let flash = self.flash.as_mut().expect("a chip with flash");
+        flash.map(vaddr, offset, size);
+        self.code.moved();
     }
 
     /// The word at `addr`, as a load at `cycle` reads it.
@@ -593,6 +617,7 @@ impl Soc {
     /// Writes `bytes` from `addr` into SRAM or RTC memory, as a loader does. Every byte lies in
     /// one of them.
     pub(crate) fn poke(&mut self, addr: u32, bytes: &[u8]) {
+        self.code.moved();
         if let Some(offset) = Self::sram_offset(addr, false) {
             self.sram.write_bytes(offset, bytes);
         } else if RTC_FAST.contains(&addr) {
@@ -1025,10 +1050,18 @@ impl Soc {
                 }
                 true
             }
-            _ if MMU_TABLE.contains(&addr) => self
-                .flash
-                .as_mut()
-                .is_some_and(|flash| flash.write_mmu(addr - MMU_TABLE.start, value)),
+            _ if MMU_TABLE.contains(&addr) => {
+                let Some(flash) = self.flash.as_mut() else {
+                    return false;
+                };
+                let offset = addr - MMU_TABLE.start;
+                let before = flash.read_mmu(offset);
+                let done = flash.write_mmu(offset, value);
+                if flash.read_mmu(offset) != before {
+                    self.code.moved();
+                }
+                done
+            }
             _ => false,
         };
         let value = if base == EXTMEM {
@@ -1325,21 +1358,28 @@ fn word_of(addr: u32, width: Width) -> (u32, u32, u32) {
 }
 
 impl Soc {
-    fn fetch(&mut self, addr: u32) -> Result<u32, Exit> {
-        if self.changed.is_some()
+    /// Whether a store set something the run reads before the next instruction, so every fetch
+    /// stops.
+    fn fetch_held(&self) -> bool {
+        self.changed.is_some()
             || self.sampled.is_some()
             || self.rearmed
             || self.reclocked
             || self.started
-        {
+    }
+
+    fn fetch(&mut self, addr: u32) -> Result<u32, Exit> {
+        if self.fetch_held() {
             return Err(Exit::Stop);
         }
         if let Some(offset) = Self::sram_offset(addr, true) {
+            self.code.fetched_sram(offset);
             return Ok(self.sram.read(offset, Width::Word));
         }
         let word = if flash::IROM.contains(&addr) || rom::ROM.contains(&addr) {
             self.memory_word(addr)
         } else if RTC_FAST.contains(&addr) {
+            self.code.fetched_rtc_fast(addr - RTC_FAST.start);
             Some(self.rtc_fast.read(addr, Width::Word))
         } else {
             None
@@ -1423,10 +1463,12 @@ impl Soc {
                 }
             }
             self.sram.write(offset, width, value);
+            self.code.stored_sram(offset);
             return Ok(());
         }
         if RTC_FAST.contains(&addr) {
             self.rtc_fast.write(addr, width, value);
+            self.code.stored_rtc_fast(addr - RTC_FAST.start);
             return Ok(());
         }
         if RTC_SLOW.contains(&addr) {
@@ -1698,5 +1740,13 @@ impl Bus for CoreBus<'_> {
 
     fn yields(&self) -> bool {
         self.soc.steer.is_some()
+    }
+
+    fn code_version(&self) -> Option<u64> {
+        Some(self.soc.code.version())
+    }
+
+    fn fetch_held(&self) -> bool {
+        self.soc.fetch_held()
     }
 }

@@ -18,7 +18,7 @@ const CCOUNT: u8 = 234;
 const CCOMPARE0: u8 = 240;
 
 impl Program {
-    fn s32i(&mut self, t: u8, s: u8, offset: u8) -> &mut Program {
+    pub(super) fn s32i(&mut self, t: u8, s: u8, offset: u8) -> &mut Program {
         self.rri8(6, t, s, offset)
     }
 
@@ -38,7 +38,7 @@ impl Program {
         self.raw(&[t << 4, sr, 0x03])
     }
 
-    fn addi(&mut self, t: u8, s: u8, imm: i8) -> &mut Program {
+    pub(super) fn addi(&mut self, t: u8, s: u8, imm: i8) -> &mut Program {
         self.raw(&[t << 4 | 2, 0xc0 | s, imm as u8])
     }
 
@@ -47,20 +47,20 @@ impl Program {
         self.raw(&[t << 4, r << 4 | s, 0x10])
     }
 
-    fn branch(&mut self, op: u8, s: u8, to: u32) -> &mut Program {
+    pub(super) fn branch(&mut self, op: u8, s: u8, to: u32) -> &mut Program {
         let imm = to.wrapping_sub(self.pc() + 4);
         self.raw(&[op, s | (imm as u8 & 0xf) << 4, (imm >> 4) as u8])
     }
 
-    fn beqz(&mut self, s: u8, to: u32) -> &mut Program {
+    pub(super) fn beqz(&mut self, s: u8, to: u32) -> &mut Program {
         self.branch(0x16, s, to)
     }
 
-    fn bnez(&mut self, s: u8, to: u32) -> &mut Program {
+    pub(super) fn bnez(&mut self, s: u8, to: u32) -> &mut Program {
         self.branch(0x56, s, to)
     }
 
-    fn j(&mut self, to: u32) -> &mut Program {
+    pub(super) fn j(&mut self, to: u32) -> &mut Program {
         let offset = to.wrapping_sub(self.pc() + 4);
         self.raw(&[
             0x06 | (offset as u8 & 3) << 6,
@@ -74,7 +74,7 @@ impl Program {
     }
 
     /// `n` passes of a two-op loop on `at`.
-    fn delay(&mut self, t: u8, n: u8) -> &mut Program {
+    pub(super) fn delay(&mut self, t: u8, n: u8) -> &mut Program {
         self.movi(t, n);
         let top = self.pc();
         self.addi(t, t, -1).bnez(t, top)
@@ -93,13 +93,13 @@ impl Program {
 
     /// With `SYSTEM` in a2: the boot address `entry` from a4 into `CONTROL_1`, then
     /// `CONTROL_0` from power-on 0x4 to `CLKGATE_EN`, which releases the APP CPU's reset.
-    fn release(&mut self) -> &mut Program {
+    pub(super) fn release(&mut self) -> &mut Program {
         self.s32i(4, 2, 4).movi(3, 2).s32i(3, 2, 0)
     }
 }
 
 /// The ROM's reset path, cut short: poll `SYSTEM_CORE_1_CONTROL_1_REG` and jump to it.
-fn boot_rom() -> Program {
+pub(super) fn boot_rom() -> Program {
     let mut rom = Program::at(RESET - 4, &[SYSTEM + 4]);
     rom.l32r(2, 0);
     let poll = rom.pc();
@@ -132,7 +132,7 @@ fn toggles(at: u32, n: usize) -> Program {
 
 /// A chip that runs `pro` on the PRO CPU and has `rom` in its ROM, with `more` in SRAM too,
 /// GPIO4 and GPIO21 netted and every watchdog off.
-fn chip(pro: &Program, rom: &Program, more: &[&Program]) -> Esp32s3 {
+pub(super) fn chip(pro: &Program, rom: &Program, more: &[&Program]) -> Esp32s3 {
     let images: Vec<(u32, Vec<u8>)> = [pro]
         .into_iter()
         .chain(more.iter().copied())

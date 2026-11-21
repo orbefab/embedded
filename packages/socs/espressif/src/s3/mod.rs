@@ -31,6 +31,7 @@ mod boot;
 mod bridge;
 mod calibration;
 mod clock;
+mod code;
 mod cores;
 mod curve;
 mod efuse;
@@ -312,17 +313,17 @@ impl Esp32s3 {
         let source = boot::clock_source(&state).expect("the captured clock is one the model runs");
         let mut soc = Soc::new(CpuClock::new(source), netted, Watchdogs::new(source.apb()));
         load_rom(&mut soc, boot.rom);
-        soc.flash = Some(Flash::new(boot.flash));
+        soc.attach_flash(Flash::new(boot.flash));
         let mut core = Core::new();
         boot::apply(&state, &mut core, &mut soc);
         boot::program_rom_uart(&state, &mut soc);
         for segment in boot.segments {
-            let flash = soc.flash.as_mut().expect("attached");
             if segment.mapped() {
-                flash.map(segment.addr, segment.offset, segment.len);
+                soc.map_flash(segment.addr, segment.offset, segment.len);
             } else {
+                let flash = soc.flash_bytes().expect("attached");
                 let at = segment.offset as usize;
-                let bytes = flash.bytes()[at..at + segment.len as usize].to_vec();
+                let bytes = flash[at..at + segment.len as usize].to_vec();
                 soc.poke(segment.addr, &bytes);
             }
         }
@@ -1064,6 +1065,7 @@ mod tests {
     }
 
     mod adc;
+    mod code;
     mod dual;
     mod i2c;
     mod pads;
@@ -1795,7 +1797,7 @@ mod tests {
             let mut chip = program.chip();
             let mut flash = Flash::new(vec![0xa5; 0x1_0000].into());
             flash.write_mmu(0, entry);
-            chip.soc.flash = Some(flash);
+            chip.soc.attach_flash(flash);
             let halt = chip.run_until(c(1000));
             if mapped {
                 assert_eq!(halt, None, "entry {entry:#x}");

@@ -729,8 +729,24 @@ impl<C: Config> Core<C> {
         self.take_vector(vecbase + level_vector(level));
     }
 
+    /// The instruction at the PC. When the bus keeps a code version and the table holds the PC
+    /// at that version, the core runs the kept decode without fetching, and stops where the
+    /// fetch would. Either way a fetch that moved to a new address costs the refetch cycle when
+    /// the op runs into the next word.
     fn fetch<B: Bus>(&mut self, bus: &mut B) -> Result<Insn, Trap> {
         let pc = self.pc;
+        let version = bus.code_version();
+        if let Some(insn) = version.and_then(|version| self.decodes.kept(pc, version)) {
+            if bus.fetch_held() {
+                return Err(exit_trap(Exit::Stop, pc));
+            }
+            let insn = insn.clone();
+            if self.refetch && (pc & 3) + u32::from(insn.len) > 4 {
+                self.cycle.0 += 1;
+            }
+            self.refetch = false;
+            return Ok(insn);
+        }
         let word = pc & !3;
         let low = bus
             .fetch(self.cycle, word)
@@ -751,7 +767,7 @@ impl<C: Config> Core<C> {
         let raw = ((both >> (8 * offset)) as u32) & (u32::MAX >> (32 - 8 * u32::from(len)));
         let insn = self
             .decodes
-            .get_or(pc, len, raw, || {
+            .get_or(pc, len, raw, version, || {
                 match C::decode(&raw.to_le_bytes()[..usize::from(len)], pc) {
                     Some(Decoded::Insn(insn)) => Some(insn),
                     _ => None,
