@@ -2,13 +2,13 @@
   "part": "esp32s3-devkitc-1",
   "source": {
     "script": "model.py",
-    "sha256": "036364966377a2ce41833a38b9dcb37e4fbd7f8604ca412adab7ddc907a60558",
-    "bytes": 1513
+    "sha256": "dc19310303b42994d9ed8e986a932e8c334770be6dd1f14e03894c5fb41ec2de",
+    "bytes": 1595
   },
   "files": {
     "esp32s3-devkitc-1.glb": {
-      "sha256": "12ba2c2341f9e5cd4fc106c8dd5f5bda243218b3d4d5207bcb16d1be889a9d72",
-      "bytes": 1732
+      "sha256": "c6a155783f3ae25a80bed492b596d2f2843c5d2bea6b27a5701d6d34178d3ccf",
+      "bytes": 1776
     }
   },
   "box": {
@@ -40,7 +40,7 @@
       "children": 21,
       "lowest_node": "pcb",
       "z_mm": 0,
-      "draw_calls": 136
+      "draw_calls": 139
     }
   }
 }
