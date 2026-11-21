@@ -2,13 +2,13 @@
   "part": "capacitor-tantalum-3216",
   "source": {
     "script": "model.py",
-    "sha256": "4dae1b65de758e87ec44279433c189a5c92f0b174ec1e1f861ba392f87988120",
-    "bytes": 1198
+    "sha256": "3b00e97b95a984ff8bbce69242df91a0cfdc31577795617011b25db28fe89c71",
+    "bytes": 1575
   },
   "files": {
     "capacitor-tantalum-3216.glb": {
-      "sha256": "4005c30c7e1a76e65b255e40f0a757f3ee20719be6633a96884509d1ebac392f",
-      "bytes": 3804
+      "sha256": "5498d2be5258e3fa9d330a3a1dc1527cede7f2dead0070ac152df069ce87550d",
+      "bytes": 4824
     },
     "capacitor-tantalum-3216.anchors.json": {
       "sha256": "b4f2571c0ae6aca703b3be324ff39d03bf157043ef3cc3938f1690aaf8ea4c5d",
@@ -17,10 +17,10 @@
   },
   "box": {
     "min": [-1.6, -0.8, 0],
-    "max": [1.6, 0.8, 1.63]
+    "max": [1.6, 0.8, 1.635]
   },
   "kept_nodes": [],
-  "draw_calls": 2,
+  "draw_calls": 3,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -37,8 +37,8 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 3,
-      "primitives_out": 2
+      "primitives_in": 4,
+      "primitives_out": 3
     }
   }
 }

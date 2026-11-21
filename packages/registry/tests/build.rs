@@ -37,10 +37,10 @@ fn records_of_three_parts_and_a_block_match_their_snapshots() {
     let registry = build(&repo(), None).unwrap();
     let bless = std::env::var_os("ORBE_BLESS").is_some();
     for address in [
-        "led-5mm@0.1.0",
-        "atmega328p-dip28@0.1.0",
-        "nano-board@0.1.0",
-        "nano-button-led@0.1.0",
+        "led-5mm@0.1.1",
+        "atmega328p-dip28@0.1.1",
+        "nano-board@0.1.1",
+        "nano-button-led@0.1.2",
     ] {
         let text = std::str::from_utf8(&registry.output[&format!("{address}.json")]).unwrap();
         let got = without_hashes(text);
@@ -121,7 +121,7 @@ fn every_url_holds_the_bytes_its_hash_names() {
             "{url}: the folder hash is over the files it lists"
         );
     }
-    let block = record(&registry.output, "nano-button-led@0.1.0");
+    let block = record(&registry.output, "nano-button-led@0.1.2");
     assert_eq!(
         block["license"],
         "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
@@ -156,7 +156,7 @@ fn the_repo_names_the_official_registry() {
 #[test]
 fn a_block_depends_on_every_part_it_runs_at_the_versions_in_the_same_build() {
     let registry = build(&repo(), None).unwrap();
-    let block = record(&registry.output, "nano-button-led@0.1.0");
+    let block = record(&registry.output, "nano-button-led@0.1.2");
     let deps: Vec<&str> = block["registryDependencies"]
         .as_array()
         .unwrap()
@@ -164,19 +164,19 @@ fn a_block_depends_on_every_part_it_runs_at_the_versions_in_the_same_build() {
         .map(|dep| dep.as_str().unwrap())
         .collect();
     for direct in [
-        "nano-board@0.1.0",
-        "tactile-switch-6mm@0.1.0",
-        "resistor-axial@0.1.0",
-        "led-5mm@0.1.0",
+        "nano-board@0.1.1",
+        "tactile-switch-6mm@0.1.1",
+        "resistor-axial@0.1.1",
+        "led-5mm@0.1.1",
     ] {
         assert!(deps.contains(&direct), "{direct} in {deps:?}");
     }
-    let board = record(&registry.output, "nano-board@0.1.0");
+    let board = record(&registry.output, "nano-board@0.1.1");
     for through_the_board in board["registryDependencies"].as_array().unwrap() {
         assert!(deps.contains(&through_the_board.as_str().unwrap()));
     }
     assert_eq!(block["board"], "nano-board");
-    assert_eq!(block["version"], "0.1.0");
+    assert_eq!(block["version"], "0.1.2");
 }
 
 #[test]
@@ -409,6 +409,13 @@ fn a_part_that_uses_a_version_the_registry_lacks_does_not_build() {
     assert!(invalid(src.path()).contains("uses `lamp@1.0.0`, which these parts lack"));
 }
 
+/// Whether this volume treats `a` and `A` as one name.
+fn volume_folds_case() -> bool {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("orbe-case-a"), b"a").unwrap();
+    fs::metadata(dir.path().join("orbe-case-A")).is_ok()
+}
+
 /// Each probe is a source a registry must refuse, with what its message names.
 #[test]
 fn the_build_refuses_what_a_client_could_not_trust() {
@@ -476,8 +483,8 @@ fn the_build_refuses_what_a_client_could_not_trust() {
         ),
         (
             "a folder that is not an id",
-            &|src| put(src, "parts/Lamp/part.jsonc", LAMP),
-            "parts/Lamp is not an id",
+            &|src| put(src, "parts/Bulb/part.jsonc", LAMP),
+            "parts/Bulb is not an id",
         ),
         (
             "a file name with a colon",
@@ -518,10 +525,19 @@ fn the_build_refuses_what_a_client_could_not_trust() {
             "a registry's name is `@` and an id",
         ),
     ];
+    let folds_case = volume_folds_case();
     for (what, change, says) in probes {
+        // `readme.md` is the same file as `README.md` on a volume that ignores case.
+        if folds_case && what == "two files one case apart" {
+            continue;
+        }
         let src = third_party();
         change(src.path());
-        let message = invalid(src.path());
+        let message = match build(src.path(), None) {
+            Err(Error::Invalid(message)) => message,
+            Err(other) => panic!("{what}: {other}"),
+            Ok(_) => panic!("{what}: the build accepted it"),
+        };
         assert!(message.contains(says), "{what}: {message}");
     }
 }
@@ -529,8 +545,15 @@ fn the_build_refuses_what_a_client_could_not_trust() {
 #[test]
 fn every_item_is_a_part_or_a_block_of_the_repo() {
     let registry = build(&repo(), None).unwrap();
-    let parts = fs::read_dir(repo().join("parts")).unwrap().count();
-    let blocks = fs::read_dir(repo().join("blocks")).unwrap().count();
+    // A file beside the folders, such as blocks/README.md, is not an item.
+    let folders = |kind: &str| {
+        fs::read_dir(repo().join(kind))
+            .unwrap()
+            .filter(|entry| entry.as_ref().unwrap().path().is_dir())
+            .count()
+    };
+    let parts = folders("parts");
+    let blocks = folders("blocks");
     let (mut p, mut b) = (0, 0);
     for item in &registry.items {
         match item {

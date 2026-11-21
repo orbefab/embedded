@@ -2,13 +2,13 @@
   "part": "ch340g",
   "source": {
     "script": "model.py",
-    "sha256": "3774689f95bb6733ba649d57022bb4cfcabc5095afca7ab861ca11e951fd01ea",
-    "bytes": 1971
+    "sha256": "a400f87ed058edb14ced5a205d8bf5ced232092649ea06c8d49556c68826e550",
+    "bytes": 2280
   },
   "files": {
     "ch340g.glb": {
-      "sha256": "3abdeab1b3e1e657f030de54bb61e871b3bef1d7e81a012b78b0ddeca46b7196",
-      "bytes": 13528
+      "sha256": "293104d34133053eefd989f84f3a7a1c6f75634b809cc1e418a8b93d586f3777",
+      "bytes": 29984
     },
     "ch340g.anchors.json": {
       "sha256": "d0da8323f794331981cae3a5d9a26fd778093d0f90290159533ea0f8083dad29",
@@ -20,7 +20,7 @@
     "max": [4.95, 3.15, 1.86]
   },
   "kept_nodes": [],
-  "draw_calls": 2,
+  "draw_calls": 3,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -38,7 +38,7 @@
     },
     "merge": {
       "primitives_in": 18,
-      "primitives_out": 2
+      "primitives_out": 3
     }
   }
 }

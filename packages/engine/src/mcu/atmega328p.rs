@@ -540,8 +540,9 @@ fn resolve_fuses(part: &Ref, wire: &WireFuses, out: &mut Vec<Diagnostic>) -> Opt
 
 /// Flash from Intel HEX text, one record a line. Records 00 to 05 are read: 02 and 04 move the
 /// base address, and 01, 03 and 05 may name a start address, which a part at reset does not
-/// use. A gap is erased flash, `0xFF`, and no byte is written twice. A fault names its 1-based
-/// line.
+/// use. A gap is erased flash, `0xFF`, and no byte is written twice. Text with no data record
+/// would leave the whole flash erased, which no build makes, so it is refused. A fault names its
+/// 1-based line.
 fn flash(text: &str) -> Result<Vec<u8>, (Option<usize>, FirmwareRule)> {
     let mut flash = Vec::new();
     let mut placed = Vec::new();
@@ -593,6 +594,9 @@ fn flash(text: &str) -> Result<Vec<u8>, (Option<usize>, FirmwareRule)> {
     }
     if !ended {
         return Err((None, FirmwareRule::NoEnd));
+    }
+    if flash.is_empty() {
+        return Err((None, FirmwareRule::Empty));
     }
     Ok(flash)
 }

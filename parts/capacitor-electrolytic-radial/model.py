@@ -17,8 +17,8 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint, tht
-from cad.color import srgb
-from cad.geom import cyl_z
+from cad.color import metal, plastic, tin
+from cad.geom import box, cyl_z, fuse
 
 CE_CAN = (6.3, 11.0)  # Φ, tall
 CE_TOP = (5.4, 0.3)  # the top's foil Φ, recess  # verify
@@ -27,10 +27,10 @@ CE_LEAD_D = 0.5
 CE_PITCH = 2.5
 CE_LEADS = ((1, -1.25, 20.0), (2, 1.25, 17.5))  # lead (+, -), x, below z = 0  # verify
 
-_SLEEVE = srgb("#1B1B1D")
-_STRIPE = srgb("#B9BCC2")
-_FOIL = srgb("#D3D6DB")
-_TIN = srgb("#C5C8CE")
+_SLEEVE = plastic("#1B1B1D")
+_STRIPE = plastic("#B9BCC2")
+_FOIL = metal("#D3D6DB")
+_TIN = tin()
 
 
 def _wedge(r, h):
@@ -51,6 +51,18 @@ def cap_electrolytic_anchors():
     return [glb.Anchor(lead, f"lead-{lead}", (x, 0.0, -below)) for lead, x, below in CE_LEADS]
 
 
+def _vent(fd, h, recess):
+    """A dark cross on the foil, the vent scored into the top."""
+    z = h - recess + 0.04
+    arm = fd * 0.55
+    return fuse([box(0, 0, z, arm, 0.22, 0.05), box(0, 0, z, 0.22, arm, 0.05)])
+
+
+def _minuses(d, h):
+    """Short bars on the stripe. The stripe is the negative side."""
+    return fuse([box(d / 2.0 + 0.03, 0, h * z, 0.08, 1.05, 0.16) for z in (0.32, 0.48, 0.64)])
+
+
 def cap_electrolytic_shape():
     d, h = CE_CAN
     fd, recess = CE_TOP
@@ -60,6 +72,8 @@ def cap_electrolytic_shape():
         paint(can - wedge, "sleeve", _SLEEVE),
         paint(can & wedge, "stripe", _STRIPE),
         paint(cyl_z(0, 0, h - recess, h - recess + 0.05, fd / 2.0 - 0.01), "top", _FOIL),
+        paint(_vent(fd, h, recess), "vent", _SLEEVE),
+        paint(_minuses(d, h), "marks", _SLEEVE),
     ]
     for lead, x, below in CE_LEADS:
         children.append(paint(tht.round_lead(x, 0, -below, 0.0, CE_LEAD_D), f"lead-{lead}", _TIN))

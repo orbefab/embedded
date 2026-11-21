@@ -24,7 +24,7 @@ its anchor at the hole's mouth on the top face, axis +Z (out of the hole):
 import build123d as bd
 
 from cad import glb, mark, paint
-from cad.color import srgb
+from cad.color import plastic
 from cad.geom import box
 
 PITCH = 2.54
@@ -42,10 +42,10 @@ GROOVE = (2.6, 1.5)  # centre channel wide, deep  # verify
 STRIPE = (0.6, 0.05)  # wide, tall
 PRINT_SIZE = 1.2
 
-_WHITE = srgb("#F2F1EC")
-_RED = srgb("#D0342A")
-_BLUE = srgb("#2F5FD0")
-_PRINT = srgb("#5A5A5A")
+_WHITE = plastic("#F2F1EC")
+_RED = plastic("#D0342A")
+_BLUE = plastic("#2F5FD0")
+_PRINT = plastic("#5A5A5A")
 
 
 def terminal_xy(columns, column, row):

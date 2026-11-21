@@ -19,7 +19,7 @@ export function PartSearch({ parts }: { parts: readonly Listed[] }) {
       <label className="block">
         <span className="font-mono text-muted-foreground text-xs uppercase tracking-[0.16em]">Search</span>
         <input
-          className="mt-2 w-full rounded-md border border-input bg-transparent px-3 py-2 font-mono text-sm outline-none focus:border-brand"
+          className="mt-2 w-full border border-input bg-transparent px-3 py-2 font-mono text-sm outline-none focus:border-brand"
           name="q"
           onChange={(event) => change(event.target.value)}
           placeholder="led, 0603, kingbright, board"
@@ -30,22 +30,15 @@ export function PartSearch({ parts }: { parts: readonly Listed[] }) {
       <p className="mt-3 font-mono text-muted-foreground text-xs" data-testid="count">
         {shown.length === parts.length ? `${parts.length} parts` : `${shown.length} of ${parts.length} parts`}
       </p>
-      <ul className="mt-4 divide-y divide-border border-border border-y">
+      <ul className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {shown.map((part) => (
           <li data-part={part.name} key={part.name}>
-            <a className="grid gap-1 py-4 transition-colors hover:text-brand sm:grid-cols-[minmax(0,1fr)_auto]" href={part.href}>
-              <span>
-                <span className="font-medium">{part.title}</span>
-                <span className="block text-muted-foreground text-sm">
-                  {part.description ?? "No summary yet."}
-                </span>
-              </span>
-              <span className="font-mono text-muted-foreground text-xs sm:text-right">
-                {part.name}
-                {part.maker || part.number ? (
-                  <span className="block">{[part.maker, part.number].filter(Boolean).join(" ")}</span>
-                ) : null}
-              </span>
+            <a
+              className="flex h-full min-w-0 flex-col gap-1 border border-border p-4 transition-colors hover:border-brand max-sm:flex-row max-sm:items-center max-sm:justify-between max-sm:gap-3"
+              href={part.href}
+            >
+              <span className="min-w-0 font-medium">{part.title}</span>
+              {part.use === "" ? null : <span className="font-mono text-foreground text-xs sm:mt-auto">{part.use}</span>}
             </a>
           </li>
         ))}

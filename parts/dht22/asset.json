@@ -2,13 +2,13 @@
   "part": "dht22",
   "source": {
     "script": "model.py",
-    "sha256": "8d6a98aba45730377485e01f73bff84e3ef5cce230c283ba17db0e5271bb633c",
-    "bytes": 2719
+    "sha256": "71b44a0c384c5a24af47a71ba1e6fb63a28677b734c9fefe68b30e76caa5679a",
+    "bytes": 3033
   },
   "files": {
     "dht22.glb": {
-      "sha256": "231eaf99a86d3e14a46b397e499d580a3650db3f6780615743465db88ca09f71",
-      "bytes": 19756
+      "sha256": "15293a0743dc68a0d1ee34f931548baf4c67994fd802b14897b73af0dfcbbf22",
+      "bytes": 90388
     },
     "dht22.anchors.json": {
       "sha256": "f70df30cf9c7c0b0bb8f08b40ddec09be0d8a4aea4d97f8e371fdadd1463f877",

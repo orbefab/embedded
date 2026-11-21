@@ -1,25 +1,36 @@
 #!/usr/bin/env bash
-# Checks the site. It runs the type check and the brand check, then a build with
-# ORBE_SITE_INSTALL=1 that must give every part and Block a page with its install line. Then it
-# runs the build as it deploys, whose own files must show no install line and no repo link, and
-# which must serve the AVR runtime source every Block's NOTICE names. Playwright then drives that
-# build in headless Chromium twice: on `vite preview`, and on `wrangler dev --local`.
+# Checks the site. It runs the type check, the circuit unit tests and the brand check, then a
+# build with ORBE_SITE_INSTALL=1. scripts/site-install.sh checks that build: every part and
+# Block page shows its orbe add line, and Get orbe shows the install command, the repo link
+# and install.sh. The site workflow runs the same script on the build it uploads. Playwright
+# drives that build once, on `vite preview`, for the checks that need the install line. Then
+# it runs the build as it deploys, whose own files must show no install line.
+# The footer links the repo either way. The build must serve the AVR runtime source every
+# Block's NOTICE names.
+# Playwright then drives that build in headless Chromium twice: on `vite preview`, and on
+# `wrangler dev --local`.
 #
 # The flag gates the site's own text and links: the pages, the build's scripts and styles, the
 # brand files and the part views. The registry under r/, orbe-wasm and the runtime source are data
 # the site serves unchanged, so a Block's README or block.jsonc still says `orbe add`.
 #
 # Needs what scripts/site.sh needs, and a Chromium found as check-viewer-e2e.sh finds it. It
-# installs nothing. check.sh does not run this. `--previous <dir>` builds the registry on
-# the one the live site serves. With no `--previous`, the build is a first deploy
-# (`scripts/site.sh --first-deploy`). `--renders <dir>` saves screenshots there. The
-# arguments can be in any order. An unknown argument is an error.
+# installs nothing. scripts/check.sh web runs this with `--first-deploy`. One of two arguments is
+# required: `--previous <dir>` builds the registry on the one the live site serves, and
+# `--first-deploy` is a local build with no registry to download. A build for a deploy always
+# passes `--previous`. `--renders <dir>` saves screenshots there.
+# `--servers vite` or `--servers wrangler` drives the suite on that one host. `wrangler` skips
+# the install-line build, which Playwright drives on `vite preview`. `--shard N/M` passes that
+# shard to the suite. The arguments can be in any order. With none of `--servers` or `--shard`,
+# the check runs both hosts, as `scripts/check.sh web` does. An unknown argument is an error.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 previous=()
 first=0
 renders=""
 saw_renders=0
+servers=both
+shard=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --first-deploy)
@@ -43,6 +54,30 @@ while [[ $# -gt 0 ]]; do
       saw_renders=1
       shift 2
       ;;
+    --servers)
+      case ${2:-} in
+        both | vite | wrangler) servers=$2 ;;
+        *)
+          echo "check-site: --servers needs both, vite or wrangler" >&2
+          exit 2
+          ;;
+      esac
+      shift 2
+      ;;
+    --shard)
+      if [[ $# -lt 2 || ! ${2:-} =~ ^[1-9][0-9]*/[1-9][0-9]*$ ]]; then
+        echo "check-site: --shard needs N/M, such as 1/2" >&2
+        exit 2
+      fi
+      shard_n=${2%/*}
+      shard_m=${2#*/}
+      if ((shard_n > shard_m)); then
+        echo "check-site: --shard $2 is out of range" >&2
+        exit 2
+      fi
+      shard=$2
+      shift 2
+      ;;
     *)
       echo "check-site: unknown argument $1" >&2
       exit 2
@@ -55,8 +90,11 @@ if [[ $first -eq 1 && ${#previous[@]} -gt 0 ]]; then
 fi
 if [[ ${#previous[@]} -gt 0 ]]; then
   site=("${previous[@]}")
-else
+elif [[ $first -eq 1 ]]; then
   site=(--first-deploy)
+else
+  echo "check-site: pass --previous <dir>, the registry the live site serves, or --first-deploy for a local build with no registry" >&2
+  exit 2
 fi
 if [[ $saw_renders -eq 1 ]]; then
   export ORBE_RENDERS=$renders
@@ -67,37 +105,39 @@ fail() {
   exit 1
 }
 pnpm --filter @orbe/site typecheck
+pnpm --filter @orbe/site test
 scripts/brand.sh check
 dist=apps/site/dist/client
 own() { grep -rlE "$1" "$dist" --exclude-dir=r --exclude-dir=orbe-wasm --exclude-dir=sources || true; }
-pages() { find "$dist/$1" -mindepth 2 -name index.html | wc -l; }
-listed() {
-  # console.log colors a number when FORCE_COLOR is set, and [[ ]] then rejects the count.
-  node -e 'const index = require(process.argv[1]); process.stdout.write(String(new Set(index.items.filter((row) => row.type === process.argv[2]).map((row) => row.name)).size) + "\n")' \
-    "$PWD/$dist/r/index.json" "$1"
+
+# 8787 is wrangler's default and may already be taken. Ask the OS for a free port.
+free_port() {
+  node -e 'const s = require("node:net").createServer().listen(0, "127.0.0.1", () => { process.stdout.write(String(s.address().port) + "\n"); s.close(); })'
 }
 
+if [[ $servers != wrangler ]]; then
 ORBE_SITE_INSTALL=1 scripts/site.sh "${site[@]}" >/dev/null
-parts=$(pages parts)
-blocks=$(pages blocks)
-[[ $parts -eq $(listed part) && $blocks -eq $(listed block) ]] ||
-  fail "the build has $parts part and $blocks Block pages, and the registry lists $(listed part) and $(listed block)"
-[[ $(grep -rlE 'orbe add [a-z]' "$dist/parts" "$dist/blocks" --include=index.html | wc -l) -eq $((parts + blocks)) ]] ||
-  fail "with ORBE_SITE_INSTALL=1, not every part and Block page shows its orbe add line"
-grep -q 'curl -fsSL https://orbefab.com/embedded/install.sh | sh' "$dist/index.html" ||
-  fail "with ORBE_SITE_INSTALL=1, the landing page shows no install line"
-[[ -f $dist/install.sh ]] || fail "with ORBE_SITE_INSTALL=1, the build does not serve install.sh"
-cmp -s scripts/install.sh "$dist/install.sh" ||
-  fail "with ORBE_SITE_INSTALL=1, install.sh is not scripts/install.sh"
-grep -q 'href="https://github.com/orbefab/embedded"' "$dist/index.html" ||
-  fail "with ORBE_SITE_INSTALL=1, the landing page links no repo"
-echo "check-site: ORBE_SITE_INSTALL=1 shows orbe add on $parts part and $blocks Block pages, and the install script and the repo on the landing page"
+scripts/site-install.sh
+
+install_port=$(free_port)
+export ORBE_E2E=site
+export ORBE_SITE_INSTALL_E2E=1
+export ORBE_SITE_SERVERS=vite
+export ORBE_SITE_VITE_PORT=$install_port
+echo "check-site: install-on browser checks on 127.0.0.1:$install_port"
+pnpm exec playwright test apps/site/e2e/install.spec.ts
+unset ORBE_SITE_INSTALL_E2E ORBE_SITE_SERVERS
+fi
 
 scripts/site.sh "${site[@]}"
 [[ ! -e $dist/install.sh ]] || fail "install.sh is served with ORBE_SITE_INSTALL unset"
-shown=$(own 'orbe add|cargo install|github\.com/orbefab/embedded|orbefab\.com/embedded/install\.sh')
-[[ -z $shown ]] || fail "these files of the site's own show an install line or a repo link with ORBE_SITE_INSTALL unset: $shown"
-echo "check-site: no file of the site's own shows an install line or a repo link with ORBE_SITE_INSTALL unset"
+shown=$(own 'orbe add|cargo install|orbefab\.com/embedded/install\.sh')
+[[ -z $shown ]] || fail "these files of the site's own show an install line with ORBE_SITE_INSTALL unset: $shown"
+grep -q 'href="https://github.com/orbefab/embedded"' "$dist/index.html" ||
+  fail "the footer does not link the repo"
+grep -q 'name="robots" content="noindex"' "$dist/blocks/nano-button-led/embed/index.html" ||
+  fail "the embed page is not noindex"
+echo "check-site: no file of the site's own shows an install line with ORBE_SITE_INSTALL unset, and the footer links the repo"
 
 pin() { sed -n "s/^$1=//p" packages/engine/scripts/sketches.sh; }
 archive=$(pin runtime_url)
@@ -124,12 +164,15 @@ target=$(cargo metadata --format-version 1 --no-deps |
 export ORBE=$target/debug/orbe
 export ORBE_E2E=site
 export WRANGLER_SEND_METRICS=false
-# 8787 is wrangler's default and may already be taken. Ask the OS for two free ports.
-free_port() {
-  node -e 'const s = require("node:net").createServer().listen(0, "127.0.0.1", () => { process.stdout.write(String(s.address().port) + "\n"); s.close(); })'
-}
 vite_port=$(free_port)
 wrangler_port=$(free_port)
 export ORBE_SITE_VITE_PORT=$vite_port
 export ORBE_SITE_WRANGLER_PORT=$wrangler_port
-pnpm exec playwright test
+if [[ $servers != both ]]; then
+  export ORBE_SITE_SERVERS=$servers
+fi
+if [[ -n $shard ]]; then
+  pnpm exec playwright test --shard="$shard"
+else
+  pnpm exec playwright test
+fi

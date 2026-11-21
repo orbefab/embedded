@@ -2,13 +2,13 @@
   "part": "capacitor-0603",
   "source": {
     "script": "model.py",
-    "sha256": "90cc43b9470e51b55f05cdc9878595b22d6598c38423120207638f273c7c0908",
-    "bytes": 948
+    "sha256": "a2c19deb1c263543c01d4790411b5705b53acfa1c3eac7d34a7d7c32213581af",
+    "bytes": 954
   },
   "files": {
     "capacitor-0603.glb": {
-      "sha256": "2c847c19e55ec3ca86d28af402f0909ac0d002f36cabb8620284fc4270201ed3",
-      "bytes": 3808
+      "sha256": "571ea1aae4d2cccda22c63d954d62bd9d50caf7c83b1e0971b4b4b4efea6dd85",
+      "bytes": 3892
     },
     "capacitor-0603.anchors.json": {
       "sha256": "57c56ac511c0ac4aebccda273016f2ef134636a2bfb5f90eb20d54f54785ddb0",

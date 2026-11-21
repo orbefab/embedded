@@ -1,5 +1,5 @@
 // An LED on D9 of a Nano fades up and down by PWM, built on a half-size breadboard.
-// The Nano straddles the centre channel over columns 1 to 15. D9 is column 4 on the f to j side.
+// The Nano straddles the center channel over columns 1 to 15. D9 is column 4 on the f to j side.
 {
   "format": 1,
   "parts": {
@@ -14,6 +14,7 @@
     "r1": { "on": { "a": "bb.i20" } }, // b in column 24
     "led1": { "on": { "anode": "bb.h24" } }, // cathode in column 25
   },
+  "nets": { "GND": "nano.GND" },
   "wires": [
     ["bb.j4", "bb.j20"], // D9 to r1.a
     ["bb.j12", "bb.Z13", { "color": "#161616" }], // GND to the - rail

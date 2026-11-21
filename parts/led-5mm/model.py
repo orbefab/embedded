@@ -16,15 +16,15 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint, tht
-from cad.color import srgb
+from cad.color import plastic, tin
 
 L5_BODY = (5.0, 5.8, 1.0, 8.6)  # Φ, flange Φ, flange height, overall
 L5_FLAT = 2.5  # the flat's x on the cathode side  # verify
 L5_LEAD = 0.5
 L5_LEADS = ((1, -1.27, 27.4), (2, 1.27, 25.4))  # lead (anode, cathode), x, below z = 0
 
-_RED = srgb("#D8342A")
-_TIN = srgb("#C5C8CE")
+_RED = plastic("#D8342A")
+_TIN = tin()
 
 
 def led_5mm_anchors():

@@ -14,8 +14,8 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint
-from cad.color import srgb
-from cad.geom import box
+from cad.color import plastic, tin
+from cad.geom import box, formed_foot
 
 SOT223_BODY = (3.5, 6.5, 1.6)  # x, y, height
 SOT223_BODY_Z = 0.05  # body underside above the board
@@ -23,8 +23,8 @@ SOT223_TAB = (2.1, 3.3, 0.42, -2.45, 0.07)  # x, y, thick, centre x, underside z
 SOT223_LEAD = (1.15, 0.65, 0.2, 2.15, 0.06)  # x, y, thick, centre x, underside z
 SOT223_PITCH = 2.3
 
-_BLACK = srgb("#1A1A1A")
-_TIN = srgb("#C5C8CE")
+_BLACK = plastic("#1A1A1A")
+_TIN = tin()
 
 
 def _pads():
@@ -38,7 +38,16 @@ def ams1117_sot223_shape():
     bx, by, bh = SOT223_BODY
     children = [paint(box(0, 0, SOT223_BODY_Z + bh / 2.0, bx, by, bh), "body", _BLACK)]
     for lead, (x, y, z), (sx, sy, sz) in _pads():
-        children.append(paint(box(x, y, z + sz / 2.0, sx, sy, sz), f"lead-{lead}", _TIN))
+        # The foot stays the pad. The bend is at the end that meets the body.
+        children.append(
+            paint(
+                formed_foot(
+                    x, y, z + sz / 2.0, sx, sy, sz, axis="x", sign=-1.0 if x > 0 else 1.0, rise=0.45, tuck=0.32
+                ),
+                f"lead-{lead}",
+                _TIN,
+            )
+        )
     return bd.Compound(children=children, label="ams1117_sot223")
 
 

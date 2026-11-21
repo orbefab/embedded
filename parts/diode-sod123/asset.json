@@ -2,13 +2,13 @@
   "part": "diode-sod123",
   "source": {
     "script": "model.py",
-    "sha256": "b5dbd8a07510726a552bff5a00372a31758240fdd0a633b39578a1dd0ff2f8c6",
-    "bytes": 948
+    "sha256": "09a4aeaaa8c9aadb28e775b3105f9fdd61dabf811f600f6f336bd8808bc3bf76",
+    "bytes": 954
   },
   "files": {
     "diode-sod123.glb": {
-      "sha256": "56c3b7cb3d76faaa988cb6013fb348faaa6a9fa0e5045bb2aa201a9717bd7f79",
-      "bytes": 3812
+      "sha256": "31951989a80d94831f99ec317f14aa1ab1a10c96a11dbfc56b07330cf012f404",
+      "bytes": 3896
     },
     "diode-sod123.anchors.json": {
       "sha256": "d040d4c1c4acaa07d49354f8d4d6c5c608483d85e9f55683c3d685d844a2b76b",

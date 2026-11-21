@@ -134,6 +134,8 @@ fn each_firmware_fault_names_its_line_and_rule() {
         (":027FFF00FFFF82\n:00000001FF", "1", "past_flash"),
         (":02001000F8CF27\n", "null", "no_end"),
         ("", "null", "no_end"),
+        (":00000001FF\n", "null", "empty"),
+        (":020000040000FA\n:00000001FF", "null", "empty"),
     ];
     for (hex, line, rule) in cases {
         assert_eq!(

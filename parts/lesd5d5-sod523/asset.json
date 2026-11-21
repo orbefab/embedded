@@ -2,13 +2,13 @@
   "part": "lesd5d5-sod523",
   "source": {
     "script": "model.py",
-    "sha256": "c236babdc5fe4aad89cc492ea24a5d149c76fa204f46f707519637e1086a4b1b",
-    "bytes": 949
+    "sha256": "34587862f472ac213a8f69cf83e48da1c299859969077645daabf396a6638e2c",
+    "bytes": 955
   },
   "files": {
     "lesd5d5-sod523.glb": {
-      "sha256": "682b759efde9205bb02da4461c1585cd36643d0ef43175689ddcc8a930c5df2a",
-      "bytes": 3808
+      "sha256": "8b1c0ed07e9e30432f361127f128ca10b718e7ed91be845f0b5d417dc270440c",
+      "bytes": 3892
     },
     "lesd5d5-sod523.anchors.json": {
       "sha256": "0dcef4725595903f564ce0074dae02f984a81eb634efdbf93ae6f4b7f2b3f539",

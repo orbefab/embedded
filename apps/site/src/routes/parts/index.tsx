@@ -9,7 +9,7 @@ export const Route = createFileRoute("/parts/")({
   head: ({ loaderData }) =>
     head({
       title: "Parts",
-      description: `The ${loaderData?.length ?? 0} parts of the registry, each with its pins, ratings, 3D model and files.`,
+      description: `The ${loaderData?.length ?? 0} parts of the catalog, each with its pins, ratings, 3D model and files.`,
       path: at.parts,
     }),
   component: () => <PartsPage parts={Route.useLoaderData()} />,

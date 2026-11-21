@@ -1,0 +1,47 @@
+div 2 shot 0 8821
+div 2 shot 1 6733
+div 2 shot 2 6733
+div 2 shot 3 6733
+div 2 shot 4 6733
+div 2 shot 5 6733
+div 2 shot 6 6733
+div 2 shot 7 6733
+div 2 reload 0 6762
+div 2 reload 1 12756
+div 2 reload 2 18774
+div 2 reload 3 24792
+div 2 reload 4 30810
+div 2 reload 5 36828
+div 2 reload 6 42846
+div 2 reload 7 48864
+div 80 shot 0 241186
+div 80 shot 1 240730
+div 80 shot 2 240730
+div 80 shot 3 240730
+div 80 shot 4 240730
+div 80 shot 5 240730
+div 80 shot 6 240730
+div 80 shot 7 240730
+div 80 reload 0 240758
+div 80 reload 1 480740
+div 80 reload 2 720740
+div 80 reload 3 960740
+div 80 reload 4 1200740
+div 80 reload 5 1440740
+div 80 reload 6 1680740
+div 80 reload 7 1920740
+equal 1395
+behind 1353
+above 241321 381
+rng 0 nz
+rng 1 nz
+rng 2 nz
+rng 3 nz
+rng 4 nz
+rng 5 nz
+rng 6 nz
+rng 7 nz
+TIMERS DONE
+rng_on 1437249e
+rng_off 399b27b6
+RNG OFF DONE

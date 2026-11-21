@@ -206,6 +206,9 @@ pub(crate) struct Part {
     /// Each `not_simulated` entry's reason with the pins it lists.
     pub(crate) not_simulated: Vec<(String, Vec<String>)>,
     pub(crate) joins_only: bool,
+    /// Pins the design leaves open. `net.floating` leaves a net of one out while nothing
+    /// outside this part reaches it.
+    pub(crate) open: Vec<String>,
     pub(crate) holes: Option<Holes>,
     /// A finding in this part file, which the engine's findings on the part may repeat.
     pub(crate) reported: Option<Reported>,
@@ -487,6 +490,7 @@ pub(crate) fn decode_part(
         params: Vec::new(),
         not_simulated: Vec::new(),
         joins_only: false,
+        open: Vec::new(),
         holes: None,
         reported: None,
     };
@@ -515,6 +519,11 @@ pub(crate) fn decode_part(
             "not_simulated" => part.not_simulated = decode_not_simulated(value, out),
             "buy" => crate::buy::check(value, out),
             "joins_only" => part.joins_only = matches!(value.json, Json::Bool(true)),
+            "open" => {
+                if value.items().is_some() {
+                    part.open = decode_open(value, out);
+                }
+            }
             "holes" => part.holes = Some(decode_holes(value)),
             _ => {}
         }
@@ -546,7 +555,60 @@ pub(crate) fn decode_part(
             }
         }
     }
+    if let Some(node) = root.get("open") {
+        for name in &part.open {
+            if part.pin(name).is_some() {
+                continue;
+            }
+            let span = node
+                .items()
+                .unwrap_or_default()
+                .iter()
+                .find(|item| item.str() == Some(name))
+                .map_or(node.span, |item| item.span);
+            out.push(
+                Code::UnknownPin,
+                span,
+                format!("`open` lists `{name}`, which is not a pin of this part"),
+                format!("its pins: {}", part.pin_list()),
+            );
+        }
+    }
     Some(part)
+}
+
+/// Pin names in `open`. `shape` has already reported a value of the wrong type, so a list is
+/// the only case read here. An empty list is refused: leave `open` out instead.
+fn decode_open(node: &Node, out: &mut Findings) -> Vec<String> {
+    let Some(items) = node.items() else {
+        return Vec::new();
+    };
+    if items.is_empty() {
+        out.push(
+            Code::Syntax,
+            node.span,
+            "`open` is empty",
+            "leave `open` out, or name a pin the design leaves open".into(),
+        );
+        return Vec::new();
+    }
+    let mut pins = Vec::new();
+    for item in items {
+        let Some(name) = item.str() else {
+            continue;
+        };
+        if pins.iter().any(|have| have == name) {
+            out.push(
+                Code::Syntax,
+                item.span,
+                format!("`open` lists `{name}` twice"),
+                "name each pin once".into(),
+            );
+            continue;
+        }
+        pins.push(name.to_string());
+    }
+    pins
 }
 
 fn decode_instances(node: &Node, out: &mut Findings) -> Vec<Instance> {

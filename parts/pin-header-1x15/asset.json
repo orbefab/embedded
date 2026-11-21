@@ -7,8 +7,8 @@
   },
   "files": {
     "pin-header-1x15.glb": {
-      "sha256": "9a4edc0a1db1e864d5c673254223f8ac9ab2219db67a336a56c6225bb95662c8",
-      "bytes": 20148
+      "sha256": "050bf3a9640e2325f1311af8454c2530cb58dca7315126ba7c61877c304f057a",
+      "bytes": 4672
     },
     "pin-header-1x15.anchors.json": {
       "sha256": "6e2ae2a33e8c00fc465f090ad394fc28741f2f073c8e28a8d420bb2fe8e28bfa",
@@ -16,8 +16,8 @@
     }
   },
   "box": {
-    "min": [-18.9, -1.116868, -8],
-    "max": [18.9, 1.116868, 5.54]
+    "min": [-19.05, -1.27, -8],
+    "max": [19.05, 1.27, 5.54]
   },
   "kept_nodes": ["housing-1", "housing-10", "housing-11", "housing-12", "housing-13", "housing-14", "housing-15", "housing-2", "housing-3", "housing-4", "housing-5", "housing-6", "housing-7", "housing-8", "housing-9", "pin-1", "pin-10", "pin-11", "pin-12", "pin-13", "pin-14", "pin-15", "pin-2", "pin-3", "pin-4", "pin-5", "pin-6", "pin-7", "pin-8", "pin-9"],
   "draw_calls": 30,

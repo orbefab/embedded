@@ -13,7 +13,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint
-from cad.color import srgb
+from cad.color import plastic, tin
 from cad.geom import box
 
 TQFP_BODY = 7.0
@@ -24,8 +24,9 @@ TQFP_PITCH = 0.8
 TQFP_LEAD = (1.3, 0.22, 0.16)  # out from the body, wide, thick
 TQFP_LEAD_Z = 0.1  # lead centre
 
-_BLACK = srgb("#1A1A1A")
-_TIN = srgb("#C5C8CE")
+_BLACK = plastic("#1A1A1A")
+_DOT = plastic("#8A8D93")
+_TIN = tin()
 
 
 def _lead_xy(lead):
@@ -38,7 +39,7 @@ def _lead_xy(lead):
 def atmega328p_tqfp32_shape():
     children = [
         paint(box(0, 0, TQFP_STANDOFF + TQFP_H / 2.0, TQFP_BODY, TQFP_BODY, TQFP_H), "body", _BLACK),
-        paint(box(-2.45, 2.45, TQFP_STANDOFF + TQFP_H + 0.05, 0.55, 0.55, 0.12), "dot", _TIN),
+        paint(box(-2.45, 2.45, TQFP_STANDOFF + TQFP_H + 0.05, 0.55, 0.55, 0.12), "dot", _DOT),
     ]
     out, wide, thick = TQFP_LEAD
     for lead in range(1, 33):

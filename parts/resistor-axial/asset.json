@@ -2,13 +2,13 @@
   "part": "resistor-axial",
   "source": {
     "script": "model.py",
-    "sha256": "69a78bb5a24106da60cf1eb9dc55f1e0d288f6a3f22c1c75b0f5efd977e35e40",
-    "bytes": 2510
+    "sha256": "3a795721d855498cec57af014896b2587a910e11da901f4865dc5c64de71c10d",
+    "bytes": 2514
   },
   "files": {
     "resistor-axial.glb": {
-      "sha256": "d63729bbe13c04018d2016e2361ba4c6cd327ba031a8464821207d076e7d65f1",
-      "bytes": 77028
+      "sha256": "b4b916c0d596b118f6842124d305711702aaf59c1a6c79880db2e764f6ccf1bf",
+      "bytes": 77280
     },
     "resistor-axial.anchors.json": {
       "sha256": "a98084ba09c2a467acca47216708850c932c505643e2f914f0c110e9273fb27a",

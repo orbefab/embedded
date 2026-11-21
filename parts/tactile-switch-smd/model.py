@@ -15,7 +15,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint
-from cad.color import srgb
+from cad.color import plastic, tin
 from cad.geom import box
 
 SMD_SW_CAN = (3.5, 4.7, 1.5)  # x, y, height
@@ -32,8 +32,8 @@ SMD_SW_LEGS = (
     (4, -1, 1),
 )  # lead, side in x, side in y  # verify
 
-_TIN = srgb("#C5C8CE")
-_CREAM = srgb("#F3E6C4")
+_TIN = tin()
+_CREAM = plastic("#F3E6C4")
 
 
 def _leg_xy(sx, sy):

@@ -18,7 +18,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint
-from cad.color import srgb
+from cad.color import nickel, plastic, tin
 from cad.geom import box
 
 BODY = (15.75, 12.0, 10.9)  # long, wide, tall  # verify
@@ -34,9 +34,9 @@ LEGS = {  # lead: x, y, (wide along x, wide along y)
 }
 BELOW = 3.0
 
-_SHELL = srgb("#C9CCD1")
-_PLASTIC = srgb("#F2F1EC")
-_TIN = srgb("#C5C8CE")
+_SHELL = nickel("#C9CCD1")
+_PLASTIC = plastic("#F2F1EC")
+_TIN = tin()
 
 
 def usb_b_socket_shape():

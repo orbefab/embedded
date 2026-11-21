@@ -17,15 +17,15 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint, tht
-from cad.color import srgb
+from cad.color import plastic, tin
 from cad.mark import text
 
 PINS = ("emitter", "base", "collector")  # from -X, seen from the flat face
 MARK = ("P2N", "2222A")
 
-_BODY = srgb("#1B1B1D")
-_PRINT = srgb("#E8E8E8")
-_TIN = srgb("#C5C8CE")
+_BODY = plastic("#1B1B1D")
+_PRINT = plastic("#E8E8E8")
+_TIN = tin()
 
 
 def to92_2n2222_anchors():

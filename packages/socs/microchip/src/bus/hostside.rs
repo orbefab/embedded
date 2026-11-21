@@ -1,9 +1,7 @@
 //! Host peers that are not devices on the die.
 //!
-//! The host SPI master clocks a slave chip. The slave queue is the bytes that
-//! host returns on `MISO` while the chip is master. This lives on [`super::Bus`],
-//! beside the device list, because [`orbe_avr::Core::step`] only has `&mut Bus`
-//! and a master transfer starts from an `SPDR` store.
+//! The host SPI master clocks a slave chip. It lives on [`super::Bus`], beside the device
+//! list, because its edges are bus events. A chip that is master reads `MISO` from its pad.
 
 use std::collections::VecDeque;
 
@@ -243,23 +241,12 @@ fn idle_level(cpol_high: bool) -> Level {
 #[derive(Debug, Clone)]
 pub(crate) struct HostSide {
     pub(crate) master: HostClock,
-    /// One byte per master frame. An empty queue shifts in `0xFF`.
-    slave_miso: VecDeque<u8>,
 }
 
 impl HostSide {
     pub(crate) fn idle() -> Self {
         Self {
             master: HostClock::idle(),
-            slave_miso: VecDeque::new(),
         }
-    }
-
-    pub(crate) fn push_miso(&mut self, bytes: &[u8]) {
-        self.slave_miso.extend(bytes);
-    }
-
-    pub(crate) fn slave_miso(&mut self) -> &mut VecDeque<u8> {
-        &mut self.slave_miso
     }
 }

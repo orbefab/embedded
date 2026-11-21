@@ -1,6 +1,12 @@
 {
-  "format": 1, "part": "usb-b-socket", "version": "0.1.0", "title": "USB type-B socket", "license": "MIT OR Apache-2.0",
-  "real": { "generic": true, "maker": "Amphenol", "number": "61729", "datasheet": null },
+  "format": 1, "part": "usb-b-socket", "version": "0.1.1", "title": "USB type-B socket", "license": "MIT OR Apache-2.0",
+  "summary": "Right-angle USB 2.0 type-B receptacle. Leads 1 to 4 are VBUS, D-, D+ and GND. Leads 5 and 6 are the shell.",
+  "tags": ["usb", "connector", "socket", "through-hole"],
+  "docs": {
+    "Amphenol 61729": null,
+    "USB 2.0 specification": null,
+  },
+  "real": { "generic": true, "maker": "Amphenol", "number": "61729", "datasheet": "Amphenol 61729" },
   "pins": { "VBUS": [1], "DM": [2], "DP": [3], "GND": [4], "SHIELD": [5, 6] },
   "model": {
     "host": {
@@ -12,5 +18,5 @@
       "pins": { "p": "VBUS", "n": "GND" },
     },
   },
-  "not_simulated": [{ "what": "USB data and shield", "pins": ["DM", "DP", "SHIELD"], "why": "The host's 5 V stands in for a plugged cable. USB data is not modelled." }],
+  "not_simulated": [{ "what": "USB data and shield", "pins": ["DM", "DP", "SHIELD"], "why": "The host's 5 V stands in for a plugged cable. USB data is not modeled." }],
 }

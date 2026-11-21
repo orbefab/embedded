@@ -4,16 +4,21 @@
 import type { Vec3 } from "./protocol";
 import type { Box } from "./wire-geometry";
 
-export const CAMERA_FOV_DEG = 45;
+export const CAMERA_FOV_DEG = 30;
 export const MIN_DISTANCE_MM = 28;
 export const TOP_VIEW_ZOOM = 7;
-const CAMERA_TILT_DEG = 25;
+// Off straight down, from the front left. A connector's opening faces -X in the part frame,
+// so the camera sits in front of that opening, and lower than an overhead view.
+const CAMERA_TILT_DEG = 40;
+const CAMERA_AZIMUTH_DEG = -35;
 const CAMERA_DISTANCE_MM = 110;
 const FRAME_INSET_PX = 56;
-const MIN_FRAME_MM = 60;
+// Top-view zoom treats the whole scene's span as at least this wide, so a small scene stays
+// readable without filling the view. The span is every drawn box together, not one part.
+const MIN_FRAME_MM = 16;
 
 const TILT = (CAMERA_TILT_DEG * Math.PI) / 180;
-const AZIMUTH = (35 * Math.PI) / 180;
+const AZIMUTH = (CAMERA_AZIMUTH_DEG * Math.PI) / 180;
 const TOP_CAMERA_Y = 400;
 
 export type CameraMode = "tilted" | "top";
@@ -83,8 +88,10 @@ export function cameraPosition(view: CameraView): Vec3 {
   ];
 }
 
-/** The box around every box. */
+/** The box around every box. An empty scene is a point at the origin, so a floor or a light
+ * placed from it is not NaN. */
 export function union(boxes: readonly Box[]): Box {
+  if (boxes.length === 0) return { min: [0, 0, 0], max: [0, 0, 0] };
   const along = (axis: 0 | 1 | 2) => boxes.flatMap((box) => [box.min[axis], box.max[axis]]);
   const [xs, ys, zs] = [along(0), along(1), along(2)];
   return {
@@ -96,7 +103,6 @@ export function union(boxes: readonly Box[]): Box {
 export function frameView(mode: CameraMode, boxes: readonly Box[], viewport: Viewport): CameraView {
   const points = boxes.flatMap(corners);
   const all = union(boxes);
-  // A lone LED would otherwise fill the screen. Keep some room around it.
   const padX = Math.max(0, MIN_FRAME_MM - (all.max[0] - all.min[0])) / 2;
   const padZ = Math.max(0, MIN_FRAME_MM - (all.max[2] - all.min[2])) / 2;
   const min: Vec3 = [all.min[0] - padX, all.min[1], all.min[2] - padZ];

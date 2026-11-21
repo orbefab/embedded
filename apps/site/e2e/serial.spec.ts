@@ -98,7 +98,11 @@ test.describe("serial output", () => {
     const dark = await ink(strip);
     expect(luma(dark.color)).toBeGreaterThan(luma(dark.background));
     await shot(page, `${shotName}-serial-theme-dark`);
-    await page.evaluate(() => document.documentElement.classList.remove("dark"));
+    await page.evaluate(() => {
+      localStorage.setItem("theme", "light");
+      document.documentElement.classList.remove("dark");
+      document.documentElement.classList.add("light");
+    });
     const light = await ink(strip);
     expect(luma(light.color)).toBeLessThan(luma(light.background));
     await shot(page, `${shotName}-serial-theme-light`);

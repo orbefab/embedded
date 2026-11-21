@@ -88,6 +88,9 @@ pub enum FirmwareRule {
     AfterEnd,
     /// No end-of-file record.
     NoEnd,
+    /// No data record, so the flash is erased: an `.eep` of a sketch with no EEPROM data, for
+    /// one, which holds only the end-of-file record.
+    Empty,
     /// A data byte at or past the end of the flash.
     PastFlash,
     /// A data byte an earlier record already placed, or an ELF segment on a byte of memory
@@ -899,6 +902,7 @@ impl Diagnostic {
                     FirmwareRule::RecordType => "has a record type other than 00 to 05",
                     FirmwareRule::AfterEnd => "comes after the end-of-file record",
                     FirmwareRule::NoEnd => "has no end-of-file record",
+                    FirmwareRule::Empty => "has no data record, so the flash would be erased",
                     FirmwareRule::PastFlash => "puts a byte past the end of the flash",
                     FirmwareRule::Region => {
                         "places a flash region past the end of the 16 MB flash or onto a byte an earlier region placed"
@@ -1173,6 +1177,9 @@ impl Diagnostic {
                 symbol,
             } => {
                 let what = match reason {
+                    Unsupported::Op if *op == "unknown" => {
+                        "a word that decodes to no instruction".to_string()
+                    }
                     Unsupported::Op => format!("`{op}`"),
                     Unsupported::Unaligned => format!("an unaligned `{op}`"),
                     Unsupported::Litbase => "`l32r` with LITBASE".to_string(),
@@ -1218,16 +1225,25 @@ impl Diagnostic {
                 app,
                 symbol,
             } => {
-                let what = match setting {
-                    Setting::Transfer(setting) => {
+                let what = match (*peripheral, *setting) {
+                    ("AC", Setting::Register("aco_read")) => {
+                        "read the AC output while the comparator is on".to_string()
+                    }
+                    ("CPU", Setting::Sleep) => {
+                        "put the chip to sleep in a reserved sleep mode".to_string()
+                    }
+                    (_, Setting::Transfer(setting)) => {
                         format!("started a {peripheral} transfer with setting {setting}")
                     }
-                    Setting::Interrupt => format!("enabled a {peripheral} interrupt"),
-                    Setting::Register(setting) => format!("set {peripheral} {setting}"),
-                    Setting::Sleep => "put the chip to sleep".to_string(),
+                    (_, Setting::Interrupt) => format!("enabled a {peripheral} interrupt"),
+                    (_, Setting::Register(setting)) => format!("set {peripheral} {setting}"),
+                    (_, Setting::Sleep) => "put the chip to sleep".to_string(),
                 };
                 let why = match (*peripheral, *setting) {
                     (_, Setting::Interrupt) => "which the model never raises",
+                    ("AC", Setting::Register("aco_read")) => {
+                        "which the model works out from the logic level on each input pin, not its voltage"
+                    }
                     ("GDMA", Setting::Register("reset_while_sending")) => {
                         "which the model does not run; ESP-IDF sets GDMA's reset when it restarts or panics, so the console holds any panic text"
                     }

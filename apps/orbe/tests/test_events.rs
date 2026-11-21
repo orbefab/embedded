@@ -271,9 +271,11 @@ fn a_step_reports_the_diagnostics_that_arose_during_it() {
 
 #[test]
 fn serial_contains_searches_everything_since_open() {
+    // A second of this sketch is more than the 4096-byte serial frame. "ready" is printed
+    // before that flood, and the search has to find it in the whole log.
     let dir = with_firmware(
         "flood",
-        "open\nstep 100ms\nexpect serial contains \"ready\"\nstep 7s\nexpect serial contains \"ready\"\n",
+        "open\nstep 100ms\nexpect serial contains \"ready\"\nstep 1s\nexpect serial contains \"ready\"\n",
     );
     let run = orbe(dir.path(), &["test"]);
     assert_eq!(run.code, 0, "{}", &run.stdout[..run.stdout.len().min(2000)]);

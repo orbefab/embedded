@@ -14,8 +14,9 @@ it takes every packages/engine/tests/circuits/*/netlist.json, then every
 packages/engine/tests/circuit/fixtures/*/netlist.json, the circuits the reference tests
 run. `--check` regenerates in memory and
 exits 1 if any committed byte differs, or if a skipped example already has
-deck.cir or ngspice.json. For an example with a chip it also runs the engine and exits 1
-or a relay unless the run's logic.vcd reads back as its observations.logic summary. stdout is one
+deck.cir or ngspice.json. For an example with a chip or a relay it also runs release `orbe-run` from cargo's
+target directory, so `CARGO_TARGET_DIR` selects that binary, and exits 1 unless the run's
+logic.vcd reads back as its observations.logic summary. stdout is one
 JSON document.
 
 A part with no kind, an unknown kind, a kind that runs firmware, a part with no
@@ -228,8 +229,26 @@ def has_logic(netlist):
     return has_chip(netlist) or any(part.get("kind") == "relay" for part in netlist["parts"])
 
 
+def release_orbe_run():
+    """The release `orbe-run` cargo just built. `cargo metadata` honors `CARGO_TARGET_DIR`."""
+    metadata = subprocess.run(
+        ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    target = json.loads(metadata.stdout).get("target_directory")
+    if not target:
+        sys.exit("ngspice_refs: cargo metadata printed no target directory")
+    runner = Path(target) / "release" / "orbe-run"
+    if not runner.is_file():
+        sys.exit(f"ngspice_refs: no orbe-run at {runner}")
+    return runner
+
+
 def logic_reads_back(example):
-    """Runs the engine on the example and reads its logic.vcd back as observations.logic."""
+    """Runs release `orbe-run` and reads its logic.vcd back as observations.logic."""
     subprocess.run(
         [
             "cargo",
@@ -247,10 +266,11 @@ def logic_reads_back(example):
         cwd=ROOT,
         check=True,
     )
+    runner = release_orbe_run()
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp, "run")
         subprocess.run(
-            [ROOT / "target/release/orbe-run", "run", example / "netlist.json", "--out", out],
+            [runner, "run", example / "netlist.json", "--out", out],
             capture_output=True,
             check=True,
         )
