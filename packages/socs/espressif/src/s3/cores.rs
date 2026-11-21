@@ -198,6 +198,7 @@ impl Cores {
     /// reason, and returns that core and its stop. With no core that may run, the PRO CPU
     /// stops with [`Stop::Spin`] at the latest cycle any core ran to, and `reached` is `until`.
     pub(crate) fn run_until(&mut self, soc: &mut Soc, until: Cycle) -> (CoreId, Stop) {
+        soc.forget_events();
         loop {
             if self
                 .app_released()

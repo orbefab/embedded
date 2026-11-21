@@ -21,6 +21,7 @@ use super::calibration::{self, Calibration};
 use super::clock::{CpuClock, Source, Tick};
 use super::code::Code;
 use super::efuse::{Efuse, EfuseSet};
+use super::events::{Events, Peripheral};
 use super::extmem;
 use super::flash::{self, Flash};
 use super::gates::{self, Block, Gates};
@@ -95,6 +96,8 @@ pub(crate) struct Soc {
     flash: Option<Flash>,
     /// The code version the cores' decode tables run on, and the lines it watches.
     code: Code,
+    /// The next event of each peripheral the last poll found.
+    events: Events,
     /// Registers kept as plain words, by address.
     plain: BTreeMap<u32, u32>,
     pub(crate) gpio: Gpio,
@@ -336,6 +339,7 @@ impl Soc {
             rom: None,
             flash: None,
             code: Code::default(),
+            events: Events::default(),
             plain: BTreeMap::new(),
             gpio: Gpio::new(netted),
             systimer: Systimer::new(),
@@ -517,6 +521,7 @@ impl Soc {
     /// The PRO CPU's bus for one access outside a run, as a test makes it.
     #[cfg(test)]
     pub(crate) fn bus(&mut self) -> CoreBus<'_> {
+        self.forget_events();
         CoreBus::new(
             self,
             Step {
@@ -1425,6 +1430,7 @@ impl Soc {
         if !PERIPHERALS.contains(&addr) {
             return Err(Exit::Fault(Cause::LoadStoreError));
         }
+        self.events.touch(word);
         if let Some(refused) = self.gated(word) {
             self.ending = Some(Ending::Refused(refused));
             return Err(Exit::Stop);
@@ -1498,6 +1504,7 @@ impl Soc {
         if !PERIPHERALS.contains(&addr) {
             return Err(Exit::Fault(Cause::LoadStoreError));
         }
+        self.events.touch(addr);
         self.store_register(step, cycle, addr, width, value)?;
         if step.other_sleeps {
             self.steer(Steer::Wake(step.start));
@@ -1682,23 +1689,49 @@ impl Soc {
         self.matrix.lines(core, sources)
     }
 
+    /// Forgets the next event of every peripheral, at the start of a slice. The pads and the
+    /// host's input may have changed since the last one.
+    pub(crate) fn forget_events(&mut self) {
+        self.events.forget();
+    }
+
+    /// The cycle the lines can next change at. Each peripheral's event comes from
+    /// [`Events`] while it holds there, and from the peripheral when not.
     fn next_event(&mut self, cycle: Cycle) -> Option<Cycle> {
         let now = self.stamp(cycle);
         self.rmt.settle(now);
         let apb = self.clock.source.apb();
         self.uart.settle(now, &self.gpio, apb);
-        let next = [
-            self.systimer.next_event(now),
-            self.watchdogs.next_alarm(now),
-            self.spi2.next_event(),
-            self.usb.next_event(now),
-            self.rmt.next_event(),
-            self.uart.next_event(now),
-        ]
-        .into_iter()
-        .flatten()
-        .min()?;
-        Some(self.clock.cycle_after(next))
+        let mut next: Option<Tick> = None;
+        for peripheral in Peripheral::ALL {
+            let at = self.events.kept(peripheral, now).unwrap_or_else(|| {
+                let at = self.ask(peripheral, now);
+                self.events.keep(peripheral, at);
+                at
+            });
+            #[cfg(debug_assertions)]
+            {
+                let asked = match peripheral {
+                    Peripheral::Timers => self.watchdogs.clone().next_alarm(now),
+                    _ => self.ask(peripheral, now),
+                };
+                assert_eq!(at, asked, "the kept event of {peripheral:?} at {now:?}");
+            }
+            next = next.into_iter().chain(at).min();
+        }
+        Some(self.clock.cycle_after(next?))
+    }
+
+    /// The first tick after `now` at which `peripheral` can move a line.
+    fn ask(&mut self, peripheral: Peripheral, now: Tick) -> Option<Tick> {
+        match peripheral {
+            Peripheral::Systimer => self.systimer.next_event(now),
+            Peripheral::Timers => self.watchdogs.next_alarm(now),
+            Peripheral::Spi2 => self.spi2.next_event(),
+            Peripheral::Usb => self.usb.next_event(now),
+            Peripheral::Rmt => self.rmt.next_event(),
+            Peripheral::Uart => self.uart.next_event(now),
+        }
     }
 }
 
