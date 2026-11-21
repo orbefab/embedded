@@ -4,7 +4,7 @@
 
 A microcontroller is a chip crate in `packages/socs`, such as `orbe-microchip` for the ATmega328P and `orbe-espressif` for the ESP32-S3. The chip crate holds the chip and its `bridge` module, which implements `Mcu` beside the registers it reads. A chip crate never depends on `orbe-engine`. `scripts/check.sh fast` runs `scripts/core-deps.sh`, which fails when a crate in `packages/socs` depends on `packages/engine`, or when `orbe-mcu` depends on anything but `orbe-model`.
 
-The engine keeps what the circuit sees, in `packages/engine/src/mcu/`. `mod.rs` holds the table of kinds, one row per chip crate's type. Each kind has its own file there with its netlist struct, its JSON wire type and its parse, and the outputs, watches and samples it builds from its part's pins and electrical params. The engine parses an ESP32-S3 executable and builds the chip crate's chip from it. `orbe-microchip` parses an AVR image, and `orbe-espressif` maps the ROM by section. Each of those reads the ELF bytes with the `object` crate and keeps its own windows and refusals.
+The engine keeps what the circuit sees, in `packages/engine/src/mcu/`. `mod.rs` holds the table of kinds, one row per chip crate's type. Each kind has its own file there with its netlist struct, its JSON wire type and its parse, and the outputs, watches and samples it builds from its part's pins and electrical params. The engine parses an ESP32-S3 executable and builds the chip crate's chip from it. The engine reads an ATmega328P's Intel HEX with `orbe-microchip`'s `parse_hex`. `orbe-espressif` maps the ROM by section, reading its ELF bytes with the `object` crate and keeping its own windows and refusals.
 
 ## Mcu
 

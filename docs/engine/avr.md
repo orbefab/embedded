@@ -6,7 +6,7 @@ The sources are two documents. DS40002061B is the datasheet, written DS here. DS
 
 ## What it models
 
-A `Cpu` is one chip. `parse_hex` or `parse_elf` reads an image and `Cpu::load_image` puts it in flash. `Cpu::run_until` runs to a cycle, `Cpu::take_pin` yields each pin change with the cycle it happened on, and `Cpu::drive_pin` drives a pad from outside. `Cpu` is `Clone`, and a clone shares the flash. Cycle 0 is the first instruction, and power-on start-up is already over at that point.
+A `Cpu` is one chip. `parse_hex` reads an Intel HEX image by the rules [netlist.md](netlist.md#atmega328p) gives `firmware`, and `Cpu::load_flash` puts it in flash. The engine reads a part's `firmware` with that same function. `Cpu::run_until` runs to a cycle, `Cpu::take_pin` yields each pin change with the cycle it happened on, and `Cpu::drive_pin` drives a pad from outside. `Cpu` is `Clone`, and a clone shares the flash. Cycle 0 is the first instruction, and power-on start-up is already over at that point.
 
 A pin report carries the pin's level and its drive, the pin's own stage apart from the host: `High` or `Low` for an output, `PullUp` for an input with `PORTxn` set and `PUD` clear, and `Off` for an input with no pull-up (Table 14-1). A report goes out when either changes, so a pull-up that turns on under a pin the host already holds high is still a report. While `RSTDISBL` is unprogrammed, `PC6` is `RESET`: its drive is always `PullUp`, its port bits do not move it, and `PINC6` reads 0 (Table 14-7, §14.3.2). An in-run reset keeps what the host drives on the pads.
 
@@ -204,7 +204,7 @@ Every row carries its citation and is exact. There are 107 rows. The interrupt p
 
 With no arguments the example loads `blocks/nano-led-fade/firmware/fade.hex`, found from the crate directory. The default cycle count is 16,000,000, one second at the 16 MHz clock `Cpu::new` uses. Pass a hex path, then a cycle count, to time another image or a longer run. A path you pass is relative to the current directory. The run stops on the instruction that crosses the cycle count, and the printed count is the median run's actual cycles.
 
-Each run is a new `Cpu`. Before `load_image`, the example calls `set_fuses` with the bytes in `parts/atmega328p-tqfp32/part.jsonc`, low `0xFF`, high `0xDF`, and extended `0xFD`. Those are the fuses on the `nano-board` chip. The example drains `take_pin` every `PIN_QUEUE_CAP` cycles, so a long run does not drop pin reports.
+Each run is a new `Cpu`. Before `load_flash`, the example calls `set_fuses` with the bytes in `parts/atmega328p-tqfp32/part.jsonc`, low `0xFF`, high `0xDF`, and extended `0xFD`. Those are the fuses on the `nano-board` chip. The example drains `take_pin` every `PIN_QUEUE_CAP` cycles, so a long run does not drop pin reports.
 
 The example discards one warm-up, times five runs, and prints the median wall time in milliseconds per simulated second, the minimum, the maximum, and the MHz of the median run. A simulated second is 16,000,000 cycles. The same line gives the pin-edge count of the median run. The process exits non-zero when a run stops before its cycle count or executes an unknown opcode. `scripts/check.sh` does not run the example.
 

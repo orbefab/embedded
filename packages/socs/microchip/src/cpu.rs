@@ -5,14 +5,11 @@
 //! mask is set. While the core is sleeping, [`Cpu::run_until`] jumps to the
 //! next event. A budget is a cycle: there is no instruction-count run.
 
-use std::fmt;
-
 use orbe_avr::{Activity, Core, SpmNote};
 
 use crate::bus::Bus;
 use crate::chip::{FLASH_WORDS, IRQ_CYCLES, RAMEND, USART0, VECTORS};
 use crate::fuses::FuseBytes;
-use crate::image::Image;
 use crate::irq;
 use crate::periph::system::{BORF, EXTRF, PORF, WDRF};
 use crate::periph::usart::Sent;
@@ -96,25 +93,6 @@ pub struct SpiClock {
     pub mode: u8,
     pub lsb_first: bool,
 }
-
-/// The image is larger than this part's flash.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LoadError {
-    pub bytes: usize,
-    pub flash_bytes: usize,
-}
-
-impl fmt::Display for LoadError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "image is {} bytes and this part's flash is {} bytes",
-            self.bytes, self.flash_bytes
-        )
-    }
-}
-
-impl std::error::Error for LoadError {}
 
 /// One programmed ATmega328P.
 #[derive(Debug)]
@@ -355,25 +333,6 @@ fn merged_status(kind: ResetKind, old: u8) -> u8 {
 impl Cpu {
     pub fn load_words(&mut self, words: &[u16]) {
         self.core.load_words(words);
-    }
-
-    /// Flash capacity of this part, in bytes.
-    pub fn flash_bytes(&self) -> usize {
-        usize::from(FLASH_WORDS) * 2
-    }
-
-    /// Load a parsed image. An image longer than [`Self::flash_bytes`] is an
-    /// error. Bytes are not truncated.
-    pub fn load_image(&mut self, image: &Image) -> Result<(), LoadError> {
-        let flash_bytes = self.flash_bytes();
-        if image.bytes().len() > flash_bytes {
-            return Err(LoadError {
-                bytes: image.bytes().len(),
-                flash_bytes,
-            });
-        }
-        self.load_flash(image.bytes());
-        Ok(())
     }
 
     /// Little-endian program image. A trailing odd byte is padded with zero.
