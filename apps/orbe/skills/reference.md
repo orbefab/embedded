@@ -125,8 +125,8 @@ Each line is a live command without `orbe`. `--json`, `--session`, `--help` or `
 
 - `orbe open` starts a background process that holds the session, and every later command talks to it. The process ends on `orbe close`, or after 1 hour with no command while it is not playing and no page watches it.
 - A session has a name. By default it comes from the project folder, the nearest one up with `scene.jsonc` or `parts.lock`, so each project gets its own, and its `tests/` folder shares it. Outside a project it comes from the git repository's root folder, else the current folder. `--session <name>` after the command, or `ORBE_SESSION=<name>`, picks another.
-- `orbe close --all` closes every session and cleans up after crashed ones.
-- A command other than `close` refuses a session that another version of orbe started. The message names that version and says to run `orbe close`.
+- `orbe close --all` closes every session and cleans up after crashed ones. A crash's output stays in `<name>.crashed.log` until the next crash replaces it.
+- A command other than `close` refuses a session another orbe version started, as `version_mismatch`. Run `orbe close`.
 - A command sent while a `step` runs waits for it. Ctrl-C during a long `step` stops it, and the session stays paused at the time it reached.
 
 ## The 3D page
@@ -143,7 +143,7 @@ Only this machine can reach the page's address. From another machine it works th
 | `scene.no_model` | A part has no engine model, no `not_simulated` reason and no `"joins_only": true`, so nothing runs for it. Use a part with a model. |
 | `scene.unconnected` | Nothing is wired to a part, or a part with at most 3 nets has a net with no wire. Wire it, or leave it open when the circuit means it. |
 | `net.floating` | A net has no DC path to ground. Fix it when a part reads that net. |
-| `scene.unplaced` | Parts have no `layout` position, so the 3D page puts them in a row. A part whose `at` puts a leg in a breadboard hole, with no `on`, is drawn as if plugged in while its leads join nothing. Seat it with `on`, as the hint shows, when its place matters. |
+| `scene.unplaced` | Parts have no `layout` position, so the 3D page puts them in a row. A part whose `at` puts a leg in a hole is drawn as if plugged in, unless that leg already shares the hole's net or sits further below the board than the hole is deep. Seat it with `on`. The hint keeps a non-zero `rotate`. |
 | `scene.shorted` | Two pins of one part sit in one breadboard strip, such as a resistor turned along a column. Turn the part a quarter turn, as the hint shows. |
 
 ## Errors
@@ -158,7 +158,8 @@ The part and `orbe add` codes are in `orbe skills get parts`.
 | `scene.unknown_pin`, `scene.param`, `scene.syntax` | A typo or a wrong value at that line and column. The hint names what is valid. |
 | `scene.world` | A `world` quantity that does not exist, a value outside its range, or a step at 0, too close to the one before it, or that does not change the value. |
 | `no_session` | No session runs under this name. Run the `orbe open` in the hint. |
-| `session_crashed` | The session's process died. Run `orbe open` again. `open` says the previous session crashed, and leaves the log the hint named until that log is read or the next crash replaces it. |
+| `session_crashed` | The session's process died. Run `orbe open` again. It names `<name>.crashed.log`. A refused `open` says so too. |
+| `version_mismatch` | Another version of orbe started this session. Run `orbe close`. |
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |
 | `not_settable` | `press` and `release` work only on a switch. `set` works only on a quantity the scene's `world` names or a part reads. |
 | `wrong_setting` | The part takes a different input, such as a trimmer's `position`. Set that param in the scene and run `orbe open` again. |

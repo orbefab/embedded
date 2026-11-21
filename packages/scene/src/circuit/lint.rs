@@ -121,7 +121,7 @@ impl Circuit<'_> {
             .collect();
         let tree = syntax::parse(&project.sources, scene.file, &mut Findings::default())
             .expect("the scene parsed when it checked");
-        let hovering = self.hovering();
+        let hovering = self.hovering(&root);
         let scope = Scope {
             circuit: &*self,
             root,
@@ -228,18 +228,23 @@ fn unplaced(s: &Scope, out: &mut Findings) {
             ),
         );
     }
-    for &(instance, id, _) in &s.tops {
-        if s.circuit.seated.contains_key(&id) {
-            continue;
-        }
-        let Some(place) = layout.and_then(|node| node.get(&instance.name)) else {
-            continue;
-        };
-        if place.get("at").is_none() || place.get("on").is_some() {
-            continue;
-        }
+    for &(instance, _, _) in &s.tops {
         let Some((board, hole, pin)) = s.hovering.get(&instance.name) else {
             continue;
+        };
+        let turn = layout
+            .and_then(|node| node.get(&instance.name))
+            .and_then(|place| place.get("rotate"))
+            .and_then(turned);
+        let seat = match &turn {
+            Some(turn) => format!(
+                "\"{}\": {{ \"on\": {{ \"{pin}\": \"{board}.{hole}\" }}, \"rotate\": {turn} }}",
+                instance.name
+            ),
+            None => format!(
+                "\"{}\": {{ \"on\": {{ \"{pin}\": \"{board}.{hole}\" }} }}",
+                instance.name
+            ),
         };
         out.push(
             Code::Lint(Lint::Unplaced),
@@ -248,12 +253,26 @@ fn unplaced(s: &Scope, out: &mut Findings) {
                 "`{}` is drawn on `{board}` as if it were plugged in, and its leads join nothing",
                 instance.name
             ),
-            format!(
-                "seat it with \"on\", as \"{}\": {{ \"on\": {{ \"{pin}\": \"{board}.{hole}\" }} }}",
-                instance.name
-            ),
+            format!("seat it with \"on\", as {seat}"),
         );
     }
+}
+
+/// `rotate` as written, when it is three numbers and not all zero.
+fn turned(node: &Node) -> Option<String> {
+    let items = node.items()?;
+    if items.len() != 3 {
+        return None;
+    }
+    let numbers: Vec<&str> = items.iter().filter_map(Node::raw_number).collect();
+    if numbers.len() != 3 {
+        return None;
+    }
+    let zero = items.iter().all(|item| item.number() == Some(0.0));
+    if zero {
+        return None;
+    }
+    Some(format!("[{}, {}, {}]", numbers[0], numbers[1], numbers[2]))
 }
 
 /// Two pins of one plugged part in one strip: the strip joins them, as a part plugged in along

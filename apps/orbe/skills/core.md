@@ -113,9 +113,9 @@ A scene is JSONC: JSON plus `//` comments and trailing commas. Its keys:
 - `format`: always `1`.
 - `parts`: each instance by name. `type` is a catalog id or a `./` path to a part folder of your own. The other keys are the part's params. `"not_simulated": "<why>"` keeps a part for drawing only. Nothing may be wired to it. A wire to one of its pins is a `not_simulated` error that gives `<why>`.
 - `wires`: pairs of pins, `["nano.D2", "btn1.a"]`. Wired pins join into nets.
-- `nets` (optional): names a net by one of its pins, `"GND": "nano.GND"`. The ground net takes its pin's own name, such as `GND`, unless a name in `nets` already uses it. Every other net takes the name of its smallest pin, with `.` written `__`.
+- `nets` (optional): names a net by one of its pins, `"GND": "nano.GND"`. The ground net is named `GND` when `nets` does not give that name to another net. A hole never names a net. Every other net takes the name of its smallest pin, with `.` written `__`.
 - `layout` (optional): `"r1": { "on": { "a": "bb.d25" } }` seats a part in a breadboard, and `"bb": { "at": [x, y, z], "rotate": [rx, ry, rz] }` places one, in mm and degrees.
-- `ground` (optional): a pin on the ground net, as `"ground": "bb.X1"`, for a scene with no board to name one.
+- `ground` (optional): a pin on the ground net, as `"ground": "bb.X1"`, for a scene with no board to name one. The net is still named `GND` when that name is free.
 - `sim` (optional): `{ "max_step": "1ms" }`, the engine's largest step, 10 ms by default.
 - `world` (optional): the room, the same for every part. Each quantity holds a number, or `{ "initial": 25, "steps": [{ "at": "2s", "to": 30 }] }`:
 
@@ -139,7 +139,7 @@ In a part's folder, `part.jsonc` is the part: its pins, params, ratings and the 
 
 Give the board an `at`. Then seat every part with leads using `on`: name one pin and the hole its lead goes into, and orbe seats the other leads where the part's shape puts them, each in its hole's strip. That works for leads off the 2.54 mm grid too. `"ldr": { "on": { "a": "bb.c21" } }` seats the LDR's lead b in c22. `"rotate": [0, 0, 90]` turns a part a quarter turn first. Wire the rest with jumpers between holes.
 
-`at` alone only draws a part where you put it. Its leads join no hole. When that `at` puts a leg in a breadboard hole, `orbe lint` warns `scene.unplaced` and the hint seats it with `on`. Run `orbe check` and `orbe lint` after seating: a lead in the channel, off the board or in a taken hole is an error whose hint names a placement that fits, when one does, and two pins of one part in one strip warn `scene.shorted`. `orbe skills get reference` has a whole breadboard scene.
+`at` alone only draws a part where you put it. Its leads join no hole. When that `at` puts a leg in a breadboard hole, `orbe lint` warns `scene.unplaced` and the hint seats it with `on`, keeping a non-zero `rotate`. A leg already on that hole's net, or one further below the board than the hole is deep, does not warn. Run `orbe check` and `orbe lint` after seating: a lead in the channel, off the board or in a taken hole is an error whose hint names a placement that fits, when one does, and two pins of one part in one strip warn `scene.shorted`. `orbe skills get reference` has a whole breadboard scene.
 
 ## Driving a session
 

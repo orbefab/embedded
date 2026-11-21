@@ -165,6 +165,8 @@ pub enum Code {
     Cancelled,
     /// The session's process ended without closing.
     SessionCrashed,
+    /// A session another version of orbe started.
+    VersionMismatch,
     /// The engine refused to open the netlist, with its diagnostic's code.
     Engine(String),
 }
@@ -191,6 +193,7 @@ impl Code {
             Code::NoChange => "no_change",
             Code::Cancelled => "cancelled",
             Code::SessionCrashed => "session_crashed",
+            Code::VersionMismatch => "version_mismatch",
             Code::Engine(code) => code,
         }
     }
@@ -1254,7 +1257,7 @@ impl Reply {
                     && one.hint == error.hint
                 {
                     out.pop();
-                    return out;
+                    return with_crash(out, self.previous_crash.as_deref());
                 }
             }
             Data::Stepped(_) => {
@@ -1276,7 +1279,7 @@ impl Reply {
         if !error.hint.is_empty() {
             let _ = write!(out, "\n  hint: {}", error.hint);
         }
-        out
+        with_crash(out, self.previous_crash.as_deref())
     }
 }
 
