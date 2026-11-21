@@ -1,7 +1,9 @@
 {
-  "format": 1, "part": "usb-micro-b", "version": "0.1.0", "title": "USB micro-B socket", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "usb-micro-b", "version": "0.1.1", "title": "USB micro-B socket", "license": "MIT OR Apache-2.0",
   "summary": "Right-angle USB micro-B receptacle. Five contacts on 0.65 mm and four shell feet. The shell feet are GND with pin 5.",
-  "real": { "generic": true, "maker": null, "number": null, "datasheet": null },
+  "tags": ["usb", "connector", "socket", "surface-mount"],
+  "docs": { "USB 2.0 specification": null },
+  "real": { "generic": true, "maker": null, "number": null, "datasheet": "USB 2.0 specification" },
   "pins": { "VBUS": [1], "DM": [2], "DP": [3], "ID": [4], "GND": [5, 6, 7, 8, 9] },
   "model": {
     "host": {
@@ -11,5 +13,5 @@
       "pins": { "p": "VBUS", "n": "GND" },
     },
   },
-  "not_simulated": [{ "what": "USB data", "pins": ["DM", "DP", "ID"], "why": "The host's 5 V stands in for a plugged cable. USB data is not modelled." }],
+  "not_simulated": [{ "what": "USB data", "pins": ["DM", "DP", "ID"], "why": "The host's 5 V stands in for a plugged cable. USB data is not modeled." }],
 }

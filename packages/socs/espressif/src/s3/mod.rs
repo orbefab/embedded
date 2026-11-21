@@ -1,7 +1,8 @@
 //! The ESP32-S3 as one Xtensa LX7 core on its internal SRAM and RTC memory, with GPIO, IO_MUX
-//! and the GPIO matrix, the interrupt matrix, SYSTIMER, the watchdogs, the USB Serial/JTAG
-//! console, SPI2, RMT, and for a chip booted from flash the mask ROM, the flash behind SPI1 and the
-//! MMU, and the registers the boot path reads.
+//! and the GPIO matrix, the interrupt matrix, SYSTIMER, the watchdogs, the timer groups' general
+//! timers, the hardware RNG, the USB Serial/JTAG
+//! console, UART0, UART1, UART2, SPI2, RMT, and for a chip booted from flash the mask ROM, the
+//! flash behind SPI1 and the MMU, and the registers the boot path reads.
 //!
 //! The chip starts in one of two ways. [`Esp32s3::new`] starts it as a bare-metal ELF leaves it:
 //! the segments in SRAM, the PC at the entry, the core's reset state otherwise, no ROM and no
@@ -31,6 +32,7 @@ mod bridge;
 mod calibration;
 mod clock;
 mod cores;
+mod curve;
 mod efuse;
 mod extmem;
 mod flash;
@@ -41,12 +43,15 @@ mod i2c;
 mod ledc;
 mod matrix;
 mod rmt;
+mod rng;
 mod rom;
+mod sar;
 mod sha;
 mod soc;
 mod spi1;
 mod spi2;
 mod timers;
+mod uart;
 mod usb;
 
 use std::sync::Arc;
@@ -63,6 +68,7 @@ use timers::{Action, Watchdogs};
 pub use boot::Segment;
 pub use bridge::{Bridge, PINS};
 pub use clock::{TICK_HZ, Tick};
+pub use efuse::EfuseSet;
 pub use gpio::PadDrive;
 pub use orbe_xtensa::CoreId;
 pub use rmt::{Flight, Train};
@@ -161,11 +167,17 @@ pub enum Refused {
 /// Where a run stopped before its limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Halt {
-    /// At `at` a pad's drive changed, a record ended, or both: an SPI2 transfer, an LEDC
-    /// update that took effect on a pad with a net, or an RMT transmission. [`Esp32s3::drive`]
-    /// gives the new drives, and [`Esp32s3::take_transfers`], [`Esp32s3::take_duties`] and
-    /// [`Esp32s3::take_trains`] the records.
-    Change { at: Tick, image: bool, record: bool },
+    /// At `at` a pad's drive changed, a record ended, an ADC conversion samples its pad, or
+    /// several of these. A record is an SPI2 transfer, an LEDC update that took effect on a pad
+    /// with a net, or an RMT transmission. [`Esp32s3::drive`] gives the new drives,
+    /// [`Esp32s3::take_transfers`], [`Esp32s3::take_duties`] and [`Esp32s3::take_trains`] the
+    /// records, and [`Esp32s3::sample`] takes the pads' voltages at `at` before the chip runs on.
+    Change {
+        at: Tick,
+        image: bool,
+        record: bool,
+        sample: bool,
+    },
     /// The LEDC updates that took effect at `at` moved a pad's drive, after the `Change` at
     /// `at` that holds their records. [`Esp32s3::drive`] gives the new drives.
     Moved(Tick),
@@ -234,6 +246,8 @@ pub struct Esp32s3 {
     shown: [PadDrive; PADS],
     /// The tick of an image change not reported yet.
     changed: Option<Tick>,
+    /// The tick an ADC conversion samples its pad at, not reported yet.
+    sampled: Option<Tick>,
     /// How many of SPI2's transfers have had their end reported and wait to be taken.
     reported: usize,
     /// The `Duty` records, from the first not taken.
@@ -258,6 +272,8 @@ pub struct Esp32s3 {
     /// The PC after the store that started the last RMT transmission, which a transmission
     /// that never ends names.
     rmt_pc: Pc,
+    /// The PC after the last UART store, which a frame that meets a setting names.
+    uart_pc: Pc,
 }
 
 impl Esp32s3 {
@@ -299,6 +315,7 @@ impl Esp32s3 {
         soc.flash = Some(Flash::new(boot.flash));
         let mut core = Core::new();
         boot::apply(&state, &mut core, &mut soc);
+        boot::program_rom_uart(&state, &mut soc);
         for segment in boot.segments {
             let flash = soc.flash.as_mut().expect("attached");
             if segment.mapped() {
@@ -319,12 +336,24 @@ impl Esp32s3 {
         self.soc.gpio.omit_pull_down();
     }
 
+    /// The chip has the eFuses `set` gives, in place of the default set.
+    pub fn use_efuse(&mut self, set: EfuseSet) {
+        self.soc.use_efuse(set);
+    }
+
+    /// Gives each ADC conversion the chip reported a `sample` halt for the code at its pad's
+    /// voltage: `volts` of a GPIO that [`adc_pad`] names, against `GND`.
+    pub fn sample(&mut self, volts: impl Fn(u8) -> f64) {
+        self.soc.sample(volts);
+    }
+
     fn with(core: Core<orbe_xtensa::Esp32s3>, soc: Soc) -> Esp32s3 {
         Esp32s3 {
             cores: Cores::new(core),
             shown: soc.image(),
             soc,
             changed: None,
+            sampled: None,
             reported: 0,
             duties: Vec::new(),
             reported_duties: 0,
@@ -342,6 +371,10 @@ impl Esp32s3 {
                 core: CoreId::Pro,
                 pc: 0,
             },
+            uart_pc: Pc {
+                core: CoreId::Pro,
+                pc: 0,
+            },
         }
     }
 
@@ -352,6 +385,7 @@ impl Esp32s3 {
             self.settle_ledc();
             self.settle_i2c(limit);
             self.settle_rmt();
+            self.settle_uart();
             if let Some(halt) = self.next_halt() {
                 if halt.at() > limit {
                     return None;
@@ -368,6 +402,11 @@ impl Esp32s3 {
             let ledc = self.soc.ledc.next(self.soc.clock.source.apb());
             let i2c = self.soc.i2c.next_event();
             let rmt = self.soc.rmt.upcoming().map(|at| Tick(at.0 + 1));
+            let uart = self
+                .soc
+                .uart
+                .next_event(self.now())
+                .map(|at| Tick(at.0 + 1));
             let train = self
                 .trains
                 .get(self.reported_trains)
@@ -379,6 +418,7 @@ impl Esp32s3 {
                 ledc.map(|at| Tick(at.0 + 1)),
                 i2c.map(|at| Tick(at.0 + 1)),
                 rmt,
+                uart,
                 train,
             ]
             .into_iter()
@@ -391,6 +431,10 @@ impl Esp32s3 {
                 debug_assert!(self.changed.is_none(), "a change stops the core");
                 self.changed = Some(change);
             }
+            if let Some(at) = self.soc.sampled.take() {
+                debug_assert!(self.sampled.is_none(), "a sample stops the core");
+                self.sampled = Some(at);
+            }
             self.soc.rearmed = false;
             self.soc.reclocked = false;
             self.soc.started = false;
@@ -402,6 +446,12 @@ impl Esp32s3 {
             }
             if let Some(core) = self.soc.rmt_started.take() {
                 self.rmt_pc = Pc {
+                    core,
+                    pc: self.cores.core(core).pc(),
+                };
+            }
+            if let Some(core) = self.soc.uart_started.take() {
+                self.uart_pc = Pc {
                     core,
                     pc: self.cores.core(core).pc(),
                 };
@@ -555,6 +605,50 @@ impl Esp32s3 {
         self.trains.extend(trains);
     }
 
+    /// Drives each UART TXD edge due at a tick whose instructions have all run. An edge that
+    /// moves a netted pad waits for its `Moved` halt, and the others change the pad at once.
+    /// A frame that ends here queues the next byte's start bit, and that edge is driven before
+    /// the cores run on. A frame that meets a divider or a clock the model does not shift ends
+    /// the run, naming the PC after the last UART store.
+    fn settle_uart(&mut self) {
+        let Some(through) = self.now().0.checked_sub(1) else {
+            return;
+        };
+        let mut bound = Tick(through);
+        let apb = self.soc.clock.source.apb();
+        loop {
+            let mut moved = false;
+            while let Some(edge) = self.soc.uart.next_edge(bound) {
+                let signal = uart::SIGNAL[usize::from(edge.port)];
+                let moves = self.soc.gpio.moves(signal, edge.level);
+                self.soc.uart.take_edge(usize::from(edge.port));
+                if moves {
+                    self.moves.push((edge.at, signal, edge.level));
+                    self.soc
+                        .uart
+                        .after_edge(usize::from(edge.port), edge.at, &self.soc.gpio, apb);
+                    bound = edge.at;
+                    moved = true;
+                    break;
+                }
+                self.soc.gpio.set_signal(signal, edge.level);
+                self.soc
+                    .uart
+                    .after_edge(usize::from(edge.port), edge.at, &self.soc.gpio, apb);
+            }
+            self.soc.uart.settle(bound, &self.soc.gpio, apb);
+            if moved || self.soc.uart.next_edge(bound).is_none() {
+                break;
+            }
+        }
+        if let Some((at, name, setting)) = self.soc.uart.take_refused()
+            && self.fault.is_none_or(|(fault, _)| at < fault)
+        {
+            let refused = Refused::Register(name, setting);
+            self.fault = Some((at, Fault::Refused(refused, self.uart_pc)));
+        }
+    }
+
     /// Holds the chip in reset from `now`, after the store at `pc` reset it from `esp_restart`.
     /// The boot ROM does not run, so the core runs no further, and each pad drives as at
     /// power-on.
@@ -595,12 +689,16 @@ impl Esp32s3 {
             .map(|train| train.end)
             .filter(|&end| end <= self.now());
         let record = [transfer, duty, train].into_iter().flatten().min();
-        let change = [self.changed, record].into_iter().flatten().min();
+        let change = [self.changed, record, self.sampled]
+            .into_iter()
+            .flatten()
+            .min();
         let change = change.map(|at| {
             let halt = Halt::Change {
                 at,
                 image: self.changed == Some(at),
                 record: record == Some(at),
+                sample: self.sampled == Some(at),
             };
             (at, 0, halt)
         });
@@ -624,10 +722,18 @@ impl Esp32s3 {
 
     fn report(&mut self, halt: Halt) {
         match halt {
-            Halt::Change { at, image, record } => {
+            Halt::Change {
+                at,
+                image,
+                record,
+                sample,
+            } => {
                 if image {
                     self.shown = self.soc.image();
                     self.changed = None;
+                }
+                if sample {
+                    self.sampled = None;
                 }
                 if record {
                     if self.soc.spi2.end(self.reported) == Some(at) {
@@ -718,11 +824,18 @@ impl Esp32s3 {
             self.soc.gpio.set_pad(gpio, level);
         }
         self.soc.i2c.input(at, &self.soc.gpio);
+        let apb = self.soc.clock.source.apb();
+        self.soc.uart.note_pins(at, &self.soc.gpio, apb);
     }
 
     /// The next console byte whose packet went at or before `through`, with that tick.
     pub fn take_sent(&mut self, through: Tick) -> Option<(Tick, u8)> {
         self.soc.usb.take_sent(through)
+    }
+
+    /// The next UART byte, sent or received, whose stop bit ended at or before `through`.
+    pub(crate) fn take_uart(&mut self, through: Tick) -> Option<uart::Sent> {
+        self.soc.uart.take_sent(through)
     }
 
     /// Queues `bytes` for the console to receive from `at`, after every byte queued before.
@@ -746,6 +859,12 @@ impl Esp32s3 {
     }
 }
 
+/// Whether GPIO `gpio` is an ADC channel's pad: GPIO1 to GPIO10 are ADC1's channels 0 to 9, and
+/// GPIO11 to GPIO20 ADC2's, `soc/esp32s3/include/soc/adc_channel.h`.
+pub fn adc_pad(gpio: u8) -> bool {
+    (1..=20).contains(&gpio)
+}
+
 /// Adds the mask ROM from the ROM ELF `rom`, and puts its data in SRAM.
 fn load_rom(soc: &mut Soc, rom: &[u8]) {
     let image = rom::load(rom, |addr, len| {
@@ -763,6 +882,7 @@ fn load_rom(soc: &mut Soc, rom: &[u8]) {
 mod tests {
     use orbe_xtensa::{Bus, Cause, Cycle, Exit, Sr, Width};
 
+    use super::rng;
     use super::soc::{
         EFUSE, Ending, GDMA, GPIO, IO_MUX, RTC_CNTL, SPI2, SYSTEM, SYSTIMER, TIMG0, TIMG1,
         USB_SERIAL_JTAG,
@@ -866,6 +986,7 @@ mod tests {
             at,
             image: true,
             record: false,
+            sample: false,
         }
     }
 
@@ -942,6 +1063,7 @@ mod tests {
         );
     }
 
+    mod adc;
     mod dual;
     mod i2c;
     mod pads;
@@ -966,6 +1088,147 @@ mod tests {
             let mut split = blink().chip();
             assert_eq!(halts(&mut split, 1000, step), seen, "limits {step} apart");
             assert_eq!(split.tick(), whole.tick());
+        }
+    }
+
+    /// Routes GPIO21 to UART0, sends 0x55 at 1 Mbaud from the APB clock, and checks the edges
+    /// and the logged byte against a run whose limits fall inside the byte.
+    fn uart_byte() -> Program {
+        let mut program = Program::new(&[
+            IO_MUX + 0x58,
+            1 << 12,
+            GPIO + 0x5a8,
+            12,
+            0x6000_0078,
+            (1 << 20) | (1 << 22) | (1 << 24) | (1 << 25),
+            0x6000_0014,
+            80,
+            0x6000_0048,
+            256,
+            0x6000_0000,
+            0x55,
+        ]);
+        program
+            .l32r(2, 0)
+            .l32r(3, 1)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 2)
+            .l32r(3, 3)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 4)
+            .l32r(3, 5)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 6)
+            .l32r(3, 7)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 8)
+            .l32r(3, 9)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 10)
+            .l32r(3, 11)
+            .rri8(6, 3, 2, 0)
+            .raw(&LOOP);
+        program
+    }
+
+    #[test]
+    fn a_uart_byte_lands_on_the_same_edges_however_the_run_splits() {
+        let bytes = |chip: &mut Esp32s3| {
+            std::iter::from_fn(|| chip.take_uart(Tick(u64::MAX)))
+                .map(|sent| (sent.port, sent.byte, sent.start, sent.end))
+                .collect::<Vec<_>>()
+        };
+        let mut whole = uart_byte().chip();
+        let seen = halts(&mut whole, 4000, 4000);
+        let sent = bytes(&mut whole);
+        assert_eq!(sent.len(), 1, "{seen:?}");
+        assert_eq!(sent[0].0, 0);
+        assert_eq!(sent[0].1, 0x55);
+        assert!(seen.len() > 2, "{seen:?}");
+        for step in [1, 3, 7, 40] {
+            let mut split = uart_byte().chip();
+            assert_eq!(halts(&mut split, 4000, step), seen, "limits {step} apart");
+            assert_eq!(bytes(&mut split), sent, "limits {step} apart");
+            assert_eq!(split.tick(), whole.tick(), "limits {step} apart");
+        }
+    }
+
+    /// Two 0x00 bytes written back to back with `tx_idle_num` 0. GPIO21 must fall and rise
+    /// for both frames: the second start bit is queued when the first stop bit ends.
+    fn uart_queued() -> Program {
+        let mut program = Program::new(&[
+            IO_MUX + 0x58,
+            1 << 12,
+            GPIO + 0x5a8,
+            12,
+            0x6000_0078,
+            (1 << 20) | (1 << 22) | (1 << 24) | (1 << 25),
+            0x6000_0014,
+            80,
+            0x6000_0048,
+            256,
+            0x6000_0000,
+            0x00,
+        ]);
+        program
+            .l32r(2, 0)
+            .l32r(3, 1)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 2)
+            .l32r(3, 3)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 4)
+            .l32r(3, 5)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 6)
+            .l32r(3, 7)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 8)
+            .l32r(3, 9)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 10)
+            .l32r(3, 11)
+            .rri8(6, 3, 2, 0)
+            .rri8(6, 3, 2, 0)
+            .raw(&LOOP);
+        program
+    }
+
+    #[test]
+    fn a_queued_byte_drives_its_start_bit_however_the_run_splits() {
+        let bytes = |chip: &mut Esp32s3| {
+            std::iter::from_fn(|| chip.take_uart(Tick(u64::MAX)))
+                .map(|sent| (sent.port, sent.byte, sent.start, sent.end))
+                .collect::<Vec<_>>()
+        };
+        let mut whole = uart_queued().chip();
+        let seen = halts(&mut whole, 4000, 4000);
+        let drives: Vec<PadDrive> = seen.iter().map(|&(_, drive)| drive).collect();
+        let sent = bytes(&mut whole);
+        // The route idles the pad high. Each 0x00 frame then falls for its start bit and
+        // rises for its stop bit, including the byte that was queued behind the first.
+        assert_eq!(
+            drives,
+            [
+                PadDrive::High,
+                PadDrive::Low,
+                PadDrive::High,
+                PadDrive::Low,
+                PadDrive::High
+            ],
+            "{seen:?}"
+        );
+        assert_eq!(sent.len(), 2, "{sent:?}");
+        assert!(sent.iter().all(|byte| byte.0 == 0 && byte.1 == 0x00));
+        assert_eq!(
+            sent[1].2, sent[0].3,
+            "the next start bit begins as the stop bit ends"
+        );
+        for step in [1, 3, 7, 40] {
+            let mut split = uart_queued().chip();
+            assert_eq!(halts(&mut split, 4000, step), seen, "limits {step} apart");
+            assert_eq!(bytes(&mut split), sent, "limits {step} apart");
+            assert_eq!(split.tick(), whole.tick(), "limits {step} apart");
         }
     }
 
@@ -1026,6 +1289,98 @@ mod tests {
             Some((c(6), pro(at))),
             "a hint of ESP_RST_SW"
         );
+    }
+
+    /// UART0 at 1 Mbaud sends a byte, then `SYSTEM_UART_RST` pulses. The pointers survive the
+    /// reset after traffic, so the port's next TX write is refused until `txfifo_rst`.
+    fn stale_uart0() -> Vec<(u32, u32)> {
+        vec![
+            (0x6000_0078, 1 << 20 | 1 << 22 | 1 << 24 | 1 << 25),
+            (0x6000_0014, 80),
+            (0x6000_0048, 256),
+            (0x6000_0000, 0x55),
+            (SYSTEM + 0x20, 1 << 2),
+            (SYSTEM + 0x20, 0),
+        ]
+    }
+
+    /// Every reset the model makes after UART0 went stale ends the run or holds the chip, and
+    /// none reaches a UART0 FIFO write: the model runs neither the boot ROM's PRO CPU path nor
+    /// the bootloader after a reset, so their UART0 log never follows one. A TX write after the
+    /// same prefix is refused, which shows the prefix leaves UART0 stale.
+    #[test]
+    fn every_reset_after_a_stale_uart0_ends_or_holds_without_a_uart_refusal() {
+        let last = |pairs: Vec<(u32, u32)>, store6: Option<u32>| {
+            let program = stores(&[stale_uart0(), pairs].concat());
+            let mut chip = program.chip();
+            if let Some(word) = store6 {
+                chip.soc.restore(STORE6, word);
+            }
+            let seen = halts(&mut chip, 1_000_000, 1_000_000);
+            let refused = seen.iter().any(|&(halt, _)| {
+                matches!(
+                    halt,
+                    Halt::Fault(_, Fault::Refused(Refused::Register("UART0", _), _))
+                )
+            });
+            (seen.last().map(|&(halt, _)| halt), refused, chip.restart())
+        };
+        let write = stores(&[stale_uart0(), vec![(0x6000_0000, 0x00)]].concat());
+        let (halt, refused, _) = last(vec![(0x6000_0000, 0x00)], None);
+        assert!(refused, "{halt:?}");
+        assert!(
+            matches!(
+                halt,
+                Some(Halt::Fault(_, Fault::Refused(Refused::Register("UART0", "fifo_pointers"), pc)))
+                    if pc == store_pc(&write, 6)
+            ),
+            "{halt:?}"
+        );
+
+        // esp_restart: RTC_CNTL_SW_SYS_RST or RTC_CNTL_SW_PROCPU_RST with no hint holds the chip.
+        for bit in [1 << 31, 1 << 5] {
+            let (halt, refused, restart) = last(vec![(RTC_CNTL, bit)], Some(0));
+            assert!(!refused, "{bit:#x}: {halt:?}");
+            assert!(restart.is_some(), "{bit:#x}: {halt:?}");
+        }
+        // A software reset after IDF recorded a watchdog or a panic ends the run.
+        for (word, cause) in [
+            (hint(7), ResetCause::Watchdog),
+            (hint(4), ResetCause::Panic),
+        ] {
+            let (halt, refused, _) = last(vec![(RTC_CNTL, 1 << 31)], Some(word));
+            assert!(!refused, "{halt:?}");
+            assert!(
+                matches!(halt, Some(Halt::Fault(_, Fault::FaultRestart(got, _))) if got == cause),
+                "{halt:?}"
+            );
+        }
+        // Each watchdog's system or RTC reset ends the run.
+        let watchdogs = [
+            (vec![(TIMG0 + 0x50, 1)], Watchdog::Timg0, Reset::System),
+            (
+                vec![
+                    (TIMG1 + 0x48, 0),
+                    (TIMG1 + 0x50, 1),
+                    (TIMG1 + 0x48, EN | 3 << 29),
+                ],
+                Watchdog::Timg1,
+                Reset::System,
+            ),
+            (vec![(RTC_CNTL + 0x9c, 1)], Watchdog::Rtc, Reset::Rtc),
+        ];
+        for (pairs, watchdog, reset) in watchdogs {
+            let (halt, refused, _) = last(pairs, None);
+            assert!(!refused, "{watchdog:?}: {halt:?}");
+            assert!(
+                matches!(
+                    halt,
+                    Some(Halt::Fault(_, Fault::Watchdog { watchdog: w, reset: r, .. }))
+                        if w == watchdog && r == reset
+                ),
+                "{watchdog:?}: {halt:?}"
+            );
+        }
     }
 
     /// A reset after IDF recorded a panic or a watchdog, or with no reason the model can read,
@@ -1135,8 +1490,6 @@ mod tests {
         let out = gdma + 4 * 0xc0 + 0x60;
         let refused = [
             (SPI2 + 0x34, 1 << 10, Refused::Interrupt("SPI2")),
-            (TIMG0 + 0x70, 1, Refused::Interrupt("TIMG0")),
-            (TIMG1 + 0x70, 2, Refused::Interrupt("TIMG1")),
             (
                 USB_SERIAL_JTAG + 0x10,
                 1 << 0,
@@ -1151,12 +1504,14 @@ mod tests {
             (gdma + 0x20, 1 << 23, Refused::Register("GDMA", "restart")),
             (out + 0x20, 1 << 22, Refused::Register("GDMA", "restart")),
             (RTC_CNTL + 0x18, 1 << 31, Refused::Sleep),
+            (0x6000_000c, 1 << 5, Refused::Interrupt("UART0")),
         ];
         for (address, value, why) in refused {
             let program = store_after_two_loads(address, value, 0);
             let mut chip = program.chip();
-            chip.soc.restore(SYSTEM + 0x18, 1 << 6 | 1 << 11);
-            chip.soc.restore(SYSTEM + 0x1c, 1 << 6 | 1 << 2);
+            chip.soc
+                .restore(SYSTEM + 0x18, 1 << 6 | 1 << 11 | 1 << 2 | 1 << 5);
+            chip.soc.restore(SYSTEM + 0x1c, 1 << 6 | 1 << 2 | 1 << 9);
             chip.soc.restore(SYSTEM + 0x24, 0);
             assert_eq!(
                 chip.run_until(c(1000)),
@@ -1169,6 +1524,10 @@ mod tests {
         }
         let mut chip = store_after_two_loads(TIMG0 + 0x70, 1 << 2, 0).chip();
         assert_eq!(chip.run_until(c(1000)), None, "the watchdog's interrupt");
+        let mut chip = store_after_two_loads(TIMG0 + 0x70, 1, 0).chip();
+        assert_eq!(chip.run_until(c(1000)), None, "timer 0's interrupt");
+        let mut chip = store_after_two_loads(TIMG1 + 0x70, 2, 0).chip();
+        assert_eq!(chip.run_until(c(1000)), None, "timer 1's interrupt");
     }
 
     /// `JTAG_IN_FLUSH` and SOF are not among the USB Serial/JTAG enables the model runs.
@@ -1501,9 +1860,9 @@ mod tests {
         let image = chip.run_until(c(1000));
         assert_eq!(chip.drive(21), PadDrive::Low);
 
-        let mut probe = store_after_two_loads(0x6000_0000, 0, 0).chip();
+        let mut probe = store_after_two_loads(0x6001_7000, 0, 0).chip();
         assert_eq!(probe.run_until(c(1000)), None);
-        let (_, touch) = probe.unmodeled().next().expect("the store touched UART0");
+        let (_, touch) = probe.unmodeled().next().expect("the store touched PCNT");
         assert_eq!(image, Some(image_at(touch.at)));
     }
 
@@ -1617,6 +1976,7 @@ mod tests {
                     at,
                     image: false,
                     record: true,
+                    sample: false,
                 },
                 _,
                 ref sent,
@@ -2176,6 +2536,7 @@ mod tests {
             at,
             image: false,
             record: true,
+            sample: false,
         }
     }
 
@@ -2340,6 +2701,7 @@ mod tests {
                         at: c(29),
                         image: true,
                         record: true,
+                        sample: false,
                     },
                     PadDrive::High
                 ),
@@ -2648,5 +3010,163 @@ mod tests {
                 "limits {step} apart"
             );
         }
+    }
+
+    /// Four RNG reads, twenty-four crystal cycles apart, then TIMG0 T0 armed for ten counts at
+    /// divider 2. The core waits, and the alarm wakes it. Halting every step, every seven steps
+    /// and once at the end leaves the same fault and the same words.
+    #[test]
+    fn a_timer_alarm_and_rng_reads_split_across_halts_match() {
+        let config = (1 << 31) | (1 << 30) | (2 << 13) | (1 << 10);
+        let mut program = Program::new(&[TIMG0, 0x6003_507c, 0x3fc8_8000, config, 10]);
+        program
+            .l32r(2, 0)
+            .movi(3, 0)
+            .rri8(6, 3, 2, 0x48)
+            .l32r(4, 1)
+            .l32r(5, 2);
+        for k in 0..4u8 {
+            program.rri8(2, 6, 4, 0).rri8(6, 6, 5, k * 4);
+            if k < 3 {
+                for _ in 0..24 {
+                    program.raw(&[0xf0, 0x20, 0x00]);
+                }
+            }
+        }
+        program
+            .l32r(3, 4)
+            .rri8(6, 3, 2, 0x10)
+            .movi(3, 0)
+            .rri8(6, 3, 2, 0x14)
+            .rri8(6, 3, 2, 0x18)
+            .rri8(6, 3, 2, 0x1c)
+            .rri8(6, 3, 2, 0x20)
+            .movi(7, 2)
+            .wsr(7, INTENABLE)
+            .movi(7, 0)
+            .wsr(7, PS)
+            .l32r(3, 3)
+            .rri8(6, 3, 2, 0x00)
+            .raw(&WAITI)
+            .raw(&LOOP);
+        let make = || {
+            let mut chip = program.chip();
+            chip.soc.restore(TIMG0 + 0x70, 1);
+            chip.soc.restore(0x600c_2000 + 4 * 50, 1);
+            chip
+        };
+        let words = |chip: &mut Esp32s3| {
+            [0, 4, 8, 12].map(|offset| chip.load_word(0x3fc8_8000 + offset).unwrap())
+        };
+        let mut done = make();
+        let whole = halts(&mut done, 5000, 5000);
+        let stored = words(&mut done);
+        for step in [1, 7, 1000] {
+            let mut chip = make();
+            assert_eq!(halts(&mut chip, 5000, step), whole, "steps of {step}");
+            assert_eq!(words(&mut chip), stored, "steps of {step}");
+        }
+        assert!(stored.iter().all(|word| *word != 0), "{stored:?}");
+        assert!(
+            stored.windows(2).any(|pair| pair[0] != pair[1]),
+            "{stored:?}"
+        );
+        // The enable store is at cycle 97, the alarm 20 cycles later, and the vector entry
+        // takes 4, so the unmapped fetch is at cycle 121.
+        assert!(
+            matches!(
+                whole[..],
+                [(Halt::Fault(at, Fault::UnmappedFetch(pc)), _)]
+                    if pc == pro(0x4000_0300) && at == c(121)
+            ),
+            "{whole:?}"
+        );
+    }
+
+    #[test]
+    fn a_divider_change_while_the_timer_runs_ends_the_run_at_its_store() {
+        let first = (1 << 31) | (1 << 30) | (2 << 13);
+        let second = (1 << 31) | (1 << 30) | (80 << 13);
+        let program = stores(&[(TIMG0, first), (TIMG0, second)]);
+        let mut chip = program.chip();
+        let why = Refused::Register("TIMG0", "divider");
+        assert_eq!(
+            chip.run_until(c(1000)),
+            Some(Halt::Fault(
+                c(5),
+                Fault::Refused(why, store_pc(&program, 1))
+            ))
+        );
+        assert_eq!(
+            chip.soc.bus().load(Cycle(0), TIMG0, Width::Word),
+            Ok(first),
+            "the refused store leaves the divider"
+        );
+    }
+
+    #[test]
+    fn a_clear_rng_clock_bit_refuses_the_read_and_the_stream_stays_on_the_apb_index() {
+        let off = Some(Ending::Refused(Refused::Register("RNG", "clock_off")));
+        let mut open = Esp32s3::new(&[], BASE, [], None).soc;
+        let mut gated = Esp32s3::new(&[], BASE, [], None).soc;
+        assert_ne!(
+            open.bus()
+                .load(Cycle(0), rng::WDEV_RND_REG, Width::Word)
+                .unwrap(),
+            0,
+            "the reset word has the clock bit set"
+        );
+        gated.restore(rng::WIFI_CLK_EN_REG, rng::WIFI_CLK_EN_RESET & !rng::RNG_EN);
+        assert_eq!(
+            gated.bus().load(Cycle(16), rng::WDEV_RND_REG, Width::Word),
+            Err(Exit::Stop)
+        );
+        assert_eq!(gated.ending.take(), off);
+        gated.restore(rng::WIFI_CLK_EN_REG, 0xffff_dfdf);
+        assert_eq!(
+            gated.bus().load(Cycle(16), rng::WDEV_RND_REG, Width::Word),
+            open.bus().load(Cycle(16), rng::WDEV_RND_REG, Width::Word),
+            "cycles while the bit was clear still count"
+        );
+
+        let mut kept = Esp32s3::new(&[], BASE, [], None).soc;
+        kept.restore(rng::WIFI_CLK_EN_REG, 0xffff_dfdf);
+        assert_eq!(
+            kept.bus()
+                .store(Cycle(1), rng::WIFI_CLK_EN_REG, Width::Word, 0xffff_dfdf),
+            Ok(())
+        );
+        assert_eq!(
+            kept.bus().store(
+                Cycle(2),
+                rng::WIFI_CLK_EN_REG,
+                Width::Word,
+                rng::WIFI_CLK_EN_RESET & !rng::RNG_EN,
+            ),
+            Ok(())
+        );
+        assert_eq!(kept.ending, None, "clearing the bit is not refused");
+        assert_eq!(
+            kept.bus().load(Cycle(3), rng::WDEV_RND_REG, Width::Word),
+            Err(Exit::Stop)
+        );
+        assert_eq!(kept.ending, off);
+
+        // A bare-metal chip has not kept the register. IDF's write is unmodeled there, and the
+        // stream still runs, because the absence means the reset value.
+        let program = store_after_two_loads(
+            rng::WIFI_CLK_EN_REG,
+            rng::WIFI_CLK_EN_RESET & !rng::RNG_EN,
+            0,
+        );
+        let mut bare = program.chip();
+        assert_eq!(bare.run_until(c(1000)), None);
+        assert_ne!(
+            bare.soc
+                .bus()
+                .load(Cycle(0), rng::WDEV_RND_REG, Width::Word)
+                .unwrap(),
+            0
+        );
     }
 }

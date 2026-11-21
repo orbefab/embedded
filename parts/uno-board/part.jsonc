@@ -1,5 +1,5 @@
 // An Uno R3 compatible board drawn as the common CH340G clone, with the ATmega328P in a DIP-28 socket.
-// Frame: the board's underside on z = 0 and its top at z = 1.6, the outline's centre on the origin,
+// Frame: the board's underside on z = 0 and its top at z = 1.6, the outline's center on the origin,
 // the USB and power jacks at -X, the digital header along +Y.
 // The circuit is RobotDyn's UNO R3 CH340G schematic, net by net, plus the 1k resistors in the
 // serial lines. RobotDyn wires those lines direct. The clone photo shows the 1k bodies in the LED
@@ -14,7 +14,7 @@
 {
   "format": 1,
   "part": "uno-board",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "Uno R3 compatible board",
   "summary": "ATmega328P in a DIP-28 socket with a CH340G USB-serial chip, 68.6 x 53.3 mm, with female headers in the Uno R3 positions. Simulated: the 328P and its firmware, RESET with its button and the CH340G's DTR auto-reset, the serial line from the CH340G, 5V from USB, 3V3 from its regulator, and the L and ON LEDs. Not simulated: VIN, the barrel jack and the 5 V regulator, USB data, the clocks' crystals, the TX and RX LEDs, and the USB switch's gate. D13 feeds the L LED through 1k, so D13 as an input with its pull-up reads low. Guessed: the Q1 gate pair at 10k, the DTR capacitor at 100n, the 22p loads on the 16 MHz crystal, and placeholders for the USB series resistors, the DTR pulldown, the resistor across the CH340G crystal and the capacitor from RESET to ground.",
   "tags": ["board", "microcontroller", "avr", "atmega328p", "usb", "ch340g"],
@@ -22,22 +22,22 @@
   "docs": {
     "RobotDyn UNO R3 CH340G schematic": "https://robotdyn.com/pub/media/0G-00004029%3D%3DUNO-R3-CH340G/DOCS/Schematic%3D%3D0G-00004029%3D%3DUNO-R3-CH340G.pdf",
     "RobotDyn UNO R3 CH340G dimension diagram": "https://robotdyn.com/pub/media/0G-00004029%3D%3DUNO-R3-CH340G/DOCS/DIM%3D%3D0G-00004029%3D%3DUNO-R3-CH340G.pdf",
-    "CH340 clone schematic, mischianti.org": "https://mischianti.org/wp-content/uploads/2023/11/Arduino-UNO-Rev-3-CH340-SMD-clone-schema.pdf",
-    "WCH CH340 datasheet": "https://cdn.sparkfun.com/datasheets/Dev/Arduino/Other/CH340DS1.PDF",
-    "CH340G clone, top photo": "https://commons.wikimedia.org/wiki/File:Noname_clone_of_Arduino_Uno_-_top.jpg",
-    "Maker Portal, CH340 board": "https://makersportal.com/blog/2019/3/12/testing-the-arduino-ch340-board",
-    "Joy-IT ARD_R3DIP": "https://joy-it.net/en/products/ARD_R3DIP",
+    "CH340 clone schematic, mischianti.org": null,
+    "WCH CH340 datasheet": "https://www.wch-ic.com/download/file?id=79",
+    "CH340G clone, top photo": null,
+    "Maker Portal, CH340 board": null,
+    "Joy-IT ARD_R3DIP": null,
   },
   // A clone has no maker's sheet. RobotDyn's CH340G board, whose maker publishes its schematic and
   // dimensions, is the representative for the circuit and the interface.
   "real": { "generic": true, "maker": "RobotDyn", "number": "UNO R3 CH340G", "datasheet": "RobotDyn UNO R3 CH340G schematic" },
   "uses": {
-    "ams1117-sot223": "0.1.0", "atmega328p-dip28": "0.1.0", "barrel-jack-dc21": "0.1.0", "capacitor-0603": "0.1.0",
-    "capacitor-electrolytic-smd": "0.1.0", "ch340g": "0.1.0", "crystal-hc49us": "0.1.0", "diode-cd1206": "0.1.0",
-    "diode-m7-sma": "0.1.0", "dip-socket-28": "0.1.0", "led-0805": "0.1.0", "lp2985-sot23-5": "0.1.0",
-    "pin-header-2x3": "0.1.0", "pmos-fdn340p-sot23": "0.1.0", "ptc-fuse-1812": "0.1.0", "resistor-0603": "0.1.0",
-    "socket-strip-1x10": "0.1.0", "socket-strip-1x6": "0.1.0", "socket-strip-1x8": "0.1.0",
-    "tactile-switch-ts42": "0.1.0", "usb-b-socket": "0.1.0",
+    "ams1117-sot223": "0.1.1", "atmega328p-dip28": "0.1.1", "barrel-jack-dc21": "0.1.1", "capacitor-0603": "0.1.1",
+    "capacitor-electrolytic-smd": "0.1.1", "ch340g": "0.1.1", "crystal-hc49us": "0.1.1", "diode-cd1206": "0.1.1",
+    "diode-m7-sma": "0.1.1", "dip-socket-28": "0.1.1", "led-0805": "0.1.1", "lp2985-sot23-5": "0.1.1",
+    "pin-header-2x3": "0.1.1", "pmos-fdn340p-sot23": "0.1.1", "ptc-fuse-1812": "0.1.1", "resistor-0603": "0.1.1",
+    "socket-strip-1x10": "0.1.1", "socket-strip-1x6": "0.1.1", "socket-strip-1x8": "0.1.1",
+    "tactile-switch-ts42": "0.1.1", "usb-b-socket": "0.1.1",
   },
   "params": {
     "firmware": {}, // the scene must set it, as `"firmware": "build/button.ino.hex"`
@@ -280,7 +280,7 @@
     ["mcu_socket.25", "mcu.PC2", { "kind": "contact" }], ["mcu_socket.26", "mcu.PC3", { "kind": "contact" }],
     ["mcu_socket.27", "mcu.PC4", { "kind": "contact" }], ["mcu_socket.28", "mcu.PC5", { "kind": "contact" }],
   ],
-  // Measured off the clone's top photo, in mm from the board's centre. The headers and the ICSP header
+  // Measured off the clone's top photo, in mm from the board's center. The headers and the ICSP header
   // are RobotDyn's dimension diagram, as model.py says. R9, R10, R11, R12 and C14 sit in the
   // neighborhood the photo shows for that role. The sheet prints no position for them.
   "layout": {
@@ -342,5 +342,7 @@
     "IOREF": "power.2", "RESET": "power.3", "3V3": "power.4", "5V": "power.5", "VIN": "power.8",
     "A0": "ad.1", "A1": "ad.2", "A2": "ad.3", "A3": "ad.4", "A4": "ad.5", "A5": "ad.6",
   },
+  // Nothing on the board drives AREF. A scene that leaves the pin open is the board as designed.
+  "open": ["AREF"],
   "not_simulated": [{ "what": "VIN", "pins": ["VIN"], "why": "The barrel jack feeds it. The board runs from USB." }],
 }

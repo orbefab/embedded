@@ -11,8 +11,9 @@
 //! [`index::Index`] is the device list resolved once at construction, including
 //! the flag, comparator, and capture slots.
 //! [`hostside::HostSide`]
-//! is the host SPI master and the MISO queue, not a device on the die.
+//! is the host SPI master, not a device on the die.
 
+mod gaps;
 pub(crate) mod hostside;
 mod index;
 mod power;
@@ -119,6 +120,8 @@ pub(crate) struct Bus {
     host_side: HostSide,
     /// Oscillator hertz. `cpu_hz` is this divided by `div`.
     osc_hz: u32,
+    /// What the firmware reached that the model does not run.
+    gaps: crate::gaps::Gaps,
     /// The last two `CLKPR` divisions. CPU cycles stay 1; wall time scales.
     epochs: Epochs,
     /// Schedule-and-ack source for the `irq` tests. Not a device, and not on `tick`.
@@ -151,6 +154,7 @@ clone_fields!(Bus {
     wdt_reset,
     host_side,
     osc_hz,
+    gaps,
     epochs,
     #[cfg(test)]
     test_irq
@@ -173,6 +177,9 @@ impl orbe_avr::Bus for Bus {
         }
         if let Some(index) = io_index(addr) {
             self.note_read(index);
+            if self.gap_watched_load(addr) {
+                self.gap_load(core);
+            }
             return self.load_io(index);
         }
         0
@@ -202,6 +209,9 @@ impl orbe_avr::Bus for Bus {
         };
         if addr == SREG || addr == SPL || addr == SPH {
             return true;
+        }
+        if self.gap_watched_load(addr) {
+            return false;
         }
         let slot = self.owners[index];
         slot.dev == NO_DEV
@@ -236,6 +246,9 @@ impl orbe_avr::Bus for Bus {
         let Some(index) = io_index(addr) else {
             return true;
         };
+        if self.gap_watched(addr) {
+            return false;
+        }
         let slot = self.owners[index];
         // A stepped store also logs unmodeled bits and delivers waiting edges and notices.
         slot.dev != NO_DEV
@@ -368,6 +381,7 @@ impl Bus {
             wdt_reset: false,
             host_side: HostSide::idle(),
             osc_hz: 16_000_000,
+            gaps: crate::gaps::Gaps::default(),
             epochs: Epochs::START,
             #[cfg(test)]
             test_irq: crate::periph::probe::Probe::new(),
@@ -724,11 +738,6 @@ impl Bus {
         self.note_schedule();
     }
 
-    /// Queue bytes the host slave returns on `MISO`. An empty queue is `0xFF`.
-    pub(crate) fn supply_spi(&mut self, bytes: &[u8]) {
-        self.host_side.push_miso(bytes);
-    }
-
     /// The next MOSI byte from a master chip, at the cycle `SPIF` was set.
     pub(crate) fn take_spi(&mut self) -> Option<(u8, u64)> {
         self.spi_mut()?.take_mosi()
@@ -910,6 +919,9 @@ impl Bus {
         }
         if let Some(index) = io_index(addr) {
             self.store_io(index, addr, value, cycles);
+            if self.gap_watched(addr) {
+                self.gap_store(core, addr, value);
+            }
         }
     }
 
@@ -1127,13 +1139,12 @@ impl Bus {
             devices,
             mux,
             host,
-            host_side,
             epochs,
             ..
         } = self;
         let mut ctx = host.ctx(epochs);
         for dev in devices.iter_mut() {
-            dev.stamp(cycle, mux, &mut ctx, host_side);
+            dev.stamp(cycle, mux, &mut ctx);
         }
     }
 
@@ -1255,13 +1266,11 @@ impl Bus {
                 devices,
                 mux,
                 host,
-                host_side,
                 epochs,
                 ..
             } = self;
             let mut ctx = host.ctx(epochs);
-            devices[usize::from(slot.dev)]
-                .poke(slot.reg, value, mux, cycle, &clock, &mut ctx, host_side)
+            devices[usize::from(slot.dev)].poke(slot.reg, value, mux, cycle, &clock, &mut ctx)
         };
         self.finish_store(touch, cycle);
     }

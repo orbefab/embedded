@@ -1,8 +1,8 @@
-import { at, BASE } from "./paths";
+import { BASE } from "./paths";
 
 /** A page's title, description and address, as its head shows them. */
 export function head({ title, description, path }: { title: string; description: string; path: string }) {
-  const full = path === at.home ? title : `${title} | orbe`;
+  const full = `${title} | Orbefab`;
   const url = `https://orbefab.com${path}`;
   return {
     meta: [

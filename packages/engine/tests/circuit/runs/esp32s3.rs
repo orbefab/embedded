@@ -5,6 +5,7 @@
 //! core now runs.
 
 use std::fs;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use orbe_model::Time;
@@ -14,12 +15,30 @@ use common::{repo, run_netlist};
 use orbe_engine::blob::{Blobs, Sha256};
 use orbe_engine::{Refused, Session};
 
-fn scratch(name: &str) -> PathBuf {
+/// A temp folder this test removes when it ends, including when an assertion fails.
+/// Nextest runs each test in its own process, so nothing later reuses the path.
+struct Scratch(PathBuf);
+
+impl Deref for Scratch {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch(name: &str) -> Scratch {
     let path =
         std::env::temp_dir().join(format!("orbe-engine-esp32s3-{name}-{}", std::process::id()));
     let _ = fs::remove_dir_all(&path);
     fs::create_dir_all(&path).unwrap();
-    path
+    Scratch(path)
 }
 
 fn example() -> serde_json::Value {
@@ -554,10 +573,10 @@ fn a_watchdog_during_a_pulses_record_keeps_the_leds_a_stop_keeps() {
 
 #[test]
 fn an_unmodeled_register_is_reported_once_with_its_pc_and_symbol() {
-    // l32r a2 <- UART0; l32i a3, a2, 0 twice; then idle.
+    // l32r a2 <- PCNT; l32i a3, a2, 0 twice; then idle.
     let mut code = vec![0x21, 0xff, 0xff, 0x32, 0x22, 0x00, 0x32, 0x22, 0x00];
     code.extend(IDLE);
-    let doc = run_program("unmodeled", &[0x6000_0000], &code, 10_000_000_000);
+    let doc = run_program("unmodeled", &[0x6001_7000], &code, 10_000_000_000);
     let found = diagnostics(&doc);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0]["code"], "chip.unmodeled_register");
@@ -565,10 +584,10 @@ fn an_unmodeled_register_is_reported_once_with_its_pc_and_symbol() {
     assert_eq!(
         found[0]["data"],
         serde_json::json!({
-            "address": 0x6000_0000u32,
+            "address": 0x6001_7000u32,
             "kept": false,
             "pc": IRAM + 4 + 3,
-            "register": "UART0+0x0",
+            "register": "PCNT+0x0",
             "symbol": "main+0x3",
             "write": false,
         })
@@ -579,13 +598,13 @@ fn an_unmodeled_register_is_reported_once_with_its_pc_and_symbol() {
 
 #[test]
 fn a_session_lists_an_unmodeled_register_only_once_its_access_is_accepted() {
-    // l32r a2 <- 100000; addi a2, a2, -1 and bnez back to it until a2 is 0; l32r a3 <- UART0;
+    // l32r a2 <- 100000; addi a2, a2, -1 and bnez back to it until a2 is 0; l32r a3 <- PCNT;
     // l32i a4, a3, 0; then idle.
     let mut code = vec![
         0x21, 0xfe, 0xff, 0x22, 0xc2, 0xff, 0x56, 0x92, 0xff, 0x31, 0xfc, 0xff, 0x42, 0x23, 0x00,
     ];
     code.extend(IDLE);
-    let bytes = program(&[100_000, 0x6000_0000], &code);
+    let bytes = program(&[100_000, 0x6001_7000], &code);
     let json = serde_json::to_vec(&netlist_for(&bytes, 100_000_000_000)).unwrap();
     let mut blobs = Blobs::new();
     blobs.add(bytes.into());
@@ -743,13 +762,13 @@ fn a_reset_with_no_reason_the_model_can_read_fails_the_run() {
 fn a_switch_to_the_pll_speeds_up_the_core() {
     // l32r a2 <- SYSTEM_CPU_PER_CONF_REG; l32r a3 <- 240 MHz from the 480 MHz PLL; s32i a3, a2, 0;
     // l32r a2 <- SYSTEM_SYSCLK_CONF_REG; l32r a3 <- the PLL; s32i a3, a2, 0;
-    // l32r a2 <- UART0; l32i a3, a2, 0; then idle.
+    // l32r a2 <- PCNT; l32i a3, a2, 0; then idle.
     let mut code = vec![
         0x21, 0xfb, 0xff, 0x31, 0xfb, 0xff, 0x32, 0x62, 0x00, 0x21, 0xfa, 0xff, 0x31, 0xfb, 0xff,
         0x32, 0x62, 0x00, 0x21, 0xfa, 0xff, 0x32, 0x22, 0x00,
     ];
     code.extend(IDLE);
-    let literals = [0x600c_0010, 0x6, 0x600c_0060, 1 << 10, 0x6000_0000];
+    let literals = [0x600c_0010, 0x6, 0x600c_0060, 1 << 10, 0x6001_7000];
     let doc = run_program("pll", &literals, &code, 10_000_000_000);
     let found = diagnostics(&doc);
     assert_eq!(found.len(), 1, "{found:?}");

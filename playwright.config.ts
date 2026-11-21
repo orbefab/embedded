@@ -1,12 +1,14 @@
-// ORBE_E2E picks the suite. Site runs the same checks twice, once per server.
+// ORBE_E2E picks the suite. Site runs the same checks on vite preview and on
+// wrangler dev --local, unless ORBE_SITE_SERVERS names one of them.
 // A failed check keeps its trace in test-results/.
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { defineConfig, type PlaywrightTestConfig } from "@playwright/test";
-import { chromiumPath, LAUNCH_ARGS } from "./e2e/support";
+import { bundledBrowser, chromiumPath, enginesLaunch, LAUNCH_ARGS } from "./e2e/support";
 
-const executablePath = chromiumPath();
 const suite = process.env.ORBE_E2E;
+// The engines suite drives only Firefox and WebKit, so it does not need a Chromium.
+const executablePath = suite === "engines" ? undefined : chromiumPath();
 
 const VIEWER = "http://127.0.0.1:4174";
 const SITE_VITE_PORT = process.env.ORBE_SITE_VITE_PORT ?? "4173";
@@ -89,40 +91,114 @@ const suites: Record<string, PlaywrightTestConfig> = {
       reuseExistingServer: false,
     },
   },
-  site: {
+  site: siteSuite(),
+};
+
+function siteSuite(): PlaywrightTestConfig {
+  const which = process.env.ORBE_SITE_SERVERS ?? "both";
+  if (which !== "both" && which !== "vite" && which !== "wrangler") {
+    console.error(`ORBE_SITE_SERVERS must be both, vite or wrangler, not ${which}`);
+    process.exit(2);
+  }
+  const wantVite = which === "both" || which === "vite";
+  const wantWrangler = which === "both" || which === "wrangler";
+  const viteServer = {
+    command: `pnpm exec vite preview --strictPort --host 127.0.0.1 --port ${SITE_VITE_PORT}`,
+    cwd: "apps/site",
+    url: `${SITE_VITE}/embedded/`,
+    name: "vite preview",
+    reuseExistingServer: false,
+    stdout: "ignore" as const,
+    timeout: 120_000,
+  };
+  const wranglerServer = {
+    command: `pnpm exec wrangler dev --local --ip 127.0.0.1 --port ${SITE_WRANGLER_PORT}`,
+    cwd: "apps/site",
+    url: `${SITE_WRANGLER}/embedded/`,
+    name: "wrangler dev --local",
+    reuseExistingServer: false,
+    stdout: "ignore" as const,
+    timeout: 180_000,
+  };
+  const webServer = [...(wantVite ? [viteServer] : []), ...(wantWrangler ? [wranglerServer] : [])];
+  const projects = [];
+  if (wantVite) projects.push({ name: "vite preview", use: { baseURL: SITE_VITE } });
+  if (wantWrangler) {
+    projects.push({
+      name: "wrangler dev --local",
+      ...(wantVite ? { dependencies: ["vite preview"] } : {}),
+      use: { baseURL: SITE_WRANGLER },
+    });
+  }
+  return {
     ...shared,
     testDir: "apps/site/e2e",
     testMatch: "*.spec.ts",
     use: { ...shared.use, viewport: { width: 1280, height: 900 } },
+    webServer: webServer.length === 1 ? webServer[0] : webServer,
+    projects,
+  };
+}
+
+function enginesSuite(): PlaywrightTestConfig {
+  const firefoxExecutable = bundledBrowser("Firefox", "firefox");
+  const webkitExecutable = bundledBrowser("WebKit", "webkit");
+  enginesLaunch("Firefox", firefoxExecutable);
+  enginesLaunch("WebKit", webkitExecutable);
+  for (const [path, how] of [
+    [resolve("apps/viewer/dist/index.html"), "pnpm --filter @orbe/viewer-page build"],
+    [resolve("apps/site/dist/client/index.html"), "scripts/site.sh --first-deploy"],
+  ] as const) {
+    if (!existsSync(path)) {
+      console.error(`No ${path}. Run \`${how}\` first.`);
+      process.exit(2);
+    }
+  }
+  const viewerPort = process.env.ORBE_VIEWER_PORT ?? "4174";
+  const sitePort = process.env.ORBE_SITE_PORT ?? "4175";
+  const viewer = `http://127.0.0.1:${viewerPort}`;
+  const site = `http://127.0.0.1:${sitePort}`;
+  return {
+    outputDir: "test-results",
+    reporter: shared.reporter,
+    timeout: 60_000,
+    workers: 1,
+    fullyParallel: false,
+    retries: 0,
+    testDir: "e2e",
+    testMatch: "engines.spec.ts",
+    use: {
+      headless: true,
+      trace: "retain-on-failure",
+      viewport: { width: 1280, height: 720 },
+    },
+    projects: [
+      { name: "firefox", use: { browserName: "firefox", launchOptions: { executablePath: firefoxExecutable } } },
+      { name: "webkit", use: { browserName: "webkit", launchOptions: { executablePath: webkitExecutable } } },
+    ],
     webServer: [
       {
-        command: `pnpm exec vite preview --strictPort --host 127.0.0.1 --port ${SITE_VITE_PORT}`,
+        command: `pnpm exec vite preview --strictPort --host 127.0.0.1 --port ${viewerPort}`,
+        cwd: "apps/viewer",
+        url: `${viewer}/`,
+        reuseExistingServer: false,
+        stdout: "ignore",
+        timeout: 60_000,
+      },
+      {
+        command: `pnpm exec vite preview --strictPort --host 127.0.0.1 --port ${sitePort}`,
         cwd: "apps/site",
-        url: `${SITE_VITE}/embedded/`,
-        name: "vite preview",
+        url: `${site}/embedded/`,
         reuseExistingServer: false,
         stdout: "ignore",
         timeout: 120_000,
       },
-      {
-        command: `pnpm exec wrangler dev --local --ip 127.0.0.1 --port ${SITE_WRANGLER_PORT}`,
-        cwd: "apps/site",
-        url: `${SITE_WRANGLER}/embedded/`,
-        name: "wrangler dev --local",
-        reuseExistingServer: false,
-        stdout: "ignore",
-        timeout: 180_000,
-      },
     ],
-    projects: [
-      { name: "vite preview", use: { baseURL: SITE_VITE } },
-      { name: "wrangler dev --local", dependencies: ["vite preview"], use: { baseURL: SITE_WRANGLER } },
-    ],
-  },
-};
+  };
+}
 
-if (suite === undefined || !(suite in suites)) {
-  console.error("usage: ORBE_E2E=viewer|block|headed|world|site pnpm exec playwright test");
+if (suite === undefined || (suite !== "engines" && !(suite in suites))) {
+  console.error("usage: ORBE_E2E=viewer|block|headed|world|site|engines pnpm exec playwright test");
   process.exit(2);
 }
 
@@ -155,4 +231,4 @@ if (suite === "headed" || suite === "world") {
   }
 }
 
-export default defineConfig(suites[suite]);
+export default defineConfig(suite === "engines" ? enginesSuite() : suites[suite]);

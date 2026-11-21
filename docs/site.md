@@ -1,32 +1,36 @@
 # The site
 
-`apps/site` is the homepage at [orbefab.com/embedded](https://orbefab.com/embedded): what orbe is, with a Block playing live, the parts catalog, the Blocks, and the `@orbefab` registry itself. Every page is static and is built from one registry build of this repo, so a part or Block added here reaches the site at the next build with no change to the site.
+`apps/site` is Get orbe at [orbefab.com/embedded](https://orbefab.com/embedded): how to install orbe and run it, the parts catalog, the Blocks, and the `@orbefab` registry itself. Every page is static and is built from one registry build of this repo, so a part or Block added here reaches the site at the next build with no change to the site. The header, footer and theme match orbefab.com.
 
 | Path | What it shows |
 | --- | --- |
-| `/embedded/` | What orbe is, every Block live in 3D with a tab each, the Blocks and the boards. |
-| `/embedded/parts/` | Every part, and a search over the fields `orbe search` reads, in its order. `?q=` holds the query. |
-| `/embedded/parts/<id>/` | The part in 3D, its pins, params, ratings with their sources, what is not simulated, what it is built from and what uses it, every file with its size and licence as a download, its docs, where to buy it with the date each link was checked, and its versions. A part that names a maker says Orbefab is not affiliated with or endorsed by that maker. |
-| `/embedded/blocks/` | Every Block, with the board it runs on and how many parts its scene places. |
-| `/embedded/blocks/<id>/` | The Block live in 3D, its README, its parts at their versions, its scene, firmware source and tests, its licence and every file with its own licence. |
+| `/embedded/` | Get orbe: what it is, the three points, and the four steps. With install lines off, each step says the CLI is coming. |
+| `/embedded/parts/` | Every part as a card: its title, and where it is used when a Block or a board carries it. A search over the fields `orbe search` reads, in its order. `?q=` holds the query. |
+| `/embedded/parts/<id>/` | The part in 3D beside its install line and a short glance of its pins and where it is used. Below, when each has something to show: the Blocks whose scenes place it, the boards it sits inside, its pins, its settings, its ratings, what is not simulated, what it is built from, its docs, and where to buy it with the date each link was checked. A rating's source is a Datasheet link. A board's pins are names. A breadboard says that holes in a strip are connected. A closed license box lists every file and its size, and the license expression. |
+| `/embedded/blocks/` | Every Block. Each card names the board and how many parts its scene places. |
+| `/embedded/blocks/<id>/` | The Block live in 3D, or its sketch, scene and tests, on a Preview / Code toggle. The install line sits beside the toggle. Below: the README, the parts the scene places, and a closed license box with the license expression and every file. The part count is the scene's, the same number as the card. The test count is the number of `tests/*.test` files, which is what `orbe test` reports. |
+| `/embedded/blocks/<id>/embed/` | That Block's player only: the stage, its caption and Hold to press. No header or footer. `noindex`. The home frames `nano-button-led` from here. |
 | `/embedded/r/` | The registry `orbe registry build` writes, so `@orbefab`'s template is `https://orbefab.com/embedded/r/{name}.json`. |
 | `/embedded/sources/` | The AVR runtime's source archive, which every Block's `firmware/NOTICE` names. |
+| `/embedded/install.sh` | The install script, copied from `scripts/install.sh` when install lines are on. |
 
-Sparse parts render as they are. A missing summary, tag, doc or seller shows as missing, never made up.
+A section with nothing in it is left out. A missing summary is left out, never made up.
 
 ## How it builds
 
 ```sh
 pnpm install --frozen-lockfile
-scripts/site.sh --first-deploy
+rm -rf .scratch/site/previous
+scripts/site-previous.sh --url https://orbefab.com/embedded/r/ --out .scratch/site/previous
+scripts/site.sh --previous .scratch/site/previous
 ```
 
-`scripts/site.sh` fetches the AVR runtime's source into the blob cache, builds `orbe`, writes this repo's registry with `orbe registry build . .scratch/site/registry`, builds orbe-wasm with `scripts/wasm.sh .scratch/site/wasm`, then runs `vite build` in `apps/site`. It needs what [wasm.md](wasm.md#build) needs, Node 24 and pnpm, and installs nothing. It requires either `--previous <dir>` or `--first-deploy`. `--previous <dir>` is the registry the live site serves, and the build keeps every version that registry served, as [registry.md](registry.md#versions) says. `--first-deploy` is the first deploy, which has no earlier registry.
+`scripts/site.sh` fetches the AVR runtime's source into the blob cache, builds `orbe`, writes this repo's registry with `orbe registry build . .scratch/site/registry`, builds orbe-wasm with `scripts/wasm.sh .scratch/site/wasm`, then runs `vite build` in `apps/site`. It needs what [wasm.md](wasm.md#build) needs, Node 24 and pnpm, and installs nothing. It requires either `--previous <dir>` or `--first-deploy`. `--previous <dir>` is the registry the live site serves, and the build keeps every version that registry served, as [registry.md](registry.md#versions) says. `scripts/site-previous.sh` downloads that registry into the directory passed as `--out`. `--first-deploy` is only the local build, when there is no registry to download.
 
 The site is a [TanStack Start](https://tanstack.com/start/latest) app, set up as the website is: file routes in `src/routes`, `@cloudflare/vite-plugin`, Tailwind 4 and `@vitejs/plugin-react`.
 
-- **Inputs.** `build/inputs.ts` is a Vite plugin. It runs `scripts/brand.sh check` and stops on a brand copy that differs from its list. It reads the registry, orbe-wasm and the runtime source from `.scratch/site`. It then writes `.scratch/site/public`, the folder Vite serves at `/embedded/` and copies into the build: the brand's public files, the registry at `r/`, the package at `orbe-wasm/`, Syne's licence beside the font, the runtime source at `sources/`, each part's `view.json` and `_headers`. The catalog reaches the server side as the module `virtual:orbe-site`, and only `src/site.server.ts` imports it.
-- **Pages.** Vite's `base` is `/embedded/`, and Start makes that the router's basepath, so a route file such as `src/routes/parts/$id.tsx` answers `/embedded/parts/<id>/`. Each route's loader is a server function in `src/data.ts` that returns what the page shows. Start prerenders every page at build time: it starts from `/embedded/` and the 404 page, and follows each link it finds (`prerender.crawlLinks`). It renders in a Worker built from Start's server entry, and only the build runs that Worker. A loader's result is in the page's HTML, and the browser hydrates the page from it. Pages link to each other with plain anchors, so each navigation loads the next page's HTML and the browser never calls a server function. `scripts/check-site.sh` fails when a page and the registry disagree on how many parts and Blocks there are.
+- **Inputs.** `build/inputs.ts` is a Vite plugin. It runs `scripts/brand.sh check` and stops on a brand copy that differs from its list. It reads the registry, orbe-wasm and the runtime source from `.scratch/site`. It then writes `.scratch/site/public`, the folder Vite serves at `/embedded/` and copies into the build: the brand's public files, the registry at `r/`, the package at `orbe-wasm/`, Syne's licence beside the font, the runtime source at `sources/`, each part's `view.json`, `_headers`, and, when install lines are on, `install.sh`. The catalog reaches the server side as the module `virtual:orbe-site`, and only `src/site.server.ts` imports it.
+- **Pages.** Vite's `base` is `/embedded/`, and Start makes that the router's basepath, so a route file such as `src/routes/parts/$id.tsx` answers `/embedded/parts/<id>/`. Each route's loader is a server function in `src/data.ts` that returns what the page shows. Start prerenders every page at build time: it starts from `/embedded/`, the 404 page and each Block's embed route (nothing links to an embed), and follows each link it finds (`prerender.crawlLinks`). It renders in a Worker built from Start's server entry, and only the build runs that Worker. A loader's result is in the page's HTML, and the browser hydrates the page from it. Pages link to each other with plain anchors, so each navigation loads the next page's HTML and the browser never calls a server function. A click on a same-page hash, including a second click on the hash the page already has, stays on that page: the router keeps the prerendered loader data (`defaultStaleTime` is infinite), so that click does not call a server function either. `scripts/check-site.sh` fails when a page and the registry disagree on how many parts and Blocks there are.
 - **A part's 3D.** The build runs orbe-wasm's `partScene` in Node on each part's files and those of every part it is built from, and writes the scene message to `/embedded/parts/<id>/view.json`, with each model pointed at its file in the registry. The part page draws it with `packages/viewer`, as `orbe show` draws a scene, with no Worker and no WebAssembly. The parts list shows no images.
 - **A Block.** The player runs `packages/viewer`'s `workerSource` on orbe-wasm's `worker.js` from `/embedded/orbe-wasm/`, and `loadBlock` reads the Block from `/embedded/r/` and checks every hash, as [viewer.md](viewer.md#run-a-block-in-the-page) says. It plays as soon as the Block opens. Showing another Block, or leaving the page, closes the source, which terminates the Worker and revokes its object URLs.
 - **three.js** and the viewer are a chunk of their own, `src/components/live.tsx`, which only a page with a 3D view loads, once its text has drawn.
@@ -34,7 +38,7 @@ The site is a [TanStack Start](https://tanstack.com/start/latest) app, set up as
 
 ### Install lines
 
-Until the repo and the binaries are public, an install command would fail, so the site shows none. `ORBE_SITE_INSTALL=1 scripts/site.sh --first-deploy` shows them: `orbe add <id>` on each part and Block page, `cargo install`, the releases page and the repo on the landing page, and the repo in the footer. A Block's README shows either way. The paragraph that says `orbe add <block>` shows only with the flag, and without the flag that paragraph is left out. Without the flag, the install places say the CLI is coming. The build defines the flag as a literal, `__ORBE_SITE_INSTALL__`, so a build without it holds none of that text, in its pages or in its scripts.
+Until the repo and the binaries are public, an install command would fail, so the site shows none. `ORBE_SITE_INSTALL=1 scripts/site.sh --previous .scratch/site/previous` shows them: `orbe add <id>` on each part and Block page, each with a Copy button, and on Get orbe the install line, `orbe skills get core`, `orbe add nano-led-fade` with that Block's `scene.jsonc`, `orbe check scene.jsonc` and `orbe test`. That build also serves `scripts/install.sh` at `/embedded/install.sh`. A build without the flag does not, and each of those steps says the CLI is coming. The footer links the repo either way. A Block's README shows either way. The paragraph that says `orbe add <block>` shows only with the flag, and without the flag that paragraph is left out. The build defines the flag as a literal, `__ORBE_SITE_INSTALL__`, so a build without it holds none of the install text, in its pages or in its scripts. On a local build with no registry to download, the same flag is `ORBE_SITE_INSTALL=1 scripts/site.sh --first-deploy`.
 
 The flag gates the site's own text and links. The registry's files are data, served as `orbe registry build` wrote them, so a Block's `README.md` and `block.jsonc` still say `orbe add`, and its `firmware/NOTICE` names the repo. `scripts/check-site.sh` checks every file under `dist/client` except `r/`, `orbe-wasm/` and `sources/`.
 
@@ -55,45 +59,68 @@ pnpm exec wrangler dev --local            # the same build, under wrangler
 
 ## Check it
 
-`scripts/check-site.sh` runs the type check and the brand check. It builds the site with `ORBE_SITE_INSTALL=1` and fails unless every part and Block in the registry has a page with its `orbe add` line, and the landing page shows `cargo install` and links the repo. It builds the site again without the flag. That build fails the check if a file of the site's own shows `orbe add`, `cargo install` or the repo, or if it does not serve the runtime source that sketches.sh pins and every Block's NOTICE names. Then `@playwright/test` (`apps/site/e2e/site.spec.ts`) drives that build in headless Chromium, once on `vite preview` and once on `wrangler dev --local`:
+`scripts/check-site.sh` runs the type check, `pnpm --filter @orbe/site test` (the circuit readers and the value formatter) and the brand check. It builds the site with `ORBE_SITE_INSTALL=1` and fails unless every part and Block in the registry has a page, each Block also has an embed page, and `scripts/site-install.sh` passes: every part and Block page shows its `orbe add` line, the Get orbe page shows the install command and links the repo, and `/embedded/install.sh` is `scripts/install.sh`. Playwright then drives that build on `vite preview` (`apps/site/e2e/install.spec.ts`): every part page and every Block page fits a phone width with the install line on screen, Get orbe shows the five commands and the scene, and Copy says when the write worked and when it did not. It builds the site again without the flag. That build fails the check if it serves `install.sh`, or if a file of the site's own shows `orbe add`, `cargo install` or the install script URL, or if the footer does not link the repo, or if it does not serve the runtime source that sketches.sh pins and every Block's NOTICE names. Then `@playwright/test` (`apps/site/e2e`, including `site.spec.ts` and `whole-catalog.spec.ts`) drives that build in headless Chromium, once on `vite preview` and once on `wrangler dev --local`:
 
-- the landing page plays nano-button-led, and its tab for nano-led-fade terminates the first Worker and revokes every object URL it made. The page asks no server for data, loads every file from under `/embedded/`, and draws the wordmark in Syne from `/embedded/fonts/`;
+- Get orbe says what orbe is, shows the three points and four steps, and plays no Block. With install lines off, each step says the CLI is coming. The page asks no server for data, loads every file from under `/embedded/`, and draws the wordmark in Syne from `/embedded/fonts/`. The header and footer are the ones shared with orbefab.com;
 - the parts search lists every part, and for ten queries shows the parts `orbe search --json` gives, in its order;
-- led-5mm's page draws its model, lists its five files with their licences, serves a download whose SHA-256 is the record's, and lists DigiKey with its checked date and the not-affiliated line;
-- nano-board's page draws the board with its children. The Uno is titled as a compatible board, shows `MIT OR Apache-2.0` on its `part.jsonc`, `model.py` and GLB, and links the clone schematic it is drawn from;
-- nano-button-led's page plays, and holding `@btn1` lights `@led1`, which goes dark on release. Its files show their own licences: the image and `LICENSE-runtime` LGPL-2.1-or-later, `LICENSE-libc` BSD-3-Clause, the scene and the sketch MIT OR Apache-2.0;
+- led-5mm's page draws its model, lists its five files inside License and files under the shared license expression, serves a download whose SHA-256 is the record's, lists the Blocks that place it, and lists DigiKey with its checked date;
+- nano-board's page draws the board with its children and lists the Blocks that place it. The Uno is titled as a compatible board, shows `MIT OR Apache-2.0` on the license box, lists `part.jsonc`, `model.py` and the GLB, and links the clone schematic it is drawn from;
+- every Block's page plays it in the Worker. A button lights `@led1` while it is held, the fade's LED changes brightness as it plays, and the light comparator's slider lights `@led1` in the dark and turns it off in the light. Preview and Code switch the view. The Code view lists the sketch, the scene and every file under `tests/`. nano-button-led's files show their own licenses: the image and `LICENSE-runtime` LGPL-2.1-or-later, `LICENSE-libc` BSD-3-Clause, the scene and the sketch MIT OR Apache-2.0. A card's part count is the number of parts in that Block's `scene.jsonc`. A same-page `#` link, clicked again or opened already on that hash, stays on the page and calls no server function;
 - an unknown path answers 404 with the site's page and logs no page error, and `/embeddedfoo` is not the site's;
 - a registry file answers 304 to its own ETag, a missing one answers 404 with no immutable cache, a hashed build file keeps for a year, and a record's `@` path answers 307.
 
-It prints each page's requests and bytes, uncompressed and gzipped, and the time to the first Block frame. It finds Chromium as `check-viewer-e2e.sh` does. `--renders <dir>` saves screenshots. `scripts/check.sh` does not run it.
+It prints each page's requests and bytes, uncompressed and gzipped, and the time to the first Block frame. It finds Chromium as `check-viewer-e2e.sh` does. `--renders <dir>` saves screenshots. `--servers vite` or `--servers wrangler` drives the suite on that one host. `--servers wrangler` skips the install-line build, which needs `vite preview`. `--shard N/M` runs that Playwright shard of the suite. With neither of those flags the check runs both hosts. `scripts/check.sh web` runs it with `--first-deploy`, then `scripts/check-engines.sh`, which loads this build's Get orbe page, parts page and Blocks page in headless Firefox and headless WebKit on `vite preview` only. WebKit draws a Block page's Block. Headless Firefox shows the WebGL error described in [viewer.md](viewer.md#run-it).
 
 ## Hosting
 
 `apps/site/wrangler.jsonc` is a Worker with no code. The build writes its deploy config, `dist/client/wrangler.json`, which serves `dist/client` as Workers static assets mounted at `/embedded` by `assets.base_path` ([Serving a subdirectory](https://developers.cloudflare.com/workers/static-assets/routing/advanced/serving-a-subdirectory/)). It runs on two routes, `orbefab.com/embedded` and `orbefab.com/embedded/*`. A pattern that ends in `*` matches every suffix, so `orbefab.com/embedded*` would also take `/embeddedfoo` ([Routes](https://developers.cloudflare.com/workers/configuration/routing/routes/)). The website's Worker holds `orbefab.com` as a Custom Domain, and a route takes precedence over a Custom Domain on the paths it matches, so this Worker answers `/embedded` and every path under it, and the website answers the rest.
 
 - `_headers` caches `/embedded/assets/*` for a year, since their names are their hashes, and `/embedded/fonts/*` for 30 days. A rule in `_headers` applies to every response at a matching path, a 404 included ([Headers](https://developers.cloudflare.com/workers/static-assets/headers/)), and nothing in `_headers` or `not_found_handling` tells a hit from a miss. So `/embedded/r/files/*` keeps the default, `public, max-age=0, must-revalidate`, and a browser revalidates each file against its ETag, which answers 304 while it is unchanged. A registry file that is missing for a moment, during a deploy, is never cached. Every file gets `X-Content-Type-Options: nosniff`, and the registry gets `Access-Control-Allow-Origin: *`, so any page can read it.
-- Workers static assets answer a path that holds `@` with a 307 to the same path with `%40`. A registry record such as `led-5mm@0.1.0.json` therefore costs one redirect, which browsers and `loadBlock` follow.
+- Workers static assets answer a path that holds `@` with a 307 to the same path with `%40`. A registry record such as `led-5mm@1.2.3.json` therefore costs one redirect, which browsers and `loadBlock` follow.
 - A path under `/embedded` that holds no file gets `404.html`, the site's own page, with a 404.
 - A build is about 430 files and 16 MB, 7 MB of it the runtime source. The registry stores each file once by its hash, and nothing beyond that is optimised.
 
 ## Deploy
 
-The first deploy and every later one run from a clean checkout of `main`, with Cloudflare credentials for the `orbefab.com` zone.
+A push to `main` runs [`.github/workflows/site.yml`](../.github/workflows/site.yml) on GitHub's `ubuntu-24.04` runner. The workflow also runs when someone starts it by hand. The hand run has one input, `deploy`, which defaults to false. The `site` environment, limited to the `main` branch, holds the two secrets. That is what keeps them from other branches and from pull requests.
+
+The push starts a job only when the repository variable `SITE_DEPLOY` is `1`. Until then the push skips the job and spends nothing. A hand run works on `main` only, because the job uses the `site` environment, which allows only `main`. It always builds and checks, and deploys only when `SITE_DEPLOY` is `1` and `deploy` is true. Deploy runs on `main` share one concurrency group, and a build that does not deploy does not. A newer pending deploy replaces an older pending one, so the latest commit wins. A deploy that has started is left to finish.
+
+`scripts/site-previous.sh` downloads `https://orbefab.com/embedded/r/` into the directory passed as `--out`. That directory must be missing or empty. It starts at `index.json` and fetches every record and every `files/<sha256>` that record lists, requesting a record with `@` encoded as `%40` and following a redirect that stays in that directory. It writes a path only when a record's URL is `<name>@<version>.json` and a file's URL is `files/` plus 64 lowercase hex. A bad entry fails the whole download, and nothing is written. `orbe registry build --previous` verifies everything that download contains. A network error, a timeout or a 5xx is tried three times. A 404, any other status, or a redirect that leaves that directory fails the download.
+
+Set the repository variable `ORBE_SITE_INSTALL` to `1` to deploy with install lines. `scripts/check-site.sh` builds the site both ways and leaves the build with the lines off. When the variable is `1`, the workflow runs `scripts/site.sh` once more with `ORBE_SITE_INSTALL=1` and `scripts/site-install.sh` checks that build before it is uploaded: every part and Block in the registry has a page and each Block an embed page, every part and Block page shows its `orbe add` line, Get orbe shows the install command and the repo link, and `install.sh` is served and equals `scripts/install.sh`.
+
+The deploy step reads two secrets from the `site` environment.
+
+| Secret | What it is |
+| --- | --- |
+| `CLOUDFLARE_API_TOKEN` | An account API token for the account in `CLOUDFLARE_ACCOUNT_ID`. |
+| `CLOUDFLARE_ACCOUNT_ID` | The account that owns the Worker `orbefab-embedded`. |
+
+The token is Workers Editor on the Worker `orbefab-embedded`, plus zone Workers Routes Edit on `orbefab.com`. `wrangler deploy` reads the zone's routes on every deploy, even when they do not change. `apps/site/wrangler.jsonc` names the zone by its ID, so the token needs no other zone permission to find it. Under the older token names, Workers Editor is account Workers Scripts Edit, which is not limited to this Worker. [Workers roles](https://developers.cloudflare.com/workers/authorization/workers/) names the current roles.
+
+`wrangler deploy` runs in `apps/site`. It follows `.wrangler/deploy/config.json`, which the build wrote, to `dist/client/wrangler.json`, and uploads `dist/client` as assets and no Worker code. Do not pass `--config wrangler.jsonc`, which skips the built config. `scripts/site-deployed.sh` then requests the live site and fails the job unless:
+
+- `https://orbefab.com/embedded/` shows Get orbe. `https://orbefab.com/` answers 200 with the website's title, which says Orbefab and not Get orbe. `https://orbefab.com/embeddedfoo` answers 404.
+- `https://orbefab.com/embedded/r/index.json` is this build's index, and `https://orbefab.com/embedded/parts/led-5mm/` is that part's page and downloads every file of its record.
+- `https://orbefab.com/embedded/sources/avr-1.8.6.tar.bz2` downloads, with the SHA-256 every Block NOTICE names.
+- `https://orbefab.com/embedded/assets/<file>` has the year-long `Cache-Control`.
+- `https://orbefab.com/embedded/no-such-page` answers 404 with this site's page, not the website's.
+
+With install lines on, Get orbe shows the install command and `/embedded/install.sh` is `scripts/install.sh`. With them off, Get orbe says the CLI is coming and that URL answers 404. When the live check fails after a deploy, run `pnpm exec wrangler rollback` in `apps/site`, then fix forward.
+
+After a deploy that succeeds, the workflow uploads `apps/site/dist/client/r` as an artifact named for the commit, even when the live check after it fails. Re-running that run replaces the artifact. An artifact is kept for 90 days, so after 90 days with no deploy there is none. That artifact is the copy to restore from if the live registry is ever lost or shrunk. Re-running an older run deploys that older commit's pages again.
+
+The same steps, run by hand from a clean checkout of `main`, are the fallback when the workflow cannot. The manual deploy always uses `--previous`.
 
 ```sh
 git status --short                 # nothing
 pnpm install --frozen-lockfile
-scripts/check-site.sh              # builds dist/ as it deploys, and checks it
+rm -rf .scratch/site/previous
+scripts/site-previous.sh --url https://orbefab.com/embedded/r/ --out .scratch/site/previous
+scripts/check-site.sh --previous .scratch/site/previous
 cd apps/site
 pnpm exec wrangler deploy          # reads dist/client/wrangler.json, which the build wrote
 ```
 
-`check-site.sh` leaves the deploy build, without install lines, in `apps/site/dist`. `wrangler deploy` in `apps/site` follows `.wrangler/deploy/config.json`, which the build wrote, to `dist/client/wrangler.json`, so it uploads `dist/client` as assets and no Worker code. Do not pass `--config wrangler.jsonc`, which skips the built config. Keep a copy of `dist/client/r` from each deploy, and pass it to the next one as `scripts/check-site.sh --previous <copy>`, so the registry keeps serving every version it served. The first deploy passes no `--previous`, and the build runs as `scripts/site.sh --first-deploy`.
-
-After a deploy:
-
-- `https://orbefab.com/embedded/` shows this site and plays a Block, and `https://orbefab.com/` and `https://orbefab.com/embeddedfoo` still go to the website.
-- `https://orbefab.com/embedded/r/index.json` is the registry's index, and `https://orbefab.com/embedded/parts/led-5mm/` downloads its files.
-- `https://orbefab.com/embedded/sources/avr-1.8.6.tar.bz2` downloads, with the SHA-256 every Block NOTICE names.
-- `curl -sI https://orbefab.com/embedded/assets/<file>` shows the year-long `Cache-Control`, and `curl -sI https://orbefab.com/embedded/r/files/<sha256>` shows an `ETag`.
-- `https://orbefab.com/embedded/no-such-page` answers 404 with this site's page, not the website's.
+The uploaded artifact, or any directory saved from a build's `dist/client/r`, can stand in for the download. `ORBE_SITE_INSTALL=1 scripts/site.sh --previous .scratch/site/previous` rebuilds with install lines before `wrangler deploy` when those lines should show, and `scripts/site-install.sh` checks that build. `scripts/site-deployed.sh` runs the live checks. `--first-deploy` on `scripts/site.sh` and `scripts/check-site.sh` is only the local build, when no registry has been downloaded.

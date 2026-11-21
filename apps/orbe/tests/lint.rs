@@ -2,6 +2,10 @@
 
 #[path = "../../../packages/scene/tests/common/mod.rs"]
 mod common;
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+#[path = "session/harness.rs"]
+mod harness;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -90,23 +94,13 @@ fn lint_warns_on_the_nano_block_exits_zero_and_writes_nothing() {
     let run = orbe(&repo, &["lint", "blocks/nano-button-led/scene.jsonc"]);
     assert_eq!(files(&block), before, "lint wrote nothing");
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
-
-    let scene = fs::read_to_string(block.join("scene.jsonc")).unwrap();
-    let at = |text: &str| line_of(&scene, text);
-    let nano = at("\"nano\":");
-    let want: Vec<(usize, String)> = [(at("{"), "scene.ground_unnamed"), (nano, "net.floating")]
-        .into_iter()
-        .map(|(l, c)| (l, c.into()))
-        .collect();
-    assert_eq!(warned(&run.stdout), want, "{}", run.stdout);
     assert!(
         run.stdout
-            .ends_with("2 warnings in blocks/nano-button-led/scene.jsonc\n")
-    );
-    assert!(
+            .ends_with("blocks/nano-button-led/scene.jsonc: no warnings\n"),
+        "{}",
         run.stdout
-            .contains("add \"GND\": \"nano.GND\" to the scene's \"nets\"")
     );
+    assert!(!run.stdout.contains("warning["), "{}", run.stdout);
 
     let envelope = json(&orbe(
         &repo,
@@ -114,31 +108,308 @@ fn lint_warns_on_the_nano_block_exits_zero_and_writes_nothing() {
     ));
     assert_eq!(envelope["ok"], true);
     let found = envelope["data"]["diagnostics"].as_array().unwrap();
-    assert_eq!(found.len(), 2);
-    for d in found {
-        let keys: Vec<&str> = d.as_object().unwrap().keys().map(String::as_str).collect();
-        assert_eq!(keys, ["code", "column", "file", "hint", "line", "message"]);
-        assert!(!d["hint"].as_str().unwrap().is_empty(), "{d}");
-    }
-    assert_eq!(found[0]["code"], "scene.ground_unnamed");
-    assert_eq!(found[0]["file"], "blocks/nano-button-led/scene.jsonc");
+    assert!(found.is_empty(), "{found:?}");
 }
 
-/// The Uno's parts all have a model, a reason or `joins_only`, and its L LED has its resistor,
-/// so its Block warns only of what the Nano Block also leaves as it is: the ground's name, and
-/// AREF with nothing wired to it. The breadboard's empty holes warn of nothing.
+/// Each Block names its ground and leaves AREF open, so lint is quiet. The breadboard's empty
+/// holes warn of nothing.
 #[test]
 fn lint_on_the_uno_block_warns_only_as_the_nano_block_does() {
     let repo = common::repo();
-    let run = orbe(&repo, &["lint", "blocks/uno-button-led/scene.jsonc"]);
+    for block in [
+        "nano-button-led",
+        "nano-led-fade",
+        "nano-light-comparator",
+        "uno-button-led",
+    ] {
+        let run = orbe(&repo, &["lint", &format!("blocks/{block}/scene.jsonc")]);
+        assert_eq!(run.code, 0, "{block}: {}{}", run.stdout, run.stderr);
+        assert!(
+            run.stdout
+                .ends_with(&format!("blocks/{block}/scene.jsonc: no warnings\n")),
+            "{block}: {}",
+            run.stdout
+        );
+        assert!(!run.stdout.contains("warning["), "{block}: {}", run.stdout);
+    }
+}
+
+/// A pin a part lists in `open` is left out of `net.floating` when no scene wire reaches it.
+/// A wire from AREF to an open pin still warns, and so does a wire from AREF to a hole, and a
+/// wire that joins two boards' AREF pins.
+#[test]
+fn a_board_net_with_no_scene_wire_is_quiet_and_a_wire_to_it_still_warns() {
+    let nano = r#""type": "nano-board", "firmware": "build/button.ino.hex""#;
+    let bare = project(&format!(
+        "{{ \"format\": 1, \"parts\": {{ \"nano\": {{ {nano} }} }}, \"nets\": {{ \"GND\": \"nano.GND\" }} }}\n"
+    ));
+    let run = orbe(bare.path(), &["lint", "scene.jsonc"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
-    let codes: Vec<String> = warned(&run.stdout).into_iter().map(|(_, c)| c).collect();
-    assert_eq!(
-        codes,
-        ["scene.ground_unnamed", "net.floating"],
+    assert!(!run.stdout.contains("net.floating"), "{}", run.stdout);
+
+    let uno = project(
+        "{ \"format\": 1, \"parts\": { \"uno\": { \"type\": \"uno-board\", \"firmware\": \"build/button.ino.hex\" } }, \"nets\": { \"GND\": \"uno.GND\" } }\n",
+    );
+    let run = orbe(uno.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!run.stdout.contains("net.floating"), "{}", run.stdout);
+
+    let wired = project(&format!(
+        "{{ \"format\": 1, \"parts\": {{ \"nano\": {{ {nano} }}, \"r\": {{ \"type\": \"resistor-axial\", \"resistance\": \"10k\" }} }}, \"nets\": {{ \"GND\": \"nano.GND\" }}, \"wires\": [[\"nano.AREF\", \"r.a\"]] }}\n"
+    ));
+    let run = orbe(wired.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            .contains("warning[net.floating]: #net.nano__AREF has no DC path to ground"),
         "{}",
         run.stdout
     );
+    assert!(
+        run.stdout
+            .contains("warning[net.floating]: #net.r__b has no DC path to ground"),
+        "{}",
+        run.stdout
+    );
+
+    let holed = project(&format!(
+        "{{ \"format\": 1, \"parts\": {{ \"bb\": {{ \"type\": \"breadboard-400\" }}, \"nano\": {{ {nano} }} }}, \"nets\": {{ \"GND\": \"nano.GND\" }}, \"layout\": {{ \"bb\": {{ \"at\": [0, 0, 0] }} }}, \"wires\": [[\"nano.AREF\", \"bb.a1\"]] }}\n"
+    ));
+    let run = orbe(holed.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            .contains("warning[net.floating]: #net.nano__AREF has no DC path to ground"),
+        "{}",
+        run.stdout
+    );
+
+    let shared = project(
+        "{ \"format\": 1, \"parts\": { \"nano\": { \"type\": \"nano-board\", \"firmware\": \"build/button.ino.hex\" }, \"uno\": { \"type\": \"uno-board\", \"firmware\": \"build/button.ino.hex\" } }, \"nets\": { \"GND\": \"nano.GND\" }, \"wires\": [[\"nano.GND\", \"uno.GND\"], [\"nano.AREF\", \"uno.AREF\"]] }\n",
+    );
+    let run = orbe(shared.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            .contains("warning[net.floating]: #net.nano__AREF"),
+        "{}",
+        run.stdout
+    );
+
+    let apart = project(
+        "{ \"format\": 1, \"parts\": { \"nano\": { \"type\": \"nano-board\", \"firmware\": \"build/button.ino.hex\" }, \"uno\": { \"type\": \"uno-board\", \"firmware\": \"build/button.ino.hex\" } }, \"nets\": { \"GND\": \"nano.GND\" }, \"wires\": [[\"nano.GND\", \"uno.GND\"]] }\n",
+    );
+    let run = orbe(apart.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!run.stdout.contains("net.floating"), "{}", run.stdout);
+}
+
+/// The ground's name is still warned, and the hint still names the pin, on a scene that leaves
+/// `nets` out. AREF stays quiet.
+#[test]
+fn an_unnamed_ground_warns_and_names_the_pin() {
+    let dir = project(
+        "{ \"format\": 1, \"parts\": { \"nano\": { \"type\": \"nano-board\", \"firmware\": \"build/button.ino.hex\" } } }\n",
+    );
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("warning[scene.ground_unnamed]:"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .contains("add \"GND\": \"nano.GND\" to the scene's \"nets\""),
+        "{}",
+        run.stdout
+    );
+    assert!(!run.stdout.contains("net.floating"), "{}", run.stdout);
+}
+
+/// A hole that only seats an open pin, with nothing else in its strip, does not reach the net.
+/// Another part in that strip does.
+#[test]
+fn a_hole_that_only_seats_an_open_pin_is_quiet_and_another_part_in_the_strip_warns() {
+    let nano = r#""type": "nano-board", "firmware": "build/button.ino.hex""#;
+    let seated = project(&format!(
+        "{{ \"format\": 1, \"parts\": {{ \"bb\": {{ \"type\": \"breadboard-400\" }}, \"nano\": {{ {nano} }} }}, \"nets\": {{ \"GND\": \"nano.GND\" }}, \"layout\": {{ \"bb\": {{ \"at\": [0, 0, 0] }}, \"nano\": {{ \"on\": {{ \"D13\": \"bb.d1\" }} }} }} }}\n"
+    ));
+    let run = orbe(seated.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.ends_with("scene.jsonc: no warnings\n"),
+        "{}",
+        run.stdout
+    );
+
+    let shared = project(&format!(
+        "{{ \"format\": 1, \"parts\": {{ \"bb\": {{ \"type\": \"breadboard-400\" }}, \"nano\": {{ {nano} }}, \"r\": {{ \"type\": \"resistor-axial\", \"resistance\": \"10k\" }} }}, \"nets\": {{ \"GND\": \"nano.GND\" }}, \"layout\": {{ \"bb\": {{ \"at\": [0, 0, 0] }}, \"nano\": {{ \"on\": {{ \"D13\": \"bb.d1\" }} }}, \"r\": {{ \"on\": {{ \"a\": \"bb.b3\" }}, \"rotate\": [0, 0, -90] }} }} }}\n"
+    ));
+    let run = orbe(shared.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            .contains("warning[net.floating]: #net.nano__AREF has no DC path to ground"),
+        "{}",
+        run.stdout
+    );
+}
+
+/// A homemade board that holds a USB source and an ATmega, and leaves `AVCC` open, still warns.
+/// Listing `AREF` in `open` quiets AREF only.
+#[test]
+fn an_open_avcc_inside_a_board_warns_and_a_listed_aref_does_not() {
+    let dir = project(
+        "{ \"format\": 1, \"parts\": { \"board\": { \"type\": \"./home.jsonc\", \"firmware\": \"build/button.ino.hex\" } }, \"nets\": { \"GND\": \"board.GND\" } }\n",
+    );
+    fs::write(dir.path().join("home.jsonc"), home_part(false)).unwrap();
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("warning[net.floating]:") && run.stdout.contains("AVCC"),
+        "{}",
+        run.stdout
+    );
+    assert!(run.stdout.contains("AREF"), "{}", run.stdout);
+
+    fs::write(dir.path().join("home.jsonc"), home_part(true)).unwrap();
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("warning[net.floating]:") && run.stdout.contains("AVCC"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        !run.stdout.contains("AREF"),
+        "AREF is listed in open: {}",
+        run.stdout
+    );
+}
+
+/// An unwired op-amp input inside a part that also holds a source and a chip still warns.
+#[test]
+fn an_unwired_op_amp_input_inside_a_part_warns() {
+    let dir = project(
+        "{ \"format\": 1, \"parts\": { \"board\": { \"type\": \"./home.jsonc\", \"firmware\": \"build/button.ino.hex\" } }, \"nets\": { \"GND\": \"board.GND\" } }\n",
+    );
+    fs::write(dir.path().join("home.jsonc"), amp_part()).unwrap();
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    for pin in ["IN1_P", "IN2_P", "IN2_N"] {
+        assert!(
+            run.stdout.contains("warning[net.floating]:") && run.stdout.contains(pin),
+            "{pin}: {}",
+            run.stdout
+        );
+    }
+}
+
+fn home_part(open_aref: bool) -> String {
+    let open = if open_aref {
+        "\n  \"open\": [\"AREF\"],"
+    } else {
+        ""
+    };
+    format!(
+        r#"{{
+  "format": 1,
+  "params": {{ "firmware": {{}} }},
+  "ground": "usb.GND",
+  "parts": {{
+    "usb": {{ "type": "usb-micro-b" }},
+    "mcu": {{ "type": "atmega328p-dip28", "firmware": {{ "param": "firmware" }} }},
+    "hi": {{ "type": "resistor-axial", "resistance": "10k" }},
+    "lo": {{ "type": "resistor-axial", "resistance": "10k" }}
+  }},
+  "wires": [
+    ["usb.VBUS", "mcu.VCC"],
+    ["usb.GND", "mcu.GND"],
+    ["usb.VBUS", "hi.a"],
+    ["hi.b", "mcu.PC0"],
+    ["mcu.PC0", "lo.a"],
+    ["lo.b", "usb.GND"]
+  ],
+  "pins": {{ "GND": "usb.GND", "AREF": "mcu.AREF" }},{open}
+}}
+"#
+    )
+}
+
+fn amp_part() -> String {
+    r#"{
+  "format": 1,
+  "params": { "firmware": {} },
+  "ground": "usb.GND",
+  "parts": {
+    "usb": { "type": "usb-micro-b" },
+    "mcu": { "type": "atmega328p-dip28", "firmware": { "param": "firmware" } },
+    "amp": { "type": "lm358-dip8" }
+  },
+  "wires": [
+    ["usb.GND", "mcu.GND"],
+    ["usb.GND", "amp.GND"],
+    ["usb.VBUS", "mcu.VCC"],
+    ["usb.VBUS", "mcu.AVCC"],
+    ["usb.VBUS", "amp.VCC"],
+    ["amp.IN1_N", "amp.OUT1"],
+    ["amp.OUT1", "mcu.PC0"]
+  ],
+  "pins": { "GND": "usb.GND" }
+}
+"#
+    .to_string()
+}
+
+/// `orbe open` reports the same `net.floating` nets lint does: an open `AVCC` warns, a bare
+/// Nano's AREF does not, and a wire to AREF warns.
+#[cfg(target_os = "linux")]
+#[test]
+fn open_reports_the_same_floating_nets_lint_does() {
+    let runtime = harness::Runtime::new();
+    let nano = r#""type": "nano-board", "firmware": "build/button.ino.hex""#;
+
+    let bare = project(&format!(
+        "{{ \"format\": 1, \"parts\": {{ \"nano\": {{ {nano} }} }}, \"nets\": {{ \"GND\": \"nano.GND\" }} }}\n"
+    ));
+    let text = opened(&runtime, bare.path());
+    assert!(!text.contains("net.floating"), "{text}");
+
+    let wired = project(&format!(
+        "{{ \"format\": 1, \"parts\": {{ \"nano\": {{ {nano} }}, \"r\": {{ \"type\": \"resistor-axial\", \"resistance\": \"10k\" }} }}, \"nets\": {{ \"GND\": \"nano.GND\" }}, \"wires\": [[\"nano.AREF\", \"r.a\"]] }}\n"
+    ));
+    let text = opened(&runtime, wired.path());
+    assert!(
+        text.contains("warning[net.floating]") && text.contains("nano__AREF"),
+        "{text}"
+    );
+
+    let seated = project(&format!(
+        "{{ \"format\": 1, \"parts\": {{ \"bb\": {{ \"type\": \"breadboard-400\" }}, \"nano\": {{ {nano} }} }}, \"nets\": {{ \"GND\": \"nano.GND\" }}, \"layout\": {{ \"bb\": {{ \"at\": [0, 0, 0] }}, \"nano\": {{ \"on\": {{ \"D13\": \"bb.d1\" }} }} }} }}\n"
+    ));
+    let text = opened(&runtime, seated.path());
+    assert!(!text.contains("net.floating"), "{text}");
+
+    let board = project(
+        "{ \"format\": 1, \"parts\": { \"board\": { \"type\": \"./home.jsonc\", \"firmware\": \"build/button.ino.hex\" } }, \"nets\": { \"GND\": \"board.GND\" } }\n",
+    );
+    fs::write(board.path().join("home.jsonc"), home_part(true)).unwrap();
+    let text = opened(&runtime, board.path());
+    assert!(
+        text.contains("warning[net.floating]") && text.contains("AVCC"),
+        "{text}"
+    );
+    assert!(!text.contains("AREF"), "{text}");
+}
+
+#[cfg(target_os = "linux")]
+fn opened(runtime: &harness::Runtime, dir: &Path) -> String {
+    let run = runtime.orbe(dir, &["open", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let closed = runtime.orbe(dir, &["close"]);
+    assert_eq!(closed.code, 0, "{}{}", closed.stdout, closed.stderr);
+    run.stdout
 }
 
 /// A board runs its chip from its own supply, so one alone, blinking its L LED, is a whole
@@ -199,7 +470,7 @@ fn lint_on_a_scene_that_does_not_check_prints_and_exits_as_check_does() {
     assert_eq!(missing.code, 3);
     assert_eq!(
         missing.stderr,
-        "error[io_error]: no scene file at nope.jsonc\n"
+        "error[io_error]: no scene file at nope.jsonc\n  hint: write the scene, or name its path\n"
     );
 }
 
@@ -238,7 +509,6 @@ fn each_rule_warns_where_the_scene_goes_wrong() {
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     let at = |text: &str| line_of(scene, text);
     let want = [
-        (at("\"nano\": { \"type\""), "net.floating"),
         (at("\"led1\": { \"type\""), "scene.led_no_resistor"),
         (at("\"led2\""), "scene.unplaced"),
         (at("\"led2\""), "scene.unconnected"),
@@ -546,11 +816,7 @@ fn two_pins_of_a_part_in_one_breadboard_strip_warn_shorted() {
         let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
         assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
         let codes: Vec<String> = warned(&run.stdout).into_iter().map(|(_, c)| c).collect();
-        let want: &[&str] = if shorted {
-            &["net.floating", "scene.shorted"]
-        } else {
-            &["net.floating"]
-        };
+        let want: &[&str] = if shorted { &["scene.shorted"] } else { &[] };
         assert_eq!(codes, want, "rotate {rotate}: {}", run.stdout);
         if shorted {
             assert!(

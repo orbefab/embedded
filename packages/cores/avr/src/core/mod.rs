@@ -77,6 +77,8 @@ pub struct Core {
     activity: Activity,
     stopped: bool,
     unknown: Option<u16>,
+    /// The word address and the cycle of the first word that decodes to no instruction.
+    first_unknown: Option<(u16, u64)>,
     cycles: u64,
     /// `SEI` and `RETI` suppress interrupts at the boundary that follows them, until the next
     /// instruction starts.
@@ -110,6 +112,7 @@ impl Core {
             activity: Activity::Fetch,
             stopped: false,
             unknown: None,
+            first_unknown: None,
             cycles: 0,
             irq_delay: false,
         }
@@ -253,6 +256,12 @@ impl Core {
 
     pub fn unknown(&self) -> Option<u16> {
         self.unknown
+    }
+
+    /// The word address and the cycle the core first reached a word that decodes to no
+    /// instruction. It retires as a one-cycle no-op, so a chip that refuses it reads this.
+    pub fn first_unknown(&self) -> Option<(u16, u64)> {
+        self.first_unknown
     }
 
     pub fn flash_word(&self, addr: u16) -> u16 {

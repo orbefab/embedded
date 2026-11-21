@@ -12,13 +12,15 @@ Each function returns (children, anchors): painted solids, a `body` and a
 is the middle of its underside on z = 0. A DIP leg's anchor is its tip.
 """
 
-from cad import glb, paint
-from cad.color import srgb
-from cad.geom import box
+import build123d as bd
 
-BLACK = srgb("#1A1A1A")
-TIN = srgb("#C5C8CE")
-DOT = srgb("#8A8D93")
+from cad import glb, paint
+from cad.color import plastic, tin
+from cad.geom import box, formed_foot
+
+BLACK = plastic("#1A1A1A")
+TIN = tin()
+DOT = plastic("#8A8D93")
 
 
 def dual_row(count, pitch):
@@ -33,9 +35,10 @@ def dual_row(count, pitch):
 
 
 def gullwing(body, standoff, span, leads, lead=(0.3, 0.15), dot=True):
-    """A moulded body (length, width, height above its standoff) with flat
+    """A moulded body (length, width, height above its standoff) with gull-wing
     leads, each from the body's side out to `span` / 2 across the rows.
-    `leads` is (lead, x, side) with side -1 for the -Y row."""
+    `leads` is (lead, x, side) with side -1 for the -Y row. The foot stays
+    the flat pad, so the underside centroid does not move."""
     length, width, height = body
     wide, thick = lead
     children = [paint(box(0, 0, standoff + height / 2.0, length, width, height), "body", BLACK)]
@@ -59,7 +62,13 @@ def gullwing(body, standoff, span, leads, lead=(0.3, 0.15), dot=True):
     anchors = []
     for n, x, side in leads:
         y = side * (inner + outer) / 2.0
-        children.append(paint(box(x, y, thick / 2.0, wide, outer - inner, thick), f"lead-{n}", TIN))
+        children.append(
+            paint(
+                formed_foot(x, y, thick / 2.0, wide, outer - inner, thick, axis="y", sign=-side),
+                f"lead-{n}",
+                TIN,
+            )
+        )
         anchors.append(glb.Anchor(n, f"lead-{n}", (x, y, 0.0), kind="pad"))
     return children, anchors
 
@@ -97,8 +106,11 @@ def dip(count, body, standoff, row=7.62, pitch=2.54, below=3.3, lead=(0.46, 0.25
     length, width, height = body
     wide, thick = lead
     top = standoff + height
-    children = [paint(box(0, 0, standoff + height / 2.0, length, width, height), "body", BLACK)]
-    children.append(paint(box(-length / 2.0 + 0.6, 0, top + 0.02, 1.2, 1.6, 0.04), "notch", DOT))
+    # A half-round moulded notch at the -X end, in place of a painted mark.
+    radius = min(1.0, width * 0.15)
+    notch = bd.Pos(-length / 2.0, 0, top) * bd.Rot(90, 0, 0) * bd.Cylinder(radius, width * 0.5)
+    body_solid = box(0, 0, standoff + height / 2.0, length, width, height) - notch
+    children = [paint(body_solid, "body", BLACK)]
     mid = standoff + height / 2.0
     anchors = []
     y_leg = row / 2.0

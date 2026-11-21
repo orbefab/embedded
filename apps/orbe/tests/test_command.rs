@@ -12,7 +12,9 @@ use live::{common, failed, orbe, project, replies};
 fn each_block_passes() {
     let mut ids: Vec<String> = fs::read_dir(common::repo().join("blocks"))
         .unwrap()
-        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_dir())
+        .map(|path| path.file_name().unwrap().to_str().unwrap().to_string())
         .collect();
     ids.sort();
     assert_eq!(
@@ -154,14 +156,12 @@ fn each_command_replies_in_text() {
     let blocks: Vec<&str> = run.stdout.split("tests/a.test:").skip(1).collect();
     let block = |n: usize| blocks[n].lines().collect::<Vec<_>>();
 
-    assert_eq!(block(0)[0], "2> open");
     assert_eq!(
-        block(0)[1],
-        "  opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (19 engine parts, 32 nets)"
-    );
-    assert_eq!(
-        block(0)[2],
-        "    warning[net.floating] #net.nano__AREF has no DC path to ground"
+        block(0),
+        [
+            "2> open",
+            "  opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (19 engine parts, 32 nets)",
+        ]
     );
     assert_eq!(
         block(1),
@@ -246,10 +246,8 @@ fn each_command_replies_in_text() {
         snapshot[6],
         "  led1  led-5mm             lit i=0.0112925043880606 A brightness=0.0022562070877605346 A over 20ms"
     );
-    assert_eq!(
-        snapshot[7],
-        "  warning[net.floating] #net.nano__AREF has no DC path to ground"
-    );
+    assert_eq!(snapshot[7], "  diagnostics  none");
+    assert_eq!(snapshot.len(), 8, "{}", snapshot.join("\n"));
 
     assert_eq!(
         block(8),
@@ -327,7 +325,7 @@ fn each_command_replies_with_one_json_envelope() {
         ),
         (Some(19), Some(32))
     );
-    assert_eq!(open["data"]["diagnostics"][0]["code"], "net.floating");
+    assert_eq!(open["data"]["diagnostics"].as_array().unwrap().len(), 0);
 
     assert_eq!(step["t_ps"], 100_000_000_000u64);
     assert_eq!(
@@ -385,7 +383,7 @@ fn each_command_replies_with_one_json_envelope() {
     assert_eq!(parts[4]["value"]["state"], "lit");
     assert_eq!(parts[4]["value"]["brightness"], 0.0022562070877605346);
     assert_eq!(snapshot["data"]["serial"], "");
-    assert_eq!(snapshot["data"]["diagnostics"][0]["code"], "net.floating");
+    assert_eq!(snapshot["data"]["diagnostics"].as_array().unwrap().len(), 0);
 
     assert_eq!(release["data"]["landed_ps"], 104_000_000_000u64);
     assert_eq!(step2["data"]["changes"][0]["level"], "low");
@@ -417,7 +415,10 @@ fn a_failing_test_reports_its_line_with_expected_and_actual() {
     assert_eq!(run.code, 1);
     let lines: Vec<&str> = run.stdout.lines().collect();
     assert_eq!(lines[0], "FAIL tests/a.test:3: expect @led1 lit");
-    assert_eq!(lines[1], "  error[expect_failed]: expected @led1 lit");
+    assert_eq!(
+        lines[1],
+        "  error[expect_failed]: expected @led1 lit at t=10ms"
+    );
     assert_eq!(lines[2], "    expected: @led1 lit");
     assert!(
         lines[3].starts_with("    actual:   led1 off, i="),

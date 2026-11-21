@@ -1,0 +1,114 @@
+baud 115200
+cfg 8N1
+tx 00
+rx 00
+edge 955 0
+edge 18861 1
+tx 55
+rx 55
+edge 82 0
+edge 2194 1
+edge 4264 0
+edge 6334 1
+edge 8404 0
+edge 10516 1
+edge 12586 0
+edge 14656 1
+edge 16768 0
+edge 18838 1
+tx ff
+rx ff
+edge 82 0
+edge 2194 1
+cfg 8E1
+tx 01
+rx 01
+edge 81 0
+edge 2193 1
+edge 4263 0
+edge 18849 1
+cfg 8N2
+tx a5
+rx a5
+edge 82 0
+edge 2194 1
+edge 4264 0
+edge 6334 1
+edge 8404 0
+edge 12574 1
+edge 14686 0
+edge 16756 1
+burst
+edge 639 0
+edge 18870 1
+edge 20931 0
+edge 39708 1
+edge 41769 0
+edge 60546 1
+edge 62607 0
+edge 81342 1
+edge 83445 0
+edge 102180 1
+edge 104283 0
+edge 123018 1
+edge 125121 0
+edge 143856 1
+edge 145959 0
+edge 164694 1
+tx 00
+rx 00
+tx 00
+rx 00
+tx 00
+rx 00
+tx 00
+rx 00
+tx 00
+rx 00
+tx 00
+rx 00
+tx 00
+rx 00
+tx 00
+rx 00
+baud 1000000
+cfg 8N1
+tx 00
+rx 00
+edge 82 0
+edge 2236 1
+tx 55
+rx 55
+edge 82 0
+edge 346 1
+edge 568 0
+edge 832 1
+edge 1054 0
+edge 1276 1
+edge 1540 0
+edge 1762 1
+edge 2026 0
+edge 2248 1
+tx ff
+rx ff
+edge 81 0
+edge 345 1
+cfg 8E1
+tx 01
+rx 01
+edge 82 0
+edge 346 1
+edge 568 0
+edge 2260 1
+cfg 8N2
+tx a5
+rx a5
+edge 82 0
+edge 346 1
+edge 568 0
+edge 832 1
+edge 1054 0
+edge 1528 1
+edge 1792 0
+edge 2014 1
+UART DONE

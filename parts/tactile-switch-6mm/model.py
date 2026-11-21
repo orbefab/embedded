@@ -19,7 +19,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint
-from cad.color import srgb
+from cad.color import plastic, steel
 from cad.geom import box, cyl_z
 
 SWITCH_BODY = 6.0  # verify, square body
@@ -34,9 +34,9 @@ SWITCH_LEG_W = 0.7
 SWITCH_LEG_T = 0.3
 SWITCH_LEGS = ((1, 1, -1), (2, -1, -1), (3, 1, 1), (4, -1, 1))  # lead, side in x, side in y
 
-_BLACK = srgb("#1F1F22")
-_STEEL = srgb("#B9BEC4")
-_STEM = srgb("#2B2B2E")
+_BLACK = plastic("#1F1F22")
+_STEEL = steel("#B9BEC4")
+_STEM = plastic("#2B2B2E")
 
 
 def _leg_xy(sx, sy):

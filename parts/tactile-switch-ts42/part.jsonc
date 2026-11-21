@@ -2,7 +2,9 @@
 // packages/engine/tests/circuits/atmega-board-button/netlist.json, part `sw_reset`. No sheet for the part
 // number was found, so each value here is a guess with a note that says so.
 {
-  "format": 1, "part": "tactile-switch-ts42", "version": "0.1.0", "title": "Push button, TS42, 5 pads", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "tactile-switch-ts42", "version": "0.1.1", "title": "Push button, TS42, 5 pads", "license": "MIT OR Apache-2.0",
+  "summary": "Surface-mount tact switch with five pads. Leads 1-2 are one contact and leads 3-4 the other. Pressing joins the pairs. Lead 5 is the center pad.",
+  "tags": ["switch", "button", "tactile", "smd"],
   "docs": { "TS42031-160R-TR-7260": null },
   "real": { "generic": true, "maker": "Diptronics", "number": "TS42031-160R-TR-7260", "datasheet": "TS42031-160R-TR-7260" },
   "pins": { "a": [1, 2], "b": [3, 4], "tab": [5] },

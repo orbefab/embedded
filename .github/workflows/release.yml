@@ -1,0 +1,178 @@
+# Builds release binaries and opens a draft GitHub release. It does not publish.
+# A draft stays off the public releases page until someone publishes it by hand.
+#
+# It runs on a push of a v* tag, or on a manual run that names an existing v* tag.
+# It does not run on pull requests or on main. Deleting a tag does not run it.
+#
+# Linux x86_64 uses ubuntu-22.04, so the binary needs glibc 2.35 or newer and runs
+# on Ubuntu 22.04 and Debian 12. Built on ubuntu-24.04 it needs 2.39 and does not
+# start on either. macOS arm64 uses the
+# repository variable ORBE_MACOS_RUNNER when that names a runner. Otherwise it
+# uses macos-15, a hosted Apple Silicon runner. macos-14 was retired on
+# 2026-11-02. Both are GitHub-hosted standard runners, which are free on a public
+# repository. Set the variable to choose another runner, including a self-hosted
+# Mac, before the first tag.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing v* tag to build, such as v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    if: github.event_name != 'push' || github.event.deleted != true
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - name: macOS arm64
+            target: aarch64-apple-darwin
+            runner: ${{ vars.ORBE_MACOS_RUNNER || 'macos-15' }}
+    env:
+      CARGO_INCREMENTAL: "0"
+      NO_COLOR: "1"
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.sha }}
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare pnpm@11.28.10 --activate
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustc --version
+          cargo --version
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the release archive
+        run: scripts/release-build.sh ${{ matrix.target }}
+
+      - name: Check the glibc the binary needs
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          need=$(objdump -T target/${{ matrix.target }}/release/orbe | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "orbe needs $need"
+          [ "$(printf '%s\nGLIBC_2.35\n' "$need" | sort -V | tail -1)" = GLIBC_2.35 ] || { echo "orbe needs $need, above GLIBC_2.35" >&2; exit 1; }
+
+      - name: Check the release archive
+        run: scripts/check-release.sh .scratch/release/*.tar.gz
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: orbe-${{ matrix.target }}
+          path: |
+            .scratch/release/*.tar.gz
+            .scratch/release/*.tar.gz.sha256
+          if-no-files-found: error
+
+  draft:
+    name: Draft release
+    needs: build
+    if: github.event_name != 'push' || github.event.deleted != true
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Open a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -eu
+          case "$TAG" in
+            v[0-9]*) ;;
+            *)
+              echo "refusing tag $TAG; a release tag looks like v0.1.0"
+              exit 1
+              ;;
+          esac
+          version=${TAG#v}
+          for target in x86_64-unknown-linux-gnu aarch64-apple-darwin; do
+            archive="dist/orbe-${version}-${target}.tar.gz"
+            sum="${archive}.sha256"
+            if [ ! -f "$archive" ] || [ ! -f "$sum" ]; then
+              echo "missing $archive or its sha256"
+              exit 1
+            fi
+          done
+          for extra in dist/*; do
+            base=$(basename "$extra")
+            case "$base" in
+              orbe-"${version}"-*.tar.gz | orbe-"${version}"-*.tar.gz.sha256) ;;
+              *)
+                echo "unexpected asset $base"
+                exit 1
+                ;;
+            esac
+          done
+          (
+            cd dist
+            for sum in ./*.tar.gz.sha256; do
+              sha256sum -c "$sum"
+            done
+          )
+          notes=$(mktemp)
+          {
+            echo "Prebuilt orbe ${version} for Linux x86_64 and macOS arm64. Each archive includes the 3D viewer."
+            echo
+            echo "Install:"
+            echo
+            echo "    curl -fsSL https://orbefab.com/embedded/install.sh | sh"
+            echo
+            echo "This is a draft. Publishing it is a separate step."
+          } >"$notes"
+          if gh release view "$TAG" --json isDraft --jq .isDraft >"$notes.draft" 2>/dev/null; then
+            read -r draft <"$notes.draft"
+            if [ "$draft" != "true" ]; then
+              echo "release $TAG is already published. This workflow does not replace a published release."
+              exit 1
+            fi
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" --draft --title "orbe ${version}" --notes-file "$notes" dist/*
+          fi

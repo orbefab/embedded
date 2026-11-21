@@ -6,7 +6,7 @@ This text comes from the `orbe` you have installed, so it matches it. `orbe <com
 
 ## The loop
 
-1. When a Block is close to the circuit, run `orbe add <block>` in an empty folder. It writes a scene, firmware and a test that already work. Then run `orbe check scene.jsonc` and `orbe test`. Otherwise start at the next step.
+1. `orbe blocks` lists the Blocks, and `orbe search <words>` finds one. When a Block is close to the circuit, run `orbe add <block>` in an empty folder. It writes a scene, firmware and a test that already work. Then run `orbe check scene.jsonc` and `orbe test`. Otherwise start at the next step.
    - `nano-button-led`: a button on D2 lights a red LED on D13 of an Arduino Nano, and releasing it turns the LED off.
    - `uno-button-led`: a button on D2 lights a red LED on D13 of an Arduino Uno, and the board's own L LED with it.
    - `nano-led-fade`: an LED on D9 of an Arduino Nano fades up and down by PWM.
@@ -78,7 +78,7 @@ scene.jsonc:4:23: error[part_missing]: part `nano-board` is not in this project'
 4 errors in scene.jsonc
 $ orbe add led-5mm nano-board resistor-axial tactile-switch-6mm
 ...
-wrote parts/nano-board 0.1.0
+wrote parts/nano-board 0.1.1
 ...
 wrote parts.lock
 $ orbe check scene.jsonc
@@ -88,12 +88,9 @@ scene.jsonc:1:1: warning[scene.ground_unnamed]: the ground net is `nano__GND`, a
   hint: add "GND": "nano.GND" to the scene's "nets", so refs and messages say GND
 scene.jsonc:4:5: warning[scene.unplaced]: `nano`, `btn1`, `r2`, `r1` and `led1` have no position, so the 3D page places them in a row for drawing only
   hint: place a part whose place matters in the scene's "layout", as "nano": { "at": [x, y, z] } in mm
-scene.jsonc:4:5: warning[net.floating]: #net.nano__AREF has no DC path to ground
-  hint: if a part reads `nano.AREF`, wire it to a source, or through a resistor to ground; a net nothing reads can stay as it is
-3 warnings in scene.jsonc
+2 warnings in scene.jsonc
 $ orbe open
 opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (19 engine parts, 32 nets)
-  warning[net.floating] #net.nano__AREF has no DC path to ground
 $ orbe step 100ms
 t=100ms (from 0s)
   brightness led1 off 1.2775403302174304e-13 A over 20ms
@@ -124,7 +121,7 @@ btn1  tactile-switch-6mm  i=-0.00047583015647667537 A
 r2    resistor-axial      i=0.0004749665847758726 A
 r1    resistor-axial      i=0.011292504389976967 A
 led1  led-5mm             lit i=0.0112925043880606 A brightness=0.0022562070877605346 A over 20ms
-warning[net.floating] #net.nano__AREF has no DC path to ground
+diagnostics  none
 $ orbe close
 closed at t=104ms
 $ orbe test
@@ -132,7 +129,7 @@ PASS tests/button.test
 1 passed, 0 failed
 ```
 
-The example keeps its 3 warnings, since each is what it means: no `layout`, and the ground named after `nano.GND`. The `net.floating` warning on `nano__AREF` is normal for the Nano and the Uno. Nothing drives AREF until you wire it.
+The example keeps its 2 warnings, since each is what it means: no `layout`, and the ground named after `nano.GND`.
 
 With D13 wired straight to `led1.anode` and no `r1`, the LED draws 94 mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `step 20ms` after it lists `warning[rating.current]` for `#nano__mcu.pin.PB5 (nano.D13)`, the chip pin behind D13, over its 40 mA rating. `expect no diagnostics` fails. The LED holds D13 at 2.3 V, so D13 reads `low` while the LED is lit. `orbe lint` warns of it before any run, with `warning[scene.led_no_resistor]` on `led1`. Give each LED a series resistor, such as 220 ohm from a 5 V pin.
 
@@ -296,7 +293,7 @@ An LED behind 10 kohm from 5 V carries about 0.35 mA and reads `dim`. When `step
 - An input lands at the session's time or later, and its reply gives the time. A `set` also lands after the last change the scene's `steps` schedule, so it never undoes one.
 - `step --until <condition> [--timeout <duration>]` first reads the condition now. If it holds, it takes no time. Otherwise it steps until it holds, up to the timeout, 10s by default. A pin condition stops 1 ps after the exact edge. `@led1.i` shows that current there, and the light state follows the average over 20 ms. Other conditions are read every 1 ms, so the reply says `by 104ms`. A timeout is the error `until_timeout`.
 - Serial can reach orbe up to one engine step (10 ms) after the chip sends it. Step a little past a print before you expect it.
-- A session stops at 2 hours of simulated time. Reads still work there, and `press`, `release`, `set` and `step` fail with `ended`. A `step` that would pass the stop fails with `past_stop`. Run `orbe open` to start again.
+- A session stops at 2 hours of simulated time. Reads still work there, and `press`, `release`, `set`, `step` and `play` fail with `ended`. Run `orbe open` to start again. A `step` by a time that would pass the stop fails with `past_stop`, and its hint names the time left. A `step --until` whose timeout passes the stop runs to the stop, and fails with `ended` if its condition has not held by then.
 
 A switch with `bounce` set bounces up to `max_bounces` times within that window after each `press` and `release`, and an input on it lands after the window of the one before. With this one-line change to the worked example's `scene.jsonc`,
 
@@ -345,7 +342,7 @@ A test file is `tests/<name>.test` in the project folder. Each line is a live co
 
 ```
 FAIL tests/button.test:4: expect @led1 lit
-  error[expect_failed]: expected @led1 lit
+  error[expect_failed]: expected @led1 lit at t=100ms
     expected: @led1 lit
     actual:   led1 off, i=1.2775403302175985e-13 A, brightness=1.2775403302174304e-13 A over 20ms
 0 passed, 1 failed
@@ -362,7 +359,7 @@ A test needs no background process, so it runs the same in CI. Each file's sessi
 | `scene.led_no_resistor` | An LED joins two driven nets, such as a pin and GND, with no resistor in series, so it can draw far over its rating. The path runs through diodes, switches, and a transistor whose emitter is on a driven net, as in a low-side NPN switch. A net a diode feeds from a source is driven, as the Nano's 5V is behind its USB diode. A chip pin on a net that a resistor also feeds from a driven net counts as reading that net, not driving it. So A0 wired to read an LED's node does not hide its series resistor, and lint misses an LED wired straight to an output pin that also has a pull-up. Put a resistor in series, such as 220 ohm from a 5 V pin. |
 | `scene.no_model` | A part has no engine model, no `not_simulated` reason and no `"joins_only": true`, so the simulation runs nothing for it. Use a part with a model. A part of your own that only joins the wires that reach it, such as a jumper, takes `"joins_only": true` in its part file. A part nothing is wired to can take `"not_simulated": "<why>"` in the scene instead. |
 | `scene.unconnected` | Nothing is wired to a part, or a part with at most 3 nets, such as a resistor, LED, transistor or pot, has a net with no wire. Wire it, or leave it open when the circuit means it, as a pot used as a variable resistor. A board runs its chip from its own supply, so a board alone, such as one blinking its L LED, gets no warning. |
-| `net.floating` | A net has no DC path to ground. Fix it when a part reads that net. |
+| `net.floating` | A net has no DC path to ground. Fix it when a part reads that net. A part lists pins its design leaves open, as `"open": ["AREF"]` on the Nano and the Uno, and that net is left out while nothing in the scene reaches it. A hole that only seats that pin, with nothing else in its strip, does not reach the net. A scene wire, another part's pin, or a wire to a hole on the net still warns. |
 | `scene.ground_unnamed` | The ground net is named after a pin. Name it in `nets`, as `"GND": "nano.GND"`. |
 | `scene.unplaced` | Parts have no `layout` position, so the 3D page places them in a row for drawing only. One warning names them all. A part plugged in with `on` has a position. Give a part a position when its place matters. |
 | `scene.shorted` | Two pins of one part sit in one breadboard strip, so the strip joins them, such as a resistor turned along a column. Turn the part a quarter turn, as the hint shows, or plug it in elsewhere. |
@@ -400,7 +397,7 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 | --- | --- |
 | `usage` | The command line is wrong. The message says how. |
 | `part_missing` | Run the `orbe add` command in the hint. |
-| `unknown_part` | `orbe add` knows no part by that id. Pick one from the parts list above. |
+| `unknown_part` | No Block or part has that id. Pick one the hint names, from `orbe blocks` or the parts list. |
 | `busy` | Another `orbe add` is at work in this project. Wait for it, then run yours again. |
 | `scene_exists`, `file_exists` | `orbe add <block>` found another scene, or a file whose bytes differ. Matching files are kept, and running it again finishes an install that stopped part way. Use a new folder only when the bytes differ, as the hint shows. |
 | `symlink` | `orbe add <block>` found a link where it would write. It does not follow the link. Remove the link, then run the command in the hint again. |
@@ -416,9 +413,11 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 | `session_crashed` | The session's process died. Run `orbe open` again. |
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |
 | `not_settable` | `press` and `release` work only on a switch, by its part name. `set` works only on a quantity the scene's `world` names or a part reads. |
+| `wrong_setting` | `press` and `release` do not apply: the part takes a different input, such as a trimmer's `position`. Set that param in the scene and run `orbe open` again. |
 | `no_change` | The input asks for the state already there, such as `set light 50` when the light is already 50. |
 | `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`. When an LED timeout covers a full 20 ms, the hint names the measured average, the state, and the range the wanted state needs, and says to check the circuit with `snapshot`. A shorter window says to step longer. Otherwise fix the circuit or the firmware, or step longer. |
-| `ended`, `past_stop` | The session reached its 2-hour stop. Run `orbe open`. |
+| `ended` | The session reached its 2-hour stop. Reads still work. Run `orbe open` before `press`, `release`, `set`, `step` or `play`. |
+| `past_stop` | A `step` would end past the stop, or an input would land past it. Step at most the time the hint names. When the message says the input would land past the stop, run `orbe open`. |
 | `cancelled` | Ctrl-C stopped a `step`. The session stays at the time it reached. Step again. |
 | `faulted` | The engine stopped the session. The message names why. Fix it and run `orbe open`. |
 
@@ -430,7 +429,8 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 - USB, and serial into the chip. The chip's serial out (TX, D1) is read as text.
 - The chip's clamp diodes. A pin pulled past VCC or GND draws no clamp current, and `rating.voltage` names it.
 - The chips' own supply current as the sketch changes it. The ATmega328P draws its datasheet typical for 16 MHz, 11.4 mA at 5 V while it runs and 2.0 mA while RESET is held low, and the Nano's and Uno's CH340G 12 mA at 5 V, both as resistances, whatever the sketch does and in sleep too.
-- A switch's force and travel, and part tolerances. An LED's `brightness` is its average forward current over the last 20 ms. It reads `lit` above 2 mA, `dim` above 100 uA and at or below 2 mA, and `off` at or below 100 uA. Light, temperature and humidity reach only a part whose file reads them from the scene's `world`.
+- A switch's force and travel, and part tolerances. An LED's `brightness` is its average forward current over the last 20 ms. It reads `lit` above 2 mA, `dim` above 100 uA and at or below 2 mA, and `off` at or below 100 uA. Light, temperature and humidity reach only a part whose file reads them from the scene's `world`, and the ATmega328P's own temperature sensor, which reads `temperature`.
 - Turning a potentiometer during a session. Its `position` param sets the wiper for the whole run, so run `orbe open` again after you change it.
+- Parts of the ATmega328P, such as its analog comparator, Timer2's 32 kHz crystal and self-programming, which stop the run with `chip.unsupported_setting` or `chip.unsupported_instruction` when a sketch reaches one. I2C slave mode, `OSCCAL`, A6 and A7, and an I2C clock below about 18 kHz warn `chip.unmodeled_register` once instead, and the run goes on. The arduino skill lists them.
 - Any part the catalog above does not list.
 - orbe never builds firmware. Build it with your toolchain and name the output file in the scene.

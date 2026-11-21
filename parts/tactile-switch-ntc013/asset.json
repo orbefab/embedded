@@ -2,13 +2,13 @@
   "part": "tactile-switch-ntc013",
   "source": {
     "script": "model.py",
-    "sha256": "834849739e04f9a0a864ef271cd8e86139eb0d21419eda224d5e582a248e6089",
-    "bytes": 2707
+    "sha256": "f010624abd4b1482f92ebd187d75c3aa4d078c818de2516846fb1eadbd86dcbe",
+    "bytes": 2711
   },
   "files": {
     "tactile-switch-ntc013.glb": {
-      "sha256": "18c14dad73d4c0beb47ad9b28fd6735c5ea8333e6cca86be2e16d463c9e43963",
-      "bytes": 7136
+      "sha256": "70b8c026efd6f567bbf3173201c71e40fd18b3067fdf419f158651037a08d16e",
+      "bytes": 7264
     },
     "tactile-switch-ntc013.anchors.json": {
       "sha256": "5462e41367e8ffef9967b89bdeeb9312f0cb7dbd04cd156e801268867740f794",

@@ -1,0 +1,184 @@
+# Builds the site and, when the repository asks, deploys it to orbefab.com/embedded.
+#
+# A push to main starts the job only when the repository variable SITE_DEPLOY is `1`.
+# Until then the job is skipped, so the push spends no minutes. A workflow_dispatch
+# run works on main only, because the job uses the site environment, which allows only
+# main. It deploys only when SITE_DEPLOY is `1` and the deploy input is true. The input
+# defaults to false, which is a build and a check with no deploy.
+#
+# The site environment, limited to main, holds the two deploy secrets. That is what
+# keeps them from other branches and from pull requests. ORBE_SITE_INSTALL=1 shows
+# install lines on the build that is uploaded. docs/site.md says what the secrets allow.
+name: Site
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy after the build. Also needs SITE_DEPLOY set to 1, on main.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.deploy) && 'site-deploy' || format('site-build-{0}', github.run_id) }}"
+  cancel-in-progress: false
+
+jobs:
+  site:
+    if: github.event_name == 'workflow_dispatch' || vars.SITE_DEPLOY == '1'
+    runs-on: ubuntu-24.04
+    environment: site
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: "4"
+      NO_COLOR: "1"
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+      WASM_TOOLS_DIR: ${{ github.workspace }}/.scratch/wasm/tools
+      ORBE_BLOBS: ${{ github.workspace }}/.scratch/blobs
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.scratch/ms-playwright
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read pinned tool versions
+        id: pins
+        run: |
+          set -euo pipefail
+          bindgen=$(awk '
+            $0 == "[[package]]" { name = ""; next }
+            $1 == "name" { gsub(/"/, "", $3); name = $3; next }
+            name == "wasm-bindgen" && $1 == "version" {
+              gsub(/"/, "", $3)
+              print $3
+              exit
+            }
+          ' Cargo.lock)
+          runtime_sha256=$(sed -n 's/^runtime_sha256=//p' packages/engine/scripts/sketches.sh)
+          if [[ ! $bindgen =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "could not read the wasm-bindgen version from Cargo.lock" >&2
+            exit 1
+          fi
+          if [[ ! $runtime_sha256 =~ ^[0-9a-f]{64}$ ]]; then
+            echo "could not read the runtime archive hash from sketches.sh" >&2
+            exit 1
+          fi
+          echo "bindgen=$bindgen" >> "$GITHUB_OUTPUT"
+          echo "runtime_sha256=$runtime_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rust
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustup show
+          rustup target list --installed | grep -qx wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: ". -> target"
+
+      - name: Cache wasm-bindgen
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.WASM_TOOLS_DIR }}
+          key: wasm-bindgen-${{ steps.pins.outputs.bindgen }}
+
+      - name: Cache the runtime source
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.ORBE_BLOBS }}
+          key: orbe-blobs-${{ steps.pins.outputs.runtime_sha256 }}
+
+      - name: Install Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: |
+          set -euo pipefail
+          corepack enable
+          corepack prepare --activate
+          pnpm --version
+
+      - name: Cache pnpm
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ github.workspace }}/.scratch/pnpm-store
+          key: pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile --store-dir "${{ github.workspace }}/.scratch/pnpm-store"
+
+      - name: Install wasm-bindgen
+        env:
+          BINDGEN: ${{ steps.pins.outputs.bindgen }}
+        run: |
+          set -euo pipefail
+          root="$WASM_TOOLS_DIR/wasm-bindgen-$BINDGEN"
+          if [[ ! -x $root/bin/wasm-bindgen ]]; then
+            cargo install wasm-bindgen-cli --version "=$BINDGEN" --locked --root "$root"
+          fi
+          "$root/bin/wasm-bindgen" --version
+
+      - name: Cache Playwright Chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: ms-playwright-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Fetch the registry the live site serves
+        id: previous
+        run: |
+          set -euo pipefail
+          scripts/site-previous.sh --url https://orbefab.com/embedded/r/ --out "$RUNNER_TEMP/site-previous"
+          echo "dir=$RUNNER_TEMP/site-previous" >> "$GITHUB_OUTPUT"
+
+      - name: Check the site
+        run: scripts/check-site.sh --previous "${{ steps.previous.outputs.dir }}"
+
+      - name: Rebuild with install lines
+        if: vars.ORBE_SITE_INSTALL == '1'
+        run: ORBE_SITE_INSTALL=1 scripts/site.sh --previous "${{ steps.previous.outputs.dir }}"
+
+      - name: Check the install lines
+        if: vars.ORBE_SITE_INSTALL == '1'
+        run: scripts/site-install.sh
+
+      - name: Deploy
+        id: deploy
+        if: vars.SITE_DEPLOY == '1' && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.deploy == true)
+        working-directory: apps/site
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm exec wrangler deploy
+
+      - name: Check the deployed site
+        if: vars.SITE_DEPLOY == '1' && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.deploy == true)
+        env:
+          ORBE_SITE_INSTALL: ${{ vars.ORBE_SITE_INSTALL }}
+        run: scripts/site-deployed.sh
+
+      - name: Keep a copy of the registry
+        if: ${{ !cancelled() && steps.deploy.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: registry-${{ github.sha }}
+          path: apps/site/dist/client/r
+          retention-days: 90
+          overwrite: true
+          if-no-files-found: error

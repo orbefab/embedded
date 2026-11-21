@@ -9,13 +9,13 @@ import { pathToFileURL } from "node:url";
 import type { Plugin } from "vite";
 import { BASE } from "../src/paths.ts";
 import type { SiteData } from "../src/records.ts";
-import { partViews, readCatalog, siteData } from "./catalog.ts";
+import { type Catalog, partViews, readCatalog, siteData } from "./catalog.ts";
 
 const REPO = resolve(import.meta.dirname, "../../..");
 const INPUT = join(REPO, ".scratch/site");
 /** The folder Vite serves at the base and copies into the build: the brand's public files, the
  * registry at r/, orbe-wasm at orbe-wasm/, each part's view.json, the runtime source and
- * _headers. */
+ * _headers. When install lines show, it also holds install.sh, served at /embedded/install.sh. */
 export const PUBLIC = join(INPUT, "public");
 const MODULE = "virtual:orbe-site";
 
@@ -34,6 +34,23 @@ ${BASE}fonts/*
 
 function fail(message: string): never {
   throw new Error(`site: ${message}`);
+}
+
+function xmlText(text: string): string {
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+/** Absolute page URLs for https://orbefab.com/embedded/sitemap.xml. Embed routes stay out. */
+export function sitemapXml(catalog: Catalog): string {
+  const paths = [
+    "/embedded/",
+    "/embedded/blocks/",
+    "/embedded/parts/",
+    ...catalog.blocks.map((item) => item.record.name).sort().map((id) => `/embedded/blocks/${id}/`),
+    ...catalog.parts.map((item) => item.record.name).sort().map((id) => `/embedded/parts/${id}/`),
+  ];
+  const body = paths.map((path) => `  <url><loc>${xmlText(`https://orbefab.com${path}`)}</loc></url>`).join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${body}\n</urlset>\n`;
 }
 
 async function assemble(install: boolean): Promise<SiteData> {
@@ -69,20 +86,24 @@ async function assemble(install: boolean): Promise<SiteData> {
   cpSync(registry, join(PUBLIC, "r"), { recursive: true });
   for (const file of engine.files) cpSync(join(wasm, file), join(PUBLIC, "orbe-wasm", file));
   cpSync(sources, join(PUBLIC, "sources"), { recursive: true });
+  const shown: Record<string, string> = {};
   for (const [id, view] of views) {
     mkdirSync(join(PUBLIC, "parts", id), { recursive: true });
-    writeFileSync(join(PUBLIC, "parts", id, "view.json"), view);
+    writeFileSync(join(PUBLIC, "parts", id, "view.json"), view.scene);
+    if (view.shown !== undefined) shown[id] = view.shown;
   }
+  if (install) cpSync(join(REPO, "scripts/install.sh"), join(PUBLIC, "install.sh"));
   writeFileSync(join(PUBLIC, "_headers"), HEADERS);
+  writeFileSync(join(PUBLIC, "sitemap.xml"), sitemapXml(catalog));
 
   const commit = engine.orbe?.commit ?? null;
   console.log(`site: ${catalog.parts.length} parts and ${catalog.blocks.length} Blocks from ${catalog.name}, sources ${readdirSync(sources).join(", ")}`);
   console.log(`site: install lines ${install ? "shown" : "hidden, the CLI is coming"}; orbe-wasm ${engine.version} from ${commit ?? "no commit"}`);
   if (commit === null || commit.endsWith("-dirty")) console.warn("site: warning: orbe-wasm was not built from a clean commit. Deploy a build of a clean checkout.");
-  return siteData(catalog, { registry: catalog.name, engine: { version: engine.version, commit } });
+  return siteData(catalog, { registry: catalog.name, engine: { version: engine.version, commit } }, shown);
 }
 
-/** `install` is ORBE_SITE_INSTALL=1: install lines and repo links show. */
+/** `install` is ORBE_SITE_INSTALL=1: install lines show. The footer links the repo either way. */
 export function siteInputs(install: boolean): Plugin {
   let data: SiteData | null = null;
   return {

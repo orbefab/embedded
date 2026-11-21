@@ -447,7 +447,7 @@ def test_captures_refs_and_netlist() -> None:
         alien = root / "alien"
         write_run(alien, text, refs)
         serial_file = alien / "traces" / "serial.csv"
-        serial_file.write_text(serial_file.read_text().replace(",u1,USB_SERIAL_JTAG,", ",u1,UART0,", 1))
+        serial_file.write_text(serial_file.read_text().replace(",u1,USB_SERIAL_JTAG,", ",u1,USART0,", 1))
         expect("a serial byte that is not USB_SERIAL_JTAG fails", lambda: panel(alien, refs_path, False), refuse=True)
 
         bare_net = {

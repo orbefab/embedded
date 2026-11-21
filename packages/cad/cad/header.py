@@ -10,14 +10,13 @@ the top of one housing.
 import build123d as bd
 
 from cad import glb, paint
-from cad.color import srgb
-from cad.geom import box, cyl_z
+from cad.color import gold, plastic, tin
+from cad.geom import box
 from cad.tht import socket_liner
 
 PITCH = 2.54
 PIN = 0.64
 PLASTIC = 2.54  # verify
-HOUSING_R = 1.12
 PIN_BELOW = 8.0  # verify, tip below the plastic's underside
 PIN_ABOVE = 3.0  # verify, the tail above the plastic, through a 1.6 board
 ICSP_PIN_ABOVE = 3.2  # verify
@@ -27,9 +26,9 @@ STRIP_SOCKET = (1.0, 6.0)  # square opening, deep  # verify
 STRIP_WALL = 0.1
 STRIP_TAIL = (0.64, 3.0)  # square, below z = 0  # verify
 
-_BLACK = srgb("#1A1A1A")
-_TIN = srgb("#C5C8CE")
-_GOLD = srgb("#D9B44A")
+_BLACK = plastic("#1A1A1A")
+_TIN = tin()
+_GOLD = gold()
 
 
 def _x(lead, count):
@@ -37,20 +36,16 @@ def _x(lead, count):
 
 
 def row_shape(count):
-    """One round housing per pin. Each pin runs `PIN_BELOW` under the
-    plastic and stands `PIN_ABOVE` proud of its top."""
+    """One square plastic bar. Each pin owns the segment it stands in, and
+    the segments meet, so a hover on one pin is not claimed by another.
+    Each pin runs `PIN_BELOW` under the plastic and stands `PIN_ABOVE`
+    proud of its top."""
     top = PLASTIC + PIN_ABOVE
     children = []
     for lead in range(1, count + 1):
         x = _x(lead, count)
-        children.append(paint(cyl_z(x, 0, 0, PLASTIC, HOUSING_R), f"housing-{lead}", _BLACK))
-        children.append(
-            paint(
-                box(x, 0, (top - PIN_BELOW) / 2.0, PIN, PIN, top + PIN_BELOW),
-                f"pin-{lead}",
-                _TIN,
-            )
-        )
+        children.append(paint(box(x, 0, PLASTIC / 2.0, PITCH, PITCH, PLASTIC), f"housing-{lead}", _BLACK))
+        children.append(paint(box(x, 0, (top - PIN_BELOW) / 2.0, PIN, PIN, top + PIN_BELOW), f"pin-{lead}", _TIN))
     return bd.Compound(children=children, label=f"pin_header_1x{count}")
 
 

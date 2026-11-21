@@ -1,11 +1,15 @@
 //! The ESP32-S3 on the `orbe-mcu` contract. Each GPIO the host wires becomes an output and a
-//! watch around [`Esp32s3`], its console is the `USB_SERIAL_JTAG` USART, each SPI2 transfer is a
+//! watch around [`Esp32s3`], its console is the `USB_SERIAL_JTAG` USART and each UART byte is
+//! `UART0`, `UART1` or `UART2`, each SPI2 transfer is a
 //! `Spi` record, each LEDC update is a `Duty` record on each of its wired pads, each RMT
 //! transmission is a `Pulses` record on each of its wired pads, and its 480 MHz tick converts
 //! between picoseconds and its timeline.
 //!
 //! An LEDC update that moves its pad's drive moves it 1 ps after its record's end, a stop of its
 //! own, so the record and the drive change never land together.
+//!
+//! Its samples are its wired ADC pads, GPIO1 to GPIO20, each against `GND`, in output order. A
+//! conversion's start is a stop that asks for them, and the chip takes its pad's voltage there.
 //!
 //! A console packet has no line timing: every byte of one starts and ends at the cycle the
 //! firmware flushed it.
@@ -16,7 +20,7 @@ use orbe_xtensa::{CoreId, Missing};
 
 use super::{
     Duty, Esp32s3, Fault, FlashRefusal, Halt, PadDrive, Pc, Refused, ResetCause, TICK_HZ, Tick,
-    Touch, Train, Transfer,
+    Touch, Train, Transfer, adc_pad,
 };
 
 /// The supply pins, then the GPIOs a board can wire. GPIO22 to GPIO25 do not exist, and GPIO33
@@ -35,6 +39,8 @@ pub struct Bridge {
     chip: Esp32s3,
     /// The GPIO of each output and watch.
     gpios: Vec<u8>,
+    /// The GPIO of each sample.
+    sampled: Vec<u8>,
     image: Vec<Drive>,
     /// Whether each output pulls down, beside its drive in `image`.
     pulled_down: Vec<bool>,
@@ -85,6 +91,15 @@ fn pc(pc: Pc) -> mcu::Pc {
     }
 }
 
+/// The GPIOs among `gpios`, in their order, whose voltage the bridge samples: the ADC pads.
+fn sampled(gpios: &[u8]) -> Vec<u8> {
+    gpios
+        .iter()
+        .copied()
+        .filter(|&gpio| adc_pad(gpio))
+        .collect()
+}
+
 /// The pin of the part on `pad`.
 fn pin(pad: u8) -> Option<&'static str> {
     PINS.into_iter()
@@ -104,6 +119,7 @@ impl Bridge {
         }
         let mut bridge = Bridge {
             chip,
+            sampled: sampled(&gpios),
             image: vec![Drive::Off; gpios.len()],
             pulled_down: vec![false; gpios.len()],
             gpios,
@@ -264,7 +280,7 @@ impl Bridge {
 }
 
 impl Mcu for Bridge {
-    const USARTS: &'static [&'static str] = &["USB_SERIAL_JTAG"];
+    const USARTS: &'static [&'static str] = &["USB_SERIAL_JTAG", "UART0", "UART1", "UART2"];
     const SENDS: bool = true;
 
     #[inline]
@@ -277,12 +293,17 @@ impl Mcu for Bridge {
             return None;
         };
         let at = time(halt.at());
-        let (at, record) = match halt {
-            Halt::Change { image, record, .. } => {
+        let (at, record, sample) = match halt {
+            Halt::Change {
+                image,
+                record,
+                sample,
+                ..
+            } => {
                 if image {
                     self.refresh();
                 }
-                (at, record)
+                (at, record, sample)
             }
             Halt::Moved(_) => {
                 self.held = Some((Time::from_ps(at.as_ps() + 1), Held::Moved));
@@ -301,11 +322,7 @@ impl Mcu for Bridge {
             }
         };
         self.served = Some(at);
-        Some(Stop {
-            at,
-            sample: false,
-            record,
-        })
+        Some(Stop { at, sample, record })
     }
 
     #[inline]
@@ -316,6 +333,15 @@ impl Mcu for Bridge {
     #[inline]
     fn pulled_down(&self) -> &[bool] {
         &self.pulled_down
+    }
+
+    /// Its ADC pads' voltages, in `sampled` order.
+    fn sample(&mut self, _at: Time, volts: &[f64]) {
+        let sampled = &self.sampled;
+        self.chip.sample(|gpio| {
+            let k = sampled.iter().position(|&pad| pad == gpio);
+            volts[k.expect("a conversion's pad has a net")]
+        });
     }
 
     /// Its GPIOs' levels, in watch order.
@@ -338,6 +364,15 @@ impl Mcu for Bridge {
                 byte,
                 start: at,
                 end: at,
+            });
+        }
+        let through = tick(through);
+        while let Some(byte) = self.chip.take_uart(through) {
+            sent(Frame {
+                usart: byte.port + 1,
+                byte: byte.byte,
+                start: time(byte.start),
+                end: time(byte.end),
             });
         }
     }

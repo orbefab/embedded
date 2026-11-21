@@ -16,11 +16,11 @@ import build123d as bd
 
 from cad import glb
 from cad.chip import chip, chip_anchors
-from cad.color import srgb
+from cad.color import plastic
 
 SIZE = (4.55, 3.24, 0.7)  # length, width, height
 
-_BODY = srgb("#C9A35A")
+_BODY = plastic("#C9A35A")
 
 
 def ptc_fuse_1812_shape():
