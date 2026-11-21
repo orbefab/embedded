@@ -14,12 +14,10 @@ use crate::model::{Instance, Part, TypeRef};
 use crate::name::and_list;
 use crate::syntax::{self, Node};
 
-const RULES: [fn(&Scope, &mut Findings); 8] = [
+const RULES: [fn(&Scope, &mut Findings); 6] = [
     unplaced,
     shorted,
     unconnected,
-    ground_unnamed,
-    rotation,
     no_model,
     floating,
     led_no_resistor,
@@ -37,9 +35,10 @@ struct Scope<'c, 'p> {
     tops: Vec<(&'p Instance, usize, &'p Part)>,
     scene: Node,
     engine: Netlist,
-    ground: &'c str,
     /// Nets left out of `net.floating`. See [`Circuit::quiet_floating`].
     quiet: BTreeSet<String>,
+    /// A part drawn in a board's hole while it is not seated: the board, the hole, and the pin.
+    hovering: BTreeMap<String, (String, String, String)>,
 }
 
 impl Scope<'_, '_> {
@@ -122,6 +121,7 @@ impl Circuit<'_> {
             .collect();
         let tree = syntax::parse(&project.sources, scene.file, &mut Findings::default())
             .expect("the scene parsed when it checked");
+        let hovering = self.hovering();
         let scope = Scope {
             circuit: &*self,
             root,
@@ -131,8 +131,8 @@ impl Circuit<'_> {
             scene: tree,
             engine: orbe_engine::netlist::parse_with(netlist.json.as_bytes(), &netlist.blobs)
                 .expect("the engine read this netlist when it checked"),
-            ground: &netlist.ground,
             quiet: netlist.refs.quiet_floating.clone(),
+            hovering,
         };
         for rule in RULES {
             rule(&scope, out);
@@ -208,25 +208,52 @@ fn unplaced(s: &Scope, out: &mut Findings) {
         .map(|(instance, _, _)| *instance)
         .filter(|i| layout.and_then(|l| l.get(&i.name)?.get("at")).is_none())
         .collect();
-    let Some(first) = unplaced.first() else {
-        return;
-    };
-    let names: Vec<String> = unplaced.iter().map(|i| format!("`{}`", i.name)).collect();
-    let names = and_list(&names.iter().map(String::as_str).collect::<Vec<_>>());
-    let message = if unplaced.len() == 1 {
-        format!("{names} has no position, so the 3D page places it in a row for drawing only")
-    } else {
-        format!("{names} have no position, so the 3D page places them in a row for drawing only")
-    };
-    out.push(
-        Code::Lint(Lint::Unplaced),
-        first.name_span,
-        message,
-        format!(
-            "place a part whose place matters in the scene's \"layout\", as \"{}\": {{ \"at\": [x, y, z] }} in mm",
-            first.name
-        ),
-    );
+    if let Some(first) = unplaced.first() {
+        let names: Vec<String> = unplaced.iter().map(|i| format!("`{}`", i.name)).collect();
+        let names = and_list(&names.iter().map(String::as_str).collect::<Vec<_>>());
+        let message = if unplaced.len() == 1 {
+            format!("{names} has no position, so the 3D page places it in a row for drawing only")
+        } else {
+            format!(
+                "{names} have no position, so the 3D page places them in a row for drawing only"
+            )
+        };
+        out.push(
+            Code::Lint(Lint::Unplaced),
+            first.name_span,
+            message,
+            format!(
+                "place a part whose place matters in the scene's \"layout\", as \"{}\": {{ \"at\": [x, y, z] }} in mm",
+                first.name
+            ),
+        );
+    }
+    for &(instance, id, _) in &s.tops {
+        if s.circuit.seated.contains_key(&id) {
+            continue;
+        }
+        let Some(place) = layout.and_then(|node| node.get(&instance.name)) else {
+            continue;
+        };
+        if place.get("at").is_none() || place.get("on").is_some() {
+            continue;
+        }
+        let Some((board, hole, pin)) = s.hovering.get(&instance.name) else {
+            continue;
+        };
+        out.push(
+            Code::Lint(Lint::Unplaced),
+            instance.name_span,
+            format!(
+                "`{}` is drawn on `{board}` as if it were plugged in, and its leads join nothing",
+                instance.name
+            ),
+            format!(
+                "seat it with \"on\", as \"{}\": {{ \"on\": {{ \"{pin}\": \"{board}.{hole}\" }} }}",
+                instance.name
+            ),
+        );
+    }
 }
 
 /// Two pins of one plugged part in one strip: the strip joins them, as a part plugged in along
@@ -326,81 +353,6 @@ fn unconnected(s: &Scope, out: &mut Findings) {
             instance.name_span,
             message,
             hint,
-        );
-    }
-}
-
-fn ground_unnamed(s: &Scope, out: &mut Findings) {
-    let scene = &s.circuit.project.scene;
-    if scene.nets.iter().any(|(name, _, _)| name == s.ground) {
-        return;
-    }
-    let root = s.net_root(s.ground).expect("the ground is a net");
-    let pin = s
-        .tops
-        .iter()
-        .filter(|(_, _, part)| part.holes.is_none())
-        .find_map(|&(instance, id, part)| {
-            let pin = part.pins.iter().find(|p| s.pin_root(id, &p.name) == root)?;
-            Some(format!("{}.{}", instance.name, pin.name))
-        })
-        .unwrap_or_else(|| {
-            let info = &s.circuit.pins[root];
-            format!("{}.{}", s.circuit.insts[info.inst].dotted(), info.name)
-        });
-    out.push(
-        Code::Lint(Lint::GroundUnnamed),
-        scene.span,
-        format!(
-            "the ground net is `{}`, a name taken from a pin, because \"nets\" does not name it",
-            s.ground
-        ),
-        format!("add \"GND\": \"{pin}\" to the scene's \"nets\", so refs and messages say GND"),
-    );
-}
-
-/// An angle as one turn writes it, above -180 and at most 180 degrees.
-fn canonical(angle: f64) -> f64 {
-    let turned = angle.rem_euclid(360.0);
-    if turned > 180.0 {
-        turned - 360.0
-    } else {
-        turned
-    }
-}
-
-fn rotation(s: &Scope, out: &mut Findings) {
-    let Some(layout) = s.scene.get("layout").and_then(Node::props) else {
-        return;
-    };
-    let shown = |angles: &[f64]| {
-        let each: Vec<String> = angles.iter().map(f64::to_string).collect();
-        format!("[{}]", each.join(", "))
-    };
-    for placement in layout {
-        let Some(rotate) = placement.value.get("rotate") else {
-            continue;
-        };
-        let Some(angles) = rotate
-            .items()
-            .and_then(|items| items.iter().map(Node::number).collect::<Option<Vec<f64>>>())
-        else {
-            continue;
-        };
-        if angles.iter().all(|a| *a > -180.0 && *a <= 180.0) {
-            continue;
-        }
-        let turned: Vec<f64> = angles.iter().copied().map(canonical).collect();
-        out.push(
-            Code::Lint(Lint::Rotation),
-            rotate.span,
-            format!(
-                "`{}` turns by {}, which is {} with each angle above -180 and at most 180 degrees",
-                placement.key,
-                shown(&angles),
-                shown(&turned)
-            ),
-            format!("write \"rotate\": {}", shown(&turned)),
         );
     }
 }

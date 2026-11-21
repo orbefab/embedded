@@ -49,8 +49,6 @@ pub enum Code {
 pub enum Lint {
     Unplaced,
     Unconnected,
-    GroundUnnamed,
-    Rotation,
     NoModel,
     /// The engine's own static check.
     Floating,
@@ -88,8 +86,6 @@ impl Code {
             Code::Engine(code) => code,
             Code::Lint(Lint::Unplaced) => "scene.unplaced",
             Code::Lint(Lint::Unconnected) => "scene.unconnected",
-            Code::Lint(Lint::GroundUnnamed) => "scene.ground_unnamed",
-            Code::Lint(Lint::Rotation) => "scene.rotation",
             Code::Lint(Lint::NoModel) => "scene.no_model",
             Code::Lint(Lint::Floating) => "net.floating",
             Code::Lint(Lint::LedNoResistor) => "scene.led_no_resistor",

@@ -1,2 +1,2 @@
-scene.ground scene.jsonc:2:1 | nano.3V3 | ground
+scene.ground scene.jsonc:2:1 | nano.3V3 | nano.GND
 scene.param scene.jsonc:8:53 | prefix | 220

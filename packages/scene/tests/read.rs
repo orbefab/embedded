@@ -20,11 +20,11 @@ fn read(scene: &str) -> (orbe_scene::Netlist, Value) {
 fn first_target_has_19_parts_and_34_nets() {
     let (netlist, json) = read("scene.jsonc");
     assert_eq!(netlist.parts, 19);
-    assert_eq!(netlist.ground, "nano__GND");
+    assert_eq!(netlist.ground, "GND");
     let mut nets = netlist.nets.clone();
     nets.sort();
     let mut expected: Vec<String> = [
-        "nano__GND",
+        "GND",
         "led1__anode",
         "nano__5V",
         "nano__AREF",
@@ -44,7 +44,7 @@ fn first_target_has_19_parts_and_34_nets() {
     .collect();
     expected.sort();
     assert_eq!(nets, expected);
-    assert_eq!(json["nets"][0], "nano__GND", "ground is the first net");
+    assert_eq!(json["nets"][0], "GND", "ground is the first net");
     let names: Vec<&str> = json["parts"]
         .as_array()
         .unwrap()
@@ -73,7 +73,7 @@ fn first_target_has_19_parts_and_34_nets() {
         .find(|p| p["name"] == "nano__mcu")
         .unwrap();
     assert_eq!(mcu["pins"]["PB5"], "nano__D13");
-    assert_eq!(mcu["pins"]["GND_8"], "nano__GND");
+    assert_eq!(mcu["pins"]["GND_8"], "GND");
     assert_eq!(
         mcu["firmware"].as_str().unwrap(),
         fs::read_to_string(common::firmware()).unwrap()
@@ -119,11 +119,11 @@ fn scene_params_are_user_values_and_defaults_fill_the_rest() {
 }
 
 #[test]
-fn two_buttons_ground_is_btn1_gnd() {
+fn two_buttons_ground_is_gnd() {
     let (netlist, json) = read("two-buttons.jsonc");
     assert_eq!(netlist.parts, 19);
     assert_eq!(netlist.nets.len(), 33);
-    assert_eq!(netlist.ground, "btn1__gnd");
+    assert_eq!(netlist.ground, "GND");
     for net in ["btn1__out", "btn1__vcc", "btn2__out"] {
         assert!(netlist.nets.contains(&net.to_string()), "no net {net}");
     }

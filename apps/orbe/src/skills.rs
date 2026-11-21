@@ -626,8 +626,6 @@ mod tests {
         let code = |lint: Lint| match lint {
             Lint::Unplaced
             | Lint::Unconnected
-            | Lint::GroundUnnamed
-            | Lint::Rotation
             | Lint::NoModel
             | Lint::Floating
             | Lint::LedNoResistor
@@ -636,8 +634,6 @@ mod tests {
         let rules: std::collections::BTreeSet<&str> = [
             Lint::Unplaced,
             Lint::Unconnected,
-            Lint::GroundUnnamed,
-            Lint::Rotation,
             Lint::NoModel,
             Lint::Floating,
             Lint::LedNoResistor,
