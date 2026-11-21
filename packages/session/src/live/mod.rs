@@ -218,6 +218,7 @@ impl Live {
             state,
             data,
             error,
+            previous_crash: None,
         }
     }
 

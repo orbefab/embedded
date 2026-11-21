@@ -234,6 +234,116 @@ fn a_process_that_dies_is_session_crashed_until_it_is_opened_again() {
 }
 
 #[test]
+fn open_keeps_a_crashed_sessions_log_until_it_is_read_or_the_next_crash_replaces_it() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    let session = ["--session", "kept"];
+    runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+    kill_daemon(&runtime);
+    let log = runtime.sessions().join("kept.log");
+    fs::write(&log, "first crash\n").unwrap();
+
+    let run = runtime
+        .orbe(dir.path(), &[&["open", "--json"][..], &session].concat())
+        .ok();
+    let path = log.display().to_string();
+    let note = format!("the previous session crashed; its last output is in {path}");
+    assert_eq!(run.json()["data"]["previous_crash"], note.as_str());
+    assert_eq!(fs::read_to_string(&log).unwrap(), "first crash\n");
+
+    let run = runtime
+        .orbe(dir.path(), &[&["close"][..], &session].concat())
+        .ok();
+    assert!(
+        !run.stdout.contains("previous session crashed"),
+        "{}",
+        run.stdout
+    );
+
+    runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+    kill_daemon(&runtime);
+    fs::write(&log, "first crash\n").unwrap();
+    let run = runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+    assert!(
+        run.stdout.starts_with("opened scene.jsonc at t=0: "),
+        "{}",
+        run.stdout
+    );
+    assert!(run.stdout.contains(&note), "{}", run.stdout);
+    assert_eq!(fs::read_to_string(&log).unwrap(), "first crash\n");
+
+    kill_daemon(&runtime);
+    let starts: Vec<_> = fs::read_dir(runtime.sessions())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("kept.log."))
+        })
+        .collect();
+    assert_eq!(starts.len(), 1, "{starts:?}");
+    fs::write(&starts[0], "second crash\n").unwrap();
+    let run = runtime.orbe(dir.path(), &["get", "@led1", "--session", "kept"]);
+    assert_eq!(run.code, 1);
+    assert!(run.stderr.contains(&path), "{}", run.stderr);
+    assert_eq!(fs::read_to_string(&log).unwrap(), "second crash\n");
+    // The read above is a user reading the log. Put the access time back on the write so
+    // `open` still has a log to keep.
+    let written = std::process::Command::new("stat")
+        .args(["-c", "%y"])
+        .arg(&log)
+        .output()
+        .unwrap()
+        .stdout;
+    std::process::Command::new("touch")
+        .args(["-a", "-d"])
+        .arg(String::from_utf8(written).unwrap().trim())
+        .arg(&log)
+        .status()
+        .unwrap();
+
+    let run = runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+    assert!(run.stdout.contains(&note), "{}", run.stdout);
+    assert_eq!(fs::read_to_string(&log).unwrap(), "second crash\n");
+    runtime
+        .orbe(dir.path(), &[&["step", "1ms"][..], &session].concat())
+        .ok();
+    let taken = fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        !taken.contains("second crash"),
+        "reading the log lets the session take it: {taken}"
+    );
+    runtime
+        .orbe(dir.path(), &[&["close"][..], &session].concat())
+        .ok();
+    assert!(
+        !log.exists(),
+        "a clean exit removes the log once it was read"
+    );
+
+    let run = runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+    assert!(
+        !run.stdout.contains("previous session crashed"),
+        "{}",
+        run.stdout
+    );
+    runtime
+        .orbe(dir.path(), &[&["close"][..], &session].concat())
+        .ok();
+}
+
+#[test]
 fn two_sessions_with_different_names_run_side_by_side() {
     let dir = project("open\n");
     let runtime = Runtime::new();

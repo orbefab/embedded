@@ -154,6 +154,61 @@ impl Place {
         left.sort_by(|a, b| a.1.cmp(&b.1));
         left
     }
+
+    /// A crashed start whose log is newer than `name.log` becomes `name.log`, so the path a
+    /// crash names still holds the latest output. A start log a process holds stays where it is.
+    pub fn keep_latest_crash(&self, name: &Name) {
+        use rustix::fs::{FlockOperation, Mode, OFlags};
+        let Ok(entries) = fs::read_dir(&self.dir) else {
+            return;
+        };
+        let log = self.log(name);
+        let kept = fs::symlink_metadata(&log)
+            .ok()
+            .filter(|meta| meta.is_file());
+        let kept_at = kept.as_ref().and_then(|meta| meta.modified().ok());
+        let kept_output = kept.as_ref().is_some_and(|meta| meta.len() > 0);
+        let mut best: Option<(std::time::SystemTime, PathBuf, rustix::fd::OwnedFd)> = None;
+        for entry in entries.filter_map(Result::ok) {
+            let file = entry.file_name();
+            let Some(text) = file.to_str() else {
+                continue;
+            };
+            let Some((stem, id)) = text.rsplit_once(".log.") else {
+                continue;
+            };
+            if stem != name.as_str() || id.parse::<u64>().is_err() {
+                continue;
+            }
+            let path = entry.path();
+            let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+            let Ok(fd) = rustix::fs::open(&path, flags, Mode::empty()) else {
+                continue;
+            };
+            if rustix::fs::flock(&fd, FlockOperation::NonBlockingLockExclusive).is_err() {
+                continue;
+            }
+            let Ok(meta) = fs::symlink_metadata(&path) else {
+                continue;
+            };
+            if !meta.is_file() || meta.len() == 0 {
+                continue;
+            }
+            let Ok(written) = meta.modified() else {
+                continue;
+            };
+            let newer = match (kept_output, kept_at) {
+                (true, Some(kept_at)) => written > kept_at,
+                _ => true,
+            };
+            if newer && best.as_ref().is_none_or(|(at, ..)| written > *at) {
+                best = Some((written, path, fd));
+            }
+        }
+        if let Some((_, path, _fd)) = best {
+            let _ = fs::rename(path, log);
+        }
+    }
 }
 
 /// The longest socket path: `sun_path`, less its closing NUL.

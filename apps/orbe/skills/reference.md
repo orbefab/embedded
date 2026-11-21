@@ -157,7 +157,7 @@ The part and `orbe add` codes are in `orbe skills get parts`.
 | `scene.unknown_pin`, `scene.param`, `scene.syntax` | A typo or a wrong value at that line and column. The hint names what is valid. |
 | `scene.world` | A `world` quantity that does not exist, a value outside its range, or a step at 0, too close to the one before it, or that does not change the value. |
 | `no_session` | No session runs under this name. Run the `orbe open` in the hint. |
-| `session_crashed` | The session's process died. Run `orbe open` again. |
+| `session_crashed` | The session's process died. Run `orbe open` again. `open` says the previous session crashed, and leaves the log the hint named until that log is read or the next crash replaces it. |
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |
 | `not_settable` | `press` and `release` work only on a switch. `set` works only on a quantity the scene's `world` names or a part reads. |
 | `wrong_setting` | The part takes a different input, such as a trimmer's `position`. Set that param in the scene and run `orbe open` again. |

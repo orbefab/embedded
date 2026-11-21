@@ -326,9 +326,9 @@ impl Job {
     }
 }
 
-/// Runs the session. `start` names the log `open` gave this process for its stderr: once this
-/// process holds the socket, that log becomes the session's, and a process that loses the
-/// socket to another start removes it.
+/// Runs the session. `start` names the log `open` gave this process for its stderr. Once this
+/// process holds the socket, that log becomes the session's, unless the session's log already
+/// holds a crash's output. A process that loses the socket to another start removes its log.
 pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
     let found = Place::find().and_then(|place| {
         let start = start.map(|id| place.start_log(name, id));
@@ -359,7 +359,11 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
         }
     };
     let bound = (inode(&socket), start.as_deref().and_then(inode));
+    // A crash left output in the log the hint names. Leave that file until it is read or a
+    // later crash replaces it, and keep this process's stderr on its start log.
+    let preserve = start.is_some() && holds_output(&log);
     if let Some(start) = &start
+        && !preserve
         && let Err(error) = std::fs::rename(start, &log)
     {
         if inode(&socket) == bound.0 {
@@ -372,6 +376,11 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
         );
         return ExitCode::from(3);
     }
+    let crash = start.as_ref().zip(bound.1).map(|(start, inode)| CrashLog {
+        start,
+        log: &log,
+        inode,
+    });
     let idle = test_duration("ORBE_TEST_IDLE_TIMEOUT").unwrap_or(IDLE);
     let (events, queue) = mpsc::channel();
     let reading = Arc::new(AtomicUsize::new(0));
@@ -386,10 +395,16 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
         ticked: None,
     };
     thread::spawn(move || accept(&listener, &events, &reading));
-    let (why, unanswered) = serve(&mut held, &queue, idle, timer);
-    for (path, identity) in [(&socket, bound.0), (&log, bound.1)] {
-        if identity.is_some() && inode(path) == identity {
-            let _ = std::fs::remove_file(path);
+    let (why, unanswered) = serve(&mut held, &queue, idle, timer, crash.as_ref());
+    if bound.0.is_some() && inode(&socket) == bound.0 {
+        let _ = std::fs::remove_file(&socket);
+    }
+    if let Some(crash) = &crash {
+        crash.claim_if_read();
+        if inode(crash.log) == Some(crash.inode) {
+            let _ = std::fs::remove_file(crash.log);
+        } else if inode(crash.start) == Some(crash.inode) {
+            let _ = std::fs::remove_file(crash.start);
         }
     }
     if let Some((job, reply)) = unanswered {
@@ -422,6 +437,7 @@ fn serve(
     queue: &Receiver<Event>,
     idle: Duration,
     timer: Sender<()>,
+    crash: Option<&CrashLog>,
 ) -> (&'static str, Option<(Job, Reply)>) {
     let mut timer = Some(timer);
     let mut last = wall();
@@ -441,6 +457,9 @@ fn serve(
         match event {
             Ok(Event::Job(job)) => {
                 last = wall();
+                if let Some(crash) = crash {
+                    crash.claim_if_read();
+                }
                 let reply = held.run(&job);
                 if let Data::Closed { .. } = reply.data {
                     return ("`orbe close` ended the session", Some((job, reply)));
@@ -553,6 +572,34 @@ fn inode(path: &Path) -> Option<(u64, u64)> {
     std::fs::symlink_metadata(path)
         .ok()
         .map(|m| (m.dev(), m.ino()))
+}
+
+/// The start log and the session log while a crash's output still occupies the session log.
+struct CrashLog<'a> {
+    start: &'a Path,
+    log: &'a Path,
+    inode: (u64, u64),
+}
+
+impl CrashLog<'_> {
+    /// The crash log was read after it was written. This process's stderr already points at
+    /// the start log, so that file takes the session log's name and a clean exit removes it.
+    fn claim_if_read(&self) {
+        if inode(self.log) == Some(self.inode) {
+            return;
+        }
+        let Ok(meta) = std::fs::symlink_metadata(self.log) else {
+            return;
+        };
+        let read = meta.is_file() && meta.len() > 0 && meta.accessed().ok() > meta.modified().ok();
+        if read {
+            let _ = std::fs::rename(self.start, self.log);
+        }
+    }
+}
+
+fn holds_output(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0)
 }
 
 /// Counts each accepted connection in `reading` until its request is queued or it ends.

@@ -378,6 +378,7 @@ impl Refusal {
             state,
             data: Data::None,
             error: Some(self.error.clone()),
+            previous_crash: None,
         }
     }
 
@@ -553,17 +554,36 @@ impl Client {
     /// reached ends before it answers, it starts again.
     fn open(&self, command: Command) -> Result<Box<Reply>, Refusal> {
         let mut started = None;
+        let mut recovered = None;
         for attempt in 1..=TRIES {
             let answered = match self.find()? {
                 Found::Listening(stream) => self.send(stream, Ask::Run(Ok(command.clone()))),
-                Found::Missing | Found::Stale => self.start(attempt).and_then(|(stream, log)| {
+                Found::Missing => self.start(attempt).and_then(|(stream, log)| {
                     started = Some(log);
                     self.send(stream, Ask::Run(Ok(command.clone())))
                 }),
+                Found::Stale => {
+                    recovered = Some(self.crash_log());
+                    self.start(attempt).and_then(|(stream, log)| {
+                        started = Some(log);
+                        self.send(stream, Ask::Run(Ok(command.clone())))
+                    })
+                }
             };
             match answered {
                 Err(refused)
                     if matches!(refused.error.code, Code::NoSession | Code::SessionCrashed) => {}
+                Ok(mut reply) => {
+                    if let Some(path) = &recovered {
+                        reply.previous_crash = Some(match path {
+                            Some(path) => format!(
+                                "the previous session crashed; its last output is in {path}"
+                            ),
+                            None => "the previous session crashed".into(),
+                        });
+                    }
+                    return Ok(reply);
+                }
                 answered => return answered,
             }
         }
@@ -877,16 +897,24 @@ impl Client {
     }
 
     fn crashed(&self, how: &str) -> Refusal {
-        let log = self.place.log(&self.name);
+        let log = self.crash_log();
         let mut hint = self.open_hint("to start it again");
-        if holds_output(&log) {
-            hint.push_str(&format!("; its last output is in {}", log.display()));
+        if let Some(log) = log {
+            hint.push_str(&format!("; its last output is in {log}"));
         }
         self.refuse(
             Code::SessionCrashed,
             format!("the process of session `{}` {how}", self.name),
             hint,
         )
+    }
+
+    /// The session log after a newer crashed start, if one was waiting, has replaced it.
+    /// `None` when that log holds nothing.
+    fn crash_log(&self) -> Option<String> {
+        self.place.keep_latest_crash(&self.name);
+        let log = self.place.log(&self.name);
+        holds_output(&log).then(|| log.display().to_string())
     }
 
     fn session_flag(&self) -> String {
