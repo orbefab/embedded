@@ -125,7 +125,7 @@ A scene is JSONC: JSON plus `//` comments and trailing commas. Its keys:
   | `humidity` | %RH | 0 to 100 | 50 |
   | `light` | lx | 0 to 100000 | 300 |
 
-A part name starts with a letter, takes letters, digits and `_`, and may not contain `__` or end in `_`. `i`, `v`, `p`, `ib`, `ic`, `id`, `iin`, `iout`, `pin`, `logic`, `usart` and `net` are taken. A param value is a number with an optional prefix (p, n, u, m, k, M) and unit, such as `"10k"`, `"100n"` or `"1ms"`, a choice by name, as `"color": "red"`, or a file path from the scene's folder, as the firmware.
+A part name starts with a letter, takes letters, digits and `_`, and may not contain `__` or end in `_`. `i`, `v`, `p`, `ib`, `ic`, `id`, `iin`, `iout`, `pin`, `logic`, `usart` and `net` are taken. A param value is a number with an optional prefix (p, n, u, m, k, M) and unit, such as `"10k"`, `"100n"` or `"1ms"`, a choice by name, as `"color": "red"`, or a file path from the scene's folder, as the firmware. The part reads that file as text, such as a hex, or as bytes when its file param says `"as": "blob"`, such as an app image.
 
 ## Parts
 

@@ -59,7 +59,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
   ],
 ```
 
-When parsing fails, `blobs` is absent. The folder copies no blob. A rerun from the folder alone fails with `netlist.blob`, so it names the blob folder, as in `orbe-run run <run>/netlist.json --out <new> --blobs packages/engine/tests/circuits/esp32s3-blink/blobs`. A rerun from `packages/engine/tests/circuits/esp32s3-blink/netlist.json` finds the `blobs` folder beside it. No example commits the ROM, so a rerun of `packages/engine/tests/circuits/esp32s3-hello` also passes the folder `packages/engine/scripts/blobs.sh` prints, as in `orbe-run run packages/engine/tests/circuits/esp32s3-hello/netlist.json --out <new> --blobs "$(packages/engine/scripts/blobs.sh)"`.
+When parsing fails, `blobs` is absent. The folder copies no blob. A rerun from the folder alone fails with `netlist.blob`, so it names the blob folder, as in `orbe-run run <run>/netlist.json --out <new> --blobs packages/engine/tests/circuits/esp32s3-blink/blobs`. A rerun from `packages/engine/tests/circuits/esp32s3-blink/netlist.json` finds the `blobs` folder beside it. No engine example commits the ROM. The catalog part `esp32s3-qfn56` does, and `packages/engine/scripts/blobs.sh` copies that file into its cache when the cache lacks it. A rerun of `packages/engine/tests/circuits/esp32s3-hello` passes the folder that script prints, as in `orbe-run run packages/engine/tests/circuits/esp32s3-hello/netlist.json --out <new> --blobs "$(packages/engine/scripts/blobs.sh)"`.
 
 `seed` is the netlist seed. When parsing fails, `seed` is `null`.
 

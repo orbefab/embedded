@@ -1,0 +1,44 @@
+{
+  "part": "esp32s3-qfn56",
+  "source": {
+    "script": "model.py",
+    "sha256": "32532271e9cb0b3d2a093f74cfd4e778a98a435135904a4373fe03e5baeb4e5b",
+    "bytes": 1438
+  },
+  "files": {
+    "esp32s3-qfn56.glb": {
+      "sha256": "baa577044d80e350886d0f93aeeed1230019130853605b62286a5b16211c218b",
+      "bytes": 40504
+    },
+    "esp32s3-qfn56.anchors.json": {
+      "sha256": "81704d191db914a56d60c9d43c63627822fb3a48e0af8b5495e3127dade0e6ca",
+      "bytes": 6545
+    }
+  },
+  "box": {
+    "min": [-3.5, -3.5, 0],
+    "max": [3.5, 3.5, 0.89]
+  },
+  "kept_nodes": [],
+  "draw_calls": 3,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 57,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0.05
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 59,
+      "primitives_out": 3
+    }
+  }
+}
