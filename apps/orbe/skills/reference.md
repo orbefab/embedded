@@ -1,6 +1,6 @@
 # orbe: reference
 
-The details behind `orbe skills get core`: breadboards in full, ratings, LED brightness, time, test files, sessions, the 3D page, and every warning and error. The examples build on the core skill's worked example.
+The details behind `orbe skills get core`: breadboards in full, ratings, LED brightness, time, test files, sessions, the 3D page, and the warnings and errors an agent meets. The examples build on the core skill's worked example.
 
 ## Breadboards
 
@@ -78,8 +78,8 @@ Right after `step --until @led1 lit` the pin is already high and `i` is about 12
 - `step <duration>` takes ps, ns, us, ms or s, such as `100ms`, `1.5ms`, `20us`. Serial edges on D1 can fill its 20 lines.
 - An input lands at the session's time or later, and its reply gives the time. A `set` also lands after the last change the scene's `steps` schedule, so it never undoes one.
 - `step --until` first reads the condition now. If it holds, it takes no time. A pin condition stops 1 ps after the exact edge. `@led1.i` shows that current there, and the light state follows the average over 20 ms. Other conditions are read every 1 ms, so the reply says `by 104ms`.
-- Serial can reach orbe up to one engine step (10 ms) after the chip sends it. Step a little past a print before you expect it.
-- A session stops at 2 hours of simulated time. Reads still work there, and `press`, `release`, `set`, `step` and `play` fail with `ended`. A `step` that would pass the stop fails with `past_stop`, and its hint names the time left.
+- Serial can reach orbe up to one engine step (`sim.max_step`, 10 ms by default) after the chip sends it. Step a little past a print before you expect it.
+- A session stops at 2 hours of simulated time. Reads still work there, and `press`, `release`, `set`, `step` and `play` fail with `ended`. `step <duration>` past the stop fails with `past_stop`, and its hint names the time left. `step --until` stops there and fails with `ended`. An input that would land past the stop fails with `past_stop`, and its hint says to run `orbe open`.
 
 A switch with `bounce` set bounces up to `max_bounces` times within that window after each `press` and `release`, and an input on it lands after the window of the one before. With this change to the worked example's `scene.jsonc`,
 
@@ -166,7 +166,7 @@ The part and `orbe add` codes are in `orbe skills get parts`.
 | `no_change` | The input asks for the state already there, such as `set light 50` when the light is 50. |
 | `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`, then fix the circuit or the firmware, or step longer. |
 | `ended` | The session reached its 2-hour stop. Reads still work. Run `orbe open` to start again. |
-| `past_stop` | A `step` would end past the stop. Step at most the time the hint names. |
+| `past_stop` | A `step` would end past the stop, or an input would land past it. Do what the hint says. |
 | `cancelled` | Ctrl-C stopped a `step`. Step again. |
 | `faulted` | The engine stopped the session. The message names why. Fix it and run `orbe open`. |
 

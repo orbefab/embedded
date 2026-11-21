@@ -29,7 +29,7 @@ pub const SKILLS: &[Skill] = &[
     },
     Skill {
         name: "reference",
-        about: "Breadboards in full, ratings, LED brightness, time, sessions, the 3D page, and every warning and error.",
+        about: "Breadboards in full, ratings, LED brightness, time, sessions, the 3D page, and the warnings and errors an agent meets.",
         text: include_str!("../skills/reference.md"),
     },
 ];

@@ -1475,7 +1475,7 @@ fn orbe_test_leaves_an_open_session_alone_and_none_to_close() {
 fn no_diagnostics_says_a_chip_warning_can_show_one_engine_step_late() {
     says(
         &skill("core"),
-        "A chip warning can show up to one engine step (10 ms) late, so step that far past its cause first.",
+        "A chip warning can show up to one engine step (`sim.max_step`, 10 ms by default) late, so step that far past its cause first.",
     );
     let project = worked_example();
     let dir = project.path();

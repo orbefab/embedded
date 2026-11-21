@@ -125,7 +125,7 @@ A scene is JSONC: JSON plus `//` comments and trailing commas. Its keys:
   | `humidity` | %RH | 0 to 100 | 50 |
   | `light` | lx | 0 to 100000 | 300 |
 
-A part name starts with a letter, takes letters, digits and `_`, and may not contain `__`. A param value is a number with an optional prefix (p, n, u, m, k, M) and unit, such as `"10k"`, `"100n"` or `"1ms"`, a choice by name, as `"color": "red"`, or a file path from the scene's folder, as the firmware.
+A part name starts with a letter, takes letters, digits and `_`, and may not contain `__` or end in `_`. `i`, `v`, `p`, `ib`, `ic`, `id`, `iin`, `iout`, `pin`, `logic`, `usart` and `net` are taken. A param value is a number with an optional prefix (p, n, u, m, k, M) and unit, such as `"10k"`, `"100n"` or `"1ms"`, a choice by name, as `"color": "red"`, or a file path from the scene's folder, as the firmware.
 
 ## Parts
 
@@ -143,7 +143,7 @@ Give the board an `at`. Then seat every part with leads using `on`: name one pin
 
 ## Driving a session
 
-A ref names something in the open scene. It starts with `@`, which a shell leaves alone.
+`orbe open [<scene>]` starts a session on `scene.jsonc`, or on the scene named. A ref names something in the open scene. It starts with `@`, which a shell leaves alone.
 
 - `@led1`: a part. `get` prints its state, such as `lit`, `dim` or `off`, and its current `i`, voltage `v` and power `p`.
 - `@nano.D13`, `@led1.anode`: a pin. `get` prints its level, `high` or `low`, when a chip pin is on its net, and its voltage.
@@ -154,11 +154,11 @@ A ref names something in the open scene. It starts with `@`, which a shell leave
 
 `expect` and `step --until` take the same conditions:
 
-- `@led1 lit`, `@led1 dim`, `@led1 off`: an LED's state, from its `brightness`, its average current over 20 ms. It is `lit` above 2 mA and `off` at or below 100 uA.
+- `@led1 lit`, `@led1 dim`, `@led1 off`: an LED's state, from its `brightness`, its average current over 20 ms. It is `lit` above 2 mA and `off` at or below 100 uA. `@led1.brightness > 1mA` compares that average.
 - `@nano.D13 high`, `@nano.D13 low`: a pin's level.
 - `@led1.i > 5mA`, `@nano.D2 < 1V`: a quantity or a pin's voltage, with `<`, `<=`, `>` or `>=`. In a shell, quote `<` and `>`, as `orbe expect @led1.i '>' 5mA`.
 - `serial contains "text"`: all the serial text since `open`. `snapshot` shows the last 10 lines of it, joined with `\n`.
-- `no diagnostics`: no runtime warning has come up. A chip warning can show up to one engine step (10 ms) late, so step that far past its cause first.
+- `no diagnostics`: no runtime warning has come up. A chip warning can show up to one engine step (`sim.max_step`, 10 ms by default) late, so step that far past its cause first.
 
 Time moves only inside `step`, or while `play` runs. `step 100ms` advances by that much and lists what changed. A read at time t shows the circuit just before anything at t, so step after an input before you read its effect. `step --until <condition> [--timeout <duration>]` steps until the condition holds, up to the timeout, 10s by default. An LED's state follows its 20 ms average, so it changes a few ms after its pin does.
 
@@ -180,7 +180,7 @@ FAIL tests/button.test:4: expect @led1 lit
 
 `step` lists pin edges with their exact times, LED changes and diagnostics. It lists at most 20, then `and N more`, then every LED's `brightness`. A `warning[...]` line is a runtime diagnostic. `rating.current`, `rating.power` and `rating.voltage` mean a part or a chip pin went past its datasheet rating, such as an LED with no series resistor. Fix the circuit. `chip.floating_input` names an input that nothing drives.
 
-An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what the hint says. The common ones are `part_missing`, `firmware_missing` (build it, or fix the path), `unknown_ref` (the hint lists what exists), `expect_failed` and `until_timeout` (compare `actual`, then fix the circuit or the firmware, or step longer). `orbe skills get reference` has every code.
+An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what the hint says. The common ones are `part_missing`, `firmware_missing` (build it, or fix the path), `unknown_ref` (the hint lists what exists), `expect_failed` and `until_timeout` (compare `actual`, then fix the circuit or the firmware, or step longer). `orbe skills get reference` has more.
 
 Exit codes: 0 ok, 1 a failed check, `expect` or command, 2 a usage error, 3 a file or system error.
 
@@ -188,4 +188,4 @@ With `--json` a command prints one JSON object, `{"ok": true, "data": {...}}` or
 
 ## Watching in 3D
 
-`orbe open --headed` opens the scene and a page in the default browser, where a person watches it in 3D and clicks its buttons. `orbe show` opens the page on a session that already runs, and `--no-browser` only prints its address. The address holds the session's key, so give it only to the user. A session opens paused, so run `orbe play` before you hand over the page. Time then runs at real speed until `orbe pause` or a `step`. A playing session uses the CPU until `orbe close`.
+`orbe open --headed` opens the scene and a page in the default browser, where a person watches it in 3D and clicks its buttons. `orbe show` opens the page on a session that already runs, and `--no-browser` only prints its address. The address holds the session's key, so give it only to the user. A session opens paused, so run `orbe play` before you hand over the page. Time then runs at real speed until `orbe pause`, a `step` that runs, the 2-hour stop or a fault, and uses the CPU while it runs.
