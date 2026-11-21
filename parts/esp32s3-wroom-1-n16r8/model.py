@@ -7,7 +7,8 @@ toward +Y. Leads are the castellations and the ground pad.
 The body is Table 1-1 of the ESP32-S3-WROOM-1 & WROOM-1U Datasheet v1.8:
 18.0 x 25.5 x 3.1 mm. Figure 10-1 draws the rest of the outside: a 0.8 mm
 PCB, a 15.8 x 17.6 mm shield 1.05 mm from the far end, and 6 mm of bare
-PCB at the antenna end. The shield rises to the 3.1 mm top. Each
+PCB at the antenna end. Those three do not add up to the 25.5 mm body: the
+model keeps the shield's 17.6 and 1.05, which leaves 6.85 mm at the antenna. The shield rises to the 3.1 mm top. Each
 castellation is a Ø0.55 half hole on the outline with a 0.9 by 0.45 pad on
 the PCB's top. The model cuts each hole square, 0.55 wide and 0.275 deep,
 so the mesh stays small. The sheet does not give the plating's thickness:

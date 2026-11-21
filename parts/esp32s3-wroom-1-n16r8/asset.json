@@ -2,8 +2,8 @@
   "part": "esp32s3-wroom-1-n16r8",
   "source": {
     "script": "model.py",
-    "sha256": "639a634a5005435654a8f43d7144a6dee89d23d6cc62c2c677cac5aa4f5f8341",
-    "bytes": 6083
+    "sha256": "88756c135d480969c4fd1c565cb7d044aca5613d070e2a0823617e307780c88c",
+    "bytes": 6211
   },
   "files": {
     "esp32s3-wroom-1-n16r8.glb": {
