@@ -12,7 +12,7 @@ use crate::special::{Access, CCOMPARE, EPC, EPS, Sr};
 mod decodes;
 mod options;
 
-use decodes::Decodes;
+use decodes::{Decodes, Kept, Stores};
 
 const PS_INTLEVEL: u32 = 0xf;
 const PS_EXCM: u32 = 1 << 4;
@@ -194,6 +194,8 @@ pub struct Core<C: Config> {
     lines_until: Cycle,
     /// The cycle at which each `CCOMPAREn` next equals `CCOUNT`.
     timer_due: [Cycle; 3],
+    /// The earliest of `timer_due`.
+    timer_next: Cycle,
     /// The FPU registers `f0` to `f15`.
     fr: [u32; 16],
     /// The S3's `q0` to `q7`, each as four words, lowest first.
@@ -247,6 +249,7 @@ impl<C: Config> Core<C> {
             lines: 0,
             lines_until: Cycle(0),
             timer_due: [Cycle(0); 3],
+            timer_next: Cycle(0),
             fr: [0; 16],
             q: [[0; 4]; 8],
             disabled: None,
@@ -462,7 +465,8 @@ impl<C: Config> Core<C> {
 
     /// Takes a pending interrupt, idles in `WAITI`, or runs one instruction. Interrupts come
     /// first, as the ISA's priority list puts them ahead of the `ICOUNT` debug exception (4.4.1.11,
-    /// p 145).
+    /// p 145). A step with `ASK` set that runs an op which leaves those checks as they were goes
+    /// on with a straight run.
     fn step<const ASK: bool, B: Bus>(&mut self, bus: &mut B, limit: Cycle) -> Result<(), Stop> {
         let nmi = self.poll::<ASK, _>(bus);
         let level = if nmi {
@@ -483,7 +487,7 @@ impl<C: Config> Core<C> {
             self.idle(bus, limit);
             return Ok(());
         }
-        let counting = self.cintlevel() < self.sr[Sr::IcountLevel as usize];
+        let counting = self.counting();
         let icount = self.sr[Sr::Icount as usize];
         // Below debug level the usual rule applies. The S3 also re-takes at debug level.
         // A higher level does not, so the entry cannot lower `PS.INTLEVEL`.
@@ -494,17 +498,99 @@ impl<C: Config> Core<C> {
             self.execute(bus)
         };
         match done {
-            Ok(op) => {
-                if counting && !matches!(op, Op::WSR_ICOUNT | Op::XSR_ICOUNT) {
-                    self.sr[Sr::Icount as usize] = icount.wrapping_add(1);
+            Ok((op, rechecks)) => {
+                if counting {
+                    if !matches!(op, Op::WSR_ICOUNT | Op::XSR_ICOUNT) {
+                        self.sr[Sr::Icount as usize] = icount.wrapping_add(1);
+                    }
+                } else if ASK && !rechecks {
+                    return self.straight(bus, limit);
                 }
+                Ok(())
             }
-            Err(Trap::Exception(cause, vaddr)) => self.exception(cause, vaddr),
-            Err(Trap::Window { base, vector }) => self.window_exception(base, vector),
-            Err(Trap::Debug(cause)) => self.debug_exception(cause),
-            Err(Trap::Stop(stop)) => return Err(stop),
+            Err(trap) => self.trap(trap),
+        }
+    }
+
+    /// Enters the handler of a trap that is not a stop, or returns the stop.
+    fn trap(&mut self, trap: Trap) -> Result<(), Stop> {
+        match trap {
+            Trap::Exception(cause, vaddr) => self.exception(cause, vaddr),
+            Trap::Window { base, vector } => self.window_exception(base, vector),
+            Trap::Debug(cause) => self.debug_exception(cause),
+            Trap::Stop(stop) => return Err(stop),
         }
         Ok(())
+    }
+
+    /// Whether `ICOUNT` counts the next instruction.
+    fn counting(&self) -> bool {
+        self.cintlevel() < self.sr[Sr::IcountLevel as usize]
+    }
+
+    /// Runs the kept decodes after a step's op back to back, while a step before each would
+    /// only mark its start. That step found no interrupt to take, no wait and no `ICOUNT`
+    /// count, and its op changed nothing those checks read. Each op of the run starts before
+    /// the run's limit, the next timer match and the cycle the lines can next move at, and the
+    /// bus's code version keeps it. A step before it would then read no line, latch nothing,
+    /// find no interrupt, wait or count, and fetch nothing. A bus turns on `yields` and
+    /// `fetch_held` only in an access that can move the lines, and that access ends the run.
+    /// So the run marks each op's start and checks the cycle. It ends after an op that
+    /// rechecks, after a trap, once the lines can move, at a PC the table does not keep at the
+    /// current version, or at the horizon. A taken branch changes nothing a step checks, so the
+    /// run goes on at its target.
+    fn straight<B: Bus>(&mut self, bus: &mut B, limit: Cycle) -> Result<(), Stop> {
+        if bus.code_version().is_none() {
+            return Ok(());
+        }
+        let horizon = limit.min(self.timer_next);
+        let table = self.decodes.take();
+        let mut done = Ok(());
+        while self.cycle < horizon && self.cycle < self.lines_until {
+            let Some(slot) = bus
+                .code_version()
+                .and_then(|version| table.find(self.pc, version))
+            else {
+                break;
+            };
+            self.keep_step(bus);
+            let kept = table.kept(slot);
+            if self.refetch && (self.pc & 3) + u32::from(kept.insn.len) > 4 {
+                self.cycle.0 += 1;
+            }
+            self.refetch = false;
+            match self.run(bus, kept) {
+                Ok(_) if !kept.rechecks => {}
+                Ok(_) => break,
+                Err(trap) => {
+                    done = self.trap(trap);
+                    break;
+                }
+            }
+        }
+        self.decodes.put(table);
+        done
+    }
+
+    /// The step before an op of a straight run, which only marks its start. A check build polls
+    /// there as a step would, and requires every check the run skips to find nothing.
+    #[inline]
+    fn keep_step<B: Bus>(&mut self, bus: &mut B) {
+        #[cfg(not(feature = "poll-skip-check"))]
+        bus.begin_step(self.cycle);
+        #[cfg(feature = "poll-skip-check")]
+        {
+            assert!(!self.poll::<true, _>(bus), "a skipped poll raised the NMI");
+            assert_eq!(self.interrupt_level(), None, "at {:?}", self.cycle);
+            assert!(
+                self.wait == Wait::No,
+                "a straight run waits at {:?}",
+                self.cycle
+            );
+            assert!(!self.counting(), "ICOUNT counts at {:?}", self.cycle);
+            assert!(!bus.yields(), "the bus yields at {:?}", self.cycle);
+            assert!(!bus.fetch_held(), "the fetch is held at {:?}", self.cycle);
+        }
     }
 
     fn ar_index(&self, n: u32) -> usize {
@@ -549,6 +635,10 @@ impl<C: Config> Core<C> {
             );
             #[cfg(not(feature = "poll-skip-check"))]
             bus.begin_step(self.cycle);
+            if self.cycle < self.timer_next {
+                // No line rose and no timer is due, so the latch below would change nothing.
+                return false;
+            }
             0
         } else {
             let lines = bus.interrupts(self.cycle) & interrupts.external();
@@ -570,12 +660,14 @@ impl<C: Config> Core<C> {
                 self.timer_due[i] = Cycle(due.0 + (periods << 32));
             }
         }
+        self.timer_next = self.timer_due.into_iter().fold(Cycle(u64::MAX), Cycle::min);
         self.sr[Sr::Interrupt as usize] = latched;
         rose & interrupts.nmi != 0
     }
 
-    fn note_lines<B: Bus>(&mut self, bus: &B, addr: u32) {
-        if bus.access_moves_lines(addr) {
+    /// Reads the lines at the next step after an access that `moves` them.
+    fn note_lines(&mut self, moves: bool) {
+        if moves {
             self.lines_until = Cycle(0);
         }
     }
@@ -611,6 +703,7 @@ impl<C: Config> Core<C> {
             ahead => u64::from(ahead),
         };
         self.timer_due[i] = Cycle(self.cycle.0 + ahead);
+        self.timer_next = self.timer_due.into_iter().fold(Cycle(u64::MAX), Cycle::min);
     }
 
     /// `WAITI` with no interrupt to take moves the cycle to the bus's next event, a timer match
@@ -729,8 +822,18 @@ impl<C: Config> Core<C> {
         self.take_vector(vecbase + level_vector(level));
     }
 
-    fn fetch<B: Bus>(&mut self, bus: &mut B) -> Result<Insn, Trap> {
+    /// The table's slot that holds the instruction at the PC. When the bus keeps a code version
+    /// and the table holds the PC at that version, the core runs the kept decode without
+    /// fetching, and stops where the fetch would.
+    fn fetch<B: Bus>(&mut self, bus: &mut B) -> Result<usize, Trap> {
         let pc = self.pc;
+        let version = bus.code_version();
+        if let Some(slot) = version.and_then(|version| self.decodes.kept(pc, version)) {
+            if bus.fetch_held() {
+                return Err(exit_trap(Exit::Stop, pc));
+            }
+            return Ok(slot);
+        }
         let word = pc & !3;
         let low = bus
             .fetch(self.cycle, word)
@@ -749,20 +852,14 @@ impl<C: Config> Core<C> {
             both |= u64::from(high) << 32;
         }
         let raw = ((both >> (8 * offset)) as u32) & (u32::MAX >> (32 - 8 * u32::from(len)));
-        let insn = self
-            .decodes
-            .get_or(pc, len, raw, || {
+        self.decodes
+            .get_or::<C>(pc, len, raw, version, || {
                 match C::decode(&raw.to_le_bytes()[..usize::from(len)], pc) {
                     Some(Decoded::Insn(insn)) => Some(insn),
                     _ => None,
                 }
             })
-            .ok_or(Trap::Exception(Cause::IllegalInstruction, None))?;
-        if self.refetch && end > 4 {
-            self.cycle.0 += 1;
-        }
-        self.refetch = false;
-        Ok(insn)
+            .ok_or(Trap::Exception(Cause::IllegalInstruction, None))
     }
 
     /// Loads the bytes from `addr`, little-endian, one bus access per aligned part.
@@ -773,7 +870,7 @@ impl<C: Config> Core<C> {
         }
         let mut value = 0;
         for (at, part, shift) in parts(addr, width) {
-            self.note_lines(bus, at);
+            self.note_lines(bus.load_moves_lines(at));
             let bytes = bus
                 .load(self.cycle, at, part)
                 .map_err(|exit| self.access_trap(exit, op, addr, width))?;
@@ -795,7 +892,7 @@ impl<C: Config> Core<C> {
             self.watch_hit(addr, width, true)?;
         }
         for (at, part, shift) in parts(addr, width) {
-            self.note_lines(bus, at);
+            self.note_lines(bus.access_moves_lines(at));
             bus.store(self.cycle, at, part, value >> shift)
                 .map_err(|exit| self.access_trap(exit, op, addr, width))?;
         }
@@ -838,7 +935,8 @@ impl<C: Config> Core<C> {
         }
     }
 
-    /// Runs one instruction. On `Ok` the PC, the registers and the cycle have moved. On `Err`
+    /// Runs one instruction, and returns its op and whether the next step makes every check, as
+    /// `Kept::rechecks` says. On `Ok` the PC, the registers and the cycle have moved. On `Err`
     /// none of them has, except what fetching and decoding charged, but an unaligned store that
     /// stops keeps the parts it wrote before the faulting one.
     ///
@@ -857,8 +955,23 @@ impl<C: Config> Core<C> {
     ///
     /// The coprocessor-disabled exception comes after the window check, as the ISA's priority list
     /// orders them (4.4.1.11, p 146).
-    fn execute<B: Bus>(&mut self, bus: &mut B) -> Result<Op, Trap> {
-        let insn = self.fetch(bus)?;
+    fn execute<B: Bus>(&mut self, bus: &mut B) -> Result<(Op, bool), Trap> {
+        let slot = self.fetch(bus)?;
+        let table = self.decodes.take();
+        let kept = table.kept(slot);
+        // A fetch that moved to a new address costs a cycle when the op runs into the next word.
+        if self.refetch && (self.pc & 3) + u32::from(kept.insn.len) > 4 {
+            self.cycle.0 += 1;
+        }
+        self.refetch = false;
+        let done = self.run(bus, kept).map(|op| (op, kept.rechecks));
+        self.decodes.put(table);
+        done
+    }
+
+    /// Runs the fetched op `kept`, the rest of [`Self::execute`].
+    fn run<B: Bus>(&mut self, bus: &mut B, kept: &Kept) -> Result<Op, Trap> {
+        let insn = &kept.insn;
         if insn.op == Op::J
             && insn.fields[0] == self.pc
             && !self.spun
@@ -871,7 +984,7 @@ impl<C: Config> Core<C> {
             return Err(self.overflow_trap(n));
         }
         let pc = self.pc;
-        if let Some(n) = C::coprocessor(insn.op)
+        if let Some(n) = kept.coprocessor
             && self.sr[Sr::CpEnable as usize] >> n & 1 == 0
         {
             let Some(cause) = Cause::coprocessor_disabled(n) else {
@@ -896,14 +1009,14 @@ impl<C: Config> Core<C> {
         } else {
             seq
         };
-        let (cycles, target) = match self.operate(bus, &insn, next) {
+        let (cycles, target) = match self.operate(bus, insn, next) {
             Ok(done) => done,
             Err(trap) => {
                 self.sr[Sr::Lcount as usize] = lcount;
                 return Err(trap);
             }
         };
-        self.note(&insn);
+        self.note(kept);
         self.cycle.0 += cycles;
         match target {
             Some(to) => {
@@ -931,19 +1044,17 @@ impl<C: Config> Core<C> {
     /// extra. The FPU and `q` stores, and a `s32c1i` that stored, count as stores, though no board
     /// row times a `memw` after one. A `s32c1i` stored when the old word it left in `at` equals
     /// `SCOMPARE1`.
-    fn note(&mut self, insn: &Insn) {
-        let op = insn.op;
+    fn note(&mut self, kept: &Kept) {
         self.pace &= PACE_LOOP;
-        let stored = match op {
-            Op::S8I | Op::S16I | Op::S32I | Op::S32I_N | Op::S32NB | Op::S32E | Op::S32RI => true,
-            Op::SSI | Op::SSX | Op::SSIP | Op::SSXP | Op::st_QR => true,
-            Op::S32C1I => self.a(insn.fields[0]) == self.sr[Sr::Scompare1 as usize],
-            _ => false,
+        let stored = match kept.stores {
+            Stores::Never => false,
+            Stores::Always => true,
+            Stores::Compared => self.a(kept.insn.fields[0]) == self.sr[Sr::Scompare1 as usize],
         };
         if stored {
             self.pace |= PACE_STORE;
         }
-        if matches!(op, Op::QUOU | Op::QUOS | Op::REMU | Op::REMS) {
+        if kept.divides {
             self.pace |= PACE_DIVIDE;
         }
     }
@@ -957,7 +1068,7 @@ impl<C: Config> Core<C> {
         next: u32,
     ) -> Result<(u64, Option<u32>), Trap> {
         let pc = self.pc;
-        let f = insn.fields;
+        let f = &insn.fields;
         let mut cycles = 1;
         let mut target = None;
         let sar = self.sr[Sr::Sar as usize];
@@ -1292,7 +1403,7 @@ impl<C: Config> Core<C> {
         Ok((cycles, target))
     }
 
-    fn move_if(&mut self, f: [u32; 8], test: impl Fn(u32) -> bool) {
+    fn move_if(&mut self, f: &[u32; 8], test: impl Fn(u32) -> bool) {
         if test(self.a(f[2])) {
             self.set_a(f[0], self.a(f[1]));
         }

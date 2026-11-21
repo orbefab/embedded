@@ -508,9 +508,13 @@ fn check_clean(project: &Path) -> Checked {
     let nets = data["nets"].as_u64().unwrap();
     let ground = data["ground"].as_str().unwrap().to_string();
     assert_eq!(data["scene"], "scene.jsonc");
-    assert_eq!(
-        stdout.trim(),
-        format!("scene.jsonc: ok, {parts} engine parts, {nets} nets, ground {ground}")
+    let line = stdout.trim();
+    assert!(
+        line.starts_with("scene.jsonc: ok, ")
+            && line.contains("scene part")
+            && line.contains(&format!("expanding to {parts} engine part"))
+            && line.ends_with(&format!(", {nets} nets, ground {ground}")),
+        "{stdout}"
     );
     Checked {
         parts,

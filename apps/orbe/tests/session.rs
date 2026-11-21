@@ -935,6 +935,48 @@ fn no_session(name: &str) -> String {
 }
 
 #[test]
+fn a_failed_open_leaves_no_socket_for_the_next_command() {
+    let dir = project("open\n");
+    fs::remove_dir_all(dir.path().join("parts/nano-board")).unwrap();
+    let runtime = Runtime::new();
+    let run = runtime.orbe(dir.path(), &["open", "--session", "miss"]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("error[part_missing]"),
+        "{}{}",
+        run.stdout,
+        run.stderr
+    );
+    assert!(
+        runtime.sockets().is_empty(),
+        "a failed open left a socket: {:?}",
+        runtime.sockets()
+    );
+    let again = runtime.orbe(dir.path(), &["get", "@led1", "--session", "miss"]);
+    assert_eq!(again.code, 1, "{}{}", again.stdout, again.stderr);
+    assert_eq!(again.stderr, no_session("miss"), "{}", again.stdout);
+    let retry = runtime.orbe(dir.path(), &["open", "--session", "miss"]);
+    assert_eq!(retry.code, 1, "{}{}", retry.stdout, retry.stderr);
+    assert!(
+        retry.stdout.contains("error[part_missing]"),
+        "{}{}",
+        retry.stdout,
+        retry.stderr
+    );
+    assert!(
+        !format!("{}{}", retry.stdout, retry.stderr).contains("session_crashed"),
+        "{}{}",
+        retry.stdout,
+        retry.stderr
+    );
+    assert!(
+        runtime.sockets().is_empty(),
+        "the retry left a socket: {:?}",
+        runtime.sockets()
+    );
+}
+
+#[test]
 fn close_on_a_process_with_no_scene_changes_nothing_and_open_reaches_it() {
     let dir = project("open\n");
     let runtime = Runtime::new();
@@ -1338,23 +1380,23 @@ fn a_command_whose_process_crashed_while_another_shell_opened_again_says_so() {
 }
 
 #[test]
-fn close_all_after_a_refused_open_skips_the_process_and_exits_0() {
+fn close_all_after_a_refused_open_finds_nothing_and_exits_0() {
     let dir = project("open\n");
     fs::write(dir.path().join("bad.jsonc"), "{").unwrap();
     let runtime = Runtime::new();
     let run = runtime.orbe(dir.path(), &["open", "bad.jsonc", "--session", "ca"]);
     assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
-    let pid = runtime.daemon();
+    assert!(
+        runtime.sockets().is_empty(),
+        "a refused open left a socket: {:?}",
+        runtime.sockets()
+    );
     let run = runtime.orbe(dir.path(), &["close", "--all"]);
     assert_eq!(
         (run.code, run.stdout.as_str(), run.stderr.as_str()),
-        (
-            0,
-            "ca: no scene is open; its process is starting or ending\n",
-            ""
-        )
+        (0, "no sessions are running\n", "")
     );
-    assert_eq!(runtime.daemons(), [pid]);
+    assert!(runtime.daemons().is_empty(), "{:?}", runtime.daemons());
 }
 
 #[test]

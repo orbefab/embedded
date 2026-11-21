@@ -94,6 +94,11 @@ impl Bus for Flat {
     fn yields(&self) -> bool {
         self.yields
     }
+
+    /// The code never changes, so its version never moves, and the core runs straight runs.
+    fn code_version(&self) -> Option<u64> {
+        Some(0)
+    }
 }
 
 pub fn core_at<C: Config>(pc: u32) -> Core<C> {
@@ -216,8 +221,8 @@ fn a_yielding_bus_stops_the_core_before_its_next_step() {
 /// `Core` is copied at every landing, so its size is pinned.
 #[test]
 fn core_size_is_pinned() {
-    assert_eq!(size_of::<Core<Esp32>>(), 936);
-    assert_eq!(size_of::<Core<Esp32s3>>(), 936);
+    assert_eq!(size_of::<Core<Esp32>>(), 944);
+    assert_eq!(size_of::<Core<Esp32s3>>(), 944);
 }
 
 /// `DBREAKAn` and `DBREAKCn` read back through `wsr` and `rsr`.

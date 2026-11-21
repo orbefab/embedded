@@ -18,6 +18,8 @@ use std::collections::VecDeque;
 use super::clock::Tick;
 
 const PACKET: usize = 64;
+/// `USB_SERIAL_JTAG_EP1_CONF_REG`, whose bits say whether EP1 takes or holds a byte.
+pub(crate) const EP1_CONF: u32 = 0x04;
 const WR_DONE: u32 = 1 << 0;
 const SERIAL_IN_EP_DATA_FREE: u32 = 1 << 1;
 const SERIAL_OUT_EP_DATA_AVAIL: u32 = 1 << 2;
@@ -79,8 +81,10 @@ impl UsbSerialJtag {
         let arrived = self.received.front().filter(|&&(at, _)| at <= now);
         match offset {
             0x00 => Some(arrived.map_or(0, |&(_, byte)| u32::from(byte))),
-            0x04 if arrived.is_some() => Some(SERIAL_IN_EP_DATA_FREE | SERIAL_OUT_EP_DATA_AVAIL),
-            0x04 => Some(SERIAL_IN_EP_DATA_FREE),
+            EP1_CONF if arrived.is_some() => {
+                Some(SERIAL_IN_EP_DATA_FREE | SERIAL_OUT_EP_DATA_AVAIL)
+            }
+            EP1_CONF => Some(SERIAL_IN_EP_DATA_FREE),
             0x08 => Some(self.raw | self.sof(now)),
             0x0c => Some(self.raw & self.ena),
             0x10 => Some(self.ena),
