@@ -373,7 +373,7 @@ mod tests {
         let through = root.join("sub").join("..").join("a");
         // macOS realpath resolves a trailing slash on a file. Memory keeps the Linux answer:
         // that slash names a directory.
-        let slash_is_not_a_directory = slash.canonicalize().is_err();
+        let disk_refuses_slash = slash.canonicalize().is_err();
 
         for path in [&missing, &slash, &through] {
             assert_eq!(
@@ -388,7 +388,7 @@ mod tests {
                 "read {}",
                 path.display()
             );
-            if slash_is_not_a_directory || path.as_path() != slash.as_path() {
+            if disk_refuses_slash || path.as_path() != slash.as_path() {
                 assert_eq!(
                     outcome(disk.real(path)),
                     outcome(memory.real(path)),

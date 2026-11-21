@@ -483,8 +483,8 @@ fn the_build_refuses_what_a_client_could_not_trust() {
         ),
         (
             "a folder that is not an id",
-            &|src| put(src, "parts/Lamp/part.jsonc", LAMP),
-            "parts/Lamp is not an id",
+            &|src| put(src, "parts/Bulb/part.jsonc", LAMP),
+            "parts/Bulb is not an id",
         ),
         (
             "a file name with a colon",
@@ -527,14 +527,8 @@ fn the_build_refuses_what_a_client_could_not_trust() {
     ];
     let folds_case = volume_folds_case();
     for (what, change, says) in probes {
-        // `parts/Lamp` is the same directory as `parts/lamp` on a volume that ignores case,
-        // and `readme.md` is the same file as `README.md`.
-        if folds_case
-            && matches!(
-                what,
-                "a folder that is not an id" | "two files one case apart"
-            )
-        {
+        // `readme.md` is the same file as `README.md` on a volume that ignores case.
+        if folds_case && what == "two files one case apart" {
             continue;
         }
         let src = third_party();
