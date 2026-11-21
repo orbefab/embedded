@@ -21,6 +21,7 @@ use super::calibration::{self, Calibration};
 use super::clock::{CpuClock, Source, Tick};
 use super::code::Code;
 use super::efuse::{Efuse, EfuseSet};
+use super::events::{Events, Peripheral};
 use super::extmem;
 use super::flash::{self, Flash};
 use super::gates::{self, Block, Gates};
@@ -36,7 +37,7 @@ use super::sar::{self, Sar};
 use super::sha::{self, Sha};
 use super::spi1::{self, FlashRefusal, Spi1};
 use super::spi2::{self, Setting, Spi2};
-use super::timers::{Register, Systimer, Watchdogs};
+use super::timers::{Expiry, Register, Systimer, Watchdogs};
 use super::uart::{self, Uarts};
 use super::usb::{self, UsbSerialJtag};
 use super::{Duty, Pc, RAM, Refused, ResetCause, Touch};
@@ -95,6 +96,8 @@ pub(crate) struct Soc {
     flash: Option<Flash>,
     /// The code version the cores' decode tables run on, and the lines it watches.
     code: Code,
+    /// The next event of each peripheral the last poll found.
+    events: Events,
     /// Registers kept as plain words, by address.
     plain: BTreeMap<u32, u32>,
     pub(crate) gpio: Gpio,
@@ -326,6 +329,15 @@ fn effect(addr: u32) -> Option<Effect> {
     })
 }
 
+/// The watchdog deadline, the next LEDC event and the I2C controller's, and whether I2C runs.
+#[derive(Debug, PartialEq, Eq)]
+struct Armed {
+    deadline: Option<Expiry>,
+    ledc: Option<Tick>,
+    i2c_runs: bool,
+    i2c: Option<Tick>,
+}
+
 impl Soc {
     pub(crate) fn new(clock: CpuClock, netted: &[u8], watchdogs: Watchdogs) -> Soc {
         let mut soc = Soc {
@@ -336,6 +348,7 @@ impl Soc {
             rom: None,
             flash: None,
             code: Code::default(),
+            events: Events::default(),
             plain: BTreeMap::new(),
             gpio: Gpio::new(netted),
             systimer: Systimer::new(),
@@ -517,6 +530,7 @@ impl Soc {
     /// The PRO CPU's bus for one access outside a run, as a test makes it.
     #[cfg(test)]
     pub(crate) fn bus(&mut self) -> CoreBus<'_> {
+        self.forget_events();
         CoreBus::new(
             self,
             Step {
@@ -1425,6 +1439,7 @@ impl Soc {
         if !PERIPHERALS.contains(&addr) {
             return Err(Exit::Fault(Cause::LoadStoreError));
         }
+        self.events.touch(word);
         if let Some(refused) = self.gated(word) {
             self.ending = Some(Ending::Refused(refused));
             return Err(Exit::Stop);
@@ -1498,6 +1513,7 @@ impl Soc {
         if !PERIPHERALS.contains(&addr) {
             return Err(Exit::Fault(Cause::LoadStoreError));
         }
+        self.events.touch(addr);
         self.store_register(step, cycle, addr, width, value)?;
         if step.other_sleeps {
             self.steer(Steer::Wake(step.start));
@@ -1572,7 +1588,9 @@ impl Soc {
             || uart::Uarts::index(base).is_some()
             || (base == SYSTEM && gates::OFFSETS.contains(&(word - SYSTEM)));
         if !pads {
-            let deadline = self.watchdogs.deadline();
+            // A store to USB Serial/JTAG moves no watchdog, LEDC or I2C event.
+            let usb = base == USB_SERIAL_JTAG;
+            let armed = (!usb || cfg!(debug_assertions)).then(|| self.armed());
             let app = [
                 SYSTEM + app::CONTROL_0,
                 RTC_CNTL + OPTIONS0,
@@ -1587,8 +1605,6 @@ impl Soc {
             } else {
                 value
             };
-            let due = self.ledc.next(self.clock.source.apb());
-            let i2c = (self.i2c.runs(), self.i2c.next_event());
             let usb_due = self.usb.next_event(now);
             self.refuse_clock_change(word, kept, now)?;
             self.write_kept(now, word, kept);
@@ -1602,21 +1618,31 @@ impl Soc {
                 return Err(Exit::Stop);
             }
             self.changes.extend(change.map(|touch| (word, touch)));
-            if !i2c.0 && self.i2c.runs() {
-                self.i2c_started = Some(step.core);
+            if let Some(before) = armed {
+                let after = self.armed();
+                debug_assert!(
+                    !usb || after == before,
+                    "a USB Serial/JTAG store moved {after:?}"
+                );
+                if !before.i2c_runs && after.i2c_runs {
+                    self.i2c_started = Some(step.core);
+                }
+                self.rearmed |= after.deadline != before.deadline
+                    || after.ledc != before.ledc
+                    || after.i2c != before.i2c;
             }
-            self.rearmed |= self.watchdogs.deadline() != deadline
-                || self.ledc.next(self.clock.source.apb()) != due
-                || self.i2c.next_event() != i2c.1
-                || self.usb.next_event(now) != usb_due;
+            self.rearmed |= self.usb.next_event(now) != usb_due;
             return Ok(());
         }
         self.settle_ledc(now);
         self.rmt.settle(now);
-        let rmt_due = self.rmt.next_event();
+        // A UART store routes no pad to LEDC and moves no RMT event.
+        let uart = uart::Uarts::index(base).is_some();
+        let compared = !uart || cfg!(debug_assertions);
+        let rmt_due = compared.then(|| self.rmt.next_event());
         let uart_due = self.uart.next_event(now);
         let before = self.image();
-        let carried = self.ledc_pads();
+        let carried = compared.then(|| self.ledc_pads());
         self.write_kept(now, word, value);
         if self.rmt_pending {
             self.rmt_started = Some(step.core);
@@ -1629,13 +1655,26 @@ impl Soc {
         if self.image() != before {
             self.changed = Some(now);
         }
-        if self.rmt.next_event() != rmt_due || self.uart.next_event(now) != uart_due {
+        if let Some(due) = rmt_due {
+            let after = self.rmt.next_event();
+            debug_assert!(!uart || after == due, "a UART store moved the RMT event");
+            self.rearmed |= after != due;
+        }
+        if self.uart.next_event(now) != uart_due {
             self.rearmed = true;
         }
-        if uart::Uarts::index(word).is_some() {
+        if uart {
             self.uart_started = Some(step.core);
         }
-        for (pad, channel, inverted) in self.ledc_pads() {
+        let Some(carried) = carried else {
+            return Ok(());
+        };
+        let pads = self.ledc_pads();
+        debug_assert!(
+            !uart || pads == carried,
+            "a UART store routed a pad to LEDC"
+        );
+        for (pad, channel, inverted) in pads {
             if let Some(effect) = self.ledc.sent(usize::from(channel))
                 && !carried.contains(&(pad, channel, inverted))
             {
@@ -1645,6 +1684,16 @@ impl Soc {
             }
         }
         Ok(())
+    }
+
+    /// The events a store outside the pads compares before and after itself.
+    fn armed(&self) -> Armed {
+        Armed {
+            deadline: self.watchdogs.deadline(),
+            ledc: self.ledc.next(self.clock.source.apb()),
+            i2c_runs: self.i2c.runs(),
+            i2c: self.i2c.next_event(),
+        }
     }
 
     /// Steers the run after a store took the APP CPU's hold from `before`, with `reset` a write
@@ -1682,23 +1731,49 @@ impl Soc {
         self.matrix.lines(core, sources)
     }
 
+    /// Forgets the next event of every peripheral, at the start of a slice. The pads and the
+    /// host's input may have changed since the last one.
+    pub(crate) fn forget_events(&mut self) {
+        self.events.forget();
+    }
+
+    /// The cycle the lines can next change at. Each peripheral's event comes from
+    /// [`Events`] while it holds there, and from the peripheral when not.
     fn next_event(&mut self, cycle: Cycle) -> Option<Cycle> {
         let now = self.stamp(cycle);
         self.rmt.settle(now);
         let apb = self.clock.source.apb();
         self.uart.settle(now, &self.gpio, apb);
-        let next = [
-            self.systimer.next_event(now),
-            self.watchdogs.next_alarm(now),
-            self.spi2.next_event(),
-            self.usb.next_event(now),
-            self.rmt.next_event(),
-            self.uart.next_event(now),
-        ]
-        .into_iter()
-        .flatten()
-        .min()?;
-        Some(self.clock.cycle_after(next))
+        let mut next: Option<Tick> = None;
+        for peripheral in Peripheral::ALL {
+            let at = self.events.kept(peripheral, now).unwrap_or_else(|| {
+                let at = self.ask(peripheral, now);
+                self.events.keep(peripheral, at);
+                at
+            });
+            #[cfg(debug_assertions)]
+            {
+                let asked = match peripheral {
+                    Peripheral::Timers => self.watchdogs.clone().next_alarm(now),
+                    _ => self.ask(peripheral, now),
+                };
+                assert_eq!(at, asked, "the kept event of {peripheral:?} at {now:?}");
+            }
+            next = next.into_iter().chain(at).min();
+        }
+        Some(self.clock.cycle_after(next?))
+    }
+
+    /// The first tick after `now` at which `peripheral` can move a line.
+    fn ask(&mut self, peripheral: Peripheral, now: Tick) -> Option<Tick> {
+        match peripheral {
+            Peripheral::Systimer => self.systimer.next_event(now),
+            Peripheral::Timers => self.watchdogs.next_alarm(now),
+            Peripheral::Spi2 => self.spi2.next_event(),
+            Peripheral::Usb => self.usb.next_event(now),
+            Peripheral::Rmt => self.rmt.next_event(),
+            Peripheral::Uart => self.uart.next_event(now),
+        }
     }
 }
 

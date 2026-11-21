@@ -57,8 +57,8 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Prints each net and the pins on it. A net with fewer than two pins, other than
-    /// breadboard holes, is floating, and a pin on no net is not connected.
+    /// Prints each net and the pins on it. A net with no DC path to ground is floating, except
+    /// a board net lint leaves quiet, and a pin on no net is not connected.
     #[command(display_order = 3)]
     Nets {
         /// The scene file, such as scene.jsonc. scene.jsonc when omitted.
@@ -679,8 +679,13 @@ fn print_skill(command: SkillsCommand) -> ExitCode {
             print_json(&json!({ "ok": true, "data": { "skills": skills } }));
         }
         SkillsCommand::List { json: false } => {
+            let width = skills::SKILLS
+                .iter()
+                .map(|s| s.name.len())
+                .max()
+                .unwrap_or(0);
             for skill in skills::SKILLS {
-                println!("{:<8} {}", skill.name, skill.about);
+                println!("{:<width$}  {}", skill.name, skill.about);
             }
         }
         SkillsCommand::Get { name, json } => {
@@ -766,6 +771,7 @@ fn nets(scene: &Path, json: bool) -> ExitCode {
         Err(errors) => return invalid(scene, errors, json),
     };
     let holes = hole_pins(&netlist);
+    let floating_nets = netlist.floating();
     let mut pins_of: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut unconnected = Vec::new();
     for (part, map) in &netlist.refs.parts {
@@ -783,7 +789,7 @@ fn nets(scene: &Path, json: bool) -> ExitCode {
         .iter()
         .map(|name| {
             let pins = pins_of.remove(name).unwrap_or_default();
-            let floating = pins.iter().filter(|pin| !holes.contains(*pin)).count() < 2;
+            let floating = floating_nets.contains(name);
             (name.clone(), pins, floating)
         })
         .collect();

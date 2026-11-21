@@ -656,10 +656,17 @@ impl Open {
         };
         let applied = match self.engine.set(&change) {
             Err(Rejected::NoChange) => {
+                let landed_ps = self
+                    .engine
+                    .world()
+                    .schedule(set.quantity)
+                    .and_then(|schedule| schedule.events().last())
+                    .map(|event| event.at.as_ps())
+                    .unwrap_or(0);
                 return Ok(Data::Set {
                     quantity: set.quantity,
                     value: set.value,
-                    landed_ps: self.engine.now().as_ps(),
+                    landed_ps,
                     already: true,
                 });
             }
@@ -1027,9 +1034,9 @@ mod tests {
             held.text(),
             "\
 t=50ms (from 50ms), @led1 off at 50ms
-  brightness led1 off 1.278e-13 A over 20ms
-  brightness nano.led_l off 1.278e-13 A over 20ms
-  brightness nano.led_pwr lit 3.014 mA over 20ms"
+  brightness led1 off 1.2775403302174304e-13 A over 20ms
+  brightness nano.led_l off 1.2775344350286488e-13 A over 20ms
+  brightness nano.led_pwr lit 3.0136985454632015 mA over 20ms"
         );
 
         let unmet = step(&mut live, "--until @led1 lit");

@@ -59,6 +59,7 @@ pub fn breadboard_line(id: &str) -> Option<String> {
         return Some("does not plug into a breadboard: it has no leads that go into a hole".into());
     }
     let choices = choices(&legs);
+    let mut short = false;
     if choices.is_empty() {
         return Some(
             "does not plug into a breadboard: its leads do not land in the holes of one breadboard"
@@ -73,18 +74,23 @@ pub fn breadboard_line(id: &str) -> Option<String> {
         for &degrees in &QUARTERS {
             for &hole in &holes {
                 for choice in &choices {
-                    let Some(landed) = fit(&legs, choice.leg, hole, degrees, &board) else {
-                        continue;
-                    };
-                    return Some(sentence(board_id, choice, &legs, &landed, &board));
+                    match seat(&legs, choice.leg, hole, degrees, &board) {
+                        Some(Seat::Placed(landed)) => {
+                            return Some(sentence(board_id, choice, &legs, &landed, &board));
+                        }
+                        Some(Seat::Short) => short = true,
+                        None => {}
+                    }
                 }
             }
         }
     }
-    Some(
+    Some(if short {
+        "does not plug into a breadboard: two legs in one strip short".into()
+    } else {
         "does not plug into a breadboard: its leads do not land in the holes of one breadboard"
-            .into(),
-    )
+            .into()
+    })
 }
 
 fn sentence(
@@ -182,9 +188,16 @@ fn hole_order(board: &Board) -> Vec<usize> {
     order
 }
 
-/// Each leg's hole when every leg lands in its own hole and no strip joins two pins. `None`
-/// when the seat misses, bends, stacks two legs, or shorts two pins.
-fn fit(legs: &[Leg], named: usize, hole: usize, degrees: f64, board: &Board) -> Option<Vec<usize>> {
+enum Seat {
+    Placed(Vec<usize>),
+    /// Every leg is within reach of a hole, and two pins share a strip or a hole.
+    Short,
+}
+
+/// Each leg's hole when every leg lands in its own hole and no strip joins two pins.
+/// [`Seat::Short`] when every leg is within reach and two pins share a strip or a hole.
+/// `None` when the seat misses.
+fn seat(legs: &[Leg], named: usize, hole: usize, degrees: f64, board: &Board) -> Option<Seat> {
     let named_leg = &legs[named];
     let hole = &board.holes[hole];
     let turned = rotation([0.0, 0.0, degrees]);
@@ -217,10 +230,18 @@ fn fit(legs: &[Leg], named: usize, hole: usize, degrees: f64, board: &Board) -> 
     let mut seen = BTreeSet::new();
     let mut strips: BTreeMap<usize, &str> = BTreeMap::new();
     let mut landed = Vec::with_capacity(legs.len());
+    let mut over_fit = false;
+    let mut shorted = false;
     for leg in legs {
         let (index, distance) = nearest(board, place(leg, shift))?;
-        if distance > FIT_MM || !seen.insert(index) {
+        if distance > REACH_MM {
             return None;
+        }
+        if distance > FIT_MM {
+            over_fit = true;
+        }
+        if !seen.insert(index) {
+            shorted = true;
         }
         let hole = &board.holes[index];
         if let Some(strip) = hole.strip
@@ -228,11 +249,17 @@ fn fit(legs: &[Leg], named: usize, hole: usize, degrees: f64, board: &Board) -> 
                 .insert(strip, leg.pin.as_str())
                 .is_some_and(|other| other != leg.pin)
         {
-            return None;
+            shorted = true;
         }
         landed.push(index);
     }
-    Some(landed)
+    if !over_fit && !shorted {
+        Some(Seat::Placed(landed))
+    } else if shorted {
+        Some(Seat::Short)
+    } else {
+        None
+    }
 }
 
 fn nearest(board: &Board, at: [f64; 2]) -> Option<(usize, f64)> {

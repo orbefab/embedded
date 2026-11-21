@@ -188,9 +188,9 @@ fn open_replaces_the_socket_a_killed_process_left() {
         run.stdout,
         "\
 t=10ms (from 0s)
-  brightness led1 off 3.488e-10 A over 10ms
-  brightness nano.led_l off 3.481e-10 A over 10ms
-  brightness nano.led_pwr lit 3.014 mA over 10ms
+  brightness led1 off 3.4882796973335236e-10 A over 10ms
+  brightness nano.led_l off 3.4809606749501575e-10 A over 10ms
+  brightness nano.led_pwr lit 3.0136985456123377 mA over 10ms
 "
     );
     runtime

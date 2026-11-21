@@ -218,6 +218,12 @@ fn part_says_how_it_plugs_into_a_breadboard() {
         "{}",
         text("nano-board")
     );
+    assert!(
+        text("npn-2n2222-to92")
+            .contains("does not plug into a breadboard: two legs in one strip short\n"),
+        "{}",
+        text("npn-2n2222-to92")
+    );
 
     let (code, stdout, stderr) = orbe(&["part", "led-5mm", "--json"]);
     assert_eq!(code, 0, "{stderr}");

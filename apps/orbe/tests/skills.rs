@@ -1,5 +1,6 @@
 //! The skills `orbe skills` prints, held to this binary. The core skill's worked example runs
-//! from an empty folder and prints what the skill shows, and the stub's commands work.
+//! from an empty folder and prints what the skill shows, the topics' examples run on it, each
+//! skill fits in one read, and the stub's commands work.
 
 #![cfg(target_os = "linux")]
 
@@ -162,18 +163,12 @@ fn says(skill: &str, sentence: &str) {
     );
 }
 
-/// Every block of the core skill, in order, in one folder: each file block is written and
-/// each `console` block runs as shown.
-#[test]
-fn the_core_examples_run_from_an_empty_folder_as_shown() {
-    let text = skill("core");
-    let project = tempfile::tempdir().unwrap();
-    let dir = project.path();
-    fs::create_dir_all(dir.join("build")).unwrap();
-    fs::copy(common::firmware(), dir.join("build/button.ino.hex")).unwrap();
+/// Every block of a skill, in order, in `dir`: each file block is written and each `console`
+/// block runs as shown. Returns the `console` blocks.
+fn run_blocks(text: &str, dir: &Path) -> Vec<String> {
     let runtime = Runtime::new();
     let mut sessions = Vec::new();
-    for (info, body) in blocks(&text) {
+    for (info, body) in blocks(text) {
         match info.split_once(' ') {
             Some(("diff", file)) => apply_diff(dir, file, &body),
             Some((_, file)) => write_file(dir, file, &body),
@@ -184,15 +179,51 @@ fn the_core_examples_run_from_an_empty_folder_as_shown() {
             None => {}
         }
     }
-    assert!(sessions.len() >= 2, "{} sessions", sessions.len());
+    wait_until("each example closes its session", || {
+        runtime.daemons().is_empty()
+    });
+    sessions
+}
+
+#[test]
+fn the_core_examples_run_from_an_empty_folder_as_shown() {
+    let project = tempfile::tempdir().unwrap();
+    let dir = project.path();
+    fs::create_dir_all(dir.join("build")).unwrap();
+    fs::copy(common::firmware(), dir.join("build/button.ino.hex")).unwrap();
+    let sessions = run_blocks(&skill("core"), dir);
     assert!(
         sessions[0].matches("$ orbe ").count() >= 10,
         "the worked example"
     );
     assert!(sessions[0].contains("\n$ orbe test\n"));
-    wait_until("each example closes its session", || {
-        runtime.daemons().is_empty()
-    });
+}
+
+/// The reference skill's examples run on the core skill's worked example, and the parts
+/// skill's from an empty folder.
+#[test]
+fn the_topic_examples_run_as_shown() {
+    let project = worked_example();
+    let sessions = run_blocks(&skill("reference"), project.path());
+    assert!(sessions.len() >= 3, "{} sessions", sessions.len());
+    let empty = tempfile::tempdir().unwrap();
+    let sessions = run_blocks(&skill("parts"), empty.path());
+    assert!(!sessions.is_empty());
+}
+
+/// Each skill prints at most 16 KB, so an agent that shows only the start and end of a long
+/// output still reads all of it.
+#[test]
+fn each_skill_fits_in_one_read() {
+    let runtime = Runtime::new();
+    let list = runtime.orbe(Path::new("."), &["skills", "list"]).ok();
+    for name in list.stdout.lines().map(|l| l.split(' ').next().unwrap()) {
+        let size = skill(name).len();
+        assert!(
+            size <= 16 * 1024,
+            "`orbe skills get {name}` prints {size} bytes"
+        );
+    }
 }
 
 #[test]
@@ -218,7 +249,7 @@ fn the_nano_pins_the_skills_call_not_simulated_are_the_ones_the_reader_leaves_ou
         .map(|(pin, _)| pin.as_str())
         .collect();
     assert_eq!(left_out, BTreeSet::from(["3V3", "A6", "A7", "VIN"]));
-    assert!(skill("core").contains("The Nano's 3V3, VIN, A6 and A7 pins"));
+    assert!(skill("reference").contains("The Nano's 3V3, VIN, A6 and A7 pins"));
     let arduino = skill("arduino");
     let nano = board_section(&arduino, "nano-board");
     for pin in &left_out {
@@ -240,11 +271,11 @@ fn the_uno_pins_the_skills_call_not_simulated_are_the_ones_the_reader_leaves_out
         .map(|(pin, _)| pin.as_str())
         .collect();
     assert_eq!(left_out, BTreeSet::from(["VIN"]));
-    let core = skill("core");
+    let reference = skill("reference");
     let arduino = skill("arduino");
     let uno = board_section(&arduino, "uno-board");
-    says(&core, "The Uno's VIN pin and barrel jack.");
-    says(&core, "The Uno's 3V3 works.");
+    says(&reference, "The Uno's VIN pin and barrel jack.");
+    says(&reference, "The Uno's 3V3 works.");
     for pin in &left_out {
         assert!(
             uno.contains(&format!("`{pin}`")),
@@ -349,7 +380,7 @@ fn skills_list_and_get_print_text_and_json_and_name_the_skills_on_a_typo() {
         .lines()
         .map(|l| l.split(' ').next().unwrap())
         .collect();
-    assert_eq!(names, ["core", "arduino"]);
+    assert_eq!(names, ["core", "arduino", "parts", "reference"]);
 
     let json = runtime
         .orbe(here, &["skills", "list", "--json"])
@@ -369,7 +400,7 @@ fn skills_list_and_get_print_text_and_json_and_name_the_skills_on_a_typo() {
     assert_eq!(typo.code, 2);
     assert_eq!(
         typo.stderr,
-        "error[usage]: no skill named `cor`\n  hint: the skills are core, arduino\n"
+        "error[usage]: no skill named `cor`\n  hint: the skills are core, arduino, parts, reference\n"
     );
     let typo = runtime
         .orbe(here, &["skills", "get", "cor", "--json"])
@@ -708,13 +739,13 @@ fn a_flag_on_a_test_line_is_a_usage_error_except_as_serial_text() {
         run.stdout
     );
 
-    let core = skill("core");
+    let reference = skill("reference");
     says(
-        &core,
+        &reference,
         "Each line is a live command without `orbe`. `--json`, `--session`, `--help` or `-h` on a line is a usage error, except as the text after `serial contains`. Live, `--help` anywhere prints help, so `orbe expect serial contains --help` prints help, while the same test line looks for that text.",
     );
     says(
-        &core,
+        &reference,
         "`\"...\"` holds spaces, and inside it only `\\\"` and `\\\\` escape, so a test cannot name a line ending.",
     );
 }
@@ -748,7 +779,7 @@ fn the_session_name_rule_core_states_is_the_one_orbe_follows() {
     assert_eq!(stem(&name(&repo.join("notes"))), "repo");
     assert_eq!(stem(&name(&plain)), "plain");
     says(
-        &skill("core"),
+        &skill("reference"),
         "By default it comes from the project folder, the nearest one up with `scene.jsonc` or `parts.lock`, so each project gets its own, and its `tests/` folder shares it. Outside a project it comes from the git repository's root folder, else the current folder.",
     );
 }
@@ -816,7 +847,7 @@ fn the_check_findings_core_states_are_the_ones_orbe_reports() {
         fs::write(&file, text).unwrap();
     }
     says(
-        &core,
+        &skill("parts"),
         "A copy that differs, even in spacing, is a `part_modified` error. A board built from other parts, such as `nano-board`, is the exception. An edit to it checks, with a note.",
     );
 }
@@ -969,19 +1000,19 @@ fn a_flag_before_the_command_gets_a_hint_whose_line_runs() {
 /// past the last input's time plus the window sees the switch settled. Two windows, with a
 /// press last and a release last.
 #[test]
-fn a_bouncing_switch_reads_settled_where_core_says() {
-    let core = skill("core");
+fn a_bouncing_switch_reads_settled_where_reference_says() {
+    let reference = skill("reference");
     for sentence in [
         "an input on it lands after the window of the one before.",
         "a `release` and a `press` with no `step` between land 2 ms apart. `step --until @led1 lit` stops once the average crosses 2 mA, after the first contact has opened again inside the bounce window",
         "To read a bouncing switch settled, step past the time in the last input's reply plus the window.",
     ] {
-        says(&core, sentence);
+        says(&reference, sentence);
     }
-    let (_, diff) = blocks(&core)
+    let (_, diff) = blocks(&reference)
         .into_iter()
         .find(|(info, _)| info == "diff scene.jsonc")
-        .expect("core shows its bounce change");
+        .expect("reference shows its bounce change");
     let project = worked_example();
     let dir = project.path();
     let scene = fs::read_to_string(dir.join("scene.jsonc")).unwrap();
@@ -1024,7 +1055,7 @@ fn a_bouncing_switch_reads_settled_where_core_says() {
 #[test]
 fn a_command_sent_while_a_step_runs_waits_for_it() {
     says(
-        &skill("core"),
+        &skill("reference"),
         "A command sent while a `step` runs waits for it.",
     );
     let project = worked_example();
@@ -1155,15 +1186,15 @@ fn a_load_over_the_usb_supply_warns_and_a_wire_across_it_is_a_short() {
     }
     assert_eq!(orbe(&["open"]).code, 1);
 
-    let core = skill("core");
+    let reference = skill("reference");
     says(
-        &core,
+        &reference,
         &format!(
             "A load over that on 5V, such as 2.5 ohm from 5V to GND ({peak:.1} A), warns `rating.current` on the supply, `#nano__usb__host.i (nano.usb)`, at {peak:.1} A over its 0.5 A rating, and on the Schottky behind 5V, `#nano__diode.i (nano.diode)`, which is rated 0.5 A too."
         ),
     );
     says(
-        &core,
+        &reference,
         "A wire from the Nano's 5V straight to GND is a short: `orbe check` and `orbe open` refuse the scene with `net.short`, naming the wire.",
     );
 }
@@ -1277,9 +1308,9 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     );
     orbe(&["close"]).ok();
 
-    let core = skill("core");
+    let reference = skill("reference");
     says(
-        &core,
+        &reference,
         &format!(
             "With D13 wired straight to `led1.anode` and no `r1`, the LED draws {:.0} mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `step 20ms` after it lists `warning[rating.current]` for `#nano__mcu.pin.PB5 (nano.D13)`, the chip pin behind D13, over its 40 mA rating. `expect no diagnostics` fails. The LED holds D13 at {:.1} V, so D13 reads `{}` while the LED is {}.",
             led["i"].as_f64().unwrap() * 1e3,
@@ -1289,21 +1320,21 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
         ),
     );
     says(
-        &core,
+        &reference,
         "`orbe lint` warns of it before any run, with `warning[scene.led_no_resistor]` on `led1`.",
     );
     says(
-        &core,
+        &reference,
         &format!("Give each LED a series resistor, such as {series} ohm from a 5 V pin."),
     );
     says(
-        &core,
-        "- It warns `rating.current` above 30 mA and `rating.power` above 75 mW.",
+        &runtime.orbe(dir, &["part", "led-5mm"]).ok().stdout,
+        "ratings\n  current  30 mA\n  power  75 mW\n",
     );
 }
 
 #[test]
-fn a_resistor_over_its_power_rating_warns_as_its_parts_line_says() {
+fn a_resistor_over_its_power_rating_warns_as_orbe_part_says() {
     let project = worked_example();
     let dir = project.path();
     write_file(
@@ -1328,14 +1359,17 @@ fn a_resistor_over_its_power_rating_warns_as_its_parts_line_says() {
         "{open}"
     );
     runtime.orbe(dir, &["close"]).ok();
-    says(&skill("core"), "- It warns `rating.power` above 250 mW.");
+    says(
+        &runtime.orbe(dir, &["part", "resistor-axial"]).ok().stdout,
+        "ratings\n  power  250 mW\n",
+    );
 }
 
 #[test]
 fn part_readings_show_a_pin_edge_where_until_stops_and_led_l_follows_d13() {
     let core = skill("core");
     says(
-        &core,
+        &skill("reference"),
         "A pin condition stops 1 ps after the exact edge. `@led1.i` shows that current there, and the light state follows the average over 20 ms.",
     );
     says(
@@ -1428,7 +1462,7 @@ fn orbe_test_leaves_an_open_session_alone_and_none_to_close() {
     says(
         &core,
         &format!(
-            "9. Run `orbe close` when the live work is done. A `{code}` error from it means nothing was open.\n10. Write what worked as `tests/<name>.test` and run `orbe test`. It leaves no session to close."
+            "8. Run `orbe close` when the live work is done. A `{code}` error from it means nothing was open. `orbe test` leaves no session to close."
         ),
     );
     says(
@@ -1441,7 +1475,7 @@ fn orbe_test_leaves_an_open_session_alone_and_none_to_close() {
 fn no_diagnostics_says_a_chip_warning_can_show_one_engine_step_late() {
     says(
         &skill("core"),
-        "A chip warning can show up to one engine step (10 ms) late, so step that far past its cause first.",
+        "A chip warning can show up to one engine step (`sim.max_step`, 10 ms by default) late, so step that far past its cause first.",
     );
     let project = worked_example();
     let dir = project.path();
@@ -1463,10 +1497,10 @@ fn no_diagnostics_says_a_chip_warning_can_show_one_engine_step_late() {
     }
 }
 
-/// The worked example with every lint rule broken once: D13 straight to the LED, D9 through 10 ohm
-/// into a second LED, a part of its own with no model, a turn past 180 degrees, and the resistor
-/// left over plugged into one strip of a breadboard. Each code `orbe lint` prints is in the core
-/// skill's warnings table, the table names no other, and `orbe open` shows only `net.floating`.
+/// The worked example with every lint rule broken once: D13 straight to the LED, a part of its
+/// own with no model, a turn past 180 degrees, and the resistor left over plugged into one strip of
+/// a breadboard. Each code `orbe lint` prints is in the reference skill's
+/// warnings table, the table names no other, and `orbe open` shows only `net.floating`.
 #[test]
 fn the_warnings_table_lists_the_codes_lint_prints_and_open_shows_only_the_engines() {
     let project = worked_example();
@@ -1476,14 +1510,6 @@ fn the_warnings_table_lists_the_codes_lint_prints_and_open_shows_only_the_engine
     let broken = scene
         .replace("[\"nano.D13\", \"r1.a\"]", "[\"nano.D13\", \"led1.anode\"]")
         .replace("[\"r1.b\", \"led1.anode\"],", "")
-        .replace(
-            "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },",
-            "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },\n    \"rh\": { \"type\": \"resistor-axial\", \"resistance\": \"10\" },\n    \"hot\": { \"type\": \"led-5mm\", \"color\": \"red\" },",
-        )
-        .replace(
-            "[\"led1.cathode\", \"nano.GND\"],",
-            "[\"led1.cathode\", \"nano.GND\"],\n    [\"nano.D9\", \"rh.a\"],\n    [\"rh.b\", \"hot.anode\"],\n    [\"hot.cathode\", \"nano.GND\"],",
-        )
         .replace(
             "\"parts\": {",
             "\"parts\": {\n    \"jump\": { \"type\": \"./jumper.jsonc\" },\n    \"bb\": { \"type\": \"breadboard-400\" },",
@@ -1506,8 +1532,8 @@ fn the_warnings_table_lists_the_codes_lint_prints_and_open_shows_only_the_engine
         Some(rest.split(']').next()?.to_string())
     };
     let printed: BTreeSet<String> = lint.lines().filter_map(code).collect();
-    let core = skill("core");
-    let table: BTreeSet<String> = core
+    let reference = skill("reference");
+    let table: BTreeSet<String> = reference
         .split("## Warnings")
         .nth(1)
         .and_then(|rest| rest.split("\n## ").next())
@@ -1530,14 +1556,15 @@ fn the_warnings_table_lists_the_codes_lint_prints_and_open_shows_only_the_engine
         "{open}"
     );
     says(
-        &core,
+        &reference,
         "`orbe open` shows none of these warnings except `net.floating`.",
     );
 }
 
-/// `orbe skills get core` starts from a Block, and prints a breadboard's holes as ranges.
+/// `orbe skills get core` starts from a Block, and `orbe part` prints a breadboard's holes as
+/// ranges, a part's pins, params and an LED's brightness ranges.
 #[test]
-fn the_core_skill_starts_from_a_block_and_ranges_its_holes() {
+fn the_core_skill_starts_from_a_block_and_orbe_part_prints_a_part() {
     let core = skill("core");
     let loop_ = core
         .split("## The loop")
@@ -1565,6 +1592,8 @@ fn the_core_skill_starts_from_a_block_and_ranges_its_holes() {
             "{id} is not a line of the loop"
         );
     }
+    let runtime = Runtime::new();
+    let part = |id: &str| runtime.orbe(Path::new("."), &["part", id]).ok().stdout;
     for (id, rows) in [
         (
             "breadboard-400",
@@ -1575,20 +1604,28 @@ fn the_core_skill_starts_from_a_block_and_ranges_its_holes() {
             "rows a to j at columns 1 to 63; rows W to Z at columns 3 to 7, 9 to 13",
         ),
     ] {
-        let section = core.split(&format!("### `{id}`")).nth(1).unwrap();
-        let pins = section
+        let card = part(id);
+        let holes = card
             .lines()
-            .find(|line| line.starts_with("- Pins:"))
+            .skip_while(|line| !line.starts_with("holes "))
+            .nth(1)
             .unwrap();
-        assert!(pins.contains(rows), "{pins}");
-        assert!(!pins.contains("`a1`"), "{pins}");
-        assert!(pins.len() < 400, "{id} pins line is {} bytes", pins.len());
+        assert!(holes.contains(rows), "{holes}");
+        assert!(
+            holes.len() < 400,
+            "{id} holes line is {} bytes",
+            holes.len()
+        );
     }
-    let led = core.split("### `led-5mm`").nth(1).unwrap();
-    let pins = led
-        .lines()
-        .find(|line| line.starts_with("- Pins:"))
-        .unwrap();
-    assert!(pins.contains("`anode`"), "{pins}");
-    assert!(pins.contains("`cathode`"), "{pins}");
+    let led = part("led-5mm");
+    says(&led, "pins\n  anode  1\n  cathode  2\n");
+    says(
+        &led,
+        "  lit while that average is above 2 mA\n  dim while that average is above 100 uA and at or below 2 mA\n  off while that average is at or below 100 uA\n",
+    );
+    says(&part("nano-board"), "\nNano (CH340 clone)\n");
+    says(
+        &part("trimmer-3362p"),
+        "  resistance: a value in ohm above 0, required\n  position: a number above 0 and below 1, 0.5 by default\n",
+    );
 }

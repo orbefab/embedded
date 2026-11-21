@@ -7,7 +7,7 @@ use orbe_engine::name::Ref as EngineRef;
 
 use super::{Open, Outcome, engine_name, fail, failed, quantity, t, unit_of};
 use crate::condition::{Condition, Op, State as Want, Unit};
-use crate::reply::{Check, Code, Data, Diagnostic, Error, Level, Light, number};
+use crate::reply::{Check, Code, Data, Diagnostic, Error, Level, Light, current, number};
 use crate::target::Target;
 
 /// What a condition reads, resolved against the open scene.
@@ -185,10 +185,10 @@ impl Open {
                 (
                     glow.state == *want,
                     format!(
-                        "{part} {}, i={} A, brightness={} A over {}",
+                        "{part} {}, i={}, brightness={} over {}",
                         glow.state.as_str(),
-                        number(instant),
-                        number(glow.amperes),
+                        current(instant),
+                        current(glow.amperes),
                         t(glow.over_ps)
                     ),
                 )
@@ -204,8 +204,8 @@ impl Open {
                 (
                     op.holds(glow.amperes, *value),
                     format!(
-                        "{label} = {} A over {}",
-                        number(glow.amperes),
+                        "{label} = {} over {}",
+                        current(glow.amperes),
                         t(glow.over_ps)
                     ),
                 )
@@ -224,7 +224,13 @@ impl Open {
                 let seen = self.read(column);
                 (
                     op.holds(seen, *value),
-                    format!("{label} = {} {}", number(seen), unit.as_str()),
+                    format!(
+                        "{label} = {}",
+                        match unit {
+                            Unit::Ampere => current(seen),
+                            _ => format!("{} {}", number(seen), unit.as_str()),
+                        }
+                    ),
                 )
             }
             Bound::SerialContains(text) => {

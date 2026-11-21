@@ -105,12 +105,13 @@ fn the_first_target_reads_the_engine_values_while_pressed() {
         run.stdout
     );
     assert!(
-        run.stdout.contains("\n  led1 lit i=11.29 mA v="),
+        run.stdout
+            .contains("\n  led1 lit i=11.292504388060703 mA v="),
         "{}",
         run.stdout
     );
     assert!(
-        run.stdout.contains("\n  led1.i 11.29 mA\n"),
+        run.stdout.contains("\n  led1.i 11.292504388060703 mA\n"),
         "{}",
         run.stdout
     );
@@ -167,9 +168,9 @@ fn each_command_replies_in_text() {
         [
             "3> step 100ms",
             "  t=100ms (from 0s)",
-            "    brightness led1 off 1.278e-13 A over 20ms",
-            "    brightness nano.led_l off 1.278e-13 A over 20ms",
-            "    brightness nano.led_pwr lit 3.014 mA over 20ms",
+            "    brightness led1 off 1.2775403302174304e-13 A over 20ms",
+            "    brightness nano.led_l off 1.2775344350286488e-13 A over 20ms",
+            "    brightness nano.led_pwr lit 3.0136985454632046 mA over 20ms",
         ]
     );
     assert_eq!(block(2)[0], "4> expect @led1 off");
@@ -197,11 +198,11 @@ fn each_command_replies_in_text() {
     );
     assert_eq!(
         until[4],
-        "    by 103ms led1 dim, brightness=1.692 mA over 20ms"
+        "    by 103ms led1 dim, brightness=1.6915818683638897 mA over 20ms"
     );
     assert_eq!(
         until[6],
-        "    by 104ms led1 lit, brightness=2.256 mA over 20ms"
+        "    by 104ms led1 lit, brightness=2.2562070877605347 mA over 20ms"
     );
 
     assert_eq!(
@@ -215,7 +216,7 @@ fn each_command_replies_in_text() {
         block(6),
         [
             "8> expect @led1.i > 5mA",
-            "  passed @led1.i > 5mA (led1.i = 11.29 mA)"
+            "  passed @led1.i > 5mA (led1.i = 11.2925043880606 mA)"
         ]
     );
 
@@ -243,7 +244,7 @@ fn each_command_replies_in_text() {
     );
     assert_eq!(
         snapshot[6],
-        "  led1  led-5mm             lit i=11.29 mA brightness=2.256 mA over 20ms"
+        "  led1  led-5mm             lit i=11.2925043880606 mA brightness=2.2562070877605347 mA over 20ms"
     );
     assert_eq!(snapshot[7], "  diagnostics  none");
     assert_eq!(snapshot.len(), 8, "{}", snapshot.join("\n"));
@@ -266,7 +267,7 @@ fn each_command_replies_in_text() {
     );
     assert_eq!(
         step[5],
-        "    by 126ms led1 off, brightness=1.278e-13 A over 20ms"
+        "    by 126ms led1 off, brightness=1.277543604373932e-13 A over 20ms"
     );
     assert_eq!(
         block(10),
@@ -373,7 +374,7 @@ fn each_command_replies_with_one_json_envelope() {
     );
 
     assert_eq!(high["data"]["actual"], "nano.D13 high");
-    assert_eq!(compare["data"]["actual"], "led1.i = 0.0112925043880606 A");
+    assert_eq!(compare["data"]["actual"], "led1.i = 11.2925043880606 mA");
 
     let parts = snapshot["data"]["parts"].as_array().unwrap();
     assert_eq!(parts[0]["ref"], "@nano");
@@ -752,15 +753,16 @@ expect @ldr.v > 4.7V    # the dark: 1 Mohm, 4.715 V
             "quantity": "light",
             "value": 50.0,
             "unit": "lx",
-            "landed_ps": 0,
+            "landed_ps": 20_000_000_000u64,
             "already": true,
         }),
-        "50 lx is the scene's last step, and setting it again succeeds"
+        "50 lx is the scene's step at 20 ms, and setting it again names that time"
     );
     let run = orbe(dir.path(), &["test", "-v"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(
-        run.stdout.contains("\n  light is already 50 lx\n"),
+        run.stdout
+            .contains("\n  light is already set to 50 lx from t=20ms\n"),
         "{}",
         run.stdout
     );

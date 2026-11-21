@@ -58,8 +58,8 @@ fn nets_names_each_net_a_floating_one_and_a_pin_on_none() {
     assert_eq!(
         run.stdout,
         "\
-GND (floating): r.a
-r__b (floating): bb.a1 bb.b1 bb.c1 bb.d1 bb.e1 r.b
+GND: r.a
+r__b: bb.a1 bb.b1 bb.c1 bb.d1 bb.e1 r.b
 spare__a (floating): spare.a
 spare__b (floating): spare.b
 not connected: hdr.1 hdr.2 hdr.3 hdr.4 hdr.5 hdr.6
@@ -78,11 +78,11 @@ not connected: hdr.1 hdr.2 hdr.3 hdr.4 hdr.5 hdr.6
                 "scene": "scene.jsonc",
                 "ground": "GND",
                 "nets": [
-                    { "name": "GND", "pins": ["r.a"], "floating": true },
+                    { "name": "GND", "pins": ["r.a"], "floating": false },
                     {
                         "name": "r__b",
                         "pins": ["bb.a1", "bb.b1", "bb.c1", "bb.d1", "bb.e1", "r.b"],
-                        "floating": true
+                        "floating": false
                     },
                     { "name": "spare__a", "pins": ["spare.a"], "floating": true },
                     { "name": "spare__b", "pins": ["spare.b"], "floating": true }
@@ -99,4 +99,29 @@ not connected: hdr.1 hdr.2 hdr.3 hdr.4 hdr.5 hdr.6
         "{}",
         missing.stderr
     );
+}
+
+/// A board's own one-pin nets, such as the USB serial DTR, and an open AREF, are not floating.
+#[test]
+fn a_bare_nano_does_not_mark_its_internal_nets_floating() {
+    let dir = common::project("nano-button");
+    fs::write(
+        dir.path().join("scene.jsonc"),
+        r#"{
+  "format": 1,
+  "parts": { "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" } }
+}
+"#,
+    )
+    .unwrap();
+    let run = orbe(dir.path(), &["nets"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    for name in ["nano__usb_serial__DTR", "nano__AREF"] {
+        let line = run
+            .stdout
+            .lines()
+            .find(|line| line.starts_with(name))
+            .unwrap_or_else(|| panic!("{name} missing from {}", run.stdout));
+        assert!(!line.contains("(floating)"), "{line}\n{}", run.stdout);
+    }
 }

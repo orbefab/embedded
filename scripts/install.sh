@@ -148,7 +148,7 @@ resolve_latest() {
   [ -z "$base" ] || die "--base needs a version, such as --version 0.1.0"
   command -v curl >/dev/null 2>&1 || die "need curl to find the latest release"
   latest_url=$repo/releases/latest
-  effective=$(curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 2 -o /dev/null -w '%{url_effective}' "$latest_url") || die "could not read $latest_url"
+  effective=$(curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 2 --speed-limit 1 --speed-time 30 -o /dev/null -w '%{url_effective}' "$latest_url") || die "could not read $latest_url"
   tag=${effective##*/}
   case $tag in
     v[0-9]*) version=${tag#v} ;;
@@ -177,7 +177,7 @@ fetch() {
   url=$1
   dest=$2
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 2 -o "$dest" "$url" || return 1
+    curl -fsSL --connect-timeout 15 --retry 3 --retry-delay 2 --speed-limit 1 --speed-time 30 -o "$dest" "$url" || return 1
   elif command -v wget >/dev/null 2>&1; then
     wget -q --timeout=15 --tries=3 -O "$dest" "$url" || return 1
   else
