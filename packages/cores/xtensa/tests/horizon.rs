@@ -1,7 +1,9 @@
 //! The core keeps the lines it read until the bus's next event, an access the bus says can move
 //! them, or the next run. A device register here raises a level-2 line when it is read or
 //! written, as a read of I2C0 settles the master and can raise `TRANS_COMPLETE`, and as a store
-//! to a peripheral's interrupt enable, with its raw bit already latched, raises a line.
+//! to a peripheral's interrupt enable, with its raw bit already latched, raises a line. A status
+//! register beside it raises the line when written and not when read, as a UART's `STATUS`
+//! holds a FIFO count a load only reads.
 
 use orbe_xtensa::{Bus, Cause, Config, Core, Cycle, Esp32, Exit, Sr, Width};
 
@@ -11,6 +13,7 @@ const WOE: u32 = 1 << 18;
 const LINE2: u32 = 1 << 19;
 const RAM: u32 = 0x3ffb_0000;
 const DEVICE: u32 = 0x6001_3000;
+const STATUS: u32 = DEVICE + 4;
 
 struct Device {
     code: Vec<u8>,
@@ -50,13 +53,13 @@ impl Bus for Device {
                 self.high = true;
                 Ok(0)
             }
-            RAM => Ok(0),
+            RAM | STATUS => Ok(0),
             _ => Err(Exit::Fault(Cause::LoadProhibited)),
         }
     }
 
     fn store(&mut self, _now: Cycle, addr: u32, _width: Width, _value: u32) -> Result<(), Exit> {
-        if addr == DEVICE {
+        if addr == DEVICE || addr == STATUS {
             self.high = true;
             Ok(())
         } else {
@@ -76,6 +79,10 @@ impl Bus for Device {
 
     fn access_moves_lines(&self, addr: u32) -> bool {
         addr != RAM
+    }
+
+    fn load_moves_lines(&self, addr: u32) -> bool {
+        addr != RAM && addr != STATUS
     }
 }
 
@@ -122,6 +129,26 @@ fn a_load_that_moves_no_line_keeps_the_lines() {
     assert_eq!(core.pc(), CODE + 9);
     #[cfg(not(feature = "poll-skip-check"))]
     assert_eq!(bus.polls, 1);
+}
+
+/// A load the bus says moves no line, from a register a store to which does, keeps the lines.
+#[test]
+fn a_load_of_a_register_only_a_store_to_which_moves_the_lines_keeps_them() {
+    let mut bus = Device::new("222300f02000f02000");
+    let mut core = setup(STATUS);
+    core.run_until(&mut bus, Cycle(3));
+    assert_eq!(core.pc(), CODE + 9);
+    #[cfg(not(feature = "poll-skip-check"))]
+    assert_eq!(bus.polls, 1);
+}
+
+/// A store to that register raises the line, and the next step takes it.
+#[test]
+fn a_store_to_a_register_whose_loads_keep_the_lines_is_seen_at_the_next_step() {
+    let mut bus = Device::new("226300f02000f02000");
+    let mut core = setup(STATUS);
+    core.run_until(&mut bus, Cycle(4));
+    assert_eq!(core.special(Sr::Epc2), CODE + 3, "taken after the store");
 }
 
 /// `s32i a2, a3, 0` and two `nop`s. The store raises the line, and the next step takes it.

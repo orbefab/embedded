@@ -618,6 +618,15 @@ impl Soc {
         true
     }
 
+    /// A load of a UART's `STATUS` or of USB Serial/JTAG's `EP1_CONF` settles its peripheral
+    /// to the load's tick, as a poll does, and changes nothing else, so it moves no line. A
+    /// firmware that prints reads one of them before each byte it sends.
+    pub(crate) fn load_moves_lines(addr: u32) -> bool {
+        let word = addr & !3;
+        let status = uart::BASES.iter().any(|&base| word == base + uart::STATUS);
+        !status && word != USB_SERIAL_JTAG + usb::EP1_CONF && Self::access_moves_lines(addr)
+    }
+
     pub(crate) fn sram_offset(addr: u32, fetch: bool) -> Option<u32> {
         RAM.iter()
             .filter(|w| w.code || !fetch)
@@ -1742,6 +1751,10 @@ impl Bus for CoreBus<'_> {
 
     fn access_moves_lines(&self, addr: u32) -> bool {
         Soc::access_moves_lines(addr)
+    }
+
+    fn load_moves_lines(&self, addr: u32) -> bool {
+        Soc::load_moves_lines(addr)
     }
 
     fn next_event(&mut self, now: Cycle) -> Option<Cycle> {

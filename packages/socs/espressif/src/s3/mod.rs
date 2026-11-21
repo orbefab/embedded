@@ -1577,6 +1577,21 @@ mod tests {
         }
     }
 
+    /// A load of a UART's `STATUS` or of `EP1_CONF` keeps the lines. A load of a FIFO takes a
+    /// byte and a store to a status word may start a transfer, so each of those still moves them.
+    #[test]
+    fn only_a_load_of_a_status_word_keeps_the_lines() {
+        for base in uart::BASES {
+            assert!(!Soc::load_moves_lines(base + 0x1c), "{base:#x}");
+            assert!(Soc::load_moves_lines(base), "{base:#x}");
+            assert!(Soc::access_moves_lines(base + 0x1c), "{base:#x}");
+        }
+        assert!(!Soc::load_moves_lines(USB_SERIAL_JTAG + 0x04));
+        assert!(Soc::load_moves_lines(USB_SERIAL_JTAG));
+        assert!(Soc::access_moves_lines(USB_SERIAL_JTAG + 0x04));
+        assert!(Soc::load_moves_lines(USB_SERIAL_JTAG + 0x08));
+    }
+
     #[test]
     fn a_load_of_usb_wrap_is_unmodeled() {
         let mut program = Program::new(&[0x6003_9000]);

@@ -582,8 +582,9 @@ impl<C: Config> Core<C> {
         rose & interrupts.nmi != 0
     }
 
-    fn note_lines<B: Bus>(&mut self, bus: &B, addr: u32) {
-        if bus.access_moves_lines(addr) {
+    /// Reads the lines at the next step after an access that `moves` them.
+    fn note_lines(&mut self, moves: bool) {
+        if moves {
             self.lines_until = Cycle(0);
         }
     }
@@ -786,7 +787,7 @@ impl<C: Config> Core<C> {
         }
         let mut value = 0;
         for (at, part, shift) in parts(addr, width) {
-            self.note_lines(bus, at);
+            self.note_lines(bus.load_moves_lines(at));
             let bytes = bus
                 .load(self.cycle, at, part)
                 .map_err(|exit| self.access_trap(exit, op, addr, width))?;
@@ -808,7 +809,7 @@ impl<C: Config> Core<C> {
             self.watch_hit(addr, width, true)?;
         }
         for (at, part, shift) in parts(addr, width) {
-            self.note_lines(bus, at);
+            self.note_lines(bus.access_moves_lines(at));
             bus.store(self.cycle, at, part, value >> shift)
                 .map_err(|exit| self.access_trap(exit, op, addr, width))?;
         }

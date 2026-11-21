@@ -107,11 +107,11 @@ pub trait Bus {
     /// The levels of the interrupt lines at `now`, one bit per interrupt number. The core reads
     /// the bits of the external level, edge and NMI interrupts before an instruction when this
     /// run has not read them yet, when the cycle has reached [`Bus::next_event`], or when the
-    /// previous instruction accessed an address [`Bus::access_moves_lines`] names. Between those
-    /// reads the lines stay as the last read left them. The lines may change at an access or at
-    /// [`Bus::next_event`], so that a run split at any cycle sees the same lines as one run. The
-    /// core compares each call with the last one, so an edge or NMI line must read low on one
-    /// call and high on a later one.
+    /// previous instruction stored to an address [`Bus::access_moves_lines`] names or loaded
+    /// from one [`Bus::load_moves_lines`] names. Between those reads the lines stay as the last
+    /// read left them. The lines may change at an access or at [`Bus::next_event`], so that a run
+    /// split at any cycle sees the same lines as one run. The core compares each call with the
+    /// last one, so an edge or NMI line must read low on one call and high on a later one.
     fn interrupts(&mut self, now: Cycle) -> u32;
     /// The first cycle after `now` at which the lines can change with no access, or `None`. A
     /// poll asks at the cycle of the read. A one-step read does not ask. A core in `WAITI` asks
@@ -131,6 +131,13 @@ pub trait Bus {
     /// the lines it last read until the next event.
     fn access_moves_lines(&self, _addr: u32) -> bool {
         true
+    }
+
+    /// Whether a load from `addr` can change what [`Bus::interrupts`] returns. The default is
+    /// [`Bus::access_moves_lines`]. A register whose load changes nothing a poll reads answers
+    /// `false` here even when a store to it can move the lines.
+    fn load_moves_lines(&self, addr: u32) -> bool {
+        self.access_moves_lines(addr)
     }
 
     /// A count that moves whenever a word [`Bus::fetch`] returned may read differently: a store
