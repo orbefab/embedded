@@ -409,6 +409,13 @@ fn a_part_that_uses_a_version_the_registry_lacks_does_not_build() {
     assert!(invalid(src.path()).contains("uses `lamp@1.0.0`, which these parts lack"));
 }
 
+/// Whether this volume treats `a` and `A` as one name.
+fn volume_folds_case() -> bool {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("orbe-case-a"), b"a").unwrap();
+    fs::metadata(dir.path().join("orbe-case-A")).is_ok()
+}
+
 /// Each probe is a source a registry must refuse, with what its message names.
 #[test]
 fn the_build_refuses_what_a_client_could_not_trust() {
@@ -476,8 +483,8 @@ fn the_build_refuses_what_a_client_could_not_trust() {
         ),
         (
             "a folder that is not an id",
-            &|src| put(src, "parts/Lamp/part.jsonc", LAMP),
-            "parts/Lamp is not an id",
+            &|src| put(src, "parts/Bulb/part.jsonc", LAMP),
+            "parts/Bulb is not an id",
         ),
         (
             "a file name with a colon",
@@ -518,10 +525,19 @@ fn the_build_refuses_what_a_client_could_not_trust() {
             "a registry's name is `@` and an id",
         ),
     ];
+    let folds_case = volume_folds_case();
     for (what, change, says) in probes {
+        // `readme.md` is the same file as `README.md` on a volume that ignores case.
+        if folds_case && what == "two files one case apart" {
+            continue;
+        }
         let src = third_party();
         change(src.path());
-        let message = invalid(src.path());
+        let message = match build(src.path(), None) {
+            Err(Error::Invalid(message)) => message,
+            Err(other) => panic!("{what}: {other}"),
+            Ok(_) => panic!("{what}: the build accepted it"),
+        };
         assert!(message.contains(says), "{what}: {message}");
     }
 }

@@ -1527,19 +1527,29 @@ fn bytes_put_in_a_copy_the_log_has_not_named_yet_are_never_deleted() {
     }
 }
 
+/// Whether this volume stores `name`. A plain name is written first, so a temp dir that cannot
+/// be used is not mistaken for a name the volume refused.
+fn volume_stores(name: &[u8]) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("plain"), b"").unwrap();
+    fs::write(dir.path().join(std::ffi::OsStr::from_bytes(name)), b"").is_ok()
+}
+
 /// A user folder an overwrite replaces may hold a name that is not UTF-8. The add moved it in
 /// itself, so it deletes it with the old copy.
 #[test]
 fn an_overwrite_deletes_odd_names_it_moved_aside() {
     use std::os::unix::ffi::OsStrExt;
+    let bytes = b"caf\xe9.txt";
+    // APFS refuses a name that is not UTF-8, so an overwrite cannot be given one here.
+    if !volume_stores(bytes) {
+        return;
+    }
     let dir = project();
     add(dir.path(), &["led-5mm"], false).unwrap();
     let folder = dir.path().join("parts/led-5mm");
-    fs::write(
-        folder.join(std::ffi::OsStr::from_bytes(b"caf\xe9.txt")),
-        "x",
-    )
-    .unwrap();
+    fs::write(folder.join(std::ffi::OsStr::from_bytes(bytes)), "x").unwrap();
     let reply = text(&add(dir.path(), &["led-5mm"], true).unwrap());
     assert_eq!(
         reply,
@@ -1646,6 +1656,10 @@ fn every_hinted_path_moves_its_entry_in_sh_and_bash_from_where_the_user_ran() {
         b"\xe2\x80\xae",
     ];
     for name in names {
+        // APFS refuses a name that is not UTF-8. The names it can store still run.
+        if std::str::from_utf8(name).is_err() && !volume_stores(name) {
+            continue;
+        }
         for shell in ["sh", "bash"] {
             let dir = edited_project();
             stop_add(dir.path(), kill_at("do delete"));
@@ -1810,10 +1824,15 @@ fn diff_names_a_read_error_in_the_staging_folder_as_the_next_add_hits_it() {
 #[test]
 fn a_name_that_is_not_utf8_is_printed_so_a_shell_finds_it() {
     use std::os::unix::ffi::OsStrExt;
+    let bytes = b"\xff\xfe it's";
+    // APFS refuses a name that is not UTF-8, so the printed `mv` cannot be tried here.
+    if !volume_stores(bytes) {
+        return;
+    }
     for point in ["do clean", "do delete"] {
         let dir = edited_project();
         stop_add(dir.path(), kill_at(point));
-        let name = std::ffi::OsStr::from_bytes(b"\xff\xfe it's");
+        let name = std::ffi::OsStr::from_bytes(bytes);
         fs::write(dir.path().join("parts/.orbe-add").join(name), "KEEP-ME\n").unwrap();
         let error = diff_predicts(dir.path()).err().unwrap().to_string();
         assert!(!error.contains('\u{fffd}'), "{point}: {error}");
