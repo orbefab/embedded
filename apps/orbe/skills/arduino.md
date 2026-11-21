@@ -64,6 +64,17 @@ The path starts from the scene's folder. After each change to the sketch, compil
 
 `cpu=atmega328old` in the FQBN changes only the bootloader used for upload. It builds the same `.hex`, so the simulation does not need it.
 
+## A Block's firmware
+
+A Block's sketch is `firmware/<name>/<name>.ino`, and its scene names `firmware/<name>.hex`. `<name>` is the sketch folder, such as `fade` for `nano-led-fade` and `button` for `nano-button-led`. Compile that folder from the project folder, then copy the program hex to the path the scene already names. For a Block on the Uno, use `arduino:avr:uno` as the FQBN.
+
+```sh
+arduino-cli compile --fqbn arduino:avr:nano --output-dir build firmware/fade
+cp build/fade.ino.hex firmware/fade.hex
+```
+
+A Block's tests check its shipped behaviour, so a change to the firmware's timing or pins needs its tests updated or a new test written.
+
 ## The simulated Nano and Uno
 
 <!-- boards nano-board uno-board -->
