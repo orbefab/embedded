@@ -7,7 +7,9 @@
 //!
 //! A part is read as placed, before a user's scene sets it: a required param with no default
 //! has no value, so a body that param writes is not compiled, and a scene ground is not needed.
-//! A body it does not write is compiled. A Block's scene sets what it uses, so it is read in full.
+//! A body it does not write is compiled. A file param, text or blob, is no different: a default
+//! is read from the part's folder, and a required one with no default names no file. A Block's
+//! scene sets what it uses, so it is read in full.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -222,8 +224,44 @@ fn name_block(id: &str, found: Vec<Diagnostic>) -> Vec<Diagnostic> {
 
 #[cfg(test)]
 mod tests {
-    use super::within;
-    use std::path::Path;
+    use super::{SCENE, lock_text, part_project, project_files, within};
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
+
+    /// The catalog's ESP32-S3 parts, probed as the build probes them. The chip's `rom` default
+    /// is read. `app` and `partitions` have no value and name no file.
+    #[test]
+    fn the_esp32s3_parts_probe_the_rom_and_leave_app_and_partitions_unset() {
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let parts = crate::folders(&repo, "parts").unwrap();
+        let cards = orbe_scene::cards(&parts).unwrap();
+        let official = BTreeSet::new();
+        let project = project_files(&parts, &lock_text(&cards, &official, "@orbefab"));
+        for (id, rom) in [
+            ("esp32s3-qfn56", "r1.rom"),
+            ("esp32s3-wroom-1-n16r8", "r1.u1.rom"),
+            ("esp32s3-devkitc-1", "r1.mod.u1.rom"),
+        ] {
+            let card = cards.iter().find(|card| card.name == id).unwrap();
+            let placed =
+                orbe_scene::read_placed(&part_project(&project, card), Path::new(SCENE), true);
+            assert_eq!(placed.findings, [], "{id}");
+            let read: Vec<(&str, &str, &str)> = placed
+                .file_paths
+                .iter()
+                .map(|p| (p.file.as_str(), p.site.as_str(), p.path.as_str()))
+                .collect();
+            assert_eq!(
+                read,
+                [(
+                    "parts/esp32s3-qfn56/part.jsonc",
+                    rom,
+                    "esp32s3_rev0_rom.elf"
+                )],
+                "{id}"
+            );
+        }
+    }
 
     #[test]
     fn a_path_stays_within_its_folder_only_while_every_walk_does() {
