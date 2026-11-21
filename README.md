@@ -18,10 +18,12 @@ It installs `orbe` with the 3D viewer into `~/.local/bin`, on Linux x86_64 with 
 
 ```sh
 mkdir demo && cd demo
-orbe add nano-button-led   # copy a Block: a small circuit with its firmware and tests
-orbe test                  # run its tests, headless
-orbe open                  # start the circuit, paused
-orbe show                  # watch it live in 3D, and press play there
+orbe add nano-button-led
+orbe check scene.jsonc
+orbe test
+orbe open --headed
+orbe play
+orbe close
 ```
 
 `orbe search <words>` finds parts, and `orbe part <id>` prints one.

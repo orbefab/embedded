@@ -1070,3 +1070,60 @@ fn follow_old_move(dir: &Path) -> Result<(), Vec<Diagnostic>> {
     }
     orbe_scene::read(&Files::disk(), &dir.join("scene.jsonc")).map(|_| ())
 }
+
+/// A hole past the board names the rows and columns the board has. A neighbor is suggested
+/// only when it is one row or one column away, so `j99` is not read as `j9`.
+#[test]
+fn a_hole_past_the_board_names_the_range_and_only_a_near_hole() {
+    let dir = on_400(
+        r#""led1": { "type": "led-5mm", "color": "red" },"#,
+        r#""led1": { "on": { "anode": "bb.j99" } },"#,
+        r#"["bb.j99", "nano.GND"], ["bb.j31", "nano.5V"], ["bb.W6", "nano.D2"], ["bb.J9", "nano.D13"], ["bb.k31", "nano.A0"]"#,
+    );
+    let found = findings(dir.path());
+    let hint = |needle: &str| {
+        found
+            .iter()
+            .find(|d| d.message.contains(needle))
+            .unwrap_or_else(|| panic!("no finding for {needle}: {found:#?}"))
+            .hint
+            .clone()
+    };
+    let range = "rows a to j at columns 1 to 30; rows W to Z at columns 1 to 5, 7 to 11, 13 to 17, 19 to 23, 25 to 29";
+    let far: Vec<_> = found
+        .iter()
+        .filter(|d| d.message.contains("`j99`"))
+        .collect();
+    assert_eq!(
+        far.len(),
+        2,
+        "the wire and the plug each name j99: {found:#?}"
+    );
+    for diag in far {
+        assert!(diag.hint.contains(range), "{}", diag.hint);
+        assert!(!diag.hint.contains("did you mean"), "{}", diag.hint);
+        assert!(
+            !diag.hint.contains("a1, "),
+            "j99 lists holes instead of the range: {}",
+            diag.hint
+        );
+    }
+    assert!(
+        hint("`j31`").contains("did you mean `bb.j30`?"),
+        "{}",
+        hint("`j31`")
+    );
+    assert!(
+        hint("`W6`").contains("did you mean `bb.W5`?"),
+        "{}",
+        hint("`W6`")
+    );
+    assert!(
+        hint("`J9`").contains("did you mean `bb.j9`?"),
+        "{}",
+        hint("`J9`")
+    );
+    let diagonal = hint("`k31`");
+    assert!(diagonal.contains(range), "{diagonal}");
+    assert!(!diagonal.contains("did you mean"), "{diagonal}");
+}

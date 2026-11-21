@@ -110,22 +110,18 @@ scripts/brand.sh check
 dist=apps/site/dist/client
 own() { grep -rlE "$1" "$dist" --exclude-dir=r --exclude-dir=orbe-wasm --exclude-dir=sources || true; }
 
-# 8787 is wrangler's default and may already be taken. Ask the OS for a free port.
-free_port() {
-  node -e 'const s = require("node:net").createServer().listen(0, "127.0.0.1", () => { process.stdout.write(String(s.address().port) + "\n"); s.close(); })'
-}
+# shellcheck source=scripts/site-port.sh
+source scripts/site-port.sh
 
 if [[ $servers != wrangler ]]; then
 ORBE_SITE_INSTALL=1 scripts/site.sh "${site[@]}" >/dev/null
 scripts/site-install.sh
 
-install_port=$(free_port)
 export ORBE_E2E=site
 export ORBE_SITE_INSTALL_E2E=1
 export ORBE_SITE_SERVERS=vite
-export ORBE_SITE_VITE_PORT=$install_port
-echo "check-site: install-on browser checks on 127.0.0.1:$install_port"
-pnpm exec playwright test apps/site/e2e/install.spec.ts
+echo "check-site: install-on browser checks"
+with_fresh_ports ORBE_SITE_VITE_PORT -- pnpm exec playwright test apps/site/e2e/install.spec.ts
 unset ORBE_SITE_INSTALL_E2E ORBE_SITE_SERVERS
 fi
 
@@ -164,15 +160,11 @@ target=$(cargo metadata --format-version 1 --no-deps |
 export ORBE=$target/debug/orbe
 export ORBE_E2E=site
 export WRANGLER_SEND_METRICS=false
-vite_port=$(free_port)
-wrangler_port=$(free_port)
-export ORBE_SITE_VITE_PORT=$vite_port
-export ORBE_SITE_WRANGLER_PORT=$wrangler_port
 if [[ $servers != both ]]; then
   export ORBE_SITE_SERVERS=$servers
 fi
 if [[ -n $shard ]]; then
-  pnpm exec playwright test --shard="$shard"
+  with_fresh_ports ORBE_SITE_VITE_PORT ORBE_SITE_WRANGLER_PORT -- pnpm exec playwright test --shard="$shard"
 else
-  pnpm exec playwright test
+  with_fresh_ports ORBE_SITE_VITE_PORT ORBE_SITE_WRANGLER_PORT -- pnpm exec playwright test
 fi

@@ -412,8 +412,11 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
 /// Runs jobs, viewers' commands and `play`'s ticks in order until a `close` closes the scene,
 /// or nothing comes for `idle` while it is not playing and no viewer watches. Before the first
 /// scene opens, every command but `open` gets `no_session` and changes nothing, and the process
-/// ends `UNOPENED` after it started. A session at its stop stays, so reads still answer there.
-/// Returns why it ended, for the viewers, and the `close` that ended it, still unanswered.
+/// ends `UNOPENED` after it started. An `open` that fails while no scene is open ends it at
+/// once, and the socket is removed before the client reads the refusal, so a retry starts
+/// clean. A session at its stop stays, so reads still answer there.
+/// Returns why it ended, for the viewers, and the `close` or the failed `open` that ended it,
+/// still unanswered.
 fn serve(
     held: &mut Held,
     queue: &Receiver<Event>,
@@ -441,6 +444,21 @@ fn serve(
                 let reply = held.run(&job);
                 if let Data::Closed { .. } = reply.data {
                     return ("`orbe close` ended the session", Some((job, reply)));
+                }
+                // The socket goes before the client reads this refusal. A retry then finds
+                // nothing, as it would have on the first try. A scene that was already open
+                // stays: a refused open leaves that session as it was.
+                if reply.error.is_some()
+                    && held.live.scene().is_none()
+                    && matches!(
+                        &job.request,
+                        Ok(Request {
+                            ask: Ask::Run(Ok(Command::Open(_))),
+                            ..
+                        })
+                    )
+                {
+                    return ("no scene was opened", Some((job, reply)));
                 }
                 job.answer(&reply);
                 held.after(&reply);
