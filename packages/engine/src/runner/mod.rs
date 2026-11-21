@@ -1,10 +1,4 @@
-//! What `orbe-run` reads and prints: the blobs a run reads, the report of a run, and the images
-//! of a run's displays.
-
-mod png;
-mod view;
-
-pub use view::{ViewReport, view};
+//! What `orbe-run` reads and prints: the blobs a run reads and the report of a run.
 
 use std::fs;
 use std::io::{self, Write};
@@ -74,8 +68,7 @@ pub enum Status {
     Failed,
     /// Exit 2. Bad command line. Nothing written.
     UsageError,
-    /// Exit 3. Could not read the netlist or write the run folder. View: could not read the run
-    /// folder or write an image.
+    /// Exit 3. Could not read the netlist or write the run folder.
     IoError,
 }
 

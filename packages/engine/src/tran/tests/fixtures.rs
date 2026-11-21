@@ -165,7 +165,6 @@ pub(super) fn run_with(
         budget,
         Columns::new(netlist),
         Some(rows),
-        None,
     ) {
         Ok(mut session) => {
             session.warnings.clear();
@@ -220,7 +219,6 @@ pub(super) fn open(netlist: &Netlist, chips: Vec<active::Chip>, budget: Budget) 
         budget,
         Columns::new(netlist),
         Some(Rows::Grid),
-        None,
     )
     .unwrap()
 }

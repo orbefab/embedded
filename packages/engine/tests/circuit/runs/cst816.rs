@@ -1,6 +1,6 @@
 //! `packages/engine/tests/circuits/atmega-cst816`: an ATmega328P at 3.3 V and 8 MHz reads a `cst816` over the TWI and
 //! prints the finger count and the point. The touches sit on the part, and a session that
-//! applies the same points writes the folder `orbe-run run` writes for its export.
+//! applies the same points live reads what a batch run of the example writes.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -13,7 +13,7 @@ use common::{read_vcd, repo};
 use orbe_engine::name::Name;
 use orbe_engine::run_folder::RunFolder;
 use orbe_engine::timestamp::Timestamp;
-use orbe_engine::{DeviceEvent, Input, Session, Setting, Status};
+use orbe_engine::{DeviceEvent, EdgeCursor, Input, Session, Setting, Status};
 
 const TEXT: &str = "1 291 69\r\n1 16 32\r\n";
 
@@ -84,8 +84,10 @@ fn the_sketch_prints_the_points_and_the_decoder_agrees() {
     assert!(text.contains("22 of 22 rows match"), "{text}");
 }
 
+/// The example with its touches taken off, opened, and the same two points applied live, reads
+/// the logic edges and the serial rows a batch run of the example writes.
 #[test]
-fn a_session_touch_finishes_as_a_batch_run_of_the_export() {
+fn a_session_touch_reads_as_a_batch_run_of_the_example() {
     let mut json: serde_json::Value = serde_json::from_slice(
         &std::fs::read(repo(
             "packages/engine/tests/circuits/atmega-cst816/netlist.json",
@@ -97,7 +99,7 @@ fn a_session_touch_finishes_as_a_batch_run_of_the_export() {
     let chip = parts.iter_mut().find(|part| part["name"] == "u2").unwrap();
     chip.as_object_mut().unwrap().remove("touches");
     let bytes = serde_json::to_vec(&json).unwrap();
-    let mut session = Session::record_document(&bytes).unwrap();
+    let mut session = Session::open(orbe_engine::netlist::parse(&bytes).unwrap()).unwrap();
     let part = Name::new("u2").unwrap();
     let first = session
         .apply(&touch(&part, FIRST_AT, FIRST))
@@ -108,14 +110,15 @@ fn a_session_touch_finishes_as_a_batch_run_of_the_export() {
     assert_eq!(first.at, Time::from_ps(FIRST_AT));
     assert_eq!(second.at, Time::from_ps(SECOND_AT));
     assert_eq!(session.advance_to(Time::from_ps(u64::MAX)), Status::Stopped);
-    let export = session.export().unwrap();
-    let stamp = Timestamp::from_unix_seconds(1_700_000_000);
-    let batch = orbe_engine::run(&export, stamp).folder;
-    let folder = session.finish(stamp).unwrap();
-    assert_eq!(folder_paths(&folder), folder_paths(&batch));
-    for ((path, got), (_, want)) in folder.files().zip(batch.files()) {
-        assert!(got == want, "{path} differs");
-    }
+    let example = std::fs::read(repo(
+        "packages/engine/tests/circuits/atmega-cst816/netlist.json",
+    ))
+    .unwrap();
+    let results = orbe_engine::simulate(&orbe_engine::netlist::parse(&example).unwrap());
+    let (edges, _) = session.edges_since(EdgeCursor::default()).unwrap();
+    assert_eq!(edges, results.trace().unwrap().logic().unwrap().changes());
+    let folder = render_example();
+    assert_eq!(common::serial_rows(&session), common::csv_rows(&folder));
     assert_eq!(serial_text(folder.file("traces/serial.csv").unwrap()), TEXT);
 }
 
@@ -321,8 +324,4 @@ fn read_phases() -> Vec<(String, [Option<u8>; 4])> {
         out.push(row("stop", none));
     }
     out
-}
-
-fn folder_paths(folder: &RunFolder) -> Vec<String> {
-    folder.files().map(|(path, _)| path.to_string()).collect()
 }

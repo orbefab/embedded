@@ -123,7 +123,7 @@ fn a_blob_list_names_no_folder() {
         .to_string();
     let message = |netlist: &serde_json::Value, blobs: &Blobs| {
         let json = serde_json::to_vec(netlist).unwrap();
-        let Err(Refused::Invalid(found)) = Session::open_document_with(&json, blobs) else {
+        let Err(Refused::Invalid(found)) = Session::open_json(&json, blobs) else {
             panic!("the netlist is invalid");
         };
         serde_json::to_value(&found[0]).unwrap()["message"]
@@ -591,7 +591,7 @@ fn a_session_lists_an_unmodeled_register_only_once_its_access_is_accepted() {
             .collect()
     };
 
-    let mut session = Session::open_document_with(&json, &blobs).unwrap();
+    let mut session = Session::open_json(&json, &blobs).unwrap();
     session.advance_to(Time::from_ps(u64::MAX));
     let [at] = touched(&session)[..] else {
         panic!("one register touched: {:?}", session.diagnostics());
@@ -601,7 +601,7 @@ fn a_session_lists_an_unmodeled_register_only_once_its_access_is_accepted() {
         "after the loop, at {at:?}"
     );
 
-    let mut session = Session::open_document_with(&json, &blobs).unwrap();
+    let mut session = Session::open_json(&json, &blobs).unwrap();
     session.advance_to(Time::from_ps(at.as_ps() - 1));
     assert_eq!(
         touched(&session),

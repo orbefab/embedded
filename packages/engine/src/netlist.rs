@@ -1,7 +1,6 @@
 //! Nets are ground first, then the rest by name. Parts are by name.
 
 pub mod bounce;
-mod document;
 pub mod elf;
 pub mod flash;
 pub(crate) mod json;
@@ -28,7 +27,6 @@ use crate::device::{
 };
 use crate::mcu::{Atmega328p, Esp32s3};
 
-pub use document::Document;
 pub use waveform::{Baud, Frame, Pulse, Serial, SerialEvent, SerialSend, Shape, Step, Waveform};
 
 /// The netlist `version`s this engine reads, ascending. See docs/engine/netlist.md.

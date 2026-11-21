@@ -109,9 +109,9 @@ impl Session {
     /// last frames are still on the wire starts when the line is idle. The start bit is at that
     /// time. A device event lands on its part, and one equal to the last still lands.
     /// One call appends one event and solves the held step once, however many bytes it
-    /// sends. A batch run of the export takes every accepted step there. The held step is solved
-    /// again with the new edge, and every step that then lands by `now` is accepted. A level or a
-    /// serial start is a jump, so that solve restarts. The status is the session's after that
+    /// sends. A batch run of the netlist with the input scheduled there takes every accepted
+    /// step. The held step is solved again with the new edge, and every step that then lands by
+    /// `now` is accepted. A level or a serial start is a jump, so that solve restarts. The status is the session's after that
     /// re-solve. A failed restart ends the session at the landing. Any other fault ends it at the
     /// accepted step.
     pub fn apply(&mut self, input: &Input) -> Result<Applied, Rejected> {
@@ -170,7 +170,6 @@ impl Session {
 
     /// Arms `changer`'s new edge at `at` and solves the held step again from the accepted one.
     fn land(&mut self, changer: Changer, at: Time) -> Applied {
-        self.opened = None;
         self.breakpoints.arm(changer, at);
         let State::Running { accepted, now, .. } = std::mem::replace(&mut self.state, State::TAKEN)
         else {
@@ -179,34 +178,6 @@ impl Session {
         self.state = self.solved(accepted);
         let status = self.advance_to(now);
         Applied { at, status }
-    }
-
-    /// Whether the session has a document for `export` to write, as `open_document` and
-    /// `record_document` keep.
-    pub fn has_document(&self) -> bool {
-        self.document.is_some()
-    }
-
-    /// The document `open_document` read, with every applied input in its part. A switch event
-    /// is appended to `events`. A plain `voltage`, `current` or `position` becomes `steps`, and
-    /// a `steps` field gains the new levels. A `serial` field gains one event per applied send.
-    /// A device part gains each applied event on its event's field, `touches` on a `cst816`.
-    /// A part with nothing applied is unchanged. A plain source does not become a `serial` source.
-    /// While the session runs, `stop_ps` is the held step's reach, at least `max_step_ps` and at
-    /// most the document's `stop_ps`. No test pins the reach in that bound; the argument in `docs/engine/engine.md` Sessions covers it. A batch run of the export
-    /// takes every step the session accepted and the one it holds. Once the session has ended
-    /// `stop_ps` is the document's.
-    /// `None` for a session `open` made.
-    pub fn export(&self) -> Option<Vec<u8>> {
-        let document = self.document.as_ref()?;
-        let stop = match &self.state {
-            State::Running { next, .. } => next
-                .reach
-                .max(Time::from_ps(self.transient.max_step))
-                .min(self.transient.stop),
-            State::Ended { .. } => self.transient.stop,
-        };
-        Some(document.export(&self.circuit.netlist, stop))
     }
 }
 

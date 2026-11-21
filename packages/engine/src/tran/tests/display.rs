@@ -51,11 +51,13 @@ fn chunked(session: &mut Session, stop: u64, seed: u64) {
 #[test]
 fn the_example_writes_the_same_rows_and_image_in_any_chunking() {
     let json = example("st77916-replay", u64::MAX);
-    let stop = transient(&Document::parse(&json).unwrap().1).stop.as_ps();
+    let netlist = crate::netlist::parse(&json).unwrap();
+    let whole = transient(&netlist);
+    let stop = whole.stop.as_ps();
     let lcd1 = Name::new("lcd1").unwrap();
     let mut folders = Vec::new();
     for seed in [None, Some(3), Some(17)] {
-        let mut session = Session::record_document(&json).unwrap();
+        let mut session = record(netlist.clone(), &whole, Rows::Grid).unwrap();
         match seed {
             None => {
                 session.advance_to(Time::from_ps(stop));

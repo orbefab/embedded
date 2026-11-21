@@ -3,10 +3,10 @@ use orbe_model::Time;
 use orbe_engine::finite::Finite;
 use orbe_engine::name::Ref;
 use orbe_engine::netlist;
-use orbe_engine::run_folder::{RunFolder, render};
+use orbe_engine::run_folder::render;
 use orbe_engine::timestamp::Timestamp;
 use orbe_engine::world::Quantity;
-use orbe_engine::{Rejected, Session, Status, WorldChange};
+use orbe_engine::{EdgeCursor, Rejected, SerialCursor, Session, Status, WorldChange};
 
 use crate::common::{column, simulate, simulate_steps, trace};
 
@@ -167,8 +167,8 @@ fn a_netlist_without_a_world_writes_no_world_column() {
 }
 
 /// The ADC example's pot becomes 10 kohm over the LDR. A `set light` after the session ran
-/// ahead writes the run folder a netlist with that change scheduled writes: trace, serial,
-/// logic and diagnostics.
+/// ahead reads what a run of the netlist with that change scheduled holds: its serial bytes,
+/// its logic changes, and its last row, bit for bit.
 #[test]
 fn a_set_after_the_session_ran_ahead_matches_the_change_scheduled() {
     let path = format!(
@@ -187,7 +187,7 @@ fn a_set_after_the_session_ran_ahead_matches_the_change_scheduled() {
     doc["world"] = serde_json::json!({ "light": serde_json::from_str::<serde_json::Value>(&lux(300.0)).unwrap() });
     let live = serde_json::to_vec(&doc).unwrap();
 
-    let mut session = Session::record_document(&live).unwrap();
+    let mut session = Session::open(netlist::parse(&live).unwrap()).unwrap();
     let asked = Time::from_ps(6_000_000_000);
     session.advance_to(asked);
     assert!(
@@ -196,8 +196,7 @@ fn a_set_after_the_session_ran_ahead_matches_the_change_scheduled() {
     );
     let applied = session.set(&light(50.0)).unwrap();
     assert!(applied.at >= asked);
-    let created = Timestamp::from_unix_seconds(1_700_000_000);
-    let set = session.finish(created).unwrap();
+    assert_eq!(session.advance_to(Time::from_ps(u64::MAX)), Status::Stopped);
 
     doc["world"]["light"] = serde_json::json!({
         "kind": "steps",
@@ -206,15 +205,42 @@ fn a_set_after_the_session_ran_ahead_matches_the_change_scheduled() {
     });
     let scheduled = serde_json::to_vec(&doc).unwrap();
     let netlist = netlist::parse(&scheduled).unwrap();
-    let batch = render(
+    let results = orbe_engine::simulate(&netlist);
+    let batch = trace(&results);
+    let last = batch.time().len() - 1;
+    let probe = session.probe();
+    assert_eq!(probe.at(), batch.time()[last]);
+    for (j, column) in batch.columns().iter().enumerate() {
+        assert_eq!(
+            probe.get(column).unwrap().get().to_bits(),
+            batch.column(j)[last].to_bits(),
+            "{column}"
+        );
+    }
+    let (edges, _) = session.edges_since(EdgeCursor::default()).unwrap();
+    assert_eq!(edges, batch.logic().unwrap().changes());
+    let folder = render(
         &scheduled,
         Some(&netlist),
-        &orbe_engine::simulate(&netlist),
-        created,
+        &results,
+        Timestamp::from_unix_seconds(0),
     );
-    same_files(&set, &batch);
-
-    let csv = String::from_utf8(set.file("traces/serial.csv").unwrap().to_vec()).unwrap();
+    let csv = String::from_utf8(folder.file("traces/serial.csv").unwrap().to_vec()).unwrap();
+    let usarts = session.usarts();
+    let (bytes, _) = session.serial_since(SerialCursor::default()).unwrap();
+    let read: Vec<String> = bytes
+        .iter()
+        .map(|byte| {
+            let (part, usart) = &usarts[usize::from(byte.usart)];
+            format!(
+                "{},{},{usart},{}",
+                byte.at.as_ps(),
+                part.as_str(),
+                byte.byte
+            )
+        })
+        .collect();
+    assert_eq!(read, csv.lines().skip(1).collect::<Vec<_>>());
     let text: String = csv
         .lines()
         .skip(1)
@@ -223,16 +249,4 @@ fn a_set_after_the_session_ran_ahead_matches_the_change_scheduled() {
     // floor(1024 * R / (10 kohm + R)): 33 at 300 lx, where R is 333 ohm, and 170 at 50 lx.
     assert!(text.starts_with("33\r\n33\r\n"), "{text:?}");
     assert!(text.contains("\n170\r\n"), "{text:?}");
-}
-
-fn same_files(left: &RunFolder, right: &RunFolder) {
-    let names: Vec<_> = left.files().map(|(name, _)| name.to_string()).collect();
-    let other: Vec<_> = right.files().map(|(name, _)| name.to_string()).collect();
-    assert_eq!(names, other);
-    for name in names {
-        if name == "netlist.json" || name == "manifest.json" {
-            continue;
-        }
-        assert!(left.file(&name) == right.file(&name), "{name} differs");
-    }
 }

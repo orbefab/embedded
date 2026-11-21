@@ -49,7 +49,7 @@ A clean run prints one JSON document and exits 0.
 }
 ```
 
-`orbe-run run <netlist> --out <dir> [--blobs <dir>]…` looks up each blob the netlist names as [netlist.md](netlist.md#blobs) says. `orbe-run view <run> --out <dir>` writes `display-<part>.png` into `<dir>` for each display part of a finished run folder, what the panel's glass showed at the end. [run-folder.md](run-folder.md#what-the-glass-shows) says how it draws them.
+`orbe-run run <netlist> --out <dir> [--blobs <dir>]…` looks up each blob the netlist names as [netlist.md](netlist.md#blobs) says.
 
 The process exits with one of these codes.
 

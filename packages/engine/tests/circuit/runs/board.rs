@@ -13,10 +13,12 @@ use common::examples::examples;
 use common::read_vcd;
 use common::{records, repo};
 use orbe_engine::finite::Finite;
+use orbe_engine::logic::Level;
 use orbe_engine::name::{Name, Ref};
+use orbe_engine::netlist;
 use orbe_engine::run_folder::RunFolder;
 use orbe_engine::timestamp::Timestamp;
-use orbe_engine::{Input, Session, Setting, Status};
+use orbe_engine::{EdgeCursor, Input, Session, Setting, Status};
 
 /// `k * T / q` at 298.15 K, with the exact SI values.
 const VT: f64 = 1.380649e-23 * 298.15 / 1.602176634e-19;
@@ -374,9 +376,16 @@ fn assert_quiet(done: &orbe_engine::Completed) {
 }
 
 /// PC6 falls at `fall_ps`, then rises `want_ps` after `charge_ps`, within the window.
-/// The next PB5 rise is the fuse delay plus the sketch offset, within one cycle.
-fn assert_restart(folder: &RunFolder, fall_ps: u64, charge_ps: u64, cycle: u64, want_ps: u64) {
-    let pc6 = logic(folder, "#mcu.logic.PC6");
+/// The next PB5 rise is the fuse delay plus the sketch offset, within one cycle. `logic` gives a
+/// signal's edges.
+fn assert_restart(
+    logic: impl Fn(&str) -> Vec<(u64, bool)>,
+    fall_ps: u64,
+    charge_ps: u64,
+    cycle: u64,
+    want_ps: u64,
+) {
+    let pc6 = logic("#mcu.logic.PC6");
     assert_eq!(
         pc6.first().copied(),
         Some((fall_ps, false)),
@@ -392,7 +401,7 @@ fn assert_restart(folder: &RunFolder, fall_ps: u64, charge_ps: u64, cycle: u64, 
         got.abs_diff(want_ps) <= RELEASE_WINDOW_PS,
         "release {got} ps, closed form {want_ps} ps"
     );
-    let pb5 = logic(folder, "#mcu.logic.PB5");
+    let pb5 = logic("#mcu.logic.PB5");
     let offset = pb5.iter().find(|(_, high)| *high).unwrap().0;
     assert_eq!(offset, SKETCH_CYCLES * cycle);
     let (restart, high) = pb5.iter().find(|(at, _)| *at > release).copied().unwrap();
@@ -515,7 +524,7 @@ fn a_dtr_fall_resets_within_the_window() {
     let fall = 1_500_000_000_000;
     let trace = done.results.trace().unwrap();
     let want = dtr_release_ps(sample(trace, "#net.v5", fall));
-    assert_restart(&done.folder, fall, fall, cycle, want);
+    assert_restart(|key| logic(&done.folder, key), fall, fall, cycle, want);
     let rise = 2_500_000_000_000;
     let interval = row_at(trace, rise);
     let volts = trace.max_column(column_index(trace, "#net.reset"))[interval];
@@ -545,7 +554,13 @@ fn the_reset_button_restarts_within_the_window() {
     let open = 1_600_000_000_000;
     let trace = done.results.trace().unwrap();
     let want = button_release_ps(sample(trace, "#net.v5", open));
-    assert_restart(&done.folder, 1_500_000_000_000, open, cycle, want);
+    assert_restart(
+        |key| logic(&done.folder, key),
+        1_500_000_000_000,
+        open,
+        cycle,
+        want,
+    );
 }
 
 #[test]
@@ -687,7 +702,7 @@ fn live_dtr_fall(target_ps: u64, grid_ps: u64, on_row: bool) {
     json["analysis"]["transient"]["stop_ps"] = serde_json::Value::from(2_000_000_000_000_u64);
     json["analysis"]["transient"]["grid_ps"] = serde_json::Value::from(grid_ps);
     let bytes = serde_json::to_vec(&json).unwrap();
-    let mut session = Session::record_document(&bytes).unwrap();
+    let mut session = Session::open(netlist::parse(&bytes).unwrap()).unwrap();
     let fall = Time::from_ps(target_ps);
     assert_eq!(
         session.advance_to(fall),
@@ -708,12 +723,20 @@ fn live_dtr_fall(target_ps: u64, grid_ps: u64, on_row: bool) {
     assert!(!probe.interpolated(), "v5 was interpolated");
     let column: Ref = "#net.v5".parse().unwrap();
     let v5 = probe.get(&column).expect("missing #net.v5").get();
-    let folder = session.finish(Timestamp::from_unix_seconds(0)).unwrap();
-    let diagnostics: serde_json::Value =
-        serde_json::from_slice(folder.file("diagnostics.json").unwrap()).unwrap();
-    assert_eq!(diagnostics.as_array().unwrap().len(), 0);
+    assert_eq!(session.advance_to(Time::from_ps(u64::MAX)), Status::Stopped);
+    assert_eq!(session.diagnostics(), []);
+    let (changes, _) = session.edges_since(EdgeCursor::default()).unwrap();
+    let signals = session.signals();
+    let edges = |key: &str| -> Vec<(u64, bool)> {
+        let signal: Ref = key.parse().unwrap();
+        changes
+            .iter()
+            .filter(|change| signals[change.signal] == signal)
+            .map(|change| (change.at.as_ps(), change.level == Level::High))
+            .collect()
+    };
     assert_restart(
-        &folder,
+        edges,
         fall.as_ps(),
         fall.as_ps(),
         cycle_ps(&json),

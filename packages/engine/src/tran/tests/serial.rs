@@ -416,7 +416,7 @@ fn analog_serial_with_a_reset_dip(fall: Time) -> Vec<u8> {
 /// call that ends there stands inside the dip. `sw2` then lands there, and the re-solve's step
 /// ends inside the dip, so `RESET` flips before the `\n` ends, and the reset drops the frame on
 /// the wire. The session never read the `\n`. Its bytes are the first bytes of one call on its
-/// export, and once it has ended they are all of them.
+/// netlist with `sw2` landed, and once it has ended they are all of them.
 ///
 /// The 13.609 V and the 41.7 us lead came from a search over `vd`'s level near where the dip
 /// first crosses 2.1 V, with 12.1 kohm, for a dip that no step end falls inside, with margin each
@@ -442,7 +442,7 @@ fn a_byte_after_the_accepted_step_waits_for_the_steps_an_input_moves() {
     let reset = Ref::Logic(Name::new("u1").unwrap(), Name::new("PC6").unwrap());
     let pc6 = Ref::Net(Name::new("pc6").unwrap());
 
-    let mut session = Session::open_document(&json).unwrap();
+    let mut session = Session::open(netlist.clone()).unwrap();
     session.advance_to(end);
     let State::Running { accepted, next, .. } = &session.state else {
         panic!("the session ended");
@@ -459,11 +459,10 @@ fn a_byte_after_the_accepted_step_waits_for_the_steps_an_input_moves() {
     assert_eq!(log(&session), rows(&want[..newline]));
     assert_eq!(session.apply(&close("sw2", end)).unwrap().at, end);
     assert_eq!(session.level(&reset), Some(Level::Low));
-    let exported = crate::netlist::parse(&session.export().unwrap()).unwrap();
-    assert!(serial_of_one_call(&exported, BUDGET).starts_with(&log(&session)));
+    let landed = session.circuit.netlist.clone();
+    assert!(serial_of_one_call(&landed, BUDGET).starts_with(&log(&session)));
     assert_eq!(session.advance_to(stop), Status::Stopped);
-    let exported = crate::netlist::parse(&session.export().unwrap()).unwrap();
-    assert_eq!(log(&session), serial_of_one_call(&exported, BUDGET));
+    assert_eq!(log(&session), serial_of_one_call(&landed, BUDGET));
     assert!(!log(&session).contains(&want[newline].byte));
 }
 
