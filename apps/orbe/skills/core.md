@@ -93,34 +93,34 @@ $ orbe open
 opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 19 engine parts, 32 nets)
 $ orbe step 100ms
 t=100ms (from 0s)
-  brightness led1 off 1.2775403302174304e-13 A over 20ms
-  brightness nano.led_l off 1.2775344350286488e-13 A over 20ms
-  brightness nano.led_pwr lit 0.0030136985454632045 A over 20ms
+  brightness led1 off 1.278e-13 A over 20ms
+  brightness nano.led_l off 1.278e-13 A over 20ms
+  brightness nano.led_pwr lit 3.014 mA over 20ms
 $ orbe expect @led1 off
-passed @led1 off (led1 off, i=1.2775403302175985e-13 A, brightness=1.2775403302174304e-13 A over 20ms)
+passed @led1 off (led1 off, i=1.278e-13 A, brightness=1.278e-13 A over 20ms)
 $ orbe press @btn1
 pressed btn1 at t=100ms; reads show it after t=100ms
 $ orbe step --until @led1 lit --timeout 50ms
 t=104ms (from 100ms), @led1 lit by 104ms
   100ms nano.D2 high
   100.0040625ms nano.D13 high
-  by 103ms led1 dim, brightness=0.0016915818683638896 A over 20ms
+  by 103ms led1 dim, brightness=1.692 mA over 20ms
 ...
-  by 104ms led1 lit, brightness=0.0022562070877605346 A over 20ms
+  by 104ms led1 lit, brightness=2.256 mA over 20ms
 ...
 $ orbe get @nano.D13
 nano.D13 high 4.400713547712646 V
 $ orbe get @led1
-led1 lit i=0.0112925043880606 A v=1.9163625819177128 V p=0.021640532865420913 W brightness=0.0022562070877605346 A over 20ms
+led1 lit i=11.29 mA v=1.9163625819177128 V p=0.021640532865420913 W brightness=2.256 mA over 20ms
 $ orbe expect @led1.i '>' 5mA
-passed @led1.i > 5mA (led1.i = 0.0112925043880606 A)
+passed @led1.i > 5mA (led1.i = 11.29 mA)
 $ orbe snapshot
 t=104ms  scene=scene.jsonc
 nano  nano-board          5V=high  D13=high  D2=high  GND=0.0V
-btn1  tactile-switch-6mm  i=-0.00047583015647667537 A
-r2    resistor-axial      i=0.0004749665847758726 A
-r1    resistor-axial      i=0.011292504389976967 A
-led1  led-5mm             lit i=0.0112925043880606 A brightness=0.0022562070877605346 A over 20ms
+btn1  tactile-switch-6mm  i=-475.8 µA
+r2    resistor-axial      i=475 µA
+r1    resistor-axial      i=11.29 mA
+led1  led-5mm             lit i=11.29 mA brightness=2.256 mA over 20ms
 diagnostics  none
 $ orbe close
 closed at t=104ms
@@ -141,7 +141,7 @@ The board's ATmega328P has the datasheet's absolute maximum ratings, and a run w
 
 The board's USB supply is rated at 500 mA, the most a USB port gives a high-power device. A load over that on 5V, such as 2.5 ohm from 5V to GND (1.8 A), warns `rating.current` on the supply, `#nano__usb__host.i (nano.usb)`, at 1.8 A over its 0.5 A rating, and on the Schottky behind 5V, `#nano__diode.i (nano.diode)`, which is rated 0.5 A too. A wire from the Nano's 5V straight to GND is a short: `orbe check` and `orbe open` refuse the scene with `net.short`, naming the wire. On the Uno the same wire runs through the board's fuse and USB switch, about 0.2 ohm, and warns `rating.current` at about 24 A. Remove the wire, and feed any load through a part that limits its current.
 
-The message names the chip pin, then the board's pins on its net, as in `#nano__mcu.pin.PB1 (nano.D9) carries 0.0434 A RMS over the last 10.2 ms, over its 0.04 A rating`, the RMS when `step` first saw it. D9 held into 47 ohm settles at 69 mA. Once a warning has lasted, its message ends with the time it has been over, as in `for 32582912000 ps`. A pin wired to 5V lists both, `(nano.5V, nano.D10)`. The current is the model's. Its output stage is linear, 25 ohm from its rail, so a short reads 200 mA, about twice what a real pin gives. Either is past the rating, and a real pin can be damaged there. The run does not warn at 20 mA. That is where the datasheet specifies a pin's output voltage, and above it the pin's high or low level sags, as it does here. Keep a pin at 20 mA or less when a level matters, and drive a larger load through a transistor.
+The message names the chip pin, then the board's pins on its net, as in `#nano__mcu.pin.PB1 (nano.D9) carries 43.4 mA RMS over the last 10.2 ms, over its 40 mA rating`, the RMS when `step` first saw it. D9 held into 47 ohm settles at 69 mA. Once a warning has lasted, its message ends with the time it has been over, as in `for 32.582912ms`. A pin wired to 5V lists both, `(nano.5V, nano.D10)`. The current is the model's. Its output stage is linear, 25 ohm from its rail, so a short reads 200 mA, about twice what a real pin gives. Either is past the rating, and a real pin can be damaged there. The run does not warn at 20 mA. That is where the datasheet specifies a pin's output voltage, and above it the pin's high or low level sags, as it does here. Keep a pin at 20 mA or less when a level matters, and drive a larger load through a transistor.
 
 ## Scenes
 
@@ -327,7 +327,7 @@ t=111ms (from 105ms)
   105ms nano.D2 low
 ...
 $ orbe expect @led1 lit
-passed @led1 lit (led1 lit, i=0.0112925043880606 A, brightness=0.004627811350286439 A over 20ms)
+passed @led1 lit (led1 lit, i=11.29 mA, brightness=4.628 mA over 20ms)
 $ orbe close
 closed at t=111ms
 ```
@@ -344,7 +344,7 @@ A test file is `tests/<name>.test` in the project folder. Each line is a live co
 FAIL tests/button.test:4: expect @led1 lit
   error[expect_failed]: expected @led1 lit at t=100ms
     expected: @led1 lit
-    actual:   led1 off, i=1.2775403302175985e-13 A, brightness=1.2775403302174304e-13 A over 20ms
+    actual:   led1 off, i=1.278e-13 A, brightness=1.278e-13 A over 20ms
 0 passed, 1 failed
 ```
 
@@ -357,6 +357,7 @@ A test needs no background process, so it runs the same in CI. Each file's sessi
 | Code | What it means, and what to do |
 | --- | --- |
 | `scene.led_no_resistor` | An LED joins two driven nets, such as a pin and GND, with no resistor in series, so it can draw far over its rating. The path runs through diodes, switches, and a transistor whose emitter is on a driven net, as in a low-side NPN switch. A net a diode feeds from a source is driven, as the Nano's 5V is behind its USB diode. A chip pin on a net that a resistor also feeds from a driven net counts as reading that net, not driving it. So A0 wired to read an LED's node does not hide its series resistor, and lint misses an LED wired straight to an output pin that also has a pull-up. Put a resistor in series, such as 220 ohm from a 5 V pin. |
+| `scene.led_overcurrent` | A straightforward series path, an output pin or a supply through one resistor and an LED to ground, would carry a steady current over the LED's rating or that pin's. The message names the current, the rating and a resistor that keeps it under. A path that is not that simple, such as a transistor, a pot or another part on the LED's node, stays quiet. Raise the resistor, as the hint says. |
 | `scene.no_model` | A part has no engine model, no `not_simulated` reason and no `"joins_only": true`, so the simulation runs nothing for it. Use a part with a model. A part of your own that only joins the wires that reach it, such as a jumper, takes `"joins_only": true` in its part file. A part nothing is wired to can take `"not_simulated": "<why>"` in the scene instead. |
 | `scene.unconnected` | Nothing is wired to a part, or a part with at most 3 nets, such as a resistor, LED, transistor or pot, has a net with no wire. Wire it, or leave it open when the circuit means it, as a pot used as a variable resistor. A board runs its chip from its own supply, so a board alone, such as one blinking its L LED, gets no warning. |
 | `net.floating` | A net has no DC path to ground. Fix it when a part reads that net. A part lists pins its design leaves open, as `"open": ["AREF"]` on the Nano and the Uno, and that net is left out while nothing in the scene reaches it. A hole that only seats that pin, with nothing else in its strip, does not reach the net. A scene wire, another part's pin, or a wire to a hole on the net still warns. |
@@ -414,7 +415,7 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |
 | `not_settable` | `press` and `release` work only on a switch, by its part name. `set` works only on a quantity the scene's `world` names or a part reads. |
 | `wrong_setting` | `press` and `release` do not apply: the part takes a different input, such as a trimmer's `position`. Set that param in the scene and run `orbe open` again. |
-| `no_change` | The input asks for the state already there, such as `set light 50` when the light is already 50. |
+| `no_change` | The input asks for the state already there, such as `press @btn1` when the button is already pressed. Setting a world quantity to the value it already has succeeds and says so. |
 | `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`. When an LED timeout covers a full 20 ms, the hint names the measured average, the state, and the range the wanted state needs, and says to check the circuit with `snapshot`. A shorter window says to step longer. Otherwise fix the circuit or the firmware, or step longer. |
 | `ended` | The session reached its 2-hour stop. Reads still work. Run `orbe open` before `press`, `release`, `set`, `step` or `play`. |
 | `past_stop` | A `step` would end past the stop, or an input would land past it. Step at most the time the hint names. When the message says the input would land past the stop, run `orbe open`. |

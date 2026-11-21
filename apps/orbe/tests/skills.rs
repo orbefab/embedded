@@ -389,7 +389,7 @@ fn help_lists_every_command_and_each_command_prints_its_usage() {
         .take_while(|l| !l.is_empty())
         .map(|l| l.split_whitespace().next().unwrap())
         .collect();
-    let mut want = vec!["check", "lint", "add", "part", "search", "blocks"];
+    let mut want = vec!["check", "lint", "nets", "add", "part", "search", "blocks"];
     want.extend(orbe_session::COMMANDS.iter().map(|s| s.name));
     want.extend(["show", "test", "skills", "registry", "help"]);
     assert_eq!(listed, want);
@@ -1248,7 +1248,7 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
         .stdout;
     for warning in [
         "warning[rating.current] #led1.i peaks at ",
-        "A, over its 0.03 A rating",
+        "mA, over its 30 mA rating",
         "warning[rating.power] #led1.p peaks at ",
         "W, over its 0.075 W rating",
     ] {
@@ -1260,7 +1260,7 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     let held = orbe(&["step", "20ms"]).ok().stdout;
     for warning in [
         "warning[rating.current] #nano__mcu.pin.PB5 (nano.D13) carries ",
-        "A RMS over the last 10.2 ms, over its 0.04 A rating",
+        "mA RMS over the last 10.2 ms, over its 40 mA rating",
     ] {
         assert!(held.contains(warning), "{held}");
     }
@@ -1463,10 +1463,10 @@ fn no_diagnostics_says_a_chip_warning_can_show_one_engine_step_late() {
     }
 }
 
-/// The worked example with every lint rule broken once: D13 straight to the LED, a part of its
-/// own with no model, a turn past 180 degrees, and the resistor left over plugged into one strip of
-/// a breadboard. Each code `orbe lint` prints is in the core skill's
-/// warnings table, the table names no other, and `orbe open` shows only `net.floating`.
+/// The worked example with every lint rule broken once: D13 straight to the LED, D9 through 10 ohm
+/// into a second LED, a part of its own with no model, a turn past 180 degrees, and the resistor
+/// left over plugged into one strip of a breadboard. Each code `orbe lint` prints is in the core
+/// skill's warnings table, the table names no other, and `orbe open` shows only `net.floating`.
 #[test]
 fn the_warnings_table_lists_the_codes_lint_prints_and_open_shows_only_the_engines() {
     let project = worked_example();
@@ -1476,6 +1476,14 @@ fn the_warnings_table_lists_the_codes_lint_prints_and_open_shows_only_the_engine
     let broken = scene
         .replace("[\"nano.D13\", \"r1.a\"]", "[\"nano.D13\", \"led1.anode\"]")
         .replace("[\"r1.b\", \"led1.anode\"],", "")
+        .replace(
+            "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },",
+            "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },\n    \"rh\": { \"type\": \"resistor-axial\", \"resistance\": \"10\" },\n    \"hot\": { \"type\": \"led-5mm\", \"color\": \"red\" },",
+        )
+        .replace(
+            "[\"led1.cathode\", \"nano.GND\"],",
+            "[\"led1.cathode\", \"nano.GND\"],\n    [\"nano.D9\", \"rh.a\"],\n    [\"rh.b\", \"hot.anode\"],\n    [\"hot.cathode\", \"nano.GND\"],",
+        )
         .replace(
             "\"parts\": {",
             "\"parts\": {\n    \"jump\": { \"type\": \"./jumper.jsonc\" },\n    \"bb\": { \"type\": \"breadboard-400\" },",

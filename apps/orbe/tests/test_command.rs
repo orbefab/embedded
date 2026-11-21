@@ -105,13 +105,12 @@ fn the_first_target_reads_the_engine_values_while_pressed() {
         run.stdout
     );
     assert!(
-        run.stdout
-            .contains("\n  led1 lit i=0.011292504388060703 A v="),
+        run.stdout.contains("\n  led1 lit i=11.29 mA v="),
         "{}",
         run.stdout
     );
     assert!(
-        run.stdout.contains("\n  led1.i 0.011292504388060703 A\n"),
+        run.stdout.contains("\n  led1.i 11.29 mA\n"),
         "{}",
         run.stdout
     );
@@ -168,9 +167,9 @@ fn each_command_replies_in_text() {
         [
             "3> step 100ms",
             "  t=100ms (from 0s)",
-            "    brightness led1 off 1.2775403302174304e-13 A over 20ms",
-            "    brightness nano.led_l off 1.2775344350286488e-13 A over 20ms",
-            "    brightness nano.led_pwr lit 0.0030136985454632045 A over 20ms",
+            "    brightness led1 off 1.278e-13 A over 20ms",
+            "    brightness nano.led_l off 1.278e-13 A over 20ms",
+            "    brightness nano.led_pwr lit 3.014 mA over 20ms",
         ]
     );
     assert_eq!(block(2)[0], "4> expect @led1 off");
@@ -198,11 +197,11 @@ fn each_command_replies_in_text() {
     );
     assert_eq!(
         until[4],
-        "    by 103ms led1 dim, brightness=0.0016915818683638896 A over 20ms"
+        "    by 103ms led1 dim, brightness=1.692 mA over 20ms"
     );
     assert_eq!(
         until[6],
-        "    by 104ms led1 lit, brightness=0.0022562070877605346 A over 20ms"
+        "    by 104ms led1 lit, brightness=2.256 mA over 20ms"
     );
 
     assert_eq!(
@@ -216,7 +215,7 @@ fn each_command_replies_in_text() {
         block(6),
         [
             "8> expect @led1.i > 5mA",
-            "  passed @led1.i > 5mA (led1.i = 0.0112925043880606 A)"
+            "  passed @led1.i > 5mA (led1.i = 11.29 mA)"
         ]
     );
 
@@ -244,7 +243,7 @@ fn each_command_replies_in_text() {
     );
     assert_eq!(
         snapshot[6],
-        "  led1  led-5mm             lit i=0.0112925043880606 A brightness=0.0022562070877605346 A over 20ms"
+        "  led1  led-5mm             lit i=11.29 mA brightness=2.256 mA over 20ms"
     );
     assert_eq!(snapshot[7], "  diagnostics  none");
     assert_eq!(snapshot.len(), 8, "{}", snapshot.join("\n"));
@@ -267,7 +266,7 @@ fn each_command_replies_in_text() {
     );
     assert_eq!(
         step[5],
-        "    by 126ms led1 off, brightness=1.277543604373932e-13 A over 20ms"
+        "    by 126ms led1 off, brightness=1.278e-13 A over 20ms"
     );
     assert_eq!(
         block(10),
@@ -745,13 +744,100 @@ expect @ldr.v > 4.7V    # the dark: 1 Mohm, 4.715 V
     );
 
     fs::write(dir.path().join("tests/light.test"), "open\nset light 50\n").unwrap();
-    let run = orbe(dir.path(), &["test", "--json"]);
-    let error = &run.json()["data"]["tests"][0]["error"];
-    assert_eq!(error["code"], "no_change", "50 lx is the scene's last step");
+    let json = live::replies_in(&dir);
+    assert_eq!(json[1]["ok"], true, "{}", json[1]);
+    assert_eq!(
+        json[1]["data"],
+        serde_json::json!({
+            "quantity": "light",
+            "value": 50.0,
+            "unit": "lx",
+            "landed_ps": 0,
+            "already": true,
+        }),
+        "50 lx is the scene's last step, and setting it again succeeds"
+    );
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("\n  light is already 50 lx\n"),
+        "{}",
+        run.stdout
+    );
 
     let (error, _) = failed("open\nset humidity 40\n");
     assert_eq!(error["code"], "not_settable");
     assert_eq!(error["message"], "the scene does not declare humidity");
+
+    let (error, _) = failed("open\nget humidity\n");
+    assert_eq!(error["code"], "not_settable");
+    assert_eq!(error["message"], "the scene does not declare humidity");
+}
+
+/// `get light` reads the world value in force now. A `set` lands later, so the next `get`
+/// still shows the previous value until a `step` passes that landing.
+#[test]
+fn get_light_reads_the_value_in_force_and_world_dot_reads_the_same() {
+    let dir = common::overlaid(&common::repo().join("packages/scene/tests/good/world_ldr"));
+    fs::create_dir_all(dir.path().join("tests")).unwrap();
+    fs::write(
+        dir.path().join("tests/light.test"),
+        "\
+open
+get light
+set light 80
+get light
+step 21ms
+get light
+get @world.light
+",
+    )
+    .unwrap();
+    let json = live::replies_in(&dir);
+    let world = |n: usize, value: f64| {
+        assert_eq!(
+            json[n]["data"],
+            serde_json::json!({ "quantity": "light", "value": value, "unit": "lx" }),
+            "{}",
+            json[n]
+        );
+    };
+    world(1, 300.0);
+    assert_eq!(
+        json[2]["data"],
+        serde_json::json!({
+            "quantity": "light",
+            "value": 80.0,
+            "unit": "lx",
+            "landed_ps": 20_000_002_000u64,
+        }),
+        "the set still lands after the scene's last step, with no already flag"
+    );
+    world(3, 300.0);
+    world(5, 80.0);
+    world(6, 80.0);
+
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        run.stdout.matches("\n  light 300 lx\n").count(),
+        2,
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains(
+            "\n  set light to 80 lx at t=20.000002ms; reads show it after t=20.000002ms\n"
+        ),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(
+        run.stdout.matches("\n  light 80 lx\n").count(),
+        2,
+        "{}",
+        run.stdout
+    );
 }
 
 /// A Nano reads a DHT22 every 2 s, from 2 s on, and prints what it read. A read sends what the

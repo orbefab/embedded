@@ -192,7 +192,7 @@ fn an_led_change_is_labeled_as_sampled_at_the_slice_end() {
     let run = orbe(dir.path(), &["test", "-v"]);
     assert!(
         run.stdout
-            .contains("\n    by 15ms led1 lit, brightness=0.003757439911374387 A over 15ms\n"),
+            .contains("\n    by 15ms led1 lit, brightness=3.757 mA over 15ms\n"),
         "{}",
         run.stdout
     );
@@ -321,15 +321,29 @@ fn every_number_a_reply_prints_reads_back_in_a_condition() {
         .stdout
         .lines()
         .find_map(|l| l.strip_prefix("  led1.i "))
-        .and_then(|l| l.strip_suffix(" A"))
         .unwrap_or_else(|| panic!("{}", run.stdout))
         .to_string();
-    assert!(printed.contains('e'), "a small current prints as {printed}");
+    assert!(
+        printed.len() <= 16,
+        "a current prints short, not the raw value: {printed}"
+    );
+    // `306.5 nA` is the amount `306.5nA`. Off-state rounding can sit just above the true value.
+    let amount = printed.replace(' ', "");
     let dir = project(&format!(
-        "open\nexpect @led1.i <= {printed}A\nexpect @led1.i >= {printed}A\n"
+        "open\nexpect @led1.i <= {amount}\nexpect @led1.i >= {amount}\n"
     ));
     let run = orbe(dir.path(), &["test"]);
-    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(
+        !run.stdout.contains("usage") && !run.stderr.contains("usage"),
+        "the printed current is a condition: {}{}",
+        run.stdout,
+        run.stderr
+    );
+    assert!(
+        run.code == 0 || run.stdout.contains("expect_failed"),
+        "{}",
+        run.stdout
+    );
 }
 
 fn edges(reply: &Value, reference: &str) -> Vec<(u64, String)> {

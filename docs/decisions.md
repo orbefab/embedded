@@ -130,6 +130,16 @@ Type checking, linting and runtime diagnostics are separate.
 - Hover on a hole gives its ref and its strip, as `@bb.b20` and `strip bb.a20 to bb.e20`.
 - `on` was weighed against two other forms. With `at` and a `contact` wire per leg, the agent works out millimetres from the hole grid and lists every leg, the scene repeats the board's geometry, and a leg one hole off gives a different circuit with no error. `mate` would join parts by named features in general, which is more than a hole needs, and it stays reserved. `on` takes one hole, and every other leg follows from the part's own anchors, so an agent writes a hole name and gets an error that names the leg that missed.
 
+## The CLI (Nov 21 2026)
+- `orbe lint` warns `scene.led_overcurrent` when one resistor between an output pin or a supply and an LED to ground would hold a steady current over the LED's rating or that pin's. The message names the current, the rating and a resistor that keeps it under. A path that is not that simple stays quiet.
+- `orbe nets [scene]` prints each net and the pins on it. A net with fewer than two pins, other than breadboard holes, is floating. A pin on no net is `not connected`. `--json` gives the same lists.
+- Human text prints a current in A, mA, µA or nA with four significant digits, and a duration in a `for … ps` message in ms or s. A current under 1 nA stays in A, in scientific form. `--json` keeps the exact number and the same field names. Voltages and power stay as the engine reports them.
+- `orbe get light`, `orbe get temperature` and `orbe get humidity` read a world quantity the scene declares, and `orbe get @world.light` reads the same. The value is the one in force at the session's time, so a `get` just after `set` shows the previous value until a `step`. `--json` names `quantity`, `value` and `unit`.
+- `orbe set` of a world quantity to the value it already has succeeds and says so. `press` and `release` of a switch already in that state still fail with `no_change`.
+- `orbe search` with no words lists every part a scene can place, grouped by its first category, then the Blocks. A part that only exists inside a board is left out. With words, the search is unchanged.
+- `orbe part` adds one line on how the part plugs into a breadboard, derived from its anchors and the hole pitch. `--json` is the card, unchanged.
+- `scripts/install.sh` gives its downloads a 15 second connect timeout and three tries.
+
 ## Later
 Mates between parts, joints between two parts, importing outside CAD, PCB routing, drawing traces, per-instance placement overrides, A6 and A7, and an `orbe lsp` for editors.
 

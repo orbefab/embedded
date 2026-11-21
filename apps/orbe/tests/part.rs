@@ -144,6 +144,87 @@ fn an_unknown_id_exits_with_near_matches() {
 }
 
 #[test]
+fn search_with_no_words_lists_the_parts_a_scene_can_place() {
+    let (code, stdout, stderr) = orbe(&["search"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("\nldr-5mm  "), "{stdout}");
+    assert!(stdout.contains("\nresistor-axial  "), "{stdout}");
+    assert!(!stdout.contains("atmega328p-tqfp32"), "{stdout}");
+    assert!(!stdout.contains("led-0603"), "{stdout}");
+    let blocks = stdout
+        .rfind("\nblocks\n")
+        .unwrap_or_else(|| panic!("{stdout}"));
+    assert!(stdout[..blocks].contains("resistor-axial"), "{stdout}");
+    assert!(stdout[blocks..].contains("nano-button-led"), "{stdout}");
+    assert!(!stdout[blocks..].contains("resistor-axial"), "{stdout}");
+
+    let (code, stdout, stderr) = orbe(&["search", "--json"]);
+    assert_eq!(code, 0, "{stderr}");
+    let envelope: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(envelope["ok"], true, "{stdout}");
+    let groups = envelope["data"]["groups"].as_array().unwrap();
+    assert_eq!(groups.last().unwrap()["category"], "blocks");
+    let ids: Vec<&str> = groups
+        .iter()
+        .flat_map(|group| group["items"].as_array().unwrap())
+        .map(|item| item["id"].as_str().unwrap())
+        .collect();
+    assert!(ids.contains(&"ldr-5mm") && ids.contains(&"resistor-axial"));
+    assert!(!ids.contains(&"atmega328p-tqfp32"));
+    assert!(envelope["data"].get("parts").is_none(), "{stdout}");
+}
+
+#[test]
+fn part_says_how_it_plugs_into_a_breadboard() {
+    let text = |id: &str| {
+        let (code, stdout, stderr) = orbe(&["part", id]);
+        assert_eq!(code, 0, "{stderr}{stdout}");
+        stdout
+    };
+    assert!(
+        text("led-5mm").contains(
+            "plugs into a breadboard: name one lead's hole with on, such as \"on\": { \"anode\": \"bb.c21\" }, and orbe seats the other lead in the next hole\n"
+        ),
+        "{}",
+        text("led-5mm")
+    );
+    assert!(
+        text("resistor-axial").contains(
+            "plugs into a breadboard: name one lead's hole with on, such as \"on\": { \"a\": \"bb.c21\" }, and orbe seats the other lead 4 holes along the row, so the part spans 5 holes\n"
+        ),
+        "{}",
+        text("resistor-axial")
+    );
+    assert!(
+        text("ldr-5mm").contains(
+            "plugs into a breadboard: name one lead's hole with on, such as \"on\": { \"a\": \"bb.c21\" }, and orbe seats the other lead in the next hole\n"
+        ),
+        "{}",
+        text("ldr-5mm")
+    );
+    assert!(
+        text("led-0603")
+            .contains("does not plug into a breadboard: it has no leads that go into a hole\n"),
+        "{}",
+        text("led-0603")
+    );
+    assert!(
+        text("breadboard-400").contains("it is a breadboard; other parts plug into its holes\n"),
+        "{}",
+        text("breadboard-400")
+    );
+    assert!(
+        text("nano-board").contains("plugs into a breadboard"),
+        "{}",
+        text("nano-board")
+    );
+
+    let (code, stdout, stderr) = orbe(&["part", "led-5mm", "--json"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(!stdout.contains("plugs into a breadboard"), "{stdout}");
+}
+
+#[test]
 fn search_prints_title_matches_before_the_rest() {
     let (code, stdout, stderr) = orbe(&["search", "led"]);
     assert_eq!(code, 0, "{stderr}");

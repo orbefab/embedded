@@ -221,11 +221,19 @@ pub enum Data {
         pressed: bool,
         landed_ps: u64,
     },
-    /// A world quantity's value from `landed_ps` on, in its unit.
+    /// A world quantity's value from `landed_ps` on, in its unit. `already` is set when the
+    /// value was already that, and is left out of the JSON then as well as when it is false.
     Set {
         quantity: Quantity,
         value: f64,
         landed_ps: u64,
+        #[serde(default, skip_serializing_if = "is_false")]
+        already: bool,
+    },
+    /// A world quantity as it stands at the session's time.
+    World {
+        quantity: Quantity,
+        value: f64,
     },
     Got(Got),
     Stepped(Stepped),
@@ -488,6 +496,155 @@ pub(crate) fn number(value: f64) -> String {
     format!("{value:?}")
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Human text: a current in A, mA, µA or nA with four significant digits, and a `for … ps`
+/// duration in ms or s. A current under 1 nA stays in A, in scientific form. `--json` does
+/// not use this. Voltages and power stay as written.
+fn humanize(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if let Some((end, replacement)) = try_for_ps(text, i).or_else(|| try_ampere(text, i)) {
+            out.push_str(&replacement);
+            i = end;
+            continue;
+        }
+        let ch = text[i..].chars().next().expect("i is on a char boundary");
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// ` for <integer> ps` at `i`, when the next character is absent or not a letter or digit.
+fn try_for_ps(text: &str, i: usize) -> Option<(usize, String)> {
+    let rest = &text[i..];
+    let bytes = rest.as_bytes();
+    if !rest.starts_with(" for ") {
+        return None;
+    }
+    let mut j = " for ".len();
+    let start = j;
+    while j < bytes.len() && bytes[j].is_ascii_digit() {
+        j += 1;
+    }
+    if j == start || j + 3 > bytes.len() || &bytes[j..j + 3] != b" ps" {
+        return None;
+    }
+    let after = j + 3;
+    if after < bytes.len() && bytes[after].is_ascii_alphanumeric() {
+        return None;
+    }
+    let ps: u64 = rest[start..j].parse().ok()?;
+    Some((i + after, format!(" for {}", Duration::from_ps(ps))))
+}
+
+/// A current `<number> A` at `i`, not preceded by a letter or digit.
+fn try_ampere(text: &str, i: usize) -> Option<(usize, String)> {
+    if text[..i]
+        .chars()
+        .next_back()
+        .is_some_and(|c| c.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+    let bytes = text.as_bytes();
+    let mut j = i;
+    if bytes.get(j) == Some(&b'-') {
+        j += 1;
+    }
+    let number_at = j;
+    if j >= bytes.len() || !bytes[j].is_ascii_digit() {
+        return None;
+    }
+    while j < bytes.len() && bytes[j].is_ascii_digit() {
+        j += 1;
+    }
+    if bytes.get(j) == Some(&b'.') {
+        let dot = j;
+        j += 1;
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j == dot + 1 {
+            return None;
+        }
+    }
+    if matches!(bytes.get(j), Some(b'e' | b'E')) {
+        let mark = j;
+        j += 1;
+        if matches!(bytes.get(j), Some(b'+' | b'-')) {
+            j += 1;
+        }
+        let exponent = j;
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j == exponent {
+            j = mark;
+        }
+    }
+    if j == number_at || j + 2 > bytes.len() || &bytes[j..j + 2] != b" A" {
+        return None;
+    }
+    let after = j + 2;
+    if after < bytes.len() && bytes[after].is_ascii_alphanumeric() {
+        return None;
+    }
+    let value: f64 = text[i..j].parse().ok()?;
+    value.is_finite().then(|| (after, human_current(value)))
+}
+
+fn human_current(value: f64) -> String {
+    if value == 0.0 {
+        return "0 A".to_string();
+    }
+    let sign = if value.is_sign_negative() { "-" } else { "" };
+    let abs = value.abs();
+    if abs < 1e-9 {
+        return format!("{sign}{abs:.3e} A");
+    }
+    let (scale, unit) = if abs >= 1.0 {
+        (1.0, "A")
+    } else if abs >= 1e-3 {
+        (1e3, "mA")
+    } else if abs >= 1e-6 {
+        (1e6, "µA")
+    } else {
+        (1e9, "nA")
+    };
+    format!("{sign}{} {unit}", sig4(abs * scale))
+}
+
+/// Four significant digits, with trailing zeros after the decimal trimmed.
+fn sig4(value: f64) -> String {
+    let mut exp = 0i32;
+    let mut scaled = value;
+    while scaled >= 10.0 {
+        scaled /= 10.0;
+        exp += 1;
+    }
+    while scaled > 0.0 && scaled < 1.0 {
+        scaled *= 10.0;
+        exp -= 1;
+    }
+    let prec = (4 - exp - 1).max(0) as usize;
+    let text = format!("{value:.prec$}");
+    let Some((whole, frac)) = text.split_once('.') else {
+        return text;
+    };
+    let frac = frac.trim_end_matches('0');
+    if frac.is_empty() {
+        whole.to_string()
+    } else {
+        format!("{whole}.{frac}")
+    }
+}
+
 impl Reading {
     fn json(&self) -> Value {
         match self {
@@ -549,7 +706,8 @@ impl Reading {
         }
     }
 
-    /// `high 4.62 V`, `0.0122 A`, `lit i=0.0122 A v=1.93 V brightness=0.0122 A over 20ms`.
+    /// `high 4.62 V`, `12.2 mA`, `lit i=12.2 mA v=1.93 V brightness=12.2 mA over 20ms`.
+    /// Currents here stay in amperes; [`humanize`] prints them when a reply is shown.
     pub fn text(&self) -> String {
         match self {
             Reading::Pin {
@@ -704,11 +862,23 @@ impl Data {
                 quantity,
                 value,
                 landed_ps,
-            } => json!({
+                already,
+            } => {
+                let mut body = json!({
+                    "quantity": quantity.name(),
+                    "value": value,
+                    "unit": quantity.unit(),
+                    "landed_ps": landed_ps,
+                });
+                if *already {
+                    body["already"] = json!(true);
+                }
+                body
+            }
+            Data::World { quantity, value } => json!({
                 "quantity": quantity.name(),
                 "value": value,
                 "unit": quantity.unit(),
-                "landed_ps": landed_ps,
             }),
             Data::Got(got) => json!({
                 "ref": format!("@{}", got.target),
@@ -803,14 +973,27 @@ impl Data {
                 quantity,
                 value,
                 landed_ps,
+                already,
             } => {
-                let at = t(*landed_ps);
-                let _ = write!(
-                    out,
-                    "set {} to {value} {} at t={at}; reads show it after t={at}",
-                    quantity.name(),
-                    quantity.unit()
-                );
+                if *already {
+                    let _ = write!(
+                        out,
+                        "{} is already {value} {}",
+                        quantity.name(),
+                        quantity.unit()
+                    );
+                } else {
+                    let at = t(*landed_ps);
+                    let _ = write!(
+                        out,
+                        "set {} to {value} {} at t={at}; reads show it after t={at}",
+                        quantity.name(),
+                        quantity.unit()
+                    );
+                }
+            }
+            Data::World { quantity, value } => {
+                let _ = write!(out, "{} {value} {}", quantity.name(), quantity.unit());
             }
             Data::Got(got) => {
                 let _ = write!(out, "{} {}", got.target, got.value.text());
@@ -956,7 +1139,7 @@ impl Reply {
 
     pub fn text(&self) -> String {
         let Some(error) = &self.error else {
-            return self.data.text(self.t_ps);
+            return humanize(&self.data.text(self.t_ps));
         };
         let mut out = String::new();
         match &self.data {
@@ -972,7 +1155,7 @@ impl Reply {
                     && one.hint == error.hint
                 {
                     out.pop();
-                    return out;
+                    return humanize(&out);
                 }
             }
             Data::Stepped(_) => {
@@ -994,6 +1177,26 @@ impl Reply {
         if !error.hint.is_empty() {
             let _ = write!(out, "\n  hint: {}", error.hint);
         }
-        out
+        humanize(&out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::humanize;
+
+    #[test]
+    fn human_text_prints_readable_current_and_duration() {
+        let text = "\
+carries 0.06978612345678901 A for 30000000000 ps, and 1.2775403302175985e-13 A, \
+and 2.158099861018882 W at 1000 ps, i=0 A, i=-0.00047583015647667537 A, over its 0.04 A rating";
+        let once = humanize(text);
+        assert_eq!(
+            once,
+            "\
+carries 69.79 mA for 30ms, and 1.278e-13 A, \
+and 2.158099861018882 W at 1000 ps, i=0 A, i=-475.8 µA, over its 40 mA rating"
+        );
+        assert_eq!(humanize(&once), once);
     }
 }
