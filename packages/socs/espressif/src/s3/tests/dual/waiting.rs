@@ -180,7 +180,8 @@ fn a_waiting_app_cpu_takes_spi2s_end_on_its_cycle_while_the_other_runs() {
         Halt::Change {
             at: c(373),
             image: false,
-            record: true
+            record: true,
+            sample: false,
         }
     );
     assert_eq!(

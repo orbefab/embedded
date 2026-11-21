@@ -420,7 +420,9 @@ fn delay_images_run_as_stepped_at_dense_boundaries() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let mut images: Vec<_> = std::fs::read_dir(root.join("blocks"))
         .unwrap()
-        .map(|entry| entry.unwrap().path().join("firmware"))
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_dir())
+        .map(|dir| dir.join("firmware"))
         .flat_map(|dir| std::fs::read_dir(dir).unwrap())
         .map(|entry| entry.unwrap().path())
         .filter(|path| path.extension().is_some_and(|e| e == "hex"))

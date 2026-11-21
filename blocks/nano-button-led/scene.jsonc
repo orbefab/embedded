@@ -1,5 +1,5 @@
 // A button on D2 lights an LED on D13 of a Nano, built on a half-size breadboard.
-// The Nano straddles the centre channel over columns 1 to 15, so each of its pins has a strip of
+// The Nano straddles the center channel over columns 1 to 15, so each of its pins has a strip of
 // free holes beside it: D13 is column 1 on the a to e side, D2 column 11 on the f to j side.
 {
   "format": 1,

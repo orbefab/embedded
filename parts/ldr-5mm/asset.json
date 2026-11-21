@@ -2,13 +2,13 @@
   "part": "ldr-5mm",
   "source": {
     "script": "model.py",
-    "sha256": "73daaefb65042098022de534213b87e004b921830faabb2b4e3cf5eba973637e",
-    "bytes": 2232
+    "sha256": "9fb0ff0a96e4fcb4ac98d10fa0f57ffbb633025bb87c3dbb28350eda6e9e1b79",
+    "bytes": 2236
   },
   "files": {
     "ldr-5mm.glb": {
-      "sha256": "461893aa064ac50a07f7fa475f0ad53e0bcbf7e94b0d1d77ca64a235b6da29ed",
-      "bytes": 14764
+      "sha256": "06efd14d2de6d2d72cfc375ebf118b7f9126390ca9630bb5771d86ccded8ed9b",
+      "bytes": 14892
     },
     "ldr-5mm.anchors.json": {
       "sha256": "cc382ff56705f3cb689ccc922b007d5f2d103d2551e52990777522e2fe0edeb9",

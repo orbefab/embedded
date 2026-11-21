@@ -2,13 +2,13 @@
   "part": "diode-1n4007",
   "source": {
     "script": "model.py",
-    "sha256": "1359783657c60e4181cc4e6b57f9c3f8898079cee20d2712a3e18183a54e0e00",
-    "bytes": 1879
+    "sha256": "0205628fa0df983ac3b6cbce8602ed8445538014cc75d66d8bdbe1429e292581",
+    "bytes": 1883
   },
   "files": {
     "diode-1n4007.glb": {
-      "sha256": "c4bcaad82e0fdb30c39fc27212dcf654e735076c6e20026793885c88f57e7e60",
-      "bytes": 40304
+      "sha256": "24420fe4d16aef2047e5efea22df4c1363517fb13f0a0d003c0383a32bac11cf",
+      "bytes": 40432
     },
     "diode-1n4007.anchors.json": {
       "sha256": "54612b37eebf050ecbd071429d47b8827504198b296d9937c851a5fb3ad1f623",

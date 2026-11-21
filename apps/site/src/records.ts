@@ -121,4 +121,6 @@ export interface SiteData {
   readonly parts: readonly Item<PartRecord>[];
   readonly blocks: readonly Item<BlockRecord>[];
   readonly texts: Readonly<Record<string, string>>;
+  /** A sentence such as "Shown at 220 Ω." for a part page whose view draws a supplied value. */
+  readonly shown: Readonly<Record<string, string>>;
 }

@@ -10,7 +10,8 @@ x = 0 to 25.40 and y = 0 to 62.865, with 0.5 mm corner arcs. The printed
 callouts say 25.40 mm and 62.74 mm. This box is the polyline's bounding
 rectangle, so the placed parts share that frame, and the corners are
 square. The drawing does not state the PCB thickness, and 1.6 mm is not a
-measurement from it. The sheet does not name a solder-mask colour.
+measurement from it. The sheet does not name a solder-mask colour. The
+photos in the v1.1 user guide show a black mask, so the PCB is plastic.
 """
 
 import sys
@@ -19,13 +20,13 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint
-from cad.color import srgb
+from cad.color import plastic
 from cad.geom import box
 
 BOARD_X = 25.40  # the outline polyline, and the printed 25.40 mm callout
 BOARD_Y = 62.865  # the outline polyline. The printed callout says 62.74 mm
 BOARD_T = 1.6  # the drawing does not state this
-_MASK = srgb("#1A1A1A")
+_MASK = plastic("#1A1A1A")
 
 
 def esp32s3_devkitc_1_shape():

@@ -32,6 +32,7 @@ mod bridge;
 mod calibration;
 mod clock;
 mod cores;
+mod curve;
 mod efuse;
 mod extmem;
 mod flash;
@@ -44,6 +45,7 @@ mod matrix;
 mod rmt;
 mod rng;
 mod rom;
+mod sar;
 mod sha;
 mod soc;
 mod spi1;
@@ -66,6 +68,7 @@ use timers::{Action, Watchdogs};
 pub use boot::Segment;
 pub use bridge::{Bridge, PINS};
 pub use clock::{TICK_HZ, Tick};
+pub use efuse::EfuseSet;
 pub use gpio::PadDrive;
 pub use orbe_xtensa::CoreId;
 pub use rmt::{Flight, Train};
@@ -164,11 +167,17 @@ pub enum Refused {
 /// Where a run stopped before its limit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Halt {
-    /// At `at` a pad's drive changed, a record ended, or both: an SPI2 transfer, an LEDC
-    /// update that took effect on a pad with a net, or an RMT transmission. [`Esp32s3::drive`]
-    /// gives the new drives, and [`Esp32s3::take_transfers`], [`Esp32s3::take_duties`] and
-    /// [`Esp32s3::take_trains`] the records.
-    Change { at: Tick, image: bool, record: bool },
+    /// At `at` a pad's drive changed, a record ended, an ADC conversion samples its pad, or
+    /// several of these. A record is an SPI2 transfer, an LEDC update that took effect on a pad
+    /// with a net, or an RMT transmission. [`Esp32s3::drive`] gives the new drives,
+    /// [`Esp32s3::take_transfers`], [`Esp32s3::take_duties`] and [`Esp32s3::take_trains`] the
+    /// records, and [`Esp32s3::sample`] takes the pads' voltages at `at` before the chip runs on.
+    Change {
+        at: Tick,
+        image: bool,
+        record: bool,
+        sample: bool,
+    },
     /// The LEDC updates that took effect at `at` moved a pad's drive, after the `Change` at
     /// `at` that holds their records. [`Esp32s3::drive`] gives the new drives.
     Moved(Tick),
@@ -237,6 +246,8 @@ pub struct Esp32s3 {
     shown: [PadDrive; PADS],
     /// The tick of an image change not reported yet.
     changed: Option<Tick>,
+    /// The tick an ADC conversion samples its pad at, not reported yet.
+    sampled: Option<Tick>,
     /// How many of SPI2's transfers have had their end reported and wait to be taken.
     reported: usize,
     /// The `Duty` records, from the first not taken.
@@ -325,12 +336,24 @@ impl Esp32s3 {
         self.soc.gpio.omit_pull_down();
     }
 
+    /// The chip has the eFuses `set` gives, in place of the default set.
+    pub fn use_efuse(&mut self, set: EfuseSet) {
+        self.soc.use_efuse(set);
+    }
+
+    /// Gives each ADC conversion the chip reported a `sample` halt for the code at its pad's
+    /// voltage: `volts` of a GPIO that [`adc_pad`] names, against `GND`.
+    pub fn sample(&mut self, volts: impl Fn(u8) -> f64) {
+        self.soc.sample(volts);
+    }
+
     fn with(core: Core<orbe_xtensa::Esp32s3>, soc: Soc) -> Esp32s3 {
         Esp32s3 {
             cores: Cores::new(core),
             shown: soc.image(),
             soc,
             changed: None,
+            sampled: None,
             reported: 0,
             duties: Vec::new(),
             reported_duties: 0,
@@ -407,6 +430,10 @@ impl Esp32s3 {
             if let Some(change) = self.soc.changed.take() {
                 debug_assert!(self.changed.is_none(), "a change stops the core");
                 self.changed = Some(change);
+            }
+            if let Some(at) = self.soc.sampled.take() {
+                debug_assert!(self.sampled.is_none(), "a sample stops the core");
+                self.sampled = Some(at);
             }
             self.soc.rearmed = false;
             self.soc.reclocked = false;
@@ -662,12 +689,16 @@ impl Esp32s3 {
             .map(|train| train.end)
             .filter(|&end| end <= self.now());
         let record = [transfer, duty, train].into_iter().flatten().min();
-        let change = [self.changed, record].into_iter().flatten().min();
+        let change = [self.changed, record, self.sampled]
+            .into_iter()
+            .flatten()
+            .min();
         let change = change.map(|at| {
             let halt = Halt::Change {
                 at,
                 image: self.changed == Some(at),
                 record: record == Some(at),
+                sample: self.sampled == Some(at),
             };
             (at, 0, halt)
         });
@@ -691,10 +722,18 @@ impl Esp32s3 {
 
     fn report(&mut self, halt: Halt) {
         match halt {
-            Halt::Change { at, image, record } => {
+            Halt::Change {
+                at,
+                image,
+                record,
+                sample,
+            } => {
                 if image {
                     self.shown = self.soc.image();
                     self.changed = None;
+                }
+                if sample {
+                    self.sampled = None;
                 }
                 if record {
                     if self.soc.spi2.end(self.reported) == Some(at) {
@@ -820,6 +859,12 @@ impl Esp32s3 {
     }
 }
 
+/// Whether GPIO `gpio` is an ADC channel's pad: GPIO1 to GPIO10 are ADC1's channels 0 to 9, and
+/// GPIO11 to GPIO20 ADC2's, `soc/esp32s3/include/soc/adc_channel.h`.
+pub fn adc_pad(gpio: u8) -> bool {
+    (1..=20).contains(&gpio)
+}
+
 /// Adds the mask ROM from the ROM ELF `rom`, and puts its data in SRAM.
 fn load_rom(soc: &mut Soc, rom: &[u8]) {
     let image = rom::load(rom, |addr, len| {
@@ -941,6 +986,7 @@ mod tests {
             at,
             image: true,
             record: false,
+            sample: false,
         }
     }
 
@@ -1017,6 +1063,7 @@ mod tests {
         );
     }
 
+    mod adc;
     mod dual;
     mod i2c;
     mod pads;
@@ -1242,6 +1289,98 @@ mod tests {
             Some((c(6), pro(at))),
             "a hint of ESP_RST_SW"
         );
+    }
+
+    /// UART0 at 1 Mbaud sends a byte, then `SYSTEM_UART_RST` pulses. The pointers survive the
+    /// reset after traffic, so the port's next TX write is refused until `txfifo_rst`.
+    fn stale_uart0() -> Vec<(u32, u32)> {
+        vec![
+            (0x6000_0078, 1 << 20 | 1 << 22 | 1 << 24 | 1 << 25),
+            (0x6000_0014, 80),
+            (0x6000_0048, 256),
+            (0x6000_0000, 0x55),
+            (SYSTEM + 0x20, 1 << 2),
+            (SYSTEM + 0x20, 0),
+        ]
+    }
+
+    /// Every reset the model makes after UART0 went stale ends the run or holds the chip, and
+    /// none reaches a UART0 FIFO write: the model runs neither the boot ROM's PRO CPU path nor
+    /// the bootloader after a reset, so their UART0 log never follows one. A TX write after the
+    /// same prefix is refused, which shows the prefix leaves UART0 stale.
+    #[test]
+    fn every_reset_after_a_stale_uart0_ends_or_holds_without_a_uart_refusal() {
+        let last = |pairs: Vec<(u32, u32)>, store6: Option<u32>| {
+            let program = stores(&[stale_uart0(), pairs].concat());
+            let mut chip = program.chip();
+            if let Some(word) = store6 {
+                chip.soc.restore(STORE6, word);
+            }
+            let seen = halts(&mut chip, 1_000_000, 1_000_000);
+            let refused = seen.iter().any(|&(halt, _)| {
+                matches!(
+                    halt,
+                    Halt::Fault(_, Fault::Refused(Refused::Register("UART0", _), _))
+                )
+            });
+            (seen.last().map(|&(halt, _)| halt), refused, chip.restart())
+        };
+        let write = stores(&[stale_uart0(), vec![(0x6000_0000, 0x00)]].concat());
+        let (halt, refused, _) = last(vec![(0x6000_0000, 0x00)], None);
+        assert!(refused, "{halt:?}");
+        assert!(
+            matches!(
+                halt,
+                Some(Halt::Fault(_, Fault::Refused(Refused::Register("UART0", "fifo_pointers"), pc)))
+                    if pc == store_pc(&write, 6)
+            ),
+            "{halt:?}"
+        );
+
+        // esp_restart: RTC_CNTL_SW_SYS_RST or RTC_CNTL_SW_PROCPU_RST with no hint holds the chip.
+        for bit in [1 << 31, 1 << 5] {
+            let (halt, refused, restart) = last(vec![(RTC_CNTL, bit)], Some(0));
+            assert!(!refused, "{bit:#x}: {halt:?}");
+            assert!(restart.is_some(), "{bit:#x}: {halt:?}");
+        }
+        // A software reset after IDF recorded a watchdog or a panic ends the run.
+        for (word, cause) in [
+            (hint(7), ResetCause::Watchdog),
+            (hint(4), ResetCause::Panic),
+        ] {
+            let (halt, refused, _) = last(vec![(RTC_CNTL, 1 << 31)], Some(word));
+            assert!(!refused, "{halt:?}");
+            assert!(
+                matches!(halt, Some(Halt::Fault(_, Fault::FaultRestart(got, _))) if got == cause),
+                "{halt:?}"
+            );
+        }
+        // Each watchdog's system or RTC reset ends the run.
+        let watchdogs = [
+            (vec![(TIMG0 + 0x50, 1)], Watchdog::Timg0, Reset::System),
+            (
+                vec![
+                    (TIMG1 + 0x48, 0),
+                    (TIMG1 + 0x50, 1),
+                    (TIMG1 + 0x48, EN | 3 << 29),
+                ],
+                Watchdog::Timg1,
+                Reset::System,
+            ),
+            (vec![(RTC_CNTL + 0x9c, 1)], Watchdog::Rtc, Reset::Rtc),
+        ];
+        for (pairs, watchdog, reset) in watchdogs {
+            let (halt, refused, _) = last(pairs, None);
+            assert!(!refused, "{watchdog:?}: {halt:?}");
+            assert!(
+                matches!(
+                    halt,
+                    Some(Halt::Fault(_, Fault::Watchdog { watchdog: w, reset: r, .. }))
+                        if w == watchdog && r == reset
+                ),
+                "{watchdog:?}: {halt:?}"
+            );
+        }
     }
 
     /// A reset after IDF recorded a panic or a watchdog, or with no reason the model can read,
@@ -1837,6 +1976,7 @@ mod tests {
                     at,
                     image: false,
                     record: true,
+                    sample: false,
                 },
                 _,
                 ref sent,
@@ -2396,6 +2536,7 @@ mod tests {
             at,
             image: false,
             record: true,
+            sample: false,
         }
     }
 
@@ -2560,6 +2701,7 @@ mod tests {
                         at: c(29),
                         image: true,
                         record: true,
+                        sample: false,
                     },
                     PadDrive::High
                 ),

@@ -225,11 +225,7 @@ impl Live {
     fn open(&mut self, scene: &Path) -> Outcome {
         let shown = scene.display().to_string();
         if !self.files.is_file(scene) {
-            return Err(fail(Error::new(
-                Code::IoError,
-                format!("no scene file at {shown}"),
-                "write the scene, or name its path",
-            )));
+            return Err(fail(Error::missing_scene(scene)));
         }
         let dir = scene.parent().unwrap_or(Path::new(""));
         let mut netlist =

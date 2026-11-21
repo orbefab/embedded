@@ -1,13 +1,15 @@
-import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
+import { createRootRoute, HeadContent, Outlet, Scripts, useRouterState } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { getSite } from "../data";
 import { NotFoundPage } from "../pages/home";
 import { Shell } from "../pages/layout";
-import { at } from "../paths";
+import { at, sitePath } from "../paths";
 import css from "../site.css?url";
+import { THEME_INIT } from "../theme";
+
+/** The embed is the player alone, so the home page can frame it. */
+const isEmbed = (pathname: string) => /^\/blocks\/[^/]+\/embed\/?$/.test(sitePath(pathname));
 
 export const Route = createRootRoute({
-  loader: () => getSite(),
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -25,18 +27,25 @@ export const Route = createRootRoute({
     ],
   }),
   shellComponent: Document,
-  component: () => (
-    <Shell site={Route.useLoaderData()}>
-      <Outlet />
-    </Shell>
-  ),
+  component: RootView,
   notFoundComponent: NotFoundPage,
 });
 
+function RootView() {
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  if (isEmbed(pathname)) return <Outlet />;
+  return (
+    <Shell missing={/^\/404\/?$/.test(sitePath(pathname))}>
+      <Outlet />
+    </Shell>
+  );
+}
+
 function Document({ children }: { children: ReactNode }) {
   return (
-    <html className="dark" lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT }} suppressHydrationWarning />
         <HeadContent />
       </head>
       <body>

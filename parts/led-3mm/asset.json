@@ -2,13 +2,13 @@
   "part": "led-3mm",
   "source": {
     "script": "model.py",
-    "sha256": "5c43bc22967aec63dab8fed71164ab3bf9919f58202303eb14de5fc565a87e4a",
-    "bytes": 1633
+    "sha256": "e4b99107fc3dbe7ce78fc02422fcfb29bd2ed5b9fba459a551d4733bf569ee7e",
+    "bytes": 1634
   },
   "files": {
     "led-3mm.glb": {
-      "sha256": "206774439c7af2d1fcd6d09830b2b1e0d002c48cdfb40cd8e259df02b125a48d",
-      "bytes": 20852
+      "sha256": "a072316c4b72d0cf53a5aa56757c5c7baa2daca4ad76ef39b8471b456aa1d34e",
+      "bytes": 20936
     },
     "led-3mm.anchors.json": {
       "sha256": "5a44cb018a0076999c131259d3f86fcf16b3d9c68fb9d82b2bab89cd5147cc36",

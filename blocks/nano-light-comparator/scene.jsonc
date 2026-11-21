@@ -1,5 +1,5 @@
 // An LDR divider and a trimmer divider feed an LM358 on a full-size breadboard beside a Nano.
-// The Nano straddles the centre channel over columns 1 to 15. D2 is j11, 5V is a12 and GND is a14.
+// The Nano straddles the center channel over columns 1 to 15. D2 is j11, 5V is a12 and GND is a14.
 // The LM358 sits with pin 1 (OUT1) in e28, so IN1- is e29, IN1+ is e30, GND is e31, and VCC is f28.
 // Dark makes the LDR node fall below the trimmer, the output goes high, and the LED lights.
 {

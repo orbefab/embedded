@@ -155,6 +155,59 @@ fn a_part_in_format_3_needs_a_newer_orbe() {
     assert_eq!(found[0].hint, "this binary reads format 1, 2");
 }
 
+/// A project a newer orbe wrote holds `parts/<id>/` and its `parts.lock` line for an id this
+/// binary does not carry. orbe 0.1.0 reads part format 1, and meets the ESP32-S3 chip part
+/// this way: its one finding is `part_format` at the part's `format`, saying the project needs
+/// a newer orbe, with no `part_missing` and no `part_modified`. This binary takes the same path
+/// one format up. The part's `"as": "image"` is not a value this binary knows, and it is never
+/// read, so it cannot turn into a parse error.
+#[test]
+fn a_locked_part_this_orbe_does_not_carry_in_a_newer_format_needs_a_newer_orbe() {
+    let part_format = orbe_scene::PART_FORMATS.iter().max().unwrap() + 1;
+    let scene_format = orbe_scene::SCENE_FORMATS.iter().max().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("parts/newer-chip");
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(
+        folder.join("part.jsonc"),
+        format!(
+            "{{\n  \"format\": {part_format},\n  \"part\": \"newer-chip\",\n  \"version\": \"0.1.0\",\n  \"pins\": {{ \"a\": [1] }},\n  \"params\": {{ \"app\": {{ \"file\": \"bin\", \"as\": \"image\", \"required\": true }} }}\n}}\n"
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("parts.lock"),
+        format!("{}\n", common::lock_line(dir.path(), "newer-chip")),
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("scene.jsonc"),
+        format!(
+            "{{\n  \"format\": {scene_format},\n  \"parts\": {{ \"u1\": {{ \"type\": \"newer-chip\", \"app\": \"app.bin\" }} }}\n}}\n"
+        ),
+    )
+    .unwrap();
+    let found = errors(dir.path());
+    assert_eq!(found.len(), 1, "{found:#?}");
+    assert_eq!(found[0].code, Code::PartFormat);
+    assert_eq!(found[0].file, "parts/newer-chip/part.jsonc");
+    assert_eq!(found[0].line, 2);
+    assert_eq!(
+        found[0].message,
+        format!(
+            "format {part_format} is newer than this binary reads; this project needs a newer orbe"
+        )
+    );
+    let reads: Vec<String> = orbe_scene::PART_FORMATS
+        .iter()
+        .map(u32::to_string)
+        .collect();
+    assert_eq!(
+        found[0].hint,
+        format!("this binary reads format {}", reads.join(", "))
+    );
+}
+
 #[test]
 fn a_scene_in_format_2_needs_a_newer_orbe() {
     let project = project();

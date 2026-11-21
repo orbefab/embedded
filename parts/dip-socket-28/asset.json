@@ -2,13 +2,13 @@
   "part": "dip-socket-28",
   "source": {
     "script": "model.py",
-    "sha256": "305212d21c964a4f1e9d1909fd8bf34d9d8b693fce913e93c21bf8ac63160602",
-    "bytes": 2541
+    "sha256": "57da0c419089d80f0925fc4379d89c092d713dce5b1d3f6d16d205e1c803782d",
+    "bytes": 2539
   },
   "files": {
     "dip-socket-28.glb": {
-      "sha256": "0fed7125d4308fb43f025afc9b1da6106d2f8364cf9904382222d75cf0f48e5c",
-      "bytes": 57040
+      "sha256": "9576a44839da3fb3ef52e90cda2b1bd641ae261cb0f4e7d1922fea3695df3afa",
+      "bytes": 57164
     },
     "dip-socket-28.anchors.json": {
       "sha256": "add6e0209c72b8f6cd7a4cfe6335ac16150eacd181ecd99e2298cc079320ceeb",

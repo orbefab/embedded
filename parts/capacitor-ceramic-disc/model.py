@@ -18,7 +18,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint, tht
-from cad.color import srgb
+from cad.color import plastic, tin
 from cad.mark import text
 
 CC_DISC = (5.5, 2.5)  # Φ, thick  # verify
@@ -27,9 +27,9 @@ CC_LEAD_D = 0.5
 CC_PITCH = 5.0
 CC_BELOW = 20.0  # verify
 
-_DISC = srgb("#C8742B")
-_TIN = srgb("#C5C8CE")
-_PRINT = srgb("#1A1A1A")
+_DISC = plastic("#C8742B")
+_TIN = tin()
+_PRINT = plastic("#1A1A1A")
 
 
 def cap_ceramic_104_anchors():

@@ -8,6 +8,8 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
+#[cfg(unix)]
+use std::sync::OnceLock;
 
 use crate::diagnostic::Findings;
 use crate::files::Files;
@@ -203,14 +205,20 @@ impl Catalog {
         }
     }
 
-    /// The repo's `parts/`, one version of each id, embedded at build time.
+    /// The repo's `parts/`, one version of each id, embedded at build time and parsed once.
+    /// Each call returns a clone, so a caller can insert into its own catalog.
     pub(crate) fn builtin() -> Catalog {
-        let mut catalog = Catalog::official();
-        for (id, files) in folders() {
-            let entry = entry_from_files(&id, files).expect("the built-in catalog parses");
-            catalog.insert(entry);
-        }
-        catalog
+        static BUILTIN: OnceLock<Catalog> = OnceLock::new();
+        BUILTIN
+            .get_or_init(|| {
+                let mut catalog = Catalog::official();
+                for (id, files) in folders() {
+                    let entry = entry_from_files(&id, files).expect("the built-in catalog parses");
+                    catalog.insert(entry);
+                }
+                catalog
+            })
+            .clone()
     }
 
     pub(crate) fn registry(&self) -> &str {
@@ -460,7 +468,6 @@ mod tests {
         assert_eq!(catalog.ids(), want);
         for id in ids {
             let entry = catalog.newest(&id).unwrap();
-            assert_eq!(entry.version.to_string(), "0.1.0");
             assert_eq!(entry.hash, folder_hash(&parts.join(&id)).unwrap(), "{id}");
         }
         assert!(catalog.newest("led-5mm").unwrap().sealed);

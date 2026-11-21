@@ -7,9 +7,9 @@
 
 use crate::common;
 use common::Instructions;
-use common::{DDRB, PORTB, clock_spi, in_io, ldi, out, spin, sts};
+use common::{DDRB, PORTB, clock_spi, in_io, ldi, out, sbrs, spin, sts};
 
-use orbe_microchip::{Channel, Cpu, Level, PinOrigin, Port, SpiClock, SupplyChannel};
+use orbe_microchip::{Channel, Cpu, Level, PinDrive, PinOrigin, Port, SpiClock, Timeline};
 
 const SPCR: u16 = 0x004C;
 const SPSR: u16 = 0x004D;
@@ -21,6 +21,7 @@ const SPIE: u8 = 1 << 7;
 const SPE: u8 = 1 << 6;
 const DORD: u8 = 1 << 5;
 const MSTR: u8 = 1 << 4;
+const CPHA: u8 = 1 << 2;
 const SPIF: u8 = 1 << 7;
 const WCOL: u8 = 1 << 6;
 const SPI2X: u8 = 1 << 0;
@@ -375,28 +376,116 @@ fn four_modes_and_both_bit_orders_match_the_figures() {
     }
 }
 
-#[test]
-fn an_empty_slave_queue_returns_0xff_and_a_supplied_byte_returns_that() {
-    // The host slave ignores SS and shifts on every master frame.
-    let mut cpu = Cpu::new();
-    arm(&mut cpu, 0, false);
-    cpu.load_words(&xfer_out(0xA5));
+/// Reads `SPSR` then `SPDR` into r17 once the transfer that `xfer_out` started is done.
+fn received(cpu: &mut Cpu) -> u8 {
     cpu.run_until(36);
     cpu.load_words(&[in_io(16, SPSR_IO), in_io(17, SPDR_IO), spin()]);
     let at = cpu.cycles();
     cpu.run_until(at + 2);
-    assert_eq!(cpu.reg(17), 0xFF);
+    cpu.reg(17)
+}
 
+#[test]
+fn a_master_reads_miso_from_its_pad() {
+    // Table 19-1: in master mode MISO is an input, so the byte is what its pad holds.
+    for (level, byte) in [(Level::High, 0xFF), (Level::Low, 0x00)] {
+        let mut cpu = Cpu::new();
+        arm(&mut cpu, 0, false);
+        cpu.drive_pin(MISO, level);
+        cpu.load_words(&xfer_out(0xA5));
+        assert_eq!(received(&mut cpu), byte, "MISO {level:?}");
+        assert_eq!(cpu.peek(SPSR) & SPIF, 0, "SPSR then SPDR clears SPIF");
+    }
+}
+
+#[test]
+fn a_master_never_drives_miso_whatever_ddrb_says() {
+    // Table 19-1 overrides MISO's direction to input in master mode.
+    let mut cpu = Cpu::new();
+    cpu.poke(DDRB, (1 << 3) | (1 << 4) | (1 << 5));
+    cpu.poke(SPCR, SPE | MSTR);
+    cpu.load_words(&xfer_out(0xFF));
+    cpu.run_until(36);
+    assert_eq!(cpu.pin_levels().drive(MISO), Some(PinDrive::Off));
+    assert!(
+        edges(&mut cpu).iter().all(|&(pin, _, _)| pin != MISO),
+        "no SPI edge on MISO"
+    );
+}
+
+/// Three transfers of 0x55 into r17, r18 and r19, each waiting on `SPIF`.
+fn three_bytes() -> Vec<u16> {
+    let rjmp = |from: usize, to: usize| 0xC000 | ((to as i32 - from as i32 - 1) as u16 & 0x0FFF);
+    let mut words = vec![ldi(16, 0x55)];
+    for reg in [17, 18, 19] {
+        let wait = words.len() + 1;
+        words.extend([
+            out(16, SPDR_IO),
+            in_io(20, SPSR_IO),
+            sbrs(20, 7),
+            rjmp(wait + 2, wait),
+            in_io(reg, SPDR_IO),
+        ]);
+    }
+    words.push(spin());
+    words
+}
+
+#[test]
+fn a_mosi_to_miso_loopback_reads_back_every_byte_in_every_mode() {
+    // §19.4 and Table 19-3: the master samples MISO on the edge opposite the one MOSI changes
+    // on, so a wire from MOSI to MISO reads back each byte sent, the first one too. The host
+    // here is a timeline that copies MOSI onto MISO's pad at each halt, as a net does.
+    for mode_bits in [0, CPHA, CPOL, CPOL | CPHA, DORD] {
+        for spi2x in [false, true] {
+            let mut cpu = Cpu::new();
+            arm(&mut cpu, mode_bits, spi2x);
+            cpu.load_words(&three_bytes());
+            let mut timeline = Timeline::new(cpu);
+            let mut mosi = timeline.drives()[MOSI as usize];
+            timeline.set_pad(MISO, mosi == PinDrive::High);
+            while timeline.run_until(2_000).is_some() {
+                let drive = timeline.drives()[MOSI as usize];
+                if drive != mosi {
+                    mosi = drive;
+                    timeline.set_pad(MISO, drive == PinDrive::High);
+                }
+            }
+            let cpu = timeline.cpu();
+            assert_eq!(
+                [cpu.reg(17), cpu.reg(18), cpu.reg(19)],
+                [0x55; 3],
+                "mode bits {mode_bits:#04x} SPI2X {spi2x}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_miso_edge_mid_byte_reaches_only_the_bits_sampled_after_it() {
+    // MISO rises halfway through the byte, landed by the timeline at the cycle it reached
+    // while the core may sit past it. The bits sampled before read 0 and the rest read 1.
     let mut cpu = Cpu::new();
     arm(&mut cpu, 0, false);
-    cpu.supply(SupplyChannel::Spi, &[0x3C]);
-    cpu.load_words(&xfer_out(0x11));
-    cpu.run_until(36);
+    cpu.drive_pin(MISO, Level::Low);
+    cpu.load_words(&xfer_out(0x00));
+    let mut timeline = Timeline::new(cpu);
+    while let Some(halt) = timeline.run_until(60) {
+        if halt.at >= 18 {
+            break;
+        }
+    }
+    timeline.set_pad(MISO, true);
+    while timeline.run_until(60).is_some() {}
+    let mut cpu = timeline.cpu().clone();
     cpu.load_words(&[in_io(16, SPSR_IO), in_io(17, SPDR_IO), spin()]);
     let at = cpu.cycles();
     cpu.run_until(at + 2);
-    assert_eq!(cpu.reg(17), 0x3C);
-    assert_eq!(cpu.peek(SPSR) & SPIF, 0, "SPSR then SPDR clears SPIF");
+    let byte = cpu.reg(17);
+    assert!(
+        byte != 0 && byte != 0xFF && byte & byte.wrapping_add(1) == 0,
+        "{byte:#04x}: the low bits read 1"
+    );
 }
 
 #[test]
@@ -469,21 +558,23 @@ fn receive_keeps_the_last_completed_byte_until_spdr_is_read() {
     // unread byte. A read during the next shift returns the previous byte.
     let mut cpu = Cpu::new();
     arm(&mut cpu, 0, false);
-    cpu.supply(SupplyChannel::Spi, &[0x11, 0x22]);
+    cpu.drive_pin(MISO, Level::High);
     cpu.load_words(&xfer_out(0x01));
     cpu.run_until(36);
+    cpu.drive_pin(MISO, Level::Low);
     cpu.load_words(&xfer_out(0x02));
     cpu.run_until(cpu.cycles() + 2 + 32 + 2);
     cpu.load_words(&[in_io(16, SPSR_IO), in_io(17, SPDR_IO), spin()]);
     let at = cpu.cycles();
     cpu.run_until(at + 2);
-    assert_eq!(cpu.reg(17), 0x22, "the unread 0x11 was replaced");
+    assert_eq!(cpu.reg(17), 0x00, "the unread 0xFF was replaced");
 
     let mut cpu = Cpu::new();
     arm(&mut cpu, 0, false);
-    cpu.supply(SupplyChannel::Spi, &[0x11, 0x22]);
+    cpu.drive_pin(MISO, Level::High);
     cpu.load_words(&xfer_out(0x01));
     cpu.run_until(36);
+    cpu.drive_pin(MISO, Level::Low);
     cpu.load_words(&[
         ldi(16, 0x02),
         out(16, SPDR_IO),
@@ -493,12 +584,12 @@ fn receive_keeps_the_last_completed_byte_until_spdr_is_read() {
     ]);
     let at = cpu.cycles();
     cpu.run_until(at + 4);
-    assert_eq!(cpu.reg(18), 0x11, "the shifter is not what SPDR reads");
+    assert_eq!(cpu.reg(18), 0xFF, "the shifter is not what SPDR reads");
     cpu.run_until(at + 4 + 32);
     cpu.load_words(&[in_io(16, SPSR_IO), in_io(17, SPDR_IO), spin()]);
     let at = cpu.cycles();
     cpu.run_until(at + 2);
-    assert_eq!(cpu.reg(17), 0x22);
+    assert_eq!(cpu.reg(17), 0x00);
 }
 
 #[test]
@@ -726,10 +817,12 @@ fn a_master_and_a_host_master_that_finish_together_use_two_channels() {
     // SS is an output, so the host's SS low does not clear MSTR (§19.3).
     // LDI plus OUT retires at cycle 2. Period 4 sets SPIF at 34. The host
     // master, queued at that same retire, samples its last SCK edge on
-    // that cycle too. Each byte stays on its own channel.
+    // that cycle too. Each byte stays on its own channel. MISO is an input in master mode
+    // (Table 19-1), so the host's own high on it is what the host master reads.
     let mut cpu = Cpu::new();
     cpu.poke(DDRB, 1 << 2);
     cpu.poke(SPCR, SPE | MSTR);
+    cpu.drive_pin(MISO, Level::High);
     cpu.load_words(&[ldi(16, 0xA5), out(16, SPDR_IO), spin()]);
     assert!(cpu.queue_spi_master(
         2,

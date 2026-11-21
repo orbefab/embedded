@@ -70,7 +70,8 @@ static void route_pad(void)
 }
 
 // The USB console gates UART0. The same sequence `uart_ll_enable_bus_clock` and
-// `uart_ll_reset_register` use puts the port back where a FIFO write shifts.
+// `uart_ll_reset_register` use restarts the port. It keeps the FIFO pointers, which the boot
+// stages leave apart, so `reset_fifos` must follow before a FIFO write.
 static void enable_uart0(void)
 {
     REG_SET_BIT(SYSTEM_PERIP_CLK_EN0_REG, SYSTEM_UART_CLK_EN);
@@ -79,6 +80,16 @@ static void enable_uart0(void)
     REG_SET_BIT(SYSTEM_PERIP_RST_EN0_REG, SYSTEM_UART_RST);
     REG_CLR_BIT(SYSTEM_PERIP_RST_EN0_REG, SYSTEM_UART_RST);
     REG_CLR_BIT(UART_CLK_CONF_REG(0), UART_RST_CORE);
+}
+
+// uart_param_config resets the RX FIFO, then the TX FIFO, each as a set and a clear of its
+// CONF0 bit: uart_ll_rxfifo_rst and uart_ll_txfifo_rst. Only these zero the pointers.
+static void reset_fifos(void)
+{
+    REG_SET_BIT(UART_CONF0_REG(0), UART_RXFIFO_RST);
+    REG_CLR_BIT(UART_CONF0_REG(0), UART_RXFIFO_RST);
+    REG_SET_BIT(UART_CONF0_REG(0), UART_TXFIFO_RST);
+    REG_CLR_BIT(UART_CONF0_REG(0), UART_TXFIFO_RST);
 }
 
 static void set_clock(uint32_t div, uint32_t frag)
@@ -275,6 +286,10 @@ void app_main(void)
     }
     route_pad();
     enable_uart0();
+    // As uart_param_config: the clock and the frame, then the FIFO resets.
+    set_clock(694, 7);
+    set_format(conf0_of("8N1"));
+    reset_fifos();
     one_baud(115200, 694, 7);
     one_baud(1000000, 80, 0);
     print_line("UART DONE");

@@ -2,13 +2,13 @@
   "part": "npn-2n2222-to92",
   "source": {
     "script": "model.py",
-    "sha256": "ea7ec587324892fe1c366d19b246bbdff486273d5178f9e26371a4fa5a64dfd8",
-    "bytes": 1957
+    "sha256": "648f46c40e1301782d67a2466129a454c27d4db8368367f9f08a84b89602105b",
+    "bytes": 1961
   },
   "files": {
     "npn-2n2222-to92.glb": {
-      "sha256": "9788e9405213e2ebb4e1b4b031a2904f57b05616464e7ff0c1bbbfe0f4f5741b",
-      "bytes": 71204
+      "sha256": "18df4b2ab638d9cacf430652607205879cd46f9e982962efeb1015523b15c8d4",
+      "bytes": 71328
     },
     "npn-2n2222-to92.anchors.json": {
       "sha256": "97fec33cd750ea5b0bf2ebb08e8dfec515c8449bec1664a41569170d151c7404",

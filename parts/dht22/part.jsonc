@@ -5,14 +5,15 @@
 {
   "format": 1,
   "part": "dht22",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "DHT22 (AM2302) temperature and humidity sensor",
   "summary": "Digital temperature and humidity sensor on one open-drain data line. It reads the scene's `temperature` and `humidity` to 0.1 and sends them as 40 bits when the host pulls DATA low for at least 0.8 ms and releases it. Each read sends what the sensor measured at the end of the read before, so after `orbe set temperature 30` the second read shows it. Read it at most every 2 s, and not in the first 2 s after power-on: a start sooner gets no answer and a `chip.protocol` warning, rule `interval`. DATA needs a pull-up to VDD; the sheet asks for 5.1 kΩ. Four leads on 2.54 mm: VDD, DATA, NC, GND.",
   "tags": ["dht22", "am2302", "temperature", "humidity", "sensor", "one-wire", "digital", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "docs": {
-    "Aosong AM2302 product manual v1.1": "https://atta.szlcsc.com/upload/public/pdf/source/20161123/1479873083101.pdf",
-    "Aosong DHT22 datasheet": "https://cdn.sparkfun.com/assets/f/7/d/9/c/DHT22.pdf",
+    "Aosong AM2302 product manual v1.1": null,
+    "Aosong DHT22 datasheet": null,
+    "Aosong AM2302 Technical Manual": "https://www.aosong.com/uploadfiles/2025/04/20250417105409216.pdf",
   },
   "real": { "maker": "Aosong", "number": "AM2302", "datasheet": "Aosong AM2302 product manual v1.1" },
   "buy": [

@@ -1,63 +1,74 @@
 // Adapted from maker-sandbox (MIT, Copyright 2026 Alwurts).
 import { type ThreeEvent, useFrame, useLoader, useThree } from "@react-three/fiber";
-import { Bloom, EffectComposer, Outline } from "@react-three/postprocessing";
-import { type RefObject, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { CanvasTexture, type Group, Mesh, type Object3D, RepeatWrapping, SRGBColorSpace } from "three";
+import { EffectComposer, Outline } from "@react-three/postprocessing";
+import { BlendFunction, SelectiveBloomEffect } from "postprocessing";
+import { type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { BackSide, Box3, type Group, Mesh, MeshStandardMaterial, type Object3D } from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { type BuiltScene, buildScene, fromGltf, type Tag, tagOf } from "./build";
-import { type CameraMode, union } from "./camera-frame";
+import type { CameraMode } from "./camera-frame";
 import { CameraRig } from "./camera-rig";
-import { glowIntensity, litColour } from "./glow";
+import { glowIntensity, litColour, shownCurrent } from "./glow";
 import type { Hovered, HoverStore } from "./hover";
 import type { Command, FrameMessage, Ref, SceneMessage, Vec3 } from "./protocol";
 import { holeAt, instanceAt, refOf, stripText } from "./refs";
+import { applyRoom, roomTexture, StageFloor, StageLights, StageRoom } from "./stage";
+import type { StageTheme } from "./stage-theme";
 import type { Box } from "./wire-geometry";
 import { WireMesh } from "./wire-mesh";
 
-const MAT_CELL_MM = 10;
+/** orbefab.com's brand orange. */
+const HOVER = "#e85d04";
 
-function matTexture(): CanvasTexture {
-  const canvas = document.createElement("canvas");
-  canvas.width = 64;
-  canvas.height = 64;
-  const context = canvas.getContext("2d");
-  if (context !== null) {
-    context.fillStyle = "#32363c";
-    context.fillRect(0, 0, 64, 64);
-    context.strokeStyle = "#4a5058";
-    context.strokeRect(0.5, 0.5, 63, 63);
-  }
-  const texture = new CanvasTexture(canvas);
-  texture.wrapS = RepeatWrapping;
-  texture.wrapT = RepeatWrapping;
-  texture.colorSpace = SRGBColorSpace;
-  return texture;
+/** The render layer bloom reads. The hover outline toggles its own layer, 10, on the hovered
+ * meshes, so bloom must not share it. */
+const BLOOM_LAYER = 11;
+
+/** Each mesh the scene glows, with its glow material. */
+function glowMeshes(built: BuiltScene): { mesh: Mesh; material: MeshStandardMaterial }[] {
+  const materials = new Set<MeshStandardMaterial>(built.glows.map((glow) => glow.material));
+  const meshes: { mesh: Mesh; material: MeshStandardMaterial }[] = [];
+  built.root.traverse((object) => {
+    if (!(object instanceof Mesh)) return;
+    const list = Array.isArray(object.material) ? object.material : [object.material];
+    const material = list.find((each) => each instanceof MeshStandardMaterial && materials.has(each));
+    if (material !== undefined) meshes.push({ mesh: object, material });
+  });
+  return meshes;
 }
 
-/** A cutting mat just under the lowest lead or wire. */
-function Mat({ boxes }: { boxes: readonly Box[] }) {
-  const box = useMemo(() => union(boxes), [boxes]);
-  const width = Math.max(240, (box.max[0] - box.min[0]) * 2);
-  const depth = Math.max(160, (box.max[2] - box.min[2]) * 2);
-  const texture = useMemo(() => {
-    const made = matTexture();
-    made.repeat.set(width / MAT_CELL_MM, depth / MAT_CELL_MM);
-    return made;
-  }, [width, depth]);
-  useEffect(() => () => texture.dispose(), [texture]);
-  return (
-    <mesh
-      position={[(box.min[0] + box.max[0]) / 2, box.min[1] - 0.5, (box.min[2] + box.max[2]) / 2]}
-      rotation={[-Math.PI / 2, 0, 0]}
-    >
-      <planeGeometry args={[width, depth]} />
-      <meshStandardMaterial map={texture} roughness={1} />
-    </mesh>
-  );
+/** Bloom over the meshes on BLOOM_LAYER only. A depth pass of that layer masks the frame, so a
+ * pixel blooms only where the nearest surface is one of those meshes, or a clear lens over one. */
+function useBloom(): SelectiveBloomEffect {
+  const scene = useThree((state) => state.scene);
+  const camera = useThree((state) => state.camera);
+  const bloom = useMemo(() => {
+    const effect = new SelectiveBloomEffect(scene, camera, {
+      blendFunction: BlendFunction.ADD,
+      intensity: 1.2,
+      luminanceSmoothing: 0.2,
+      luminanceThreshold: 1,
+      mipmapBlur: true,
+    });
+    effect.selection.layer = BLOOM_LAYER;
+    return effect;
+  }, [scene, camera]);
+  useEffect(() => () => bloom.dispose(), [bloom]);
+  // The mask turns depth into distance with the camera's near and far planes, and it copies
+  // them only when told. The near plane moves with the orbit distance, so copy it each time.
+  const copied = useRef({ bloom, near: camera.near, far: camera.far });
+  useFrame(() => {
+    const last = copied.current;
+    if (last.bloom === bloom && last.near === camera.near && last.far === camera.far) return;
+    bloom.mainCamera = camera;
+    copied.current = { bloom, near: camera.near, far: camera.far };
+  });
+  return bloom;
 }
 
 function Effects({ hover }: { hover: HoverStore }) {
   const hovered = useSyncExternalStore(hover.subscribe, hover.get);
+  const bloom = useBloom();
   const target = hovered?.object;
   const selection = useMemo(() => {
     const meshes: Object3D[] = [];
@@ -68,18 +79,35 @@ function Effects({ hover }: { hover: HoverStore }) {
   }, [target]);
   return (
     <EffectComposer autoClear={false} multisampling={0}>
-      <Bloom intensity={1.2} luminanceSmoothing={0.2} luminanceThreshold={1} mipmapBlur />
+      <primitive object={bloom} />
       <Outline
         blur
         edgeStrength={6}
-        hiddenEdgeColor="#7dff67"
+        hiddenEdgeColor={HOVER}
         pulseSpeed={0}
         selection={selection}
-        visibleEdgeColor="#7dff67"
+        visibleEdgeColor={HOVER}
         xRay
       />
     </EffectComposer>
   );
+}
+
+/** One box per drawn mesh, plus one per wire. A part's own box has empty corners, and those
+ * would push the camera back. */
+function drawnBoxes(built: BuiltScene): readonly Box[] {
+  const boxes: Box[] = [];
+  const box = new Box3();
+  built.root.updateMatrixWorld(true);
+  built.root.traverse((object) => {
+    if (!(object instanceof Mesh)) return;
+    object.geometry.boundingBox ?? object.geometry.computeBoundingBox();
+    if (object.geometry.boundingBox === null) return;
+    box.copy(object.geometry.boundingBox).applyMatrix4(object.matrixWorld);
+    boxes.push({ min: [box.min.x, box.min.y, box.min.z], max: [box.max.x, box.max.y, box.max.z] });
+  });
+  if (boxes.length === 0) return built.boxes;
+  return [...boxes, ...built.boxes.slice(built.boxes.length - built.wires.length)];
 }
 
 /** The nearest object at or above `object` whose tag passes `test`. */
@@ -137,17 +165,26 @@ function endsPress(event: PointerEvent): boolean {
 export function SceneView({
   scene,
   frame,
+  ledPeak,
   send,
   hover,
   mode,
   onBuilt,
+  colours,
+  pageScroll = false,
 }: {
   scene: SceneMessage;
   frame: RefObject<FrameMessage | null>;
+  /** Brightest LED current since the previous drawn frame, one entry per channel. */
+  ledPeak: RefObject<number[]>;
   send: (command: Command) => void;
   hover: HoverStore;
   mode: CameraMode;
   onBuilt: (built: BuiltScene) => void;
+  /** Background, floor fill and grid line, from the page theme. */
+  colours: StageTheme;
+  /** One finger scrolls the page. Two fingers orbit and zoom. */
+  pageScroll?: boolean;
 }) {
   const urls = useMemo(() => modelUrls(scene), [scene]);
   const gltfs = useLoader(GLTFLoader, urls);
@@ -167,13 +204,46 @@ export function SceneView({
   }, [gltfs, scene, urls]);
   useEffect(() => onBuilt(built), [built, onBuilt]);
 
+  const gl = useThree((state) => state.gl);
+  const stage = useThree((state) => state.scene);
+  useLayoutEffect(() => {
+    const texture = roomTexture(gl);
+    const visit = (object: Object3D) => {
+      if (!(object instanceof Mesh)) return;
+      object.castShadow = true;
+      object.receiveShadow = true;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      for (const material of materials) {
+        if (!(material instanceof MeshStandardMaterial)) continue;
+        // A pin or a shell is open. The back faces cast, so the shadow keeps the part's shape.
+        material.shadowSide = BackSide;
+        applyRoom(material, texture);
+      }
+    };
+    built.root.traverse(visit);
+    stage.getObjectByName("stage-wires")?.traverse(visit);
+  }, [built, gl, stage]);
+
+  const glowing = useMemo(() => glowMeshes(built), [built]);
   useFrame(() => {
     const live = frame.current;
+    const peaks = ledPeak.current;
     for (const glow of built.glows) {
-      const intensity = glowIntensity(live?.led_a[glow.channel] ?? 0, glow.full);
+      const now = live?.led_a[glow.channel] ?? 0;
+      const intensity = glowIntensity(shownCurrent(now, peaks[glow.channel] ?? 0), glow.full);
       glow.material.emissiveIntensity = intensity;
       litColour(glow.base, intensity, glow.material.color);
     }
+    // A glow mesh is on the bloom layer only from its full current up, where its own luminance
+    // reaches the bloom threshold. Below that, a highlight on it or on the lens over it would
+    // bloom from some angles, and the LED would read as lit.
+    for (const { mesh, material } of glowing) {
+      if (material.emissiveIntensity >= 1) mesh.layers.enable(BLOOM_LAYER);
+      else mesh.layers.disable(BLOOM_LAYER);
+    }
+    const count = Math.max(peaks.length, live?.led_a.length ?? 0);
+    for (let channel = 0; channel < count; channel += 1) peaks[channel] = live?.led_a[channel] ?? 0;
+    peaks.length = count;
     for (const slide of built.slides) {
       slide.node.position.copy(slide.rest);
       if (live?.switches[slide.channel] === 1) slide.node.position.add(slide.delta);
@@ -241,19 +311,24 @@ export function SceneView({
     hover.set(hole ?? { ref: found.tag.ref, why: found.tag.why, error: found.tag.error, ...at });
   };
 
+  const frameBoxes = useMemo(() => drawnBoxes(built), [built]);
   return (
     <>
-      <CameraRig boxes={built.boxes} mode={mode} />
+      <StageRoom />
+      <StageLights background={colours.background} boxes={built.boxes} />
+      <CameraRig boxes={frameBoxes} mode={mode} pageScroll={pageScroll} />
       <primitive
         object={built.root}
         onPointerDown={press}
         onPointerMove={move}
         onPointerOut={() => hover.set(null)}
       />
-      {built.wires.map((wire, index) => (
-        <WireMesh key={index} wire={wire} />
-      ))}
-      <Mat boxes={built.boxes} />
+      <group name="stage-wires">
+        {built.wires.map((wire, index) => (
+          <WireMesh key={index} wire={wire} />
+        ))}
+      </group>
+      <StageFloor boxes={built.boxes} colours={colours} />
       <Effects hover={hover} />
     </>
   );

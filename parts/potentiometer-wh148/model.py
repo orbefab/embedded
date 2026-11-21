@@ -22,7 +22,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint, tht
-from cad.color import srgb
+from cad.color import gold, metal, plastic, steel, tin
 from cad.geom import box, cyl_z
 
 POT_CAN = (16.0, 7.0)  # diameter, deep
@@ -34,13 +34,13 @@ POT_PIN = (1.2, 0.5, 6.0)  # wide, thick, below z = 0  # verify
 POT_LUG = (7.0, 1.2, 2.0, 1.0)  # radius, wide, along, tall  # verify
 POT_KNOB = (15.0, 13.0, 2.0)  # diameter, tall, gap above the bushing  # verify
 
-_CAN = srgb("#B9BCC2")
-_BASE = srgb("#2B5FA8")
-_BRASS = srgb("#C8A85A")
-_STEEL = srgb("#D0D3D8")
-_KNOB = srgb("#1B1B1D")
-_POINTER = srgb("#F2F2F2")
-_TIN = srgb("#C5C8CE")
+_CAN = metal("#B9BCC2")
+_BASE = plastic("#2B5FA8")
+_BRASS = gold("#C8A85A")
+_STEEL = steel("#D0D3D8")
+_KNOB = plastic("#1B1B1D")
+_POINTER = plastic("#F2F2F2")
+_TIN = tin()
 
 
 def potentiometer_wh148_anchors():

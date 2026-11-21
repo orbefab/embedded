@@ -17,16 +17,16 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint, tht
-from cad.color import srgb
+from cad.color import nickel, plastic, tin
 from cad.mark import text
 
 PINS = ("gate", "drain", "source")  # from -X, seen from the face
 MARK = ("IRF520",)
 
-_BODY = srgb("#1B1B1D")
-_TAB = srgb("#C9CCD1")
-_PRINT = srgb("#E8E8E8")
-_TIN = srgb("#C5C8CE")
+_BODY = plastic("#1B1B1D")
+_TAB = nickel("#C9CCD1")
+_PRINT = plastic("#E8E8E8")
+_TIN = tin()
 
 
 def to220_irf520_anchors():

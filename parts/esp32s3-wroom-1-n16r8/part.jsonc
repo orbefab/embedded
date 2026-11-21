@@ -72,9 +72,9 @@
     ["TXD0", "u1.GPIO43", { "kind": "trace" }]
   ],
   // The datasheet does not locate the chip inside the shield. The QFN sits
-  // on this module's seating plane, at the origin.
+  // on the module's 0.8 mm PCB (Figure 10-1), at the origin, under the shield.
   "layout": {
-    "u1": { "at": [0, 0, 0] }
+    "u1": { "at": [0, 0, 0.8] }
   },
   "pins": {
     "GND": [1, 40, 41],

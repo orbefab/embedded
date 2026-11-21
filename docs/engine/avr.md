@@ -14,8 +14,8 @@ A pin report carries the pin's level and its drive, the pin's own stage apart fr
 - Ports B, C, and D, with the synchronizer on `PINx` (§14.2.4), the pull-ups, and the alternate functions of §14.3 on one pin mux. A pin id is port × 8 + bit, so `PB0` is 0, `PC0` is 8, and `PD0` is 16.
 - Timer0, Timer1, and Timer2 in every waveform mode, the shared prescaler of §17, input capture with the noise canceler, and the `T0`/`T1` clock inputs.
 - `INT0`, `INT1`, and the three pin-change groups (§13). While `clkI/O` runs, they read each pin through the `PINx` synchronizer, two cycles after the pad changes (Figure 14-3, and Figure 13-1 for a pin change). A pin holds the last level it was driven to in a cycle. Every level that lasts a cycle reaches the edge detector, however many pins change at once. §13.2.1 does not ensure an interrupt for a pulse shorter than a clock, and here it sets no flag. While reset holds the core, through the start-up time-out, the registers keep their reset values (§11.1), so a pin that moves then sets no flag. §11.1 does not say whether the synchronizer samples during reset. This model lets it, so the pin leaves its last level and release flags only a change that reaches the edge detector after it. A first `IN` from `PINx` reads the levels sampled during the hold. A change on the last cycle of the time-out reaches the edge detector after the first instruction. A first `STS` to `EICRA` or `PCMSK2` arms an edge for it only when the host has set the stored register, since reset clears the register file.
-- USART0 in asynchronous mode and as an SPI master (§20, §21). SPI master and slave (§19). The TWI master on SCL and SDA (§22), as [The TWI](#the-twi) says.
-- The ADC and the analog comparator (§23, §24), sampling voltages the host sets.
+- USART0 in asynchronous mode and as an SPI master (§20, §21). SPI master and slave (§19). A master reads `MISO` from its pad at the edge Table 19-3 samples on, and never drives it, because Table 19-1 makes it an input. The TWI master on SCL and SDA (§22), as [The TWI](#the-twi) says.
+- The ADC and the analog comparator (§23, §24), sampling voltages the host sets. The temperature sensor (§24.8) reads the netlist's world `temperature`, or 25 °C when the netlist declares none, through Table 24-2's typical values.
 - EEPROM (§8), the watchdog (§11), every reset source with its `MCUSR` flag, brown-out, the sleep modes and their wake sources (§10), `PRR`, `CLKPR`, and the fuse bytes.
 
 `Cpu::step` runs one instruction, or enters the interrupt pending at the boundary the core sits on. A host call between two steps lands at that boundary. A `Cpu::poke` that sets a flag under its enable, sets an enable under a flag already up, or unmasks a low level on `INT0` or `INT1`, leaves that interrupt pending there. With `I` set, the next `step` is the four-cycle entry and runs no instruction, and `Cpu::run_until` enters at the same boundary. §7.7.1 serves an interrupt once the current instruction completes, and the poke came after it did, so the flag is already pending when the next instruction would start. After `SEI` or `RETI` one instruction still runs first (§7.7). A host that single-steps passes through every state a run passes through.
@@ -75,16 +75,35 @@ Other choices that the documents do not settle are written beside the code that 
 
 ## Not yet modelled
 
-- **TWI slave mode.** `TWAR` and `TWAMR` are stored and logged, and nothing answers an address, general call included. The TWI is a master only.
-- **SPI with a part on a net.** SPI drives SCK, MOSI, and MISO, but its peer is inside the crate. A byte queue answers a master, or a host master clocks a slave.
-- **The analog comparator through the seam.** The adapter hands the core each pin as a level from its watch, so `AIN0`, `AIN1`, and an ADC channel the comparator reads through `ACME` compare 0 V or VCC, not the pins' voltages.
-- **`tRST`.** Table 29-11 (§29) gives `RESET` a minimum pulse width of 2.5 us. The adapter does not filter it and resets on a low of any length.
-- Timer2's asynchronous clock from a TOSC crystal. `ASSR.AS2` is stored and logged, and Timer2 counts `clkI/O`.
-- The boot section. The image runs from word 0, so parse rejects a programmed `BOOTRST`, and `SPM` is logged but does not write flash.
+The chip says when the firmware reaches something on this list. A refusal is `chip.unsupported_setting` or `chip.unsupported_instruction`: the run past it would be wrong, so the chip stops there and the run ends. A note is `chip.unmodeled_register`, once per run for each item: the model keeps the register without running what it does, and the run stays right. An in-run reset keeps both. The checks are in `packages/socs/microchip/src/bus/gaps.rs` and `Cpu`, each with its datasheet reason.
+
+| Firmware reaches | Diagnostic | Why |
+| --- | --- | --- |
+| A word that decodes to no instruction | refusal, op `unknown` | §37 lists the instruction set. The model ran such a word as a one-cycle no-op. An erased flash is all such words. |
+| A read of `ACSR` while the comparator is on (`ACD` clear) | refusal, `AC` `aco_read` | §23.1 sets `ACO` when `AIN0` is above `AIN1`. The adapter hands the core each pin as a level from its watch, so `AIN0`, `AIN1` and an ADC channel through `ACME` compare 0 V or VCC, not the pins' voltages. A read that a store setting `ACD` follows within 1024 cycles is `ACSR \|= _BV(ACD)`, which turns it off, and is no use. Any other read-modify-write refuses, such as `ACSR &= ~_BV(ACD)`, which turns the comparator on, or `ACSR \|= _BV(ACI)`, which clears its flag. Both mean the firmware uses the comparator. |
+| `ACIE`, `ACIC` or `ACBG` with the comparator on | refusal, `AC` and the bit | §23.3.2. The interrupt, Timer1's capture and the bandgap input each act on that output. |
+| `ADTS` 001 with the comparator on | refusal, `ADC` `ADTS` | Table 24-6. The conversion starts on that output. |
+| `REFS` 10, or `MUX` 1001 to 1101 | refusal, `ADC` `REFS` or `MUX` | Tables 24-3 and 24-4 mark them reserved. |
+| `ADMUX` selecting ADC6 or ADC7 | note on `ADMUX` | The 28-pin package the model runs has no pad for them, so a conversion reads 0 V. A Nano's TQFP has both. |
+| `MCUCR.IVSEL` | refusal, `CPU` `IVSEL` | §12.5.1 moves the vectors to the boot section, and the model serves them from word 0. |
+| A store to `SPMCSR` that sets `SPMIE` or any of bits 0 to 5 (`SPMEN`, `PGERS`, `PGWRT`, `BLBSET`, `RWWSRE`, `SIGRD`) | refusal, `BOOT_LOAD` `SPMCSR`, or its interrupt for `SPMIE` | §27.9.1. A store of 0, or of only the read-only `RWWSB`, does not refuse. Every `SPM` that acts needs `SPMEN` set here first. The model keeps the register as plain memory, so the `SPM` or `LPM` after it would not program flash or read a signature, fuse or lock byte, and `SPMEN` would never clear. |
+| `ASSR.AS2` or `ASSR.EXCLK` | refusal, `TC2` and the bit | §18.11.8 clocks Timer2 from `TOSC1`. The model counts `clkI/O`. |
+| `UMSEL0` 01 or 10, or `UPM0` 01 | refusal, `USART0` `synchronous`, `UMSEL` or `UPM` | Table 20-8: 01 is synchronous mode, clocked on `XCK`, and 10 is reserved. Table 20-9 marks `UPM` 01 reserved. |
+| `SLEEP` with `SM` 100 or 101 | refusal, a sleep | Table 10-2 marks both reserved. |
+| A firmware store to `TWAR` while `TWCR` has `TWEN` and `TWEA` set, as `Wire.begin(address)` makes | note on `TWAR` | §22.7.3 and §22.7.4: the TWI would answer its address, and the general call, as a slave. The TWI is a master only, so nothing answers. The run stays right until another master addresses the chip. |
+| A START at a bit rate below about 18 kHz | note on `TWBR` | `D` is `T/16` (see [The TWI](#the-twi)), which passes Table 29-14's 3.45 us `tHD;DAT` maximum there. |
+| A store to `OSCCAL` | note on `OSCCAL` | §9.12.1. It tunes the RC oscillator, which times EEPROM writes (§8.6.3). The system clock is the crystal, so only the EEPROM write time is off. |
+
+These stay unmodelled with no diagnostic:
+
+- **`tRST`.** Table 29-11 (§29) gives `RESET` a minimum pulse width of 2.5 us. The adapter does not filter it and resets on a low of any length. A short pulse comes from the circuit, not the firmware, so the chip has no instruction to name.
 - The TWI slew-rate limiter (§22.5.1). A low edge falls through the pin's 25 ohm stage.
 - The TWI spike filter (§22.5.1). The part suppresses a spike under 50 ns. The model has no filter, so it passes any pulse the circuit resolves.
-- tHD;DAT's maximum below about 18 kHz. `D` is `T/16`, which stays inside Table 29-14 down to that rate.
 - SMBus timeouts. The datasheet does not define them for this part.
+- A reserved `WGM` or `UCSZ0`. Each spans two registers, so a firmware passes through a reserved value while it writes them one at a time.
+- `GPIOR0` to `GPIOR2` and `DWDR`. They are plain memory on the part too.
+
+The netlist parse refuses two things before a run starts. One is a programmed `BOOTRST`, as [the netlist](netlist.md#atmega328p) says, because the image runs from word 0. The other is an Intel HEX text with no data record, such as the `.eep` of a sketch with no EEPROM data. It is `netlist.firmware` with rule `empty`.
 
 ## The TWI
 

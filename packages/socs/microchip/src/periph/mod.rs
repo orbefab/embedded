@@ -479,7 +479,6 @@ impl Device {
         cycle: u64,
         clock: &ClockView,
         ctx: &mut Ctx<'_>,
-        host: &mut crate::bus::hostside::HostSide,
     ) -> Touch {
         match self {
             Device::Port(port) => {
@@ -497,7 +496,7 @@ impl Device {
             }
             // The scratch stays here. The real context would report SS and MOSI,
             // and no caller expects a poke to do that.
-            Device::Spi(spi) => spi.poke(reg, value, mux, cycle, host.slave_miso()),
+            Device::Spi(spi) => spi.poke(reg, value, mux, cycle),
             Device::Twi(twi) => twi.poke(reg, value, mux, ctx, cycle),
             Device::Adc(adc) => adc.write(reg, value, mux, ctx, cycle),
             Device::Acmp(acmp) => acmp.write(reg, value, mux, ctx, cycle),
@@ -674,16 +673,10 @@ impl Device {
         }
     }
 
-    pub(crate) fn stamp(
-        &mut self,
-        cycle: u64,
-        mux: &mut PinMux,
-        ctx: &mut Ctx<'_>,
-        host: &mut crate::bus::hostside::HostSide,
-    ) {
+    pub(crate) fn stamp(&mut self, cycle: u64, mux: &mut PinMux, ctx: &mut Ctx<'_>) {
         match self {
             Device::Usart(usart) => usart.stamp(cycle, mux, ctx),
-            Device::Spi(spi) => spi.stamp(cycle, mux, ctx, host.slave_miso()),
+            Device::Spi(spi) => spi.stamp(cycle, mux, ctx),
             Device::Twi(twi) => twi.stamp(cycle, mux, ctx),
             _ => {}
         }

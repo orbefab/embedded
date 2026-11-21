@@ -78,7 +78,7 @@ scene.jsonc:4:23: error[part_missing]: part `nano-board` is not in this project'
 4 errors in scene.jsonc
 $ orbe add led-5mm nano-board resistor-axial tactile-switch-6mm
 ...
-wrote parts/nano-board 0.1.0
+wrote parts/nano-board 0.1.1
 ...
 wrote parts.lock
 $ orbe check scene.jsonc
@@ -293,7 +293,7 @@ An LED behind 10 kohm from 5 V carries about 0.35 mA and reads `dim`. When `step
 - An input lands at the session's time or later, and its reply gives the time. A `set` also lands after the last change the scene's `steps` schedule, so it never undoes one.
 - `step --until <condition> [--timeout <duration>]` first reads the condition now. If it holds, it takes no time. Otherwise it steps until it holds, up to the timeout, 10s by default. A pin condition stops 1 ps after the exact edge. `@led1.i` shows that current there, and the light state follows the average over 20 ms. Other conditions are read every 1 ms, so the reply says `by 104ms`. A timeout is the error `until_timeout`.
 - Serial can reach orbe up to one engine step (10 ms) after the chip sends it. Step a little past a print before you expect it.
-- A session stops at 2 hours of simulated time. Reads still work there, and `press`, `release`, `set` and `step` fail with `ended`. A `step` that would pass the stop fails with `past_stop`. Run `orbe open` to start again.
+- A session stops at 2 hours of simulated time. Reads still work there, and `press`, `release`, `set`, `step` and `play` fail with `ended`. Run `orbe open` to start again. A `step` by a time that would pass the stop fails with `past_stop`, and its hint names the time left. A `step --until` whose timeout passes the stop runs to the stop, and fails with `ended` if its condition has not held by then.
 
 A switch with `bounce` set bounces up to `max_bounces` times within that window after each `press` and `release`, and an input on it lands after the window of the one before. With this one-line change to the worked example's `scene.jsonc`,
 
@@ -342,7 +342,7 @@ A test file is `tests/<name>.test` in the project folder. Each line is a live co
 
 ```
 FAIL tests/button.test:4: expect @led1 lit
-  error[expect_failed]: expected @led1 lit
+  error[expect_failed]: expected @led1 lit at t=100ms
     expected: @led1 lit
     actual:   led1 off, i=1.2775403302175985e-13 A, brightness=1.2775403302174304e-13 A over 20ms
 0 passed, 1 failed
@@ -397,7 +397,7 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 | --- | --- |
 | `usage` | The command line is wrong. The message says how. |
 | `part_missing` | Run the `orbe add` command in the hint. |
-| `unknown_part` | `orbe add` knows no part by that id. Pick one from the parts list above. |
+| `unknown_part` | No Block or part has that id. Pick one the hint names, from `orbe blocks` or the parts list. |
 | `busy` | Another `orbe add` is at work in this project. Wait for it, then run yours again. |
 | `scene_exists`, `file_exists` | `orbe add <block>` found another scene, or a file whose bytes differ. Matching files are kept, and running it again finishes an install that stopped part way. Use a new folder only when the bytes differ, as the hint shows. |
 | `symlink` | `orbe add <block>` found a link where it would write. It does not follow the link. Remove the link, then run the command in the hint again. |
@@ -413,9 +413,11 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 | `session_crashed` | The session's process died. Run `orbe open` again. |
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |
 | `not_settable` | `press` and `release` work only on a switch, by its part name. `set` works only on a quantity the scene's `world` names or a part reads. |
+| `wrong_setting` | `press` and `release` do not apply: the part takes a different input, such as a trimmer's `position`. Set that param in the scene and run `orbe open` again. |
 | `no_change` | The input asks for the state already there, such as `set light 50` when the light is already 50. |
 | `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`. When an LED timeout covers a full 20 ms, the hint names the measured average, the state, and the range the wanted state needs, and says to check the circuit with `snapshot`. A shorter window says to step longer. Otherwise fix the circuit or the firmware, or step longer. |
-| `ended`, `past_stop` | The session reached its 2-hour stop. Run `orbe open`. |
+| `ended` | The session reached its 2-hour stop. Reads still work. Run `orbe open` before `press`, `release`, `set`, `step` or `play`. |
+| `past_stop` | A `step` would end past the stop, or an input would land past it. Step at most the time the hint names. When the message says the input would land past the stop, run `orbe open`. |
 | `cancelled` | Ctrl-C stopped a `step`. The session stays at the time it reached. Step again. |
 | `faulted` | The engine stopped the session. The message names why. Fix it and run `orbe open`. |
 
@@ -427,7 +429,8 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 - USB, and serial into the chip. The chip's serial out (TX, D1) is read as text.
 - The chip's clamp diodes. A pin pulled past VCC or GND draws no clamp current, and `rating.voltage` names it.
 - The chips' own supply current as the sketch changes it. The ATmega328P draws its datasheet typical for 16 MHz, 11.4 mA at 5 V while it runs and 2.0 mA while RESET is held low, and the Nano's and Uno's CH340G 12 mA at 5 V, both as resistances, whatever the sketch does and in sleep too.
-- A switch's force and travel, and part tolerances. An LED's `brightness` is its average forward current over the last 20 ms. It reads `lit` above 2 mA, `dim` above 100 uA and at or below 2 mA, and `off` at or below 100 uA. Light, temperature and humidity reach only a part whose file reads them from the scene's `world`.
+- A switch's force and travel, and part tolerances. An LED's `brightness` is its average forward current over the last 20 ms. It reads `lit` above 2 mA, `dim` above 100 uA and at or below 2 mA, and `off` at or below 100 uA. Light, temperature and humidity reach only a part whose file reads them from the scene's `world`, and the ATmega328P's own temperature sensor, which reads `temperature`.
 - Turning a potentiometer during a session. Its `position` param sets the wiper for the whole run, so run `orbe open` again after you change it.
+- Parts of the ATmega328P, such as its analog comparator, Timer2's 32 kHz crystal and self-programming, which stop the run with `chip.unsupported_setting` or `chip.unsupported_instruction` when a sketch reaches one. I2C slave mode, `OSCCAL`, A6 and A7, and an I2C clock below about 18 kHz warn `chip.unmodeled_register` once instead, and the run goes on. The arduino skill lists them.
 - Any part the catalog above does not list.
 - orbe never builds firmware. Build it with your toolchain and name the output file in the scene.

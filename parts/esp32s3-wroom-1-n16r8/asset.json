@@ -2,13 +2,13 @@
   "part": "esp32s3-wroom-1-n16r8",
   "source": {
     "script": "model.py",
-    "sha256": "ea1282eb8725beb14c1c218b010b5d4435c37a1f5d0293f4da7ebe52ae045c38",
-    "bytes": 3343
+    "sha256": "639a634a5005435654a8f43d7144a6dee89d23d6cc62c2c677cac5aa4f5f8341",
+    "bytes": 6083
   },
   "files": {
     "esp32s3-wroom-1-n16r8.glb": {
-      "sha256": "49c1153b4b8152852cf41161dc0f3ccb444ccd0fbd0a80cc88c2d283110b4e49",
-      "bytes": 29080
+      "sha256": "a5fc321018eb009e331bba1378f4f98b6d42bedd32727c3b9631c22ee40f15e0",
+      "bytes": 141912
     },
     "esp32s3-wroom-1-n16r8.anchors.json": {
       "sha256": "808575ead72001f9512b737bbf2bfa386b81ce264bf038cb28aa973c8c06867e",
@@ -16,11 +16,11 @@
     }
   },
   "box": {
-    "min": [-9.5, -13.250001, 0],
+    "min": [-9.5, -13.25, 0],
     "max": [9.5, 12.75, 3.1]
   },
   "kept_nodes": [],
-  "draw_calls": 2,
+  "draw_calls": 3,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -30,21 +30,21 @@
       "largest_miss_mm": 0
     },
     "seating": {
-      "lowest_node": "body",
+      "lowest_node": "pcb",
       "z_mm": 0
     },
     "names": {
       "nodes": []
     },
     "merge": {
-      "primitives_in": 42,
-      "primitives_out": 2
+      "primitives_in": 43,
+      "primitives_out": 3
     },
     "composition": {
       "children": 1,
-      "lowest_node": "body",
+      "lowest_node": "pcb",
       "z_mm": 0,
-      "draw_calls": 5
+      "draw_calls": 6
     }
   }
 }

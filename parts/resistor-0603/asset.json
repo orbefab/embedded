@@ -2,13 +2,13 @@
   "part": "resistor-0603",
   "source": {
     "script": "model.py",
-    "sha256": "99e93f6ec947577ebb054324e6311ae0516b02ca980136e259d747444b97b4ef",
-    "bytes": 947
+    "sha256": "77813dbdd030bfec821b90c71dc6574515585430f3753f9e6de94263e3756961",
+    "bytes": 953
   },
   "files": {
     "resistor-0603.glb": {
-      "sha256": "6124583262019f1725871badd2cb87138adeed795490a2ced8bcfb786bcb3197",
-      "bytes": 3812
+      "sha256": "0fcac055a2ed4fa4375d25ac98f15457cacb2fa67146e568c7bf2536e1f04d99",
+      "bytes": 3896
     },
     "resistor-0603.anchors.json": {
       "sha256": "6b88af0a2abc0b6155417fe745a4b826c53a9f2f21d0414739f1b6b6757e7327",

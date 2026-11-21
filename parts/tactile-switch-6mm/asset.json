@@ -2,13 +2,13 @@
   "part": "tactile-switch-6mm",
   "source": {
     "script": "model.py",
-    "sha256": "cd8e55f04f583f894d74d348d80eb8c44071c2f481ef9cb80414940e07997448",
-    "bytes": 2773
+    "sha256": "ad861f4405c0e5e0793479b1bf4ac7eb40f304ab5b9f7446143251b73cdc42fa",
+    "bytes": 2790
   },
   "files": {
     "tactile-switch-6mm.glb": {
-      "sha256": "9ecc36a5c9c16446da89f81543de5190a2a3731c13474f998a7f1102c2f225b3",
-      "bytes": 15224
+      "sha256": "2bae93a2e71051dac54e2d703cd70f0536b1bbee7e1df404412ea66bca0e9719",
+      "bytes": 15348
     },
     "tactile-switch-6mm.anchors.json": {
       "sha256": "6b2dc31ca5103063c9c06f53258f474741ae18ec82d3d7f3bb6f62c2a6905eda",

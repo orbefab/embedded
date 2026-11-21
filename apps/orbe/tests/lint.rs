@@ -470,7 +470,7 @@ fn lint_on_a_scene_that_does_not_check_prints_and_exits_as_check_does() {
     assert_eq!(missing.code, 3);
     assert_eq!(
         missing.stderr,
-        "error[io_error]: no scene file at nope.jsonc\n"
+        "error[io_error]: no scene file at nope.jsonc\n  hint: write the scene, or name its path\n"
     );
 }
 

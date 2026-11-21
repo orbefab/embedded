@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Checks the viewer: the type check, the unit tests and the page build. Needs Node 24 and pnpm.
-# check.sh does not run this, so it needs neither.
+# scripts/check.sh web runs this. lint and fast need neither Node nor pnpm.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 scripts/need-node-deps.sh scripts/check-viewer.sh

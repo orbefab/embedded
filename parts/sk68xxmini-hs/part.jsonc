@@ -1,7 +1,7 @@
 {
   "format": 1,
   "part": "sk68xxmini-hs",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "SK68XXMINI-HS addressable RGB LED",
   "summary": "One addressable RGB LED in a 3.7 x 3.5 x 1.95 mm package. Pin 1 is GND, pin 2 DIN, pin 3 VDD and pin 4 DOUT. The sheet's supply is 3.7 V to 5.5 V. The engine times the bits as a Worldsemi WS2812E, and this sheet's longest 0-bit high is 0.4 us, past that window.",
   "tags": ["led", "rgb", "addressable", "ws2812"],

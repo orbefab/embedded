@@ -12,7 +12,9 @@ use live::{common, failed, orbe, project, replies};
 fn each_block_passes() {
     let mut ids: Vec<String> = fs::read_dir(common::repo().join("blocks"))
         .unwrap()
-        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_dir())
+        .map(|path| path.file_name().unwrap().to_str().unwrap().to_string())
         .collect();
     ids.sort();
     assert_eq!(
@@ -413,7 +415,10 @@ fn a_failing_test_reports_its_line_with_expected_and_actual() {
     assert_eq!(run.code, 1);
     let lines: Vec<&str> = run.stdout.lines().collect();
     assert_eq!(lines[0], "FAIL tests/a.test:3: expect @led1 lit");
-    assert_eq!(lines[1], "  error[expect_failed]: expected @led1 lit");
+    assert_eq!(
+        lines[1],
+        "  error[expect_failed]: expected @led1 lit at t=10ms"
+    );
     assert_eq!(lines[2], "    expected: @led1 lit");
     assert!(
         lines[3].starts_with("    actual:   led1 off, i="),

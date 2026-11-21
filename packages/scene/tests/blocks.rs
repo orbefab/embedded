@@ -39,13 +39,20 @@ fn non_empty_text(value: &Value) -> bool {
     value.as_str().is_some_and(|text| !text.trim().is_empty())
 }
 
-#[test]
-fn each_block_names_itself_and_reads_with_the_catalog_alone() {
+/// Each Block is a folder. A file beside them, such as `README.md`, is not one.
+fn block_dirs() -> Vec<std::path::PathBuf> {
     let mut dirs: Vec<_> = fs::read_dir(common::repo().join("blocks"))
         .unwrap()
         .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_dir())
         .collect();
     dirs.sort();
+    dirs
+}
+
+#[test]
+fn each_block_names_itself_and_reads_with_the_catalog_alone() {
+    let dirs = block_dirs();
     assert!(dirs.len() >= 3, "{dirs:?}");
     for dir in dirs {
         let id = dir.file_name().unwrap().to_str().unwrap();
@@ -132,8 +139,8 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
 #[test]
 fn each_block_firmware_is_the_engine_build_of_its_sketch() {
     let sketches = common::repo().join("packages/engine/tests/firmware/sketch");
-    for entry in fs::read_dir(common::repo().join("blocks")).unwrap() {
-        let firmware = entry.unwrap().path().join("firmware");
+    for dir in block_dirs() {
+        let firmware = dir.join("firmware");
         let mut images = 0;
         for file in fs::read_dir(&firmware).unwrap() {
             let name = file.unwrap().file_name().into_string().unwrap();
@@ -177,8 +184,7 @@ fn each_block_notice_names_the_runtime_sketches_sh_pins_and_where_the_site_serve
         "https://orbefab.com/embedded/sources/{}",
         url.rsplit('/').next().unwrap()
     );
-    for entry in fs::read_dir(common::repo().join("blocks")).unwrap() {
-        let dir = entry.unwrap().path();
+    for dir in block_dirs() {
         let notice = fs::read_to_string(dir.join("firmware/NOTICE")).unwrap();
         assert!(
             notice.contains(&hosted),
@@ -348,8 +354,7 @@ fn each_block_file_names_its_own_licence() {
         }
     }
     let parts = orbe_scene::catalog_cards();
-    for entry in fs::read_dir(common::repo().join("blocks")).unwrap() {
-        let dir = entry.unwrap().path();
+    for dir in block_dirs() {
         let id = dir.file_name().unwrap().to_string_lossy().into_owned();
         let mut files = BTreeMap::new();
         walk(&dir, &dir, &mut files);

@@ -1,3 +1,13 @@
+# Lint, the Rust tests, the viewer and the site run in parallel on every pull
+# request and on every push to main. A pull request runs the site suite on
+# wrangler. The vite host, which includes the install-line build, and the
+# Firefox and WebKit smoke run on main and nightly. The engine checks run on
+# main and nightly, and on a pull
+# request unless every changed file is under apps/site/, docs/ or .github/
+# other than this workflow, or is a markdown file. The cargo cache keeps
+# dependencies only. Caching the workspace crates still rebuilt them after
+# checkout, so those artifacts are left out. scripts/check-speed.sh stays
+# a local check.
 name: CI
 
 on:
@@ -5,20 +15,64 @@ on:
   push:
     branches:
       - main
+  schedule:
+    - cron: "0 6 * * *"
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CARGO_PROFILE_TEST_DEBUG: line-tables-only
+  CARGO_BUILD_JOBS: "4"
+  NO_COLOR: "1"
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+  CACHE_SAVE: ${{ github.ref == 'refs/heads/main' }}
 
 jobs:
-  check:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    env:
-      CARGO_INCREMENTAL: "0"
-      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  scope:
+    name: engine paths
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      engine: ${{ steps.paths.outputs.run }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Engine paths
+        id: paths
+        run: |
+          git fetch --no-tags origin "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}"
+          scripts/ci-engine-changed.sh "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" | tee -a "$GITHUB_OUTPUT"
+
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install shellcheck
+        run: |
+          if ! command -v shellcheck >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y shellcheck
+          fi
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Install Rust
         run: |
@@ -29,15 +83,660 @@ jobs:
           cargo fmt --version
           cargo clippy --version
 
+      # The runner image ships stable beside the toolchain rust-toolchain.toml
+      # pins. rust-cache hashes every installed toolchain, so that stable
+      # changes the cache key when the image does.
+      - name: Drop the image toolchain
+        run: |
+          if rustup toolchain list | grep -q '^stable'; then
+            rustup toolchain uninstall stable
+          fi
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: ". -> target"
+          save-if: ${{ env.CACHE_SAVE }}
+
+      - name: Lint
+        run: scripts/check.sh lint
+
+      # Release builds also target macOS arm64, where some libc types differ (`st_dev` is an
+      # `i32`). Clippy for that target catches a build that breaks only there. It needs no Mac,
+      # since it type-checks without linking.
+      - name: Lint for macOS
+        run: |
+          rustup target add aarch64-apple-darwin
+          cargo clippy --workspace --all-targets --locked --target aarch64-apple-darwin -- -D warnings
+
+  rust-tests:
+    name: rust-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustc --version
+
+      - name: Drop the image toolchain
+        run: |
+          if rustup toolchain list | grep -q '^stable'; then
+            rustup toolchain uninstall stable
+          fi
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: ". -> target"
+          save-if: ${{ env.CACHE_SAVE }}
+
+      - name: Nextest version
+        id: nextest
+        run: echo "version=$(awk -F '"' '/^nextest-version[[:space:]]*=/ { print $2; exit }' .config/nextest.toml)" >> "$GITHUB_OUTPUT"
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: cargo-nextest@${{ steps.nextest.outputs.version }}
+
       - name: Install uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Rust tests
+        run: scripts/check.sh rust
+
+  viewer:
+    name: viewer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare pnpm@11.28.10 --activate
+
+      - name: Restore the pnpm store
+        id: pnpm-store
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/setup-pnpm/store
+          key: pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile --store-dir /home/runner/setup-pnpm/store
+
+      - name: Save the pnpm store
+        if: env.CACHE_SAVE == 'true' && steps.pnpm-store.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/setup-pnpm/store
+          key: pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Restore the Playwright Chromium cache
+        id: playwright
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/.cache/ms-playwright
+          key: playwright-chromium-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Chromium
+        run: pnpm exec playwright install chromium
+
+      - name: Save the Playwright Chromium cache
+        if: env.CACHE_SAVE == 'true' && steps.playwright.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/.cache/ms-playwright
+          key: playwright-chromium-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Viewer fixture
+        run: |
+          scripts/check-viewer.sh
+          scripts/check-viewer-e2e.sh
+
+  viewer-blocks:
+    name: block, headed, world
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare pnpm@11.28.10 --activate
+
+      - name: Restore the pnpm store
+        id: pnpm-store
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/setup-pnpm/store
+          key: pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile --store-dir /home/runner/setup-pnpm/store
+
+      - name: Save the pnpm store
+        if: env.CACHE_SAVE == 'true' && steps.pnpm-store.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/setup-pnpm/store
+          key: pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Restore the Playwright Chromium cache
+        id: playwright
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/.cache/ms-playwright
+          key: playwright-chromium-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Chromium
+        run: pnpm exec playwright install chromium
+
+      - name: Save the Playwright Chromium cache
+        if: env.CACHE_SAVE == 'true' && steps.playwright.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/.cache/ms-playwright
+          key: playwright-chromium-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustc --version
+
+      - name: Drop the image toolchain
+        run: |
+          if rustup toolchain list | grep -q '^stable'; then
+            rustup toolchain uninstall stable
+          fi
+
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: ". -> target"
+          shared-key: web
+          save-if: ${{ env.CACHE_SAVE }}
 
-      - name: Check
-        run: scripts/check.sh lint
+      - name: Install wasm-bindgen
+        run: scripts/install-wasm-bindgen.sh
+
+      - name: Block, headed and world
+        run: |
+          scripts/check-block.sh
+          scripts/check-headed.sh
+
+  site:
+    name: site ${{ matrix.shard }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/2", "2/2"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare pnpm@11.28.10 --activate
+
+      - name: Restore the pnpm store
+        id: pnpm-store
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/setup-pnpm/store
+          key: pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile --store-dir /home/runner/setup-pnpm/store
+
+      - name: Save the pnpm store
+        if: env.CACHE_SAVE == 'true' && steps.pnpm-store.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/setup-pnpm/store
+          key: pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Restore the Playwright Chromium cache
+        id: playwright
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/.cache/ms-playwright
+          key: playwright-chromium-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Chromium
+        run: pnpm exec playwright install chromium
+
+      - name: Save the Playwright Chromium cache
+        if: env.CACHE_SAVE == 'true' && steps.playwright.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/.cache/ms-playwright
+          key: playwright-chromium-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustc --version
+
+      - name: Drop the image toolchain
+        run: |
+          if rustup toolchain list | grep -q '^stable'; then
+            rustup toolchain uninstall stable
+          fi
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: ". -> target"
+          shared-key: web
+          save-if: ${{ env.CACHE_SAVE }}
+
+      - name: Install wasm-bindgen
+        run: scripts/install-wasm-bindgen.sh
+
+      - name: Previous registry
+        if: matrix.shard == '2/2'
+        run: scripts/site-previous.test.sh
+
+      - name: Site on wrangler
+        run: scripts/check-site.sh --first-deploy --servers wrangler --shard "${{ matrix.shard }}"
+
+  engine-chips:
+    name: engine-chips
+    needs: scope
+    if: >-
+      always() && !cancelled() &&
+      (needs.scope.result == 'success' || needs.scope.result == 'skipped') &&
+      (github.event_name != 'pull_request' || needs.scope.outputs.engine == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustc --version
+
+      - name: Drop the image toolchain
+        run: |
+          if rustup toolchain list | grep -q '^stable'; then
+            rustup toolchain uninstall stable
+          fi
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: ". -> target"
+          save-if: ${{ env.CACHE_SAVE }}
+
+      - name: Nextest version
+        id: nextest
+        run: echo "version=$(awk -F '"' '/^nextest-version[[:space:]]*=/ { print $2; exit }' .config/nextest.toml)" >> "$GITHUB_OUTPUT"
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: cargo-nextest@${{ steps.nextest.outputs.version }}
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Chip skip checks
+        run: scripts/check.sh engine-chips
+
+  engine-circuits:
+    name: engine-circuits
+    needs: scope
+    if: >-
+      always() && !cancelled() &&
+      (needs.scope.result == 'success' || needs.scope.result == 'skipped') &&
+      (github.event_name != 'pull_request' || needs.scope.outputs.engine == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install ngspice
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ngspice
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustc --version
+
+      - name: Drop the image toolchain
+        run: |
+          if rustup toolchain list | grep -q '^stable'; then
+            rustup toolchain uninstall stable
+          fi
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: ". -> target"
+          save-if: ${{ env.CACHE_SAVE }}
+
+      - name: Nextest version
+        id: nextest
+        run: echo "version=$(awk -F '"' '/^nextest-version[[:space:]]*=/ { print $2; exit }' .config/nextest.toml)" >> "$GITHUB_OUTPUT"
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: cargo-nextest@${{ steps.nextest.outputs.version }}
+
+      - name: Circuit checks
+        run: scripts/check.sh engine-circuits
+
+  engine-wasm:
+    name: engine-wasm
+    needs: scope
+    if: >-
+      always() && !cancelled() &&
+      (needs.scope.result == 'success' || needs.scope.result == 'skipped') &&
+      (github.event_name != 'pull_request' || needs.scope.outputs.engine == 'true')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare pnpm@11.28.10 --activate
+
+      - name: Restore the pnpm store
+        id: pnpm-store
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/setup-pnpm/store
+          key: pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile --store-dir /home/runner/setup-pnpm/store
+
+      - name: Save the pnpm store
+        if: env.CACHE_SAVE == 'true' && steps.pnpm-store.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/setup-pnpm/store
+          key: pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustc --version
+
+      - name: Drop the image toolchain
+        run: |
+          if rustup toolchain list | grep -q '^stable'; then
+            rustup toolchain uninstall stable
+          fi
+          rustup target add wasm32-wasip1
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: ". -> target"
+          save-if: ${{ env.CACHE_SAVE }}
+
+      - name: Install wasm-bindgen
+        run: scripts/install-wasm-bindgen.sh
+
+      - name: WASI and the wasm package
+        run: scripts/check.sh engine-wasm
+
+  site-vite:
+    name: site vite
+    if: github.event_name == 'schedule' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare pnpm@11.28.10 --activate
+
+      - name: Restore the pnpm store
+        id: pnpm-store
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/setup-pnpm/store
+          key: pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile --store-dir /home/runner/setup-pnpm/store
+
+      - name: Save the pnpm store
+        if: env.CACHE_SAVE == 'true' && steps.pnpm-store.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/setup-pnpm/store
+          key: pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Restore the Playwright Chromium cache
+        id: playwright
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/.cache/ms-playwright
+          key: playwright-chromium-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Chromium
+        run: pnpm exec playwright install chromium
+
+      - name: Save the Playwright Chromium cache
+        if: env.CACHE_SAVE == 'true' && steps.playwright.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/.cache/ms-playwright
+          key: playwright-chromium-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustc --version
+
+      - name: Drop the image toolchain
+        run: |
+          if rustup toolchain list | grep -q '^stable'; then
+            rustup toolchain uninstall stable
+          fi
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: ". -> target"
+          shared-key: web
+          save-if: ${{ env.CACHE_SAVE }}
+
+      - name: Install wasm-bindgen
+        run: scripts/install-wasm-bindgen.sh
+
+      - name: Site on vite preview
+        run: scripts/check-site.sh --first-deploy --servers vite
+
+  engines:
+    name: engines
+    if: github.event_name == 'schedule' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Node
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare pnpm@11.28.10 --activate
+
+      - name: Restore the pnpm store
+        id: pnpm-store
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/setup-pnpm/store
+          key: pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile --store-dir /home/runner/setup-pnpm/store
+
+      - name: Save the pnpm store
+        if: env.CACHE_SAVE == 'true' && steps.pnpm-store.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/setup-pnpm/store
+          key: pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Restore the Playwright Firefox and WebKit cache
+        id: playwright
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/.cache/ms-playwright
+          key: playwright-firefox-webkit-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Firefox and WebKit
+        run: |
+          pnpm exec playwright install-deps firefox webkit
+          pnpm exec playwright install firefox webkit
+
+      - name: Save the Playwright Firefox and WebKit cache
+        if: env.CACHE_SAVE == 'true' && steps.playwright.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: /home/runner/.cache/ms-playwright
+          key: playwright-firefox-webkit-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain none --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustc --version
+
+      - name: Drop the image toolchain
+        run: |
+          if rustup toolchain list | grep -q '^stable'; then
+            rustup toolchain uninstall stable
+          fi
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: ". -> target"
+          shared-key: web
+          save-if: ${{ env.CACHE_SAVE }}
+
+      - name: Install wasm-bindgen
+        run: scripts/install-wasm-bindgen.sh
+
+      - name: Build the viewer page and the site
+        run: |
+          pnpm --filter @orbe/viewer-page build
+          scripts/site.sh --first-deploy
+
+      - name: Firefox and WebKit
+        run: scripts/check-engines.sh
+
+  ci-ok:
+    name: ci-ok
+    needs: [scope, lint, rust-tests, viewer, viewer-blocks, site, engine-chips, engine-circuits, engine-wasm]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require the other jobs
+        env:
+          SCOPE: ${{ needs.scope.result }}
+          LINT: ${{ needs.lint.result }}
+          RUST: ${{ needs.rust-tests.result }}
+          VIEWER: ${{ needs.viewer.result }}
+          VIEWER_BLOCKS: ${{ needs.viewer-blocks.result }}
+          SITE: ${{ needs.site.result }}
+          ENGINE_CHIPS: ${{ needs.engine-chips.result }}
+          ENGINE_CIRCUITS: ${{ needs.engine-circuits.result }}
+          ENGINE_WASM: ${{ needs.engine-wasm.result }}
+        run: |
+          failed=
+          for name in SCOPE LINT RUST VIEWER VIEWER_BLOCKS SITE ENGINE_CHIPS ENGINE_CIRCUITS ENGINE_WASM; do
+            result=${!name}
+            case $result in
+              success|skipped) ;;
+              *)
+                echo "$name is $result" >&2
+                failed=1
+                ;;
+            esac
+          done
+          [[ -z $failed ]]
