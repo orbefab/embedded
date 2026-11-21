@@ -215,9 +215,11 @@ pub enum Data {
     Paced {
         playing: bool,
     },
-    /// A viewer's address, which `show` gives.
+    /// A viewer's address, which `show` gives. `viewers` is how many were already connected,
+    /// so `open --headed` does not count the browser it is about to open.
     Viewer {
         url: String,
+        viewers: usize,
     },
     Landed {
         target: String,
@@ -937,7 +939,7 @@ impl Data {
             }),
             Data::Closed { at_ps } => json!({ "closed": true, "at_ps": at_ps }),
             Data::Paced { playing } => json!({ "playing": playing }),
-            Data::Viewer { url } => json!({ "url": url }),
+            Data::Viewer { url, viewers } => json!({ "url": url, "viewers": viewers }),
             Data::Landed {
                 target, landed_ps, ..
             } => json!({ "ref": format!("@{target}"), "landed_ps": landed_ps }),
@@ -1042,7 +1044,7 @@ impl Data {
             Data::Paced { playing: false } => {
                 let _ = write!(out, "paused at t={}", t(t_ps));
             }
-            Data::Viewer { url } => out.push_str(url),
+            Data::Viewer { url, .. } => out.push_str(url),
             Data::Landed {
                 target,
                 pressed,

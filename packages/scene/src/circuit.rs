@@ -31,6 +31,15 @@ pub use view::{Instance, PartData, PinWhy, Placement, View, Wire};
 const ROOT: usize = 0;
 const NAME_LIMIT: usize = 64;
 
+/// A pin of `part` the scene can name as its ground: `GND`, else the pin its `ground` names.
+fn ground_pin_of(part: &Part) -> Option<String> {
+    if part.pin("GND").is_some() {
+        return Some("GND".into());
+    }
+    let declared = part.comp.ground.as_ref()?.text.rsplit('.').next()?;
+    part.pin(declared).is_some().then(|| declared.to_string())
+}
+
 /// A net name the engine accepts: an ASCII letter, then letters, digits or `_`, and not `net`.
 fn net_name(name: &str) -> bool {
     let mut chars = name.chars();
@@ -1378,6 +1387,40 @@ impl<'p> Circuit<'p> {
         root
     }
 
+    /// A ground the scene can name. A top part's `GND` pin, or the pin its `ground` names,
+    /// and `nano` when that part is there. With no such pin, a placeholder, never a board
+    /// the scene does not have.
+    fn ground_hint(&self) -> String {
+        format!(
+            "name one in the scene, as \"ground\": \"{}\"",
+            self.ground_example()
+        )
+    }
+
+    fn ground_example(&self) -> String {
+        let mut found = Vec::new();
+        for inst in 1..self.insts.len() {
+            if self.insts[inst].path.len() != 1 || self.insts[inst].dropped.is_some() {
+                continue;
+            }
+            let Some(part) = self.part(inst) else {
+                continue;
+            };
+            let Some(pin) = ground_pin_of(part) else {
+                continue;
+            };
+            found.push((self.insts[inst].path[0].as_str(), pin));
+        }
+        if let Some((id, pin)) = found.iter().find(|(id, _)| *id == "nano") {
+            return format!("{id}.{pin}");
+        }
+        found.sort_by_key(|(id, _)| *id);
+        match found.first() {
+            Some((id, pin)) => format!("{id}.{pin}"),
+            None => "<part>.<pin>".into(),
+        }
+    }
+
     /// Every `ground` in the tree must land on one net. The scene's own, when it has one, wins.
     fn ground(&mut self, scene: &Scene, nets: &BTreeMap<usize, String>) -> Option<String> {
         let mut grounds: Vec<(Option<usize>, String)> = Vec::new();
@@ -1397,7 +1440,7 @@ impl<'p> Circuit<'p> {
             }
         }
         let span = scene.span;
-        let hint = "name one in the scene, as \"ground\": \"nano.GND\"";
+        let hint = self.ground_hint();
         let roots: Vec<(Option<&String>, &String)> = grounds
             .iter()
             .map(|(k, text)| (k.map(|k| self.find(k)).and_then(|r| nets.get(&r)), text))
@@ -1408,7 +1451,7 @@ impl<'p> Circuit<'p> {
                     Code::Ground,
                     span,
                     "nothing in the scene names a ground",
-                    hint.into(),
+                    hint.clone(),
                 );
             }
             return None;
@@ -1418,7 +1461,7 @@ impl<'p> Circuit<'p> {
                 Code::Ground,
                 span,
                 format!("the ground `{first_text}` is on no simulated net"),
-                hint.into(),
+                hint.clone(),
             );
             return None;
         };
@@ -1427,7 +1470,7 @@ impl<'p> Circuit<'p> {
                 Code::Ground,
                 span,
                 format!("the grounds `{first_text}` and `{other}` sit on different nets"),
-                hint.into(),
+                hint,
             );
             return None;
         }

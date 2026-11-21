@@ -223,7 +223,7 @@ fn print_headed(
         Err(refused) => (refused.json()["error"].clone(), refused.exit()),
     };
     if let Ok(Reply {
-        data: Data::Viewer { url },
+        data: Data::Viewer { url, .. },
         ..
     }) = shown.as_deref()
     {
@@ -242,7 +242,10 @@ fn print_headed(
             Err(refused) => eprintln!("{}", refused.text()),
         }
     }
-    if browser && let Ok(reply) = &shown {
+    if browser
+        && let Ok(reply) = &shown
+        && let Data::Viewer { viewers: 0, .. } = &reply.data
+    {
         open_browser(reply);
     }
     ExitCode::from(exit)
@@ -251,7 +254,7 @@ fn print_headed(
 /// Opens `show`'s URL in the default browser. A browser that does not start leaves the URL to
 /// open by hand.
 fn open_browser(reply: &Reply) {
-    let Data::Viewer { url } = &reply.data else {
+    let Data::Viewer { url, .. } = &reply.data else {
         return;
     };
     let program = if cfg!(target_os = "macos") {
@@ -824,9 +827,12 @@ impl Client {
                 let _ = hangup.shutdown(Shutdown::Write);
             });
         }
+        #[cfg(debug_assertions)]
         let stop = matches!(ask, Ask::Run(Ok(Command::Open(_))))
             .then(|| std::env::var("ORBE_TEST_STOP").ok())
             .flatten();
+        #[cfg(not(debug_assertions))]
+        let stop: Option<String> = None;
         let request = Request {
             cwd: self.cwd.clone(),
             ask,

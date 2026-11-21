@@ -41,8 +41,8 @@ enum Command {
     /// Type-checks a scene and every part file it uses, and prints each finding.
     #[command(display_order = 1)]
     Check {
-        /// The scene file, such as scene.jsonc.
-        scene: PathBuf,
+        /// The scene file, such as scene.jsonc. scene.jsonc when omitted.
+        scene: Option<PathBuf>,
         /// Print one JSON envelope instead of text.
         #[arg(long)]
         json: bool,
@@ -51,8 +51,8 @@ enum Command {
     /// or unclear. Warnings never fail it.
     #[command(display_order = 2)]
     Lint {
-        /// The scene file, such as scene.jsonc.
-        scene: PathBuf,
+        /// The scene file, such as scene.jsonc. scene.jsonc when omitted.
+        scene: Option<PathBuf>,
         /// Print one JSON envelope instead of text.
         #[arg(long)]
         json: bool,
@@ -316,11 +316,9 @@ fn main() -> ExitCode {
         .and_then(|matches| Cli::from_arg_matches(&matches));
     match parsed {
         Ok(cli) => match cli.command {
-            Command::Check { scene, json } => check(&scene, json),
-            Command::Lint { scene, json } => lint(&scene, json),
-            Command::Nets { scene, json } => {
-                nets(&scene.unwrap_or_else(|| PathBuf::from("scene.jsonc")), json)
-            }
+            Command::Check { scene, json } => check(&scene_or_default(scene), json),
+            Command::Lint { scene, json } => lint(&scene_or_default(scene), json),
+            Command::Nets { scene, json } => nets(&scene_or_default(scene), json),
             Command::Add {
                 ids,
                 dir,
@@ -724,6 +722,10 @@ fn print_skill(command: SkillsCommand) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+fn scene_or_default(scene: Option<PathBuf>) -> PathBuf {
+    scene.unwrap_or_else(|| PathBuf::from("scene.jsonc"))
 }
 
 fn check(scene: &Path, json: bool) -> ExitCode {

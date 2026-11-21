@@ -83,3 +83,7 @@ opt-level = 3
 
 [profile.dev.package.sha2]
 opt-level = 3
+
+# The binary `scripts/release-build.sh` publishes. Symbols are not part of it.
+[profile.release]
+strip = true

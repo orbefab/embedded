@@ -197,8 +197,12 @@ impl Held {
                 .live
                 .refuse(Error::new(Code::NoSession, "no scene is open", ""));
         }
+        let viewers = self.watchers.viewers.len();
         if let Some(url) = &self.url {
-            return self.live.report(Data::Viewer { url: url.clone() });
+            return self.live.report(Data::Viewer {
+                url: url.clone(),
+                viewers,
+            });
         }
         let page = match Page::find(page) {
             Ok(page) => page,
@@ -207,7 +211,7 @@ impl Held {
         match viewer::start(page, Arc::clone(&self.models), self.events.clone()) {
             Ok(url) => {
                 self.url = Some(url.clone());
-                self.live.report(Data::Viewer { url })
+                self.live.report(Data::Viewer { url, viewers })
             }
             Err(error) => self.live.refuse(Error::new(
                 Code::IoError,
@@ -393,7 +397,10 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
         log: &log,
         inode,
     });
+    #[cfg(debug_assertions)]
     let idle = test_duration("ORBE_TEST_IDLE_TIMEOUT").unwrap_or(IDLE);
+    #[cfg(not(debug_assertions))]
+    let idle = IDLE;
     let (events, queue) = mpsc::channel();
     let reading = Arc::new(AtomicUsize::new(0));
     let timer = unopened_timer(events.clone(), UNOPENED.min(idle), Arc::clone(&reading));
@@ -534,7 +541,9 @@ fn unopened_timer(events: Sender<Event>, wait: Duration, reading: Arc<AtomicUsiz
 }
 
 /// `ORBE_TEST_IDLE_TIMEOUT`, which also caps `UNOPENED`, and `ORBE_TEST_READ_DELAY`, how long
-/// the process waits before it reads its first connection's request.
+/// the process waits before it reads its first connection's request. A release build has
+/// neither switch.
+#[cfg(debug_assertions)]
 fn test_duration(name: &str) -> Option<Duration> {
     std::env::var(name)
         .ok()
@@ -543,18 +552,27 @@ fn test_duration(name: &str) -> Option<Duration> {
 }
 
 /// `ORBE_TEST_STOP` from the shell that ran `open`, a test seam for a stop shorter than 2 hours.
+/// A release build ignores it.
 fn test_stop(text: Option<&str>) -> Result<Option<(orbe_session::Duration, String)>, Error> {
-    let Some(text) = text else {
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = text;
         return Ok(None);
-    };
-    let stop = orbe_session::Duration::parse(text).map_err(|reason| {
-        Error::new(
-            Code::Usage,
-            format!("ORBE_TEST_STOP={text} is not a duration: {reason}"),
-            "set ORBE_TEST_STOP to a duration such as 50ms, or unset it",
-        )
-    })?;
-    Ok(Some((stop, "ORBE_TEST_STOP".into())))
+    }
+    #[cfg(debug_assertions)]
+    {
+        let Some(text) = text else {
+            return Ok(None);
+        };
+        let stop = orbe_session::Duration::parse(text).map_err(|reason| {
+            Error::new(
+                Code::Usage,
+                format!("ORBE_TEST_STOP={text} is not a duration: {reason}"),
+                "set ORBE_TEST_STOP to a duration such as 50ms, or unset it",
+            )
+        })?;
+        Ok(Some((stop, "ORBE_TEST_STOP".into())))
+    }
 }
 
 /// `to` from the folder `from`, both real paths, such as `../scene.jsonc`.
@@ -619,7 +637,10 @@ fn holds_output(path: &Path) -> bool {
 
 /// Counts each accepted connection in `reading` until its request is queued or it ends.
 fn accept(listener: &UnixListener, jobs: &Sender<Event>, reading: &Arc<AtomicUsize>) {
+    #[cfg(debug_assertions)]
     let mut delay = test_duration("ORBE_TEST_READ_DELAY");
+    #[cfg(not(debug_assertions))]
+    let mut delay: Option<Duration> = None;
     for stream in listener.incoming().flatten() {
         reading.fetch_add(1, Ordering::SeqCst);
         let (jobs, reading, delay) = (jobs.clone(), Arc::clone(reading), delay.take());

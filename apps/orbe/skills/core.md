@@ -20,7 +20,7 @@ This text comes from the `orbe` you have installed, so it matches it. `orbe <com
    - `nano-light-comparator`: an LDR and a trimmer set a threshold. An LM358 lights a red LED in the dark, and a Nano on D2 prints dark or light.
 2. Otherwise find each part with `orbe search <words>`, read it with `orbe part <id>`, and copy it into the project with `orbe add <id>…`.
 3. Write `scene.jsonc` in the project folder. Seat each part on a breadboard with `on`.
-4. Run `orbe check scene.jsonc`, then `orbe lint scene.jsonc`, after every edit. Do what each hint says. A `part_missing` hint is the `orbe add` command to run. `orbe nets` lists each net and its pins, and marks `(floating)` on a net with no DC path to ground.
+4. Run `orbe check scene.jsonc`, then `orbe lint scene.jsonc`, after every edit. With no path, both read `scene.jsonc`. Do what each hint says. A `part_missing` hint is the `orbe add` command to run. `orbe nets` lists each net and its pins, and marks `(floating)` on a net with no DC path to ground.
 5. Build the firmware and name the built file in the scene. For an Arduino board, run `orbe skills get arduino` first.
 6. Run `orbe open`, which starts a session at t = 0, paused. Drive it with `step`, `press`, `release`, `set`, `get`, `expect` and `snapshot`. After a fix, rebuild and run `orbe open` again. Write what works as `tests/<name>.test` and run `orbe test`.
 7. When the user wants to watch, run `orbe open --headed` and `orbe play`.
@@ -190,4 +190,4 @@ With `--json` a command prints one JSON object, `{"ok": true, "data": {...}}` or
 
 ## Watching in 3D
 
-`orbe open --headed` opens the scene and a page in the default browser, where a person watches it in 3D and clicks its buttons. `orbe show` opens the page on a session that already runs, and `--no-browser` only prints its address. The address holds the session's key, so give it only to the user. A session opens paused, so run `orbe play` before you hand over the page. Time then runs at real speed until `orbe pause`, a `step` that runs, the 2-hour stop or a fault, and uses the CPU while it runs.
+`orbe open --headed` opens the scene and a page in the default browser, where a person watches it in 3D and clicks its buttons. When a viewer is already connected, it prints the address and opens no browser. `orbe show` opens the page on a session that already runs, and `--no-browser` only prints its address. The address holds the session's key, so give it only to the user. A session opens paused, so run `orbe play` before you hand over the page. Time then runs at real speed until `orbe pause`, a `step` that runs, the 2-hour stop or a fault, and uses the CPU while it runs.
