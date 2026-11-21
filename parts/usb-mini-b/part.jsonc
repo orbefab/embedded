@@ -1,6 +1,6 @@
 {
   "format": 1, "part": "usb-mini-b", "version": "0.1.1", "title": "USB mini-B socket", "license": "MIT OR Apache-2.0",
-  "summary": "Right-angle USB mini-B receptacle. Five contacts: lead 1 is VBUS and lead 5 is GND. The shell feet are ground with pin 5.",
+  "summary": "Right-angle USB mini-B receptacle. Five contacts: lead 1 is VBUS and lead 5 is GND.",
   "tags": ["usb", "connector", "socket", "surface-mount"],
   "docs": { "USB 2.0 specification": null },
   "real": { "generic": true, "maker": null, "number": null, "datasheet": "USB 2.0 specification" },

@@ -40,7 +40,7 @@
       "children": 50,
       "lowest_node": "pcb",
       "z_mm": 0,
-      "draw_calls": 274
+      "draw_calls": 281
     }
   }
 }

@@ -149,6 +149,12 @@ def _stamp_factors(glb: Path, table) -> None:
     materials = doc.get("materials") or []
     if not materials:
         raise RuntimeError(f"{glb.name}: GLB has no materials")
+    # A solid with no colour gets no material, and a loader draws it as white metal.
+    for index, mesh in enumerate(doc.get("meshes") or []):
+        for primitive in mesh.get("primitives") or []:
+            if "material" not in primitive:
+                name = mesh.get("name") or f"#{index}"
+                raise RuntimeError(f"{glb.name}: mesh {name} has no colour, so no finish")
     for mat in materials:
         pbr = mat.setdefault("pbrMetallicRoughness", {})
         raw = pbr.get("baseColorFactor", [1.0, 1.0, 1.0, 1.0])
