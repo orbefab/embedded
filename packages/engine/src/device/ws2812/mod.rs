@@ -1,20 +1,21 @@
 //! A `ws2812` chain behind the seam. It watches `DIN` and takes `Pulses` on that net. The
-//! device in [`model`] keeps the bits and the colours, and shows the colours. The pulse engine
-//! times the line.
+//! device in [`model`] keeps the bits and the colours, shows the colours, and drives `DOUT`
+//! when the part wires it. The pulse engine times the line.
 
 use serde::Deserialize;
 
-use orbe_model::{Device, Fields, Value};
+use orbe_model::{Device, Fields, Value as FieldValue};
 
 use crate::active::native::{Hosted, Native};
 use crate::active::pulse::Pulse;
-use crate::active::{Chip, Core, Takes};
+use crate::active::{Chip, Core, Output, Stage, Takes};
 use crate::diagnostic::{Diagnostic, ValueRule};
 use crate::mna::Node;
 use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
-use crate::netlist::json::{PinMap, resolve_pins};
-use crate::netlist::{NetId, PartId, Threshold};
+use crate::netlist::json::{PinMap, WireInt, resolve_int, resolve_pins};
+use crate::netlist::{IntValue, NetId, PartId, Threshold, Value};
+use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage_at};
 use crate::watch::{Signal, Watch};
 
 pub(crate) mod model;
@@ -25,15 +26,25 @@ mod tests;
 const VCC: usize = 0;
 const GND: usize = 1;
 const DIN: usize = 2;
+const DOUT: usize = 3;
 
-/// The pin pairs it joins at DC. It joins none: `DIN` draws no current.
-pub(crate) const DC_PATHS: [(usize, usize); 0] = [];
+/// The pin pairs it joins at DC: `DOUT` to `VCC` and to `GND` when it is wired. `DIN` draws no
+/// current.
+const DC_PATHS: [(usize, usize); 2] = [(DOUT, VCC), (DOUT, GND)];
+
+pub(crate) fn dc_paths(chain: &Ws2812) -> &'static [(usize, usize)] {
+    if chain.dout.is_some() { &DC_PATHS } else { &[] }
+}
+
+/// The longest `dout.delay`, picoseconds: T1H's longest high, so the edges still due at once
+/// stay few.
+pub const DOUT_DELAY_MAX: u64 = 1_000_000;
 
 /// No events. A chain takes its bits from the line.
 pub(crate) const ROW: crate::device::Row = crate::device::Row::new(&[]);
 
 pub(crate) fn chip(part: PartId, chain: &Ws2812) -> Chip {
-    let pins = chain.pins;
+    let pins = &chain.pins;
     let against = |fraction: f64| Signal {
         terms: vec![
             (Node::from(pins[DIN]), 1.0),
@@ -43,9 +54,28 @@ pub(crate) fn chip(part: PartId, chain: &Ws2812) -> Chip {
         offset: 0.0,
     };
     let threshold = &chain.input_threshold;
+    let stage = |drop: &Value, resistance: &Value| Stage {
+        drop: drop.si.get(),
+        resistance: resistance.si.get(),
+    };
+    let outputs = chain
+        .dout
+        .iter()
+        .map(|dout| Output {
+            pin: pins[DOUT],
+            vcc: pins[VCC],
+            gnd: pins[GND],
+            high: stage(&dout.output.high_drop, &dout.output.high_resistance),
+            low: stage(&dout.output.low_drop, &dout.output.low_resistance),
+            pull_up: None,
+            pull_down: None,
+            leakage: None,
+        })
+        .collect();
+    let delay = chain.dout.as_ref().map_or(0, |dout| dout.delay.value);
     Chip {
         part: Some(part),
-        outputs: Vec::new(),
+        outputs,
         watches: vec![Watch {
             rise: against(threshold.high.si.get()),
             fall: against(threshold.low.si.get()),
@@ -61,40 +91,61 @@ pub(crate) fn chip(part: PartId, chain: &Ws2812) -> Chip {
             duty: None,
             pulses: Some(pins[DIN]),
         },
-        core: Core::Device(core(chain.leds)),
+        core: Core::Device(core(chain.leds, delay)),
     }
 }
 
 /// The device sized to the chain: the smallest of 16, 64, 256 and 1024 LEDs that holds it. A
-/// landing copies the state, so a short chain copies little.
-fn core(leds: u16) -> Box<dyn Hosted> {
+/// landing copies the state, so a short chain copies little. `delay` is `DIN` to `DOUT` in
+/// picoseconds, 0 for a chain with no `DOUT`.
+fn core(leds: u16, delay: u64) -> Box<dyn Hosted> {
     match leds {
-        0..=16 => sized::<16>(leds),
-        17..=64 => sized::<64>(leds),
-        65..=256 => sized::<256>(leds),
-        _ => sized::<{ Ws2812::LED_MAX as usize }>(leds),
+        0..=16 => sized::<16>(leds, delay),
+        17..=64 => sized::<64>(leds, delay),
+        65..=256 => sized::<256>(leds, delay),
+        _ => sized::<{ Ws2812::LED_MAX as usize }>(leds, delay),
     }
 }
 
-fn sized<const N: usize>(leds: u16) -> Box<dyn Hosted> {
-    let device = model::Ws2812::<N>::new(&Fields::new(&[("leds", Value::Int(i64::from(leds)))]))
-        .expect("the state holds the chain");
-    Box::new(Native::new(device, Pulse::new(), 0))
+fn sized<const N: usize>(leds: u16, delay: u64) -> Box<dyn Hosted> {
+    let delay = i64::try_from(delay).expect("parse bounds the delay");
+    let device = model::Ws2812::<N>::new(&Fields::new(&[
+        ("leds", FieldValue::Int(i64::from(leds))),
+        ("delay", FieldValue::Int(delay)),
+    ]))
+    .expect("the state holds the chain");
+    let outputs = if delay > 0 { model::OUTPUTS } else { 0 };
+    Box::new(Native::new(device, Pulse::new(), outputs))
 }
 
 /// A chain of WS2812E-1313 LEDs, an active chip with no clock of its own. It reads `DIN`
 /// through `input_threshold`, fractions of its supply, and takes `Pulses` records on that net.
 /// Each LED keeps the first 24 bits, green then red then blue, and passes the rest on. A low
-/// longer than 280 µs latches. `leds` is from 1 to [`Ws2812::LED_MAX`]. Only parse builds one.
+/// longer than 280 µs latches. `leds` is from 1 to [`Ws2812::LED_MAX`]. With `dout`, the last
+/// LED passes the rest on through `DOUT`. Only parse builds one.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ws2812 {
-    pub pins: [NetId; 3],
+    /// `VCC`, `GND` and `DIN`, then `DOUT` when `dout` is given.
+    pub pins: Vec<NetId>,
     pub leds: u16,
     pub input_threshold: Threshold,
+    pub dout: Option<Dout>,
+}
+
+/// How a chain drives `DOUT`: through `output` from its own rails, each `DIN` high once every
+/// LED holds its bits, `delay` later.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dout {
+    pub output: OutputStage,
+    /// Picoseconds, from 1 to [`DOUT_DELAY_MAX`].
+    pub delay: IntValue,
 }
 
 impl Ws2812 {
-    pub const PINS: [&'static str; 3] = ["VCC", "GND", "DIN"];
+    /// The first three are required. `DOUT` is wired exactly when the part gives `dout`.
+    pub const PINS: [&'static str; 4] = ["VCC", "GND", "DIN", "DOUT"];
+    /// How many of [`PINS`](Self::PINS) every chain wires.
+    pub const REQUIRED: usize = 3;
     /// The most LEDs one part holds.
     pub const LED_MAX: u16 = model::LED_MAX;
     /// The count a part omits.
@@ -113,6 +164,15 @@ pub(crate) struct WireWs2812 {
     #[serde(default = "default_leds")]
     leds: u16,
     input_threshold: WireThreshold,
+    #[serde(default)]
+    dout: Option<WireDout>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireDout {
+    output: WireOutputStage,
+    delay: WireInt<u64>,
 }
 
 pub(crate) fn resolve_ws2812(ctx: ParseCtx<'_>, wire: WireWs2812) -> Option<Ws2812> {
@@ -123,7 +183,31 @@ pub(crate) fn resolve_ws2812(ctx: ParseCtx<'_>, wire: WireWs2812) -> Option<Ws28
         out,
         ..
     } = ctx;
-    let pins = resolve_pins(name, Ws2812::PINS, &wire.pins.0, nets, out);
+    let pins = if wire.dout.is_some() {
+        resolve_pins(name, Ws2812::PINS, &wire.pins.0, nets, out).map(Vec::from)
+    } else {
+        let [vcc, gnd, din, _] = Ws2812::PINS;
+        resolve_pins(name, [vcc, gnd, din], &wire.pins.0, nets, out).map(Vec::from)
+    };
+    let dout = wire.dout.map(|dout| {
+        let output = resolve_output_stage_at(part_ref, "dout.output", dout.output, out);
+        let delay = resolve_int(part_ref, "dout.delay", "ps", dout.delay, out);
+        if let Some(delay) = &delay
+            && delay.value > DOUT_DELAY_MAX
+        {
+            out.push(Diagnostic::NetlistValue {
+                part: part_ref.clone(),
+                field: "dout.delay".into(),
+                value: delay.value as f64,
+                rule: ValueRule::Delay,
+            });
+            return None;
+        }
+        Some(Dout {
+            output: output?,
+            delay: delay?,
+        })
+    });
     let input_threshold = resolve_threshold(
         part_ref,
         ["input_threshold.low", "input_threshold.high"],
@@ -141,9 +225,14 @@ pub(crate) fn resolve_ws2812(ctx: ParseCtx<'_>, wire: WireWs2812) -> Option<Ws28
         });
         None
     };
+    let dout = match dout {
+        Some(dout) => Some(dout?),
+        None => None,
+    };
     Some(Ws2812 {
         pins: pins?,
         leds: leds?,
         input_threshold: input_threshold?,
+        dout,
     })
 }

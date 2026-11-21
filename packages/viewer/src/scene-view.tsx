@@ -8,7 +8,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { type BuiltScene, buildScene, fromGltf, type Tag, tagOf } from "./build";
 import type { CameraMode } from "./camera-frame";
 import { CameraRig } from "./camera-rig";
-import { glowIntensity, litColour, shownCurrent } from "./glow";
+import { glowIntensity, litColour, pixelGlow, shownCurrent } from "./glow";
 import type { Hovered, HoverStore } from "./hover";
 import type { Command, FrameMessage, Ref, SceneMessage, Vec3 } from "./protocol";
 import { holeAt, instanceAt, refOf, stripText } from "./refs";
@@ -229,14 +229,18 @@ export function SceneView({
     const live = frame.current;
     const peaks = ledPeak.current;
     for (const glow of built.glows) {
-      const now = live?.led_a[glow.channel] ?? 0;
-      const intensity = glowIntensity(shownCurrent(now, peaks[glow.channel] ?? 0), glow.full);
+      const { by } = glow;
+      const intensity =
+        by.kind === "current"
+          ? glowIntensity(shownCurrent(live?.led_a[by.channel] ?? 0, peaks[by.channel] ?? 0), by.full)
+          : pixelGlow(live?.pixel_rgb[by.channel] ?? [], glow.material.emissive);
       glow.material.emissiveIntensity = intensity;
       litColour(glow.base, intensity, glow.material.color);
     }
-    // A glow mesh is on the bloom layer only from its full current up, where its own luminance
-    // reaches the bloom threshold. Below that, a highlight on it or on the lens over it would
-    // bloom from some angles, and the LED would read as lit.
+    // A glow mesh is on the bloom layer only from intensity 1 up, its full current or a
+    // channel at 255, where its own luminance reaches the bloom threshold. Below that, a
+    // highlight on it or on the lens over it would bloom from some angles, and the LED would
+    // read as lit.
     for (const { mesh, material } of glowing) {
       if (material.emissiveIntensity >= 1) mesh.layers.enable(BLOOM_LAYER);
       else mesh.layers.disable(BLOOM_LAYER);

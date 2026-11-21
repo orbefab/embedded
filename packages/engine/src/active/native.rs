@@ -40,8 +40,13 @@ pub(crate) trait Hosted: Send + fmt::Debug {
     fn shows(&self) -> Shows;
     /// What the device shows now.
     fn view(&self) -> View<'_>;
-    /// Each time what an LED chain shows changed, in time order.
-    fn shown(&self) -> &[Shown];
+    /// Each time what an LED chain shows changed, in time order. A core keeps every one only
+    /// once [`keep_shown`](Self::keep_shown) asked it to, and otherwise the last alone.
+    fn shown(&self) -> Vec<Shown>;
+    /// When what an LED chain shows last changed. `None` before the first change.
+    fn latched(&self) -> Option<Time>;
+    /// Keeps every change of what an LED chain shows, for a run that writes them.
+    fn keep_shown(&mut self);
     /// Each rule its port or its device saw broken, at the first time.
     fn broke(&self) -> Vec<(ProtocolRule, Time)>;
     /// The first record its port dropped because a lane sat on another net than its pin, and
@@ -60,6 +65,68 @@ pub(crate) struct Shown {
     pub(crate) bytes: Arc<[u8]>,
 }
 
+/// What an LED chain showed, newest first, as a list each copy shares. A copy copies a pointer,
+/// and a change adds one link however many copies share the list, so a chain that latches `n`
+/// times costs `n` links. A copy that rewinds keeps the links it had, and the newer links go
+/// with the last copy that holds them.
+#[derive(Clone, Debug, Default)]
+struct History(Option<Arc<Link>>);
+
+#[derive(Debug)]
+struct Link {
+    shown: Shown,
+    before: History,
+}
+
+impl History {
+    /// Adds `shown` after the rest, or in place of the rest when `keep` is false.
+    fn push(&mut self, shown: Shown, keep: bool) {
+        let before = if keep {
+            std::mem::take(self)
+        } else {
+            History::default()
+        };
+        self.0 = Some(Arc::new(Link { shown, before }));
+    }
+
+    fn last(&self) -> Option<&Shown> {
+        self.0.as_deref().map(|link| &link.shown)
+    }
+
+    /// Oldest first.
+    fn to_vec(&self) -> Vec<Shown> {
+        let mut all = Vec::new();
+        let mut at = self.0.as_deref();
+        while let Some(link) = at {
+            all.push(link.shown.clone());
+            at = link.before.0.as_deref();
+        }
+        all.reverse();
+        all
+    }
+
+    fn same(&self, other: &History) -> bool {
+        match (&self.0, &other.0) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
+/// Drops a long list one link at a time, so it never recurses once per link.
+impl Drop for History {
+    fn drop(&mut self) {
+        let mut next = self.0.take();
+        while let Some(link) = next {
+            next = match Arc::try_unwrap(link) {
+                Ok(mut link) => link.before.0.take(),
+                Err(_) => None,
+            };
+        }
+    }
+}
+
 /// A device and what its calls left besides its state. Every call on the device goes through
 /// [`call`](Self::call) or [`run_until`](Self::run_until), which read its `Cx`.
 pub(crate) struct Hosting<D> {
@@ -67,7 +134,11 @@ pub(crate) struct Hosting<D> {
     /// The first time a call broke each rule, by [`ProtocolRule::index`].
     broke: [Option<Time>; ProtocolRule::ALL.len()],
     /// Shared with every copy, so a copy copies a pointer.
-    shown: Arc<Vec<Shown>>,
+    shown: History,
+    /// Whether `shown` keeps every change, or the last alone. A run that writes `leds.csv`
+    /// keeps them all. A session that writes nothing needs only the last, and keeping every
+    /// one would grow without bound in a long session.
+    keep: bool,
     /// The pixel writes it closed that a commit has not staged. A call that closes one is at a
     /// landing that commits it, so a copy holds none.
     drawn: Vec<(Time, Drawn)>,
@@ -81,7 +152,8 @@ impl<D: Device> Clone for Hosting<D> {
         Hosting {
             device: self.device.clone(),
             broke: self.broke,
-            shown: Arc::clone(&self.shown),
+            shown: self.shown.clone(),
+            keep: self.keep,
             drawn: self.drawn.clone(),
             queued: self.queued.clone(),
         }
@@ -92,9 +164,10 @@ impl<D: Device> Clone for Hosting<D> {
     fn clone_from(&mut self, source: &Self) {
         self.device.copy_from(&source.device);
         self.broke = source.broke;
-        if !Arc::ptr_eq(&self.shown, &source.shown) {
-            self.shown = Arc::clone(&source.shown);
+        if !self.shown.same(&source.shown) {
+            self.shown = source.shown.clone();
         }
+        self.keep = source.keep;
         self.drawn.clone_from(&source.drawn);
         self.queued.clone_from(&source.queued);
     }
@@ -105,7 +178,8 @@ impl<D: Device> Hosting<D> {
         Hosting {
             device,
             broke: [None; ProtocolRule::ALL.len()],
-            shown: Arc::new(Vec::new()),
+            shown: History::default(),
+            keep: false,
             drawn: Vec::new(),
             queued: None,
         }
@@ -130,6 +204,20 @@ impl<D: Device> Hosting<D> {
         call: impl FnOnce(&mut D, &mut Cx) -> R,
     ) -> R {
         let mut cx = Self::cx(world, at);
+        let out = call(&mut self.device, &mut cx);
+        self.read(at, cx);
+        out
+    }
+
+    /// [`call`](Self::call), in a `Cx` that says it replays a record.
+    #[inline]
+    pub(crate) fn replay<R>(
+        &mut self,
+        world: &World,
+        at: Time,
+        call: impl FnOnce(&mut D, &mut Cx) -> R,
+    ) -> R {
+        let mut cx = Self::cx(world, at).replaying();
         let out = call(&mut self.device, &mut cx);
         self.read(at, cx);
         out
@@ -173,10 +261,11 @@ impl<D: Device> Hosting<D> {
                 matches!(D::SHOWS, Shows::Leds { .. }) && bytes.len().is_multiple_of(3),
                 "a chain shows three bytes per led"
             );
-            Arc::make_mut(&mut self.shown).push(Shown {
+            let shown = Shown {
                 at,
                 bytes: Arc::from(bytes),
-            });
+            };
+            self.shown.push(shown, self.keep);
         }
         if let Some(drawn) = cx.drawn() {
             assert!(
@@ -491,8 +580,16 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
         self.dev.device.view()
     }
 
-    fn shown(&self) -> &[Shown] {
-        &self.dev.shown
+    fn shown(&self) -> Vec<Shown> {
+        self.dev.shown.to_vec()
+    }
+
+    fn latched(&self) -> Option<Time> {
+        self.dev.shown.last().map(|shown| shown.at)
+    }
+
+    fn keep_shown(&mut self) {
+        self.dev.keep = true;
     }
 
     fn broke(&self) -> Vec<(ProtocolRule, Time)> {

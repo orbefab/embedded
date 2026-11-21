@@ -215,7 +215,7 @@ fn a_part_draws_on_its_own_with_its_children_and_no_channel() {
     assert_eq!(scene["session"], "nano-board");
     assert_eq!(
         scene["channels"],
-        serde_json::json!({ "pins": [], "leds": [], "switches": [] })
+        serde_json::json!({ "pins": [], "leds": [], "switches": [], "pixels": [] })
     );
     assert!(scene.get("circuit_hash").is_none());
     let instances = scene["instances"].as_array().unwrap();

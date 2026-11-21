@@ -97,6 +97,9 @@ pub(crate) struct FrameMessage<'a> {
     /// 1 for closed, 0 for open, per `channels.switches`.
     #[cfg_attr(test, schemars(extend("items" = { "enum": [0, 1] })))]
     switches: &'a [u8],
+    /// Red, green and blue from 0 to 255, per `channels.pixels`: the colour that part's first LED
+    /// last latched, black before its first latch.
+    pixel_rgb: &'a [[u8; 3]],
     /// Each value per the scene's `world`: the value from `t_ps` on, or from where the
     /// quantity's last `set` lands when that is later, so a `set` shows while paused. Absent
     /// when the scene declares none.
@@ -363,6 +366,7 @@ impl Feed {
             pins: &sample.pins,
             led_a,
             switches: &sample.switches,
+            pixel_rgb: &sample.pixels,
             world: (!sample.world.is_empty()).then_some(sample.world.as_slice()),
             speed: pace.map(|pace| pace.speed),
             ratio: pace.map(|pace| pace.ratio),
@@ -509,6 +513,7 @@ mod tests {
             pins: vec![],
             leds: vec![],
             switches: vec![],
+            pixels: vec![],
             world: vec![],
             diagnostics: 0,
             fault: None,

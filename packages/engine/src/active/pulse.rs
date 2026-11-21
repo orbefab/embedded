@@ -164,8 +164,18 @@ impl<D: PulseTarget> Pulse<D> {
         self.idle_at = at.as_ps().checked_add(D::IDLE.after).map(Time::from_ps);
     }
 
-    fn feed(&mut self, dev: &mut Hosting<D>, world: &World, level: bool, at: Time) {
+    /// The line at `level` from `at`. `replay` is a level a record carried, and its call says so.
+    fn feed(&mut self, dev: &mut Hosting<D>, world: &World, level: bool, at: Time, replay: bool) {
         let rest = D::IDLE.level;
+        let call = |dev: &mut Hosting<D>, level: bool, width: u64| {
+            let pulse =
+                |device: &mut D, cx: &mut orbe_model::Cx| device.pulse(cx, at, level, width);
+            if replay {
+                dev.replay(world, at, pulse);
+            } else {
+                dev.call(world, at, pulse);
+            }
+        };
         match self.line {
             Line::Fresh => {
                 self.line = if level == rest {
@@ -177,7 +187,7 @@ impl<D: PulseTarget> Pulse<D> {
             Line::Held if level == rest => self.settle(at),
             Line::Away { since } if level == rest => {
                 let width = at.as_ps().saturating_sub(since.as_ps());
-                dev.call(world, at, |device, cx| device.pulse(cx, at, !rest, width));
+                call(dev, !rest, width);
                 self.settle(at);
             }
             Line::Rest { since } if level != rest => {
@@ -186,7 +196,7 @@ impl<D: PulseTarget> Pulse<D> {
                     "the idle lands before the line leaves rest"
                 );
                 let width = at.as_ps().saturating_sub(since.as_ps());
-                dev.call(world, at, |device, cx| device.pulse(cx, at, rest, width));
+                call(dev, rest, width);
                 self.idle_at = None;
                 self.line = Line::Away { since: at };
             }
@@ -209,7 +219,7 @@ impl<D: PulseTarget> Pulse<D> {
     ) {
         self.restore(dev, start);
         if self.line == Line::Fresh {
-            self.feed(dev, world, idle, start);
+            self.feed(dev, world, idle, start, true);
         }
         if self.line == Line::Held {
             match pulses.first() {
@@ -223,7 +233,7 @@ impl<D: PulseTarget> Pulse<D> {
             if t > until_ps {
                 break;
             }
-            self.feed(dev, world, level, Time::from_ps(t));
+            self.feed(dev, world, level, Time::from_ps(t), true);
             t = t.saturating_add(ps);
             if let Some(idle_at) = self.idle_at
                 && idle_at.as_ps() <= t.min(until_ps)
@@ -237,7 +247,7 @@ impl<D: PulseTarget> Pulse<D> {
     /// keeps its start.
     fn rest(&mut self, dev: &mut Hosting<D>, world: &World, idle: bool, at: Time) {
         let leaves = idle != D::IDLE.level && matches!(self.line, Line::Rest { .. });
-        self.feed(dev, world, idle, at);
+        self.feed(dev, world, idle, at, true);
         if leaves {
             self.line = Line::Held;
         }
@@ -285,7 +295,7 @@ impl<D: PulseTarget> Port<D> for Pulse<D> {
     fn input(&mut self, dev: &mut Hosting<D>, world: &World, at: Time, levels: &[bool]) {
         assert_eq!(levels.len(), 1, "a pulse target watches one line");
         self.undo = None;
-        self.feed(dev, world, levels[0], at);
+        self.feed(dev, world, levels[0], at, false);
     }
 
     fn claim(&mut self, dev: &mut Hosting<D>, at: Time) {
