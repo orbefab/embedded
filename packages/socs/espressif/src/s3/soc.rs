@@ -9,6 +9,7 @@
 //! never sees time go back when one core's access comes a cycle after its step's start.
 
 use std::collections::BTreeMap;
+use std::iter;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -18,6 +19,7 @@ use super::analog::Analog;
 use super::app::{self, AppControl, Hold, Steer};
 use super::calibration::{self, Calibration};
 use super::clock::{CpuClock, Source, Tick};
+use super::code::Code;
 use super::efuse::{Efuse, EfuseSet};
 use super::extmem;
 use super::flash::{self, Flash};
@@ -44,6 +46,9 @@ pub(crate) const SRAM: usize = 512 * 1024;
 pub(crate) const RTC_FAST: Range<u32> = 0x600f_e000..0x6010_0000;
 /// RTC slow memory, on the data bus.
 pub(crate) const RTC_SLOW: Range<u32> = 0x5000_0000..0x5000_2000;
+
+/// The netted GPIOs fit one mask.
+const _: () = assert!(PADS <= 64);
 
 const PERIPHERALS: Range<u32> = 0x6000_0000..0x600d_1000;
 pub(crate) const GPIO: u32 = 0x6000_4000;
@@ -87,7 +92,9 @@ pub(crate) struct Soc {
     rtc_slow: PagedRam,
     /// The mask ROM, on a chip booted from flash.
     rom: Option<Arc<[u8]>>,
-    pub(crate) flash: Option<Flash>,
+    flash: Option<Flash>,
+    /// The code version the cores' decode tables run on, and the lines it watches.
+    code: Code,
     /// Registers kept as plain words, by address.
     plain: BTreeMap<u32, u32>,
     pub(crate) gpio: Gpio,
@@ -117,6 +124,8 @@ pub(crate) struct Soc {
     calibration: [Calibration; 2],
     /// The GPIOs with nets, whose drives the image holds.
     netted: Vec<u8>,
+    /// Bit `n` set for each GPIO `n` in `netted`, each below [`PADS`].
+    netted_mask: u64,
     pub(crate) unmodeled: BTreeMap<u32, Touch>,
     /// Each write that changed a register the model keeps without running its effect, with
     /// that register, in the order the writes landed.
@@ -326,6 +335,7 @@ impl Soc {
             rtc_slow: PagedRam::new(RTC_SLOW.start, (RTC_SLOW.end - RTC_SLOW.start) as usize),
             rom: None,
             flash: None,
+            code: Code::default(),
             plain: BTreeMap::new(),
             gpio: Gpio::new(netted),
             systimer: Systimer::new(),
@@ -349,6 +359,7 @@ impl Soc {
             matrix: Matrix::default(),
             calibration: Default::default(),
             netted: netted.to_vec(),
+            netted_mask: netted.iter().fold(0, |mask, &gpio| mask | 1 << gpio),
             unmodeled: BTreeMap::new(),
             changes: Vec::new(),
             pending: None,
@@ -446,16 +457,20 @@ impl Soc {
     /// that channel and whether `OUT_INV_SEL` inverts it.
     fn ledc_pads(&self) -> Vec<(u8, u8, bool)> {
         let channels = ledc::SIGNAL..ledc::SIGNAL + ledc::CHANNELS as u16;
-        (0..PADS as u8)
-            .filter(|&pad| self.netted(pad))
-            .filter_map(|pad| {
-                let (signal, inverted) = self.gpio.carries(usize::from(pad))?;
-                let channel = channels
-                    .contains(&signal)
-                    .then(|| (signal - ledc::SIGNAL) as u8)?;
-                Some((pad, channel, inverted))
-            })
-            .collect()
+        let mut left = self.netted_mask;
+        iter::from_fn(move || {
+            let pad = (left != 0).then(|| left.trailing_zeros() as u8)?;
+            left &= left - 1;
+            Some(pad)
+        })
+        .filter_map(|pad| {
+            let (signal, inverted) = self.gpio.carries(usize::from(pad))?;
+            let channel = channels
+                .contains(&signal)
+                .then(|| (signal - ledc::SIGNAL) as u8)?;
+            Some((pad, channel, inverted))
+        })
+        .collect()
     }
 
     /// Puts `set` in the eFuse controller's read registers, where IDF reads its calibration.
@@ -471,6 +486,26 @@ impl Soc {
     /// Adds the ROM and the flash, as a chip booted from flash has them.
     pub(crate) fn attach_rom(&mut self, rom: Arc<[u8]>) {
         self.rom = Some(rom);
+        self.code.moved();
+    }
+
+    /// Gives the chip `flash`, which fetches then read through its MMU.
+    pub(crate) fn attach_flash(&mut self, flash: Flash) {
+        self.flash = Some(flash);
+        self.code.moved();
+    }
+
+    /// The whole flash, on a chip that has it.
+    pub(crate) fn flash_bytes(&self) -> Option<&[u8]> {
+        self.flash.as_ref().map(Flash::bytes)
+    }
+
+    /// Maps `size` bytes of flash from `offset` at bus address `vaddr`, as the bootloader maps
+    /// an app's segment.
+    pub(crate) fn map_flash(&mut self, vaddr: u32, offset: u32, size: u32) {
+        let flash = self.flash.as_mut().expect("a chip with flash");
+        flash.map(vaddr, offset, size);
+        self.code.moved();
     }
 
     /// The word at `addr`, as a load at `cycle` reads it.
@@ -583,6 +618,15 @@ impl Soc {
         true
     }
 
+    /// A load of a UART's `STATUS` or of USB Serial/JTAG's `EP1_CONF` settles its peripheral
+    /// to the load's tick, as a poll does, and changes nothing else, so it moves no line. A
+    /// firmware that prints reads one of them before each byte it sends.
+    pub(crate) fn load_moves_lines(addr: u32) -> bool {
+        let word = addr & !3;
+        let status = uart::BASES.iter().any(|&base| word == base + uart::STATUS);
+        !status && word != USB_SERIAL_JTAG + usb::EP1_CONF && Self::access_moves_lines(addr)
+    }
+
     pub(crate) fn sram_offset(addr: u32, fetch: bool) -> Option<u32> {
         RAM.iter()
             .filter(|w| w.code || !fetch)
@@ -593,6 +637,7 @@ impl Soc {
     /// Writes `bytes` from `addr` into SRAM or RTC memory, as a loader does. Every byte lies in
     /// one of them.
     pub(crate) fn poke(&mut self, addr: u32, bytes: &[u8]) {
+        self.code.moved();
         if let Some(offset) = Self::sram_offset(addr, false) {
             self.sram.write_bytes(offset, bytes);
         } else if RTC_FAST.contains(&addr) {
@@ -1025,10 +1070,18 @@ impl Soc {
                 }
                 true
             }
-            _ if MMU_TABLE.contains(&addr) => self
-                .flash
-                .as_mut()
-                .is_some_and(|flash| flash.write_mmu(addr - MMU_TABLE.start, value)),
+            _ if MMU_TABLE.contains(&addr) => {
+                let Some(flash) = self.flash.as_mut() else {
+                    return false;
+                };
+                let offset = addr - MMU_TABLE.start;
+                let before = flash.read_mmu(offset);
+                let done = flash.write_mmu(offset, value);
+                if flash.read_mmu(offset) != before {
+                    self.code.moved();
+                }
+                done
+            }
             _ => false,
         };
         let value = if base == EXTMEM {
@@ -1278,7 +1331,7 @@ impl Soc {
 
     /// Whether pad `gpio` has a net.
     pub(crate) fn netted(&self, gpio: u8) -> bool {
-        self.netted.contains(&gpio)
+        usize::from(gpio) < PADS && self.netted_mask >> gpio & 1 != 0
     }
 
     /// Puts GPIO and IO_MUX back to power-on, as a reset does.
@@ -1325,21 +1378,28 @@ fn word_of(addr: u32, width: Width) -> (u32, u32, u32) {
 }
 
 impl Soc {
-    fn fetch(&mut self, addr: u32) -> Result<u32, Exit> {
-        if self.changed.is_some()
+    /// Whether a store set something the run reads before the next instruction, so every fetch
+    /// stops.
+    fn fetch_held(&self) -> bool {
+        self.changed.is_some()
             || self.sampled.is_some()
             || self.rearmed
             || self.reclocked
             || self.started
-        {
+    }
+
+    fn fetch(&mut self, addr: u32) -> Result<u32, Exit> {
+        if self.fetch_held() {
             return Err(Exit::Stop);
         }
         if let Some(offset) = Self::sram_offset(addr, true) {
+            self.code.fetched_sram(offset);
             return Ok(self.sram.read(offset, Width::Word));
         }
         let word = if flash::IROM.contains(&addr) || rom::ROM.contains(&addr) {
             self.memory_word(addr)
         } else if RTC_FAST.contains(&addr) {
+            self.code.fetched_rtc_fast(addr - RTC_FAST.start);
             Some(self.rtc_fast.read(addr, Width::Word))
         } else {
             None
@@ -1423,10 +1483,12 @@ impl Soc {
                 }
             }
             self.sram.write(offset, width, value);
+            self.code.stored_sram(offset);
             return Ok(());
         }
         if RTC_FAST.contains(&addr) {
             self.rtc_fast.write(addr, width, value);
+            self.code.stored_rtc_fast(addr - RTC_FAST.start);
             return Ok(());
         }
         if RTC_SLOW.contains(&addr) {
@@ -1691,6 +1753,10 @@ impl Bus for CoreBus<'_> {
         Soc::access_moves_lines(addr)
     }
 
+    fn load_moves_lines(&self, addr: u32) -> bool {
+        Soc::load_moves_lines(addr)
+    }
+
     fn next_event(&mut self, now: Cycle) -> Option<Cycle> {
         self.stamp_start();
         self.soc.next_event(now)
@@ -1698,5 +1764,13 @@ impl Bus for CoreBus<'_> {
 
     fn yields(&self) -> bool {
         self.soc.steer.is_some()
+    }
+
+    fn code_version(&self) -> Option<u64> {
+        Some(self.soc.code.version())
+    }
+
+    fn fetch_held(&self) -> bool {
+        self.soc.fetch_held()
     }
 }
