@@ -129,17 +129,17 @@ mod tests {
     fn fields(ratio: f64) -> String {
         format!(
             r#"
-              "output_voltage": {{ "value": 3.3, "unit": "V", "source": "user" }},
-              "line_regulation": {{ "value": 9.75609756097561e-05, "unit": "1", "source": "user" }},
-              "output_resistance": {{ "value": 0.00125, "unit": "ohm", "source": "user" }},
-              "dropout_voltage": {{ "value": 1.0857142857142859, "unit": "V", "source": "user" }},
-              "dropout_resistance": {{ "value": 0.14285714285714288, "unit": "ohm", "source": "user" }},
-              "current_limit": {{ "value": 1.2, "unit": "A", "source": "user" }},
-              "quiescent_current": {{ "value": 0.005, "unit": "A", "source": "user" }},
-              "ground_current_ratio": {{ "value": {ratio}, "unit": "1", "source": "user" }},
+              "output_voltage": {{ "value": 3.3, "unit": "V" }},
+              "line_regulation": {{ "value": 9.75609756097561e-05, "unit": "1" }},
+              "output_resistance": {{ "value": 0.00125, "unit": "ohm" }},
+              "dropout_voltage": {{ "value": 1.0857142857142859, "unit": "V" }},
+              "dropout_resistance": {{ "value": 0.14285714285714288, "unit": "ohm" }},
+              "current_limit": {{ "value": 1.2, "unit": "A" }},
+              "quiescent_current": {{ "value": 0.005, "unit": "A" }},
+              "ground_current_ratio": {{ "value": {ratio}, "unit": "1" }},
               "ratings": {{
-                "current": {{ "value": 0.8, "unit": "A", "source": "user" }},
-                "power": {{ "value": 1.6233766233766234, "unit": "W", "source": "user" }}
+                "current": {{ "value": 0.8, "unit": "A" }},
+                "power": {{ "value": 1.6233766233766234, "unit": "W" }}
               }}
             "#
         )
@@ -151,7 +151,7 @@ mod tests {
               "name": "{name}",
               "kind": "voltage_source",
               "pins": {{ "p": "{net}", "n": "gnd" }},
-              "voltage": {{ "value": {volts}, "unit": "V", "source": "user" }}
+              "voltage": {{ "value": {volts}, "unit": "V" }}
             }}"#
         )
     }
@@ -162,7 +162,7 @@ mod tests {
               "name": "{name}",
               "kind": "resistor",
               "pins": {{ "a": "{a}", "b": "{b}" }},
-              "resistance": {{ "value": {ohm}, "unit": "ohm", "source": "user" }},
+              "resistance": {{ "value": {ohm}, "unit": "ohm" }},
               "ratings": {{ "power": null }}
             }}"#
         )
@@ -174,7 +174,7 @@ mod tests {
               "name": "{name}",
               "kind": "capacitor",
               "pins": {{ "a": "{a}", "b": "{b}" }},
-              "capacitance": {{ "value": 1e-5, "unit": "F", "source": "user" }},
+              "capacitance": {{ "value": 1e-5, "unit": "F" }},
               "initial": null
             }}"#
         )
@@ -195,7 +195,7 @@ mod tests {
     fn netlist(nets: &str, parts: &[&str]) -> String {
         format!(
             r#"{{
-              "version": 0,
+              "version": 1,
               "seed": 0,
               "analysis": {{ "op": {{}} }},
               "ground": "gnd",
@@ -572,7 +572,7 @@ mod tests {
                       "name": "i1",
                       "kind": "current_source",
                       "pins": { "p": "gnd", "n": "vout" },
-                      "current": { "value": 0.5, "unit": "A", "source": "user" }
+                      "current": { "value": 0.5, "unit": "A" }
                     }"#,
                 &regulator("vin", "vout", "gnd", 0.0),
             ],
@@ -606,7 +606,7 @@ mod tests {
                       "name": "i1",
                       "kind": "current_source",
                       "pins": { "p": "gnd", "n": "vout" },
-                      "current": { "value": 0.5, "unit": "A", "source": "user" }
+                      "current": { "value": 0.5, "unit": "A" }
                     }"#,
                 &regulator("vin", "vout", "gnd", 0.02),
             ],
@@ -662,7 +662,7 @@ mod tests {
                       "name": "vin_src",
                       "kind": "voltage_source",
                       "pins": { "p": "vin", "n": "ref" },
-                      "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+                      "voltage": { "value": 5.0, "unit": "V" }
                     }"#,
                 &resistor("rl", "vout", "ref", 33.0),
                 &regulator("vin", "vout", "ref", 0.0),

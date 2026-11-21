@@ -49,7 +49,7 @@ A clean run prints one JSON document and exits 0.
 }
 ```
 
-`orbe-run run <netlist> --out <dir> [--blobs <dir>]…` looks up each blob the netlist names as [netlist.md](netlist.md#blobs) says. `orbe-run view <run> --out <dir>` writes `display-<part>.png` into `<dir>` for each display part of a finished run folder, what the panel's glass showed at the end. [run-folder.md](run-folder.md#what-the-glass-shows) says how it draws them.
+`orbe-run run <netlist> --out <dir> [--blobs <dir>]…` looks up each blob the netlist names as [netlist.md](netlist.md#blobs) says.
 
 The process exits with one of these codes.
 
@@ -64,7 +64,7 @@ The process exits with one of these codes.
 
 `scripts/run-hashes.sh` runs every netlist in `packages/engine/tests/circuits` and prints one `sha256  path` line per file those runs wrote. A `manifest.json` line is the hash of that JSON with `created_at` removed, the same removal `packages/engine/scripts/wasi-check.sh` uses when it compares two manifests. Every other file is hashed as written. The lines are sorted by path, so one circuit's files sit together in a diff.
 
-Each Block adds three records. `blocks/<id>/netlist.json` is the netlist v0 its scene resolves to. `blocks/<id>/run/` is every file of that netlist run after `analysis.transient.stop_ps` is set to `2000000000000`, which is 2 s. The scene stops at 7200 s on a 1 ms grid, and `orbe-run` rejects that trace, so the manifest hashes this 2 s run instead. `blocks/<id>/orbe-test` is the stdout of `orbe test -v` on that Block. That stdout includes each `expect`'s measured value.
+Each Block adds three records. `blocks/<id>/netlist.json` is the netlist v1 its scene resolves to. `blocks/<id>/run/` is every file of that netlist run after `analysis.transient.stop_ps` is set to `2000000000000`, which is 2 s. The scene stops at 7200 s on a 1 ms grid, and `orbe-run` rejects that trace, so the manifest hashes this 2 s run instead. `blocks/<id>/orbe-test` is the stdout of `orbe test -v` on that Block. That stdout includes each `expect`'s measured value.
 
 A run that does not exit 0 stops the script. The script names the circuit and the exit code, prints the runner's report on stderr, and exits with that code. A Block test that fails prints its output on stderr and exits with the test's status. The paths are relative to the repo root, so two runs of one build print the same lines.
 

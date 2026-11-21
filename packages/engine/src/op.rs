@@ -314,7 +314,7 @@ mod tests {
       "name": "v2",
       "kind": "voltage_source",
       "pins": { "p": "vin", "n": "gnd" },
-      "voltage": { "value": 3.0, "unit": "V", "source": "user" }
+      "voltage": { "value": 3.0, "unit": "V" }
     },"#,
                 )
                 .into_bytes(),
@@ -337,7 +337,7 @@ mod tests {
       "name": "i1",
       "kind": "current_source",
       "pins": { "p": "vout", "n": "gnd" },
-      "current": { "value": 0.001, "unit": "A", "source": "user" }
+      "current": { "value": 0.001, "unit": "A" }
     },"#,
                 )
                 .as_bytes(),

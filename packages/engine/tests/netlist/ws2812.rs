@@ -9,7 +9,7 @@ use orbe_engine::diagnostic::{Diagnostic, ValueRule};
 fn chain(leds: &str) -> String {
     format!(
         r#"{{
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": {{ "op": {{}} }},
   "ground": "gnd",
@@ -19,7 +19,7 @@ fn chain(leds: &str) -> String {
       "name": "v1",
       "kind": "voltage_source",
       "pins": {{ "p": "vcc", "n": "gnd" }},
-      "voltage": {{ "value": 5.0, "unit": "V", "source": "user" }}
+      "voltage": {{ "value": 5.0, "unit": "V" }}
     }},
     {{
       "name": "ring",
@@ -27,8 +27,8 @@ fn chain(leds: &str) -> String {
       "pins": {{ "VCC": "vcc", "GND": "gnd", "DIN": "din" }},
       {leds}
       "input_threshold": {{
-        "low": {{ "value": 0.14, "unit": "1", "source": "user" }},
-        "high": {{ "value": 0.7, "unit": "1", "source": "user" }}
+        "low": {{ "value": 0.14, "unit": "1" }},
+        "high": {{ "value": 0.7, "unit": "1" }}
       }}
     }}
   ]
@@ -102,12 +102,12 @@ fn dout(delay_ps: u64, high_resistance_unit: &str) -> String {
     format!(
         r#""dout": {{
         "output": {{
-          "high_drop": {{ "value": 0.0, "unit": "V", "source": "user" }},
-          "high_resistance": {{ "value": 50.0, "unit": "{high_resistance_unit}", "source": "user" }},
-          "low_drop": {{ "value": 0.0, "unit": "V", "source": "user" }},
-          "low_resistance": {{ "value": 50.0, "unit": "ohm", "source": "user" }}
+          "high_drop": {{ "value": 0.0, "unit": "V" }},
+          "high_resistance": {{ "value": 50.0, "unit": "{high_resistance_unit}" }},
+          "low_drop": {{ "value": 0.0, "unit": "V" }},
+          "low_resistance": {{ "value": 50.0, "unit": "ohm" }}
         }},
-        "delay": {{ "value": {delay_ps}, "unit": "ps", "source": "user" }}
+        "delay": {{ "value": {delay_ps}, "unit": "ps" }}
       }},"#
     )
 }

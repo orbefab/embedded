@@ -1,6 +1,6 @@
 [package]
 name = "orbe-scene"
-description = "Reads an orbe scene and its part files into the engine's netlist v0."
+description = "Reads an orbe scene and its part files into the engine's netlist v1."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

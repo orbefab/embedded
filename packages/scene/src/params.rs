@@ -244,7 +244,7 @@ fn value_object(unit: Unit, range: Range, node: &Node) -> Result<Value, (Code, S
             ));
         }
         in_range(range, unit, shown, number / 1e12)?;
-        return Ok(json!({ "value": number, "unit": "ps", "source": source.to_value() }));
+        return Ok(json!({ "value": number, "unit": "ps" }));
     }
     if unit_text != unit.as_str() {
         return Err(fail(
@@ -260,7 +260,7 @@ fn value_object(unit: Unit, range: Range, node: &Node) -> Result<Value, (Code, S
         ));
     }
     in_range(range, unit, shown, number)?;
-    Ok(json!({ "value": number, "unit": unit_text, "source": source.to_value() }))
+    Ok(json!({ "value": number, "unit": unit_text }))
 }
 
 fn bounded(
@@ -281,7 +281,7 @@ fn bounded(
         (value, unit.as_str())
     };
     in_range(range, unit, text, si)?;
-    Ok(json!({ "value": value, "unit": unit_text, "source": "user" }))
+    Ok(json!({ "value": value, "unit": unit_text }))
 }
 
 fn in_range(range: Range, unit: Unit, text: &str, si: f64) -> Result<(), (Code, String, String)> {

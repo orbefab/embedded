@@ -31,7 +31,6 @@ fn edited(field: &str, value: &str, unit: &str) -> String {
     part[field] = serde_json::json!({
         "value": serde_json::from_str::<serde_json::Value>(value).unwrap(),
         "unit": unit,
-        "source": "user",
     });
     doc.to_string()
 }

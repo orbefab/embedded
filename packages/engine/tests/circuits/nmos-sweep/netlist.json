@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": {
     "transient": {
@@ -26,8 +26,7 @@
       },
       "voltage": {
         "value": 12.0,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -41,408 +40,357 @@
         "kind": "steps",
         "initial": {
           "value": 0.0,
-          "unit": "V",
-          "source": "user"
+          "unit": "V"
         },
         "events": [
           {
             "t_ps": 1000000000,
             "level": {
               "value": 0.1,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 2000000000,
             "level": {
               "value": 0.2,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 3000000000,
             "level": {
               "value": 0.3,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 4000000000,
             "level": {
               "value": 0.4,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 5000000000,
             "level": {
               "value": 0.5,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 6000000000,
             "level": {
               "value": 0.6,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 7000000000,
             "level": {
               "value": 0.7,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 8000000000,
             "level": {
               "value": 0.8,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 9000000000,
             "level": {
               "value": 0.9,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 10000000000,
             "level": {
               "value": 1.0,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 11000000000,
             "level": {
               "value": 1.1,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 12000000000,
             "level": {
               "value": 1.2,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 13000000000,
             "level": {
               "value": 1.3,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 14000000000,
             "level": {
               "value": 1.4,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 15000000000,
             "level": {
               "value": 1.5,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 16000000000,
             "level": {
               "value": 1.6,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 17000000000,
             "level": {
               "value": 1.7,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 18000000000,
             "level": {
               "value": 1.8,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 19000000000,
             "level": {
               "value": 1.9,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 20000000000,
             "level": {
               "value": 2.0,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 21000000000,
             "level": {
               "value": 2.1,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 22000000000,
             "level": {
               "value": 2.2,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 23000000000,
             "level": {
               "value": 2.3,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 24000000000,
             "level": {
               "value": 2.4,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 25000000000,
             "level": {
               "value": 2.5,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 26000000000,
             "level": {
               "value": 2.6,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 27000000000,
             "level": {
               "value": 2.7,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 28000000000,
             "level": {
               "value": 2.8,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 29000000000,
             "level": {
               "value": 2.9,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 30000000000,
             "level": {
               "value": 3.0,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 31000000000,
             "level": {
               "value": 3.1,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 32000000000,
             "level": {
               "value": 3.2,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 33000000000,
             "level": {
               "value": 3.3,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 34000000000,
             "level": {
               "value": 3.4,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 35000000000,
             "level": {
               "value": 3.5,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 36000000000,
             "level": {
               "value": 3.6,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 37000000000,
             "level": {
               "value": 3.7,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 38000000000,
             "level": {
               "value": 3.8,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 39000000000,
             "level": {
               "value": 3.9,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 40000000000,
             "level": {
               "value": 4.0,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 41000000000,
             "level": {
               "value": 4.1,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 42000000000,
             "level": {
               "value": 4.2,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 43000000000,
             "level": {
               "value": 4.3,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 44000000000,
             "level": {
               "value": 4.4,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 45000000000,
             "level": {
               "value": 4.5,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 46000000000,
             "level": {
               "value": 4.6,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 47000000000,
             "level": {
               "value": 4.7,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 48000000000,
             "level": {
               "value": 4.8,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 49000000000,
             "level": {
               "value": 4.9,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           },
           {
             "t_ps": 50000000000,
             "level": {
               "value": 5.0,
-              "unit": "V",
-              "source": "user"
+              "unit": "V"
             }
           }
         ]
@@ -457,8 +405,7 @@
       },
       "resistance": {
         "value": 100.0,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "ratings": {
         "power": null
@@ -474,90 +421,36 @@
       },
       "transconductance_parameter": {
         "value": 0.0468,
-        "unit": "A/V^2",
-        "source": {
-          "datasheet": {
-            "doc": "2N7000/D Rev. 5",
-            "at": "Figure 2 at 25 C, through (4.0 V, 0.20 A) and (5.0 V, 0.36 A), rounded to 0.0468 A/V^2. A 3.3 V gate gives 0.115 A here, where Figure 2 reads about 0.07 A. The model conducts from 1.08 V. Figure 2's typical curve starts near 2.5 V, and at a 2.5 V gate the model gives about 0.047 A, where a typical part passes almost nothing",
-            "basis": "typical"
-          }
-        }
+        "unit": "A/V^2"
       },
       "threshold_voltage": {
         "value": 1.08,
-        "unit": "V",
-        "source": {
-          "datasheet": {
-            "doc": "2N7000/D Rev. 5",
-            "at": "Figure 2 at 25 C, through (4.0 V, 0.20 A) and (5.0 V, 0.36 A), rounded to 1.08 V, inside ON CHARACTERISTICS VGS(th) of 0.8 V to 3.0 V at ID = 1.0 mA. A 3.3 V gate gives 0.115 A here, where Figure 2 reads about 0.07 A. The model conducts from 1.08 V. Figure 2's typical curve starts near 2.5 V, and at a 2.5 V gate the model gives about 0.047 A, where a typical part passes almost nothing",
-            "basis": "typical"
-          }
-        }
+        "unit": "V"
       },
       "channel_length_modulation": {
         "value": 0.0,
-        "unit": "1/V",
-        "source": {
-          "closed_form": {
-            "note": "Figure 1 of 2N7000/D Rev. 5 draws flat saturation lines, so LAMBDA is 0"
-          }
-        }
+        "unit": "1/V"
       },
       "gate_source_capacitance": {
         "value": 5.5e-11,
-        "unit": "F",
-        "source": {
-          "datasheet": {
-            "doc": "2N7000/D Rev. 5",
-            "at": "DYNAMIC CHARACTERISTICS, Ciss maximum minus Crss maximum, 60 pF minus 5 pF, VDS = 25 V, VGS = 0, f = 1.0 MHz",
-            "basis": "max"
-          }
-        }
+        "unit": "F"
       },
       "gate_drain_capacitance": {
         "value": 5e-12,
-        "unit": "F",
-        "source": {
-          "datasheet": {
-            "doc": "2N7000/D Rev. 5",
-            "at": "DYNAMIC CHARACTERISTICS, Crss maximum, VDS = 25 V, VGS = 0, f = 1.0 MHz",
-            "basis": "max"
-          }
-        }
+        "unit": "F"
       },
       "drain_source_capacitance": {
         "value": 2e-11,
-        "unit": "F",
-        "source": {
-          "datasheet": {
-            "doc": "2N7000/D Rev. 5",
-            "at": "DYNAMIC CHARACTERISTICS, Coss maximum minus Crss maximum, 25 pF minus 5 pF, VDS = 25 V, VGS = 0, f = 1.0 MHz",
-            "basis": "max"
-          }
-        }
+        "unit": "F"
       },
       "ratings": {
         "current": {
           "value": 0.2,
-          "unit": "A",
-          "source": {
-            "datasheet": {
-              "doc": "2N7000/D Rev. 5",
-              "at": "MAXIMUM RATINGS, ID continuous, 200 mA",
-              "basis": "absolute_max"
-            }
-          }
+          "unit": "A"
         },
         "power": {
           "value": 0.35,
-          "unit": "W",
-          "source": {
-            "datasheet": {
-              "doc": "2N7000/D Rev. 5",
-              "at": "MAXIMUM RATINGS, PD total at TC = 25 C, 350 mW",
-              "basis": "absolute_max"
-            }
-          }
+          "unit": "W"
         }
       }
     },
@@ -570,8 +463,7 @@
       },
       "resistance": {
         "value": 150.0,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "ratings": {
         "power": null

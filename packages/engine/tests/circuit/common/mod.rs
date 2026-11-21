@@ -44,7 +44,7 @@ pub fn span(values: &[f64]) -> f64 {
 pub fn transient(stop_ps: u64, max_step_ps: u64, nets: &str, parts: &[&str]) -> String {
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {{ "transient": {{ "stop_ps": {stop_ps}, "max_step_ps": {max_step_ps}, "grid_ps": {max_step_ps} }} }},
       "ground": "gnd",
@@ -62,21 +62,21 @@ pub fn source(volts: f64) -> String {
 pub fn source_on(name: &str, net: &str, volts: f64) -> String {
     format!(
         r#"{{ "name": "{name}", "kind": "voltage_source", "pins": {{ "p": "{net}", "n": "gnd" }},
-          "voltage": {{ "value": {volts:?}, "unit": "V", "source": "user" }} }}"#
+          "voltage": {{ "value": {volts:?}, "unit": "V" }} }}"#
     )
 }
 
 pub fn resistor(name: &str, a: &str, b: &str, ohm: f64) -> String {
     format!(
         r#"{{ "name": "{name}", "kind": "resistor", "pins": {{ "a": "{a}", "b": "{b}" }},
-          "resistance": {{ "value": {ohm:?}, "unit": "ohm", "source": "user" }}, "ratings": {{ "power": null }} }}"#
+          "resistance": {{ "value": {ohm:?}, "unit": "ohm" }}, "ratings": {{ "power": null }} }}"#
     )
 }
 
 pub fn held_capacitor(name: &str, a: &str, b: &str, farad: f64, initial: f64) -> String {
     format!(
         r#"{{ "name": "{name}", "kind": "capacitor", "pins": {{ "a": "{a}", "b": "{b}" }},
-          "capacitance": {{ "value": {farad:?}, "unit": "F", "source": "user" }},
-          "initial": {{ "value": {initial:?}, "unit": "V", "source": "user" }} }}"#
+          "capacitance": {{ "value": {farad:?}, "unit": "F" }},
+          "initial": {{ "value": {initial:?}, "unit": "V" }} }}"#
     )
 }

@@ -9,7 +9,7 @@ use common::errors;
 fn document(body: &str) -> String {
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {{ "op": {{}} }},
       "ground": "gnd",
@@ -32,7 +32,7 @@ fn fields(resistance: &str, position: &str) -> String {
 }
 
 fn value(number: &str, unit: &str) -> String {
-    format!(r#"{{ "value": {number}, "unit": "{unit}", "source": "user" }}"#)
+    format!(r#"{{ "value": {number}, "unit": "{unit}" }}"#)
 }
 
 fn pot(resistance: &str, position: &str) -> String {
@@ -117,25 +117,25 @@ fn pins_are_exactly_a_wiper_and_b_and_every_field_is_required() {
     assert_eq!(
         errors(&document(
             r#""pins": { "a": "top", "b": "gnd" },
-            "resistance": { "value": 10000.0, "unit": "ohm", "source": "user" },
-            "position": { "value": 0.3, "unit": "1", "source": "user" }"#
+            "resistance": { "value": 10000.0, "unit": "ohm" },
+            "position": { "value": 0.3, "unit": "1" }"#
         )),
         [r##""netlist.pins" ["#rv1"] {"missing":["wiper"],"unexpected":[]}"##]
     );
     assert_eq!(
         errors(&document(
             r#""pins": { "a": "top", "wiper": "mid", "b": "gnd", "c": "top" },
-            "resistance": { "value": 10000.0, "unit": "ohm", "source": "user" },
-            "position": { "value": 0.3, "unit": "1", "source": "user" }"#
+            "resistance": { "value": 10000.0, "unit": "ohm" },
+            "position": { "value": 0.3, "unit": "1" }"#
         )),
         [r##""netlist.pins" ["#rv1"] {"missing":[],"unexpected":["c"]}"##]
     );
     for body in [
         r#""pins": { "a": "top", "wiper": "mid", "b": "gnd" },
-          "resistance": { "value": 10000.0, "unit": "ohm", "source": "user" }"#,
+          "resistance": { "value": 10000.0, "unit": "ohm" }"#,
         r#""pins": { "a": "top", "wiper": "mid", "b": "gnd" },
-          "resistance": { "value": 10000.0, "unit": "ohm", "source": "user" },
-          "position": { "value": 0.3, "unit": "1", "source": "user" },
+          "resistance": { "value": 10000.0, "unit": "ohm" },
+          "position": { "value": 0.3, "unit": "1" },
           "ratings": { "power": null }"#,
     ] {
         let found = errors(&document(body));
@@ -424,7 +424,7 @@ fn a_step_or_pulse_position_is_a_syntax_error() {
         (
             steps_position(
                 "0.3",
-                r#"{ "t_ps": 2000.5, "level": { "value": 0.4, "unit": "1", "source": "user" } }"#,
+                r#"{ "t_ps": 2000.5, "level": { "value": 0.4, "unit": "1" } }"#,
             ),
             "invalid type: floating point `2000.5`",
         ),

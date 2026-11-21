@@ -56,7 +56,7 @@ fn resistor(netlist: &mut serde_json::Value, a: &str, b: &str) {
         .unwrap()
         .push(serde_json::json!({
             "name": "r2", "kind": "resistor", "pins": { "a": a, "b": b },
-            "resistance": { "value": 10_000.0, "unit": "ohm", "source": "user" },
+            "resistance": { "value": 10_000.0, "unit": "ohm" },
             "ratings": { "power": null }
         }));
 }

@@ -23,7 +23,7 @@ fn part() -> Value {
 
 fn solve(parts: Vec<Value>) -> (f64, f64, f64) {
     let doc = json!({
-        "version": 0,
+        "version": 1,
         "seed": 1,
         "analysis": { "op": {} },
         "ground": "gnd",
@@ -49,7 +49,7 @@ fn source(name: &str, net: &str, volts: f64) -> Value {
         "name": name,
         "kind": "voltage_source",
         "pins": { "p": net, "n": "gnd" },
-        "voltage": { "value": volts, "unit": "V", "source": "user" }
+        "voltage": { "value": volts, "unit": "V" }
     })
 }
 
@@ -58,7 +58,7 @@ fn load(amps: f64) -> Value {
         "name": "i1",
         "kind": "current_source",
         "pins": { "p": "gnd", "n": "vout" },
-        "current": { "value": amps, "unit": "A", "source": "user" }
+        "current": { "value": amps, "unit": "A" }
     })
 }
 

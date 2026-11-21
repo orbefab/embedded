@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": {
     "transient": {
@@ -24,8 +24,7 @@
       },
       "voltage": {
         "value": 5.0,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -40,23 +39,19 @@
       "output": {
         "high_drop": {
           "value": 0.0,
-          "unit": "V",
-          "source": "user"
+          "unit": "V"
         },
         "high_resistance": {
           "value": 25.0,
-          "unit": "ohm",
-          "source": "user"
+          "unit": "ohm"
         },
         "low_drop": {
           "value": 0.0,
-          "unit": "V",
-          "source": "user"
+          "unit": "V"
         },
         "low_resistance": {
           "value": 25.0,
-          "unit": "ohm",
-          "source": "user"
+          "unit": "ohm"
         }
       },
       "events": [
@@ -2575,25 +2570,11 @@
       "input_threshold": {
         "low": {
           "value": 0.14,
-          "unit": "1",
-          "source": {
-            "datasheet": {
-              "doc": "WS2812E-1313",
-              "at": "V1.1 page 2, Electrical Characteristics, VIL 0.7 V at VDD 5 V; 0.7 V / 5 V",
-              "basis": "max"
-            }
-          }
+          "unit": "1"
         },
         "high": {
           "value": 0.7,
-          "unit": "1",
-          "source": {
-            "datasheet": {
-              "doc": "WS2812E-1313",
-              "at": "V1.1 page 2, Electrical Characteristics, VIH 0.7 VDD",
-              "basis": "min"
-            }
-          }
+          "unit": "1"
         }
       }
     }

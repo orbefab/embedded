@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": {
     "transient": {
@@ -48,8 +48,7 @@
       },
       "voltage": {
         "value": 5.0,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -61,14 +60,12 @@
       },
       "resistance": {
         "value": 100.0,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "ratings": {
         "power": {
           "value": 0.25,
-          "unit": "W",
-          "source": "user"
+          "unit": "W"
         }
       }
     },
@@ -81,14 +78,12 @@
       },
       "resistance": {
         "value": 10000.0,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "ratings": {
         "power": {
           "value": 0.25,
-          "unit": "W",
-          "source": "user"
+          "unit": "W"
         }
       }
     },
@@ -101,13 +96,11 @@
       },
       "capacitance": {
         "value": 2.2e-11,
-        "unit": "F",
-        "source": "user"
+        "unit": "F"
       },
       "initial": {
         "value": 0.0,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -119,13 +112,11 @@
       },
       "capacitance": {
         "value": 2.2e-11,
-        "unit": "F",
-        "source": "user"
+        "unit": "F"
       },
       "initial": {
         "value": 0.0,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -137,13 +128,11 @@
       },
       "capacitance": {
         "value": 1e-07,
-        "unit": "F",
-        "source": "user"
+        "unit": "F"
       },
       "initial": {
         "value": 0.0,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -182,8 +171,7 @@
       "firmware": ":100000000C9434000C9451000C9451000C94510049\n:100010000C9451000C9451000C9451000C9451001C\n:100020000C9451000C9451000C9451000C9451000C\n:100030000C9451000C9451000C9451000C945100FC\n:100040000C9453000C9451000C9451000C945100EA\n:100050000C9451000C9451000C9451000C945100DC\n:100060000C9451000C94510011241FBECFEFD8E026\n:10007000DEBFCDBF11E0A0E0B1E0EEE1F2E002C0F2\n:1000800005900D92A832B107D9F721E0A8E2B1E0BE\n:1000900001C01D92A133B207E1F70E949D000C94AC\n:1000A0000D010C9400001F920F920FB60F921124B5\n:1000B0002F933F938F939F93AF93BF9380912D0185\n:1000C00090912E01A0912F01B091300130912C011F\n:1000D00023E0230F2D3758F50196A11DB11D209364\n:1000E0002C0180932D0190932E01A0932F01B093AA\n:1000F00030018091280190912901A0912A01B091AD\n:100100002B010196A11DB11D809328019093290117\n:10011000A0932A01B0932B01BF91AF919F918F9132\n:100120003F912F910F900FBE0F901F90189526E8CA\n:10013000230F0296A11DB11DD2CF789484B58260A1\n:1001400084BD84B5816084BD85B5826085BD85B57B\n:10015000816085BD80916E00816080936E001092F9\n:100160008100809181008260809381008091810074\n:100170008160809381008091800081608093800005\n:100180008091B10084608093B1008091B000816063\n:100190008093B00080917A00846080937A0080918F\n:1001A0007A00826080937A0080917A0081608093E7\n:1001B0007A0080917A00806880937A001092C10062\n:1001C0004FB7F894209A2898A0E0B1E087E22D91EB\n:1001D00038E0289A220F30F0000028980000000034\n:1001E000000006C000000000000000000000289889\n:1001F0003A9519F48A9559F704C0000000000000F0\n:10020000E8CF8BEA94E00197F1F74FBFC0E0D0E070\n:0E0210002097F1F30E940000FBCFF894FFCF7F\n:10021E0000102001112102122203132304142405BD\n:10022E0015250616260717270818280919290A1A48\n:08023E002A0B1B2B0C1C2C00E9\n:00000001FF\n",
       "clock_hz": {
         "value": 16000000,
-        "unit": "Hz",
-        "source": "user"
+        "unit": "Hz"
       },
       "fuses": {
         "low": 255,
@@ -193,126 +181,51 @@
       "output": {
         "high_drop": {
           "value": 0.0,
-          "unit": "V",
-          "source": {
-            "datasheet": {
-              "doc": "DS40002061B",
-              "at": "Figure 31-355",
-              "basis": "typical"
-            }
-          }
+          "unit": "V"
         },
         "high_resistance": {
           "value": 25.0,
-          "unit": "ohm",
-          "source": {
-            "datasheet": {
-              "doc": "DS40002061B",
-              "at": "Figure 31-355",
-              "basis": "typical"
-            }
-          }
+          "unit": "ohm"
         },
         "low_drop": {
           "value": 0.0,
-          "unit": "V",
-          "source": {
-            "datasheet": {
-              "doc": "DS40002061B",
-              "at": "Figure 31-353",
-              "basis": "typical"
-            }
-          }
+          "unit": "V"
         },
         "low_resistance": {
           "value": 25.0,
-          "unit": "ohm",
-          "source": {
-            "datasheet": {
-              "doc": "DS40002061B",
-              "at": "Figure 31-353",
-              "basis": "typical"
-            }
-          }
+          "unit": "ohm"
         }
       },
       "pull_up_resistance": {
         "value": 35714.0,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "DS40002061B",
-            "at": "Figure 31-348",
-            "basis": "typical"
-          }
-        }
+        "unit": "ohm"
       },
       "reset_pull_up_resistance": {
         "value": 46296.0,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "DS40002061B",
-            "at": "Figure 31-351",
-            "basis": "typical"
-          }
-        }
+        "unit": "ohm"
       },
       "leakage_resistance": {
         "value": 5500000.0,
-        "unit": "ohm",
-        "source": {
-          "closed_form": {
-            "note": "DS40002061B Table 30-1: IIL and IIH at most 1 uA at VCC = 5.5 V, so 5.5 V / 1 uA"
-          }
-        }
+        "unit": "ohm"
       },
       "input_threshold": {
         "low": {
           "value": 0.42,
-          "unit": "1",
-          "source": {
-            "datasheet": {
-              "doc": "DS40002061B",
-              "at": "Figure 31-357",
-              "basis": "typical"
-            }
-          }
+          "unit": "1"
         },
         "high": {
           "value": 0.52,
-          "unit": "1",
-          "source": {
-            "datasheet": {
-              "doc": "DS40002061B",
-              "at": "Figure 31-356",
-              "basis": "typical"
-            }
-          }
+          "unit": "1"
         }
       },
       "reset_threshold": {
         "low": {
           "value": 0.42,
-          "unit": "1",
-          "source": {
-            "datasheet": {
-              "doc": "DS40002061B",
-              "at": "Figure 31-360",
-              "basis": "typical"
-            }
-          }
+          "unit": "1"
         },
         "high": {
           "value": 0.44,
-          "unit": "1",
-          "source": {
-            "datasheet": {
-              "doc": "DS40002061B",
-              "at": "Figure 31-359",
-              "basis": "typical"
-            }
-          }
+          "unit": "1"
         }
       }
     },
@@ -328,25 +241,11 @@
       "input_threshold": {
         "low": {
           "value": 0.14,
-          "unit": "1",
-          "source": {
-            "datasheet": {
-              "doc": "WS2812E-1313",
-              "at": "V1.1 page 2, Electrical Characteristics, VIL 0.7 V at VDD 5 V; 0.7 V / 5 V",
-              "basis": "max"
-            }
-          }
+          "unit": "1"
         },
         "high": {
           "value": 0.7,
-          "unit": "1",
-          "source": {
-            "datasheet": {
-              "doc": "WS2812E-1313",
-              "at": "V1.1 page 2, Electrical Characteristics, VIH 0.7 VDD",
-              "basis": "min"
-            }
-          }
+          "unit": "1"
         }
       }
     }

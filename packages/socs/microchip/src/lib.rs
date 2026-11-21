@@ -8,8 +8,8 @@
 //! comparator sample. `regs` holds the register ids and the masks in the chip
 //! table. `cpu` is the core a host steps. `fuses` holds the three fuse bytes
 //! and the start-up, `CLKPR`, watchdog, and brown-out values read out of them.
-//! `MCUCR.IVSEL` does not move the vectors. `image` parses Intel HEX and ELF
-//! into flash bytes. `timeline` runs the core on a host's clock, in oscillator
+//! `MCUCR.IVSEL` does not move the vectors. `hex` reads Intel HEX into flash
+//! bytes. `timeline` runs the core on a host's clock, in oscillator
 //! cycles, and stops it at each change of a pin's drive. `gaps` holds what the
 //! firmware reached that the model does not run, which stops the timeline or is
 //! noted. `bridge` is the chip on the `orbe-mcu` contract: its package pins, the
@@ -41,7 +41,7 @@ mod chip;
 mod cpu;
 mod fuses;
 mod gaps;
-mod image;
+mod hex;
 mod irq;
 mod mux;
 mod periph;
@@ -49,10 +49,10 @@ mod regs;
 mod timeline;
 
 pub use bridge::{Bridge, PACKAGE, PORT_PINS, Pad, port_index};
-pub use cpu::{Channel, Cpu, LoadError, Parity, ResetKind, SerialFrame, SpiClock, SupplyChannel};
+pub use cpu::{Channel, Cpu, Parity, ResetKind, SerialFrame, SpiClock, SupplyChannel};
 pub use fuses::FuseBytes;
 pub use gaps::{Noted, Refusal, Refused, Unmodeled};
-pub use image::{IgnoredRegion, IgnoredSegment, Image, ImageError, parse_elf, parse_hex};
+pub use hex::{FLASH_BYTES, HexFault, HexRule, parse_hex};
 pub use periph::twi::{I2cNote, I2cStamp};
 pub use periph::usart::Sent;
 pub use periph::{IO_LOG_CAP, IoWrite};
