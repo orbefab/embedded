@@ -1,3 +1,4 @@
+use orbe_scratch::Scratch;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -8,10 +9,11 @@ use common::{
     display_parts, files, has_kind, led_parts, repo, run_netlist, sends_records, transient_folder,
 };
 
-fn scratch(name: &str) -> PathBuf {
-    let path = std::env::temp_dir().join(format!("orbe-engine-{name}-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&path);
-    path
+/// A path inside a fresh temp folder, which is removed when the test ends, even on a panic.
+fn scratch(name: &str) -> (Scratch, PathBuf) {
+    let scratch = Scratch::new();
+    let path = scratch.join(name);
+    (scratch, path)
 }
 
 fn example() -> PathBuf {
@@ -55,7 +57,7 @@ fn assert_four_files(out: &Path) {
 #[ignore = "full tier"]
 #[test]
 fn ok_run_writes_the_folder_and_exits_zero() {
-    let out = scratch("ok");
+    let (_out_scratch, out) = scratch("ok");
     let netlist = example();
     let (code, doc) = run_netlist(&netlist, &out, &[]);
     assert_eq!(code, 0, "{doc}");
@@ -74,13 +76,12 @@ fn ok_run_writes_the_folder_and_exits_zero() {
     let vout = observations["op"]["#net.vout"].as_f64().unwrap();
     let expect = 10.0 / 3.0;
     assert!((vout - expect).abs() <= 1e-8 * expect.abs());
-    let _ = fs::remove_dir_all(&out);
 }
 
 #[ignore = "full tier"]
 #[test]
 fn rejected_netlist_exits_one_and_still_writes_diagnostics() {
-    let out = scratch("rejected");
+    let (_out_scratch, out) = scratch("rejected");
     let netlist = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/netlist/fixtures/invalid/several.json");
     let (code, doc) = run_netlist(&netlist, &out, &[]);
@@ -104,7 +105,6 @@ fn rejected_netlist_exits_one_and_still_writes_diagnostics() {
     let manifest: serde_json::Value =
         serde_json::from_slice(&fs::read(out.join("manifest.json")).unwrap()).unwrap();
     assert!(manifest["seed"].is_null());
-    let _ = fs::remove_dir_all(&out);
 }
 
 /// The pages that state the version state this one.
@@ -120,14 +120,14 @@ fn the_docs_name_the_engine_version() {
 #[ignore = "full tier"]
 #[test]
 fn a_floating_net_exits_zero_with_one_warning() {
-    let dir = scratch("float");
+    let (_dir_scratch, dir) = scratch("float");
     fs::create_dir_all(&dir).unwrap();
     let netlist = dir.join("netlist.json");
     let out = dir.join("out");
     fs::write(
         &netlist,
         br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -147,15 +147,14 @@ fn a_floating_net_exits_zero_with_one_warning() {
         serde_json::json!(["#net.isle"])
     );
     assert_four_files(&out);
-    let _ = fs::remove_dir_all(&dir);
 }
 
 #[ignore = "full tier"]
 #[test]
 fn two_runs_differ_only_in_created_at() {
     let netlist = example();
-    let first_out = scratch("twice-a");
-    let second_out = scratch("twice-b");
+    let (_first_out_scratch, first_out) = scratch("twice-a");
+    let (_second_out_scratch, second_out) = scratch("twice-b");
     let (code, doc) = run_netlist(&netlist, &first_out, &[]);
     assert_eq!(code, 0, "{doc}");
     std::thread::sleep(Duration::from_millis(1100));
@@ -180,14 +179,12 @@ fn two_runs_differ_only_in_created_at() {
         .unwrap();
     assert_ne!(first_at, second_at);
     assert_eq!(first, second);
-    let _ = fs::remove_dir_all(&first_out);
-    let _ = fs::remove_dir_all(&second_out);
 }
 
 #[ignore = "full tier"]
 #[test]
 fn the_9v_led_breaks_three_ratings_and_still_writes_its_operating_point() {
-    let out = scratch("led-9v");
+    let (_out_scratch, out) = scratch("led-9v");
     let netlist = named_example("led-9v");
     let (code, doc) = run_netlist(&netlist, &out, &[]);
     assert_eq!(code, 0, "{doc}");
@@ -221,13 +218,12 @@ fn the_9v_led_breaks_three_ratings_and_still_writes_its_operating_point() {
     let on_disk: serde_json::Value =
         serde_json::from_slice(&fs::read(out.join("diagnostics.json")).unwrap()).unwrap();
     assert_eq!(on_disk, doc["diagnostics"]);
-    let _ = fs::remove_dir_all(&out);
 }
 
 #[ignore = "full tier"]
 #[test]
 fn the_5v_led_is_within_its_ratings() {
-    let out = scratch("led-5v");
+    let (_out_scratch, out) = scratch("led-5v");
     let netlist = named_example("led-5v");
     let (code, doc) = run_netlist(&netlist, &out, &[]);
     assert_eq!(code, 0, "{doc}");
@@ -236,14 +232,13 @@ fn the_5v_led_is_within_its_ratings() {
     let observations: serde_json::Value =
         serde_json::from_slice(&fs::read(out.join("observations.json")).unwrap()).unwrap();
     assert!(observations["op"]["#led1.i"].as_f64().unwrap() < 0.03);
-    let _ = fs::remove_dir_all(&out);
 }
 
 #[ignore = "full tier"]
 #[test]
 fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
     for name in transient_examples() {
-        let out = scratch(&format!("tran-{name}"));
+        let (_out_scratch, out) = scratch(&format!("tran-{name}"));
         let netlist = named_example(&name);
         let (code, doc) = run_netlist(&netlist, &out, &blob_dirs(netlist.parent().unwrap()));
         assert_eq!(code, 0, "{doc}");
@@ -373,7 +368,6 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
             assert!(found.is_empty(), "{name}: {}", doc["diagnostics"]);
         }
         transient_folder(&name, &out);
-        let _ = fs::remove_dir_all(&out);
     }
 }
 
@@ -401,23 +395,23 @@ fn assert_kept_resets(name: &str, doc: &serde_json::Value, count: usize) {
 #[test]
 fn two_runs_of_each_transient_example_differ_only_in_created_at() {
     let names = transient_examples();
-    let outs = |round: &str| -> Vec<PathBuf> {
+    let outs = |round: &str| -> Vec<(Scratch, PathBuf)> {
         names
             .iter()
             .map(|name| {
-                let out = scratch(&format!("tran-twice-{name}-{round}"));
+                let (scratch, out) = scratch(&format!("tran-twice-{name}-{round}"));
                 let netlist = named_example(name);
                 let (code, doc) =
                     run_netlist(&netlist, &out, &blob_dirs(netlist.parent().unwrap()));
                 assert_eq!(code, 0, "{doc}");
-                out
+                (scratch, out)
             })
             .collect()
     };
     let first = outs("a");
     std::thread::sleep(Duration::from_millis(1100));
     let second = outs("b");
-    for ((left, right), name) in first.iter().zip(&second).zip(names) {
+    for (((_, left), (_, right)), name) in first.iter().zip(&second).zip(names) {
         let mut left_files = files(left);
         let mut right_files = files(right);
         let manifest = |files: &mut std::collections::BTreeMap<String, Vec<u8>>| {
@@ -444,8 +438,6 @@ fn two_runs_of_each_transient_example_differ_only_in_created_at() {
             + usize::from(led_parts(&netlist));
         assert_eq!(left_files.len(), 7 + logic + chip, "{name}");
         assert_eq!(left_files, right_files, "{}", left.display());
-        let _ = fs::remove_dir_all(left);
-        let _ = fs::remove_dir_all(right);
     }
 }
 
@@ -460,10 +452,10 @@ fn the_binary_exits_two_on_usage_and_three_on_a_missing_netlist() {
     let doc: serde_json::Value = serde_json::from_slice(&usage.stdout).unwrap();
     assert_eq!(doc["status"], "usage_error", "{doc}");
 
-    let out = scratch("missing-netlist");
+    let (_out_scratch, out) = scratch("missing-netlist");
     let missing = std::process::Command::new(bin)
         .arg("run")
-        .arg(scratch("no-such-netlist").join("netlist.json"))
+        .arg(scratch("no-such-netlist").1.join("netlist.json"))
         .arg("--out")
         .arg(&out)
         .output()

@@ -10,6 +10,7 @@ members = [
   "packages/engine/device-check",
   "packages/model",
   "packages/mcu",
+  "packages/scratch",
   "packages/cores/*",
   "packages/socs/*",
 ]
@@ -32,6 +33,8 @@ orbe-xtensa = { path = "packages/cores/xtensa" }
 orbe-avr = { path = "packages/cores/avr" }
 orbe-microchip = { path = "packages/socs/microchip" }
 orbe-espressif = { path = "packages/socs/espressif" }
+# Tests only.
+orbe-scratch = { path = "packages/scratch" }
 jsonc-parser = "=0.34.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
@@ -80,3 +83,7 @@ opt-level = 3
 
 [profile.dev.package.sha2]
 opt-level = 3
+
+# The binary `scripts/release-build.sh` publishes. Symbols are not part of it.
+[profile.release]
+strip = true

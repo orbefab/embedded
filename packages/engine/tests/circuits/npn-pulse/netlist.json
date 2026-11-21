@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": {
     "transient": {
@@ -26,8 +26,7 @@
       },
       "voltage": {
         "value": 5.0,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -41,13 +40,11 @@
         "kind": "pulse",
         "initial": {
           "value": 0.0,
-          "unit": "V",
-          "source": "user"
+          "unit": "V"
         },
         "pulsed": {
           "value": 5.0,
-          "unit": "V",
-          "source": "user"
+          "unit": "V"
         },
         "delay_ps": 200000000,
         "width_ps": 500000000,
@@ -63,8 +60,7 @@
       },
       "resistance": {
         "value": 10000.0,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "ratings": {
         "power": null
@@ -80,139 +76,56 @@
       },
       "saturation_current": {
         "value": 8.095e-15,
-        "unit": "A",
-        "source": {
-          "datasheet": {
-            "doc": "2N3903/D Rev. 8",
-            "at": "Figure 17, typical for the 2N3903 and the 2N3904 at TJ = 25 C, VBE at VCE = 1.0 V through (1 mA, 0.657 V) and (100 mA, 0.865 V), fitted by scripts/fit_transistor.py with NF = NR = 1",
-            "basis": "typical"
-          }
-        }
+        "unit": "A"
       },
       "forward_beta": {
         "value": 173.2,
-        "unit": "1",
-        "source": {
-          "closed_form": {
-            "note": "geometric mean of the 2N3904 row's hFE, minimum 100 and maximum 300, at IC = 10 mA and VCE = 1.0 V, 2N3903/D Rev. 8 ON CHARACTERISTICS"
-          }
-        }
+        "unit": "1"
       },
       "reverse_beta": {
         "value": 0.2704,
-        "unit": "1",
-        "source": {
-          "datasheet": {
-            "doc": "2N3903/D Rev. 8",
-            "at": "Figure 17, typical for the 2N3903 and the 2N3904 at TJ = 25 C, VCE(sat) 0.100 V at IC = 1 mA, IC/IB = 10, fitted by scripts/fit_transistor.py with NF = NR = 1",
-            "basis": "typical"
-          }
-        }
+        "unit": "1"
       },
       "forward_emission": {
         "value": 1.0,
-        "unit": "1",
-        "source": {
-          "closed_form": {
-            "note": "ideal junction"
-          }
-        }
+        "unit": "1"
       },
       "reverse_emission": {
         "value": 1.0,
-        "unit": "1",
-        "source": {
-          "closed_form": {
-            "note": "ideal junction"
-          }
-        }
+        "unit": "1"
       },
       "early_voltage": {
         "value": 100.0,
-        "unit": "V",
-        "source": {
-          "closed_form": {
-            "note": "puts hoe at 9.1 umhos at IC = 1 mA and VCE = 10 V, inside the 1 to 40 umhos of 2N3903/D Rev. 8"
-          }
-        }
+        "unit": "V"
       },
       "base_resistance": {
         "value": 5.707,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "2N3903/D Rev. 8",
-            "at": "Figure 17, typical for the 2N3903 and the 2N3904 at TJ = 25 C, VBE(sat) 0.93 V at IC = 100 mA, IC/IB = 10, fitted by scripts/fit_transistor.py with NF = NR = 1",
-            "basis": "typical"
-          }
-        }
+        "unit": "ohm"
       },
       "collector_resistance": {
         "value": 1.531,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "2N3903/D Rev. 8",
-            "at": "Figure 17, typical for the 2N3903 and the 2N3904 at TJ = 25 C, VCE(sat) 0.346 V at IC = 100 mA, IC/IB = 10, fitted by scripts/fit_transistor.py with NF = NR = 1",
-            "basis": "typical"
-          }
-        }
+        "unit": "ohm"
       },
       "emitter_resistance": {
         "value": 0.867,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "2N3903/D Rev. 8",
-            "at": "Figure 17, typical for the 2N3903 and the 2N3904 at TJ = 25 C, VBE at VCE = 1.0 V through (1 mA, 0.657 V) and (100 mA, 0.865 V), fitted by scripts/fit_transistor.py with NF = NR = 1",
-            "basis": "typical"
-          }
-        }
+        "unit": "ohm"
       },
       "base_emitter_capacitance": {
         "value": 8e-12,
-        "unit": "F",
-        "source": {
-          "datasheet": {
-            "doc": "2N3903/D Rev. 8",
-            "at": "Cibo at VEB = 0.5 V, IC = 0, f = 1.0 MHz",
-            "basis": "max"
-          }
-        }
+        "unit": "F"
       },
       "base_collector_capacitance": {
         "value": 4e-12,
-        "unit": "F",
-        "source": {
-          "datasheet": {
-            "doc": "2N3903/D Rev. 8",
-            "at": "Cobo at VCB = 5.0 V, IE = 0, f = 1.0 MHz",
-            "basis": "max"
-          }
-        }
+        "unit": "F"
       },
       "ratings": {
         "current": {
           "value": 0.2,
-          "unit": "A",
-          "source": {
-            "datasheet": {
-              "doc": "2N3903/D Rev. 8",
-              "at": "MAXIMUM RATINGS, IC continuous",
-              "basis": "absolute_max"
-            }
-          }
+          "unit": "A"
         },
         "power": {
           "value": 0.625,
-          "unit": "W",
-          "source": {
-            "datasheet": {
-              "doc": "2N3903/D Rev. 8",
-              "at": "MAXIMUM RATINGS, PD at TA = 25 C",
-              "basis": "absolute_max"
-            }
-          }
+          "unit": "W"
         }
       }
     },
@@ -225,8 +138,7 @@
       },
       "resistance": {
         "value": 1000.0,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "ratings": {
         "power": null
@@ -241,8 +153,7 @@
       },
       "capacitance": {
         "value": 1e-07,
-        "unit": "F",
-        "source": "user"
+        "unit": "F"
       },
       "initial": null
     }

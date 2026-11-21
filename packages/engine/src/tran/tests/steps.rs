@@ -15,7 +15,7 @@ fn times(netlist: &Netlist) -> Vec<u64> {
 fn divider_switch(edge: u64, stop: u64, max_step: u64) -> Netlist {
     let json = format!(
         r#"{{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": {{ "transient": {{ "stop_ps": {stop}, "max_step_ps": {max_step}, "grid_ps": {stop} }} }},
           "ground": "gnd",
@@ -25,28 +25,28 @@ fn divider_switch(edge: u64, stop: u64, max_step: u64) -> Netlist {
               "name": "v1",
               "kind": "voltage_source",
               "pins": {{ "p": "vcc", "n": "gnd" }},
-              "voltage": {{ "value": 5.0, "unit": "V", "source": "user" }}
+              "voltage": {{ "value": 5.0, "unit": "V" }}
             }},
             {{
               "name": "r1",
               "kind": "resistor",
               "pins": {{ "a": "vcc", "b": "vout" }},
-              "resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
+              "resistance": {{ "value": 1000.0, "unit": "ohm" }},
               "ratings": {{ "power": null }}
             }},
             {{
               "name": "r2",
               "kind": "resistor",
               "pins": {{ "a": "vout", "b": "gnd" }},
-              "resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
+              "resistance": {{ "value": 1000.0, "unit": "ohm" }},
               "ratings": {{ "power": null }}
             }},
             {{
               "name": "s1",
               "kind": "switch",
               "pins": {{ "a": "vout", "b": "gnd" }},
-              "on_resistance": {{ "value": 0.1, "unit": "ohm", "source": "user" }},
-              "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+              "on_resistance": {{ "value": 0.1, "unit": "ohm" }},
+              "off_resistance": {{ "value": 1e9, "unit": "ohm" }},
               "initial": "open",
               "events": [{{ "t_ps": {edge}, "state": "closed" }}],
               "bounce": null
@@ -61,7 +61,7 @@ fn divider_switch(edge: u64, stop: u64, max_step: u64) -> Netlist {
 fn rc_two_switches(edge_a: u64, edge_b: u64, stop: u64, max_step: u64) -> Netlist {
     let json = format!(
         r#"{{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": {{ "transient": {{ "stop_ps": {stop}, "max_step_ps": {max_step}, "grid_ps": {stop} }} }},
           "ground": "gnd",
@@ -71,28 +71,28 @@ fn rc_two_switches(edge_a: u64, edge_b: u64, stop: u64, max_step: u64) -> Netlis
               "name": "v1",
               "kind": "voltage_source",
               "pins": {{ "p": "vcc", "n": "gnd" }},
-              "voltage": {{ "value": 1.0, "unit": "V", "source": "user" }}
+              "voltage": {{ "value": 1.0, "unit": "V" }}
             }},
             {{
               "name": "r1",
               "kind": "resistor",
               "pins": {{ "a": "vcc", "b": "vout" }},
-              "resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
+              "resistance": {{ "value": 1000.0, "unit": "ohm" }},
               "ratings": {{ "power": null }}
             }},
             {{
               "name": "c1",
               "kind": "capacitor",
               "pins": {{ "a": "vout", "b": "gnd" }},
-              "capacitance": {{ "value": 1e-9, "unit": "F", "source": "user" }},
+              "capacitance": {{ "value": 1e-9, "unit": "F" }},
               "initial": null
             }},
             {{
               "name": "s1",
               "kind": "switch",
               "pins": {{ "a": "vout", "b": "gnd" }},
-              "on_resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
-              "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+              "on_resistance": {{ "value": 1000.0, "unit": "ohm" }},
+              "off_resistance": {{ "value": 1e9, "unit": "ohm" }},
               "initial": "open",
               "events": [{{ "t_ps": {edge_a}, "state": "closed" }}],
               "bounce": null
@@ -101,8 +101,8 @@ fn rc_two_switches(edge_a: u64, edge_b: u64, stop: u64, max_step: u64) -> Netlis
               "name": "s2",
               "kind": "switch",
               "pins": {{ "a": "vout", "b": "gnd" }},
-              "on_resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
-              "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+              "on_resistance": {{ "value": 1000.0, "unit": "ohm" }},
+              "off_resistance": {{ "value": 1e9, "unit": "ohm" }},
               "initial": "open",
               "events": [{{ "t_ps": {edge_b}, "state": "closed" }}],
               "bounce": null
@@ -200,33 +200,33 @@ fn edge_beside(close: u64, jump: u64, at_rest: bool) -> Netlist {
     let rc = if at_rest {
         r#",
             { "name": "r1", "kind": "resistor", "pins": { "a": "vcc", "b": "vout" },
-              "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" }, "ratings": { "power": null } },
+              "resistance": { "value": 1000.0, "unit": "ohm" }, "ratings": { "power": null } },
             { "name": "c1", "kind": "capacitor", "pins": { "a": "vout", "b": "gnd" },
-              "capacitance": { "value": 1e-9, "unit": "F", "source": "user" }, "initial": null }"#
+              "capacitance": { "value": 1e-9, "unit": "F" }, "initial": null }"#
     } else {
         ""
     };
     let json = format!(
         r#"{{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": {{ "transient": {{ "stop_ps": 100000, "max_step_ps": 100000, "grid_ps": 100000 }} }},
           "ground": "gnd",
           "nets": ["gnd", "vcc", "vsw", "vp", "vout"],
           "parts": [
             {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "vcc", "n": "gnd" }},
-              "voltage": {{ "value": 5.0, "unit": "V", "source": "user" }} }},
+              "voltage": {{ "value": 5.0, "unit": "V" }} }},
             {{ "name": "rs", "kind": "resistor", "pins": {{ "a": "vcc", "b": "vsw" }},
-              "resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }}, "ratings": {{ "power": null }} }},
+              "resistance": {{ "value": 1000.0, "unit": "ohm" }}, "ratings": {{ "power": null }} }},
             {{ "name": "s1", "kind": "switch", "pins": {{ "a": "vsw", "b": "gnd" }},
-              "on_resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
-              "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+              "on_resistance": {{ "value": 1000.0, "unit": "ohm" }},
+              "off_resistance": {{ "value": 1e9, "unit": "ohm" }},
               "initial": "open", "events": [{{ "t_ps": {close}, "state": "closed" }}], "bounce": null }},
             {{ "name": "vs", "kind": "voltage_source", "pins": {{ "p": "vp", "n": "gnd" }},
-              "voltage": {{ "kind": "step", "initial": {{ "value": 0.0, "unit": "V", "source": "user" }},
-                           "final": {{ "value": 5.0, "unit": "V", "source": "user" }}, "at_ps": {jump} }} }},
+              "voltage": {{ "kind": "step", "initial": {{ "value": 0.0, "unit": "V" }},
+                           "final": {{ "value": 5.0, "unit": "V" }}, "at_ps": {jump} }} }},
             {{ "name": "rp", "kind": "resistor", "pins": {{ "a": "vp", "b": "gnd" }},
-              "resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }}, "ratings": {{ "power": null }} }}{rc}
+              "resistance": {{ "value": 1000.0, "unit": "ohm" }}, "ratings": {{ "power": null }} }}{rc}
           ]
         }}"#
     );

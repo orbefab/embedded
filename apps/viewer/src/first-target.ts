@@ -99,13 +99,6 @@ const parts: Record<string, PartData> = {
       ADC7: [22], PC0: [23], PC1: [24], PC2: [25], PC3: [26], PC4: [27], PC5: [28], PC6: [29], PD0: [30],
       PD1: [31], PD2: [32],
     },
-    not_simulated: [
-      {
-        what: "ADC6, ADC7",
-        pins: ["ADC6", "ADC7"],
-        why: "The engine's atmega328p kind has the DIP's pins, with no ADC6 or ADC7 pad.",
-      },
-    ],
   }),
   "capacitor-0603": part("capacitor-0603", capacitor0603, { leads: { a: [1], b: [2] } }),
   "capacitor-tantalum-3216": part("capacitor-tantalum-3216", tantalum3216, { leads: { pos: [1], neg: [2] } }),
@@ -275,13 +268,12 @@ export const firstTarget: SceneMessage = {
     pins: ["@nano.D2", "@nano.D13"],
     leds: ["@led1", "@nano.led_l", "@nano.led_pwr"],
     switches: ["@btn1", "@nano.sw_reset"],
+    pixels: [],
   },
   // The Nano's header pins whose nets reach no simulated pin, with the reasons `orbe check`
   // gives for a wire to each.
   not_simulated: [
     { ref: "@nano.3V3", why: "It is the CH340G's 3.3 V output. The engine has no USB-serial chip, so the pin supplies nothing." },
-    { ref: "@nano.A6", why: "The engine's atmega328p kind has the DIP's pins, with no ADC6 or ADC7 pad." },
-    { ref: "@nano.A7", why: "The engine's atmega328p kind has the DIP's pins, with no ADC6 or ADC7 pad." },
     { ref: "@nano.VIN", why: "It feeds the AMS1117, which has no model yet. The board runs from USB." },
   ],
 };
@@ -297,6 +289,7 @@ const frame = (seq: number, t_ps: number, pressed: boolean): FrameMessage => ({
   pins: pressed ? [1, 1] : [0, 0],
   led_a: pressed ? [0.0122465581, 0.0028787405, PWR_A] : [0, 0, PWR_A],
   switches: pressed ? [1, 0] : [0, 0],
+  pixel_rgb: [],
   diagnostics: 0,
 });
 

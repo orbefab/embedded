@@ -837,7 +837,7 @@ fn comparator_output_modes_and_capture() {
 }
 
 /// §14.3.2 and §14.3.3. ADC0 is `PC0`, AIN0 is `PD6`, and AIN1 is `PD7`.
-/// ADC6 has no pad (§1.1.9).
+/// ADC6 has no GPIO pad (§1.1.9).
 #[test]
 fn analog_pins_match_the_328p_channels() {
     assert_eq!(Port::C.pin_id(0), PC0);

@@ -18,12 +18,12 @@ const LED: &str = r#"{
   "name": "led1",
   "kind": "led",
   "pins": { "anode": "vk", "cathode": "vbtn" },
-  "saturation_current": { "value": 6.711e-10, "unit": "A", "source": "user" },
-  "emission_coefficient": { "value": 4.427, "unit": "1", "source": "user" },
-  "series_resistance": { "value": 2.115, "unit": "ohm", "source": "user" },
+  "saturation_current": { "value": 6.711e-10, "unit": "A" },
+  "emission_coefficient": { "value": 4.427, "unit": "1" },
+  "series_resistance": { "value": 2.115, "unit": "ohm" },
   "ratings": {
-    "current": { "value": 0.03, "unit": "A", "source": "user" },
-    "power": { "value": 0.075, "unit": "W", "source": "user" }
+    "current": { "value": 0.03, "unit": "A" },
+    "power": { "value": 0.075, "unit": "W" }
   }
 }"#;
 
@@ -31,7 +31,7 @@ const LED: &str = r#"{
 fn button(series: f64, bounce: &str) -> String {
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 7,
       "analysis": {{ "transient": {{ "stop_ps": 20000000000, "max_step_ps": 10000000, "grid_ps": 10000000 }} }},
       "ground": "gnd",
@@ -41,20 +41,20 @@ fn button(series: f64, bounce: &str) -> String {
           "name": "v1",
           "kind": "voltage_source",
           "pins": {{ "p": "vcc", "n": "gnd" }},
-          "voltage": {{ "value": 5.0, "unit": "V", "source": "user" }}
+          "voltage": {{ "value": 5.0, "unit": "V" }}
         }},
         {{
           "name": "r1",
           "kind": "resistor",
           "pins": {{ "a": "vcc", "b": "vbtn" }},
-          "resistance": {{ "value": 10000.0, "unit": "ohm", "source": "user" }},
+          "resistance": {{ "value": 10000.0, "unit": "ohm" }},
           "ratings": {{ "power": null }}
         }},
         {{
           "name": "r2",
           "kind": "resistor",
           "pins": {{ "a": "vcc", "b": "vk" }},
-          "resistance": {{ "value": {series:?}, "unit": "ohm", "source": "user" }},
+          "resistance": {{ "value": {series:?}, "unit": "ohm" }},
           "ratings": {{ "power": null }}
         }},
         {LED},
@@ -62,8 +62,8 @@ fn button(series: f64, bounce: &str) -> String {
           "name": "sw1",
           "kind": "switch",
           "pins": {{ "a": "vbtn", "b": "gnd" }},
-          "on_resistance": {{ "value": 0.1, "unit": "ohm", "source": "user" }},
-          "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+          "on_resistance": {{ "value": 0.1, "unit": "ohm" }},
+          "off_resistance": {{ "value": 1e9, "unit": "ohm" }},
           "initial": "open",
           "events": [
             {{ "t_ps": 2000000000, "state": "closed" }},
@@ -77,8 +77,8 @@ fn button(series: f64, bounce: &str) -> String {
 }
 
 const BOUNCE: &str = r#"{
-  "window": { "value": 1000000000, "unit": "ps", "source": "user" },
-  "max_bounces": { "value": 4, "unit": "1", "source": "user" }
+  "window": { "value": 1000000000, "unit": "ps" },
+  "max_bounces": { "value": 4, "unit": "1" }
 }"#;
 
 #[ignore = "full tier"]
@@ -505,7 +505,7 @@ fn stiff_button(max_step: u64) -> String {
           "name": "c2",
           "kind": "capacitor",
           "pins": { "a": "vbtn", "b": "gnd" },
-          "capacitance": { "value": 1e-7, "unit": "F", "source": "user" },
+          "capacitance": { "value": 1e-7, "unit": "F" },
           "initial": null
         },
         {
@@ -589,8 +589,8 @@ fn cluster_switches() -> String {
           "name": "s{n}",
           "kind": "switch",
           "pins": {{ "a": "vout", "b": "gnd" }},
-          "on_resistance": {{ "value": 0.1, "unit": "ohm", "source": "user" }},
-          "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+          "on_resistance": {{ "value": 0.1, "unit": "ohm" }},
+          "off_resistance": {{ "value": 1e9, "unit": "ohm" }},
           "initial": "open",
           "events": [{{ "t_ps": {edge}, "state": "closed" }}],
           "bounce": null
@@ -599,7 +599,7 @@ fn cluster_switches() -> String {
     }
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 1,
       "analysis": {{ "transient": {{ "stop_ps": 52000000, "max_step_ps": 1000000, "grid_ps": 1000000 }} }},
       "ground": "gnd",
@@ -609,20 +609,20 @@ fn cluster_switches() -> String {
           "name": "v1",
           "kind": "voltage_source",
           "pins": {{ "p": "vcc", "n": "gnd" }},
-          "voltage": {{ "value": 5.0, "unit": "V", "source": "user" }}
+          "voltage": {{ "value": 5.0, "unit": "V" }}
         }},
         {{
           "name": "r1",
           "kind": "resistor",
           "pins": {{ "a": "vcc", "b": "vout" }},
-          "resistance": {{ "value": 220.0, "unit": "ohm", "source": "user" }},
+          "resistance": {{ "value": 220.0, "unit": "ohm" }},
           "ratings": {{ "power": null }}
         }},
         {{
           "name": "c1",
           "kind": "capacitor",
           "pins": {{ "a": "vout", "b": "gnd" }},
-          "capacitance": {{ "value": 1e-7, "unit": "F", "source": "user" }},
+          "capacitance": {{ "value": 1e-7, "unit": "F" }},
           "initial": null
         }}{switches}
       ]
@@ -648,14 +648,14 @@ fn rc_with_loops() -> String {
       "name": "c2",
       "kind": "capacitor",
       "pins": { "a": "vin", "b": "gnd" },
-      "capacitance": { "value": 1e-7, "unit": "F", "source": "user" },
+      "capacitance": { "value": 1e-7, "unit": "F" },
       "initial": null
     },
     {
       "name": "c3",
       "kind": "capacitor",
       "pins": { "a": "vout", "b": "gnd" },
-      "capacitance": { "value": 3e-6, "unit": "F", "source": "user" },
+      "capacitance": { "value": 3e-6, "unit": "F" },
       "initial": null
     }
   ]"#;

@@ -341,12 +341,11 @@ mod tests {
         )
     }
 
-    fn scratch(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!("orbe-engine-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&path);
-        let _ = fs::remove_dir_all(super::replace::sibling(&path, "partial"));
-        let _ = fs::remove_dir_all(super::replace::sibling(&path, "replacing"));
-        path
+    /// A run folder path inside a fresh temp folder, which holds its siblings too.
+    fn scratch(name: &str) -> (orbe_scratch::Scratch, PathBuf) {
+        let scratch = orbe_scratch::Scratch::new();
+        let path = scratch.join(name);
+        (scratch, path)
     }
 
     #[test]
@@ -465,12 +464,11 @@ mod tests {
         assert_eq!(folder.file("traces/time.u64").unwrap().len(), 16);
         assert_eq!(folder.file("traces/envelope.f64").unwrap().len(), 16);
 
-        let dir = scratch("traces");
+        let (_dir_scratch, dir) = scratch("traces");
         folder.write(&dir).unwrap();
         assert_eq!(fs::read(dir.join("traces/analog.f64")).unwrap().len(), 16);
         rejected_folder(b"{}", 1).write(&dir).unwrap();
         assert!(!dir.join("traces").exists());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -524,7 +522,7 @@ mod tests {
         let manifest: serde_json::Value =
             serde_json::from_slice(folder.file("manifest.json").unwrap()).unwrap();
         assert_eq!(manifest["seed"], 0);
-        assert_eq!(manifest["netlist_format"], 0);
+        assert_eq!(manifest["netlist_format"], 1);
         assert_eq!(folder.file("netlist.json").unwrap(), input.as_slice());
     }
 
@@ -534,8 +532,8 @@ mod tests {
             serde_json::from_slice(rejected_folder(input, 0).file("manifest.json").unwrap())
                 .unwrap()
         };
-        let future = manifest(br#"{"version": 1, "seed": 7}"#);
-        assert_eq!(future["netlist_format"], 1);
+        let future = manifest(br#"{"version": 2, "seed": 7}"#);
+        assert_eq!(future["netlist_format"], 2);
         assert_eq!(future["seed"], serde_json::Value::Null);
         for unreadable in [&br#"{"version": "0"}"#[..], b"{}", b"[]", b"not json"] {
             assert_eq!(

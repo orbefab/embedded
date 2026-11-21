@@ -36,6 +36,7 @@ A command does what it names and nothing in the background. Where `orbe` could g
 - A part's files, such as the ESP32-S3 ROM, live in its folder. A file param's `default` names one, as a path relative to the part file.
 - A file param reads its file `"as": "text"`, into the model as a string, or `"as": "blob"`, as bytes. A blob param writes `{ "sha256", "bytes" }` at its `sets` pointer, and the reader hands the bytes to the engine beside the netlist. `"as": "blob"` needs part format 2, which is format 1 plus that, so only a part that uses a blob declares format 2. Scenes stay format 1.
 - A part states its readings, such as an LED's `lit` above 2 mA and `dim` above 100 uA. `brightness` is the average forward current over the last 20 ms, the time since t = 0 when the session is younger. 2 mA is the lowest current of the forward fit. 100 uA is a hundredth of the 10 mA at which the datasheet rates luminous intensity, and ten times the 10 uA reverse-current maximum.
+- An addressable LED's colour is a reading, `"of": "rgb"`: the red, green and blue each of its LEDs last latched, and when the part last latched. It is a value, not a light state, so `get` prints it as `rgb(255,0,0)` and `expect` checks it as `@led1 rgb(255,0,0)`. A word that starts with `#` is a comment on a command line, so a colour is not written in hex. A `view.glow` by that reading glows in the latched colour. A chain's `DOUT` and that reading need part format 3, which is format 2 plus them, so an older orbe says it needs a newer one, and a part before format 3 keeps its `DOUT` off the chain.
 - `joints` say what moves, such as a button's plunger, and `controls.press` names the joint it drives. Joints between two parts come later.
 - Versions are three numbers. A patch or minor version can't change a passing test.
 - Parts that share an engine model, such as two packages of one chip, each hold a copy of its values. A check keeps the copies equal.
@@ -80,7 +81,7 @@ A command does what it names and nothing in the background. Where `orbe` could g
 - An instance has a `type` (a catalog id, or a `./` path to a part of your own), its params, and an optional `not_simulated` reason.
 - `wires` lists pin pairs, such as `["nano.D2", "btn1.a"]`, and `orbe` works out the nets. Every wire has a kind. `jumper` is the default and is drawn. `trace` (copper on a board) and `contact` (two pins touching, such as a leg in a breadboard hole) are not drawn. Drawing traces comes later.
 - `layout` sits in the parent, keyed by name, with `{ "at": [x, y, z], "rotate": [rx, ry, rz] }` in mm and degrees. The rotation is about the parent's fixed X, then Y, then Z, URDF's order. In a scene, `on` plugs a part into a board's holes in place of `at`, as [Breadboards](#breadboards-nov-8-2026) says. `mate` is reserved for later.
-- A net takes the name of its smallest label. A scene can name nets in `nets`, such as `"GND": "nano.GND"`.
+- A net takes the name of its smallest label. The ground net takes its ground pin's own name, such as `GND` from `nano.GND`, unless a scene net already has that name. A scene can name nets in `nets`, such as `"GND": "nano.GND"`.
 - Nested names flatten for the engine by joining with `__`, so `@nano.D13` is the net `nano__D13`. Names may not contain `__`.
 - A viewer edit goes to the file that holds what it changes. If that file is used more than once, the viewer asks first. Sealed parts refuse edits. A part with no position is placed by the viewer for drawing only, and nothing is written until a person drags it.
 - Two hashes: one over every project file read, which guards writes, and one over the netlist, which says whether the simulation is current.
@@ -89,7 +90,7 @@ A command does what it names and nothing in the background. Where `orbe` could g
 ## Checking (Nov 4 2026)
 Type checking, linting and runtime diagnostics are separate.
 - `orbe check` type-checks: do the files describe a valid circuit? Every finding is an error. `orbe open` runs it first.
-- `orbe lint` runs `orbe check`, then lint rules that never block, such as an unnamed ground net, a part with no position or an unconnected pin. It includes the engine's static checks, such as a floating net.
+- `orbe lint` runs `orbe check`, then lint rules that never block, such as a part with no position or an unconnected pin. It includes the engine's static checks, such as a floating net.
 - A part lists the pins its design leaves open in `open`, such as `"open": ["AREF"]` on the Nano and the Uno. `net.floating` is left out for the net of one of those pins while no scene wire reaches it and every other pin on the net, other than a hole, belongs to that part or a part inside it. A hole that only seats that pin, with nothing else in its strip, does not reach the net. A scene wire, another part's pin, or a wire to a hole on the net still warns. `open` does not change the model, so the part format stays 1. A binary that does not know the key refuses the part file.
 - A part that holds both a source and a chip, such as a board, runs with nothing wired to it, so lint does not call it unconnected. The rule reads the engine model kinds, not part names.
 - Runtime diagnostics come only from `run`, `step` and `test`.
@@ -98,7 +99,7 @@ Type checking, linting and runtime diagnostics are separate.
 ## The nano board (Nov 4 2026)
 - It is built from 14 leaf parts, 28 children in all, wired with traces. The viewer draws it by composing its children's 3D models, with no merged model.
 - Its header children sit at z = 0 with their plastic under the board, so it seats on a breadboard.
-- A6 and A7 are not simulated yet, since the engine's 328P has the DIP's pins. A wire to them is an error that says so.
+- A6 and A7 read their voltage. They are the 328P's `ADC6` and `ADC7`, which the engine's `atmega328p` kind has as pins of the TQFP.
 - Its 16 MHz clock is a three-terminal ceramic resonator, until a clone's photo says otherwise.
 
 ## The uno board (Nov 8 2026)
@@ -130,8 +131,17 @@ Type checking, linting and runtime diagnostics are separate.
 - Hover on a hole gives its ref and its strip, as `@bb.b20` and `strip bb.a20 to bb.e20`.
 - `on` was weighed against two other forms. With `at` and a `contact` wire per leg, the agent works out millimetres from the hole grid and lists every leg, the scene repeats the board's geometry, and a leg one hole off gives a different circuit with no error. `mate` would join parts by named features in general, which is more than a hole needs, and it stays reserved. `on` takes one hole, and every other leg follows from the part's own anchors, so an agent writes a hole name and gets an error that names the leg that missed.
 
+## The CLI (Nov 21 2026)
+- `orbe nets [scene]` prints each net and the pins on it. A net with no DC path to ground is `(floating)`, except a board net lint leaves quiet, such as an open AREF. A pin on no net is `not connected`. `--json` gives the same lists.
+- Human text prints a current where the reply builds it, in A, mA, µA or nA. The digits are the shortest decimal in that unit that parses back to the same value. A current under 1 nA stays in A, in scientific form. A rating's `for … ps` duration prints in ms or s. `--json` keeps the exact number and the same field names. Serial text and words the user wrote stay as they are. Voltages and power stay as the engine reports them.
+- `orbe get light`, `orbe get temperature` and `orbe get humidity` read a world quantity the scene declares, and `orbe get @world.light` reads the same. The value is the one in force at the session's time, so a `get` just after `set` shows the previous value until a `step`. `--json` names `quantity`, `value` and `unit`.
+- `orbe set` of a world quantity to a value already scheduled succeeds and says so. When that value has not landed, the reply names the time it lands. `press` and `release` of a switch already in that state still fail with `no_change`.
+- `orbe search` with no words lists every part a scene can place, grouped by its first category, then the Blocks. A part that only exists inside a board is left out. With words, the search is unchanged.
+- `orbe part` adds one line on how the part plugs into a breadboard, derived from its anchors and the hole pitch. A part whose legs cannot sit one to a hole says when two legs would share a strip and short. `--json` is the card, unchanged.
+- `scripts/install.sh` gives its downloads a 15 second connect timeout, three tries, and fails a transfer that stays under 1 byte/s for 30 seconds.
+
 ## Later
-Mates between parts, joints between two parts, importing outside CAD, PCB routing, drawing traces, per-instance placement overrides, A6 and A7, and an `orbe lsp` for editors.
+Mates between parts, joints between two parts, importing outside CAD, PCB routing, drawing traces, per-instance placement overrides, and an `orbe lsp` for editors.
 
 ## Repo (Oct 31 2026)
 One private repo for the whole branch: `orbefab/embedded`. The current sim-engine code moves in first, then maker-sandbox, then the rest (Blocks and skills). The sandbox then builds against the current engine instead of a frozen copy.

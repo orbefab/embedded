@@ -946,9 +946,9 @@ fn refuse_outside(src: &Path, place: &str, path: &str, folder: &str) {
     assert!(!out.exists(), "a refused build writes nothing");
 }
 
-/// The firmware the engine's tests build, by its absolute path.
+/// A Block's firmware, by its absolute path.
 fn button_hex() -> String {
-    let path = repo().join("packages/engine/tests/firmware/sketch/button.hex");
+    let path = repo().join("blocks/nano-button-led/firmware/button.hex");
     path.canonicalize().unwrap().to_str().unwrap().to_string()
 }
 
@@ -989,7 +989,7 @@ fn a_part_default_that_leaves_its_folder_is_not_published() {
 #[test]
 fn a_block_file_that_leaves_its_folder_is_not_published() {
     let hex = button_hex();
-    let through = hex.replacen("/sketch/", "/sketch/../sketch/", 1);
+    let through = hex.replacen("/firmware/", "/firmware/../firmware/", 1);
     assert_ne!(through, hex);
     for path in [hex.clone(), through, "../firmware.hex".to_string()] {
         let dir = tempfile::tempdir().unwrap();
@@ -1048,7 +1048,7 @@ fn a_file_that_ships_in_its_folder_is_published() {
             Checked {
                 parts: 1,
                 nets: 27,
-                ground: "mcu__GND".into(),
+                ground: "GND".into(),
             },
         );
     }
@@ -1074,7 +1074,7 @@ fn a_file_that_ships_in_its_folder_is_published() {
         Checked {
             parts: 1,
             nets: 27,
-            ground: "mcu__GND".into(),
+            ground: "GND".into(),
         },
     );
 }
@@ -1226,7 +1226,7 @@ fn a_required_count_or_duration_the_engine_takes_is_published() {
             Checked {
                 parts: 1,
                 nets: 2,
-                ground: "r1__a".into(),
+                ground: "a".into(),
             },
         );
     }
@@ -1343,7 +1343,7 @@ fn a_required_voltage_below_zero_is_published() {
             Checked {
                 parts: 1,
                 nets: 2,
-                ground: "r1__neg".into(),
+                ground: "neg".into(),
             },
         );
     }
@@ -1445,7 +1445,7 @@ fn a_part_whose_waiting_param_writes_its_only_body_is_published() {
         Checked {
             parts: 1,
             nets: 2,
-            ground: "r1__neg".into(),
+            ground: "neg".into(),
         },
     );
 }
@@ -1543,7 +1543,7 @@ fn a_body_a_waiting_choice_writes_is_published() {
         Checked {
             parts: 2,
             nets: 4,
-            ground: "r1__neg".into(),
+            ground: "neg".into(),
         },
     );
 }

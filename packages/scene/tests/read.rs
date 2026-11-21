@@ -17,14 +17,14 @@ fn read(scene: &str) -> (orbe_scene::Netlist, Value) {
 }
 
 #[test]
-fn first_target_has_19_parts_and_32_nets() {
+fn first_target_has_19_parts_and_34_nets() {
     let (netlist, json) = read("scene.jsonc");
     assert_eq!(netlist.parts, 19);
-    assert_eq!(netlist.ground, "nano__GND");
+    assert_eq!(netlist.ground, "GND");
     let mut nets = netlist.nets.clone();
     nets.sort();
     let mut expected: Vec<String> = [
-        "nano__GND",
+        "GND",
         "led1__anode",
         "nano__5V",
         "nano__AREF",
@@ -39,12 +39,12 @@ fn first_target_has_19_parts_and_32_nets() {
     ]
     .into_iter()
     .map(str::to_string)
-    .chain((0..=5).map(|i| format!("nano__A{i}")))
+    .chain((0..=7).map(|i| format!("nano__A{i}")))
     .chain((0..=13).map(|i| format!("nano__D{i}")))
     .collect();
     expected.sort();
     assert_eq!(nets, expected);
-    assert_eq!(json["nets"][0], "nano__GND", "ground is the first net");
+    assert_eq!(json["nets"][0], "GND", "ground is the first net");
     let names: Vec<&str> = json["parts"]
         .as_array()
         .unwrap()
@@ -73,7 +73,7 @@ fn first_target_has_19_parts_and_32_nets() {
         .find(|p| p["name"] == "nano__mcu")
         .unwrap();
     assert_eq!(mcu["pins"]["PB5"], "nano__D13");
-    assert_eq!(mcu["pins"]["GND_8"], "nano__GND");
+    assert_eq!(mcu["pins"]["GND_8"], "GND");
     assert_eq!(
         mcu["firmware"].as_str().unwrap(),
         fs::read_to_string(common::firmware()).unwrap()
@@ -94,7 +94,7 @@ fn scene_params_are_user_values_and_defaults_fill_the_rest() {
     };
     assert_eq!(
         part("r1")["resistance"],
-        serde_json::json!({ "value": 220, "unit": "ohm", "source": "user" })
+        serde_json::json!({ "value": 220, "unit": "ohm" })
     );
     assert_eq!(part("r2")["resistance"]["value"], 10_000.0);
     assert_eq!(part("led1")["saturation_current"]["value"], 6.711e-10);
@@ -112,17 +112,18 @@ fn scene_params_are_user_values_and_defaults_fill_the_rest() {
         "c_reset is not simulated"
     );
     assert_eq!(
-        part("nano__r_l")["resistance"]["source"]["datasheet"]["at"],
-        "RN2A, 1K"
+        part("nano__r_l")["resistance"],
+        serde_json::json!({ "value": 1000, "unit": "ohm" }),
+        "a part file's value reaches the netlist without its source"
     );
 }
 
 #[test]
-fn two_buttons_ground_is_btn1_gnd() {
+fn two_buttons_ground_is_gnd() {
     let (netlist, json) = read("two-buttons.jsonc");
     assert_eq!(netlist.parts, 19);
-    assert_eq!(netlist.nets.len(), 31);
-    assert_eq!(netlist.ground, "btn1__gnd");
+    assert_eq!(netlist.nets.len(), 33);
+    assert_eq!(netlist.ground, "GND");
     for net in ["btn1__out", "btn1__vcc", "btn2__out"] {
         assert!(netlist.nets.contains(&net.to_string()), "no net {net}");
     }
@@ -150,7 +151,7 @@ fn two_buttons_ground_is_btn1_gnd() {
 #[test]
 fn two_buttons_with_nets_names_ground_gnd() {
     let (netlist, _) = read("two-buttons-nets.jsonc");
-    assert_eq!(netlist.nets.len(), 31);
+    assert_eq!(netlist.nets.len(), 33);
     assert_eq!(netlist.ground, "GND");
     for net in ["VCC", "btn1__out", "btn2__out"] {
         assert!(netlist.nets.contains(&net.to_string()), "no net {net}");
@@ -231,7 +232,7 @@ fn a_bounce_window_fills_the_switch_with_its_default_count() {
         .unwrap();
     assert_eq!(
         btn1["bounce"]["window"],
-        serde_json::json!({ "value": 1_000_000_000u64, "unit": "ps", "source": "user" })
+        serde_json::json!({ "value": 1_000_000_000u64, "unit": "ps" })
     );
     assert_eq!(btn1["bounce"]["max_bounces"]["value"], 2);
 }
@@ -284,8 +285,9 @@ fn edit_led_resistance(root: &std::path::Path) {
 fn hold(root: &std::path::Path, id: &str, version: &str) {
     let file = root.join("parts").join(id).join("part.jsonc");
     let text = fs::read_to_string(&file).unwrap();
+    let carried = orbe_scene::card(id).unwrap().version;
     let edited = text.replacen(
-        "\"version\": \"0.1.1\"",
+        &format!("\"version\": \"{carried}\""),
         &format!("\"version\": \"{version}\""),
         1,
     );
@@ -450,7 +452,8 @@ fn a_lock_from_another_registry_at_another_version_names_the_registry() {
             d.message
         );
         assert!(
-            d.message.contains(&format!("`{id}@0.1.1`")),
+            d.message
+                .contains(&format!("`{id}@{}`", orbe_scene::card(id).unwrap().version)),
             "{id}: {}",
             d.message
         );
@@ -471,7 +474,7 @@ fn an_outdated_board_is_an_error_and_not_a_note() {
     assert_eq!(found.len(), 1, "{found:#?}");
     assert_eq!(
         found[0].message,
-        "this orbe carries `nano-board@0.1.1` and the project holds `nano-board@0.0.9`"
+        "this orbe carries `nano-board@0.1.2` and the project holds `nano-board@0.0.9`"
     );
 }
 
@@ -828,8 +831,13 @@ fn clock_project(clock: Option<&str>) -> tempfile::TempDir {
         fs::read_to_string(common::repo().join("parts/atmega328p-tqfp32/part.jsonc")).unwrap();
     let firmware = "\"firmware\": { \"file\": \"hex\", \"as\": \"text\", \"required\": true, \"sets\": \"/firmware\" }";
     assert!(catalog.contains(firmware));
+    let version = orbe_scene::card("atmega328p-tqfp32").unwrap().version;
     let part = catalog
-        .replacen("\"part\": \"atmega328p-tqfp32\", \"version\": \"0.1.1\", ", "", 1)
+        .replacen(
+            &format!("\"part\": \"atmega328p-tqfp32\", \"version\": \"{version}\", "),
+            "",
+            1,
+        )
         .replacen(
             firmware,
             &format!("{firmware}, \"clock\": {{ \"unit\": \"Hz\", \"default\": \"16M\", \"sets\": \"/clock_hz\" }}"),

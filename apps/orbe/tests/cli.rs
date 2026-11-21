@@ -30,8 +30,9 @@ fn orbe_in(dir: &Path, args: &[&str]) -> (Output, String, String) {
 }
 
 /// A folder with a scene and nothing else.
-fn scene_only() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
+/// A Scratch, since a test that locks this project's folders still leaves nothing behind.
+fn scene_only() -> orbe_scratch::Scratch {
+    let dir = orbe_scratch::Scratch::new();
     fs::write(dir.path().join("scene.jsonc"), "{}\n").unwrap();
     dir
 }
@@ -116,8 +117,9 @@ fn retitle(project: &Path, id: &str, title: &str) {
 fn hold(project: &Path, id: &str, version: &str) {
     let file = project.join("parts").join(id).join("part.jsonc");
     let text = fs::read_to_string(&file).unwrap();
+    let carried = orbe_scene::card(id).unwrap().version;
     let edited = text.replacen(
-        "\"version\": \"0.1.1\"",
+        &format!("\"version\": \"{carried}\""),
         &format!("\"version\": \"{version}\""),
         1,
     );
@@ -150,8 +152,7 @@ fn a_scene_that_reads_is_ok() {
     let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout
-            .contains("ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND"),
+        stdout.contains("ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND"),
         "{stdout}"
     );
 
@@ -160,8 +161,8 @@ fn a_scene_that_reads_is_ok() {
     let reply: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(reply["ok"], true);
     assert_eq!(reply["data"]["parts"], 19);
-    assert_eq!(reply["data"]["nets"], 32);
-    assert_eq!(reply["data"]["ground"], "nano__GND");
+    assert_eq!(reply["data"]["nets"], 34);
+    assert_eq!(reply["data"]["ground"], "GND");
 }
 
 #[test]
@@ -205,15 +206,50 @@ fn a_missing_scene_is_an_io_error() {
 }
 
 #[test]
+fn check_and_lint_read_scene_jsonc_when_no_scene_is_named() {
+    let (_workspace, proj) = first_target();
+    for command in ["check", "lint"] {
+        let (named, named_out, named_err) = orbe_in(&proj, &[command, "scene.jsonc"]);
+        let (bare, bare_out, bare_err) = orbe_in(&proj, &[command]);
+        assert_eq!(
+            (named.status.code(), named_out, named_err),
+            (bare.status.code(), bare_out, bare_err),
+            "{command}"
+        );
+        assert_ne!(
+            bare.status.code(),
+            Some(2),
+            "{command} treated the default as usage"
+        );
+    }
+    let empty = tempfile::tempdir().unwrap();
+    let (output, _, stderr) = orbe_in(empty.path(), &["lint"]);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("no scene file at scene.jsonc"), "{stderr}");
+    let (output, stdout) = orbe(&["check", "--help"]);
+    assert!(output.status.success(), "{stdout}");
+    assert!(stdout.contains("scene.jsonc when omitted"), "{stdout}");
+    let (output, stdout) = orbe(&["lint", "--help"]);
+    assert!(output.status.success(), "{stdout}");
+    assert!(stdout.contains("scene.jsonc when omitted"), "{stdout}");
+}
+
+#[test]
 fn json_usage_is_one_envelope_on_stdout() {
-    let (output, stdout) = orbe(&["check", "--json"]);
-    assert_eq!(output.status.code(), Some(2), "{stdout}");
-    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let dir = tempfile::tempdir().unwrap();
+    let (output, stdout, stderr) = orbe_in(dir.path(), &["check", "--json"]);
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
     let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(reply["ok"], false);
-    assert!(reply["error"].is_object());
-    assert_eq!(reply["error"]["code"], "usage");
-    assert!(!reply["error"]["message"].as_str().unwrap_or("").is_empty());
+    assert_eq!(reply["error"]["code"], "io_error");
+    assert!(
+        reply["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("scene.jsonc"),
+        "{reply}"
+    );
     assert_eq!(stdout.lines().count(), 1, "{stdout}");
 
     let (output, stdout) = orbe(&["check", "--json", "scene.jsonc", "extra"]);
@@ -445,7 +481,10 @@ fn adding_parts_for_the_first_target() {
     assert_eq!(fs::read_to_string(&lock_path).unwrap(), fixture_lock);
     for id in &copied {
         assert!(
-            stdout.contains(&format!("wrote parts/{id} 0.1.1")),
+            stdout.contains(&format!(
+                "wrote parts/{id} {}",
+                orbe_scene::card(id).unwrap().version
+            )),
             "{id}: {stdout}"
         );
     }
@@ -453,8 +492,7 @@ fn adding_parts_for_the_first_target() {
     let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout
-            .contains("ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND"),
+        stdout.contains("ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND"),
         "{stdout}"
     );
 
@@ -522,8 +560,7 @@ fn adding_parts_for_the_first_target() {
     let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout
-            .contains("ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND"),
+        stdout.contains("ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND"),
         "{stdout}"
     );
 
@@ -537,7 +574,7 @@ fn adding_parts_for_the_first_target() {
     .unwrap();
     let (output, stdout, _) = orbe_in(dir.path(), &["add", "nano-board", "--diff"]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
-    assert!(stdout.contains("stays at 0.1.1"), "{stdout}");
+    assert!(stdout.contains("stays at 0.1.2"), "{stdout}");
     assert!(stdout.contains("the version is unchanged"), "{stdout}");
     assert!(
         stdout
@@ -584,8 +621,7 @@ fn adding_parts_for_the_first_target() {
     let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout
-            .contains("ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND"),
+        stdout.contains("ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND"),
         "{stdout}"
     );
     assert!(
@@ -718,7 +754,7 @@ fn the_first_target_walk_from_the_folder_above() {
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert_eq!(
         stdout,
-        "proj/scene.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND\n"
+        "proj/scene.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND\n"
     );
     assert!(proj.join("parts.lock").is_file());
 }
@@ -1020,7 +1056,7 @@ fn an_overwrite_of_an_older_board_leaves_a_newer_child() {
         let (output, out, err) = run_printed(root, &command);
         assert_eq!(output.status.code(), Some(0), "{version}: {out}{err}");
         assert!(
-            out.contains("wrote parts/nano-board 0.1.1, replacing 0.0.9"),
+            out.contains("wrote parts/nano-board 0.1.2, replacing 0.0.9"),
             "{version}: {out}"
         );
         assert!(
@@ -1051,7 +1087,7 @@ fn an_overwrite_of_an_older_board_leaves_a_newer_child() {
         assert!(stdout.contains("error[part_newer]"), "{version}: {stdout}");
         assert!(
             stdout.contains(&format!(
-                "this project holds `atmega328p-tqfp32@{version}` and this orbe carries `atmega328p-tqfp32@0.1.1`"
+                "this project holds `atmega328p-tqfp32@{version}` and this orbe carries `atmega328p-tqfp32@0.1.2`"
             )),
             "{version}: {stdout}"
         );
@@ -1064,7 +1100,7 @@ fn an_overwrite_of_an_older_board_leaves_a_newer_child() {
 fn a_named_overwrite_leaves_a_newer_locked_copy() {
     let chip = "atmega328p-tqfp32";
     let named = ["add", chip, "--overwrite"];
-    let pinned = ["add", "atmega328p-tqfp32@0.1.1", "--overwrite"];
+    let pinned = ["add", "atmega328p-tqfp32@0.1.2", "--overwrite"];
     let board = ["add", "nano-board", "--overwrite"];
     for args in [named.as_slice(), pinned.as_slice(), board.as_slice()] {
         let project = common::project("nano-button");
@@ -1270,8 +1306,10 @@ fn add_refuses_a_folder_that_is_not_a_project() {
 #[test]
 fn a_failed_overwrite_puts_every_folder_back_and_says_so() {
     use std::os::unix::fs::PermissionsExt;
-    let project = common::project("nano-button");
-    let root = project.path();
+    // A Scratch, so the folder this test locks is opened and removed even if it fails.
+    let scratch = orbe_scratch::Scratch::new();
+    let root = &scratch.join("project");
+    fs::rename(common::project("nano-button").path(), root).unwrap();
     for id in ["led-5mm", "resistor-axial"] {
         let path = root.join("parts").join(id).join("part.jsonc");
         let mut bytes = fs::read(&path).unwrap();
@@ -1316,7 +1354,7 @@ fn a_scene_not_named_scene_jsonc_gets_a_hint_that_runs() {
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert_eq!(
         stdout,
-        "blinky.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND\n"
+        "blinky.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND\n"
     );
 }
 

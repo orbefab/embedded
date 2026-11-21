@@ -20,7 +20,7 @@ This text comes from the `orbe` you have installed, so it matches it. `orbe <com
    - `nano-light-comparator`: an LDR and a trimmer set a threshold. An LM358 lights a red LED in the dark, and a Nano on D2 prints dark or light.
 2. Otherwise find each part with `orbe search <words>`, read it with `orbe part <id>`, and copy it into the project with `orbe add <id>…`.
 3. Write `scene.jsonc` in the project folder. Seat each part on a breadboard with `on`.
-4. Run `orbe check scene.jsonc`, then `orbe lint scene.jsonc`, after every edit. Do what each hint says. A `part_missing` hint is the `orbe add` command to run.
+4. Run `orbe check scene.jsonc`, then `orbe lint scene.jsonc`, after every edit. With no path, both read `scene.jsonc`. Do what each hint says. A `part_missing` hint is the `orbe add` command to run. `orbe nets` lists each net and its pins, and marks `(floating)` on a net with no DC path to ground.
 5. Build the firmware and name the built file in the scene. For an Arduino board, run `orbe skills get arduino` first.
 6. Run `orbe open`, which starts a session at t = 0, paused. Drive it with `step`, `press`, `release`, `set`, `get`, `expect` and `snapshot`. After a fix, rebuild and run `orbe open` again. Write what works as `tests/<name>.test` and run `orbe test`.
 7. When the user wants to watch, run `orbe open --headed` and `orbe play`.
@@ -77,12 +77,12 @@ $ orbe add led-5mm nano-board resistor-axial tactile-switch-6mm
 ...
 wrote parts.lock
 $ orbe check scene.jsonc
-scene.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND
+scene.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND
 $ orbe lint scene.jsonc
 ...
-2 warnings in scene.jsonc
+1 warning in scene.jsonc
 $ orbe open
-opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 19 engine parts, 32 nets)
+opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 19 engine parts, 34 nets)
 $ orbe step 100ms
 t=100ms (from 0s)
 ...
@@ -96,7 +96,7 @@ t=104ms (from 100ms), @led1 lit by 104ms
 $ orbe get @nano.D13
 nano.D13 high 4.400713547712646 V
 $ orbe expect @led1.i '>' 5mA
-passed @led1.i > 5mA (led1.i = 0.0112925043880606 A)
+passed @led1.i > 5mA (led1.i = 11.2925043880606 mA)
 $ orbe close
 closed at t=104ms
 $ orbe test
@@ -104,7 +104,7 @@ PASS tests/button.test
 1 passed, 0 failed
 ```
 
-The 2 lint warnings say the scene has no `layout` and its ground is named after `nano.GND`. Both are what the scene means, so they stay.
+The lint warning says the scene has no `layout`, so the 3D page places the parts in a row for drawing only. This example is not a 3D scene, so the parts stay unplaced.
 
 ## Scenes
 
@@ -113,7 +113,7 @@ A scene is JSONC: JSON plus `//` comments and trailing commas. Its keys:
 - `format`: always `1`.
 - `parts`: each instance by name. `type` is a catalog id or a `./` path to a part folder of your own. The other keys are the part's params. `"not_simulated": "<why>"` keeps a part for drawing only. Nothing may be wired to it. A wire to one of its pins is a `not_simulated` error that gives `<why>`.
 - `wires`: pairs of pins, `["nano.D2", "btn1.a"]`. Wired pins join into nets.
-- `nets` (optional): names a net by one of its pins, `"GND": "nano.GND"`. Other nets take the name of their smallest pin, with `.` written `__`.
+- `nets` (optional): names a net by one of its pins, `"GND": "nano.GND"`. The ground net takes its pin's own name, such as `GND`, unless a name in `nets` already uses it. Every other net takes the name of its smallest pin, with `.` written `__`.
 - `layout` (optional): `"r1": { "on": { "a": "bb.d25" } }` seats a part in a breadboard, and `"bb": { "at": [x, y, z], "rotate": [rx, ry, rz] }` places one, in mm and degrees.
 - `ground` (optional): a pin on the ground net, as `"ground": "bb.X1"`, for a scene with no board to name one.
 - `sim` (optional): `{ "max_step": "1ms" }`, the engine's largest step, 10 ms by default.
@@ -139,7 +139,7 @@ In a part's folder, `part.jsonc` is the part: its pins, params, ratings and the 
 
 Give the board an `at`. Then seat every part with leads using `on`: name one pin and the hole its lead goes into, and orbe seats the other leads where the part's shape puts them, each in its hole's strip. That works for leads off the 2.54 mm grid too. `"ldr": { "on": { "a": "bb.c21" } }` seats the LDR's lead b in c22. `"rotate": [0, 0, 90]` turns a part a quarter turn first. Wire the rest with jumpers between holes.
 
-`at` alone only draws a part where you put it. Its leads join no hole, and nothing checks that it floats above the board. Run `orbe check` and `orbe lint` after seating: a lead in the channel, off the board or in a taken hole is an error whose hint names a placement that fits, when one does, and two pins of one part in one strip warn `scene.shorted`. `orbe skills get reference` has a whole breadboard scene.
+`at` alone only draws a part where you put it. Its leads join no hole. When that `at` puts a leg in a breadboard hole, `orbe lint` warns `scene.unplaced` and the hint seats it with `on`. Run `orbe check` and `orbe lint` after seating: a lead in the channel, off the board or in a taken hole is an error whose hint names a placement that fits, when one does, and two pins of one part in one strip warn `scene.shorted`. `orbe skills get reference` has a whole breadboard scene.
 
 ## Driving a session
 
@@ -148,14 +148,16 @@ Give the board an `at`. Then seat every part with leads using `on`: name one pin
 - `@led1`: a part. `get` prints its state, such as `lit`, `dim` or `off`, and its current `i`, voltage `v` and power `p`.
 - `@nano.D13`, `@led1.anode`: a pin. `get` prints its level, `high` or `low`, when a chip pin is on its net, and its voltage.
 - `@led1.i`: one quantity of a part. An unknown one is an error that lists what the part reports.
+- `@led1.color`: the colour an addressable LED, such as the sk68xxmini-hs, last latched, as `rgb(r,g,b)` from 0 to 255, and when. `get @led1` prints it as `color=`.
 - `@nano.mcu.PB5`, `@nano.led_l`: a part inside a part, by its name in that part's file. On the Nano and the Uno the chip is `mcu`, and `led_l` is the L LED, which D13 drives.
 
-`press @btn1` and `release @btn1` close and open a switch. `orbe set light 50` changes a `world` quantity from then on.
+`press @btn1` and `release @btn1` close and open a switch. `orbe set light 50` changes a `world` quantity from then on. `orbe get light` reads the value in force, and `orbe get @world.light` reads the same.
 
 `expect` and `step --until` take the same conditions:
 
 - `@led1 lit`, `@led1 dim`, `@led1 off`: an LED's state, from its `brightness`, its average current over 20 ms. It is `lit` above 2 mA and `off` at or below 100 uA. `@led1.brightness > 1mA` compares that average.
 - `@nano.D13 high`, `@nano.D13 low`: a pin's level.
+- `@led1 rgb(255,0,0)`: an addressable LED's latched colour. `#` starts a comment, so a colour is never hex.
 - `@led1.i > 5mA`, `@nano.D2 < 1V`: a quantity or a pin's voltage, with `<`, `<=`, `>` or `>=`. In a shell, quote `<` and `>`, as `orbe expect @led1.i '>' 5mA`.
 - `serial contains "text"`: all the serial text since `open`. `snapshot` shows the last 10 lines of it, joined with `\n`.
 - `no diagnostics`: no runtime warning has come up. A chip warning can show up to one engine step (`sim.max_step`, 10 ms by default) late, so step that far past its cause first.
@@ -188,4 +190,4 @@ With `--json` a command prints one JSON object, `{"ok": true, "data": {...}}` or
 
 ## Watching in 3D
 
-`orbe open --headed` opens the scene and a page in the default browser, where a person watches it in 3D and clicks its buttons. `orbe show` opens the page on a session that already runs, and `--no-browser` only prints its address. The address holds the session's key, so give it only to the user. A session opens paused, so run `orbe play` before you hand over the page. Time then runs at real speed until `orbe pause`, a `step` that runs, the 2-hour stop or a fault, and uses the CPU while it runs.
+`orbe open --headed` opens the scene and a page in the default browser, where a person watches it in 3D and clicks its buttons. When a viewer is already connected, it prints the address and opens no browser. `orbe show` opens the page on a session that already runs, and `--no-browser` only prints its address. The address holds the session's key, so give it only to the user. A session opens paused, so run `orbe play` before you hand over the page. Time then runs at real speed until `orbe pause`, a `step` that runs, the 2-hour stop or a fault, and uses the CPU while it runs.

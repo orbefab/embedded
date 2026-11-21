@@ -43,7 +43,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 
 `run_format` versions this folder, and `engine_version` is the workspace package version, the release that wrote the folder. The current values are 0 and `0.1.0`. [Run format](#run-format) says which changes move `run_format`.
 
-`netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 1` records 1. It is `null` when no such integer could be read.
+`netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 2` records 2. It is `null` when no such integer could be read.
 
 `input.file` is the name inside the folder. `input.sha256` and `input.bytes` describe the input bytes. For `packages/engine/tests/circuits/divider/netlist.json` the length is 904.
 
@@ -492,7 +492,7 @@ lo, hi = env[refs.index("#net.vout")]  # interval k spans t_ps[k] to t_ps[k + 1]
 
 ## What the glass shows
 
-The frame memory file is what the panel holds, not what a person sees. The engine draws what the glass shows, and a viewer only paints those pixels. `orbe-run view <dir> --out <out>` reads a finished run folder and writes `display-<part>.png` into `<out>` for each entry of `observations.json` `displays`. It writes nothing into the run folder unless `<out>` is that folder. `Display::pixels` on a session gives the same pixels from the same function, as [engine.md](engine.md#sessions) says.
+The frame memory file is what the panel holds, not what a person sees. The engine draws what the glass shows, and a viewer only paints those pixels. `Display::pixels` on a session gives them, as [engine.md](engine.md#sessions) says.
 
 For an `st77916` the pixels are 360 rows of 360, rows top to bottom and each row left to right, each pixel red, green, blue and alpha, one byte each:
 
@@ -505,10 +505,6 @@ For an `st77916` the pixels are 360 rows of 360, rows top to bottom and each row
 The glass does not dim. `brightness` stays a separate number in the `displays` entry, and a viewer applies it.
 
 `packages/engine/tests/circuits/st77916-replay` ends with `inverted` false, so its unwritten pixels, all zero bytes, show white on the glass.
-
-The PNG is 8-bit RGBA with no interlace. Every row has filter type 0, and the image data is one `IDAT` of stored deflate blocks, uncompressed. The same pixels always give the same bytes, so two `orbe-run view` runs of one folder write identical files. An `st77916` PNG is 518863 bytes.
-
-`orbe-run view` prints one JSON document. A clean view is `ok`, exit 0, with `out` and `images`, the PNG path written for each part, by part name. A run folder with no display part creates no `<out>`, writes no file, and prints `"images": {}`. A folder it cannot read is `io_error`, exit 3, with `message` and `path`, and it writes no file. That covers a missing or malformed `observations.json`, a display kind it does not draw, an `image` other than `traces/display-<part>.rgb565`, and a frame memory file that is missing, the wrong size, or not the bytes its `sha256` names.
 
 ## Determinism
 

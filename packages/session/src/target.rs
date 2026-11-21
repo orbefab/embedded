@@ -86,6 +86,20 @@ pub enum Target {
     },
     /// The average forward current of a part that states `lit` and `dim`.
     Brightness { path: String },
+    /// The colours an addressable LED part last latched, by its reading `"of": "rgb"`.
+    Color {
+        path: String,
+        reading: String,
+        engine: String,
+    },
+}
+
+/// The name of the part's reading `"of": "rgb"`, the colours its LED chain latched.
+pub(crate) fn rgb_reading(part: &MapPart) -> Option<&str> {
+    part.readings
+        .iter()
+        .find(|(_, reading)| reading.of == "rgb")
+        .map(|(name, _)| name.as_str())
 }
 
 pub(crate) const QUANTITIES: [Quantity; 8] = [
@@ -131,6 +145,14 @@ pub fn resolve(
         }
         if last && seg == "brightness" && part.readings.contains_key("lit") {
             return Ok(Target::Brightness { path });
+        }
+        if last && rgb_reading(part) == Some(seg.as_str()) {
+            let engine = one_engine(&path, part, Code::NoReading)?;
+            return Ok(Target::Color {
+                path,
+                reading: seg.clone(),
+                engine,
+            });
         }
         if last && let Some(&quantity) = QUANTITIES.iter().find(|q| q.as_str() == seg) {
             let engine = one_engine(&path, part, Code::NoReading)?;
@@ -216,6 +238,9 @@ pub(crate) fn names(part: &MapPart, reported: &[Quantity]) -> String {
     }
     if part.readings.contains_key("lit") {
         found.push("brightness".to_string());
+    }
+    if let Some(reading) = rgb_reading(part) {
+        found.push(reading.to_string());
     }
     found.join("; ")
 }

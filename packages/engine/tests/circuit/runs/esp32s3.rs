@@ -5,41 +5,15 @@
 //! core now runs.
 
 use std::fs;
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
 use orbe_model::Time;
+use orbe_scratch::Scratch;
 
 use crate::runs::common;
 use common::{repo, run_netlist};
 use orbe_engine::blob::{Blobs, Sha256};
 use orbe_engine::{Refused, Session};
-
-/// A temp folder this test removes when it ends, including when an assertion fails.
-/// Nextest runs each test in its own process, so nothing later reuses the path.
-struct Scratch(PathBuf);
-
-impl Deref for Scratch {
-    type Target = Path;
-
-    fn deref(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-fn scratch(name: &str) -> Scratch {
-    let path =
-        std::env::temp_dir().join(format!("orbe-engine-esp32s3-{name}-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&path);
-    fs::create_dir_all(&path).unwrap();
-    Scratch(path)
-}
 
 fn example() -> serde_json::Value {
     serde_json::from_slice(
@@ -74,7 +48,7 @@ fn firmware(netlist: &mut serde_json::Value, sha256: &str, bytes: usize) {
 
 #[test]
 fn a_netlist_with_no_blobs_folder_names_the_missing_blob_and_blobs_finds_it() {
-    let dir = scratch("missing");
+    let dir = Scratch::new();
     let netlist = example();
     let (code, doc) = run(&dir, &netlist, &[]);
     assert_eq!((code, doc["status"].as_str()), (1, Some("failed")));
@@ -103,7 +77,7 @@ fn a_netlist_with_no_blobs_folder_names_the_missing_blob_and_blobs_finds_it() {
 
 #[test]
 fn a_blob_that_is_not_the_one_named_is_refused() {
-    let dir = scratch("mismatch");
+    let dir = Scratch::new();
     let mut netlist = example();
     let sha256 = netlist["parts"][1]["firmware"]["elf"]["sha256"]
         .as_str()
@@ -149,7 +123,7 @@ fn a_blob_list_names_no_folder() {
         .to_string();
     let message = |netlist: &serde_json::Value, blobs: &Blobs| {
         let json = serde_json::to_vec(netlist).unwrap();
-        let Err(Refused::Invalid(found)) = Session::open_document_with(&json, blobs) else {
+        let Err(Refused::Invalid(found)) = Session::open_json(&json, blobs) else {
             panic!("the netlist is invalid");
         };
         serde_json::to_value(&found[0]).unwrap()["message"]
@@ -174,7 +148,7 @@ fn a_blob_list_names_no_folder() {
 fn the_first_good_copy_wins_and_a_file_the_netlist_does_not_name_is_not_read() {
     use std::os::unix::fs::PermissionsExt;
 
-    let dir = scratch("search");
+    let dir = Scratch::new();
     let netlist = example();
     let sha256 = netlist["parts"][1]["firmware"]["elf"]["sha256"]
         .as_str()
@@ -226,7 +200,7 @@ fn the_first_good_copy_wins_and_a_file_the_netlist_does_not_name_is_not_read() {
 
 #[test]
 fn a_blob_that_is_not_an_executable_for_its_ram_is_a_firmware_error() {
-    let dir = scratch("not-elf");
+    let dir = Scratch::new();
     let mut netlist = example();
     let blobs = dir.join("blobs");
     fs::create_dir_all(&blobs).unwrap();
@@ -260,7 +234,7 @@ fn hello() -> serde_json::Value {
 /// commits, so its absence is the one blob a run of the flash example names.
 #[test]
 fn the_rom_comes_with_a_flash_and_is_the_pinned_one() {
-    let dir = scratch("rom");
+    let dir = Scratch::new();
     let hello_blobs = repo("packages/engine/tests/circuits/esp32s3-hello/blobs");
     let rom = hello()["parts"][1]["rom"].clone();
     let mut other = hello();
@@ -292,7 +266,7 @@ fn the_rom_comes_with_a_flash_and_is_the_pinned_one() {
 
 #[test]
 fn a_gpio_is_optional_and_a_pin_the_chip_lacks_is_refused() {
-    let dir = scratch("pins");
+    let dir = Scratch::new();
     let mut netlist = example();
     netlist["parts"][1]["pins"] = serde_json::json!({ "VCC": "vcc", "GND": "gnd" });
     let (code, doc) = run(&dir, &netlist, &[&example_blobs()]);
@@ -309,18 +283,6 @@ fn a_gpio_is_optional_and_a_pin_the_chip_lacks_is_refused() {
     );
 }
 
-/// The part `docs/engine/netlist.md` shows, with every value's source dropped.
-fn without_sources(value: &serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => map
-            .iter()
-            .filter(|(key, _)| key.as_str() != "source")
-            .map(|(key, value)| (key.clone(), without_sources(value)))
-            .collect(),
-        other => other.clone(),
-    }
-}
-
 #[test]
 fn the_documented_part_is_the_examples() {
     let doc = fs::read_to_string(repo("docs/engine/netlist.md")).unwrap();
@@ -328,10 +290,7 @@ fn the_documented_part_is_the_examples() {
     let start = section.find("```json\n").unwrap() + "```json\n".len();
     let end = start + section[start..].find("\n```").unwrap();
     let documented: serde_json::Value = serde_json::from_str(&section[start..end]).unwrap();
-    assert_eq!(
-        without_sources(&documented),
-        without_sources(&example()["parts"][1])
-    );
+    assert_eq!(documented, example()["parts"][1]);
 }
 
 const IRAM: u32 = 0x4038_0000;
@@ -359,8 +318,8 @@ fn netlist_for(bytes: &[u8], stop_ps: u64) -> serde_json::Value {
 
 /// Runs `code` from `IRAM`, with `literals` in the words before it, on the example's board for
 /// `stop_ps`.
-fn run_program(name: &str, literals: &[u32], code: &[u8], stop_ps: u64) -> serde_json::Value {
-    let dir = scratch(name);
+fn run_program(literals: &[u32], code: &[u8], stop_ps: u64) -> serde_json::Value {
+    let dir = Scratch::new();
     let bytes = program(literals, code);
     let blobs = dir.join("blobs");
     fs::create_dir_all(&blobs).unwrap();
@@ -405,11 +364,11 @@ fn replay_on(netlist: &mut serde_json::Value, event_ps: u64) {
     }
 }
 
-fn run_idle(name: &str, stop_ps: u64, event_ps: u64) -> (u8, serde_json::Value, String) {
+fn run_idle(stop_ps: u64, event_ps: u64) -> (u8, serde_json::Value, String) {
     let bytes = program(&[], &IDLE);
     let mut netlist = netlist_for(&bytes, stop_ps);
     replay_on(&mut netlist, event_ps);
-    let dir = scratch(name);
+    let dir = Scratch::new();
     let blobs = dir.join("blobs");
     fs::create_dir_all(&blobs).unwrap();
     fs::write(blobs.join(Sha256::of(&bytes).to_string()), &bytes).unwrap();
@@ -420,7 +379,7 @@ fn run_idle(name: &str, stop_ps: u64, event_ps: u64) -> (u8, serde_json::Value, 
 
 #[test]
 fn a_watchdog_left_running_ends_the_run_at_its_first_stage() {
-    let doc = run_program("watchdog", &[], &IDLE, 900_000_000_000);
+    let doc = run_program(&[], &IDLE, 900_000_000_000);
     let found = diagnostics(&doc);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0]["code"], "chip.watchdog");
@@ -470,7 +429,7 @@ fn a_watchdog_stage_that_interrupts_leads_to_the_stage_that_resets() {
         (0x6001_f054, 500),
         (0x6001_f048, 1 << 31 | 1 << 29 | 3 << 27),
     ]);
-    let doc = run_program("watchdog-stages", &literals, &code, 10_000_000_000);
+    let doc = run_program(&literals, &code, 10_000_000_000);
     let found = diagnostics(&doc);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0]["code"], "chip.watchdog");
@@ -529,7 +488,7 @@ fn an_led_duty_from_0_to_half_and_back_sends_two_duty_rows_and_two_edges() {
         (ledc + 0xa0, 1 | 256 << 4 | 1 << 25),
     ];
     let (literals, code) = stores(&[&setup[..], &duty(1), &duty(0)].concat());
-    let dir = scratch("duty");
+    let dir = Scratch::new();
     let bytes = program(&literals, &code);
     let blobs = dir.join("blobs");
     fs::create_dir_all(&blobs).unwrap();
@@ -556,9 +515,9 @@ fn a_watchdog_during_a_pulses_record_keeps_the_leds_a_stop_keeps() {
     // latch to 649_989_062_501, before the 650 ms fault and before the record ends at 650.01 ms.
     const EVENT_PS: u64 = 649_320_000_000;
     const LATCH: &str = "649989062501,ring,13,0010200111210212220313230414240515250616260717270818280919290a1a2a0b1b2b0c1c2c";
-    let (code, doc, stopped) = run_idle("latch-stop", 649_999_000_000, EVENT_PS);
+    let (code, doc, stopped) = run_idle(649_999_000_000, EVENT_PS);
     assert_eq!((code, doc["status"].as_str()), (0, Some("ok")), "{doc}");
-    let (code, doc, faulted) = run_idle("latch-fault", 900_000_000_000, EVENT_PS);
+    let (code, doc, faulted) = run_idle(900_000_000_000, EVENT_PS);
     assert_eq!((code, doc["status"].as_str()), (1, Some("failed")), "{doc}");
     let found = diagnostics(&doc);
     assert_eq!(found.len(), 1, "{found:?}");
@@ -576,7 +535,7 @@ fn an_unmodeled_register_is_reported_once_with_its_pc_and_symbol() {
     // l32r a2 <- PCNT; l32i a3, a2, 0 twice; then idle.
     let mut code = vec![0x21, 0xff, 0xff, 0x32, 0x22, 0x00, 0x32, 0x22, 0x00];
     code.extend(IDLE);
-    let doc = run_program("unmodeled", &[0x6001_7000], &code, 10_000_000_000);
+    let doc = run_program(&[0x6001_7000], &code, 10_000_000_000);
     let found = diagnostics(&doc);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0]["code"], "chip.unmodeled_register");
@@ -617,7 +576,7 @@ fn a_session_lists_an_unmodeled_register_only_once_its_access_is_accepted() {
             .collect()
     };
 
-    let mut session = Session::open_document_with(&json, &blobs).unwrap();
+    let mut session = Session::open_json(&json, &blobs).unwrap();
     session.advance_to(Time::from_ps(u64::MAX));
     let [at] = touched(&session)[..] else {
         panic!("one register touched: {:?}", session.diagnostics());
@@ -627,7 +586,7 @@ fn a_session_lists_an_unmodeled_register_only_once_its_access_is_accepted() {
         "after the loop, at {at:?}"
     );
 
-    let mut session = Session::open_document_with(&json, &blobs).unwrap();
+    let mut session = Session::open_json(&json, &blobs).unwrap();
     session.advance_to(Time::from_ps(at.as_ps() - 1));
     assert_eq!(
         touched(&session),
@@ -641,12 +600,7 @@ fn a_session_lists_an_unmodeled_register_only_once_its_access_is_accepted() {
 #[test]
 fn an_op_the_core_does_not_run_ends_the_run() {
     // movi a2, 0; rfi 1, which only levels 2 to 7 return from.
-    let doc = run_program(
-        "unsupported",
-        &[0],
-        &[0x22, 0xa0, 0x00, 0x10, 0x31, 0x00],
-        10_000_000_000,
-    );
+    let doc = run_program(&[0], &[0x22, 0xa0, 0x00, 0x10, 0x31, 0x00], 10_000_000_000);
     let found = diagnostics(&doc);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0]["code"], "chip.unsupported_instruction");
@@ -671,7 +625,7 @@ fn an_efuse_program_command_ends_the_run() {
     ];
     code.extend(IDLE);
     let literals = [0x6000_71cc, 0x5a5a, 0x6000_71d4, 0b10];
-    let doc = run_program("efuse", &literals, &code, 10_000_000_000);
+    let doc = run_program(&literals, &code, 10_000_000_000);
     assert_eq!(doc["status"], "failed");
     let found = diagnostics(&doc);
     assert_eq!(found.len(), 1, "{found:?}");
@@ -691,7 +645,7 @@ fn a_flash_erase_ends_the_run() {
     // l32r a2 <- SPI_MEM_CMD_REG of SPI1; l32r a3 <- SPI_MEM_FLASH_SE; s32i a3, a2, 0; then idle.
     let mut code = vec![0x21, 0xfe, 0xff, 0x31, 0xfe, 0xff, 0x32, 0x62, 0x00];
     code.extend(IDLE);
-    let doc = run_program("erase", &[0x6000_2000, 1 << 24], &code, 10_000_000_000);
+    let doc = run_program(&[0x6000_2000, 1 << 24], &code, 10_000_000_000);
     let found = diagnostics(&doc);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0]["code"], "chip.flash_command");
@@ -714,7 +668,7 @@ fn a_write_that_takes_a_flash_pad_ends_the_run() {
     // l32r a2 <- IO_MUX_GPIO30_REG; l32r a3 <- function 1, the GPIO; s32i a3, a2, 0; then idle.
     let mut code = vec![0x21, 0xfe, 0xff, 0x31, 0xfe, 0xff, 0x32, 0x62, 0x00];
     code.extend(IDLE);
-    let doc = run_program("pads", &[0x6000_907c, 1 << 12], &code, 10_000_000_000);
+    let doc = run_program(&[0x6000_907c, 1 << 12], &code, 10_000_000_000);
     let found = diagnostics(&doc);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0]["code"], "chip.flash_command");
@@ -743,7 +697,7 @@ fn a_reset_with_no_reason_the_model_can_read_fails_the_run() {
     // l32r a2 <- RTC_CNTL_OPTIONS0_REG; l32r a3 <- RTC_CNTL_SW_SYS_RST; s32i a3, a2, 0; then idle.
     let mut code = vec![0x21, 0xfe, 0xff, 0x31, 0xfe, 0xff, 0x32, 0x62, 0x00];
     code.extend(IDLE);
-    let doc = run_program("restart", &[0x6000_8000, 1 << 31], &code, 10_000_000_000);
+    let doc = run_program(&[0x6000_8000, 1 << 31], &code, 10_000_000_000);
     let found = diagnostics(&doc);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0]["code"], "chip.fault_restart");
@@ -769,7 +723,7 @@ fn a_switch_to_the_pll_speeds_up_the_core() {
     ];
     code.extend(IDLE);
     let literals = [0x600c_0010, 0x6, 0x600c_0060, 1 << 10, 0x6001_7000];
-    let doc = run_program("pll", &literals, &code, 10_000_000_000);
+    let doc = run_program(&literals, &code, 10_000_000_000);
     let found = diagnostics(&doc);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0]["code"], "chip.unmodeled_register");
@@ -785,7 +739,7 @@ fn a_switch_to_the_rc_fast_clock_ends_the_run() {
     // l32r a2 <- SYSTEM_SYSCLK_CONF_REG; l32r a3 <- the RC fast clock; s32i a3, a2, 0; then idle.
     let mut code = vec![0x21, 0xfe, 0xff, 0x31, 0xfe, 0xff, 0x32, 0x62, 0x00];
     code.extend(IDLE);
-    let doc = run_program("rc-fast", &[0x600c_0060, 2 << 10], &code, 10_000_000_000);
+    let doc = run_program(&[0x600c_0060, 2 << 10], &code, 10_000_000_000);
     let found = diagnostics(&doc);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0]["code"], "chip.unsupported_clock");
@@ -803,7 +757,6 @@ fn a_switch_to_the_rc_fast_clock_ends_the_run() {
 fn an_fpu_op_runs_once_its_coprocessor_is_enabled() {
     // movi.n a2, 1; wsr.cpenable a2; rsync; add.s f0, f1, f2; rfi 1.
     let doc = run_program(
-        "fpu",
         &[0],
         &[
             0x0c, 0x12, 0x20, 0xe0, 0x13, 0x10, 0x20, 0x00, 0x20, 0x01, 0x0a, 0x10, 0x31, 0x00,
@@ -820,7 +773,6 @@ fn an_fpu_op_runs_once_its_coprocessor_is_enabled() {
 
     // movi.n a2, 0; wsr.cpenable a2; rsync; add.s f0, f1, f2; rfi 1.
     let doc = run_program(
-        "fpu-off",
         &[0],
         &[
             0x0c, 0x02, 0x20, 0xe0, 0x13, 0x10, 0x20, 0x00, 0x20, 0x01, 0x0a, 0x10, 0x31, 0x00,
@@ -843,7 +795,6 @@ fn an_spi2_transfer_with_a_setting_the_model_does_not_run_ends_the_run() {
         0x21, 0xfd, 0xff, 0x31, 0xfd, 0xff, 0x41, 0xfd, 0xff, 0x32, 0x62, 0x04, 0x42, 0x62, 0x00,
     ];
     let doc = run_program(
-        "setting",
         &[0x6002_4000, 1 << 29, 1 << 24],
         &[code.as_slice(), &IDLE].concat(),
         10_000_000_000,
@@ -871,7 +822,6 @@ fn an_spi2_transfer_with_a_setting_the_model_does_not_run_ends_the_run() {
 fn a_pull_down_on_a_part_that_names_none_ends_the_run() {
     // l32r a2 <- GPIO21's IO_MUX; l32r a3 <- FUN_WPD; s32i a3, a2, 0.
     let doc = run_program(
-        "pull-down",
         &[0x6000_9058, 1 << 7],
         &[
             [0x21, 0xfe, 0xff, 0x31, 0xfe, 0xff, 0x32, 0x62, 0x00].as_slice(),
@@ -905,12 +855,7 @@ fn a_pull_down_on_a_part_that_names_none_ends_the_run() {
 #[test]
 fn a_jump_out_of_the_instruction_window_ends_the_run() {
     // movi a2, 0; jx a2.
-    let doc = run_program(
-        "unmapped",
-        &[],
-        &[0x22, 0xa0, 0x00, 0xa0, 0x02, 0x00],
-        10_000_000_000,
-    );
+    let doc = run_program(&[], &[0x22, 0xa0, 0x00, 0xa0, 0x02, 0x00], 10_000_000_000);
     let found = diagnostics(&doc);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0]["code"], "chip.unmapped_fetch");
@@ -992,7 +937,7 @@ fn the_console_reads_each_byte_the_host_sends_from_its_time_on() {
         { "t_ps": 1_000_000_000u64, "bytes": [65, 66] },
         { "t_ps": 1_500_000_001u64, "bytes": [67] },
     ]);
-    let dir = scratch("console-echo");
+    let dir = Scratch::new();
     let blobs = dir.join("blobs");
     fs::create_dir_all(&blobs).unwrap();
     fs::write(blobs.join(Sha256::of(&bytes).to_string()), &bytes).unwrap();
@@ -1039,7 +984,7 @@ fn a_console_send_at_t_0_out_of_order_or_empty_is_a_schedule_error() {
     for (console, event, rule) in cases {
         let mut netlist = netlist_for(&bytes, 20_000_000_000);
         netlist["parts"][1]["console"] = console;
-        let dir = scratch(&format!("console-{rule}"));
+        let dir = Scratch::new();
         let blobs = dir.join("blobs");
         fs::create_dir_all(&blobs).unwrap();
         fs::write(blobs.join(Sha256::of(&bytes).to_string()), &bytes).unwrap();

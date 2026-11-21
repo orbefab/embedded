@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use orbe_microchip::{Cpu, FuseBytes, Image, PIN_QUEUE_CAP, parse_hex};
+use orbe_microchip::{Cpu, FuseBytes, PIN_QUEUE_CAP, parse_hex};
 
 /// CPU cycles in one simulated second.
 ///
@@ -78,24 +78,22 @@ fn default_hex_path() -> PathBuf {
         .join(DEFAULT_HEX)
 }
 
-fn read_image(path: &Path) -> Image {
+fn read_image(path: &Path) -> Vec<u8> {
     let text = std::fs::read_to_string(path).unwrap_or_else(|err| {
         die(&format!("cannot read {}: {err}", path.display()));
     });
-    parse_hex(&text).unwrap_or_else(|err| die(&format!("{}: {err}", path.display())))
+    parse_hex(&text).unwrap_or_else(|err| die(&format!("{}: {err:?}", path.display())))
 }
 
-fn prepare(image: &Image) -> Cpu {
+fn prepare(image: &[u8]) -> Cpu {
     let mut cpu = Cpu::new();
     cpu.set_fuses(PART_FUSES.low, PART_FUSES.high, PART_FUSES.extended);
-    if let Err(err) = cpu.load_image(image) {
-        die(&err.to_string());
-    }
+    cpu.load_flash(image);
     cpu
 }
 
 #[expect(clippy::disallowed_methods, reason = "the clock is the measurement")]
-fn time_run(image: &Image, cycles: u64) -> Sample {
+fn time_run(image: &[u8], cycles: u64) -> Sample {
     let mut cpu = prepare(image);
     let mut edges = 0u64;
     let start = Instant::now();

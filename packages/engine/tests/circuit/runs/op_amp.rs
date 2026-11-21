@@ -125,7 +125,7 @@ fn a_comparator_switches_in_few_steps_at_its_threshold() {
 /// An LM358-shaped comparator on 5 V. `input_headroom` is the only thing that moves. The
 /// differential stage stays the ideal law, so the output still follows which input is higher.
 fn comparator(headroom: f64, vp: f64, vn: f64) -> (Vec<orbe_engine::diagnostic::Diagnostic>, f64) {
-    let value = |number: f64, unit: &str| serde_json::json!({ "value": number, "unit": unit, "source": "user" });
+    let value = |number: f64, unit: &str| serde_json::json!({ "value": number, "unit": unit });
     let source = |name: &str, net: &str, volts: f64| {
         serde_json::json!({
             "name": name,
@@ -135,7 +135,7 @@ fn comparator(headroom: f64, vp: f64, vn: f64) -> (Vec<orbe_engine::diagnostic::
         })
     };
     let doc = serde_json::json!({
-        "version": 0,
+        "version": 1,
         "seed": 0,
         "analysis": { "op": {} },
         "ground": "gnd",

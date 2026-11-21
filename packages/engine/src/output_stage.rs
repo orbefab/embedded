@@ -35,12 +35,22 @@ pub(crate) fn resolve_output_stage(
     wire: WireOutputStage,
     out: &mut Vec<Diagnostic>,
 ) -> Option<OutputStage> {
-    let ohm = |field, value, out: &mut Vec<Diagnostic>| {
+    resolve_output_stage_at(part_ref, "output", wire, out)
+}
+
+/// The stage at field `at`, which names each of its fields in a diagnostic.
+pub(crate) fn resolve_output_stage_at(
+    part_ref: &Ref,
+    at: &str,
+    wire: WireOutputStage,
+    out: &mut Vec<Diagnostic>,
+) -> Option<OutputStage> {
+    let ohm = |field: String, value, out: &mut Vec<Diagnostic>| {
         resolve_value(part_ref, field, "ohm", true, value, out)
     };
-    let drop = |field: &'static str, value: WireValue, out: &mut Vec<Diagnostic>| {
+    let drop = |field: String, value: WireValue, out: &mut Vec<Diagnostic>| {
         let volts = value.value.get();
-        let value = resolve_value(part_ref, field, "V", false, value, out)?;
+        let value = resolve_value(part_ref, field.clone(), "V", false, value, out)?;
         if volts < 0.0 {
             out.push(Diagnostic::NetlistValue {
                 part: part_ref.clone(),
@@ -52,10 +62,10 @@ pub(crate) fn resolve_output_stage(
         }
         Some(value)
     };
-    let high_drop = drop("output.high_drop", wire.high_drop, out);
-    let high_resistance = ohm("output.high_resistance", wire.high_resistance, out);
-    let low_drop = drop("output.low_drop", wire.low_drop, out);
-    let low_resistance = ohm("output.low_resistance", wire.low_resistance, out);
+    let high_drop = drop(format!("{at}.high_drop"), wire.high_drop, out);
+    let high_resistance = ohm(format!("{at}.high_resistance"), wire.high_resistance, out);
+    let low_drop = drop(format!("{at}.low_drop"), wire.low_drop, out);
+    let low_resistance = ohm(format!("{at}.low_resistance"), wire.low_resistance, out);
     Some(OutputStage {
         high_drop: high_drop?,
         high_resistance: high_resistance?,

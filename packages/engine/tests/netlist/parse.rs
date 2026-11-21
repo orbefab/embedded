@@ -1,4 +1,4 @@
-use orbe_engine::netlist::{self, Analysis, Basis, Model, Source};
+use orbe_engine::netlist::{self, Analysis, Model};
 
 use std::fs;
 use std::path::PathBuf;
@@ -57,7 +57,7 @@ fn one_pass_collects_every_netlist_diagnostic() {
 #[test]
 fn duplicate_net_refs_the_net() {
     let json = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 1,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -79,18 +79,18 @@ fn future_version_wins_over_a_schema_error() {
     let wire = serde_json::to_value(&err[0]).unwrap();
     assert_eq!(
         wire["data"],
-        serde_json::json!({"found": 2, "supported": [0]})
+        serde_json::json!({"found": 2, "supported": [1]})
     );
     assert_eq!(
         wire["message"],
-        "netlist version 2 is not supported; this engine reads 0"
+        "netlist version 2 is not supported; this engine reads 1"
     );
 }
 
 #[test]
 fn analysis_must_be_an_op_object() {
     let string = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": "op",
       "ground": "gnd",
@@ -101,7 +101,7 @@ fn analysis_must_be_an_op_object() {
     assert_eq!(err[0].code(), "netlist.syntax");
 
     let extra = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": { "step": 1 } },
       "ground": "gnd",
@@ -113,7 +113,7 @@ fn analysis_must_be_an_op_object() {
 }
 
 #[test]
-fn divider_is_canonical_and_keeps_its_source() {
+fn divider_is_canonical() {
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/circuits/divider/netlist.json");
     let netlist = netlist::parse(&fs::read(path).unwrap()).unwrap();
@@ -129,37 +129,28 @@ fn divider_is_canonical_and_keeps_its_source() {
         .find(|(_, p)| p.name.as_str() == "r1")
         .unwrap();
     match &r1.model {
-        Model::Resistor(r) => match &r.resistance.fixed().unwrap().source {
-            Source::Datasheet { doc, at, basis } => {
-                assert_eq!(doc, "resistor-nominal");
-                assert_eq!(at, "Table 1, nominal");
-                assert_eq!(*basis, Basis::Nominal);
-            }
-            other => panic!("r1 source {other:?}"),
-        },
+        Model::Resistor(r) => assert_eq!(r.resistance.fixed().unwrap().si.get(), 1000.0),
         other => panic!("r1 model {other:?}"),
     }
 }
 
+/// Version 1 gives a value no `source`, and an unknown field is an error.
 #[test]
-fn a_basis_outside_the_list_and_the_old_typical_flag_are_syntax() {
+fn a_value_with_a_source_is_syntax() {
     let path =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/circuits/divider/netlist.json");
     let divider = fs::read_to_string(path).unwrap();
-    for (from, to) in [
-        (r#""basis": "nominal""#, r#""basis": "typ""#),
-        (r#""basis": "nominal""#, r#""typical": false"#),
-    ] {
-        let err = netlist::parse(divider.replace(from, to).as_bytes()).unwrap_err();
-        assert_eq!(err.len(), 1, "{to}");
-        assert_eq!(err[0].code(), "netlist.syntax", "{to}");
-    }
+    let sourced = divider.replacen(r#""unit": "V""#, r#""unit": "V", "source": "user""#, 1);
+    assert_ne!(sourced, divider);
+    let err = netlist::parse(sourced.as_bytes()).unwrap_err();
+    assert_eq!(err.len(), 1);
+    assert_eq!(err[0].code(), "netlist.syntax");
 }
 
 #[test]
 fn reordering_parts_and_nets_keeps_the_same_ids() {
     let shuffled = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -169,14 +160,14 @@ fn reordering_parts_and_nets_keeps_the_same_ids() {
           "name": "r2",
           "kind": "resistor",
           "pins": { "b": "gnd", "a": "vout" },
-          "resistance": { "value": 2000.0, "unit": "ohm", "source": "user" },
+          "resistance": { "value": 2000.0, "unit": "ohm" },
           "ratings": { "power": null }
         },
         {
           "name": "v1",
           "kind": "voltage_source",
           "pins": { "n": "gnd", "p": "vin" },
-          "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+          "voltage": { "value": 5.0, "unit": "V" }
         },
         {
           "name": "r1",
@@ -184,8 +175,7 @@ fn reordering_parts_and_nets_keeps_the_same_ids() {
           "pins": { "b": "vout", "a": "vin" },
           "resistance": {
             "value": 1000.0,
-            "unit": "ohm",
-            "source": { "closed_form": { "note": "divider" } }
+            "unit": "ohm"
           },
           "ratings": { "power": null }
         }
@@ -230,7 +220,7 @@ fn reordering_parts_and_nets_keeps_the_same_ids() {
 #[test]
 fn duplicate_pin_key_is_syntax() {
     let json = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -240,7 +230,7 @@ fn duplicate_pin_key_is_syntax() {
           "name": "r1",
           "kind": "resistor",
           "pins": { "a": "vout", "b": "gnd", "b": "vin" },
-          "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+          "resistance": { "value": 1000.0, "unit": "ohm" },
           "ratings": { "power": null }
         }
       ]

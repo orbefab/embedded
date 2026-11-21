@@ -35,6 +35,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use orbe_scene::{Code, Diagnostic, Files, Request, add_parts, read};
+use orbe_scratch::Scratch;
 
 #[derive(Clone, Copy)]
 enum State {
@@ -929,8 +930,9 @@ fn apply(project: &Path, id: &str, state: State) {
 fn hold(project: &Path, id: &str, version: &str) {
     let file = project.join("parts").join(id).join("part.jsonc");
     let text = fs::read_to_string(&file).unwrap();
+    let carried = orbe_scene::card(id).unwrap().version;
     let edited = text.replacen(
-        "\"version\": \"0.1.1\"",
+        &format!("\"version\": \"{carried}\""),
         &format!("\"version\": \"{version}\""),
         1,
     );
@@ -999,12 +1001,12 @@ fn spoil_lock(project: &Path) {
     fs::write(lock, format!("this line does not parse\n{text}")).unwrap();
 }
 
-fn placed() -> (tempfile::TempDir, PathBuf, PathBuf) {
+fn placed() -> (Scratch, PathBuf, PathBuf) {
     placed_named("my proj")
 }
 
-fn placed_named(name: &str) -> (tempfile::TempDir, PathBuf, PathBuf) {
-    let scratch = tempfile::tempdir().unwrap();
+fn placed_named(name: &str) -> (Scratch, PathBuf, PathBuf) {
+    let scratch = Scratch::new();
     let outside = scratch.path().join("outside");
     fs::create_dir(&outside).unwrap();
     let project = outside.join(name);
@@ -1153,8 +1155,6 @@ fn an_unreadable_directory_refuses_and_the_chmod_keeps_the_lock() {
     }
     let _directory = one_directory();
     let (_scratch, outside, project) = placed_named("it's $HOME");
-    // Declared after the temp folder, so write permission returns before that folder is removed.
-    let _open = OpenTree(_scratch.path().to_path_buf());
     let restore = cwd_guard();
     let lock_path = project.join("parts.lock");
     let part_path = project.join("parts/led-5mm/part.jsonc");
@@ -1363,32 +1363,6 @@ fn hide(path: &Path) {
 fn mode_bits(path: &Path) -> u32 {
     use std::os::unix::fs::PermissionsExt;
     fs::metadata(path).unwrap().permissions().mode() & 0o777
-}
-
-/// Puts every directory under a temp project back to mode 755.
-/// A chmod hint leaves `parts/` at mode 0500, and `TempDir` then cannot delete it.
-struct OpenTree(PathBuf);
-
-impl Drop for OpenTree {
-    fn drop(&mut self) {
-        fn open(path: &Path) {
-            use std::os::unix::fs::PermissionsExt;
-            let Ok(meta) = fs::symlink_metadata(path) else {
-                return;
-            };
-            if !meta.is_dir() {
-                return;
-            }
-            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o755));
-            let Ok(entries) = fs::read_dir(path) else {
-                return;
-            };
-            for entry in entries.flatten() {
-                open(&entry.path());
-            }
-        }
-        open(&self.0);
-    }
 }
 
 struct CwdGuard(PathBuf);

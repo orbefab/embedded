@@ -54,7 +54,7 @@ The worked example on a breadboard, with the Nano across the channel over column
 $ orbe add breadboard-400
 ...
 $ orbe check breadboard.jsonc
-breadboard.jsonc: ok, 6 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND
+breadboard.jsonc: ok, 6 scene parts, expanding to 19 engine parts, 34 nets, ground GND
 ```
 
 Read a hole as a pin, as `orbe get @bb.a12`. `snapshot` lists no holes. A leg that lands in the channel, off the board, between holes or in a hole another leg holds is an error that names the leg and the hole. Its hint is a placement that seats every leg with no strip joining two of the part's pins: a quarter turn from the same hole, else a hole within 10.16 mm and a turn, else it says no quarter turn seats the part there. A hole holds one lead, so a wire end in a hole a leg or another wire end already names is an error that names both. When the strip has a free hole the hint is `a hole holds one lead; move one of them to a free hole in the same strip, such as bb.c1`. When every hole in the strip is taken the hint is `a hole holds one lead, and every hole in this strip is taken; free one first, for example by moving one of its leads to an empty strip and wiring that strip back to the hole it left`. When a free hole remains but each one is already named by another hint in this check, the hint is `a hole holds one lead; every free hole in this strip is already named by another hint in this check`. A wire may still end on a pin off the board, such as an Uno's header pin.
@@ -63,7 +63,7 @@ Read a hole as a pin, as `orbe get @bb.a12`. `snapshot` lists no holes. A leg th
 
 With D13 wired straight to `led1.anode` and no `r1`, the LED draws 94 mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `step 20ms` after it lists `warning[rating.current]` for `#nano__mcu.pin.PB5 (nano.D13)`, the chip pin behind D13, over its 40 mA rating. `expect no diagnostics` fails. The LED holds D13 at 2.3 V, so D13 reads `low` while the LED is lit. `orbe lint` warns of it before any run, with `warning[scene.led_no_resistor]` on `led1`. Give each LED a series resistor, such as 220 ohm from a 5 V pin.
 
-The board's ATmega328P has the datasheet's absolute maximum ratings. A pin's and the supply's current count by their RMS over the last 10.2 ms, five periods of `analogWrite`'s 490 Hz PWM, so a PWM load counts by its RMS, not its peak. A run warns `rating.current` on a pin that sources or sinks over 40 mA, on `VCC` or `GND` when the pins together pass over 200 mA, and `rating.voltage` on a pin below -0.5 V or above VCC + 0.5 V. The message names the chip pin, then the board's pins on its net, as in `#nano__mcu.pin.PB1 (nano.D9) carries 0.0434 A RMS over the last 10.2 ms, over its 0.04 A rating`. Once a warning has lasted, its message ends with how long, as in `for 32582912000 ps`. The pin's output stage is linear, 25 ohm from its rail. Keep a pin at 20 mA or less when a level matters, and drive a larger load through a transistor.
+The board's ATmega328P has the datasheet's absolute maximum ratings. A pin's and the supply's current count by their RMS over the last 10.2 ms, five periods of `analogWrite`'s 490 Hz PWM, so a PWM load counts by its RMS, not its peak. A run warns `rating.current` on a pin that sources or sinks over 40 mA, on `VCC` or `GND` when the pins together pass over 200 mA, and `rating.voltage` on a pin below -0.5 V or above VCC + 0.5 V. The message names the chip pin, then the board's pins on its net, as in `#nano__mcu.pin.PB1 (nano.D9) carries 43.4 mA RMS over the last 10.2 ms, over its 40 mA rating`. Once a warning has lasted, its message ends with how long, as in `for 32.582912ms`. The pin's output stage is linear, 25 ohm from its rail. Keep a pin at 20 mA or less when a level matters, and drive a larger load through a transistor.
 
 The board's USB supply is rated at 500 mA. A load over that on 5V, such as 2.5 ohm from 5V to GND (1.8 A), warns `rating.current` on the supply, `#nano__usb__host.i (nano.usb)`, at 1.8 A over its 0.5 A rating, and on the Schottky behind 5V, `#nano__diode.i (nano.diode)`, which is rated 0.5 A too. A wire from the Nano's 5V straight to GND is a short: `orbe check` and `orbe open` refuse the scene with `net.short`, naming the wire.
 
@@ -110,7 +110,7 @@ pressed btn1 at t=107.000002ms; reads show it after t=107.000002ms
 $ orbe step 6ms
 ...
 $ orbe expect @led1 lit
-passed @led1 lit (led1 lit, i=0.0112925043880606 A, brightness=0.004627811350286439 A over 20ms)
+passed @led1 lit (led1 lit, i=11.2925043880606 mA, brightness=4.627811350286438 mA over 20ms)
 $ orbe close
 closed at t=111ms
 ```
@@ -125,7 +125,8 @@ Each line is a live command without `orbe`. `--json`, `--session`, `--help` or `
 
 - `orbe open` starts a background process that holds the session, and every later command talks to it. The process ends on `orbe close`, or after 1 hour with no command while it is not playing and no page watches it.
 - A session has a name. By default it comes from the project folder, the nearest one up with `scene.jsonc` or `parts.lock`, so each project gets its own, and its `tests/` folder shares it. Outside a project it comes from the git repository's root folder, else the current folder. `--session <name>` after the command, or `ORBE_SESSION=<name>`, picks another.
-- `orbe close --all` closes every session of this `orbe` and cleans up after crashed ones.
+- `orbe close --all` closes every session and cleans up after crashed ones.
+- A command other than `close` refuses a session that another version of orbe started. The message names that version and says to run `orbe close`.
 - A command sent while a `step` runs waits for it. Ctrl-C during a long `step` stops it, and the session stays paused at the time it reached.
 
 ## The 3D page
@@ -142,10 +143,8 @@ Only this machine can reach the page's address. From another machine it works th
 | `scene.no_model` | A part has no engine model, no `not_simulated` reason and no `"joins_only": true`, so nothing runs for it. Use a part with a model. |
 | `scene.unconnected` | Nothing is wired to a part, or a part with at most 3 nets has a net with no wire. Wire it, or leave it open when the circuit means it. |
 | `net.floating` | A net has no DC path to ground. Fix it when a part reads that net. |
-| `scene.ground_unnamed` | The ground net is named after a pin. Name it in `nets`, as `"GND": "nano.GND"`. |
-| `scene.unplaced` | Parts have no `layout` position, so the 3D page puts them in a row. Seat them on a breadboard when their place matters. |
+| `scene.unplaced` | Parts have no `layout` position, so the 3D page puts them in a row. A part whose `at` puts a leg in a breadboard hole, with no `on`, is drawn as if plugged in while its leads join nothing. Seat it with `on`, as the hint shows, when its place matters. |
 | `scene.shorted` | Two pins of one part sit in one breadboard strip, such as a resistor turned along a column. Turn the part a quarter turn, as the hint shows. |
-| `scene.rotation` | A `rotate` angle is outside -180 to 180 degrees. Write the same turn as the hint shows. |
 
 ## Errors
 
@@ -159,11 +158,11 @@ The part and `orbe add` codes are in `orbe skills get parts`.
 | `scene.unknown_pin`, `scene.param`, `scene.syntax` | A typo or a wrong value at that line and column. The hint names what is valid. |
 | `scene.world` | A `world` quantity that does not exist, a value outside its range, or a step at 0, too close to the one before it, or that does not change the value. |
 | `no_session` | No session runs under this name. Run the `orbe open` in the hint. |
-| `session_crashed` | The session's process died. Run `orbe open` again. |
+| `session_crashed` | The session's process died. Run `orbe open` again. `open` says the previous session crashed, and leaves the log the hint named until that log is read or the next crash replaces it. |
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |
 | `not_settable` | `press` and `release` work only on a switch. `set` works only on a quantity the scene's `world` names or a part reads. |
 | `wrong_setting` | The part takes a different input, such as a trimmer's `position`. Set that param in the scene and run `orbe open` again. |
-| `no_change` | The input asks for the state already there, such as `set light 50` when the light is 50. |
+| `no_change` | `press` or `release` asks for the switch state already there. `set` of a value already scheduled succeeds, and names the time it lands when that time is still ahead. |
 | `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`, then fix the circuit or the firmware, or step longer. |
 | `ended` | The session reached its 2-hour stop. Reads still work. Run `orbe open` to start again. |
 | `past_stop` | A `step` would end past the stop, or an input would land past it. Do what the hint says. |
@@ -174,7 +173,7 @@ The part and `orbe add` codes are in `orbe skills get parts`.
 
 `orbe part <id>` lists what each part leaves out, and `orbe skills get arduino` what each board's chip does.
 
-- The Nano's 3V3, VIN, A6 and A7 pins. A wire to one is a `not_simulated` error.
+- The Nano's 3V3 and VIN pins. A wire to one is a `not_simulated` error.
 - The Uno's VIN pin and barrel jack. The Uno's 3V3 works.
 - USB, and serial into the chip. The chip's serial out (TX, D1) is read as text.
 - The chip's clamp diodes. A pin pulled past VCC or GND draws no clamp current, and `rating.voltage` names it.

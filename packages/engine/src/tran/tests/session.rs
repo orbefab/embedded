@@ -218,7 +218,7 @@ fn relay_flyback_in_chunks_writes_the_batch_folder() {
 /// beside 10 pF held at 1 V that discharges through 1 kohm. The steps after the edge stiffen
 /// `cf`, and the 1 ns grid puts rows inside them.
 pub(super) const STIFF_ROW: &[u8] = br#"{
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": { "transient": { "stop_ps": 200000, "max_step_ps": 5000, "grid_ps": 1000 } },
   "ground": "gnd",
@@ -228,42 +228,42 @@ pub(super) const STIFF_ROW: &[u8] = br#"{
       "name": "cs",
       "kind": "capacitor",
       "pins": { "a": "vs", "b": "gnd" },
-      "capacitance": { "value": 1e-11, "unit": "F", "source": "user" },
-      "initial": { "value": 1.0, "unit": "V", "source": "user" }
+      "capacitance": { "value": 1e-11, "unit": "F" },
+      "initial": { "value": 1.0, "unit": "V" }
     },
     {
       "name": "rs",
       "kind": "resistor",
       "pins": { "a": "vs", "b": "gnd" },
-      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "resistance": { "value": 1000.0, "unit": "ohm" },
       "ratings": { "power": null }
     },
     {
       "name": "v1",
       "kind": "voltage_source",
       "pins": { "p": "vcc", "n": "gnd" },
-      "voltage": { "value": 1.0, "unit": "V", "source": "user" }
+      "voltage": { "value": 1.0, "unit": "V" }
     },
     {
       "name": "rf",
       "kind": "resistor",
       "pins": { "a": "vcc", "b": "vf" },
-      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "resistance": { "value": 1000.0, "unit": "ohm" },
       "ratings": { "power": null }
     },
     {
       "name": "cf",
       "kind": "capacitor",
       "pins": { "a": "vf", "b": "gnd" },
-      "capacitance": { "value": 3.003e-11, "unit": "F", "source": "user" },
+      "capacitance": { "value": 3.003e-11, "unit": "F" },
       "initial": null
     },
     {
       "name": "sw1",
       "kind": "switch",
       "pins": { "a": "vf", "b": "gnd" },
-      "on_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
-      "off_resistance": { "value": 1e9, "unit": "ohm", "source": "user" },
+      "on_resistance": { "value": 1.0, "unit": "ohm" },
+      "off_resistance": { "value": 1e9, "unit": "ohm" },
       "initial": "open",
       "events": [{ "t_ps": 5500, "state": "closed" }],
       "bounce": null
@@ -630,12 +630,12 @@ fn chunks_that_end_beside_a_switch_edge_land_on_it_once() {
 /// that crosses 2.5 V stalls before it converges.
 fn stalled_crossing() -> (Netlist, active::Chip) {
     let step = r#"{ "name": "vs", "kind": "voltage_source", "pins": { "p": "src", "n": "gnd" },
-          "voltage": { "kind": "step", "initial": { "value": 0.0, "unit": "V", "source": "user" },
-                       "final": { "value": 5.0, "unit": "V", "source": "user" }, "at_ps": 1000000 } }"#;
+          "voltage": { "kind": "step", "initial": { "value": 0.0, "unit": "V" },
+                       "final": { "value": 5.0, "unit": "V" }, "at_ps": 1000000 } }"#;
     let led = r#"{ "name": "led1", "kind": "led", "pins": { "anode": "k", "cathode": "gnd" },
-          "saturation_current": { "value": 6.711e-10, "unit": "A", "source": "user" },
-          "emission_coefficient": { "value": 4.427, "unit": "1", "source": "user" },
-          "series_resistance": { "value": 2.115, "unit": "ohm", "source": "user" },
+          "saturation_current": { "value": 6.711e-10, "unit": "A" },
+          "emission_coefficient": { "value": 4.427, "unit": "1" },
+          "series_resistance": { "value": 2.115, "unit": "ohm" },
           "ratings": { "current": null, "power": null } }"#;
     let netlist = circuit(
         3 * US,

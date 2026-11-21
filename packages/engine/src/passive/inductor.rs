@@ -108,17 +108,17 @@ mod tests {
     fn solved(history: impl Fn(&Solution) -> History<'_>) -> (f64, f64) {
         let netlist = netlist::parse(
             br#"{
-              "version": 0,
+              "version": 1,
               "seed": 0,
               "analysis": { "op": {} },
               "ground": "gnd",
               "nets": ["gnd", "vin"],
               "parts": [
                 { "name": "v1", "kind": "voltage_source", "pins": { "p": "vin", "n": "gnd" },
-                  "voltage": { "value": 5.0, "unit": "V", "source": "user" } },
+                  "voltage": { "value": 5.0, "unit": "V" } },
                 { "name": "l1", "kind": "inductor", "pins": { "a": "vin", "b": "gnd" },
-                  "inductance": { "value": 1e-9, "unit": "H", "source": "user" },
-                  "series_resistance": { "value": 70.0, "unit": "ohm", "source": "user" } }
+                  "inductance": { "value": 1e-9, "unit": "H" },
+                  "series_resistance": { "value": 70.0, "unit": "ohm" } }
               ]
             }"#,
         )

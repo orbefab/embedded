@@ -1,4 +1,4 @@
 22 engine parts
-c1 /initial { "value": 2, "unit": "V", "source": "user" }
-c2__c /initial { "value": 2, "unit": "V", "source": "user" }
-rb__r /resistance { "value": 1000, "unit": "ohm", "source": "user" }
+c1 /initial { "value": 2, "unit": "V" }
+c2__c /initial { "value": 2, "unit": "V" }
+rb__r /resistance { "value": 1000, "unit": "ohm" }

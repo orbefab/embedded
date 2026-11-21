@@ -21,12 +21,12 @@ fn relay(changed: &[(&str, &str, &str)]) -> String {
                 .iter()
                 .find(|(field, ..)| *field == name)
                 .map_or((unit, value), |&(_, unit, value)| (unit, value));
-            format!(r#""{name}": {{ "value": {value}, "unit": "{unit}", "source": "user" }}"#)
+            format!(r#""{name}": {{ "value": {value}, "unit": "{unit}" }}"#)
         })
         .collect();
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {{ "op": {{}} }},
       "ground": "gnd",
@@ -136,7 +136,7 @@ fn drop_out_at_or_above_pull_in_breaks_hysteresis() {
 #[test]
 fn a_missing_key_an_unknown_key_or_a_wrong_type_is_a_syntax_error() {
     let missing = relay(&[]).replace(
-        r#""off_resistance": { "value": 100000000.0, "unit": "ohm", "source": "user" }"#,
+        r#""off_resistance": { "value": 100000000.0, "unit": "ohm" }"#,
         r#""bounce": null"#,
     );
     let wrong_type = relay(&[("inductance", "H", r#""0.505""#)]);

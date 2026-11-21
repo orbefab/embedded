@@ -1,2 +1,2 @@
-scene.ground scene.jsonc:2:1 | names a ground | ground
+scene.ground scene.jsonc:2:1 | names a ground | <part>.<pin>
 scene.unknown_pin scene.jsonc:8:6 | nope | its pins

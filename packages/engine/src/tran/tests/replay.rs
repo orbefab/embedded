@@ -3,14 +3,14 @@ use crate::netlist::{Baud, Contact, Frame};
 use crate::logic::{Change, Level};
 use crate::name::Name;
 
-use crate::run_folder::RunFolder;
+use crate::run_folder::{self, RunFolder};
 use crate::serial::SerialByte;
 use crate::timestamp::Timestamp;
 
 use super::super::*;
 use super::fixtures::transient;
 use super::inputs::without_events;
-use super::session::{Rng, example};
+use super::session::{Rng, example, finish};
 use crate::active;
 use crate::mcu::Mcu;
 use crate::session::{EdgeCursor, Input, Serial, SerialCursor, Setting, State, Status};
@@ -29,7 +29,7 @@ fn quiet_button() -> Vec<u8> {
 /// copy ran.
 fn charging_button() -> Vec<u8> {
     let mut json: serde_json::Value = serde_json::from_slice(&quiet_button()).unwrap();
-    let volts = |value: f64| serde_json::json!({"value": value, "unit": "V", "source": "user"});
+    let volts = |value: f64| serde_json::json!({"value": value, "unit": "V"});
     let nets = json["nets"].as_array_mut().unwrap();
     nets.extend(["vchg".into(), "vcap".into()]);
     let parts = json["parts"].as_array_mut().unwrap();
@@ -51,14 +51,14 @@ fn charging_button() -> Vec<u8> {
             "name": "r2",
             "kind": "resistor",
             "pins": {"a": "vchg", "b": "vcap"},
-            "resistance": {"value": 1e6, "unit": "ohm", "source": "user"},
+            "resistance": {"value": 1e6, "unit": "ohm"},
             "ratings": {"power": null},
         }),
         serde_json::json!({
             "name": "c2",
             "kind": "capacitor",
             "pins": {"a": "vcap", "b": "gnd"},
-            "capacitance": {"value": 1e-6, "unit": "F", "source": "user"},
+            "capacitance": {"value": 1e-6, "unit": "F"},
             "initial": null,
         }),
         led,
@@ -91,11 +91,11 @@ fn a_contact_after_quiet_frames_runs_the_core_again_for_one_step_at_most() {
         ("atmega-button", quiet_button()),
         ("charging", charging_button()),
     ] {
-        let (_, netlist) = Document::parse(&input).unwrap();
+        let netlist = crate::netlist::parse(&input).unwrap();
         // The example's clock is 16 MHz.
         let step_cycles = transient(&netlist).max_step * 16 / 1_000_000;
         for frames in [1, 4, 9, 10, 16, 40] {
-            let mut session = Session::open_document(&input).unwrap();
+            let mut session = Session::open(netlist.clone()).unwrap();
             for k in 1..=frames {
                 session.advance_to(Time::from_ps(k * FRAME_PS));
             }
@@ -241,28 +241,39 @@ fn files(folder: &RunFolder) -> Vec<(String, Vec<u8>)> {
 /// A recorded session advanced one call per frame, the same with seeded calls inside each
 /// frame, and an unrecorded session with those calls read the same after every frame, with
 /// the same inputs at the same frames. The recorded ones write one folder, and a recorded run
-/// of the ended session's export writes it too. The bytes read across the frames are the bytes
-/// of that run, each once, and are returned.
+/// of the ended session's netlist, which holds each input it took, writes it too. The bytes read
+/// across the frames are the bytes of that run, each once, and are returned.
 fn splits_read_the_same(
     name: &str,
     input: &[u8],
     frame_ps: u64,
     script: &[(u64, &[Ask])],
 ) -> Vec<SerialByte> {
-    let at = Timestamp::from_unix_seconds(0);
-    let mut one = Session::record_document(input).unwrap();
+    let netlist = crate::netlist::parse(input).unwrap();
+    let span = transient(&netlist);
+    let recorded = || record(netlist.clone(), &span, Rows::Grid).unwrap();
+    let folder_of = |session: Session| {
+        let results = finish(session);
+        files(&run_folder::render(
+            input,
+            None,
+            &results,
+            Timestamp::from_unix_seconds(0),
+        ))
+    };
+    let mut one = recorded();
     let want = frames(&mut one, frame_ps, script, whole);
     let landed: usize = want.iter().map(|read| read.landed.len()).sum();
     let asked: usize = script.iter().map(|(_, asks)| asks.len()).sum();
     assert_eq!(landed, asked, "{name}");
     assert_eq!(want.last().unwrap().status, Status::Stopped, "{name}");
     assert!(want.iter().any(|read| !read.edges.is_empty()), "{name}");
-    let export = one.export().unwrap();
-    let folder = files(&one.finish(at).unwrap());
+    let landed = one.circuit.netlist.clone();
+    let folder = folder_of(one);
     for seed in [0x5eed_2001, 0x5eed_2002] {
-        let mut recorded = Session::record_document(input).unwrap();
-        let mut unrecorded = Session::open_document(input).unwrap();
-        for session in [&mut recorded, &mut unrecorded] {
+        let mut chunked_recorded = recorded();
+        let mut unrecorded = Session::open(netlist.clone()).unwrap();
+        for session in [&mut chunked_recorded, &mut unrecorded] {
             let got = frames(session, frame_ps, script, chunked(seed));
             assert_eq!(got.len(), want.len(), "{name} {seed:#x}");
             for (got, want) in got.iter().zip(&want) {
@@ -270,18 +281,18 @@ fn splits_read_the_same(
             }
         }
         assert!(
-            files(&recorded.finish(at).unwrap()) == folder,
+            folder_of(chunked_recorded) == folder,
             "{name} {seed:#x}: the folder differs"
         );
     }
-    let mut exported = Session::record_document(&export).unwrap();
-    exported.advance_to(Time::from_ps(u64::MAX));
+    let mut batch = record(landed, &span, Rows::Grid).unwrap();
+    batch.advance_to(Time::from_ps(u64::MAX));
     let read: Vec<SerialByte> = want.iter().flat_map(|read| read.serial.clone()).collect();
-    let sent = exported.serial_since(SerialCursor::default()).unwrap().0;
+    let sent = batch.serial_since(SerialCursor::default()).unwrap().0;
     assert_eq!(read, sent, "{name}");
     assert!(
-        files(&exported.finish(at).unwrap()) == folder,
-        "{name}: the export's folder differs"
+        folder_of(batch) == folder,
+        "{name}: the folder of its landings differs"
     );
     read
 }

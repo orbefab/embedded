@@ -1,9 +1,9 @@
 {
-  "format": 1,
+  "format": 3,
   "part": "sk68xxmini-hs",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "title": "SK68XXMINI-HS addressable RGB LED",
-  "summary": "One addressable RGB LED in a 3.7 x 3.5 x 1.95 mm package. Pin 1 is GND, pin 2 DIN, pin 3 VDD and pin 4 DOUT. The sheet's supply is 3.7 V to 5.5 V. The engine times the bits as a Worldsemi WS2812E, and this sheet's longest 0-bit high is 0.4 us, past that window.",
+  "summary": "One addressable RGB LED in a 3.7 x 3.5 x 1.95 mm package. Pin 1 is GND, pin 2 DIN, pin 3 VDD and pin 4 DOUT. It keeps the first 24 bits it reads and passes the rest to the next LED on DOUT, so a chain on one pin shows one colour per LED. Its reading `color` is the last colour it latched. The sheet's supply is 3.7 V to 5.5 V. The engine times the bits as a Worldsemi WS2812E, and this sheet's longest 0-bit high is 0.4 us, past that window.",
   "tags": ["led", "rgb", "addressable", "ws2812"],
   "license": "MIT OR Apache-2.0",
   "docs": { "SPC / SK68XX MINI-HS Rev. 04": null },
@@ -12,7 +12,7 @@
   "model": {
     "kind": "ws2812",
     "leds": 1,
-    "pins": { "VCC": "VDD", "GND": "GND", "DIN": "DIN" },
+    "pins": { "VCC": "VDD", "GND": "GND", "DIN": "DIN", "DOUT": "DOUT" },
     "input_threshold": {
       "low": {
         "value": 0.3,
@@ -36,13 +36,41 @@
           }
         }
       }
+    },
+    "dout": {
+      "output": {
+        "high_drop": { "value": 0.0, "unit": "V", "source": { "closed_form": { "note": "The sheet gives no DOUT output voltage. DOUT drives the next LED's DIN, which draws no current in the engine, so a high sits at VDD" } } },
+        "high_resistance": { "value": 100.0, "unit": "ohm", "source": { "closed_form": { "note": "The sheet gives no DOUT drive strength. DIN draws no current, so the level DOUT sets does not depend on this value. 100 ohm keeps a DOUT shorted to GND at 50 mA at 5 V" } } },
+        "low_drop": { "value": 0.0, "unit": "V", "source": { "closed_form": { "note": "The sheet gives no DOUT output voltage. DOUT drives the next LED's DIN, which draws no current in the engine, so a low sits at GND" } } },
+        "low_resistance": { "value": 100.0, "unit": "ohm", "source": { "closed_form": { "note": "The sheet gives no DOUT drive strength. DIN draws no current, so the level DOUT sets does not depend on this value. 100 ohm keeps a DOUT shorted to VDD at 50 mA at 5 V" } } }
+      },
+      "delay": {
+        "value": 500000,
+        "unit": "ps",
+        "source": {
+          "datasheet": {
+            "doc": "SPC / SK68XX MINI-HS Rev. 04",
+            "at": "Section 11, DIN to DOUT transmission delay, 500 ns maximum",
+            "basis": "max"
+          }
+        }
+      }
     }
+  },
+  "readings": {
+    "color": { "of": "rgb" }
+  },
+  "view": {
+    "glow": [{ "node": "lens", "by": "color" }]
   },
   "not_simulated": [
     {
       "what": "data output",
-      "pins": ["DOUT"],
-      "why": "The ws2812 kind has no DOUT pin. Section 11 gives the DIN to DOUT delay as 500 ns maximum, and a one-LED part discards the bits past its own 24."
+      "why": "DOUT follows DIN 500 ns later, rise and fall alike, once this LED holds its 24 bits, and is low before that and until the next reset. Section 11 gives that delay as a maximum and no typical, and gives no output widths, so DOUT passes each high as long as it came. The sheet gives no DOUT drive strength either; the output stage is 100 ohm to each rail. Bits a Pulses record carried, such as an ESP32-S3 RMT train, reach DIN only when the record ends, so they do not go on to DOUT, and the part reports chip.protocol rule dout_record."
+    },
+    {
+      "what": "light",
+      "why": "The reading `color` is the 8-bit red, green and blue the LED latched, not its luminous intensity. The sheet rates each colour's intensity separately, and the model does not weigh them. The drawing lights the lens in the latched colour, at full glow when its brightest channel is 255."
     },
     {
       "what": "supply and current",

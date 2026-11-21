@@ -9,11 +9,11 @@ fn inductor(changed: Option<(&str, &str, &str)>) -> String {
             Some((field, unit, value)) if field == name => (unit, value),
             _ => (unit, value),
         };
-        format!(r#""{name}": {{ "value": {value}, "unit": "{unit}", "source": "user" }}"#)
+        format!(r#""{name}": {{ "value": {value}, "unit": "{unit}" }}"#)
     };
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {{ "op": {{}} }},
       "ground": "gnd",
@@ -97,7 +97,7 @@ fn each_field_names_its_unit_and_must_be_positive_with_a_finite_reciprocal() {
 #[test]
 fn a_missing_or_unknown_key_is_a_syntax_error() {
     let missing = inductor(None).replace(
-        r#""series_resistance": { "value": 70.0, "unit": "ohm", "source": "user" }"#,
+        r#""series_resistance": { "value": 70.0, "unit": "ohm" }"#,
         r#""ratings": { "current": null }"#,
     );
     let wrong_type = inductor(Some(("inductance", "H", r#""0.505""#)));

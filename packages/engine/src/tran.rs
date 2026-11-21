@@ -1,6 +1,6 @@
 use orbe_model::Time;
 
-use crate::netlist::{Document, Edge, Model, Netlist, PartId, Transient};
+use crate::netlist::{Edge, Model, Netlist, PartId, Transient};
 use crate::world::Quantity;
 
 use std::cmp::Reverse;
@@ -61,8 +61,7 @@ impl Rows {
     }
 }
 
-/// The recorded session on a transient, and the one way `simulate` and
-/// `Session::record_document` open one. The session holds the netlist's floating-net warnings,
+/// The recorded session on a transient, and the one way `simulate` opens one. The session holds the netlist's floating-net warnings,
 /// which its run reports. A grid with more rows than a trace holds is `trace.too_large`, before
 /// any solve. Then the operating point and the step after it.
 // With 32-bit pointers the error is under the lint's size limit, and the lint stays silent.
@@ -77,7 +76,6 @@ pub(crate) fn record(
     netlist: Netlist,
     transient: &Transient,
     rows: Rows,
-    document: Option<Document>,
 ) -> Result<Session, Unopened> {
     let columns = Columns::new(&netlist);
     let limit = Trace::row_limit(columns.refs().len());
@@ -93,18 +91,11 @@ pub(crate) fn record(
             warnings: topology::floating_nets(&netlist),
         });
     }
-    Session::start(
-        netlist,
-        transient,
-        Vec::new(),
-        BUDGET,
-        columns,
-        Some(rows),
-        document,
-    )
-    .map_err(|failure| Unopened {
-        error: failure.error,
-        warnings: failure.warnings,
+    Session::start(netlist, transient, Vec::new(), BUDGET, columns, Some(rows)).map_err(|failure| {
+        Unopened {
+            error: failure.error,
+            warnings: failure.warnings,
+        }
     })
 }
 
@@ -123,7 +114,7 @@ pub(crate) fn run(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Outcome {
     to_stop(
-        record(netlist.clone(), transient, rows, None),
+        record(netlist.clone(), transient, rows),
         transient,
         diagnostics,
     )

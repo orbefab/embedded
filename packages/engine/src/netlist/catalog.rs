@@ -181,7 +181,8 @@ macro_rules! define_kinds {
         }
 
         impl Model {
-            /// Pin names in the order of `pins()`. An `esp32s3` lists only the pins it has nets on.
+            /// Pin names in the order of `pins()`. An `esp32s3` or an `atmega328p` lists only the pins
+            /// it has nets on.
             pub fn pin_names(&self) -> &[&'static str] {
                 match self {
                     $(Model::$variant(_) => $pins,)*
@@ -373,7 +374,8 @@ macro_rules! define_kinds {
 ///
 /// The required pins are the first `n` of the names, and a part must give each a net. The rest
 /// may go unwired. Every kind requires all its pins but `esp32s3`, which requires `VCC` and
-/// `GND` and takes any of its GPIOs.
+/// `GND` and takes any of its GPIOs, `atmega328p`, which requires the DIP's 28 and takes `ADC6`
+/// and `ADC7` where the package has them, and `ws2812`, whose `DOUT` is optional.
 pub fn engine_kinds() -> &'static [(&'static str, &'static [&'static str], usize)] {
     KINDS
 }
@@ -381,17 +383,16 @@ pub fn engine_kinds() -> &'static [(&'static str, &'static [&'static str], usize
 fn chip_pin_names(chip: &Chip) -> &[&'static str] {
     use crate::chip::Ne555;
     use crate::device::{Cst816, Dht22, PulsesReplay, SpiReplay, St77916, Ws2812};
-    use crate::mcu::Atmega328p;
 
     match chip {
         Chip::Ne555(_) => &Ne555::PINS,
-        Chip::Atmega328p(_) => &Atmega328p::PINS,
+        Chip::Atmega328p(mcu) => &mcu.names,
         Chip::SpiReplay(_) => &SpiReplay::PINS,
         Chip::St77916(_) => &St77916::PINS,
         Chip::Cst816(_) => &Cst816::PINS,
         Chip::Dht22(_) => &Dht22::PINS,
         Chip::Esp32s3(mcu) => &mcu.names,
-        Chip::Ws2812(_) => &Ws2812::PINS,
+        Chip::Ws2812(part) => &Ws2812::PINS[..part.pins.len()],
         Chip::PulsesReplay(_) => &PulsesReplay::PINS,
     }
 }
@@ -478,7 +479,7 @@ define_kinds! {
         Ne555, "ne555",
             crate::chip::ne555::WireNe555, crate::chip::ne555::resolve_ne555,
             &crate::chip::Ne555::PINS;
-        Atmega328p, "atmega328p",
+        Atmega328p required crate::mcu::Atmega328p::REQUIRED, "atmega328p",
             crate::mcu::atmega328p::WireAtmega328p, crate::mcu::atmega328p::resolve_atmega328p,
             &crate::mcu::Atmega328p::PINS;
         SpiReplay, "spi_replay",
@@ -496,7 +497,7 @@ define_kinds! {
         Esp32s3 required crate::mcu::Esp32s3::REQUIRED, "esp32s3",
             crate::mcu::esp32s3::WireEsp32s3, crate::mcu::esp32s3::resolve_esp32s3,
             &crate::mcu::Esp32s3::PINS;
-        Ws2812, "ws2812",
+        Ws2812 required crate::device::Ws2812::REQUIRED, "ws2812",
             crate::device::ws2812::WireWs2812, crate::device::ws2812::resolve_ws2812,
             &crate::device::Ws2812::PINS;
         PulsesReplay, "pulses_replay",
@@ -532,10 +533,14 @@ mod tests {
     }
 
     #[test]
-    fn every_kind_but_esp32s3_requires_all_its_pins() {
+    fn every_kind_but_esp32s3_atmega328p_and_ws2812_requires_all_its_pins() {
         for &(name, pins, required) in engine_kinds() {
             if name == "esp32s3" {
                 assert_eq!(&pins[..required], ["VCC", "GND"]);
+            } else if name == "atmega328p" {
+                assert_eq!(&pins[required..], ["ADC6", "ADC7"]);
+            } else if name == "ws2812" {
+                assert_eq!(&pins[required..], ["DOUT"]);
             } else {
                 assert_eq!(required, pins.len(), "`{name}`");
             }

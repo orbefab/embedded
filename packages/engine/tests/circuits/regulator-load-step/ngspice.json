@@ -1,7 +1,7 @@
 {
   "deck_sha256": "454b89ae0465b1a13ecd1550fff1ed2e340e846248ac3ef2caecd9b53ad451c5",
   "format": 0,
-  "netlist_sha256": "bba9c9d9a5c7a989fc07fdf59923d492c3e31060c6a655f6d08b9e15ed1cf9f3",
+  "netlist_sha256": "5131de4bb3648b8e3aedaecb7018de7bb6101e788658df819e318dd7dfda7dc3",
   "ngspice": "ngspice-42",
   "options": "temp=25 tnom=25 reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-12",
   "tran": {

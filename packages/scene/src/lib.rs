@@ -1,4 +1,4 @@
-//! Reads a `scene.jsonc` and the part files it uses into the engine's netlist v0, or into
+//! Reads a `scene.jsonc` and the part files it uses into the engine's netlist v1, or into
 //! the findings that stop it.
 //!
 //! A scene's folder is its project root. An id such as `led-5mm` reads `parts/led-5mm/` there
@@ -11,6 +11,7 @@
 #[cfg(unix)]
 mod add;
 mod blocks;
+mod breadboard;
 mod buy;
 mod catalog;
 mod circuit;
@@ -33,6 +34,7 @@ use std::path::Path;
 
 #[cfg(unix)]
 pub use add::{AddCode, Reply, Request, RunError, run as add_parts};
+pub use breadboard::breadboard_line;
 pub use catalog::Version;
 pub use circuit::{
     Amount, BoardFacts, BoardLed, EnginePart, FilePath, Gap, Instance, MapPart, Netlist, PartData,

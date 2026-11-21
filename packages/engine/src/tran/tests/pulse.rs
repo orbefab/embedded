@@ -102,8 +102,8 @@ fn replayed() -> Netlist {
         .iter()
         .map(|&(level, ps)| format!(r#"{{ "level": {level}, "ps": {ps} }}"#))
         .collect();
-    let ohm = r#"{ "value": 25.0, "unit": "ohm", "source": "user" }"#;
-    let volt = r#"{ "value": 0.0, "unit": "V", "source": "user" }"#;
+    let ohm = r#"{ "value": 25.0, "unit": "ohm" }"#;
+    let volt = r#"{ "value": 0.0, "unit": "V" }"#;
     circuit(
         STOP,
         &["line"],
@@ -126,9 +126,8 @@ fn stepped() -> Netlist {
         .chain([&(true, 0)])
         .map(|&(level, ps)| {
             let volts = if level { 5.0 } else { 0.0 };
-            let step = format!(
-                r#"{{ "t_ps": {t}, "level": {{ "value": {volts:?}, "unit": "V", "source": "user" }} }}"#
-            );
+            let step =
+                format!(r#"{{ "t_ps": {t}, "level": {{ "value": {volts:?}, "unit": "V" }} }}"#);
             t += ps;
             step
         })
@@ -139,7 +138,7 @@ fn stepped() -> Netlist {
         &[format!(
             r#"{{ "name": "v2", "kind": "voltage_source", "pins": {{ "p": "line", "n": "gnd" }},
               "voltage": {{ "kind": "steps",
-                "initial": {{ "value": 5.0, "unit": "V", "source": "user" }},
+                "initial": {{ "value": 5.0, "unit": "V" }},
                 "events": [{}] }} }}"#,
             steps.join(", ")
         )],

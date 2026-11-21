@@ -50,6 +50,8 @@ pub enum ValueRule {
     Span,
     /// An LED count is outside 1 to 1024.
     Leds,
+    /// A `ws2812`'s `dout.delay` is past 1 µs.
+    Delay,
     /// A world quantity's value, or a B equation's reference temperature, is outside the range
     /// its quantity's row of the table gives.
     Range,
@@ -192,15 +194,19 @@ pub enum ProtocolRule {
     /// A read that came sooner than the sensor answers one: inside its warm-up after power-on,
     /// or before its minimum interval after the last read it answered.
     Interval,
+    /// A high a `Pulses` record carried, which a chain with `DOUT` would pass on. The record
+    /// lands at its end, after that high, so `DOUT` does not drive it.
+    DoutRecord,
 }
 
 impl ProtocolRule {
-    pub(crate) const ALL: [ProtocolRule; 5] = [
+    pub(crate) const ALL: [ProtocolRule; 6] = [
         ProtocolRule::Command,
         ProtocolRule::PixelFormat,
         ProtocolRule::SdaWhileSclHigh,
         ProtocolRule::Bit,
         ProtocolRule::Interval,
+        ProtocolRule::DoutRecord,
     ];
 
     /// Its place in [`ALL`](Self::ALL).
@@ -216,6 +222,7 @@ impl ProtocolRule {
             "sda_while_scl_high" => Some(ProtocolRule::SdaWhileSclHigh),
             "bit" => Some(ProtocolRule::Bit),
             "interval" => Some(ProtocolRule::Interval),
+            "dout_record" => Some(ProtocolRule::DoutRecord),
             _ => None,
         }
     }
@@ -872,6 +879,9 @@ impl Diagnostic {
                     ValueRule::Leds => {
                         format!("{part} {field} is {count}; it must be from 1 to 1024")
                     }
+                    ValueRule::Delay => {
+                        format!("{part} {field} is {value}; it must be at most 1000000")
+                    }
                     ValueRule::Range => {
                         let quantity = match part {
                             Ref::World(quantity) => *quantity,
@@ -1151,6 +1161,15 @@ impl Diagnostic {
             } => format!(
                 "{part} did not answer a read that broke rule {} at {} ps, the first time",
                 rule_text(&ProtocolRule::Interval),
+                at.as_ps()
+            ),
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::DoutRecord,
+            } => format!(
+                "{part} did not pass a high from a record on to DOUT, breaking rule {} at {} ps, the first time",
+                rule_text(&ProtocolRule::DoutRecord),
                 at.as_ps()
             ),
             Diagnostic::ChipProtocol { part, at, rule } => format!(

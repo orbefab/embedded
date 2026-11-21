@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use common::{column, resistor, simulate, simulate_steps, span, trace, transient};
 
 fn level(value: f64, unit: &str) -> String {
-    format!(r#"{{ "value": {value:?}, "unit": "{unit}", "source": "user" }}"#)
+    format!(r#"{{ "value": {value:?}, "unit": "{unit}" }}"#)
 }
 
 fn current_source(name: &str, net: &str, drive: &str) -> String {
@@ -30,7 +30,7 @@ fn voltage_source(name: &str, net: &str, drive: &str) -> String {
 fn capacitor(name: &str, a: &str, farad: f64) -> String {
     format!(
         r#"{{ "name": "{name}", "kind": "capacitor", "pins": {{ "a": "{a}", "b": "gnd" }},
-          "capacitance": {{ "value": {farad:?}, "unit": "F", "source": "user" }}, "initial": null }}"#
+          "capacitance": {{ "value": {farad:?}, "unit": "F" }}, "initial": null }}"#
     )
 }
 
@@ -53,7 +53,7 @@ fn step(unit: &str, low: f64, high: f64, at: u64) -> String {
 
 fn op(nets: &str, parts: &[&str]) -> String {
     format!(
-        r#"{{ "version": 0, "seed": 0, "analysis": {{ "op": {{}} }}, "ground": "gnd",
+        r#"{{ "version": 1, "seed": 0, "analysis": {{ "op": {{}} }}, "ground": "gnd",
              "nets": [{nets}], "parts": [{}] }}"#,
         parts.join(",")
     )

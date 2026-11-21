@@ -190,7 +190,7 @@ fn open_replaces_the_socket_a_killed_process_left() {
 t=10ms (from 0s)
   brightness led1 off 3.4882796973335236e-10 A over 10ms
   brightness nano.led_l off 3.4809606749501575e-10 A over 10ms
-  brightness nano.led_pwr lit 0.003013698545612338 A over 10ms
+  brightness nano.led_pwr lit 3.0136985456123377 mA over 10ms
 "
     );
     runtime
@@ -230,6 +230,116 @@ fn a_process_that_dies_is_session_crashed_until_it_is_opened_again() {
         .ok();
     runtime
         .orbe(dir.path(), &["close", "--session", "crash"])
+        .ok();
+}
+
+#[test]
+fn open_keeps_a_crashed_sessions_log_until_it_is_read_or_the_next_crash_replaces_it() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    let session = ["--session", "kept"];
+    runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+    kill_daemon(&runtime);
+    let log = runtime.sessions().join("kept.log");
+    fs::write(&log, "first crash\n").unwrap();
+
+    let run = runtime
+        .orbe(dir.path(), &[&["open", "--json"][..], &session].concat())
+        .ok();
+    let path = log.display().to_string();
+    let note = format!("the previous session crashed; its last output is in {path}");
+    assert_eq!(run.json()["data"]["previous_crash"], note.as_str());
+    assert_eq!(fs::read_to_string(&log).unwrap(), "first crash\n");
+
+    let run = runtime
+        .orbe(dir.path(), &[&["close"][..], &session].concat())
+        .ok();
+    assert!(
+        !run.stdout.contains("previous session crashed"),
+        "{}",
+        run.stdout
+    );
+
+    runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+    kill_daemon(&runtime);
+    fs::write(&log, "first crash\n").unwrap();
+    let run = runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+    assert!(
+        run.stdout.starts_with("opened scene.jsonc at t=0: "),
+        "{}",
+        run.stdout
+    );
+    assert!(run.stdout.contains(&note), "{}", run.stdout);
+    assert_eq!(fs::read_to_string(&log).unwrap(), "first crash\n");
+
+    kill_daemon(&runtime);
+    let starts: Vec<_> = fs::read_dir(runtime.sessions())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("kept.log."))
+        })
+        .collect();
+    assert_eq!(starts.len(), 1, "{starts:?}");
+    fs::write(&starts[0], "second crash\n").unwrap();
+    let run = runtime.orbe(dir.path(), &["get", "@led1", "--session", "kept"]);
+    assert_eq!(run.code, 1);
+    assert!(run.stderr.contains(&path), "{}", run.stderr);
+    assert_eq!(fs::read_to_string(&log).unwrap(), "second crash\n");
+    // The read above is a user reading the log. Put the access time back on the write so
+    // `open` still has a log to keep.
+    let written = std::process::Command::new("stat")
+        .args(["-c", "%y"])
+        .arg(&log)
+        .output()
+        .unwrap()
+        .stdout;
+    std::process::Command::new("touch")
+        .args(["-a", "-d"])
+        .arg(String::from_utf8(written).unwrap().trim())
+        .arg(&log)
+        .status()
+        .unwrap();
+
+    let run = runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+    assert!(run.stdout.contains(&note), "{}", run.stdout);
+    assert_eq!(fs::read_to_string(&log).unwrap(), "second crash\n");
+    runtime
+        .orbe(dir.path(), &[&["step", "1ms"][..], &session].concat())
+        .ok();
+    let taken = fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        !taken.contains("second crash"),
+        "reading the log lets the session take it: {taken}"
+    );
+    runtime
+        .orbe(dir.path(), &[&["close"][..], &session].concat())
+        .ok();
+    assert!(
+        !log.exists(),
+        "a clean exit removes the log once it was read"
+    );
+
+    let run = runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+    assert!(
+        !run.stdout.contains("previous session crashed"),
+        "{}",
+        run.stdout
+    );
+    runtime
+        .orbe(dir.path(), &[&["close"][..], &session].concat())
         .ok();
 }
 
@@ -664,7 +774,7 @@ fn a_refusal_the_client_makes_shows_the_state_the_process_reports() {
         (
             2,
             "",
-            "error[usage]: takes one ref, such as `@btn1`; usage: get <ref>\n"
+            "error[usage]: takes one ref, such as `@btn1`, or a world quantity, such as `light`; usage: get <ref> | get <quantity>\n"
         )
     );
 
@@ -680,15 +790,65 @@ fn a_refusal_the_client_makes_shows_the_state_the_process_reports() {
 }
 
 #[test]
+fn a_session_another_version_started_names_that_version_and_asks_for_close() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    let session = ["--session", "up"];
+    runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+    let version = runtime.sessions().join("up.version");
+    assert_eq!(
+        fs::read_to_string(&version).unwrap(),
+        format!("{}\n", env!("CARGO_PKG_VERSION"))
+    );
+    fs::write(&version, "9.9.9\n").unwrap();
+    let running = runtime.daemons();
+    assert_eq!(running.len(), 1);
+
+    let run = runtime.orbe(dir.path(), &["get", "@led1", "--session", "up"]);
+    assert_eq!(
+        run.stderr,
+        "error[io_error]: session `up` runs orbe 9.9.9\n  hint: run `orbe close --session up`\n"
+    );
+    assert_eq!(runtime.daemons(), running, "no second session starts");
+
+    let opened = runtime.orbe(dir.path(), &[&["open"][..], &session].concat());
+    assert_eq!(opened.code, 3, "{}{}", opened.stdout, opened.stderr);
+    assert!(
+        opened.stderr.contains("runs orbe 9.9.9"),
+        "{}",
+        opened.stderr
+    );
+    assert_eq!(runtime.daemons(), running);
+
+    runtime
+        .orbe(dir.path(), &[&["close"][..], &session].concat())
+        .ok();
+    assert!(runtime.daemons().is_empty());
+    runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+    assert_eq!(
+        fs::read_to_string(&version).unwrap(),
+        format!("{}\n", env!("CARGO_PKG_VERSION"))
+    );
+    runtime
+        .orbe(dir.path(), &["get", "@led1", "--session", "up"])
+        .ok();
+    runtime
+        .orbe(dir.path(), &[&["close"][..], &session].concat())
+        .ok();
+    assert!(!version.exists());
+}
+
+#[test]
 fn a_socket_path_past_the_system_limit_is_refused_before_anything_starts() {
     let dir = project("open\n");
     let runtime = Runtime::new();
     let long = runtime.dir.path().join("d".repeat(100));
     fs::create_dir(&long).unwrap();
-    let socket = long
-        .join("orbe")
-        .join(env!("CARGO_PKG_VERSION"))
-        .join("s.sock");
+    let socket = long.join("orbe").join("s.sock");
     let expected = format!(
         "error[io_error]: the socket path {} is {} bytes, and the system takes at most 107\n  hint: use a shorter `--session` name, or set XDG_RUNTIME_DIR to a shorter folder\n",
         socket.display(),
@@ -1075,7 +1235,7 @@ fn opens_at_once_leave_only_the_listening_process_in_the_log() {
         names
     };
     wait_until("only the session's files remain", || {
-        files() == ["lg.log", "lg.sock"]
+        files() == ["lg.log", "lg.sock", "lg.version"]
     });
     let log = fs::read_to_string(runtime.sessions().join("lg.log")).unwrap();
     assert_eq!(log, "", "the log holds only the listening process's output");
@@ -1220,7 +1380,7 @@ fn opens_at_once_over_a_killed_process_leave_no_start_log() {
         }
         wait_until(
             &format!("round {round} leaves only the session's files"),
-            || session_files(&runtime) == ["sl.log", "sl.sock"],
+            || session_files(&runtime) == ["sl.log", "sl.sock", "sl.version"],
         );
         runtime.orbe(dir.path(), &["close", "--session", "sl"]).ok();
     }
@@ -1425,7 +1585,10 @@ fn an_open_read_after_the_no_scene_wait_still_opens_on_the_process_it_started() 
         "the request was read late: {elapsed:?}"
     );
     assert_eq!(runtime.daemons().len(), 1);
-    assert_eq!(session_files(&runtime), ["late.log", "late.sock"]);
+    assert_eq!(
+        session_files(&runtime),
+        ["late.log", "late.sock", "late.version"]
+    );
     runtime
         .orbe(dir.path(), &["close", "--session", "late"])
         .ok();

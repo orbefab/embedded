@@ -223,7 +223,7 @@ fn print_headed(
         Err(refused) => (refused.json()["error"].clone(), refused.exit()),
     };
     if let Ok(Reply {
-        data: Data::Viewer { url },
+        data: Data::Viewer { url, .. },
         ..
     }) = shown.as_deref()
     {
@@ -242,7 +242,10 @@ fn print_headed(
             Err(refused) => eprintln!("{}", refused.text()),
         }
     }
-    if browser && let Ok(reply) = &shown {
+    if browser
+        && let Ok(reply) = &shown
+        && let Data::Viewer { viewers: 0, .. } = &reply.data
+    {
         open_browser(reply);
     }
     ExitCode::from(exit)
@@ -251,7 +254,7 @@ fn print_headed(
 /// Opens `show`'s URL in the default browser. A browser that does not start leaves the URL to
 /// open by hand.
 fn open_browser(reply: &Reply) {
-    let Data::Viewer { url } = &reply.data else {
+    let Data::Viewer { url, .. } = &reply.data else {
         return;
     };
     let program = if cfg!(target_os = "macos") {
@@ -378,6 +381,7 @@ impl Refusal {
             state,
             data: Data::None,
             error: Some(self.error.clone()),
+            previous_crash: None,
         }
     }
 
@@ -553,17 +557,36 @@ impl Client {
     /// reached ends before it answers, it starts again.
     fn open(&self, command: Command) -> Result<Box<Reply>, Refusal> {
         let mut started = None;
+        let mut recovered = None;
         for attempt in 1..=TRIES {
             let answered = match self.find()? {
                 Found::Listening(stream) => self.send(stream, Ask::Run(Ok(command.clone()))),
-                Found::Missing | Found::Stale => self.start(attempt).and_then(|(stream, log)| {
+                Found::Missing => self.start(attempt).and_then(|(stream, log)| {
                     started = Some(log);
-                    self.send(stream, Ask::Run(Ok(command.clone())))
+                    self.send_started(stream, Ask::Run(Ok(command.clone())))
                 }),
+                Found::Stale => {
+                    recovered = Some(self.crash_log());
+                    self.start(attempt).and_then(|(stream, log)| {
+                        started = Some(log);
+                        self.send_started(stream, Ask::Run(Ok(command.clone())))
+                    })
+                }
             };
             match answered {
                 Err(refused)
                     if matches!(refused.error.code, Code::NoSession | Code::SessionCrashed) => {}
+                Ok(mut reply) => {
+                    if let Some(path) = &recovered {
+                        reply.previous_crash = Some(match path {
+                            Some(path) => format!(
+                                "the previous session crashed; its last output is in {path}"
+                            ),
+                            None => "the previous session crashed".into(),
+                        });
+                    }
+                    return Ok(reply);
+                }
                 answered => return answered,
             }
         }
@@ -606,6 +629,7 @@ impl Client {
                     let _ = fs::remove_file(&log);
                 }
                 let starts = self.place.remove_left_logs(|name| name == &self.name);
+                let _ = fs::remove_file(self.place.version(&self.name));
                 Ok(Done::Stale(Stale {
                     session: self.name.clone(),
                     log: kept.then_some(log),
@@ -620,6 +644,9 @@ impl Client {
     fn usage(&self, error: Error) -> Refusal {
         let at = match self.find() {
             Ok(Found::Listening(stream)) => {
+                if let Err(refused) = self.refuse_other_version() {
+                    return refused;
+                }
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
                 match self.send(stream, Ask::Run(Err(error.clone()))) {
                     Ok(reply) => Some((reply.t_ps, reply.state)),
@@ -778,6 +805,19 @@ impl Client {
     /// A `no_session` reply, from a process with no scene yet or one that is ending, becomes
     /// the client's own, and a hint to `open` again names the shell command.
     fn send(&self, stream: UnixStream, ask: Ask) -> Result<Box<Reply>, Refusal> {
+        if !matches!(&ask, Ask::Run(Ok(Command::Close))) {
+            self.refuse_other_version()?;
+        }
+        self.dispatch(stream, ask)
+    }
+
+    /// `send` for the process this client just started. Its version file may still name the
+    /// session it replaced.
+    fn send_started(&self, stream: UnixStream, ask: Ask) -> Result<Box<Reply>, Refusal> {
+        self.dispatch(stream, ask)
+    }
+
+    fn dispatch(&self, stream: UnixStream, ask: Ask) -> Result<Box<Reply>, Refusal> {
         if let Ok(hangup) = stream.try_clone() {
             let pressed = AtomicBool::new(false);
             let _ = ctrlc::set_handler(move || {
@@ -787,9 +827,12 @@ impl Client {
                 let _ = hangup.shutdown(Shutdown::Write);
             });
         }
+        #[cfg(debug_assertions)]
         let stop = matches!(ask, Ask::Run(Ok(Command::Open(_))))
             .then(|| std::env::var("ORBE_TEST_STOP").ok())
             .flatten();
+        #[cfg(not(debug_assertions))]
+        let stop: Option<String> = None;
         let request = Request {
             cwd: self.cwd.clone(),
             ask,
@@ -877,16 +920,50 @@ impl Client {
     }
 
     fn crashed(&self, how: &str) -> Refusal {
-        let log = self.place.log(&self.name);
+        let log = self.crash_log();
         let mut hint = self.open_hint("to start it again");
-        if holds_output(&log) {
-            hint.push_str(&format!("; its last output is in {}", log.display()));
+        if let Some(log) = log {
+            hint.push_str(&format!("; its last output is in {log}"));
         }
         self.refuse(
             Code::SessionCrashed,
             format!("the process of session `{}` {how}", self.name),
             hint,
         )
+    }
+
+    /// A live session another version started. `close` is the way off it, so `close` does
+    /// not ask. A missing file is this version: a process writes the file as it binds.
+    fn refuse_other_version(&self) -> Result<(), Refusal> {
+        let path = self.place.version(&self.name);
+        let text = match fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => {
+                return Err(self.refuse(
+                    Code::IoError,
+                    format!("cannot read {}: {error}", path.display()),
+                    "",
+                ));
+            }
+        };
+        let version = text.trim();
+        if version.is_empty() || version == env!("CARGO_PKG_VERSION") {
+            return Ok(());
+        }
+        Err(self.refuse(
+            Code::IoError,
+            format!("session `{}` runs orbe {version}", self.name),
+            format!("run `orbe close{}`", self.session_flag()),
+        ))
+    }
+
+    /// The session log after a newer crashed start, if one was waiting, has replaced it.
+    /// `None` when that log holds nothing.
+    fn crash_log(&self) -> Option<String> {
+        self.place.keep_latest_crash(&self.name);
+        let log = self.place.log(&self.name);
+        holds_output(&log).then(|| log.display().to_string())
     }
 
     fn session_flag(&self) -> String {
@@ -916,8 +993,9 @@ impl Client {
         }
     }
 
-    /// Closes every session of this build for this user, and removes the sockets and start
-    /// logs that ended processes left. A process with no scene is left to end on its own.
+    /// Closes every session for this user, whichever version started it, and removes the
+    /// sockets and start logs that ended processes left. A process with no scene is left to
+    /// end on its own.
     fn close_all(&self) -> Result<Vec<Result<Done, Refusal>>, Refusal> {
         let names = self.place.names().map_err(|error| {
             self.refuse(

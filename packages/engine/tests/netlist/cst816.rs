@@ -8,7 +8,7 @@ use orbe_engine::diagnostic::{Diagnostic, ScheduleRule, ValueRule};
 fn chip(touches: &str) -> String {
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {{ "transient": {{ "stop_ps": 1000000000, "max_step_ps": 1000000, "grid_ps": 1000000 }} }},
       "ground": "gnd",
@@ -17,11 +17,11 @@ fn chip(touches: &str) -> String {
         "name": "u2",
         "kind": "cst816",
         "pins": {{ "VCC": "vcc", "GND": "gnd", "SCL": "scl", "SDA": "sda", "INT": "int", "RST": "rst" }},
-        "low_drop": {{ "value": 0.0, "unit": "V", "source": "user" }},
-        "low_resistance": {{ "value": 133.3, "unit": "ohm", "source": "user" }},
+        "low_drop": {{ "value": 0.0, "unit": "V" }},
+        "low_resistance": {{ "value": 133.3, "unit": "ohm" }},
         "input_threshold": {{
-          "low": {{ "value": 0.3, "unit": "1", "source": "user" }},
-          "high": {{ "value": 0.7, "unit": "1", "source": "user" }}
+          "low": {{ "value": 0.3, "unit": "1" }},
+          "high": {{ "value": 0.7, "unit": "1" }}
         }},
         "touches": {touches}
       }}]

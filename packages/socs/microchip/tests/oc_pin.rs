@@ -13,9 +13,8 @@
 use orbe_microchip::{Cpu, Level, parse_hex};
 
 fn edges(hex: &str, until: u64) -> Vec<(u32, Level, u64)> {
-    let image = parse_hex(hex).unwrap();
     let mut cpu = Cpu::new();
-    cpu.load_image(&image).unwrap();
+    cpu.load_flash(&parse_hex(hex).unwrap());
     cpu.run_until(until);
     let mut out = Vec::new();
     while let Some(report) = cpu.take_pin() {

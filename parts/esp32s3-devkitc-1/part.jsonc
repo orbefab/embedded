@@ -36,7 +36,7 @@
   "uses": {
     "cp2102n-qfn28": "0.1.1", "esp32s3-wroom-1-n16r8": "0.1.0", "lesd5d5-sod523": "0.1.1",
     "npn-l8050-sot23": "0.1.1", "pin-header-1x22": "0.1.1", "resistor-0603": "0.1.1",
-    "sgm2212-sot223": "0.1.1", "sk68xxmini-hs": "0.1.1", "tactile-switch-ntc013": "0.1.1",
+    "sgm2212-sot223": "0.1.1", "sk68xxmini-hs": "0.1.2", "tactile-switch-ntc013": "0.1.1",
     "usb-micro-b": "0.1.1"
   },
   "params": { "app": {}, "partitions": {} },

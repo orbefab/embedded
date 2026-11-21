@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Rebuilds packages/engine/tests/firmware/sketch/<name>.hex from packages/engine/tests/firmware/sketch/<name>/<name>.ino with a pinned AVR
+# Rebuilds each <dir>/<name>.hex from <dir>/<name>/<name>.ino, where <dir> is
+# packages/engine/tests/firmware/sketch or a Block's blocks/<id>/firmware, with a pinned AVR
 # toolchain and the standard AVR runtime, for the ATmega328P, with the flags the standard IDE
 # uses. The clock is 16 MHz unless the sketch directory contains `f_cpu`, one integer of hertz.
 # The runtime's core is compiled into an archive and linked with each sketch, and main() comes
@@ -27,7 +28,7 @@ mkdir -p "$1"
 tools=$(cd "$1" && pwd)
 downloads=${2:-$tools/dl}
 mkdir -p "$downloads"
-firmware=$(cd "$(dirname "$0")/../tests/firmware/sketch" && pwd)
+repo=$(cd "$(dirname "$0")/../../.." && pwd)
 
 unpack() {
   local dir=$1 url=$2 sha256=$3
@@ -106,9 +107,10 @@ clock_archives() {
   "$bin/avr-gcc-ar" rcs "$dest/wire.a" "$dest/wire/Wire.cpp.o" "$dest/wire/twi.c.o"
 }
 
-for dir in "$firmware"/*/; do
+for dir in "$repo"/packages/engine/tests/firmware/sketch/*/ "$repo"/blocks/*/firmware/*/; do
   dir=${dir%/}
   name=$(basename "$dir")
+  firmware=$(dirname "$dir")
   library=()
   archives=()
   sketch_target=("${target[@]}")
@@ -132,5 +134,5 @@ for dir in "$firmware"/*/; do
   "$bin/avr-gcc" "${link_flags[@]}" -o "$work/$name.elf" "$work/$name.o" "${archives[@]}" \
     "$core_a" -L"$work" -lm
   "$bin/avr-objcopy" -O ihex -R .eeprom "$work/$name.elf" "$firmware/$name.hex"
-  "$bin/avr-size" "$work/$name.elf" | tail -n 1 | awk -v n="$name" '{print n ": " $1 + $2 " flash bytes"}'
+  "$bin/avr-size" "$work/$name.elf" | tail -n 1 | awk -v n="${dir#"$repo"/}" '{print n ": " $1 + $2 " flash bytes"}'
 done

@@ -51,11 +51,13 @@ fn chunked(session: &mut Session, stop: u64, seed: u64) {
 #[test]
 fn the_example_writes_the_same_rows_and_image_in_any_chunking() {
     let json = example("st77916-replay", u64::MAX);
-    let stop = transient(&Document::parse(&json).unwrap().1).stop.as_ps();
+    let netlist = crate::netlist::parse(&json).unwrap();
+    let whole = transient(&netlist);
+    let stop = whole.stop.as_ps();
     let lcd1 = Name::new("lcd1").unwrap();
     let mut folders = Vec::new();
     for seed in [None, Some(3), Some(17)] {
-        let mut session = Session::record_document(&json).unwrap();
+        let mut session = record(netlist.clone(), &whole, Rows::Grid).unwrap();
         match seed {
             None => {
                 session.advance_to(Time::from_ps(stop));
@@ -100,53 +102,53 @@ fn data(at: u64, bytes: &[u8], cs: &str) -> String {
 /// `max_step` long.
 fn panel_netlist(events: &[String], d1: &str, max_step: u64) -> Netlist {
     let stage = r#"{
-        "high_drop": { "value": 0.0, "unit": "V", "source": "user" },
-        "high_resistance": { "value": 25.0, "unit": "ohm", "source": "user" },
-        "low_drop": { "value": 0.0, "unit": "V", "source": "user" },
-        "low_resistance": { "value": 25.0, "unit": "ohm", "source": "user" } }"#;
+        "high_drop": { "value": 0.0, "unit": "V" },
+        "high_resistance": { "value": 25.0, "unit": "ohm" },
+        "low_drop": { "value": 0.0, "unit": "V" },
+        "low_resistance": { "value": 25.0, "unit": "ohm" } }"#;
     let json = format!(
         r#"{{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": {{ "transient": {{ "stop_ps": {STOP}, "max_step_ps": {max_step}, "grid_ps": {max_step} }} }},
           "ground": "gnd",
           "nets": ["gnd", "vcc", "cs", "sclk", "d0", "d1", "d2", "d3", "dx", "rst", "blk", "te", "o1", "o2", "x"],
           "parts": [
             {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "vcc", "n": "gnd" }},
-              "voltage": {{ "value": 3.3, "unit": "V", "source": "user" }} }},
+              "voltage": {{ "value": 3.3, "unit": "V" }} }},
             {{ "name": "rp1", "kind": "spi_replay",
               "pins": {{ "VCC": "vcc", "GND": "gnd", "CS": "cs", "SCLK": "sclk",
                         "D0": "d0", "D1": "{d1}", "D2": "d2", "D3": "d3" }},
-              "clock_hz": {{ "value": 10000000, "unit": "Hz", "source": "user" }},
+              "clock_hz": {{ "value": 10000000, "unit": "Hz" }},
               "output": {stage}, "events": [{}] }},
             {{ "name": "lcd1", "kind": "st77916",
               "pins": {{ "VCC": "vcc", "GND": "gnd", "CS": "cs", "SCLK": "sclk", "D0": "d0",
                         "D1": "d1", "D2": "d2", "D3": "d3", "RST": "rst", "TE": "te",
                         "BLK": "blk" }},
               "output": {stage},
-              "input_threshold": {{ "low": {{ "value": 0.3, "unit": "1", "source": "user" }},
-                                   "high": {{ "value": 0.7, "unit": "1", "source": "user" }} }} }},
+              "input_threshold": {{ "low": {{ "value": 0.3, "unit": "1" }},
+                                   "high": {{ "value": 0.7, "unit": "1" }} }} }},
             {{ "name": "rrst", "kind": "resistor", "pins": {{ "a": "vcc", "b": "rst" }},
-              "resistance": {{ "value": 10000.0, "unit": "ohm", "source": "user" }},
+              "resistance": {{ "value": 10000.0, "unit": "ohm" }},
               "ratings": {{ "power": null }} }},
             {{ "name": "sw1", "kind": "switch", "pins": {{ "a": "rst", "b": "gnd" }},
-              "on_resistance": {{ "value": 10.0, "unit": "ohm", "source": "user" }},
-              "off_resistance": {{ "value": 1e6, "unit": "ohm", "source": "user" }},
+              "on_resistance": {{ "value": 10.0, "unit": "ohm" }},
+              "off_resistance": {{ "value": 1e6, "unit": "ohm" }},
               "initial": "open", "events": [], "bounce": null }},
             {{ "name": "rblk", "kind": "resistor", "pins": {{ "a": "blk", "b": "gnd" }},
-              "resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
+              "resistance": {{ "value": 1000.0, "unit": "ohm" }},
               "ratings": {{ "power": null }} }},
             {{ "name": "rdx", "kind": "resistor", "pins": {{ "a": "dx", "b": "gnd" }},
-              "resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
+              "resistance": {{ "value": 1000.0, "unit": "ohm" }},
               "ratings": {{ "power": null }} }},
             {{ "name": "ro1", "kind": "resistor", "pins": {{ "a": "o1", "b": "gnd" }},
-              "resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
+              "resistance": {{ "value": 1000.0, "unit": "ohm" }},
               "ratings": {{ "power": null }} }},
             {{ "name": "ro2", "kind": "resistor", "pins": {{ "a": "o2", "b": "gnd" }},
-              "resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
+              "resistance": {{ "value": 1000.0, "unit": "ohm" }},
               "ratings": {{ "power": null }} }},
             {{ "name": "rx", "kind": "resistor", "pins": {{ "a": "x", "b": "gnd" }},
-              "resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
+              "resistance": {{ "value": 1000.0, "unit": "ohm" }},
               "ratings": {{ "power": null }} }}
           ]
         }}"#,

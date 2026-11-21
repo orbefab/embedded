@@ -1,4 +1,4 @@
-//! One tree of instances from the files, then pins joined into nets, and netlist v0.
+//! One tree of instances from the files, then pins joined into nets, and netlist v1.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, PathBuf};
@@ -30,6 +30,24 @@ pub use view::{Instance, PartData, PinWhy, Placement, View, Wire};
 
 const ROOT: usize = 0;
 const NAME_LIMIT: usize = 64;
+
+/// A pin of `part` the scene can name as its ground: `GND`, else the pin its `ground` names.
+fn ground_pin_of(part: &Part) -> Option<String> {
+    if part.pin("GND").is_some() {
+        return Some("GND".into());
+    }
+    let declared = part.comp.ground.as_ref()?.text.rsplit('.').next()?;
+    part.pin(declared).is_some().then(|| declared.to_string())
+}
+
+/// A net name the engine accepts: an ASCII letter, then letters, digits or `_`, and not `net`.
+fn net_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(first) if first.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && name != "net"
+        && name.len() <= NAME_LIMIT
+}
 const GRID_PS: u64 = 1_000_000_000;
 /// A shared hole whose strip still has room. The hole after `such as` is one an agent can
 /// write at the finding, and each hint in one check names a different hole.
@@ -197,7 +215,7 @@ struct Written {
 
 /// What the reader made of a scene that reads.
 pub struct Netlist {
-    /// Netlist v0, pretty-printed.
+    /// Netlist v1, pretty-printed.
     pub json: String,
     /// The number of engine parts.
     pub parts: usize,
@@ -210,6 +228,27 @@ pub struct Netlist {
     pub view: View,
     /// The bytes of each blob the netlist names, read from the blob params' files.
     pub blobs: Blobs,
+}
+
+impl Netlist {
+    /// Nets `net.floating` warns about: no DC path to ground, except a board net lint leaves
+    /// quiet, such as an open AREF with nothing wired to it.
+    pub fn floating(&self) -> BTreeSet<String> {
+        let engine = orbe_engine::netlist::parse_with(self.json.as_bytes(), &self.blobs)
+            .expect("a netlist the reader wrote parses");
+        orbe_engine::floating_nets(&engine)
+            .into_iter()
+            .filter_map(|found| match found {
+                orbe_engine::diagnostic::Diagnostic::NetFloating {
+                    net: orbe_engine::name::Ref::Net(name),
+                } => {
+                    let name = name.as_str().to_string();
+                    (!self.refs.quiet_floating.contains(&name)).then_some(name)
+                }
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 /// With `lint`, the lint rules' warnings on a circuit that checks go there. With `placing`,
@@ -1200,8 +1239,9 @@ impl<'p> Circuit<'p> {
     }
 
     /// Each net with an engine pin, by its root, with its name: a `nets` name, else the
-    /// smallest label, else the smallest member pin, each flattened. A hole never names a net,
-    /// so a circuit on a breadboard has the names it has wired directly.
+    /// smallest label, else the smallest member pin, each flattened. The ground net then takes
+    /// its ground pin's own name, unless a net already has it. A hole never names a net, so a circuit
+    /// on a breadboard has the names it has wired directly.
     fn name_nets(&mut self, scene: &Scene) -> BTreeMap<usize, String> {
         let mut named: BTreeMap<usize, String> = BTreeMap::new();
         let mut from_scene = BTreeSet::new();
@@ -1262,6 +1302,7 @@ impl<'p> Circuit<'p> {
         for (root, name) in labels.into_iter().chain(members) {
             named.entry(root).or_insert(name);
         }
+        self.name_ground(scene, &mut named, &from_scene);
         for (root, name) in &named {
             if from_scene.contains(root) {
                 continue;
@@ -1270,6 +1311,114 @@ impl<'p> Circuit<'p> {
             self.note_long(span, name, false);
         }
         named
+    }
+
+    /// The ground net takes its ground pin's own name, `GND` from `nano.GND`, unless that name
+    /// is already a net's or is not a net name. A scene `nets` entry still wins, and a miss
+    /// here names nothing: `ground` reports it.
+    fn name_ground(
+        &self,
+        scene: &Scene,
+        named: &mut BTreeMap<usize, String>,
+        from_scene: &BTreeSet<usize>,
+    ) {
+        let Some(root) = self.ground_root(scene) else {
+            return;
+        };
+        if from_scene.contains(&root) || !named.contains_key(&root) {
+            return;
+        }
+        let Some(pin) = self.ground_pin(scene) else {
+            return;
+        };
+        if named.values().any(|other| other == &pin) {
+            return;
+        }
+        named.insert(root, pin);
+    }
+
+    /// The ground pin's own name: the scene's `ground` pin, else the smallest name a part's
+    /// `ground` pin has. A name the engine would refuse is left out.
+    fn ground_pin(&self, scene: &Scene) -> Option<String> {
+        let mut pins = Vec::new();
+        if let Some(r) = &scene.comp.ground {
+            pins.extend(r.segs.last().cloned());
+        } else {
+            for inst in 1..self.insts.len() {
+                if self.insts[inst].dropped.is_some() {
+                    continue;
+                }
+                let Some(r) = self.part(inst).and_then(|p| p.comp.ground.as_ref()) else {
+                    continue;
+                };
+                pins.extend(r.segs.last().cloned());
+            }
+        }
+        pins.into_iter().filter(|pin| net_name(pin)).min()
+    }
+
+    /// The one net every ground pin lands on, without a finding. [`ground`] reports a miss.
+    fn ground_root(&self, scene: &Scene) -> Option<usize> {
+        let mut roots = Vec::new();
+        if let Some(r) = &scene.comp.ground {
+            let key = self.lookup(ROOT, r).ok().flatten()?;
+            roots.push(self.root_of(key));
+        } else {
+            for inst in 1..self.insts.len() {
+                if self.insts[inst].dropped.is_some() {
+                    continue;
+                }
+                let Some(r) = self.part(inst).and_then(|p| p.comp.ground.as_ref()) else {
+                    continue;
+                };
+                let key = self.lookup(inst, r).ok().flatten()?;
+                roots.push(self.root_of(key));
+            }
+        }
+        let first = *roots.first()?;
+        roots.iter().all(|root| *root == first).then_some(first)
+    }
+
+    fn root_of(&self, key: usize) -> usize {
+        let mut root = key;
+        while self.parent[root] != root {
+            root = self.parent[root];
+        }
+        root
+    }
+
+    /// A ground the scene can name. A top part's `GND` pin, or the pin its `ground` names,
+    /// and `nano` when that part is there. With no such pin, a placeholder, never a board
+    /// the scene does not have.
+    fn ground_hint(&self) -> String {
+        format!(
+            "name one in the scene, as \"ground\": \"{}\"",
+            self.ground_example()
+        )
+    }
+
+    fn ground_example(&self) -> String {
+        let mut found = Vec::new();
+        for inst in 1..self.insts.len() {
+            if self.insts[inst].path.len() != 1 || self.insts[inst].dropped.is_some() {
+                continue;
+            }
+            let Some(part) = self.part(inst) else {
+                continue;
+            };
+            let Some(pin) = ground_pin_of(part) else {
+                continue;
+            };
+            found.push((self.insts[inst].path[0].as_str(), pin));
+        }
+        if let Some((id, pin)) = found.iter().find(|(id, _)| *id == "nano") {
+            return format!("{id}.{pin}");
+        }
+        found.sort_by_key(|(id, _)| *id);
+        match found.first() {
+            Some((id, pin)) => format!("{id}.{pin}"),
+            None => "<part>.<pin>".into(),
+        }
     }
 
     /// Every `ground` in the tree must land on one net. The scene's own, when it has one, wins.
@@ -1291,7 +1440,7 @@ impl<'p> Circuit<'p> {
             }
         }
         let span = scene.span;
-        let hint = "name one in the scene, as \"ground\": \"nano.GND\"";
+        let hint = self.ground_hint();
         let roots: Vec<(Option<&String>, &String)> = grounds
             .iter()
             .map(|(k, text)| (k.map(|k| self.find(k)).and_then(|r| nets.get(&r)), text))
@@ -1302,7 +1451,7 @@ impl<'p> Circuit<'p> {
                     Code::Ground,
                     span,
                     "nothing in the scene names a ground",
-                    hint.into(),
+                    hint.clone(),
                 );
             }
             return None;
@@ -1312,7 +1461,7 @@ impl<'p> Circuit<'p> {
                 Code::Ground,
                 span,
                 format!("the ground `{first_text}` is on no simulated net"),
-                hint.into(),
+                hint.clone(),
             );
             return None;
         };
@@ -1321,14 +1470,14 @@ impl<'p> Circuit<'p> {
                 Code::Ground,
                 span,
                 format!("the grounds `{first_text}` and `{other}` sit on different nets"),
-                hint.into(),
+                hint,
             );
             return None;
         }
         Some(first.clone())
     }
 
-    /// Writes netlist v0 and has the engine check it, even when the reader has findings, so
+    /// Writes netlist v1 and has the engine check it, even when the reader has findings, so
     /// one run reports both. A part the engine's schema refuses is left out with the finding
     /// that says why, and the rest are checked again.
     fn write(
@@ -1386,6 +1535,7 @@ impl<'p> Circuit<'p> {
                 object.insert("pins".into(), Value::Object(pins));
                 let mut object = Value::Object(object);
                 whole_numbers(&mut object);
+                drop_sources(&mut object);
                 parts.push(Written {
                     inst,
                     body: body.name.clone(),
@@ -1409,7 +1559,7 @@ impl<'p> Circuit<'p> {
         names.retain(|n| *n != ground_name);
         names.insert(0, ground_name.clone());
         let mut head = json!({
-            "version": 0,
+            "version": 1,
             "seed": scene.seed,
             "analysis": { "transient": { "stop_ps": Scene::STOP_PS, "max_step_ps": scene.max_step_ps, "grid_ps": GRID_PS } },
             "ground": ground_name,
@@ -1873,7 +2023,7 @@ fn around(pointer: &str) -> Vec<String> {
         .collect()
 }
 
-/// Netlist v0 without its parts.
+/// Netlist v1 without its parts.
 pub(super) struct Head(Value);
 
 impl Head {
@@ -1911,7 +2061,7 @@ fn world<'a>(scene: &Scene, models: impl Iterator<Item = &'a Value>) -> Option<V
     if read.is_empty() {
         return None;
     }
-    let level = |quantity: Quantity, value: f64| json!({ "value": value, "unit": quantity.unit(), "source": "user" });
+    let level = |quantity: Quantity, value: f64| json!({ "value": value, "unit": quantity.unit() });
     let mut world = Map::new();
     for quantity in read {
         let set = scene
@@ -1955,6 +2105,21 @@ fn reads(value: &Value, out: &mut BTreeSet<Quantity>) {
             map.values().for_each(|inner| reads(inner, out));
         }
         Value::Array(items) => items.iter().for_each(|inner| reads(inner, out)),
+        _ => {}
+    }
+}
+
+/// A part file says where each model value came from, and the netlist does not carry it: each
+/// object with a `value` and a `unit` loses its `source`.
+fn drop_sources(value: &mut Value) {
+    match value {
+        Value::Array(items) => items.iter_mut().for_each(drop_sources),
+        Value::Object(map) => {
+            if map.contains_key("value") && map.contains_key("unit") {
+                map.remove("source");
+            }
+            map.values_mut().for_each(drop_sources);
+        }
         _ => {}
     }
 }

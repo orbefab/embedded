@@ -11,7 +11,7 @@ use crate::finite::Finite;
 use crate::name::Ref;
 use crate::netlist::json::waveform::{ObjectVisitor, WirePosition};
 use crate::netlist::json::{FRACTION_UNIT, WireValue, resolve_schedule, resolve_value};
-use crate::netlist::{Schedule, Source, Value};
+use crate::netlist::{Schedule, Value};
 
 /// The top-level `world`: each quantity by name, a value object or `steps`. A repeated name is
 /// `netlist.syntax`.
@@ -128,7 +128,6 @@ pub(crate) fn resolve_world(wire: Option<WireWorld>, out: &mut Vec<Diagnostic>) 
         let schedule = schedule.unwrap_or_else(|| Schedule {
             initial: Value {
                 si: Finite::new(quantity.row().default).expect("a row's default is finite"),
-                source: Source::User,
             },
             events: Vec::new(),
         });
@@ -156,10 +155,7 @@ fn level(
         });
     }
     let ok = resolved.is_some() && in_range;
-    let value = resolved.unwrap_or(Value {
-        si,
-        source: Source::User,
-    });
+    let value = resolved.unwrap_or(Value { si });
     (ok, value)
 }
 
