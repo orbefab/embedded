@@ -1,0 +1,21 @@
+# Each file's licence, as REUSE 3.3 reads it (https://reuse.software/spec-3.3/). Of the
+# annotations whose path matches a file, the last one applies, and a file's own SPDX line wins.
+version = 1
+
+# The part files written here. model.py also carries its own SPDX line.
+[[annotations]]
+path = [
+  "part.jsonc",
+  "model.py",
+  "esp32s3-qfn56.glb",
+  "esp32s3-qfn56.anchors.json",
+  "asset.json",
+  "REUSE.toml",
+]
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
+# The mask ROM ELF is not UTF-8 and has no SPDX line. LICENSE-rom is Espressif's
+# Apache-2.0 text, unchanged. NOTICE quotes the third-party notices the ROM requires.
+[[annotations]]
+path = ["esp32s3_rev0_rom.elf", "LICENSE-rom", "NOTICE"]
+SPDX-License-Identifier = "Apache-2.0"

@@ -1,1 +1,2 @@
 packages/engine/tests/firmware/esp32s3/arduino/checks/knob/refs.json -diff
+parts/esp32s3-qfn56/esp32s3_rev0_rom.elf binary

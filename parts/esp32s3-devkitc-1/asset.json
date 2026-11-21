@@ -1,0 +1,46 @@
+{
+  "part": "esp32s3-devkitc-1",
+  "source": {
+    "script": "model.py",
+    "sha256": "dc19310303b42994d9ed8e986a932e8c334770be6dd1f14e03894c5fb41ec2de",
+    "bytes": 1595
+  },
+  "files": {
+    "esp32s3-devkitc-1.glb": {
+      "sha256": "c6a155783f3ae25a80bed492b596d2f2843c5d2bea6b27a5701d6d34178d3ccf",
+      "bytes": 1776
+    }
+  },
+  "box": {
+    "min": [-12.7, -31.432498, 0],
+    "max": [12.7, 31.432498, 1.6]
+  },
+  "kept_nodes": [],
+  "draw_calls": 1,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 0,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "pcb",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 1,
+      "primitives_out": 1
+    },
+    "composition": {
+      "children": 21,
+      "lowest_node": "pcb",
+      "z_mm": 0,
+      "draw_calls": 139
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "part": "esp32s3-wroom-1-n16r8",
+  "source": {
+    "script": "model.py",
+    "sha256": "88756c135d480969c4fd1c565cb7d044aca5613d070e2a0823617e307780c88c",
+    "bytes": 6211
+  },
+  "files": {
+    "esp32s3-wroom-1-n16r8.glb": {
+      "sha256": "a5fc321018eb009e331bba1378f4f98b6d42bedd32727c3b9631c22ee40f15e0",
+      "bytes": 141912
+    },
+    "esp32s3-wroom-1-n16r8.anchors.json": {
+      "sha256": "808575ead72001f9512b737bbf2bfa386b81ce264bf038cb28aa973c8c06867e",
+      "bytes": 4831
+    }
+  },
+  "box": {
+    "min": [-9.5, -13.25, 0],
+    "max": [9.5, 12.75, 3.1]
+  },
+  "kept_nodes": [],
+  "draw_calls": 3,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 41,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "pcb",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 43,
+      "primitives_out": 3
+    },
+    "composition": {
+      "children": 1,
+      "lowest_node": "pcb",
+      "z_mm": 0,
+      "draw_calls": 6
+    }
+  }
+}
