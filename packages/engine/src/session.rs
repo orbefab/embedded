@@ -1,6 +1,6 @@
 use orbe_model::Time;
 
-use crate::netlist::{Analysis, Document, Netlist, Transient};
+use crate::netlist::{Analysis, Netlist, Transient};
 
 use std::mem::size_of;
 
@@ -14,9 +14,8 @@ use crate::link::{Link, LinkRow};
 use crate::logic::{Change, Level};
 use crate::name::{Name, Ref};
 
-use crate::run_folder::{self, Observations, Results, RunFolder};
+use crate::run_folder::Observations;
 use crate::serial::{Serial as Delivered, SerialByte};
-use crate::timestamp::Timestamp;
 
 use crate::RunStats;
 use crate::active::native::Hosted;
@@ -33,7 +32,7 @@ use crate::observe::{self, Columns};
 use crate::op;
 use crate::ratings::{Ratings, Timing};
 use crate::step::Plan;
-use crate::tran::{self, Breakpoints, Outcome, Record, Rows};
+use crate::tran::{Breakpoints, Outcome, Record, Rows};
 use crate::watch::{self, Levels};
 
 mod input;
@@ -210,10 +209,6 @@ pub struct Session {
     /// keeps them, for `display.csv`.
     display: Vec<Rectangle>,
     pub(crate) record: Option<Record>,
-    /// The JSON the session opened from, which `export` writes back.
-    document: Option<Document>,
-    /// The bytes `record_document` read, until an input changes the netlist they hold.
-    opened: Option<Vec<u8>>,
     /// `net.floating` warnings. `start` fills this from the netlist.
     pub(crate) warnings: Vec<Diagnostic>,
     /// Rated quantities, sampled at t = 0 and on each accepted step.
@@ -307,9 +302,9 @@ pub enum Refused {
     /// An `op` analysis has no time to advance.
     Op,
     /// `solver.too_large`, or the operating point at t = 0 failed to settle or gave a quantity
-    /// that is not finite. For `record_document`, also `trace.too_large`.
+    /// that is not finite.
     Failed(Diagnostic),
-    /// The document `open_document` or `record_document` read is not a valid netlist.
+    /// The bytes `open_json` read are not a valid netlist.
     Invalid(Vec<Diagnostic>),
 }
 
@@ -385,54 +380,20 @@ impl Session {
     /// Solves the operating point at t = 0 and the step after it, and keeps no trace. The step
     /// after t = 0 can fail, and then the session it returns has faulted.
     pub fn open(netlist: Netlist) -> Result<Session, Refused> {
-        Session::open_with(netlist, None, BUDGET)
+        Session::open_with(netlist, BUDGET)
     }
 
-    /// `open` on the netlist `json` parses to, keeping `json` so `export` can write it back.
-    pub fn open_document(json: &[u8]) -> Result<Session, Refused> {
-        Session::open_document_with(json, &Blobs::new())
+    /// `open` on the netlist `json` parses to, finding each blob the netlist names in `blobs`.
+    pub fn open_json(json: &[u8], blobs: &Blobs) -> Result<Session, Refused> {
+        let netlist = crate::netlist::parse_with(json, blobs).map_err(Refused::Invalid)?;
+        Session::open_with(netlist, BUDGET)
     }
 
-    /// [`Session::open_document`], finding each blob the netlist names in `blobs`.
-    pub fn open_document_with(json: &[u8], blobs: &Blobs) -> Result<Session, Refused> {
-        let (document, netlist) = Document::parse_with(json, blobs).map_err(Refused::Invalid)?;
-        Session::open_with(netlist, Some(document), BUDGET)
-    }
-
-    /// `open_document` with the trace and logic history `orbe-run run` keeps, so `finish` can write
-    /// its run folder. It also refuses a grid with more rows than a trace holds, with
-    /// `trace.too_large`.
-    pub fn record_document(json: &[u8]) -> Result<Session, Refused> {
-        Session::record_document_with(json, &Blobs::new())
-    }
-
-    /// [`Session::record_document`], finding each blob the netlist names in `blobs`.
-    pub fn record_document_with(json: &[u8], blobs: &Blobs) -> Result<Session, Refused> {
-        let (document, netlist) = Document::parse_with(json, blobs).map_err(Refused::Invalid)?;
-        let transient = transient(&netlist)?;
-        let mut session = tran::record(netlist, &transient, Rows::Grid, Some(document))
-            .map_err(|unopened| Refused::Failed(unopened.error))?;
-        session.opened = Some(json.to_vec());
-        Ok(session)
-    }
-
-    fn open_with(
-        netlist: Netlist,
-        document: Option<Document>,
-        budget: Budget,
-    ) -> Result<Session, Refused> {
+    fn open_with(netlist: Netlist, budget: Budget) -> Result<Session, Refused> {
         let transient = transient(&netlist)?;
         let columns = Columns::new(&netlist);
-        Session::start(
-            netlist,
-            &transient,
-            Vec::new(),
-            budget,
-            columns,
-            None,
-            document,
-        )
-        .map_err(|failure| Refused::Failed(failure.error))
+        Session::start(netlist, &transient, Vec::new(), budget, columns, None)
+            .map_err(|failure| Refused::Failed(failure.error))
     }
 
     /// Solves t = 0 and records it when `rows` is set, then solves the step after it. Fails only
@@ -444,7 +405,6 @@ impl Session {
         budget: Budget,
         columns: Columns,
         rows: Option<Rows>,
-        document: Option<Document>,
     ) -> Result<Session, Box<StartFailure>> {
         let warnings = crate::topology::floating_nets(&netlist);
         let fail = |error| {
@@ -530,8 +490,6 @@ impl Session {
             link: Vec::new(),
             display: Vec::new(),
             record,
-            document,
-            opened: None,
             warnings,
             ratings,
             inputs,
@@ -806,7 +764,7 @@ impl Session {
     /// Forgets the serial bytes before `cursor`. An unrecorded session drains them. A recorded
     /// session only raises the read floor over the one list. Cursors keep counting from the
     /// first byte. A later `serial_since` is unchanged except on a cursor before `cursor`. A
-    /// recorded finish still writes every delivered byte to `serial.csv`.
+    /// recorded run still writes every delivered byte to `serial.csv`.
     pub fn forget_serial(&mut self, cursor: SerialCursor) {
         let cursor = u64::from(cursor);
         if self.record.is_some() {
@@ -815,30 +773,6 @@ impl Session {
         } else {
             forget_prefix(&mut self.serial, &mut self.serial_forgotten, cursor);
         }
-    }
-
-    /// Advances to `stop` and returns the run folder `orbe-run run` writes for the netlist this
-    /// session ran, stamped `created_at`. Its `netlist.json` is the bytes `record_document` read
-    /// when no input was applied, and otherwise the export of the ended session. `None` for a
-    /// session `open` or `open_document` made, which records nothing.
-    pub fn finish(mut self, created_at: Timestamp) -> Option<RunFolder> {
-        self.record.as_ref()?;
-        self.advance_to(self.transient.stop);
-        let json = match self.opened.take() {
-            Some(json) => json,
-            None => self.export()?,
-        };
-        // `outcome` consumes the session, and `render` reads the netlist's version and seed.
-        let netlist = self.circuit.netlist.clone();
-        let mut diagnostics = Vec::new();
-        let outcome = self.outcome(&mut diagnostics);
-        let results = Results::new(outcome.observations, outcome.trace, diagnostics);
-        Some(run_folder::render(
-            &json,
-            Some(&netlist),
-            &results,
-            created_at,
-        ))
     }
 
     /// The observations and trace of a recorded session advanced to its end, and its warnings,

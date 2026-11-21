@@ -41,6 +41,39 @@ pub fn run_netlist(netlist: &Path, out: &Path, blobs: &[PathBuf]) -> (u8, serde_
     (status.exit_code(), doc.unwrap())
 }
 
+/// Every serial byte `session` has read, as rows of `serial.csv`.
+pub fn serial_rows(session: &orbe_engine::Session) -> Vec<String> {
+    let usarts = session.usarts();
+    let (bytes, _) = session
+        .serial_since(orbe_engine::SerialCursor::default())
+        .expect("no byte was forgotten");
+    bytes
+        .iter()
+        .map(|byte| {
+            let (part, usart) = &usarts[usize::from(byte.usart)];
+            format!(
+                "{},{},{usart},{}",
+                byte.at.as_ps(),
+                part.as_str(),
+                byte.byte
+            )
+        })
+        .collect()
+}
+
+/// The rows of `folder`'s `serial.csv`, and none without one.
+pub fn csv_rows(folder: &orbe_engine::run_folder::RunFolder) -> Vec<String> {
+    let csv = folder
+        .file("traces/serial.csv")
+        .unwrap_or(b"t_ps,part,usart,byte\n");
+    std::str::from_utf8(csv)
+        .unwrap()
+        .lines()
+        .skip(1)
+        .map(str::to_string)
+        .collect()
+}
+
 pub fn repo(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")

@@ -14,7 +14,7 @@ use orbe_engine::name::Name;
 
 use orbe_engine::run_folder::RunFolder;
 use orbe_engine::timestamp::Timestamp;
-use orbe_engine::{Input, Session, Setting, Status};
+use orbe_engine::{EdgeCursor, Input, Session, Setting, Status};
 
 // The shortest to the longest seen over the board's two knob captures, 13 A and 18 B detents,
 // rounded outward to 0.1 ms: how long one detent held each line low, and the idle time from a
@@ -106,14 +106,17 @@ fn the_sketch_prints_the_counts_the_script_gives() {
     assert_eq!(serial_text(&done.folder), counts(&detents(&netlist)));
 }
 
+/// The example with its contacts taken off, opened, and each detent applied live, reads the
+/// logic edges and the serial rows a batch run of the example writes.
 #[test]
-fn detents_applied_live_finish_as_a_batch_run_of_the_export() {
+fn detents_applied_live_read_as_a_batch_run_of_the_example() {
     let mut netlist = netlist();
     let detents = detents(&netlist);
     for line in [Line::A, Line::B] {
         part_mut(&mut netlist, line.switch())["events"] = serde_json::json!([]);
     }
-    let mut session = Session::record_document(&serde_json::to_vec(&netlist).unwrap()).unwrap();
+    let bytes = serde_json::to_vec(&netlist).unwrap();
+    let mut session = Session::open(orbe_engine::netlist::parse(&bytes).unwrap()).unwrap();
     for detent in &detents {
         session.advance_to(Time::from_ps(detent.at_ps - LEAD_PS));
         let part = Name::new(detent.line.switch()).unwrap();
@@ -132,23 +135,13 @@ fn detents_applied_live_finish_as_a_batch_run_of_the_export() {
         }
     }
     assert_eq!(session.advance_to(Time::from_ps(u64::MAX)), Status::Stopped);
-    let export = session.export().unwrap();
-    let batch = orbe_engine::run(&export, stamp()).folder;
-    let folder = session.finish(stamp()).unwrap();
-    assert_eq!(paths(&folder), paths(&batch));
-    for ((path, got), (_, want)) in folder.files().zip(batch.files()) {
-        assert!(got == want, "{path} differs from a batch run of the export");
-    }
-    let committed = orbe_engine::run(&example_bytes(), stamp()).folder;
-    assert_eq!(paths(&folder), paths(&committed));
-    for ((path, got), (_, want)) in folder.files().zip(committed.files()) {
-        if path != "netlist.json" && path != "manifest.json" {
-            assert!(
-                got == want,
-                "{path} differs from the committed script's run"
-            );
-        }
-    }
+    assert_eq!(session.diagnostics(), []);
+    let example = example_bytes();
+    let results = orbe_engine::simulate(&orbe_engine::netlist::parse(&example).unwrap());
+    let (edges, _) = session.edges_since(EdgeCursor::default()).unwrap();
+    assert_eq!(edges, results.trace().unwrap().logic().unwrap().changes());
+    let committed = orbe_engine::run(&example, stamp()).folder;
+    assert_eq!(common::serial_rows(&session), common::csv_rows(&committed));
 }
 
 fn example_bytes() -> Vec<u8> {
@@ -222,10 +215,6 @@ fn serial_text(folder: &RunFolder) -> String {
         .skip(1)
         .map(|line| char::from(line.split(',').nth(3).unwrap().parse::<u8>().unwrap()))
         .collect()
-}
-
-fn paths(folder: &RunFolder) -> Vec<String> {
-    folder.files().map(|(path, _)| path.to_string()).collect()
 }
 
 fn stamp() -> Timestamp {

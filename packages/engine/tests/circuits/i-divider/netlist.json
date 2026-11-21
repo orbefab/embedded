@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": { "op": {} },
   "ground": "gnd",
@@ -9,20 +9,20 @@
       "name": "i1",
       "kind": "current_source",
       "pins": { "p": "vt", "n": "gnd" },
-      "current": { "value": 0.001, "unit": "A", "source": "user" }
+      "current": { "value": 0.001, "unit": "A" }
     },
     {
       "name": "r1",
       "kind": "resistor",
       "pins": { "a": "vt", "b": "gnd" },
-      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "resistance": { "value": 1000.0, "unit": "ohm" },
       "ratings": { "power": null }
     },
     {
       "name": "r2",
       "kind": "resistor",
       "pins": { "a": "vt", "b": "gnd" },
-      "resistance": { "value": 2000.0, "unit": "ohm", "source": "user" },
+      "resistance": { "value": 2000.0, "unit": "ohm" },
       "ratings": { "power": null }
     }
   ]

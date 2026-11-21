@@ -1,7 +1,6 @@
 //! Nets are ground first, then the rest by name. Parts are by name.
 
 pub mod bounce;
-mod document;
 pub mod elf;
 pub mod flash;
 pub(crate) mod json;
@@ -28,11 +27,10 @@ use crate::device::{
 };
 use crate::mcu::{Atmega328p, Esp32s3};
 
-pub use document::Document;
 pub use waveform::{Baud, Frame, Pulse, Serial, SerialEvent, SerialSend, Shape, Step, Waveform};
 
 /// The netlist `version`s this engine reads, ascending. See docs/engine/netlist.md.
-pub const VERSIONS: &[u64] = &[0];
+pub const VERSIONS: &[u64] = &[1];
 
 /// Parse and validate netlist.json bytes.
 ///
@@ -479,10 +477,7 @@ impl Schedule<Value> {
         debug_assert_ne!(self.after(at).si, level);
         self.events.push(Event {
             at,
-            to: Value {
-                si: level,
-                source: Source::User,
-            },
+            to: Value { si: level },
         });
     }
 }
@@ -522,11 +517,10 @@ pub struct Bounce {
     pub max_bounces: IntValue,
 }
 
-/// An integer quantity with where it came from.
+/// An integer quantity.
 #[derive(Clone, Debug, PartialEq)]
 pub struct IntValue {
     pub value: u64,
-    pub source: Source,
 }
 
 /// What a rating bounds. Each maps to one quantity and one diagnostic code.
@@ -545,41 +539,8 @@ impl RatingKind {
     }
 }
 
-/// A number in SI base units, with where it came from.
-/// The JSON `unit` was checked against the field and is not kept.
+/// A number in SI base units. The JSON `unit` was checked against the field and is not kept.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Value {
     pub si: Finite,
-    pub source: Source,
-}
-
-/// Provenance of a value. The solver does not compute with it.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Source {
-    /// Chosen by whoever wrote the scenario.
-    User,
-    /// Derived by a formula. `note` says which.
-    ClosedForm { note: String },
-    /// Read from a datasheet. `at` locates the cell, row, or figure.
-    Datasheet {
-        doc: String,
-        at: String,
-        basis: Basis,
-    },
-}
-
-/// Which figure of a datasheet a value is. A new basis keeps the netlist version.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Basis {
-    /// A typical column, or a typical-only curve.
-    Typical,
-    /// A minimum column.
-    Min,
-    /// A maximum column, recommended operating conditions included.
-    Max,
-    /// A part's stated value, such as a schematic value or a marked resistance.
-    Nominal,
-    /// An absolute maximum rating.
-    AbsoluteMax,
 }

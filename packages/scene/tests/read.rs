@@ -94,7 +94,7 @@ fn scene_params_are_user_values_and_defaults_fill_the_rest() {
     };
     assert_eq!(
         part("r1")["resistance"],
-        serde_json::json!({ "value": 220, "unit": "ohm", "source": "user" })
+        serde_json::json!({ "value": 220, "unit": "ohm" })
     );
     assert_eq!(part("r2")["resistance"]["value"], 10_000.0);
     assert_eq!(part("led1")["saturation_current"]["value"], 6.711e-10);
@@ -112,8 +112,9 @@ fn scene_params_are_user_values_and_defaults_fill_the_rest() {
         "c_reset is not simulated"
     );
     assert_eq!(
-        part("nano__r_l")["resistance"]["source"]["datasheet"]["at"],
-        "RN2A, 1K"
+        part("nano__r_l")["resistance"],
+        serde_json::json!({ "value": 1000, "unit": "ohm" }),
+        "a part file's value reaches the netlist without its source"
     );
 }
 
@@ -231,7 +232,7 @@ fn a_bounce_window_fills_the_switch_with_its_default_count() {
         .unwrap();
     assert_eq!(
         btn1["bounce"]["window"],
-        serde_json::json!({ "value": 1_000_000_000u64, "unit": "ps", "source": "user" })
+        serde_json::json!({ "value": 1_000_000_000u64, "unit": "ps" })
     );
     assert_eq!(btn1["bounce"]["max_bounces"]["value"], 2);
 }

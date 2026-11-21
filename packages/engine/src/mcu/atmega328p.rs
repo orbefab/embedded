@@ -23,7 +23,9 @@ use crate::netlist::json::{
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
 use crate::ratings::{Ceiling, PinRatings, PinWindow};
 use crate::watch::{Signal, Watch};
-use orbe_microchip::{Bridge, FuseBytes, PACKAGE, PORT_PINS, Pad, Port, port_index};
+use orbe_microchip::{
+    Bridge, FuseBytes, HexRule, PACKAGE, PORT_PINS, Pad, Port, parse_hex, port_index,
+};
 
 /// The supply at which the chip's own conductance draws `active_current` or `reset_current`,
 /// volt.
@@ -286,7 +288,7 @@ impl Atmega328p {
     /// The DIP's pins, which every part wires. A part may leave `ADC6` and `ADC7` out.
     pub(crate) const REQUIRED: usize = 28;
     /// The flash, 32 KB, DS40002061B Table 2-1.
-    pub const FLASH_BYTES: usize = 32 * 1024;
+    pub const FLASH_BYTES: usize = orbe_microchip::FLASH_BYTES;
 
     /// The net of `pad`'s pin, `None` for `ADC6` or `ADC7` when the part leaves it out.
     fn net(&self, pad: Pad) -> Option<NetId> {
@@ -408,13 +410,13 @@ pub(crate) fn resolve_atmega328p(ctx: ParseCtx<'_>, wire: WireAtmega328p) -> Opt
         out,
     )
     .and_then(|(pins, names)| one_ground(name, pins, nets, out).map(|pins| (pins, names)));
-    let firmware = match flash(&wire.firmware) {
+    let firmware = match parse_hex(&wire.firmware) {
         Ok(flash) => Some(Firmware { flash }),
-        Err((line, rule)) => {
+        Err(fault) => {
             out.push(Diagnostic::NetlistFirmware {
                 part: part_ref.clone(),
-                line,
-                rule,
+                line: fault.line,
+                rule: firmware_rule(fault.rule),
             });
             None
         }
@@ -565,81 +567,16 @@ fn resolve_fuses(part: &Ref, wire: &WireFuses, out: &mut Vec<Diagnostic>) -> Opt
     })
 }
 
-/// Flash from Intel HEX text, one record a line. Records 00 to 05 are read: 02 and 04 move the
-/// base address, and 01, 03 and 05 may name a start address, which a part at reset does not
-/// use. A gap is erased flash, `0xFF`, and no byte is written twice. Text with no data record
-/// would leave the whole flash erased, which no build makes, so it is refused. A fault names its
-/// 1-based line.
-fn flash(text: &str) -> Result<Vec<u8>, (Option<usize>, FirmwareRule)> {
-    let mut flash = Vec::new();
-    let mut placed = Vec::new();
-    let mut base = 0;
-    let mut ended = false;
-    for (index, line) in text.lines().enumerate() {
-        if line.is_empty() {
-            continue;
-        }
-        let fault = |rule| (Some(index + 1), rule);
-        if ended {
-            return Err(fault(FirmwareRule::AfterEnd));
-        }
-        let bytes = record(line).ok_or(fault(FirmwareRule::Record))?;
-        if bytes.iter().fold(0u8, |sum, &byte| sum.wrapping_add(byte)) != 0 {
-            return Err(fault(FirmwareRule::Checksum));
-        }
-        let address = usize::from(u16::from_be_bytes([bytes[1], bytes[2]]));
-        let data = &bytes[4..bytes.len() - 1];
-        let upper = |shift: u32| match *data {
-            [high, low] => Ok(usize::from(u16::from_be_bytes([high, low])) << shift),
-            _ => Err(fault(FirmwareRule::Record)),
-        };
-        match bytes[3] {
-            0x00 => {
-                let start = base + address;
-                let end = start + data.len();
-                if end > Atmega328p::FLASH_BYTES {
-                    return Err(fault(FirmwareRule::PastFlash));
-                }
-                if flash.len() < end {
-                    flash.resize(end, 0xFF);
-                    placed.resize(end, false);
-                }
-                if placed[start..end].contains(&true) {
-                    return Err(fault(FirmwareRule::Overlap));
-                }
-                flash[start..end].copy_from_slice(data);
-                placed[start..end].fill(true);
-            }
-            0x01 if data.is_empty() => ended = true,
-            0x01 => return Err(fault(FirmwareRule::Record)),
-            0x02 => base = upper(4)?,
-            0x04 => base = upper(16)?,
-            0x03 | 0x05 if data.len() == 4 => {}
-            0x03 | 0x05 => return Err(fault(FirmwareRule::Record)),
-            _ => return Err(fault(FirmwareRule::RecordType)),
-        }
+/// The rule a firmware breaks for each rule the chip's HEX reader names.
+fn firmware_rule(rule: HexRule) -> FirmwareRule {
+    match rule {
+        HexRule::Record => FirmwareRule::Record,
+        HexRule::Checksum => FirmwareRule::Checksum,
+        HexRule::RecordType => FirmwareRule::RecordType,
+        HexRule::AfterEnd => FirmwareRule::AfterEnd,
+        HexRule::NoEnd => FirmwareRule::NoEnd,
+        HexRule::Empty => FirmwareRule::Empty,
+        HexRule::PastFlash => FirmwareRule::PastFlash,
+        HexRule::Overlap => FirmwareRule::Overlap,
     }
-    if !ended {
-        return Err((None, FirmwareRule::NoEnd));
-    }
-    if flash.is_empty() {
-        return Err((None, FirmwareRule::Empty));
-    }
-    Ok(flash)
-}
-
-/// The record's bytes, its count through its checksum, when its length matches its count.
-fn record(line: &str) -> Option<Vec<u8>> {
-    let digits = line.strip_prefix(':')?.as_bytes();
-    if !digits.len().is_multiple_of(2) {
-        return None;
-    }
-    let bytes: Vec<u8> = digits
-        .chunks(2)
-        .map(|pair| {
-            let nibble = |digit: u8| char::from(digit).to_digit(16);
-            Some((nibble(pair[0])? << 4 | nibble(pair[1])?) as u8)
-        })
-        .collect::<Option<_>>()?;
-    (bytes.len() >= 5 && bytes.len() == usize::from(bytes[0]) + 5).then_some(bytes)
 }

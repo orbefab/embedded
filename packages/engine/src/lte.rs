@@ -913,26 +913,26 @@ mod tests {
     fn the_op_amp_s_integrator_does_not_warn() {
         let netlist = crate::netlist::parse(
             br#"{
-              "version": 0,
+              "version": 1,
               "seed": 0,
               "analysis": { "transient": { "stop_ps": 10000000000, "max_step_ps": 10000000000, "grid_ps": 10000000000 } },
               "ground": "gnd",
               "nets": ["gnd", "vcc", "out"],
               "parts": [
                 { "name": "vs", "kind": "voltage_source", "pins": { "p": "vcc", "n": "gnd" },
-                  "voltage": { "value": 5.0, "unit": "V", "source": "user" } },
+                  "voltage": { "value": 5.0, "unit": "V" } },
                 { "name": "u1", "kind": "op_amp",
                   "pins": { "in_p": "out", "in_n": "out", "out": "out", "vcc": "vcc", "gnd": "gnd" },
-                  "gain_bandwidth": { "value": 1e6, "unit": "Hz", "source": "user" },
-                  "slew_rate": { "value": 1e6, "unit": "V/s", "source": "user" },
-                  "open_loop_gain": { "value": 1e5, "unit": "1", "source": "user" },
-                  "input_bias_current": { "value": 1.5e-8, "unit": "A", "source": "user" },
-                  "swing_high": { "value": 0.0025, "unit": "V", "source": "user" },
-                  "swing_low": { "value": 0.051, "unit": "V", "source": "user" },
-                  "output_resistance": { "value": 30.0, "unit": "ohm", "source": "user" },
-                  "short_circuit_current": { "value": 0.04, "unit": "A", "source": "user" },
-                  "supply_current": { "value": 1.05e-4, "unit": "A", "source": "user" },
-                  "input_headroom": { "value": 0.0, "unit": "V", "source": "user" } }
+                  "gain_bandwidth": { "value": 1e6, "unit": "Hz" },
+                  "slew_rate": { "value": 1e6, "unit": "V/s" },
+                  "open_loop_gain": { "value": 1e5, "unit": "1" },
+                  "input_bias_current": { "value": 1.5e-8, "unit": "A" },
+                  "swing_high": { "value": 0.0025, "unit": "V" },
+                  "swing_low": { "value": 0.051, "unit": "V" },
+                  "output_resistance": { "value": 30.0, "unit": "ohm" },
+                  "short_circuit_current": { "value": 0.04, "unit": "A" },
+                  "supply_current": { "value": 1.05e-4, "unit": "A" },
+                  "input_headroom": { "value": 0.0, "unit": "V" } }
               ]
             }"#,
         )
@@ -1537,19 +1537,19 @@ mod tests {
     fn split() -> (crate::netlist::Netlist, Layout) {
         let netlist = crate::netlist::parse(
             br#"{
-              "version": 0,
+              "version": 1,
               "seed": 0,
               "analysis": { "transient": { "stop_ps": 1000, "max_step_ps": 1000, "grid_ps": 1000 } },
               "ground": "gnd",
               "nets": ["gnd", "a", "b"],
               "parts": [
                 { "name": "m1", "kind": "resistor", "pins": { "a": "a", "b": "gnd" },
-                  "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+                  "resistance": { "value": 1000.0, "unit": "ohm" },
                   "ratings": { "power": null } },
                 { "name": "n1", "kind": "capacitor", "pins": { "a": "a", "b": "gnd" },
-                  "capacitance": { "value": 1e-9, "unit": "F", "source": "user" }, "initial": null },
+                  "capacitance": { "value": 1e-9, "unit": "F" }, "initial": null },
                 { "name": "o1", "kind": "capacitor", "pins": { "a": "b", "b": "gnd" },
-                  "capacitance": { "value": 2e-9, "unit": "F", "source": "user" }, "initial": null }
+                  "capacitance": { "value": 2e-9, "unit": "F" }, "initial": null }
               ]
             }"#,
         )
@@ -1587,36 +1587,36 @@ mod tests {
     fn charges_are_the_parts_capacitors() {
         let netlist = crate::netlist::parse(
             br#"{
-              "version": 0,
+              "version": 1,
               "seed": 0,
               "analysis": { "transient": { "stop_ps": 1000, "max_step_ps": 1000, "grid_ps": 1000 } },
               "ground": "gnd",
               "nets": ["gnd", "b", "c"],
               "parts": [
                 { "name": "c1", "kind": "capacitor", "pins": { "a": "c", "b": "gnd" },
-                  "capacitance": { "value": 1e-9, "unit": "F", "source": "user" }, "initial": null },
+                  "capacitance": { "value": 1e-9, "unit": "F" }, "initial": null },
                 { "name": "q1", "kind": "npn",
                   "pins": { "collector": "c", "base": "b", "emitter": "gnd" },
-                  "saturation_current": { "value": 1e-14, "unit": "A", "source": "user" },
-                  "forward_beta": { "value": 100.0, "unit": "1", "source": "user" },
-                  "reverse_beta": { "value": 1.0, "unit": "1", "source": "user" },
-                  "forward_emission": { "value": 1.0, "unit": "1", "source": "user" },
-                  "reverse_emission": { "value": 1.0, "unit": "1", "source": "user" },
-                  "early_voltage": { "value": 100.0, "unit": "V", "source": "user" },
-                  "base_resistance": { "value": 10.0, "unit": "ohm", "source": "user" },
-                  "collector_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
-                  "emitter_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
-                  "base_emitter_capacitance": { "value": 8e-12, "unit": "F", "source": "user" },
-                  "base_collector_capacitance": { "value": 4e-12, "unit": "F", "source": "user" },
+                  "saturation_current": { "value": 1e-14, "unit": "A" },
+                  "forward_beta": { "value": 100.0, "unit": "1" },
+                  "reverse_beta": { "value": 1.0, "unit": "1" },
+                  "forward_emission": { "value": 1.0, "unit": "1" },
+                  "reverse_emission": { "value": 1.0, "unit": "1" },
+                  "early_voltage": { "value": 100.0, "unit": "V" },
+                  "base_resistance": { "value": 10.0, "unit": "ohm" },
+                  "collector_resistance": { "value": 1.0, "unit": "ohm" },
+                  "emitter_resistance": { "value": 1.0, "unit": "ohm" },
+                  "base_emitter_capacitance": { "value": 8e-12, "unit": "F" },
+                  "base_collector_capacitance": { "value": 4e-12, "unit": "F" },
                   "ratings": { "current": null, "power": null } },
                 { "name": "m1", "kind": "nmos",
                   "pins": { "drain": "c", "gate": "b", "source": "gnd" },
-                  "transconductance_parameter": { "value": 0.0468, "unit": "A/V^2", "source": "user" },
-                  "threshold_voltage": { "value": 1.08, "unit": "V", "source": "user" },
-                  "channel_length_modulation": { "value": 0.0, "unit": "1/V", "source": "user" },
-                  "gate_source_capacitance": { "value": 55e-12, "unit": "F", "source": "user" },
-                  "gate_drain_capacitance": { "value": 5e-12, "unit": "F", "source": "user" },
-                  "drain_source_capacitance": { "value": 20e-12, "unit": "F", "source": "user" },
+                  "transconductance_parameter": { "value": 0.0468, "unit": "A/V^2" },
+                  "threshold_voltage": { "value": 1.08, "unit": "V" },
+                  "channel_length_modulation": { "value": 0.0, "unit": "1/V" },
+                  "gate_source_capacitance": { "value": 55e-12, "unit": "F" },
+                  "gate_drain_capacitance": { "value": 5e-12, "unit": "F" },
+                  "drain_source_capacitance": { "value": 20e-12, "unit": "F" },
                   "ratings": { "current": null, "power": null } }
               ]
             }"#,
@@ -1699,30 +1699,30 @@ mod tests {
     fn two_internal() -> (crate::netlist::Netlist, element::Pair, PartId, PartId) {
         let netlist = crate::netlist::parse(
             br#"{
-              "version": 0,
+              "version": 1,
               "seed": 0,
               "analysis": { "op": {} },
               "ground": "gnd",
               "nets": ["gnd", "a", "b"],
               "parts": [
                 { "name": "a_r", "kind": "resistor", "pins": { "a": "a", "b": "gnd" },
-                  "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+                  "resistance": { "value": 1000.0, "unit": "ohm" },
                   "ratings": { "power": null } },
                 { "name": "b_r", "kind": "resistor", "pins": { "a": "b", "b": "gnd" },
-                  "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+                  "resistance": { "value": 1000.0, "unit": "ohm" },
                   "ratings": { "power": null } },
                 { "name": "c_n", "kind": "capacitor", "pins": { "a": "a", "b": "gnd" },
-                  "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
+                  "capacitance": { "value": 1e-6, "unit": "F" },
                   "initial": null },
                 { "name": "d_o", "kind": "capacitor", "pins": { "a": "b", "b": "gnd" },
-                  "capacitance": { "value": 1e-9, "unit": "F", "source": "user" },
+                  "capacitance": { "value": 1e-9, "unit": "F" },
                   "initial": null },
                 { "name": "e_s", "kind": "voltage_source", "pins": { "p": "a", "n": "gnd" },
-                  "voltage": { "value": 2.0, "unit": "V", "source": "user" } },
+                  "voltage": { "value": 2.0, "unit": "V" } },
                 { "name": "f_s", "kind": "voltage_source", "pins": { "p": "b", "n": "gnd" },
-                  "voltage": { "value": 3.0, "unit": "V", "source": "user" } },
+                  "voltage": { "value": 3.0, "unit": "V" } },
                 { "name": "g_s", "kind": "voltage_source", "pins": { "p": "b", "n": "gnd" },
-                  "voltage": { "value": 2.5, "unit": "V", "source": "user" } }
+                  "voltage": { "value": 2.5, "unit": "V" } }
               ]
             }"#,
         )
@@ -2291,31 +2291,31 @@ mod tests {
 
         let netlist = crate::netlist::parse(
             br#"{
-              "version": 0,
+              "version": 1,
               "seed": 0,
               "analysis": { "op": {} },
               "ground": "gnd",
               "nets": ["gnd", "a", "b"],
               "parts": [
                 { "name": "a_r", "kind": "resistor", "pins": { "a": "a", "b": "gnd" },
-                  "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+                  "resistance": { "value": 1000.0, "unit": "ohm" },
                   "ratings": { "power": null } },
                 { "name": "b_r", "kind": "resistor", "pins": { "a": "b", "b": "gnd" },
-                  "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+                  "resistance": { "value": 1000.0, "unit": "ohm" },
                   "ratings": { "power": null } },
                 { "name": "c_m", "kind": "resistor", "pins": { "a": "a", "b": "b" },
-                  "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+                  "resistance": { "value": 1000.0, "unit": "ohm" },
                   "ratings": { "power": null } },
                 { "name": "d_c", "kind": "capacitor", "pins": { "a": "a", "b": "gnd" },
-                  "capacitance": { "value": 1e-9, "unit": "F", "source": "user" },
+                  "capacitance": { "value": 1e-9, "unit": "F" },
                   "initial": null },
                 { "name": "e_s", "kind": "voltage_source", "pins": { "p": "a", "n": "gnd" },
-                  "voltage": { "value": 2.0, "unit": "V", "source": "user" } },
+                  "voltage": { "value": 2.0, "unit": "V" } },
                 { "name": "f_s", "kind": "voltage_source", "pins": { "p": "b", "n": "gnd" },
-                  "voltage": { "value": 3.0, "unit": "V", "source": "user" } },
+                  "voltage": { "value": 3.0, "unit": "V" } },
                 { "name": "g_l", "kind": "inductor", "pins": { "a": "a", "b": "gnd" },
-                  "inductance": { "value": 1.0, "unit": "H", "source": "user" },
-                  "series_resistance": { "value": 10.0, "unit": "ohm", "source": "user" } }
+                  "inductance": { "value": 1.0, "unit": "H" },
+                  "series_resistance": { "value": 10.0, "unit": "ohm" } }
               ]
             }"#,
         )

@@ -1,6 +1,6 @@
 use orbe_model::Time;
 
-use orbe_engine::netlist::{self, Analysis, Contact, Model, Netlist};
+use orbe_engine::netlist::{self, Analysis, Appended, Model, Netlist};
 
 use crate::common;
 
@@ -157,7 +157,7 @@ fn reads_are_the_batch(name: &str, stop_ps: u64, seed: u64) {
 #[test]
 fn a_live_potentiometer_sets_the_divider_voltage() {
     let json = r#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "transient": { "stop_ps": 10000, "max_step_ps": 1000, "grid_ps": 1000 } },
       "ground": "gnd",
@@ -167,14 +167,14 @@ fn a_live_potentiometer_sets_the_divider_voltage() {
           "name": "v1",
           "kind": "voltage_source",
           "pins": { "p": "vin", "n": "gnd" },
-          "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+          "voltage": { "value": 5.0, "unit": "V" }
         },
         {
           "name": "rv1",
           "kind": "potentiometer",
           "pins": { "a": "vin", "wiper": "mid", "b": "gnd" },
-          "resistance": { "value": 10000.0, "unit": "ohm", "source": "user" },
-          "position": { "value": 0.25, "unit": "1", "source": "user" }
+          "resistance": { "value": 10000.0, "unit": "ohm" },
+          "position": { "value": 0.25, "unit": "1" }
         }
       ]
     }"#;
@@ -336,77 +336,22 @@ fn a_grid_past_the_row_limit_still_opens_a_session() {
     assert_eq!(probe.get(&"#net.vin".parse().unwrap()).unwrap().get(), 5.0);
 }
 
-/// A session opened on a document exports it with each input in its switch's events. One
-/// opened on a netlist has no document to export.
+/// `open_json` refuses bytes that are not a netlist with what parse found, and opens the netlist
+/// bytes that are.
 #[ignore = "full tier"]
 #[test]
-fn a_session_opened_on_a_document_exports_its_inputs() {
-    let json = std::fs::read(example_path("rc-switch")).unwrap();
-    let mut session = Session::open_document(&json).unwrap();
-    session.advance_to(Time::from_ps(40_000_000_000));
-    let input = Input {
-        part: Name::new("sw1").unwrap(),
-        at: Time::ZERO,
-        setting: Setting::Contact(Contact::Closed),
-    };
-    let landed = session.apply(&input).unwrap().at;
-    assert_eq!(session.advance_to(Time::from_ps(u64::MAX)), Status::Stopped);
-    let exported = netlist::parse(&session.export().unwrap()).unwrap();
-    let id = exported.part_id(&input.part).unwrap();
-    let Model::Switch(switch) = &exported.part(id).model else {
-        panic!("sw1 is a switch");
-    };
-    let last = switch.events.events().last().unwrap();
-    assert_eq!((last.at, last.to), (landed, Contact::Closed));
-    assert_eq!(Session::open(exported).unwrap().export(), None);
-    assert!(matches!(
-        Session::open_document(b"{}"),
-        Err(Refused::Invalid(_))
-    ));
-}
-
-/// `record_document` refuses what `open_document` refuses, and a grid with more rows than a
-/// trace holds, with the diagnostic `simulate` reports.
-#[ignore = "full tier"]
-#[test]
-fn a_recorded_session_refuses_an_op_an_invalid_document_and_a_grid_past_the_row_limit() {
-    let divider = std::fs::read(example_path("divider")).unwrap();
-    assert!(matches!(
-        Session::record_document(&divider),
-        Err(Refused::Op)
-    ));
-    assert!(matches!(
-        Session::record_document(b"{}"),
-        Err(Refused::Invalid(_))
-    ));
-    let json = transient(
-        1_000_000_000_000,
-        1_000,
-        r#""gnd","vin""#,
-        &[
-            &source_on("v1", "vin", 5.0),
-            &resistor("r1", "vin", "gnd", 1000.0),
-        ],
-    );
-    let Err(Refused::Failed(diagnostic)) = Session::record_document(json.as_bytes()) else {
+fn open_json_refuses_bytes_that_are_not_a_netlist() {
+    let Err(Refused::Invalid(found)) = Session::open_json(b"{}", &Blobs::new()) else {
         panic!("a session opens");
     };
-    assert_eq!(diagnostic.code(), "trace.too_large");
-    let netlist = netlist::parse(json.as_bytes()).unwrap();
     assert_eq!(
-        orbe_engine::simulate(&netlist).diagnostics(),
-        std::slice::from_ref(&diagnostic)
+        found,
+        netlist::parse(b"{}").unwrap_err(),
+        "the diagnostics parse gives"
     );
-}
-
-#[ignore = "full tier"]
-#[test]
-fn a_session_that_records_nothing_finishes_to_no_folder() {
-    let json = std::fs::read(example_path("v-steps")).unwrap();
-    let at = Timestamp::from_unix_seconds(0);
-    assert!(Session::open_document(&json).unwrap().finish(at).is_none());
-    let netlist = netlist::parse(&json).unwrap();
-    assert!(Session::open(netlist).unwrap().finish(at).is_none());
+    let json = std::fs::read(example_path("rc-switch")).unwrap();
+    let session = Session::open_json(&json, &Blobs::new()).unwrap();
+    assert_eq!(session.status(), Status::Running);
 }
 
 /// A cursor is the count of bytes read, so a count read back resumes the log there.
@@ -674,37 +619,36 @@ fn advance_at(session: &mut Session, times: &[u64]) {
     }
 }
 
-/// `open` and `record_document` on one chip netlist, each advanced in its own splits after the
-/// same position input, return the same `edges_since(0)`. The recorded list is what `logic.vcd`
-/// is written from.
+/// `open` on one chip netlist, advanced in splits around a position input, returns the
+/// `edges_since(0)` a batch run of the netlist with that position appended at its landing holds
+/// in `logic.vcd`.
 #[ignore = "full tier"]
 #[test]
-fn an_open_edge_log_matches_a_recorded_one() {
+fn an_open_edge_log_matches_a_batch_run_with_the_input() {
     let bytes = std::fs::read(example_path("atmega-analog-serial")).unwrap();
     let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let stop = document["analysis"]["transient"]["stop_ps"]
         .as_u64()
         .unwrap();
     let input_at = 1_000_000_000;
-    let mut opened = Session::open(netlist::parse(&bytes).unwrap()).unwrap();
-    let mut recorded = Session::record_document(&bytes).unwrap();
+    let netlist = netlist::parse(&bytes).unwrap();
+    let mut opened = Session::open(netlist.clone()).unwrap();
     advance_at(&mut opened, &[400_000_000, input_at]);
-    advance_at(&mut recorded, &[input_at]);
     let input = Input {
         part: Name::new("rv1").unwrap(),
         at: Time::from_ps(input_at),
         setting: Setting::Level(Finite::new(0.2).unwrap()),
     };
     let open_landed = opened.apply(&input).unwrap().at;
-    let recorded_landed = recorded.apply(&input).unwrap().at;
-    assert_eq!(open_landed, recorded_landed);
     advance_at(&mut opened, &[3_000_000_000, 9_000_000_000, stop]);
-    advance_at(&mut recorded, &[stop]);
     assert_eq!(opened.status(), Status::Stopped);
-    assert_eq!(recorded.status(), Status::Stopped);
+    let mut landed = netlist;
+    let rv1 = landed.part_id(&input.part).unwrap();
+    landed.append(rv1, open_landed, Appended::Level(Finite::new(0.2).unwrap()));
+    let results = orbe_engine::simulate(&landed);
+    let batch_edges = results.trace().unwrap().logic().unwrap().changes();
     let opened_edges = edge_list(&opened);
-    let recorded_edges = edge_list(&recorded);
-    assert_eq!(opened_edges, recorded_edges);
+    assert_eq!(opened_edges, batch_edges);
     assert!(opened_edges.len() >= 3);
     assert!(
         opened_edges.iter().any(|change| change.at >= open_landed),
@@ -787,24 +731,16 @@ fn serial_floor(session: &mut Session, which: &str) {
     assert_eq!(u64::from(cursor), end, "{which}");
 }
 
-/// On a recorded session and on an unrecorded one, `forget_edges(f)` and `forget_serial(f)`
-/// leave `[f..]` readable, a cursor between `f` and the end reads that tail, and a forget past
-/// the end reads nothing and keeps the cursor.
+/// `forget_edges(f)` and `forget_serial(f)` leave `[f..]` readable, a cursor between `f` and the
+/// end reads that tail, and a forget past the end reads nothing and keeps the cursor.
 #[ignore = "full tier"]
 #[test]
 fn a_forget_reads_the_tail_through_the_floor() {
     let bytes = std::fs::read(example_path("atmega-analog-serial")).unwrap();
-    for recorded in [true, false] {
-        let mut session = if recorded {
-            Session::record_document(&bytes).unwrap()
-        } else {
-            Session::open(netlist::parse(&bytes).unwrap()).unwrap()
-        };
-        assert_eq!(session.advance_to(Time::from_ps(u64::MAX)), Status::Stopped);
-        let which = if recorded { "recorded" } else { "open" };
-        edges_floor(&mut session, which);
-        serial_floor(&mut session, which);
-    }
+    let mut session = Session::open(netlist::parse(&bytes).unwrap()).unwrap();
+    assert_eq!(session.advance_to(Time::from_ps(u64::MAX)), Status::Stopped);
+    edges_floor(&mut session, "open");
+    serial_floor(&mut session, "open");
 }
 
 /// Two readers, a forget, and `levels` as the fold of the changes before `edge_cursor`.
@@ -865,46 +801,6 @@ fn an_edge_cursor_is_the_count_of_changes_read() {
     session.forget_edges(mid);
     assert!(session.edges_since(slow).is_none());
     assert_eq!(session.edge_cursor(), end);
-}
-
-/// `forget_serial` and `forget_edges` leave the folder `finish` writes unchanged.
-#[ignore = "full tier"]
-#[test]
-fn a_recorded_finish_keeps_what_a_forget_dropped() {
-    let stop = 5_000_000_000u64;
-    let mut json: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(example_path("atmega-analog-serial")).unwrap())
-            .unwrap();
-    let transient = &mut json["analysis"]["transient"];
-    for key in ["stop_ps", "max_step_ps", "grid_ps"] {
-        transient[key] = transient[key].as_u64().unwrap().min(stop).into();
-    }
-    let bytes = serde_json::to_vec(&json).unwrap();
-    let at = Timestamp::from_unix_seconds(0);
-    let mut plain = Session::record_document(&bytes).unwrap();
-    assert_eq!(plain.advance_to(Time::from_ps(stop)), Status::Stopped);
-    let plain = plain.finish(at).unwrap();
-    let mut forgotten = Session::record_document(&bytes).unwrap();
-    assert_eq!(forgotten.advance_to(Time::from_ps(stop)), Status::Stopped);
-    let (serial, _) = forgotten
-        .serial_since(SerialCursor::default())
-        .expect("cursor still held");
-    assert!(serial.len() >= 2);
-    let (edges, _) = forgotten
-        .edges_since(EdgeCursor::default())
-        .expect("cursor still held");
-    assert!(!edges.is_empty());
-    forgotten.forget_serial(SerialCursor::from(1));
-    forgotten.forget_edges(EdgeCursor::from(1));
-    assert!(forgotten.serial_since(SerialCursor::default()).is_none());
-    assert!(forgotten.edges_since(EdgeCursor::default()).is_none());
-    let folder = forgotten.finish(at).unwrap();
-    let plain_paths: Vec<String> = plain.files().map(|(path, _)| path.to_string()).collect();
-    let folder_paths: Vec<String> = folder.files().map(|(path, _)| path.to_string()).collect();
-    assert_eq!(folder_paths, plain_paths);
-    for path in &plain_paths {
-        assert_eq!(folder.file(path), plain.file(path), "{path}");
-    }
 }
 
 fn column_integral(session: &Session, reference: &str) -> f64 {
@@ -1007,8 +903,8 @@ fn a_non_negative_divider_integral_never_falls_on_accepted_steps() {
 fn closing_switch(edge: u64, ohm: f64) -> String {
     format!(
         r#"{{ "name": "sw1", "kind": "switch", "pins": {{ "a": "vin", "b": "vout" }},
-          "on_resistance": {{ "value": {ohm:?}, "unit": "ohm", "source": "user" }},
-          "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+          "on_resistance": {{ "value": {ohm:?}, "unit": "ohm" }},
+          "off_resistance": {{ "value": 1e9, "unit": "ohm" }},
           "initial": "open", "events": [{{ "t_ps": {edge}, "state": "closed" }}], "bounce": null }}"#
     )
 }
@@ -1082,12 +978,12 @@ const LED: &str = r#"{
   "name": "led1",
   "kind": "led",
   "pins": { "anode": "vled", "cathode": "gnd" },
-  "saturation_current": { "value": 6.711e-10, "unit": "A", "source": "user" },
-  "emission_coefficient": { "value": 4.427, "unit": "1", "source": "user" },
-  "series_resistance": { "value": 2.115, "unit": "ohm", "source": "user" },
+  "saturation_current": { "value": 6.711e-10, "unit": "A" },
+  "emission_coefficient": { "value": 4.427, "unit": "1" },
+  "series_resistance": { "value": 2.115, "unit": "ohm" },
   "ratings": {
-    "current": { "value": 0.03, "unit": "A", "source": "user" },
-    "power": { "value": 0.075, "unit": "W", "source": "user" }
+    "current": { "value": 0.03, "unit": "A" },
+    "power": { "value": 0.075, "unit": "W" }
   }
 }"#;
 
@@ -1134,16 +1030,11 @@ fn folder_warnings(which: &str, bytes: &[u8], blobs: &Blobs, stop: Time) -> Vec<
     let results = orbe_engine::simulate(&netlist);
     let from_run = session_warnings(results.diagnostics());
     drop(results);
-    let mut opened = Session::open_document_with(bytes, blobs).expect(which);
+    let mut opened = Session::open_json(bytes, blobs).expect(which);
     opened.advance_to(stop);
     let open_found = opened.diagnostics();
     drop(opened);
-    let mut recorded = Session::record_document_with(bytes, blobs).expect(which);
-    recorded.advance_to(stop);
-    let recorded_found = recorded.diagnostics();
-    let folder = recorded
-        .finish(Timestamp::from_unix_seconds(0))
-        .expect(which);
+    let folder = orbe_engine::run_with(bytes, blobs, Timestamp::from_unix_seconds(0)).folder;
     let parsed: serde_json::Value =
         serde_json::from_slice(folder.file("diagnostics.json").unwrap()).unwrap();
     let from_file: Vec<serde_json::Value> = parsed
@@ -1154,7 +1045,6 @@ fn folder_warnings(which: &str, bytes: &[u8], blobs: &Blobs, stop: Time) -> Vec<
         .cloned()
         .collect();
     assert_eq!(open_found, from_run, "{which} open");
-    assert_eq!(recorded_found, from_run, "{which} recorded");
     assert_eq!(
         serde_json::to_value(&from_run).unwrap(),
         serde_json::Value::Array(from_file),
@@ -1174,7 +1064,7 @@ fn a_floating_net_is_listed_when_the_session_opens() {
             &source_on("v1", "vin", 5.0),
             &resistor("r1", "vin", "gnd", 1000.0),
             r#"{ "name": "c1", "kind": "capacitor", "pins": { "a": "lonely", "b": "gnd" },
-              "capacitance": { "value": 1e-9, "unit": "F", "source": "user" }, "initial": null }"#,
+              "capacitance": { "value": 1e-9, "unit": "F" }, "initial": null }"#,
         ],
     );
     let bytes = json.as_bytes();
@@ -1202,7 +1092,7 @@ fn pulsed_led() -> String {
     let step = 1_000_000_000u64;
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {{ "transient": {{ "stop_ps": {stop}, "max_step_ps": {step}, "grid_ps": {step} }} }},
       "ground": "gnd",
@@ -1214,8 +1104,8 @@ fn pulsed_led() -> String {
           "pins": {{ "p": "vin", "n": "gnd" }},
           "voltage": {{
             "kind": "pulse",
-            "initial": {{ "value": 0.0, "unit": "V", "source": "user" }},
-            "pulsed": {{ "value": 5.0, "unit": "V", "source": "user" }},
+            "initial": {{ "value": 0.0, "unit": "V" }},
+            "pulsed": {{ "value": 5.0, "unit": "V" }},
             "delay_ps": 2000000000,
             "width_ps": 500000000,
             "period_ps": 20000000000
@@ -1225,7 +1115,7 @@ fn pulsed_led() -> String {
           "name": "r1",
           "kind": "resistor",
           "pins": {{ "a": "vin", "b": "vled" }},
-          "resistance": {{ "value": 22.0, "unit": "ohm", "source": "user" }},
+          "resistance": {{ "value": 22.0, "unit": "ohm" }},
           "ratings": {{ "power": null }}
         }},
         {LED}
@@ -1404,11 +1294,7 @@ fn diagnostics_at_the_stop_match_the_folder() {
         match netlist.analysis() {
             Analysis::Op => {
                 assert!(
-                    matches!(Session::open_document(&bytes), Err(Refused::Op)),
-                    "{name}"
-                );
-                assert!(
-                    matches!(Session::record_document(&bytes), Err(Refused::Op)),
+                    matches!(Session::open_json(&bytes, &blobs), Err(Refused::Op)),
                     "{name}"
                 );
                 let results = orbe_engine::simulate(&netlist);

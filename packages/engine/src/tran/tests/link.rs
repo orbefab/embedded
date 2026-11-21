@@ -298,12 +298,12 @@ fn a_replay_part_reaches_a_receiver_on_its_nets() {
     let replay = r#"{ "name": "rp1", "kind": "spi_replay",
           "pins": { "VCC": "vcc", "GND": "gnd", "CS": "cs", "SCLK": "sclk",
                     "D0": "o1", "D1": "o2", "D2": "x", "D3": "x" },
-          "clock_hz": { "value": 10000000, "unit": "Hz", "source": "user" },
+          "clock_hz": { "value": 10000000, "unit": "Hz" },
           "output": {
-            "high_drop": { "value": 0.0, "unit": "V", "source": "user" },
-            "high_resistance": { "value": 25.0, "unit": "ohm", "source": "user" },
-            "low_drop": { "value": 0.0, "unit": "V", "source": "user" },
-            "low_resistance": { "value": 25.0, "unit": "ohm", "source": "user" } },
+            "high_drop": { "value": 0.0, "unit": "V" },
+            "high_resistance": { "value": 25.0, "unit": "ohm" },
+            "low_drop": { "value": 0.0, "unit": "V" },
+            "low_resistance": { "value": 25.0, "unit": "ohm" } },
           "events": [
             { "t_ps": 1000000, "phases": [{ "bits": 8, "lanes": 1, "value": 2 }], "lanes": 1,
               "bytes": [17, 34], "cs": "held" },
@@ -348,12 +348,12 @@ fn replay_netlist(stop: u64, max_step: u64, events: &str, extra: &[String]) -> N
         r#"{{ "name": "rp1", "kind": "spi_replay",
           "pins": {{ "VCC": "vcc", "GND": "gnd", "CS": "cs", "SCLK": "sclk",
                     "D0": "o1", "D1": "o2", "D2": "x", "D3": "x" }},
-          "clock_hz": {{ "value": 10000000, "unit": "Hz", "source": "user" }},
+          "clock_hz": {{ "value": 10000000, "unit": "Hz" }},
           "output": {{
-            "high_drop": {{ "value": 0.0, "unit": "V", "source": "user" }},
-            "high_resistance": {{ "value": 25.0, "unit": "ohm", "source": "user" }},
-            "low_drop": {{ "value": 0.0, "unit": "V", "source": "user" }},
-            "low_resistance": {{ "value": 25.0, "unit": "ohm", "source": "user" }} }},
+            "high_drop": {{ "value": 0.0, "unit": "V" }},
+            "high_resistance": {{ "value": 25.0, "unit": "ohm" }},
+            "low_drop": {{ "value": 0.0, "unit": "V" }},
+            "low_resistance": {{ "value": 25.0, "unit": "ohm" }} }},
           "events": [ {events} ] }}"#
     );
     let nets: Vec<String> = ["gnd", "vcc", "o1", "o2", "o3", "x", "cs", "sclk", "sw"]
@@ -369,14 +369,14 @@ fn replay_netlist(stop: u64, max_step: u64, events: &str, extra: &[String]) -> N
     parts.extend_from_slice(extra);
     let json = format!(
         r#"{{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": {{ "transient": {{ "stop_ps": {stop}, "max_step_ps": {max_step}, "grid_ps": {max_step} }} }},
           "ground": "gnd",
           "nets": [{}],
           "parts": [
             {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "vcc", "n": "gnd" }},
-              "voltage": {{ "value": 5.0, "unit": "V", "source": "user" }} }},
+              "voltage": {{ "value": 5.0, "unit": "V" }} }},
             {}
           ]
         }}"#,
@@ -408,8 +408,8 @@ fn an_input_while_a_record_is_in_flight_delivers_each_record_once() {
         replay_event(second, 34, "released")
     );
     let switch = r#"{ "name": "sw1", "kind": "switch", "pins": { "a": "vcc", "b": "sw" },
-         "on_resistance": { "value": 10.0, "unit": "ohm", "source": "user" },
-         "off_resistance": { "value": 1e6, "unit": "ohm", "source": "user" },
+         "on_resistance": { "value": 10.0, "unit": "ohm" },
+         "off_resistance": { "value": 1e6, "unit": "ohm" },
          "initial": "open", "events": [], "bounce": null }"#;
     let netlist = replay_netlist(STOP, STOP, &events, &[switch.to_string()]);
     let mut session = open(&netlist, vec![receiver(&netlist)], BUDGET);

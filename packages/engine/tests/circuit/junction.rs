@@ -62,7 +62,7 @@ fn the_5v_example_draws_about_14_ma() {
 fn a_reversed_led_blocks() {
     let results = simulate(
         br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -72,22 +72,22 @@ fn a_reversed_led_blocks() {
           "name": "v1",
           "kind": "voltage_source",
           "pins": { "p": "vin", "n": "gnd" },
-          "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+          "voltage": { "value": 5.0, "unit": "V" }
         },
         {
           "name": "r1",
           "kind": "resistor",
           "pins": { "a": "vin", "b": "vled" },
-          "resistance": { "value": 220.0, "unit": "ohm", "source": "user" },
+          "resistance": { "value": 220.0, "unit": "ohm" },
           "ratings": { "power": null }
         },
         {
           "name": "led1",
           "kind": "led",
           "pins": { "anode": "gnd", "cathode": "vled" },
-          "saturation_current": { "value": 6.711e-10, "unit": "A", "source": "user" },
-          "emission_coefficient": { "value": 4.427, "unit": "1", "source": "user" },
-          "series_resistance": { "value": 2.115, "unit": "ohm", "source": "user" },
+          "saturation_current": { "value": 6.711e-10, "unit": "A" },
+          "emission_coefficient": { "value": 4.427, "unit": "1" },
+          "series_resistance": { "value": 2.115, "unit": "ohm" },
           "ratings": { "current": null, "power": null }
         }
       ]
@@ -125,7 +125,7 @@ fn half_a_volt_across_a_reversed_diode_still_takes_gmin() {
 fn a_reversed_diode_behind_1e20_ohm_solves() {
     let results = simulate(
         br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -135,15 +135,15 @@ fn a_reversed_diode_behind_1e20_ohm_solves() {
           "name": "i1",
           "kind": "current_source",
           "pins": { "p": "a", "n": "gnd" },
-          "current": { "value": -2e-12, "unit": "A", "source": "user" }
+          "current": { "value": -2e-12, "unit": "A" }
         },
         {
           "name": "d1",
           "kind": "diode",
           "pins": { "anode": "a", "cathode": "gnd" },
-          "saturation_current": { "value": 1e-14, "unit": "A", "source": "user" },
-          "emission_coefficient": { "value": 1.0, "unit": "1", "source": "user" },
-          "series_resistance": { "value": 1e20, "unit": "ohm", "source": "user" },
+          "saturation_current": { "value": 1e-14, "unit": "A" },
+          "emission_coefficient": { "value": 1.0, "unit": "1" },
+          "series_resistance": { "value": 1e20, "unit": "ohm" },
           "ratings": { "current": null, "power": null }
         }
       ]
@@ -162,7 +162,7 @@ fn a_reversed_diode_behind_1e20_ohm_solves() {
 fn two_leds_in_series_from_9v_are_not_floating() {
     let results = simulate(
         br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -172,31 +172,31 @@ fn two_leds_in_series_from_9v_are_not_floating() {
           "name": "v1",
           "kind": "voltage_source",
           "pins": { "p": "vin", "n": "gnd" },
-          "voltage": { "value": 9.0, "unit": "V", "source": "user" }
+          "voltage": { "value": 9.0, "unit": "V" }
         },
         {
           "name": "r1",
           "kind": "resistor",
           "pins": { "a": "vin", "b": "vled" },
-          "resistance": { "value": 330.0, "unit": "ohm", "source": "user" },
+          "resistance": { "value": 330.0, "unit": "ohm" },
           "ratings": { "power": null }
         },
         {
           "name": "led1",
           "kind": "led",
           "pins": { "anode": "vled", "cathode": "mid" },
-          "saturation_current": { "value": 6.711e-10, "unit": "A", "source": "user" },
-          "emission_coefficient": { "value": 4.427, "unit": "1", "source": "user" },
-          "series_resistance": { "value": 2.115, "unit": "ohm", "source": "user" },
+          "saturation_current": { "value": 6.711e-10, "unit": "A" },
+          "emission_coefficient": { "value": 4.427, "unit": "1" },
+          "series_resistance": { "value": 2.115, "unit": "ohm" },
           "ratings": { "current": null, "power": null }
         },
         {
           "name": "led2",
           "kind": "led",
           "pins": { "anode": "mid", "cathode": "gnd" },
-          "saturation_current": { "value": 6.711e-10, "unit": "A", "source": "user" },
-          "emission_coefficient": { "value": 4.427, "unit": "1", "source": "user" },
-          "series_resistance": { "value": 2.115, "unit": "ohm", "source": "user" },
+          "saturation_current": { "value": 6.711e-10, "unit": "A" },
+          "emission_coefficient": { "value": 4.427, "unit": "1" },
+          "series_resistance": { "value": 2.115, "unit": "ohm" },
           "ratings": { "current": null, "power": null }
         }
       ]
@@ -347,7 +347,7 @@ fn biased_diode(volts: f64, ohms: Option<f64>, is: &str, n: &str) -> String {
           "name": "r1",
           "kind": "resistor",
           "pins": {{ "a": "a", "b": "b" }},
-          "resistance": {{ "value": {ohms}, "unit": "ohm", "source": "user" }},
+          "resistance": {{ "value": {ohms}, "unit": "ohm" }},
           "ratings": {{ "power": null }}
         }},"#
             ),
@@ -357,7 +357,7 @@ fn biased_diode(volts: f64, ohms: Option<f64>, is: &str, n: &str) -> String {
     };
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {{ "op": {{}} }},
       "ground": "gnd",
@@ -367,16 +367,16 @@ fn biased_diode(volts: f64, ohms: Option<f64>, is: &str, n: &str) -> String {
           "name": "v1",
           "kind": "voltage_source",
           "pins": {{ "p": "a", "n": "gnd" }},
-          "voltage": {{ "value": {volts}, "unit": "V", "source": "user" }}
+          "voltage": {{ "value": {volts}, "unit": "V" }}
         }},
         {resistor}
         {{
           "name": "d1",
           "kind": "diode",
           "pins": {{ "anode": "{anode}", "cathode": "gnd" }},
-          "saturation_current": {{ "value": {is}, "unit": "A", "source": "user" }},
-          "emission_coefficient": {{ "value": {n}, "unit": "1", "source": "user" }},
-          "series_resistance": {{ "value": 1.0, "unit": "ohm", "source": "user" }},
+          "saturation_current": {{ "value": {is}, "unit": "A" }},
+          "emission_coefficient": {{ "value": {n}, "unit": "1" }},
+          "series_resistance": {{ "value": 1.0, "unit": "ohm" }},
           "ratings": {{ "current": null, "power": null }}
         }}
       ]

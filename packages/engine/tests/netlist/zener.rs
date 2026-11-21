@@ -3,7 +3,7 @@ use orbe_engine::netlist::{self, Model};
 fn zener(fields: &str) -> String {
     format!(
         r#"{{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": {{ "op": {{}} }},
           "ground": "gnd",
@@ -23,13 +23,13 @@ fn zener(fields: &str) -> String {
 fn row(vz: &str, zzt: &str, rb: &str) -> String {
     zener(&format!(
         r#"
-          "saturation_current": {{ "value": 1e-14, "unit": "A", "source": "user" }},
-          "emission_coefficient": {{ "value": 1.0, "unit": "1", "source": "user" }},
-          "series_resistance": {{ "value": 1.0, "unit": "ohm", "source": "user" }},
-          "zener_voltage": {{ "value": {vz}, "unit": "V", "source": "user" }},
-          "zener_current": {{ "value": 0.05, "unit": "A", "source": "user" }},
-          "zener_impedance": {{ "value": {zzt}, "unit": "ohm", "source": "user" }},
-          "breakdown_resistance": {{ "value": {rb}, "unit": "ohm", "source": "user" }},
+          "saturation_current": {{ "value": 1e-14, "unit": "A" }},
+          "emission_coefficient": {{ "value": 1.0, "unit": "1" }},
+          "series_resistance": {{ "value": 1.0, "unit": "ohm" }},
+          "zener_voltage": {{ "value": {vz}, "unit": "V" }},
+          "zener_current": {{ "value": 0.05, "unit": "A" }},
+          "zener_impedance": {{ "value": {zzt}, "unit": "ohm" }},
+          "breakdown_resistance": {{ "value": {rb}, "unit": "ohm" }},
           "ratings": {{ "current": null, "power": null }}
         "#
     ))
@@ -98,13 +98,13 @@ fn both_breakdown_inequalities_report_and_finite_junction_does_not() {
 fn a_sharp_knee_names_isb() {
     let json = zener(
         r#"
-          "saturation_current": { "value": 1e-14, "unit": "A", "source": "user" },
-          "emission_coefficient": { "value": 1.0, "unit": "1", "source": "user" },
-          "series_resistance": { "value": 0.35, "unit": "ohm", "source": "user" },
-          "zener_voltage": { "value": 12.0, "unit": "V", "source": "user" },
-          "zener_current": { "value": 0.021, "unit": "A", "source": "user" },
-          "zener_impedance": { "value": 9.0, "unit": "ohm", "source": "user" },
-          "breakdown_resistance": { "value": 8.0, "unit": "ohm", "source": "user" },
+          "saturation_current": { "value": 1e-14, "unit": "A" },
+          "emission_coefficient": { "value": 1.0, "unit": "1" },
+          "series_resistance": { "value": 0.35, "unit": "ohm" },
+          "zener_voltage": { "value": 12.0, "unit": "V" },
+          "zener_current": { "value": 0.021, "unit": "A" },
+          "zener_impedance": { "value": 9.0, "unit": "ohm" },
+          "breakdown_resistance": { "value": 8.0, "unit": "ohm" },
           "ratings": { "current": null, "power": null }
         "#,
     );
@@ -124,13 +124,13 @@ fn a_sharp_knee_names_isb() {
 fn a_breakdown_that_overflows_names_zener_voltage() {
     let json = zener(
         r#"
-          "saturation_current": { "value": 1e-14, "unit": "A", "source": "user" },
-          "emission_coefficient": { "value": 1.0, "unit": "1", "source": "user" },
-          "series_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
-          "zener_voltage": { "value": 100.0, "unit": "V", "source": "user" },
-          "zener_current": { "value": 1.0, "unit": "A", "source": "user" },
-          "zener_impedance": { "value": 2.0000000001, "unit": "ohm", "source": "user" },
-          "breakdown_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
+          "saturation_current": { "value": 1e-14, "unit": "A" },
+          "emission_coefficient": { "value": 1.0, "unit": "1" },
+          "series_resistance": { "value": 1.0, "unit": "ohm" },
+          "zener_voltage": { "value": 100.0, "unit": "V" },
+          "zener_current": { "value": 1.0, "unit": "A" },
+          "zener_impedance": { "value": 2.0000000001, "unit": "ohm" },
+          "breakdown_resistance": { "value": 1.0, "unit": "ohm" },
           "ratings": { "current": null, "power": null }
         "#,
     );
@@ -142,16 +142,16 @@ fn a_breakdown_that_overflows_names_zener_voltage() {
 fn each_zener_field_names_its_unit_and_a_rating_names_its_dotted_field() {
     let json = zener(
         r#"
-          "saturation_current": { "value": 1e-14, "unit": "V", "source": "user" },
-          "emission_coefficient": { "value": 1.0, "unit": "A", "source": "user" },
-          "series_resistance": { "value": 1.0, "unit": "V", "source": "user" },
-          "zener_voltage": { "value": 5.0, "unit": "ohm", "source": "user" },
-          "zener_current": { "value": 0.05, "unit": "V", "source": "user" },
-          "zener_impedance": { "value": 10.0, "unit": "A", "source": "user" },
-          "breakdown_resistance": { "value": 4.0, "unit": "V", "source": "user" },
+          "saturation_current": { "value": 1e-14, "unit": "V" },
+          "emission_coefficient": { "value": 1.0, "unit": "A" },
+          "series_resistance": { "value": 1.0, "unit": "V" },
+          "zener_voltage": { "value": 5.0, "unit": "ohm" },
+          "zener_current": { "value": 0.05, "unit": "V" },
+          "zener_impedance": { "value": 10.0, "unit": "A" },
+          "breakdown_resistance": { "value": 4.0, "unit": "V" },
           "ratings": {
-            "current": { "value": 0.178, "unit": "ohm", "source": "user" },
-            "power": { "value": 1.3, "unit": "A", "source": "user" }
+            "current": { "value": 0.178, "unit": "ohm" },
+            "power": { "value": 1.3, "unit": "A" }
           }
         "#,
     );

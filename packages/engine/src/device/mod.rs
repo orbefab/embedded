@@ -163,16 +163,6 @@ impl Declared {
         Fields::new(&self.fields)
     }
 
-    /// Each field's name and value, in declaration order.
-    pub(crate) fn pairs(&self) -> &[(&'static str, Value)] {
-        &self.fields
-    }
-
-    /// The netlist field that schedules it.
-    pub(crate) fn field(&self) -> &'static str {
-        self.spec.field
-    }
-
     pub(crate) fn event(&self) -> ModelEvent<'_> {
         ModelEvent::Declared {
             name: self.spec.name,

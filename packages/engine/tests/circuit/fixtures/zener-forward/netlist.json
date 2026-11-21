@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": {
     "op": {}
@@ -20,8 +20,7 @@
       },
       "voltage": {
         "value": 5.0,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -33,8 +32,7 @@
       },
       "resistance": {
         "value": 220.0,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "ratings": {
         "power": null
@@ -49,103 +47,40 @@
       },
       "saturation_current": {
         "value": 2.908000103814407e-13,
-        "unit": "A",
-        "source": {
-          "datasheet": {
-            "doc": "Vishay 1N4728A to 1N4761A, document 85816, Rev. 2.7, 07-Nov-2024",
-            "at": "p3 Fig. 2, typical IF against VF at Tj = 25 C; fit through (0.622 V, 0.1 mA), (0.695 V, 1 mA), (0.876 V, 100 mA) at kT/q for 298.15 K",
-            "basis": "typical"
-          }
-        }
+        "unit": "A"
       },
       "emission_coefficient": {
         "value": 1.2314970051462708,
-        "unit": "1",
-        "source": {
-          "datasheet": {
-            "doc": "Vishay 1N4728A to 1N4761A, document 85816, Rev. 2.7, 07-Nov-2024",
-            "at": "p3 Fig. 2, typical IF against VF at Tj = 25 C; fit through (0.622 V, 0.1 mA), (0.695 V, 1 mA), (0.876 V, 100 mA) at kT/q for 298.15 K",
-            "basis": "typical"
-          }
-        }
+        "unit": "1"
       },
       "series_resistance": {
         "value": 0.3512998076842114,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "Vishay 1N4728A to 1N4761A, document 85816, Rev. 2.7, 07-Nov-2024",
-            "at": "p3 Fig. 2, typical IF against VF at Tj = 25 C; fit through (0.622 V, 0.1 mA), (0.695 V, 1 mA), (0.876 V, 100 mA) at kT/q for 298.15 K",
-            "basis": "typical"
-          }
-        }
+        "unit": "ohm"
       },
       "zener_voltage": {
         "value": 5.1,
-        "unit": "V",
-        "source": {
-          "datasheet": {
-            "doc": "Vishay 1N4728A to 1N4761A, document 85816, Rev. 2.7, 07-Nov-2024",
-            "at": "p2 table, 1N4733A, VZ nominal at IZT 49 mA",
-            "basis": "nominal"
-          }
-        }
+        "unit": "V"
       },
       "zener_current": {
         "value": 0.049,
-        "unit": "A",
-        "source": {
-          "datasheet": {
-            "doc": "Vishay 1N4728A to 1N4761A, document 85816, Rev. 2.7, 07-Nov-2024",
-            "at": "p2 table, 1N4733A, IZT1",
-            "basis": "nominal"
-          }
-        }
+        "unit": "A"
       },
       "zener_impedance": {
         "value": 7.0,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "Vishay 1N4728A to 1N4761A, document 85816, Rev. 2.7, 07-Nov-2024",
-            "at": "p2 table, 1N4733A, ZZT typical at IZT 49 mA and f = 1 kHz; the model uses it as the DC slope",
-            "basis": "typical"
-          }
-        }
+        "unit": "ohm"
       },
       "breakdown_resistance": {
         "value": 4.518344790967284,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "EIC 1N4727A to 1N4761A",
-            "at": "Fig. 1, typical at TA = 25 C; the resistance that puts 1 mA on the 4.46 V read, with VZ, IZT and ZZT from Vishay 85816 1N4733A",
-            "basis": "typical"
-          }
-        }
+        "unit": "ohm"
       },
       "ratings": {
         "current": {
           "value": 0.178,
-          "unit": "A",
-          "source": {
-            "datasheet": {
-              "doc": "Vishay 1N4728A to 1N4761A, document 85816, Rev. 2.7, 07-Nov-2024",
-              "at": "p2 table, 1N4733A, IZM",
-              "basis": "max"
-            }
-          }
+          "unit": "A"
         },
         "power": {
           "value": 1.3,
-          "unit": "W",
-          "source": {
-            "datasheet": {
-              "doc": "Vishay 1N4728A to 1N4761A, document 85816, Rev. 2.7, 07-Nov-2024",
-              "at": "p1, Ptot",
-              "basis": "absolute_max"
-            }
-          }
+          "unit": "W"
         }
       }
     }

@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": {
     "transient": {
@@ -24,8 +24,7 @@
       },
       "voltage": {
         "value": 3.3,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -37,8 +36,7 @@
       },
       "capacitance": {
         "value": 1e-05,
-        "unit": "F",
-        "source": "user"
+        "unit": "F"
       },
       "initial": null
     },
@@ -51,8 +49,7 @@
       },
       "resistance": {
         "value": 330.0,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "ratings": {
         "power": null
@@ -67,13 +64,11 @@
       },
       "on_resistance": {
         "value": 0.01,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "off_resistance": {
         "value": 1000000000.0,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "initial": "open",
       "events": [
@@ -97,8 +92,7 @@
       },
       "resistance": {
         "value": 6.6,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "ratings": {
         "power": null

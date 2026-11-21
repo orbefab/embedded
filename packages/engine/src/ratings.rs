@@ -569,7 +569,7 @@ mod tests {
     fn netlist() -> Netlist {
         crate::netlist::parse(
             br#"{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": { "op": {} },
           "ground": "gnd",
@@ -579,11 +579,11 @@ mod tests {
               "name": "d1",
               "kind": "diode",
               "pins": { "anode": "a", "cathode": "gnd" },
-              "saturation_current": { "value": 1e-14, "unit": "A", "source": "user" },
-              "emission_coefficient": { "value": 1.0, "unit": "1", "source": "user" },
-              "series_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
+              "saturation_current": { "value": 1e-14, "unit": "A" },
+              "emission_coefficient": { "value": 1.0, "unit": "1" },
+              "series_resistance": { "value": 1.0, "unit": "ohm" },
               "ratings": {
-                "current": { "value": 0.03, "unit": "A", "source": "user" },
+                "current": { "value": 0.03, "unit": "A" },
                 "power": null
               }
             },
@@ -591,7 +591,7 @@ mod tests {
               "name": "r1",
               "kind": "resistor",
               "pins": { "a": "a", "b": "gnd" },
-              "resistance": { "value": 10.0, "unit": "ohm", "source": "user" },
+              "resistance": { "value": 10.0, "unit": "ohm" },
               "ratings": { "power": null }
             }
           ]

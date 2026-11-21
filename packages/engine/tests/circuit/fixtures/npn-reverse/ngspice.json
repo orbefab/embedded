@@ -1,7 +1,7 @@
 {
   "deck_sha256": "191acd1a76b54ba579d2ceda32cb6c6a2bcde51740db8b032c67b18927d4f3e1",
   "format": 0,
-  "netlist_sha256": "7762eace711930155ec27b6e7a3558f5697550a53e8af3174c846984a965d43f",
+  "netlist_sha256": "797074799c7a434308f3fb387627d0196b28764756712d312aa28d24450462e8",
   "ngspice": "ngspice-42",
   "op": {
     "#net.b": 0.0,

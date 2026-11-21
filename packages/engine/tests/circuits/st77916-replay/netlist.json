@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": {
     "transient": {
@@ -41,35 +41,29 @@
       "output": {
         "high_drop": {
           "value": 0.0,
-          "unit": "V",
-          "source": "user"
+          "unit": "V"
         },
         "high_resistance": {
           "value": 25.0,
-          "unit": "ohm",
-          "source": "user"
+          "unit": "ohm"
         },
         "low_drop": {
           "value": 0.0,
-          "unit": "V",
-          "source": "user"
+          "unit": "V"
         },
         "low_resistance": {
           "value": 25.0,
-          "unit": "ohm",
-          "source": "user"
+          "unit": "ohm"
         }
       },
       "input_threshold": {
         "low": {
           "value": 0.3,
-          "unit": "1",
-          "source": "user"
+          "unit": "1"
         },
         "high": {
           "value": 0.7,
-          "unit": "1",
-          "source": "user"
+          "unit": "1"
         }
       }
     },
@@ -82,8 +76,7 @@
       },
       "resistance": {
         "value": 10000.0,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "ratings": {
         "power": null
@@ -104,29 +97,24 @@
       },
       "clock_hz": {
         "value": 80000000,
-        "unit": "Hz",
-        "source": "user"
+        "unit": "Hz"
       },
       "output": {
         "high_drop": {
           "value": 0.0,
-          "unit": "V",
-          "source": "user"
+          "unit": "V"
         },
         "high_resistance": {
           "value": 25.0,
-          "unit": "ohm",
-          "source": "user"
+          "unit": "ohm"
         },
         "low_drop": {
           "value": 0.0,
-          "unit": "V",
-          "source": "user"
+          "unit": "V"
         },
         "low_resistance": {
           "value": 25.0,
-          "unit": "ohm",
-          "source": "user"
+          "unit": "ohm"
         }
       },
       "events": [
@@ -176,8 +164,7 @@
       },
       "voltage": {
         "value": 3.3,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     }
   ]

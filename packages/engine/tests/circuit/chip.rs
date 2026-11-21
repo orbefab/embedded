@@ -18,7 +18,7 @@ fn op_value(results: &Results, reference: &str) -> f64 {
 fn netlist(analysis: &str, nets: &str, parts: &[String]) -> String {
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {analysis},
       "ground": "gnd",
@@ -35,8 +35,7 @@ const OP: &str = r#"{ "op": {} }"#;
 /// gnd, trig, out, reset, cont, thres, disch, vcc.
 fn ne555(name: &str, pins: [&str; 8]) -> String {
     let [gnd, trig, out, reset, cont, thres, disch, vcc] = pins;
-    let value =
-        |v: f64, unit: &str| format!(r#"{{ "value": {v:?}, "unit": "{unit}", "source": "user" }}"#);
+    let value = |v: f64, unit: &str| format!(r#"{{ "value": {v:?}, "unit": "{unit}" }}"#);
     format!(
         r#"{{ "name": "{name}", "kind": "ne555",
           "pins": {{ "gnd": "{gnd}", "trig": "{trig}", "out": "{out}", "reset": "{reset}",

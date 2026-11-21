@@ -14,7 +14,7 @@ fn world_of(project: &std::path::Path) -> Option<Value> {
 }
 
 fn level(value: f64, unit: &str) -> Value {
-    json!({ "value": value, "unit": unit, "source": "user" })
+    json!({ "value": value, "unit": unit })
 }
 
 fn ldr_case() -> tempfile::TempDir {

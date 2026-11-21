@@ -144,7 +144,7 @@ fn netlist(
 fn resistor(name: &str, a: &str, b: &str, ohms: f64) -> serde_json::Value {
     serde_json::json!({
         "name": name, "kind": "resistor", "pins": { "a": a, "b": b },
-        "resistance": { "value": ohms, "unit": "ohm", "source": "user" },
+        "resistance": { "value": ohms, "unit": "ohm" },
         "ratings": { "power": null }
     })
 }
@@ -412,7 +412,7 @@ fn the_temperature_sensor_reads_the_world_at_60_degrees() {
         let mut netlist = conversion(0xC8, &[], serde_json::json!([]), &[]);
         if let Some(celsius) = celsius {
             netlist["world"] = serde_json::json!({
-                "temperature": { "value": celsius, "unit": "degC", "source": "user" }
+                "temperature": { "value": celsius, "unit": "degC" }
             });
         }
         let (code, diagnostics) = converted(&netlist);

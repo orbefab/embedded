@@ -2199,6 +2199,35 @@ fn decode_bodies(model: &Node, part: &Part, format: u32, out: &mut Findings) -> 
     bodies
 }
 
+/// Each value object in an engine part, an object with a `value` and a `unit`, says where its
+/// value came from in `source`. The netlist leaves `source` out, so the reader checks it here.
+/// `pointer` is where `node` sits in the engine part.
+fn check_sources(node: &Node, pointer: &str, out: &mut Findings) {
+    if let Some(props) = node.props() {
+        if node.get("value").is_some() && node.get("unit").is_some() {
+            match node.get("source") {
+                Some(source) => shape::check(source, &shape::Shape::Source, Some("source"), out),
+                None => {
+                    let field = dotted(pointer);
+                    out.push(
+                        Code::Syntax,
+                        node.span,
+                        format!("`{field}` needs `source`"),
+                        format!("add `source` to `{field}`, such as \"source\": \"user\""),
+                    );
+                }
+            }
+        }
+        for prop in props {
+            check_sources(&prop.value, &format!("{pointer}/{}", prop.key), out);
+        }
+    } else if let Some(items) = node.items() {
+        for (index, item) in items.iter().enumerate() {
+            check_sources(item, &format!("{pointer}/{index}"), out);
+        }
+    }
+}
+
 fn decode_body(
     name: Option<String>,
     node: &Node,
@@ -2244,6 +2273,7 @@ fn decode_body(
     } else {
         engine_pins
     };
+    check_sources(node, "", out);
     let map = node.get("pins").and_then(Node::props).unwrap_or_default();
     for entry in map {
         if before_dout && entry.key == "DOUT" {

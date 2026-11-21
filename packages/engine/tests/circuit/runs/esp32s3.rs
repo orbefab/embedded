@@ -123,7 +123,7 @@ fn a_blob_list_names_no_folder() {
         .to_string();
     let message = |netlist: &serde_json::Value, blobs: &Blobs| {
         let json = serde_json::to_vec(netlist).unwrap();
-        let Err(Refused::Invalid(found)) = Session::open_document_with(&json, blobs) else {
+        let Err(Refused::Invalid(found)) = Session::open_json(&json, blobs) else {
             panic!("the netlist is invalid");
         };
         serde_json::to_value(&found[0]).unwrap()["message"]
@@ -283,18 +283,6 @@ fn a_gpio_is_optional_and_a_pin_the_chip_lacks_is_refused() {
     );
 }
 
-/// The part `docs/engine/netlist.md` shows, with every value's source dropped.
-fn without_sources(value: &serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => map
-            .iter()
-            .filter(|(key, _)| key.as_str() != "source")
-            .map(|(key, value)| (key.clone(), without_sources(value)))
-            .collect(),
-        other => other.clone(),
-    }
-}
-
 #[test]
 fn the_documented_part_is_the_examples() {
     let doc = fs::read_to_string(repo("docs/engine/netlist.md")).unwrap();
@@ -302,10 +290,7 @@ fn the_documented_part_is_the_examples() {
     let start = section.find("```json\n").unwrap() + "```json\n".len();
     let end = start + section[start..].find("\n```").unwrap();
     let documented: serde_json::Value = serde_json::from_str(&section[start..end]).unwrap();
-    assert_eq!(
-        without_sources(&documented),
-        without_sources(&example()["parts"][1])
-    );
+    assert_eq!(documented, example()["parts"][1]);
 }
 
 const IRAM: u32 = 0x4038_0000;
@@ -591,7 +576,7 @@ fn a_session_lists_an_unmodeled_register_only_once_its_access_is_accepted() {
             .collect()
     };
 
-    let mut session = Session::open_document_with(&json, &blobs).unwrap();
+    let mut session = Session::open_json(&json, &blobs).unwrap();
     session.advance_to(Time::from_ps(u64::MAX));
     let [at] = touched(&session)[..] else {
         panic!("one register touched: {:?}", session.diagnostics());
@@ -601,7 +586,7 @@ fn a_session_lists_an_unmodeled_register_only_once_its_access_is_accepted() {
         "after the loop, at {at:?}"
     );
 
-    let mut session = Session::open_document_with(&json, &blobs).unwrap();
+    let mut session = Session::open_json(&json, &blobs).unwrap();
     session.advance_to(Time::from_ps(at.as_ps() - 1));
     assert_eq!(
         touched(&session),

@@ -37,7 +37,7 @@ fn a_step_that_fails_down_to_one_picosecond_ends_the_run_at_the_last_accepted_ti
 /// after the edge.
 fn led_discharge() -> Netlist {
     let json = r#"{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": { "transient": { "stop_ps": 2000000, "max_step_ps": 100000, "grid_ps": 100000 } },
           "ground": "gnd",
@@ -47,37 +47,37 @@ fn led_discharge() -> Netlist {
               "name": "v1",
               "kind": "voltage_source",
               "pins": { "p": "vcc", "n": "gnd" },
-              "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+              "voltage": { "value": 5.0, "unit": "V" }
             },
             {
               "name": "r1",
               "kind": "resistor",
               "pins": { "a": "vcc", "b": "vk" },
-              "resistance": { "value": 220.0, "unit": "ohm", "source": "user" },
+              "resistance": { "value": 220.0, "unit": "ohm" },
               "ratings": { "power": null }
             },
             {
               "name": "c1",
               "kind": "capacitor",
               "pins": { "a": "vk", "b": "gnd" },
-              "capacitance": { "value": 1e-14, "unit": "F", "source": "user" },
+              "capacitance": { "value": 1e-14, "unit": "F" },
               "initial": null
             },
             {
               "name": "led1",
               "kind": "led",
               "pins": { "anode": "vk", "cathode": "vbtn" },
-              "saturation_current": { "value": 6.711e-10, "unit": "A", "source": "user" },
-              "emission_coefficient": { "value": 4.427, "unit": "1", "source": "user" },
-              "series_resistance": { "value": 2.115, "unit": "ohm", "source": "user" },
+              "saturation_current": { "value": 6.711e-10, "unit": "A" },
+              "emission_coefficient": { "value": 4.427, "unit": "1" },
+              "series_resistance": { "value": 2.115, "unit": "ohm" },
               "ratings": { "current": null, "power": null }
             },
             {
               "name": "sw1",
               "kind": "switch",
               "pins": { "a": "vbtn", "b": "gnd" },
-              "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
-              "off_resistance": { "value": 1e9, "unit": "ohm", "source": "user" },
+              "on_resistance": { "value": 0.1, "unit": "ohm" },
+              "off_resistance": { "value": 1e9, "unit": "ohm" },
               "initial": "open",
               "events": [{ "t_ps": 1000000, "state": "closed" }],
               "bounce": null
@@ -159,7 +159,7 @@ fn a_restart_that_fails_keeps_the_edge_row_and_names_the_edge() {
 /// 20000, so 5000 is neither a row time nor the stop.
 fn huge_step() -> (Netlist, &'static [u8]) {
     let json = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "transient": { "stop_ps": 20000, "max_step_ps": 10000, "grid_ps": 10000 } },
       "ground": "gnd",
@@ -171,8 +171,8 @@ fn huge_step() -> (Netlist, &'static [u8]) {
           "pins": { "p": "vin", "n": "gnd" },
           "voltage": {
             "kind": "step",
-            "initial": { "value": 0.0, "unit": "V", "source": "user" },
-            "final": { "value": 1e200, "unit": "V", "source": "user" },
+            "initial": { "value": 0.0, "unit": "V" },
+            "final": { "value": 1e200, "unit": "V" },
             "at_ps": 5000
           }
         },
@@ -180,7 +180,7 @@ fn huge_step() -> (Netlist, &'static [u8]) {
           "name": "c1",
           "kind": "capacitor",
           "pins": { "a": "vin", "b": "gnd" },
-          "capacitance": { "value": 1e-9, "unit": "F", "source": "user" },
+          "capacitance": { "value": 1e-9, "unit": "F" },
           "initial": null
         }
       ]
@@ -246,7 +246,7 @@ fn an_off_grid_failure_keeps_that_accepted_step_as_its_last_row() {
 fn led_switch_over_from_the_start() -> Netlist {
     crate::netlist::parse(
         br#"{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": { "transient": { "stop_ps": 2000000, "max_step_ps": 100000, "grid_ps": 100000 } },
           "ground": "gnd",
@@ -256,37 +256,37 @@ fn led_switch_over_from_the_start() -> Netlist {
               "name": "v1",
               "kind": "voltage_source",
               "pins": { "p": "vcc", "n": "gnd" },
-              "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+              "voltage": { "value": 5.0, "unit": "V" }
             },
             {
               "name": "rbleed",
               "kind": "resistor",
               "pins": { "a": "vcc", "b": "gnd" },
-              "resistance": { "value": 10.0, "unit": "ohm", "source": "user" },
-              "ratings": { "power": { "value": 0.001, "unit": "W", "source": "user" } }
+              "resistance": { "value": 10.0, "unit": "ohm" },
+              "ratings": { "power": { "value": 0.001, "unit": "W" } }
             },
             {
               "name": "r1",
               "kind": "resistor",
               "pins": { "a": "vcc", "b": "vk" },
-              "resistance": { "value": 220.0, "unit": "ohm", "source": "user" },
+              "resistance": { "value": 220.0, "unit": "ohm" },
               "ratings": { "power": null }
             },
             {
               "name": "led1",
               "kind": "led",
               "pins": { "anode": "vk", "cathode": "vbtn" },
-              "saturation_current": { "value": 6.711e-10, "unit": "A", "source": "user" },
-              "emission_coefficient": { "value": 4.427, "unit": "1", "source": "user" },
-              "series_resistance": { "value": 2.115, "unit": "ohm", "source": "user" },
+              "saturation_current": { "value": 6.711e-10, "unit": "A" },
+              "emission_coefficient": { "value": 4.427, "unit": "1" },
+              "series_resistance": { "value": 2.115, "unit": "ohm" },
               "ratings": { "current": null, "power": null }
             },
             {
               "name": "sw1",
               "kind": "switch",
               "pins": { "a": "vbtn", "b": "gnd" },
-              "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
-              "off_resistance": { "value": 1e9, "unit": "ohm", "source": "user" },
+              "on_resistance": { "value": 0.1, "unit": "ohm" },
+              "off_resistance": { "value": 1e9, "unit": "ohm" },
               "initial": "open",
               "events": [{ "t_ps": 1000000, "state": "closed" }],
               "bounce": null

@@ -23,7 +23,7 @@ SYNTHETIC = efuse_set("synthetic", SETS.read_text())
 
 
 def value(v: float, unit: str) -> dict:
-    return {"value": v, "unit": unit, "source": "user"}
+    return {"value": v, "unit": unit}
 
 
 def netlist(supply: float = 3.3, top: float = 10000.0, bottom: float = 10000.0, efuse: str | None = None) -> dict:

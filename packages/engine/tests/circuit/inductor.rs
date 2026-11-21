@@ -9,29 +9,29 @@ fn simulate(json: &str) -> Results {
 fn source(volts: f64) -> String {
     format!(
         r#"{{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "vcc", "n": "gnd" }},
-          "voltage": {{ "value": {volts:?}, "unit": "V", "source": "user" }} }}"#
+          "voltage": {{ "value": {volts:?}, "unit": "V" }} }}"#
     )
 }
 
 fn resistor(name: &str, a: &str, b: &str, ohm: f64) -> String {
     format!(
         r#"{{ "name": "{name}", "kind": "resistor", "pins": {{ "a": "{a}", "b": "{b}" }},
-          "resistance": {{ "value": {ohm:?}, "unit": "ohm", "source": "user" }}, "ratings": {{ "power": null }} }}"#
+          "resistance": {{ "value": {ohm:?}, "unit": "ohm" }}, "ratings": {{ "power": null }} }}"#
     )
 }
 
 fn inductor(name: &str, a: &str, b: &str, henry: f64, ohm: f64) -> String {
     format!(
         r#"{{ "name": "{name}", "kind": "inductor", "pins": {{ "a": "{a}", "b": "{b}" }},
-          "inductance": {{ "value": {henry:?}, "unit": "H", "source": "user" }},
-          "series_resistance": {{ "value": {ohm:?}, "unit": "ohm", "source": "user" }} }}"#
+          "inductance": {{ "value": {henry:?}, "unit": "H" }},
+          "series_resistance": {{ "value": {ohm:?}, "unit": "ohm" }} }}"#
     )
 }
 
 fn op(nets: &str, parts: &[&str]) -> String {
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {{ "op": {{}} }},
       "ground": "gnd",
@@ -70,7 +70,7 @@ fn the_operating_point_is_a_short_behind_the_series_resistance() {
 #[test]
 fn a_net_reached_only_through_an_inductor_has_a_dc_path() {
     let capacitor = r#"{ "name": "c1", "kind": "capacitor", "pins": { "a": "top", "b": "gnd" },
-          "capacitance": { "value": 1e-6, "unit": "F", "source": "user" }, "initial": null }"#;
+          "capacitance": { "value": 1e-6, "unit": "F" }, "initial": null }"#;
     let joined = op(
         r#""gnd", "vcc", "top""#,
         &[
