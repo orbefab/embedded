@@ -15,8 +15,10 @@ It builds the package into `OUT_DIR`, by default `.scratch/wasm/pkg` in the repo
 It also needs the `wasm-bindgen` CLI at the version `Cargo.lock` holds for the `wasm-bindgen` crate, 0.2.129 today. `Cargo.toml` pins the crate with `=`, so a `cargo update` cannot move it away from the CLI. The script uses `WASM_TOOLS_DIR/wasm-bindgen-<version>/bin/wasm-bindgen` when it is there, then a `wasm-bindgen` on `PATH` at that version, and ignores a `PATH` copy at another version with a line that says so. `WASM_TOOLS_DIR` defaults to `.scratch/wasm/tools` in the repo. The script installs nothing. Without the CLI it exits 2 and prints the command that installs it where the script looks:
 
 ```sh
-cargo install wasm-bindgen-cli --version =0.2.129 --locked --root .scratch/wasm/tools/wasm-bindgen-0.2.129
+scripts/install-wasm-bindgen.sh
 ```
+
+That script downloads the prebuilt CLI and checks its SHA-256. On a platform with no prebuilt CLI it prints the `cargo install` command instead.
 
 Without the target it exits 2 and prints `rustup target add wasm32-unknown-unknown`.
 
