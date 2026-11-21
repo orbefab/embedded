@@ -930,7 +930,7 @@ fn hold(project: &Path, id: &str, version: &str) {
     let file = project.join("parts").join(id).join("part.jsonc");
     let text = fs::read_to_string(&file).unwrap();
     let edited = text.replacen(
-        "\"version\": \"0.1.0\"",
+        "\"version\": \"0.1.1\"",
         &format!("\"version\": \"{version}\""),
         1,
     );
@@ -939,7 +939,7 @@ fn hold(project: &Path, id: &str, version: &str) {
     rewrite_lock_line(project, id, &common::lock_line(project, id));
 }
 
-/// A title change at `0.1.0` whose lock line still names the catalog hash.
+/// A title change at `0.1.1` whose lock line still names the catalog hash.
 fn edit_title(project: &Path, id: &str) {
     let path = project.join("parts").join(id).join("part.jsonc");
     let text = fs::read_to_string(&path).unwrap();

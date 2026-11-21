@@ -3,7 +3,7 @@
 {
   "format": 1,
   "part": "led-5mm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "5 mm LED",
   "summary": "Round 5 mm through-hole LED, two leads on 2.54 mm. The longer lead is the anode. Pick its color.",
   "tags": ["led", "light", "indicator", "through-hole"],

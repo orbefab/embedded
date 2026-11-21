@@ -2,13 +2,13 @@
   "part": "led-0603",
   "source": {
     "script": "model.py",
-    "sha256": "4238b295f7c1d0a17613241602b85566cec497bc3f77de4026cc1f7fb399bd77",
-    "bytes": 1020
+    "sha256": "efcbd8bbb2ad30c06c5fe5cc12ecda907a06441bde99e68ec42e4200992810e3",
+    "bytes": 1040
   },
   "files": {
     "led-0603.glb": {
-      "sha256": "5dc5f95bc294ea77a043be782c7e2012306d343cc4b6fc1eb34374b5401bb123",
-      "bytes": 3820
+      "sha256": "9c1e5ef493b519d2200edc026d4b6c3f66340eaea21064db02f24958b149105d",
+      "bytes": 10732
     },
     "led-0603.anchors.json": {
       "sha256": "80024bf82c5ae09770ac947e450df447a04a7dfe3f934d94955df9a54cc50739",
@@ -20,7 +20,7 @@
     "max": [0.8, 0.4, 0.58]
   },
   "kept_nodes": ["body"],
-  "draw_calls": 2,
+  "draw_calls": 4,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -30,15 +30,15 @@
       "largest_miss_mm": 0
     },
     "seating": {
-      "lowest_node": "body",
+      "lowest_node": "package",
       "z_mm": 0
     },
     "names": {
       "nodes": ["body"]
     },
     "merge": {
-      "primitives_in": 3,
-      "primitives_out": 2
+      "primitives_in": 5,
+      "primitives_out": 4
     }
   }
 }

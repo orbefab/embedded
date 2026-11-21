@@ -1,12 +1,13 @@
 {
   "format": 1,
   "part": "capacitor-electrolytic-radial",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "Capacitor, radial electrolytic",
   "summary": "Polarized aluminum electrolytic can, 6.3 mm across, with two leads on 2.5 mm. The longer lead is `pos`, and the stripe on the sleeve marks `neg`. A reversed can runs without any warning, so wire `pos` to the higher voltage. Set its capacitance. It starts where the circuit's DC solution puts it, which on a pin that is still an input is not 0 V. Set `initial`, such as \"0\", to start it at that voltage.",
   "tags": ["capacitor", "electrolytic", "polarized", "passive", "bulk", "filter", "timing", "through-hole"],
   "license": "MIT OR Apache-2.0",
-  "real": { "generic": true, "maker": "Nichicon", "number": "UVR", "datasheet": null },
+  "docs": { "Nichicon UVR": null },
+  "real": { "generic": true, "maker": "Nichicon", "number": "UVR", "datasheet": "Nichicon UVR" },
   "pins": { "pos": [1], "neg": [2] },
   "params": {
     "capacitance": { "unit": "F", "required": true, "min_exclusive": 0, "sets": "/capacitance" },

@@ -2,13 +2,13 @@
   "part": "diode-m7-sma",
   "source": {
     "script": "model.py",
-    "sha256": "2e74f343bac9e6e0fe335704cc5a84193e3b6d28822fa0bb7b94d1d69fd666cb",
-    "bytes": 1492
+    "sha256": "45e1e734db74f8deace0c757067e460ca4f1737e61cb49e4f85e06f4653ff9a0",
+    "bytes": 1501
   },
   "files": {
     "diode-m7-sma.glb": {
-      "sha256": "c9c6e2a843ff29b803957d784f8220c54c772df952444d481996318666823702",
-      "bytes": 4704
+      "sha256": "0711cc492d39121f437b67238e968f7c4387149dd1ed88e4b7a4581528406cd9",
+      "bytes": 4828
     },
     "diode-m7-sma.anchors.json": {
       "sha256": "5d34e914e6ebf6d9606bee9b9ffa5a7ac7d75ab47d777ca6fac162805fd9a4ca",

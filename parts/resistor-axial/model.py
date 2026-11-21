@@ -17,7 +17,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint, tht
-from cad.color import srgb
+from cad.color import plastic, tin
 
 RQ_LENGTH = 6.3
 RQ_CAP_D = 2.4
@@ -31,8 +31,8 @@ RQ_BANDS = (  # x0, x1, colour, label
     (2.1, 2.55, "#B8902E", "band4-gold"),
 )
 
-_BODY = srgb("#D9C49A")
-_TIN = srgb("#C5C8CE")
+_BODY = plastic("#D9C49A")
+_TIN = tin()
 
 
 def _diameter(x0, x1):
@@ -54,7 +54,7 @@ def _body():
     for x0, x1 in itertools.pairwise(edges):
         if (x0, x1) in bands:
             color, label = bands[(x0, x1)]
-            parts.append(paint(_segment(x0, x1), label, srgb(color)))
+            parts.append(paint(_segment(x0, x1), label, plastic(color)))
         else:
             k += 1
             parts.append(paint(_segment(x0, x1), f"body{k}", _BODY))

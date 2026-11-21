@@ -154,12 +154,12 @@ fn recover(root: &Path) -> String {
 fn run_copies_a_real_part_and_a_second_run_keeps_the_bytes() {
     let dir = project();
     let reply = add(dir.path(), &["led-5mm"], false).unwrap();
-    assert_eq!(text(&reply), "wrote parts/led-5mm 0.1.0\nwrote parts.lock");
+    assert_eq!(text(&reply), "wrote parts/led-5mm 0.1.1\nwrote parts.lock");
     let before = tree(dir.path());
     let again = add(dir.path(), &["led-5mm"], false).unwrap();
     assert_eq!(
         text(&again),
-        "skipped parts/led-5mm 0.1.0\nparts.lock unchanged"
+        "skipped parts/led-5mm 0.1.1\nparts.lock unchanged"
     );
     assert_eq!(tree(dir.path()), before);
     assert_lock_agrees(dir.path());
@@ -212,7 +212,7 @@ fn a_failure_at_any_point_rolls_every_move_back() {
                 assert!(point > 10, "only {point} points");
                 assert!(
                     text(&reply)
-                        .contains("wrote parts/led-5mm 0.1.0, replacing 0.1.0 with local edits"),
+                        .contains("wrote parts/led-5mm 0.1.1, replacing 0.1.1 with local edits"),
                     "{}",
                     text(&reply)
                 );
@@ -603,7 +603,7 @@ fn an_empty_staging_folder_is_removed_without_a_claim() {
     let reply = add(dir.path(), &["led-5mm"], false).unwrap();
     assert_eq!(
         text(&reply),
-        "skipped parts/led-5mm 0.1.0\nparts.lock unchanged\ndeleted parts/.orbe-add, an empty folder an earlier add left"
+        "skipped parts/led-5mm 0.1.1\nparts.lock unchanged\ndeleted parts/.orbe-add, an empty folder an earlier add left"
     );
 }
 
@@ -633,7 +633,7 @@ fn a_second_run_is_busy_while_one_holds_the_lock() {
     drop(held);
     assert_eq!(tree(dir.path()), before);
     let reply = add(dir.path(), &["led-5mm"], true).unwrap();
-    assert!(text(&reply).starts_with("wrote parts/led-5mm 0.1.0, replacing"));
+    assert!(text(&reply).starts_with("wrote parts/led-5mm 0.1.1, replacing"));
     assert!(!dir.path().join(".orbe-add.lock").exists());
 }
 
@@ -958,7 +958,7 @@ fn a_log_cut_before_its_commit_never_removes_the_part() {
         fs::remove_dir_all(dir.path().join("parts/led-5mm")).unwrap();
         let reply = add(dir.path(), &["led-5mm"], false).unwrap();
         assert!(
-            text(&reply).starts_with("wrote parts/led-5mm 0.1.0"),
+            text(&reply).starts_with("wrote parts/led-5mm 0.1.1"),
             "{}",
             text(&reply)
         );
@@ -1000,7 +1000,7 @@ fn a_folder_planted_in_old_is_never_installed_or_deleted() {
     fs::rename(&planted, &kept).unwrap();
     let reply = add(dir.path(), &["led-5mm"], false).unwrap();
     assert!(
-        text(&reply).starts_with("wrote parts/led-5mm 0.1.0\nwrote parts.lock\nrolled back an interrupted add: removed the new parts/led-5mm"),
+        text(&reply).starts_with("wrote parts/led-5mm 0.1.1\nwrote parts.lock\nrolled back an interrupted add: removed the new parts/led-5mm"),
         "{}",
         text(&reply)
     );
@@ -1102,7 +1102,7 @@ fn a_file_at_a_part_path_is_kept_unless_overwrite_names_it() {
 
     let reply = add(dir.path(), &["led-5mm"], true).unwrap();
     assert!(
-        text(&reply).contains("wrote parts/led-5mm 0.1.0, replacing a file"),
+        text(&reply).contains("wrote parts/led-5mm 0.1.1, replacing a file"),
         "{}",
         text(&reply)
     );
@@ -1143,7 +1143,7 @@ fn a_broken_folder_of_the_users_own_does_not_block_an_add() {
     fs::write(mine.join("part.jsonc"), "{}\n").unwrap();
     std::os::unix::fs::symlink("../../datasheets/sensor.pdf", mine.join("datasheet.pdf")).unwrap();
     let reply = add(dir.path(), &["led-5mm"], false).unwrap();
-    assert_eq!(text(&reply), "wrote parts/led-5mm 0.1.0\nwrote parts.lock");
+    assert_eq!(text(&reply), "wrote parts/led-5mm 0.1.1\nwrote parts.lock");
 }
 
 /// `orbe check` names the folder of a scene of any name with `-C`, so a named folder is trusted.
@@ -1152,7 +1152,7 @@ fn a_folder_named_with_c_is_trusted_and_a_missing_one_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("blinky.jsonc"), "{}\n").unwrap();
     let reply = add(dir.path(), &["led-5mm"], false).unwrap();
-    assert_eq!(text(&reply), "wrote parts/led-5mm 0.1.0\nwrote parts.lock");
+    assert_eq!(text(&reply), "wrote parts/led-5mm 0.1.1\nwrote parts.lock");
 
     let missing = dir.path().join("nowhere");
     let reply = add(&missing, &["led-5mm"], false).unwrap();
@@ -1183,10 +1183,10 @@ fn parts_on_another_filesystem_still_takes_an_add() {
     }
     std::os::unix::fs::symlink(other.path(), dir.path().join("parts")).unwrap();
     let reply = add(dir.path(), &["led-5mm"], false).unwrap();
-    assert_eq!(text(&reply), "wrote parts/led-5mm 0.1.0\nwrote parts.lock");
+    assert_eq!(text(&reply), "wrote parts/led-5mm 0.1.1\nwrote parts.lock");
     edit(dir.path(), "led-5mm");
     let reply = add(dir.path(), &["led-5mm"], true).unwrap();
-    assert!(text(&reply).contains("replacing 0.1.0 with local edits"));
+    assert!(text(&reply).contains("replacing 0.1.1 with local edits"));
     assert_lock_agrees(dir.path());
 }
 
@@ -1355,7 +1355,7 @@ fn a_folder_and_log_at_the_old_trash_names_are_left_alone() {
     let before = tree(&dir.path().join("parts"));
     assert_eq!(diff_predicts(dir.path()).unwrap(), "");
     let reply = text(&add(dir.path(), &["led-5mm"], false).unwrap());
-    assert_eq!(reply, "wrote parts/led-5mm 0.1.0\nwrote parts.lock");
+    assert_eq!(reply, "wrote parts/led-5mm 0.1.1\nwrote parts.lock");
     let mut after = tree(&dir.path().join("parts"));
     after.retain(|path, _| !path.starts_with("led-5mm"));
     assert_eq!(after, before);
@@ -1553,7 +1553,7 @@ fn an_overwrite_deletes_odd_names_it_moved_aside() {
     let reply = text(&add(dir.path(), &["led-5mm"], true).unwrap());
     assert_eq!(
         reply,
-        "wrote parts/led-5mm 0.1.0, replacing 0.1.0 with local edits\nparts.lock unchanged"
+        "wrote parts/led-5mm 0.1.1, replacing 0.1.1 with local edits\nparts.lock unchanged"
     );
     assert!(!dir.path().join("parts/.orbe-add").exists());
     assert_lock_agrees(dir.path());

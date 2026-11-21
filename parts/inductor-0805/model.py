@@ -16,11 +16,11 @@ import build123d as bd
 
 from cad import glb
 from cad.chip import chip, chip_anchors
-from cad.color import srgb
+from cad.color import plastic
 
 SIZE = (2.0, 1.25, 0.85)  # length, width, height
 
-_BODY = srgb("#3A3A3C")
+_BODY = plastic("#3A3A3C")
 
 
 def inductor_0805_shape():

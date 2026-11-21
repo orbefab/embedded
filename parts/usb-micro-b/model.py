@@ -16,7 +16,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint
-from cad.color import srgb
+from cad.color import plastic, tin
 from cad.geom import box
 
 USB_W = 7.5  # verify
@@ -33,8 +33,9 @@ USB_SHELLS = (
     (9, 1, 1),
 )  # lead, end in x, side in y
 
-_TIN = srgb("#C5C8CE")
-_DARK = srgb("#2A2E33")
+_TIN = tin()
+_DARK = plastic("#2A2E33")
+_TONGUE = plastic("#F2F1EC")
 
 
 def _pad_xy(lead):
@@ -54,7 +55,7 @@ def usb_micro_b_shape():
     children = [
         paint(shell - cutter, "body", _TIN),
         paint(box(front + depth - 0.3, 0, z + 0.15, 0.35, mouth_w - 0.4, mouth_h - 0.3), "mouth", _DARK),
-        paint(box(front + 0.8, 0, z - 0.25, 1.8, 5.2, 0.3), "tongue", _TIN),
+        paint(box(front + 0.8, 0, z - 0.25, 1.8, 5.2, 0.3), "tongue", _TONGUE),
     ]
     length, width, thick = USB_PAD
     for lead in range(1, 6):

@@ -13,11 +13,11 @@ import build123d as bd
 
 from cad import glb
 from cad.chip import chip, chip_anchors
-from cad.color import srgb
+from cad.color import plastic
 
 SIZE = (1.6, 0.8, 0.8)  # length, width, height  # verify height
 
-_TAN = srgb("#C4A574")
+_TAN = plastic("#C4A574")
 
 
 def capacitor_0603_shape():

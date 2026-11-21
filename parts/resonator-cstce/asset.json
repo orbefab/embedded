@@ -2,13 +2,13 @@
   "part": "resonator-cstce",
   "source": {
     "script": "model.py",
-    "sha256": "ef9cad41e00291b5992aa5690c0f55f3d8faad52e4c3bafb7ad340967e5797e5",
-    "bytes": 1554
+    "sha256": "4c7a43634a159ec076ed8f69d578b3a6515e3540b83131fc1414d2eba8b8e94d",
+    "bytes": 1560
   },
   "files": {
     "resonator-cstce.glb": {
-      "sha256": "8198f8e52835d517a375b29fec8edeb4a2f84710635371c0d6e85bb0fafb3301",
-      "bytes": 4436
+      "sha256": "48c7073edc101d54952ce8aa91073659f0ab2503d85c7cbbffeddd960df9f827",
+      "bytes": 4520
     },
     "resonator-cstce.anchors.json": {
       "sha256": "5941360c852bc5ebbcbe07c95f42e2ecc94ef9b17a9431d353803706acc3f6e1",

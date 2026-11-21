@@ -89,13 +89,31 @@ fn a_passive_a_chip_and_a_board_keep_only_what_their_files_say() {
     );
 
     let chip = card("atmega328p-dip28").unwrap();
-    assert!(chip.description.is_none());
-    assert!(chip.categories.is_none());
+    assert!(
+        chip.description
+            .as_deref()
+            .unwrap()
+            .contains("ATmega328P-PU")
+    );
+    assert!(
+        chip.categories
+            .as_ref()
+            .unwrap()
+            .iter()
+            .any(|category| category == "microcontroller")
+    );
     assert_eq!(chip.real.maker.as_deref(), Some("Microchip"));
     assert_eq!(chip.real.number.as_deref(), Some("ATmega328P-PU"));
     let docs = chip.docs.unwrap();
-    assert!(docs.iter().all(|doc| doc.url.is_none()));
-    assert!(docs.iter().any(|doc| doc.name == "DS40002061B"));
+    assert!(docs.iter().any(|doc| {
+        doc.name == "DS40002061B"
+            && doc.url.as_deref()
+                == Some("https://ww1.microchip.com/downloads/en/DeviceDoc/ATmega48A-PA-88A-PA-168A-PA-328-P-DS-DS40002061B.pdf")
+    }));
+    assert!(
+        docs.iter()
+            .any(|doc| doc.name == "avr-1.8.6 boards.txt" && doc.url.is_none())
+    );
     assert!(
         chip.params
             .iter()
@@ -108,7 +126,7 @@ fn a_passive_a_chip_and_a_board_keep_only_what_their_files_say() {
     assert!(board.categories.is_some());
     assert_eq!(
         board.uses.get("led-0603").map(String::as_str),
-        Some("0.1.0")
+        Some("0.1.1")
     );
     assert!(board.used_by.is_empty());
     let docs = board.docs.unwrap();

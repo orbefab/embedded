@@ -3,8 +3,8 @@
 
 Part frame: on its pads, body underside on z = 0, length along X, centred
 on the origin. Lead 1 (the anode) is the end cap at -X, lead 2 (the
-cathode) the one at +X, as on the 0603 LED. The body node is the lens, so
-a viewer can light and tint it; the shape takes the lens colour.
+cathode) the one at +X, as on the 0603 LED. The body node is the die under
+a clear dome, so a viewer can light and tint it; the die takes the lens colour.
 
 The common 0805 chip LED: 2.0 × 1.25 × 0.8 (`# verify` height).
 """
@@ -15,16 +15,16 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb
-from cad.chip import chip, chip_anchors
-from cad.color import srgb
+from cad.chip import chip_anchors, led
+from cad.color import plastic
 
 SIZE = (2.0, 1.25, 0.8)  # length, width, height  # verify height
 
-_LENS = srgb("#E8C56A")
+_LENS = plastic("#E8C56A")
 
 
 def led_0805_shape(lens=_LENS):
-    return bd.Compound(children=chip(*SIZE, lens), label="led_0805")
+    return bd.Compound(children=led(*SIZE, lens), label="led_0805")
 
 
 def led_0805_anchors():

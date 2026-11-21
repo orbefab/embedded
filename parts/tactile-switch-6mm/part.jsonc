@@ -1,7 +1,7 @@
 {
   "format": 1,
   "part": "tactile-switch-6mm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "Push button, 6 mm",
   "summary": "Momentary 6 x 6 mm tact switch with four legs. Legs 1-2 are joined, legs 3-4 are joined, and pressing joins the two pairs.",
   "tags": ["button", "switch", "input", "momentary", "through-hole"],

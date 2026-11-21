@@ -2,13 +2,13 @@
   "part": "uno-board",
   "source": {
     "script": "model.py",
-    "sha256": "0927ff92c30b50769721dce6b751c0bdc2ad48d6749e290051c688b6bf4f12d1",
-    "bytes": 4367
+    "sha256": "36eef2d317bb1326b75fd92b17f2f2c67f56f97b83a11bf748cd81c6dff1addd",
+    "bytes": 4376
   },
   "files": {
     "uno-board.glb": {
-      "sha256": "8a6d1d4209f1991b62784423d55e719c58c0419f933cced692b57d9a1a0bf682",
-      "bytes": 326720
+      "sha256": "50de6ef6e6c67582579bb475c8e3bf69582266047441003a5fc771f2567d7f7d",
+      "bytes": 326804
     }
   },
   "box": {
@@ -40,7 +40,7 @@
       "children": 50,
       "lowest_node": "pcb",
       "z_mm": 0,
-      "draw_calls": 273
+      "draw_calls": 281
     }
   }
 }

@@ -17,16 +17,16 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint, tht
-from cad.color import srgb
+from cad.color import metal, tin
 from cad.geom import box, cyl_z
 
 BASE = (11.35, 4.65, 0.4)  # long, wide, tall
 CAN = (10.5, 3.7, 3.5)  # long, wide, top above the seat
 LEG = (0.43, 4.88, 3.0)  # Φ, apart, below the seat
 
-_CAN = srgb("#D0D3D8")
-_BASE = srgb("#B9BCC2")
-_TIN = srgb("#C5C8CE")
+_CAN = metal("#D0D3D8")
+_BASE = metal("#B9BCC2")
+_TIN = tin()
 
 
 def _stadium(length, width, z0, z1):

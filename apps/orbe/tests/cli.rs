@@ -117,7 +117,7 @@ fn hold(project: &Path, id: &str, version: &str) {
     let file = project.join("parts").join(id).join("part.jsonc");
     let text = fs::read_to_string(&file).unwrap();
     let edited = text.replacen(
-        "\"version\": \"0.1.0\"",
+        "\"version\": \"0.1.1\"",
         &format!("\"version\": \"{version}\""),
         1,
     );
@@ -383,7 +383,7 @@ fn adding_parts_for_the_first_target() {
     assert_eq!(fs::read_to_string(&lock_path).unwrap(), fixture_lock);
     for id in &copied {
         assert!(
-            stdout.contains(&format!("wrote parts/{id} 0.1.0")),
+            stdout.contains(&format!("wrote parts/{id} 0.1.1")),
             "{id}: {stdout}"
         );
     }
@@ -452,7 +452,7 @@ fn adding_parts_for_the_first_target() {
 
     let (output, stdout, _) = orbe_in(dir.path(), &["add", "led-5mm", "--overwrite"]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
-    assert!(stdout.contains("wrote parts/led-5mm 0.1.0"), "{stdout}");
+    assert!(stdout.contains("wrote parts/led-5mm 0.1.1"), "{stdout}");
     let restored = fs::read_to_string(&led).unwrap();
     assert!(restored.contains("\"title\": \"5 mm LED\""));
     assert!(!restored.contains("edited"));
@@ -473,7 +473,7 @@ fn adding_parts_for_the_first_target() {
     .unwrap();
     let (output, stdout, _) = orbe_in(dir.path(), &["add", "nano-board", "--diff"]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
-    assert!(stdout.contains("stays at 0.1.0"), "{stdout}");
+    assert!(stdout.contains("stays at 0.1.1"), "{stdout}");
     assert!(stdout.contains("the version is unchanged"), "{stdout}");
     assert!(
         stdout
@@ -664,7 +664,7 @@ fn every_part_missing_and_part_modified_hint_makes_the_next_check_pass() {
         let path = project.join("parts/led-5mm/part.jsonc");
         let text = fs::read_to_string(&path).unwrap();
         let edited = text.replacen(
-            "\"version\": \"0.1.0\"",
+            "\"version\": \"0.1.1\"",
             &format!("\"version\": \"{to}\""),
             1,
         );
@@ -733,12 +733,12 @@ fn every_part_missing_and_part_modified_hint_makes_the_next_check_pass() {
         ),
         (
             "a sealed edit",
-            "differs from `led-5mm@0.1.0` in `title`",
+            "differs from `led-5mm@0.1.1` in `title`",
             Box::new(move |p: &Path| edit_title(p)),
         ),
         (
             "a version in another major",
-            "differs from `led-5mm@0.1.0` in `version`",
+            "differs from `led-5mm@0.1.1` in `version`",
             Box::new(move |p: &Path| set_version(p, "1.0.0")),
         ),
         (
@@ -747,7 +747,7 @@ fn every_part_missing_and_part_modified_hint_makes_the_next_check_pass() {
             Box::new(|p: &Path| {
                 let lock = p.join("parts.lock");
                 let text = fs::read_to_string(&lock).unwrap();
-                fs::write(&lock, text.replacen("led-5mm 0.1.0 ", "led-5mm 0.2.0 ", 1)).unwrap();
+                fs::write(&lock, text.replacen("led-5mm 0.1.1 ", "led-5mm 0.2.0 ", 1)).unwrap();
             }),
         ),
     ];
@@ -795,12 +795,12 @@ fn an_outdated_copy_names_one_add_and_a_hand_edit_stays_modified() {
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert!(stdout.contains("error[part_outdated]"), "{stdout}");
     assert!(
-        stdout.contains("this orbe carries `led-5mm@0.1.0` and the project holds `led-5mm@0.0.9`"),
+        stdout.contains("this orbe carries `led-5mm@0.1.1` and the project holds `led-5mm@0.0.9`"),
         "{stdout}"
     );
     assert!(
         stdout.contains(
-            "this orbe carries `resistor-axial@0.1.0` and the project holds `resistor-axial@0.0.8`"
+            "this orbe carries `resistor-axial@0.1.1` and the project holds `resistor-axial@0.0.8`"
         ),
         "{stdout}"
     );
@@ -821,7 +821,7 @@ fn an_outdated_copy_names_one_add_and_a_hand_edit_stays_modified() {
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert!(stdout.contains("error[part_modified]"), "{stdout}");
     assert!(
-        stdout.contains("differs from `led-5mm@0.1.0` in `title`"),
+        stdout.contains("differs from `led-5mm@0.1.1` in `title`"),
         "{stdout}"
     );
     assert!(!stdout.contains("part_outdated"), "{stdout}");
@@ -859,7 +859,7 @@ fn a_newer_major_is_not_pinned_into_an_overwrite() {
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert!(stdout.contains("error[part_newer]"), "{stdout}");
     assert!(
-        stdout.contains("this project holds `led-5mm@1.0.0` and this orbe carries `led-5mm@0.1.0`"),
+        stdout.contains("this project holds `led-5mm@1.0.0` and this orbe carries `led-5mm@0.1.1`"),
         "{stdout}"
     );
     assert_eq!(
@@ -871,7 +871,7 @@ fn a_newer_major_is_not_pinned_into_an_overwrite() {
         "hint: this project needs a newer orbe"
     );
     assert!(!stdout.contains("orbe add"), "{stdout}");
-    assert!(!stdout.contains("led-5mm@0.1.0 --overwrite"), "{stdout}");
+    assert!(!stdout.contains("led-5mm@0.1.1 --overwrite"), "{stdout}");
     let text = fs::read_to_string(project.path().join("parts/led-5mm/part.jsonc")).unwrap();
     assert!(text.contains("\"version\": \"1.0.0\""), "{text}");
 }
@@ -888,7 +888,7 @@ fn a_newer_copy_is_not_an_overwrite() {
     assert_eq!(diagnostics[0]["code"], "part_newer");
     assert_eq!(
         diagnostics[0]["message"],
-        "this project holds `led-5mm@0.2.0` and this orbe carries `led-5mm@0.1.0`"
+        "this project holds `led-5mm@0.2.0` and this orbe carries `led-5mm@0.1.1`"
     );
     assert_eq!(diagnostics[0]["hint"], "this project needs a newer orbe");
     assert!(!stdout.contains("orbe add"), "{stdout}");
@@ -952,7 +952,7 @@ fn an_overwrite_of_an_older_board_leaves_a_newer_child() {
         let (output, out, err) = run_printed(root, &command);
         assert_eq!(output.status.code(), Some(0), "{version}: {out}{err}");
         assert!(
-            out.contains("wrote parts/nano-board 0.1.0, replacing 0.0.9"),
+            out.contains("wrote parts/nano-board 0.1.1, replacing 0.0.9"),
             "{version}: {out}"
         );
         assert!(
@@ -983,7 +983,7 @@ fn an_overwrite_of_an_older_board_leaves_a_newer_child() {
         assert!(stdout.contains("error[part_newer]"), "{version}: {stdout}");
         assert!(
             stdout.contains(&format!(
-                "this project holds `atmega328p-tqfp32@{version}` and this orbe carries `atmega328p-tqfp32@0.1.0`"
+                "this project holds `atmega328p-tqfp32@{version}` and this orbe carries `atmega328p-tqfp32@0.1.1`"
             )),
             "{version}: {stdout}"
         );
@@ -996,7 +996,7 @@ fn an_overwrite_of_an_older_board_leaves_a_newer_child() {
 fn a_named_overwrite_leaves_a_newer_locked_copy() {
     let chip = "atmega328p-tqfp32";
     let named = ["add", chip, "--overwrite"];
-    let pinned = ["add", "atmega328p-tqfp32@0.1.0", "--overwrite"];
+    let pinned = ["add", "atmega328p-tqfp32@0.1.1", "--overwrite"];
     let board = ["add", "nano-board", "--overwrite"];
     for args in [named.as_slice(), pinned.as_slice(), board.as_slice()] {
         let project = common::project("nano-button");
@@ -1057,7 +1057,7 @@ fn an_outdated_add_does_not_call_a_lock_match_a_local_edit() {
     let (output, out, err) = run_printed(project.path(), &command);
     assert_eq!(output.status.code(), Some(0), "{out}{err}");
     assert!(
-        out.contains("wrote parts/led-5mm 0.1.0, replacing 0.0.9\n"),
+        out.contains("wrote parts/led-5mm 0.1.1, replacing 0.0.9\n"),
         "{out}"
     );
     assert!(!out.contains("local edits"), "{out}");
@@ -1078,7 +1078,7 @@ fn an_outdated_add_does_not_call_a_lock_match_a_local_edit() {
         .unwrap_or_else(|| panic!("{stdout}"));
     let (output, out, err) = run_printed(edited.path(), &command);
     assert_eq!(output.status.code(), Some(0), "{out}{err}");
-    assert!(out.contains("replacing 0.1.0 with local edits"), "{out}");
+    assert!(out.contains("replacing 0.1.1 with local edits"), "{out}");
 }
 
 #[test]
@@ -1162,7 +1162,7 @@ fn add_refuses_a_folder_that_is_not_a_project() {
 
     let (output, stdout, stderr) = orbe_in(lonely.path(), &["add", "led-5mm"]);
     assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
-    assert!(stdout.contains("wrote parts/led-5mm 0.1.0\n"), "{stdout}");
+    assert!(stdout.contains("wrote parts/led-5mm 0.1.1\n"), "{stdout}");
     assert!(stdout.contains("wrote parts.lock\n"), "{stdout}");
     assert!(lonely.path().join("parts/led-5mm/part.jsonc").is_file());
     assert!(!lonely.path().join("scene.jsonc").exists());
@@ -1412,6 +1412,6 @@ fn a_user_folder_at_the_old_add_trash_is_left_in_place() {
     .unwrap();
     let (output, stdout, stderr) = orbe_in(project.path(), &["add", "led-5mm"]);
     assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
-    assert_eq!(stdout, "wrote parts/led-5mm 0.1.0\nwrote parts.lock\n");
+    assert_eq!(stdout, "wrote parts/led-5mm 0.1.1\nwrote parts.lock\n");
     assert_eq!(fs::read(&note).unwrap(), b"KEEP-ME\n");
 }

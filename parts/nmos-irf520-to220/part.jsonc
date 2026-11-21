@@ -1,7 +1,7 @@
 {
   "format": 1,
   "part": "nmos-irf520-to220",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "N-channel MOSFET, IRF520 (TO-220)",
   "summary": "100 V, 9.2 A power MOSFET in TO-220. With the marked face toward you and the leads down, the legs are gate, drain, source from left to right, and the metal tab is the drain too. It is not a logic-level part: a 5 V gate passes about 2 A, and a 3.3 V gate about 9 mA. A load that wants more than that from a 5 V pin, such as 1 ohm on 5 V, sees the transistor hold its current near 2 A, with several volts and watts across it.",
   "tags": ["transistor", "mosfet", "nmos", "switch", "power", "motor", "through-hole"],

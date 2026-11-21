@@ -37,10 +37,10 @@ fn records_of_three_parts_and_a_block_match_their_snapshots() {
     let registry = build(&repo(), None).unwrap();
     let bless = std::env::var_os("ORBE_BLESS").is_some();
     for address in [
-        "led-5mm@0.1.0",
-        "atmega328p-dip28@0.1.0",
-        "nano-board@0.1.0",
-        "nano-button-led@0.1.1",
+        "led-5mm@0.1.1",
+        "atmega328p-dip28@0.1.1",
+        "nano-board@0.1.1",
+        "nano-button-led@0.1.2",
     ] {
         let text = std::str::from_utf8(&registry.output[&format!("{address}.json")]).unwrap();
         let got = without_hashes(text);
@@ -121,7 +121,7 @@ fn every_url_holds_the_bytes_its_hash_names() {
             "{url}: the folder hash is over the files it lists"
         );
     }
-    let block = record(&registry.output, "nano-button-led@0.1.1");
+    let block = record(&registry.output, "nano-button-led@0.1.2");
     assert_eq!(
         block["license"],
         "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
@@ -156,7 +156,7 @@ fn the_repo_names_the_official_registry() {
 #[test]
 fn a_block_depends_on_every_part_it_runs_at_the_versions_in_the_same_build() {
     let registry = build(&repo(), None).unwrap();
-    let block = record(&registry.output, "nano-button-led@0.1.1");
+    let block = record(&registry.output, "nano-button-led@0.1.2");
     let deps: Vec<&str> = block["registryDependencies"]
         .as_array()
         .unwrap()
@@ -164,19 +164,19 @@ fn a_block_depends_on_every_part_it_runs_at_the_versions_in_the_same_build() {
         .map(|dep| dep.as_str().unwrap())
         .collect();
     for direct in [
-        "nano-board@0.1.0",
-        "tactile-switch-6mm@0.1.0",
-        "resistor-axial@0.1.0",
-        "led-5mm@0.1.0",
+        "nano-board@0.1.1",
+        "tactile-switch-6mm@0.1.1",
+        "resistor-axial@0.1.1",
+        "led-5mm@0.1.1",
     ] {
         assert!(deps.contains(&direct), "{direct} in {deps:?}");
     }
-    let board = record(&registry.output, "nano-board@0.1.0");
+    let board = record(&registry.output, "nano-board@0.1.1");
     for through_the_board in board["registryDependencies"].as_array().unwrap() {
         assert!(deps.contains(&through_the_board.as_str().unwrap()));
     }
     assert_eq!(block["board"], "nano-board");
-    assert_eq!(block["version"], "0.1.1");
+    assert_eq!(block["version"], "0.1.2");
 }
 
 #[test]

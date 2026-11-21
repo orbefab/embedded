@@ -2,13 +2,13 @@
   "part": "atmega328p-tqfp32",
   "source": {
     "script": "model.py",
-    "sha256": "1eb0194131741ad5f858370e8b2781515c83a0dbe16cd786f21a5b601a905770",
-    "bytes": 2085
+    "sha256": "7356a14a5746ead3abd0a3263c502a8d1ef86be17e51e7458159df04e821b54d",
+    "bytes": 2112
   },
   "files": {
     "atmega328p-tqfp32.glb": {
-      "sha256": "110f2b513728589bd93a412500da0cae71d1f2fb95fed1be4b8214b3ce75958d",
-      "bytes": 23928
+      "sha256": "0dcd1ee1e5d0503612dec1528f99273443098a7ac4a2b734e642aab85a953d95",
+      "bytes": 24308
     },
     "atmega328p-tqfp32.anchors.json": {
       "sha256": "18d213a3d99aed6240e66fb3e6724ef4082dde52d50ba62bfd7e4de41ee27ea7",
@@ -20,7 +20,7 @@
     "max": [4.5, 4.5, 1.26]
   },
   "kept_nodes": [],
-  "draw_calls": 2,
+  "draw_calls": 3,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -38,7 +38,7 @@
     },
     "merge": {
       "primitives_in": 34,
-      "primitives_out": 2
+      "primitives_out": 3
     }
   }
 }

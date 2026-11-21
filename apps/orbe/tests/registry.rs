@@ -809,7 +809,7 @@ fn a_block_scene_that_names_an_unknown_hole_is_not_published() {
         &project,
         scene,
         &[
-            ("breadboard-400", &board, "0.1.0", "@orbefab"),
+            ("breadboard-400", &board, "0.1.1", "@orbefab"),
             ("lamp", &lamp, "1.2.0", "@acme"),
         ],
     );
@@ -833,7 +833,7 @@ fn a_changed_sealed_catalog_part_is_not_published() {
     project_locked(
         &project,
         scene,
-        &[("resistor-axial", &folder, "0.1.0", "@orbefab")],
+        &[("resistor-axial", &folder, "0.1.1", "@orbefab")],
     );
     refuse_installed(
         &src,
@@ -856,7 +856,7 @@ fn a_block_that_names_firmware_it_does_not_ship_is_not_published() {
     project_locked(
         &project,
         scene,
-        &[("atmega328p-dip28", &folder, "0.1.0", "@orbefab")],
+        &[("atmega328p-dip28", &folder, "0.1.1", "@orbefab")],
     );
     refuse_installed(&src, &project, "blocks/blink/scene.jsonc", "firmware.hex");
 }
@@ -1009,7 +1009,7 @@ fn a_block_file_that_leaves_its_folder_is_not_published() {
             project_locked(
                 &project,
                 &scene,
-                &[("atmega328p-dip28", &folder, "0.1.0", "@orbefab")],
+                &[("atmega328p-dip28", &folder, "0.1.1", "@orbefab")],
             );
             check_clean(&project);
         }
@@ -1037,7 +1037,7 @@ fn a_file_that_ships_in_its_folder_is_published() {
         std::fs::write(folder.join("sketch.hex"), &hex).unwrap();
         let scene = "{ \"format\": 1, \"parts\": { \"mcu\": { \"type\": \"blink-mcu\" } }, \"ground\": \"mcu.GND\" }\n";
         let project = dir.path().join("project");
-        project_locked(&project, scene, &[("blink-mcu", &folder, "0.1.0", "@acme")]);
+        project_locked(&project, scene, &[("blink-mcu", &folder, "0.1.1", "@acme")]);
         assert_published(
             &src,
             &project,
@@ -1061,7 +1061,7 @@ fn a_file_that_ships_in_its_folder_is_published() {
     project_locked(
         &project,
         scene,
-        &[("atmega328p-dip28", &folder, "0.1.0", "@orbefab")],
+        &[("atmega328p-dip28", &folder, "0.1.1", "@orbefab")],
     );
     std::fs::write(project.join("sketch.hex"), &hex).unwrap();
     assert_published(

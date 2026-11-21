@@ -22,7 +22,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint, tht
-from cad.color import srgb
+from cad.color import plastic, tin
 from cad.geom import box, cyl_z
 
 TRIM_BODY = (6.60, 6.99, 4.88)  # wide, deep, top above z = 0
@@ -34,9 +34,9 @@ TRIM_SLOT = (2.77, 0.64, 0.89)  # long, wide, deep
 TRIM_PIN = (0.46, 5.46)  # Φ, below z = 0
 TRIM_PINS = ((1, -2.54, 3.53), (2, 0.0, 3.53 + 2.54), (3, 2.54, 3.53))  # lead, x, behind the front edge
 
-_BLUE = srgb("#2F63B5")
-_ROTOR = srgb("#EFEBE0")
-_TIN = srgb("#C5C8CE")
+_BLUE = plastic("#2F63B5")
+_ROTOR = plastic("#EFEBE0")
+_TIN = tin()
 
 
 def trimmer_3362p_anchors():

@@ -2,13 +2,13 @@
   "part": "crystal-3215",
   "source": {
     "script": "model.py",
-    "sha256": "03fa8a89a33b01a1aed68aaedda53da7b70e93e236489a76c611a863881d794d",
-    "bytes": 922
+    "sha256": "5f01d4520ba11fb6f6e2932726d68287cd546252b2a87942a7c9f68eeb0aaccc",
+    "bytes": 1756
   },
   "files": {
     "crystal-3215.glb": {
-      "sha256": "0c6bb2c12e84099cc7a2f48538964e4fec2b50c45d22384e9f242ec18c96e9b4",
-      "bytes": 3040
+      "sha256": "6acc16e98d23d5eecdeb8f9286d9f99c609e3963e534c85a252c282b28e9a6d4",
+      "bytes": 4512
     },
     "crystal-3215.anchors.json": {
       "sha256": "596123c244f4e015977646c56aeeb11193c7e54da79ddb333d701cb0a95fd2e9",
@@ -20,7 +20,7 @@
     "max": [1.6, 0.75, 0.73]
   },
   "kept_nodes": [],
-  "draw_calls": 1,
+  "draw_calls": 2,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -37,8 +37,8 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 3,
-      "primitives_out": 1
+      "primitives_in": 4,
+      "primitives_out": 2
     }
   }
 }

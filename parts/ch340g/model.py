@@ -7,8 +7,8 @@ from +X, 9 to 16 back along -Y. The dot marks lead 1. On the Nano it hangs
 under the board, turned half a turn about X.
 
 SOIC-16 outline: body 9.9 × 3.9, 1.75 tall, leads 0.4 wide and 1.2 long on
-1.27, 6.3 tip to tip. The mark is the same colour as the leads, so the merged
-file has no separate mark node and stays at two draw calls.
+1.27, 6.3 tip to tip. Each lead is a gull wing; the foot stays the pad
+whose underside the anchor names. The pin-1 mark is paint, not the lead metal.
 """
 
 import sys
@@ -17,8 +17,8 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint
-from cad.color import srgb
-from cad.geom import box
+from cad.color import plastic, tin
+from cad.geom import box, formed_foot
 
 SOIC_L = 9.9
 SOIC_W = 3.9
@@ -28,8 +28,9 @@ SOIC_LEAD = (0.4, 1.2, 0.18)  # wide, out, thick
 SOIC_LEAD_Y = 2.55
 SOIC_LEAD_Z = 0.12  # lead centre
 
-_BLACK = srgb("#1A1A1A")
-_TIN = srgb("#C5C8CE")
+_BLACK = plastic("#1A1A1A")
+_DOT = plastic("#8A8D93")
+_TIN = tin()
 
 
 def _lead_xy(lead):
@@ -42,12 +43,21 @@ def _lead_xy(lead):
 def ch340g_shape():
     children = [
         paint(box(0, 0, SOIC_H / 2.0, SOIC_L, SOIC_W, SOIC_H), "body", _BLACK),
-        paint(box(4.15, 1.15, SOIC_H + 0.05, 0.5, 0.5, 0.12), "dot", _TIN),
+        paint(box(4.15, 1.15, SOIC_H + 0.05, 0.5, 0.5, 0.12), "dot", _DOT),
     ]
     wide, out, thick = SOIC_LEAD
     for lead in range(1, 17):
         x, y = _lead_xy(lead)
-        children.append(paint(box(x, y, SOIC_LEAD_Z, wide, out, thick), f"lead-{lead}", _TIN))
+        # The body is toward y = 0, so a +Y lead bends toward -Y.
+        children.append(
+            paint(
+                formed_foot(
+                    x, y, SOIC_LEAD_Z, wide, out, thick, axis="y", sign=-1.0 if y > 0 else 1.0, rise=0.5, tuck=0.32
+                ),
+                f"lead-{lead}",
+                _TIN,
+            )
+        )
     return bd.Compound(children=children, label="ch340g")
 
 

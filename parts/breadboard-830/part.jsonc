@@ -2,12 +2,12 @@
 {
   "format": 1,
   "part": "breadboard-830",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "Breadboard, 830 points",
   "summary": "Full-size solderless breadboard: 63 columns of two 5-hole strips across a center channel, rows a to j, and four 50-hole power rails, W and Y for +, X and Z for -, each hole numbered by its column and each rail one strip the whole length.",
   "tags": ["breadboard", "prototyping", "solderless"],
   "license": "MIT OR Apache-2.0",
-  "docs": { "BusBoard BB830 datasheet, Rev 7": "https://core-electronics.com.au/attachments/localcontent/BPS-DAT-(BB830)-Datasheet_827195b117c.pdf" },
+  "docs": { "BusBoard BB830 datasheet, Rev 7": "https://www.busboard.com/documents/datasheets/BPS-DAT-(BB830)-Datasheet.pdf" },
   "real": { "maker": "BusBoard Prototype Systems", "number": "BB830", "datasheet": "BusBoard BB830 datasheet, Rev 7" },
   "joins_only": true,
   "pins": {

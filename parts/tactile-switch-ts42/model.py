@@ -17,7 +17,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint
-from cad.color import srgb
+from cad.color import nickel, plastic, tin
 from cad.geom import box, cyl_z
 
 BODY = (5.95, 4.4, 1.4, -0.125)  # long, wide, tall, x of its centre
@@ -27,9 +27,9 @@ TRAVEL = 0.2  # verify
 PADS = {1: (-4.2, 2.25), 2: (4.2, 2.25), 3: (-4.2, -2.25), 4: (4.2, -2.25), 5: (-4.2, 0.0)}
 TAB = (0.8, 0.15)  # wide, thick
 
-_BLACK = srgb("#1A1A1A")
-_COVER = srgb("#C9CCD1")
-_TIN = srgb("#C5C8CE")
+_BLACK = plastic("#1A1A1A")
+_COVER = nickel("#C9CCD1")
+_TIN = tin()
 
 
 def _tab(lead):
