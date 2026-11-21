@@ -980,6 +980,9 @@ impl Reply {
             _ => {}
         }
         let _ = write!(out, "error[{}]: {}", error.code.as_str(), error.message);
+        if error.code == Code::ExpectFailed {
+            let _ = write!(out, " at t={}", t(self.t_ps));
+        }
         if let Some(check) = self.check() {
             let _ = write!(
                 out,

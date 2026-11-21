@@ -342,7 +342,7 @@ A test file is `tests/<name>.test` in the project folder. Each line is a live co
 
 ```
 FAIL tests/button.test:4: expect @led1 lit
-  error[expect_failed]: expected @led1 lit
+  error[expect_failed]: expected @led1 lit at t=100ms
     expected: @led1 lit
     actual:   led1 off, i=1.2775403302175985e-13 A, brightness=1.2775403302174304e-13 A over 20ms
 0 passed, 1 failed
