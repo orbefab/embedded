@@ -173,12 +173,8 @@ jobs:
           wasm-bindgen: true
           cache-save: ${{ env.CACHE_SAVE }}
 
-      - name: Previous registry
-        if: matrix.shard == '2/2'
-        run: scripts/site-previous.test.sh
-
       - name: Site on wrangler
-        run: scripts/check-site.sh --first-deploy --servers wrangler --shard "${{ matrix.shard }}"
+        run: scripts/check-site.sh --servers wrangler --shard "${{ matrix.shard }}"
 
   engine-chips:
     name: engine-chips

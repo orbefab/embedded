@@ -126,7 +126,7 @@ fn copy(from: &Path, root: &Path, rel: &str) {
 
 /// The findings `build` refuses `src` with, as `file:line:column code message` lines.
 fn refused(src: &Path) -> Vec<String> {
-    match build(src, None) {
+    match build(src) {
         Err(Error::Check(found)) => found
             .iter()
             .map(|d| {
@@ -156,7 +156,7 @@ fn a_blob_param_with_a_default_is_probed_at_that_default() {
     let part = elf_chip();
     let src = source(&[("elf-chip", part.clone())]);
     copy(&test_elf(), src.path(), "parts/elf-chip/program.elf");
-    let registry = build(src.path(), None).unwrap();
+    let registry = build(src.path()).unwrap();
     let files = record(&registry.output, "elf-chip@0.1.0")["files"].to_string();
     assert!(files.contains("program.elf"), "{files}");
 
@@ -192,7 +192,7 @@ fn a_required_blob_param_holds_back_only_the_bodies_it_reaches() {
         ("flash-module", flash_module(LOAD)),
     ]);
     copy(&rom_elf(), src.path(), "parts/flash-chip/rom.elf");
-    let registry = build(src.path(), None).unwrap();
+    let registry = build(src.path()).unwrap();
     for address in ["flash-chip@0.1.0", "flash-module@0.1.0"] {
         record(&registry.output, address);
     }
@@ -251,7 +251,7 @@ fn a_required_blob_param_holds_back_only_the_bodies_it_reaches() {
 /// the chip.
 #[test]
 fn the_catalog_esp32s3_parts_build_with_the_rom_and_without_an_app() {
-    let registry = build(&repo(), None).unwrap();
+    let registry = build(&repo()).unwrap();
     let chip = record(&registry.output, "esp32s3-qfn56@0.1.0");
     let rom = chip["files"]
         .as_array()

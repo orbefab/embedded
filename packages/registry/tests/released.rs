@@ -5,7 +5,7 @@ mod common;
 use std::fs;
 
 use common::{put, repo, third_party};
-use orbe_registry::{Error, RELEASED, build, released_changes, released_lock};
+use orbe_registry::{RELEASED, build, released_changes, released_lock};
 use orbe_scene::folder_hash;
 
 const CAP: &str = r#"{
@@ -48,7 +48,7 @@ fn the_lock_pins_the_record_the_build_writes() {
     let text = lock(src.path());
     let lines: Vec<_> = text.lines().collect();
     assert_eq!(lines.len(), 2, "{text}");
-    let registry = build(src.path(), None).unwrap();
+    let registry = build(src.path()).unwrap();
     let index: serde_json::Value = serde_json::from_slice(&registry.output["index.json"]).unwrap();
     let digest = |name: &str| {
         index["items"]
@@ -87,8 +87,6 @@ fn an_edited_part_at_the_same_version_names_the_part_and_says_to_bump() {
 fn a_part_bump_changes_the_block_record_at_the_same_block_version() {
     let src = third_party();
     lock(src.path());
-    let served = src.path().join("served");
-    build(src.path(), None).unwrap().write(&served).unwrap();
     let folder = folder_hash(&src.path().join("blocks/lamp-demo")).unwrap();
     let text = fs::read_to_string(src.path().join("parts/lamp/part.jsonc")).unwrap();
     put(
@@ -108,19 +106,6 @@ fn a_part_bump_changes_the_block_record_at_the_same_block_version() {
             "0.1.0",
             "blocks/lamp-demo/block.jsonc"
         )]
-    );
-    let Error::Invalid(message) = build(src.path(), Some(&served)).err().unwrap() else {
-        panic!("--previous accepted the build");
-    };
-    assert!(
-        message.contains(
-            "`lamp-demo@0.1.0` builds to a record other than the one served at that version"
-        ),
-        "{message}"
-    );
-    assert!(
-        message.contains("give the change a new version"),
-        "{message}"
     );
 }
 
@@ -268,8 +253,6 @@ fn removed_then_restored(
     from: &str,
     to: &str,
 ) {
-    let served = src.join("served");
-    build(src, None).unwrap().write(&served).unwrap();
     let first = fs::read_to_string(src.join(RELEASED)).unwrap();
     let line = first
         .lines()
@@ -292,8 +275,6 @@ fn removed_then_restored(
     walk(&root, &root, &mut saved);
     fs::remove_dir_all(&root).unwrap();
     assert!(released_changes(src).unwrap().is_empty());
-    let carried = build(src, Some(&served)).unwrap();
-    assert_eq!(carried.report.carried, 1, "{id} is carried, not rebuilt");
     let kept = released_lock(src).unwrap();
     assert!(
         kept.lines().any(|kept_line| kept_line == line),
@@ -311,19 +292,6 @@ fn removed_then_restored(
     assert_eq!(
         released_changes(src).unwrap(),
         vec![differs(id, "0.1.0", file)]
-    );
-    let Error::Invalid(message) = build(src, Some(&served)).err().unwrap() else {
-        panic!("--previous accepted the restored {id}");
-    };
-    assert!(
-        message.contains(&format!(
-            "`{id}@0.1.0` builds to a record other than the one served at that version"
-        )),
-        "{message}"
-    );
-    assert!(
-        message.contains("give the change a new version"),
-        "{message}"
     );
 }
 

@@ -82,7 +82,7 @@ pub fn written(dir: &Path) -> BTreeMap<String, Vec<u8>> {
 }
 
 pub fn invalid(src: &Path) -> String {
-    match build(src, None) {
+    match build(src) {
         Err(Error::Invalid(message)) => message,
         Err(other) => panic!("{other}"),
         Ok(_) => panic!("{} built", src.display()),
