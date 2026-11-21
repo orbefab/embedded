@@ -48,6 +48,10 @@ arduino-cli compile --fqbn arduino:avr:nano --output-dir build button
 
 The names follow the sketch folder, so the firmware is `build/<sketch>.ino.hex`.
 
+## Libraries
+
+orbe runs the compiled firmware unchanged, so Arduino libraries that work on the real board work here too, such as DHT sensor library or Adafruit NeoPixel. When a library uses a feature orbe doesn't simulate, the run stops with a diagnostic that names it.
+
 ## Name the right file
 
 The scene names `build/button.ino.hex`, the program alone:

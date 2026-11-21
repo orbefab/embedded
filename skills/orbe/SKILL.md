@@ -5,14 +5,8 @@ description: Simulates a circuit and its microcontroller firmware with the orbe 
 
 # orbe
 
-Run `orbe skills get core` and follow it before anything else. The `orbe` you have installed prints it, so it matches that version.
+orbe is a hardware simulator you drive from the shell. It runs a circuit and the firmware on its microcontroller, so you can build and test a hardware project without the hardware.
 
-Before you write or build Arduino firmware, also run `orbe skills get arduino`.
+Run `orbe skills get core` first, and follow it. The `orbe` you have installed prints it, so it matches that version.
 
-`orbe part led-5mm` prints one catalog part. `orbe search led` finds parts by id, title, maker, number, summary and tags. Look a part up that way before you add it.
-
-`orbe skills list` lists every skill. If `orbe` is not found, it is not installed. Install it, then run `orbe skills get core`:
-
-```sh
-curl -fsSL https://orbefab.com/embedded/install.sh | sh
-```
+If `orbe` is not found, it is not installed. Ask the user to install it from https://orbefab.com/embedded, then run `orbe skills get core`.

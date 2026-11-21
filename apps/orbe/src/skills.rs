@@ -1,13 +1,9 @@
-//! The skills this binary serves. Each is a markdown file compiled in. The `core` skill's
-//! parts section and the `arduino` skill's board section are rendered from the built-in
-//! catalog when a skill is printed.
+//! The skills this binary serves. Each is a markdown file compiled in. The `arduino` skill's
+//! board section is rendered from the built-in catalog when a skill is printed.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use orbe_scene::{
-    BoardFacts, Card, Gap, board_facts, catalog_cards, holes_text, param_sentence, si_amount,
-};
-use orbe_session::BRIGHTNESS_WINDOW;
+use orbe_scene::{BoardFacts, Gap, board_facts, si_amount};
 
 pub struct Skill {
     pub name: &'static str,
@@ -18,7 +14,7 @@ pub struct Skill {
 pub const SKILLS: &[Skill] = &[
     Skill {
         name: "core",
-        about: "How to use orbe: the loop, scenes, parts, refs, time, tests, sessions and errors. Read it first.",
+        about: "How to use orbe: the rules, the loop, scenes, parts, breadboards, sessions, tests and results. Read it first.",
         text: include_str!("../skills/core.md"),
     },
     Skill {
@@ -26,9 +22,17 @@ pub const SKILLS: &[Skill] = &[
         about: "Building Arduino Nano and Uno firmware with arduino-cli and naming it in the scene.",
         text: include_str!("../skills/arduino.md"),
     },
+    Skill {
+        name: "parts",
+        about: "How a project keeps its parts: copies, parts.lock, versions, Blocks and the buy field.",
+        text: include_str!("../skills/parts.md"),
+    },
+    Skill {
+        name: "reference",
+        about: "Breadboards in full, ratings, LED brightness, time, sessions, the 3D page, and every warning and error.",
+        text: include_str!("../skills/reference.md"),
+    },
 ];
-
-const PARTS: &str = "<!-- catalog parts -->";
 
 pub fn find(name: &str) -> Option<&'static Skill> {
     SKILLS.iter().find(|s| s.name == name)
@@ -40,7 +44,7 @@ pub fn names() -> String {
 
 impl Skill {
     pub fn text(&self) -> Result<String, String> {
-        fill_boards(&self.text.replace(PARTS, &parts(&catalog_cards())))
+        fill_boards(self.text)
     }
 }
 
@@ -191,105 +195,6 @@ fn join_and(items: &[String]) -> String {
         [one] => one.clone(),
         [a, b] => format!("{a} and {b}"),
         [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
-    }
-}
-
-/// What a part warns of at a rating, by the rating's key. A chip's pin ratings warn under
-/// `rating.current` and `rating.voltage`, not under their own keys.
-fn rating_warning(key: &str, amount: &str) -> String {
-    match key {
-        "pin_current" => format!("`rating.current` above {amount} on a pin"),
-        "supply_current" => format!("`rating.current` above {amount} through VCC or GND"),
-        "rail_margin" => {
-            format!("`rating.voltage` on a pin more than {amount} below GND or above VCC")
-        }
-        "reset_voltage" => format!("`rating.voltage` above {amount} on RESET"),
-        "supply_voltage" => format!("`rating.voltage` above {amount} on VCC"),
-        _ => format!("`rating.{key}` above {amount}"),
-    }
-}
-
-/// The parts a scene uses directly, in full, then the parts only other parts are built from.
-fn parts(catalog: &[Card]) -> String {
-    let (top, inner): (Vec<&Card>, Vec<&Card>) =
-        catalog.iter().partition(|part| part.used_by.is_empty());
-    let mut out = String::new();
-    for part in top {
-        out.push_str(&format!("### `{}`: {}\n\n", part.name, part.title));
-        if let Some(summary) = &part.description {
-            out.push_str(&format!("{summary}\n\n"));
-        }
-        out.push_str(&format!("- Pins: {}.\n", pin_text(part)));
-        for param in &part.params {
-            out.push_str(&format!("- `{}`: {}.\n", param.name, param_sentence(param)));
-        }
-        if let (Some(lit), Some(dim)) = (&part.lit, &part.dim) {
-            let lit_above = si_amount(lit.above, &lit.unit);
-            let dim_above = si_amount(dim.above, &dim.unit);
-            out.push_str(&format!(
-                "- It reads `lit` while its average `i` over {BRIGHTNESS_WINDOW} is above {lit_above}, `dim` while that average is above {dim_above} and at or below {lit_above}, and `off` at or below {dim_above}. `brightness` is that average.\n",
-            ));
-        }
-        let warns: Vec<String> = part
-            .ratings
-            .iter()
-            .filter_map(|rating| {
-                let value = rating.value?;
-                let unit = rating.unit.as_deref()?;
-                Some(rating_warning(&rating.name, &si_amount(value, unit)))
-            })
-            .collect();
-        if !warns.is_empty() {
-            out.push_str(&format!("- It warns {}.\n", warns.join(" and ")));
-        }
-        if part.pressable {
-            out.push_str("- `press` and `release` close and open it.\n");
-        }
-        out.push('\n');
-    }
-    let inner: Vec<String> = inner
-        .iter()
-        .map(|p| format!("`{}` ({})", p.name, p.title))
-        .collect();
-    out.push_str(&format!(
-        "The catalog also holds the parts the boards above are built from: {}. `orbe add` copies them with the board. Each one's pins and params are in its `parts/<id>/part.jsonc`.",
-        inner.join(", ")
-    ));
-    out
-}
-
-fn quoted(names: &[String]) -> String {
-    names
-        .iter()
-        .map(|n| format!("`{n}`"))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// A part's pins. A breadboard's holes are one range per row, the same text `orbe part` prints,
-/// instead of a name for every hole.
-fn pin_text(part: &Card) -> String {
-    let Some(holes) = &part.holes else {
-        let pins: Vec<String> = part.pins.iter().map(|pin| pin.name.clone()).collect();
-        return quoted(&pins);
-    };
-    let is_hole = |name: &str| holes.strips.iter().flatten().any(|hole| hole == name);
-    let pins: Vec<String> = part
-        .pins
-        .iter()
-        .filter(|pin| !is_hole(&pin.name))
-        .map(|pin| pin.name.clone())
-        .collect();
-    let ranges = holes_text(
-        part.pins
-            .iter()
-            .map(|pin| pin.name.as_str())
-            .filter(|name| is_hole(name)),
-    );
-    if pins.is_empty() {
-        ranges
-    } else {
-        format!("{}; {ranges}", quoted(&pins))
     }
 }
 
@@ -502,8 +407,9 @@ mod tests {
     const HOUR_PS: u64 = 3_600_000_000_000_000;
 
     #[test]
-    fn the_limits_the_core_skill_states_are_this_binary_s() {
+    fn the_limits_the_skills_state_are_this_binary_s() {
         let core = find("core").unwrap().text().unwrap();
+        let reference = find("reference").unwrap().text().unwrap();
         let says = |text: String| assert!(core.contains(&text), "core does not say `{text}`");
         says(format!("It lists at most {},", orbe_session::CHANGES));
         says(format!(
@@ -511,10 +417,11 @@ mod tests {
             orbe_session::SERIAL_LINES
         ));
         assert_eq!(orbe_scene::STOP_PS % HOUR_PS, 0);
-        says(format!(
+        let stop = format!(
             "A session stops at {} hours of simulated time",
             orbe_scene::STOP_PS / HOUR_PS
-        ));
+        );
+        assert!(reference.contains(&stop), "reference does not say `{stop}`");
         says(format!(
             "up to the timeout, {} by default",
             orbe_session::UNTIL_TIMEOUT
@@ -548,7 +455,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn every_code_in_the_core_error_table_is_one_orbe_reports() {
+    fn every_code_in_the_error_tables_is_one_orbe_reports() {
         use orbe_scene::AddCode as Add;
         use orbe_scene::Code as Scene;
         use orbe_session::Code as Live;
@@ -635,15 +542,20 @@ mod tests {
             .chain(scene.into_iter().map(|code| code.as_str()))
             .chain(added.into_iter().map(add))
             .collect();
-        let core = find("core").unwrap().text().unwrap();
-        let table = table_in(&core, "## Errors");
-        assert!(table.len() > 10, "{} rows", table.len());
+        let texts: Vec<String> = ["reference", "parts"]
+            .iter()
+            .map(|name| find(name).unwrap().text().unwrap())
+            .collect();
         let mut listed = std::collections::BTreeSet::new();
-        for row in table {
-            let codes = row.split('|').nth(1).unwrap();
-            for code in codes.split('`').skip(1).step_by(2) {
-                assert!(known.contains(&code), "orbe reports no `{code}`");
-                assert!(listed.insert(code), "`{code}` has two rows");
+        for text in &texts {
+            let table = table_in(text, "## Errors");
+            assert!(table.len() > 5, "{} rows", table.len());
+            for row in table {
+                let codes = row.split('|').nth(1).unwrap();
+                for code in codes.split('`').skip(1).step_by(2) {
+                    assert!(known.contains(&code), "orbe reports no `{code}`");
+                    assert!(listed.insert(code), "`{code}` has two rows");
+                }
             }
         }
     }
@@ -708,7 +620,7 @@ mod tests {
     }
 
     #[test]
-    fn the_core_warnings_table_has_one_row_for_each_lint_rule() {
+    fn the_reference_warnings_table_has_one_row_for_each_lint_rule() {
         use orbe_scene::{Code, Lint};
         // The match stops the build when a rule is added, until it is listed here.
         let code = |lint: Lint| match lint {
@@ -733,8 +645,8 @@ mod tests {
         ]
         .map(code)
         .into();
-        let core = find("core").unwrap().text().unwrap();
-        let listed: Vec<&str> = table_in(&core, "## Warnings")
+        let reference = find("reference").unwrap().text().unwrap();
+        let listed: Vec<&str> = table_in(&reference, "## Warnings")
             .into_iter()
             .filter_map(|row| row.split('`').nth(1))
             .collect();
@@ -871,40 +783,15 @@ mod tests {
         )
     }
 
+    /// Core points to `orbe search` and `orbe part` for parts, and pastes no catalog, which
+    /// would push it past what an agent reads in one output.
     #[test]
-    fn the_core_skill_lists_every_catalog_part() {
-        let text = find("core").unwrap().text().unwrap();
-        assert!(!text.contains(PARTS));
-        for part in catalog_cards() {
-            assert!(text.contains(&format!("`{}`", part.name)), "{}", part.name);
+    fn the_core_skill_pastes_no_catalog() {
+        let core = find("core").unwrap().text().unwrap();
+        assert!(!core.contains("<!--"), "core holds a marker");
+        assert!(!core.contains("\n### `"), "core holds a part's section");
+        for line in ["`orbe search <words>`", "`orbe part <id>`"] {
+            assert!(core.contains(line), "core does not name {line}");
         }
-        assert!(text.contains("### `nano-board`: Nano (CH340 clone)"));
-        assert!(text.contains("- `resistance`: a value in ohm above 0, required."));
-        assert!(text.contains("- `position`: a number above 0 and below 1, 0.5 by default."));
-        assert!(text.contains(
-            "- It reads `lit` while its average `i` over 20ms is above 2 mA, `dim` while that average is above 100 uA and at or below 2 mA, and `off` at or below 100 uA. `brightness` is that average."
-        ));
-        assert!(
-            text.contains(
-                "- It warns `rating.current` above 30 mA and `rating.power` above 75 mW."
-            )
-        );
-        assert!(text.contains("- It warns `rating.power` above 250 mW."));
-    }
-
-    #[test]
-    fn a_chip_rating_names_the_code_it_warns_under() {
-        assert_eq!(
-            rating_warning("pin_current", "40 mA"),
-            "`rating.current` above 40 mA on a pin"
-        );
-        assert_eq!(
-            rating_warning("rail_margin", "500 mV"),
-            "`rating.voltage` on a pin more than 500 mV below GND or above VCC"
-        );
-        assert_eq!(
-            rating_warning("power", "75 mW"),
-            "`rating.power` above 75 mW"
-        );
     }
 }
