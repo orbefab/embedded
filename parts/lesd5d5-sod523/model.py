@@ -13,11 +13,11 @@ import build123d as bd
 
 from cad import glb
 from cad.chip import chip, chip_anchors
-from cad.color import srgb
+from cad.color import plastic
 
 SIZE = (1.20, 0.80, 0.60)  # D, E, A, nominal
 
-_BLACK = srgb("#1A1A1A")
+_BLACK = plastic("#1A1A1A")
 
 
 def lesd5d5_sod523_shape():

@@ -17,7 +17,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint, tht
-from cad.color import srgb
+from cad.color import plastic, tin
 from cad.geom import box, cyl_z, fuse
 
 LDR_DISC = (5.1, 4.3, 2.1)  # Φ, across the flats, thick
@@ -26,9 +26,9 @@ LDR_LEADS = ((1, -1.5), (2, 1.5))  # lead, x
 LDR_BELOW = 34.0 - LDR_DISC[2]
 LDR_TRACK = (5, 2.2, 0.3, 0.02)  # runs, long, wide, raised  # verify
 
-_CERAMIC = srgb("#ECE6D6")
-_CDS = srgb("#B5462A")
-_TIN = srgb("#C5C8CE")
+_CERAMIC = plastic("#ECE6D6")
+_CDS = plastic("#B5462A")
+_TIN = tin()
 
 
 def ldr_5mm_anchors():

@@ -2,13 +2,13 @@
   "part": "usb-b-socket",
   "source": {
     "script": "model.py",
-    "sha256": "71e7b38e3fe4fe55c9fca1251c9761f03960d1380931e4970c13952a927fdcc2",
-    "bytes": 2355
+    "sha256": "3d2197f2a6bc83849fb7ed5035675900624c8d9853cf78027f4421a9eafc6988",
+    "bytes": 2366
   },
   "files": {
     "usb-b-socket.glb": {
-      "sha256": "0667e73ee7ec0304567df7e6c32df446d3b23226ee4b342958a80cee2dc62bd0",
-      "bytes": 5932
+      "sha256": "dfc26d846b7711c65b059ad5890d0b14b7d0fc7047ad967a43f77ac392a296d2",
+      "bytes": 6060
     },
     "usb-b-socket.anchors.json": {
       "sha256": "6baebc5c5719136ae0c4b88a0367f0d5ecd67ea6acc11761d079025bb60c921d",

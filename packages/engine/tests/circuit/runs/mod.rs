@@ -2,6 +2,7 @@ mod common;
 
 mod analog_serial;
 mod atmega328p;
+mod atmega_gaps;
 mod blink;
 mod blinker;
 mod board;

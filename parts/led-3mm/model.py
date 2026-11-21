@@ -16,15 +16,15 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint, tht
-from cad.color import srgb
+from cad.color import plastic, tin
 
 L3_BODY = (3.0, 3.8, 0.8, 5.3)  # Φ, flange Φ, flange height, overall  # verify, flange
 L3_FLAT = 1.6  # the flat's x on the cathode side  # verify
 L3_LEAD = 0.5
 L3_LEADS = ((1, -1.27, 27.4), (2, 1.27, 25.4))  # lead (anode, cathode), x, below z = 0
 
-_GREEN = srgb("#3FAE49")
-_TIN = srgb("#C5C8CE")
+_GREEN = plastic("#3FAE49")
+_TIN = tin()
 
 
 def led_3mm_anchors():

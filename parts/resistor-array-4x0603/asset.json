@@ -2,13 +2,13 @@
   "part": "resistor-array-4x0603",
   "source": {
     "script": "model.py",
-    "sha256": "7724092696d4d5144b7b630e1e3ea46d34909e04d1870f15506817d226d05a8c",
-    "bytes": 1986
+    "sha256": "e0c1517cb8372080cf5575bdd0582c0ca9c23fc7d068b90f9db218c7404dde03",
+    "bytes": 1987
   },
   "files": {
     "resistor-array-4x0603.glb": {
-      "sha256": "d521a28c1dd1392df70c07f2a3115d05a653a3fe7d8d6534f9a3ebe020055597",
-      "bytes": 13072
+      "sha256": "c895d67e4c2e0078e1bcfac158b1ceb845653e792c153655a402a7e0cd229666",
+      "bytes": 13156
     },
     "resistor-array-4x0603.anchors.json": {
       "sha256": "db061a0bd304f5164ca79185db9515d65fbb3eaa663a8ec23061b3b94d54c546",

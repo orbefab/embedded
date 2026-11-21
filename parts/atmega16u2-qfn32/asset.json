@@ -7,8 +7,8 @@
   },
   "files": {
     "atmega16u2-qfn32.glb": {
-      "sha256": "99035e3e724ed3f2f777c24cbd1530be840fccb25844a5c323d25503ce734c3e",
-      "bytes": 24780
+      "sha256": "3f36b4afd5b700ea04e26392ab7ea439bdbfb71168266923925a3c67472f020b",
+      "bytes": 24908
     },
     "atmega16u2-qfn32.anchors.json": {
       "sha256": "09cb671efeb94741569fdfcc766ee44daae0a3c575adc0201aae89a690da17cb",

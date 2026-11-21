@@ -19,7 +19,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, ic, paint
-from cad.color import srgb
+from cad.color import gold, plastic, tin
 from cad.geom import box
 from cad.tht import socket_liner
 
@@ -31,9 +31,9 @@ WALL = 0.1
 TAIL = (0.5, 3.0)  # square, below z = 0  # verify
 WINDOW = (30.0, 3.0)  # the open frame's window, long, wide  # verify
 
-_BLACK = srgb("#1A1A1A")
-_GOLD = srgb("#D9B44A")
-_TIN = srgb("#C5C8CE")
+_BLACK = plastic("#1A1A1A")
+_GOLD = gold()
+_TIN = tin()
 
 
 def _contacts():

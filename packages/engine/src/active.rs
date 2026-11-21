@@ -258,7 +258,7 @@ impl Core {
     fn sample(&mut self, world: &World, at: Time, volts: &[f64]) {
         match *self {
             Core::Device(ref mut core) => core.sample(world, at, volts),
-            Core::Mcu(ref mut mcu) => mcu.sample(at, volts),
+            Core::Mcu(ref mut mcu) => mcu.sample(world, at, volts),
             #[cfg(test)]
             Core::Script(ref mut core) => core.sample(at, volts),
         }

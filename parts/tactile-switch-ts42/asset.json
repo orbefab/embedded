@@ -2,13 +2,13 @@
   "part": "tactile-switch-ts42",
   "source": {
     "script": "model.py",
-    "sha256": "77fc0091bd11ce73e20141966de6f5a96ac020c3c6fd0fa08e39e6baa2c7bd68",
-    "bytes": 2551
+    "sha256": "531d641487a457292f9f8f8e9eda9ba18477c8306938ed399b987fa8546c6440",
+    "bytes": 2562
   },
   "files": {
     "tactile-switch-ts42.glb": {
-      "sha256": "2a55ad786d1ef8805bc642511c61b394cfd496a7974cfd104904fae2a7d61e13",
-      "bytes": 22984
+      "sha256": "baa5b034815f1e110fe33bd4084bb6f51329634fc1c09425e4744791969a97d6",
+      "bytes": 23112
     },
     "tactile-switch-ts42.anchors.json": {
       "sha256": "6bedceeceefa283c9acba71a38f4671afc9a47316e047b8f755ac0d8ba836580",

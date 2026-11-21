@@ -9,12 +9,15 @@
 use crate::{Channel, Cpu, I2cStamp, Level, PIN_COUNT, PinDrive, Sent};
 
 /// Where [`Timeline::run_until`] stopped: at oscillator cycle `at` a drive changed, the chip
-/// went into or out of a held reset, or the ADC samples.
+/// went into or out of a held reset, the ADC samples, or the chip refused what the firmware
+/// reached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Halt {
     pub at: u64,
     /// The ADC's sample-and-hold is at `at`, waiting for [`Timeline::sample`].
     pub sample: bool,
+    /// The chip stops at `at` on [`Cpu::refusal`], and the timeline runs no further.
+    pub refused: bool,
 }
 
 #[derive(Debug)]
@@ -34,6 +37,11 @@ pub struct Timeline {
     holds: Vec<(u64, bool)>,
     /// The oscillator cycle of a sample-and-hold the host has not answered.
     sample: Option<u64>,
+    /// The oscillator cycle the chip stops at for its refusal: the refusal's own, or the cycle
+    /// after the one reached when the core showed it later, as a deferred check does.
+    refusal: Option<u64>,
+    /// It halted on the refusal.
+    refused: bool,
 }
 
 clone_fields!(Timeline {
@@ -43,14 +51,18 @@ clone_fields!(Timeline {
     pending,
     held,
     holds,
-    sample
+    sample,
+    refusal,
+    refused
 });
 
 impl Timeline {
     /// A programmed, powered core at oscillator cycle 0. Its ADC asks [`Timeline::sample`] for
-    /// every sample-and-hold.
+    /// every sample-and-hold, and it watches for what the model does not run
+    /// ([`Cpu::watch_gaps`]).
     pub fn new(mut cpu: Cpu) -> Timeline {
         cpu.ask_for_samples();
+        cpu.watch_gaps();
         let levels = cpu.pin_levels();
         let drives = std::array::from_fn(|pin| levels.drive(pin as u32).unwrap_or(PinDrive::Off));
         let held = cpu.is_held_in_reset();
@@ -62,12 +74,15 @@ impl Timeline {
             held,
             holds: Vec::new(),
             sample: None,
+            refusal: None,
+            refused: false,
         }
     }
 
     /// Runs from where it reached and stops at the first oscillator cycle in `(reached, limit]`
-    /// where a drive changes, the chip goes into or out of a held reset, or the ADC samples.
-    /// `None` once everything up to `limit` is done.
+    /// where a drive changes, the chip goes into or out of a held reset, the ADC samples, or the
+    /// chip refuses. `None` once everything up to `limit` is done, and always after a refusal.
+    /// What the core did past its refusal never shows.
     /// Two calls to `l1` then `l2` leave the state one call to `l2` does.
     pub fn run_until(&mut self, limit: u64) -> Option<Halt> {
         assert!(
@@ -78,16 +93,25 @@ impl Timeline {
             self.sample.is_none_or(|at| at > self.reached),
             "answer the sample before running on"
         );
+        if self.refused {
+            self.reached = self.reached.max(limit);
+            return None;
+        }
         loop {
             let edge = self.pending.first().map(|&(at, _, _)| at);
             let hold = self.holds.first().map(|&(at, _)| at);
-            match edge.into_iter().chain(hold).chain(self.sample).min() {
+            let next = edge.into_iter().chain(hold).chain(self.sample);
+            match next.chain(self.refusal).min() {
                 Some(at) if at <= limit => {
                     if at <= self.done() {
                         return Some(self.halt(at));
                     }
                 }
-                _ if self.cpu.is_stopped() || self.cpu.cycles() >= self.cpu.cpu_cycle_of(limit) => {
+                _ if self.cpu.is_stopped()
+                    || self.refusal.is_some()
+                    || (self.cpu.cycles() >= self.cpu.cpu_cycle_of(limit)
+                        && self.cpu.gap_pending().is_none_or(|at| at > limit)) =>
+                {
                     self.reached = limit;
                     return None;
                 }
@@ -146,6 +170,11 @@ impl Timeline {
         &self.cpu
     }
 
+    /// See [`Cpu::set_temperature_c`]. The sensor's next sample reads it.
+    pub fn set_temperature_c(&mut self, celsius: f32) {
+        self.cpu.set_temperature_c(celsius);
+    }
+
     /// See [`Cpu::take`].
     pub fn take(&mut self, channel: Channel) -> Option<(u8, u64)> {
         self.cpu.take(channel)
@@ -161,12 +190,14 @@ impl Timeline {
         self.cpu.take_i2c_through(through)
     }
 
-    /// The oscillator cycle at and before which the core has made every report.
+    /// The oscillator cycle at and before which the core has made every report. A load the chip
+    /// may yet refuse at holds it there, so nothing past the load shows before the refusal.
     fn done(&self) -> u64 {
-        if self.cpu.is_stopped() {
+        if self.cpu.is_stopped() || self.refusal.is_some() {
             return u64::MAX;
         }
-        self.cpu.oscillator_cycles()
+        let done = self.cpu.oscillator_cycles();
+        self.cpu.gap_pending().map_or(done, |at| done.min(at))
     }
 
     fn halt(&mut self, at: u64) -> Halt {
@@ -180,9 +211,11 @@ impl Timeline {
         }
         self.holds.drain(..due);
         self.reached = at;
+        self.refused = self.refusal == Some(at);
         Halt {
             at,
             sample: self.sample == Some(at),
+            refused: self.refused,
         }
     }
 
@@ -200,6 +233,11 @@ impl Timeline {
     }
 
     fn collect(&mut self, floor: u64) {
+        if self.refusal.is_none()
+            && let Some(refusal) = self.cpu.refusal()
+        {
+            self.refusal = Some(refusal.at.max(self.reached + 1));
+        }
         while let Some(report) = self.cpu.take_pin() {
             let at = self.cpu.oscillator_cycle_of(report.cycle).max(floor);
             assert!(at > self.reached, "a report after the cycle a host reached");

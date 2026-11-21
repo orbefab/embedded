@@ -2,13 +2,13 @@
   "part": "nmos-irf520-to220",
   "source": {
     "script": "model.py",
-    "sha256": "426b832baa54be952516c86f1a5914602d152862d8522af36f50b041df1749cf",
-    "bytes": 2179
+    "sha256": "921d10a3efbe604a669debd88ebfeb47c4c283278b586dc46b4653d0177f72a6",
+    "bytes": 2193
   },
   "files": {
     "nmos-irf520-to220.glb": {
-      "sha256": "78bde9ae62ebbc6f0620db74908cc5d266cabfedf893779d4b417b6c4b975519",
-      "bytes": 63212
+      "sha256": "e85de122cad4df3571dce8e175cd15f21b7e142ff888a86b737174ea40885f8c",
+      "bytes": 63380
     },
     "nmos-irf520-to220.anchors.json": {
       "sha256": "937af28ef66a7696540040c574a4aa0e13bef7f5d4d396ca3740ecca140a4b5f",

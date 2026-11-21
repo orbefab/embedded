@@ -18,7 +18,7 @@ use super::analog::Analog;
 use super::app::{self, AppControl, Hold, Steer};
 use super::calibration::{self, Calibration};
 use super::clock::{CpuClock, Source, Tick};
-use super::efuse::Efuse;
+use super::efuse::{Efuse, EfuseSet};
 use super::extmem;
 use super::flash::{self, Flash};
 use super::gates::{self, Block, Gates};
@@ -28,7 +28,9 @@ use super::i2c::{self, I2c};
 use super::ledc::{self, Ledc};
 use super::matrix::{self, Matrix};
 use super::rmt::{self, Rmt};
+use super::rng::{self, Rng};
 use super::rom;
+use super::sar::{self, Sar};
 use super::sha::{self, Sha};
 use super::spi1::{self, FlashRefusal, Spi1};
 use super::spi2::{self, Setting, Spi2};
@@ -63,6 +65,7 @@ const I2C1: u32 = 0x6002_7000;
 pub(crate) const USB_SERIAL_JTAG: u32 = 0x6003_8000;
 const USB_WRAP: u32 = 0x6003_9000;
 const SHA: u32 = 0x6003_b000;
+const APB_SARADC: u32 = 0x6004_0000;
 pub(crate) const GDMA: u32 = 0x6003_f000;
 pub(crate) const SYSTEM: u32 = 0x600c_0000;
 /// `SYSTEM_CPU_PER_CONF_REG` and `SYSTEM_SYSCLK_CONF_REG`, which pick the CPU clock.
@@ -90,6 +93,7 @@ pub(crate) struct Soc {
     pub(crate) gpio: Gpio,
     pub(crate) systimer: Systimer,
     pub(crate) watchdogs: Watchdogs,
+    rng: Rng,
     pub(crate) usb: UsbSerialJtag,
     pub(crate) spi2: Spi2,
     gdma: Gdma,
@@ -105,6 +109,8 @@ pub(crate) struct Soc {
     gates: Gates,
     analog: Analog,
     efuse: Efuse,
+    /// The SAR ADCs' RTC controllers in SENS, and APB_SARADC's arbiter register.
+    sar: Sar,
     spi1: Spi1,
     matrix: Matrix,
     /// Each timer group's RTC clock calibration.
@@ -123,6 +129,9 @@ pub(crate) struct Soc {
     in_flight: Vec<Range<u32>>,
     /// A store changed a netted pad's drive at this tick, so the next fetch stops the core.
     pub(crate) changed: Option<Tick>,
+    /// A store started an ADC conversion that samples its pad at this tick, so the next fetch
+    /// stops the core and the run asks the host for the pad's voltage.
+    pub(crate) sampled: Option<Tick>,
     /// A store changed the CPU clock, so the next fetch stops the core and the run maps its
     /// limits to cycles again.
     pub(crate) reclocked: bool,
@@ -268,9 +277,14 @@ fn effect(addr: u32) -> Option<Effect> {
     Some(match (base, offset) {
         (RTC_CNTL, 0x18) => Effect::Refuse(1 << 31, Ending::Refused(Refused::Sleep)),
         (RTC_CNTL, 0x74) => Effect::Report(u32::MAX),
+        (RTC_CNTL, sar::INT_ENA) => Effect::Refuse(sar::INT_BITS, interrupt("SENS")),
+        (RTC_CNTL, _)
+            if offset == sar::SENS + sar::CLK_GATE || offset == sar::SENS + sar::RESET_CONF =>
+        {
+            Effect::Report(!sar::SARADC_BIT)
+        }
+        (RTC_CNTL, _) if offset == sar::SENS + 0x40 => Effect::Report(sar::SLAVE_ADDRS),
         (SPI2, 0x34) => Effect::Refuse(!spi2::TRANS_DONE, interrupt("SPI2")),
-        (TIMG0, 0x70) => Effect::Refuse(0b11, interrupt("TIMG0")),
-        (TIMG1, 0x70) => Effect::Refuse(0b11, interrupt("TIMG1")),
         (USB_SERIAL_JTAG, 0x10) => Effect::Refuse(!usb::ENA_ALLOWED, interrupt("USB_SERIAL_JTAG")),
         (SHA, sha::INT_ENA) => Effect::Refuse(1, interrupt("SHA")),
         (LEDC, ledc::INT_ENA) => Effect::Refuse(u32::MAX, interrupt("LEDC")),
@@ -316,6 +330,7 @@ impl Soc {
             gpio: Gpio::new(netted),
             systimer: Systimer::new(),
             watchdogs,
+            rng: Rng::new(clock.source.apb()),
             usb: UsbSerialJtag::default(),
             spi2: Spi2::new(),
             gdma: Gdma::new(),
@@ -329,6 +344,7 @@ impl Soc {
             gates: Gates::new(),
             analog: Analog::default(),
             efuse: Efuse::default(),
+            sar: Sar::new(),
             spi1: Spi1::default(),
             matrix: Matrix::default(),
             calibration: Default::default(),
@@ -338,6 +354,7 @@ impl Soc {
             pending: None,
             in_flight: Vec::new(),
             changed: None,
+            sampled: None,
             rearmed: false,
             reclocked: false,
             first_touch: None,
@@ -439,6 +456,16 @@ impl Soc {
                 Some((pad, channel, inverted))
             })
             .collect()
+    }
+
+    /// Puts `set` in the eFuse controller's read registers, where IDF reads its calibration.
+    pub(crate) fn use_efuse(&mut self, set: EfuseSet) {
+        self.efuse.set = set;
+    }
+
+    /// Gives each ADC conversion that waits for its sample the code at its pad's `volts`.
+    pub(crate) fn sample(&mut self, volts: impl Fn(u8) -> f64) {
+        self.sar.sample(volts);
     }
 
     /// Adds the ROM and the flash, as a chip booted from flash has them.
@@ -599,7 +626,11 @@ impl Soc {
         let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
         let now = Tick(0);
         match base {
-            TIMG0 | TIMG1 if (0x48..=0x64).contains(&offset) || (0x70..=0x7c).contains(&offset) => {
+            TIMG0 | TIMG1
+                if offset <= 0x44
+                    || (0x48..=0x64).contains(&offset)
+                    || (0x70..=0x7c).contains(&offset) =>
+            {
                 let group = usize::from(base == TIMG1);
                 self.watchdogs
                     .restore(now, Register::Timg(group, offset), value);
@@ -624,6 +655,7 @@ impl Soc {
             SYSTEM if offset == app::CONTROL_1 => self.app.boot = value,
             SYSTEM if gates::OFFSETS.contains(&offset) => {
                 self.gates.write(offset, value).for_each(drop);
+                self.sync_timg(now);
                 self.sync_uart_gates();
             }
             _ => {
@@ -683,18 +715,37 @@ impl Soc {
         None
     }
 
+    /// Whether the RNG's clock bit is set. A kept word gates the read. A chip that has not kept
+    /// the register, a bare-metal one, uses the reset value, whose bit is set.
+    fn rng_clock_on(&self) -> bool {
+        let gate = self
+            .plain
+            .get(&rng::WIFI_CLK_EN_REG)
+            .copied()
+            .unwrap_or(rng::WIFI_CLK_EN_RESET);
+        gate & rng::RNG_EN != 0
+    }
+
     /// The kept register's word at `addr`, a multiple of 4 in the peripherals, at `now`.
     fn read_kept(&mut self, now: Tick, addr: u32) -> Option<u32> {
+        if addr == rng::WDEV_RND_REG {
+            // A load refuses the register while its clock bit is clear, before it gets here. The
+            // shifter still counts every APB cycle, so turning the bit back on matches a chip
+            // that left it set.
+            return Some(self.rng.read(now));
+        }
         let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
         let value = match base {
             GPIO => self.gpio.read(offset),
             IO_MUX => self.gpio.read_io_mux(offset),
+            RTC_CNTL if offset >= sar::SENS => self.sar.read(now, offset - sar::SENS),
             RTC_CNTL => self.watchdogs.read_rtc(offset),
+            APB_SARADC if offset == sar::ARB_CTRL => Some(self.sar.arb_ctrl()),
             TIMG0 | TIMG1 if calibration::OFFSETS.contains(&offset) => {
                 self.calibration[usize::from(base == TIMG1)].read(offset)
             }
-            TIMG0 => self.watchdogs.read_timg(0, offset),
-            TIMG1 => self.watchdogs.read_timg(1, offset),
+            TIMG0 => self.watchdogs.read_timg(now, 0, offset),
+            TIMG1 => self.watchdogs.read_timg(now, 1, offset),
             SYSTIMER => self.systimer.read(now, offset),
             USB_SERIAL_JTAG => self.usb.read(now, offset),
             SPI2 => self.spi2.read(now, offset),
@@ -741,6 +792,31 @@ impl Soc {
                     self.ending = Some(Ending::Refused(Refused::Register("IO_MUX", setting)));
                     true
                 }),
+            RTC_CNTL if offset >= sar::SENS => {
+                let context = sar::Context {
+                    efuse: &self.efuse.set,
+                    analog: &self.analog,
+                    clk_conf: self.plain.get(&(RTC_CNTL + sar::CLK_CONF)).copied(),
+                    netted: &self.netted,
+                };
+                match self.sar.write(now, offset - sar::SENS, value, &context) {
+                    Ok(started) => {
+                        if started.is_some() {
+                            self.sampled = Some(now);
+                        }
+                        true
+                    }
+                    Err(Some(setting)) => {
+                        self.ending = Some(Ending::Refused(Refused::Register("SENS", setting)));
+                        true
+                    }
+                    Err(None) => false,
+                }
+            }
+            APB_SARADC if offset == sar::ARB_CTRL => {
+                self.sar.write_arb_ctrl(value);
+                true
+            }
             RTC_CNTL => self
                 .watchdogs
                 .write_rtc(now, offset, value)
@@ -863,6 +939,7 @@ impl Soc {
                 for block in held {
                     self.reset(block);
                 }
+                self.sync_timg(now);
                 // A gated UART keeps its registers. A frame that was shifting stops, and a later
                 // FIFO write completes without leaving the port.
                 self.sync_uart_gates();
@@ -976,6 +1053,7 @@ impl Soc {
         let spi2 = self.spi2.line(now);
         let gpio = self.gpio.pending() != 0;
         let lines = self.watchdogs.lines();
+        let timers = self.watchdogs.timer_lines(now);
         let rmt = self.rmt.line(now);
         let apb = self.clock.source.apb();
         self.uart.settle(now, &self.gpio, apb);
@@ -986,7 +1064,7 @@ impl Soc {
             gpio,
             self.i2c.line(),
             rmt,
-        );
+        ) | Matrix::timer_levels(timers);
         if self.usb.poll(now) {
             sources |= 1 << usb::SOURCE;
         }
@@ -1007,10 +1085,23 @@ impl Soc {
             Some(source) if source != self.clock.source => {
                 self.clock.switch(at, source);
                 self.watchdogs.reclock(tick, source.apb());
+                self.rng.reclock(tick, source.apb());
                 self.reclocked = true;
             }
             Some(_) => {}
         }
+    }
+
+    /// The general timers follow TIMG0's and TIMG1's clock and reset bits. The watchdog does not.
+    fn sync_timg(&mut self, now: Tick) {
+        let mut clocked = [false; 2];
+        let mut held = [false; 2];
+        for group in 0..2 {
+            let (clock, reset) = self.gates.timg(group);
+            clocked[group] = clock;
+            held[group] = reset;
+        }
+        self.watchdogs.apply_gates(now, clocked, held);
     }
 
     /// Lets an access to an unmodeled register through, or stops the core at the first one.
@@ -1235,7 +1326,12 @@ fn word_of(addr: u32, width: Width) -> (u32, u32, u32) {
 
 impl Soc {
     fn fetch(&mut self, addr: u32) -> Result<u32, Exit> {
-        if self.changed.is_some() || self.rearmed || self.reclocked || self.started {
+        if self.changed.is_some()
+            || self.sampled.is_some()
+            || self.rearmed
+            || self.reclocked
+            || self.started
+        {
             return Err(Exit::Stop);
         }
         if let Some(offset) = Self::sram_offset(addr, true) {
@@ -1275,6 +1371,12 @@ impl Soc {
         }
         if self.rmt_fifo(word) {
             self.ending = Some(Ending::Refused(Refused::Register("RMT", "fifo")));
+            return Err(Exit::Stop);
+        }
+        // No source says what the register reads with its clock off. The technical reference
+        // says only that it reads pseudo-random numbers with no entropy source.
+        if word == rng::WDEV_RND_REG && !self.rng_clock_on() {
+            self.ending = Some(Ending::Refused(Refused::Register("RNG", "clock_off")));
             return Err(Exit::Stop);
         }
         let now = self.stamp(cycle);
@@ -1525,6 +1627,7 @@ impl Soc {
         self.uart.settle(now, &self.gpio, apb);
         let next = [
             self.systimer.next_event(now),
+            self.watchdogs.next_alarm(now),
             self.spi2.next_event(),
             self.usb.next_event(now),
             self.rmt.next_event(),

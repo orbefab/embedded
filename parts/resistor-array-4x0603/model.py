@@ -16,15 +16,15 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, ic, paint
-from cad.color import srgb
+from cad.color import plastic, tin
 from cad.geom import box
 
 CAY_BODY = (3.2, 1.6, 0.5)  # long, wide, tall
 CAY_PITCH = 0.8
 CAY_TERMINAL = (0.4, 0.3)  # wide, in from the side
 
-_BODY = srgb("#1A1A1A")
-_TIN = srgb("#C5C8CE")
+_BODY = plastic("#1A1A1A")
+_TIN = tin()
 
 
 def _terminal_xy(x, side):

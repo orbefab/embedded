@@ -13,12 +13,12 @@ import build123d as bd
 
 from cad import glb, paint
 from cad.chip import CAP_PROUD, TIN, cap_length
-from cad.color import srgb
+from cad.color import plastic
 from cad.geom import box
 
 CSTCE_SIZE = (3.2, 1.5, 0.7)  # length, width, height  # verify
 
-_GOLD = srgb("#C6A15A")
+_GOLD = plastic("#C6A15A")
 
 
 def _terminal_x():

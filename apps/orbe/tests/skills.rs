@@ -578,6 +578,61 @@ fn the_arduino_compile_command_writes_the_firmware_the_scene_names() {
     );
 }
 
+/// The Block commands in the arduino skill, run as written on `nano-led-fade`, write the
+/// hex its scene already names, and the Block's shipped test passes on that hex.
+#[test]
+fn the_block_compile_commands_write_the_hex_the_scene_names() {
+    let avr = Command::new("arduino-cli").args(["core", "list"]).output();
+    if !avr.is_ok_and(|o| {
+        o.status.success() && String::from_utf8_lossy(&o.stdout).contains("arduino:avr ")
+    }) {
+        let skipped = "the_block_compile_commands_write_the_hex_the_scene_names: skipped, arduino-cli with the arduino:avr core is not on PATH\n";
+        std::io::stderr().write_all(skipped.as_bytes()).unwrap();
+        return;
+    }
+    let text = skill("arduino");
+    says(
+        &text,
+        "A Block's tests check its shipped behaviour, so a change to the firmware's timing or pins needs its tests updated or a new test written.",
+    );
+    says(&text, "`firmware/<name>/<name>.ino`");
+    says(&text, "`firmware/<name>.hex`");
+    let commands = blocks(&text)
+        .into_iter()
+        .find(|(info, body)| info == "sh" && body.contains("firmware/fade"))
+        .map(|(_, body)| body)
+        .expect("arduino shows the Block compile commands");
+    let project = tempfile::tempdir().unwrap();
+    let dir = project.path();
+    let runtime = Runtime::new();
+    runtime.orbe(dir, &["add", "nano-led-fade"]).ok();
+    let scene = fs::read_to_string(dir.join("scene.jsonc")).unwrap();
+    assert!(
+        scene.contains("\"firmware\": \"firmware/fade.hex\""),
+        "{scene}"
+    );
+    for line in commands.lines().filter(|line| !line.is_empty()) {
+        let built = Command::new("sh")
+            .args(["-c", line])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            built.status.success(),
+            "{line}\n{}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+    }
+    assert!(dir.join("firmware/fade.hex").is_file());
+    let run = runtime.orbe(dir, &["test"]).ok();
+    assert!(
+        run.stdout.contains("PASS tests/fade.test\n")
+            && run.stdout.ends_with("1 passed, 0 failed\n"),
+        "{}",
+        run.stdout
+    );
+}
+
 #[test]
 fn a_flag_on_a_test_line_is_a_usage_error_except_as_serial_text() {
     let project = worked_example();
@@ -1483,7 +1538,10 @@ fn the_core_skill_starts_from_a_block_and_ranges_its_holes() {
         .split("\n## ")
         .next()
         .unwrap();
-    assert!(loop_.contains("1. When a Block is close"), "{loop_}");
+    assert!(
+        loop_.contains("1. `orbe blocks` lists the Blocks, and `orbe search <words>` finds one. When a Block is close"),
+        "{loop_}"
+    );
     assert!(
         loop_.contains("`orbe add <block>` in an empty folder"),
         "{loop_}"

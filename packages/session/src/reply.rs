@@ -2,6 +2,7 @@
 //! with its fix when it failed. Text by default, one JSON envelope with `--json`.
 
 use std::fmt::{self, Write as _};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -124,6 +125,15 @@ impl Error {
             message: message.into(),
             hint: hint.into(),
         }
+    }
+
+    /// The refusal for a path that is not a scene file. `open` and `check` both use it.
+    pub fn missing_scene(scene: &Path) -> Error {
+        Error::new(
+            Code::IoError,
+            format!("no scene file at {}", scene.display()),
+            "write the scene, or name its path",
+        )
     }
 }
 
@@ -953,6 +963,16 @@ impl Reply {
                 for d in found {
                     let _ = writeln!(out, "{d}");
                 }
+                // One finding whose code, message and hint are this error is already
+                // printed above. A second line would repeat it.
+                if let [one] = found.as_slice()
+                    && one.code == error.code.as_str()
+                    && one.message == error.message
+                    && one.hint == error.hint
+                {
+                    out.pop();
+                    return out;
+                }
             }
             Data::Stepped(_) => {
                 let _ = writeln!(out, "{}", self.data.text(self.t_ps));
@@ -960,6 +980,9 @@ impl Reply {
             _ => {}
         }
         let _ = write!(out, "error[{}]: {}", error.code.as_str(), error.message);
+        if error.code == Code::ExpectFailed {
+            let _ = write!(out, " at t={}", t(self.t_ps));
+        }
         if let Some(check) = self.check() {
             let _ = write!(
                 out,

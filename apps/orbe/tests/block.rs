@@ -345,7 +345,7 @@ fn a_block_installs_alone() {
     for args in [
         &["add", "nano-button-led", "led-5mm"][..],
         &["add", "nano-button-led", "--overwrite"],
-        &["add", "nano-button-led@0.1.0"],
+        &["add", "nano-button-led@0.1.2"],
     ] {
         let run = orbe(project.path(), args);
         assert_eq!(run.code, 2, "{args:?}: {}{}", run.stdout, run.stderr);
@@ -370,7 +370,9 @@ fn the_core_skill_names_each_block() {
     assert!(skill.contains(&listed), "{listed}");
     let mut found: Vec<String> = fs::read_dir(common::repo().join("blocks"))
         .unwrap()
-        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .map(|e| e.unwrap().path())
+        .filter(|path| path.is_dir())
+        .map(|path| path.file_name().unwrap().to_str().unwrap().to_string())
         .collect();
     found.sort();
     let mut want = BLOCKS.map(String::from).to_vec();

@@ -2,13 +2,13 @@
   "part": "usb-mini-b",
   "source": {
     "script": "model.py",
-    "sha256": "50b289ef2575cc11bcff41d897e7322b7295d244bfe60339cccff1e79a626a91",
-    "bytes": 2026
+    "sha256": "12bf9ae9bc5387f1d9682a5a132a97c7ecd59997bda64c13f8670fc83b5a7f6f",
+    "bytes": 2059
   },
   "files": {
     "usb-mini-b.glb": {
-      "sha256": "c410cad7574762617156a03170ae9ae9e291b66a984e71256cf138501ea7b240",
-      "bytes": 9028
+      "sha256": "ba26de207e3cb7b19a6dcaf2352f6ba6565badaec62d42942d51ee6e5e8891fa",
+      "bytes": 9396
     },
     "usb-mini-b.anchors.json": {
       "sha256": "3456cd3e90404e565c93d78ea4bab82c9407950cd49be9ad2ede4b52941006d2",
@@ -20,7 +20,7 @@
     "max": [5.2, 4.4, 4]
   },
   "kept_nodes": [],
-  "draw_calls": 2,
+  "draw_calls": 3,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -38,7 +38,7 @@
     },
     "merge": {
       "primitives_in": 8,
-      "primitives_out": 2
+      "primitives_out": 3
     }
   }
 }

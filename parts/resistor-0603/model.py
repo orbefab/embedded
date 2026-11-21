@@ -13,11 +13,11 @@ import build123d as bd
 
 from cad import glb
 from cad.chip import chip, chip_anchors
-from cad.color import srgb
+from cad.color import plastic
 
 SIZE = (1.6, 0.8, 0.45)  # length, width, height  # verify height
 
-_BLACK = srgb("#1A1A1A")
+_BLACK = plastic("#1A1A1A")
 
 
 def resistor_0603_shape():

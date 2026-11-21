@@ -3,9 +3,9 @@
 {
   "format": 1,
   "part": "led-5mm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "5 mm LED",
-  "summary": "Round 5 mm through-hole LED, two leads on 2.54 mm. The longer lead is the anode. Pick its colour.",
+  "summary": "Round 5 mm through-hole LED, two leads on 2.54 mm. The longer lead is the anode. Pick its color.",
   "tags": ["led", "light", "indicator", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "docs": { "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113ID.pdf" },

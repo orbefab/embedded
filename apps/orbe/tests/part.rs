@@ -102,13 +102,23 @@ fn a_part_prints_where_to_buy_it_and_a_part_without_buy_says_none() {
 }
 
 #[test]
-fn a_chip_with_no_summary_prints_its_datasheet_name_and_no_url() {
+fn a_chip_prints_its_summary_categories_and_datasheet_url() {
     let (code, stdout, stderr) = orbe(&["part", "atmega328p-dip28"]);
     assert_eq!(code, 0, "{stderr}");
     assert!(stdout.contains("DS40002061B"), "{stdout}");
     assert!(stdout.contains("ATmega328P, PDIP-28"), "{stdout}");
-    assert!(!stdout.to_lowercase().contains("http"), "{stdout}");
-    assert!(!stdout.contains("categories"), "{stdout}");
+    assert!(
+        stdout.contains("ATmega328P-PU in a 300 mil PDIP-28"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("https://ww1.microchip.com/downloads/en/DeviceDoc/ATmega48A-PA-88A-PA-168A-PA-328-P-DS-DS40002061B.pdf"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("categories  microcontroller, avr, dip"),
+        "{stdout}"
+    );
 }
 
 #[test]
@@ -116,7 +126,7 @@ fn an_unknown_id_exits_with_near_matches() {
     let (code, stdout, stderr) = orbe(&["part", "resistor-axil"]);
     assert_eq!(code, 1);
     assert!(stdout.is_empty(), "{stdout}");
-    assert!(stderr.starts_with("error[unknown_part]: no catalog part named `resistor-axil`\n"));
+    assert!(stderr.starts_with("error[unknown_part]: no Block or part named `resistor-axil`\n"));
     assert!(stderr.contains("`resistor-axial`"), "{stderr}");
 
     let (code, stdout, stderr) = orbe(&["part", "LED-5MM", "--json"]);
@@ -268,7 +278,7 @@ fn a_unique_id_segment_prints_that_part_and_several_list_like_an_unknown_id() {
     let (code, stdout, stderr) = orbe(&["part", "switch"]);
     assert_eq!(code, 1);
     assert!(stdout.is_empty(), "{stdout}");
-    assert!(stderr.starts_with("error[unknown_part]: no catalog part named `switch`\n"));
+    assert!(stderr.starts_with("error[unknown_part]: no Block or part named `switch`\n"));
     for name in [
         "tactile-switch-6mm",
         "tactile-switch-smd",

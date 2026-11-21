@@ -123,16 +123,19 @@ impl Files {
         }
     }
 
-    pub(crate) fn read_to_string(&self, path: &Path) -> io::Result<String> {
-        match &self.store {
-            Store::Disk => fs::read_to_string(path),
+    /// The file as UTF-8 text. A leading byte order mark is dropped, so a scene or a test
+    /// an editor saved with one still parses.
+    pub fn read_to_string(&self, path: &Path) -> io::Result<String> {
+        let text = match &self.store {
+            Store::Disk => fs::read_to_string(path)?,
             Store::Memory(_) => String::from_utf8(self.read(path)?).map_err(|_| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     "stream did not contain valid UTF-8",
                 )
-            }),
-        }
+            })?,
+        };
+        Ok(strip_bom(text))
     }
 
     /// The paths of what a folder holds, in no set order.
@@ -170,6 +173,15 @@ impl Files {
                 }
             }
         }
+    }
+}
+
+/// Drops one leading U+FEFF. Editors write those bytes as a UTF-8 byte order mark, and they
+/// are not part of the file.
+pub(crate) fn strip_bom(text: String) -> String {
+    match text.strip_prefix('\u{feff}') {
+        Some(rest) => rest.to_string(),
+        None => text,
     }
 }
 
@@ -342,7 +354,8 @@ mod tests {
     }
 
     /// `missing/../a` is missing, and a trailing slash on a file is not a directory.
-    /// Disk and memory report the same kind, and a `..` through a real directory still reads.
+    /// Disk and memory report the same kind, except where `realpath` accepts that slash.
+    /// A `..` through a real directory still reads.
     #[test]
     fn memory_matches_disk_on_a_missing_parent_and_a_trailing_slash() {
         let tmp = tempfile::tempdir().unwrap();
@@ -358,6 +371,9 @@ mod tests {
         let missing = root.join("missing").join("..").join("a");
         let slash = PathBuf::from(format!("{}/", root.join("a").display()));
         let through = root.join("sub").join("..").join("a");
+        // macOS realpath resolves a trailing slash on a file. Memory keeps the Linux answer:
+        // that slash names a directory.
+        let disk_refuses_slash = slash.canonicalize().is_err();
 
         for path in [&missing, &slash, &through] {
             assert_eq!(
@@ -372,12 +388,14 @@ mod tests {
                 "read {}",
                 path.display()
             );
-            assert_eq!(
-                outcome(disk.real(path)),
-                outcome(memory.real(path)),
-                "real {}",
-                path.display()
-            );
+            if disk_refuses_slash || path.as_path() != slash.as_path() {
+                assert_eq!(
+                    outcome(disk.real(path)),
+                    outcome(memory.real(path)),
+                    "real {}",
+                    path.display()
+                );
+            }
         }
         assert_eq!(
             memory.read(&missing).unwrap_err().kind(),
@@ -385,6 +403,10 @@ mod tests {
         );
         assert_eq!(
             memory.read(&slash).unwrap_err().kind(),
+            io::ErrorKind::NotADirectory
+        );
+        assert_eq!(
+            memory.real(&slash).unwrap_err().kind(),
             io::ErrorKind::NotADirectory
         );
         assert_eq!(memory.read(&through).unwrap(), b"A");

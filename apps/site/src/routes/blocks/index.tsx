@@ -9,7 +9,7 @@ export const Route = createFileRoute("/blocks/")({
   head: () =>
     head({
       title: "Blocks",
-      description: "Small circuits that work, each with its scene, firmware and tests, live in 3D in the browser.",
+      description: "Small circuits that work. Play each one live in your browser.",
       path: at.blocks,
     }),
   component: () => <BlocksPage blocks={Route.useLoaderData()} />,

@@ -23,7 +23,15 @@ function notFoundHistory() {
 
 export function getRouter() {
   const history = notFoundHistory();
-  return createRouter({ routeTree, trailingSlash: "always", ...(history === undefined ? {} : { history }) });
+  return createRouter({
+    routeTree,
+    trailingSlash: "always",
+    // A hash click fires popstate. When the address did not change, the router treats that as a
+    // stale reload and calls the route's server function. This site is prerendered, so that call
+    // 404s. Loader data in the HTML stays fresh for the life of the page.
+    defaultStaleTime: Number.POSITIVE_INFINITY,
+    ...(history === undefined ? {} : { history }),
+  });
 }
 
 declare module "@tanstack/react-router" {

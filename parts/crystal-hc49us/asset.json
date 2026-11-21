@@ -2,13 +2,13 @@
   "part": "crystal-hc49us",
   "source": {
     "script": "model.py",
-    "sha256": "4dc23a291822228c4d1cb507c3d80e69fb4278c0c05085249e1cb80105eadef5",
-    "bytes": 2037
+    "sha256": "6d304888e2b118fad0e43e23160e74b12da419e7c4ace67e85488814d43e1d94",
+    "bytes": 2035
   },
   "files": {
     "crystal-hc49us.glb": {
-      "sha256": "53e29bb93bb796282b66af8eabc23ef6ed03e31031095a6881ad30d321d9d735",
-      "bytes": 18564
+      "sha256": "c94d36300a67a976e7a6a9f34289f5d4cb437063d6e67a69ce71469cd8decb8d",
+      "bytes": 18688
     },
     "crystal-hc49us.anchors.json": {
       "sha256": "437e5b733b1cf0d46dfca3fc837678f52785d5b271e2edb103d80ff04b8a33a2",

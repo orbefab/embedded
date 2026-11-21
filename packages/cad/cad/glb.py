@@ -21,6 +21,7 @@ A socket cut into the body, such as a breadboard's hole, has no node.
 from __future__ import annotations
 
 import json
+import struct
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -95,6 +96,95 @@ def _writer():
     return Writer
 
 
+def _declared(node, found: list[tuple[tuple[float, float, float], tuple[float, float]]]) -> None:
+    """The finish each coloured solid declared. A coloured solid with none fails."""
+    if node.color is not None:
+        factors = getattr(node, "orbe_factors", None)
+        rgba = getattr(node, "orbe_rgba", None)
+        if factors is None or rgba is None:
+            raise RuntimeError(f"{getattr(node, 'label', None) or 'unlabelled'}: material has no declared finish")
+        found.append((rgba[:3], (*factors, rgba[3])))
+    for child in node.children or ():
+        _declared(child, found)
+
+
+def _finish_table(rows: list[tuple[tuple[float, float, float], tuple[float, float]]]):
+    """Map a linear base colour to its factors. The same colour with two finishes fails."""
+    table: dict[tuple[float, float, float], tuple[float, float]] = {}
+    for rgb, factors in rows:
+        key = tuple(round(channel, 5) for channel in rgb)
+        previous = table.get(key)
+        if previous is not None and previous != factors:
+            raise RuntimeError(f"one colour {key} declares two finishes, {previous} and {factors}")
+        table[key] = factors
+    return table
+
+
+def _nearest(color, table):
+    best = None
+    best_gap = None
+    for key, factors in table.items():
+        gap = max(abs(color[i] - key[i]) for i in range(3))
+        if best_gap is None or gap < best_gap:
+            best, best_gap = factors, gap
+    if best is None or best_gap is None or best_gap > 2e-3:
+        return None
+    return best
+
+
+def _stamp_factors(glb: Path, table) -> None:
+    """Write metallicFactor and roughnessFactor onto every material.
+
+    OCCT's writer omits both, and a missing metallicFactor is 1 in glTF, so
+    every surface would load as metal. The colour bytes stay as the writer
+    emitted them; only the two factors are added.
+    """
+    data = glb.read_bytes()
+    if data[:4] != b"glTF":
+        raise RuntimeError(f"{glb.name}: not a GLB")
+    json_len, json_type = struct.unpack_from("<II", data, 12)
+    if json_type != 0x4E4F534A:
+        raise RuntimeError(f"{glb.name}: first chunk is not JSON")
+    doc = json.loads(data[20 : 20 + json_len])
+    materials = doc.get("materials") or []
+    if not materials:
+        raise RuntimeError(f"{glb.name}: GLB has no materials")
+    # A solid with no colour gets no material, and a loader draws it as white metal.
+    for index, mesh in enumerate(doc.get("meshes") or []):
+        for primitive in mesh.get("primitives") or []:
+            if "material" not in primitive:
+                name = mesh.get("name") or f"#{index}"
+                raise RuntimeError(f"{glb.name}: mesh {name} has no colour, so no finish")
+    for mat in materials:
+        pbr = mat.setdefault("pbrMetallicRoughness", {})
+        raw = pbr.get("baseColorFactor", [1.0, 1.0, 1.0, 1.0])
+        factors = _nearest(raw, table)
+        if factors is None:
+            raise RuntimeError(f"{glb.name}: material {mat.get('name')!r} {raw} has no declared finish")
+        metallic, roughness, alpha = factors
+        pbr["metallicFactor"] = metallic
+        pbr["roughnessFactor"] = roughness
+        # OCCT drops an alpha below 1, and without alphaMode a loader treats
+        # the surface as opaque. A clear lens needs both.
+        if alpha < 0.999:
+            color = list(pbr.get("baseColorFactor", [1.0, 1.0, 1.0, 1.0]))
+            if len(color) < 4:
+                color.extend([1.0] * (4 - len(color)))
+            color[3] = alpha
+            pbr["baseColorFactor"] = color
+            mat["alphaMode"] = "BLEND"
+    new_json = json.dumps(doc, separators=(",", ":")).encode()
+    pad = (4 - (len(new_json) % 4)) % 4
+    new_json += b" " * pad
+    rest = data[20 + json_len :]
+    total = 12 + 8 + len(new_json) + len(rest)
+    out = struct.pack("<III", 0x46546C67, 2, total)
+    out += struct.pack("<II", len(new_json), 0x4E4F534A)
+    out += new_json
+    out += rest
+    glb.write_bytes(out)
+
+
 def write(shape, part: str, anchors: list[Anchor] | None, folder: Path) -> None:
     """`anchors` is None for a part with no leads of its own, such as a bare board."""
     leads = sorted(a.lead for a in anchors or ())
@@ -116,6 +206,11 @@ def write(shape, part: str, anchors: list[Anchor] | None, folder: Path) -> None:
         )
     if not wrote:
         raise RuntimeError(f"{part}: export_gltf returned false for {glb.name}")
+    declared: list[tuple[tuple[float, float, float], tuple[float, float]]] = []
+    _declared(shape, declared)
+    if not declared:
+        raise RuntimeError(f"{part}: no coloured solid declared a finish")
+    _stamp_factors(glb, _finish_table(declared))
     if anchors is None:
         print(f"wrote {glb}")
         return

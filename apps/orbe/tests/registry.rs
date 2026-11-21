@@ -93,6 +93,51 @@ fn a_folder_with_no_parts_and_no_blocks_is_invalid() {
 }
 
 #[test]
+fn a_missing_manifest_or_source_folder_names_what_is_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    std::fs::create_dir(&src).unwrap();
+    let out = dir.path().join("out");
+    let (code, stdout, stderr) = orbe(&[
+        "registry",
+        "build",
+        src.to_str().unwrap(),
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, Some(1), "{stdout}{stderr}");
+    assert_eq!(stdout, "");
+    assert_eq!(
+        stderr,
+        format!(
+            "error[registry_invalid]: {} has no registry.jsonc, which names the registry: {{ \"format\": 1, \"name\": \"@<id>\" }}\n  hint: write registry.jsonc in that folder\n",
+            src.display()
+        )
+    );
+    assert!(!out.exists());
+
+    let file = dir.path().join("a-file");
+    std::fs::write(&file, "").unwrap();
+    for not_a_folder in [dir.path().join("missing-src"), file] {
+        let (code, stdout, stderr) = orbe(&[
+            "registry",
+            "build",
+            not_a_folder.to_str().unwrap(),
+            out.to_str().unwrap(),
+        ]);
+        assert_eq!(code, Some(1), "{stdout}{stderr}");
+        assert_eq!(stdout, "");
+        assert_eq!(
+            stderr,
+            format!(
+                "error[registry_invalid]: no folder at {}\n  hint: name the folder that holds registry.jsonc, parts/ and blocks/\n",
+                not_a_folder.display()
+            )
+        );
+        assert!(!out.exists());
+    }
+}
+
+#[test]
 fn previous_carries_a_build_forward_and_refuses_a_changed_version() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("src");
@@ -764,7 +809,7 @@ fn a_block_scene_that_names_an_unknown_hole_is_not_published() {
         &project,
         scene,
         &[
-            ("breadboard-400", &board, "0.1.0", "@orbefab"),
+            ("breadboard-400", &board, "0.1.1", "@orbefab"),
             ("lamp", &lamp, "1.2.0", "@acme"),
         ],
     );
@@ -788,7 +833,7 @@ fn a_changed_sealed_catalog_part_is_not_published() {
     project_locked(
         &project,
         scene,
-        &[("resistor-axial", &folder, "0.1.0", "@orbefab")],
+        &[("resistor-axial", &folder, "0.1.1", "@orbefab")],
     );
     refuse_installed(
         &src,
@@ -811,7 +856,7 @@ fn a_block_that_names_firmware_it_does_not_ship_is_not_published() {
     project_locked(
         &project,
         scene,
-        &[("atmega328p-dip28", &folder, "0.1.0", "@orbefab")],
+        &[("atmega328p-dip28", &folder, "0.1.1", "@orbefab")],
     );
     refuse_installed(&src, &project, "blocks/blink/scene.jsonc", "firmware.hex");
 }
@@ -964,7 +1009,7 @@ fn a_block_file_that_leaves_its_folder_is_not_published() {
             project_locked(
                 &project,
                 &scene,
-                &[("atmega328p-dip28", &folder, "0.1.0", "@orbefab")],
+                &[("atmega328p-dip28", &folder, "0.1.1", "@orbefab")],
             );
             check_clean(&project);
         }
@@ -992,7 +1037,7 @@ fn a_file_that_ships_in_its_folder_is_published() {
         std::fs::write(folder.join("sketch.hex"), &hex).unwrap();
         let scene = "{ \"format\": 1, \"parts\": { \"mcu\": { \"type\": \"blink-mcu\" } }, \"ground\": \"mcu.GND\" }\n";
         let project = dir.path().join("project");
-        project_locked(&project, scene, &[("blink-mcu", &folder, "0.1.0", "@acme")]);
+        project_locked(&project, scene, &[("blink-mcu", &folder, "0.1.1", "@acme")]);
         assert_published(
             &src,
             &project,
@@ -1016,7 +1061,7 @@ fn a_file_that_ships_in_its_folder_is_published() {
     project_locked(
         &project,
         scene,
-        &[("atmega328p-dip28", &folder, "0.1.0", "@orbefab")],
+        &[("atmega328p-dip28", &folder, "0.1.1", "@orbefab")],
     );
     std::fs::write(project.join("sketch.hex"), &hex).unwrap();
     assert_published(

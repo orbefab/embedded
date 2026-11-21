@@ -34,6 +34,13 @@
 //! read replaces it.
 //! `SPIF` clears on the vector or by reading `SPSR` while it is set and then
 //! accessing `SPDR`. `WCOL` clears by the same access sequence (§19.5.2).
+//!
+//! A master reads `MISO` from its pad, which Table 19-1 makes an input while `MSTR` is set,
+//! at the edge Table 19-3 and Figures 19-3 and 19-4 sample on: the leading edge with `CPHA`
+//! 0 and the trailing edge with `CPHA` 1, whatever `CPOL` is. A host drives that pad from a
+//! cycle the core may already have run past, by up to an instruction. Each sample keeps its
+//! cycle, so a pad change from a cycle at or before a sample of the byte under way, or of the
+//! byte just finished, replaces that sample's bit.
 
 use std::collections::VecDeque;
 
@@ -112,7 +119,12 @@ pub(crate) struct Spi {
     rx: u8,
     shift_out: u8,
     rx_acc: u8,
-    miso_cur: u8,
+    /// The cycle a master sampled each bit of the byte under way, or of the byte it just
+    /// finished, by bit index. `taken_n` bits are sampled.
+    taken: [u64; 8],
+    taken_n: u8,
+    /// The master byte `taken` belongs to has finished, and `rx` holds it.
+    taken_done: bool,
     bit: u8,
     /// Master transfer in progress.
     shifting: bool,
@@ -160,7 +172,9 @@ impl Spi {
             rx: 0,
             shift_out: 0,
             rx_acc: 0,
-            miso_cur: 0xFF,
+            taken: [0; 8],
+            taken_n: 0,
+            taken_done: false,
             bit: 0,
             shifting: false,
             phase: 0,
@@ -342,14 +356,7 @@ impl Spi {
         touch
     }
 
-    pub(crate) fn poke(
-        &mut self,
-        reg: u8,
-        value: u8,
-        mux: &mut PinMux,
-        cycle: u64,
-        slave_miso: &mut VecDeque<u8>,
-    ) -> Touch {
+    pub(crate) fn poke(&mut self, reg: u8, value: u8, mux: &mut PinMux, cycle: u64) -> Touch {
         if !self.running() {
             return Touch::default();
         }
@@ -390,7 +397,7 @@ impl Spi {
         self.consider_ss(mux, &mut ctx, cycle);
         self.refresh(mux, &mut ctx, cycle);
         if self.pending_tx.is_some() {
-            self.stamp(cycle, mux, &mut ctx, slave_miso);
+            self.stamp(cycle, mux, &mut ctx);
         }
         Touch {
             irq: true,
@@ -401,13 +408,7 @@ impl Spi {
 
     /// The store has retired. §19.2 starts the generator here, and an
     /// `SPCR` write drives its pins here.
-    pub(crate) fn stamp(
-        &mut self,
-        cycle: u64,
-        mux: &mut PinMux,
-        ctx: &mut Ctx<'_>,
-        slave_miso: &mut VecDeque<u8>,
-    ) {
+    pub(crate) fn stamp(&mut self, cycle: u64, mux: &mut PinMux, ctx: &mut Ctx<'_>) {
         if self.defer_pins {
             self.defer_pins = false;
             self.consider_ss(mux, ctx, cycle);
@@ -420,8 +421,7 @@ impl Spi {
             self.shift_out = byte;
             return;
         }
-        let miso = slave_miso.pop_front().unwrap_or(0xFF);
-        self.begin_master(byte, miso, cycle, mux, ctx);
+        self.begin_master(byte, cycle, mux, ctx);
     }
 
     pub(crate) fn irq_bits(&self) -> u64 {
@@ -451,16 +451,14 @@ impl Spi {
         if leading {
             if self.lat_cpha {
                 self.present_master_bit(self.bit, at, mux, ctx);
-            } else if self.sample_pad(mux) {
-                self.rx_acc = deposit(self.rx_acc, self.bit, self.lat_lsb, true);
+            } else {
+                self.sample_master_bit(at, mux);
             }
             self.drive_sck(!self.lat_cpol, at, mux, ctx);
             self.phase = 2;
             self.next = at + self.half;
         } else if self.lat_cpha {
-            if self.sample_pad(mux) {
-                self.rx_acc = deposit(self.rx_acc, self.bit, self.lat_lsb, true);
-            }
+            self.sample_master_bit(at, mux);
             self.drive_sck(self.lat_cpol, at, mux, ctx);
             self.advance_master_bit(at);
         } else {
@@ -500,7 +498,32 @@ impl Spi {
                 ..Touch::default()
             };
         }
+        if pin == self.miso.id && self.master() {
+            self.resample(level == Level::High, at);
+        }
         Touch::default()
+    }
+
+    /// A master's `MISO` pad is at `high` from cycle `at`. Each bit of the byte under way, or
+    /// of the byte just finished, sampled at or after `at` takes that level. The host lands a
+    /// pad from the cycle it reached, which the core can have run past by an instruction, and
+    /// no instruction has read the finished byte from `SPDR` in that time.
+    fn resample(&mut self, high: bool, at: u64) {
+        for index in 0..self.taken_n {
+            if self.taken[usize::from(index)] < at {
+                continue;
+            }
+            let shift = if self.lat_lsb { index } else { 7 - index };
+            let byte = if high {
+                self.rx_acc | 1 << shift
+            } else {
+                self.rx_acc & !(1 << shift)
+            };
+            self.rx_acc = byte;
+            if self.taken_done {
+                self.rx = byte;
+            }
+        }
     }
 
     pub(crate) fn after_pad(&mut self, mux: &mut PinMux, ctx: &mut Ctx<'_>, _at: u64) -> Touch {
@@ -532,13 +555,14 @@ impl Spi {
         self.armed = 0;
     }
 
-    fn begin_master(&mut self, byte: u8, miso: u8, at: u64, mux: &mut PinMux, ctx: &mut Ctx<'_>) {
+    fn begin_master(&mut self, byte: u8, at: u64, mux: &mut PinMux, ctx: &mut Ctx<'_>) {
         let period = sck_period(self.spcr, self.spi2x);
         self.half = period / 2;
         self.shift_out = byte;
         self.rx_acc = 0;
+        self.taken_n = 0;
+        self.taken_done = false;
         self.bit = 0;
-        self.miso_cur = miso;
         self.shifting = true;
         self.phase = 1;
         self.latch_mode();
@@ -565,19 +589,30 @@ impl Spi {
         self.next = at + self.half;
     }
 
+    /// Puts bit `index` on `MOSI`. `MISO` is an input in master mode (Table 19-1), so the
+    /// master drives nothing on it.
     fn present_master_bit(&mut self, index: u8, at: u64, mux: &mut PinMux, ctx: &mut Ctx<'_>) {
         let high = bit_high(self.shift_out, index, self.lat_lsb);
         self.mosi_lv = Some(high);
         self.drive_wire(self.mosi, high, at, mux, ctx);
-        let miso_high = bit_high(self.miso_cur, index, self.lat_lsb);
-        let level = if miso_high { Level::High } else { Level::Low };
-        mux.drive(u32::from(self.miso.id), level, ctx, at);
+    }
+
+    /// Samples the `MISO` pad into the bit under way, and keeps the cycle for [`Self::resample`].
+    fn sample_master_bit(&mut self, at: u64, mux: &PinMux) {
+        if self.sample_pad(mux) {
+            self.rx_acc = deposit(self.rx_acc, self.bit, self.lat_lsb, true);
+        }
+        if let Some(slot) = self.taken.get_mut(usize::from(self.bit)) {
+            *slot = at;
+            self.taken_n = self.bit + 1;
+        }
     }
 
     fn finish_master(&mut self, at: u64) {
         self.shifting = false;
         self.phase = 0;
         self.next = u64::MAX;
+        self.taken_done = true;
         self.rx = self.rx_acc;
         self.flags |= SPIF;
         self.mosi_q.push_back((self.shift_out, at));

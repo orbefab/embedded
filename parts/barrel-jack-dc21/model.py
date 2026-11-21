@@ -17,7 +17,7 @@ from pathlib import Path
 import build123d as bd
 
 from cad import glb, paint
-from cad.color import srgb
+from cad.color import plastic, tin
 from cad.geom import box
 
 BODY = (13.5, 9.0, 11.0)  # long, wide, tall  # verify, tall
@@ -27,8 +27,8 @@ LEGS = {1: (3.748, -4.495), 2: (6.745, 0.509), 3: (0.751, 0.509)}  # lead: x, y
 LEG = (0.6, 2.4)  # thick, wide (blades across X)  # verify
 BELOW = 3.0
 
-_BLACK = srgb("#1A1A1A")
-_TIN = srgb("#C5C8CE")
+_BLACK = plastic("#1A1A1A")
+_TIN = tin()
 
 
 def _along_x(x, y, z, r, length):

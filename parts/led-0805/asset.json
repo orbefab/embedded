@@ -2,13 +2,13 @@
   "part": "led-0805",
   "source": {
     "script": "model.py",
-    "sha256": "afd0b23f3a6468fc3a65300fd2ccf0ee943b944b226d6f3ceea0cbbf08502a87",
-    "bytes": 1106
+    "sha256": "c70d3d9b57b4a7161f1f7046b0b1a237d7b6ea04d3cbd4e6c4c1e9cea603053d",
+    "bytes": 1126
   },
   "files": {
     "led-0805.glb": {
-      "sha256": "4f3aafc33440484880154f2dbf775e96e545a19f1b374722b4ab5d04378237cf",
-      "bytes": 3816
+      "sha256": "22c233ee7bba5acc5d3aa19ee1654e7319ef3ca5d18b9860bb6f40023d9cdd32",
+      "bytes": 10696
     },
     "led-0805.anchors.json": {
       "sha256": "69377feed33ff0dda7780a41604ea45dd0b7c8c8e4bf9014a547ebb67e0bdd10",
@@ -17,10 +17,10 @@
   },
   "box": {
     "min": [-1, -0.625, 0],
-    "max": [1, 0.625, 0.83]
+    "max": [1, 0.625, 0.832]
   },
   "kept_nodes": ["body"],
-  "draw_calls": 2,
+  "draw_calls": 4,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -30,15 +30,15 @@
       "largest_miss_mm": 0
     },
     "seating": {
-      "lowest_node": "body",
+      "lowest_node": "package",
       "z_mm": 0
     },
     "names": {
       "nodes": ["body"]
     },
     "merge": {
-      "primitives_in": 3,
-      "primitives_out": 2
+      "primitives_in": 5,
+      "primitives_out": 4
     }
   }
 }

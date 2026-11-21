@@ -2,13 +2,13 @@
   "part": "tactile-switch-smd",
   "source": {
     "script": "model.py",
-    "sha256": "9743d8c71f04ff5980374d8a1852ba08f3c6235602b44e3dfe1c68e4196cd0a6",
-    "bytes": 2386
+    "sha256": "f27c09bc2bdaab2ba82b5d15f3af4556ab948a87acf0d86bc3439ffaa3f511b0",
+    "bytes": 2387
   },
   "files": {
     "tactile-switch-smd.glb": {
-      "sha256": "79544bc075bac1cda9b71c01c03c107db20f1e4d5af833771675c04662605834",
-      "bytes": 6388
+      "sha256": "2953cbcf77efb5d7bffac1109f813496e9b0493da9e7190b1bf1e46da1b7b8d4",
+      "bytes": 6472
     },
     "tactile-switch-smd.anchors.json": {
       "sha256": "61bfdb039c40ce8c589ceb3cfcd4af02537b76bc42dbc449625c0044304b5c04",
