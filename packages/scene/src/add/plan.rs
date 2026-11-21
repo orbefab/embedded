@@ -258,7 +258,7 @@ fn unknown_specs(catalog: &Catalog, specs: &[Spec]) -> Option<Plan> {
         let mut hints = Vec::new();
         let mut lines = Vec::new();
         for id in &unknown {
-            lines.push(format!("no catalog part named `{id}`"));
+            lines.push(format!("no Block or part named `{id}`"));
             let mut names = catalog.ids();
             for block in super::block::ids() {
                 names.insert(block);
@@ -270,7 +270,7 @@ fn unknown_specs(catalog: &Catalog, specs: &[Spec]) -> Option<Plan> {
             }
         }
         let hint = if hints.is_empty() {
-            "the catalog has no part with that id".into()
+            "the catalog has no Block or part with that id".into()
         } else {
             hints.join(" ")
         };

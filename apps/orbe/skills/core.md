@@ -397,7 +397,7 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 | --- | --- |
 | `usage` | The command line is wrong. The message says how. |
 | `part_missing` | Run the `orbe add` command in the hint. |
-| `unknown_part` | `orbe add` knows no part by that id. Pick one from the parts list above. |
+| `unknown_part` | No Block or part has that id. Pick one the hint names, from `orbe blocks` or the parts list. |
 | `busy` | Another `orbe add` is at work in this project. Wait for it, then run yours again. |
 | `scene_exists`, `file_exists` | `orbe add <block>` found another scene, or a file whose bytes differ. Matching files are kept, and running it again finishes an install that stopped part way. Use a new folder only when the bytes differ, as the hint shows. |
 | `symlink` | `orbe add <block>` found a link where it would write. It does not follow the link. Remove the link, then run the command in the hint again. |

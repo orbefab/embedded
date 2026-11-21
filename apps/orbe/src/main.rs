@@ -907,9 +907,9 @@ fn print_block(card: &orbe_scene::BlockCard, json: bool) -> ExitCode {
 }
 
 fn unknown_part(id: &str, names: &[String], json: bool) -> ExitCode {
-    let message = format!("no catalog part named `{id}`");
+    let message = format!("no Block or part named `{id}`");
     let hint = if names.is_empty() {
-        "the catalog has no part with that id".to_string()
+        "the catalog has no Block or part with that id".to_string()
     } else {
         let names = names
             .iter()

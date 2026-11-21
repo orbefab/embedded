@@ -1158,7 +1158,7 @@ fn add_refuses_a_folder_that_is_not_a_project() {
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert_eq!(
         stdout,
-        "error[unknown_part]: no catalog part named `no-such-part`\n  hint: the catalog has no part with that id\n"
+        "error[unknown_part]: no Block or part named `no-such-part`\n  hint: the catalog has no Block or part with that id\n"
     );
     assert_eq!(fs::read_dir(empty.path()).unwrap().count(), 0);
     let build_typo = build.join("deeper");
@@ -1167,7 +1167,13 @@ fn add_refuses_a_folder_that_is_not_a_project() {
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert_eq!(
         stdout,
-        "error[unknown_part]: no catalog part named `nano-button-lde`\n  hint: did you mean `nano-button-led`?\n"
+        "error[unknown_part]: no Block or part named `nano-button-lde`\n  hint: did you mean `nano-button-led`?\n"
+    );
+    let (output, stdout, _) = orbe_in(&build_typo, &["add", "nano-buton-led"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert_eq!(
+        stdout,
+        "error[unknown_part]: no Block or part named `nano-buton-led`\n  hint: did you mean `nano-button-led`?\n"
     );
     assert_eq!(fs::read_dir(&build_typo).unwrap().count(), 0);
 
@@ -1176,7 +1182,7 @@ fn add_refuses_a_folder_that_is_not_a_project() {
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(reply["error"]["code"], "unknown_part");
-    assert_eq!(reply["error"]["message"], "no catalog part named `led-5m`");
+    assert_eq!(reply["error"]["message"], "no Block or part named `led-5m`");
     assert_eq!(reply["error"]["hint"], "did you mean `led-5mm`?");
     assert_eq!(fs::read_dir(lonely.path()).unwrap().count(), 0);
 
