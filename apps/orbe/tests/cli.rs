@@ -254,6 +254,63 @@ fn help_is_not_a_usage_envelope() {
 }
 
 #[test]
+fn add_help_names_a_version_placeholder() {
+    let (output, stdout) = orbe(&["add", "--help"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(stdout.contains("id@<version>"), "{stdout}");
+    assert!(!stdout.contains("@0.1.0"), "{stdout}");
+}
+
+#[test]
+fn a_version_that_is_not_three_numbers_shows_the_shape() {
+    let dir = tempfile::tempdir().unwrap();
+    let (output, stdout, stderr) = orbe_in(dir.path(), &["add", "led-5mm@1"]);
+    assert_eq!(output.status.code(), Some(2), "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert_eq!(
+        stderr,
+        "error[usage]: `led-5mm@1` is not a version. a version is three numbers, such as `id@1.2.3`\n"
+    );
+}
+
+#[test]
+fn open_prints_a_missing_part_once() {
+    let project = tempfile::tempdir().unwrap();
+    let (output, stdout, stderr) = orbe_in(project.path(), &["add", "nano-button-led"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    fs::remove_dir_all(project.path().join("parts/nano-board")).unwrap();
+    let (output, stdout, stderr) = orbe_in(project.path(), &["open"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    assert_eq!(
+        stdout,
+        "scene.jsonc:8:23: error[part_missing]: part `nano-board` has a parts.lock line but no folder\n  hint: run `orbe add nano-board`\n"
+    );
+    assert_eq!(stdout.matches("error[part_missing]").count(), 1, "{stdout}");
+
+    let (output, stdout, stderr) =
+        orbe_in(project.path(), &["open", "--json", "--session", "once"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    assert_eq!(stdout.lines().count(), 1, "{stdout}");
+    let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(reply["ok"], false);
+    assert_eq!(reply["error"]["code"], "part_missing");
+    assert_eq!(
+        reply["error"]["message"],
+        "part `nano-board` has a parts.lock line but no folder"
+    );
+    assert_eq!(reply["error"]["hint"], "run `orbe add nano-board`");
+    let found = reply["data"]["diagnostics"].as_array().unwrap();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0]["code"], "part_missing");
+    assert_eq!(found[0]["line"], 8);
+    assert_eq!(found[0]["column"], 23);
+    assert_eq!(found[0]["message"], reply["error"]["message"]);
+    assert_eq!(found[0]["hint"], reply["error"]["hint"]);
+}
+
+#[test]
 fn every_bad_fixture_exits_1_and_prints_its_findings() {
     for case in common::cases("bad") {
         let name = case.file_name().unwrap().to_string_lossy().to_string();
@@ -1138,7 +1195,7 @@ fn add_refuses_a_folder_that_is_not_a_project() {
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert_eq!(
         stdout,
-        "error[unknown_part]: no catalog part named `no-such-part`\n  hint: the catalog has no part with that id\n"
+        "error[unknown_part]: no Block or part named `no-such-part`\n  hint: the catalog has no Block or part with that id\n"
     );
     assert_eq!(fs::read_dir(empty.path()).unwrap().count(), 0);
     let build_typo = build.join("deeper");
@@ -1147,7 +1204,13 @@ fn add_refuses_a_folder_that_is_not_a_project() {
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert_eq!(
         stdout,
-        "error[unknown_part]: no catalog part named `nano-button-lde`\n  hint: did you mean `nano-button-led`?\n"
+        "error[unknown_part]: no Block or part named `nano-button-lde`\n  hint: did you mean `nano-button-led`?\n"
+    );
+    let (output, stdout, _) = orbe_in(&build_typo, &["add", "nano-buton-led"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert_eq!(
+        stdout,
+        "error[unknown_part]: no Block or part named `nano-buton-led`\n  hint: did you mean `nano-button-led`?\n"
     );
     assert_eq!(fs::read_dir(&build_typo).unwrap().count(), 0);
 
@@ -1156,7 +1219,7 @@ fn add_refuses_a_folder_that_is_not_a_project() {
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(reply["error"]["code"], "unknown_part");
-    assert_eq!(reply["error"]["message"], "no catalog part named `led-5m`");
+    assert_eq!(reply["error"]["message"], "no Block or part named `led-5m`");
     assert_eq!(reply["error"]["hint"], "did you mean `led-5mm`?");
     assert_eq!(fs::read_dir(lonely.path()).unwrap().count(), 0);
 

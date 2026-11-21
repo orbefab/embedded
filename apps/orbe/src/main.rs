@@ -60,7 +60,7 @@ enum Command {
     /// copying its parts first, then writing its scene, firmware, tests and README.
     #[command(display_order = 3)]
     Add {
-        /// Part ids, or one Block id. A part's version is `id@0.1.0`.
+        /// Part ids, or one Block id. A part's version is `id@<version>`.
         ids: Vec<String>,
         /// The project folder, the one with scene.jsonc. The current folder by default.
         #[arg(short = 'C', value_name = "DIR", allow_hyphen_values = true)]
@@ -907,9 +907,9 @@ fn print_block(card: &orbe_scene::BlockCard, json: bool) -> ExitCode {
 }
 
 fn unknown_part(id: &str, names: &[String], json: bool) -> ExitCode {
-    let message = format!("no catalog part named `{id}`");
+    let message = format!("no Block or part named `{id}`");
     let hint = if names.is_empty() {
-        "the catalog has no part with that id".to_string()
+        "the catalog has no Block or part with that id".to_string()
     } else {
         let names = names
             .iter()

@@ -126,7 +126,7 @@ fn an_unknown_id_exits_with_near_matches() {
     let (code, stdout, stderr) = orbe(&["part", "resistor-axil"]);
     assert_eq!(code, 1);
     assert!(stdout.is_empty(), "{stdout}");
-    assert!(stderr.starts_with("error[unknown_part]: no catalog part named `resistor-axil`\n"));
+    assert!(stderr.starts_with("error[unknown_part]: no Block or part named `resistor-axil`\n"));
     assert!(stderr.contains("`resistor-axial`"), "{stderr}");
 
     let (code, stdout, stderr) = orbe(&["part", "LED-5MM", "--json"]);
@@ -278,7 +278,7 @@ fn a_unique_id_segment_prints_that_part_and_several_list_like_an_unknown_id() {
     let (code, stdout, stderr) = orbe(&["part", "switch"]);
     assert_eq!(code, 1);
     assert!(stdout.is_empty(), "{stdout}");
-    assert!(stderr.starts_with("error[unknown_part]: no catalog part named `switch`\n"));
+    assert!(stderr.starts_with("error[unknown_part]: no Block or part named `switch`\n"));
     for name in [
         "tactile-switch-6mm",
         "tactile-switch-smd",
