@@ -72,8 +72,9 @@ lint_tracked() {
     echo "scripts/check.sh: no tracked Python file" >&2
     exit 1
   fi
-  uv run --project packages/cad --frozen ruff check "${py[@]}"
-  uv run --project packages/cad --frozen ruff format --check "${py[@]}"
+  # uvx fetches this one ruff on its own, without the CAD project's dependencies.
+  uvx ruff@0.17.4 check "${py[@]}"
+  uvx ruff@0.17.4 format --check "${py[@]}"
 }
 
 lint() {
