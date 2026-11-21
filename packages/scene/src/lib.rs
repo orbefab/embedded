@@ -41,7 +41,7 @@ pub use circuit::{
 pub use diagnostic::{Code, Diagnostic, Lint};
 pub use files::Files;
 pub use holes::{holes_text, strip_text};
-pub use model::{FORMATS, STOP_PS, is_id};
+pub use model::{PART_FORMATS, SCENE_FORMATS, STOP_PS, is_id};
 pub use project::{BLOCK, REGISTRY, folder_hash, is_registry_name, part_file, shell_join};
 pub use published::is_published;
 pub use summary::{
@@ -136,6 +136,34 @@ pub fn view(files: &Files, scene: &Path) -> Result<View, Vec<Diagnostic>> {
 /// column. Otherwise `read`'s errors.
 pub fn lint(files: &Files, scene: &Path) -> Result<Vec<Diagnostic>, Vec<Diagnostic>> {
     compile(files, scene, true, false, None).map(|(_, warnings)| warnings)
+}
+
+/// How `orbe check` and `orbe open` name the two counts: the parts the scene lists, and the
+/// engine parts those expand to. A breadboard is a scene part and adds no engine part.
+pub fn part_counts(scene: usize, engine: usize) -> String {
+    let noun = |n: usize| if n == 1 { "part" } else { "parts" };
+    format!(
+        "{scene} scene {}, expanding to {engine} engine {}",
+        noun(scene),
+        noun(engine)
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::part_counts;
+
+    #[test]
+    fn part_counts_names_the_scene_parts_and_the_engine_parts_they_expand_to() {
+        assert_eq!(
+            part_counts(5, 19),
+            "5 scene parts, expanding to 19 engine parts"
+        );
+        assert_eq!(
+            part_counts(1, 1),
+            "1 scene part, expanding to 1 engine part"
+        );
+    }
 }
 
 /// What [`read_placed`] gives: the findings, and each path a file param takes.

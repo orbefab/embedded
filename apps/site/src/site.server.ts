@@ -83,10 +83,10 @@ const dependencyIds = (record: PartRecord | BlockRecord) => record.registryDepen
 export const blockCards = () => data.blocks.map(card);
 
 export const home = () => {
-  const fade = data.blocks.find((entry) => entry.record.name === "nano-led-fade");
-  const sceneFile = fade?.record.files.find((file) => file.path === "scene.jsonc");
+  const block = data.blocks.find((entry) => entry.record.name === "nano-button-led");
+  const sceneFile = block?.record.files.find((file) => file.path === "scene.jsonc");
   const scene = sceneFile === undefined ? undefined : data.texts[sceneFile.sha256];
-  if (scene === undefined) throw new Error("nano-led-fade has no scene.jsonc");
+  if (scene === undefined) throw new Error("nano-button-led has no scene.jsonc");
   return {
     blocks: blockCards(),
     boards: data.parts.filter((item) => item.record.categories?.includes("board")).map(({ record }) => ({ title: record.title, href: at.part(record.name) })),

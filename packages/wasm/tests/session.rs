@@ -238,3 +238,29 @@ fn a_missing_part_is_refused_with_the_finding() {
     assert!(error.contains("error[part_missing]"), "{error}");
     assert!(error.contains("led-0603"), "{error}");
 }
+
+/// The catalog-defaults Block: its own files, and catalog parts whose file params default to a
+/// file in the part folder. The text default is an AVR hex. The blob default is an ELF.
+fn catalog_defaults() -> Block {
+    let root = repo().join("packages/scene/tests/fixtures/catalog-defaults");
+    let mut block = Block::new();
+    for name in ["block.jsonc", "scene.jsonc"] {
+        block.add(name, fs::read(root.join(name)).unwrap());
+    }
+    for entry in fs::read_dir(root.join("catalog")).unwrap() {
+        let dir = entry.unwrap().path();
+        let id = dir.file_name().unwrap().to_str().unwrap();
+        add_folder(&mut block, &dir, &format!("parts/{id}/"));
+    }
+    block
+}
+
+#[test]
+fn a_block_opens_with_a_catalog_text_default_and_a_catalog_blob_default() {
+    let mut session = Session::start("catalog-defaults", catalog_defaults())
+        .unwrap_or_else(|text| panic!("{text}"));
+    let opened = messages(&mut session);
+    let types: Vec<&str> = opened.iter().map(|m| m["type"].as_str().unwrap()).collect();
+    assert_eq!(types, ["scene", "frame"]);
+    assert_eq!(opened[0]["session"], "catalog-defaults");
+}

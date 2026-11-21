@@ -34,6 +34,7 @@ A command does what it names and nothing in the background. Where `orbe` could g
 - A part with children passes a param to a child with `{ "param": "<name>" }` on the child, as a prop passes through a component. The whole value passes, with no arithmetic for now.
 - Catalog parts name the real object in `real` (maker, part number, datasheet), and every model value cites its source.
 - A part's files, such as the ESP32-S3 ROM, live in its folder. A file param's `default` names one, as a path relative to the part file.
+- A file param reads its file `"as": "text"`, into the model as a string, or `"as": "blob"`, as bytes. A blob param writes `{ "sha256", "bytes" }` at its `sets` pointer, and the reader hands the bytes to the engine beside the netlist. `"as": "blob"` needs part format 2, which is format 1 plus that, so only a part that uses a blob declares format 2. Scenes stay format 1.
 - A part states its readings, such as an LED's `lit` above 2 mA and `dim` above 100 uA. `brightness` is the average forward current over the last 20 ms, the time since t = 0 when the session is younger. 2 mA is the lowest current of the forward fit. 100 uA is a hundredth of the 10 mA at which the datasheet rates luminous intensity, and ten times the 10 uA reverse-current maximum.
 - `joints` say what moves, such as a button's plunger, and `controls.press` names the joint it drives. Joints between two parts come later.
 - Versions are three numbers. A patch or minor version can't change a passing test.

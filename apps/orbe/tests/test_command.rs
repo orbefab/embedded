@@ -160,7 +160,7 @@ fn each_command_replies_in_text() {
         block(0),
         [
             "2> open",
-            "  opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (19 engine parts, 32 nets)",
+            "  opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 19 engine parts, 32 nets)",
         ]
     );
     assert_eq!(

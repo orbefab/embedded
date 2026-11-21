@@ -19,8 +19,13 @@ use crate::units::{self, Unit};
 const SCENE_KEYS: &[&str] = &[
     "format", "$schema", "parts", "wires", "layout", "ground", "nets", "sim", "world",
 ];
-/// Part and scene `format` values this binary reads. A part's `format` covers its `model`.
-pub const FORMATS: &[u32] = &[1];
+/// Part `format` values this binary reads. A part's `format` covers its `model` and its params.
+/// Format 2 is format 1 plus `"as": "blob"` on a file param.
+pub const PART_FORMATS: &[u32] = &[1, 2];
+/// Scene `format` values this binary reads.
+pub const SCENE_FORMATS: &[u32] = &[1];
+/// The oldest part format whose file params take `"as": "blob"`.
+const BLOB_FORMAT: u32 = 2;
 const WIRE_KINDS: &[&str] = &["jumper", "trace", "contact"];
 /// A live session's stop, investigation 1's 2-hour cap.
 pub const STOP_PS: u64 = 7_200 * 1_000_000_000_000;
@@ -97,9 +102,18 @@ pub(crate) enum ParamKind {
         range: Range,
     },
     Choice(Vec<(String, Vec<(String, Node)>)>),
-    File,
+    File(FileAs),
     /// No `sets`: a part with children hands it to a child with `{ "param": "<name>" }`.
     Through,
+}
+
+/// How a file param reads its file.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FileAs {
+    /// UTF-8 text, written into the model as a string.
+    Text,
+    /// Bytes, written into the model as `{ "sha256", "bytes" }` and kept for the engine.
+    Blob,
 }
 
 #[derive(Clone, Copy)]
@@ -274,10 +288,18 @@ impl Scene {
     pub(crate) const STOP_PS: u64 = STOP_PS;
 }
 
-/// Checks `format`. A file in another format is not read further. `part` is the part's label
-/// when the file is a part; a scene passes `None` and keeps [`Code::Format`].
-fn format_ok(file: FileId, root: &Node, out: &mut Findings, part: Option<&str>, add: &str) -> bool {
-    let reads = FORMATS
+/// Checks `format` against `formats`, the list the file's kind reads, and gives it. A file in
+/// another format is not read further. `part` is the part's label when the file is a part; a
+/// scene passes `None` and keeps [`Code::Format`].
+fn format_ok(
+    file: FileId,
+    root: &Node,
+    out: &mut Findings,
+    formats: &[u32],
+    part: Option<&str>,
+    add: &str,
+) -> Option<u32> {
+    let reads = formats
         .iter()
         .map(u32::to_string)
         .collect::<Vec<_>>()
@@ -290,17 +312,14 @@ fn format_ok(file: FileId, root: &Node, out: &mut Findings, part: Option<&str>, 
             "the file has no `format`".into(),
             format!("add \"format\": 1; this binary reads format {reads}"),
         );
-        return false;
+        return None;
     };
-    if node
-        .number()
-        .is_some_and(|n| FORMATS.iter().any(|f| f64::from(*f) == n))
-    {
-        return true;
+    if let Some(n) = whole_format(node).filter(|n| formats.contains(n)) {
+        return Some(n);
     }
-    let (message, hint) = format_refusal(node, part, &reads, add);
+    let (message, hint) = format_refusal(node, formats, part, &reads, add);
     report_format(out, part, node.span, message, hint);
-    false
+    None
 }
 
 fn report_format(
@@ -318,7 +337,7 @@ fn report_format(
     out.push(code, span, message, hint);
 }
 
-/// What to say when `format` is present and not one [`FORMATS`] lists. A whole number below
+/// What to say when `format` is present and not one `formats` lists. A whole number below
 /// the oldest is an older orbe, and one above the newest is a newer orbe. Anything else, a
 /// gap included, stays the plain refusal.
 ///
@@ -327,7 +346,13 @@ fn report_format(
 /// file at the old format. The hint tells them to update the file, or to point the scene at
 /// the catalog part when the file is a copy of one. A catalog id is named in the `orbe add`
 /// the other hints print, so the folder and the quoting match.
-fn format_refusal(node: &Node, part: Option<&str>, reads: &str, add: &str) -> (String, String) {
+fn format_refusal(
+    node: &Node,
+    formats: &[u32],
+    part: Option<&str>,
+    reads: &str,
+    add: &str,
+) -> (String, String) {
     let plain = (
         format!("format {} is not one this binary reads", node.to_value()),
         format!("this binary reads format {reads}"),
@@ -335,7 +360,7 @@ fn format_refusal(node: &Node, part: Option<&str>, reads: &str, add: &str) -> (S
     let Some(n) = whole_format(node) else {
         return plain;
     };
-    let Some((min, max)) = format_bounds() else {
+    let Some((min, max)) = format_bounds(formats) else {
         return plain;
     };
     if n < min {
@@ -366,10 +391,10 @@ fn format_refusal(node: &Node, part: Option<&str>, reads: &str, add: &str) -> (S
     plain
 }
 
-fn format_bounds() -> Option<(u32, u32)> {
+fn format_bounds(formats: &[u32]) -> Option<(u32, u32)> {
     Some((
-        FORMATS.iter().copied().min()?,
-        FORMATS.iter().copied().max()?,
+        formats.iter().copied().min()?,
+        formats.iter().copied().max()?,
     ))
 }
 
@@ -407,9 +432,7 @@ pub(crate) fn decode_scene(
         schema(out, root, "an object");
         return None;
     };
-    if !format_ok(file, root, out, None, "") {
-        return None;
-    }
+    format_ok(file, root, out, SCENE_FORMATS, None, "")?;
     let mut scene = Scene {
         file,
         span: root.span,
@@ -456,9 +479,7 @@ pub(crate) fn decode_part(
         schema(out, root, "an object");
         return None;
     };
-    if !format_ok(file, root, out, Some(&label), add) {
-        return None;
-    }
+    let format = format_ok(file, root, out, PART_FORMATS, Some(&label), add)?;
     let mut part = Part {
         file,
         label,
@@ -508,7 +529,7 @@ pub(crate) fn decode_part(
         }
     }
     if let Some(params) = root.get("params") {
-        part.params = decode_params(params, &part, out);
+        part.params = decode_params(params, &part, format, out);
     }
     if let Some(model) = part.model.clone() {
         part.bodies = decode_bodies(&model, &part, out);
@@ -1406,7 +1427,7 @@ fn decode_not_simulated(node: &Node, out: &mut Findings) -> Vec<(String, Vec<Str
 
 /// The part's params. `shape` reports an unknown key or a value of the wrong type, so a field
 /// written with the wrong type is left out here without a second finding.
-fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl> {
+fn decode_params(node: &Node, part: &Part, format: u32, out: &mut Findings) -> Vec<ParamDecl> {
     let mut params = Vec::new();
     for prop in node.props().unwrap_or_default() {
         if prop.key == "type" || prop.key == "not_simulated" {
@@ -1431,8 +1452,20 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
             ParamShape::Choice => {
                 ParamKind::Choice(field("choices").map(decode_choices).unwrap_or_default())
             }
-            ParamShape::File => match field("as").map(Node::str) {
-                Some(Some("text")) => ParamKind::File,
+            ParamShape::File => match field("as").map(|n| (n, n.str())) {
+                Some((_, Some("text"))) => ParamKind::File(FileAs::Text),
+                Some((node, Some("blob"))) => {
+                    if format < BLOB_FORMAT {
+                        // The param stays declared, so a scene that sets it says nothing more.
+                        let message = format!(
+                            "file param `{}` takes \"as\": \"blob\" only in part format {BLOB_FORMAT}; this file is format {format}",
+                            prop.key
+                        );
+                        let hint = format!("set \"format\": {BLOB_FORMAT} in this part file");
+                        out.push(Code::Param, node.span, message, hint);
+                    }
+                    ParamKind::File(FileAs::Blob)
+                }
                 Some(_) => continue,
                 None => {
                     out.push(
@@ -1467,7 +1500,7 @@ fn decode_params(node: &Node, part: &Part, out: &mut Findings) -> Vec<ParamDecl>
             ParamShape::Through => ParamKind::Through,
         };
         let sets = match kind {
-            ParamKind::Number { .. } | ParamKind::File => {
+            ParamKind::Number { .. } | ParamKind::File(_) => {
                 field("sets").and_then(Node::str).map(str::to_string)
             }
             ParamKind::Choice(_) | ParamKind::Through => None,
@@ -2123,18 +2156,15 @@ fn decode_body(name: Option<String>, node: &Node, part: &Part, out: &mut Finding
         return None;
     };
     let kinds = engine_kinds();
-    let Some(engine_pins) = kinds
-        .iter()
-        .find(|(name, _)| *name == kind)
-        .map(|(_, pins)| *pins)
-    else {
-        let named = did_you_mean(kind, kinds.iter().map(|(name, _)| *name), "");
+    // The engine says how many of a kind's pins are required: the first `required` of them.
+    let Some(&(_, engine_pins, required)) = kinds.iter().find(|(name, _, _)| *name == kind) else {
+        let named = did_you_mean(kind, kinds.iter().map(|(name, _, _)| *name), "");
         let hint = if named.is_empty() {
             format!(
                 "the kinds are {}",
                 kinds
                     .iter()
-                    .map(|(name, _)| *name)
+                    .map(|(name, _, _)| *name)
                     .collect::<Vec<_>>()
                     .join(", ")
             )
@@ -2161,12 +2191,14 @@ fn decode_body(name: Option<String>, node: &Node, part: &Part, out: &mut Finding
         }
     }
     let mut pins = Vec::new();
-    for &engine_pin in engine_pins {
+    for (index, &engine_pin) in engine_pins.iter().enumerate() {
         let (part_pin, span) = match map.iter().find(|e| e.key == engine_pin) {
             Some(entry) => (
                 entry.value.str().unwrap_or_default().to_string(),
                 entry.value.span,
             ),
+            // An optional pin the model does not map sits on the part pin of its name, if any.
+            None if index >= required && part.pin(engine_pin).is_none() => continue,
             None => (engine_pin.to_string(), kind_node.span),
         };
         if part.pin(&part_pin).is_none() {

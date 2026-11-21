@@ -1,0 +1,25 @@
+// A test ESP32-S3. Its program is the ELF beside this part, read as a blob. The scene does
+// not name it: the default does. This is not the mask ROM.
+{
+  "format": 2,
+  "pins": { "VCC": [1], "GND": [2] },
+  "params": {
+    "program": { "file": "elf", "as": "blob", "default": "image.elf", "sets": "/firmware/elf" }
+  },
+  "model": {
+    "kind": "esp32s3",
+    "firmware": {},
+    "output": {
+      "high_drop": { "value": 0.0, "unit": "V", "source": "user" },
+      "high_resistance": { "value": 16.5, "unit": "ohm", "source": "user" },
+      "low_drop": { "value": 0.0, "unit": "V", "source": "user" },
+      "low_resistance": { "value": 17.68, "unit": "ohm", "source": "user" }
+    },
+    "pull_up_resistance": { "value": 45000.0, "unit": "ohm", "source": "user" },
+    "leakage_resistance": { "value": 66000000.0, "unit": "ohm", "source": "user" },
+    "input_threshold": {
+      "low": { "value": 0.25, "unit": "1", "source": "user" },
+      "high": { "value": 0.75, "unit": "1", "source": "user" }
+    }
+  }
+}

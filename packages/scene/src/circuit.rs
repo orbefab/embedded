@@ -1,17 +1,18 @@
 //! One tree of instances from the files, then pins joined into nets, and netlist v0.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Component, PathBuf};
 
 use serde_json::{Map, Value, json};
 
+use orbe_engine::blob::Blobs;
 use orbe_engine::world::Quantity;
 
 use crate::diagnostic::{Code, Findings, Reported};
 use crate::model::{Body, Comp, ParamDecl, ParamKind, Part, PinDef, Ref, Scene, passed};
 use crate::name::did_you_mean;
 use crate::params::{Arg, Cover, blocked, convert, cover, dotted, set, tokens, within};
-use crate::project::{Owner, Project};
+use crate::project::{Owner, Project, Store};
 use crate::source::Span;
 use crate::syntax::Node;
 use crate::units::Unit;
@@ -102,6 +103,8 @@ struct Circuit<'p> {
     /// Only the placement of the scene's parts is read, before a scene gives them a value for
     /// each required param and a ground. See [`crate::read_placed`].
     placing: bool,
+    /// The bytes each blob param read, under their SHA-256.
+    blobs: Blobs,
 }
 
 /// What [`Circuit::args`] gives an instance, field by field of [`Inst`].
@@ -205,6 +208,8 @@ pub struct Netlist {
     pub modified: Vec<String>,
     pub refs: RefMap,
     pub view: View,
+    /// The bytes of each blob the netlist names, read from the blob params' files.
+    pub blobs: Blobs,
 }
 
 /// With `lint`, the lint rules' warnings on a circuit that checks go there. With `placing`,
@@ -267,7 +272,7 @@ impl Circuit<'_> {
                 continue;
             };
             for decl in &part.params {
-                if !matches!(decl.kind, ParamKind::File) {
+                if !matches!(decl.kind, ParamKind::File(_)) {
                     continue;
                 }
                 let (node, site) = match (inst.args.get(&decl.name), &decl.default) {
@@ -314,6 +319,31 @@ fn read_far<'p>(project: &'p Project<'p>, out: &'p mut Findings) -> Circuit<'p> 
     circuit
 }
 
+/// The catalog id when `part` is the copy a Block reads, at `parts/<id>/part.jsonc`.
+/// That copy is not on disk: a default file is in the catalog. A project copy, and a part a
+/// file names by path, are read from the folder of the file that wrote the path.
+fn catalog_id(project: &Project, part: &Part) -> Option<String> {
+    if project.store != Store::Catalog {
+        return None;
+    }
+    let path = &project.sources.file(part.file).path;
+    let rel = path.strip_prefix(project.sources.root()).ok()?;
+    let names: Vec<_> = rel.components().collect();
+    let [
+        Component::Normal(folder),
+        Component::Normal(id),
+        Component::Normal(file),
+    ] = names.as_slice()
+    else {
+        return None;
+    };
+    if *folder == "parts" && *file == "part.jsonc" {
+        id.to_str().map(str::to_string)
+    } else {
+        None
+    }
+}
+
 impl<'p> Circuit<'p> {
     fn new(project: &'p Project<'p>, out: &'p mut Findings) -> Circuit<'p> {
         let root = Inst {
@@ -339,6 +369,7 @@ impl<'p> Circuit<'p> {
             unsimulated: BTreeMap::new(),
             seated: BTreeMap::new(),
             placing: false,
+            blobs: Blobs::new(),
         }
     }
 
@@ -448,6 +479,7 @@ impl<'p> Circuit<'p> {
                         node: prop.value.clone(),
                         site,
                         dir: dir.to_path_buf(),
+                        catalog: None,
                         explicit: true,
                     },
                 );
@@ -523,6 +555,7 @@ impl<'p> Circuit<'p> {
                         node: default.clone(),
                         site,
                         dir,
+                        catalog: catalog_id(project, owner_part),
                         explicit: false,
                     },
                 );
@@ -678,6 +711,22 @@ impl<'p> Circuit<'p> {
             } else {
                 format!("{prefix}.")
             };
+            if part.holes.is_some() {
+                let hint = crate::holes::near_hole_hint(
+                    seg,
+                    part.pins.iter().map(|p| p.name.as_str()),
+                    &dotted,
+                );
+                return (
+                    Code::UnknownPin,
+                    format!("{owner} has no hole `{seg}`"),
+                    format!(
+                        "{hint}a {}'s holes are named row then column: {}",
+                        part.label,
+                        crate::holes::holes_text(part.pins.iter().map(|p| p.name.as_str()))
+                    ),
+                );
+            }
             let hint = did_you_mean(seg, part.pins.iter().map(|p| p.name.as_str()), &dotted);
             let name = if prefix.is_empty() {
                 "it".to_string()
@@ -1378,7 +1427,8 @@ impl<'p> Circuit<'p> {
                 .collect();
             let document = head.with(kept.iter().map(|&i| &parts[i].fields));
             let text = serde_json::to_string_pretty(&document).expect("a JSON value");
-            let Err(diagnostics) = orbe_engine::netlist::parse(text.as_bytes()) else {
+            let Err(diagnostics) = orbe_engine::netlist::parse_with(text.as_bytes(), &self.blobs)
+            else {
                 break text;
             };
             let quiet = !clean || !left_out.is_empty();
@@ -1431,6 +1481,7 @@ impl<'p> Circuit<'p> {
             modified: self.project.modified.clone(),
             refs,
             view,
+            blobs: std::mem::take(&mut self.blobs),
         })
     }
 
@@ -1584,6 +1635,7 @@ impl<'p> Circuit<'p> {
                     node: default.clone(),
                     site: format!("{}.{}", self.insts[inst].dotted(), decl.name),
                     dir: dir.clone(),
+                    catalog: catalog_id(self.project, part),
                     explicit: false,
                 },
                 (None, None) => continue,
@@ -1596,7 +1648,7 @@ impl<'p> Circuit<'p> {
                 (false, false, true) => Rank::Required,
                 (false, false, false) => Rank::Default,
             };
-            match convert(self.project.files, decl, &arg) {
+            match convert(self.project.files, decl, &arg, &mut self.blobs) {
                 Ok(sets) => {
                     let setter = Setter::new(decl, &arg);
                     let opens = decl.opens() && !arg.node.is_null();

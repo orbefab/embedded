@@ -728,9 +728,9 @@ fn check(scene: &Path, json: bool) -> ExitCode {
         }));
     } else {
         println!(
-            "{}: ok, {} engine parts, {} nets, ground {}",
+            "{}: ok, {}, {} nets, ground {}",
             scene.display(),
-            netlist.parts,
+            orbe_scene::part_counts(netlist.refs.top.len(), netlist.parts),
             netlist.nets.len(),
             netlist.ground
         );

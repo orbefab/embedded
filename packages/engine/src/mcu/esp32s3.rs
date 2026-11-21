@@ -247,6 +247,8 @@ impl Esp32s3 {
 
     /// The supply pins, then the GPIOs a board can wire, as the chip names them.
     pub const PINS: [&'static str; 42] = s3::PINS;
+    /// How many of [`PINS`](Self::PINS) a part must wire: the supply pins, `VCC` and `GND`.
+    pub(crate) const REQUIRED: usize = 2;
 
     /// Where a bare-metal program may load: the 512 KB of internal SRAM, through its window on
     /// the instruction bus and through its window on the data bus. Each window's `offset` is
@@ -527,7 +529,7 @@ fn resolve_pins(
             }
         }
     }
-    let missing: Vec<&'static str> = Esp32s3::PINS[..2]
+    let missing: Vec<&'static str> = Esp32s3::PINS[..Esp32s3::REQUIRED]
         .iter()
         .copied()
         .filter(|pin| !pins.contains_key(*pin))

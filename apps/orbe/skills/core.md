@@ -82,7 +82,7 @@ wrote parts/nano-board 0.1.1
 ...
 wrote parts.lock
 $ orbe check scene.jsonc
-scene.jsonc: ok, 19 engine parts, 32 nets, ground nano__GND
+scene.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND
 $ orbe lint scene.jsonc
 scene.jsonc:1:1: warning[scene.ground_unnamed]: the ground net is `nano__GND`, a name taken from a pin, because "nets" does not name it
   hint: add "GND": "nano.GND" to the scene's "nets", so refs and messages say GND
@@ -90,7 +90,7 @@ scene.jsonc:4:5: warning[scene.unplaced]: `nano`, `btn1`, `r2`, `r1` and `led1` 
   hint: place a part whose place matters in the scene's "layout", as "nano": { "at": [x, y, z] } in mm
 2 warnings in scene.jsonc
 $ orbe open
-opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (19 engine parts, 32 nets)
+opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 19 engine parts, 32 nets)
 $ orbe step 100ms
 t=100ms (from 0s)
   brightness led1 off 1.2775403302174304e-13 A over 20ms
@@ -169,7 +169,7 @@ Param values:
 
 - A number with an optional SI prefix and unit, as a string or a number, such as `"10k"`, `"4.7 kohm"`, `"220"`, `220`, `"100n"`, `"1ms"`. Prefixes: p, n, u, m, k, M.
 - A choice by its name, as `"color": "red"`.
-- A file by its path, relative to the file that sets it, as `"firmware": "build/button.ino.hex"`.
+- A file by its path, relative to the file that sets it, as `"firmware": "build/button.ino.hex"`. The part reads the file as text, such as a hex, or as bytes when its file param says `"as": "blob"`, such as an app image.
 
 ## Breadboards
 
@@ -227,7 +227,7 @@ It is the same circuit as `scene.jsonc`, so it runs the same. Read a hole as a p
 $ orbe add breadboard-400
 ...
 $ orbe check breadboard.jsonc
-breadboard.jsonc: ok, 19 engine parts, 32 nets, ground nano__GND
+breadboard.jsonc: ok, 6 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND
 ```
 
 `orbe lint` warns `scene.shorted` when two pins of one part sit in one strip, such as a resistor turned along a column, and its hint is found the same way. A wire may still end on a pin off the board, such as an Uno's header pin.
@@ -408,7 +408,7 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 | `part_outdated` | The copy matches its `parts.lock` line and is an older version than this orbe carries. The message names both versions. Run the one `orbe add` command in the hint. It names every older id, and no newer one. |
 | `part_newer` | The copy matches its `parts.lock` line and is a newer version than this orbe carries. The message names both versions. This project needs a newer orbe. The hint names no `orbe add` command. `--overwrite` leaves the copy, and says so. |
 | `part_modified` | A copied part was edited. Run `orbe add <id> --overwrite` to restore it, or copy it to a folder of your own. |
-| `part_format` | The part file's format is not one this orbe reads. An older catalog copy is written for an older orbe: run `orbe add <id> --overwrite`. A part opened by a `./` path is the user's file: update that file to the format this orbe reads, including its model, or point the scene at the catalog id if the file copies one. A newer part means this project needs a newer orbe. |
+| `part_format` | The part file's format is not one this orbe reads. An older catalog copy is written for an older orbe: run `orbe add <id> --overwrite`. A part opened by a `./` path is the user's file: update that file to the format this orbe reads, including its model, or point the scene at the catalog id if the file copies one. A newer part means this project needs a newer orbe. This orbe reads part formats 1 and 2. Format 2 is format 1 plus `"as": "blob"` on a file param, and a blob param in a format 1 file is `scene.param`, with the hint to set `"format": 2`. A scene is format 1. |
 | `no_session` | No session runs under this name. Run the `orbe open` in the hint. |
 | `session_crashed` | The session's process died. Run `orbe open` again. |
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |

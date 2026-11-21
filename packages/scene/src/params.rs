@@ -1,13 +1,14 @@
 //! A param's value, as an instance or a default writes it, turned into what it sets in the
 //! part's model.
 
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
+use orbe_engine::blob::Blobs;
 use serde_json::{Map, Value, json};
 
 use crate::diagnostic::Code;
 use crate::files::Files;
-use crate::model::{ParamDecl, ParamKind, Range};
+use crate::model::{FileAs, ParamDecl, ParamKind, Range};
 use crate::name::did_you_mean;
 use crate::syntax::Node;
 use crate::units::{self, Unit};
@@ -20,6 +21,9 @@ pub(crate) struct Arg {
     pub(crate) site: String,
     /// The folder of the file that wrote it, for a file param's path.
     pub(crate) dir: PathBuf,
+    /// The catalog part whose folder holds this file, when the path is that part's default.
+    /// A Block's copy is not on disk, so the file is read from the catalog. None reads `dir`.
+    pub(crate) catalog: Option<String>,
     /// Set by an instance, not a declaration's default.
     pub(crate) explicit: bool,
 }
@@ -30,8 +34,9 @@ fn fail(message: impl Into<String>, hint: impl Into<String>) -> (Code, String, S
     (Code::Param, message.into(), hint.into())
 }
 
-/// The pointers a param's value sets in the model, and what goes at each.
-pub(crate) fn convert(files: &Files, decl: &ParamDecl, arg: &Arg) -> Converted {
+/// The pointers a param's value sets in the model, and what goes at each. A blob param's bytes
+/// go into `blobs`, under their SHA-256.
+pub(crate) fn convert(files: &Files, decl: &ParamDecl, arg: &Arg, blobs: &mut Blobs) -> Converted {
     let node = &arg.node;
     let pointer = decl.sets.clone().unwrap_or_default();
     match &decl.kind {
@@ -73,22 +78,34 @@ pub(crate) fn convert(files: &Files, decl: &ParamDecl, arg: &Arg) -> Converted {
                 }
             }
         }
-        ParamKind::File => {
+        ParamKind::File(file_as) => {
             let Some(rel) = node.str() else {
                 return Err(fail(
                     format!("a file param takes a path, found {}", node.what()),
                     "write a path relative to the file that sets it",
                 ));
             };
-            match files.read(&arg.dir.join(rel)) {
-                Ok(bytes) => match String::from_utf8(bytes) {
+            let bytes = match &arg.catalog {
+                Some(id) => catalog_bytes(files, id, rel),
+                None => files.read(&arg.dir.join(rel)).ok(),
+            };
+            match bytes {
+                Some(bytes) if *file_as == FileAs::Blob => {
+                    let length = bytes.len();
+                    let sha256 = blobs.add(bytes.into());
+                    Ok(vec![(
+                        pointer,
+                        json!({ "sha256": sha256.to_string(), "bytes": length }),
+                    )])
+                }
+                Some(bytes) => match String::from_utf8(bytes) {
                     Ok(text) => Ok(vec![(pointer, Value::String(text))]),
                     Err(_) => Err(fail(
                         format!("`{rel}` is not text"),
                         "save it as UTF-8 text",
                     )),
                 },
-                Err(_) => Err((
+                None => Err((
                     Code::FirmwareMissing,
                     format!("no file at `{rel}`"),
                     "build it, or fix the path; it is relative to the file that sets it".into(),
@@ -97,6 +114,34 @@ pub(crate) fn convert(files: &Files, decl: &ParamDecl, arg: &Arg) -> Converted {
         }
         ParamKind::Through => Ok(Vec::new()),
     }
+}
+
+/// The bytes of `rel` in the catalog copy of `id`. The path stays inside that part's folder.
+fn catalog_bytes(files: &Files, id: &str, rel: &str) -> Option<Vec<u8>> {
+    let rel = catalog_rel(rel)?;
+    files.catalog().file(id, &rel).map(<[u8]>::to_vec)
+}
+
+/// `rel` as a catalog key: `.` dropped, `/` between names, and no step that leaves the folder.
+fn catalog_rel(rel: &str) -> Option<String> {
+    if Path::new(rel).is_absolute() {
+        return None;
+    }
+    let mut names = Vec::new();
+    for component in Path::new(rel).components() {
+        match component {
+            Component::Normal(name) => names.push(name.to_str()?),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                names.pop()?;
+            }
+            Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    if names.is_empty() {
+        return None;
+    }
+    Some(names.join("/"))
 }
 
 pub(crate) fn number(

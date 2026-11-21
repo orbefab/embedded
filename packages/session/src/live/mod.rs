@@ -9,7 +9,8 @@
 //! `dim` and `off` follow its average current over the last 20 ms, or since t = 0 when the
 //! session is younger. `@part.i` stays the current at the read.
 
-use orbe_engine::netlist::{Analysis, Contact};
+use orbe_engine::blob::Blobs;
+use orbe_engine::netlist::Contact;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::ControlFlow;
@@ -236,7 +237,13 @@ impl Live {
                 .json
                 .replacen(&at(orbe_scene::STOP_PS), &at(stop), 1);
         }
-        let open = Open::new(&netlist.json, netlist.refs, netlist.view, shown.clone())?;
+        let open = Open::new(
+            &netlist.json,
+            &netlist.blobs,
+            netlist.refs,
+            netlist.view,
+            shown.clone(),
+        )?;
         let data = Data::Opened {
             scene: shown,
             parts: open.refs.top.clone(),
@@ -249,14 +256,36 @@ impl Live {
     }
 }
 
+/// The transient the reader writes, in picoseconds: its stop, max step and grid. They are read
+/// from the JSON, so a session parses the netlist once, as it opens it, and hashes its blobs
+/// once.
+struct Transient {
+    stop_ps: u64,
+    max_step_ps: u64,
+    grid_ps: u64,
+}
+
+impl Transient {
+    fn of(json: &str) -> Transient {
+        let netlist: serde_json::Value =
+            serde_json::from_str(json).expect("the reader writes JSON");
+        let at = |key: &str| {
+            netlist["analysis"]["transient"][key]
+                .as_u64()
+                .expect("the reader writes a transient")
+        };
+        Transient {
+            stop_ps: at("stop_ps"),
+            max_step_ps: at("max_step_ps"),
+            grid_ps: at("grid_ps"),
+        }
+    }
+}
+
 /// The engine runs no stop shorter than the scene's max step or trace grid.
 fn shorter_stop(json: &str, stop: Duration, variable: &str) -> Result<u64, Error> {
-    let netlist =
-        orbe_engine::netlist::parse(json.as_bytes()).expect("the reader writes a netlist");
-    let Analysis::Transient(transient) = netlist.analysis() else {
-        unreachable!("a session runs a transient");
-    };
-    let least = transient.max_step.max(transient.grid);
+    let transient = Transient::of(json);
+    let least = transient.max_step_ps.max(transient.grid_ps);
     let refuse = |message: String, hint: String| Err(Error::new(Code::Usage, message, hint));
     if stop.as_ps() > orbe_scene::STOP_PS {
         return refuse(
@@ -402,8 +431,14 @@ fn fail(error: Error) -> Box<Failed> {
 }
 
 impl Open {
-    fn new(json: &str, refs: RefMap, view: View, scene: String) -> Result<Open, Box<Failed>> {
-        let engine = Session::open_document(json.as_bytes()).map_err(|refused| {
+    fn new(
+        json: &str,
+        blobs: &Blobs,
+        refs: RefMap,
+        view: View,
+        scene: String,
+    ) -> Result<Open, Box<Failed>> {
+        let engine = Session::open_document_with(json.as_bytes(), blobs).map_err(|refused| {
             let (code, message) = match &refused {
                 Refused::Op => (
                     "netlist.analysis",
@@ -424,11 +459,7 @@ impl Open {
                 "report this with the scene",
             ))
         })?;
-        let netlist = orbe_engine::netlist::parse(json.as_bytes())
-            .expect("the engine opened the same netlist");
-        let Analysis::Transient(transient) = netlist.analysis() else {
-            unreachable!("a session runs a transient");
-        };
+        let transient = Transient::of(json);
         let mut reports: BTreeMap<String, Vec<Quantity>> = BTreeMap::new();
         for column in engine.probe().refs() {
             if let EngineRef::Quantity(part, q) = column {
@@ -453,8 +484,8 @@ impl Open {
             playing: false,
             unlisted: None,
             scene,
-            stop_ps: transient.stop.as_ps(),
-            max_step_ps: transient.max_step,
+            stop_ps: transient.stop_ps,
+            max_step_ps: transient.max_step_ps,
             reports,
             signals,
             signal_pins,
@@ -909,8 +940,14 @@ mod tests {
         let json = netlist.json.replace(&stop, "\"stop_ps\": 50000000000");
         let mut live = Live::new("t", Files::disk());
         live.open = Some(
-            Open::new(&json, netlist.refs, netlist.view, "scene.jsonc".into())
-                .unwrap_or_else(|f| panic!("{:?}", f.error)),
+            Open::new(
+                &json,
+                &netlist.blobs,
+                netlist.refs,
+                netlist.view,
+                "scene.jsonc".into(),
+            )
+            .unwrap_or_else(|f| panic!("{:?}", f.error)),
         );
         live
     }

@@ -405,8 +405,11 @@ impl Circuit<'_> {
         }
         let board_holes = self.holes(board, board_part);
         let Some(first_hole) = board_holes.iter().find(|h| &h.name == hole_name) else {
-            let names = board_holes.iter().map(|h| h.name.as_str());
-            let hint = did_you_mean(hole_name, names, &format!("{board_name}."));
+            let hint = crate::holes::near_hole_hint(
+                hole_name,
+                board_holes.iter().map(|h| h.name.as_str()),
+                &format!("{board_name}."),
+            );
             self.out.push(
                 Code::UnknownPin,
                 plug.hole.span,

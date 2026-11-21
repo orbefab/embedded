@@ -7,7 +7,7 @@ use std::fs;
 use orbe_scene::{Code, Files};
 
 fn owned_hint() -> String {
-    let current = orbe_scene::FORMATS.iter().copied().max().unwrap();
+    let current = orbe_scene::PART_FORMATS.iter().copied().max().unwrap();
     format!(
         "update this file to format {current}, including its model. if it copies a catalog part, point the scene at that id instead of this path"
     )
@@ -32,7 +32,7 @@ fn check(part_line: &str) -> orbe_scene::Diagnostic {
     let dir = tempfile::tempdir().unwrap();
     fs::create_dir(dir.path().join("mine")).unwrap();
     fs::write(dir.path().join("mine/part.jsonc"), part_text(part_line)).unwrap();
-    let scene_format = orbe_scene::FORMATS.iter().copied().max().unwrap();
+    let scene_format = orbe_scene::SCENE_FORMATS.iter().copied().max().unwrap();
     fs::write(
         dir.path().join("scene.jsonc"),
         format!(

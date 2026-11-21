@@ -1,0 +1,44 @@
+// The chips name no firmware. Each takes the file its catalog part defaults to.
+{
+  "format": 1,
+  "parts": {
+    "v5": { "type": "supply", "voltage": "5" },
+    "mcu": { "type": "text-chip" },
+    "v3": { "type": "supply", "voltage": "3.3" },
+    "s3": { "type": "blob-chip" }
+  },
+  "wires": [
+    ["v5.pos", "mcu.VCC"],
+    ["v5.pos", "mcu.AVCC"],
+    ["v5.neg", "mcu.GND_8"],
+    ["v5.neg", "mcu.GND_22"],
+    ["v5.neg", "mcu.PC6"],
+    ["v5.neg", "mcu.PD0"],
+    ["v5.neg", "mcu.PD1"],
+    ["v5.neg", "mcu.PD2"],
+    ["v5.neg", "mcu.PD3"],
+    ["v5.neg", "mcu.PD4"],
+    ["v5.neg", "mcu.PB6"],
+    ["v5.neg", "mcu.PB7"],
+    ["v5.neg", "mcu.PD5"],
+    ["v5.neg", "mcu.PD6"],
+    ["v5.neg", "mcu.PD7"],
+    ["v5.neg", "mcu.PB0"],
+    ["v5.neg", "mcu.PB1"],
+    ["v5.neg", "mcu.PB2"],
+    ["v5.neg", "mcu.PB3"],
+    ["v5.neg", "mcu.PB4"],
+    ["v5.neg", "mcu.PB5"],
+    ["v5.neg", "mcu.AREF"],
+    ["v5.neg", "mcu.PC0"],
+    ["v5.neg", "mcu.PC1"],
+    ["v5.neg", "mcu.PC2"],
+    ["v5.neg", "mcu.PC3"],
+    ["v5.neg", "mcu.PC4"],
+    ["v5.neg", "mcu.PC5"],
+    ["v3.pos", "s3.VCC"],
+    ["v5.neg", "v3.neg"],
+    ["v5.neg", "s3.GND"]
+  ],
+  "ground": "v5.neg"
+}

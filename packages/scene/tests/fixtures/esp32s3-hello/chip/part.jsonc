@@ -1,0 +1,111 @@
+// A test chip: an ESP32-S3 booting an ESP-IDF app from its flash, with the values of
+// packages/engine/tests/circuits/esp32s3-hello. The ROM is not committed: a test copies it to
+// rom.elf beside this file, from the folder packages/engine/scripts/blobs.sh fills.
+{
+  "format": 2,
+  "pins": { "VCC": [1], "GND": [2] },
+  "params": {
+    "rom": { "file": "elf", "as": "blob", "default": "rom.elf", "sets": "/rom" },
+    "partition_table": { "file": "bin", "as": "blob", "required": true, "sets": "/firmware/flash/0" },
+    "app": { "file": "bin", "as": "blob", "required": true, "sets": "/firmware/flash/1" }
+  },
+  "model": {
+    "kind": "esp32s3",
+    "pins": {
+      "VCC": "VCC",
+      "GND": "GND"
+    },
+    "firmware": {
+      "flash": [
+        {
+          "offset": 32768
+        },
+        {
+          "offset": 65536
+        }
+      ]
+    },
+    "output": {
+      "high_drop": {
+        "value": 0.0,
+        "unit": "V",
+        "source": {
+          "closed_form": {
+            "note": "the high stage as a resistance from VCC"
+          }
+        }
+      },
+      "high_resistance": {
+        "value": 16.5,
+        "unit": "ohm",
+        "source": {
+          "closed_form": {
+            "note": "Table 5-4: IOH 40 mA at VOH 2.64 V, VDD 3.3 V and drive strength 3, so 0.66 V / 40 mA"
+          }
+        }
+      },
+      "low_drop": {
+        "value": 0.0,
+        "unit": "V",
+        "source": {
+          "closed_form": {
+            "note": "the low stage as a resistance into GND"
+          }
+        }
+      },
+      "low_resistance": {
+        "value": 17.68,
+        "unit": "ohm",
+        "source": {
+          "closed_form": {
+            "note": "Table 5-4: IOL 28 mA at VOL 0.495 V, VDD 3.3 V and drive strength 3, so 0.495 V / 28 mA"
+          }
+        }
+      }
+    },
+    "pull_up_resistance": {
+      "value": 45000.0,
+      "unit": "ohm",
+      "source": {
+        "datasheet": {
+          "doc": "Espressif ESP32-S3 Series Datasheet v2.2",
+          "at": "Table 5-4, DC Characteristics (3.3 V, 25 C)",
+          "basis": "typical"
+        }
+      }
+    },
+    "leakage_resistance": {
+      "value": 66000000.0,
+      "unit": "ohm",
+      "source": {
+        "closed_form": {
+          "note": "Table 5-4: IIH and IIL at most 50 nA, so 3.3 V / 50 nA"
+        }
+      }
+    },
+    "input_threshold": {
+      "low": {
+        "value": 0.25,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "Espressif ESP32-S3 Series Datasheet v2.2",
+            "at": "Table 5-4, DC Characteristics (3.3 V, 25 C)",
+            "basis": "max"
+          }
+        }
+      },
+      "high": {
+        "value": 0.75,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "Espressif ESP32-S3 Series Datasheet v2.2",
+            "at": "Table 5-4, DC Characteristics (3.3 V, 25 C)",
+            "basis": "min"
+          }
+        }
+      }
+    }
+  }
+}
