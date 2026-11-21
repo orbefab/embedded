@@ -152,8 +152,7 @@ fn a_scene_that_reads_is_ok() {
     let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout
-            .contains("ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground nano__GND"),
+        stdout.contains("ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND"),
         "{stdout}"
     );
 
@@ -163,7 +162,7 @@ fn a_scene_that_reads_is_ok() {
     assert_eq!(reply["ok"], true);
     assert_eq!(reply["data"]["parts"], 19);
     assert_eq!(reply["data"]["nets"], 34);
-    assert_eq!(reply["data"]["ground"], "nano__GND");
+    assert_eq!(reply["data"]["ground"], "GND");
 }
 
 #[test]
@@ -207,15 +206,50 @@ fn a_missing_scene_is_an_io_error() {
 }
 
 #[test]
+fn check_and_lint_read_scene_jsonc_when_no_scene_is_named() {
+    let (_workspace, proj) = first_target();
+    for command in ["check", "lint"] {
+        let (named, named_out, named_err) = orbe_in(&proj, &[command, "scene.jsonc"]);
+        let (bare, bare_out, bare_err) = orbe_in(&proj, &[command]);
+        assert_eq!(
+            (named.status.code(), named_out, named_err),
+            (bare.status.code(), bare_out, bare_err),
+            "{command}"
+        );
+        assert_ne!(
+            bare.status.code(),
+            Some(2),
+            "{command} treated the default as usage"
+        );
+    }
+    let empty = tempfile::tempdir().unwrap();
+    let (output, _, stderr) = orbe_in(empty.path(), &["lint"]);
+    assert_eq!(output.status.code(), Some(3), "{stderr}");
+    assert!(stderr.contains("no scene file at scene.jsonc"), "{stderr}");
+    let (output, stdout) = orbe(&["check", "--help"]);
+    assert!(output.status.success(), "{stdout}");
+    assert!(stdout.contains("scene.jsonc when omitted"), "{stdout}");
+    let (output, stdout) = orbe(&["lint", "--help"]);
+    assert!(output.status.success(), "{stdout}");
+    assert!(stdout.contains("scene.jsonc when omitted"), "{stdout}");
+}
+
+#[test]
 fn json_usage_is_one_envelope_on_stdout() {
-    let (output, stdout) = orbe(&["check", "--json"]);
-    assert_eq!(output.status.code(), Some(2), "{stdout}");
-    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let dir = tempfile::tempdir().unwrap();
+    let (output, stdout, stderr) = orbe_in(dir.path(), &["check", "--json"]);
+    assert_eq!(output.status.code(), Some(3), "{stdout}{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
     let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(reply["ok"], false);
-    assert!(reply["error"].is_object());
-    assert_eq!(reply["error"]["code"], "usage");
-    assert!(!reply["error"]["message"].as_str().unwrap_or("").is_empty());
+    assert_eq!(reply["error"]["code"], "io_error");
+    assert!(
+        reply["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("scene.jsonc"),
+        "{reply}"
+    );
     assert_eq!(stdout.lines().count(), 1, "{stdout}");
 
     let (output, stdout) = orbe(&["check", "--json", "scene.jsonc", "extra"]);
@@ -458,8 +492,7 @@ fn adding_parts_for_the_first_target() {
     let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout
-            .contains("ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground nano__GND"),
+        stdout.contains("ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND"),
         "{stdout}"
     );
 
@@ -527,8 +560,7 @@ fn adding_parts_for_the_first_target() {
     let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout
-            .contains("ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground nano__GND"),
+        stdout.contains("ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND"),
         "{stdout}"
     );
 
@@ -589,8 +621,7 @@ fn adding_parts_for_the_first_target() {
     let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout
-            .contains("ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground nano__GND"),
+        stdout.contains("ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND"),
         "{stdout}"
     );
     assert!(
@@ -723,7 +754,7 @@ fn the_first_target_walk_from_the_folder_above() {
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert_eq!(
         stdout,
-        "proj/scene.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground nano__GND\n"
+        "proj/scene.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND\n"
     );
     assert!(proj.join("parts.lock").is_file());
 }
@@ -1323,7 +1354,7 @@ fn a_scene_not_named_scene_jsonc_gets_a_hint_that_runs() {
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert_eq!(
         stdout,
-        "blinky.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground nano__GND\n"
+        "blinky.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND\n"
     );
 }
 

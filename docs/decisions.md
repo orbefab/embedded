@@ -81,7 +81,7 @@ A command does what it names and nothing in the background. Where `orbe` could g
 - An instance has a `type` (a catalog id, or a `./` path to a part of your own), its params, and an optional `not_simulated` reason.
 - `wires` lists pin pairs, such as `["nano.D2", "btn1.a"]`, and `orbe` works out the nets. Every wire has a kind. `jumper` is the default and is drawn. `trace` (copper on a board) and `contact` (two pins touching, such as a leg in a breadboard hole) are not drawn. Drawing traces comes later.
 - `layout` sits in the parent, keyed by name, with `{ "at": [x, y, z], "rotate": [rx, ry, rz] }` in mm and degrees. The rotation is about the parent's fixed X, then Y, then Z, URDF's order. In a scene, `on` plugs a part into a board's holes in place of `at`, as [Breadboards](#breadboards-nov-8-2026) says. `mate` is reserved for later.
-- A net takes the name of its smallest label. A scene can name nets in `nets`, such as `"GND": "nano.GND"`.
+- A net takes the name of its smallest label. The ground net takes its ground pin's own name, such as `GND` from `nano.GND`, unless a scene net already has that name. A scene can name nets in `nets`, such as `"GND": "nano.GND"`.
 - Nested names flatten for the engine by joining with `__`, so `@nano.D13` is the net `nano__D13`. Names may not contain `__`.
 - A viewer edit goes to the file that holds what it changes. If that file is used more than once, the viewer asks first. Sealed parts refuse edits. A part with no position is placed by the viewer for drawing only, and nothing is written until a person drags it.
 - Two hashes: one over every project file read, which guards writes, and one over the netlist, which says whether the simulation is current.
@@ -90,7 +90,7 @@ A command does what it names and nothing in the background. Where `orbe` could g
 ## Checking (Nov 4 2026)
 Type checking, linting and runtime diagnostics are separate.
 - `orbe check` type-checks: do the files describe a valid circuit? Every finding is an error. `orbe open` runs it first.
-- `orbe lint` runs `orbe check`, then lint rules that never block, such as an unnamed ground net, a part with no position or an unconnected pin. It includes the engine's static checks, such as a floating net.
+- `orbe lint` runs `orbe check`, then lint rules that never block, such as a part with no position or an unconnected pin. It includes the engine's static checks, such as a floating net.
 - A part lists the pins its design leaves open in `open`, such as `"open": ["AREF"]` on the Nano and the Uno. `net.floating` is left out for the net of one of those pins while no scene wire reaches it and every other pin on the net, other than a hole, belongs to that part or a part inside it. A hole that only seats that pin, with nothing else in its strip, does not reach the net. A scene wire, another part's pin, or a wire to a hole on the net still warns. `open` does not change the model, so the part format stays 1. A binary that does not know the key refuses the part file.
 - A part that holds both a source and a chip, such as a board, runs with nothing wired to it, so lint does not call it unconnected. The rule reads the engine model kinds, not part names.
 - Runtime diagnostics come only from `run`, `step` and `test`.

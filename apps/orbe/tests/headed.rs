@@ -11,7 +11,8 @@ mod live;
 use std::fs;
 use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
-use std::path::Path;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -655,4 +656,71 @@ fn a_viewer_leaving_keeps_the_session_and_close_ends_the_rest() {
         Some(&json!({"type": "closed", "reason": "`orbe close` ended the session"}))
     );
     wait_until("the session process ends", || gone(pid));
+}
+
+/// An `xdg-open` that records the URL it was given.
+fn xdg_open(dir: &Path) -> (PathBuf, PathBuf) {
+    let bin = dir.join("bin");
+    fs::create_dir(&bin).unwrap();
+    let log = dir.join("xdg.log");
+    let script = bin.join("xdg-open");
+    fs::write(
+        &script,
+        "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$ORBE_XDG_LOG\"\n",
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&script).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&script, perms).unwrap();
+    (bin, log)
+}
+
+#[test]
+fn open_headed_opens_a_browser_only_when_no_viewer_is_connected() {
+    let runtime = Runtime::new();
+    let dir = project("open\n");
+    let page = page();
+    let tools = tempfile::tempdir().unwrap();
+    let (bin, log) = xdg_open(tools.path());
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+    let headed = |args: &[&str]| {
+        let output = runtime
+            .command(dir.path(), args)
+            .env("ORBE_VIEWER_DIR", page.path())
+            .env("PATH", &path)
+            .env("ORBE_XDG_LOG", &log)
+            .output()
+            .unwrap();
+        Run::new(output)
+    };
+
+    let first = headed(&["open", "--headed"]);
+    assert_eq!(first.code, 0, "{}{}", first.stdout, first.stderr);
+    let url = first.stdout.lines().next_back().unwrap().to_string();
+    assert!(url.starts_with("http://127.0.0.1:"), "{}", first.stdout);
+    wait_until("xdg-open ran", || {
+        fs::read_to_string(&log).is_ok_and(|text| text.trim() == url)
+    });
+    let opened = fs::read_to_string(&log).unwrap();
+
+    let mut viewer = Viewer::connect(&url);
+    viewer.until("scene", &mut Vec::new());
+    let second = headed(&["open", "--headed"]);
+    assert_eq!(second.code, 0, "{}{}", second.stdout, second.stderr);
+    assert!(
+        second.stdout.lines().any(|line| line == url),
+        "{}",
+        second.stdout
+    );
+    assert_eq!(
+        fs::read_to_string(&log).unwrap(),
+        opened,
+        "a connected viewer opens no browser"
+    );
+
+    let shown = headed(&["show", "--no-browser"]).ok();
+    assert!(shown.stdout.contains(&url), "{}", shown.stdout);
+    assert_eq!(fs::read_to_string(&log).unwrap(), opened);
+    viewer.leave();
+    runtime.orbe(dir.path(), &["close"]).ok();
 }

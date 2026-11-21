@@ -82,6 +82,9 @@ pub struct Reply {
     pub state: State,
     pub data: Data,
     pub error: Option<Error>,
+    /// Set by the client when `open` starts again after a crash. Absent on the wire.
+    #[serde(default, skip)]
+    pub previous_crash: Option<String>,
 }
 
 /// The session's state in a reply. `closed` is a session with no scene open.
@@ -212,9 +215,11 @@ pub enum Data {
     Paced {
         playing: bool,
     },
-    /// A viewer's address, which `show` gives.
+    /// A viewer's address, which `show` gives. `viewers` is how many were already connected,
+    /// so `open --headed` does not count the browser it is about to open.
     Viewer {
         url: String,
+        viewers: usize,
     },
     Landed {
         target: String,
@@ -934,7 +939,7 @@ impl Data {
             }),
             Data::Closed { at_ps } => json!({ "closed": true, "at_ps": at_ps }),
             Data::Paced { playing } => json!({ "playing": playing }),
-            Data::Viewer { url } => json!({ "url": url }),
+            Data::Viewer { url, viewers } => json!({ "url": url, "viewers": viewers }),
             Data::Landed {
                 target, landed_ps, ..
             } => json!({ "ref": format!("@{target}"), "landed_ps": landed_ps }),
@@ -1039,7 +1044,7 @@ impl Data {
             Data::Paced { playing: false } => {
                 let _ = write!(out, "paused at t={}", t(t_ps));
             }
-            Data::Viewer { url } => out.push_str(url),
+            Data::Viewer { url, .. } => out.push_str(url),
             Data::Landed {
                 target,
                 pressed,
@@ -1201,7 +1206,13 @@ impl Reply {
     }
 
     pub fn json(&self) -> Value {
-        serde_json::to_value(self.envelope()).expect("an envelope serializes")
+        let mut value = serde_json::to_value(self.envelope()).expect("an envelope serializes");
+        if let Some(note) = &self.previous_crash
+            && let Some(data) = value.get_mut("data").filter(|data| data.is_object())
+        {
+            data["previous_crash"] = note.clone().into();
+        }
+        value
     }
 
     pub(crate) fn envelope(&self) -> Envelope<'_> {
@@ -1227,7 +1238,7 @@ impl Reply {
 
     pub fn text(&self) -> String {
         let Some(error) = &self.error else {
-            return self.data.text(self.t_ps);
+            return with_crash(self.data.text(self.t_ps), self.previous_crash.as_deref());
         };
         let mut out = String::new();
         match &self.data {
@@ -1267,6 +1278,16 @@ impl Reply {
         }
         out
     }
+}
+
+fn with_crash(mut text: String, note: Option<&str>) -> String {
+    if let Some(note) = note {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(note);
+    }
+    text
 }
 
 #[cfg(test)]

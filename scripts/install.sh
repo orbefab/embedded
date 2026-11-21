@@ -272,6 +272,9 @@ done
 if [ "$on_path" -eq 0 ]; then
   echo "install.sh: $abs is not on PATH. Add it yourself. This script does not edit your shell rc files."
 fi
+echo "install.sh: next, run these:"
+echo "orbe --version"
+echo "npx skills add orbefab/embedded"
 }
 
 main "$@"

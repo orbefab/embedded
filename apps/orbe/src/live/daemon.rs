@@ -197,8 +197,12 @@ impl Held {
                 .live
                 .refuse(Error::new(Code::NoSession, "no scene is open", ""));
         }
+        let viewers = self.watchers.viewers.len();
         if let Some(url) = &self.url {
-            return self.live.report(Data::Viewer { url: url.clone() });
+            return self.live.report(Data::Viewer {
+                url: url.clone(),
+                viewers,
+            });
         }
         let page = match Page::find(page) {
             Ok(page) => page,
@@ -207,7 +211,7 @@ impl Held {
         match viewer::start(page, Arc::clone(&self.models), self.events.clone()) {
             Ok(url) => {
                 self.url = Some(url.clone());
-                self.live.report(Data::Viewer { url })
+                self.live.report(Data::Viewer { url, viewers })
             }
             Err(error) => self.live.refuse(Error::new(
                 Code::IoError,
@@ -326,9 +330,9 @@ impl Job {
     }
 }
 
-/// Runs the session. `start` names the log `open` gave this process for its stderr: once this
-/// process holds the socket, that log becomes the session's, and a process that loses the
-/// socket to another start removes it.
+/// Runs the session. `start` names the log `open` gave this process for its stderr. Once this
+/// process holds the socket, that log becomes the session's, unless the session's log already
+/// holds a crash's output. A process that loses the socket to another start removes its log.
 pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
     let found = Place::find().and_then(|place| {
         let start = start.map(|id| place.start_log(name, id));
@@ -359,7 +363,11 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
         }
     };
     let bound = (inode(&socket), start.as_deref().and_then(inode));
+    // A crash left output in the log the hint names. Leave that file until it is read or a
+    // later crash replaces it, and keep this process's stderr on its start log.
+    let preserve = start.is_some() && holds_output(&log);
     if let Some(start) = &start
+        && !preserve
         && let Err(error) = std::fs::rename(start, &log)
     {
         if inode(&socket) == bound.0 {
@@ -372,7 +380,27 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
         );
         return ExitCode::from(3);
     }
+    let version = socket.with_file_name(format!("{name}.version"));
+    if let Err(error) = std::fs::write(&version, format!("{}\n", env!("CARGO_PKG_VERSION"))) {
+        if inode(&socket) == bound.0 {
+            let _ = std::fs::remove_file(&socket);
+        }
+        eprintln!(
+            "error[io_error]: cannot write {}: {error}",
+            version.display()
+        );
+        return ExitCode::from(3);
+    }
+    let version_inode = inode(&version);
+    let crash = start.as_ref().zip(bound.1).map(|(start, inode)| CrashLog {
+        start,
+        log: &log,
+        inode,
+    });
+    #[cfg(debug_assertions)]
     let idle = test_duration("ORBE_TEST_IDLE_TIMEOUT").unwrap_or(IDLE);
+    #[cfg(not(debug_assertions))]
+    let idle = IDLE;
     let (events, queue) = mpsc::channel();
     let reading = Arc::new(AtomicUsize::new(0));
     let timer = unopened_timer(events.clone(), UNOPENED.min(idle), Arc::clone(&reading));
@@ -386,10 +414,19 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
         ticked: None,
     };
     thread::spawn(move || accept(&listener, &events, &reading));
-    let (why, unanswered) = serve(&mut held, &queue, idle, timer);
-    for (path, identity) in [(&socket, bound.0), (&log, bound.1)] {
-        if identity.is_some() && inode(path) == identity {
-            let _ = std::fs::remove_file(path);
+    let (why, unanswered) = serve(&mut held, &queue, idle, timer, crash.as_ref());
+    if bound.0.is_some() && inode(&socket) == bound.0 {
+        let _ = std::fs::remove_file(&socket);
+    }
+    if version_inode.is_some() && inode(&version) == version_inode {
+        let _ = std::fs::remove_file(&version);
+    }
+    if let Some(crash) = &crash {
+        crash.claim_if_read();
+        if inode(crash.log) == Some(crash.inode) {
+            let _ = std::fs::remove_file(crash.log);
+        } else if inode(crash.start) == Some(crash.inode) {
+            let _ = std::fs::remove_file(crash.start);
         }
     }
     if let Some((job, reply)) = unanswered {
@@ -422,6 +459,7 @@ fn serve(
     queue: &Receiver<Event>,
     idle: Duration,
     timer: Sender<()>,
+    crash: Option<&CrashLog>,
 ) -> (&'static str, Option<(Job, Reply)>) {
     let mut timer = Some(timer);
     let mut last = wall();
@@ -441,6 +479,9 @@ fn serve(
         match event {
             Ok(Event::Job(job)) => {
                 last = wall();
+                if let Some(crash) = crash {
+                    crash.claim_if_read();
+                }
                 let reply = held.run(&job);
                 if let Data::Closed { .. } = reply.data {
                     return ("`orbe close` ended the session", Some((job, reply)));
@@ -500,7 +541,9 @@ fn unopened_timer(events: Sender<Event>, wait: Duration, reading: Arc<AtomicUsiz
 }
 
 /// `ORBE_TEST_IDLE_TIMEOUT`, which also caps `UNOPENED`, and `ORBE_TEST_READ_DELAY`, how long
-/// the process waits before it reads its first connection's request.
+/// the process waits before it reads its first connection's request. A release build has
+/// neither switch.
+#[cfg(debug_assertions)]
 fn test_duration(name: &str) -> Option<Duration> {
     std::env::var(name)
         .ok()
@@ -509,18 +552,27 @@ fn test_duration(name: &str) -> Option<Duration> {
 }
 
 /// `ORBE_TEST_STOP` from the shell that ran `open`, a test seam for a stop shorter than 2 hours.
+/// A release build ignores it.
 fn test_stop(text: Option<&str>) -> Result<Option<(orbe_session::Duration, String)>, Error> {
-    let Some(text) = text else {
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = text;
         return Ok(None);
-    };
-    let stop = orbe_session::Duration::parse(text).map_err(|reason| {
-        Error::new(
-            Code::Usage,
-            format!("ORBE_TEST_STOP={text} is not a duration: {reason}"),
-            "set ORBE_TEST_STOP to a duration such as 50ms, or unset it",
-        )
-    })?;
-    Ok(Some((stop, "ORBE_TEST_STOP".into())))
+    }
+    #[cfg(debug_assertions)]
+    {
+        let Some(text) = text else {
+            return Ok(None);
+        };
+        let stop = orbe_session::Duration::parse(text).map_err(|reason| {
+            Error::new(
+                Code::Usage,
+                format!("ORBE_TEST_STOP={text} is not a duration: {reason}"),
+                "set ORBE_TEST_STOP to a duration such as 50ms, or unset it",
+            )
+        })?;
+        Ok(Some((stop, "ORBE_TEST_STOP".into())))
+    }
 }
 
 /// `to` from the folder `from`, both real paths, such as `../scene.jsonc`.
@@ -555,9 +607,40 @@ fn inode(path: &Path) -> Option<(u64, u64)> {
         .map(|m| (m.dev(), m.ino()))
 }
 
+/// The start log and the session log while a crash's output still occupies the session log.
+struct CrashLog<'a> {
+    start: &'a Path,
+    log: &'a Path,
+    inode: (u64, u64),
+}
+
+impl CrashLog<'_> {
+    /// The crash log was read after it was written. This process's stderr already points at
+    /// the start log, so that file takes the session log's name and a clean exit removes it.
+    fn claim_if_read(&self) {
+        if inode(self.log) == Some(self.inode) {
+            return;
+        }
+        let Ok(meta) = std::fs::symlink_metadata(self.log) else {
+            return;
+        };
+        let read = meta.is_file() && meta.len() > 0 && meta.accessed().ok() > meta.modified().ok();
+        if read {
+            let _ = std::fs::rename(self.start, self.log);
+        }
+    }
+}
+
+fn holds_output(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0)
+}
+
 /// Counts each accepted connection in `reading` until its request is queued or it ends.
 fn accept(listener: &UnixListener, jobs: &Sender<Event>, reading: &Arc<AtomicUsize>) {
+    #[cfg(debug_assertions)]
     let mut delay = test_duration("ORBE_TEST_READ_DELAY");
+    #[cfg(not(debug_assertions))]
+    let mut delay: Option<Duration> = None;
     for stream in listener.incoming().flatten() {
         reading.fetch_add(1, Ordering::SeqCst);
         let (jobs, reading, delay) = (jobs.clone(), Arc::clone(reading), delay.take());

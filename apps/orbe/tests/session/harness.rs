@@ -71,7 +71,7 @@ impl Runtime {
     }
 
     pub fn sessions(&self) -> PathBuf {
-        self.dir.path().join("orbe").join(env!("CARGO_PKG_VERSION"))
+        self.dir.path().join("orbe")
     }
 
     pub fn sockets(&self) -> Vec<String> {
