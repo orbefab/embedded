@@ -362,8 +362,8 @@ fn an_unseated_leg_hint_keeps_a_nonzero_rotate() {
     assert!(!run.stdout.contains("rotate"), "{}", run.stdout);
 }
 
-/// A leg already on the hole's net is seated. One contact there means the part's leads are
-/// not joining nothing, even when the other leg lines up with another hole.
+/// A leg already on the hole's net is not unseated. The part's other leg, lined up with
+/// another hole, still is. Both legs on their holes' nets stay quiet.
 #[test]
 fn a_leg_already_on_the_holes_net_is_not_an_unseated_leg() {
     let nano = r#""type": "nano-board", "firmware": "build/button.ino.hex""#;
@@ -372,6 +372,27 @@ fn a_leg_already_on_the_holes_net_is_not_an_unseated_leg() {
         r#"{{ "format": 1, "parts": {{ "bb": {{ "type": "breadboard-400" }}, "nano": {{ {nano} }}, "r1": {{ {resistor} }} }}, "nets": {{ "GND": "nano.GND" }}, "wires": [["r1.a", "bb.a1", {{ "kind": "contact" }}]], "layout": {{ "bb": {{ "at": [0, 0, 0] }}, "nano": {{ "at": [200, 0, 0] }}, "r1": {{ "at": [-31.75, -13.97, 8.5] }} }} }}"#
     );
     let dir = project(&scene);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains(
+            "warning[scene.unplaced]: `r1` is drawn on `bb` as if it were plugged in, and its leads join nothing"
+        ),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .contains("hint: seat it with \"on\", as \"r1\": { \"on\": { \"b\": \"bb.a5\" } }"),
+        "{}",
+        run.stdout
+    );
+    assert!(!run.stdout.contains("\"a\": \"bb.a1\""), "{}", run.stdout);
+
+    let both = format!(
+        r#"{{ "format": 1, "parts": {{ "bb": {{ "type": "breadboard-400" }}, "nano": {{ {nano} }}, "r1": {{ {resistor} }} }}, "nets": {{ "GND": "nano.GND" }}, "wires": [["r1.a", "bb.a1", {{ "kind": "contact" }}], ["r1.b", "bb.a5", {{ "kind": "contact" }}]], "layout": {{ "bb": {{ "at": [0, 0, 0] }}, "nano": {{ "at": [200, 0, 0] }}, "r1": {{ "at": [-31.75, -13.97, 8.5] }} }} }}"#
+    );
+    let dir = project(&both);
     let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(!run.stdout.contains("leads join nothing"), "{}", run.stdout);
@@ -384,6 +405,12 @@ fn a_leg_already_on_the_holes_net_is_not_an_unseated_leg() {
     let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(run.stdout.contains("leads join nothing"), "{}", run.stdout);
+    assert!(
+        run.stdout
+            .contains("hint: seat it with \"on\", as \"r1\": { \"on\": { \"a\": \"bb.a1\" } }"),
+        "{}",
+        run.stdout
+    );
 }
 
 /// A part whose legs are further below the holes than the board is thick is not drawn in them.

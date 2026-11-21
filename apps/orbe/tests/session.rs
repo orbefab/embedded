@@ -12,13 +12,14 @@ use std::fs;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::Path;
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::Value;
 use tempfile::TempDir;
 
-use harness::{Run, Runtime, kill, kill_daemon, wait_until};
+use harness::{Run, Runtime, gone, kill, kill_daemon, wait_until};
 use live::{common, project};
 
 /// The Nano button Block laid out as in the repo, so `blocks/nano-button-led/scene.jsonc` names
@@ -233,7 +234,7 @@ fn a_process_that_dies_is_session_crashed_until_it_is_opened_again() {
         .ok();
 }
 
-/// The path a crash message names, `<name>.crashed.log`.
+/// The path a crash message names, `<name>.log.crashed`.
 fn crashed_log(text: &str) -> &str {
     text.lines()
         .find_map(|line| {
@@ -257,7 +258,7 @@ fn a_crash_log_stays_after_it_is_read_and_the_next_open_names_it() {
     let run = runtime.orbe(dir.path(), &["get", "@led1", "--session", "kept"]);
     assert_eq!(run.code, 1, "{}", run.stderr);
     let path = crashed_log(&run.stderr);
-    assert!(path.ends_with("kept.crashed.log"), "{path}");
+    assert!(path.ends_with("kept.log.crashed"), "{path}");
     assert_eq!(fs::read_to_string(path).unwrap(), "panic: boom\n");
 
     let run = runtime
@@ -318,13 +319,13 @@ fn close_keeps_the_latest_crash_log_and_close_all_does_too() {
     crash_twice("c2");
     let run = runtime.orbe(dir.path(), &["close", "--session", "c2"]).ok();
     let path = crashed_log(&run.stdout);
-    assert!(path.ends_with("c2.crashed.log"), "{path}\n{}", run.stdout);
+    assert!(path.ends_with("c2.log.crashed"), "{path}\n{}", run.stdout);
     assert_eq!(fs::read_to_string(path).unwrap(), "crash two\n");
 
     crash_twice("c3");
     let run = runtime.orbe(dir.path(), &["close", "--all"]).ok();
     let path = crashed_log(&run.stdout);
-    assert!(path.ends_with("c3.crashed.log"), "{path}\n{}", run.stdout);
+    assert!(path.ends_with("c3.log.crashed"), "{path}\n{}", run.stdout);
     assert_eq!(fs::read_to_string(path).unwrap(), "crash two\n");
 }
 
@@ -351,7 +352,7 @@ fn a_refused_open_after_a_crash_still_names_the_crash_log() {
         run.stdout
     );
     let path = crashed_log(&run.stdout);
-    assert!(path.ends_with("bad.crashed.log"), "{path}");
+    assert!(path.ends_with("bad.log.crashed"), "{path}");
     assert_eq!(fs::read_to_string(path).unwrap(), "panic: boom\n");
 
     fs::write(&scene, good).unwrap();
@@ -367,6 +368,278 @@ fn a_refused_open_after_a_crash_still_names_the_crash_log() {
     runtime
         .orbe(dir.path(), &[&["close"][..], &session].concat())
         .ok();
+}
+
+/// A crash that writes nothing replaces the previous crash's log, so `step` and `close` do
+/// not name that older panic.
+#[test]
+fn a_silent_crash_does_not_name_an_older_crash_log() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    let session = ["--session", "s1"];
+    runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+    kill_daemon(&runtime);
+    fs::write(runtime.sessions().join("s1.log"), "panic: crash one\n").unwrap();
+    let opened = runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+    let path = crashed_log(&opened.stdout);
+    assert!(path.ends_with("s1.log.crashed"), "{path}");
+    assert_eq!(fs::read_to_string(path).unwrap(), "panic: crash one\n");
+    kill_daemon(&runtime);
+
+    let step = runtime.orbe(dir.path(), &["step", "1ms", "--session", "s1"]);
+    assert_eq!(
+        (step.code, step.stdout.as_str(), step.stderr.as_str()),
+        (
+            1,
+            "",
+            "error[session_crashed]: the process of session `s1` ended without closing\n  hint: run `orbe open --session s1` to start it again\n"
+        )
+    );
+    assert!(
+        !Path::new(path).exists(),
+        "{path} still holds the older crash"
+    );
+    let close = runtime.orbe(dir.path(), &["close", "--session", "s1"]).ok();
+    assert_eq!(
+        close.stdout,
+        "removed the socket of a process that ended without closing\n"
+    );
+    assert!(!close.stdout.contains("crash one"), "{}", close.stdout);
+    assert!(!Path::new(path).exists(), "{path}");
+}
+
+/// An `open` whose process dies on every attempt names the crash log that holds the panic.
+#[test]
+fn an_open_whose_every_process_dies_names_the_crash_log() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    let log = runtime.sessions().join("s2.log");
+    let child = runtime
+        .command(dir.path(), &["open", "--session", "s2"])
+        .env("ORBE_TEST_READ_DELAY", "3s")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut kills = 0;
+    let mut spins = 0;
+    while kills < 5 && spins < 2_000 {
+        spins += 1;
+        if gone(child.id()) {
+            break;
+        }
+        let Some(&pid) = runtime.daemons().first() else {
+            std::thread::sleep(Duration::from_millis(10));
+            continue;
+        };
+        if accepted_sockets(pid) < 2 {
+            std::thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+        fs::write(&log, "panic: dies\n").unwrap();
+        kill("-KILL", pid);
+        wait_until("the killed session process is dead", || gone(pid));
+        kills += 1;
+    }
+    let run = Run::new(child.wait_with_output().unwrap());
+    assert_eq!(kills, 5, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let path = crashed_log(&run.stderr);
+    assert!(path.ends_with("s2.log.crashed"), "{path}\n{}", run.stderr);
+    assert_eq!(fs::read_to_string(path).unwrap(), "panic: dies\n");
+    assert!(
+        run.stderr.contains(&format!(
+            "the previous session crashed; its last output is in {path}"
+        )),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        run.stderr.contains(&format!(
+            "error[session_crashed]: the process of session `s2` ended before it answered `open`, 5 times\n  hint: its last output is in {path}\n"
+        )),
+        "{}",
+        run.stderr
+    );
+}
+
+/// Session `foo.crashed` has its own log. It is not session `foo`'s crash log, and `close
+/// --all` leaves that crash log in place.
+#[test]
+fn a_dotted_session_name_does_not_share_a_crash_log() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    runtime.orbe(dir.path(), &["open", "--session", "foo"]).ok();
+    kill_daemon(&runtime);
+    fs::write(runtime.sessions().join("foo.log"), "panic: from foo\n").unwrap();
+    let step = runtime.orbe(dir.path(), &["step", "1ms", "--session", "foo"]);
+    assert_eq!(step.code, 1, "{}", step.stderr);
+    let path = crashed_log(&step.stderr);
+    assert!(path.ends_with("foo.log.crashed"), "{path}\n{}", step.stderr);
+    assert_eq!(fs::read_to_string(path).unwrap(), "panic: from foo\n");
+
+    runtime
+        .orbe(dir.path(), &["open", "--session", "foo.crashed"])
+        .ok();
+    let live = runtime.sessions().join("foo.crashed.log");
+    assert_ne!(Path::new(path), live.as_path());
+    assert_eq!(fs::read_to_string(path).unwrap(), "panic: from foo\n");
+    let live_text = fs::read_to_string(&live).unwrap_or_default();
+    assert!(
+        !live_text.contains("panic: from foo"),
+        "the other session's log is the crash: {live_text}"
+    );
+    runtime.orbe(dir.path(), &["close", "--all"]).ok();
+    assert_eq!(fs::read_to_string(path).unwrap(), "panic: from foo\n");
+    assert!(
+        session_files(&runtime).contains(&"foo.log.crashed".to_string()),
+        "{:?}",
+        session_files(&runtime)
+    );
+}
+
+/// A refusal the client makes after a crash carries `previous_crash`, as a refusal the
+/// session process makes does, and both print that note on its own line.
+#[test]
+fn a_client_refused_open_after_a_crash_uses_previous_crash() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    let session = ["--session", "s5"];
+    runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+    kill_daemon(&runtime);
+    let log = runtime.sessions().join("s5.log");
+    fs::remove_file(&log).unwrap();
+    fs::create_dir(&log).unwrap();
+    let crash = runtime.sessions().join("s5.log.crashed");
+    fs::write(&crash, "panic: boom\n").unwrap();
+
+    let text = runtime.orbe(dir.path(), &[&["open"][..], &session].concat());
+    assert_eq!(text.code, 3, "{}{}", text.stdout, text.stderr);
+    let note = format!(
+        "the previous session crashed; its last output is in {}",
+        crash.display()
+    );
+    assert!(
+        text.stderr.ends_with(&format!("{note}\n")),
+        "{}",
+        text.stderr
+    );
+    assert!(
+        text.stderr
+            .lines()
+            .any(|line| line == format!("  hint: remove it with `rm -r {}`", log.display())),
+        "{}",
+        text.stderr
+    );
+    assert!(
+        !text
+            .stderr
+            .lines()
+            .any(|line| { line.starts_with("  hint:") && line.contains("previous session") })
+    );
+    assert_eq!(fs::read_to_string(&crash).unwrap(), "panic: boom\n");
+
+    let json = runtime.orbe(dir.path(), &[&["open", "--json"][..], &session].concat());
+    assert_eq!(json.code, 3, "{}", json.stdout);
+    let envelope = json.json();
+    assert_eq!(envelope["data"]["previous_crash"], note);
+    assert!(
+        !envelope["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("previous session"),
+        "{}",
+        json.stdout
+    );
+    assert_eq!(envelope["error"]["code"], "io_error");
+
+    fs::remove_dir(&log).unwrap();
+    let scene = dir.path().join("scene.jsonc");
+    let good = fs::read_to_string(&scene).unwrap();
+    for (name, json) in [("s6", false), ("s7", true)] {
+        runtime.orbe(dir.path(), &["open", "--session", name]).ok();
+        kill_daemon(&runtime);
+        fs::write(
+            runtime.sessions().join(format!("{name}.log")),
+            "panic: boom\n",
+        )
+        .unwrap();
+        fs::write(&scene, "{\n").unwrap();
+        let args: &[&str] = if json {
+            &["open", "--json", "--session", name]
+        } else {
+            &["open", "--session", name]
+        };
+        let refused = runtime.orbe(dir.path(), args);
+        fs::write(&scene, &good).unwrap();
+        assert_ne!(
+            refused.code, 0,
+            "{name}: {}{}",
+            refused.stdout, refused.stderr
+        );
+        if json {
+            let process = refused.json();
+            let process_note = process["data"]["previous_crash"].as_str().unwrap();
+            assert!(
+                process_note.starts_with("the previous session crashed; its last output is in "),
+                "{process_note}"
+            );
+            assert!(
+                process_note.ends_with(&format!("{name}.log.crashed")),
+                "{process_note}"
+            );
+            assert!(
+                !process["error"]["hint"]
+                    .as_str()
+                    .unwrap()
+                    .contains("previous session"),
+                "{}",
+                refused.stdout
+            );
+        } else {
+            let process_path = crashed_log(&refused.stdout);
+            let process_note =
+                format!("the previous session crashed; its last output is in {process_path}");
+            assert!(
+                refused.stdout.ends_with(&format!("{process_note}\n")),
+                "{}",
+                refused.stdout
+            );
+            assert!(
+                process_path.ends_with(&format!("{name}.log.crashed")),
+                "{process_path}"
+            );
+            assert!(
+                !refused.stdout.lines().any(|line| {
+                    line.starts_with("  hint:") && line.contains("previous session")
+                }),
+                "{}",
+                refused.stdout
+            );
+        }
+    }
+}
+
+/// Sockets the process holds. The listener is one; an accepted connection is the second.
+fn accepted_sockets(pid: u32) -> usize {
+    fs::read_dir(format!("/proc/{pid}/fd"))
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| {
+                    fs::read_link(entry.path())
+                        .ok()
+                        .is_some_and(|target| target.to_string_lossy().starts_with("socket:"))
+                })
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 #[test]

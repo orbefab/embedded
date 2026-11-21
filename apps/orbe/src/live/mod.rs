@@ -287,7 +287,7 @@ enum Done {
 
 struct Stale {
     session: Name,
-    /// `<name>.crashed.log` when the process left output.
+    /// `<name>.log.crashed` when the process left output.
     log: Option<PathBuf>,
     /// The session's start logs no process held, removed.
     starts: Vec<PathBuf>,
@@ -367,21 +367,23 @@ impl Done {
 /// session's time and state when its process, or a missing socket, told the client. Without
 /// it the envelope leaves them out rather than guess.
 struct Refusal {
-    session: String,
+    session: Box<str>,
     error: Error,
     at: Option<(u64, State)>,
+    /// The crash this command found, in the same place a process's reply puts it.
+    previous_crash: Option<Box<str>>,
 }
 
 impl Refusal {
     fn reply(&self) -> Reply {
         let (t_ps, state) = self.at.unwrap_or((0, State::Closed));
         Reply {
-            session: self.session.clone(),
+            session: self.session.to_string(),
             t_ps,
             state,
             data: Data::None,
             error: Some(self.error.clone()),
-            previous_crash: None,
+            previous_crash: self.previous_crash.as_deref().map(str::to_string),
         }
     }
 
@@ -412,9 +414,10 @@ fn refusal(
     hint: impl Into<String>,
 ) -> Refusal {
     Refusal {
-        session: session.to_string(),
+        session: session.into(),
         error: Error::new(code, message, hint),
         at: None,
+        previous_crash: None,
     }
 }
 
@@ -579,25 +582,32 @@ impl Client {
                 answered => return self.with_crash(answered, recovered),
             }
         }
-        let hint = [Some(self.place.log(&self.name)), started]
-            .into_iter()
-            .flatten()
-            .find(|log| holds_output(log))
-            .map(|log| format!("its last output is in {}", log.display()))
-            .unwrap_or_default();
-        Err(self.refuse(
-            Code::SessionCrashed,
-            format!(
-                "the process of session `{}` ended before it answered `open`, {TRIES} times",
-                self.name
-            ),
-            hint,
-        ))
+        let hint = [
+            Some(self.place.log(&self.name)),
+            started,
+            Some(self.place.crashed_log(&self.name)),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|log| place::holds_output(log))
+        .map(|log| format!("its last output is in {}", log.display()))
+        .unwrap_or_default();
+        self.with_crash(
+            Err(self.refuse(
+                Code::SessionCrashed,
+                format!(
+                    "the process of session `{}` ended before it answered `open`, {TRIES} times",
+                    self.name
+                ),
+                hint,
+            )),
+            recovered,
+        )
     }
 
     /// Ends the session: `close` to its process, or, for a socket a crashed process left, the
     /// socket and the session's start logs no process holds removed. Output that process left
-    /// is kept as `<name>.crashed.log` until the next crash replaces it.
+    /// is kept as `<name>.log.crashed` until the next crash replaces it.
     fn close(&self) -> Result<Done, Refusal> {
         match self.find()? {
             Found::Listening(stream) => self
@@ -614,7 +624,7 @@ impl Client {
                 })?;
                 let kept = self.place.take_crash_log(&self.name);
                 let log = self.place.log(&self.name);
-                if !holds_output(&log) {
+                if !place::holds_output(&log) {
                     let _ = fs::remove_file(&log);
                 }
                 let starts = self.place.remove_left_logs(|name| name == &self.name);
@@ -647,9 +657,10 @@ impl Client {
             _ => None,
         };
         Refusal {
-            session: self.name.to_string(),
+            session: self.name.as_str().into(),
             error,
             at,
+            previous_crash: None,
         }
     }
 
@@ -753,7 +764,7 @@ impl Client {
 
     /// A start that failed. Its log stays, named in the hint, only when it holds output.
     fn failed_start(&self, log: &Path, message: impl Into<String>) -> Refusal {
-        let hint = if holds_output(log) {
+        let hint = if place::holds_output(log) {
             format!("its output is in {}", log.display())
         } else {
             let _ = fs::remove_file(log);
@@ -947,8 +958,8 @@ impl Client {
         ))
     }
 
-    /// Moves `<name>.log` to `<name>.crashed.log` when it holds output. The path named in the
-    /// crash message, when that file holds output.
+    /// Moves `<name>.log` to `<name>.log.crashed`. The path named in the crash message, when
+    /// that file holds output.
     fn crash_log(&self) -> Option<String> {
         self.place
             .take_crash_log(&self.name)
@@ -974,10 +985,7 @@ impl Client {
                 Ok(reply)
             }
             Err(mut refused) => {
-                if !refused.error.hint.is_empty() {
-                    refused.error.hint.push('\n');
-                }
-                refused.error.hint.push_str(&note);
+                refused.previous_crash = Some(note.into());
                 Err(refused)
             }
         }
@@ -1053,10 +1061,6 @@ fn what_is(meta: &fs::Metadata) -> (&'static str, &'static str) {
     } else {
         ("a special file", "rm")
     }
-}
-
-fn holds_output(path: &Path) -> bool {
-    fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() > 0)
 }
 
 fn print_all(closed: &[Result<Done, Refusal>], json: bool) -> ExitCode {
