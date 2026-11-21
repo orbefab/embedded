@@ -837,6 +837,72 @@ test.describe("fixture page", () => {
     });
   });
 
+  const STAGE_THEMES = {
+    dark: { stage: "#17191c", mat: "#202327", line: "#2c3036" },
+    light: { stage: "#e9e9ec", mat: "#e2e2e6", line: "#d2d2d8" },
+  } as const;
+
+  async function setStageTheme(page: Page, name: keyof typeof STAGE_THEMES) {
+    const theme = STAGE_THEMES[name];
+    await page.evaluate((theme) => {
+      const root = document.documentElement;
+      root.style.setProperty("--stage", theme.stage);
+      root.style.setProperty("--stage-mat", theme.mat);
+      root.style.setProperty("--stage-line", theme.line);
+      root.classList.remove("light", "dark");
+      root.classList.add(theme.stage === "#17191c" ? "dark" : "light");
+    }, theme);
+    await page.waitForFunction(
+      (hex) => window.orbeViewer.get().scene.background?.getHexString?.() === hex,
+      theme.stage.slice(1),
+    );
+  }
+
+  /** The brightest pixel that is not an LED. A glowing body and a clear lens over it are hidden,
+   * so a dim power LED does not count. An unlit lens and a white plastic still do. */
+  function outsideLuminance(page: Page): Promise<number> {
+    return page.evaluate(() => {
+      const { scene, gl, camera, size } = window.orbeViewer.get();
+      const { WebGLRenderTarget, FloatType } = window.orbeFixture.three;
+      const glowing = (material: any) =>
+        material?.emissiveIntensity > 0 && (material.emissive?.r > 0 || material.emissive?.g > 0 || material.emissive?.b > 0);
+      const hidden: { visible: boolean }[] = [];
+      const groups = new Set<any>();
+      scene.traverse((object: any) => {
+        if (!object.isMesh) return;
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        if (materials.some(glowing)) groups.add(object.parent);
+      });
+      for (const group of groups) {
+        group?.traverse((node: any) => {
+          if (!node.isMesh) return;
+          const materials = Array.isArray(node.material) ? node.material : [node.material];
+          const glow = materials.some(glowing);
+          const clear = materials.some((material: any) => material?.transparent || material?.opacity < 1);
+          if (glow || clear) {
+            hidden.push(node);
+            node.visible = false;
+          }
+        });
+      }
+      const hdr = new WebGLRenderTarget(size.width, size.height, { type: FloatType });
+      gl.setRenderTarget(hdr);
+      gl.clear();
+      gl.render(scene, camera);
+      gl.setRenderTarget(null);
+      const pixels = new Float32Array(size.width * size.height * 4);
+      gl.readRenderTargetPixels(hdr, 0, 0, size.width, size.height, pixels);
+      hdr.dispose();
+      for (const node of hidden) node.visible = true;
+      let max = 0;
+      for (let i = 0; i < pixels.length; i += 4) {
+        const y = 0.2126 * pixels[i]! + 0.7152 * pixels[i + 1]! + 0.0722 * pixels[i + 2]!;
+        if (y > max) max = y;
+      }
+      return max;
+    });
+  }
+
   test("each 0603 LED takes its colour's tint, and the lit power LED glows in the red tint", async ({ browser, host }) => {
     const { context, page } = await open(browser, host.base);
     try {
@@ -864,22 +930,33 @@ test.describe("fixture page", () => {
     const { context, page } = await open(browser, host.base);
     try {
       const glow = [];
-      for (const fraction of [0.95, 1.0]) {
-        await page.evaluate((fraction) => {
+      for (const theme of ["dark", "light"] as const) {
+        await setStageTheme(page, theme);
+        await page.evaluate((seq) => {
           const { source, script } = window.orbeFixture;
-          const amps = 0.01 * fraction;
-          source.push({ ...script.idle, seq: 1000 + fraction, led_a: [amps, amps, amps] });
-        }, fraction);
-        await page.waitForTimeout(300);
-        glow.push(
+          source.push({ ...script.idle, seq });
+        }, 800 + (theme === "dark" ? 0 : 1));
+        await still(page);
+        const idle = await outsideLuminance(page);
+        expect(idle < 1, `${theme} idle outside luminance ${idle}`).toBe(true);
+        for (const fraction of [0.95, 1.0]) {
           await page.evaluate((fraction) => {
+            const { source, script } = window.orbeFixture;
+            const amps = 0.01 * fraction;
+            source.push({ ...script.idle, seq: 1000 + fraction, led_a: [amps, amps, amps] });
+          }, fraction);
+          await page.waitForTimeout(300);
+          const row = await page.evaluate(({ fraction, theme }) => {
             const { scene, gl, camera, size } = window.orbeViewer.get();
             const { WebGLRenderTarget, FloatType } = window.orbeFixture.three;
             const hdr = new WebGLRenderTarget(size.width, size.height, { type: FloatType });
-            gl.setRenderTarget(hdr);
-            gl.clear();
-            gl.render(scene, camera);
-            gl.setRenderTarget(null);
+            const read = () => {
+              gl.setRenderTarget(hdr);
+              gl.clear();
+              gl.render(scene, camera);
+              gl.setRenderTarget(null);
+            };
+            read();
             const luminance = (ref: string) => {
               const values: number[] = [];
               scene.getObjectByName(ref).getObjectByName("body").traverse((mesh: any) => {
@@ -898,18 +975,54 @@ test.describe("fixture page", () => {
               values.sort((a, b) => a - b);
               return +values[Math.floor(values.length * 0.9)].toFixed(3);
             };
-            const row = { fraction, led1: luminance("@led1"), led_l: luminance("@nano.led_l"), led_pwr: luminance("@nano.led_pwr") };
+            const leds = { led1: luminance("@led1"), led_l: luminance("@nano.led_l"), led_pwr: luminance("@nano.led_pwr") };
+            const glowing = (material: any) =>
+              material?.emissiveIntensity > 0 && (material.emissive?.r > 0 || material.emissive?.g > 0 || material.emissive?.b > 0);
+            const hidden: { visible: boolean }[] = [];
+            const groups = new Set<any>();
+            scene.traverse((object: any) => {
+              if (!object.isMesh) return;
+              const materials = Array.isArray(object.material) ? object.material : [object.material];
+              if (materials.some(glowing)) groups.add(object.parent);
+            });
+            for (const group of groups) {
+              group?.traverse((node: any) => {
+                if (!node.isMesh) return;
+                const materials = Array.isArray(node.material) ? node.material : [node.material];
+                const glow = materials.some(glowing);
+                const clear = materials.some((material: any) => material?.transparent || material?.opacity < 1);
+                if (glow || clear) {
+                  hidden.push(node);
+                  node.visible = false;
+                }
+              });
+            }
+            read();
+            const pixels = new Float32Array(size.width * size.height * 4);
+            gl.readRenderTargetPixels(hdr, 0, 0, size.width, size.height, pixels);
+            let outside = 0;
+            for (let i = 0; i < pixels.length; i += 4) {
+              const y = 0.2126 * pixels[i]! + 0.7152 * pixels[i + 1]! + 0.0722 * pixels[i + 2]!;
+              if (y > outside) outside = y;
+            }
+            for (const node of hidden) node.visible = true;
             hdr.dispose();
-            return row;
-          }, fraction),
-        );
+            return { theme, fraction, ...leds, outside: +outside.toFixed(3) };
+          }, { fraction, theme });
+          glow.push(row);
+          expect(row.outside < 1, JSON.stringify(row)).toBe(true);
+        }
       }
-      const [below, at] = glow;
       const leds = ["led1", "led_l", "led_pwr"] as const;
-      expect(
-        leds.every((led) => below[led] < 1 && Math.abs(at[led] - 1) <= 0.03),
-        JSON.stringify(glow),
-      ).toBe(true);
+      for (const theme of ["dark", "light"] as const) {
+        const [below, at] = glow.filter((row) => row.theme === theme);
+        expect(
+          below !== undefined &&
+            at !== undefined &&
+            leds.every((led) => below[led] < 1 && Math.abs(at[led] - 1) <= 0.03),
+          JSON.stringify(glow),
+        ).toBe(true);
+      }
     } finally {
       await context.close();
     }

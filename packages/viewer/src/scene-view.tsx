@@ -11,7 +11,7 @@ import { glowIntensity, litColour } from "./glow";
 import type { Hovered, HoverStore } from "./hover";
 import type { Command, FrameMessage, Ref, SceneMessage, Vec3 } from "./protocol";
 import { holeAt, instanceAt, refOf, stripText } from "./refs";
-import { applyPlasticRoom, roomTexture, StageFloor, StageLights, StageRoom } from "./stage";
+import { applyRoom, roomTexture, StageFloor, StageLights, StageRoom } from "./stage";
 import type { StageTheme } from "./stage-theme";
 import type { Box } from "./wire-geometry";
 import { WireMesh } from "./wire-mesh";
@@ -166,7 +166,7 @@ export function SceneView({
         if (!(material instanceof MeshStandardMaterial)) continue;
         // A pin or a shell is open. The back faces cast, so the shadow keeps the part's shape.
         material.shadowSide = BackSide;
-        applyPlasticRoom(material, texture);
+        applyRoom(material, texture);
       }
     };
     built.root.traverse(visit);

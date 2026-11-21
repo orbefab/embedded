@@ -19,10 +19,18 @@ import type { StageTheme } from "./stage-theme";
 import type { Box } from "./wire-geometry";
 
 const MAT_CELL_MM = 10;
-const ROOM_STRENGTH = 0.55;
+const KEY_LIGHT = 1.9;
+// Room-image strength for each finish. The studio lite prototype lit metal at 0.99 and plastic
+// at 0.275. A tin lead then reaches luminance about 2.1, and the white wire about 1.10, so both
+// would bloom. These two keep a non-LED pixel under luminance 1, where bloom starts.
+const METAL_ROOM = 0.42;
+const PLASTIC_ROOM = 0.18;
+// The opaque grid sits 0.5 mm under the lowest mesh. A shadow plane 0.01 mm above that grid
+// z-fights, and a large board's shadow breaks into stripes. This clearance stays under the parts.
+const SHADOW_CLEAR_MM = 0.3;
 
 /** True when `background` is a dark colour. Three stores the hex in linear space. */
-export function isDark(background: string): boolean {
+function isDark(background: string): boolean {
   const color = new Color(background);
   return 0.2126 * color.r + 0.7152 * color.g + 0.0722 * color.b < 0.18;
 }
@@ -43,16 +51,12 @@ export function roomTexture(gl: WebGLRenderer): Texture {
   return texture;
 }
 
-/** Half the room. A white plastic under the studio key stays near luminance 1. */
-const PLASTIC_ROOM = ROOM_STRENGTH * 0.5;
-
-/** A plastic carries the room map itself. Three replaces a material's strength with
- * `scene.environmentIntensity` while `envMap` is null, so a plastic would take the full
- * room and a white one would bloom. Metal keeps the scene strength. Metalness is the GLB's. */
-export function applyPlasticRoom(material: MeshStandardMaterial, texture: Texture): void {
-  if (material.metalness >= 0.5) return;
+/** Each finish carries the room map itself. Three uses `scene.environmentIntensity` while
+ * `envMap` is null, so a plastic and a metal would otherwise share one strength. Metalness
+ * is the GLB's. */
+export function applyRoom(material: MeshStandardMaterial, texture: Texture): void {
   material.envMap = texture;
-  material.envMapIntensity = PLASTIC_ROOM;
+  material.envMapIntensity = material.metalness >= 0.5 ? METAL_ROOM : PLASTIC_ROOM;
   material.needsUpdate = true;
 }
 
@@ -64,7 +68,8 @@ export function StageRoom() {
     const previous = scene.environment;
     const intensity = scene.environmentIntensity;
     scene.environment = roomTexture(gl);
-    scene.environmentIntensity = ROOM_STRENGTH;
+    // A material that never got its own map takes the plastic share, which stays under the bloom.
+    scene.environmentIntensity = PLASTIC_ROOM;
     return () => {
       scene.environment = previous;
       scene.environmentIntensity = intensity;
@@ -123,7 +128,7 @@ function ShadowKey({ boxes }: { boxes: readonly Box[] }) {
     lamp.shadow.normalBias = 0.02;
     lamp.shadow.needsUpdate = true;
   }, [box]);
-  return <directionalLight castShadow intensity={1.9} ref={light} />;
+  return <directionalLight castShadow intensity={KEY_LIGHT} ref={light} />;
 }
 
 /** Hemisphere fill, a shadow-mapped key from the front left, and a softer fill from the other side. */
@@ -227,7 +232,7 @@ export function StageFloor({ boxes, colours }: { boxes: readonly Box[]; colours:
       <mesh material={material} name="stage-mat" position={[centreX, y, centreZ]} renderOrder={-20} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[radiusX * 2.2, radiusZ * 2.2]} />
       </mesh>
-      <mesh position={[centreX, y + 0.01, centreZ]} receiveShadow rotation={[-Math.PI / 2, 0, 0]}>
+      <mesh position={[centreX, y + SHADOW_CLEAR_MM, centreZ]} receiveShadow rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[radiusX * 2.2, radiusZ * 2.2]} />
         <shadowMaterial depthWrite={false} opacity={shadow} transparent />
       </mesh>
