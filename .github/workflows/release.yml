@@ -4,7 +4,9 @@
 # It runs on a push of a v* tag, or on a manual run that names an existing v* tag.
 # It does not run on pull requests or on main. Deleting a tag does not run it.
 #
-# Linux x86_64 uses ubuntu-24.04, the runner CI uses. macOS arm64 uses the
+# Linux x86_64 uses ubuntu-22.04, so the binary needs glibc 2.35 or newer and runs
+# on Ubuntu 22.04 and Debian 12. Built on ubuntu-24.04 it needs 2.39 and does not
+# start on either. macOS arm64 uses the
 # repository variable ORBE_MACOS_RUNNER when that names a runner. Otherwise it
 # uses macos-15, a hosted Apple Silicon runner. macos-14 was retired on
 # 2026-11-02. Both are GitHub-hosted standard runners, which are free on a public
@@ -41,7 +43,7 @@ jobs:
         include:
           - name: Linux x86_64
             target: x86_64-unknown-linux-gnu
-            runner: ubuntu-24.04
+            runner: ubuntu-22.04
           - name: macOS arm64
             target: aarch64-apple-darwin
             runner: ${{ vars.ORBE_MACOS_RUNNER || 'macos-15' }}
@@ -81,6 +83,13 @@ jobs:
 
       - name: Build the release archive
         run: scripts/release-build.sh ${{ matrix.target }}
+
+      - name: Check the glibc the binary needs
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          need=$(objdump -T target/${{ matrix.target }}/release/orbe | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          echo "orbe needs $need"
+          [ "$(printf '%s\nGLIBC_2.35\n' "$need" | sort -V | tail -1)" = GLIBC_2.35 ] || { echo "orbe needs $need, above GLIBC_2.35" >&2; exit 1; }
 
       - name: Check the release archive
         run: scripts/check-release.sh .scratch/release/*.tar.gz

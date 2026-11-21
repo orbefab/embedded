@@ -12,7 +12,7 @@ It runs the Arduino Nano and Uno today. ESP32 is in progress.
 curl -fsSL https://orbefab.com/embedded/install.sh | sh
 ```
 
-It installs `orbe` with the 3D viewer into `~/.local/bin`, on Linux x86_64 and macOS arm64.
+It installs `orbe` with the 3D viewer into `~/.local/bin`, on Linux x86_64 with glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and later) and macOS arm64.
 
 ## Try it
 
