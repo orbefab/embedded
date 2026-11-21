@@ -29,6 +29,7 @@ rustix.workspace = true
 [dev-dependencies]
 sha2.workspace = true
 tempfile.workspace = true
+orbe-scratch.workspace = true
 
 [lints]
 workspace = true

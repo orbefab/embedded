@@ -505,3 +505,106 @@ fn a_held_fall_starts_the_reset_count() {
     );
     assert!(!folder[2].contains("chip.protocol"), "{}", folder[2]);
 }
+
+/// The `ws2812` part `ring` of circuit `name` cut into one part per count, each part's `DOUT` on
+/// the next part's `DIN`. The last part has no `DOUT`. Gives each part's pixels by name, `led0`
+/// first, and the run's `diagnostics.json`.
+fn chained(name: &str, counts: &[u16]) -> (Vec<serde_json::Value>, serde_json::Value) {
+    let path = repo(&format!(
+        "packages/engine/tests/circuits/{name}/netlist.json"
+    ));
+    let mut netlist: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let parts = netlist["parts"].as_array_mut().unwrap();
+    let k = parts
+        .iter()
+        .position(|part| part["name"] == "ring")
+        .unwrap();
+    let ring = parts.remove(k);
+    let mut din = ring["pins"]["DIN"].as_str().unwrap().to_string();
+    let mut nets = Vec::new();
+    for (k, &count) in counts.iter().enumerate() {
+        let mut part = ring.clone();
+        part["name"] = format!("led{k}").into();
+        part["leds"] = count.into();
+        part["pins"]["DIN"] = din.clone().into();
+        if k + 1 < counts.len() {
+            din = format!("dout{k}");
+            nets.push(din.clone());
+            part["pins"]["DOUT"] = din.clone().into();
+            part["dout"] = serde_json::json!({
+                "output": {
+                    "high_drop": { "value": 0.0, "unit": "V", "source": "user" },
+                    "high_resistance": { "value": 50.0, "unit": "ohm", "source": "user" },
+                    "low_drop": { "value": 0.0, "unit": "V", "source": "user" },
+                    "low_resistance": { "value": 50.0, "unit": "ohm", "source": "user" }
+                },
+                "delay": { "value": 500000, "unit": "ps", "source": "user" }
+            });
+        }
+        parts.push(part);
+    }
+    netlist["nets"]
+        .as_array_mut()
+        .unwrap()
+        .extend(nets.into_iter().map(Into::into));
+    let (folder, _) = render(&serde_json::to_vec(&netlist).unwrap());
+    let observations: serde_json::Value =
+        serde_json::from_slice(folder.file("observations.json").unwrap()).unwrap();
+    let diagnostics: serde_json::Value =
+        serde_json::from_slice(folder.file("diagnostics.json").unwrap()).unwrap();
+    let pixels = (0..counts.len())
+        .map(|k| observations["leds"][format!("led{k}")]["pixels"].clone())
+        .collect();
+    (pixels, diagnostics)
+}
+
+#[ignore = "full tier"]
+#[test]
+fn four_chained_parts_on_the_sketch_s_pin_each_show_their_own_colour() {
+    let (pixels, diagnostics) = chained("atmega-ws2812", &[1, 1, 1, 1]);
+    let palette = palette();
+    for (k, pixels) in pixels.iter().enumerate() {
+        assert_eq!(pixels, &serde_json::json!([palette[k]]), "led{k}");
+    }
+    assert_eq!(diagnostics, serde_json::json!([]));
+}
+
+#[ignore = "full tier"]
+#[test]
+fn a_ring_cut_in_three_by_dout_shows_the_whole_ring_s_colours() {
+    let (pixels, diagnostics) = chained("atmega-ws2812", &[1, 4, 8]);
+    let palette = palette();
+    assert_eq!(pixels[0], serde_json::json!(palette[..1]));
+    assert_eq!(pixels[1], serde_json::json!(palette[1..5]));
+    assert_eq!(pixels[2], serde_json::json!(palette[5..]));
+    assert_eq!(diagnostics, serde_json::json!([]));
+}
+
+#[ignore = "full tier"]
+#[test]
+fn a_record_does_not_go_on_through_dout_and_says_so_once() {
+    let (pixels, diagnostics) = chained("ws2812-replay", &[1, 12]);
+    assert_eq!(pixels[0], serde_json::json!(palette()[..1]));
+    assert_eq!(pixels[1], serde_json::json!(vec![[0, 0, 0]; 12]));
+    let rules: Vec<_> = diagnostics
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| {
+            (
+                d["code"].clone(),
+                d["data"]["rule"].clone(),
+                d["message"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rules,
+        vec![(
+            "chip.protocol".into(),
+            "dout_record".into(),
+            "#led0 did not pass a high from a record on to DOUT, breaking rule dout_record at 1030000000 ps, the first time".into()
+        )]
+    );
+}

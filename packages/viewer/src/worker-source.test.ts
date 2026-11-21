@@ -40,7 +40,7 @@ const scene = {
     "lost-part": { model: "/parts/lost-part/lost-part.glb" },
   },
 } as unknown as SceneMessage;
-const frame: FrameMessage = { type: "frame", seq: 0, t_ps: 0, state: "paused", pins: [], led_a: [], switches: [], diagnostics: 0 };
+const frame: FrameMessage = { type: "frame", seq: 0, t_ps: 0, state: "paused", pins: [], led_a: [], switches: [], pixel_rgb: [], diagnostics: 0 };
 const reply: Reply = { ok: true, session: "nano-button-led", t_ps: 0, state: "playing" };
 const settle = () => new Promise((done) => setTimeout(done, 0));
 

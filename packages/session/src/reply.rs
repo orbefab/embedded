@@ -359,12 +359,68 @@ pub enum Reading {
         value: f64,
         over_ps: u64,
     },
-    /// A part: its light state and brightness when it states them, and each engine quantity.
+    /// The colours an addressable LED part last latched.
+    Color(Colors),
+    /// A part: its light state and brightness when it states them, its colours when it latches
+    /// them, and each engine quantity.
     Part {
         state: Option<Light>,
         brightness: Option<(f64, u64)>,
+        color: Option<Colors>,
         quantities: Vec<(String, Unit, f64)>,
     },
+}
+
+/// What an addressable LED part last latched: one `[red, green, blue]` per LED, LED 0 first, and
+/// when. `latched_ps` is `None` before the first latch, while every LED shows the black of
+/// power-on.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Colors {
+    pub leds: Vec<[u8; 3]>,
+    pub latched_ps: Option<u64>,
+}
+
+impl Colors {
+    fn rgb([r, g, b]: [u8; 3]) -> String {
+        format!("rgb({r},{g},{b})")
+    }
+
+    fn led_json([r, g, b]: [u8; 3]) -> serde_json::Map<String, Value> {
+        let mut map = serde_json::Map::new();
+        map.insert("r".into(), json!(r));
+        map.insert("g".into(), json!(g));
+        map.insert("b".into(), json!(b));
+        map
+    }
+
+    /// One LED's `r`, `g` and `b`, or a chain's `leds`, each with those, and `latched_ps`.
+    fn json(&self) -> Value {
+        let mut map = match self.leds.as_slice() {
+            [one] => Colors::led_json(*one),
+            leds => {
+                let mut map = serde_json::Map::new();
+                let leds: Vec<Value> = leds
+                    .iter()
+                    .map(|&rgb| Value::Object(Colors::led_json(rgb)))
+                    .collect();
+                map.insert("leds".into(), Value::Array(leds));
+                map
+            }
+        };
+        map.insert("latched_ps".into(), json!(self.latched_ps));
+        Value::Object(map)
+    }
+
+    /// `rgb(255,0,0) latched at 12.5ms`, each LED's colour in chain order, or `rgb(0,0,0) not
+    /// latched yet`.
+    pub fn text(&self) -> String {
+        let mut words: Vec<String> = self.leds.iter().map(|&rgb| Colors::rgb(rgb)).collect();
+        words.push(match self.latched_ps {
+            Some(ps) => format!("latched at {}", t(ps)),
+            None => "not latched yet".to_string(),
+        });
+        words.join(" ")
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -660,9 +716,11 @@ impl Reading {
             Reading::Pin { level, v } => json!({ "level": level.map(Level::as_str), "v": v }),
             Reading::Quantity { value, .. } => json!(value),
             Reading::Brightness { value, over_ps } => json!({ "a": value, "over_ps": over_ps }),
+            Reading::Color(colors) => colors.json(),
             Reading::Part {
                 state,
                 brightness,
+                color,
                 quantities,
             } => {
                 let mut map = serde_json::Map::new();
@@ -672,6 +730,9 @@ impl Reading {
                 if let Some((value, over_ps)) = brightness {
                     map.insert("brightness".into(), json!(value));
                     map.insert("over_ps".into(), json!(over_ps));
+                }
+                if let Some(color) = color {
+                    map.insert("color".into(), color.json());
                 }
                 for (name, _, value) in quantities {
                     map.insert(name.clone(), json!(value));
@@ -686,6 +747,7 @@ impl Reading {
             Reading::Pin { .. } => "pin",
             Reading::Quantity { .. } => "quantity",
             Reading::Brightness { .. } => "brightness",
+            Reading::Color(_) => "color",
             Reading::Part { .. } => "part",
         }
     }
@@ -697,14 +759,18 @@ impl Reading {
                 level: Some(level), ..
             } => level.as_str().to_string(),
             Reading::Pin { level: None, v } => format!("{}V", number(*v)),
-            Reading::Quantity { .. } | Reading::Brightness { .. } => self.text(),
+            Reading::Quantity { .. } | Reading::Brightness { .. } | Reading::Color(_) => {
+                self.text()
+            }
             Reading::Part {
                 state,
                 brightness,
+                color,
                 quantities,
             } => Reading::Part {
                 state: *state,
                 brightness: *brightness,
+                color: color.clone(),
                 quantities: quantities
                     .iter()
                     .filter(|(n, ..)| n == "i")
@@ -715,7 +781,8 @@ impl Reading {
         }
     }
 
-    /// `high 4.62 V`, `11.292504388060703 mA`, `lit i=11.292504388060703 mA v=1.93 V brightness=2.2562070877605347 mA over 20ms`.
+    /// `high 4.62 V`, `11.292504388060703 mA`, `lit i=11.292504388060703 mA v=1.93 V brightness=2.2562070877605347 mA over 20ms`,
+    /// `rgb(255,0,0) latched at 12.5ms`, `color=rgb(255,0,0) latched at 12.5ms`.
     pub fn text(&self) -> String {
         match self {
             Reading::Pin {
@@ -727,9 +794,11 @@ impl Reading {
             Reading::Brightness { value, over_ps } => {
                 format!("{} over {}", current(*value), t(*over_ps))
             }
+            Reading::Color(colors) => colors.text(),
             Reading::Part {
                 state,
                 brightness,
+                color,
                 quantities,
             } => {
                 let mut words: Vec<String> = state
@@ -747,6 +816,9 @@ impl Reading {
                         current(*value),
                         t(*over_ps)
                     ));
+                }
+                if let Some(color) = color {
+                    words.push(format!("color={}", color.text()));
                 }
                 words.join(" ")
             }

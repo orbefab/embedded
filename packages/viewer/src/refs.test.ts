@@ -37,7 +37,7 @@ const scene: SceneMessage = {
     switch: part({ leads: { a: [1, 2], b: [3, 4] } }),
   },
   wires: [],
-  channels: { pins: [], leds: [], switches: [] },
+  channels: { pins: [], leds: [], switches: [], pixels: [] },
 };
 
 describe("leadsOf", () => {

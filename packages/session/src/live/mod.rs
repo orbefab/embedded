@@ -31,10 +31,10 @@ use crate::command::{Command, Step, WorldSet};
 use crate::condition::Unit;
 use crate::duration::Duration;
 use crate::reply::{
-    Code, Data, Diagnostic, Error, Finding, Got, Level, PartState, Reading, Reply, Snapshot, State,
-    Stepped,
+    Code, Colors, Data, Diagnostic, Error, Finding, Got, Level, PartState, Reading, Reply,
+    Snapshot, State, Stepped,
 };
-use crate::target::{Ref, Target, names, one_engine, reports_hint, resolve};
+use crate::target::{Ref, Target, names, one_engine, reports_hint, resolve, rgb_reading};
 
 mod bound;
 mod frame;
@@ -730,6 +730,14 @@ impl Open {
                     },
                 )
             }
+            Target::Color {
+                path,
+                reading,
+                engine,
+            } => (
+                format!("{path}.{reading}"),
+                Reading::Color(self.colors(&engine)),
+            ),
             Target::Part(path) => {
                 let value = self.part(&path).ok_or_else(|| {
                     Error::new(
@@ -814,13 +822,31 @@ impl Open {
         )
     }
 
-    /// A part's light state, its brightness, and its engine quantities. `None` when it has none.
+    /// The colours engine part `engine`, an LED chain, last latched, red then green then blue.
+    fn colors(&self, engine: &str) -> Colors {
+        let leds = self
+            .engine
+            .leds(&engine_name(engine))
+            .expect("a part with a reading of rgb is an LED chain");
+        let chain = leds.chain();
+        assert_eq!(chain.order, "grb", "a chain latches green, red, blue");
+        Colors {
+            leds: chain.pixels.iter().map(|&[g, r, b]| [r, g, b]).collect(),
+            latched_ps: leds.latched().map(|at| at.as_ps()),
+        }
+    }
+
+    /// A part's light state, its brightness, its colours, and its engine quantities. `None` when
+    /// it has none.
     fn part(&self, path: &str) -> Option<Reading> {
-        let engine = one_engine(path, &self.refs.parts[path], Code::NoReading).ok()?;
+        let part = &self.refs.parts[path];
+        let engine = one_engine(path, part, Code::NoReading).ok()?;
+        let color = rgb_reading(part).map(|_| self.colors(&engine));
         let probe = self.engine.probe();
         let quantities: Vec<(String, Unit, f64)> = self
             .reports
-            .get(&engine)?
+            .get(&engine)
+            .map_or(&[][..], Vec::as_slice)
             .iter()
             .map(|&q| {
                 let value = probe.get(&quantity(&engine, q)).expect("a reported column");
@@ -833,9 +859,10 @@ impl Open {
             .map(|index| self.light.glow(index, &probe));
         let state = glow.map(|glow| glow.state);
         let brightness = glow.map(|glow| (glow.amperes, glow.over_ps));
-        (state.is_some() || !quantities.is_empty()).then_some(Reading::Part {
+        (state.is_some() || color.is_some() || !quantities.is_empty()).then_some(Reading::Part {
             state,
             brightness,
+            color,
             quantities,
         })
     }

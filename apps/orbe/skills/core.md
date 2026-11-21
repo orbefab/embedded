@@ -148,6 +148,7 @@ Give the board an `at`. Then seat every part with leads using `on`: name one pin
 - `@led1`: a part. `get` prints its state, such as `lit`, `dim` or `off`, and its current `i`, voltage `v` and power `p`.
 - `@nano.D13`, `@led1.anode`: a pin. `get` prints its level, `high` or `low`, when a chip pin is on its net, and its voltage.
 - `@led1.i`: one quantity of a part. An unknown one is an error that lists what the part reports.
+- `@led1.color`: the colour an addressable LED, such as the sk68xxmini-hs, last latched, as `rgb(r,g,b)` from 0 to 255, and when. `get @led1` prints it as `color=`.
 - `@nano.mcu.PB5`, `@nano.led_l`: a part inside a part, by its name in that part's file. On the Nano and the Uno the chip is `mcu`, and `led_l` is the L LED, which D13 drives.
 
 `press @btn1` and `release @btn1` close and open a switch. `orbe set light 50` changes a `world` quantity from then on. `orbe get light` reads the value in force, and `orbe get @world.light` reads the same.
@@ -156,6 +157,7 @@ Give the board an `at`. Then seat every part with leads using `on`: name one pin
 
 - `@led1 lit`, `@led1 dim`, `@led1 off`: an LED's state, from its `brightness`, its average current over 20 ms. It is `lit` above 2 mA and `off` at or below 100 uA. `@led1.brightness > 1mA` compares that average.
 - `@nano.D13 high`, `@nano.D13 low`: a pin's level.
+- `@led1 rgb(255,0,0)`: an addressable LED's latched colour. `#` starts a comment, so a colour is never hex.
 - `@led1.i > 5mA`, `@nano.D2 < 1V`: a quantity or a pin's voltage, with `<`, `<=`, `>` or `>=`. In a shell, quote `<` and `>`, as `orbe expect @led1.i '>' 5mA`.
 - `serial contains "text"`: all the serial text since `open`. `snapshot` shows the last 10 lines of it, joined with `\n`.
 - `no diagnostics`: no runtime warning has come up. A chip warning can show up to one engine step (`sim.max_step`, 10 ms by default) late, so step that far past its cause first.

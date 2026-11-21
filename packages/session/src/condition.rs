@@ -12,6 +12,8 @@ pub enum Condition {
     State(Ref, State),
     /// `@led1.i > 5mA`.
     Compare(Ref, Op, Amount),
+    /// `@pixel rgb(255,0,0)`: every LED of an addressable part shows that colour.
+    Color(Ref, Rgb),
     /// `serial contains "pressed"`.
     SerialContains(Needle),
     /// `no diagnostics`.
@@ -109,6 +111,57 @@ impl Unit {
         [Unit::Ampere, Unit::Volt, Unit::Watt]
             .into_iter()
             .find(|u| u.as_str() == text)
+    }
+}
+
+/// A colour as `rgb(` red, green and blue `)`, each 0 to 255, such as `rgb(255,128,0)`. A word
+/// that starts with `#` is a comment on a command line, so a colour is not written in hex. Its
+/// wire form is that text without spaces, read by `parse`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub struct Rgb(pub [u8; 3]);
+
+impl Rgb {
+    /// `rgb(255,0,0)`, with or without spaces after the commas.
+    pub fn parse(text: &str) -> Result<Rgb, String> {
+        let bad = || {
+            format!(
+                "`{text}` is not a colour; write red, green and blue from 0 to 255, such as `rgb(255,0,0)`"
+            )
+        };
+        let inner = text
+            .strip_prefix("rgb(")
+            .and_then(|rest| rest.strip_suffix(')'))
+            .ok_or_else(bad)?;
+        let channels: Vec<u8> = inner
+            .split(',')
+            .map(|channel| channel.trim().parse::<u8>().map_err(|_| bad()))
+            .collect::<Result<_, _>>()?;
+        let [r, g, b] = channels[..] else {
+            return Err(bad());
+        };
+        Ok(Rgb([r, g, b]))
+    }
+}
+
+impl fmt::Display for Rgb {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let [r, g, b] = self.0;
+        write!(f, "rgb({r},{g},{b})")
+    }
+}
+
+impl TryFrom<String> for Rgb {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Rgb, String> {
+        Rgb::parse(&text)
+    }
+}
+
+impl From<Rgb> for String {
+    fn from(rgb: Rgb) -> String {
+        rgb.to_string()
     }
 }
 
@@ -215,9 +268,13 @@ impl Condition {
         match words.as_slice() {
             ["no", "diagnostics"] => Ok(Condition::NoDiagnostics),
             ["serial", "contains", text] => Ok(Condition::SerialContains(Needle::parse(text)?)),
+            [r, first, ..] if r.starts_with('@') && first.starts_with("rgb(") => {
+                let colour = words[1..].concat();
+                Ok(Condition::Color(Ref::parse(r)?, Rgb::parse(&colour)?))
+            }
             [r, word] if r.starts_with('@') => {
                 let state = State::parse(word).ok_or_else(|| {
-                    format!("`{word}` is not a state; use lit, dim, off, high or low")
+                    format!("`{word}` is not a state; use lit, dim, off, high, low or a colour such as rgb(255,0,0)")
                 })?;
                 Ok(Condition::State(Ref::parse(r)?, state))
             }
@@ -230,9 +287,12 @@ impl Condition {
                     Amount::parse(value)?,
                 ))
             }
+            [r] if r.starts_with('@') => Err(format!(
+                "`{r}` needs what to expect of it, such as `{r} lit` or `{r} rgb(255,0,0)`; a word that starts with # is a comment"
+            )),
             [] => Err("a condition is missing".to_string()),
             _ => Err(format!(
-                "`{}` is not a condition; write `@led1 lit`, `@led1.brightness > 2mA`, `serial contains \"text\"` or `no diagnostics`",
+                "`{}` is not a condition; write `@led1 lit`, `@led1.brightness > 2mA`, `@pixel rgb(255,0,0)`, `serial contains \"text\"` or `no diagnostics`",
                 words.join(" ")
             )),
         }
@@ -246,6 +306,7 @@ impl fmt::Display for Condition {
             Condition::Compare(r, op, amount) => {
                 write!(f, "{r} {} {}", op.as_str(), amount.written)
             }
+            Condition::Color(r, rgb) => write!(f, "{r} {rgb}"),
             Condition::SerialContains(text) => write!(f, "serial contains {:?}", text.as_str()),
             Condition::NoDiagnostics => f.write_str("no diagnostics"),
         }

@@ -3,12 +3,14 @@
 # scripts/wasm.sh looks: .scratch/wasm/tools/wasm-bindgen-<version>/bin/wasm-bindgen.
 # It does nothing when that binary is already the right version. WASM_TOOLS_DIR
 # overrides the tools directory, as it does for scripts/wasm.sh.
-# Usage: scripts/install-wasm-bindgen.sh
+# With --version it prints that version and installs nothing. This is the one place
+# that reads it from Cargo.lock.
+# Usage: scripts/install-wasm-bindgen.sh [--version]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [[ $# -gt 0 ]]; then
-  echo "usage: scripts/install-wasm-bindgen.sh" >&2
+if [[ $# -gt 1 || ($# -eq 1 && $1 != --version) ]]; then
+  echo "usage: scripts/install-wasm-bindgen.sh [--version]" >&2
   exit 2
 fi
 
@@ -16,6 +18,10 @@ version=$(awk '$0 == "name = \"wasm-bindgen\"" { getline; gsub(/version = |"/, "
 if [[ ! $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "install-wasm-bindgen: Cargo.lock has no wasm-bindgen version" >&2
   exit 1
+fi
+if [[ $# -eq 1 ]]; then
+  echo "$version"
+  exit 0
 fi
 
 tools=${WASM_TOOLS_DIR:-$PWD/.scratch/wasm/tools}

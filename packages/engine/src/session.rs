@@ -132,6 +132,12 @@ impl Leds<'_> {
     pub fn chain(&self) -> crate::leds::Chain {
         crate::leds::Chain::shown(self.chain.shows(), self.chain.view())
     }
+
+    /// When its colours last latched, which is when [`chain`](Self::chain) took them. `None`
+    /// before its first latch, while every LED shows the black of power-on.
+    pub fn latched(&self) -> Option<Time> {
+        self.chain.latched()
+    }
 }
 
 impl Display<'_> {
@@ -473,7 +479,10 @@ impl Session {
         let signals = circuit.logic_refs();
         let logic = circuit.logic_levels(&start.chips, &start.levels);
         let integrals = vec![0.0; columns.refs().len()];
-        let actives = Actives::new(&circuit, &start.levels);
+        let mut actives = Actives::new(&circuit, &start.levels);
+        if rows.is_some() {
+            actives.keep_shown();
+        }
         let mut ratings = Ratings::new(&circuit.netlist, &circuit.actives, &columns, Timing::Run);
         ratings.sample(Time::ZERO, &row, actives.cores());
         let inputs = Inputs::new(&circuit.netlist, &circuit.actives);
