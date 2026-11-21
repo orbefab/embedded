@@ -18,7 +18,7 @@ It also needs the `wasm-bindgen` CLI at the version `Cargo.lock` holds for the `
 scripts/install-wasm-bindgen.sh
 ```
 
-That script downloads the prebuilt CLI and checks its SHA-256. On a platform with no prebuilt CLI it prints the `cargo install` command instead.
+That script downloads the prebuilt CLI. On Linux x86_64, the platform CI runs on, it checks the download's SHA-256; other prebuilts install unchecked. On a platform with no prebuilt CLI it prints the `cargo install` command instead.
 
 Without the target it exits 2 and prints `rustup target add wasm32-unknown-unknown`.
 

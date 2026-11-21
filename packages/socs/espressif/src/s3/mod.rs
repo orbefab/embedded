@@ -35,6 +35,7 @@ mod code;
 mod cores;
 mod curve;
 mod efuse;
+mod events;
 mod extmem;
 mod flash;
 mod gates;
