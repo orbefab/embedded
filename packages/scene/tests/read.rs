@@ -17,7 +17,7 @@ fn read(scene: &str) -> (orbe_scene::Netlist, Value) {
 }
 
 #[test]
-fn first_target_has_19_parts_and_32_nets() {
+fn first_target_has_19_parts_and_34_nets() {
     let (netlist, json) = read("scene.jsonc");
     assert_eq!(netlist.parts, 19);
     assert_eq!(netlist.ground, "nano__GND");
@@ -39,7 +39,7 @@ fn first_target_has_19_parts_and_32_nets() {
     ]
     .into_iter()
     .map(str::to_string)
-    .chain((0..=5).map(|i| format!("nano__A{i}")))
+    .chain((0..=7).map(|i| format!("nano__A{i}")))
     .chain((0..=13).map(|i| format!("nano__D{i}")))
     .collect();
     expected.sort();
@@ -122,7 +122,7 @@ fn scene_params_are_user_values_and_defaults_fill_the_rest() {
 fn two_buttons_ground_is_btn1_gnd() {
     let (netlist, json) = read("two-buttons.jsonc");
     assert_eq!(netlist.parts, 19);
-    assert_eq!(netlist.nets.len(), 31);
+    assert_eq!(netlist.nets.len(), 33);
     assert_eq!(netlist.ground, "btn1__gnd");
     for net in ["btn1__out", "btn1__vcc", "btn2__out"] {
         assert!(netlist.nets.contains(&net.to_string()), "no net {net}");
@@ -151,7 +151,7 @@ fn two_buttons_ground_is_btn1_gnd() {
 #[test]
 fn two_buttons_with_nets_names_ground_gnd() {
     let (netlist, _) = read("two-buttons-nets.jsonc");
-    assert_eq!(netlist.nets.len(), 31);
+    assert_eq!(netlist.nets.len(), 33);
     assert_eq!(netlist.ground, "GND");
     for net in ["VCC", "btn1__out", "btn2__out"] {
         assert!(netlist.nets.contains(&net.to_string()), "no net {net}");
@@ -285,8 +285,9 @@ fn edit_led_resistance(root: &std::path::Path) {
 fn hold(root: &std::path::Path, id: &str, version: &str) {
     let file = root.join("parts").join(id).join("part.jsonc");
     let text = fs::read_to_string(&file).unwrap();
+    let carried = orbe_scene::card(id).unwrap().version;
     let edited = text.replacen(
-        "\"version\": \"0.1.1\"",
+        &format!("\"version\": \"{carried}\""),
         &format!("\"version\": \"{version}\""),
         1,
     );
@@ -451,7 +452,8 @@ fn a_lock_from_another_registry_at_another_version_names_the_registry() {
             d.message
         );
         assert!(
-            d.message.contains(&format!("`{id}@0.1.1`")),
+            d.message
+                .contains(&format!("`{id}@{}`", orbe_scene::card(id).unwrap().version)),
             "{id}: {}",
             d.message
         );
@@ -472,7 +474,7 @@ fn an_outdated_board_is_an_error_and_not_a_note() {
     assert_eq!(found.len(), 1, "{found:#?}");
     assert_eq!(
         found[0].message,
-        "this orbe carries `nano-board@0.1.1` and the project holds `nano-board@0.0.9`"
+        "this orbe carries `nano-board@0.1.2` and the project holds `nano-board@0.0.9`"
     );
 }
 
@@ -829,8 +831,13 @@ fn clock_project(clock: Option<&str>) -> tempfile::TempDir {
         fs::read_to_string(common::repo().join("parts/atmega328p-tqfp32/part.jsonc")).unwrap();
     let firmware = "\"firmware\": { \"file\": \"hex\", \"as\": \"text\", \"required\": true, \"sets\": \"/firmware\" }";
     assert!(catalog.contains(firmware));
+    let version = orbe_scene::card("atmega328p-tqfp32").unwrap().version;
     let part = catalog
-        .replacen("\"part\": \"atmega328p-tqfp32\", \"version\": \"0.1.1\", ", "", 1)
+        .replacen(
+            &format!("\"part\": \"atmega328p-tqfp32\", \"version\": \"{version}\", "),
+            "",
+            1,
+        )
         .replacen(
             firmware,
             &format!("{firmware}, \"clock\": {{ \"unit\": \"Hz\", \"default\": \"16M\", \"sets\": \"/clock_hz\" }}"),

@@ -71,6 +71,8 @@ pub(super) fn atmega(vdd: &str, hex: &str, clock_hz: u32, fuses: FuseBytes) -> S
             Pad::Vcc | Pad::Avcc | Pad::Aref => vdd.to_string(),
             Pad::Gnd | Pad::Agnd => "gnd".to_string(),
             Pad::Port(..) | Pad::Xtal => name.to_lowercase(),
+            // The DIP has neither.
+            Pad::Adc(_) => continue,
         }
         .into();
     }
@@ -92,6 +94,7 @@ fn each_pad_is_the_pin_its_name_says() {
             Pad::Avcc => vec!["AVCC".to_string()],
             Pad::Aref => vec!["AREF".to_string()],
             Pad::Agnd => vec!["GND_22".to_string()],
+            Pad::Adc(n) => vec![format!("ADC{n}")],
         };
         assert!(names.iter().any(|n| n == name), "{name} {pad:?}");
     }
@@ -497,7 +500,7 @@ fn a_clone_from_leaves_the_state_a_clone_does() {
                 .run_until(orbe_model::Time::from_ps(20_000 * US))
                 .expect("a stop before the end");
             if halt.sample {
-                core.sample(halt.at, &[3.3, 0.0, 0.0, 0.0, 0.0, 0.0, 5.0, 5.0]);
+                core.sample(halt.at, &[3.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 5.0, 5.0]);
             }
             if halt.at.as_ps() >= from && core.drive()[txd] == drive {
                 break halt.at;

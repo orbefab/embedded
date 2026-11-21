@@ -194,8 +194,6 @@ impl Bus {
                     self.refuse(setting("ADC", "REFS"), cycle, pc);
                 } else if (0x09..=0x0D).contains(&mux) {
                     self.refuse(setting("ADC", "MUX"), cycle, pc);
-                } else if mux == 6 || mux == 7 {
-                    self.note(Unmodeled::AdcNoPad(mux), pc, true);
                 }
             }
             MCUCR => {

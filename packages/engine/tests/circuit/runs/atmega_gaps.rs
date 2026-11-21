@@ -1,6 +1,6 @@
-//! The ATmega328P's SPI master and what it says it does not model, each on the documented
-//! ATmega328P netlist with a firmware written here word by word. Each firmware shows what it
-//! read on PORTD, and PB0 high once it finished.
+//! The ATmega328P's SPI master, its ADC6 and ADC7, and what it says it does not model, each on
+//! the documented ATmega328P netlist with a firmware written here word by word. Each firmware
+//! shows what it read on PORTD, and PB0 high once it finished.
 
 use std::fs;
 
@@ -338,40 +338,86 @@ fn wire_begin_0x42_as_a_slave_notes_twar_and_runs_on() {
     );
 }
 
+/// The documented netlist running one conversion of the channel and reference `admux` selects,
+/// with `parts` added on `nets` and the chip's pins remapped by `pins`. ADCSRA: on, start,
+/// clk/128. The code shows on PC1:0 and PORTD. The first conversion takes 25 ADC clocks of 128
+/// cycles, 200 us (§24.4), so the run is 400 us.
+fn conversion(
+    admux: u16,
+    nets: &[&str],
+    parts: serde_json::Value,
+    pins: &[(&str, &str)],
+) -> serde_json::Value {
+    let mut words = vec![ldi(16, admux)];
+    words.extend(sts(ADMUX, 16));
+    words.push(ldi(16, 0xC7));
+    words.extend(sts(ADCSRA, 16));
+    let wait = words.len();
+    words.extend(lds(16, ADCSRA));
+    words.extend([sbrc(16, 6), rjmp(wait + 3, wait)]);
+    words.extend(lds(17, ADCL));
+    words.extend(lds(18, ADCH));
+    words.extend([
+        ldi(16, 0x03),
+        out(DDRC, 16),
+        out(PORTC, 18),
+        ldi(16, 0x01),
+        out(DDRB, 16),
+    ]);
+    show_r17(&mut words);
+    let mut netlist = netlist(&words, nets, parts, pins);
+    netlist["analysis"]["transient"]["stop_ps"] = 400_000_000u64.into();
+    netlist
+}
+
+/// The code a run of [`conversion`] showed, and the run's diagnostics.
+fn converted(netlist: &serde_json::Value) -> (u16, Vec<String>) {
+    let ran = Ran::new(netlist);
+    let high = u16::from(ran.high("pc0")) | (u16::from(ran.high("pc1")) << 1);
+    ((high << 8) | u16::from(ran.portd()), ran.diagnostics())
+}
+
+/// ADC6 and ADC7 read the `ADC6` and `ADC7` pins, which the TQFP has, and 0 V on a part that
+/// leaves them out, as the DIP does. Neither is a note. A divider from VCC puts 2/3 of AVCC on
+/// `a6` and 1/3 on `a7`, codes 682 and 341 (§24.7).
+#[test]
+fn adc6_and_adc7_read_their_pins_and_0_v_without_them() {
+    let dividers = serde_json::json!([
+        resistor("r6a", "vcc", "a6", 10e3),
+        resistor("r6b", "a6", "gnd", 20e3),
+        resistor("r7a", "vcc", "a7", 20e3),
+        resistor("r7b", "a7", "gnd", 10e3),
+    ]);
+    let tqfp = |admux| {
+        converted(&conversion(
+            admux,
+            &["a6", "a7"],
+            dividers.clone(),
+            &[("ADC6", "a6"), ("ADC7", "a7")],
+        ))
+    };
+    let dip = |admux| converted(&conversion(admux, &[], serde_json::json!([]), &[]));
+    // ADMUX: AVCC as the reference and ADC6 or ADC7.
+    assert_eq!(tqfp(0x46), (682, Vec::new()));
+    assert_eq!(tqfp(0x47), (341, Vec::new()));
+    assert_eq!(dip(0x46), (0, Vec::new()));
+    assert_eq!(dip(0x47), (0, Vec::new()));
+}
+
 #[test]
 fn the_temperature_sensor_reads_the_world_at_60_degrees() {
-    // ADMUX: the 1.1 V reference and ADC8. ADCSRA: on, start, clk/128. Table 24-2's typical
-    // values put 60 degC at about 352 mV, ADC 328.
+    // ADMUX: the 1.1 V reference and ADC8. Table 24-2's typical values put 60 degC at about
+    // 352 mV, ADC 328.
     let read = |celsius: Option<f64>| {
-        let mut words = vec![ldi(16, 0xC8)];
-        words.extend(sts(ADMUX, 16));
-        words.push(ldi(16, 0xC7));
-        words.extend(sts(ADCSRA, 16));
-        let wait = words.len();
-        words.extend(lds(16, ADCSRA));
-        words.extend([sbrc(16, 6), rjmp(wait + 3, wait)]);
-        words.extend(lds(17, ADCL));
-        words.extend(lds(18, ADCH));
-        words.extend([
-            ldi(16, 0x03),
-            out(DDRC, 16),
-            out(PORTC, 18),
-            ldi(16, 0x01),
-            out(DDRB, 16),
-        ]);
-        show_r17(&mut words);
-        let mut netlist = netlist(&words, &[], serde_json::json!([]), &[]);
-        // The first conversion takes 25 ADC clocks of 128 cycles, 200 us (§24.4).
-        netlist["analysis"]["transient"]["stop_ps"] = 400_000_000u64.into();
+        let mut netlist = conversion(0xC8, &[], serde_json::json!([]), &[]);
         if let Some(celsius) = celsius {
             netlist["world"] = serde_json::json!({
                 "temperature": { "value": celsius, "unit": "degC" }
             });
         }
-        let ran = Ran::new(&netlist);
-        let high = u16::from(ran.high("pc0")) | (u16::from(ran.high("pc1")) << 1);
-        assert_eq!(ran.diagnostics(), Vec::<String>::new());
-        (high << 8) | u16::from(ran.portd())
+        let (code, diagnostics) = converted(&netlist);
+        assert_eq!(diagnostics, Vec::<String>::new());
+        code
     };
     let hot = read(Some(60.0));
     assert!((326..=330).contains(&hot), "{hot}");

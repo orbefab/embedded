@@ -617,7 +617,6 @@ An `atmega328p` keeps every register, so each of its notes has `kept` true and `
 - `TWAR`, at `0xba`: a store to `TWAR` while `TWCR` held `TWEN` and `TWEA`, or a store to `TWCR` that set both after a store to `TWAR` since the last reset. The TWI would answer as a slave, and the model has no slave modes.
 - `TWBR`, at `0xb8`: a store to `TWCR` that started a START at a bit rate whose data hold time passes Table 29-14's maximum, below about 18 kHz. The store is to `TWCR`, and the note names the register that sets the rate.
 - `OSCCAL`, at `0x66`: any store.
-- `ADMUX`, at `0x7c`: a store that selects ADC6 or ADC7, each listed once. The 28-pin package has no pad for them, so a conversion reads 0 V.
 
 ## trace.too_large
 

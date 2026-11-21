@@ -50,9 +50,6 @@ pub enum Unmodeled {
     /// `OSCCAL`, which retunes the RC oscillator that times EEPROM writes. The model keeps the
     /// typical 8 MHz.
     Osccal,
-    /// `ADMUX` selects ADC6 or ADC7, which have no pad on the 28-pin package the bridge runs,
-    /// so a conversion reads 0 V.
-    AdcNoPad(u8),
 }
 
 impl Unmodeled {
@@ -62,7 +59,6 @@ impl Unmodeled {
             Unmodeled::TwiSlave => "TWAR",
             Unmodeled::TwiHoldTime => "TWBR",
             Unmodeled::Osccal => "OSCCAL",
-            Unmodeled::AdcNoPad(_) => "ADMUX",
         }
     }
 
@@ -72,7 +68,6 @@ impl Unmodeled {
             Unmodeled::TwiSlave => 0x00BA,
             Unmodeled::TwiHoldTime => 0x00B8,
             Unmodeled::Osccal => 0x0066,
-            Unmodeled::AdcNoPad(_) => 0x007C,
         }
     }
 
@@ -82,8 +77,6 @@ impl Unmodeled {
             Unmodeled::TwiSlave => 1 << 0,
             Unmodeled::TwiHoldTime => 1 << 1,
             Unmodeled::Osccal => 1 << 2,
-            Unmodeled::AdcNoPad(6) => 1 << 3,
-            Unmodeled::AdcNoPad(_) => 1 << 4,
         }
     }
 }

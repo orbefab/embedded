@@ -949,7 +949,7 @@ impl Cpu {
     }
 
     /// Voltage on an ADC channel. Channels with a pad (ADC0–ADC5 on the 328P)
-    /// are the same wire as [`Self::set_voltage`]. ADC6 and ADC7 have no pad.
+    /// are the same wire as [`Self::set_voltage`]. ADC6 and ADC7 have no digital pad.
     pub fn set_channel_voltage(&mut self, channel: u8, volts: f32) {
         self.bus
             .set_channel_voltage(channel, crate::analog::microvolts(volts));
