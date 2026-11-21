@@ -1028,22 +1028,25 @@ test.describe("fixture page", () => {
     }
   });
 
-  /** Pixels the bloom pass changes. `hide` covers every glowing body and the clear lens over it,
-   * so a difference is something other than an LED blooming. The read is the composited frame,
-   * because a metal highlight may pass luminance 1 and still must not bloom. */
-  function bloomDelta(page: Page, hide: boolean): Promise<{ pixels: number; max: number }> {
-    return page.evaluate(async (hide) => {
+  /** Pixels the bloom pass, or the hover outline, changes. `hide` covers every glowing body and
+   * the clear lens over it, so a bloom difference is something other than an LED blooming. The
+   * read is the composited frame, because a metal highlight may pass luminance 1 and still must
+   * not bloom. */
+  function effectDelta(page: Page, hide: boolean, effect: "bloom" | "outline" = "bloom"): Promise<{ pixels: number; max: number; leds: Record<string, number> }> {
+    return page.evaluate(async ([hide, effect]) => {
       const state = () => window.orbeViewer.get();
-      const findBloom = (scene: any) => {
+      const findEffect = (scene: any) => {
         let found: any;
         const walk = (node: any) => {
           if (node === undefined || node === null) return;
           const object = node.object;
-          if (object?.luminanceMaterial !== undefined && typeof object.intensity === "number") found = object;
+          const bloom = object?.luminanceMaterial !== undefined && typeof object.intensity === "number";
+          const outline = object?.visibleEdgeColor !== undefined && object?.blendMode?.opacity !== undefined;
+          if (effect === "bloom" ? bloom : outline) found = object;
           for (const child of node.children ?? []) walk(child);
         };
         walk(scene.__r3f);
-        if (found === undefined) throw new Error("no bloom effect");
+        if (found === undefined) throw new Error(`no ${effect} effect`);
         return found;
       };
       const frame = () =>
@@ -1104,12 +1107,15 @@ test.describe("fixture page", () => {
         return hidden;
       };
       const { scene } = state();
-      const bloom = findBloom(scene);
+      const found = findEffect(scene);
       const hidden = hide ? hideLeds(scene) : [];
-      const intensity = bloom.intensity;
+      // The bloom's strength, or the outline's blend opacity, goes to 0 for the second frame.
+      const strength = effect === "bloom" ? found : found.blendMode.opacity;
+      const key = effect === "bloom" ? "intensity" : "value";
+      const before = strength[key];
       try {
         const on = await frame();
-        bloom.intensity = 0;
+        strength[key] = 0;
         const off = await frame();
         let energy = 0;
         let pixels = 0;
@@ -1121,14 +1127,52 @@ test.describe("fixture page", () => {
           if (delta > 1) pixels += 1;
         }
         if (energy === 0) throw new Error("the composited frame read back blank");
-        return { pixels, max };
+        // Each LED's peak: the largest change within 6 px of its glow body's centre on screen.
+        const { camera, gl } = state();
+        const width = gl.domElement.width;
+        const height = gl.domElement.height;
+        const leds: Record<string, number> = {};
+        for (const ref of ["@led1", "@nano.led_l", "@nano.led_pwr"]) {
+          const group = scene.getObjectByName(ref);
+          let body: any;
+          group?.traverse((node: any) => {
+            const materials = Array.isArray(node.material) ? node.material : [node.material];
+            if (node.isMesh && materials.some((material: any) => material?.emissive !== undefined && material.emissiveIntensity > 0)) body = node;
+          });
+          if (body === undefined) continue;
+          body.geometry.boundingBox ?? body.geometry.computeBoundingBox();
+          const centre = body.geometry.boundingBox.getCenter(body.position.clone()).applyMatrix4(body.matrixWorld).project(camera);
+          const cx = Math.round(((centre.x + 1) / 2) * width);
+          const cy = Math.round(((centre.y + 1) / 2) * height);
+          let peak = 0;
+          for (let y = Math.max(0, cy - 6); y <= Math.min(height - 1, cy + 6); y += 1) {
+            for (let x = Math.max(0, cx - 6); x <= Math.min(width - 1, cx + 6); x += 1) {
+              const i = (y * width + x) * 4;
+              peak = Math.max(peak, Math.abs(on[i]! - off[i]!), Math.abs(on[i + 1]! - off[i + 1]!), Math.abs(on[i + 2]! - off[i + 2]!));
+            }
+          }
+          leds[ref] = peak;
+        }
+        return { pixels, max, leds };
       } finally {
-        bloom.intensity = intensity;
+        strength[key] = before;
         for (const node of hidden) node.visible = true;
         await frame();
       }
-    }, hide);
+    }, [hide, effect] as const);
   }
+
+  const bloomDelta = (page: Page, hide: boolean) => effectDelta(page, hide, "bloom");
+  const outlineDelta = (page: Page) => effectDelta(page, false, "outline");
+
+  const drive = (page: Page, seq: number, amps: number) =>
+    page.evaluate(
+      ([seq, amps]) => {
+        const { source, script } = window.orbeFixture;
+        source.push({ ...script.idle, seq, led_a: [amps, amps, amps] });
+      },
+      [seq, amps] as const,
+    );
 
   async function orbit(page: Page, polarDeg: number, azimuthDeg: number) {
     await page.evaluate(({ polarDeg, azimuthDeg }) => {
@@ -1149,25 +1193,31 @@ test.describe("fixture page", () => {
     await still(page);
   }
 
-  test("only an LED blooms from the side, from overhead and from the top view", async ({ browser, host }) => {
+  // 20 mA is twice the full current, so each LED's glow body passes the bloom threshold
+  // by itself, not only through a highlight.
+  const LIT_A = 0.02;
+  const ORBIT_POSES = [
+    { name: "23 deg off vertical at 90 deg azimuth", polar: 23, azimuth: 90 },
+    { name: "30 deg off vertical at 100 deg azimuth", polar: 30, azimuth: 100 },
+    { name: "straight down", polar: 0, azimuth: 90 },
+  ];
+
+  test("only a lit LED blooms, from the side, from overhead and from the top view", async ({ browser, host }) => {
     const { context, page } = await open(browser, host.base);
     try {
       let seq = 1100;
       for (const theme of ["light", "dark"] as const) {
         await setStageTheme(page, theme);
-        await page.evaluate((seq) => {
-          const { source, script } = window.orbeFixture;
-          source.push({ ...script.idle, seq, led_a: [0.01, 0.01, 0.01] });
-        }, seq);
+        await drive(page, seq, LIT_A);
         seq += 1;
         await page.waitForTimeout(300);
         await still(page);
         const lit = await bloomDelta(page, false);
-        expect(lit.pixels > 0, `${theme} lit LED did not bloom ${JSON.stringify(lit)}`).toBe(true);
-        for (const pose of [
-          { name: "23 deg off vertical at 90 deg azimuth", polar: 23, azimuth: 90 },
-          { name: "straight down", polar: 0, azimuth: 90 },
-        ]) {
+        expect(Object.keys(lit.leds).sort(), `${theme} lit LEDs ${JSON.stringify(lit)}`).toEqual(["@led1", "@nano.led_l", "@nano.led_pwr"]);
+        for (const [ref, peak] of Object.entries(lit.leds)) expect(peak > 0, `${theme} ${ref} did not bloom ${JSON.stringify(lit)}`).toBe(true);
+        const outline = await outlineDelta(page);
+        expect(outline.pixels, `${theme} nothing hovered, yet the outline drew ${JSON.stringify(outline)}`).toBe(0);
+        for (const pose of ORBIT_POSES) {
           await orbit(page, pose.polar, pose.azimuth);
           const beside = await bloomDelta(page, true);
           expect(beside.pixels, `${theme} ${pose.name} ${JSON.stringify(beside)}`).toBe(0);
@@ -1175,8 +1225,63 @@ test.describe("fixture page", () => {
         await toggleView(page, "OrthographicCamera");
         const top = await bloomDelta(page, true);
         expect(top.pixels, `${theme} top view ${JSON.stringify(top)}`).toBe(0);
+        // Every LED off, with its die and lens drawn: nothing blooms.
+        await drive(page, seq, 0);
+        seq += 1;
+        await page.waitForTimeout(300);
+        const dark = await bloomDelta(page, false);
+        expect(dark.pixels, `${theme} top view, every LED off ${JSON.stringify(dark)}`).toBe(0);
         await toggleView(page, "PerspectiveCamera");
+        // Off, or at half the full current, a highlight on an LED's die or lens does not bloom.
+        for (const amps of [0, 0.005]) {
+          await drive(page, seq, amps);
+          seq += 1;
+          await page.waitForTimeout(300);
+          for (const pose of ORBIT_POSES) {
+            await orbit(page, pose.polar, pose.azimuth);
+            const off = await bloomDelta(page, false);
+            expect(off.pixels, `${theme} ${pose.name}, every LED at ${amps} A ${JSON.stringify(off)}`).toBe(0);
+          }
+        }
       }
+    } finally {
+      await context.close();
+    }
+  });
+
+  test("hovering the Nano and leaving draws no outline after, and its LEDs still bloom", async ({ browser, host }) => {
+    const { context, page } = await open(browser, host.base);
+    try {
+      await drive(page, 1200, LIT_A);
+      await page.waitForTimeout(300);
+      await still(page);
+      const before = await bloomDelta(page, false);
+      expect(Object.keys(before.leds).sort()).toEqual(["@led1", "@nano.led_l", "@nano.led_pwr"]);
+
+      const leave = async () => {
+        await page.mouse.move(...(Object.values(await pointOnMat(page)) as [number, number]));
+        await expect.poll(() => label(page)).toBeNull();
+        await page.waitForTimeout(100);
+      };
+      const board = await hoverUntil(page, await pointAt(page, "@nano", [3, -6, 4.2]), "@nano");
+      expect(board).not.toBeNull();
+      const hovered = await outlineDelta(page);
+      expect(hovered.pixels > 0, `the hovered Nano has no outline ${JSON.stringify(hovered)}`).toBe(true);
+      await leave();
+      const outline = await outlineDelta(page);
+      expect(outline.pixels, `the outline stayed after the pointer left ${JSON.stringify(outline)}`).toBe(0);
+      const after = await bloomDelta(page, false);
+      for (const [ref, peak] of Object.entries(before.leds)) {
+        expect(peak > 0, `${ref} did not bloom ${JSON.stringify(before)}`).toBe(true);
+        expect(after.leds[ref], `${ref}'s bloom after a hover, before ${JSON.stringify(before)}`).toBeGreaterThanOrEqual(peak - 2);
+      }
+
+      // From an orbit pose where its metal passes luminance 1, the hovered Nano still does not bloom.
+      await orbit(page, 23, 90);
+      expect(await hoverUntil(page, await pointAt(page, "@nano", [3, -6, 4.2]), "@nano")).not.toBeNull();
+      const metal = await bloomDelta(page, true);
+      expect(metal.pixels, `with the Nano hovered, something other than an LED bloomed ${JSON.stringify(metal)}`).toBe(0);
+      await leave();
     } finally {
       await context.close();
     }
