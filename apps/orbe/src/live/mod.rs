@@ -287,7 +287,7 @@ enum Done {
 
 struct Stale {
     session: Name,
-    /// The process's log, kept when it holds output such as a panic.
+    /// `<name>.crashed.log` when the process left output.
     log: Option<PathBuf>,
     /// The session's start logs no process held, removed.
     starts: Vec<PathBuf>,
@@ -576,18 +576,7 @@ impl Client {
             match answered {
                 Err(refused)
                     if matches!(refused.error.code, Code::NoSession | Code::SessionCrashed) => {}
-                Ok(mut reply) => {
-                    if let Some(path) = &recovered {
-                        reply.previous_crash = Some(match path {
-                            Some(path) => format!(
-                                "the previous session crashed; its last output is in {path}"
-                            ),
-                            None => "the previous session crashed".into(),
-                        });
-                    }
-                    return Ok(reply);
-                }
-                answered => return answered,
+                answered => return self.with_crash(answered, recovered),
             }
         }
         let hint = [Some(self.place.log(&self.name)), started]
@@ -607,8 +596,8 @@ impl Client {
     }
 
     /// Ends the session: `close` to its process, or, for a socket a crashed process left, the
-    /// socket and the session's start logs no process holds removed, and the log kept when it
-    /// holds output.
+    /// socket and the session's start logs no process holds removed. Output that process left
+    /// is kept as `<name>.crashed.log` until the next crash replaces it.
     fn close(&self) -> Result<Done, Refusal> {
         match self.find()? {
             Found::Listening(stream) => self
@@ -623,16 +612,16 @@ impl Client {
                         "",
                     )
                 })?;
+                let kept = self.place.take_crash_log(&self.name);
                 let log = self.place.log(&self.name);
-                let kept = holds_output(&log);
-                if !kept {
+                if !holds_output(&log) {
                     let _ = fs::remove_file(&log);
                 }
                 let starts = self.place.remove_left_logs(|name| name == &self.name);
                 let _ = fs::remove_file(self.place.version(&self.name));
                 Ok(Done::Stale(Stale {
                     session: self.name.clone(),
-                    log: kept.then_some(log),
+                    log: kept,
                     starts: starts.into_iter().map(|(_, start)| start).collect(),
                 }))
             }
@@ -952,18 +941,46 @@ impl Client {
             return Ok(());
         }
         Err(self.refuse(
-            Code::IoError,
+            Code::VersionMismatch,
             format!("session `{}` runs orbe {version}", self.name),
             format!("run `orbe close{}`", self.session_flag()),
         ))
     }
 
-    /// The session log after a newer crashed start, if one was waiting, has replaced it.
-    /// `None` when that log holds nothing.
+    /// Moves `<name>.log` to `<name>.crashed.log` when it holds output. The path named in the
+    /// crash message, when that file holds output.
     fn crash_log(&self) -> Option<String> {
-        self.place.keep_latest_crash(&self.name);
-        let log = self.place.log(&self.name);
-        holds_output(&log).then(|| log.display().to_string())
+        self.place
+            .take_crash_log(&self.name)
+            .map(|log| log.display().to_string())
+    }
+
+    /// The open that found a stale session says so, whether the open then succeeds or is refused.
+    fn with_crash(
+        &self,
+        answered: Result<Box<Reply>, Refusal>,
+        recovered: Option<Option<String>>,
+    ) -> Result<Box<Reply>, Refusal> {
+        let Some(path) = recovered else {
+            return answered;
+        };
+        let note = match path {
+            Some(path) => format!("the previous session crashed; its last output is in {path}"),
+            None => "the previous session crashed".into(),
+        };
+        match answered {
+            Ok(mut reply) => {
+                reply.previous_crash = Some(note);
+                Ok(reply)
+            }
+            Err(mut refused) => {
+                if !refused.error.hint.is_empty() {
+                    refused.error.hint.push('\n');
+                }
+                refused.error.hint.push_str(&note);
+                Err(refused)
+            }
+        }
     }
 
     fn session_flag(&self) -> String {

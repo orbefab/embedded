@@ -40,14 +40,6 @@ fn ground_pin_of(part: &Part) -> Option<String> {
     part.pin(declared).is_some().then(|| declared.to_string())
 }
 
-/// A net name the engine accepts: an ASCII letter, then letters, digits or `_`, and not `net`.
-fn net_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    matches!(chars.next(), Some(first) if first.is_ascii_alphabetic())
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && name != "net"
-        && name.len() <= NAME_LIMIT
-}
 const GRID_PS: u64 = 1_000_000_000;
 /// A shared hole whose strip still has room. The hole after `such as` is one an agent can
 /// write at the finding, and each hint in one check names a different hole.
@@ -273,10 +265,10 @@ pub(crate) fn compile(
     circuit.plug();
     circuit.check_scene_wires(scene);
     circuit.apply_models();
-    let nets = circuit.name_nets(scene);
+    let mut nets = circuit.name_nets(scene);
     circuit.check_flat_names();
     circuit.report_long();
-    let ground = circuit.ground(scene, &nets);
+    let ground = circuit.ground(scene, &mut nets);
     let netlist = circuit.write(scene, &nets, ground)?;
     if let Some(warnings) = lint {
         circuit.lint(&nets, &netlist, warnings);
@@ -1239,9 +1231,9 @@ impl<'p> Circuit<'p> {
     }
 
     /// Each net with an engine pin, by its root, with its name: a `nets` name, else the
-    /// smallest label, else the smallest member pin, each flattened. The ground net then takes
-    /// its ground pin's own name, unless a net already has it. A hole never names a net, so a circuit
-    /// on a breadboard has the names it has wired directly.
+    /// smallest label, else the smallest member pin, each flattened. A hole never names a net,
+    /// so a circuit on a breadboard has the names it has wired directly. [`ground`] then names
+    /// the ground net `GND` when the scene's `nets` leaves that name free.
     fn name_nets(&mut self, scene: &Scene) -> BTreeMap<usize, String> {
         let mut named: BTreeMap<usize, String> = BTreeMap::new();
         let mut from_scene = BTreeSet::new();
@@ -1302,7 +1294,6 @@ impl<'p> Circuit<'p> {
         for (root, name) in labels.into_iter().chain(members) {
             named.entry(root).or_insert(name);
         }
-        self.name_ground(scene, &mut named, &from_scene);
         for (root, name) in &named {
             if from_scene.contains(root) {
                 continue;
@@ -1311,80 +1302,6 @@ impl<'p> Circuit<'p> {
             self.note_long(span, name, false);
         }
         named
-    }
-
-    /// The ground net takes its ground pin's own name, `GND` from `nano.GND`, unless that name
-    /// is already a net's or is not a net name. A scene `nets` entry still wins, and a miss
-    /// here names nothing: `ground` reports it.
-    fn name_ground(
-        &self,
-        scene: &Scene,
-        named: &mut BTreeMap<usize, String>,
-        from_scene: &BTreeSet<usize>,
-    ) {
-        let Some(root) = self.ground_root(scene) else {
-            return;
-        };
-        if from_scene.contains(&root) || !named.contains_key(&root) {
-            return;
-        }
-        let Some(pin) = self.ground_pin(scene) else {
-            return;
-        };
-        if named.values().any(|other| other == &pin) {
-            return;
-        }
-        named.insert(root, pin);
-    }
-
-    /// The ground pin's own name: the scene's `ground` pin, else the smallest name a part's
-    /// `ground` pin has. A name the engine would refuse is left out.
-    fn ground_pin(&self, scene: &Scene) -> Option<String> {
-        let mut pins = Vec::new();
-        if let Some(r) = &scene.comp.ground {
-            pins.extend(r.segs.last().cloned());
-        } else {
-            for inst in 1..self.insts.len() {
-                if self.insts[inst].dropped.is_some() {
-                    continue;
-                }
-                let Some(r) = self.part(inst).and_then(|p| p.comp.ground.as_ref()) else {
-                    continue;
-                };
-                pins.extend(r.segs.last().cloned());
-            }
-        }
-        pins.into_iter().filter(|pin| net_name(pin)).min()
-    }
-
-    /// The one net every ground pin lands on, without a finding. [`ground`] reports a miss.
-    fn ground_root(&self, scene: &Scene) -> Option<usize> {
-        let mut roots = Vec::new();
-        if let Some(r) = &scene.comp.ground {
-            let key = self.lookup(ROOT, r).ok().flatten()?;
-            roots.push(self.root_of(key));
-        } else {
-            for inst in 1..self.insts.len() {
-                if self.insts[inst].dropped.is_some() {
-                    continue;
-                }
-                let Some(r) = self.part(inst).and_then(|p| p.comp.ground.as_ref()) else {
-                    continue;
-                };
-                let key = self.lookup(inst, r).ok().flatten()?;
-                roots.push(self.root_of(key));
-            }
-        }
-        let first = *roots.first()?;
-        roots.iter().all(|root| *root == first).then_some(first)
-    }
-
-    fn root_of(&self, key: usize) -> usize {
-        let mut root = key;
-        while self.parent[root] != root {
-            root = self.parent[root];
-        }
-        root
     }
 
     /// A ground the scene can name. A top part's `GND` pin, or the pin its `ground` names,
@@ -1422,7 +1339,9 @@ impl<'p> Circuit<'p> {
     }
 
     /// Every `ground` in the tree must land on one net. The scene's own, when it has one, wins.
-    fn ground(&mut self, scene: &Scene, nets: &BTreeMap<usize, String>) -> Option<String> {
+    /// That net is named `GND` when the scene's `nets` does not give `GND` to a net, unless the
+    /// scene already named this net.
+    fn ground(&mut self, scene: &Scene, nets: &mut BTreeMap<usize, String>) -> Option<String> {
         let mut grounds: Vec<(Option<usize>, String)> = Vec::new();
         if let Some(r) = &scene.comp.ground {
             let key = self.resolve(ROOT, r)?;
@@ -1441,11 +1360,11 @@ impl<'p> Circuit<'p> {
         }
         let span = scene.span;
         let hint = self.ground_hint();
-        let roots: Vec<(Option<&String>, &String)> = grounds
+        let resolved: Vec<(Option<usize>, &String)> = grounds
             .iter()
-            .map(|(k, text)| (k.map(|k| self.find(k)).and_then(|r| nets.get(&r)), text))
+            .map(|(key, text)| (key.map(|key| self.find(key)), text))
             .collect();
-        let Some((first, first_text)) = roots.first().copied() else {
+        let Some((first_root, first_text)) = resolved.first().copied() else {
             if !self.placing && self.insts[1..].iter().all(|i| i.part.is_some()) {
                 self.out.push(
                     Code::Ground,
@@ -1456,7 +1375,8 @@ impl<'p> Circuit<'p> {
             }
             return None;
         };
-        let Some(first) = first else {
+        let named = |root: Option<usize>| root.and_then(|root| nets.get(&root).map(String::as_str));
+        let Some(first) = named(first_root) else {
             self.out.push(
                 Code::Ground,
                 span,
@@ -1465,7 +1385,10 @@ impl<'p> Circuit<'p> {
             );
             return None;
         };
-        if let Some((_, other)) = roots.iter().find(|(net, _)| *net != Some(first)) {
+        if let Some((_, other)) = resolved
+            .iter()
+            .find(|(root, _)| named(*root) != Some(first))
+        {
             self.out.push(
                 Code::Ground,
                 span,
@@ -1474,7 +1397,19 @@ impl<'p> Circuit<'p> {
             );
             return None;
         }
-        Some(first.clone())
+        let Some(root) = first_root else {
+            return Some(first.to_string());
+        };
+        let kept = scene.nets.iter().any(|(name, _, _)| name == first);
+        let gnd_taken = scene.nets.iter().any(|(name, _, _)| name == "GND")
+            || nets
+                .iter()
+                .any(|(other, name)| *other != root && name == "GND");
+        if kept || gnd_taken {
+            return Some(first.to_string());
+        }
+        nets.insert(root, "GND".to_string());
+        Some("GND".to_string())
     }
 
     /// Writes netlist v1 and has the engine check it, even when the reader has findings, so

@@ -233,8 +233,18 @@ fn a_process_that_dies_is_session_crashed_until_it_is_opened_again() {
         .ok();
 }
 
+/// The path a crash message names, `<name>.crashed.log`.
+fn crashed_log(text: &str) -> &str {
+    text.lines()
+        .find_map(|line| {
+            line.rsplit_once("its last output is in ")
+                .map(|(_, path)| path.trim())
+        })
+        .unwrap_or_else(|| panic!("no crash log in:\n{text}"))
+}
+
 #[test]
-fn open_keeps_a_crashed_sessions_log_until_it_is_read_or_the_next_crash_replaces_it() {
+fn a_crash_log_stays_after_it_is_read_and_the_next_open_names_it() {
     let dir = project("open\n");
     let runtime = Runtime::new();
     let session = ["--session", "kept"];
@@ -242,31 +252,14 @@ fn open_keeps_a_crashed_sessions_log_until_it_is_read_or_the_next_crash_replaces
         .orbe(dir.path(), &[&["open"][..], &session].concat())
         .ok();
     kill_daemon(&runtime);
-    let log = runtime.sessions().join("kept.log");
-    fs::write(&log, "first crash\n").unwrap();
+    fs::write(runtime.sessions().join("kept.log"), "panic: boom\n").unwrap();
 
-    let run = runtime
-        .orbe(dir.path(), &[&["open", "--json"][..], &session].concat())
-        .ok();
-    let path = log.display().to_string();
-    let note = format!("the previous session crashed; its last output is in {path}");
-    assert_eq!(run.json()["data"]["previous_crash"], note.as_str());
-    assert_eq!(fs::read_to_string(&log).unwrap(), "first crash\n");
+    let run = runtime.orbe(dir.path(), &["get", "@led1", "--session", "kept"]);
+    assert_eq!(run.code, 1, "{}", run.stderr);
+    let path = crashed_log(&run.stderr);
+    assert!(path.ends_with("kept.crashed.log"), "{path}");
+    assert_eq!(fs::read_to_string(path).unwrap(), "panic: boom\n");
 
-    let run = runtime
-        .orbe(dir.path(), &[&["close"][..], &session].concat())
-        .ok();
-    assert!(
-        !run.stdout.contains("previous session crashed"),
-        "{}",
-        run.stdout
-    );
-
-    runtime
-        .orbe(dir.path(), &[&["open"][..], &session].concat())
-        .ok();
-    kill_daemon(&runtime);
-    fs::write(&log, "first crash\n").unwrap();
     let run = runtime
         .orbe(dir.path(), &[&["open"][..], &session].concat())
         .ok();
@@ -275,69 +268,102 @@ fn open_keeps_a_crashed_sessions_log_until_it_is_read_or_the_next_crash_replaces
         "{}",
         run.stdout
     );
-    assert!(run.stdout.contains(&note), "{}", run.stdout);
-    assert_eq!(fs::read_to_string(&log).unwrap(), "first crash\n");
-
-    kill_daemon(&runtime);
-    let starts: Vec<_> = fs::read_dir(runtime.sessions())
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("kept.log."))
-        })
-        .collect();
-    assert_eq!(starts.len(), 1, "{starts:?}");
-    fs::write(&starts[0], "second crash\n").unwrap();
-    let run = runtime.orbe(dir.path(), &["get", "@led1", "--session", "kept"]);
-    assert_eq!(run.code, 1);
-    assert!(run.stderr.contains(&path), "{}", run.stderr);
-    assert_eq!(fs::read_to_string(&log).unwrap(), "second crash\n");
-    // The read above is a user reading the log. Put the access time back on the write so
-    // `open` still has a log to keep.
-    let written = std::process::Command::new("stat")
-        .args(["-c", "%y"])
-        .arg(&log)
-        .output()
-        .unwrap()
-        .stdout;
-    std::process::Command::new("touch")
-        .args(["-a", "-d"])
-        .arg(String::from_utf8(written).unwrap().trim())
-        .arg(&log)
-        .status()
-        .unwrap();
-
-    let run = runtime
-        .orbe(dir.path(), &[&["open"][..], &session].concat())
-        .ok();
-    assert!(run.stdout.contains(&note), "{}", run.stdout);
-    assert_eq!(fs::read_to_string(&log).unwrap(), "second crash\n");
-    runtime
-        .orbe(dir.path(), &[&["step", "1ms"][..], &session].concat())
-        .ok();
-    let taken = fs::read_to_string(&log).unwrap_or_default();
     assert!(
-        !taken.contains("second crash"),
-        "reading the log lets the session take it: {taken}"
+        run.stdout.contains(&format!(
+            "the previous session crashed; its last output is in {path}"
+        )),
+        "{}",
+        run.stdout
+    );
+    assert_eq!(
+        fs::read_to_string(path).unwrap(),
+        "panic: boom\n",
+        "opening again must not empty the crash log"
+    );
+    let session_log = fs::read_to_string(runtime.sessions().join("kept.log")).unwrap_or_default();
+    assert!(
+        !session_log.contains("panic: boom"),
+        "the new session's log is not the crash: {session_log}"
     );
     runtime
         .orbe(dir.path(), &[&["close"][..], &session].concat())
         .ok();
-    assert!(
-        !log.exists(),
-        "a clean exit removes the log once it was read"
-    );
+    assert_eq!(fs::read_to_string(path).unwrap(), "panic: boom\n");
+}
 
+#[test]
+fn close_keeps_the_latest_crash_log_and_close_all_does_too() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    let crash_twice = |name: &str| {
+        let session = ["--session", name];
+        runtime
+            .orbe(dir.path(), &[&["open"][..], &session].concat())
+            .ok();
+        kill_daemon(&runtime);
+        fs::write(
+            runtime.sessions().join(format!("{name}.log")),
+            "crash one\n",
+        )
+        .unwrap();
+        runtime
+            .orbe(dir.path(), &[&["open"][..], &session].concat())
+            .ok();
+        let pid = runtime.daemon();
+        let stderr = fs::read_link(format!("/proc/{pid}/fd/2")).unwrap();
+        fs::write(&stderr, "crash two\n").unwrap();
+        kill_daemon(&runtime);
+    };
+
+    crash_twice("c2");
+    let run = runtime.orbe(dir.path(), &["close", "--session", "c2"]).ok();
+    let path = crashed_log(&run.stdout);
+    assert!(path.ends_with("c2.crashed.log"), "{path}\n{}", run.stdout);
+    assert_eq!(fs::read_to_string(path).unwrap(), "crash two\n");
+
+    crash_twice("c3");
+    let run = runtime.orbe(dir.path(), &["close", "--all"]).ok();
+    let path = crashed_log(&run.stdout);
+    assert!(path.ends_with("c3.crashed.log"), "{path}\n{}", run.stdout);
+    assert_eq!(fs::read_to_string(path).unwrap(), "crash two\n");
+}
+
+#[test]
+fn a_refused_open_after_a_crash_still_names_the_crash_log() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    let session = ["--session", "bad"];
+    let scene = dir.path().join("scene.jsonc");
+    let good = fs::read_to_string(&scene).unwrap();
+    runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+    kill_daemon(&runtime);
+    fs::write(runtime.sessions().join("bad.log"), "panic: boom\n").unwrap();
+    fs::write(&scene, "{\n").unwrap();
+
+    let run = runtime.orbe(dir.path(), &[&["open"][..], &session].concat());
+    assert_ne!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.stdout.contains("error["), "{}", run.stdout);
+    assert!(
+        run.stdout.contains("the previous session crashed"),
+        "{}",
+        run.stdout
+    );
+    let path = crashed_log(&run.stdout);
+    assert!(path.ends_with("bad.crashed.log"), "{path}");
+    assert_eq!(fs::read_to_string(path).unwrap(), "panic: boom\n");
+
+    fs::write(&scene, good).unwrap();
     let run = runtime
         .orbe(dir.path(), &[&["open"][..], &session].concat())
         .ok();
     assert!(
-        !run.stdout.contains("previous session crashed"),
+        run.stdout.starts_with("opened scene.jsonc at t=0: "),
         "{}",
         run.stdout
     );
+    assert_eq!(fs::read_to_string(path).unwrap(), "panic: boom\n");
     runtime
         .orbe(dir.path(), &[&["close"][..], &session].concat())
         .ok();
@@ -809,12 +835,12 @@ fn a_session_another_version_started_names_that_version_and_asks_for_close() {
     let run = runtime.orbe(dir.path(), &["get", "@led1", "--session", "up"]);
     assert_eq!(
         run.stderr,
-        "error[io_error]: session `up` runs orbe 9.9.9\n  hint: run `orbe close --session up`\n"
+        "error[version_mismatch]: session `up` runs orbe 9.9.9\n  hint: run `orbe close --session up`\n"
     );
     assert_eq!(runtime.daemons(), running, "no second session starts");
 
     let opened = runtime.orbe(dir.path(), &[&["open"][..], &session].concat());
-    assert_eq!(opened.code, 3, "{}{}", opened.stdout, opened.stderr);
+    assert_eq!(opened.code, 1, "{}{}", opened.stdout, opened.stderr);
     assert!(
         opened.stderr.contains("runs orbe 9.9.9"),
         "{}",

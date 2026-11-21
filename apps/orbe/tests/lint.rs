@@ -204,10 +204,10 @@ fn a_board_net_with_no_scene_wire_is_quiet_and_a_wire_to_it_still_warns() {
     assert!(!run.stdout.contains("net.floating"), "{}", run.stdout);
 }
 
-/// The ground net takes its pin's name, and a scene net that already has that name keeps the
-/// flattened one. AREF stays quiet either way.
+/// The ground net is named `GND` when `nets` leaves that name free. A scene net that already
+/// has `GND` keeps the flattened name. AREF stays quiet either way.
 #[test]
-fn the_ground_net_takes_its_pins_name_unless_a_scene_net_has_it() {
+fn the_ground_net_is_gnd_unless_a_scene_net_has_that_name() {
     let nano = r#""type": "nano-board", "firmware": "build/button.ino.hex""#;
     let plain = project(&format!(
         "{{ \"format\": 1, \"parts\": {{ \"nano\": {{ {nano} }} }} }}\n"
@@ -217,7 +217,6 @@ fn the_ground_net_takes_its_pins_name_unless_a_scene_net_has_it() {
     assert!(run.stdout.contains(", ground GND\n"), "{}", run.stdout);
     let run = orbe(plain.path(), &["lint", "scene.jsonc"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
-    assert!(!run.stdout.contains("ground_unnamed"), "{}", run.stdout);
     assert!(!run.stdout.contains("net.floating"), "{}", run.stdout);
 
     let taken = project(&format!(
@@ -230,6 +229,41 @@ fn the_ground_net_takes_its_pins_name_unless_a_scene_net_has_it() {
         "{}",
         run.stdout
     );
+
+    let named = project(&format!(
+        "{{ \"format\": 1, \"parts\": {{ \"nano\": {{ {nano} }} }}, \"nets\": {{ \"VGND\": \"nano.GND\" }} }}\n"
+    ));
+    let run = orbe(named.path(), &["check", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.stdout.contains(", ground VGND\n"), "{}", run.stdout);
+}
+
+/// A ground pin that is a hole or a lead does not lend the net its leaf name. `bb.a5`, `r1.b`
+/// and `bb.X1` all leave the net `GND` while that name is free.
+#[test]
+fn a_ground_pointed_at_a_hole_or_a_lead_is_named_gnd() {
+    let nano = r#""type": "nano-board", "firmware": "build/button.ino.hex""#;
+    let scenes = [
+        format!(
+            r#"{{ "format": 1, "parts": {{ "bb": {{ "type": "breadboard-400" }}, "nano": {{ {nano} }} }}, "wires": [["nano.GND", "bb.a5"]], "ground": "bb.a5" }}"#
+        ),
+        format!(
+            r#"{{ "format": 1, "parts": {{ "nano": {{ {nano} }}, "r1": {{ "type": "resistor-axial", "resistance": "10k" }} }}, "ground": "r1.b" }}"#
+        ),
+        format!(
+            r#"{{ "format": 1, "parts": {{ "bb": {{ "type": "breadboard-400" }}, "nano": {{ {nano} }} }}, "wires": [["nano.GND", "bb.X1"]], "ground": "bb.X1" }}"#
+        ),
+    ];
+    for scene in scenes {
+        let dir = project(&scene);
+        let run = orbe(dir.path(), &["check", "scene.jsonc"]);
+        assert_eq!(run.code, 0, "{}{}\n{scene}", run.stdout, run.stderr);
+        assert!(
+            run.stdout.contains(", ground GND\n"),
+            "{scene}\n{}",
+            run.stdout
+        );
+    }
 }
 
 /// A part whose `at` puts a leg in a breadboard hole, with no `on`, is drawn as if plugged in.
@@ -281,6 +315,89 @@ fn a_part_drawn_over_a_hole_warns_until_it_is_seated() {
     let run = orbe(loose.path(), &["lint", "scene.jsonc"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(!run.stdout.contains("drawn on"), "{}", run.stdout);
+}
+
+/// A non-zero `rotate` is part of the hint. Without it, seating `a` on `a5` puts `b` in `a9`.
+#[test]
+fn an_unseated_leg_hint_keeps_a_nonzero_rotate() {
+    let nano = r#""type": "nano-board", "firmware": "build/button.ino.hex""#;
+    let resistor = r#""type": "resistor-axial", "resistance": "10k""#;
+    let scene = format!(
+        r#"{{ "format": 1, "parts": {{ "bb": {{ "type": "breadboard-400" }}, "nano": {{ {nano} }}, "r1": {{ {resistor} }} }}, "nets": {{ "GND": "nano.GND" }}, "layout": {{ "bb": {{ "at": [0, 0, 0] }}, "nano": {{ "at": [200, 0, 0] }}, "r1": {{ "at": [-31.75, -13.97, 8.5], "rotate": [0, 0, 180] }} }} }}"#
+    );
+    let dir = project(&scene);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let hint = "hint: seat it with \"on\", as \"r1\": { \"on\": { \"a\": \"bb.a5\" }, \"rotate\": [0, 0, 180] }";
+    assert!(run.stdout.contains(hint), "{}", run.stdout);
+
+    let seated = format!(
+        r#"{{ "format": 1, "parts": {{ "bb": {{ "type": "breadboard-400" }}, "nano": {{ {nano} }}, "r1": {{ {resistor} }} }}, "nets": {{ "GND": "nano.GND" }}, "layout": {{ "bb": {{ "at": [0, 0, 0] }}, "nano": {{ "at": [200, 0, 0] }}, "r1": {{ "on": {{ "a": "bb.a5" }}, "rotate": [0, 0, 180] }} }} }}"#
+    );
+    let dir = project(&seated);
+    let run = orbe(dir.path(), &["nets", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let row = |pin: &str| {
+        run.stdout
+            .lines()
+            .find(|line| line.split_whitespace().any(|word| word == pin))
+            .unwrap_or_else(|| panic!("no net holds {pin}\n{}", run.stdout))
+    };
+    assert!(row("r1.a").contains("bb.a5"), "{}", run.stdout);
+    assert!(row("r1.b").contains("bb.a1"), "{}", run.stdout);
+    assert!(!row("r1.b").contains("bb.a9"), "{}", run.stdout);
+
+    let flat = format!(
+        r#"{{ "format": 1, "parts": {{ "bb": {{ "type": "breadboard-400" }}, "nano": {{ {nano} }}, "r1": {{ {resistor} }} }}, "nets": {{ "GND": "nano.GND" }}, "layout": {{ "bb": {{ "at": [0, 0, 0] }}, "nano": {{ "at": [200, 0, 0] }}, "r1": {{ "at": [-31.75, -13.97, 8.5], "rotate": [0, 0, 0] }} }} }}"#
+    );
+    let dir = project(&flat);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            .contains("hint: seat it with \"on\", as \"r1\": { \"on\": { \"a\": \"bb.a1\" } }"),
+        "{}",
+        run.stdout
+    );
+    assert!(!run.stdout.contains("rotate"), "{}", run.stdout);
+}
+
+/// A leg already on the hole's net is seated. One contact there means the part's leads are
+/// not joining nothing, even when the other leg lines up with another hole.
+#[test]
+fn a_leg_already_on_the_holes_net_is_not_an_unseated_leg() {
+    let nano = r#""type": "nano-board", "firmware": "build/button.ino.hex""#;
+    let resistor = r#""type": "resistor-axial", "resistance": "10k""#;
+    let scene = format!(
+        r#"{{ "format": 1, "parts": {{ "bb": {{ "type": "breadboard-400" }}, "nano": {{ {nano} }}, "r1": {{ {resistor} }} }}, "nets": {{ "GND": "nano.GND" }}, "wires": [["r1.a", "bb.a1", {{ "kind": "contact" }}]], "layout": {{ "bb": {{ "at": [0, 0, 0] }}, "nano": {{ "at": [200, 0, 0] }}, "r1": {{ "at": [-31.75, -13.97, 8.5] }} }} }}"#
+    );
+    let dir = project(&scene);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!run.stdout.contains("leads join nothing"), "{}", run.stdout);
+    assert!(!run.stdout.contains("drawn on"), "{}", run.stdout);
+
+    let elsewhere = format!(
+        r#"{{ "format": 1, "parts": {{ "bb": {{ "type": "breadboard-400" }}, "nano": {{ {nano} }}, "r1": {{ {resistor} }} }}, "nets": {{ "GND": "nano.GND" }}, "wires": [["r1.a", "bb.a30", {{ "kind": "contact" }}]], "layout": {{ "bb": {{ "at": [0, 0, 0] }}, "nano": {{ "at": [200, 0, 0] }}, "r1": {{ "at": [-31.75, -13.97, 8.5] }} }} }}"#
+    );
+    let dir = project(&elsewhere);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.stdout.contains("leads join nothing"), "{}", run.stdout);
+}
+
+/// A part whose legs are further below the holes than the board is thick is not drawn in them.
+#[test]
+fn a_part_below_the_board_is_not_an_unseated_leg() {
+    let nano = r#""type": "nano-board", "firmware": "build/button.ino.hex""#;
+    let scene = format!(
+        r#"{{ "format": 1, "parts": {{ "bb": {{ "type": "breadboard-400" }}, "nano": {{ {nano} }}, "r1": {{ "type": "resistor-axial", "resistance": "10k" }} }}, "nets": {{ "GND": "nano.GND" }}, "layout": {{ "bb": {{ "at": [0, 0, 0] }}, "nano": {{ "at": [200, 0, 0] }}, "r1": {{ "at": [-31.75, -13.97, -30] }} }} }}"#
+    );
+    let dir = project(&scene);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!run.stdout.contains("drawn on"), "{}", run.stdout);
+    assert!(!run.stdout.contains("leads join nothing"), "{}", run.stdout);
 }
 
 /// A hole that only seats an open pin, with nothing else in its strip, does not reach the net.

@@ -41,7 +41,8 @@ macOS arm64.
                Pass a version with it.
 --tarball FILE Install FILE and check FILE.sha256. Do not download.
 
-When DIR is not on PATH, the script says so. It does not edit shell rc files.
+When DIR is not on PATH, the script says so and the next command names the
+binary by its path. It does not edit shell rc files.
 EOF
 }
 
@@ -273,7 +274,11 @@ if [ "$on_path" -eq 0 ]; then
   echo "install.sh: $abs is not on PATH. Add it yourself. This script does not edit your shell rc files."
 fi
 echo "install.sh: next, run these:"
-echo "orbe --version"
+if [ "$on_path" -eq 0 ]; then
+  echo "\"$abs/orbe\" --version"
+else
+  echo "orbe --version"
+fi
 echo "npx skills add orbefab/embedded"
 }
 
