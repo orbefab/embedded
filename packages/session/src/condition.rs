@@ -200,7 +200,7 @@ impl From<Needle> for String {
     }
 }
 
-/// A value in its SI unit, as written: `5mA` is 0.005 A, and `3.2e-7A` is what `get` prints.
+/// A value in its SI unit, as written: `5mA` is 0.005 A, and `3.2e-7A` is 320 nA.
 /// Its wire form is the text as written, read by `parse`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]

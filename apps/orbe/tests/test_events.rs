@@ -192,7 +192,7 @@ fn an_led_change_is_labeled_as_sampled_at_the_slice_end() {
     let run = orbe(dir.path(), &["test", "-v"]);
     assert!(
         run.stdout
-            .contains("\n    by 15ms led1 lit, brightness=0.003757439911374387 A over 15ms\n"),
+            .contains("\n    by 15ms led1 lit, brightness=3.757439911374387 mA over 15ms\n"),
         "{}",
         run.stdout
     );
@@ -321,15 +321,45 @@ fn every_number_a_reply_prints_reads_back_in_a_condition() {
         .stdout
         .lines()
         .find_map(|l| l.strip_prefix("  led1.i "))
-        .and_then(|l| l.strip_suffix(" A"))
         .unwrap_or_else(|| panic!("{}", run.stdout))
         .to_string();
-    assert!(printed.contains('e'), "a small current prints as {printed}");
+    let amount = printed.replace(' ', "");
     let dir = project(&format!(
-        "open\nexpect @led1.i <= {printed}A\nexpect @led1.i >= {printed}A\n"
+        "open\nexpect @led1.i <= {amount}\nexpect @led1.i >= {amount}\n"
     ));
     let run = orbe(dir.path(), &["test"]);
     assert_eq!(run.code, 0, "{}", run.stdout);
+}
+
+#[test]
+fn serial_keeps_a_current_the_sketch_printed() {
+    // One long step lists pin edges first and drops the serial line. Short steps leave room
+    // for the line in the step that receives it.
+    let mut script = String::from("open\n");
+    for _ in 0..30 {
+        script.push_str("step 100us\n");
+    }
+    script.push_str("snapshot\n");
+    let dir = with_firmware("amp", &script);
+    let json = replies_in(&dir);
+    let texts: Vec<&str> = json
+        .iter()
+        .filter_map(|reply| reply["data"]["changes"].as_array())
+        .flatten()
+        .filter(|change| change["kind"] == "serial")
+        .map(|change| change["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(texts.concat(), "I=0.25 A\r\n");
+    assert_eq!(json.last().unwrap()["data"]["serial"], "I=0.25 A");
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}", run.stdout);
+    assert!(run.stdout.contains("serial \"5 \""), "{}", run.stdout);
+    assert!(run.stdout.contains("serial \"A\""), "{}", run.stdout);
+    assert!(
+        run.stdout.contains("\n  serial  \"I=0.25 A\"\n"),
+        "{}",
+        run.stdout
+    );
 }
 
 fn edges(reply: &Value, reference: &str) -> Vec<(u64, String)> {

@@ -420,7 +420,7 @@ fn help_lists_every_command_and_each_command_prints_its_usage() {
         .take_while(|l| !l.is_empty())
         .map(|l| l.split_whitespace().next().unwrap())
         .collect();
-    let mut want = vec!["check", "lint", "add", "part", "search", "blocks"];
+    let mut want = vec!["check", "lint", "nets", "add", "part", "search", "blocks"];
     want.extend(orbe_session::COMMANDS.iter().map(|s| s.name));
     want.extend(["show", "test", "skills", "registry", "help"]);
     assert_eq!(listed, want);
@@ -1279,7 +1279,7 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
         .stdout;
     for warning in [
         "warning[rating.current] #led1.i peaks at ",
-        "A, over its 0.03 A rating",
+        "mA, over its 30 mA rating",
         "warning[rating.power] #led1.p peaks at ",
         "W, over its 0.075 W rating",
     ] {
@@ -1291,7 +1291,7 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     let held = orbe(&["step", "20ms"]).ok().stdout;
     for warning in [
         "warning[rating.current] #nano__mcu.pin.PB5 (nano.D13) carries ",
-        "A RMS over the last 10.2 ms, over its 0.04 A rating",
+        "mA RMS over the last 10.2 ms, over its 40 mA rating",
     ] {
         assert!(held.contains(warning), "{held}");
     }

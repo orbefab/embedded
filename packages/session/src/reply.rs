@@ -221,11 +221,20 @@ pub enum Data {
         pressed: bool,
         landed_ps: u64,
     },
-    /// A world quantity's value from `landed_ps` on, in its unit.
+    /// A world quantity's value from `landed_ps` on, in its unit. `already` is set when that
+    /// value was already scheduled. It is left out of the JSON when false. When the scheduled
+    /// value has not landed yet, `landed_ps` is that time.
     Set {
         quantity: Quantity,
         value: f64,
         landed_ps: u64,
+        #[serde(default, skip_serializing_if = "is_false")]
+        already: bool,
+    },
+    /// A world quantity as it stands at the session's time.
+    World {
+        quantity: Quantity,
+        value: f64,
     },
     Got(Got),
     Stepped(Stepped),
@@ -285,7 +294,7 @@ impl Diagnostic {
 
     pub(crate) fn text(&self) -> String {
         let severity = self.json["severity"].as_str().unwrap_or("warning");
-        let message = self.json["message"].as_str().unwrap_or_default();
+        let message = shown_message(&self.code, &self.json);
         format!("{severity}[{}] {message}", self.code)
             .trim_end()
             .to_string()
@@ -544,6 +553,163 @@ pub(crate) fn number(value: f64) -> String {
     format!("{value:?}")
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// A current in A, mA, µA or nA. The digits are the shortest decimal in that unit that
+/// parses back to the same amperes. Under 1 nA stays in A, in scientific form. Zero is `0 A`.
+pub(crate) fn current(amperes: f64) -> String {
+    if !amperes.is_finite() {
+        return format!("{amperes} A");
+    }
+    if amperes == 0.0 {
+        return "0 A".to_string();
+    }
+    let sign = if amperes.is_sign_negative() { "-" } else { "" };
+    let abs = amperes.abs();
+    if abs < 1e-9 {
+        return format!("{sign}{abs:?} A");
+    }
+    let (prefix, unit) = if abs >= 1.0 {
+        (1.0, "A")
+    } else if abs >= 1e-3 {
+        (1e-3, "mA")
+    } else if abs >= 1e-6 {
+        (1e-6, "µA")
+    } else {
+        (1e-9, "nA")
+    };
+    format!("{sign}{} {unit}", shortest_scaled(abs, prefix))
+}
+
+fn quantity_text(unit: Unit, value: f64) -> String {
+    match unit {
+        Unit::Ampere => current(value),
+        _ => format!("{} {}", number(value), unit.as_str()),
+    }
+}
+
+/// The shortest decimal of `abs / prefix` whose parse, times `prefix`, is `abs`.
+fn shortest_scaled(abs: f64, prefix: f64) -> String {
+    let mut best: Option<String> = None;
+    let mut consider = |text: &str| {
+        let trimmed = trim_number(text);
+        let candidate = if scales_back(&trimmed, abs, prefix) {
+            trimmed
+        } else if scales_back(text, abs, prefix) {
+            text.to_string()
+        } else {
+            return;
+        };
+        if best.as_ref().is_none_or(|cur| shorter(&candidate, cur)) {
+            best = Some(candidate);
+        }
+    };
+    let quot = abs / prefix;
+    if quot.is_finite() && quot > 0.0 {
+        for prec in 0..=17 {
+            consider(&format!("{quot:.prec$}"));
+            consider(&format!("{quot:.prec$e}"));
+        }
+        consider(&format!("{quot:?}"));
+        let bits = quot.to_bits();
+        for delta in 1..=4096u64 {
+            for step in [delta, 0u64.wrapping_sub(delta)] {
+                let near = f64::from_bits(bits.wrapping_add(step));
+                if near.is_finite() && near > 0.0 && near * prefix == abs {
+                    consider(&format!("{near:?}"));
+                }
+            }
+        }
+    }
+    best.unwrap_or_else(|| format!("{quot:?}"))
+}
+
+fn scales_back(text: &str, abs: f64, prefix: f64) -> bool {
+    text.parse::<f64>()
+        .ok()
+        .is_some_and(|parsed| parsed.is_finite() && parsed > 0.0 && parsed * prefix == abs)
+}
+
+fn trim_number(text: &str) -> String {
+    let (body, exp) = match text.find(['e', 'E']) {
+        Some(at) => (&text[..at], Some(&text[at..])),
+        None => (text, None),
+    };
+    let body = match body.split_once('.') {
+        Some((whole, frac)) => {
+            let frac = frac.trim_end_matches('0');
+            if frac.is_empty() {
+                whole.to_string()
+            } else {
+                format!("{whole}.{frac}")
+            }
+        }
+        None => body.to_string(),
+    };
+    match exp {
+        Some(exp) => format!("{body}{exp}"),
+        None => body,
+    }
+}
+
+/// Fewer characters, then a plain decimal ahead of scientific form.
+fn shorter(new: &str, old: &str) -> bool {
+    (new.len(), new.contains(['e', 'E']), new) < (old.len(), old.contains(['e', 'E']), old)
+}
+
+/// A rating message with its currents in [`current`] and a lasted `for … ps` in a duration.
+fn shown_message(code: &str, json: &Value) -> String {
+    let message = json["message"].as_str().unwrap_or_default();
+    if code == "rating.current"
+        && let Some(text) = rating_current(message, json)
+    {
+        return text;
+    }
+    if matches!(code, "rating.power" | "rating.voltage") {
+        return with_over(message, json);
+    }
+    message.to_string()
+}
+
+fn with_over(message: &str, json: &Value) -> String {
+    let Some(over) = json["data"]["over_ps"].as_u64().filter(|over| *over > 0) else {
+        return message.to_string();
+    };
+    let suffix = format!(" for {over} ps");
+    match message.strip_suffix(&suffix) {
+        Some(head) => format!("{head} for {}", Duration::from_ps(over)),
+        None => message.to_string(),
+    }
+}
+
+fn rating_current(message: &str, json: &Value) -> Option<String> {
+    let peak = json["data"]["peak"].as_f64()?;
+    let limit = json["data"]["limit"].as_f64()?;
+    let duration = json["data"]["over_ps"]
+        .as_u64()
+        .filter(|over| *over > 0)
+        .map(|over| format!(" for {}", Duration::from_ps(over)))
+        .unwrap_or_default();
+    if let Some(window) = json["data"]["window_ps"].as_u64() {
+        let head = message.split(" carries ").next()?;
+        let ms = window as f64 / 1e9;
+        Some(format!(
+            "{head} carries {} RMS over the last {ms} ms, over its {} rating{duration}",
+            current(peak),
+            current(limit),
+        ))
+    } else {
+        let head = message.split(" peaks at ").next()?;
+        Some(format!(
+            "{head} peaks at {}, over its {} rating{duration}",
+            current(peak),
+            current(limit),
+        ))
+    }
+}
+
 impl Reading {
     fn json(&self) -> Value {
         match self {
@@ -615,7 +781,7 @@ impl Reading {
         }
     }
 
-    /// `high 4.62 V`, `0.0122 A`, `lit i=0.0122 A v=1.93 V brightness=0.0122 A over 20ms`,
+    /// `high 4.62 V`, `11.292504388060703 mA`, `lit i=11.292504388060703 mA v=1.93 V brightness=2.2562070877605347 mA over 20ms`,
     /// `rgb(255,0,0) latched at 12.5ms`, `color=rgb(255,0,0) latched at 12.5ms`.
     pub fn text(&self) -> String {
         match self {
@@ -624,9 +790,9 @@ impl Reading {
                 v,
             } => format!("{} {} V", level.as_str(), number(*v)),
             Reading::Pin { level: None, v } => format!("{} V", number(*v)),
-            Reading::Quantity { unit, value } => format!("{} {}", number(*value), unit.as_str()),
+            Reading::Quantity { unit, value } => quantity_text(*unit, *value),
             Reading::Brightness { value, over_ps } => {
-                format!("{} A over {}", number(*value), t(*over_ps))
+                format!("{} over {}", current(*value), t(*over_ps))
             }
             Reading::Color(colors) => colors.text(),
             Reading::Part {
@@ -642,12 +808,12 @@ impl Reading {
                 words.extend(
                     quantities
                         .iter()
-                        .map(|(n, u, v)| format!("{n}={} {}", number(*v), u.as_str())),
+                        .map(|(n, u, v)| format!("{n}={}", quantity_text(*u, *v))),
                 );
                 if let Some((value, over_ps)) = brightness {
                     words.push(format!(
-                        "brightness={} A over {}",
-                        number(*value),
+                        "brightness={} over {}",
+                        current(*value),
                         t(*over_ps)
                     ));
                 }
@@ -721,10 +887,10 @@ impl Change {
                 brightness,
                 over_ps,
             } => format!(
-                "by {} {part} {}, brightness={} A over {}",
+                "by {} {part} {}, brightness={} over {}",
                 t(*by_ps),
                 state.as_str(),
-                number(*brightness),
+                current(*brightness),
                 t(*over_ps)
             ),
             Change::Serial {
@@ -776,11 +942,23 @@ impl Data {
                 quantity,
                 value,
                 landed_ps,
-            } => json!({
+                already,
+            } => {
+                let mut body = json!({
+                    "quantity": quantity.name(),
+                    "value": value,
+                    "unit": quantity.unit(),
+                    "landed_ps": landed_ps,
+                });
+                if *already {
+                    body["already"] = json!(true);
+                }
+                body
+            }
+            Data::World { quantity, value } => json!({
                 "quantity": quantity.name(),
                 "value": value,
                 "unit": quantity.unit(),
-                "landed_ps": landed_ps,
             }),
             Data::Got(got) => json!({
                 "ref": format!("@{}", got.target),
@@ -875,14 +1053,35 @@ impl Data {
                 quantity,
                 value,
                 landed_ps,
+                already,
             } => {
-                let at = t(*landed_ps);
-                let _ = write!(
-                    out,
-                    "set {} to {value} {} at t={at}; reads show it after t={at}",
-                    quantity.name(),
-                    quantity.unit()
-                );
+                if *already && *landed_ps > 0 && *landed_ps >= t_ps {
+                    let _ = write!(
+                        out,
+                        "{} is already set to {value} {} from t={}",
+                        quantity.name(),
+                        quantity.unit(),
+                        t(*landed_ps)
+                    );
+                } else if *already {
+                    let _ = write!(
+                        out,
+                        "{} is already {value} {}",
+                        quantity.name(),
+                        quantity.unit()
+                    );
+                } else {
+                    let at = t(*landed_ps);
+                    let _ = write!(
+                        out,
+                        "set {} to {value} {} at t={at}; reads show it after t={at}",
+                        quantity.name(),
+                        quantity.unit()
+                    );
+                }
+            }
+            Data::World { quantity, value } => {
+                let _ = write!(out, "{} {value} {}", quantity.name(), quantity.unit());
             }
             Data::Got(got) => {
                 let _ = write!(out, "{} {}", got.target, got.value.text());
@@ -919,10 +1118,10 @@ impl Data {
                 for led in &stepped.leds {
                     let _ = write!(
                         out,
-                        "\n  brightness {} {} {} A over {}",
+                        "\n  brightness {} {} {} over {}",
                         led.part,
                         led.state.as_str(),
-                        number(led.brightness),
+                        current(led.brightness),
                         t(led.over_ps)
                     );
                 }
@@ -1067,5 +1266,37 @@ impl Reply {
             let _ = write!(out, "\n  hint: {}", error.hint);
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::current;
+    use crate::condition::{Amount, Unit};
+
+    #[test]
+    fn a_printed_current_parses_back_to_the_same_amperes() {
+        for amperes in [
+            0.0,
+            1.8,
+            0.5,
+            0.04,
+            0.03,
+            0.011292504388060703,
+            0.004627811350286439,
+            0.0030136985454632045,
+            0.0016915818683638896,
+            0.0022562070877605346,
+            1.2775403302175985e-13,
+            1.2775403302174304e-13,
+            -0.00047583015647667537,
+            0.06978612345678901,
+        ] {
+            let text = current(amperes);
+            let parsed = Amount::parse(&text.replace(' ', ""))
+                .unwrap_or_else(|error| panic!("{text}: {error}"));
+            assert_eq!(parsed.unit, Unit::Ampere, "{text}");
+            assert_eq!(parsed.value, amperes, "{text}");
+        }
     }
 }

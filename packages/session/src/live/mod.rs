@@ -153,6 +153,7 @@ impl Live {
             (Command::Release(r), Some(open)) => open.contact(r, false),
             (Command::Set(set), Some(open)) => open.set(set),
             (Command::Get(r), Some(open)) => open.get(r).map(Data::Got).map_err(fail),
+            (Command::GetWorld(quantity), Some(open)) => open.get_world(*quantity),
             (Command::Step(step), Some(open)) => open.step(step, during),
             (Command::Play, Some(open)) => open.play(),
             (Command::Pause, Some(open)) => {
@@ -653,20 +654,43 @@ impl Open {
             at: self.engine.now(),
             value: Finite::new(set.value).expect("the command's value is finite"),
         };
-        let applied = self
-            .engine
-            .set(&change)
-            .map_err(|e| fail(rejected(e, set.quantity.name())))?;
+        let applied = match self.engine.set(&change) {
+            Err(Rejected::NoChange) => {
+                let landed_ps = self
+                    .engine
+                    .world()
+                    .schedule(set.quantity)
+                    .and_then(|schedule| schedule.events().last())
+                    .map(|event| event.at.as_ps())
+                    .unwrap_or(0);
+                return Ok(Data::Set {
+                    quantity: set.quantity,
+                    value: set.value,
+                    landed_ps,
+                    already: true,
+                });
+            }
+            Err(error) => return Err(fail(rejected(error, set.quantity.name()))),
+            Ok(applied) => applied,
+        };
         self.world_sets.insert(set.quantity, applied.at);
         let data = Data::Set {
             quantity: set.quantity,
             value: set.value,
             landed_ps: applied.at.as_ps(),
+            already: false,
         };
         match applied.status {
             Status::Faulted => Err(failed(self.faulted(), data)),
             _ => Ok(data),
         }
+    }
+
+    fn get_world(&self, quantity: orbe_engine::world::Quantity) -> Outcome {
+        let Some(value) = self.engine.world().before(quantity, self.engine.now()) else {
+            return Err(fail(rejected(Rejected::Undeclared, quantity.name())));
+        };
+        Ok(Data::World { quantity, value })
     }
 
     fn faulted(&self) -> Error {
@@ -1039,7 +1063,7 @@ mod tests {
 t=50ms (from 50ms), @led1 off at 50ms
   brightness led1 off 1.2775403302174304e-13 A over 20ms
   brightness nano.led_l off 1.2775344350286488e-13 A over 20ms
-  brightness nano.led_pwr lit 0.0030136985454632015 A over 20ms"
+  brightness nano.led_pwr lit 3.0136985454632015 mA over 20ms"
         );
 
         let unmet = step(&mut live, "--until @led1 lit");
