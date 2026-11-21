@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { cameraPosition, frameView } from "./camera-frame";
+import { cameraPosition, frameView, union } from "./camera-frame";
 import type { Box } from "./wire-geometry";
 
 const VIEW = { width: 800, height: 600 };
@@ -14,6 +14,10 @@ function tilted(part: Box) {
   return view;
 }
 
+test("an empty scene unions to a point at the origin", () => {
+  expect(union([])).toEqual({ min: [0, 0, 0], max: [0, 0, 0] });
+});
+
 test("the tilted camera sits front-left of the part and a little below overhead", () => {
   const view = tilted(box(0, 0, 0, 20, 8, 10));
   const position = cameraPosition(view);
@@ -23,7 +27,7 @@ test("the tilted camera sits front-left of the part and a little below overhead"
   expect(rise).toBeCloseTo(Math.cos((40 * Math.PI) / 180), 5);
 });
 
-test("the top view frames a part under 16 mm as 16 mm", () => {
+test("the top view frames a scene under 16 mm across as 16 mm", () => {
   const tiny = frameView("top", [box(0, 0, 0, 1, 1, 1)], VIEW);
   const wide = frameView("top", [box(-7.5, 0, -7.5, 8.5, 1, 8.5)], VIEW);
   if (tiny.mode !== "top" || wide.mode !== "top") throw new Error("expected the top view");

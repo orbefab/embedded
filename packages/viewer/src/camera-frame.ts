@@ -13,7 +13,8 @@ const CAMERA_TILT_DEG = 40;
 const CAMERA_AZIMUTH_DEG = -35;
 const CAMERA_DISTANCE_MM = 110;
 const FRAME_INSET_PX = 56;
-// The top view frames at least this much, so a small part stays readable without filling the view.
+// Top-view zoom treats the whole scene's span as at least this wide, so a small scene stays
+// readable without filling the view. The span is every drawn box together, not one part.
 const MIN_FRAME_MM = 16;
 
 const TILT = (CAMERA_TILT_DEG * Math.PI) / 180;
@@ -87,8 +88,10 @@ export function cameraPosition(view: CameraView): Vec3 {
   ];
 }
 
-/** The box around every box. */
+/** The box around every box. An empty scene is a point at the origin, so a floor or a light
+ * placed from it is not NaN. */
 export function union(boxes: readonly Box[]): Box {
+  if (boxes.length === 0) return { min: [0, 0, 0], max: [0, 0, 0] };
   const along = (axis: 0 | 1 | 2) => boxes.flatMap((box) => [box.min[axis], box.max[axis]]);
   const [xs, ys, zs] = [along(0), along(1), along(2)];
   return {
