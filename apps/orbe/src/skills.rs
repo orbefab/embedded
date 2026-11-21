@@ -479,6 +479,7 @@ mod tests {
             Live::NoChange,
             Live::Cancelled,
             Live::SessionCrashed,
+            Live::VersionMismatch,
         ];
         let scene = [
             Scene::Syntax,
