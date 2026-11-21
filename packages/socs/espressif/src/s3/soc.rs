@@ -9,6 +9,7 @@
 //! never sees time go back when one core's access comes a cycle after its step's start.
 
 use std::collections::BTreeMap;
+use std::iter;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -45,6 +46,9 @@ pub(crate) const SRAM: usize = 512 * 1024;
 pub(crate) const RTC_FAST: Range<u32> = 0x600f_e000..0x6010_0000;
 /// RTC slow memory, on the data bus.
 pub(crate) const RTC_SLOW: Range<u32> = 0x5000_0000..0x5000_2000;
+
+/// The netted GPIOs fit one mask.
+const _: () = assert!(PADS <= 64);
 
 const PERIPHERALS: Range<u32> = 0x6000_0000..0x600d_1000;
 pub(crate) const GPIO: u32 = 0x6000_4000;
@@ -120,6 +124,8 @@ pub(crate) struct Soc {
     calibration: [Calibration; 2],
     /// The GPIOs with nets, whose drives the image holds.
     netted: Vec<u8>,
+    /// Bit `n` set for each GPIO `n` in `netted`, each below [`PADS`].
+    netted_mask: u64,
     pub(crate) unmodeled: BTreeMap<u32, Touch>,
     /// Each write that changed a register the model keeps without running its effect, with
     /// that register, in the order the writes landed.
@@ -353,6 +359,7 @@ impl Soc {
             matrix: Matrix::default(),
             calibration: Default::default(),
             netted: netted.to_vec(),
+            netted_mask: netted.iter().fold(0, |mask, &gpio| mask | 1 << gpio),
             unmodeled: BTreeMap::new(),
             changes: Vec::new(),
             pending: None,
@@ -450,16 +457,20 @@ impl Soc {
     /// that channel and whether `OUT_INV_SEL` inverts it.
     fn ledc_pads(&self) -> Vec<(u8, u8, bool)> {
         let channels = ledc::SIGNAL..ledc::SIGNAL + ledc::CHANNELS as u16;
-        (0..PADS as u8)
-            .filter(|&pad| self.netted(pad))
-            .filter_map(|pad| {
-                let (signal, inverted) = self.gpio.carries(usize::from(pad))?;
-                let channel = channels
-                    .contains(&signal)
-                    .then(|| (signal - ledc::SIGNAL) as u8)?;
-                Some((pad, channel, inverted))
-            })
-            .collect()
+        let mut left = self.netted_mask;
+        iter::from_fn(move || {
+            let pad = (left != 0).then(|| left.trailing_zeros() as u8)?;
+            left &= left - 1;
+            Some(pad)
+        })
+        .filter_map(|pad| {
+            let (signal, inverted) = self.gpio.carries(usize::from(pad))?;
+            let channel = channels
+                .contains(&signal)
+                .then(|| (signal - ledc::SIGNAL) as u8)?;
+            Some((pad, channel, inverted))
+        })
+        .collect()
     }
 
     /// Puts `set` in the eFuse controller's read registers, where IDF reads its calibration.
@@ -1311,7 +1322,7 @@ impl Soc {
 
     /// Whether pad `gpio` has a net.
     pub(crate) fn netted(&self, gpio: u8) -> bool {
-        self.netted.contains(&gpio)
+        usize::from(gpio) < PADS && self.netted_mask >> gpio & 1 != 0
     }
 
     /// Puts GPIO and IO_MUX back to power-on, as a reset does.
