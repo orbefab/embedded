@@ -41,7 +41,7 @@ pub use circuit::{
 pub use diagnostic::{Code, Diagnostic, Lint};
 pub use files::Files;
 pub use holes::{holes_text, strip_text};
-pub use model::{FORMATS, STOP_PS, is_id};
+pub use model::{PART_FORMATS, SCENE_FORMATS, STOP_PS, is_id};
 pub use project::{BLOCK, REGISTRY, folder_hash, is_registry_name, part_file, shell_join};
 pub use published::is_published;
 pub use summary::{

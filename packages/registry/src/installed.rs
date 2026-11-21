@@ -141,7 +141,7 @@ fn block_project(project: &BTreeMap<PathBuf, Vec<u8>>, folder: &Folder) -> Files
 }
 
 fn current_format() -> u32 {
-    orbe_scene::FORMATS.iter().copied().max().unwrap_or(1)
+    orbe_scene::SCENE_FORMATS.iter().copied().max().unwrap_or(1)
 }
 
 enum Item<'a> {

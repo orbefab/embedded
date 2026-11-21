@@ -1,0 +1,8 @@
+// A resistor that maps its engine pin `a` and leaves `b` to a part pin of that name, which
+// this part lacks. Every resistor pin is required, so `b` is refused.
+{
+  "format": 1,
+  "pins": { "x": [1], "y": [2] },
+  "params": { "resistance": { "unit": "ohm", "required": true, "sets": "/resistance" } },
+  "model": { "kind": "resistor", "pins": { "a": "x" } },
+}

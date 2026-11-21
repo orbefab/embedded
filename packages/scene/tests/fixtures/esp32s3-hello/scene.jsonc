@@ -1,0 +1,17 @@
+// ESP-IDF's hello_world on an ESP32-S3, booted from its flash, with nothing but its supply.
+{
+  "format": 1,
+  "parts": {
+    "v1": { "type": "./supply/part.jsonc", "voltage": "3.3" },
+    "u1": {
+      "type": "./chip/part.jsonc",
+      "partition_table": "firmware/partition-table.bin",
+      "app": "firmware/hello_world.bin",
+    },
+  },
+  "wires": [
+    ["v1.pos", "u1.VCC"],
+    ["v1.neg", "u1.GND"],
+  ],
+  "ground": "v1.neg",
+}

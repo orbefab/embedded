@@ -2,7 +2,9 @@
 //! must give exactly the findings its `expect` file lists, one `<code> <file>:<line>:<col>`
 //! per line. ` | <message>` and a further ` | <hint>` are substrings the finding must contain.
 //! Every finding has a hint. An `edit` file changes one project file: its path, the text, and
-//! the new text. `orbe check` prints the same findings and exits 1, in the CLI's own tests.
+//! the new text. A `base` file names another fixture to lay the case over, and a `blobs` file
+//! copies blobs no fixture commits, as `common::overlaid` says. `orbe check` prints the same
+//! findings and exits 1, in the CLI's own tests.
 
 mod common;
 

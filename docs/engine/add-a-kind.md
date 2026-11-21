@@ -1,6 +1,6 @@
 # Add an analog kind
 
-An analog kind is a part the engine solves as conductances, sources and junctions, such as `resistor`, `zener` or `nmos`. A new one is one new file, one `mod` line and one row in `packages/engine/src/netlist/catalog.rs`. The row generates the `Model` variant, the wire variant that reads the part's JSON, the call to the kind's resolve function, and the kind's entry in `engine_kinds`, the list of names and pins that `orbe check` reads. Two kind PRs touch the same file only at their rows.
+An analog kind is a part the engine solves as conductances, sources and junctions, such as `resistor`, `zener` or `nmos`. A new one is one new file, one `mod` line and one row in `packages/engine/src/netlist/catalog.rs`. The row generates the `Model` variant, the wire variant that reads the part's JSON, the call to the kind's resolve function, and the kind's entry in `engine_kinds`, the list of names, pins and required-pin counts that `orbe check` reads. Two kind PRs touch the same file only at their rows.
 
 Copy the existing kind closest to yours. `packages/engine/src/passive/resistor.rs` is the smallest.
 

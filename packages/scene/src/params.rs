@@ -3,11 +3,12 @@
 
 use std::path::PathBuf;
 
+use orbe_engine::blob::Blobs;
 use serde_json::{Map, Value, json};
 
 use crate::diagnostic::Code;
 use crate::files::Files;
-use crate::model::{ParamDecl, ParamKind, Range};
+use crate::model::{FileAs, ParamDecl, ParamKind, Range};
 use crate::name::did_you_mean;
 use crate::syntax::Node;
 use crate::units::{self, Unit};
@@ -30,8 +31,9 @@ fn fail(message: impl Into<String>, hint: impl Into<String>) -> (Code, String, S
     (Code::Param, message.into(), hint.into())
 }
 
-/// The pointers a param's value sets in the model, and what goes at each.
-pub(crate) fn convert(files: &Files, decl: &ParamDecl, arg: &Arg) -> Converted {
+/// The pointers a param's value sets in the model, and what goes at each. A blob param's bytes
+/// go into `blobs`, under their SHA-256.
+pub(crate) fn convert(files: &Files, decl: &ParamDecl, arg: &Arg, blobs: &mut Blobs) -> Converted {
     let node = &arg.node;
     let pointer = decl.sets.clone().unwrap_or_default();
     match &decl.kind {
@@ -73,7 +75,7 @@ pub(crate) fn convert(files: &Files, decl: &ParamDecl, arg: &Arg) -> Converted {
                 }
             }
         }
-        ParamKind::File => {
+        ParamKind::File(file_as) => {
             let Some(rel) = node.str() else {
                 return Err(fail(
                     format!("a file param takes a path, found {}", node.what()),
@@ -81,6 +83,14 @@ pub(crate) fn convert(files: &Files, decl: &ParamDecl, arg: &Arg) -> Converted {
                 ));
             };
             match files.read(&arg.dir.join(rel)) {
+                Ok(bytes) if *file_as == FileAs::Blob => {
+                    let length = bytes.len();
+                    let sha256 = blobs.add(bytes.into());
+                    Ok(vec![(
+                        pointer,
+                        json!({ "sha256": sha256.to_string(), "bytes": length }),
+                    )])
+                }
                 Ok(bytes) => match String::from_utf8(bytes) {
                     Ok(text) => Ok(vec![(pointer, Value::String(text))]),
                     Err(_) => Err(fail(
