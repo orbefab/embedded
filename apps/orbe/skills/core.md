@@ -82,7 +82,7 @@ wrote parts/nano-board 0.1.1
 ...
 wrote parts.lock
 $ orbe check scene.jsonc
-scene.jsonc: ok, 19 engine parts, 32 nets, ground nano__GND
+scene.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND
 $ orbe lint scene.jsonc
 scene.jsonc:1:1: warning[scene.ground_unnamed]: the ground net is `nano__GND`, a name taken from a pin, because "nets" does not name it
   hint: add "GND": "nano.GND" to the scene's "nets", so refs and messages say GND
@@ -90,7 +90,7 @@ scene.jsonc:4:5: warning[scene.unplaced]: `nano`, `btn1`, `r2`, `r1` and `led1` 
   hint: place a part whose place matters in the scene's "layout", as "nano": { "at": [x, y, z] } in mm
 2 warnings in scene.jsonc
 $ orbe open
-opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (19 engine parts, 32 nets)
+opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 19 engine parts, 32 nets)
 $ orbe step 100ms
 t=100ms (from 0s)
   brightness led1 off 1.2775403302174304e-13 A over 20ms
@@ -227,7 +227,7 @@ It is the same circuit as `scene.jsonc`, so it runs the same. Read a hole as a p
 $ orbe add breadboard-400
 ...
 $ orbe check breadboard.jsonc
-breadboard.jsonc: ok, 19 engine parts, 32 nets, ground nano__GND
+breadboard.jsonc: ok, 6 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND
 ```
 
 `orbe lint` warns `scene.shorted` when two pins of one part sit in one strip, such as a resistor turned along a column, and its hint is found the same way. A wire may still end on a pin off the board, such as an Uno's header pin.

@@ -255,7 +255,7 @@ test.describe("landing", () => {
   });
 
   test("each step says the CLI is coming", async () => {
-    expect(await page.locator('[data-testid="cli-coming"]').count()).toBe(4);
+    expect(await page.locator('[data-testid="cli-coming"]').count()).toBe(5);
     await shot(page, "site-landing");
   });
 
