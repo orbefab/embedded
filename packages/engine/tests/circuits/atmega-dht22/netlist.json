@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": {
     "transient": {
@@ -49,26 +49,12 @@
         "p": "nano__5V"
       },
       "voltage": {
-        "source": {
-          "datasheet": {
-            "at": "VBUS nominal 5.0 V, the center of the high-power range 4.75 V to 5.25 V",
-            "basis": "nominal",
-            "doc": "USB 2.0 specification"
-          }
-        },
         "unit": "V",
         "value": 5
       }
     },
     {
       "clock_hz": {
-        "source": {
-          "datasheet": {
-            "at": "f_cpu 16000000, the resonator CSTCE16M0V53-R0 frequency the runtime programs",
-            "basis": "nominal",
-            "doc": "avr-1.8.6 boards.txt"
-          }
-        },
         "unit": "Hz",
         "value": 16000000
       },
@@ -80,81 +66,34 @@
       },
       "input_threshold": {
         "high": {
-          "source": {
-            "datasheet": {
-              "at": "Figure 31-356",
-              "basis": "typical",
-              "doc": "DS40002061B"
-            }
-          },
           "unit": "1",
           "value": 0.52
         },
         "low": {
-          "source": {
-            "datasheet": {
-              "at": "Figure 31-357",
-              "basis": "typical",
-              "doc": "DS40002061B"
-            }
-          },
           "unit": "1",
           "value": 0.42
         }
       },
       "kind": "atmega328p",
       "leakage_resistance": {
-        "source": {
-          "closed_form": {
-            "note": "DS40002061B Table 30-1: IIL and IIH at most 1 uA at VCC = 5.5 V, so 5.5 V / 1 uA"
-          }
-        },
         "unit": "ohm",
         "value": 5500000
       },
       "name": "nano__mcu",
       "output": {
         "high_drop": {
-          "source": {
-            "datasheet": {
-              "at": "Figure 31-355",
-              "basis": "typical",
-              "doc": "DS40002061B"
-            }
-          },
           "unit": "V",
           "value": 0
         },
         "high_resistance": {
-          "source": {
-            "datasheet": {
-              "at": "Figure 31-355",
-              "basis": "typical",
-              "doc": "DS40002061B"
-            }
-          },
           "unit": "ohm",
           "value": 25
         },
         "low_drop": {
-          "source": {
-            "datasheet": {
-              "at": "Figure 31-353",
-              "basis": "typical",
-              "doc": "DS40002061B"
-            }
-          },
           "unit": "V",
           "value": 0
         },
         "low_resistance": {
-          "source": {
-            "datasheet": {
-              "at": "Figure 31-353",
-              "basis": "typical",
-              "doc": "DS40002061B"
-            }
-          },
           "unit": "ohm",
           "value": 25
         }
@@ -190,47 +129,19 @@
         "VCC": "nano__5V"
       },
       "pull_up_resistance": {
-        "source": {
-          "datasheet": {
-            "at": "Figure 31-348",
-            "basis": "typical",
-            "doc": "DS40002061B"
-          }
-        },
         "unit": "ohm",
         "value": 35714
       },
       "reset_pull_up_resistance": {
-        "source": {
-          "datasheet": {
-            "at": "Figure 31-351",
-            "basis": "typical",
-            "doc": "DS40002061B"
-          }
-        },
         "unit": "ohm",
         "value": 46296
       },
       "reset_threshold": {
         "high": {
-          "source": {
-            "datasheet": {
-              "at": "Figure 31-359",
-              "basis": "typical",
-              "doc": "DS40002061B"
-            }
-          },
           "unit": "1",
           "value": 0.44
         },
         "low": {
-          "source": {
-            "datasheet": {
-              "at": "Figure 31-360",
-              "basis": "typical",
-              "doc": "DS40002061B"
-            }
-          },
           "unit": "1",
           "value": 0.42
         }
@@ -247,20 +158,10 @@
         "events": [],
         "kind": "serial",
         "mark": {
-          "source": {
-            "closed_form": {
-              "note": "The chip runs from the 5 V rail, so a mark is that rail and a space is ground. Its sheet is not cited."
-            }
-          },
           "unit": "V",
           "value": 5
         },
         "space": {
-          "source": {
-            "closed_form": {
-              "note": "The chip runs from the 5 V rail, so a mark is that rail and a space is ground. Its sheet is not cited."
-            }
-          },
           "unit": "V",
           "value": 0
         }
@@ -276,11 +177,6 @@
       "voltage": {
         "events": [],
         "initial": {
-          "source": {
-            "closed_form": {
-              "note": "DTR idles high on the 5 V rail. Its sheet is not cited."
-            }
-          },
           "unit": "V",
           "value": 5
         },
@@ -294,20 +190,10 @@
       "kind": "switch",
       "name": "nano__sw_reset",
       "off_resistance": {
-        "source": {
-          "closed_form": {
-            "note": "A guess. The schematic names TS42031-160R-TR-7260. No sheet for that part number was found. The open model is 1e8 ohm, a 100 megohm insulation."
-          }
-        },
         "unit": "ohm",
         "value": 100000000
       },
       "on_resistance": {
-        "source": {
-          "closed_form": {
-            "note": "A guess. The schematic names TS42031-160R-TR-7260. No sheet for that part number was found. The closed model is 0.1 ohm, a 100 milliohm contact."
-          }
-        },
         "unit": "ohm",
         "value": 0.1
       },
@@ -318,22 +204,10 @@
     },
     {
       "capacitance": {
-        "source": {
-          "datasheet": {
-            "at": "Built-in Load Capacitance, 15 pF",
-            "basis": "nominal",
-            "doc": "Murata CSTCE16M0V53-R0"
-          }
-        },
         "unit": "F",
         "value": 1.5e-11
       },
       "initial": {
-        "source": {
-          "closed_form": {
-            "note": "held at 0 V, so the operating point has a DC path on this net"
-          }
-        },
         "unit": "V",
         "value": 0
       },
@@ -346,22 +220,10 @@
     },
     {
       "capacitance": {
-        "source": {
-          "datasheet": {
-            "at": "Built-in Load Capacitance, 15 pF",
-            "basis": "nominal",
-            "doc": "Murata CSTCE16M0V53-R0"
-          }
-        },
         "unit": "F",
         "value": 1.5e-11
       },
       "initial": {
-        "source": {
-          "closed_form": {
-            "note": "held at 0 V, so the operating point has a DC path on this net"
-          }
-        },
         "unit": "V",
         "value": 0
       },
@@ -383,13 +245,6 @@
         "power": null
       },
       "resistance": {
-        "source": {
-          "datasheet": {
-            "at": "RN2A, 1K",
-            "basis": "nominal",
-            "doc": "development board schematic, revision 3"
-          }
-        },
         "unit": "ohm",
         "value": 1000
       }
@@ -405,26 +260,12 @@
         "power": null
       },
       "resistance": {
-        "source": {
-          "datasheet": {
-            "at": "RN4D, 1K",
-            "basis": "nominal",
-            "doc": "development board schematic, revision 3"
-          }
-        },
         "unit": "ohm",
         "value": 1000
       }
     },
     {
       "emission_coefficient": {
-        "source": {
-          "datasheet": {
-            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K. Stands in for a yellow LED, which has no fit of its own.",
-            "basis": "typical",
-            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A"
-          }
-        },
         "unit": "1",
         "value": 4.427
       },
@@ -436,60 +277,25 @@
       },
       "ratings": {
         "current": {
-          "source": {
-            "datasheet": {
-              "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current",
-              "basis": "absolute_max",
-              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A"
-            }
-          },
           "unit": "A",
           "value": 0.03
         },
         "power": {
-          "source": {
-            "datasheet": {
-              "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation",
-              "basis": "absolute_max",
-              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A"
-            }
-          },
           "unit": "W",
           "value": 0.075
         }
       },
       "saturation_current": {
-        "source": {
-          "datasheet": {
-            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K. Stands in for a yellow LED, which has no fit of its own.",
-            "basis": "typical",
-            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A"
-          }
-        },
         "unit": "A",
         "value": 6.711e-10
       },
       "series_resistance": {
-        "source": {
-          "datasheet": {
-            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K. Stands in for a yellow LED, which has no fit of its own.",
-            "basis": "typical",
-            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A"
-          }
-        },
         "unit": "ohm",
         "value": 2.115
       }
     },
     {
       "emission_coefficient": {
-        "source": {
-          "datasheet": {
-            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
-            "basis": "typical",
-            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A"
-          }
-        },
         "unit": "1",
         "value": 4.427
       },
@@ -501,47 +307,19 @@
       },
       "ratings": {
         "current": {
-          "source": {
-            "datasheet": {
-              "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current",
-              "basis": "absolute_max",
-              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A"
-            }
-          },
           "unit": "A",
           "value": 0.03
         },
         "power": {
-          "source": {
-            "datasheet": {
-              "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation",
-              "basis": "absolute_max",
-              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A"
-            }
-          },
           "unit": "W",
           "value": 0.075
         }
       },
       "saturation_current": {
-        "source": {
-          "datasheet": {
-            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
-            "basis": "typical",
-            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A"
-          }
-        },
         "unit": "A",
         "value": 6.711e-10
       },
       "series_resistance": {
-        "source": {
-          "datasheet": {
-            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
-            "basis": "typical",
-            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A"
-          }
-        },
         "unit": "ohm",
         "value": 2.115
       }
@@ -557,26 +335,12 @@
         "power": null
       },
       "resistance": {
-        "source": {
-          "datasheet": {
-            "at": "RN4B, 1K",
-            "basis": "nominal",
-            "doc": "development board schematic, revision 3"
-          }
-        },
         "unit": "ohm",
         "value": 1000
       }
     },
     {
       "capacitance": {
-        "source": {
-          "datasheet": {
-            "at": "C5, 100 nF",
-            "basis": "nominal",
-            "doc": "development board schematic, revision 3"
-          }
-        },
         "unit": "F",
         "value": 1e-07
       },
@@ -599,13 +363,6 @@
         "power": null
       },
       "resistance": {
-        "source": {
-          "datasheet": {
-            "at": "RN1D, 10K",
-            "basis": "nominal",
-            "doc": "development board schematic, revision 3"
-          }
-        },
         "unit": "ohm",
         "value": 10000
       }
@@ -613,35 +370,16 @@
     {
       "input_threshold": {
         "high": {
-          "source": {
-            "datasheet": {
-              "at": "table 4, high input voltage, rising, at least 70 % of VDD",
-              "basis": "min",
-              "doc": "Aosong AM2302 product manual v1.1"
-            }
-          },
           "unit": "1",
           "value": 0.7
         },
         "low": {
-          "source": {
-            "datasheet": {
-              "at": "table 4, low input voltage, falling, at most 30 % of VDD",
-              "basis": "max",
-              "doc": "Aosong AM2302 product manual v1.1"
-            }
-          },
           "unit": "1",
           "value": 0.3
         }
       },
       "kind": "dht22",
       "low_resistance": {
-        "source": {
-          "closed_form": {
-            "note": "table 4: low output voltage at most 300 mV, and output current 8 mA typical when on. 300 mV / 8 mA. The sheet gives no typical low voltage, so the open drain is its worst case"
-          }
-        },
         "unit": "ohm",
         "value": 37.5
       },
@@ -663,13 +401,6 @@
         "power": null
       },
       "resistance": {
-        "source": {
-          "datasheet": {
-            "at": "table 4, Rpu, the pull-up resistor, 45 kohm typical (30 to 60) at VDD 5 V and VIN = VSS",
-            "basis": "typical",
-            "doc": "Aosong AM2302 product manual v1.1"
-          }
-        },
         "unit": "ohm",
         "value": 45000
       }
@@ -683,13 +414,11 @@
       },
       "ratings": {
         "power": {
-          "source": "user",
           "unit": "W",
           "value": 0.25
         }
       },
       "resistance": {
-        "source": "user",
         "unit": "ohm",
         "value": 5100
       }
@@ -700,16 +429,14 @@
       "kind": "steps",
       "initial": {
         "value": 23.4,
-        "unit": "degC",
-        "source": "user"
+        "unit": "degC"
       },
       "events": [
         {
           "t_ps": 3000000000000,
           "level": {
             "value": -10.1,
-            "unit": "degC",
-            "source": "user"
+            "unit": "degC"
           }
         }
       ]
@@ -718,16 +445,14 @@
       "kind": "steps",
       "initial": {
         "value": 61.7,
-        "unit": "%RH",
-        "source": "user"
+        "unit": "%RH"
       },
       "events": [
         {
           "t_ps": 3000000000000,
           "level": {
             "value": 40.0,
-            "unit": "%RH",
-            "source": "user"
+            "unit": "%RH"
           }
         }
       ]

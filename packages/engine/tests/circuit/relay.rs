@@ -10,8 +10,7 @@ const DROP_OUT: f64 = 0.007142857142857143;
 
 fn relay(name: &str, pins: [&str; 5], henry: f64) -> String {
     let [coil_a, coil_b, com, no, nc] = pins;
-    let value =
-        |v: f64, unit: &str| format!(r#"{{ "value": {v:?}, "unit": "{unit}", "source": "user" }}"#);
+    let value = |v: f64, unit: &str| format!(r#"{{ "value": {v:?}, "unit": "{unit}" }}"#);
     format!(
         r#"{{ "name": "{name}", "kind": "relay",
           "pins": {{ "coil_a": "{coil_a}", "coil_b": "{coil_b}", "com": "{com}", "no": "{no}", "nc": "{nc}" }},
@@ -31,14 +30,12 @@ fn steps(levels: &[(u64, f64)]) -> String {
     let events: Vec<String> = levels
         .iter()
         .map(|(at, volts)| {
-            format!(
-                r#"{{ "t_ps": {at}, "level": {{ "value": {volts:?}, "unit": "V", "source": "user" }} }}"#
-            )
+            format!(r#"{{ "t_ps": {at}, "level": {{ "value": {volts:?}, "unit": "V" }} }}"#)
         })
         .collect();
     format!(
         r#"{{ "name": "v2", "kind": "voltage_source", "pins": {{ "p": "vin", "n": "gnd" }},
-          "voltage": {{ "kind": "steps", "initial": {{ "value": 0.0, "unit": "V", "source": "user" }},
+          "voltage": {{ "kind": "steps", "initial": {{ "value": 0.0, "unit": "V" }},
                        "events": [{}] }} }}"#,
         events.join(", ")
     )
@@ -51,8 +48,8 @@ fn switch(name: &str, a: &str, b: &str, events: &[(u64, &str)]) -> String {
         .collect();
     format!(
         r#"{{ "name": "{name}", "kind": "switch", "pins": {{ "a": "{a}", "b": "{b}" }},
-          "on_resistance": {{ "value": 0.1, "unit": "ohm", "source": "user" }},
-          "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+          "on_resistance": {{ "value": 0.1, "unit": "ohm" }},
+          "off_resistance": {{ "value": 1e9, "unit": "ohm" }},
           "initial": "open", "events": [{}], "bounce": null }}"#,
         events.join(", ")
     )
@@ -188,7 +185,7 @@ fn latching_relay_settles() {
 fn a_contact_that_breaks_its_own_coil_current_is_unsettled() {
     let json = format!(
         r#"{{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": {{ "op": {{}} }},
           "ground": "gnd",
@@ -315,10 +312,10 @@ fn a_relay_coil_follows_its_closed_form() {
 #[test]
 fn a_net_reached_only_through_the_coil_has_a_dc_path() {
     let capacitor = r#"{ "name": "c1", "kind": "capacitor", "pins": { "a": "k", "b": "gnd" },
-          "capacitance": { "value": 1e-6, "unit": "F", "source": "user" }, "initial": null }"#;
+          "capacitance": { "value": 1e-6, "unit": "F" }, "initial": null }"#;
     let json = format!(
         r#"{{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": {{ "op": {{}} }},
           "ground": "gnd",

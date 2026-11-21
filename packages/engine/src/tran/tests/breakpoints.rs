@@ -43,7 +43,7 @@ fn breakpoints_list_each_edge_the_nanosecond_after_it_and_after_the_start() {
 fn train_100mhz() -> Netlist {
     crate::netlist::parse(
         br#"{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": { "transient": { "stop_ps": 1000000000000, "max_step_ps": 20000000, "grid_ps": 20000000 } },
           "ground": "gnd",
@@ -55,8 +55,8 @@ fn train_100mhz() -> Netlist {
               "pins": { "p": "vin", "n": "gnd" },
               "voltage": {
                 "kind": "pulse",
-                "initial": { "value": 0.0, "unit": "V", "source": "user" },
-                "pulsed": { "value": 5.0, "unit": "V", "source": "user" },
+                "initial": { "value": 0.0, "unit": "V" },
+                "pulsed": { "value": 5.0, "unit": "V" },
                 "delay_ps": 10000, "width_ps": 5000, "period_ps": 10000
               }
             },
@@ -64,7 +64,7 @@ fn train_100mhz() -> Netlist {
               "name": "r1",
               "kind": "resistor",
               "pins": { "a": "vin", "b": "gnd" },
-              "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+              "resistance": { "value": 1000.0, "unit": "ohm" },
               "ratings": { "power": null }
             }
           ]
@@ -111,16 +111,16 @@ fn breakpoints_list_every_source_jump_past_a_million_without_a_cap() {
 fn breakpoints_merge_jumps_across_sources_in_time_order() {
     let pulse = |name: &str, net: &str, delay: u64| {
         format!(
-            r#"{{"name":"{name}","kind":"voltage_source","pins":{{"p":"{net}","n":"gnd"}},"voltage":{{"kind":"pulse","initial":{{"value":0.0,"unit":"V","source":"user"}},"pulsed":{{"value":1.0,"unit":"V","source":"user"}},"delay_ps":{delay},"width_ps":2000,"period_ps":4000}}}}"#
+            r#"{{"name":"{name}","kind":"voltage_source","pins":{{"p":"{net}","n":"gnd"}},"voltage":{{"kind":"pulse","initial":{{"value":0.0,"unit":"V"}},"pulsed":{{"value":1.0,"unit":"V"}},"delay_ps":{delay},"width_ps":2000,"period_ps":4000}}}}"#
         )
     };
     let resistor = |name: &str, net: &str| {
         format!(
-            r#"{{"name":"{name}","kind":"resistor","pins":{{"a":"{net}","b":"gnd"}},"resistance":{{"value":1000.0,"unit":"ohm","source":"user"}},"ratings":{{"power":null}}}}"#
+            r#"{{"name":"{name}","kind":"resistor","pins":{{"a":"{net}","b":"gnd"}},"resistance":{{"value":1000.0,"unit":"ohm"}},"ratings":{{"power":null}}}}"#
         )
     };
     let json = format!(
-        r#"{{"version":0,"seed":0,"analysis":{{"transient":{{"stop_ps":1000000000000,"max_step_ps":20000000,"grid_ps":20000000}}}},"ground":"gnd","nets":["gnd","a","b"],"parts":[{},{},{},{}]}}"#,
+        r#"{{"version":1,"seed":0,"analysis":{{"transient":{{"stop_ps":1000000000000,"max_step_ps":20000000,"grid_ps":20000000}}}},"ground":"gnd","nets":["gnd","a","b"],"parts":[{},{},{},{}]}}"#,
         pulse("vlate", "a", 9_500),
         resistor("ra", "a"),
         pulse("vearly", "b", 2_000),

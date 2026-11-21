@@ -64,7 +64,7 @@ fn two_renders_of_the_divider_are_the_same_bytes() {
 }
 
 const SHUFFLED_DIVIDER: &[u8] = br#"{
-  "version": 0,
+  "version": 1,
   "seed": 7,
   "analysis": { "op": {} },
   "ground": "gnd",
@@ -74,20 +74,20 @@ const SHUFFLED_DIVIDER: &[u8] = br#"{
       "name": "r2",
       "kind": "resistor",
       "pins": { "b": "gnd", "a": "vout" },
-      "resistance": { "value": 2000.0, "unit": "ohm", "source": "user" },
+      "resistance": { "value": 2000.0, "unit": "ohm" },
       "ratings": { "power": null }
     },
     {
       "name": "v1",
       "kind": "voltage_source",
       "pins": { "n": "gnd", "p": "vin" },
-      "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+      "voltage": { "value": 5.0, "unit": "V" }
     },
     {
       "name": "r1",
       "kind": "resistor",
       "pins": { "b": "vout", "a": "vin" },
-      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "resistance": { "value": 1000.0, "unit": "ohm" },
       "ratings": { "power": null }
     }
   ]
@@ -116,7 +116,7 @@ fn reordering_parts_and_nets_keeps_observations_and_diagnostics() {
 fn a_resistor_onto_an_otherwise_untouched_net_is_not_floating() {
     let results = simulate_bytes(
         br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -126,13 +126,13 @@ fn a_resistor_onto_an_otherwise_untouched_net_is_not_floating() {
           "name": "v1",
           "kind": "voltage_source",
           "pins": { "p": "vin", "n": "gnd" },
-          "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+          "voltage": { "value": 5.0, "unit": "V" }
         },
         {
           "name": "r1",
           "kind": "resistor",
           "pins": { "a": "vin", "b": "lonely" },
-          "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+          "resistance": { "value": 1000.0, "unit": "ohm" },
           "ratings": { "power": null }
         }
       ]
@@ -153,7 +153,7 @@ fn a_resistor_onto_an_otherwise_untouched_net_is_not_floating() {
 fn a_net_with_no_dc_path_to_ground_is_floating() {
     let results = simulate_bytes(
         br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -163,13 +163,13 @@ fn a_net_with_no_dc_path_to_ground_is_floating() {
           "name": "v1",
           "kind": "voltage_source",
           "pins": { "p": "vin", "n": "gnd" },
-          "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+          "voltage": { "value": 5.0, "unit": "V" }
         },
         {
           "name": "risle",
           "kind": "resistor",
           "pins": { "a": "isle", "b": "isle2" },
-          "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+          "resistance": { "value": 1000.0, "unit": "ohm" },
           "ratings": { "power": null }
         }
       ]
@@ -196,7 +196,7 @@ fn a_net_with_no_dc_path_to_ground_is_floating() {
 fn parallel_voltage_sources_are_singular_at_the_second_source() {
     let results = simulate_bytes(
         br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -206,13 +206,13 @@ fn parallel_voltage_sources_are_singular_at_the_second_source() {
           "name": "v1",
           "kind": "voltage_source",
           "pins": { "p": "vin", "n": "gnd" },
-          "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+          "voltage": { "value": 5.0, "unit": "V" }
         },
         {
           "name": "v2",
           "kind": "voltage_source",
           "pins": { "p": "vin", "n": "gnd" },
-          "voltage": { "value": 3.0, "unit": "V", "source": "user" }
+          "voltage": { "value": 3.0, "unit": "V" }
         }
       ]
     }"#,

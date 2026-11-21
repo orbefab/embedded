@@ -181,25 +181,6 @@ fn stripped(part: &serde_json::Value) -> serde_json::Value {
     part
 }
 
-fn walk_values(value: &serde_json::Value, at: &str) {
-    match value {
-        serde_json::Value::Object(map) => {
-            if map.contains_key("value") && map.contains_key("unit") && map.contains_key("source") {
-                assert_ne!(map["source"], "user", "{at}");
-            }
-            for (key, child) in map {
-                walk_values(child, &format!("{at}.{key}"));
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for (index, child) in items.iter().enumerate() {
-                walk_values(child, &format!("{at}[{index}]"));
-            }
-        }
-        _ => {}
-    }
-}
-
 fn run(netlist: &serde_json::Value) -> orbe_engine::Completed {
     orbe_engine::run(
         &serde_json::to_vec(netlist).unwrap(),
@@ -452,24 +433,6 @@ fn every_board_example_keeps_the_fragment() {
 }
 
 #[test]
-fn no_fragment_value_has_source_user() {
-    let fragment = fragment();
-    let names: Vec<_> = fragment["parts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|part| part["name"].as_str().unwrap().to_string())
-        .collect();
-    for path in board_examples() {
-        let netlist = read_json(&path.join("netlist.json"));
-        let example = path.file_name().unwrap().to_str().unwrap();
-        for name in &names {
-            walk_values(part(&netlist, name), &format!("{example}.{name}"));
-        }
-    }
-}
-
-#[test]
 fn the_blink_run_matches_the_led_and_d0() {
     let netlist = fragment();
     assert_eq!(
@@ -504,14 +467,7 @@ fn the_blink_run_matches_the_led_and_d0() {
 #[test]
 fn a_dtr_fall_resets_within_the_window() {
     let mut netlist = fragment();
-    let source = part(&netlist, "usb_dtr")["voltage"]["initial"]["source"].clone();
-    let level = |volts: f64| {
-        serde_json::json!({
-            "value": volts,
-            "unit": "V",
-            "source": source.clone()
-        })
-    };
+    let level = |volts: f64| serde_json::json!({ "value": volts, "unit": "V" });
     part_mut(&mut netlist, "usb_dtr")["voltage"]["events"] = serde_json::json!([
         { "t_ps": 1_500_000_000_000_u64, "level": level(0.0) },
         { "t_ps": 2_500_000_000_000_u64, "level": level(5.0) }

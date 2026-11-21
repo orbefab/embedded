@@ -43,7 +43,7 @@ The message is:
 netlist version {found} is not supported; this engine reads {supported}
 ```
 
-`data` holds `found` and `supported`. `supported` lists every version this engine reads, `[0]`. The message joins that list with `, `.
+`data` holds `found` and `supported`. `supported` lists every version this engine reads, `[1]`. The message joins that list with `, `.
 
 ## netlist.name
 

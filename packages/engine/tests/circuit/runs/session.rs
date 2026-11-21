@@ -293,8 +293,7 @@ fn floating() -> serde_json::Value {
         .as_array_mut()
         .unwrap()
         .extend(["x".into(), "y".into()]);
-    json["parts"][1]["ratings"]["power"] =
-        serde_json::json!({ "value": 0.001, "unit": "W", "source": "user" });
+    json["parts"][1]["ratings"]["power"] = serde_json::json!({ "value": 0.001, "unit": "W" });
     json["parts"]
         .as_array_mut()
         .unwrap()
@@ -302,7 +301,7 @@ fn floating() -> serde_json::Value {
             "name": "r2",
             "kind": "resistor",
             "pins": { "a": "x", "b": "y" },
-            "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+            "resistance": { "value": 1000.0, "unit": "ohm" },
             "ratings": { "power": null }
         }));
     json

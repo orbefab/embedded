@@ -28,7 +28,7 @@ use crate::session::{Applied, Input, Rejected, Serial, SerialCursor, Setting, St
 /// rejected. `sw1` puts 1 kohm across the capacitor and `sw2` puts 10 kohm across it, with up
 /// to two bounces in 50 ns. Neither has an event.
 const RC_SWITCHES: &[u8] = br#"{
-  "version": 0,
+  "version": 1,
   "seed": 3,
   "analysis": { "transient": { "stop_ps": 20000000, "max_step_ps": 100000, "grid_ps": 500000 } },
   "ground": "gnd",
@@ -38,28 +38,28 @@ const RC_SWITCHES: &[u8] = br#"{
       "name": "v1",
       "kind": "voltage_source",
       "pins": { "p": "vcc", "n": "gnd" },
-      "voltage": { "value": 1.0, "unit": "V", "source": "user" }
+      "voltage": { "value": 1.0, "unit": "V" }
     },
     {
       "name": "r1",
       "kind": "resistor",
       "pins": { "a": "vcc", "b": "vout" },
-      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "resistance": { "value": 1000.0, "unit": "ohm" },
       "ratings": { "power": null }
     },
     {
       "name": "c1",
       "kind": "capacitor",
       "pins": { "a": "vout", "b": "gnd" },
-      "capacitance": { "value": 5e-12, "unit": "F", "source": "user" },
+      "capacitance": { "value": 5e-12, "unit": "F" },
       "initial": null
     },
     {
       "name": "sw1",
       "kind": "switch",
       "pins": { "a": "vout", "b": "gnd" },
-      "on_resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
-      "off_resistance": { "value": 1e9, "unit": "ohm", "source": "user" },
+      "on_resistance": { "value": 1000.0, "unit": "ohm" },
+      "off_resistance": { "value": 1e9, "unit": "ohm" },
       "initial": "open",
       "events": [],
       "bounce": null
@@ -68,20 +68,20 @@ const RC_SWITCHES: &[u8] = br#"{
       "name": "sw2",
       "kind": "switch",
       "pins": { "a": "vout", "b": "gnd" },
-      "on_resistance": { "value": 10000.0, "unit": "ohm", "source": "user" },
-      "off_resistance": { "value": 1e9, "unit": "ohm", "source": "user" },
+      "on_resistance": { "value": 10000.0, "unit": "ohm" },
+      "off_resistance": { "value": 1e9, "unit": "ohm" },
       "initial": "open",
       "events": [],
       "bounce": {
-        "window": { "value": 50000, "unit": "ps", "source": "user" },
-        "max_bounces": { "value": 2, "unit": "1", "source": "user" }
+        "window": { "value": 50000, "unit": "ps" },
+        "max_bounces": { "value": 2, "unit": "1" }
       }
     }
   ]
 }"#;
 
 const RC_LEVELS: &[u8] = br#"{
-  "version": 0,
+  "version": 1,
   "seed": 4,
   "analysis": { "transient": { "stop_ps": 1000000, "max_step_ps": 5000, "grid_ps": 1000 } },
   "ground": "gnd",
@@ -93,7 +93,7 @@ const RC_LEVELS: &[u8] = br#"{
       "pins": { "p": "vcc", "n": "gnd" },
       "voltage": {
         "kind": "steps",
-        "initial": { "value": 1.0, "unit": "V", "source": "user" },
+        "initial": { "value": 1.0, "unit": "V" },
         "events": []
       }
     },
@@ -103,7 +103,7 @@ const RC_LEVELS: &[u8] = br#"{
       "pins": { "p": "vout", "n": "gnd" },
       "current": {
         "kind": "steps",
-        "initial": { "value": 0.0002, "unit": "A", "source": "user" },
+        "initial": { "value": 0.0002, "unit": "A" },
         "events": []
       }
     },
@@ -111,21 +111,21 @@ const RC_LEVELS: &[u8] = br#"{
       "name": "r1",
       "kind": "resistor",
       "pins": { "a": "vcc", "b": "vout" },
-      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "resistance": { "value": 1000.0, "unit": "ohm" },
       "ratings": { "power": null }
     },
     {
       "name": "c1",
       "kind": "capacitor",
       "pins": { "a": "vout", "b": "gnd" },
-      "capacitance": { "value": 1e-9, "unit": "F", "source": "user" },
+      "capacitance": { "value": 1e-9, "unit": "F" },
       "initial": null
     }
   ]
 }"#;
 
 const KINDS: &[u8] = br#"{
-  "version": 0,
+  "version": 1,
   "seed": 5,
   "analysis": { "transient": { "stop_ps": 100000, "max_step_ps": 1000, "grid_ps": 1000 } },
   "ground": "gnd",
@@ -137,8 +137,8 @@ const KINDS: &[u8] = br#"{
       "pins": { "p": "ns", "n": "gnd" },
       "voltage": {
         "kind": "step",
-        "initial": { "value": 0.0, "unit": "V", "source": "user" },
-        "final": { "value": 1.0, "unit": "V", "source": "user" },
+        "initial": { "value": 0.0, "unit": "V" },
+        "final": { "value": 1.0, "unit": "V" },
         "at_ps": 5000
       }
     },
@@ -148,8 +148,8 @@ const KINDS: &[u8] = br#"{
       "pins": { "p": "np", "n": "gnd" },
       "voltage": {
         "kind": "pulse",
-        "initial": { "value": 0.0, "unit": "V", "source": "user" },
-        "pulsed": { "value": 1.0, "unit": "V", "source": "user" },
+        "initial": { "value": 0.0, "unit": "V" },
+        "pulsed": { "value": 1.0, "unit": "V" },
         "delay_ps": 5000,
         "width_ps": 2000,
         "period_ps": 4000
@@ -161,7 +161,7 @@ const KINDS: &[u8] = br#"{
       "pins": { "p": "nv", "n": "gnd" },
       "voltage": {
         "kind": "steps",
-        "initial": { "value": 1.0, "unit": "V", "source": "user" },
+        "initial": { "value": 1.0, "unit": "V" },
         "events": []
       }
     },
@@ -169,15 +169,15 @@ const KINDS: &[u8] = br#"{
       "name": "r1",
       "kind": "resistor",
       "pins": { "a": "nv", "b": "gnd" },
-      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "resistance": { "value": 1000.0, "unit": "ohm" },
       "ratings": { "power": null }
     },
     {
       "name": "sw1",
       "kind": "switch",
       "pins": { "a": "nv", "b": "gnd" },
-      "on_resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
-      "off_resistance": { "value": 1e9, "unit": "ohm", "source": "user" },
+      "on_resistance": { "value": 1000.0, "unit": "ohm" },
+      "off_resistance": { "value": 1e9, "unit": "ohm" },
       "initial": "open",
       "events": [],
       "bounce": null
@@ -186,8 +186,8 @@ const KINDS: &[u8] = br#"{
       "name": "rv1",
       "kind": "potentiometer",
       "pins": { "a": "nv", "wiper": "nw", "b": "gnd" },
-      "resistance": { "value": 10000.0, "unit": "ohm", "source": "user" },
-      "position": { "value": 0.5, "unit": "1", "source": "user" }
+      "resistance": { "value": 10000.0, "unit": "ohm" },
+      "position": { "value": 0.5, "unit": "1" }
     }
   ]
 }"#;
@@ -1821,7 +1821,7 @@ fn two_levels_at_one_time_take_one_restart() {
 #[test]
 fn a_position_whose_leg_underflows_is_refused() {
     let input = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 6,
       "analysis": { "transient": { "stop_ps": 1000, "max_step_ps": 1000, "grid_ps": 1000 } },
       "ground": "gnd",
@@ -1831,14 +1831,14 @@ fn a_position_whose_leg_underflows_is_refused() {
           "name": "v1",
           "kind": "voltage_source",
           "pins": { "p": "n", "n": "gnd" },
-          "voltage": { "value": 0.0, "unit": "V", "source": "user" }
+          "voltage": { "value": 0.0, "unit": "V" }
         },
         {
           "name": "rv1",
           "kind": "potentiometer",
           "pins": { "a": "n", "wiper": "gnd", "b": "gnd" },
-          "resistance": { "value": 1e-300, "unit": "ohm", "source": "user" },
-          "position": { "value": 0.5, "unit": "1", "source": "user" }
+          "resistance": { "value": 1e-300, "unit": "ohm" },
+          "position": { "value": 0.5, "unit": "1" }
         }
       ]
     }"#;
@@ -2024,8 +2024,8 @@ fn stiff_serial() -> Vec<u8> {
         if part["name"] == "v1" {
             part["voltage"] = serde_json::json!({
                 "kind": "serial",
-                "mark": { "value": 1.0, "unit": "V", "source": "user" },
-                "space": { "value": 0.0, "unit": "V", "source": "user" },
+                "mark": { "value": 1.0, "unit": "V" },
+                "space": { "value": 0.0, "unit": "V" },
                 "events": []
             });
         }
@@ -2249,7 +2249,7 @@ fn a_serial_send_on_the_wrong_part_is_refused() {
         assert_eq!(held(&session), before, "{name} {part}");
     }
     let diode = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "transient": { "stop_ps": 1000, "max_step_ps": 1000, "grid_ps": 1000 } },
       "ground": "gnd",
@@ -2259,15 +2259,15 @@ fn a_serial_send_on_the_wrong_part_is_refused() {
           "name": "v1",
           "kind": "voltage_source",
           "pins": { "p": "a", "n": "gnd" },
-          "voltage": { "value": 0.0, "unit": "V", "source": "user" }
+          "voltage": { "value": 0.0, "unit": "V" }
         },
         {
           "name": "d1",
           "kind": "diode",
           "pins": { "anode": "a", "cathode": "gnd" },
-          "saturation_current": { "value": 1e-14, "unit": "A", "source": "user" },
-          "emission_coefficient": { "value": 1.0, "unit": "1", "source": "user" },
-          "series_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
+          "saturation_current": { "value": 1e-14, "unit": "A" },
+          "emission_coefficient": { "value": 1.0, "unit": "1" },
+          "series_resistance": { "value": 1.0, "unit": "ohm" },
           "ratings": { "current": null, "power": null }
         }
       ]

@@ -29,7 +29,7 @@ fn quiet_button() -> Vec<u8> {
 /// copy ran.
 fn charging_button() -> Vec<u8> {
     let mut json: serde_json::Value = serde_json::from_slice(&quiet_button()).unwrap();
-    let volts = |value: f64| serde_json::json!({"value": value, "unit": "V", "source": "user"});
+    let volts = |value: f64| serde_json::json!({"value": value, "unit": "V"});
     let nets = json["nets"].as_array_mut().unwrap();
     nets.extend(["vchg".into(), "vcap".into()]);
     let parts = json["parts"].as_array_mut().unwrap();
@@ -51,14 +51,14 @@ fn charging_button() -> Vec<u8> {
             "name": "r2",
             "kind": "resistor",
             "pins": {"a": "vchg", "b": "vcap"},
-            "resistance": {"value": 1e6, "unit": "ohm", "source": "user"},
+            "resistance": {"value": 1e6, "unit": "ohm"},
             "ratings": {"power": null},
         }),
         serde_json::json!({
             "name": "c2",
             "kind": "capacitor",
             "pins": {"a": "vcap", "b": "gnd"},
-            "capacitance": {"value": 1e-6, "unit": "F", "source": "user"},
+            "capacitance": {"value": 1e-6, "unit": "F"},
             "initial": null,
         }),
         led,

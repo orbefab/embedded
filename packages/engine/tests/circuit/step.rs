@@ -8,7 +8,7 @@ use common::{
 /// 5 V through 1 kohm into 10 fF, and a 0.1 ohm switch across it that closes at 1 us.
 /// The discharge after the edge has a 1 fs time constant, far under the 1 ps step floor.
 const FEMTOSECOND_EDGE: &str = r#"{
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": { "transient": { "stop_ps": 20000000000, "max_step_ps": 100000, "grid_ps": 100000 } },
   "ground": "gnd",
@@ -18,28 +18,28 @@ const FEMTOSECOND_EDGE: &str = r#"{
       "name": "v1",
       "kind": "voltage_source",
       "pins": { "p": "vcc", "n": "gnd" },
-      "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+      "voltage": { "value": 5.0, "unit": "V" }
     },
     {
       "name": "r1",
       "kind": "resistor",
       "pins": { "a": "vcc", "b": "vout" },
-      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "resistance": { "value": 1000.0, "unit": "ohm" },
       "ratings": { "power": null }
     },
     {
       "name": "c1",
       "kind": "capacitor",
       "pins": { "a": "vout", "b": "gnd" },
-      "capacitance": { "value": 1e-14, "unit": "F", "source": "user" },
+      "capacitance": { "value": 1e-14, "unit": "F" },
       "initial": null
     },
     {
       "name": "sw1",
       "kind": "switch",
       "pins": { "a": "vout", "b": "gnd" },
-      "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
-      "off_resistance": { "value": 1e9, "unit": "ohm", "source": "user" },
+      "on_resistance": { "value": 0.1, "unit": "ohm" },
+      "off_resistance": { "value": 1e9, "unit": "ohm" },
       "initial": "open",
       "events": [{ "t_ps": 1000000, "state": "closed" }],
       "bounce": null
@@ -66,7 +66,7 @@ fn a_mode_faster_than_the_step_floor_dies_out_instead_of_ringing() {
 /// 1 V through 1 kohm into 100.1 pF, and a 1 ohm switch across it that closes at 10 ns.
 /// It discharges with a 100 ps time constant.
 const PICOSECOND_EDGE: &str = r#"{
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": { "transient": { "stop_ps": 15000, "max_step_ps": 1000, "grid_ps": 1000 } },
   "ground": "gnd",
@@ -76,28 +76,28 @@ const PICOSECOND_EDGE: &str = r#"{
       "name": "v1",
       "kind": "voltage_source",
       "pins": { "p": "vcc", "n": "gnd" },
-      "voltage": { "value": 1.0, "unit": "V", "source": "user" }
+      "voltage": { "value": 1.0, "unit": "V" }
     },
     {
       "name": "r1",
       "kind": "resistor",
       "pins": { "a": "vcc", "b": "vout" },
-      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "resistance": { "value": 1000.0, "unit": "ohm" },
       "ratings": { "power": null }
     },
     {
       "name": "c1",
       "kind": "capacitor",
       "pins": { "a": "vout", "b": "gnd" },
-      "capacitance": { "value": 1.001e-10, "unit": "F", "source": "user" },
+      "capacitance": { "value": 1.001e-10, "unit": "F" },
       "initial": null
     },
     {
       "name": "sw1",
       "kind": "switch",
       "pins": { "a": "vout", "b": "gnd" },
-      "on_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
-      "off_resistance": { "value": 1e9, "unit": "ohm", "source": "user" },
+      "on_resistance": { "value": 1.0, "unit": "ohm" },
+      "off_resistance": { "value": 1e9, "unit": "ohm" },
       "initial": "open",
       "events": [{ "t_ps": 10000, "state": "closed" }],
       "bounce": null
@@ -125,7 +125,7 @@ fn a_100_ps_discharge_after_an_edge_stays_on_its_closed_form() {
 /// 5 V through 1 kohm into 100 nF, and a 0.1 ohm switch across it that closes at 1 us.
 /// It discharges with a time constant just under 10 ns.
 const FAST_EDGE: &str = r#"{
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": { "transient": { "stop_ps": 2000000, "max_step_ps": 10000, "grid_ps": 10000 } },
   "ground": "gnd",
@@ -135,28 +135,28 @@ const FAST_EDGE: &str = r#"{
       "name": "v1",
       "kind": "voltage_source",
       "pins": { "p": "vcc", "n": "gnd" },
-      "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+      "voltage": { "value": 5.0, "unit": "V" }
     },
     {
       "name": "r1",
       "kind": "resistor",
       "pins": { "a": "vcc", "b": "vout" },
-      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "resistance": { "value": 1000.0, "unit": "ohm" },
       "ratings": { "power": null }
     },
     {
       "name": "c1",
       "kind": "capacitor",
       "pins": { "a": "vout", "b": "gnd" },
-      "capacitance": { "value": 1e-7, "unit": "F", "source": "user" },
+      "capacitance": { "value": 1e-7, "unit": "F" },
       "initial": null
     },
     {
       "name": "sw1",
       "kind": "switch",
       "pins": { "a": "vout", "b": "gnd" },
-      "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
-      "off_resistance": { "value": 1e9, "unit": "ohm", "source": "user" },
+      "on_resistance": { "value": 0.1, "unit": "ohm" },
+      "off_resistance": { "value": 1e9, "unit": "ohm" },
       "initial": "open",
       "events": [{ "t_ps": 1000000, "state": "closed" }],
       "bounce": null
@@ -205,7 +205,7 @@ fn a_10_ns_discharge_after_an_edge_follows_its_closed_form_from_the_first_row() 
 
 /// 1 uF held at 5 V at the operating point, then discharging through 1 kohm.
 const HELD_DISCHARGE: &str = r#"{
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": { "transient": { "stop_ps": 5000000000, "max_step_ps": 10000000, "grid_ps": 10000000 } },
   "ground": "gnd",
@@ -215,15 +215,15 @@ const HELD_DISCHARGE: &str = r#"{
       "name": "r1",
       "kind": "resistor",
       "pins": { "a": "vout", "b": "gnd" },
-      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "resistance": { "value": 1000.0, "unit": "ohm" },
       "ratings": { "power": null }
     },
     {
       "name": "c1",
       "kind": "capacitor",
       "pins": { "a": "vout", "b": "gnd" },
-      "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
-      "initial": { "value": 5.0, "unit": "V", "source": "user" }
+      "capacitance": { "value": 1e-6, "unit": "F" },
+      "initial": { "value": 5.0, "unit": "V" }
     }
   ]
 }"#;
@@ -362,7 +362,7 @@ fn a_1_fs_mode_switched_in_beside_a_1_ms_charge_leaves_it_on_its_closed_form() {
 fn capacitor(name: &str, a: &str, b: &str, farad: f64) -> String {
     format!(
         r#"{{ "name": "{name}", "kind": "capacitor", "pins": {{ "a": "{a}", "b": "{b}" }},
-          "capacitance": {{ "value": {farad:?}, "unit": "F", "source": "user" }}, "initial": null }}"#
+          "capacitance": {{ "value": {farad:?}, "unit": "F" }}, "initial": null }}"#
     )
 }
 
@@ -370,8 +370,8 @@ fn capacitor(name: &str, a: &str, b: &str, farad: f64) -> String {
 fn closing_switch(name: &str, a: &str, b: &str, ohm: f64, t_ps: u64) -> String {
     format!(
         r#"{{ "name": "{name}", "kind": "switch", "pins": {{ "a": "{a}", "b": "{b}" }},
-          "on_resistance": {{ "value": {ohm:?}, "unit": "ohm", "source": "user" }},
-          "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+          "on_resistance": {{ "value": {ohm:?}, "unit": "ohm" }},
+          "off_resistance": {{ "value": 1e9, "unit": "ohm" }},
           "initial": "open", "events": [{{ "t_ps": {t_ps}, "state": "closed" }}], "bounce": null }}"#
     )
 }

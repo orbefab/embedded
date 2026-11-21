@@ -157,7 +157,7 @@ fn reads_are_the_batch(name: &str, stop_ps: u64, seed: u64) {
 #[test]
 fn a_live_potentiometer_sets_the_divider_voltage() {
     let json = r#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "transient": { "stop_ps": 10000, "max_step_ps": 1000, "grid_ps": 1000 } },
       "ground": "gnd",
@@ -167,14 +167,14 @@ fn a_live_potentiometer_sets_the_divider_voltage() {
           "name": "v1",
           "kind": "voltage_source",
           "pins": { "p": "vin", "n": "gnd" },
-          "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+          "voltage": { "value": 5.0, "unit": "V" }
         },
         {
           "name": "rv1",
           "kind": "potentiometer",
           "pins": { "a": "vin", "wiper": "mid", "b": "gnd" },
-          "resistance": { "value": 10000.0, "unit": "ohm", "source": "user" },
-          "position": { "value": 0.25, "unit": "1", "source": "user" }
+          "resistance": { "value": 10000.0, "unit": "ohm" },
+          "position": { "value": 0.25, "unit": "1" }
         }
       ]
     }"#;
@@ -903,8 +903,8 @@ fn a_non_negative_divider_integral_never_falls_on_accepted_steps() {
 fn closing_switch(edge: u64, ohm: f64) -> String {
     format!(
         r#"{{ "name": "sw1", "kind": "switch", "pins": {{ "a": "vin", "b": "vout" }},
-          "on_resistance": {{ "value": {ohm:?}, "unit": "ohm", "source": "user" }},
-          "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+          "on_resistance": {{ "value": {ohm:?}, "unit": "ohm" }},
+          "off_resistance": {{ "value": 1e9, "unit": "ohm" }},
           "initial": "open", "events": [{{ "t_ps": {edge}, "state": "closed" }}], "bounce": null }}"#
     )
 }
@@ -978,12 +978,12 @@ const LED: &str = r#"{
   "name": "led1",
   "kind": "led",
   "pins": { "anode": "vled", "cathode": "gnd" },
-  "saturation_current": { "value": 6.711e-10, "unit": "A", "source": "user" },
-  "emission_coefficient": { "value": 4.427, "unit": "1", "source": "user" },
-  "series_resistance": { "value": 2.115, "unit": "ohm", "source": "user" },
+  "saturation_current": { "value": 6.711e-10, "unit": "A" },
+  "emission_coefficient": { "value": 4.427, "unit": "1" },
+  "series_resistance": { "value": 2.115, "unit": "ohm" },
   "ratings": {
-    "current": { "value": 0.03, "unit": "A", "source": "user" },
-    "power": { "value": 0.075, "unit": "W", "source": "user" }
+    "current": { "value": 0.03, "unit": "A" },
+    "power": { "value": 0.075, "unit": "W" }
   }
 }"#;
 
@@ -1064,7 +1064,7 @@ fn a_floating_net_is_listed_when_the_session_opens() {
             &source_on("v1", "vin", 5.0),
             &resistor("r1", "vin", "gnd", 1000.0),
             r#"{ "name": "c1", "kind": "capacitor", "pins": { "a": "lonely", "b": "gnd" },
-              "capacitance": { "value": 1e-9, "unit": "F", "source": "user" }, "initial": null }"#,
+              "capacitance": { "value": 1e-9, "unit": "F" }, "initial": null }"#,
         ],
     );
     let bytes = json.as_bytes();
@@ -1092,7 +1092,7 @@ fn pulsed_led() -> String {
     let step = 1_000_000_000u64;
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {{ "transient": {{ "stop_ps": {stop}, "max_step_ps": {step}, "grid_ps": {step} }} }},
       "ground": "gnd",
@@ -1104,8 +1104,8 @@ fn pulsed_led() -> String {
           "pins": {{ "p": "vin", "n": "gnd" }},
           "voltage": {{
             "kind": "pulse",
-            "initial": {{ "value": 0.0, "unit": "V", "source": "user" }},
-            "pulsed": {{ "value": 5.0, "unit": "V", "source": "user" }},
+            "initial": {{ "value": 0.0, "unit": "V" }},
+            "pulsed": {{ "value": 5.0, "unit": "V" }},
             "delay_ps": 2000000000,
             "width_ps": 500000000,
             "period_ps": 20000000000
@@ -1115,7 +1115,7 @@ fn pulsed_led() -> String {
           "name": "r1",
           "kind": "resistor",
           "pins": {{ "a": "vin", "b": "vled" }},
-          "resistance": {{ "value": 22.0, "unit": "ohm", "source": "user" }},
+          "resistance": {{ "value": 22.0, "unit": "ohm" }},
           "ratings": {{ "power": null }}
         }},
         {LED}

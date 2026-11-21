@@ -7,13 +7,13 @@ const TRANSIENT: &str =
     r#"{ "transient": { "stop_ps": 1000000, "max_step_ps": 1000, "grid_ps": 1000 } }"#;
 
 fn value(value: f64, unit: &str) -> String {
-    format!(r#"{{ "value": {value:?}, "unit": "{unit}", "source": "user" }}"#)
+    format!(r#"{{ "value": {value:?}, "unit": "{unit}" }}"#)
 }
 
 fn document(world: &str, parts: &str) -> String {
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {TRANSIENT},
       "ground": "gnd",
@@ -139,7 +139,6 @@ fn the_three_curves_give_their_closed_forms() {
 fn si(value: f64) -> orbe_engine::netlist::Value {
     orbe_engine::netlist::Value {
         si: orbe_engine::finite::Finite::new(value).unwrap(),
-        source: orbe_engine::netlist::Source::User,
     }
 }
 

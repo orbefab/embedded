@@ -384,8 +384,8 @@ fn a_100_pf_bus_adds_the_rise_to_each_scl_period() {
             "name": name,
             "kind": "capacitor",
             "pins": { "a": net_name, "b": "gnd" },
-            "capacitance": { "value": 100e-12, "unit": "F", "source": "user" },
-            "initial": { "value": 0.0, "unit": "V", "source": "user" }
+            "capacitance": { "value": 100e-12, "unit": "F" },
+            "initial": { "value": 0.0, "unit": "V" }
         })
     };
     let parts = net["parts"].as_array_mut().unwrap();

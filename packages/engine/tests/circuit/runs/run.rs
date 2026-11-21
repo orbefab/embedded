@@ -127,7 +127,7 @@ fn a_floating_net_exits_zero_with_one_warning() {
     fs::write(
         &netlist,
         br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",

@@ -283,18 +283,6 @@ fn a_gpio_is_optional_and_a_pin_the_chip_lacks_is_refused() {
     );
 }
 
-/// The part `docs/engine/netlist.md` shows, with every value's source dropped.
-fn without_sources(value: &serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => map
-            .iter()
-            .filter(|(key, _)| key.as_str() != "source")
-            .map(|(key, value)| (key.clone(), without_sources(value)))
-            .collect(),
-        other => other.clone(),
-    }
-}
-
 #[test]
 fn the_documented_part_is_the_examples() {
     let doc = fs::read_to_string(repo("docs/engine/netlist.md")).unwrap();
@@ -302,10 +290,7 @@ fn the_documented_part_is_the_examples() {
     let start = section.find("```json\n").unwrap() + "```json\n".len();
     let end = start + section[start..].find("\n```").unwrap();
     let documented: serde_json::Value = serde_json::from_str(&section[start..end]).unwrap();
-    assert_eq!(
-        without_sources(&documented),
-        without_sources(&example()["parts"][1])
-    );
+    assert_eq!(documented, example()["parts"][1]);
 }
 
 const IRAM: u32 = 0x4038_0000;

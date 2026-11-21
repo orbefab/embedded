@@ -24,8 +24,8 @@ fn samples() -> Vec<Diagnostic> {
             detail: "unknown field `resistence`".into(),
         },
         Diagnostic::NetlistVersion {
-            found: 1,
-            supported: &[0],
+            found: 2,
+            supported: &[1],
         },
         Diagnostic::NetlistName {
             path: "parts[0].name".into(),

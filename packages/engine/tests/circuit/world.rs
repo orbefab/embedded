@@ -18,23 +18,23 @@ fn ldr(name: &str, a: &str, b: &str) -> String {
     format!(
         r#"{{ "name": "{name}", "kind": "resistor", "pins": {{ "a": "{a}", "b": "{b}" }},
           "resistance": {{ "kind": "world", "quantity": "light", "curve": {{ "kind": "power",
-            "x": {{ "value": 10.0, "unit": "lx", "source": "user" }},
-            "y": {{ "value": 10000.0, "unit": "ohm", "source": "user" }},
-            "exponent": {{ "value": -1.0, "unit": "1", "source": "user" }},
-            "max": {{ "value": 1000000.0, "unit": "ohm", "source": "user" }} }} }},
+            "x": {{ "value": 10.0, "unit": "lx" }},
+            "y": {{ "value": 10000.0, "unit": "ohm" }},
+            "exponent": {{ "value": -1.0, "unit": "1" }},
+            "max": {{ "value": 1000000.0, "unit": "ohm" }} }} }},
           "ratings": {{ "power": null }} }}"#
     )
 }
 
 fn lux(value: f64) -> String {
-    format!(r#"{{ "value": {value:?}, "unit": "lx", "source": "user" }}"#)
+    format!(r#"{{ "value": {value:?}, "unit": "lx" }}"#)
 }
 
 /// A 5 V source over 10 kohm on top and the LDR below, `mid` between them.
 fn divider(light: &str, stop_ps: u64, max_step_ps: u64) -> String {
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {{ "transient": {{ "stop_ps": {stop_ps}, "max_step_ps": {max_step_ps}, "grid_ps": {max_step_ps} }} }},
       "ground": "gnd",
@@ -42,9 +42,9 @@ fn divider(light: &str, stop_ps: u64, max_step_ps: u64) -> String {
       "world": {{ "light": {light} }},
       "parts": [
         {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "vcc", "n": "gnd" }},
-           "voltage": {{ "value": {VOLTS:?}, "unit": "V", "source": "user" }} }},
+           "voltage": {{ "value": {VOLTS:?}, "unit": "V" }} }},
         {{ "name": "r1", "kind": "resistor", "pins": {{ "a": "vcc", "b": "mid" }},
-           "resistance": {{ "value": {TOP_OHM:?}, "unit": "ohm", "source": "user" }}, "ratings": {{ "power": null }} }},
+           "resistance": {{ "value": {TOP_OHM:?}, "unit": "ohm" }}, "ratings": {{ "power": null }} }},
         {}
       ]
     }}"#,
@@ -180,7 +180,7 @@ fn a_set_after_the_session_ran_ahead_matches_the_change_scheduled() {
     let pot = parts.iter().position(|p| p["name"] == "rv1").unwrap();
     parts[pot] = serde_json::from_str(&format!(
         r#"{{ "name": "rv1", "kind": "resistor", "pins": {{ "a": "vcc", "b": "pc0" }},
-          "resistance": {{ "value": {TOP_OHM:?}, "unit": "ohm", "source": "user" }}, "ratings": {{ "power": null }} }}"#
+          "resistance": {{ "value": {TOP_OHM:?}, "unit": "ohm" }}, "ratings": {{ "power": null }} }}"#
     ))
     .unwrap();
     parts.push(serde_json::from_str(&ldr("rl", "pc0", "gnd")).unwrap());

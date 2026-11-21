@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": {
     "op": {}
@@ -23,8 +23,7 @@
       },
       "voltage": {
         "value": 12.0,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -36,8 +35,7 @@
       },
       "voltage": {
         "value": 5.0,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -49,8 +47,7 @@
       },
       "resistance": {
         "value": 100.0,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "ratings": {
         "power": null
@@ -65,14 +62,12 @@
       },
       "resistance": {
         "value": 560.0,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "ratings": {
         "power": {
           "value": 0.25,
-          "unit": "W",
-          "source": "user"
+          "unit": "W"
         }
       }
     },
@@ -85,59 +80,24 @@
       },
       "saturation_current": {
         "value": 6.711e-10,
-        "unit": "A",
-        "source": {
-          "datasheet": {
-            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
-            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
-            "basis": "typical"
-          }
-        }
+        "unit": "A"
       },
       "emission_coefficient": {
         "value": 4.427,
-        "unit": "1",
-        "source": {
-          "datasheet": {
-            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
-            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
-            "basis": "typical"
-          }
-        }
+        "unit": "1"
       },
       "series_resistance": {
         "value": 2.115,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
-            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
-            "basis": "typical"
-          }
-        }
+        "unit": "ohm"
       },
       "ratings": {
         "current": {
           "value": 0.03,
-          "unit": "A",
-          "source": {
-            "datasheet": {
-              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
-              "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current",
-              "basis": "absolute_max"
-            }
-          }
+          "unit": "A"
         },
         "power": {
           "value": 0.075,
-          "unit": "W",
-          "source": {
-            "datasheet": {
-              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
-              "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation",
-              "basis": "absolute_max"
-            }
-          }
+          "unit": "W"
         }
       }
     },
@@ -151,90 +111,36 @@
       },
       "transconductance_parameter": {
         "value": 0.0468,
-        "unit": "A/V^2",
-        "source": {
-          "datasheet": {
-            "doc": "2N7000/D Rev. 5",
-            "at": "Figure 2 at 25 C, through (4.0 V, 0.20 A) and (5.0 V, 0.36 A), rounded to 0.0468 A/V^2. A 3.3 V gate gives 0.115 A here, where Figure 2 reads about 0.07 A. The model conducts from 1.08 V. Figure 2's typical curve starts near 2.5 V, and at a 2.5 V gate the model gives about 0.047 A, where a typical part passes almost nothing",
-            "basis": "typical"
-          }
-        }
+        "unit": "A/V^2"
       },
       "threshold_voltage": {
         "value": 1.08,
-        "unit": "V",
-        "source": {
-          "datasheet": {
-            "doc": "2N7000/D Rev. 5",
-            "at": "Figure 2 at 25 C, through (4.0 V, 0.20 A) and (5.0 V, 0.36 A), rounded to 1.08 V, inside ON CHARACTERISTICS VGS(th) of 0.8 V to 3.0 V at ID = 1.0 mA. A 3.3 V gate gives 0.115 A here, where Figure 2 reads about 0.07 A. The model conducts from 1.08 V. Figure 2's typical curve starts near 2.5 V, and at a 2.5 V gate the model gives about 0.047 A, where a typical part passes almost nothing",
-            "basis": "typical"
-          }
-        }
+        "unit": "V"
       },
       "channel_length_modulation": {
         "value": 0.0,
-        "unit": "1/V",
-        "source": {
-          "closed_form": {
-            "note": "Figure 1 of 2N7000/D Rev. 5 draws flat saturation lines, so LAMBDA is 0"
-          }
-        }
+        "unit": "1/V"
       },
       "gate_source_capacitance": {
         "value": 5.5e-11,
-        "unit": "F",
-        "source": {
-          "datasheet": {
-            "doc": "2N7000/D Rev. 5",
-            "at": "DYNAMIC CHARACTERISTICS, Ciss maximum minus Crss maximum, 60 pF minus 5 pF, VDS = 25 V, VGS = 0, f = 1.0 MHz",
-            "basis": "max"
-          }
-        }
+        "unit": "F"
       },
       "gate_drain_capacitance": {
         "value": 5e-12,
-        "unit": "F",
-        "source": {
-          "datasheet": {
-            "doc": "2N7000/D Rev. 5",
-            "at": "DYNAMIC CHARACTERISTICS, Crss maximum, VDS = 25 V, VGS = 0, f = 1.0 MHz",
-            "basis": "max"
-          }
-        }
+        "unit": "F"
       },
       "drain_source_capacitance": {
         "value": 2e-11,
-        "unit": "F",
-        "source": {
-          "datasheet": {
-            "doc": "2N7000/D Rev. 5",
-            "at": "DYNAMIC CHARACTERISTICS, Coss maximum minus Crss maximum, 25 pF minus 5 pF, VDS = 25 V, VGS = 0, f = 1.0 MHz",
-            "basis": "max"
-          }
-        }
+        "unit": "F"
       },
       "ratings": {
         "current": {
           "value": 0.2,
-          "unit": "A",
-          "source": {
-            "datasheet": {
-              "doc": "2N7000/D Rev. 5",
-              "at": "MAXIMUM RATINGS, ID continuous, 200 mA",
-              "basis": "absolute_max"
-            }
-          }
+          "unit": "A"
         },
         "power": {
           "value": 0.35,
-          "unit": "W",
-          "source": {
-            "datasheet": {
-              "doc": "2N7000/D Rev. 5",
-              "at": "MAXIMUM RATINGS, PD total at TC = 25 C, 350 mW",
-              "basis": "absolute_max"
-            }
-          }
+          "unit": "W"
         }
       }
     }

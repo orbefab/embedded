@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": { "transient": { "stop_ps": 50000000000, "max_step_ps": 1000000000, "grid_ps": 50000000 } },
   "ground": "gnd",
@@ -11,10 +11,10 @@
       "pins": { "p": "vin", "n": "gnd" },
       "voltage": {
         "kind": "steps",
-        "initial": { "value": 0.0, "unit": "V", "source": "user" },
+        "initial": { "value": 0.0, "unit": "V" },
         "events": [
-          { "t_ps": 1000000000, "level": { "value": 5.0, "unit": "V", "source": "user" } },
-          { "t_ps": 30000000000, "level": { "value": 0.0, "unit": "V", "source": "user" } }
+          { "t_ps": 1000000000, "level": { "value": 5.0, "unit": "V" } },
+          { "t_ps": 30000000000, "level": { "value": 0.0, "unit": "V" } }
         ]
       }
     },
@@ -22,8 +22,8 @@
       "name": "l1",
       "kind": "inductor",
       "pins": { "a": "vin", "b": "gnd" },
-      "inductance": { "value": 0.505, "unit": "H", "source": "user" },
-      "series_resistance": { "value": 70.0, "unit": "ohm", "source": "user" }
+      "inductance": { "value": 0.505, "unit": "H" },
+      "series_resistance": { "value": 70.0, "unit": "ohm" }
     }
   ]
 }

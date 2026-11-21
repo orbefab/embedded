@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": {
     "transient": {
@@ -48,8 +48,7 @@
       },
       "voltage": {
         "value": 5.0,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -61,14 +60,12 @@
       },
       "resistance": {
         "value": 220.0,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "ratings": {
         "power": {
           "value": 0.25,
-          "unit": "W",
-          "source": "user"
+          "unit": "W"
         }
       }
     },
@@ -81,59 +78,24 @@
       },
       "saturation_current": {
         "value": 6.711e-10,
-        "unit": "A",
-        "source": {
-          "datasheet": {
-            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
-            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
-            "basis": "typical"
-          }
-        }
+        "unit": "A"
       },
       "emission_coefficient": {
         "value": 4.427,
-        "unit": "1",
-        "source": {
-          "datasheet": {
-            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
-            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
-            "basis": "typical"
-          }
-        }
+        "unit": "1"
       },
       "series_resistance": {
         "value": 2.115,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
-            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
-            "basis": "typical"
-          }
-        }
+        "unit": "ohm"
       },
       "ratings": {
         "current": {
           "value": 0.03,
-          "unit": "A",
-          "source": {
-            "datasheet": {
-              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
-              "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current",
-              "basis": "absolute_max"
-            }
-          }
+          "unit": "A"
         },
         "power": {
           "value": 0.075,
-          "unit": "W",
-          "source": {
-            "datasheet": {
-              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
-              "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation",
-              "basis": "absolute_max"
-            }
-          }
+          "unit": "W"
         }
       }
     },
@@ -146,13 +108,11 @@
       },
       "capacitance": {
         "value": 2.2e-11,
-        "unit": "F",
-        "source": "user"
+        "unit": "F"
       },
       "initial": {
         "value": 0.0,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -164,13 +124,11 @@
       },
       "capacitance": {
         "value": 2.2e-11,
-        "unit": "F",
-        "source": "user"
+        "unit": "F"
       },
       "initial": {
         "value": 0.0,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -182,13 +140,11 @@
       },
       "capacitance": {
         "value": 1e-07,
-        "unit": "F",
-        "source": "user"
+        "unit": "F"
       },
       "initial": {
         "value": 0.0,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -227,8 +183,7 @@
       "firmware": ":10000000259A1D9A8EEF99E6A8E181509040A04074\n:0C001000E1F70000000000000000F3CF4A\n:00000001FF\n",
       "clock_hz": {
         "value": 16000000,
-        "unit": "Hz",
-        "source": "user"
+        "unit": "Hz"
       },
       "fuses": {
         "low": 255,
@@ -238,126 +193,51 @@
       "output": {
         "high_drop": {
           "value": 0.0,
-          "unit": "V",
-          "source": {
-            "datasheet": {
-              "doc": "DS40002061B",
-              "at": "Figure 31-355",
-              "basis": "typical"
-            }
-          }
+          "unit": "V"
         },
         "high_resistance": {
           "value": 25.0,
-          "unit": "ohm",
-          "source": {
-            "datasheet": {
-              "doc": "DS40002061B",
-              "at": "Figure 31-355",
-              "basis": "typical"
-            }
-          }
+          "unit": "ohm"
         },
         "low_drop": {
           "value": 0.0,
-          "unit": "V",
-          "source": {
-            "datasheet": {
-              "doc": "DS40002061B",
-              "at": "Figure 31-353",
-              "basis": "typical"
-            }
-          }
+          "unit": "V"
         },
         "low_resistance": {
           "value": 25.0,
-          "unit": "ohm",
-          "source": {
-            "datasheet": {
-              "doc": "DS40002061B",
-              "at": "Figure 31-353",
-              "basis": "typical"
-            }
-          }
+          "unit": "ohm"
         }
       },
       "pull_up_resistance": {
         "value": 35714.0,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "DS40002061B",
-            "at": "Figure 31-348",
-            "basis": "typical"
-          }
-        }
+        "unit": "ohm"
       },
       "reset_pull_up_resistance": {
         "value": 46296.0,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "DS40002061B",
-            "at": "Figure 31-351",
-            "basis": "typical"
-          }
-        }
+        "unit": "ohm"
       },
       "leakage_resistance": {
         "value": 5500000.0,
-        "unit": "ohm",
-        "source": {
-          "closed_form": {
-            "note": "DS40002061B Table 30-1: IIL and IIH at most 1 uA at VCC = 5.5 V, so 5.5 V / 1 uA"
-          }
-        }
+        "unit": "ohm"
       },
       "input_threshold": {
         "low": {
           "value": 0.42,
-          "unit": "1",
-          "source": {
-            "datasheet": {
-              "doc": "DS40002061B",
-              "at": "Figure 31-357",
-              "basis": "typical"
-            }
-          }
+          "unit": "1"
         },
         "high": {
           "value": 0.52,
-          "unit": "1",
-          "source": {
-            "datasheet": {
-              "doc": "DS40002061B",
-              "at": "Figure 31-356",
-              "basis": "typical"
-            }
-          }
+          "unit": "1"
         }
       },
       "reset_threshold": {
         "low": {
           "value": 0.42,
-          "unit": "1",
-          "source": {
-            "datasheet": {
-              "doc": "DS40002061B",
-              "at": "Figure 31-360",
-              "basis": "typical"
-            }
-          }
+          "unit": "1"
         },
         "high": {
           "value": 0.44,
-          "unit": "1",
-          "source": {
-            "datasheet": {
-              "doc": "DS40002061B",
-              "at": "Figure 31-359",
-              "basis": "typical"
-            }
-          }
+          "unit": "1"
         }
       }
     }

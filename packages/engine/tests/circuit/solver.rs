@@ -8,7 +8,7 @@ fn simulate(bytes: &[u8]) -> orbe_engine::run_folder::Results {
 fn source_and_resistor(volts: &str, ohms: &str) -> String {
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {{ "op": {{}} }},
       "ground": "gnd",
@@ -18,14 +18,14 @@ fn source_and_resistor(volts: &str, ohms: &str) -> String {
           "name": "r1",
           "kind": "resistor",
           "pins": {{ "a": "vin", "b": "gnd" }},
-          "resistance": {{ "value": {ohms}, "unit": "ohm", "source": "user" }},
+          "resistance": {{ "value": {ohms}, "unit": "ohm" }},
           "ratings": {{ "power": null }}
         }},
         {{
           "name": "v1",
           "kind": "voltage_source",
           "pins": {{ "p": "vin", "n": "gnd" }},
-          "voltage": {{ "value": {volts}, "unit": "V", "source": "user" }}
+          "voltage": {{ "value": {volts}, "unit": "V" }}
         }}
       ]
     }}"#
@@ -72,12 +72,12 @@ fn chain(signal_nets: usize) -> String {
         let net = format!("n{index}");
         nets.push(format!("\"{net}\""));
         parts.push(format!(
-            r#"{{"name":"r{index}","kind":"resistor","pins":{{"a":"{previous}","b":"{net}"}},"resistance":{{"value":1000.0,"unit":"ohm","source":"user"}},"ratings":{{"power":null}}}}"#
+            r#"{{"name":"r{index}","kind":"resistor","pins":{{"a":"{previous}","b":"{net}"}},"resistance":{{"value":1000.0,"unit":"ohm"}},"ratings":{{"power":null}}}}"#
         ));
         previous = net;
     }
     format!(
-        r#"{{"version":0,"seed":0,"analysis":{{"op":{{}}}},"ground":"gnd","nets":[{}],"parts":[{}]}}"#,
+        r#"{{"version":1,"seed":0,"analysis":{{"op":{{}}}},"ground":"gnd","nets":[{}],"parts":[{}]}}"#,
         nets.join(","),
         parts.join(",")
     )

@@ -8,7 +8,6 @@ use crate::mna::{Probe, Stamp, Unknowns};
 use crate::name::{Quantity, Ref};
 use crate::netlist::NetId;
 use crate::netlist::Schedule;
-use crate::netlist::Source;
 use crate::netlist::Value;
 use crate::netlist::broken_fraction;
 use crate::netlist::broken_positive;
@@ -165,10 +164,7 @@ fn level_with_legs(
     let field = field.into();
     let resolved = resolve_value(part, field.clone(), FRACTION_UNIT, false, wire, out);
     let mut ok = resolved.is_some();
-    let value = resolved.unwrap_or(Value {
-        si,
-        source: Source::User,
-    });
+    let value = resolved.unwrap_or(Value { si });
     if let Some(resistance) = resistance {
         let Some(legs) = position_rule(number, resistance.si.get()).legs() else {
             refuse_fraction(part, field, number, out);

@@ -534,12 +534,12 @@ fn chained(name: &str, counts: &[u16]) -> (Vec<serde_json::Value>, serde_json::V
             part["pins"]["DOUT"] = din.clone().into();
             part["dout"] = serde_json::json!({
                 "output": {
-                    "high_drop": { "value": 0.0, "unit": "V", "source": "user" },
-                    "high_resistance": { "value": 50.0, "unit": "ohm", "source": "user" },
-                    "low_drop": { "value": 0.0, "unit": "V", "source": "user" },
-                    "low_resistance": { "value": 50.0, "unit": "ohm", "source": "user" }
+                    "high_drop": { "value": 0.0, "unit": "V" },
+                    "high_resistance": { "value": 50.0, "unit": "ohm" },
+                    "low_drop": { "value": 0.0, "unit": "V" },
+                    "low_resistance": { "value": 50.0, "unit": "ohm" }
                 },
-                "delay": { "value": 500000, "unit": "ps", "source": "user" }
+                "delay": { "value": 500000, "unit": "ps" }
             });
         }
         parts.push(part);

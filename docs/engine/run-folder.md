@@ -43,7 +43,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 
 `run_format` versions this folder, and `engine_version` is the workspace package version, the release that wrote the folder. The current values are 0 and `0.1.0`. [Run format](#run-format) says which changes move `run_format`.
 
-`netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 1` records 1. It is `null` when no such integer could be read.
+`netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 2` records 2. It is `null` when no such integer could be read.
 
 `input.file` is the name inside the folder. `input.sha256` and `input.bytes` describe the input bytes. For `packages/engine/tests/circuits/divider/netlist.json` the length is 904.
 

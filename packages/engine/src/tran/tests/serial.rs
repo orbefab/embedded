@@ -325,8 +325,8 @@ fn analog_serial_with_a_switch() -> Netlist {
     for (name, a) in [("sw1", "pd2"), ("sw2", "q"), ("sw3", "q"), ("swr", "pc6")] {
         parts.push(serde_json::json!({
             "name": name, "kind": "switch", "pins": { "a": a, "b": "gnd" },
-            "on_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
-            "off_resistance": { "value": 1e9, "unit": "ohm", "source": "user" },
+            "on_resistance": { "value": 1.0, "unit": "ohm" },
+            "off_resistance": { "value": 1e9, "unit": "ohm" },
             "initial": "open", "events": [], "bounce": null
         }));
     }
@@ -388,8 +388,8 @@ fn analog_serial_with_a_reset_dip(fall: Time) -> Vec<u8> {
         "name": "vd", "kind": "voltage_source", "pins": { "p": "d", "n": "gnd" },
         "voltage": {
             "kind": "steps",
-            "initial": { "value": 13.609, "unit": "V", "source": "user" },
-            "events": [{ "t_ps": fall.as_ps(), "level": { "value": 0.0, "unit": "V", "source": "user" } }]
+            "initial": { "value": 13.609, "unit": "V" },
+            "events": [{ "t_ps": fall.as_ps(), "level": { "value": 0.0, "unit": "V" } }]
         }
     }));
     parts.push(serde_json::from_str(&resistor("rd", "d", "a", 12.1e3)).unwrap());
@@ -398,13 +398,13 @@ fn analog_serial_with_a_reset_dip(fall: Time) -> Vec<u8> {
     for (name, a, b) in [("cd1", "a", "gnd"), ("cd2", "a", "pc6")] {
         parts.push(serde_json::json!({
             "name": name, "kind": "capacitor", "pins": { "a": a, "b": b },
-            "capacitance": { "value": 5e-9, "unit": "F", "source": "user" }, "initial": null
+            "capacitance": { "value": 5e-9, "unit": "F" }, "initial": null
         }));
     }
     parts.push(serde_json::json!({
         "name": "sw2", "kind": "switch", "pins": { "a": "q", "b": "gnd" },
-        "on_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
-        "off_resistance": { "value": 1e9, "unit": "ohm", "source": "user" },
+        "on_resistance": { "value": 1.0, "unit": "ohm" },
+        "off_resistance": { "value": 1e9, "unit": "ohm" },
         "initial": "open", "events": [], "bounce": null
     }));
     let nets = json["nets"].as_array_mut().unwrap();
@@ -550,8 +550,8 @@ fn boards_with(stop: u64, chips: &[(&str, u32)], extra: Vec<String>) -> Netlist 
         parts.push(
             serde_json::json!({
                 "name": format!("sw{prefix}"), "kind": "switch", "pins": { "a": pd2, "b": "gnd" },
-                "on_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
-                "off_resistance": { "value": 1e9, "unit": "ohm", "source": "user" },
+                "on_resistance": { "value": 1.0, "unit": "ohm" },
+                "off_resistance": { "value": 1e9, "unit": "ohm" },
                 "initial": "open", "events": [], "bounce": null
             })
             .to_string(),
@@ -614,8 +614,8 @@ fn a_tie_goes_in_part_order_whichever_byte_started_first() {
     let stop = 97_000 * US;
     let release = serde_json::json!({
         "name": "swrw", "kind": "switch", "pins": { "a": "w_pc6", "b": "gnd" },
-        "on_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
-        "off_resistance": { "value": 1e9, "unit": "ohm", "source": "user" },
+        "on_resistance": { "value": 1.0, "unit": "ohm" },
+        "off_resistance": { "value": 1e9, "unit": "ohm" },
         "initial": "closed", "events": [{ "t_ps": 24_979_375_000u64, "state": "open" }],
         "bounce": null
     });

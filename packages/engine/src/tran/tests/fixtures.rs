@@ -8,7 +8,7 @@ use crate::session::Budget;
 pub(super) fn led_switch() -> Netlist {
     crate::netlist::parse(
         br#"{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": { "transient": { "stop_ps": 2000000, "max_step_ps": 100000, "grid_ps": 100000 } },
           "ground": "gnd",
@@ -18,30 +18,30 @@ pub(super) fn led_switch() -> Netlist {
               "name": "v1",
               "kind": "voltage_source",
               "pins": { "p": "vcc", "n": "gnd" },
-              "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+              "voltage": { "value": 5.0, "unit": "V" }
             },
             {
               "name": "r1",
               "kind": "resistor",
               "pins": { "a": "vcc", "b": "vk" },
-              "resistance": { "value": 220.0, "unit": "ohm", "source": "user" },
+              "resistance": { "value": 220.0, "unit": "ohm" },
               "ratings": { "power": null }
             },
             {
               "name": "led1",
               "kind": "led",
               "pins": { "anode": "vk", "cathode": "vbtn" },
-              "saturation_current": { "value": 6.711e-10, "unit": "A", "source": "user" },
-              "emission_coefficient": { "value": 4.427, "unit": "1", "source": "user" },
-              "series_resistance": { "value": 2.115, "unit": "ohm", "source": "user" },
+              "saturation_current": { "value": 6.711e-10, "unit": "A" },
+              "emission_coefficient": { "value": 4.427, "unit": "1" },
+              "series_resistance": { "value": 2.115, "unit": "ohm" },
               "ratings": { "current": null, "power": null }
             },
             {
               "name": "sw1",
               "kind": "switch",
               "pins": { "a": "vbtn", "b": "gnd" },
-              "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
-              "off_resistance": { "value": 1e9, "unit": "ohm", "source": "user" },
+              "on_resistance": { "value": 0.1, "unit": "ohm" },
+              "off_resistance": { "value": 1e9, "unit": "ohm" },
               "initial": "open",
               "events": [{ "t_ps": 1000000, "state": "closed" }],
               "bounce": null
@@ -68,15 +68,15 @@ pub(super) fn fast_discharge(bleed: bool) -> Netlist {
               "name": "rbleed",
               "kind": "resistor",
               "pins": { "a": "vcc", "b": "gnd" },
-              "resistance": { "value": 10.0, "unit": "ohm", "source": "user" },
-              "ratings": { "power": { "value": 0.001, "unit": "W", "source": "user" } }
+              "resistance": { "value": 10.0, "unit": "ohm" },
+              "ratings": { "power": { "value": 0.001, "unit": "W" } }
             },"#
     } else {
         ""
     };
     let json = format!(
         r#"{{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": {{ "transient": {{ "stop_ps": 2000000, "max_step_ps": 100000, "grid_ps": 100000 }} }},
           "ground": "gnd",
@@ -86,29 +86,29 @@ pub(super) fn fast_discharge(bleed: bool) -> Netlist {
               "name": "v1",
               "kind": "voltage_source",
               "pins": {{ "p": "vcc", "n": "gnd" }},
-              "voltage": {{ "value": 1.0, "unit": "V", "source": "user" }}
+              "voltage": {{ "value": 1.0, "unit": "V" }}
             }},
             {bleeder}
             {{
               "name": "r1",
               "kind": "resistor",
               "pins": {{ "a": "vcc", "b": "vout" }},
-              "resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
+              "resistance": {{ "value": 1000.0, "unit": "ohm" }},
               "ratings": {{ "power": null }}
             }},
             {{
               "name": "c1",
               "kind": "capacitor",
               "pins": {{ "a": "vout", "b": "gnd" }},
-              "capacitance": {{ "value": 1e-12, "unit": "F", "source": "user" }},
+              "capacitance": {{ "value": 1e-12, "unit": "F" }},
               "initial": null
             }},
             {{
               "name": "s1",
               "kind": "switch",
               "pins": {{ "a": "vout", "b": "gnd" }},
-              "on_resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
-              "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+              "on_resistance": {{ "value": 1000.0, "unit": "ohm" }},
+              "off_resistance": {{ "value": 1e9, "unit": "ohm" }},
               "initial": "open",
               "events": [{{ "t_ps": 1000000, "state": "closed" }}],
               "bounce": null
