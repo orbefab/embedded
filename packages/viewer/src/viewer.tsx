@@ -582,7 +582,7 @@ export function Viewer({ source, onCreated, pageScroll = false }: ViewerProps) {
       style={{ position: "relative", width: "100%", height: "100%", touchAction: pageScroll ? "pan-y" : "none" }}
     >
       <ShowError>
-        {/* The effect composer forces tone mapping off. A lit LED reaches luminance 1 and blooms; the scene stays under it. */}
+        {/* The effect composer forces tone mapping off. Bloom reads only the LED glow meshes. */}
         <Canvas dpr={[1, 1.75]} flat gl={{ antialias: false, alpha: false }} onCreated={onCreated}>
           <StageBackdrop color={stage.background} />
           {scene === null ? null : (

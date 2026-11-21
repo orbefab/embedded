@@ -20,9 +20,8 @@ import type { Box } from "./wire-geometry";
 
 const MAT_CELL_MM = 10;
 const KEY_LIGHT = 1.9;
-// Room-image strength for each finish. The studio lite prototype lit metal at 0.99 and plastic
-// at 0.275. A tin lead then reaches luminance about 2.1, and the white wire about 1.10, so both
-// would bloom. These two keep a non-LED pixel under luminance 1, where bloom starts.
+// The approved studio lite strengths. Metal is 0.42 and plastic is 0.18. A highlight can pass
+// luminance 1 from some angles. Bloom does not use that: it reads only the LED glow meshes.
 const METAL_ROOM = 0.42;
 const PLASTIC_ROOM = 0.18;
 // The opaque grid sits 0.5 mm under the lowest mesh. A shadow plane 0.01 mm above that grid
@@ -68,7 +67,7 @@ export function StageRoom() {
     const previous = scene.environment;
     const intensity = scene.environmentIntensity;
     scene.environment = roomTexture(gl);
-    // A material that never got its own map takes the plastic share, which stays under the bloom.
+    // A material that never got its own map takes the plastic share.
     scene.environmentIntensity = PLASTIC_ROOM;
     return () => {
       scene.environment = previous;

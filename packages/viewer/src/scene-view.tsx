@@ -1,7 +1,7 @@
 // Adapted from maker-sandbox (MIT, Copyright 2026 Alwurts).
 import { type ThreeEvent, useFrame, useLoader, useThree } from "@react-three/fiber";
-import { Bloom, EffectComposer, Outline } from "@react-three/postprocessing";
-import { type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { EffectComposer, Outline, SelectiveBloom } from "@react-three/postprocessing";
+import { type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { BackSide, Box3, type Group, Mesh, MeshStandardMaterial, type Object3D } from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { type BuiltScene, buildScene, fromGltf, type Tag, tagOf } from "./build";
@@ -19,8 +19,38 @@ import { WireMesh } from "./wire-mesh";
 /** orbefab.com's brand orange. */
 const HOVER = "#e85d04";
 
-function Effects({ hover }: { hover: HoverStore }) {
+/** The meshes whose materials the scene glows. Bloom reads only these, so a metal highlight
+ * can pass luminance 1 and still not bloom. */
+function glowMeshes(built: BuiltScene): Object3D[] {
+  const materials = new Set<MeshStandardMaterial>(built.glows.map((glow) => glow.material));
+  const meshes: Object3D[] = [];
+  built.root.traverse((object) => {
+    if (!(object instanceof Mesh)) return;
+    const list = Array.isArray(object.material) ? object.material : [object.material];
+    if (list.some((material) => material instanceof MeshStandardMaterial && materials.has(material))) meshes.push(object);
+  });
+  return meshes;
+}
+
+/** Lights already in the scene. SelectiveBloom warns, and skips, when it is given none. */
+function useSceneLights(): Object3D[] {
+  const scene = useThree((state) => state.scene);
+  const [lights, setLights] = useState<Object3D[]>([]);
+  useLayoutEffect(() => {
+    const found: Object3D[] = [];
+    scene.traverse((object) => {
+      if ((object as { isLight?: boolean }).isLight === true) found.push(object);
+    });
+    setLights((current) =>
+      current.length === found.length && current.every((light, index) => light === found[index]) ? current : found,
+    );
+  }, [scene]);
+  return lights;
+}
+
+function Effects({ hover, glow }: { hover: HoverStore; glow: Object3D[] }) {
   const hovered = useSyncExternalStore(hover.subscribe, hover.get);
+  const lights = useSceneLights();
   const target = hovered?.object;
   const selection = useMemo(() => {
     const meshes: Object3D[] = [];
@@ -31,7 +61,16 @@ function Effects({ hover }: { hover: HoverStore }) {
   }, [target]);
   return (
     <EffectComposer autoClear={false} multisampling={0}>
-      <Bloom intensity={1.2} luminanceSmoothing={0.2} luminanceThreshold={1} mipmapBlur />
+      {lights.length === 0 ? null : (
+        <SelectiveBloom
+          intensity={1.2}
+          lights={lights}
+          luminanceSmoothing={0.2}
+          luminanceThreshold={1}
+          mipmapBlur
+          selection={glow}
+        />
+      )}
       <Outline
         blur
         edgeStrength={6}
@@ -256,6 +295,7 @@ export function SceneView({
   };
 
   const frameBoxes = useMemo(() => drawnBoxes(built), [built]);
+  const glow = useMemo(() => glowMeshes(built), [built]);
   return (
     <>
       <StageRoom />
@@ -273,7 +313,7 @@ export function SceneView({
         ))}
       </group>
       <StageFloor boxes={built.boxes} colours={colours} />
-      <Effects hover={hover} />
+      <Effects glow={glow} hover={hover} />
     </>
   );
 }

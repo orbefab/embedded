@@ -1027,4 +1027,158 @@ test.describe("fixture page", () => {
       await context.close();
     }
   });
+
+  /** Pixels the bloom pass changes. `hide` covers every glowing body and the clear lens over it,
+   * so a difference is something other than an LED blooming. The read is the composited frame,
+   * because a metal highlight may pass luminance 1 and still must not bloom. */
+  function bloomDelta(page: Page, hide: boolean): Promise<{ pixels: number; max: number }> {
+    return page.evaluate(async (hide) => {
+      const state = () => window.orbeViewer.get();
+      const findBloom = (scene: any) => {
+        let found: any;
+        const walk = (node: any) => {
+          if (node === undefined || node === null) return;
+          const object = node.object;
+          if (object?.luminanceMaterial !== undefined && typeof object.intensity === "number") found = object;
+          for (const child of node.children ?? []) walk(child);
+        };
+        walk(scene.__r3f);
+        if (found === undefined) throw new Error("no bloom effect");
+        return found;
+      };
+      const frame = () =>
+        new Promise<Uint8Array>((resolve, reject) => {
+          const live = state();
+          const subscribe = live.internal?.subscribe;
+          if (typeof subscribe !== "function") {
+            reject(new Error(`no frame subscribe, keys ${Object.keys(live.internal ?? {}).join(",")}`));
+            return;
+          }
+          const ref = {
+            current: () => {
+              try {
+                stop();
+                const { gl } = state();
+                const context = gl.getContext();
+                const width = gl.domElement.width;
+                const height = gl.domElement.height;
+                context.bindFramebuffer(context.FRAMEBUFFER, null);
+                const pixels = new Uint8Array(width * height * 4);
+                context.readPixels(0, 0, width, height, context.RGBA, context.UNSIGNED_BYTE, pixels);
+                resolve(pixels);
+              } catch (error) {
+                reject(error instanceof Error ? error : new Error(String(error)));
+              }
+            },
+          };
+          const stop = subscribe(ref, 2, { getState: state });
+          const timer = setTimeout(() => reject(new Error(`frame did not render, subscribers ${live.internal.subscribers?.length}`)), 2000);
+          const finish = ref.current;
+          ref.current = () => {
+            clearTimeout(timer);
+            finish();
+          };
+        });
+      const glowing = (material: any) =>
+        material?.emissiveIntensity > 0 && (material.emissive?.r > 0 || material.emissive?.g > 0 || material.emissive?.b > 0);
+      const hideLeds = (scene: any) => {
+        const hidden: { visible: boolean }[] = [];
+        const groups = new Set<any>();
+        scene.traverse((object: any) => {
+          if (!object.isMesh) return;
+          const materials = Array.isArray(object.material) ? object.material : [object.material];
+          if (materials.some(glowing) && object.parent !== undefined) groups.add(object.parent);
+        });
+        for (const group of groups) {
+          group.traverse((node: any) => {
+            if (!node.isMesh) return;
+            const materials = Array.isArray(node.material) ? node.material : [node.material];
+            const glow = materials.some(glowing);
+            const clear = materials.some((material: any) => material?.transparent || material?.opacity < 1);
+            if (glow || clear) {
+              hidden.push(node);
+              node.visible = false;
+            }
+          });
+        }
+        return hidden;
+      };
+      const { scene } = state();
+      const bloom = findBloom(scene);
+      const hidden = hide ? hideLeds(scene) : [];
+      const intensity = bloom.intensity;
+      try {
+        const on = await frame();
+        bloom.intensity = 0;
+        const off = await frame();
+        let energy = 0;
+        let pixels = 0;
+        let max = 0;
+        for (let i = 0; i < on.length; i += 4) {
+          energy += on[i]! + on[i + 1]! + on[i + 2]!;
+          const delta = Math.max(Math.abs(on[i]! - off[i]!), Math.abs(on[i + 1]! - off[i + 1]!), Math.abs(on[i + 2]! - off[i + 2]!));
+          if (delta > max) max = delta;
+          if (delta > 1) pixels += 1;
+        }
+        if (energy === 0) throw new Error("the composited frame read back blank");
+        return { pixels, max };
+      } finally {
+        bloom.intensity = intensity;
+        for (const node of hidden) node.visible = true;
+        await frame();
+      }
+    }, hide);
+  }
+
+  async function orbit(page: Page, polarDeg: number, azimuthDeg: number) {
+    await page.evaluate(({ polarDeg, azimuthDeg }) => {
+      const { camera, controls } = window.orbeViewer.get();
+      const target = controls.target;
+      const distance = camera.position.distanceTo(target);
+      const polar = (polarDeg * Math.PI) / 180;
+      const azimuth = (azimuthDeg * Math.PI) / 180;
+      camera.position.set(
+        target.x + distance * Math.sin(polar) * Math.sin(azimuth),
+        target.y + distance * Math.cos(polar),
+        target.z + distance * Math.sin(polar) * Math.cos(azimuth),
+      );
+      camera.up.set(0, 1, 0);
+      camera.lookAt(target);
+      controls.update();
+    }, { polarDeg, azimuthDeg });
+    await still(page);
+  }
+
+  test("only an LED blooms from the side, from overhead and from the top view", async ({ browser, host }) => {
+    const { context, page } = await open(browser, host.base);
+    try {
+      let seq = 1100;
+      for (const theme of ["light", "dark"] as const) {
+        await setStageTheme(page, theme);
+        await page.evaluate((seq) => {
+          const { source, script } = window.orbeFixture;
+          source.push({ ...script.idle, seq, led_a: [0.01, 0.01, 0.01] });
+        }, seq);
+        seq += 1;
+        await page.waitForTimeout(300);
+        await still(page);
+        const lit = await bloomDelta(page, false);
+        expect(lit.pixels > 0, `${theme} lit LED did not bloom ${JSON.stringify(lit)}`).toBe(true);
+        for (const pose of [
+          { name: "23 deg off vertical at 90 deg azimuth", polar: 23, azimuth: 90 },
+          { name: "straight down", polar: 0, azimuth: 90 },
+        ]) {
+          await orbit(page, pose.polar, pose.azimuth);
+          const beside = await bloomDelta(page, true);
+          expect(beside.pixels, `${theme} ${pose.name} ${JSON.stringify(beside)}`).toBe(0);
+        }
+        await toggleView(page, "OrthographicCamera");
+        const top = await bloomDelta(page, true);
+        expect(top.pixels, `${theme} top view ${JSON.stringify(top)}`).toBe(0);
+        await toggleView(page, "PerspectiveCamera");
+      }
+    } finally {
+      await context.close();
+    }
+  });
 });
