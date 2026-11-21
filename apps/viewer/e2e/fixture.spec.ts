@@ -1163,6 +1163,12 @@ test.describe("fixture page", () => {
   }
 
   const bloomDelta = (page: Page, hide: boolean) => effectDelta(page, hide, "bloom");
+  // A slow page can still draw the last lit frame a while after the drive turns the LEDs
+  // down, so wait for the bloom to clear rather than for a fixed time. It must clear.
+  const unlit = (page: Page, label: string) =>
+    expect
+      .poll(() => bloomDelta(page, false), { message: label, timeout: 10_000 })
+      .toMatchObject({ pixels: 0 });
   const outlineDelta = (page: Page) => effectDelta(page, false, "outline");
 
   const drive = (page: Page, seq: number, amps: number) =>
@@ -1228,15 +1234,13 @@ test.describe("fixture page", () => {
         // Every LED off, with its die and lens drawn: nothing blooms.
         await drive(page, seq, 0);
         seq += 1;
-        await page.waitForTimeout(300);
-        const dark = await bloomDelta(page, false);
-        expect(dark.pixels, `${theme} top view, every LED off ${JSON.stringify(dark)}`).toBe(0);
+        await unlit(page, `${theme} top view, every LED off`);
         await toggleView(page, "PerspectiveCamera");
         // Off, or at half the full current, a highlight on an LED's die or lens does not bloom.
         for (const amps of [0, 0.005]) {
           await drive(page, seq, amps);
           seq += 1;
-          await page.waitForTimeout(300);
+          await unlit(page, `${theme} every LED at ${amps} A`);
           for (const pose of ORBIT_POSES) {
             await orbit(page, pose.polar, pose.azimuth);
             const off = await bloomDelta(page, false);
