@@ -112,6 +112,19 @@ fn turn(m: &[[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
     [0, 1, 2].map(|r| m[r][0] * v[0] + m[r][1] * v[1] + m[r][2] * v[2])
 }
 
+fn unturn(m: &[[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
+    [0, 1, 2].map(|c| m[0][c] * v[0] + m[1][c] * v[1] + m[2][c] * v[2])
+}
+
+/// The pin `on` names: the leg as the placed part shows it, without that part's name.
+fn on_pin(part: &str, leg: &Leg) -> String {
+    let prefix = format!("{part}.");
+    leg.shown
+        .strip_prefix(&prefix)
+        .unwrap_or(&leg.shown)
+        .to_string()
+}
+
 fn compose(a: &[[f64; 3]; 3], b: &[[f64; 3]; 3]) -> [[f64; 3]; 3] {
     [0, 1, 2].map(|r| [0, 1, 2].map(|c| (0..3).map(|k| a[r][k] * b[k][c]).sum()))
 }
@@ -705,6 +718,94 @@ impl Circuit<'_> {
         }
         legs.sort_by(|a, b| a.leaf.cmp(&b.leaf).then(a.lead.cmp(&b.lead)));
         legs
+    }
+
+    /// A top part whose `at` puts a downward leg into a hole of a board that has its own `at`.
+    /// The page draws that leg in the hole. The value is the board, the hole, and the pin `on`
+    /// would name. A board with no `at` is drawn in a row, so it is not under the part.
+    pub(super) fn hovering(&self) -> BTreeMap<String, (String, String, String)> {
+        let mut trees = BTreeMap::new();
+        let scene = self.tree(&mut trees, self.project.scene.file);
+        let layout = &scene["layout"];
+        let tops: Vec<(String, usize)> = self.insts[ROOT]
+            .children
+            .iter()
+            .map(|(name, id)| (name.clone(), *id))
+            .collect();
+        let mut boards = Vec::new();
+        for (name, id) in &tops {
+            let Some(part) = self.part(*id) else {
+                continue;
+            };
+            if part.holes.is_none() {
+                continue;
+            }
+            let written = &layout[name.as_str()];
+            if !written["on"].is_null() {
+                continue;
+            }
+            let Some(place) = placement(written) else {
+                continue;
+            };
+            let holes = self.holes(*id, part);
+            if !holes.is_empty() {
+                boards.push((name.clone(), place, holes));
+            }
+        }
+        let mut found = BTreeMap::new();
+        for (name, id) in &tops {
+            let written = &layout[name.as_str()];
+            if written["at"].is_null() || !written["on"].is_null() {
+                continue;
+            }
+            let Some(place) = placement(written) else {
+                continue;
+            };
+            let legs = self.legs(*id, &mut trees);
+            let turned = rotation(place.rotate);
+            let mut best: Option<(f64, String, String, String)> = None;
+            for leg in &legs {
+                let tip = turn(&turned, leg.tip);
+                let world = [
+                    place.at[0] + tip[0],
+                    place.at[1] + tip[1],
+                    place.at[2] + tip[2],
+                ];
+                for (board, board_at, holes) in &boards {
+                    if board == name {
+                        continue;
+                    }
+                    let delta = [
+                        world[0] - board_at.at[0],
+                        world[1] - board_at.at[1],
+                        world[2] - board_at.at[2],
+                    ];
+                    let local = unturn(&rotation(board_at.rotate), delta);
+                    for hole in holes {
+                        if local[2] > hole.at[2] + 0.1 {
+                            continue;
+                        }
+                        let distance = libm::hypot(local[0] - hole.at[0], local[1] - hole.at[1]);
+                        if distance > REACH_MM {
+                            continue;
+                        }
+                        if best.as_ref().is_some_and(|&(near, ..)| distance >= near) {
+                            continue;
+                        }
+                        best = Some((
+                            distance,
+                            board.clone(),
+                            hole.name.clone(),
+                            on_pin(name, leg),
+                        ));
+                    }
+                }
+            }
+            if let Some((_, board, hole, pin)) = best {
+                found.insert(name.clone(), (board, hole, pin));
+            }
+        }
+        found
     }
 }
 

@@ -77,10 +77,10 @@ $ orbe add led-5mm nano-board resistor-axial tactile-switch-6mm
 ...
 wrote parts.lock
 $ orbe check scene.jsonc
-scene.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND
+scene.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground GND
 $ orbe lint scene.jsonc
 ...
-2 warnings in scene.jsonc
+1 warning in scene.jsonc
 $ orbe open
 opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 19 engine parts, 32 nets)
 $ orbe step 100ms
@@ -104,7 +104,7 @@ PASS tests/button.test
 1 passed, 0 failed
 ```
 
-The 2 lint warnings say the scene has no `layout` and its ground is named after `nano.GND`. Both are what the scene means, so they stay.
+The lint warning says the scene has no `layout`, so the 3D page places the parts in a row for drawing only. This example is not a 3D scene, so the parts stay unplaced.
 
 ## Scenes
 
@@ -113,7 +113,7 @@ A scene is JSONC: JSON plus `//` comments and trailing commas. Its keys:
 - `format`: always `1`.
 - `parts`: each instance by name. `type` is a catalog id or a `./` path to a part folder of your own. The other keys are the part's params. `"not_simulated": "<why>"` keeps a part for drawing only. Nothing may be wired to it. A wire to one of its pins is a `not_simulated` error that gives `<why>`.
 - `wires`: pairs of pins, `["nano.D2", "btn1.a"]`. Wired pins join into nets.
-- `nets` (optional): names a net by one of its pins, `"GND": "nano.GND"`. Other nets take the name of their smallest pin, with `.` written `__`.
+- `nets` (optional): names a net by one of its pins, `"GND": "nano.GND"`. The ground net takes its pin's own name, such as `GND`, unless a name in `nets` already uses it. Every other net takes the name of its smallest pin, with `.` written `__`.
 - `layout` (optional): `"r1": { "on": { "a": "bb.d25" } }` seats a part in a breadboard, and `"bb": { "at": [x, y, z], "rotate": [rx, ry, rz] }` places one, in mm and degrees.
 - `ground` (optional): a pin on the ground net, as `"ground": "bb.X1"`, for a scene with no board to name one.
 - `sim` (optional): `{ "max_step": "1ms" }`, the engine's largest step, 10 ms by default.
@@ -139,7 +139,7 @@ In a part's folder, `part.jsonc` is the part: its pins, params, ratings and the 
 
 Give the board an `at`. Then seat every part with leads using `on`: name one pin and the hole its lead goes into, and orbe seats the other leads where the part's shape puts them, each in its hole's strip. That works for leads off the 2.54 mm grid too. `"ldr": { "on": { "a": "bb.c21" } }` seats the LDR's lead b in c22. `"rotate": [0, 0, 90]` turns a part a quarter turn first. Wire the rest with jumpers between holes.
 
-`at` alone only draws a part where you put it. Its leads join no hole, and nothing checks that it floats above the board. Run `orbe check` and `orbe lint` after seating: a lead in the channel, off the board or in a taken hole is an error whose hint names a placement that fits, when one does, and two pins of one part in one strip warn `scene.shorted`. `orbe skills get reference` has a whole breadboard scene.
+`at` alone only draws a part where you put it. Its leads join no hole. When that `at` puts a leg in a breadboard hole, `orbe lint` warns `scene.unplaced` and the hint seats it with `on`. Run `orbe check` and `orbe lint` after seating: a lead in the channel, off the board or in a taken hole is an error whose hint names a placement that fits, when one does, and two pins of one part in one strip warn `scene.shorted`. `orbe skills get reference` has a whole breadboard scene.
 
 ## Driving a session
 

@@ -1048,7 +1048,7 @@ fn a_file_that_ships_in_its_folder_is_published() {
             Checked {
                 parts: 1,
                 nets: 27,
-                ground: "mcu__GND".into(),
+                ground: "GND".into(),
             },
         );
     }
@@ -1074,7 +1074,7 @@ fn a_file_that_ships_in_its_folder_is_published() {
         Checked {
             parts: 1,
             nets: 27,
-            ground: "mcu__GND".into(),
+            ground: "GND".into(),
         },
     );
 }
@@ -1226,7 +1226,7 @@ fn a_required_count_or_duration_the_engine_takes_is_published() {
             Checked {
                 parts: 1,
                 nets: 2,
-                ground: "r1__a".into(),
+                ground: "a".into(),
             },
         );
     }
@@ -1343,7 +1343,7 @@ fn a_required_voltage_below_zero_is_published() {
             Checked {
                 parts: 1,
                 nets: 2,
-                ground: "r1__neg".into(),
+                ground: "neg".into(),
             },
         );
     }
@@ -1445,7 +1445,7 @@ fn a_part_whose_waiting_param_writes_its_only_body_is_published() {
         Checked {
             parts: 1,
             nets: 2,
-            ground: "r1__neg".into(),
+            ground: "neg".into(),
         },
     );
 }
@@ -1543,7 +1543,7 @@ fn a_body_a_waiting_choice_writes_is_published() {
         Checked {
             parts: 2,
             nets: 4,
-            ground: "r1__neg".into(),
+            ground: "neg".into(),
         },
     );
 }

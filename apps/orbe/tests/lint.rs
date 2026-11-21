@@ -204,27 +204,83 @@ fn a_board_net_with_no_scene_wire_is_quiet_and_a_wire_to_it_still_warns() {
     assert!(!run.stdout.contains("net.floating"), "{}", run.stdout);
 }
 
-/// The ground's name is still warned, and the hint still names the pin, on a scene that leaves
-/// `nets` out. AREF stays quiet.
+/// The ground net takes its pin's name, and a scene net that already has that name keeps the
+/// flattened one. AREF stays quiet either way.
 #[test]
-fn an_unnamed_ground_warns_and_names_the_pin() {
-    let dir = project(
-        "{ \"format\": 1, \"parts\": { \"nano\": { \"type\": \"nano-board\", \"firmware\": \"build/button.ino.hex\" } } }\n",
+fn the_ground_net_takes_its_pins_name_unless_a_scene_net_has_it() {
+    let nano = r#""type": "nano-board", "firmware": "build/button.ino.hex""#;
+    let plain = project(&format!(
+        "{{ \"format\": 1, \"parts\": {{ \"nano\": {{ {nano} }} }} }}\n"
+    ));
+    let run = orbe(plain.path(), &["check", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.stdout.contains(", ground GND\n"), "{}", run.stdout);
+    let run = orbe(plain.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!run.stdout.contains("ground_unnamed"), "{}", run.stdout);
+    assert!(!run.stdout.contains("net.floating"), "{}", run.stdout);
+
+    let taken = project(&format!(
+        "{{ \"format\": 1, \"parts\": {{ \"nano\": {{ {nano} }} }}, \"nets\": {{ \"GND\": \"nano.D13\" }} }}\n"
+    ));
+    let run = orbe(taken.path(), &["check", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains(", ground nano__GND\n"),
+        "{}",
+        run.stdout
     );
+}
+
+/// A part whose `at` puts a leg in a breadboard hole, with no `on`, is drawn as if plugged in.
+/// One off the board, one above the holes, one seated, and one over a board that has no `at`
+/// stay quiet.
+#[test]
+fn a_part_drawn_over_a_hole_warns_until_it_is_seated() {
+    let nano = r#""type": "nano-board", "firmware": "build/button.ino.hex""#;
+    let resistor = r#""type": "resistor-axial", "resistance": "10k""#;
+    let scene = format!(
+        r#"{{ "format": 1, "parts": {{ "bb": {{ "type": "breadboard-400" }}, "nano": {{ {nano} }}, "r1": {{ {resistor} }}, "r_far": {{ {resistor} }}, "r_high": {{ {resistor} }}, "r_on": {{ {resistor} }} }}, "nets": {{ "GND": "nano.GND" }}, "layout": {{ "bb": {{ "at": [0, 0, 0] }}, "nano": {{ "at": [200, 0, 0] }}, "r1": {{ "at": [-31.75, -13.97, 8.5] }}, "r_far": {{ "at": [200, 0, 8.5] }}, "r_high": {{ "at": [-31.75, -13.97, 100] }}, "r_on": {{ "on": {{ "a": "bb.a10" }} }} }} }}"#
+    );
+    let dir = project(&scene);
     let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(
-        run.stdout.contains("warning[scene.ground_unnamed]:"),
+        run.stdout.contains(
+            "warning[scene.unplaced]: `r1` is drawn on `bb` as if it were plugged in, and its leads join nothing"
+        ),
         "{}",
         run.stdout
     );
     assert!(
         run.stdout
-            .contains("add \"GND\": \"nano.GND\" to the scene's \"nets\""),
+            .contains("hint: seat it with \"on\", as \"r1\": { \"on\": { \"a\": \"bb.a1\" } }"),
         "{}",
         run.stdout
     );
-    assert!(!run.stdout.contains("net.floating"), "{}", run.stdout);
+    for name in ["r_far", "r_high", "r_on", "nano", "bb"] {
+        assert!(
+            !run.stdout.contains(&format!("`{name}` is drawn on")),
+            "{name} in\n{}",
+            run.stdout
+        );
+    }
+    let envelope = json(&orbe(dir.path(), &["lint", "scene.jsonc", "--json"]));
+    let codes: Vec<&str> = envelope["data"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["message"].as_str().unwrap().contains("drawn on"))
+        .map(|d| d["code"].as_str().unwrap())
+        .collect();
+    assert_eq!(codes, ["scene.unplaced"]);
+
+    let loose = project(&format!(
+        r#"{{ "format": 1, "parts": {{ "bb": {{ "type": "breadboard-400" }}, "nano": {{ {nano} }}, "r1": {{ {resistor} }} }}, "nets": {{ "GND": "nano.GND" }}, "layout": {{ "nano": {{ "at": [0, 0, 0] }}, "r1": {{ "at": [-31.75, -13.97, 8.5] }} }} }}"#
+    ));
+    let run = orbe(loose.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!run.stdout.contains("drawn on"), "{}", run.stdout);
 }
 
 /// A hole that only seats an open pin, with nothing else in its strip, does not reach the net.
@@ -515,14 +571,10 @@ fn each_rule_warns_where_the_scene_goes_wrong() {
         (at("\"led2\""), "net.floating"),
         (at("\"led2\""), "net.floating"),
         (at("\"r8\": { \"type\""), "scene.unconnected"),
-        (at("[0, 0, 270]"), "scene.rotation"),
-        (at("[-180, 0, 540]"), "scene.rotation"),
     ];
     let want: Vec<(usize, String)> = want.into_iter().map(|(l, c)| (l, c.into())).collect();
     assert_eq!(warned(&run.stdout), want, "{}", run.stdout);
     for line in [
-        "  hint: write \"rotate\": [0, 0, -90]",
-        "  hint: write \"rotate\": [180, 0, 180]",
         "warning[scene.unconnected]: nothing is wired to `led2`",
         "warning[scene.unconnected]: `r8` has no wire on b",
         "warning[scene.unplaced]: `led2` has no position",

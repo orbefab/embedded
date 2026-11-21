@@ -151,8 +151,7 @@ fn a_scene_that_reads_is_ok() {
     let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout
-            .contains("ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND"),
+        stdout.contains("ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground GND"),
         "{stdout}"
     );
 
@@ -162,7 +161,7 @@ fn a_scene_that_reads_is_ok() {
     assert_eq!(reply["ok"], true);
     assert_eq!(reply["data"]["parts"], 19);
     assert_eq!(reply["data"]["nets"], 32);
-    assert_eq!(reply["data"]["ground"], "nano__GND");
+    assert_eq!(reply["data"]["ground"], "GND");
 }
 
 #[test]
@@ -454,8 +453,7 @@ fn adding_parts_for_the_first_target() {
     let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout
-            .contains("ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND"),
+        stdout.contains("ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground GND"),
         "{stdout}"
     );
 
@@ -523,8 +521,7 @@ fn adding_parts_for_the_first_target() {
     let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout
-            .contains("ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND"),
+        stdout.contains("ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground GND"),
         "{stdout}"
     );
 
@@ -585,8 +582,7 @@ fn adding_parts_for_the_first_target() {
     let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout
-            .contains("ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND"),
+        stdout.contains("ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground GND"),
         "{stdout}"
     );
     assert!(
@@ -719,7 +715,7 @@ fn the_first_target_walk_from_the_folder_above() {
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert_eq!(
         stdout,
-        "proj/scene.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND\n"
+        "proj/scene.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground GND\n"
     );
     assert!(proj.join("parts.lock").is_file());
 }
@@ -1319,7 +1315,7 @@ fn a_scene_not_named_scene_jsonc_gets_a_hint_that_runs() {
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert_eq!(
         stdout,
-        "blinky.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND\n"
+        "blinky.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 32 nets, ground GND\n"
     );
 }
 

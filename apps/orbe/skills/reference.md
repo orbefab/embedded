@@ -54,7 +54,7 @@ The worked example on a breadboard, with the Nano across the channel over column
 $ orbe add breadboard-400
 ...
 $ orbe check breadboard.jsonc
-breadboard.jsonc: ok, 6 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND
+breadboard.jsonc: ok, 6 scene parts, expanding to 19 engine parts, 32 nets, ground GND
 ```
 
 Read a hole as a pin, as `orbe get @bb.a12`. `snapshot` lists no holes. A leg that lands in the channel, off the board, between holes or in a hole another leg holds is an error that names the leg and the hole. Its hint is a placement that seats every leg with no strip joining two of the part's pins: a quarter turn from the same hole, else a hole within 10.16 mm and a turn, else it says no quarter turn seats the part there. A hole holds one lead, so a wire end in a hole a leg or another wire end already names is an error that names both. When the strip has a free hole the hint is `a hole holds one lead; move one of them to a free hole in the same strip, such as bb.c1`. When every hole in the strip is taken the hint is `a hole holds one lead, and every hole in this strip is taken; free one first, for example by moving one of its leads to an empty strip and wiring that strip back to the hole it left`. When a free hole remains but each one is already named by another hint in this check, the hint is `a hole holds one lead; every free hole in this strip is already named by another hint in this check`. A wire may still end on a pin off the board, such as an Uno's header pin.
@@ -142,10 +142,8 @@ Only this machine can reach the page's address. From another machine it works th
 | `scene.no_model` | A part has no engine model, no `not_simulated` reason and no `"joins_only": true`, so nothing runs for it. Use a part with a model. |
 | `scene.unconnected` | Nothing is wired to a part, or a part with at most 3 nets has a net with no wire. Wire it, or leave it open when the circuit means it. |
 | `net.floating` | A net has no DC path to ground. Fix it when a part reads that net. |
-| `scene.ground_unnamed` | The ground net is named after a pin. Name it in `nets`, as `"GND": "nano.GND"`. |
-| `scene.unplaced` | Parts have no `layout` position, so the 3D page puts them in a row. Seat them on a breadboard when their place matters. |
+| `scene.unplaced` | Parts have no `layout` position, so the 3D page puts them in a row. A part whose `at` puts a leg in a breadboard hole, with no `on`, is drawn as if plugged in while its leads join nothing. Seat it with `on`, as the hint shows, when its place matters. |
 | `scene.shorted` | Two pins of one part sit in one breadboard strip, such as a resistor turned along a column. Turn the part a quarter turn, as the hint shows. |
-| `scene.rotation` | A `rotate` angle is outside -180 to 180 degrees. Write the same turn as the hint shows. |
 
 ## Errors
 
