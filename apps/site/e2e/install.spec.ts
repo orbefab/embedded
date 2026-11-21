@@ -17,14 +17,17 @@ test("the start page shows each command and the Block's scene", async ({ browser
   const page = await context.newPage();
   await page.goto(`${host.base}/embedded/`);
   const installs = page.locator('[data-testid="install"]');
-  await expect(installs).toHaveCount(5);
+  await expect(installs).toHaveCount(8);
   const texts = (await installs.locator("[data-copy-text]").allInnerTexts()).map((text) => text.trim());
   expect(texts).toEqual([
     "curl -fsSL https://orbefab.com/embedded/install.sh | sh",
     "orbe skills get core",
-    "orbe add nano-led-fade",
+    "orbe add nano-button-led",
     "orbe check scene.jsonc",
     "orbe test",
+    "orbe open --headed",
+    "orbe play",
+    "orbe close",
   ]);
   await expect(page.getByTestId("scene-file")).toContainText("breadboard-400");
   await expect(page.getByTestId("cli-coming")).toHaveCount(0);
@@ -34,6 +37,7 @@ test("the start page shows each command and the Block's scene", async ({ browser
   expect(body).toContain("A Block is a small circuit that works: a scene file, its firmware and its tests. In an empty folder, orbe add copies one in.");
   expect(body).toContain("The scene file describes the circuit:");
   expect(body).toContain("Runs the firmware and the Block's tests.");
+  expect(body).toContain("Opens the circuit in 3D, runs time, then closes the session.");
   expect(body).toContain("Boards:");
   expect(body).not.toContain("Boards today:");
   expect(body).not.toContain("parts.lock");

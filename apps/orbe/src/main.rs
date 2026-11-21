@@ -665,8 +665,13 @@ fn print_skill(command: SkillsCommand) -> ExitCode {
             print_json(&json!({ "ok": true, "data": { "skills": skills } }));
         }
         SkillsCommand::List { json: false } => {
+            let width = skills::SKILLS
+                .iter()
+                .map(|s| s.name.len())
+                .max()
+                .unwrap_or(0);
             for skill in skills::SKILLS {
-                println!("{:<8} {}", skill.name, skill.about);
+                println!("{:<width$}  {}", skill.name, skill.about);
             }
         }
         SkillsCommand::Get { name, json } => {
@@ -728,9 +733,9 @@ fn check(scene: &Path, json: bool) -> ExitCode {
         }));
     } else {
         println!(
-            "{}: ok, {} engine parts, {} nets, ground {}",
+            "{}: ok, {}, {} nets, ground {}",
             scene.display(),
-            netlist.parts,
+            orbe_scene::part_counts(netlist.refs.top.len(), netlist.parts),
             netlist.nets.len(),
             netlist.ground
         );

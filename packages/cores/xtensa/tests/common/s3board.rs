@@ -8,6 +8,7 @@ use orbe_xtensa::{
     Bus, Cause, Core, Cycle, Esp32s3, Exit, PagedRam, Sr, Stop, Unimplemented, Width,
 };
 
+use super::Straight;
 use super::elf::Elf;
 
 const IRAM: Range<u32> = 0x4037_0000..0x403e_0000;
@@ -57,6 +58,12 @@ impl Board {
             ram.write_bytes(segment.addr, &segment.data);
         }
         board
+    }
+
+    /// The board with a code version that moves at each store to instruction RAM. Its lines
+    /// never move, so it is still.
+    pub fn kept(self) -> Straight<Board> {
+        Straight::kept(self, IRAM, true)
     }
 
     /// The print hook the classic board uses does not exist here. A served function returns 0
@@ -172,9 +179,14 @@ pub struct Run {
     pub uart: String,
     pub stop: Stop,
     pub core: Core<Esp32s3>,
+    /// The bus's trace of every load and store.
+    pub trace: u64,
+    /// The full steps the core made.
+    pub steps: u64,
 }
 
 /// Runs a probe image from its entry until it prints `END <probe>`, stops, or reaches `limit`.
+/// The board keeps a code version, so the core runs straight runs.
 pub fn run_probe(elf: &Elf, probe: &str, limit: Cycle, served: &[&str]) -> Run {
     run_answering(elf, probe, limit, served, |_, _| false)
 }
@@ -186,9 +198,19 @@ pub fn run_answering(
     probe: &str,
     limit: Cycle,
     served: &[&str],
+    answer: impl FnMut(&mut Core<Esp32s3>, Unimplemented) -> bool,
+) -> Run {
+    run_answering_on(Board::load(elf, served).kept(), elf, probe, limit, answer)
+}
+
+/// [`run_answering`] on `board`, as the image loaded it.
+pub fn run_answering_on(
+    mut board: Straight<Board>,
+    elf: &Elf,
+    probe: &str,
+    limit: Cycle,
     mut answer: impl FnMut(&mut Core<Esp32s3>, Unimplemented) -> bool,
 ) -> Run {
-    let mut board = Board::load(elf, served);
     let mut core = Core::<Esp32s3>::new();
     core.set_pc(elf.entry);
     let end = format!("END {probe}\n");
@@ -196,7 +218,7 @@ pub fn run_answering(
         let to = Cycle((core.cycle().0 + 20_000).min(limit.0));
         let stop = core.run_until(&mut board, to);
         if stop == Stop::Bus {
-            board.serve(&mut core);
+            board.bus.serve(&mut core);
             continue;
         }
         if stop == Stop::Spin {
@@ -207,11 +229,13 @@ pub fn run_answering(
         {
             continue;
         }
-        if board.uart.contains(&end) || stop != Stop::Limit || core.cycle() >= limit {
+        if board.bus.uart.contains(&end) || stop != Stop::Limit || core.cycle() >= limit {
             return Run {
-                uart: board.uart,
+                uart: board.bus.uart,
                 stop,
                 core,
+                trace: board.trace,
+                steps: board.steps.get(),
             };
         }
     }

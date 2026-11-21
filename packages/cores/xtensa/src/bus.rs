@@ -107,23 +107,27 @@ pub trait Bus {
     /// The levels of the interrupt lines at `now`, one bit per interrupt number. The core reads
     /// the bits of the external level, edge and NMI interrupts before an instruction when this
     /// run has not read them yet, when the cycle has reached [`Bus::next_event`], or when the
-    /// previous instruction accessed an address [`Bus::access_moves_lines`] names. Between those
-    /// reads the lines stay as the last read left them. The lines may change at an access or at
-    /// [`Bus::next_event`], so that a run split at any cycle sees the same lines as one run. The
-    /// core compares each call with the last one, so an edge or NMI line must read low on one
-    /// call and high on a later one.
+    /// previous instruction stored to an address [`Bus::access_moves_lines`] names or loaded
+    /// from one [`Bus::load_moves_lines`] names. Between those reads the lines stay as the last
+    /// read left them. The lines may change at an access or at [`Bus::next_event`], so that a run
+    /// split at any cycle sees the same lines as one run. The core compares each call with the
+    /// last one, so an edge or NMI line must read low on one call and high on a later one.
     fn interrupts(&mut self, now: Cycle) -> u32;
     /// The first cycle after `now` at which the lines can change with no access, or `None`. A
     /// poll asks at the cycle of the read. A one-step read does not ask. A core in `WAITI` asks
     /// from `idle` and skips to the earliest of this, its own timer match and the run's limit.
     fn next_event(&mut self, now: Cycle) -> Option<Cycle>;
-    /// Whether the core returns [`Stop::Yield`](crate::Stop::Yield) before its next step.
+    /// Whether the core returns [`Stop::Yield`](crate::Stop::Yield) before its next step. The
+    /// core does not ask between the ops of a straight run, which ends at an access that
+    /// [`Bus::access_moves_lines`] or [`Bus::load_moves_lines`] names. So a bus turns this on
+    /// only in such an access, or between runs.
     fn yields(&self) -> bool {
         false
     }
 
-    /// Records the start of the instruction at `now` when the core does not read the lines.
-    /// A bus that timestamps a store from that cycle records it here. The default does nothing.
+    /// Records the start of the instruction at `now` when the core does not read the lines,
+    /// which includes each op of a straight run. A bus that timestamps a store from that cycle
+    /// records it here. The default does nothing.
     fn begin_step(&mut self, _now: Cycle) {}
 
     /// Whether a data access at `addr` can change what [`Bus::interrupts`] returns. The default
@@ -131,5 +135,32 @@ pub trait Bus {
     /// the lines it last read until the next event.
     fn access_moves_lines(&self, _addr: u32) -> bool {
         true
+    }
+
+    /// Whether a load from `addr` can change what [`Bus::interrupts`] returns. The default is
+    /// [`Bus::access_moves_lines`]. A register whose load changes nothing a poll reads answers
+    /// `false` here even when a store to it can move the lines.
+    fn load_moves_lines(&self, addr: u32) -> bool {
+        self.access_moves_lines(addr)
+    }
+
+    /// A count that moves whenever a word [`Bus::fetch`] returned may read differently: a store
+    /// or a loader wrote its bytes, or the map that placed it changed. While the count holds, a
+    /// fetch of an address that returned a word returns that word again, unless
+    /// [`Bus::fetch_held`] is set. The core then runs an instruction it decoded at that count
+    /// without fetching it, and runs straight runs of them. `None`, the default, keeps no
+    /// count, and the core fetches every instruction, compares its bytes and runs no straight
+    /// run.
+    fn code_version(&self) -> Option<u64> {
+        None
+    }
+
+    /// Whether a fetch now returns [`Exit::Stop`] whatever its address. The core asks before an
+    /// instruction it runs without fetching at the start of a step, and stops there as the fetch
+    /// would. It does not ask between the ops of a straight run, so a bus sets this only in an
+    /// access that [`Bus::access_moves_lines`] or [`Bus::load_moves_lines`] names, or between
+    /// runs. The default is never.
+    fn fetch_held(&self) -> bool {
+        false
     }
 }

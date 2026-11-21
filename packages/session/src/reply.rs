@@ -772,8 +772,9 @@ impl Data {
             } => {
                 let _ = write!(
                     out,
-                    "opened {scene} at t=0: {} ({engine_parts} engine parts, {nets} nets)",
-                    parts.join(", ")
+                    "opened {scene} at t=0: {} ({}, {nets} nets)",
+                    parts.join(", "),
+                    orbe_scene::part_counts(parts.len(), *engine_parts)
                 );
                 for d in diagnostics {
                     let _ = write!(out, "\n  {}", d.text());

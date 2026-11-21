@@ -711,6 +711,22 @@ impl<'p> Circuit<'p> {
             } else {
                 format!("{prefix}.")
             };
+            if part.holes.is_some() {
+                let hint = crate::holes::near_hole_hint(
+                    seg,
+                    part.pins.iter().map(|p| p.name.as_str()),
+                    &dotted,
+                );
+                return (
+                    Code::UnknownPin,
+                    format!("{owner} has no hole `{seg}`"),
+                    format!(
+                        "{hint}a {}'s holes are named row then column: {}",
+                        part.label,
+                        crate::holes::holes_text(part.pins.iter().map(|p| p.name.as_str()))
+                    ),
+                );
+            }
             let hint = did_you_mean(seg, part.pins.iter().map(|p| p.name.as_str()), &dotted);
             let name = if prefix.is_empty() {
                 "it".to_string()

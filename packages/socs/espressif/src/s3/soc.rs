@@ -9,6 +9,7 @@
 //! never sees time go back when one core's access comes a cycle after its step's start.
 
 use std::collections::BTreeMap;
+use std::iter;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -18,7 +19,9 @@ use super::analog::Analog;
 use super::app::{self, AppControl, Hold, Steer};
 use super::calibration::{self, Calibration};
 use super::clock::{CpuClock, Source, Tick};
+use super::code::Code;
 use super::efuse::{Efuse, EfuseSet};
+use super::events::{Events, Peripheral};
 use super::extmem;
 use super::flash::{self, Flash};
 use super::gates::{self, Block, Gates};
@@ -34,7 +37,7 @@ use super::sar::{self, Sar};
 use super::sha::{self, Sha};
 use super::spi1::{self, FlashRefusal, Spi1};
 use super::spi2::{self, Setting, Spi2};
-use super::timers::{Register, Systimer, Watchdogs};
+use super::timers::{Expiry, Register, Systimer, Watchdogs};
 use super::uart::{self, Uarts};
 use super::usb::{self, UsbSerialJtag};
 use super::{Duty, Pc, RAM, Refused, ResetCause, Touch};
@@ -44,6 +47,9 @@ pub(crate) const SRAM: usize = 512 * 1024;
 pub(crate) const RTC_FAST: Range<u32> = 0x600f_e000..0x6010_0000;
 /// RTC slow memory, on the data bus.
 pub(crate) const RTC_SLOW: Range<u32> = 0x5000_0000..0x5000_2000;
+
+/// The netted GPIOs fit one mask.
+const _: () = assert!(PADS <= 64);
 
 const PERIPHERALS: Range<u32> = 0x6000_0000..0x600d_1000;
 pub(crate) const GPIO: u32 = 0x6000_4000;
@@ -87,7 +93,11 @@ pub(crate) struct Soc {
     rtc_slow: PagedRam,
     /// The mask ROM, on a chip booted from flash.
     rom: Option<Arc<[u8]>>,
-    pub(crate) flash: Option<Flash>,
+    flash: Option<Flash>,
+    /// The code version the cores' decode tables run on, and the lines it watches.
+    code: Code,
+    /// The next event of each peripheral the last poll found.
+    events: Events,
     /// Registers kept as plain words, by address.
     plain: BTreeMap<u32, u32>,
     pub(crate) gpio: Gpio,
@@ -117,6 +127,8 @@ pub(crate) struct Soc {
     calibration: [Calibration; 2],
     /// The GPIOs with nets, whose drives the image holds.
     netted: Vec<u8>,
+    /// Bit `n` set for each GPIO `n` in `netted`, each below [`PADS`].
+    netted_mask: u64,
     pub(crate) unmodeled: BTreeMap<u32, Touch>,
     /// Each write that changed a register the model keeps without running its effect, with
     /// that register, in the order the writes landed.
@@ -317,6 +329,15 @@ fn effect(addr: u32) -> Option<Effect> {
     })
 }
 
+/// The watchdog deadline, the next LEDC event and the I2C controller's, and whether I2C runs.
+#[derive(Debug, PartialEq, Eq)]
+struct Armed {
+    deadline: Option<Expiry>,
+    ledc: Option<Tick>,
+    i2c_runs: bool,
+    i2c: Option<Tick>,
+}
+
 impl Soc {
     pub(crate) fn new(clock: CpuClock, netted: &[u8], watchdogs: Watchdogs) -> Soc {
         let mut soc = Soc {
@@ -326,6 +347,8 @@ impl Soc {
             rtc_slow: PagedRam::new(RTC_SLOW.start, (RTC_SLOW.end - RTC_SLOW.start) as usize),
             rom: None,
             flash: None,
+            code: Code::default(),
+            events: Events::default(),
             plain: BTreeMap::new(),
             gpio: Gpio::new(netted),
             systimer: Systimer::new(),
@@ -349,6 +372,7 @@ impl Soc {
             matrix: Matrix::default(),
             calibration: Default::default(),
             netted: netted.to_vec(),
+            netted_mask: netted.iter().fold(0, |mask, &gpio| mask | 1 << gpio),
             unmodeled: BTreeMap::new(),
             changes: Vec::new(),
             pending: None,
@@ -446,16 +470,20 @@ impl Soc {
     /// that channel and whether `OUT_INV_SEL` inverts it.
     fn ledc_pads(&self) -> Vec<(u8, u8, bool)> {
         let channels = ledc::SIGNAL..ledc::SIGNAL + ledc::CHANNELS as u16;
-        (0..PADS as u8)
-            .filter(|&pad| self.netted(pad))
-            .filter_map(|pad| {
-                let (signal, inverted) = self.gpio.carries(usize::from(pad))?;
-                let channel = channels
-                    .contains(&signal)
-                    .then(|| (signal - ledc::SIGNAL) as u8)?;
-                Some((pad, channel, inverted))
-            })
-            .collect()
+        let mut left = self.netted_mask;
+        iter::from_fn(move || {
+            let pad = (left != 0).then(|| left.trailing_zeros() as u8)?;
+            left &= left - 1;
+            Some(pad)
+        })
+        .filter_map(|pad| {
+            let (signal, inverted) = self.gpio.carries(usize::from(pad))?;
+            let channel = channels
+                .contains(&signal)
+                .then(|| (signal - ledc::SIGNAL) as u8)?;
+            Some((pad, channel, inverted))
+        })
+        .collect()
     }
 
     /// Puts `set` in the eFuse controller's read registers, where IDF reads its calibration.
@@ -471,6 +499,26 @@ impl Soc {
     /// Adds the ROM and the flash, as a chip booted from flash has them.
     pub(crate) fn attach_rom(&mut self, rom: Arc<[u8]>) {
         self.rom = Some(rom);
+        self.code.moved();
+    }
+
+    /// Gives the chip `flash`, which fetches then read through its MMU.
+    pub(crate) fn attach_flash(&mut self, flash: Flash) {
+        self.flash = Some(flash);
+        self.code.moved();
+    }
+
+    /// The whole flash, on a chip that has it.
+    pub(crate) fn flash_bytes(&self) -> Option<&[u8]> {
+        self.flash.as_ref().map(Flash::bytes)
+    }
+
+    /// Maps `size` bytes of flash from `offset` at bus address `vaddr`, as the bootloader maps
+    /// an app's segment.
+    pub(crate) fn map_flash(&mut self, vaddr: u32, offset: u32, size: u32) {
+        let flash = self.flash.as_mut().expect("a chip with flash");
+        flash.map(vaddr, offset, size);
+        self.code.moved();
     }
 
     /// The word at `addr`, as a load at `cycle` reads it.
@@ -482,6 +530,7 @@ impl Soc {
     /// The PRO CPU's bus for one access outside a run, as a test makes it.
     #[cfg(test)]
     pub(crate) fn bus(&mut self) -> CoreBus<'_> {
+        self.forget_events();
         CoreBus::new(
             self,
             Step {
@@ -583,6 +632,15 @@ impl Soc {
         true
     }
 
+    /// A load of a UART's `STATUS` or of USB Serial/JTAG's `EP1_CONF` settles its peripheral
+    /// to the load's tick, as a poll does, and changes nothing else, so it moves no line. A
+    /// firmware that prints reads one of them before each byte it sends.
+    pub(crate) fn load_moves_lines(addr: u32) -> bool {
+        let word = addr & !3;
+        let status = uart::BASES.iter().any(|&base| word == base + uart::STATUS);
+        !status && word != USB_SERIAL_JTAG + usb::EP1_CONF && Self::access_moves_lines(addr)
+    }
+
     pub(crate) fn sram_offset(addr: u32, fetch: bool) -> Option<u32> {
         RAM.iter()
             .filter(|w| w.code || !fetch)
@@ -593,6 +651,7 @@ impl Soc {
     /// Writes `bytes` from `addr` into SRAM or RTC memory, as a loader does. Every byte lies in
     /// one of them.
     pub(crate) fn poke(&mut self, addr: u32, bytes: &[u8]) {
+        self.code.moved();
         if let Some(offset) = Self::sram_offset(addr, false) {
             self.sram.write_bytes(offset, bytes);
         } else if RTC_FAST.contains(&addr) {
@@ -1025,10 +1084,18 @@ impl Soc {
                 }
                 true
             }
-            _ if MMU_TABLE.contains(&addr) => self
-                .flash
-                .as_mut()
-                .is_some_and(|flash| flash.write_mmu(addr - MMU_TABLE.start, value)),
+            _ if MMU_TABLE.contains(&addr) => {
+                let Some(flash) = self.flash.as_mut() else {
+                    return false;
+                };
+                let offset = addr - MMU_TABLE.start;
+                let before = flash.read_mmu(offset);
+                let done = flash.write_mmu(offset, value);
+                if flash.read_mmu(offset) != before {
+                    self.code.moved();
+                }
+                done
+            }
             _ => false,
         };
         let value = if base == EXTMEM {
@@ -1278,7 +1345,7 @@ impl Soc {
 
     /// Whether pad `gpio` has a net.
     pub(crate) fn netted(&self, gpio: u8) -> bool {
-        self.netted.contains(&gpio)
+        usize::from(gpio) < PADS && self.netted_mask >> gpio & 1 != 0
     }
 
     /// Puts GPIO and IO_MUX back to power-on, as a reset does.
@@ -1325,21 +1392,28 @@ fn word_of(addr: u32, width: Width) -> (u32, u32, u32) {
 }
 
 impl Soc {
-    fn fetch(&mut self, addr: u32) -> Result<u32, Exit> {
-        if self.changed.is_some()
+    /// Whether a store set something the run reads before the next instruction, so every fetch
+    /// stops.
+    fn fetch_held(&self) -> bool {
+        self.changed.is_some()
             || self.sampled.is_some()
             || self.rearmed
             || self.reclocked
             || self.started
-        {
+    }
+
+    fn fetch(&mut self, addr: u32) -> Result<u32, Exit> {
+        if self.fetch_held() {
             return Err(Exit::Stop);
         }
         if let Some(offset) = Self::sram_offset(addr, true) {
+            self.code.fetched_sram(offset);
             return Ok(self.sram.read(offset, Width::Word));
         }
         let word = if flash::IROM.contains(&addr) || rom::ROM.contains(&addr) {
             self.memory_word(addr)
         } else if RTC_FAST.contains(&addr) {
+            self.code.fetched_rtc_fast(addr - RTC_FAST.start);
             Some(self.rtc_fast.read(addr, Width::Word))
         } else {
             None
@@ -1365,6 +1439,7 @@ impl Soc {
         if !PERIPHERALS.contains(&addr) {
             return Err(Exit::Fault(Cause::LoadStoreError));
         }
+        self.events.touch(word);
         if let Some(refused) = self.gated(word) {
             self.ending = Some(Ending::Refused(refused));
             return Err(Exit::Stop);
@@ -1423,10 +1498,12 @@ impl Soc {
                 }
             }
             self.sram.write(offset, width, value);
+            self.code.stored_sram(offset);
             return Ok(());
         }
         if RTC_FAST.contains(&addr) {
             self.rtc_fast.write(addr, width, value);
+            self.code.stored_rtc_fast(addr - RTC_FAST.start);
             return Ok(());
         }
         if RTC_SLOW.contains(&addr) {
@@ -1436,6 +1513,7 @@ impl Soc {
         if !PERIPHERALS.contains(&addr) {
             return Err(Exit::Fault(Cause::LoadStoreError));
         }
+        self.events.touch(addr);
         self.store_register(step, cycle, addr, width, value)?;
         if step.other_sleeps {
             self.steer(Steer::Wake(step.start));
@@ -1510,7 +1588,9 @@ impl Soc {
             || uart::Uarts::index(base).is_some()
             || (base == SYSTEM && gates::OFFSETS.contains(&(word - SYSTEM)));
         if !pads {
-            let deadline = self.watchdogs.deadline();
+            // A store to USB Serial/JTAG moves no watchdog, LEDC or I2C event.
+            let usb = base == USB_SERIAL_JTAG;
+            let armed = (!usb || cfg!(debug_assertions)).then(|| self.armed());
             let app = [
                 SYSTEM + app::CONTROL_0,
                 RTC_CNTL + OPTIONS0,
@@ -1525,8 +1605,6 @@ impl Soc {
             } else {
                 value
             };
-            let due = self.ledc.next(self.clock.source.apb());
-            let i2c = (self.i2c.runs(), self.i2c.next_event());
             let usb_due = self.usb.next_event(now);
             self.refuse_clock_change(word, kept, now)?;
             self.write_kept(now, word, kept);
@@ -1540,21 +1618,31 @@ impl Soc {
                 return Err(Exit::Stop);
             }
             self.changes.extend(change.map(|touch| (word, touch)));
-            if !i2c.0 && self.i2c.runs() {
-                self.i2c_started = Some(step.core);
+            if let Some(before) = armed {
+                let after = self.armed();
+                debug_assert!(
+                    !usb || after == before,
+                    "a USB Serial/JTAG store moved {after:?}"
+                );
+                if !before.i2c_runs && after.i2c_runs {
+                    self.i2c_started = Some(step.core);
+                }
+                self.rearmed |= after.deadline != before.deadline
+                    || after.ledc != before.ledc
+                    || after.i2c != before.i2c;
             }
-            self.rearmed |= self.watchdogs.deadline() != deadline
-                || self.ledc.next(self.clock.source.apb()) != due
-                || self.i2c.next_event() != i2c.1
-                || self.usb.next_event(now) != usb_due;
+            self.rearmed |= self.usb.next_event(now) != usb_due;
             return Ok(());
         }
         self.settle_ledc(now);
         self.rmt.settle(now);
-        let rmt_due = self.rmt.next_event();
+        // A UART store routes no pad to LEDC and moves no RMT event.
+        let uart = uart::Uarts::index(base).is_some();
+        let compared = !uart || cfg!(debug_assertions);
+        let rmt_due = compared.then(|| self.rmt.next_event());
         let uart_due = self.uart.next_event(now);
         let before = self.image();
-        let carried = self.ledc_pads();
+        let carried = compared.then(|| self.ledc_pads());
         self.write_kept(now, word, value);
         if self.rmt_pending {
             self.rmt_started = Some(step.core);
@@ -1567,13 +1655,26 @@ impl Soc {
         if self.image() != before {
             self.changed = Some(now);
         }
-        if self.rmt.next_event() != rmt_due || self.uart.next_event(now) != uart_due {
+        if let Some(due) = rmt_due {
+            let after = self.rmt.next_event();
+            debug_assert!(!uart || after == due, "a UART store moved the RMT event");
+            self.rearmed |= after != due;
+        }
+        if self.uart.next_event(now) != uart_due {
             self.rearmed = true;
         }
-        if uart::Uarts::index(word).is_some() {
+        if uart {
             self.uart_started = Some(step.core);
         }
-        for (pad, channel, inverted) in self.ledc_pads() {
+        let Some(carried) = carried else {
+            return Ok(());
+        };
+        let pads = self.ledc_pads();
+        debug_assert!(
+            !uart || pads == carried,
+            "a UART store routed a pad to LEDC"
+        );
+        for (pad, channel, inverted) in pads {
             if let Some(effect) = self.ledc.sent(usize::from(channel))
                 && !carried.contains(&(pad, channel, inverted))
             {
@@ -1583,6 +1684,16 @@ impl Soc {
             }
         }
         Ok(())
+    }
+
+    /// The events a store outside the pads compares before and after itself.
+    fn armed(&self) -> Armed {
+        Armed {
+            deadline: self.watchdogs.deadline(),
+            ledc: self.ledc.next(self.clock.source.apb()),
+            i2c_runs: self.i2c.runs(),
+            i2c: self.i2c.next_event(),
+        }
     }
 
     /// Steers the run after a store took the APP CPU's hold from `before`, with `reset` a write
@@ -1620,23 +1731,49 @@ impl Soc {
         self.matrix.lines(core, sources)
     }
 
+    /// Forgets the next event of every peripheral, at the start of a slice. The pads and the
+    /// host's input may have changed since the last one.
+    pub(crate) fn forget_events(&mut self) {
+        self.events.forget();
+    }
+
+    /// The cycle the lines can next change at. Each peripheral's event comes from
+    /// [`Events`] while it holds there, and from the peripheral when not.
     fn next_event(&mut self, cycle: Cycle) -> Option<Cycle> {
         let now = self.stamp(cycle);
         self.rmt.settle(now);
         let apb = self.clock.source.apb();
         self.uart.settle(now, &self.gpio, apb);
-        let next = [
-            self.systimer.next_event(now),
-            self.watchdogs.next_alarm(now),
-            self.spi2.next_event(),
-            self.usb.next_event(now),
-            self.rmt.next_event(),
-            self.uart.next_event(now),
-        ]
-        .into_iter()
-        .flatten()
-        .min()?;
-        Some(self.clock.cycle_after(next))
+        let mut next: Option<Tick> = None;
+        for peripheral in Peripheral::ALL {
+            let at = self.events.kept(peripheral, now).unwrap_or_else(|| {
+                let at = self.ask(peripheral, now);
+                self.events.keep(peripheral, at);
+                at
+            });
+            #[cfg(debug_assertions)]
+            {
+                let asked = match peripheral {
+                    Peripheral::Timers => self.watchdogs.clone().next_alarm(now),
+                    _ => self.ask(peripheral, now),
+                };
+                assert_eq!(at, asked, "the kept event of {peripheral:?} at {now:?}");
+            }
+            next = next.into_iter().chain(at).min();
+        }
+        Some(self.clock.cycle_after(next?))
+    }
+
+    /// The first tick after `now` at which `peripheral` can move a line.
+    fn ask(&mut self, peripheral: Peripheral, now: Tick) -> Option<Tick> {
+        match peripheral {
+            Peripheral::Systimer => self.systimer.next_event(now),
+            Peripheral::Timers => self.watchdogs.next_alarm(now),
+            Peripheral::Spi2 => self.spi2.next_event(),
+            Peripheral::Usb => self.usb.next_event(now),
+            Peripheral::Rmt => self.rmt.next_event(),
+            Peripheral::Uart => self.uart.next_event(now),
+        }
     }
 }
 
@@ -1691,6 +1828,10 @@ impl Bus for CoreBus<'_> {
         Soc::access_moves_lines(addr)
     }
 
+    fn load_moves_lines(&self, addr: u32) -> bool {
+        Soc::load_moves_lines(addr)
+    }
+
     fn next_event(&mut self, now: Cycle) -> Option<Cycle> {
         self.stamp_start();
         self.soc.next_event(now)
@@ -1698,5 +1839,13 @@ impl Bus for CoreBus<'_> {
 
     fn yields(&self) -> bool {
         self.soc.steer.is_some()
+    }
+
+    fn code_version(&self) -> Option<u64> {
+        Some(self.soc.code.version())
+    }
+
+    fn fetch_held(&self) -> bool {
+        self.soc.fetch_held()
     }
 }
