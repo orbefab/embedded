@@ -924,6 +924,15 @@ test("a touch drag on empty stage space does not press the button", async ({ bro
   }));
   expect(touchAction).toEqual({ box: "pan-y", canvas: "pan-y" });
   const before = await page.evaluate(() => window.orbeViewer.get().camera.position.toArray() as number[]);
+  // The hint shows for 1.6 s, and a slow page can take longer than that to reach the check below,
+  // so record it when it appears.
+  await page.evaluate(() => {
+    const seen = window as unknown as { hintSeen?: string };
+    new MutationObserver(() => {
+      const text = document.querySelector("[data-testid=gesture-hint]")?.textContent;
+      if (text) seen.hintSeen = text;
+    }).observe(document.body, { childList: true, subtree: true, characterData: true });
+  });
   const session = await context.newCDPSession(page);
   await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ ...spot, id: 1 }] });
   for (let step = 1; step <= 6; step += 1) {
@@ -939,7 +948,9 @@ test("a touch drag on empty stage space does not press the button", async ({ bro
     before.every((value, index) => Math.abs(value - (after[index] ?? value)) < 0.5),
     JSON.stringify({ before, after }),
   ).toBe(true);
-  await expect(page.getByTestId("gesture-hint")).toHaveText("Use two fingers to move the view");
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { hintSeen?: string }).hintSeen))
+    .toBe("Use two fingers to move the view");
   await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
   const hold = page.getByTestId("hold-to-press");
   await hold.scrollIntoViewIfNeeded();
