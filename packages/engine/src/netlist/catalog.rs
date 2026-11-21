@@ -373,7 +373,7 @@ macro_rules! define_kinds {
 ///
 /// The required pins are the first `n` of the names, and a part must give each a net. The rest
 /// may go unwired. Every kind requires all its pins but `esp32s3`, which requires `VCC` and
-/// `GND` and takes any of its GPIOs.
+/// `GND` and takes any of its GPIOs, and `ws2812`, whose `DOUT` is optional.
 pub fn engine_kinds() -> &'static [(&'static str, &'static [&'static str], usize)] {
     KINDS
 }
@@ -391,7 +391,7 @@ fn chip_pin_names(chip: &Chip) -> &[&'static str] {
         Chip::Cst816(_) => &Cst816::PINS,
         Chip::Dht22(_) => &Dht22::PINS,
         Chip::Esp32s3(mcu) => &mcu.names,
-        Chip::Ws2812(_) => &Ws2812::PINS,
+        Chip::Ws2812(part) => &Ws2812::PINS[..part.pins.len()],
         Chip::PulsesReplay(_) => &PulsesReplay::PINS,
     }
 }
@@ -496,7 +496,7 @@ define_kinds! {
         Esp32s3 required crate::mcu::Esp32s3::REQUIRED, "esp32s3",
             crate::mcu::esp32s3::WireEsp32s3, crate::mcu::esp32s3::resolve_esp32s3,
             &crate::mcu::Esp32s3::PINS;
-        Ws2812, "ws2812",
+        Ws2812 required crate::device::Ws2812::REQUIRED, "ws2812",
             crate::device::ws2812::WireWs2812, crate::device::ws2812::resolve_ws2812,
             &crate::device::Ws2812::PINS;
         PulsesReplay, "pulses_replay",
@@ -532,10 +532,12 @@ mod tests {
     }
 
     #[test]
-    fn every_kind_but_esp32s3_requires_all_its_pins() {
+    fn every_kind_but_esp32s3_and_ws2812_requires_all_its_pins() {
         for &(name, pins, required) in engine_kinds() {
             if name == "esp32s3" {
                 assert_eq!(&pins[..required], ["VCC", "GND"]);
+            } else if name == "ws2812" {
+                assert_eq!(&pins[required..], ["DOUT"]);
             } else {
                 assert_eq!(required, pins.len(), "`{name}`");
             }

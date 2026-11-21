@@ -275,6 +275,7 @@ export const firstTarget: SceneMessage = {
     pins: ["@nano.D2", "@nano.D13"],
     leds: ["@led1", "@nano.led_l", "@nano.led_pwr"],
     switches: ["@btn1", "@nano.sw_reset"],
+    pixels: [],
   },
   // The Nano's header pins whose nets reach no simulated pin, with the reasons `orbe check`
   // gives for a wire to each.
@@ -297,6 +298,7 @@ const frame = (seq: number, t_ps: number, pressed: boolean): FrameMessage => ({
   pins: pressed ? [1, 1] : [0, 0],
   led_a: pressed ? [0.0122465581, 0.0028787405, PWR_A] : [0, 0, PWR_A],
   switches: pressed ? [1, 0] : [0, 0],
+  pixel_rgb: [],
   diagnostics: 0,
 });
 

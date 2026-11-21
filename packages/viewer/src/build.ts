@@ -7,7 +7,7 @@ import type { GLTF } from "three/addons/loaders/GLTFLoader.js";
 import { fourBands } from "./bands";
 import { glowColour } from "./glow";
 import { type Footprint, layOut } from "./layout";
-import type { Anchor, InstanceBase, Placement, Ref, SceneMessage, Vec3, Wire } from "./protocol";
+import type { Anchor, InstanceBase, PartData, Placement, Ref, SceneMessage, Vec3, Wire } from "./protocol";
 import { instanceAt, type LeadAt, leadRef, leadsOf, partOf, refOf } from "./refs";
 import { type Box, routeWire, type WireEnd, type WirePath } from "./wire-geometry";
 
@@ -69,9 +69,15 @@ export interface GlowBinding {
   readonly material: MeshStandardMaterial;
   /** The material's colour while the LED is dark. */
   readonly base: Color;
-  readonly full: number;
-  readonly channel: number;
+  readonly by: GlowDrive;
 }
+
+/** What lights a glow: an LED's current on its `channels.leds` channel, with `full` the
+ * current that is intensity 1, or an addressable LED's colour on its `channels.pixels`
+ * channel. */
+export type GlowDrive =
+  | { readonly kind: "current"; readonly full: number; readonly channel: number }
+  | { readonly kind: "pixel"; readonly channel: number };
 
 export interface SlideBinding {
   readonly node: Object3D;
@@ -127,6 +133,19 @@ function namedNode(body: Object3D, name: string, part: string): Object3D {
     throw new Error(`${part}: the GLB has no node "${name}"`);
   }
   return node;
+}
+
+/** What drives a glow `by` names. `"brightness"` is the LED's current, which needs its
+ * `full`. Any other name is the part's colour reading, and the session sends its colour when
+ * the part is on `channels.pixels`. Undefined when the scene sends nothing to draw it by. */
+function glowDrive(scene: SceneMessage, ref: Ref, part: PartData, by: string): GlowDrive | undefined {
+  if (by === "brightness") {
+    const channel = scene.channels.leds.indexOf(ref);
+    const full = part.readings.brightness?.full;
+    return channel >= 0 && full !== undefined ? { kind: "current", full, channel } : undefined;
+  }
+  const channel = scene.channels.pixels.indexOf(ref);
+  return channel >= 0 ? { kind: "pixel", channel } : undefined;
 }
 
 interface Press {
@@ -189,16 +208,14 @@ function drawBody(builder: Builder, group: Group, instance: InstanceBase, path: 
       }
     });
   }
-  const led = scene.channels.leds.indexOf(ref);
-  const full = part.readings.brightness?.full;
-  if (led >= 0 && full !== undefined) {
-    for (const { node } of part.view.glow ?? []) {
-      for (const material of ownMaterials(namedNode(body, node, instance.part))) {
-        material.emissive.copy(glowColour(material.color));
-        material.emissiveIntensity = 0;
-        material.toneMapped = false;
-        glows.push({ material, base: material.color.clone(), full, channel: led });
-      }
+  for (const { node, by } of part.view.glow ?? []) {
+    const drive = glowDrive(scene, ref, part, by);
+    if (drive === undefined) continue;
+    for (const material of ownMaterials(namedNode(body, node, instance.part))) {
+      material.emissive.copy(glowColour(material.color));
+      material.emissiveIntensity = 0;
+      material.toneMapped = false;
+      glows.push({ material, base: material.color.clone(), by: drive });
     }
   }
   const press = part.controls.press;

@@ -1,5 +1,5 @@
 use crate::world::World;
-use orbe_model::{Pulses, Stop, Time};
+use orbe_model::{Drive, Pulses, Stop, Time};
 
 use crate::active::native::Hosted;
 use crate::diagnostic::ProtocolRule;
@@ -35,9 +35,14 @@ impl Clone for Core {
 
 impl Core {
     fn new(count: u16) -> Core {
-        Core {
-            hosted: super::core(count),
-        }
+        Core::with_dout(count, 0)
+    }
+
+    /// A chain that drives `DOUT` `delay` picoseconds after `DIN`, or has none at 0.
+    fn with_dout(count: u16, delay: u64) -> Core {
+        let mut hosted = super::core(count, delay);
+        hosted.keep_shown();
+        Core { hosted }
     }
 
     fn run_until(&mut self, limit: Time) -> Option<Stop> {
@@ -134,7 +139,27 @@ fn settle(core: &mut Core, t: u64) {
 
 /// A power-on low, then `pulses` on the pin from `START`, then low.
 fn by_pin(count: u16, pulses: &[(bool, u64)]) -> Core {
-    let mut core = Core::new(count);
+    by_pin_into(Core::new(count), pulses).0
+}
+
+/// [`by_pin`] on `core`, with each `DOUT` level the core drove and when, as `(ps, high)`.
+fn by_pin_into(mut core: Core, pulses: &[(bool, u64)]) -> (Core, Vec<(u64, bool)>) {
+    let mut edges = Vec::new();
+    let mut high = false;
+    let mut settle = |core: &mut Core, t: u64| {
+        while let Some(stop) = core.run_until(Time::from_ps(t)) {
+            let now = match core.hosted.drive() {
+                [] => continue,
+                [Drive::High] => true,
+                [Drive::Low] => false,
+                other => panic!("DOUT drives {other:?}"),
+            };
+            if now != high {
+                edges.push((stop.at.as_ps(), now));
+                high = now;
+            }
+        }
+    };
     core.input(Time::ZERO, &[false]);
     let mut t = START;
     for &(level, ps) in pulses {
@@ -145,7 +170,21 @@ fn by_pin(count: u16, pulses: &[(bool, u64)]) -> Core {
     settle(&mut core, t);
     core.input(Time::from_ps(t), &[false]);
     settle(&mut core, t + 2 * RES);
-    core
+    (core, edges)
+}
+
+/// Edges as levels from `START`, the first low until the first edge.
+fn levels(edges: &[(u64, bool)]) -> Vec<(bool, u64)> {
+    let mut t = START;
+    let mut level = false;
+    let mut out = Vec::new();
+    for &(at, high) in edges {
+        assert_ne!(high, level, "DOUT changes at each stop");
+        out.push((level, at - t));
+        (t, level) = (at, high);
+    }
+    out.push((level, 1));
+    out
 }
 
 /// The pin at `idle` from power-on, then each record landing at its end. As at the seam,
@@ -472,4 +511,91 @@ fn a_held_line_that_falls_on_its_pin_ends_no_bit() {
     settle(&mut early, t + 2 * RES);
     assert_eq!(early.broke(), None);
     assert_eq!(early.observed().pixels, vec![[0x80, 0, 0]]);
+}
+
+/// A session writes no `leds.csv`, so a chain there keeps its last latch alone. Keeping every
+/// one made each latch copy all the latches before it, which a checkpoint copy shares, so a
+/// long session slowed as it ran. A run that writes the file keeps them all.
+#[test]
+fn a_chain_that_writes_no_rows_keeps_its_last_latch_alone() {
+    let frames = [[1, 2, 3], [4, 5, 6], [7, 8, 9]];
+    let trains: Vec<_> = frames.iter().map(|f| train(f, ZERO, ONE)).collect();
+    let mut starts = vec![START];
+    for pulses in &trains {
+        starts.push(end(*starts.last().unwrap(), pulses));
+    }
+    let latched: Vec<u64> = trains
+        .iter()
+        .zip(&starts)
+        .map(|(pulses, &start)| reset_after(start, pulses))
+        .collect();
+    let pulses = trains.concat();
+    let session = Core {
+        hosted: super::core(1, 0),
+    };
+    let (session, _) = by_pin_into(session, &pulses);
+    let (run, _) = by_pin_into(Core::new(1), &pulses);
+    assert_eq!(session.observed().pixels, vec![[7, 8, 9]]);
+    assert_eq!(latch_times(&session), latched[2..]);
+    assert_eq!(session.latches()[0].pixels, vec![[7, 8, 9]]);
+    assert_eq!(session.hosted.latched(), Some(Time::from_ps(latched[2])));
+    assert_eq!(latch_times(&run), latched);
+}
+
+/// The sheet's DIN to DOUT delay, 500 ns.
+const DELAY: u64 = 500_000;
+
+#[test]
+fn a_chain_with_no_dout_drives_nothing() {
+    let core = by_pin(1, &train(&[1, 2, 3, 4, 5, 6], ZERO, ONE));
+    assert_eq!(core.hosted.drive(), &[] as &[Drive]);
+}
+
+#[test]
+fn dout_is_low_for_the_chain_s_own_bits_then_follows_din_by_the_delay() {
+    let pulses = train(&[0x12, 0x34, 0x56, 0xA5, 0x5A, 0xC3], ZERO, ONE);
+    let (core, edges) = by_pin_into(Core::with_dout(1, DELAY), &pulses);
+    assert_eq!(core.observed().pixels, vec![[0x12, 0x34, 0x56]]);
+    assert_eq!(core.hosted.drive(), &[Drive::Low]);
+    let mut want = Vec::new();
+    let mut t = START;
+    for (k, &(level, ps)) in pulses.iter().enumerate() {
+        if level && k >= 48 {
+            want.push((t + DELAY, true));
+            want.push((t + ps + DELAY, false));
+        }
+        t += ps;
+    }
+    assert_eq!(edges, want);
+}
+
+#[test]
+fn four_chained_leds_each_take_their_own_24_bits() {
+    let colours = [[0xFF, 0, 0], [0, 0xFF, 0], [0, 0, 0xFF], [0x10, 0x20, 0x30]];
+    let mut pulses = train(colours.as_flattened(), ZERO, ONE);
+    for (k, colour) in colours.iter().enumerate() {
+        let (core, edges) = by_pin_into(Core::with_dout(1, DELAY), &pulses);
+        assert_eq!(core.observed().pixels, vec![*colour], "led {k}");
+        assert_eq!(core.broke(), None, "led {k}");
+        pulses = levels(&edges);
+    }
+    assert_eq!(pulses, vec![(false, 1)], "the last LED passes nothing on");
+}
+
+#[test]
+fn a_record_past_the_chain_warns_dout_record_and_drives_nothing() {
+    let pulses = train(&[0x12, 0x34, 0x56, 0xA5, 0x5A, 0xC3], ZERO, ONE);
+    let mut core = Core::with_dout(1, DELAY);
+    core.input(Time::ZERO, &[false]);
+    let last = end(START, &pulses);
+    settle(&mut core, last);
+    core.land(Time::from_ps(START), false, &pulses, Time::from_ps(last));
+    assert_eq!(core.run_until(Time::from_ps(last + 2 * RES)), None);
+    assert_eq!(core.observed().pixels, vec![[0x12, 0x34, 0x56]]);
+    let first_past: u64 = START + pulses[..48].iter().map(|&(_, ps)| ps).sum::<u64>();
+    assert_eq!(
+        core.broke(),
+        Some((ProtocolRule::DoutRecord, Time::from_ps(first_past)))
+    );
+    assert_eq!(core.hosted.drive(), &[Drive::Low]);
 }

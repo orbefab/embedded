@@ -192,7 +192,7 @@ pub(crate) fn dc_paths(chip: &Chip) -> &'static [(usize, usize)] {
         Chip::Cst816(_) => &crate::device::cst816::DC_PATHS,
         Chip::Dht22(_) => &crate::device::dht22::DC_PATHS,
         Chip::Esp32s3(mcu) => crate::mcu::esp32s3::dc_paths(mcu),
-        Chip::Ws2812(_) => &crate::device::ws2812::DC_PATHS,
+        Chip::Ws2812(chain) => crate::device::ws2812::dc_paths(chain),
         Chip::PulsesReplay(_) => &crate::device::pulses_replay::DC_PATHS,
     }
 }

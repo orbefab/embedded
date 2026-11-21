@@ -1111,11 +1111,13 @@ A `cst816` has no `ratings` object and no `i`, `v`, or `p`. Its logic signals ar
 
 ### WS2812
 
-`kind` is `ws2812`, a chain of addressable LEDs on one data pin. It is an active chip with no clock of its own. It watches `DIN` and takes the `Pulses` records on that net, as [engine.md](engine.md#records) says. Pins are `VCC`, `GND` and `DIN`. Every pin is required. The part has no `DOUT` pin. Each LED takes the next 24 bits and the bits past the last LED are discarded. Green is the first byte, then red, then blue, most significant bit first. A low longer than the reset latches the colours into `observations.json` and `traces/leds.csv`.
+`kind` is `ws2812`, a chain of addressable LEDs on one data pin. It is an active chip with no clock of its own. It watches `DIN` and takes the `Pulses` records on that net, as [engine.md](engine.md#records) says. Pins are `VCC`, `GND` and `DIN`, each required, and `DOUT`, which a part wires exactly when it gives `dout`. Each LED takes the next 24 bits. Without `dout` the bits past the last LED are discarded, and with it they go on through `DOUT`. Green is the first byte, then red, then blue, most significant bit first. A low longer than the reset latches the colours into `observations.json` and `traces/leds.csv`.
 
 `leds` may be absent. It is then 13. An integer from 0 to 65535 outside 1 to 1024 is `netlist.value` with rule `leds`, and its message prints the count as an integer. Any other number, a negative, a fraction, `13.0`, or one above 65535, is `netlist.syntax`.
 
 The bit times are the Worldsemi WS2812E-1313 datasheet's, V1.1, page 3. A high of 220 ns to 380 ns, T0H, is a 0, and a high of 580 ns to 1 µs, T1H, is a 1, each end included. A low up to 280 µs ends the bit, however short or long. The same page gives T0L and T1L as 580 ns to 1 µs and a bit of at least 1.25 µs, and the WS2812E 5050 datasheet, V1.0, page 3, gives T1L as 220 ns to 420 ns. The chain checks no low against either, so a train timed to either sheet decodes, the 300 ns high and 900 ns low of an RMT 0 and its 900 ns high and 300 ns low 1 among them. RES is a low longer than 280 µs, and it latches. The table gives ">280µs", so a low of exactly 280 µs is no reset and the chain latches at the fall plus 280 µs plus 1 ps. A high outside both windows drops that bit, and the first drop is `chip.protocol` rule `bit`.
+
+With `dout`, once every LED holds its 24 bits, each high on `DIN` goes on to `DOUT` `dout.delay` later, its rise and its fall alike, until the chain latches. `DOUT` is low before that and after the latch. It drives high through `dout.output.high_drop` under `VCC` behind `dout.output.high_resistance`, and low through `dout.output.low_drop` over `GND` behind `dout.output.low_resistance`, as an NE555's OUT does. The SK6812MINI-HS datasheet, Rev. 04, section 11, gives the delay from `DIN` to `DOUT` as at most 500 ns, rise and fall alike, and gives no output widths, so `DOUT` passes each high as long as it came. A second chain whose `DIN` is that net takes those bits as it would from a chip, so parts chained one after the other each take their own 24 bits. A high that a `Pulses` record carried has already ended when the record lands, so it does not go on to `DOUT`. The first is `chip.protocol` rule `dout_record`, and `DOUT` stays low. At most 8 `DOUT` edges are due at once. The datasheet's times queue 2, and a line that changes faster drops the newest high whole.
 
 The same sheet, page 2, gives `VIH` as at least 0.7 VDD and `VIL` as at most 0.7 V, both at VDD 5 V. `VIL` is a voltage there, not a fraction of the supply. The example's `input_threshold.low` is that 0.7 V over 5 V, 0.14 of the supply, so it holds at 5 V.
 
@@ -1144,10 +1146,13 @@ The same sheet, page 2, gives `VIH` as at least 0.7 VDD and `VIL` as at most 0.7
 | --- | --- | --- |
 | `leds` | count | an integer from 1 to 1024. 0 to 65535 outside that is rule `leds`, and any other number is `netlist.syntax`. Absent means 13 |
 | `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+| `dout.output.high_drop`, `dout.output.low_drop` | `V` | at least 0, else rule `non_negative` |
+| `dout.output.high_resistance`, `dout.output.low_resistance` | `ohm` | the resistor's |
+| `dout.delay` | `ps` | an integer from 1 to 1000000. 0 is rule `positive`, and above 1000000, T1H's longest high, is rule `delay` |
 
-A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
+`dout` may be absent, and the chain then has no `DOUT`. `dout` without a `DOUT` pin, or a `DOUT` pin without `dout`, is `netlist.pins`. A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
 
-A `ws2812` has no `ratings` object and no `i`, `v`, or `p`. Its logic signal is `DIN`. It joins no pins, so `VCC`, `GND` and `DIN` each need another DC path.
+A `ws2812` has no `ratings` object and no `i`, `v`, or `p`. Its logic signal is `DIN`. It joins `DOUT` to `VCC` and to `GND` through the stage its drive stamps, and no other pins, so `VCC`, `GND` and `DIN` each need another DC path.
 
 ### DHT22
 

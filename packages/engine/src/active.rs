@@ -343,6 +343,13 @@ impl Core {
         }
     }
 
+    /// Keeps every change of what an LED chain shows, for a run that writes them.
+    fn keep_shown(&mut self) {
+        if let Core::Device(core) = self {
+            core.keep_shown();
+        }
+    }
+
     /// What it shows besides its drives, as its device declares.
     fn shows(&self) -> Shows {
         match self {
@@ -798,6 +805,17 @@ impl Actives {
 
     pub(crate) fn led_names(&self) -> &[Name] {
         &self.leds
+    }
+
+    /// Has every LED chain keep each latch, for a run that writes `leds.csv`. A session that
+    /// writes nothing keeps only each chain's last latch.
+    pub(crate) fn keep_shown(&mut self) {
+        for core in self.committed.iter_mut() {
+            core.keep_shown();
+        }
+        for ahead in &mut self.ahead {
+            ahead.core.keep_shown();
+        }
     }
 
     /// Each display part's committed core, in `displays` order.

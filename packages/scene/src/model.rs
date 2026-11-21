@@ -19,13 +19,17 @@ use crate::units::{self, Unit};
 const SCENE_KEYS: &[&str] = &[
     "format", "$schema", "parts", "wires", "layout", "ground", "nets", "sim", "world",
 ];
-/// Part `format` values this binary reads. A part's `format` covers its `model` and its params.
-/// Format 2 is format 1 plus `"as": "blob"` on a file param.
-pub const PART_FORMATS: &[u32] = &[1, 2];
+/// Part `format` values this binary reads. A part's `format` covers its `model`, its params and
+/// its readings. Format 2 is format 1 plus `"as": "blob"` on a file param. Format 3 is format 2
+/// plus `DOUT` on a `ws2812` and a reading `"of": "rgb"`.
+pub const PART_FORMATS: &[u32] = &[1, 2, 3];
 /// Scene `format` values this binary reads.
 pub const SCENE_FORMATS: &[u32] = &[1];
 /// The oldest part format whose file params take `"as": "blob"`.
 const BLOB_FORMAT: u32 = 2;
+/// The oldest part format whose `ws2812` has `DOUT`, and whose readings take `"of": "rgb"`.
+/// An older part's `DOUT` pin stays off the chain, as it did when the engine had none.
+const DOUT_FORMAT: u32 = 3;
 const WIRE_KINDS: &[&str] = &["jumper", "trace", "contact"];
 /// A live session's stop, investigation 1's 2-hour cap.
 pub const STOP_PS: u64 = 7_200 * 1_000_000_000_000;
@@ -515,7 +519,10 @@ pub(crate) fn decode_part(
             "ground" => part.comp.ground = decode_ref(value, out),
             "pins" => part.pins = decode_pins(value, out),
             "model" => part.model = Some(value.clone()),
-            "readings" => decode_names(value, "reading", out),
+            "readings" => {
+                decode_names(value, "reading", out);
+                check_rgb(value, format, out);
+            }
             "not_simulated" => part.not_simulated = decode_not_simulated(value, out),
             "buy" => crate::buy::check(value, out),
             "joins_only" => part.joins_only = matches!(value.json, Json::Bool(true)),
@@ -532,7 +539,7 @@ pub(crate) fn decode_part(
         part.params = decode_params(params, &part, format, out);
     }
     if let Some(model) = part.model.clone() {
-        part.bodies = decode_bodies(&model, &part, out);
+        part.bodies = decode_bodies(&model, &part, format, out);
         check_sets(&mut part, &model, out);
     }
     if let Some(layout) = root.get("layout") {
@@ -1392,6 +1399,23 @@ fn check_own_names(root: &Node, out: &mut Findings) {
     }
 }
 
+/// A reading `"of": "rgb"` is a part format 3 reading.
+fn check_rgb(readings: &Node, format: u32, out: &mut Findings) {
+    if format >= DOUT_FORMAT {
+        return;
+    }
+    for prop in readings.props().unwrap_or_default() {
+        if let Some(of) = prop.value.get("of").filter(|of| of.str() == Some("rgb")) {
+            out.push(
+                Code::Syntax,
+                of.span,
+                format!("reading `{}` takes \"of\": \"rgb\" only in part format {DOUT_FORMAT}; this file is format {format}", prop.key),
+                format!("set \"format\": {DOUT_FORMAT} in this part file"),
+            );
+        }
+    }
+}
+
 fn decode_names(node: &Node, what: &str, out: &mut Findings) {
     for prop in node.props().unwrap_or_default() {
         name_ok(&prop.key, prop.key_span, NameKind::Name, what, out);
@@ -2112,7 +2136,7 @@ fn decode_choices(node: &Node) -> Vec<(String, Vec<(String, Node)>)> {
         .collect()
 }
 
-fn decode_bodies(model: &Node, part: &Part, out: &mut Findings) -> Vec<Body> {
+fn decode_bodies(model: &Node, part: &Part, format: u32, out: &mut Findings) -> Vec<Body> {
     let Some(props) = model.props() else {
         schema(
             out,
@@ -2122,7 +2146,9 @@ fn decode_bodies(model: &Node, part: &Part, out: &mut Findings) -> Vec<Body> {
         return Vec::new();
     };
     if model.get("kind").is_some() {
-        return decode_body(None, model, part, out).into_iter().collect();
+        return decode_body(None, model, part, format, out)
+            .into_iter()
+            .collect();
     }
     let mut bodies = Vec::new();
     for prop in props {
@@ -2141,12 +2167,24 @@ fn decode_bodies(model: &Node, part: &Part, out: &mut Findings) -> Vec<Body> {
                 "name engine parts apart from pins, such as `host_tx` beside `TXD`".into(),
             );
         }
-        bodies.extend(decode_body(Some(prop.key.clone()), &prop.value, part, out));
+        bodies.extend(decode_body(
+            Some(prop.key.clone()),
+            &prop.value,
+            part,
+            format,
+            out,
+        ));
     }
     bodies
 }
 
-fn decode_body(name: Option<String>, node: &Node, part: &Part, out: &mut Findings) -> Option<Body> {
+fn decode_body(
+    name: Option<String>,
+    node: &Node,
+    part: &Part,
+    format: u32,
+    out: &mut Findings,
+) -> Option<Body> {
     let Some(kind_node) = node.get("kind") else {
         schema(out, node, "an engine part with a `kind`");
         return None;
@@ -2179,9 +2217,22 @@ fn decode_body(name: Option<String>, node: &Node, part: &Part, out: &mut Finding
         );
         return None;
     };
+    let before_dout = kind == "ws2812" && format < DOUT_FORMAT;
+    let engine_pins = if before_dout {
+        &engine_pins[..required]
+    } else {
+        engine_pins
+    };
     let map = node.get("pins").and_then(Node::props).unwrap_or_default();
     for entry in map {
-        if !engine_pins.contains(&entry.key.as_str()) {
+        if before_dout && entry.key == "DOUT" {
+            out.push(
+                Code::UnknownPin,
+                entry.key_span,
+                format!("the engine's `ws2812` takes `DOUT` only in part format {DOUT_FORMAT}; this file is format {format}"),
+                format!("set \"format\": {DOUT_FORMAT} in this part file"),
+            );
+        } else if !engine_pins.contains(&entry.key.as_str()) {
             out.push(
                 Code::UnknownPin,
                 entry.key_span,
