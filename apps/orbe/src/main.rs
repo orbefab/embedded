@@ -269,7 +269,7 @@ fn live_help(spec: &orbe_session::Spec) -> clap::Command {
             Arg::new("all")
                 .long("all")
                 .action(ArgAction::SetTrue)
-                .help("Close every session of this orbe"),
+                .help("Close every session"),
         );
     }
     command

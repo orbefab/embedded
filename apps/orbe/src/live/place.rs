@@ -67,8 +67,8 @@ impl fmt::Display for Name {
     }
 }
 
-/// The folder of this build's sessions: `$XDG_RUNTIME_DIR/orbe/<version>`, else
-/// `<temp>/orbe-<uid>/<version>`. Each level is the user's own, with mode 0700.
+/// The folder of this user's sessions: `$XDG_RUNTIME_DIR/orbe`, else `<temp>/orbe-<uid>`.
+/// It is the user's own, with mode 0700. Every version of orbe uses this one folder.
 #[derive(Clone)]
 pub struct Place {
     dir: PathBuf,
@@ -77,12 +77,10 @@ pub struct Place {
 impl Place {
     /// Finds the folder, creating what is missing. A refusal is its message and hint.
     pub fn find() -> Result<Place, (String, String)> {
-        let base = match std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
+        let dir = match std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
             Some(runtime) if runtime.is_absolute() => runtime.join("orbe"),
             _ => std::env::temp_dir().join(format!("orbe-{}", rustix::process::getuid().as_raw())),
         };
-        let dir = base.join(env!("CARGO_PKG_VERSION"));
-        private(&base)?;
         private(&dir)?;
         Ok(Place { dir })
     }
@@ -106,6 +104,11 @@ impl Place {
     /// What the session's process wrote to stderr, such as a panic, kept when it crashes.
     pub fn log(&self, name: &Name) -> PathBuf {
         self.dir.join(format!("{name}.log"))
+    }
+
+    /// The orbe version that started the session, one line, written when that process binds.
+    pub fn version(&self, name: &Name) -> PathBuf {
+        self.dir.join(format!("{name}.version"))
     }
 
     /// The log one start of the session's process writes until it holds the socket, so a

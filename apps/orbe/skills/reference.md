@@ -125,7 +125,8 @@ Each line is a live command without `orbe`. `--json`, `--session`, `--help` or `
 
 - `orbe open` starts a background process that holds the session, and every later command talks to it. The process ends on `orbe close`, or after 1 hour with no command while it is not playing and no page watches it.
 - A session has a name. By default it comes from the project folder, the nearest one up with `scene.jsonc` or `parts.lock`, so each project gets its own, and its `tests/` folder shares it. Outside a project it comes from the git repository's root folder, else the current folder. `--session <name>` after the command, or `ORBE_SESSION=<name>`, picks another.
-- `orbe close --all` closes every session of this `orbe` and cleans up after crashed ones.
+- `orbe close --all` closes every session and cleans up after crashed ones.
+- A command other than `close` refuses a session that another version of orbe started. The message names that version and says to run `orbe close`.
 - A command sent while a `step` runs waits for it. Ctrl-C during a long `step` stops it, and the session stays paused at the time it reached.
 
 ## The 3D page

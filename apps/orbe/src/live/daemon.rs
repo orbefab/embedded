@@ -376,6 +376,18 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
         );
         return ExitCode::from(3);
     }
+    let version = socket.with_file_name(format!("{name}.version"));
+    if let Err(error) = std::fs::write(&version, format!("{}\n", env!("CARGO_PKG_VERSION"))) {
+        if inode(&socket) == bound.0 {
+            let _ = std::fs::remove_file(&socket);
+        }
+        eprintln!(
+            "error[io_error]: cannot write {}: {error}",
+            version.display()
+        );
+        return ExitCode::from(3);
+    }
+    let version_inode = inode(&version);
     let crash = start.as_ref().zip(bound.1).map(|(start, inode)| CrashLog {
         start,
         log: &log,
@@ -398,6 +410,9 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
     let (why, unanswered) = serve(&mut held, &queue, idle, timer, crash.as_ref());
     if bound.0.is_some() && inode(&socket) == bound.0 {
         let _ = std::fs::remove_file(&socket);
+    }
+    if version_inode.is_some() && inode(&version) == version_inode {
+        let _ = std::fs::remove_file(&version);
     }
     if let Some(crash) = &crash {
         crash.claim_if_read();
