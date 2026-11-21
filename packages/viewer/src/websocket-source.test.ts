@@ -34,6 +34,7 @@ const frame = (seq: number): FrameMessage => ({
   pins: [],
   led_a: [],
   switches: [],
+  pixel_rgb: [],
   diagnostics: 0,
 });
 const reply: Reply = { ok: true, session: "s", t_ps: 0, state: "paused", data: { ref: "@btn1", landed_ps: 0 } };

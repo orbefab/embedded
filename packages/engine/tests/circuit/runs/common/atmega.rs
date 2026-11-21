@@ -144,8 +144,8 @@ pub fn run_beside_steps(example: &str) -> Beside {
     let bytes = fs::read(&path).unwrap();
     let netlist: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     let parsed = orbe_engine::netlist::parse(&bytes).unwrap();
-    let out = std::env::temp_dir().join(format!("orbe-engine-{example}-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&out);
+    let scratch = orbe_scratch::Scratch::new();
+    let out = scratch.join(example);
     let mut gridless = netlist.clone();
     let stop = gridless["analysis"]["transient"]["stop_ps"].clone();
     gridless["analysis"]["transient"]["grid_ps"] = stop;
@@ -162,7 +162,7 @@ pub fn run_beside_steps(example: &str) -> Beside {
     assert_eq!(doc["diagnostics"], serde_json::json!([]));
 
     let folder = transient_folder(example, &out);
-    fs::remove_dir_all(&out).unwrap();
+    drop(scratch);
     assert_eq!(
         gridless_stats.landings,
         steps.trace().unwrap().rows() as u64 - 1,

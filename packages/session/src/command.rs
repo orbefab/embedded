@@ -20,6 +20,8 @@ pub enum Command {
     Release(Ref),
     Set(WorldSet),
     Get(Ref),
+    /// A world quantity the scene declares, such as `light`, read by `get light` or `get @world.light`.
+    GetWorld(Quantity),
     Step(Step),
     Play,
     Pause,
@@ -96,9 +98,9 @@ pub const COMMANDS: &[Spec] = &[
     },
     Spec {
         name: "get",
-        usage: "get <ref>",
+        usage: "get <ref> | get <quantity>",
         about: "Reads one part, pin or quantity now.",
-        parse: |args, _| one_ref(args).map(Command::Get),
+        parse: |args, _| parse_get(args),
     },
     Spec {
         name: "step",
@@ -165,6 +167,23 @@ fn none(args: &[String], command: Command) -> Result<Command, String> {
     match args {
         [] => Ok(command),
         _ => Err("takes no arguments".into()),
+    }
+}
+
+fn parse_get(args: &[String]) -> Result<Command, String> {
+    match args {
+        [one] => {
+            if let Some(quantity) = Quantity::parse(one) {
+                return Ok(Command::GetWorld(quantity));
+            }
+            if let Some(name) = one.strip_prefix("@world.")
+                && let Some(quantity) = Quantity::parse(name)
+            {
+                return Ok(Command::GetWorld(quantity));
+            }
+            Ref::parse(one).map(Command::Get)
+        }
+        _ => Err("takes one ref, such as `@btn1`, or a world quantity, such as `light`".into()),
     }
 }
 

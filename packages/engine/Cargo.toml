@@ -34,6 +34,7 @@ required-features = ["runner"]
 
 [dev-dependencies]
 orbe-engine = { path = ".", features = ["step-rows", "runner"] }
+orbe-scratch.workspace = true
 
 [lints]
 workspace = true

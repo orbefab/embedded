@@ -1,5 +1,7 @@
 //! Text for `orbe part` and `orbe search`.
 
+use std::collections::BTreeMap;
+
 use orbe_scene::{BlockCard, Card, holes_text, param_sentence, si_amount, strip_text};
 use orbe_session::BRIGHTNESS_WINDOW;
 
@@ -173,6 +175,10 @@ pub fn text(card: &Card) -> String {
     if card.pressable {
         lines.push("press and release close and open it".into());
     }
+    if let Some(line) = orbe_scene::breadboard_line(&card.name) {
+        lines.push(String::new());
+        lines.push(line);
+    }
     lines.push(String::new());
     lines.join("\n")
 }
@@ -201,6 +207,53 @@ pub fn blocks_text(cards: &[BlockCard]) -> String {
         lines.push(format!("{}  {}", card.name, card.title));
         if let Some(description) = &card.description {
             lines.push(format!("  {description}"));
+        }
+    }
+    lines.push(String::new());
+    lines.join("\n")
+}
+
+/// Every part a scene can place, grouped by its first category, then the Blocks. A part that
+/// only exists inside a board is left out.
+pub fn catalog_groups() -> Vec<(String, Vec<(String, String)>)> {
+    let mut groups: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    for card in orbe_scene::catalog_cards() {
+        if !card.used_by.is_empty() {
+            continue;
+        }
+        let category = card
+            .categories
+            .as_ref()
+            .and_then(|categories| categories.first())
+            .cloned()
+            .unwrap_or_else(|| "other".to_string());
+        groups
+            .entry(category)
+            .or_default()
+            .push((card.name, card.title));
+    }
+    let mut groups: Vec<_> = groups.into_iter().collect();
+    for (_, items) in &mut groups {
+        items.sort();
+    }
+    let mut blocks: Vec<_> = orbe_scene::builtin_blocks()
+        .into_iter()
+        .map(|card| (card.name, card.title))
+        .collect();
+    blocks.sort();
+    groups.push(("blocks".to_string(), blocks));
+    groups
+}
+
+pub fn catalog_text(groups: &[(String, Vec<(String, String)>)]) -> String {
+    let mut lines = Vec::new();
+    for (index, (category, items)) in groups.iter().enumerate() {
+        if index > 0 {
+            lines.push(String::new());
+        }
+        lines.push(category.clone());
+        for (id, title) in items {
+            lines.push(format!("{id}  {title}"));
         }
     }
     lines.push(String::new());

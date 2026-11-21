@@ -24,6 +24,7 @@ tungstenite.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+orbe-scratch.workspace = true
 
 [lints]
 workspace = true

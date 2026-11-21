@@ -37,11 +37,13 @@ const parts: Record<string, PartData> = {
     view: { recolour: [{ nodes: BANDS, by: "resistance", rule: "iec60062-4-band" }] },
   }),
   lamp: partData("lamp.glb", { view: { glow: [{ node: "lens", by: "brightness" }] }, readings: { brightness: { full: 0.01 } } }),
+  pixel: partData("pixel.glb", { view: { glow: [{ node: "lens", by: "color" }] } }),
   board: partData("board.glb"),
 };
 const models = new Map([
   ["resistor.glb", body(...BANDS)],
   ["lamp.glb", body("body")],
+  ["pixel.glb", body("body", "lens")],
   ["board.glb", body("pcb")],
 ]);
 
@@ -54,7 +56,7 @@ function scene(instances: Instance[], extra: Partial<SceneMessage> = {}): SceneM
     instances,
     parts,
     wires: [],
-    channels: { pins: [], leds: [], switches: [] },
+    channels: { pins: [], leds: [], switches: [], pixels: [] },
     ...extra,
   };
 }
@@ -112,7 +114,7 @@ describe("buildScene", () => {
           { name: "led1", part: "lamp", params: {}, placement: at, children: [] },
           { name: "nano", part: "board", params: {}, placement: at, children: [] },
         ],
-        { channels: { pins: [], leds: ["@led1"], switches: [] } }
+        { channels: { pins: [], leds: ["@led1"], switches: [], pixels: [] } }
       ),
       models
     );
@@ -145,6 +147,30 @@ describe("buildScene", () => {
     expect(built.errors).toEqual(["@nano.r_l: the scene message gives this child no placement"]);
     expect(built.root.getObjectByName("@nano.r_l")).toBeUndefined();
     expect(built.root.getObjectByName("@nano")?.getObjectByName("pcb")).toBeDefined();
+  });
+
+  test("an addressable LED's lens glows by its channel on the scene's pixels", () => {
+    const built = buildScene(
+      scene(
+        [0, 1].map((k) => ({ name: `pixel${k}`, part: "pixel", params: {}, placement: at, children: [] })),
+        { channels: { pins: [], leds: [], switches: [], pixels: ["@pixel1", "@pixel0"] } }
+      ),
+      models
+    );
+    expect(built.errors).toEqual([]);
+    expect(built.glows.map((glow) => glow.by)).toEqual([
+      { kind: "pixel", channel: 1 },
+      { kind: "pixel", channel: 0 },
+    ]);
+    const lens = built.root.getObjectByName("@pixel0")?.getObjectByName("lens");
+    expect(lens instanceof Mesh && lens.material === built.glows[0]?.material).toBe(true);
+    expect(built.glows[0]?.material.toneMapped).toBe(false);
+  });
+
+  test("an addressable LED the scene sends no colour for does not glow", () => {
+    const built = buildScene(scene([{ name: "pixel0", part: "pixel", params: {}, placement: at, children: [] }]), models);
+    expect(built.errors).toEqual([]);
+    expect(built.glows).toEqual([]);
   });
 
   test("an instance carries its not_simulated reason for hover", () => {

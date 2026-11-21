@@ -625,10 +625,8 @@ fn a_master_that_nacks_a_shared_read_loses_arbitration() {
         .map(|row| row.t_ps)
         .collect();
     assert_eq!(starts[0], starts[1], "both masters' START is one SDA fall");
-    let out = std::env::temp_dir().join(format!("orbe-engine-i2c-read-ack-{}", std::process::id()));
-    if out.exists() {
-        std::fs::remove_dir_all(&out).unwrap();
-    }
+    let scratch = orbe_scratch::Scratch::new();
+    let out = scratch.join("run");
     folder.write(&out).unwrap();
     let output = std::process::Command::new("uv")
         .args(["run", "packages/engine/scripts/i2c_decode.py", "--timing"])
@@ -642,5 +640,4 @@ fn a_master_that_nacks_a_shared_read_loses_arbitration() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.status.success(), "{got}");
-    let _ = std::fs::remove_dir_all(&out);
 }

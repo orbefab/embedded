@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use super::{Live, Open, Progress};
 use crate::reply::{Code, Diagnostic, Level};
-use crate::target::{QUANTITIES, one_engine};
+use crate::target::{QUANTITIES, one_engine, rgb_reading};
 use crate::viewer;
 
 /// The refs each frame array follows, in order.
@@ -24,15 +24,20 @@ pub struct Channels {
     pub leds: Vec<String>,
     #[cfg_attr(test, schemars(with = "Vec<crate::Ref>"))]
     pub switches: Vec<String>,
+    /// Each addressable LED part, by its reading `"of": "rgb"`.
+    #[cfg_attr(test, schemars(with = "Vec<crate::Ref>"))]
+    pub pixels: Vec<String>,
 }
 
-/// The channels with what reads each: a logic signal, a probe column, a switch's engine name.
+/// The channels with what reads each: a logic signal, a probe column, a switch's engine name,
+/// an LED chain's engine name.
 #[derive(Default)]
 pub(super) struct Bound {
     names: Channels,
     pins: Vec<usize>,
     leds: Vec<usize>,
     switches: Vec<String>,
+    pixels: Vec<String>,
 }
 
 /// A world quantity's name: `temperature`, `humidity` or `light`.
@@ -121,6 +126,8 @@ pub struct Sample {
     /// Each LED's current in amperes, and its integral from t = 0 in ampere picoseconds.
     pub leds: Vec<(f64, f64)>,
     pub switches: Vec<u8>,
+    /// Each addressable LED part's first LED, the red, green and blue it last latched.
+    pub pixels: Vec<[u8; 3]>,
     /// Each declared world quantity's value from `t_ps` on, or from where its last `set` lands
     /// when that is later, in table order. Empty when the scene declares none.
     pub world: Vec<f64>,
@@ -216,7 +223,8 @@ pub(super) fn contacts(json: &str) -> BTreeMap<String, (bool, Vec<(u64, bool)>)>
 
 impl Open {
     /// The scene's board pins that `snapshot` shows and that a chip pin drives, every LED the
-    /// part data says glows, and every pressable switch, each with what reads it.
+    /// part data says glows, every pressable switch, and every addressable LED, each with what
+    /// reads it.
     pub(super) fn bind_channels(&self) -> Bound {
         let mut bound = Bound::default();
         let wired = self.wired_nets();
@@ -266,6 +274,12 @@ impl Open {
                 bound.names.switches.push(format!("@{path}"));
                 bound.switches.push(engine);
             }
+            let chain =
+                rgb_reading(part).and_then(|_| one_engine(path, part, Code::NoReading).ok());
+            if let Some(engine) = chain {
+                bound.names.pixels.push(format!("@{path}"));
+                bound.pixels.push(engine);
+            }
         }
         bound
     }
@@ -306,6 +320,17 @@ impl Open {
                 .switches
                 .iter()
                 .map(|engine| u8::from(self.closed(engine)))
+                .collect(),
+            pixels: bound
+                .pixels
+                .iter()
+                .map(|engine| {
+                    self.colors(engine)
+                        .leds
+                        .first()
+                        .copied()
+                        .unwrap_or_default()
+                })
                 .collect(),
             world: self
                 .engine

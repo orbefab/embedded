@@ -2,6 +2,7 @@
 //! pixels are what `st77916::glass` draws from the run folder, whose bytes are the same on every
 //! run, and which leaves the run folder as `orbe-run run` wrote it.
 
+use orbe_scratch::Scratch;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,8 +19,11 @@ fn run_into(netlist: &Path, run: &Path) {
     assert_eq!(code, 0, "{doc}");
 }
 
-fn scratch(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("orbe-engine-view-{name}-{}", std::process::id()))
+/// A path inside a fresh temp folder, which is removed when the test ends, even on a panic.
+fn scratch(name: &str) -> (Scratch, PathBuf) {
+    let scratch = Scratch::new();
+    let path = scratch.join(name);
+    (scratch, path)
 }
 
 /// The pixels of a PNG `orbe-run view` writes: one IDAT of stored deflate blocks, each row behind
@@ -92,8 +96,7 @@ fn adler32(data: &[u8]) -> u32 {
 
 #[test]
 fn the_replay_panel_is_one_png_of_its_glass_the_same_on_every_run() {
-    let dir = scratch("replay");
-    let _ = fs::remove_dir_all(&dir);
+    let (_dir_scratch, dir) = scratch("replay");
     let run = dir.join("run");
     let netlist = repo("packages/engine/tests/circuits/st77916-replay/netlist.json");
     run_into(&netlist, &run);
@@ -124,13 +127,11 @@ fn the_replay_panel_is_one_png_of_its_glass_the_same_on_every_run() {
         pixels == st77916::glass(flags, &frame),
         "the PNG is the glass"
     );
-    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn a_run_with_no_display_part_writes_no_image() {
-    let dir = scratch("none");
-    let _ = fs::remove_dir_all(&dir);
+    let (_dir_scratch, dir) = scratch("none");
     let run = dir.join("run");
     let netlist = repo("packages/engine/tests/circuits/rc-switch/netlist.json");
     run_into(&netlist, &run);
@@ -140,13 +141,11 @@ fn a_run_with_no_display_part_writes_no_image() {
     };
     assert!(report.images.is_empty());
     assert!(!out.exists());
-    let _ = fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn an_image_path_other_than_the_part_frame_is_an_io_error() {
-    let dir = scratch("image-path");
-    let _ = fs::remove_dir_all(&dir);
+    let (_dir_scratch, dir) = scratch("image-path");
     let run = dir.join("run");
     let netlist = repo("packages/engine/tests/circuits/st77916-replay/netlist.json");
     run_into(&netlist, &run);
@@ -168,15 +167,13 @@ fn an_image_path_other_than_the_part_frame_is_an_io_error() {
     assert!(message.contains("traces/display-lcd1.rgb565"));
     assert!(!message.contains("display-other"));
     assert!(!out.exists());
-    let _ = fs::remove_dir_all(&dir);
 }
 
 /// A folder with no `observations.json`, and a frame memory file that is not the one its entry
 /// names, are failures, which `orbe-run view` reports as `io_error`, and write no image.
 #[test]
 fn an_unreadable_run_folder_is_an_io_error_and_writes_nothing() {
-    let dir = scratch("broken");
-    let _ = fs::remove_dir_all(&dir);
+    let (_dir_scratch, dir) = scratch("broken");
     let out = dir.join("out");
     assert!(view(&dir.join("absent"), &out).is_err());
 
@@ -192,5 +189,4 @@ fn an_unreadable_run_folder_is_an_io_error_and_writes_nothing() {
     };
     assert_eq!(failure.path, Some(image.display().to_string()));
     assert!(!out.exists());
-    let _ = fs::remove_dir_all(&dir);
 }

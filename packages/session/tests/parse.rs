@@ -119,9 +119,24 @@ fn an_amount_reads_the_numbers_a_reply_prints() {
 }
 
 #[test]
+fn a_colour_is_rgb_with_or_without_spaces_and_prints_without() {
+    for text in [
+        "@led1 rgb(255,128,0)",
+        "@led1 rgb(255, 128, 0)",
+        "@led1 rgb( 255,128 ,0 )",
+    ] {
+        let condition = Condition::parse(&words(text)).unwrap();
+        assert_eq!(condition.to_string(), "@led1 rgb(255,128,0)", "{text}");
+    }
+}
+
+#[test]
 fn a_bad_condition_says_what_to_write() {
     for (text, says) in [
-        ("@led1 bright", "use lit, dim, off, high or low"),
+        ("@led1 bright", "use lit, dim, off, high, low or a colour"),
+        ("@led1 rgb(256,0,0)", "red, green and blue from 0 to 255"),
+        ("@led1 rgb(1,2)", "red, green and blue from 0 to 255"),
+        ("@led1 #ff0000", "not a state"),
         ("@led1.i == 5mA", "use <, <=, > or >="),
         ("@led1.i > 5", "not a value with a unit"),
         ("@led1.i > 5mOhm", "not a value with a unit"),
@@ -135,6 +150,11 @@ fn a_bad_condition_says_what_to_write() {
         let error = Condition::parse(&words(text)).unwrap_err();
         assert!(error.contains(says), "{text}: {error}");
     }
+    let error = line("expect @led1 #ff0000").unwrap_err();
+    assert!(
+        error.contains("a word that starts with # is a comment"),
+        "{error}"
+    );
     let error = line("expect serial contains \"\"").unwrap_err();
     assert!(error.contains("needs text"), "{error}");
 }

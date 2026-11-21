@@ -749,6 +749,7 @@ dependencies = [
  "httparse",
  "orbe-registry",
  "orbe-scene",
+ "orbe-scratch",
  "orbe-session",
  "rustix",
  "serde",
@@ -781,6 +782,7 @@ dependencies = [
  "orbe-mcu",
  "orbe-microchip",
  "orbe-model",
+ "orbe-scratch",
  "orbe-xtensa",
  "serde",
  "serde_json",
@@ -846,6 +848,7 @@ dependencies = [
  "libm",
  "orbe-engine",
  "orbe-model",
+ "orbe-scratch",
  "rustix",
  "schemars",
  "serde",
@@ -854,6 +857,13 @@ dependencies = [
  "strsim",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "orbe-scratch"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
 ]
 
 [[package]]

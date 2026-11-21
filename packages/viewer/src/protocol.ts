@@ -6,6 +6,8 @@ export type * from "./view";
 export interface Channels {
   readonly leds: readonly Ref[];
   readonly pins: readonly Ref[];
+  /** Each addressable LED part, by its reading `"of": "rgb"`. */
+  readonly pixels: readonly Ref[];
   readonly switches: readonly Ref[];
 }
 
@@ -42,6 +44,9 @@ export interface FrameMessage {
   readonly led_a: readonly number[];
   /** 0 for low, 1 for high, per `channels.pins`. */
   readonly pins: readonly (0 | 1)[];
+  /** Red, green and blue from 0 to 255, per `channels.pixels`: the colour that part's first LED
+   * last latched, black before its first latch. */
+  readonly pixel_rgb: readonly (readonly number[])[];
   /** On a frame from a `play` tick: simulated time over wall time in that tick, as the session
    * achieved it. Under 1 when the engine runs slower than real time. */
   readonly ratio?: number;

@@ -2,6 +2,7 @@
 //! row per event at the end its clock gives. Two replays whose events end together write
 //! those rows by part name.
 
+use orbe_scratch::Scratch;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -19,8 +20,11 @@ fn run(netlist: &Path, out: &Path) -> Vec<u8> {
     csv
 }
 
-fn scratch(name: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("orbe-engine-link-{name}-{}", std::process::id()))
+/// A path inside a fresh temp folder, which is removed when the test ends, even on a panic.
+fn scratch(name: &str) -> (Scratch, PathBuf) {
+    let scratch = Scratch::new();
+    let path = scratch.join(name);
+    (scratch, path)
 }
 
 /// The row each event of a replay part writes, from the netlist alone: its end is its start
@@ -89,7 +93,7 @@ fn the_replay_example_writes_its_event_list_to_link_csv() {
     assert_eq!(rows.len(), 7);
     let got = run(
         &repo("packages/engine/tests/circuits/spi-replay/netlist.json"),
-        &scratch("example"),
+        &scratch("example").1,
     );
     assert_eq!(String::from_utf8(got).unwrap(), csv(&rows));
 }
@@ -120,12 +124,11 @@ fn two_replays_listed_in_either_order_write_the_same_link_csv() {
         let listed: Vec<_> = order.iter().map(|&k| parts[k].clone()).collect();
         doc["parts"] =
             serde_json::Value::Array([listed, vec![netlist["parts"][1].clone()]].concat());
-        let dir = scratch(label);
+        let (_dir_scratch, dir) = scratch(label);
         fs::create_dir_all(&dir).unwrap();
         let input = dir.join("netlist.json");
         fs::write(&input, serde_json::to_vec(&doc).unwrap()).unwrap();
         ends.push(String::from_utf8(run(&input, &dir.join("out"))).unwrap());
-        let _ = fs::remove_dir_all(&dir);
     }
     assert_eq!(ends[0], ends[1]);
     let mut rows = expected_rows(&netlist["parts"][0]);

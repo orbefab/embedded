@@ -63,7 +63,7 @@ Read a hole as a pin, as `orbe get @bb.a12`. `snapshot` lists no holes. A leg th
 
 With D13 wired straight to `led1.anode` and no `r1`, the LED draws 94 mA. `step` lists `warning[rating.current]` and `warning[rating.power]` for `led1`, and `step 20ms` after it lists `warning[rating.current]` for `#nano__mcu.pin.PB5 (nano.D13)`, the chip pin behind D13, over its 40 mA rating. `expect no diagnostics` fails. The LED holds D13 at 2.3 V, so D13 reads `low` while the LED is lit. `orbe lint` warns of it before any run, with `warning[scene.led_no_resistor]` on `led1`. Give each LED a series resistor, such as 220 ohm from a 5 V pin.
 
-The board's ATmega328P has the datasheet's absolute maximum ratings. A pin's and the supply's current count by their RMS over the last 10.2 ms, five periods of `analogWrite`'s 490 Hz PWM, so a PWM load counts by its RMS, not its peak. A run warns `rating.current` on a pin that sources or sinks over 40 mA, on `VCC` or `GND` when the pins together pass over 200 mA, and `rating.voltage` on a pin below -0.5 V or above VCC + 0.5 V. The message names the chip pin, then the board's pins on its net, as in `#nano__mcu.pin.PB1 (nano.D9) carries 0.0434 A RMS over the last 10.2 ms, over its 0.04 A rating`. Once a warning has lasted, its message ends with how long, as in `for 32582912000 ps`. The pin's output stage is linear, 25 ohm from its rail. Keep a pin at 20 mA or less when a level matters, and drive a larger load through a transistor.
+The board's ATmega328P has the datasheet's absolute maximum ratings. A pin's and the supply's current count by their RMS over the last 10.2 ms, five periods of `analogWrite`'s 490 Hz PWM, so a PWM load counts by its RMS, not its peak. A run warns `rating.current` on a pin that sources or sinks over 40 mA, on `VCC` or `GND` when the pins together pass over 200 mA, and `rating.voltage` on a pin below -0.5 V or above VCC + 0.5 V. The message names the chip pin, then the board's pins on its net, as in `#nano__mcu.pin.PB1 (nano.D9) carries 43.4 mA RMS over the last 10.2 ms, over its 40 mA rating`. Once a warning has lasted, its message ends with how long, as in `for 32.582912ms`. The pin's output stage is linear, 25 ohm from its rail. Keep a pin at 20 mA or less when a level matters, and drive a larger load through a transistor.
 
 The board's USB supply is rated at 500 mA. A load over that on 5V, such as 2.5 ohm from 5V to GND (1.8 A), warns `rating.current` on the supply, `#nano__usb__host.i (nano.usb)`, at 1.8 A over its 0.5 A rating, and on the Schottky behind 5V, `#nano__diode.i (nano.diode)`, which is rated 0.5 A too. A wire from the Nano's 5V straight to GND is a short: `orbe check` and `orbe open` refuse the scene with `net.short`, naming the wire.
 
@@ -110,7 +110,7 @@ pressed btn1 at t=107.000002ms; reads show it after t=107.000002ms
 $ orbe step 6ms
 ...
 $ orbe expect @led1 lit
-passed @led1 lit (led1 lit, i=0.0112925043880606 A, brightness=0.004627811350286439 A over 20ms)
+passed @led1 lit (led1 lit, i=11.2925043880606 mA, brightness=4.627811350286438 mA over 20ms)
 $ orbe close
 closed at t=111ms
 ```
@@ -163,7 +163,7 @@ The part and `orbe add` codes are in `orbe skills get parts`.
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |
 | `not_settable` | `press` and `release` work only on a switch. `set` works only on a quantity the scene's `world` names or a part reads. |
 | `wrong_setting` | The part takes a different input, such as a trimmer's `position`. Set that param in the scene and run `orbe open` again. |
-| `no_change` | The input asks for the state already there, such as `set light 50` when the light is 50. |
+| `no_change` | `press` or `release` asks for the switch state already there. `set` of a value already scheduled succeeds, and names the time it lands when that time is still ahead. |
 | `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`, then fix the circuit or the firmware, or step longer. |
 | `ended` | The session reached its 2-hour stop. Reads still work. Run `orbe open` to start again. |
 | `past_stop` | A `step` would end past the stop, or an input would land past it. Do what the hint says. |

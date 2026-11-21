@@ -30,8 +30,9 @@ fn orbe_in(dir: &Path, args: &[&str]) -> (Output, String, String) {
 }
 
 /// A folder with a scene and nothing else.
-fn scene_only() -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
+/// A Scratch, since a test that locks this project's folders still leaves nothing behind.
+fn scene_only() -> orbe_scratch::Scratch {
+    let dir = orbe_scratch::Scratch::new();
     fs::write(dir.path().join("scene.jsonc"), "{}\n").unwrap();
     dir
 }
@@ -1274,8 +1275,10 @@ fn add_refuses_a_folder_that_is_not_a_project() {
 #[test]
 fn a_failed_overwrite_puts_every_folder_back_and_says_so() {
     use std::os::unix::fs::PermissionsExt;
-    let project = common::project("nano-button");
-    let root = project.path();
+    // A Scratch, so the folder this test locks is opened and removed even if it fails.
+    let scratch = orbe_scratch::Scratch::new();
+    let root = &scratch.join("project");
+    fs::rename(common::project("nano-button").path(), root).unwrap();
     for id in ["led-5mm", "resistor-axial"] {
         let path = root.join("parts").join(id).join("part.jsonc");
         let mut bytes = fs::read(&path).unwrap();

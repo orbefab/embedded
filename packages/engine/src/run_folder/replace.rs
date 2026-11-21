@@ -292,12 +292,11 @@ mod tests {
         )
     }
 
-    fn scratch(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!("orbe-engine-{name}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&path);
-        let _ = fs::remove_dir_all(sibling(&path, "partial"));
-        let _ = fs::remove_dir_all(sibling(&path, "replacing"));
-        path
+    /// A run folder path inside a fresh temp folder, which holds its siblings too.
+    fn scratch(name: &str) -> (orbe_scratch::Scratch, PathBuf) {
+        let scratch = orbe_scratch::Scratch::new();
+        let path = scratch.join(name);
+        (scratch, path)
     }
 
     fn tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
@@ -314,52 +313,48 @@ mod tests {
 
     #[test]
     fn write_is_idempotent_and_replaces_a_previous_run() {
-        let dir = scratch("idem");
+        let (_dir_scratch, dir) = scratch("idem");
         let folder = rejected_folder(b"{}", 0);
         folder.write(&dir).unwrap();
         let first = tree(&dir);
         folder.write(&dir).unwrap();
         assert_eq!(tree(&dir), first);
         assert!(dir.join("manifest.json").is_file());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn write_replaces_an_empty_directory() {
-        let dir = scratch("empty");
+        let (_dir_scratch, dir) = scratch("empty");
         fs::create_dir_all(&dir).unwrap();
         rejected_folder(b"{}", 0).write(&dir).unwrap();
         assert!(dir.join("manifest.json").is_file());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn write_refuses_a_non_run_directory() {
-        let dir = scratch("foreign");
+        let (_dir_scratch, dir) = scratch("foreign");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("notes.txt"), b"keep").unwrap();
         let err = rejected_folder(b"{}", 0).write(&dir).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(fs::read(dir.join("notes.txt")).unwrap(), b"keep");
         assert!(!dir.join("manifest.json").exists());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn write_clears_a_leftover_staging_directory() {
-        let dir = scratch("staging");
+        let (_dir_scratch, dir) = scratch("staging");
         let staging = sibling(&dir, "partial");
         fs::create_dir_all(staging.join("stale")).unwrap();
         fs::write(staging.join("stale").join("half.json"), b"{").unwrap();
         rejected_folder(b"{}", 0).write(&dir).unwrap();
         assert!(dir.join("observations.json").is_file());
         assert!(!staging.exists());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn write_refuses_a_foreign_manifest() {
-        let dir = scratch("foreign-manifest");
+        let (_dir_scratch, dir) = scratch("foreign-manifest");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("manifest.json"), br#"{"app":"web"}"#).unwrap();
         fs::write(dir.join("notes.txt"), b"keep").unwrap();
@@ -370,7 +365,6 @@ mod tests {
             br#"{"app":"web"}"#
         );
         assert_eq!(fs::read(dir.join("notes.txt")).unwrap(), b"keep");
-        let _ = fs::remove_dir_all(&dir);
     }
 
     fn previous_manifest() -> String {
@@ -398,14 +392,13 @@ mod tests {
             ("bare", r#"{"run_format":3,"input":{"file":"netlist.json"},"created_at":"2030-01-01T00:00:00Z"}"#.to_string()),
         ];
         for (name, manifest) in cases {
-            let dir = scratch(name);
+            let (_dir_scratch, dir) = scratch(name);
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join("manifest.json"), &manifest).unwrap();
             fs::write(dir.join("old.txt"), b"old").unwrap();
             rejected_folder(b"{}", 0).write(&dir).unwrap();
             assert!(dir.join("observations.json").is_file(), "{name}");
             assert!(!dir.join("old.txt").exists(), "{name}");
-            let _ = fs::remove_dir_all(&dir);
         }
     }
 
@@ -429,7 +422,7 @@ mod tests {
             ("array", "[]".to_string()),
         ];
         for (name, manifest) in cases {
-            let dir = scratch(name);
+            let (_dir_scratch, dir) = scratch(name);
             fs::create_dir_all(&dir).unwrap();
             fs::write(dir.join("manifest.json"), &manifest).unwrap();
             fs::write(dir.join("sentinel.txt"), b"keep").unwrap();
@@ -446,19 +439,16 @@ mod tests {
                 "{name}"
             );
             assert!(!dir.join("observations.json").exists(), "{name}");
-            let _ = fs::remove_dir_all(&dir);
         }
     }
 
     #[test]
     fn write_refuses_without_removing_a_stale_partial() {
-        let dir = scratch("refuse-partial");
+        let (_dir_scratch, dir) = scratch("refuse-partial");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("notes.txt"), b"keep").unwrap();
         let partial = named_sibling(&dir, "partial", 4242);
         let replacing = named_sibling(&dir, "replacing", 4242);
-        let _ = fs::remove_dir_all(&partial);
-        let _ = fs::remove_dir_all(&replacing);
         fs::create_dir_all(&partial).unwrap();
         fs::write(partial.join("sentinel"), b"stay").unwrap();
         fs::create_dir_all(&replacing).unwrap();
@@ -468,19 +458,16 @@ mod tests {
         assert_eq!(fs::read(dir.join("notes.txt")).unwrap(), b"keep");
         assert_eq!(fs::read(partial.join("sentinel")).unwrap(), b"stay");
         assert_eq!(fs::read(replacing.join("sentinel")).unwrap(), b"stay");
-        let _ = fs::remove_dir_all(&dir);
-        let _ = fs::remove_dir_all(&partial);
-        let _ = fs::remove_dir_all(&replacing);
     }
 
     #[cfg(unix)]
     #[test]
     fn a_symlinked_backup_is_restored_before_the_ownership_check() {
-        let target = scratch("symlink-target");
+        let (_target_scratch, target) = scratch("symlink-target");
         fs::create_dir_all(&target).unwrap();
         fs::write(target.join("manifest.json"), br#"{"app":"web"}"#).unwrap();
         fs::write(target.join("sentinel"), b"keep").unwrap();
-        let out = scratch("symlink-out");
+        let (_out_scratch, out) = scratch("symlink-out");
         let replacing = named_sibling(&out, "replacing", 4242);
         let _ = fs::remove_file(&replacing);
         std::os::unix::fs::symlink(&target, &replacing).unwrap();
@@ -490,18 +477,15 @@ mod tests {
         assert!(!target.join("observations.json").exists());
         let _ = fs::remove_file(&out);
         let _ = fs::remove_file(&replacing);
-        let _ = fs::remove_dir_all(&target);
     }
 
     #[cfg(unix)]
     #[test]
     fn a_symlinked_previous_run_is_replaced_without_touching_its_target() {
-        let target = scratch("symlink-run-target");
-        let _ = fs::remove_dir_all(&target);
+        let (_target_scratch, target) = scratch("symlink-run-target");
         rejected_folder(b"{}", 0).write(&target).unwrap();
         fs::write(target.join("sentinel"), b"keep").unwrap();
-        let out = scratch("symlink-run-out");
-        let _ = fs::remove_dir_all(&out);
+        let (_out_scratch, out) = scratch("symlink-run-out");
         let replacing = named_sibling(&out, "replacing", 4343);
         let _ = fs::remove_file(&replacing);
         std::os::unix::fs::symlink(&target, &replacing).unwrap();
@@ -511,13 +495,11 @@ mod tests {
         assert!(fs::symlink_metadata(&replacing).is_err());
         assert_eq!(fs::read(target.join("sentinel")).unwrap(), b"keep");
         assert_eq!(fs::read(target.join("netlist.json")).unwrap(), b"{}");
-        let _ = fs::remove_dir_all(&out);
-        let _ = fs::remove_dir_all(&target);
     }
 
     #[test]
     fn write_removes_a_stale_partial_file() {
-        let dir = scratch("partial-file");
+        let (_dir_scratch, dir) = scratch("partial-file");
         let partial = named_sibling(&dir, "partial", 7);
         let _ = fs::remove_file(&partial);
         fs::write(&partial, b"not a directory").unwrap();
@@ -525,12 +507,11 @@ mod tests {
         assert!(dir.join("manifest.json").is_file());
         assert!(!partial.exists());
         let _ = fs::remove_file(&partial);
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn write_restores_a_stale_backup_then_replaces_it() {
-        let dir = scratch("restore");
+        let (_dir_scratch, dir) = scratch("restore");
         let backup = named_sibling(&dir, "replacing", 999_999);
         fs::create_dir_all(&backup).unwrap();
         let previous = rejected_folder(b"old", 0);
@@ -549,12 +530,11 @@ mod tests {
         assert!(!dir.join("old.txt").exists());
         assert!(!backup.exists());
         assert!(!partial.exists());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn write_restores_a_foreign_backup_and_then_refuses_it() {
-        let dir = scratch("restore-foreign");
+        let (_dir_scratch, dir) = scratch("restore-foreign");
         let backup = named_sibling(&dir, "replacing", 999_999);
         fs::create_dir_all(&backup).unwrap();
         fs::write(backup.join("manifest.json"), br#"{"app":"web"}"#).unwrap();
@@ -567,14 +547,12 @@ mod tests {
             br#"{"app":"web"}"#
         );
         assert!(!backup.exists());
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]
     #[test]
     fn failed_backup_cleanup_still_commits_and_the_next_write_sweeps_it() {
-        let dir = scratch("backup-cleanup");
-        let _cleanup = BackupCleanup { dir: dir.clone() };
+        let (_dir_scratch, dir) = scratch("backup-cleanup");
         rejected_folder(b"old", 0).write(&dir).unwrap();
         // macOS will not rename a directory whose own mode is 0555. A nested unwritable
         // directory still stops the backup delete, and the run directory stays movable.
@@ -602,36 +580,5 @@ mod tests {
         let mut perms = fs::symlink_metadata(path).unwrap().permissions();
         perms.set_mode(mode);
         fs::set_permissions(path, perms).unwrap();
-    }
-
-    #[cfg(unix)]
-    struct BackupCleanup {
-        dir: PathBuf,
-    }
-
-    #[cfg(unix)]
-    impl Drop for BackupCleanup {
-        fn drop(&mut self) {
-            use std::os::unix::fs::PermissionsExt;
-            for path in [
-                self.dir.join("locked"),
-                sibling(&self.dir, "replacing").join("locked"),
-                sibling(&self.dir, "replacing"),
-                sibling(&self.dir, "partial"),
-                self.dir.clone(),
-            ] {
-                let Ok(meta) = fs::symlink_metadata(&path) else {
-                    continue;
-                };
-                let mut perms = meta.permissions();
-                perms.set_mode(0o755);
-                let _ = fs::set_permissions(&path, perms);
-                if meta.is_dir() {
-                    let _ = fs::remove_dir_all(&path);
-                } else {
-                    let _ = fs::remove_file(&path);
-                }
-            }
-        }
     }
 }

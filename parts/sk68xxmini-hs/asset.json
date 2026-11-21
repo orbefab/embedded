@@ -7,8 +7,8 @@
   },
   "files": {
     "sk68xxmini-hs.glb": {
-      "sha256": "8c09dccdb1e11dfde728379c53ca2f75b99e50e64e932dd7d268c95f404a33c1",
-      "bytes": 16128
+      "sha256": "b68c9f51441d332c66a082629c5e30e009f103993bcbbf15640fcad39f30ec24",
+      "bytes": 16144
     },
     "sk68xxmini-hs.anchors.json": {
       "sha256": "bfa020b6d4f0dd37ebb07643a2f54041e716c611b2bb2bc1d76a96a31e8efd78",
@@ -19,7 +19,7 @@
     "min": [-1.85, -1.75, 0],
     "max": [1.85, 1.75, 1.95]
   },
-  "kept_nodes": [],
+  "kept_nodes": ["lens"],
   "draw_calls": 3,
   "checks": {
     "frame": {
@@ -34,7 +34,7 @@
       "z_mm": 0.15
     },
     "names": {
-      "nodes": []
+      "nodes": ["lens"]
     },
     "merge": {
       "primitives_in": 6,
