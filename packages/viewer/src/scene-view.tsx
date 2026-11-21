@@ -1,7 +1,8 @@
 // Adapted from maker-sandbox (MIT, Copyright 2026 Alwurts).
 import { type ThreeEvent, useFrame, useLoader, useThree } from "@react-three/fiber";
-import { EffectComposer, Outline, SelectiveBloom } from "@react-three/postprocessing";
-import { type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { EffectComposer, Outline } from "@react-three/postprocessing";
+import { BlendFunction, SelectiveBloomEffect } from "postprocessing";
+import { type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { BackSide, Box3, type Group, Mesh, MeshStandardMaterial, type Object3D } from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { type BuiltScene, buildScene, fromGltf, type Tag, tagOf } from "./build";
@@ -19,38 +20,55 @@ import { WireMesh } from "./wire-mesh";
 /** orbefab.com's brand orange. */
 const HOVER = "#e85d04";
 
-/** The meshes whose materials the scene glows. Bloom reads only these, so a metal highlight
- * can pass luminance 1 and still not bloom. */
-function glowMeshes(built: BuiltScene): Object3D[] {
+/** The render layer bloom reads. The hover outline toggles its own layer, 10, on the hovered
+ * meshes, so bloom must not share it. */
+const BLOOM_LAYER = 11;
+
+/** Each mesh the scene glows, with its glow material. */
+function glowMeshes(built: BuiltScene): { mesh: Mesh; material: MeshStandardMaterial }[] {
   const materials = new Set<MeshStandardMaterial>(built.glows.map((glow) => glow.material));
-  const meshes: Object3D[] = [];
+  const meshes: { mesh: Mesh; material: MeshStandardMaterial }[] = [];
   built.root.traverse((object) => {
     if (!(object instanceof Mesh)) return;
     const list = Array.isArray(object.material) ? object.material : [object.material];
-    if (list.some((material) => material instanceof MeshStandardMaterial && materials.has(material))) meshes.push(object);
+    const material = list.find((each) => each instanceof MeshStandardMaterial && materials.has(each));
+    if (material !== undefined) meshes.push({ mesh: object, material });
   });
   return meshes;
 }
 
-/** Lights already in the scene. SelectiveBloom warns, and skips, when it is given none. */
-function useSceneLights(): Object3D[] {
+/** Bloom over the meshes on BLOOM_LAYER only. A depth pass of that layer masks the frame, so a
+ * pixel blooms only where the nearest surface is one of those meshes, or a clear lens over one. */
+function useBloom(): SelectiveBloomEffect {
   const scene = useThree((state) => state.scene);
-  const [lights, setLights] = useState<Object3D[]>([]);
-  useLayoutEffect(() => {
-    const found: Object3D[] = [];
-    scene.traverse((object) => {
-      if ((object as { isLight?: boolean }).isLight === true) found.push(object);
+  const camera = useThree((state) => state.camera);
+  const bloom = useMemo(() => {
+    const effect = new SelectiveBloomEffect(scene, camera, {
+      blendFunction: BlendFunction.ADD,
+      intensity: 1.2,
+      luminanceSmoothing: 0.2,
+      luminanceThreshold: 1,
+      mipmapBlur: true,
     });
-    setLights((current) =>
-      current.length === found.length && current.every((light, index) => light === found[index]) ? current : found,
-    );
-  }, [scene]);
-  return lights;
+    effect.selection.layer = BLOOM_LAYER;
+    return effect;
+  }, [scene, camera]);
+  useEffect(() => () => bloom.dispose(), [bloom]);
+  // The mask turns depth into distance with the camera's near and far planes, and it copies
+  // them only when told. The near plane moves with the orbit distance, so copy it each time.
+  const copied = useRef({ bloom, near: camera.near, far: camera.far });
+  useFrame(() => {
+    const last = copied.current;
+    if (last.bloom === bloom && last.near === camera.near && last.far === camera.far) return;
+    bloom.mainCamera = camera;
+    copied.current = { bloom, near: camera.near, far: camera.far };
+  });
+  return bloom;
 }
 
-function Effects({ hover, glow }: { hover: HoverStore; glow: Object3D[] }) {
+function Effects({ hover }: { hover: HoverStore }) {
   const hovered = useSyncExternalStore(hover.subscribe, hover.get);
-  const lights = useSceneLights();
+  const bloom = useBloom();
   const target = hovered?.object;
   const selection = useMemo(() => {
     const meshes: Object3D[] = [];
@@ -61,16 +79,7 @@ function Effects({ hover, glow }: { hover: HoverStore; glow: Object3D[] }) {
   }, [target]);
   return (
     <EffectComposer autoClear={false} multisampling={0}>
-      {lights.length === 0 ? null : (
-        <SelectiveBloom
-          intensity={1.2}
-          lights={lights}
-          luminanceSmoothing={0.2}
-          luminanceThreshold={1}
-          mipmapBlur
-          selection={glow}
-        />
-      )}
+      <primitive object={bloom} />
       <Outline
         blur
         edgeStrength={6}
@@ -215,6 +224,7 @@ export function SceneView({
     stage.getObjectByName("stage-wires")?.traverse(visit);
   }, [built, gl, stage]);
 
+  const glowing = useMemo(() => glowMeshes(built), [built]);
   useFrame(() => {
     const live = frame.current;
     const peaks = ledPeak.current;
@@ -223,6 +233,13 @@ export function SceneView({
       const intensity = glowIntensity(shownCurrent(now, peaks[glow.channel] ?? 0), glow.full);
       glow.material.emissiveIntensity = intensity;
       litColour(glow.base, intensity, glow.material.color);
+    }
+    // A glow mesh is on the bloom layer only from its full current up, where its own luminance
+    // reaches the bloom threshold. Below that, a highlight on it or on the lens over it would
+    // bloom from some angles, and the LED would read as lit.
+    for (const { mesh, material } of glowing) {
+      if (material.emissiveIntensity >= 1) mesh.layers.enable(BLOOM_LAYER);
+      else mesh.layers.disable(BLOOM_LAYER);
     }
     const count = Math.max(peaks.length, live?.led_a.length ?? 0);
     for (let channel = 0; channel < count; channel += 1) peaks[channel] = live?.led_a[channel] ?? 0;
@@ -295,7 +312,6 @@ export function SceneView({
   };
 
   const frameBoxes = useMemo(() => drawnBoxes(built), [built]);
-  const glow = useMemo(() => glowMeshes(built), [built]);
   return (
     <>
       <StageRoom />
@@ -313,7 +329,7 @@ export function SceneView({
         ))}
       </group>
       <StageFloor boxes={built.boxes} colours={colours} />
-      <Effects glow={glow} hover={hover} />
+      <Effects hover={hover} />
     </>
   );
 }
