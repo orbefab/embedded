@@ -576,16 +576,21 @@ mod tests {
         let dir = scratch("backup-cleanup");
         let _cleanup = BackupCleanup { dir: dir.clone() };
         rejected_folder(b"old", 0).write(&dir).unwrap();
-        set_mode(&dir, 0o555);
+        // macOS will not rename a directory whose own mode is 0555. A nested unwritable
+        // directory still stops the backup delete, and the run directory stays movable.
+        let locked = dir.join("locked");
+        fs::create_dir(&locked).unwrap();
+        fs::write(locked.join("keep"), b"x").unwrap();
+        set_mode(&locked, 0o555);
         // A process that can write inside a 0555 directory can also delete it.
-        if fs::write(dir.join("probe"), b"x").is_ok() {
+        if fs::write(locked.join("probe"), b"x").is_ok() {
             return;
         }
         rejected_folder(b"new", 1).write(&dir).unwrap();
         let backup = sibling(&dir, "replacing");
         assert!(backup.is_dir());
         assert_eq!(fs::read(dir.join("netlist.json")).unwrap(), b"new");
-        set_mode(&backup, 0o755);
+        set_mode(&backup.join("locked"), 0o755);
         rejected_folder(b"newer", 2).write(&dir).unwrap();
         assert!(!backup.exists());
         assert_eq!(fs::read(dir.join("netlist.json")).unwrap(), b"newer");
@@ -609,6 +614,8 @@ mod tests {
         fn drop(&mut self) {
             use std::os::unix::fs::PermissionsExt;
             for path in [
+                self.dir.join("locked"),
+                sibling(&self.dir, "replacing").join("locked"),
                 sibling(&self.dir, "replacing"),
                 sibling(&self.dir, "partial"),
                 self.dir.clone(),
