@@ -94,6 +94,11 @@ impl Bus for Flat {
     fn yields(&self) -> bool {
         self.yields
     }
+
+    /// The code never changes, so its version never moves, and the core runs straight runs.
+    fn code_version(&self) -> Option<u64> {
+        Some(0)
+    }
 }
 
 pub fn core_at<C: Config>(pc: u32) -> Core<C> {

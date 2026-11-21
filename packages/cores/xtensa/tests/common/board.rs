@@ -7,9 +7,10 @@ use std::ops::Range;
 use orbe_xtensa::{Bus, Cause, Core, Cycle, Esp32, Exit, PagedRam, Sr, Stop, Width};
 
 use super::elf::Elf;
-use super::{Pieces, run_in_pieces};
+use super::{Pieces, Straight, run_in_pieces};
 
 const ROM: Range<u32> = 0x4000_0000..0x4006_0000;
+const IRAM: Range<u32> = 0x4008_0000..0x400a_0000;
 const PERIPHERALS: Range<u32> = 0x3ff0_0000..0x3ff8_0000;
 const DRAM: Range<u32> = 0x3ffa_e000..0x4000_0000;
 
@@ -86,7 +87,7 @@ pub struct Board {
 impl Board {
     pub fn load(elf: &Elf, served: &[&str]) -> Board {
         let mut board = Board {
-            iram: PagedRam::new(0x4008_0000, 0x2_0000),
+            iram: PagedRam::new(IRAM.start, (IRAM.end - IRAM.start) as usize),
             dram: PagedRam::new(DRAM.start, (DRAM.end - DRAM.start) as usize),
             rom: PagedRam::new(ROM.start, (ROM.end - ROM.start) as usize),
             served: served.iter().map(|name| elf.symbol(name)).collect(),
@@ -105,6 +106,12 @@ impl Board {
         }
         board.dram.write(ROM_A1 - 12, Width::Word, ROM_FRAME_LINK);
         board
+    }
+
+    /// The board with a code version that moves at each store to instruction RAM. Its lines
+    /// never move, so it is still.
+    pub fn kept(self) -> Straight<Board> {
+        Straight::kept(self, IRAM, true)
     }
 
     fn in_stub(addr: u32) -> bool {
@@ -202,43 +209,57 @@ pub struct Run {
     pub uart: String,
     pub stop: Stop,
     pub core: Core<Esp32>,
+    /// The bus's trace of every load and store.
+    pub trace: u64,
+    /// The full steps the core made.
+    pub steps: u64,
 }
 
 /// Runs a probe image from its entry on `Core<Esp32>` until it prints `END <probe>`, stops for
 /// another reason, or reaches `limit`. `served` names the image functions the test answers with
-/// 0, and `pieces` cuts each run at random limits.
+/// 0, and `pieces` cuts each run at random limits. The board keeps a code version, so the core
+/// runs straight runs.
 pub fn run_probe(
     elf: &Elf,
     probe: &str,
     limit: Cycle,
     served: &[&str],
+    pieces: Option<Pieces>,
+) -> Run {
+    run_probe_on(Board::load(elf, served).kept(), elf, probe, limit, pieces)
+}
+
+/// [`run_probe`] on `board`, as the image loaded it.
+pub fn run_probe_on(
+    mut board: Straight<Board>,
+    elf: &Elf,
+    probe: &str,
+    limit: Cycle,
     mut pieces: Option<Pieces>,
 ) -> Run {
-    let mut board = Board::load(elf, served);
     let mut core = Core::<Esp32>::new();
     core.set_pc(elf.entry);
     core.set_special(Sr::Sar, ROM_SAR);
     core.set_a(1, ROM_A1);
     core.set_special(Sr::WindowBase, ROM_WINDOWBASE);
     let end = format!("END {probe}\r\n");
+    let done = |board: Straight<Board>, stop, core| Run {
+        uart: board.bus.uart,
+        stop,
+        core,
+        trace: board.trace,
+        steps: board.steps.get(),
+    };
     loop {
         let stop = run_in_pieces(&mut core, &mut board, limit, &mut pieces);
         if stop != Stop::Bus {
-            return Run {
-                uart: board.uart,
-                stop,
-                core,
-            };
+            return done(board, stop, core);
         }
-        board.serve(&mut core);
-        if board.uart.ends_with(&end) {
+        board.bus.serve(&mut core);
+        if board.bus.uart.ends_with(&end) {
             let after = Cycle(core.cycle().0 + 1000);
             let stop = run_in_pieces(&mut core, &mut board, after, &mut pieces);
-            return Run {
-                uart: board.uart,
-                stop,
-                core,
-            };
+            return done(board, stop, core);
         }
     }
 }

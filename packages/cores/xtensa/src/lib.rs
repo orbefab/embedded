@@ -33,6 +33,16 @@
 //! The ISA lets a chip leave `WAITI` at any time (8.3.341, p 643). This core leaves only to take
 //! an interrupt.
 //!
+//! On a bus with a code version the core runs straight runs. After a step that takes no
+//! interrupt, does not wait or count `ICOUNT`, and runs an op that writes none of `PS`,
+//! `INTENABLE`, the pending interrupts, `ICOUNT`, `ICOUNTLEVEL`, `CCOUNT` and the `CCOMPAREn`,
+//! it runs the decodes it keeps at that version back to back. Before each op it only marks the
+//! step's start and compares the cycle with the run's limit, the next timer match and the cycle
+//! the lines can next move at. The run ends at an op that writes one of those, at a trap, at an
+//! access that can move the lines, at a PC it does not keep, or at that horizon, and the next
+//! step makes every check. Every op, interrupt, exception and timer match lands on the
+//! instruction and cycle that a full step before each op gives.
+//!
 //! Both chips select the hardware alignment option, so an unaligned load or store in data RAM
 //! completes at its own address. On the S3, instruction RAM (`0x40370000..0x403e0000`) and mask
 //! ROM (`0x40000000..0x40060000`) raise [`Cause::LoadStoreAlignment`] when the address is not

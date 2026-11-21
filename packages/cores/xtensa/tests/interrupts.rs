@@ -310,7 +310,7 @@ fn a_masked_wait_runs_to_the_limit() {
 /// level 3:  rsr.ccount a5; movi a6, 1; slli a6, a6, 22; wsr.intclear a6; addi a7, a7, 1; rfi 3
 /// kernel:   rsr.ccompare0 a4; addi a4, a4, 100; wsr.ccompare0 a4; addi a9, a9, 1; rfe
 /// ```
-fn sleeper() -> (Core<Esp32s3>, Flat) {
+pub fn sleeper() -> (Core<Esp32s3>, Flat) {
     const MAIN: &str = "32a00022a03276820282c80100700032c30186fdff";
     const LEVEL3: &str = "50ea0362a001a0660160e31372c701103300";
     const KERNEL_HANDLER: &str = "40f00342c46440f01392c901003000";

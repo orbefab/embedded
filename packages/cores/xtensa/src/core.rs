@@ -465,7 +465,8 @@ impl<C: Config> Core<C> {
 
     /// Takes a pending interrupt, idles in `WAITI`, or runs one instruction. Interrupts come
     /// first, as the ISA's priority list puts them ahead of the `ICOUNT` debug exception (4.4.1.11,
-    /// p 145).
+    /// p 145). A step with `ASK` set that runs an op which leaves those checks as they were goes
+    /// on with a straight run.
     fn step<const ASK: bool, B: Bus>(&mut self, bus: &mut B, limit: Cycle) -> Result<(), Stop> {
         let nmi = self.poll::<ASK, _>(bus);
         let level = if nmi {
@@ -486,7 +487,7 @@ impl<C: Config> Core<C> {
             self.idle(bus, limit);
             return Ok(());
         }
-        let counting = self.cintlevel() < self.sr[Sr::IcountLevel as usize];
+        let counting = self.counting();
         let icount = self.sr[Sr::Icount as usize];
         // Below debug level the usual rule applies. The S3 also re-takes at debug level.
         // A higher level does not, so the entry cannot lower `PS.INTLEVEL`.
@@ -497,17 +498,99 @@ impl<C: Config> Core<C> {
             self.execute(bus)
         };
         match done {
-            Ok(op) => {
-                if counting && !matches!(op, Op::WSR_ICOUNT | Op::XSR_ICOUNT) {
-                    self.sr[Sr::Icount as usize] = icount.wrapping_add(1);
+            Ok((op, rechecks)) => {
+                if counting {
+                    if !matches!(op, Op::WSR_ICOUNT | Op::XSR_ICOUNT) {
+                        self.sr[Sr::Icount as usize] = icount.wrapping_add(1);
+                    }
+                } else if ASK && !rechecks {
+                    return self.straight(bus, limit);
                 }
+                Ok(())
             }
-            Err(Trap::Exception(cause, vaddr)) => self.exception(cause, vaddr),
-            Err(Trap::Window { base, vector }) => self.window_exception(base, vector),
-            Err(Trap::Debug(cause)) => self.debug_exception(cause),
-            Err(Trap::Stop(stop)) => return Err(stop),
+            Err(trap) => self.trap(trap),
+        }
+    }
+
+    /// Enters the handler of a trap that is not a stop, or returns the stop.
+    fn trap(&mut self, trap: Trap) -> Result<(), Stop> {
+        match trap {
+            Trap::Exception(cause, vaddr) => self.exception(cause, vaddr),
+            Trap::Window { base, vector } => self.window_exception(base, vector),
+            Trap::Debug(cause) => self.debug_exception(cause),
+            Trap::Stop(stop) => return Err(stop),
         }
         Ok(())
+    }
+
+    /// Whether `ICOUNT` counts the next instruction.
+    fn counting(&self) -> bool {
+        self.cintlevel() < self.sr[Sr::IcountLevel as usize]
+    }
+
+    /// Runs the kept decodes after a step's op back to back, while a step before each would
+    /// only mark its start. That step found no interrupt to take, no wait and no `ICOUNT`
+    /// count, and its op changed nothing those checks read. Each op of the run starts before
+    /// the run's limit, the next timer match and the cycle the lines can next move at, and the
+    /// bus's code version keeps it. A step before it would then read no line, latch nothing,
+    /// find no interrupt, wait or count, and fetch nothing. A bus turns on `yields` and
+    /// `fetch_held` only in an access that can move the lines, and that access ends the run.
+    /// So the run marks each op's start and checks the cycle. It ends after an op that
+    /// rechecks, after a trap, once the lines can move, at a PC the table does not keep at the
+    /// current version, or at the horizon. A taken branch changes nothing a step checks, so the
+    /// run goes on at its target.
+    fn straight<B: Bus>(&mut self, bus: &mut B, limit: Cycle) -> Result<(), Stop> {
+        if bus.code_version().is_none() {
+            return Ok(());
+        }
+        let horizon = limit.min(self.timer_next);
+        let table = self.decodes.take();
+        let mut done = Ok(());
+        while self.cycle < horizon && self.cycle < self.lines_until {
+            let Some(slot) = bus
+                .code_version()
+                .and_then(|version| table.find(self.pc, version))
+            else {
+                break;
+            };
+            self.keep_step(bus);
+            let kept = table.kept(slot);
+            if self.refetch && (self.pc & 3) + u32::from(kept.insn.len) > 4 {
+                self.cycle.0 += 1;
+            }
+            self.refetch = false;
+            match self.run(bus, kept) {
+                Ok(_) if !kept.rechecks => {}
+                Ok(_) => break,
+                Err(trap) => {
+                    done = self.trap(trap);
+                    break;
+                }
+            }
+        }
+        self.decodes.put(table);
+        done
+    }
+
+    /// The step before an op of a straight run, which only marks its start. A check build polls
+    /// there as a step would, and requires every check the run skips to find nothing.
+    #[inline]
+    fn keep_step<B: Bus>(&mut self, bus: &mut B) {
+        #[cfg(not(feature = "poll-skip-check"))]
+        bus.begin_step(self.cycle);
+        #[cfg(feature = "poll-skip-check")]
+        {
+            assert!(!self.poll::<true, _>(bus), "a skipped poll raised the NMI");
+            assert_eq!(self.interrupt_level(), None, "at {:?}", self.cycle);
+            assert!(
+                self.wait == Wait::No,
+                "a straight run waits at {:?}",
+                self.cycle
+            );
+            assert!(!self.counting(), "ICOUNT counts at {:?}", self.cycle);
+            assert!(!bus.yields(), "the bus yields at {:?}", self.cycle);
+            assert!(!bus.fetch_held(), "the fetch is held at {:?}", self.cycle);
+        }
     }
 
     fn ar_index(&self, n: u32) -> usize {
@@ -852,7 +935,8 @@ impl<C: Config> Core<C> {
         }
     }
 
-    /// Runs one instruction. On `Ok` the PC, the registers and the cycle have moved. On `Err`
+    /// Runs one instruction, and returns its op and whether the next step makes every check, as
+    /// `Kept::rechecks` says. On `Ok` the PC, the registers and the cycle have moved. On `Err`
     /// none of them has, except what fetching and decoding charged, but an unaligned store that
     /// stops keeps the parts it wrote before the faulting one.
     ///
@@ -871,7 +955,7 @@ impl<C: Config> Core<C> {
     ///
     /// The coprocessor-disabled exception comes after the window check, as the ISA's priority list
     /// orders them (4.4.1.11, p 146).
-    fn execute<B: Bus>(&mut self, bus: &mut B) -> Result<Op, Trap> {
+    fn execute<B: Bus>(&mut self, bus: &mut B) -> Result<(Op, bool), Trap> {
         let slot = self.fetch(bus)?;
         let table = self.decodes.take();
         let kept = table.kept(slot);
@@ -880,7 +964,7 @@ impl<C: Config> Core<C> {
             self.cycle.0 += 1;
         }
         self.refetch = false;
-        let done = self.run(bus, kept);
+        let done = self.run(bus, kept).map(|op| (op, kept.rechecks));
         self.decodes.put(table);
         done
     }
