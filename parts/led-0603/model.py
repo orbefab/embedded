@@ -3,8 +3,8 @@
 
 Part frame: on its pads, body underside on z = 0, length along X, centred
 on the origin. Lead 1 (the anode) is the end cap at -X,
-lead 2 (the cathode) the one at +X. The body node is the lens, so a
-viewer can light and tint it; the shape takes the lens colour.
+lead 2 (the cathode) the one at +X. The body node is the die under a
+clear dome, so a viewer can light and tint it; the die takes the lens colour.
 """
 
 import sys

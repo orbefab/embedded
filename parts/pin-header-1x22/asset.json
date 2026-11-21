@@ -7,20 +7,20 @@
   },
   "files": {
     "pin-header-1x22.glb": {
-      "sha256": "ae9ed6eed1aadb4518fd413c017a2e0e1fcd35b18d9005d14f4a0f0069517c0f",
-      "bytes": 4236
+      "sha256": "14b8f78b249fdc8006c21a015c3c4505702e5b8c0d6be3738ab156ebae1fe453",
+      "bytes": 5732
     },
     "pin-header-1x22.anchors.json": {
-      "sha256": "c8dc5d4752d2221bade58ec2351a06d97e80b8b0b064a941ce20029307bee44f",
-      "bytes": 2781
+      "sha256": "df3ebf6ee06b634a449a7b2b4fafa8e7d1c610b5d15590c53b22f01c3b82d717",
+      "bytes": 2838
     }
   },
   "box": {
-    "min": [-27.939999, -1.27, -8],
-    "max": [27.939999, 1.27, 5.54]
+    "min": [-27.94, -1.27, -8],
+    "max": [27.94, 1.27, 5.54]
   },
-  "kept_nodes": ["housing", "pin-1", "pin-10", "pin-11", "pin-12", "pin-13", "pin-14", "pin-15", "pin-16", "pin-17", "pin-18", "pin-19", "pin-2", "pin-20", "pin-21", "pin-22", "pin-3", "pin-4", "pin-5", "pin-6", "pin-7", "pin-8", "pin-9"],
-  "draw_calls": 23,
+  "kept_nodes": ["housing-1", "housing-10", "housing-11", "housing-12", "housing-13", "housing-14", "housing-15", "housing-16", "housing-17", "housing-18", "housing-19", "housing-2", "housing-20", "housing-21", "housing-22", "housing-3", "housing-4", "housing-5", "housing-6", "housing-7", "housing-8", "housing-9", "pin-1", "pin-10", "pin-11", "pin-12", "pin-13", "pin-14", "pin-15", "pin-16", "pin-17", "pin-18", "pin-19", "pin-2", "pin-20", "pin-21", "pin-22", "pin-3", "pin-4", "pin-5", "pin-6", "pin-7", "pin-8", "pin-9"],
+  "draw_calls": 44,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -37,8 +37,8 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 23,
-      "primitives_out": 23
+      "primitives_in": 44,
+      "primitives_out": 44
     }
   }
 }

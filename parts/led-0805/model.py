@@ -3,8 +3,8 @@
 
 Part frame: on its pads, body underside on z = 0, length along X, centred
 on the origin. Lead 1 (the anode) is the end cap at -X, lead 2 (the
-cathode) the one at +X, as on the 0603 LED. The body node is the lens, so
-a viewer can light and tint it; the shape takes the lens colour.
+cathode) the one at +X, as on the 0603 LED. The body node is the die under
+a clear dome, so a viewer can light and tint it; the die takes the lens colour.
 
 The common 0805 chip LED: 2.0 × 1.25 × 0.8 (`# verify` height).
 """

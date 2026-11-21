@@ -36,25 +36,22 @@ def _x(lead, count):
 
 
 def row_shape(count):
-    """One square plastic bar. Each pin runs `PIN_BELOW` under the plastic
-    and stands `PIN_ABOVE` proud of its top."""
+    """One square plastic bar. Each pin owns the segment it stands in, and
+    the segments meet, so a hover on one pin is not claimed by another.
+    Each pin runs `PIN_BELOW` under the plastic and stands `PIN_ABOVE`
+    proud of its top."""
     top = PLASTIC + PIN_ABOVE
-    children = [paint(box(0, 0, PLASTIC / 2.0, count * PITCH, PITCH, PLASTIC), "housing", _BLACK)]
+    children = []
     for lead in range(1, count + 1):
         x = _x(lead, count)
-        children.append(
-            paint(
-                box(x, 0, (top - PIN_BELOW) / 2.0, PIN, PIN, top + PIN_BELOW),
-                f"pin-{lead}",
-                _TIN,
-            )
-        )
+        children.append(paint(box(x, 0, PLASTIC / 2.0, PITCH, PITCH, PLASTIC), f"housing-{lead}", _BLACK))
+        children.append(paint(box(x, 0, (top - PIN_BELOW) / 2.0, PIN, PIN, top + PIN_BELOW), f"pin-{lead}", _TIN))
     return bd.Compound(children=children, label=f"pin_header_1x{count}")
 
 
 def row_anchors(count):
     return [
-        glb.Anchor(lead, f"pin-{lead}", (_x(lead, count), 0.0, -PIN_BELOW), also=("housing",))
+        glb.Anchor(lead, f"pin-{lead}", (_x(lead, count), 0.0, -PIN_BELOW), also=(f"housing-{lead}",))
         for lead in range(1, count + 1)
     ]
 
