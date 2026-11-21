@@ -15,7 +15,7 @@ fn value(results: &Results, reference: &str) -> f64 {
 fn switched(initial: &str, load: &str) -> String {
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {{ "op": {{}} }},
       "ground": "gnd",
@@ -25,14 +25,14 @@ fn switched(initial: &str, load: &str) -> String {
           "name": "v1",
           "kind": "voltage_source",
           "pins": {{ "p": "vin", "n": "gnd" }},
-          "voltage": {{ "value": 5.0, "unit": "V", "source": "user" }}
+          "voltage": {{ "value": 5.0, "unit": "V" }}
         }},
         {{
           "name": "sw1",
           "kind": "switch",
           "pins": {{ "a": "vin", "b": "vout" }},
-          "on_resistance": {{ "value": 0.1, "unit": "ohm", "source": "user" }},
-          "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+          "on_resistance": {{ "value": 0.1, "unit": "ohm" }},
+          "off_resistance": {{ "value": 1e9, "unit": "ohm" }},
           "initial": "{initial}",
           "events": [{{ "t_ps": 1000000, "state": "{flipped}" }}],
           "bounce": null
@@ -48,7 +48,7 @@ const RESISTOR: &str = r#"{
   "name": "r1",
   "kind": "resistor",
   "pins": { "a": "vout", "b": "gnd" },
-  "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+  "resistance": { "value": 1000.0, "unit": "ohm" },
   "ratings": { "power": null }
 }"#;
 
@@ -56,7 +56,7 @@ const CAPACITOR: &str = r#"{
   "name": "c1",
   "kind": "capacitor",
   "pins": { "a": "vout", "b": "gnd" },
-  "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
+  "capacitance": { "value": 1e-6, "unit": "F" },
   "initial": null
 }"#;
 
@@ -118,7 +118,7 @@ fn a_net_reached_only_through_a_capacitor_floats() {
 fn a_held_capacitor_is_a_voltage_at_the_operating_point() {
     let held = CAPACITOR.replace(
         r#""initial": null"#,
-        r#""initial": { "value": 2.0, "unit": "V", "source": "user" }"#,
+        r#""initial": { "value": 2.0, "unit": "V" }"#,
     );
     let results = simulate(&switched("closed", &held));
     assert!(
@@ -147,7 +147,7 @@ fn a_net_reached_only_through_a_held_capacitor_has_a_dc_path() {
         )
         .replace(
             r#""initial": null"#,
-            r#""initial": { "value": 1.0, "unit": "V", "source": "user" }"#,
+            r#""initial": { "value": 1.0, "unit": "V" }"#,
         );
     let results = simulate(&isolated);
     assert!(

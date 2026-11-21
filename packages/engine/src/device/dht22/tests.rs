@@ -15,7 +15,7 @@ const MS: u64 = 1_000 * US;
 const S: u64 = 1_000 * MS;
 
 fn level(value: f64, unit: &str) -> String {
-    format!(r#"{{ "value": {value:?}, "unit": "{unit}", "source": "user" }}"#)
+    format!(r#"{{ "value": {value:?}, "unit": "{unit}" }}"#)
 }
 
 /// `temperature` from `initial` C, and to `to` C at `at` ps when given. Humidity holds `rh`.
@@ -30,7 +30,7 @@ fn world(initial: f64, step: Option<(u64, f64)>, rh: f64) -> World {
     };
     let json = format!(
         r#"{{
-          "version": 0, "seed": 0,
+          "version": 1, "seed": 0,
           "analysis": {{ "transient": {{ "stop_ps": 10000000000000, "max_step_ps": 1000000000, "grid_ps": 1000000000 }} }},
           "ground": "gnd", "nets": ["gnd", "vcc", "data"],
           "world": {{ "temperature": {temperature}, "humidity": {} }},

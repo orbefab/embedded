@@ -8,7 +8,7 @@ use common::{errors, with_parts};
 #[test]
 fn unexpected_pin_on_an_unknown_net_reports_both() {
     let json = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -18,7 +18,7 @@ fn unexpected_pin_on_an_unknown_net_reports_both() {
           "name": "r1",
           "kind": "resistor",
           "pins": { "a": "vin", "b": "gnd", "c": "missing" },
-          "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+          "resistance": { "value": 1000.0, "unit": "ohm" },
           "ratings": { "power": null }
         }
       ]
@@ -39,7 +39,7 @@ fn unexpected_pin_on_an_unknown_net_reports_both() {
 #[test]
 fn an_illegal_unexpected_pin_key_stays_a_pin_mismatch() {
     let json = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -49,7 +49,7 @@ fn an_illegal_unexpected_pin_key_stays_a_pin_mismatch() {
           "name": "r1",
           "kind": "resistor",
           "pins": { "a": "vin", "b": "gnd", "1": "missing" },
-          "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+          "resistance": { "value": 1000.0, "unit": "ohm" },
           "ratings": { "power": null }
         }
       ]
@@ -64,7 +64,7 @@ fn an_illegal_unexpected_pin_key_stays_a_pin_mismatch() {
 #[test]
 fn a_reserved_part_name_still_reports_pin_unit_and_value() {
     let json = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -74,7 +74,7 @@ fn a_reserved_part_name_still_reports_pin_unit_and_value() {
           "name": "net",
           "kind": "resistor",
           "pins": { "c": "missing" },
-          "resistance": { "value": 0, "unit": "farad", "source": "user" },
+          "resistance": { "value": 0, "unit": "farad" },
           "ratings": { "power": null }
         }
       ]
@@ -102,7 +102,7 @@ fn a_reserved_part_name_still_reports_pin_unit_and_value() {
 #[test]
 fn a_name_that_fails_the_grammar_stops() {
     let json = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -112,7 +112,7 @@ fn a_name_that_fails_the_grammar_stops() {
           "name": "1bad",
           "kind": "resistor",
           "pins": { "c": "missing" },
-          "resistance": { "value": 0, "unit": "farad", "source": "user" },
+          "resistance": { "value": 0, "unit": "farad" },
           "ratings": { "power": null }
         }
       ]
@@ -127,7 +127,7 @@ fn a_name_that_fails_the_grammar_stops() {
 fn led_with_ratings(ratings: &str) -> String {
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {{ "op": {{}} }},
       "ground": "gnd",
@@ -137,9 +137,9 @@ fn led_with_ratings(ratings: &str) -> String {
           "name": "led1",
           "kind": "led",
           "pins": {{ "anode": "vled", "cathode": "gnd" }},
-          "saturation_current": {{ "value": 6.711e-10, "unit": "A", "source": "user" }},
-          "emission_coefficient": {{ "value": 4.427, "unit": "1", "source": "user" }},
-          "series_resistance": {{ "value": 2.115, "unit": "ohm", "source": "user" }},
+          "saturation_current": {{ "value": 6.711e-10, "unit": "A" }},
+          "emission_coefficient": {{ "value": 4.427, "unit": "1" }},
+          "series_resistance": {{ "value": 2.115, "unit": "ohm" }},
           "ratings": {ratings}
         }}
       ]
@@ -151,7 +151,7 @@ fn led_with_ratings(ratings: &str) -> String {
 fn an_led_keeps_its_parameters_and_ratings() {
     let json = led_with_ratings(
         r#"{
-            "current": { "value": 0.03, "unit": "A", "source": "user" },
+            "current": { "value": 0.03, "unit": "A" },
             "power": null
           }"#,
     );
@@ -195,8 +195,8 @@ fn an_unknown_rating_key_is_syntax() {
 fn a_rating_in_the_wrong_unit_or_not_positive_names_its_field() {
     let json = led_with_ratings(
         r#"{
-            "current": { "value": 30.0, "unit": "mA", "source": "user" },
-            "power": { "value": 0.0, "unit": "W", "source": "user" }
+            "current": { "value": 30.0, "unit": "mA" },
+            "power": { "value": 0.0, "unit": "W" }
           }"#,
     );
     let err = netlist::parse(json.as_bytes()).unwrap_err();
@@ -212,7 +212,7 @@ fn a_rating_in_the_wrong_unit_or_not_positive_names_its_field() {
 #[test]
 fn a_resistor_without_ratings_is_syntax() {
     let json = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -222,7 +222,7 @@ fn a_resistor_without_ratings_is_syntax() {
           "name": "r1",
           "kind": "resistor",
           "pins": { "a": "vin", "b": "gnd" },
-          "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" }
+          "resistance": { "value": 1000.0, "unit": "ohm" }
         }
       ]
     }"#;
@@ -236,7 +236,7 @@ fn a_resistor_without_ratings_is_syntax() {
 #[test]
 fn a_voltage_source_has_no_ratings() {
     let json = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -246,7 +246,7 @@ fn a_voltage_source_has_no_ratings() {
           "name": "v1",
           "kind": "voltage_source",
           "pins": { "p": "vin", "n": "gnd" },
-          "voltage": { "value": 5.0, "unit": "V", "source": "user" },
+          "voltage": { "value": 5.0, "unit": "V" },
           "ratings": { "power": null }
         }
       ]
@@ -280,7 +280,7 @@ fn a_capacitor_keeps_its_value_and_has_no_ratings() {
       "name": "c1",
       "kind": "capacitor",
       "pins": { "a": "a", "b": "gnd" },
-      "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
+      "capacitance": { "value": 1e-6, "unit": "F" },
       "initial": null
     }"#;
     let netlist = netlist::parse(with_parts(r#"{ "op": {} }"#, part).as_bytes()).unwrap();
@@ -296,10 +296,7 @@ fn a_capacitor_keeps_its_value_and_has_no_ratings() {
         errors(&with_parts(r#"{ "op": {} }"#, &zero)),
         [r##""netlist.value" ["#c1"] {"field":"capacitance","rule":"positive","value":0.0}"##]
     );
-    let rated = part.replace(
-        r#""source": "user" }"#,
-        r#""source": "user" }, "ratings": {}"#,
-    );
+    let rated = part.replace(r#""unit": "F" }"#, r#""unit": "F" }, "ratings": {}"#);
     let err = netlist::parse(with_parts(r#"{ "op": {} }"#, &rated).as_bytes()).unwrap_err();
     assert_eq!(err[0].code(), "netlist.syntax");
 }
@@ -310,8 +307,8 @@ fn a_capacitor_initial_is_required_and_any_finite_voltage() {
       "name": "c1",
       "kind": "capacitor",
       "pins": { "a": "a", "b": "gnd" },
-      "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
-      "initial": { "value": -2.5, "unit": "V", "source": "user" }
+      "capacitance": { "value": 1e-6, "unit": "F" },
+      "initial": { "value": -2.5, "unit": "V" }
     }"#;
     let netlist = netlist::parse(with_parts(r#"{ "op": {} }"#, part).as_bytes()).unwrap();
     let (_, c1) = netlist.parts().next().unwrap();
@@ -320,10 +317,7 @@ fn a_capacitor_initial_is_required_and_any_finite_voltage() {
     };
     assert_eq!(capacitor.initial.as_ref().unwrap().si.get(), -2.5);
 
-    let open = part.replace(
-        r#"{ "value": -2.5, "unit": "V", "source": "user" }"#,
-        "null",
-    );
+    let open = part.replace(r#"{ "value": -2.5, "unit": "V" }"#, "null");
     let netlist = netlist::parse(with_parts(r#"{ "op": {} }"#, &open).as_bytes()).unwrap();
     let Model::Capacitor(capacitor) = &netlist.parts().next().unwrap().1.model else {
         panic!("not a capacitor");
@@ -337,7 +331,7 @@ fn a_capacitor_initial_is_required_and_any_finite_voltage() {
     );
     let missing = part.replace(
         r#",
-      "initial": { "value": -2.5, "unit": "V", "source": "user" }"#,
+      "initial": { "value": -2.5, "unit": "V" }"#,
         "",
     );
     let err = netlist::parse(with_parts(r#"{ "op": {} }"#, &missing).as_bytes()).unwrap_err();

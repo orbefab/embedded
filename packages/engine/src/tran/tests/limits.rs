@@ -8,7 +8,7 @@ use crate::session::Budget;
 fn pulse_between_rows() -> Netlist {
     crate::netlist::parse(
         br#"{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": { "transient": { "stop_ps": 20000, "max_step_ps": 10000, "grid_ps": 10000 } },
           "ground": "gnd",
@@ -20,8 +20,8 @@ fn pulse_between_rows() -> Netlist {
               "pins": { "p": "vcc", "n": "gnd" },
               "voltage": {
                 "kind": "pulse",
-                "initial": { "value": 0.0, "unit": "V", "source": "user" },
-                "pulsed": { "value": 5.0, "unit": "V", "source": "user" },
+                "initial": { "value": 0.0, "unit": "V" },
+                "pulsed": { "value": 5.0, "unit": "V" },
                 "delay_ps": 3000, "width_ps": 2000, "period_ps": 1000000
               }
             },
@@ -29,8 +29,8 @@ fn pulse_between_rows() -> Netlist {
               "name": "r1",
               "kind": "resistor",
               "pins": { "a": "vcc", "b": "gnd" },
-              "resistance": { "value": 10.0, "unit": "ohm", "source": "user" },
-              "ratings": { "power": { "value": 0.001, "unit": "W", "source": "user" } }
+              "resistance": { "value": 10.0, "unit": "ohm" },
+              "ratings": { "power": { "value": 0.001, "unit": "W" } }
             }
           ]
         }"#,
@@ -79,11 +79,11 @@ fn the_value_cap_binds_before_the_row_cap() {
         let stop = (rows as u64 - 1) * 1_000;
         let mut json = String::with_capacity(RESISTORS * 160 + 800);
         json.push_str(&format!(
-            r#"{{"version":0,"seed":0,"analysis":{{"transient":{{"stop_ps":{stop},"max_step_ps":1000,"grid_ps":1000}}}},"ground":"gnd","nets":["gnd","vcc"],"parts":[{{"name":"v1","kind":"voltage_source","pins":{{"p":"vcc","n":"gnd"}},"voltage":{{"value":1.0,"unit":"V","source":"user"}}}}"#
+            r#"{{"version":1,"seed":0,"analysis":{{"transient":{{"stop_ps":{stop},"max_step_ps":1000,"grid_ps":1000}}}},"ground":"gnd","nets":["gnd","vcc"],"parts":[{{"name":"v1","kind":"voltage_source","pins":{{"p":"vcc","n":"gnd"}},"voltage":{{"value":1.0,"unit":"V"}}}}"#
         ));
         for index in 0..RESISTORS {
             json.push_str(&format!(
-                r#",{{"name":"r{index}","kind":"resistor","pins":{{"a":"vcc","b":"gnd"}},"resistance":{{"value":1000.0,"unit":"ohm","source":"user"}},"ratings":{{"power":null}}}}"#
+                r#",{{"name":"r{index}","kind":"resistor","pins":{{"a":"vcc","b":"gnd"}},"resistance":{{"value":1000.0,"unit":"ohm"}},"ratings":{{"power":null}}}}"#
             ));
         }
         json.push_str("]}");
@@ -118,11 +118,11 @@ fn the_value_cap_binds_before_the_row_cap() {
 fn wide_source(resistors: usize, stop: u64) -> Netlist {
     let mut json = String::with_capacity(resistors * 160 + 800);
     json.push_str(&format!(
-        r#"{{"version":0,"seed":0,"analysis":{{"transient":{{"stop_ps":{stop},"max_step_ps":1000,"grid_ps":{stop}}}}},"ground":"gnd","nets":["gnd","vcc"],"parts":[{{"name":"v1","kind":"voltage_source","pins":{{"p":"vcc","n":"gnd"}},"voltage":{{"value":1.0,"unit":"V","source":"user"}}}}"#
+        r#"{{"version":1,"seed":0,"analysis":{{"transient":{{"stop_ps":{stop},"max_step_ps":1000,"grid_ps":{stop}}}}},"ground":"gnd","nets":["gnd","vcc"],"parts":[{{"name":"v1","kind":"voltage_source","pins":{{"p":"vcc","n":"gnd"}},"voltage":{{"value":1.0,"unit":"V"}}}}"#
     ));
     for index in 0..resistors {
         json.push_str(&format!(
-            r#",{{"name":"r{index}","kind":"resistor","pins":{{"a":"vcc","b":"gnd"}},"resistance":{{"value":1000.0,"unit":"ohm","source":"user"}},"ratings":{{"power":null}}}}"#
+            r#",{{"name":"r{index}","kind":"resistor","pins":{{"a":"vcc","b":"gnd"}},"resistance":{{"value":1000.0,"unit":"ohm"}},"ratings":{{"power":null}}}}"#
         ));
     }
     json.push_str("]}");
@@ -169,7 +169,7 @@ fn steps_past_the_row_limit_keep_the_rows_and_report_trace_too_large() {
 fn dense_pulse() -> Netlist {
     crate::netlist::parse(
         br#"{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": { "transient": { "stop_ps": 1000000000000, "max_step_ps": 20000000, "grid_ps": 20000000 } },
           "ground": "gnd",
@@ -181,8 +181,8 @@ fn dense_pulse() -> Netlist {
               "pins": { "p": "vin", "n": "gnd" },
               "voltage": {
                 "kind": "pulse",
-                "initial": { "value": 0.0, "unit": "V", "source": "user" },
-                "pulsed": { "value": 1.0, "unit": "V", "source": "user" },
+                "initial": { "value": 0.0, "unit": "V" },
+                "pulsed": { "value": 1.0, "unit": "V" },
                 "delay_ps": 10000, "width_ps": 5000, "period_ps": 10000
               }
             },
@@ -190,7 +190,7 @@ fn dense_pulse() -> Netlist {
               "name": "r1",
               "kind": "resistor",
               "pins": { "a": "vin", "b": "gnd" },
-              "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+              "resistance": { "value": 1000.0, "unit": "ohm" },
               "ratings": { "power": null }
             }
           ]

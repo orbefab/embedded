@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": { "op": {} },
   "ground": "gnd",
@@ -9,7 +9,7 @@
       "name": "v1",
       "kind": "voltage_source",
       "pins": { "p": "vin", "n": "gnd" },
-      "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+      "voltage": { "value": 5.0, "unit": "V" }
     },
     {
       "name": "r1",
@@ -17,14 +17,7 @@
       "pins": { "a": "vin", "b": "vout" },
       "resistance": {
         "value": 1000.0,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "resistor-nominal",
-            "at": "Table 1, nominal",
-            "basis": "nominal"
-          }
-        }
+        "unit": "ohm"
       },
       "ratings": { "power": null }
     },
@@ -32,7 +25,7 @@
       "name": "r2",
       "kind": "resistor",
       "pins": { "a": "vout", "b": "gnd" },
-      "resistance": { "value": 2000.0, "unit": "ohm", "source": "user" },
+      "resistance": { "value": 2000.0, "unit": "ohm" },
       "ratings": { "power": null }
     }
   ]

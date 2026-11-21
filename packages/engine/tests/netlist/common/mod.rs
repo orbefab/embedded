@@ -3,7 +3,7 @@ use orbe_engine::netlist;
 pub fn with_parts(analysis: &str, parts: &str) -> String {
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 7,
       "analysis": {analysis},
       "ground": "gnd",

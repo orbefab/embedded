@@ -32,14 +32,14 @@ fn stepped(stop_ps: u64, max_step_ps: u64, nets: &[&str], parts: &[String]) -> N
         .collect();
     let json = format!(
         r#"{{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": {{ "transient": {{ "stop_ps": {stop_ps}, "max_step_ps": {max_step_ps}, "grid_ps": {max_step_ps} }} }},
           "ground": "gnd",
           "nets": [{}],
           "parts": [
             {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "vcc", "n": "gnd" }},
-              "voltage": {{ "value": 5.0, "unit": "V", "source": "user" }} }},
+              "voltage": {{ "value": 5.0, "unit": "V" }} }},
             {}
           ]
         }}"#,
@@ -52,7 +52,7 @@ fn stepped(stop_ps: u64, max_step_ps: u64, nets: &[&str], parts: &[String]) -> N
 pub(super) fn resistor(name: &str, a: &str, b: &str, ohm: f64) -> String {
     format!(
         r#"{{ "name": "{name}", "kind": "resistor", "pins": {{ "a": "{a}", "b": "{b}" }},
-              "resistance": {{ "value": {ohm:?}, "unit": "ohm", "source": "user" }},
+              "resistance": {{ "value": {ohm:?}, "unit": "ohm" }},
               "ratings": {{ "power": null }} }}"#
     )
 }
@@ -60,7 +60,7 @@ pub(super) fn resistor(name: &str, a: &str, b: &str, ohm: f64) -> String {
 pub(super) fn capacitor(name: &str, a: &str, farad: f64) -> String {
     format!(
         r#"{{ "name": "{name}", "kind": "capacitor", "pins": {{ "a": "{a}", "b": "gnd" }},
-              "capacitance": {{ "value": {farad:?}, "unit": "F", "source": "user" }},
+              "capacitance": {{ "value": {farad:?}, "unit": "F" }},
               "initial": null }}"#
     )
 }
@@ -413,8 +413,8 @@ fn a_sample_at_the_chips_time_sets_a_later_drive() {
 /// runs again to it. `out` turns high exactly 200 ns after the located crossing.
 fn echo() -> (Netlist, active::Chip) {
     let step = r#"{ "name": "vs", "kind": "voltage_source", "pins": { "p": "src", "n": "gnd" },
-          "voltage": { "kind": "step", "initial": { "value": 0.0, "unit": "V", "source": "user" },
-                       "final": { "value": 5.0, "unit": "V", "source": "user" }, "at_ps": 1000000 } }"#;
+          "voltage": { "kind": "step", "initial": { "value": 0.0, "unit": "V" },
+                       "final": { "value": 5.0, "unit": "V" }, "at_ps": 1000000 } }"#;
     let netlist = circuit(
         3 * US,
         &["out", "src", "in"],
@@ -592,8 +592,8 @@ fn one_active_chip_reads_another_through_the_restart() {
 /// there.
 fn echoed(a_ops: &[(u64, Op)], b_ops: &[(u64, Op)]) -> Vec<(u64, f64)> {
     let step = r#"{ "name": "vs", "kind": "voltage_source", "pins": { "p": "src", "n": "gnd" },
-          "voltage": { "kind": "step", "initial": { "value": 0.0, "unit": "V", "source": "user" },
-                       "final": { "value": 5.0, "unit": "V", "source": "user" }, "at_ps": 1000000 } }"#;
+          "voltage": { "kind": "step", "initial": { "value": 0.0, "unit": "V" },
+                       "final": { "value": 5.0, "unit": "V" }, "at_ps": 1000000 } }"#;
     let netlist = circuit(
         2 * US,
         &["a_out", "b_out", "b_in", "src"],
@@ -787,14 +787,14 @@ fn a_chip_stop_a_switch_edge_and_a_source_jump_share_one_landing() {
     const T: u64 = US + 500 * NS + 17;
     let switch = format!(
         r#"{{ "name": "sw", "kind": "switch", "pins": {{ "a": "vcc", "b": "sw" }},
-              "on_resistance": {{ "value": 10.0, "unit": "ohm", "source": "user" }},
-              "off_resistance": {{ "value": 1e6, "unit": "ohm", "source": "user" }},
+              "on_resistance": {{ "value": 10.0, "unit": "ohm" }},
+              "off_resistance": {{ "value": 1e6, "unit": "ohm" }},
               "initial": "open", "events": [{{ "t_ps": {T}, "state": "closed" }}], "bounce": null }}"#
     );
     let step = format!(
         r#"{{ "name": "vs", "kind": "voltage_source", "pins": {{ "p": "src", "n": "gnd" }},
-              "voltage": {{ "kind": "step", "initial": {{ "value": 0.0, "unit": "V", "source": "user" }},
-                           "final": {{ "value": 2.0, "unit": "V", "source": "user" }}, "at_ps": {T} }} }}"#
+              "voltage": {{ "kind": "step", "initial": {{ "value": 0.0, "unit": "V" }},
+                           "final": {{ "value": 2.0, "unit": "V" }}, "at_ps": {T} }} }}"#
     );
     let netlist = circuit(
         3 * US,

@@ -27,12 +27,12 @@ fn transistor(kind: &str, changed: Option<(&str, &str, &str)>) -> String {
                 Some((name, unit, value)) if name == field => (unit.to_string(), value.to_string()),
                 _ => (unit.to_string(), format!("{value:?}")),
             };
-            format!(r#""{field}": {{ "value": {value}, "unit": "{unit}", "source": "user" }}"#)
+            format!(r#""{field}": {{ "value": {value}, "unit": "{unit}" }}"#)
         })
         .collect();
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {{ "op": {{}} }},
       "ground": "gnd",
@@ -44,8 +44,8 @@ fn transistor(kind: &str, changed: Option<(&str, &str, &str)>) -> String {
           "pins": {{ "collector": "c", "base": "b", "emitter": "gnd" }},
           {},
           "ratings": {{
-            "current": {{ "value": 0.2, "unit": "A", "source": "user" }},
-            "power": {{ "value": 0.625, "unit": "W", "source": "user" }}
+            "current": {{ "value": 0.2, "unit": "A" }},
+            "power": {{ "value": 0.625, "unit": "W" }}
           }}
         }}
       ]
@@ -210,12 +210,12 @@ fn mosfet(changed: Option<(&str, &str, &str)>) -> String {
                 Some((name, unit, value)) if name == field => (unit.to_string(), value.to_string()),
                 _ => (unit.to_string(), format!("{value:?}")),
             };
-            format!(r#""{field}": {{ "value": {value}, "unit": "{unit}", "source": "user" }}"#)
+            format!(r#""{field}": {{ "value": {value}, "unit": "{unit}" }}"#)
         })
         .collect();
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {{ "op": {{}} }},
       "ground": "gnd",
@@ -227,8 +227,8 @@ fn mosfet(changed: Option<(&str, &str, &str)>) -> String {
           "pins": {{ "drain": "d", "gate": "g", "source": "gnd" }},
           {},
           "ratings": {{
-            "current": {{ "value": 0.2, "unit": "A", "source": "user" }},
-            "power": {{ "value": 0.35, "unit": "W", "source": "user" }}
+            "current": {{ "value": 0.2, "unit": "A" }},
+            "power": {{ "value": 0.35, "unit": "W" }}
           }}
         }}
       ]

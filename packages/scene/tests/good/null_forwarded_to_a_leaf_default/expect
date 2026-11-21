@@ -1,2 +1,2 @@
 19 engine parts
-btn1__s /on_resistance {"value":220,"unit":"ohm","source":"user"}
+btn1__s /on_resistance {"value":220,"unit":"ohm"}

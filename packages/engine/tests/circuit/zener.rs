@@ -18,19 +18,19 @@ fn value(results: &Results, reference: &str) -> f64 {
 
 fn forward_fields() -> &'static str {
     r#"
-      "saturation_current": { "value": 1e-14, "unit": "A", "source": "user" },
-      "emission_coefficient": { "value": 1.0, "unit": "1", "source": "user" },
-      "series_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
+      "saturation_current": { "value": 1e-14, "unit": "A" },
+      "emission_coefficient": { "value": 1.0, "unit": "1" },
+      "series_resistance": { "value": 1.0, "unit": "ohm" },
     "#
 }
 
 fn zener_fields() -> String {
     format!(
         r#"{forward}
-          "zener_voltage": {{ "value": 5.0, "unit": "V", "source": "user" }},
-          "zener_current": {{ "value": 0.05, "unit": "A", "source": "user" }},
-          "zener_impedance": {{ "value": 10.0, "unit": "ohm", "source": "user" }},
-          "breakdown_resistance": {{ "value": 4.0, "unit": "ohm", "source": "user" }},
+          "zener_voltage": {{ "value": 5.0, "unit": "V" }},
+          "zener_current": {{ "value": 0.05, "unit": "A" }},
+          "zener_impedance": {{ "value": 10.0, "unit": "ohm" }},
+          "breakdown_resistance": {{ "value": 4.0, "unit": "ohm" }},
           "ratings": {{ "current": null, "power": null }}
         "#,
         forward = forward_fields()
@@ -49,7 +49,7 @@ fn diode_fields() -> String {
 fn biased(kind: &str, name: &str, anode: &str, cathode: &str, volts: f64, fields: &str) -> String {
     format!(
         r#"{{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": {{ "op": {{}} }},
           "ground": "gnd",
@@ -59,7 +59,7 @@ fn biased(kind: &str, name: &str, anode: &str, cathode: &str, volts: f64, fields
               "name": "v1",
               "kind": "voltage_source",
               "pins": {{ "p": "p", "n": "gnd" }},
-              "voltage": {{ "value": {volts}, "unit": "V", "source": "user" }}
+              "voltage": {{ "value": {volts}, "unit": "V" }}
             }},
             {{
               "name": "{name}",
@@ -109,7 +109,7 @@ fn zener_breakdown_resistance_stays_off_the_forward_path() {
 fn a_net_a_diode_would_not_float_does_not_float_with_a_zener() {
     let json = format!(
         r#"{{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": {{ "op": {{}} }},
           "ground": "gnd",
@@ -119,13 +119,13 @@ fn a_net_a_diode_would_not_float_does_not_float_with_a_zener() {
               "name": "v1",
               "kind": "voltage_source",
               "pins": {{ "p": "vin", "n": "gnd" }},
-              "voltage": {{ "value": 5.0, "unit": "V", "source": "user" }}
+              "voltage": {{ "value": 5.0, "unit": "V" }}
             }},
             {{
               "name": "c1",
               "kind": "capacitor",
               "pins": {{ "a": "vin", "b": "top" }},
-              "capacitance": {{ "value": 1e-6, "unit": "F", "source": "user" }},
+              "capacitance": {{ "value": 1e-6, "unit": "F" }},
               "initial": null
             }},
             {{

@@ -282,9 +282,9 @@ fn an_ne555_and_an_atmega328p_in_one_netlist_both_write_their_signals() {
 fn a_net_held_only_by_an_off_pin_solves_on_its_leakage() {
     let parts = serde_json::json!([
         { "name": "i1", "kind": "current_source", "pins": { "p": "x", "n": "gnd" },
-          "current": { "value": 1e-6, "unit": "A", "source": "user" } },
+          "current": { "value": 1e-6, "unit": "A" } },
         { "name": "rx", "kind": "resistor", "pins": { "a": "x", "b": "pd3" },
-          "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+          "resistance": { "value": 1000.0, "unit": "ohm" },
           "ratings": { "power": null } }
     ]);
     let done = probe(&["x"], parts, |_| {});
@@ -305,7 +305,7 @@ fn a_net_held_only_by_an_off_pin_solves_on_its_leakage() {
 fn a_ground_pin_on_a_net_of_its_own_is_an_error() {
     let parts = serde_json::json!([
         { "name": "ra", "kind": "resistor", "pins": { "a": "vcc", "b": "agnd" },
-          "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+          "resistance": { "value": 1000.0, "unit": "ohm" },
           "ratings": { "power": null } }
     ]);
     let done = probe(&["agnd"], parts, |chip| {

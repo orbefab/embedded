@@ -3,7 +3,7 @@ use orbe_engine::netlist::{self, Model, Shape};
 #[test]
 fn resistance_with_a_non_finite_reciprocal_is_a_value_error() {
     let json = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -13,7 +13,7 @@ fn resistance_with_a_non_finite_reciprocal_is_a_value_error() {
           "name": "r1",
           "kind": "resistor",
           "pins": { "a": "vin", "b": "gnd" },
-          "resistance": { "value": 1e-320, "unit": "ohm", "source": "user" },
+          "resistance": { "value": 1e-320, "unit": "ohm" },
           "ratings": { "power": null }
         }
       ]
@@ -29,7 +29,7 @@ fn resistance_with_a_non_finite_reciprocal_is_a_value_error() {
 #[test]
 fn a_very_small_finite_conductance_parses() {
     let json = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -39,7 +39,7 @@ fn a_very_small_finite_conductance_parses() {
           "name": "r1",
           "kind": "resistor",
           "pins": { "a": "vin", "b": "gnd" },
-          "resistance": { "value": 1e-300, "unit": "ohm", "source": "user" },
+          "resistance": { "value": 1e-300, "unit": "ohm" },
           "ratings": { "power": null }
         }
       ]
@@ -50,7 +50,7 @@ fn a_very_small_finite_conductance_parses() {
 #[test]
 fn a_number_past_the_f64_range_is_syntax() {
     let json = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -60,7 +60,7 @@ fn a_number_past_the_f64_range_is_syntax() {
           "name": "v1",
           "kind": "voltage_source",
           "pins": { "p": "vin", "n": "gnd" },
-          "voltage": { "value": 1e309, "unit": "V", "source": "user" }
+          "voltage": { "value": 1e309, "unit": "V" }
         }
       ]
     }"#;
@@ -72,7 +72,7 @@ fn a_number_past_the_f64_range_is_syntax() {
 #[test]
 fn negative_voltage_is_legal() {
     let json = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -82,7 +82,7 @@ fn negative_voltage_is_legal() {
           "name": "v1",
           "kind": "voltage_source",
           "pins": { "p": "vin", "n": "gnd" },
-          "voltage": { "value": -5.0, "unit": "V", "source": "user" }
+          "voltage": { "value": -5.0, "unit": "V" }
         }
       ]
     }"#;
@@ -103,7 +103,7 @@ fn negative_voltage_is_legal() {
 fn diode_at(is: &str, n: &str) -> String {
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {{ "op": {{}} }},
       "ground": "gnd",
@@ -113,22 +113,22 @@ fn diode_at(is: &str, n: &str) -> String {
           "name": "v1",
           "kind": "voltage_source",
           "pins": {{ "p": "a", "n": "gnd" }},
-          "voltage": {{ "value": 1.0, "unit": "V", "source": "user" }}
+          "voltage": {{ "value": 1.0, "unit": "V" }}
         }},
         {{
           "name": "r1",
           "kind": "resistor",
           "pins": {{ "a": "a", "b": "b" }},
-          "resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
+          "resistance": {{ "value": 1000.0, "unit": "ohm" }},
           "ratings": {{ "power": null }}
         }},
         {{
           "name": "d1",
           "kind": "diode",
           "pins": {{ "anode": "b", "cathode": "gnd" }},
-          "saturation_current": {{ "value": {is}, "unit": "A", "source": "user" }},
-          "emission_coefficient": {{ "value": {n}, "unit": "1", "source": "user" }},
-          "series_resistance": {{ "value": 1.0, "unit": "ohm", "source": "user" }},
+          "saturation_current": {{ "value": {is}, "unit": "A" }},
+          "emission_coefficient": {{ "value": {n}, "unit": "1" }},
+          "series_resistance": {{ "value": 1.0, "unit": "ohm" }},
           "ratings": {{ "current": null, "power": null }}
         }}
       ]

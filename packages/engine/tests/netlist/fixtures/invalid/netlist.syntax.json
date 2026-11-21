@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": { "op": {} },
   "ground": "gnd",
@@ -9,7 +9,7 @@
       "name": "r1",
       "kind": "resistor",
       "pins": { "a": "gnd", "b": "gnd" },
-      "resistence": { "value": 1000.0, "unit": "ohm", "source": "user" }
+      "resistence": { "value": 1000.0, "unit": "ohm" }
     }
   ]
 }

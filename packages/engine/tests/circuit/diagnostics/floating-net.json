@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": { "transient": { "stop_ps": 1000000, "max_step_ps": 1000000, "grid_ps": 1000000 } },
   "ground": "gnd",
@@ -9,20 +9,20 @@
       "name": "v1",
       "kind": "voltage_source",
       "pins": { "p": "vin", "n": "gnd" },
-      "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+      "voltage": { "value": 5.0, "unit": "V" }
     },
     {
       "name": "r1",
       "kind": "resistor",
       "pins": { "a": "vin", "b": "gnd" },
-      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "resistance": { "value": 1000.0, "unit": "ohm" },
       "ratings": { "power": null }
     },
     {
       "name": "c1",
       "kind": "capacitor",
       "pins": { "a": "lonely", "b": "gnd" },
-      "capacitance": { "value": 1e-9, "unit": "F", "source": "user" },
+      "capacitance": { "value": 1e-9, "unit": "F" },
       "initial": null
     }
   ]

@@ -10,11 +10,10 @@ use crate::session::State;
 /// `tests/chip.rs`. `cr` starts at `rst` V. `step_ps` adds a 0 to 1 V step into 1 kohm and
 /// 1 nF at that time.
 fn reset_release(step_ps: Option<u64>, rst: f64) -> Netlist {
-    let value =
-        |v: f64, unit: &str| format!(r#"{{ "value": {v:?}, "unit": "{unit}", "source": "user" }}"#);
+    let value = |v: f64, unit: &str| format!(r#"{{ "value": {v:?}, "unit": "{unit}" }}"#);
     let json = format!(
         r#"{{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": {{ "transient": {{ "stop_ps": 40000000000, "max_step_ps": 1000000000, "grid_ps": 1000000000 }} }},
           "ground": "gnd",
@@ -238,7 +237,7 @@ fn a_probe_that_fails_twice_is_the_line_and_says_so() {
 fn source_into_rc(voltage: &str, current: &str, contact: &str, initial: f64) -> Netlist {
     let json = format!(
         r#"{{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": {{ "transient": {{ "stop_ps": 20000, "max_step_ps": 20000, "grid_ps": 10500 }} }},
           "ground": "gnd",
@@ -249,13 +248,13 @@ fn source_into_rc(voltage: &str, current: &str, contact: &str, initial: f64) -> 
             {{ "name": "i1", "kind": "current_source", "pins": {{ "p": "vout", "n": "gnd" }},
               "current": {current} }},
             {{ "name": "r1", "kind": "resistor", "pins": {{ "a": "src", "b": "vout" }},
-              "resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }}, "ratings": {{ "power": null }} }},
+              "resistance": {{ "value": 1000.0, "unit": "ohm" }}, "ratings": {{ "power": null }} }},
             {{ "name": "c1", "kind": "capacitor", "pins": {{ "a": "vout", "b": "gnd" }},
-              "capacitance": {{ "value": 1e-9, "unit": "F", "source": "user" }},
-              "initial": {{ "value": {initial:?}, "unit": "V", "source": "user" }} }},
+              "capacitance": {{ "value": 1e-9, "unit": "F" }},
+              "initial": {{ "value": {initial:?}, "unit": "V" }} }},
             {{ "name": "sw", "kind": "switch", "pins": {{ "a": "vout", "b": "gnd" }},
-              "on_resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
-              "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+              "on_resistance": {{ "value": 1000.0, "unit": "ohm" }},
+              "off_resistance": {{ "value": 1e9, "unit": "ohm" }},
               {contact}, "bounce": null }}
           ]
         }}"#
@@ -270,13 +269,11 @@ fn source_into_rc(voltage: &str, current: &str, contact: &str, initial: f64) -> 
 fn a_row_after_a_restart_is_the_line_from_the_restart() {
     let step = |unit: &str, last: f64| {
         format!(
-            r#"{{ "kind": "step", "initial": {{ "value": 0.0, "unit": "{unit}", "source": "user" }},
-            "final": {{ "value": {last:?}, "unit": "{unit}", "source": "user" }}, "at_ps": 10000 }}"#
+            r#"{{ "kind": "step", "initial": {{ "value": 0.0, "unit": "{unit}" }},
+            "final": {{ "value": {last:?}, "unit": "{unit}" }}, "at_ps": 10000 }}"#
         )
     };
-    let dc = |unit: &str, value: f64| {
-        format!(r#"{{ "value": {value:?}, "unit": "{unit}", "source": "user" }}"#)
-    };
+    let dc = |unit: &str, value: f64| format!(r#"{{ "value": {value:?}, "unit": "{unit}" }}"#);
     let netlist = source_into_rc(
         &step("V", 5.0),
         &step("A", 1e-3),
@@ -326,23 +323,23 @@ fn a_row_after_a_restart_is_the_line_from_the_restart() {
 /// steps of up to 100 us, with a row every 1 us.
 fn led_charge() -> Netlist {
     let json = r#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "transient": { "stop_ps": 2000000000, "max_step_ps": 100000000, "grid_ps": 1000000 } },
       "ground": "gnd",
       "nets": ["gnd", "vcc", "x"],
       "parts": [
         { "name": "v1", "kind": "voltage_source", "pins": { "p": "vcc", "n": "gnd" },
-          "voltage": { "value": 5.0, "unit": "V", "source": "user" } },
+          "voltage": { "value": 5.0, "unit": "V" } },
         { "name": "r1", "kind": "resistor", "pins": { "a": "vcc", "b": "x" },
-          "resistance": { "value": 220.0, "unit": "ohm", "source": "user" }, "ratings": { "power": null } },
+          "resistance": { "value": 220.0, "unit": "ohm" }, "ratings": { "power": null } },
         { "name": "c1", "kind": "capacitor", "pins": { "a": "x", "b": "gnd" },
-          "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
-          "initial": { "value": 0.0, "unit": "V", "source": "user" } },
+          "capacitance": { "value": 1e-6, "unit": "F" },
+          "initial": { "value": 0.0, "unit": "V" } },
         { "name": "led1", "kind": "led", "pins": { "anode": "x", "cathode": "gnd" },
-          "saturation_current": { "value": 6.711e-10, "unit": "A", "source": "user" },
-          "emission_coefficient": { "value": 4.427, "unit": "1", "source": "user" },
-          "series_resistance": { "value": 2.115, "unit": "ohm", "source": "user" },
+          "saturation_current": { "value": 6.711e-10, "unit": "A" },
+          "emission_coefficient": { "value": 4.427, "unit": "1" },
+          "series_resistance": { "value": 2.115, "unit": "ohm" },
           "ratings": { "current": null, "power": null } }
       ]
     }"#;
@@ -390,7 +387,7 @@ fn a_row_whose_second_solve_converges_is_solved() {
 fn source_and_switch_at(at: u64) -> Netlist {
     let json = format!(
         r#"{{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": {{ "transient": {{ "stop_ps": 30000, "max_step_ps": 20000, "grid_ps": 20000 }} }},
           "ground": "gnd",
@@ -402,8 +399,8 @@ fn source_and_switch_at(at: u64) -> Netlist {
               "pins": {{ "p": "vcc", "n": "gnd" }},
               "voltage": {{
                 "kind": "step",
-                "initial": {{ "value": 1.0, "unit": "V", "source": "user" }},
-                "final": {{ "value": 2.0, "unit": "V", "source": "user" }},
+                "initial": {{ "value": 1.0, "unit": "V" }},
+                "final": {{ "value": 2.0, "unit": "V" }},
                 "at_ps": {at}
               }}
             }},
@@ -411,22 +408,22 @@ fn source_and_switch_at(at: u64) -> Netlist {
               "name": "r1",
               "kind": "resistor",
               "pins": {{ "a": "vcc", "b": "vout" }},
-              "resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
+              "resistance": {{ "value": 1000.0, "unit": "ohm" }},
               "ratings": {{ "power": null }}
             }},
             {{
               "name": "c1",
               "kind": "capacitor",
               "pins": {{ "a": "vout", "b": "gnd" }},
-              "capacitance": {{ "value": 1e-9, "unit": "F", "source": "user" }},
+              "capacitance": {{ "value": 1e-9, "unit": "F" }},
               "initial": null
             }},
             {{
               "name": "s1",
               "kind": "switch",
               "pins": {{ "a": "vout", "b": "gnd" }},
-              "on_resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }},
-              "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+              "on_resistance": {{ "value": 1000.0, "unit": "ohm" }},
+              "off_resistance": {{ "value": 1e9, "unit": "ohm" }},
               "initial": "open",
               "events": [{{ "t_ps": {at}, "state": "closed" }}],
               "bounce": null

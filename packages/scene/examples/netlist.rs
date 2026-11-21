@@ -1,4 +1,4 @@
-//! Writes the netlist v0 of one scene to stdout.
+//! Writes the netlist v1 of one scene to stdout.
 
 use std::env;
 use std::path::Path;

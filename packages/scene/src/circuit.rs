@@ -1,4 +1,4 @@
-//! One tree of instances from the files, then pins joined into nets, and netlist v0.
+//! One tree of instances from the files, then pins joined into nets, and netlist v1.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, PathBuf};
@@ -207,7 +207,7 @@ struct Written {
 
 /// What the reader made of a scene that reads.
 pub struct Netlist {
-    /// Netlist v0, pretty-printed.
+    /// Netlist v1, pretty-printed.
     pub json: String,
     /// The number of engine parts.
     pub parts: usize,
@@ -1412,7 +1412,7 @@ impl<'p> Circuit<'p> {
         Some("GND".to_string())
     }
 
-    /// Writes netlist v0 and has the engine check it, even when the reader has findings, so
+    /// Writes netlist v1 and has the engine check it, even when the reader has findings, so
     /// one run reports both. A part the engine's schema refuses is left out with the finding
     /// that says why, and the rest are checked again.
     fn write(
@@ -1470,6 +1470,7 @@ impl<'p> Circuit<'p> {
                 object.insert("pins".into(), Value::Object(pins));
                 let mut object = Value::Object(object);
                 whole_numbers(&mut object);
+                drop_sources(&mut object);
                 parts.push(Written {
                     inst,
                     body: body.name.clone(),
@@ -1493,7 +1494,7 @@ impl<'p> Circuit<'p> {
         names.retain(|n| *n != ground_name);
         names.insert(0, ground_name.clone());
         let mut head = json!({
-            "version": 0,
+            "version": 1,
             "seed": scene.seed,
             "analysis": { "transient": { "stop_ps": Scene::STOP_PS, "max_step_ps": scene.max_step_ps, "grid_ps": GRID_PS } },
             "ground": ground_name,
@@ -1957,7 +1958,7 @@ fn around(pointer: &str) -> Vec<String> {
         .collect()
 }
 
-/// Netlist v0 without its parts.
+/// Netlist v1 without its parts.
 pub(super) struct Head(Value);
 
 impl Head {
@@ -1995,7 +1996,7 @@ fn world<'a>(scene: &Scene, models: impl Iterator<Item = &'a Value>) -> Option<V
     if read.is_empty() {
         return None;
     }
-    let level = |quantity: Quantity, value: f64| json!({ "value": value, "unit": quantity.unit(), "source": "user" });
+    let level = |quantity: Quantity, value: f64| json!({ "value": value, "unit": quantity.unit() });
     let mut world = Map::new();
     for quantity in read {
         let set = scene
@@ -2039,6 +2040,21 @@ fn reads(value: &Value, out: &mut BTreeSet<Quantity>) {
             map.values().for_each(|inner| reads(inner, out));
         }
         Value::Array(items) => items.iter().for_each(|inner| reads(inner, out)),
+        _ => {}
+    }
+}
+
+/// A part file says where each model value came from, and the netlist does not carry it: each
+/// object with a `value` and a `unit` loses its `source`.
+fn drop_sources(value: &mut Value) {
+    match value {
+        Value::Array(items) => items.iter_mut().for_each(drop_sources),
+        Value::Object(map) => {
+            if map.contains_key("value") && map.contains_key("unit") {
+                map.remove("source");
+            }
+            map.values_mut().for_each(drop_sources);
+        }
         _ => {}
     }
 }
