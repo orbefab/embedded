@@ -2,7 +2,7 @@
 // packages/engine/tests/circuits/atmega-board-button/netlist.json, part `sw_reset`. No sheet for the part
 // number was found, so each value here is a guess with a note that says so.
 {
-  "format": 1, "part": "tactile-switch-smd", "version": "0.1.0", "title": "Push button, SMD", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "tactile-switch-smd", "version": "0.1.1", "title": "Push button, SMD", "license": "MIT OR Apache-2.0",
   "summary": "Surface-mount tact switch, 3.5 x 4.7 mm. Legs 1-2 are one contact and legs 3-4 the other. Pressing joins the pairs.",
   "tags": ["switch", "button", "tactile", "smd"],
   "docs": { "TS42031-160R-TR-7260": null },

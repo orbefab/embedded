@@ -2,7 +2,7 @@
 // packages/engine/tests/circuits/atmega-board-button/netlist.json, part `mcu`. The ratings
 // cite DS40002061B §29.1 directly, and `active_current` and `reset_current` cite its pages.
 {
-  "format": 1, "part": "atmega328p-tqfp32", "version": "0.1.0", "title": "ATmega328P, TQFP-32", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "atmega328p-tqfp32", "version": "0.1.1", "title": "ATmega328P, TQFP-32", "license": "MIT OR Apache-2.0",
   "summary": "ATmega328P-AU in a 7 x 7 mm TQFP-32. The dot marks the lead-1 corner. The part needs firmware.",
   "tags": ["microcontroller", "avr", "tqfp"],
   "docs": {

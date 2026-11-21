@@ -1,5 +1,5 @@
 {
-  "format": 1, "part": "usb-b-socket", "version": "0.1.0", "title": "USB type-B socket", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "usb-b-socket", "version": "0.1.1", "title": "USB type-B socket", "license": "MIT OR Apache-2.0",
   "summary": "Right-angle USB 2.0 type-B receptacle. Leads 1 to 4 are VBUS, D-, D+ and GND. Leads 5 and 6 are the shell.",
   "tags": ["usb", "connector", "socket", "through-hole"],
   "docs": {

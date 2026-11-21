@@ -5,7 +5,7 @@
 {
   "format": 1,
   "part": "nano-board",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "Nano (CH340 clone)",
   "summary": "ATmega328P board, 18 x 43.2 mm, 30 pins on two rows 15.24 mm apart. D13 drives the L LED. Powered from USB.",
   "tags": ["board", "microcontroller", "avr", "atmega328p", "usb"],
@@ -20,10 +20,10 @@
   // A clone has no maker's sheet. The official board is the representative for size and pinout.
   "real": { "generic": true, "maker": "Arduino", "number": "A000005", "datasheet": "Arduino Nano A000005 datasheet" },
   "uses": {
-    "ams1117-sot223": "0.1.0", "atmega328p-tqfp32": "0.1.0", "capacitor-0603": "0.1.0",
-    "capacitor-tantalum-3216": "0.1.0", "ch340g": "0.1.0", "crystal-3215": "0.1.0",
-    "diode-sod123": "0.1.0", "led-0603": "0.1.0", "pin-header-1x15": "0.1.0", "pin-header-2x3": "0.1.0",
-    "resistor-0603": "0.1.0", "resonator-cstce": "0.1.0", "tactile-switch-smd": "0.1.0", "usb-mini-b": "0.1.0",
+    "ams1117-sot223": "0.1.1", "atmega328p-tqfp32": "0.1.1", "capacitor-0603": "0.1.1",
+    "capacitor-tantalum-3216": "0.1.1", "ch340g": "0.1.1", "crystal-3215": "0.1.1",
+    "diode-sod123": "0.1.1", "led-0603": "0.1.1", "pin-header-1x15": "0.1.1", "pin-header-2x3": "0.1.1",
+    "resistor-0603": "0.1.1", "resonator-cstce": "0.1.1", "tactile-switch-smd": "0.1.1", "usb-mini-b": "0.1.1",
   },
   "params": {
     "firmware": {}, // the scene must set it, as `"firmware": "build/button.ino.hex"`

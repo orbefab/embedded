@@ -1,5 +1,5 @@
 {
-  "format": 1, "part": "barrel-jack-dc21", "version": "0.1.0", "title": "DC barrel jack, 2.1 mm", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "barrel-jack-dc21", "version": "0.1.1", "title": "DC barrel jack, 2.1 mm", "license": "MIT OR Apache-2.0",
   "summary": "2.1 mm DC barrel jack. The opening is the plug face. Lead 2 is the center pin; leads 1 and 3 are the sleeve.",
   "tags": ["connector", "power", "through-hole"],
   "docs": { "2.1 mm DC barrel jack": null },

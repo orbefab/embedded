@@ -1,7 +1,7 @@
 {
   "format": 1,
   "part": "potentiometer-wh148",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "Potentiometer, 16 mm rotary (WH148)",
   "summary": "Linear rotary pot with a knob and three pins on 5 mm. Seen from the shaft with the pins down, `a` is the left pin, `wiper` the middle and `b` the right. Set its resistance, the value printed on the can (B10K is 10k). `position` is the wiper's place along the track, the share of `resistance` between `a` and `wiper`, above 0 and below 1.",
   "tags": ["potentiometer", "knob", "variable resistor", "voltage divider", "input", "analog", "through-hole"],

@@ -1,7 +1,7 @@
 {
   "format": 1,
   "part": "cp2102n-qfn28",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "CP2102N USB to serial, QFN-28",
   "summary": "Silicon Labs CP2102N-A02-GQFN28. A serial source stands in for TXD, and steps sources for DTR and RTS, both idle high. On the A02, VIO is VDD. The ESP32-S3-DevKitC-1 ties VDD to 3.3 V, so those pins idle at 3.3 V. USB, the charger pins and RXD are left open.",
   "tags": ["usb", "uart", "bridge", "qfn"],

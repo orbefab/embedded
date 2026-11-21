@@ -285,7 +285,7 @@ fn hold(root: &std::path::Path, id: &str, version: &str) {
     let file = root.join("parts").join(id).join("part.jsonc");
     let text = fs::read_to_string(&file).unwrap();
     let edited = text.replacen(
-        "\"version\": \"0.1.0\"",
+        "\"version\": \"0.1.1\"",
         &format!("\"version\": \"{version}\""),
         1,
     );
@@ -314,7 +314,7 @@ fn a_sealed_edit_with_a_foreign_lock_version_is_part_modified() {
         "{}",
         d.message
     );
-    assert!(d.message.contains("led-5mm@0.1.0"), "{}", d.message);
+    assert!(d.message.contains("led-5mm@0.1.1"), "{}", d.message);
     assert!(d.hint.contains("orbe add"), "{}", d.hint);
 }
 
@@ -332,7 +332,7 @@ fn a_lock_version_outside_the_catalog_is_an_error() {
     );
     assert!(found[0].message.contains("9.9.9"), "{}", found[0].message);
     assert!(
-        found[0].message.contains("led-5mm@0.1.0"),
+        found[0].message.contains("led-5mm@0.1.1"),
         "{}",
         found[0].message
     );
@@ -359,8 +359,8 @@ fn a_copy_that_matches_its_lock_and_not_the_catalog_is_outdated() {
     assert_eq!(
         messages,
         [
-            "this orbe carries `led-5mm@0.1.0` and the project holds `led-5mm@0.0.9`",
-            "this orbe carries `resistor-axial@0.1.0` and the project holds `resistor-axial@0.0.8`",
+            "this orbe carries `led-5mm@0.1.1` and the project holds `led-5mm@0.0.9`",
+            "this orbe carries `resistor-axial@0.1.1` and the project holds `resistor-axial@0.0.8`",
         ]
     );
     assert_eq!(found[0].hint, found[1].hint);
@@ -379,7 +379,7 @@ fn a_copy_that_matches_its_lock_and_not_the_catalog_is_outdated() {
 
 #[test]
 fn a_newer_locked_copy_is_part_newer_and_names_no_add() {
-    for version in ["0.1.1", "0.2.0", "1.0.0"] {
+    for version in ["0.1.2", "0.2.0", "1.0.0"] {
         let project = project("nano-button");
         hold(project.path(), "led-5mm", version);
         let found = scene_errors(project.path());
@@ -389,7 +389,7 @@ fn a_newer_locked_copy_is_part_newer_and_names_no_add() {
         assert_eq!(d.file, "parts.lock");
         assert_eq!(
             d.message,
-            format!("this project holds `led-5mm@{version}` and this orbe carries `led-5mm@0.1.0`")
+            format!("this project holds `led-5mm@{version}` and this orbe carries `led-5mm@0.1.1`")
         );
         assert_eq!(d.hint, "this project needs a newer orbe");
         assert!(!d.hint.contains("orbe add"), "{}", d.hint);
@@ -414,7 +414,7 @@ fn a_mixed_hint_names_only_the_older_ids() {
     assert_eq!(older.code, orbe_scene::Code::PartOutdated);
     assert_eq!(
         older.message,
-        "this orbe carries `resistor-axial@0.1.0` and the project holds `resistor-axial@0.0.8`"
+        "this orbe carries `resistor-axial@0.1.1` and the project holds `resistor-axial@0.0.8`"
     );
     assert!(
         older.hint.contains("resistor-axial --overwrite"),
@@ -426,7 +426,7 @@ fn a_mixed_hint_names_only_the_older_ids() {
     assert_eq!(newer.code, orbe_scene::Code::PartNewer);
     assert_eq!(
         newer.message,
-        "this project holds `led-5mm@1.0.0` and this orbe carries `led-5mm@0.1.0`"
+        "this project holds `led-5mm@1.0.0` and this orbe carries `led-5mm@0.1.1`"
     );
     assert_eq!(newer.hint, "this project needs a newer orbe");
     assert!(!newer.hint.contains("orbe add"), "{}", newer.hint);
@@ -450,7 +450,7 @@ fn a_lock_from_another_registry_at_another_version_names_the_registry() {
             d.message
         );
         assert!(
-            d.message.contains(&format!("`{id}@0.1.0`")),
+            d.message.contains(&format!("`{id}@0.1.1`")),
             "{id}: {}",
             d.message
         );
@@ -471,7 +471,7 @@ fn an_outdated_board_is_an_error_and_not_a_note() {
     assert_eq!(found.len(), 1, "{found:#?}");
     assert_eq!(
         found[0].message,
-        "this orbe carries `nano-board@0.1.0` and the project holds `nano-board@0.0.9`"
+        "this orbe carries `nano-board@0.1.1` and the project holds `nano-board@0.0.9`"
     );
 }
 
@@ -499,7 +499,7 @@ fn bytecode_does_not_make_orbe_add_replace_a_sealed_copy() {
     .unwrap();
     let text = reply.text();
     assert_eq!(reply.code(), 0, "{text}");
-    assert!(text.contains("skipped parts/led-5mm 0.1.0"), "{text}");
+    assert!(text.contains("skipped parts/led-5mm 0.1.1"), "{text}");
     assert!(text.contains("parts.lock unchanged"), "{text}");
     assert_eq!(fs::read(led.join("part.jsonc")).unwrap(), before);
     assert!(led.join("a.pyc").is_file());
@@ -541,12 +541,12 @@ fn bytecode_in_a_sealed_copy_is_not_part_modified_and_an_author_file_is() {
 fn the_same_version_with_different_bytes_is_part_modified() {
     let project = project("nano-button");
     edit_led_resistance(project.path());
-    rewrite_lock(project.path(), "led-5mm", "0.1.0", orbe_scene::REGISTRY);
+    rewrite_lock(project.path(), "led-5mm", "0.1.1", orbe_scene::REGISTRY);
     let found = scene_errors(project.path());
     assert_eq!(found.len(), 1, "{found:#?}");
     assert_eq!(found[0].code, orbe_scene::Code::PartModified);
     assert!(
-        found[0].message.contains("differs from `led-5mm@0.1.0`"),
+        found[0].message.contains("differs from `led-5mm@0.1.1`"),
         "{}",
         found[0].message
     );
@@ -590,7 +590,7 @@ fn a_part_id_locked_from_two_registries_is_an_error() {
 #[test]
 fn a_lock_registry_outside_the_catalog_is_an_error() {
     let project = project("nano-button");
-    rewrite_lock(project.path(), "led-5mm", "0.1.0", "@acme");
+    rewrite_lock(project.path(), "led-5mm", "0.1.1", "@acme");
     let found = scene_errors(project.path());
     assert_eq!(found.len(), 1, "{found:#?}");
     assert_eq!(found[0].code, orbe_scene::Code::PartModified);
@@ -605,7 +605,7 @@ fn a_lock_registry_outside_the_catalog_is_an_error() {
         found[0].message
     );
     assert!(
-        found[0].message.contains("led-5mm@0.1.0"),
+        found[0].message.contains("led-5mm@0.1.1"),
         "{}",
         found[0].message
     );
@@ -625,7 +625,7 @@ fn a_lock_names_a_registry_by_name_not_by_url() {
     rewrite_lock(
         project.path(),
         "led-5mm",
-        "0.1.0",
+        "0.1.1",
         "https://example.com/r/{name}.json",
     );
     let found = scene_errors(project.path());
@@ -661,7 +661,7 @@ fn deleting_a_sealed_model_does_not_unseal_the_part() {
     assert_eq!(modified[0].file, "parts/resistor-axial/part.jsonc");
     assert_eq!((modified[0].line, modified[0].column), (18, 3));
     assert!(
-        modified[0].message.contains("resistor-axial@0.1.0"),
+        modified[0].message.contains("resistor-axial@0.1.1"),
         "{}",
         modified[0].message
     );
@@ -704,7 +704,7 @@ fn a_symlink_loop_in_a_sealed_copy_is_an_error() {
     assert_eq!(modified.len(), 1, "{found:#?}");
     assert_eq!((modified[0].line, modified[0].column), (27, 46));
     assert!(
-        modified[0].message.contains("led-5mm@0.1.0"),
+        modified[0].message.contains("led-5mm@0.1.1"),
         "{}",
         modified[0].message
     );
@@ -829,7 +829,7 @@ fn clock_project(clock: Option<&str>) -> tempfile::TempDir {
     let firmware = "\"firmware\": { \"file\": \"hex\", \"as\": \"text\", \"required\": true, \"sets\": \"/firmware\" }";
     assert!(catalog.contains(firmware));
     let part = catalog
-        .replacen("\"part\": \"atmega328p-tqfp32\", \"version\": \"0.1.0\", ", "", 1)
+        .replacen("\"part\": \"atmega328p-tqfp32\", \"version\": \"0.1.1\", ", "", 1)
         .replacen(
             firmware,
             &format!("{firmware}, \"clock\": {{ \"unit\": \"Hz\", \"default\": \"16M\", \"sets\": \"/clock_hz\" }}"),

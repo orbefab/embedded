@@ -3,7 +3,7 @@
   "$schema": "item.schema.json",
   "format": 1,
   "name": "atmega328p-dip28",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "ATmega328P, PDIP-28",
   "description": "ATmega328P-PU in a 300 mil PDIP-28. The notch is at one end and marks the lead-1 corner. The part needs firmware.",
   "categories": [

@@ -1,7 +1,7 @@
 {
   "format": 1,
   "part": "led-3mm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "3 mm LED",
   "summary": "Round 3 mm (T-1) diffused through-hole LED, two leads on 2.54 mm. The longer lead is the anode, and the flat on the rim marks the cathode. Pick its color. Red and yellow warn above 30 mA and 75 mW, green above 25 mA and 62.5 mW.",
   "tags": ["led", "light", "indicator", "through-hole"],

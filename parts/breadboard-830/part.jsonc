@@ -2,7 +2,7 @@
 {
   "format": 1,
   "part": "breadboard-830",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "Breadboard, 830 points",
   "summary": "Full-size solderless breadboard: 63 columns of two 5-hole strips across a center channel, rows a to j, and four 50-hole power rails, W and Y for +, X and Z for -, each hole numbered by its column and each rail one strip the whole length.",
   "tags": ["breadboard", "prototyping", "solderless"],

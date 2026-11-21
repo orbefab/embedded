@@ -1,5 +1,5 @@
 {
-  "format": 1, "part": "dip-socket-28", "version": "0.1.0", "title": "DIP socket, 28 pins, 300 mil", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "dip-socket-28", "version": "0.1.1", "title": "DIP socket, 28 pins, 300 mil", "license": "MIT OR Apache-2.0",
   "summary": "28-pin 300 mil DIP socket. The notch marks the lead-1 end. Each contact is a socket on top and a tail below the board.",
   "tags": ["socket", "dip", "through-hole"],
   "joins_only": true,

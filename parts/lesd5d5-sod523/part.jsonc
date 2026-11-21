@@ -1,5 +1,5 @@
 {
-  "format": 1, "part": "lesd5d5-sod523", "version": "0.1.0", "title": "LESD5D5.0CT1G TVS diode, SOD-523", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "lesd5d5-sod523", "version": "0.1.1", "title": "LESD5D5.0CT1G TVS diode, SOD-523", "license": "MIT OR Apache-2.0",
   "summary": "Bidirectional 5 V ESD clamp in SOD-523. It stands off 5 V and breaks down between 5.6 V and 7.8 V. The engine has no bidirectional clamp, so the pins are left open.",
   "tags": ["tvs", "esd", "diode", "sod-523"],
   "docs": {

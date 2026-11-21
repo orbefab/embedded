@@ -388,7 +388,7 @@ test.describe("led-5mm", () => {
   test("a download serves the file's bytes, by the record's SHA-256", async () => {
     const href = await page.locator('[data-testid="license-files"] a[download]', { hasText: /^part\.jsonc$/ }).getAttribute("href");
     const download = await page.evaluate(async (href) => {
-      const record = await (await fetch("/embedded/r/led-5mm@0.1.0.json")).json();
+      const record = await (await fetch("/embedded/r/led-5mm@0.1.1.json")).json();
       const bytes = new Uint8Array(await (await fetch(href)).arrayBuffer());
       const hex = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
       return { hex, want: record.files.find((file: { path: string; sha256: string }) => file.path === "part.jsonc").sha256 };
@@ -1298,7 +1298,7 @@ test.describe("cache", () => {
   });
 
   test("a path with @ answers 307 to the same path with %40", async ({ host }) => {
-    const at = await head(host.base, "/embedded/r/led-5mm@0.1.0.json");
+    const at = await head(host.base, "/embedded/r/led-5mm@0.1.1.json");
     expect(at.status, JSON.stringify(at)).toBe(307);
   });
 

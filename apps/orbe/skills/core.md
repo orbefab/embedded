@@ -78,7 +78,7 @@ scene.jsonc:4:23: error[part_missing]: part `nano-board` is not in this project'
 4 errors in scene.jsonc
 $ orbe add led-5mm nano-board resistor-axial tactile-switch-6mm
 ...
-wrote parts/nano-board 0.1.0
+wrote parts/nano-board 0.1.1
 ...
 wrote parts.lock
 $ orbe check scene.jsonc

@@ -2,7 +2,7 @@
 {
   "format": 1,
   "block": "nano-light-comparator",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "title": "Light comparator on a Nano",
   "summary": "An LDR and a trimmer set a threshold. An LM358 lights a red LED in the dark, and a Nano on D2 prints dark or light.",
   "board": "nano-board",

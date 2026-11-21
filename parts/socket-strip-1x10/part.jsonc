@@ -1,5 +1,5 @@
 {
-  "format": 1, "part": "socket-strip-1x10", "version": "0.1.0", "title": "Socket strip, 1 x 10, 2.54 mm", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "socket-strip-1x10", "version": "0.1.1", "title": "Socket strip, 1 x 10, 2.54 mm", "license": "MIT OR Apache-2.0",
   "summary": "One row of 10 socket contacts on 2.54 mm, 8.5 mm tall. Lead 1 is the contact at one end. On the Uno this is the D8-to-SCL header.",
   "tags": ["socket", "connector", "through-hole"],
   "joins_only": true,

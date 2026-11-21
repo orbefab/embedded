@@ -1,5 +1,5 @@
 {
-  "format": 1, "part": "pin-header-1x22", "version": "0.1.0", "title": "Pin header, 1 x 22, 2.54 mm", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "pin-header-1x22", "version": "0.1.1", "title": "Pin header, 1 x 22, 2.54 mm", "license": "MIT OR Apache-2.0",
   "summary": "One row of 22 square pins on 2.54 mm, in one plastic bar. Lead 1 is the pin at one end.",
   "tags": ["header", "connector", "through-hole"],
   "joins_only": true,

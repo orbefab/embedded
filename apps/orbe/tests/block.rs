@@ -345,7 +345,7 @@ fn a_block_installs_alone() {
     for args in [
         &["add", "nano-button-led", "led-5mm"][..],
         &["add", "nano-button-led", "--overwrite"],
-        &["add", "nano-button-led@0.1.1"],
+        &["add", "nano-button-led@0.1.2"],
     ] {
         let run = orbe(project.path(), args);
         assert_eq!(run.code, 2, "{args:?}: {}{}", run.stdout, run.stderr);
