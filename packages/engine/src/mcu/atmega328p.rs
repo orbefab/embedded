@@ -18,7 +18,7 @@ use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::WireThreshold;
 use crate::netlist::json::threshold::resolve_threshold;
 use crate::netlist::json::{
-    PinMap, WireInt, WireValue, resolve_int, resolve_pins, resolve_rating, resolve_value,
+    PinMap, WireInt, WireValue, resolve_int, resolve_rating, resolve_some_pins, resolve_value,
 };
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
 use crate::ratings::{Ceiling, PinRatings, PinWindow};
@@ -40,9 +40,9 @@ const _: () = assert!(matches!(PACKAGE[GND_8], Pad::Gnd));
 const _: () = assert!(matches!(PACKAGE[GND_22], Pad::Agnd));
 
 /// The pin pairs the chip joins at DC, for `net.floating`, by package index: each port pin to
-/// VCC and to `GND_8` through its leakage, which every drive state stamps. The crystal pins and
-/// `AREF` join nothing. Neither does `AVCC`: every stage draws from VCC, and `AVCC` is read only
-/// at a sample. Parse puts `GND_22` on `GND_8`'s net.
+/// VCC and to `GND_8` through its leakage, which every drive state stamps. The crystal pins,
+/// `AREF`, `ADC6` and `ADC7` join nothing. Neither does `AVCC`: every stage draws from VCC, and
+/// `AVCC` is read only at a sample. Parse puts `GND_22` on `GND_8`'s net.
 pub(crate) const DC_PATHS: [(usize, usize); 42] = {
     let mut paths = [(0, 0); 42];
     let mut k = 0;
@@ -148,15 +148,18 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
     }
     signals.sort_unstable();
 
-    // ADC0 to ADC5 are `PC0` to `PC5`. The DIP has no ADC6 or ADC7.
-    let to_agnd = |pad: Pad| Signal {
-        terms: vec![(node(pad), 1.0), (node(Pad::Agnd), -1.0)],
-        offset: 0.0,
-    };
+    // ADC0 to ADC5 are `PC0` to `PC5`. A part without `ADC6` or `ADC7`, as the DIP is, reads
+    // 0 V there.
     let samples = (0..6)
         .map(|bit| Pad::Port(Port::C, bit))
-        .chain([Pad::Avcc, Pad::Aref])
-        .map(to_agnd)
+        .chain([Pad::Adc(6), Pad::Adc(7), Pad::Avcc, Pad::Aref])
+        .map(|pad| Signal {
+            terms: match mcu.net(pad) {
+                Some(net) => vec![(Node::from(net), 1.0), (node(Pad::Agnd), -1.0)],
+                None => Vec::new(),
+            },
+            offset: 0.0,
+        })
         .collect();
 
     let mut chip = super::chip(part, outputs, watches, signals, samples, bridge);
@@ -172,8 +175,8 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
     chip
 }
 
-/// The part's ratings on its package pins, `None` when it has no `ratings` object. Each port
-/// pin is an output, in `PORT_PINS` order. Every pin but the two ground pins has a window over
+/// The part's ratings on its pins, `None` when it has no `ratings` object. Each port pin is an
+/// output, in `PORT_PINS` order. Every pin it has but the two ground pins has a window over
 /// `GND_8`: `rail_margin` below it, and `rail_margin` above `VCC`, but for `VCC`, whose
 /// ceiling is `supply_voltage`, and `PC6` while it is `RESET`, whose ceiling is
 /// `reset_voltage` (DS40002061B §29.1).
@@ -182,7 +185,7 @@ pub(crate) fn pin_ratings(mcu: &Atmega328p) -> Option<PinRatings> {
     let si = |value: &Option<Value>| value.as_ref().map(|value| value.si.get());
     let margin = si(&ratings.rail_margin);
     let reset = mcu.fuses.has_reset().then(|| package_pin(RESET));
-    let windows = (0..Atmega328p::PINS.len())
+    let windows = (0..mcu.pins.len())
         .filter(|&k| k != GND_8 && k != GND_22)
         .filter_map(|k| {
             let above = if k == VCC {
@@ -193,7 +196,7 @@ pub(crate) fn pin_ratings(mcu: &Atmega328p) -> Option<PinRatings> {
                 margin.map(Ceiling::OverSupply)
             };
             (margin.is_some() || above.is_some()).then(|| PinWindow {
-                pin: Atmega328p::PINS[k],
+                pin: mcu.names[k],
                 net: mcu.pins[k],
                 below: margin,
                 above,
@@ -210,7 +213,8 @@ pub(crate) fn pin_ratings(mcu: &Atmega328p) -> Option<PinRatings> {
     })
 }
 
-/// An ATmega328P in its 28-pin DIP, running `firmware` from power-on. Microchip DS40002061B.
+/// An ATmega328P running `firmware` from power-on, in its 28-pin DIP or in a package that adds
+/// `ADC6` and `ADC7`, as the TQFP does. Microchip DS40002061B.
 ///
 /// Each I/O pin drives through `output` from VCC and into `GND_8`, pulls up through
 /// `pull_up_resistance`, or is off, as the firmware sets it, leaks to VCC and to `GND_8` through
@@ -220,7 +224,11 @@ pub(crate) fn pin_ratings(mcu: &Atmega328p) -> Option<PinRatings> {
 /// one, so `GND_8` and `GND_22` name one net.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Atmega328p {
-    pub pins: [NetId; 28],
+    /// The net of each pin the part has, in `PINS` order: the DIP's 28, then `ADC6` and `ADC7`
+    /// where it has them.
+    pub pins: Vec<NetId>,
+    /// The name of each of `pins`.
+    pub names: Vec<&'static str>,
     pub firmware: Firmware,
     /// Hertz, greater than 0, at most `u32::MAX`.
     pub clock_hz: IntValue,
@@ -268,14 +276,24 @@ pub struct Atmega328pRatings {
 }
 
 impl Atmega328p {
-    /// DIP order, DS40002061B Figure 1-1. The two ground pins carry their pin numbers.
-    pub const PINS: [&'static str; 28] = [
+    /// DIP order, DS40002061B Figure 1-1, then `ADC6` and `ADC7`, which the TQFP has and the DIP
+    /// does not (§1.1.9). The two ground pins carry their pin numbers.
+    pub const PINS: [&'static str; 30] = [
         "PC6", "PD0", "PD1", "PD2", "PD3", "PD4", "VCC", "GND_8", "PB6", "PB7", "PD5", "PD6",
         "PD7", "PB0", "PB1", "PB2", "PB3", "PB4", "PB5", "AVCC", "AREF", "GND_22", "PC0", "PC1",
-        "PC2", "PC3", "PC4", "PC5",
+        "PC2", "PC3", "PC4", "PC5", "ADC6", "ADC7",
     ];
+    /// The DIP's pins, which every part wires. A part may leave `ADC6` and `ADC7` out.
+    pub(crate) const REQUIRED: usize = 28;
     /// The flash, 32 KB, DS40002061B Table 2-1.
     pub const FLASH_BYTES: usize = 32 * 1024;
+
+    /// The net of `pad`'s pin, `None` for `ADC6` or `ADC7` when the part leaves it out.
+    fn net(&self, pad: Pad) -> Option<NetId> {
+        let name = Atmega328p::PINS[package_pin(pad)];
+        let k = self.names.iter().position(|&wired| wired == name)?;
+        Some(self.pins[k])
+    }
 }
 
 /// A program image from flash address 0. Only parse builds one, so it fits the flash.
@@ -381,8 +399,15 @@ pub(crate) fn resolve_atmega328p(ctx: ParseCtx<'_>, wire: WireAtmega328p) -> Opt
     let ohm = |field, value, out: &mut Vec<Diagnostic>| {
         resolve_value(part_ref, field, "ohm", true, value, out)
     };
-    let pins = resolve_pins(name, Atmega328p::PINS, &wire.pins.0, nets, out)
-        .and_then(|pins| one_ground(name, pins, nets, out));
+    let pins = resolve_some_pins(
+        name,
+        &Atmega328p::PINS,
+        Atmega328p::REQUIRED,
+        &wire.pins.0,
+        nets,
+        out,
+    )
+    .and_then(|(pins, names)| one_ground(name, pins, nets, out).map(|pins| (pins, names)));
     let firmware = match flash(&wire.firmware) {
         Ok(flash) => Some(Firmware { flash }),
         Err((line, rule)) => {
@@ -428,8 +453,10 @@ pub(crate) fn resolve_atmega328p(ctx: ParseCtx<'_>, wire: WireAtmega328p) -> Opt
         None => Some(None),
         Some(wire) => resolve_ratings(part_ref, wire, out).map(Some),
     };
+    let (pins, names) = pins?;
     Some(Atmega328p {
-        pins: pins?,
+        pins,
+        names,
         firmware: firmware?,
         clock_hz: clock_hz?,
         fuses: fuses?,
@@ -479,10 +506,10 @@ fn resolve_ratings(
 /// Figure 1-1 names pins 8 and 22 `GND`, one function, so they name one net.
 fn one_ground(
     part: &Name,
-    pins: [NetId; 28],
+    pins: Vec<NetId>,
     nets: &BTreeMap<String, NetId>,
     out: &mut Vec<Diagnostic>,
-) -> Option<[NetId; 28]> {
+) -> Option<Vec<NetId>> {
     let index = |pin| Atmega328p::PINS.iter().position(|&p| p == pin).unwrap();
     let (gnd_8, gnd_22) = (pins[index("GND_8")], pins[index("GND_22")]);
     if gnd_8 == gnd_22 {

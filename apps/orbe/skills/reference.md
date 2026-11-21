@@ -54,7 +54,7 @@ The worked example on a breadboard, with the Nano across the channel over column
 $ orbe add breadboard-400
 ...
 $ orbe check breadboard.jsonc
-breadboard.jsonc: ok, 6 scene parts, expanding to 19 engine parts, 32 nets, ground nano__GND
+breadboard.jsonc: ok, 6 scene parts, expanding to 19 engine parts, 34 nets, ground nano__GND
 ```
 
 Read a hole as a pin, as `orbe get @bb.a12`. `snapshot` lists no holes. A leg that lands in the channel, off the board, between holes or in a hole another leg holds is an error that names the leg and the hole. Its hint is a placement that seats every leg with no strip joining two of the part's pins: a quarter turn from the same hole, else a hole within 10.16 mm and a turn, else it says no quarter turn seats the part there. A hole holds one lead, so a wire end in a hole a leg or another wire end already names is an error that names both. When the strip has a free hole the hint is `a hole holds one lead; move one of them to a free hole in the same strip, such as bb.c1`. When every hole in the strip is taken the hint is `a hole holds one lead, and every hole in this strip is taken; free one first, for example by moving one of its leads to an empty strip and wiring that strip back to the hole it left`. When a free hole remains but each one is already named by another hint in this check, the hint is `a hole holds one lead; every free hole in this strip is already named by another hint in this check`. A wire may still end on a pin off the board, such as an Uno's header pin.
@@ -174,7 +174,7 @@ The part and `orbe add` codes are in `orbe skills get parts`.
 
 `orbe part <id>` lists what each part leaves out, and `orbe skills get arduino` what each board's chip does.
 
-- The Nano's 3V3, VIN, A6 and A7 pins. A wire to one is a `not_simulated` error.
+- The Nano's 3V3 and VIN pins. A wire to one is a `not_simulated` error.
 - The Uno's VIN pin and barrel jack. The Uno's 3V3 works.
 - USB, and serial into the chip. The chip's serial out (TX, D1) is read as text.
 - The chip's clamp diodes. A pin pulled past VCC or GND draws no clamp current, and `rating.voltage` names it.

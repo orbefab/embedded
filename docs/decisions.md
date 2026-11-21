@@ -98,7 +98,7 @@ Type checking, linting and runtime diagnostics are separate.
 ## The nano board (Nov 4 2026)
 - It is built from 14 leaf parts, 28 children in all, wired with traces. The viewer draws it by composing its children's 3D models, with no merged model.
 - Its header children sit at z = 0 with their plastic under the board, so it seats on a breadboard.
-- A6 and A7 are not simulated yet, since the engine's 328P has the DIP's pins. A wire to them is an error that says so.
+- A6 and A7 read their voltage. They are the 328P's `ADC6` and `ADC7`, which the engine's `atmega328p` kind has as pins of the TQFP.
 - Its 16 MHz clock is a three-terminal ceramic resonator, until a clone's photo says otherwise.
 
 ## The uno board (Nov 8 2026)
@@ -131,7 +131,7 @@ Type checking, linting and runtime diagnostics are separate.
 - `on` was weighed against two other forms. With `at` and a `contact` wire per leg, the agent works out millimetres from the hole grid and lists every leg, the scene repeats the board's geometry, and a leg one hole off gives a different circuit with no error. `mate` would join parts by named features in general, which is more than a hole needs, and it stays reserved. `on` takes one hole, and every other leg follows from the part's own anchors, so an agent writes a hole name and gets an error that names the leg that missed.
 
 ## Later
-Mates between parts, joints between two parts, importing outside CAD, PCB routing, drawing traces, per-instance placement overrides, A6 and A7, and an `orbe lsp` for editors.
+Mates between parts, joints between two parts, importing outside CAD, PCB routing, drawing traces, per-instance placement overrides, and an `orbe lsp` for editors.
 
 ## Repo (Oct 31 2026)
 One private repo for the whole branch: `orbefab/embedded`. The current sim-engine code moves in first, then maker-sandbox, then the rest (Blocks and skills). The sandbox then builds against the current engine instead of a frozen copy.

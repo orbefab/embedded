@@ -600,6 +600,67 @@ pub(crate) fn resolve_pins<const N: usize>(
     resolved.then_some(ids)
 }
 
+/// The pins of a kind whose first `required` of `names` every part wires and whose rest a part
+/// may leave out: the net of each pin the part wires, in `names` order, with its name.
+pub(crate) fn resolve_some_pins(
+    part: &Name,
+    names: &[&'static str],
+    required: usize,
+    pins: &BTreeMap<String, String>,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<(Vec<NetId>, Vec<&'static str>)> {
+    let (mut ids, mut wired) = (Vec::new(), Vec::new());
+    let mut resolved = true;
+    for &pin in names {
+        let Some(net) = pins.get(pin) else {
+            continue;
+        };
+        match nets.get(net) {
+            Some(&id) => {
+                ids.push(id);
+                wired.push(pin);
+            }
+            None => {
+                resolved = false;
+                out.push(Diagnostic::NetlistUnknownNet {
+                    pin: Ref::Pin(part.clone(), Name::new(pin).expect("kind pin name")),
+                    net: net.clone(),
+                });
+            }
+        }
+    }
+    let missing: Vec<&'static str> = names[..required]
+        .iter()
+        .copied()
+        .filter(|pin| !pins.contains_key(*pin))
+        .collect();
+    let mut unexpected = Vec::new();
+    for (key, net) in pins {
+        if names.contains(&key.as_str()) {
+            continue;
+        }
+        unexpected.push(key.clone());
+        if let Ok(pin) = Name::new(key)
+            && !nets.contains_key(net)
+        {
+            out.push(Diagnostic::NetlistUnknownNet {
+                pin: Ref::Pin(part.clone(), pin),
+                net: net.clone(),
+            });
+        }
+    }
+    if !missing.is_empty() || !unexpected.is_empty() {
+        out.push(Diagnostic::NetlistPins {
+            part: Ref::Part(part.clone()),
+            missing,
+            unexpected,
+        });
+        resolved = false;
+    }
+    resolved.then_some((ids, wired))
+}
+
 /// `None` when the rating is invalid. `Some(None)` is an explicit `null`.
 pub(crate) fn resolve_rating(
     part: &Ref,

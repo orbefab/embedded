@@ -929,8 +929,9 @@ fn apply(project: &Path, id: &str, state: State) {
 fn hold(project: &Path, id: &str, version: &str) {
     let file = project.join("parts").join(id).join("part.jsonc");
     let text = fs::read_to_string(&file).unwrap();
+    let carried = orbe_scene::card(id).unwrap().version;
     let edited = text.replacen(
-        "\"version\": \"0.1.1\"",
+        &format!("\"version\": \"{carried}\""),
         &format!("\"version\": \"{version}\""),
         1,
     );
