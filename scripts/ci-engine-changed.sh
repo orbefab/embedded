@@ -4,8 +4,8 @@
 # Prints `run=true` or `run=false`. The diff is the changes <head> made since
 # the merge base of the two commits. The jobs run unless every changed file is
 # markdown, under apps/site/, under docs/, or under .github/ except
-# .github/workflows/ci.yml. packages/ and the rest of what the engine, the wasm
-# build or the viewer build reads are not in that list. An unknown argument, or
+# .github/workflows/ci.yml and .github/actions/. packages/ and the rest of what
+# the engine, the wasm build or the viewer build reads are not in that list. An unknown argument, or
 # a commit git cannot resolve, exits 2.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -24,11 +24,12 @@ under() {
   [[ $path == "$prefix" || ${path#"$prefix"/} != "$path" ]]
 }
 
-# A file the engine jobs can skip. ci.yml changes how those jobs run.
+# A file the engine jobs can skip. ci.yml and the setup actions change how those jobs run.
 skippable() {
   local path=$1
   [[ $path == *.md ]] && return 0
   [[ $path == .github/workflows/ci.yml ]] && return 1
+  under "$path" .github/actions && return 1
   under "$path" apps/site && return 0
   under "$path" docs && return 0
   under "$path" .github && return 0

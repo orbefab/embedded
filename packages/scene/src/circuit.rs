@@ -212,6 +212,27 @@ pub struct Netlist {
     pub blobs: Blobs,
 }
 
+impl Netlist {
+    /// Nets `net.floating` warns about: no DC path to ground, except a board net lint leaves
+    /// quiet, such as an open AREF with nothing wired to it.
+    pub fn floating(&self) -> BTreeSet<String> {
+        let engine = orbe_engine::netlist::parse_with(self.json.as_bytes(), &self.blobs)
+            .expect("a netlist the reader wrote parses");
+        orbe_engine::floating_nets(&engine)
+            .into_iter()
+            .filter_map(|found| match found {
+                orbe_engine::diagnostic::Diagnostic::NetFloating {
+                    net: orbe_engine::name::Ref::Net(name),
+                } => {
+                    let name = name.as_str().to_string();
+                    (!self.refs.quiet_floating.contains(&name)).then_some(name)
+                }
+                _ => None,
+            })
+            .collect()
+    }
+}
+
 /// With `lint`, the lint rules' warnings on a circuit that checks go there. With `placing`,
 /// only the placement of the scene's parts is read, as [`crate::read_placed`] says. With
 /// `paths`, each path a file param takes goes there.

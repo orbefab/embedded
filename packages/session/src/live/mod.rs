@@ -31,10 +31,10 @@ use crate::command::{Command, Step, WorldSet};
 use crate::condition::Unit;
 use crate::duration::Duration;
 use crate::reply::{
-    Code, Data, Diagnostic, Error, Finding, Got, Level, PartState, Reading, Reply, Snapshot, State,
-    Stepped,
+    Code, Colors, Data, Diagnostic, Error, Finding, Got, Level, PartState, Reading, Reply,
+    Snapshot, State, Stepped,
 };
-use crate::target::{Ref, Target, names, one_engine, reports_hint, resolve};
+use crate::target::{Ref, Target, names, one_engine, reports_hint, resolve, rgb_reading};
 
 mod bound;
 mod frame;
@@ -153,6 +153,7 @@ impl Live {
             (Command::Release(r), Some(open)) => open.contact(r, false),
             (Command::Set(set), Some(open)) => open.set(set),
             (Command::Get(r), Some(open)) => open.get(r).map(Data::Got).map_err(fail),
+            (Command::GetWorld(quantity), Some(open)) => open.get_world(*quantity),
             (Command::Step(step), Some(open)) => open.step(step, during),
             (Command::Play, Some(open)) => open.play(),
             (Command::Pause, Some(open)) => {
@@ -653,20 +654,43 @@ impl Open {
             at: self.engine.now(),
             value: Finite::new(set.value).expect("the command's value is finite"),
         };
-        let applied = self
-            .engine
-            .set(&change)
-            .map_err(|e| fail(rejected(e, set.quantity.name())))?;
+        let applied = match self.engine.set(&change) {
+            Err(Rejected::NoChange) => {
+                let landed_ps = self
+                    .engine
+                    .world()
+                    .schedule(set.quantity)
+                    .and_then(|schedule| schedule.events().last())
+                    .map(|event| event.at.as_ps())
+                    .unwrap_or(0);
+                return Ok(Data::Set {
+                    quantity: set.quantity,
+                    value: set.value,
+                    landed_ps,
+                    already: true,
+                });
+            }
+            Err(error) => return Err(fail(rejected(error, set.quantity.name()))),
+            Ok(applied) => applied,
+        };
         self.world_sets.insert(set.quantity, applied.at);
         let data = Data::Set {
             quantity: set.quantity,
             value: set.value,
             landed_ps: applied.at.as_ps(),
+            already: false,
         };
         match applied.status {
             Status::Faulted => Err(failed(self.faulted(), data)),
             _ => Ok(data),
         }
+    }
+
+    fn get_world(&self, quantity: orbe_engine::world::Quantity) -> Outcome {
+        let Some(value) = self.engine.world().before(quantity, self.engine.now()) else {
+            return Err(fail(rejected(Rejected::Undeclared, quantity.name())));
+        };
+        Ok(Data::World { quantity, value })
     }
 
     fn faulted(&self) -> Error {
@@ -706,6 +730,14 @@ impl Open {
                     },
                 )
             }
+            Target::Color {
+                path,
+                reading,
+                engine,
+            } => (
+                format!("{path}.{reading}"),
+                Reading::Color(self.colors(&engine)),
+            ),
             Target::Part(path) => {
                 let value = self.part(&path).ok_or_else(|| {
                     Error::new(
@@ -790,13 +822,31 @@ impl Open {
         )
     }
 
-    /// A part's light state, its brightness, and its engine quantities. `None` when it has none.
+    /// The colours engine part `engine`, an LED chain, last latched, red then green then blue.
+    fn colors(&self, engine: &str) -> Colors {
+        let leds = self
+            .engine
+            .leds(&engine_name(engine))
+            .expect("a part with a reading of rgb is an LED chain");
+        let chain = leds.chain();
+        assert_eq!(chain.order, "grb", "a chain latches green, red, blue");
+        Colors {
+            leds: chain.pixels.iter().map(|&[g, r, b]| [r, g, b]).collect(),
+            latched_ps: leds.latched().map(|at| at.as_ps()),
+        }
+    }
+
+    /// A part's light state, its brightness, its colours, and its engine quantities. `None` when
+    /// it has none.
     fn part(&self, path: &str) -> Option<Reading> {
-        let engine = one_engine(path, &self.refs.parts[path], Code::NoReading).ok()?;
+        let part = &self.refs.parts[path];
+        let engine = one_engine(path, part, Code::NoReading).ok()?;
+        let color = rgb_reading(part).map(|_| self.colors(&engine));
         let probe = self.engine.probe();
         let quantities: Vec<(String, Unit, f64)> = self
             .reports
-            .get(&engine)?
+            .get(&engine)
+            .map_or(&[][..], Vec::as_slice)
             .iter()
             .map(|&q| {
                 let value = probe.get(&quantity(&engine, q)).expect("a reported column");
@@ -809,9 +859,10 @@ impl Open {
             .map(|index| self.light.glow(index, &probe));
         let state = glow.map(|glow| glow.state);
         let brightness = glow.map(|glow| (glow.amperes, glow.over_ps));
-        (state.is_some() || !quantities.is_empty()).then_some(Reading::Part {
+        (state.is_some() || color.is_some() || !quantities.is_empty()).then_some(Reading::Part {
             state,
             brightness,
+            color,
             quantities,
         })
     }
@@ -1012,7 +1063,7 @@ mod tests {
 t=50ms (from 50ms), @led1 off at 50ms
   brightness led1 off 1.2775403302174304e-13 A over 20ms
   brightness nano.led_l off 1.2775344350286488e-13 A over 20ms
-  brightness nano.led_pwr lit 0.0030136985454632015 A over 20ms"
+  brightness nano.led_pwr lit 3.0136985454632015 mA over 20ms"
         );
 
         let unmet = step(&mut live, "--until @led1 lit");

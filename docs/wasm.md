@@ -15,8 +15,10 @@ It builds the package into `OUT_DIR`, by default `.scratch/wasm/pkg` in the repo
 It also needs the `wasm-bindgen` CLI at the version `Cargo.lock` holds for the `wasm-bindgen` crate, 0.2.129 today. `Cargo.toml` pins the crate with `=`, so a `cargo update` cannot move it away from the CLI. The script uses `WASM_TOOLS_DIR/wasm-bindgen-<version>/bin/wasm-bindgen` when it is there, then a `wasm-bindgen` on `PATH` at that version, and ignores a `PATH` copy at another version with a line that says so. `WASM_TOOLS_DIR` defaults to `.scratch/wasm/tools` in the repo. The script installs nothing. Without the CLI it exits 2 and prints the command that installs it where the script looks:
 
 ```sh
-cargo install wasm-bindgen-cli --version =0.2.129 --locked --root .scratch/wasm/tools/wasm-bindgen-0.2.129
+scripts/install-wasm-bindgen.sh
 ```
+
+That script downloads the prebuilt CLI. On Linux x86_64, the platform CI runs on, it checks the download's SHA-256; other prebuilts install unchecked. On a platform with no prebuilt CLI it prints the `cargo install` command instead.
 
 Without the target it exits 2 and prints `rustup target add wasm32-unknown-unknown`.
 
@@ -90,7 +92,7 @@ A viewer sends only `press`, `release`, `set`, `play` and `pause`, each parsed b
 
 `packages/wasm/tests/session.rs` runs the session natively in `scripts/check.sh fast`. It opens nano-button-led from its files and every catalog part, checks the `scene` then the first `frame`, plays in 16 ms ticks, presses `@btn1` until D13 is high and `@led1` carries over 5 mA, pauses, and checks that a paused session does not move and that `step` is refused. A Block without `led-5mm` is refused with the text `orbe open` prints. It also draws nano-board on its own with its 28 children and no channel, and refuses it with `part_missing` when `led-0603` is gone. `scripts/check.sh fast` also runs clippy on `orbe-wasm` for `wasm32-unknown-unknown`.
 
-`scripts/check-wasm.sh [SCRATCH_DIR]` runs in `scripts/check.sh full`, and in CI with `packages/engine/scripts/wasi-check.sh` on every push to `main` and every night, and on a pull request unless every changed file is under `apps/site/`, `docs/` or `.github/` other than `.github/workflows/ci.yml`, or is a markdown file. It needs what `scripts/wasm.sh` needs and node 24 or later. It installs nothing. It removes its default `SCRATCH_DIR`, `.scratch/wasm/check`, when it passes. A `SCRATCH_DIR` the caller names keeps the package in `pkg` and the registry in `registry`.
+`scripts/check-wasm.sh [SCRATCH_DIR]` is a step of `scripts/check.sh full` and `engine-wasm`. It needs what `scripts/wasm.sh` needs and node 24 or later. It installs nothing. It removes its default `SCRATCH_DIR`, `.scratch/wasm/check`, when it passes. A `SCRATCH_DIR` the caller names keeps the package in `pkg` and the registry in `registry`.
 
 - It builds the package, then builds it again with a fresh target directory, and fails unless both folders hold the same bytes.
 - It checks `package.json`: the name, the version, `private`, the licence, `files`, each `exports` target, and a commit stamp when the directory is the checkout.
@@ -108,7 +110,7 @@ The page's headed check, `scripts/check-block.sh`, runs every Block from a regis
 scripts/check-speed.sh [--profile BLOCK] [PKG_DIR REGISTRY_DIR]
 ```
 
-It checks that every Block in the registry plays live in a browser, so a change that slows the engine fails before it ships. `scripts/check.sh full` runs it on the package and registry `scripts/check-wasm.sh` built. With no directories it builds both under `.scratch/speed` and removes them after. It needs node 24 or later, the repo's Node dependencies, and the Chromium Playwright expects under `~/.cache/ms-playwright` or the binary in `ORBE_CHROMIUM`, as `scripts/check-viewer-e2e.sh` does. It installs nothing. CI does not run it.
+It checks that every Block in the registry plays live in a browser, so a change that slows the engine fails before it ships. `scripts/check.sh full` runs it on the package and registry `scripts/check-wasm.sh` built. With no directories it builds both under `.scratch/speed` and removes them after. It needs node 24 or later, the repo's Node dependencies, and the Chromium Playwright expects under `~/.cache/ms-playwright` or the binary in `ORBE_CHROMIUM`, as `scripts/check-viewer-e2e.sh` does. It installs nothing.
 
 `packages/wasm/tests/speed.mjs` serves the package and a test page from `packages/wasm/tests/speed`, loads each Block with the viewer's registry client, and opens a fresh page in headless Chromium for each run. A run opens the Block in the package's own `worker.js`, plays it, and times the wall clock from the first `frame` at or past 200 ms of simulated time to the first at or past 2.2 s. It fails when the session leaves `playing` or when the span is not 2 s of 16 ms ticks.
 

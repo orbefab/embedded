@@ -1,5 +1,5 @@
 //! `orbe`, the CLI. `orbe check` type-checks a scene, and `orbe lint` checks it, then warns of
-//! what is likely wrong or unclear. `orbe add` copies catalog parts, or installs a Block. `orbe part` prints one
+//! what is likely wrong or unclear. `orbe nets` prints each net and the pins on it. `orbe add` copies catalog parts, or installs a Block. `orbe part` prints one
 //! catalog part or one Block, `orbe search` finds either, and `orbe blocks` lists the Blocks.
 //! `orbe registry build` turns a folder of parts and
 //! Blocks into a registry.
@@ -12,6 +12,7 @@ mod live;
 mod part;
 mod skills;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -56,9 +57,19 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Prints each net and the pins on it. A net with no DC path to ground is floating, except
+    /// a board net lint leaves quiet, and a pin on no net is not connected.
+    #[command(display_order = 3)]
+    Nets {
+        /// The scene file, such as scene.jsonc. scene.jsonc when omitted.
+        scene: Option<PathBuf>,
+        /// Print one JSON envelope instead of text.
+        #[arg(long)]
+        json: bool,
+    },
     /// Copies catalog parts into `parts/` and writes `parts.lock`, or installs a Block by
     /// copying its parts first, then writing its scene, firmware, tests and README.
-    #[command(display_order = 3)]
+    #[command(display_order = 4)]
     Add {
         /// Part ids, or one Block id. A part's version is `id@<version>`.
         ids: Vec<String>,
@@ -79,7 +90,7 @@ enum Command {
         json: bool,
     },
     /// Prints one catalog part, or one Block.
-    #[command(display_order = 4)]
+    #[command(display_order = 5)]
     Part {
         /// Catalog id, such as `led-5mm`, or a Block id, such as `nano-led-fade`. A whole word of exactly one id, such as `1n4007`, names it.
         id: String,
@@ -88,18 +99,18 @@ enum Command {
         json: bool,
     },
     /// Finds catalog parts and Blocks whose id, title, summary or tags hold every word.
-    /// A part also matches its maker and number.
-    #[command(display_order = 5)]
+    /// A part also matches its maker and number. With no words, lists every part a scene
+    /// can place, grouped by its first category, then the Blocks.
+    #[command(display_order = 6)]
     Search {
-        /// Words to match. Every word must appear.
-        #[arg(required = true)]
+        /// Words to match. Every word must appear. With no words, lists the catalog.
         words: Vec<String>,
         /// Print one JSON envelope instead of text.
         #[arg(long)]
         json: bool,
     },
     /// Lists the Blocks this orbe installs.
-    #[command(display_order = 6)]
+    #[command(display_order = 7)]
     Blocks {
         /// Print one JSON envelope instead of text.
         #[arg(long)]
@@ -198,7 +209,7 @@ enum SkillsCommand {
 fn cli() -> clap::Command {
     let live = orbe_session::COMMANDS
         .iter()
-        .zip(6..)
+        .zip(8..)
         .map(|(spec, order)| live_help(spec).display_order(order));
     Cli::command().subcommands(live)
 }
@@ -307,6 +318,9 @@ fn main() -> ExitCode {
         Ok(cli) => match cli.command {
             Command::Check { scene, json } => check(&scene, json),
             Command::Lint { scene, json } => lint(&scene, json),
+            Command::Nets { scene, json } => {
+                nets(&scene.unwrap_or_else(|| PathBuf::from("scene.jsonc")), json)
+            }
             Command::Add {
                 ids,
                 dir,
@@ -748,6 +762,80 @@ fn check(scene: &Path, json: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn nets(scene: &Path, json: bool) -> ExitCode {
+    if let Some(exit) = no_scene(scene, json) {
+        return exit;
+    }
+    let netlist = match orbe_scene::read(&Files::disk(), scene) {
+        Ok(netlist) => netlist,
+        Err(errors) => return invalid(scene, errors, json),
+    };
+    let holes = hole_pins(&netlist);
+    let floating_nets = netlist.floating();
+    let mut pins_of: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut unconnected = Vec::new();
+    for (part, map) in &netlist.refs.parts {
+        for (pin, net) in &map.pins {
+            let dotted = format!("{part}.{pin}");
+            match net {
+                Some(name) => pins_of.entry(name.clone()).or_default().push(dotted),
+                None if !holes.contains(&dotted) => unconnected.push(dotted),
+                None => {}
+            }
+        }
+    }
+    let rows: Vec<_> = netlist
+        .nets
+        .iter()
+        .map(|name| {
+            let pins = pins_of.remove(name).unwrap_or_default();
+            let floating = floating_nets.contains(name);
+            (name.clone(), pins, floating)
+        })
+        .collect();
+    if json {
+        print_json(&json!({
+            "ok": true,
+            "data": {
+                "scene": scene.display().to_string(),
+                "ground": netlist.ground,
+                "nets": rows.iter().map(|(name, pins, floating)| json!({
+                    "name": name,
+                    "pins": pins,
+                    "floating": floating,
+                })).collect::<Vec<_>>(),
+                "unconnected": unconnected,
+            },
+        }));
+    } else {
+        for (name, pins, floating) in &rows {
+            let mark = if *floating { " (floating)" } else { "" };
+            println!("{name}{mark}: {}", pins.join(" "));
+        }
+        if !unconnected.is_empty() {
+            println!("not connected: {}", unconnected.join(" "));
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// Breadboard holes, as `part.pin`, from the catalog card of each part that has holes.
+fn hole_pins(netlist: &orbe_scene::Netlist) -> BTreeSet<String> {
+    let mut holes = BTreeSet::new();
+    for (name, part) in &netlist.refs.parts {
+        let Some(card) = orbe_scene::card(&part.ty) else {
+            continue;
+        };
+        let Some(board) = &card.holes else {
+            continue;
+        };
+        for pin in board.strips.iter().flatten() {
+            holes.insert(format!("{name}.{pin}"));
+        }
+    }
+    holes
+}
+
 fn lint(scene: &Path, json: bool) -> ExitCode {
     if let Some(exit) = no_scene(scene, json) {
         return exit;
@@ -935,6 +1023,23 @@ fn unknown_part(id: &str, names: &[String], json: bool) -> ExitCode {
 }
 
 fn search_parts(words: &[String], json: bool) -> ExitCode {
+    if words.is_empty() {
+        let groups = part::catalog_groups();
+        if json {
+            print_json(&json!({
+                "ok": true,
+                "data": {
+                    "groups": groups.iter().map(|(category, items)| json!({
+                        "category": category,
+                        "items": items.iter().map(|(id, title)| json!({ "id": id, "title": title })).collect::<Vec<_>>(),
+                    })).collect::<Vec<_>>(),
+                },
+            }));
+        } else {
+            print!("{}", part::catalog_text(&groups));
+        }
+        return ExitCode::SUCCESS;
+    }
     let query = words.join(" ");
     let found = orbe_scene::search(&query);
     let blocks = orbe_scene::search_blocks(&query);

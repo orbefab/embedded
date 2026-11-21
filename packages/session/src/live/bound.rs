@@ -6,9 +6,9 @@ use std::fmt::Write;
 use orbe_engine::name::Ref as EngineRef;
 
 use super::{Open, Outcome, engine_name, fail, failed, quantity, t, unit_of};
-use crate::condition::{Condition, Op, State as Want, Unit};
-use crate::reply::{Check, Code, Data, Diagnostic, Error, Level, Light, number};
-use crate::target::Target;
+use crate::condition::{Condition, Op, Rgb, State as Want, Unit};
+use crate::reply::{Check, Code, Data, Diagnostic, Error, Level, Light, current, number};
+use crate::target::{Target, one_engine, rgb_reading};
 
 /// What a condition reads, resolved against the open scene.
 pub(super) enum Bound {
@@ -35,6 +35,12 @@ pub(super) enum Bound {
         op: Op,
         value: f64,
         unit: Unit,
+    },
+    /// `@pixel rgb(255,0,0)`, every LED of the part's chain.
+    Color {
+        label: String,
+        engine: String,
+        want: Rgb,
     },
     SerialContains(String),
     NoDiagnostics,
@@ -101,6 +107,29 @@ impl Open {
                     }
                 }
             }
+            Condition::Color(r, want) => {
+                let (label, engine) = match self.resolve(r)? {
+                    Target::Color {
+                        path,
+                        reading,
+                        engine,
+                    } => (format!("{path}.{reading}"), engine),
+                    Target::Part(path) => {
+                        let part = &self.refs.parts[&path];
+                        let Some(reading) = rgb_reading(part) else {
+                            return Err(no_color(r));
+                        };
+                        let engine = one_engine(&path, part, Code::NoReading)?;
+                        (format!("{path}.{reading}"), engine)
+                    }
+                    _ => return Err(no_color(r)),
+                };
+                Bound::Color {
+                    label,
+                    engine,
+                    want: *want,
+                }
+            }
             Condition::Compare(r, op, amount) => {
                 let (label, column, unit) = match self.resolve(r)? {
                     Target::Pin {
@@ -146,6 +175,13 @@ impl Open {
                         pin,
                         net: None,
                     } => return Err(self.not_simulated(&path, &pin)),
+                    Target::Color { .. } => {
+                        return Err(Error::new(
+                            Code::NoReading,
+                            format!("{r} is a colour, not a value to compare"),
+                            format!("expect the colour itself, such as `{r} rgb(255,0,0)`"),
+                        ));
+                    }
                     Target::Part(_) => {
                         return Err(Error::new(
                             Code::NoReading,
@@ -185,10 +221,10 @@ impl Open {
                 (
                     glow.state == *want,
                     format!(
-                        "{part} {}, i={} A, brightness={} A over {}",
+                        "{part} {}, i={}, brightness={} over {}",
                         glow.state.as_str(),
-                        number(instant),
-                        number(glow.amperes),
+                        current(instant),
+                        current(glow.amperes),
                         t(glow.over_ps)
                     ),
                 )
@@ -204,8 +240,8 @@ impl Open {
                 (
                     op.holds(glow.amperes, *value),
                     format!(
-                        "{label} = {} A over {}",
-                        number(glow.amperes),
+                        "{label} = {} over {}",
+                        current(glow.amperes),
                         t(glow.over_ps)
                     ),
                 )
@@ -224,7 +260,24 @@ impl Open {
                 let seen = self.read(column);
                 (
                     op.holds(seen, *value),
-                    format!("{label} = {} {}", number(seen), unit.as_str()),
+                    format!(
+                        "{label} = {}",
+                        match unit {
+                            Unit::Ampere => current(seen),
+                            _ => format!("{} {}", number(seen), unit.as_str()),
+                        }
+                    ),
+                )
+            }
+            Bound::Color {
+                label,
+                engine,
+                want,
+            } => {
+                let colors = self.colors(engine);
+                (
+                    colors.leds.iter().all(|&led| led == want.0),
+                    format!("{label} {}", colors.text()),
                 )
             }
             Bound::SerialContains(text) => {
@@ -279,4 +332,12 @@ impl Open {
         );
         Err(failed(error, Data::Checked(check)))
     }
+}
+
+fn no_color(r: &crate::target::Ref) -> Error {
+    Error::new(
+        Code::NoReading,
+        format!("{r} has no colour"),
+        "an addressable LED, a part with a reading of rgb, has a colour, such as `@pixel rgb(255,0,0)`",
+    )
 }

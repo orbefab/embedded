@@ -190,7 +190,7 @@ pub enum Ack {
 /// [`world`](Cx::world) reads a quantity the device declares. [`broke`](Cx::broke) names a rule
 /// and the time. The first call wins. [`show`](Cx::show) says what an LED chain shows changed.
 /// [`drew`](Cx::drew) is a pixel write a screen closed. [`pulses`](Cx::pulses) queues a train
-/// on an open-drain line.
+/// on an open-drain line. [`replayed`](Cx::replayed) says the call replays a record.
 #[derive(Clone, Debug, Default)]
 pub struct Cx {
     world: Readings,
@@ -198,6 +198,7 @@ pub struct Cx {
     shown: bool,
     drawn: Option<Drawn>,
     queued: Option<(Time, Pulses)>,
+    replay: bool,
 }
 
 impl Cx {
@@ -207,6 +208,20 @@ impl Cx {
             world,
             ..Cx::default()
         }
+    }
+
+    /// This call, marked as one that replays a level a `Pulses` record carried. The host marks
+    /// each [`PulseTarget`] call it makes from a record.
+    pub fn replaying(mut self) -> Cx {
+        self.replay = true;
+        self
+    }
+
+    /// Whether this call replays a level a `Pulses` record carried. A record lands at its end,
+    /// so the call's time is at or before the device's own: anything the device would start
+    /// from it on a pin of its own would start in the past.
+    pub fn replayed(&self) -> bool {
+        self.replay
     }
 
     /// The value of `quantity`, in its unit, at the call's time: after every change strictly

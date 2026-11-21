@@ -33,7 +33,7 @@ fn every_part_under_parts_loads_in_a_format_this_binary_reads() {
     )
     .unwrap();
     fs::copy(
-        root.join("packages/engine/tests/firmware/sketch/button.hex"),
+        root.join("blocks/nano-button-led/firmware/button.hex"),
         dir.path().join("firmware.hex"),
     )
     .unwrap();

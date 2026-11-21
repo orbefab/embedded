@@ -61,7 +61,9 @@ export interface Anchor {
 
 /** `part.jsonc`'s `view`, unchanged. Every node is a GLB node name of the part's body model. */
 export interface PartView {
-  readonly glow?: readonly { readonly node: string; readonly by: "brightness" }[];
+  /** The node glows by `brightness`, the LED's current, or by the name of the part's reading
+   * `"of": "rgb"`, the colour an addressable LED latched. */
+  readonly glow?: readonly { readonly node: string; readonly by: string }[];
   /** The node takes the `tint` of the choice the param `by` picks. */
   readonly tint?: readonly { readonly node: string; readonly by: string }[];
   readonly recolour?: readonly {

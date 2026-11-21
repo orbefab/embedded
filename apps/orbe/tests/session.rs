@@ -190,7 +190,7 @@ fn open_replaces_the_socket_a_killed_process_left() {
 t=10ms (from 0s)
   brightness led1 off 3.4882796973335236e-10 A over 10ms
   brightness nano.led_l off 3.4809606749501575e-10 A over 10ms
-  brightness nano.led_pwr lit 0.003013698545612338 A over 10ms
+  brightness nano.led_pwr lit 3.0136985456123377 mA over 10ms
 "
     );
     runtime
@@ -664,7 +664,7 @@ fn a_refusal_the_client_makes_shows_the_state_the_process_reports() {
         (
             2,
             "",
-            "error[usage]: takes one ref, such as `@btn1`; usage: get <ref>\n"
+            "error[usage]: takes one ref, such as `@btn1`, or a world quantity, such as `light`; usage: get <ref> | get <quantity>\n"
         )
     );
 
