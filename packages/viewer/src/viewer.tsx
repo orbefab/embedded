@@ -457,6 +457,7 @@ export function Viewer({ source, onCreated, pageScroll = false }: ViewerProps) {
   const [scene, setScene] = useState<SceneMessage | null>(null);
   const [mode, setMode] = useState<CameraMode>("tilted");
   const frame = useRef<FrameMessage | null>(null);
+  const ledPeak = useRef<number[]>([]);
   const hover = useMemo(createHoverStore, []);
   const [partErrors, setPartErrors] = useState<readonly string[]>([]);
   const [sendErrors, setSendErrors] = useState<readonly string[]>([]);
@@ -488,9 +489,14 @@ export function Viewer({ source, onCreated, pageScroll = false }: ViewerProps) {
       source.subscribe((message) => {
         if (message.type === "scene") {
           frame.current = null;
+          ledPeak.current = [];
           setSendErrors([]);
           setScene(message);
         } else if (message.type === "frame") {
+          const peaks = ledPeak.current;
+          for (let channel = 0; channel < message.led_a.length; channel += 1) {
+            peaks[channel] = Math.max(peaks[channel] ?? 0, message.led_a[channel] ?? 0);
+          }
           frame.current = message;
         } else {
           setClosed(message.reason);
@@ -585,6 +591,7 @@ export function Viewer({ source, onCreated, pageScroll = false }: ViewerProps) {
                 colours={stage}
                 frame={frame}
                 hover={hover}
+                ledPeak={ledPeak}
                 mode={mode}
                 onBuilt={onBuilt}
                 pageScroll={pageScroll}

@@ -7,7 +7,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { type BuiltScene, buildScene, fromGltf, type Tag, tagOf } from "./build";
 import type { CameraMode } from "./camera-frame";
 import { CameraRig } from "./camera-rig";
-import { glowIntensity, litColour } from "./glow";
+import { glowIntensity, litColour, shownCurrent } from "./glow";
 import type { Hovered, HoverStore } from "./hover";
 import type { Command, FrameMessage, Ref, SceneMessage, Vec3 } from "./protocol";
 import { holeAt, instanceAt, refOf, stripText } from "./refs";
@@ -117,6 +117,7 @@ function endsPress(event: PointerEvent): boolean {
 export function SceneView({
   scene,
   frame,
+  ledPeak,
   send,
   hover,
   mode,
@@ -126,6 +127,8 @@ export function SceneView({
 }: {
   scene: SceneMessage;
   frame: RefObject<FrameMessage | null>;
+  /** Brightest LED current since the previous drawn frame, one entry per channel. */
+  ledPeak: RefObject<number[]>;
   send: (command: Command) => void;
   hover: HoverStore;
   mode: CameraMode;
@@ -175,11 +178,16 @@ export function SceneView({
 
   useFrame(() => {
     const live = frame.current;
+    const peaks = ledPeak.current;
     for (const glow of built.glows) {
-      const intensity = glowIntensity(live?.led_a[glow.channel] ?? 0, glow.full);
+      const now = live?.led_a[glow.channel] ?? 0;
+      const intensity = glowIntensity(shownCurrent(now, peaks[glow.channel] ?? 0), glow.full);
       glow.material.emissiveIntensity = intensity;
       litColour(glow.base, intensity, glow.material.color);
     }
+    const count = Math.max(peaks.length, live?.led_a.length ?? 0);
+    for (let channel = 0; channel < count; channel += 1) peaks[channel] = live?.led_a[channel] ?? 0;
+    peaks.length = count;
     for (const slide of built.slides) {
       slide.node.position.copy(slide.rest);
       if (live?.switches[slide.channel] === 1) slide.node.position.add(slide.delta);
