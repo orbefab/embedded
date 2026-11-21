@@ -455,7 +455,7 @@ const FREE_HOLE: &str = "a hole holds one lead; move one of them to a free hole 
 
 /// A full column, the 400's full X rail, and both at once name no hole. A strip filled
 /// with part legs, a board with no empty hole, and a full strip inside a part say the
-/// same sentence. The skill and the decision record quote it.
+/// same sentence. The reference skill and the decision record quote it.
 #[test]
 fn a_full_strip_says_the_strip_is_full() {
     let cases = [
@@ -479,7 +479,7 @@ fn a_full_strip_says_the_strip_is_full() {
         }
     }
     let repo = common::repo();
-    for path in ["apps/orbe/skills/core.md", "docs/decisions.md"] {
+    for path in ["apps/orbe/skills/reference.md", "docs/decisions.md"] {
         let text = fs::read_to_string(repo.join(path)).unwrap();
         assert!(
             text.contains(FULL_STRIP),
