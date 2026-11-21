@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": { "transient": { "stop_ps": 20000000, "max_step_ps": 100000, "grid_ps": 100000 } },
   "ground": "gnd",
@@ -11,10 +11,10 @@
       "pins": { "p": "vin", "n": "gnd" },
       "voltage": {
         "kind": "steps",
-        "initial": { "value": 0.0, "unit": "V", "source": "user" },
+        "initial": { "value": 0.0, "unit": "V" },
         "events": [
-          { "t_ps": 99500, "level": { "value": 5.0, "unit": "V", "source": "user" } },
-          { "t_ps": 9999500, "level": { "value": 1.0, "unit": "V", "source": "user" } }
+          { "t_ps": 99500, "level": { "value": 5.0, "unit": "V" } },
+          { "t_ps": 9999500, "level": { "value": 1.0, "unit": "V" } }
         ]
       }
     },
@@ -22,14 +22,14 @@
       "name": "r1",
       "kind": "resistor",
       "pins": { "a": "vin", "b": "vout" },
-      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "resistance": { "value": 1000.0, "unit": "ohm" },
       "ratings": { "power": null }
     },
     {
       "name": "c1",
       "kind": "capacitor",
       "pins": { "a": "vout", "b": "gnd" },
-      "capacitance": { "value": 5e-9, "unit": "F", "source": "user" },
+      "capacitance": { "value": 5e-9, "unit": "F" },
       "initial": null
     }
   ]

@@ -356,7 +356,7 @@ mod tests {
     const CJC: f64 = 4e-12;
 
     fn value(v: f64, unit: &str) -> String {
-        format!(r#"{{ "value": {v:?}, "unit": "{unit}", "source": "user" }}"#)
+        format!(r#"{{ "value": {v:?}, "unit": "{unit}" }}"#)
     }
 
     /// `q1` with the `npn-led` example's values and `nr` for its reverse emission, its pins on
@@ -393,7 +393,7 @@ mod tests {
         nets.dedup();
         let nets: Vec<String> = nets.iter().map(|net| format!("\"{net}\"")).collect();
         let json = format!(
-            r#"{{ "version": 0, "seed": 0, "analysis": {analysis}, "ground": "gnd",
+            r#"{{ "version": 1, "seed": 0, "analysis": {analysis}, "ground": "gnd",
                 "nets": ["gnd", {}], "parts": [{}] }}"#,
             nets.join(", "),
             parts.join(", ")

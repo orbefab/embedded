@@ -18,7 +18,7 @@ fn chip(edit: impl FnOnce(&mut serde_json::Value)) -> Result<Netlist, Vec<Diagno
     nets.sort();
     nets.dedup();
     let document = serde_json::json!({
-        "version": 0,
+        "version": 1,
         "seed": 0,
         "analysis": { "op": {} },
         "ground": "gnd",
@@ -215,7 +215,7 @@ fn rstdisbl_makes_pc6_a_port_pin() {
 
 #[test]
 fn a_threshold_is_a_fraction_of_the_supply_with_low_at_most_high() {
-    let value = |v: f64| serde_json::json!({ "value": v, "unit": "1", "source": "user" });
+    let value = |v: f64| serde_json::json!({ "value": v, "unit": "1" });
     assert_eq!(
         errors(|part| {
             part["input_threshold"]["high"] = value(1.0);
@@ -236,8 +236,7 @@ fn a_threshold_is_a_fraction_of_the_supply_with_low_at_most_high() {
     assert_eq!(values(&equal).reset_threshold.high.si.get(), 0.42);
     assert_eq!(
         errors(|part| {
-            part["reset_threshold"]["high"] =
-                serde_json::json!({ "value": 0, "unit": "V", "source": "user" });
+            part["reset_threshold"]["high"] = serde_json::json!({ "value": 0, "unit": "V" });
         }),
         [
             r##""netlist.unit" ["#u1"] {"expected":"1","field":"reset_threshold.high","found":"V"}"##,
@@ -280,7 +279,7 @@ fn a_clock_is_a_whole_number_of_hertz_and_a_ratings_object_names_every_key() {
 }
 
 fn ratings() -> serde_json::Value {
-    let value = |value: f64, unit: &str| serde_json::json!({ "value": value, "unit": unit, "source": "user" });
+    let value = |value: f64, unit: &str| serde_json::json!({ "value": value, "unit": unit });
     serde_json::json!({
         "pin_current": value(0.04, "A"),
         "supply_current": value(0.2, "A"),

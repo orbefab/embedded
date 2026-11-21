@@ -3,7 +3,7 @@
 
 use orbe_model::Time;
 
-use crate::netlist::{MIN_GAP_PS, Source, Value, Waveform};
+use crate::netlist::{MIN_GAP_PS, Value, Waveform};
 
 use std::borrow::Cow;
 use std::fmt;
@@ -315,13 +315,7 @@ fn taken_level(
     let si = wire.value;
     match resolve_value(part, field, unit, false, wire, out) {
         Some(value) => (true, value),
-        None => (
-            false,
-            Value {
-                si,
-                source: Source::User,
-            },
-        ),
+        None => (false, Value { si }),
     }
 }
 

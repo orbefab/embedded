@@ -27,5 +27,4 @@ mod run;
 mod serial_echo;
 mod session;
 mod transistor;
-mod view;
 mod ws2812;

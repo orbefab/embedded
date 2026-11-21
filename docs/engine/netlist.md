@@ -1,6 +1,6 @@
-# Netlist v0
+# Netlist v1
 
-A netlist is fully resolved JSON. `version` is 0. [Version](#version) says which changes keep it. Every field is required except the top-level `world`, and an unknown field is an error. Nothing is filled in by default. A netlist without `world` declares no world quantity, as [World](#world) says.
+A netlist is fully resolved JSON. `version` is 1. [Version](#version) says which changes keep it. Every field is required except the top-level `world`, and an unknown field is an error. Nothing is filled in by default. A netlist without `world` declares no world quantity, as [World](#world) says.
 
 The netlist is the engine's input. Data a part needs lives inside the document, with one exception. A large input, such as an `esp32s3` part's firmware or its mask ROM, is a blob, which the document names by its SHA-256 and length, as [Blobs](#blobs) says.
 
@@ -12,7 +12,7 @@ Values are SI numbers. `unit` must already be the field's unit. Integer values a
 
 ```json
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": { "op": {} },
   "ground": "gnd",
@@ -22,7 +22,7 @@ Values are SI numbers. `unit` must already be the field's unit. Integer values a
       "name": "v1",
       "kind": "voltage_source",
       "pins": { "p": "vin", "n": "gnd" },
-      "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+      "voltage": { "value": 5.0, "unit": "V" }
     },
     {
       "name": "r1",
@@ -30,14 +30,7 @@ Values are SI numbers. `unit` must already be the field's unit. Integer values a
       "pins": { "a": "vin", "b": "vout" },
       "resistance": {
         "value": 1000.0,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "resistor-nominal",
-            "at": "Table 1, nominal",
-            "basis": "nominal"
-          }
-        }
+        "unit": "ohm"
       },
       "ratings": { "power": null }
     },
@@ -45,7 +38,7 @@ Values are SI numbers. `unit` must already be the field's unit. Integer values a
       "name": "r2",
       "kind": "resistor",
       "pins": { "a": "vout", "b": "gnd" },
-      "resistance": { "value": 2000.0, "unit": "ohm", "source": "user" },
+      "resistance": { "value": 2000.0, "unit": "ohm" },
       "ratings": { "power": null }
     }
   ]
@@ -54,7 +47,7 @@ Values are SI numbers. `unit` must already be the field's unit. Integer values a
 
 ## Fields
 
-`version` is `0`. Any number this engine does not read yields only `netlist.version`, even when the rest of the document is valid.
+`version` is `1`. Any number this engine does not read yields only `netlist.version`, even when the rest of the document is valid.
 
 `seed` is an unsigned integer. The manifest records it. It moves switch bounce edges and nothing else. An operating point, and a run whose every `bounce` is `null`, do not depend on it.
 
@@ -82,7 +75,7 @@ The engine stores ground first and sorts the other nets by name. It sorts parts 
 | `max_step_ps` | No time step is longer, in picoseconds. |
 | `grid_ps` | The trace has a row at every multiple of it, in picoseconds. |
 
-All three are JSON integers, like `seed`. They are the scenario's choices, so they carry no unit and no source. A float, a negative number, or a missing field is `netlist.syntax`. `stop_ps` must be greater than 0. `max_step_ps` must be at least 1000 and at most `stop_ps`. `grid_ps` must be at least 1000 and at most `stop_ps`. A break is `netlist.analysis` with the field and the rule.
+All three are JSON integers, like `seed`. They are the scenario's choices, so they carry no unit. A float, a negative number, or a missing field is `netlist.syntax`. `stop_ps` must be greater than 0. `max_step_ps` must be at least 1000 and at most `stop_ps`. `grid_ps` must be at least 1000 and at most `stop_ps`. A break is `netlist.analysis` with the field and the rule.
 
 The rows are t = 0, every multiple of `grid_ps` before `stop_ps`, and `stop_ps`. That is `ceil(stop_ps / grid_ps) + 1` rows. `stop_ps` need not be a multiple of `grid_ps`. The grid never changes the steps, and the longest step is at most `max_step_ps`. A row is a point sample of the solution at its time, solved from the last accepted step and never accepted, as [engine.md](engine.md#rows) says. Between the rows, `envelope.f64` holds each column's minimum and maximum over the two rows and every accepted step between them. [run-folder.md](run-folder.md#traces) says how to read them and how to pick `grid_ps`. A dense switch or source schedule costs steps, not rows, and can hit the run's step limit.
 
@@ -102,11 +95,11 @@ The world is the room the circuit sits in. Its quantities are a closed table, ex
 
 ```json
 "world": {
-  "temperature": { "value": 25.0, "unit": "degC", "source": "user" },
+  "temperature": { "value": 25.0, "unit": "degC" },
   "light": {
     "kind": "steps",
-    "initial": { "value": 300.0, "unit": "lx", "source": "user" },
-    "events": [{ "t_ps": 20000000000, "level": { "value": 50.0, "unit": "lx", "source": "user" } }]
+    "initial": { "value": 300.0, "unit": "lx" },
+    "events": [{ "t_ps": 20000000000, "level": { "value": 50.0, "unit": "lx" } }]
   }
 }
 ```
@@ -127,10 +120,10 @@ A part field that the world drives holds `{"kind": "world", "quantity": ..., "cu
   "quantity": "light",
   "curve": {
     "kind": "power",
-    "x": { "value": 10.0, "unit": "lx", "source": "user" },
-    "y": { "value": 10000.0, "unit": "ohm", "source": "user" },
-    "exponent": { "value": -1.0, "unit": "1", "source": "user" },
-    "max": { "value": 1000000.0, "unit": "ohm", "source": "user" }
+    "x": { "value": 10.0, "unit": "lx" },
+    "y": { "value": 10000.0, "unit": "ohm" },
+    "exponent": { "value": -1.0, "unit": "1" },
+    "max": { "value": 1000000.0, "unit": "ohm" }
   }
 }
 ```
@@ -196,7 +189,7 @@ A potentiometer has no `ratings` field. It has no `i`, `v`, or `p`. Both legs ar
   "name": "i1",
   "kind": "current_source",
   "pins": { "p": "vt", "n": "gnd" },
-  "current": { "value": 0.001, "unit": "A", "source": "user" }
+  "current": { "value": 0.001, "unit": "A" }
 }
 ```
 
@@ -206,15 +199,15 @@ A current source has no `ratings` field. It joins no DC path. A net reached only
 
 ### Source waveforms
 
-A source's `voltage` or `current` is a value object, which holds at every time, or an object with `kind`, which changes. Its levels are values in the source's unit, any finite number. Its times are JSON integers in picoseconds, like `stop_ps`. They are the scenario's choices, so they carry no unit and no source.
+A source's `voltage` or `current` is a value object, which holds at every time, or an object with `kind`, which changes. Its levels are values in the source's unit, any finite number. Its times are JSON integers in picoseconds, like `stop_ps`. They are the scenario's choices, so they carry no unit.
 
 A step holds `initial` until `at_ps`, then `final`.
 
 ```json
 "voltage": {
   "kind": "step",
-  "initial": { "value": 0.0, "unit": "V", "source": "user" },
-  "final": { "value": 5.0, "unit": "V", "source": "user" },
+  "initial": { "value": 0.0, "unit": "V" },
+  "final": { "value": 5.0, "unit": "V" },
   "at_ps": 1000000000
 }
 ```
@@ -224,10 +217,10 @@ A `steps` waveform holds `initial`, then each event's `level` from its `t_ps` on
 ```json
 "voltage": {
   "kind": "steps",
-  "initial": { "value": 0.0, "unit": "V", "source": "user" },
+  "initial": { "value": 0.0, "unit": "V" },
   "events": [
-    { "t_ps": 2000, "level": { "value": 5.0, "unit": "V", "source": "user" } },
-    { "t_ps": 4000, "level": { "value": 1.0, "unit": "V", "source": "user" } }
+    { "t_ps": 2000, "level": { "value": 5.0, "unit": "V" } },
+    { "t_ps": 4000, "level": { "value": 1.0, "unit": "V" } }
   ]
 }
 ```
@@ -239,8 +232,8 @@ A pulse holds `initial` until `delay_ps`, then `pulsed` for `width_ps`, then `in
 ```json
 "current": {
   "kind": "pulse",
-  "initial": { "value": 0.0002, "unit": "A", "source": "user" },
-  "pulsed": { "value": 0.001, "unit": "A", "source": "user" },
+  "initial": { "value": 0.0002, "unit": "A" },
+  "pulsed": { "value": 0.001, "unit": "A" },
   "delay_ps": 1000000000,
   "width_ps": 2000000000,
   "period_ps": 5000000000
@@ -252,8 +245,8 @@ A `serial` waveform holds `mark` while idle and for a 1 bit, and `space` for a s
 ```json
 "voltage": {
   "kind": "serial",
-  "mark": { "value": 5.0, "unit": "V", "source": "user" },
-  "space": { "value": 0.0, "unit": "V", "source": "user" },
+  "mark": { "value": 5.0, "unit": "V" },
+  "space": { "value": 0.0, "unit": "V" },
   "events": [
     { "t_ps": 1000000000, "baud": 9600, "frame": "8N1", "bytes": [49] }
   ]
@@ -291,7 +284,7 @@ A `step` or a `pulse` jump between equal levels is still a jump. A `serial` wave
 `initial` is required. It is a value in `V`, any finite number, or `null`.
 
 ```json
-"initial": { "value": 0.0, "unit": "V", "source": "user" }
+"initial": { "value": 0.0, "unit": "V" }
 ```
 
 A capacitor with `"initial": null` is open at the operating point, so `#c1.i` is 0 there. A capacitor with a value is held there, behind a series resistance of 1 fs divided by its capacitance. That resistance is the backward Euler companion of a 1 fs step. `V(a) - V(b)` is the value plus `#c1.i` times the resistance, and `#c1.i` is the current the hold takes. For 1 uF and 5 mA the voltage moves by 5 pV. A held capacitor across a voltage source, held capacitors in parallel, and held capacitors in series across a source then solve instead of making the matrix singular. Capacitors in parallel share their current by capacitance. Two in parallel at different values meet at their capacitance-weighted mean, as their charge would. A held value that disagrees with a voltage source across it draws the difference over the resistance, 1e9 A per volt for 1 uF. That current also enters the error estimate of the first steps, so they fall to the 1 ps floor and grow back. A missing key is `netlist.syntax`. A wrong unit is `netlist.unit` with field `initial`. In a step the current follows from the voltage across it and the last accepted point.
@@ -305,8 +298,8 @@ A capacitor has no `ratings` field.
 `inductance.value` is in `H` and `series_resistance.value` is in `ohm`. Each follows the resistance rules. It must be greater than 0, and its reciprocal must be finite.
 
 ```json
-"inductance": { "value": 0.505, "unit": "H", "source": "user" },
-"series_resistance": { "value": 70.0, "unit": "ohm", "source": "user" }
+"inductance": { "value": 0.505, "unit": "H" },
+"series_resistance": { "value": 70.0, "unit": "ohm" }
 ```
 
 The series resistance runs from `a` to an internal node, and the inductance runs from that node to `b`. The internal node is not observed. A coil's winding resistance is its series resistance. The resistance must be greater than 0, so an ideal inductor is a small resistance. At the operating point the inductance is a short, and the part is its series resistance. An inductor has no `initial`. Its current at t = 0 is the operating point's. In a step the current follows from the voltage across the inductance and the last accepted point. `packages/engine/tests/circuits/rl-step` steps 5 V across 0.505 H and 70 ohm.
@@ -322,12 +315,12 @@ An inductor has no `ratings` field.
   "name": "k1",
   "kind": "relay",
   "pins": { "coil_a": "vcc", "coil_b": "coil", "com": "vcc", "no": "no", "nc": "nc" },
-  "inductance": { "value": 0.505, "unit": "H", "source": "user" },
-  "coil_resistance": { "value": 70.0, "unit": "ohm", "source": "user" },
-  "pull_in_current": { "value": 0.05357142857142857, "unit": "A", "source": "user" },
-  "drop_out_current": { "value": 0.007142857142857143, "unit": "A", "source": "user" },
-  "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
-  "off_resistance": { "value": 100000000.0, "unit": "ohm", "source": "user" }
+  "inductance": { "value": 0.505, "unit": "H" },
+  "coil_resistance": { "value": 70.0, "unit": "ohm" },
+  "pull_in_current": { "value": 0.05357142857142857, "unit": "A" },
+  "drop_out_current": { "value": 0.007142857142857143, "unit": "A" },
+  "on_resistance": { "value": 0.1, "unit": "ohm" },
+  "off_resistance": { "value": 100000000.0, "unit": "ohm" }
 }
 ```
 
@@ -354,16 +347,16 @@ A relay has no `ratings` field. It has `i`, `v` and `p` of its coil, as [Sign ru
   "name": "sw1",
   "kind": "switch",
   "pins": { "a": "vbtn", "b": "gnd" },
-  "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
-  "off_resistance": { "value": 1000000000.0, "unit": "ohm", "source": "user" },
+  "on_resistance": { "value": 0.1, "unit": "ohm" },
+  "off_resistance": { "value": 1000000000.0, "unit": "ohm" },
   "initial": "open",
   "events": [
     { "t_ps": 2000000000, "state": "closed" },
     { "t_ps": 12000000000, "state": "open" }
   ],
   "bounce": {
-    "window": { "value": 1000000000, "unit": "ps", "source": "user" },
-    "max_bounces": { "value": 4, "unit": "1", "source": "user" }
+    "window": { "value": 1000000000, "unit": "ps" },
+    "max_bounces": { "value": 4, "unit": "1" }
   }
 }
 ```
@@ -614,17 +607,17 @@ The NPN is the 2N3904 row of 2N3903/D Rev. 8, and the PNP is 2N3906/D Rev. 4. `N
   "name": "q1",
   "kind": "npn",
   "pins": { "collector": "c", "base": "b", "emitter": "gnd" },
-  "saturation_current": { "value": 8.095e-15, "unit": "A", "source": "user" },
-  "forward_beta": { "value": 173.2, "unit": "1", "source": "user" },
-  "reverse_beta": { "value": 0.2704, "unit": "1", "source": "user" },
-  "forward_emission": { "value": 1.0, "unit": "1", "source": "user" },
-  "reverse_emission": { "value": 1.0, "unit": "1", "source": "user" },
-  "early_voltage": { "value": 100.0, "unit": "V", "source": "user" },
-  "base_resistance": { "value": 5.707, "unit": "ohm", "source": "user" },
-  "collector_resistance": { "value": 1.531, "unit": "ohm", "source": "user" },
-  "emitter_resistance": { "value": 0.867, "unit": "ohm", "source": "user" },
-  "base_emitter_capacitance": { "value": 8e-12, "unit": "F", "source": "user" },
-  "base_collector_capacitance": { "value": 4e-12, "unit": "F", "source": "user" },
+  "saturation_current": { "value": 8.095e-15, "unit": "A" },
+  "forward_beta": { "value": 173.2, "unit": "1" },
+  "reverse_beta": { "value": 0.2704, "unit": "1" },
+  "forward_emission": { "value": 1.0, "unit": "1" },
+  "reverse_emission": { "value": 1.0, "unit": "1" },
+  "early_voltage": { "value": 100.0, "unit": "V" },
+  "base_resistance": { "value": 5.707, "unit": "ohm" },
+  "collector_resistance": { "value": 1.531, "unit": "ohm" },
+  "emitter_resistance": { "value": 0.867, "unit": "ohm" },
+  "base_emitter_capacitance": { "value": 8e-12, "unit": "F" },
+  "base_collector_capacitance": { "value": 4e-12, "unit": "F" },
   "ratings": { "current": null, "power": null }
 }
 ```
@@ -680,12 +673,12 @@ The values are from 2N7000/D Rev. 5. `VTO` is 1.08 V and `KP` is 0.0468 A/V^2. T
   "name": "m1",
   "kind": "nmos",
   "pins": { "drain": "d", "gate": "g", "source": "gnd" },
-  "transconductance_parameter": { "value": 0.0468, "unit": "A/V^2", "source": "user" },
-  "threshold_voltage": { "value": 1.08, "unit": "V", "source": "user" },
-  "channel_length_modulation": { "value": 0.0, "unit": "1/V", "source": "user" },
-  "gate_source_capacitance": { "value": 55e-12, "unit": "F", "source": "user" },
-  "gate_drain_capacitance": { "value": 5e-12, "unit": "F", "source": "user" },
-  "drain_source_capacitance": { "value": 20e-12, "unit": "F", "source": "user" },
+  "transconductance_parameter": { "value": 0.0468, "unit": "A/V^2" },
+  "threshold_voltage": { "value": 1.08, "unit": "V" },
+  "channel_length_modulation": { "value": 0.0, "unit": "1/V" },
+  "gate_source_capacitance": { "value": 55e-12, "unit": "F" },
+  "gate_drain_capacitance": { "value": 5e-12, "unit": "F" },
+  "drain_source_capacitance": { "value": 20e-12, "unit": "F" },
   "ratings": { "current": null, "power": null }
 }
 ```
@@ -702,18 +695,18 @@ The values are from 2N7000/D Rev. 5. `VTO` is 1.08 V and `KP` is 0.0468 A/V^2. T
     "gnd": "gnd", "trig": "thr", "out": "out", "reset": "vcc",
     "cont": "cont", "thres": "thr", "disch": "dis", "vcc": "vcc"
   },
-  "ladder_resistance": { "value": 5000.0, "unit": "ohm", "source": "user" },
-  "reset_threshold": { "value": 0.7, "unit": "V", "source": "user" },
+  "ladder_resistance": { "value": 5000.0, "unit": "ohm" },
+  "reset_threshold": { "value": 0.7, "unit": "V" },
   "discharge": {
-    "on_resistance": { "value": 18.75, "unit": "ohm", "source": "user" },
-    "off_resistance": { "value": 250000000.0, "unit": "ohm", "source": "user" }
+    "on_resistance": { "value": 18.75, "unit": "ohm" },
+    "off_resistance": { "value": 250000000.0, "unit": "ohm" }
   },
-  "supply_resistance": { "value": 1875.0, "unit": "ohm", "source": "user" },
+  "supply_resistance": { "value": 1875.0, "unit": "ohm" },
   "output": {
-    "high_drop": { "value": 0.9, "unit": "V", "source": "user" },
-    "high_resistance": { "value": 8.0, "unit": "ohm", "source": "user" },
-    "low_drop": { "value": 0.016666666666666666, "unit": "V", "source": "user" },
-    "low_resistance": { "value": 16.666666666666668, "unit": "ohm", "source": "user" }
+    "high_drop": { "value": 0.9, "unit": "V" },
+    "high_resistance": { "value": 8.0, "unit": "ohm" },
+    "low_drop": { "value": 0.016666666666666666, "unit": "V" },
+    "low_resistance": { "value": 16.666666666666668, "unit": "ohm" }
   }
 }
 ```
@@ -744,13 +737,13 @@ A chip has no `ratings` field and no `i`, `v`, or `p`. Its logic levels are refs
 
 ### ATmega328P
 
-`kind` is `atmega328p`, an ATmega328P in its 28-pin DIP running firmware, Microchip DS40002061B. Pins are the package's 28, named as Figure 1-1 prints them and listed in package order: `PC6`, `PD0` to `PD4`, `VCC`, `GND_8`, `PB6`, `PB7`, `PD5` to `PD7`, `PB0` to `PB5`, `AVCC`, `AREF`, `GND_22`, and `PC0` to `PC5`. The two ground pins carry their pin numbers, because a pin name is unique. Every pin is required, so an unused pin sits on a net of its own. `GND_8` and `GND_22` name one net: Figure 1-1 names both pins `GND`, and §1.1.2 gives that pin one function, ground. A part that puts them on two nets is `netlist.same_net` on its `GND_22` pin.
+`kind` is `atmega328p`, an ATmega328P running firmware, Microchip DS40002061B. Pins are the 28-pin DIP's, named as Figure 1-1 prints them and listed in package order: `PC6`, `PD0` to `PD4`, `VCC`, `GND_8`, `PB6`, `PB7`, `PD5` to `PD7`, `PB0` to `PB5`, `AVCC`, `AREF`, `GND_22`, and `PC0` to `PC5`, then `ADC6` and `ADC7`. The two ground pins carry their pin numbers, because a pin name is unique. The DIP's 28 are required, so an unused one sits on a net of its own. `ADC6` and `ADC7` are the TQFP's two inputs of the ADC alone (§1.1.9), with no port behind them, so they join nothing at DC. A part may leave either out, as the DIP has neither, and the ADC reads 0 V on a channel whose pin the part leaves out. `GND_8` and `GND_22` name one net: Figure 1-1 names both pins `GND`, and §1.1.2 gives that pin one function, ground. A part that puts them on two nets is `netlist.same_net` on its `GND_22` pin.
 
 This document runs `packages/engine/tests/firmware/toggle.S` at 16 MHz into 1 kohm on PB5. `cx1` and `cx2` are the crystal's load capacitors and `cref` decouples `AREF`. Each is held at 0 V at the operating point, which gives its net a DC path.
 
 ```json
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": { "transient": { "stop_ps": 20000000, "max_step_ps": 1000000, "grid_ps": 1000000 } },
   "ground": "gnd",
@@ -764,35 +757,35 @@ This document runs `packages/engine/tests/firmware/toggle.S` at 16 MHz into 1 ko
       "name": "v1",
       "kind": "voltage_source",
       "pins": { "p": "vcc", "n": "gnd" },
-      "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+      "voltage": { "value": 5.0, "unit": "V" }
     },
     {
       "name": "r1",
       "kind": "resistor",
       "pins": { "a": "pb5", "b": "gnd" },
-      "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+      "resistance": { "value": 1000.0, "unit": "ohm" },
       "ratings": { "power": null }
     },
     {
       "name": "cx1",
       "kind": "capacitor",
       "pins": { "a": "xtal1", "b": "gnd" },
-      "capacitance": { "value": 2.2e-11, "unit": "F", "source": "user" },
-      "initial": { "value": 0.0, "unit": "V", "source": "user" }
+      "capacitance": { "value": 2.2e-11, "unit": "F" },
+      "initial": { "value": 0.0, "unit": "V" }
     },
     {
       "name": "cx2",
       "kind": "capacitor",
       "pins": { "a": "xtal2", "b": "gnd" },
-      "capacitance": { "value": 2.2e-11, "unit": "F", "source": "user" },
-      "initial": { "value": 0.0, "unit": "V", "source": "user" }
+      "capacitance": { "value": 2.2e-11, "unit": "F" },
+      "initial": { "value": 0.0, "unit": "V" }
     },
     {
       "name": "cref",
       "kind": "capacitor",
       "pins": { "a": "aref", "b": "gnd" },
-      "capacitance": { "value": 1e-07, "unit": "F", "source": "user" },
-      "initial": { "value": 0.0, "unit": "V", "source": "user" }
+      "capacitance": { "value": 1e-07, "unit": "F" },
+      "initial": { "value": 0.0, "unit": "V" }
     },
     {
       "name": "u1",
@@ -805,56 +798,45 @@ This document runs `packages/engine/tests/firmware/toggle.S` at 16 MHz into 1 ko
         "PC0": "pc0", "PC1": "pc1", "PC2": "pc2", "PC3": "pc3", "PC4": "pc4", "PC5": "pc5"
       },
       "firmware": ":10000000259A1D9A0FE10A95F1F700000000000003\n:02001000F8CF27\n:00000001FF\n",
-      "clock_hz": { "value": 16000000, "unit": "Hz", "source": "user" },
+      "clock_hz": { "value": 16000000, "unit": "Hz" },
       "fuses": { "low": 255, "high": 217, "extended": 253 },
       "output": {
         "high_drop": {
-          "value": 0.0, "unit": "V",
-          "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-355", "basis": "typical" } }
+          "value": 0.0, "unit": "V"
         },
         "high_resistance": {
-          "value": 25.0, "unit": "ohm",
-          "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-355", "basis": "typical" } }
+          "value": 25.0, "unit": "ohm"
         },
         "low_drop": {
-          "value": 0.0, "unit": "V",
-          "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-353", "basis": "typical" } }
+          "value": 0.0, "unit": "V"
         },
         "low_resistance": {
-          "value": 25.0, "unit": "ohm",
-          "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-353", "basis": "typical" } }
+          "value": 25.0, "unit": "ohm"
         }
       },
       "pull_up_resistance": {
-        "value": 35714.0, "unit": "ohm",
-        "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-348", "basis": "typical" } }
+        "value": 35714.0, "unit": "ohm"
       },
       "reset_pull_up_resistance": {
-        "value": 46296.0, "unit": "ohm",
-        "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-351", "basis": "typical" } }
+        "value": 46296.0, "unit": "ohm"
       },
       "leakage_resistance": {
-        "value": 5500000.0, "unit": "ohm",
-        "source": { "closed_form": { "note": "DS40002061B Table 30-1: IIL and IIH at most 1 uA at VCC = 5.5 V, so 5.5 V / 1 uA" } }
+        "value": 5500000.0, "unit": "ohm"
       },
       "input_threshold": {
         "low": {
-          "value": 0.42, "unit": "1",
-          "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-357", "basis": "typical" } }
+          "value": 0.42, "unit": "1"
         },
         "high": {
-          "value": 0.52, "unit": "1",
-          "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-356", "basis": "typical" } }
+          "value": 0.52, "unit": "1"
         }
       },
       "reset_threshold": {
         "low": {
-          "value": 0.42, "unit": "1",
-          "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-360", "basis": "typical" } }
+          "value": 0.42, "unit": "1"
         },
         "high": {
-          "value": 0.44, "unit": "1",
-          "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-359", "basis": "typical" } }
+          "value": 0.44, "unit": "1"
         }
       }
     }
@@ -918,7 +900,7 @@ The example's values but one are typical curves at VCC = 5 V, read by eye, not d
 | `reset_threshold` | 0.42 and 0.44 | Figures 31-360 and 31-359, about 2.1 V falling and 2.2 V rising. |
 | `leakage_resistance` | 5.5 Mohm | Derived from Table 30-1, which bounds `IIL` and `IIH` at 1 uA at VCC = 5.5 V. With the pin at one rail, 5.5 V across 5.5 Mohm to the other is that 1 uA. It is an approximation: the leakage at its bound, written as a resistance. Table 30-1 gives `RESET` no bound of its own, and `PC6` takes the I/O pin's. |
 
-Table 30-1's limits are wider. The pull-up there is 20 to 50 kohm and the reset pull-up 30 to 60 kohm. `VIL` is at most 0.3 VCC and `VIH` at least 0.6 VCC, where a read is ensured, not where it trips, and `RESET`'s are at most 0.1 VCC and at least 0.9 VCC. A corner is that value written with basis `min` or `max`.
+Table 30-1's limits are wider. The pull-up there is 20 to 50 kohm and the reset pull-up 30 to 60 kohm. `VIL` is at most 0.3 VCC and `VIH` at least 0.6 VCC, where a read is ensured, not where it trips, and `RESET`'s are at most 0.1 VCC and at least 0.9 VCC. A corner run takes one of those limits instead.
 
 Each port pin, `PC6` included, is a DC path to `VCC` and to `GND_8` in every drive state, through its leakage, and the solve stamps that leakage in every state. An output stage beside it moves the pin by about 5 ppm of the supply. A net that only an off pin holds solves on that leakage, not on gmin. `PB6`, `PB7` and `AREF` join nothing, so a net reached only through them is `net.floating`. So is a net reached only through `AVCC`. §1.1.7 makes `AVCC` the supply of the ADC and of `PC3` to `PC0`, and says it must be connected to `VCC` even when the ADC is unused. The model draws every pin's stages, `PC3` to `PC0` included, from `VCC`, and reads `AVCC` only at an ADC sample, so it joins nothing. That is the datasheet's circuit while `AVCC` is wired to `VCC`, and an `AVCC` left on a net of its own is reported. An unused port pin on a net of its own is not. An off pin with no load sits at half the supply, inside the band between the defaults' `input_threshold.low` and `input_threshold.high`, so it reads low from power-on and then keeps its last level. Thresholds that put half the supply outside the band read it as that side.
 
@@ -934,11 +916,11 @@ Each port pin, `PC6` included, is a DC path to `VCC` and to `GND_8` in every dri
 
 ```json
 "ratings": {
-  "pin_current": { "value": 0.04, "unit": "A", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: DC Current per I/O Pin, 40.0 mA", "basis": "absolute_max" } } },
-  "supply_current": { "value": 0.2, "unit": "A", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: DC Current VCC and GND Pins, 200.0 mA", "basis": "absolute_max" } } },
-  "rail_margin": { "value": 0.5, "unit": "V", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: Voltage on any Pin except RESET with respect to Ground, -0.5 V to VCC + 0.5 V", "basis": "absolute_max" } } },
-  "reset_voltage": { "value": 13.0, "unit": "V", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: Voltage on RESET with respect to Ground, -0.5 V to +13.0 V", "basis": "absolute_max" } } },
-  "supply_voltage": { "value": 6.0, "unit": "V", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: Maximum Operating Voltage, 6.0 V", "basis": "absolute_max" } } }
+  "pin_current": { "value": 0.04, "unit": "A" },
+  "supply_current": { "value": 0.2, "unit": "A" },
+  "rail_margin": { "value": 0.5, "unit": "V" },
+  "reset_voltage": { "value": 13.0, "unit": "V" },
+  "supply_voltage": { "value": 6.0, "unit": "V" }
 }
 ```
 
@@ -962,12 +944,12 @@ An ATmega328P has no `i`, `v`, or `p`. Its logic signals are its watched pins, d
     "VCC": "v3v3", "GND": "gnd", "CS": "cs", "SCLK": "sclk",
     "D0": "d0", "D1": "d1", "D2": "d2", "D3": "d3"
   },
-  "clock_hz": { "value": 40000000, "unit": "Hz", "source": "user" },
+  "clock_hz": { "value": 40000000, "unit": "Hz" },
   "output": {
-    "high_drop": { "value": 0.0, "unit": "V", "source": "user" },
-    "high_resistance": { "value": 25.0, "unit": "ohm", "source": "user" },
-    "low_drop": { "value": 0.0, "unit": "V", "source": "user" },
-    "low_resistance": { "value": 25.0, "unit": "ohm", "source": "user" }
+    "high_drop": { "value": 0.0, "unit": "V" },
+    "high_resistance": { "value": 25.0, "unit": "ohm" },
+    "low_drop": { "value": 0.0, "unit": "V" },
+    "low_resistance": { "value": 25.0, "unit": "ohm" }
   },
   "events": [
     {
@@ -1017,14 +999,14 @@ A `spi_replay` has no `ratings` object and no `i`, `v`, or `p`. It has no logic 
     "RST": "rst", "TE": "te", "BLK": "v3v3"
   },
   "output": {
-    "high_drop": { "value": 0.0, "unit": "V", "source": "user" },
-    "high_resistance": { "value": 25.0, "unit": "ohm", "source": "user" },
-    "low_drop": { "value": 0.0, "unit": "V", "source": "user" },
-    "low_resistance": { "value": 25.0, "unit": "ohm", "source": "user" }
+    "high_drop": { "value": 0.0, "unit": "V" },
+    "high_resistance": { "value": 25.0, "unit": "ohm" },
+    "low_drop": { "value": 0.0, "unit": "V" },
+    "low_resistance": { "value": 25.0, "unit": "ohm" }
   },
   "input_threshold": {
-    "low": { "value": 0.3, "unit": "1", "source": "user" },
-    "high": { "value": 0.7, "unit": "1", "source": "user" }
+    "low": { "value": 0.3, "unit": "1" },
+    "high": { "value": 0.7, "unit": "1" }
   }
 }
 ```
@@ -1070,11 +1052,11 @@ An `st77916` has no `ratings` object and no `i`, `v`, or `p`. Its logic signal i
   "pins": {
     "VCC": "vcc", "GND": "gnd", "SCL": "pc5", "SDA": "pc4", "INT": "pd2", "RST": "vcc"
   },
-  "low_drop": { "value": 0.0, "unit": "V", "source": "user" },
-  "low_resistance": { "value": 133.3, "unit": "ohm", "source": "user" },
+  "low_drop": { "value": 0.0, "unit": "V" },
+  "low_resistance": { "value": 133.3, "unit": "ohm" },
   "input_threshold": {
-    "low": { "value": 0.3, "unit": "1", "source": "user" },
-    "high": { "value": 0.7, "unit": "1", "source": "user" }
+    "low": { "value": 0.3, "unit": "1" },
+    "high": { "value": 0.7, "unit": "1" }
   },
   "touches": [
     { "t_ps": 20000000000, "x": 291, "y": 69, "down": true },
@@ -1131,12 +1113,10 @@ The same sheet, page 2, gives `VIH` as at least 0.7 VDD and `VIL` as at most 0.7
   "leds": 13,
   "input_threshold": {
     "low": {
-      "value": 0.14, "unit": "1",
-      "source": { "datasheet": { "doc": "WS2812E-1313", "at": "V1.1 page 2, Electrical Characteristics, VIL 0.7 V at VDD 5 V; 0.7 V / 5 V", "basis": "max" } }
+      "value": 0.14, "unit": "1"
     },
     "high": {
-      "value": 0.7, "unit": "1",
-      "source": { "datasheet": { "doc": "WS2812E-1313", "at": "V1.1 page 2, Electrical Characteristics, VIH 0.7 VDD", "basis": "min" } }
+      "value": 0.7, "unit": "1"
     }
   }
 }
@@ -1170,17 +1150,14 @@ A read sends the last measurement, and the end of each reply starts the next one
   "kind": "dht22",
   "pins": { "VCC": "nano__5V", "DATA": "nano__D2", "GND": "nano__GND" },
   "low_resistance": {
-    "value": 37.5, "unit": "ohm",
-    "source": { "closed_form": { "note": "table 4: low output voltage at most 300 mV, and output current 8 mA typical when on. 300 mV / 8 mA. The sheet gives no typical low voltage, so the open drain is its worst case" } }
+    "value": 37.5, "unit": "ohm"
   },
   "input_threshold": {
     "low": {
-      "value": 0.3, "unit": "1",
-      "source": { "datasheet": { "doc": "Aosong AM2302 product manual v1.1", "at": "table 4, low input voltage, falling, at most 30 % of VDD", "basis": "max" } }
+      "value": 0.3, "unit": "1"
     },
     "high": {
-      "value": 0.7, "unit": "1",
-      "source": { "datasheet": { "doc": "Aosong AM2302 product manual v1.1", "at": "table 4, high input voltage, rising, at least 70 % of VDD", "basis": "min" } }
+      "value": 0.7, "unit": "1"
     }
   }
 }
@@ -1231,16 +1208,16 @@ A `pulses_replay` has no `ratings` object and no `i`, `v`, or `p`. It has no log
     }
   },
   "output": {
-    "high_drop": { "value": 0.0, "unit": "V", "source": "user" },
-    "high_resistance": { "value": 16.5, "unit": "ohm", "source": "user" },
-    "low_drop": { "value": 0.0, "unit": "V", "source": "user" },
-    "low_resistance": { "value": 17.68, "unit": "ohm", "source": "user" }
+    "high_drop": { "value": 0.0, "unit": "V" },
+    "high_resistance": { "value": 16.5, "unit": "ohm" },
+    "low_drop": { "value": 0.0, "unit": "V" },
+    "low_resistance": { "value": 17.68, "unit": "ohm" }
   },
-  "pull_up_resistance": { "value": 45000.0, "unit": "ohm", "source": "user" },
-  "leakage_resistance": { "value": 66000000.0, "unit": "ohm", "source": "user" },
+  "pull_up_resistance": { "value": 45000.0, "unit": "ohm" },
+  "leakage_resistance": { "value": 66000000.0, "unit": "ohm" },
   "input_threshold": {
-    "low": { "value": 0.25, "unit": "1", "source": "user" },
-    "high": { "value": 0.75, "unit": "1", "source": "user" }
+    "low": { "value": 0.25, "unit": "1" },
+    "high": { "value": 0.75, "unit": "1" }
   }
 }
 ```
@@ -1348,30 +1325,10 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 `current`, `pin_current` and `supply_current` are in `A`. `power` is in `W`. `rail_margin`, `reset_voltage` and `supply_voltage` are in `V`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object where it is required are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.<key>`, such as `ratings.current`. A value of 0 or below is `netlist.value` with the same field.
 
 ```json
-"ratings": { "power": { "value": 0.25, "unit": "W", "source": "user" } }
+"ratings": { "power": { "value": 0.25, "unit": "W" } }
 ```
 
 The run compares the magnitude of each rated quantity with its rating, and each rated pin's voltage with its window. A DC rating, an `atmega328p`'s `pin_current` and `supply_current` and a `voltage_source`'s `current`, is compared through the quantity's RMS over the last 10.2 ms. Going over is a warning, `rating.current`, `rating.power` or `rating.voltage`, in [diagnostics.md](diagnostics.md).
-
-## Sources
-
-`source` is one of three forms. An integer value such as `bounce.window` takes the same forms.
-
-- `"user"`
-- `{"closed_form": {"note": "<text>"}}`
-- `{"datasheet": {"doc": "<id>", "at": "<place>", "basis": "<basis>"}}`
-
-`note`, `doc`, and `at` are strings. `basis` says which figure of the datasheet the value is. Any other string is `netlist.syntax`.
-
-| `basis` | The value is |
-| --- | --- |
-| `typical` | a typical column, or read off a typical-only curve |
-| `min` | a minimum column |
-| `max` | a maximum column, recommended operating conditions included |
-| `nominal` | the part's stated value, such as a schematic value or a marked resistance |
-| `absolute_max` | an absolute maximum rating |
-
-The solve uses `value` alone.
 
 ## Sign rules
 
@@ -1443,12 +1400,14 @@ Map keys and diagnostic order use this order: nets, then parts, then pins, then 
 A version names a set of valid documents and what each one means. A change that keeps every valid document valid, with the same meaning, keeps the version. These keep it:
 
 - a new part kind
-- a new source form or a new waveform kind
+- a new waveform kind
 - a new analysis
-- a new value of a string enum, such as a `basis`
+- a new value of a string enum, such as a `frame`
 - a rule that accepts more documents than before
 - an optional field whose absence keeps an older document's meaning, such as `world`
 
 Every other change bumps it. A new required field on an existing object bumps it, because an unknown field is an error and an older document lacks it.
 
-The engine reads the versions in a list. This engine reads `[0]`. `netlist.version`'s `data.supported` is that list. A document whose `version` is not in the list yields only `netlist.version`. The engine reads an older listed version with that version's own rules, and gives it its old meaning.
+The engine reads the versions in a list. This engine reads `[1]`. `netlist.version`'s `data.supported` is that list. A document whose `version` is not in the list yields only `netlist.version`. The engine reads an older listed version with that version's own rules, and gives it its old meaning.
+
+Version 0 also gave every value a `source`, where the value came from. The solve never read it, so version 1 drops it. A part file still gives one, as the scene reader checks.

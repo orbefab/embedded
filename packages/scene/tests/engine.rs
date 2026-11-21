@@ -7,6 +7,7 @@ use orbe_engine::netlist::Contact;
 
 mod common;
 
+use orbe_engine::blob::Blobs;
 use orbe_engine::name::{Name, Ref};
 
 use orbe_engine::{Input, Session, Setting, Status};
@@ -33,7 +34,7 @@ fn read(session: &Session, r: &str) -> f64 {
 fn pressing_the_button_lights_led1() {
     let project = common::project("nano-button");
     let netlist = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc")).unwrap();
-    let mut session = Session::open_document(netlist.json.as_bytes()).unwrap();
+    let mut session = Session::open_json(netlist.json.as_bytes(), &Blobs::new()).unwrap();
     for (at, contact) in [(50, Contact::Closed), (150, Contact::Open)] {
         let input = Input {
             part: Name::new("btn1").unwrap(),

@@ -5,7 +5,7 @@ use orbe_engine::name::Quantity;
 fn regulator(fields: &str) -> String {
     format!(
         r#"{{
-          "version": 0,
+          "version": 1,
           "seed": 0,
           "analysis": {{ "op": {{}} }},
           "ground": "gnd",
@@ -25,14 +25,14 @@ fn regulator(fields: &str) -> String {
 fn fitted() -> String {
     regulator(
         r#"
-          "output_voltage": { "value": 3.3, "unit": "V", "source": "user" },
-          "line_regulation": { "value": 0.0, "unit": "1", "source": "user" },
-          "output_resistance": { "value": 0.00125, "unit": "ohm", "source": "user" },
-          "dropout_voltage": { "value": 1.1, "unit": "V", "source": "user" },
-          "dropout_resistance": { "value": 0.14, "unit": "ohm", "source": "user" },
-          "current_limit": { "value": 1.2, "unit": "A", "source": "user" },
-          "quiescent_current": { "value": 0.0, "unit": "A", "source": "user" },
-          "ground_current_ratio": { "value": 0.0, "unit": "1", "source": "user" },
+          "output_voltage": { "value": 3.3, "unit": "V" },
+          "line_regulation": { "value": 0.0, "unit": "1" },
+          "output_resistance": { "value": 0.00125, "unit": "ohm" },
+          "dropout_voltage": { "value": 1.1, "unit": "V" },
+          "dropout_resistance": { "value": 0.14, "unit": "ohm" },
+          "current_limit": { "value": 1.2, "unit": "A" },
+          "quiescent_current": { "value": 0.0, "unit": "A" },
+          "ground_current_ratio": { "value": 0.0, "unit": "1" },
           "ratings": { "current": null, "power": null }
         "#,
     )
@@ -67,8 +67,8 @@ fn a_regulator_parses_and_rates_iout() {
     let rated = fitted().replace(
         r#""ratings": { "current": null, "power": null }"#,
         r#""ratings": {
-            "current": { "value": 1.0, "unit": "A", "source": "user" },
-            "power": { "value": 2.0, "unit": "W", "source": "user" }
+            "current": { "value": 1.0, "unit": "A" },
+            "power": { "value": 2.0, "unit": "W" }
         }"#,
     );
     let rated = netlist::parse(rated.as_bytes()).unwrap();
@@ -107,7 +107,6 @@ fn edited(field: &str, value: &str, unit: &str) -> String {
     *target = serde_json::json!({
         "value": serde_json::from_str::<serde_json::Value>(value).unwrap(),
         "unit": unit,
-        "source": "user",
     });
     doc.to_string()
 }

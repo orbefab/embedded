@@ -7,7 +7,7 @@ use crate::common;
 use common::{errors, with_parts};
 
 fn level(value: f64, unit: &str) -> String {
-    format!(r#"{{ "value": {value:?}, "unit": "{unit}", "source": "user" }}"#)
+    format!(r#"{{ "value": {value:?}, "unit": "{unit}" }}"#)
 }
 
 fn source(kind: &str, key: &str, drive: &str) -> String {
@@ -122,7 +122,7 @@ fn a_resistor_has_no_next_change() {
     let json = with_parts(
         r#"{ "op": {} }"#,
         r#"{ "name": "r1", "kind": "resistor", "pins": { "a": "a", "b": "gnd" },
-             "resistance": { "value": 1.0, "unit": "ohm", "source": "user" }, "ratings": { "power": null } }"#,
+             "resistance": { "value": 1.0, "unit": "ohm" }, "ratings": { "power": null } }"#,
     );
     let netlist = parse(&json);
     assert!(
@@ -271,7 +271,7 @@ fn a_malformed_waveform_is_one_syntax_error_with_serde_detail() {
             "unknown field `value`",
         ),
         (
-            level(0.001, "A").replace(r#""source""#, r#""at_ps": 5, "source""#),
+            level(0.001, "A").replace(r#""unit""#, r#""at_ps": 5, "unit""#),
             "unknown field `at_ps`",
         ),
         (

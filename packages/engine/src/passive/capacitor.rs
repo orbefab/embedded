@@ -98,19 +98,19 @@ mod tests {
 
         let netlist = netlist::parse(
             br#"{
-              "version": 0,
+              "version": 1,
               "seed": 0,
               "analysis": { "op": {} },
               "ground": "gnd",
               "nets": ["gnd", "n"],
               "parts": [
                 { "name": "a_r", "kind": "resistor", "pins": { "a": "n", "b": "gnd" },
-                  "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+                  "resistance": { "value": 1000.0, "unit": "ohm" },
                   "ratings": { "power": null } },
                 { "name": "b_v", "kind": "voltage_source", "pins": { "p": "n", "n": "gnd" },
-                  "voltage": { "value": 2.0, "unit": "V", "source": "user" } },
+                  "voltage": { "value": 2.0, "unit": "V" } },
                 { "name": "c_c", "kind": "capacitor", "pins": { "a": "n", "b": "gnd" },
-                  "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
+                  "capacitance": { "value": 1e-6, "unit": "F" },
                   "initial": null }
               ]
             }"#,

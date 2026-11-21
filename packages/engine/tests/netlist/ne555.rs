@@ -1,12 +1,11 @@
 use orbe_engine::chip::Ne555;
-use orbe_engine::netlist::{self, Chip, Model, Netlist, Source};
+use orbe_engine::netlist::{self, Chip, Model, Netlist};
 
 use orbe_engine::diagnostic::Diagnostic;
 
 /// One NE555 with every field, and `edit` applied to its JSON object.
 fn chip(edit: impl FnOnce(&mut serde_json::Value)) -> Result<Netlist, Vec<Diagnostic>> {
-    let value =
-        |v: f64, unit: &str| serde_json::json!({ "value": v, "unit": unit, "source": "user" });
+    let value = |v: f64, unit: &str| serde_json::json!({ "value": v, "unit": unit });
     let mut part = serde_json::json!({
         "name": "u1",
         "kind": "ne555",
@@ -30,7 +29,7 @@ fn chip(edit: impl FnOnce(&mut serde_json::Value)) -> Result<Netlist, Vec<Diagno
     });
     edit(&mut part);
     let document = serde_json::json!({
-        "version": 0,
+        "version": 1,
         "seed": 0,
         "analysis": { "op": {} },
         "ground": "gnd",
@@ -69,7 +68,6 @@ fn an_ne555_parses_with_its_pins_in_package_order() {
     );
     assert_eq!(chip.discharge.off_resistance.si.get(), 2.5e8);
     assert_eq!(chip.output.low_drop.si.get(), 0.0);
-    assert_eq!(chip.reset_threshold.source, Source::User);
     let (_, part) = netlist.parts().next().unwrap();
     assert!(part.model.ratings().is_empty());
 }

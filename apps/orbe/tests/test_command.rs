@@ -160,7 +160,7 @@ fn each_command_replies_in_text() {
         block(0),
         [
             "2> open",
-            "  opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 19 engine parts, 32 nets)",
+            "  opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 19 engine parts, 34 nets)",
         ]
     );
     assert_eq!(
@@ -323,7 +323,7 @@ fn each_command_replies_with_one_json_envelope() {
             open["data"]["engine_parts"].as_u64(),
             open["data"]["nets"].as_u64()
         ),
-        (Some(19), Some(32))
+        (Some(19), Some(34))
     );
     assert_eq!(open["data"]["diagnostics"].as_array().unwrap().len(), 0);
 
@@ -840,6 +840,52 @@ get @world.light
         "{}",
         run.stdout
     );
+}
+
+/// A Nano's A6 and A7 are the TQFP's ADC6 and ADC7. Dividers from 5V put 2/3 of it on A6 and
+/// 1/3 on A7, and the sketch prints both codes every 10 ms.
+#[test]
+fn a_nano_reads_the_voltage_on_a6_and_a7() {
+    let dir = project(
+        "\
+open
+step 50ms
+expect serial contains \"A6=682 A7=341\"
+expect no diagnostics
+",
+    );
+    fs::write(
+        dir.path().join("scene.jsonc"),
+        r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/analog_a6_a7.ino.hex" },
+    "r6a": { "type": "resistor-axial", "resistance": "10k" },
+    "r6b": { "type": "resistor-axial", "resistance": "20k" },
+    "r7a": { "type": "resistor-axial", "resistance": "20k" },
+    "r7b": { "type": "resistor-axial", "resistance": "10k" },
+  },
+  "wires": [
+    ["nano.5V", "r6a.a"],
+    ["r6a.b", "nano.A6"],
+    ["nano.A6", "r6b.a"],
+    ["r6b.b", "nano.GND"],
+    ["nano.5V", "r7a.a"],
+    ["r7a.b", "nano.A7"],
+    ["nano.A7", "r7b.a"],
+    ["r7b.b", "nano.GND"],
+  ],
+}
+"#,
+    )
+    .unwrap();
+    fs::copy(
+        common::repo().join("packages/engine/tests/firmware/sketch/analog_a6_a7.hex"),
+        dir.path().join("build/analog_a6_a7.ino.hex"),
+    )
+    .unwrap();
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
 }
 
 /// A Nano reads a DHT22 every 2 s, from 2 s on, and prints what it read. A read sends what the

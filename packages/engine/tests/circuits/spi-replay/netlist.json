@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": { "transient": { "stop_ps": 100000000, "max_step_ps": 10000000, "grid_ps": 10000000 } },
   "ground": "gnd",
@@ -12,12 +12,12 @@
         "VCC": "v3v3", "GND": "gnd", "CS": "cs", "SCLK": "sclk",
         "D0": "d0", "D1": "d1", "D2": "d2", "D3": "d3"
       },
-      "clock_hz": { "value": 40000000, "unit": "Hz", "source": "user" },
+      "clock_hz": { "value": 40000000, "unit": "Hz" },
       "output": {
-        "high_drop": { "value": 0.0, "unit": "V", "source": "user" },
-        "high_resistance": { "value": 25.0, "unit": "ohm", "source": "user" },
-        "low_drop": { "value": 0.0, "unit": "V", "source": "user" },
-        "low_resistance": { "value": 25.0, "unit": "ohm", "source": "user" }
+        "high_drop": { "value": 0.0, "unit": "V" },
+        "high_resistance": { "value": 25.0, "unit": "ohm" },
+        "low_drop": { "value": 0.0, "unit": "V" },
+        "low_resistance": { "value": 25.0, "unit": "ohm" }
       },
       "events": [
         {
@@ -57,7 +57,7 @@
       "name": "v1",
       "kind": "voltage_source",
       "pins": { "p": "v3v3", "n": "gnd" },
-      "voltage": { "value": 3.3, "unit": "V", "source": "user" }
+      "voltage": { "value": 3.3, "unit": "V" }
     }
   ]
 }

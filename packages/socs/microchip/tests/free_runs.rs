@@ -398,7 +398,7 @@ fn shipped_and_interrupt_heavy_images_run_as_stepped() {
     for path in images {
         let image = parse_hex(&std::fs::read_to_string(&path).unwrap()).unwrap();
         matches_stepping_from(
-            &|cpu| cpu.load_image(&image).unwrap(),
+            &|cpu| cpu.load_flash(&image),
             &boundaries,
             &path.display().to_string(),
         );
@@ -451,7 +451,7 @@ fn delay_images_run_as_stepped_at_dense_boundaries() {
         matches_stepping_from(
             &|cpu| {
                 cpu.set_fuses(PART_FUSES.low, PART_FUSES.high, PART_FUSES.extended);
-                cpu.load_image(&image).unwrap();
+                cpu.load_flash(&image);
             },
             &boundaries,
             &path.display().to_string(),

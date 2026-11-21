@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": {
     "transient": {
@@ -26,8 +26,7 @@
       },
       "voltage": {
         "value": 5.0,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -39,8 +38,7 @@
       },
       "voltage": {
         "value": 2.5,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -54,13 +52,11 @@
         "kind": "pulse",
         "initial": {
           "value": 0.0,
-          "unit": "V",
-          "source": "user"
+          "unit": "V"
         },
         "pulsed": {
           "value": 5.0,
-          "unit": "V",
-          "source": "user"
+          "unit": "V"
         },
         "delay_ps": 10000000,
         "width_ps": 50000000,
@@ -70,7 +66,7 @@
     {
       "name": "u1",
       "kind": "op_amp",
-      "input_headroom": { "value": 0.0, "unit": "V", "source": "user" },
+      "input_headroom": { "value": 0.0, "unit": "V" },
       "pins": {
         "in_p": "inp",
         "in_n": "vref",
@@ -80,94 +76,39 @@
       },
       "gain_bandwidth": {
         "value": 1000000.0,
-        "unit": "Hz",
-        "source": {
-          "datasheet": {
-            "doc": "TI SLOS263Y",
-            "at": "p7 section 6.8, B1 unity-gain bandwidth at VCC 5 V, CL 200 pF",
-            "basis": "typical"
-          }
-        }
+        "unit": "Hz"
       },
       "slew_rate": {
         "value": 1000000.0,
-        "unit": "V/s",
-        "source": {
-          "datasheet": {
-            "doc": "TI SLOS263Y",
-            "at": "p7 section 6.8, SR slew rate at VCC 5 V",
-            "basis": "typical"
-          }
-        }
+        "unit": "V/s"
       },
       "open_loop_gain": {
         "value": 100000.0,
-        "unit": "1",
-        "source": {
-          "datasheet": {
-            "doc": "TI SLOS263Y",
-            "at": "p7 section 6.8, AVD 100 V/mV at VCC 5 V, RL 2 kohm",
-            "basis": "typical"
-          }
-        }
+        "unit": "1"
       },
       "input_bias_current": {
         "value": 1.5e-08,
-        "unit": "A",
-        "source": {
-          "datasheet": {
-            "doc": "TI SLOS263Y",
-            "at": "p7 section 6.8, IIB input bias current at VCC 5 V",
-            "basis": "typical"
-          }
-        }
+        "unit": "A"
       },
       "swing_high": {
         "value": 0.0025,
-        "unit": "V",
-        "source": {
-          "closed_form": {
-            "note": "p7 section 6.8 VOH typicals at VCC 5 V, VCC - 10 mV into 10 kohm and VCC - 40 mV into 2 kohm, both to 2.5 V. The line through them falls 30.6 ohm and starts 2.4 mV below VCC, rounded to 2.5 mV"
-          }
-        }
+        "unit": "V"
       },
       "swing_low": {
         "value": 0.051,
-        "unit": "V",
-        "source": {
-          "closed_form": {
-            "note": "p7 section 6.8 VOL typicals at VCC 5 V, 65 mV into 10 kohm and 120 mV into 2 kohm, both to 2.5 V. The line through them starts at 50.9 mV, rounded to 51 mV. Its 58 ohm slope is not output_resistance, so the model reads VOL 58 mV and 87 mV at those loads"
-          }
-        }
+        "unit": "V"
       },
       "output_resistance": {
         "value": 30.0,
-        "unit": "ohm",
-        "source": {
-          "closed_form": {
-            "note": "the slope of the swing_high line, 30 mV over 0.98 mA, rounded"
-          }
-        }
+        "unit": "ohm"
       },
       "short_circuit_current": {
         "value": 0.04,
-        "unit": "A",
-        "source": {
-          "datasheet": {
-            "doc": "TI SLOS263Y",
-            "at": "p7 section 6.8, IOS 40 mA typical sourcing at VO 0 V and sinking at VO 5 V",
-            "basis": "typical"
-          }
-        }
+        "unit": "A"
       },
       "supply_current": {
         "value": 0.000105,
-        "unit": "A",
-        "source": {
-          "closed_form": {
-            "note": "p7 section 6.8 ICC 210 uA typical at VCC 5 V for both channels of the LMV358, halved"
-          }
-        }
+        "unit": "A"
       }
     }
   ]

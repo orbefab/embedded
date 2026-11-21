@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": {
     "op": {}
@@ -21,8 +21,7 @@
       },
       "voltage": {
         "value": 0.0,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -34,8 +33,7 @@
       },
       "voltage": {
         "value": 0.27,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -47,8 +45,7 @@
       },
       "voltage": {
         "value": 0.13,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -61,58 +58,47 @@
       },
       "saturation_current": {
         "value": 1e-08,
-        "unit": "A",
-        "source": "user"
+        "unit": "A"
       },
       "forward_beta": {
         "value": 173.2,
-        "unit": "1",
-        "source": "user"
+        "unit": "1"
       },
       "reverse_beta": {
         "value": 0.2704,
-        "unit": "1",
-        "source": "user"
+        "unit": "1"
       },
       "forward_emission": {
         "value": 1.5,
-        "unit": "1",
-        "source": "user"
+        "unit": "1"
       },
       "reverse_emission": {
         "value": 2.0,
-        "unit": "1",
-        "source": "user"
+        "unit": "1"
       },
       "early_voltage": {
         "value": 100.0,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       },
       "base_resistance": {
         "value": 5.707,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "collector_resistance": {
         "value": 1.531,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "emitter_resistance": {
         "value": 0.867,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "base_emitter_capacitance": {
         "value": 8e-12,
-        "unit": "F",
-        "source": "user"
+        "unit": "F"
       },
       "base_collector_capacitance": {
         "value": 4e-12,
-        "unit": "F",
-        "source": "user"
+        "unit": "F"
       },
       "ratings": {
         "current": null,

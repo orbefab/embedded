@@ -522,7 +522,7 @@ mod tests {
         let manifest: serde_json::Value =
             serde_json::from_slice(folder.file("manifest.json").unwrap()).unwrap();
         assert_eq!(manifest["seed"], 0);
-        assert_eq!(manifest["netlist_format"], 0);
+        assert_eq!(manifest["netlist_format"], 1);
         assert_eq!(folder.file("netlist.json").unwrap(), input.as_slice());
     }
 
@@ -532,8 +532,8 @@ mod tests {
             serde_json::from_slice(rejected_folder(input, 0).file("manifest.json").unwrap())
                 .unwrap()
         };
-        let future = manifest(br#"{"version": 1, "seed": 7}"#);
-        assert_eq!(future["netlist_format"], 1);
+        let future = manifest(br#"{"version": 2, "seed": 7}"#);
+        assert_eq!(future["netlist_format"], 2);
         assert_eq!(future["seed"], serde_json::Value::Null);
         for unreadable in [&br#"{"version": "0"}"#[..], b"{}", b"[]", b"not json"] {
             assert_eq!(

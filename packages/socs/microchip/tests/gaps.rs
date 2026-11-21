@@ -157,21 +157,18 @@ fn reserved_adc_references_and_channels_stop_the_chip() {
     }
 }
 
+/// ADC6 and ADC7 are channels like the others. A package without their pins reads 0 V there,
+/// which the host's samples give.
 #[test]
-fn adc6_and_adc7_are_noted_once_each() {
+fn adc6_and_adc7_note_and_refuse_nothing() {
     let mut words = vec![];
-    for mux in [6, 6, 7, 6] {
+    for mux in [6, 7] {
         words.push(ldi(16, 0x40 | mux));
         words.extend(sts(16, ADMUX));
     }
     words.push(spin());
     let cpu = run(&words, 100);
-    let noted: Vec<Unmodeled> = cpu.noted().iter().map(|noted| noted.what).collect();
-    assert_eq!(
-        noted,
-        [Unmodeled::AdcNoPad(6), Unmodeled::AdcNoPad(7)],
-        "once per run each"
-    );
+    assert_eq!(cpu.noted(), []);
     assert_eq!(cpu.refusal(), None);
 }
 

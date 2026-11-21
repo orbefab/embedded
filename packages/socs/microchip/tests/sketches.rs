@@ -42,7 +42,7 @@ fn load(path: &str) -> Cpu {
     let path = format!("{}/../../../{path}", env!("CARGO_MANIFEST_DIR"));
     let image = parse_hex(&std::fs::read_to_string(path).unwrap()).unwrap();
     let mut cpu = Cpu::new();
-    cpu.load_image(&image).unwrap();
+    cpu.load_flash(&image);
     cpu
 }
 

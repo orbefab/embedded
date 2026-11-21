@@ -99,7 +99,7 @@ Type checking, linting and runtime diagnostics are separate.
 ## The nano board (Nov 4 2026)
 - It is built from 14 leaf parts, 28 children in all, wired with traces. The viewer draws it by composing its children's 3D models, with no merged model.
 - Its header children sit at z = 0 with their plastic under the board, so it seats on a breadboard.
-- A6 and A7 are not simulated yet, since the engine's 328P has the DIP's pins. A wire to them is an error that says so.
+- A6 and A7 read their voltage. They are the 328P's `ADC6` and `ADC7`, which the engine's `atmega328p` kind has as pins of the TQFP.
 - Its 16 MHz clock is a three-terminal ceramic resonator, until a clone's photo says otherwise.
 
 ## The uno board (Nov 8 2026)
@@ -141,7 +141,7 @@ Type checking, linting and runtime diagnostics are separate.
 - `scripts/install.sh` gives its downloads a 15 second connect timeout, three tries, and fails a transfer that stays under 1 byte/s for 30 seconds.
 
 ## Later
-Mates between parts, joints between two parts, importing outside CAD, PCB routing, drawing traces, per-instance placement overrides, A6 and A7, and an `orbe lsp` for editors.
+Mates between parts, joints between two parts, importing outside CAD, PCB routing, drawing traces, per-instance placement overrides, and an `orbe lsp` for editors.
 
 ## Repo (Oct 31 2026)
 One private repo for the whole branch: `orbefab/embedded`. The current sim-engine code moves in first, then maker-sandbox, then the rest (Blocks and skills). The sandbox then builds against the current engine instead of a frozen copy.

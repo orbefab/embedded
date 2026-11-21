@@ -1,4 +1,4 @@
-//! Reads a `scene.jsonc` and the part files it uses into the engine's netlist v0, or into
+//! Reads a `scene.jsonc` and the part files it uses into the engine's netlist v1, or into
 //! the findings that stop it.
 //!
 //! A scene's folder is its project root. An id such as `led-5mm` reads `parts/led-5mm/` there

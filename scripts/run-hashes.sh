@@ -10,7 +10,7 @@
 # sorted by path, so one circuit's files sit together.
 #
 # Each Block adds its resolved netlist, a short run of that netlist, and the
-# stdout of `orbe test -v`. `blocks/<id>/netlist.json` is the netlist v0 its
+# stdout of `orbe test -v`. `blocks/<id>/netlist.json` is the netlist v1 its
 # scene resolves to. `blocks/<id>/run/` is every file of that netlist run after
 # analysis.transient.stop_ps is set to 2000000000000, which is 2 s. The scene
 # stops at 7200 s on a 1 ms grid, and orbe-run rejects that trace, so the

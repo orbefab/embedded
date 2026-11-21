@@ -8,7 +8,7 @@
     "r1": { "type": "resistor-axial", "resistance": "220x" },
     "led1": { "type": "led-5mm", "color": "red" },
   },
-  "ground": "nano.A6",
+  "ground": "nano.3V3",
   "wires": [
     ["nano.D2", "btn1.a"],
     ["btn1.b", "nano.5V"],

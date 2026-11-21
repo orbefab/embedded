@@ -529,10 +529,10 @@ fn serial_contains_matches_the_text_a_reply_shows() {
 
 #[test]
 fn a_level_on_a_pin_the_engine_does_not_simulate_says_so() {
-    let (expect, _) = failed("open\nexpect @nano.A6 high\n");
-    let (get, _) = failed("open\nget @nano.A6\n");
+    let (expect, _) = failed("open\nexpect @nano.3V3 high\n");
+    let (get, _) = failed("open\nget @nano.3V3\n");
     assert_eq!(expect, get, "one reason for one pin");
-    assert_eq!(expect["message"], "`nano.A6` is not simulated");
+    assert_eq!(expect["message"], "`nano.3V3` is not simulated");
     let hint = expect["hint"].as_str().unwrap();
     let named = hint
         .split('`')

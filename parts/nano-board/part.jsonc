@@ -5,7 +5,7 @@
 {
   "format": 1,
   "part": "nano-board",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "title": "Nano (CH340 clone)",
   "summary": "ATmega328P board, 18 x 43.2 mm, 30 pins on two rows 15.24 mm apart. D13 drives the L LED. Powered from USB.",
   "tags": ["board", "microcontroller", "avr", "atmega328p", "usb"],
@@ -20,7 +20,7 @@
   // A clone has no maker's sheet. The official board is the representative for size and pinout.
   "real": { "generic": true, "maker": "Arduino", "number": "A000005", "datasheet": "Arduino Nano A000005 datasheet" },
   "uses": {
-    "ams1117-sot223": "0.1.1", "atmega328p-tqfp32": "0.1.1", "capacitor-0603": "0.1.1",
+    "ams1117-sot223": "0.1.1", "atmega328p-tqfp32": "0.1.2", "capacitor-0603": "0.1.1",
     "capacitor-tantalum-3216": "0.1.1", "ch340g": "0.1.1", "crystal-3215": "0.1.1",
     "diode-sod123": "0.1.1", "led-0603": "0.1.1", "pin-header-1x15": "0.1.1", "pin-header-2x3": "0.1.1",
     "resistor-0603": "0.1.1", "resonator-cstce": "0.1.1", "tactile-switch-smd": "0.1.1", "usb-mini-b": "0.1.1",
@@ -171,8 +171,9 @@
     "A0": "j2.4", "A1": "j2.5", "A2": "j2.6", "A3": "j2.7", "A4": "j2.8", "A5": "j2.9", "A6": "j2.10", "A7": "j2.11",
     "5V": "j2.12", "VIN": "j2.15",
   },
-  // Nothing on the board drives AREF. A scene that leaves the pin open is the board as designed.
-  "open": ["AREF"],
+  // Nothing on the board drives AREF, A6 or A7. A scene that leaves one open is the board as
+  // designed.
+  "open": ["AREF", "A6", "A7"],
   "not_simulated": [
     { "what": "3V3", "pins": ["3V3"], "why": "It is the CH340G's 3.3 V output. The engine has no USB-serial chip, so the pin supplies nothing." },
     { "what": "VIN", "pins": ["VIN"], "why": "It feeds the AMS1117, which has no model yet. The board runs from USB." },

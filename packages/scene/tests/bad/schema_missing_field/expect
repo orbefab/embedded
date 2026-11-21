@@ -1,1 +1,1 @@
-netlist.syntax parts/sw.jsonc:13:27 | the engine needs `source` in `bounce.window` | add `source` to `bounce.window`
+scene.syntax parts/sw.jsonc:13:27 | `bounce.window` needs `source` | add `source` to `bounce.window`

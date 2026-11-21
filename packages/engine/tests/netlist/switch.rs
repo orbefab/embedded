@@ -14,8 +14,8 @@ fn switch(events: &str, bounce: &str) -> String {
           "name": "sw1",
           "kind": "switch",
           "pins": {{ "a": "a", "b": "gnd" }},
-          "on_resistance": {{ "value": 0.1, "unit": "ohm", "source": "user" }},
-          "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+          "on_resistance": {{ "value": 0.1, "unit": "ohm" }},
+          "off_resistance": {{ "value": 1e9, "unit": "ohm" }},
           "initial": "open",
           "events": {events},
           "bounce": {bounce}
@@ -27,8 +27,8 @@ fn switch(events: &str, bounce: &str) -> String {
 fn bounce(window: &str, max_bounces: &str) -> String {
     format!(
         r#"{{
-          "window": {{ "value": {window}, "unit": "ps", "source": "user" }},
-          "max_bounces": {{ "value": {max_bounces}, "unit": "1", "source": "user" }}
+          "window": {{ "value": {window}, "unit": "ps" }},
+          "max_bounces": {{ "value": {max_bounces}, "unit": "1" }}
         }}"#
     )
 }
@@ -195,22 +195,22 @@ fn each_broken_event_names_its_index_and_rule() {
         ),
         (
             r#"[{ "t_ps": 5000, "state": "closed" }, { "t_ps": 10999, "state": "open" }]"#,
-            r#"{ "window": { "value": 4000, "unit": "ps", "source": "user" },
-                 "max_bounces": { "value": 1, "unit": "1", "source": "user" } }"#,
+            r#"{ "window": { "value": 4000, "unit": "ps" },
+                 "max_bounces": { "value": 1, "unit": "1" } }"#,
             "too_close",
             1,
         ),
         (
             r#"[{ "t_ps": 18446744073709550000, "state": "closed" }]"#,
-            r#"{ "window": { "value": 4000, "unit": "ps", "source": "user" },
-                 "max_bounces": { "value": 1, "unit": "1", "source": "user" } }"#,
+            r#"{ "window": { "value": 4000, "unit": "ps" },
+                 "max_bounces": { "value": 1, "unit": "1" } }"#,
             "overflow",
             0,
         ),
         (
             r#"[{ "t_ps": 18446744073709550000, "state": "closed" }, { "t_ps": 18446744073709551000, "state": "open" }]"#,
-            r#"{ "window": { "value": 4000, "unit": "ps", "source": "user" },
-                 "max_bounces": { "value": 1, "unit": "1", "source": "user" } }"#,
+            r#"{ "window": { "value": 4000, "unit": "ps" },
+                 "max_bounces": { "value": 1, "unit": "1" } }"#,
             "overflow",
             0,
         ),
@@ -222,15 +222,15 @@ fn each_broken_event_names_its_index_and_rule() {
         ),
         (
             r#"[{ "t_ps": 18446744073709545616, "state": "closed" }, { "t_ps": 18446744073709545716, "state": "open" }]"#,
-            r#"{ "window": { "value": 4000, "unit": "ps", "source": "user" },
-                 "max_bounces": { "value": 1, "unit": "1", "source": "user" } }"#,
+            r#"{ "window": { "value": 4000, "unit": "ps" },
+                 "max_bounces": { "value": 1, "unit": "1" } }"#,
             "too_close",
             1,
         ),
         (
             r#"[{ "t_ps": 10000, "state": "closed" }, { "t_ps": 10001, "state": "open" }]"#,
-            r#"{ "window": { "value": 18446744073709540615, "unit": "ps", "source": "user" },
-                 "max_bounces": { "value": 8, "unit": "1", "source": "user" } }"#,
+            r#"{ "window": { "value": 18446744073709540615, "unit": "ps" },
+                 "max_bounces": { "value": 8, "unit": "1" } }"#,
             "too_close",
             1,
         ),

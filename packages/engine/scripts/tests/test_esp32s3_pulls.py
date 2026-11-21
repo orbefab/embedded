@@ -10,7 +10,7 @@ R = 45000.0
 
 
 def value(v: float, unit: str) -> dict:
-    return {"value": v, "unit": unit, "source": "user"}
+    return {"value": v, "unit": unit}
 
 
 def part(up: float = R, down: float | None = R) -> dict:

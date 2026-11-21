@@ -8,11 +8,13 @@ use orbe_model::{Drive, Stop, Time};
 
 use crate::{Channel, Cpu, FuseBytes, I2cNote, PinDrive, Port, Refused, Timeline};
 
-/// What a package pin is.
+/// What a pin of the kind is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pad {
     /// `P<port><bit>`, which the chip drives and reads.
     Port(Port, u8),
+    /// `ADC6` or `ADC7`, an input of the ADC alone, with no port behind it (§1.1.9).
+    Adc(u8),
     /// `PB6` or `PB7`, which the crystal holds.
     Xtal,
     Vcc,
@@ -24,9 +26,9 @@ pub enum Pad {
     Agnd,
 }
 
-/// What each pin of the 28-pin DIP is, pin 1 first. Pin 1 is `PC6`, which is `RESET` while the
-/// fuses keep it so.
-pub const PACKAGE: [Pad; 28] = [
+/// What each pin of the kind is: the 28-pin DIP's, pin 1 first, then `ADC6` and `ADC7`, which the
+/// TQFP has and the DIP does not. Pin 1 is `PC6`, which is `RESET` while the fuses keep it so.
+pub const PACKAGE: [Pad; 30] = [
     Pad::Port(Port::C, 6),
     Pad::Port(Port::D, 0),
     Pad::Port(Port::D, 1),
@@ -55,6 +57,8 @@ pub const PACKAGE: [Pad; 28] = [
     Pad::Port(Port::C, 3),
     Pad::Port(Port::C, 4),
     Pad::Port(Port::C, 5),
+    Pad::Adc(6),
+    Pad::Adc(7),
 ];
 
 /// The package index of each port pin, in package order. The image and the watches follow
@@ -222,11 +226,10 @@ impl Mcu for Bridge {
         self.cpu().pin_read_at(pin).map(|cycle| self.time(cycle))
     }
 
-    /// ADC0 to ADC5, `AVCC`, and `AREF`, each against the analog GND.
+    /// ADC0 to ADC7, `AVCC`, and `AREF`, each against the analog GND.
     fn sample(&mut self, _at: Time, volts: &[f64]) {
         let v = |k: usize| volts[k] as f32;
-        self.timeline
-            .sample([v(0), v(1), v(2), v(3), v(4), v(5), 0.0, 0.0], v(6), v(7));
+        self.timeline.sample(std::array::from_fn(v), v(8), v(9));
     }
 
     /// Takes the frames whose stop bit ended on a cycle at or before `through`'s last, which is

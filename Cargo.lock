@@ -812,7 +812,6 @@ dependencies = [
 name = "orbe-microchip"
 version = "0.1.0"
 dependencies = [
- "object",
  "orbe-avr",
  "orbe-mcu",
  "orbe-model",

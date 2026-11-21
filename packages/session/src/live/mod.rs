@@ -440,7 +440,7 @@ impl Open {
         view: View,
         scene: String,
     ) -> Result<Open, Box<Failed>> {
-        let engine = Session::open_document_with(json.as_bytes(), blobs).map_err(|refused| {
+        let engine = Session::open_json(json.as_bytes(), blobs).map_err(|refused| {
             let (code, message) = match &refused {
                 Refused::Op => (
                     "netlist.analysis",
