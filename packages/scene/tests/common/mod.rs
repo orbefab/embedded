@@ -22,9 +22,9 @@ pub fn fixture(name: &str) -> PathBuf {
     repo().join("packages/scene/tests/fixtures").join(name)
 }
 
-/// The `button.ino.hex` the first target builds: the engine's own build of the same sketch.
+/// The `button.ino.hex` the first target builds: the Block's own build of the same sketch.
 pub fn firmware() -> PathBuf {
-    repo().join("packages/engine/tests/firmware/sketch/button.hex")
+    repo().join("blocks/nano-button-led/firmware/button.hex")
 }
 
 pub fn copy_dir(from: &Path, to: &Path) {
