@@ -1,8 +1,6 @@
 //! The `esp32s3` part: its netlist struct and how parse reads it, its firmware and blobs, and
 //! the outputs and watches its wired GPIOs give the circuit around `orbe_espressif::s3::Bridge`.
 
-use std::collections::BTreeMap;
-
 use serde::Deserialize;
 
 use orbe_model::Time;
@@ -11,7 +9,7 @@ use crate::active::{Chip, Output, Stage};
 use crate::blob::{Blob, Blobs, Role, Sha256};
 use crate::diagnostic::{BlobRule, Diagnostic, FirmwareRule, ScheduleRule};
 use crate::mna::Node;
-use crate::name::{Name, Ref};
+use crate::name::Ref;
 use crate::netlist::Event;
 use crate::netlist::NetId;
 use crate::netlist::PartId;
@@ -21,7 +19,7 @@ use crate::netlist::elf::{self, Elf};
 use crate::netlist::flash::{self, Flash};
 use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
-use crate::netlist::json::{PinMap, WireValue, resolve_value};
+use crate::netlist::json::{PinMap, WireValue, resolve_some_pins, resolve_value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
 use crate::watch::{Signal, Watch};
 use orbe_espressif::s3::{self, Bridge};
@@ -384,7 +382,15 @@ pub(crate) fn resolve_esp32s3(ctx: ParseCtx<'_>, wire: WireEsp32s3) -> Option<Es
     let ohm = |field, value, out: &mut Vec<Diagnostic>| {
         resolve_value(part_ref, field, "ohm", true, value, out)
     };
-    let pins = resolve_pins(name, &wire.pins.0, nets, out);
+    // `VCC` and `GND`, then each GPIO the part has a net on.
+    let pins = resolve_some_pins(
+        name,
+        &Esp32s3::PINS,
+        Esp32s3::REQUIRED,
+        &wire.pins.0,
+        nets,
+        out,
+    );
     let firmware = resolve_firmware(part_ref, wire.rom, wire.firmware, blobs, out);
     let output = resolve_output_stage(part_ref, wire.output, out);
     let pull_up = ohm("pull_up_resistance", wire.pull_up_resistance, out);
@@ -500,64 +506,6 @@ fn resolve_firmware(
         }
         _ => fail(FirmwareRule::Rom, out),
     }
-}
-
-/// `VCC` and `GND`, then each GPIO the part has a net on, in [`Esp32s3::PINS`] order.
-fn resolve_pins(
-    part: &Name,
-    pins: &BTreeMap<String, String>,
-    nets: &BTreeMap<String, NetId>,
-    out: &mut Vec<Diagnostic>,
-) -> Option<(Vec<NetId>, Vec<&'static str>)> {
-    let (mut ids, mut names) = (Vec::new(), Vec::new());
-    let mut resolved = true;
-    for &pin in &Esp32s3::PINS {
-        let Some(net) = pins.get(pin) else {
-            continue;
-        };
-        match nets.get(net) {
-            Some(&id) => {
-                ids.push(id);
-                names.push(pin);
-            }
-            None => {
-                resolved = false;
-                out.push(Diagnostic::NetlistUnknownNet {
-                    pin: Ref::Pin(part.clone(), Name::new(pin).expect("kind pin name")),
-                    net: net.clone(),
-                });
-            }
-        }
-    }
-    let missing: Vec<&'static str> = Esp32s3::PINS[..Esp32s3::REQUIRED]
-        .iter()
-        .copied()
-        .filter(|pin| !pins.contains_key(*pin))
-        .collect();
-    let mut unexpected = Vec::new();
-    for (key, net) in pins {
-        if Esp32s3::PINS.contains(&key.as_str()) {
-            continue;
-        }
-        unexpected.push(key.clone());
-        if let Ok(pin) = Name::new(key)
-            && !nets.contains_key(net)
-        {
-            out.push(Diagnostic::NetlistUnknownNet {
-                pin: Ref::Pin(part.clone(), pin),
-                net: net.clone(),
-            });
-        }
-    }
-    if !missing.is_empty() || !unexpected.is_empty() {
-        out.push(Diagnostic::NetlistPins {
-            part: Ref::Part(part.clone()),
-            missing,
-            unexpected,
-        });
-        resolved = false;
-    }
-    resolved.then_some((ids, names))
 }
 
 /// The blob `wire` names, when `blobs` has it under that name, it hashes to that name, and its

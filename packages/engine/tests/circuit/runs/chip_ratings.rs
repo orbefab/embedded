@@ -65,14 +65,14 @@ fn add(netlist: &mut serde_json::Value, nets: &[&str], parts: serde_json::Value)
 fn source(name: &str, p: &str, n: &str, volts: f64) -> serde_json::Value {
     serde_json::json!({
         "name": name, "kind": "voltage_source", "pins": { "p": p, "n": n },
-        "voltage": { "value": volts, "unit": "V", "source": "user" }
+        "voltage": { "value": volts, "unit": "V" }
     })
 }
 
 fn resistor(name: &str, a: &str, b: &str, ohm: f64) -> serde_json::Value {
     serde_json::json!({
         "name": name, "kind": "resistor", "pins": { "a": a, "b": b },
-        "resistance": { "value": ohm, "unit": "ohm", "source": "user" },
+        "resistance": { "value": ohm, "unit": "ohm" },
         "ratings": { "power": null }
     })
 }
@@ -142,8 +142,13 @@ fn the_documented_ratings_are_the_part_files() {
             .skip(1)
             .filter(|line| line.contains("\"value\""))
         {
-            let line = line.trim().trim_end_matches(',');
-            assert!(file.contains(line), "{part} lacks {line}");
+            // The part file also says where each value came from, which the netlist does not.
+            let value = line
+                .trim()
+                .trim_end_matches(',')
+                .trim_end_matches('}')
+                .trim_end();
+            assert!(file.contains(value), "{part} lacks {value}");
         }
     }
 }

@@ -15,7 +15,7 @@ use common::read_vcd;
 use orbe_engine::name::Name;
 
 use orbe_engine::timestamp::Timestamp;
-use orbe_engine::{Input, Serial, Session, Setting, Status};
+use orbe_engine::{Input, Serial, SerialCursor, Session, Setting, Status};
 
 /// `serial_echo.S` leaves `U2X0` clear and writes `UBRR0` = 103. Table 20-1: a bit is
 /// 16 baud ticks, and a tick is `UBRR0 + 1` cycles (§20.3.1).
@@ -241,7 +241,7 @@ fn a_byte_typed_on_the_first_frame_is_the_fifth_echo() {
         "packages/engine/tests/circuits/atmega-serial-echo/netlist.json",
     ))
     .unwrap();
-    let mut session = Session::record_document(&json).unwrap();
+    let mut session = Session::open(orbe_engine::netlist::parse(&json).unwrap()).unwrap();
     let frame = Time::from_ps(1_000_000_000);
     let mut at = frame;
     let mut status = Status::Running;
@@ -265,9 +265,8 @@ fn a_byte_typed_on_the_first_frame_is_the_fifth_echo() {
         at = Time::from_ps(at.as_ps() + 1_000_000_000);
     }
     assert!(sent_byte, "the first frame was already stopped");
-    let folder = session.finish(Timestamp::from_unix_seconds(0)).unwrap();
-    let rows = sent(folder.file("traces/serial.csv").unwrap());
-    let bytes: Vec<u8> = rows.iter().map(|(_, byte)| *byte).collect();
+    let (sent, _) = session.serial_since(SerialCursor::default()).unwrap();
+    let bytes: Vec<u8> = sent.iter().map(|byte| byte.byte).collect();
     assert_eq!(bytes, vec![49, 48, 104, 105, 49]);
 }
 

@@ -501,7 +501,7 @@ fn earliest(rise: Option<u64>, fall: Option<u64>) -> Option<u64> {
 
 #[cfg(test)]
 mod tests {
-    use crate::netlist::{Event, Source};
+    use crate::netlist::Event;
 
     use super::*;
     use crate::finite::Finite;
@@ -509,7 +509,6 @@ mod tests {
     fn level(v: f64) -> Value {
         Value {
             si: Finite::new(v).unwrap(),
-            source: Source::User,
         }
     }
 

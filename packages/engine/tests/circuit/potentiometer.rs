@@ -12,7 +12,7 @@ fn value(results: &orbe_engine::run_folder::Results, reference: &str) -> f64 {
 fn a_potentiometer_divider_matches_the_closed_form() {
     let results = simulate(
         r#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -22,14 +22,14 @@ fn a_potentiometer_divider_matches_the_closed_form() {
           "name": "v1",
           "kind": "voltage_source",
           "pins": { "p": "vin", "n": "gnd" },
-          "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+          "voltage": { "value": 5.0, "unit": "V" }
         },
         {
           "name": "rv1",
           "kind": "potentiometer",
           "pins": { "a": "vin", "wiper": "mid", "b": "gnd" },
-          "resistance": { "value": 10000.0, "unit": "ohm", "source": "user" },
-          "position": { "value": 0.3, "unit": "1", "source": "user" }
+          "resistance": { "value": 10000.0, "unit": "ohm" },
+          "position": { "value": 0.3, "unit": "1" }
         }
       ]
     }"#,
@@ -61,7 +61,7 @@ fn a_potentiometer_divider_matches_the_closed_form() {
 fn both_legs_reach_the_source() {
     let results = simulate(
         r#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "op": {} },
       "ground": "gnd",
@@ -71,14 +71,14 @@ fn both_legs_reach_the_source() {
           "name": "v1",
           "kind": "voltage_source",
           "pins": { "p": "vin", "n": "gnd" },
-          "voltage": { "value": 5.0, "unit": "V", "source": "user" }
+          "voltage": { "value": 5.0, "unit": "V" }
         },
         {
           "name": "rv1",
           "kind": "potentiometer",
           "pins": { "a": "vin", "wiper": "mid", "b": "far" },
-          "resistance": { "value": 10000.0, "unit": "ohm", "source": "user" },
-          "position": { "value": 0.3, "unit": "1", "source": "user" }
+          "resistance": { "value": 10000.0, "unit": "ohm" },
+          "position": { "value": 0.3, "unit": "1" }
         }
       ]
     }"#,

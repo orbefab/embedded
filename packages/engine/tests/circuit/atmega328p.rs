@@ -24,7 +24,7 @@ fn board(wired: &[(&str, &str)], parts: &[String]) -> String {
     parts.push(source(5.0));
     parts.push(chip.to_string());
     format!(
-        r#"{{ "version": 0, "seed": 0, "analysis": {{ "op": {{}} }}, "ground": "gnd",
+        r#"{{ "version": 1, "seed": 0, "analysis": {{ "op": {{}} }}, "ground": "gnd",
           "nets": {}, "parts": [{}] }}"#,
         serde_json::to_string(&nets).unwrap(),
         parts.join(",")

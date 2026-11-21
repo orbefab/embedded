@@ -132,14 +132,18 @@ fn wires_hold_the_scene_s_and_each_part_s_with_prefixed_ends() {
 fn not_simulated_pins_take_the_ref_hover_shows() {
     let view = first_target();
     let idle = view["not_simulated"].as_array().unwrap();
-    let a6 = idle.iter().find(|p| p["ref"] == "@nano.A6").unwrap();
+    let pin = idle.iter().find(|p| p["ref"] == "@nano.3V3").unwrap();
     assert_eq!(
-        a6["why"],
-        "The engine's atmega328p kind has the DIP's pins, with no ADC6 or ADC7 pad."
+        pin["why"],
+        "It is the CH340G's 3.3 V output. The engine has no USB-serial chip, so the pin supplies nothing."
     );
     assert!(
-        idle.iter().all(|p| p["ref"] != "@nano.j2.10"),
-        "header pin 10 shows as its label"
+        idle.iter().all(|p| p["ref"] != "@nano.j2.2"),
+        "header pin 2 shows as its label"
+    );
+    assert!(
+        idle.iter().all(|p| p["ref"] != "@nano.A6"),
+        "A6 reads its voltage"
     );
     assert!(idle.iter().all(|p| p["ref"] != "@nano.D13"));
 }

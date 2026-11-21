@@ -129,7 +129,7 @@ export interface Wire {
  * check` gives for a wire to it. Every entry carries its `why`. */
 export interface PinNotSimulated {
   /** The ref hover shows for the pin: the outermost label that reaches it, such as
-   * `@nano.A6`, else its own pin. */
+   * `@nano.3V3`, else its own pin. */
   readonly ref: Ref;
   readonly why: string;
 }

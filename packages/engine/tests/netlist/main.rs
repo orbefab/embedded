@@ -3,7 +3,6 @@ mod common;
 mod atmega328p;
 mod cst816;
 mod diagnostic;
-mod document;
 mod inductor;
 mod ne555;
 mod op_amp;

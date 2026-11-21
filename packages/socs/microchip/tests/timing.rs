@@ -139,7 +139,7 @@ fn run(program: &Program) -> Run {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/timing/hex");
     let text = std::fs::read_to_string(dir.join(format!("{}.hex", program.name))).unwrap();
     let mut cpu = Cpu::new();
-    cpu.load_image(&parse_hex(&text).unwrap()).unwrap();
+    cpu.load_flash(&parse_hex(&text).unwrap());
     let mut edges: BTreeMap<u32, Vec<(u64, Level)>> = BTreeMap::new();
     while cpu.cycles() < program.cycles {
         let horizon = (cpu.cycles() + PIN_QUEUE_CAP as u64).min(program.cycles);

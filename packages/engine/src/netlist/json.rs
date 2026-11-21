@@ -11,9 +11,7 @@ pub(crate) mod waveform;
 use orbe_model::Time;
 
 use super::catalog::WirePart;
-use super::{
-    Analysis, Basis, Event, IntValue, MIN_GAP_PS, NetId, Netlist, Part, Source, Transient, Value,
-};
+use super::{Analysis, Event, IntValue, MIN_GAP_PS, NetId, Netlist, Part, Transient, Value};
 use crate::blob::{Blobs, Sha256};
 use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
 use crate::finite::Finite;
@@ -77,7 +75,6 @@ struct WireTransient {
 pub(crate) struct WireInt<T> {
     pub(crate) value: T,
     pub(crate) unit: String,
-    pub(crate) source: WireSource,
 }
 
 #[derive(Deserialize)]
@@ -123,21 +120,6 @@ impl<'de> Visitor<'de> for PinMapVisitor {
 pub(crate) struct WireValue {
     pub(crate) value: Finite,
     pub(crate) unit: String,
-    pub(crate) source: WireSource,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum WireSource {
-    User,
-    ClosedForm {
-        note: String,
-    },
-    Datasheet {
-        doc: String,
-        at: String,
-        basis: Basis,
-    },
 }
 
 /// A later version adds its own wire types here, and a lift into the domain types. Nothing
@@ -542,10 +524,7 @@ pub(crate) fn resolve_int<T: Into<u64>>(
         });
         ok = false;
     }
-    ok.then(|| IntValue {
-        value: number,
-        source: source(value.source),
-    })
+    ok.then_some(IntValue { value: number })
 }
 
 pub(crate) fn resolve_pins<const N: usize>(
@@ -600,6 +579,67 @@ pub(crate) fn resolve_pins<const N: usize>(
     resolved.then_some(ids)
 }
 
+/// The pins of a kind whose first `required` of `names` every part wires and whose rest a part
+/// may leave out: the net of each pin the part wires, in `names` order, with its name.
+pub(crate) fn resolve_some_pins(
+    part: &Name,
+    names: &[&'static str],
+    required: usize,
+    pins: &BTreeMap<String, String>,
+    nets: &BTreeMap<String, NetId>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<(Vec<NetId>, Vec<&'static str>)> {
+    let (mut ids, mut wired) = (Vec::new(), Vec::new());
+    let mut resolved = true;
+    for &pin in names {
+        let Some(net) = pins.get(pin) else {
+            continue;
+        };
+        match nets.get(net) {
+            Some(&id) => {
+                ids.push(id);
+                wired.push(pin);
+            }
+            None => {
+                resolved = false;
+                out.push(Diagnostic::NetlistUnknownNet {
+                    pin: Ref::Pin(part.clone(), Name::new(pin).expect("kind pin name")),
+                    net: net.clone(),
+                });
+            }
+        }
+    }
+    let missing: Vec<&'static str> = names[..required]
+        .iter()
+        .copied()
+        .filter(|pin| !pins.contains_key(*pin))
+        .collect();
+    let mut unexpected = Vec::new();
+    for (key, net) in pins {
+        if names.contains(&key.as_str()) {
+            continue;
+        }
+        unexpected.push(key.clone());
+        if let Ok(pin) = Name::new(key)
+            && !nets.contains_key(net)
+        {
+            out.push(Diagnostic::NetlistUnknownNet {
+                pin: Ref::Pin(part.clone(), pin),
+                net: net.clone(),
+            });
+        }
+    }
+    if !missing.is_empty() || !unexpected.is_empty() {
+        out.push(Diagnostic::NetlistPins {
+            part: Ref::Part(part.clone()),
+            missing,
+            unexpected,
+        });
+        resolved = false;
+    }
+    resolved.then_some((ids, wired))
+}
+
 /// `None` when the rating is invalid. `Some(None)` is an explicit `null`.
 pub(crate) fn resolve_rating(
     part: &Ref,
@@ -646,10 +686,7 @@ pub(crate) fn resolve_value(
     if !ok {
         return None;
     }
-    Some(Value {
-        si: value.value,
-        source: source(value.source),
-    })
+    Some(Value { si: value.value })
 }
 
 pub(crate) fn resolve_fraction(
@@ -671,12 +708,4 @@ pub(crate) fn resolve_fraction(
         return None;
     }
     resolved
-}
-
-fn source(wire: WireSource) -> Source {
-    match wire {
-        WireSource::User => Source::User,
-        WireSource::ClosedForm { note } => Source::ClosedForm { note },
-        WireSource::Datasheet { doc, at, basis } => Source::Datasheet { doc, at, basis },
-    }
 }

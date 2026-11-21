@@ -248,8 +248,8 @@ fn the_nano_pins_the_skills_call_not_simulated_are_the_ones_the_reader_leaves_ou
         .filter(|(_, net)| net.is_none())
         .map(|(pin, _)| pin.as_str())
         .collect();
-    assert_eq!(left_out, BTreeSet::from(["3V3", "A6", "A7", "VIN"]));
-    assert!(skill("reference").contains("The Nano's 3V3, VIN, A6 and A7 pins"));
+    assert_eq!(left_out, BTreeSet::from(["3V3", "VIN"]));
+    assert!(skill("reference").contains("The Nano's 3V3 and VIN pins"));
     let arduino = skill("arduino");
     let nano = board_section(&arduino, "nano-board");
     for pin in &left_out {

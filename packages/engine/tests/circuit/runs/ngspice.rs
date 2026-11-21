@@ -927,7 +927,7 @@ fn the_grid_drops_a_stop_500_ps_after_a_jump() {
 #[test]
 fn a_held_capacitor_drops_only_the_t_0_sample_of_its_current_and_power() {
     let input = br#"{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": { "transient": { "stop_ps": 10000, "max_step_ps": 1000, "grid_ps": 1000 } },
       "ground": "gnd",
@@ -937,21 +937,21 @@ fn a_held_capacitor_drops_only_the_t_0_sample_of_its_current_and_power() {
           "name": "c1",
           "kind": "capacitor",
           "pins": { "a": "vout", "b": "gnd" },
-          "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
-          "initial": { "value": 5.0, "unit": "V", "source": "user" }
+          "capacitance": { "value": 1e-6, "unit": "F" },
+          "initial": { "value": 5.0, "unit": "V" }
         },
         {
           "name": "c2",
           "kind": "capacitor",
           "pins": { "a": "vout", "b": "gnd" },
-          "capacitance": { "value": 1e-6, "unit": "F", "source": "user" },
+          "capacitance": { "value": 1e-6, "unit": "F" },
           "initial": null
         },
         {
           "name": "r1",
           "kind": "resistor",
           "pins": { "a": "vout", "b": "gnd" },
-          "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+          "resistance": { "value": 1000.0, "unit": "ohm" },
           "ratings": { "power": null }
         }
       ]

@@ -164,15 +164,15 @@ def events_text(items):
 def netlist_text(items):
     def stage(volts, ohms):
         return {
-            "high_drop": {"value": volts, "unit": "V", "source": "user"},
-            "high_resistance": {"value": ohms, "unit": "ohm", "source": "user"},
-            "low_drop": {"value": volts, "unit": "V", "source": "user"},
-            "low_resistance": {"value": ohms, "unit": "ohm", "source": "user"},
+            "high_drop": {"value": volts, "unit": "V"},
+            "high_resistance": {"value": ohms, "unit": "ohm"},
+            "low_drop": {"value": volts, "unit": "V"},
+            "low_resistance": {"value": ohms, "unit": "ohm"},
         }
 
     data = {"D0": "d0", "D1": "d1", "D2": "d2", "D3": "d3"}
     netlist = {
-        "version": 0,
+        "version": 1,
         "seed": 0,
         "analysis": {"transient": {"stop_ps": STOP_PS, "max_step_ps": STEP_PS, "grid_ps": STEP_PS}},
         "ground": "gnd",
@@ -193,22 +193,22 @@ def netlist_text(items):
                 },
                 "output": stage(0.0, 25.0),
                 "input_threshold": {
-                    "low": {"value": 0.3, "unit": "1", "source": "user"},
-                    "high": {"value": 0.7, "unit": "1", "source": "user"},
+                    "low": {"value": 0.3, "unit": "1"},
+                    "high": {"value": 0.7, "unit": "1"},
                 },
             },
             {
                 "name": "r1",
                 "kind": "resistor",
                 "pins": {"a": "v3v3", "b": "rst"},
-                "resistance": {"value": 10000.0, "unit": "ohm", "source": "user"},
+                "resistance": {"value": 10000.0, "unit": "ohm"},
                 "ratings": {"power": None},
             },
             {
                 "name": "rp1",
                 "kind": "spi_replay",
                 "pins": {"VCC": "v3v3", "GND": "gnd", "CS": "cs", "SCLK": "sclk", **data},
-                "clock_hz": {"value": CLOCK_HZ, "unit": "Hz", "source": "user"},
+                "clock_hz": {"value": CLOCK_HZ, "unit": "Hz"},
                 "output": stage(0.0, 25.0),
                 "events": "EVENTS",
             },
@@ -216,7 +216,7 @@ def netlist_text(items):
                 "name": "v1",
                 "kind": "voltage_source",
                 "pins": {"p": "v3v3", "n": "gnd"},
-                "voltage": {"value": 3.3, "unit": "V", "source": "user"},
+                "voltage": {"value": 3.3, "unit": "V"},
             },
         ],
     }

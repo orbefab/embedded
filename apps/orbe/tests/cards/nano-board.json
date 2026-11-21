@@ -256,7 +256,7 @@
   "title": "Nano (CH340 clone)",
   "uses": {
     "ams1117-sot223": "0.1.1",
-    "atmega328p-tqfp32": "0.1.1",
+    "atmega328p-tqfp32": "0.1.2",
     "capacitor-0603": "0.1.1",
     "capacitor-tantalum-3216": "0.1.1",
     "ch340g": "0.1.1",
@@ -270,5 +270,5 @@
     "tactile-switch-smd": "0.1.1",
     "usb-mini-b": "0.1.1"
   },
-  "version": "0.1.1"
+  "version": "0.1.2"
 }

@@ -71,6 +71,8 @@ pub(super) fn atmega(vdd: &str, hex: &str, clock_hz: u32, fuses: FuseBytes) -> S
             Pad::Vcc | Pad::Avcc | Pad::Aref => vdd.to_string(),
             Pad::Gnd | Pad::Agnd => "gnd".to_string(),
             Pad::Port(..) | Pad::Xtal => name.to_lowercase(),
+            // The DIP has neither.
+            Pad::Adc(_) => continue,
         }
         .into();
     }
@@ -92,6 +94,7 @@ fn each_pad_is_the_pin_its_name_says() {
             Pad::Avcc => vec!["AVCC".to_string()],
             Pad::Aref => vec!["AREF".to_string()],
             Pad::Agnd => vec!["GND_22".to_string()],
+            Pad::Adc(n) => vec![format!("ADC{n}")],
         };
         assert!(names.iter().any(|n| n == name), "{name} {pad:?}");
     }
@@ -103,8 +106,8 @@ fn each_pad_is_the_pin_its_name_says() {
 #[test]
 fn reset_releases_at_its_own_threshold() {
     let step = r#"{ "name": "vr", "kind": "voltage_source", "pins": { "p": "src", "n": "gnd" },
-          "voltage": { "kind": "step", "initial": { "value": 0.0, "unit": "V", "source": "user" },
-                       "final": { "value": 2.4, "unit": "V", "source": "user" }, "at_ps": 1000000 } }"#;
+          "voltage": { "kind": "step", "initial": { "value": 0.0, "unit": "V" },
+                       "final": { "value": 2.4, "unit": "V" }, "at_ps": 1000000 } }"#;
     let netlist = board(
         3 * US,
         &["src"],
@@ -141,8 +144,8 @@ fn reset_releases_at_its_own_threshold() {
 #[test]
 fn a_chip_held_in_reset_draws_its_reset_current() {
     let step = r#"{ "name": "vr", "kind": "voltage_source", "pins": { "p": "src", "n": "gnd" },
-          "voltage": { "kind": "step", "initial": { "value": 0.0, "unit": "V", "source": "user" },
-                       "final": { "value": 5.0, "unit": "V", "source": "user" }, "at_ps": 2000000 } }"#;
+          "voltage": { "kind": "step", "initial": { "value": 0.0, "unit": "V" },
+                       "final": { "value": 5.0, "unit": "V" }, "at_ps": 2000000 } }"#;
     let mut mcu: serde_json::Value = serde_json::from_str(&atmega(
         "chip",
         TOGGLE,
@@ -150,8 +153,8 @@ fn a_chip_held_in_reset_draws_its_reset_current() {
         FuseBytes { low: 0xDF, ..FUSES },
     ))
     .unwrap();
-    mcu["active_current"] = serde_json::json!({ "value": 0.0114, "unit": "A", "source": "user" });
-    mcu["reset_current"] = serde_json::json!({ "value": 0.002, "unit": "A", "source": "user" });
+    mcu["active_current"] = serde_json::json!({ "value": 0.0114, "unit": "A" });
+    mcu["reset_current"] = serde_json::json!({ "value": 0.002, "unit": "A" });
     let netlist = board(
         4 * US,
         &["src", "chip"],
@@ -261,8 +264,8 @@ fn toggle_stops_follow_the_firmware_when_a_watch_is_located() {
     let edge_ps = 5_760_000;
     let step = format!(
         r#"{{ "name": "vs", "kind": "voltage_source", "pins": {{ "p": "src", "n": "gnd" }},
-          "voltage": {{ "kind": "step", "initial": {{ "value": 0.0, "unit": "V", "source": "user" }},
-                       "final": {{ "value": 5.0, "unit": "V", "source": "user" }}, "at_ps": {edge_ps} }} }}"#
+          "voltage": {{ "kind": "step", "initial": {{ "value": 0.0, "unit": "V" }},
+                       "final": {{ "value": 5.0, "unit": "V" }}, "at_ps": {edge_ps} }} }}"#
     );
     let stop = 20 * US;
     let netlist = board(
@@ -412,8 +415,8 @@ fn a_pull_up_that_leaves_the_level_still_stops() {
 #[test]
 fn an_input_flip_reaches_the_core_and_comes_back_on_an_output() {
     let step = r#"{ "name": "vs", "kind": "voltage_source", "pins": { "p": "src", "n": "gnd" },
-          "voltage": { "kind": "step", "initial": { "value": 0.0, "unit": "V", "source": "user" },
-                       "final": { "value": 5.0, "unit": "V", "source": "user" }, "at_ps": 1000000 } }"#;
+          "voltage": { "kind": "step", "initial": { "value": 0.0, "unit": "V" },
+                       "final": { "value": 5.0, "unit": "V" }, "at_ps": 1000000 } }"#;
     let netlist = board(
         4 * US,
         &["src"],
@@ -497,7 +500,7 @@ fn a_clone_from_leaves_the_state_a_clone_does() {
                 .run_until(orbe_model::Time::from_ps(20_000 * US))
                 .expect("a stop before the end");
             if halt.sample {
-                core.sample(halt.at, &[3.3, 0.0, 0.0, 0.0, 0.0, 0.0, 5.0, 5.0]);
+                core.sample(halt.at, &[3.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 5.0, 5.0]);
             }
             if halt.at.as_ps() >= from && core.drive()[txd] == drive {
                 break halt.at;
@@ -587,8 +590,8 @@ fn a_clkpr_division_keeps_edges_on_the_crystals_cycles() {
 #[test]
 fn a_brown_out_holds_every_pin_off() {
     let supply = r#"{ "name": "vd", "kind": "voltage_source", "pins": { "p": "vdd", "n": "gnd" },
-          "voltage": { "kind": "step", "initial": { "value": 5.0, "unit": "V", "source": "user" },
-                       "final": { "value": 2.0, "unit": "V", "source": "user" }, "at_ps": 20000000 } }"#;
+          "voltage": { "kind": "step", "initial": { "value": 5.0, "unit": "V" },
+                       "final": { "value": 2.0, "unit": "V" }, "at_ps": 20000000 } }"#;
     let netlist = board(
         30 * US,
         &["vdd"],
@@ -705,8 +708,8 @@ fn a_driven_pin_reads_its_own_drive_at_its_stop() {
 #[test]
 fn an_input_on_a_source_reads_the_sources_jumps() {
     let pulse = r#"{ "name": "vs", "kind": "voltage_source", "pins": { "p": "pd2", "n": "gnd" },
-          "voltage": { "kind": "pulse", "initial": { "value": 0.0, "unit": "V", "source": "user" },
-                       "pulsed": { "value": 5.0, "unit": "V", "source": "user" },
+          "voltage": { "kind": "pulse", "initial": { "value": 0.0, "unit": "V" },
+                       "pulsed": { "value": 5.0, "unit": "V" },
                        "delay_ps": 2000000, "width_ps": 3000000, "period_ps": 10000000 } }"#;
     let netlist = board(
         24 * US,
@@ -734,8 +737,8 @@ fn an_input_on_a_source_reads_the_sources_jumps() {
 #[test]
 fn a_slow_input_flips_once_at_each_threshold() {
     let pulse = r#"{ "name": "vs", "kind": "voltage_source", "pins": { "p": "src", "n": "gnd" },
-          "voltage": { "kind": "pulse", "initial": { "value": 0.0, "unit": "V", "source": "user" },
-                       "pulsed": { "value": 5.0, "unit": "V", "source": "user" },
+          "voltage": { "kind": "pulse", "initial": { "value": 0.0, "unit": "V" },
+                       "pulsed": { "value": 5.0, "unit": "V" },
                        "delay_ps": 1000000, "width_ps": 40000000, "period_ps": 200000000 } }"#;
     let netlist = board(
         80 * US,
@@ -784,8 +787,8 @@ fn a_slow_input_flips_once_at_each_threshold() {
 fn supply(initial: f64, pulsed: f64) -> String {
     format!(
         r#"{{ "name": "vd", "kind": "voltage_source", "pins": {{ "p": "vdd", "n": "gnd" }},
-          "voltage": {{ "kind": "pulse", "initial": {{ "value": {initial:?}, "unit": "V", "source": "user" }},
-                       "pulsed": {{ "value": {pulsed:?}, "unit": "V", "source": "user" }},
+          "voltage": {{ "kind": "pulse", "initial": {{ "value": {initial:?}, "unit": "V" }},
+                       "pulsed": {{ "value": {pulsed:?}, "unit": "V" }},
                        "delay_ps": 10000000, "width_ps": 10000000, "period_ps": 100000000 }} }}"#
     )
 }
@@ -824,21 +827,21 @@ fn a_flip_the_restart_undoes_returns_at_the_next_step() {
     let initial = high - volts_per_ps * (crossing - start as f64);
     let ramp = format!(
         r#"{{ "name": "is", "kind": "current_source", "pins": {{ "p": "cap", "n": "gnd" }},
-          "current": {{ "kind": "pulse", "initial": {{ "value": 0.0, "unit": "A", "source": "user" }},
-                       "pulsed": {{ "value": 1.0, "unit": "A", "source": "user" }},
+          "current": {{ "kind": "pulse", "initial": {{ "value": 0.0, "unit": "A" }},
+                       "pulsed": {{ "value": 1.0, "unit": "A" }},
                        "delay_ps": {start}, "width_ps": {}, "period_ps": {} }} }}"#,
         stop - start,
         2 * US,
     );
     let cap = format!(
         r#"{{ "name": "cs", "kind": "capacitor", "pins": {{ "a": "cap", "b": "gnd" }},
-          "capacitance": {{ "value": 2e-9, "unit": "F", "source": "user" }},
-          "initial": {{ "value": {initial:?}, "unit": "V", "source": "user" }} }}"#
+          "capacitance": {{ "value": 2e-9, "unit": "F" }},
+          "initial": {{ "value": {initial:?}, "unit": "V" }} }}"#
     );
     let back = format!(
         r#"{{ "name": "vb", "kind": "voltage_source", "pins": {{ "p": "pd2", "n": "cap" }},
-          "voltage": {{ "kind": "step", "initial": {{ "value": 0.0, "unit": "V", "source": "user" }},
-                       "final": {{ "value": -2.0, "unit": "V", "source": "user" }}, "at_ps": {jump} }} }}"#
+          "voltage": {{ "kind": "step", "initial": {{ "value": 0.0, "unit": "V" }},
+                       "final": {{ "value": -2.0, "unit": "V" }}, "at_ps": {jump} }} }}"#
     );
     let netlist = board(
         US,

@@ -1,5 +1,5 @@
 {
-  "version": 0,
+  "version": 1,
   "seed": 0,
   "analysis": {
     "transient": {
@@ -27,8 +27,7 @@
       },
       "voltage": {
         "value": 5.0,
-        "unit": "V",
-        "source": "user"
+        "unit": "V"
       }
     },
     {
@@ -43,63 +42,27 @@
       },
       "inductance": {
         "value": 0.505,
-        "unit": "H",
-        "source": {
-          "closed_form": {
-            "note": "10 ms / ln 4 * 70 ohm = 0.504943 H reaches a pull-in of 75 % of 5 V in the 10 ms max operate time at 70 ohm, no travel, rounded to 0.505 H"
-          }
-        }
+        "unit": "H"
       },
       "coil_resistance": {
         "value": 70.0,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "SRD, RELAY ISO9002",
-            "at": "COIL DATA CHART, 05 VDC high sensitivity, 0.36 W",
-            "basis": "typical"
-          }
-        }
+        "unit": "ohm"
       },
       "pull_in_current": {
         "value": 0.05357142857142857,
-        "unit": "A",
-        "source": {
-          "closed_form": {
-            "note": "pull-in voltage 75 % max of 5 V over 70 ohm, COIL DATA CHART, 05 VDC high sensitivity"
-          }
-        }
+        "unit": "A"
       },
       "drop_out_current": {
         "value": 0.007142857142857143,
-        "unit": "A",
-        "source": {
-          "closed_form": {
-            "note": "drop-out voltage 10 % min of 5 V over 70 ohm, COIL DATA CHART, 05 VDC high sensitivity"
-          }
-        }
+        "unit": "A"
       },
       "on_resistance": {
         "value": 0.1,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "SRD, RELAY ISO9002",
-            "at": "Contact Resistance",
-            "basis": "max"
-          }
-        }
+        "unit": "ohm"
       },
       "off_resistance": {
         "value": 100000000.0,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "SRD, RELAY ISO9002",
-            "at": "Insulation Resistance, 500 VDC",
-            "basis": "min"
-          }
-        }
+        "unit": "ohm"
       }
     },
     {
@@ -111,13 +74,11 @@
       },
       "on_resistance": {
         "value": 0.1,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "off_resistance": {
         "value": 1000000.0,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "initial": "open",
       "events": [
@@ -141,48 +102,20 @@
       },
       "saturation_current": {
         "value": 9.4334e-08,
-        "unit": "A",
-        "source": {
-          "datasheet": {
-            "doc": "Vishay 1N4001, Document Number 88503, Revision 29-Apr-2020",
-            "at": "Fig. 4, Typical Instantaneous Forward Characteristics, TJ = 25 C; fit through (0.62 V, 10 mA), (0.80 V, 0.25 A), (1.00 V, 2.6 A) at kT/q for 298.15 K",
-            "basis": "typical"
-          }
-        }
+        "unit": "A"
       },
       "emission_coefficient": {
         "value": 2.0844,
-        "unit": "1",
-        "source": {
-          "datasheet": {
-            "doc": "Vishay 1N4001, Document Number 88503, Revision 29-Apr-2020",
-            "at": "Fig. 4, Typical Instantaneous Forward Characteristics, TJ = 25 C; fit through (0.62 V, 10 mA), (0.80 V, 0.25 A), (1.00 V, 2.6 A) at kT/q for 298.15 K",
-            "basis": "typical"
-          }
-        }
+        "unit": "1"
       },
       "series_resistance": {
         "value": 0.0317,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "Vishay 1N4001, Document Number 88503, Revision 29-Apr-2020",
-            "at": "Fig. 4, Typical Instantaneous Forward Characteristics, TJ = 25 C; fit through (0.62 V, 10 mA), (0.80 V, 0.25 A), (1.00 V, 2.6 A) at kT/q for 298.15 K",
-            "basis": "typical"
-          }
-        }
+        "unit": "ohm"
       },
       "ratings": {
         "current": {
           "value": 1.0,
-          "unit": "A",
-          "source": {
-            "datasheet": {
-              "doc": "Vishay 1N4001, Document Number 88503, Revision 29-Apr-2020",
-              "at": "MAXIMUM RATINGS, maximum average forward rectified current IF(AV), TA = 75 C",
-              "basis": "absolute_max"
-            }
-          }
+          "unit": "A"
         },
         "power": null
       }
@@ -196,8 +129,7 @@
       },
       "resistance": {
         "value": 220.0,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "ratings": {
         "power": null
@@ -212,59 +144,24 @@
       },
       "saturation_current": {
         "value": 6.711e-10,
-        "unit": "A",
-        "source": {
-          "datasheet": {
-            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
-            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
-            "basis": "typical"
-          }
-        }
+        "unit": "A"
       },
       "emission_coefficient": {
         "value": 4.427,
-        "unit": "1",
-        "source": {
-          "datasheet": {
-            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
-            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
-            "basis": "typical"
-          }
-        }
+        "unit": "1"
       },
       "series_resistance": {
         "value": 2.115,
-        "unit": "ohm",
-        "source": {
-          "datasheet": {
-            "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
-            "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K",
-            "basis": "typical"
-          }
-        }
+        "unit": "ohm"
       },
       "ratings": {
         "current": {
           "value": 0.03,
-          "unit": "A",
-          "source": {
-            "datasheet": {
-              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
-              "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current",
-              "basis": "absolute_max"
-            }
-          }
+          "unit": "A"
         },
         "power": {
           "value": 0.075,
-          "unit": "W",
-          "source": {
-            "datasheet": {
-              "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
-              "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation",
-              "basis": "absolute_max"
-            }
-          }
+          "unit": "W"
         }
       }
     },
@@ -277,8 +174,7 @@
       },
       "resistance": {
         "value": 1000.0,
-        "unit": "ohm",
-        "source": "user"
+        "unit": "ohm"
       },
       "ratings": {
         "power": null

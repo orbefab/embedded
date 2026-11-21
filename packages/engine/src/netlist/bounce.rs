@@ -87,7 +87,7 @@ fn stream(seed: u64, name: &Name, index: u64) -> SplitMix64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::netlist::{Contact, IntValue, Source};
+    use crate::netlist::{Contact, IntValue};
 
     use super::*;
 
@@ -116,12 +116,8 @@ mod tests {
         let bounce = Bounce {
             window: IntValue {
                 value: 1_000_000_000,
-                source: Source::User,
             },
-            max_bounces: IntValue {
-                value: 4,
-                source: Source::User,
-            },
+            max_bounces: IntValue { value: 4 },
         };
         let edges = expand(7, &Name::new("sw1").unwrap(), &events, Some(&bounce));
         let got: Vec<(u64, Contact)> = edges.iter().map(|e| (e.at.as_ps(), e.to)).collect();
@@ -156,12 +152,8 @@ mod tests {
         let bounce = Bounce {
             window: IntValue {
                 value: 2 * MIN_GAP_PS,
-                source: Source::User,
             },
-            max_bounces: IntValue {
-                value: 1,
-                source: Source::User,
-            },
+            max_bounces: IntValue { value: 1 },
         };
         let edges = expand(0, &Name::new("s").unwrap(), &events, Some(&bounce));
         let times: Vec<u64> = edges.iter().map(|e| e.at.as_ps()).collect();

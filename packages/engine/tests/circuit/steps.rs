@@ -12,13 +12,13 @@ use orbe_engine::run_folder::{RunFolder, render};
 use orbe_engine::timestamp::Timestamp;
 
 fn level(value: f64, unit: &str) -> String {
-    format!(r#"{{ "value": {value:?}, "unit": "{unit}", "source": "user" }}"#)
+    format!(r#"{{ "value": {value:?}, "unit": "{unit}" }}"#)
 }
 
 fn divider(voltage: &str, stop_ps: u64) -> String {
     format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {{ "transient": {{ "stop_ps": {stop_ps}, "max_step_ps": 1000, "grid_ps": 1000 }} }},
       "ground": "gnd",
@@ -26,9 +26,9 @@ fn divider(voltage: &str, stop_ps: u64) -> String {
       "parts": [
         {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "vin", "n": "gnd" }}, "voltage": {voltage} }},
         {{ "name": "r1", "kind": "resistor", "pins": {{ "a": "vin", "b": "mid" }},
-           "resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }}, "ratings": {{ "power": null }} }},
+           "resistance": {{ "value": 1000.0, "unit": "ohm" }}, "ratings": {{ "power": null }} }},
         {{ "name": "r2", "kind": "resistor", "pins": {{ "a": "mid", "b": "gnd" }},
-           "resistance": {{ "value": 1000.0, "unit": "ohm", "source": "user" }}, "ratings": {{ "power": null }} }}
+           "resistance": {{ "value": 1000.0, "unit": "ohm" }}, "ratings": {{ "power": null }} }}
       ]
     }}"#
     )
@@ -179,19 +179,19 @@ fn a_wiper_move_holds_the_old_divider_and_the_capacitor_follows_the_new_one() {
     );
     let json = format!(
         r#"{{
-      "version": 0,
+      "version": 1,
       "seed": 0,
       "analysis": {{ "transient": {{ "stop_ps": 100000, "max_step_ps": 10000, "grid_ps": 10000 }} }},
       "ground": "gnd",
       "nets": ["gnd", "vin", "mid"],
       "parts": [
         {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "vin", "n": "gnd" }},
-           "voltage": {{ "value": 4.0, "unit": "V", "source": "user" }} }},
+           "voltage": {{ "value": 4.0, "unit": "V" }} }},
         {{ "name": "rv1", "kind": "potentiometer", "pins": {{ "a": "vin", "wiper": "mid", "b": "gnd" }},
-           "resistance": {{ "value": 10000.0, "unit": "ohm", "source": "user" }},
+           "resistance": {{ "value": 10000.0, "unit": "ohm" }},
            "position": {position} }},
         {{ "name": "c1", "kind": "capacitor", "pins": {{ "a": "mid", "b": "gnd" }},
-           "capacitance": {{ "value": {FARAD:?}, "unit": "F", "source": "user" }},
+           "capacitance": {{ "value": {FARAD:?}, "unit": "F" }},
            "initial": null }}
       ]
     }}"#

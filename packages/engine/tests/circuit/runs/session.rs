@@ -1,9 +1,10 @@
-//! A recorded session, advanced in seeded chunks and finished, writes the run folder `orbe-run run`
-//! writes. It uses only the public items a binding calls: `orbe_engine::run` and `Session`.
+//! A session advanced in seeded chunks reads what a batch run of the same netlist holds: its
+//! serial rows, its diagnostics and its last row. It uses only the public items a binding calls:
+//! `orbe_engine::run`, `orbe_engine::simulate` and `Session`.
 
 use orbe_model::Time;
 
-use orbe_engine::netlist::{Baud, Contact, Frame};
+use orbe_engine::netlist::{self, Appended, Baud, Contact, Frame, Netlist, SerialSend};
 
 use std::fs;
 use std::path::Path;
@@ -11,10 +12,11 @@ use std::path::Path;
 use crate::runs::common;
 use common::examples::{self as example_files, examples};
 use orbe_engine::blob::Blobs;
-use orbe_engine::diagnostic::ValueRule;
+use orbe_engine::diagnostic::{Diagnostic, Severity, ValueRule};
 use orbe_engine::finite::Finite;
 use orbe_engine::name::Name;
 
+use orbe_engine::run_folder::Results;
 use orbe_engine::run_folder::RunFolder;
 use orbe_engine::timestamp::Timestamp;
 use orbe_engine::{Input, Refused, Rejected, Serial, SerialCursor, Session, Setting, Status};
@@ -37,13 +39,10 @@ impl Rng {
     }
 }
 
-/// Not the epoch, so a `finish` that drops its timestamp writes another `manifest.json`.
+/// The time a batch folder is stamped with. No check reads it.
 fn created_at() -> Timestamp {
-    Timestamp::from_unix_seconds(1_700_000_000)
+    Timestamp::from_unix_seconds(0)
 }
-
-/// `created_at` as `manifest.json` writes it.
-const CREATED_AT: &str = "2023-11-14T22:13:20Z";
 
 fn stop_ps(json: &[u8]) -> u64 {
     let doc: serde_json::Value = serde_json::from_slice(json).unwrap();
@@ -104,17 +103,42 @@ fn advance_in_chunks(
     }
 }
 
-/// The two folders hold the same files, byte for byte, and the session's is stamped `stamp`.
-fn assert_same_folder(name: &str, session: &RunFolder, batch: &RunFolder, stamp: &str) {
-    let manifest: serde_json::Value =
-        serde_json::from_slice(session.file("manifest.json").unwrap()).unwrap();
-    assert_eq!(manifest["created_at"], stamp, "{name}");
-    let paths = |folder: &RunFolder| -> Vec<String> {
-        folder.files().map(|(path, _)| path.to_string()).collect()
-    };
-    assert_eq!(paths(session), paths(batch), "{name}");
-    for ((path, got), (_, want)) in session.files().zip(batch.files()) {
-        assert!(got == want, "{name}: {path} differs");
+/// `session`, ended, read the run in `results`: the same warnings, the same fault, and, when it
+/// stopped, the last row bit for bit.
+fn assert_reads_the_batch(name: &str, session: &Session, results: &Results) {
+    let warnings: Vec<Diagnostic> = results
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.severity() == Severity::Warning
+                && diagnostic.code() != "trace.row_interpolated"
+        })
+        .cloned()
+        .collect();
+    assert_eq!(session.diagnostics(), warnings, "{name}: warnings");
+    let errors: Vec<&Diagnostic> = results
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.severity() == Severity::Error)
+        .collect();
+    assert_eq!(
+        session.fault().into_iter().collect::<Vec<_>>(),
+        errors,
+        "{name}: fault"
+    );
+    if session.status() != Status::Stopped {
+        return;
+    }
+    let trace = results.trace().expect("a stopped run has a trace");
+    let last = trace.time().len() - 1;
+    let probe = session.probe();
+    assert_eq!(probe.at(), trace.time()[last], "{name}: last row");
+    for (j, column) in trace.columns().iter().enumerate() {
+        assert_eq!(
+            probe.get(column).unwrap().get().to_bits(),
+            trace.column(j)[last].to_bits(),
+            "{name}: {column} on the last row"
+        );
     }
 }
 
@@ -128,22 +152,22 @@ fn assert_serial_rows(name: &str, folder: &RunFolder, rows: &[String]) {
     assert_eq!(rows, want, "{name}: serial rows");
 }
 
-/// `json` recorded with `blobs`, advanced in chunks with no input, and finished, is `orbe-run run`'s
-/// folder. An `op` analysis opens no session, and `orbe-run run` still writes its folder.
-fn finishes_as_a_batch_run(name: &str, json: &[u8], blobs: &Blobs, seed: u64) {
-    let batch = orbe_engine::run_with(json, blobs, created_at()).folder;
-    let mut session = match Session::record_document_with(json, blobs) {
+/// `json` opened with `blobs` and advanced in chunks to its end with no input reads what
+/// `orbe-run run` writes for it. An `op` analysis opens no session, and `orbe-run run` still
+/// writes its folder.
+fn reads_as_a_batch_run(name: &str, json: &[u8], blobs: &Blobs, seed: u64) {
+    let batch = orbe_engine::run_with(json, blobs, created_at());
+    let mut session = match Session::open_json(json, blobs) {
         Ok(session) => session,
         Err(Refused::Op) => {
-            assert!(batch.file("observations.json").is_some(), "{name}");
+            assert!(batch.folder.file("observations.json").is_some(), "{name}");
             return;
         }
         Err(refused) => panic!("{name}: {refused:?}"),
     };
     let rows = advance_in_chunks(&mut session, json, END, &mut Rng(seed), |_, _| {});
-    let folder = session.finish(created_at()).unwrap();
-    assert_same_folder(name, &folder, &batch, CREATED_AT);
-    assert_serial_rows(name, &folder, &rows);
+    assert_serial_rows(name, &batch.folder, &rows);
+    assert_reads_the_batch(name, &session, &batch.results);
 }
 
 fn example(path: &Path) -> (String, Vec<u8>, Blobs) {
@@ -154,12 +178,12 @@ fn example(path: &Path) -> (String, Vec<u8>, Blobs) {
 
 #[ignore = "full tier"]
 #[test]
-fn every_example_finishes_to_the_folder_a_batch_run_writes() {
+fn every_example_reads_what_a_batch_run_writes() {
     let examples: Vec<_> = examples().iter().map(|path| example(path)).collect();
     assert!(examples.len() >= 14);
     std::thread::scope(|scope| {
         for (k, (name, json, blobs)) in examples.iter().enumerate() {
-            scope.spawn(move || finishes_as_a_batch_run(name, json, blobs, 0x5eed_8000 + k as u64));
+            scope.spawn(move || reads_as_a_batch_run(name, json, blobs, 0x5eed_8000 + k as u64));
         }
     });
 }
@@ -199,7 +223,8 @@ fn assert_ring_cut(label: &str, full: &RunFolder, cut: &RunFolder) {
     assert_eq!(pulses, 2, "{label}: {link}");
 }
 
-/// A session stopped `offset` ps after frame 2's start matches a batch run stopped there.
+/// A batch run stopped `offset` ps after frame 2's start keeps what had ended there, and a session
+/// stopped there reads it.
 fn run_ring_cut(
     name: &str,
     json: &[u8],
@@ -214,23 +239,23 @@ fn run_ring_cut(
     let mut doc: serde_json::Value = serde_json::from_slice(json).unwrap();
     doc["analysis"]["transient"]["stop_ps"] = serde_json::Value::from(cut);
     let cut_json = serde_json::to_vec(&doc).unwrap();
-    let batch = orbe_engine::run_with(&cut_json, blobs, created_at()).folder;
-    assert_ring_cut(&label, full, &batch);
-    let mut session = Session::record_document_with(&cut_json, blobs).unwrap();
+    let batch = orbe_engine::run_with(&cut_json, blobs, created_at());
+    assert_ring_cut(&label, full, &batch.folder);
+    let mut session = Session::open_json(&cut_json, blobs).unwrap();
     let rows = advance_in_chunks(&mut session, &cut_json, END, &mut Rng(seed), |_, _| {});
-    let folder = session.finish(created_at()).unwrap();
-    assert_same_folder(&label, &folder, &batch, CREATED_AT);
-    assert_serial_rows(&label, &folder, &rows);
-    assert_ring_cut(&label, full, &folder);
+    assert_eq!(session.status(), Status::Stopped, "{label}");
+    assert_serial_rows(&label, &batch.folder, &rows);
+    assert_reads_the_batch(&label, &session, &batch.results);
 }
 
 /// Frame 2's entry 275 starts 330 µs after that record's start, 275 entries of 1.2 µs. A second
-/// cut, 600 ns later, is inside the same entry. The start comes from a full run. A session
-/// stopped at either time matches a batch run stopped there. No folder file holds the pairs a
-/// cut reads, since the chain writes only latched frames, so the RMT unit tests pin those pairs.
+/// cut, 600 ns later, is inside the same entry. The start comes from a full run. A batch run
+/// stopped at either time keeps what had ended, and a session stopped there reads it. No folder
+/// file holds the pairs a cut reads, since the chain writes only latched frames, so the RMT unit
+/// tests pin those pairs.
 #[ignore = "full tier"]
 #[test]
-fn a_session_cut_inside_frame_2_matches_a_batch_run() {
+fn a_cut_inside_frame_2_keeps_what_had_ended() {
     let path = examples()
         .into_iter()
         .find(|path| path.file_name().unwrap() == "esp32s3-ring")
@@ -268,8 +293,7 @@ fn floating() -> serde_json::Value {
         .as_array_mut()
         .unwrap()
         .extend(["x".into(), "y".into()]);
-    json["parts"][1]["ratings"]["power"] =
-        serde_json::json!({ "value": 0.001, "unit": "W", "source": "user" });
+    json["parts"][1]["ratings"]["power"] = serde_json::json!({ "value": 0.001, "unit": "W" });
     json["parts"]
         .as_array_mut()
         .unwrap()
@@ -277,7 +301,7 @@ fn floating() -> serde_json::Value {
             "name": "r2",
             "kind": "resistor",
             "pins": { "a": "x", "b": "y" },
-            "resistance": { "value": 1000.0, "unit": "ohm", "source": "user" },
+            "resistance": { "value": 1000.0, "unit": "ohm" },
             "ratings": { "power": null }
         }));
     json
@@ -285,23 +309,18 @@ fn floating() -> serde_json::Value {
 
 #[ignore = "full tier"]
 #[test]
-fn floating_nets_and_ratings_finish_as_a_batch_run_reports_them() {
+fn a_session_reads_floating_nets_and_ratings_as_a_batch_run_reports_them() {
     let json = serde_json::to_vec(&floating()).unwrap();
     let results = orbe_engine::run(&json, created_at()).results;
     let codes: Vec<_> = results.diagnostics().iter().map(|d| d.code()).collect();
     assert_eq!(codes, ["net.floating", "net.floating", "rating.power"]);
-    finishes_as_a_batch_run("floating", &json, &Blobs::new(), 0x5eed_8100);
+    reads_as_a_batch_run("floating", &json, &Blobs::new(), 0x5eed_8100);
 }
 
-/// `json`, the floating `v-steps` changed so it cannot open, is refused by `record_document` with
-/// `code`, and the folder `orbe-run run` writes lists the floating nets, then `code`.
-fn refused_after_its_floating_nets(json: serde_json::Value, code: &str) {
-    let json = serde_json::to_vec(&json).unwrap();
-    let Err(Refused::Failed(refused)) = Session::record_document(&json) else {
-        panic!("a session opens");
-    };
-    assert_eq!(refused.code(), code);
-    let folder = orbe_engine::run(&json, created_at()).folder;
+/// The folder `orbe-run run` writes for `json`, the floating `v-steps` changed so it cannot run,
+/// lists the floating nets, then `code`.
+fn reported_after_its_floating_nets(json: &[u8], code: &str) {
+    let folder = orbe_engine::run(json, created_at()).folder;
     let diagnostics: serde_json::Value =
         serde_json::from_slice(folder.file("diagnostics.json").unwrap()).unwrap();
     let codes: Vec<_> = diagnostics
@@ -313,14 +332,17 @@ fn refused_after_its_floating_nets(json: serde_json::Value, code: &str) {
     assert_eq!(codes, ["net.floating", "net.floating", code]);
 }
 
-/// The floating `v-steps` on a grid past the row limit, refused before any solve.
+/// The floating `v-steps` on a grid past the row limit, refused before any solve. A session
+/// records no rows, so it still opens.
 #[ignore = "full tier"]
 #[test]
 fn a_grid_past_the_row_limit_reports_its_floating_nets() {
     let mut json = floating();
     json["analysis"]["transient"]["stop_ps"] = 2_000_000_000.into();
     json["analysis"]["transient"]["grid_ps"] = 1_000.into();
-    refused_after_its_floating_nets(json, "trace.too_large");
+    let json = serde_json::to_vec(&json).unwrap();
+    reported_after_its_floating_nets(&json, "trace.too_large");
+    assert!(Session::open_json(&json, &Blobs::new()).is_ok());
 }
 
 /// The floating `v-steps` starting at 1e200 V, which faults the operating point at t = 0.
@@ -329,52 +351,47 @@ fn a_grid_past_the_row_limit_reports_its_floating_nets() {
 fn a_fault_at_t_0_reports_its_floating_nets() {
     let mut json = floating();
     json["parts"][0]["voltage"]["initial"]["value"] = 1e200.into();
-    refused_after_its_floating_nets(json, "solver.nonfinite");
+    let json = serde_json::to_vec(&json).unwrap();
+    reported_after_its_floating_nets(&json, "solver.nonfinite");
+    let Err(Refused::Failed(refused)) = Session::open_json(&json, &Blobs::new()) else {
+        panic!("a session opens");
+    };
+    assert_eq!(refused.code(), "solver.nonfinite");
 }
 
 /// `v-steps` whose second step is 1e200 V, which faults the run at that step.
 #[ignore = "full tier"]
 #[test]
-fn a_faulted_session_finishes_to_the_folder_a_batch_run_writes() {
+fn a_faulted_session_reads_the_fault_a_batch_run_reports() {
     let mut json = v_steps();
     json["parts"][0]["voltage"]["events"][1]["level"]["value"] = 1e200.into();
     let json = serde_json::to_vec(&json).unwrap();
-    let mut session = Session::record_document(&json).unwrap();
+    let mut session = Session::open_json(&json, &Blobs::new()).unwrap();
     assert_eq!(session.advance_to(END), Status::Faulted);
     assert_eq!(session.fault().unwrap().code(), "solver.nonfinite");
-    finishes_as_a_batch_run("fault", &json, &Blobs::new(), 0x5eed_8200);
+    reads_as_a_batch_run("fault", &json, &Blobs::new(), 0x5eed_8200);
 }
 
-/// `packages/engine/tests/circuits/<name>` recorded, advanced in chunks to half its run, and finished while it runs,
-/// is `orbe-run run`'s folder for its bytes. At each chunk end `reject` may apply inputs that are
-/// refused, and those leave the bytes as they were.
-fn finishes_partway_as_a_batch_run(name: &str, seed: u64, mut reject: impl FnMut(&mut Session)) {
+/// `packages/engine/tests/circuits/<name>` opened and advanced in chunks to its end reads what
+/// `orbe-run run` writes for its bytes. At each chunk end `reject` may apply inputs that are
+/// refused, and those change nothing the session reads.
+fn reads_as_a_batch_run_after_refusals(
+    name: &str,
+    seed: u64,
+    mut reject: impl FnMut(&mut Session),
+) {
     let json = fs::read(common::repo(&format!(
         "packages/engine/tests/circuits/{name}/netlist.json"
     )))
     .unwrap();
-    let batch = orbe_engine::run(&json, created_at()).folder;
-    let mut session = Session::record_document(&json).unwrap();
-    let until = Time::from_ps(stop_ps(&json) / 2);
-    advance_in_chunks(&mut session, &json, until, &mut Rng(seed), |session, _| {
+    let batch = orbe_engine::run(&json, created_at());
+    let mut session = Session::open_json(&json, &Blobs::new()).unwrap();
+    let rows = advance_in_chunks(&mut session, &json, END, &mut Rng(seed), |session, _| {
         reject(session)
     });
-    assert_eq!(session.status(), Status::Running, "{name}");
-    let folder = session.finish(created_at()).unwrap();
-    assert_eq!(folder.file("netlist.json"), Some(json.as_slice()), "{name}");
-    assert_same_folder(name, &folder, &batch, CREATED_AT);
-}
-
-#[ignore = "full tier"]
-#[test]
-fn a_running_session_with_no_input_finishes_to_the_folder_a_batch_run_writes() {
-    std::thread::scope(|scope| {
-        for (k, &(name, _, _)) in INPUTS.iter().enumerate() {
-            scope.spawn(move || {
-                finishes_partway_as_a_batch_run(name, 0x5eed_8500 + k as u64, |_| {})
-            });
-        }
-    });
+    assert_eq!(session.status(), Status::Stopped, "{name}");
+    assert_serial_rows(name, &batch.folder, &rows);
+    assert_reads_the_batch(name, &session, &batch.results);
 }
 
 /// Applies each input, at `now` unless it names a time, and asserts it is refused.
@@ -395,7 +412,7 @@ fn refuse_each(session: &mut Session, refusals: &[(&str, Option<Time>, Setting, 
 /// running session gives.
 #[ignore = "full tier"]
 #[test]
-fn refused_inputs_finish_to_the_folder_a_batch_run_writes_for_the_opened_bytes() {
+fn refused_inputs_leave_what_a_session_reads_as_a_batch_run_of_its_bytes() {
     let level = |value| Setting::Level(Finite::new(value).unwrap());
     let json = fs::read(common::repo(
         "packages/engine/tests/circuits/v-steps/netlist.json",
@@ -418,36 +435,30 @@ fn refused_inputs_finish_to_the_folder_a_batch_run_writes_for_the_opened_bytes()
     )];
     std::thread::scope(|scope| {
         scope.spawn(|| {
-            finishes_partway_as_a_batch_run("v-steps", 0x5eed_8600, |session| {
+            reads_as_a_batch_run_after_refusals("v-steps", 0x5eed_8600, |session| {
                 refuse_each(session, &v_steps)
             })
         });
         scope.spawn(|| {
-            finishes_partway_as_a_batch_run("atmega-analog-serial", 0x5eed_8601, |session| {
+            reads_as_a_batch_run_after_refusals("atmega-analog-serial", 0x5eed_8601, |session| {
                 refuse_each(session, &pot)
             })
         });
     });
 }
 
-/// `v-steps` advanced to its stop refuses a new level on `v1` with `Ended`, and finished a day
-/// after `created_at`, is `orbe-run run`'s folder for the bytes read at that time.
+/// `v-steps` advanced to its stop refuses a new level on `v1` with `Ended`.
 #[ignore = "full tier"]
 #[test]
-fn an_input_after_the_end_finishes_to_the_folder_a_batch_run_writes_for_the_opened_bytes() {
+fn an_input_after_the_end_is_refused() {
     let json = fs::read(common::repo(
         "packages/engine/tests/circuits/v-steps/netlist.json",
     ))
     .unwrap();
-    let a_day_later = Timestamp::from_unix_seconds(1_700_086_400);
-    let batch = orbe_engine::run(&json, a_day_later).folder;
-    let mut session = Session::record_document(&json).unwrap();
+    let mut session = Session::open_json(&json, &Blobs::new()).unwrap();
     assert_eq!(session.advance_to(END), Status::Stopped);
     let level = Setting::Level(Finite::new(2.0).unwrap());
     refuse_each(&mut session, &[("v1", None, level, Rejected::Ended)]);
-    let folder = session.finish(a_day_later).unwrap();
-    assert_eq!(folder.file("netlist.json"), Some(json.as_slice()));
-    assert_same_folder("v-steps", &folder, &batch, "2023-11-15T22:13:20Z");
 }
 
 /// What a seeded input writes.
@@ -469,8 +480,14 @@ const INPUTS: &[(&str, &str, Seed)] = &[
 ];
 
 /// One seeded input on `part` at `now`. A contact or a level from 0 V to 5 V, or one 8N1 byte
-/// at 9600 baud. A contact equal to the last is moved to the other one. Whether it landed.
-fn apply_seeded(session: &mut Session, rng: &mut Rng, part: &Name, seed: Seed) -> bool {
+/// at 9600 baud. A contact equal to the last is moved to the other one. Where it landed and what
+/// it set, when it landed.
+fn apply_seeded(
+    session: &mut Session,
+    rng: &mut Rng,
+    part: &Name,
+    seed: Seed,
+) -> Option<(Time, Setting)> {
     let mut settings = Vec::new();
     match seed {
         Seed::Contact => {
@@ -500,110 +517,78 @@ fn apply_seeded(session: &mut Session, rng: &mut Rng, part: &Name, seed: Seed) -
             setting,
         };
         match session.apply(&input) {
-            Ok(_) => return true,
+            Ok(applied) => return Some((applied.at, input.setting)),
             Err(Rejected::NoChange) => {}
             Err(rejected) => {
                 assert_eq!(rejected, Rejected::PastStop);
-                return false;
+                return None;
             }
         }
     }
-    false
+    None
 }
 
-/// `packages/engine/tests/circuits/<name>` recorded and advanced in chunks to `until`, with a seeded input on `part`
-/// at each chunk end until one lands and at half of them after, and the serial rows it read. One
-/// seed gives the same session every time.
+/// `setting` as the event it appends to a part's netlist.
+fn appended(setting: Setting) -> Appended {
+    match setting {
+        Setting::Contact(contact) => Appended::Contact(contact),
+        Setting::Level(level) => Appended::Level(level),
+        Setting::Serial(Serial { baud, frame, bytes }) => {
+            Appended::Serial(SerialSend { baud, frame, bytes })
+        }
+        other => panic!("no seeded input sets {other:?}"),
+    }
+}
+
+/// `packages/engine/tests/circuits/<name>` opened and advanced in chunks to its end, with a
+/// seeded input on `part` at each chunk end until one lands and at half of them after. Returns
+/// the session, the serial rows it read, and the netlist with each landed input appended where
+/// it landed. One seed gives the same session every time.
 fn with_inputs(
     name: &str,
     part: &str,
     seed_kind: Seed,
-    until: Time,
     seed: u64,
-) -> (Session, Vec<String>) {
+) -> (Session, Vec<String>, Netlist) {
     let json = fs::read(common::repo(&format!(
         "packages/engine/tests/circuits/{name}/netlist.json"
     )))
     .unwrap();
     let part = Name::new(part).unwrap();
-    let mut session = Session::record_document(&json).unwrap();
+    let mut landed = netlist::parse(&json).unwrap();
+    let id = landed.part_id(&part).unwrap();
+    let mut session = Session::open_json(&json, &Blobs::new()).unwrap();
     let mut applied = 0;
-    let rows = advance_in_chunks(
-        &mut session,
-        &json,
-        until,
-        &mut Rng(seed),
-        |session, rng| {
-            if (applied == 0 || rng.below(2) == 1) && apply_seeded(session, rng, &part, seed_kind) {
-                applied += 1;
-            }
-        },
-    );
-    assert!(applied > 0, "{name}: no input landed");
-    assert_ne!(session.export().unwrap(), json, "{name}");
-    (session, rows)
-}
-
-/// The example with inputs, advanced to its end, exported, then finished, is `orbe-run run`'s folder
-/// for that ended export, and the serial rows read are its `serial.csv`.
-fn finishes_as_a_batch_run_on_the_export(name: &str, part: &str, seed_kind: Seed, seed: u64) {
-    let (session, rows) = with_inputs(name, part, seed_kind, END, seed);
-    let batch = orbe_engine::run(&session.export().unwrap(), created_at()).folder;
-    let folder = session.finish(created_at()).unwrap();
-    assert_same_folder(name, &folder, &batch, CREATED_AT);
-    assert_serial_rows(name, &folder, &rows);
-}
-
-#[ignore = "full tier"]
-#[test]
-fn inputs_finish_to_the_folder_a_batch_run_writes_for_the_export() {
-    std::thread::scope(|scope| {
-        for (k, &(name, part, seed_kind)) in INPUTS.iter().enumerate() {
-            scope.spawn(move || {
-                finishes_as_a_batch_run_on_the_export(name, part, seed_kind, 0x5eed_8300 + k as u64)
-            });
+    let rows = advance_in_chunks(&mut session, &json, END, &mut Rng(seed), |session, rng| {
+        if (applied == 0 || rng.below(2) == 1)
+            && let Some((at, setting)) = apply_seeded(session, rng, &part, seed_kind)
+        {
+            landed.append(id, at, appended(setting));
+            applied += 1;
         }
     });
+    assert!(applied > 0, "{name}: no input landed");
+    (session, rows, landed)
 }
 
-/// A session with inputs, finished while it runs, writes the folder of the export it ends on. A
-/// twin on the same seed, advanced to its end and exported, gives that export. The export taken
-/// while the twin still runs has a shorter `stop_ps`, so `finish` cannot write that one.
-fn a_running_session_finishes_as_its_ended_export(
-    name: &str,
-    part: &str,
-    seed_kind: Seed,
-    seed: u64,
-) {
-    let json = fs::read(common::repo(&format!(
-        "packages/engine/tests/circuits/{name}/netlist.json"
-    )))
-    .unwrap();
-    let until = Time::from_ps(stop_ps(&json) / 2);
-    let (session, _) = with_inputs(name, part, seed_kind, until, seed);
-    let (mut twin, _) = with_inputs(name, part, seed_kind, until, seed);
-    assert_eq!(session.status(), Status::Running, "{name}");
-    let running = twin.export().unwrap();
-    assert_eq!(twin.advance_to(END), Status::Stopped, "{name}");
-    let ended = twin.export().unwrap();
-    assert_ne!(running, ended, "{name}");
-    let batch = orbe_engine::run(&ended, created_at()).folder;
-    let folder = session.finish(created_at()).unwrap();
-    assert_same_folder(name, &folder, &batch, CREATED_AT);
+/// The example with inputs, advanced to its end, reads what a batch run of the netlist with each
+/// input appended where it landed holds, and the serial rows read are its `serial.csv`.
+fn reads_as_a_batch_run_of_its_landings(name: &str, part: &str, seed_kind: Seed, seed: u64) {
+    let (session, rows, landed) = with_inputs(name, part, seed_kind, seed);
+    assert_eq!(session.status(), Status::Stopped, "{name}");
+    let results = orbe_engine::simulate(&landed);
+    let folder = orbe_engine::run_folder::render(b"", Some(&landed), &results, created_at());
+    assert_serial_rows(name, &folder, &rows);
+    assert_reads_the_batch(name, &session, &results);
 }
 
 #[ignore = "full tier"]
 #[test]
-fn a_running_session_with_inputs_finishes_to_the_folder_of_its_ended_export() {
+fn inputs_read_as_a_batch_run_of_the_netlist_they_land_in() {
     std::thread::scope(|scope| {
         for (k, &(name, part, seed_kind)) in INPUTS.iter().enumerate() {
             scope.spawn(move || {
-                a_running_session_finishes_as_its_ended_export(
-                    name,
-                    part,
-                    seed_kind,
-                    0x5eed_8400 + k as u64,
-                )
+                reads_as_a_batch_run_of_its_landings(name, part, seed_kind, 0x5eed_8300 + k as u64)
             });
         }
     });

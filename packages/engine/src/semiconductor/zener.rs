@@ -80,7 +80,7 @@ mod tests {
     fn part(body: &str) -> String {
         format!(
             r#"{{
-              "version": 0,
+              "version": 1,
               "seed": 0,
               "analysis": {{ "op": {{}} }},
               "ground": "gnd",
@@ -90,7 +90,7 @@ mod tests {
                   "name": "v1",
                   "kind": "voltage_source",
                   "pins": {{ "p": "c", "n": "gnd" }},
-                  "voltage": {{ "value": 1.0, "unit": "V", "source": "user" }}
+                  "voltage": {{ "value": 1.0, "unit": "V" }}
                 }},
                 {{
                   "name": "dz1",
@@ -107,13 +107,13 @@ mod tests {
     fn circuit() -> Circuit {
         let json = part(
             r#"
-                  "saturation_current": { "value": 1e-20, "unit": "A", "source": "user" },
-                  "emission_coefficient": { "value": 1.0, "unit": "1", "source": "user" },
-                  "series_resistance": { "value": 1.0, "unit": "ohm", "source": "user" },
-                  "zener_voltage": { "value": 5.0, "unit": "V", "source": "user" },
-                  "zener_current": { "value": 0.05, "unit": "A", "source": "user" },
-                  "zener_impedance": { "value": 10.0, "unit": "ohm", "source": "user" },
-                  "breakdown_resistance": { "value": 4.0, "unit": "ohm", "source": "user" },
+                  "saturation_current": { "value": 1e-20, "unit": "A" },
+                  "emission_coefficient": { "value": 1.0, "unit": "1" },
+                  "series_resistance": { "value": 1.0, "unit": "ohm" },
+                  "zener_voltage": { "value": 5.0, "unit": "V" },
+                  "zener_current": { "value": 0.05, "unit": "A" },
+                  "zener_impedance": { "value": 10.0, "unit": "ohm" },
+                  "breakdown_resistance": { "value": 4.0, "unit": "ohm" },
             "#,
         );
         Circuit::new(netlist::parse(json.as_bytes()).unwrap()).unwrap()
