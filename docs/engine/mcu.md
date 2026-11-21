@@ -28,7 +28,7 @@ A chip is its state. `Mcu` needs `Clone`, and a copy is a checkpoint. The engine
 | `notes(through)` | What it noted at or before `through`, each at its time. Empty by default. |
 | `read(output)` | When its firmware first read that output's pin as a digital input since the pin's drive last turned off, as far as it has run. A read while the drive is not off does not count. Once the drive is no longer off, it is still the read of the stretch that just ended. `None` by default, so the engine checks no input of a chip that keeps it. [diagnostics.md](diagnostics.md#chipfloating_input) says what the engine does with it. |
 
-That is three constants and twelve methods, eight of them with defaults. A clocked chip runs to cycle `floor(limit_ps * f / 1e12)` and puts a stop at cycle `c` at `ceil(c * 1e12 / f)` ps, counting from its clock domain's last frequency change, as [engine.md](engine.md#active-chips) says. The chip converts between picoseconds and its own cycles.
+A clocked chip runs to cycle `floor(limit_ps * f / 1e12)` and puts a stop at cycle `c` at `ceil(c * 1e12 / f)` ps, counting from its clock domain's last frequency change, as [engine.md](engine.md#active-chips) says. The chip converts between picoseconds and its own cycles.
 
 Only `run_until` changes the drives, `pulled_down()` and `held()`. `input` and `sample` leave them alone, and what they cause comes at least 1 ps later, at a stop. The ATmega328P stops where `RESET` low or a brown-out starts holding it and where the hold ends, so the engine stamps its reset draw from that stop, as it does a new drive. The engine checks this after each of those calls, in every build, and panics on a chip that breaks it.
 

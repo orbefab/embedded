@@ -1,10 +1,12 @@
-# Lint, the Rust tests, the viewer and the site run in parallel on every pull
-# request and on every push to main. A pull request runs the site suite on
-# wrangler. The vite host, which includes the install-line build, and the
-# Firefox and WebKit smoke run on main and nightly. The engine checks run on
-# main and nightly, and on a pull
-# request unless every changed file is under apps/site/, docs/ or .github/
-# other than this workflow, or is a markdown file. The cargo cache keeps
+# What CI runs, and when. This header is where that is written down.
+# scripts/check.sh says what each command runs.
+# Lint (`check.sh lint`), the Rust tests (`check.sh rust`), the viewer checks
+# and the site suite on wrangler run in parallel on every pull request and on
+# every push to main. The site suite on vite preview, which includes the
+# install-line build, and the Firefox and WebKit smoke run on main and
+# nightly. The engine checks (`check.sh engine-chips`, `engine-circuits` and
+# `engine-wasm`) run in parallel on main and nightly, and on a pull request
+# when scripts/ci-engine-changed.sh prints run=true. The cargo cache keeps
 # dependencies only. Caching the workspace crates still rebuilt them after
 # checkout, so those artifacts are left out. scripts/check-speed.sh stays
 # a local check.
