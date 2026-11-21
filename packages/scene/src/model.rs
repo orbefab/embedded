@@ -535,6 +535,9 @@ pub(crate) fn decode_part(
             _ => {}
         }
     }
+    if let Some(readings) = root.get("readings") {
+        check_rgb_kind(readings, part.model.as_ref(), out);
+    }
     if let Some(params) = root.get("params") {
         part.params = decode_params(params, &part, format, out);
     }
@@ -1411,6 +1414,24 @@ fn check_rgb(readings: &Node, format: u32, out: &mut Findings) {
                 of.span,
                 format!("reading `{}` takes \"of\": \"rgb\" only in part format {DOUT_FORMAT}; this file is format {format}", prop.key),
                 format!("set \"format\": {DOUT_FORMAT} in this part file"),
+            );
+        }
+    }
+}
+
+/// Only an LED chain has a colour, so `"of": "rgb"` needs a model of kind `ws2812`.
+fn check_rgb_kind(readings: &Node, model: Option<&Node>, out: &mut Findings) {
+    let kind = model.and_then(|m| m.get("kind")).and_then(Node::str);
+    if kind == Some("ws2812") {
+        return;
+    }
+    for prop in readings.props().unwrap_or_default() {
+        if let Some(of) = prop.value.get("of").filter(|of| of.str() == Some("rgb")) {
+            out.push(
+                Code::Syntax,
+                of.span,
+                format!("reading `{}` takes \"of\": \"rgb\" only on a part whose model is `ws2812`", prop.key),
+                "read a colour only from an addressable LED, whose \"model\" has \"kind\": \"ws2812\"".to_string(),
             );
         }
     }

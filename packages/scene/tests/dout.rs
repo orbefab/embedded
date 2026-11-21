@@ -137,3 +137,38 @@ fn a_part_before_format_3_that_maps_dout_is_told_to_move_to_format_3() {
         ]
     );
 }
+
+#[test]
+fn a_colour_reading_on_a_part_that_is_no_led_chain_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let supply = SUPPLY
+        .replacen("\"format\": 1,", "\"format\": 3,", 1)
+        .replacen(
+            "\"model\":",
+            "\"readings\": { \"color\": { \"of\": \"rgb\" } },\n  \"model\":",
+            1,
+        );
+    let scene = r#"{
+  "format": 1,
+  "parts": { "v1": { "type": "./supply/part.jsonc", "voltage": "5" } },
+  "ground": "v1.neg",
+}
+"#;
+    for (file, text) in [
+        ("supply/part.jsonc", supply.as_str()),
+        ("scene.jsonc", scene),
+    ] {
+        let path = dir.path().join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+    let found = read(dir.path()).unwrap_err();
+    let found: Vec<(Code, &str)> = found.iter().map(|d| (d.code, d.message.as_str())).collect();
+    assert_eq!(
+        found,
+        [(
+            Code::Syntax,
+            "reading `color` takes \"of\": \"rgb\" only on a part whose model is `ws2812`"
+        )]
+    );
+}
