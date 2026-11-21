@@ -254,6 +254,26 @@ fn help_is_not_a_usage_envelope() {
 }
 
 #[test]
+fn add_help_names_a_version_placeholder() {
+    let (output, stdout) = orbe(&["add", "--help"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}");
+    assert!(stdout.contains("id@<version>"), "{stdout}");
+    assert!(!stdout.contains("@0.1.0"), "{stdout}");
+}
+
+#[test]
+fn a_version_that_is_not_three_numbers_shows_the_shape() {
+    let dir = tempfile::tempdir().unwrap();
+    let (output, stdout, stderr) = orbe_in(dir.path(), &["add", "led-5mm@1"]);
+    assert_eq!(output.status.code(), Some(2), "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert_eq!(
+        stderr,
+        "error[usage]: `led-5mm@1` is not a version. a version is three numbers, such as `id@1.2.3`\n"
+    );
+}
+
+#[test]
 fn every_bad_fixture_exits_1_and_prints_its_findings() {
     for case in common::cases("bad") {
         let name = case.file_name().unwrap().to_string_lossy().to_string();

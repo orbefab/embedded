@@ -60,7 +60,7 @@ enum Command {
     /// copying its parts first, then writing its scene, firmware, tests and README.
     #[command(display_order = 3)]
     Add {
-        /// Part ids, or one Block id. A part's version is `id@0.1.0`.
+        /// Part ids, or one Block id. A part's version is `id@<version>`.
         ids: Vec<String>,
         /// The project folder, the one with scene.jsonc. The current folder by default.
         #[arg(short = 'C', value_name = "DIR", allow_hyphen_values = true)]

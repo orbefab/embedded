@@ -192,7 +192,7 @@ fn parse_specs(ids: &[String]) -> Result<Vec<Spec>, String> {
         }
         let Some(version) = Version::parse(version) else {
             bad.push(format!(
-                "`{raw}` is not a version. a version is three numbers, such as `led-5mm@0.1.0`"
+                "`{raw}` is not a version. a version is three numbers, such as `id@1.2.3`"
             ));
             continue;
         };
