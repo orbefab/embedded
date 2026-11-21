@@ -31,6 +31,7 @@ mod boot;
 mod bridge;
 mod calibration;
 mod clock;
+mod code;
 mod cores;
 mod curve;
 mod efuse;
@@ -312,17 +313,17 @@ impl Esp32s3 {
         let source = boot::clock_source(&state).expect("the captured clock is one the model runs");
         let mut soc = Soc::new(CpuClock::new(source), netted, Watchdogs::new(source.apb()));
         load_rom(&mut soc, boot.rom);
-        soc.flash = Some(Flash::new(boot.flash));
+        soc.attach_flash(Flash::new(boot.flash));
         let mut core = Core::new();
         boot::apply(&state, &mut core, &mut soc);
         boot::program_rom_uart(&state, &mut soc);
         for segment in boot.segments {
-            let flash = soc.flash.as_mut().expect("attached");
             if segment.mapped() {
-                flash.map(segment.addr, segment.offset, segment.len);
+                soc.map_flash(segment.addr, segment.offset, segment.len);
             } else {
+                let flash = soc.flash_bytes().expect("attached");
                 let at = segment.offset as usize;
-                let bytes = flash.bytes()[at..at + segment.len as usize].to_vec();
+                let bytes = flash[at..at + segment.len as usize].to_vec();
                 soc.poke(segment.addr, &bytes);
             }
         }
@@ -1064,6 +1065,7 @@ mod tests {
     }
 
     mod adc;
+    mod code;
     mod dual;
     mod i2c;
     mod pads;
@@ -1575,6 +1577,21 @@ mod tests {
         }
     }
 
+    /// A load of a UART's `STATUS` or of `EP1_CONF` keeps the lines. A load of a FIFO takes a
+    /// byte and a store to a status word may start a transfer, so each of those still moves them.
+    #[test]
+    fn only_a_load_of_a_status_word_keeps_the_lines() {
+        for base in uart::BASES {
+            assert!(!Soc::load_moves_lines(base + 0x1c), "{base:#x}");
+            assert!(Soc::load_moves_lines(base), "{base:#x}");
+            assert!(Soc::access_moves_lines(base + 0x1c), "{base:#x}");
+        }
+        assert!(!Soc::load_moves_lines(USB_SERIAL_JTAG + 0x04));
+        assert!(Soc::load_moves_lines(USB_SERIAL_JTAG));
+        assert!(Soc::access_moves_lines(USB_SERIAL_JTAG + 0x04));
+        assert!(Soc::load_moves_lines(USB_SERIAL_JTAG + 0x08));
+    }
+
     #[test]
     fn a_load_of_usb_wrap_is_unmodeled() {
         let mut program = Program::new(&[0x6003_9000]);
@@ -1795,7 +1812,7 @@ mod tests {
             let mut chip = program.chip();
             let mut flash = Flash::new(vec![0xa5; 0x1_0000].into());
             flash.write_mmu(0, entry);
-            chip.soc.flash = Some(flash);
+            chip.soc.attach_flash(flash);
             let halt = chip.run_until(c(1000));
             if mapped {
                 assert_eq!(halt, None, "entry {entry:#x}");

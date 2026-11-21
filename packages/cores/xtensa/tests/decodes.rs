@@ -1,6 +1,7 @@
-//! The core keeps each instruction it decodes, by its PC and the bytes the fetch read. Each test
-//! changes what a cached PC holds, or what runs around it, and checks that the core runs what
-//! memory holds now.
+//! The core keeps each instruction it decodes, by its PC and the bytes the fetch read, and by the
+//! bus's code version when it keeps one. Each test changes what a cached PC holds, or what runs
+//! around it, and checks that the core runs what memory holds now, on a bus with no version and on
+//! one whose version moves at every change.
 
 use std::ops::Range;
 
@@ -14,12 +15,16 @@ const LIMIT: Cycle = Cycle(10_000);
 /// Code and data in one array from `CODE`, which the core fetches, loads and stores. `alias`
 /// maps a second window onto the same bytes, the way the data-bus window aliases the
 /// instruction-bus window. `banks` swaps which array the fetch reads, as a remap of the MMU
-/// would.
+/// would. A versioned memory moves its code version at every store, poke, remap and new fetch
+/// fault, and counts its fetches.
 struct Memory {
     banks: Vec<Vec<u8>>,
     bank: usize,
     alias: Option<u32>,
     fetch_fault: Option<u32>,
+    version: Option<u64>,
+    held: bool,
+    fetches: u64,
 }
 
 impl Memory {
@@ -29,7 +34,33 @@ impl Memory {
             bank: 0,
             alias: None,
             fetch_fault: None,
+            version: None,
+            held: false,
+            fetches: 0,
         }
+    }
+
+    /// `hex`, unversioned and then versioned.
+    fn both(hex: &str) -> [Memory; 2] {
+        let mut versioned = Memory::new(hex);
+        versioned.version = Some(0);
+        [Memory::new(hex), versioned]
+    }
+
+    fn moved(&mut self) {
+        if let Some(version) = &mut self.version {
+            *version += 1;
+        }
+    }
+
+    fn remap(&mut self, bank: usize) {
+        self.bank = bank;
+        self.moved();
+    }
+
+    fn fault_fetch(&mut self, addr: u32) {
+        self.fetch_fault = Some(addr);
+        self.moved();
     }
 
     fn offset(&self, addr: u32, len: u32) -> Option<Range<usize>> {
@@ -46,6 +77,7 @@ impl Memory {
         let at = (addr - CODE) as usize;
         let new = bytes(hex);
         self.banks[self.bank][at..at + new.len()].copy_from_slice(&new);
+        self.moved();
     }
 }
 
@@ -60,6 +92,10 @@ fn bytes(hex: &str) -> Vec<u8> {
 
 impl Bus for Memory {
     fn fetch(&mut self, _now: Cycle, addr: u32) -> Result<u32, Exit> {
+        self.fetches += 1;
+        if self.held {
+            return Err(Exit::Stop);
+        }
         if self.fetch_fault == Some(addr) {
             return Err(Exit::Fault(Cause::InstructionFetchError));
         }
@@ -83,6 +119,7 @@ impl Bus for Memory {
             .ok_or(Exit::Fault(Cause::StoreProhibited))?;
         let len = range.len();
         self.banks[self.bank][range].copy_from_slice(&value.to_le_bytes()[..len]);
+        self.moved();
         Ok(())
     }
 
@@ -92,6 +129,14 @@ impl Bus for Memory {
 
     fn next_event(&mut self, _now: Cycle) -> Option<Cycle> {
         None
+    }
+
+    fn code_version(&self) -> Option<u64> {
+        self.version
+    }
+
+    fn fetch_held(&self) -> bool {
+        self.held
     }
 }
 
@@ -111,14 +156,15 @@ fn again(core: &mut Core<Esp32s3>, bus: &mut Memory) -> Stop {
 fn a_store_over_a_cached_op_runs_the_new_op() {
     says("1b33", CODE, "addi.n\ta3, a3, 1");
     says("5906", CODE, "s32i.n\ta5, a6, 0");
-    let mut bus = Memory::new("1b335906");
-    let mut core = core_at::<Esp32s3>(CODE);
-    core.set_a(5, u32::from_le_bytes([0x2b, 0x33, 0x59, 0x06]));
-    core.set_a(6, CODE);
-    assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
-    assert_eq!(core.a(3), 1);
-    assert_eq!(again(&mut core, &mut bus), Stop::Bus);
-    assert_eq!(core.a(3), 3, "the stored addi.n a3, a3, 2 ran");
+    for mut bus in Memory::both("1b335906") {
+        let mut core = core_at::<Esp32s3>(CODE);
+        core.set_a(5, u32::from_le_bytes([0x2b, 0x33, 0x59, 0x06]));
+        core.set_a(6, CODE);
+        assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
+        assert_eq!(core.a(3), 1);
+        assert_eq!(again(&mut core, &mut bus), Stop::Bus);
+        assert_eq!(core.a(3), 3, "the stored addi.n a3, a3, 2 ran");
+    }
 }
 
 /// The same store, aimed at the data-bus alias of the instruction window. The fetch address
@@ -127,20 +173,21 @@ fn a_store_over_a_cached_op_runs_the_new_op() {
 fn a_store_through_the_dram_alias_reaches_the_fetch() {
     says("1b33", CODE, "addi.n\ta3, a3, 1");
     says("2b33", CODE, "addi.n\ta3, a3, 2");
-    let alias = CODE + 0x200;
-    let mut bus = Memory::new("1b335906");
-    bus.alias = Some(alias);
-    let mut core = core_at::<Esp32s3>(CODE);
-    core.set_a(5, u32::from_le_bytes([0x2b, 0x33, 0x59, 0x06]));
-    core.set_a(6, alias);
-    assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
-    assert_eq!(core.a(3), 1);
-    assert_eq!(again(&mut core, &mut bus), Stop::Bus);
-    assert_eq!(
-        core.a(3),
-        3,
-        "the store through the alias replaced the cached addi.n"
-    );
+    for mut bus in Memory::both("1b335906") {
+        let alias = CODE + 0x200;
+        bus.alias = Some(alias);
+        let mut core = core_at::<Esp32s3>(CODE);
+        core.set_a(5, u32::from_le_bytes([0x2b, 0x33, 0x59, 0x06]));
+        core.set_a(6, alias);
+        assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
+        assert_eq!(core.a(3), 1);
+        assert_eq!(again(&mut core, &mut bus), Stop::Bus);
+        assert_eq!(
+            core.a(3),
+            3,
+            "the store through the alias replaced the cached addi.n"
+        );
+    }
 }
 
 /// The other core stores over an op this core has cached. Each core keeps its own table, and
@@ -149,18 +196,19 @@ fn a_store_through_the_dram_alias_reaches_the_fetch() {
 #[test]
 fn a_store_by_the_other_core_reaches_this_one() {
     says("861e00", CODE + 2, "j\t0x40370080");
-    let mut bus = Memory::new("1b33861e00");
-    bus.alias = Some(CODE + 0x100);
-    bus.banks[0].extend(bytes("5906"));
-    let mut pro = core_at::<Esp32s3>(CODE);
-    assert_eq!(pro.run_until(&mut bus, LIMIT), Stop::Bus);
-    assert_eq!((pro.a(3), pro.pc()), (1, CODE + 0x80));
-    let mut app = core_at::<Esp32s3>(CODE + 0x108);
-    app.set_a(5, u32::from_le_bytes([0x2b, 0x33, 0x86, 0x1e]));
-    app.set_a(6, CODE);
-    assert_eq!(app.run_until(&mut bus, LIMIT), Stop::Bus);
-    assert_eq!(again(&mut pro, &mut bus), Stop::Bus);
-    assert_eq!((pro.a(3), pro.pc()), (3, CODE + 0x80));
+    for mut bus in Memory::both("1b33861e00") {
+        bus.alias = Some(CODE + 0x100);
+        bus.banks[0].extend(bytes("5906"));
+        let mut pro = core_at::<Esp32s3>(CODE);
+        assert_eq!(pro.run_until(&mut bus, LIMIT), Stop::Bus);
+        assert_eq!((pro.a(3), pro.pc()), (1, CODE + 0x80));
+        let mut app = core_at::<Esp32s3>(CODE + 0x108);
+        app.set_a(5, u32::from_le_bytes([0x2b, 0x33, 0x86, 0x1e]));
+        app.set_a(6, CODE);
+        assert_eq!(app.run_until(&mut bus, LIMIT), Stop::Bus);
+        assert_eq!(again(&mut pro, &mut bus), Stop::Bus);
+        assert_eq!((pro.a(3), pro.pc()), (3, CODE + 0x80));
+    }
 }
 
 /// The fetch reads other bytes at the same PC, as after an MMU remap, here a three-byte op
@@ -168,28 +216,30 @@ fn a_store_by_the_other_core_reaches_this_one() {
 #[test]
 fn a_remap_under_a_cached_pc_runs_what_the_fetch_reads() {
     says("32c305", CODE, "addi\ta3, a3, 5");
-    let mut bus = Memory::new("1b330000");
-    bus.banks.push(bytes("32c30500"));
-    let mut core = core_at::<Esp32s3>(CODE);
-    assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
-    assert_eq!(core.a(3), 1);
-    bus.bank = 1;
-    assert_eq!(again(&mut core, &mut bus), Stop::Bus);
-    assert_eq!(core.a(3), 6);
+    for mut bus in Memory::both("1b330000") {
+        bus.banks.push(bytes("32c30500"));
+        let mut core = core_at::<Esp32s3>(CODE);
+        assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
+        assert_eq!(core.a(3), 1);
+        bus.remap(1);
+        assert_eq!(again(&mut core, &mut bus), Stop::Bus);
+        assert_eq!(core.a(3), 6);
+    }
 }
 
 /// An op that runs into the next word is keyed by the bytes of both words.
 #[test]
 fn a_change_in_the_second_word_of_an_op_misses() {
     says("f02000", CODE, "nop");
-    let mut bus = Memory::new("3df032c305f02000");
-    let mut core = core_at::<Esp32s3>(CODE);
-    assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
-    assert_eq!(core.a(3), 5);
-    bus.poke(CODE + 4, "07");
-    core.set_a(3, 0);
-    assert_eq!(again(&mut core, &mut bus), Stop::Bus);
-    assert_eq!(core.a(3), 7);
+    for mut bus in Memory::both("3df032c305f02000") {
+        let mut core = core_at::<Esp32s3>(CODE);
+        assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
+        assert_eq!(core.a(3), 5);
+        bus.poke(CODE + 4, "07");
+        core.set_a(3, 0);
+        assert_eq!(again(&mut core, &mut bus), Stop::Bus);
+        assert_eq!(core.a(3), 7);
+    }
 }
 
 /// The same bytes at two PCs decode to two targets, since a PC-relative operand is the target
@@ -197,38 +247,25 @@ fn a_change_in_the_second_word_of_an_op_misses() {
 #[test]
 fn the_same_jump_at_two_pcs_goes_to_two_targets() {
     says("060000", CODE, "j\t0x40370004");
-    let mut bus = Memory::new("060000");
-    bus.alias = Some(CODE + 0x100);
-    let mut core = core_at::<Esp32s3>(CODE);
-    assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
-    assert_eq!(core.pc(), CODE + 4);
-    core.set_pc(CODE + 0x100);
-    assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
-    assert_eq!(core.pc(), CODE + 0x104);
+    for mut bus in Memory::both("060000") {
+        bus.alias = Some(CODE + 0x100);
+        let mut core = core_at::<Esp32s3>(CODE);
+        assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
+        assert_eq!(core.pc(), CODE + 4);
+        core.set_pc(CODE + 0x100);
+        assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
+        assert_eq!(core.pc(), CODE + 0x104);
+    }
 }
 
 /// A cached op whose bytes become `ill` raises the exception on the next pass.
 #[test]
 fn a_cached_op_overwritten_with_ill_raises_it() {
-    let mut bus = Memory::new("1b330000");
-    let mut core = core_at::<Esp32s3>(CODE);
-    core.set_special(Sr::Ps, WOE);
-    assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
-    bus.poke(CODE, "000000");
-    core.set_pc(CODE);
-    core.run_until(&mut bus, Cycle(core.cycle().0 + 1));
-    assert_eq!(core.special(Sr::ExcCause), Cause::IllegalInstruction as u32);
-    assert_eq!(core.special(Sr::Epc1), CODE);
-}
-
-/// `000100` is not an instruction. Both fetches raise, and a table that kept the word would run it.
-#[test]
-fn an_undefined_word_stays_illegal() {
-    let mut bus = Memory::new("000100");
-    let mut core = core_at::<Esp32s3>(CODE);
-    for _ in 0..2 {
+    for mut bus in Memory::both("1b330000") {
+        let mut core = core_at::<Esp32s3>(CODE);
         core.set_special(Sr::Ps, WOE);
-        core.set_special(Sr::ExcCause, 5);
+        assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
+        bus.poke(CODE, "000000");
         core.set_pc(CODE);
         core.run_until(&mut bus, Cycle(core.cycle().0 + 1));
         assert_eq!(core.special(Sr::ExcCause), Cause::IllegalInstruction as u32);
@@ -236,18 +273,35 @@ fn an_undefined_word_stays_illegal() {
     }
 }
 
+/// `000100` is not an instruction. Both fetches raise, and a table that kept the word would run it.
+#[test]
+fn an_undefined_word_stays_illegal() {
+    for mut bus in Memory::both("000100") {
+        let mut core = core_at::<Esp32s3>(CODE);
+        for _ in 0..2 {
+            core.set_special(Sr::Ps, WOE);
+            core.set_special(Sr::ExcCause, 5);
+            core.set_pc(CODE);
+            core.run_until(&mut bus, Cycle(core.cycle().0 + 1));
+            assert_eq!(core.special(Sr::ExcCause), Cause::IllegalInstruction as u32);
+            assert_eq!(core.special(Sr::Epc1), CODE);
+        }
+    }
+}
+
 /// `LBEG`, `LEND` and `LCOUNT` are not part of a decode, so a cached loop body runs each
 /// count the loop op sets.
 #[test]
 fn a_cached_loop_body_runs_each_new_count() {
-    let mut bus = Memory::new("7682011b333df0");
-    let mut core = core_at::<Esp32s3>(CODE);
-    core.set_special(Sr::Ps, WOE);
-    for count in [5, 2, 7] {
-        core.set_a(2, count);
-        core.set_a(3, 0);
-        assert_eq!(again(&mut core, &mut bus), Stop::Bus);
-        assert_eq!((core.a(3), core.special(Sr::Lcount)), (count, 0));
+    for mut bus in Memory::both("7682011b333df0") {
+        let mut core = core_at::<Esp32s3>(CODE);
+        core.set_special(Sr::Ps, WOE);
+        for count in [5, 2, 7] {
+            core.set_a(2, count);
+            core.set_a(3, 0);
+            assert_eq!(again(&mut core, &mut bus), Stop::Bus);
+            assert_eq!((core.a(3), core.special(Sr::Lcount)), (count, 0));
+        }
     }
 }
 
@@ -256,32 +310,34 @@ fn a_cached_loop_body_runs_each_new_count() {
 #[test]
 fn a_cached_op_still_checks_the_window() {
     says("82c801", CODE, "addi\ta8, a8, 1");
-    let mut bus = Memory::new("82c801");
-    let mut core = core_at::<Esp32s3>(CODE);
-    core.set_special(Sr::Ps, WOE);
-    assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
-    assert_eq!(core.a(8), 1);
-    core.set_special(Sr::WindowStart, 0b11);
-    core.set_pc(CODE);
-    core.run_until(&mut bus, Cycle(core.cycle().0 + 1));
-    assert_eq!(core.special(Sr::Epc1), CODE, "the overflow was taken");
-    assert_eq!(core.special(Sr::WindowBase), 1, "at the spilled frame");
+    for mut bus in Memory::both("82c801") {
+        let mut core = core_at::<Esp32s3>(CODE);
+        core.set_special(Sr::Ps, WOE);
+        assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
+        assert_eq!(core.a(8), 1);
+        core.set_special(Sr::WindowStart, 0b11);
+        core.set_pc(CODE);
+        core.run_until(&mut bus, Cycle(core.cycle().0 + 1));
+        assert_eq!(core.special(Sr::Epc1), CODE, "the overflow was taken");
+        assert_eq!(core.special(Sr::WindowBase), 1, "at the spilled frame");
+    }
 }
 
 /// A clone starts with an empty table. Equality of two cores does not read the table, so this
 /// checks the bytes each copy runs after a store.
 #[test]
 fn a_clone_runs_what_memory_holds_now() {
-    let mut bus = Memory::new("1b330000");
-    let mut core = core_at::<Esp32s3>(CODE);
-    assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
-    let mut copy = core.clone();
-    bus.poke(CODE, "2b33");
-    assert_eq!(again(&mut copy, &mut bus), Stop::Bus);
-    assert_eq!(copy.a(3), 3);
-    bus.poke(CODE, "3b33");
-    assert_eq!(again(&mut core, &mut bus), Stop::Bus);
-    assert_eq!(core.a(3), 4);
+    for mut bus in Memory::both("1b330000") {
+        let mut core = core_at::<Esp32s3>(CODE);
+        assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
+        let mut copy = core.clone();
+        bus.poke(CODE, "2b33");
+        assert_eq!(again(&mut copy, &mut bus), Stop::Bus);
+        assert_eq!(copy.a(3), 3);
+        bus.poke(CODE, "3b33");
+        assert_eq!(again(&mut core, &mut bus), Stop::Bus);
+        assert_eq!(core.a(3), 4);
+    }
 }
 
 /// A fetch that faults at a PC the core has already decoded raises that fault and does not
@@ -289,24 +345,64 @@ fn a_clone_runs_what_memory_holds_now() {
 #[test]
 fn a_fetch_fault_at_a_cached_pc_does_not_run_it() {
     says("1b33", CODE, "addi.n\ta3, a3, 1");
-    let mut bus = Memory::new("1b330000");
+    for mut bus in Memory::both("1b330000") {
+        let mut core = core_at::<Esp32s3>(CODE);
+        core.set_special(Sr::Ps, WOE);
+        assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
+        assert_eq!(core.a(3), 1);
+        bus.fault_fetch(CODE);
+        core.set_a(3, 0);
+        core.set_special(Sr::Ps, WOE);
+        core.set_special(Sr::ExcCause, 5);
+        core.set_pc(CODE);
+        assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
+        assert_eq!(core.a(3), 0, "the kept addi.n did not run");
+        assert_eq!(
+            core.special(Sr::ExcCause),
+            Cause::InstructionFetchError as u32
+        );
+        assert_eq!(core.special(Sr::Epc1), CODE);
+        assert_eq!(core.special(Sr::ExcVaddr), CODE);
+    }
+}
+
+/// While the version holds, the core runs what it kept without a fetch. A bus that changed the
+/// bytes and kept its version would see the old op run, which is what the version promises
+/// cannot happen.
+#[test]
+fn a_kept_op_runs_without_a_fetch_while_the_version_holds() {
+    let [_, mut bus] = Memory::both("1b330000");
     let mut core = core_at::<Esp32s3>(CODE);
-    core.set_special(Sr::Ps, WOE);
     assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
     assert_eq!(core.a(3), 1);
-    bus.fetch_fault = Some(CODE);
-    core.set_a(3, 0);
-    core.set_special(Sr::Ps, WOE);
-    core.set_special(Sr::ExcCause, 5);
-    core.set_pc(CODE);
-    assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
-    assert_eq!(core.a(3), 0, "the kept addi.n did not run");
+    let first = bus.fetches;
+    bus.banks[0][0] = 0x2b;
+    assert_eq!(again(&mut core, &mut bus), Stop::Bus);
+    assert_eq!(core.a(3), 2, "the kept addi.n a3, a3, 1 ran");
     assert_eq!(
-        core.special(Sr::ExcCause),
-        Cause::InstructionFetchError as u32
+        bus.fetches - first,
+        first - 1,
+        "every fetch of the first pass but the kept op's"
     );
-    assert_eq!(core.special(Sr::Epc1), CODE);
-    assert_eq!(core.special(Sr::ExcVaddr), CODE);
+    bus.moved();
+    assert_eq!(again(&mut core, &mut bus), Stop::Bus);
+    assert_eq!(core.a(3), 4, "the fetched addi.n a3, a3, 2 ran");
+}
+
+/// A kept op stops where its fetch would have, before it runs and with no cycle charged.
+#[test]
+fn a_held_fetch_stops_before_a_kept_op() {
+    let [_, mut bus] = Memory::both("1b330000");
+    let mut core = core_at::<Esp32s3>(CODE);
+    assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
+    bus.held = true;
+    core.set_pc(CODE);
+    let cycle = core.cycle();
+    assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
+    assert_eq!((core.a(3), core.pc(), core.cycle()), (1, CODE, cycle));
+    bus.held = false;
+    assert_eq!(core.run_until(&mut bus, LIMIT), Stop::Bus);
+    assert_eq!(core.a(3), 2);
 }
 
 /// One `u32` is the fetched-byte key. A length of 0 is the empty slot, and a length above 4
