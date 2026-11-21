@@ -1210,10 +1210,15 @@ impl Reply {
 
     pub fn json(&self) -> Value {
         let mut value = serde_json::to_value(self.envelope()).expect("an envelope serializes");
-        if let Some(note) = &self.previous_crash
-            && let Some(data) = value.get_mut("data").filter(|data| data.is_object())
-        {
-            data["previous_crash"] = note.clone().into();
+        if let Some(note) = &self.previous_crash {
+            let data = value
+                .as_object_mut()
+                .expect("an envelope is an object")
+                .entry("data")
+                .or_insert_with(|| json!({}));
+            data.as_object_mut()
+                .expect("data is an object")
+                .insert("previous_crash".to_string(), note.clone().into());
         }
         value
     }

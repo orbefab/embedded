@@ -723,8 +723,8 @@ impl Circuit<'_> {
     /// A top part whose `at` puts a downward leg into a hole of a board that has its own `at`.
     /// The page draws that leg in the hole. The value is the board, the hole, and the pin `on`
     /// would name. A board with no `at` is drawn in a row, so it is not under the part.
-    /// `root` is each pin's net. A leg whose pin already shares the hole's net is seated, and
-    /// a part with one of those is not drawn as if its leads joined nothing.
+    /// `root` is each pin's net. A leg whose pin already shares the hole's net is skipped.
+    /// Another leg of the same part, in a hole it does not share, is still unseated.
     pub(super) fn hovering(&self, root: &[usize]) -> BTreeMap<String, (String, String, String)> {
         let mut trees = BTreeMap::new();
         let scene = self.tree(&mut trees, self.project.scene.file);
@@ -767,7 +767,6 @@ impl Circuit<'_> {
             let legs = self.legs(*id, &mut trees);
             let turned = rotation(place.rotate);
             let mut best: Option<(f64, String, String, String)> = None;
-            let mut seated = false;
             for leg in &legs {
                 let tip = turn(&turned, leg.tip);
                 let world = [
@@ -799,7 +798,6 @@ impl Circuit<'_> {
                             && hole.key < root.len()
                             && root[leg.pin_key] == root[hole.key]
                         {
-                            seated = true;
                             continue;
                         }
                         if best.as_ref().is_some_and(|&(near, ..)| distance >= near) {
@@ -813,9 +811,6 @@ impl Circuit<'_> {
                         ));
                     }
                 }
-            }
-            if seated {
-                continue;
             }
             if let Some((_, board, hole, pin)) = best {
                 found.insert(name.clone(), (board, hole, pin));

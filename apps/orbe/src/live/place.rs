@@ -158,25 +158,33 @@ impl Place {
         left
     }
 
-    /// `<name>.crashed.log`, the output of a session that ended without closing. The next crash
-    /// replaces it.
+    /// `<name>.log.crashed`, the output of a session that ended without closing. The next crash
+    /// replaces it. The name is not a session's log, socket, version or start log: a session
+    /// may contain `.`, and a start log's id is a number.
     pub fn crashed_log(&self, name: &Name) -> PathBuf {
-        self.dir.join(format!("{name}.crashed.log"))
+        self.dir.join(format!("{name}.log.crashed"))
     }
 
-    /// Moves `<name>.log` onto `<name>.crashed.log` when the log holds output, replacing any
-    /// older crashed log. The crashed log's path when that file holds output.
+    /// Moves `<name>.log` onto the crash log whenever that log is there, empty or not, so a
+    /// crash that wrote nothing replaces an older crash's output. When `<name>.log` is missing,
+    /// an earlier command already took this crash's log and the crash log stays. An empty crash
+    /// log is removed. The path when the crash log then holds output.
     pub fn take_crash_log(&self, name: &Name) -> Option<PathBuf> {
         let log = self.log(name);
         let crashed = self.crashed_log(name);
-        if holds_output(&log) {
+        if fs::symlink_metadata(&log).is_ok() {
             let _ = fs::rename(&log, &crashed);
         }
-        holds_output(&crashed).then_some(crashed)
+        if holds_output(&crashed) {
+            Some(crashed)
+        } else {
+            let _ = fs::remove_file(&crashed);
+            None
+        }
     }
 }
 
-fn holds_output(path: &Path) -> bool {
+pub(super) fn holds_output(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0)
 }
 
