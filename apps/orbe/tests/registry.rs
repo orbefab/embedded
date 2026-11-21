@@ -946,9 +946,9 @@ fn refuse_outside(src: &Path, place: &str, path: &str, folder: &str) {
     assert!(!out.exists(), "a refused build writes nothing");
 }
 
-/// The firmware the engine's tests build, by its absolute path.
+/// A Block's firmware, by its absolute path.
 fn button_hex() -> String {
-    let path = repo().join("packages/engine/tests/firmware/sketch/button.hex");
+    let path = repo().join("blocks/nano-button-led/firmware/button.hex");
     path.canonicalize().unwrap().to_str().unwrap().to_string()
 }
 
@@ -989,7 +989,7 @@ fn a_part_default_that_leaves_its_folder_is_not_published() {
 #[test]
 fn a_block_file_that_leaves_its_folder_is_not_published() {
     let hex = button_hex();
-    let through = hex.replacen("/sketch/", "/sketch/../sketch/", 1);
+    let through = hex.replacen("/firmware/", "/firmware/../firmware/", 1);
     assert_ne!(through, hex);
     for path in [hex.clone(), through, "../firmware.hex".to_string()] {
         let dir = tempfile::tempdir().unwrap();

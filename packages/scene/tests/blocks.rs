@@ -134,30 +134,27 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
     }
 }
 
-/// A Block's image is the engine's build of the sketch beside it, so `sketches.sh` rebuilds it
-/// and the licences it carries are the ones that build needs.
+/// `sketches.sh` rebuilds a Block's image from the sketch beside it, and the licences it carries
+/// are the ones that build needs.
 #[test]
-fn each_block_firmware_is_the_engine_build_of_its_sketch() {
+fn each_block_firmware_is_built_from_the_sketch_beside_it() {
     let sketches = common::repo().join("packages/engine/tests/firmware/sketch");
     for dir in block_dirs() {
         let firmware = dir.join("firmware");
         let mut images = 0;
         for file in fs::read_dir(&firmware).unwrap() {
             let name = file.unwrap().file_name().into_string().unwrap();
-            let same = |rel: &str| {
-                assert_eq!(
-                    fs::read(firmware.join(rel)).unwrap(),
-                    fs::read(sketches.join(rel)).unwrap(),
-                    "{}: {rel}",
-                    firmware.display()
-                );
-            };
             if let Some(sketch) = name.strip_suffix(".hex") {
-                same(&name);
-                same(&format!("{sketch}/{sketch}.ino"));
+                let source = firmware.join(format!("{sketch}/{sketch}.ino"));
+                assert!(source.is_file(), "{}", source.display());
                 images += 1;
             } else if name.starts_with("LICENSE-") {
-                same(&name);
+                assert_eq!(
+                    fs::read(firmware.join(&name)).unwrap(),
+                    fs::read(sketches.join(&name)).unwrap(),
+                    "{}: {name}",
+                    firmware.display()
+                );
             }
         }
         assert!(images > 0, "{}", firmware.display());

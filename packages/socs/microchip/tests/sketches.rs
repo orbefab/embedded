@@ -1,5 +1,6 @@
-//! The compiled sketches in `packages/engine/tests/firmware/sketch`, built by `packages/engine/scripts/sketches.sh` against the
-//! standard AVR runtime for an ATmega328P at 16 MHz.
+//! The compiled sketches in `packages/engine/tests/firmware/sketch` and the Blocks' `firmware`,
+//! built by `packages/engine/scripts/sketches.sh` against the standard AVR runtime for an
+//! ATmega328P at 16 MHz.
 //!
 //! Each expected time comes from the runtime's own setup. Its `init()` runs Timer0 in fast PWM
 //! at /64, so Timer0 overflows every 256 * 64 cycles. The overflow ISR adds 1 ms to `millis()`
@@ -31,11 +32,14 @@ const PB5: u32 = 5;
 const PD1: u32 = 17;
 const PD2: u32 = 18;
 
-fn load(name: &str) -> Cpu {
-    let path = format!(
-        "{}/../../engine/tests/firmware/sketch/{name}.hex",
-        env!("CARGO_MANIFEST_DIR")
-    );
+/// An engine test sketch's image.
+fn sketch(name: &str) -> String {
+    format!("packages/engine/tests/firmware/sketch/{name}.hex")
+}
+
+/// The image at `path`, from the repository root.
+fn load(path: &str) -> Cpu {
+    let path = format!("{}/../../../{path}", env!("CARGO_MANIFEST_DIR"));
     let image = parse_hex(&std::fs::read_to_string(path).unwrap()).unwrap();
     let mut cpu = Cpu::new();
     cpu.load_image(&image).unwrap();
@@ -106,7 +110,7 @@ fn assert_back_to_back(frames: &[(u64, u8)], bit: u64) {
 
 #[test]
 fn blink_holds_each_level_for_delay_1000() {
-    let mut cpu = load("blink");
+    let mut cpu = load(&sketch("blink"));
     // 10 ms past the second hold, so its closing edge lands inside the run.
     let edges = edges(&mut cpu, PB5, 2 * 1000 * MS + 10 * MS);
     let levels: Vec<bool> = edges.iter().map(|&(_, high)| high).collect();
@@ -123,7 +127,7 @@ fn blink_holds_each_level_for_delay_1000() {
 
 #[test]
 fn blink_without_delay_toggles_as_millis_passes_each_second() {
-    let mut cpu = load("blink_without_delay");
+    let mut cpu = load(&sketch("blink_without_delay"));
     let limit = overflow_reaching(3000) * T0_OVERFLOW + SLACK;
     let edges = edges(&mut cpu, PB5, limit);
     let levels: Vec<bool> = edges.iter().map(|&(_, high)| high).collect();
@@ -139,7 +143,7 @@ fn blink_without_delay_toggles_as_millis_passes_each_second() {
 
 #[test]
 fn button_copies_pin_2_to_the_led() {
-    let mut cpu = load("button");
+    let mut cpu = load("blocks/nano-button-led/firmware/button.hex");
     let mut led = edges(&mut cpu, PB5, 100_000);
     assert_eq!(
         led.iter().map(|&(_, high)| high).collect::<Vec<_>>(),
@@ -174,7 +178,7 @@ fn fade_steps_the_duty_on_pin_9_every_30_ms() {
     // The glitch spans the few instructions of `digitalWrite` between its two stores. This bound
     // is a tenth of the narrowest pulse, 128 * 5 cycles.
     const GLITCH: u64 = 64;
-    let mut cpu = load("fade");
+    let mut cpu = load("blocks/nano-led-fade/firmware/fade.hex");
     let edges = edges(&mut cpu, PB1, 1700 * MS);
     assert!(!edges[0].1, "pinMode drives the pin low");
     let pulses: Vec<(u64, u64)> = edges[1..]
@@ -247,7 +251,7 @@ fn fade_steps_the_duty_on_pin_9_every_30_ms() {
 fn analog_read_serial_prints_the_code_of_a0_at_9600_baud() {
     let bit = bit_cycles(9600);
     assert_eq!(bit, 1664);
-    let mut cpu = load("analog_read_serial");
+    let mut cpu = load(&sketch("analog_read_serial"));
     cpu.set_channel_voltage(0, 3.3);
     let mut txd = edges(&mut cpu, PD1, 1_000_000);
     cpu.set_channel_voltage(0, 1.0);
@@ -269,7 +273,7 @@ fn analog_read_serial_prints_the_code_of_a0_at_9600_baud() {
 fn serial_counter_prints_each_count_at_115200_baud() {
     let bit = bit_cycles(115_200);
     assert_eq!(bit, 136);
-    let mut cpu = load("serial_counter");
+    let mut cpu = load(&sketch("serial_counter"));
     let frames = decode_txd(&edges(&mut cpu, PD1, 500 * MS), bit, cpu.cycles());
     assert_back_to_back(&frames, bit);
     let text = text(&frames);
@@ -288,7 +292,7 @@ fn serial_counter_prints_each_count_at_115200_baud() {
 fn tone_plays_440_toggles_of_440_hz_once_a_second() {
     const HALF: u64 = 142 * 128;
     const LATENCY: u64 = 128;
-    let mut cpu = load("tone");
+    let mut cpu = load(&sketch("tone"));
     let edges = edges(&mut cpu, PB0, 1000 * MS + 10 * MS);
     assert!(!edges[0].1, "pinMode drives the pin low");
     let burst: Vec<(u64, bool)> = edges[1..]

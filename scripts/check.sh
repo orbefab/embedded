@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
-# Checks the repo. `lint` runs shellcheck on every tracked shell script, ruff on every tracked
+# Checks the repo, in tiers. This header is where the tiers are written down: what each one runs
+# and what it needs. The header of .github/workflows/ci.yml says what CI runs, and when.
+# `lint` runs shellcheck on every tracked shell script, ruff on every tracked
 # Python file, `scripts/core-deps.sh`, rustfmt, clippy, and clippy on orbe-model, orbe-scene,
 # orbe-session and orbe-wasm for wasm32.
 # `fast` runs `lint`, then `rust`. `rust` is the Rust tests through cargo-nextest, except the
 # engine tests marked `full tier`. `orbe-avr` and `orbe-microchip` are in that workspace run.
 # `full` runs the microchip tests once, in their `port-skip-check` build, instead of in the
-# workspace run. CI calls `rust` on its own, without `lint`.
+# workspace run.
 # `viewer` runs `check-viewer.sh`, `check-viewer-e2e.sh`, `check-block.sh` and `check-headed.sh`.
 # `web` runs `viewer`, then `site-previous.test.sh`, `site-port.test.sh`,
 # `check-site.sh --first-deploy` and `check-engines.sh`, each once.
 # `check-assets.sh` stays separate, because it needs a models checkout.
 # `engine-chips`, `engine-circuits` and `engine-wasm` are the steps of `full` beyond `fast` and
 # `web`, except `scripts/check-speed.sh`. `full` runs those steps in the order below, then the
-# speed check on the package `engine-wasm` built, then `web`. CI runs the three engine commands
-# in parallel and does not run the speed check. The wasm package check and the speed check run
-# once, not again in `web`.
+# speed check on the package `engine-wasm` built, then `web`. The wasm package check and the
+# speed check run once, not again in `web`.
 # `lint` needs uv and shellcheck. `fast`, `rust`, `full`, `engine-chips` and `engine-circuits`
 # need cargo-nextest too.
 # `viewer` needs Node 24, pnpm, the repo's Node dependencies, cargo, a Chromium as
@@ -25,8 +26,6 @@
 # also need `sudo pnpm exec playwright install-deps firefox webkit`.
 # `full` and `engine-circuits` also need ngspice-42. `full` and `engine-wasm` need rustup with
 # the wasm32-wasip1 target and that wasm-bindgen CLI.
-# `scripts/check-site.sh --servers vite|wrangler` drives one host, and `--shard N/M` runs one
-# Playwright shard. With neither, `web` and `full` behave as they always have.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -72,8 +71,9 @@ lint_tracked() {
     echo "scripts/check.sh: no tracked Python file" >&2
     exit 1
   fi
-  uv run --project packages/cad --frozen ruff check "${py[@]}"
-  uv run --project packages/cad --frozen ruff format --check "${py[@]}"
+  # uvx fetches this one ruff on its own, without the CAD project's dependencies.
+  uvx ruff@0.17.4 check "${py[@]}"
+  uvx ruff@0.17.4 format --check "${py[@]}"
 }
 
 lint() {

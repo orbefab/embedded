@@ -233,7 +233,7 @@ fn the_arduino_sketch_is_the_one_the_prebuilt_firmware_was_built_from() {
         .into_iter()
         .find(|(info, _)| info == "cpp button/button.ino")
         .expect("the arduino skill shows the sketch");
-    let built_from = common::repo().join("packages/engine/tests/firmware/sketch/button/button.ino");
+    let built_from = common::repo().join("blocks/nano-button-led/firmware/button/button.ino");
     assert_eq!(sketch, fs::read_to_string(built_from).unwrap());
     assert!(text.contains("\"firmware\": \"build/button.ino.hex\""));
 }

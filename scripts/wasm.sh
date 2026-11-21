@@ -8,8 +8,8 @@
 # The script needs bash 4.2 or later, rustup with the wasm32-unknown-unknown target, and the
 # wasm-bindgen CLI at the version Cargo.lock holds for the crate. It installs neither. It uses
 # WASM_TOOLS_DIR/wasm-bindgen-<version>/bin/wasm-bindgen when it is there, then a wasm-bindgen on
-# PATH at that version. Otherwise it exits 2 and prints the `cargo install` command that puts it
-# in WASM_TOOLS_DIR, which defaults to .scratch/wasm/tools in the repo.
+# PATH at that version. Otherwise it exits 2 and says to run scripts/install-wasm-bindgen.sh,
+# which puts it in WASM_TOOLS_DIR, which defaults to .scratch/wasm/tools in the repo.
 #
 # OUT_DIR defaults to .scratch/wasm/pkg in the repo. CARGO_TARGET_DIR is honored, and
 # CARGO_BUILD_JOBS defaults to 4.
@@ -288,8 +288,7 @@ if ! rustup target list --installed | grep -qx wasm32-unknown-unknown; then
   exit 2
 fi
 
-version=$(awk '$0 == "name = \"wasm-bindgen\"" { getline; gsub(/version = |"/, ""); print }' \
-  Cargo.lock)
+version=$(scripts/install-wasm-bindgen.sh --version)
 tools=$tools_dir/wasm-bindgen-$version
 bindgen=$tools/bin/wasm-bindgen
 if [[ ! -x $bindgen ]] && found=$(command -v wasm-bindgen); then
@@ -302,7 +301,7 @@ if [[ ! -x $bindgen ]] && found=$(command -v wasm-bindgen); then
 fi
 if [[ ! -x $bindgen ]]; then
   echo "orbe-wasm: wasm-bindgen $version is not installed. Install it with:" >&2
-  echo "  cargo install wasm-bindgen-cli --version =$version --locked --root $tools" >&2
+  echo "  scripts/install-wasm-bindgen.sh" >&2
   exit 2
 fi
 

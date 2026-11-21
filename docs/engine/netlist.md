@@ -946,7 +946,7 @@ The run works out each port pin's current from the row and the drive the firmwar
 
 An ATmega328P has no `i`, `v`, or `p`. Its logic signals are its watched pins, described in [Refs](#refs).
 
-`packages/engine/tests/circuits/atmega-board-blink` places this part on the development board fragment and runs `packages/engine/tests/firmware/sketch/blink.hex`. `packages/engine/tests/circuits/atmega-board-button` is that fragment running `packages/engine/tests/firmware/sketch/button.hex`, with a switch from `d2` to `v5` and a 10 kohm pull-down to `gnd`. `packages/engine/tests/circuits/atmega-board-knob` is that fragment running `packages/engine/tests/firmware/sketch/knob.hex`, with a knob's two contacts on `d2` and `d3`, and the sketch prints a count for each.
+`packages/engine/tests/circuits/atmega-board-blink` places this part on the development board fragment and runs `packages/engine/tests/firmware/sketch/blink.hex`. `packages/engine/tests/circuits/atmega-board-button` is that fragment running `blocks/nano-button-led/firmware/button.hex`, with a switch from `d2` to `v5` and a 10 kohm pull-down to `gnd`. `packages/engine/tests/circuits/atmega-board-knob` is that fragment running `packages/engine/tests/firmware/sketch/knob.hex`, with a knob's two contacts on `d2` and `d3`, and the sketch prints a count for each.
 
 ### SPI replay
 

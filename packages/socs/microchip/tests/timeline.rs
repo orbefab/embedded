@@ -892,11 +892,9 @@ fn corners() -> Vec<Timeline> {
     ]
 }
 
+/// The image at `path`, from the repository root.
 fn image(path: &str) -> Cpu {
-    let path = format!(
-        "{}/../../engine/tests/firmware/{path}.hex",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    let path = format!("{}/../../../{path}", env!("CARGO_MANIFEST_DIR"));
     let image = orbe_microchip::parse_hex(&std::fs::read_to_string(path).unwrap()).unwrap();
     let mut cpu = Cpu::new();
     cpu.load_image(&image).unwrap();
@@ -914,16 +912,25 @@ fn a_clone_from_across_runs_leaves_the_state_a_clone_does() {
     const MS: u64 = 16_000;
     let mut states = vec![Timeline::new(Cpu::new())];
     for (name, pads) in [
-        ("sketch/analog_read_serial", &[][..]),
-        ("sketch/blink", &[]),
-        ("sketch/blink_without_delay", &[]),
-        ("sketch/button", &[PD2]),
-        ("sketch/fade", &[]),
-        ("sketch/serial_counter", &[PD0]),
-        ("sketch/tone", &[]),
-        ("adc", &[]),
-        ("echo", &[PD0]),
-        ("speedup", &[]),
+        (
+            "packages/engine/tests/firmware/sketch/analog_read_serial.hex",
+            &[][..],
+        ),
+        ("packages/engine/tests/firmware/sketch/blink.hex", &[]),
+        (
+            "packages/engine/tests/firmware/sketch/blink_without_delay.hex",
+            &[],
+        ),
+        ("blocks/nano-button-led/firmware/button.hex", &[PD2]),
+        ("blocks/nano-led-fade/firmware/fade.hex", &[]),
+        (
+            "packages/engine/tests/firmware/sketch/serial_counter.hex",
+            &[PD0],
+        ),
+        ("packages/engine/tests/firmware/sketch/tone.hex", &[]),
+        ("packages/engine/tests/firmware/adc.hex", &[]),
+        ("packages/engine/tests/firmware/echo.hex", &[PD0]),
+        ("packages/engine/tests/firmware/speedup.hex", &[]),
     ] {
         states.push(ran(image(name), 3 * MS, pads));
     }
@@ -945,7 +952,7 @@ fn a_clone_from_across_runs_leaves_the_state_a_clone_does() {
     }
     states.push(ran(cpu(&every_queue()), 70_000, &ARMED));
     states.extend(corners());
-    let mut asked = Timeline::new(image("adc"));
+    let mut asked = Timeline::new(image("packages/engine/tests/firmware/adc.hex"));
     while !asked.run_until(MS).is_some_and(|halt| halt.sample) {}
     states.push(asked);
     let mut slow = cpu(&every_queue());
