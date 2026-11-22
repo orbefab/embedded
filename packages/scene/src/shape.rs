@@ -67,6 +67,7 @@ const PARAM_KEYS: &[(&str, Shape)] = &[
     ("min_exclusive", Shape::Num),
     ("max_exclusive", Shape::Num),
     ("sets", Shape::Str),
+    ("live", Shape::Bool),
 ];
 
 const PARAM: Shape = Shape::Obj("a param declaration", PARAM_KEYS);
@@ -108,6 +109,7 @@ const PARAM_KINDS: &[(ParamShape, &str, Option<&str>, &[&str])] = &[
             "min_exclusive",
             "max_exclusive",
             "sets",
+            "live",
         ],
     ),
     (
@@ -187,6 +189,7 @@ const JOINT: Shape = Shape::Obj(
         ("slide", Shape::List(&Shape::Num)),
         ("turn", Shape::List(&Shape::Num)),
         ("range", VALUE),
+        ("by", Shape::Str),
     ],
 );
 

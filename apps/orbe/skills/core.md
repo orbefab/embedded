@@ -152,7 +152,7 @@ Give the board an `at`. Then seat every part with leads using `on`: name one pin
 - `@led1.color`: the colour an addressable LED last latched, as `rgb(r,g,b)` from 0 to 255, and when. `get @led1` prints it as `color=`.
 - `@nano.mcu.PB5`, `@nano.led_l`: a part inside a part, by its name in that part's file. On the Nano and the Uno the chip is `mcu`, and `led_l` is the L LED, which D13 drives.
 
-`press @btn1` and `release @btn1` close and open a switch. `orbe set light 50` changes a `world` quantity from then on. `orbe get light` reads the value in force, and `orbe get @world.light` reads the same.
+`press @btn1` and `release @btn1` close and open a switch. `orbe set light 50` changes a `world` quantity from then on. `orbe get light` reads the value in force, and `orbe get @world.light` reads the same. `orbe set @pot1.position 0.8` turns a potentiometer's knob from then on, and `orbe get @pot1.position` reads it. `set` changes only a param `orbe part` says `set` changes, inside its range. The next `step` solves with it, so the wiper's voltage and the sketch's `analogRead` move.
 
 `expect` and `step --until` take the same conditions:
 

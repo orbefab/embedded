@@ -136,6 +136,8 @@ pub(crate) struct ParamDecl {
     pub(crate) sets: Option<String>,
     /// The part file's own check refused a pointer of this param, so its values never land.
     pub(crate) sets_refused: bool,
+    /// `"live": true`, at that key: a session's `set` changes the param while time runs.
+    pub(crate) live: Option<Span>,
 }
 
 impl ParamDecl {
@@ -556,6 +558,10 @@ pub(crate) fn decode_part(
     if let Some(model) = part.model.clone() {
         part.bodies = decode_bodies(&model, &part, format, out);
         check_sets(&mut part, &model, out);
+    }
+    check_live(&part, out);
+    if let Some(joints) = root.get("joints") {
+        check_joints(joints, &part, out);
     }
     if let Some(layout) = root.get("layout") {
         decode_layout(layout, &part.comp, false, out);
@@ -1362,7 +1368,8 @@ fn decode_pins(node: &Node, out: &mut Findings) -> Vec<Pin> {
 
 /// Each name a part file gives to another of its own sections: `controls.press.joint` to a key
 /// of `joints`, each `view.glow` entry's `by` to a reading, and each `view.tint` and
-/// `view.recolour` entry's `by` to a param. A section that is not an object has its own finding.
+/// `view.recolour` entry's `by` and each joint's `by` to a param. A section that is not an
+/// object has its own finding.
 fn check_own_names(root: &Node, out: &mut Findings) {
     let press = root.get("controls").and_then(|c| c.get("press"));
     let mut names: Vec<(&Node, &str, &str)> = press
@@ -1370,6 +1377,13 @@ fn check_own_names(root: &Node, out: &mut Findings) {
         .map(|joint| (joint, "joints", "joint"))
         .into_iter()
         .collect();
+    let joints = root.get("joints").and_then(Node::props).unwrap_or_default();
+    names.extend(
+        joints
+            .iter()
+            .filter_map(|joint| joint.value.get("by"))
+            .map(|by| (by, "params", "param")),
+    );
     let view = root.get("view");
     for (list, section, what) in [
         ("glow", "readings", "reading"),
@@ -1411,6 +1425,103 @@ fn check_own_names(root: &Node, out: &mut Findings) {
             format!("this part has no {what} named `{name}`"),
             hint,
         );
+    }
+}
+
+/// A live param is a number param with both bounds, which a page's slider spans, that sets the
+/// one field the engine changes while a session runs on the part's one engine part, such as a
+/// potentiometer's `/position`.
+fn check_live(part: &Part, out: &mut Findings) {
+    for decl in &part.params {
+        let Some(span) = decl.live else { continue };
+        let ParamKind::Number { range, .. } = &decl.kind else {
+            continue;
+        };
+        let problem = if range.above.is_none() || range.below.is_none() {
+            Some((
+                "a live param needs `min_exclusive` and `max_exclusive`, the range `set` and a page's slider take".to_string(),
+                "add both bounds, or remove \"live\": true".to_string(),
+            ))
+        } else {
+            match part.bodies.as_slice() {
+                [body] if body.name.is_none() => match orbe_engine::netlist::live_field(&body.kind)
+                {
+                    None => Some((
+                        format!(
+                            "the engine changes no field of a `{}` while a session runs",
+                            body.kind
+                        ),
+                        "remove \"live\": true".to_string(),
+                    )),
+                    Some(field) if decl.sets.as_deref() != Some(&format!("/{field}")) => Some((
+                        format!(
+                            "the engine changes only `/{field}` of a `{}` while a session runs",
+                            body.kind
+                        ),
+                        format!("point `sets` at \"/{field}\", or remove \"live\": true"),
+                    )),
+                    Some(_) => None,
+                },
+                _ => Some((
+                    "a live param sets a field of a part whose `model` is one engine part"
+                        .to_string(),
+                    "remove \"live\": true".to_string(),
+                )),
+            }
+        };
+        if let Some((message, hint)) = problem {
+            out.push(
+                Code::Param,
+                span,
+                format!("param `{}`: {message}", decl.name),
+                hint,
+            );
+        }
+    }
+}
+
+/// A joint `by` a param follows that param across its range, so the param is a number with both
+/// bounds. A joint that turns has its `range` in degrees.
+fn check_joints(joints: &Node, part: &Part, out: &mut Findings) {
+    for joint in joints.props().unwrap_or_default() {
+        if let Some(by) = joint.value.get("by")
+            && let Some(name) = by.str()
+            && let Some(decl) = part.param(name)
+        {
+            let bounded = matches!(
+                decl.kind,
+                ParamKind::Number {
+                    range: Range {
+                        above: Some(_),
+                        below: Some(_)
+                    },
+                    ..
+                }
+            );
+            if !bounded {
+                out.push(
+                    Code::Param,
+                    by.span,
+                    format!(
+                        "joint `{}` follows param `{name}`, which is not a number with `min_exclusive` and `max_exclusive`",
+                        joint.key
+                    ),
+                    format!("give `{name}` both bounds, or remove `by`"),
+                );
+            }
+        }
+        let unit = joint.value.get("range").and_then(|range| range.get("unit"));
+        if joint.value.get("turn").is_some()
+            && let Some(unit) = unit
+            && unit.str() != Some("deg")
+        {
+            out.push(
+                Code::Param,
+                unit.span,
+                format!("joint `{}` turns, so its `range` is in deg", joint.key),
+                "write the range in degrees, as \"unit\": \"deg\"".into(),
+            );
+        }
     }
 }
 
@@ -1605,6 +1716,9 @@ fn decode_params(node: &Node, part: &Part, format: u32, out: &mut Findings) -> V
                 hint,
             );
         }
+        let live = field("live")
+            .filter(|node| matches!(node.json, Json::Bool(true)))
+            .map(|node| node.span);
         params.push(ParamDecl {
             name: prop.key.clone(),
             span: prop.key_span,
@@ -1612,6 +1726,7 @@ fn decode_params(node: &Node, part: &Part, format: u32, out: &mut Findings) -> V
             default,
             sets,
             sets_refused: false,
+            live,
         });
     }
     params

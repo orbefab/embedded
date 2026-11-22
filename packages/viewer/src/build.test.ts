@@ -39,12 +39,16 @@ const parts: Record<string, PartData> = {
   lamp: partData("lamp.glb", { view: { glow: [{ node: "lens", by: "brightness" }] }, readings: { brightness: { full: 0.01 } } }),
   pixel: partData("pixel.glb", { view: { glow: [{ node: "lens", by: "color" }] } }),
   board: partData("board.glb"),
+  pot: partData("pot.glb", {
+    joints: { knob: { node: "shaft", turn: [0, 0, -1], range: 300, by: { param: "position", min: 0, max: 1 } } },
+  }),
 };
 const models = new Map([
   ["resistor.glb", body(...BANDS)],
   ["lamp.glb", body("body")],
   ["pixel.glb", body("body", "lens")],
   ["board.glb", body("pcb")],
+  ["pot.glb", body("shaft")],
 ]);
 
 function scene(instances: Instance[], extra: Partial<SceneMessage> = {}): SceneMessage {
@@ -247,5 +251,21 @@ describe("fromGltf", () => {
   test("refuses a root that has a mesh of its own", async () => {
     const gltf = await new GLTFLoader().parseAsync(glb(true), "");
     expect(() => fromGltf(gltf, "root-mesh.glb")).toThrow("root-mesh.glb: the GLB's root node has a mesh");
+  });
+
+  test("a joint by a param turns its node half its range each way from the middle, from the live channel", () => {
+    const pots = [
+      { name: "pot1", part: "pot", params: { position: 0.5 }, placement: at, children: [] },
+      { name: "pot2", part: "pot", params: { position: 0.75 }, placement: at, children: [] },
+    ];
+    const live = { ref: "@pot2.position", unit: "1", above: 0, below: 1, start: 0.75 } as const;
+    const built = buildScene(scene(pots, { params: [live] }), models);
+    expect(built.errors).toEqual([]);
+    const [first, second] = built.turns;
+    expect([first?.channel, first?.value, second?.channel, second?.value]).toEqual([-1, 0.5, 0, 0.75]);
+    const degrees = (value: number) => ((second?.angle(value) ?? Number.NaN) * 180) / Math.PI;
+    expect([degrees(0), degrees(0.5), degrees(1)].map((d) => Math.round(d))).toEqual([-150, 0, 150]);
+    expect(second?.axis.toArray().map((v) => Math.round(v))).toEqual([0, 0, -1]);
+    expect(second?.node.name).toBe("shaft");
   });
 });
