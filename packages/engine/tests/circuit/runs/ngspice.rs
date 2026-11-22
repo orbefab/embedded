@@ -360,10 +360,7 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
     {
         assert_eq!(
             found,
-            vec![
-                ("rating.current".to_string(), "#u1.iout".to_string()),
-                ("rating.power".to_string(), "#u1.p".to_string()),
-            ],
+            vec![("rating.current".to_string(), "#u1.iout".to_string())],
             "{label}"
         );
     } else {

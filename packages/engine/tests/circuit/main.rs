@@ -7,6 +7,7 @@ mod divider;
 mod inductor;
 mod junction;
 mod potentiometer;
+mod power;
 mod regulator;
 mod relay;
 mod runs;

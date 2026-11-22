@@ -550,14 +550,16 @@ pub struct Excursion {
     pub quantity: Ref,
     /// The rating, in SI units.
     pub limit: f64,
-    /// Largest magnitude seen, or for a DC rating the largest RMS over `window_ps`.
+    /// Largest magnitude seen. For a DC current rating, the largest RMS over `window_ps`.
+    /// For a power rating, the largest average of the magnitude over `window_ps`.
     pub peak: f64,
     pub peak_at: Time,
     /// First sample over the limit.
     pub first: Time,
     /// Total time over the limit. `None` for an operating point, which has no duration.
     pub over_ps: Option<u64>,
-    /// The window a DC rating's RMS runs over, or `None` for a rating checked on each sample.
+    /// The window a DC current's RMS or a power's average runs over, or `None` for a rating
+    /// checked on each sample.
     pub window_ps: Option<u64>,
 }
 
@@ -1561,8 +1563,8 @@ impl Diagnostic {
                 from.as_ps(),
                 to.as_ps()
             ),
-            Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A", namer),
-            Diagnostic::RatingPower(excursion) => over_rating(excursion, "W", namer),
+            Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A", false, namer),
+            Diagnostic::RatingPower(excursion) => over_rating(excursion, "W", true, namer),
             Diagnostic::RatingVoltage(excursion) => outside_window(excursion, namer),
         }
     }
@@ -1840,7 +1842,12 @@ pub(crate) fn number_text(value: f64) -> String {
     }
 }
 
-fn over_rating(excursion: &Excursion, unit: &str, namer: &dyn Fn(&Ref) -> String) -> String {
+fn over_rating(
+    excursion: &Excursion,
+    unit: &str,
+    average: bool,
+    namer: &dyn Fn(&Ref) -> String,
+) -> String {
     let Excursion {
         quantity,
         limit,
@@ -1851,6 +1858,10 @@ fn over_rating(excursion: &Excursion, unit: &str, namer: &dyn Fn(&Ref) -> String
     } = excursion;
     let quantity = namer(quantity);
     let reading = match window_ps {
+        Some(window) if average => format!(
+            "{quantity} averages {peak} {unit} over the last {} ms",
+            *window as f64 / 1e9
+        ),
         Some(window) => format!(
             "{quantity} carries {peak} {unit} RMS over the last {} ms",
             *window as f64 / 1e9

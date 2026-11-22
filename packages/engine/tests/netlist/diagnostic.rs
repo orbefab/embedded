@@ -101,7 +101,7 @@ fn samples() -> Vec<Diagnostic> {
             peak_at: Time::from_ps(7),
             first: Time::from_ps(5),
             over_ps: Some(4),
-            window_ps: None,
+            window_ps: Some(10_200_000_000),
         }),
         Diagnostic::NetlistSchedule {
             part: part("sw1"),
@@ -365,7 +365,7 @@ fn severity_refs_and_time_follow_the_variant() {
     let power = serde_json::to_string(by_code(&found, "rating.power")).unwrap();
     assert!(
         power.contains(
-            r##""refs":["#r1.p"],"t_ps":5,"message":"#r1.p peaks at 3 W, over its 0.25 W rating for 4 ps","data":{"limit":0.25,"over_ps":4,"peak":3.0,"peak_ps":7,"window_ps":null}"##
+            r##""refs":["#r1.p"],"t_ps":5,"message":"#r1.p averages 3 W over the last 10.2 ms, over its 0.25 W rating for 4 ps","data":{"limit":0.25,"over_ps":4,"peak":3.0,"peak_ps":7,"window_ps":10200000000}"##
         ),
         "{power}"
     );

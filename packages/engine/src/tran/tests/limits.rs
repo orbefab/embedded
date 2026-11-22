@@ -4,7 +4,8 @@ use super::super::*;
 use super::fixtures::*;
 use crate::session::Budget;
 
-/// 5 V pulsed onto 10 ohm rated 1 mW, from 3 ns for 2 ns, on a 10 ns grid. No row sees it.
+/// 5 V pulsed onto 10 ohm from 3 ns for 2 ns, on a 10 ns grid. No row sees it. 2.5 W for
+/// 2 ns averages about 4.9e-7 W over 10.2 ms, and the rating sits under that share.
 fn pulse_between_rows() -> Netlist {
     crate::netlist::parse(
         br#"{
@@ -30,7 +31,7 @@ fn pulse_between_rows() -> Netlist {
               "kind": "resistor",
               "pins": { "a": "vcc", "b": "gnd" },
               "resistance": { "value": 10.0, "unit": "ohm" },
-              "ratings": { "power": { "value": 0.001, "unit": "W" } }
+              "ratings": { "power": { "value": 1e-7, "unit": "W" } }
             }
           ]
         }"#,
@@ -61,11 +62,17 @@ fn a_rating_samples_every_step_between_the_rows() {
         panic!("{grid:?}");
     };
     // The jump at 3 ns holds the old level, and the step 1 ns later the new one, through the
-    // fall at 5 ns.
-    assert_eq!(excursion.first, Time::from_ps(4_000));
-    assert_eq!(excursion.peak_at, Time::from_ps(4_000));
-    assert_eq!(excursion.over_ps, Some(2_000));
-    assert!((excursion.peak - 2.5).abs() < 1e-9, "{}", excursion.peak);
+    // fall at 5 ns. The rows stay at 0 V, so this average is the pulse the steps between them
+    // folded in: 2.5 W for 2 ns over the 10.2 ms window.
+    assert_eq!(excursion.window_ps, Some(10_200_000_000));
+    let share = 2.5 * 2_000.0 / 10_200_000_000.0;
+    assert!(
+        (excursion.peak - share).abs() <= 0.05 * share,
+        "{}",
+        excursion.peak
+    );
+    assert!(excursion.peak > excursion.limit);
+    assert!(excursion.first.as_ps() > 3_000, "{:?}", excursion.first);
 }
 
 #[test]

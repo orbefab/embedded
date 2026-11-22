@@ -649,7 +649,7 @@ The message is one of:
 
 The second is a DC rating's, below. ` for {over_ps} ps` is left out for an operating point, and while `over_ps` is 0, as on the step where the quantity first goes over. A session's `diagnostics()` writes each message as it stands through the last accepted step, so a warning seen early reads a shorter time, or none, than the run folder's.
 
-`data` holds `limit`, `over_ps`, `peak`, `peak_ps`, and `window_ps`. `limit` is the rating. `peak` is the largest magnitude of the quantity, or of its RMS for a DC rating. `peak_ps` is when it peaked. `over_ps` is `null` for an operating point, which has no duration. `window_ps` is 10200000000 for a DC rating and `null` for any other.
+`data` holds `limit`, `over_ps`, `peak`, `peak_ps`, and `window_ps`. `limit` is the rating. `peak` is the largest magnitude of the quantity, or of its RMS for a DC current rating. `peak_ps` is when it peaked. `over_ps` is `null` for an operating point, which has no duration. `window_ps` is 10200000000 for a DC current rating and `null` for a current rating checked on each step.
 
 A transient checks every accepted step, not only the rows. Each step's value holds until the next accepted step. `t_ps` is the first step over the rating, and `over_ps` adds the time to the next step for every step over it. The last step adds nothing. So `t_ps` and `peak_ps` can fall between rows. At a switch edge the solve at the edge holds the old contact. With 22 ohm in place of 220 ohm in `packages/engine/tests/circuits/button-led`, `#led1.i` is first over 1 ns after the press, and `over_ps` is exactly the time the contact was closed.
 
@@ -663,7 +663,7 @@ The window is 10.2 ms because PWM is the load a pin most often switches. Judging
 
 An absolute maximum DC rating is a current the part bears for as long as it flows, and it says nothing of shorter currents. A longer window would read a PWM load the same when its period fits in the window, which every default Arduino PWM does, but would warn later of a load held over the rating and spread a lone pulse thinner, so the window is the shortest that holds whole periods of every default PWM with margin. A slower PWM, such as a software PWM toggled with `delay`, counts each pulse longer than the window as a held level. A pulse longer than the window fills it, so it counts at its full value: 100 mA for 20 ms reads 100 mA RMS. A pulse shorter than the window counts by its share: 100 mA for 1 ms reads 31 mA RMS and does not warn, and the datasheet gives no pulse rating to hold it to. A capacitor that a pin charges through its stage, `R` ohm, takes `I0^2 * R * C / 2` of `i^2 * t` an edge. On the model's 25 ohm stage, 100 pF takes 0.2 A for a few nanoseconds, which over 10.2 ms is well under 1 mA RMS, and a 1 uF load on a 490 Hz PWM pin stays well under 40 mA. 10 uF and 47 uF on that pin go over, as such a load does on a real pin, since every edge charges it again. A pin that charges 10 uF once from 0 V stays under; 47 uF and 100 uF go over. A load held at `k` times the rating goes over once `1 / k^2` of the window has filled: 69 mA from a pin into 47 ohm after 3.4 ms, five LEDs taking 44 mA from one pin after 8.4 ms, and a pin driving low on 5V, 200 mA, after 0.41 ms.
 
-Every other current and power rating is checked on each accepted step. An LED's `current` is its DC forward current. An LED datasheet gives a higher peak forward current for short pulses at a low duty, which this model does not carry, so a pulse over the DC current warns.
+Every other current rating is checked on each accepted step. A power rating uses the same 10.2 ms window, on the average of the power's magnitude, as [rating.power](#ratingpower) says. An LED's `current` is its DC forward current. An LED datasheet gives a higher peak forward current for short pulses at a low duty, which this model does not carry, so a pulse over the DC current warns.
 
 The 9 V LED example puts about 0.55 A through an LED rated 0.03 A.
 
@@ -685,17 +685,19 @@ Six pins each driving 120 ohm to ground carry 34.5 mA each, under the pin rating
 
 ## rating.power
 
-Severity `warning`. Refs is the rated quantity, `#<part>.p`. `t_ps` is the first time over the rating, 0 for the operating point.
+Severity `warning`. Refs is the rated quantity, `#<part>.p`. `t_ps` is the first time the average over the window is over the rating, 0 for the operating point.
 
 The message is:
 
 ```text
-{ref} peaks at {peak} W, over its {limit} W rating for {over_ps} ps
+{ref} averages {peak} W over the last 10.2 ms, over its {limit} W rating for {over_ps} ps
 ```
 
-` for {over_ps} ps` is left out as for `rating.current`. `data` is the same as `rating.current`, with `window_ps` `null`: a power rating is checked on each accepted step.
+` for {over_ps} ps` is left out as for `rating.current`. `data` is the same as `rating.current`. `peak` is the largest average of the power's magnitude over the window. `window_ps` is 10200000000.
 
-The 9 V LED example reports `#led1.p` over its 0.075 W rating and `#r1.p` over its 0.25 W rating.
+A power rating is the heat the part can shed. Every kind that has one, a resistor, a diode, an LED, a zener, a bipolar transistor, a MOSFET and a linear regulator, is checked the same way: against the average of the power's magnitude over the same 10.2 ms window a DC current rating uses, not against each step's value. The window starts full of the operating point. A switching edge that spends its rating for a few hundred nanoseconds stays under it. A load held at `k` times the rating goes over once `1 / k` of the window has filled. An operating point over its rating warns at once, and its average is its value.
+
+The 9 V LED example is a steady overload. It reports `#led1.p` over its 0.075 W rating and `#r1.p` over its 0.25 W rating.
 
 ## rating.voltage
 
