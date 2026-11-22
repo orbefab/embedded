@@ -1,93 +1,48 @@
-//! The catalog a Block reads its parts from: the repo's `parts/`, embedded by `build.rs`, or the
-//! part folders a caller hands in, such as the ones a browser fetched from a registry. It is the
-//! registry's index for the versions it holds.
+//! Part folders a caller hands in, such as the ones a browser fetched from a registry. A Block
+//! on disk reads the `parts/` beside `blocks/` instead. Nothing here is built into the binary.
 
 use std::collections::BTreeMap;
-#[cfg(unix)]
-use std::collections::BTreeSet;
 use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
-#[cfg(unix)]
-use std::sync::OnceLock;
 
 use crate::diagnostic::Findings;
-#[cfg(unix)]
-use crate::project::hash_files;
 use crate::source::Sources;
 use crate::syntax::{self, Node};
 
-include!(concat!(env!("OUT_DIR"), "/catalog.rs"));
-
-/// Where a Block's catalog parts come from.
-#[derive(Clone, Debug, Default)]
-pub(crate) enum Source {
-    /// The catalog this binary was built with.
-    #[default]
-    Builtin,
-    /// Part folders handed in, each file by `<id>/<path>`.
-    Given(Arc<BTreeMap<String, Vec<u8>>>),
+/// Part folders handed in, each file by `<id>/<path>`.
+#[derive(Clone, Debug)]
+pub(crate) struct Source {
+    files: Arc<BTreeMap<String, Vec<u8>>>,
 }
 
-pub(crate) struct Original {
-    pub(crate) tree: Node,
+impl Default for Source {
+    fn default() -> Source {
+        Source::empty()
+    }
 }
 
 impl Source {
-    /// Each file by `<id>/<path>`, sorted.
-    fn files(&self) -> Box<dyn Iterator<Item = (&str, &[u8])> + '_> {
-        match self {
-            Source::Builtin => Box::new(FILES.iter().map(|(path, bytes)| (*path, *bytes))),
-            Source::Given(files) => Box::new(
-                files
-                    .iter()
-                    .map(|(path, bytes)| (path.as_str(), bytes.as_slice())),
-            ),
+    pub(crate) fn empty() -> Source {
+        Source {
+            files: Arc::new(BTreeMap::new()),
         }
     }
 
-    pub(crate) fn ids(&self) -> impl Iterator<Item = String> + '_ {
-        self.files()
-            .filter_map(|(path, _)| path.strip_suffix("/part.jsonc"))
-            .map(str::to_string)
+    pub(crate) fn given(parts: impl IntoIterator<Item = (String, Vec<u8>)>) -> Source {
+        Source {
+            files: Arc::new(parts.into_iter().collect()),
+        }
     }
 
-    /// The bytes of `rel` in the catalog's copy of `id`.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+
+    /// The bytes of `rel` in the handed-in copy of `id`.
     pub(crate) fn file(&self, id: &str, rel: &str) -> Option<&[u8]> {
-        let path = format!("{id}/{rel}");
-        match self {
-            Source::Builtin => FILES
-                .iter()
-                .find(|(name, _)| *name == path)
-                .map(|(_, bytes)| *bytes),
-            Source::Given(files) => files.get(&path).map(Vec::as_slice),
-        }
+        self.files.get(&format!("{id}/{rel}")).map(Vec::as_slice)
     }
-
-    pub(crate) fn find(&self, id: &str) -> Option<Original> {
-        let bytes = self.file(id, "part.jsonc")?;
-        let text = std::str::from_utf8(bytes).ok()?.to_string();
-        let mut sources = Sources::new(Path::new(""));
-        let file = sources.add(Path::new("part.jsonc"), text);
-        let tree = syntax::parse(&sources, file, &mut Findings::default())?;
-        Some(Original { tree })
-    }
-}
-
-/// The built-in catalog's part folders by id, each file by its `/`-separated path from the folder.
-pub(crate) fn folders() -> BTreeMap<String, BTreeMap<String, Vec<u8>>> {
-    let mut folders: BTreeMap<String, BTreeMap<String, Vec<u8>>> = BTreeMap::new();
-    for (path, bytes) in FILES {
-        if let Some((id, rel)) = path.split_once('/')
-            && crate::published::is_published(rel)
-        {
-            folders
-                .entry(id.to_string())
-                .or_default()
-                .insert(rel.to_string(), bytes.to_vec());
-        }
-    }
-    folders
 }
 
 /// Three numbers. The first is the major version, including versions below 1.0. Versions order
@@ -129,89 +84,6 @@ impl fmt::Display for Version {
     }
 }
 
-/// One published version of a part. `hash` is the folder hash of its published files.
-#[cfg(unix)]
-#[derive(Clone, Debug)]
-pub(crate) struct CatalogEntry {
-    pub(crate) id: String,
-    pub(crate) version: Version,
-    pub(crate) files: BTreeMap<String, Vec<u8>>,
-    // The catalog test compares this with `folder_hash`. `orbe add` copies `files`.
-    #[allow(dead_code)]
-    pub(crate) hash: String,
-    pub(crate) uses: BTreeMap<String, Version>,
-}
-
-/// The parts `orbe add` can copy. The built-in catalog is this binary's `parts/`. Tests build
-/// one with several versions of an id.
-#[cfg(unix)]
-#[derive(Clone, Debug)]
-pub(crate) struct Catalog {
-    entries: BTreeMap<(String, Version), CatalogEntry>,
-}
-
-#[cfg(unix)]
-impl Catalog {
-    pub(crate) fn official() -> Catalog {
-        Catalog {
-            entries: BTreeMap::new(),
-        }
-    }
-
-    /// The repo's `parts/`, one version of each id, embedded at build time and parsed once.
-    /// Each call returns a clone, so a caller can insert into its own catalog.
-    pub(crate) fn builtin() -> Catalog {
-        static BUILTIN: OnceLock<Catalog> = OnceLock::new();
-        BUILTIN
-            .get_or_init(|| {
-                let mut catalog = Catalog::official();
-                for (id, files) in folders() {
-                    let entry = entry_from_files(&id, files).expect("the built-in catalog parses");
-                    catalog.insert(entry);
-                }
-                catalog
-            })
-            .clone()
-    }
-
-    pub(crate) fn insert(&mut self, entry: CatalogEntry) {
-        self.entries
-            .insert((entry.id.clone(), entry.version), entry);
-    }
-
-    pub(crate) fn get(&self, id: &str, version: Version) -> Option<&CatalogEntry> {
-        self.entries.get(&(id.to_string(), version))
-    }
-
-    fn of_id(&self, id: &str) -> impl Iterator<Item = &CatalogEntry> {
-        self.entries
-            .range(
-                (
-                    id.to_string(),
-                    Version {
-                        major: 0,
-                        minor: 0,
-                        patch: 0,
-                    },
-                )..,
-            )
-            .take_while(move |(key, _)| key.0 == id)
-            .map(|(_, entry)| entry)
-    }
-
-    pub(crate) fn newest(&self, id: &str) -> Option<&CatalogEntry> {
-        self.of_id(id).max_by_key(|entry| entry.version)
-    }
-
-    pub(crate) fn ids(&self) -> BTreeSet<&str> {
-        self.entries.keys().map(|(id, _)| id.as_str()).collect()
-    }
-
-    pub(crate) fn versions_of(&self, id: &str) -> Vec<Version> {
-        self.of_id(id).map(|entry| entry.version).collect()
-    }
-}
-
 /// The file `rel` of the folder `id`, parsed. The error is a sentence that names the file.
 pub(crate) fn jsonc(
     id: &str,
@@ -247,57 +119,45 @@ pub(crate) fn part_version(id: &str, tree: &Node) -> Result<Version, String> {
         })
 }
 
-#[cfg(unix)]
-pub(crate) fn entry_from_files(
-    id: &str,
-    files: BTreeMap<String, Vec<u8>>,
-) -> Result<CatalogEntry, String> {
-    let tree = jsonc(id, &files, "part.jsonc")?;
-    let version = part_version(id, &tree)?;
-    let uses = match tree.get("uses") {
-        None => BTreeMap::new(),
-        Some(node) => {
-            let props = node
-                .props()
-                .ok_or_else(|| format!("`{id}` uses is not an object"))?;
-            let mut uses = BTreeMap::new();
-            for prop in props {
-                let text = prop
-                    .value
-                    .str()
-                    .ok_or_else(|| format!("`{id}` uses `{}` is not a version", prop.key))?;
-                let version = Version::parse(text).ok_or_else(|| {
-                    format!(
-                        "`{id}` uses `{}` at `{text}`, which is not a version",
-                        prop.key
-                    )
-                })?;
-                uses.insert(prop.key.clone(), version);
-            }
-            uses
-        }
-    };
-    let hash = hash_files(
-        files
-            .iter()
-            .map(|(path, bytes)| (path.as_str(), bytes.as_slice())),
-    );
-    Ok(CatalogEntry {
-        id: id.to_string(),
-        version,
-        files,
-        hash,
-        uses,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::project::{folder_hash, hex};
+    use crate::project::hex;
     use serde_json::Value;
     use sha2::{Digest, Sha256};
+    use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn parts_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parts")
+    }
+
+    fn load_folder(id: &str) -> BTreeMap<String, Vec<u8>> {
+        let dir = parts_root().join(id);
+        let mut files = BTreeMap::new();
+        for path in crate::published::published_paths(&dir).unwrap() {
+            let rel = path
+                .strip_prefix(&dir)
+                .unwrap()
+                .components()
+                .map(|component| component.as_os_str().to_str().unwrap())
+                .collect::<Vec<_>>()
+                .join("/");
+            files.insert(rel, fs::read(&path).unwrap());
+        }
+        files
+    }
+
+    fn part_ids() -> Vec<String> {
+        let mut ids: Vec<String> = fs::read_dir(parts_root())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .filter(|id| parts_root().join(id).join("part.jsonc").is_file())
+            .collect();
+        ids.sort();
+        ids
+    }
 
     #[test]
     fn a_version_has_one_spelling_and_orders_by_number() {
@@ -327,29 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn the_embedded_catalog_is_the_published_part_files() {
-        let parts = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../parts")
-            .canonicalize()
-            .unwrap();
-        let got: BTreeSet<String> = FILES.iter().map(|(path, _)| (*path).to_string()).collect();
-        let want: BTreeSet<String> = crate::published::published_paths(&parts)
-            .unwrap()
-            .iter()
-            .map(|path| {
-                path.strip_prefix(&parts)
-                    .unwrap()
-                    .components()
-                    .map(|component| component.as_os_str().to_str().unwrap())
-                    .collect::<Vec<_>>()
-                    .join("/")
-            })
-            .collect();
-        assert_eq!(got, want);
-    }
-
-    #[test]
-    fn build_output_does_not_enter_the_catalog_embed() {
+    fn build_output_is_not_a_published_file() {
         let dir = tempfile::tempdir().unwrap();
         let lamp = dir.path().join("lamp");
         fs::create_dir(&lamp).unwrap();
@@ -385,58 +223,46 @@ mod tests {
     }
 
     #[test]
-    fn the_builtin_catalog_matches_the_parts_tree() {
-        let catalog = Catalog::builtin();
-        let parts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parts");
-        let mut ids = Vec::new();
-        for entry in fs::read_dir(&parts).unwrap() {
-            ids.push(entry.unwrap().file_name().into_string().unwrap());
-        }
-        let want: BTreeSet<&str> = ids.iter().map(String::as_str).collect();
-        assert_eq!(catalog.ids(), want);
-        for id in ids {
-            let entry = catalog.newest(&id).unwrap();
-            assert_eq!(entry.hash, folder_hash(&parts.join(&id)).unwrap(), "{id}");
-        }
-    }
-
-    fn built_from(id: &str) -> BTreeSet<String> {
-        Source::Builtin
-            .find(id)
-            .unwrap()
-            .tree
-            .get("parts")
-            .and_then(crate::syntax::Node::props)
-            .unwrap()
-            .iter()
-            .filter_map(|inst| inst.value.get("type").and_then(crate::syntax::Node::str))
-            .map(str::to_string)
-            .collect()
-    }
-
-    fn part_uses_the_parts_it_is_built_from(id: &str) {
-        let catalog = Catalog::builtin();
-        let part = catalog.newest(id).unwrap();
-        let used: BTreeSet<String> = part.uses.keys().cloned().collect();
-        assert_eq!(used, built_from(id), "{id}");
-        for (child, version) in &part.uses {
-            assert!(
-                catalog.get(child, *version).is_some(),
-                "{id} uses {child}@{version}, which the catalog lacks"
-            );
-        }
-    }
-
-    #[test]
     fn every_part_uses_the_parts_it_is_built_from() {
-        for id in Catalog::builtin().ids() {
-            let original = Source::Builtin.find(id).unwrap();
-            let children = original
-                .tree
+        let ids = part_ids();
+        let known: BTreeSet<&str> = ids.iter().map(String::as_str).collect();
+        for id in &ids {
+            let files = load_folder(id);
+            let tree = jsonc(id, &files, "part.jsonc").unwrap();
+            let children = tree
                 .get("parts")
-                .and_then(crate::syntax::Node::props);
-            if children.is_some_and(|props| !props.is_empty()) {
-                part_uses_the_parts_it_is_built_from(id);
+                .and_then(crate::syntax::Node::props)
+                .unwrap_or_default();
+            if children.is_empty() {
+                continue;
+            }
+            let built: BTreeSet<String> = children
+                .iter()
+                .filter_map(|inst| inst.value.get("type").and_then(crate::syntax::Node::str))
+                .filter(|ty| !ty.starts_with('.') && !ty.starts_with('@'))
+                .map(str::to_string)
+                .collect();
+            let used: BTreeSet<String> = tree
+                .get("uses")
+                .and_then(crate::syntax::Node::props)
+                .unwrap_or_default()
+                .iter()
+                .map(|prop| prop.key.clone())
+                .collect();
+            assert_eq!(used, built, "{id}");
+            for prop in tree
+                .get("uses")
+                .and_then(crate::syntax::Node::props)
+                .unwrap_or_default()
+            {
+                assert!(known.contains(prop.key.as_str()), "{id} uses {}", prop.key);
+                let child = jsonc(&prop.key, &load_folder(&prop.key), "part.jsonc").unwrap();
+                assert_eq!(
+                    child.get("version").and_then(crate::syntax::Node::str),
+                    prop.value.str(),
+                    "{id} uses {}",
+                    prop.key
+                );
             }
         }
     }
@@ -515,22 +341,21 @@ mod tests {
     /// name, and the `node` and `also` of each leg or socket anchor, each once.
     #[test]
     fn every_body_model_matches_its_asset_record() {
-        let catalog = Catalog::builtin();
-        for id in catalog.ids() {
-            let entry = catalog.newest(id).unwrap();
+        for id in part_ids() {
+            let id = id.as_str();
+            let files = load_folder(id);
             let glb = format!("{id}.glb");
-            if !entry.files.contains_key(&glb) && !entry.files.contains_key("asset.json") {
+            if !files.contains_key(&glb) && !files.contains_key("asset.json") {
                 continue;
             }
-            let asset_bytes = entry
-                .files
+            let asset_bytes = files
                 .get("asset.json")
                 .unwrap_or_else(|| panic!("{id} is missing asset.json"));
             let asset: Value = serde_json::from_slice(asset_bytes)
                 .unwrap_or_else(|e| panic!("{id}: asset.json: {e}"));
             let anchors_name = format!("{id}.anchors.json");
             let mut want = vec![glb.as_str()];
-            if entry.files.contains_key(&anchors_name) {
+            if files.contains_key(&anchors_name) {
                 want.push(&anchors_name);
             }
             let listed = asset["files"].as_object().unwrap();
@@ -539,7 +364,7 @@ mod tests {
             want.sort();
             assert_eq!(names, want, "{id}: asset.json lists these files");
             for (name, record) in listed {
-                let bytes = entry.files.get(name).unwrap_or_else(|| {
+                let bytes = files.get(name).unwrap_or_else(|| {
                     panic!("{id}: asset.json lists {name}, which the folder lacks")
                 });
                 assert_eq!(record["bytes"], bytes.len(), "{id}: size of {name}");
@@ -549,7 +374,7 @@ mod tests {
                     "{id}: sha256 of {name}"
                 );
             }
-            if let Some(script) = entry.files.get("model.py") {
+            if let Some(script) = files.get("model.py") {
                 let recorded = asset["source"]["sha256"].as_str().unwrap_or("");
                 assert_eq!(
                     recorded,
@@ -558,8 +383,8 @@ mod tests {
                 );
             }
 
-            let part = Source::Builtin.find(id).unwrap().tree.to_value();
-            let anchors: Vec<Value> = match entry.files.get(&anchors_name) {
+            let part = jsonc(id, &files, "part.jsonc").unwrap().to_value();
+            let anchors: Vec<Value> = match files.get(&anchors_name) {
                 Some(bytes) => serde_json::from_slice::<Value>(bytes).unwrap()["anchors"]
                     .as_array()
                     .unwrap()
@@ -607,7 +432,7 @@ mod tests {
                 .iter()
                 .map(|node| node.as_str().unwrap().to_string())
                 .collect();
-            let in_glb = glb_node_names(id, &entry.files[&glb]);
+            let in_glb = glb_node_names(id, &files[&glb]);
             assert_eq!(
                 in_glb, kept,
                 "{id}: the GLB's named nodes against kept_nodes"

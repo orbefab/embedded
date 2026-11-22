@@ -4,6 +4,8 @@
 #![cfg(unix)]
 
 mod live;
+#[path = "registry_env.rs"]
+mod registry_env;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -69,7 +71,6 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
                 assert_eq!(installed.get(&rel), Some(&bytes), "{id}: {rel}");
             }
         }
-        assert!(!dir.join("parts.lock").exists(), "{id}");
         let mut copied: Vec<String> = fs::read_dir(dir.join("parts"))
             .unwrap()
             .map(|e| e.unwrap().file_name().into_string().unwrap())
@@ -78,12 +79,19 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
         copied.sort();
         assert!(copied.iter().any(|part| part == "led-5mm"), "{id}");
         for part in &copied {
-            assert_eq!(
-                tree(&dir.join("parts").join(part)),
-                tree(&common::repo().join("parts").join(part)),
-                "{id}: parts/{part} is the catalog's"
-            );
+            let catalog = tree(&common::repo().join("parts").join(part));
+            let got = tree(&dir.join("parts").join(part));
+            for (rel, bytes) in &catalog {
+                assert_eq!(got.get(rel), Some(bytes), "{id}: parts/{part}/{rel}");
+            }
         }
+        let chip = dir
+            .join("parts/nano-board/parts/atmega328p-tqfp32/part.jsonc")
+            .is_file()
+            || dir
+                .join("parts/uno-board/parts/atmega328p-dip28/part.jsonc")
+                .is_file();
+        assert!(chip, "{id}: the board nests its chip");
 
         let check = orbe(dir, &["check", "scene.jsonc"]);
         assert_eq!(check.code, 0, "{id}: {}", check.stdout);
@@ -95,11 +103,16 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
         );
 
         let again = orbe(dir, &["add", id]);
-        assert_eq!(again.code, 1, "{id}: {}", again.stdout);
+        assert_eq!(again.code, 1, "{id}: {}{}", again.stdout, again.stderr);
         assert!(
-            again.stdout.contains("error[part_exists]"),
+            again.stderr.contains("error[part_exists]"),
             "{id}: {}",
-            again.stdout
+            again.stderr
+        );
+        assert!(
+            again.stderr.contains(&format!("run `orbe add {id}`")),
+            "{id}: {}",
+            again.stderr
         );
         assert_eq!(
             tree(dir),
@@ -143,10 +156,16 @@ fn a_second_add_refuses_when_the_part_folders_are_already_there() {
     let again = orbe(dir, &["add", "nano-button-led"]);
     assert_eq!(again.code, 1, "{}{}", again.stdout, again.stderr);
     assert!(
-        again.stdout.contains("error[part_exists]"),
+        again.stderr.contains("error[part_exists]"),
         "{}",
-        again.stdout
+        again.stderr
     );
+    assert!(
+        again.stderr.contains("run `orbe add nano-button-led`"),
+        "{}",
+        again.stderr
+    );
+    assert!(again.stderr.contains("parts/led-5mm"), "{}", again.stderr);
     assert!(!dir.join("scene.jsonc").exists());
     assert!(!again.stdout.contains("wrote "), "{}", again.stdout);
 }
@@ -162,7 +181,7 @@ fn a_block_refuses_a_folder_with_a_scene_and_writes_nothing() {
     let run = orbe(dir, &["add", "nano-button-led"]);
     assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
     assert_eq!(
-        run.stdout,
+        run.stderr,
         "error[scene_exists]: scene.jsonc already holds a scene, and the Block `nano-button-led` brings its own. orbe does not merge scenes. nothing was written\n  hint: install it into an empty folder: `mkdir nano-button-led && orbe add -C nano-button-led nano-button-led`\n"
     );
     assert_eq!(tree(dir), before, "the refusal wrote nothing");
@@ -190,11 +209,11 @@ fn a_block_refuses_a_file_in_its_way_and_writes_nothing() {
     let run = orbe(dir, &["add", "nano-button-led"]);
     assert_eq!(run.code, 1, "{}", run.stdout);
     assert!(
-        run.stdout.starts_with(
+        run.stderr.starts_with(
             "error[file_exists]: tests/button.test is already there and is not the Block `nano-button-led`'s. nothing was written\n"
         ),
         "{}",
-        run.stdout
+        run.stderr
     );
     assert_eq!(tree(dir), before);
 }
@@ -231,14 +250,14 @@ fn refuses_the_link(dir: &Path, outside: &Path, link: &str) {
     let run = orbe(dir, &["add", "nano-button-led"]);
     assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
     assert_eq!(
-        run.stdout,
+        run.stderr,
         format!(
             "error[symlink]: {link} is a link, and orbe add does not write through a link. nothing was written\n  hint: remove the link {link}, then run `orbe add nano-button-led` again\n"
         ),
         "{}",
-        run.stdout
+        run.stderr
     );
-    assert!(!run.stdout.contains("kept"), "{}", run.stdout);
+    assert!(!run.stderr.contains("kept"), "{}", run.stderr);
     assert_eq!(shallow(outside), before, "the link's target changed");
     assert_eq!(
         shallow(dir),
@@ -256,16 +275,16 @@ fn a_block_refuses_a_symlinked_firmware_directory() {
 }
 
 #[test]
-fn a_block_refuses_a_symlink_at_its_temp_file() {
-    let outside = tempfile::tempdir().unwrap();
+fn a_leftover_add_folder_is_removed_and_the_block_installs() {
     let project = tempfile::tempdir().unwrap();
     let dir = project.path();
-    fs::create_dir(dir.join("firmware")).unwrap();
-    let seed = outside.path().join("seed");
-    fs::write(&seed, b"SEED").unwrap();
-    symlink(&seed, dir.join("firmware/.button.hex.orbe-add")).unwrap();
-    refuses_the_link(dir, outside.path(), "firmware/.button.hex.orbe-add");
-    assert_eq!(fs::read(&seed).unwrap(), b"SEED");
+    let leftover = dir.join("parts/.add-led-5mm");
+    fs::create_dir_all(&leftover).unwrap();
+    fs::write(leftover.join("note"), b"OLD").unwrap();
+    let run = orbe(dir, &["add", "nano-button-led"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!leftover.exists());
+    assert!(dir.join("scene.jsonc").is_file());
 }
 
 /// A destination that is a link is refused again, even when the target already holds the
@@ -313,40 +332,46 @@ fn a_block_installs_when_the_project_path_is_a_symlink() {
 }
 
 #[test]
-fn a_block_replaces_a_regular_temp_file_left_by_a_stopped_install() {
+fn a_block_installs_over_a_leftover_staging_directory() {
     let project = tempfile::tempdir().unwrap();
     let dir = project.path();
-    fs::create_dir(dir.join("firmware")).unwrap();
-    fs::write(dir.join("firmware/.button.hex.orbe-add"), b"OLD").unwrap();
+    fs::create_dir_all(dir.join("parts/.add-nano-board")).unwrap();
+    fs::write(dir.join("parts/.add-nano-board/part.jsonc"), b"OLD").unwrap();
     let run = orbe(dir, &["add", "nano-button-led"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
-    assert!(!dir.join("firmware/.button.hex.orbe-add").exists());
+    assert!(!dir.join("parts/.add-nano-board").exists());
     let hex = fs::read(common::repo().join("blocks/nano-button-led/firmware/button.hex")).unwrap();
     assert_eq!(fs::read(dir.join("firmware/button.hex")).unwrap(), hex);
-    assert!(
-        !fs::symlink_metadata(dir.join("firmware/button.hex"))
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
 }
 
 #[test]
 fn a_block_installs_alone() {
     let project = tempfile::tempdir().unwrap();
-    for args in [
-        &["add", "nano-button-led", "led-5mm"][..],
-        &["add", "nano-button-led@0.1.3"],
-    ] {
-        let run = orbe(project.path(), args);
-        assert_eq!(run.code, 2, "{args:?}: {}{}", run.stdout, run.stderr);
-        assert!(
-            run.stderr
-                .starts_with("error[usage]: `nano-button-led` is a Block"),
-            "{}",
-            run.stderr
-        );
-    }
+    let mixed = orbe(project.path(), &["add", "nano-button-led", "led-5mm"]);
+    assert_eq!(mixed.code, 2, "{}{}", mixed.stdout, mixed.stderr);
+    assert!(
+        mixed
+            .stderr
+            .starts_with("error[usage]: `nano-button-led` is a Block"),
+        "{}",
+        mixed.stderr
+    );
+    let versioned = orbe(project.path(), &["add", "nano-button-led@0.1.3"]);
+    assert_eq!(
+        versioned.code, 2,
+        "{}{}",
+        versioned.stdout, versioned.stderr
+    );
+    assert!(
+        versioned.stderr.contains("names a version"),
+        "{}",
+        versioned.stderr
+    );
+    assert!(
+        versioned.stderr.contains("hint: nano-button-led\n"),
+        "{}",
+        versioned.stderr
+    );
     assert_eq!(fs::read_dir(project.path()).unwrap().count(), 0);
 }
 

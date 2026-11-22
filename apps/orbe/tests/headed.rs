@@ -7,6 +7,8 @@
 #[path = "session/harness.rs"]
 mod harness;
 mod live;
+#[path = "registry_env.rs"]
+mod registry_env;
 
 use std::fs;
 use std::io::{ErrorKind, Read, Write};

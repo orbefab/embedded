@@ -1,5 +1,8 @@
-//! Finding and reading every part file a scene uses. A project reads `parts/<id>/` as it is.
-//! A Block reads its catalog ids from this binary's catalog instead.
+//! Finding and reading every part file a scene uses. A project reads `parts/<id>/` for an id
+//! the scene names. A child is read from `<that part's folder>/parts/<id>/` when that file is
+//! there, and otherwise from the project's `parts/<id>/`. A Block, a folder that holds
+//! `block.jsonc`, reads every id from the `parts/` beside `blocks/`, or from the part folders
+//! handed in with the files.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -10,7 +13,6 @@ use sha2::{Digest, Sha256};
 use crate::diagnostic::{Code, Diagnostic, Findings};
 use crate::files::{Files, Kind};
 use crate::model::{Comp, ParamKind, Part, Scene, TypeRef, decode_part, decode_scene};
-use crate::name::did_you_mean;
 use crate::source::{FileId, Sources, Span, display};
 use crate::syntax;
 
@@ -24,10 +26,11 @@ pub const BLOCK: &str = "block.jsonc";
 /// Where a project reads the catalog ids its files name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Store {
-    /// The copies in `parts/<id>/`, as the project left them.
+    /// The copies in `parts/<id>/`, as the project left them. A child is read from the folder
+    /// of the part that names it.
     Copies,
-    /// A Block: every id is the copy in this binary's catalog. A Block holds no `parts/`, so it
-    /// always runs the catalog it ships with.
+    /// A Block. Ids are read flat from the part folders handed in, or from the `parts/`
+    /// beside `blocks/` when none were handed in.
     Catalog,
 }
 
@@ -41,22 +44,32 @@ impl Store {
     }
 
     pub(crate) fn has(self, files: &Files, root: &Path, id: &str, rel: &str) -> bool {
-        match self {
-            Store::Copies => files.is_file(&root.join("parts").join(id).join(rel)),
-            Store::Catalog => files.catalog().file(id, rel).is_some(),
-        }
+        self.read(files, root, id, rel).is_some()
     }
 
     pub(crate) fn read(self, files: &Files, root: &Path, id: &str, rel: &str) -> Option<Vec<u8>> {
-        match self {
-            Store::Copies => files.read(&root.join("parts").join(id).join(rel)).ok(),
-            Store::Catalog => files.catalog().file(id, rel).map(<[u8]>::to_vec),
+        if self == Store::Catalog
+            && let Some(bytes) = files.catalog().file(id, rel)
+        {
+            return Some(bytes.to_vec());
         }
+        let folder = match self {
+            Store::Copies => root.join("parts"),
+            Store::Catalog => block_parts(root)?,
+        };
+        files.read(&folder.join(id).join(rel)).ok()
     }
 }
 
-/// The file `rel` of the catalog part `id` as the project in `root` reads it: its copy in
-/// `parts/<id>/`, or in a Block, this binary's catalog's.
+/// The `parts/` a Block reads: the folder beside `blocks/`, two levels above the Block.
+fn block_parts(root: &Path) -> Option<PathBuf> {
+    Some(root.parent()?.parent()?.join("parts"))
+}
+
+/// The file `rel` of part `id` as the project in `root` reads it. A project reads
+/// `parts/<id>/<rel>`, and a path such as `parts/<board>/parts/<child>/<file>` is `id` of the
+/// first folder with the rest as `rel`. A Block reads the `parts/` beside `blocks/`, or the
+/// part folders handed in with the files.
 pub fn part_file(files: &Files, root: &Path, id: &str, rel: &str) -> Option<Vec<u8>> {
     Store::of(files, root).read(files, root, id, rel)
 }
@@ -109,7 +122,7 @@ struct Loader<'a> {
     loaded: BTreeMap<PathBuf, Option<usize>>,
     stack: Vec<PathBuf>,
     types: BTreeMap<(Owner, usize), usize>,
-    missing: Vec<(String, Span)>,
+    missing: Vec<Gap>,
     /// The catalog ids whose `part.jsonc` read.
     used: BTreeSet<String>,
     /// `orbe add`, run from where the scene was named, as hints print it.
@@ -248,14 +261,10 @@ pub(crate) fn load<'f>(
     loader.resolve(Owner::Scene, &scene_path, false, types);
     loader.report_missing();
     let mut catalog_ids = loader.used;
-    let mut unknown_part = false;
-    for (id, _) in loader.missing {
-        if files.catalog().find(&id).is_some() {
-            catalog_ids.insert(id);
-        } else {
-            unknown_part = true;
-        }
+    for gap in &loader.missing {
+        catalog_ids.insert(gap.id.clone());
     }
+    let unknown_part = false;
     Ok(Project {
         files,
         store,
@@ -330,7 +339,7 @@ impl Loader<'_> {
                 Code::Role,
                 Span::start_of(scene),
                 format!(
-                    "this folder holds {BLOCK}, so it is a Block, which reads its parts from the catalog built into orbe, and it also holds `parts`"
+                    "this folder holds {BLOCK}, so it is a Block, which reads the parts/ beside blocks/, and it also holds `parts`"
                 ),
                 format!(
                     "remove `parts`, or remove {BLOCK} to make the folder a project that reads its own copies"
@@ -359,39 +368,64 @@ impl Loader<'_> {
             let Some((ty, span)) = ty else { continue };
             let found = match ty {
                 TypeRef::Id(id) => {
-                    let folder = root.join("parts").join(&id);
-                    let path = folder.join("part.jsonc");
-                    if self.store == Store::Copies && self.parts_unreadable {
-                        continue;
-                    }
                     if self.store == Store::Copies
-                        && self.files.is_dir(&folder)
-                        && let Err(error) = self.files.list(&folder)
+                        && self.parts_unreadable
+                        && matches!(owner, Owner::Scene)
                     {
-                        self.note_unreadable(&folder, &error);
                         continue;
                     }
-                    let path = match self.store {
-                        Store::Copies if self.files.is_file(&path) => {
-                            self.files.real(&path).unwrap_or(path)
-                        }
-                        // The folder is there and part.jsonc is not. Reading it is an io error.
-                        Store::Copies if self.files.is_dir(&folder) => path,
-                        Store::Catalog
-                            if self.files.catalog().file(&id, "part.jsonc").is_some() =>
-                        {
-                            path
-                        }
-                        _ => {
-                            self.missing.push((id, span));
+                    let given = self.store == Store::Catalog && !self.files.catalog().is_empty();
+                    if given {
+                        let path = root.join("parts").join(&id).join("part.jsonc");
+                        if self.files.catalog().file(&id, "part.jsonc").is_none() {
+                            self.missing.push(Gap::new(
+                                id.clone(),
+                                span,
+                                format!("parts/{id}"),
+                                GapKind::Absent,
+                            ));
                             continue;
                         }
-                    };
-                    let found = self.load_part(&path, id.clone(), true, span);
-                    if found.is_some() {
-                        self.used.insert(id);
+                        let found = self.load_part(&path, id.clone(), true, span);
+                        if found.is_some() {
+                            self.used.insert(id.clone());
+                        }
+                        found
+                    } else {
+                        let mut opened = None;
+                        let mut gap = None;
+                        for folder in self.id_folders(owner, owner_path, &id) {
+                            if self.files.is_dir(&folder)
+                                && let Err(error) = self.files.list(&folder)
+                            {
+                                self.note_unreadable(&folder, &error);
+                                opened = None;
+                                gap = None;
+                                break;
+                            }
+                            let path = folder.join("part.jsonc");
+                            if self.files.is_file(&path) {
+                                opened = Some(self.files.real(&path).unwrap_or(path));
+                                break;
+                            }
+                            if gap.is_none() {
+                                let shown = display(&root, &folder);
+                                gap =
+                                    Some(Gap::new(id.clone(), span, shown, self.gap_kind(&folder)));
+                            }
+                        }
+                        let Some(path) = opened else {
+                            if let Some(gap) = gap {
+                                self.missing.push(gap);
+                            }
+                            continue;
+                        };
+                        let found = self.load_part(&path, id.clone(), false, span);
+                        if found.is_some() {
+                            self.used.insert(id.clone());
+                        }
+                        found
                     }
-                    found
                 }
                 TypeRef::Path(rel) => {
                     if catalog_owner {
@@ -516,95 +550,189 @@ impl Loader<'_> {
         Some(id)
     }
 
-    /// One finding per missing id. Every catalog id shares one `orbe add` command that adds
-    /// them all. A suggestion is only for an id the catalog does not have, since that command
-    /// cannot add it.
+    /// Where an id is read, first choice first. A scene's ids are `parts/<id>/`. A part's
+    /// child is `<that part's folder>/parts/<id>/` when the part file is `part.jsonc`, and
+    /// the project's `parts/<id>/` when that copy is not there. A loose part file has no
+    /// folder of its own, so its children are read from the project. A Block reads one flat
+    /// `parts/` beside `blocks/`.
+    fn id_folders(&self, owner: Owner, owner_path: &Path, id: &str) -> Vec<PathBuf> {
+        let root = self.sources.root();
+        if self.store == Store::Catalog {
+            let base = block_parts(root).unwrap_or_else(|| root.join("parts"));
+            return vec![base.join(id)];
+        }
+        let project = root.join("parts").join(id);
+        if matches!(owner, Owner::Scene) {
+            return vec![project];
+        }
+        let nested = owner_path
+            .file_name()
+            .is_some_and(|name| name == "part.jsonc")
+            .then(|| {
+                owner_path
+                    .parent()
+                    .unwrap_or(Path::new("."))
+                    .join("parts")
+                    .join(id)
+            });
+        match nested {
+            Some(folder) if folder != project => vec![folder, project],
+            _ => vec![project],
+        }
+    }
+
+    fn gap_kind(&self, folder: &Path) -> GapKind {
+        match self.files.link_kind(folder) {
+            Some(Kind::Link) => GapKind::Link,
+            Some(Kind::Dir) => GapKind::NoFile,
+            Some(_) => GapKind::File,
+            None => GapKind::Absent,
+        }
+    }
+
+    /// One finding per missing id. A scene-level id that is simply absent shares one
+    /// `orbe add`. A folder with no `part.jsonc`, a file or a link in its place, and a child
+    /// that is not inside its parent, each name the top part folder to remove.
     fn report_missing(&mut self) {
         let root = self.sources.root().to_path_buf();
-        let mut found: Vec<(String, Span, String)> = Vec::new();
-        for (id, span) in &self.missing {
-            if found.iter().any(|(seen, ..)| seen == id) {
+        let mut found: Vec<Gap> = Vec::new();
+        for gap in &self.missing {
+            if found
+                .iter()
+                .any(|seen| seen.id == gap.id && seen.place == gap.place)
+            {
                 continue;
             }
-            found.push((id.clone(), *span, self.why_missing(&root, id)));
+            found.push(gap.clone());
         }
-        let mut ids: Vec<&str> = found
+        let mut absent: Vec<String> = found
             .iter()
-            .map(|(id, ..)| id.as_str())
-            .filter(|id| self.files.catalog().find(id).is_some())
+            .filter(|gap| gap.kind == GapKind::Absent && gap.scene_level())
+            .map(|gap| gap.id.clone())
             .collect();
-        ids.sort();
-        let specs: Vec<String> = ids.iter().map(|id| (*id).to_string()).collect();
-        let command = self.missing_command(&root, &specs);
-        let known: Vec<String> = self.files.catalog().ids().collect();
+        absent.sort();
+        absent.dedup();
+        let command = add_writing(&self.add, &absent);
         let parts = root.join("parts");
-        let blocked = self.store == Store::Copies
-            && self.files.link_kind(&parts).is_some()
-            && !self.files.is_dir(&parts);
-        for (id, span, why) in &found {
-            let hint = if blocked {
-                "move `parts` out of the way, since part folders go in a folder named `parts`. then check again for the command that adds them".into()
-            } else if let Some(command) = command.as_ref().filter(|_| ids.contains(&id.as_str())) {
-                format!("run `{command}`")
-            } else {
-                let close = did_you_mean(id, known.iter().map(String::as_str), "");
-                format!("{close}the catalog has no part named `{id}`")
-            };
-            self.out
-                .push(Code::PartMissing, *span, format!("part `{id}` {why}"), hint);
+        let parts_kind = self.files.link_kind(&parts);
+        let blocked =
+            self.store == Store::Copies && parts_kind.is_some() && !self.files.is_dir(&parts);
+        let catalog = self.store == Store::Catalog;
+        for gap in &found {
+            let (message, hint) = gap_text(
+                gap,
+                command.as_deref(),
+                blocked,
+                parts_kind == Some(Kind::File),
+                catalog,
+                &self.add,
+            );
+            self.out.push(Code::PartMissing, gap.span, message, hint);
+        }
+    }
+}
+
+#[derive(Clone)]
+struct Gap {
+    id: String,
+    span: Span,
+    /// The folder that should hold the part, with `/` between names, from the project.
+    place: String,
+    kind: GapKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GapKind {
+    Absent,
+    NoFile,
+    File,
+    Link,
+}
+
+impl Gap {
+    fn new(id: String, span: Span, place: String, kind: GapKind) -> Gap {
+        Gap {
+            id,
+            span,
+            place,
+            kind,
         }
     }
 
-    /// The command that repairs these missing catalog ids. On disk it is the command
-    /// `orbe add` of those ids would print, so a folder already there is named there too.
-    fn missing_command(&self, root: &Path, specs: &[String]) -> Option<String> {
-        self.disk_repair(root, specs)
-            .or_else(|| add_writing(&self.add, specs))
+    /// A scene names this id at `parts/<id>/`, rather than a child nested further down.
+    fn scene_level(&self) -> bool {
+        self.place == format!("parts/{}", self.id)
     }
+}
 
-    /// The command `orbe add` of these ids would print, when this project is a folder on disk.
-    /// A memory set and a non-unix build keep the ids check already gathered.
-    #[cfg(unix)]
-    fn disk_repair(&self, root: &Path, specs: &[String]) -> Option<String> {
-        if self.store == Store::Copies && self.files.is_disk() {
-            crate::add::repair_command(root, &self.add, specs)
+fn gap_text(
+    gap: &Gap,
+    command: Option<&str>,
+    blocked: bool,
+    parts_file: bool,
+    catalog: bool,
+    add: &str,
+) -> (String, String) {
+    if catalog {
+        return (
+            format!("part `{}` is not in the catalog this Block reads", gap.id),
+            format!("the catalog has no part named `{}`", gap.id),
+        );
+    }
+    if blocked && gap.scene_level() {
+        let what = if parts_file {
+            "is a file, not a folder"
         } else {
-            None
-        }
-    }
-
-    #[cfg(not(unix))]
-    fn disk_repair(&self, _root: &Path, _specs: &[String]) -> Option<String> {
-        None
-    }
-
-    /// What is at `parts/<id>` for an id that did not resolve.
-    fn why_missing(&self, root: &Path, id: &str) -> String {
-        if self.store == Store::Catalog {
-            return "is not in the catalog this Block reads".into();
-        }
-        let parts = root.join("parts");
-        if let Some(kind) = self.files.link_kind(&parts)
-            && !self.files.is_dir(&parts)
-        {
-            let what = if kind == Kind::File {
-                "is a file, not a folder"
-            } else {
-                "is not a folder"
-            };
-            return format!("cannot be read, because `parts` {what}");
-        }
-        let folder = parts.join(id);
-        let Some(kind) = self.files.link_kind(&folder) else {
-            return "is not in parts/".into();
+            "is not a folder"
         };
-        if kind == Kind::Link {
-            return format!("is parts/{id}, which is a link, not a folder");
+        return (
+            format!("part `{}` cannot be read, because `parts` {what}", gap.id),
+            "move `parts` out of the way, since part folders go in a folder named `parts`. then check again for the command that adds them".into(),
+        );
+    }
+    let top = gap
+        .place
+        .strip_prefix("parts/")
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or(gap.id.as_str());
+    let again = add_writing(add, &[top.to_string()]).unwrap_or_else(|| format!("{add} {top}"));
+    match gap.kind {
+        GapKind::NoFile => (
+            format!("{} has no part.jsonc", gap.place),
+            format!("remove parts/{top} and run `{again}`"),
+        ),
+        GapKind::File => (
+            format!(
+                "part `{}` is {}, which is a file, not a folder",
+                gap.id, gap.place
+            ),
+            format!("remove parts/{top} and run `{again}`"),
+        ),
+        GapKind::Link => (
+            format!(
+                "part `{}` is {}, which is a link, not a folder",
+                gap.id, gap.place
+            ),
+            format!("remove parts/{top} and run `{again}`"),
+        ),
+        GapKind::Absent if !gap.scene_level() => {
+            let message = match gap.place.rfind("/parts/") {
+                Some(at) => {
+                    let parent = &gap.place[..at];
+                    let child = &gap.place[at + "/parts/".len()..];
+                    format!("{parent} has no parts/{child}")
+                }
+                None => format!("part `{}` is not in parts/", gap.id),
+            };
+            (message, format!("remove parts/{top} and run `{again}`"))
         }
-        if kind != Kind::Dir {
-            return format!("is parts/{id}, which is a file, not a folder");
-        }
-        "is not in parts/".into()
+        GapKind::Absent => (
+            format!("part `{}` is not in parts/", gap.id),
+            match command {
+                Some(command) => format!("run `{command}`"),
+                None => format!("run `{again}`"),
+            },
+        ),
     }
 }
 
@@ -615,8 +743,8 @@ pub fn is_registry_name(text: &str) -> bool {
 
 /// The SHA-256 over a folder's published files, paths included: one line `<sha256>  <path>`
 /// per file, sorted by path, with `/` between path parts. Written as `sha256:<hex>`. Build
-/// output is left out. The paths are [`crate::published::published_paths`], the same set the
-/// catalog embeds.
+/// output is left out. The paths are [`crate::published::published_paths`], the same set a
+/// registry record publishes.
 pub fn folder_hash(dir: &Path) -> io::Result<String> {
     let paths = crate::published::published_paths(dir)?;
     let mut found = Vec::new();
@@ -643,9 +771,9 @@ pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The `orbe add` command that writes `specs`. Each spec is an id, or `id@version`. `None`
-/// when `specs` is empty, so a hint never prints `orbe add` with no part id. Check and add
-/// both build that command here, from the ids the add would write.
+/// The `orbe add` command that writes `specs`. Each spec is an id. `None` when `specs` is
+/// empty, so a hint never prints `orbe add` with no part id. Check and add both build that
+/// command here, from the ids the add would write.
 pub(crate) fn add_writing(add: &str, specs: &[String]) -> Option<String> {
     format_add(add, specs)
 }
@@ -784,7 +912,7 @@ fn from_cwd(dir: &Path) -> PathBuf {
 }
 
 /// A word a POSIX shell reads back unchanged.
-pub(crate) fn shell_word(word: &str) -> String {
+pub fn shell_word(word: &str) -> String {
     let plain = !word.is_empty()
         && word
             .chars()

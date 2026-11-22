@@ -2,14 +2,13 @@
 //! the findings that stop it.
 //!
 //! A scene's folder is its project root. An id such as `led-5mm` reads `parts/led-5mm/` there,
-//! as the project left it. In a Block, a folder that holds `block.jsonc`, an id reads the copy
-//! in this binary's catalog. A `./` or `../` path reads a part of the user's own, relative to
-//! the file that names it.
+//! as the project left it. A child reads `<that part's folder>/parts/<id>/`. In a Block, a
+//! folder that holds `block.jsonc`, an id reads the `parts/` beside `blocks/`, or the part
+//! folders handed in with the files. A `./` or `../` path reads a part of the user's own,
+//! relative to the file that names it.
 //!
-//! [`Files`] says where those files are read from. `orbe add`, which writes them, is on Unix only.
+//! [`Files`] says where those files are read from.
 
-#[cfg(unix)]
-mod add;
 mod blocks;
 mod breadboard;
 mod buy;
@@ -32,9 +31,7 @@ mod units;
 
 use std::path::Path;
 
-#[cfg(unix)]
-pub use add::{AddCode, Reply, Request, RunError, run as add_parts};
-pub use breadboard::breadboard_line;
+pub use breadboard::{PlugPart, breadboard_line};
 pub use catalog::Version;
 pub use circuit::{
     Amount, BoardFacts, BoardLed, EnginePart, FilePath, Gap, Instance, MapPart, Netlist, PartData,
@@ -44,7 +41,10 @@ pub use diagnostic::{Code, Diagnostic, Lint};
 pub use files::Files;
 pub use holes::{holes_text, strip_text};
 pub use model::{PART_FORMATS, SCENE_FORMATS, STOP_PS, is_id};
-pub use project::{BLOCK, REGISTRY, folder_hash, is_registry_name, part_file, shell_join};
+pub use name::did_you_mean;
+pub use project::{
+    BLOCK, REGISTRY, folder_hash, is_registry_name, part_file, shell_join, shell_word,
+};
 pub use published::is_published;
 pub use summary::{
     BlockCard, Buy, Card, CardFile, Choice, Doc, Folder, Holes, Literal, Missing, NotSimulated,

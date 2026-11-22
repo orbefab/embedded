@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use orbe_scene::{BlockCard, Card, holes_text, param_sentence, si_amount, strip_text};
 use orbe_session::BRIGHTNESS_WINDOW;
 
-pub fn text(card: &Card) -> String {
+pub fn text(card: &Card, breadboard: Option<&str>) -> String {
     let mut lines = Vec::new();
     lines.push(format!("{}  {}", card.name, card.version));
     lines.push(card.title.clone());
@@ -175,9 +175,9 @@ pub fn text(card: &Card) -> String {
     if card.pressable {
         lines.push("press and release close and open it".into());
     }
-    if let Some(line) = orbe_scene::breadboard_line(&card.name) {
+    if let Some(line) = breadboard {
         lines.push(String::new());
-        lines.push(line);
+        lines.push(line.to_string());
     }
     lines.push(String::new());
     lines.join("\n")
@@ -201,11 +201,11 @@ pub fn block_text(card: &BlockCard) -> String {
     lines.join("\n")
 }
 
-pub fn blocks_text(cards: &[BlockCard]) -> String {
+pub fn blocks_text(blocks: &[(String, String, Option<String>)]) -> String {
     let mut lines = Vec::new();
-    for card in cards {
-        lines.push(format!("{}  {}", card.name, card.title));
-        if let Some(description) = &card.description {
+    for (name, title, description) in blocks {
+        lines.push(format!("{name}  {title}"));
+        if let Some(description) = description {
             lines.push(format!("  {description}"));
         }
     }
@@ -213,33 +213,25 @@ pub fn blocks_text(cards: &[BlockCard]) -> String {
     lines.join("\n")
 }
 
-/// Every part a scene can place, grouped by its first category, then the Blocks. A part that
-/// only exists inside a board is left out.
-pub fn catalog_groups() -> Vec<(String, Vec<(String, String)>)> {
+/// Parts grouped by their first category, then the Blocks. Every part is listed: a part that
+/// only a board uses is still a part a scene can name.
+pub fn catalog_groups(
+    parts: &[(String, Option<String>, String)],
+    blocks: &[(String, String)],
+) -> Vec<(String, Vec<(String, String)>)> {
     let mut groups: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
-    for card in orbe_scene::catalog_cards() {
-        if !card.used_by.is_empty() {
-            continue;
-        }
-        let category = card
-            .categories
-            .as_ref()
-            .and_then(|categories| categories.first())
-            .cloned()
-            .unwrap_or_else(|| "other".to_string());
+    for (id, categories, title) in parts {
+        let category = categories.clone().unwrap_or_else(|| "other".to_string());
         groups
             .entry(category)
             .or_default()
-            .push((card.name, card.title));
+            .push((id.clone(), title.clone()));
     }
     let mut groups: Vec<_> = groups.into_iter().collect();
     for (_, items) in &mut groups {
         items.sort();
     }
-    let mut blocks: Vec<_> = orbe_scene::builtin_blocks()
-        .into_iter()
-        .map(|card| (card.name, card.title))
-        .collect();
+    let mut blocks: Vec<_> = blocks.to_vec();
     blocks.sort();
     groups.push(("blocks".to_string(), blocks));
     groups
@@ -260,19 +252,14 @@ pub fn catalog_text(groups: &[(String, Vec<(String, String)>)]) -> String {
     lines.join("\n")
 }
 
-pub fn search_text(cards: &[Card], blocks: &[BlockCard]) -> String {
-    if cards.is_empty() && blocks.is_empty() {
+pub fn search_text(found: &[(String, String)]) -> String {
+    if found.is_empty() {
         return "no parts match\n".to_string();
     }
-    let mut lines: Vec<String> = cards
+    let mut lines: Vec<String> = found
         .iter()
-        .map(|card| format!("{}  {}", card.name, card.title))
+        .map(|(id, title)| format!("{id}  {title}"))
         .collect();
-    lines.extend(
-        blocks
-            .iter()
-            .map(|card| format!("{}  {}", card.name, card.title)),
-    );
     lines.push(String::new());
     lines.join("\n")
 }

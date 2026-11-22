@@ -22,11 +22,8 @@ fn every_part_under_parts_loads_in_a_format_this_binary_reads() {
         "the catalog has no parts, so this check would pass without loading one"
     );
     let dir = tempfile::tempdir().unwrap();
-    fs::write(
-        dir.path().join("block.jsonc"),
-        "{ \"format\": 1, \"block\": \"probe\", \"version\": \"0.1.0\", \"title\": \"Probe\", \"board\": \"probe\", \"license\": \"MIT\" }\n",
-    )
-    .unwrap();
+    // The probe is a project. Its `parts/` is this repo's, so a scene id and a child both resolve.
+    std::os::unix::fs::symlink(root.join("parts"), dir.path().join("parts")).unwrap();
     fs::write(
         dir.path().join("probe-ground.jsonc"),
         serde_json::to_string_pretty(&probe_ground()).unwrap(),
@@ -47,7 +44,7 @@ fn every_part_under_parts_loads_in_a_format_this_binary_reads() {
     )
     .unwrap();
     let released = released_ids(&root);
-    let cards = catalog_cards();
+    let cards = catalog_cards(&root.join("parts"));
     let mut loaded = 0usize;
     let mut failures = Vec::new();
     for id in &ids {

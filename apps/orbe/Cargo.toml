@@ -12,9 +12,11 @@ orbe-registry.workspace = true
 orbe-scene.workspace = true
 orbe-session.workspace = true
 clap.workspace = true
+jsonc-parser = { workspace = true, features = ["serde"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+strsim.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 ctrlc.workspace = true

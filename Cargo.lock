@@ -747,6 +747,7 @@ dependencies = [
  "clap",
  "ctrlc",
  "httparse",
+ "jsonc-parser",
  "orbe-registry",
  "orbe-scene",
  "orbe-scratch",
@@ -755,6 +756,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "strsim",
  "tempfile",
  "tungstenite",
 ]
@@ -848,7 +850,6 @@ dependencies = [
  "orbe-engine",
  "orbe-model",
  "orbe-scratch",
- "rustix",
  "schemars",
  "serde",
  "serde_json",

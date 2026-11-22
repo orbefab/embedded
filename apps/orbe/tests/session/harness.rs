@@ -39,6 +39,12 @@ pub struct Runtime {
     pub dir: TempDir,
 }
 
+/// The file-URL template. Skill consoles set it; a session test does not fetch.
+#[allow(dead_code)]
+pub fn registry_template() -> String {
+    crate::registry_env::template()
+}
+
 impl Runtime {
     pub fn new() -> Runtime {
         Runtime {
@@ -55,6 +61,7 @@ impl Runtime {
             .env_remove("ORBE_SESSION")
             .env_remove("ORBE_TEST_IDLE_TIMEOUT")
             .env_remove("ORBE_TEST_STOP");
+        crate::registry_env::apply_if(&mut command, args);
         command
     }
 

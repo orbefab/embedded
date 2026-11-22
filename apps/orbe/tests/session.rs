@@ -6,6 +6,8 @@
 #[path = "session/harness.rs"]
 mod harness;
 mod live;
+#[path = "registry_env.rs"]
+mod registry_env;
 
 use std::ffi::OsStr;
 use std::fs;
@@ -28,6 +30,7 @@ fn first_target(lines: &str) -> TempDir {
     let dir = tempfile::tempdir().unwrap();
     let block = dir.path().join("blocks/nano-button-led");
     common::copy_dir(&common::repo().join("blocks/nano-button-led"), &block);
+    std::os::unix::fs::symlink(common::repo().join("parts"), dir.path().join("parts")).unwrap();
     fs::write(block.join("tests/live.test"), lines).unwrap();
     dir
 }

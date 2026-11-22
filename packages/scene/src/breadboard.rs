@@ -6,7 +6,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
-use crate::catalog::Source;
+/// A part's `part.jsonc` and its anchors, as `orbe part` already fetched them.
+#[derive(Clone)]
+pub struct PlugPart {
+    pub value: Value,
+    pub anchors: Vec<Value>,
+}
 
 /// A leg further than this from every hole is in none: half the 2.54 mm pitch.
 const REACH_MM: f64 = 1.27;
@@ -48,13 +53,14 @@ struct Choice {
     preferred: bool,
 }
 
-/// One line on how `id` plugs into a breadboard, or `None` when the catalog has no such part.
-pub fn breadboard_line(id: &str) -> Option<String> {
-    let value = part_value(id)?;
+/// One line on how `id` plugs into a breadboard, or `None` when `load` has no such part.
+/// `load` returns the part and the boards the line tries, including each immediate child.
+pub fn breadboard_line(id: &str, load: &dyn Fn(&str) -> Option<PlugPart>) -> Option<String> {
+    let value = part_value(id, load)?;
     if value.get("holes").is_some_and(Value::is_object) {
         return Some("it is a breadboard; other parts plug into its holes".into());
     }
-    let legs = legs_of(id, &value);
+    let legs = legs_of(id, &value, load);
     if legs.is_empty() {
         return Some("does not plug into a breadboard: it has no leads that go into a hole".into());
     }
@@ -67,7 +73,7 @@ pub fn breadboard_line(id: &str) -> Option<String> {
         );
     }
     for board_id in ["breadboard-400", "breadboard-830"] {
-        let Some(board) = board(board_id) else {
+        let Some(board) = board(board_id, load) else {
             continue;
         };
         let holes = hole_order(&board);
@@ -285,9 +291,9 @@ fn nearest(board: &Board, at: [f64; 2]) -> Option<(usize, f64)> {
     best
 }
 
-fn board(id: &str) -> Option<Board> {
-    let value = part_value(id)?;
-    let anchors = anchors(id);
+fn board(id: &str, load: &dyn Fn(&str) -> Option<PlugPart>) -> Option<Board> {
+    let value = part_value(id, load)?;
+    let anchors = anchors(id, load);
     let at: BTreeMap<u64, [f64; 2]> = anchors
         .iter()
         .filter(|a| a["kind"] == "socket")
@@ -348,10 +354,18 @@ fn row_column(name: &str) -> Option<(String, u32)> {
     Some((row.to_string(), column.parse().ok()?))
 }
 
-fn legs_of(id: &str, value: &Value) -> Vec<Leg> {
-    let exposed = exposed(value);
+fn legs_of(id: &str, value: &Value, load: &dyn Fn(&str) -> Option<PlugPart>) -> Vec<Leg> {
+    let exposed = exposed(value, load);
     let mut legs = Vec::new();
-    push_legs(&mut legs, id, "", &rotation([0.0; 3]), [0.0; 3], &exposed);
+    push_legs(
+        &mut legs,
+        id,
+        "",
+        &rotation([0.0; 3]),
+        [0.0; 3],
+        &exposed,
+        load,
+    );
     if let Some(parts) = value["parts"].as_object() {
         for (name, spec) in parts {
             if !exposed.children.contains(name) {
@@ -362,7 +376,7 @@ fn legs_of(id: &str, value: &Value) -> Vec<Leg> {
             };
             let (at, rotate) = placement(&value["layout"][name]);
             let frame = rotation(rotate);
-            push_legs(&mut legs, ty, name, &frame, at, &exposed);
+            push_legs(&mut legs, ty, name, &frame, at, &exposed, load);
         }
     }
     legs
@@ -374,7 +388,7 @@ struct Exposed {
     children: BTreeSet<String>,
 }
 
-fn exposed(value: &Value) -> Exposed {
+fn exposed(value: &Value, load: &dyn Fn(&str) -> Option<PlugPart>) -> Exposed {
     let mut out = Exposed {
         by_lead: BTreeMap::new(),
         children: BTreeSet::new(),
@@ -401,7 +415,7 @@ fn exposed(value: &Value) -> Exposed {
     let mut child_leads: BTreeMap<String, BTreeMap<String, Vec<u64>>> = BTreeMap::new();
     for (child, child_pin, pin) in labels {
         let leads = child_leads.entry(child.clone()).or_insert_with(|| {
-            part_value(child_type(value, &child))
+            part_value(child_type(value, &child), load)
                 .and_then(|part| part["pins"].as_object().cloned())
                 .map(|pins| {
                     pins.iter()
@@ -431,8 +445,9 @@ fn push_legs(
     frame: &[[f64; 3]; 3],
     origin: [f64; 3],
     exposed: &Exposed,
+    load: &dyn Fn(&str) -> Option<PlugPart>,
 ) {
-    for anchor in anchors(id) {
+    for anchor in anchors(id, load) {
         if anchor["kind"] != "leg" {
             continue;
         }
@@ -482,18 +497,12 @@ fn label_list(spec: &Value) -> Vec<String> {
     }
 }
 
-fn part_value(id: &str) -> Option<Value> {
-    Source::Builtin.find(id).map(|found| found.tree.to_value())
+fn part_value(id: &str, load: &dyn Fn(&str) -> Option<PlugPart>) -> Option<Value> {
+    load(id).map(|part| part.value)
 }
 
-fn anchors(id: &str) -> Vec<Value> {
-    let Some(bytes) = Source::Builtin.file(id, &format!("{id}.anchors.json")) else {
-        return Vec::new();
-    };
-    serde_json::from_slice::<Value>(bytes)
-        .ok()
-        .and_then(|value| value.get("anchors").and_then(Value::as_array).cloned())
-        .unwrap_or_default()
+fn anchors(id: &str, load: &dyn Fn(&str) -> Option<PlugPart>) -> Vec<Value> {
+    load(id).map(|part| part.anchors).unwrap_or_default()
 }
 
 fn placement(value: &Value) -> ([f64; 3], [f64; 3]) {

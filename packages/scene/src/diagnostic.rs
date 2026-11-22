@@ -30,6 +30,8 @@ pub enum Code {
     FirmwareMissing,
     /// A part file's `format` is older or newer than the formats this binary reads.
     PartFormat,
+    /// A part's engine model `kind` is not in this binary.
+    EngineModel,
     /// A project file that exists could not be read.
     Io,
     /// The engine refused a value the reader wrote, and no param set it. The engine's own code.
@@ -72,6 +74,7 @@ impl Code {
             Code::PartMissing => "part_missing",
             Code::FirmwareMissing => "firmware_missing",
             Code::PartFormat => "part_format",
+            Code::EngineModel => "engine_model",
             Code::Io => "io_error",
             Code::Engine(code) => code,
             Code::Lint(Lint::Unplaced) => "scene.unplaced",

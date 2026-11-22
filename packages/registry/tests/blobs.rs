@@ -202,13 +202,19 @@ fn a_required_blob_param_holds_back_only_the_bodies_it_reaches() {
     fs::write(src.path().join("parts/flash-chip/part.jsonc"), &chip).unwrap();
     let found = refused(src.path());
     let (line, column) = place(&chip, r#""220""#);
-    let syntax = |site: &str| {
+    let syntax = |file: &str, site: &str| {
         format!(
-            "parts/flash-chip/part.jsonc:{line}:{column} netlist.syntax `{site}`: the engine does not read `resistance`: invalid type: string \"220\", expected a value object or a waveform object"
+            "{file}:{line}:{column} netlist.syntax `{site}`: the engine does not read `resistance`: invalid type: string \"220\", expected a value object or a waveform object"
         )
     };
-    // `r1` is the chip placed alone, and `r1.u1` the chip inside the module.
-    assert_eq!(found, [syntax("r1.u1"), syntax("r1")]);
+    // `r1` is the chip placed alone. `r1.u1` is that chip nested inside the module.
+    assert_eq!(
+        found,
+        [
+            syntax("parts/flash-chip/part.jsonc", "r1"),
+            syntax("parts/flash-module/parts/flash-chip/part.jsonc", "r1.u1"),
+        ]
+    );
     fs::write(
         src.path().join("parts/flash-chip/part.jsonc"),
         flash_chip(LOAD),
@@ -235,14 +241,18 @@ fn a_required_blob_param_holds_back_only_the_bodies_it_reaches() {
     // The `rom` default is read though the body it writes waits, for the chip and the module.
     fs::remove_file(src.path().join("parts/flash-chip/rom.elf")).unwrap();
     let (line, column) = place(&flash_chip(LOAD), r#""rom.elf""#);
-    let missing = |site: &str| {
-        format!(
-            "parts/flash-chip/part.jsonc:{line}:{column} firmware_missing `{site}`: no file at `rom.elf`"
-        )
+    let missing = |file: &str, site: &str| {
+        format!("{file}:{line}:{column} firmware_missing `{site}`: no file at `rom.elf`")
     };
     assert_eq!(
         refused(src.path()),
-        [missing("r1.rom"), missing("r1.u1.rom")]
+        [
+            missing("parts/flash-chip/part.jsonc", "r1.rom"),
+            missing(
+                "parts/flash-module/parts/flash-chip/part.jsonc",
+                "r1.u1.rom"
+            ),
+        ]
     );
 }
 

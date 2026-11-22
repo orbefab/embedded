@@ -233,6 +233,7 @@ pub(crate) const PART: &[(&str, Shape)] = &[
     ("$schema", Shape::Str),
     ("part", Shape::Str),
     ("version", Shape::Str),
+    ("orbe", Shape::Str),
     ("title", Shape::Str),
     ("summary", Shape::Str),
     ("tags", Shape::List(&Shape::Str)),

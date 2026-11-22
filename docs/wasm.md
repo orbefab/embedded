@@ -86,7 +86,7 @@ A viewer sends only `press`, `release`, `set`, `play` and `pause`, each parsed b
 
 ## Errors
 
-`Session.open` throws an `Error` whose message is the refusal as `orbe open` prints it, such as `scene.jsonc:9:23: error[part_missing]: part `led-5mm` is not in the catalog this Block reads`, with its hint. `worker.js` posts that message as the `reason` of a `closed` message. A command the session refuses is not thrown: its `reply` carries `ok: false` and the error, as `orbe <command> --json` prints it. A command no viewer sends, or text that is not JSON, gets a `usage` error. `partScene` throws an `Error` whose message lists each finding as `orbe check` prints it. A call on a freed object throws `null pointer passed to rust`.
+`Session.open` throws an `Error` whose message is the refusal as `orbe open` prints it, such as `scene.jsonc:9:23: error[part_missing]: part `led-5mm` is not in the catalog this Block reads`, with the hint `the catalog has no part named `led-5mm``. `worker.js` posts that message as the `reason` of a `closed` message. A command the session refuses is not thrown: its `reply` carries `ok: false` and the error, as `orbe <command> --json` prints it. A command no viewer sends, or text that is not JSON, gets a `usage` error. `partScene` throws an `Error` whose message lists each finding as `orbe check` prints it. A call on a freed object throws `null pointer passed to rust`.
 
 ## Tests
 

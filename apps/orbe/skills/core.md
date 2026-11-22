@@ -18,7 +18,7 @@ This text comes from the `orbe` you have installed, so it matches it. `orbe <com
    - `uno-button-led`: a button on D2 lights a red LED on D13 of an Arduino Uno, and the board's own L LED with it.
    - `nano-led-fade`: an LED on D9 of an Arduino Nano fades up and down by PWM.
    - `nano-light-comparator`: an LDR and a trimmer set a threshold. An LM358 lights a red LED in the dark, and a Nano on D2 prints dark or light.
-2. Otherwise find each part with `orbe search <words>`, read it with `orbe part <id>`, and copy it into the project with `orbe add <id>…`.
+2. Otherwise find each part with `orbe search <words>`, read it with `orbe part <id>`, and download it into the project with `orbe add <id>…`.
 3. Write `scene.jsonc` in the project folder. Seat each part on a breadboard with `on`.
 4. Run `orbe check scene.jsonc`, then `orbe lint scene.jsonc`, after every edit. With no path, both read `scene.jsonc`. Do what each hint says. A `part_missing` hint is the `orbe add` command to run. `orbe nets` lists each net and its pins, and marks `(floating)` on a net with no DC path to ground.
 5. Build the firmware and name the built file in the scene. For an Arduino board, run `orbe skills get arduino` first.
@@ -112,7 +112,7 @@ The lint warning says the scene has no `layout`, so the 3D page places the parts
 A scene is JSONC: JSON plus `//` comments and trailing commas. Its keys:
 
 - `format`: always `1`.
-- `parts`: each instance by name. `type` is a catalog id or a `./` path to a part folder of your own. The other keys are the part's params. `"not_simulated": "<why>"` keeps a part for drawing only. Nothing may be wired to it. A wire to one of its pins is a `not_simulated` error that gives `<why>`.
+- `parts`: each instance by name. `type` is a part id or a `./` path to a part folder of your own. The other keys are the part's params. `"not_simulated": "<why>"` keeps a part for drawing only. Nothing may be wired to it. A wire to one of its pins is a `not_simulated` error that gives `<why>`.
 - `wires`: pairs of pins, `["nano.D2", "btn1.a"]`. Wired pins join into nets.
 - `nets` (optional): names a net by one of its pins, `"GND": "nano.GND"`. The ground net is named `GND` when `nets` does not give that name to another net. A hole never names a net. Every other net takes the name of its smallest pin, with `.` written `__`.
 - `layout` (optional): `"r1": { "on": { "a": "bb.d25" } }` seats a part in a breadboard, and `"bb": { "at": [x, y, z], "rotate": [rx, ry, rz] }` places one, in mm and degrees.
@@ -130,7 +130,7 @@ A part name starts with a letter, takes letters, digits and `_`, and may not con
 
 ## Parts
 
-`orbe search <words>` lists the parts whose id, title, maker, number, summary or tags hold every word, then the Blocks. `orbe part <id>` prints one part: its pins and the leads they are on, params, ratings, what it does not simulate, datasheets and files. That print is the part's electrical behaviour. `orbe add <id>…` copies parts into `parts/<id>/`. The copy is the project's: edit it, and commit `parts/` with the scene. `orbe add <block>` installs a Block. The Blocks are `nano-button-led`, `uno-button-led`, `nano-led-fade` and `nano-light-comparator`.
+`orbe search <words>` lists the parts whose id, title, maker, number, summary or tags hold every word, then the Blocks. `orbe part <id>` prints one part: its pins and the leads they are on, params, ratings, what it does not simulate, datasheets and files. That print is the part's electrical behaviour. `orbe add <id>…` downloads the latest part into `parts/<id>/`, and the parts it is built from into `parts/<id>/parts/`. The copy is the project's: edit it, and commit `parts/` with the scene. `orbe check`, `orbe open` and `orbe test` read that copy and never use the network. `orbe add`, `orbe search` and `orbe part` need curl. `orbe add <block>` installs a Block. The Blocks are `nano-button-led`, `uno-button-led`, `nano-led-fade` and `nano-light-comparator`.
 
 In a part's folder, `part.jsonc` is the part: its pins, params, ratings and the engine model it names, which runs inside orbe. `<id>.glb` is its 3D shape, and `<id>.anchors.json` says where each lead sits, for drawing and seating. Any other file builds the 3D shape and holds nothing electrical. `orbe skills get parts` covers the copy and versions.
 

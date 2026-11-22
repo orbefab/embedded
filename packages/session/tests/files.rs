@@ -47,16 +47,65 @@ fn memory(base: &Path, block: &str) -> Files {
     Files::memory(files)
 }
 
+#[path = "../../scene/tests/common/mod.rs"]
+mod layout;
+
 /// The Block installed by `orbe add` into `<base>/blocks/<block>`, so it is no longer a Block.
+/// `block.jsonc` stays behind. The parts the scene names are copied, and each part's own
+/// parts are nested inside its folder.
 fn install(base: &Path, block: &str) -> PathBuf {
+    let src = repo().join("blocks").join(block);
     let dir = base.join("blocks").join(block);
     fs::create_dir_all(&dir).unwrap();
-    let request = orbe_scene::Request {
-        ids: vec![block.to_string()],
-    };
-    let reply = orbe_scene::add_parts(Some(&dir), &request).unwrap();
-    assert_eq!(reply.code(), 0, "{}", reply.text());
+    for entry in fs::read_dir(&src).unwrap() {
+        let path = entry.unwrap().path();
+        if path
+            .file_name()
+            .is_some_and(|name| name == orbe_scene::BLOCK)
+        {
+            continue;
+        }
+        let target = dir.join(path.file_name().unwrap());
+        if path.is_dir() {
+            layout::copy_dir(&path, &target);
+        } else {
+            fs::copy(&path, &target).unwrap();
+        }
+    }
+    let scene = fs::read_to_string(src.join("scene.jsonc")).unwrap_or_default();
+    let catalog = repo().join("parts");
+    for id in scene_part_ids(&scene) {
+        let from = catalog.join(&id);
+        if !from.join("part.jsonc").is_file() {
+            continue;
+        }
+        let dest = dir.join("parts").join(&id);
+        layout::copy_dir(&from, &dest);
+        layout::nest_uses(&catalog, &dest, &mut Vec::new());
+    }
     dir
+}
+
+/// The catalog ids a scene's `parts` name by `"type"`. A path and a repeated id are skipped.
+fn scene_part_ids(text: &str) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("\"type\"") {
+        rest = &rest[at + "\"type\"".len()..];
+        let Some(colon) = rest.find(':') else { break };
+        let after = rest[colon + 1..].trim_start();
+        if !after.starts_with('"') {
+            continue;
+        }
+        let body = &after[1..];
+        let Some(end) = body.find('"') else { break };
+        let id = &body[..end];
+        if orbe_scene::is_id(id) && !ids.iter().any(|seen| seen == id) {
+            ids.push(id.to_string());
+        }
+        rest = &body[end + 1..];
+    }
+    ids
 }
 
 fn walk(base: &Path, path: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
@@ -158,11 +207,47 @@ fn same_lines(block: &str, disk: Vec<String>, memory: Vec<String>) -> Vec<String
 }
 
 fn same_both_ways(base: &Path, block: &str) -> Vec<String> {
+    let folder = base.join("blocks").join(block);
+    if folder.join(orbe_scene::BLOCK).is_file() {
+        // A Block reads the `parts/` beside `blocks/`. Memory holds those files at the same
+        // absolute paths disk reads, so the two readings name the same files.
+        return same_lines(
+            block,
+            outcome(&Files::disk(), base, block),
+            outcome(&memory_with_parts(base, block), base, block),
+        );
+    }
     same_lines(
         block,
         shown(base, outcome(&Files::disk(), base, block)),
         outcome(&memory(base, block), Path::new(""), block),
     )
+}
+
+/// The Block's files and the `parts/` beside `blocks/`, each at its absolute path.
+fn memory_with_parts(base: &Path, block: &str) -> Files {
+    let mut files = Vec::new();
+    let folder = base.join("blocks").join(block);
+    walk_abs(&folder, &mut files);
+    if let Some(parts) = folder
+        .parent()
+        .and_then(|dir| dir.parent())
+        .map(|dir| dir.join("parts"))
+        && parts.is_dir()
+    {
+        walk_abs(&parts, &mut files);
+    }
+    Files::memory(files)
+}
+
+fn walk_abs(path: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
+    if path.is_dir() {
+        for entry in fs::read_dir(path).unwrap() {
+            walk_abs(&entry.unwrap().path(), out);
+        }
+    } else if path.is_file() {
+        out.push((path.to_path_buf(), fs::read(path).unwrap()));
+    }
 }
 
 /// The read starts with `{` and the lint with `Ok(`. The first played line passed. A Block
@@ -226,16 +311,44 @@ fn given_catalog(skip: &str) -> Vec<(String, Vec<u8>)> {
         .collect()
 }
 
-/// A Block handed its catalog as part folders, as a browser is, reads and runs as it does with
-/// the catalog built in.
+/// A Block handed its catalog as part folders, as a browser is, reads and runs as it does from
+/// the `parts/` beside `blocks/`. The scene hash names the files that were read, and a handed-in
+/// catalog records those files at `parts/<id>/` inside the Block, so that hash is set aside.
 #[test]
 fn each_block_reads_and_runs_the_same_from_a_given_catalog() {
     for block in blocks() {
         let block = block.as_str();
-        let built_in = outcome(&memory(&repo(), block), Path::new(""), block);
+        let disk = shown(&repo(), outcome(&Files::disk(), &repo(), block));
         let given = memory(&repo(), block).with_catalog(given_catalog(""));
-        assert_eq!(outcome(&given, Path::new(""), block), built_in, "{block}");
+        let from_catalog = outcome(&given, Path::new(""), block);
+        assert_eq!(
+            scrub_scene_hash(&from_catalog),
+            scrub_scene_hash(&disk),
+            "{block}"
+        );
     }
+}
+
+/// `scene_hash` covers the paths of the files that were read. A handed-in catalog and a Block
+/// on disk name those files differently, and the rest of the reading is what this compares.
+fn scrub_scene_hash(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| {
+            let mut out = String::new();
+            let mut rest = line.as_str();
+            let key = "\"scene_hash\":\"";
+            while let Some(at) = rest.find(key) {
+                out.push_str(&rest[..at + key.len()]);
+                out.push_str("sha256:0");
+                rest = &rest[at + key.len()..];
+                let Some(end) = rest.find('"') else { break };
+                rest = &rest[end..];
+            }
+            out.push_str(rest);
+            out
+        })
+        .collect()
 }
 
 /// A given catalog replaces the built-in one, so a part it lacks is missing.

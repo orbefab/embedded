@@ -26,11 +26,9 @@ impl Run {
 
 /// Runs `orbe` in `dir`.
 pub fn orbe(dir: &Path, args: &[&str]) -> Run {
-    let output = Command::new(env!("CARGO_BIN_EXE_orbe"))
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_orbe"));
+    crate::registry_env::apply(&mut command);
+    let output = command.args(args).current_dir(dir).output().unwrap();
     Run {
         code: output.status.code().unwrap(),
         stdout: String::from_utf8(output.stdout).unwrap(),

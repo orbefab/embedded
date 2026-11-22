@@ -2,12 +2,14 @@
 //! code, and how a failing test reports.
 
 mod live;
+#[path = "registry_env.rs"]
+mod registry_env;
 
 use std::fs;
 
 use live::{common, failed, orbe, project, replies};
 
-/// Every Block's tests pass where it sits in the repo, reading its parts from the catalog.
+/// Every Block's tests pass where it sits in the repo, reading the `parts/` beside `blocks/`.
 #[test]
 fn each_block_passes() {
     let mut ids: Vec<String> = fs::read_dir(common::repo().join("blocks"))

@@ -2,7 +2,9 @@
 # Runs a newcomer's first path on a release orbe. Pass the orbe binary, or the
 # archive scripts/release-build.sh wrote. An archive is checked against the
 # sha256 file beside it, then unpacked. `sh scripts/install.sh --tarball`
-# installs that archive into the temp folder. It downloads nothing. A checksum
+# installs that archive into the temp folder. The part install reads a registry
+# this script builds from this repo with that `orbe`, so the script still
+# downloads nothing from the network. A checksum
 # that does not match is refused, and the installed `orbe --version` must be
 # the version in the archive name. The commands then run on that installed
 # binary. They run in an empty temp folder, and the script stops at the first
@@ -491,8 +493,16 @@ echo "scripts/check-release.sh: skills get core printed ${#skill} bytes" >&2
 project=$work/project
 mkdir -p "$project"
 
-# Copies the Block's part files, including each model.
-run_in 30 "$orbe_bin" add nano-button-led
+# The part install reads this registry. Nothing is downloaded.
+registry=$work/registry
+mkdir -p "$registry"
+repo=$(cd "$scripts_dir/.." && pwd)
+echo "scripts/check-release.sh: registry build  [$registry]" >&2
+"$orbe_bin" registry build "$repo" "$registry"
+export ORBE_REGISTRY="file://${registry}/{name}.json"
+
+# Downloads the Block's part files from that registry, including each model.
+run_in 60 "$orbe_bin" add nano-button-led
 # Reads the scene and every part it names.
 run_in 30 "$orbe_bin" check scene.jsonc
 # The same read, then the warning pass.

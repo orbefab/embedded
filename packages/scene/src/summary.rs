@@ -1,11 +1,11 @@
-//! One card per part and one per Block. `orbe part` and `orbe search` print the catalog's part
-//! cards and the Blocks built into this binary, and do not parse `part.jsonc`. The registry's
-//! records are built from cards of any folder of parts and Blocks.
+//! One card per part and one per Block. The registry's records are built from cards of any
+//! folder of parts and Blocks. `orbe part` and `orbe search` read the registry, not these.
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::Path;
 
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -25,82 +25,82 @@ pub struct Card {
     pub version: String,
     pub license: String,
     pub hash: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub categories: Option<Vec<String>>,
     pub real: Real,
     pub pins: Vec<Pin>,
     pub params: Vec<Param>,
     pub ratings: Vec<Rating>,
     pub not_simulated: Vec<NotSimulated>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub docs: Option<Vec<Doc>>,
     pub files: Vec<CardFile>,
     pub uses: BTreeMap<String, String>,
     pub used_by: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub buy: Option<Vec<Buy>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lit: Option<Threshold>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dim: Option<Threshold>,
-    #[serde(skip_serializing_if = "skip_false")]
+    #[serde(default, skip_serializing_if = "skip_false")]
     pub pressable: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub holes: Option<Holes>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Real {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub maker: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub number: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub datasheet: Option<String>,
-    #[serde(skip_serializing_if = "skip_false")]
+    #[serde(default, skip_serializing_if = "skip_false")]
     pub generic: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Pin {
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "Vec<u64>"))]
     pub leads: Option<Vec<u64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "Vec<String>"))]
     pub refs: Option<Vec<String>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Param {
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub unit: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "Literal"))]
     pub above: Option<Literal>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "Literal"))]
     pub below: Option<Literal>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub file: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "Vec<Choice>"))]
     pub choices: Option<Vec<Choice>>,
-    #[serde(skip_serializing_if = "skip_false")]
+    #[serde(default, skip_serializing_if = "skip_false")]
     pub required: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Literal>"))]
     pub default: Option<Option<Literal>>,
 }
@@ -121,6 +121,17 @@ impl Literal {
                 Some(unit) => format!("{raw} {unit}"),
             },
             Literal::Name(name) => format!("\"{name}\""),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Literal {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Literal, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        match value {
+            Value::Number(number) => Ok(Literal::Number(number.to_string())),
+            Value::String(name) => Ok(Literal::Name(name)),
+            _ => Err(serde::de::Error::custom("a number or a choice name")),
         }
     }
 }
@@ -151,46 +162,46 @@ impl schemars::JsonSchema for Literal {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Choice {
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub number: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub tint: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Rating {
     pub name: String,
     pub value: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub unit: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "Value"))]
     pub source: Option<Value>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct NotSimulated {
     pub what: String,
     pub why: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "Vec<String>"))]
     pub pins: Option<Vec<String>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Doc {
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub url: Option<String>,
 }
@@ -204,7 +215,7 @@ pub struct CardFile {
     pub license: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Buy {
     pub seller: String,
@@ -214,7 +225,7 @@ pub struct Buy {
 
 /// A board's holes, such as a breadboard's: how deep each is, and the holes each strip joins.
 /// Each hole is also one of the card's pins.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Holes {
     pub depth: f64,
@@ -222,7 +233,7 @@ pub struct Holes {
 }
 
 /// A light threshold: `lit` or `dim` while `of` is above `above`.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Threshold {
     pub of: String,
@@ -238,9 +249,9 @@ pub struct BlockCard {
     /// The folder hash over the Block's published files, as `sha256:<hex>`.
     pub hash: String,
     pub title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub categories: Option<Vec<String>>,
     pub board: String,
     pub license: String,
@@ -270,9 +281,42 @@ impl fmt::Display for Missing {
     }
 }
 
-/// Every catalog part, by id.
-pub fn catalog_cards() -> Vec<Card> {
-    cards(&catalog::folders()).expect("the built-in catalog parses")
+/// Every part folder in `dir`, by id.
+pub fn catalog_cards(dir: &Path) -> Vec<Card> {
+    cards(&folders_in(dir)).expect("the parts folder parses")
+}
+
+/// Part folders in `dir`, each file by its `/`-separated path. Build output is left out.
+pub fn folders_in(dir: &Path) -> BTreeMap<String, Folder> {
+    let mut folders = BTreeMap::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return folders;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.join("part.jsonc").is_file() {
+            continue;
+        }
+        let Ok(paths) = crate::published::published_paths(&path) else {
+            continue;
+        };
+        let mut files = Folder::new();
+        for file in paths {
+            let Ok(rel) = file.strip_prefix(&path) else {
+                continue;
+            };
+            let rel = rel
+                .components()
+                .map(|component| component.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            if let Ok(bytes) = std::fs::read(&file) {
+                files.insert(rel, bytes);
+            }
+        }
+        folders.insert(entry.file_name().to_string_lossy().into_owned(), files);
+    }
+    folders
 }
 
 /// One card per part folder, by id. The error names the first part that does not read, or that
@@ -414,38 +458,41 @@ pub fn block_card(id: &str, files: &Folder, parts: &[Card]) -> Result<BlockCard,
     })
 }
 
-pub fn card(name: &str) -> Option<Card> {
-    catalog_cards().into_iter().find(|card| card.name == name)
+pub fn card(parts: &Path, name: &str) -> Option<Card> {
+    catalog_cards(parts)
+        .into_iter()
+        .find(|card| card.name == name)
 }
 
-/// The Blocks built into this binary, by id.
-pub fn builtin_blocks() -> Vec<BlockCard> {
-    let parts = catalog_cards();
-    let mut cards: Vec<BlockCard> = crate::blocks::ids()
+/// The Blocks in `blocks`, read against the parts in `parts`, by id.
+pub fn builtin_blocks(parts: &Path, blocks: &Path) -> Vec<BlockCard> {
+    let cards_of = catalog_cards(parts);
+    let mut found: Vec<BlockCard> = crate::blocks::ids(blocks)
+        .into_iter()
         .map(|id| {
-            let files = crate::blocks::folder(id).expect("a built-in block has files");
-            block_card(id, &files, &parts).expect("a built-in block reads")
+            let files = crate::blocks::folder(blocks, &id).expect("a block has files");
+            block_card(&id, &files, &cards_of).expect("a block reads")
         })
         .collect();
-    cards.sort_by(|a, b| a.name.cmp(&b.name));
-    cards
+    found.sort_by(|a, b| a.name.cmp(&b.name));
+    found
 }
 
-/// The Block `id` built into this binary.
-pub fn builtin_block(id: &str) -> Option<BlockCard> {
-    let files = crate::blocks::folder(id)?;
-    let parts = catalog_cards();
-    Some(block_card(id, &files, &parts).expect("a built-in block reads"))
+/// The Block `id` in `blocks`, read against the parts in `parts`.
+pub fn builtin_block(parts: &Path, blocks: &Path, id: &str) -> Option<BlockCard> {
+    let files = crate::blocks::folder(blocks, id)?;
+    let cards_of = catalog_cards(parts);
+    Some(block_card(id, &files, &cards_of).expect("a block reads"))
 }
 
 /// Parts whose id, title, maker, number, summary or tags contain every word.
 /// An exact id comes first. Then every word is a whole word of the id, the title or a tag.
 /// Then the rest. Ids break ties.
-pub fn search(query: &str) -> Vec<Card> {
+pub fn search(parts: &Path, query: &str) -> Vec<Card> {
     let Some((words, joined)) = query_words(query) else {
         return Vec::new();
     };
-    let mut found: Vec<(u8, Card)> = catalog_cards()
+    let mut found: Vec<(u8, Card)> = catalog_cards(parts)
         .into_iter()
         .filter_map(|card| rank(&card, &words, &joined).map(|rank| (rank, card)))
         .collect();
@@ -454,11 +501,11 @@ pub fn search(query: &str) -> Vec<Card> {
 }
 
 /// Blocks whose id, title, summary or tags contain every word, in the same order as [`search`].
-pub fn search_blocks(query: &str) -> Vec<BlockCard> {
+pub fn search_blocks(parts: &Path, blocks: &Path, query: &str) -> Vec<BlockCard> {
     let Some((words, joined)) = query_words(query) else {
         return Vec::new();
     };
-    let mut found: Vec<(u8, BlockCard)> = builtin_blocks()
+    let mut found: Vec<(u8, BlockCard)> = builtin_blocks(parts, blocks)
         .into_iter()
         .filter_map(|card| rank_block(&card, &words, &joined).map(|rank| (rank, card)))
         .collect();
@@ -479,11 +526,10 @@ fn query_words(query: &str) -> Option<(Vec<String>, String)> {
 }
 
 /// Part and Block ids close to `name`, best first. The id itself is not one of them.
-pub fn near_names(name: &str) -> Vec<String> {
+pub fn near_names(name: &str, parts: &Path, blocks: &Path) -> Vec<String> {
     let want = name.to_lowercase();
-    let mut scored: Vec<(f64, String)> = catalog::Source::Builtin
-        .ids()
-        .chain(crate::blocks::ids().map(str::to_string))
+    let mut scored: Vec<(f64, String)> = listed_ids(parts, blocks)
+        .into_iter()
         .filter(|id| id != name)
         .map(|id| (strsim::jaro_winkler(&want, &id.to_lowercase()), id))
         .filter(|(score, _)| *score >= 0.8)
@@ -494,15 +540,27 @@ pub fn near_names(name: &str) -> Vec<String> {
 }
 
 /// Part and Block ids that have `word` as one whole segment, such as `1n4007` in `diode-1n4007`.
-pub fn ids_with_segment(word: &str) -> Vec<String> {
+pub fn ids_with_segment(word: &str, parts: &Path, blocks: &Path) -> Vec<String> {
     let want = word.to_lowercase();
-    let mut ids: Vec<String> = catalog::Source::Builtin
-        .ids()
-        .chain(crate::blocks::ids().map(str::to_string))
+    let mut ids: Vec<String> = listed_ids(parts, blocks)
+        .into_iter()
         .filter(|id| words_of(id).iter().any(|segment| segment == &want))
         .collect();
     ids.sort();
     ids.dedup();
+    ids
+}
+
+fn listed_ids(parts: &Path, blocks: &Path) -> Vec<String> {
+    let mut ids = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(parts) {
+        for entry in entries.flatten() {
+            if entry.path().join("part.jsonc").is_file() {
+                ids.push(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+    }
+    ids.extend(crate::blocks::ids(blocks));
     ids
 }
 

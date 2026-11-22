@@ -13,7 +13,7 @@ use crate::diagnostic::Findings;
 use crate::model::{ParamKind, PinDef};
 use crate::params::number;
 use crate::project::{hash_files, hex};
-use crate::source::FileId;
+use crate::source::{FileId, display};
 use crate::syntax;
 
 #[derive(Clone, Debug, Serialize)]
@@ -239,11 +239,7 @@ impl Circuit<'_> {
     }
 
     fn part_data(&self, part: &crate::model::Part, tree: &Value) -> PartData {
-        let root = self.project.sources.root();
-        let id = &part.label;
-        let (files, store) = (self.project.files, self.project.store);
-        let model = (self.catalog(part) && store.has(files, root, id, &format!("{id}.glb")))
-            .then(|| format!("/parts/{id}/{id}.glb"));
+        let model = self.model_url(part);
         let anchors = self.anchors_of(part);
         let mut leads = BTreeMap::new();
         let mut labels = BTreeMap::new();
@@ -321,22 +317,39 @@ impl Circuit<'_> {
         }
     }
 
-    /// Whether a part is a catalog copy, whose folder holds its GLB and anchors.
-    fn catalog(&self, part: &crate::model::Part) -> bool {
-        let root = self.project.sources.root();
-        let file = &self.project.sources.file(part.file).path;
-        file == &root.join("parts").join(&part.label).join("part.jsonc")
-    }
-
-    /// `<id>.anchors.json`'s `anchors`, unchanged, or none for a part of the user's own.
-    pub(super) fn anchors_of(&self, part: &crate::model::Part) -> Vec<Value> {
-        if !self.catalog(part) {
-            return Vec::new();
-        }
+    /// The GLB a viewer fetches. A file inside the project is its path from the project root.
+    /// A Block's part, and a part handed in with the files, is `/parts/<id>/<id>.glb`.
+    fn model_url(&self, part: &crate::model::Part) -> Option<String> {
         let root = self.project.sources.root();
         let id = &part.label;
+        let rel = format!("{id}.glb");
+        let file = &self.project.sources.file(part.file).path;
+        if let Some(folder) = file.parent() {
+            let glb = folder.join(&rel);
+            if glb.starts_with(root) && self.project.files.is_file(&glb) {
+                return Some(format!("/{}", display(root, &glb)));
+            }
+        }
         let (files, store) = (self.project.files, self.project.store);
-        anchors(store.read(files, root, id, &format!("{id}.anchors.json")))
+        store
+            .has(files, root, id, &rel)
+            .then(|| format!("/parts/{id}/{rel}"))
+    }
+
+    /// `<id>.anchors.json` beside the part file, or the same file of a part handed in.
+    pub(super) fn anchors_of(&self, part: &crate::model::Part) -> Vec<Value> {
+        let id = &part.label;
+        let rel = format!("{id}.anchors.json");
+        let file = &self.project.sources.file(part.file).path;
+        if let Some(folder) = file.parent() {
+            let path = folder.join(&rel);
+            if let Ok(bytes) = self.project.files.read(&path) {
+                return anchors(Some(bytes));
+            }
+        }
+        let root = self.project.sources.root();
+        let (files, store) = (self.project.files, self.project.store);
+        anchors(store.read(files, root, id, &rel))
     }
 
     /// The ref hover shows for pin `pin` of `inst`: up through each parent's label that lists

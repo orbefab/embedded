@@ -389,10 +389,10 @@ fn grounded(id: &str) -> String {
     )
 }
 
-/// The project an install of these folders would check: the part folders and `scene.jsonc`.
-fn project_locked(project: &Path, scene: &str, parts: &[(&str, &Path, &str, &str)]) {
+/// Copies these part folders into the project and writes `scene.jsonc`.
+fn installed_project(project: &Path, scene: &str, parts: &[(&str, &Path)]) {
     std::fs::create_dir_all(project).unwrap();
-    for (id, folder, _version, _registry) in parts {
+    for (id, folder) in parts {
         copy_tree(folder, &project.join("parts").join(id));
     }
     std::fs::write(project.join("scene.jsonc"), scene).unwrap();
@@ -533,11 +533,7 @@ fn a_model_that_omits_a_field_the_engine_needs_is_not_published() {
 "#;
     let folder = put_part(&src, "lamp", part);
     let project = dir.path().join("project");
-    project_locked(
-        &project,
-        &grounded("lamp"),
-        &[("lamp", &folder, "1.2.0", "@acme")],
-    );
+    installed_project(&project, &grounded("lamp"), &[("lamp", &folder)]);
     refuse_installed(&src, &project, "parts/lamp/part.jsonc", "nothing writes it");
 }
 
@@ -559,11 +555,7 @@ fn a_model_field_of_the_wrong_type_is_not_published() {
 "#;
     let folder = put_part(&src, "lamp", part);
     let project = dir.path().join("project");
-    project_locked(
-        &project,
-        &grounded("lamp"),
-        &[("lamp", &folder, "1.2.0", "@acme")],
-    );
+    installed_project(&project, &grounded("lamp"), &[("lamp", &folder)]);
     refuse_installed(&src, &project, "parts/lamp/part.jsonc", "invalid type");
 }
 
@@ -574,11 +566,7 @@ fn a_param_default_outside_its_range_is_not_published() {
     manifest(&src);
     let folder = put_part(&src, "lamp", &LAMP.replace("\"220\"", "\"-1\""));
     let project = dir.path().join("project");
-    project_locked(
-        &project,
-        &grounded("lamp"),
-        &[("lamp", &folder, "1.2.0", "@acme")],
-    );
+    installed_project(&project, &grounded("lamp"), &[("lamp", &folder)]);
     refuse_installed(&src, &project, "parts/lamp/part.jsonc", "out of range");
 }
 
@@ -591,7 +579,7 @@ fn a_block_scene_param_outside_its_range_is_not_published() {
     let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"lamp\", \"resistance\": \"-1\" } }, \"ground\": \"r1.a\" }\n";
     put_block(&src, "bad-range", "lamp", scene);
     let project = dir.path().join("project");
-    project_locked(&project, scene, &[("lamp", &folder, "1.2.0", "@acme")]);
+    installed_project(&project, scene, &[("lamp", &folder)]);
     refuse_installed(
         &src,
         &project,
@@ -622,11 +610,7 @@ fn a_file_param_that_names_nothing_is_not_published() {
 "#;
     let folder = put_part(&src, "lamp", part);
     let project = dir.path().join("project");
-    project_locked(
-        &project,
-        &grounded("lamp"),
-        &[("lamp", &folder, "1.2.0", "@acme")],
-    );
+    installed_project(&project, &grounded("lamp"), &[("lamp", &folder)]);
     refuse_installed(&src, &project, "parts/lamp/part.jsonc", "missing.txt");
 }
 
@@ -649,11 +633,7 @@ fn a_part_that_names_a_missing_child_is_not_published() {
 "#;
     let folder = put_part(&src, "lamp", part);
     let project = dir.path().join("project");
-    project_locked(
-        &project,
-        &grounded("lamp"),
-        &[("lamp", &folder, "1.2.0", "@acme")],
-    );
+    installed_project(&project, &grounded("lamp"), &[("lamp", &folder)]);
     refuse_installed(&src, &project, "parts/lamp/part.jsonc", "missing-child");
 }
 
@@ -676,13 +656,10 @@ fn a_part_wire_to_an_unknown_pin_is_not_published() {
 "#;
     let folder = put_part(&src, "wrap", wrap);
     let project = dir.path().join("project");
-    project_locked(
+    installed_project(
         &project,
         &grounded("wrap"),
-        &[
-            ("lamp", &lamp, "1.2.0", "@acme"),
-            ("wrap", &folder, "0.1.0", "@acme"),
-        ],
+        &[("lamp", &lamp), ("wrap", &folder)],
     );
     refuse_installed(&src, &project, "parts/wrap/part.jsonc", "nope");
 }
@@ -696,7 +673,7 @@ fn a_block_scene_wire_to_an_unknown_pin_is_not_published() {
     let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"lamp\" } }, \"wires\": [[\"r1.nope\", \"r1.a\"]], \"ground\": \"r1.a\" }\n";
     put_block(&src, "bad-pin", "lamp", scene);
     let project = dir.path().join("project");
-    project_locked(&project, scene, &[("lamp", &folder, "1.2.0", "@acme")]);
+    installed_project(&project, scene, &[("lamp", &folder)]);
     refuse_installed(&src, &project, "blocks/bad-pin/scene.jsonc", "nope");
 }
 
@@ -709,7 +686,7 @@ fn a_block_scene_with_no_ground_is_not_published() {
     let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"lamp\" } } }\n";
     put_block(&src, "no-gnd", "lamp", scene);
     let project = dir.path().join("project");
-    project_locked(&project, scene, &[("lamp", &folder, "1.2.0", "@acme")]);
+    installed_project(&project, scene, &[("lamp", &folder)]);
     refuse_installed(
         &src,
         &project,
@@ -729,13 +706,10 @@ fn a_block_scene_that_names_an_unknown_hole_is_not_published() {
     let scene = "{ \"format\": 1, \"parts\": { \"bb\": { \"type\": \"breadboard-400\" }, \"r1\": { \"type\": \"lamp\" } }, \"layout\": { \"bb\": { \"at\": [0, 0, 0] }, \"r1\": { \"on\": { \"a\": \"bb.zz99\" } } }, \"ground\": \"r1.b\" }\n";
     put_block(&src, "bad-hole", "breadboard-400", scene);
     let project = dir.path().join("project");
-    project_locked(
+    installed_project(
         &project,
         scene,
-        &[
-            ("breadboard-400", &board, "0.1.1", "@orbefab"),
-            ("lamp", &lamp, "1.2.0", "@acme"),
-        ],
+        &[("breadboard-400", &board), ("lamp", &lamp)],
     );
     refuse_installed(&src, &project, "blocks/bad-hole/scene.jsonc", "zz99");
 }
@@ -750,11 +724,7 @@ fn a_block_that_names_firmware_it_does_not_ship_is_not_published() {
     let scene = "{ \"format\": 1, \"parts\": { \"mcu\": { \"type\": \"atmega328p-dip28\", \"firmware\": \"firmware.hex\" } }, \"ground\": \"mcu.GND\" }\n";
     put_block(&src, "blink", "atmega328p-dip28", scene);
     let project = dir.path().join("project");
-    project_locked(
-        &project,
-        scene,
-        &[("atmega328p-dip28", &folder, "0.1.1", "@orbefab")],
-    );
+    installed_project(&project, scene, &[("atmega328p-dip28", &folder)]);
     refuse_installed(&src, &project, "blocks/blink/scene.jsonc", "firmware.hex");
 }
 
@@ -770,7 +740,7 @@ fn a_block_that_types_a_part_file_it_does_not_ship_is_not_published() {
         );
         put_block(&src, "blink", "lamp", &scene);
         let project = dir.path().join("project");
-        project_locked(&project, &scene, &[("lamp", &folder, "1.2.0", "@acme")]);
+        installed_project(&project, &scene, &[("lamp", &folder)]);
         refuse_installed(&src, &project, "blocks/blink/scene.jsonc", ty);
     }
 }
@@ -804,11 +774,7 @@ fn a_part_default_in_its_folder_that_names_nothing_is_not_published() {
         manifest(&src);
         let folder = put_part(&src, "lamp", &noted_lamp(note));
         let project = dir.path().join("project");
-        project_locked(
-            &project,
-            &grounded("lamp"),
-            &[("lamp", &folder, "1.2.0", "@acme")],
-        );
+        installed_project(&project, &grounded("lamp"), &[("lamp", &folder)]);
         refuse_installed(&src, &project, "parts/lamp/part.jsonc", "firmware.hex");
     }
 }
@@ -903,11 +869,7 @@ fn a_block_file_that_leaves_its_folder_is_not_published() {
         if path == hex {
             // `orbe check` in the author's own tree finds the file, and an install would not.
             let project = dir.path().join("project");
-            project_locked(
-                &project,
-                &scene,
-                &[("atmega328p-dip28", &folder, "0.1.1", "@orbefab")],
-            );
+            installed_project(&project, &scene, &[("atmega328p-dip28", &folder)]);
             check_clean(&project);
         }
     }
@@ -934,7 +896,7 @@ fn a_file_that_ships_in_its_folder_is_published() {
         std::fs::write(folder.join("sketch.hex"), &hex).unwrap();
         let scene = "{ \"format\": 1, \"parts\": { \"mcu\": { \"type\": \"blink-mcu\" } }, \"ground\": \"mcu.GND\" }\n";
         let project = dir.path().join("project");
-        project_locked(&project, scene, &[("blink-mcu", &folder, "0.1.1", "@acme")]);
+        installed_project(&project, scene, &[("blink-mcu", &folder)]);
         assert_published(
             &src,
             &project,
@@ -955,11 +917,7 @@ fn a_file_that_ships_in_its_folder_is_published() {
     put_block(&src, "blink", "atmega328p-dip28", scene);
     std::fs::write(src.join("blocks/blink/sketch.hex"), &hex).unwrap();
     let project = dir.path().join("project");
-    project_locked(
-        &project,
-        scene,
-        &[("atmega328p-dip28", &folder, "0.1.1", "@orbefab")],
-    );
+    installed_project(&project, scene, &[("atmega328p-dip28", &folder)]);
     std::fs::write(project.join("sketch.hex"), &hex).unwrap();
     assert_published(
         &src,
@@ -1070,7 +1028,7 @@ fn a_param_whose_bounds_hold_no_value_is_not_published() {
             "{{ \"format\": 1, \"parts\": {{ \"r1\": {{ \"type\": \"src\", \"{name}\": \"{value}\" }} }}, \"ground\": \"r1.{pin}\" }}\n"
         );
         let project = dir.path().join("project");
-        project_locked(&project, &scene, &[("src", &folder, "0.1.0", "@acme")]);
+        installed_project(&project, &scene, &[("src", &folder)]);
         check_at(&project, "");
     }
 }
@@ -1112,7 +1070,7 @@ fn a_required_count_or_duration_the_engine_takes_is_published() {
             "{{ \"format\": 1, \"parts\": {{ \"r1\": {{ \"type\": \"sw\", \"{name}\": \"{value}\" }} }}, \"ground\": \"r1.a\" }}\n"
         );
         let project = dir.path().join("project");
-        project_locked(&project, &scene, &[("sw", &folder, "0.1.0", "@acme")]);
+        installed_project(&project, &scene, &[("sw", &folder)]);
         assert_published(
             &src,
             &project,
@@ -1172,14 +1130,10 @@ fn a_board_child_that_has_its_values_is_checked_while_another_waits() {
     let folder = put_part(&src, "board", board);
     let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"board\", \"voltage\": \"5\" } }, \"ground\": \"r1.b\" }\n";
     let project = dir.path().join("project");
-    project_locked(
+    installed_project(
         &project,
         scene,
-        &[
-            ("board", &folder, "0.1.0", "@acme"),
-            ("src", &source, "0.1.0", "@acme"),
-            ("sw", &switch, "0.1.0", "@acme"),
-        ],
+        &[("board", &folder), ("src", &source), ("sw", &switch)],
     );
     refuse_installed(&src, &project, "parts/board/part.jsonc", "at least 4ns");
 }
@@ -1194,7 +1148,7 @@ fn a_part_with_a_required_param_is_checked_without_its_value() {
     let folder = put_part(&src, "lamp", &part);
     let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"lamp\", \"resistance\": \"220\" } }, \"ground\": \"r1.a\" }\n";
     let project = dir.path().join("project");
-    project_locked(&project, scene, &[("lamp", &folder, "1.2.0", "@acme")]);
+    installed_project(&project, scene, &[("lamp", &folder)]);
     refuse_installed(&src, &project, "parts/lamp/part.jsonc", "missing.txt");
 }
 
@@ -1229,7 +1183,7 @@ fn a_required_voltage_below_zero_is_published() {
             "{{ \"format\": 1, \"parts\": {{ \"r1\": {{ \"type\": \"src\", \"voltage\": \"{voltage}\" }} }}, \"ground\": \"r1.neg\" }}\n"
         );
         let project = dir.path().join("project");
-        project_locked(&project, &scene, &[("src", &folder, "0.1.0", "@acme")]);
+        installed_project(&project, &scene, &[("src", &folder)]);
         assert_published(
             &src,
             &project,
@@ -1266,14 +1220,10 @@ fn disagreeing_child_grounds_are_not_published() {
     let folder = put_part(&src, "twin", twin);
     let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"twin\" } } }\n";
     let project = dir.path().join("project");
-    project_locked(
+    installed_project(
         &project,
         scene,
-        &[
-            ("left", &left, "1.2.0", "@acme"),
-            ("right", &right, "1.2.0", "@acme"),
-            ("twin", &folder, "0.1.0", "@acme"),
-        ],
+        &[("left", &left), ("right", &right), ("twin", &folder)],
     );
     refuse_installed(&src, &project, "scene.jsonc", "different nets");
 }
@@ -1307,7 +1257,7 @@ fn a_sibling_body_a_waiting_param_does_not_write_is_not_published() {
     let folder = put_part(&src, "combo", combo_part());
     let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"combo\", \"voltage\": \"5\" } }, \"ground\": \"r1.neg\" }\n";
     let project = dir.path().join("project");
-    project_locked(&project, scene, &[("combo", &folder, "0.1.0", "@acme")]);
+    installed_project(&project, scene, &[("combo", &folder)]);
     refuse_installed(&src, &project, "parts/combo/part.jsonc", "string \"220\"");
 }
 
@@ -1331,7 +1281,7 @@ fn a_part_whose_waiting_param_writes_its_only_body_is_published() {
     );
     let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"src\", \"voltage\": \"5\" } }, \"ground\": \"r1.neg\" }\n";
     let project = dir.path().join("project");
-    project_locked(&project, scene, &[("src", &folder, "0.1.0", "@acme")]);
+    installed_project(&project, scene, &[("src", &folder)]);
     assert_published(
         &src,
         &project,
@@ -1386,7 +1336,7 @@ fn a_param_that_sets_several_bodies_still_checks_one_it_does_not_write() {
     let folder = put_part(&src, "combo", &part);
     let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"combo\", \"fit\": \"five\" } }, \"ground\": \"r1.neg\" }\n";
     let project = dir.path().join("project");
-    project_locked(&project, scene, &[("combo", &folder, "0.1.0", "@acme")]);
+    installed_project(&project, scene, &[("combo", &folder)]);
     refuse_installed(&src, &project, "parts/combo/part.jsonc", "string \"220\"");
 }
 
@@ -1429,7 +1379,7 @@ fn a_body_a_waiting_choice_writes_is_published() {
     let folder = put_part(&src, "combo", &part);
     let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"combo\", \"fit\": \"five\" } }, \"ground\": \"r1.neg\" }\n";
     let project = dir.path().join("project");
-    project_locked(&project, scene, &[("combo", &folder, "0.1.0", "@acme")]);
+    installed_project(&project, scene, &[("combo", &folder)]);
     assert_published(
         &src,
         &project,
@@ -1475,14 +1425,7 @@ fn a_body_stays_checked_when_the_waiting_param_is_passed_to_a_child() {
     let folder = put_part(&src, "wrap", wrap);
     let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"wrap\", \"voltage\": \"5\" } }, \"ground\": \"r1.neg\" }\n";
     let project = dir.path().join("project");
-    project_locked(
-        &project,
-        scene,
-        &[
-            ("src", &source, "0.1.0", "@acme"),
-            ("wrap", &folder, "0.1.0", "@acme"),
-        ],
-    );
+    installed_project(&project, scene, &[("src", &source), ("wrap", &folder)]);
     refuse_installed(&src, &project, "parts/wrap/part.jsonc", "string \"220\"");
 }
 
@@ -1530,7 +1473,7 @@ fn refuse_empty_sets(part: &str, scene: &str, pointer: &str, absent: &[&str]) {
     manifest(&src);
     let folder = put_part(&src, "combo", part);
     let project = dir.path().join("project");
-    project_locked(&project, scene, &[("combo", &folder, "0.1.0", "@acme")]);
+    installed_project(&project, scene, &[("combo", &folder)]);
     let found = check_at(&project, "this name is empty");
     assert_eq!(found.code, "scene.param");
     assert!(

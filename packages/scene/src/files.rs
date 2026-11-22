@@ -1,16 +1,15 @@
 //! Where the reader reads a project from: the disk, or a set of files held in memory, such as a
-//! scene and its parts handed to a browser. A Block reads its parts from a catalog, the one built
-//! into this binary unless the files name another.
+//! scene and its parts handed to a browser. A Block on disk reads the `parts/` beside `blocks/`.
+//! A Block in memory reads the part folders handed in with [`Files::with_catalog`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 
 use crate::catalog;
 
-/// The files a scene is read from, and the catalog a Block among them reads.
+/// The files a scene is read from, and the part folders a memory Block reads.
 #[derive(Clone, Debug)]
 pub struct Files {
     store: Store,
@@ -37,7 +36,7 @@ impl Files {
     pub fn disk() -> Files {
         Files {
             store: Store::Disk,
-            catalog: catalog::Source::Builtin,
+            catalog: catalog::Source::empty(),
         }
     }
 
@@ -52,16 +51,16 @@ impl Files {
                     .map(|(path, bytes)| (normal(path.as_ref()), bytes))
                     .collect(),
             ),
-            catalog: catalog::Source::Builtin,
+            catalog: catalog::Source::empty(),
         }
     }
 
-    /// These files, with a Block's parts read from `parts` in place of the catalog built into
-    /// this binary. Each key is a part's id and a path in its folder, such as
-    /// `led-5mm/part.jsonc`.
+    /// These files, with a Block's parts read from `parts`. Each key is a part's id and a path
+    /// in its folder, such as `led-5mm/part.jsonc`. A Block on disk that is not given parts
+    /// reads the `parts/` beside `blocks/` instead.
     pub fn with_catalog(self, parts: impl IntoIterator<Item = (String, Vec<u8>)>) -> Files {
         Files {
-            catalog: catalog::Source::Given(Arc::new(parts.into_iter().collect())),
+            catalog: catalog::Source::given(parts),
             ..self
         }
     }
@@ -76,13 +75,6 @@ impl Files {
 
     pub(crate) fn is_dir(&self, path: &Path) -> bool {
         self.kind(path) == Some(Kind::Dir)
-    }
-
-    /// Whether reads come from the real filesystem. A hint that plans an add reads folders
-    /// the same way `orbe add` does, which a memory set cannot. Planning an add is unix-only.
-    #[cfg(unix)]
-    pub(crate) fn is_disk(&self) -> bool {
-        matches!(self.store, Store::Disk)
     }
 
     /// What is at `path`, through any links.

@@ -6,6 +6,9 @@ mod common;
 #[allow(dead_code)]
 #[path = "session/harness.rs"]
 mod harness;
+#[cfg(target_os = "linux")]
+#[path = "registry_env.rs"]
+mod registry_env;
 
 use std::collections::BTreeMap;
 use std::fs;

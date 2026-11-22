@@ -129,6 +129,9 @@ echo "check-site: the build serves sources/$archive, the runtime source each Blo
 target=$(cargo metadata --format-version 1 --no-deps |
   sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
 export ORBE=$target/debug/orbe
+# `orbe search` reads the registry this build wrote, the same index the parts page searches.
+registry=$(cd "$dist/r" && pwd)
+export ORBE_REGISTRY="file://${registry}/{name}.json"
 export ORBE_E2E=site
 export WRANGLER_SEND_METRICS=false
 if [[ $servers != both ]]; then

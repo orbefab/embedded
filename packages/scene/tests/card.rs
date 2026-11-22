@@ -14,6 +14,10 @@ fn parts_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../parts")
 }
 
+fn blocks_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../blocks")
+}
+
 fn title_word(title: &str, word: &str) -> bool {
     title
         .split(|c: char| !c.is_ascii_alphanumeric())
@@ -28,7 +32,7 @@ fn every_catalog_part_is_a_card() {
         .filter(|id| parts_dir().join(id).join("part.jsonc").is_file())
         .collect();
     ids.sort();
-    let cards = catalog_cards();
+    let cards = catalog_cards(&parts_dir());
     let names: Vec<String> = cards.iter().map(|card| card.name.clone()).collect();
     assert_eq!(names, ids);
     for card in &cards {
@@ -64,7 +68,7 @@ fn every_catalog_part_is_a_card() {
 
 #[test]
 fn a_passive_a_chip_and_a_board_keep_only_what_their_files_say() {
-    let passive = card("resistor-axial").unwrap();
+    let passive = card(&parts_dir(), "resistor-axial").unwrap();
     assert!(passive.description.is_some());
     assert!(passive.categories.is_some());
     assert!(passive.real.generic);
@@ -88,7 +92,7 @@ fn a_passive_a_chip_and_a_board_keep_only_what_their_files_say() {
             .all(|file| file.license == "MIT OR Apache-2.0")
     );
 
-    let chip = card("atmega328p-dip28").unwrap();
+    let chip = card(&parts_dir(), "atmega328p-dip28").unwrap();
     assert!(
         chip.description
             .as_deref()
@@ -121,7 +125,7 @@ fn a_passive_a_chip_and_a_board_keep_only_what_their_files_say() {
     );
     assert!(chip.buy.is_none());
 
-    let board = card("nano-board").unwrap();
+    let board = card(&parts_dir(), "nano-board").unwrap();
     assert!(board.description.is_some());
     assert!(board.categories.is_some());
     assert_eq!(
@@ -137,7 +141,7 @@ fn a_passive_a_chip_and_a_board_keep_only_what_their_files_say() {
 
 #[test]
 fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
-    let led = search("led");
+    let led = search(&parts_dir(), "led");
     let mut saw_rest = false;
     let mut title_hits = Vec::new();
     for card in &led {
@@ -167,10 +171,10 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
     assert!(rest.contains(&"uno-board"));
     assert!(rest.windows(2).all(|pair| pair[0] < pair[1]));
 
-    assert_eq!(search("led-5mm")[0].name, "led-5mm");
-    assert_eq!(search("LED-5MM")[0].name, "led-5mm");
+    assert_eq!(search(&parts_dir(), "led-5mm")[0].name, "led-5mm");
+    assert_eq!(search(&parts_dir(), "LED-5MM")[0].name, "led-5mm");
 
-    let resistors = search("resistor");
+    let resistors = search(&parts_dir(), "resistor");
     let names: Vec<&str> = resistors.iter().map(|card| card.name.as_str()).collect();
     assert_eq!(
         &names[..4],
@@ -182,7 +186,7 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
         ]
     );
 
-    let switches = search("switch");
+    let switches = search(&parts_dir(), "switch");
     let names: Vec<&str> = switches.iter().map(|card| card.name.as_str()).collect();
     assert_eq!(
         &names[..7],
@@ -202,7 +206,7 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
         .unwrap();
     assert!(diode > 6, "{names:?}");
 
-    let boards = search("board");
+    let boards = search(&parts_dir(), "board");
     let names: Vec<&str> = boards.iter().map(|card| card.name.as_str()).collect();
     assert_eq!(&names[..2], ["nano-board", "uno-board"]);
     let diode = names
@@ -218,7 +222,7 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
 
 #[test]
 fn file_hashes_and_the_folder_hash_match_the_catalog() {
-    for card in catalog_cards() {
+    for card in catalog_cards(&parts_dir()) {
         let dir = parts_dir().join(&card.name);
         assert_eq!(card.hash, folder_hash(&dir).unwrap(), "{}", card.name);
         for file in &card.files {
@@ -239,7 +243,7 @@ fn file_hashes_and_the_folder_hash_match_the_catalog() {
 
 #[test]
 fn used_by_matches_the_uses_graph() {
-    let cards = catalog_cards();
+    let cards = catalog_cards(&parts_dir());
     for card in &cards {
         let mut expect: Vec<&str> = cards
             .iter()
@@ -254,7 +258,7 @@ fn used_by_matches_the_uses_graph() {
 
 #[test]
 fn a_null_rating_stays_on_the_card_and_a_number_default_keeps_its_unit() {
-    let led = card("led-3mm").unwrap();
+    let led = card(&parts_dir(), "led-3mm").unwrap();
     let names: Vec<&str> = led
         .ratings
         .iter()
@@ -263,7 +267,7 @@ fn a_null_rating_stays_on_the_card_and_a_number_default_keeps_its_unit() {
     assert_eq!(names, ["current", "power"]);
     assert!(led.ratings.iter().all(|rating| rating.value.is_none()));
 
-    let diode = card("diode-1n4007").unwrap();
+    let diode = card(&parts_dir(), "diode-1n4007").unwrap();
     let current = diode
         .ratings
         .iter()
@@ -277,7 +281,7 @@ fn a_null_rating_stays_on_the_card_and_a_number_default_keeps_its_unit() {
     assert_eq!(current.value, Some(1.0));
     assert!(power.value.is_none());
 
-    let pot = card("potentiometer-wh148").unwrap();
+    let pot = card(&parts_dir(), "potentiometer-wh148").unwrap();
     let position = pot
         .params
         .iter()
@@ -293,7 +297,7 @@ fn a_null_rating_stays_on_the_card_and_a_number_default_keeps_its_unit() {
         "a number above 0 and below 1, 0.5 by default"
     );
 
-    let switch = card("tactile-switch-6mm").unwrap();
+    let switch = card(&parts_dir(), "tactile-switch-6mm").unwrap();
     let bounce = switch
         .params
         .iter()
@@ -316,10 +320,16 @@ fn a_null_rating_stays_on_the_card_and_a_number_default_keeps_its_unit() {
 #[test]
 fn one_id_segment_names_that_part_and_several_stay_a_list() {
     let owned = |ids: &[&str]| -> Vec<String> { ids.iter().map(|id| (*id).to_string()).collect() };
-    assert_eq!(ids_with_segment("1n4007"), owned(&["diode-1n4007"]));
-    assert_eq!(ids_with_segment("1N4007"), owned(&["diode-1n4007"]));
     assert_eq!(
-        ids_with_segment("switch"),
+        ids_with_segment("1n4007", &parts_dir(), &blocks_dir()),
+        owned(&["diode-1n4007"])
+    );
+    assert_eq!(
+        ids_with_segment("1N4007", &parts_dir(), &blocks_dir()),
+        owned(&["diode-1n4007"])
+    );
+    assert_eq!(
+        ids_with_segment("switch", &parts_dir(), &blocks_dir()),
         owned(&[
             "tactile-switch-6mm",
             "tactile-switch-ntc013",
@@ -327,20 +337,28 @@ fn one_id_segment_names_that_part_and_several_stay_a_list() {
             "tactile-switch-ts42",
         ])
     );
-    assert!(ids_with_segment("not-a-part-zzzz").is_empty());
-    assert_eq!(ids_with_segment("fade"), owned(&["nano-led-fade"]));
+    assert!(ids_with_segment("not-a-part-zzzz", &parts_dir(), &blocks_dir()).is_empty());
+    assert_eq!(
+        ids_with_segment("fade", &parts_dir(), &blocks_dir()),
+        owned(&["nano-led-fade"])
+    );
 }
 
 #[test]
 fn search_finds_a_block_by_a_word_of_its_id() {
-    let fade = search_blocks("fade");
+    let fade = search_blocks(&parts_dir(), &blocks_dir(), "fade");
     assert_eq!(fade.len(), 1);
     assert_eq!(fade[0].name, "nano-led-fade");
     assert_eq!(
-        near_names("nano-led-fad").first().map(String::as_str),
+        near_names("nano-led-fad", &parts_dir(), &blocks_dir())
+            .first()
+            .map(String::as_str),
         Some("nano-led-fade")
     );
-    let names: Vec<String> = builtin_blocks().into_iter().map(|card| card.name).collect();
+    let names: Vec<String> = builtin_blocks(&parts_dir(), &blocks_dir())
+        .into_iter()
+        .map(|card| card.name)
+        .collect();
     assert_eq!(
         names,
         [
@@ -354,26 +372,30 @@ fn search_finds_a_block_by_a_word_of_its_id() {
 
 #[test]
 fn an_unknown_id_names_the_closest_parts() {
-    assert!(card("LED-5MM").is_none());
+    assert!(card(&parts_dir(), "LED-5MM").is_none());
     assert_eq!(
-        near_names("LED-5MM").first().map(String::as_str),
+        near_names("LED-5MM", &parts_dir(), &blocks_dir())
+            .first()
+            .map(String::as_str),
         Some("led-5mm")
     );
     assert_eq!(
-        near_names("resistor-axil").first().map(String::as_str),
+        near_names("resistor-axil", &parts_dir(), &blocks_dir())
+            .first()
+            .map(String::as_str),
         Some("resistor-axial")
     );
     assert!(
-        near_names("resistor-axial")
+        near_names("resistor-axial", &parts_dir(), &blocks_dir())
             .iter()
             .all(|id| id != "resistor-axial")
     );
-    assert!(near_names("not-a-part-zzzz").len() <= 8);
+    assert!(near_names("not-a-part-zzzz", &parts_dir(), &blocks_dir()).len() <= 8);
 }
 
 #[test]
 fn every_file_of_a_board_is_mit_or_apache() {
-    let uno = card("uno-board").unwrap();
+    let uno = card(&parts_dir(), "uno-board").unwrap();
     let licence = |path: &str| {
         uno.files
             .iter()
@@ -384,7 +406,7 @@ fn every_file_of_a_board_is_mit_or_apache() {
         assert_eq!(licence(path), Some("MIT OR Apache-2.0"), "{path}");
     }
     assert_eq!(uno.license, "MIT OR Apache-2.0");
-    let nano = card("nano-board").unwrap();
+    let nano = card(&parts_dir(), "nano-board").unwrap();
     assert!(
         nano.files
             .iter()
@@ -394,7 +416,7 @@ fn every_file_of_a_board_is_mit_or_apache() {
 
 #[test]
 fn the_esp32s3_rom_is_apache_and_the_part_names_it() {
-    let chip = card("esp32s3-qfn56").unwrap();
+    let chip = card(&parts_dir(), "esp32s3-qfn56").unwrap();
     assert!(chip.license.contains("Apache-2.0"), "{}", chip.license);
     let licence = |path: &str| {
         chip.files

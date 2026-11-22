@@ -216,6 +216,8 @@ pub(crate) struct Part {
     pub(crate) holes: Option<Holes>,
     /// A finding in this part file, which the engine's findings on the part may repeat.
     pub(crate) reported: Option<Reported>,
+    /// The oldest orbe that runs this part, when the part file names one.
+    pub(crate) orbe: Option<String>,
 }
 
 impl Part {
@@ -497,6 +499,7 @@ pub(crate) fn decode_part(
         open: Vec::new(),
         holes: None,
         reported: None,
+        orbe: None,
     };
     for prop in props {
         let value = &prop.value;
@@ -532,6 +535,15 @@ pub(crate) fn decode_part(
                 }
             }
             "holes" => part.holes = Some(decode_holes(value)),
+            "orbe" => match value.str().and_then(crate::Version::parse) {
+                Some(version) => part.orbe = Some(version.to_string()),
+                None => out.push(
+                    Code::Syntax,
+                    value.span,
+                    "`orbe` is a version of three numbers, such as 0.2.0",
+                    "write the oldest orbe that runs this part, such as \"orbe\": \"0.2.0\"".into(),
+                ),
+            },
             _ => {}
         }
     }
@@ -2246,24 +2258,22 @@ fn decode_body(
     let kinds = engine_kinds();
     // The engine says how many of a kind's pins are required: the first `required` of them.
     let Some(&(_, engine_pins, required)) = kinds.iter().find(|(name, _, _)| *name == kind) else {
-        let named = did_you_mean(kind, kinds.iter().map(|(name, _, _)| *name), "");
-        let hint = if named.is_empty() {
-            format!(
-                "the kinds are {}",
-                kinds
-                    .iter()
-                    .map(|(name, _, _)| *name)
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        } else {
-            named.trim_end().to_string()
+        let need = match &part.orbe {
+            Some(version) => format!("it needs orbe {version}"),
+            None => "a newer orbe is needed".to_string(),
         };
         out.push(
-            Code::Syntax,
+            Code::EngineModel,
             kind_node.span,
-            format!("`{kind}` is not an engine kind this reader knows"),
-            hint,
+            format!(
+                "parts/{}/part.jsonc names the engine model \"{kind}\", which orbe {} does not have. {need}",
+                part.label,
+                env!("CARGO_PKG_VERSION")
+            ),
+            match &part.orbe {
+                Some(version) => format!("install orbe {version}"),
+                None => "install a newer orbe".into(),
+            },
         );
         return None;
     };

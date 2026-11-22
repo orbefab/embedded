@@ -2,6 +2,8 @@
 //! refusal reads: a failed `open`, a step past the stop, a ref with nothing to read.
 
 mod live;
+#[path = "registry_env.rs"]
+mod registry_env;
 
 use std::fs;
 
