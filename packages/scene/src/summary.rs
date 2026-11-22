@@ -49,10 +49,6 @@ pub struct Card {
     pub pressable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub holes: Option<Holes>,
-    /// Search and the parts list offer this part unless its file says `"listed": false`.
-    /// The card's JSON leaves the flag out. The index row carries it.
-    #[serde(skip)]
-    pub listed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -775,10 +771,6 @@ fn build<'a>(
         dim: threshold(tree, "dim"),
         pressable: tree.get("controls").and_then(|c| c.get("press")).is_some(),
         holes: holes(tree),
-        listed: tree
-            .get("listed")
-            .and_then(|node| node.to_value().as_bool())
-            .unwrap_or(true),
     })
 }
 

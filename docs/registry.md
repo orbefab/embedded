@@ -15,14 +15,15 @@ orbe registry build <src> <out>
   "format": 1,
   "name": "@acme",
   "homepage": "https://parts.acme.example",
+  "unlisted": ["soic-chip"],
 }
 ```
 
-`name` is `@` and an id. `homepage` is an `https://` URL and may be left out. Only folders in `parts/` and `blocks/` are items. Every published file in an item's folder is one of its files, and a link among those files is an error. `<out>` must be missing or empty. The build writes into a sibling folder and renames it to `<out>` once every file is written, so a failed build leaves nothing to serve. The same `<src>` always writes the same bytes.
+`name` is `@` and an id. `homepage` is an `https://` URL and may be left out. `unlisted` names the part ids that `orbe search` and the site's parts list leave out, and may be left out. An id in it that is not a part in the tree fails the build, and the message names that id. A part file's own `listed` field is ignored, so hiding or showing a part does not change its record and does not need a new version. Only folders in `parts/` and `blocks/` are items. Every published file in an item's folder is one of its files, and a link among those files is an error. `<out>` must be missing or empty. The build writes into a sibling folder and renames it to `<out>` once every file is written, so a failed build leaves nothing to serve. The same `<src>` always writes the same bytes.
 
 The build fails, and writes nothing, when:
 
-- `registry.jsonc` is missing, holds a key other than `format`, `name` and `homepage`, or has a bad `name` or `homepage`;
+- `registry.jsonc` is missing, holds a key other than `format`, `name`, `homepage` and `unlisted`, has a bad `name` or `homepage`, or names in `unlisted` an id that is not a part in the tree;
 - an item folder's name is not an id, or is reserved (see [Names](#names));
 - a file path in an item is one some platform cannot hold (see step 5 of [Verify what you fetch](#verify-what-you-fetch)), or two paths differ only in case;
 - a `part.jsonc` does not parse, the part-file reader refuses it, it has no version in the one spelling, it has no `license`, or it names another folder in `part`. The reader is the one `orbe check` uses, and the finding has the same code, place and message;
@@ -107,7 +108,7 @@ A template is an `https://` URL with exactly one `{name}`. `{name}` starts its l
 }
 ```
 
-`name` is the registry's name and `homepage` its page, absent when `registry.jsonc` has none. `items` has one row per record, sorted by name and then by version, oldest first. Every row has a `version`. `description` and `categories` are absent when the item has none. A part row may also carry `maker` and `number`, from the part file's `real` fields, and leaves a field out when the part names none. A Block row carries neither. A part row carries `"listed": false` when search and the parts list leave it out, and leaves `listed` out when the part is offered. `url` is `<name>@<version>.json`, relative to the index's URL. `sha256` is the lowercase hex SHA-256 of the record's bytes, and `bytes` is their count.
+`name` is the registry's name and `homepage` its page, absent when `registry.jsonc` has none. `items` has one row per record, sorted by name and then by version, oldest first. Every row has a `version`. `description` and `categories` are absent when the item has none. A part row may also carry `maker` and `number`, from the part file's `real` fields, and leaves a field out when the part names none. A Block row carries neither. A part row carries `"listed": false` when `registry.jsonc`'s `unlisted` names that part, which is what search and the parts list leave out, and leaves `listed` out when the part is offered. A part file's own `listed` field is ignored. `url` is `<name>@<version>.json`, relative to the index's URL. `sha256` is the lowercase hex SHA-256 of the record's bytes, and `bytes` is their count.
 
 ## Records
 
