@@ -173,12 +173,8 @@ jobs:
           wasm-bindgen: true
           cache-save: ${{ env.CACHE_SAVE }}
 
-      - name: Previous registry
-        if: matrix.shard == '2/2'
-        run: scripts/site-previous.test.sh
-
       - name: Site on wrangler
-        run: scripts/check-site.sh --first-deploy --servers wrangler --shard "${{ matrix.shard }}"
+        run: scripts/check-site.sh --servers wrangler --shard "${{ matrix.shard }}"
 
   engine-chips:
     name: engine-chips
@@ -278,7 +274,7 @@ jobs:
           cache-save: ${{ env.CACHE_SAVE }}
 
       - name: Site on vite preview
-        run: scripts/check-site.sh --first-deploy --servers vite
+        run: scripts/check-site.sh --servers vite
 
   engines:
     name: engines
@@ -302,7 +298,7 @@ jobs:
       - name: Build the viewer page and the site
         run: |
           pnpm --filter @orbe/viewer-page build
-          scripts/site.sh --first-deploy
+          scripts/site.sh
 
       - name: Firefox and WebKit
         run: scripts/check-engines.sh

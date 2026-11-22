@@ -147,7 +147,7 @@ function enginesSuite(): PlaywrightTestConfig {
   enginesLaunch("WebKit", webkitExecutable);
   for (const [path, how] of [
     [resolve("apps/viewer/dist/index.html"), "pnpm --filter @orbe/viewer-page build"],
-    [resolve("apps/site/dist/client/index.html"), "scripts/site.sh --first-deploy"],
+    [resolve("apps/site/dist/client/index.html"), "scripts/site.sh"],
   ] as const) {
     if (!existsSync(path)) {
       console.error(`No ${path}. Run \`${how}\` first.`);

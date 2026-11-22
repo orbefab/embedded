@@ -7,15 +7,6 @@
 //!
 //! `orbe show` asks the process for a viewer's URL and opens it in the default browser.
 
-// `Refusal` holds the same `String`s as `Reply`. Boxing it would add a conversion at every return.
-#![cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::result_large_err,
-        reason = "session and previous_crash match Reply's String"
-    )
-)]
-
 mod daemon;
 mod page;
 mod place;
@@ -376,23 +367,23 @@ impl Done {
 /// session's time and state when its process, or a missing socket, told the client. Without
 /// it the envelope leaves them out rather than guess.
 struct Refusal {
-    session: String,
+    session: Box<str>,
     error: Error,
     at: Option<(u64, State)>,
     /// The crash this command found, in the same place a process's reply puts it.
-    previous_crash: Option<String>,
+    previous_crash: Option<Box<str>>,
 }
 
 impl Refusal {
     fn reply(&self) -> Reply {
         let (t_ps, state) = self.at.unwrap_or((0, State::Closed));
         Reply {
-            session: self.session.clone(),
+            session: self.session.to_string(),
             t_ps,
             state,
             data: Data::None,
             error: Some(self.error.clone()),
-            previous_crash: self.previous_crash.clone(),
+            previous_crash: self.previous_crash.as_deref().map(str::to_string),
         }
     }
 
@@ -423,7 +414,7 @@ fn refusal(
     hint: impl Into<String>,
 ) -> Refusal {
     Refusal {
-        session: session.to_string(),
+        session: session.into(),
         error: Error::new(code, message, hint),
         at: None,
         previous_crash: None,
@@ -520,7 +511,7 @@ impl Client {
                     self.send(stream, Ask::Run(Ok(command))).map(Done::Reply)
                 }
                 Found::Missing => Err(self.no_session()),
-                Found::Stale => Err(self.crashed("ended without closing")),
+                Found::Stale => Err(self.report_crash("ended without closing", true)),
             },
         }
     }
@@ -594,20 +585,19 @@ impl Client {
             }
         }
         // Park this open's own output when that does not replace an earlier crash the note
-        // already names. A retry must not park: that would replace the earlier output.
-        if !matches!(recovered, Some(Some(_))) {
+        // already names. That earlier file is not this open's output, so the hint leaves it out.
+        let parked = if matches!(recovered, Some(Some(_))) {
+            None
+        } else {
             let _ = self.place.take_crash_log(&self.name);
-        }
-        let hint = [
-            Some(self.place.log(&self.name)),
-            started,
-            Some(self.place.crashed_log(&self.name)),
-        ]
-        .into_iter()
-        .flatten()
-        .find(|log| place::holds_output(log))
-        .map(|log| format!("its last output is in {}", log.display()))
-        .unwrap_or_default();
+            Some(self.place.crashed_log(&self.name))
+        };
+        let hint = [Some(self.place.log(&self.name)), started, parked]
+            .into_iter()
+            .flatten()
+            .find(|log| place::holds_output(log))
+            .map(|log| format!("its last output is in {}", log.display()))
+            .unwrap_or_default();
         self.with_crash(
             Err(self.refuse(
                 Code::SessionCrashed,
@@ -669,7 +659,7 @@ impl Client {
             _ => None,
         };
         Refusal {
-            session: self.name.to_string(),
+            session: self.name.as_str().into(),
             error,
             at,
             previous_crash: None,
@@ -793,7 +783,7 @@ impl Client {
         match self.find()? {
             Found::Listening(stream) => self.send(stream, Ask::Show { page }),
             Found::Missing => Err(self.no_session()),
-            Found::Stale => Err(self.crashed("ended without closing")),
+            Found::Stale => Err(self.report_crash("ended without closing", true)),
         }
     }
 
@@ -933,10 +923,6 @@ impl Client {
         )
     }
 
-    fn crashed(&self, how: &str) -> Refusal {
-        self.report_crash(how, true)
-    }
-
     /// `park` moves `<name>.log` onto the crash log. A retry of `open` passes false so it does
     /// not replace output an earlier session left.
     fn report_crash(&self, how: &str, park: bool) -> Refusal {
@@ -1005,7 +991,7 @@ impl Client {
                 Ok(reply)
             }
             Err(mut refused) => {
-                refused.previous_crash = Some(note);
+                refused.previous_crash = Some(note.into());
                 Err(refused)
             }
         }

@@ -22,6 +22,16 @@ const FIT_MM: f64 = 1.0;
 /// A leg points down when its axis does, once placed.
 const DOWN: f64 = -0.5;
 
+/// How a drawn leg joins the hole it is drawn in.
+pub(super) enum Join {
+    /// `on` seats the part on the drawn hole.
+    Seat,
+    /// A contact wire to this `board.hole`.
+    Contact(String),
+    /// The drawn hole is held and its strip has no free hole.
+    Full,
+}
+
 /// A part the scene plugs in, where it sits, and the hole under each leg.
 pub(super) struct Seated {
     pub(super) placement: Placement,
@@ -742,14 +752,14 @@ impl Circuit<'_> {
 
     /// A top part whose `at` puts a downward leg into a hole of a board that has its own `at`.
     /// The page draws that leg in the hole. The value is the board, the hole, the pin `on`
-    /// would name, and whether that seat would put another leg in a hole something already
-    /// holds. A board with no `at` is drawn in a row, so it is not under the part.
-    /// `root` is each pin's net. A leg whose pin already shares the hole's net is skipped.
-    /// Another leg of the same part, in a hole it does not share, is still unseated.
+    /// would name, and how to join it. When that hole is held, the join is a contact wire to
+    /// a free hole in the same strip. A board with no `at` is drawn in a row, so it is not
+    /// under the part. `root` is each pin's net. A leg whose pin already shares the hole's net
+    /// is skipped. Another leg of the same part, in a hole it does not share, is still unseated.
     pub(super) fn hovering(
         &self,
         root: &[usize],
-    ) -> BTreeMap<String, (String, String, String, bool)> {
+    ) -> BTreeMap<String, (String, String, String, Join)> {
         let mut trees = BTreeMap::new();
         let scene = self.tree(&mut trees, self.project.scene.file);
         let layout = &scene["layout"];
@@ -780,6 +790,11 @@ impl Circuit<'_> {
             }
         }
         let held = self.held_holes();
+        let leads: BTreeMap<usize, String> = held
+            .iter()
+            .copied()
+            .map(|key| (key, self.hole_label(key)))
+            .collect();
         let mut found = BTreeMap::new();
         for (name, id) in &tops {
             let written = &layout[name.as_str()];
@@ -841,13 +856,23 @@ impl Circuit<'_> {
                 }
             }
             if let Some((_, board, hole, pin, key)) = best {
-                // The other leg is drawn in a hole a wire already names, so `on` would claim
-                // that hole twice. The free hole itself can still take a contact wire.
-                let blocked = !held.contains(&key)
-                    && occupied
-                        .iter()
-                        .any(|&other| other != key && held.contains(&other));
-                found.insert(name.clone(), (board, hole, pin, blocked));
+                // `on` claims every hole this part is drawn in. A held one takes a contact
+                // wire instead, to a free hole in that strip when the drawn hole itself is held.
+                let join = if held.contains(&key) {
+                    let mut reserved = BTreeSet::new();
+                    match self.free_hole(key, &leads, &mut reserved, &[]) {
+                        Some(target) => Join::Contact(target),
+                        None => Join::Full,
+                    }
+                } else if occupied
+                    .iter()
+                    .any(|&other| other != key && held.contains(&other))
+                {
+                    Join::Contact(format!("{board}.{hole}"))
+                } else {
+                    Join::Seat
+                };
+                found.insert(name.clone(), (board, hole, pin, join));
             }
         }
         found
