@@ -48,4 +48,4 @@ npx skills add orbefab/embedded
 
 The code is under MIT OR Apache-2.0, at your option, unless a file says otherwise. The MIT license is [LICENSE-MIT](LICENSE-MIT). The Apache License, Version 2.0 is [LICENSE-APACHE](LICENSE-APACHE). A contribution you submit for inclusion is under the same two licenses, with no other terms.
 
-The Block firmware images in `blocks/*/build/` and the engine's test sketch images in `packages/engine/tests/firmware/sketch/` say otherwise. Each image is statically linked to the Arduino AVR core, which is LGPL-2.1-or-later. Each Block's `firmware/NOTICE` names its image. `firmware/NOTICE` beside the test images names those.
+The Block firmware images in `blocks/*/build/` and the engine's test sketch images in `packages/engine/tests/firmware/sketch/` say otherwise. Each image is statically linked to the Arduino AVR core, which is LGPL-2.1-or-later. The NeoPixel stick's image also links Adafruit NeoPixel 1.15.5, which is LGPL-3.0-or-later. Each Block's `firmware/NOTICE` names its image. `firmware/NOTICE` beside the test images names those.

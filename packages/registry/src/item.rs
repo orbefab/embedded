@@ -274,7 +274,6 @@ impl From<Card> for Item {
             dim,
             pressable,
             holes,
-            listed: _,
         } = card;
         Item::Part(Box::new(PartItem {
             head: Head {

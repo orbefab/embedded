@@ -22,8 +22,8 @@
     },
   },
   "not_simulated": [
-    { "what": "tolerance", "why": "The value is exact. The series is sold at ±5 %." },
-    { "what": "temperature coefficient", "why": "The engine has no temperature. The sheet gives ±300 ppm/°C, and the 15 W rating is at 25 °C." },
+    { "what": "tolerance", "why": "The value is exact. The series is sold at ±5 %, and wirewound values also at ±1 %." },
+    { "what": "temperature coefficient", "why": "The engine has no temperature. The sheet gives ±300 ppm/°C, or ±100 ppm/°C for some wirewound values, and the 15 W rating is at 25 °C." },
     { "what": "wirewound inductance", "why": "The model is a resistance. A wirewound body has inductance the engine leaves out." },
   ],
 }

@@ -49,10 +49,6 @@ pub struct Card {
     pub pressable: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub holes: Option<Holes>,
-    /// Search and the parts list offer this part unless its file says `"listed": false`.
-    /// The card's JSON leaves the flag out. The index row carries it.
-    #[serde(skip)]
-    pub listed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -111,6 +107,10 @@ pub struct Param {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "Literal"))]
     pub example: Option<Literal>,
+    /// `set` changes it while a session runs, as a person turns a potentiometer's knob. Absent
+    /// when false.
+    #[serde(default, skip_serializing_if = "skip_false")]
+    pub live: bool,
 }
 
 /// A param bound or default. A number keeps the digits the part file wrote, and the
@@ -644,6 +644,9 @@ pub fn param_sentence(param: &Param) -> String {
     if let Some(phrase) = example_phrase(param) {
         text.push_str(&format!(", example {phrase}"));
     }
+    if param.live {
+        text.push_str(", and `set` changes it while a session runs");
+    }
     text
 }
 
@@ -775,10 +778,6 @@ fn build<'a>(
         dim: threshold(tree, "dim"),
         pressable: tree.get("controls").and_then(|c| c.get("press")).is_some(),
         holes: holes(tree),
-        listed: tree
-            .get("listed")
-            .and_then(|node| node.to_value().as_bool())
-            .unwrap_or(true),
     })
 }
 
@@ -923,6 +922,7 @@ fn param<'t>(
             required: false,
             default: None,
             example: example_of(decl),
+            live: false,
         };
         apply_default(&mut param, own);
         return Some(param);
@@ -943,6 +943,7 @@ fn param<'t>(
             required: false,
             default: None,
             example: example_of(decl),
+            live: false,
         };
         apply_default(&mut param, own);
         return Some(param);
@@ -958,6 +959,9 @@ fn param<'t>(
             required: false,
             default: None,
             example: example_of(decl),
+            live: decl
+                .get("live")
+                .is_some_and(|live| live.to_value().as_bool() == Some(true)),
         };
         apply_default(&mut param, own);
         return Some(param);

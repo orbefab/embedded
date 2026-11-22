@@ -73,12 +73,17 @@ export interface PartView {
   }[];
 }
 
-/** A joint of `part.jsonc`, with `range` read as mm. The node slides along `slide`, a unit
- * vector in the part frame, by `range` when the joint is fully driven. */
+/** A joint of `part.jsonc`. The node slides along `slide`, a unit vector in the part frame, by
+ * `range` mm when the joint is fully driven, or turns about `turn`, a unit vector in the part
+ * frame through the node's origin, right-handed, by `range` degrees. */
 export interface Joint {
   readonly node: string;
-  readonly slide: Vec3;
+  readonly slide?: Vec3;
+  readonly turn?: Vec3;
   readonly range: number;
+  /** The param that poses the joint. At the middle of `min` to `max` the node sits where the
+   * model draws it, and it moves half of `range` toward each end, `+` toward `max`. */
+  readonly by?: { readonly param: string; readonly min: number; readonly max: number };
 }
 
 /** One entry of `part.jsonc`'s `not_simulated`, unchanged. It names a feature the engine

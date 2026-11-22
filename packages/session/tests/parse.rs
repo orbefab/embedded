@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use orbe_session::{
-    Command, Condition, Duration, Needle, Op, Ref, Step, UNTIL_TIMEOUT, Unit, Want,
+    Command, Condition, Duration, Needle, Op, ParamSet, Ref, Step, UNTIL_TIMEOUT, Unit, Want,
 };
 
 fn ps(text: &str) -> u64 {
@@ -277,7 +277,19 @@ fn a_bad_line_names_the_command_and_its_usage() {
         ),
         (
             "set light",
-            "takes a quantity and a value, such as `light 50`; usage: set <quantity> <value>",
+            "takes a quantity and a value, such as `light 50`, or a part's param and a value, such as `@pot1.position 0.8`; usage: set <quantity> <value> | set <ref> <value>",
+        ),
+        (
+            "set @pot1 0.5",
+            "`@pot1` is a part; name its param, such as `@pot1.position`",
+        ),
+        (
+            "set @pot1.position half",
+            "`half` is not a number; write the param's value, such as 0.5",
+        ),
+        (
+            "set pot1.position 0.5",
+            "`pot1.position` is not a world quantity",
         ),
         (
             "press",
@@ -340,4 +352,16 @@ fn the_wire_refuses_what_the_parser_refuses() {
 
 fn line_ok(text: &str) -> Command {
     line(text).unwrap().unwrap()
+}
+
+#[test]
+fn set_takes_a_world_quantity_or_a_part_s_param() {
+    assert_eq!(
+        line_ok("set @pot1.position 0.8"),
+        Command::SetParam(ParamSet {
+            target: Ref::parse("@pot1.position").unwrap(),
+            value: 0.8,
+        })
+    );
+    assert_eq!(line_ok("set @world.light 50"), line_ok("set light 50"));
 }

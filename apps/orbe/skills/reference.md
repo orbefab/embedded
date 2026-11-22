@@ -76,7 +76,7 @@ Right after `step --until @led1 lit` the pin is already high and `i` is about 12
 ## Time
 
 - `step <duration>` takes ps, ns, us, ms or s, such as `100ms`, `1.5ms`, `20us`. Serial edges on D1 can fill its 20 lines.
-- An input lands at the session's time or later, and its reply gives the time. A `set` also lands after the last change the scene's `steps` schedule, so it never undoes one.
+- An input lands at the session's time or later, and its reply gives the time. A world `set` also lands after the last change the scene's `steps` schedule, so it never undoes one. A part's `set`, such as `@pot1.position`, lands at once.
 - `step --until` first reads the condition now. If it holds, it takes no time. A pin condition stops 1 ps after the exact edge. `@led1.i` shows that current there, and the light state follows the average over 20 ms. Other conditions are read every 1 ms, so the reply says `by 104ms`.
 - Serial can reach orbe up to one engine step (`sim.max_step`, 10 ms by default) after the chip sends it. Step a little past a print before you expect it.
 - A session stops at 2 hours of simulated time. Reads still work there, and `press`, `release`, `set`, `step` and `play` fail with `ended`. `step <duration>` past the stop fails with `past_stop`, and its hint names the time left. `step --until` stops there and fails with `ended`. An input that would land past the stop fails with `past_stop`, and its hint says to run `orbe open`.
@@ -161,14 +161,26 @@ The part and `orbe add` codes are in `orbe skills get parts`.
 | `session_crashed` | The session's process died. Run `orbe open` again. It names `<name>.log.crashed` when the process left output. A failed `open` after an earlier crash names `<name>.log`, the retry's output. A crash that wrote nothing removes the older one. |
 | `version_mismatch` | Another version of orbe started this session. Run `orbe close`. |
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |
-| `not_settable` | `press` and `release` work only on a switch. `set` works only on a quantity the scene's `world` names or a part reads. |
-| `wrong_setting` | The part takes a different input, such as a trimmer's `position`. Set that param in the scene and run `orbe open` again. |
+| `not_settable` | `press` and `release` work only on a switch. `set` works on a quantity the scene's `world` names or a part reads, and on a live param. Other params are fixed; the hint names the live ones. |
+| `value` | A live param set out of range. |
+| `wrong_setting` | The part takes a different input, such as a `press` on a part that is not a switch. |
 | `no_change` | `press` or `release` asks for the switch state already there. `set` of a value already scheduled succeeds, and names the time it lands when that time is still ahead. |
 | `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`, then fix the circuit or the firmware, or step longer. |
 | `ended` | The session reached its 2-hour stop. Reads still work. Run `orbe open` to start again. |
 | `past_stop` | A `step` would end past the stop, or an input would land past it. Do what the hint says. |
 | `cancelled` | Ctrl-C stopped a `step`. Step again. |
 | `faulted` | The engine stopped the session. The message names why. Fix it and run `orbe open`. |
+
+## Turning a knob
+
+`set` turns a knob while the session runs. Its wiper feeds A0; D13 lights over half scale:
+
+```text tests/knob.test
+open
+set @pot1.position 0.8
+step 100ms
+expect @led1 lit
+```
 
 ## What is not simulated
 
@@ -179,5 +191,4 @@ The part and `orbe add` codes are in `orbe skills get parts`.
 - USB, and serial into the chip. The chip's serial out (TX, D1) is read as text.
 - The chip's clamp diodes. A pin pulled past VCC or GND draws no clamp current, and `rating.voltage` names it.
 - A switch's force and travel, and part tolerances.
-- Turning a potentiometer during a session. Its `position` param sets the wiper for the whole run.
 - orbe never builds firmware. Build it with your toolchain and name the output file in the scene.

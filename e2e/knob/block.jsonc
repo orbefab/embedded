@@ -1,0 +1,11 @@
+// A test fixture shaped like a Block, so its scene reads the repo's parts/ two folders up. It is
+// not in blocks/, so the registry does not serve it.
+{
+  "format": 1,
+  "block": "knob",
+  "version": "0.0.0",
+  "title": "Knob on a Nano",
+  "summary": "A potentiometer on A0 of an Arduino Nano. The LED on D13 lights while A0 reads above half scale.",
+  "board": "nano-board",
+  "license": "MIT OR Apache-2.0",
+}

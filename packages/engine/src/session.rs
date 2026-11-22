@@ -513,6 +513,13 @@ impl Session {
         self.circuit.netlist.world()
     }
 
+    /// The settable level of part `part`, such as a potentiometer's `position`, with each input
+    /// `apply` appended. `None` when no part has that name or the part has no level.
+    pub fn part_level(&self, part: &crate::name::Name) -> Option<crate::netlist::LevelField<'_>> {
+        let netlist = &self.circuit.netlist;
+        netlist.part(netlist.part_id(part)?).model.level()
+    }
+
     /// The time the step after the last accepted one lands, which a call accepts once it
     /// reaches that time. Edges and bytes join the logs only on an accepted step, so none
     /// arrives before it. `None` once the session has ended.

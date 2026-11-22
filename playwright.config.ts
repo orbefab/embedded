@@ -91,6 +91,21 @@ const suites: Record<string, PlaywrightTestConfig> = {
       reuseExistingServer: false,
     },
   },
+  knob: {
+    ...shared,
+    testDir: "apps/viewer/e2e",
+    testMatch: "knob.spec.ts",
+    use: { ...shared.use, viewport: { width: 1280, height: 720 } },
+    webServer: {
+      command: "node e2e/headed-server.mjs",
+      env: { ...process.env, ORBE_SCENE: "e2e/knob/scene.jsonc" },
+      wait: { stdout: /ORBE_SHOW_READY=1/ },
+      stdout: "pipe",
+      gracefulShutdown: { signal: "SIGTERM", timeout: 15_000 },
+      timeout: 60_000,
+      reuseExistingServer: false,
+    },
+  },
   site: siteSuite(),
 };
 
@@ -200,7 +215,7 @@ function enginesSuite(): PlaywrightTestConfig {
 }
 
 if (suite === undefined || (suite !== "engines" && !(suite in suites))) {
-  console.error("usage: ORBE_E2E=viewer|block|headed|world|site|engines pnpm exec playwright test");
+  console.error("usage: ORBE_E2E=viewer|block|headed|world|knob|site|engines pnpm exec playwright test");
   process.exit(2);
 }
 
@@ -218,7 +233,7 @@ if (suite === "viewer" || suite === "block") {
   }
 }
 
-if (suite === "headed" || suite === "world") {
+if (suite === "headed" || suite === "world" || suite === "knob") {
   const orbe = process.env.ORBE ?? "";
   if (orbe === "" || !existsSync(orbe)) {
     console.error(`No orbe at ${orbe}. Usage: scripts/check-headed.sh [--renders <dir>]`);

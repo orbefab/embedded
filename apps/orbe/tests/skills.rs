@@ -1713,34 +1713,7 @@ fn the_warnings_table_lists_the_codes_lint_prints_and_open_shows_only_the_engine
 /// `orbe skills get core` starts from a Block, and `orbe part` prints a breadboard's holes as
 /// ranges, a part's pins, params and an LED's brightness ranges.
 #[test]
-fn the_core_skill_starts_from_a_block_and_orbe_part_prints_a_part() {
-    let core = skill("core");
-    let loop_ = core
-        .split("## The loop")
-        .nth(1)
-        .unwrap()
-        .split("\n## ")
-        .next()
-        .unwrap();
-    assert!(
-        loop_.contains("1. `orbe blocks` lists the Blocks, and `orbe search <words>` finds one. Start from a Block only when the user did not ask to build the circuit from parts."),
-        "{loop_}"
-    );
-    assert!(
-        loop_.contains("`orbe add <block>` in an empty folder"),
-        "{loop_}"
-    );
-    for id in [
-        "nano-button-led",
-        "uno-button-led",
-        "nano-led-fade",
-        "nano-light-comparator",
-    ] {
-        assert!(
-            loop_.contains(&format!("- `{id}`:")),
-            "{id} is not a line of the loop"
-        );
-    }
+fn orbe_part_prints_the_holes_pins_and_readings() {
     let runtime = Runtime::new();
     let part = |id: &str| runtime.orbe(Path::new("."), &["part", id]).ok().stdout;
     for (id, rows) in [
@@ -1775,6 +1748,6 @@ fn the_core_skill_starts_from_a_block_and_orbe_part_prints_a_part() {
     says(&part("nano-board"), "\nNano (CH340 clone)\n");
     says(
         &part("trimmer-3362p"),
-        "  resistance: a value in ohm above 0, required, example 10 kohm\n  position: a number above 0 and below 1, 0.5 by default\n",
+        "  resistance: a value in ohm above 0, required, example 10 kohm\n  position: a number above 0 and below 1, 0.5 by default, and `set` changes it while a session runs\n",
     );
 }

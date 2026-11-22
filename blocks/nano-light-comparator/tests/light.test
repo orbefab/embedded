@@ -48,4 +48,17 @@ expect @led1 off
 expect @nano.D2 low
 expect @nano.D2 < 0.2V
 expect serial contains "light 3"
+# The trimmer sets the threshold. Turned toward `a`, to 0.1, it raises the threshold to 2.93 V,
+# over the LDR node's 2.52 V at 300 lx, so the LED lights in the same light. Turned back, it goes out.
+set @trim.position 0.1
+step --until @led1 lit --timeout 100ms
+step 50ms
+expect @nano.D2 high
+expect @u1.IN1_P > 2.85V
+expect serial contains "dark 4"
+set @trim.position 0.5
+step --until @led1 off --timeout 100ms
+step 50ms
+expect @nano.D2 low
+expect serial contains "light 5"
 expect no diagnostics
