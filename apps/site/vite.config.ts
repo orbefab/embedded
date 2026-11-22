@@ -6,7 +6,7 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { PUBLIC, siteInputs } from "./build/inputs.ts";
-import { parseJsonc } from "./src/jsonc.ts";
+import type { IndexRow } from "./src/records.ts";
 
 const BRAND = resolve(import.meta.dirname, "../../packages/brand/website");
 const flag = process.env.ORBE_SITE_INSTALL ?? "";
@@ -26,14 +26,12 @@ const embedPages = readdirSync(resolve(import.meta.dirname, "../../blocks"))
 
 /** A part with `"listed": false` is left out of the parts list, so the crawl never finds its page
  * unless a board page links it. List each one. */
-const unlistedPartPages = readdirSync(resolve(import.meta.dirname, "../../parts"))
-  .filter((name) => {
-    const file = resolve(import.meta.dirname, "../../parts", name, "part.jsonc");
-    if (!existsSync(file)) return false;
-    const value = parseJsonc(readFileSync(file, "utf8")) as { listed?: boolean };
-    return value.listed === false;
-  })
-  .map((name) => ({ path: `/embedded/parts/${name}/` }));
+const index = resolve(import.meta.dirname, "../../.scratch/site/registry/index.json");
+const unlistedPartPages = existsSync(index)
+  ? (JSON.parse(readFileSync(index, "utf8")) as { items: IndexRow[] }).items
+      .filter((row) => row.type === "part" && row.listed === false)
+      .map((row) => ({ path: `/embedded/parts/${row.name}/` }))
+  : [];
 
 /** The Worker Start renders pages in, from its server entry. */
 const renderer = { name: "orbefab-embedded-render", main: "@tanstack/react-start/server-entry" };
