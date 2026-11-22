@@ -1,13 +1,5 @@
 //! The skills this binary serves. Each is a markdown file compiled in.
 
-#[cfg(test)]
-use std::collections::{BTreeMap, BTreeSet};
-#[cfg(test)]
-use std::path::Path;
-
-#[cfg(test)]
-use orbe_scene::{BoardFacts, Gap, board_facts, si_amount};
-
 pub struct Skill {
     pub name: &'static str,
     pub about: &'static str,
@@ -83,164 +75,6 @@ pub fn names() -> String {
 impl Skill {
     pub fn text(&self) -> Result<String, String> {
         Ok(self.text.to_string())
-    }
-}
-
-/// Replaces a `<!-- boards nano-board uno-board -->` marker with one block per named board.
-/// `parts` is the directory of part folders. A skill with no marker is unchanged.
-#[cfg(test)]
-fn fill_boards(text: &str, parts: &Path) -> Result<String, String> {
-    let Some(start) = text.find("<!-- boards") else {
-        return Ok(text.to_string());
-    };
-    let tail = &text[start..];
-    let Some(close) = tail.find("-->") else {
-        return Err("the boards marker does not close".into());
-    };
-    let body = tail["<!-- boards".len()..close].trim();
-    if body.is_empty() {
-        return Err("the boards marker names no board".into());
-    }
-    let ids: Vec<&str> = body.split_whitespace().collect();
-    let rendered = boards(parts, &ids)?;
-    let mut out = String::with_capacity(text.len() + rendered.len());
-    out.push_str(&text[..start]);
-    out.push_str(&rendered);
-    out.push_str(&tail[close + 3..]);
-    Ok(out)
-}
-
-/// One heading and one list per board, from its part file: the chip and its clock, the pins
-/// that work, the pins the reader leaves unsimulated, and the L LED.
-#[cfg(test)]
-fn boards(parts: &Path, ids: &[&str]) -> Result<String, String> {
-    let mut blocks = Vec::with_capacity(ids.len());
-    for id in ids {
-        blocks.push(board_text(&board_facts(parts, id)?));
-    }
-    Ok(blocks.join("\n"))
-}
-
-#[cfg(test)]
-fn board_text(board: &BoardFacts) -> String {
-    let mut out = format!("### `{}`\n\n", board.id);
-    out.push_str(&format!(
-        "- `{}`, {}, runs the {} at {}.\n",
-        board.id,
-        board.title,
-        board.chip,
-        si_amount(board.clock_hz, "Hz"),
-    ));
-    out.push_str(&format!("- These pins work: {}.\n", pin_list(&board.works)));
-    for names in &board.same {
-        out.push_str(&format!("- {} are one net.\n", pin_list(names)));
-    }
-    for supply in &board.supplies {
-        out.push_str(&format!(
-            "- `{}` comes from `{}`, a {} regulator.\n",
-            supply.pin,
-            supply.from,
-            si_amount(supply.volts, "V"),
-        ));
-    }
-    for group in group_whys(&board.gaps) {
-        let names = pin_list(&group.0);
-        let verb = if group.0.len() == 1 { "is" } else { "are" };
-        let wire = if group.0.len() == 1 {
-            "A wire to it is a `not_simulated` error."
-        } else {
-            "A wire to one is a `not_simulated` error."
-        };
-        out.push_str(&format!(
-            "- {names} {verb} not simulated. {} {wire}\n",
-            group.1
-        ));
-    }
-    for led in &board.leds {
-        out.push_str(&format!(
-            "- `{}` drives `{}` through `{}`, {}.\n",
-            led.pin,
-            led.name,
-            led.resistor,
-            si_amount(led.ohms, "ohm"),
-        ));
-    }
-    out
-}
-
-/// Pins that share a reason, in the order the pins are listed.
-#[cfg(test)]
-fn group_whys(gaps: &[Gap]) -> Vec<(Vec<String>, String)> {
-    let mut groups: Vec<(Vec<String>, String)> = Vec::new();
-    for gap in gaps {
-        if let Some(group) = groups.iter_mut().find(|group| group.1 == gap.why) {
-            group.0.push(gap.pin.clone());
-        } else {
-            groups.push((vec![gap.pin.clone()], gap.why.clone()));
-        }
-    }
-    groups
-}
-
-/// `` `D0` to `D13`, `RESET` and `5V` ``. A letter-and-number run of three or more with no
-/// gap inside it is one range.
-#[cfg(test)]
-fn pin_list(names: &[String]) -> String {
-    let mut sets: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
-    for name in names {
-        if let Some((prefix, n)) = split_pin(name) {
-            sets.entry(prefix.to_string()).or_default().insert(n);
-        }
-    }
-    let mut items = Vec::new();
-    let mut seen = BTreeSet::new();
-    for name in names {
-        if !seen.insert(name.clone()) {
-            continue;
-        }
-        if let Some((prefix, _)) = split_pin(name)
-            && let Some(set) = sets.get(prefix)
-            && set.len() >= 3
-            && run(set)
-        {
-            let start = set.iter().next().unwrap();
-            let end = set.iter().next_back().unwrap();
-            items.push(format!("`{prefix}{start}` to `{prefix}{end}`"));
-            for n in set {
-                seen.insert(format!("{prefix}{n}"));
-            }
-            continue;
-        }
-        items.push(format!("`{name}`"));
-    }
-    join_and(&items)
-}
-
-#[cfg(test)]
-fn split_pin(name: &str) -> Option<(&str, u32)> {
-    let at = name.find(|c: char| c.is_ascii_digit())?;
-    let (prefix, rest) = name.split_at(at);
-    if prefix.is_empty() || !prefix.chars().all(|c| c.is_ascii_uppercase()) {
-        return None;
-    }
-    rest.parse().ok().map(|n| (prefix, n))
-}
-
-#[cfg(test)]
-fn run(set: &BTreeSet<u32>) -> bool {
-    let (Some(&first), Some(&last)) = (set.iter().next(), set.iter().next_back()) else {
-        return false;
-    };
-    last - first + 1 == set.len() as u32
-}
-
-#[cfg(test)]
-fn join_and(items: &[String]) -> String {
-    match items {
-        [] => String::new(),
-        [one] => one.clone(),
-        [a, b] => format!("{a} and {b}"),
-        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
     }
 }
 
@@ -649,7 +483,6 @@ mod tests {
     fn the_arduino_skill_names_every_pin_a_board_leaves_unsimulated() {
         let skill = find("arduino").unwrap();
         let text = skill.text().unwrap();
-        assert!(!text.contains("<!-- boards"));
         let ids = ["nano-board".to_string(), "uno-board".to_string()];
         assert!(ids.len() >= 2, "{ids:?}");
         for id in &ids {
@@ -694,30 +527,6 @@ mod tests {
             let number = orbe_scene::card(&parts, chip).unwrap().real.number.unwrap();
             assert!(block.contains(&number), "{id} omits {number}");
         }
-    }
-
-    #[test]
-    fn a_board_the_marker_names_that_is_not_an_avr_board_is_an_error() {
-        let err = fill_boards("<!-- boards resistor-0603 -->\n", &repo_parts()).unwrap_err();
-        assert!(err.contains("resistor-0603"), "{err}");
-    }
-
-    #[test]
-    fn a_board_the_marker_names_that_does_not_read_is_an_error() {
-        let err = fill_boards("<!-- boards not-a-board -->\n", &repo_parts()).unwrap_err();
-        assert!(err.contains("not-a-board"), "{err}");
-    }
-
-    #[test]
-    fn a_boards_marker_that_names_nothing_is_an_error() {
-        let err = fill_boards("<!-- boards -->\n", &repo_parts()).unwrap_err();
-        assert!(err.contains("names no board"), "{err}");
-    }
-
-    #[test]
-    fn a_boards_marker_that_does_not_close_is_an_error() {
-        let err = fill_boards("<!-- boards nano-board", &repo_parts()).unwrap_err();
-        assert!(err.contains("does not close"), "{err}");
     }
 
     fn repo_parts() -> std::path::PathBuf {
