@@ -720,12 +720,36 @@ impl Circuit<'_> {
         legs
     }
 
+    /// Holes a plugged leg or a scene wire already names.
+    fn held_holes(&self) -> BTreeSet<usize> {
+        let mut held = BTreeSet::new();
+        for seated in self.seated.values() {
+            for contact in &seated.contacts {
+                held.insert(contact.hole_key);
+            }
+        }
+        for wire in &self.project.scene.comp.wires {
+            for end in &wire.ends {
+                if let Ok(Some(key)) = self.lookup(ROOT, end)
+                    && self.strip_of(key).is_some()
+                {
+                    held.insert(key);
+                }
+            }
+        }
+        held
+    }
+
     /// A top part whose `at` puts a downward leg into a hole of a board that has its own `at`.
-    /// The page draws that leg in the hole. The value is the board, the hole, and the pin `on`
-    /// would name. A board with no `at` is drawn in a row, so it is not under the part.
+    /// The page draws that leg in the hole. The value is the board, the hole, the pin `on`
+    /// would name, and whether that seat would put another leg in a hole something already
+    /// holds. A board with no `at` is drawn in a row, so it is not under the part.
     /// `root` is each pin's net. A leg whose pin already shares the hole's net is skipped.
     /// Another leg of the same part, in a hole it does not share, is still unseated.
-    pub(super) fn hovering(&self, root: &[usize]) -> BTreeMap<String, (String, String, String)> {
+    pub(super) fn hovering(
+        &self,
+        root: &[usize],
+    ) -> BTreeMap<String, (String, String, String, bool)> {
         let mut trees = BTreeMap::new();
         let scene = self.tree(&mut trees, self.project.scene.file);
         let layout = &scene["layout"];
@@ -755,6 +779,7 @@ impl Circuit<'_> {
                 boards.push((name.clone(), place, holes, depth));
             }
         }
+        let held = self.held_holes();
         let mut found = BTreeMap::new();
         for (name, id) in &tops {
             let written = &layout[name.as_str()];
@@ -766,7 +791,8 @@ impl Circuit<'_> {
             };
             let legs = self.legs(*id, &mut trees);
             let turned = rotation(place.rotate);
-            let mut best: Option<(f64, String, String, String)> = None;
+            let mut occupied = Vec::new();
+            let mut best: Option<(f64, String, String, String, usize)> = None;
             for leg in &legs {
                 let tip = turn(&turned, leg.tip);
                 let world = [
@@ -794,6 +820,7 @@ impl Circuit<'_> {
                         if distance > REACH_MM {
                             continue;
                         }
+                        occupied.push(hole.key);
                         if leg.pin_key < root.len()
                             && hole.key < root.len()
                             && root[leg.pin_key] == root[hole.key]
@@ -808,12 +835,19 @@ impl Circuit<'_> {
                             board.clone(),
                             hole.name.clone(),
                             on_pin(name, leg),
+                            hole.key,
                         ));
                     }
                 }
             }
-            if let Some((_, board, hole, pin)) = best {
-                found.insert(name.clone(), (board, hole, pin));
+            if let Some((_, board, hole, pin, key)) = best {
+                // The other leg is drawn in a hole a wire already names, so `on` would claim
+                // that hole twice. The free hole itself can still take a contact wire.
+                let blocked = !held.contains(&key)
+                    && occupied
+                        .iter()
+                        .any(|&other| other != key && held.contains(&other));
+                found.insert(name.clone(), (board, hole, pin, blocked));
             }
         }
         found
