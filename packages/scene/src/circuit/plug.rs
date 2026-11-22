@@ -859,8 +859,7 @@ impl Circuit<'_> {
                 // `on` claims every hole this part is drawn in. A held one takes a contact
                 // wire instead, to a free hole in that strip when the drawn hole itself is held.
                 let join = if held.contains(&key) {
-                    let mut reserved = BTreeSet::new();
-                    match self.free_hole(key, &leads, &mut reserved, &[]) {
+                    match self.free_hole(key, &leads) {
                         Some(target) => Join::Contact(target),
                         None => Join::Full,
                     }
