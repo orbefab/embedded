@@ -292,9 +292,21 @@ fn a_null_rating_stays_on_the_card_and_a_number_default_keeps_its_unit() {
     assert_eq!(json["above"], serde_json::json!(0));
     assert_eq!(json["below"], serde_json::json!(1));
     assert_eq!(json["unit"], "1");
+    assert_eq!(json["live"], true);
     assert_eq!(
         param_sentence(position),
-        "a number above 0 and below 1, 0.5 by default"
+        "a number above 0 and below 1, 0.5 by default, and `set` changes it while a session runs"
+    );
+    let resistance = pot
+        .params
+        .iter()
+        .find(|param| param.name == "resistance")
+        .unwrap();
+    assert!(
+        serde_json::to_value(resistance)
+            .unwrap()
+            .get("live")
+            .is_none()
     );
 
     let switch = card(&parts_dir(), "tactile-switch-6mm").unwrap();

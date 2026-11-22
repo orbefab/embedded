@@ -1,0 +1,19 @@
+{
+  "format": 1,
+  "part": "dial",
+  "version": "0.1.0",
+  "title": "Dial",
+  "license": "MIT",
+  "pins": { "a": [1], "wiper": [2], "b": [3] },
+  "params": {
+    "resistance": { "unit": "ohm", "default": 10000, "min_exclusive": 0, "max_exclusive": 1e9, "sets": "/resistance", "live": true },
+    "position": { "unit": "1", "default": 0.5, "min_exclusive": 0, "sets": "/position", "live": true },
+    "style": { "choices": { "round": { "sets": {} }, "flat": { "sets": {} } }, "default": "round" },
+  },
+  "model": { "kind": "potentiometer" },
+  "joints": {
+    "knob": { "node": "shaft", "turn": [0, 0, -1], "range": { "value": 300, "unit": "mm" }, "by": "position" },
+    "lever": { "node": "arm", "turn": [0, 0, 1], "range": { "value": 90, "unit": "deg" }, "by": "style" },
+    "cap": { "node": "cap", "turn": [0, 0, 1], "range": { "value": 90, "unit": "deg" }, "by": "angle" },
+  },
+}

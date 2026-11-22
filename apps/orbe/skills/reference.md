@@ -162,6 +162,7 @@ The part and `orbe add` codes are in `orbe skills get parts`.
 | `version_mismatch` | Another version of orbe started this session. Run `orbe close`. |
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |
 | `not_settable` | `press` and `release` work only on a switch. `set` works only on a quantity the scene's `world` names or a part reads. |
+| `value` | A live param set out of range. |
 | `wrong_setting` | The part takes a different input, such as a trimmer's `position`. Set that param in the scene and run `orbe open` again. |
 | `no_change` | `press` or `release` asks for the switch state already there. `set` of a value already scheduled succeeds, and names the time it lands when that time is still ahead. |
 | `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`, then fix the circuit or the firmware, or step longer. |
@@ -169,6 +170,17 @@ The part and `orbe add` codes are in `orbe skills get parts`.
 | `past_stop` | A `step` would end past the stop, or an input would land past it. Do what the hint says. |
 | `cancelled` | Ctrl-C stopped a `step`. Step again. |
 | `faulted` | The engine stopped the session. The message names why. Fix it and run `orbe open`. |
+
+## Turning a knob
+
+`set` turns a knob while the session runs. Its wiper feeds A0; D13 lights over half scale:
+
+```text tests/knob.test
+open
+set @pot1.position 0.8
+step 100ms
+expect @led1 lit
+```
 
 ## What is not simulated
 

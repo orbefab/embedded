@@ -182,6 +182,15 @@ impl Open {
                             format!("expect the colour itself, such as `{r} rgb(255,0,0)`"),
                         ));
                     }
+                    Target::Param { .. } => {
+                        return Err(Error::new(
+                            Code::NoReading,
+                            format!("{r} is a param, which `expect` does not compare"),
+                            format!(
+                                "read it with `get {r}`, or expect what it drives, such as a pin's voltage"
+                            ),
+                        ));
+                    }
                     Target::Part(_) => {
                         return Err(Error::new(
                             Code::NoReading,

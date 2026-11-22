@@ -1775,6 +1775,6 @@ fn the_core_skill_starts_from_a_block_and_orbe_part_prints_a_part() {
     says(&part("nano-board"), "\nNano (CH340 clone)\n");
     says(
         &part("trimmer-3362p"),
-        "  resistance: a value in ohm above 0, required, example 10 kohm\n  position: a number above 0 and below 1, 0.5 by default\n",
+        "  resistance: a value in ohm above 0, required, example 10 kohm\n  position: a number above 0 and below 1, 0.5 by default, and `set` changes it while a session runs\n",
     );
 }

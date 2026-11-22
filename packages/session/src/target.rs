@@ -3,7 +3,7 @@
 use std::fmt;
 
 use orbe_engine::name::Quantity;
-use orbe_scene::{MapPart, RefMap};
+use orbe_scene::{MapParam, MapPart, RefMap};
 use serde::{Deserialize, Serialize};
 
 use crate::reply::{Code, Error};
@@ -92,6 +92,12 @@ pub enum Target {
         reading: String,
         engine: String,
     },
+    /// A param the part file declares, live or fixed for the run.
+    Param {
+        path: String,
+        param: String,
+        spec: MapParam,
+    },
 }
 
 /// The name of the part's reading `"of": "rgb"`, the colours its LED chain latched.
@@ -170,6 +176,13 @@ pub fn resolve(
                 quantity,
             });
         }
+        if last && let Some(spec) = part.params.get(seg) {
+            return Ok(Target::Param {
+                path,
+                param: seg.clone(),
+                spec: spec.clone(),
+            });
+        }
         let reported = one_engine(&path, part, Code::NoReading)
             .map(|engine| reports(&engine))
             .unwrap_or_default();
@@ -242,5 +255,18 @@ pub(crate) fn names(part: &MapPart, reported: &[Quantity]) -> String {
     if let Some(reading) = rgb_reading(part) {
         found.push(reading.to_string());
     }
+    let live = live_params(part);
+    if !live.is_empty() {
+        found.push(format!("live params: {}", live.join(", ")));
+    }
     found.join("; ")
+}
+
+/// The params of `part` that `set` changes while a session runs, by name.
+pub(crate) fn live_params(part: &MapPart) -> Vec<&str> {
+    part.params
+        .iter()
+        .filter(|(_, spec)| spec.live)
+        .map(|(name, _)| name.as_str())
+        .collect()
 }

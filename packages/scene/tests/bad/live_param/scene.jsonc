@@ -1,0 +1,16 @@
+// A param marked live that the engine cannot change while a session runs, and joints that follow a param they cannot.
+{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "dial1": { "type": "./parts/dial.jsonc" },
+    "trim1": { "type": "./parts/trim.jsonc" },
+  },
+  "wires": [
+    ["dial1.a", "nano.GND"],
+    ["dial1.wiper", "nano.A0"],
+    ["dial1.b", "nano.5V"],
+    ["trim1.a", "nano.D13"],
+    ["trim1.b", "nano.GND"],
+  ],
+}

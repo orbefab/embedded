@@ -262,6 +262,16 @@ pub enum Data {
         #[serde(default, skip_serializing_if = "is_false")]
         already: bool,
     },
+    /// A part's live param from `landed_ps` on, in the param's unit, such as `pot1.position`.
+    /// `already` is as on `Set`.
+    SetParam {
+        target: String,
+        value: f64,
+        unit: String,
+        landed_ps: u64,
+        #[serde(default, skip_serializing_if = "is_false")]
+        already: bool,
+    },
     /// A world quantity as it stands at the session's time.
     World {
         quantity: Quantity,
@@ -392,6 +402,11 @@ pub enum Reading {
     },
     /// The colours an addressable LED part last latched.
     Color(Colors),
+    /// A live param's value, in the param's unit as the part file writes it, such as `1`.
+    Param {
+        unit: String,
+        value: f64,
+    },
     /// A part: its light state and brightness when it states them, its colours when it latches
     /// them, and each engine quantity.
     Part {
@@ -655,6 +670,14 @@ pub(crate) fn number(value: f64) -> String {
     format!("{value:?}")
 }
 
+/// A param's value with its unit, which a fraction, unit `1`, leaves out.
+fn with_unit(value: f64, unit: &str) -> String {
+    match unit {
+        "1" | "" => number(value),
+        unit => format!("{} {unit}", number(value)),
+    }
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -819,6 +842,7 @@ impl Reading {
             Reading::Quantity { value, .. } => json!(value),
             Reading::Brightness { value, over_ps } => json!({ "a": value, "over_ps": over_ps }),
             Reading::Color(colors) => colors.json(),
+            Reading::Param { value, .. } => json!(value),
             Reading::Part {
                 state,
                 brightness,
@@ -850,6 +874,7 @@ impl Reading {
             Reading::Quantity { .. } => "quantity",
             Reading::Brightness { .. } => "brightness",
             Reading::Color(_) => "color",
+            Reading::Param { .. } => "param",
             Reading::Part { .. } => "part",
         }
     }
@@ -861,9 +886,10 @@ impl Reading {
                 level: Some(level), ..
             } => level.as_str().to_string(),
             Reading::Pin { level: None, v } => format!("{}V", number(*v)),
-            Reading::Quantity { .. } | Reading::Brightness { .. } | Reading::Color(_) => {
-                self.text()
-            }
+            Reading::Quantity { .. }
+            | Reading::Brightness { .. }
+            | Reading::Color(_)
+            | Reading::Param { .. } => self.text(),
             Reading::Part {
                 state,
                 brightness,
@@ -897,6 +923,7 @@ impl Reading {
                 format!("{} over {}", current(*value), t(*over_ps))
             }
             Reading::Color(colors) => colors.text(),
+            Reading::Param { unit, value } => with_unit(*value, unit),
             Reading::Part {
                 state,
                 brightness,
@@ -1064,6 +1091,24 @@ impl Data {
                 }
                 body
             }
+            Data::SetParam {
+                target,
+                value,
+                unit,
+                landed_ps,
+                already,
+            } => {
+                let mut body = json!({
+                    "ref": format!("@{target}"),
+                    "value": value,
+                    "unit": unit,
+                    "landed_ps": landed_ps,
+                });
+                if *already {
+                    body["already"] = json!(true);
+                }
+                body
+            }
             Data::World { quantity, value } => json!({
                 "quantity": quantity.name(),
                 "value": value,
@@ -1169,6 +1214,30 @@ impl Data {
                         "set {} to {value} {} at t={at}; reads show it after t={at}",
                         quantity.name(),
                         quantity.unit()
+                    );
+                }
+            }
+            Data::SetParam {
+                target,
+                value,
+                unit,
+                landed_ps,
+                already,
+            } => {
+                let shown = with_unit(*value, unit);
+                if *already && *landed_ps > 0 && *landed_ps >= t_ps {
+                    let _ = write!(
+                        out,
+                        "{target} is already set to {shown} from t={}",
+                        t(*landed_ps)
+                    );
+                } else if *already {
+                    let _ = write!(out, "{target} is already {shown}");
+                } else {
+                    let at = t(*landed_ps);
+                    let _ = write!(
+                        out,
+                        "set {target} to {shown} at t={at}; reads show it after t={at}"
                     );
                 }
             }

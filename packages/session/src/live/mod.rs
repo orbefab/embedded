@@ -25,16 +25,18 @@ use orbe_engine::{
     EdgeCursor, Input, Probe, Refused, Rejected, Session, Setting, Status, WorldChange,
 };
 use orbe_model::Time;
-use orbe_scene::{Files, RefMap, View};
+use orbe_scene::{Files, MapParam, RefMap, View};
 
-use crate::command::{Command, Step, WorldSet};
+use crate::command::{Command, ParamSet, Step, WorldSet};
 use crate::condition::Unit;
 use crate::duration::Duration;
 use crate::reply::{
     Code, Colors, Data, Diagnostic, Error, Finding, Got, Level, PartState, Reading, Reply,
     Snapshot, State, Stepped,
 };
-use crate::target::{Ref, Target, names, one_engine, reports_hint, resolve, rgb_reading};
+use crate::target::{
+    Ref, Target, live_params, names, one_engine, reports_hint, resolve, rgb_reading,
+};
 
 mod bound;
 mod frame;
@@ -46,8 +48,8 @@ pub use light::BRIGHTNESS_WINDOW;
 
 #[cfg(test)]
 pub(crate) use frame::WorldName;
-pub(crate) use frame::WorldQuantity;
 pub use frame::{Channels, FrameState, Pace, Sample};
+pub(crate) use frame::{LiveParam, WorldQuantity};
 pub use step::{CHANGES, Progress};
 
 /// The serial lines a snapshot shows, from the end.
@@ -98,6 +100,8 @@ struct Open {
     /// Where each quantity's last `set` landed, which can be after `now`. A frame shows the
     /// value from there on, so a `set` shows while the session is paused.
     world_sets: BTreeMap<orbe_engine::world::Quantity, Time>,
+    /// Where each live param's last `set` landed, by engine part, as `world_sets` holds it.
+    param_sets: BTreeMap<String, Time>,
     /// Each LED's forward-current integral, sampled as time advances, for its brightness.
     light: light::Log,
 }
@@ -152,6 +156,7 @@ impl Live {
             (Command::Press(r), Some(open)) => open.contact(r, true),
             (Command::Release(r), Some(open)) => open.contact(r, false),
             (Command::Set(set), Some(open)) => open.set(set),
+            (Command::SetParam(set), Some(open)) => open.set_param(set),
             (Command::Get(r), Some(open)) => open.get(r).map(Data::Got).map_err(fail),
             (Command::GetWorld(quantity), Some(open)) => open.get_world(*quantity),
             (Command::Step(step), Some(open)) => open.step_and_list(step, during),
@@ -502,6 +507,7 @@ impl Open {
             listed: edges,
             serial: Serial::default(),
             world_sets: BTreeMap::new(),
+            param_sets: BTreeMap::new(),
             light,
         };
         open.channels = open.bind_channels();
@@ -707,6 +713,108 @@ impl Open {
         }
     }
 
+    /// Turns a part's live param, such as a potentiometer's position, from now on. The engine
+    /// moves the field in place, so the next step solves with it.
+    fn set_param(&mut self, set: &ParamSet) -> Outcome {
+        let (label, engine, spec) = self
+            .live_param(&set.target, Code::NotSettable)
+            .map_err(fail)?;
+        let (above, below) = (spec.above, spec.below);
+        let inside = above.is_none_or(|above| set.value > above)
+            && below.is_none_or(|below| set.value < below);
+        if !inside {
+            let bounds = match (above, below) {
+                (Some(above), Some(below)) => format!("above {above} and below {below}"),
+                (Some(above), None) => format!("above {above}"),
+                (None, Some(below)) => format!("below {below}"),
+                (None, None) => unreachable!("an unbounded value is inside"),
+            };
+            return Err(fail(Error::new(
+                Code::Value,
+                format!("{label} is {bounds}, not {}", set.value),
+                format!("set {label} to a value {bounds}"),
+            )));
+        }
+        let name = engine_name(&engine);
+        let input = Input {
+            part: name.clone(),
+            at: self.engine.now(),
+            setting: Setting::Level(Finite::new(set.value).expect("the command's value is finite")),
+        };
+        let data = |landed_ps: u64, already: bool| Data::SetParam {
+            target: label.clone(),
+            value: set.value,
+            unit: spec.unit.clone(),
+            landed_ps,
+            already,
+        };
+        let applied = match self.engine.apply(&input) {
+            Err(Rejected::NoChange) => {
+                let landed_ps = self
+                    .engine
+                    .part_level(&name)
+                    .and_then(|level| level.schedule.events().last())
+                    .map_or(0, |event| event.at.as_ps());
+                return Ok(data(landed_ps, true));
+            }
+            Err(error) => return Err(fail(rejected(error, &label))),
+            Ok(applied) => applied,
+        };
+        self.param_sets.insert(engine, applied.at);
+        let data = data(applied.at.as_ps(), false);
+        match applied.status {
+            Status::Faulted => Err(failed(self.faulted(), data)),
+            _ => Ok(data),
+        }
+    }
+
+    /// The live param `r` names: its label, such as `pot1.position`, its engine part and its
+    /// range. `code` is the caller's for a param fixed for the run.
+    fn live_param(&self, r: &Ref, code: Code) -> Result<(String, String, MapParam), Error> {
+        let (path, param, spec) = match self.resolve(r)? {
+            Target::Param { path, param, spec } => (path, param, spec),
+            Target::Part(path) => {
+                let live = live_params(&self.refs.parts[&path]);
+                return Err(Error::new(
+                    code,
+                    format!("{r} is a part, not one of its params"),
+                    match live.first() {
+                        Some(param) => format!("name the param, such as `{r}.{param}`"),
+                        None => format!("`{path}` has no live param"),
+                    },
+                ));
+            }
+            _ => {
+                return Err(Error::new(
+                    code,
+                    format!("{r} is not a param"),
+                    "name a part's live param, such as a potentiometer's `@pot1.position`",
+                ));
+            }
+        };
+        let label = format!("{path}.{param}");
+        let part = &self.refs.parts[&path];
+        if !spec.live {
+            let live = live_params(part);
+            let hint = match live.as_slice() {
+                [] => "change it in the scene, then run `open` again".to_string(),
+                live => format!(
+                    "change it in the scene, then run `open` again; `{path}`'s live params are {}",
+                    live.join(", ")
+                ),
+            };
+            return Err(Error::new(
+                code,
+                format!(
+                    "`{label}` is fixed for the run; only a live param changes while the session runs"
+                ),
+                hint,
+            ));
+        }
+        let engine = one_engine(&path, part, code)?;
+        Ok((label, engine, spec))
+    }
+
     fn get_world(&self, quantity: orbe_engine::world::Quantity) -> Outcome {
         let Some(value) = self.engine.world().before(quantity, self.engine.now()) else {
             return Err(fail(rejected(Rejected::Undeclared, quantity.name())));
@@ -759,6 +867,21 @@ impl Open {
                 format!("{path}.{reading}"),
                 Reading::Color(self.colors(&engine)),
             ),
+            Target::Param { .. } => {
+                let (label, engine, spec) = self.live_param(r, Code::NoReading)?;
+                let level = self
+                    .engine
+                    .part_level(&engine_name(&engine))
+                    .expect("a live param's part has a level");
+                let value = level.schedule.before(self.engine.now()).si.get();
+                (
+                    label,
+                    Reading::Param {
+                        unit: spec.unit,
+                        value,
+                    },
+                )
+            }
             Target::Part(path) => {
                 let value = self.part(&path).ok_or_else(|| {
                     Error::new(

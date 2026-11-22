@@ -111,6 +111,10 @@ pub struct Param {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "Literal"))]
     pub example: Option<Literal>,
+    /// `set` changes it while a session runs, as a person turns a potentiometer's knob. Absent
+    /// when false.
+    #[serde(default, skip_serializing_if = "skip_false")]
+    pub live: bool,
 }
 
 /// A param bound or default. A number keeps the digits the part file wrote, and the
@@ -644,6 +648,9 @@ pub fn param_sentence(param: &Param) -> String {
     if let Some(phrase) = example_phrase(param) {
         text.push_str(&format!(", example {phrase}"));
     }
+    if param.live {
+        text.push_str(", and `set` changes it while a session runs");
+    }
     text
 }
 
@@ -923,6 +930,7 @@ fn param<'t>(
             required: false,
             default: None,
             example: example_of(decl),
+            live: false,
         };
         apply_default(&mut param, own);
         return Some(param);
@@ -943,6 +951,7 @@ fn param<'t>(
             required: false,
             default: None,
             example: example_of(decl),
+            live: false,
         };
         apply_default(&mut param, own);
         return Some(param);
@@ -958,6 +967,9 @@ fn param<'t>(
             required: false,
             default: None,
             example: example_of(decl),
+            live: decl
+                .get("live")
+                .is_some_and(|live| live.to_value().as_bool() == Some(true)),
         };
         apply_default(&mut param, own);
         return Some(param);

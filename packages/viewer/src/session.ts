@@ -31,6 +31,6 @@ export function commandLine(command: Command): string {
     case "pause":
       return command.cmd;
     case "set":
-      return `set ${command.quantity} ${command.value}`;
+      return `set ${"ref" in command ? command.ref : command.quantity} ${command.value}`;
   }
 }
