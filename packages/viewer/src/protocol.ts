@@ -55,8 +55,6 @@ export interface FrameMessage {
    * shows. Absent when none arrived and this frame is not a join's view of text the session
    * already has. */
   readonly serial?: SerialText;
-  /** On a frame from a `play` tick: the speed `play` runs at, always 1 for now. */
-  readonly speed?: number;
   readonly state: FrameState;
   /** 1 for closed, 0 for open, per `channels.switches`. */
   readonly switches: readonly (0 | 1)[];

@@ -84,7 +84,7 @@ async function buttonLed(id, board, extraLed) {
     const played = await session.send({ cmd: "play" });
     check(`${id}: play is answered playing`, played.ok && played.state === "playing", played);
     const dark = await session.until((m) => m.type === "frame" && m.t_ps >= 100e9, 10_000, "frame at 100 ms");
-    check(`${id}: playing to 100 ms, D13 is low and @led1 dark`, dark.pins[d13] === 0 && dark.led_a[led] < 1e-4 && dark.speed === 1, dark);
+    check(`${id}: playing to 100 ms, D13 is low and @led1 dark`, dark.pins[d13] === 0 && dark.led_a[led] < 1e-4 && dark.speed === undefined, dark);
 
     const mark = session.seen.length;
     const pressed = await session.send({ cmd: "press", ref: "@btn1" });

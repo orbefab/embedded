@@ -293,7 +293,11 @@ fn play_ticks_until_pause() {
     assert!(live.tick(TICK).is_some());
     let paused = live.run(&Command::Pause);
     assert_eq!((paused.t_ps, paused.state), (32_000_000_000, State::Paused));
-    assert_eq!(paused.text(), "paused at t=32ms");
+    assert!(
+        paused.text().starts_with("t=32ms (from 0s)"),
+        "{}",
+        paused.text()
+    );
     assert!(live.tick(TICK).is_none(), "a paused session does not tick");
     assert_eq!(live.sample().unwrap().t_ps, 32_000_000_000);
 }
@@ -331,7 +335,7 @@ fn a_refused_step_leaves_play_running() {
 }
 
 #[test]
-fn the_next_step_lists_what_play_ran() {
+fn pause_lists_what_play_ran_and_step_lists_only_its_own() {
     let mut live = opened();
     assert!(live.run(&Command::Play).ok());
     assert!(live.run(&command("press @btn1")).ok());
@@ -339,13 +343,26 @@ fn the_next_step_lists_what_play_ran() {
         assert!(live.tick(TICK).is_some());
     }
     let paused = live.run(&Command::Pause);
-    assert_eq!(paused.text(), "paused at t=64ms");
-    let stepped = live.run(&command("step 1ms"));
-    assert!(stepped.ok(), "{}", stepped.text());
-    let text = stepped.text();
-    assert!(text.starts_with("t=65ms (from 0s)\n"), "{text}");
+    assert!(paused.ok(), "{}", paused.text());
+    let text = paused.text();
+    assert!(text.starts_with("t=64ms (from 0s)\n"), "{text}");
     assert!(text.contains(" nano.D13 high"), "{text}");
     assert!(text.contains(" led1 lit"), "{text}");
+    let stepped = live.run(&command("step 1ms"));
+    assert!(stepped.ok(), "{}", stepped.text());
+    let stepped_text = stepped.text();
+    assert!(
+        stepped_text.starts_with("t=65ms (from 64ms)\n"),
+        "{stepped_text}"
+    );
+    let own: Vec<_> = stepped_text
+        .lines()
+        .filter(|line| line.starts_with("  ") && !line.starts_with("  brightness "))
+        .collect();
+    assert!(
+        own.is_empty(),
+        "a step lists only its own changes: {stepped_text}"
+    );
     let again = live.run(&command("step 1ms"));
     let again_text = again.text();
     let changes: Vec<_> = again_text
@@ -468,16 +485,14 @@ fn a_tick_runs_at_most_one_tick_of_simulated_time_and_says_its_pace() {
     assert!(live.run(&Command::Play).ok());
     let pace = live.tick(TICK * 2).unwrap();
     assert_eq!(live.sample().unwrap().t_ps, 16_000_000_000);
-    assert_eq!((pace.speed, pace.ratio), (1.0, 0.5));
+    assert_eq!(pace.ratio, 0.5);
     let pace = live.tick(TICK / 2).unwrap();
     assert_eq!(live.sample().unwrap().t_ps, 24_000_000_000);
     assert_eq!(pace.ratio, 1.0);
     let mut feed = Feed::default();
     let frame = feed.now(&live, Some(pace)).into_iter().next().unwrap();
-    assert_eq!(
-        (frame["speed"].as_f64(), frame["ratio"].as_f64()),
-        (Some(1.0), Some(1.0))
-    );
+    assert_eq!(frame["ratio"].as_f64(), Some(1.0));
+    assert!(frame.get("speed").is_none(), "{frame}");
 }
 
 /// Each catalog part's files by `<id>/<path>`.

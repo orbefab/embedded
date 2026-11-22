@@ -76,7 +76,7 @@ A bundler that copies `orbe_wasm.js` into one bundle must also emit `orbe_wasm_b
 | `block.add(path, bytes)` | Adds one file, `string` and `Uint8Array`, in the layout above. |
 | `Session.open(name, block)` | Opens the Block's `scene.jsonc` in a session named `name`. Its `scene` message and first `frame` wait in `messages()`. It takes the `Block`, which is freed. |
 | `session.command(text)` | Runs one viewer command, given as its JSON text. The `reply`, then the frames for what changed, wait in `messages()`. A continuation longer than 4096 bytes is several frames. |
-| `session.tick(wallMs)` | One `play` tick, `wallMs` milliseconds of wall time after the last. A playing session advances by that much, up to 16 ms, and the tick's frames carry `speed` and `ratio`, and `serial` when text arrived. A tick posts more than one frame when new serial text is longer than 4096 bytes. A paused session does not move. |
+| `session.tick(wallMs)` | One `play` tick, `wallMs` milliseconds of wall time after the last. A playing session advances by that much, up to 16 ms, and the tick's frames carry `ratio`, and `serial` when text arrived. A tick posts more than one frame when new serial text is longer than 4096 bytes. A paused session does not move. |
 | `session.playing()` | Whether `play` runs, so the caller keeps ticking. |
 | `session.messages()` | The JSON text of each message since the last call, in order. |
 | `tickMs()` | The tick, 16 ms. |
