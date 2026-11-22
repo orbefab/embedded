@@ -13,7 +13,7 @@ This text comes from the `orbe` you have installed, so it matches it. `orbe <com
 
 ## The loop
 
-1. `orbe blocks` lists the Blocks, and `orbe search <words>` finds one. When a Block is close to the circuit, run `orbe add <block>` in an empty folder. It writes a scene, firmware and a test that already work. Run `orbe check scene.jsonc` and `orbe test`, then change it.
+1. `orbe blocks` lists the Blocks, and `orbe search <words>` finds one. When a Block is close to the circuit and the user did not ask to build it from parts, run `orbe add <block>` in an empty folder. It writes a scene, firmware and a test that already work. Run `orbe check scene.jsonc` and `orbe test`, then change it. Tell the user which Block you started from and what you changed.
 2. Otherwise find each part with `orbe search <words>`, read it with `orbe part <id>`, and download it into the project with `orbe add <id>…`.
 3. Write `scene.jsonc` in the project folder. Seat each part on a breadboard with `on`.
 4. Run `orbe check scene.jsonc`, then `orbe lint scene.jsonc`, after every edit. With no path, both read `scene.jsonc`. Do what each hint says. A `part_missing` hint is the `orbe add` command to run. `orbe nets` lists each net and its pins, and marks `(floating)` on a net with no DC path to ground.
@@ -125,6 +125,8 @@ A scene is JSONC: JSON plus `//` comments and trailing commas. Its keys:
 A part name starts with a letter, takes letters, digits and `_`, and may not contain `__` or end in `_`. `i`, `v`, `p`, `ib`, `ic`, `id`, `iin`, `iout`, `pin`, `logic`, `usart` and `net` are taken. A param value is a number with an optional prefix (p, n, u, m, k, M) and unit, such as `"10k"`, `"100n"` or `"1ms"`, a choice by name, as `"color": "red"`, or a file path from the scene's folder, as the firmware. The part reads that file as text, such as a hex, or as bytes when its file param says `"as": "blob"`, such as an app image.
 
 ## Parts
+
+A load such as an LED strip or a heater is `resistor-sqp15`. A separate supply is `barrel-jack-dc21` with its `voltage`.
 
 `orbe search <words>` lists the parts whose id, title, maker, number, summary or tags hold every word, then the Blocks. `orbe part <id>` prints one part: its pins and the leads they are on, params, ratings, what it does not simulate, datasheets and files. That print is the part's electrical behaviour. `orbe add <id>…` downloads the latest part into `parts/<id>/`, and the parts it is built from into `parts/<id>/parts/`. The copy is the project's: edit it, and commit `parts/` with the scene. `orbe check`, `orbe open` and `orbe test` read that copy and never use the network. `orbe add`, `orbe search` and `orbe part` need curl. `orbe add <block>` installs a Block.
 
