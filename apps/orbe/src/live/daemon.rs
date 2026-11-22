@@ -332,7 +332,7 @@ impl Job {
 
 /// Runs the session. `start` names the log `open` gave this process for its stderr. Once this
 /// process holds the socket, that log becomes the session's. A process that loses the socket
-/// to another start removes its log. A crash's output is `<name>.crashed.log`, kept by the
+/// to another start removes its log. A crash's output is `<name>.log.crashed`, kept by the
 /// client until the next crash replaces it.
 pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
     let found = Place::find().and_then(|place| {

@@ -37,8 +37,9 @@ struct Scope<'c, 'p> {
     engine: Netlist,
     /// Nets left out of `net.floating`. See [`Circuit::quiet_floating`].
     quiet: BTreeSet<String>,
-    /// A part drawn in a board's hole while it is not seated: the board, the hole, and the pin.
-    hovering: BTreeMap<String, (String, String, String)>,
+    /// A part drawn in a board's hole while it is not seated: the board, the hole, the pin,
+    /// and whether seating that pin would put another leg in a hole a wire already holds.
+    hovering: BTreeMap<String, (String, String, String, bool)>,
 }
 
 impl Scope<'_, '_> {
@@ -229,13 +230,14 @@ fn unplaced(s: &Scope, out: &mut Findings) {
         );
     }
     for &(instance, _, _) in &s.tops {
-        let Some((board, hole, pin)) = s.hovering.get(&instance.name) else {
+        let Some((board, hole, pin, blocked)) = s.hovering.get(&instance.name) else {
             continue;
         };
         let turn = layout
             .and_then(|node| node.get(&instance.name))
             .and_then(|place| place.get("rotate"))
             .and_then(turned);
+        let leg = format!("{}.{pin}", instance.name);
         let seat = match &turn {
             Some(turn) => format!(
                 "\"{}\": {{ \"on\": {{ \"{pin}\": \"{board}.{hole}\" }}, \"rotate\": {turn} }}",
@@ -246,14 +248,19 @@ fn unplaced(s: &Scope, out: &mut Findings) {
                 instance.name
             ),
         };
+        // Seating the free leg would also plug the leg a wire already holds into that hole.
+        let hint = if *blocked {
+            format!(
+                "join it with a contact wire, as [\"{leg}\", \"{board}.{hole}\", {{ \"kind\": \"contact\" }}]"
+            )
+        } else {
+            format!("seat it with \"on\", as {seat}")
+        };
         out.push(
             Code::Lint(Lint::Unplaced),
             instance.name_span,
-            format!(
-                "`{}` is drawn on `{board}` as if it were plugged in, and its leads join nothing",
-                instance.name
-            ),
-            format!("seat it with \"on\", as {seat}"),
+            format!("`{leg}` is drawn in `{board}.{hole}` and joins nothing there"),
+            hint,
         );
     }
 }
