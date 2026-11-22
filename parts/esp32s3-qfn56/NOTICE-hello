@@ -1,20 +1,18 @@
-hello_world.bin and partition-table.bin in this folder are the app image and partition
-table from packages/scene/tests/fixtures/esp32s3-hello/firmware/. They were built from
-packages/engine/tests/firmware/esp32s3/idf by packages/engine/scripts/esp32s3-firmware.sh
-with ESP-IDF v5.5.5, the tag v5.5.5 of https://github.com/espressif/esp-idf, and its
-toolchain esp-14.2.0_20260121. The partition table is that directory's partitions.csv.
+hello_world.bin and partition-table.bin in this folder are an app image and a partition
+table built from ESP-IDF's hello_world example with ESP-IDF v5.5.5, the tag v5.5.5 of
+https://github.com/espressif/esp-idf, and its toolchain esp-14.2.0_20260121. The table
+places the app at 0x10000.
 
 The app image links ESP-IDF's components. They are under the Apache License 2.0, whose text is
-LICENSE-APACHE at the root of this repository, apart from the files whose headers name other
-terms. Among those, the FreeRTOS kernel is under the MIT License, reproduced with its notice in
-LICENSE-freertos, and the Xtensa core HAL under the notice reproduced in LICENSE-xtensa. The
-FreeRTOS Xtensa port and the Xtensa interrupt, context and vector files are under that same
-notice, with the line Copyright (c) 2015-2019 Cadence Design Systems, Inc. The TLSF heap
-allocator is under the BSD-3-Clause License, reproduced with its notice in LICENSE-tlsf, and the
-undefined behaviour sanitizer hooks under the BSD-2-Clause terms reproduced with their notice in
-LICENSE-ubsan. The image also holds routines of the toolchain's C library, newlib, under the
-notices of LICENSE-newlib, and of the compiler's support library, under the GCC Runtime Library
-Exception.
+LICENSE-rom in this folder, apart from the files whose headers name other terms. Among those,
+the FreeRTOS kernel is under the MIT License, reproduced with its notice in LICENSE-freertos,
+and the Xtensa core HAL under the notice reproduced in LICENSE-xtensa. The FreeRTOS Xtensa
+port and the Xtensa interrupt, context and vector files are under that same notice, with the
+line Copyright (c) 2015-2019 Cadence Design Systems, Inc. The TLSF heap allocator is under the
+BSD-3-Clause License, reproduced with its notice in LICENSE-tlsf, and the undefined behaviour
+sanitizer hooks under the BSD-2-Clause terms reproduced with their notice in LICENSE-ubsan.
+The image also holds routines of the toolchain's C library, newlib, under the notices of
+LICENSE-newlib, and of the compiler's support library, under the GCC Runtime Library Exception.
 
 hello_world/main/hello_world_main.c is ESP-IDF's hello_world example, under CC0-1.0, with two
 lines added.

@@ -1617,12 +1617,19 @@ fn decode_params(node: &Node, part: &Part, format: u32, out: &mut Findings) -> V
     params
 }
 
-/// Why `example` is not a value a scene could set on this param.
+/// Why `example` is not a value this param can show. A number is a JSON number, in the
+/// param's unit. A scene may still set that number as a string.
 fn example_value(name: &str, kind: &ParamKind, node: &Node) -> Result<(), (String, String)> {
     match kind {
-        ParamKind::Number { unit, range } => crate::params::number(*unit, *range, node)
-            .map(|_| ())
-            .map_err(|(_, message, hint)| (message, hint)),
+        ParamKind::Number { unit, range } => match node.number() {
+            Some(_) => crate::params::number(*unit, *range, node)
+                .map(|_| ())
+                .map_err(|(_, message, hint)| (message, hint)),
+            None => Err((
+                format!("expected a JSON number, found {}", node.what()),
+                "write a JSON number, in this param's unit".into(),
+            )),
+        },
         ParamKind::Choice(choices) => {
             let names: Vec<&str> = choices.iter().map(|(choice, _)| choice.as_str()).collect();
             match node.str() {

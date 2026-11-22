@@ -1028,6 +1028,24 @@ mod example {
     }
 
     #[test]
+    fn a_string_example_on_a_number_param_is_refused() {
+        let text = lamp(
+            r#""resistance": { "unit": "ohm", "required": true, "example": "220", "sets": "/resistance" }"#,
+            RESISTOR,
+        );
+        let found = part_diagnostics("lamp", &text);
+        assert!(
+            found.iter().any(|d| {
+                d.code == Code::Param
+                    && d.message
+                        == "param `resistance` example: expected a JSON number, found a string"
+                    && d.hint == "write a JSON number, in this param's unit"
+            }),
+            "{found:?}"
+        );
+    }
+
+    #[test]
     fn an_example_a_scene_could_set_is_not_a_finding() {
         let text = lamp(
             r#""resistance": { "unit": "ohm", "required": true, "min_exclusive": 0, "example": 220, "sets": "/resistance" }"#,

@@ -6,7 +6,8 @@
 //! source. A Block's project is those part folders and the Block's own files.
 //!
 //! A part has no scene of its own. The build places it alone and sets each required param to
-//! its example. An example that names a file names the copy already in the nested part folder.
+//! its example. A required param with none is a finding at the key of the param that declares
+//! it. An example that names a file names the copy already in the nested part folder.
 //! When the part names no ground, and no part inside it does, the scene adds a voltage source
 //! and names one of its pins as ground. When a part in that tree names a ground, those grounds
 //! must agree. A Block's scene sets what it uses, so it is read as the Block wrote it.
@@ -14,7 +15,7 @@
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
-use orbe_scene::{Card, Diagnostic, FilePath, Files, Folder, Literal};
+use orbe_scene::{Card, Code, Diagnostic, FilePath, Files, Folder, Literal};
 use serde_json::{Map, Value, json};
 
 /// Each part placed, and each Block scene, as `orbe check` reads it after an install. A file
@@ -32,9 +33,13 @@ pub(crate) fn refusal(
     cards: &[Card],
 ) -> Option<Refusal> {
     let mut read = Vec::new();
+    let mut gaps = Vec::new();
     for card in cards.iter().filter(|card| parts.contains_key(&card.name)) {
+        let missing = example_gaps(parts, card);
+        let covered: Vec<String> = missing.iter().map(|gap| gap.name.clone()).collect();
+        gaps.extend(missing.into_iter().map(|gap| gap.diagnostic));
         let placed = orbe_scene::read_paths(&part_project(parts, cards, card), Path::new(SCENE));
-        read.push((Item::Part, placed));
+        read.push((Item::Part(covered), placed));
     }
     for (id, folder) in blocks {
         let files = block_project(parts, cards, folder);
@@ -59,11 +64,17 @@ pub(crate) fn refusal(
 
     let mut found = Vec::new();
     for (item, placed) in read {
-        found.extend(match item {
-            Item::Part => placed.findings,
-            Item::Block(id) => name_block(id, placed.findings),
-        });
+        match item {
+            Item::Part(covered) => found.extend(
+                placed
+                    .findings
+                    .into_iter()
+                    .filter(|diagnostic| !example_covered(diagnostic, &covered)),
+            ),
+            Item::Block(id) => found.extend(name_block(id, placed.findings)),
+        }
     }
+    found.extend(gaps);
     found.sort_by(|a, b| {
         (&a.file, a.line, a.column, a.code, &a.message)
             .cmp(&(&b.file, b.line, b.column, b.code, &b.message))
@@ -73,6 +84,133 @@ pub(crate) fn refusal(
 }
 
 const SCENE: &str = "scene.jsonc";
+
+/// A required param with no example, named as the scene would ask for it, and the finding at
+/// the key of the param that declares it.
+struct Gap {
+    name: String,
+    diagnostic: Diagnostic,
+}
+
+/// Each required param of `card` that has no example, when the key of the param that declares
+/// it can be read. A param that only passes its value on is reported on the part that gives it
+/// a unit, choices or file.
+fn example_gaps(parts: &BTreeMap<String, Folder>, card: &Card) -> Vec<Gap> {
+    card.params
+        .iter()
+        .filter(|param| param.required && param.example.is_none())
+        .filter_map(|param| example_gap(parts, &card.name, &param.name))
+        .collect()
+}
+
+fn example_gap(parts: &BTreeMap<String, Folder>, root: &str, param: &str) -> Option<Gap> {
+    let (id, name) = declaring(parts, root, param)?;
+    let text = part_text(parts.get(&id)?)?;
+    let at = param_key(&text, &name)?;
+    let (line, column) = line_col(&text, at);
+    Some(Gap {
+        name: param.to_string(),
+        diagnostic: Diagnostic {
+            code: Code::Param,
+            file: format!("parts/{id}/part.jsonc"),
+            line,
+            column,
+            message: format!("required param `{name}` has no `example`"),
+            hint: "add \"example\" with a value a scene could set".into(),
+        },
+    })
+}
+
+/// The part that declares `param`, and that param's name there. A param that only passes its
+/// value on is followed until a part gives it a unit, choices or file. The walk stops at 16 steps.
+fn declaring(
+    parts: &BTreeMap<String, Folder>,
+    root: &str,
+    param: &str,
+) -> Option<(String, String)> {
+    let mut id = root.to_string();
+    let mut name = param.to_string();
+    for _ in 0..16 {
+        let value = parts.get(&id).and_then(part_value)?;
+        if declares_param(&value, &name) {
+            return Some((id, name));
+        }
+        let (child, child_param) = passed_to(&value, &name)?;
+        id = child;
+        name = child_param;
+    }
+    None
+}
+
+fn declares_param(part: &Value, name: &str) -> bool {
+    let Some(decl) = part
+        .get("params")
+        .and_then(|node| node.get(name))
+        .and_then(|node| node.as_object())
+    else {
+        return false;
+    };
+    decl.contains_key("file") || decl.contains_key("unit") || decl.contains_key("choices")
+}
+
+fn part_text(folder: &Folder) -> Option<String> {
+    let text = String::from_utf8_lossy(folder.get("part.jsonc")?);
+    Some(text.strip_prefix('\u{feff}').unwrap_or(&text).to_string())
+}
+
+/// The byte offset of `name`'s key in `params`, including its quotes.
+fn param_key(text: &str, name: &str) -> Option<usize> {
+    let parsed = jsonc_parser::parse_to_ast(
+        text,
+        &jsonc_parser::CollectOptions::default(),
+        &json_options(),
+    )
+    .ok()?;
+    let root = parsed.value?;
+    let params = root.as_object()?.get("params")?.value.as_object()?;
+    Some(name_start(&params.get(name)?.name))
+}
+
+fn name_start(name: &jsonc_parser::ast::ObjectPropName<'_>) -> usize {
+    match name {
+        jsonc_parser::ast::ObjectPropName::String(lit) => lit.range.start,
+        jsonc_parser::ast::ObjectPropName::Word(lit) => lit.range.start,
+    }
+}
+
+/// The 1-based line and column of `offset`, the column counted in characters.
+fn line_col(text: &str, offset: usize) -> (usize, usize) {
+    let before = &text[..offset.min(text.len())];
+    let line = before.matches('\n').count() + 1;
+    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+    (line, before[line_start..].chars().count() + 1)
+}
+
+/// JSON as the scene reader takes it: comments and trailing commas, and nothing looser.
+fn json_options() -> jsonc_parser::ParseOptions {
+    jsonc_parser::ParseOptions {
+        allow_comments: true,
+        allow_trailing_commas: true,
+        allow_loose_object_property_names: false,
+        allow_missing_commas: false,
+        allow_single_quoted_strings: false,
+        allow_hexadecimal_numbers: false,
+        allow_unary_plus_numbers: false,
+        allow_bare_decimal_point_numbers: false,
+        allow_non_finite_numbers: false,
+        allow_extended_string_escapes: false,
+    }
+}
+
+/// The in-memory scene's `` `r1` needs param `` line for a param whose missing example was
+/// reported on the part file. Other findings stay, including one the scene still reports when
+/// the key could not be read.
+fn example_covered(diagnostic: &Diagnostic, names: &[String]) -> bool {
+    diagnostic.file == SCENE
+        && names
+            .iter()
+            .any(|name| diagnostic.message == format!("`r1` needs param `{name}`"))
+}
 
 /// The project with a scene that places the part and sets each required param to its example.
 /// The part's own files are `parts/<id>/`, and each part it uses is nested one folder further
@@ -347,7 +485,8 @@ fn current_format() -> u32 {
 }
 
 enum Item<'a> {
-    Part,
+    /// Required params of this part whose missing example was reported on a part file.
+    Part(Vec<String>),
     Block(&'a str),
 }
 
@@ -360,7 +499,7 @@ fn outside(path: &FilePath, item: &Item) -> Option<String> {
         (Some("parts"), Some(id)) => {
             let site = match item {
                 // `r1` is the generated scene's, not a name the author wrote.
-                Item::Part => path.site.strip_prefix("r1.").unwrap_or(&path.site),
+                Item::Part(_) => path.site.strip_prefix("r1.").unwrap_or(&path.site),
                 Item::Block(_) => &path.site,
             };
             (
