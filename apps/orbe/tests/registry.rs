@@ -311,8 +311,16 @@ fn assert_refused(src: &Path, out: &Path, file: &str, found: &Found) {
     assert!(stderr.is_empty(), "{stderr}");
     let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(reply["ok"], false);
-    assert_eq!(reply["error"]["code"], "scene_invalid");
     let diagnostics = reply["data"]["diagnostics"].as_array().unwrap();
+    let codes: Vec<&str> = diagnostics
+        .iter()
+        .map(|d| d["code"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        reply["error"]["code"],
+        orbe_session::Code::for_findings(codes).as_str(),
+        "{stdout}"
+    );
     let same = diagnostics.iter().find(|d| {
         d["code"] == found.code
             && d["message"] == found.message

@@ -268,8 +268,9 @@ const USAGE: u8 = 2;
 
 fn main() -> ExitCode {
     let mut args: Vec<OsString> = std::env::args_os().collect();
-    if let Some(exit) = flag_before_command(&args[1..]) {
-        return exit;
+    if let Some(words) = flag_before_command(&args[1..]) {
+        args.truncate(1);
+        args.extend(words);
     }
     if args.get(1).is_some_and(|a| a == "help") {
         let words = args.len();
@@ -283,9 +284,10 @@ fn main() -> ExitCode {
         .and_then(|n| n.to_str())
         .and_then(orbe_session::spec)
     {
-        let args: Result<Vec<String>, _> = std::env::args_os()
+        let args: Result<Vec<String>, _> = args
+            .iter()
             .skip(2)
-            .map(|a| a.into_string())
+            .map(|a| a.clone().into_string())
             .collect();
         let Ok(args) = args else {
             eprintln!("error[usage]: `orbe {}` takes UTF-8 arguments", spec.name);
@@ -332,10 +334,10 @@ fn main() -> ExitCode {
 /// The flags that take the next word as their value, so that word is never the command name.
 const VALUED: [&str; 4] = ["--session", "-C", "--timeout", "--until"];
 
-/// A flag before the command name, as in `orbe --session x open`, is refused with a hint
-/// that moves the words before the command name to after it, as typed, less a repeat clap
-/// refuses. Only `--help` and `--version` go first.
-fn flag_before_command(args: &[OsString]) -> Option<ExitCode> {
+/// A flag before the command name, as in `orbe --json open`, moves after the name, as typed,
+/// less a repeat clap refuses. `--help` and `--version`, and their short forms, stay in front.
+/// `None` when the words already start with the command, or are not UTF-8.
+fn flag_before_command(args: &[OsString]) -> Option<Vec<OsString>> {
     let words: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
     let first = words.first()?;
     if !first.starts_with('-') || ["-h", "--help", "-V", "--version"].contains(first) {
@@ -376,18 +378,7 @@ fn flag_before_command(args: &[OsString]) -> Option<ExitCode> {
             line.extend(unit);
         }
     }
-    let shown = |words: &[&str]| orbe_scene::shell_join(words);
-    let message = format!("`{}` is before the command name", shown(&words[..at]));
-    let hint = format!("put it after the command name, as `orbe {}`", shown(&line));
-    if words.contains(&"--json") {
-        print_json(&json!({
-            "ok": false,
-            "error": { "code": "usage", "message": message, "hint": hint }
-        }));
-    } else {
-        eprintln!("error[usage]: {message}\n  hint: {hint}");
-    }
-    Some(ExitCode::from(USAGE))
+    Some(line.into_iter().map(OsString::from).collect())
 }
 
 /// Whether `flag`, such as `--json`, `--session=x` or `-Cdir`, is `arg`.
@@ -855,6 +846,11 @@ fn no_scene(scene: &Path, json: bool) -> Option<ExitCode> {
     Some(ExitCode::from(IO))
 }
 
+/// The code `open` uses for these findings: `part_missing`, `firmware_missing` or `scene_invalid`.
+fn scene_code(errors: &[Diagnostic]) -> orbe_session::Code {
+    orbe_session::Code::for_findings(errors.iter().map(|error| error.code.as_str()))
+}
+
 /// Each finding with its file from the current folder rather than the scene's.
 fn placed(scene: &Path, found: Vec<Diagnostic>) -> Vec<Diagnostic> {
     let dir = scene.parent().unwrap_or(Path::new(""));
@@ -889,9 +885,10 @@ fn scene_refused(errors: &[Diagnostic], json: bool) -> ExitCode {
             String::new()
         };
         let message = format!("{}{where_}", counted(errors.len(), "error"));
+        let code = scene_code(errors);
         print_json(&json!({
             "ok": false,
-            "error": { "code": "scene_invalid", "message": message },
+            "error": { "code": code.as_str(), "message": message },
             "data": { "diagnostics": found }
         }));
     } else {
@@ -907,8 +904,9 @@ fn invalid(scene: &Path, errors: Vec<Diagnostic>, json: bool) -> ExitCode {
     let count = format!("{} in {}", counted(errors.len(), "error"), scene.display());
     if json {
         let found: Vec<Value> = errors.iter().map(diagnostic_json).collect();
+        let code = scene_code(&errors);
         print_json(
-            &json!({ "ok": false, "error": { "code": "scene_invalid", "message": count }, "data": { "diagnostics": found } }),
+            &json!({ "ok": false, "error": { "code": code.as_str(), "message": count }, "data": { "diagnostics": found } }),
         );
     } else {
         for error in &errors {

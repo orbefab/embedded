@@ -25,7 +25,7 @@ use orbe_engine::{
     EdgeCursor, Input, Probe, Refused, Rejected, Session, Setting, Status, WorldChange,
 };
 use orbe_model::Time;
-use orbe_scene::{Code as SceneCode, Files, RefMap, View};
+use orbe_scene::{Files, RefMap, View};
 
 use crate::command::{Command, Step, WorldSet};
 use crate::condition::Unit;
@@ -313,8 +313,8 @@ fn shorter_stop(json: &str, stop: Duration, variable: &str) -> Result<u64, Error
     Ok(stop.as_ps())
 }
 
-/// `orbe check`'s findings as one refusal: `part_missing` or `firmware_missing` when every
-/// finding is that, else `scene_invalid`. One finding keeps its own message and hint.
+/// `orbe check`'s findings as one refusal. The code is [`Code::for_findings`]. One finding
+/// keeps its own message and hint.
 fn refused(dir: &Path, scene: &str, found: Vec<orbe_scene::Diagnostic>) -> Box<Failed> {
     let placed: Vec<Finding> = found
         .into_iter()
@@ -325,16 +325,7 @@ fn refused(dir: &Path, scene: &str, found: Vec<orbe_scene::Diagnostic>) -> Box<F
             })
         })
         .collect();
-    let all = |code: SceneCode| placed.iter().all(|d| d.code == code.as_str());
-    let code = if placed.is_empty() {
-        Code::SceneInvalid
-    } else if all(SceneCode::PartMissing) {
-        Code::PartMissing
-    } else if all(SceneCode::FirmwareMissing) {
-        Code::FirmwareMissing
-    } else {
-        Code::SceneInvalid
-    };
+    let code = Code::for_findings(placed.iter().map(|d| d.code.as_str()));
     let error = match placed.as_slice() {
         [one] => Error::new(code, one.message.clone(), one.hint.clone()),
         many => Error::new(

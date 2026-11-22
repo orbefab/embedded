@@ -187,7 +187,7 @@ An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what
 
 Exit codes: 0 ok, 1 a failed check, `expect` or command, 2 a usage error, 3 a file or system error.
 
-With `--json` a command prints one JSON object, `{"ok": true, "data": {...}}` or `{"ok": false, "error": {"code", "message", "hint"}}`. A failed `orbe check scene.jsonc --json` is `scene_invalid`, with each finding, its code and hint in `data.diagnostics`. Live commands add `session`, `t_ps` (picoseconds) and `state`: `paused`, `playing`, `stopped`, `faulted` or `closed`.
+With `--json` a command prints one JSON object, `{"ok": true, "data": {...}}` or `{"ok": false, "error": {"code", "message", "hint"}}`. A failed `orbe check scene.jsonc --json` uses the same `error.code` as `orbe open --json`: `part_missing` or `firmware_missing` when every finding has that code, and `scene_invalid` otherwise, with each finding, its code and hint in `data.diagnostics`. Live commands add `session`, `t_ps` (picoseconds) and `state`: `paused`, `playing`, `stopped`, `faulted` or `closed`.
 
 ## Watching in 3D
 

@@ -172,6 +172,27 @@ pub enum Code {
 }
 
 impl Code {
+    /// The code `open` and `check` share for one scene's findings. `part_missing` or
+    /// `firmware_missing` when every finding has that code, otherwise `scene_invalid`.
+    /// No findings is `scene_invalid`.
+    pub fn for_findings<'a>(codes: impl IntoIterator<Item = &'a str>) -> Self {
+        let part = orbe_scene::Code::PartMissing.as_str();
+        let firmware = orbe_scene::Code::FirmwareMissing.as_str();
+        let mut found = None;
+        for code in codes {
+            match found {
+                None => found = Some(code),
+                Some(same) if same == code => {}
+                Some(_) => return Code::SceneInvalid,
+            }
+        }
+        match found {
+            Some(code) if code == part => Code::PartMissing,
+            Some(code) if code == firmware => Code::FirmwareMissing,
+            _ => Code::SceneInvalid,
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         match self {
             Code::Usage => "usage",
