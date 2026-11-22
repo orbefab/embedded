@@ -353,12 +353,12 @@ fn search_lists_switches_and_boards_before_summary_matches() {
 }
 
 #[test]
-fn search_for_crystal_leaves_out_crystal_3215_and_adding_the_nano_still_installs_it() {
+fn search_for_crystal_finds_the_hc49us_and_hides_crystal_3215_that_the_nano_installs() {
     let (code, stdout, stderr) = orbe(&["search", "crystal"]);
     assert_eq!(code, 0, "{stderr}");
     let names = names_of(&stdout);
     assert!(!names.contains(&"crystal-3215"), "{stdout}");
-    assert!(!names.contains(&"crystal-hc49us"), "{stdout}");
+    assert!(names.contains(&"crystal-hc49us"), "{stdout}");
 
     let (code, stdout, stderr) = orbe(&["part", "crystal-3215"]);
     assert_eq!(code, 0, "{stderr}");

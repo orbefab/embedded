@@ -283,7 +283,7 @@ fn record_to_card(record: &Value) -> Value {
     Value::Object(map)
 }
 
-/// Part ids `registry.jsonc` leaves out of search. The surface-mount parts are in this list.
+/// Part ids `registry.jsonc` leaves out of search: the parts a jumper wire cannot land on.
 const HIDDEN: &[&str] = &[
     "ams1117-sot223",
     "atmega16u2-qfn32",
@@ -294,7 +294,6 @@ const HIDDEN: &[&str] = &[
     "ch340g",
     "cp2102n-qfn28",
     "crystal-3215",
-    "crystal-hc49us",
     "diode-cd1206",
     "diode-m7-sma",
     "diode-sod123",
