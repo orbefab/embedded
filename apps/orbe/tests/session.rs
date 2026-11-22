@@ -1692,7 +1692,7 @@ fn opens_at_once_leave_only_the_listening_process_in_the_log() {
         names
     };
     wait_until("only the session's files remain", || {
-        files() == ["lg.log", "lg.sock", "lg.version"]
+        files() == ["lg.claim", "lg.log", "lg.sock", "lg.version"]
     });
     let log = fs::read_to_string(runtime.sessions().join("lg.log")).unwrap();
     assert_eq!(log, "", "the log holds only the listening process's output");
@@ -1815,6 +1815,76 @@ fn session_files(runtime: &Runtime) -> Vec<String> {
     names
 }
 
+/// Milliseconds each start waits between seeing a dead socket and removing it, so several
+/// opens reach that window together.
+const PAUSE_BEFORE_BIND_MS: &str = "500";
+
+fn spawn_open(runtime: &Runtime, dir: &Path, args: &[&str]) -> std::process::Child {
+    runtime
+        .command(dir, args)
+        .env("ORBE_TEST_PAUSE_BEFORE_BIND_MS", PAUSE_BEFORE_BIND_MS)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap()
+}
+
+/// Session processes whose command line names `name`, from `orbe daemon --session=<name>`.
+fn daemons_for(runtime: &Runtime, name: &str) -> Vec<u32> {
+    let flag = format!("--session={name}");
+    runtime
+        .daemons()
+        .into_iter()
+        .filter(|pid| {
+            fs::read(format!("/proc/{pid}/cmdline"))
+                .unwrap_or_default()
+                .split(|byte| *byte == 0)
+                .any(|arg| arg == flag.as_bytes())
+        })
+        .collect()
+}
+
+#[test]
+fn opens_at_once_over_a_killed_process_share_one_session() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    runtime
+        .orbe(dir.path(), &["open", "--session", "race"])
+        .ok();
+    kill_daemon(&runtime);
+    let opens: Vec<_> = (0..4)
+        .map(|_| {
+            spawn_open(
+                &runtime,
+                dir.path(),
+                &["open", "--json", "--session", "race"],
+            )
+        })
+        .collect();
+    let mut sessions = Vec::new();
+    let mut scenes = Vec::new();
+    for open in opens {
+        let run = Run::new(open.wait_with_output().unwrap());
+        assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+        let body = run.json();
+        sessions.push(body["session"].as_str().unwrap().to_string());
+        scenes.push(body["data"]["scene"].as_str().unwrap().to_string());
+    }
+    assert!(
+        sessions.iter().all(|session| session == "race"),
+        "{sessions:?}"
+    );
+    assert!(scenes.iter().all(|scene| scene == &scenes[0]), "{scenes:?}");
+    // A start that bound, then lost the socket, and never got `open` exits after 5 s.
+    // Count before that. A start that lost the claim exits as soon as it sees the listener.
+    std::thread::sleep(Duration::from_millis(1000));
+    let found = daemons_for(&runtime, "race");
+    assert_eq!(found.len(), 1, "session processes: {found:?}");
+    runtime
+        .orbe(dir.path(), &["close", "--session", "race"])
+        .ok();
+}
+
 #[test]
 fn opens_at_once_over_a_killed_process_leave_no_start_log() {
     let dir = project("open\n");
@@ -1829,7 +1899,7 @@ fn opens_at_once_over_a_killed_process_leave_no_start_log() {
             pids.iter().all(|&pid| harness::gone(pid))
         });
         let opens: Vec<_> = (0..8)
-            .map(|_| runtime.spawn(dir.path(), &["open", "--session", "sl"]))
+            .map(|_| spawn_open(&runtime, dir.path(), &["open", "--session", "sl"]))
             .collect();
         for open in opens {
             let run = Run::new(open.wait_with_output().unwrap()).ok();
@@ -1837,7 +1907,7 @@ fn opens_at_once_over_a_killed_process_leave_no_start_log() {
         }
         wait_until(
             &format!("round {round} leaves only the session's files"),
-            || session_files(&runtime) == ["sl.log", "sl.sock", "sl.version"],
+            || session_files(&runtime) == ["sl.claim", "sl.log", "sl.sock", "sl.version"],
         );
         runtime.orbe(dir.path(), &["close", "--session", "sl"]).ok();
     }
@@ -2044,7 +2114,7 @@ fn an_open_read_after_the_no_scene_wait_still_opens_on_the_process_it_started() 
     assert_eq!(runtime.daemons().len(), 1);
     assert_eq!(
         session_files(&runtime),
-        ["late.log", "late.sock", "late.version"]
+        ["late.claim", "late.log", "late.sock", "late.version"]
     );
     runtime
         .orbe(dir.path(), &["close", "--session", "late"])
@@ -2071,7 +2141,11 @@ fn an_open_whose_every_process_ends_before_reading_it_says_how_many_times() {
         )
     );
     wait_until("every process ended", || runtime.daemons().is_empty());
-    assert!(session_files(&runtime).is_empty());
+    assert_eq!(
+        session_files(&runtime),
+        ["rd.claim"],
+        "a start that ends leaves the claim lock until close"
+    );
 }
 
 /// A scene whose name starts with `-` reads as a flag, live and in a test file, and the error
