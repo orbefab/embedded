@@ -331,6 +331,7 @@ fn search_lists_switches_and_boards_before_summary_matches() {
     for name in [
         "nmos-irf520-to220",
         "npn-2n2222-to92",
+        "pmos-irf9540n-to220",
         "tactile-switch-6mm",
         "tactile-switch-smd",
         "tactile-switch-ts42",
