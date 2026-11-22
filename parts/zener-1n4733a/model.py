@@ -6,7 +6,7 @@ centred on the origin; the cathode band toward +X. The leads bend down at
 x = ±5.08 (0.4") and run 8 below z = 0: the anode at -X is lead 1, the
 cathode at +X lead 2.
 
-From Vishay's DO-41 outline for the 1N4728A to 1N4764A series: body up to
+From Vishay's DO-41 outline for the 1N4728A to 1N4761A series: body up to
 4.1 long and Φ2.6, leads up to Φ0.86; drawn at the body's maxima and at a
 0.8 lead, inside that maximum.
 """
