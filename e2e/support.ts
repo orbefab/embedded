@@ -276,6 +276,8 @@ async function stepLight(page: Page, key: "ArrowLeft" | "ArrowRight", want: stri
   );
 }
 
+const FADE_CYCLE_S = 3.1;
+
 /** Play, require simulated time to move, and check the behaviour the scene declares. */
 export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, shotName: string | null): Promise<void> {
   await page.locator("canvas").scrollIntoViewIfNeeded();
@@ -298,14 +300,15 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
       sample();
       window.orbeGlowTimer = window.setInterval(sample, 50);
     });
+    // The fade sketch climbs and falls in 102 steps of 30 ms, so watch one whole cycle.
     try {
-      await waitSimulatedPast(page, start + 1.4);
+      await waitSimulatedPast(page, start + FADE_CYCLE_S);
     } finally {
       await page.evaluate(() => window.clearInterval(window.orbeGlowTimer));
     }
     const span = await page.evaluate(() => window.orbeGlowSpan ?? { min: 0, max: 0 });
     expect(span.max - span.min, `${block.id} brightness`).toBeGreaterThan(0.2);
-    expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(Math.max(1, start + 1.4));
+    expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(Math.max(1, start + FADE_CYCLE_S));
     if (shotName !== null) {
       await page.locator("canvas").scrollIntoViewIfNeeded();
       await shot(page, shotName);
