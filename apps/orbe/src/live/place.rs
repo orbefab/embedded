@@ -194,6 +194,20 @@ fn lock_if_free(path: &Path) -> Option<std::os::fd::OwnedFd> {
     Some(fd)
 }
 
+/// Whether a process holds `path`. A session's process locks its log for as long as it runs,
+/// and a killed one can still hold that lock while its threads exit.
+pub(super) fn process_holds(path: &Path) -> bool {
+    use rustix::fs::{FlockOperation, Mode, OFlags};
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let Ok(fd) = rustix::fs::open(path, flags, Mode::empty()) else {
+        return false;
+    };
+    matches!(
+        rustix::fs::flock(&fd, FlockOperation::NonBlockingLockExclusive),
+        Err(rustix::io::Errno::WOULDBLOCK)
+    )
+}
+
 pub(super) fn holds_output(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0)
 }

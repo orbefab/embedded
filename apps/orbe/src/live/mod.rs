@@ -596,18 +596,30 @@ impl Client {
         }
         // Park this open's own output when that does not replace an earlier crash the note
         // already names. That earlier file is not this open's output, so the hint leaves it out.
+        // The socket can close while the process still holds the log, and the next start
+        // replaces `<name>.log`, so wait for that lock and name the crash log.
         let parked = if matches!(recovered, Some(Some(_))) {
             None
         } else {
-            let _ = self.place.take_crash_log(&self.name);
+            self.park_exited_log();
             Some(self.place.crashed_log(&self.name))
         };
-        let hint = [Some(self.place.log(&self.name)), started, parked]
-            .into_iter()
-            .flatten()
-            .find(|log| place::holds_output(log))
-            .map(|log| format!("its last output is in {}", log.display()))
-            .unwrap_or_default();
+        let live = self.place.log(&self.name);
+        // A process that still holds `<name>.log` is the one writing it. Otherwise the
+        // crash log is the copy that stays: a new file at the live path is replaced by the
+        // next start.
+        let writing = place::holds_output(&live) && place::process_holds(&live);
+        let kept = parked.as_ref().is_some_and(|log| place::holds_output(log));
+        let hint = if kept && !writing {
+            parked
+        } else {
+            [Some(live), started, parked]
+                .into_iter()
+                .flatten()
+                .find(|log| place::holds_output(log))
+        }
+        .map(|log| format!("its last output is in {}", log.display()))
+        .unwrap_or_default();
         self.with_crash(
             Err(self.refuse(
                 Code::SessionCrashed,
@@ -984,6 +996,20 @@ impl Client {
             format!("session `{}` runs orbe {version}", self.name),
             format!("run `orbe close{}`", self.session_flag()),
         ))
+    }
+
+    /// Moves `<name>.log` onto the crash log once a process that has ended releases it. The
+    /// socket closes first. The threads can still hold the log, and the next start replaces
+    /// `<name>.log`, so a hint that did not wait would name a file that then disappears.
+    fn park_exited_log(&self) {
+        let log = self.place.log(&self.name);
+        for _ in 0..POLLS {
+            if !place::process_holds(&log) {
+                break;
+            }
+            std::thread::sleep(POLL);
+        }
+        let _ = self.place.take_crash_log(&self.name);
     }
 
     /// Moves `<name>.log` to `<name>.log.crashed`. The path named in the crash message, when
