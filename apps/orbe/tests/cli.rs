@@ -80,7 +80,7 @@ fn a_scene_that_reads_is_ok() {
     let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout.contains("ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND"),
+        stdout.contains("ok, 5 scene parts, expanding to 20 engine parts, 35 nets, ground GND"),
         "{stdout}"
     );
 
@@ -88,8 +88,8 @@ fn a_scene_that_reads_is_ok() {
     assert_eq!(output.status.code(), Some(0));
     let reply: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(reply["ok"], true);
-    assert_eq!(reply["data"]["parts"], 19);
-    assert_eq!(reply["data"]["nets"], 34);
+    assert_eq!(reply["data"]["parts"], 20);
+    assert_eq!(reply["data"]["nets"], 35);
     assert_eq!(reply["data"]["ground"], "GND");
 }
 
@@ -436,7 +436,7 @@ fn adding_parts_for_the_first_target() {
     let (output, stdout) = orbe(&["check", scene.to_str().unwrap()]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert!(
-        stdout.contains("ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND"),
+        stdout.contains("ok, 5 scene parts, expanding to 20 engine parts, 35 nets, ground GND"),
         "{stdout}"
     );
 
@@ -467,7 +467,7 @@ fn adding_parts_for_the_first_target() {
     assert!(!stdout.contains("part_modified"), "{stdout}");
     assert!(!stdout.contains("note:"), "{stdout}");
     assert!(
-        stdout.contains("ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND"),
+        stdout.contains("ok, 5 scene parts, expanding to 20 engine parts, 35 nets, ground GND"),
         "{stdout}"
     );
     assert!(
@@ -538,7 +538,7 @@ fn the_first_target_walk_from_the_folder_above() {
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert_eq!(
         stdout,
-        "proj/scene.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND\n"
+        "proj/scene.jsonc: ok, 5 scene parts, expanding to 20 engine parts, 35 nets, ground GND\n"
     );
     assert!(proj.join("parts/led-5mm/part.jsonc").is_file());
 }
@@ -652,7 +652,7 @@ fn a_scene_not_named_scene_jsonc_gets_a_hint_that_runs() {
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert_eq!(
         stdout,
-        "blinky.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND\n"
+        "blinky.jsonc: ok, 5 scene parts, expanding to 20 engine parts, 35 nets, ground GND\n"
     );
 }
 

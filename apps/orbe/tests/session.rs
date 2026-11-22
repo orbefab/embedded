@@ -129,7 +129,7 @@ fn a_live_read_gives_the_engine_value_pressed_at_50ms_and_read_at_100ms() {
         runtime.orbe(dir.path(), &args).ok();
     }
     let run = runtime.orbe(dir.path(), &["get", "@nano.D13"]).ok();
-    assert_eq!(run.stdout, "nano.D13 high 4.400713547712648 V\n");
+    assert_eq!(run.stdout, "nano.D13 high 4.400713544697176 V\n");
     runtime.orbe(dir.path(), &["close"]).ok();
 }
 
@@ -192,9 +192,9 @@ fn open_replaces_the_socket_a_killed_process_left() {
         run.stdout,
         "\
 t=10ms (from 0s)
-  brightness led1 off 3.4882796973335236e-10 A over 10ms
-  brightness nano.led_l off 3.4809606749501575e-10 A over 10ms
-  brightness nano.led_pwr lit 3.0136985456123377 mA over 10ms
+  brightness led1 off 3.488279692573668e-10 A over 10ms
+  brightness nano.led_l off 3.4809606695432935e-10 A over 10ms
+  brightness nano.led_pwr lit 3.0136985406846266 mA over 10ms
 "
     );
     runtime
