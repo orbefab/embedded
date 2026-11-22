@@ -4,10 +4,10 @@
 # comes from the blob cache. All three go to .scratch/site, and `vite build` in apps/site renders
 # every page from them. Needs what scripts/wasm.sh needs, Node 24, pnpm and cargo. It installs
 # nothing. ORBE_SITE_INSTALL=1 shows install lines, once the repo and the binaries are public,
-# and copies scripts/install.sh to /embedded/install.sh. The footer links the repo either way.
+# and copies scripts/install.sh to /orbe/install.sh. The footer links the repo either way.
 #
 # The Block firmware links the AVR runtime under the LGPL, so the site serves the runtime's source
-# beside it, at /embedded/sources/. The archive is the one packages/engine/scripts/sketches.sh
+# beside it, at /orbe/sources/. The archive is the one packages/engine/scripts/sketches.sh
 # pins by URL and SHA-256. It is fetched once into the blob cache, $ORBE_BLOBS, else
 # $XDG_CACHE_HOME/orbe/blobs, else ~/.cache/orbe/blobs, as a file named by its SHA-256, and a
 # download with another hash is refused.

@@ -15,12 +15,12 @@ function ids(dir: string, file: string): string[] {
 test("the start page shows each command and the Block's scene", async ({ browser, host }) => {
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.goto(`${host.base}/embedded/`);
+  await page.goto(`${host.base}/orbe/`);
   const installs = page.locator('[data-testid="install"]');
   await expect(installs).toHaveCount(8);
   const texts = (await installs.locator("[data-copy-text]").allInnerTexts()).map((text) => text.trim());
   expect(texts).toEqual([
-    "curl -fsSL https://orbefab.com/embedded/install.sh | sh",
+    "curl -fsSL https://orbefab.com/orbe/install.sh | sh",
     "orbe skills get core",
     "orbe add nano-button-led",
     "orbe check scene.jsonc",
@@ -52,8 +52,8 @@ test("every part and Block page fits a phone width with its install line", async
   const page = await context.newPage();
   const fits = () => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1);
   const pages = [
-    ...ids("parts", "part.jsonc").map((id) => `/embedded/parts/${id}/`),
-    ...ids("blocks", "block.jsonc").map((id) => `/embedded/blocks/${id}/`),
+    ...ids("parts", "part.jsonc").map((id) => `/orbe/parts/${id}/`),
+    ...ids("blocks", "block.jsonc").map((id) => `/orbe/blocks/${id}/`),
   ];
   for (const path of pages) {
     await page.goto(`${host.base}${path}`);
@@ -65,7 +65,7 @@ test("every part and Block page fits a phone width with its install line", async
     expect(box, path).not.toBeNull();
     expect(box!.x + box!.width, path).toBeLessThanOrEqual(391);
     expect(await fits(), path).toBe(true);
-    if (path.startsWith("/embedded/blocks/")) {
+    if (path.startsWith("/orbe/blocks/")) {
       await page.locator('[data-testid="view-code"]').click();
       expect(await fits(), `${path} code`).toBe(true);
     }
@@ -77,7 +77,7 @@ test("Copy says Copied and writes the command", async ({ browser, host }) => {
   const context = await browser.newContext();
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   const page = await context.newPage();
-  await page.goto(`${host.base}/embedded/parts/capacitor-electrolytic-radial/`);
+  await page.goto(`${host.base}/orbe/parts/capacitor-electrolytic-radial/`);
   const install = page.locator('[data-testid="install"]');
   const command = await install.locator("[data-copy-text]").innerText();
   await install.locator('[data-testid="copy"]').click();
@@ -91,7 +91,7 @@ async function refused(page: import("@playwright/test").Page, host: string, scri
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.addInitScript(script);
-  await page.goto(`${host}/embedded/parts/capacitor-electrolytic-radial/`);
+  await page.goto(`${host}/orbe/parts/capacitor-electrolytic-radial/`);
   const install = page.locator('[data-testid="install"]');
   const command = await install.locator("[data-copy-text]").innerText();
   await install.locator('[data-testid="copy"]').click();
@@ -129,7 +129,7 @@ test("a same-page hash stays on the page when clicked twice", async ({ browser, 
     if (/_serverFn|__tsr\//.test(request.url())) urls.push(request.url());
   });
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(`${host.base}/embedded/parts/led-5mm/`);
+  await page.goto(`${host.base}/orbe/parts/led-5mm/`);
   await page.waitForFunction(() => {
     for (const node of document.querySelectorAll("body *")) {
       if (Object.keys(node).some((key) => key.startsWith("__reactFiber") || key.startsWith("__reactContainer"))) return true;
@@ -151,7 +151,7 @@ test("a same-page hash stays on the page when clicked twice", async ({ browser, 
 test("a Block page keeps the install line and the short code note", async ({ browser, host }) => {
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+  await page.goto(`${host.base}/orbe/blocks/nano-button-led/`);
   await expect(page.locator('[data-testid="install"]')).toContainText("orbe add nano-button-led");
   await expect(page.getByText("New to orbe?")).toHaveCount(0);
   await page.locator('[data-testid="view-code"]').click();

@@ -1,5 +1,5 @@
 //! `orbe add`, `orbe search`, `orbe part` and `orbe blocks`. They read the registry at
-//! `https://orbefab.com/embedded/r/{name}.json`. `ORBE_REGISTRY` replaces that template, which
+//! `https://orbefab.com/orbe/r/{name}.json`. `ORBE_REGISTRY` replaces that template, which
 //! is how a test points at a registry built from the same tree. `{name}` is replaced with
 //! `index` and with nothing else. Every other URL is resolved against the document that holds it.
 //! An `https` URL is fetched by running `curl`. A `file` URL is read from disk.
@@ -29,7 +29,7 @@ const USAGE: u8 = 2;
 const IO: u8 = 3;
 const NETWORK: &str = "check the network and run the command again";
 const MISMATCH: &str = "the file does not match its record";
-const TEMPLATE: &str = "https://orbefab.com/embedded/r/{name}.json";
+const TEMPLATE: &str = "https://orbefab.com/orbe/r/{name}.json";
 /// A response larger than this is refused before it is kept. The largest part file is well under it.
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const REDIRECTS: &str = "3";

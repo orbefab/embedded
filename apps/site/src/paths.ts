@@ -1,10 +1,10 @@
 /** Every URL the site links to, under the one path the site's route serves. */
-export const BASE = "/embedded/";
+export const BASE = "/orbe/";
 
-/** The router pathname, whether or not it still has the `/embedded` base on it. */
+/** The router pathname, whether or not it still has the `/orbe` base on it. */
 export function sitePath(pathname: string): string {
-  if (pathname === "/embedded") return "/";
-  if (pathname.startsWith("/embedded/")) return pathname.slice("/embedded".length);
+  if (pathname === "/orbe") return "/";
+  if (pathname.startsWith("/orbe/")) return pathname.slice("/orbe".length);
   return pathname;
 }
 

@@ -80,7 +80,7 @@ A user lists registries in `registries.json`, in `$XDG_CONFIG_HOME/orbe/`, else 
 }
 ```
 
-A project names a part from that registry as `@acme/<id>`. A bare id names `@orbefab`, which needs no line. Its template is `https://orbefab.com/embedded/r/{name}.json`. This `orbe` does not read `registries.json`. It fetches `@orbefab` from that template. `orbe add`, `orbe search`, `orbe part` and `orbe blocks` are the commands that fetch. `orbe check`, `orbe open`, `orbe test` and `orbe show` do not.
+A project names a part from that registry as `@acme/<id>`. A bare id names `@orbefab`, which needs no line. Its template is `https://orbefab.com/orbe/r/{name}.json`. This `orbe` does not read `registries.json`. It fetches `@orbefab` from that template. `orbe add`, `orbe search`, `orbe part` and `orbe blocks` are the commands that fetch. `orbe check`, `orbe open`, `orbe test` and `orbe show` do not.
 
 A template is an `https://` URL with exactly one `{name}`. `{name}` starts its last path segment and is followed only by a fixed suffix, such as `.json`. A template has no query and no fragment. A client replaces `{name}` with `index`, literally, to get the index's URL. It never builds another URL from the template. It takes each record's URL from its index row and each file's URL from its record, and resolves both against the URL of the document that holds them. A registry that `orbe registry build` wrote and that is served at `B/` has the template `B/{name}.json`.
 
@@ -91,7 +91,7 @@ A template is an `https://` URL with exactly one `{name}`. `{name}` starts its l
   "$schema": "index.schema.json",
   "format": 1,
   "name": "@orbefab",
-  "homepage": "https://orbefab.com/embedded",
+  "homepage": "https://orbefab.com/orbe",
   "items": [
     {
       "name": "led-5mm",

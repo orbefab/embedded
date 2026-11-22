@@ -17,12 +17,12 @@ if (!["", "0", "1"].includes(flag)) {
 /** A path the build renders to HTML: a page, which ends in `/`, or the 404 page. The registry,
  * orbe-wasm and the other files the pages link to are copied, not rendered. */
 const isPage = (path: string) =>
-  path === "/embedded/404" || (path.startsWith("/embedded/") && path.endsWith("/") && !path.startsWith("/embedded/r/"));
+  path === "/orbe/404" || (path.startsWith("/orbe/") && path.endsWith("/") && !path.startsWith("/orbe/r/"));
 
 /** Embed routes are unlinked, so the crawl never finds them. List each Block's. */
 const embedPages = readdirSync(resolve(import.meta.dirname, "../../blocks"))
   .filter((name) => existsSync(resolve(import.meta.dirname, "../../blocks", name, "block.jsonc")))
-  .map((name) => ({ path: `/embedded/blocks/${name}/embed/` }));
+  .map((name) => ({ path: `/orbe/blocks/${name}/embed/` }));
 
 /** A part whose index row has `"listed": false` is left out of the parts list, so the crawl never finds its page
  * unless a board page links it. List each one. */
@@ -30,18 +30,19 @@ const index = resolve(import.meta.dirname, "../../.scratch/site/registry/index.j
 const unlistedPartPages = existsSync(index)
   ? (JSON.parse(readFileSync(index, "utf8")) as { items: IndexRow[] }).items
       .filter((row) => row.type === "part" && row.listed === false)
-      .map((row) => ({ path: `/embedded/parts/${row.name}/` }))
+      .map((row) => ({ path: `/orbe/parts/${row.name}/` }))
   : [];
 
 /** The Worker Start renders pages in, from its server entry. */
 const renderer = { name: "orbefab-embedded-render", main: "@tanstack/react-start/server-entry" };
 
-// Start derives the router's basepath, /embedded, from `base`, and renders every page at build
+// Start derives the router's basepath, /orbe, from `base`, and renders every page at build
 // time by crawling the links from Get orbe, in a Worker built only for that. The Worker
-// that deploys serves dist/client as static assets, mounted at /embedded by wrangler.jsonc's
-// `assets.base_path`, and runs no code. `vite dev` renders each page on request in that Worker.
+// that deploys serves dist/client as static assets, mounted at /orbe by wrangler.jsonc's
+// `assets.base_path`. redirect.js answers /embedded. `vite dev` renders each page on request
+// in the prerender Worker.
 export default defineConfig(({ command }) => ({
-  base: "/embedded/",
+  base: "/orbe/",
   publicDir: PUBLIC,
   plugins: [
     siteInputs(flag === "1"),
@@ -51,8 +52,8 @@ export default defineConfig(({ command }) => ({
     tailwindcss(),
     tanstackStart({
       pages: [
-        { path: "/embedded/" },
-        { path: "/embedded/404", prerender: { outputPath: "/embedded/404.html" } },
+        { path: "/orbe/" },
+        { path: "/orbe/404", prerender: { outputPath: "/orbe/404.html" } },
         ...embedPages,
         ...unlistedPartPages,
       ],

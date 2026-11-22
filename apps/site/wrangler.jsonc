@@ -1,22 +1,29 @@
-// The Worker that serves orbefab.com/embedded and every path under it. It runs no code: it serves
-// dist/client, which scripts/site.sh builds, as static assets mounted at /embedded. The build
-// writes the deploy config, dist/client/wrangler.json, from this file. docs/site.md says how to
-// deploy it.
+// The Worker orbefab-embedded serves orbefab.com/orbe, and redirects orbefab.com/embedded
+// to the same path under /orbe. The name stays orbefab-embedded: a new name would be a second
+// Worker, and this one would keep the routes. redirect.js answers /embedded. Static assets from
+// dist/client, which scripts/site.sh builds, are mounted at /orbe. A request under /orbe is an
+// asset, so the Worker does not see it. The build bundles redirect.js and writes
+// dist/orbefab_embedded/wrangler.json from this file. Its assets are dist/client.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "orbefab-embedded",
+  "main": "redirect.js",
   "compatibility_date": "2026-11-01",
   // Routes, not a Custom Domain: the website's Worker holds orbefab.com, and a route runs before
-  // it for the paths it matches. `orbefab.com/embedded*` would also match /embeddedfoo. The zone is
-  // named by its ID, the zone orbefab.com, so the deploy token needs no Zone Read to look it up.
+  // it for the paths it matches. `orbefab.com/orbe*` would also match /orbefoo, and the same for
+  // /embedded. The zone is named by its ID, the zone orbefab.com, so the deploy token needs no
+  // Zone Read to look it up.
   "routes": [
+    { "pattern": "orbefab.com/orbe", "zone_id": "82bb63ff17adeced8bd3f19a7409b505" },
+    { "pattern": "orbefab.com/orbe/*", "zone_id": "82bb63ff17adeced8bd3f19a7409b505" },
     { "pattern": "orbefab.com/embedded", "zone_id": "82bb63ff17adeced8bd3f19a7409b505" },
     { "pattern": "orbefab.com/embedded/*", "zone_id": "82bb63ff17adeced8bd3f19a7409b505" },
   ],
   "workers_dev": false,
   "preview_urls": false,
   "assets": {
-    "base_path": "/embedded",
+    "binding": "ASSETS",
+    "base_path": "/orbe",
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "404-page",
   },

@@ -84,7 +84,7 @@ fn every_url_holds_the_bytes_its_hash_names() {
     assert_eq!(index["$schema"], INDEX_SCHEMA);
     assert_eq!(index["format"], 1);
     assert_eq!(index["name"], orbe_scene::REGISTRY);
-    assert_eq!(index["homepage"], "https://orbefab.com/embedded");
+    assert_eq!(index["homepage"], "https://orbefab.com/orbe");
     let rows = index["items"].as_array().unwrap();
     assert_eq!(rows.len(), registry.items.len());
     for row in rows {
