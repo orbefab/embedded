@@ -123,7 +123,7 @@ fn catalog_bytes(files: &Files, id: &str, rel: &str) -> Option<Vec<u8>> {
 }
 
 /// `rel` as a catalog key: `.` dropped, `/` between names, and no step that leaves the folder.
-fn catalog_rel(rel: &str) -> Option<String> {
+pub(crate) fn catalog_rel(rel: &str) -> Option<String> {
     if Path::new(rel).is_absolute() {
         return None;
     }
@@ -320,41 +320,6 @@ fn bounds(range: Range, unit: Unit) -> String {
     .join(" and ")
 }
 
-/// Why no value [`number`] takes lies inside `range`, when none does. A number is a finite
-/// `f64`. A duration goes to the engine as a whole number of picoseconds, zero or more, that
-/// fits a `u64`.
-pub(crate) fn no_value(unit: Unit, range: Range) -> Option<(String, String)> {
-    let bounds = bounds(range, unit);
-    if unit != Unit::Second {
-        let least = range.above.map_or(f64::MIN, f64::next_up);
-        if least.is_finite() && inside(range, least) {
-            return None;
-        }
-        return Some((
-            format!("no number is {bounds}"),
-            "move `min_exclusive` and `max_exclusive` apart so a number fits between them".into(),
-        ));
-    }
-    // The smallest whole number of picoseconds above the low bound. The product may round, so
-    // the search starts a little below it.
-    let mut ps = range
-        .above
-        .map_or(0.0, |above| ((above * 1e12).floor() - 1.0).max(0.0));
-    for _ in 0..8 {
-        if range.above.is_none_or(|above| ps / 1e12 > above) {
-            break;
-        }
-        ps = (ps + 1.0).max(ps.next_up());
-    }
-    if ps < 18_446_744_073_709_551_616.0 && inside(range, ps / 1e12) {
-        return None;
-    }
-    Some((
-        format!("no whole number of picoseconds, zero or more, is {bounds}"),
-        "move `min_exclusive` and `max_exclusive` apart so a whole number of picoseconds, zero or more, fits between them".into(),
-    ))
-}
-
 pub(crate) fn source_ok(node: &Node) -> bool {
     if let Some(text) = node.str() {
         return text == "user";
@@ -541,45 +506,4 @@ pub(crate) fn set(target: &mut Value, pointer: &str, value: Value, create: bool)
         (slot, value) => *slot = value,
     }
     true
-}
-
-#[cfg(test)]
-mod tests {
-    use super::no_value;
-    use crate::model::Range;
-    use crate::units::Unit;
-
-    fn range(above: Option<f64>, below: Option<f64>) -> Range {
-        Range { above, below }
-    }
-
-    #[test]
-    fn bounds_hold_a_value_until_none_fits_between_them() {
-        let open = |unit, above, below| no_value(unit, range(above, below)).is_none();
-        assert!(open(Unit::Volt, None, None));
-        assert!(open(Unit::Volt, Some(1.0), Some(2.0)));
-        assert!(open(
-            Unit::Volt,
-            Some(1.0),
-            Some(1.0f64.next_up().next_up())
-        ));
-        assert!(!open(Unit::Volt, Some(1.0), Some(1.0f64.next_up())));
-        assert!(!open(Unit::Volt, Some(5.0), Some(5.0)));
-        assert!(!open(Unit::Volt, Some(f64::MAX), None));
-        assert!(open(Unit::Volt, None, Some(-1e300)));
-        assert!(!open(Unit::Volt, None, Some(f64::MIN)));
-        assert!(open(Unit::One, Some(0.0), Some(1.0)));
-        assert!(open(Unit::One, Some(2.0), Some(3.0)));
-
-        assert!(open(Unit::Second, None, None));
-        assert!(open(Unit::Second, None, Some(1e-12)));
-        assert!(!open(Unit::Second, None, Some(0.0)));
-        assert!(!open(Unit::Second, Some(0.0), Some(1e-12)));
-        assert!(open(Unit::Second, Some(0.0), Some(2e-12)));
-        assert!(!open(Unit::Second, Some(0.0), Some(1e-13)));
-        assert!(open(Unit::Second, Some(4e-9), Some(5e-9)));
-        assert!(open(Unit::Second, Some(-1.0), Some(1e-12)));
-        assert!(!open(Unit::Second, Some(1e8), None));
-        assert!(open(Unit::Second, Some(1e7), None));
-    }
 }

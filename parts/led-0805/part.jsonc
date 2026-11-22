@@ -13,6 +13,7 @@
   "params": {
     "color": {
       "required": true,
+      "example": "red",
       "choices": {
         "red": {
           "tint": "#e0b0a4",

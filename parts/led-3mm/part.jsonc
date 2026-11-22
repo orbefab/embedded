@@ -16,6 +16,7 @@
   "params": {
     "color": {
       "required": true,
+      "example": "red",
       "choices": {
         "red": {
           "real": { "number": "L-934ID", "datasheet": "Kingbright L-934ID, Spec No DSAA4904, Rev V.12A" },

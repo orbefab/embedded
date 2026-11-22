@@ -8,10 +8,10 @@
   "real": { "generic": true, "maker": "Bourns", "number": "CAY16-J4", "datasheet": "Bourns CAY16-J4" },
   "pins": { "1": [1], "2": [2], "3": [3], "4": [4], "5": [5], "6": [6], "7": [7], "8": [8] },
   "params": {
-    "resistance_a": { "unit": "ohm", "required": true, "min_exclusive": 0, "sets": "/a/resistance" },
-    "resistance_b": { "unit": "ohm", "required": true, "min_exclusive": 0, "sets": "/b/resistance" },
-    "resistance_c": { "unit": "ohm", "required": true, "min_exclusive": 0, "sets": "/c/resistance" },
-    "resistance_d": { "unit": "ohm", "required": true, "min_exclusive": 0, "sets": "/d/resistance" },
+    "resistance_a": { "unit": "ohm", "required": true, "example": 220, "min_exclusive": 0, "sets": "/a/resistance" },
+    "resistance_b": { "unit": "ohm", "required": true, "example": 220, "min_exclusive": 0, "sets": "/b/resistance" },
+    "resistance_c": { "unit": "ohm", "required": true, "example": 220, "min_exclusive": 0, "sets": "/c/resistance" },
+    "resistance_d": { "unit": "ohm", "required": true, "example": 220, "min_exclusive": 0, "sets": "/d/resistance" },
   },
   "model": {
     "a": { "kind": "resistor", "ratings": { "power": null }, "pins": { "a": "1", "b": "8" } },

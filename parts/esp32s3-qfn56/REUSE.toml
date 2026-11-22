@@ -19,3 +19,29 @@ SPDX-License-Identifier = "MIT OR Apache-2.0"
 [[annotations]]
 path = ["esp32s3_rev0_rom.elf", "LICENSE-rom", "NOTICE"]
 SPDX-License-Identifier = "Apache-2.0"
+
+# hello_world.bin and partition-table.bin are an ESP-IDF app and its partition table.
+# NOTICE-hello quotes their notices. The LICENSE files are those texts, unchanged.
+[[annotations]]
+path = ["LICENSE-freertos"]
+SPDX-License-Identifier = "MIT"
+
+[[annotations]]
+path = ["LICENSE-tlsf"]
+SPDX-License-Identifier = "BSD-3-Clause"
+
+[[annotations]]
+path = ["LICENSE-ubsan"]
+SPDX-License-Identifier = "BSD-2-Clause"
+
+[[annotations]]
+path = ["LICENSE-xtensa"]
+SPDX-License-Identifier = "LicenseRef-Cadence-Xtensa"
+
+[[annotations]]
+path = ["LICENSE-newlib"]
+SPDX-License-Identifier = "LicenseRef-newlib"
+
+[[annotations]]
+path = ["hello_world.bin", "partition-table.bin", "NOTICE-hello"]
+SPDX-License-Identifier = "Apache-2.0 AND MIT AND BSD-3-Clause AND BSD-2-Clause AND LicenseRef-Cadence-Xtensa AND LicenseRef-newlib AND LicenseRef-GCC-Runtime-Library-Exception"

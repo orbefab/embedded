@@ -229,7 +229,8 @@
     {
       "name": "firmware",
       "file": "hex",
-      "required": true
+      "required": true,
+      "example": "example.hex"
     }
   ],
   "ratings": [],

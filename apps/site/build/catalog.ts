@@ -3,8 +3,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { at } from "../src/paths.ts";
+import { si } from "../src/format.ts";
 import { type BlockRecord, dependencyId, type IndexRow, type Item, type ItemRecord, type PartRecord, type Site, type SiteData } from "../src/records.ts";
-import { supplyPartScene } from "../src/shown.ts";
 
 export interface Catalog {
   readonly name: string;
@@ -65,8 +65,32 @@ export function siteData(catalog: Catalog, site: Site, shown: Readonly<Record<st
  * part it is built from, each as `[parts/<id>/<path>, bytes]`. */
 export type DrawPart = (id: string, files: readonly (readonly [string, Uint8Array])[]) => string;
 
+interface DrawnScene {
+  instances: { params?: Record<string, number | string>; part: string }[];
+  parts: Record<string, { view?: { recolour?: readonly { by?: string }[] } }>;
+}
+
+/** Sets each required param to its example. The caption names a value a recolour draws. */
+function supplyPartScene(sceneText: string, record: PartRecord): { scene: string; shown?: string } {
+  const scene = JSON.parse(sceneText) as DrawnScene;
+  const root = scene.instances[0];
+  if (root === undefined) throw new Error(`${record.name}: the part scene has no instance`);
+  root.params ??= {};
+  const named = new Set<string>();
+  for (const entry of scene.parts[root.part]?.view?.recolour ?? []) if (typeof entry.by === "string") named.add(entry.by);
+  const labels: string[] = [];
+  for (const param of record.params) {
+    if (param.required !== true || param.default !== undefined || param.example === undefined) continue;
+    if (root.params[param.name] !== undefined) continue;
+    root.params[param.name] = param.example;
+    if (!named.has(param.name)) continue;
+    labels.push(typeof param.example === "number" ? si(param.example, param.unit) : param.example);
+  }
+  return { scene: JSON.stringify(scene), shown: labels.length === 0 ? undefined : `Shown at ${labels.join(" and ")}.` };
+}
+
 /** Each part's scene message, by part id, with each model pointed at its file in the registry,
- * and the sentence naming a value the view draws when the part file supplies one. */
+ * and the sentence naming an example a recolour draws. */
 export function partViews(catalog: Catalog, draw: DrawPart): Map<string, { scene: string; shown?: string }> {
   const byName = new Map(catalog.parts.map((item) => [item.record.name, item.record]));
   const closure = (name: string, seen = new Set<string>()): Set<string> => {

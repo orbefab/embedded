@@ -5,6 +5,6 @@
   "docs": { "Yageo RC0603": null },
   "real": { "generic": true, "maker": "Yageo", "number": "RC0603", "datasheet": "Yageo RC0603" },
   "pins": { "a": [1], "b": [2] },
-  "params": { "resistance": { "unit": "ohm", "required": true, "min_exclusive": 0, "sets": "/resistance" } },
+  "params": { "resistance": { "unit": "ohm", "required": true, "example": 220, "min_exclusive": 0, "sets": "/resistance" } },
   "model": { "kind": "resistor", "ratings": { "power": null } },
 }

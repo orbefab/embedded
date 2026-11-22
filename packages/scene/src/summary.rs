@@ -103,6 +103,10 @@ pub struct Param {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<Literal>"))]
     pub default: Option<Option<Literal>>,
+    /// A value a scene could set, on a required param. Absent when the param has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Literal"))]
+    pub example: Option<Literal>,
 }
 
 /// A param bound or default. A number keeps the digits the part file wrote, and the
@@ -621,7 +625,7 @@ pub fn param_sentence(param: &Param) -> String {
         }
         text
     };
-    if param.required {
+    let mut text = if param.required {
         format!("{takes}, required")
     } else if param.default.as_ref().is_some_and(Option::is_none) {
         format!("{takes}, not set by default")
@@ -632,7 +636,26 @@ pub fn param_sentence(param: &Param) -> String {
         )
     } else {
         takes
+    };
+    if let Some(phrase) = example_phrase(param) {
+        text.push_str(&format!(", example {phrase}"));
     }
+    text
+}
+
+/// How `orbe part` prints an example: a number in its SI prefix, or a choice or file name.
+fn example_phrase(param: &Param) -> Option<String> {
+    let example = param.example.as_ref()?;
+    Some(match example {
+        Literal::Number(raw) => match param.unit.as_deref() {
+            Some(unit) if unit != "1" => match raw.parse::<f64>() {
+                Ok(value) if value.is_finite() => si_amount(value, unit),
+                _ => format!("{raw} {unit}"),
+            },
+            _ => raw.clone(),
+        },
+        Literal::Name(name) => name.clone(),
+    })
 }
 
 fn rank(card: &Card, words: &[String], joined: &str) -> Option<u8> {
@@ -891,6 +914,7 @@ fn param<'t>(
             ),
             required: false,
             default: None,
+            example: example_of(decl),
         };
         apply_default(&mut param, own);
         return Some(param);
@@ -910,6 +934,7 @@ fn param<'t>(
             choices: None,
             required: false,
             default: None,
+            example: example_of(decl),
         };
         apply_default(&mut param, own);
         return Some(param);
@@ -924,6 +949,7 @@ fn param<'t>(
             choices: None,
             required: false,
             default: None,
+            example: example_of(decl),
         };
         apply_default(&mut param, own);
         return Some(param);
@@ -949,16 +975,22 @@ fn apply_default(param: &mut Param, own: OwnDefault) {
         OwnDefault::Unset => {
             param.required = false;
             param.default = Some(None);
+            param.example = None;
         }
         OwnDefault::Value(value) => {
             param.required = false;
             param.default = Some(Some(value));
+            param.example = None;
         }
         OwnDefault::Required | OwnDefault::Inherit => {
             param.required = true;
             param.default = None;
         }
     }
+}
+
+fn example_of(decl: &Node) -> Option<Literal> {
+    decl.get("example").and_then(literal_or_none)
 }
 
 fn literal(node: &Node) -> Literal {
@@ -1213,9 +1245,11 @@ mod tests {
             std::path::Path::new("part.jsonc"),
             r#"{
                 "params": {
-                    "delay": { "unit": "s", "default": 0.001, "min_exclusive": 0, "max_exclusive": 1 },
+                    "delay": { "unit": "s", "default": 0.001, "example": 1, "min_exclusive": 0, "max_exclusive": 1 },
                     "color": { "default": "red", "choices": { "red": {}, "green": {} } },
-                    "initial": { "unit": "V", "default": null }
+                    "initial": { "unit": "V", "default": null },
+                    "resistance": { "unit": "ohm", "required": true, "min_exclusive": 0, "example": 220 },
+                    "tint": { "required": true, "example": "red", "choices": { "red": {}, "green": {} } }
                 }
             }"#
             .to_string(),
@@ -1231,9 +1265,23 @@ mod tests {
         assert_eq!(json["below"], serde_json::json!(1));
         assert_eq!(json["unit"], "s");
         assert_eq!(json["default"].to_string(), "0.001");
+        assert!(json.get("example").is_none());
         assert_eq!(
             param_sentence(&delay),
             "a value in s above 0 and below 1, 0.001 s by default"
+        );
+
+        let resistance = param(&tree, "resistance", &none).unwrap();
+        let json = serde_json::to_value(&resistance).unwrap();
+        assert_eq!(json["example"], serde_json::json!(220));
+        assert_eq!(
+            param_sentence(&resistance),
+            "a value in ohm above 0, required, example 220 ohm"
+        );
+        let tint = param(&tree, "tint", &none).unwrap();
+        assert_eq!(
+            param_sentence(&tint),
+            "one of `red`, `green`, required, example red"
         );
 
         let color = param(&tree, "color", &none).unwrap();
