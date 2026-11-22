@@ -2,11 +2,12 @@
 # scripts/check.sh says what each command runs.
 # Lint (`check.sh lint`), the Rust tests (`check.sh rust`), the viewer checks
 # and the site suite on wrangler run in parallel on every pull request and on
-# every push to main. The viewer check plays the page with no session, which
-# runs a Block, so that job installs Rust and wasm-bindgen. The page build
-# itself does not. The site suite on vite preview, which includes the
-# install-line build, and the Firefox and WebKit smoke run on main and
-# nightly. The engine checks (`check.sh engine-chips`, `engine-circuits` and
+# every push to main. The viewer fixture is two shards of one Playwright run.
+# Each shard plays the page with no session, which runs a Block, so those jobs
+# install Rust and wasm-bindgen. The page build itself does not. The site
+# suite on wrangler is three shards. The site suite on vite preview, which
+# includes the install-line build, and the Firefox and WebKit smoke run on
+# main and nightly. The engine checks (`check.sh engine-chips`, `engine-circuits` and
 # `engine-wasm`) run in parallel on main and nightly, and on a pull request
 # when scripts/ci-engine-changed.sh prints run=true. The cargo cache keeps
 # dependencies only. Caching the workspace crates still rebuilt them after
@@ -111,9 +112,13 @@ jobs:
         run: scripts/check.sh rust
 
   viewer:
-    name: viewer
+    name: viewer ${{ matrix.shard }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ["1/2", "2/2"]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -131,7 +136,7 @@ jobs:
       - name: Viewer fixture
         run: |
           scripts/check-viewer.sh
-          scripts/check-viewer-e2e.sh
+          scripts/check-viewer-e2e.sh --shard "${{ matrix.shard }}"
 
   viewer-blocks:
     name: block, headed, world
@@ -163,7 +168,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: ["1/2", "2/2"]
+        shard: ["1/3", "2/3", "3/3"]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
