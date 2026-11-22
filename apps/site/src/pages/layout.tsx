@@ -86,8 +86,8 @@ export function Footer({ className = "mt-24" }: { className?: string }) {
             <FooterLink href={at.home}>Get orbe</FooterLink>
             <FooterLink href={at.blocks}>Blocks</FooterLink>
             <FooterLink href={at.parts}>Parts</FooterLink>
-            <FooterLink href="https://github.com/orbefab/embedded/releases">Releases</FooterLink>
-            <FooterLink href="https://github.com/orbefab/embedded">GitHub</FooterLink>
+            <FooterLink href="https://github.com/orbefab/orbe/releases">Releases</FooterLink>
+            <FooterLink href="https://github.com/orbefab/orbe">GitHub</FooterLink>
           </ul>
         </div>
         <div>
@@ -95,7 +95,7 @@ export function Footer({ className = "mt-24" }: { className?: string }) {
           <ul className="mt-2.5 grid gap-0.5">
             <FooterLink href="/">Home</FooterLink>
             <FooterLink href="/brand">Brand</FooterLink>
-            <FooterLink href="https://github.com/orbefab/embedded/blob/main/LICENSE-MIT">License</FooterLink>
+            <FooterLink href="https://github.com/orbefab/orbe/blob/main/LICENSE-MIT">License</FooterLink>
           </ul>
         </div>
       </div>
