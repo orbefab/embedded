@@ -298,6 +298,7 @@ fn play_ticks_until_pause() {
         "{}",
         paused.text()
     );
+    assert_eq!(paused.json()["data"]["playing"], false);
     assert!(live.tick(TICK).is_none(), "a paused session does not tick");
     assert_eq!(live.sample().unwrap().t_ps, 32_000_000_000);
 }
@@ -348,6 +349,8 @@ fn pause_lists_what_play_ran_and_step_lists_only_its_own() {
     assert!(text.starts_with("t=64ms (from 0s)\n"), "{text}");
     assert!(text.contains(" nano.D13 high"), "{text}");
     assert!(text.contains(" led1 lit"), "{text}");
+    assert_eq!(paused.json()["data"]["playing"], false);
+    assert_eq!(paused.json()["data"]["from_ps"], 0);
     let stepped = live.run(&command("step 1ms"));
     assert!(stepped.ok(), "{}", stepped.text());
     let stepped_text = stepped.text();
@@ -377,6 +380,107 @@ fn pause_lists_what_play_ran_and_step_lists_only_its_own() {
         again_text.starts_with("t=66ms (from 65ms)\n"),
         "{again_text}"
     );
+}
+
+/// Press during `play`, let the LED light, then release so the next `step` has a change of its own.
+fn play_until_lit(live: &mut Live) {
+    assert!(live.run(&Command::Play).ok());
+    assert!(live.run(&command("press @btn1")).ok());
+    for _ in 0..4 {
+        assert!(live.tick(TICK).is_some());
+    }
+    assert!(live.run(&command("release @btn1")).ok());
+}
+
+fn change_lines(text: &str) -> Vec<&str> {
+    text.lines()
+        .filter(|line| {
+            line.starts_with("  ")
+                && !line.starts_with("  brightness ")
+                && !line.starts_with("  and ")
+        })
+        .collect()
+}
+
+fn assert_play_then_step(reply: &Reply) {
+    let text = reply.text();
+    assert!(text.starts_with("t=74ms (from 0s)\n"), "{text}");
+    let lines = change_lines(&text);
+    let at = |needle: &str| {
+        lines
+            .iter()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("{needle} missing:\n{text}"))
+    };
+    let high = at("nano.D2 high");
+    let lit = at("led1 lit");
+    let low = at("nano.D2 low");
+    assert!(
+        high < lit && lit < low,
+        "play's changes, then the step's:\n{text}"
+    );
+    let body = reply.json();
+    assert_eq!(body["data"]["from_ps"], 0);
+    assert!(body["data"].get("playing").is_none(), "{body}");
+    let changes = body["data"]["changes"].as_array().unwrap();
+    let pos = |kind: &str, want: &dyn Fn(&Value) -> bool| {
+        changes
+            .iter()
+            .position(|change| change["kind"] == kind && want(change))
+            .unwrap_or_else(|| panic!("{kind} missing: {changes:?}"))
+    };
+    let high = pos("edge", &|c| c["ref"] == "@nano.D2" && c["level"] == "high");
+    let lit = pos("led", &|c| c["ref"] == "@led1" && c["state"] == "lit");
+    let low = pos("edge", &|c| c["ref"] == "@nano.D2" && c["level"] == "low");
+    assert!(high < lit && lit < low, "{changes:?}");
+}
+
+#[test]
+fn a_step_after_play_lists_plays_changes_then_its_own_and_pause_is_clear() {
+    let mut live = opened();
+    play_until_lit(&mut live);
+    let stepped = live.run(&command("step 10ms"));
+    assert!(stepped.ok(), "{}", stepped.text());
+    assert_play_then_step(&stepped);
+    let paused = live.run(&Command::Pause);
+    assert!(paused.ok(), "{}", paused.text());
+    assert!(
+        paused.text().starts_with("paused at t="),
+        "{}",
+        paused.text()
+    );
+    assert!(!paused.text().contains("(from "), "{}", paused.text());
+    assert!(!paused.text().contains("led1"), "{}", paused.text());
+    assert_eq!(paused.json()["data"], json!({ "playing": false }));
+}
+
+#[test]
+fn a_viewer_pause_leaves_plays_changes_for_the_next_step() {
+    let mut live = opened();
+    let (played, _) = viewer::answer(&mut live, r#"{"id": 1, "cmd": "play"}"#);
+    assert_eq!(played.json()["data"], json!({ "playing": true }));
+    let (pressed, _) = viewer::answer(&mut live, r#"{"id": 2, "cmd": "press", "ref": "@btn1"}"#);
+    assert!(pressed.ok(), "{}", pressed.text());
+    for _ in 0..4 {
+        assert!(live.tick(TICK).is_some());
+    }
+    let (paused, _) = viewer::answer(&mut live, r#"{"id": 3, "cmd": "pause"}"#);
+    assert_eq!(paused.text(), "paused at t=64ms");
+    assert_eq!(paused.json()["data"], json!({ "playing": false }));
+    assert!(live.run(&command("release @btn1")).ok());
+    let stepped = live.run(&command("step 10ms"));
+    assert!(stepped.ok(), "{}", stepped.text());
+    assert_play_then_step(&stepped);
+}
+
+#[test]
+fn pause_with_nothing_held_says_playing_is_false() {
+    let mut live = opened();
+    let paused = live.run(&Command::Pause);
+    assert!(paused.ok(), "{}", paused.text());
+    assert_eq!(paused.text(), "paused at t=0s");
+    assert_eq!(paused.json()["data"], json!({ "playing": false }));
+    assert_eq!(paused.json()["state"], "paused");
 }
 
 #[test]

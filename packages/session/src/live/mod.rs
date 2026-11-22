@@ -73,8 +73,8 @@ struct Open {
     contacts: BTreeMap<String, (bool, Vec<(u64, bool)>)>,
     /// Time runs at real speed between commands, since a `play`.
     playing: bool,
-    /// What `play`'s ticks ran, from where that stretch started. `pause` returns it.
-    /// A step that cannot run, at a fault or the stop, returns it too.
+    /// What `play`'s ticks ran, from where that stretch started. The CLI's next `pause` or
+    /// `step` lists it and clears it. A page's `pause` leaves it.
     unlisted: Option<Stepped>,
     scene: String,
     stop_ps: u64,
@@ -154,15 +154,9 @@ impl Live {
             (Command::Set(set), Some(open)) => open.set(set),
             (Command::Get(r), Some(open)) => open.get(r).map(Data::Got).map_err(fail),
             (Command::GetWorld(quantity), Some(open)) => open.get_world(*quantity),
-            (Command::Step(step), Some(open)) => open.step(step, during),
+            (Command::Step(step), Some(open)) => open.step_and_list(step, during),
             (Command::Play, Some(open)) => open.play(),
-            (Command::Pause, Some(open)) => {
-                open.playing = false;
-                match open.unlisted.take() {
-                    Some(played) => Ok(Data::Stepped(played)),
-                    None => Ok(Data::Paced { playing: false }),
-                }
-            }
+            (Command::Pause, Some(open)) => open.pause(),
             (Command::Snapshot, Some(open)) => Ok(open.snapshot()),
             (Command::Expect(condition), Some(open)) => open.expect(condition),
         };
@@ -188,10 +182,28 @@ impl Live {
         self.open.as_ref().is_some_and(|open| open.playing)
     }
 
+    /// A page's `pause`. It stops play and leaves what `play` changed for the CLI's next
+    /// `pause` or `step`.
+    pub(crate) fn pause_from_viewer(&mut self) -> Reply {
+        if self.open.is_none() {
+            return self.run(&Command::Pause);
+        }
+        if let Some(open) = self.open.as_mut() {
+            open.playing = false;
+        }
+        self.reply(
+            Data::Paced {
+                playing: false,
+                played: None,
+            },
+            None,
+        )
+    }
+
     /// One `play` tick, `wall` after the one before: advances a playing session by as much
     /// simulated time, up to one [`TICK`](crate::viewer::TICK) at speed 1, or to its stop when
-    /// that is nearer, as a `step` would, and keeps its changes for `pause` to list. Play
-    /// ends at the stop or a fault. Returns the tick's pace while it still plays.
+    /// that is nearer, as a `step` would, and keeps its changes for the CLI's next `pause` or
+    /// `step`. Play ends at the stop or a fault. Returns the tick's pace while it still plays.
     pub fn tick(&mut self, wall: std::time::Duration) -> Option<Pace> {
         let open = self.open.as_mut().filter(|open| open.playing)?;
         let simulated = wall.min(crate::viewer::TICK);
@@ -542,7 +554,20 @@ impl Open {
             Status::Running => {}
         }
         self.playing = true;
-        Ok(Data::Paced { playing: true })
+        Ok(Data::Paced {
+            playing: true,
+            played: None,
+        })
+    }
+
+    /// The CLI's `pause`. Time stops, and what `play` held is listed with `playing` false.
+    /// `from_ps` on that list is where the held stretch started.
+    fn pause(&mut self) -> Outcome {
+        self.playing = false;
+        Ok(Data::Paced {
+            playing: false,
+            played: self.unlisted.take(),
+        })
     }
 
     fn resolve(&self, r: &Ref) -> Result<Target, Error> {

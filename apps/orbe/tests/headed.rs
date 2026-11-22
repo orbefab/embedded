@@ -551,15 +551,38 @@ fn play_then_pause_advances_time_at_wall_speed() {
             break frame["t_ps"].as_u64().unwrap();
         }
     };
+    runtime.orbe(dir.path(), &["press", "@btn1"]).ok();
     std::thread::sleep(Duration::from_millis(300));
     let paused = runtime.orbe(dir.path(), &["pause", "--json"]).ok().json();
     let elapsed = started.elapsed();
     assert_eq!(paused["state"], "paused");
-    assert!(
-        paused["data"]["changes"].is_array(),
-        "pause lists what play ran: {paused}"
+    assert_eq!(paused["data"]["playing"], false);
+    assert_eq!(
+        paused["data"]["from_ps"], 0,
+        "the listed stretch is this play, from t=0: {paused}"
     );
+    let changes = paused["data"]["changes"]
+        .as_array()
+        .unwrap_or_else(|| panic!("pause lists what play ran: {paused}"));
     let t = paused["t_ps"].as_u64().unwrap();
+    assert!(
+        changes.iter().any(|change| {
+            change["kind"] == "edge"
+                && change["ref"] == "@nano.D2"
+                && change["level"] == "high"
+                && change["at_ps"].as_u64().is_some_and(|at| at <= t)
+        }),
+        "pause lists the press from this play, through t={t}: {paused}"
+    );
+    assert!(
+        changes.iter().all(|change| {
+            change["at_ps"]
+                .as_u64()
+                .or_else(|| change["by_ps"].as_u64())
+                .is_some_and(|at| at <= t)
+        }),
+        "every listed change happened during the play, through t={t}: {paused}"
+    );
     // Slow motion is what a tick costs when the engine takes longer than the slice it
     // simulates, so the floor is only that time moved after the first frame. The ceiling is
     // the measured interval plus one tick. The loop applies a due tick before it reads

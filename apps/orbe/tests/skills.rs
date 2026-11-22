@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use harness::{Run, Runtime, wait_until};
 use orbe_scene::Files;
+use serde_json::Value;
 
 fn skill(name: &str) -> String {
     let runtime = Runtime::new();
@@ -76,6 +77,19 @@ fn shell(runtime: &Runtime, dir: &Path, line: &str) -> Run {
         .output()
         .unwrap();
     Run::new(output)
+}
+
+/// One JSON envelope on stdout, and nothing on stderr.
+fn one_envelope(run: &Run, what: &str) -> Value {
+    assert_eq!(
+        run.stdout.lines().count(),
+        1,
+        "{what} prints one line, got {}",
+        run.stdout
+    );
+    assert!(run.stderr.is_empty(), "{what}: {}", run.stderr);
+    serde_json::from_str(run.stdout.trim())
+        .unwrap_or_else(|error| panic!("{what}: {error}: {}", run.stdout))
 }
 
 /// Applies a `diff` block: each `-` line of the file becomes the `+` line after it.
@@ -854,9 +868,9 @@ fn the_check_findings_core_states_are_the_ones_orbe_reports() {
     );
 }
 
-/// A flag before the command name runs that command, with the flag after the name, as typed,
-/// and drops only a repeat clap refuses. The line's own result comes back, and an `add`
-/// writes the folder its `-C` names.
+/// A flag before the command name runs that command. `--json` prints one JSON envelope,
+/// `--session` opens that session, and an `add` writes the folder its `-C` names.
+/// The same session name twice counts once. Two names are a usage error.
 #[test]
 fn a_flag_before_the_command_runs_that_command() {
     let project = worked_example();
@@ -957,6 +971,13 @@ fn a_flag_before_the_command_runs_that_command() {
         (
             "--session a --session b open",
             "open --session a --session b",
+            2,
+            None,
+            "error[usage]: the argument '--session <NAME>' cannot be used multiple times",
+        ),
+        (
+            "--session a --session a open",
+            "open --session a",
             0,
             None,
             "",
@@ -984,7 +1005,144 @@ fn a_flag_before_the_command_runs_that_command() {
                 "orbe {line} copies {id} into {folder}"
             );
         }
+        if code == 0 && written.split_whitespace().any(|word| word == "--json") {
+            let reply = one_envelope(&run, &format!("orbe {written}"));
+            assert!(reply.get("ok").is_some(), "orbe {written}: {reply}");
+        }
+        if code == 0 {
+            let mut session = None;
+            let mut words = written.split_whitespace();
+            while let Some(word) = words.next() {
+                let name = if word == "--session" {
+                    words.next().unwrap()
+                } else if let Some(name) = word.strip_prefix("--session=") {
+                    name
+                } else {
+                    continue;
+                };
+                assert_eq!(session.unwrap_or(name), name, "orbe {written}");
+                session = Some(name);
+            }
+            if let Some(name) = session {
+                let socket = format!("{name}.sock");
+                assert!(
+                    runtime.sockets().iter().any(|sock| sock == &socket),
+                    "orbe {written} opens `{name}`, sockets {:?}",
+                    runtime.sockets()
+                );
+            }
+        }
     }
+    runtime.orbe(dir, &["close", "--all"]).ok();
+}
+
+/// `orbe --json open <scene>` prints the open, and nothing else.
+#[test]
+fn a_flag_before_open_prints_one_json_envelope() {
+    let project = worked_example();
+    let dir = project.path();
+    let runtime = Runtime::new();
+    let run = shell(&runtime, dir, "orbe --json open scene.jsonc");
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let reply = one_envelope(&run, "orbe --json open scene.jsonc");
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert_eq!(reply["data"]["scene"], "scene.jsonc", "{reply}");
+    assert_eq!(reply["state"], "paused", "{reply}");
+    assert_eq!(reply["t_ps"], 0, "{reply}");
+    runtime.orbe(dir, &["close", "--all"]).ok();
+}
+
+/// A word that is not a flag is left for clap. A flag in front of `--` stays a flag.
+/// The same session name on both sides of a live command counts once, and two names do not.
+#[test]
+fn only_a_flag_moves_ahead_of_the_command() {
+    let project = worked_example();
+    let dir = project.path();
+    let runtime = Runtime::new();
+    let usage = |line: &str| {
+        let run = shell(&runtime, dir, &format!("orbe {line}"));
+        let printed = format!("{}{}", run.stdout, run.stderr);
+        assert_eq!(run.code, 2, "orbe {line}: {printed}");
+        let reply = one_envelope(&run, &format!("orbe {line}"));
+        assert_eq!(reply["ok"], false, "orbe {line}: {reply}");
+        assert_eq!(reply["error"]["code"], "usage", "orbe {line}: {reply}");
+        assert!(
+            !reply["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("no scene file"),
+            "orbe {line}: {reply}"
+        );
+        reply
+    };
+    let help = usage("--json help open");
+    assert!(
+        help["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unexpected argument '--json'"),
+        "{help}"
+    );
+    let shifted = usage("--json scene.jsonc check");
+    assert!(
+        shifted["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unexpected argument '--json'"),
+        "{shifted}"
+    );
+
+    let conflict = shell(&runtime, dir, "orbe --session a open --session b");
+    assert_eq!(conflict.code, 2, "{}{}", conflict.stdout, conflict.stderr);
+    assert!(conflict.stdout.is_empty(), "{}", conflict.stdout);
+    assert!(
+        conflict.stderr.starts_with(
+            "error[usage]: the argument '--session <NAME>' cannot be used multiple times"
+        ),
+        "{}",
+        conflict.stderr
+    );
+    assert!(
+        runtime
+            .sockets()
+            .iter()
+            .all(|sock| sock != "a.sock" && sock != "b.sock"),
+        "a conflicting session opens nothing, sockets {:?}",
+        runtime.sockets()
+    );
+
+    let same = shell(&runtime, dir, "orbe --session a open --session a");
+    assert_eq!(same.code, 0, "{}{}", same.stdout, same.stderr);
+    assert!(same.stdout.starts_with("opened "), "{}", same.stdout);
+    assert!(
+        runtime.sockets().iter().any(|sock| sock == "a.sock"),
+        "the one name opens session a, sockets {:?}",
+        runtime.sockets()
+    );
+
+    let search = shell(&runtime, dir, "orbe --json search -- --foo");
+    assert_eq!(search.code, 0, "{}{}", search.stdout, search.stderr);
+    let found = one_envelope(&search, "orbe --json search -- --foo");
+    assert_eq!(found["ok"], true, "{found}");
+    assert!(found["data"].get("groups").is_none(), "{found}");
+    assert_eq!(
+        found["data"]["parts"].as_array().unwrap().len(),
+        0,
+        "{found}"
+    );
+    assert_eq!(
+        found["data"]["blocks"].as_array().unwrap().len(),
+        0,
+        "{found}"
+    );
+
+    let missing = shell(&runtime, dir, "orbe --json check -- x");
+    assert_eq!(missing.code, 3, "{}{}", missing.stdout, missing.stderr);
+    let reply = one_envelope(&missing, "orbe --json check -- x");
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert_eq!(reply["error"]["code"], "io_error", "{reply}");
+    assert_eq!(reply["error"]["message"], "no scene file at x", "{reply}");
+
     runtime.orbe(dir, &["close", "--all"]).ok();
 }
 
