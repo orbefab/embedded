@@ -274,7 +274,7 @@ jobs:
           cache-save: ${{ env.CACHE_SAVE }}
 
       - name: Site on vite preview
-        run: scripts/check-site.sh --first-deploy --servers vite
+        run: scripts/check-site.sh --servers vite
 
   engines:
     name: engines
@@ -298,7 +298,7 @@ jobs:
       - name: Build the viewer page and the site
         run: |
           pnpm --filter @orbe/viewer-page build
-          scripts/site.sh --first-deploy
+          scripts/site.sh
 
       - name: Firefox and WebKit
         run: scripts/check-engines.sh
