@@ -1,7 +1,7 @@
 //! One `orbe add` at a time in a project. A run holds an exclusive OS lock on the project
 //! folder itself from before recovery to after cleanup, and a second run does not wait for it.
-//! Locking the folder writes nothing, so `--diff` works in a project it cannot write, and no
-//! lock file can be deleted, linked elsewhere or left behind.
+//! Locking the folder writes nothing, and no lock file can be deleted, linked elsewhere or
+//! left behind.
 
 use std::fs::{File, TryLockError};
 use std::path::Path;

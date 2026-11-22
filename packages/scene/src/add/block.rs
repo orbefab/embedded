@@ -53,18 +53,17 @@ pub(super) fn named(dir: Option<&Path>, request: &Request) -> Option<Result<Bloc
         let id = raw.split('@').next().unwrap_or(raw);
         Some((raw, find(id)?))
     })?;
-    let alone = request.ids.len() == 1 && !request.overwrite && !request.diff && !request.relock;
+    let alone = request.ids.len() == 1;
     Some(if raw != block.id {
-        let command =
-            project::add_writing(&project::add_command(dir), &[block.id.to_string()], false)
-                .expect("a block id");
+        let command = project::add_writing(&project::add_command(dir), &[block.id.to_string()])
+            .expect("a block id");
         Err(format!(
             "`{}` is a Block, and orbe installs the one version of it built in. run `{command}`",
             block.id
         ))
     } else if !alone {
         Err(format!(
-            "`{}` is a Block. orbe installs a Block on its own, with no other id and no --overwrite, --diff or --relock",
+            "`{}` is a Block. orbe installs a Block on its own, with no other id",
             block.id
         ))
     } else {
@@ -100,7 +99,7 @@ pub(super) fn install(
     let add = project::add_command(dir);
     let again = Again::new(
         dir,
-        project::add_writing(&add, &[block.id.to_string()], false).expect("a block id"),
+        project::add_writing(&add, &[block.id.to_string()]).expect("a block id"),
     );
     let opened = Folder::open_chosen(root).map_err(|error| io_at(root, error))?;
     let mut present = BTreeSet::new();
@@ -129,9 +128,6 @@ pub(super) fn install(
     }
     let parts = Request {
         ids: block.part_ids()?,
-        overwrite: false,
-        diff: false,
-        relock: false,
     };
     let parts = match super::run_in(dir, &parts, fault)? {
         Reply::Add(reply) => reply,
@@ -195,7 +191,6 @@ fn in_the_way(block: &Block, rel: &str, again: &Again) -> Refusal {
         cmd = project::add_writing(
             &project::add_command(Some(Path::new(block.id))),
             &[block.id.to_string()],
-            false,
         )
         .expect("a block id"),
     );

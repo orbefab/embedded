@@ -4,7 +4,7 @@ mod common;
 
 use std::fs;
 
-use common::{lock_line, locked_ids, project};
+use common::project;
 use orbe_scene::Files;
 use serde_json::Value;
 
@@ -158,54 +158,16 @@ fn two_buttons_with_nets_names_ground_gnd() {
     }
 }
 
+/// An edit to a copied part is the project's. Check reports nothing about it, and the
+/// netlist uses the edited value.
 #[test]
-fn an_edited_nano_copy_is_modified_and_still_reads() {
+fn an_edited_copy_checks_and_the_run_uses_it() {
     let project = project("nano-button");
-    let file = project.path().join("parts/nano-board/part.jsonc");
-    let text = fs::read_to_string(&file).unwrap();
-    fs::write(
-        &file,
-        text.replacen(
-            "\"r_l\": { \"at\": [8.5, 3.3, 4.14] }",
-            "\"r_l\": { \"at\": [9.0, 3.3, 4.14] }",
-            1,
-        ),
-    )
-    .unwrap();
-    let netlist = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc")).unwrap();
-    assert_eq!(netlist.modified, vec!["nano-board".to_string()]);
-}
-
-#[test]
-fn a_sealed_edit_with_its_lock_line_rewritten_is_still_modified() {
-    let project = project("nano-button");
-    let file = project.path().join("parts/led-5mm/part.jsonc");
-    let text = fs::read_to_string(&file).unwrap();
-    fs::write(
-        &file,
-        text.replacen("\"value\": 2.115", "\"value\": 1.5", 1),
-    )
-    .unwrap();
-    let lock = project.path().join("parts.lock");
-    let lines: String = fs::read_to_string(&lock)
-        .unwrap()
-        .lines()
-        .map(|l| if l.starts_with("led-5mm ") { lock_line(project.path(), "led-5mm") } else { l.to_string() } + "\n")
-        .collect();
-    fs::write(&lock, lines).unwrap();
-    let found = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc"))
-        .err()
-        .unwrap();
-    assert_eq!(found.len(), 1, "{found:#?}");
-    assert_eq!(found[0].code, orbe_scene::Code::PartModified);
-    assert_eq!(found[0].file, "parts/led-5mm/part.jsonc");
-    assert!(
-        found[0]
-            .message
-            .contains("`params.color.choices.red.sets./series_resistance.value`"),
-        "{}",
-        found[0].message
-    );
+    edit_led_resistance(project.path());
+    let netlist = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc"))
+        .expect("an edited copy checks");
+    let led = engine_part(&netlist, "led1");
+    assert_eq!(led["series_resistance"]["value"].as_f64(), Some(1000.0));
 }
 
 #[test]
@@ -242,35 +204,6 @@ fn scene_errors(root: &std::path::Path) -> Vec<orbe_scene::Diagnostic> {
         .err()
         .unwrap_or_else(|| panic!("scene read with no findings"))
 }
-
-/// The 1-based line of `id` in the project's `parts.lock`.
-fn lock_row(root: &std::path::Path, id: &str) -> usize {
-    fs::read_to_string(root.join("parts.lock"))
-        .unwrap()
-        .lines()
-        .position(|l| l.starts_with(&format!("{id} ")))
-        .unwrap()
-        + 1
-}
-
-fn rewrite_lock(root: &std::path::Path, id: &str, version: &str, registry: &str) {
-    let hash = orbe_scene::folder_hash(&root.join("parts").join(id)).unwrap();
-    let new_line = format!("{id} {version} {registry} {hash}");
-    let path = root.join("parts.lock");
-    let text = fs::read_to_string(&path).unwrap();
-    let lines: Vec<String> = text
-        .lines()
-        .map(|line| {
-            if line.split_whitespace().next() == Some(id) {
-                new_line.clone()
-            } else {
-                line.to_string()
-            }
-        })
-        .collect();
-    fs::write(&path, lines.join("\n") + "\n").unwrap();
-}
-
 fn edit_led_resistance(root: &std::path::Path) {
     let file = root.join("parts/led-5mm/part.jsonc");
     let text = fs::read_to_string(&file).unwrap();
@@ -280,453 +213,6 @@ fn edit_led_resistance(root: &std::path::Path) {
     )
     .unwrap();
 }
-
-/// Writes `version` into the copy and rewrites its lock line to match those bytes.
-fn hold(root: &std::path::Path, id: &str, version: &str) {
-    let file = root.join("parts").join(id).join("part.jsonc");
-    let text = fs::read_to_string(&file).unwrap();
-    let carried = orbe_scene::card(id).unwrap().version;
-    let edited = text.replacen(
-        &format!("\"version\": \"{carried}\""),
-        &format!("\"version\": \"{version}\""),
-        1,
-    );
-    assert_ne!(text, edited, "{id}");
-    fs::write(&file, edited).unwrap();
-    rewrite_lock(root, id, version, orbe_scene::REGISTRY);
-}
-
-#[test]
-fn a_sealed_edit_with_a_foreign_lock_version_is_part_modified() {
-    let project = project("nano-button");
-    edit_led_resistance(project.path());
-    rewrite_lock(project.path(), "led-5mm", "9.9.9", orbe_scene::REGISTRY);
-    let found = scene_errors(project.path());
-    let modified: Vec<_> = found
-        .iter()
-        .filter(|d| d.code == orbe_scene::Code::PartModified)
-        .collect();
-    assert_eq!(modified.len(), 1, "{found:#?}");
-    let d = modified[0];
-    assert_eq!(d.file, "parts/led-5mm/part.jsonc");
-    assert_eq!((d.line, d.column), (27, 46));
-    assert!(
-        d.message
-            .contains("`params.color.choices.red.sets./series_resistance.value`"),
-        "{}",
-        d.message
-    );
-    assert!(d.message.contains("led-5mm@0.1.1"), "{}", d.message);
-    assert!(d.hint.contains("orbe add"), "{}", d.hint);
-}
-
-#[test]
-fn a_lock_version_outside_the_catalog_is_an_error() {
-    let project = project("nano-button");
-    rewrite_lock(project.path(), "led-5mm", "9.9.9", orbe_scene::REGISTRY);
-    let found = scene_errors(project.path());
-    assert_eq!(found.len(), 1, "{found:#?}");
-    assert_eq!(found[0].code, orbe_scene::Code::PartModified);
-    assert_eq!(found[0].file, "parts.lock");
-    assert_eq!(
-        (found[0].line, found[0].column),
-        (lock_row(project.path(), "led-5mm"), 1)
-    );
-    assert!(found[0].message.contains("9.9.9"), "{}", found[0].message);
-    assert!(
-        found[0].message.contains("led-5mm@0.1.1"),
-        "{}",
-        found[0].message
-    );
-    assert!(!found[0].hint.is_empty());
-}
-
-#[test]
-fn a_copy_that_matches_its_lock_and_not_the_catalog_is_outdated() {
-    let project = project("nano-button");
-    hold(project.path(), "led-5mm", "0.0.9");
-    hold(project.path(), "resistor-axial", "0.0.8");
-    let found = scene_errors(project.path());
-    assert!(
-        found
-            .iter()
-            .all(|d| d.code == orbe_scene::Code::PartOutdated),
-        "{found:#?}"
-    );
-    assert_eq!(found.len(), 2, "{found:#?}");
-    assert!(found.iter().all(|d| d.file == "parts.lock"), "{found:#?}");
-    assert!(found.iter().all(|d| d.code.severity() == "error"));
-    let mut messages: Vec<_> = found.iter().map(|d| d.message.as_str()).collect();
-    messages.sort_unstable();
-    assert_eq!(
-        messages,
-        [
-            "this orbe carries `led-5mm@0.1.1` and the project holds `led-5mm@0.0.9`",
-            "this orbe carries `resistor-axial@0.1.1` and the project holds `resistor-axial@0.0.8`",
-        ]
-    );
-    assert_eq!(found[0].hint, found[1].hint);
-    assert!(
-        found[0].hint.contains("led-5mm resistor-axial --overwrite"),
-        "{}",
-        found[0].hint
-    );
-    assert_eq!(
-        found[0].hint.matches("orbe add").count(),
-        1,
-        "{}",
-        found[0].hint
-    );
-}
-
-#[test]
-fn a_newer_locked_copy_is_part_newer_and_names_no_add() {
-    for version in ["0.1.2", "0.2.0", "1.0.0"] {
-        let project = project("nano-button");
-        hold(project.path(), "led-5mm", version);
-        let found = scene_errors(project.path());
-        assert_eq!(found.len(), 1, "{version}: {found:#?}");
-        let d = &found[0];
-        assert_eq!(d.code, orbe_scene::Code::PartNewer, "{version}");
-        assert_eq!(d.file, "parts.lock");
-        assert_eq!(
-            d.message,
-            format!("this project holds `led-5mm@{version}` and this orbe carries `led-5mm@0.1.1`")
-        );
-        assert_eq!(d.hint, "this project needs a newer orbe");
-        assert!(!d.hint.contains("orbe add"), "{}", d.hint);
-    }
-}
-
-#[test]
-fn a_mixed_hint_names_only_the_older_ids() {
-    let project = project("nano-button");
-    hold(project.path(), "led-5mm", "1.0.0");
-    hold(project.path(), "resistor-axial", "0.0.8");
-    let found = scene_errors(project.path());
-    assert_eq!(found.len(), 2, "{found:#?}");
-    let older = found
-        .iter()
-        .find(|d| d.message.contains("resistor-axial"))
-        .unwrap();
-    let newer = found
-        .iter()
-        .find(|d| d.message.contains("led-5mm"))
-        .unwrap();
-    assert_eq!(older.code, orbe_scene::Code::PartOutdated);
-    assert_eq!(
-        older.message,
-        "this orbe carries `resistor-axial@0.1.1` and the project holds `resistor-axial@0.0.8`"
-    );
-    assert!(
-        older.hint.contains("resistor-axial --overwrite"),
-        "{}",
-        older.hint
-    );
-    assert_eq!(older.hint.matches("orbe add").count(), 1, "{}", older.hint);
-    assert!(!older.hint.contains("led-5mm"), "{}", older.hint);
-    assert_eq!(newer.code, orbe_scene::Code::PartNewer);
-    assert_eq!(
-        newer.message,
-        "this project holds `led-5mm@1.0.0` and this orbe carries `led-5mm@0.1.1`"
-    );
-    assert_eq!(newer.hint, "this project needs a newer orbe");
-    assert!(!newer.hint.contains("orbe add"), "{}", newer.hint);
-}
-
-#[test]
-fn a_lock_from_another_registry_at_another_version_names_the_registry() {
-    for id in ["led-5mm", "nano-board"] {
-        let project = project("nano-button");
-        hold(project.path(), id, "0.0.9");
-        rewrite_lock(project.path(), id, "0.0.9", "@acme");
-        let found = scene_errors(project.path());
-        assert_eq!(found.len(), 1, "{id}: {found:#?}");
-        let d = &found[0];
-        assert_eq!(d.code, orbe_scene::Code::PartModified, "{id}");
-        assert_eq!(d.file, "parts.lock");
-        assert!(
-            d.message
-                .contains(&format!("lists `{id}` at `0.0.9` from `@acme`")),
-            "{id}: {}",
-            d.message
-        );
-        assert!(
-            d.message
-                .contains(&format!("`{id}@{}`", orbe_scene::card(id).unwrap().version)),
-            "{id}: {}",
-            d.message
-        );
-    }
-}
-
-#[test]
-fn an_outdated_board_is_an_error_and_not_a_note() {
-    let project = project("nano-button");
-    hold(project.path(), "nano-board", "0.0.9");
-    let found = scene_errors(project.path());
-    assert!(
-        found
-            .iter()
-            .all(|d| d.code == orbe_scene::Code::PartOutdated),
-        "{found:#?}"
-    );
-    assert_eq!(found.len(), 1, "{found:#?}");
-    assert_eq!(
-        found[0].message,
-        "this orbe carries `nano-board@0.1.2` and the project holds `nano-board@0.0.9`"
-    );
-}
-
-#[test]
-fn bytecode_does_not_make_orbe_add_replace_a_sealed_copy() {
-    let project = project("nano-button");
-    let led = project.path().join("parts/led-5mm");
-    fs::write(led.join("a.pyc"), b"bytecode").unwrap();
-    fs::create_dir(led.join("__pycache__")).unwrap();
-    fs::write(
-        led.join("__pycache__").join("led.cpython-312.pyc"),
-        b"cached",
-    )
-    .unwrap();
-    let before = fs::read(led.join("part.jsonc")).unwrap();
-    let reply = orbe_scene::add_parts(
-        Some(project.path()),
-        &orbe_scene::Request {
-            ids: vec!["led-5mm".into()],
-            overwrite: false,
-            diff: false,
-            relock: false,
-        },
-    )
-    .unwrap();
-    let text = reply.text();
-    assert_eq!(reply.code(), 0, "{text}");
-    assert!(text.contains("skipped parts/led-5mm 0.1.1"), "{text}");
-    assert!(text.contains("parts.lock unchanged"), "{text}");
-    assert_eq!(fs::read(led.join("part.jsonc")).unwrap(), before);
-    assert!(led.join("a.pyc").is_file());
-}
-
-#[test]
-fn bytecode_in_a_sealed_copy_is_not_part_modified_and_an_author_file_is() {
-    let project = project("nano-button");
-    let led = project.path().join("parts/led-5mm");
-    fs::write(led.join("a.pyc"), b"bytecode").unwrap();
-    fs::create_dir(led.join("__pycache__")).unwrap();
-    fs::write(
-        led.join("__pycache__").join("led.cpython-312.pyc"),
-        b"cached",
-    )
-    .unwrap();
-    assert!(
-        orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc")).is_ok(),
-        "bytecode is not part of the sealed copy"
-    );
-
-    fs::write(led.join("notes.txt"), b"an author file\n").unwrap();
-    let found = scene_errors(project.path());
-    assert!(
-        found
-            .iter()
-            .any(|d| d.code == orbe_scene::Code::PartModified && d.message.contains("notes.txt")),
-        "{found:#?}"
-    );
-    assert!(
-        found
-            .iter()
-            .all(|d| !d.message.contains(".pyc") && !d.message.contains("__pycache__")),
-        "{found:#?}"
-    );
-}
-
-#[test]
-fn the_same_version_with_different_bytes_is_part_modified() {
-    let project = project("nano-button");
-    edit_led_resistance(project.path());
-    rewrite_lock(project.path(), "led-5mm", "0.1.1", orbe_scene::REGISTRY);
-    let found = scene_errors(project.path());
-    assert_eq!(found.len(), 1, "{found:#?}");
-    assert_eq!(found[0].code, orbe_scene::Code::PartModified);
-    assert!(
-        found[0].message.contains("differs from `led-5mm@0.1.1`"),
-        "{}",
-        found[0].message
-    );
-    assert!(
-        found[0].hint.contains("orbe add") && found[0].hint.contains("led-5mm --overwrite"),
-        "{}",
-        found[0].hint
-    );
-}
-
-#[test]
-fn a_part_id_locked_from_two_registries_is_an_error() {
-    let project = project("nano-button");
-    let path = project.path().join("parts.lock");
-    let mut text = fs::read_to_string(&path).unwrap();
-    let line = text
-        .lines()
-        .find(|l| l.starts_with("led-5mm "))
-        .unwrap()
-        .replace(orbe_scene::REGISTRY, "@acme");
-    text.push_str(&line);
-    text.push('\n');
-    fs::write(&path, &text).unwrap();
-    let found = scene_errors(project.path());
-    assert_eq!(found.len(), 1, "{found:#?}");
-    assert_eq!(found[0].code, orbe_scene::Code::Duplicate);
-    assert_eq!(found[0].file, "parts.lock");
-    assert_eq!((found[0].line, found[0].column), (text.lines().count(), 1));
-    assert!(
-        found[0].message.contains("second line for `led-5mm`"),
-        "{}",
-        found[0].message
-    );
-    assert!(
-        found[0].hint.contains("parts/led-5mm/"),
-        "{}",
-        found[0].hint
-    );
-}
-
-#[test]
-fn a_lock_registry_outside_the_catalog_is_an_error() {
-    let project = project("nano-button");
-    rewrite_lock(project.path(), "led-5mm", "0.1.1", "@acme");
-    let found = scene_errors(project.path());
-    assert_eq!(found.len(), 1, "{found:#?}");
-    assert_eq!(found[0].code, orbe_scene::Code::PartModified);
-    assert_eq!(found[0].file, "parts.lock");
-    assert_eq!(
-        (found[0].line, found[0].column),
-        (lock_row(project.path(), "led-5mm"), 1)
-    );
-    assert!(
-        found[0].message.contains("from `@acme`"),
-        "{}",
-        found[0].message
-    );
-    assert!(
-        found[0].message.contains("led-5mm@0.1.1"),
-        "{}",
-        found[0].message
-    );
-    assert!(!found[0].hint.is_empty());
-}
-
-#[test]
-fn a_lock_names_a_registry_by_name_not_by_url() {
-    let project = project("nano-button");
-    let lock = fs::read_to_string(project.path().join("parts.lock")).unwrap();
-    assert!(
-        lock.lines()
-            .all(|line| line.split(' ').nth(2) == Some(orbe_scene::REGISTRY)),
-        "{lock}"
-    );
-    assert_eq!(orbe_scene::REGISTRY, "@orbefab");
-    rewrite_lock(
-        project.path(),
-        "led-5mm",
-        "0.1.1",
-        "https://example.com/r/{name}.json",
-    );
-    let found = scene_errors(project.path());
-    assert_eq!(found[0].code, orbe_scene::Code::Syntax, "{found:#?}");
-    assert_eq!(found[0].file, "parts.lock");
-    assert!(
-        found[0].message.contains("@<registry>"),
-        "{}",
-        found[0].message
-    );
-    assert!(found[0].hint.contains("--relock"), "{}", found[0].hint);
-}
-
-#[test]
-fn deleting_a_sealed_model_does_not_unseal_the_part() {
-    let project = project("nano-button");
-    let file = project.path().join("parts/resistor-axial/part.jsonc");
-    let text = fs::read_to_string(&file).unwrap();
-    let from = "  \"model\": {\n    \"kind\": \"resistor\",\n    \"ratings\": { \"power\": { \"value\": 0.25, \"unit\": \"W\", \"source\": \"user\" } },\n  },";
-    let edited = text.replacen(
-        from,
-        "  \"parts\": { \"r\": { \"type\": \"resistor-0603\", \"resistance\": \"1\" } },",
-        1,
-    );
-    assert_ne!(text, edited);
-    fs::write(&file, edited).unwrap();
-    let found = scene_errors(project.path());
-    let modified: Vec<_> = found
-        .iter()
-        .filter(|d| d.code == orbe_scene::Code::PartModified)
-        .collect();
-    assert_eq!(modified.len(), 1, "{found:#?}");
-    assert_eq!(modified[0].file, "parts/resistor-axial/part.jsonc");
-    assert_eq!((modified[0].line, modified[0].column), (18, 3));
-    assert!(
-        modified[0].message.contains("resistor-axial@0.1.1"),
-        "{}",
-        modified[0].message
-    );
-    assert!(
-        modified[0].message.contains("differs"),
-        "{}",
-        modified[0].message
-    );
-    assert!(
-        modified[0].hint.contains("orbe add"),
-        "{}",
-        modified[0].hint
-    );
-}
-
-#[test]
-fn a_symlink_loop_in_a_sealed_copy_is_an_error() {
-    let project = project("nano-button");
-    let folder = project.path().join("parts/led-5mm");
-    std::os::unix::fs::symlink(".", folder.join("loop")).unwrap();
-    edit_led_resistance(project.path());
-    let found = scene_errors(project.path());
-    let io: Vec<_> = found
-        .iter()
-        .filter(|d| d.code == orbe_scene::Code::Io)
-        .collect();
-    let modified: Vec<_> = found
-        .iter()
-        .filter(|d| d.code == orbe_scene::Code::PartModified)
-        .collect();
-    assert_eq!(io.len(), 1, "{found:#?}");
-    assert_eq!(io[0].file, "parts/led-5mm/part.jsonc");
-    assert_eq!((io[0].line, io[0].column), (1, 1));
-    assert!(
-        io[0].message.contains("cannot hash parts/led-5mm"),
-        "{}",
-        io[0].message
-    );
-    assert!(io[0].hint.contains("link"), "{}", io[0].hint);
-    assert_eq!(modified.len(), 1, "{found:#?}");
-    assert_eq!((modified[0].line, modified[0].column), (27, 46));
-    assert!(
-        modified[0].message.contains("led-5mm@0.1.1"),
-        "{}",
-        modified[0].message
-    );
-}
-
-#[test]
-fn a_symlink_loop_without_an_edit_does_not_pass() {
-    let project = project("nano-button");
-    let folder = project.path().join("parts/led-5mm");
-    std::os::unix::fs::symlink(".", folder.join("loop")).unwrap();
-    let found = scene_errors(project.path());
-    assert!(
-        found
-            .iter()
-            .any(|d| d.code == orbe_scene::Code::Io && d.hint.contains("link")),
-        "{found:#?}"
-    );
-}
-
 #[test]
 fn a_passed_through_bounce_default_matches_setting_it() {
     let direct = project("nano-button");
@@ -968,32 +454,11 @@ fn a_deleted_copy_is_only_part_missing() {
     assert_eq!(found[0].code, orbe_scene::Code::PartMissing);
     assert_eq!(found[0].file, "scene.jsonc");
     assert_eq!((found[0].line, found[0].column), (9, 23));
+    assert_eq!(found[0].message, "part `led-5mm` is not in parts/");
     assert_eq!(
         found[0].hint,
         format!("run `orbe add -C {} led-5mm`", project.path().display())
     );
-}
-
-#[test]
-fn a_lock_line_the_scene_no_longer_uses_is_not_checked() {
-    let project = project("nano-button");
-    fs::remove_dir_all(project.path().join("parts/led-5mm")).unwrap();
-    let scene = project.path().join("scene.jsonc");
-    let mut text = fs::read_to_string(&scene).unwrap();
-    for (from, to) in [
-        (
-            "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },",
-            "",
-        ),
-        ("[\"r1.b\", \"led1.anode\"],", "[\"r1.b\", \"nano.GND\"],"),
-        ("[\"led1.cathode\", \"nano.GND\"],", ""),
-    ] {
-        assert!(text.contains(from), "{from}");
-        text = text.replacen(from, to, 1);
-    }
-    fs::write(&scene, text).unwrap();
-    let netlist = orbe_scene::read(&Files::disk(), &scene).unwrap_or_else(|d| panic!("{d:#?}"));
-    assert_eq!(netlist.parts, 18);
 }
 
 fn unreadable(path: &std::path::Path) {
@@ -1086,59 +551,6 @@ fn an_unreadable_part_directory_is_one_io_error() {
     );
     assert!(!found[0].hint.contains("--overwrite"), "{}", found[0].hint);
 }
-
-#[test]
-fn an_unreadable_subdirectory_is_one_io_error() {
-    if common::mode_000_reads() {
-        return;
-    }
-    let project = project("nano-button");
-    let notes = project.path().join("parts/led-5mm/notes");
-    fs::create_dir(&notes).unwrap();
-    unreadable(&notes);
-    let _open = OpenDir(notes.clone());
-    let found = scene_errors(project.path());
-    assert_eq!(found.len(), 1, "{found:#?}");
-    assert_eq!(found[0].code, orbe_scene::Code::Io);
-    assert!(
-        found[0]
-            .message
-            .contains("cannot read parts/led-5mm/notes:"),
-        "{}",
-        found[0].message
-    );
-    assert_chmod_dir(&found[0].hint, &notes);
-    assert!(
-        !found[0].message.contains("cannot hash"),
-        "{}",
-        found[0].message
-    );
-}
-
-#[test]
-fn an_unreadable_file_in_a_copy_is_one_io_error_that_names_it() {
-    if common::mode_000_reads() {
-        return;
-    }
-    let project = project("nano-button");
-    let extra = project.path().join("parts/led-5mm/datasheet.txt");
-    fs::write(&extra, "kept").unwrap();
-    unreadable(&extra);
-    let found = scene_errors(project.path());
-    assert_eq!(found.len(), 1, "{found:#?}");
-    assert_eq!(found[0].code, orbe_scene::Code::Io);
-    assert!(
-        found[0]
-            .message
-            .contains("cannot read parts/led-5mm/datasheet.txt"),
-        "{}",
-        found[0].message
-    );
-    assert_chmod_names(&found[0].hint, &extra);
-    assert!(!found[0].hint.contains("link"), "{}", found[0].hint);
-}
-
-/// The chmod in `hint`, run from the current directory, names `file`.
 fn assert_chmod_names(hint: &str, file: &std::path::Path) {
     assert_chmod_mode(hint, file, "u+r");
 }
@@ -1473,7 +885,19 @@ fn required_args(part: &orbe_scene::Card) -> String {
 #[test]
 fn every_catalog_part_file_reads_without_a_finding() {
     let project = project("nano-button");
-    let ids = locked_ids(project.path());
+    let mut ids: Vec<String> = fs::read_dir(project.path().join("parts"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().to_string())
+        .filter(|id| {
+            project
+                .path()
+                .join("parts")
+                .join(id)
+                .join("part.jsonc")
+                .is_file()
+        })
+        .collect();
+    ids.sort();
     let catalog: Vec<String> = fs::read_dir(common::repo().join("parts"))
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
@@ -1481,7 +905,7 @@ fn every_catalog_part_file_reads_without_a_finding() {
     assert_eq!(
         ids.len(),
         catalog.len(),
-        "the project locks every catalog part"
+        "the project holds every catalog part"
     );
     let summaries = orbe_scene::catalog_cards();
     let parts: String = ids
@@ -1508,7 +932,7 @@ fn every_catalog_part_file_reads_without_a_finding() {
     for id in &ids {
         assert!(
             catalog.contains(id),
-            "{id} is in the project's parts.lock but not in parts/"
+            "{id} is in parts/ but not in the catalog"
         );
     }
 }

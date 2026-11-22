@@ -1,6 +1,5 @@
 //! Embeds the repo's `parts/` folder, the catalog this binary was built with, and its `blocks/`
-//! folder, the Blocks `orbe add` installs. The reader compares a project's sealed copies against
-//! the catalog to name the field an edit changed, and reads a Block's parts from it. A wasm32
+//! folder, the Blocks `orbe add` installs. A Block reads its parts from that catalog. A wasm32
 //! build is a browser's, which is handed the parts it runs from a registry, so it embeds neither.
 
 use std::fmt::Write as _;

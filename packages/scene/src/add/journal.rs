@@ -470,53 +470,6 @@ pub(super) fn next(log: &Log, seen: &Seen) -> Next {
     Next::Clean
 }
 
-/// What recovery from here does, as [`next`] decides it step by step.
-pub(super) struct Ahead {
-    pub(super) steps: Vec<String>,
-    pub(super) stops: bool,
-}
-
-pub(super) fn ahead(log: &Log, seen: &Seen) -> Ahead {
-    let mut log = log.clone();
-    let mut seen = seen.clone();
-    let start = log.records.len();
-    let stops = loop {
-        match next(&log, &seen) {
-            Next::Act(effect, record) => {
-                seen.apply(&effect);
-                log.records.push(record);
-            }
-            Next::Clean => break false,
-            Next::Stop(_) => break true,
-        }
-    };
-    Ahead {
-        steps: steps(&log, start, Tense::Present),
-        stops,
-    }
-}
-
-impl Seen {
-    /// What is on disk once `effect` is done.
-    fn apply(&mut self, effect: &Effect) {
-        match effect {
-            Effect::None => {}
-            Effect::Unplace(id, _) => {
-                let here = self.parts.entry(id.clone()).or_default();
-                here.new = here.dest.take();
-                self.names.push(OsString::from(format!("new/{id}")));
-            }
-            Effect::Restore(id, _) => {
-                let here = self.parts.entry(id.clone()).or_default();
-                here.dest = here.old.take();
-                self.names.retain(|name| *name != *format!("old/{id}"));
-            }
-            Effect::LockBack(saved, _) => self.lock = Some(saved.clone()),
-            Effect::LockRemove(_) => self.lock = None,
-        }
-    }
-}
-
 /// The first step recovery takes, and the problems it stops on once every other step is done.
 fn first_step(log: &Log, seen: &Seen) -> (Option<(Effect, Record)>, Vec<Problem>) {
     let strays = strays(log, seen);
@@ -725,23 +678,8 @@ fn unlogged(seen: &Seen) -> Made {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Tense {
-    Past,
-    Present,
-}
-
-impl Tense {
-    fn verb(self, past: &str, present: &str) -> String {
-        match self {
-            Tense::Past => past.into(),
-            Tense::Present => present.into(),
-        }
-    }
-}
-
 /// What the log says recovery did, one phrase each, in the order it did it.
-fn undone(log: &Log, records: &[Record], tense: Tense) -> Vec<String> {
+fn undone(log: &Log, records: &[Record]) -> Vec<String> {
     let mut seen_ids = Vec::new();
     let mut lines = Vec::new();
     for record in records {
@@ -753,29 +691,22 @@ fn undone(log: &Log, records: &[Record], tense: Tense) -> Vec<String> {
                 seen_ids.push(id.clone());
                 let part = log.part(id);
                 if part.restored {
-                    format!("{} parts/{id}", tense.verb("put back", "puts back"))
+                    format!("put back parts/{id}")
                 } else if part.unplaced {
-                    format!("{} the new parts/{id}", tense.verb("removed", "removes"))
+                    format!("removed the new parts/{id}")
                 } else {
-                    format!(
-                        "{} parts/{id} as it is, since it changed after the add",
-                        tense.verb("left", "leaves")
-                    )
+                    format!("left parts/{id} as it is, since it changed after the add")
                 }
             }
             Record::LockRestored => match log.plan.lock {
-                LockChange::Add(_) => {
-                    format!("{} the new parts.lock", tense.verb("removed", "removes"))
-                }
-                _ => format!("{} parts.lock", tense.verb("put back", "puts back")),
+                LockChange::Add(_) => "removed the new parts.lock".to_string(),
+                _ => "put back parts.lock".to_string(),
             },
-            Record::LockKept => format!(
-                "{} parts.lock as it is, since it changed after the add",
-                tense.verb("left", "leaves")
-            ),
+            Record::LockKept => {
+                "left parts.lock as it is, since it changed after the add".to_string()
+            }
             Record::LockStays => format!(
-                "{} the parts.lock the add wrote, since the copy from before it was not in parts/{STAGE}",
-                tense.verb("left", "leaves")
+                "left the parts.lock the add wrote, since the copy from before it was not in parts/{STAGE}"
             ),
             _ => continue,
         };
@@ -800,7 +731,7 @@ fn gone(log: &Log) -> Vec<String> {
 /// What a rollback did, from the whole log, once it is done. `None` when the project is as it
 /// was before the add.
 pub(super) fn summary(log: &Log) -> Option<String> {
-    let mut lines = undone(log, &log.records, Tense::Past);
+    let mut lines = undone(log, &log.records);
     let gone = gone(log);
     if !gone.is_empty() {
         lines.push(format!(
@@ -814,24 +745,21 @@ pub(super) fn summary(log: &Log) -> Option<String> {
 
 /// The steps this run's recovery took, for a message about a recovery that stopped.
 pub(super) fn steps_taken(log: &Log, from: usize) -> Vec<String> {
-    steps(log, from, Tense::Past)
+    steps(log, from)
 }
 
-fn steps(log: &Log, from: usize, tense: Tense) -> Vec<String> {
+fn steps(log: &Log, from: usize) -> Vec<String> {
     let records = &log.records[from.min(log.records.len())..];
     if log.committed() {
         return records
             .iter()
             .filter_map(|record| match record {
-                Record::Restored(id) => Some(format!(
-                    "{} parts/{id}",
-                    tense.verb("put back", "puts back")
-                )),
+                Record::Restored(id) => Some(format!("put back parts/{id}")),
                 _ => None,
             })
             .collect();
     }
-    undone(log, records, tense)
+    undone(log, records)
 }
 
 /// The ids whose new copy the log says the add placed, with its hash, then the hash of

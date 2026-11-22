@@ -31,8 +31,8 @@ pub(crate) fn folder(id: &str) -> Option<BTreeMap<String, Vec<u8>>> {
 mod tests {
     use super::*;
 
-    /// The annotation names each file the Block holds and `parts.lock`, which `orbe add` writes.
-    /// A file outside that list, including one added later, is not covered.
+    /// The annotation names each file the Block holds. A file outside that list, including one
+    /// added later, is not covered.
     #[test]
     fn an_annotation_covers_the_block_files_and_not_a_later_file() {
         for id in ids() {
@@ -45,11 +45,7 @@ mod tests {
                     "{id}: {path} has no annotation"
                 );
             }
-            assert_eq!(
-                reuse.license("parts.lock", None).as_deref(),
-                Some("MIT OR Apache-2.0"),
-                "{id}: parts.lock"
-            );
+            assert_eq!(reuse.license("parts.lock", None), None, "{id}: parts.lock");
             for extra in [
                 "mine.txt",
                 "src/mine.ino",

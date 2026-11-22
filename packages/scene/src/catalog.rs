@@ -1,6 +1,6 @@
 //! The catalog a Block reads its parts from: the repo's `parts/`, embedded by `build.rs`, or the
 //! part folders a caller hands in, such as the ones a browser fetched from a registry. It is the
-//! registry's index for the versions it holds, so a sealed copy can be compared with it.
+//! registry's index for the versions it holds.
 
 use std::collections::BTreeMap;
 #[cfg(unix)]
@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::OnceLock;
 
 use crate::diagnostic::Findings;
-use crate::files::Files;
+#[cfg(unix)]
 use crate::project::hash_files;
 use crate::source::Sources;
 use crate::syntax::{self, Node};
@@ -29,11 +29,8 @@ pub(crate) enum Source {
     Given(Arc<BTreeMap<String, Vec<u8>>>),
 }
 
-pub(crate) struct Original<'s> {
-    pub(crate) version: String,
-    pub(crate) hash: String,
+pub(crate) struct Original {
     pub(crate) tree: Node,
-    files: Vec<(&'s str, &'s [u8])>,
 }
 
 impl Source {
@@ -67,28 +64,13 @@ impl Source {
         }
     }
 
-    pub(crate) fn find(&self, id: &str) -> Option<Original<'_>> {
-        let prefix = format!("{id}/");
-        let files: Vec<(&str, &[u8])> = self
-            .files()
-            .filter_map(|(path, bytes)| {
-                let rel = path.strip_prefix(prefix.as_str())?;
-                crate::published::is_published(rel).then_some((rel, bytes))
-            })
-            .collect();
-        let text =
-            std::str::from_utf8(files.iter().find(|(rel, _)| *rel == "part.jsonc")?.1).ok()?;
+    pub(crate) fn find(&self, id: &str) -> Option<Original> {
+        let bytes = self.file(id, "part.jsonc")?;
+        let text = std::str::from_utf8(bytes).ok()?.to_string();
         let mut sources = Sources::new(Path::new(""));
-        let file = sources.add(Path::new("part.jsonc"), text.to_string());
+        let file = sources.add(Path::new("part.jsonc"), text);
         let tree = syntax::parse(&sources, file, &mut Findings::default())?;
-        let version = tree.get("version")?.str()?.to_string();
-        let hash = hash_files(files.iter().copied());
-        Some(Original {
-            version,
-            hash,
-            tree,
-            files,
-        })
+        Some(Original { tree })
     }
 }
 
@@ -106,34 +88,6 @@ pub(crate) fn folders() -> BTreeMap<String, BTreeMap<String, Vec<u8>>> {
         }
     }
     folders
-}
-
-impl Original<'_> {
-    /// The files of `folder` that differ from this version's, for a message. `None` when
-    /// every file matches.
-    pub(crate) fn files_differing(&self, files: &Files, folder: &Path) -> Option<String> {
-        let mut names: Vec<String> = Vec::new();
-        for (rel, bytes) in &self.files {
-            match files.read(&folder.join(rel)) {
-                Ok(copy) if copy == *bytes => {}
-                Ok(_) if *rel == "part.jsonc" => {
-                    names.push("the comments or spacing of `part.jsonc`".into())
-                }
-                Ok(_) => names.push(format!("`{rel}`")),
-                Err(_) => names.push(format!("`{rel}`, which is missing")),
-            }
-        }
-        let mut extra = Vec::new();
-        list(files, folder, folder, &mut extra);
-        extra.sort();
-        for rel in extra
-            .iter()
-            .filter(|rel| !self.files.iter().any(|(r, _)| r == rel))
-        {
-            names.push(format!("`{rel}`, which the catalog's copy does not have"));
-        }
-        (!names.is_empty()).then(|| names.join(", "))
-    }
 }
 
 /// Three numbers. The first is the major version, including versions below 1.0. Versions order
@@ -175,16 +129,17 @@ impl fmt::Display for Version {
     }
 }
 
-/// One published version of a part. `hash` is the folder hash `parts.lock` records.
+/// One published version of a part. `hash` is the folder hash of its published files.
 #[cfg(unix)]
 #[derive(Clone, Debug)]
 pub(crate) struct CatalogEntry {
     pub(crate) id: String,
     pub(crate) version: Version,
     pub(crate) files: BTreeMap<String, Vec<u8>>,
+    // The catalog test compares this with `folder_hash`. `orbe add` copies `files`.
+    #[allow(dead_code)]
     pub(crate) hash: String,
     pub(crate) uses: BTreeMap<String, Version>,
-    pub(crate) sealed: bool,
 }
 
 /// The parts `orbe add` can copy. The built-in catalog is this binary's `parts/`. Tests build
@@ -192,7 +147,6 @@ pub(crate) struct CatalogEntry {
 #[cfg(unix)]
 #[derive(Clone, Debug)]
 pub(crate) struct Catalog {
-    registry: String,
     entries: BTreeMap<(String, Version), CatalogEntry>,
 }
 
@@ -200,7 +154,6 @@ pub(crate) struct Catalog {
 impl Catalog {
     pub(crate) fn official() -> Catalog {
         Catalog {
-            registry: crate::project::REGISTRY.to_string(),
             entries: BTreeMap::new(),
         }
     }
@@ -219,10 +172,6 @@ impl Catalog {
                 catalog
             })
             .clone()
-    }
-
-    pub(crate) fn registry(&self) -> &str {
-        &self.registry
     }
 
     pub(crate) fn insert(&mut self, entry: CatalogEntry) {
@@ -252,12 +201,6 @@ impl Catalog {
 
     pub(crate) fn newest(&self, id: &str) -> Option<&CatalogEntry> {
         self.of_id(id).max_by_key(|entry| entry.version)
-    }
-
-    pub(crate) fn newest_in_major(&self, id: &str, major: u64) -> Option<&CatalogEntry> {
-        self.of_id(id)
-            .filter(|entry| entry.version.major == major)
-            .max_by_key(|entry| entry.version)
     }
 
     pub(crate) fn ids(&self) -> BTreeSet<&str> {
@@ -342,25 +285,10 @@ pub(crate) fn entry_from_files(
     Ok(CatalogEntry {
         id: id.to_string(),
         version,
-        sealed: crate::project::is_sealed(&tree),
         files,
         hash,
         uses,
     })
-}
-
-fn list(files: &Files, root: &Path, dir: &Path, out: &mut Vec<String>) {
-    for path in files.list(dir).into_iter().flatten() {
-        let rel = crate::source::display(root, &path);
-        if !crate::published::is_published(&rel) {
-            continue;
-        }
-        if files.is_dir(&path) {
-            list(files, root, &path, out);
-        } else {
-            out.push(rel);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -470,7 +398,6 @@ mod tests {
             let entry = catalog.newest(&id).unwrap();
             assert_eq!(entry.hash, folder_hash(&parts.join(&id)).unwrap(), "{id}");
         }
-        assert!(catalog.newest("led-5mm").unwrap().sealed);
     }
 
     fn built_from(id: &str) -> BTreeSet<String> {
@@ -490,7 +417,6 @@ mod tests {
     fn part_uses_the_parts_it_is_built_from(id: &str) {
         let catalog = Catalog::builtin();
         let part = catalog.newest(id).unwrap();
-        assert!(!part.sealed, "{id}");
         let used: BTreeSet<String> = part.uses.keys().cloned().collect();
         assert_eq!(used, built_from(id), "{id}");
         for (child, version) in &part.uses {

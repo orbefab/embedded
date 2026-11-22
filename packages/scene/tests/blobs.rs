@@ -155,12 +155,10 @@ fn a_part_in_format_4_needs_a_newer_orbe() {
     assert_eq!(found[0].hint, "this binary reads format 1, 2, 3");
 }
 
-/// A project a newer orbe wrote holds `parts/<id>/` and its `parts.lock` line for an id this
-/// binary does not carry. orbe 0.1.0 reads part format 1, and meets the ESP32-S3 chip part
-/// this way: its one finding is `part_format` at the part's `format`, saying the project needs
-/// a newer orbe, with no `part_missing` and no `part_modified`. This binary takes the same path
-/// one format up. The part's `"as": "image"` is not a value this binary knows, and it is never
-/// read, so it cannot turn into a parse error.
+/// A project a newer orbe wrote holds `parts/<id>/` for an id this binary does not carry.
+/// Its one finding is `part_format` at the part's `format`, saying the project needs a newer
+/// orbe. The part's `"as": "image"` is not a value this binary knows, and it is never read,
+/// so it cannot turn into a parse error.
 #[test]
 fn a_locked_part_this_orbe_does_not_carry_in_a_newer_format_needs_a_newer_orbe() {
     let part_format = orbe_scene::PART_FORMATS.iter().max().unwrap() + 1;
@@ -173,11 +171,6 @@ fn a_locked_part_this_orbe_does_not_carry_in_a_newer_format_needs_a_newer_orbe()
         format!(
             "{{\n  \"format\": {part_format},\n  \"part\": \"newer-chip\",\n  \"version\": \"0.1.0\",\n  \"pins\": {{ \"a\": [1] }},\n  \"params\": {{ \"app\": {{ \"file\": \"bin\", \"as\": \"image\", \"required\": true }} }}\n}}\n"
         ),
-    )
-    .unwrap();
-    fs::write(
-        dir.path().join("parts.lock"),
-        format!("{}\n", common::lock_line(dir.path(), "newer-chip")),
     )
     .unwrap();
     fs::write(

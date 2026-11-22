@@ -70,12 +70,13 @@ The session, with what each command prints. A line `...` stands for lines left o
 
 ```console
 $ orbe check scene.jsonc
-scene.jsonc:4:23: error[part_missing]: part `nano-board` is not in this project's parts.lock
+scene.jsonc:4:23: error[part_missing]: part `nano-board` is not in parts/
   hint: run `orbe add led-5mm nano-board resistor-axial tactile-switch-6mm`
 ...
 $ orbe add led-5mm nano-board resistor-axial tactile-switch-6mm
 ...
-wrote parts.lock
+wrote parts/led-5mm 0.1.1
+...
 $ orbe check scene.jsonc
 scene.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND
 $ orbe lint scene.jsonc
@@ -129,9 +130,9 @@ A part name starts with a letter, takes letters, digits and `_`, and may not con
 
 ## Parts
 
-`orbe search <words>` lists the parts whose id, title, maker, number, summary or tags hold every word, then the Blocks. `orbe part <id>` prints one part: its pins and the leads they are on, params, ratings, what it does not simulate, datasheets and files. That print is the part's electrical behaviour. `orbe add <id>…` copies parts into `parts/<id>/` and records them in `parts.lock`. Commit both with the scene, and don't edit a copied part. `orbe add <block>` installs a Block. The Blocks are `nano-button-led`, `uno-button-led`, `nano-led-fade` and `nano-light-comparator`.
+`orbe search <words>` lists the parts whose id, title, maker, number, summary or tags hold every word, then the Blocks. `orbe part <id>` prints one part: its pins and the leads they are on, params, ratings, what it does not simulate, datasheets and files. That print is the part's electrical behaviour. `orbe add <id>…` copies parts into `parts/<id>/`. The copy is the project's: edit it, and commit `parts/` with the scene. `orbe add <block>` installs a Block. The Blocks are `nano-button-led`, `uno-button-led`, `nano-led-fade` and `nano-light-comparator`.
 
-In a part's folder, `part.jsonc` is the part: its pins, params, ratings and the engine model it names, which runs inside orbe. `<id>.glb` is its 3D shape, and `<id>.anchors.json` says where each lead sits, for drawing and seating. Any other file builds the 3D shape and holds nothing electrical. `orbe skills get parts` covers copies, locks and versions.
+In a part's folder, `part.jsonc` is the part: its pins, params, ratings and the engine model it names, which runs inside orbe. `<id>.glb` is its 3D shape, and `<id>.anchors.json` says where each lead sits, for drawing and seating. Any other file builds the 3D shape and holds nothing electrical. `orbe skills get parts` covers the copy and versions.
 
 ## Breadboards
 
