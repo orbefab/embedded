@@ -1,0 +1,127 @@
+{
+  "version": 1,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 11000000000,
+      "max_step_ps": 1000000000,
+      "grid_ps": 100000000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "d",
+    "g",
+    "gnd",
+    "pin",
+    "src"
+  ],
+  "parts": [
+    {
+      "name": "vsrc",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "src",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 5.0,
+        "unit": "V"
+      }
+    },
+    {
+      "name": "vpin",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "pin",
+        "n": "gnd"
+      },
+      "voltage": {
+        "kind": "steps",
+        "initial": {
+          "value": 5.0,
+          "unit": "V"
+        },
+        "events": [
+          { "t_ps": 1000000000, "level": { "value": 4.5, "unit": "V" } },
+          { "t_ps": 2000000000, "level": { "value": 4.0, "unit": "V" } },
+          { "t_ps": 3000000000, "level": { "value": 3.5, "unit": "V" } },
+          { "t_ps": 4000000000, "level": { "value": 3.0, "unit": "V" } },
+          { "t_ps": 5000000000, "level": { "value": 2.5, "unit": "V" } },
+          { "t_ps": 6000000000, "level": { "value": 2.0, "unit": "V" } },
+          { "t_ps": 7000000000, "level": { "value": 1.5, "unit": "V" } },
+          { "t_ps": 8000000000, "level": { "value": 1.0, "unit": "V" } },
+          { "t_ps": 9000000000, "level": { "value": 0.5, "unit": "V" } },
+          { "t_ps": 10000000000, "level": { "value": 0.0, "unit": "V" } }
+        ]
+      }
+    },
+    {
+      "name": "rg",
+      "kind": "resistor",
+      "pins": {
+        "a": "pin",
+        "b": "g"
+      },
+      "resistance": {
+        "value": 100.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "rl",
+      "kind": "resistor",
+      "pins": {
+        "a": "d",
+        "b": "gnd"
+      },
+      "resistance": {
+        "value": 100.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "m1",
+      "kind": "pmos",
+      "pins": {
+        "drain": "d",
+        "gate": "g",
+        "source": "src"
+      },
+      "transconductance_parameter": {
+        "value": 4.579,
+        "unit": "A/V^2"
+      },
+      "threshold_voltage": {
+        "value": 0.8,
+        "unit": "V"
+      },
+      "channel_length_modulation": {
+        "value": 0.0,
+        "unit": "1/V"
+      },
+      "gate_source_capacitance": {
+        "value": 7.23e-10,
+        "unit": "F"
+      },
+      "gate_drain_capacitance": {
+        "value": 5.6e-11,
+        "unit": "F"
+      },
+      "drain_source_capacitance": {
+        "value": 6.5e-11,
+        "unit": "F"
+      },
+      "ratings": {
+        "current": null,
+        "power": null
+      }
+    }
+  ]
+}

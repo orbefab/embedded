@@ -67,7 +67,7 @@ pub(crate) struct Update {
 pub(crate) const TWO_PIN: &[Quantity] = &[Quantity::I, Quantity::V, Quantity::P];
 
 /// The values `observe` contributes, in `quantities` order.
-/// `len` is `model.quantities().len()`. The third slot pads an `nmos`.
+/// `len` is `model.quantities().len()`. The third slot pads a MOSFET.
 pub(crate) struct Observed {
     values: [f64; 3],
     len: usize,

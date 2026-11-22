@@ -127,6 +127,8 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "op-amp-slew",
             "op-amp-square",
             "op-amp-swing",
+            "pmos-high-side",
+            "pmos-sweep",
             "pnp-load",
             "pnp-sweep",
             "rc-picofarad",
@@ -162,10 +164,11 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
 /// set `NF` to 1.5 and `NR` to 2, with the emitter 0.13 V from the base and the collector
 /// 0.27 V from it. Each transistor there has an `IS` of 1e-8 A, so the reverse law shows
 /// above the floor. `nmos-off` holds an off MOSFET
-/// so its drain current is the drain-source gmin. `npn-slow-edge` drives the junction
+/// so its drain current is the drain-source gmin. `pmos-off` is that circuit with the supplies
+/// negated, so the drain current is the negated gmin. `npn-slow-edge` drives the junction
 /// capacitors through 1 Mohm, and `nmos-pulse` does the same for the gate capacitances, slow
 /// next to the deck's ramp. `nmos-regions` biases the drain through reverse, linear and saturation.
-/// `nmos-follower` holds the source off ground. `zener-forward`, `zener-reverse`,
+/// `pmos-regions` is that circuit with the supplies negated. `nmos-follower` holds the source off ground. `zener-forward`, `zener-reverse`,
 /// `zener-breakdown` and `zener-overload` hold the fitted zener forward, below the knee,
 /// at its test current, and past both ratings. `regulator-off-cap` holds the input at 0 V
 /// with only a capacitor on the output. `regulator-c100u` is the load step with 100 uF
@@ -212,6 +215,8 @@ fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "npn-reverse",
             "npn-slow-edge",
             "p-relay-npn-bare",
+            "pmos-off",
+            "pmos-regions",
             "pnp-held-off",
             "pnp-nf-nr",
             "pnp-off",
@@ -458,10 +463,10 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
         let wanted = |key: &str| series(values, label, key);
         let (got_p, wanted_p) = power(&netlist, &part.model, &name, got, wanted, ig.as_deref());
         let stored = column(trace, label, &name);
-        // An nmos pin formula needs the gate current, which is not an engine column. The
+        // An nmos or pmos pin formula needs the gate current, which is not an engine column. The
         // circuit test `pin_power_includes_the_gate_current` pins that identity. Here the
         // stored column is what the span check reads.
-        if !matches!(part.model, Model::Nmos(_)) {
+        if !matches!(part.model, Model::Nmos(_) | Model::Pmos(_)) {
             for (row, (&p, &derived)) in stored.iter().zip(&got_p).enumerate() {
                 assert!(
                     (p - derived).abs() <= 1e-15,
@@ -470,7 +475,7 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
             }
         }
         compared.record(&name, &got_p, &wanted_p);
-        if let (Model::Nmos(_), Some(ig)) = (&part.model, &ig) {
+        if let (Model::Nmos(_) | Model::Pmos(_), Some(ig)) = (&part.model, &ig) {
             let pins = part.model.pins();
             let [d, g, s] = [0, 1, 2].map(|k| {
                 column(
@@ -679,8 +684,8 @@ impl SpanCheck<'_> {
 
 /// A part's power on every row from its other columns, read once through `got` and once
 /// through `wanted`. A two-pin part's is `v * i`. A bipolar transistor's is
-/// `(V(c) - V(e)) * ic + (V(b) - V(e)) * ib`, from its pin nets. An nmos engine series is
-/// the stored `.p` column. Its ngspice series is `(V(d) - V(s)) * id + (V(g) - V(s)) * ig`,
+/// `(V(c) - V(e)) * ic + (V(b) - V(e)) * ib`, from its pin nets. An nmos or pmos engine series
+/// is the stored `.p` column. Its ngspice series is `(V(d) - V(s)) * id + (V(g) - V(s)) * ig`,
 /// with `ig` from the gate ammeter in `tran.gate`.
 fn power(
     netlist: &netlist::Netlist,
@@ -716,7 +721,7 @@ fn power(
                     })
                     .collect()
             }
-            Model::Nmos(_) => {
+            Model::Nmos(_) | Model::Pmos(_) => {
                 let [d, g, s] = [0, 1, 2].map(|k| {
                     let net = netlist.net_name(model.pins()[k]);
                     read(&format!("#net.{}", net.as_str()))
@@ -735,7 +740,7 @@ fn power(
         }
     };
     match model {
-        Model::Nmos(_) => (got(name), derive(&wanted)),
+        Model::Nmos(_) | Model::Pmos(_) => (got(name), derive(&wanted)),
         _ => (derive(&got), derive(&wanted)),
     }
 }

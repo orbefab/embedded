@@ -1,5 +1,5 @@
 use orbe_engine::netlist::{self, Model, RatingKind};
-use orbe_engine::semiconductor::{Npn, Pnp};
+use orbe_engine::semiconductor::{Nmos, Npn, Pmos, Pnp};
 
 use orbe_engine::name::Quantity;
 
@@ -202,7 +202,8 @@ const MOS_FIELDS: [(&str, &str, f64); 6] = [
     ("drain_source_capacitance", "F", 20e-12),
 ];
 
-fn mosfet(changed: Option<(&str, &str, &str)>) -> String {
+/// `m1` of `kind`, with one field's unit and value replaced when `changed` names it.
+fn mosfet(kind: &str, changed: Option<(&str, &str, &str)>) -> String {
     let fields: Vec<String> = MOS_FIELDS
         .iter()
         .map(|&(field, unit, value)| {
@@ -223,7 +224,7 @@ fn mosfet(changed: Option<(&str, &str, &str)>) -> String {
       "parts": [
         {{
           "name": "m1",
-          "kind": "nmos",
+          "kind": "{kind}",
           "pins": {{ "drain": "d", "gate": "g", "source": "gnd" }},
           {},
           "ratings": {{
@@ -239,9 +240,9 @@ fn mosfet(changed: Option<(&str, &str, &str)>) -> String {
 
 #[test]
 fn an_nmos_keeps_every_field_and_rates_id_and_p() {
-    let netlist = netlist::parse(mosfet(None).as_bytes()).unwrap();
+    let netlist = netlist::parse(mosfet("nmos", None).as_bytes()).unwrap();
     let (_, part) = netlist.parts().next().unwrap();
-    let Model::Nmos(mosfet) = &part.model else {
+    let Model::Nmos(Nmos(mosfet)) = &part.model else {
         panic!("{:?}", part.model);
     };
     let got = [
@@ -271,10 +272,30 @@ fn an_nmos_keeps_every_field_and_rates_id_and_p() {
 }
 
 #[test]
+fn a_pmos_takes_the_same_fields_as_an_nmos() {
+    let nmos = netlist::parse(mosfet("nmos", None).as_bytes()).unwrap();
+    let pmos = netlist::parse(mosfet("pmos", None).as_bytes()).unwrap();
+    let (Model::Nmos(Nmos(n)), Model::Pmos(Pmos(p))) = (
+        &nmos.parts().next().unwrap().1.model,
+        &pmos.parts().next().unwrap().1.model,
+    ) else {
+        panic!("not an nmos and a pmos");
+    };
+    assert_eq!(n, p);
+    for (field, _, _) in MOS_FIELDS {
+        assert_eq!(
+            rejected(&mosfet("pmos", Some((field, "mA", "1.0")))),
+            rejected(&mosfet("nmos", Some((field, "mA", "1.0")))),
+            "{field}"
+        );
+    }
+}
+
+#[test]
 fn mosfet_fields_name_their_units_and_rules() {
     for (field, _, _) in MOS_FIELDS {
         assert_eq!(
-            rejected(&mosfet(Some((field, "mA", "1.0")))),
+            rejected(&mosfet("nmos", Some((field, "mA", "1.0")))),
             [("netlist.unit".to_string(), field.to_string(), String::new())],
             "{field}"
         );
@@ -296,7 +317,7 @@ fn mosfet_fields_name_their_units_and_rules() {
             ("1e-320", "finite_reciprocal"),
         ] {
             assert_eq!(
-                rejected(&mosfet(Some((field, unit, value)))),
+                rejected(&mosfet("nmos", Some((field, unit, value)))),
                 [(
                     "netlist.value".to_string(),
                     field.to_string(),
@@ -307,14 +328,18 @@ fn mosfet_fields_name_their_units_and_rules() {
         }
     }
     let negative =
-        netlist::parse(mosfet(Some(("threshold_voltage", "V", "-1.5"))).as_bytes()).unwrap();
-    let Model::Nmos(device) = &negative.parts().next().unwrap().1.model else {
+        netlist::parse(mosfet("nmos", Some(("threshold_voltage", "V", "-1.5"))).as_bytes())
+            .unwrap();
+    let Model::Nmos(Nmos(device)) = &negative.parts().next().unwrap().1.model else {
         panic!("not an nmos");
     };
     assert_eq!(device.threshold_voltage.si.get(), -1.5);
     assert!(netlist::parse(mosfet_text_with_infinite_threshold().as_bytes()).is_err());
     assert_eq!(
-        rejected(&mosfet(Some(("channel_length_modulation", "1/V", "-0.1")))),
+        rejected(&mosfet(
+            "nmos",
+            Some(("channel_length_modulation", "1/V", "-0.1"))
+        )),
         [(
             "netlist.value".to_string(),
             "channel_length_modulation".to_string(),
@@ -322,10 +347,12 @@ fn mosfet_fields_name_their_units_and_rules() {
         )]
     );
     assert!(
-        netlist::parse(mosfet(Some(("channel_length_modulation", "1/V", "0.0"))).as_bytes())
-            .is_ok()
+        netlist::parse(
+            mosfet("nmos", Some(("channel_length_modulation", "1/V", "0.0"))).as_bytes()
+        )
+        .is_ok()
     );
-    let ratings = mosfet(None).replace(
+    let ratings = mosfet("nmos", None).replace(
         r#""current": { "value": 0.2, "unit": "A""#,
         r#""current": { "value": 0.2, "unit": "mA""#,
     );
@@ -340,7 +367,7 @@ fn mosfet_fields_name_their_units_and_rules() {
 }
 
 fn mosfet_text_with_infinite_threshold() -> String {
-    mosfet(None).replace(
+    mosfet("nmos", None).replace(
         r#""threshold_voltage": { "value": 1.08"#,
         r#""threshold_voltage": { "value": 1e309"#,
     )

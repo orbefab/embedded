@@ -64,8 +64,9 @@ CHIPS = ("ne555",)
 # A relay's coil is an inductor, so a relay deck takes the inductor deck's settings.
 COILS = ("inductor", "relay")
 FIRMWARE = ("atmega328p", "esp32s3")
-TRANSISTORS = ("npn", "pnp", "nmos")
+TRANSISTORS = ("npn", "pnp", "nmos", "pmos")
 BJT_KINDS = ("npn", "pnp")
+MOS_KINDS = ("nmos", "pmos")
 # Each BJT field's .model parameter. `mje=0 mjc=0` makes the depletion capacitances constant.
 BJT_CARD = (
     ("is", "saturation_current"),
@@ -624,7 +625,7 @@ def op_point(netlist, values):
             c, b, e = (net_voltage(op, net) for net in pin_nets(part))
             op[f"#{name}.p"] = (c - e) * op[f"#{name}.ic"] + (b - e) * op[f"#{name}.ib"]
             continue
-        if part["kind"] == "nmos":
+        if part["kind"] in MOS_KINDS:
             d, _g, s = (net_voltage(op, net) for net in pin_nets(part))
             op[f"#{name}.p"] = (d - s) * op[f"#{name}.id"]
             continue
@@ -690,6 +691,7 @@ PIN_ORDER = {
     "npn": ("collector", "base", "emitter"),
     "pnp": ("collector", "base", "emitter"),
     "nmos": ("drain", "gate", "source"),
+    "pmos": ("drain", "gate", "source"),
     "capacitor": ("a", "b"),
     "inductor": ("a", "b"),
     "relay": ("coil_a", "coil_b", "com", "no", "nc"),
@@ -878,10 +880,12 @@ def translate_shape(title, netlist):
             lines.append(f"q{name} x_{name}_c x_{name}_b {e} qmod_{name}")
             params = " ".join(f"{key}={number(part[field])}" for key, field in BJT_CARD)
             lines.append(f".model qmod_{name} {kind} ({params} mje=0 mjc=0)")
-        elif kind == "nmos":
+        elif kind in MOS_KINDS:
             # Ammeters read the whole drain and gate pin currents, capacitors included.
             # The three capacitances are plain elements on the device side of the ammeters.
             # `l=w` so `kp` alone sets the current. `is=0` leaves no body diode.
+            # A pmos card negates `vto`. ngspice multiplies that card value by its type of -1,
+            # which is the positive threshold the netlist stores.
             d, g, s = (node(net) for net in pin_list)
             for pin, at in (("d", d), ("g", g)):
                 lines.append(f"vx_{name}_{pin} {at} x_{name}_{pin} dc 0")
@@ -890,8 +894,8 @@ def translate_shape(title, netlist):
             mapping[f"i(vx_{name}_d)"] = f"#{part['name']}.id"
             mapping[f"i(vx_{name}_g)"] = GateCurrent(f"#{part['name']}")
             lines.append(f"m{name} x_{name}_d x_{name}_g {s} {s} mmod_{name} l=100u w=100u")
-            params = " ".join(f"{key}={number(part[field])}" for key, field in MOS_CARD)
-            lines.append(f".model mmod_{name} nmos (level=1 {params} is=0)")
+            params = " ".join(f"{key}={mos_number(kind, key, part[field])}" for key, field in MOS_CARD)
+            lines.append(f".model mmod_{name} {kind} (level=1 {params} is=0)")
             cap_nodes = {
                 "gs": (f"x_{name}_g", s),
                 "gd": (f"x_{name}_g", f"x_{name}_d"),
@@ -1137,6 +1141,14 @@ def number(value):
     return repr(float(value["value"]))
 
 
+def mos_number(kind, key, value):
+    """A MOSFET card parameter. A pmos stores a positive threshold and the card negates `vto`."""
+    text = number(value)
+    if kind == "pmos" and key == "vto":
+        text = text[1:] if text.startswith("-") else f"-{text}"
+    return text
+
+
 def source_value(value, transient, corners):
     """A source's value on its deck line. A waveform holds its idle level at the operating
     point, and in a transient each jump ramps over EDGE_RAMP_PS. Its knots in (0, stop] are
@@ -1280,7 +1292,7 @@ def dense_spans(netlist, values, gate):
     """Each scored column's maximum minus its minimum over ngspice's own points.
 
     That is every value, each part's `p` as the Rust comparison derives it, and
-    each nmos gate current under `<ref>.ig`.
+    each nmos or pmos gate current under `<ref>.ig`.
     """
     series = dict(values)
     for part in netlist["parts"]:
@@ -1302,7 +1314,7 @@ def transient_power(part, values, gate):
         c, b, e = (values[f"#net.{net}"] for net in pin_nets(part))
         ic, ib = values[f"{ref}.ic"], values[f"{ref}.ib"]
         return [(c[k] - e[k]) * ic[k] + (b[k] - e[k]) * ib[k] for k in range(len(ic))]
-    if part["kind"] == "nmos":
+    if part["kind"] in MOS_KINDS:
         d, g, s = (values[f"#net.{net}"] for net in pin_nets(part))
         i_d, ig = values[f"{ref}.id"], gate[ref]
         return [(d[k] - s[k]) * i_d[k] + (g[k] - s[k]) * ig[k] for k in range(len(i_d))]

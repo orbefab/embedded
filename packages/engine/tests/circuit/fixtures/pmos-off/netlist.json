@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "seed": 0,
+  "analysis": {
+    "op": {}
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "d",
+    "g",
+    "vcc"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vcc",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": -5.0,
+        "unit": "V"
+      }
+    },
+    {
+      "name": "vg",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "g",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 0.0,
+        "unit": "V"
+      }
+    },
+    {
+      "name": "rd",
+      "kind": "resistor",
+      "pins": {
+        "a": "vcc",
+        "b": "d"
+      },
+      "resistance": {
+        "value": 1000.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": null
+      }
+    },
+    {
+      "name": "m1",
+      "kind": "pmos",
+      "pins": {
+        "drain": "d",
+        "gate": "g",
+        "source": "gnd"
+      },
+      "transconductance_parameter": {
+        "value": 0.0468,
+        "unit": "A/V^2"
+      },
+      "threshold_voltage": {
+        "value": 1.08,
+        "unit": "V"
+      },
+      "channel_length_modulation": {
+        "value": 0.0,
+        "unit": "1/V"
+      },
+      "gate_source_capacitance": {
+        "value": 5.5e-11,
+        "unit": "F"
+      },
+      "gate_drain_capacitance": {
+        "value": 5e-12,
+        "unit": "F"
+      },
+      "drain_source_capacitance": {
+        "value": 2e-11,
+        "unit": "F"
+      },
+      "ratings": {
+        "current": {
+          "value": 0.2,
+          "unit": "A"
+        },
+        "power": {
+          "value": 0.35,
+          "unit": "W"
+        }
+      }
+    }
+  ]
+}
