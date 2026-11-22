@@ -117,13 +117,37 @@ fn an_overloaded_led_is_over_for_exactly_the_time_the_button_is_closed() {
         .sum();
     let found: Vec<_> = results.diagnostics().iter().map(Diagnostic::code).collect();
     assert_eq!(found, ["rating.current", "rating.power"]);
-    for diagnostic in results.diagnostics() {
-        let doc = serde_json::to_value(diagnostic).unwrap();
-        assert_eq!(doc["t_ps"], 2_000_001_000_u64, "{doc}");
-        assert_eq!(doc["data"]["over_ps"], closed, "{doc}");
-        let peak_ps = doc["data"]["peak_ps"].as_u64().unwrap();
-        assert!(peak_ps > 2_000_000_000 && peak_ps < 12_000_000_000, "{doc}");
-    }
+    let docs: Vec<_> = results
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| serde_json::to_value(diagnostic).unwrap())
+        .collect();
+    let (current, power) = (&docs[0], &docs[1]);
+    // The current rating is the LED's forward current, checked on each step. It is over for
+    // exactly the time the contact is closed, from 1 ns after the press.
+    assert_eq!(current["t_ps"], 2_000_001_000_u64, "{current}");
+    assert_eq!(current["data"]["over_ps"], closed, "{current}");
+    let peak_ps = current["data"]["peak_ps"].as_u64().unwrap();
+    assert!(
+        peak_ps > 2_000_000_000 && peak_ps < 12_000_000_000,
+        "{current}"
+    );
+    // Power is the average over 10.2 ms. It crosses after the press and stays over through
+    // the short bounce gaps, so the time over is the closed span, within a window of it.
+    assert_eq!(power["data"]["window_ps"], 10_200_000_000_u64, "{power}");
+    let message = power["message"].as_str().unwrap();
+    assert!(
+        message.contains("averages") && message.contains("10.2"),
+        "{power}"
+    );
+    let peak = power["data"]["peak"].as_f64().unwrap();
+    let limit = power["data"]["limit"].as_f64().unwrap();
+    assert!(peak > limit, "{power}");
+    let over = power["data"]["over_ps"].as_u64().unwrap();
+    assert!(
+        over > closed / 2 && over < closed + 2 * 10_200_000_000,
+        "over {over} closed {closed}"
+    );
 }
 
 #[ignore = "full tier"]

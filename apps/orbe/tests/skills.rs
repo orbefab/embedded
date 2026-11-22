@@ -1325,18 +1325,21 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     for warning in [
         "warning[rating.current] #led1.i peaks at ",
         "mA, over its 30 mA rating",
-        "warning[rating.power] #led1.p peaks at ",
-        "W, over its 0.075 W rating",
     ] {
         assert!(step.contains(warning), "{step}");
     }
+    // Brightness crosses `lit` about 0.4 ms after the pin rises. The LED's power average
+    // crosses 75 mW later, about 3.5 ms in, so this step has no power warning yet.
+    assert!(!step.contains("warning[rating.power]"), "{step}");
     // The pin's rating is DC: its RMS over the last 10.2 ms crosses 40 mA (40 / 94)^2 of the
     // window after the press, 1.8 ms, and a chip warning can show up to one 10 ms engine step
-    // late.
+    // late. The LED's power is the average over that same window, full by 20 ms.
     let held = orbe(&["step", "20ms"]).ok().stdout;
     for warning in [
         "warning[rating.current] #nano__mcu.pin.PB5 (nano.D13) carries ",
         "mA RMS over the last 10.2 ms, over its 40 mA rating",
+        "warning[rating.power] #led1.p averages ",
+        "over the last 10.2 ms, over its 0.075 W rating",
     ] {
         assert!(held.contains(warning), "{held}");
     }
@@ -1353,7 +1356,7 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     assert!(
         expect
             .stdout
-            .contains("actual:   rating.current, rating.power, rating.current"),
+            .contains("actual:   rating.current, rating.current, rating.power"),
         "{}",
         expect.stdout
     );
@@ -1387,7 +1390,7 @@ fn a_resistor_over_its_power_rating_warns() {
     let open = runtime.orbe(dir, &["open", "hot.jsonc"]).ok().stdout;
     assert!(
         open.contains(
-            "warning[rating.power] #r9.p peaks at 2.158099860411514 W, over its 0.25 W rating"
+            "warning[rating.power] #r9.p averages 2.158099860411514 W over the last 10.2 ms, over its 0.25 W rating"
         ),
         "{open}"
     );

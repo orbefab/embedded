@@ -8,6 +8,7 @@ mod inductor;
 mod junction;
 mod led_forward;
 mod potentiometer;
+mod power;
 mod regulator;
 mod relay;
 mod runs;

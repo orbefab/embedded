@@ -246,10 +246,7 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
         if name == "regulator-load-step" {
             assert_eq!(
                 found,
-                vec![
-                    ("rating.current".to_string(), "#u1.iout".to_string()),
-                    ("rating.power".to_string(), "#u1.p".to_string()),
-                ],
+                vec![("rating.current".to_string(), "#u1.iout".to_string())],
                 "{name}: {}",
                 doc["diagnostics"]
             );
