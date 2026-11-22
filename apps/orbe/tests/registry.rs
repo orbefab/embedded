@@ -975,28 +975,28 @@ fn a_param_whose_example_is_out_of_range_is_not_published() {
             SOURCE_PINS,
             SOURCE_MODEL,
             "voltage",
-            r#""unit": "V", "required": true, "min_exclusive": 1, "max_exclusive": 1.0000000000000002, "example": "1", "sets": "/voltage""#,
+            r#""unit": "V", "required": true, "min_exclusive": 1, "max_exclusive": 1.0000000000000002, "example": 1, "sets": "/voltage""#,
             "1",
         ),
         (
             SOURCE_PINS,
             SOURCE_MODEL,
             "voltage",
-            r#""unit": "V", "required": true, "min_exclusive": 5, "max_exclusive": 5, "example": "5", "sets": "/voltage""#,
+            r#""unit": "V", "required": true, "min_exclusive": 5, "max_exclusive": 5, "example": 5, "sets": "/voltage""#,
             "5",
         ),
         (
             SWITCH_PINS,
             switch.as_str(),
             "window",
-            r#""unit": "s", "required": true, "min_exclusive": 0, "max_exclusive": 1e-13, "example": "1ps", "sets": "/bounce/window""#,
+            r#""unit": "s", "required": true, "min_exclusive": 0, "max_exclusive": 1e-13, "example": 1e-12, "sets": "/bounce/window""#,
             "0.05ps",
         ),
         (
             SWITCH_PINS,
             switch.as_str(),
             "window",
-            r#""unit": "s", "required": true, "max_exclusive": 0, "example": "0", "sets": "/bounce/window""#,
+            r#""unit": "s", "required": true, "max_exclusive": 0, "example": 0, "sets": "/bounce/window""#,
             "0",
         ),
     ];
@@ -1041,19 +1041,19 @@ fn a_required_count_or_duration_the_engine_takes_is_published() {
         (
             switch_model(1_000_000_000, 1),
             "max_bounces",
-            r#""unit": "1", "required": true, "min_exclusive": 0, "max_exclusive": 5, "example": "2", "sets": "/bounce/max_bounces""#,
+            r#""unit": "1", "required": true, "min_exclusive": 0, "max_exclusive": 5, "example": 2, "sets": "/bounce/max_bounces""#,
             "2",
         ),
         (
             switch_model(1_000_000_000, 1),
             "max_bounces",
-            r#""unit": "1", "required": true, "max_exclusive": 5, "example": "2", "sets": "/bounce/max_bounces""#,
+            r#""unit": "1", "required": true, "max_exclusive": 5, "example": 2, "sets": "/bounce/max_bounces""#,
             "2",
         ),
         (
             switch_model(1_000_000_000, 1),
             "window",
-            r#""unit": "s", "required": true, "min_exclusive": 0, "max_exclusive": 5e-9, "example": "4.5ns", "sets": "/bounce/window""#,
+            r#""unit": "s", "required": true, "min_exclusive": 0, "max_exclusive": 5e-9, "example": 4.5e-9, "sets": "/bounce/window""#,
             "4.5ns",
         ),
     ];
@@ -1097,7 +1097,7 @@ fn a_board_child_that_has_its_values_is_checked_while_another_waits() {
             "src",
             SOURCE_PINS,
             "voltage",
-            r#""unit": "V", "required": true, "example": "5", "sets": "/voltage""#,
+            r#""unit": "V", "required": true, "example": 5, "sets": "/voltage""#,
             SOURCE_MODEL,
         ),
     );
@@ -1146,7 +1146,7 @@ fn a_part_with_a_required_param_is_checked_without_its_value() {
     manifest(&src);
     let part = noted_lamp("missing.txt").replacen(
         r#""default": "220""#,
-        r#""required": true, "example": "220""#,
+        r#""required": true, "example": 220"#,
         1,
     );
     let folder = put_part(&src, "lamp", &part);
@@ -1177,7 +1177,7 @@ fn a_required_voltage_below_zero_is_published() {
   "summary": "A source",
   "license": "MIT",
   "pins": {{ "pos": [1], "neg": [2] }},
-  "params": {{ "voltage": {{ "unit": "V", "required": true, "example": "{voltage}", {bounds}, "sets": "/voltage" }} }},
+  "params": {{ "voltage": {{ "unit": "V", "required": true, "example": {voltage}, {bounds}, "sets": "/voltage" }} }},
   "model": {{ "kind": "voltage_source", "pins": {{ "p": "pos", "n": "neg" }} }}
 }}
 "#
@@ -1242,7 +1242,7 @@ fn combo_part() -> &'static str {
   "summary": "A source and a resistor",
   "license": "MIT",
   "pins": { "pos": [1], "neg": [2], "a": [3], "b": [4] },
-  "params": { "voltage": { "unit": "V", "required": true, "example": "5", "sets": "/src/voltage" } },
+  "params": { "voltage": { "unit": "V", "required": true, "example": 5, "sets": "/src/voltage" } },
   "model": {
     "src": { "kind": "voltage_source", "pins": { "p": "pos", "n": "neg" } },
     "r": { "kind": "resistor", "resistance": "220", "pins": { "a": "a", "b": "b" } }
@@ -1279,7 +1279,7 @@ fn a_part_whose_waiting_param_writes_its_only_body_is_published() {
             "src",
             SOURCE_PINS,
             "voltage",
-            r#""unit": "V", "required": true, "example": "5", "sets": "/voltage""#,
+            r#""unit": "V", "required": true, "example": 5, "sets": "/voltage""#,
             SOURCE_MODEL,
         ),
     );
@@ -1410,7 +1410,7 @@ fn a_body_stays_checked_when_the_waiting_param_is_passed_to_a_child() {
             "src",
             SOURCE_PINS,
             "voltage",
-            r#""unit": "V", "required": true, "example": "5", "sets": "/voltage""#,
+            r#""unit": "V", "required": true, "example": 5, "sets": "/voltage""#,
             SOURCE_MODEL,
         ),
     );
