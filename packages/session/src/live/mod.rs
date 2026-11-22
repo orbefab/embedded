@@ -590,21 +590,22 @@ impl Open {
     /// a part inside a board, as in `#uno__usb__host.i (uno.usb) peaks at ...`.
     fn diagnostic(&self, d: &EngineDiagnostic) -> Diagnostic {
         let mut diagnostic = Diagnostic::new(d);
-        if let Some(message) = diagnostic.json["message"].as_str() {
-            let mut message = message.to_string();
-            for r in d.refs() {
-                // A part's quantity is named by the part's ref, as `#uno__usb__host` for
-                // `#uno__usb__host.i`.
-                let named = match &r {
-                    EngineRef::Quantity(part, _) => EngineRef::Part(part.clone()).to_string(),
-                    _ => r.to_string(),
-                };
-                let r = r.to_string();
-                if let Some(scene) = self.pin_names.get(&named) {
-                    message = message.replacen(&r, &format!("{r} ({scene})"), 1);
-                }
-            }
-            diagnostic.json["message"] = message.into();
+        if diagnostic.json["message"].is_string() {
+            let names = &self.pin_names;
+            diagnostic.json["message"] = d
+                .message_with(&|r| {
+                    // A part's quantity is named by the part's ref, as `#uno__usb__host` for
+                    // `#uno__usb__host.i`.
+                    let named = match r {
+                        EngineRef::Quantity(part, _) => EngineRef::Part(part.clone()).to_string(),
+                        _ => r.to_string(),
+                    };
+                    match names.get(&named) {
+                        Some(scene) => format!("{r} ({scene})"),
+                        None => r.to_string(),
+                    }
+                })
+                .into();
         }
         diagnostic
     }

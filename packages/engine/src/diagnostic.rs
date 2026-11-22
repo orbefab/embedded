@@ -784,7 +784,13 @@ impl Diagnostic {
         (self.at(), self.code(), self.refs())
     }
 
+    /// Each ref in its own text, as a run folder prints it.
     fn message(&self) -> String {
+        self.message_with(&|r| r.to_string())
+    }
+
+    /// The same text, with each ref named by `namer`.
+    pub fn message_with(&self, namer: &dyn Fn(&Ref) -> String) -> String {
         match self {
             Diagnostic::NetlistSyntax { path, detail, .. } => {
                 format!("schema mismatch at `{path}` ({detail})")
@@ -806,25 +812,40 @@ impl Diagnostic {
                     name_problem(*problem)
                 )
             }
-            Diagnostic::NetlistDuplicate { name } => format!("{name} is declared more than once"),
+            Diagnostic::NetlistDuplicate { name } => {
+                let name = namer(name);
+                format!("{name} is declared more than once")
+            }
             Diagnostic::NetlistUnknownNet { pin, net } => {
+                let pin = namer(pin);
                 format!("pin {pin} names net `{net}`, which is not in `nets`")
             }
-            Diagnostic::NetlistPins { part, .. } => format!("{part} pins do not match its kind"),
+            Diagnostic::NetlistPins { part, .. } => {
+                let part = namer(part);
+                format!("{part} pins do not match its kind")
+            }
             Diagnostic::NetlistUnit {
                 part,
                 field,
                 expected,
                 found,
-            } => format!(
-                "{part} {field} is in `{found}`; it must be in `{expected}` (SI base units)"
-            ),
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} {field} is in `{found}`; it must be in `{expected}` (SI base units)"
+                )
+            }
             Diagnostic::NetlistValue {
                 part,
                 field,
                 value,
                 rule,
             } => {
+                let world = match part {
+                    Ref::World(quantity) => *quantity,
+                    _ => crate::world::Quantity::Temperature,
+                };
+                let part = namer(part);
                 let byte = *value as u8;
                 let count = *value as u16;
                 let value = number_text(*value);
@@ -883,11 +904,7 @@ impl Diagnostic {
                         format!("{part} {field} is {value}; it must be at most 1000000")
                     }
                     ValueRule::Range => {
-                        let quantity = match part {
-                            Ref::World(quantity) => *quantity,
-                            _ => crate::world::Quantity::Temperature,
-                        };
-                        let row = quantity.row();
+                        let row = world.row();
                         format!(
                             "{part} {field} is {value} {}; {} must be from {} to {} {}",
                             row.unit,
@@ -906,6 +923,7 @@ impl Diagnostic {
                 }
             }
             Diagnostic::NetlistFirmware { part, line, rule } => {
+                let part = namer(part);
                 let what = match rule {
                     FirmwareRule::Record => "is not an Intel HEX record",
                     FirmwareRule::Checksum => "has a bad checksum",
@@ -946,6 +964,7 @@ impl Diagnostic {
                 found,
                 source,
             } => {
+                let part = namer(part);
                 let role = role.as_str();
                 let found = found.unwrap_or(0);
                 match (source, rule) {
@@ -974,11 +993,15 @@ impl Diagnostic {
                 with,
                 found,
                 expected,
-            } => format!(
-                "pin {pin} is on `{}`; it must be on `{}`, as {with} is",
-                found.as_str(),
-                expected.as_str()
-            ),
+            } => {
+                let pin = namer(pin);
+                let with = namer(with);
+                format!(
+                    "pin {pin} is on `{}`; it must be on `{}`, as {with} is",
+                    found.as_str(),
+                    expected.as_str()
+                )
+            }
             Diagnostic::NetlistGround { net } => format!("ground `{net}` is not in `nets`"),
             Diagnostic::NetlistAnalysis { field, value, rule } => {
                 let must = match rule {
@@ -1001,6 +1024,7 @@ impl Diagnostic {
             } => {
                 // A switch's events have a bounce window. A world quantity's are levels.
                 let switch = *field == "events" && !matches!(part, Ref::World(_));
+                let part = namer(part);
                 let what = match rule {
                     ScheduleRule::AtZero => {
                         "is at 0 ps; an event must come after t = 0".to_string()
@@ -1032,7 +1056,7 @@ impl Diagnostic {
                 rule,
             } => {
                 let at = match part {
-                    Some(part) => format!("{part} {field}"),
+                    Some(part) => format!("{} {field}", namer(part)),
                     None => field.to_string(),
                 };
                 match rule {
@@ -1064,28 +1088,44 @@ impl Diagnostic {
                 field,
                 value,
                 rule,
-            } => match rule {
-                WaveformRule::Equal => {
-                    let source = field.strip_suffix(".space").unwrap_or(field.as_ref());
-                    format!("{part} {source}.mark and {source}.space are equal")
+            } => {
+                let part = namer(part);
+                match rule {
+                    WaveformRule::Equal => {
+                        let source = field.strip_suffix(".space").unwrap_or(field.as_ref());
+                        format!("{part} {source}.mark and {source}.space are equal")
+                    }
+                    WaveformRule::AtZero => {
+                        format!("{part} {field} is {value}; a jump must come after t = 0")
+                    }
+                    WaveformRule::TooClose => format!(
+                        "{part} {field} is {value}; two jumps must be at least {} ps apart",
+                        MIN_GAP_PS
+                    ),
+                    WaveformRule::Overflow => {
+                        format!(
+                            "{part} {field} is {value}; the first fall is past the largest time"
+                        )
+                    }
                 }
-                WaveformRule::AtZero => {
-                    format!("{part} {field} is {value}; a jump must come after t = 0")
-                }
-                WaveformRule::TooClose => format!(
-                    "{part} {field} is {value}; two jumps must be at least {} ps apart",
-                    MIN_GAP_PS
-                ),
-                WaveformRule::Overflow => {
-                    format!("{part} {field} is {value}; the first fall is past the largest time")
-                }
-            },
-            Diagnostic::NetFloating { net } => format!("{net} has no DC path to ground"),
-            Diagnostic::NetShort { part, net } => format!(
-                "{part} holds `p` and `n` apart, but both are on {net}, so the circuit shorts it"
-            ),
-            Diagnostic::SolverSingular { unknown, .. } => format!("singular matrix at {unknown}"),
+            }
+            Diagnostic::NetFloating { net } => {
+                let net = namer(net);
+                format!("{net} has no DC path to ground")
+            }
+            Diagnostic::NetShort { part, net } => {
+                let part = namer(part);
+                let net = namer(net);
+                format!(
+                    "{part} holds `p` and `n` apart, but both are on {net}, so the circuit shorts it"
+                )
+            }
+            Diagnostic::SolverSingular { unknown, .. } => {
+                let unknown = namer(unknown);
+                format!("singular matrix at {unknown}")
+            }
             Diagnostic::SolverNonFinite { unknown, .. } => {
+                let unknown = namer(unknown);
                 format!("non-finite number at {unknown}")
             }
             Diagnostic::SolverTooLarge {
@@ -1101,37 +1141,49 @@ impl Diagnostic {
                 source_scale,
                 solve: Solve::Ladder,
                 ..
-            } if *at > Time::ZERO => format!(
-                "Newton did not converge at {unknown} after {iterations} iterations in the restart solve at {} ps; source stepping reached {source_scale}",
-                at.as_ps()
-            ),
+            } if *at > Time::ZERO => {
+                let unknown = namer(unknown);
+                format!(
+                    "Newton did not converge at {unknown} after {iterations} iterations in the restart solve at {} ps; source stepping reached {source_scale}",
+                    at.as_ps()
+                )
+            }
             Diagnostic::SolverConvergence {
                 unknown,
                 iterations,
                 source_scale,
                 solve: Solve::Ladder,
                 ..
-            } => format!(
-                "Newton did not converge at {unknown} after {iterations} iterations; source stepping reached {source_scale}"
-            ),
+            } => {
+                let unknown = namer(unknown);
+                format!(
+                    "Newton did not converge at {unknown} after {iterations} iterations; source stepping reached {source_scale}"
+                )
+            }
             Diagnostic::SolverConvergence {
                 unknown,
                 iterations,
                 solve: Solve::Step { step_ps },
                 ..
-            } => format!(
-                "Newton did not converge at {unknown} after {iterations} iterations; the time step halved to {step_ps} ps"
-            ),
+            } => {
+                let unknown = namer(unknown);
+                format!(
+                    "Newton did not converge at {unknown} after {iterations} iterations; the time step halved to {step_ps} ps"
+                )
+            }
             Diagnostic::SolverConvergence {
                 at,
                 unknown,
                 iterations,
                 solve: Solve::Probe { .. },
                 ..
-            } => format!(
-                "Newton did not converge at {unknown} after {iterations} iterations in the probe at {} ps locating a chip event",
-                at.as_ps()
-            ),
+            } => {
+                let unknown = namer(unknown);
+                format!(
+                    "Newton did not converge at {unknown} after {iterations} iterations in the probe at {} ps locating a chip event",
+                    at.as_ps()
+                )
+            }
             Diagnostic::ChipUnsettled { at, rounds, .. } => format!(
                 "the chips kept changing state for {rounds} solves at {} ps",
                 at.as_ps()
@@ -1140,52 +1192,74 @@ impl Diagnostic {
                 part,
                 at,
                 rule: ProtocolRule::SdaWhileSclHigh,
-            } => format!(
-                "{part} left SDA unmoved because SCL was high at {} ps, breaking rule {}, the first time",
-                at.as_ps(),
-                rule_text(&ProtocolRule::SdaWhileSclHigh)
-            ),
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} left SDA unmoved because SCL was high at {} ps, breaking rule {}, the first time",
+                    at.as_ps(),
+                    rule_text(&ProtocolRule::SdaWhileSclHigh)
+                )
+            }
             Diagnostic::ChipProtocol {
                 part,
                 at,
                 rule: ProtocolRule::Bit,
-            } => format!(
-                "{part} dropped a bit that broke rule {} at {} ps, the first time",
-                rule_text(&ProtocolRule::Bit),
-                at.as_ps()
-            ),
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} dropped a bit that broke rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::Bit),
+                    at.as_ps()
+                )
+            }
             Diagnostic::ChipProtocol {
                 part,
                 at,
                 rule: ProtocolRule::Interval,
-            } => format!(
-                "{part} did not answer a read that broke rule {} at {} ps, the first time",
-                rule_text(&ProtocolRule::Interval),
-                at.as_ps()
-            ),
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} did not answer a read that broke rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::Interval),
+                    at.as_ps()
+                )
+            }
             Diagnostic::ChipProtocol {
                 part,
                 at,
                 rule: ProtocolRule::DoutRecord,
-            } => format!(
-                "{part} did not pass a high from a record on to DOUT, breaking rule {} at {} ps, the first time",
-                rule_text(&ProtocolRule::DoutRecord),
-                at.as_ps()
-            ),
-            Diagnostic::ChipProtocol { part, at, rule } => format!(
-                "{part} dropped a transfer that broke rule {} at {} ps, the first time",
-                rule_text(rule),
-                at.as_ps()
-            ),
-            Diagnostic::ChipFloatingInput { pin, net, at } => format!(
-                "{pin} floats on {net} at {} ps, and the firmware has taken in its level since the pin last became an input with its pull-up off, alone or with the rest of its port: there is no DC path to a supply or to ground, and a capacitor does not hold the pin's level, so the level is whatever leakage and noise leave; add a pull-up or a pull-down resistor, or turn the pin's pull-up on",
-                at.as_ps()
-            ),
-            Diagnostic::ChipLinkMiswired { part, at, sender } => format!(
-                "{part} dropped an SPI transaction from #{} whose data lanes are not on its own data pins at {} ps, the first time",
-                sender.as_str(),
-                at.as_ps()
-            ),
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} did not pass a high from a record on to DOUT, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::DoutRecord),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol { part, at, rule } => {
+                let part = namer(part);
+                format!(
+                    "{part} dropped a transfer that broke rule {} at {} ps, the first time",
+                    rule_text(rule),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipFloatingInput { pin, net, at } => {
+                let pin = namer(pin);
+                let net = namer(net);
+                format!(
+                    "{pin} floats on {net} at {} ps, and the firmware has taken in its level since the pin last became an input with its pull-up off, alone or with the rest of its port: there is no DC path to a supply or to ground, and a capacitor does not hold the pin's level, so the level is whatever leakage and noise leave; add a pull-up or a pull-down resistor, or turn the pin's pull-up on",
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipLinkMiswired { part, at, sender } => {
+                let part = namer(part);
+                format!(
+                    "{part} dropped an SPI transaction from #{} whose data lanes are not on its own data pins at {} ps, the first time",
+                    sender.as_str(),
+                    at.as_ps()
+                )
+            }
             Diagnostic::ChipUnsupportedInstruction {
                 part,
                 at,
@@ -1204,6 +1278,7 @@ impl Diagnostic {
                     Unsupported::Litbase => "`l32r` with LITBASE".to_string(),
                     Unsupported::LoopEnd => format!("`{op}` as the last op of a loop"),
                 };
+                let part = namer(part);
                 format!(
                     "{part} reached {what} at {pc:#010x}{}{}, which the model does not run, at {} ps",
                     symbol_text(symbol),
@@ -1217,24 +1292,30 @@ impl Diagnostic {
                 pc,
                 app,
                 symbol,
-            } => format!(
-                "{part} fetched code at {pc:#010x}{}{}, where the model maps no memory, at {} ps",
-                symbol_text(symbol),
-                core_text(*app),
-                at.as_ps()
-            ),
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} fetched code at {pc:#010x}{}{}, where the model maps no memory, at {} ps",
+                    symbol_text(symbol),
+                    core_text(*app),
+                    at.as_ps()
+                )
+            }
             Diagnostic::ChipHalted {
                 part,
                 at,
                 pc,
                 app,
                 symbol,
-            } => format!(
-                "{part} halted at {pc:#010x}{}{}, a jump to itself that no interrupt or watchdog can leave, at {} ps",
-                symbol_text(symbol),
-                core_text(*app),
-                at.as_ps()
-            ),
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} halted at {pc:#010x}{}{}, a jump to itself that no interrupt or watchdog can leave, at {} ps",
+                    symbol_text(symbol),
+                    core_text(*app),
+                    at.as_ps()
+                )
+            }
             Diagnostic::ChipUnsupportedSetting {
                 part,
                 at,
@@ -1268,6 +1349,7 @@ impl Diagnostic {
                     }
                     _ => "which the model does not run",
                 };
+                let part = namer(part);
                 format!(
                     "{part} {what} at {pc:#010x}{}{}, {why}, at {} ps",
                     symbol_text(symbol),
@@ -1281,22 +1363,28 @@ impl Diagnostic {
                 watchdog,
                 stage,
                 reset,
-            } => format!(
-                "{part} {watchdog} watchdog's stage {stage} ran out and reset the {reset} at {} ps; the firmware neither fed nor disabled it",
-                at.as_ps()
-            ),
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} {watchdog} watchdog's stage {stage} ran out and reset the {reset} at {} ps; the firmware neither fed nor disabled it",
+                    at.as_ps()
+                )
+            }
             Diagnostic::ChipEfuseProgram {
                 part,
                 at,
                 pc,
                 app,
                 symbol,
-            } => format!(
-                "{part} started an eFuse program command at {pc:#010x}{}{}, which would burn eFuses, at {} ps",
-                symbol_text(symbol),
-                core_text(*app),
-                at.as_ps()
-            ),
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} started an eFuse program command at {pc:#010x}{}{}, which would burn eFuses, at {} ps",
+                    symbol_text(symbol),
+                    core_text(*app),
+                    at.as_ps()
+                )
+            }
             Diagnostic::ChipFlashCommand {
                 part,
                 at,
@@ -1348,6 +1436,7 @@ impl Diagnostic {
                         "which the model does not run",
                     ),
                 };
+                let part = namer(part);
                 format!(
                     "{part} {what} at {pc:#010x}{}{}, {why}, at {} ps",
                     symbol_text(symbol),
@@ -1361,24 +1450,30 @@ impl Diagnostic {
                 pc,
                 app,
                 symbol,
-            } => format!(
-                "{part} picked a CPU clock the model does not run, the RC fast clock or a reserved setting, at {pc:#010x}{}{} at {} ps",
-                symbol_text(symbol),
-                core_text(*app),
-                at.as_ps()
-            ),
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} picked a CPU clock the model does not run, the RC fast clock or a reserved setting, at {pc:#010x}{}{} at {} ps",
+                    symbol_text(symbol),
+                    core_text(*app),
+                    at.as_ps()
+                )
+            }
             Diagnostic::ChipRestart {
                 part,
                 at,
                 pc,
                 app,
                 symbol,
-            } => format!(
-                "{part} reset itself at {pc:#010x}{}{} at {} ps; the model does not run the boot ROM, so the chip stays in reset",
-                symbol_text(symbol),
-                core_text(*app),
-                at.as_ps()
-            ),
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} reset itself at {pc:#010x}{}{} at {} ps; the model does not run the boot ROM, so the chip stays in reset",
+                    symbol_text(symbol),
+                    core_text(*app),
+                    at.as_ps()
+                )
+            }
             Diagnostic::ChipFaultRestart {
                 part,
                 at,
@@ -1386,20 +1481,23 @@ impl Diagnostic {
                 pc,
                 app,
                 symbol,
-            } => format!(
-                "{part} reset itself at {pc:#010x}{}{} {}, at {} ps",
-                symbol_text(symbol),
-                core_text(*app),
-                match reason {
-                    ResetReason::Panic => "after a panic",
-                    ResetReason::InterruptWatchdog => "after its interrupt watchdog fired",
-                    ResetReason::TaskWatchdog => "after its task watchdog fired",
-                    ResetReason::Watchdog => "after a watchdog fired",
-                    ResetReason::Brownout => "after a brownout",
-                    ResetReason::Unreadable => "with no reset reason the model can read",
-                },
-                at.as_ps()
-            ),
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} reset itself at {pc:#010x}{}{} {}, at {} ps",
+                    symbol_text(symbol),
+                    core_text(*app),
+                    match reason {
+                        ResetReason::Panic => "after a panic",
+                        ResetReason::InterruptWatchdog => "after its interrupt watchdog fired",
+                        ResetReason::TaskWatchdog => "after its task watchdog fired",
+                        ResetReason::Watchdog => "after a watchdog fired",
+                        ResetReason::Brownout => "after a brownout",
+                        ResetReason::Unreadable => "with no reset reason the model can read",
+                    },
+                    at.as_ps()
+                )
+            }
             Diagnostic::ChipUnmappedLoad {
                 part,
                 at,
@@ -1407,12 +1505,15 @@ impl Diagnostic {
                 pc,
                 app,
                 symbol,
-            } => format!(
-                "{part} loaded from {address:#010x} at {pc:#010x}{}{}, where the MMU maps no flash, at {} ps",
-                symbol_text(symbol),
-                core_text(*app),
-                at.as_ps()
-            ),
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} loaded from {address:#010x} at {pc:#010x}{}{}, where the MMU maps no flash, at {} ps",
+                    symbol_text(symbol),
+                    core_text(*app),
+                    at.as_ps()
+                )
+            }
             Diagnostic::ChipUnmodeledRegister {
                 part,
                 at,
@@ -1423,18 +1524,21 @@ impl Diagnostic {
                 symbol,
                 write,
                 kept,
-            } => format!(
-                "{part} {} {register} at {address:#010x}, {} {} ps from {pc:#010x}{}{}",
-                if *write { "wrote" } else { "read" },
-                if *kept {
-                    "whose effect the model does not run, at"
-                } else {
-                    "which the model does not keep, first at"
-                },
-                at.as_ps(),
-                symbol_text(symbol),
-                core_text(*app)
-            ),
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} {} {register} at {address:#010x}, {} {} ps from {pc:#010x}{}{}",
+                    if *write { "wrote" } else { "read" },
+                    if *kept {
+                        "whose effect the model does not run, at"
+                    } else {
+                        "which the model does not keep, first at"
+                    },
+                    at.as_ps(),
+                    symbol_text(symbol),
+                    core_text(*app)
+                )
+            }
             Diagnostic::TraceTooLarge {
                 rows,
                 limit,
@@ -1457,9 +1561,9 @@ impl Diagnostic {
                 from.as_ps(),
                 to.as_ps()
             ),
-            Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A"),
-            Diagnostic::RatingPower(excursion) => over_rating(excursion, "W"),
-            Diagnostic::RatingVoltage(excursion) => outside_window(excursion),
+            Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A", namer),
+            Diagnostic::RatingPower(excursion) => over_rating(excursion, "W", namer),
+            Diagnostic::RatingVoltage(excursion) => outside_window(excursion, namer),
         }
     }
 
@@ -1736,7 +1840,7 @@ pub(crate) fn number_text(value: f64) -> String {
     }
 }
 
-fn over_rating(excursion: &Excursion, unit: &str) -> String {
+fn over_rating(excursion: &Excursion, unit: &str, namer: &dyn Fn(&Ref) -> String) -> String {
     let Excursion {
         quantity,
         limit,
@@ -1745,6 +1849,7 @@ fn over_rating(excursion: &Excursion, unit: &str) -> String {
         window_ps,
         ..
     } = excursion;
+    let quantity = namer(quantity);
     let reading = match window_ps {
         Some(window) => format!(
             "{quantity} carries {peak} {unit} RMS over the last {} ms",
@@ -1767,7 +1872,7 @@ fn for_time(over_ps: Option<u64>) -> String {
     }
 }
 
-fn outside_window(excursion: &VoltageExcursion) -> String {
+fn outside_window(excursion: &VoltageExcursion, namer: &dyn Fn(&Ref) -> String) -> String {
     let VoltageExcursion {
         pin,
         low,
@@ -1776,6 +1881,7 @@ fn outside_window(excursion: &VoltageExcursion) -> String {
         over_ps,
         ..
     } = excursion;
+    let pin = namer(pin);
     let window = match (low, high) {
         (Some(low), Some(high)) => format!("its {low} V to {high} V rating"),
         (Some(low), None) => format!("its {low} V floor"),
