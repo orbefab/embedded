@@ -17,6 +17,7 @@
   "params": {
     "color": {
       "required": true,
+      "example": "red",
       "choices": {
         "red": {
           "real": { "number": "WP7113ID" },

@@ -6,7 +6,10 @@
 // The electrical values are Table 5-4 at 3.3 V and 25 C, the field table in
 // docs/engine/netlist.md. There is no efuse field.
 // The ROM ELF is Apache-2.0. LICENSE-rom is Espressif's licence, unchanged, and
-// NOTICE quotes the third-party notices. Our files stay MIT OR Apache-2.0.
+// NOTICE quotes the ROM's third-party notices. hello_world.bin and
+// partition-table.bin are an ESP-IDF app and its partition table. NOTICE-hello
+// quotes their notices, and the LICENSE files beside them are those texts.
+// The part's other files stay MIT OR Apache-2.0.
 {
   "format": 2,
   "part": "esp32s3-qfn56",
@@ -14,7 +17,7 @@
   "title": "ESP32-S3, QFN-56",
   "summary": "ESP32-S3 in a 7 x 7 mm QFN-56. GPIO names match the esp32s3 kind. The mask ROM is the default of rom.",
   "tags": ["microcontroller", "esp32-s3", "qfn"],
-  "license": "(MIT OR Apache-2.0) AND Apache-2.0",
+  "license": "(MIT OR Apache-2.0) AND Apache-2.0 AND MIT AND BSD-3-Clause AND BSD-2-Clause AND LicenseRef-Cadence-Xtensa AND LicenseRef-newlib AND LicenseRef-GCC-Runtime-Library-Exception",
   "docs": {
     "ESP32-S3 Series Datasheet v2.2": "https://www.espressif.com/sites/default/files/documentation/esp32-s3_datasheet_en.pdf"
   },
@@ -39,8 +42,8 @@
     "GND": [57]
   },
   "params": {
-    "app": { "file": "bin", "as": "blob", "required": true, "sets": "/firmware/flash/1" },
-    "partitions": { "file": "bin", "as": "blob", "required": true, "sets": "/firmware/flash/0" },
+    "app": { "file": "bin", "as": "blob", "required": true, "example": "hello_world.bin", "sets": "/firmware/flash/1" },
+    "partitions": { "file": "bin", "as": "blob", "required": true, "example": "partition-table.bin", "sets": "/firmware/flash/0" },
     "rom": { "file": "elf", "as": "blob", "default": "esp32s3_rev0_rom.elf", "sets": "/rom" }
   },
   "model": {

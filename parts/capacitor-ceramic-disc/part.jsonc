@@ -10,7 +10,7 @@
   "real": { "generic": true, "maker": null, "number": null, "datasheet": "Vishay K-series ceramic disc" },
   "pins": { "a": [1], "b": [2] },
   "params": {
-    "capacitance": { "unit": "F", "required": true, "min_exclusive": 0, "sets": "/capacitance" },
+    "capacitance": { "unit": "F", "required": true, "example": 1e-7, "min_exclusive": 0, "sets": "/capacitance" },
     "initial": { "unit": "V", "default": null, "sets": "/initial" },
   },
   "model": { "kind": "capacitor" },

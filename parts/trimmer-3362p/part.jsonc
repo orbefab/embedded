@@ -3,7 +3,7 @@
   "part": "trimmer-3362p",
   "version": "0.2.0",
   "title": "Trimmer potentiometer, 1/4 inch square (3362P)",
-  "summary": "Single-turn cermet trimmer you set once with a screwdriver, such as a comparator's threshold. Its three pins sit in a triangle on the breadboard grid. Seen from the top with the printed face toward you, `a` is the left pin, `b` the right and `wiper` the one behind them. Turning clockwise moves the wiper from `a` toward `b`. Set its resistance, the value printed on top (103 is 10k). `position` is the wiper's place along the track, the share of `resistance` between `a` and `wiper`, above 0 and below 1. The buy link is the 10 kΩ value of the series.",
+  "summary": "Single-turn cermet trimmer you set once with a screwdriver, such as a comparator's threshold. Its three pins sit in a triangle on the breadboard grid. Seen from the top with the printed face toward you, `a` is the left pin, `b` the right and `wiper` the one behind them. Turning clockwise moves the wiper from `a` toward `b`. Set its resistance, the value printed on top (103 is 10k). `position` is the wiper's place along the track, the share of `resistance` between `a` and `wiper`, above 0 and below 1.",
   "tags": ["potentiometer", "trimmer", "trimpot", "variable resistor", "voltage divider", "threshold", "analog", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "docs": { "Bourns 3362": "https://www.bourns.com/docs/Product-Datasheets/3362.pdf" },
@@ -13,7 +13,7 @@
   ],
   "pins": { "a": [1], "wiper": [2], "b": [3] },
   "params": {
-    "resistance": { "unit": "ohm", "required": true, "min_exclusive": 0, "sets": "/resistance" },
+    "resistance": { "unit": "ohm", "required": true, "example": 10000, "min_exclusive": 0, "sets": "/resistance" },
     "position": { "unit": "1", "default": 0.5, "min_exclusive": 0, "max_exclusive": 1, "sets": "/position" },
   },
   "model": { "kind": "potentiometer" },

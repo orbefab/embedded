@@ -52,6 +52,7 @@ export interface Param {
   readonly unit?: string;
   readonly required?: boolean;
   readonly default?: number | string | null;
+  readonly example?: number | string;
   readonly above?: number;
   readonly below?: number;
   readonly choices?: readonly Choice[];

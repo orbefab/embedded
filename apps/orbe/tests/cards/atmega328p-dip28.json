@@ -25,6 +25,10 @@
     },
     {
       "license": "MIT OR Apache-2.0",
+      "path": "example.hex"
+    },
+    {
+      "license": "MIT OR Apache-2.0",
       "path": "part.jsonc"
     }
   ],
@@ -46,6 +50,7 @@
   ],
   "params": [
     {
+      "example": "example.hex",
       "file": "hex",
       "name": "firmware",
       "required": true

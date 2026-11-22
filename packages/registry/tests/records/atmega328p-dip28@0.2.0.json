@@ -29,6 +29,13 @@
       "license": "MIT OR Apache-2.0"
     },
     {
+      "path": "example.hex",
+      "url": "files/<sha256>",
+      "sha256": "<sha256>",
+      "bytes": 0,
+      "license": "MIT OR Apache-2.0"
+    },
+    {
       "path": "part.jsonc",
       "url": "files/<sha256>",
       "sha256": "<sha256>",
@@ -211,7 +218,8 @@
     {
       "name": "firmware",
       "file": "hex",
-      "required": true
+      "required": true,
+      "example": "example.hex"
     }
   ],
   "ratings": [

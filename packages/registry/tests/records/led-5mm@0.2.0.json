@@ -67,7 +67,8 @@
           "tint": "#d8342a"
         }
       ],
-      "required": true
+      "required": true,
+      "example": "red"
     }
   ],
   "ratings": [

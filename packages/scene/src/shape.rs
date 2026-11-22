@@ -62,6 +62,7 @@ const PARAM_KEYS: &[(&str, Shape)] = &[
     ("file", Shape::Str),
     ("as", Shape::Word(&["text", "blob"])),
     ("default", Shape::Any),
+    ("example", Shape::Any),
     ("required", Shape::Bool),
     ("min_exclusive", Shape::Num),
     ("max_exclusive", Shape::Num),
@@ -87,13 +88,13 @@ const PARAM_KINDS: &[(ParamShape, &str, Option<&str>, &[&str])] = &[
         ParamShape::Choice,
         "a choice param",
         Some("choices"),
-        &["choices", "default", "required"],
+        &["choices", "default", "example", "required"],
     ),
     (
         ParamShape::File,
         "a file param",
         Some("file"),
-        &["file", "as", "default", "required", "sets"],
+        &["file", "as", "default", "example", "required", "sets"],
     ),
     (
         ParamShape::Number,
@@ -102,6 +103,7 @@ const PARAM_KINDS: &[(ParamShape, &str, Option<&str>, &[&str])] = &[
         &[
             "unit",
             "default",
+            "example",
             "required",
             "min_exclusive",
             "max_exclusive",
@@ -117,7 +119,8 @@ const PARAM_KINDS: &[(ParamShape, &str, Option<&str>, &[&str])] = &[
 ];
 
 /// The kind of a param declaration, with a `scene.syntax` finding at each key that kind does
-/// not read, and at `"required": true` beside a `default`. [`check`] reports a key no kind has,
+/// not read, at `"required": true` beside a `default`, and at an `example` beside a `default`.
+/// [`check`] reports a key no kind has,
 /// such as a misspelt `unit`, and then the kind is not known, so its keys wait for the next run.
 pub(crate) fn param_shape(node: &Node, out: &mut Findings) -> ParamShape {
     let props = node.props().unwrap_or_default();
@@ -150,6 +153,14 @@ pub(crate) fn param_shape(node: &Node, out: &mut Findings) -> ParamShape {
                 "a param with a `default` is not required",
                 "remove \"required\": true, or remove `default` so that every use must set it"
                     .into(),
+            );
+        }
+        if key == "example" && has("default") {
+            out.push(
+                Code::Syntax,
+                prop.key_span,
+                "a param with a `default` has no `example`",
+                "remove `example`, or remove `default` so that every use must set it".into(),
             );
         }
     }

@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 use crate::diagnostic::{Code, Diagnostic, Findings};
 use crate::files::{Files, Kind};
-use crate::model::{Comp, ParamKind, Part, Scene, TypeRef, decode_part, decode_scene};
+use crate::model::{Comp, Part, Scene, TypeRef, decode_part, decode_scene};
 use crate::source::{FileId, Sources, Span, display};
 use crate::syntax;
 
@@ -159,36 +159,6 @@ pub(crate) fn part_diagnostics(id: &str, text: &str) -> Vec<Diagnostic> {
         text,
         |sources, file, out| {
             parse_part(sources, file, id.to_string(), out, "orbe add");
-        },
-    )
-}
-
-/// A finding at each required number param with no default in the text of
-/// `parts/<id>/part.jsonc` whose bounds hold no value a scene could set. Empty when the file does
-/// not read, since [`part_diagnostics`] reports why.
-pub(crate) fn unusable_params(id: &str, text: &str) -> Vec<Diagnostic> {
-    reader_diagnostics(
-        &format!("parts/{id}/part.jsonc"),
-        text,
-        |sources, file, out| {
-            let mut quiet = Findings::default();
-            let Some(part) = parse_part(sources, file, id.to_string(), &mut quiet, "orbe add")
-            else {
-                return;
-            };
-            for decl in part.params.iter().filter(|decl| decl.default.is_none()) {
-                let ParamKind::Number { unit, range } = decl.kind else {
-                    continue;
-                };
-                if let Some((why, hint)) = crate::params::no_value(unit, range) {
-                    out.push(
-                        Code::Param,
-                        decl.span,
-                        format!("param `{}` takes no value: {why}", decl.name),
-                        hint,
-                    );
-                }
-            }
         },
     )
 }
@@ -967,4 +937,103 @@ pub(crate) fn shell_path(path: &std::ffi::OsStr) -> String {
         word.push_str(&format!("'{}'", "\n".repeat(newlines)));
     }
     word
+}
+
+#[cfg(test)]
+mod example {
+    use super::part_diagnostics;
+    use crate::diagnostic::Code;
+
+    fn lamp(params: &str, model: &str) -> String {
+        format!(
+            r#"{{
+  "format": 1,
+  "part": "lamp",
+  "version": "0.1.0",
+  "title": "Lamp",
+  "license": "MIT",
+  "pins": {{ "a": [1], "b": [2] }},
+  "params": {{ {params} }},
+  "model": {model}
+}}
+"#
+        )
+    }
+
+    const RESISTOR: &str = r#"{ "kind": "resistor", "ratings": { "power": null } }"#;
+
+    #[test]
+    fn an_example_of_zero_on_a_resistance_above_zero_is_out_of_range() {
+        let text = lamp(
+            r#""resistance": { "unit": "ohm", "required": true, "min_exclusive": 0, "example": 0, "sets": "/resistance" }"#,
+            RESISTOR,
+        );
+        let found = part_diagnostics("lamp", &text);
+        assert!(
+            found.iter().any(|d| {
+                d.code == Code::Param
+                    && d.message.contains("param `resistance` example:")
+                    && d.message.contains("out of range")
+            }),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn an_example_beside_a_default_is_a_syntax_error_and_not_also_checked() {
+        let text = lamp(
+            r#""resistance": { "unit": "ohm", "default": "220", "example": 0, "min_exclusive": 0, "sets": "/resistance" }"#,
+            RESISTOR,
+        );
+        let found = part_diagnostics("lamp", &text);
+        assert!(
+            found
+                .iter()
+                .any(|d| d.code == Code::Syntax && d.message.contains("has no `example`")),
+            "{found:?}"
+        );
+        assert!(
+            found
+                .iter()
+                .all(|d| !d.message.contains("param `resistance` example:")),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn an_example_file_outside_the_folder_is_refused() {
+        let text = lamp(
+            r#""note": { "file": "txt", "as": "text", "required": true, "example": "../x", "sets": "/note" }"#,
+            r#"{ "kind": "resistor", "ratings": { "power": null }, "note": "" }"#,
+        );
+        let found = part_diagnostics("lamp", &text);
+        assert!(
+            found.iter().any(|d| {
+                d.code == Code::Param && d.message.contains("`../x` is outside this part's folder")
+            }),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn a_through_param_does_not_read_an_example() {
+        let text = lamp(r#""firmware": { "example": "example.hex" }"#, RESISTOR);
+        let found = part_diagnostics("lamp", &text);
+        assert!(
+            found.iter().any(|d| {
+                d.code == Code::Syntax && d.message.contains("does not read `example`")
+            }),
+            "{found:?}"
+        );
+    }
+
+    #[test]
+    fn an_example_a_scene_could_set_is_not_a_finding() {
+        let text = lamp(
+            r#""resistance": { "unit": "ohm", "required": true, "min_exclusive": 0, "example": 220, "sets": "/resistance" }"#,
+            RESISTOR,
+        );
+        let found = part_diagnostics("lamp", &text);
+        assert!(found.is_empty(), "{found:?}");
+    }
 }
