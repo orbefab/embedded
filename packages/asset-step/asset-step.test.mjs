@@ -1,7 +1,7 @@
-// Runs the asset step on crafted models in a scratch models repo. scripts/check-assets.sh runs it.
+// Runs the asset step on crafted models. scripts/check-assets.sh runs it.
 
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -65,49 +65,33 @@ function board(id, children, layout, nodes = [{ name: 'pcb', points: [[0, 0, 1]]
 
 const BLOCK = { part: { format: 1, part: 'block' }, nodes: [{ name: 'body', points: [[0, 0, 0], [0, 0, 2]] }] };
 
-function git(models, args) {
-  return execFileSync('git', ['-C', models, '-c', 'user.name=test', '-c', 'user.email=test@example.invalid', ...args], {
-    encoding: 'utf8',
-  }).trim();
-}
-
-/** Commits each spec's GLB and anchors to the scratch models repo and returns the commit. */
-async function publish(fx, specs) {
-  mkdirSync(join(fx.models, 'GLB/parts'), { recursive: true });
-  for (const [id, spec] of Object.entries(specs)) {
-    if (!spec.nodes) continue;
-    writeFileSync(join(fx.models, 'GLB/parts', `${id}.glb`), await glb(spec.nodes));
-    if (spec.anchors) {
-      const text = typeof spec.anchors === 'string' ? spec.anchors : JSON.stringify(spec.anchors);
-      writeFileSync(join(fx.models, 'GLB/parts', `${id}.anchors.json`), text);
-    }
-  }
-  git(fx.models, ['add', '-A']);
-  git(fx.models, ['commit', '-q', '--allow-empty', '-m', 'models']);
-  return git(fx.models, ['rev-parse', 'HEAD']);
-}
-
 const writePart = (fx, id, part) => writeFileSync(join(fx.parts, id, 'part.jsonc'), JSON.stringify(part));
 
 async function fixture(t, specs) {
   const root = mkdtempSync(join(tmpdir(), 'asset-step-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const fx = { models: join(root, 'models'), parts: join(root, 'parts') };
-  mkdirSync(fx.models);
-  git(fx.models, ['init', '-q']);
-  fx.commit = await publish(fx, specs);
+  const fx = { raw: join(root, 'raw'), parts: join(root, 'parts') };
   for (const [id, spec] of Object.entries(specs)) {
     mkdirSync(join(fx.parts, id), { recursive: true });
     writePart(fx, id, spec.part);
+    writeFileSync(join(fx.parts, id, 'model.py'), spec.script ?? `print(${JSON.stringify(id)})\n`);
+    if (!spec.nodes) continue;
+    const raw = join(fx.raw, id);
+    mkdirSync(raw, { recursive: true });
+    writeFileSync(join(raw, `${id}.glb`), await glb(spec.nodes));
+    if (spec.anchors) {
+      const text = typeof spec.anchors === 'string' ? spec.anchors : JSON.stringify(spec.anchors);
+      writeFileSync(join(raw, `${id}.anchors.json`), text);
+    }
   }
   return fx;
 }
 
-function run(fx, ids, commit = fx.commit) {
-  const args = [STEP, '--models', fx.models, '--parts', fx.parts, ...(commit ? ['--commit', commit] : []), ...ids];
+function run(fx, ids) {
+  const args = [STEP, '--raw', fx.raw, '--parts', fx.parts, ...ids];
   const { status, stdout, stderr } = spawnSync(process.execPath, args, { encoding: 'utf8', env });
   const lines = stdout.trimEnd().split('\n');
-  return { status, stderr, line: (id) => lines.find((l) => l.split(/\s+/)[1] === id) };
+  return { status, stdout, stderr, line: (id) => lines.find((l) => l.split(/\s+/)[1] === id) };
 }
 
 const files = (fx, id) => readdirSync(join(fx.parts, id)).sort();
@@ -121,7 +105,7 @@ test('a two-number `at` places a child at z = 0', async (t) => {
   });
   const out = run(fx, ['block', 'flipped', 'raised']);
   assert.equal(out.status, 1);
-  assert.match(out.line('flipped'), /^FAIL {2}flipped {2}composition: placed by the layout, node `u1\/body` reaches z = -2\.000 mm/);
+  assert.match(out.line('flipped'), /^FAIL {2}flipped {2}composition: placed by the layout, node `u1\/\(unnamed\)` reaches z = -2\.000 mm/);
   assert.match(out.line('raised'), /^ok/);
   assert.deepEqual(asset(fx, 'raised').checks.composition, { children: 1, lowest_node: 'pcb', z_mm: 1, draw_calls: 2 });
 });
@@ -136,7 +120,7 @@ test('a vertex that is not a finite number fails seating and composition', async
   const out = run(fx, ['block', 'nan-body', 'nan-also', 'short-rotate']);
   assert.match(out.line('nan-body'), /seating: node `shell` has a vertex that is not a finite number/);
   assert.match(out.line('nan-also'), /seating: node `tab` has a vertex that is not a finite number/);
-  assert.match(out.line('short-rotate'), /composition: placed by the layout, node `u1\/body` has a vertex that is not a finite number/);
+  assert.match(out.line('short-rotate'), /composition: placed by the layout, node `u1\/\(unnamed\)` has a vertex that is not a finite number/);
 });
 
 test('a lead whose node has an infinite vertex fails the anchors check', async (t) => {
@@ -212,39 +196,11 @@ test("a model.py child's pad that sinks below its parent fails composition by na
     sunk,
     holder: board('holder', { c1: 'sunk' }, { c1: { at: [0, 0, 0] } }),
   });
-  const folder = join(fx.parts, 'sunk');
-  writeFileSync(join(folder, 'model.py'), 'print("sunk")\n');
-  const raw = join(fx.parts, '..', 'raw', 'sunk');
-  mkdirSync(raw, { recursive: true });
-  writeFileSync(join(raw, 'sunk.glb'), await glb(sunk.nodes));
-  writeFileSync(join(raw, 'sunk.anchors.json'), JSON.stringify(sunk.anchors));
-  const local = spawnSync(process.execPath, [STEP, '--local', '--raw', join(fx.parts, '..', 'raw'), '--parts', fx.parts, 'sunk'], {
-    encoding: 'utf8',
-    env,
-  });
-  assert.equal(local.status, 0, local.stdout);
-  assert.equal(existsSync(join(folder, 'sunk.source.glb')), false);
+  const out = run(fx, ['sunk', 'holder']);
+  assert.match(out.line('sunk'), /^ok/);
+  assert.equal(existsSync(join(fx.parts, 'sunk', 'sunk.source.glb')), false);
   assert.deepEqual(asset(fx, 'sunk').kept_nodes, []);
-  const lost = run(fx, ['holder']);
-  assert.match(lost.line('holder'), /composition: placed by the layout, node `c1\/\(unnamed\)` reaches z = -0\.400 mm/);
-});
-
-test("a child's pads are leads when its parent is composed", async (t) => {
-  const fx = await fixture(t, {
-    capped: {
-      part: { format: 1, part: 'capped', pins: { a: [1] } },
-      nodes: [
-        { name: 'cap', points: [[-0.5, 0, -0.5], [0.5, 0, -0.5]] },
-        { name: 'body', points: [[0, 0, 1]] },
-      ],
-      anchors: { part: 'capped', units: 'mm', anchors: [leg({ node: 'cap', at: [0, 0, -0.5], kind: 'pad' })] },
-    },
-    holder: board('holder', { c1: 'capped' }, { c1: { at: [0, 0, 0] } }),
-  });
-  const out = run(fx, ['capped', 'holder']);
-  assert.equal(out.status, 0, out.line('holder'));
-  assert.deepEqual(asset(fx, 'capped').kept_nodes, []);
-  assert.equal(asset(fx, 'holder').checks.composition.lowest_node, 'pcb');
+  assert.match(out.line('holder'), /composition: placed by the layout, node `c1\/\(unnamed\)` reaches z = -0\.400 mm/);
 });
 
 test("composition places a child's own children", async (t) => {
@@ -255,17 +211,8 @@ test("composition places a child's own children", async (t) => {
     tilted: board('tilted', { m: 'mid' }, { m: { at: [0, 0, 0], rotate: [0, 20, 0] } }),
   });
   const out = run(fx, ['tilted', 'flat', 'mid', 'block']);
-  assert.match(out.line('tilted'), /composition: placed by the layout, node `m\/b\/body` reaches z = -3\.420 mm/);
+  assert.match(out.line('tilted'), /composition: placed by the layout, node `m\/b\/\(unnamed\)` reaches z = -3\.420 mm/);
   assert.match(out.line('flat'), /^ok {4}flat {2}kept 0 nodes, 1, composed 3 draw calls/);
-});
-
-test('a child is composed from the commit its asset.json records', async (t) => {
-  const fx = await fixture(t, { block: BLOCK, holder: board('holder', { u1: 'block' }, { u1: { at: [0, 0, 0] } }) });
-  assert.equal(run(fx, ['block', 'holder']).status, 0);
-  const sunk = await publish(fx, { block: { ...BLOCK, nodes: [{ name: 'body', points: [[0, 0, -3], [0, 0, 2]] }] } });
-  const out = run(fx, ['holder'], sunk);
-  assert.equal(out.status, 0, out.line('holder'));
-  assert.equal(asset(fx, 'holder').checks.composition.z_mm, 0);
 });
 
 test('a part that holds itself fails composition', async (t) => {
@@ -288,21 +235,6 @@ test('two children of one type, and a diamond, are not a cycle', async (t) => {
   assert.equal(out.status, 0, out.stdout);
   assert.match(out.line('twins'), /^ok/);
   assert.match(out.line('diamond'), /^ok/);
-});
-
-test('a recorded commit the models checkout lacks fails its part and the parts that hold it', async (t) => {
-  const fx = await fixture(t, { block: BLOCK, holder: board('holder', { u1: 'block' }, { u1: { at: [0, 0, 0] } }) });
-  assert.equal(run(fx, ['block', 'holder']).status, 0);
-  const missing = 'f'.repeat(40);
-  const record = asset(fx, 'block');
-  writeFileSync(join(fx.parts, 'block', 'asset.json'), JSON.stringify({ ...record, source: { ...record.source, commit: missing } }));
-  const why = `source: \`block\`'s asset.json records models commit ${missing}, which ${fx.models} does not have; fetch it`;
-  for (const ids of [['block'], ['holder']]) {
-    const out = run(fx, ids, null);
-    assert.equal(out.status, 1);
-    assert.equal(out.line(ids[0]), `FAIL  ${ids[0]}  ${why}`);
-    assert.equal(out.stderr, '');
-  }
 });
 
 test('a part whose body and children are all leads has no lowest node', async (t) => {
@@ -342,18 +274,19 @@ test('a bad input fails its part, and the run goes on to the next part', async (
   assert.match(out.line('not-json'), /^FAIL {2}not-json {2}error: /);
   assert.match(out.line('empty-board'), /merge: the merged scene has no nodes left to draw/);
   for (const id of ['no-also', 'short-at', 'short-axis', 'bad-kind', 'not-json', 'empty-board']) {
-    assert.deepEqual(files(fx, id), ['part.jsonc'], id);
+    assert.deepEqual(files(fx, id), ['model.py', 'part.jsonc'], id);
   }
   assert.match(out.line('z-last'), /^ok/);
-  assert.deepEqual(files(fx, 'z-last'), ['asset.json', 'part.jsonc', 'z-last.anchors.json', 'z-last.glb']);
+  assert.deepEqual(files(fx, 'z-last'), ['asset.json', 'model.py', 'part.jsonc', 'z-last.anchors.json', 'z-last.glb']);
 });
 
 test('a part that fails keeps the files of its last good run', async (t) => {
   const fx = await fixture(t, { good: leaded('good') });
   assert.equal(run(fx, ['good']).status, 0);
   const before = files(fx, 'good').map((name) => readFileSync(join(fx.parts, 'good', name)));
-  const moved = await publish(fx, { good: leaded('good', { anchor: { at: [9, 9, 9] } }) });
-  const out = run(fx, ['good'], moved);
+  const spec = leaded('good', { anchor: { at: [9, 9, 9] } });
+  writeFileSync(join(fx.raw, 'good', 'good.anchors.json'), JSON.stringify(spec.anchors));
+  const out = run(fx, ['good']);
   assert.match(out.line('good'), /^FAIL {2}good {2}anchors: lead 1's node `lead` ends at/);
   assert.deepEqual(
     files(fx, 'good').map((name) => readFileSync(join(fx.parts, 'good', name))),
@@ -361,75 +294,23 @@ test('a part that fails keeps the files of its last good run', async (t) => {
   );
 });
 
-test('with no --commit, a part with no asset.json is skipped', async (t) => {
-  const fx = await fixture(t, { good: leaded('good'), wires: { part: { format: 1, part: 'wires', pins: { a: [1] } } } });
-  assert.equal(run(fx, ['good']).status, 0);
-  const out = run(fx, [], null);
-  assert.equal(out.status, 0);
-  assert.match(out.line('wires'), /^skip {2}wires {2}no --commit given and no asset.json records one/);
-  assert.match(out.line('good'), /^ok/);
-  assert.equal(existsSync(join(fx.parts, 'wires', 'asset.json')), false);
-});
-
-test('a --models that is not a git checkout is a usage error', async (t) => {
-  const fx = await fixture(t, { good: leaded('good') });
-  const { status, stderr } = spawnSync(process.execPath, [STEP, '--models', join(fx.parts, 'nowhere'), '--parts', fx.parts], { encoding: 'utf8', env });
+test('missing --raw is a usage error', () => {
+  const { status, stderr } = spawnSync(process.execPath, [STEP], { encoding: 'utf8', env });
   assert.equal(status, 2);
-  assert.match(stderr, /^--models .*nowhere is not a git checkout/);
+  assert.match(stderr, /^usage: asset-step\.mjs --raw/);
 });
 
-test('a --commit the models repo does not have is a usage error', async (t) => {
-  const fx = await fixture(t, { good: leaded('good') });
-  const { status, stderr } = spawnSync(process.execPath, [STEP, '--models', fx.models, '--parts', fx.parts, '--commit', 'no-such-rev'], {
-    encoding: 'utf8',
-    env,
-  });
-  assert.equal(status, 2);
-  assert.match(stderr, /^--commit no-such-rev is not a commit of /);
-});
-
-test('passing --models and --local is a usage error', () => {
-  const { status, stderr } = spawnSync(process.execPath, [STEP, '--models', 'x', '--local'], { encoding: 'utf8', env });
-  assert.equal(status, 2);
-  assert.match(stderr, /^pass either --models or --local/);
-});
-
-test('with no ids, a part with model.py is skipped', async (t) => {
-  const fx = await fixture(t, { good: leaded('good'), wired: leaded('wired') });
-  writeFileSync(join(fx.parts, 'wired', 'model.py'), '');
-  const out = run(fx, []);
-  assert.equal(out.status, 0);
-  assert.match(out.line('wired'), /^skip {2}wired {2}built from model.py/);
-  assert.match(out.line('good'), /^ok/);
-  assert.equal(existsSync(join(fx.parts, 'wired', 'wired.glb')), false);
-});
-
-test('naming a part with model.py without --local fails', async (t) => {
-  const fx = await fixture(t, { good: leaded('good') });
-  writeFileSync(join(fx.parts, 'good', 'model.py'), '');
-  const out = run(fx, ['good']);
-  assert.equal(out.status, 1);
-  assert.match(out.line('good'), /source: `good` is built from model.py\. Run scripts\/model\.sh good/);
-});
-
-test('--local without --raw is a usage error', () => {
-  const { status, stderr } = spawnSync(process.execPath, [STEP, '--local'], { encoding: 'utf8', env });
-  assert.equal(status, 2);
-  assert.match(stderr, /^--local needs --raw/);
-});
-
-test('--local reads the raw export and records model.py', async (t) => {
+test('--raw reads the raw export and records model.py', async (t) => {
   const spec = leaded('good');
   const fx = await fixture(t, { good: spec });
   const folder = join(fx.parts, 'good');
   const script = 'print("model")\n';
   writeFileSync(join(folder, 'model.py'), script);
   writeFileSync(join(folder, 'good.glb'), Buffer.from('already merged'));
-  const raw = join(fx.parts, '..', 'raw', 'good');
-  mkdirSync(raw, { recursive: true });
+  const raw = join(fx.raw, 'good');
   writeFileSync(join(raw, 'good.glb'), await glb(spec.nodes));
   writeFileSync(join(raw, 'good.anchors.json'), JSON.stringify(spec.anchors));
-  const args = [STEP, '--local', '--raw', join(fx.parts, '..', 'raw'), '--parts', fx.parts, 'good'];
+  const args = [STEP, '--raw', fx.raw, '--parts', fx.parts, 'good'];
   const first = spawnSync(process.execPath, args, { encoding: 'utf8', env });
   assert.equal(first.status, 0, first.stdout);
   assert.match(first.stdout, /^ok\s+good /);
@@ -452,19 +333,18 @@ test('--local reads the raw export and records model.py', async (t) => {
   assert.deepEqual(readFileSync(join(folder, 'asset.json')), record);
 });
 
-test('a failed --local check leaves the part folder untouched', async (t) => {
+test('a failed check leaves the part folder untouched', async (t) => {
   const spec = leaded('good');
   const fx = await fixture(t, { good: spec });
   const folder = join(fx.parts, 'good');
   writeFileSync(join(folder, 'model.py'), 'x\n');
   writeFileSync(join(folder, 'kept.txt'), 'stay\n');
-  const raw = join(fx.parts, '..', 'raw', 'good');
-  mkdirSync(raw, { recursive: true });
+  const raw = join(fx.raw, 'good');
   writeFileSync(join(raw, 'good.glb'), await glb(spec.nodes));
   const anchors = { ...spec.anchors, anchors: [{ ...spec.anchors.anchors[0], at: [9, 9, 9] }] };
   writeFileSync(join(raw, 'good.anchors.json'), JSON.stringify(anchors));
   const before = readdirSync(folder).sort();
-  const { status, stdout } = spawnSync(process.execPath, [STEP, '--local', '--raw', join(fx.parts, '..', 'raw'), '--parts', fx.parts, 'good'], {
+  const { status, stdout } = spawnSync(process.execPath, [STEP, '--raw', fx.raw, '--parts', fx.parts, 'good'], {
     encoding: 'utf8',
     env,
   });

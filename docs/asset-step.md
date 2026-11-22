@@ -1,6 +1,6 @@
 # The asset step
 
-The asset step checks a part's body model and writes the merged GLB and `asset.json`. A part with `model.py` is built in this repo. Any other part is read from the commit its `asset.json` records in `orbefab/models`. Contributors run this when a model changes. Users never run it.
+The asset step checks a part's body model and writes the merged GLB and `asset.json`. A part with `model.py` is built in this repo. Contributors run this when a model changes. Users never run it.
 
 ## A part built here
 
@@ -11,28 +11,15 @@ scripts/model.sh --all
 
 Rebuild only the parts you changed. A second run that writes the same bytes is proven on Linux x86_64.
 
-`scripts/model.sh` runs `parts/<id>/model.py`. The script uses build123d and the helpers in `packages/cad`. It writes the raw GLB and the anchors into a temporary folder, then runs the asset step with `--local --raw` on that folder. `--all` builds every part that has `model.py`.
+`scripts/model.sh` runs `parts/<id>/model.py`. The script uses build123d and the helpers in `packages/cad`. It writes the raw GLB and the anchors into a temporary folder, then runs the asset step with `--raw` on that folder. `--all` builds every part that has `model.py`.
 
 The shell script checks that uv is installed, that Node is 24 or newer, that the asset step's dependencies are installed, and that `packages/cad/.venv` can import build123d. When one is missing it prints the install command and exits. It never installs anything itself. The model environment is Python 3.13. Install it with `uv sync --project packages/cad --frozen`.
 
-`--local` reads the raw GLB and anchors from `--raw`, runs the checks, and writes the merged GLB, the anchors and `asset.json` into the part folder only after that part's checks pass. `source.sha256` is the SHA-256 of `model.py`. The hashes under `files` cover the merged GLB and the anchors. With no ids, `--local` runs every part that has `model.py`, and it still needs `--raw`. It does not read the GLB already in the part folder.
+`--raw` reads the raw GLB and anchors from that folder, runs the checks, and writes the merged GLB, the anchors and `asset.json` into the part folder only after that part's checks pass. `source.sha256` is the SHA-256 of `model.py`. The hashes under `files` cover the merged GLB and the anchors. With no ids, it runs every part that has `model.py`. It does not read the GLB already in the part folder.
 
 After it finishes, run `scripts/check.sh fast`.
 
 The model build stays off CI.
-
-## A part still recorded by commit
-
-```bash
-pnpm install --frozen-lockfile
-node packages/asset-step/asset-step.mjs --models ../models [<id> ...]
-```
-
-`--models` is a checkout of `orbefab/models`. The step reads `GLB/parts/<id>.glb` and `GLB/parts/<id>.anchors.json` at a commit with `git show`, so it never changes the checkout. With no `--commit`, each part reruns from the commit its `asset.json` records, and fails if the checkout lacks that commit, which you then fetch. With no ids, it runs every part in `parts/` that has a GLB at that commit, and skips a part that has `model.py`. Naming such a part fails and tells you to run `scripts/model.sh`.
-
-With no `--commit` and no ids, a part with no GLB at its commit, or with no `asset.json` to name a commit, is skipped. A part with no model yet does not fail the run.
-
-`scripts/check-assets.sh <models checkout>` runs the step's tests, rebuilds every part that has `model.py`, then reruns every other part from its recorded commit, and fails if any file under `parts/` changes. The script still needs the models checkout for the other parts, and the `packages/cad` environment for the rebuild. Run it on a clean tree. `check.sh` does not run it.
 
 ## What it writes
 
@@ -40,7 +27,7 @@ For each part that passes every check, it writes:
 
 - `<id>.glb`, the merged model. The merge keeps the names of the nodes that leg and socket anchors name, and merges pads into the body to save draw calls.
 - `<id>.anchors.json`, copied unchanged. A part with no leads of its own, such as `nano-board`, has none.
-- `asset.json`, with the source, the SHA-256 and size of each file written, the box in mm, the kept nodes, the draw calls and what each check measured. A part built here records `source.script` as `model.py` and `source.sha256` as that file's SHA-256. A part still read from `orbefab/models` records that repo, the commit, and each input's path, SHA-256 and size.
+- `asset.json`, with the source, the SHA-256 and size of each file written, the box in mm, the kept nodes, the draw calls and what each check measured. A part built here records `source.script` as `model.py` and `source.sha256` as that file's SHA-256.
 
 A part that fails a check gets no files. The step prints the check and the reason, goes on to the next part, and exits 1 at the end. Files from an earlier run stay as they were. An input the step cannot read, such as an anchors file with no `also` list, fails its part the same way.
 
@@ -57,9 +44,7 @@ A lead is the mesh of the node an anchor names. The anchors check takes a lead's
 | seating | No node reaches more than 0.01 mm below z = 0, except the nodes an anchor names. |
 | names | Each node that `view` and `joints` name exists once. |
 | merge | The merge keeps the nodes that `view` and `joints` name, and the `node` and `also` of each anchor. A socket with no node keeps none. Every other node loses its name and joins one mesh per material, and identical meshes are shared. Each kept node exists once afterwards, and the scene still has nodes to draw. |
-| composition | Only for a part with children. The part's model, each child's model and each model below those, placed by each parent's `layout` with its full rotation, stay within 0.01 mm of z = 0 or above, except at the nodes their anchors name. An `at` of two numbers sits at z = 0. A child with `model.py` is the merged GLB in its folder, where pads have no names, so a pad of such a child that reaches below z = 0 fails composition by name. Any other child is its source GLB at the commit its `asset.json` records, which passed these checks. A child whose recorded commit the models checkout lacks fails the part, and so does a part that holds itself. |
-
-The step does not compare a composed part with the whole object the models repo also exports, such as the Nano.
+| composition | Only for a part with children. The part's model, each child's model and each model below those, placed by each parent's `layout` with its full rotation, stay within 0.01 mm of z = 0 or above, except at the nodes their anchors name. An `at` of two numbers sits at z = 0. A child is the merged GLB in its folder, where pads have no names, so a pad of such a child that reaches below z = 0 fails composition by name. A part that holds itself fails. |
 
 Composition needs each child's `asset.json`. A part with children and no body of its own has none, so a part that holds one fails composition, and the children below it are not placed. `part.jsonc` does not say whether a part has a body, so the step cannot tell such a part from one whose model has not been brought in yet.
 

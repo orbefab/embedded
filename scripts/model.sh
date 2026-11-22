@@ -83,5 +83,5 @@ for id in "${ids[@]}"; do
   UV_PYTHON_DOWNLOADS=never "$py" "parts/$id/model.py" "$raw/$id"
 done
 
-node packages/asset-step/asset-step.mjs --local --raw "$raw" "${ids[@]}"
+node packages/asset-step/asset-step.mjs --raw "$raw" "${ids[@]}"
 echo "Run scripts/check.sh fast."
