@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# Drives a smoke in headless Firefox and headless WebKit. The viewer's fixture plays and
-# the time reading changes. WebKit draws the board. Headless Firefox on Linux cannot create
-# a WebGL context, so the viewer fixture shows that error instead of the board, and those
-# console lines are the expected ones. The site's Get orbe page, parts page and Blocks page
-# load on vite preview. A Block page draws its Block in WebKit. In Firefox it shows one
-# sentence in place of the view and starts no renderer, so it logs none of those lines. Any
-# other page error or console error fails the check.
-# Needs the built viewer page, the built site, Node 24, pnpm, and the Firefox and WebKit
+# Drives a smoke in headless Firefox and headless WebKit. The page runs nano-button-led.
+# It opens paused, and after Play the time reading changes. WebKit draws the board. Headless
+# Firefox on Linux cannot create a WebGL context, so the page shows that error instead of
+# the board. After Play its time reading still changes, and those console lines are the
+# expected ones. The site's Get orbe page, parts page and Blocks page load on vite preview.
+# A Block page draws its Block in WebKit. In Firefox it shows one sentence in place of the
+# view and starts no renderer, so it logs none of those lines. Any other page error or
+# console error fails the check.
+# Needs the built viewer page, the built site, the wasm package and the registry under
+# .scratch/wasm, Node 24, pnpm, and the Firefox and WebKit
 # Playwright 1.64.1 expects under ~/.cache/ms-playwright. It installs nothing. A missing
 # browser or a missing system library exits 2. Install the browsers with
 # `pnpm exec playwright install firefox webkit`. On Ubuntu, install the libraries with
@@ -25,6 +27,14 @@ if [[ ! -f apps/viewer/dist/index.html ]]; then
 fi
 if [[ ! -f apps/site/dist/client/index.html ]]; then
   echo "check-engines: no site build at apps/site/dist/client. Run \`scripts/site.sh\` first, or \`scripts/check-site.sh\`." >&2
+  exit 2
+fi
+if [[ ! -f .scratch/wasm/pkg/worker.js ]]; then
+  echo "check-engines: no wasm package at .scratch/wasm/pkg/worker.js. Run \`scripts/wasm.sh .scratch/wasm/pkg\` first." >&2
+  exit 2
+fi
+if [[ ! -f .scratch/wasm/registry/index.json ]]; then
+  echo "check-engines: no registry at .scratch/wasm/registry/index.json. Run \`cargo build -p orbe --locked\`, then \`orbe registry build . .scratch/wasm/registry\`." >&2
   exit 2
 fi
 free_port() {

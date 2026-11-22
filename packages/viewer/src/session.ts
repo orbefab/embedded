@@ -1,7 +1,7 @@
 import type { Command, Reply, ReplyError, ToViewer } from "./protocol";
 
 /** Where the viewer's messages come from and its commands go: a WebSocket to the session
- * process, orbe-wasm's Worker, or a fixture. */
+ * process, or orbe-wasm's Worker. */
 export interface SessionSource {
   /** Calls `listener` with every message from now on, and returns the unsubscribe. A source
    * sends the current scene, then the latest frame, to each new listener. That frame carries

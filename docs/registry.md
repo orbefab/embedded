@@ -30,7 +30,8 @@ The build fails, and writes nothing, when:
 - a `block.jsonc` holds a key other than `format`, `block`, `version`, `title`, `summary`, `board`, `tags` and `license`, lacks `version`, `title`, `board` or `license`, or names another folder in `block`;
 - a Block's `scene.jsonc` does not parse or the scene reader refuses it, with that same finding, or the scene names a part the registry lacks, or an `@<registry>/<id>`, or does not use the Block's `board`;
 - a file param names a path outside the folder of the item that writes it: an absolute path, or a `..` that leaves `parts/<id>/` for a part's default or a part file's value, or leaves the Block's folder for a Block's scene. An install copies only that folder, so the installed copy would not have the file. This is `registry_invalid`, and it names the file, the place and the path. `orbe check` in the author's own tree reads such a path when the file happens to be there, so it can pass there and still be refused here;
-- a param's `example` sits beside a `default`, is out of range, or names a file outside the part's folder. `example` is a value a scene could set, on a param with no `default`. The finding is the part-file reader's, with the same code, place and message;
+- a param's `example` sits beside a `default`, is out of range, is not a JSON number on a number param, or names a file outside the part's folder. `example` is a value a scene could set, on a param with no `default`. A number example is a JSON number. The finding is the part-file reader's, with the same code, place and message;
+- a required param has no `example`. The finding names that param's key in `parts/<id>/part.jsonc` and says to add one;
 - installing the part or the Block and running `orbe check` would refuse it, as [What the build checks](#what-the-build-checks) says. The finding has the same code, place and message;
 - a part and a Block share a name.
 
@@ -40,7 +41,7 @@ It prints the item counts and the file counts: files the records list, files sto
 
 The build reads each Block's scene the way `orbe check` reads it after a project installs the Block: the project holds the registry's part folders and the Block's own files. Every finding `orbe check` would print refuses the Block, in `blocks/<id>/scene.jsonc`.
 
-A part has no scene of its own. The build places it alone as `r1` in a project that holds the registry's part folders and reads that scene the way `orbe check` reads a scene. Each required param is set to its `example`. An example that names a file names the copy already in the nested part folder. When the part names no ground, and no part inside it does, the scene adds a voltage source and names one of its pins as ground. When a part in that tree names a ground, those grounds must agree, as they must in a scene that only places the part. Every finding refuses the part. A finding names `parts/<id>/part.jsonc`, or the file it is in. One about the grounds names `scene.jsonc`.
+A part has no scene of its own. The build places it alone as `r1` in a project that holds the registry's part folders and reads that scene the way `orbe check` reads a scene. Each required param is set to its `example`. A required param with none is refused at that param's key in `parts/<id>/part.jsonc`. An example that names a file names the copy already in the nested part folder. When the part names no ground, and no part inside it does, the scene adds a voltage source and names one of its pins as ground. When a part in that tree names a ground, those grounds must agree, as they must in a scene that only places the part. Every finding refuses the part. A finding names `parts/<id>/part.jsonc`, or the file it is in. A finding about the grounds names `scene.jsonc`, and so does a finding about a value the build set from an example, because that scene exists only in memory.
 
 ## Layout
 
@@ -106,7 +107,7 @@ A template is an `https://` URL with exactly one `{name}`. `{name}` starts its l
 }
 ```
 
-`name` is the registry's name and `homepage` its page, absent when `registry.jsonc` has none. `items` has one row per record, sorted by name and then by version, oldest first. Every row has a `version`. `description` and `categories` are absent when the item has none. A part row may also carry `maker` and `number`, from the part file's `real` fields, and leaves a field out when the part names none. A Block row carries neither. `url` is `<name>@<version>.json`, relative to the index's URL. `sha256` is the lowercase hex SHA-256 of the record's bytes, and `bytes` is their count.
+`name` is the registry's name and `homepage` its page, absent when `registry.jsonc` has none. `items` has one row per record, sorted by name and then by version, oldest first. Every row has a `version`. `description` and `categories` are absent when the item has none. A part row may also carry `maker` and `number`, from the part file's `real` fields, and leaves a field out when the part names none. A Block row carries neither. A part row carries `"listed": false` when search and the parts list leave it out, and leaves `listed` out when the part is offered. `url` is `<name>@<version>.json`, relative to the index's URL. `sha256` is the lowercase hex SHA-256 of the record's bytes, and `bytes` is their count.
 
 ## Records
 

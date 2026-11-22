@@ -148,6 +148,8 @@ function enginesSuite(): PlaywrightTestConfig {
   for (const [path, how] of [
     [resolve("apps/viewer/dist/index.html"), "pnpm --filter @orbe/viewer-page build"],
     [resolve("apps/site/dist/client/index.html"), "scripts/site.sh"],
+    [resolve(".scratch/wasm/pkg/worker.js"), "scripts/wasm.sh .scratch/wasm/pkg"],
+    [resolve(".scratch/wasm/registry/index.json"), "orbe registry build . .scratch/wasm/registry"],
   ] as const) {
     if (!existsSync(path)) {
       console.error(`No ${path}. Run \`${how}\` first.`);
@@ -161,7 +163,7 @@ function enginesSuite(): PlaywrightTestConfig {
   return {
     outputDir: "test-results",
     reporter: shared.reporter,
-    timeout: 60_000,
+    timeout: 120_000,
     workers: 1,
     fullyParallel: false,
     retries: 0,
@@ -202,22 +204,15 @@ if (suite === undefined || (suite !== "engines" && !(suite in suites))) {
   process.exit(2);
 }
 
-if (suite === "viewer") {
-  const dist = resolve("apps/viewer/dist");
-  if (!existsSync(resolve(dist, "index.html"))) {
-    console.error(`No build at ${dist}. Run \`pnpm --filter @orbe/viewer-page build\` first.`);
-    process.exit(2);
-  }
-}
-
-if (suite === "block") {
+if (suite === "viewer" || suite === "block") {
   for (const [path, how] of [
     [resolve("apps/viewer/dist/index.html"), "pnpm --filter @orbe/viewer-page build"],
     [resolve(".scratch/wasm/pkg/worker.js"), "scripts/wasm.sh .scratch/wasm/pkg"],
     [resolve(".scratch/wasm/registry/index.json"), "orbe registry build . .scratch/wasm/registry"],
   ] as const) {
     if (!existsSync(path)) {
-      console.error(`No ${path}. Run \`${how}\` first, or scripts/check-block.sh.`);
+      const script = suite === "viewer" ? "scripts/check-viewer-e2e.sh" : "scripts/check-block.sh";
+      console.error(`No ${path}. Run \`${how}\` first, or ${script}.`);
       process.exit(2);
     }
   }

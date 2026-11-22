@@ -6,8 +6,8 @@ import { type Connect, defineConfig, type Plugin } from "vite";
 const REPO = resolve(import.meta.dirname, "../..");
 const PARTS = resolve(REPO, "parts");
 const GLB_URL = /^\/parts\/([a-z0-9-]+)\/\1\.glb$/;
-/** Folders served under a URL prefix: the registry and the orbe-wasm package that `?block=`
- * loads, where docs/viewer.md builds them. */
+/** Folders served under a URL prefix: the registry and the orbe-wasm package a Block loads,
+ * including the page with no `block` query. docs/viewer.md builds them. */
 const FOLDERS: readonly (readonly [string, string])[] = [
   ["/registry/", resolve(REPO, ".scratch/wasm/registry")],
   ["/orbe-wasm/", resolve(REPO, ".scratch/wasm/pkg")],

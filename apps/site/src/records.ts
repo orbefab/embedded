@@ -94,6 +94,8 @@ export interface IndexRow {
   readonly type: "part" | "block";
   readonly version: string;
   readonly url: string;
+  /** Absent or true when search and the parts list offer this part. */
+  readonly listed?: boolean;
 }
 
 /** A dependency's id, from `<id>@<version>`. */
@@ -105,6 +107,8 @@ export interface Item<R extends ItemRecord> {
   readonly record: R;
   readonly versions: readonly string[];
   readonly usedBy: readonly string[];
+  /** False when search and the parts list leave this part out. Absent means they offer it. */
+  readonly listed?: boolean;
 }
 
 /** What every page knows of the build. */

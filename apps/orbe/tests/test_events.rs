@@ -194,7 +194,7 @@ fn an_led_change_is_labeled_as_sampled_at_the_slice_end() {
     let run = orbe(dir.path(), &["test", "-v"]);
     assert!(
         run.stdout
-            .contains("\n    by 15ms led1 lit, brightness=3.757439911374387 mA over 15ms\n"),
+            .contains("\n    by 15ms led1 lit, brightness=3.7574399070530244 mA over 15ms\n"),
         "{}",
         run.stdout
     );

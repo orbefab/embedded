@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
@@ -6,6 +6,7 @@ import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 import { PUBLIC, siteInputs } from "./build/inputs.ts";
+import { parseJsonc } from "./src/jsonc.ts";
 
 const BRAND = resolve(import.meta.dirname, "../../packages/brand/website");
 const flag = process.env.ORBE_SITE_INSTALL ?? "";
@@ -22,6 +23,17 @@ const isPage = (path: string) =>
 const embedPages = readdirSync(resolve(import.meta.dirname, "../../blocks"))
   .filter((name) => existsSync(resolve(import.meta.dirname, "../../blocks", name, "block.jsonc")))
   .map((name) => ({ path: `/embedded/blocks/${name}/embed/` }));
+
+/** A part with `"listed": false` is left out of the parts list, so the crawl never finds its page
+ * unless a board page links it. List each one. */
+const unlistedPartPages = readdirSync(resolve(import.meta.dirname, "../../parts"))
+  .filter((name) => {
+    const file = resolve(import.meta.dirname, "../../parts", name, "part.jsonc");
+    if (!existsSync(file)) return false;
+    const value = parseJsonc(readFileSync(file, "utf8")) as { listed?: boolean };
+    return value.listed === false;
+  })
+  .map((name) => ({ path: `/embedded/parts/${name}/` }));
 
 /** The Worker Start renders pages in, from its server entry. */
 const renderer = { name: "orbefab-embedded-render", main: "@tanstack/react-start/server-entry" };
@@ -40,7 +52,12 @@ export default defineConfig(({ command }) => ({
       : cloudflare({ config: renderer, viteEnvironment: { name: "ssr" } }),
     tailwindcss(),
     tanstackStart({
-      pages: [{ path: "/embedded/" }, { path: "/embedded/404", prerender: { outputPath: "/embedded/404.html" } }, ...embedPages],
+      pages: [
+        { path: "/embedded/" },
+        { path: "/embedded/404", prerender: { outputPath: "/embedded/404.html" } },
+        ...embedPages,
+        ...unlistedPartPages,
+      ],
       prerender: { enabled: true, crawlLinks: true, autoStaticPathsDiscovery: false, filter: ({ path }) => isPage(path) },
     }),
     react(),

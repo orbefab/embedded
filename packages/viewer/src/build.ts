@@ -311,13 +311,9 @@ function nearestPair(a: readonly WireEnd[], b: readonly WireEnd[]): readonly [Wi
 
 const PALETTE = ["#ff8a1e", "#f2d21b", "#2f9e44", "#2f5fd0", "#7b3ff0", "#f4f4f4"] as const;
 
-/** A hint's colour, else red for 5 V, black for ground, and a rotating palette for the rest. */
+/** The wire's own colour, or the next colour in the palette when the scene sets none. */
 function wireColour(wire: Wire, index: number): string {
-  if (wire.color !== undefined) return wire.color;
-  const pins = wire.ends.map((end) => end.split(".").pop());
-  if (pins.some((pin) => pin === "5V" || pin === "VCC")) return "#d12b2b";
-  if (pins.some((pin) => pin === "GND")) return "#161616";
-  return PALETTE[index % PALETTE.length] ?? "#f4f4f4";
+  return wire.color ?? PALETTE[index % PALETTE.length] ?? "#f4f4f4";
 }
 
 export function buildScene(scene: SceneMessage, models: ReadonlyMap<string, Group | Error>): BuiltScene {

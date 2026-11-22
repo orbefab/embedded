@@ -1,9 +1,28 @@
 {
-  "format": 1, "part": "barrel-jack-dc21", "version": "0.2.0", "title": "DC barrel jack, 2.1 mm", "license": "MIT OR Apache-2.0",
-  "summary": "2.1 mm DC barrel jack. The opening is the plug face. Lead 1 is the sleeve, lead 2 the center pin and lead 3 the sleeve's switch.",
+  "format": 1,
+  "part": "barrel-jack-dc21",
+  "version": "0.2.0",
+  "title": "DC barrel jack, 2.1 mm",
+  "summary": "2.1 mm DC barrel jack. Set the voltage between the center pin and the sleeve. The opening is the plug face. Lead 1 is the sleeve, lead 2 the center pin and lead 3 the sleeve's switch.",
   "tags": ["connector", "power", "through-hole"],
+  "license": "MIT OR Apache-2.0",
   "docs": { "2.1 mm DC barrel jack": null },
   "real": { "generic": true, "maker": null, "number": null, "datasheet": "2.1 mm DC barrel jack" },
   "pins": { "sleeve": [1], "center": [2], "switch": [3] },
-  "not_simulated": [{ "what": "plug", "pins": ["sleeve", "center", "switch"], "why": "No plug is modeled, so the jack powers nothing." }],
+  "params": {
+    "voltage": { "unit": "V", "required": true, "example": 9, "min_exclusive": 0, "sets": "/supply/voltage" }
+  },
+  "model": {
+    "supply": {
+      "kind": "voltage_source",
+      "pins": { "p": "center", "n": "sleeve" }
+    }
+  },
+  "not_simulated": [
+    {
+      "what": "sleeve switch",
+      "pins": ["switch"],
+      "why": "The sleeve switch opens when a plug is inserted. Nothing senses a plug, so the switch pin stays open."
+    }
+  ]
 }

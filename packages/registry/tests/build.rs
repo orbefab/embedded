@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use common::{LAMP, invalid, put, record, repo, sha256, third_party, written};
 use orbe_registry::{Error, INDEX_SCHEMA, ITEM_SCHEMA, Item, LARGE, Why, build};
+use orbe_scene::{Code, Diagnostic};
 use serde_json::Value;
 
 /// A record's text with the values that change whenever a file's bytes do replaced by names.
@@ -531,6 +532,51 @@ fn the_build_refuses_what_a_client_could_not_trust() {
         };
         assert!(message.contains(says), "{what}: {message}");
     }
+}
+
+/// A required param with no example is refused at that param's key. The in-memory scene's
+/// missing-param line is not the finding a part author sees.
+#[test]
+fn a_required_param_with_no_example_is_refused_at_that_param() {
+    let part = r#"{
+  "format": 1,
+  "part": "lamp",
+  "version": "1.2.0",
+  "title": "Lamp",
+  "license": "MIT",
+  "pins": { "a": [1], "b": [2] },
+  "params": { "resistance": { "unit": "ohm", "required": true, "sets": "/resistance" } },
+  "model": {
+    "kind": "resistor",
+    "resistance": { "value": 220, "unit": "ohm", "source": "user" },
+    "ratings": { "power": null }
+  }
+}
+"#;
+    let src = third_party();
+    put(src.path(), "parts/lamp/part.jsonc", part);
+    fs::remove_dir_all(src.path().join("blocks")).unwrap();
+    let at = part.find("\"resistance\"").unwrap();
+    let before = &part[..at];
+    let line = before.matches('\n').count() + 1;
+    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+    let column = before[line_start..].chars().count() + 1;
+    let found = match build(src.path()) {
+        Err(Error::Check(found)) => found,
+        Err(other) => panic!("{other}"),
+        Ok(_) => panic!("the build accepted a required param with no example"),
+    };
+    assert_eq!(
+        found,
+        vec![Diagnostic {
+            code: Code::Param,
+            file: "parts/lamp/part.jsonc".into(),
+            line,
+            column,
+            message: "required param `resistance` has no `example`".into(),
+            hint: "add \"example\" with a value a scene could set".into(),
+        }]
+    );
 }
 
 #[test]

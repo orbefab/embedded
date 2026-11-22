@@ -78,12 +78,12 @@ $ orbe add led-5mm nano-board resistor-axial tactile-switch-6mm
 wrote parts/led-5mm 0.2.0
 ...
 $ orbe check scene.jsonc
-scene.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND
+scene.jsonc: ok, 5 scene parts, expanding to 20 engine parts, 35 nets, ground GND
 $ orbe lint scene.jsonc
 ...
 1 warning in scene.jsonc
 $ orbe open
-opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 19 engine parts, 34 nets)
+opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 20 engine parts, 35 nets)
 $ orbe step 100ms
 t=100ms (from 0s)
 ...
@@ -95,9 +95,9 @@ t=104ms (from 100ms), @led1 lit by 104ms
   100.0040625ms nano.D13 high
 ...
 $ orbe get @nano.D13
-nano.D13 high 4.400713547712646 V
+nano.D13 high 4.400713544697175 V
 $ orbe expect @led1.i '>' 5mA
-passed @led1.i > 5mA (led1.i = 11.2925043880606 mA)
+passed @led1.i > 5mA (led1.i = 11.292504375073351 mA)
 $ orbe close
 closed at t=104ms
 $ orbe test
@@ -175,7 +175,7 @@ A failure prints the line, the expected and the actual value. With the first `ex
 FAIL tests/button.test:4: expect @led1 lit
   error[expect_failed]: expected @led1 lit at t=100ms
     expected: @led1 lit
-    actual:   led1 off, i=1.2775403302175985e-13 A, brightness=1.2775403302174304e-13 A over 20ms
+    actual:   led1 off, i=1.2775403141980628e-13 A, brightness=1.2775403141982445e-13 A over 20ms
 0 passed, 1 failed
 ```
 

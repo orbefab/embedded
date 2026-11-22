@@ -90,11 +90,11 @@ enum Command {
         json: bool,
     },
     /// Finds parts and Blocks in the registry whose id, title, summary or tags hold every word.
-    /// A part also matches its maker and number. With no words, lists every part, grouped by
-    /// its first category, then the Blocks.
+    /// A part also matches its maker and number. A part with `"listed": false` is left out.
+    /// With no words, lists every offered part, grouped by its first category, then the Blocks.
     #[command(display_order = 6)]
     Search {
-        /// Words to match. Every word must appear. With no words, lists the registry.
+        /// Words to match. Every word must appear. With no words, lists every offered part and the Blocks.
         words: Vec<String>,
         /// Print one JSON envelope instead of text.
         #[arg(long)]

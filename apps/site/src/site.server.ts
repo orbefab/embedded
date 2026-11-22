@@ -84,13 +84,14 @@ export const home = () => {
   return {
     blocks: blockCards(),
     boards: data.parts.filter((item) => item.record.categories?.includes("board")).map(({ record }) => ({ title: record.title, href: at.part(record.name) })),
-    parts: data.parts.length,
+    parts: data.parts.filter((item) => item.listed !== false).length,
     scene,
   };
 };
 
 export const parts = (): Listed[] =>
   [...data.parts]
+    .filter((item) => item.listed !== false)
     .sort((a, b) => a.record.title.localeCompare(b.record.title))
     .map(({ record }) => {
       const use = useOf(record.name);
