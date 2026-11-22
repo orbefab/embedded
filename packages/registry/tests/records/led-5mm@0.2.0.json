@@ -3,7 +3,7 @@
   "$schema": "item.schema.json",
   "format": 1,
   "name": "led-5mm",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "title": "5 mm LED",
   "description": "Round 5 mm through-hole LED, two leads on 2.54 mm. The longer lead is the anode. Pick its color.",
   "categories": [
@@ -16,13 +16,6 @@
   "registryDependencies": [],
   "files": [
     {
-      "path": "asset.json",
-      "url": "files/<sha256>",
-      "sha256": "<sha256>",
-      "bytes": 0,
-      "license": "MIT OR Apache-2.0"
-    },
-    {
       "path": "led-5mm.anchors.json",
       "url": "files/<sha256>",
       "sha256": "<sha256>",
@@ -31,13 +24,6 @@
     },
     {
       "path": "led-5mm.glb",
-      "url": "files/<sha256>",
-      "sha256": "<sha256>",
-      "bytes": 0,
-      "license": "MIT OR Apache-2.0"
-    },
-    {
-      "path": "model.py",
       "url": "files/<sha256>",
       "sha256": "<sha256>",
       "bytes": 0,

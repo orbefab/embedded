@@ -82,7 +82,14 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
             let catalog = tree(&common::repo().join("parts").join(part));
             let got = tree(&dir.join("parts").join(part));
             for (rel, bytes) in &catalog {
-                assert_eq!(got.get(rel), Some(bytes), "{id}: parts/{part}/{rel}");
+                if orbe_scene::is_published(rel) {
+                    assert_eq!(got.get(rel), Some(bytes), "{id}: parts/{part}/{rel}");
+                } else {
+                    assert!(
+                        !got.contains_key(rel),
+                        "{id}: parts/{part}/{rel} is not copied"
+                    );
+                }
             }
         }
         let chip = dir

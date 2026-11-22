@@ -2,7 +2,7 @@
 {
   "format": 1,
   "part": "diode-1n4007",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "title": "Rectifier diode, 1N4007",
   "summary": "1 A, 1000 V rectifier in DO-41, with its leads bent to 10.16 mm (0.4 inch) for a breadboard. The band marks the cathode.",
   "tags": ["diode", "rectifier", "flyback", "reverse protection", "through-hole"],

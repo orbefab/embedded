@@ -1,5 +1,5 @@
 {
-  "format": 1, "part": "pin-header-1x15", "version": "0.1.1", "title": "Pin header, 1 x 15, 2.54 mm", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "pin-header-1x15", "version": "0.2.0", "title": "Pin header, 1 x 15, 2.54 mm", "license": "MIT OR Apache-2.0",
   "summary": "One row of 15 square pins on 2.54 mm, in one plastic bar. Lead 1 is the pin at one end.",
   "tags": ["header", "connector", "through-hole"],
   "joins_only": true,

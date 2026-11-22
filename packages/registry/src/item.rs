@@ -154,7 +154,7 @@ pub struct Head {
     /// Each item this one is built from or runs.
     pub registry_dependencies: Vec<Dependency>,
     /// Each published file in the item's folder, by path. Build output (`__pycache__`, `.pyc`,
-    /// `.pytest_cache` and `.venv`) is left out.
+    /// `.pytest_cache` and `.venv`) is left out, and so are `model.py` and `asset.json`.
     pub files: Vec<File>,
     /// The folder hash over `files`, as `sha256:<hex>`.
     #[schemars(pattern(pattern::HASH))]

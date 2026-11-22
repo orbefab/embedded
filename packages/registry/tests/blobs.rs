@@ -262,7 +262,7 @@ fn a_required_blob_param_holds_back_only_the_bodies_it_reaches() {
 #[test]
 fn the_catalog_esp32s3_parts_build_with_the_rom_and_without_an_app() {
     let registry = build(&repo()).unwrap();
-    let chip = record(&registry.output, "esp32s3-qfn56@0.1.0");
+    let chip = record(&registry.output, "esp32s3-qfn56@0.2.0");
     let rom = chip["files"]
         .as_array()
         .unwrap()
@@ -275,7 +275,7 @@ fn the_catalog_esp32s3_parts_build_with_the_rom_and_without_an_app() {
         "esp32s3-wroom-1-n16r8",
         "esp32s3-devkitc-1",
     ] {
-        let item = record(&registry.output, &format!("{id}@0.1.0"));
+        let item = record(&registry.output, &format!("{id}@0.2.0"));
         for file in item["files"].as_array().unwrap() {
             let path = file["path"].as_str().unwrap();
             assert!(!path.ends_with(".bin"), "{id} ships {path}");

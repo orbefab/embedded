@@ -53,30 +53,31 @@ mod tests {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../blocks")
     }
 
-    /// The annotation names each file the Block holds. A file outside that list, including one
-    /// added later, is not covered.
+    /// `firmware/NOTICE` states which file carries which licence. The Block ships no
+    /// `REUSE.toml`.
     #[test]
-    fn an_annotation_covers_the_block_files_and_not_a_later_file() {
+    fn the_notice_states_each_file_licence() {
         let dir = blocks_dir();
         for id in ids(&dir) {
             let files = folder(&dir, &id).unwrap();
-            let text = std::str::from_utf8(&files["REUSE.toml"]).unwrap();
-            let reuse = crate::reuse::Reuse::parse(text).unwrap();
-            for path in files.keys() {
-                assert!(
-                    reuse.license(path, None).is_some(),
-                    "{id}: {path} has no annotation"
-                );
-            }
-            assert_eq!(reuse.license("parts.lock", None), None, "{id}: parts.lock");
-            for extra in [
-                "mine.txt",
-                "src/mine.ino",
-                "firmware/extra.ino",
-                "notes.md",
-                "parts/led-5mm/part.jsonc",
+            assert!(
+                !files.contains_key("REUSE.toml"),
+                "{id} still ships REUSE.toml"
+            );
+            let notice = std::str::from_utf8(
+                files
+                    .get("firmware/NOTICE")
+                    .unwrap_or_else(|| panic!("{id} has no firmware/NOTICE")),
+            )
+            .unwrap();
+            for fact in [
+                "MIT OR Apache-2.0",
+                "LGPL-2.1-or-later",
+                "BSD-3-Clause",
+                "LICENSE-runtime",
+                "LICENSE-libc",
             ] {
-                assert_eq!(reuse.license(extra, None), None, "{id}: {extra} is covered");
+                assert!(notice.contains(fact), "{id}: NOTICE does not state {fact}");
             }
         }
     }

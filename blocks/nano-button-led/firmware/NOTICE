@@ -17,3 +17,11 @@ modifications.
 The image also holds the start-up code of the toolchain's C library, version 2.0.0, under that
 library's modified BSD license, whose notice is in LICENSE-libc as the license requires, and
 routines of the compiler's support library, under the GCC Runtime Library Exception.
+
+These files and their licences:
+
+`block.jsonc`, `README.md`, `scene.jsonc`, `firmware/NOTICE`, `firmware/button/button.ino` and
+`tests/button.test` are under MIT OR Apache-2.0.
+
+`firmware/button.hex` and `firmware/LICENSE-runtime` are under LGPL-2.1-or-later.
+`firmware/LICENSE-libc` is under BSD-3-Clause.

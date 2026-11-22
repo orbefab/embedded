@@ -2,7 +2,7 @@
 // are the engine's U3 stand-ins, from packages/engine/tests/circuits/atmega-board-button/netlist.json, parts
 // `usb_tx` and `usb_dtr`.
 {
-  "format": 1, "part": "atmega16u2-qfn32", "version": "0.1.1", "title": "ATmega16U2 USB controller, QFN-32", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "atmega16u2-qfn32", "version": "0.2.0", "title": "ATmega16U2 USB controller, QFN-32", "license": "MIT OR Apache-2.0",
   "summary": "ATmega16U2-MU USB controller in a 5 x 5 mm QFN-32. The dot marks lead 1. The exposed pad is lead 33.",
   "tags": ["microcontroller", "avr", "usb", "qfn"],
   "docs": {

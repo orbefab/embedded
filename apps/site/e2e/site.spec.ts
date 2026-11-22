@@ -85,12 +85,6 @@ async function openTracked(browser: { newContext(options: { viewport: { width: n
 
 const bodyText = (page: Page) => page.evaluate(() => document.body.innerText);
 
-function licences(page: Page): Promise<Record<string, string | null>> {
-  return page
-    .locator('[data-testid="license-files"] tbody tr')
-    .evaluateAll((rows) => Object.fromEntries(rows.map((row) => [row.cells[0]?.textContent ?? "", row.cells[2]?.textContent ?? null])));
-}
-
 function blockIds(): string[] {
   return readdirSync(join(REPO, "blocks"))
     .filter((id) => existsSync(join(REPO, "blocks", id, "scene.jsonc")))
@@ -371,11 +365,12 @@ test.describe("led-5mm", () => {
     expect(await page.evaluate(() => window.orbeViewer?.get().scene.getObjectByName("@led_5mm") !== undefined)).toBe(true);
   });
 
-  test("it lists all five files as downloads", async () => {
+  test("it lists its three files as downloads", async () => {
     const files = await page
       .locator('[data-testid="license-files"] a[download]')
       .evaluateAll((links) => links.map((link) => [link.textContent, link.getAttribute("href")]));
-    expect(files.length === 5 && files.some(([path]) => path === "led-5mm.glb"), JSON.stringify(files)).toBe(true);
+    const names = files.map(([path]) => path).sort();
+    expect(names, JSON.stringify(files)).toEqual(["led-5mm.anchors.json", "led-5mm.glb", "part.jsonc"]);
   });
 
   test("the license box names the shared licence and lists no per-file column", async () => {
@@ -388,7 +383,7 @@ test.describe("led-5mm", () => {
   test("a download serves the file's bytes, by the record's SHA-256", async () => {
     const href = await page.locator('[data-testid="license-files"] a[download]', { hasText: /^part\.jsonc$/ }).getAttribute("href");
     const download = await page.evaluate(async (href) => {
-      const record = await (await fetch("/embedded/r/led-5mm@0.1.1.json")).json();
+      const record = await (await fetch("/embedded/r/led-5mm@0.2.0.json")).json();
       const bytes = new Uint8Array(await (await fetch(href)).arrayBuffer());
       const hex = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
       return { hex, want: record.files.find((file: { path: string; sha256: string }) => file.path === "part.jsonc").sha256 };
@@ -547,7 +542,10 @@ test.describe("uno-board", () => {
     await expect(box.locator("summary")).toContainText("MIT OR Apache-2.0");
     await expect(box.locator("th", { hasText: "License" })).toHaveCount(0);
     const names = await box.locator("a[download]").allTextContents();
-    expect(["part.jsonc", "model.py", "uno-board.glb"].every((path) => names.includes(path)), JSON.stringify(names)).toBe(true);
+    expect(
+      ["part.jsonc", "uno-board.glb"].every((path) => names.includes(path)) && !names.includes("model.py") && !names.includes("asset.json"),
+      JSON.stringify(names),
+    ).toBe(true);
   });
 
   test("the Uno's page links the clone schematic it is drawn from", async () => {
@@ -662,16 +660,12 @@ test.describe("nano-button-led", () => {
     ).toBe(true);
   });
 
-  test("each Block file shows its own licence", async () => {
-    const files = await licences(page);
-    expect(
-      files["scene.jsonc"] === "MIT OR Apache-2.0" &&
-        files["firmware/button/button.ino"] === "MIT OR Apache-2.0" &&
-        files["firmware/button.hex"] === "LGPL-2.1-or-later" &&
-        files["firmware/LICENSE-runtime"] === "LGPL-2.1-or-later" &&
-        files["firmware/LICENSE-libc"] === "BSD-3-Clause",
-      JSON.stringify(files),
-    ).toBe(true);
+  test("the Block's files share the box's licence", async () => {
+    const box = page.locator('[data-testid="license-files"]');
+    await expect(box.locator("summary")).toContainText("(MIT OR Apache-2.0) AND LGPL-2.1-or-later");
+    await expect(box.locator("th", { hasText: "License" })).toHaveCount(0);
+    const names = await box.locator("a[download]").allTextContents();
+    expect(names.includes("firmware/NOTICE") && !names.includes("REUSE.toml"), JSON.stringify(names)).toBe(true);
   });
 
   test("Space on the hold control presses the button, and the window losing focus releases it", async () => {
@@ -1309,7 +1303,7 @@ test.describe("cache", () => {
   });
 
   test("a path with @ answers 307 to the same path with %40", async ({ host }) => {
-    const at = await head(host.base, "/embedded/r/led-5mm@0.1.1.json");
+    const at = await head(host.base, "/embedded/r/led-5mm@0.2.0.json");
     expect(at.status, JSON.stringify(at)).toBe(307);
   });
 

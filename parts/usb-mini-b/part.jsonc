@@ -1,5 +1,5 @@
 {
-  "format": 1, "part": "usb-mini-b", "version": "0.1.1", "title": "USB mini-B socket", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "usb-mini-b", "version": "0.2.0", "title": "USB mini-B socket", "license": "MIT OR Apache-2.0",
   "summary": "Right-angle USB mini-B receptacle. Five contacts: lead 1 is VBUS and lead 5 is GND.",
   "tags": ["usb", "connector", "socket", "surface-mount"],
   "docs": { "USB 2.0 specification": null },

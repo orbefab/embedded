@@ -130,7 +130,7 @@ fn a_passive_a_chip_and_a_board_keep_only_what_their_files_say() {
     assert!(board.categories.is_some());
     assert_eq!(
         board.uses.get("led-0603").map(String::as_str),
-        Some("0.1.1")
+        Some("0.2.0")
     );
     assert!(board.used_by.is_empty());
     let docs = board.docs.unwrap();
@@ -402,9 +402,14 @@ fn every_file_of_a_board_is_mit_or_apache() {
             .find(|file| file.path == path)
             .map(|file| file.license.as_str())
     };
-    for path in ["part.jsonc", "model.py", "uno-board.glb", "asset.json"] {
+    for path in ["part.jsonc", "uno-board.glb"] {
         assert_eq!(licence(path), Some("MIT OR Apache-2.0"), "{path}");
     }
+    assert!(
+        uno.files
+            .iter()
+            .all(|file| file.path != "model.py" && file.path != "asset.json")
+    );
     assert_eq!(uno.license, "MIT OR Apache-2.0");
     let nano = card(&parts_dir(), "nano-board").unwrap();
     assert!(

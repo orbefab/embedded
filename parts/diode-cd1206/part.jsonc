@@ -1,7 +1,7 @@
 // The model's values and sources are the engine's D2, from
 // packages/engine/tests/circuits/atmega-board-button/netlist.json, part `d_reset`.
 {
-  "format": 1, "part": "diode-cd1206", "version": "0.1.1", "title": "Switching diode, CD1206-S01575, 1206", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "diode-cd1206", "version": "0.2.0", "title": "Switching diode, CD1206-S01575, 1206", "license": "MIT OR Apache-2.0",
   "summary": "Bourns CD1206-S01575 switching diode in 1206. The band marks the cathode, lead 1.",
   "tags": ["diode", "smd"],
   "docs": { "Bourns CD1206-S01575": "https://www.bourns.com/docs/technical-documents/obsolete-parts/cd1206_s01575_obsolete.pdf" },

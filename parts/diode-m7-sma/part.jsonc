@@ -1,5 +1,5 @@
 {
-  "format": 1, "part": "diode-m7-sma", "version": "0.1.1", "title": "Rectifier diode, M7 (1N4007), SMA", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "diode-m7-sma", "version": "0.2.0", "title": "Rectifier diode, M7 (1N4007), SMA", "license": "MIT OR Apache-2.0",
   "summary": "M7 (1N4007) rectifier in SMA (DO-214AC). The band marks the cathode, lead 1.",
   "tags": ["diode", "rectifier", "smd"],
   "docs": { "Comchip CGRA4007-G": null },

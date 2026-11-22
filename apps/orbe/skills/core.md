@@ -75,7 +75,7 @@ scene.jsonc:4:23: error[part_missing]: part `nano-board` is not in parts/
 ...
 $ orbe add led-5mm nano-board resistor-axial tactile-switch-6mm
 ...
-wrote parts/led-5mm 0.1.1
+wrote parts/led-5mm 0.2.0
 ...
 $ orbe check scene.jsonc
 scene.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND
@@ -132,7 +132,7 @@ A part name starts with a letter, takes letters, digits and `_`, and may not con
 
 `orbe search <words>` lists the parts whose id, title, maker, number, summary or tags hold every word, then the Blocks. `orbe part <id>` prints one part: its pins and the leads they are on, params, ratings, what it does not simulate, datasheets and files. That print is the part's electrical behaviour. `orbe add <id>…` downloads the latest part into `parts/<id>/`, and the parts it is built from into `parts/<id>/parts/`. The copy is the project's: edit it, and commit `parts/` with the scene. `orbe check`, `orbe open` and `orbe test` read that copy and never use the network. `orbe add`, `orbe search` and `orbe part` need curl. `orbe add <block>` installs a Block. The Blocks are `nano-button-led`, `uno-button-led`, `nano-led-fade` and `nano-light-comparator`.
 
-In a part's folder, `part.jsonc` is the part: its pins, params, ratings and the engine model it names, which runs inside orbe. `<id>.glb` is its 3D shape, and `<id>.anchors.json` says where each lead sits, for drawing and seating. Any other file builds the 3D shape and holds nothing electrical. `orbe skills get parts` covers the copy and versions.
+In a part's folder, `part.jsonc` is the part: its pins, params, ratings and the engine model it names, which runs inside orbe. `<id>.glb` is its 3D shape, and `<id>.anchors.json` says where each lead sits, for drawing and seating. `orbe add` copies `part.jsonc`, the GLB and the anchors when the part has them. It does not copy `model.py` or `asset.json`. Those build the 3D shape and hold nothing electrical. `orbe skills get parts` covers the copy and versions.
 
 ## Breadboards
 

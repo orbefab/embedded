@@ -1,5 +1,5 @@
 {
-  "format": 1, "part": "ams1117-sot223", "version": "0.1.1", "title": "AMS1117 regulator, SOT-223", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "ams1117-sot223", "version": "0.2.0", "title": "AMS1117 regulator, SOT-223", "license": "MIT OR Apache-2.0",
   "summary": "AMS1117-5.0, a fixed 5.0 V regulator in SOT-223. The tab is OUT. Seen from the top, lead 1 is GND, lead 2 is OUT and lead 3 is IN.",
   "tags": ["regulator", "ldo", "sot-223", "power"],
   "docs": { "AMS1117 1A Low Dropout Voltage Regulator": "http://www.advanced-monolithic.com/pdf/ds1117.pdf" },

@@ -1,5 +1,5 @@
 {
-  "format": 1, "part": "usb-micro-b", "version": "0.1.1", "title": "USB micro-B socket", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "usb-micro-b", "version": "0.2.0", "title": "USB micro-B socket", "license": "MIT OR Apache-2.0",
   "summary": "Right-angle USB micro-B receptacle. Five contacts on 0.65 mm and four shell feet. The shell feet are GND with pin 5.",
   "tags": ["usb", "connector", "socket", "surface-mount"],
   "docs": { "USB 2.0 specification": null },

@@ -1,5 +1,5 @@
 {
-  "format": 1, "part": "crystal-hc49us", "version": "0.1.1", "title": "Crystal, HC-49/US", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "crystal-hc49us", "version": "0.2.0", "title": "Crystal, HC-49/US", "license": "MIT OR Apache-2.0",
   "summary": "HC-49/US low-profile crystal, any frequency, not polarized. Two leads.",
   "tags": ["crystal", "timing", "passive", "through-hole"],
   "docs": { "ECS HC-49USX": "https://www.ecsxtal.com/store/pdf/hc-49usx.pdf" },
