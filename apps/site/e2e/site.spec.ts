@@ -378,13 +378,10 @@ test.describe("parts search", () => {
   });
 
   test("the parts page lists every part without a query", async () => {
-    const parts = join(REPO, "parts");
-    const catalog = readdirSync(parts).filter((id) => {
-      const file = join(parts, id, "part.jsonc");
-      if (!existsSync(file)) return false;
-      const value = parseJsonc(readFileSync(file, "utf8")) as { listed?: boolean };
-      return value.listed !== false;
-    }).length;
+    const index = JSON.parse(readFileSync(join(registryDir(), "index.json"), "utf8")) as {
+      items: { name: string; type: string; listed?: boolean }[];
+    };
+    const catalog = new Set(index.items.filter((row) => row.type === "part" && row.listed !== false).map((row) => row.name)).size;
     expect(await page.locator("[data-part]").count()).toBe(catalog);
   });
 
