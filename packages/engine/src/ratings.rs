@@ -110,8 +110,9 @@ enum Reduce {
 }
 
 /// A quantity over the last [`DC_WINDOW_PS`], each sample held until the next. The window
-/// starts full of the first sample, the operating point, which is DC. The stored sample is
-/// the square for [`Reduce::Rms`] and the magnitude for [`Reduce::Mean`].
+/// starts full of the first sample. For a run that is the DC point when [`Ratings::prefill_dc`]
+/// has fed one, and the t = 0 value otherwise. The stored sample is the square for
+/// [`Reduce::Rms`] and the magnitude for [`Reduce::Mean`].
 #[derive(Clone)]
 struct Square {
     reduce: Reduce,
@@ -305,6 +306,58 @@ impl Ratings {
         }
     }
 
+    /// Whether a DC current or a power rating averages over [`DC_WINDOW_PS`].
+    pub(crate) fn averages(&self) -> bool {
+        self.watches.iter().any(|watch| watch.window.is_some())
+    }
+
+    /// Fills each window from `steady`, the DC point with every capacitor open, when `real`
+    /// (the t = 0 solve) disagrees with it, and from `real` when the two agree. A later
+    /// [`Self::sample`] at the same time keeps this fill and carries `real` forward, so a hold's
+    /// surge counts only from t = 0 on and a steady overload is already the whole window.
+    pub(crate) fn prefill_dc(
+        &mut self,
+        at: Time,
+        steady: &[Finite],
+        real: &[Finite],
+        cores: &[active::Core],
+    ) {
+        let steady_values = self.magnitudes(steady, cores);
+        let real_values = self.magnitudes(real, cores);
+        for (watch, (steady, real)) in self
+            .watches
+            .iter_mut()
+            .zip(steady_values.into_iter().zip(real_values))
+        {
+            let Some(window) = &mut watch.window else {
+                continue;
+            };
+            let fill = if is_surge(steady, real) { steady } else { real };
+            window.reading(at, fill);
+        }
+    }
+
+    /// The window starts empty. Used when the DC point did not solve, so a t = 0 surge is not
+    /// taken as the whole window.
+    pub(crate) fn prefill_empty(&mut self, at: Time) {
+        for watch in &mut self.watches {
+            if let Some(window) = &mut watch.window {
+                window.reading(at, 0.0);
+            }
+        }
+    }
+
+    /// Each watch's magnitude on `row`, after the gauges have read it.
+    fn magnitudes(&mut self, row: &[Finite], cores: &[active::Core]) -> Vec<f64> {
+        for gauge in &mut self.chips {
+            gauge.read(row, &cores[gauge.active]);
+        }
+        self.watches
+            .iter()
+            .map(|watch| magnitude(watch, &self.chips, row))
+            .collect()
+    }
+
     /// Over means a magnitude above the limit, the RMS over the window for a DC current, the
     /// average over the window for a power rating, or a voltage outside its window. The first
     /// time over stays; the peak rises. A sample that was over adds the time until this one to
@@ -324,11 +377,7 @@ impl Ratings {
                 watch.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
                 self.last,
             );
-            let mut magnitude = match watch.read {
-                Read::Column(column) => row[column].get(),
-                Read::Gauge { gauge, k } => self.chips[gauge].currents[k],
-            }
-            .abs();
+            let mut magnitude = magnitude(watch, &self.chips, row);
             if let Some(window) = &mut watch.window {
                 magnitude = window.reading(at, magnitude);
             }
@@ -479,6 +528,22 @@ impl Watch {
             excursion: None,
         }
     }
+}
+
+/// The t = 0 value disagrees with the DC point, so it is a hold's surge and not the
+/// window's fill. 1e-3 of a unit, and at least a milliamp or a milliwatt, is far above the
+/// microamp a crystal load draws and far below a rating this window is checked against.
+fn is_surge(steady: f64, real: f64) -> bool {
+    let scale = steady.abs().max(real.abs()).max(1.0);
+    (steady - real).abs() > 1e-3 * scale
+}
+
+fn magnitude(watch: &Watch, chips: &[Gauge], row: &[Finite]) -> f64 {
+    match watch.read {
+        Read::Column(column) => row[column].get(),
+        Read::Gauge { gauge, k } => chips[gauge].currents[k],
+    }
+    .abs()
 }
 
 impl Square {
@@ -908,6 +973,32 @@ mod tests {
         let mut row = vec![Finite::new(0.0).unwrap(); columns.refs().len()];
         row[columns.index(&"#r1.p".parse().unwrap()).unwrap()] = Finite::new(power).unwrap();
         row
+    }
+
+    /// A t = 0 value the DC point does not share is a hold's surge, so it does not fill the window.
+    #[test]
+    fn a_prefill_drops_a_surge_the_dc_point_does_not_share() {
+        let (mut ratings, columns) = power_ratings(0.25);
+        let steady = row_power(&columns, 0.0);
+        let real = row_power(&columns, 2.5);
+        ratings.prefill_dc(Time::ZERO, &steady, &real, &[]);
+        ratings.sample(Time::ZERO, &real, &[]);
+        assert!(ratings.findings().is_empty());
+    }
+
+    /// A value the DC point shares is the window at once.
+    #[test]
+    fn a_prefill_keeps_a_steady_overload() {
+        let (mut ratings, columns) = power_ratings(0.25);
+        let row = row_power(&columns, 2.5);
+        ratings.prefill_dc(Time::ZERO, &row, &row, &[]);
+        ratings.sample(Time::ZERO, &row, &[]);
+        let found = ratings.findings();
+        let [Diagnostic::RatingPower(excursion)] = found.as_slice() else {
+            panic!("not one power finding: {found:?}");
+        };
+        assert_eq!(excursion.first, Time::ZERO);
+        close(excursion.peak, 2.5);
     }
 
     /// 3 W for 136 ns is 0.4 µJ. Over 10.2 ms that averages about 40 µW, under a 2.419 W rating.

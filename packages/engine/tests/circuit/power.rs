@@ -80,13 +80,17 @@ fn pulse(high: f64, delay_ps: u64, width_ps: u64, period_ps: u64) -> String {
     )
 }
 
-fn power_warnings(json: &str) -> Vec<serde_json::Value> {
+fn warnings(json: &str, code: &str) -> Vec<serde_json::Value> {
     simulate(json)
         .diagnostics()
         .iter()
-        .filter(|diagnostic| diagnostic.code() == "rating.power")
+        .filter(|diagnostic| diagnostic.code() == code)
         .map(|diagnostic| serde_json::to_value(diagnostic).unwrap())
         .collect()
+}
+
+fn power_warnings(json: &str) -> Vec<serde_json::Value> {
+    warnings(json, "rating.power")
 }
 
 fn assert_switched(json: &str) {
@@ -266,4 +270,117 @@ fn a_pulse_train_warns_only_when_its_average_power_is_over() {
     let peak = warning["data"]["peak"].as_f64().unwrap();
     assert!((peak - 1.25).abs() < 0.02, "{peak}");
     assert!(run(PWM_490_PS / 10).is_empty());
+}
+
+/// A capacitor held discharged at t = 0 draws 2.5 W through r1 for that first solve, then
+/// charges in 1 us. The heat is about a microjoule, so the 0.25 W rating and the source's
+/// 0.2 A rating stay quiet. The same resistor with nothing held is a steady overload and
+/// warns at open.
+#[test]
+fn a_capacitor_starting_discharged_does_not_count_its_first_surge_as_a_window_of_heat() {
+    let json = |cap: &str| {
+        format!(
+            r#"{{
+      "version": 1,
+      "seed": 1,
+      "analysis": {{ "transient": {{ "stop_ps": 22000000000, "max_step_ps": 1000000000, "grid_ps": 10000000000 }} }},
+      "ground": "gnd",
+      "nets": ["gnd", "vcc", "mid"],
+      "parts": [
+        {{
+          "name": "v1",
+          "kind": "voltage_source",
+          "pins": {{ "p": "vcc", "n": "gnd" }},
+          "voltage": {{ "value": 5.0, "unit": "V" }},
+          "ratings": {{ "current": {{ "value": 0.2, "unit": "A" }} }}
+        }},
+        {{
+          "name": "r1",
+          "kind": "resistor",
+          "pins": {{ "a": "vcc", "b": "mid" }},
+          "resistance": {{ "value": 10.0, "unit": "ohm" }},
+          "ratings": {{ "power": {{ "value": 0.25, "unit": "W" }} }}
+        }},
+        {cap}
+      ]
+    }}"#
+        )
+    };
+    let held = r#"{
+          "name": "c1",
+          "kind": "capacitor",
+          "pins": { "a": "mid", "b": "gnd" },
+          "capacitance": { "value": 1e-7, "unit": "F" },
+          "initial": { "value": 0.0, "unit": "V" }
+        }"#;
+    let held = json(held);
+    assert_eq!(power_warnings(&held), Vec::<serde_json::Value>::new());
+    assert_eq!(
+        warnings(&held, "rating.current"),
+        Vec::<serde_json::Value>::new()
+    );
+    let shorted = r#"{
+          "name": "r2",
+          "kind": "resistor",
+          "pins": { "a": "mid", "b": "gnd" },
+          "resistance": { "value": 0.001, "unit": "ohm" },
+          "ratings": { "power": null }
+        }"#;
+    let shorted = json(shorted);
+    let found = power_warnings(&shorted);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["refs"][0], "#r1.p");
+    assert_eq!(found[0]["t_ps"], 0);
+    let current = warnings(&shorted, "rating.current");
+    assert_eq!(current.len(), 1, "{current:?}");
+    assert_eq!(current[0]["refs"][0], "#v1.i");
+    assert_eq!(current[0]["t_ps"], 0);
+}
+
+/// A steady 2.5 W beside a held capacitor still fills that resistor's window at open. The
+/// surge branch does not.
+#[test]
+fn a_steady_overload_beside_a_held_capacitor_still_warns_at_open() {
+    let json = r#"{
+      "version": 1,
+      "seed": 1,
+      "analysis": { "transient": { "stop_ps": 22000000000, "max_step_ps": 1000000000, "grid_ps": 10000000000 } },
+      "ground": "gnd",
+      "nets": ["gnd", "vcc", "mid"],
+      "parts": [
+        {
+          "name": "v1",
+          "kind": "voltage_source",
+          "pins": { "p": "vcc", "n": "gnd" },
+          "voltage": { "value": 5.0, "unit": "V" }
+        },
+        {
+          "name": "rload",
+          "kind": "resistor",
+          "pins": { "a": "vcc", "b": "gnd" },
+          "resistance": { "value": 10.0, "unit": "ohm" },
+          "ratings": { "power": { "value": 0.25, "unit": "W" } }
+        },
+        {
+          "name": "r_surge",
+          "kind": "resistor",
+          "pins": { "a": "vcc", "b": "mid" },
+          "resistance": { "value": 10.0, "unit": "ohm" },
+          "ratings": { "power": { "value": 0.25, "unit": "W" } }
+        },
+        {
+          "name": "c1",
+          "kind": "capacitor",
+          "pins": { "a": "mid", "b": "gnd" },
+          "capacitance": { "value": 1e-7, "unit": "F" },
+          "initial": { "value": 0.0, "unit": "V" }
+        }
+      ]
+    }"#;
+    let found = power_warnings(json);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["refs"][0], "#rload.p");
+    assert_eq!(found[0]["t_ps"], 0);
+    let peak = found[0]["data"]["peak"].as_f64().unwrap();
+    assert!((peak - 2.5).abs() < 1e-3, "{peak}");
 }

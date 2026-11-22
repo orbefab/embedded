@@ -219,6 +219,9 @@ pub(crate) struct Conditions<'h> {
     /// The time this solve is for.
     pub(crate) at: Time,
     pub(crate) history: History<'h>,
+    /// Open every capacitor and ignore `initial`. A rating window's DC point uses this.
+    /// The run's t = 0 solve leaves it clear, so a held capacitor keeps its voltage there.
+    pub(crate) capacitors_open: bool,
     /// Each chip's state, by slot. Only an accepted time changes it.
     pub(crate) chips: &'h [chip::State],
     /// Each active chip's core in force, by active slot.
@@ -273,6 +276,7 @@ impl Conditions<'static> {
         source_scale: 1.0,
         at: Time::ZERO,
         history: History::Start,
+        capacitors_open: false,
         chips: &[],
         cores: &[],
     };

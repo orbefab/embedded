@@ -1,6 +1,6 @@
 use orbe_model::Time;
 
-use crate::netlist::{Analysis, Netlist, Transient};
+use crate::netlist::{Analysis, Model, Netlist, Transient};
 
 use std::mem::size_of;
 
@@ -376,6 +376,47 @@ pub(crate) struct StartFailure {
     pub(crate) warnings: Vec<Diagnostic>,
 }
 
+/// A held capacitor's branch current above this is a t = 0 surge, not the DC point a rating
+/// window starts from. A crystal load's leakage is about a microamp and stays under it.
+const HOLD_SURGE_A: f64 = 1e-4;
+
+/// Whether a capacitor held at `initial` carries more than [`HOLD_SURGE_A`] at the t = 0 solve.
+fn hold_surge(circuit: &Circuit, solution: &Solution) -> bool {
+    circuit.netlist.parts().any(|(id, part)| {
+        let Model::Capacitor(capacitor) = &part.model else {
+            return false;
+        };
+        capacitor.initial.is_some()
+            && solution.get(circuit.layout.branch_row(id, 0)).abs() > HOLD_SURGE_A
+    })
+}
+
+/// The DC point with every capacitor open, warmed from the real operating point and the
+/// chips already settled. `None` when that solve fails. The run still starts.
+fn dc_row(
+    circuit: &Circuit,
+    columns: &Columns,
+    chips: &[chip::State],
+    cores: &[active::Core],
+    warm: &Iterate,
+) -> Option<Vec<Finite>> {
+    let conditions = Conditions {
+        capacitors_open: true,
+        chips,
+        cores,
+        ..Conditions::NOMINAL
+    };
+    let converged = newton(circuit, None, &conditions, warm.clone(), op::OP_BUDGET).ok()?;
+    observe::observe(
+        circuit,
+        columns,
+        &converged.iterate.solution,
+        Time::ZERO,
+        Side::Before,
+    )
+    .ok()
+}
+
 impl Session {
     /// Solves the operating point at t = 0 and the step after it, and keeps no trace. The step
     /// after t = 0 can fail, and then the session it returns has faulted.
@@ -444,6 +485,22 @@ impl Session {
             actives.keep_shown();
         }
         let mut ratings = Ratings::new(&circuit.netlist, &circuit.actives, &columns, Timing::Run);
+        // A held capacitor's t = 0 current is the hold, not the DC the window starts from. When
+        // that current is a surge, fill each window from the DC point, capacitors open, so the
+        // surge counts only from t = 0 on. A crystal load's microamp is not a surge, and the
+        // window stays the operating point.
+        if hold_surge(&circuit, &start.iterate.solution) && ratings.averages() {
+            match dc_row(
+                &circuit,
+                &columns,
+                &start.chips,
+                actives.cores(),
+                &start.iterate,
+            ) {
+                Some(steady) => ratings.prefill_dc(Time::ZERO, &steady, &row, actives.cores()),
+                None => ratings.prefill_empty(Time::ZERO),
+            }
+        }
         ratings.sample(Time::ZERO, &row, actives.cores());
         let inputs = Inputs::new(&circuit.netlist, &circuit.actives);
         let record = rows
