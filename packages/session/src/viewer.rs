@@ -105,9 +105,6 @@ pub(crate) struct FrameMessage<'a> {
     /// when the scene declares none.
     #[serde(skip_serializing_if = "Option::is_none")]
     world: Option<&'a [f64]>,
-    /// On a frame from a `play` tick: the speed `play` runs at, always 1 for now.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    speed: Option<f64>,
     /// On a frame from a `play` tick: simulated time over wall time in that tick, as the session
     /// achieved it. Under 1 when the engine runs slower than real time.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -191,8 +188,7 @@ pub fn command(text: &str) -> (Option<u64>, Result<Command, Error>) {
     (id, parsed)
 }
 
-/// The words after the command name. `set` takes `quantity` and `value`. The others take `ref`
-/// and, where the table allows it, `speed`.
+/// The words after the command name. `set` takes `quantity` and `value`. The others take `ref`.
 fn viewer_args(name: &str, message: &Value) -> Vec<String> {
     if name == "set" {
         let quantity = message["quantity"].as_str().unwrap_or("").to_string();
@@ -203,10 +199,11 @@ fn viewer_args(name: &str, message: &Value) -> Vec<String> {
         };
         return vec![quantity, value];
     }
-    let mut args = Vec::new();
-    args.extend(message["ref"].as_str().map(String::from));
-    args.extend(message.get("speed").map(Value::to_string));
-    args
+    message["ref"]
+        .as_str()
+        .map(String::from)
+        .into_iter()
+        .collect()
 }
 
 /// Runs a viewer's command text on `live`: the reply, and the message that carries it back to
@@ -368,7 +365,6 @@ impl Feed {
             switches: &sample.switches,
             pixel_rgb: &sample.pixels,
             world: (!sample.world.is_empty()).then_some(sample.world.as_slice()),
-            speed: pace.map(|pace| pace.speed),
             ratio: pace.map(|pace| pace.ratio),
             diagnostics: sample.diagnostics,
             fault: sample.fault.as_deref(),
@@ -482,8 +478,6 @@ mod tests {
         );
         let (_, unnamed) = command(r#"{"id": 10, "cmd": "press", "ref": "btn1"}"#);
         assert_eq!(unnamed.unwrap_err().code, Code::Usage);
-        let (_, fast) = command(r#"{"id": 11, "cmd": "play", "speed": 2}"#);
-        assert_eq!(fast.unwrap_err().message, "takes no arguments; usage: play");
         let (_, set) = command(r#"{"id": 12, "cmd": "set", "quantity": "light", "value": 50}"#);
         assert_eq!(
             set.unwrap(),

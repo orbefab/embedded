@@ -73,8 +73,8 @@ struct Open {
     contacts: BTreeMap<String, (bool, Vec<(u64, bool)>)>,
     /// Time runs at real speed between commands, since a `play`.
     playing: bool,
-    /// What `play`'s ticks ran since a `step` last listed changes, from where that step
-    /// ended. The next `step` lists these first.
+    /// What `play`'s ticks ran, from where that stretch started. `pause` returns it.
+    /// A step that cannot run, at a fault or the stop, returns it too.
     unlisted: Option<Stepped>,
     scene: String,
     stop_ps: u64,
@@ -158,7 +158,10 @@ impl Live {
             (Command::Play, Some(open)) => open.play(),
             (Command::Pause, Some(open)) => {
                 open.playing = false;
-                Ok(Data::Paced { playing: false })
+                match open.unlisted.take() {
+                    Some(played) => Ok(Data::Stepped(played)),
+                    None => Ok(Data::Paced { playing: false }),
+                }
             }
             (Command::Snapshot, Some(open)) => Ok(open.snapshot()),
             (Command::Expect(condition), Some(open)) => open.expect(condition),
@@ -187,7 +190,7 @@ impl Live {
 
     /// One `play` tick, `wall` after the one before: advances a playing session by as much
     /// simulated time, up to one [`TICK`](crate::viewer::TICK) at speed 1, or to its stop when
-    /// that is nearer, as a `step` would, and keeps its changes for the next `step` to list. Play
+    /// that is nearer, as a `step` would, and keeps its changes for `pause` to list. Play
     /// ends at the stop or a fault. Returns the tick's pace while it still plays.
     pub fn tick(&mut self, wall: std::time::Duration) -> Option<Pace> {
         let open = self.open.as_mut().filter(|open| open.playing)?;
@@ -197,12 +200,12 @@ impl Live {
         let step = Step::For(Duration::from_ps(length));
         let ran = open.step(&step, &mut |_| ControlFlow::Continue(()));
         open.playing = ran.is_ok() && open.engine.status() == Status::Running;
-        open.unlisted = match ran.map_err(|failed| failed.data) {
-            Ok(Data::Stepped(stepped)) | Err(Data::Stepped(stepped)) => Some(stepped),
-            _ => None,
-        };
+        if let Ok(Data::Stepped(stepped)) | Err(Data::Stepped(stepped)) =
+            ran.map_err(|failed| failed.data)
+        {
+            open.hold(stepped);
+        }
         open.playing.then(|| Pace {
-            speed: 1.0,
             ratio: simulated.as_secs_f64() / wall.as_secs_f64().max(f64::EPSILON),
         })
     }

@@ -131,7 +131,7 @@ Each line is a live command without `orbe`. `--json`, `--session`, `--help` or `
 
 ## The 3D page
 
-Only this machine reaches the page. From another, `ssh -L <port>:127.0.0.1:<port>` and open `http://127.0.0.1:<port>/` with the same `#t=` key. Several pages watch one session; `orbe close` ends them. A click is `press`; letting go is `release`. While paused a click changes no pin: the firmware runs only as time moves. `play` reports nothing as time runs. Next `step` lists changes since the last one, play included. Run `step 1ms` first. `show` failing with "this orbe was built without the viewer page" means this `orbe` has no page. Tell the user to rebuild `orbe`.
+Only this machine reaches the page. From another, `ssh -L <port>:127.0.0.1:<port>` and open `http://127.0.0.1:<port>/` with the same `#t=` key. Several pages watch one session; `orbe close` ends them. A click is `press`; letting go is `release`. While paused a click changes no pin: the firmware runs only as time moves. `play` reports nothing as time runs. `pause` lists what changed while it ran. A later `step` lists only what that step did. `show` failing with "this orbe was built without the viewer page" means this `orbe` has no page. Tell the user to rebuild `orbe`.
 
 ## Warnings
 

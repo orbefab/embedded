@@ -136,11 +136,9 @@ pub struct Sample {
     pub fault: Option<String>,
 }
 
-/// `play`'s pace for a frame: the speed it asked for, and simulated time over wall time as the
-/// session achieved it.
+/// `play`'s pace for a frame: simulated time over wall time as the session achieved it.
 #[derive(Clone, Copy, Debug)]
 pub struct Pace {
-    pub speed: f64,
     pub ratio: f64,
 }
 

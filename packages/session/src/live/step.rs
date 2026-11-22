@@ -114,8 +114,8 @@ impl Open {
     }
 
     /// Steps as `step` asks. A step that runs ends `play`, and one refused before it runs
-    /// leaves it running. It lists what `play` ran since the last `step` first, and a step
-    /// refused at a fault or the stop lists those in its refusal, since no later step runs.
+    /// leaves it running. It lists only what this step did. What `play` held waits for
+    /// `pause`. A step refused at a fault or the stop lists that too, since no later step runs.
     pub(super) fn step(
         &mut self,
         step: &Step,
@@ -173,10 +173,8 @@ impl Open {
             .collect();
         let mut known: BTreeSet<Key> = self.findings(&probe).iter().map(key).collect();
         drop(probe);
-        let (listed_from, mut changes, mut more) = match self.unlisted.take() {
-            Some(played) => (played.from_ps, played.changes, played.more),
-            None => (from, Vec::new(), 0),
-        };
+        let mut changes = Vec::new();
+        let mut more = 0;
         let mut list = |found: Vec<Change>| {
             for change in found {
                 if changes.len() < CHANGES {
@@ -299,7 +297,7 @@ impl Open {
             self.light.steady_hint(*index, *want, end)
         });
         let data = Data::Stepped(Stepped {
-            from_ps: listed_from,
+            from_ps: from,
             met,
             changes,
             more,
@@ -343,6 +341,22 @@ impl Open {
 
     fn unlisted(&mut self) -> Data {
         self.unlisted.take().map_or(Data::None, Data::Stepped)
+    }
+
+    /// Keeps what one `play` tick ran, after the changes already held, up to [`CHANGES`].
+    pub(super) fn hold(&mut self, mut stepped: Stepped) {
+        let Some(held) = self.unlisted.as_mut() else {
+            self.unlisted = Some(stepped);
+            return;
+        };
+        let room = CHANGES.saturating_sub(held.changes.len());
+        if stepped.changes.len() > room {
+            held.more += stepped.changes.len() - room;
+            stepped.changes.truncate(room);
+        }
+        held.more += stepped.more;
+        held.changes.append(&mut stepped.changes);
+        held.leds = stepped.leds;
     }
 
     /// Takes the edges and bytes the engine logged since the last drain. Every edge through

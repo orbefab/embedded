@@ -555,7 +555,10 @@ fn play_then_pause_advances_time_at_wall_speed() {
     let paused = runtime.orbe(dir.path(), &["pause", "--json"]).ok().json();
     let elapsed = started.elapsed();
     assert_eq!(paused["state"], "paused");
-    assert_eq!(paused["data"]["playing"], false);
+    assert!(
+        paused["data"]["changes"].is_array(),
+        "pause lists what play ran: {paused}"
+    );
     let t = paused["t_ps"].as_u64().unwrap();
     // Slow motion is what a tick costs when the engine takes longer than the slice it
     // simulates, so the floor is only that time moved after the first frame. The ceiling is
@@ -582,7 +585,10 @@ fn play_then_pause_advances_time_at_wall_speed() {
         .filter(|m| m["state"] == "playing" && m["t_ps"] != 0)
         .collect();
     assert!(!playing.is_empty(), "frames from play's ticks");
-    assert!(playing.iter().all(|f| f["speed"] == 1.0), "{playing:?}");
+    assert!(
+        playing.iter().all(|f| f.get("speed").is_none()),
+        "{playing:?}"
+    );
     assert!(playing.iter().all(|f| f["ratio"].as_f64().unwrap() > 0.0));
 
     let again = viewer.run(1, "play", None, &mut seen);
