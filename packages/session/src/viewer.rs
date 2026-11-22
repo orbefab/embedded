@@ -211,6 +211,7 @@ fn viewer_args(name: &str, message: &Value) -> Vec<String> {
 pub fn answer(live: &mut Live, text: &str) -> (Reply, Value) {
     let (id, command) = command(text);
     let reply = match command {
+        Ok(Command::Pause) => live.pause_from_viewer(),
         Ok(command) => live.run(&command),
         Err(error) => live.refuse(error),
     };

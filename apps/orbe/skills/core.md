@@ -181,7 +181,7 @@ FAIL tests/button.test:4: expect @led1 lit
 
 ## Reading results
 
-`step` lists pin edges with their exact times, LED changes and diagnostics. It lists at most 20, then `and N more`, then every LED's `brightness`. A `warning[...]` line is a runtime diagnostic. `rating.current`, `rating.power` and `rating.voltage` mean a part or a chip pin went past its datasheet rating, such as an LED with no series resistor. Fix the circuit. `chip.floating_input` names an input that nothing drives.
+`step` lists pin edges with their exact times, LED changes and diagnostics. It lists at most 20, for what `play` held and again for what the step did, then `and N more`, then every LED's `brightness`. A `warning[...]` line is a runtime diagnostic. `rating.current`, `rating.power` and `rating.voltage` mean a part or a chip pin went past its datasheet rating, such as an LED with no series resistor. Fix the circuit. `chip.floating_input` names an input that nothing drives.
 
 An error prints `error[<code>]: <message>`, and most add a `hint:` line. Do what the hint says. The common ones are `part_missing`, `firmware_missing` (build it, or fix the path), `unknown_ref` (the hint lists what exists), `expect_failed` and `until_timeout` (compare `actual`, then fix the circuit or the firmware, or step longer). `orbe skills get reference` has more.
 
@@ -191,4 +191,4 @@ With `--json` a command prints one JSON object, `{"ok": true, "data": {...}}` or
 
 ## Watching in 3D
 
-`orbe open --headed` opens the scene and a page in the default browser, where a person watches it in 3D and clicks its buttons. When a viewer is already connected, it prints the address and opens no browser. `orbe show` opens the page on a session that already runs, and `--no-browser` only prints its address. The address holds the session's key, so give it only to the user. A session opens paused, so run `orbe play` before you hand over the page. Time then runs at real speed until `orbe pause`, a `step` that runs, the 2-hour stop or a fault, and uses the CPU while it runs.
+`orbe open --headed` opens the scene and a page in the default browser, where a person watches it in 3D and clicks its buttons. When a viewer is already connected, it prints the address and opens no browser. `orbe show` opens the page on a session that already runs, and `--no-browser` only prints its address. The address holds the session's key, so give it only to the user. A session opens paused, so run `orbe play` before you hand over the page. Time then runs at real speed until `orbe pause`, a `step` that runs, the 2-hour stop or a fault, and uses the CPU while it runs. `orbe pause`, or the next `orbe step`, lists what changed while playing, including what the user did on the page.

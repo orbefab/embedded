@@ -16,6 +16,20 @@ use crate::duration::Duration;
 use crate::reply::{Change, Check, Code, Data, Error, Got, LedRead, Level, Light, Met, Stepped};
 use crate::target::Ref;
 
+/// What `play` held, then what the step returned. A step that did not run has no list of
+/// its own, so the held stretch is the whole reply. `from_ps` stays the start of that stretch.
+fn held_then(mut held: Stepped, data: Data) -> Data {
+    let Data::Stepped(mut own) = data else {
+        return Data::Stepped(held);
+    };
+    held.more += own.more;
+    held.changes.append(&mut own.changes);
+    held.leds = own.leds;
+    held.met = own.met;
+    held.check = own.check;
+    Data::Stepped(held)
+}
+
 /// `step` advances in slices this long, so `--until` and a caller see each one.
 /// Each slice records an LED sample.
 const SLICE: Duration = Duration::from_ms(1);
@@ -113,9 +127,30 @@ impl Open {
         }
     }
 
+    /// A CLI `step`. What `play` held is listed first, under its own cap of [`CHANGES`], then
+    /// this step's own changes under the same cap, and the hold is cleared. `from_ps` stays
+    /// the start of the stretch that was held.
+    pub(super) fn step_and_list(
+        &mut self,
+        step: &Step,
+        during: &mut dyn FnMut(&Progress) -> ControlFlow<()>,
+    ) -> Outcome {
+        let outcome = self.step(step, during);
+        let Some(held) = self.unlisted.take() else {
+            return outcome;
+        };
+        match outcome {
+            Ok(data) => Ok(held_then(held, data)),
+            Err(mut failed) => {
+                failed.data = held_then(held, failed.data);
+                Err(failed)
+            }
+        }
+    }
+
     /// Steps as `step` asks. A step that runs ends `play`, and one refused before it runs
-    /// leaves it running. It lists only what this step did. What `play` held waits for
-    /// `pause`. A step refused at a fault or the stop lists that too, since no later step runs.
+    /// leaves it running. The changes it returns are this step's own. What `play` held stays
+    /// where it is, for [`Self::step_and_list`] or `pause`.
     pub(super) fn step(
         &mut self,
         step: &Step,
@@ -128,14 +163,13 @@ impl Open {
             }
         };
         match (self.engine.status(), step) {
-            (Status::Faulted, _) => return Err(failed(self.faulted(), self.unlisted())),
+            (Status::Faulted, _) => return Err(fail(self.faulted())),
             (Status::Stopped, Step::For(_)) => {
-                let error = Error::new(
+                return Err(fail(Error::new(
                     Code::Ended,
                     format!("the session reached its {} stop", self.stop_name()),
                     "run `open` to start again",
-                );
-                return Err(failed(error, self.unlisted()));
+                )));
             }
             _ => {}
         }
@@ -337,10 +371,6 @@ impl Open {
             }
             _ => Ok(data),
         }
-    }
-
-    fn unlisted(&mut self) -> Data {
-        self.unlisted.take().map_or(Data::None, Data::Stepped)
     }
 
     /// Keeps what one `play` tick ran, after the changes already held, up to [`CHANGES`].

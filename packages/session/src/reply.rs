@@ -214,9 +214,11 @@ pub enum Data {
     Closed {
         at_ps: u64,
     },
-    /// `play` or `pause`: whether time runs now.
+    /// `play` or `pause`: whether time runs now. `pause` also carries what `play` held, when
+    /// anything was. `from_ps` on that list is where the held stretch started.
     Paced {
         playing: bool,
+        played: Option<Stepped>,
     },
     /// A viewer's address, which `show` gives. `viewers` is how many were already connected,
     /// so `open --headed` does not count the browser it is about to open.
@@ -451,13 +453,84 @@ pub struct Stepped {
     pub from_ps: u64,
     pub met: Option<Met>,
     pub changes: Vec<Change>,
-    /// Changes past the 20 a reply lists.
+    /// Changes left out of `changes`. A `step` after `play` leaves out the overflow of each
+    /// list, and each list stops at 20.
     pub more: usize,
     /// `--until`'s condition as it stood at the end.
     pub check: Option<Check>,
     /// Each simulated LED at the end of the step, apart from `changes`, so a fade that stays
     /// in one state still shows its brightness.
     pub leds: Vec<LedRead>,
+}
+
+impl Stepped {
+    fn json(&self) -> Value {
+        let (at, by, sent) = match self.met {
+            Some(Met::At(ps) | Met::Edge(ps)) => (Some(ps), None, None),
+            Some(Met::By(ps)) => (None, Some(ps), None),
+            Some(Met::Serial { by_ps, sent_at_ps }) => (None, Some(by_ps), Some(sent_at_ps)),
+            None => (None, None, None),
+        };
+        let mut value = json!({
+            "from_ps": self.from_ps,
+            "met_at_ps": at,
+            "met_by_ps": by,
+            "sent_at_ps": sent,
+            "changes": self.changes.iter().map(Change::json).collect::<Vec<_>>(),
+            "more": self.more,
+            "leds": self.leds.iter().map(|led| json!({
+                "ref": format!("@{}", led.part),
+                "state": led.state.as_str(),
+                "brightness": led.brightness,
+                "over_ps": led.over_ps,
+            })).collect::<Vec<_>>(),
+        });
+        if let Some(check) = &self.check {
+            value["check"] = check.json();
+        }
+        value
+    }
+
+    fn write_text(&self, out: &mut String, t_ps: u64) {
+        let _ = write!(out, "t={} (from {})", t(t_ps), t(self.from_ps));
+        if let Some(met) = self.met
+            && let Some(check) = &self.check
+        {
+            let _ = write!(out, ", {} ", check.expected);
+            let _ = match met {
+                Met::At(ps) => write!(out, "at {}", t(ps)),
+                Met::Edge(ps) if t_ps > ps => {
+                    write!(out, "at {} (reads show it from {})", t(ps), t(t_ps))
+                }
+                Met::Edge(ps) => write!(out, "at {} (reads show it after {})", t(ps), t(ps)),
+                Met::By(ps) => write!(out, "by {}", t(ps)),
+                Met::Serial { by_ps, sent_at_ps } => {
+                    write!(
+                        out,
+                        "by {} (last byte sent from {})",
+                        t(by_ps),
+                        t(sent_at_ps)
+                    )
+                }
+            };
+        }
+        for change in &self.changes {
+            let _ = write!(out, "\n  {}", change.text());
+        }
+        if self.more > 0 {
+            let _ = write!(out, "\n  and {} more", self.more);
+        }
+        for led in &self.leds {
+            let _ = write!(
+                out,
+                "\n  brightness {} {} {} over {}",
+                led.part,
+                led.state.as_str(),
+                current(led.brightness),
+                t(led.over_ps)
+            );
+        }
+    }
 }
 
 /// One LED at the end of a step.
@@ -941,7 +1014,14 @@ impl Data {
                 })).collect::<Vec<_>>(),
             }),
             Data::Closed { at_ps } => json!({ "closed": true, "at_ps": at_ps }),
-            Data::Paced { playing } => json!({ "playing": playing }),
+            Data::Paced { playing, played } => {
+                let mut value = played
+                    .as_ref()
+                    .map(Stepped::json)
+                    .unwrap_or_else(|| json!({}));
+                value["playing"] = json!(playing);
+                value
+            }
             Data::Viewer { url, viewers } => json!({ "url": url, "viewers": viewers }),
             Data::Landed {
                 target, landed_ps, ..
@@ -973,34 +1053,7 @@ impl Data {
                 "kind": got.value.kind(),
                 "value": got.value.json(),
             }),
-            Data::Stepped(stepped) => {
-                let (at, by, sent) = match stepped.met {
-                    Some(Met::At(ps) | Met::Edge(ps)) => (Some(ps), None, None),
-                    Some(Met::By(ps)) => (None, Some(ps), None),
-                    Some(Met::Serial { by_ps, sent_at_ps }) => {
-                        (None, Some(by_ps), Some(sent_at_ps))
-                    }
-                    None => (None, None, None),
-                };
-                let mut value = json!({
-                    "from_ps": stepped.from_ps,
-                    "met_at_ps": at,
-                    "met_by_ps": by,
-                    "sent_at_ps": sent,
-                    "changes": stepped.changes.iter().map(Change::json).collect::<Vec<_>>(),
-                    "more": stepped.more,
-                    "leds": stepped.leds.iter().map(|led| json!({
-                        "ref": format!("@{}", led.part),
-                        "state": led.state.as_str(),
-                        "brightness": led.brightness,
-                        "over_ps": led.over_ps,
-                    })).collect::<Vec<_>>(),
-                });
-                if let Some(check) = &stepped.check {
-                    value["check"] = check.json();
-                }
-                value
-            }
+            Data::Stepped(stepped) => stepped.json(),
             Data::Snapshot(snapshot) => json!({
                 "scene": snapshot.scene,
                 "parts": snapshot.parts.iter().map(|p| json!({
@@ -1041,10 +1094,20 @@ impl Data {
             Data::Closed { at_ps } => {
                 let _ = write!(out, "closed at t={}", t(*at_ps));
             }
-            Data::Paced { playing: true } => {
+            Data::Paced {
+                played: Some(stepped),
+                ..
+            } => stepped.write_text(&mut out, t_ps),
+            Data::Paced {
+                playing: true,
+                played: None,
+            } => {
                 let _ = write!(out, "playing from t={}", t(t_ps));
             }
-            Data::Paced { playing: false } => {
+            Data::Paced {
+                playing: false,
+                played: None,
+            } => {
                 let _ = write!(out, "paused at t={}", t(t_ps));
             }
             Data::Viewer { url, .. } => out.push_str(url),
@@ -1094,46 +1157,7 @@ impl Data {
             Data::Got(got) => {
                 let _ = write!(out, "{} {}", got.target, got.value.text());
             }
-            Data::Stepped(stepped) => {
-                let _ = write!(out, "t={} (from {})", t(t_ps), t(stepped.from_ps));
-                if let Some(met) = stepped.met
-                    && let Some(check) = &stepped.check
-                {
-                    let _ = write!(out, ", {} ", check.expected);
-                    let _ = match met {
-                        Met::At(ps) => write!(out, "at {}", t(ps)),
-                        Met::Edge(ps) if t_ps > ps => {
-                            write!(out, "at {} (reads show it from {})", t(ps), t(t_ps))
-                        }
-                        Met::Edge(ps) => {
-                            write!(out, "at {} (reads show it after {})", t(ps), t(ps))
-                        }
-                        Met::By(ps) => write!(out, "by {}", t(ps)),
-                        Met::Serial { by_ps, sent_at_ps } => write!(
-                            out,
-                            "by {} (last byte sent from {})",
-                            t(by_ps),
-                            t(sent_at_ps)
-                        ),
-                    };
-                }
-                for change in &stepped.changes {
-                    let _ = write!(out, "\n  {}", change.text());
-                }
-                if stepped.more > 0 {
-                    let _ = write!(out, "\n  and {} more", stepped.more);
-                }
-                for led in &stepped.leds {
-                    let _ = write!(
-                        out,
-                        "\n  brightness {} {} {} over {}",
-                        led.part,
-                        led.state.as_str(),
-                        current(led.brightness),
-                        t(led.over_ps)
-                    );
-                }
-            }
+            Data::Stepped(stepped) => stepped.write_text(&mut out, t_ps),
             Data::Snapshot(snapshot) => {
                 let _ = write!(out, "t={}  scene={}", t(t_ps), snapshot.scene);
                 let width = snapshot
