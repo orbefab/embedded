@@ -518,7 +518,7 @@ test.describe("led-5mm", () => {
   test("a download serves the file's bytes, by the record's SHA-256", async () => {
     const href = await page.locator('[data-testid="license-files"] a[download]', { hasText: /^part\.jsonc$/ }).getAttribute("href");
     const download = await page.evaluate(async (href) => {
-      const record = await (await fetch("/embedded/r/led-5mm@0.2.0.json")).json();
+      const record = await (await fetch("/embedded/r/led-5mm@0.3.0.json")).json();
       const bytes = new Uint8Array(await (await fetch(href)).arrayBuffer());
       const hex = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
       return { hex, want: record.files.find((file: { path: string; sha256: string }) => file.path === "part.jsonc").sha256 };

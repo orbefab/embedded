@@ -6,6 +6,7 @@ mod contact;
 mod divider;
 mod inductor;
 mod junction;
+mod led_forward;
 mod potentiometer;
 mod regulator;
 mod relay;
