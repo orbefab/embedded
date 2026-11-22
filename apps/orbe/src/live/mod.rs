@@ -616,9 +616,13 @@ impl Client {
     /// is kept as `<name>.log.crashed` until the next crash replaces it.
     fn close(&self) -> Result<Done, Refusal> {
         match self.find()? {
-            Found::Listening(stream) => self
-                .send(stream, Ask::Run(Ok(Command::Close)))
-                .map(Done::Reply),
+            Found::Listening(stream) => {
+                let done = self
+                    .send(stream, Ask::Run(Ok(Command::Close)))
+                    .map(Done::Reply);
+                remove_claim(&self.socket);
+                done
+            }
             Found::Missing => Err(self.no_session()),
             Found::Stale => {
                 fs::remove_file(&self.socket).map_err(|error| {
@@ -631,6 +635,7 @@ impl Client {
                 let kept = self.place.take_crash_log(&self.name);
                 let starts = self.place.remove_left_logs(|name| name == &self.name);
                 let _ = fs::remove_file(self.place.version(&self.name));
+                remove_claim(&self.socket);
                 Ok(Done::Stale(Stale {
                     session: self.name.clone(),
                     log: kept,
@@ -694,13 +699,12 @@ impl Client {
             )
         })?;
         for _ in 0..POLLS {
-            if let Ok(Found::Listening(stream)) = self.find() {
-                return Ok((stream, log));
-            }
             if let Ok(Some(status)) = child.try_wait() {
-                // This start lost the socket. Another start may already be listening, and
-                // that listener is the session.
-                if let Ok(Found::Listening(stream)) = self.find() {
+                // Exit `LOST` is the only one that means another start is the session. A
+                // failed log rename, a failed version write, or a signal still fails this open.
+                if status.code() == Some(i32::from(daemon::LOST))
+                    && let Ok(Found::Listening(stream)) = self.find()
+                {
                     return Ok((stream, log));
                 }
                 if status.success() {
@@ -710,6 +714,9 @@ impl Client {
                     &log,
                     format!("the session process exited ({status}) before it listened"),
                 ));
+            }
+            if let Ok(Found::Listening(stream)) = self.find() {
+                return Ok((stream, log));
             }
             std::thread::sleep(POLL);
         }
@@ -1059,6 +1066,21 @@ impl Client {
         );
         Ok(closed)
     }
+}
+
+/// Removes `<name>.claim` when no start holds it. A start keeps that file for the bind and
+/// never unlinks it, so two starts wait on one lock. `close` is what removes it.
+fn remove_claim(socket: &Path) {
+    use rustix::fs::{FlockOperation, Mode, OFlags};
+    let path = socket.with_extension("claim");
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let Ok(fd) = rustix::fs::open(&path, flags, Mode::empty()) else {
+        return;
+    };
+    if rustix::fs::flock(&fd, FlockOperation::NonBlockingLockExclusive).is_err() {
+        return;
+    }
+    let _ = fs::remove_file(path);
 }
 
 /// What is at a path that should be a socket or a log, and the `rm` that removes it.

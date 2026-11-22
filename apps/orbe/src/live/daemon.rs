@@ -47,6 +47,13 @@ const WRITE: Duration = Duration::from_secs(5);
 /// How long the ending process waits for its viewers to take their close.
 const FAREWELL: Duration = Duration::from_secs(1);
 
+/// `orbe daemon` could not prepare the session. The client reports a failed start.
+const IO: u8 = 3;
+
+/// This start found a listener already serving, or lost the socket. The client uses that
+/// listener. Every other exit, including a signal, is a failed start.
+pub(super) const LOST: u8 = 4;
+
 /// A request, or why it did not read as one, with the connection its reply goes back on.
 pub(super) struct Job {
     request: Result<Request, Error>,
@@ -343,7 +350,7 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
         Ok(paths) => paths,
         Err((message, hint)) => {
             eprintln!("error[io_error]: {message}\n  hint: {hint}");
-            return ExitCode::from(3);
+            return ExitCode::from(IO);
         }
     };
     let listener = match bind(&socket) {
@@ -360,7 +367,7 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
                 "error[io_error]: cannot listen at {}: {error}",
                 socket.display()
             );
-            return ExitCode::from(3);
+            return ExitCode::from(if lost { LOST } else { IO });
         }
     };
     let bound = (inode(&socket), start.as_deref().and_then(inode));
@@ -375,7 +382,7 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
             start.display(),
             log.display()
         );
-        return ExitCode::from(3);
+        return ExitCode::from(IO);
     }
     let version = socket.with_file_name(format!("{name}.version"));
     if let Err(error) = std::fs::write(&version, format!("{}\n", env!("CARGO_PKG_VERSION"))) {
@@ -386,7 +393,7 @@ pub fn run(name: &Name, start: Option<u64>) -> ExitCode {
             "error[io_error]: cannot write {}: {error}",
             version.display()
         );
-        return ExitCode::from(3);
+        return ExitCode::from(IO);
     }
     let version_inode = inode(&version);
     #[cfg(debug_assertions)]
@@ -525,6 +532,21 @@ fn unopened_timer(events: Sender<Event>, wait: Duration, reading: Arc<AtomicUsiz
     timer
 }
 
+/// `ORBE_TEST_PAUSE_BEFORE_BIND_MS`, milliseconds a start waits after it sees a dead socket
+/// and before it removes that socket. A release build has no pause.
+#[cfg(debug_assertions)]
+fn pause_before_bind() {
+    let Ok(text) = std::env::var("ORBE_TEST_PAUSE_BEFORE_BIND_MS") else {
+        return;
+    };
+    let Ok(ms) = text.parse::<u64>() else {
+        return;
+    };
+    if ms > 0 {
+        thread::sleep(Duration::from_millis(ms));
+    }
+}
+
 /// `ORBE_TEST_IDLE_TIMEOUT`, which also caps `UNOPENED`, and `ORBE_TEST_READ_DELAY`, how long
 /// the process waits before it reads its first connection's request. A release build has
 /// neither switch.
@@ -570,8 +592,9 @@ fn relative(from: &Path, to: &Path) -> PathBuf {
 }
 
 /// Binds the socket. A socket file nothing answers on is one a crashed process left, and is
-/// replaced by the one start that holds the claim. Another start cannot delete the socket this
-/// one just bound. Anything else at the path stays, and the bind fails.
+/// replaced by the one start that holds `<name>.claim`. The file stays until `close` removes
+/// it, so the next start waits on this lock instead of locking a new file. Anything else at
+/// the path stays, and the bind fails.
 fn bind(socket: &Path) -> io::Result<UnixListener> {
     let _claim = claim(socket)?;
     match UnixListener::bind(socket) {
@@ -591,6 +614,10 @@ fn replace_dead(socket: &Path, busy: io::Error) -> io::Result<UnixListener> {
             Err(busy)
         }
         Ok(_) => {
+            // The connect above failed: nothing answers on this socket. The pause is the
+            // window where a second start used to delete the socket this one is about to bind.
+            #[cfg(debug_assertions)]
+            pause_before_bind();
             if let Err(error) = std::fs::remove_file(socket)
                 && error.kind() != io::ErrorKind::NotFound
             {
@@ -601,29 +628,15 @@ fn replace_dead(socket: &Path, busy: io::Error) -> io::Result<UnixListener> {
     }
 }
 
-/// Exclusive right to replace `socket`, held until dropped. The file is removed while the lock
-/// is held, so the session folder does not keep it. A lock on a file that was already removed
-/// is not this right: that start takes it again.
+/// Exclusive right to replace `socket`, held until dropped. The file is not removed here:
+/// unlinking it lets the next start create a new file and take the lock at once.
 fn claim(socket: &Path) -> io::Result<std::os::fd::OwnedFd> {
     use rustix::fs::{FlockOperation, Mode, OFlags};
     let path = socket.with_extension("claim");
     let flags = OFlags::RDWR | OFlags::CREATE | OFlags::CLOEXEC | OFlags::NOFOLLOW;
-    loop {
-        let fd =
-            rustix::fs::open(&path, flags, Mode::RUSR | Mode::WUSR).map_err(io::Error::from)?;
-        rustix::fs::flock(&fd, FlockOperation::LockExclusive).map_err(io::Error::from)?;
-        let held = rustix::fs::fstat(&fd).map_err(io::Error::from)?;
-        let same = rustix::fs::stat(&path)
-            .is_ok_and(|st| st.st_dev == held.st_dev && st.st_ino == held.st_ino);
-        if !same {
-            continue;
-        }
-        match std::fs::remove_file(&path) {
-            Ok(()) => return Ok(fd),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(error),
-        }
-    }
+    let fd = rustix::fs::open(&path, flags, Mode::RUSR | Mode::WUSR).map_err(io::Error::from)?;
+    rustix::fs::flock(&fd, FlockOperation::LockExclusive).map_err(io::Error::from)?;
+    Ok(fd)
 }
 
 /// A file's identity, so the process removes only the socket it bound and the log it got.
