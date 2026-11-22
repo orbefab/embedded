@@ -9,8 +9,8 @@
 # `full` runs the microchip tests once, in their `port-skip-check` build, instead of in the
 # workspace run.
 # `viewer` runs `check-viewer.sh`, `check-viewer-e2e.sh`, `check-block.sh` and `check-headed.sh`.
-# `web` runs `viewer`, then `site-previous.test.sh`, `site-port.test.sh`,
-# `check-site.sh --first-deploy` and `check-engines.sh`, each once.
+# `web` runs `viewer`, then `site-port.test.sh`, `check-site.sh` and `check-engines.sh`,
+# each once.
 # `check-assets.sh` stays separate, because it needs a models checkout.
 # `engine-chips`, `engine-circuits` and `engine-wasm` are the steps of `full` beyond `fast` and
 # `web`, except `scripts/check-speed.sh`. `full` runs those steps in the order below, then the
@@ -177,9 +177,8 @@ viewer() {
 
 web() {
   viewer
-  scripts/site-previous.test.sh
   scripts/site-port.test.sh
-  scripts/check-site.sh --first-deploy
+  scripts/check-site.sh
   scripts/check-engines.sh
 }
 

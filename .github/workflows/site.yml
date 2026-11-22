@@ -71,26 +71,18 @@ jobs:
           rust: "true"
           wasm-bindgen: "true"
 
-      - name: Fetch the registry the live site serves
-        id: previous
-        run: |
-          set -euo pipefail
-          scripts/site-previous.sh --url https://orbefab.com/embedded/r/ --out "$RUNNER_TEMP/site-previous"
-          echo "dir=$RUNNER_TEMP/site-previous" >> "$GITHUB_OUTPUT"
-
       - name: Check the site
-        run: scripts/check-site.sh --previous "${{ steps.previous.outputs.dir }}"
+        run: scripts/check-site.sh
 
       - name: Rebuild with install lines
         if: vars.ORBE_SITE_INSTALL == '1'
-        run: ORBE_SITE_INSTALL=1 scripts/site.sh --previous "${{ steps.previous.outputs.dir }}"
+        run: ORBE_SITE_INSTALL=1 scripts/site.sh
 
       - name: Check the install lines
         if: vars.ORBE_SITE_INSTALL == '1'
         run: scripts/site-install.sh
 
       - name: Deploy
-        id: deploy
         if: vars.SITE_DEPLOY == '1' && github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.deploy == true)
         working-directory: apps/site
         env:
@@ -103,13 +95,3 @@ jobs:
         env:
           ORBE_SITE_INSTALL: ${{ vars.ORBE_SITE_INSTALL }}
         run: scripts/site-deployed.sh
-
-      - name: Keep a copy of the registry
-        if: ${{ !cancelled() && steps.deploy.outcome == 'success' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: registry-${{ github.sha }}
-          path: apps/site/dist/client/r
-          retention-days: 90
-          overwrite: true
-          if-no-files-found: error

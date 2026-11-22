@@ -5,7 +5,7 @@ A registry serves parts and Blocks as static files: an index, one record per ite
 ## Build a registry
 
 ```sh
-orbe registry build <src> <out> [--previous <dir>]
+orbe registry build <src> <out>
 ```
 
 `<src>` holds `registry.jsonc`, `parts/<id>/` and `blocks/<id>/`. `registry.jsonc` names the registry:
@@ -32,8 +32,7 @@ The build fails, and writes nothing, when:
 - a file param names a path outside the folder of the item that writes it: an absolute path, or a `..` that leaves `parts/<id>/` for a part's default or a part file's value, or leaves the Block's folder for a Block's scene. An install copies only that folder, so the installed copy would not have the file. This is `registry_invalid`, and it names the file, the place and the path. `orbe check` in the author's own tree reads such a path when the file happens to be there, so it can pass there and still be refused here;
 - a required param with no default declares `min_exclusive` and `max_exclusive` that hold no value: no finite number lies strictly between them, or, for a duration in `s`, no whole number of picoseconds, zero or more, does. `orbe check` refuses every value a scene could set it to. The finding is `scene.param` at the param's key in `parts/<id>/part.jsonc`;
 - installing the part or the Block and running `orbe check` would refuse it, as [What the build checks](#what-the-build-checks) says. The finding has the same code, place and message;
-- a part and a Block share a name;
-- with `--previous`, the earlier build does not check out, or a version it serves would build to a different record (see [Versions](#versions)).
+- a part and a Block share a name.
 
 It prints the item counts and the file counts: files the records list, files stored by hash, and every file in `<out>`, which is the number a static host counts. It warns with counts of the parts that lack a summary, tags, docs, a datasheet URL or buy links, and of the Blocks that lack a summary or tags. It also names, per item, each hidden file (a path segment that starts with `.`) and each file over 1 MB, since a file in an item's folder is published, apart from build output, and cached by its hash. `--json` prints the same as one envelope.
 
@@ -188,9 +187,9 @@ TLS to the registry's host is the trust root. The index is not signed. Its hashe
 
 - A record at `<id>@<version>` never changes once it is served. A change to the item is a new version.
 - Versions order by number: by the first, then the second, then the third. `0.10.0` is newer than `0.9.0`. The latest version of an item is the highest.
-- `released.lock`, at the root of this repo, records each part and Block a release served: `<id> <version> sha256:<hash>`, one line, sorted by id. The hash is the SHA-256 of the record `orbe registry build` writes for `<id>@<version>`, the same digest that record's index row stores, written with `sha256:` in front. The check rebuilds each record from source and compares it to that hash, so it refuses a tree `--previous` would refuse. The line does not also record the folder hash. That hash is a field of the record, so this digest covers it, and a folder hash cannot see the part versions a Block's record names. The file changes only when a release is tagged. Until the first tag it is empty, because nothing has been served. A missing line means that item is not released yet. A line, once written, stays. `scripts/released.sh` keeps a line whose folder is gone, adds a line for a new item, and advances a line to a newer version. It never moves a version backwards. An item put back at a recorded version must build the same record. `scripts/check.sh fast` fails when it does not. The message names the item and says to bump its version. A folder at a newer version than its line passes. Run `scripts/released.sh` when tagging a release, and commit the file with the tag.
+- `released.lock`, at the root of this repo, records each part and Block a release served: `<id> <version> sha256:<hash>`, one line, sorted by id. The hash is the SHA-256 of the record `orbe registry build` writes for `<id>@<version>`, the same digest that record's index row stores, written with `sha256:` in front. The check rebuilds each record from source and compares it to that hash. The line does not also record the folder hash. That hash is a field of the record, so this digest covers it, and a folder hash cannot see the part versions a Block's record names. The file changes only when a release is tagged. Until the first tag it is empty, because nothing has been served. A missing line means that item is not released yet. A line, once written, stays. `scripts/released.sh` keeps a line whose folder is gone, adds a line for a new item, and advances a line to a newer version. It never moves a version backwards. An item put back at a recorded version must build the same record. `scripts/check.sh fast` fails when it does not. The message names the item and says to bump its version. A folder at a newer version than its line passes. Run `scripts/released.sh` when tagging a release, and commit the file with the tag.
 - A part's `format` covers its `model`. A netlist change that an existing part file cannot survive raises the part `format`.
-- A registry keeps serving every version it ever served. `--previous <dir>` makes the build keep that rule. It reads the build in `<dir>`, checks each record and file against its hashes, and carries forward every record the source no longer holds, with its files. A version the source still holds must build to the same bytes as the record `<dir>` serves, or the build refuses and asks for a new version.
+- The site serves the versions in this repo. A version that has left the repo is not republished.
 - A Block record names the versions of its parts, so a Block whose parts get new versions takes a new version too.
 
 ## Caching

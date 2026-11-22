@@ -167,11 +167,6 @@ enum RegistryCommand {
         src: PathBuf,
         /// The folder to write. It must be missing or empty.
         out: PathBuf,
-        /// The folder of the build this one replaces. Every record it serves stays served: a
-        /// version `<SRC>` still holds must build to the same bytes, and older versions are
-        /// carried forward.
-        #[arg(long, value_name = "DIR")]
-        previous: Option<PathBuf>,
         /// Print one JSON envelope instead of text.
         #[arg(long)]
         json: bool,
@@ -321,14 +316,8 @@ fn main() -> ExitCode {
             } => run_tests(&paths, verbose, json),
             Command::Skills { command } => print_skill(command),
             Command::Registry {
-                command:
-                    RegistryCommand::Build {
-                        src,
-                        out,
-                        previous,
-                        json,
-                    },
-            } => build_registry(&src, &out, previous.as_deref(), json),
+                command: RegistryCommand::Build { src, out, json },
+            } => build_registry(&src, &out, json),
             Command::Show {
                 session,
                 no_browser,
@@ -1041,8 +1030,8 @@ fn list_blocks(json: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn build_registry(src: &Path, out: &Path, previous: Option<&Path>, json: bool) -> ExitCode {
-    let built = orbe_registry::build(src, previous).and_then(|registry| {
+fn build_registry(src: &Path, out: &Path, json: bool) -> ExitCode {
+    let built = orbe_registry::build(src).and_then(|registry| {
         registry.write(out)?;
         Ok(registry)
     });

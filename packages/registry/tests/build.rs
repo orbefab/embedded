@@ -34,7 +34,7 @@ fn without_hashes(text: &str) -> String {
 
 #[test]
 fn records_of_three_parts_and_a_block_match_their_snapshots() {
-    let registry = build(&repo(), None).unwrap();
+    let registry = build(&repo()).unwrap();
     let bless = std::env::var_os("ORBE_BLESS").is_some();
     for address in [
         "led-5mm@0.1.1",
@@ -63,22 +63,22 @@ fn records_of_three_parts_and_a_block_match_their_snapshots() {
 fn two_builds_write_the_same_bytes() {
     let first = tempfile::tempdir().unwrap();
     let second = tempfile::tempdir().unwrap();
-    build(&repo(), None).unwrap().write(first.path()).unwrap();
-    build(&repo(), None).unwrap().write(second.path()).unwrap();
+    build(&repo()).unwrap().write(first.path()).unwrap();
+    build(&repo()).unwrap().write(second.path()).unwrap();
     let a = written(first.path());
     let b = written(second.path());
     assert_eq!(a.keys().collect::<Vec<_>>(), b.keys().collect::<Vec<_>>());
     for (path, bytes) in &a {
         assert!(&b[path] == bytes, "{path} differs between two builds");
     }
-    assert_eq!(a.len(), build(&repo(), None).unwrap().report.files);
+    assert_eq!(a.len(), build(&repo()).unwrap().report.files);
 }
 
 /// Every row's record and every record's file is in the output, under the URL the row or
 /// record gives, with the SHA-256 and size it gives.
 #[test]
 fn every_url_holds_the_bytes_its_hash_names() {
-    let registry = build(&repo(), None).unwrap();
+    let registry = build(&repo()).unwrap();
     let index: Value = serde_json::from_slice(&registry.output["index.json"]).unwrap();
     assert_eq!(index["$schema"], INDEX_SCHEMA);
     assert_eq!(index["format"], 1);
@@ -147,7 +147,7 @@ fn every_url_holds_the_bytes_its_hash_names() {
 
 #[test]
 fn the_repo_names_the_official_registry() {
-    let registry = build(&repo(), None).unwrap();
+    let registry = build(&repo()).unwrap();
     let index: Value = serde_json::from_slice(&registry.output["index.json"]).unwrap();
     assert_eq!(index["name"], "@orbefab");
     assert_eq!(index["name"], orbe_scene::REGISTRY);
@@ -155,7 +155,7 @@ fn the_repo_names_the_official_registry() {
 
 #[test]
 fn a_block_depends_on_every_part_it_runs_at_the_versions_in_the_same_build() {
-    let registry = build(&repo(), None).unwrap();
+    let registry = build(&repo()).unwrap();
     let block = record(&registry.output, "nano-button-led@0.1.3");
     let deps: Vec<&str> = block["registryDependencies"]
         .as_array()
@@ -181,7 +181,7 @@ fn a_block_depends_on_every_part_it_runs_at_the_versions_in_the_same_build() {
 
 #[test]
 fn the_item_schema_has_the_part_and_block_types() {
-    let registry = build(&repo(), None).unwrap();
+    let registry = build(&repo()).unwrap();
     let schema: Value = serde_json::from_slice(&registry.output[ITEM_SCHEMA]).unwrap();
     let types: Vec<&Value> = schema["oneOf"]
         .as_array()
@@ -195,7 +195,7 @@ fn the_item_schema_has_the_part_and_block_types() {
 #[test]
 fn another_folder_of_parts_and_blocks_builds_and_counts_what_it_lacks() {
     let src = third_party();
-    let registry = build(src.path(), None).unwrap();
+    let registry = build(src.path()).unwrap();
     let names: Vec<String> = registry.items.iter().map(Item::address).collect();
     assert_eq!(names, ["lamp@1.2.0", "lamp-demo@0.1.0"]);
     let index: Value = serde_json::from_slice(&registry.output["index.json"]).unwrap();
@@ -276,7 +276,7 @@ fn build_output_in_a_part_folder_is_not_in_the_registry() {
         cached,
     );
     put(src.path(), "parts/lamp/notes.txt", "an author file");
-    let registry = build(src.path(), None).unwrap();
+    let registry = build(src.path()).unwrap();
     let lamp = record(&registry.output, "lamp@1.2.0");
     let paths: Vec<&str> = lamp["files"]
         .as_array()
@@ -306,7 +306,7 @@ fn a_hidden_or_large_file_is_named_in_the_warnings() {
         "parts/lamp/model.glb",
         &"x".repeat(LARGE as usize + 1),
     );
-    let registry = build(src.path(), None).unwrap();
+    let registry = build(src.path()).unwrap();
     let notices: Vec<(&str, &str, Why)> = registry
         .report
         .notices
@@ -345,7 +345,7 @@ fn two_parts_with_one_files_bytes_store_it_once() {
         );
         put(src.path(), &format!("parts/{id}/lamp.glb"), glb);
     }
-    let registry = build(src.path(), None).unwrap();
+    let registry = build(src.path()).unwrap();
     assert_eq!(registry.report.listed, 4);
     assert_eq!(registry.report.stored, 3);
     let stored = format!("files/{}", sha256(glb.as_bytes()));
@@ -533,7 +533,7 @@ fn the_build_refuses_what_a_client_could_not_trust() {
         }
         let src = third_party();
         change(src.path());
-        let message = match build(src.path(), None) {
+        let message = match build(src.path()) {
             Err(Error::Invalid(message)) => message,
             Err(other) => panic!("{what}: {other}"),
             Ok(_) => panic!("{what}: the build accepted it"),
@@ -544,7 +544,7 @@ fn the_build_refuses_what_a_client_could_not_trust() {
 
 #[test]
 fn every_item_is_a_part_or_a_block_of_the_repo() {
-    let registry = build(&repo(), None).unwrap();
+    let registry = build(&repo()).unwrap();
     // A file beside the folders, such as blocks/README.md, is not an item.
     let folders = |kind: &str| {
         fs::read_dir(repo().join(kind))
