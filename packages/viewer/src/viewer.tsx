@@ -16,12 +16,23 @@ import { Color } from "three";
 import type { BuiltScene } from "./build";
 import type { CameraMode } from "./camera-frame";
 import { createHoverStore, type HoverStore } from "./hover";
-import type { Command, FrameMessage, FrameState, Reply, SceneMessage, WorldName, WorldQuantity } from "./protocol";
+import type { Command, FrameMessage, FrameState, Reply, SceneMessage } from "./protocol";
 import { SceneView } from "./scene-view";
 import { useStageTheme } from "./stage-theme";
 import { applySerial, EMPTY_SERIAL, serialShown, type SerialView } from "./serial";
 import { commandLine, errorText, type SessionSource } from "./session";
-import { formatValue, IDLE, nearest, nextThumb, parseValue, shownValue, stops, type Thumb, type ThumbEvent } from "./world";
+import {
+  type Control,
+  formatValue,
+  IDLE,
+  nearest,
+  nextThumb,
+  paramControl,
+  shownValue,
+  type Thumb,
+  type ThumbEvent,
+  worldControl,
+} from "./world";
 
 class ShowError extends Component<{ children: ReactNode }, { error: Error | null }> {
   override state = { error: null as Error | null };
@@ -150,21 +161,22 @@ const field = {
   padding: "1px 4px",
 } as const;
 
-/** One quantity's thumb and its number. A pointer sends `set` when it lets go, the keyboard
- * once no key is down for {@link SETTLE_MS}, and the number when Enter is pressed. From then
- * until the session answers and a frame follows, the thumb holds the sent value. */
-function WorldSlider({
-  quantity,
+/** One control's thumb and its number, for a world quantity or a part's live param. A pointer
+ * sends `set` when it lets go, the keyboard once no key is down for {@link SETTLE_MS}, and the
+ * number when Enter is pressed. From then until the session answers and a frame follows, the
+ * thumb holds the sent value. */
+function Slider({
+  control,
   frame,
   off,
   send,
 }: {
-  quantity: WorldQuantity;
+  control: Control;
   frame: number;
   off: boolean;
-  send: (quantity: WorldName, value: number) => Promise<boolean>;
+  send: (command: Command) => Promise<boolean>;
 }) {
-  const values = useMemo(() => stops(quantity), [quantity]);
+  const values = control.stops;
   const [thumb, setThumb] = useState<Thumb>(IDLE);
   const [typed, setTyped] = useState<string | null>(null);
   const [why, setWhy] = useState<string | null>(null);
@@ -179,10 +191,10 @@ function WorldSlider({
       setThumb(after);
       if (after.kind === "sending" && after !== before) {
         const value = after.value;
-        void send(quantity.name, value).then((ok) => apply({ type: "replied", value, ok, frame: live.current.frame }));
+        void send(control.command(value)).then((ok) => apply({ type: "replied", value, ok, frame: live.current.frame }));
       }
     },
-    [quantity.name, send]
+    [control, send]
   );
   useEffect(() => apply({ type: "frame" }), [apply, frame]);
   useEffect(() => () => window.clearTimeout(live.current.timer), []);
@@ -201,22 +213,22 @@ function WorldSlider({
   };
 
   const shown = shownValue(thumb, frame);
-  const { name, unit } = quantity;
+  const { id, label, unit } = control;
   return (
     <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-      <label htmlFor={`world-${name}`} style={{ width: 84 }}>
-        {name}
+      <label htmlFor={id} style={{ minWidth: 84 }}>
+        {label}
       </label>
       <input
-        id={`world-${name}`}
-        data-testid={`world-${name}`}
+        id={id}
+        data-testid={id}
         type="range"
         min={0}
         max={values.length - 1}
         step={1}
         value={nearest(values, shown)}
         disabled={off}
-        aria-valuetext={`${formatValue(shown)} ${unit}`}
+        aria-valuetext={unit === "" ? formatValue(shown) : `${formatValue(shown)} ${unit}`}
         onChange={(event) => {
           const value = values[Number(event.currentTarget.value)];
           if (value === undefined) return;
@@ -241,9 +253,9 @@ function WorldSlider({
         style={{ width: "clamp(96px, 30vw, 180px)", margin: 0 }}
       />
       <input
-        data-testid={`world-${name}-value`}
+        data-testid={`${id}-value`}
         data-frame={String(frame)}
-        aria-label={`${name} in ${unit}`}
+        aria-label={unit === "" ? label : `${label} in ${unit}`}
         inputMode="decimal"
         disabled={off}
         value={typed ?? formatValue(shown)}
@@ -258,7 +270,7 @@ function WorldSlider({
             setWhy(null);
           }
           if (event.key !== "Enter" || typed === null) return;
-          const parsed = parseValue(quantity, typed);
+          const parsed = control.parse(typed);
           if (!parsed.ok) {
             setWhy(parsed.why);
             return;
@@ -272,9 +284,9 @@ function WorldSlider({
         }}
         style={{ ...field, width: 64, textAlign: "right", outline: why === null ? undefined : "1px solid #ff8a80" }}
       />
-      <span>{unit}</span>
+      {unit === "" ? null : <span>{unit}</span>}
       {why === null ? null : (
-        <div data-testid={`world-${name}-error`} style={{ flexBasis: "100%", color: "#ff8a80" }}>
+        <div data-testid={`${id}-error`} style={{ flexBasis: "100%", color: "#ff8a80" }}>
           {why}
         </div>
       )}
@@ -282,16 +294,26 @@ function WorldSlider({
   );
 }
 
+const worldValues = (frame: FrameMessage) => frame.world ?? [];
+const paramValues = (frame: FrameMessage) => frame.params ?? [];
+
 const sameValues = (a: readonly number[], b: readonly number[]) => a.length === b.length && a.every((value, i) => value === b[i]);
 
-/** One slider per world quantity the scene declares, off once the session stopped or faulted,
- * since the session then refuses every `set`. */
-function WorldPanel({
-  quantities,
+/** One slider per control, each at the value `values` reads from a frame, off once the session
+ * stopped or faulted, since the session then refuses every `set`. `name` is the panel's test id,
+ * and `still` what stays as it is once the session ended. */
+function SliderPanel({
+  controls,
+  values: valuesOf,
+  name,
+  still,
   source,
   send,
 }: {
-  quantities: readonly WorldQuantity[];
+  controls: readonly Control[];
+  values: (frame: FrameMessage) => readonly number[];
+  name: string;
+  still: string;
   source: SessionSource;
   send: (command: Command) => Promise<Reply | null>;
 }) {
@@ -300,24 +322,21 @@ function WorldPanel({
     () =>
       source.subscribe((message) => {
         if (message.type !== "frame") return;
-        const values = message.world ?? [];
+        const values = valuesOf(message);
         setNow((current) =>
           current !== null && current.state === message.state && sameValues(current.values, values)
             ? current
             : { values, state: message.state }
         );
       }),
-    [source]
+    [source, valuesOf]
   );
-  const set = useCallback(
-    (quantity: WorldName, value: number) => send({ cmd: "set", quantity, value }).then((reply) => reply?.ok === true),
-    [send]
-  );
+  const set = useCallback((command: Command) => send(command).then((reply) => reply?.ok === true), [send]);
   if (now === null) return null;
   const off = now.state === "stopped" || now.state === "faulted";
   return (
     <div
-      data-testid="world"
+      data-testid={name}
       style={{
         display: "flex",
         flexDirection: "column",
@@ -331,18 +350,12 @@ function WorldPanel({
         pointerEvents: "auto",
       }}
     >
-      {quantities.map((quantity, index) => (
-        <WorldSlider
-          key={quantity.name}
-          quantity={quantity}
-          frame={now.values[index] ?? quantity.start}
-          off={off}
-          send={set}
-        />
+      {controls.map((control, index) => (
+        <Slider key={control.id} control={control} frame={now.values[index] ?? control.start} off={off} send={set} />
       ))}
       {off ? (
-        <div data-testid="world-off" style={{ color: "var(--stage-label-muted, #c9ced6)" }}>
-          {`The session ${now.state}, so the world stays as it is.`}
+        <div data-testid={`${name}-off`} style={{ color: "var(--stage-label-muted, #c9ced6)" }}>
+          {`The session ${now.state}, so ${still}.`}
         </div>
       ) : null}
     </div>
@@ -463,6 +476,8 @@ export function Viewer({ source, onCreated, pageScroll = false }: ViewerProps) {
   const [sendErrors, setSendErrors] = useState<readonly string[]>([]);
   const [closed, setClosed] = useState<string | null>(null);
   const onBuilt = useCallback((built: BuiltScene) => setPartErrors(built.errors), []);
+  const worldControls = useMemo(() => (scene?.world ?? []).map(worldControl), [scene]);
+  const paramControls = useMemo(() => (scene?.params ?? []).map(paramControl), [scene]);
   const send = useCallback(
     (command: Command): Promise<Reply | null> => {
       const fail = (why: string) => {
@@ -619,7 +634,26 @@ export function Viewer({ source, onCreated, pageScroll = false }: ViewerProps) {
         >
           <Controls send={send} source={source} />
           <SerialStrip source={source} />
-          {scene?.world === undefined ? null : <WorldPanel quantities={scene.world} send={send} source={source} />}
+          {worldControls.length === 0 ? null : (
+            <SliderPanel
+              controls={worldControls}
+              values={worldValues}
+              name="world"
+              still="the world stays as it is"
+              send={send}
+              source={source}
+            />
+          )}
+          {paramControls.length === 0 ? null : (
+            <SliderPanel
+              controls={paramControls}
+              values={paramValues}
+              name="params"
+              still="each knob stays where it is"
+              send={send}
+              source={source}
+            />
+          )}
         </div>
       ) : null}
       {closed === null ? null : (

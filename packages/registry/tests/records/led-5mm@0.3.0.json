@@ -3,9 +3,9 @@
   "$schema": "item.schema.json",
   "format": 1,
   "name": "led-5mm",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "title": "5 mm LED",
-  "description": "Round 5 mm through-hole LED, two leads on 2.54 mm. The longer lead is the anode. Pick its color. The page's glow is the mean current since the last frame, so a PWM-dimmed LED glows at its average.",
+  "description": "Round 5 mm through-hole LED, two leads on 2.54 mm. The longer lead is the anode. Pick its color: red, yellow, green, blue or white. Red, yellow and green are diffused; blue and white are water clear. Red, yellow, blue and white warn above 30 mA, green above 25 mA. Red and yellow warn above 75 mW, green above 62.5 mW, and blue and white above 120 mW. The page's glow is the mean current since the last frame, so a PWM-dimmed LED glows at its average.",
   "categories": [
     "led",
     "light",
@@ -65,6 +65,26 @@
           "name": "red",
           "number": "WP7113ID",
           "tint": "#d8342a"
+        },
+        {
+          "name": "yellow",
+          "number": "WP7113YD",
+          "tint": "#f2c12e"
+        },
+        {
+          "name": "green",
+          "number": "WP7113GD",
+          "tint": "#3fae49"
+        },
+        {
+          "name": "blue",
+          "number": "WP7113QBC/D",
+          "tint": "#2a62e6"
+        },
+        {
+          "name": "white",
+          "number": "WP7113QWC/D",
+          "tint": "#f4f6f8"
         }
       ],
       "required": true,
@@ -100,11 +120,11 @@
   "notSimulated": [
     {
       "what": "light",
-      "why": "The engine reports current, not luminous intensity. The drawing scales current by 10 mA, so the glow is 1 at 10 mA and blooms above that. The forward curve is fitted from 2 mA to 20 mA through (1.70 V, 2 mA), (1.90 V, 10 mA) and (2.00 V, 20 mA). Below 2 mA and above 20 mA the current is that curve extended. A threshold at 1 mA would sit outside the fit. Luminous intensity versus forward current is drawn as a straight line from 0 mA, so the extended current still glows in proportion."
+      "why": "The engine reports current, not luminous intensity. The drawing scales every color by 10 mA, so the glow is 1 at 10 mA and blooms above that. Blue and white rate luminous intensity at 20 mA, and that difference is not modeled. Each color's forward curve is fitted from 2 mA to 20 mA as its source names. Below 2 mA and above 20 mA the current is that curve extended. A threshold at 1 mA would sit outside the fit. Luminous intensity versus forward current is drawn as a straight line from 0 mA on each datasheet, so the extended current still glows in proportion."
     },
     {
       "what": "temperature",
-      "why": "The fit is at 25 C and the engine has no temperature."
+      "why": "The fits are at 25 C and the engine has no temperature."
     },
     {
       "what": "reverse breakdown",
@@ -115,6 +135,22 @@
     {
       "name": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A",
       "url": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113ID.pdf"
+    },
+    {
+      "name": "Kingbright WP7113YD, Spec No DSAF2448, Rev V.11B",
+      "url": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113YD.pdf"
+    },
+    {
+      "name": "Kingbright WP7113GD, Spec No DSAE9335, Rev V.12B",
+      "url": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113GD.pdf"
+    },
+    {
+      "name": "Kingbright WP7113QBC/D, Spec No DSAG3481, Rev V.18B",
+      "url": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113QBC-D.pdf"
+    },
+    {
+      "name": "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B",
+      "url": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113QWC-D.pdf"
     }
   ],
   "buy": [

@@ -2,22 +2,22 @@
   "part": "npn-2n2222-to92",
   "source": {
     "script": "model.py",
-    "sha256": "648f46c40e1301782d67a2466129a454c27d4db8368367f9f08a84b89602105b",
-    "bytes": 1961
+    "sha256": "29c618313200ab6e1e90960c6501b048f25a95ac1a2e015db76f70d3d62d4b0f",
+    "bytes": 2022
   },
   "files": {
     "npn-2n2222-to92.glb": {
-      "sha256": "18df4b2ab638d9cacf430652607205879cd46f9e982962efeb1015523b15c8d4",
-      "bytes": 71328
+      "sha256": "d13ce0aa98c2ed74897c1345759f3cb1ea2d7b381c111b2294f38dc693db154d",
+      "bytes": 75032
     },
     "npn-2n2222-to92.anchors.json": {
-      "sha256": "97fec33cd750ea5b0bf2ebb08e8dfec515c8449bec1664a41569170d151c7404",
+      "sha256": "b1441737dbeae17bc10c3de31b72e71d8a3b9c6e00068769befcdb4ff2f8e916",
       "bytes": 413
     }
   },
   "box": {
-    "min": [-2.28912, -1.33, -12.7],
-    "max": [2.28912, 2.29, 4.58]
+    "min": [-2.77, -1.33, -12.7],
+    "max": [2.77, 2.29, 7.12]
   },
   "kept_nodes": ["lead-1", "lead-2", "lead-3"],
   "draw_calls": 5,
@@ -31,7 +31,7 @@
     },
     "seating": {
       "lowest_node": "body",
-      "z_mm": 0
+      "z_mm": 2.54
     },
     "names": {
       "nodes": []

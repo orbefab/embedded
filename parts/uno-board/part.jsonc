@@ -32,7 +32,7 @@
   // dimensions, is the representative for the circuit and the interface.
   "real": { "generic": true, "maker": "RobotDyn", "number": "UNO R3 CH340G", "datasheet": "RobotDyn UNO R3 CH340G schematic" },
   "uses": {
-    "ams1117-sot223": "0.2.0", "atmega328p-dip28": "0.2.0", "barrel-jack-dc21": "0.2.0", "capacitor-0603": "0.2.0",
+    "ams1117-sot223": "0.2.0", "atmega328p-dip28": "0.2.0", "barrel-jack-dc21": "0.2.1", "capacitor-0603": "0.2.0",
     "capacitor-electrolytic-smd": "0.2.1", "ch340g": "0.2.0", "crystal-hc49us": "0.2.0", "diode-cd1206": "0.2.0",
     "diode-m7-sma": "0.2.0", "dip-socket-28": "0.2.0", "led-0805": "0.2.0", "lp2985-sot23-5": "0.2.0",
     "pin-header-2x3": "0.2.0", "pmos-fdn340p-sot23": "0.2.0", "ptc-fuse-1812": "0.2.0", "resistor-0603": "0.2.0",

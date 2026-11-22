@@ -6,4 +6,6 @@ The LDR sits above 2.2k to ground, so the node rises as the room gets brighter. 
 
 `orbe set light 10` darkens the room and the LED comes on. `orbe set light 300` brings the room back and the LED goes out.
 
+The trimmer sets the threshold, 1.54 V at `position` 0.5. `orbe set @trim.position 0.1` turns it toward `a` and raises the threshold to 2.93 V, over the LDR node, so the LED comes on in the same light. On the 3D page the trimmer has a slider beside the light's.
+
 Check it with `orbe check scene.jsonc` and run its tests with `orbe test`.

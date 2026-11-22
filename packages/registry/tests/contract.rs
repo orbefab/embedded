@@ -4,7 +4,8 @@
 
 mod common;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 
 use common::{record, repo, third_party};
 use jsonschema::Validator;
@@ -57,8 +58,8 @@ fn the_schemas_refuse_what_the_contract_forbids_and_allow_new_fields() {
     let registry = build(&repo()).unwrap();
     let items = validator(&registry.output, ITEM_SCHEMA);
     let index = validator(&registry.output, INDEX_SCHEMA);
-    let led = record(&registry.output, "led-5mm@0.2.0");
-    let block = record(&registry.output, "nano-button-led@0.2.1");
+    let led = record(&registry.output, "led-5mm@0.3.0");
+    let block = record(&registry.output, "nano-button-led@0.3.0");
     let row: Value = serde_json::from_slice::<Value>(&registry.output["index.json"]).unwrap();
 
     let mutated = |base: &Value, pointer: &str, value: Value| {
@@ -282,24 +283,75 @@ fn record_to_card(record: &Value) -> Value {
     Value::Object(map)
 }
 
+/// Part ids `registry.jsonc` leaves out of search: the parts a jumper wire cannot land on.
+const HIDDEN: &[&str] = &[
+    "ams1117-sot223",
+    "atmega16u2-qfn32",
+    "atmega328p-tqfp32",
+    "capacitor-0603",
+    "capacitor-electrolytic-smd",
+    "capacitor-tantalum-3216",
+    "ch340g",
+    "cp2102n-qfn28",
+    "crystal-3215",
+    "diode-cd1206",
+    "diode-m7-sma",
+    "diode-sod123",
+    "esp32s3-qfn56",
+    "esp32s3-wroom-1-n16r8",
+    "inductor-0805",
+    "led-0603",
+    "led-0805",
+    "lesd5d5-sod523",
+    "lmv358-msop8",
+    "lp2985-sot23-5",
+    "npn-l8050-sot23",
+    "pmos-fdn340p-sot23",
+    "ptc-fuse-1812",
+    "resistor-0603",
+    "resistor-array-4x0603",
+    "resonator-cstce",
+    "sgm2212-sot223",
+    "sk68xxmini-hs",
+    "tactile-switch-ntc013",
+    "tactile-switch-smd",
+    "tactile-switch-ts42",
+    "usb-micro-b",
+    "usb-mini-b",
+];
+
+fn unlisted_in_manifest() -> BTreeSet<String> {
+    let text = fs::read_to_string(repo().join("registry.jsonc")).unwrap();
+    let value: Value =
+        jsonc_parser::parse_to_serde_value(&text, &jsonc_parser::ParseOptions::default()).unwrap();
+    value["unlisted"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| id.as_str().unwrap().to_string())
+        .collect()
+}
+
 #[test]
 fn a_part_left_out_of_search_is_false_on_its_index_row_and_absent_from_its_record() {
     let registry = build(&repo()).unwrap();
     let index: Value = serde_json::from_slice(&registry.output["index.json"]).unwrap();
     let rows = index["items"].as_array().unwrap();
     let row = |name: &str| rows.iter().find(|row| row["name"] == name).unwrap();
-    for name in [
-        "crystal-3215",
-        "crystal-hc49us",
-        "resonator-cstce",
-        "ch340g",
-        "cp2102n-qfn28",
-        "atmega16u2-qfn32",
-        "lesd5d5-sod523",
-    ] {
+    let left_out = unlisted_in_manifest();
+    let want: BTreeSet<String> = HIDDEN.iter().map(|id| (*id).to_string()).collect();
+    assert_eq!(left_out, want);
+    for name in &left_out {
         assert_eq!(row(name)["listed"], json!(false), "{name}");
-        let record = record(&registry.output, &format!("{name}@0.2.0"));
+        let version = row(name)["version"].as_str().unwrap();
+        let record = record(&registry.output, &format!("{name}@{version}"));
         assert!(record.get("listed").is_none(), "{name}");
+    }
+    for row in rows.iter().filter(|row| row["type"] == "part") {
+        let name = row["name"].as_str().unwrap();
+        if !left_out.contains(name) {
+            assert!(row.get("listed").is_none(), "{name} is offered");
+        }
     }
     assert!(row("led-5mm").get("listed").is_none());
 }

@@ -234,6 +234,7 @@ const VALUES: Record<string, Record<string, readonly string[]>> = {
     nano: ["light.ino.hex"],
   },
   "uno-button-led": { r1: ["220 Ω"], r2: ["10 kΩ"], led1: ["red"], uno: ["button.ino.hex"] },
+  "nano-neopixel-stick": { r1: ["470 Ω"], nano: ["rainbow.ino.hex"] },
 };
 
 async function hydrated(page: Page): Promise<void> {
@@ -452,10 +453,10 @@ test.describe("parts search", () => {
     expect(await page.locator("main")).toContainText("Real parts with their pins, ratings and 3D models.");
     expect(await line("led-5mm")).toContain("in 4 Blocks");
     expect(await line("led-5mm")).not.toContain("led-5mm");
-    expect(await line("resistor-axial")).toContain("in 4 Blocks");
+    expect(await line("resistor-axial")).toContain("in 5 Blocks");
     expect(await line("lm358-dip8")).toContain("in 1 Block");
-    expect(await line("nano-board")).toContain("in 3 Blocks");
-    expect(await line("led-0603")).toContain("on the Nano (CH340 clone)");
+    expect(await line("nano-board")).toContain("in 4 Blocks");
+    expect(await line("pin-header-1x15")).toContain("on the Nano (CH340 clone)");
     const unused = await page.locator("[data-part]").evaluateAll((nodes) => nodes.some((node) => (node.textContent ?? "").includes("in no Block yet") || (node.textContent ?? "").includes("Generic")));
     expect(unused).toBe(false);
   });
@@ -518,7 +519,7 @@ test.describe("led-5mm", () => {
   test("a download serves the file's bytes, by the record's SHA-256", async () => {
     const href = await page.locator('[data-testid="license-files"] a[download]', { hasText: /^part\.jsonc$/ }).getAttribute("href");
     const download = await page.evaluate(async (href) => {
-      const record = await (await fetch("/embedded/r/led-5mm@0.2.0.json")).json();
+      const record = await (await fetch("/embedded/r/led-5mm@0.3.0.json")).json();
       const bytes = new Uint8Array(await (await fetch(href)).arrayBuffer());
       const hex = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
       return { hex, want: record.files.find((file: { path: string; sha256: string }) => file.path === "part.jsonc").sha256 };
@@ -531,7 +532,7 @@ test.describe("led-5mm", () => {
     expect(/DigiKey\s*2026-11-08/.test(body), body.match(/Where to buy[\s\S]{0,120}/i)?.[0] ?? "").toBe(true);
   });
 
-  test("it shows the ratings as names, with a Datasheet link and no citation", async () => {
+  test("it shows the ratings as names, with a Datasheet link, and lists each other color's datasheet", async () => {
     const section = page.locator("section", { has: page.getByRole("heading", { name: "Ratings" }) });
     await expect(section).toContainText("Current");
     await expect(section).toContainText("30 mA");
@@ -539,7 +540,8 @@ test.describe("led-5mm", () => {
     const body = await bodyText(page);
     expect(body).not.toContain("Brightness is the average");
     expect(body).not.toContain("Absolute Maximum Ratings");
-    await expect(page.getByRole("heading", { name: "Docs" })).toHaveCount(0);
+    const docs = page.locator("section", { has: page.getByRole("heading", { name: "Docs" }) });
+    for (const number of ["WP7113YD", "WP7113GD", "WP7113QBC/D", "WP7113QWC/D"]) await expect(docs.getByRole("link", { name: new RegExp(number) })).toBeVisible();
     expect(body).not.toContain("not affiliated");
     expect(body).not.toContain("No summary yet");
   });
@@ -714,6 +716,7 @@ for (const block of repoBlocks()) {
       await page.waitForFunction(
         (kind) => {
           const scene = window.orbeViewer?.get().scene;
+          if (kind === "pixels") return scene?.getObjectByName("@stick.px1")?.getObjectByName("lens") !== undefined;
           const led = scene?.getObjectByName("@led1")?.getObjectByName("body") !== undefined;
           const button = kind !== "button" || scene?.getObjectByName("@btn1")?.getObjectByName("stem") !== undefined;
           return led && button;
@@ -891,6 +894,7 @@ const README = {
   "/embedded/blocks/nano-led-fade/": "fades up and down about every 3 seconds",
   "/embedded/blocks/nano-light-comparator/": "prints dark and a count",
   "/embedded/blocks/uno-button-led/": "A 10k pull-down holds D2 low",
+  "/embedded/blocks/nano-neopixel-stick/": "Each pixel keeps its own colour",
 } as const;
 
 test("every Block page shows its README and no install line", async ({ browser, host }) => {

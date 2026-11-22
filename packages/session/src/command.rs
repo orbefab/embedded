@@ -19,6 +19,8 @@ pub enum Command {
     Press(Ref),
     Release(Ref),
     Set(WorldSet),
+    /// A part's live param, such as `set @pot1.position 0.8`.
+    SetParam(ParamSet),
     Get(Ref),
     /// A world quantity the scene declares, such as `light`, read by `get light` or `get @world.light`.
     GetWorld(Quantity),
@@ -33,6 +35,14 @@ pub enum Command {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorldSet {
     pub quantity: Quantity,
+    pub value: f64,
+}
+
+/// A part's live param, named as `@pot1.position`, and its new value in the param's unit. The
+/// open scene decides whether the param is live and whether the value is in its range.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ParamSet {
+    pub target: Ref,
     pub value: f64,
 }
 
@@ -92,9 +102,9 @@ pub const COMMANDS: &[Spec] = &[
     },
     Spec {
         name: "set",
-        usage: "set <quantity> <value>",
-        about: "Sets a world quantity the scene declares, from now on: temperature in degC, humidity in %RH or light in lx, such as `set light 50`.",
-        parse: |args, _| parse_set(args).map(Command::Set),
+        usage: "set <quantity> <value> | set <ref> <value>",
+        about: "Sets a world quantity the scene declares, from now on: temperature in degC, humidity in %RH or light in lx, such as `set light 50`. Or turns a part's live param, such as a potentiometer's position, as in `set @pot1.position 0.8`.",
+        parse: |args, _| parse_set(args),
     },
     Spec {
         name: "get",
@@ -196,14 +206,35 @@ fn one_ref(args: &[String]) -> Result<Ref, String> {
     }
 }
 
-fn parse_set(args: &[String]) -> Result<WorldSet, String> {
+fn parse_set(args: &[String]) -> Result<Command, String> {
     let names = || {
         let names: Vec<&str> = Quantity::ALL.iter().map(|q| q.name()).collect();
         names.join(", ")
     };
     let [name, value] = args else {
-        return Err("takes a quantity and a value, such as `light 50`".into());
+        return Err(
+            "takes a quantity and a value, such as `light 50`, or a part's param and a value, such as `@pot1.position 0.8`"
+                .into(),
+        );
     };
+    let world = name.strip_prefix("@world.");
+    if let Some(r) = name.strip_prefix('@').filter(|_| world.is_none()) {
+        let target = Ref::parse(name)?;
+        let value = value
+            .parse::<f64>()
+            .ok()
+            .filter(|v| v.is_finite())
+            .ok_or_else(|| {
+                format!("`{value}` is not a number; write the param's value, such as 0.5")
+            })?;
+        if !r.contains('.') {
+            return Err(format!(
+                "`{name}` is a part; name its param, such as `{name}.position`"
+            ));
+        }
+        return Ok(Command::SetParam(ParamSet { target, value }));
+    }
+    let name = world.unwrap_or(name);
     let quantity = Quantity::parse(name).ok_or_else(|| {
         format!(
             "`{name}` is not a world quantity; the quantities are {}",
@@ -227,7 +258,7 @@ fn parse_set(args: &[String]) -> Result<WorldSet, String> {
             row.name, row.min, row.max, row.unit
         ));
     }
-    Ok(WorldSet { quantity, value })
+    Ok(Command::Set(WorldSet { quantity, value }))
 }
 
 fn parse_step(args: &[String]) -> Result<Step, String> {
@@ -261,8 +292,9 @@ fn condition_words(args: &[String]) -> Result<Vec<String>, String> {
     }
 }
 
-/// Splits a line at spaces. `"..."` holds spaces, with `\"` and `\\` inside, and `#` outside
-/// quotes starts a comment.
+/// Splits a line at spaces. `"..."` holds spaces, with `\"` and `\\` inside. `'...'` holds
+/// spaces and keeps every character, as a shell does, so a test line can quote a comparison
+/// the way `orbe expect @led1.i '>' 5mA` does. `#` outside quotes starts a comment.
 fn words(line: &str) -> Result<Vec<String>, String> {
     let mut words = Vec::new();
     let mut chars = line.chars().peekable();
@@ -281,6 +313,18 @@ fn words(line: &str) -> Result<Vec<String>, String> {
                             Some(c @ ('"' | '\\')) => word.push(c),
                             _ => return Err("only `\\\"` and `\\\\` escape inside quotes".into()),
                         },
+                        Some(c) => word.push(c),
+                    }
+                }
+                words.push(word);
+            }
+            Some('\'') => {
+                chars.next();
+                let mut word = String::new();
+                loop {
+                    match chars.next() {
+                        None => return Err("a quote is not closed".into()),
+                        Some('\'') => break,
                         Some(c) => word.push(c),
                     }
                 }

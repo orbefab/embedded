@@ -159,6 +159,7 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
             "led-0805",
             "led-3mm",
             "led-5mm",
+            "neopixel-stick-8",
             "sk68xxmini-hs",
         ]
     );
@@ -189,11 +190,13 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
     let switches = search(&parts_dir(), "switch");
     let names: Vec<&str> = switches.iter().map(|card| card.name.as_str()).collect();
     assert_eq!(
-        &names[..7],
+        &names[..9],
         [
             "nmos-irf520-to220",
             "npn-2n2222-to92",
             "npn-l8050-sot23",
+            "pmos-irf9540n-to220",
+            "pnp-2n3906-to92",
             "tactile-switch-6mm",
             "tactile-switch-ntc013",
             "tactile-switch-smd",
@@ -204,7 +207,7 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
         .iter()
         .position(|name| *name == "diode-cd1206")
         .unwrap();
-    assert!(diode > 6, "{names:?}");
+    assert!(diode > 8, "{names:?}");
 
     let boards = search(&parts_dir(), "board");
     let names: Vec<&str> = boards.iter().map(|card| card.name.as_str()).collect();
@@ -292,9 +295,21 @@ fn a_null_rating_stays_on_the_card_and_a_number_default_keeps_its_unit() {
     assert_eq!(json["above"], serde_json::json!(0));
     assert_eq!(json["below"], serde_json::json!(1));
     assert_eq!(json["unit"], "1");
+    assert_eq!(json["live"], true);
     assert_eq!(
         param_sentence(position),
-        "a number above 0 and below 1, 0.5 by default"
+        "a number above 0 and below 1, 0.5 by default, and `set` changes it while a session runs"
+    );
+    let resistance = pot
+        .params
+        .iter()
+        .find(|param| param.name == "resistance")
+        .unwrap();
+    assert!(
+        serde_json::to_value(resistance)
+            .unwrap()
+            .get("live")
+            .is_none()
     );
 
     let switch = card(&parts_dir(), "tactile-switch-6mm").unwrap();
@@ -365,6 +380,7 @@ fn search_finds_a_block_by_a_word_of_its_id() {
             "nano-button-led",
             "nano-led-fade",
             "nano-light-comparator",
+            "nano-neopixel-stick",
             "uno-button-led",
         ]
     );

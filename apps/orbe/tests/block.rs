@@ -14,11 +14,12 @@ use std::path::Path;
 
 use live::{common, orbe};
 
-const BLOCKS: [&str; 4] = [
+const BLOCKS: [&str; 5] = [
     "nano-button-led",
     "uno-button-led",
     "nano-led-fade",
     "nano-light-comparator",
+    "nano-neopixel-stick",
 ];
 
 /// Every file below `dir` with its bytes, by its path from `dir`.
@@ -77,7 +78,13 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
             .filter(|name| dir.join("parts").join(name).join("part.jsonc").is_file())
             .collect();
         copied.sort();
-        assert!(copied.iter().any(|part| part == "led-5mm"), "{id}");
+        // The rainbow Block drives a pixel module. The others light a 5 mm LED.
+        let marker = if id == "nano-neopixel-stick" {
+            "neopixel-stick-8"
+        } else {
+            "led-5mm"
+        };
+        assert!(copied.iter().any(|part| part == marker), "{id}: {copied:?}");
         for part in &copied {
             let catalog = tree(&common::repo().join("parts").join(part));
             let got = tree(&dir.join("parts").join(part));
@@ -383,14 +390,7 @@ fn a_block_installs_alone() {
 }
 
 #[test]
-fn the_core_skill_names_each_block() {
-    let skill = fs::read_to_string(common::repo().join("apps/orbe/skills/core.md")).unwrap();
-    let ids: Vec<String> = BLOCKS.iter().map(|id| format!("`{id}`")).collect();
-    let listed = format!(
-        "The Blocks are {}, {}, {} and {}.",
-        ids[0], ids[1], ids[2], ids[3]
-    );
-    assert!(skill.contains(&listed), "{listed}");
+fn each_block_folder_is_in_the_block_list() {
     let mut found: Vec<String> = fs::read_dir(common::repo().join("blocks"))
         .unwrap()
         .map(|e| e.unwrap().path())

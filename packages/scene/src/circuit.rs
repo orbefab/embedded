@@ -25,7 +25,7 @@ mod plug;
 mod view;
 
 pub use board::{BoardFacts, BoardLed, Gap, Supply, board_facts, one_part};
-pub use map::{Amount, EnginePart, MapPart, Reading, RefMap};
+pub use map::{Amount, EnginePart, MapParam, MapPart, Reading, RefMap};
 pub use view::{Instance, PartData, PinWhy, Placement, View, Wire};
 
 const ROOT: usize = 0;

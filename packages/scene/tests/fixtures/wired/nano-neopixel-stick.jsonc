@@ -1,0 +1,16 @@
+// A Nano drives an 8-pixel NeoPixel stick through a 470 ohm resistor on DIN.
+{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/rainbow.ino.hex" },
+    "r1": { "type": "resistor-axial", "resistance": "470" },
+    "stick": { "type": "neopixel-stick-8" },
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["nano.D6", "r1.a"],
+    ["r1.b", "stick.DIN"],
+    ["nano.5V", "stick.5V"],
+    ["stick.GND", "nano.GND"],
+  ],
+}

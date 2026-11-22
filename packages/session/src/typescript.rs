@@ -42,11 +42,24 @@ enum FromSession<'a> {
 #[derive(Serialize, JsonSchema)]
 #[serde(tag = "cmd", rename_all = "lowercase")]
 enum Command {
-    Press { r#ref: Ref },
-    Release { r#ref: Ref },
+    Press {
+        r#ref: Ref,
+    },
+    Release {
+        r#ref: Ref,
+    },
     Play,
     Pause,
-    Set { quantity: WorldName, value: f64 },
+    Set {
+        quantity: WorldName,
+        value: f64,
+    },
+    /// A part's live param, such as `@pot1.position`, as `orbe set @pot1.position 0.8`.
+    #[serde(rename = "set")]
+    SetParam {
+        r#ref: Ref,
+        value: f64,
+    },
 }
 
 /// A command as the viewer sends it on a session's WebSocket. `id` is the viewer's own and comes
@@ -336,11 +349,19 @@ fn every_command_the_type_allows_is_read_as_the_cli_reads_it() {
             },
             "set light 50",
         ),
+        (
+            Command::SetParam {
+                r#ref: Ref::parse("@pot1.position").unwrap(),
+                value: 0.8,
+            },
+            "set @pot1.position 0.8",
+        ),
     ];
-    let names: Vec<&str> = commands
+    let mut names: Vec<&str> = commands
         .iter()
         .map(|(_, line)| line.split(' ').next().unwrap())
         .collect();
+    names.dedup();
     assert_eq!(names, SENT);
     for (id, (command, line)) in (1..).zip(commands) {
         let text = serde_json::to_string(&CommandMessage { id, command }).unwrap();

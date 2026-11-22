@@ -30,6 +30,8 @@ pub struct Potentiometer {
 
 impl Potentiometer {
     pub const PINS: [&'static str; 3] = ["a", "wiper", "b"];
+    /// The document field an input moves while a session runs.
+    pub const LEVEL: &'static str = "position";
 }
 
 /// A potentiometer position that breaks a rule, in the order parse reports them.
@@ -260,7 +262,7 @@ impl Kind for Potentiometer {
     fn level(&self) -> Option<LevelField<'_>> {
         Some(LevelField {
             schedule: &self.position,
-            field: "position",
+            field: Self::LEVEL,
             unit: FRACTION_UNIT,
         })
     }

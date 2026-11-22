@@ -380,6 +380,16 @@ pub fn engine_kinds() -> &'static [(&'static str, &'static [&'static str], usize
     KINDS
 }
 
+/// The field of every part of `kind` that a session's input changes while it runs, the one
+/// [`Model::level`] holds: a potentiometer's `position`. A source has a settable level only on a
+/// `steps` waveform, so it has none here. `None` for a kind no input changes this way.
+pub fn live_field(kind: &str) -> Option<&'static str> {
+    match kind {
+        "potentiometer" => Some(crate::passive::Potentiometer::LEVEL),
+        _ => None,
+    }
+}
+
 fn chip_pin_names(chip: &Chip) -> &[&'static str] {
     use crate::chip::Ne555;
     use crate::device::{Cst816, Dht22, PulsesReplay, SpiReplay, St77916, Ws2812};
