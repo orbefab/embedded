@@ -34,7 +34,7 @@ describe("hold gesture", () => {
     const { target, events } = recording();
     const hold = holdGesture(target);
     hold.pointerDown(4, 0);
-    hold.pointerEnd(4);
+    hold.pointerEnd(4, true);
     hold.click();
     expect(events).toEqual(["press", "release"]);
     vi.advanceTimersByTime(0);
@@ -49,7 +49,7 @@ describe("hold gesture", () => {
     const hold = holdGesture(target);
     hold.pointerDown(1, 0);
     hold.drop();
-    hold.pointerEnd(1);
+    hold.pointerEnd(1, true);
     hold.click();
     expect(events).toEqual(["press", "release"]);
   });
@@ -93,18 +93,31 @@ describe("hold gesture", () => {
     expect(events).toEqual(["press", "release"]);
   });
 
-  it("ignores the click after a pointer leaves, and a later click presses", () => {
+  it("ignores the click when a pointer leaves and lifts on the control, and a later click presses", () => {
     vi.useFakeTimers();
     const { target, events } = recording();
     const hold = holdGesture(target);
     hold.pointerDown(1, 0);
     hold.pointerLeave(1);
     expect(events).toEqual(["press", "release"]);
-    hold.pointerEnd(1);
+    hold.pointerEnd(1, true);
     hold.click();
     expect(events).toEqual(["press", "release"]);
     vi.advanceTimersByTime(0);
     hold.click();
+    vi.advanceTimersByTime(300);
+    expect(events).toEqual(["press", "release", "press", "release"]);
+  });
+
+  it("presses for a click after the pointer lifts off the control", () => {
+    vi.useFakeTimers();
+    const { target, events } = recording();
+    const hold = holdGesture(target);
+    hold.pointerDown(1, 0);
+    hold.pointerLeave(1);
+    hold.pointerEnd(1, false);
+    hold.click();
+    expect(events).toEqual(["press", "release", "press"]);
     vi.advanceTimersByTime(300);
     expect(events).toEqual(["press", "release", "press", "release"]);
   });
@@ -141,7 +154,7 @@ describe("hold gesture", () => {
     expect(events).toEqual(["press", "release"]);
     hold.pointerDown(1, 0);
     expect(events).toEqual(["press", "release", "press"]);
-    hold.pointerEnd(1);
+    hold.pointerEnd(1, false);
     expect(events).toEqual(["press", "release", "press", "release"]);
   });
 
@@ -155,7 +168,7 @@ describe("hold gesture", () => {
     expect(events).toEqual(["press"]);
     hold.keyUp(" ");
     expect(events).toEqual(["press"]);
-    hold.pointerEnd(1);
+    hold.pointerEnd(1, false);
     expect(events).toEqual(["press", "release"]);
   });
 });

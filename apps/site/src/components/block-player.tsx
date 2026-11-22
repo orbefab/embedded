@@ -24,6 +24,7 @@ export interface BlockPlayerProps {
  * releases when that gesture ends, the control blurs, the window blurs, or the page is hidden. */
 function PressControl({ hold }: { hold: { readonly current: ButtonHold | null } }) {
   const gesture = useRef<HoldGesture | null>(null);
+  const button = useRef<HTMLButtonElement>(null);
   if (gesture.current === null) {
     gesture.current = holdGesture({
       press: () => hold.current?.press(),
@@ -40,7 +41,10 @@ function PressControl({ hold }: { hold: { readonly current: ButtonHold | null } 
     };
     // keyup and pointerup can land on another element after this control blurs.
     const onKeyUp = (event: globalThis.KeyboardEvent) => current.keyUp(event.key);
-    const onPointerUp = (event: globalThis.PointerEvent) => current.pointerEnd(event.pointerId);
+    const onPointerUp = (event: globalThis.PointerEvent) => {
+      const target = event.target;
+      current.pointerEnd(event.pointerId, target instanceof Node && (button.current?.contains(target) ?? false));
+    };
     window.addEventListener("blur", onWindowBlur);
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("keyup", onKeyUp);
@@ -72,6 +76,7 @@ function PressControl({ hold }: { hold: { readonly current: ButtonHold | null } 
     <button
       className="mt-3 touch-none border border-border px-3 py-1.5 text-sm hover:border-foreground focus-visible:[outline:2px_solid_var(--brand)] focus-visible:outline-offset-2"
       data-testid="hold-to-press"
+      ref={button}
       onBlur={() => gesture.current?.drop()}
       onClick={() => gesture.current?.click()}
       onKeyDown={onKeyDown}

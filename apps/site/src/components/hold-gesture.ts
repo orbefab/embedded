@@ -8,7 +8,8 @@ export interface HoldGesture {
   keyDown(key: string, repeat: boolean): void;
   keyUp(key: string): void;
   pointerDown(id: number, button: number): void;
-  pointerEnd(id: number): void;
+  /** `onControl` is true when this pointerup's target is the control, so its click follows. */
+  pointerEnd(id: number, onControl: boolean): void;
   /** The pointer left the control while down. Its pointerup can still land on the control. */
   pointerLeave(id: number): void;
   /** The control blurred, the window blurred, or the page was hidden. */
@@ -64,6 +65,11 @@ export function holdGesture(target: HoldTarget): HoldGesture {
       if (down === 0 && keys.size === 0 && pointers.size === 0) oweClick = false;
     }, 0);
   };
+  /** Nothing is held, so a click from here on is a new one. */
+  const releaseClick = () => {
+    oweClick = false;
+    cancelSettle();
+  };
 
   return {
     keyDown(key, repeat) {
@@ -84,9 +90,16 @@ export function holdGesture(target: HoldTarget): HoldGesture {
       ownClick();
       press();
     },
-    pointerEnd(id) {
+    pointerEnd(id, onControl) {
       if (pointers.delete(id)) releaseOne();
-      settleClick();
+      // A pointerup on the control is followed by its click. A pointerup anywhere else is not,
+      // so the next click is a new press.
+      if (onControl) {
+        oweClick = true;
+        settleClick();
+        return;
+      }
+      if (pointers.size === 0 && keys.size === 0) releaseClick();
     },
     pointerLeave(id) {
       if (!pointers.delete(id)) return;
