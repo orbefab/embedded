@@ -444,17 +444,18 @@ fn help_lists_every_command_and_each_command_prints_its_usage() {
         assert_eq!(run.stdout, step);
     }
 
-    let early = runtime.orbe(here, &["--session", "x", "open"]);
-    assert_eq!(early.code, 2);
-    assert_eq!(
-        early.stderr,
-        "error[usage]: `--session x` is before the command name\n  hint: put it after the command name, as `orbe open --session x`\n"
-    );
-    let early = runtime.orbe(here, &["--json", "skills", "list"]).json();
-    assert_eq!(early["error"]["code"], "usage");
-    assert_eq!(
-        early["error"]["hint"],
-        "put it after the command name, as `orbe skills list --json`"
+    let listed = runtime
+        .orbe(here, &["--json", "skills", "list"])
+        .ok()
+        .json();
+    assert_eq!(listed["ok"], true);
+    assert!(
+        listed["data"]["skills"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|skill| skill["name"] == "core"),
+        "{listed}"
     );
     assert!(runtime.daemons().is_empty(), "help starts no session");
 }
@@ -806,12 +807,10 @@ fn the_check_findings_core_states_are_the_ones_orbe_reports() {
             .unwrap()
             .starts_with("run `orbe add ")
     );
+    assert_eq!(json["error"]["code"], "part_missing", "{json}");
     says(
         &core,
-        &format!(
-            "A failed `orbe check scene.jsonc --json` is `{}`, with each finding, its code and hint in `data.diagnostics`.",
-            json["error"]["code"].as_str().unwrap()
-        ),
+        "A failed `orbe check scene.jsonc --json` uses the same `error.code` as `orbe open --json`: `part_missing` or `firmware_missing` when every finding has that code, and `scene_invalid` otherwise, with each finding, its code and hint in `data.diagnostics`.",
     );
     fs::rename(&kept, &led).unwrap();
 
@@ -855,11 +854,11 @@ fn the_check_findings_core_states_are_the_ones_orbe_reports() {
     );
 }
 
-/// A flag before the command name gets a hint that moves the words before it to after it, as
-/// typed, and drops only a repeat clap refuses. The hinted line runs, or fails with the
-/// command's own error, and an `add` writes the folder its `-C` names.
+/// A flag before the command name runs that command, with the flag after the name, as typed,
+/// and drops only a repeat clap refuses. The line's own result comes back, and an `add`
+/// writes the folder its `-C` names.
 #[test]
-fn a_flag_before_the_command_gets_a_hint_whose_line_runs() {
+fn a_flag_before_the_command_runs_that_command() {
     let project = worked_example();
     let dir = project.path();
     for folder in ["check", "dir", "-proj", "a", "b"] {
@@ -971,25 +970,9 @@ fn a_flag_before_the_command_gets_a_hint_whose_line_runs() {
         ),
     ] {
         let run = shell(&runtime, dir, &format!("orbe {written}"));
-        assert_eq!(run.code, 2, "orbe {written}");
-        let (message, hint) = if written.contains("--json") {
-            let error = &run.json()["error"];
-            let text = |key: &str| error[key].as_str().unwrap().to_string();
-            (text("message"), text("hint"))
-        } else {
-            let (message, hint) = run.stderr.trim_end().split_once("\n  hint: ").unwrap();
-            (message.replace("error[usage]: ", ""), hint.to_string())
-        };
-        assert!(
-            message.ends_with("` is before the command name"),
-            "{message}"
-        );
-        let hinted = format!("put it after the command name, as `orbe {line}`");
-        assert_eq!(hint, hinted, "orbe {written}");
-        let run = shell(&runtime, dir, &format!("orbe {line}"));
         let printed = format!("{}{}", run.stdout, run.stderr);
-        assert_eq!(run.code, code, "orbe {line}: {printed}");
-        assert!(printed.starts_with(says), "orbe {line}: {printed}");
+        assert_eq!(run.code, code, "orbe {written}: {printed}");
+        assert!(printed.starts_with(says), "orbe {written}: {printed}");
         if let Some(folder) = lock {
             let id = line.split(' ').nth(1).unwrap();
             assert!(

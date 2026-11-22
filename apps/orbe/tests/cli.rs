@@ -200,6 +200,44 @@ fn json_with_a_value_is_still_one_envelope() {
 }
 
 #[test]
+fn check_and_open_share_the_error_code_for_a_missing_part_and_missing_firmware() {
+    let code_of = |stdout: &str| {
+        let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
+        assert_eq!(reply["ok"], false, "{stdout}");
+        reply["error"]["code"].as_str().unwrap().to_string()
+    };
+    let same = |dir: &Path, want: &str| {
+        let (check_out, check_stdout, check_stderr) = orbe_in(dir, &["check", "--json"]);
+        assert_eq!(
+            check_out.status.code(),
+            Some(1),
+            "{check_stdout}{check_stderr}"
+        );
+        let (open_out, open_stdout, open_stderr) = orbe_in(dir, &["open", "--json"]);
+        assert_eq!(
+            open_out.status.code(),
+            Some(1),
+            "{open_stdout}{open_stderr}"
+        );
+        let check_code = code_of(&check_stdout);
+        let open_code = code_of(&open_stdout);
+        assert_eq!(
+            check_code, open_code,
+            "check {check_stdout}\nopen {open_stdout}"
+        );
+        assert_eq!(check_code, want);
+    };
+
+    let missing_part = common::project("nano-button");
+    fs::remove_dir_all(missing_part.path().join("parts/led-5mm")).unwrap();
+    same(missing_part.path(), "part_missing");
+
+    let missing_firmware = common::project("nano-button");
+    fs::remove_file(missing_firmware.path().join("build/button.ino.hex")).unwrap();
+    same(missing_firmware.path(), "firmware_missing");
+}
+
+#[test]
 fn a_deleted_copy_prints_one_part_missing() {
     let project = common::project("nano-button");
     fs::remove_dir_all(project.path().join("parts/led-5mm")).unwrap();

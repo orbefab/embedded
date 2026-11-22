@@ -22,8 +22,8 @@ The engine runs firmware built with any toolchain, and users bring whatever they
 ## No hidden actions (Nov 4 2026)
 A command does what it names and nothing in the background. Where `orbe` could guess or quietly fix something, it stops with a clear error that says what happened and what to run instead. A reply carries what concerns its own command (its result, its errors and how to fix them), and nothing unrelated is added to every reply.
 
-## Flags follow the command (Nov 8 2026)
-`orbe` refuses a flag placed before the command name, as in `orbe --session x open`. An agent learns one way to write a command. The error names the flag and shows those words with the flag after the command name. `--help` and `--version`, and their short forms, still come first. Clap's `global = true`, which would accept the flag in either place, is the alternative not taken.
+## A flag before the command runs it (Nov 22 2026)
+`orbe --json open` runs `open`, the same as `orbe open --json`. A flag may come before the command name. A repeated flag that the command takes once counts once. `--help` and `--version`, and their short forms, still come first.
 
 ## Parts (Nov 4 2026)
 - A part is one real physical object, defined in one file, `part.jsonc`. Every field is optional except `format`. A part may have an engine model, children (`parts`, `wires`, `layout`), both or neither.
