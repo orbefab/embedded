@@ -53,9 +53,6 @@ fn install(base: &Path, block: &str) -> PathBuf {
     fs::create_dir_all(&dir).unwrap();
     let request = orbe_scene::Request {
         ids: vec![block.to_string()],
-        overwrite: false,
-        diff: false,
-        relock: false,
     };
     let reply = orbe_scene::add_parts(Some(&dir), &request).unwrap();
     assert_eq!(reply.code(), 0, "{}", reply.text());
@@ -79,12 +76,11 @@ fn reading(files: &Files, base: &Path, block: &str) -> Vec<String> {
     vec![
         match orbe_scene::read(files, &scene) {
             Ok(netlist) => format!(
-                "{}\n{} {:?} {} {:?}\n{:?}\n{}",
+                "{}\n{} {:?} {} {:?}\n{}",
                 netlist.json,
                 netlist.parts,
                 netlist.nets,
                 netlist.ground,
-                netlist.modified,
                 netlist.refs,
                 serde_json::to_string(&netlist.view).unwrap()
             ),
@@ -325,9 +321,9 @@ fn edit_part(part: &Path) -> bool {
     true
 }
 
-/// Removes one installed part, edits a file of a part the reader reports as `PartModified`,
-/// and removes `firmware/` when `install` wrote it. Each flag is whether that break can
-/// produce its finding. `lack` says why it cannot.
+/// Removes one installed part, edits another copy, and removes `firmware/` when `install`
+/// wrote it. An edit is the project's, so the read does not report it. Each flag is whether
+/// that break can produce its finding. `lack` says why it cannot.
 fn break_install(dir: &Path) -> [(&'static str, bool, &'static str); 3] {
     let parts = part_folders(dir);
     let missing = if let Some(part) = parts.first() {
@@ -336,7 +332,9 @@ fn break_install(dir: &Path) -> [(&'static str, bool, &'static str); 3] {
     } else {
         false
     };
-    let (modified, modified_lack) = edit_until_modified(dir, &parts);
+    if let Some(part) = parts.get(1) {
+        edit_part(part);
+    }
     let firmware = dir.join("firmware");
     let firmware_missing = if firmware.is_dir() {
         fs::remove_dir_all(&firmware).unwrap();
@@ -346,7 +344,7 @@ fn break_install(dir: &Path) -> [(&'static str, bool, &'static str); 3] {
     };
     [
         ("PartMissing", missing, "no part folder"),
-        ("PartModified", modified, modified_lack),
+        ("PartModified", false, "an edited copy is the project's"),
         ("FirmwareMissing", firmware_missing, "no firmware folder"),
     ]
 }
@@ -362,15 +360,13 @@ fn finds(block: &str, reading: &str, code: &str, present: bool, lack: &str) {
     }
 }
 
-/// A missing part, an edited file and an extra file in a part the reader reports as
-/// `PartModified`, and no firmware, each found the same way in memory as on disk, and so is
-/// the test transcript. The part removed is the first folder `install` wrote. The part edited
-/// is the first remaining folder for which the reader reports `PartModified`; a folder it does
-/// not is put back and the next is tried. A Block with no part folder, a single part, no such
-/// folder, or no firmware folder says so, and the read still has to show every finding that
-/// Block can produce. The transcript is the Block's own test file: its passed or failed line,
-/// each source line's number, and every reply. The read has already failed, so the run does
-/// not start.
+/// A missing part, an edited copy, and no firmware, each found the same way in memory as on
+/// disk, and so is the test transcript. The part removed is the first folder `install` wrote.
+/// The next folder is edited, and that edit is not a finding. A Block with no part folder or
+/// no firmware folder says so, and the read still has to show every finding that Block can
+/// produce. The transcript is the Block's own test file: its passed or failed line, each
+/// source line's number, and every reply. The read has already failed, so the run does not
+/// start.
 #[test]
 fn a_broken_install_finds_the_same_from_memory() {
     let tmp = TempDir::new().unwrap();
@@ -386,76 +382,6 @@ fn a_broken_install_finds_the_same_from_memory() {
     }
 }
 
-fn folder_name(path: &Path) -> &str {
-    path.file_name().unwrap().to_str().unwrap()
-}
-
-/// Every file under `part`, so an edit the reader does not report can be put back.
-fn saved_files(part: &Path) -> Vec<(PathBuf, Vec<u8>)> {
-    files_in(part)
-        .into_iter()
-        .map(|path| {
-            let bytes = fs::read(&path).unwrap();
-            (path, bytes)
-        })
-        .collect()
-}
-
-fn put_back(part: &Path, saved: &[(PathBuf, Vec<u8>)]) {
-    for path in files_in(part) {
-        if !saved.iter().any(|(kept, _)| kept == &path) {
-            fs::remove_file(path).unwrap();
-        }
-    }
-    for (path, bytes) in saved {
-        fs::write(path, bytes).unwrap();
-    }
-}
-
-/// The reader reports `PartModified` for `id` in this installed project.
-fn reader_reports_modified(dir: &Path, id: &str) -> bool {
-    let scene = dir.join("scene.jsonc");
-    let Err(found) = orbe_scene::read(&Files::disk(), &scene) else {
-        return false;
-    };
-    let named = format!("`{id}`");
-    found
-        .iter()
-        .any(|d| d.code == orbe_scene::Code::PartModified && d.message.contains(&named))
-}
-
-/// Edits the first remaining folder for which the reader reports `PartModified`. The folders
-/// are the ones `install` wrote, in sorted order, after the one this test removed. A folder
-/// the reader does not report that way is put back, and the next is tried.
-fn edit_until_modified(dir: &Path, parts: &[PathBuf]) -> (bool, &'static str) {
-    if parts.is_empty() {
-        return (false, "no part folder");
-    }
-    if parts.len() == 1 {
-        return (false, "a single part");
-    }
-    let mut edited = false;
-    for part in parts.iter().skip(1) {
-        let saved = saved_files(part);
-        if !edit_part(part) {
-            continue;
-        }
-        edited = true;
-        if reader_reports_modified(dir, folder_name(part)) {
-            return (true, "");
-        }
-        put_back(part, &saved);
-    }
-    (
-        false,
-        if edited {
-            "no sealed part"
-        } else {
-            "no file in the sealed part"
-        },
-    )
-}
-
 fn messages(files: &Files, scene: &Path) -> Vec<String> {
     match orbe_scene::read(files, scene) {
         Ok(_) => vec!["read ok".to_string()],
@@ -467,36 +393,6 @@ fn memory_of(root: &Path) -> Files {
     let mut files = Vec::new();
     walk(root, root, &mut files);
     Files::memory(files)
-}
-
-/// Extra files in a sealed copy are named in sorted order, from disk and from memory.
-#[test]
-fn extra_files_in_a_sealed_copy_are_named_in_the_same_order() {
-    let tmp = TempDir::new().unwrap();
-    let base = tmp.path().canonicalize().unwrap();
-    let block = "nano-button-led";
-    let dir = install(&base, block);
-    let part = dir.join("parts/led-5mm");
-    fs::write(part.join("z-extra.txt"), "z").unwrap();
-    fs::write(part.join("a-extra.txt"), "a").unwrap();
-    let scene = dir.join("scene.jsonc");
-    let prefix = format!("{}/", base.display());
-    let disk: Vec<String> = messages(&Files::disk(), &scene)
-        .into_iter()
-        .map(|text| text.replace(&prefix, ""))
-        .collect();
-    let memory = messages(
-        &memory(&base, block),
-        &Path::new("blocks").join(block).join("scene.jsonc"),
-    );
-    assert_eq!(disk, memory, "{block}");
-    let message = disk
-        .iter()
-        .find(|line| line.contains("a-extra.txt"))
-        .unwrap_or_else(|| panic!("{disk:#?}"));
-    let a = message.find("`a-extra.txt`").expect(message);
-    let z = message.find("`z-extra.txt`").expect(message);
-    assert!(a < z, "{message}");
 }
 
 /// `./missing/../mine.jsonc` is not a part, from disk and from memory.

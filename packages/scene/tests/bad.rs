@@ -33,7 +33,6 @@ const CODES: &[&str] = &[
     "scene.name_too_long",
     "part_missing",
     "firmware_missing",
-    "part_modified",
 ];
 
 fn run(case: &Path) -> (Vec<(String, String, String)>, String) {

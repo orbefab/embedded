@@ -1,5 +1,6 @@
-//! What the plan sees of a project: `parts.lock`, and what sits at `parts/<id>` for each
-//! catalog id the request can reach. Nothing else under `parts/` is read.
+//! What the plan sees of a project: what sits at `parts/<id>` for each catalog id the request
+//! can reach. A folder that is already there is named from its own `part.jsonc` version.
+//! Nothing else under `parts/` is read.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -8,29 +9,17 @@ use std::path::{Path, PathBuf};
 
 use crate::catalog::Version;
 use crate::diagnostic::Findings;
-use crate::project::{self, LockFields, hash_files};
 use crate::source::Sources;
 use crate::syntax::{self, Node};
 
 use super::{RunError, io_at};
 
-/// What sits at `parts/<id>`. A link is never followed, so replacing it never touches its
-/// target.
+/// What sits at `parts/<id>`. A link is never followed.
 pub(super) enum Target {
     Absent,
     Folder(Folder),
     /// A file, a link, or anything else that is not a folder, named for a message.
     Other(&'static str),
-}
-
-/// A file or directory under a part folder that exists and could not be read.
-pub(super) struct Unreadable {
-    /// Path relative to the part folder, with `/` between parts. `.` is the part folder.
-    pub(super) rel: String,
-    pub(super) error: String,
-    pub(super) permission: bool,
-    /// `rel` is a directory that could not be listed. A file is `false`.
-    pub(super) directory: bool,
 }
 
 /// A directory `add` tried to list, and the I/O error.
@@ -39,51 +28,23 @@ pub(super) struct Denied {
     pub(super) permission: bool,
 }
 
-/// A folder's readable files, and the entries that are not plain readable files.
+/// A folder that is already at `parts/<id>`. `version` is the copy's own, when `part.jsonc`
+/// has one. No other file is read.
 pub(super) struct Folder {
     pub(super) version: Option<Version>,
-    pub(super) hash: String,
-    pub(super) files: BTreeMap<String, Vec<u8>>,
-    /// Entries that are links, unreadable, or neither file nor folder, as message phrases.
-    pub(super) odd: Vec<String>,
-    /// Files that exist and could not be read.
-    pub(super) unreadable: Vec<Unreadable>,
 }
 
 impl Folder {
+    #[cfg(test)]
     pub(super) fn from_files(files: BTreeMap<String, Vec<u8>>) -> Folder {
-        let version = files.get("part.jsonc").and_then(|bytes| version_of(bytes));
-        let hash = hash_files(
-            files
-                .iter()
-                .map(|(path, bytes)| (path.as_str(), bytes.as_slice())),
-        );
         Folder {
-            version,
-            hash,
-            files,
-            odd: Vec::new(),
-            unreadable: Vec::new(),
+            version: files.get("part.jsonc").and_then(|bytes| version_of(bytes)),
         }
-    }
-
-    /// Whether the folder holds exactly these bytes.
-    pub(super) fn is(&self, hash: &str) -> bool {
-        self.odd.is_empty() && self.hash == hash
-    }
-
-    pub(super) fn has_part_file(&self) -> bool {
-        self.files.contains_key("part.jsonc")
     }
 }
 
 pub(super) struct Snapshot {
     pub(super) targets: BTreeMap<String, Target>,
-    pub(super) lock: BTreeMap<String, LockFields>,
-    pub(super) lock_text: Option<String>,
-    pub(super) lock_error: Option<String>,
-    /// `parts.lock` exists and this process cannot read it. The string is the I/O error.
-    pub(super) lock_denied: Option<String>,
     /// `parts/` exists and this process cannot list it. The ids under it were not read,
     /// so a missing folder is not the same thing as a part that is absent.
     pub(super) parts_denied: Option<Denied>,
@@ -95,17 +56,10 @@ impl Snapshot {
     pub(super) fn target(&self, id: &str) -> &Target {
         self.targets.get(id).unwrap_or(&Target::Absent)
     }
-
-    pub(super) fn folder(&self, id: &str) -> Option<&Folder> {
-        match self.target(id) {
-            Target::Folder(folder) => Some(folder),
-            _ => None,
-        }
-    }
 }
 
-/// Reads `parts.lock` and `parts/<id>` for each id. A directory that cannot be listed is
-/// [`Denied`] or an [`Unreadable`] directory. It is not an absent part.
+/// Reads `parts/<id>` for each id. A directory that cannot be listed is [`Denied`]. It is
+/// not an absent part.
 pub(super) fn load(root: &Path, ids: &BTreeSet<String>) -> Result<Snapshot, RunError> {
     let parts = root.join("parts");
     let parts_denied = match fs::metadata(&parts) {
@@ -121,19 +75,14 @@ pub(super) fn load(root: &Path, ids: &BTreeSet<String>) -> Result<Snapshot, RunE
     };
     let mut targets = BTreeMap::new();
     // A directory that cannot be listed hides every id. Walking them would record each
-    // one as absent, and `--relock` would write a lock with those parts removed.
+    // one as absent.
     if parts_denied.is_none() {
         for id in ids {
             targets.insert(id.clone(), target(&parts.join(id)));
         }
     }
-    let (lock_text, lock, lock_error, lock_denied) = read_lock(root)?;
     Ok(Snapshot {
         targets,
-        lock,
-        lock_text,
-        lock_error,
-        lock_denied,
         parts_denied,
         root: root.to_path_buf(),
     })
@@ -150,9 +99,8 @@ fn target(path: &Path) -> Target {
     let meta = match fs::symlink_metadata(path) {
         Ok(meta) => meta,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Target::Absent,
-        // A failure other than "nothing is there" is not an absent part. Treating it as
-        // absent is what let `--relock` drop the part from the lock.
-        Err(error) => return Target::Folder(unreadable_folder(".", error)),
+        // A failure other than "nothing is there" is not an absent part.
+        Err(_) => return Target::Folder(Folder { version: None }),
     };
     if meta.file_type().is_symlink() {
         return Target::Other("a link");
@@ -163,152 +111,10 @@ fn target(path: &Path) -> Target {
     if !meta.is_dir() {
         return Target::Other("neither a file nor a folder");
     }
-    let mut files = BTreeMap::new();
-    let mut odd = Vec::new();
-    let mut unreadable = Vec::new();
-    read_tree(path, path, &mut files, &mut odd, &mut unreadable);
-    let mut folder = Folder::from_files(files);
-    folder.odd = odd;
-    folder.unreadable = unreadable;
-    Target::Folder(folder)
-}
-
-fn read_tree(
-    root: &Path,
-    dir: &Path,
-    files: &mut BTreeMap<String, Vec<u8>>,
-    odd: &mut Vec<String>,
-    unreadable: &mut Vec<Unreadable>,
-) {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(error) => {
-            push_directory(unreadable, rel(root, dir), error);
-            return;
-        }
-    };
-    for entry in entries {
-        let path = match entry {
-            Ok(entry) => entry.path(),
-            Err(error) => {
-                push_directory(unreadable, rel(root, dir), error);
-                continue;
-            }
-        };
-        let shown = rel(root, &path);
-        if !crate::published::is_published(&shown) {
-            continue;
-        }
-        match fs::symlink_metadata(&path) {
-            Ok(meta) if meta.file_type().is_symlink() => {
-                odd.push(format!("`{shown}`, which is a link"));
-            }
-            Ok(meta) if meta.is_dir() => read_tree(root, &path, files, odd, unreadable),
-            Ok(meta) if meta.is_file() => match fs::read(&path) {
-                Ok(bytes) => {
-                    files.insert(shown, bytes);
-                }
-                Err(error) => {
-                    odd.push(format!("`{shown}`, which cannot be read: {error}"));
-                    unreadable.push(Unreadable {
-                        rel: shown,
-                        error: error.to_string(),
-                        permission: error.kind() == io::ErrorKind::PermissionDenied,
-                        directory: false,
-                    });
-                }
-            },
-            Ok(_) => odd.push(format!("`{shown}`, which is not a file")),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                odd.push(format!("`{shown}`, which cannot be read: {error}"));
-            }
-            Err(error) => unreadable.push(Unreadable {
-                rel: shown,
-                error: error.to_string(),
-                permission: error.kind() == io::ErrorKind::PermissionDenied,
-                directory: false,
-            }),
-        }
-    }
-}
-
-/// A directory that could not be listed. It is not recorded as an odd entry, which would
-/// read as a content difference and hide the read.
-fn push_directory(unreadable: &mut Vec<Unreadable>, rel: String, error: io::Error) {
-    if unreadable
-        .iter()
-        .any(|item| item.directory && item.rel == rel)
-    {
-        return;
-    }
-    unreadable.push(Unreadable {
-        rel,
-        error: error.to_string(),
-        permission: error.kind() == io::ErrorKind::PermissionDenied,
-        directory: true,
-    });
-}
-
-fn unreadable_folder(rel: &str, error: io::Error) -> Folder {
-    let mut folder = Folder::from_files(BTreeMap::new());
-    push_directory(&mut folder.unreadable, rel.to_string(), error);
-    folder
-}
-
-fn rel(root: &Path, path: &Path) -> String {
-    let shown = crate::source::display(root, path);
-    if shown.is_empty() { ".".into() } else { shown }
-}
-
-type Lock = (
-    Option<String>,
-    BTreeMap<String, LockFields>,
-    Option<String>,
-    Option<String>,
-);
-
-fn read_lock(root: &Path) -> Result<Lock, RunError> {
-    let path = root.join("parts.lock");
-    if !path.exists() {
-        return Ok((None, BTreeMap::new(), None, None));
-    }
-    if !path.is_file() {
-        return Err(io_at(&path, io::Error::other("`parts.lock` is not a file")));
-    }
-    let text = match fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-            return Ok((None, BTreeMap::new(), None, Some(error.to_string())));
-        }
-        Err(error) => return Err(io_at(&path, error)),
-    };
-    let mut lines = BTreeMap::new();
-    let mut error = None;
-    for line in text.lines() {
-        match project::lock_fields(line) {
-            Ok(None) => {}
-            Ok(Some(fields)) if lines.contains_key(&fields.id) => {
-                error = Some(format!(
-                    "parts.lock has a second line for `{}`, and a project takes each part id from one registry\n{line}",
-                    fields.id
-                ));
-                break;
-            }
-            Ok(Some(fields)) => {
-                lines.insert(fields.id.clone(), fields);
-            }
-            Err(()) => {
-                // A later line can still be the lock-matching newer copy `--relock` keeps.
-                // The first bad line stays the error.
-                if error.is_none() {
-                    error = Some(format!(
-                        "a parts.lock line is `<id> <version> @<registry> sha256:<hash>`\n{line}"
-                    ));
-                }
-            }
-        }
-    }
-    Ok((Some(text), lines, error, None))
+    let version = fs::read(path.join("part.jsonc"))
+        .ok()
+        .and_then(|bytes| version_of(&bytes));
+    Target::Folder(Folder { version })
 }
 
 fn version_of(bytes: &[u8]) -> Option<Version> {

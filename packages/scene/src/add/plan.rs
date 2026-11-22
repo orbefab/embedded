@@ -1,50 +1,32 @@
 //! What `orbe add` would do, as a pure function of the request, the catalog and a snapshot of
-//! the project. It names the folders to write and the lock to write, or it refuses.
+//! the project. It names the folders to write, or it refuses. A folder already at `parts/<id>/`
+//! is `part_exists`: the command writes nothing, and nothing in that folder is compared.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use crate::catalog::{Catalog, CatalogEntry, Version};
+use crate::catalog::{Catalog, Version};
 use crate::name::did_you_mean;
-use crate::project::{self, LockFields};
+use crate::project;
 
-use super::diff::diff_files;
-use super::snapshot::{Folder, Snapshot, Target};
+use super::snapshot::{Snapshot, Target};
 use super::{AddCode, Refusal, Request};
-
-const TESTS_MAY_CHANGE: &str = "tests may change";
 
 pub(super) enum Plan {
     Add(AddPlan),
-    Diff(DiffPlan),
-    Relock(RelockPlan),
     Refuse(Refusal),
     Usage(String),
 }
 
 pub(super) struct AddPlan {
     pub(super) write: Vec<Write>,
-    pub(super) skip: Vec<(String, Version)>,
-    pub(super) lock: Option<String>,
     pub(super) notes: Vec<String>,
 }
 
-/// A folder to write. `replacing` says what was at `parts/<id>` before, for the reply.
+/// A folder to write. An existing folder is `part_exists`, not a replacement.
 pub(super) struct Write {
     pub(super) id: String,
     pub(super) version: Version,
-    pub(super) replacing: Option<String>,
-}
-
-pub(super) struct DiffPlan {
-    pub(super) notes: Vec<String>,
-    pub(super) files: String,
-}
-
-pub(super) struct RelockPlan {
-    pub(super) lock: Option<String>,
-    pub(super) parts: Vec<String>,
-    pub(super) modified: Vec<String>,
 }
 
 struct Spec {
@@ -53,27 +35,9 @@ struct Spec {
     raw: String,
 }
 
-/// Who asked for a version of an id.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum By {
-    Request,
-    /// A part this add copies, through its `uses`.
-    Part(String),
-    /// A part already in the project, through the `uses` of its lock line's version.
-    Project(String),
-}
-
-struct Demand {
-    version: Version,
-    by: By,
-}
-
 /// An id, version or registry the catalog does not have. This is the request's own error, so
 /// it is reported before any look at the project folder. A missing project would hide it.
 pub(super) fn refuse_unknown(request: &Request) -> Option<Refusal> {
-    if request.relock {
-        return None;
-    }
     let specs = parse_specs(&request.ids).ok()?;
     match unknown_specs(&Catalog::builtin(), &specs) {
         Some(Plan::Refuse(refusal)) => Some(refusal),
@@ -83,13 +47,9 @@ pub(super) fn refuse_unknown(request: &Request) -> Option<Refusal> {
 
 /// The usage error in a request, which no project state changes.
 pub(super) fn usage(request: &Request) -> Option<String> {
-    if request.relock {
-        return (!request.ids.is_empty() || request.diff || request.overwrite)
-            .then(|| "orbe add --relock takes no part ids, --diff, or --overwrite".to_string());
-    }
     if request.ids.is_empty() {
-        let example = project::add_writing("orbe add", &["led-5mm".to_string()], false)
-            .expect("the id is named");
+        let example =
+            project::add_writing("orbe add", &["led-5mm".to_string()]).expect("the id is named");
         return Some(format!(
             "orbe add takes at least one part id, such as `{example}`"
         ));
@@ -97,12 +57,9 @@ pub(super) fn usage(request: &Request) -> Option<String> {
     parse_specs(&request.ids).err()
 }
 
-/// The ids whose `parts/<id>` the plan may write or compare: every catalog id the request
-/// can reach through `uses`, at any version. `--relock` compares every catalog id.
+/// The ids whose `parts/<id>` the plan may write: every catalog id the request can reach
+/// through `uses`, at any version.
 pub(super) fn wanted(catalog: &Catalog, request: &Request) -> BTreeSet<String> {
-    if request.relock {
-        return catalog.ids().into_iter().map(str::to_string).collect();
-    }
     let mut seen = BTreeSet::new();
     let mut queue: Vec<String> = parse_specs(&request.ids)
         .unwrap_or_default()
@@ -126,43 +83,42 @@ pub(super) fn plan(catalog: &Catalog, snapshot: &Snapshot, request: &Request, ad
     if let Some(message) = usage(request) {
         return Plan::Usage(message);
     }
-    // A file or directory add or `--relock` would read, and could not. Say so before a
-    // missing `part.jsonc`, a differ, or a missing version. Those would hide the read.
-    if let Some(refusal) = unreadable_files(snapshot) {
+    if let Some(refusal) = unreadable_parts(snapshot) {
         return Plan::Refuse(refusal);
-    }
-    if request.relock {
-        return plan_relock(catalog, snapshot, add);
     }
     let specs = parse_specs(&request.ids).expect("usage checked the ids");
     if let Some(plan) = unknown_specs(catalog, &specs) {
         return plan;
     }
-    if let Some(message) = snapshot.lock_error.clone() {
-        return Plan::Refuse(Refusal {
-            code: AddCode::LockSyntax,
-            message,
-            hint: format!(
-                "run `{}`",
-                project::format_add(add, &[], false, false, true).expect("relock")
-            ),
-        });
-    }
-    let selection = match select(catalog, snapshot, &specs, request.overwrite, add) {
-        Ok(selection) => selection,
+    let chosen = match choose(catalog, &specs) {
+        Ok(chosen) => chosen,
         Err(plan) => return plan,
     };
-    if request.diff {
-        return plan_diff(catalog, snapshot, &selection);
+    let mut existing = Vec::new();
+    for (id, version) in &chosen {
+        if let Some(line) = already(snapshot, id, version) {
+            existing.push(line);
+        }
     }
-    plan_add(
-        catalog,
-        snapshot,
-        &specs,
-        &selection,
-        request.overwrite,
-        add,
-    )
+    if !existing.is_empty() {
+        existing.sort();
+        let pronoun = if existing.len() == 1 { "it" } else { "them" };
+        let command = project::add_writing(add, &request.ids).expect("the request names an id");
+        return Plan::Refuse(Refusal {
+            code: AddCode::PartExists,
+            message: existing.join("\n"),
+            hint: format!("remove {pronoun} and run `{command}`"),
+        });
+    }
+    let mut write: Vec<Write> = chosen
+        .into_iter()
+        .map(|(id, version)| Write { id, version })
+        .collect();
+    write.sort_by(|a, b| a.id.cmp(&b.id));
+    Plan::Add(AddPlan {
+        write,
+        notes: Vec::new(),
+    })
 }
 
 fn parse_specs(ids: &[String]) -> Result<Vec<Spec>, String> {
@@ -209,8 +165,8 @@ fn parse_specs(ids: &[String]) -> Result<Vec<Spec>, String> {
     }
 }
 
-/// `@registry/id` is a real id shape, and v1 has only the official catalog. Other missing
-/// ids get a suggestion from this catalog.
+/// `@registry/id` is a real id shape, and this orbe copies the catalog built into it. Other
+/// missing ids get a suggestion from this catalog.
 fn unknown_specs(catalog: &Catalog, specs: &[Spec]) -> Option<Plan> {
     let mut registry = Vec::new();
     let mut unknown = Vec::new();
@@ -282,7 +238,7 @@ fn unknown_specs(catalog: &Catalog, specs: &[Spec]) -> Option<Plan> {
     }
     if !versions.is_empty() {
         return Some(Plan::Refuse(Refusal {
-            code: AddCode::UnknownVersion,
+            code: AddCode::UnknownPart,
             message: versions.join("\n"),
             hint: String::new(),
         }));
@@ -290,53 +246,45 @@ fn unknown_specs(catalog: &Catalog, specs: &[Spec]) -> Option<Plan> {
     None
 }
 
-struct Selection {
-    chosen: BTreeMap<String, Version>,
-    notes: Vec<String>,
-    tests_may_change: bool,
-}
-
-/// An id named without a version takes the newest version within the major version of the
-/// project's copy, so a plain `--overwrite` never crosses one. With no copy, the newest.
-fn default_version(catalog: &Catalog, snapshot: &Snapshot, id: &str) -> Version {
-    let newest = catalog
-        .newest(id)
-        .expect("unknown ids are refused first")
-        .version;
-    snapshot
-        .folder(id)
-        .and_then(|folder| folder.version)
-        .and_then(|copy| catalog.newest_in_major(id, copy.major))
-        .map_or(newest, |entry| entry.version)
-}
-
-fn select(
-    catalog: &Catalog,
-    snapshot: &Snapshot,
-    specs: &[Spec],
-    overwrite: bool,
-    add: &str,
-) -> Result<Selection, Plan> {
-    let mut queue = Vec::new();
+/// The version of each id the command would copy: the one the request names, or the newest
+/// this catalog carries, then the versions those parts use. Two demands for one id at two
+/// versions, with neither named by the request, is a usage error.
+fn choose(catalog: &Catalog, specs: &[Spec]) -> Result<BTreeMap<String, Version>, Plan> {
+    let mut chosen = BTreeMap::new();
+    let mut named = BTreeSet::new();
     for spec in specs {
-        let version = spec
-            .version
-            .unwrap_or_else(|| default_version(catalog, snapshot, &spec.id));
-        queue.push((spec.id.clone(), version, By::Request));
+        let version = spec.version.unwrap_or_else(|| {
+            catalog
+                .newest(&spec.id)
+                .expect("unknown ids are refused first")
+                .version
+        });
+        if let Some(previous) = chosen.get(&spec.id)
+            && previous != &version
+            && named.contains(&spec.id)
+        {
+            return Err(Plan::Usage(format!(
+                "`{}` is named at `{previous}` and at `{version}`",
+                spec.id
+            )));
+        }
+        if spec.version.is_some() {
+            named.insert(spec.id.clone());
+        }
+        chosen.insert(spec.id.clone(), version);
     }
-    let mut demands: BTreeMap<String, Vec<Demand>> = BTreeMap::new();
+    let mut queue: Vec<(String, Version, String)> = chosen
+        .iter()
+        .map(|(id, version)| (id.clone(), *version, id.clone()))
+        .collect();
     let mut walked = BTreeSet::new();
     while let Some((id, version, by)) = queue.pop() {
-        demands
-            .entry(id.clone())
-            .or_default()
-            .push(Demand { version, by });
         if !walked.insert((id.clone(), version)) {
             continue;
         }
         let entry = catalog.get(&id, version).ok_or_else(|| {
             Plan::Refuse(Refusal {
-                code: AddCode::UnknownVersion,
+                code: AddCode::UnknownPart,
                 message: format!("the catalog has no `{id}@{version}`"),
                 hint: String::new(),
             })
@@ -344,806 +292,57 @@ fn select(
         for (child, child_version) in &entry.uses {
             if catalog.get(child, *child_version).is_none() {
                 return Err(Plan::Refuse(Refusal {
-                    code: AddCode::UnknownVersion,
+                    code: AddCode::UnknownPart,
                     message: format!(
                         "`{id}` uses `{child}@{child_version}`, and the catalog has no `{child}@{child_version}`"
                     ),
                     hint: String::new(),
                 }));
             }
-            queue.push((child.clone(), *child_version, By::Part(id.clone())));
-        }
-    }
-    project_demands(catalog, snapshot, &mut demands);
-
-    let mut chosen = BTreeMap::new();
-    let mut notes = Vec::new();
-    let mut tests_may_change = false;
-    let mut clashes = Vec::new();
-    let mut kept = BTreeSet::new();
-    for (id, group) in &demands {
-        let demanded = group
-            .iter()
-            .map(|demand| demand.version)
-            .max()
-            .expect("a demand");
-        // A lock-matching copy newer than every version this add would write is not
-        // replaced, named or pinned. The folder differs from its lock line, or the line
-        // is from another registry: that stays an overwrite, as before.
-        if let Some(held) = lock_matching_newer(catalog, snapshot, id, demanded) {
-            notes.push(format!(
-                "left `{id}` at {held}. this project needs a newer orbe for it"
-            ));
-            kept.insert(id.clone());
-            continue;
-        }
-        let held = snapshot
-            .lock
-            .get(id)
-            .and_then(|line| Version::parse(&line.version));
-        match choose(id, group, specs, overwrite, held) {
-            Choose::Take(version) => {
-                chosen.insert(id.clone(), version);
-            }
-            Choose::Newer(version, note) => {
-                chosen.insert(id.clone(), version);
-                notes.push(note);
-            }
-            Choose::Named(version) => {
-                chosen.insert(id.clone(), version);
-                tests_may_change = true;
-            }
-            Choose::Clash(clash) => clashes.push(clash),
-        }
-    }
-    if !clashes.is_empty() {
-        let mut message = clashes
-            .iter()
-            .map(|clash| clash.message.clone())
-            .collect::<Vec<_>>()
-            .join("\n");
-        if !notes.is_empty() {
-            message.push('\n');
-            message.push_str(&notes.join("\n"));
-        }
-        return Err(Plan::Refuse(Refusal {
-            code: AddCode::PartConflict,
-            message,
-            hint: clash_hint(specs, &clashes, add, &kept),
-        }));
-    }
-    Ok(Selection {
-        chosen,
-        notes,
-        tests_may_change,
-    })
-}
-
-/// The version of `id` in the project when the folder matches its own official lock line
-/// and that version is newer than `than`. This binary would otherwise write `than` or
-/// older over it. A folder that does not match the lock line is the user's edit. A line
-/// from another registry is not this copy.
-fn lock_matching_newer(
-    catalog: &Catalog,
-    snapshot: &Snapshot,
-    id: &str,
-    than: Version,
-) -> Option<Version> {
-    let folder = snapshot.folder(id)?;
-    let line = snapshot.lock.get(id)?;
-    if line.registry != catalog.registry() || !folder.is(&line.hash) {
-        return None;
-    }
-    let held = Version::parse(&line.version)?;
-    (folder.version == Some(held) && held > than).then_some(held)
-}
-
-/// A part already in the project keeps needing the versions its `uses` names. Its lock line
-/// gives its version, and the catalog gives that version's `uses`. Only ids this add touches
-/// get a demand, and a part this add copies again speaks through its new version instead.
-fn project_demands(
-    catalog: &Catalog,
-    snapshot: &Snapshot,
-    demands: &mut BTreeMap<String, Vec<Demand>>,
-) {
-    let touched: BTreeSet<String> = demands.keys().cloned().collect();
-    for line in snapshot.lock.values() {
-        if touched.contains(&line.id) {
-            continue;
-        }
-        let Some(entry) = Version::parse(&line.version).and_then(|v| catalog.get(&line.id, v))
-        else {
-            continue;
-        };
-        for (child, version) in &entry.uses {
-            if let Some(group) = demands.get_mut(child) {
-                group.push(Demand {
-                    version: *version,
-                    by: By::Project(line.id.clone()),
-                });
-            }
-        }
-    }
-}
-
-enum Choose {
-    Take(Version),
-    Newer(Version, String),
-    Named(Version),
-    Clash(Clash),
-}
-
-struct Clash {
-    message: String,
-    cross_major: bool,
-    id: String,
-    versions: Vec<Version>,
-}
-
-/// `held` is the version of `id` in the project's lock. When it is already the newer of two
-/// versions in one major version, an earlier `--overwrite` settled the clash, and it stays
-/// settled, unless the request names a version of `id`.
-fn choose(
-    id: &str,
-    group: &[Demand],
-    specs: &[Spec],
-    overwrite: bool,
-    held: Option<Version>,
-) -> Choose {
-    let mut versions: Vec<Version> = group.iter().map(|demand| demand.version).collect();
-    versions.sort();
-    versions.dedup();
-    if versions.len() == 1 {
-        return Choose::Take(versions[0]);
-    }
-    let same_major = versions
-        .windows(2)
-        .all(|pair| pair[0].major == pair[1].major);
-    let newer = *versions.last().expect("at least two versions");
-    if same_major && overwrite {
-        let note = format!("took `{id}` {newer}, the newer of {}", describe(group));
-        return Choose::Newer(newer, note);
-    }
-    let named = specs
-        .iter()
-        .any(|spec| spec.id == id && spec.version.is_some());
-    if same_major && held == Some(newer) && !named {
-        let note = format!(
-            "kept `{id}` {newer}, which the project holds, the newer of {}",
-            describe(group)
-        );
-        return Choose::Newer(newer, note);
-    }
-    if !same_major
-        && overwrite
-        && let Some(named) = explicit_version(specs, id)
-    {
-        return Choose::Named(named);
-    }
-    Choose::Clash(Clash {
-        message: format!("`{id}` is {}", describe(group)),
-        cross_major: !same_major,
-        id: id.to_string(),
-        versions,
-    })
-}
-
-fn explicit_version(specs: &[Spec], id: &str) -> Option<Version> {
-    let mut named: Vec<Version> = specs
-        .iter()
-        .filter(|spec| spec.id == id)
-        .filter_map(|spec| spec.version)
-        .collect();
-    named.sort();
-    named.dedup();
-    if named.len() == 1 {
-        Some(named[0])
-    } else {
-        None
-    }
-}
-
-fn describe(group: &[Demand]) -> String {
-    let mut versions: Vec<Version> = group.iter().map(|demand| demand.version).collect();
-    versions.sort();
-    versions.dedup();
-    let phrases: Vec<String> = versions
-        .into_iter()
-        .map(|version| {
-            let mut bys: Vec<&By> = group
-                .iter()
-                .filter(|demand| demand.version == version)
-                .map(|demand| &demand.by)
-                .collect();
-            bys.sort();
-            bys.dedup();
-            let who = join_and(&bys.iter().map(|by| who(by)).collect::<Vec<_>>());
-            format!("`{version}` in {who}")
-        })
-        .collect();
-    join_and(&phrases)
-}
-
-fn who(by: &By) -> String {
-    match by {
-        By::Request => "the request".into(),
-        By::Part(id) => format!("`{id}`"),
-        By::Project(id) => format!("`{id}`, which the project holds"),
-    }
-}
-
-fn join_and(items: &[String]) -> String {
-    match items {
-        [] => String::new(),
-        [one] => one.clone(),
-        [first, second] => format!("{first} and {second}"),
-        _ => {
-            let (last, rest) = items.split_last().expect("at least three");
-            format!("{}, and {last}", rest.join(", "))
-        }
-    }
-}
-
-fn clash_hint(specs: &[Spec], clashes: &[Clash], add: &str, leave: &BTreeSet<String>) -> String {
-    let cross: Vec<&Clash> = clashes.iter().filter(|clash| clash.cross_major).collect();
-    if cross.is_empty() {
-        let command = command_for(add, specs, &[], true, leave).or_else(|| {
-            let specs = clashes
-                .iter()
-                .filter(|clash| !leave.contains(&clash.id))
-                .map(|clash| clash.id.clone())
-                .collect::<Vec<_>>();
-            project::add_writing(add, &specs, true)
-        });
-        return run_hint(command);
-    }
-    if cross.len() == 1 {
-        let clash = cross[0];
-        let commands: Vec<String> = clash
-            .versions
-            .iter()
-            .filter_map(|version| {
-                command_for(add, specs, &[(clash.id.clone(), *version)], true, leave)
-            })
-            .map(|command| format!("`{command}`"))
-            .collect();
-        if commands.is_empty() {
-            return "this project needs a newer orbe".into();
-        }
-        return format!("run {}", join_or(&commands));
-    }
-    "name one version of each id with `@<version> --overwrite`".into()
-}
-
-fn run_hint(command: Option<String>) -> String {
-    match command {
-        Some(command) => format!("run `{command}`"),
-        None => "this project needs a newer orbe".into(),
-    }
-}
-
-fn join_or(items: &[String]) -> String {
-    match items {
-        [] => String::new(),
-        [one] => one.clone(),
-        [first, second] => format!("{first} or {second}"),
-        _ => {
-            let (last, rest) = items.split_last().expect("at least three");
-            format!("{}, or {last}", rest.join(", "))
-        }
-    }
-}
-
-/// The ids a clash command names: the request's ids, without a lock-matching copy newer
-/// than this binary, with `id@version` where `pins` says the major version has to be named.
-/// Empty is not a command.
-fn command_for(
-    add: &str,
-    specs: &[Spec],
-    pins: &[(String, Version)],
-    overwrite: bool,
-    leave: &BTreeSet<String>,
-) -> Option<String> {
-    let mut args = Vec::new();
-    let mut pending: BTreeSet<&str> = pins
-        .iter()
-        .filter(|(id, _)| !leave.contains(id))
-        .map(|(id, _)| id.as_str())
-        .collect();
-    for spec in specs {
-        if leave.contains(&spec.id) {
-            continue;
-        }
-        if let Some((_, version)) = pins.iter().find(|(id, _)| id == &spec.id) {
-            args.push(format!("{}@{version}", spec.id));
-            pending.remove(spec.id.as_str());
-        } else {
-            args.push(spec.raw.clone());
-        }
-    }
-    for (id, version) in pins {
-        if pending.remove(id.as_str()) {
-            args.push(format!("{id}@{version}"));
-        }
-    }
-    project::add_writing(add, &args, overwrite)
-}
-
-/// How `parts/<id>` differs from the version the add would write.
-struct Differ {
-    line: String,
-    /// What the reply says it replaced, under `--overwrite`.
-    was: String,
-    /// The copy is in another major version, so `--overwrite` needs the version named.
-    crosses: bool,
-}
-
-fn plan_add(
-    catalog: &Catalog,
-    snapshot: &Snapshot,
-    specs: &[Spec],
-    selection: &Selection,
-    overwrite: bool,
-    add: &str,
-) -> Plan {
-    let explicit: BTreeSet<&str> = specs
-        .iter()
-        .filter(|spec| spec.version.is_some())
-        .map(|spec| spec.id.as_str())
-        .collect();
-    let mut write = Vec::new();
-    let mut skip = Vec::new();
-    let mut refused: Vec<(String, Version, Differ)> = Vec::new();
-    let mut hint_specs = Vec::new();
-    let mut notes = selection.notes.clone();
-    let mut tests_may_change = selection.tests_may_change;
-    for (id, &version) in &selection.chosen {
-        let entry = catalog
-            .get(id, version)
-            .expect("select only keeps catalog versions");
-        let lock_hash = snapshot.lock.get(id).map(|line| line.hash.as_str());
-        let Some(differ) = differ(catalog, snapshot.target(id), entry, lock_hash) else {
-            if matches!(snapshot.target(id), Target::Absent) {
-                write.push(Write {
-                    id: id.clone(),
-                    version,
-                    replacing: None,
-                });
-                hint_specs.push(id.clone());
-            } else {
-                skip.push((id.clone(), version));
-                // The folder is the catalog's, but the lock line may still name another
-                // registry or version. The command that finishes this add has to name it.
-                if !lock_matches(catalog, snapshot, id, entry) {
-                    hint_specs.push(id.clone());
+            match chosen.get(child) {
+                Some(have) if have != child_version && !named.contains(child) => {
+                    return Err(Plan::Usage(format!(
+                        "`{child}` is used at `{have}` and at `{child_version}`"
+                    )));
+                }
+                Some(_) => {}
+                None => {
+                    chosen.insert(child.clone(), *child_version);
+                    queue.push((child.clone(), *child_version, by.clone()));
                 }
             }
-            continue;
-        };
-        let named = explicit.contains(id.as_str());
-        let spec = if differ.crosses {
-            format!("{id}@{version}")
-        } else {
-            id.clone()
-        };
-        if overwrite && (!differ.crosses || named) {
-            tests_may_change |= differ.crosses;
-            write.push(Write {
-                id: id.clone(),
-                version,
-                replacing: Some(differ.was),
-            });
-            hint_specs.push(spec);
-            continue;
-        }
-        refused.push((id.clone(), version, differ));
-        hint_specs.push(spec);
-    }
-    if !refused.is_empty() {
-        let lines: Vec<&str> = refused
-            .iter()
-            .map(|(_, _, differ)| differ.line.as_str())
-            .collect();
-        let mut message = format!("nothing was written\n{}", lines.join("\n"));
-        if !notes.is_empty() {
-            message.push('\n');
-            message.push_str(&notes.join("\n"));
-        }
-        // The same ids this loop would write, including a child the request did not name.
-        // A kept newer copy is not among them. It stays in the note above.
-        let hint = match project::add_writing(add, &hint_specs, true) {
-            Some(command) => format!("run `{command}`"),
-            None if notes.iter().any(|note| note.contains("newer orbe")) => {
-                "this project needs a newer orbe".into()
-            }
-            None => String::new(),
-        };
-        return Plan::Refuse(Refusal {
-            code: AddCode::PartDiffers,
-            message,
-            hint,
-        });
-    }
-    for spec in specs.iter().filter(|spec| spec.version.is_none()) {
-        let Some(&chosen) = selection.chosen.get(&spec.id) else {
-            continue;
-        };
-        let newest = catalog.newest(&spec.id).expect("a catalog id").version;
-        if newest.major != chosen.major {
-            let command = project::add_writing(add, &[format!("{}@{newest}", spec.id)], true)
-                .expect("the id is named");
-            notes.push(format!(
-                "the catalog also has `{id}` {newest}, a new major version. `{command}` takes it, and tests may change",
-                id = spec.id
-            ));
         }
     }
-    if tests_may_change {
-        notes.push(TESTS_MAY_CHANGE.to_string());
-    }
-    let lock_text = lock_text(catalog, snapshot, &selection.chosen);
-    let lock = (snapshot.lock_text.as_deref() != Some(lock_text.as_str())).then_some(lock_text);
-    Plan::Add(AddPlan {
-        write,
-        skip,
-        lock,
-        notes,
-    })
+    Ok(chosen)
 }
 
-/// The lock line already records the catalog copy `entry`, so writing it would change nothing.
-fn lock_matches(catalog: &Catalog, snapshot: &Snapshot, id: &str, entry: &CatalogEntry) -> bool {
-    snapshot.lock.get(id).is_some_and(|line| {
-        line.version == entry.version.to_string()
-            && line.registry == catalog.registry()
-            && line.hash == entry.hash
-    })
+/// The `part_exists` line for `id` when `parts/<id>` is already there. The version is the
+/// copy's own. No other file in the folder is read.
+fn already(snapshot: &Snapshot, id: &str, _version: &Version) -> Option<String> {
+    match snapshot.target(id) {
+        Target::Absent => None,
+        Target::Folder(folder) => Some(match folder.version {
+            Some(version) => format!("parts/{id} is already {id} {version}"),
+            None => format!("parts/{id} is already there"),
+        }),
+        Target::Other(what) => Some(format!("parts/{id} is already {what}, not a folder")),
+    }
 }
 
-/// `None` when `parts/<id>` is absent or already holds exactly `entry`.
-fn differ(
-    catalog: &Catalog,
-    target: &Target,
-    entry: &CatalogEntry,
-    lock_hash: Option<&str>,
-) -> Option<Differ> {
-    let id = &entry.id;
-    let folder = match target {
-        Target::Absent => return None,
-        Target::Other(what) => {
-            return Some(Differ {
-                line: format!("parts/{id} is {what}, not a part folder"),
-                was: (*what).to_string(),
-                crosses: false,
-            });
-        }
-        Target::Folder(folder) if folder.is(&entry.hash) => return None,
-        Target::Folder(folder) => folder,
-    };
-    if !folder.has_part_file() {
-        return Some(Differ {
-            line: format!("parts/{id} is a folder with no part.jsonc"),
-            was: "a folder with no part.jsonc".into(),
-            crosses: false,
-        });
-    }
-    let Some(copy) = folder.version else {
-        return Some(Differ {
-            line: format!(
-                "`{id}` has no version in the project, and differs in {}",
-                differing_names(folder, entry)
-            ),
-            was: "a copy with no version".into(),
-            crosses: false,
-        });
-    };
-    let crosses = copy.major != entry.version.major;
-    let original = catalog.get(id, copy);
-    let clean = original.is_some_and(|original| folder.is(&original.hash));
-    // A folder that matches its lock line is the version the lock records, even when this
-    // binary does not carry that version. "with local edits" is only a folder the lock
-    // does not hash.
-    let matches_lock = lock_hash.is_some_and(|hash| folder.is(hash));
-    let locked = clean || matches_lock;
-    let edits = differing_names(folder, original.unwrap_or(entry));
-    let was = if locked {
-        copy.to_string()
+/// `parts/` exists and this process cannot list it, so a missing folder is not the same
+/// thing as a part that is absent.
+fn unreadable_parts(snapshot: &Snapshot) -> Option<Refusal> {
+    let denied = snapshot.parts_denied.as_ref()?;
+    let hint = if denied.permission {
+        project::chmod_hint(Some(&snapshot.root), Path::new("parts"), true)
     } else {
-        format!("{copy} with local edits")
+        "check that the path exists and is readable".into()
     };
-    let line = match (copy == entry.version, locked) {
-        (true, _) => format!("`{id}` is {copy} in the project and differs in {edits}"),
-        (false, true) => format!(
-            "`{id}` is {copy} in the project, {} in the catalog",
-            entry.version
-        ),
-        (false, false) => format!(
-            "`{id}` is {copy} in the project, {} in the catalog, and the copy differs from {copy} in {edits}",
-            entry.version
-        ),
-    };
-    Some(Differ { line, was, crosses })
-}
-
-fn differing_names(folder: &Folder, entry: &CatalogEntry) -> String {
-    let mut names = Vec::new();
-    for (rel, bytes) in &entry.files {
-        match folder.files.get(rel) {
-            Some(copy) if copy == bytes => {}
-            Some(_) => names.push(format!("`{rel}`")),
-            None if folder
-                .odd
-                .iter()
-                .any(|odd| odd.starts_with(&format!("`{rel}`"))) => {}
-            None => names.push(format!("`{rel}`, which is missing")),
-        }
-    }
-    for rel in folder.files.keys() {
-        if !entry.files.contains_key(rel) {
-            names.push(format!("`{rel}`, which the catalog's copy does not have"));
-        }
-    }
-    names.extend(folder.odd.iter().cloned());
-    if names.is_empty() {
-        "the folder".into()
-    } else {
-        names.join(", ")
-    }
-}
-
-fn lock_text(catalog: &Catalog, snapshot: &Snapshot, chosen: &BTreeMap<String, Version>) -> String {
-    let mut lines = snapshot.lock.clone();
-    for (id, version) in chosen {
-        let entry = catalog.get(id, *version).expect("chosen version exists");
-        lines.insert(
-            id.clone(),
-            LockFields {
-                id: id.clone(),
-                version: version.to_string(),
-                registry: catalog.registry().to_string(),
-                hash: entry.hash.clone(),
-            },
-        );
-    }
-    project::render_lock(&lines)
-}
-
-fn plan_diff(catalog: &Catalog, snapshot: &Snapshot, selection: &Selection) -> Plan {
-    let mut notes = selection.notes.clone();
-    let mut files = String::new();
-    for (id, &version) in &selection.chosen {
-        let entry = catalog.get(id, version).expect("chosen version exists");
-        match snapshot.target(id) {
-            Target::Folder(folder) if folder.is(&entry.hash) => {}
-            Target::Folder(folder) => {
-                notes.push(change_note(id, folder.version, version));
-                files.push_str(&diff_files(id, Some(&folder.files), entry));
-            }
-            Target::Absent => {
-                notes.push(change_note(id, None, version));
-                files.push_str(&diff_files(id, None, entry));
-            }
-            Target::Other(what) => {
-                notes.push(format!(
-                    "parts/{id} is {what}. `--overwrite` replaces it with `{id}` {version}"
-                ));
-                files.push_str(&diff_files(id, None, entry));
-            }
-        }
-    }
-    if files.is_empty() {
-        notes.push("nothing would change".into());
-    }
-    Plan::Diff(DiffPlan { notes, files })
-}
-
-fn change_note(id: &str, from: Option<Version>, to: Version) -> String {
-    match from {
-        None => format!("`{id}` {to} is a new copy"),
-        Some(from) if from == to => format!("`{id}` stays at {to}. the version is unchanged"),
-        Some(from) if from.major != to.major => {
-            format!("`{id}` {from} to {to}: a major version may change a passing test")
-        }
-        Some(from) if from.minor != to.minor => {
-            format!("`{id}` {from} to {to}: a minor version cannot change a passing test")
-        }
-        Some(from) => {
-            format!("`{id}` {from} to {to}: a patch version cannot change a passing test")
-        }
-    }
-}
-
-/// A folder that matches its own lock line and is newer than every version this catalog
-/// carries. `--relock` keeps that line. An older version the catalog lacks, another
-/// registry, or a folder that does not match the line stays an error.
-fn kept_newer_line(
-    catalog: &Catalog,
-    snapshot: &Snapshot,
-    id: &str,
-    version: Version,
-) -> Option<LockFields> {
-    let folder = snapshot.folder(id)?;
-    let line = snapshot.lock.get(id)?;
-    if line.registry != catalog.registry() {
-        return None;
-    }
-    let held = Version::parse(&line.version)?;
-    if folder.version != Some(held) || held != version || !folder.is(&line.hash) {
-        return None;
-    }
-    let newest = catalog.newest(id)?.version;
-    (held > newest).then(|| line.clone())
-}
-
-fn plan_relock(catalog: &Catalog, snapshot: &Snapshot, add: &str) -> Plan {
-    let mut lines = BTreeMap::new();
-    let mut modified = Vec::new();
-    let mut problems = Vec::new();
-    let mut sealed = Vec::new();
-    for (id, target) in &snapshot.targets {
-        let Target::Folder(folder) = target else {
-            continue;
-        };
-        let Some(version) = folder.version else {
-            problems.push(format!("`{id}` has no version"));
-            continue;
-        };
-        let Some(entry) = catalog.get(id, version) else {
-            if let Some(line) = kept_newer_line(catalog, snapshot, id, version) {
-                lines.insert(id.clone(), line);
-                continue;
-            }
-            problems.push(format!("the catalog has no `{id}@{version}`"));
-            continue;
-        };
-        let clean = folder.is(&entry.hash);
-        if !folder.odd.is_empty() {
-            problems.push(format!(
-                "parts/{id} holds {}, which a lock line cannot cover",
-                folder.odd.join(", ")
-            ));
-            sealed.push(id.clone());
-            continue;
-        }
-        if !clean && entry.sealed {
-            problems.push(format!(
-                "sealed part `{id}` differs from `{id}@{version}` in {}",
-                differing_names(folder, entry)
-            ));
-            sealed.push(id.clone());
-            continue;
-        }
-        let hash = if clean {
-            entry.hash.clone()
-        } else {
-            modified.push(id.clone());
-            folder.hash.clone()
-        };
-        lines.insert(
-            id.clone(),
-            LockFields {
-                id: id.clone(),
-                version: version.to_string(),
-                registry: catalog.registry().to_string(),
-                hash,
-            },
-        );
-    }
-    if !problems.is_empty() {
-        let hint = sealed
-            .iter()
-            .map(|id| {
-                let command = project::add_writing(add, std::slice::from_ref(id), true)
-                    .expect("the id is named");
-                format!("restore it with `{command}`, or copy it to a path to make it your own")
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let code = if sealed.is_empty() {
-            AddCode::UnknownVersion
-        } else {
-            AddCode::PartModified
-        };
-        return Plan::Refuse(Refusal {
-            code,
-            message: problems.join("\n"),
-            hint,
-        });
-    }
-    let parts: Vec<String> = lines.keys().cloned().collect();
-    let text = project::render_lock(&lines);
-    let lock = (snapshot.lock_text.as_deref() != Some(text.as_str())).then_some(text);
-    Plan::Relock(RelockPlan {
-        lock,
-        parts,
-        modified,
-    })
-}
-
-/// `parts/`, a part directory, or a subdirectory, and `part.jsonc`, `asset.json`, `model.py`,
-/// or `parts.lock`, when add or `--relock` could not read it. Another unreadable file stays
-/// on the path that moves a copy aside. A directory that could not be listed is never an
-/// absent part: that is what replaced `parts.lock` with an empty file.
-fn unreadable_files(snapshot: &Snapshot) -> Option<Refusal> {
-    let mut messages = Vec::new();
-    let mut hints = Vec::new();
-    if let Some(denied) = &snapshot.parts_denied {
-        note_read(
-            &mut messages,
-            &mut hints,
-            snapshot,
-            "parts",
-            &denied.error,
-            denied.permission,
-            true,
-        );
-    }
-    if let Some(error) = &snapshot.lock_denied {
-        note_read(
-            &mut messages,
-            &mut hints,
-            snapshot,
-            "parts.lock",
-            error,
-            true,
-            false,
-        );
-    }
-    for (id, target) in &snapshot.targets {
-        let Target::Folder(folder) = target else {
-            continue;
-        };
-        for file in &folder.unreadable {
-            let directory = file.directory;
-            let rel = if directory && (file.rel == "." || file.rel.is_empty()) {
-                format!("parts/{id}")
-            } else if directory
-                || matches!(file.rel.as_str(), "part.jsonc" | "asset.json" | "model.py")
-            {
-                format!("parts/{id}/{}", file.rel)
-            } else {
-                continue;
-            };
-            note_read(
-                &mut messages,
-                &mut hints,
-                snapshot,
-                &rel,
-                &file.error,
-                file.permission,
-                directory,
-            );
-        }
-    }
-    if messages.is_empty() {
-        return None;
-    }
     Some(Refusal {
         code: AddCode::Unreadable,
-        message: messages.join("\n"),
-        hint: hints.join("\n"),
+        message: format!("cannot read parts: {}", denied.error),
+        hint,
     })
-}
-
-fn note_read(
-    messages: &mut Vec<String>,
-    hints: &mut Vec<String>,
-    snapshot: &Snapshot,
-    rel: &str,
-    error: &str,
-    permission: bool,
-    directory: bool,
-) {
-    messages.push(format!("cannot read {rel}: {error}"));
-    if permission {
-        hints.push(project::chmod_hint(
-            Some(&snapshot.root),
-            Path::new(rel),
-            directory,
-        ));
-    } else {
-        hints.push("check that the path exists and is readable".into());
-    }
 }
 
 #[cfg(test)]

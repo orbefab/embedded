@@ -26,14 +26,13 @@ impl Name {
         Ok(Name(text.to_string()))
     }
 
-    /// The project folder above `cwd` (the nearest one with scene.jsonc or parts.lock), else
+    /// The project folder above `cwd` (the nearest one with scene.jsonc or parts/), else
     /// the git worktree root, else `cwd`: its folder name and a short hash of its path.
     pub fn default_for(cwd: &Path) -> Name {
         let above = |marker: fn(&Path) -> bool| cwd.ancestors().find(|dir| marker(dir));
-        let folder =
-            above(|dir| dir.join("scene.jsonc").is_file() || dir.join("parts.lock").is_file())
-                .or_else(|| above(|dir| dir.join(".git").exists()))
-                .unwrap_or(cwd);
+        let folder = above(|dir| dir.join("scene.jsonc").is_file() || dir.join("parts").is_dir())
+            .or_else(|| above(|dir| dir.join(".git").exists()))
+            .unwrap_or(cwd);
         let file = folder
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())

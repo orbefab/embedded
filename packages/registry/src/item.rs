@@ -148,7 +148,7 @@ pub struct Head {
     /// Each published file in the item's folder, by path. Build output (`__pycache__`, `.pyc`,
     /// `.pytest_cache` and `.venv`) is left out.
     pub files: Vec<File>,
-    /// The folder hash over `files`, as `sha256:<hex>`. `parts.lock` records a part's.
+    /// The folder hash over `files`, as `sha256:<hex>`.
     #[schemars(pattern(pattern::HASH))]
     pub hash: String,
 }

@@ -79,10 +79,6 @@ impl Sources {
         FileId(self.files.len() - 1)
     }
 
-    pub(crate) fn find(&self, path: &Path) -> Option<FileId> {
-        self.files.iter().position(|f| f.path == path).map(FileId)
-    }
-
     pub(crate) fn file(&self, id: FileId) -> &SourceFile {
         &self.files[id.0]
     }
