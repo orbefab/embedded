@@ -178,7 +178,7 @@ fn a_block_missing_a_part_is_refused_as_orbe_open_says() {
     };
     assert!(
         text.starts_with(
-            "scene.jsonc:12:23: error[part_missing]: part `led-5mm` is not in the catalog this Block reads\n  hint: did you mean `led-3mm`?"
+            "scene.jsonc:12:23: error[part_missing]: part `led-5mm` is not in the catalog this Block reads\n  hint: the catalog has no part named `led-5mm`"
         ),
         "{text}"
     );

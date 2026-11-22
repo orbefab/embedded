@@ -6,11 +6,13 @@ use std::process::Command;
 
 use serde_json::Value;
 
+#[path = "registry_env.rs"]
+mod registry_env;
+
 fn orbe(args: &[&str]) -> (i32, String, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_orbe"))
-        .args(args)
-        .output()
-        .unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_orbe"));
+    registry_env::apply(&mut command);
+    let output = command.args(args).output().unwrap();
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8(output.stderr).unwrap();
     (output.status.code().unwrap(), stdout, stderr)
@@ -149,8 +151,8 @@ fn search_with_no_words_lists_the_parts_a_scene_can_place() {
     assert_eq!(code, 0, "{stderr}");
     assert!(stdout.contains("\nldr-5mm  "), "{stdout}");
     assert!(stdout.contains("\nresistor-axial  "), "{stdout}");
-    assert!(!stdout.contains("atmega328p-tqfp32"), "{stdout}");
-    assert!(!stdout.contains("led-0603"), "{stdout}");
+    assert!(stdout.contains("atmega328p-tqfp32"), "{stdout}");
+    assert!(stdout.contains("led-0603"), "{stdout}");
     let blocks = stdout
         .rfind("\nblocks\n")
         .unwrap_or_else(|| panic!("{stdout}"));
@@ -170,7 +172,8 @@ fn search_with_no_words_lists_the_parts_a_scene_can_place() {
         .map(|item| item["id"].as_str().unwrap())
         .collect();
     assert!(ids.contains(&"ldr-5mm") && ids.contains(&"resistor-axial"));
-    assert!(!ids.contains(&"atmega328p-tqfp32"));
+    assert!(ids.contains(&"atmega328p-tqfp32"));
+    assert!(ids.contains(&"led-0603"));
     assert!(envelope["data"].get("parts").is_none(), "{stdout}");
 }
 
@@ -247,7 +250,7 @@ fn search_prints_title_matches_before_the_rest() {
     let (code, stdout, _) = orbe(&["search", "led-5mm", "--json"]);
     assert_eq!(code, 0);
     let envelope: Value = serde_json::from_str(&stdout).unwrap();
-    assert_eq!(envelope["data"]["parts"][0]["name"], "led-5mm");
+    assert_eq!(envelope["data"]["parts"][0]["id"], "led-5mm");
 
     let (code, stdout, stderr) = orbe(&["search", "zzzz-no-such-part"]);
     assert_eq!(code, 0, "{stderr}");
@@ -268,7 +271,7 @@ fn search_finds_a_block_and_part_describes_it() {
     assert_eq!(code, 0);
     let envelope: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(envelope["data"]["parts"].as_array().unwrap().len(), 0);
-    assert_eq!(envelope["data"]["blocks"][0]["name"], "nano-led-fade");
+    assert_eq!(envelope["data"]["blocks"][0]["id"], "nano-led-fade");
 
     let (code, stdout, stderr) = orbe(&["blocks"]);
     assert_eq!(code, 0, "{stderr}");

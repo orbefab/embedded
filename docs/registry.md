@@ -87,7 +87,7 @@ A user lists registries in `registries.json`, in `$XDG_CONFIG_HOME/orbe/`, else 
 }
 ```
 
-A project names a part from that registry as `@acme/<id>`. A bare id names `@orbefab`, which needs no line. Its template is `https://orbefab.com/embedded/r/{name}.json`. Nothing fetches from a registry yet.
+A project names a part from that registry as `@acme/<id>`. A bare id names `@orbefab`, which needs no line. Its template is `https://orbefab.com/embedded/r/{name}.json`. This `orbe` does not read `registries.json`. It fetches `@orbefab` from that template. `orbe add`, `orbe search`, `orbe part` and `orbe blocks` are the commands that fetch. `orbe check`, `orbe open`, `orbe test` and `orbe show` do not.
 
 A template is an `https://` URL with exactly one `{name}`. `{name}` starts its last path segment and is followed only by a fixed suffix, such as `.json`. A template has no query and no fragment. A client replaces `{name}` with `index`, literally, to get the index's URL. It never builds another URL from the template. It takes each record's URL from its index row and each file's URL from its record, and resolves both against the URL of the document that holds them. A registry that `orbe registry build` wrote and that is served at `B/` has the template `B/{name}.json`.
 
@@ -115,7 +115,7 @@ A template is an `https://` URL with exactly one `{name}`. `{name}` starts its l
 }
 ```
 
-`name` is the registry's name and `homepage` its page, absent when `registry.jsonc` has none. `items` has one row per record, sorted by name and then by version, oldest first. Every row has a `version`. `description` and `categories` are absent when the item has none. `url` is `<name>@<version>.json`, relative to the index's URL. `sha256` is the lowercase hex SHA-256 of the record's bytes, and `bytes` is their count.
+`name` is the registry's name and `homepage` its page, absent when `registry.jsonc` has none. `items` has one row per record, sorted by name and then by version, oldest first. Every row has a `version`. `description` and `categories` are absent when the item has none. A part row may also carry `maker` and `number`, from the part file's `real` fields, and leaves a field out when the part names none. A Block row carries neither. `url` is `<name>@<version>.json`, relative to the index's URL. `sha256` is the lowercase hex SHA-256 of the record's bytes, and `bytes` is their count.
 
 ## Records
 
@@ -152,7 +152,7 @@ A part record is what `orbe part --json` prints, changed in exactly these ways:
 
 Every other field keeps its name and its value. `orbe part --json` stays snake case. A test converts every catalog part both ways under this mapping.
 
-**A Block** adds `board`, the part its firmware runs on. `registryDependencies` lists every part the scene runs, a board's own parts included, at the versions those parts have in the same build. The build checks that each one is there. It does not run the Block's tests. In this repo, `scripts/check.sh` runs every Block's tests against the parts of the same commit, which is what the official registry is built from. `orbe add` writes each file except `block.jsonc` to the project at its `path`, including `README.md`, then copies its parts.
+**A Block** adds `board`, the part its firmware runs on. `registryDependencies` lists every part the scene runs, a board's own parts included, at the versions those parts have in the same build. The build checks that each one is there. It does not run the Block's tests. In this repo, `scripts/check.sh` runs every Block's tests against the parts of the same commit, which is what the official registry is built from. `orbe add` writes each file except `block.jsonc` to the project at its `path`, including `README.md`, then downloads the parts its scene names into `parts/<id>/`.
 
 ### Absent fields and null
 
@@ -176,7 +176,7 @@ In the index and in a record, `$schema` names the schema file beside it, for edi
 TLS to the registry's host is the trust root. The index is not signed. Its hashes tie each record to the index, and each record's hashes tie its files to it. A client that installs an item does this:
 
 1. Fetch the index from the template with `{name}` replaced by `index`. Refuse a `format` it does not know. Reject the index if two rows share a name and version.
-2. Pick the row. A lock line pins its version. Otherwise take the highest version of the name. Require the row's `url` to be `<name>@<version>.json`.
+2. Pick the row. Take the highest version of the name. `orbe add <id>@<version>` is a usage error, and the hint is the bare id. Require the row's `url` to be `<name>@<version>.json`.
 3. Fetch the record from the row's `url`, resolved against the index's URL. Verify its size and SHA-256 against the row before parsing it.
 4. Require the record's `name`, `type` and `version` to equal the row's, and its `format` to be one it knows.
 5. Reject the record if two entries of `files` share a path, or if a path is empty or absolute, or holds an empty, `.` or `..` segment, a backslash, a control character or one of `:*?"<>|`, a segment that ends in a dot or a space, or a segment whose name before its first dot is a reserved device name. Reject two paths that are equal after case folding.
@@ -199,11 +199,9 @@ TLS to the registry's host is the trust root. The index is not signed. Its hashe
 
 ## Where a copy comes from
 
-`orbe add` copies a part from the catalog built into this `orbe` into `parts/<id>/`. The project owns that folder. `@<registry>/<id>` is refused: this version reads the official catalog only. A client maps a registry name, such as `@orbefab`, to a template through `registries.json` when it fetches, so a registry that moves changes one line of config.
+`orbe add <id>` downloads the latest version of that part or Block from `@orbefab` and writes it into the project. A part goes to `parts/<id>/`, and the parts it is built from go to `parts/<id>/parts/<dep>/`. A Block writes its scene, firmware, tests and README, and the parts its scene names, the same way. The project owns those copies. `orbe` reads them as they are and does not compare them to the registry. `@<registry>/<id>` is refused: this orbe reads `@orbefab` only. `orbe check`, `orbe open`, `orbe test` and `orbe show` never use the network.
 
 ## Not in this version
 
-- `orbe add @<registry>/<id>` from a registry: read `registries.json`, then follow [Verify what you fetch](#verify-what-you-fetch) and write the copy.
-- `orbe search --refresh`: search registry indexes instead of the catalog built into `orbe`.
 - Running a Block's tests during the build. `orbe test` checks those. The build runs the same check as `orbe check` on every Block scene, and on every part up to the values a user's scene sets, as [What the build checks](#what-the-build-checks) says.
 - A part or Block that uses a part from another registry. The dependency grammar has room for it, and the build refuses it today.

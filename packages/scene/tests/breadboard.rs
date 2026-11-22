@@ -25,12 +25,15 @@ fn each_block_on_its_breadboard_runs_the_netlist_of_its_circuit_wired_directly()
         "nano-light-comparator",
         "uno-button-led",
     ] {
-        let dir = tempfile::tempdir().unwrap();
-        common::copy_dir(&common::repo().join("blocks").join(block), dir.path());
-        let on_breadboard = read(dir.path());
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("blocks").join(block);
+        common::copy_dir(&common::repo().join("blocks").join(block), &dir);
+        std::os::unix::fs::symlink(common::repo().join("parts"), root.path().join("parts"))
+            .unwrap();
+        let on_breadboard = read(&dir);
         let wired = common::fixture("wired").join(format!("{block}.jsonc"));
-        fs::copy(&wired, dir.path().join("scene.jsonc")).unwrap();
-        let direct = read(dir.path());
+        fs::copy(&wired, dir.join("scene.jsonc")).unwrap();
+        let direct = read(&dir);
         assert!(
             on_breadboard.json == direct.json,
             "{block}: the netlists differ"

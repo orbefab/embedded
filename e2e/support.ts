@@ -197,7 +197,7 @@ export interface OrbeEnvelope {
   state?: string;
   t_ps?: number;
   error?: { code?: string; message?: string; hint?: string };
-  data?: { url?: string; value?: { i: number; on: boolean; [key: string]: unknown }; parts?: { name: string }[] };
+  data?: { url?: string; value?: { i: number; on: boolean; [key: string]: unknown }; parts?: { id: string }[] };
 }
 
 export function orbeJson(binary: string, args: string[], env: NodeJS.ProcessEnv = process.env): OrbeEnvelope {

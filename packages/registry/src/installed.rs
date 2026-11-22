@@ -31,14 +31,14 @@ pub(crate) fn refusal(
     blocks: &BTreeMap<String, Folder>,
     cards: &[Card],
 ) -> Option<Refusal> {
-    let project = project_files(parts);
     let mut read = Vec::new();
     for card in cards.iter().filter(|card| parts.contains_key(&card.name)) {
-        let placed = orbe_scene::read_placed(&part_project(&project, card), Path::new(SCENE), true);
+        let placed =
+            orbe_scene::read_placed(&part_project(parts, cards, card), Path::new(SCENE), true);
         read.push((Item::Part, placed));
     }
     for (id, folder) in blocks {
-        let files = block_project(&project, folder);
+        let files = block_project(parts, cards, folder);
         let placed = orbe_scene::read_placed(&files, Path::new(SCENE), false);
         read.push((Item::Block(id), placed));
     }
@@ -80,39 +80,138 @@ pub(crate) fn refusal(
 
 const SCENE: &str = "scene.jsonc";
 
-fn project_files(parts: &BTreeMap<String, Folder>) -> BTreeMap<PathBuf, Vec<u8>> {
+/// The project with a scene that places the part and sets nothing. The part's own files are
+/// `parts/<id>/`, and each part it uses is nested one folder further down.
+fn part_project(parts: &BTreeMap<String, Folder>, cards: &[Card], card: &Card) -> Files {
     let mut files = BTreeMap::new();
-    for (id, folder) in parts {
-        for (rel, bytes) in folder {
-            files.insert(PathBuf::from(format!("parts/{id}/{rel}")), bytes.clone());
-        }
-    }
-    files
-}
-
-/// The project with a scene that places the part and sets nothing.
-fn part_project(project: &BTreeMap<PathBuf, Vec<u8>>, card: &Card) -> Files {
+    let mut stack = Vec::new();
+    nest(
+        &mut files,
+        PathBuf::from("parts").join(&card.name),
+        &card.name,
+        parts,
+        cards,
+        &mut stack,
+    );
     let scene = json!({
         "format": current_format(),
         "parts": { "r1": { "type": card.name } },
     });
     let mut text = serde_json::to_string_pretty(&scene).unwrap();
     text.push('\n');
-    let mut files = project.clone();
     files.insert(PathBuf::from(SCENE), text.into_bytes());
     Files::memory(files)
 }
 
-/// The project an install of the Block makes: the part folders and the Block's files.
-fn block_project(project: &BTreeMap<PathBuf, Vec<u8>>, folder: &Folder) -> Files {
-    let mut files = project.clone();
+/// The project an install of the Block makes: each part the scene names at `parts/<id>/`,
+/// with that part's own uses nested inside it, and the Block's files except `block.jsonc`.
+fn block_project(parts: &BTreeMap<String, Folder>, cards: &[Card], folder: &Folder) -> Files {
+    let mut files = BTreeMap::new();
     for (rel, bytes) in folder {
-        if rel == "block.jsonc" || rel == "parts.lock" || rel.starts_with("parts/") {
+        if rel == "block.jsonc" || rel.starts_with("parts/") {
             continue;
         }
         files.insert(PathBuf::from(rel), bytes.clone());
     }
+    if let Some(scene) = folder.get("scene.jsonc") {
+        for id in scene_part_ids(scene) {
+            let mut stack = Vec::new();
+            nest(
+                &mut files,
+                PathBuf::from("parts").join(&id),
+                &id,
+                parts,
+                cards,
+                &mut stack,
+            );
+        }
+    }
     Files::memory(files)
+}
+
+fn nest(
+    files: &mut BTreeMap<PathBuf, Vec<u8>>,
+    dest: PathBuf,
+    id: &str,
+    parts: &BTreeMap<String, Folder>,
+    cards: &[Card],
+    stack: &mut Vec<String>,
+) {
+    if stack.iter().any(|seen| seen == id) {
+        return;
+    }
+    let Some(folder) = parts.get(id) else {
+        return;
+    };
+    for (rel, bytes) in folder {
+        files.insert(dest.join(rel), bytes.clone());
+    }
+    let mut deps: Vec<String> = cards
+        .iter()
+        .find(|card| card.name == id)
+        .map(|card| card.uses.keys().cloned().collect())
+        .unwrap_or_default();
+    for child in child_ids(folder) {
+        if !deps.iter().any(|seen| seen == &child) {
+            deps.push(child);
+        }
+    }
+    stack.push(id.to_string());
+    for dep in deps {
+        nest(
+            files,
+            dest.join("parts").join(&dep),
+            &dep,
+            parts,
+            cards,
+            stack,
+        );
+    }
+    stack.pop();
+}
+
+/// Catalog ids a part file's `parts` name. `uses` lists the same ids when the part was
+/// published; a part that only names them here still nests those copies.
+fn child_ids(folder: &Folder) -> Vec<String> {
+    let Some(bytes) = folder.get("part.jsonc") else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(bytes);
+    let Ok(value) = jsonc_parser::parse_to_serde_value::<serde_json::Value>(
+        &text,
+        &jsonc_parser::ParseOptions::default(),
+    ) else {
+        return Vec::new();
+    };
+    let Some(parts) = value.get("parts").and_then(|node| node.as_object()) else {
+        return Vec::new();
+    };
+    parts
+        .values()
+        .filter_map(|spec| spec.get("type").and_then(|node| node.as_str()))
+        .filter(|ty| orbe_scene::is_id(ty))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Ids the scene names, skipping a `./` or `../` path.
+fn scene_part_ids(bytes: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(bytes);
+    let Ok(value) = jsonc_parser::parse_to_serde_value::<serde_json::Value>(
+        &text,
+        &jsonc_parser::ParseOptions::default(),
+    ) else {
+        return Vec::new();
+    };
+    let Some(parts) = value.get("parts").and_then(|node| node.as_object()) else {
+        return Vec::new();
+    };
+    parts
+        .values()
+        .filter_map(|spec| spec.get("type").and_then(|node| node.as_str()))
+        .filter(|ty| !ty.starts_with('.') && !ty.starts_with('@'))
+        .map(str::to_string)
+        .collect()
 }
 
 fn current_format() -> u32 {
@@ -197,7 +296,7 @@ fn name_block(id: &str, found: Vec<Diagnostic>) -> Vec<Diagnostic> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SCENE, part_project, project_files, within};
+    use super::{SCENE, part_project, within};
     use std::path::{Path, PathBuf};
 
     /// The catalog's ESP32-S3 parts, probed as the build probes them. The chip's `rom` default
@@ -207,30 +306,32 @@ mod tests {
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let parts = crate::folders(&repo, "parts").unwrap();
         let cards = orbe_scene::cards(&parts).unwrap();
-        let project = project_files(&parts);
-        for (id, rom) in [
-            ("esp32s3-qfn56", "r1.rom"),
-            ("esp32s3-wroom-1-n16r8", "r1.u1.rom"),
-            ("esp32s3-devkitc-1", "r1.mod.u1.rom"),
+        for (id, rom, file) in [
+            ("esp32s3-qfn56", "r1.rom", "parts/esp32s3-qfn56/part.jsonc"),
+            (
+                "esp32s3-wroom-1-n16r8",
+                "r1.u1.rom",
+                "parts/esp32s3-wroom-1-n16r8/parts/esp32s3-qfn56/part.jsonc",
+            ),
+            (
+                "esp32s3-devkitc-1",
+                "r1.mod.u1.rom",
+                "parts/esp32s3-devkitc-1/parts/esp32s3-wroom-1-n16r8/parts/esp32s3-qfn56/part.jsonc",
+            ),
         ] {
             let card = cards.iter().find(|card| card.name == id).unwrap();
-            let placed =
-                orbe_scene::read_placed(&part_project(&project, card), Path::new(SCENE), true);
+            let placed = orbe_scene::read_placed(
+                &part_project(&parts, &cards, card),
+                Path::new(SCENE),
+                true,
+            );
             assert_eq!(placed.findings, [], "{id}");
             let read: Vec<(&str, &str, &str)> = placed
                 .file_paths
                 .iter()
                 .map(|p| (p.file.as_str(), p.site.as_str(), p.path.as_str()))
                 .collect();
-            assert_eq!(
-                read,
-                [(
-                    "parts/esp32s3-qfn56/part.jsonc",
-                    rom,
-                    "esp32s3_rev0_rom.elf"
-                )],
-                "{id}"
-            );
+            assert_eq!(read, [(file, rom, "esp32s3_rev0_rom.elf")], "{id}");
         }
     }
 

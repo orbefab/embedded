@@ -317,7 +317,9 @@ fn clock_project(clock: Option<&str>) -> tempfile::TempDir {
         fs::read_to_string(common::repo().join("parts/atmega328p-tqfp32/part.jsonc")).unwrap();
     let firmware = "\"firmware\": { \"file\": \"hex\", \"as\": \"text\", \"required\": true, \"sets\": \"/firmware\" }";
     assert!(catalog.contains(firmware));
-    let version = orbe_scene::card("atmega328p-tqfp32").unwrap().version;
+    let version = orbe_scene::card(&common::repo().join("parts"), "atmega328p-tqfp32")
+        .unwrap()
+        .version;
     let part = catalog
         .replacen(
             &format!("\"part\": \"atmega328p-tqfp32\", \"version\": \"{version}\", "),
@@ -907,7 +909,7 @@ fn every_catalog_part_file_reads_without_a_finding() {
         catalog.len(),
         "the project holds every catalog part"
     );
-    let summaries = orbe_scene::catalog_cards();
+    let summaries = orbe_scene::catalog_cards(&common::repo().join("parts"));
     let parts: String = ids
         .iter()
         .enumerate()

@@ -43,21 +43,21 @@ A command does what it names and nothing in the background. Where `orbe` could g
 
 ## Catalog and projects (Nov 4 2026)
 - The catalog is a registry: a static index plus one archive per part version, shaped like shadcn's registry. `orbe` reads it itself.
-- `orbe add <id>…` copies catalog parts, and the parts they use, into the project's `parts/<id>/`. A project holds one folder per id. `id@version` copies that catalog version when the catalog has it. A version the catalog does not have is `unknown_part`. A folder already at `parts/<id>/` is `part_exists`: the command writes nothing, and the hint says to remove it and run the same `orbe add`.
-- Only `orbe add` copies or fetches parts. `orbe open` and `orbe test` never do. A missing folder is `part_missing`, and the hint is the `orbe add` command that copies it.
-- The copy is the project's. Editing it is the user's, and `orbe check`, `orbe open` and `orbe test` read `parts/<id>/` as it is. They do not compare it to the catalog. The hash of a part's published files is the folder hash a registry record stores. Build output in the folder is not one of those files. A fresh clone holds every part it copied and can check them offline.
+- `orbe add <id>…` downloads the latest parts, and the parts they use, into the project's `parts/<id>/`. A part a board is built from is nested at `parts/<board>/parts/<dep>/`. `orbe add` installs the highest version. `id@version` is a usage error, and the hint is the bare id. A folder already at `parts/<id>/` for an id the command names is `part_exists`: the command writes nothing, and the hint says to remove it and run the same `orbe add`.
+- `orbe add`, `orbe search`, `orbe part` and `orbe blocks` fetch. `orbe check`, `orbe open`, `orbe test` and `orbe show` never do. A missing folder is `part_missing`, and the hint is the `orbe add` command that downloads it.
+- The copy is the project's. Editing it is the user's, and `orbe check`, `orbe open` and `orbe test` read `parts/<id>/` as it is. They do not compare it to the registry. The hash of a part's published files is the folder hash a registry record stores. Build output in the folder is not one of those files. A fresh clone holds every part it downloaded and can check them offline.
 - Parts from other registries are named `@<registry>/<id>`. The first release reads the official registry only.
 - 3D models live in plain git, in the part's folder.
 
 ## Blocks (Nov 8 2026)
 - A Block is a small circuit that works: a board, parts, firmware and tests. `blocks/<id>/` holds `block.jsonc`, `scene.jsonc`, `firmware/`, `tests/` and `README.md`. It replaces `examples/`.
 - `block.jsonc` holds what a Block's catalog card needs from the Block itself: `block` (its id, the folder's name), `version`, `title`, `summary`, `board`, `tags` and `license`. It does not list parts, since the scene names them.
-- A Block commits no part copies. A folder that holds `block.jsonc` is a Block, and the reader resolves each catalog id its scene names from the catalog built into the same `orbe`. A Block in this repo then always runs the parts of the commit it sits in, so a part change that breaks a Block fails that commit's checks.
+- A Block commits no part copies. A folder that holds `block.jsonc` is a Block, and the reader resolves each id its scene names from the `parts/` beside `blocks/`. A Block in this repo then always runs the parts of the commit it sits in, so a part change that breaks a Block fails that commit's checks.
 - A Block is self-contained. Its firmware sits in its own `firmware/` with the sketch it was built from and the licences that image carries, and its scene names it as `firmware/<name>.hex`, so the path works in the Block and after it is installed.
 - `orbe add <block>` installs a Block into a project. It copies the parts the scene names into `parts/`, as `orbe add <part>` does, then writes `scene.jsonc`, `firmware/`, `tests/` and `README.md`. A part folder already there is `part_exists` and the command writes nothing. `block.jsonc` stays behind, so the installed project is not itself a Block.
-- `orbe add` never merges a Block into a scene. A project that already holds a different `scene.jsonc`, or any other file the Block brings, is refused before anything is written, and the hint installs into an empty folder. A file already there with the Block's bytes is kept, so the same install run again finishes or changes nothing.
+- `orbe add` never merges a Block into a scene. A project that already holds a different `scene.jsonc`, or any other file the Block brings, is refused before anything is written, and the hint installs into an empty folder. A file already there with the Block's bytes is kept when the part folders are not there yet. When those folders are already there, the command is `part_exists` and names the folders to remove, then the same `orbe add`.
 - Parts and Blocks share `orbe add`, so a Block id is never a catalog part id. A test fails when one is both, and one word names one of them.
-- A Block has a version, like a part. `orbe add <block>` installs the one version built into `orbe`. Naming a version is refused, and the hint is that command with the same `-C`.
+- A Block has a version, like a part. `orbe add <block>` installs the latest version. Naming a version is refused, and the hint is the bare id.
 - A Block's registry record lists every part its scene runs, at the versions in the same build. The build does not run the Block's tests. In this repo `scripts/check.sh` runs them against the parts of the same commit.
 
 ## Registry (Nov 8 2026)
@@ -72,7 +72,7 @@ A command does what it names and nothing in the background. Where `orbe` could g
 - A dependency is `[@<registry>/]<id>@<version>`, though the build writes only bare ones today, so a parser written now reads cross-registry dependencies later.
 - The URL template has one `{name}`, in its last path segment. A client fills it only with `index` and takes every other URL from the index and the records.
 - Records stay camel case, as shadcn's are, and `orbe part --json` stays snake case. [registry.md](registry.md) gives the exact mapping and a test converts every catalog part both ways.
-- A project holds one folder per part id, `parts/<id>/`. A registry's name, such as `@orbefab`, is what a client maps to a URL template, so a registry that moves changes one line of config. [registry.md](registry.md) is the client contract. This version copies only the catalog built into `orbe`.
+- A project holds one folder per part id it adds, `parts/<id>/`, and nests the parts that part is built from inside it. `orbe add` downloads the latest version from `@orbefab` at `https://orbefab.com/embedded/r/{name}.json`. [registry.md](registry.md) is the client contract.
 
 ## Scenes (Nov 4 2026)
 - A scene is its own kind of file, usually `scene.jsonc`. Its keys are `format`, `$schema`, `parts`, `wires`, `layout`, `ground`, `nets`, `sim` and `world`. It has no `pins` or `params`, and no file can use a scene as a part.
@@ -82,7 +82,7 @@ A command does what it names and nothing in the background. Where `orbe` could g
 - `layout` sits in the parent, keyed by name, with `{ "at": [x, y, z], "rotate": [rx, ry, rz] }` in mm and degrees. The rotation is about the parent's fixed X, then Y, then Z, URDF's order. In a scene, `on` plugs a part into a board's holes in place of `at`, as [Breadboards](#breadboards-nov-8-2026) says. `mate` is reserved for later.
 - A net takes the name of its smallest label. A hole never names a net. The ground net is named `GND` when the scene's `nets` does not give that name to another net. Otherwise it keeps the name it already has, such as `nano__GND` when `nets` uses `GND` for another net, or the name the scene gave this net. A scene can name nets in `nets`, such as `"GND": "nano.GND"`.
 - Nested names flatten for the engine by joining with `__`, so `@nano.D13` is the net `nano__D13`. Names may not contain `__`.
-- A viewer edit goes to the file that holds what it changes. If that file is used more than once, the viewer asks first. Sealed parts refuse edits. A part with no position is placed by the viewer for drawing only, and nothing is written until a person drags it.
+- A viewer edit goes to the file that holds what it changes. If that file is used more than once, the viewer asks first. A part with no position is placed by the viewer for drawing only, and nothing is written until a person drags it.
 - Two hashes: one over every project file read, which guards writes, and one over the netlist, which says whether the simulation is current.
 - The ESP32-S3 takes one file param per flash image, `partitions` and `app`. Its ROM is a file in the chip part's folder, named by a file param's `default`.
 

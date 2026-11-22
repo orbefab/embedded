@@ -95,6 +95,14 @@ impl Serialize for Dependency {
     }
 }
 
+impl<'de> Deserialize<'de> for Dependency {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Dependency, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        Dependency::parse(&text)
+            .ok_or_else(|| serde::de::Error::custom(format!("`{text}` is not <id>@<version>")))
+    }
+}
+
 impl JsonSchema for Dependency {
     fn schema_name() -> Cow<'static, str> {
         "Dependency".into()
@@ -110,7 +118,7 @@ impl JsonSchema for Dependency {
 }
 
 /// One record. `type` says which of the two it is.
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 #[schemars(title = "Registry item")]
 pub enum Item {
@@ -119,7 +127,7 @@ pub enum Item {
 }
 
 /// The fields every record has, whatever its type.
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Head {
     /// Where an editor finds the record's schema: `item.schema.json`, beside the record.
@@ -133,11 +141,11 @@ pub struct Head {
     #[schemars(length(min = 1))]
     pub title: String,
     /// The item file's `summary`. Absent when it has none.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "String")]
     pub description: Option<String>,
     /// The item file's `tags`. Absent when it has none.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Vec<String>")]
     pub categories: Option<Vec<String>>,
     /// The item's SPDX expression.
@@ -154,7 +162,7 @@ pub struct Head {
 }
 
 /// A part at one version: what its page shows and what `orbe add` copies.
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PartItem {
     #[serde(flatten)]
@@ -165,29 +173,29 @@ pub struct PartItem {
     pub ratings: Vec<Rating>,
     pub not_simulated: Vec<NotSimulated>,
     /// The part file's `docs`. A doc with no `url` is a name with no link.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Vec<Doc>")]
     pub docs: Option<Vec<Doc>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Vec<Buy>")]
     pub buy: Option<Vec<Buy>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Threshold")]
     pub lit: Option<Threshold>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Threshold")]
     pub dim: Option<Threshold>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pressable: bool,
     /// A board's holes, such as a breadboard's: how deep each is in mm, and the holes each
     /// strip joins. Each hole is one of `pins`.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Holes")]
     pub holes: Option<Holes>,
 }
 
 /// A Block at one version: a board, parts, firmware and tests that work together.
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockItem {
     #[serde(flatten)]
@@ -352,6 +360,10 @@ impl Item {
     /// The index row for this record, served as `bytes`.
     pub fn row(&self, bytes: &[u8]) -> Row {
         let head = self.head();
+        let (maker, number) = match self {
+            Item::Part(part) => (part.real.maker.clone(), part.real.number.clone()),
+            Item::Block(_) => (None, None),
+        };
         Row {
             name: head.name.clone(),
             kind: self.kind(),
@@ -359,6 +371,8 @@ impl Item {
             title: head.title.clone(),
             description: head.description.clone(),
             categories: head.categories.clone(),
+            maker,
+            number,
             url: record_url(&head.name, &head.version),
             sha256: crate::sha256(bytes),
             bytes: bytes.len() as u64,
@@ -428,6 +442,14 @@ pub struct Row {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[schemars(with = "Vec<String>")]
     pub categories: Option<Vec<String>>,
+    /// The part's maker. Absent on a Block, and on a part that names none.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[schemars(with = "String")]
+    pub maker: Option<String>,
+    /// The part's number. Absent on a Block, and on a part that names none.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[schemars(with = "String")]
+    pub number: Option<String>,
     /// The record's URL relative to the index's: `<name>@<version>.json`.
     #[schemars(pattern(pattern::RECORD_URL))]
     pub url: String,

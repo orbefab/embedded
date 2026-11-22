@@ -97,9 +97,7 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
             "{id}: tags"
         );
 
-        for copy in ["parts", "parts.lock"] {
-            assert!(!dir.join(copy).exists(), "{id} has {copy}");
-        }
+        assert!(!dir.join("parts").exists(), "{id} has parts");
         assert!(dir.join("README.md").is_file(), "{id}: README.md");
         let tests = fs::read_dir(dir.join("tests")).unwrap().count();
         assert!(tests > 0, "{id}: tests/");
@@ -315,7 +313,7 @@ fn a_block_names_an_id_the_catalog_lacks() {
     assert_eq!(
         findings(dir.path()),
         [
-            "part_missing: part `led-5mn` is not in the catalog this Block reads | did you mean `led-5mm`? the catalog has no part named `led-5mn`"
+            "part_missing: part `led-5mn` is not in the catalog this Block reads | the catalog has no part named `led-5mn`"
         ]
     );
 }
@@ -329,7 +327,7 @@ fn a_block_that_holds_a_lock_is_refused() {
     );
     assert_eq!(
         findings(dir.path())[0],
-        "scene.role: this folder holds block.jsonc, so it is a Block, which reads its parts from the catalog built into orbe, and it also holds `parts` | remove `parts`, or remove block.jsonc to make the folder a project that reads its own copies"
+        "scene.role: this folder holds block.jsonc, so it is a Block, which reads the parts/ beside blocks/, and it also holds `parts` | remove `parts`, or remove block.jsonc to make the folder a project that reads its own copies"
     );
 }
 
@@ -350,7 +348,7 @@ fn each_block_file_names_its_own_licence() {
             }
         }
     }
-    let parts = orbe_scene::catalog_cards();
+    let parts = orbe_scene::catalog_cards(&common::repo().join("parts"));
     for dir in block_dirs() {
         let id = dir.file_name().unwrap().to_string_lossy().into_owned();
         let mut files = BTreeMap::new();

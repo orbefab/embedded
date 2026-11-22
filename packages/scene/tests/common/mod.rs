@@ -5,9 +5,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
-use orbe_scene::{REGISTRY, folder_hash};
 use tempfile::TempDir;
 
 pub fn repo() -> PathBuf {
@@ -19,6 +17,67 @@ pub fn repo() -> PathBuf {
 
 pub fn fixture(name: &str) -> PathBuf {
     repo().join("packages/scene/tests/fixtures").join(name)
+}
+
+/// Copies each part named in `dest`'s `uses` to `dest/parts/<id>/`, then the same for those.
+/// A cycle is skipped. This is the layout `orbe add` writes.
+pub fn nest_uses(catalog: &Path, dest: &Path, stack: &mut Vec<String>) {
+    let Ok(text) = fs::read_to_string(dest.join("part.jsonc")) else {
+        return;
+    };
+    for dep in use_ids(&text) {
+        if stack.iter().any(|seen| seen == &dep) {
+            continue;
+        }
+        let from = catalog.join(&dep);
+        if !from.join("part.jsonc").is_file() {
+            continue;
+        }
+        let child = dest.join("parts").join(&dep);
+        if !child.join("part.jsonc").is_file() {
+            copy_dir(&from, &child);
+        }
+        stack.push(dep);
+        nest_uses(catalog, &child, stack);
+        stack.pop();
+    }
+}
+
+/// The ids in a part file's `uses` object. A string is a key when `:` follows it.
+fn use_ids(text: &str) -> Vec<String> {
+    let Some(at) = text.find("\"uses\"") else {
+        return Vec::new();
+    };
+    let rest = &text[at + "\"uses\"".len()..];
+    let Some(start) = rest.find('{') else {
+        return Vec::new();
+    };
+    let body = &rest[start + 1..];
+    let mut ids = Vec::new();
+    let mut depth = 1usize;
+    let mut i = 0usize;
+    let bytes = body.as_bytes();
+    while i < bytes.len() && depth > 0 {
+        match bytes[i] {
+            b'{' => depth += 1,
+            b'}' => depth -= 1,
+            b'"' if depth == 1 => {
+                let Some(end) = body[i + 1..].find('"') else {
+                    break;
+                };
+                let key = &body[i + 1..i + 1 + end];
+                let after = body[i + 1 + end + 1..].trim_start();
+                if after.starts_with(':') {
+                    ids.push(key.to_string());
+                }
+                i += end + 2;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    ids
 }
 
 /// The `button.ino.hex` the first target builds: the Block's own build of the same sketch.
@@ -37,52 +96,6 @@ pub fn copy_dir(from: &Path, to: &Path) {
             fs::copy(&path, &target).unwrap();
         }
     }
-}
-
-/// The ids a project's `parts.lock` lists.
-pub fn locked_ids(project: &Path) -> Vec<String> {
-    fs::read_to_string(project.join("parts.lock"))
-        .unwrap()
-        .lines()
-        .filter_map(|l| l.split_whitespace().next())
-        .map(str::to_string)
-        .collect()
-}
-
-/// The `parts.lock` line `orbe add` will write for the catalog copy at `parts/<id>/`.
-pub fn lock_line(project: &Path, id: &str) -> String {
-    line_for(&project.join("parts").join(id), id)
-}
-
-fn line_for(folder: &Path, id: &str) -> String {
-    let text = fs::read_to_string(folder.join("part.jsonc")).unwrap();
-    let version = text
-        .split("\"version\": \"")
-        .nth(1)
-        .and_then(|s| s.split('"').next())
-        .unwrap();
-    format!("{id} {version} {REGISTRY} {}", folder_hash(folder).unwrap())
-}
-
-/// The catalog's `parts.lock` text. A process hashes each part once.
-fn catalog_lock() -> &'static str {
-    static LOCK: OnceLock<String> = OnceLock::new();
-    LOCK.get_or_init(|| compute_catalog_lock(&repo().join("parts")))
-}
-
-fn compute_catalog_lock(catalog: &Path) -> String {
-    let mut ids: Vec<String> = fs::read_dir(catalog)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-        .filter(|id| catalog.join(id).join("part.jsonc").is_file())
-        .collect();
-    ids.sort();
-    let mut lines = String::new();
-    for id in &ids {
-        lines.push_str(&line_for(&catalog.join(id), id));
-        lines.push('\n');
-    }
-    lines
 }
 
 /// True when this process can read a file with mode 000. Root can, so a chmod test
@@ -104,8 +117,16 @@ pub fn project(name: &str) -> TempDir {
         let id = id.unwrap().file_name();
         let from = catalog.join(&id);
         if from.join("part.jsonc").is_file() {
-            copy_dir(&from, &dir.path().join("parts").join(id));
+            copy_dir(&from, &dir.path().join("parts").join(&id));
         }
+    }
+    let parts = dir.path().join("parts");
+    let ids: Vec<_> = fs::read_dir(&parts)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    for id in ids {
+        nest_uses(&catalog, &parts.join(id), &mut Vec::new());
     }
     fs::create_dir_all(dir.path().join("build")).unwrap();
     fs::copy(firmware(), dir.path().join("build/button.ino.hex")).unwrap();

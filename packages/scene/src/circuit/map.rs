@@ -33,6 +33,8 @@ pub struct MapPart {
     pub engine: Vec<EnginePart>,
     /// The part file's `readings`, such as an LED's `lit`.
     pub readings: BTreeMap<String, Reading>,
+    /// Hole pin names, when this part is a board other parts plug into.
+    pub holes: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -72,6 +74,9 @@ impl Circuit<'_> {
             if let Some(file) = self.part(inst) {
                 part.ty.clone_from(&file.label);
                 part.readings = self.readings(file.file);
+                if let Some(board) = &file.holes {
+                    part.holes = board.strips.iter().flatten().cloned().collect();
+                }
                 for pin in &file.pins {
                     let net = self.pin_net(inst, &pin.name, nets);
                     part.pins.insert(pin.name.clone(), net);

@@ -87,7 +87,7 @@ pub(crate) fn and_list(names: &[&str]) -> String {
 }
 
 /// "did you mean `x`? " when one is close, else "".
-pub(crate) fn did_you_mean<'a>(
+pub fn did_you_mean<'a>(
     word: &str,
     candidates: impl IntoIterator<Item = &'a str>,
     prefix: &str,

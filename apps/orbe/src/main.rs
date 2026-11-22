@@ -1,6 +1,7 @@
 //! `orbe`, the CLI. `orbe check` type-checks a scene, and `orbe lint` checks it, then warns of
-//! what is likely wrong or unclear. `orbe nets` prints each net and the pins on it. `orbe add` copies catalog parts, or installs a Block. `orbe part` prints one
-//! catalog part or one Block, `orbe search` finds either, and `orbe blocks` lists the Blocks.
+//! what is likely wrong or unclear. `orbe nets` prints each net and the pins on it. `orbe add`
+//! downloads a part or a Block from the registry and writes it into the project. `orbe part`
+//! prints one part or one Block, `orbe search` finds either, and `orbe blocks` lists the Blocks.
 //! `orbe registry build` turns a folder of parts and
 //! Blocks into a registry.
 //! `orbe test` runs each test file's live commands in a fresh in-process session. The live
@@ -10,6 +11,7 @@
 #[cfg(unix)]
 mod live;
 mod part;
+mod registry_client;
 mod skills;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,8 +21,6 @@ use std::process::ExitCode;
 
 use clap::{Arg, ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand};
 use orbe_scene::{Diagnostic, Files};
-#[cfg(unix)]
-use orbe_scene::{Reply, Request};
 use orbe_session::test::{self, Report};
 use serde_json::{Value, json};
 
@@ -67,11 +67,11 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Copies catalog parts into `parts/<id>/`, or installs a Block by copying its parts
-    /// first, then writing its scene, firmware, tests and README. The project owns the copy.
+    /// Downloads a part or a Block from the registry and writes it into the project.
+    /// The project owns the copy. A part's dependencies are written inside its folder.
     #[command(display_order = 4)]
     Add {
-        /// Part ids, or one Block id. A part's version is `id@<version>`.
+        /// Part ids, or one Block id. The latest version is installed.
         ids: Vec<String>,
         /// The project folder, the one with scene.jsonc or parts/. The current folder by default.
         #[arg(short = 'C', value_name = "DIR", allow_hyphen_values = true)]
@@ -80,27 +80,27 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Prints one catalog part, or one Block.
+    /// Prints one part, or one Block, from the registry.
     #[command(display_order = 5)]
     Part {
-        /// Catalog id, such as `led-5mm`, or a Block id, such as `nano-led-fade`. A whole word of exactly one id, such as `1n4007`, names it.
+        /// An id, such as `led-5mm`, or a Block id, such as `nano-led-fade`. A whole word of exactly one id, such as `1n4007`, names it.
         id: String,
         /// Print one JSON envelope instead of text.
         #[arg(long)]
         json: bool,
     },
-    /// Finds catalog parts and Blocks whose id, title, summary or tags hold every word.
-    /// A part also matches its maker and number. With no words, lists every part a scene
-    /// can place, grouped by its first category, then the Blocks.
+    /// Finds parts and Blocks in the registry whose id, title, summary or tags hold every word.
+    /// A part also matches its maker and number. With no words, lists every part, grouped by
+    /// its first category, then the Blocks.
     #[command(display_order = 6)]
     Search {
-        /// Words to match. Every word must appear. With no words, lists the catalog.
+        /// Words to match. Every word must appear. With no words, lists the registry.
         words: Vec<String>,
         /// Print one JSON envelope instead of text.
         #[arg(long)]
         json: bool,
     },
-    /// Lists the Blocks this orbe installs.
+    /// Lists the Blocks in the registry.
     #[command(display_order = 7)]
     Blocks {
         /// Print one JSON envelope instead of text.
@@ -799,17 +799,11 @@ fn nets(scene: &Path, json: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Breadboard holes, as `part.pin`, from the catalog card of each part that has holes.
+/// Breadboard holes, as `part.pin`, from each part the scene read that has holes.
 fn hole_pins(netlist: &orbe_scene::Netlist) -> BTreeSet<String> {
     let mut holes = BTreeSet::new();
     for (name, part) in &netlist.refs.parts {
-        let Some(card) = orbe_scene::card(&part.ty) else {
-            continue;
-        };
-        let Some(board) = &card.holes else {
-            continue;
-        };
-        for pin in board.strips.iter().flatten() {
+        for pin in &part.holes {
             holes.insert(format!("{name}.{pin}"));
         }
     }
@@ -937,108 +931,50 @@ fn invalid(scene: &Path, errors: Vec<Diagnostic>, json: bool) -> ExitCode {
 }
 
 fn show_part(id: &str, json: bool) -> ExitCode {
-    if let Some(card) = orbe_scene::card(id) {
-        return print_part(&card, json);
-    }
-    if let Some(block) = orbe_scene::builtin_block(id) {
-        return print_block(&block, json);
-    }
-    let matches = orbe_scene::ids_with_segment(id);
-    if matches.len() == 1 {
-        let only = &matches[0];
-        if let Some(card) = orbe_scene::card(only) {
-            return print_part(&card, json);
-        }
-        if let Some(block) = orbe_scene::builtin_block(only) {
-            return print_block(&block, json);
-        }
-    }
-    let names = if matches.len() > 1 {
-        matches
-    } else {
-        orbe_scene::near_names(id)
-    };
-    unknown_part(id, &names, json)
-}
-
-fn print_part(card: &orbe_scene::Card, json: bool) -> ExitCode {
-    if json {
-        print_json(&json!({ "ok": true, "data": card }));
-    } else {
-        print!("{}", part::text(card));
-    }
-    ExitCode::SUCCESS
-}
-
-fn print_block(card: &orbe_scene::BlockCard, json: bool) -> ExitCode {
-    if json {
-        print_json(&json!({ "ok": true, "data": card }));
-    } else {
-        print!("{}", part::block_text(card));
-    }
-    ExitCode::SUCCESS
-}
-
-fn unknown_part(id: &str, names: &[String], json: bool) -> ExitCode {
-    let message = format!("no Block or part named `{id}`");
-    let hint = if names.is_empty() {
-        "the catalog has no Block or part with that id".to_string()
-    } else {
-        let names = names
-            .iter()
-            .map(|name| format!("`{name}`"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("did you mean {names}?")
-    };
-    if json {
-        print_json(&json!({
-            "ok": false,
-            "error": { "code": "unknown_part", "message": message, "hint": hint }
-        }));
-    } else {
-        eprintln!("error[unknown_part]: {message}\n  hint: {hint}");
-    }
-    ExitCode::from(FAILED)
+    finish(registry_client::show_part(id), json)
 }
 
 fn search_parts(words: &[String], json: bool) -> ExitCode {
-    if words.is_empty() {
-        let groups = part::catalog_groups();
-        if json {
-            print_json(&json!({
-                "ok": true,
-                "data": {
-                    "groups": groups.iter().map(|(category, items)| json!({
-                        "category": category,
-                        "items": items.iter().map(|(id, title)| json!({ "id": id, "title": title })).collect::<Vec<_>>(),
-                    })).collect::<Vec<_>>(),
-                },
-            }));
-        } else {
-            print!("{}", part::catalog_text(&groups));
-        }
-        return ExitCode::SUCCESS;
-    }
-    let query = words.join(" ");
-    let found = orbe_scene::search(&query);
-    let blocks = orbe_scene::search_blocks(&query);
-    if json {
-        print_json(&json!({ "ok": true, "data": { "parts": found, "blocks": blocks } }));
-    } else {
-        print!("{}", part::search_text(&found, &blocks));
-    }
-    ExitCode::SUCCESS
+    finish(registry_client::search(words), json)
 }
 
 fn list_blocks(json: bool) -> ExitCode {
-    let found = orbe_scene::builtin_blocks();
-    if json {
-        print_json(&json!({ "ok": true, "data": { "blocks": found } }));
-    } else {
-        print!("{}", part::blocks_text(&found));
+    finish(registry_client::blocks(), json)
+}
+
+fn finish(outcome: registry_client::Outcome, json: bool) -> ExitCode {
+    match outcome {
+        registry_client::Outcome::Done(done) => {
+            if json {
+                print_json(&done.json);
+            } else {
+                print!("{}", done.text);
+            }
+            ExitCode::SUCCESS
+        }
+        registry_client::Outcome::Fail(fail) => {
+            if json {
+                let error = if fail.hint.is_empty() {
+                    json!({ "code": fail.code, "message": fail.message })
+                } else {
+                    json!({ "code": fail.code, "message": fail.message, "hint": fail.hint })
+                };
+                print_json(&json!({ "ok": false, "error": error }));
+            } else {
+                let mut lines = fail.message.lines();
+                let first = lines.next().unwrap_or("");
+                eprint!("error[{}]: {first}", fail.code);
+                for line in lines {
+                    eprint!("\n{line}");
+                }
+                if !fail.hint.is_empty() {
+                    eprint!("\n  hint: {}", fail.hint);
+                }
+                eprintln!();
+            }
+            ExitCode::from(fail.exit)
+        }
     }
-    ExitCode::SUCCESS
 }
 
 fn build_registry(src: &Path, out: &Path, previous: Option<&Path>, json: bool) -> ExitCode {
@@ -1086,39 +1022,8 @@ fn build_registry(src: &Path, out: &Path, previous: Option<&Path>, json: bool) -
     ExitCode::SUCCESS
 }
 
-#[cfg(unix)]
 fn add(dir: Option<&Path>, ids: Vec<String>, json: bool) -> ExitCode {
-    let request = Request { ids };
-    match orbe_scene::add_parts(dir, &request) {
-        Ok(reply) => print_reply(reply, json),
-        Err(error) => io_exit(&error.to_string(), json),
-    }
-}
-
-#[cfg(not(unix))]
-fn add(_dir: Option<&Path>, _ids: Vec<String>, json: bool) -> ExitCode {
-    let message = "`orbe add` needs Unix for now";
-    if json {
-        print_json(&json!({
-            "ok": false,
-            "error": { "code": "usage", "message": message }
-        }));
-    } else {
-        eprintln!("error[usage]: {message}");
-    }
-    ExitCode::from(USAGE)
-}
-
-#[cfg(unix)]
-fn print_reply(reply: Reply, json: bool) -> ExitCode {
-    if json {
-        print_json(&reply.json());
-    } else if reply.code() == USAGE {
-        eprintln!("{}", reply.text());
-    } else {
-        println!("{}", reply.text());
-    }
-    ExitCode::from(reply.code())
+    finish(registry_client::add(dir, &ids), json)
 }
 
 fn io_exit(message: &str, json: bool) -> ExitCode {

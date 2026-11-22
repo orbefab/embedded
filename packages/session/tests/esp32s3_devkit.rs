@@ -43,7 +43,10 @@ fn run(live: &mut Live, project: &Path, line: &str) -> Data {
     reply.data
 }
 
-/// The fixture plus every catalog part and a lock line for each.
+#[path = "../../scene/tests/common/mod.rs"]
+mod layout;
+
+/// The fixture plus every catalog part, with each part's own parts nested inside its folder.
 fn project() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     let root = repo();
@@ -59,7 +62,9 @@ fn project() -> tempfile::TempDir {
         .collect();
     ids.sort();
     for id in &ids {
-        copy_dir(&catalog.join(id), &dir.path().join("parts").join(id));
+        let dest = dir.path().join("parts").join(id);
+        copy_dir(&catalog.join(id), &dest);
+        layout::nest_uses(&catalog, &dest, &mut Vec::new());
     }
     dir
 }

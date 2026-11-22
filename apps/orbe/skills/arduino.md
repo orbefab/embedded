@@ -81,7 +81,25 @@ A Block's tests check its shipped behaviour, so a change to the firmware's timin
 
 ## The simulated Nano and Uno
 
-<!-- boards nano-board uno-board -->
+### `nano-board`
+
+- `nano-board`, Nano (CH340 clone), runs the ATmega328P-AU at 16 MHz.
+- These pins work: `D0` to `D13`, `RESET`, `GND`, `AREF`, `A0` to `A7`, and `5V`.
+- `3V3` is not simulated. It is the CH340G's 3.3 V output. The engine has no USB-serial chip, so the pin supplies nothing. A wire to it is a `not_simulated` error.
+- `VIN` is not simulated. It feeds the AMS1117, which has no model yet. The board runs from USB. A wire to it is a `not_simulated` error.
+- `D13` drives `led_l` through `r_l`, 1 kohm.
+
+### `uno-board`
+
+- `uno-board`, Uno R3 compatible board, runs the ATmega328P-PU at 16 MHz.
+- These pins work: `D0` to `D13`, `GND`, `AREF`, `SDA`, `SCL`, `IOREF`, `RESET`, `3V3`, `5V`, and `A0` to `A5`.
+- `SDA` and `A4` are one net.
+- `SCL` and `A5` are one net.
+- `IOREF` and `5V` are one net.
+- `3V3` comes from `reg_3v3`, a 3.3 V regulator.
+- `VIN` is not simulated. The barrel jack feeds it. The board runs from USB. A wire to it is a `not_simulated` error.
+- `D13` drives `led_l` through `r_l`, 1 kohm.
+
 - `millis()`, `delay()` and the timers run on simulated time, so `delay(1000)` takes `step 1s`.
 - D0 to D13 and A0 to A5 take `INPUT`, `INPUT_PULLUP` and `OUTPUT`. A Nano's A6 and A7 are analog inputs only, which `analogRead` reads.
 - An input that nothing drives keeps its last level here. On a real board it floats. Once the sketch reads it while it floats, `step` warns `chip.floating_input`, naming the pin, as in `#nano__mcu.pin.PD2 (nano.D2) floats on #net.nano__D2 at ... ps, and the firmware has taken in its level`. Give each button a pull-down resistor, as the core example does, or use `INPUT_PULLUP` and wire the button to GND. A `digitalRead` under `INPUT_PULLUP` reads the pull-up, so it does not count once `pinMode(INPUT)` turns the pull-up off. `digitalRead` loads its pin's whole port, so another `INPUT` pin of that port warns too when a part, even a capacitor, is wired to it and nothing holds it.

@@ -285,7 +285,7 @@ fn record_to_card(record: &Value) -> Value {
 #[test]
 fn a_part_record_maps_to_orbe_part_json_both_ways() {
     let registry = build(&repo(), None).unwrap();
-    for card in orbe_scene::catalog_cards() {
+    for card in orbe_scene::catalog_cards(&repo().join("parts")) {
         let cli = serde_json::to_value(&card).unwrap();
         let record = record(&registry.output, &format!("{}@{}", card.name, card.version));
         assert_eq!(card_to_record(&cli), record, "{} card to record", card.name);

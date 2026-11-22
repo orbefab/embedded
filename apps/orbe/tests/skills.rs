@@ -9,6 +9,8 @@ mod common;
 #[allow(dead_code)]
 #[path = "session/harness.rs"]
 mod harness;
+#[path = "registry_env.rs"]
+mod registry_env;
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -70,6 +72,7 @@ fn shell(runtime: &Runtime, dir: &Path, line: &str) -> Run {
         .env_remove("ORBE_SESSION")
         .env_remove("ORBE_TEST_IDLE_TIMEOUT")
         .env_remove("ORBE_TEST_STOP")
+        .env("ORBE_REGISTRY", harness::registry_template())
         .output()
         .unwrap();
     Run::new(output)
@@ -120,13 +123,14 @@ fn run_shown(runtime: &Runtime, dir: &Path, transcript: &str) {
     }
 }
 
-/// Copies catalog parts into the project at `dir`, as `orbe add` does.
+/// Copies catalog parts into the project at `dir`, nested the way `orbe add` writes them.
 fn add_parts(dir: &Path, ids: &[&str]) {
-    let request = orbe_scene::Request {
-        ids: ids.iter().map(|id| id.to_string()).collect(),
-    };
-    let reply = orbe_scene::add_parts(Some(dir), &request).unwrap();
-    assert_eq!(reply.code(), 0, "{}", reply.text());
+    let catalog = common::repo().join("parts");
+    for id in ids {
+        let dest = dir.join("parts").join(id);
+        common::copy_dir(&catalog.join(id), &dest);
+        common::nest_uses(&catalog, &dest, &mut Vec::new());
+    }
 }
 
 /// The core skill's worked example, with its parts added.
@@ -847,7 +851,7 @@ fn the_check_findings_core_states_are_the_ones_orbe_reports() {
     }
     says(
         &skill("parts"),
-        "The copy is the project's. Edit it. `orbe check` reads `parts/<id>/` as it is and does not compare it to the catalog.",
+        "The copy is the project's. Edit it. `orbe check`, `orbe open` and `orbe test` read `parts/<id>/` as it is and never use the network.",
     );
 }
 

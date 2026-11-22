@@ -193,7 +193,7 @@ async function cardCounts(page: Page): Promise<Record<string, string>> {
 }
 
 function searchNames(query: string): string[] {
-  return orbeJson(process.env.ORBE ?? "", ["search", ...query.split(" ")]).data?.parts?.map((part) => part.name) ?? [];
+  return orbeJson(process.env.ORBE ?? "", ["search", ...query.split(" ")]).data?.parts?.map((part) => part.id) ?? [];
 }
 
 /** A top-level scene part whose part file has a press input. A board's reset switch is a child

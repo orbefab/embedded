@@ -2,6 +2,8 @@
 
 #[path = "../../../packages/scene/tests/common/mod.rs"]
 mod common;
+#[path = "registry_env.rs"]
+mod registry_env;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -10,20 +12,17 @@ use std::process::{Command, Output};
 use serde_json::Value;
 
 fn orbe(args: &[&str]) -> (Output, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_orbe"))
-        .args(args)
-        .output()
-        .unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_orbe"));
+    registry_env::apply(&mut command);
+    let output = command.args(args).output().unwrap();
     let stdout = String::from_utf8(output.stdout.clone()).unwrap();
     (output, stdout)
 }
 
 fn orbe_in(dir: &Path, args: &[&str]) -> (Output, String, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_orbe"))
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_orbe"));
+    registry_env::apply(&mut command);
+    let output = command.args(args).current_dir(dir).output().unwrap();
     let stdout = String::from_utf8(output.stdout.clone()).unwrap();
     let stderr = String::from_utf8(output.stderr.clone()).unwrap();
     (output, stdout, stderr)
@@ -220,23 +219,26 @@ fn help_is_not_a_usage_envelope() {
 }
 
 #[test]
-fn add_help_names_a_version_placeholder() {
+fn add_help_names_the_latest_version() {
     let (output, stdout) = orbe(&["add", "--help"]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
-    assert!(stdout.contains("id@<version>"), "{stdout}");
-    assert!(!stdout.contains("@0.1.0"), "{stdout}");
+    assert!(stdout.contains("latest"), "{stdout}");
+    assert!(!stdout.contains("id@<version>"), "{stdout}");
 }
 
 #[test]
-fn a_version_that_is_not_three_numbers_shows_the_shape() {
+fn a_version_on_the_command_line_is_a_usage_error() {
     let dir = tempfile::tempdir().unwrap();
     let (output, stdout, stderr) = orbe_in(dir.path(), &["add", "led-5mm@1"]);
     assert_eq!(output.status.code(), Some(2), "{stdout}{stderr}");
     assert!(stdout.is_empty(), "{stdout}");
     assert_eq!(
         stderr,
-        "error[usage]: `led-5mm@1` is not a version. a version is three numbers, such as `id@1.2.3`\n"
+        "error[usage]: `led-5mm@1` names a version, and `orbe add` installs the latest\n  hint: led-5mm\n"
     );
+    let (output, stdout, stderr) = orbe_in(dir.path(), &["add", "led-5mm@0.1.1"]);
+    assert_eq!(output.status.code(), Some(2), "{stdout}{stderr}");
+    assert!(stderr.contains("hint: led-5mm\n"), "{stderr}");
 }
 
 #[test]
@@ -375,11 +377,9 @@ fn adding_parts_for_the_first_target() {
             .lines()
             .filter(|line| line.starts_with("wrote parts/"))
             .count(),
-        18,
+        4,
         "{stdout}"
     );
-    assert!(!stdout.contains("parts.lock"), "{stdout}");
-    assert!(!dir.path().join("parts.lock").exists());
     let mut copied = Vec::new();
     for entry in fs::read_dir(dir.path().join("parts")).unwrap() {
         let entry = entry.unwrap();
@@ -387,7 +387,20 @@ fn adding_parts_for_the_first_target() {
         copied.push(entry.file_name().into_string().unwrap());
     }
     copied.sort();
-    assert_eq!(copied.len(), 18);
+    assert_eq!(
+        copied,
+        [
+            "led-5mm",
+            "nano-board",
+            "resistor-axial",
+            "tactile-switch-6mm",
+        ]
+    );
+    assert!(
+        dir.path()
+            .join("parts/nano-board/parts/atmega328p-tqfp32/part.jsonc")
+            .is_file()
+    );
     for id in &copied {
         let names = [
             "part.jsonc".to_string(),
@@ -407,7 +420,9 @@ fn adding_parts_for_the_first_target() {
         assert!(
             stdout.contains(&format!(
                 "wrote parts/{id} {}",
-                orbe_scene::card(id).unwrap().version
+                orbe_scene::card(&common::repo().join("parts"), id)
+                    .unwrap()
+                    .version
             )),
             "{id}: {stdout}"
         );
@@ -422,14 +437,11 @@ fn adding_parts_for_the_first_target() {
 
     let led = dir.path().join("parts/led-5mm/part.jsonc");
     let led_bytes = fs::read(&led).unwrap();
-    let (output, stdout, _) = orbe_in(dir.path(), &args);
-    assert_eq!(output.status.code(), Some(1), "{stdout}");
-    assert!(stdout.contains("error[part_exists]"), "{stdout}");
-    assert!(stdout.contains("is already led-5mm "), "{stdout}");
-    assert!(
-        !stdout.lines().any(|line| line.starts_with("wrote ")),
-        "{stdout}"
-    );
+    let (output, stdout, stderr) = orbe_in(dir.path(), &args);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(stderr.contains("error[part_exists]"), "{stderr}");
+    assert!(stderr.contains("is already led-5mm "), "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
     assert_eq!(fs::read(&led).unwrap(), led_bytes);
 
     let mut json_args = vec!["add", "--json"];
@@ -463,24 +475,25 @@ fn adding_parts_for_the_first_target() {
 #[test]
 fn an_unknown_id_names_a_close_catalog_id() {
     let dir = scene_only();
-    let (output, stdout, _) = orbe_in(dir.path(), &["add", "led-5m"]);
-    assert_eq!(output.status.code(), Some(1), "{stdout}");
-    assert!(stdout.contains("did you mean"), "{stdout}");
-    assert!(stdout.contains("`led-5mm`"), "{stdout}");
+    let (output, stdout, stderr) = orbe_in(dir.path(), &["add", "led-5m"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("error[unknown_part]"), "{stderr}");
+    assert!(stderr.contains("did you mean `led-5mm`"), "{stderr}");
     assert!(!dir.path().join("parts").exists());
-    assert!(!dir.path().join("parts.lock").exists());
 }
 
 #[test]
-fn a_registry_id_says_v1_reads_the_official_catalog() {
+fn a_registry_id_reads_the_orbefab_registry_only() {
     let dir = scene_only();
-    let (output, stdout, _) = orbe_in(dir.path(), &["add", "@acme/led-5mm"]);
-    assert_eq!(output.status.code(), Some(1), "{stdout}");
-    assert!(
-        stdout.contains("v1 reads only the official catalog"),
-        "{stdout}"
+    let (output, stdout, stderr) = orbe_in(dir.path(), &["add", "@acme/led-5mm"]);
+    assert_eq!(output.status.code(), Some(2), "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert_eq!(
+        stderr,
+        "error[usage]: this orbe reads the @orbefab registry only\n  hint: orbe add led-5mm\n"
     );
-    assert!(!dir.path().join("parts.lock").exists());
+    assert!(!dir.path().join("parts").exists());
 }
 
 #[test]
@@ -491,10 +504,7 @@ fn add_usage_is_exit_2_and_json_stays_on_stdout() {
     assert!(stderr.contains("error[usage]"), "{stderr}");
     let (output, _, stderr) = orbe_in(dir.path(), &["add", "led-5mm@1"]);
     assert_eq!(output.status.code(), Some(2), "{stderr}");
-    assert!(stderr.contains("three numbers"), "{stderr}");
-    let (output, _, stderr) = orbe_in(dir.path(), &["add", "--relock", "led-5mm"]);
-    assert_eq!(output.status.code(), Some(2), "{stderr}");
-    assert!(stderr.contains("--relock"), "{stderr}");
+    assert!(stderr.contains("names a version"), "{stderr}");
     let (output, stdout, stderr) = orbe_in(dir.path(), &["add", "--json"]);
     assert_eq!(output.status.code(), Some(2), "{stdout} {stderr}");
     assert!(stderr.is_empty(), "{stderr}");
@@ -517,9 +527,8 @@ fn the_first_target_walk_from_the_folder_above() {
     );
     let (output, stdout, stderr) = run_printed(workspace.path(), &command);
     assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
-    assert_eq!(stdout.matches("wrote parts/").count(), 18, "{stdout}");
+    assert_eq!(stdout.matches("wrote parts/").count(), 4, "{stdout}");
     assert!(!workspace.path().join("parts").exists());
-    assert!(!workspace.path().join("parts.lock").exists());
     let (output, stdout, _) = orbe_in(workspace.path(), &["check", "proj/scene.jsonc"]);
     assert_eq!(output.status.code(), Some(0), "{stdout}");
     assert_eq!(
@@ -527,10 +536,9 @@ fn the_first_target_walk_from_the_folder_above() {
         "proj/scene.jsonc: ok, 5 scene parts, expanding to 19 engine parts, 34 nets, ground GND\n"
     );
     assert!(proj.join("parts/led-5mm/part.jsonc").is_file());
-    assert!(!proj.join("parts.lock").exists());
 }
 #[test]
-fn a_scene_id_the_catalog_lacks_gets_a_suggestion_and_stays_out_of_the_command() {
+fn a_scene_id_the_registry_lacks_is_named_in_the_add_command() {
     let (_workspace, proj) = first_target();
     let scene = proj.join("scene.jsonc");
     let text = fs::read_to_string(&scene).unwrap();
@@ -538,24 +546,29 @@ fn a_scene_id_the_catalog_lacks_gets_a_suggestion_and_stays_out_of_the_command()
     let (output, stdout, _) = orbe_in(&proj, &["check", "scene.jsonc"]);
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert!(
-        stdout.contains("part `led-5mn` is not in parts/\n  hint: did you mean `led-5mm`? the catalog has no part named `led-5mn`\n"),
+        stdout.contains("part `led-5mn` is not in parts/\n"),
         "{stdout}"
     );
-    assert_eq!(stdout.matches("did you mean").count(), 1, "{stdout}");
+    assert!(!stdout.contains("did you mean"), "{stdout}");
     assert!(
-        stdout.contains("run `orbe add nano-board resistor-axial tactile-switch-6mm`"),
+        stdout.contains("run `orbe add led-5mn nano-board resistor-axial tactile-switch-6mm`"),
         "{stdout}"
     );
+    let (output, stdout, stderr) = orbe_in(&proj, &["add", "led-5mn"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(stderr.contains("error[unknown_part]"), "{stderr}");
+    assert!(stderr.contains("did you mean `led-5mm`"), "{stderr}");
 }
 
 #[test]
 fn add_refuses_a_folder_that_is_not_a_project() {
     let (_workspace, proj) = first_target();
     let build = proj.join("build");
-    let (output, stdout, _) = orbe_in(&build, &["add", "led-5mm"]);
-    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    let (output, stdout, stderr) = orbe_in(&build, &["add", "led-5mm"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
     assert_eq!(
-        stdout,
+        stderr,
         "error[not_a_project]: the current folder is not an orbe project. it has no scene.jsonc and no parts folder\n  hint: run `orbe add -C .. led-5mm`\n"
     );
     assert_eq!(fs::read_dir(&build).unwrap().count(), 1);
@@ -565,27 +578,26 @@ fn add_refuses_a_folder_that_is_not_a_project() {
     assert!(!build.join("parts").exists());
 
     let empty = tempfile::tempdir().unwrap();
-    let (output, stdout, _) = orbe_in(empty.path(), &["add", "no-such-part"]);
-    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    let (output, stdout, stderr) = orbe_in(empty.path(), &["add", "no-such-part"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
     assert_eq!(
-        stdout,
-        "error[unknown_part]: no Block or part named `no-such-part`\n  hint: the catalog has no Block or part with that id\n"
+        stderr,
+        "error[unknown_part]: no Block or part named `no-such-part`\n  hint: the registry has no Block or part with that id\n"
     );
     assert_eq!(fs::read_dir(empty.path()).unwrap().count(), 0);
     let build_typo = build.join("deeper");
     fs::create_dir(&build_typo).unwrap();
-    let (output, stdout, _) = orbe_in(&build_typo, &["add", "nano-button-lde"]);
-    assert_eq!(output.status.code(), Some(1), "{stdout}");
-    assert_eq!(
-        stdout,
-        "error[unknown_part]: no Block or part named `nano-button-lde`\n  hint: did you mean `nano-button-led`?\n"
+    let (output, stdout, stderr) = orbe_in(&build_typo, &["add", "nano-button-lde"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(stderr.contains("error[not_a_project]"), "{stderr}");
+    assert!(
+        stderr.contains("orbe add -C ../.. nano-button-lde"),
+        "{stderr}"
     );
-    let (output, stdout, _) = orbe_in(&build_typo, &["add", "nano-buton-led"]);
-    assert_eq!(output.status.code(), Some(1), "{stdout}");
-    assert_eq!(
-        stdout,
-        "error[unknown_part]: no Block or part named `nano-buton-led`\n  hint: did you mean `nano-button-led`?\n"
-    );
+    let (output, stdout, stderr) = orbe_in(&build_typo, &["add", "nano-buton-led"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}{stderr}");
+    assert!(stderr.contains("error[not_a_project]"), "{stderr}");
     assert_eq!(fs::read_dir(&build_typo).unwrap().count(), 0);
 
     let lonely = tempfile::tempdir().unwrap();
@@ -600,8 +612,6 @@ fn add_refuses_a_folder_that_is_not_a_project() {
     let (output, stdout, stderr) = orbe_in(lonely.path(), &["add", "led-5mm"]);
     assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
     assert!(stdout.contains("wrote parts/led-5mm 0.1.1\n"), "{stdout}");
-    assert!(!stdout.contains("parts.lock"), "{stdout}");
-    assert!(!lonely.path().join("parts.lock").exists());
     assert!(lonely.path().join("parts/led-5mm/part.jsonc").is_file());
     assert!(!lonely.path().join("scene.jsonc").exists());
 
@@ -610,8 +620,6 @@ fn add_refuses_a_folder_that_is_not_a_project() {
     assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
     assert!(stdout.contains("wrote scene.jsonc\n"), "{stdout}");
     assert!(stdout.contains("wrote tests/button.test\n"), "{stdout}");
-    assert!(!stdout.contains("parts.lock"), "{stdout}");
-    assert!(!demo.path().join("parts.lock").exists());
     assert!(
         stdout.ends_with(
             "installed the Block `nano-button-led`. run `orbe check scene.jsonc` and `orbe test`\n"
@@ -621,12 +629,6 @@ fn add_refuses_a_folder_that_is_not_a_project() {
     assert!(demo.path().join("scene.jsonc").is_file());
     assert!(demo.path().join("parts/led-5mm/part.jsonc").is_file());
     assert!(demo.path().join("firmware/button.hex").is_file());
-
-    let relock = tempfile::tempdir().unwrap();
-    let (output, stdout, stderr) = orbe_in(relock.path(), &["add", "--relock"]);
-    assert_eq!(output.status.code(), Some(2), "{stdout}{stderr}");
-    assert!(stderr.contains("--relock"), "{stderr}");
-    assert_eq!(fs::read_dir(relock.path()).unwrap().count(), 0);
 }
 #[test]
 fn a_scene_not_named_scene_jsonc_gets_a_hint_that_runs() {
@@ -670,7 +672,6 @@ fn a_linked_scene_file_gets_the_folder_check_reads_from() {
         ),
     ] {
         let _ = fs::remove_dir_all(proj.join("parts"));
-        let _ = fs::remove_file(proj.join("parts.lock"));
         let (output, stdout, _) = orbe_in(&cwd, &["check", scene]);
         assert_eq!(output.status.code(), Some(1), "{stdout}");
         assert_eq!(add_command(&stdout), command);
@@ -728,31 +729,23 @@ fn a_file_named_parts_is_named_and_gets_no_command() {
     assert!(!stdout.contains("orbe add"), "{stdout}");
 }
 
-/// While one run holds the project's lock, another refuses at once with `busy` and writes
-/// nothing.
 #[test]
-fn a_second_add_is_busy_while_one_holds_the_lock() {
-    let project = scene_only();
-    let lock = fs::File::open(project.path()).unwrap();
-    lock.lock().unwrap();
-    let (output, stdout, _) = orbe_in(project.path(), &["add", "led-5mm"]);
+fn a_folder_in_parts_with_no_part_file_names_itself() {
+    let project = common::project("nano-button");
+    fs::remove_dir_all(project.path().join("parts/led-5mm")).unwrap();
+    fs::create_dir(project.path().join("parts/led-5mm")).unwrap();
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
     assert_eq!(output.status.code(), Some(1), "{stdout}");
     assert!(
-        stdout.starts_with("error[busy]: another `orbe add` is at work in this project, and holds its lock\n  hint: wait for it to finish, then run `orbe "),
+        stdout.contains("error[part_missing]: parts/led-5mm has no part.jsonc\n"),
         "{stdout}"
     );
-    let (output, stdout, _) = orbe_in(project.path(), &["add", "--json", "led-5mm"]);
-    assert_eq!(output.status.code(), Some(1), "{stdout}");
-    let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
-    assert_eq!(reply["error"]["code"], "busy");
-    assert!(!project.path().join("parts").exists());
-    assert!(!project.path().join("parts.lock").exists());
-    lock.unlock().unwrap();
-    drop(lock);
-    let (output, stdout, _) = orbe_in(project.path(), &["add", "led-5mm"]);
-    assert_eq!(output.status.code(), Some(0), "{stdout}");
-    assert!(!project.path().join(".orbe-add.lock").exists());
+    assert!(
+        stdout.contains("hint: remove parts/led-5mm and run `orbe add led-5mm`\n"),
+        "{stdout}"
+    );
 }
+
 #[test]
 fn a_user_folder_at_the_old_add_trash_is_left_in_place() {
     let project = scene_only();

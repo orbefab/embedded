@@ -23,9 +23,6 @@ toml.workspace = true
 orbe-engine.workspace = true
 orbe-model.workspace = true
 
-[target.'cfg(unix)'.dependencies]
-rustix.workspace = true
-
 [dev-dependencies]
 sha2.workspace = true
 tempfile.workspace = true

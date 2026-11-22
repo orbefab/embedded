@@ -2,6 +2,8 @@
 //! happened, what a read right after an input shows, and serial as the firmware sent it.
 
 mod live;
+#[path = "registry_env.rs"]
+mod registry_env;
 
 use std::fs;
 

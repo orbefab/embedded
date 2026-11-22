@@ -1,4 +1,4 @@
-scene.syntax parts/board.jsonc:3:3 | a part has no key `files` | its keys are format, $schema, part, version, title, summary, tags, license, docs, real, uses, pins, model, params, parts, wires, layout, ground, readings, controls, joints, facts, view, not_simulated, buy, joins_only, open, holes
+scene.syntax parts/board.jsonc:3:3 | a part has no key `files` | its keys are format, $schema, part, version, orbe, title, summary, tags, license, docs, real, uses, pins, model, params, parts, wires, layout, ground, readings, controls, joints, facts, view, not_simulated, buy, joins_only, open, holes
 scene.syntax parts/board.jsonc:4:3 | a part has no key `titel` | did you mean `title`?
 scene.syntax parts/board.jsonc:5:11 | `tags` takes a list, found a string | write a list
 scene.syntax parts/board.jsonc:6:31 | `real` has no key `nuber` | did you mean `number`?
