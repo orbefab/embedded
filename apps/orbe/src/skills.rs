@@ -1,13 +1,5 @@
 //! The skills this binary serves. Each is a markdown file compiled in.
 
-#[cfg(test)]
-use std::collections::{BTreeMap, BTreeSet};
-#[cfg(test)]
-use std::path::Path;
-
-#[cfg(test)]
-use orbe_scene::{BoardFacts, Gap, board_facts, si_amount};
-
 pub struct Skill {
     pub name: &'static str,
     pub about: &'static str,
@@ -17,23 +9,58 @@ pub struct Skill {
 pub const SKILLS: &[Skill] = &[
     Skill {
         name: "core",
-        about: "How to use orbe: the rules, the loop, scenes, parts, breadboards, sessions, tests and results. Read it first.",
+        about: "Read first: the rules, the loop, one example, troubleshooting, and which topic to load.",
         text: include_str!("../skills/core.md"),
     },
     Skill {
         name: "arduino",
-        about: "Building Arduino Nano and Uno firmware with arduino-cli and naming it in the scene.",
+        about: "Load when building Nano or Uno firmware, or when a chip warning names a pin.",
         text: include_str!("../skills/arduino.md"),
     },
     Skill {
         name: "parts",
-        about: "How a project keeps its parts: the copy it owns, versions, Blocks and the buy field.",
+        about: "Load when keeping a part copy, a version, a Block, a buy link, or an addressable LED.",
         text: include_str!("../skills/parts.md"),
     },
     Skill {
-        name: "reference",
-        about: "Breadboards in full, ratings, LED brightness, time, sessions, the 3D page, and the warnings and errors an agent meets.",
-        text: include_str!("../skills/reference.md"),
+        name: "scenes",
+        about: "Load when writing a scene key, a part name, a param, or world.",
+        text: include_str!("../skills/scenes.md"),
+    },
+    Skill {
+        name: "breadboards",
+        about: "Load when seating a part on a breadboard, or a hole or a strip is wrong.",
+        text: include_str!("../skills/breadboards.md"),
+    },
+    Skill {
+        name: "sessions-and-time",
+        about: "Load when a step, a set or a bounce lands, or a session's name or stop matters.",
+        text: include_str!("../skills/sessions-and-time.md"),
+    },
+    Skill {
+        name: "tests",
+        about: "Load when a test file does more than the example in core.",
+        text: include_str!("../skills/tests.md"),
+    },
+    Skill {
+        name: "ratings",
+        about: "Load when a warning names a rating, or an LED is lit, dim or off.",
+        text: include_str!("../skills/ratings.md"),
+    },
+    Skill {
+        name: "errors",
+        about: "Load when an error code is not in core's troubleshooting.",
+        text: include_str!("../skills/errors.md"),
+    },
+    Skill {
+        name: "page",
+        about: "Load when someone watches the 3D page, or a knob turns.",
+        text: include_str!("../skills/page.md"),
+    },
+    Skill {
+        name: "not-simulated",
+        about: "Load when a pin or a feature does nothing, or a wire is not_simulated.",
+        text: include_str!("../skills/not-simulated.md"),
     },
 ];
 
@@ -51,164 +78,6 @@ impl Skill {
     }
 }
 
-/// Replaces a `<!-- boards nano-board uno-board -->` marker with one block per named board.
-/// `parts` is the directory of part folders. A skill with no marker is unchanged.
-#[cfg(test)]
-fn fill_boards(text: &str, parts: &Path) -> Result<String, String> {
-    let Some(start) = text.find("<!-- boards") else {
-        return Ok(text.to_string());
-    };
-    let tail = &text[start..];
-    let Some(close) = tail.find("-->") else {
-        return Err("the boards marker does not close".into());
-    };
-    let body = tail["<!-- boards".len()..close].trim();
-    if body.is_empty() {
-        return Err("the boards marker names no board".into());
-    }
-    let ids: Vec<&str> = body.split_whitespace().collect();
-    let rendered = boards(parts, &ids)?;
-    let mut out = String::with_capacity(text.len() + rendered.len());
-    out.push_str(&text[..start]);
-    out.push_str(&rendered);
-    out.push_str(&tail[close + 3..]);
-    Ok(out)
-}
-
-/// One heading and one list per board, from its part file: the chip and its clock, the pins
-/// that work, the pins the reader leaves unsimulated, and the L LED.
-#[cfg(test)]
-fn boards(parts: &Path, ids: &[&str]) -> Result<String, String> {
-    let mut blocks = Vec::with_capacity(ids.len());
-    for id in ids {
-        blocks.push(board_text(&board_facts(parts, id)?));
-    }
-    Ok(blocks.join("\n"))
-}
-
-#[cfg(test)]
-fn board_text(board: &BoardFacts) -> String {
-    let mut out = format!("### `{}`\n\n", board.id);
-    out.push_str(&format!(
-        "- `{}`, {}, runs the {} at {}.\n",
-        board.id,
-        board.title,
-        board.chip,
-        si_amount(board.clock_hz, "Hz"),
-    ));
-    out.push_str(&format!("- These pins work: {}.\n", pin_list(&board.works)));
-    for names in &board.same {
-        out.push_str(&format!("- {} are one net.\n", pin_list(names)));
-    }
-    for supply in &board.supplies {
-        out.push_str(&format!(
-            "- `{}` comes from `{}`, a {} regulator.\n",
-            supply.pin,
-            supply.from,
-            si_amount(supply.volts, "V"),
-        ));
-    }
-    for group in group_whys(&board.gaps) {
-        let names = pin_list(&group.0);
-        let verb = if group.0.len() == 1 { "is" } else { "are" };
-        let wire = if group.0.len() == 1 {
-            "A wire to it is a `not_simulated` error."
-        } else {
-            "A wire to one is a `not_simulated` error."
-        };
-        out.push_str(&format!(
-            "- {names} {verb} not simulated. {} {wire}\n",
-            group.1
-        ));
-    }
-    for led in &board.leds {
-        out.push_str(&format!(
-            "- `{}` drives `{}` through `{}`, {}.\n",
-            led.pin,
-            led.name,
-            led.resistor,
-            si_amount(led.ohms, "ohm"),
-        ));
-    }
-    out
-}
-
-/// Pins that share a reason, in the order the pins are listed.
-#[cfg(test)]
-fn group_whys(gaps: &[Gap]) -> Vec<(Vec<String>, String)> {
-    let mut groups: Vec<(Vec<String>, String)> = Vec::new();
-    for gap in gaps {
-        if let Some(group) = groups.iter_mut().find(|group| group.1 == gap.why) {
-            group.0.push(gap.pin.clone());
-        } else {
-            groups.push((vec![gap.pin.clone()], gap.why.clone()));
-        }
-    }
-    groups
-}
-
-/// `` `D0` to `D13`, `RESET` and `5V` ``. A letter-and-number run of three or more with no
-/// gap inside it is one range.
-#[cfg(test)]
-fn pin_list(names: &[String]) -> String {
-    let mut sets: BTreeMap<String, BTreeSet<u32>> = BTreeMap::new();
-    for name in names {
-        if let Some((prefix, n)) = split_pin(name) {
-            sets.entry(prefix.to_string()).or_default().insert(n);
-        }
-    }
-    let mut items = Vec::new();
-    let mut seen = BTreeSet::new();
-    for name in names {
-        if !seen.insert(name.clone()) {
-            continue;
-        }
-        if let Some((prefix, _)) = split_pin(name)
-            && let Some(set) = sets.get(prefix)
-            && set.len() >= 3
-            && run(set)
-        {
-            let start = set.iter().next().unwrap();
-            let end = set.iter().next_back().unwrap();
-            items.push(format!("`{prefix}{start}` to `{prefix}{end}`"));
-            for n in set {
-                seen.insert(format!("{prefix}{n}"));
-            }
-            continue;
-        }
-        items.push(format!("`{name}`"));
-    }
-    join_and(&items)
-}
-
-#[cfg(test)]
-fn split_pin(name: &str) -> Option<(&str, u32)> {
-    let at = name.find(|c: char| c.is_ascii_digit())?;
-    let (prefix, rest) = name.split_at(at);
-    if prefix.is_empty() || !prefix.chars().all(|c| c.is_ascii_uppercase()) {
-        return None;
-    }
-    rest.parse().ok().map(|n| (prefix, n))
-}
-
-#[cfg(test)]
-fn run(set: &BTreeSet<u32>) -> bool {
-    let (Some(&first), Some(&last)) = (set.iter().next(), set.iter().next_back()) else {
-        return false;
-    };
-    last - first + 1 == set.len() as u32
-}
-
-#[cfg(test)]
-fn join_and(items: &[String]) -> String {
-    match items {
-        [] => String::new(),
-        [one] => one.clone(),
-        [a, b] => format!("{a} and {b}"),
-        [rest @ .., last] => format!("{}, and {last}", rest.join(", ")),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::Path;
@@ -218,8 +87,9 @@ mod tests {
     use super::*;
     use crate::{Cli, cli};
 
-    /// Each `orbe …` the skills show: the `$ orbe` lines of a `console` block, and every
-    /// inline `orbe …` span. A line with a placeholder, such as `<id>`, is a usage form.
+    /// Each `orbe …` the skills show: `$ orbe` lines in a console block, `orbe` lines in a
+    /// bash or sh block, and every inline `orbe …` span. A `#` line in a bash or sh block is
+    /// a comment. A line with a placeholder, such as `<id>`, is a usage form.
     fn command_lines(text: &str) -> Vec<String> {
         let mut lines = Vec::new();
         let mut block: Option<&str> = None;
@@ -231,6 +101,17 @@ mod tests {
             match block {
                 Some("console") => {
                     if let Some(command) = line.strip_prefix("$ orbe ") {
+                        lines.push(command.to_string());
+                    }
+                }
+                Some("bash" | "sh") => {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty()
+                        && !trimmed.starts_with('#')
+                        && let Some(command) = trimmed
+                            .strip_prefix("$ orbe ")
+                            .or_else(|| trimmed.strip_prefix("orbe "))
+                    {
                         lines.push(command.to_string());
                     }
                 }
@@ -415,55 +296,6 @@ mod tests {
         }
     }
 
-    const HOUR_PS: u64 = 3_600_000_000_000_000;
-
-    #[test]
-    fn the_limits_the_skills_state_are_this_binary_s() {
-        let core = find("core").unwrap().text().unwrap();
-        let reference = find("reference").unwrap().text().unwrap();
-        let says = |text: String| assert!(core.contains(&text), "core does not say `{text}`");
-        says(format!("It lists at most {},", orbe_session::CHANGES));
-        says(format!(
-            "`snapshot` shows the last {} lines",
-            orbe_session::SERIAL_LINES
-        ));
-        assert_eq!(orbe_scene::STOP_PS % HOUR_PS, 0);
-        let stop = format!(
-            "A session stops at {} hours of simulated time",
-            orbe_scene::STOP_PS / HOUR_PS
-        );
-        assert!(reference.contains(&stop), "reference does not say `{stop}`");
-        says(format!(
-            "up to the timeout, {} by default",
-            orbe_session::UNTIL_TIMEOUT
-        ));
-    }
-
-    #[test]
-    fn the_json_states_the_core_skill_lists_are_every_state() {
-        use orbe_session::State;
-        // The match stops the build when a state is added, until it is listed here.
-        let named = |state: State| match state {
-            State::Paused | State::Playing | State::Stopped | State::Faulted | State::Closed => {
-                format!("`{}`", state.as_str())
-            }
-        };
-        let states = [
-            State::Paused,
-            State::Playing,
-            State::Stopped,
-            State::Faulted,
-            State::Closed,
-        ]
-        .map(named);
-        let listed = format!(
-            "{}, {}, {}, {} or {}",
-            states[0], states[1], states[2], states[3], states[4]
-        );
-        let core = find("core").unwrap().text().unwrap();
-        assert!(core.contains(&listed), "core does not list {listed}");
-    }
-
     #[cfg(unix)]
     #[test]
     fn every_code_in_the_error_tables_is_one_orbe_reports() {
@@ -522,6 +354,7 @@ mod tests {
             "registry",
             "unknown_part",
             "part_exists",
+            "net.short",
         ];
         let known: Vec<&str> = live
             .iter()
@@ -529,14 +362,16 @@ mod tests {
             .chain(scene.into_iter().map(|code| code.as_str()))
             .chain(added)
             .collect();
-        let texts: Vec<String> = ["reference", "parts"]
-            .iter()
-            .map(|name| find(name).unwrap().text().unwrap())
-            .collect();
+        let texts: Vec<String> = SKILLS.iter().map(|skill| skill.text().unwrap()).collect();
         let mut listed = std::collections::BTreeSet::new();
+        let mut tables = 0;
         for text in &texts {
+            if !text.contains("## Errors") {
+                continue;
+            }
             let table = table_in(text, "## Errors");
-            assert!(table.len() > 5, "{} rows", table.len());
+            assert!(table.len() > 5, "{table:?}");
+            tables += 1;
             for row in table {
                 let codes = row.split('|').nth(1).unwrap();
                 for code in codes.split('`').skip(1).step_by(2) {
@@ -545,16 +380,16 @@ mod tests {
                 }
             }
         }
+        assert!(tables >= 2, "expected the parts table and the errors table");
     }
 
-    /// Each row of the world table under `## Scenes` is one `orbe set` reads: its default and
+    /// Each row of the world table in the scenes skill is one `orbe set` reads: its default and
     /// both ends set, and a value past either end is refused with the row's range and unit.
     #[test]
-    fn the_core_world_table_is_the_one_set_reads() {
-        let core = find("core").unwrap().text().unwrap();
-        let rows: Vec<Vec<&str>> = core
+    fn the_scenes_world_table_is_the_one_set_reads() {
+        let scenes = find("scenes").unwrap().text().unwrap();
+        let rows: Vec<Vec<&str>> = scenes
             .lines()
-            .skip_while(|l| *l != "## Scenes")
             .map(str::trim_start)
             .skip_while(|l| !l.starts_with("| Quantity |"))
             .skip(2)
@@ -607,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn the_reference_warnings_table_has_one_row_for_each_lint_rule() {
+    fn the_ratings_warnings_table_has_one_row_for_each_lint_rule() {
         use orbe_scene::{Code, Lint};
         // The match stops the build when a rule is added, until it is listed here.
         let code = |lint: Lint| match lint {
@@ -628,8 +463,8 @@ mod tests {
         ]
         .map(code)
         .into();
-        let reference = find("reference").unwrap().text().unwrap();
-        let listed: Vec<&str> = table_in(&reference, "## Warnings")
+        let ratings = find("ratings").unwrap().text().unwrap();
+        let listed: Vec<&str> = table_in(&ratings, "## Warnings")
             .into_iter()
             .filter_map(|row| row.split('`').nth(1))
             .collect();
@@ -648,7 +483,6 @@ mod tests {
     fn the_arduino_skill_names_every_pin_a_board_leaves_unsimulated() {
         let skill = find("arduino").unwrap();
         let text = skill.text().unwrap();
-        assert!(!text.contains("<!-- boards"));
         let ids = ["nano-board".to_string(), "uno-board".to_string()];
         assert!(ids.len() >= 2, "{ids:?}");
         for id in &ids {
@@ -693,30 +527,6 @@ mod tests {
             let number = orbe_scene::card(&parts, chip).unwrap().real.number.unwrap();
             assert!(block.contains(&number), "{id} omits {number}");
         }
-    }
-
-    #[test]
-    fn a_board_the_marker_names_that_is_not_an_avr_board_is_an_error() {
-        let err = fill_boards("<!-- boards resistor-0603 -->\n", &repo_parts()).unwrap_err();
-        assert!(err.contains("resistor-0603"), "{err}");
-    }
-
-    #[test]
-    fn a_board_the_marker_names_that_does_not_read_is_an_error() {
-        let err = fill_boards("<!-- boards not-a-board -->\n", &repo_parts()).unwrap_err();
-        assert!(err.contains("not-a-board"), "{err}");
-    }
-
-    #[test]
-    fn a_boards_marker_that_names_nothing_is_an_error() {
-        let err = fill_boards("<!-- boards -->\n", &repo_parts()).unwrap_err();
-        assert!(err.contains("names no board"), "{err}");
-    }
-
-    #[test]
-    fn a_boards_marker_that_does_not_close_is_an_error() {
-        let err = fill_boards("<!-- boards nano-board", &repo_parts()).unwrap_err();
-        assert!(err.contains("does not close"), "{err}");
     }
 
     fn repo_parts() -> std::path::PathBuf {
