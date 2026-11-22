@@ -120,6 +120,27 @@ pub fn part_scene(id: &str, parts: Block) -> Result<String, JsError> {
         .map_err(|text| JsError::new(&text))
 }
 
+/// The JSON text of each part the Block's `scene.jsonc` places, in the file's order. A number
+/// is its amount in the param's SI unit. A file is the path as written, and the file need not
+/// be there. It takes the `Block`, which is freed. Throws an `Error` that lists the findings
+/// as `orbe check` prints them.
+#[wasm_bindgen(js_name = sceneParts)]
+pub fn scene_parts(block: Block) -> Result<String, JsError> {
+    let files = Files::memory(block.own).with_catalog(block.parts);
+    match orbe_scene::scene_parts(&files, Path::new("scene.jsonc")) {
+        Ok(parts) => {
+            serde_json::to_string(&parts).map_err(|error| JsError::new(&error.to_string()))
+        }
+        Err(found) => Err(JsError::new(
+            &found
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )),
+    }
+}
+
 /// The wall time between two `play` ticks, in milliseconds.
 #[wasm_bindgen(js_name = tickMs)]
 pub fn tick_ms() -> f64 {

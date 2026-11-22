@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import type { Plugin } from "vite";
 import { BASE } from "../src/paths.ts";
 import type { SiteData } from "../src/records.ts";
-import { type Catalog, partViews, readCatalog, siteData } from "./catalog.ts";
+import { blockScenes, type Catalog, partViews, readCatalog, siteData } from "./catalog.ts";
 
 const REPO = resolve(import.meta.dirname, "../../..");
 const INPUT = join(REPO, ".scratch/site");
@@ -70,15 +70,18 @@ async function assemble(install: boolean): Promise<SiteData> {
     initSync(options: { module: Uint8Array }): void;
     Block: new () => { add(path: string, bytes: Uint8Array): void };
     partScene(id: string, block: unknown): string;
+    sceneParts(block: unknown): string;
   };
   orbeWasm.initSync({ module: readFileSync(join(wasm, "orbe_wasm_bg.wasm")) });
 
   const catalog = readCatalog(registry);
-  const views = partViews(catalog, (id, files) => {
+  const open = (files: readonly (readonly [string, Uint8Array])[]) => {
     const block = new orbeWasm.Block();
     for (const [path, bytes] of files) block.add(path, bytes);
-    return orbeWasm.partScene(id, block);
-  });
+    return block;
+  };
+  const views = partViews(catalog, (id, files) => orbeWasm.partScene(id, open(files)));
+  const scenes = blockScenes(catalog, (files) => orbeWasm.sceneParts(open(files)));
 
   rmSync(PUBLIC, { recursive: true, force: true });
   cpSync(join(REPO, "packages/brand/website/public"), PUBLIC, { recursive: true });
@@ -100,7 +103,7 @@ async function assemble(install: boolean): Promise<SiteData> {
   console.log(`site: ${catalog.parts.length} parts and ${catalog.blocks.length} Blocks from ${catalog.name}, sources ${readdirSync(sources).join(", ")}`);
   console.log(`site: install lines ${install ? "shown" : "hidden, the CLI is coming"}; orbe-wasm ${engine.version} from ${commit ?? "no commit"}`);
   if (commit === null || commit.endsWith("-dirty")) console.warn("site: warning: orbe-wasm was not built from a clean commit. Deploy a build of a clean checkout.");
-  return siteData(catalog, { registry: catalog.name, engine: { version: engine.version, commit } }, shown);
+  return siteData(catalog, { registry: catalog.name, engine: { version: engine.version, commit } }, shown, scenes);
 }
 
 /** `install` is ORBE_SITE_INSTALL=1: install lines show. The footer links the repo either way. */

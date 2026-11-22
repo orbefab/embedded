@@ -1,13 +1,14 @@
 import type { ReactNode } from "react";
 import type { BlockCard, Linked } from "../data";
 import { at } from "../paths";
+import { STARTER } from "../starter";
 import { CliComing, Install } from "./layout";
 
 export interface Home {
   readonly blocks: readonly BlockCard[];
   readonly boards: readonly Linked[];
   readonly parts: number;
-  /** nano-button-led's scene.jsonc, the file the third step shows. */
+  /** The starter Block's scene.jsonc, the file the third step shows. */
   readonly scene: string;
 }
 
@@ -31,7 +32,7 @@ function SceneFile({ text }: { text: string }) {
     <div className="min-w-0 overflow-hidden border border-border bg-muted font-mono text-sm" data-testid="scene-file">
       <div className="flex justify-between gap-4 border-border border-b px-4 py-2 text-muted-foreground text-xs">
         <span>scene.jsonc</span>
-        <span>nano-button-led</span>
+        <span>{STARTER}</span>
       </div>
       <pre className="overflow-x-auto p-4 leading-6">
         {lines.map((line, index) => {
@@ -140,7 +141,7 @@ export function HomePage({ home }: { home: Home }) {
                 A Block is a small circuit that works: a scene file, its firmware and its tests. In an empty folder, <code className="font-mono">orbe add</code>{" "}
                 copies one in.
               </p>
-              <Install lines={["orbe add nano-button-led"]} />
+              <Install lines={[`orbe add ${STARTER}`]} />
               <p className="text-muted-foreground text-sm">The scene file describes the circuit:</p>
               <SceneFile text={home.scene} />
             </>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { glanceLine, readCatalogUse, whereLine, type PartUse } from "./circuit";
-import type { BlockRecord, FileEntry, Item, PartRecord } from "./records";
+import type { BlockRecord, FileEntry, Item, PartRecord, ScenePart, SceneValue } from "./records";
 
 function file(path: string, sha256: string): FileEntry {
   return { path, url: path, sha256, bytes: 4, license: "MIT OR Apache-2.0" };
@@ -30,9 +30,9 @@ function partItem(name: string, record: Partial<PartRecord> = {}): Item<PartReco
   };
 }
 
-function blockItem(name: string, board: string, scene: string, extra: readonly FileEntry[] = [], deps: readonly string[] = []): { item: Item<BlockRecord>; texts: Record<string, string> } {
+function blockItem(name: string, board: string, extra: readonly FileEntry[] = [], deps: readonly string[] = []): { item: Item<BlockRecord>; texts: Record<string, string> } {
   const sceneFile = file("scene.jsonc", `scene-${name}`);
-  const texts: Record<string, string> = { [sceneFile.sha256]: scene };
+  const texts: Record<string, string> = { [sceneFile.sha256]: "scene" };
   for (const entry of extra) texts[entry.sha256] = entry.path.endsWith(".test") ? "expect one\n  expect two\n" : entry.path;
   return {
     texts,
@@ -55,23 +55,27 @@ function blockItem(name: string, board: string, scene: string, extra: readonly F
   };
 }
 
-function useOf(name: string, board: string, scene: string, parts: readonly Item<PartRecord>[], extra: readonly FileEntry[] = [], deps: readonly string[] = []) {
-  const { item, texts } = blockItem(name, board, scene, extra, deps);
-  return readCatalogUse([item], parts, texts);
+function placed(ref: string, id: string, values: SceneValue[] = [], press = false): ScenePart {
+  return { ref, part: id, press, values };
+}
+
+function useOf(
+  name: string,
+  board: string,
+  scene: readonly ScenePart[],
+  parts: readonly Item<PartRecord>[],
+  extra: readonly FileEntry[] = [],
+  deps: readonly string[] = [],
+) {
+  const { item, texts } = blockItem(name, board, extra, deps);
+  return readCatalogUse([item], parts, texts, { [name]: scene });
 }
 
 describe("readCatalogUse", () => {
   it("keeps a part that a scene places and a board carries on both lists", () => {
     const led = partItem("led", { title: "LED" });
     const board = partItem("nano-board", { title: "Nano", categories: ["board"], registryDependencies: ["led@0.1.0"] });
-    const { uses } = useOf(
-      "demo",
-      "nano-board",
-      JSON.stringify({ parts: { nano: { type: "nano-board" }, led1: { type: "led" } } }),
-      [led, board],
-      [],
-      ["nano-board@0.1.0", "led@0.1.0"],
-    );
+    const { uses } = useOf("demo", "nano-board", [placed("nano", "nano-board"), placed("led1", "led")], [led, board], [], ["nano-board@0.1.0", "led@0.1.0"]);
     expect(uses.led?.blocks.map((block) => block.id)).toEqual(["demo"]);
     expect(uses.led?.boards.map((entry) => entry.id)).toEqual(["nano-board"]);
     expect(uses["nano-board"]?.blocks).toHaveLength(1);
@@ -82,12 +86,7 @@ describe("readCatalogUse", () => {
     const cap = partItem("cap");
     const resistor = partItem("resistor");
     const board = partItem("nano-board", { categories: ["board"], registryDependencies: ["cap@0.1.0"] });
-    const { uses } = useOf(
-      "demo",
-      "nano-board",
-      JSON.stringify({ parts: { nano: { type: "nano-board" }, r1: { type: "resistor" } } }),
-      [cap, resistor, board],
-    );
+    const { uses } = useOf("demo", "nano-board", [placed("nano", "nano-board"), placed("r1", "resistor")], [cap, resistor, board]);
     expect(uses.cap?.blocks).toEqual([]);
     expect(uses.cap?.boards.map((entry) => entry.title)).toEqual(["nano-board"]);
     expect(uses.resistor?.blocks).toHaveLength(1);
@@ -95,28 +94,7 @@ describe("readCatalogUse", () => {
   });
 
   it("fails the build when the scene does not place its board", () => {
-    expect(() => useOf("blink", "nano-board", JSON.stringify({ parts: { r1: { type: "resistor" } } }), [])).toThrow(
-      "blink scene.jsonc does not place its board nano-board",
-    );
-  });
-
-  it("names the file when the scene does not parse", () => {
-    let caught: unknown;
-    try {
-      useOf("blink", "nano-board", "{", []);
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toBeInstanceOf(Error);
-    expect(caught).not.toBeInstanceOf(SyntaxError);
-    expect((caught as Error).message).toMatch(/^blink scene\.jsonc: /);
-  });
-
-  it("names the file when parts or a part is the wrong shape", () => {
-    expect(() => useOf("blink", "nano-board", JSON.stringify({ parts: [] }), [])).toThrow("blink scene.jsonc parts is not an object");
-    expect(() => useOf("blink", "nano-board", JSON.stringify({ parts: { a: 1 } }), [])).toThrow("blink scene.jsonc part a is not an object");
-    expect(() => useOf("blink", "nano-board", JSON.stringify({ parts: { a: {} } }), [])).toThrow("blink scene.jsonc part a has no type");
-    expect(() => useOf("blink", "nano-board", "", [])).toThrow(/^blink scene\.jsonc is missing|blink scene\.jsonc: /);
+    expect(() => useOf("blink", "nano-board", [placed("r1", "resistor")], [])).toThrow("blink scene.jsonc does not place its board nano-board");
   });
 
   it("names a missing scene file", () => {
@@ -136,25 +114,49 @@ describe("readCatalogUse", () => {
       versions: ["0.1.0"],
       usedBy: [],
     };
-    expect(() => readCatalogUse([item], [], {})).toThrow("blink scene.jsonc is missing");
+    expect(() => readCatalogUse([item], [], {}, {})).toThrow("blink scene.jsonc is missing");
   });
 
   it("shows a fraction whole and a file param as its file name", () => {
-    const resistor = partItem("resistor", { params: [{ name: "note" }] });
-    const board = partItem("nano-board", { categories: ["board"], params: [{ name: "firmware", file: "hex" }] });
     const { circuits } = useOf(
       "fade",
       "nano-board",
-      JSON.stringify({
-        parts: {
-          nano: { type: "nano-board", firmware: "build/fade.ino.hex" },
-          r1: { type: "resistor", note: "1/4" },
-        },
-      }),
-      [resistor, board],
+      [
+        placed("nano", "nano-board", [{ name: "firmware", file: "build/fade.ino.hex" }]),
+        placed("r1", "resistor", [{ name: "note", text: "1/4" }]),
+      ],
+      [partItem("resistor"), partItem("nano-board", { categories: ["board"] })],
     );
     expect(circuits.fade?.placed.find((part) => part.ref === "r1")?.values).toEqual(["1/4"]);
     expect(circuits.fade?.placed.find((part) => part.ref === "nano")?.values).toEqual(["fade.ino.hex"]);
+  });
+
+  it("shows a trimmer's resistance, then its position by name", () => {
+    const { circuits } = useOf(
+      "light",
+      "nano-board",
+      [
+        placed("nano", "nano-board"),
+        placed("trim", "trimmer", [
+          { name: "resistance", amount: 10000, unit: "ohm" },
+          { name: "position", amount: 0.5, unit: "1" },
+        ]),
+      ],
+      [partItem("nano-board"), partItem("trimmer")],
+    );
+    expect(circuits.light?.placed.find((part) => part.ref === "trim")?.values).toEqual(["10 kΩ", "position 0.5"]);
+  });
+
+  it("holds the first placed part with a press input, in scene order", () => {
+    const { circuits } = useOf(
+      "demo",
+      "nano-board",
+      [placed("nano", "nano-board"), placed("btn1", "switch", [], true), placed("sw", "switch", [], true)],
+      [partItem("nano-board"), partItem("switch")],
+    );
+    expect(circuits.demo?.hold).toBe("@btn1");
+    const quiet = useOf("quiet", "nano-board", [placed("nano", "nano-board")], [partItem("nano-board")]);
+    expect(quiet.circuits.quiet?.hold).toBeNull();
   });
 
   it("shows a sketch's .h and .cpp and counts test files, not expect lines", () => {
@@ -167,13 +169,7 @@ describe("readCatalogUse", () => {
       file("tests/fade.test", "test"),
       file("tests/notes.txt", "notes"),
     ];
-    const { circuits } = useOf(
-      "fade",
-      "nano-board",
-      JSON.stringify({ parts: { nano: { type: "nano-board" } } }),
-      [partItem("nano-board", { categories: ["board"] })],
-      extra,
-    );
+    const { circuits } = useOf("fade", "nano-board", [placed("nano", "nano-board")], [partItem("nano-board", { categories: ["board"] })], extra);
     const sources = circuits.fade?.sources ?? [];
     expect(sources.filter((source) => source.group === "Sketch").map((source) => source.path)).toEqual([
       "firmware/fade/fade.cpp",
@@ -186,13 +182,10 @@ describe("readCatalogUse", () => {
   });
 
   it("counts a second test file", () => {
-    const { circuits } = useOf(
-      "fade",
-      "nano-board",
-      JSON.stringify({ parts: { nano: { type: "nano-board" } } }),
-      [partItem("nano-board")],
-      [file("tests/a.test", "a"), file("tests/b.test", "b")],
-    );
+    const { circuits } = useOf("fade", "nano-board", [placed("nano", "nano-board")], [partItem("nano-board")], [
+      file("tests/a.test", "a"),
+      file("tests/b.test", "b"),
+    ]);
     expect(circuits.fade?.tests).toBe(2);
   });
 });

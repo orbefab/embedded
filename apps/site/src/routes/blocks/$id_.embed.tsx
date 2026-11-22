@@ -23,7 +23,12 @@ function EmbedPage() {
   const block = Route.useLoaderData();
   return (
     <div className="h-dvh min-w-0 bg-[var(--stage,#17191c)]" data-testid="block-embed">
-      <BlockPlayer blocks={[{ name: block.name, title: block.title, button: block.button }]} fill registry={at.registry} wasm={at.wasm} />
+      <BlockPlayer
+        blocks={[{ name: block.name, title: block.title, summary: block.description, hold: block.hold }]}
+        fill
+        registry={at.registry}
+        wasm={at.wasm}
+      />
     </div>
   );
 }

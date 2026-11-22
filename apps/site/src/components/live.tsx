@@ -6,8 +6,7 @@ import { useEffect, useState } from "react";
 /** The canvas's live state, for the site's own browser checks, as the viewer page does. */
 const expose: NonNullable<ViewerProps["onCreated"]> = (state) => Object.assign(window, { orbeViewer: { get: state.get } });
 
-/** Press and release of the Block's own button, the switch ref with no dot. The board's reset
- * switch is left to a click on that button. */
+/** Press and release of the part the page named. */
 export interface ButtonHold {
   press: () => void;
   release: () => void;
@@ -20,11 +19,14 @@ export function BlockView({
   registry,
   wasm,
   hold,
+  press,
 }: {
   id: string;
   registry: string;
   wasm: string;
   hold: { current: ButtonHold | null };
+  /** The part the page named. The press waits until the scene is open. */
+  press: Ref | null;
 }) {
   const [source, setSource] = useState<SessionSource | null>(null);
   useEffect(() => {
@@ -60,7 +62,7 @@ export function BlockView({
     const off = opened.subscribe((message) => {
       if (message.type === "scene") {
         // A new scene follows an open, which restarts the session and drops a held press.
-        button = message.channels.switches.find((ref) => !ref.includes(".")) ?? null;
+        button = press;
         held = false;
         if (!started) {
           started = true;
@@ -80,7 +82,7 @@ export function BlockView({
       off();
       opened.close();
     };
-  }, [hold, id, registry, wasm]);
+  }, [hold, id, press, registry, wasm]);
   return source === null ? null : <Viewer onCreated={expose} pageScroll source={source} />;
 }
 
