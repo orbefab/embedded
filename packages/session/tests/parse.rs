@@ -183,6 +183,29 @@ fn step_takes_a_duration_or_a_condition_with_a_timeout() {
 }
 
 #[test]
+fn a_condition_in_one_argument_splits_like_a_test_line() {
+    let root = Path::new("/project");
+    let expect = orbe_session::spec("expect").unwrap();
+    assert_eq!(
+        expect
+            .command(&["@led1 rgb(255,0,0)".into()], root)
+            .unwrap(),
+        Command::Expect(Condition::parse(&words("@led1 rgb(255,0,0)")).unwrap())
+    );
+    let step = orbe_session::spec("step").unwrap();
+    assert_eq!(
+        step.command(
+            &["--until".into(), "serial contains \"temp=35.0\"".into()],
+            root
+        )
+        .unwrap(),
+        line("step --until serial contains \"temp=35.0\"")
+            .unwrap()
+            .unwrap()
+    );
+}
+
+#[test]
 fn comments_blank_lines_and_quotes() {
     assert_eq!(line("").unwrap(), None);
     assert_eq!(line("   # a note").unwrap(), None);

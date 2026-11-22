@@ -62,7 +62,7 @@ fn add_command(stdout: &str) -> String {
         .lines()
         .filter_map(|line| {
             let at = line.rfind("orbe add ")?;
-            Some(line[at..].trim().trim_end_matches('`').to_string())
+            Some(line[at..].split('`').next()?.trim().to_string())
         })
         .collect();
     assert!(!commands.is_empty(), "{stdout}");

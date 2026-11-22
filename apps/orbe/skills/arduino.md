@@ -50,7 +50,7 @@ The names follow the sketch folder, so the firmware is `build/<sketch>.ino.hex`.
 
 ## Libraries
 
-orbe runs the compiled firmware unchanged, so Arduino libraries that work on the real board work here too, such as DHT sensor library or Adafruit NeoPixel. When a library uses a feature orbe doesn't simulate, the run stops with a diagnostic that names it.
+Prefer a stock Arduino library for a sensor or LED driver (for example `arduino-cli lib install "DHT sensor library"` or `"Adafruit NeoPixel"`); orbe runs them.
 
 ## Name the right file
 

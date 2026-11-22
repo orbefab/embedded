@@ -158,7 +158,7 @@ Give the board an `at`. Then seat every part with leads using `on`: name one pin
 
 - `@led1 lit`, `@led1 dim`, `@led1 off`: an LED's state, from its `brightness`, its average current over 20 ms. It is `lit` above 2 mA and `off` at or below 100 uA. `@led1.brightness > 1mA` compares that average.
 - `@nano.D13 high`, `@nano.D13 low`: a pin's level.
-- `@led1 rgb(255,0,0)`: an addressable LED's latched colour. `#` starts a comment, so a colour is never hex.
+- `@led1 rgb(255,0,0)`: an addressable LED's latched colour. `#` starts a comment, so a colour is never hex. In a shell, quote the colour: `orbe expect @led1 'rgb(255,0,0)'`.
 - `@led1.i > 5mA`, `@nano.D2 < 1V`: a quantity or a pin's voltage, with `<`, `<=`, `>` or `>=`. In a shell, quote `<` and `>`, as `orbe expect @led1.i '>' 5mA`.
 - `serial contains "text"`: all the serial text since `open`. `snapshot` shows the last 10 lines of it, joined with `\n`.
 - `no diagnostics`: no runtime warning has come up. A chip warning can show up to one engine step (`sim.max_step`, 10 ms by default) late, so step that far past its cause first.

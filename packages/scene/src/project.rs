@@ -698,11 +698,22 @@ fn gap_text(
         }
         GapKind::Absent => (
             format!("part `{}` is not in parts/", gap.id),
-            match command {
-                Some(command) => format!("run `{command}`"),
-                None => format!("run `{again}`"),
-            },
+            run_hint(match command {
+                Some(command) => command,
+                None => again.as_str(),
+            }),
         ),
+    }
+}
+
+/// `run \`orbe add …\``. When that command names another folder, say why: a scene
+/// reads `parts/` only from its own folder.
+fn run_hint(command: &str) -> String {
+    let run = format!("run `{command}`");
+    if command.contains(" -C ") {
+        format!("{run}. a scene finds parts/ only in its own folder")
+    } else {
+        run
     }
 }
 

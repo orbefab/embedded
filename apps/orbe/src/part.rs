@@ -252,9 +252,15 @@ pub fn catalog_text(groups: &[(String, Vec<(String, String)>)]) -> String {
     lines.join("\n")
 }
 
-pub fn search_text(found: &[(String, String)]) -> String {
+pub fn search_text(found: &[(String, String)], words: &[String]) -> String {
     if found.is_empty() {
-        return "no parts match\n".to_string();
+        let mut text = String::from("no parts match\n");
+        if let Some(word) = words.first().filter(|_| words.len() > 1) {
+            text.push_str(&format!(
+                "hint: every word must match; try one word, such as 'orbe search {word}'\n"
+            ));
+        }
+        return text;
     }
     let mut lines: Vec<String> = found
         .iter()
