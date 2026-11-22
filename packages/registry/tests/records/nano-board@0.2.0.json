@@ -248,6 +248,13 @@
       "pins": [
         "5V"
       ]
+    },
+    {
+      "what": "the regulator's input diode",
+      "why": "The AMS1117 has an internal diode from OUT to IN. The model blocks reverse current, so with USB only VIN reads about 0 V and a load from VIN to GND gets nothing. A real board shows about 4 V there, one diode drop under the 5V rail, and VIN can source a little current from USB.",
+      "pins": [
+        "VIN"
+      ]
     }
   ],
   "docs": [
