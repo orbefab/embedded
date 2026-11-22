@@ -1,0 +1,46 @@
+{
+  "part": "neopixel-stick-8",
+  "source": {
+    "script": "model.py",
+    "sha256": "a506adaa5da5b6491d3a411c90f41bd67c29885c5b56d33c527aad62bb879b15",
+    "bytes": 1679
+  },
+  "files": {
+    "neopixel-stick-8.glb": {
+      "sha256": "7e9de962b5275cd76e0afdf0564ef063da3145b2e81e54f70c28a71ae03220da",
+      "bytes": 11988
+    }
+  },
+  "box": {
+    "min": [-25.4, -5.08, 2.54],
+    "max": [25.4, 5.08, 4.14]
+  },
+  "kept_nodes": [],
+  "draw_calls": 1,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 0,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "pcb",
+      "z_mm": 2.54
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 1,
+      "primitives_out": 1
+    },
+    "composition": {
+      "children": 9,
+      "lowest_node": "pcb",
+      "z_mm": 2.54,
+      "draw_calls": 31
+    }
+  }
+}

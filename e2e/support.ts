@@ -211,7 +211,7 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "button" | "fade" | "light";
+export type BlockKind = "button" | "fade" | "light" | "pixels";
 
 export interface RepoBlock {
   id: string;
@@ -233,10 +233,11 @@ function kindOf(scene: string, id: string): BlockKind {
     .split("\n")
     .map((line) => line.replace(/\/\/.*$/, ""))
     .join("\n");
+  if (/"type"\s*:\s*"neopixel-stick-8"/.test(code)) return "pixels";
   if (/"world"\s*:\s*\{[^}]*"light"\s*:/.test(code)) return "light";
   if (/"btn1"\s*:/.test(code)) return "button";
   if (/"led1"\s*:/.test(code)) return "fade";
-  throw new Error(`${id} names no button, no fading LED and no light`);
+  throw new Error(`${id} names no button, no fading LED, no light and no pixel stick`);
 }
 
 export async function simulatedSeconds(page: Page): Promise<number> {
@@ -309,6 +310,27 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
     const span = await page.evaluate(() => window.orbeGlowSpan ?? { min: 0, max: 0 });
     expect(span.max - span.min, `${block.id} brightness`).toBeGreaterThan(0.2);
     expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(Math.max(1, start + FADE_CYCLE_S));
+    if (shotName !== null) {
+      await page.locator("canvas").scrollIntoViewIfNeeded();
+      await shot(page, shotName);
+    }
+    return;
+  }
+  if (block.kind === "pixels") {
+    await waitSimulatedPast(page, Math.max(0.05, start));
+    const colours = await page.evaluate(() => {
+      const scene = window.orbeViewer.get().scene;
+      return [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
+        const node = scene.getObjectByName(`@stick.px${n}`)?.getObjectByName("lens");
+        const material = node?.material ?? node?.children?.[0]?.material;
+        if (material === undefined) return null;
+        return { r: material.emissive.r, g: material.emissive.g, b: material.emissive.b, i: material.emissiveIntensity };
+      });
+    });
+    expect(colours.every((colour) => colour !== null && colour.i > 0.2), `${block.id} glow`).toBe(true);
+    const seen = new Set(colours.map((colour) => `${colour!.r.toFixed(3)},${colour!.g.toFixed(3)},${colour!.b.toFixed(3)}`));
+    expect(seen.size, `${block.id} colours`).toBeGreaterThan(1);
+    expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(0.05);
     if (shotName !== null) {
       await page.locator("canvas").scrollIntoViewIfNeeded();
       await shot(page, shotName);

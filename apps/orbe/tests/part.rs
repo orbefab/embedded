@@ -226,10 +226,25 @@ fn part_says_how_it_plugs_into_a_breadboard() {
         text("nano-board")
     );
     assert!(
-        text("npn-2n2222-to92")
-            .contains("does not plug into a breadboard: two legs in one strip short\n"),
+        text("npn-2n2222-to92").contains(
+            "plugs into a breadboard: name one pin's hole with on, such as \"on\": { \"collector\": \"bb.c21\" }, and orbe seats the other leads\n"
+        ),
         "{}",
         text("npn-2n2222-to92")
+    );
+    assert!(
+        text("pnp-2n3906-to92").contains(
+            "plugs into a breadboard: name one pin's hole with on, such as \"on\": { \"emitter\": \"bb.c21\" }, and orbe seats the other leads\n"
+        ),
+        "{}",
+        text("pnp-2n3906-to92")
+    );
+    assert!(
+        text("zener-1n4733a").contains(
+            "plugs into a breadboard: name one lead's hole with on, such as \"on\": { \"anode\": \"bb.c21\" }, and orbe seats the other lead 4 holes along the row, so the part spans 5 holes\n"
+        ),
+        "{}",
+        text("zener-1n4733a")
     );
 
     let (code, stdout, stderr) = orbe(&["part", "led-5mm", "--json"]);
@@ -292,6 +307,7 @@ fn search_finds_a_block_and_part_describes_it() {
         "nano-button-led",
         "nano-led-fade",
         "nano-light-comparator",
+        "nano-neopixel-stick",
         "uno-button-led",
     ] {
         assert!(stdout.contains(id), "{stdout}");

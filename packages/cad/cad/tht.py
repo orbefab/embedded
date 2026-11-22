@@ -66,19 +66,71 @@ def led_body(d, flange_d, flange_h, height, flat_x=None):
     return fuse([flange, barrel, dome]).clean()
 
 
-def to92(names, width=4.58, thick=3.6, height=4.58, lead=0.46, pitch=1.27, below=12.7):
+# The bend sits above the board, so each leg is already on the formed pitch
+# where it enters a hole. A bend below the seating plane would enter at the
+# body's 1.27 mm pitch and put two legs in one strip.
+_TO92_JOG_Z = 1.0
+
+
+def to92_tips(names, width=4.58, thick=3.6, pitch=1.27, formed=None, below=12.7):
+    """Each lead's tip, `(x, y, z)`, names from -X seen from the flat face.
+
+    The leads leave the body on `pitch`. `formed` is the tip spacing, the
+    2.54 mm a breadboard's holes use, when the legs are splayed out."""
+    r = width / 2.0
+    y_lead = (2.0 * r - thick) / 2.0
+    n = len(names)
+    span = pitch if formed is None else formed
+    mid = (n - 1) / 2.0
+    return {name: ((k - mid) * span, y_lead, -below) for k, name in enumerate(names)}
+
+
+def _to92_lead(x_body, x_tip, y, z_top, z_tip, w, t):
+    """A lead from the body down to its tip. A splayed lead jogs above the
+    board, then runs straight, so the tip is the end of that straight leg."""
+    if abs(x_tip - x_body) < 1e-9:
+        return square_lead(x_tip, y, z_tip, z_top, w, t)
+    stub = square_lead(x_body, y, _TO92_JOG_Z, z_top, w, t)
+    span = abs(x_tip - x_body) + w
+    jog = box((x_body + x_tip) / 2.0, y, _TO92_JOG_Z, span, t, w)
+    leg = square_lead(x_tip, y, z_tip, _TO92_JOG_Z, w, t)
+    return fuse([stub, jog, leg]).clean()
+
+
+def to92(
+    names,
+    width=4.58,
+    thick=3.6,
+    height=4.58,
+    lead=0.46,
+    pitch=1.27,
+    below=12.7,
+    formed=None,
+    standoff=0.0,
+):
     """TO-92: a round body cut flat on its -Y face, `thick` from the flat to
-    the back; leads in a row along X on `pitch`, names from -X seen from the
-    flat face: (body, {name: lead}). The round's axis is the Z axis."""
+    the back; leads in a row along X, names from -X seen from the flat face:
+    (body, {name: lead}). The round's axis is the Z axis.
+
+    `formed` splays the tips onto that pitch and stands the body up by
+    `standoff`, which has to clear the bend. Straight leads, `formed` left
+    unset, hang from the seating plane as the body sits on it."""
+    if formed is not None and standoff <= _TO92_JOG_Z + lead / 2.0:
+        raise ValueError("a formed TO-92 lead needs the body stood off above the bend")
     r = width / 2.0
     y_flat = r - thick
-    body = cyl_z(0, 0, 0, height, r) & box(0, (y_flat + r) / 2.0, height / 2.0, width + 1.0, r - y_flat, height + 1.0)
+    body = cyl_z(0, 0, standoff, standoff + height, r) & box(
+        0, (y_flat + r) / 2.0, standoff + height / 2.0, width + 1.0, r - y_flat, height + 1.0
+    )
     n = len(names)
+    mid = (n - 1) / 2.0
     y_lead = (y_flat + r) / 2.0
-    leads = {
-        name: square_lead((k - (n - 1) / 2.0) * pitch, y_lead, -below, 0.0, lead, lead * 0.85)
-        for k, name in enumerate(names)
-    }
+    t = lead * 0.85
+    leads = {}
+    for k, name in enumerate(names):
+        x_body = (k - mid) * pitch
+        x_tip = x_body if formed is None else (k - mid) * formed
+        leads[name] = _to92_lead(x_body, x_tip, y_lead, standoff, -below, lead, t)
     return body, leads
 
 

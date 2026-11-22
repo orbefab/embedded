@@ -23,6 +23,7 @@ fn each_block_on_its_breadboard_runs_the_netlist_of_its_circuit_wired_directly()
         "nano-button-led",
         "nano-led-fade",
         "nano-light-comparator",
+        "nano-neopixel-stick",
         "uno-button-led",
     ] {
         let root = tempfile::tempdir().unwrap();

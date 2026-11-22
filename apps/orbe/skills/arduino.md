@@ -1,21 +1,19 @@
 # orbe: arduino
 
-orbe runs the firmware you build. It never compiles anything. For the `nano-board` and the `uno-board`, build with arduino-cli, then name the `.hex` it writes in the scene. `orbe skills get core` covers everything else.
+orbe never compiles. Build a `nano-board` or `uno-board` with arduino-cli and name the `.hex` in the scene.
 
-## Install arduino-cli
+## Install
 
-First check that `arduino-cli version` runs and that `arduino-cli core list` lists `arduino:avr`.
-
-If it is missing, install arduino-cli as https://arduino.github.io/arduino-cli/latest/installation/ says, then the AVR core:
+`arduino-cli version` should run, and `arduino-cli core list` should list `arduino:avr`. If not, install it as https://arduino.github.io/arduino-cli/latest/installation/ says, then:
 
 ```sh
 arduino-cli core update-index
 arduino-cli core install arduino:avr
 ```
 
-## Write and build the sketch
+## The sketch
 
-arduino-cli wants the sketch in a folder of the same name, as `button/button.ino`. This sketch lights D13 while D2 is high, for the scene in `orbe skills get core`.
+The sketch folder has the same name. This lights D13 while D2 is high, for the scene in core.
 
 ```cpp button/button.ino
 const int buttonPin = 2;
@@ -38,54 +36,44 @@ void loop() {
 }
 ```
 
-Build it from the project folder. The Nano's FQBN is `arduino:avr:nano`. For the Uno, use `arduino:avr:uno` instead.
+The Nano's FQBN is `arduino:avr:nano`. For the Uno, use `arduino:avr:uno`.
 
 ```sh
 arduino-cli compile --fqbn arduino:avr:nano --output-dir build button
 ```
 
-`build/` then holds `button.ino.hex`, `button.ino.with_bootloader.hex`, `button.ino.with_bootloader.bin`, `button.ino.elf` and `button.ino.eep`.
+`build/` holds `button.ino.hex`, `button.ino.with_bootloader.hex`, `button.ino.with_bootloader.bin`, `button.ino.elf` and `button.ino.eep`. The firmware is `build/<sketch>.ino.hex`.
 
-The names follow the sketch folder, so the firmware is `build/<sketch>.ino.hex`.
+orbe runs a stock library, such as `arduino-cli lib install "DHT sensor library"` or `"Adafruit NeoPixel"`.
 
-## Libraries
-
-Prefer a stock Arduino library for a sensor or LED driver (for example `arduino-cli lib install "DHT sensor library"` or `"Adafruit NeoPixel"`); orbe runs them.
-
-## Name the right file
-
-The scene names `build/button.ino.hex`, the program alone:
+## Which file
 
 ```jsonc
 "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
 ```
 
-- Not `button.ino.eep`. It is EEPROM data, and for a sketch with no EEPROM data it holds no data record. `orbe check` refuses it with `error[scene.param]`, which says the firmware `has no data record, so the flash would be erased`.
+- Not `button.ino.eep`. With no EEPROM data it has no data record. `orbe check` reports `error[scene.param]`: the firmware `has no data record, so the flash would be erased`.
 - Not `.elf` or `.bin`. `orbe check` refuses them as "not text".
 - Not `button.ino.with_bootloader.hex`. It runs, but it carries the bootloader too.
 
-The path starts from the scene's folder. After each change to the sketch, compile again and run `orbe open` again, which reads the new file. A session keeps the firmware it opened with.
+Paths start at the scene's folder. Compile and `orbe open` again after each sketch change. A session keeps that firmware. `cpu=atmega328old` changes only the upload bootloader. The `.hex` stays the same.
 
-`cpu=atmega328old` in the FQBN changes only the bootloader used for upload. It builds the same `.hex`, so the simulation does not need it.
+## A Block
 
-## A Block's firmware
-
-A Block's sketch is `firmware/<name>/<name>.ino`, and its scene names `build/<name>.ino.hex`, the file the compile below writes. `<name>` is the sketch folder, such as `fade` for `nano-led-fade` and `button` for `nano-button-led`. Compile that folder from the project folder. For a Block on the Uno, use `arduino:avr:uno` as the FQBN.
+A Block's sketch is `firmware/<name>/<name>.ino` and the scene names `build/<name>.ino.hex`. `<name>` is the folder, `fade` for `nano-led-fade` and `button` for `nano-button-led`. A Uno Block uses FQBN `arduino:avr:uno`.
 
 ```sh
 arduino-cli compile --fqbn arduino:avr:nano --output-dir build firmware/fade
 ```
 
-A Block's tests check its shipped behaviour, so a change to the firmware's timing or pins needs its tests updated or a new test written.
-
-## The simulated Nano and Uno
+A Block's tests check what it shipped. Update them when the timing or the pins change.
 
 ### `nano-board`
 
 - `nano-board`, Nano (CH340 clone), runs the ATmega328P-AU at 16 MHz.
 - These pins work: `D0` to `D13`, `RESET`, `GND`, `AREF`, `A0` to `A7`, `5V`, and `VIN`.
 - `3V3` is not simulated. It is the CH340G's 3.3 V output. The engine has no USB-serial chip, so the pin supplies nothing. A wire to it is a `not_simulated` error.
-- `VIN` feeds `regulator`, an AMS1117-5.0. With about 6.1 V or more on VIN it holds the 5V pin at 5.0 V. With VIN open the board still runs from USB, and the 5V pin stays the USB rail. With USB only, VIN reads 0 V and supplies nothing, where a real board shows about 4 V through the regulator's internal diode.
+- `VIN` feeds `regulator`, an AMS1117-5.0. About 6.1 V or more on VIN holds 5V at 5.0 V. With VIN open the board runs from USB and 5V stays that rail. On USB only, VIN reads 0 V and supplies nothing. A real board shows about 4 V there, through the regulator's internal diode.
 - `D13` drives `led_l` through `r_l`, 1 kohm.
 
 ### `uno-board`
@@ -99,15 +87,14 @@ A Block's tests check its shipped behaviour, so a change to the firmware's timin
 - `VIN` is not simulated. The barrel jack feeds it. The board runs from USB. A wire to it is a `not_simulated` error.
 - `D13` drives `led_l` through `r_l`, 1 kohm.
 
-- `millis()`, `delay()` and the timers run on simulated time, so `delay(1000)` takes `step 1s`.
-- D0 to D13 and A0 to A5 take `INPUT`, `INPUT_PULLUP` and `OUTPUT`. A Nano's A6 and A7 are analog inputs only, which `analogRead` reads.
-- An input that nothing drives keeps its last level here. On a real board it floats. Once the sketch reads it while it floats, `step` warns `chip.floating_input`, naming the pin, as in `#nano__mcu.pin.PD2 (nano.D2) floats on #net.nano__D2 at ... ps, and the firmware has taken in its level`. Give each button a pull-down resistor, as the core example does, or use `INPUT_PULLUP` and wire the button to GND. A `digitalRead` under `INPUT_PULLUP` reads the pull-up, so it does not count once `pinMode(INPUT)` turns the pull-up off. `digitalRead` loads its pin's whole port, so another `INPUT` pin of that port warns too when a part, even a capacitor, is wired to it and nothing holds it.
-- `get` and `expect` read the L LED named above. With the part named `nano` or `uno`, that is `@nano.led_l` or `@uno.led_l`.
-- With `INPUT_PULLUP` on D13 the LED pulls the pin to about 1.45 V, so it reads low, where an Uno that buffers D13 through an op-amp reads high. Use another pin for an input with its pull-up.
-- `Serial` output reaches orbe as text. After `Serial.begin(115200)` and `Serial.println("ready")`, `expect serial contains "ready"` passes. `println` ends a line with `\r\n`, and `step` lists the D1 edges it makes. Serial can reach orbe up to one engine step (`sim.max_step`, 10 ms by default) after the chip sends it. A `println` in `loop` prints on every pass, so its text repeats.
-- Nothing sends serial into the chip. `Serial.read()` never gets a byte.
-- The program starts at t = 0 with no bootloader delay.
-- `SPI.transfer` returns what MISO (D12) reads, so wire D12 to the part that answers. With D12 tied to GND it returns 0, tied to 5V it returns 255, and wired to MOSI (D11) it returns the byte it sent.
-- The chip's temperature sensor reads the scene's `world` temperature, and 25 °C when the scene sets none. `analogRead` can't reach it, because the core keeps only channels 0 to 7, so a sketch sets `ADMUX = 0xC8` (the 1.1 V reference and channel 8), starts a conversion and reads `ADC`.
-- A sketch that reaches a part of the chip the simulation does not run stops the run with an error that names the peripheral and the setting, such as `error[chip.unsupported_setting]` with `#nano__mcu read the AC output while the comparator is on`. The rows before it stand. The analog comparator (`ACSR` read, or its interrupt, capture or bandgap set), Timer2 on a 32 kHz crystal (`ASSR`), self-programming (`SPMCSR`), moving the vectors (`IVSEL`), synchronous or reserved USART modes, reserved ADC references or channels, a reserved sleep mode, and a flash word that is no instruction each stop it. `ACSR |= _BV(ACD)`, which turns the comparator off, runs. Any other read of `ACSR` while the comparator is on stops the run, such as `ACSR &= ~_BV(ACD)` or `ACSR |= _BV(ACI)`.
-- `Wire.begin(address)` makes the chip an I2C slave, which the simulation does not run. `step` warns `chip.unmodeled_register` on `TWAR` once, and nothing answers that address. `Wire.begin()` with no address is a master and runs. A write to `OSCCAL` and an I2C clock below about 18 kHz each warn the same way once, on `OSCCAL` or `TWBR`, and the run goes on.
+## The chip
+
+- `millis()`, `delay()` and the timers use simulated time. `delay(1000)` takes `step 1s`. The program starts at t = 0, with no bootloader delay.
+- D0 to D13 and A0 to A5 take `INPUT`, `INPUT_PULLUP` and `OUTPUT`. A Nano's A6 and A7 are analog only. `analogRead` reads them.
+- An undriven input keeps its last level. A real pin floats. Once the sketch reads it floating, `step` warns `chip.floating_input`, as in `#nano__mcu.pin.PD2 (nano.D2) floats on #net.nano__D2 at ... ps, and the firmware has taken in its level`. Use a pull-down, as in core, or `INPUT_PULLUP` to GND. Under `INPUT_PULLUP`, `digitalRead` reads the pull-up, so it stops once `pinMode(INPUT)` turns the pull-up off. `digitalRead` loads the whole port, so another `INPUT` pin warns too when a part, even a capacitor, is on it and nothing holds it.
+- `@nano.led_l` and `@uno.led_l` are the L LED. `INPUT_PULLUP` on D13 pulls the pin to about 1.45 V through that LED, so it reads low. An Uno that buffers D13 through an op-amp reads high. Use another pin for a pull-up input.
+- After `Serial.begin(115200)` and `Serial.println("ready")`, `expect serial contains "ready"` passes. `println` ends with `\r\n`, and `step` lists the D1 edges. Text can arrive one engine step late (`sim.max_step`, 10 ms by default). A `println` in `loop` repeats. `Serial.read()` never gets a byte.
+- `SPI.transfer` returns MISO (D12). Wire D12 to the part that answers. GND returns 0, 5V returns 255, and MOSI (D11) returns the byte sent.
+- The temperature sensor reads `world` temperature, or 25 °C when unset. `analogRead` has channels 0 to 7 only, so set `ADMUX = 0xC8` (1.1 V reference, channel 8), start a conversion and read `ADC`.
+- An unmodelled setting stops the run with `error[chip.unsupported_setting]` and names the peripheral, as in `#nano__mcu read the AC output while the comparator is on`. Earlier rows stand. These stop it: `ACSR` while the comparator is on (a read, its interrupt, capture or bandgap); Timer2 on a 32 kHz crystal (`ASSR`); `SPMCSR`; `IVSEL`; a synchronous or reserved USART mode; a reserved ADC reference or channel; a reserved sleep mode; a flash word that is no instruction. `ACSR |= _BV(ACD)` turns the comparator off and runs. Any other `ACSR` read while it is on stops the run, such as `ACSR &= ~_BV(ACD)` or `ACSR |= _BV(ACI)`.
+- `Wire.begin(address)` is an I2C slave and is not run. `step` warns `chip.unmodeled_register` on `TWAR` once, and nothing answers. `Wire.begin()` with no address is a master and runs. A write to `OSCCAL`, or an I2C clock below about 18 kHz, warns once (`OSCCAL` or `TWBR`) and the run goes on.

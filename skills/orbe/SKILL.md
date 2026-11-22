@@ -7,6 +7,6 @@ description: Simulates a circuit and its microcontroller firmware with the orbe 
 
 orbe is a hardware simulator you drive from the shell. It runs a circuit and the firmware on its microcontroller, so you can build and test a hardware project without the hardware.
 
-Run `orbe skills get core` first, and follow it. The `orbe` you have installed prints it, so it matches that version.
+`orbe skills get core` prints the usage guide for the installed orbe version; read it before building. This skill is installed from the GitHub repository orbefab/embedded (`npx skills add orbefab/embedded`).
 
-If `orbe` is not found, it is not installed. Ask the user to install it from https://orbefab.com/embedded, then run `orbe skills get core`.
+If `orbe` is not found, it is not installed. Ask the user to install it from https://orbefab.com/embedded, then read what `orbe skills get core` prints.
