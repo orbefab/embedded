@@ -47,8 +47,10 @@
     "usb": { "type": "usb-b-socket" }, // CN1
     "usb_fuse": { "type": "ptc-fuse-1812" }, // F1
     "usb_switch": { "type": "pmos-fdn340p-sot23" }, // Q1, USB to 5V while VIN is low
-    // R15 and R1 bias Q1's gate. The schematic ties R1 to D1's cathode and prints no values, so 10k is a placeholder.
-    // D1, the jack and the 5 V regulator stay out, so that end sits on ground and USB holds the switch on.
+    // R15 (r_vin) and R1 (r_gate) bias Q1's gate. The schematic ties R15 to VIN at D1's cathode and R1 to 5V, and prints
+    // no values, so 10k is a placeholder. D1, the jack and the 5 V regulator stay out, so R15's far end sits on ground,
+    // not on VIN, and USB holds the switch on. A Block that feeds VIN through power.8 leaves Q1 on, where a real Uno
+    // switches it off.
     "r_vin": { "type": "resistor-0603", "resistance": "10k" },
     "r_gate": { "type": "resistor-0603", "resistance": "10k" },
     "jack": { "type": "barrel-jack-dc21", "voltage": 9, "not_simulated": "The board runs from USB. This jack stays out, so VIN stays unpowered." },
@@ -191,7 +193,7 @@
     ["d1.cathode", "regulator.IN", { "kind": "trace" }],
     ["d1.cathode", "c_vin.pos", { "kind": "trace" }],
     ["d1.cathode", "power.8", { "kind": "trace" }],
-    // Q1's VIN-side resistor sits on ground. VIN stays unpowered, so the divider holds the gate near 2.5 V.
+    // R15 sits on ground, not on VIN. VIN stays unpowered, so the divider holds the gate near 2.5 V.
     ["usb.GND", "r_vin.a", { "kind": "trace" }],
     // 3V3
     ["reg_3v3.OUT", "c_3v3.b", { "kind": "trace" }],
