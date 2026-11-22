@@ -298,6 +298,7 @@ def test_decks_grid_and_bounce():
         zener_deck(refs),
         transistor_deck(refs),
         nmos_deck(refs),
+        pmos_deck(refs),
         inductor_deck(refs),
         corner_check(refs),
         relay_deck(refs),
@@ -1163,6 +1164,42 @@ def nmos_deck(refs):
     ok = ok and not any(key.endswith(".v") for key in op)
     ok = ok and "#m1.ig" not in op
     return {"name": "nmos deck", "ok": ok}
+
+
+def pmos_deck(refs):
+    """A pmos is the nmos deck with the card's kind and a negated vto."""
+    netlist = {
+        "analysis": {"op": {}},
+        "ground": "gnd",
+        "nets": ["gnd", "d", "g"],
+        "parts": [nmos_part("m1", "d", "g", "gnd")],
+    }
+    netlist["parts"][0]["kind"] = "pmos"
+    text, mapping = refs.translate("pmos", netlist)
+    want = [
+        "vx_m1_d d x_m1_d dc 0",
+        "vx_m1_g g x_m1_g dc 0",
+        "mm1 x_m1_d x_m1_g 0 0 mmod_m1 l=100u w=100u",
+        ".model mmod_m1 pmos (level=1 vto=-1.08 kp=0.0468 lambda=0.0 is=0)",
+        "cm1_gs x_m1_g 0 5.5e-11",
+        "cm1_gd x_m1_g x_m1_d 5e-12",
+        "cm1_ds x_m1_d 0 2e-11",
+        "* The engine's gmin on every node, beside the gmin ngspice puts across each junction.",
+        "rx_gmin_d d 0 1000000000000.0",
+        "rx_gmin_g g 0 1000000000000.0",
+        ".control",
+        "save all i(vx_m1_d) i(vx_m1_g)",
+    ]
+    ok = text.splitlines()[2 : 2 + len(want)] == want
+    ok = ok and mapping["i(vx_m1_d)"] == "#m1.id"
+    ok = ok and mapping["i(vx_m1_g)"] == refs.GateCurrent("#m1")
+    ok = ok and mapping["v(x_m1_d)"] is None and mapping["v(x_m1_g)"] is None
+    values = {"#net.d": [5.0], "#net.g": [2.0], "#m1.id": [0.01]}
+    op = refs.op_point(netlist, values)
+    ok = ok and op["#m1.p"] == 5.0 * 0.01
+    ok = ok and not any(key.endswith(".v") for key in op)
+    ok = ok and "#m1.ig" not in op
+    return {"name": "pmos deck", "ok": ok}
 
 
 def rl_netlist(analysis):

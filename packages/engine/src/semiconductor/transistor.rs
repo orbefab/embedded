@@ -310,19 +310,22 @@ fn mos_capacitors(mosfet: &Mosfet) -> [OwnedCapacitor; 3] {
     ]
 }
 
-/// Writes the solved terminal voltages through, and checks the drain current.
+/// Writes the n-frame `vgs` and `vds` through, and checks the n-frame drain current.
 ///
-/// No limiter. A pass that rebuilt `vds` as `vgs - vgd` moved the last bit and never converged.
+/// A `pmos` stores `-(Vg - Vs)` and `-(Vd - Vs)`. No limiter. A pass that rebuilt `vds` as
+/// `vgs - vgd` moved the last bit and never converged.
 pub(crate) fn mos_update(
     mosfet: &Mosfet,
+    channel: Channel,
     probe: &Probe<'_>,
     prior: &[f64],
     next: &mut [f64],
 ) -> Update {
     let model = Level1::new(mosfet);
+    let sign = channel.sign();
     let vs = probe.v(mosfet.pins[2]);
-    let vgs = probe.v(mosfet.pins[1]) - vs;
-    let vds = probe.v(mosfet.pins[0]) - vs;
+    let vgs = sign * (probe.v(mosfet.pins[1]) - vs);
+    let vds = sign * (probe.v(mosfet.pins[0]) - vs);
     next[VGS] = vgs;
     next[VDS] = vds;
     let (id, gm, gds) = model.id(prior[VGS], prior[VDS]);
@@ -657,18 +660,26 @@ mod tests {
             }
         }
         // `0.2 - (1.08 - 0.0)` and `vgs - (vgs - vds)` at `(0.01, 1.08, 0.1)` each move a bit.
+        // A `pmos` stores the same n-frame slots when its terminal voltages are negated.
         let mosfet = Circuit::new(open_mos(0.0)).unwrap();
-        for v in [
-            [0.2, 1.08, 0.0],
-            [0.01, 1.08, 0.1],
-            [5.0, 3.3, 0.0],
-            [4.95, 2.53, 0.01],
-        ] {
-            let prior = [v[1] - v[2], v[0] - v[2]];
-            let (next, report) = mos_update_at(&mosfet, v, prior);
-            assert_eq!(next.map(f64::to_bits), prior.map(f64::to_bits), "{v:?}");
-            assert!(!report.limited, "{v:?}");
-            assert_eq!(report.mismatch, 0.0, "{v:?}");
+        for (channel, sign) in [(Channel::N, 1.0), (Channel::P, -1.0)] {
+            for v in [
+                [0.2, 1.08, 0.0],
+                [0.01, 1.08, 0.1],
+                [5.0, 3.3, 0.0],
+                [4.95, 2.53, 0.01],
+            ] {
+                let prior = [v[1] - v[2], v[0] - v[2]];
+                let pins = v.map(|volts| sign * volts);
+                let (next, report) = mos_update_at(&mosfet, channel, pins, prior);
+                assert_eq!(
+                    next.map(f64::to_bits),
+                    prior.map(f64::to_bits),
+                    "{channel:?} {v:?}"
+                );
+                assert!(!report.limited, "{channel:?} {v:?}");
+                assert_eq!(report.mismatch, 0.0, "{channel:?} {v:?}");
+            }
         }
     }
 
@@ -697,7 +708,7 @@ mod tests {
         let circuit = Circuit::new(open_mos(0.0)).unwrap();
         // Saturation. The solved gate is 0.1 V above the prior, so the square law
         // misses the linearised drain current by more than the tolerance.
-        let (_, report) = mos_update_at(&circuit, [5.0, 3.1, 0.0], [3.0, 5.0]);
+        let (_, report) = mos_update_at(&circuit, Channel::N, [5.0, 3.1, 0.0], [3.0, 5.0]);
         assert!(!report.limited);
         assert!(report.mismatch > 1.0, "{}", report.mismatch);
     }
@@ -781,10 +792,10 @@ mod tests {
     const CGD: f64 = 5e-12;
     const CDS: f64 = 20e-12;
 
-    fn mos_part(pins: [&str; 3], lambda: f64) -> String {
+    fn mos_part(kind: &str, pins: [&str; 3], lambda: f64) -> String {
         let [d, g, s] = pins;
         format!(
-            r#"{{ "name": "m1", "kind": "nmos",
+            r#"{{ "name": "m1", "kind": "{kind}",
                 "pins": {{ "drain": "{d}", "gate": "{g}", "source": "{s}" }},
                 "transconductance_parameter": {kp}, "threshold_voltage": {vto},
                 "channel_length_modulation": {lambda},
@@ -827,7 +838,7 @@ mod tests {
     /// `d`, `g` and `s` each have a DC path, so the gate is not floating.
     fn open_mos(lambda: f64) -> Netlist {
         let parts = [
-            mos_part(["d", "g", "s"], lambda),
+            mos_part("nmos", ["d", "g", "s"], lambda),
             resistor("rd", "d", "gnd", 1e6),
             resistor("rg", "g", "gnd", 1e6),
             resistor("rs", "s", "gnd", 1e6),
@@ -839,12 +850,17 @@ mod tests {
         let id = netlist.part_id(&Name::new("m1").unwrap()).unwrap();
         let (_, part) = netlist.parts().nth(id.index()).unwrap();
         match &part.model {
-            Model::Nmos(mosfet) => (id, mosfet),
+            Model::Nmos(Nmos(mosfet)) => (id, mosfet),
             other => panic!("{other:?}"),
         }
     }
 
-    fn mos_update_at(circuit: &Circuit, v: [f64; 3], prior: [f64; 2]) -> ([f64; 2], Update) {
+    fn mos_update_at(
+        circuit: &Circuit,
+        channel: Channel,
+        v: [f64; 3],
+        prior: [f64; 2],
+    ) -> ([f64; 2], Update) {
         let (id, mosfet) = m1(&circuit.netlist);
         let mut x = Solution::zeros(circuit.layout.size());
         for (pin, volts) in mosfet.pins.into_iter().zip(v) {
@@ -858,7 +874,7 @@ mod tests {
             x: &x,
         };
         let mut next = [f64::NAN; 2];
-        let report = mos_update(mosfet, &probe, &prior, &mut next);
+        let report = mos_update(mosfet, channel, &probe, &prior, &mut next);
         (next, report)
     }
 
@@ -967,7 +983,7 @@ mod tests {
         ] {
             let want = model.id(vg, vd).0;
             let parts = [
-                mos_part(["d", "g", "gnd"], 0.0),
+                mos_part("nmos", ["d", "g", "gnd"], 0.0),
                 source("vd", "d", vd),
                 source("vg", "g", vg),
             ];
@@ -980,12 +996,38 @@ mod tests {
         }
     }
 
+    /// A `pmos` at negated terminal voltages returns the negated drain current and the same power.
+    /// The device `GMIN` flips with `vds`, so there is no extra leak to allow.
+    #[test]
+    fn pmos_is_nmos_mirrored() {
+        for (vg, vd) in [(0.0, 5.0), (3.0, 5.0), (2.0, 0.3), (0.5, 4.0)] {
+            let bias = |kind: &str, sign: f64| {
+                let parts = [
+                    mos_part(kind, ["d", "g", "gnd"], 0.0),
+                    source("vd", "d", sign * vd),
+                    source("vg", "g", sign * vg),
+                ];
+                solved_op(&assemble(r#"{ "op": {} }"#, &["d", "g"], &parts))
+            };
+            let n = bias("nmos", 1.0);
+            let p = bias("pmos", -1.0);
+            let (id, power) = (n["#m1.id"], n["#m1.p"]);
+            assert!(id > 1e-15, "nmos id at vg {vg} V, vd {vd} V: {id}");
+            for (name, got, want) in [("id", p["#m1.id"], -id), ("p", p["#m1.p"], power)] {
+                assert!(
+                    (got - want).abs() <= 1e-9 * want.abs() + 1e-12,
+                    "{name} at vg {vg} V, vd {vd} V: {got} vs {want}"
+                );
+            }
+        }
+    }
+
     /// Drain at 12 V, gate at 5 V, 1 kohm from the source to ground.
     /// Those two readings are ngspice-42's operating point for this fit.
     #[test]
     fn a_source_follower_holds_the_source_off_ground() {
         let parts = [
-            mos_part(["d", "g", "s"], 0.0),
+            mos_part("nmos", ["d", "g", "s"], 0.0),
             source("vd", "d", 12.0),
             source("vg", "g", 5.0),
             resistor("rs", "s", "gnd", 1e3),
@@ -1008,7 +1050,7 @@ mod tests {
     #[test]
     fn a_gate_reached_only_through_a_capacitor_is_floating() {
         let open = [
-            mos_part(["d", "g", "gnd"], 0.0),
+            mos_part("nmos", ["d", "g", "gnd"], 0.0),
             source("vdd", "vdd", 5.0),
             resistor("rd", "vdd", "d", 1e3),
             capacitor("cg", "g", "gnd", CGS),
@@ -1018,7 +1060,7 @@ mod tests {
             ["#net.g"]
         );
         let held = [
-            mos_part(["d", "g", "gnd"], 0.0),
+            mos_part("nmos", ["d", "g", "gnd"], 0.0),
             source("vdd", "vdd", 5.0),
             resistor("rd", "vdd", "d", 1e3),
             capacitor("cg", "g", "gnd", CGS),
@@ -1039,7 +1081,7 @@ mod tests {
             ["gnd", "g", "g"]
         };
         let parts = [
-            mos_part(pins, 0.0),
+            mos_part("nmos", pins, 0.0),
             format!(
                 r#"{{ "name": "vin", "kind": "voltage_source", "pins": {{ "p": "in", "n": "gnd" }},
                     "voltage": {{ "kind": "pulse", "initial": {}, "pulsed": {},
@@ -1084,7 +1126,7 @@ mod tests {
     fn pin_power_includes_the_gate_current() {
         let ohm = 1e6;
         let parts = [
-            mos_part(["d", "g", "gnd"], 0.0),
+            mos_part("nmos", ["d", "g", "gnd"], 0.0),
             format!(
                 r#"{{ "name": "vin", "kind": "voltage_source", "pins": {{ "p": "in", "n": "gnd" }},
                     "voltage": {{ "kind": "pulse", "initial": {}, "pulsed": {},
@@ -1188,8 +1230,10 @@ pub struct Npn(pub Bjt);
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pnp(pub Bjt);
 
-/// An N-channel MOSFET. Level 1 with the bulk tied to the source, so `W/L` is folded into `KP`
-/// and there is no body effect. No temperature scaling.
+/// Level 1 MOSFET equations in the n-channel frame, with the bulk tied to the source, so
+/// `W/L` is folded into `KP` and there is no body effect. No temperature scaling. An `nmos`
+/// evaluates them at the terminal voltages. A `pmos` negates each terminal voltage on the way
+/// in and the drain current on the way out.
 ///
 /// With `vgs = V(gate) - V(source)` and `vds = V(drain) - V(source)`, and `vds >= 0`:
 ///
@@ -1226,6 +1270,30 @@ pub struct Mosfet {
 
 impl Mosfet {
     pub const PINS: [&'static str; 3] = ["drain", "gate", "source"];
+}
+
+/// A [`Mosfet`] as an `nmos`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Nmos(pub Mosfet);
+
+/// A [`Mosfet`] as a `pmos`. Every terminal voltage and the drain current is an `nmos`'s negated.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pmos(pub Mosfet);
+
+/// A MOSFET's kind. It sets the sign of every terminal voltage and of the drain current.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Channel {
+    N,
+    P,
+}
+
+impl Channel {
+    fn sign(self) -> f64 {
+        match self {
+            Channel::N => 1.0,
+            Channel::P => -1.0,
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -1420,6 +1488,14 @@ pub(crate) fn resolve_mosfet(ctx: ParseCtx<'_>, wire: WireMosfet) -> Option<Mosf
     })
 }
 
+pub(crate) fn resolve_nmos(ctx: ParseCtx<'_>, wire: WireMosfet) -> Option<Nmos> {
+    resolve_mosfet(ctx, wire).map(Nmos)
+}
+
+pub(crate) fn resolve_pmos(ctx: ParseCtx<'_>, wire: WireMosfet) -> Option<Pmos> {
+    resolve_mosfet(ctx, wire).map(Pmos)
+}
+
 macro_rules! bjt_kind {
     ($kind:ident, $polarity:expr) => {
         impl Kind for $kind {
@@ -1477,79 +1553,96 @@ macro_rules! bjt_kind {
 bjt_kind!(Npn, Polarity::Npn);
 bjt_kind!(Pnp, Polarity::Pnp);
 
-impl Kind for Mosfet {
-    fn pins(&self) -> &[NetId] {
-        &self.pins
-    }
-    fn unknowns(&self) -> Unknowns {
-        Unknowns {
-            internal_nodes: 0,
-            bare_internal: false,
-            branches: 3,
-            junctions: 2,
-        }
-    }
-    fn charges(&self) -> Vec<OwnedCapacitor> {
-        mos_capacitors(self).to_vec()
-    }
-    fn inductors(&self) -> Vec<OwnedInductor> {
-        Vec::new()
-    }
-    /// The channel linearised at the slot voltages, then the three pin capacitors.
-    #[inline]
-    fn stamp(&self, stamp: &mut Stamp<'_>) {
-        let model = Level1::new(self);
-        let (vgs, vds) = (stamp.junction(VGS), stamp.junction(VDS));
-        let (id, gm, gds) = model.id(vgs, vds);
-        let [d, g, s] = self.pins.map(Node::from);
-        stamp.add(d, g, gm);
-        stamp.add(d, s, -gm - gds);
-        stamp.add(d, d, gds);
-        stamp.add(s, g, -gm);
-        stamp.add(s, s, gm + gds);
-        stamp.add(s, d, -gds);
-        stamp.current(d, s, id - gm * vgs - gds * vds);
-        for cap in mos_capacitors(self) {
-            stamp_capacitor(stamp, cap.k, cap.ends, cap.farad, None);
-        }
-    }
-    fn reads_iterate(&self) -> bool {
-        true
-    }
-    /// Both slots start at 0. The square law needs no `vcrit`.
-    fn initial(&self, out: &mut [f64]) {
-        out[VGS] = 0.0;
-        out[VDS] = 0.0;
-    }
-    fn update(&self, probe: &Probe<'_>, prior: &[f64], next: &mut [f64]) -> Update {
-        mos_update(self, probe, prior, next)
-    }
-    /// The drain to the source. The gate joins nothing.
-    fn dc_paths(&self) -> &'static [(usize, usize)] {
-        &[(0, 2)]
-    }
-    fn quantities(&self) -> &'static [Quantity] {
-        &[Quantity::Id, Quantity::P]
-    }
-    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
-        let current = self.max_current.as_ref().map(|v| (Quantity::Id, v));
-        (current, self.max_power.as_ref())
-    }
-    /// `id` and `p`. `id` is the channel current plus the capacitor currents into the drain pin.
-    fn observe(&self, probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {
-        let [vd, vg, vs] = self.pins.map(|pin| probe.v(pin));
-        let id_channel = Level1::new(self).id(vg - vs, vd - vs).0;
-        let i_cgs = probe.branch(0);
-        let i_cgd = probe.branch(1);
-        let i_cds = probe.branch(2);
-        let id = id_channel + i_cds - i_cgd;
-        let ig = i_cgs + i_cgd;
-        Some(Observed::values(
-            [id, (vd - vs) * id + (vg - vs) * ig, 0.0],
-            2,
-        ))
-    }
-    fn conduction(&self) -> Conduction {
-        Conduction::Switches(0, 2)
+/// The channel linearised at the n-frame slot voltages, then the three pin capacitors.
+///
+/// Both voltage and current flip for a `pmos`, so the conductances stay. The constant current
+/// takes the sign. The capacitor currents are the physical pin currents.
+fn mos_stamp(mosfet: &Mosfet, channel: Channel, stamp: &mut Stamp<'_>) {
+    let model = Level1::new(mosfet);
+    let sign = channel.sign();
+    let (vgs, vds) = (stamp.junction(VGS), stamp.junction(VDS));
+    let (id, gm, gds) = model.id(vgs, vds);
+    let [d, g, s] = mosfet.pins.map(Node::from);
+    stamp.add(d, g, gm);
+    stamp.add(d, s, -gm - gds);
+    stamp.add(d, d, gds);
+    stamp.add(s, g, -gm);
+    stamp.add(s, s, gm + gds);
+    stamp.add(s, d, -gds);
+    stamp.current(d, s, sign * (id - gm * vgs - gds * vds));
+    for cap in mos_capacitors(mosfet) {
+        stamp_capacitor(stamp, cap.k, cap.ends, cap.farad, None);
     }
 }
+
+/// `id` and `p`. `id` is the channel current plus the capacitor currents into the drain pin.
+fn mos_observe(mosfet: &Mosfet, channel: Channel, probe: &Probe<'_>) -> Observed {
+    let sign = channel.sign();
+    let [vd, vg, vs] = mosfet.pins.map(|pin| probe.v(pin));
+    let id_channel = sign * Level1::new(mosfet).id(sign * (vg - vs), sign * (vd - vs)).0;
+    let i_cgs = probe.branch(0);
+    let i_cgd = probe.branch(1);
+    let i_cds = probe.branch(2);
+    let id = id_channel + i_cds - i_cgd;
+    let ig = i_cgs + i_cgd;
+    Observed::values([id, (vd - vs) * id + (vg - vs) * ig, 0.0], 2)
+}
+
+macro_rules! mos_kind {
+    ($kind:ident, $channel:expr) => {
+        impl Kind for $kind {
+            fn pins(&self) -> &[NetId] {
+                &self.0.pins
+            }
+            fn unknowns(&self) -> Unknowns {
+                Unknowns {
+                    internal_nodes: 0,
+                    bare_internal: false,
+                    branches: 3,
+                    junctions: 2,
+                }
+            }
+            fn charges(&self) -> Vec<OwnedCapacitor> {
+                mos_capacitors(&self.0).to_vec()
+            }
+            fn inductors(&self) -> Vec<OwnedInductor> {
+                Vec::new()
+            }
+            #[inline]
+            fn stamp(&self, stamp: &mut Stamp<'_>) {
+                mos_stamp(&self.0, $channel, stamp);
+            }
+            fn reads_iterate(&self) -> bool {
+                true
+            }
+            /// Both slots start at 0. The square law needs no `vcrit`.
+            fn initial(&self, out: &mut [f64]) {
+                out[VGS] = 0.0;
+                out[VDS] = 0.0;
+            }
+            fn update(&self, probe: &Probe<'_>, prior: &[f64], next: &mut [f64]) -> Update {
+                mos_update(&self.0, $channel, probe, prior, next)
+            }
+            /// The drain to the source. The gate joins nothing.
+            fn dc_paths(&self) -> &'static [(usize, usize)] {
+                &[(0, 2)]
+            }
+            fn quantities(&self) -> &'static [Quantity] {
+                &[Quantity::Id, Quantity::P]
+            }
+            fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+                let current = self.0.max_current.as_ref().map(|v| (Quantity::Id, v));
+                (current, self.0.max_power.as_ref())
+            }
+            fn observe(&self, probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {
+                Some(mos_observe(&self.0, $channel, probe))
+            }
+            fn conduction(&self) -> Conduction {
+                Conduction::Switches(0, 2)
+            }
+        }
+    };
+}
+
+mos_kind!(Nmos, Channel::N);
+mos_kind!(Pmos, Channel::P);

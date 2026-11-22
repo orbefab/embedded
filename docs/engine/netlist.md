@@ -683,6 +683,12 @@ The values are from 2N7000/D Rev. 5. `VTO` is 1.08 V and `KP` is 0.0468 A/V^2. T
 }
 ```
 
+### P-channel MOSFET
+
+`kind` is `pmos`. Pins, fields, ratings and the equations are the `nmos` ones, and every value stays positive, `threshold_voltage` included. The device is that `nmos` with each terminal voltage and the drain current negated, so it conducts when `V(gate) - V(source)` is below `-VTO`. `id` is negative when the channel sources current into a load tied to ground.
+
+`packages/engine/tests/circuits/pmos-high-side` is a 5 V source, a P-channel MOSFET and 10 ohm to ground. The gate sits at 5 V, then 0 V, then 5 V. While it is on, `#m1.id` is negative and `#m1.p` is positive. `packages/engine/tests/circuits/pmos-sweep` steps that gate from 5 V down to 0 V. The drain stays near ground until `|Vgs|` passes `VTO`, then rises toward the source. Both use the FDN340P fit from `parts/pmos-fdn340p-sot23`.
+
 ### NE555
 
 `kind` is `ne555`. Pins are `gnd`, `trig`, `out`, `reset`, `cont`, `thres`, `disch` and `vcc`, in package order. `packages/engine/tests/circuits/ne555-led` is the astable of TI SLFS022K Figure 6-5, 10 kohm and 47 kohm with 10 uF, driving an LED through 220 ohm. Its values cite SLFS022K, and its ladder cites the schematic of the pin-compatible LM555, TI SNAS548D.
@@ -1317,7 +1323,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `diode`, `led`, `zener` | `current`, `power` | `#<part>.i`, `#<part>.p` |
 | `linear_regulator` | `current`, `power` | `#<part>.iout`, `#<part>.p` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
-| `nmos` | `current`, `power` | `#<part>.id`, `#<part>.p` |
+| `nmos`, `pmos` | `current`, `power` | `#<part>.id`, `#<part>.p` |
 | `voltage_source` | `current` | `#<part>.i` |
 | `atmega328p` | `pin_current`, `supply_current`, `rail_margin`, `reset_voltage`, `supply_voltage` | each port pin's current, the current through `VCC` and `GND_8`, and each pin's voltage over `GND_8`, each named `#<part>.pin.<pin>` |
 | `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `ws2812`, `dht22` | none | |
@@ -1348,7 +1354,7 @@ On the divider, `#r1.i` and `#r2.i` are positive, `#r1.p` and `#r2.p` are positi
 
 For a bipolar transistor, `ib` is the current entering the base pin and `ic` the current entering the collector pin. Each flows through its series resistance, so it includes the capacitors' current. `p` is `(V(collector) - V(emitter)) * ic + (V(base) - V(emitter)) * ib`, the power entering the part at its pins. A bipolar transistor has no `v`, and its internal nodes are not observed. A conducting PNP has negative `ib` and `ic`. On `packages/engine/tests/circuits/npn-led`, `#q1.ib` and `#q1.ic` are positive. On `packages/engine/tests/circuits/pnp-load` they are negative, and `#q1.p` is positive on both.
 
-For an `nmos`, `id` is the current entering the drain pin. It includes the drain-source capacitor and the gate-drain capacitor. `p` is `(V(drain) - V(source)) * id + (V(gate) - V(source)) * ig`, where `ig` is the current entering the gate pin. The gate current is not a separate ref. At DC the capacitors are open, so `ig` is 0 and `p` is `(V(drain) - V(source)) * id`. An `nmos` has no `v` and no internal node. On `packages/engine/tests/circuits/nmos-led`, `#m1.id` and `#m1.p` are positive.
+For an `nmos` or a `pmos`, `id` is the current entering the drain pin. It includes the drain-source capacitor and the gate-drain capacitor. `p` is `(V(drain) - V(source)) * id + (V(gate) - V(source)) * ig`, where `ig` is the current entering the gate pin. The gate current is not a separate ref. At DC the capacitors are open, so `ig` is 0 and `p` is `(V(drain) - V(source)) * id`. A MOSFET has no `v` and no internal node. On `packages/engine/tests/circuits/nmos-led`, `#m1.id` and `#m1.p` are positive. A conducting `pmos` has negative `id` when it sources current into a ground load. On `packages/engine/tests/circuits/pmos-high-side`, `#m1.id` is negative while the switch is on, and `#m1.p` is positive.
 
 A linear regulator has no `i` and no `v`. `iin` is the current entering `in` and `iout` is the current entering `out`. While the part supplies a load, `iout` is negative. `p` is `(V(in) - V(gnd)) * iin + (V(out) - V(gnd)) * iout`. On `packages/engine/tests/circuits/regulator-3v3`, `#u1.iout` is negative and `#u1.p` is positive.
 

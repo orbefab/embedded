@@ -192,7 +192,7 @@ macro_rules! define_kinds {
 
             /// The quantities a run observes on this part, in `Quantity` order. A two-pin part has
             /// `i`, `v` and `p`, and so does a relay, of its coil. A BJT has `ib`, `ic` and `p`. An
-            /// `nmos` has `id` and `p`. A linear regulator has `iin`, `iout` and `p`. A chip, an op-amp
+            /// `nmos` or a `pmos` has `id` and `p`. A linear regulator has `iin`, `iout` and `p`. A chip, an op-amp
             /// and a potentiometer have none.
             pub fn quantities(&self) -> &'static [Quantity] {
                 match self {
@@ -210,7 +210,7 @@ macro_rules! define_kinds {
 
             /// Rated quantities in `RatingKind` order, each with the quantity it bounds. A
             /// current rating bounds `iout` on a linear regulator, `ic` on a BJT, `id` on an
-            /// `nmos`, and `i` on every other part. A `null` rating is left out.
+            /// `nmos` or a `pmos`, and `i` on every other part. A `null` rating is left out.
             pub fn ratings(&self) -> Vec<(RatingKind, Quantity, &Value)> {
                 let (current, power) = match self {
                     $(Model::$variant(part) => <$ty as Kind>::ratings(part),)*
@@ -453,9 +453,14 @@ define_kinds! {
             crate::semiconductor::transistor::WireBjt, crate::semiconductor::transistor::resolve_pnp,
             &crate::semiconductor::Bjt::PINS;
         #[doc = "An N-channel MOSFET. Level 1, bulk tied to the source."]
-        Nmos(crate::semiconductor::Mosfet), "nmos",
+        Nmos(crate::semiconductor::Nmos), "nmos",
             crate::semiconductor::transistor::WireMosfet,
-            crate::semiconductor::transistor::resolve_mosfet,
+            crate::semiconductor::transistor::resolve_nmos,
+            &crate::semiconductor::Mosfet::PINS;
+        #[doc = "The same device equations as `Nmos`, with every terminal voltage and the drain current negated."]
+        Pmos(crate::semiconductor::Pmos), "pmos",
+            crate::semiconductor::transistor::WireMosfet,
+            crate::semiconductor::transistor::resolve_pmos,
             &crate::semiconductor::Mosfet::PINS;
         Capacitor(crate::passive::Capacitor), "capacitor",
             crate::passive::capacitor::WireCapacitor, crate::passive::capacitor::resolve_capacitor,
