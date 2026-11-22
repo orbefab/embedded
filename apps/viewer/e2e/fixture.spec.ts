@@ -886,10 +886,10 @@ test.describe("viewer page", () => {
     }
   });
 
-  test("only an LED at or above its full current blooms, from the side, from overhead and from the top view", async ({ browser, host }) => {
-    const { context, page, rest } = await open(browser, host.base);
-    try {
-      for (const theme of ["light", "dark"] as const) {
+  for (const theme of ["light", "dark"] as const) {
+    test(`only an LED at or above its full current blooms, from the side, from overhead and from the top view, ${theme}`, async ({ browser, host }) => {
+      const { context, page, rest } = await open(browser, host.base);
+      try {
         await setStageTheme(page, theme);
         await restPointer(page);
         const outline = await outlineDelta(page);
@@ -922,11 +922,11 @@ test.describe("viewer page", () => {
           const off = await bloomDelta(page, false);
           expect(off.pixels, `${theme} ${pose.name}, button released ${JSON.stringify(off)}`).toBe(0);
         }
+      } finally {
+        await context.close();
       }
-    } finally {
-      await context.close();
-    }
-  });
+    });
+  }
 
   test("hovering the Nano and leaving draws no outline after, and its lit LED still blooms", async ({ browser, host }) => {
     const { context, page, rest } = await open(browser, host.base);
