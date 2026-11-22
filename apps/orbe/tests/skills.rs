@@ -1735,6 +1735,7 @@ fn the_core_skill_starts_from_a_block_and_orbe_part_prints_a_part() {
         "uno-button-led",
         "nano-led-fade",
         "nano-light-comparator",
+        "nano-neopixel-stick",
     ] {
         assert!(
             loop_.contains(&format!("- `{id}`:")),

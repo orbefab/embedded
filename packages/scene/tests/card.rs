@@ -159,6 +159,7 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
             "led-0805",
             "led-3mm",
             "led-5mm",
+            "neopixel-stick-8",
             "sk68xxmini-hs",
         ]
     );
@@ -365,6 +366,7 @@ fn search_finds_a_block_by_a_word_of_its_id() {
             "nano-button-led",
             "nano-led-fade",
             "nano-light-comparator",
+            "nano-neopixel-stick",
             "uno-button-led",
         ]
     );

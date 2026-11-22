@@ -1,0 +1,44 @@
+{
+  "part": "pin-header-1x3",
+  "source": {
+    "script": "model.py",
+    "sha256": "1ba11b439bc9efa35df24f858d1583452b53695903574bdd4cd3b80f77509806",
+    "bytes": 658
+  },
+  "files": {
+    "pin-header-1x3.glb": {
+      "sha256": "76eb81a252fe0b6f900c5b48c9ebe5a842937f395775d1fb1e656fcd59e6f0cd",
+      "bytes": 3084
+    },
+    "pin-header-1x3.anchors.json": {
+      "sha256": "76afee1694ecb8bfeae4afd3e8f68467f91aec756a3f3d1c380d7a15dc88a226",
+      "bytes": 436
+    }
+  },
+  "box": {
+    "min": [-3.81, -1.27, -8],
+    "max": [3.81, 1.27, 5.54]
+  },
+  "kept_nodes": ["housing-1", "housing-2", "housing-3", "pin-1", "pin-2", "pin-3"],
+  "draw_calls": 6,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 3,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": null,
+      "z_mm": null
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 6,
+      "primitives_out": 6
+    }
+  }
+}

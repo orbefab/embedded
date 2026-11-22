@@ -285,6 +285,7 @@ fn search_finds_a_block_and_part_describes_it() {
         "nano-button-led",
         "nano-led-fade",
         "nano-light-comparator",
+        "nano-neopixel-stick",
         "uno-button-led",
     ] {
         assert!(stdout.contains(id), "{stdout}");
