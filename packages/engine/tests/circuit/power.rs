@@ -384,3 +384,97 @@ fn a_steady_overload_beside_a_held_capacitor_still_warns_at_open() {
     let peak = found[0]["data"]["peak"].as_f64().unwrap();
     assert!((peak - 2.5).abs() < 1e-3, "{peak}");
 }
+
+/// 5 V, two 10 ohm resistors, and a capacitor from their midpoint to ground held at 0 V.
+/// The rated resistor is the top one when `top_rated`, and the bottom one otherwise. The
+/// rated part is `r1`.
+fn midpoint_held(farads: &str, stop_ps: u64, max_step_ps: u64, top_rated: bool) -> String {
+    let rated = r#"{ "value": 0.25, "unit": "W" }"#;
+    let (top_name, bottom_name, top, bottom) = if top_rated {
+        ("r1", "r2", rated, "null")
+    } else {
+        ("r2", "r1", "null", rated)
+    };
+    format!(
+        r#"{{
+      "version": 1,
+      "seed": 1,
+      "analysis": {{ "transient": {{ "stop_ps": {stop_ps}, "max_step_ps": {max_step_ps}, "grid_ps": 1000000000 }} }},
+      "ground": "gnd",
+      "nets": ["gnd", "vcc", "mid"],
+      "parts": [
+        {{
+          "name": "v1",
+          "kind": "voltage_source",
+          "pins": {{ "p": "vcc", "n": "gnd" }},
+          "voltage": {{ "value": 5.0, "unit": "V" }}
+        }},
+        {{
+          "name": "{top_name}",
+          "kind": "resistor",
+          "pins": {{ "a": "vcc", "b": "mid" }},
+          "resistance": {{ "value": 10.0, "unit": "ohm" }},
+          "ratings": {{ "power": {top} }}
+        }},
+        {{
+          "name": "{bottom_name}",
+          "kind": "resistor",
+          "pins": {{ "a": "mid", "b": "gnd" }},
+          "resistance": {{ "value": 10.0, "unit": "ohm" }},
+          "ratings": {{ "power": {bottom} }}
+        }},
+        {{
+          "name": "c1",
+          "kind": "capacitor",
+          "pins": {{ "a": "mid", "b": "gnd" }},
+          "capacitance": {{ "value": {farads}, "unit": "F" }},
+          "initial": {{ "value": 0.0, "unit": "V" }}
+        }}
+      ]
+    }}"#
+    )
+}
+
+/// 1 F from the midpoint, so RC is 5 s. At t = 0 the bottom resistor carries nothing. With
+/// the capacitor open it would carry 0.625 W, and it stays at microwatts for tens of milliseconds.
+#[test]
+fn a_farad_held_at_0_v_does_not_warn_on_a_cold_load() {
+    let json = midpoint_held("1", 50_000_000_000, 1_000_000_000, false);
+    let results = simulate(&json);
+    assert_eq!(power_of(&results), Vec::<serde_json::Value>::new());
+    let (_low, high) = span(results.trace().expect("a trace"), "#r1.p");
+    assert!(high < 1e-4, "{high}");
+}
+
+/// 1000 µF, so RC is 5 ms. The average over the first 10.2 ms is about 0.24 W, under 0.25 W,
+/// while the resistor's own power climbs past the rating. 10 µs steps keep the held-sample
+/// average within a few milliwatts of that integral.
+#[test]
+fn a_1000_uf_cold_load_does_not_warn_over_its_first_window() {
+    let json = midpoint_held("0.001", WINDOW_PS, 10_000_000, false);
+    let results = simulate(&json);
+    let found = power_of(&results);
+    assert!(
+        found.iter().all(|warning| warning["t_ps"] != 0),
+        "warned at open: {found:?}"
+    );
+    assert!(
+        found.is_empty(),
+        "warned while the average over the first 10.2 ms stays under 0.25 W: {found:?}"
+    );
+    let (_low, high) = span(results.trace().expect("a trace"), "#r1.p");
+    assert!(high > 0.4, "{high}");
+}
+
+/// The top resistor draws 2.5 W at t = 0 and 0.625 W with the capacitor open. Both are over
+/// 0.25 W, so it warns at open with the lower value.
+#[test]
+fn a_divider_over_at_open_and_at_dc_warns_at_open_with_the_lower_value() {
+    let json = midpoint_held("1e-7", 22_000_000_000, 1_000_000_000, true);
+    let found = power_warnings(&json);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["refs"][0], "#r1.p");
+    assert_eq!(found[0]["t_ps"], 0);
+    let peak = found[0]["data"]["peak"].as_f64().unwrap();
+    assert!((peak - 0.625).abs() < 1e-3, "{peak}");
+}

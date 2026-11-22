@@ -110,9 +110,10 @@ enum Reduce {
 }
 
 /// A quantity over the last [`DC_WINDOW_PS`], each sample held until the next. The window
-/// starts full of the first sample. For a run that is the DC point when [`Ratings::prefill_dc`]
-/// has fed one, and the t = 0 value otherwise. The stored sample is the square for
-/// [`Reduce::Rms`] and the magnitude for [`Reduce::Mean`].
+/// starts full of the first sample. For a run, that sample is the t = 0 value, or the smaller
+/// of it and the open-capacitor DC point when [`Ratings::prefill_dc`] has fed one and the two
+/// differ. The stored sample is the square for [`Reduce::Rms`] and the magnitude for
+/// [`Reduce::Mean`].
 #[derive(Clone)]
 struct Square {
     reduce: Reduce,
@@ -311,10 +312,11 @@ impl Ratings {
         self.watches.iter().any(|watch| watch.window.is_some())
     }
 
-    /// Fills each window from `steady`, the DC point with every capacitor open, when `real`
-    /// (the t = 0 solve) disagrees with it, and from `real` when the two agree. A later
-    /// [`Self::sample`] at the same time keeps this fill and carries `real` forward, so a hold's
-    /// surge counts only from t = 0 on and a steady overload is already the whole window.
+    /// Fills each window before the first sample. `steady` is the DC point with every capacitor
+    /// open and `real` is the t = 0 solve. When the two agree the window is `real`, so a steady
+    /// overload is already the whole window. When they differ the window is the smaller one, so
+    /// a hold's surge stays out of the past and a DC point the circuit has not reached does not
+    /// warn. A later [`Self::sample`] at the same time keeps this fill and carries `real` forward.
     pub(crate) fn prefill_dc(
         &mut self,
         at: Time,
@@ -332,7 +334,11 @@ impl Ratings {
             let Some(window) = &mut watch.window else {
                 continue;
             };
-            let fill = if is_surge(steady, real) { steady } else { real };
+            let fill = if is_surge(steady, real) {
+                steady.min(real)
+            } else {
+                real
+            };
             window.reading(at, fill);
         }
     }
@@ -530,9 +536,9 @@ impl Watch {
     }
 }
 
-/// The t = 0 value disagrees with the DC point, so it is a hold's surge and not the
-/// window's fill. 1e-3 of a unit, and at least a milliamp or a milliwatt, is far above the
-/// microamp a crystal load draws and far below a rating this window is checked against.
+/// The t = 0 value disagrees with the DC point, so the window takes the smaller of the two.
+/// 1e-3 of a unit, and at least a milliamp or a milliwatt, is far above the ATmega's leakage
+/// bound, 5 V / 5.5 MΩ, and far below a rating this window is checked against.
 fn is_surge(steady: f64, real: f64) -> bool {
     let scale = steady.abs().max(real.abs()).max(1.0);
     (steady - real).abs() > 1e-3 * scale
@@ -975,7 +981,8 @@ mod tests {
         row
     }
 
-    /// A t = 0 value the DC point does not share is a hold's surge, so it does not fill the window.
+    /// A t = 0 value above the DC point is a hold's surge. The window fills with the DC point,
+    /// so the surge does not warn at once.
     #[test]
     fn a_prefill_drops_a_surge_the_dc_point_does_not_share() {
         let (mut ratings, columns) = power_ratings(0.25);
@@ -984,6 +991,35 @@ mod tests {
         ratings.prefill_dc(Time::ZERO, &steady, &real, &[]);
         ratings.sample(Time::ZERO, &real, &[]);
         assert!(ratings.findings().is_empty());
+    }
+
+    /// A DC point above the t = 0 value has not been reached. The window fills with the t = 0
+    /// value, so that higher point does not warn.
+    #[test]
+    fn a_prefill_drops_a_dc_point_above_the_value_at_open() {
+        let (mut ratings, columns) = power_ratings(0.25);
+        let steady = row_power(&columns, 0.625);
+        let real = row_power(&columns, 0.0);
+        ratings.prefill_dc(Time::ZERO, &steady, &real, &[]);
+        ratings.sample(Time::ZERO, &real, &[]);
+        assert!(ratings.findings().is_empty());
+    }
+
+    /// Both values are over the rating. The window is the lower one, so it warns at once
+    /// with that value.
+    #[test]
+    fn a_prefill_warns_at_the_lower_of_two_values_over_the_rating() {
+        let (mut ratings, columns) = power_ratings(0.25);
+        let steady = row_power(&columns, 0.625);
+        let real = row_power(&columns, 2.5);
+        ratings.prefill_dc(Time::ZERO, &steady, &real, &[]);
+        ratings.sample(Time::ZERO, &real, &[]);
+        let found = ratings.findings();
+        let [Diagnostic::RatingPower(excursion)] = found.as_slice() else {
+            panic!("not one power finding: {found:?}");
+        };
+        assert_eq!(excursion.first, Time::ZERO);
+        close(excursion.peak, 0.625);
     }
 
     /// A value the DC point shares is the window at once.

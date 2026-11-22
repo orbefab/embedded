@@ -376,8 +376,8 @@ pub(crate) struct StartFailure {
     pub(crate) warnings: Vec<Diagnostic>,
 }
 
-/// A held capacitor's branch current above this is a t = 0 surge, not the DC point a rating
-/// window starts from. A crystal load's leakage is about a microamp and stays under it.
+/// A held capacitor's branch current above this is a t = 0 surge, not a settled point a
+/// rating window should take as given. The ATmega's leakage bound, 5 V / 5.5 MΩ, stays under it.
 const HOLD_SURGE_A: f64 = 1e-4;
 
 /// Whether a capacitor held at `initial` carries more than [`HOLD_SURGE_A`] at the t = 0 solve.
@@ -485,10 +485,12 @@ impl Session {
             actives.keep_shown();
         }
         let mut ratings = Ratings::new(&circuit.netlist, &circuit.actives, &columns, Timing::Run);
-        // A held capacitor's t = 0 current is the hold, not the DC the window starts from. When
-        // that current is a surge, fill each window from the DC point, capacitors open, so the
-        // surge counts only from t = 0 on. A crystal load's microamp is not a surge, and the
-        // window stays the operating point.
+        // A held capacitor's t = 0 current is the hold, not a settled DC point. When that
+        // current is a surge, each window is filled from the t = 0 value and the DC point
+        // with every capacitor open, and the two that differ take the smaller. A surge then
+        // counts only from t = 0 on, and a higher DC point does not warn for a load the
+        // circuit has not reached. The ATmega's leakage, 5 V / 5.5 MΩ, is not a surge, and
+        // that window stays the operating point.
         if hold_surge(&circuit, &start.iterate.solution) && ratings.averages() {
             match dc_row(
                 &circuit,
