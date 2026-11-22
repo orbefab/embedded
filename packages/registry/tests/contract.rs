@@ -283,6 +283,27 @@ fn record_to_card(record: &Value) -> Value {
 }
 
 #[test]
+fn a_part_left_out_of_search_is_false_on_its_index_row_and_absent_from_its_record() {
+    let registry = build(&repo()).unwrap();
+    let index: Value = serde_json::from_slice(&registry.output["index.json"]).unwrap();
+    let rows = index["items"].as_array().unwrap();
+    let row = |name: &str| rows.iter().find(|row| row["name"] == name).unwrap();
+    for name in [
+        "crystal-3215",
+        "crystal-hc49us",
+        "resonator-cstce",
+        "ch340g",
+        "cp2102n-qfn28",
+        "atmega16u2-qfn32",
+    ] {
+        assert_eq!(row(name)["listed"], json!(false), "{name}");
+        let record = record(&registry.output, &format!("{name}@0.2.0"));
+        assert!(record.get("listed").is_none(), "{name}");
+    }
+    assert!(row("led-5mm").get("listed").is_none());
+}
+
+#[test]
 fn a_part_record_maps_to_orbe_part_json_both_ways() {
     let registry = build(&repo()).unwrap();
     for card in orbe_scene::catalog_cards(&repo().join("parts")) {

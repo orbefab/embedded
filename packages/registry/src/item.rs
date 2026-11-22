@@ -274,6 +274,7 @@ impl From<Card> for Item {
             dim,
             pressable,
             holes,
+            listed: _,
         } = card;
         Item::Part(Box::new(PartItem {
             head: Head {
@@ -357,8 +358,9 @@ impl Item {
         address(&self.head().name, &self.head().version)
     }
 
-    /// The index row for this record, served as `bytes`.
-    pub fn row(&self, bytes: &[u8]) -> Row {
+    /// The index row for this record, served as `bytes`. `listed` is false when search and the
+    /// parts list leave the part out. A Block is offered.
+    pub fn row(&self, bytes: &[u8], listed: bool) -> Row {
         let head = self.head();
         let (maker, number) = match self {
             Item::Part(part) => (part.real.maker.clone(), part.real.number.clone()),
@@ -376,6 +378,7 @@ impl Item {
             url: record_url(&head.name, &head.version),
             sha256: crate::sha256(bytes),
             bytes: bytes.len() as u64,
+            listed,
         }
     }
 }
@@ -450,6 +453,10 @@ pub struct Row {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[schemars(with = "String")]
     pub number: Option<String>,
+    /// Whether search and the parts list offer this part. Absent means they do. Present only
+    /// as `false`, when they leave the part out.
+    #[serde(default = "listed_when_absent", skip_serializing_if = "is_offered")]
+    pub listed: bool,
     /// The record's URL relative to the index's: `<name>@<version>.json`.
     #[schemars(pattern(pattern::RECORD_URL))]
     pub url: String,
@@ -457,4 +464,12 @@ pub struct Row {
     #[schemars(pattern(pattern::SHA256))]
     pub sha256: String,
     pub bytes: u64,
+}
+
+fn listed_when_absent() -> bool {
+    true
+}
+
+fn is_offered(listed: &bool) -> bool {
+    *listed
 }

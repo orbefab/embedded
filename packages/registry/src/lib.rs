@@ -317,6 +317,10 @@ pub fn build(src: &Path) -> Result<Registry, Error> {
                 .count(),
         },
     };
+    let offered: BTreeMap<String, bool> = cards
+        .iter()
+        .map(|card| (card.name.clone(), card.listed))
+        .collect();
     let mut items: Vec<Item> = cards.into_iter().map(Item::from).collect();
     items.extend(block_cards.into_iter().map(Item::from));
     items.sort_by(|a, b| a.head().name.cmp(&b.head().name));
@@ -327,7 +331,8 @@ pub fn build(src: &Path) -> Result<Registry, Error> {
     let mut notices = Vec::new();
     for item in &items {
         let record = json(item);
-        rows.push(item.row(&record));
+        let show = offered.get(&item.head().name).copied().unwrap_or(true);
+        rows.push(item.row(&record, show));
         output.insert(format!("{}.json", item.address()), record);
         let name = &item.head().name;
         let folder = parts.get(name).or(blocks.get(name));

@@ -107,7 +107,7 @@ A template is an `https://` URL with exactly one `{name}`. `{name}` starts its l
 }
 ```
 
-`name` is the registry's name and `homepage` its page, absent when `registry.jsonc` has none. `items` has one row per record, sorted by name and then by version, oldest first. Every row has a `version`. `description` and `categories` are absent when the item has none. A part row may also carry `maker` and `number`, from the part file's `real` fields, and leaves a field out when the part names none. A Block row carries neither. `url` is `<name>@<version>.json`, relative to the index's URL. `sha256` is the lowercase hex SHA-256 of the record's bytes, and `bytes` is their count.
+`name` is the registry's name and `homepage` its page, absent when `registry.jsonc` has none. `items` has one row per record, sorted by name and then by version, oldest first. Every row has a `version`. `description` and `categories` are absent when the item has none. A part row may also carry `maker` and `number`, from the part file's `real` fields, and leaves a field out when the part names none. A Block row carries neither. A part row carries `"listed": false` when search and the parts list leave it out, and leaves `listed` out when the part is offered. `url` is `<name>@<version>.json`, relative to the index's URL. `sha256` is the lowercase hex SHA-256 of the record's bytes, and `bytes` is their count.
 
 ## Records
 

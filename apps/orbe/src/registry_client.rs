@@ -530,6 +530,9 @@ fn search_index(index: &Index, words: &[String]) -> Result<Done, Fail> {
         let mut parts = Vec::new();
         let mut blocks = Vec::new();
         for row in rows.values() {
+            if !row.listed {
+                continue;
+            }
             match row.kind {
                 Kind::Part => parts.push((
                     row.name.clone(),
@@ -599,6 +602,9 @@ fn search_index(index: &Index, words: &[String]) -> Result<Done, Fail> {
 }
 
 fn rank_row(row: &Row, words: &[String], joined: &str) -> Option<u8> {
+    if !row.listed {
+        return None;
+    }
     let mut haystack = format!(
         "{}\n{}\n{}\n{}\n{}",
         row.name,
@@ -929,6 +935,7 @@ fn card_of(part: orbe_registry::PartItem) -> Result<Card, Fail> {
         dim,
         pressable,
         holes,
+        listed: true,
     })
 }
 
