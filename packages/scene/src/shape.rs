@@ -249,6 +249,8 @@ pub(crate) const PART: &[(&str, Shape)] = &[
     ("version", Shape::Str),
     ("orbe", Shape::Str),
     ("title", Shape::Str),
+    // A released part file may still say `"listed": false`. The key parses and is ignored.
+    // `registry.jsonc`'s `unlisted` decides what search and the site list.
     ("listed", Shape::Bool),
     ("summary", Shape::Str),
     ("tags", Shape::List(&Shape::Str)),
