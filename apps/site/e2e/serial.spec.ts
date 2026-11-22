@@ -4,7 +4,7 @@ import { expect, shot, test, waitState } from "../../../e2e/support";
 test.describe("serial output", () => {
   test("the comparator shows dark at 10 lx and light at 300 lx", async ({ page, host }) => {
     const shotName = host.name.replaceAll(" ", "-");
-    await page.goto(`${host.base}/embedded/blocks/nano-light-comparator/`);
+    await page.goto(`${host.base}/orbe/blocks/nano-light-comparator/`);
     await waitState(page, "playing");
     const strip = page.locator('[data-testid="serial"]');
     await expect(strip).toContainText("light", { timeout: 30_000 });
@@ -25,7 +25,7 @@ test.describe("serial output", () => {
   });
 
   test("a reload shows the new session's text", async ({ page, host }) => {
-    await page.goto(`${host.base}/embedded/blocks/nano-light-comparator/`);
+    await page.goto(`${host.base}/orbe/blocks/nano-light-comparator/`);
     await waitState(page, "playing");
     await setLight(page, "10");
     await expect(page.locator('[data-testid="serial"]')).toContainText("dark", { timeout: 30_000 });
@@ -38,7 +38,7 @@ test.describe("serial output", () => {
   });
 
   test("a Block that prints nothing shows no strip", async ({ page, host }) => {
-    await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+    await page.goto(`${host.base}/orbe/blocks/nano-button-led/`);
     await waitState(page, "playing");
     await page.waitForFunction(
       () => {
@@ -54,7 +54,7 @@ test.describe("serial output", () => {
 
   test("the strip is in view at 375 by 812 without scrolling", async ({ page, host }) => {
     await page.setViewportSize({ width: 375, height: 812 });
-    await page.goto(`${host.base}/embedded/blocks/nano-light-comparator/`);
+    await page.goto(`${host.base}/orbe/blocks/nano-light-comparator/`);
     await waitState(page, "playing");
     const strip = page.locator('[data-testid="serial"]');
     await expect(strip).toContainText("light", { timeout: 30_000 });
@@ -72,7 +72,7 @@ test.describe("serial output", () => {
 
   test("the strip stays on a phone-width screen", async ({ page, host }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto(`${host.base}/embedded/blocks/nano-light-comparator/`);
+    await page.goto(`${host.base}/orbe/blocks/nano-light-comparator/`);
     await waitState(page, "playing");
     const strip = page.locator('[data-testid="serial"]');
     await expect(strip).toContainText("light", { timeout: 30_000 });
@@ -91,7 +91,7 @@ test.describe("serial output", () => {
 
   test("the strip follows both themes", async ({ page, host }) => {
     const shotName = host.name.replaceAll(" ", "-");
-    await page.goto(`${host.base}/embedded/blocks/nano-light-comparator/`);
+    await page.goto(`${host.base}/orbe/blocks/nano-light-comparator/`);
     await waitState(page, "playing");
     const strip = page.locator('[data-testid="serial"]');
     await expect(strip).toContainText("light", { timeout: 30_000 });

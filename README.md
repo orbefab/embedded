@@ -2,14 +2,14 @@
 
 A hardware simulator for the AI agent you already use.
 
-orbe runs real firmware on simulated Arduino boards, so your agent can test a circuit before you build it. Your agent drives it from the command line, headless. You can watch the same circuit live in 3D. It works with any agent, on your own subscription. orbe is made by [Orbefab](https://orbefab.com), and its parts and Blocks are at [orbefab.com/embedded](https://orbefab.com/embedded/).
+orbe runs real firmware on simulated Arduino boards, so your agent can test a circuit before you build it. Your agent drives it from the command line, headless. You can watch the same circuit live in 3D. It works with any agent, on your own subscription. orbe is made by [Orbefab](https://orbefab.com), and its parts and Blocks are at [orbefab.com/orbe](https://orbefab.com/orbe/).
 
 It runs the Arduino Nano and Uno today. ESP32 is in progress.
 
 ## Install
 
 ```sh
-curl -fsSL https://orbefab.com/embedded/install.sh | sh
+curl -fsSL https://orbefab.com/orbe/install.sh | sh
 ```
 
 It installs `orbe` with the 3D viewer into `~/.local/bin`, on Linux x86_64 with glibc 2.35 or newer (Ubuntu 22.04, Debian 12 and later) and macOS arm64. `orbe add`, `orbe search` and `orbe part` need curl.

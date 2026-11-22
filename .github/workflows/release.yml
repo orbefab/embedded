@@ -165,7 +165,7 @@ jobs:
             echo
             echo "Install:"
             echo
-            echo "    curl -fsSL https://orbefab.com/embedded/install.sh | sh"
+            echo "    curl -fsSL https://orbefab.com/orbe/install.sh | sh"
             echo
             echo "This is a draft. Publishing it is a separate step."
           } >"$notes"

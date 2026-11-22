@@ -3,7 +3,7 @@
 {
   "format": 1,
   "name": "@orbefab",
-  "homepage": "https://orbefab.com/embedded",
+  "homepage": "https://orbefab.com/orbe",
   // Part ids that `orbe search` and the site's parts list leave out. The parts stay in the
   // registry, including as the parts inside a board. A part file's `listed` field is ignored.
   "unlisted": [

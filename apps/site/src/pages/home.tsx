@@ -117,7 +117,7 @@ export function HomePage({ home }: { home: Home }) {
         <Step n="01" title="Install orbe">
           {__ORBE_SITE_INSTALL__ ? (
             <Install
-              lines={["curl -fsSL https://orbefab.com/embedded/install.sh | sh"]}
+              lines={["curl -fsSL https://orbefab.com/orbe/install.sh | sh"]}
               note="For Linux x86_64 and macOS arm64."
             />
           ) : (

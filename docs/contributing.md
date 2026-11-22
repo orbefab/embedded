@@ -17,7 +17,7 @@ scripts/check.sh fast
 | --- | --- |
 | [`apps/orbe`](../apps/orbe/) | The `orbe` CLI in Rust. `orbe` is the binary. |
 | [`apps/viewer`](../apps/viewer/) | The page `orbe show` serves. |
-| [`apps/site`](../apps/site/) | The homepage at orbefab.com/embedded: the parts catalog, the Blocks live in 3D, and the registry. [`docs/site.md`](site.md) says how to build, check and deploy it. |
+| [`apps/site`](../apps/site/) | The homepage at orbefab.com/orbe: the parts catalog, the Blocks live in 3D, and the registry. [`docs/site.md`](site.md) says how to build, check and deploy it. |
 | [`packages/scene`](../packages/scene/) | `orbe-scene` reads and checks scenes and part files and turns them into a netlist. |
 | [`packages/session`](../packages/session/) | `orbe-session` is a live session. |
 | [`packages/wasm`](../packages/wasm/) | `orbe-wasm` runs a Block live in a browser Web Worker. [`docs/wasm.md`](wasm.md) says how to build and load it. |

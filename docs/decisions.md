@@ -75,7 +75,7 @@ A command does what it names and nothing in the background. Where `orbe` could g
 - A dependency is `[@<registry>/]<id>@<version>`, though the build writes only bare ones today, so a parser written now reads cross-registry dependencies later.
 - The URL template has one `{name}`, in its last path segment. A client fills it only with `index` and takes every other URL from the index and the records.
 - Records stay camel case, as shadcn's are, and `orbe part --json` stays snake case. [registry.md](registry.md) gives the exact mapping and a test converts every catalog part both ways.
-- A project holds one folder per part id it adds, `parts/<id>/`, and nests the parts that part is built from inside it. `orbe add` downloads the latest version from `@orbefab` at `https://orbefab.com/embedded/r/{name}.json`. [registry.md](registry.md) is the client contract.
+- A project holds one folder per part id it adds, `parts/<id>/`, and nests the parts that part is built from inside it. `orbe add` downloads the latest version from `@orbefab` at `https://orbefab.com/orbe/r/{name}.json`. [registry.md](registry.md) is the client contract.
 
 ## Scenes (Nov 4 2026)
 - A scene is its own kind of file, usually `scene.jsonc`. Its keys are `format`, `$schema`, `parts`, `wires`, `layout`, `ground`, `nets`, `sim` and `world`. It has no `pins` or `params`, and no file can use a scene as a part.

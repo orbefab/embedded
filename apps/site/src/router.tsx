@@ -3,7 +3,7 @@ import { routeTree } from "./routeTree.gen";
 
 // Pages link with plain anchors, so each page is its own prerendered HTML and nothing asks the
 // server for data in the browser, where none runs.
-const NOT_FOUND = "/embedded/404/";
+const NOT_FOUND = "/orbe/404/";
 
 // Workers static assets serve the /404 render, as 404.html, for every missing path. The client
 // would match the address it was opened at, and that render would not match. This document is

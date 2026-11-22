@@ -4,7 +4,7 @@ Load this for the copy in `parts/`, a version, a Block, a buy link, or an addres
 
 ## The copy
 
-`orbe add <id>…` downloads the latest part from `https://orbefab.com/embedded/r/` into `parts/<id>/`, and the parts it is built from into `parts/<id>/parts/<dep>/`. One id has one folder at the top of `parts/`. `id@version` is a usage error. The hint is the bare id. `orbe add` installs the highest version. Commit `parts/` with the scene.
+`orbe add <id>…` downloads the latest part from `https://orbefab.com/orbe/r/` into `parts/<id>/`, and the parts it is built from into `parts/<id>/parts/<dep>/`. One id has one folder at the top of `parts/`. `id@version` is a usage error. The hint is the bare id. `orbe add` installs the highest version. Commit `parts/` with the scene.
 
 ```console
 $ orbe add resistor-axial

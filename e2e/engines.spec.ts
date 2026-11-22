@@ -7,9 +7,9 @@ const viewer = `http://127.0.0.1:${viewerPort}`;
 const site = `http://127.0.0.1:${sitePort}`;
 
 const PAGES = [
-  ["/embedded/", "A hardware simulator for the AI agent you already use."],
-  ["/embedded/parts/", "Parts"],
-  ["/embedded/blocks/", "Blocks"],
+  ["/orbe/", "A hardware simulator for the AI agent you already use."],
+  ["/orbe/parts/", "Parts"],
+  ["/orbe/blocks/", "Blocks"],
 ] as const;
 
 // Headless Firefox on Linux refuses a WebGL context. The page still starts three.js, which logs
@@ -88,7 +88,7 @@ test("the site's main pages load", async ({ page }, info) => {
 
 test("a Block page draws in WebKit", async ({ page }, info) => {
   const errors = collectLogs(page, "errors");
-  const response = await page.goto(`${site}/embedded/blocks/nano-button-led/`);
+  const response = await page.goto(`${site}/orbe/blocks/nano-button-led/`);
   expect(response?.ok()).toBe(true);
   await expect(page.locator("h1")).toHaveText("Button and LED on a Nano");
   const outcome = await drawnOrRefused(page);

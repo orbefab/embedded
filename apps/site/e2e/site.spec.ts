@@ -5,7 +5,7 @@ import { gzipSync } from "node:zlib";
 import type { BrowserContext, Page } from "@playwright/test";
 import { collectLogs, expect, ledGlow, orbeJson, rendersDir, REPO, repoBlocks, shot, showBlock, test, waitGlow, waitState } from "../../../e2e/support";
 
-const INSTALL = /orbe add|cargo install|orbefab\.com\/embedded\/install\.sh/;
+const INSTALL = /orbe add|cargo install|orbefab\.com\/orbe\/install\.sh/;
 const VIEW = { width: 1280, height: 900 };
 const QUERIES = ["led", "5 mm", "kingbright", "board", "resistor 0603", "smd", "avr usb", "nano-board", "Push", "MICROCHIP"];
 
@@ -183,7 +183,7 @@ async function openSceneReader(): Promise<SceneReader> {
 async function sceneCards(): Promise<Record<string, string>> {
   const read = await sceneReader();
   const cards: Record<string, string> = {};
-  for (const id of blockIds()) cards[`/embedded/blocks/${id}/`] = `${read.boardTitle(read.board(id))}, ${read.parts(id).length} parts`;
+  for (const id of blockIds()) cards[`/orbe/blocks/${id}/`] = `${read.boardTitle(read.board(id))}, ${read.parts(id).length} parts`;
   return cards;
 }
 
@@ -266,7 +266,7 @@ async function noServerCall(page: Page, act: () => Promise<void>): Promise<void>
 }
 
 async function cardCounts(page: Page): Promise<Record<string, string>> {
-  return page.locator('a[href^="/embedded/blocks/"]').evaluateAll((links) =>
+  return page.locator('a[href^="/orbe/blocks/"]').evaluateAll((links) =>
     Object.fromEntries(
       links.flatMap((link) => {
         const count = link.querySelector("span.font-mono")?.textContent?.trim();
@@ -297,7 +297,7 @@ function partPages(ids: readonly string[]) {
     const errors = collectLogs(page, "errors");
     for (const id of ids) {
       errors.length = 0;
-      const response = await page.goto(`${host.base}/embedded/parts/${id}/`);
+      const response = await page.goto(`${host.base}/orbe/parts/${id}/`);
       expect(response?.ok(), id).toBe(true);
       const ref = `@${id.replaceAll("-", "_")}`;
       await page.waitForFunction(
@@ -348,7 +348,7 @@ test.describe("landing", () => {
   let urls: string[] = [];
 
   test.beforeAll(async ({ browser, host }) => {
-    ({ context, page, errors, urls } = await openTracked(browser, `${host.base}/embedded/`));
+    ({ context, page, errors, urls } = await openTracked(browser, `${host.base}/orbe/`));
   });
 
   test.afterAll(async () => {
@@ -387,9 +387,9 @@ test.describe("landing", () => {
 
   test("the header and footer are the shared ones", async () => {
     const header = page.locator("header");
-    await expect(header.getByRole("link", { name: "Blocks" })).toHaveAttribute("href", "/embedded/blocks/");
-    await expect(header.getByRole("link", { name: "Parts" })).toHaveAttribute("href", "/embedded/parts/");
-    await expect(header.getByRole("link", { name: "Get orbe" })).toHaveAttribute("href", "/embedded/");
+    await expect(header.getByRole("link", { name: "Blocks" })).toHaveAttribute("href", "/orbe/blocks/");
+    await expect(header.getByRole("link", { name: "Parts" })).toHaveAttribute("href", "/orbe/parts/");
+    await expect(header.getByRole("link", { name: "Get orbe" })).toHaveAttribute("href", "/orbe/");
     await expect(header.getByRole("link", { name: "Get orbe" })).toHaveAttribute("aria-current", "page");
     await expect(header.locator("a").first()).toHaveAttribute("href", "/");
     expect(await header.innerText()).not.toMatch(/embedded/i);
@@ -415,14 +415,14 @@ test.describe("landing", () => {
     expect(calls, JSON.stringify(calls)).toEqual([]);
   });
 
-  test("every file the page loads is under /embedded/", ({ host }) => {
+  test("every file the page loads is under /orbe/", ({ host }) => {
     const origin = new URL(host.base).origin;
-    const outside = urls.filter((url) => url.startsWith(`${origin}/`) && !new URL(url).pathname.startsWith("/embedded/"));
+    const outside = urls.filter((url) => url.startsWith(`${origin}/`) && !new URL(url).pathname.startsWith("/orbe/"));
     expect(outside, JSON.stringify(outside)).toEqual([]);
   });
 
-  test("the wordmark's font loads from /embedded/fonts/", () => {
-    expect(urls.some((url) => url.endsWith("/embedded/fonts/Syne-VariableFont_wght.ttf"))).toBe(true);
+  test("the wordmark's font loads from /orbe/fonts/", () => {
+    expect(urls.some((url) => url.endsWith("/orbe/fonts/Syne-VariableFont_wght.ttf"))).toBe(true);
   });
 });
 
@@ -433,7 +433,7 @@ test.describe("parts search", () => {
   let errors: string[] = [];
 
   test.beforeAll(async ({ browser, host }) => {
-    ({ context, page, errors } = await openTracked(browser, `${host.base}/embedded/parts/`));
+    ({ context, page, errors } = await openTracked(browser, `${host.base}/orbe/parts/`));
   });
 
   test.afterAll(async () => {
@@ -489,7 +489,7 @@ test.describe("led-5mm", () => {
   let weight: () => Promise<Weight> = async () => ({ requests: 0, bytes: 0, gzip: 0, wasm: false });
 
   test.beforeAll(async ({ browser, host }) => {
-    ({ context, page, errors, weight } = await openTracked(browser, `${host.base}/embedded/parts/led-5mm/`));
+    ({ context, page, errors, weight } = await openTracked(browser, `${host.base}/orbe/parts/led-5mm/`));
     await page.waitForFunction(() => window.orbeViewer?.get().scene.getObjectByName("@led_5mm") !== undefined, null, { timeout: 30_000 });
   });
 
@@ -519,7 +519,7 @@ test.describe("led-5mm", () => {
   test("a download serves the file's bytes, by the record's SHA-256", async () => {
     const href = await page.locator('[data-testid="license-files"] a[download]', { hasText: /^part\.jsonc$/ }).getAttribute("href");
     const download = await page.evaluate(async (href) => {
-      const record = await (await fetch("/embedded/r/led-5mm@0.3.0.json")).json();
+      const record = await (await fetch("/orbe/r/led-5mm@0.3.0.json")).json();
       const bytes = new Uint8Array(await (await fetch(href)).arrayBuffer());
       const hex = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
       return { hex, want: record.files.find((file: { path: string; sha256: string }) => file.path === "part.jsonc").sha256 };
@@ -551,10 +551,10 @@ test.describe("led-5mm", () => {
     expect(place.trim()).toBe("4 Blocks");
     const hrefs = await page.locator('[data-testid="used-in"] a').evaluateAll((links) => links.map((link) => link.getAttribute("href")).sort());
     expect(hrefs).toEqual([
-      "/embedded/blocks/nano-button-led/",
-      "/embedded/blocks/nano-led-fade/",
-      "/embedded/blocks/nano-light-comparator/",
-      "/embedded/blocks/uno-button-led/",
+      "/orbe/blocks/nano-button-led/",
+      "/orbe/blocks/nano-led-fade/",
+      "/orbe/blocks/nano-light-comparator/",
+      "/orbe/blocks/uno-button-led/",
     ]);
   });
 
@@ -590,7 +590,7 @@ test.describe("breadboard-830", () => {
   let errors: string[] = [];
 
   test.beforeAll(async ({ browser, host }) => {
-    ({ context, page, errors } = await openTracked(browser, `${host.base}/embedded/parts/breadboard-830/`));
+    ({ context, page, errors } = await openTracked(browser, `${host.base}/orbe/parts/breadboard-830/`));
     await page.waitForFunction(() => window.orbeViewer?.get().scene.getObjectByName("@breadboard_830") !== undefined, null, { timeout: 30_000 });
   });
 
@@ -621,7 +621,7 @@ test.describe("nano-board", () => {
   let errors: string[] = [];
 
   test.beforeAll(async ({ browser, host }) => {
-    ({ context, page, errors } = await openTracked(browser, `${host.base}/embedded/parts/nano-board/`));
+    ({ context, page, errors } = await openTracked(browser, `${host.base}/orbe/parts/nano-board/`));
     await page.waitForFunction(() => window.orbeViewer?.get().scene.getObjectByName("@nano_board.mcu") !== undefined, null, { timeout: 30_000 });
   });
 
@@ -652,7 +652,7 @@ test.describe("nano-board", () => {
     const body = await bodyText(page);
     expect(/Used in Blocks[\s\S]*Button and LED on a Nano/i.test(body), body.match(/Used in Blocks[\s\S]{0,200}/i)?.[0] ?? body).toBe(true);
     const href = await page.locator('[data-testid="used-in"] a', { hasText: "Button and LED on a Nano" }).getAttribute("href");
-    expect(href).toBe("/embedded/blocks/nano-button-led/");
+    expect(href).toBe("/orbe/blocks/nano-button-led/");
   });
 
   test("the Nano's page logged no error", async () => {
@@ -668,7 +668,7 @@ test.describe("uno-board", () => {
   let page: Page;
 
   test.beforeAll(async ({ browser, host }) => {
-    ({ context, page } = await openTracked(browser, `${host.base}/embedded/parts/uno-board/`));
+    ({ context, page } = await openTracked(browser, `${host.base}/orbe/parts/uno-board/`));
   });
 
   test.afterAll(async () => {
@@ -712,7 +712,7 @@ for (const block of repoBlocks()) {
       });
       page = await context.newPage();
       errors = collectLogs(page, "errors");
-      await page.goto(`${host.base}/embedded/blocks/${block.id}/`);
+      await page.goto(`${host.base}/orbe/blocks/${block.id}/`);
       await page.waitForFunction(
         (kind) => {
           const scene = window.orbeViewer?.get().scene;
@@ -765,7 +765,7 @@ test.describe("nano-button-led", () => {
   let errors: string[] = [];
 
   test.beforeAll(async ({ browser, host }) => {
-    ({ context, page, errors } = await openTracked(browser, `${host.base}/embedded/blocks/nano-button-led/`));
+    ({ context, page, errors } = await openTracked(browser, `${host.base}/orbe/blocks/nano-button-led/`));
     await page.waitForFunction(() => window.orbeViewer?.get().scene.getObjectByName("@btn1") !== undefined, null, { timeout: 120_000 });
   });
 
@@ -890,11 +890,11 @@ test.describe("nano-button-led", () => {
 partPages(PART_IDS.slice(PART_THIRD * 2));
 
 const README = {
-  "/embedded/blocks/nano-button-led/": "A 10k pull-down holds D2 low",
-  "/embedded/blocks/nano-led-fade/": "fades up and down about every 3 seconds",
-  "/embedded/blocks/nano-light-comparator/": "prints dark and a count",
-  "/embedded/blocks/uno-button-led/": "A 10k pull-down holds D2 low",
-  "/embedded/blocks/nano-neopixel-stick/": "Each pixel keeps its own colour",
+  "/orbe/blocks/nano-button-led/": "A 10k pull-down holds D2 low",
+  "/orbe/blocks/nano-led-fade/": "fades up and down about every 3 seconds",
+  "/orbe/blocks/nano-light-comparator/": "prints dark and a count",
+  "/orbe/blocks/uno-button-led/": "A 10k pull-down holds D2 low",
+  "/orbe/blocks/nano-neopixel-stick/": "Each pixel keeps its own colour",
 } as const;
 
 test("every Block page shows its README and no install line", async ({ browser, host }) => {
@@ -922,10 +922,10 @@ test("every Block page shows its README and no install line", async ({ browser, 
 test("the Blocks page counts the parts each scene places", async ({ browser, host }) => {
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.goto(`${host.base}/embedded/blocks/`);
+  await page.goto(`${host.base}/orbe/blocks/`);
   await expect(page.locator("main")).toContainText("Small circuits that work. Play each one live in your browser.");
   expect(await cardCounts(page)).toEqual(await sceneCards());
-  await page.goto(`${host.base}/embedded/blocks/nano-led-fade/`);
+  await page.goto(`${host.base}/orbe/blocks/nano-led-fade/`);
   const refs = (await sceneReader()).parts("nano-led-fade").map((part) => part.ref);
   const listed = await page.locator('[data-testid="scene-parts"] li[data-ref]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-ref")));
   expect(listed).toEqual(refs);
@@ -935,12 +935,12 @@ test("the Blocks page counts the parts each scene places", async ({ browser, hos
 test("a part that only sits inside a board names that board", async ({ browser, host }) => {
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.goto(`${host.base}/embedded/parts/led-0603/`);
+  await page.goto(`${host.base}/orbe/parts/led-0603/`);
   const value = await page.locator("dt", { hasText: /^on boards$/ }).locator("xpath=following-sibling::dd[1]").innerText();
   expect(value.trim()).toBe("Nano (CH340 clone)");
   expect(await page.locator('[data-testid="used-in"]').count()).toBe(0);
   const href = await page.locator('[data-testid="on-boards"] a').getAttribute("href");
-  expect(href).toBe("/embedded/parts/nano-board/");
+  expect(href).toBe("/orbe/parts/nano-board/");
   await context.close();
 });
 
@@ -948,10 +948,10 @@ test("a long hash and the code view stay inside a phone width", async ({ browser
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
   const page = await context.newPage();
   const fits = () => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1);
-  await page.goto(`${host.base}/embedded/parts/led-5mm/`);
+  await page.goto(`${host.base}/orbe/parts/led-5mm/`);
   await page.locator('[data-testid="license-files"] summary').click();
   expect(await fits(), "led-5mm").toBe(true);
-  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+  await page.goto(`${host.base}/orbe/blocks/nano-button-led/`);
   await page.locator('[data-testid="view-code"]').click();
   expect(await fits(), "nano-button-led code").toBe(true);
   await context.close();
@@ -962,7 +962,7 @@ test("each Block lists its scene files and its values", async ({ browser, host }
   const context = await browser.newContext();
   const page = await context.newPage();
   for (const id of blockIds()) {
-    await page.goto(`${host.base}/embedded/blocks/${id}/`);
+    await page.goto(`${host.base}/orbe/blocks/${id}/`);
     await page.locator('[data-testid="view-code"]').click();
     const shown = await page.locator('[data-testid="code-file"]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-path")).sort());
     expect(shown, id).toEqual(codePaths(id));
@@ -993,12 +993,12 @@ test("each Block lists its scene files and its values", async ({ browser, host }
 test("a same-page hash stays on the page, including a second click and a page opened on the hash", async ({ browser, host }) => {
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.goto(`${host.base}/embedded/blocks/nano-button-led/#files`);
+  await page.goto(`${host.base}/orbe/blocks/nano-button-led/#files`);
   await hydrated(page);
   await expect(page.locator("#files")).toHaveJSProperty("open", true);
   await expect(page.locator('a[href="#files"]')).toHaveCount(0);
 
-  await page.goto(`${host.base}/embedded/parts/led-5mm/`);
+  await page.goto(`${host.base}/orbe/parts/led-5mm/`);
   await hydrated(page);
   const used = page.locator('a[href="#used"]');
   await noServerCall(page, async () => {
@@ -1007,7 +1007,7 @@ test("a same-page hash stays on the page, including a second click and a page op
   });
   await expect(page.locator("#used")).toBeVisible();
 
-  await page.goto(`${host.base}/embedded/parts/led-0603/`);
+  await page.goto(`${host.base}/orbe/parts/led-0603/`);
   await hydrated(page);
   const boards = page.locator('a[href="#boards"]');
   await noServerCall(page, async () => {
@@ -1016,7 +1016,7 @@ test("a same-page hash stays on the page, including a second click and a page op
   });
   await expect(page.locator("#boards")).toBeVisible();
 
-  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+  await page.goto(`${host.base}/orbe/blocks/nano-button-led/`);
   await hydrated(page);
   const urls: string[] = [];
   const errors: string[] = [];
@@ -1024,12 +1024,12 @@ test("a same-page hash stays on the page, including a second click and a page op
     if (/_serverFn|__tsr\//.test(request.url())) urls.push(request.url());
   });
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.locator('a[href="/embedded/parts/led-5mm/"]').first().click();
-  await page.waitForURL(/\/embedded\/parts\/led-5mm\/$/);
+  await page.locator('a[href="/orbe/parts/led-5mm/"]').first().click();
+  await page.waitForURL(/\/orbe\/parts\/led-5mm\/$/);
   await expect(page.locator("h1")).toHaveText("5 mm LED");
   await hydrated(page);
-  await page.locator('a[href="/embedded/blocks/nano-button-led/"]').first().click();
-  await page.waitForURL(/\/embedded\/blocks\/nano-button-led\/$/);
+  await page.locator('a[href="/orbe/blocks/nano-button-led/"]').first().click();
+  await page.waitForURL(/\/orbe\/blocks\/nano-button-led\/$/);
   await expect(page.locator("h1")).toHaveText("Button and LED on a Nano");
   expect(urls, JSON.stringify(urls)).toEqual([]);
   expect(errors, JSON.stringify(errors)).toEqual([]);
@@ -1041,7 +1041,7 @@ test("a touch drag on empty stage space does not press the button", async ({ bro
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });
   const page = await context.newPage();
   const errors = collectLogs(page, "errors");
-  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+  await page.goto(`${host.base}/orbe/blocks/nano-button-led/`);
   await page.waitForFunction(() => window.orbeViewer?.get().scene.getObjectByName("@btn1") !== undefined, null, { timeout: 30_000 });
   await waitState(page, "playing");
   await waitGlow(page, false);
@@ -1123,7 +1123,7 @@ async function viewDistance(page: Page): Promise<number> {
 test("a plain wheel over the stage scrolls the page and Ctrl + wheel zooms", async ({ browser, host }) => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
-  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+  await page.goto(`${host.base}/orbe/blocks/nano-button-led/`);
   await page.waitForFunction(() => window.orbeViewer?.get().scene.getObjectByName("@btn1") !== undefined, null, { timeout: 60_000 });
   const canvas = page.locator("canvas");
   await canvas.scrollIntoViewIfNeeded();
@@ -1161,7 +1161,7 @@ test("a plain wheel over the stage scrolls the page and Ctrl + wheel zooms", asy
 test("two fingers orbit the stage", async ({ browser, host }) => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true });
   const page = await context.newPage();
-  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+  await page.goto(`${host.base}/orbe/blocks/nano-button-led/`);
   await page.waitForFunction(() => window.orbeViewer?.get().scene.getObjectByName("@btn1") !== undefined, null, { timeout: 60_000 });
   const spot = await page.evaluate(() => {
     const canvas = document.querySelector("canvas");
@@ -1198,11 +1198,11 @@ test("two fingers orbit the stage", async ({ browser, host }) => {
 test("the theme button follows a change from another tab, and the next click switches", async ({ browser, host }) => {
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.goto(`${host.base}/embedded/blocks/`);
+  await page.goto(`${host.base}/orbe/blocks/`);
   const toggle = page.getByRole("button", { name: /Switch to (light|dark) mode/ });
   await expect(toggle).toHaveAttribute("aria-label", "Switch to light mode");
   const other = await context.newPage();
-  await other.goto(`${host.base}/embedded/parts/`);
+  await other.goto(`${host.base}/orbe/parts/`);
   await other.getByRole("button", { name: "Switch to light mode" }).click();
   await expect(toggle).toHaveAttribute("aria-label", "Switch to dark mode");
   await toggle.click();
@@ -1215,7 +1215,7 @@ test("the theme button follows a change from another tab, and the next click swi
 test("hold to press shows the brand outline on keyboard focus", async ({ browser, host }) => {
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+  await page.goto(`${host.base}/orbe/blocks/nano-button-led/`);
   await page.waitForFunction(() => window.orbeViewer?.get().scene.getObjectByName("@btn1") !== undefined, null, { timeout: 60_000 });
   const hold = page.getByTestId("hold-to-press");
   await hold.evaluate((element) => (element as HTMLElement).focus({ focusVisible: true }));
@@ -1238,16 +1238,16 @@ test("sitemap.xml lists the site pages and no embed route", async ({ browser, ho
   expect(partIds.length).toBeGreaterThan(0);
   const context = await browser.newContext();
   const page = await context.newPage();
-  const response = await page.goto(`${host.base}/embedded/sitemap.xml`);
+  const response = await page.goto(`${host.base}/orbe/sitemap.xml`);
   expect(response?.ok(), String(response?.status())).toBe(true);
   expect(response?.headers()["content-type"] ?? "").toMatch(/xml/);
   const xml = (await response?.text()) ?? "";
   const locs = [...xml.matchAll(/<loc>([^<]*)<\/loc>/g)].map((match) => match[1]);
-  expect(locs).toContain("https://orbefab.com/embedded/");
-  expect(locs).toContain("https://orbefab.com/embedded/blocks/");
-  expect(locs).toContain("https://orbefab.com/embedded/parts/");
-  for (const id of blockIds) expect(locs, id).toContain(`https://orbefab.com/embedded/blocks/${id}/`);
-  for (const id of partIds) expect(locs, id).toContain(`https://orbefab.com/embedded/parts/${id}/`);
+  expect(locs).toContain("https://orbefab.com/orbe/");
+  expect(locs).toContain("https://orbefab.com/orbe/blocks/");
+  expect(locs).toContain("https://orbefab.com/orbe/parts/");
+  for (const id of blockIds) expect(locs, id).toContain(`https://orbefab.com/orbe/blocks/${id}/`);
+  for (const id of partIds) expect(locs, id).toContain(`https://orbefab.com/orbe/parts/${id}/`);
   expect(xml).not.toContain("/embed/");
   expect(locs).toHaveLength(3 + blockIds.length + partIds.length);
   await context.close();
@@ -1263,14 +1263,14 @@ test("with no WebGL 2 a part page says so and does not say which value it shows"
     } as typeof real;
   });
   const page = await context.newPage();
-  await page.goto(`${host.base}/embedded/parts/resistor-axial/`);
+  await page.goto(`${host.base}/orbe/parts/resistor-axial/`);
   await expect(page.getByTestId("no-webgl")).toHaveText("Your browser can't show 3D here.");
   await expect(page.getByTestId("shown-at")).toHaveCount(0);
   await context.close();
 });
 
 test("an unknown path answers 404 with the site's page and logs no page error", async ({ browser, host }) => {
-  for (const path of ["/embedded/no-such-page", "/embedded/parts/no-such-part/"]) {
+  for (const path of ["/orbe/no-such-page", "/orbe/parts/no-such-part/"]) {
     const context = await browser.newContext();
     const page = await context.newPage();
     const pageErrors: string[] = [];
@@ -1281,9 +1281,9 @@ test("an unknown path answers 404 with the site's page and logs no page error", 
     expect(response?.status(), path).toBe(404);
     await expect(page.locator("h1")).toHaveText("Page not found.");
     expect(await page.title(), path).toBe("Page not found | Orbefab");
-    await expect(main.getByRole("link", { name: "Get orbe" })).toHaveAttribute("href", "/embedded/");
-    await expect(main.getByRole("link", { name: "the Blocks" })).toHaveAttribute("href", "/embedded/blocks/");
-    await expect(main.getByRole("link", { name: "the parts" })).toHaveAttribute("href", "/embedded/parts/");
+    await expect(main.getByRole("link", { name: "Get orbe" })).toHaveAttribute("href", "/orbe/");
+    await expect(main.getByRole("link", { name: "the Blocks" })).toHaveAttribute("href", "/orbe/blocks/");
+    await expect(main.getByRole("link", { name: "the parts" })).toHaveAttribute("href", "/orbe/parts/");
     await expect(main.getByRole("link", { name: "Back home" })).toHaveAttribute("href", "/");
     expect(pageErrors, path).toEqual([]);
     await context.close();
@@ -1325,7 +1325,7 @@ test("the theme choice persists across a reload and between pages", async ({ bro
     Object.assign(window, { themeClasses: seen });
   });
   const page = await context.newPage();
-  await page.goto(`${host.base}/embedded/parts/`);
+  await page.goto(`${host.base}/orbe/parts/`);
   await page.waitForTimeout(300);
   const seen = await page.evaluate(() => (window as unknown as { themeClasses: string[] }).themeClasses);
   expect(seen.every((name) => !name.split(/\s+/).includes("dark")), JSON.stringify(seen)).toBe(true);
@@ -1333,7 +1333,7 @@ test("the theme choice persists across a reload and between pages", async ({ bro
   await page.reload();
   expect(await page.evaluate(() => localStorage.getItem("theme"))).toBe("light");
   expect(await page.evaluate(() => document.documentElement.classList.contains("light"))).toBe(true);
-  await page.goto(`${host.base}/embedded/blocks/`);
+  await page.goto(`${host.base}/orbe/blocks/`);
   expect(await page.evaluate(() => document.documentElement.classList.contains("light"))).toBe(true);
   expect(await page.evaluate(() => localStorage.getItem("theme"))).toBe("light");
   await context.close();
@@ -1346,7 +1346,7 @@ test("the viewer background follows the theme on a Block, a part and the embed",
   const ready = (name: string) =>
     page.waitForFunction((objectName) => window.orbeViewer?.get().scene.getObjectByName(objectName) !== undefined, name, { timeout: 60_000 });
 
-  await page.goto(`${host.base}/embedded/blocks/nano-button-led/`);
+  await page.goto(`${host.base}/orbe/blocks/nano-button-led/`);
   await ready("@btn1");
   const dark = await stageHex(page);
   expect(dark).toBe("17191c");
@@ -1364,11 +1364,11 @@ test("the viewer background follows the theme on a Block, a part and the embed",
   const lightControls = await page.getByTestId("controls").evaluate((element) => getComputedStyle(element).color);
   expect(lightControls).not.toBe("");
 
-  await page.goto(`${host.base}/embedded/parts/resistor-axial/`);
+  await page.goto(`${host.base}/orbe/parts/resistor-axial/`);
   await ready("@resistor_axial");
   expect(await stageHex(page)).toBe("e9e9ec");
 
-  await page.goto(`${host.base}/embedded/blocks/nano-button-led/embed/`);
+  await page.goto(`${host.base}/orbe/blocks/nano-button-led/embed/`);
   await ready("@btn1");
   expect(await stageHex(page)).toBe("e9e9ec");
   await page.evaluate(() => {
@@ -1383,7 +1383,7 @@ test("the viewer background follows the theme on a Block, a part and the embed",
 test("the embed route is the player alone and does not overflow at 320px", async ({ browser, host }) => {
   const context = await browser.newContext({ viewport: { width: 320, height: 640 } });
   const page = await context.newPage();
-  const response = await page.goto(`${host.base}/embedded/blocks/nano-button-led/embed/`);
+  const response = await page.goto(`${host.base}/orbe/blocks/nano-button-led/embed/`);
   expect(response?.ok()).toBe(true);
   const headers = response?.headers() ?? {};
   expect((headers["x-frame-options"] ?? "").toLowerCase()).not.toContain("deny");
@@ -1404,13 +1404,13 @@ test("every page title ends with | Orbefab", async ({ browser, host }) => {
   const context = await browser.newContext();
   const page = await context.newPage();
   const pages: readonly (readonly [string, string])[] = [
-    ["/embedded/", "Get orbe | Orbefab"],
-    ["/embedded/blocks/", "Blocks | Orbefab"],
-    ["/embedded/parts/", "Parts | Orbefab"],
-    ["/embedded/blocks/nano-button-led/", "Button and LED on a Nano | Orbefab"],
-    ["/embedded/blocks/nano-button-led/embed/", "Button and LED on a Nano | Orbefab"],
-    ["/embedded/parts/resistor-axial/", ""],
-    ["/embedded/no-such-page", "Page not found | Orbefab"],
+    ["/orbe/", "Get orbe | Orbefab"],
+    ["/orbe/blocks/", "Blocks | Orbefab"],
+    ["/orbe/parts/", "Parts | Orbefab"],
+    ["/orbe/blocks/nano-button-led/", "Button and LED on a Nano | Orbefab"],
+    ["/orbe/blocks/nano-button-led/embed/", "Button and LED on a Nano | Orbefab"],
+    ["/orbe/parts/resistor-axial/", ""],
+    ["/orbe/no-such-page", "Page not found | Orbefab"],
   ];
   for (const [path, exact] of pages) {
     const response = await page.goto(`${host.base}${path}`);
@@ -1431,34 +1431,59 @@ test.describe("cache", () => {
   }
 
   test("a registry file revalidates against its ETag, and an unchanged one answers 304", async ({ host }) => {
-    const index = await (await fetch(`${host.base}/embedded/r/index.json`)).json();
+    const index = await (await fetch(`${host.base}/orbe/r/index.json`)).json();
     const row = index.items.find((item: { name: string; url: string }) => item.name === "led-5mm");
-    const record = await (await fetch(new URL(row.url, `${host.base}/embedded/r/index.json`))).json();
-    const file = `/embedded/r/files/${record.files[0].sha256}`;
+    const record = await (await fetch(new URL(row.url, `${host.base}/orbe/r/index.json`))).json();
+    const file = `/orbe/r/files/${record.files[0].sha256}`;
     const hit = await head(host.base, file);
     const again = await head(host.base, file, { "If-None-Match": hit.etag ?? "" });
     expect(hit.status === 200 && hit.etag !== null && again.status === 304, JSON.stringify({ hit, again })).toBe(true);
   });
 
   test("a missing registry file answers 404 with no immutable cache", async ({ host }) => {
-    const miss = await head(host.base, "/embedded/r/files/0000000000000000000000000000000000000000000000000000000000000000");
+    const miss = await head(host.base, "/orbe/r/files/0000000000000000000000000000000000000000000000000000000000000000");
     expect(miss.status === 404 && !/immutable/.test(miss.cache), JSON.stringify(miss)).toBe(true);
   });
 
   test("a hashed build file keeps for a year", async ({ host }) => {
-    const html = await (await fetch(`${host.base}/embedded/`)).text();
-    const asset = html.match(/\/embedded\/assets\/[^"]+\.css/)?.[0];
+    const html = await (await fetch(`${host.base}/orbe/`)).text();
+    const asset = html.match(/\/orbe\/assets\/[^"]+\.css/)?.[0];
     const built = await head(host.base, asset ?? "");
     expect(built.status === 200 && /max-age=31536000, immutable/.test(built.cache), JSON.stringify({ asset, built })).toBe(true);
   });
 
   test("a path with @ answers 307 to the same path with %40", async ({ host }) => {
-    const at = await head(host.base, "/embedded/r/led-5mm@0.2.0.json");
+    const at = await head(host.base, "/orbe/r/led-5mm@0.2.0.json");
     expect(at.status, JSON.stringify(at)).toBe(307);
   });
 
-  test("a path that only starts with /embedded is not this site's", async ({ host }) => {
-    const outside = await head(host.base, "/embeddedfoo");
+  test("a path that only starts with /orbe is not this site's", async ({ host }) => {
+    const outside = await head(host.base, "/orbefoo");
     expect(outside.status, JSON.stringify(outside)).toBe(404);
   });
+});
+
+test("an old /embedded URL redirects to the same path under /orbe, and the query stays", async ({ host }) => {
+  const cases = [
+    ["/embedded", "/orbe"],
+    ["/embedded/", "/orbe/"],
+    ["/embedded/r/led-5mm.json", "/orbe/r/led-5mm.json"],
+    ["/embedded/install.sh", "/orbe/install.sh"],
+    ["/embedded/parts/?q=led", "/orbe/parts/?q=led"],
+  ];
+  for (const [from, to] of cases) {
+    const response = await fetch(`${host.base}${from}`, { redirect: "manual" });
+    await response.arrayBuffer();
+    const location = response.headers.get("location") ?? "";
+    const got = new URL(location, host.base);
+    expect(response.status, `${from} -> ${location}`).toBe(301);
+    expect(`${got.pathname}${got.search}`, `${from} -> ${location}`).toBe(to);
+  }
+  const outside = await fetch(`${host.base}/embeddedfoo`, { redirect: "manual" });
+  await outside.arrayBuffer();
+  expect(outside.status, "embeddedfoo").toBe(404);
+  const direct = await fetch(`${host.base}/orbe/r/index.json`);
+  const followed = await fetch(`${host.base}/embedded/r/index.json`);
+  expect(followed.status).toBe(200);
+  expect(await followed.text()).toBe(await direct.text());
 });

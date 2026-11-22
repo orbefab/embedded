@@ -203,6 +203,7 @@ fn each_block_notice_names_the_runtime_sketches_sh_pins_and_where_the_site_serve
     let sha = pin("runtime_sha256");
     assert!(url.starts_with("https://"), "{url}");
     assert_eq!(sha.len(), 64);
+    // Released NOTICE files keep this URL. The site redirects it to /orbe/sources/.
     let hosted = format!(
         "https://orbefab.com/embedded/sources/{}",
         url.rsplit('/').next().unwrap()

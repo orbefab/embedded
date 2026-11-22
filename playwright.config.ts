@@ -120,7 +120,7 @@ function siteSuite(): PlaywrightTestConfig {
   const viteServer = {
     command: `pnpm exec vite preview --strictPort --host 127.0.0.1 --port ${SITE_VITE_PORT}`,
     cwd: "apps/site",
-    url: `${SITE_VITE}/embedded/`,
+    url: `${SITE_VITE}/orbe/`,
     name: "vite preview",
     reuseExistingServer: false,
     stdout: "ignore" as const,
@@ -129,7 +129,7 @@ function siteSuite(): PlaywrightTestConfig {
   const wranglerServer = {
     command: `pnpm exec wrangler dev --local --ip 127.0.0.1 --port ${SITE_WRANGLER_PORT}`,
     cwd: "apps/site",
-    url: `${SITE_WRANGLER}/embedded/`,
+    url: `${SITE_WRANGLER}/orbe/`,
     name: "wrangler dev --local",
     reuseExistingServer: false,
     stdout: "ignore" as const,
@@ -205,7 +205,7 @@ function enginesSuite(): PlaywrightTestConfig {
       {
         command: `pnpm exec vite preview --strictPort --host 127.0.0.1 --port ${sitePort}`,
         cwd: "apps/site",
-        url: `${site}/embedded/`,
+        url: `${site}/orbe/`,
         reuseExistingServer: false,
         stdout: "ignore",
         timeout: 120_000,

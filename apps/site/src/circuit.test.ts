@@ -191,8 +191,8 @@ describe("readCatalogUse", () => {
 });
 
 describe("glanceLine", () => {
-  const board = { id: "nano-board", title: "Nano (CH340 clone)", href: "/embedded/parts/nano-board/" };
-  const block = (id: string): PartUse["blocks"][number] => ({ id, title: id, href: `/embedded/blocks/${id}/`, refs: [] });
+  const board = { id: "nano-board", title: "Nano (CH340 clone)", href: "/orbe/parts/nano-board/" };
+  const block = (id: string): PartUse["blocks"][number] => ({ id, title: id, href: `/orbe/blocks/${id}/`, refs: [] });
 
   it("drops the word the label already says", () => {
     const both: PartUse = { blocks: [block("a"), block("b"), block("c"), block("d")], boards: [board] };

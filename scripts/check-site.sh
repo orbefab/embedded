@@ -98,7 +98,7 @@ fi
 
 scripts/site.sh
 [[ ! -e $dist/install.sh ]] || fail "install.sh is served with ORBE_SITE_INSTALL unset"
-shown=$(own 'orbe add|cargo install|orbefab\.com/embedded/install\.sh')
+shown=$(own 'orbe add|cargo install|orbefab\.com/orbe/install\.sh')
 [[ -z $shown ]] || fail "these files of the site's own show an install line with ORBE_SITE_INSTALL unset: $shown"
 grep -q 'href="https://github.com/orbefab/orbe"' "$dist/index.html" ||
   fail "the footer does not link the repo"

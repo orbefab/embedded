@@ -26,7 +26,7 @@ embeds=$(find "$dist/blocks" -mindepth 3 -maxdepth 3 -name index.html | wc -l)
   fail "the build has $parts part, $blocks Block and $embeds embed pages, and the registry lists $(listed part) and $(listed block)"
 [[ $(grep -rlE 'orbe add [a-z]' "$dist/parts" "$dist/blocks" --include=index.html | wc -l) -eq $((parts + blocks)) ]] ||
   fail "not every part and Block page shows its orbe add line"
-grep -q 'curl -fsSL https://orbefab.com/embedded/install.sh | sh' "$dist/index.html" ||
+grep -q 'curl -fsSL https://orbefab.com/orbe/install.sh | sh' "$dist/index.html" ||
   fail "Get orbe shows no install command"
 grep -q 'href="https://github.com/orbefab/orbe"' "$dist/index.html" ||
   fail "Get orbe links no repo"

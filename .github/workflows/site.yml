@@ -1,4 +1,4 @@
-# Builds the site and, when the repository asks, deploys it to orbefab.com/embedded.
+# Builds the site and, when the repository asks, deploys it to orbefab.com/orbe.
 #
 # A push to main starts the job only when the repository variable SITE_DEPLOY is `1`.
 # Until then the job is skipped, so the push spends no minutes. A workflow_dispatch

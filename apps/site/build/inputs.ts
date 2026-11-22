@@ -1,7 +1,7 @@
 // The Vite plugin that feeds the site what scripts/site.sh built from this commit: the registry
 // in .scratch/site/registry, orbe-wasm in .scratch/site/wasm and the AVR runtime's source in
 // .scratch/site/sources. It checks the brand copy, then writes the public folder Vite serves and
-// copies under /embedded/, and gives the server side the catalog as `virtual:orbe-site`.
+// copies under /orbe/, and gives the server side the catalog as `virtual:orbe-site`.
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -15,7 +15,7 @@ const REPO = resolve(import.meta.dirname, "../../..");
 const INPUT = join(REPO, ".scratch/site");
 /** The folder Vite serves at the base and copies into the build: the brand's public files, the
  * registry at r/, orbe-wasm at orbe-wasm/, each part's view.json, the runtime source and
- * _headers. When install lines show, it also holds install.sh, served at /embedded/install.sh. */
+ * _headers. When install lines show, it also holds install.sh, served at /orbe/install.sh. */
 export const PUBLIC = join(INPUT, "public");
 const MODULE = "virtual:orbe-site";
 
@@ -40,14 +40,14 @@ function xmlText(text: string): string {
   return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
-/** Absolute page URLs for https://orbefab.com/embedded/sitemap.xml. Embed routes stay out. */
+/** Absolute page URLs for https://orbefab.com/orbe/sitemap.xml. Embed routes stay out. */
 export function sitemapXml(catalog: Catalog): string {
   const paths = [
-    "/embedded/",
-    "/embedded/blocks/",
-    "/embedded/parts/",
-    ...catalog.blocks.map((item) => item.record.name).sort().map((id) => `/embedded/blocks/${id}/`),
-    ...catalog.parts.map((item) => item.record.name).sort().map((id) => `/embedded/parts/${id}/`),
+    "/orbe/",
+    "/orbe/blocks/",
+    "/orbe/parts/",
+    ...catalog.blocks.map((item) => item.record.name).sort().map((id) => `/orbe/blocks/${id}/`),
+    ...catalog.parts.map((item) => item.record.name).sort().map((id) => `/orbe/parts/${id}/`),
   ];
   const body = paths.map((path) => `  <url><loc>${xmlText(`https://orbefab.com${path}`)}</loc></url>`).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${body}\n</urlset>\n`;
