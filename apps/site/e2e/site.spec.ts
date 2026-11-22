@@ -398,10 +398,10 @@ test.describe("landing", () => {
     expect(footer).toContain("Open source under MIT or Apache-2.0.");
     expect(footer).not.toContain("unless a file says otherwise");
     expect(footer).not.toContain("not affiliated");
-    await expect(page.locator('footer a[href="https://github.com/orbefab/embedded/releases"]')).toHaveText("Releases");
-    await expect(page.locator('footer a[href="https://github.com/orbefab/embedded"]')).toHaveText("GitHub");
+    await expect(page.locator('footer a[href="https://github.com/orbefab/orbe/releases"]')).toHaveText("Releases");
+    await expect(page.locator('footer a[href="https://github.com/orbefab/orbe"]')).toHaveText("GitHub");
     await expect(page.locator('footer a[href="/brand"]')).toHaveText("Brand");
-    await expect(page.locator('footer a[href="https://github.com/orbefab/embedded/blob/main/LICENSE-MIT"]')).toHaveText("License");
+    await expect(page.locator('footer a[href="https://github.com/orbefab/orbe/blob/main/LICENSE-MIT"]')).toHaveText("License");
     expect(await bodyText(page)).not.toContain("Catalog @orbefab");
   });
 

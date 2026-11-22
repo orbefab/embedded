@@ -37,7 +37,7 @@ orbe skills get core
 That prints how an agent uses `orbe`, for the version installed. To install a small skill that tells your agents to run it:
 
 ```sh
-npx skills add orbefab/embedded
+npx skills add orbefab/orbe
 ```
 
 ## Contribute

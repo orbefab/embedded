@@ -21,7 +21,7 @@ set -eu
 
 main() {
 
-repo=https://github.com/orbefab/embedded
+repo=https://github.com/orbefab/orbe
 
 die() {
   echo "install.sh: $*" >&2
@@ -279,7 +279,7 @@ if [ "$on_path" -eq 0 ]; then
 else
   echo "orbe --version"
 fi
-echo "npx skills add orbefab/embedded"
+echo "npx skills add orbefab/orbe"
 }
 
 main "$@"

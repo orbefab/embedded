@@ -147,7 +147,7 @@ Type checking, linting and runtime diagnostics are separate.
 Mates between parts, joints between two parts, importing outside CAD, PCB routing, drawing traces, per-instance placement overrides, and an `orbe lsp` for editors.
 
 ## Repo (Oct 31 2026)
-One private repo for the whole branch: `orbefab/embedded`. The current sim-engine code moves in first, then maker-sandbox, then the rest (Blocks and skills). The sandbox then builds against the current engine instead of a frozen copy.
+One private repo for the whole branch: `orbefab/embedded`, since renamed `orbefab/orbe`. The current sim-engine code moves in first, then maker-sandbox, then the rest (Blocks and skills). The sandbox then builds against the current engine instead of a frozen copy.
 
 ## Parts model (Oct 31 2026)
 Every part (circuit parts, sensors, dev boards) should eventually have its sim model, specs and 3D model, organized together. An inventory of what exists is the next step.

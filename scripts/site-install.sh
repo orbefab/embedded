@@ -28,7 +28,7 @@ embeds=$(find "$dist/blocks" -mindepth 3 -maxdepth 3 -name index.html | wc -l)
   fail "not every part and Block page shows its orbe add line"
 grep -q 'curl -fsSL https://orbefab.com/embedded/install.sh | sh' "$dist/index.html" ||
   fail "Get orbe shows no install command"
-grep -q 'href="https://github.com/orbefab/embedded"' "$dist/index.html" ||
+grep -q 'href="https://github.com/orbefab/orbe"' "$dist/index.html" ||
   fail "Get orbe links no repo"
 [[ -f $dist/install.sh ]] || fail "the build does not serve install.sh"
 cmp -s scripts/install.sh "$dist/install.sh" ||
