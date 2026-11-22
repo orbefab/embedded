@@ -38,6 +38,8 @@ pub(super) struct Bound {
     leds: Vec<usize>,
     switches: Vec<String>,
     pixels: Vec<String>,
+    /// Each live param, as `@pot1.position`, with its engine part and the param.
+    params: Vec<(String, String, orbe_scene::MapParam)>,
 }
 
 /// A world quantity's name: `temperature`, `humidity` or `light`.
@@ -104,6 +106,24 @@ impl WorldQuantity {
     }
 }
 
+/// A part's live param, as a page shows it: a slider, and the joint the param poses.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+pub(crate) struct LiveParam {
+    /// The param, such as `@pot1.position`, as `orbe set` names it.
+    #[cfg_attr(test, schemars(with = "crate::Ref"))]
+    pub(crate) r#ref: String,
+    /// The unit of `above`, `below`, `start` and a frame's values, as the part file writes it,
+    /// such as `1`.
+    pub(crate) unit: String,
+    /// The value stays above this, the param's `min_exclusive`.
+    pub(crate) above: f64,
+    /// The value stays below this, the param's `max_exclusive`.
+    pub(crate) below: f64,
+    /// The value the scene gives it at t = 0.
+    pub(crate) start: f64,
+}
+
 /// A frame's `state`: the session's, or `stepping` for a frame read while a `step` runs, which
 /// no reply says. A frame needs an open scene, so it is never `closed`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -131,6 +151,8 @@ pub struct Sample {
     /// Each declared world quantity's value from `t_ps` on, or from where its last `set` lands
     /// when that is later, in table order. Empty when the scene declares none.
     pub world: Vec<f64>,
+    /// Each live param's value, as `world` holds a quantity's, in the scene message's order.
+    pub params: Vec<f64>,
     pub diagnostics: usize,
     /// The fault's diagnostic as `orbe snapshot` prints it, once the session faulted.
     pub fault: Option<String>,
@@ -162,10 +184,30 @@ impl Live {
             .declared()
             .map(|(quantity, schedule)| WorldQuantity::new(quantity, schedule.initial().si.get()))
             .collect();
+        let params: Vec<LiveParam> = open
+            .channels
+            .params
+            .iter()
+            .map(|(r, engine, spec)| LiveParam {
+                r#ref: r.clone(),
+                unit: spec.unit.clone(),
+                above: spec.above.expect("a live param has both bounds"),
+                below: spec.below.expect("a live param has both bounds"),
+                start: open
+                    .engine
+                    .part_level(&super::engine_name(engine))
+                    .expect("a live param's part has a level")
+                    .schedule
+                    .initial()
+                    .si
+                    .get(),
+            })
+            .collect();
         Some(viewer::scene_message(
             &self.name,
             &open.channels.names,
             &world,
+            &params,
             &open.view,
         ))
     }
@@ -279,6 +321,22 @@ impl Open {
                 bound.pixels.push(engine);
             }
         }
+        for (path, part) in &self.refs.parts {
+            let Ok(engine) = one_engine(path, part, Code::NotSettable) else {
+                continue;
+            };
+            let settable = self
+                .engine
+                .part_level(&super::engine_name(&engine))
+                .is_some();
+            for (param, spec) in &part.params {
+                if spec.live && settable && spec.above.is_some() && spec.below.is_some() {
+                    bound
+                        .params
+                        .push((format!("@{path}.{param}"), engine.clone(), spec.clone()));
+                }
+            }
+        }
         bound
     }
 
@@ -341,6 +399,21 @@ impl Open {
                         .get(&quantity)
                         .map_or(now, |&at| at.max(now));
                     schedule.after(from).si.get()
+                })
+                .collect(),
+            params: bound
+                .params
+                .iter()
+                .map(|(_, engine, _)| {
+                    let now = self.engine.now();
+                    let from = self.param_sets.get(engine).map_or(now, |&at| at.max(now));
+                    self.engine
+                        .part_level(&super::engine_name(engine))
+                        .expect("a live param's part has a level")
+                        .schedule
+                        .after(from)
+                        .si
+                        .get()
                 })
                 .collect(),
             diagnostics: self.findings(&probe).len(),

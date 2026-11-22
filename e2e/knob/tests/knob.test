@@ -1,0 +1,12 @@
+# Turning the knob past half way lights the LED, and turning it back turns the LED off.
+open
+step 100ms
+expect @led1 off
+set @pot1.position 0.8
+step --until @led1 lit --timeout 50ms
+expect @nano.D13 high
+expect @pot1.wiper > 3.5V
+set @pot1.position 0.3
+step 50ms
+expect @led1 off
+expect no diagnostics

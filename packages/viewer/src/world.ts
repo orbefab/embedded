@@ -1,4 +1,4 @@
-import type { WorldQuantity } from "./protocol";
+import type { Command, LiveParam, WorldQuantity } from "./protocol";
 
 /** Drops the binary noise of a sum such as `-40 + 3 * 0.5`. */
 const clean = (value: number) => Number(value.toPrecision(12));
@@ -49,6 +49,72 @@ export function parseValue(quantity: WorldQuantity, text: string): Parsed {
     return { ok: false, why: `${quantity.name} is from ${quantity.min} to ${quantity.max} ${quantity.unit}, not ${typed}` };
   }
   return { ok: true, value };
+}
+
+/** What one slider sets, a world quantity or a part's live param, as the page shows it. */
+export interface Control {
+  /** The slider's id and test id, such as `world-light` or `param-pot1-position`. */
+  readonly id: string;
+  /** What the label says, such as `light` or `pot1.position`. */
+  readonly label: string;
+  /** The unit beside the number, empty for a fraction. */
+  readonly unit: string;
+  /** The value the scene gives it at t = 0. */
+  readonly start: number;
+  /** The values the thumb steps through, ascending. */
+  readonly stops: readonly number[];
+  /** A typed value, checked as `orbe set` checks it. */
+  readonly parse: (text: string) => Parsed;
+  /** The command that sets `value`. */
+  readonly command: (value: number) => Command;
+}
+
+export function worldControl(quantity: WorldQuantity): Control {
+  return {
+    id: `world-${quantity.name}`,
+    label: quantity.name,
+    unit: quantity.unit,
+    start: quantity.start,
+    stops: stops(quantity),
+    parse: (text) => parseValue(quantity, text),
+    command: (value) => ({ cmd: "set", quantity: quantity.name, value }),
+  };
+}
+
+/** The values a live param's thumb steps through: a hundredth of its range, rounded down to a
+ * power of ten, from one step inside each bound, and the value the scene starts it at. */
+export function paramStops(param: LiveParam): number[] {
+  const { above, below, start } = param;
+  const step = 10 ** Math.floor(Math.log10((below - above) / 100));
+  const values = [start];
+  for (let value = clean(above + step); value < below; value = clean(value + step)) values.push(value);
+  return [...new Set(values.filter((value) => value > above && value < below))].sort((a, b) => a - b);
+}
+
+/** A typed value for a live param, checked as `orbe set @part.param` checks it. */
+export function parseParam(param: LiveParam, text: string): Parsed {
+  const typed = text.trim();
+  const value = typed === "" ? Number.NaN : Number(typed);
+  if (!Number.isFinite(value)) {
+    return { ok: false, why: `\`${typed}\` is not a number; write the param's value, such as ${formatValue(param.start)}` };
+  }
+  if (!(value > param.above && value < param.below)) {
+    return { ok: false, why: `${param.ref.slice(1)} is above ${param.above} and below ${param.below}, not ${typed}` };
+  }
+  return { ok: true, value };
+}
+
+export function paramControl(param: LiveParam): Control {
+  const label = param.ref.slice(1);
+  return {
+    id: `param-${label.replaceAll(".", "-")}`,
+    label,
+    unit: param.unit === "1" ? "" : param.unit,
+    start: param.start,
+    stops: paramStops(param),
+    parse: (text) => parseParam(param, text),
+    command: (value) => ({ cmd: "set", ref: param.ref, value }),
+  };
 }
 
 /** One slider's state. `idle` shows the frame's value. The others show `value`: `moving` while

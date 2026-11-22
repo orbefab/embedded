@@ -9,7 +9,7 @@ pub(crate) mod waveform;
 mod catalog;
 
 pub(crate) use catalog::Kind;
-pub use catalog::{Conduction, Model, engine_kinds};
+pub use catalog::{Conduction, Model, engine_kinds, live_field};
 
 use serde::{Deserialize, Serialize, Serializer};
 

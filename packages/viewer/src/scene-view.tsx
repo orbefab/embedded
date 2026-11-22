@@ -3,7 +3,7 @@ import { type ThreeEvent, useFrame, useLoader, useThree } from "@react-three/fib
 import { EffectComposer, Outline } from "@react-three/postprocessing";
 import { BlendFunction, SelectiveBloomEffect } from "postprocessing";
 import { type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { BackSide, Box3, type Group, Mesh, MeshStandardMaterial, type Object3D } from "three";
+import { BackSide, Box3, type Group, Mesh, MeshStandardMaterial, type Object3D, Quaternion } from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { type BuiltScene, buildScene, fromGltf, type Tag, tagOf } from "./build";
 import type { CameraMode } from "./camera-frame";
@@ -23,6 +23,9 @@ const HOVER = "#e85d04";
 /** The render layer bloom reads. The hover outline toggles its own layer, 10, on the hovered
  * meshes, so bloom must not share it. */
 const BLOOM_LAYER = 11;
+
+/** Scratch for a turn joint's pose, so a frame allocates nothing. */
+const turned = new Quaternion();
 
 /** Each mesh the scene glows, with its glow material. */
 function glowMeshes(built: BuiltScene): { mesh: Mesh; material: MeshStandardMaterial }[] {
@@ -251,6 +254,11 @@ export function SceneView({
     for (const slide of built.slides) {
       slide.node.position.copy(slide.rest);
       if (live?.switches[slide.channel] === 1) slide.node.position.add(slide.delta);
+    }
+    for (const turn of built.turns) {
+      const value = live?.params?.[turn.channel] ?? turn.value;
+      turned.setFromAxisAngle(turn.axis, turn.angle(value));
+      turn.node.quaternion.copy(turned).multiply(turn.rest);
     }
   });
 

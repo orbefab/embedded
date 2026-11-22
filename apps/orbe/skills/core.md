@@ -13,11 +13,7 @@ This text comes from the `orbe` you have installed, so it matches it. `orbe <com
 
 ## The loop
 
-1. `orbe blocks` lists the Blocks, and `orbe search <words>` finds one. When a Block is close to the circuit, run `orbe add <block>` in an empty folder. It writes a scene, firmware and a test that already work. Run `orbe check scene.jsonc` and `orbe test`, then change it.
-   - `nano-button-led`: a button on D2 lights a red LED on D13 of an Arduino Nano, and releasing it turns the LED off.
-   - `uno-button-led`: a button on D2 lights a red LED on D13 of an Arduino Uno, and the board's own L LED with it.
-   - `nano-led-fade`: an LED on D9 of an Arduino Nano fades up and down by PWM.
-   - `nano-light-comparator`: an LDR and a trimmer set a threshold. An LM358 lights a red LED in the dark, and a Nano on D2 prints dark or light.
+1. `orbe blocks` lists the Blocks, and `orbe search <words>` finds one. When a Block is close to the circuit and the user did not ask to build it from parts, run `orbe add <block>` in an empty folder. It writes a scene, firmware and a test that already work. Run `orbe check scene.jsonc` and `orbe test`, then change it. Tell the user which Block you started from and what you changed.
 2. Otherwise find each part with `orbe search <words>`, read it with `orbe part <id>`, and download it into the project with `orbe add <id>…`.
 3. Write `scene.jsonc` in the project folder. Seat each part on a breadboard with `on`.
 4. Run `orbe check scene.jsonc`, then `orbe lint scene.jsonc`, after every edit. With no path, both read `scene.jsonc`. Do what each hint says. A `part_missing` hint is the `orbe add` command to run. `orbe nets` lists each net and its pins, and marks `(floating)` on a net with no DC path to ground.
@@ -75,7 +71,7 @@ scene.jsonc:4:23: error[part_missing]: part `nano-board` is not in parts/
 ...
 $ orbe add led-5mm nano-board resistor-axial tactile-switch-6mm
 ...
-wrote parts/led-5mm 0.2.0
+wrote parts/led-5mm 0.3.0
 ...
 $ orbe check scene.jsonc
 scene.jsonc: ok, 5 scene parts, expanding to 20 engine parts, 35 nets, ground GND
@@ -130,7 +126,11 @@ A part name starts with a letter, takes letters, digits and `_`, and may not con
 
 ## Parts
 
-`orbe search <words>` lists the parts whose id, title, maker, number, summary or tags hold every word, then the Blocks. `orbe part <id>` prints one part: its pins and the leads they are on, params, ratings, what it does not simulate, datasheets and files. That print is the part's electrical behaviour. `orbe add <id>…` downloads the latest part into `parts/<id>/`, and the parts it is built from into `parts/<id>/parts/`. The copy is the project's: edit it, and commit `parts/` with the scene. `orbe check`, `orbe open` and `orbe test` read that copy and never use the network. `orbe add`, `orbe search` and `orbe part` need curl. `orbe add <block>` installs a Block. The Blocks are `nano-button-led`, `uno-button-led`, `nano-led-fade` and `nano-light-comparator`.
+A load such as an LED strip or a heater is `resistor-sqp15`. A separate supply is `barrel-jack-dc21` with its `voltage`.
+
+`orbe search <words>` lists the parts whose id, title, maker, number, summary or tags hold every word, then the Blocks. `orbe part <id>` prints one part: its pins and the leads they are on, params, ratings, what it does not simulate, datasheets and files. That print is the part's electrical behaviour. `orbe add <id>…` downloads the latest part into `parts/<id>/`, and the parts it is built from into `parts/<id>/parts/`. The copy is the project's: edit it, and commit `parts/` with the scene. `orbe check`, `orbe open` and `orbe test` read that copy and never use the network. `orbe add`, `orbe search` and `orbe part` need curl. `orbe add <block>` installs a Block.
+
+For addressable RGB LEDs, use the `neopixel-stick-8` module.
 
 In a part's folder, `part.jsonc` is the part: its pins, params, ratings and the engine model it names, which runs inside orbe. `<id>.glb` is its 3D shape, and `<id>.anchors.json` says where each lead sits, for drawing and seating. `orbe add` copies `part.jsonc`, the GLB and the anchors when the part has them. It does not copy `model.py` or `asset.json`. Those build the 3D shape and hold nothing electrical. `orbe skills get parts` covers the copy and versions.
 
@@ -149,10 +149,10 @@ Give the board an `at`. Then seat every part with leads using `on`: name one pin
 - `@led1`: a part. `get` prints its state, such as `lit`, `dim` or `off`, and its current `i`, voltage `v` and power `p`.
 - `@nano.D13`, `@led1.anode`: a pin. `get` prints its level, `high` or `low`, when a chip pin is on its net, and its voltage.
 - `@led1.i`: one quantity of a part. An unknown one is an error that lists what the part reports.
-- `@led1.color`: the colour an addressable LED, such as the sk68xxmini-hs, last latched, as `rgb(r,g,b)` from 0 to 255, and when. `get @led1` prints it as `color=`.
+- `@led1.color`: the colour an addressable LED last latched, as `rgb(r,g,b)` from 0 to 255, and when. `get @led1` prints it as `color=`.
 - `@nano.mcu.PB5`, `@nano.led_l`: a part inside a part, by its name in that part's file. On the Nano and the Uno the chip is `mcu`, and `led_l` is the L LED, which D13 drives.
 
-`press @btn1` and `release @btn1` close and open a switch. `orbe set light 50` changes a `world` quantity from then on. `orbe get light` reads the value in force, and `orbe get @world.light` reads the same.
+`press @btn1` and `release @btn1` close and open a switch. `orbe set light 50` changes a `world` quantity from then on. `orbe get light` reads the value in force, and `orbe get @world.light` reads the same. `orbe set @pot1.position 0.8` turns a potentiometer's knob from then on, and `orbe get @pot1.position` reads it. `set` changes only a param `orbe part` says `set` changes, inside its range. The next `step` solves with it, so the wiper's voltage and the sketch's `analogRead` move.
 
 `expect` and `step --until` take the same conditions:
 

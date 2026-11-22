@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use orbe_session::{
-    Command, Condition, Duration, Needle, Op, Ref, Step, UNTIL_TIMEOUT, Unit, Want,
+    Command, Condition, Duration, Needle, Op, ParamSet, Ref, Step, UNTIL_TIMEOUT, Unit, Want,
 };
 
 fn ps(text: &str) -> u64 {
@@ -183,6 +183,27 @@ fn step_takes_a_duration_or_a_condition_with_a_timeout() {
 }
 
 #[test]
+fn a_quoted_comparison_is_the_same_operator() {
+    let bare = line("expect @led1.i > 5mA").unwrap();
+    assert_eq!(line("expect @led1.i '>' 5mA").unwrap(), bare);
+    assert_eq!(line(r#"expect @led1.i ">" 5mA"#).unwrap(), bare);
+    assert_eq!(
+        line("step --until @led1.i '<' 1V --timeout 50ms").unwrap(),
+        line("step --until @led1.i < 1V --timeout 50ms").unwrap()
+    );
+    assert_eq!(
+        line("expect @led1.i '>=' 5mA").unwrap(),
+        line("expect @led1.i >= 5mA").unwrap()
+    );
+    assert_eq!(
+        line("expect @led1.i '<=' 1V").unwrap(),
+        line("expect @led1.i <= 1V").unwrap()
+    );
+    let error = line("expect @led1.i '> 5mA").unwrap_err();
+    assert!(error.contains("a quote is not closed"), "{error}");
+}
+
+#[test]
 fn a_condition_in_one_argument_splits_like_a_test_line() {
     let root = Path::new("/project");
     let expect = orbe_session::spec("expect").unwrap();
@@ -256,7 +277,19 @@ fn a_bad_line_names_the_command_and_its_usage() {
         ),
         (
             "set light",
-            "takes a quantity and a value, such as `light 50`; usage: set <quantity> <value>",
+            "takes a quantity and a value, such as `light 50`, or a part's param and a value, such as `@pot1.position 0.8`; usage: set <quantity> <value> | set <ref> <value>",
+        ),
+        (
+            "set @pot1 0.5",
+            "`@pot1` is a part; name its param, such as `@pot1.position`",
+        ),
+        (
+            "set @pot1.position half",
+            "`half` is not a number; write the param's value, such as 0.5",
+        ),
+        (
+            "set pot1.position 0.5",
+            "`pot1.position` is not a world quantity",
         ),
         (
             "press",
@@ -319,4 +352,16 @@ fn the_wire_refuses_what_the_parser_refuses() {
 
 fn line_ok(text: &str) -> Command {
     line(text).unwrap().unwrap()
+}
+
+#[test]
+fn set_takes_a_world_quantity_or_a_part_s_param() {
+    assert_eq!(
+        line_ok("set @pot1.position 0.8"),
+        Command::SetParam(ParamSet {
+            target: Ref::parse("@pot1.position").unwrap(),
+            value: 0.8,
+        })
+    );
+    assert_eq!(line_ok("set @world.light 50"), line_ok("set light 50"));
 }

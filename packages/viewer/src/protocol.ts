@@ -24,7 +24,9 @@ export type Command =
   | { readonly cmd: "release"; readonly ref: Ref }
   | { readonly cmd: "play" }
   | { readonly cmd: "pause" }
-  | { readonly cmd: "set"; readonly quantity: WorldName; readonly value: number };
+  | { readonly cmd: "set"; readonly quantity: WorldName; readonly value: number }
+  /** A part's live param, such as `@pot1.position`, as `orbe set @pot1.position 0.8`. */
+  | { readonly cmd: "set"; readonly ref: Ref; readonly value: number };
 
 /** A command as the viewer sends it on a session's WebSocket. `id` is the viewer's own and comes
  * back on its reply. */
@@ -42,6 +44,9 @@ export interface FrameMessage {
   /** Mean current in amperes since the previous frame, per `channels.leds`. The frame after a
    * page joins carries the present current. */
   readonly led_a: readonly number[];
+  /** Each value per the scene's `params`: the value from `t_ps` on, or from where the param's
+   * last `set` lands when that is later. Absent when the scene has none. */
+  readonly params?: readonly number[];
   /** 0 for low, 1 for high, per `channels.pins`. */
   readonly pins: readonly (0 | 1)[];
   /** Red, green and blue from 0 to 255, per `channels.pixels`: the colour that part's first LED
@@ -72,6 +77,21 @@ export type FrameState = "paused" | "playing" | "stopped" | "faulted" | "steppin
 
 /** Everything a session's WebSocket sends. */
 export type FromSession = ToViewer | ReplyMessage;
+
+/** A part's live param, as a page shows it: a slider, and the joint the param poses. */
+export interface LiveParam {
+  /** The value stays above this, the param's `min_exclusive`. */
+  readonly above: number;
+  /** The value stays below this, the param's `max_exclusive`. */
+  readonly below: number;
+  /** The param, such as `@pot1.position`, as `orbe set` names it. */
+  readonly ref: Ref;
+  /** The value the scene gives it at t = 0. */
+  readonly start: number;
+  /** The unit of `above`, `below`, `start` and a frame's values, as the part file writes it,
+   * such as `1`. */
+  readonly unit: string;
+}
 
 /** `@` and a dotted scene name, such as `@btn1` or `@nano.D13`. */
 export type Ref = `@${string}`;
@@ -111,6 +131,10 @@ export type Scale =
 /** The scene a session opened, sent once per `open`, with the refs each frame array follows. */
 export type SceneMessage = View & {
   readonly channels: Channels;
+  /** Each live param of the scene's parts, such as a potentiometer's position, which each
+   * frame's `params` follows. A page shows a slider for each and poses any joint `by` it. Absent
+   * when the scene has none. */
+  readonly params?: readonly LiveParam[];
   readonly session: string;
   readonly type: "scene";
   /** Each world quantity the scene declares, in table order, which each frame's `world` follows.

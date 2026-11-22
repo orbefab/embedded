@@ -153,10 +153,8 @@ fn reads_are_the_batch(name: &str, stop_ps: u64, seed: u64) {
     assert_eq!(session.level(&trace.columns()[0]), None);
 }
 
-#[ignore = "full tier"]
-#[test]
-fn a_live_potentiometer_sets_the_divider_voltage() {
-    let json = r#"{
+/// A 5 V source across a 10k potentiometer at a quarter turn, its wiper on net `mid`.
+const POT_DIVIDER: &str = r#"{
       "version": 1,
       "seed": 0,
       "analysis": { "transient": { "stop_ps": 10000, "max_step_ps": 1000, "grid_ps": 1000 } },
@@ -178,7 +176,11 @@ fn a_live_potentiometer_sets_the_divider_voltage() {
         }
       ]
     }"#;
-    let mut session = opened(json);
+
+#[ignore = "full tier"]
+#[test]
+fn a_live_potentiometer_sets_the_divider_voltage() {
+    let mut session = opened(POT_DIVIDER);
     let mid = "#net.mid".parse().unwrap();
     let close = |got: f64, position: f64| {
         let expect = 5.0 * (1.0 - position);
@@ -200,6 +202,44 @@ fn a_live_potentiometer_sets_the_divider_voltage() {
     close(session.probe().get(&mid).unwrap().get(), 0.25);
     assert_eq!(session.advance_to(Time::from_ps(2)), Status::Running);
     close(session.probe().get(&mid).unwrap().get(), 0.75);
+}
+
+#[test]
+fn a_potentiometer_s_position_moves_in_place_and_reads_back() {
+    let mut session = opened(POT_DIVIDER);
+    let rv1 = Name::new("rv1").unwrap();
+    let level = |session: &Session, at: u64| {
+        let field = session.part_level(&rv1).unwrap();
+        assert_eq!((field.field, field.unit), ("position", "1"));
+        field.schedule.before(Time::from_ps(at)).si.get()
+    };
+    assert_eq!(level(&session, 0), 0.25);
+    assert_eq!(netlist::live_field("potentiometer"), Some("position"));
+    assert_eq!(netlist::live_field("resistor"), None);
+    let applied = session
+        .apply(&Input {
+            part: rv1.clone(),
+            at: Time::ZERO,
+            setting: Setting::Level(Finite::new(0.8).unwrap()),
+        })
+        .unwrap();
+    assert_eq!(level(&session, applied.at.as_ps()), 0.25);
+    assert_eq!(level(&session, applied.at.as_ps() + 1), 0.8);
+    assert_eq!(session.advance_to(Time::from_ps(2)), Status::Running);
+    let mid = "#net.mid".parse().unwrap();
+    let wiper = session.probe().get(&mid).unwrap().get();
+    assert!((wiper - 5.0 * 0.2).abs() <= 1e-8, "{wiper}");
+    assert_eq!(
+        session.apply(&Input {
+            part: rv1.clone(),
+            at: Time::ZERO,
+            setting: Setting::Level(Finite::new(1.0).unwrap()),
+        }),
+        Err(orbe_engine::Rejected::Value(
+            orbe_engine::diagnostic::ValueRule::Fraction
+        ))
+    );
+    assert!(session.part_level(&Name::new("rv2").unwrap()).is_none());
 }
 
 /// The session leaves the scope that parsed its netlist, so a session that borrowed it would

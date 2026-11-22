@@ -2,13 +2,13 @@
   "part": "potentiometer-wh148",
   "source": {
     "script": "model.py",
-    "sha256": "dc3b50f0cdcac63a0be8bac9a007bcbac8ce82ef3627bdd2aa6609fb88a9524b",
-    "bytes": 3676
+    "sha256": "fc4bb95aa9f9ed20551485f086dbc9aab04959469dcf55c0a4eb50f07ad92587",
+    "bytes": 3880
   },
   "files": {
     "potentiometer-wh148.glb": {
-      "sha256": "49fd35e0b2baaeaf08c75e4a945d3a2f77e35ffbdc6c1295bde604fcec7bff7f",
-      "bytes": 57080
+      "sha256": "d9d3925c661acad686e466d6ba5b41e55703581166a00466fca04ae0855f81ae",
+      "bytes": 57096
     },
     "potentiometer-wh148.anchors.json": {
       "sha256": "1d7e5ca7b5044e0ab166e6856ec21191a180703e0abca9897f6acc0420935cc7",
@@ -19,7 +19,7 @@
     "min": [-8, -7.97763, -6],
     "max": [8, 8, 29.02]
   },
-  "kept_nodes": ["pin-1", "pin-2", "pin-3"],
+  "kept_nodes": ["pin-1", "pin-2", "pin-3", "shaft"],
   "draw_calls": 9,
   "checks": {
     "frame": {
@@ -34,7 +34,7 @@
       "z_mm": 0
     },
     "names": {
-      "nodes": []
+      "nodes": ["shaft"]
     },
     "merge": {
       "primitives_in": 10,

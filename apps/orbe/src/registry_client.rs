@@ -935,7 +935,6 @@ fn card_of(part: orbe_registry::PartItem) -> Result<Card, Fail> {
         dim,
         pressable,
         holes,
-        listed: true,
     })
 }
 

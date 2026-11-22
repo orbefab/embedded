@@ -1,0 +1,44 @@
+{
+  "part": "resistor-sqp15",
+  "source": {
+    "script": "model.py",
+    "sha256": "cb5167da65d26441b34edbf2d41aab4c1feafd9c8af0281ec56dc3a1a3458b3d",
+    "bytes": 1758
+  },
+  "files": {
+    "resistor-sqp15.glb": {
+      "sha256": "a7a57b280a1c0e1160eded926dc45621be0dd85cb380ac6c2e2cc7d6d7acc731",
+      "bytes": 24944
+    },
+    "resistor-sqp15.anchors.json": {
+      "sha256": "439580af3e10ccb09d91731a1e093f525b40d77a12c998392ececd27d8574efc",
+      "bytes": 294
+    }
+  },
+  "box": {
+    "min": [-26.4, -6.25, -8],
+    "max": [26.4, 6.25, 12.5]
+  },
+  "kept_nodes": ["lead-1", "lead-2"],
+  "draw_calls": 3,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0.004706
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 3,
+      "primitives_out": 3
+    }
+  }
+}
