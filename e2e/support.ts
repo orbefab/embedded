@@ -110,7 +110,6 @@ export const test = base.extend<{}, { host: Host }>({
 declare global {
   interface Window {
     orbeViewer?: { get(): any };
-    orbeFixture?: any;
     orbeTrack?: {
       workers: { terminated: boolean; created: number }[];
       created: string[];
@@ -119,9 +118,6 @@ declare global {
     orbeGlowSpan?: { min: number; max: number };
     orbeGlowTimer?: number;
     lastPointer?: number;
-    realSend?: unknown;
-    sets?: unknown[];
-    answer?: () => void;
   }
 }
 

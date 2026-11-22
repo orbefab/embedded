@@ -12,9 +12,9 @@ const PAGES = [
   ["/embedded/blocks/", "Blocks"],
 ] as const;
 
-// Headless Firefox on Linux refuses a WebGL context. The viewer fixture still starts three.js,
-// which logs the first three lines, and the thrown Error is logged as "Error". The fixture
-// still plays. The site detects the refusal first and draws one sentence instead, so it never
+// Headless Firefox on Linux refuses a WebGL context. The page still starts three.js, which logs
+// the first three lines, and the thrown Error is logged as "Error". The Block still runs, paused
+// until Play. The site detects the refusal first and draws one sentence instead, so it never
 // starts the renderer and logs none of those lines. WebKit creates a WebGL 2 context and draws
 // the board on a Block page. The same refusal in WebKit fails the check.
 const FIREFOX_WEBGL = [
@@ -40,6 +40,9 @@ function drawnOrRefused(page: Page): Promise<"board" | "refused"> {
 }
 
 async function timeMoves(page: Page): Promise<void> {
+  await page.getByTestId("state").waitFor({ timeout: 60_000 });
+  expect(await textOf(page, "state")).toBe("paused");
+  await page.getByTestId("play").click();
   expect(await textOf(page, "state")).toBe("playing");
   const first = await textOf(page, "time");
   expect(first).toMatch(/^t = \d+\.\d+ s$/);
@@ -53,7 +56,7 @@ async function timeMoves(page: Page): Promise<void> {
   );
 }
 
-test("the viewer fixture plays, and WebKit shows the board", async ({ page }, info) => {
+test("the page runs the Block, and WebKit shows the board", async ({ page }, info) => {
   const errors = collectLogs(page, "errors");
   const response = await page.goto(`${viewer}/`);
   expect(response?.ok()).toBe(true);

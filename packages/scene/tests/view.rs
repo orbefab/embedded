@@ -1,5 +1,4 @@
-//! What a viewer gets of the first target: the facts `apps/viewer/src/first-target.ts` writes
-//! by hand, read from the scene and the part files instead.
+//! What a viewer gets of the first target, read from the scene and the part files.
 
 use std::path::Path;
 
