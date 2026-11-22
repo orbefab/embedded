@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::Files;
 use crate::command::{Command, spec};
-use crate::live::{Channels, FrameState, Live, Pace, Sample, WorldQuantity};
+use crate::live::{Channels, FrameState, Live, LiveParam, Pace, Sample, WorldQuantity};
 use crate::reply::{Code, Data, Envelope, Error, Reply};
 
 /// `play` advances this much simulated time per tick at most, one tick of wall time at speed 1,
@@ -58,6 +58,11 @@ pub(crate) struct SceneMessage<'a> {
     /// follows. Absent when the scene declares none.
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     world: &'a [WorldQuantity],
+    /// Each live param of the scene's parts, such as a potentiometer's position, which each
+    /// frame's `params` follows. A page shows a slider for each and poses any joint `by` it.
+    /// Absent when the scene has none.
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    params: &'a [LiveParam],
     #[serde(flatten)]
     #[cfg_attr(test, schemars(skip))]
     view: &'a View,
@@ -68,6 +73,7 @@ pub(crate) fn scene_message(
     session: &str,
     channels: &Channels,
     world: &[WorldQuantity],
+    params: &[LiveParam],
     view: &View,
 ) -> Value {
     let message = SceneMessage {
@@ -75,6 +81,7 @@ pub(crate) fn scene_message(
         session,
         channels,
         world,
+        params,
         view,
     };
     serde_json::to_value(message).expect("a scene message serializes")
@@ -105,6 +112,10 @@ pub(crate) struct FrameMessage<'a> {
     /// when the scene declares none.
     #[serde(skip_serializing_if = "Option::is_none")]
     world: Option<&'a [f64]>,
+    /// Each value per the scene's `params`: the value from `t_ps` on, or from where the param's
+    /// last `set` lands when that is later. Absent when the scene has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    params: Option<&'a [f64]>,
     /// On a frame from a `play` tick: simulated time over wall time in that tick, as the session
     /// achieved it. Under 1 when the engine runs slower than real time.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -188,10 +199,15 @@ pub fn command(text: &str) -> (Option<u64>, Result<Command, Error>) {
     (id, parsed)
 }
 
-/// The words after the command name. `set` takes `quantity` and `value`. The others take `ref`.
+/// The words after the command name. `set` takes `quantity` or a param's `ref`, and `value`. The
+/// others take `ref`.
 fn viewer_args(name: &str, message: &Value) -> Vec<String> {
     if name == "set" {
-        let quantity = message["quantity"].as_str().unwrap_or("").to_string();
+        let quantity = message["ref"]
+            .as_str()
+            .or_else(|| message["quantity"].as_str())
+            .unwrap_or("")
+            .to_string();
         let value = match message.get("value") {
             Some(Value::Number(number)) => number.to_string(),
             Some(Value::String(text)) => text.clone(),
@@ -252,7 +268,7 @@ pub fn part_scene(id: &str, parts: Vec<(String, Vec<u8>)>) -> Result<Value, Stri
             .collect::<Vec<_>>()
             .join("\n")
     })?;
-    Ok(scene_message(id, &Channels::default(), &[], &view))
+    Ok(scene_message(id, &Channels::default(), &[], &[], &view))
 }
 
 /// The `scene` and `frame` messages a session's viewers get. It numbers the frames, and gives
@@ -366,6 +382,7 @@ impl Feed {
             switches: &sample.switches,
             pixel_rgb: &sample.pixels,
             world: (!sample.world.is_empty()).then_some(sample.world.as_slice()),
+            params: (!sample.params.is_empty()).then_some(sample.params.as_slice()),
             ratio: pace.map(|pace| pace.ratio),
             diagnostics: sample.diagnostics,
             fault: sample.fault.as_deref(),
@@ -510,6 +527,7 @@ mod tests {
             switches: vec![],
             pixels: vec![],
             world: vec![],
+            params: vec![],
             diagnostics: 0,
             fault: None,
         }

@@ -1,6 +1,18 @@
 import { describe, expect, test } from "vitest";
-import type { WorldQuantity } from "./protocol";
-import { IDLE, nearest, nextThumb, parseValue, shownValue, stops, type Thumb, type ThumbEvent } from "./world";
+import type { LiveParam, WorldQuantity } from "./protocol";
+import {
+  IDLE,
+  nearest,
+  nextThumb,
+  paramControl,
+  paramStops,
+  parseParam,
+  parseValue,
+  shownValue,
+  stops,
+  type Thumb,
+  type ThumbEvent,
+} from "./world";
 
 const light: WorldQuantity = { name: "light", unit: "lx", min: 0, max: 100_000, start: 300, scale: { kind: "log" } };
 const temperature: WorldQuantity = { name: "temperature", unit: "degC", min: -40, max: 125, start: 25, scale: { kind: "linear", step: 0.5 } };
@@ -97,5 +109,37 @@ describe("nextThumb", () => {
       { type: "frame" },
     ]);
     expect(thumb).toEqual({ kind: "moving", value: 1000 });
+  });
+});
+
+describe("a live param", () => {
+  const position: LiveParam = { ref: "@pot1.position", unit: "1", above: 0, below: 1, start: 0.5 };
+
+  test("steps by a hundredth of its range inside its bounds, and keeps the value it starts at", () => {
+    const values = paramStops(position);
+    expect({ count: values.length, first: values.slice(0, 2), last: values.at(-1) }).toEqual({
+      count: 99,
+      first: [0.01, 0.02],
+      last: 0.99,
+    });
+    expect(paramStops({ ...position, start: 0.333 })).toContain(0.333);
+  });
+
+  test("takes a number inside its bounds and refuses others as orbe set does", () => {
+    expect([parseParam(position, " 0.8 "), parseParam(position, "1"), parseParam(position, "half")]).toEqual([
+      { ok: true, value: 0.8 },
+      { ok: false, why: "pot1.position is above 0 and below 1, not 1" },
+      { ok: false, why: "`half` is not a number; write the param's value, such as 0.5" },
+    ]);
+  });
+
+  test("sends set with its ref and shows no unit for a fraction", () => {
+    const control = paramControl(position);
+    expect([control.id, control.label, control.unit, control.command(0.8)]).toEqual([
+      "param-pot1-position",
+      "pot1.position",
+      "",
+      { cmd: "set", ref: "@pot1.position", value: 0.8 },
+    ]);
   });
 });

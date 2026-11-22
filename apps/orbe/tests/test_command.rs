@@ -944,19 +944,19 @@ fn a_set_the_table_refuses_is_a_usage_error() {
     for (line, message) in [
         (
             "set lite 50",
-            "`lite` is not a world quantity; the quantities are temperature, humidity, light; usage: set <quantity> <value>",
+            "`lite` is not a world quantity; the quantities are temperature, humidity, light; usage: set <quantity> <value> | set <ref> <value>",
         ),
         (
             "set light 200000",
-            "light is from 0 to 100000 lx, not 200000; usage: set <quantity> <value>",
+            "light is from 0 to 100000 lx, not 200000; usage: set <quantity> <value> | set <ref> <value>",
         ),
         (
             "set temperature warm",
-            "`warm` is not a number; write temperature in degC, such as 25; usage: set <quantity> <value>",
+            "`warm` is not a number; write temperature in degC, such as 25; usage: set <quantity> <value> | set <ref> <value>",
         ),
         (
             "set light",
-            "takes a quantity and a value, such as `light 50`; usage: set <quantity> <value>",
+            "takes a quantity and a value, such as `light 50`, or a part's param and a value, such as `@pot1.position 0.8`; usage: set <quantity> <value> | set <ref> <value>",
         ),
     ] {
         let (error, _) = failed(&format!("open\n{line}\n"));

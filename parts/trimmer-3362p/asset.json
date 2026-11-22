@@ -2,13 +2,13 @@
   "part": "trimmer-3362p",
   "source": {
     "script": "model.py",
-    "sha256": "9400faf72d70aaf77346dc0e70883e066040453fd60d2b1ef6888da2d5272821",
-    "bytes": 3477
+    "sha256": "5d76fe120feccf30793a40b0e3ab7add2c6a5c2c57aaa3aa62ebdae2b39c64ed",
+    "bytes": 3698
   },
   "files": {
     "trimmer-3362p.glb": {
-      "sha256": "28fe7aeead3cd22b483a91cf3174d8d90ce19fcfa6f0ca8fc0630fa418348c02",
-      "bytes": 32164
+      "sha256": "e398e960c6ef00bfd9646b1cc69a24cb5bc4d3c13a379e2423aadc436dec22d7",
+      "bytes": 32180
     },
     "trimmer-3362p.anchors.json": {
       "sha256": "244a64a7ec4f6723c0ae69df591c6f5a1b8f99c319ad7d27803d4c1ddf5be798",
@@ -19,7 +19,7 @@
     "min": [-3.3, -3.84, -5.46],
     "max": [3.3, 3.15, 4.88]
   },
-  "kept_nodes": ["pin-1", "pin-2", "pin-3"],
+  "kept_nodes": ["pin-1", "pin-2", "pin-3", "rotor"],
   "draw_calls": 5,
   "checks": {
     "frame": {
@@ -34,7 +34,7 @@
       "z_mm": 0
     },
     "names": {
-      "nodes": []
+      "nodes": ["rotor"]
     },
     "merge": {
       "primitives_in": 5,

@@ -1,0 +1,44 @@
+{
+  "part": "pmos-irf9540n-to220",
+  "source": {
+    "script": "model.py",
+    "sha256": "52d441416fd551790940d72bd69c4ae75a3ac5e74fcf92e3e66af6384f4d4c92",
+    "bytes": 2295
+  },
+  "files": {
+    "pmos-irf9540n-to220.glb": {
+      "sha256": "cb56b5548353624fd6747d6d16351387305cd8d4f8cba613836e5122cf4657ac",
+      "bytes": 76208
+    },
+    "pmos-irf9540n-to220.anchors.json": {
+      "sha256": "33f9a7dd000c18cd494c31447551a94754c22dd120d514c7bc5658ba4a3189a7",
+      "bytes": 523
+    }
+  },
+  "box": {
+    "min": [-5, -2.27, -13],
+    "max": [5, 2.25, 15.65]
+  },
+  "kept_nodes": ["lead-1", "lead-2", "lead-3"],
+  "draw_calls": 6,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 4,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 6,
+      "primitives_out": 6
+    }
+  }
+}

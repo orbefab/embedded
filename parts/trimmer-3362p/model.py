@@ -7,7 +7,10 @@ faces -Y. Seen from the top, pin 1 is at -X, pin 3 at +X, both
 3.53 behind the front edge, and the wiper, pin 2, 2.54 further back on
 x = 0. These are leads 1 to 3, `pin-1` to `pin-3`.
 
-The rotor, with its cross slot, is one node, `rotor`.
+The rotor, with its cross slot, is one node, `rotor`, whose origin is on
+the turn axis. The part's joint `rotor` turns it about -Z with `position`,
+260° from end to end, the sheet's effective travel (`# verify`), so a
+clockwise turn moves the wiper from pin 1 toward pin 3.
 
 From Bourns' 3362 sheet, p1: body 6.60 wide, 6.99 deep and 4.88 above the
 seating plane, standoffs 0.38, the rotor's axis 3.84 behind the front edge,

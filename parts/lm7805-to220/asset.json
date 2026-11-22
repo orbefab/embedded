@@ -1,0 +1,44 @@
+{
+  "part": "lm7805-to220",
+  "source": {
+    "script": "model.py",
+    "sha256": "c6d8e6a5095bb40911636fbbd0a94539a1244fb933ee48d822016807d9daf6df",
+    "bytes": 2161
+  },
+  "files": {
+    "lm7805-to220.glb": {
+      "sha256": "dbabcd457d6788a916407b69792c31d254337781aa244b5c39102968b8f11e37",
+      "bytes": 74804
+    },
+    "lm7805-to220.anchors.json": {
+      "sha256": "17d7ad04b6c35af56c36716fa7d68d7da079c3c882e395f2cf63707e9174fa58",
+      "bytes": 516
+    }
+  },
+  "box": {
+    "min": [-5, -2.27, -13],
+    "max": [5, 2.25, 15.65]
+  },
+  "kept_nodes": ["lead-1", "lead-2", "lead-3"],
+  "draw_calls": 6,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 4,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 6,
+      "primitives_out": 6
+    }
+  }
+}

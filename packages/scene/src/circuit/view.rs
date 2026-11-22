@@ -69,12 +69,33 @@ pub struct PartData {
     pub strips: Vec<Vec<String>>,
 }
 
+/// A node of the part's model that moves: it slides along `slide` or turns about `turn`.
 #[derive(Clone, Debug, Serialize)]
 pub struct Joint {
     pub node: String,
-    pub slide: [f64; 3],
-    /// In mm.
+    /// A unit vector in the part frame the node slides along, by `range` mm.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slide: Option<[f64; 3]>,
+    /// A unit vector in the part frame the node turns about, right-handed, through the node's
+    /// own origin, by `range` degrees.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn: Option<[f64; 3]>,
+    /// In mm for a slide, in degrees for a turn.
     pub range: f64,
+    /// The param that poses the joint. Absent on a joint a control drives, such as a press.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub by: Option<JointBy>,
+}
+
+/// A param that poses a joint. At the middle of the param's range the node sits where the
+/// model draws it, and it moves half of `range` toward each end, `+` toward `max`.
+#[derive(Clone, Debug, Serialize)]
+pub struct JointBy {
+    pub param: String,
+    /// The param's `min_exclusive`.
+    pub min: f64,
+    /// The param's `max_exclusive`.
+    pub max: f64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -265,7 +286,7 @@ impl Circuit<'_> {
             .as_object()
             .into_iter()
             .flatten()
-            .filter_map(|(name, joint)| Some((name.clone(), self::joint(joint)?)))
+            .filter_map(|(name, joint)| Some((name.clone(), self::joint(joint, &tree["params"])?)))
             .collect();
         let tints = tree["params"]
             .as_object()
@@ -406,22 +427,45 @@ pub(super) fn placement(written: &Value) -> Option<Placement> {
 }
 
 /// A sliding joint, with `range` read as mm. A turning joint the viewer does not draw yet.
-fn joint(written: &Value) -> Option<Joint> {
-    let slide: Vec<f64> = written["slide"]
-        .as_array()?
-        .iter()
-        .map(Value::as_f64)
-        .collect::<Option<_>>()?;
+/// A joint as the viewer reads it. `params` is the part file's, for the bounds of the param a
+/// joint follows.
+fn joint(written: &Value, params: &Value) -> Option<Joint> {
+    let axis = |key: &str| -> Option<Option<[f64; 3]>> {
+        let Some(list) = written.get(key) else {
+            return Some(None);
+        };
+        let numbers: Vec<f64> = list
+            .as_array()?
+            .iter()
+            .map(Value::as_f64)
+            .collect::<Option<_>>()?;
+        Some(Some(numbers.try_into().ok()?))
+    };
+    let (slide, turn) = (axis("slide")?, axis("turn")?);
     let value = written["range"]["value"].as_f64()?;
-    let range = match written["range"]["unit"].as_str()? {
-        "mm" => value,
-        "m" => value * 1000.0,
+    let range = match (written["range"]["unit"].as_str()?, slide, turn) {
+        ("mm", Some(_), None) => value,
+        ("m", Some(_), None) => value * 1000.0,
+        ("deg", None, Some(_)) => value,
         _ => return None,
+    };
+    let by = match written.get("by") {
+        None => None,
+        Some(by) => {
+            let param = by.as_str()?;
+            Some(JointBy {
+                param: param.to_string(),
+                min: params[param]["min_exclusive"].as_f64()?,
+                max: params[param]["max_exclusive"].as_f64()?,
+            })
+        }
     };
     Some(Joint {
         node: written["node"].as_str()?.to_string(),
-        slide: slide.try_into().ok()?,
+        slide,
+        turn,
         range,
+        by,
     })
 }
 
