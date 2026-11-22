@@ -422,7 +422,7 @@ fn delay_images_run_as_stepped_at_dense_boundaries() {
         .unwrap()
         .map(|entry| entry.unwrap().path())
         .filter(|path| path.is_dir())
-        .map(|dir| dir.join("firmware"))
+        .map(|dir| dir.join("build"))
         .flat_map(|dir| std::fs::read_dir(dir).unwrap())
         .map(|entry| entry.unwrap().path())
         .filter(|path| path.extension().is_some_and(|e| e == "hex"))

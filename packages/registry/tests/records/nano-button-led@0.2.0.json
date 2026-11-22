@@ -50,6 +50,13 @@
       "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
     },
     {
+      "path": "build/button.ino.hex",
+      "url": "files/<sha256>",
+      "sha256": "<sha256>",
+      "bytes": 0,
+      "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
+    },
+    {
       "path": "firmware/LICENSE-libc",
       "url": "files/<sha256>",
       "sha256": "<sha256>",
@@ -65,13 +72,6 @@
     },
     {
       "path": "firmware/NOTICE",
-      "url": "files/<sha256>",
-      "sha256": "<sha256>",
-      "bytes": 0,
-      "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
-    },
-    {
-      "path": "firmware/button.hex",
       "url": "files/<sha256>",
       "sha256": "<sha256>",
       "bytes": 0,

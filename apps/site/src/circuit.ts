@@ -11,7 +11,7 @@ import { dependencyId, type BlockRecord, type Item, type Param, type PartRecord 
 export interface PlacedPart {
   readonly ref: string;
   readonly id: string;
-  /** The scene's params, in the scene's order, already in words (`220 Ω`, `red`, `fade.hex`). */
+  /** The scene's params, in the scene's order, already in words (`220 Ω`, `red`, `fade.ino.hex`). */
   readonly values: readonly string[];
 }
 
@@ -104,7 +104,7 @@ function parseAmount(text: string, unit: string): number | undefined {
 
 function formatValue(raw: string | number, param: Param | undefined): string {
   const text = String(raw);
-  // A file param is a path (`firmware/fade.hex`). A value such as `1/4` is the value itself.
+  // A file param is a path (`build/fade.ino.hex`). A value such as `1/4` is the value itself.
   if (param?.file !== undefined && text.includes("/")) return text.slice(text.lastIndexOf("/") + 1);
   if (param?.choices?.some((choice) => choice.name === text)) return text;
   const unit = param?.unit;

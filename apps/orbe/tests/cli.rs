@@ -633,7 +633,7 @@ fn add_refuses_a_folder_that_is_not_a_project() {
     );
     assert!(demo.path().join("scene.jsonc").is_file());
     assert!(demo.path().join("parts/led-5mm/part.jsonc").is_file());
-    assert!(demo.path().join("firmware/button.hex").is_file());
+    assert!(demo.path().join("build/button.ino.hex").is_file());
 }
 #[test]
 fn a_scene_not_named_scene_jsonc_gets_a_hint_that_runs() {

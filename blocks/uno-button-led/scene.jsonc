@@ -3,7 +3,7 @@
 {
   "format": 1,
   "parts": {
-    "uno": { "type": "uno-board", "firmware": "firmware/button.hex" },
+    "uno": { "type": "uno-board", "firmware": "build/button.ino.hex" },
     "bb": { "type": "breadboard-400" },
     "btn1": { "type": "tactile-switch-6mm" },
     "r2": { "type": "resistor-axial", "resistance": "10k" }, // pull-down, so D2 reads low while open

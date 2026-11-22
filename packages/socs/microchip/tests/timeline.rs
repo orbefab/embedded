@@ -921,8 +921,8 @@ fn a_clone_from_across_runs_leaves_the_state_a_clone_does() {
             "packages/engine/tests/firmware/sketch/blink_without_delay.hex",
             &[],
         ),
-        ("blocks/nano-button-led/firmware/button.hex", &[PD2]),
-        ("blocks/nano-led-fade/firmware/fade.hex", &[]),
+        ("blocks/nano-button-led/build/button.ino.hex", &[PD2]),
+        ("blocks/nano-led-fade/build/fade.ino.hex", &[]),
         (
             "packages/engine/tests/firmware/sketch/serial_counter.hex",
             &[PD0],

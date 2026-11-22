@@ -133,8 +133,8 @@ function codePaths(id: string): string[] {
 }
 
 const VALUES: Record<string, Record<string, readonly string[]>> = {
-  "nano-button-led": { r1: ["220 Ω"], r2: ["10 kΩ"], led1: ["red"], nano: ["button.hex"] },
-  "nano-led-fade": { r1: ["220 Ω"], led1: ["red"], nano: ["fade.hex"] },
+  "nano-button-led": { r1: ["220 Ω"], r2: ["10 kΩ"], led1: ["red"], nano: ["button.ino.hex"] },
+  "nano-led-fade": { r1: ["220 Ω"], led1: ["red"], nano: ["fade.ino.hex"] },
   "nano-light-comparator": {
     rbot: ["2.2 kΩ"],
     rset: ["4.7 kΩ"],
@@ -142,9 +142,9 @@ const VALUES: Record<string, Record<string, readonly string[]>> = {
     rled: ["220 Ω"],
     led1: ["red"],
     trim: ["10 kΩ", "position 0.5"],
-    nano: ["light.hex"],
+    nano: ["light.ino.hex"],
   },
-  "uno-button-led": { r1: ["220 Ω"], r2: ["10 kΩ"], led1: ["red"], uno: ["button.hex"] },
+  "uno-button-led": { r1: ["220 Ω"], r2: ["10 kΩ"], led1: ["red"], uno: ["button.ino.hex"] },
 };
 
 async function hydrated(page: Page): Promise<void> {

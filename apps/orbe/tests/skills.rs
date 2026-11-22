@@ -628,7 +628,7 @@ fn the_block_compile_commands_write_the_hex_the_scene_names() {
         "A Block's tests check its shipped behaviour, so a change to the firmware's timing or pins needs its tests updated or a new test written.",
     );
     says(&text, "`firmware/<name>/<name>.ino`");
-    says(&text, "`firmware/<name>.hex`");
+    says(&text, "`build/<name>.ino.hex`");
     let commands = blocks(&text)
         .into_iter()
         .find(|(info, body)| info == "sh" && body.contains("firmware/fade"))
@@ -640,7 +640,7 @@ fn the_block_compile_commands_write_the_hex_the_scene_names() {
     runtime.orbe(dir, &["add", "nano-led-fade"]).ok();
     let scene = fs::read_to_string(dir.join("scene.jsonc")).unwrap();
     assert!(
-        scene.contains("\"firmware\": \"firmware/fade.hex\""),
+        scene.contains("\"firmware\": \"build/fade.ino.hex\""),
         "{scene}"
     );
     for line in commands.lines().filter(|line| !line.is_empty()) {
@@ -655,7 +655,7 @@ fn the_block_compile_commands_write_the_hex_the_scene_names() {
             String::from_utf8_lossy(&built.stderr)
         );
     }
-    assert!(dir.join("firmware/fade.hex").is_file());
+    assert!(dir.join("build/fade.ino.hex").is_file());
     let run = runtime.orbe(dir, &["test"]).ok();
     assert!(
         run.stdout.contains("PASS tests/fade.test\n")

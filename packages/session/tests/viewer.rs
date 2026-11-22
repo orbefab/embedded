@@ -511,14 +511,14 @@ fn a_faulted_session_s_frame_carries_the_fault() {
     let scene = r#"{
       "format": 1,
       "parts": {
-        "nano": { "type": "nano-board", "firmware": "firmware/button.hex" },
+        "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
         "c1": { "type": "capacitor-ceramic-disc", "capacitance": "1e300" },
       },
       "wires": [["c1.a", "nano.D13"], ["c1.b", "nano.GND"]],
     }"#;
     let files = Files::memory([
         own("block.jsonc"),
-        own("firmware/button.hex"),
+        own("build/button.ino.hex"),
         ("scene.jsonc".to_string(), scene.as_bytes().to_vec()),
     ])
     .with_catalog(catalog());

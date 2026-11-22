@@ -434,9 +434,10 @@ fn edit_part(part: &Path) -> bool {
     true
 }
 
-/// Removes one installed part, edits another copy, and removes `firmware/` when `install`
-/// wrote it. An edit is the project's, so the read does not report it. Each flag is whether
-/// that break can produce its finding. `lack` says why it cannot.
+/// Removes one installed part, edits another copy, and removes `build/` when `install`
+/// wrote it. The scene names its image under `build/`, so that removal is `FirmwareMissing`.
+/// An edit is the project's, so the read does not report it. Each flag is whether that break
+/// can produce its finding. `lack` says why it cannot.
 fn break_install(dir: &Path) -> [(&'static str, bool, &'static str); 3] {
     let parts = part_folders(dir);
     let missing = if let Some(part) = parts.first() {
@@ -448,9 +449,9 @@ fn break_install(dir: &Path) -> [(&'static str, bool, &'static str); 3] {
     if let Some(part) = parts.get(1) {
         edit_part(part);
     }
-    let firmware = dir.join("firmware");
-    let firmware_missing = if firmware.is_dir() {
-        fs::remove_dir_all(&firmware).unwrap();
+    let image = dir.join("build");
+    let firmware_missing = if image.is_dir() {
+        fs::remove_dir_all(&image).unwrap();
         true
     } else {
         false
@@ -458,7 +459,7 @@ fn break_install(dir: &Path) -> [(&'static str, bool, &'static str); 3] {
     [
         ("PartMissing", missing, "no part folder"),
         ("PartModified", false, "an edited copy is the project's"),
-        ("FirmwareMissing", firmware_missing, "no firmware folder"),
+        ("FirmwareMissing", firmware_missing, "no build folder"),
     ]
 }
 
@@ -476,7 +477,7 @@ fn finds(block: &str, reading: &str, code: &str, present: bool, lack: &str) {
 /// A missing part, an edited copy, and no firmware, each found the same way in memory as on
 /// disk, and so is the test transcript. The part removed is the first folder `install` wrote.
 /// The next folder is edited, and that edit is not a finding. A Block with no part folder or
-/// no firmware folder says so, and the read still has to show every finding that Block can
+/// no image under `build/` says so, and the read still has to show every finding that Block can
 /// produce. The transcript is the Block's own test file: its passed or failed line, each
 /// source line's number, and every reply. The read has already failed, so the run does not
 /// start.

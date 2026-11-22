@@ -301,12 +301,12 @@ fn a_second_add_refuses_a_symlinked_destination() {
     let outside = tempfile::tempdir().unwrap();
     let project = tempfile::tempdir().unwrap();
     let dir = project.path();
-    fs::create_dir(dir.join("firmware")).unwrap();
-    let hex = fs::read(common::repo().join("blocks/nano-button-led/firmware/button.hex")).unwrap();
-    let target = outside.path().join("button.hex");
+    fs::create_dir(dir.join("build")).unwrap();
+    let hex = fs::read(common::repo().join("blocks/nano-button-led/build/button.ino.hex")).unwrap();
+    let target = outside.path().join("button.ino.hex");
     fs::write(&target, &hex).unwrap();
-    symlink(&target, dir.join("firmware/button.hex")).unwrap();
-    refuses_the_link(dir, outside.path(), "firmware/button.hex");
+    symlink(&target, dir.join("build/button.ino.hex")).unwrap();
+    refuses_the_link(dir, outside.path(), "build/button.ino.hex");
     assert_eq!(fs::read(&target).unwrap(), hex);
 }
 
@@ -329,7 +329,7 @@ fn a_block_installs_when_the_project_path_is_a_symlink() {
     let run = orbe(parent.path(), &["add", "-C", "link", "nano-button-led"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(real.join("scene.jsonc").is_file());
-    assert!(real.join("firmware/button.hex").is_file());
+    assert!(real.join("build/button.ino.hex").is_file());
     assert!(
         fs::symlink_metadata(parent.path().join("link"))
             .unwrap()
@@ -347,8 +347,8 @@ fn a_block_installs_over_a_leftover_staging_directory() {
     let run = orbe(dir, &["add", "nano-button-led"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(!dir.join("parts/.add-nano-board").exists());
-    let hex = fs::read(common::repo().join("blocks/nano-button-led/firmware/button.hex")).unwrap();
-    assert_eq!(fs::read(dir.join("firmware/button.hex")).unwrap(), hex);
+    let hex = fs::read(common::repo().join("blocks/nano-button-led/build/button.ino.hex")).unwrap();
+    assert_eq!(fs::read(dir.join("build/button.ino.hex")).unwrap(), hex);
 }
 
 #[test]

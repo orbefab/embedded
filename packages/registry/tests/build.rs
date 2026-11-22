@@ -133,6 +133,7 @@ fn every_url_holds_the_bytes_its_hash_names() {
     }
     assert!(!paths.contains(&"REUSE.toml"));
     assert!(paths.contains(&"firmware/NOTICE"));
+    assert!(paths.contains(&"build/button.ino.hex"));
 }
 
 #[test]
