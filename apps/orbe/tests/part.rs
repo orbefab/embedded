@@ -343,6 +343,37 @@ fn search_lists_switches_and_boards_before_summary_matches() {
 }
 
 #[test]
+fn search_for_crystal_leaves_out_crystal_3215_and_adding_the_nano_still_installs_it() {
+    let (code, stdout, stderr) = orbe(&["search", "crystal"]);
+    assert_eq!(code, 0, "{stderr}");
+    let names = names_of(&stdout);
+    assert!(!names.contains(&"crystal-3215"), "{stdout}");
+    assert!(!names.contains(&"crystal-hc49us"), "{stdout}");
+
+    let (code, stdout, stderr) = orbe(&["part", "crystal-3215"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("crystal-3215"), "{stdout}");
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_orbe"));
+    registry_env::apply(&mut command);
+    let output = command
+        .args(["add", "nano-board"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    assert!(
+        dir.path()
+            .join("parts/nano-board/parts/crystal-3215/part.jsonc")
+            .is_file(),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn a_unique_id_segment_prints_that_part_and_several_list_like_an_unknown_id() {
     let (code, stdout, stderr) = orbe(&["part", "1n4007"]);
     assert_eq!(code, 0, "{stderr}");

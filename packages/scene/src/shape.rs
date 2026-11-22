@@ -246,6 +246,7 @@ pub(crate) const PART: &[(&str, Shape)] = &[
     ("version", Shape::Str),
     ("orbe", Shape::Str),
     ("title", Shape::Str),
+    ("listed", Shape::Bool),
     ("summary", Shape::Str),
     ("tags", Shape::List(&Shape::Str)),
     ("license", Shape::Str),
