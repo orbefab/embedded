@@ -85,7 +85,7 @@ A Block's tests check its shipped behaviour, so a change to the firmware's timin
 - `nano-board`, Nano (CH340 clone), runs the ATmega328P-AU at 16 MHz.
 - These pins work: `D0` to `D13`, `RESET`, `GND`, `AREF`, `A0` to `A7`, `5V`, and `VIN`.
 - `3V3` is not simulated. It is the CH340G's 3.3 V output. The engine has no USB-serial chip, so the pin supplies nothing. A wire to it is a `not_simulated` error.
-- `VIN` feeds `regulator`, an AMS1117-5.0. With about 6.1 V or more on VIN it holds the 5V pin at 5.0 V. With VIN open the board still runs from USB, and the 5V pin stays the USB rail.
+- `VIN` feeds `regulator`, an AMS1117-5.0. With about 6.1 V or more on VIN it holds the 5V pin at 5.0 V. With VIN open the board still runs from USB, and the 5V pin stays the USB rail. With USB only, VIN reads 0 V and supplies nothing, where a real board shows about 4 V through the regulator's internal diode.
 - `D13` drives `led_l` through `r_l`, 1 kohm.
 
 ### `uno-board`

@@ -50,6 +50,13 @@
       ],
       "what": "a measured USB rail",
       "why": "The 5V pin sits one MBR0520 drop under the host's ideal 5.0 V, about 4.76 V at the board's own 26 mA. The drop is a fit to the diode's typical datasheet curve and the draw is the chips' datasheet typicals, not a reading off a real board. A USB port may give 4.75 V to 5.25 V and a clone may fit another Schottky, so a real board's 5V pin can read anywhere from about 4.5 V to 5.0 V."
+    },
+    {
+      "pins": [
+        "VIN"
+      ],
+      "what": "the regulator's input diode",
+      "why": "The AMS1117 has an internal diode from OUT to IN. The model blocks reverse current, so with USB only VIN reads about 0 V and a load from VIN to GND gets nothing. A real board shows about 4 V there, one diode drop under the 5V rail, and VIN can source a little current from USB."
     }
   ],
   "params": [
