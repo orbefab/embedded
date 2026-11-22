@@ -334,9 +334,14 @@ fn main() -> ExitCode {
 /// The flags that take the next word as their value, so that word is never the command name.
 const VALUED: [&str; 4] = ["--session", "-C", "--timeout", "--until"];
 
-/// A flag before the command name, as in `orbe --json open`, moves after the name, as typed,
-/// less a repeat clap refuses. `--help` and `--version`, and their short forms, stay in front.
-/// `None` when the words already start with the command, or are not UTF-8.
+/// A flag before the command name, as in `orbe --json open`, moves next to that name.
+/// Only a word that starts with `-` is skipped on the way to the command, plus the word
+/// after `--session`, `-C`, `--timeout` or `--until`. Any other word stays where it was,
+/// and clap reports it. A repeat of a flag a clap command takes once is left out.
+/// The flags land before a `--` on a clap command, and at the end of a live command, where
+/// `step` reads `--timeout` last. `--help` and `--version`, and their short forms, stay in front.
+/// `None` when the words already start with the command, hold no command after those flags,
+/// or are not UTF-8.
 fn flag_before_command(args: &[OsString]) -> Option<Vec<OsString>> {
     let words: Vec<&str> = args.iter().map(|a| a.to_str()).collect::<Option<_>>()?;
     let first = words.first()?;
@@ -345,8 +350,15 @@ fn flag_before_command(args: &[OsString]) -> Option<Vec<OsString>> {
     }
     let commands = cli();
     let mut at = 0;
-    while commands.find_subcommand(words.get(at)?).is_none() {
-        at += if VALUED.contains(&words[at]) { 2 } else { 1 };
+    loop {
+        let word = words.get(at)?;
+        if commands.find_subcommand(word).is_some() {
+            break;
+        }
+        if !word.starts_with('-') {
+            return None;
+        }
+        at += if VALUED.contains(word) { 2 } else { 1 };
     }
     let mut command = commands.find_subcommand(words[at])?;
     for word in &words[at + 1..] {
@@ -367,6 +379,13 @@ fn flag_before_command(args: &[OsString]) -> Option<Vec<OsString>> {
             })
     };
     let mut line: Vec<&str> = words[at..].to_vec();
+    let mut insert = if live {
+        line.len()
+    } else {
+        line.iter()
+            .position(|word| *word == "--")
+            .unwrap_or(line.len())
+    };
     let mut before = words[..at].iter().copied();
     while let Some(flag) = before.next() {
         let unit: Vec<&str> = if VALUED.contains(&flag) {
@@ -374,9 +393,11 @@ fn flag_before_command(args: &[OsString]) -> Option<Vec<OsString>> {
         } else {
             vec![flag]
         };
-        if !(takes_once(flag) && line.windows(unit.len()).any(|w| w == unit)) {
-            line.extend(unit);
+        if takes_once(flag) && line.windows(unit.len()).any(|w| w == unit) {
+            continue;
         }
+        line.splice(insert..insert, unit.iter().copied());
+        insert += unit.len();
     }
     Some(line.into_iter().map(OsString::from).collect())
 }

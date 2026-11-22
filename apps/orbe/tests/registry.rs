@@ -312,15 +312,17 @@ fn assert_refused(src: &Path, out: &Path, file: &str, found: &Found) {
     let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(reply["ok"], false);
     let diagnostics = reply["data"]["diagnostics"].as_array().unwrap();
-    let codes: Vec<&str> = diagnostics
+    // Every finding `part_missing`, or every finding `firmware_missing`, or else `scene_invalid`.
+    let shared = diagnostics
         .iter()
         .map(|d| d["code"].as_str().unwrap())
-        .collect();
-    assert_eq!(
-        reply["error"]["code"],
-        orbe_session::Code::for_findings(codes).as_str(),
-        "{stdout}"
-    );
+        .reduce(|same, code| if same == code { same } else { "" })
+        .unwrap_or("");
+    let want = match shared {
+        "part_missing" | "firmware_missing" => shared,
+        _ => "scene_invalid",
+    };
+    assert_eq!(reply["error"]["code"], want, "{stdout}");
     let same = diagnostics.iter().find(|d| {
         d["code"] == found.code
             && d["message"] == found.message

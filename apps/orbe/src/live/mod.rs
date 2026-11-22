@@ -106,13 +106,13 @@ impl Invocation {
                 "--json" => {}
                 "--session" => {
                     let name = args.next().ok_or("`--session` takes a name")?;
-                    invocation.session = Some(name.clone());
+                    one_session(&mut invocation.session, name)?;
                 }
                 "--all" if spec.name == "close" => invocation.all = true,
                 "--headed" if spec.name == "open" => invocation.headed = true,
                 "--no-browser" if spec.name == "open" => invocation.browser = false,
                 _ => match arg.strip_prefix("--session=") {
-                    Some(name) => invocation.session = Some(name.to_string()),
+                    Some(name) => one_session(&mut invocation.session, name)?,
                     None => invocation.words.push(arg.clone()),
                 },
             }
@@ -125,6 +125,16 @@ impl Invocation {
         }
         Ok(invocation)
     }
+}
+
+/// `--session` once. The same name again counts once. Two names are a usage error, as on
+/// `orbe show`, which takes the flag once.
+fn one_session(have: &mut Option<String>, name: &str) -> Result<(), String> {
+    if have.as_ref().is_some_and(|old| old != name) {
+        return Err("the argument '--session <NAME>' cannot be used multiple times".into());
+    }
+    *have = Some(name.to_string());
+    Ok(())
 }
 
 /// `orbe <command> [--session <name>] [--json]`.
