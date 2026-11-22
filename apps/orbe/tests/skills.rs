@@ -1339,7 +1339,7 @@ fn a_load_over_the_usb_supply_warns_and_a_wire_across_it_is_a_short() {
     says(
         &reference,
         &format!(
-            "A load over that on 5V, such as 2.5 ohm from 5V to GND ({peak:.1} A), warns `rating.current` on the supply, `#nano__usb__host.i (nano.usb)`, at {peak:.1} A over its 0.5 A rating, and on the Schottky behind 5V, `#nano__diode.i (nano.diode)`, which is rated 0.5 A too."
+            "A load over that on 5V, such as 2.5 ohm from 5V to GND ({peak:.1} A), warns `rating.current` on the supply, `#nano__usb__host.i (nano.usb)`, at {peak:.1} A over its 0.5 A rating, and on the Schottky behind 5V, `#nano__diode.i (nano.diode)`, also rated 0.5 A."
         ),
     );
     says(
@@ -1464,7 +1464,7 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     says(
         &reference,
         &format!(
-            "With D13 wired straight to `led1.anode` and no `r1`, the LED draws {:.0} mA. `step` lists `warning[rating.current]` for `led1`. `step 20ms` after it lists `warning[rating.power]` for `led1`, the average over 10.2 ms, and `warning[rating.current]` for `#nano__mcu.pin.PB5 (nano.D13)`, the chip pin behind D13, over its 40 mA rating. `expect no diagnostics` fails. The LED holds D13 at {:.1} V, so D13 reads `{}` while the LED is {}.",
+            "With D13 wired straight to `led1.anode` and no `r1`, the LED draws {:.0} mA. `step` lists `warning[rating.current]` for `led1`. `step 20ms` after it lists `warning[rating.power]` for `led1` and `warning[rating.current]` for `#nano__mcu.pin.PB5 (nano.D13)`, the chip pin behind D13, over its 40 mA rating. `expect no diagnostics` fails. The LED holds D13 at {:.1} V, so D13 reads `{}` while the LED is {}.",
             led["i"].as_f64().unwrap() * 1e3,
             pin["v"].as_f64().unwrap(),
             pin["level"].as_str().unwrap(),
