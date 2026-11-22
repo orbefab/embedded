@@ -2,7 +2,7 @@ import { channelSource, receive } from "./channel-source";
 import type { SessionSource } from "./session";
 
 /** The address of the session's WebSocket for the page `orbe show` served, from the token in
- * its fragment, `#t=<token>`. `null` for a page with no token, such as the fixture page. */
+ * its fragment, `#t=<token>`. `null` when the page has no token. */
 export function sessionUrl(location: {
   readonly host: string;
   readonly protocol: string;

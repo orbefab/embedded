@@ -47,8 +47,8 @@ test.describe("live session", () => {
     await shot(page, "headed-opened");
   });
 
-  test("the fixture's test hook is absent on a live page", async () => {
-    expect(await page.evaluate(() => window.orbeFixture === undefined)).toBe(true);
+  test("window.orbeFixture is absent", async () => {
+    expect(await page.evaluate(() => !("orbeFixture" in window))).toBe(true);
   });
 
   test("play runs the session: `orbe get` sees it playing past t = 0", async () => {
