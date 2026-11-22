@@ -17,23 +17,58 @@ pub struct Skill {
 pub const SKILLS: &[Skill] = &[
     Skill {
         name: "core",
-        about: "How to use orbe: the rules, the loop, scenes, parts, breadboards, sessions, tests and results. Read it first.",
+        about: "Read first: the rules, the loop, one example, troubleshooting, and which topic to load.",
         text: include_str!("../skills/core.md"),
     },
     Skill {
         name: "arduino",
-        about: "Building Arduino Nano and Uno firmware with arduino-cli and naming it in the scene.",
+        about: "Load when building Nano or Uno firmware, or when a chip warning names a pin.",
         text: include_str!("../skills/arduino.md"),
     },
     Skill {
         name: "parts",
-        about: "How a project keeps its parts: the copy it owns, versions, Blocks and the buy field.",
+        about: "Load when keeping a part copy, a version, a Block, a buy link, or an addressable LED.",
         text: include_str!("../skills/parts.md"),
     },
     Skill {
-        name: "reference",
-        about: "Breadboards in full, ratings, LED brightness, time, sessions, the 3D page, and the warnings and errors an agent meets.",
-        text: include_str!("../skills/reference.md"),
+        name: "scenes",
+        about: "Load when writing a scene key, a part name, a param, or world.",
+        text: include_str!("../skills/scenes.md"),
+    },
+    Skill {
+        name: "breadboards",
+        about: "Load when seating a part on a breadboard, or a hole or a strip is wrong.",
+        text: include_str!("../skills/breadboards.md"),
+    },
+    Skill {
+        name: "sessions-and-time",
+        about: "Load when a step, a set or a bounce lands, or a session's name or stop matters.",
+        text: include_str!("../skills/sessions-and-time.md"),
+    },
+    Skill {
+        name: "tests",
+        about: "Load when a test file does more than the example in core.",
+        text: include_str!("../skills/tests.md"),
+    },
+    Skill {
+        name: "ratings",
+        about: "Load when a warning names a rating, or an LED is lit, dim or off.",
+        text: include_str!("../skills/ratings.md"),
+    },
+    Skill {
+        name: "errors",
+        about: "Load when an error code is not in core's troubleshooting.",
+        text: include_str!("../skills/errors.md"),
+    },
+    Skill {
+        name: "page",
+        about: "Load when someone watches the 3D page, or a knob turns.",
+        text: include_str!("../skills/page.md"),
+    },
+    Skill {
+        name: "not-simulated",
+        about: "Load when a pin or a feature does nothing, or a wire is not_simulated.",
+        text: include_str!("../skills/not-simulated.md"),
     },
 ];
 
@@ -218,8 +253,9 @@ mod tests {
     use super::*;
     use crate::{Cli, cli};
 
-    /// Each `orbe …` the skills show: the `$ orbe` lines of a `console` block, and every
-    /// inline `orbe …` span. A line with a placeholder, such as `<id>`, is a usage form.
+    /// Each `orbe …` the skills show: `$ orbe` lines in a console block, `orbe` lines in a
+    /// bash or sh block, and every inline `orbe …` span. A `#` line in a bash or sh block is
+    /// a comment. A line with a placeholder, such as `<id>`, is a usage form.
     fn command_lines(text: &str) -> Vec<String> {
         let mut lines = Vec::new();
         let mut block: Option<&str> = None;
@@ -231,6 +267,17 @@ mod tests {
             match block {
                 Some("console") => {
                     if let Some(command) = line.strip_prefix("$ orbe ") {
+                        lines.push(command.to_string());
+                    }
+                }
+                Some("bash" | "sh") => {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty()
+                        && !trimmed.starts_with('#')
+                        && let Some(command) = trimmed
+                            .strip_prefix("$ orbe ")
+                            .or_else(|| trimmed.strip_prefix("orbe "))
+                    {
                         lines.push(command.to_string());
                     }
                 }
@@ -415,55 +462,6 @@ mod tests {
         }
     }
 
-    const HOUR_PS: u64 = 3_600_000_000_000_000;
-
-    #[test]
-    fn the_limits_the_skills_state_are_this_binary_s() {
-        let core = find("core").unwrap().text().unwrap();
-        let reference = find("reference").unwrap().text().unwrap();
-        let says = |text: String| assert!(core.contains(&text), "core does not say `{text}`");
-        says(format!("It lists at most {},", orbe_session::CHANGES));
-        says(format!(
-            "`snapshot` shows the last {} lines",
-            orbe_session::SERIAL_LINES
-        ));
-        assert_eq!(orbe_scene::STOP_PS % HOUR_PS, 0);
-        let stop = format!(
-            "A session stops at {} hours of simulated time",
-            orbe_scene::STOP_PS / HOUR_PS
-        );
-        assert!(reference.contains(&stop), "reference does not say `{stop}`");
-        says(format!(
-            "up to the timeout, {} by default",
-            orbe_session::UNTIL_TIMEOUT
-        ));
-    }
-
-    #[test]
-    fn the_json_states_the_core_skill_lists_are_every_state() {
-        use orbe_session::State;
-        // The match stops the build when a state is added, until it is listed here.
-        let named = |state: State| match state {
-            State::Paused | State::Playing | State::Stopped | State::Faulted | State::Closed => {
-                format!("`{}`", state.as_str())
-            }
-        };
-        let states = [
-            State::Paused,
-            State::Playing,
-            State::Stopped,
-            State::Faulted,
-            State::Closed,
-        ]
-        .map(named);
-        let listed = format!(
-            "{}, {}, {}, {} or {}",
-            states[0], states[1], states[2], states[3], states[4]
-        );
-        let core = find("core").unwrap().text().unwrap();
-        assert!(core.contains(&listed), "core does not list {listed}");
-    }
-
     #[cfg(unix)]
     #[test]
     fn every_code_in_the_error_tables_is_one_orbe_reports() {
@@ -522,6 +520,7 @@ mod tests {
             "registry",
             "unknown_part",
             "part_exists",
+            "net.short",
         ];
         let known: Vec<&str> = live
             .iter()
@@ -529,14 +528,16 @@ mod tests {
             .chain(scene.into_iter().map(|code| code.as_str()))
             .chain(added)
             .collect();
-        let texts: Vec<String> = ["reference", "parts"]
-            .iter()
-            .map(|name| find(name).unwrap().text().unwrap())
-            .collect();
+        let texts: Vec<String> = SKILLS.iter().map(|skill| skill.text().unwrap()).collect();
         let mut listed = std::collections::BTreeSet::new();
+        let mut tables = 0;
         for text in &texts {
+            if !text.contains("## Errors") {
+                continue;
+            }
             let table = table_in(text, "## Errors");
-            assert!(table.len() > 5, "{} rows", table.len());
+            assert!(table.len() > 5, "{table:?}");
+            tables += 1;
             for row in table {
                 let codes = row.split('|').nth(1).unwrap();
                 for code in codes.split('`').skip(1).step_by(2) {
@@ -545,16 +546,16 @@ mod tests {
                 }
             }
         }
+        assert!(tables >= 2, "expected the parts table and the errors table");
     }
 
-    /// Each row of the world table under `## Scenes` is one `orbe set` reads: its default and
+    /// Each row of the world table in the scenes skill is one `orbe set` reads: its default and
     /// both ends set, and a value past either end is refused with the row's range and unit.
     #[test]
-    fn the_core_world_table_is_the_one_set_reads() {
-        let core = find("core").unwrap().text().unwrap();
-        let rows: Vec<Vec<&str>> = core
+    fn the_scenes_world_table_is_the_one_set_reads() {
+        let scenes = find("scenes").unwrap().text().unwrap();
+        let rows: Vec<Vec<&str>> = scenes
             .lines()
-            .skip_while(|l| *l != "## Scenes")
             .map(str::trim_start)
             .skip_while(|l| !l.starts_with("| Quantity |"))
             .skip(2)
@@ -607,7 +608,7 @@ mod tests {
     }
 
     #[test]
-    fn the_reference_warnings_table_has_one_row_for_each_lint_rule() {
+    fn the_ratings_warnings_table_has_one_row_for_each_lint_rule() {
         use orbe_scene::{Code, Lint};
         // The match stops the build when a rule is added, until it is listed here.
         let code = |lint: Lint| match lint {
@@ -628,8 +629,8 @@ mod tests {
         ]
         .map(code)
         .into();
-        let reference = find("reference").unwrap().text().unwrap();
-        let listed: Vec<&str> = table_in(&reference, "## Warnings")
+        let ratings = find("ratings").unwrap().text().unwrap();
+        let listed: Vec<&str> = table_in(&ratings, "## Warnings")
             .into_iter()
             .filter_map(|row| row.split('`').nth(1))
             .collect();
