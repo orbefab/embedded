@@ -448,16 +448,10 @@ fn an_open_whose_every_process_dies_names_the_crash_log() {
     let run = Run::new(child.wait_with_output().unwrap());
     assert_eq!(kills, 5, "{}{}", run.stdout, run.stderr);
     assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(!run.stderr.contains("previous session"), "{}", run.stderr);
     let path = crashed_log(&run.stderr);
     assert!(path.ends_with("s2.log.crashed"), "{path}\n{}", run.stderr);
     assert_eq!(fs::read_to_string(path).unwrap(), "panic: dies\n");
-    assert!(
-        run.stderr.contains(&format!(
-            "the previous session crashed; its last output is in {path}"
-        )),
-        "{}",
-        run.stderr
-    );
     assert!(
         run.stderr.contains(&format!(
             "error[session_crashed]: the process of session `s2` ended before it answered `open`, 5 times\n  hint: its last output is in {path}\n"
@@ -465,6 +459,131 @@ fn an_open_whose_every_process_dies_names_the_crash_log() {
         "{}",
         run.stderr
     );
+}
+
+/// An earlier crash's output stays the file the note names when every retry of `open` also
+/// writes. The retries are not a previous session.
+#[test]
+fn an_open_after_a_crash_names_that_crash_not_a_retry() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    runtime.orbe(dir.path(), &["open", "--session", "s2"]).ok();
+    kill_daemon(&runtime);
+    fs::write(runtime.sessions().join("s2.log"), "panic: earlier\n").unwrap();
+
+    let log = runtime.sessions().join("s2.log");
+    let child = runtime
+        .command(dir.path(), &["open", "--session", "s2"])
+        .env("ORBE_TEST_READ_DELAY", "3s")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut kills = 0;
+    let mut spins = 0;
+    while kills < 5 && spins < 2_000 {
+        spins += 1;
+        if gone(child.id()) {
+            break;
+        }
+        let Some(&pid) = runtime.daemons().first() else {
+            std::thread::sleep(Duration::from_millis(10));
+            continue;
+        };
+        if accepted_sockets(pid) < 2 {
+            std::thread::sleep(Duration::from_millis(10));
+            continue;
+        }
+        fs::write(&log, "panic: retry\n").unwrap();
+        kill("-KILL", pid);
+        wait_until("the killed session process is dead", || gone(pid));
+        kills += 1;
+    }
+    let run = Run::new(child.wait_with_output().unwrap());
+    assert_eq!(kills, 5, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let note = run
+        .stderr
+        .lines()
+        .find(|line| line.contains("the previous session crashed"))
+        .unwrap_or_else(|| panic!("no previous-session note in:\n{}", run.stderr));
+    let path = note
+        .rsplit_once("its last output is in ")
+        .map(|(_, path)| path.trim())
+        .unwrap_or_else(|| panic!("the note names no file:\n{note}"));
+    assert!(path.ends_with("s2.log.crashed"), "{path}\n{}", run.stderr);
+    assert_eq!(
+        fs::read_to_string(path).unwrap(),
+        "panic: earlier\n",
+        "{}",
+        run.stderr
+    );
+    let hint = crashed_log(&run.stderr);
+    assert_eq!(fs::read_to_string(hint).unwrap(), "panic: retry\n");
+    assert_ne!(hint, path);
+}
+
+/// A socket nothing answers on, put in place of a live session's, is not that process's log.
+/// `step` and `close` name the earlier crash and leave the live log in place.
+#[test]
+fn a_live_log_stays_when_a_dead_socket_stands_in_for_it() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    let session = ["--session", "lk"];
+    runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+    kill_daemon(&runtime);
+    fs::write(runtime.sessions().join("lk.log"), "panic: earlier\n").unwrap();
+    let step = runtime.orbe(dir.path(), &["step", "1ms", "--session", "lk"]);
+    assert_eq!(step.code, 1, "{}", step.stderr);
+    let crash = crashed_log(&step.stderr);
+    assert_eq!(fs::read_to_string(crash).unwrap(), "panic: earlier\n");
+
+    runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+    let pid = runtime.daemon();
+    let log = runtime.sessions().join("lk.log");
+    assert_eq!(
+        fs::read_link(format!("/proc/{pid}/fd/2")).unwrap(),
+        log,
+        "the live process writes the session log"
+    );
+    let sock = runtime.sessions().join("lk.sock");
+    fs::remove_file(&sock).unwrap();
+    drop(std::os::unix::net::UnixListener::bind(&sock).unwrap());
+
+    let step = runtime.orbe(dir.path(), &["step", "1ms", "--session", "lk"]);
+    assert_eq!(step.code, 1, "{}{}", step.stdout, step.stderr);
+    assert_eq!(
+        step.stderr.matches("session_crashed").count(),
+        1,
+        "{}",
+        step.stderr
+    );
+    let named = crashed_log(&step.stderr);
+    assert_eq!(named, crash);
+    assert_eq!(fs::read_to_string(named).unwrap(), "panic: earlier\n");
+    assert!(log.exists(), "the live log was removed");
+    fs::write(format!("/proc/{pid}/fd/2"), "still live\n").unwrap();
+    assert!(
+        fs::read_to_string(&log).unwrap().contains("still live\n"),
+        "the process no longer writes {}",
+        log.display()
+    );
+    assert!(!gone(pid));
+
+    let close = runtime.orbe(dir.path(), &["close", "--session", "lk"]).ok();
+    let named = crashed_log(&close.stdout);
+    assert_eq!(fs::read_to_string(named).unwrap(), "panic: earlier\n");
+    assert!(log.exists(), "close removed the live log");
+    assert!(
+        fs::read_to_string(&log).unwrap().contains("still live\n"),
+        "{}",
+        log.display()
+    );
+    assert!(!gone(pid));
 }
 
 /// Session `foo.crashed` has its own log. It is not session `foo`'s crash log, and `close
