@@ -16,7 +16,7 @@
   "part": "uno-board",
   "version": "0.2.0",
   "title": "Uno R3 compatible board",
-  "summary": "ATmega328P in a DIP-28 socket with a CH340G USB-serial chip, 68.6 x 53.3 mm, with female headers in the Uno R3 positions. Simulated: the 328P and its firmware, RESET with its button and the CH340G's DTR auto-reset, the serial line from the CH340G, 5V from USB, 3V3 from its regulator, and the L and ON LEDs. Not simulated: VIN, the barrel jack and the 5 V regulator, USB data, the clocks' crystals, the TX and RX LEDs, and the USB switch's gate. D13 feeds the L LED through 1k, so D13 as an input with its pull-up reads low. Guessed: the Q1 gate pair at 10k, the DTR capacitor at 100n, the 22p loads on the 16 MHz crystal, and placeholders for the USB series resistors, the DTR pulldown, the resistor across the CH340G crystal and the capacitor from RESET to ground.",
+  "summary": "ATmega328P in a DIP-28 socket with a CH340G USB-serial chip, 68.6 x 53.3 mm, with female headers in the Uno R3 positions. Simulated: the 328P and its firmware, RESET with its button and the CH340G's DTR auto-reset, the serial line from the CH340G, 5V from USB, 3V3 from its regulator, and the L and ON LEDs. Not simulated: VIN, the barrel jack and the 5 V regulator, USB data, the clocks' crystals, and the TX and RX LEDs. D13 feeds the L LED through 1k, so D13 as an input with its pull-up reads low. Guessed: the Q1 gate pair at 10k, the DTR capacitor at 100n, the 22p loads on the 16 MHz crystal, and placeholders for the USB series resistors, the DTR pulldown, the resistor across the CH340G crystal and the capacitor from RESET to ground.",
   "tags": ["board", "microcontroller", "avr", "atmega328p", "usb", "ch340g"],
   "license": "MIT OR Apache-2.0",
   "docs": {
@@ -47,9 +47,10 @@
     "usb": { "type": "usb-b-socket" }, // CN1
     "usb_fuse": { "type": "ptc-fuse-1812" }, // F1
     "usb_switch": { "type": "pmos-fdn340p-sot23" }, // Q1, USB to 5V while VIN is low
-    // R15 and R1 bias Q1's gate between VIN and 5V. The schematic prints no values, so theirs are placeholders.
-    "r_vin": { "type": "resistor-0603", "resistance": "10k", "not_simulated": "It biases the USB switch's gate, which is not simulated." },
-    "r_gate": { "type": "resistor-0603", "resistance": "10k", "not_simulated": "It biases the USB switch's gate, which is not simulated." },
+    // R15 and R1 bias Q1's gate. The schematic ties R1 to D1's cathode and prints no values, so 10k is a placeholder.
+    // D1, the jack and the 5 V regulator stay out, so that end sits on ground and USB holds the switch on.
+    "r_vin": { "type": "resistor-0603", "resistance": "10k" },
+    "r_gate": { "type": "resistor-0603", "resistance": "10k" },
     "jack": { "type": "barrel-jack-dc21", "voltage": 9, "not_simulated": "The board runs from USB. This jack stays out, so VIN stays unpowered." },
     "d1": { "type": "diode-m7-sma", "not_simulated": "It guards VIN from the barrel jack. This instance stays out, so the jack does not feed VIN." }, // D1, M7
     "c_vin": { "type": "capacitor-electrolytic-smd", "capacitance": "47u", "not_simulated": "It sits on VIN, which is not simulated." },
@@ -189,8 +190,9 @@
     ["jack.center", "d1.anode", { "kind": "trace" }],
     ["d1.cathode", "regulator.IN", { "kind": "trace" }],
     ["d1.cathode", "c_vin.pos", { "kind": "trace" }],
-    ["d1.cathode", "r_vin.a", { "kind": "trace" }],
     ["d1.cathode", "power.8", { "kind": "trace" }],
+    // Q1's VIN-side resistor sits on ground. VIN stays unpowered, so the divider holds the gate near 2.5 V.
+    ["usb.GND", "r_vin.a", { "kind": "trace" }],
     // 3V3
     ["reg_3v3.OUT", "c_3v3.b", { "kind": "trace" }],
     ["reg_3v3.OUT", "power.4", { "kind": "trace" }],
