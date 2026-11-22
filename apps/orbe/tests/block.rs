@@ -390,14 +390,7 @@ fn a_block_installs_alone() {
 }
 
 #[test]
-fn the_core_skill_names_each_block() {
-    let skill = fs::read_to_string(common::repo().join("apps/orbe/skills/core.md")).unwrap();
-    let ids: Vec<String> = BLOCKS.iter().map(|id| format!("`{id}`")).collect();
-    let listed = format!(
-        "The Blocks are {}, {}, {}, {} and {}.",
-        ids[0], ids[1], ids[2], ids[3], ids[4]
-    );
-    assert!(skill.contains(&listed), "{listed}");
+fn each_block_folder_is_in_the_block_list() {
     let mut found: Vec<String> = fs::read_dir(common::repo().join("blocks"))
         .unwrap()
         .map(|e| e.unwrap().path())
