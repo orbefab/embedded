@@ -1,0 +1,44 @@
+{
+  "part": "pnp-2n3906-to92",
+  "source": {
+    "script": "model.py",
+    "sha256": "a0ee943943dd091a480fcd0d0d6a69caf7a0006d5b85b2f3154ebe3ad129d803",
+    "bytes": 1941
+  },
+  "files": {
+    "pnp-2n3906-to92.glb": {
+      "sha256": "7ab2e230dffa105b6248db8deadd5505b51290b84796bd7f2ad3debc6f40d3ae",
+      "bytes": 99732
+    },
+    "pnp-2n3906-to92.anchors.json": {
+      "sha256": "430363b79ada869a57bbe444149fbf046332282c26ff2436388bcba00920b723",
+      "bytes": 413
+    }
+  },
+  "box": {
+    "min": [-2.77, -1.33, -12.7],
+    "max": [2.77, 2.29, 7.12]
+  },
+  "kept_nodes": ["lead-1", "lead-2", "lead-3"],
+  "draw_calls": 5,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 3,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 2.54
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 6,
+      "primitives_out": 5
+    }
+  }
+}
