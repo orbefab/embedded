@@ -5,7 +5,7 @@
   "name": "led-5mm",
   "version": "0.2.0",
   "title": "5 mm LED",
-  "description": "Round 5 mm through-hole LED, two leads on 2.54 mm. The longer lead is the anode. Pick its color.",
+  "description": "Round 5 mm through-hole LED, two leads on 2.54 mm. The longer lead is the anode. Pick its color. The page's glow is the mean current since the last frame, so a PWM-dimmed LED glows at its average.",
   "categories": [
     "led",
     "light",

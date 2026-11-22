@@ -130,7 +130,9 @@ pub const COMMANDS: &[Spec] = &[
         name: "expect",
         usage: "expect <condition>",
         about: "Checks a condition now, and fails when it does not hold.",
-        parse: |args, _| Condition::parse(args).map(Command::Expect),
+        parse: |args, _| {
+            condition_words(args).and_then(|words| Condition::parse(&words).map(Command::Expect))
+        },
     },
 ];
 
@@ -241,12 +243,21 @@ fn parse_step(args: &[String]) -> Result<Step, String> {
                 words => (words, UNTIL_TIMEOUT),
             };
             Ok(Step::Until {
-                condition: Condition::parse(words)?,
+                condition: Condition::parse(&condition_words(words)?)?,
                 timeout,
             })
         }
         [duration] => Ok(Step::For(Duration::parse(duration)?)),
         _ => Err("takes a duration, such as `100ms`, or `--until <condition>`".into()),
+    }
+}
+
+/// A condition that arrived as one argument, such as `'@led1 rgb(255,0,0)'` from a shell,
+/// splits the way a test line does. Several arguments are already split.
+fn condition_words(args: &[String]) -> Result<Vec<String>, String> {
+    match args {
+        [one] if one.contains(char::is_whitespace) => words(one),
+        _ => Ok(args.to_vec()),
     }
 }
 

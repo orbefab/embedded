@@ -590,7 +590,7 @@ fn search_index(index: &Index, words: &[String]) -> Result<Done, Fail> {
             .map(|row| (row.name.clone(), row.title.clone())),
     );
     Ok(Done {
-        text: part::search_text(&shown),
+        text: part::search_text(&shown, words),
         json: json!({
             "ok": true,
             "data": {

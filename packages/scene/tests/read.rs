@@ -460,7 +460,10 @@ fn a_deleted_copy_is_only_part_missing() {
     assert_eq!(found[0].message, "part `led-5mm` is not in parts/");
     assert_eq!(
         found[0].hint,
-        format!("run `orbe add -C {} led-5mm`", project.path().display())
+        format!(
+            "run `orbe add -C {} led-5mm`. a scene finds parts/ only in its own folder",
+            project.path().display()
+        )
     );
 }
 

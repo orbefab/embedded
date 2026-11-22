@@ -255,6 +255,12 @@ fn search_prints_title_matches_before_the_rest() {
     let (code, stdout, stderr) = orbe(&["search", "zzzz-no-such-part"]);
     assert_eq!(code, 0, "{stderr}");
     assert_eq!(stdout, "no parts match\n");
+    let (code, stdout, stderr) = orbe(&["search", "potentiometer", "knob", "dimmer"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(
+        stdout,
+        "no parts match\nhint: every word must match; try one word, such as 'orbe search potentiometer'\n"
+    );
     let (code, stdout, _) = orbe(&["search", "zzzz-no-such-part", "--json"]);
     assert_eq!(code, 0);
     let envelope: Value = serde_json::from_str(&stdout).unwrap();
