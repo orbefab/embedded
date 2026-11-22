@@ -261,8 +261,9 @@ fn condition_words(args: &[String]) -> Result<Vec<String>, String> {
     }
 }
 
-/// Splits a line at spaces. `"..."` holds spaces, with `\"` and `\\` inside, and `#` outside
-/// quotes starts a comment.
+/// Splits a line at spaces. `"..."` holds spaces, with `\"` and `\\` inside. `'...'` holds
+/// spaces and keeps every character, as a shell does, so a test line can quote a comparison
+/// the way `orbe expect @led1.i '>' 5mA` does. `#` outside quotes starts a comment.
 fn words(line: &str) -> Result<Vec<String>, String> {
     let mut words = Vec::new();
     let mut chars = line.chars().peekable();
@@ -281,6 +282,18 @@ fn words(line: &str) -> Result<Vec<String>, String> {
                             Some(c @ ('"' | '\\')) => word.push(c),
                             _ => return Err("only `\\\"` and `\\\\` escape inside quotes".into()),
                         },
+                        Some(c) => word.push(c),
+                    }
+                }
+                words.push(word);
+            }
+            Some('\'') => {
+                chars.next();
+                let mut word = String::new();
+                loop {
+                    match chars.next() {
+                        None => return Err("a quote is not closed".into()),
+                        Some('\'') => break,
                         Some(c) => word.push(c),
                     }
                 }

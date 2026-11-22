@@ -183,6 +183,27 @@ fn step_takes_a_duration_or_a_condition_with_a_timeout() {
 }
 
 #[test]
+fn a_quoted_comparison_is_the_same_operator() {
+    let bare = line("expect @led1.i > 5mA").unwrap();
+    assert_eq!(line("expect @led1.i '>' 5mA").unwrap(), bare);
+    assert_eq!(line(r#"expect @led1.i ">" 5mA"#).unwrap(), bare);
+    assert_eq!(
+        line("step --until @led1.i '<' 1V --timeout 50ms").unwrap(),
+        line("step --until @led1.i < 1V --timeout 50ms").unwrap()
+    );
+    assert_eq!(
+        line("expect @led1.i '>=' 5mA").unwrap(),
+        line("expect @led1.i >= 5mA").unwrap()
+    );
+    assert_eq!(
+        line("expect @led1.i '<=' 1V").unwrap(),
+        line("expect @led1.i <= 1V").unwrap()
+    );
+    let error = line("expect @led1.i '> 5mA").unwrap_err();
+    assert!(error.contains("a quote is not closed"), "{error}");
+}
+
+#[test]
 fn a_condition_in_one_argument_splits_like_a_test_line() {
     let root = Path::new("/project");
     let expect = orbe_session::spec("expect").unwrap();

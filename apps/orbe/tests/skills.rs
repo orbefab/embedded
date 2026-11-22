@@ -1723,7 +1723,7 @@ fn the_core_skill_starts_from_a_block_and_orbe_part_prints_a_part() {
         .next()
         .unwrap();
     assert!(
-        loop_.contains("1. `orbe blocks` lists the Blocks, and `orbe search <words>` finds one. When a Block is close"),
+        loop_.contains("1. `orbe blocks` lists the Blocks, and `orbe search <words>` finds one. Start from a Block only when the user did not ask to build the circuit from parts."),
         "{loop_}"
     );
     assert!(
