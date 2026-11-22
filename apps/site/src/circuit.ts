@@ -1,11 +1,9 @@
-// A Block's parts and a part's "used in" list, both from the registry and the scene files.
-// The card count and "Parts in this circuit" are both `placed.length`. A reference has no
-// role here: the registry does not record one.
+// A Block's parts and a part's "used in" list. The parts and the values written on them come
+// from the scene reader. The card count and "Parts in this circuit" are both `placed.length`.
 
 import { si } from "./format";
-import { parseJsonc } from "./jsonc";
 import { at } from "./paths";
-import { dependencyId, type BlockRecord, type Item, type Param, type PartRecord } from "./records";
+import { dependencyId, type BlockRecord, type Item, type PartRecord, type ScenePart, type SceneValue } from "./records";
 
 /** One reference a Block's scene places. */
 export interface PlacedPart {
@@ -35,6 +33,8 @@ export interface SourceFile {
 export interface BlockCircuit {
   readonly placed: readonly PlacedPart[];
   readonly board: BoardFold;
+  /** The first placed part with a press input, as `@ref`. Null when the scene has none. */
+  readonly hold: `@${string}` | null;
   /** `tests/*.test` files. `orbe test` reports one result per file. */
   readonly tests: number;
   readonly sources: readonly SourceFile[];
@@ -67,91 +67,39 @@ export interface PartUse {
   readonly boards: readonly OnBoard[];
 }
 
-const PREFIXES: readonly (readonly [string, number])[] = [
-  ["p", 1e-12],
-  ["n", 1e-9],
-  ["u", 1e-6],
-  ["µ", 1e-6],
-  ["μ", 1e-6],
-  ["m", 1e-3],
-  ["k", 1e3],
-  ["M", 1e6],
-  ["G", 1e9],
-];
-
-function writtenUnits(unit: string): readonly string[] {
-  if (unit === "ohm") return ["ohm", "ohms", "Ω"];
-  if (unit === "1") return [];
-  return [unit];
-}
-
-/** A scene amount such as `220`, `2.2k` or `10k`, in `unit`. Undefined when it is not one. */
-function parseAmount(text: string, unit: string): number | undefined {
-  const match = /^(-?(?:\d+\.?\d*|\.\d+))(?:[eE]([+-]?\d+))?\s*(.*)$/.exec(text.trim());
-  if (match === null) return undefined;
-  const raw = match[1];
-  if (raw === undefined) return undefined;
-  const mantissa = Number(raw);
-  const exp = match[2] === undefined ? 0 : Number(match[2]);
-  if (!Number.isFinite(mantissa) || !Number.isFinite(exp)) return undefined;
-  const rest = (match[3] ?? "").trim();
-  const units = writtenUnits(unit);
-  if (rest === "" || units.includes(rest)) return mantissa * 10 ** exp;
-  const prefix = PREFIXES.find(([name]) => rest === name || (rest.startsWith(name) && units.includes(rest.slice(name.length))));
-  if (prefix === undefined) return undefined;
-  return mantissa * 10 ** exp * prefix[1];
-}
-
-function formatValue(raw: string | number, param: Param | undefined): string {
-  const text = String(raw);
-  // A file param is a path (`build/fade.ino.hex`). A value such as `1/4` is the value itself.
-  if (param?.file !== undefined && text.includes("/")) return text.slice(text.lastIndexOf("/") + 1);
-  if (param?.choices?.some((choice) => choice.name === text)) return text;
-  const unit = param?.unit;
-  if (unit !== undefined && unit !== "") {
-    const amount = parseAmount(text, unit);
-    if (amount !== undefined) return si(amount, unit);
+function showOne(value: SceneValue): string {
+  if (value.file !== undefined) {
+    const slash = value.file.lastIndexOf("/");
+    return slash < 0 ? value.file : value.file.slice(slash + 1);
   }
-  return text;
+  if (value.text !== undefined) return value.text;
+  if (value.amount !== undefined) return si(value.amount, value.unit ?? "1");
+  return "";
 }
 
-function valueTexts(id: string, fields: Readonly<Record<string, unknown>>, parts: readonly Item<PartRecord>[]): readonly string[] {
-  const params = parts.find((item) => item.record.name === id)?.record.params ?? [];
-  const shown = Object.entries(fields).flatMap(([key, raw]) => {
-    if (key === "type" || (typeof raw !== "string" && typeof raw !== "number")) return [];
-    const param = params.find((entry) => entry.name === key);
-    return [{ name: key, text: formatValue(raw, param) }];
+/** The scene's values in words. A file is its name. The first value is bare, and each later one
+ * is prefixed with its name, so a trimmer reads `10 kΩ, position 0.5`. */
+function showValues(values: readonly SceneValue[]): readonly string[] {
+  const shown = values.flatMap((value) => {
+    const text = showOne(value);
+    return text === "" ? [] : [{ name: value.name, text }];
   });
   if (shown.length <= 1) return shown.map((entry) => entry.text);
   return shown.map((entry, index) => (index === 0 ? entry.text : `${entry.name} ${entry.text}`));
 }
 
-function sceneError(name: string, detail: string): Error {
-  return new Error(`${name} scene.jsonc ${detail}`);
+function placedParts(record: BlockRecord, scene: readonly ScenePart[]): readonly PlacedPart[] {
+  const placed = scene.map((part) => ({ ref: part.ref, id: part.part, values: showValues(part.values) }));
+  if (!placed.some((part) => part.id === record.board)) {
+    throw new Error(`${record.name} scene.jsonc does not place its board ${record.board}`);
+  }
+  return placed;
 }
 
-function placedParts(record: BlockRecord, texts: Readonly<Record<string, string>>, parts: readonly Item<PartRecord>[]): readonly PlacedPart[] {
-  const file = record.files.find((entry) => entry.path === "scene.jsonc");
-  const text = file === undefined ? undefined : texts[file.sha256];
-  if (text === undefined) throw new Error(`${record.name} scene.jsonc is missing`);
-  let scene: unknown;
-  try {
-    scene = parseJsonc(text);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`${record.name} scene.jsonc: ${message}`);
-  }
-  const raw = scene !== null && typeof scene === "object" && "parts" in scene ? scene.parts : undefined;
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw sceneError(record.name, "parts is not an object");
-  const placed = Object.entries(raw).map(([ref, body]) => {
-    if (body === null || typeof body !== "object" || Array.isArray(body)) throw sceneError(record.name, `part ${ref} is not an object`);
-    const fields = body as Record<string, unknown>;
-    const id = fields.type;
-    if (typeof id !== "string") throw sceneError(record.name, `part ${ref} has no type`);
-    return { ref, id, values: valueTexts(id, fields, parts) };
-  });
-  if (!placed.some((part) => part.id === record.board)) throw sceneError(record.name, `does not place its board ${record.board}`);
-  return placed;
+/** The first placed part with a press input, in the scene's order. */
+function holdOf(scene: readonly ScenePart[]): `@${string}` | null {
+  const found = scene.find((part) => part.press);
+  return found === undefined ? null : `@${found.ref}`;
 }
 
 function boardFold(id: string, parts: readonly Item<PartRecord>[]): BoardFold {
@@ -189,9 +137,16 @@ function testCount(record: BlockRecord): number {
   return record.files.filter((file) => file.path.startsWith("tests/") && file.path.endsWith(".test")).length;
 }
 
-function circuitOf(record: BlockRecord, texts: Readonly<Record<string, string>>, parts: readonly Item<PartRecord>[]): BlockCircuit {
+function circuitOf(
+  record: BlockRecord,
+  texts: Readonly<Record<string, string>>,
+  parts: readonly Item<PartRecord>[],
+  scene: readonly ScenePart[] | undefined,
+): BlockCircuit {
+  if (scene === undefined) throw new Error(`${record.name} scene.jsonc is missing`);
   return {
-    placed: placedParts(record, texts, parts),
+    placed: placedParts(record, scene),
+    hold: holdOf(scene),
     board: boardFold(record.board, parts),
     tests: testCount(record),
     sources: sourcesOf(record, texts),
@@ -205,11 +160,12 @@ export function readCatalogUse(
   blocks: readonly Item<BlockRecord>[],
   parts: readonly Item<PartRecord>[],
   texts: Readonly<Record<string, string>>,
+  scenes: Readonly<Record<string, readonly ScenePart[]>>,
 ): { readonly circuits: Readonly<Record<string, BlockCircuit>>; readonly uses: Readonly<Record<string, PartUse>> } {
   const circuits: Record<string, BlockCircuit> = {};
   const byPart = new Map<string, UsedInBlock[]>();
   for (const { record } of blocks) {
-    const circuit = circuitOf(record, texts, parts);
+    const circuit = circuitOf(record, texts, parts, scenes[record.name]);
     circuits[record.name] = circuit;
     const grouped = new Map<string, UsedRef[]>();
     for (const placed of circuit.placed) {

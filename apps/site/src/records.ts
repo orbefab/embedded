@@ -119,13 +119,38 @@ export interface Site {
   readonly engine: { readonly version: string; readonly commit: string | null };
 }
 
+/** One value a scene writes on a part, as the scene reader returns it. */
+export interface SceneValue {
+  readonly name: string;
+  /** A number, in the param's SI unit. A duration is seconds. */
+  readonly amount?: number;
+  /** The param's unit, such as `ohm` or `1`. */
+  readonly unit?: string;
+  /** A choice, as written. */
+  readonly text?: string;
+  /** A file param's path, as written. */
+  readonly file?: string;
+}
+
+/** One part a scene places, in the scene's order. */
+export interface ScenePart {
+  readonly ref: string;
+  /** The catalog id. */
+  readonly part: string;
+  /** The part file has a press input. A child of this part does not count. */
+  readonly press: boolean;
+  readonly values: readonly SceneValue[];
+}
+
 /** Everything the pages render from, as the build reads it from one registry build. `texts`
- * holds each Block text file a page can show, by its SHA-256. */
+ * holds each Block text file a page can show, by its SHA-256. `scenes` is each Block's placed
+ * parts, from the scene reader. */
 export interface SiteData {
   readonly site: Site;
   readonly parts: readonly Item<PartRecord>[];
   readonly blocks: readonly Item<BlockRecord>[];
   readonly texts: Readonly<Record<string, string>>;
+  readonly scenes: Readonly<Record<string, readonly ScenePart[]>>;
   /** A sentence such as "Shown at 220 Ω." for a part page whose view draws a supplied value. */
   readonly shown: Readonly<Record<string, string>>;
 }

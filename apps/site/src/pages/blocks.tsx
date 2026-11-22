@@ -42,8 +42,6 @@ export interface BlockView {
   readonly links: Readonly<Record<string, Linked>>;
   readonly circuit: BlockCircuit;
   readonly readme: readonly (readonly ReadmeRun[])[];
-  /** The scene places a part with a press input, so the page shows the hold control. */
-  readonly button: boolean;
 }
 
 /** Where a README link goes. A web or mail address stays as written. Any other target is a
@@ -153,7 +151,11 @@ export function BlockPage({ block }: { block: BlockView }) {
       </p>
 
       <BlockStage install={<InstallSlot name={record.name} />} sources={circuit.sources}>
-        <BlockPlayer blocks={[{ name: record.name, title: record.title, button: block.button }]} registry={at.registry} wasm={at.wasm} />
+        <BlockPlayer
+          blocks={[{ name: record.name, title: record.title, summary: record.description, hold: circuit.hold }]}
+          registry={at.registry}
+          wasm={at.wasm}
+        />
       </BlockStage>
 
       <Section title="How it works">

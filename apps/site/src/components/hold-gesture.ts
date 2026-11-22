@@ -8,37 +8,31 @@ export interface HoldGesture {
   keyDown(key: string, repeat: boolean): void;
   keyUp(key: string): void;
   pointerDown(id: number, button: number): void;
-  pointerEnd(id: number): void;
+  /** `onControl` is true when this pointerup's target is the control, so its click follows. */
+  pointerEnd(id: number, onControl: boolean): void;
   /** The pointer left the control while down. Its pointerup can still land on the control. */
   pointerLeave(id: number): void;
   /** The control blurred, the window blurred, or the page was hidden. */
   drop(): void;
-  /** `trusted` is the click event's `isTrusted`. */
-  click(trusted: boolean): void;
+  click(): void;
 }
 
-/** How long a finished key or pointer gesture still owns its trailing click. */
-const GESTURE_MS = 500;
-/** How long a click with no key or pointer holds the button. */
+/** How long a click with no pointer or key before it holds the button. */
 const CLICK_MS = 300;
 
 /** Holds the circuit button while Space, Enter or a pointer is down, and releases it when that
- * gesture ends or {@link HoldGesture.drop} runs. A key or pointer gesture also fires a trusted
- * click. On Chrome for Android that click can arrive in a later task than touchend, so the
- * gesture stays set until the click arrives or for {@link GESTURE_MS}. The next key or pointer
- * starts a new gesture. VoiceOver, NVDA and TalkBack send a trusted click with no gesture, and
- * that click presses. A blur, or a pointer leaving the control, moves the held keys and pointers
- * aside: a later press or a click with no key or pointer is a new one, and the key-up or
- * pointerup that ends a moved-aside one owns its click again. */
+ * gesture ends or {@link HoldGesture.drop} runs. The click the browser fires for that pointer
+ * or key is ignored, so it does not press twice. A click after that, or a click with no pointer
+ * or key before it, presses for {@link CLICK_MS}. A blur while a pointer is still down keeps
+ * the click that follows ignored. A blur while only a key is down does not. */
 export function holdGesture(target: HoldTarget): HoldGesture {
   let down = 0;
-  let gesture = false;
   const keys = new Set<string>();
   const pointers = new Set<number>();
-  const droppedKeys = new Set<string>();
-  const droppedPointers = new Set<number>();
-  let gestureTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The click that belongs to the pointer or key that just ended. */
+  let oweClick = false;
   let clickTimer: ReturnType<typeof setTimeout> | undefined;
+  let settle: ReturnType<typeof setTimeout> | undefined;
 
   const press = () => {
     down += 1;
@@ -49,84 +43,85 @@ export function holdGesture(target: HoldTarget): HoldGesture {
     down -= 1;
     if (down === 0) target.release();
   };
-  const clearGestureTimer = () => {
-    if (gestureTimer === undefined) return;
-    clearTimeout(gestureTimer);
-    gestureTimer = undefined;
+  const cancelClick = () => {
+    if (clickTimer === undefined) return;
+    clearTimeout(clickTimer);
+    clickTimer = undefined;
   };
-  const beginGesture = () => {
-    clearGestureTimer();
-    gesture = true;
+  const cancelSettle = () => {
+    if (settle === undefined) return;
+    clearTimeout(settle);
+    settle = undefined;
   };
-  const endIfIdle = () => {
-    if (keys.size > 0 || pointers.size > 0) return;
-    clearGestureTimer();
-    gestureTimer = setTimeout(() => {
-      gestureTimer = undefined;
-      if (keys.size === 0 && pointers.size === 0) gesture = false;
-    }, GESTURE_MS);
+  /** This pointer or key owns the click fired for it. A click after this turn does not. */
+  const ownClick = () => {
+    oweClick = true;
+    cancelSettle();
+  };
+  const settleClick = () => {
+    cancelSettle();
+    settle = setTimeout(() => {
+      settle = undefined;
+      if (down === 0 && keys.size === 0 && pointers.size === 0) oweClick = false;
+    }, 0);
+  };
+  /** Nothing is held, so a click from here on is a new one. */
+  const releaseClick = () => {
+    oweClick = false;
+    cancelSettle();
   };
 
   return {
     keyDown(key, repeat) {
       if (key !== " " && key !== "Enter") return;
       if (repeat || keys.has(key)) return;
-      droppedKeys.delete(key);
       keys.add(key);
-      beginGesture();
+      ownClick();
       press();
     },
     keyUp(key) {
-      if (droppedKeys.delete(key)) {
-        beginGesture();
-        endIfIdle();
-        return;
-      }
       if (!keys.delete(key)) return;
       releaseOne();
-      endIfIdle();
+      if (keys.size === 0 && pointers.size === 0) settleClick();
     },
     pointerDown(id, button) {
       if (button !== 0 || pointers.has(id)) return;
-      droppedPointers.delete(id);
       pointers.add(id);
-      beginGesture();
+      ownClick();
       press();
     },
-    pointerEnd(id) {
-      if (droppedPointers.delete(id)) {
-        beginGesture();
-        endIfIdle();
+    pointerEnd(id, onControl) {
+      if (pointers.delete(id)) releaseOne();
+      // A pointerup on the control is followed by its click. A pointerup anywhere else is not,
+      // so the next click is a new press.
+      if (onControl) {
+        oweClick = true;
+        settleClick();
         return;
       }
-      if (!pointers.delete(id)) return;
-      releaseOne();
-      endIfIdle();
+      if (pointers.size === 0 && keys.size === 0) releaseClick();
     },
     pointerLeave(id) {
       if (!pointers.delete(id)) return;
-      droppedPointers.add(id);
+      oweClick = true;
       releaseOne();
-      endIfIdle();
     },
     drop() {
-      for (const key of keys) droppedKeys.add(key);
+      // A pointer that was still down owns the click that follows. A key does not, and neither
+      // does a pointer that had already left.
+      oweClick = pointers.size > 0;
       keys.clear();
-      for (const id of pointers) droppedPointers.add(id);
       pointers.clear();
-      clearGestureTimer();
-      clearTimeout(clickTimer);
-      clickTimer = undefined;
-      gesture = false;
+      cancelClick();
+      cancelSettle();
       if (down === 0) return;
       down = 0;
       target.release();
     },
-    click(trusted) {
-      if (down > 0) return;
-      if (trusted && gesture) {
-        clearGestureTimer();
-        gesture = false;
+    click() {
+      if (oweClick || down > 0) {
+        oweClick = false;
+        cancelSettle();
         return;
       }
       press();

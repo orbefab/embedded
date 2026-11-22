@@ -6,6 +6,7 @@ import { at } from "./paths";
 import { readmeParagraphs } from "./readme";
 import type { BlockRecord, Item, PartRecord } from "./records";
 import type { Searchable } from "./search";
+import { STARTER } from "./starter";
 
 /** A link to an item's page, with its title. */
 export interface Linked {
@@ -36,7 +37,7 @@ let catalogUse: ReturnType<typeof readCatalogUse> | undefined;
 
 /** One pass over the scenes. The card, the Block page and every part page read this. */
 function catalog() {
-  catalogUse ??= readCatalogUse(data.blocks, data.parts, data.texts);
+  catalogUse ??= readCatalogUse(data.blocks, data.parts, data.texts, data.scenes);
   return catalogUse;
 }
 
@@ -59,13 +60,6 @@ function linked(names: readonly string[]): Record<string, Linked> {
   return Object.fromEntries(names.map((name) => [name, entry(name)]));
 }
 
-/** A top-level scene part whose catalog record has a press input. A board's reset switch is a
- * child of the board, so it does not count. */
-function sceneHasButton(circuit: BlockCircuit): boolean {
-  const pressable = new Set(data.parts.filter((item) => item.record.pressable === true).map((item) => item.record.name));
-  return circuit.placed.some((part) => pressable.has(part.id));
-}
-
 const card = ({ record }: Item<BlockRecord>): BlockCard => {
   const circuit = circuitOf(record.name);
   return {
@@ -74,7 +68,7 @@ const card = ({ record }: Item<BlockRecord>): BlockCard => {
     description: record.description,
     board: circuit.board.title,
     parts: circuit.placed.length,
-    button: sceneHasButton(circuit),
+    button: circuit.hold !== null,
   };
 };
 
@@ -83,10 +77,10 @@ const dependencyIds = (record: PartRecord | BlockRecord) => record.registryDepen
 export const blockCards = () => data.blocks.map(card);
 
 export const home = () => {
-  const block = data.blocks.find((entry) => entry.record.name === "nano-button-led");
+  const block = data.blocks.find((entry) => entry.record.name === STARTER);
   const sceneFile = block?.record.files.find((file) => file.path === "scene.jsonc");
   const scene = sceneFile === undefined ? undefined : data.texts[sceneFile.sha256];
-  if (scene === undefined) throw new Error("nano-button-led has no scene.jsonc");
+  if (scene === undefined) throw new Error(`${STARTER} has no scene.jsonc`);
   return {
     blocks: blockCards(),
     boards: data.parts.filter((item) => item.record.categories?.includes("board")).map(({ record }) => ({ title: record.title, href: at.part(record.name) })),
@@ -129,7 +123,7 @@ export function blockPlayer(id: string) {
     name: item.record.name,
     title: item.record.title,
     description: item.record.description,
-    button: sceneHasButton(circuitOf(id)),
+    hold: circuitOf(id).hold,
   };
 }
 
@@ -143,5 +137,5 @@ export function block(id: string) {
   const readmeText = readmeFile === undefined ? undefined : data.texts[readmeFile.sha256];
   if (readmeText === undefined) throw new Error(`${id} has no README.md`);
   const names = circuit.placed.map((placed) => placed.id);
-  return { item, links: linked(names), circuit, readme: readmeParagraphs(readmeText, __ORBE_SITE_INSTALL__), button: sceneHasButton(circuit) };
+  return { item, links: linked(names), circuit, readme: readmeParagraphs(readmeText, __ORBE_SITE_INSTALL__) };
 }

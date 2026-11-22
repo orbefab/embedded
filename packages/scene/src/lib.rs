@@ -17,6 +17,7 @@ mod circuit;
 mod diagnostic;
 mod files;
 mod holes;
+mod listed;
 mod model;
 mod name;
 mod params;
@@ -40,6 +41,7 @@ pub use circuit::{
 pub use diagnostic::{Code, Diagnostic, Lint};
 pub use files::Files;
 pub use holes::{holes_text, strip_text};
+pub use listed::{ScenePart, WrittenValue, scene_parts};
 pub use model::{PART_FORMATS, SCENE_FORMATS, STOP_PS, is_id};
 pub use name::did_you_mean;
 pub use project::{

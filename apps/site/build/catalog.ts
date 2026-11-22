@@ -4,7 +4,17 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { at } from "../src/paths.ts";
 import { si } from "../src/format.ts";
-import { type BlockRecord, dependencyId, type IndexRow, type Item, type ItemRecord, type PartRecord, type Site, type SiteData } from "../src/records.ts";
+import {
+  type BlockRecord,
+  dependencyId,
+  type IndexRow,
+  type Item,
+  type ItemRecord,
+  type PartRecord,
+  type ScenePart,
+  type Site,
+  type SiteData,
+} from "../src/records.ts";
 
 export interface Catalog {
   readonly name: string;
@@ -61,13 +71,43 @@ export function readCatalog(dir: string): Catalog {
 export const isText = (path: string) =>
   path === "scene.jsonc" || path === "README.md" || path.startsWith("tests/") || /^firmware\/.+\.(ino|c|cpp|h)$/.test(path);
 
-export function siteData(catalog: Catalog, site: Site, shown: Readonly<Record<string, string>>): SiteData {
+export function siteData(
+  catalog: Catalog,
+  site: Site,
+  shown: Readonly<Record<string, string>>,
+  scenes: Readonly<Record<string, readonly ScenePart[]>>,
+): SiteData {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const texts: Record<string, string> = {};
   for (const { record } of catalog.blocks) {
     for (const file of record.files) if (isText(file.path)) texts[file.sha256] = decoder.decode(catalog.bytes(file.sha256));
   }
-  return { site, parts: catalog.parts, blocks: catalog.blocks, texts, shown };
+  return { site, parts: catalog.parts, blocks: catalog.blocks, texts, scenes, shown };
+}
+
+/** Reads one Block's placed parts. `files` is `[path, bytes]`: the Block's own files, and every
+ * catalog part's `part.jsonc` at `parts/<id>/part.jsonc`. */
+export type ReadScene = (files: readonly (readonly [string, Uint8Array])[]) => string;
+
+/** Each Block's placed parts, from the scene reader. A finding fails the build. */
+export function blockScenes(catalog: Catalog, read: ReadScene): Record<string, ScenePart[]> {
+  const partFiles: [string, Uint8Array][] = [];
+  for (const { record } of catalog.parts) {
+    const file = record.files.find((entry) => entry.path === "part.jsonc");
+    if (file !== undefined) partFiles.push([`parts/${record.name}/part.jsonc`, catalog.bytes(file.sha256)]);
+  }
+  const scenes: Record<string, ScenePart[]> = {};
+  for (const { record } of catalog.blocks) {
+    const files: [string, Uint8Array][] = [...partFiles];
+    for (const file of record.files) files.push([file.path, catalog.bytes(file.sha256)]);
+    try {
+      scenes[record.name] = JSON.parse(read(files)) as ScenePart[];
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`${record.name}: ${message}`);
+    }
+  }
+  return scenes;
 }
 
 /** Draws one part on its own: orbe-wasm's `partScene` on the part's files and those of every

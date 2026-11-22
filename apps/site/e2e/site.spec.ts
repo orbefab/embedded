@@ -1,10 +1,9 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 import type { BrowserContext, Page } from "@playwright/test";
 import { collectLogs, expect, ledGlow, orbeJson, rendersDir, REPO, repoBlocks, shot, showBlock, test, waitGlow, waitState } from "../../../e2e/support";
-import { captionOf } from "../src/captions";
-import { parseJsonc } from "../src/jsonc";
 
 const INSTALL = /orbe add|cargo install|orbefab\.com\/embedded\/install\.sh/;
 const VIEW = { width: 1280, height: 900 };
@@ -91,23 +90,113 @@ function blockIds(): string[] {
     .sort();
 }
 
-function readJsonc(path: string): unknown {
-  return parseJsonc(readFileSync(path, "utf8"));
+interface ListedPart {
+  ref: string;
+  part: string;
+  press: boolean;
 }
 
-function sceneParts(id: string): Record<string, { type?: string }> {
-  const scene = readJsonc(join(REPO, "blocks", id, "scene.jsonc")) as { parts?: Record<string, { type?: string }> };
-  return scene.parts ?? {};
+interface SceneReader {
+  parts(id: string): ListedPart[];
+  board(id: string): string;
+  boardTitle(id: string): string;
 }
 
-function sceneCards(): Record<string, string> {
-  const cards: Record<string, string> = {};
-  for (const id of blockIds()) {
-    const block = readJsonc(join(REPO, "blocks", id, "block.jsonc")) as { board: string };
-    const part = readJsonc(join(REPO, "parts", block.board, "part.jsonc")) as { title: string };
-    cards[`/embedded/blocks/${id}/`] = `${part.title}, ${Object.keys(sceneParts(id)).length} parts`;
+const compareVersions = (a: string, b: string) => {
+  const [x, y] = [a.split(".").map(Number), b.split(".").map(Number)];
+  for (let i = 0; i < 3; i += 1) if (x[i] !== y[i]) return (x[i] ?? 0) - (y[i] ?? 0);
+  return 0;
+};
+
+/** The registry this build wrote. `orbe search` reads the same folder. */
+function registryDir(): string {
+  const spec = process.env.ORBE_REGISTRY;
+  if (spec !== undefined && spec.startsWith("file://")) {
+    const path = fileURLToPath(spec);
+    return path.slice(0, path.lastIndexOf("/"));
   }
+  return join(REPO, ".scratch/site/registry");
+}
+
+let scenes: Promise<SceneReader> | undefined;
+
+/** The parts each Block places, from the same `sceneParts` the build called. */
+function sceneReader(): Promise<SceneReader> {
+  scenes ??= openSceneReader();
+  return scenes;
+}
+
+async function openSceneReader(): Promise<SceneReader> {
+  const registry = registryDir();
+  const wasmDir = join(REPO, ".scratch/site/wasm");
+  const wasm = (await import(pathToFileURL(join(wasmDir, "orbe_wasm.js")).href)) as {
+    initSync(options: { module: Uint8Array }): void;
+    Block: new () => { add(path: string, bytes: Uint8Array): void };
+    sceneParts(block: unknown): string;
+  };
+  wasm.initSync({ module: readFileSync(join(wasmDir, "orbe_wasm_bg.wasm")) });
+  const index = JSON.parse(readFileSync(join(registry, "index.json"), "utf8")) as {
+    items: { name: string; version: string; url: string }[];
+  };
+  const rows = new Map<string, { version: string; url: string }[]>();
+  for (const row of index.items) rows.set(row.name, [...(rows.get(row.name) ?? []), row]);
+  const records = new Map<string, { type: string; title?: string; board?: string; files: { path: string; sha256: string }[] }>();
+  for (const [name, list] of rows) {
+    const newest = [...list].sort((a, b) => compareVersions(a.version, b.version)).at(-1);
+    if (newest === undefined) continue;
+    records.set(name, JSON.parse(readFileSync(join(registry, newest.url), "utf8")));
+  }
+  const partFiles: [string, Uint8Array][] = [];
+  for (const [name, record] of records) {
+    if (record.type !== "part") continue;
+    const file = record.files.find((entry) => entry.path === "part.jsonc");
+    if (file === undefined) continue;
+    partFiles.push([`parts/${name}/part.jsonc`, readFileSync(join(registry, "files", file.sha256))]);
+  }
+  const cache = new Map<string, ListedPart[]>();
+  return {
+    parts(id) {
+      const hit = cache.get(id);
+      if (hit !== undefined) return hit;
+      const record = records.get(id);
+      if (record === undefined || record.type !== "block") throw new Error(`${id} is not a Block in the registry`);
+      const block = new wasm.Block();
+      for (const [path, bytes] of partFiles) block.add(path, bytes);
+      for (const file of record.files) block.add(file.path, readFileSync(join(registry, "files", file.sha256)));
+      const listed = JSON.parse(wasm.sceneParts(block)) as ListedPart[];
+      cache.set(id, listed);
+      return listed;
+    },
+    board(id) {
+      const board = records.get(id)?.board;
+      if (board === undefined) throw new Error(`${id} names no board`);
+      return board;
+    },
+    boardTitle(id) {
+      const title = records.get(id)?.title;
+      if (title === undefined) throw new Error(`${id} has no title in the registry`);
+      return title;
+    },
+  };
+}
+
+async function sceneCards(): Promise<Record<string, string>> {
+  const read = await sceneReader();
+  const cards: Record<string, string> = {};
+  for (const id of blockIds()) cards[`/embedded/blocks/${id}/`] = `${read.boardTitle(read.board(id))}, ${read.parts(id).length} parts`;
   return cards;
+}
+
+let cachedSummaries: ReadonlyMap<string, string | undefined> | undefined;
+
+/** Each Block's summary, from `orbe blocks --json`, which reads the registry this build wrote. */
+function summaries(): ReadonlyMap<string, string | undefined> {
+  if (cachedSummaries !== undefined) return cachedSummaries;
+  const envelope = orbeJson(process.env.ORBE ?? "", ["blocks"]) as {
+    data?: { blocks?: { id: string; description?: string }[] };
+  };
+  cachedSummaries = new Map((envelope.data?.blocks ?? []).map((row) => [row.id, row.description]));
+  return cachedSummaries;
 }
 
 /** Sketch, scene and test files the Code view lists, from the Block's folder. */
@@ -188,25 +277,6 @@ async function cardCounts(page: Page): Promise<Record<string, string>> {
 
 function searchNames(query: string): string[] {
   return orbeJson(process.env.ORBE ?? "", ["search", ...query.split(" ")]).data?.parts?.map((part) => part.id) ?? [];
-}
-
-/** A top-level scene part whose part file has a press input. A board's reset switch is a child
- * of the board, so it does not count. */
-function sceneHasPress(id: string): boolean {
-  const scene = parseJsonc(readFileSync(join(REPO, "blocks", id, "scene.jsonc"), "utf8"));
-  if (scene === null || typeof scene !== "object" || !("parts" in scene) || scene.parts === null || typeof scene.parts !== "object") {
-    throw new Error(`${id} scene has no parts`);
-  }
-  return Object.values(scene.parts).some((part) => {
-    if (part === null || typeof part !== "object" || !("type" in part) || typeof part.type !== "string") return false;
-    const file = join(REPO, "parts", part.type, "part.jsonc");
-    if (!existsSync(file)) return false;
-    const record = parseJsonc(readFileSync(file, "utf8"));
-    if (record === null || typeof record !== "object" || !("controls" in record) || record.controls === null || typeof record.controls !== "object") {
-      return false;
-    }
-    return "press" in record.controls;
-  });
 }
 
 test.describe("landing", () => {
@@ -308,13 +378,10 @@ test.describe("parts search", () => {
   });
 
   test("the parts page lists every part without a query", async () => {
-    const parts = join(REPO, "parts");
-    const catalog = readdirSync(parts).filter((id) => {
-      const file = join(parts, id, "part.jsonc");
-      if (!existsSync(file)) return false;
-      const value = parseJsonc(readFileSync(file, "utf8")) as { listed?: boolean };
-      return value.listed !== false;
-    }).length;
+    const index = JSON.parse(readFileSync(join(registryDir(), "index.json"), "utf8")) as {
+      items: { name: string; type: string; listed?: boolean }[];
+    };
+    const catalog = new Set(index.items.filter((row) => row.type === "part" && row.listed !== false).map((row) => row.name)).size;
     expect(await page.locator("[data-part]").count()).toBe(catalog);
   });
 
@@ -559,8 +626,6 @@ test.describe("uno-board", () => {
 });
 
 for (const block of repoBlocks()) {
-  const caption = captionOf(block.id);
-  const presses = sceneHasPress(block.id);
   test.describe(`${block.id} on its page`, () => {
     let context: BrowserContext;
     let page: Page;
@@ -606,8 +671,11 @@ for (const block of repoBlocks()) {
       expect(await page.locator('[data-testid="errors"]').count()).toBe(0);
     });
 
-    test("shows its caption, and the hold control only when the scene has a button", async () => {
-      await expect(page.getByTestId("block-caption")).toHaveText(caption);
+    test("shows its summary, and the hold control only when the scene has a press", async () => {
+      const caption = summaries().get(block.id);
+      if (caption === undefined) await expect(page.getByTestId("block-caption")).toHaveCount(0);
+      else await expect(page.getByTestId("block-caption")).toHaveText(caption);
+      const presses = (await sceneReader()).parts(block.id).some((part) => part.press);
       if (presses) await expect(page.getByTestId("hold-to-press")).toHaveText("Hold to press");
       else await expect(page.getByTestId("hold-to-press")).toHaveCount(0);
     });
@@ -650,7 +718,7 @@ test.describe("nano-button-led", () => {
   });
 
   test("the card's part count is the number of parts in the scene file", async () => {
-    const refs = Object.keys(sceneParts("nano-button-led"));
+    const refs = (await sceneReader()).parts("nano-button-led").map((part) => part.ref);
     const listed = await page.locator('[data-testid="scene-parts"] li[data-ref]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-ref")));
     expect(listed).toEqual(refs);
     const shown = await page.locator("[data-scene-parts]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-scene-parts")));
@@ -780,9 +848,9 @@ test("the Blocks page counts the parts each scene places", async ({ browser, hos
   const page = await context.newPage();
   await page.goto(`${host.base}/embedded/blocks/`);
   await expect(page.locator("main")).toContainText("Small circuits that work. Play each one live in your browser.");
-  expect(await cardCounts(page)).toEqual(sceneCards());
+  expect(await cardCounts(page)).toEqual(await sceneCards());
   await page.goto(`${host.base}/embedded/blocks/nano-led-fade/`);
-  const refs = Object.keys(sceneParts("nano-led-fade"));
+  const refs = (await sceneReader()).parts("nano-led-fade").map((part) => part.ref);
   const listed = await page.locator('[data-testid="scene-parts"] li[data-ref]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-ref")));
   expect(listed).toEqual(refs);
   await context.close();
@@ -822,13 +890,14 @@ test("each Block lists its scene files and its values", async ({ browser, host }
     await page.locator('[data-testid="view-code"]').click();
     const shown = await page.locator('[data-testid="code-file"]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-path")).sort());
     expect(shown, id).toEqual(codePaths(id));
-    const refs = Object.keys(sceneParts(id));
+    const placed = (await sceneReader()).parts(id);
+    const refs = placed.map((part) => part.ref);
     const listed = await page.locator('[data-testid="scene-parts"] li[data-ref]').evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-ref")));
     expect(listed, id).toEqual(refs);
     for (const [ref, texts] of Object.entries(VALUES[id] ?? {})) {
       const row = await page.locator(`[data-testid="scene-parts"] li[data-ref="${ref}"]`).innerText();
       for (const text of texts) expect(row, `${id} ${ref}`).toContain(text);
-      expect(row, `${id} ${ref}`).not.toContain(sceneParts(id)[ref]?.type ?? "missing-type");
+      expect(row, `${id} ${ref}`).not.toContain(placed.find((part) => part.ref === ref)?.part ?? "missing-type");
     }
     await expect(page.locator("details summary", { hasText: "brings" }), id).toHaveCount(0);
     await expect(page.getByText("See them on the board's page"), id).toHaveCount(0);

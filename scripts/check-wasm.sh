@@ -295,7 +295,8 @@ for line in \
   'tick(wall_ms: number): void;' \
   'playing(): boolean;' \
   'messages(): string[];' \
-  'export function tickMs(): number;'; do
+  'export function tickMs(): number;' \
+  'export function sceneParts(block: Block): string;'; do
   if ! grep -qF "$line" "$scratch/pkg/orbe_wasm.d.ts"; then
     echo "check-wasm: orbe_wasm.d.ts lacks $line" >&2
     exit 1

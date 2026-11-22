@@ -17,11 +17,11 @@ afterEach(() => {
 });
 
 describe("hold gesture", () => {
-  it("presses for a click with no key or pointer before it, then releases", () => {
+  it("presses for a click with no pointer or key before it, then releases", () => {
     vi.useFakeTimers();
     const { target, events } = recording();
     const hold = holdGesture(target);
-    hold.click(true);
+    hold.click();
     expect(events).toEqual(["press"]);
     vi.advanceTimersByTime(299);
     expect(events).toEqual(["press"]);
@@ -29,39 +29,107 @@ describe("hold gesture", () => {
     expect(events).toEqual(["press", "release"]);
   });
 
-  it("presses for an untrusted script click the same way", () => {
-    vi.useFakeTimers();
-    const { target, events } = recording();
-    const hold = holdGesture(target);
-    hold.click(false);
-    vi.advanceTimersByTime(300);
-    expect(events).toEqual(["press", "release"]);
-  });
-
-  it("presses once for a pointer, and ignores the click that follows pointerup", () => {
+  it("presses once for a pointer, and ignores the click that follows", () => {
     vi.useFakeTimers();
     const { target, events } = recording();
     const hold = holdGesture(target);
     hold.pointerDown(4, 0);
-    hold.pointerEnd(4);
-    hold.click(true);
+    hold.pointerEnd(4, true);
+    hold.click();
     expect(events).toEqual(["press", "release"]);
-    vi.advanceTimersByTime(500);
-    expect(events).toEqual(["press", "release"]);
-  });
-
-  it("ignores a trusted click that arrives in a later task, and presses after the window", () => {
-    vi.useFakeTimers();
-    const { target, events } = recording();
-    const hold = holdGesture(target);
-    hold.pointerDown(4, 0);
-    hold.pointerEnd(4);
     vi.advanceTimersByTime(0);
-    hold.click(true);
-    expect(events).toEqual(["press", "release"]);
-    vi.advanceTimersByTime(500);
-    hold.click(true);
+    hold.click();
     expect(events).toEqual(["press", "release", "press"]);
+    vi.advanceTimersByTime(300);
+    expect(events).toEqual(["press", "release", "press", "release"]);
+  });
+
+  it("ignores the click that ends a pointer hold a blur cut short", () => {
+    const { target, events } = recording();
+    const hold = holdGesture(target);
+    hold.pointerDown(1, 0);
+    hold.drop();
+    hold.pointerEnd(1, true);
+    hold.click();
+    expect(events).toEqual(["press", "release"]);
+  });
+
+  it("presses for a click after a key hold a blur cut short", () => {
+    vi.useFakeTimers();
+    const { target, events } = recording();
+    const hold = holdGesture(target);
+    hold.keyDown(" ", false);
+    hold.drop();
+    hold.keyUp(" ");
+    hold.click();
+    expect(events).toEqual(["press", "release", "press"]);
+    vi.advanceTimersByTime(300);
+    expect(events).toEqual(["press", "release", "press", "release"]);
+  });
+
+  it("a blur cancels a click's release, so a later held key stays down", () => {
+    vi.useFakeTimers();
+    const { target, events } = recording();
+    const hold = holdGesture(target);
+    hold.click();
+    vi.advanceTimersByTime(100);
+    hold.drop();
+    hold.keyDown(" ", false);
+    vi.advanceTimersByTime(1000);
+    expect(events).toEqual(["press", "release", "press"]);
+    hold.keyUp(" ");
+    expect(events).toEqual(["press", "release", "press", "release"]);
+  });
+
+  it("a click's release lets go of one hold, so a key pressed during it stays down", () => {
+    vi.useFakeTimers();
+    const { target, events } = recording();
+    const hold = holdGesture(target);
+    hold.click();
+    hold.keyDown(" ", false);
+    vi.advanceTimersByTime(300);
+    expect(events).toEqual(["press"]);
+    hold.keyUp(" ");
+    expect(events).toEqual(["press", "release"]);
+  });
+
+  it("ignores the click when a pointer leaves and lifts on the control, and a later click presses", () => {
+    vi.useFakeTimers();
+    const { target, events } = recording();
+    const hold = holdGesture(target);
+    hold.pointerDown(1, 0);
+    hold.pointerLeave(1);
+    expect(events).toEqual(["press", "release"]);
+    hold.pointerEnd(1, true);
+    hold.click();
+    expect(events).toEqual(["press", "release"]);
+    vi.advanceTimersByTime(0);
+    hold.click();
+    vi.advanceTimersByTime(300);
+    expect(events).toEqual(["press", "release", "press", "release"]);
+  });
+
+  it("presses for a click after the pointer lifts off the control", () => {
+    vi.useFakeTimers();
+    const { target, events } = recording();
+    const hold = holdGesture(target);
+    hold.pointerDown(1, 0);
+    hold.pointerLeave(1);
+    hold.pointerEnd(1, false);
+    hold.click();
+    expect(events).toEqual(["press", "release", "press"]);
+    vi.advanceTimersByTime(300);
+    expect(events).toEqual(["press", "release", "press", "release"]);
+  });
+
+  it("a blur after the pointer has left lets the next click press", () => {
+    vi.useFakeTimers();
+    const { target, events } = recording();
+    const hold = holdGesture(target);
+    hold.pointerDown(1, 0);
+    hold.pointerLeave(1);
+    hold.drop();
+    hold.click();
     vi.advanceTimersByTime(300);
     expect(events).toEqual(["press", "release", "press", "release"]);
   });
@@ -78,95 +146,15 @@ describe("hold gesture", () => {
     expect(events).toEqual(["press", "release", "press", "release"]);
   });
 
-  it("presses again for pointer 1 held, dropped, then pressed", () => {
+  it("presses again for a pointer held, dropped, then pressed", () => {
     const { target, events } = recording();
     const hold = holdGesture(target);
     hold.pointerDown(1, 0);
     hold.drop();
     expect(events).toEqual(["press", "release"]);
-    // The pointerup happened in another window, so this id is still dropped.
     hold.pointerDown(1, 0);
     expect(events).toEqual(["press", "release", "press"]);
-    hold.pointerEnd(1);
-    expect(events).toEqual(["press", "release", "press", "release"]);
-  });
-
-  it("a pointerup for a dropped id clears it and does not press", () => {
-    const { target, events } = recording();
-    const hold = holdGesture(target);
-    hold.pointerDown(1, 0);
-    hold.drop();
-    hold.pointerEnd(1);
-    expect(events).toEqual(["press", "release"]);
-  });
-
-  it("ignores the click that ends a hold a blur cut short", () => {
-    vi.useFakeTimers();
-    const { target, events } = recording();
-    const hold = holdGesture(target);
-    hold.pointerDown(1, 0);
-    vi.advanceTimersByTime(100);
-    hold.drop();
-    vi.advanceTimersByTime(100);
-    hold.pointerEnd(1);
-    hold.click(true);
-    vi.advanceTimersByTime(500);
-    expect(events).toEqual(["press", "release"]);
-  });
-
-  it("ignores the click after a pointer leaves, comes back later and lifts", () => {
-    vi.useFakeTimers();
-    const { target, events } = recording();
-    const hold = holdGesture(target);
-    hold.pointerDown(1, 0);
-    vi.advanceTimersByTime(200);
-    hold.pointerLeave(1);
-    expect(events).toEqual(["press", "release"]);
-    vi.advanceTimersByTime(1000);
-    hold.pointerEnd(1);
-    hold.click(true);
-    vi.advanceTimersByTime(500);
-    expect(events).toEqual(["press", "release"]);
-  });
-
-  it("a blur cancels a click's release, so a later held key stays down", () => {
-    vi.useFakeTimers();
-    const { target, events } = recording();
-    const hold = holdGesture(target);
-    hold.click(true);
-    vi.advanceTimersByTime(100);
-    hold.drop();
-    hold.keyDown(" ", false);
-    vi.advanceTimersByTime(1000);
-    expect(events).toEqual(["press", "release", "press"]);
-    hold.keyUp(" ");
-    expect(events).toEqual(["press", "release", "press", "release"]);
-  });
-
-  it("presses for a screen reader click after a blur", () => {
-    vi.useFakeTimers();
-    const { target, events } = recording();
-    const hold = holdGesture(target);
-    hold.keyDown(" ", false);
-    hold.drop();
-    hold.click(true);
-    expect(events).toEqual(["press", "release", "press"]);
-    vi.advanceTimersByTime(300);
-    expect(events).toEqual(["press", "release", "press", "release"]);
-  });
-
-  it("a new key resets the previous gesture before its window ends", () => {
-    vi.useFakeTimers();
-    const { target, events } = recording();
-    const hold = holdGesture(target);
-    hold.keyDown(" ", false);
-    hold.keyUp(" ");
-    vi.advanceTimersByTime(400);
-    hold.keyDown("Enter", false);
-    hold.keyUp("Enter");
-    // The first gesture's 500 ms window would end here. The new gesture still owns the click.
-    vi.advanceTimersByTime(100);
-    hold.click(true);
+    hold.pointerEnd(1, false);
     expect(events).toEqual(["press", "release", "press", "release"]);
   });
 
@@ -180,7 +168,7 @@ describe("hold gesture", () => {
     expect(events).toEqual(["press"]);
     hold.keyUp(" ");
     expect(events).toEqual(["press"]);
-    hold.pointerEnd(1);
+    hold.pointerEnd(1, false);
     expect(events).toEqual(["press", "release"]);
   });
 });

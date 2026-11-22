@@ -883,6 +883,7 @@ dependencies = [
 name = "orbe-wasm"
 version = "0.1.0"
 dependencies = [
+ "orbe-scene",
  "orbe-session",
  "serde_json",
  "wasm-bindgen",

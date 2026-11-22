@@ -1,5 +1,4 @@
 import { lazy, type KeyboardEvent, type PointerEvent, Suspense, useEffect, useRef, useState } from "react";
-import { captionOf } from "../captions";
 import { holdGesture, type HoldGesture } from "./hold-gesture";
 import type { ButtonHold } from "./live";
 import { Stage } from "./stage";
@@ -7,10 +6,17 @@ import { Stage } from "./stage";
 const BlockView = lazy(() => import("./live").then((live) => ({ default: live.BlockView })));
 
 export interface BlockPlayerProps {
-  readonly blocks: readonly { readonly name: string; readonly title: string; readonly button: boolean }[];
+  readonly blocks: readonly {
+    readonly name: string;
+    readonly title: string;
+    /** The Block's summary. No line under the stage when this is missing. */
+    readonly summary?: string;
+    /** The part Hold to press drives, or null when the scene places nothing pressable. */
+    readonly hold: `@${string}` | null;
+  }[];
   readonly registry: string;
   readonly wasm: string;
-  /** Fill the frame: the stage grows, and the caption and hold control sit under it. */
+  /** Fill the frame: the stage grows, and the summary and hold control sit under it. */
   readonly fill?: boolean;
 }
 
@@ -18,6 +24,7 @@ export interface BlockPlayerProps {
  * releases when that gesture ends, the control blurs, the window blurs, or the page is hidden. */
 function PressControl({ hold }: { hold: { readonly current: ButtonHold | null } }) {
   const gesture = useRef<HoldGesture | null>(null);
+  const button = useRef<HTMLButtonElement>(null);
   if (gesture.current === null) {
     gesture.current = holdGesture({
       press: () => hold.current?.press(),
@@ -34,7 +41,10 @@ function PressControl({ hold }: { hold: { readonly current: ButtonHold | null } 
     };
     // keyup and pointerup can land on another element after this control blurs.
     const onKeyUp = (event: globalThis.KeyboardEvent) => current.keyUp(event.key);
-    const onPointerUp = (event: globalThis.PointerEvent) => current.pointerEnd(event.pointerId);
+    const onPointerUp = (event: globalThis.PointerEvent) => {
+      const target = event.target;
+      current.pointerEnd(event.pointerId, target instanceof Node && (button.current?.contains(target) ?? false));
+    };
     window.addEventListener("blur", onWindowBlur);
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("keyup", onKeyUp);
@@ -66,8 +76,9 @@ function PressControl({ hold }: { hold: { readonly current: ButtonHold | null } 
     <button
       className="mt-3 touch-none border border-border px-3 py-1.5 text-sm hover:border-foreground focus-visible:[outline:2px_solid_var(--brand)] focus-visible:outline-offset-2"
       data-testid="hold-to-press"
+      ref={button}
       onBlur={() => gesture.current?.drop()}
-      onClick={(event) => gesture.current?.click(event.nativeEvent.isTrusted)}
+      onClick={() => gesture.current?.click()}
       onKeyDown={onKeyDown}
       onPointerDown={onPointerDown}
       onPointerLeave={onPointerLeave}
@@ -79,15 +90,16 @@ function PressControl({ hold }: { hold: { readonly current: ButtonHold | null } 
 }
 
 /** The first Block live in 3D, with a tab for each other Block. Switching a tab frees the
- * Block before it. A Block whose scene places a part with a press input gets the hold control. */
+ * Block before it. The line under the stage is the Block's summary. Hold to press drives the
+ * part the page named. */
 export function BlockPlayer({ blocks, registry, wasm, fill = false }: BlockPlayerProps) {
   const [shown, setShown] = useState(blocks[0]?.name ?? "");
   const [webgl, setWebgl] = useState<boolean | null>(null);
   const hold = useRef<ButtonHold | null>(null);
   const block = blocks.find((item) => item.name === shown) ?? blocks[0];
-  const name = block?.name ?? "";
-  const caption = name === "" ? "" : captionOf(name);
-  const pressable = block?.button === true && webgl === true;
+  const summary = block?.summary?.trim() ?? "";
+  const press = block?.hold ?? null;
+  const pressable = press !== null && webgl === true;
 
   return (
     <div className={fill ? "flex h-full min-h-0 min-w-0 flex-col" : undefined}>
@@ -112,14 +124,14 @@ export function BlockPlayer({ blocks, registry, wasm, fill = false }: BlockPlaye
         <Stage fill={fill} label="Loading the Block" onWebgl={setWebgl}>
           {() => (
             <Suspense fallback={null}>
-              <BlockView hold={hold} id={shown} key={shown} registry={registry} wasm={wasm} />
+              <BlockView hold={hold} id={shown} key={shown} press={press} registry={registry} wasm={wasm} />
             </Suspense>
           )}
         </Stage>
       </div>
-      {webgl === false ? null : (
+      {webgl === false || summary === "" ? null : (
         <p className={`text-muted-foreground text-sm ${fill ? "shrink-0 px-3 pt-3 break-words" : "mt-3"}`} data-testid="block-caption">
-          {caption}
+          {summary}
         </p>
       )}
       {pressable ? (

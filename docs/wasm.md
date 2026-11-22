@@ -81,12 +81,13 @@ A bundler that copies `orbe_wasm.js` into one bundle must also emit `orbe_wasm_b
 | `session.messages()` | The JSON text of each message since the last call, in order. |
 | `tickMs()` | The tick, 16 ms. |
 | `partScene(id, block)` | The JSON text of the `scene` message of the catalog part `id` drawn on its own, with no session: one instance named `id` with each `-` written `_`, no `circuit_hash` and no channels. `block` holds the part's files and those of every part it is built from, at `parts/<id>/<path>`. It reads the part as far as its children, params and layout, and checks no param, firmware or ground, so a board with no firmware draws. It throws the findings when a part is missing or does not parse. A part's page draws the part with it. |
+| `sceneParts(block)` | The JSON text of each part the Block's `scene.jsonc` places, in the file's order. Each part is `{ref, part, press, values}`. A number is `{name, amount, unit}` with `amount` in the param's SI unit, and a duration is seconds. A choice is `{name, text}`. A file is `{name, file}`, the path as written, and the file need not be there. `press` is true when that part's own file has a press input. `block` holds the Block's files and each catalog part's `part.jsonc` at `parts/<id>/part.jsonc`. It takes the `Block`, which is freed. It throws the findings when the scene does not parse or a written value is one the reader refuses. |
 
 A viewer sends only `press`, `release`, `set`, `play` and `pause`, each parsed by the CLI's own command table. `set` is `{"id": 1, "cmd": "set", "quantity": "light", "value": 50}`. It lands where a CLI `set` lands, and the next frame's `world` reads the new value, as [viewer.md](viewer.md) says. Each object holds memory inside the module until `free()` or the garbage collector frees it.
 
 ## Errors
 
-`Session.open` throws an `Error` whose message is the refusal as `orbe open` prints it, such as `scene.jsonc:9:23: error[part_missing]: part `led-5mm` is not in the catalog this Block reads`, with the hint `the catalog has no part named `led-5mm``. `worker.js` posts that message as the `reason` of a `closed` message. A command the session refuses is not thrown: its `reply` carries `ok: false` and the error, as `orbe <command> --json` prints it. A command no viewer sends, or text that is not JSON, gets a `usage` error. `partScene` throws an `Error` whose message lists each finding as `orbe check` prints it. A call on a freed object throws `null pointer passed to rust`.
+`Session.open` throws an `Error` whose message is the refusal as `orbe open` prints it, such as `scene.jsonc:9:23: error[part_missing]: part `led-5mm` is not in the catalog this Block reads`, with the hint `the catalog has no part named `led-5mm``. `worker.js` posts that message as the `reason` of a `closed` message. A command the session refuses is not thrown: its `reply` carries `ok: false` and the error, as `orbe <command> --json` prints it. A command no viewer sends, or text that is not JSON, gets a `usage` error. `partScene` and `sceneParts` throw an `Error` whose message lists each finding as `orbe check` prints it. A call on a freed object throws `null pointer passed to rust`.
 
 ## Tests
 
@@ -96,7 +97,7 @@ A viewer sends only `press`, `release`, `set`, `play` and `pause`, each parsed b
 
 - It builds the package, then builds it again with a fresh target directory, and fails unless both folders hold the same bytes.
 - It checks `package.json`: the name, the version, `private`, the licence, `files`, each `exports` target, and a commit stamp when the directory is the checkout.
-- It checks that `orbe_wasm.d.ts` types `Block.add`, `Session.open`, `command`, `tick`, `playing`, `messages` and `tickMs` as the table above does.
+- It checks that `orbe_wasm.d.ts` types `Block.add`, `Session.open`, `command`, `tick`, `playing`, `messages`, `tickMs` and `sceneParts` as the table above does.
 - It rejects the package when a file holds a host path. A file fails when it contains `$HOME/`, unless `HOME` is `/` or one of `/orbe`, `/cargo`, `/rustc` and `/target`, or a remapped host prefix with a trailing `/`. A match is a leak only when it starts a path: walking back from it over `/` bytes reaches the start of the file or a byte outside `[A-Za-z0-9._/-]`. A host path glued on after other path characters, such as `abc/home/u/x`, is a known miss. Before the build, a fixture that only names replacements must pass under `HOME` of each replacement, and a fixture that holds `/probe-home/secret` must fail under `HOME` of `/probe-home`.
 - It builds `orbe`, builds this repo's registry with `orbe registry build`, and runs `packages/wasm/tests/worker.mjs` on the package and that registry.
 
