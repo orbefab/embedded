@@ -26,26 +26,24 @@ async function open(browser: Browser, base: string, { touch = false } = {}) {
   return { context, page, logs, rest, cdp };
 }
 
-/** The damping steps once per drawn frame, so frames, not wall time, say when the camera has stopped. */
+/** Damping steps once per `controls.update()`, which the rig calls once per drawn frame.
+ * The checks read the settled pose, so step `update()` here until the pose is still. */
 async function still(page: Page) {
-  const result = await page.evaluate(
-    () =>
-      new Promise((done) => {
-        let last: number[] | undefined;
-        let calm = 0;
-        let frames = 0;
-        const tick = () => {
-          const { controls, camera } = window.orbeViewer.get();
-          const now = [...controls.target.toArray(), ...camera.position.toArray(), camera.zoom];
-          calm = last !== undefined && now.every((value, i) => Math.abs(value - last[i]) < 0.01) ? calm + 1 : 0;
-          last = now;
-          frames += 1;
-          if (calm >= 5 || frames >= 600) done({ frames, calm, now });
-          else requestAnimationFrame(tick);
-        };
-        requestAnimationFrame(tick);
-      }),
-  );
+  const result = await page.evaluate(() => {
+    let last: number[] | undefined;
+    let calm = 0;
+    let frames = 0;
+    let now: number[] = [];
+    while (calm < 5 && frames < 600) {
+      window.orbeViewer.get().controls.update();
+      const { controls, camera } = window.orbeViewer.get();
+      now = [...controls.target.toArray(), ...camera.position.toArray(), camera.zoom];
+      calm = last !== undefined && now.every((value, i) => Math.abs(value - last[i]) < 0.01) ? calm + 1 : 0;
+      last = now;
+      frames += 1;
+    }
+    return { frames, calm, now };
+  });
   const settled = result as { frames: number; calm: number; now: number[] };
   if (settled.calm < 5) throw new Error(`the camera still moved after ${settled.frames} frames: ${JSON.stringify(settled.now)}`);
 }
@@ -396,7 +394,6 @@ function effectDelta(page: Page, hide: boolean | "full", effect: "bloom" | "outl
     } finally {
       strength[key] = before;
       for (const node of hidden) node.visible = true;
-      await frame();
     }
   }, [hide, effect] as const);
 }
@@ -464,21 +461,15 @@ async function holdButton(page: Page, rest: number[]) {
   );
 }
 
+// Parallel, so CI can shard single tests. A describe that shares one page stays in default
+// mode, and that whole describe stays on one shard.
+test.describe.configure({ mode: "parallel" });
+
 test.describe("viewer page", () => {
-  test.afterAll(async ({ browser, host }) => {
-    if (rendersDir() === undefined) return;
-    const { context, page, rest } = await open(browser, host.base);
-    await shot(page, "opened");
-    await holdButton(page, rest);
-    await page.waitForTimeout(300);
-    await shot(page, "pressed");
-    await lookAt(page, "@nano.led_pwr", "body", 30);
-    await page.waitForTimeout(300);
-    await shot(page, "pressed-nano-leds");
-    await context.close();
-  });
+  test.describe.configure({ mode: "parallel" });
 
   test.describe("press and release", () => {
+    test.describe.configure({ mode: "default" });
     let context: BrowserContext;
     let afterDown = false;
     let afterUp = true;
@@ -686,6 +677,7 @@ test.describe("viewer page", () => {
   });
 
   test.describe("clicks that send nothing, and reset", () => {
+    test.describe.configure({ mode: "default" });
     let context: BrowserContext;
     let board: { x: number; y: number } | null = null;
     let matHit: string | null = null;
@@ -733,6 +725,7 @@ test.describe("viewer page", () => {
   });
 
   test.describe("top view", () => {
+    test.describe.configure({ mode: "default" });
     let context: BrowserContext;
     let page: Page;
     let afterUp = { target: [] as number[], zoom: 0 };
@@ -826,6 +819,7 @@ test.describe("viewer page", () => {
   });
 
   test.describe("hover reasons", () => {
+    test.describe.configure({ mode: "default" });
     let context: BrowserContext;
     let page: Page;
 
@@ -963,4 +957,21 @@ test.describe("viewer page", () => {
       await context.close();
     }
   });
+
+  if (rendersDir() !== undefined) {
+    test("saves the opened and pressed renders", async ({ browser, host }) => {
+      const { context, page, rest } = await open(browser, host.base);
+      try {
+        await shot(page, "opened");
+        await holdButton(page, rest);
+        await page.waitForTimeout(300);
+        await shot(page, "pressed");
+        await lookAt(page, "@nano.led_pwr", "body", 30);
+        await page.waitForTimeout(300);
+        await shot(page, "pressed-nano-leds");
+      } finally {
+        await context.close();
+      }
+    });
+  }
 });

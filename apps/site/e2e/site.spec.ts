@@ -279,7 +279,68 @@ function searchNames(query: string): string[] {
   return orbeJson(process.env.ORBE ?? "", ["search", ...query.split(" ")]).data?.parts?.map((part) => part.id) ?? [];
 }
 
+const PART_IDS = readdirSync(join(REPO, "parts"))
+  .filter((id) => existsSync(join(REPO, "parts", id, "part.jsonc")))
+  .sort();
+const PART_THIRD = Math.ceil(PART_IDS.length / 3);
+
+// Called from three places in this file. A shard keeps a whole group, and the calls sit
+// where each third of a 3-way shard begins, so each job opens about a third of the parts.
+function partPages(ids: readonly string[]) {
+  const last = ids[ids.length - 1];
+  test(`part pages ${ids[0]} through ${last} draw with no viewer error`, async ({ browser, host }) => {
+    test.setTimeout(300_000);
+    expect(ids.length).toBeGreaterThan(0);
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const errors = collectLogs(page, "errors");
+    for (const id of ids) {
+      errors.length = 0;
+      const response = await page.goto(`${host.base}/embedded/parts/${id}/`);
+      expect(response?.ok(), id).toBe(true);
+      const ref = `@${id.replaceAll("-", "_")}`;
+      await page.waitForFunction(
+        (name) => {
+          if (document.querySelector("[data-testid='no-webgl']") !== null) return true;
+          if (document.querySelector("[data-testid='errors']") !== null) return true;
+          return window.orbeViewer?.get().scene.getObjectByName(name) !== undefined;
+        },
+        ref,
+        { timeout: 60_000 },
+      );
+      expect(await page.locator('[data-testid="errors"]').count(), id).toBe(0);
+      expect(errors, `${id} ${JSON.stringify(errors)}`).toEqual([]);
+      if (id === "resistor-axial") {
+        await expect(page.getByTestId("shown-at")).toHaveText("Shown at 220 Ω.");
+        const sentence = await bodyText(page);
+        expect(sentence, id).toContain("above 0 Ω (required)");
+        await expect(page.getByRole("heading", { name: "Settings" }), id).toBeVisible();
+        expect(sentence, id).not.toContain("0 pΩ");
+        expect(sentence, id).not.toContain(", required");
+        const bands = await page.evaluate(() => {
+          const root = window.orbeViewer.get().scene.getObjectByName("@resistor_axial");
+          return ["band1-brown", "band2-black", "band3-orange", "band4-gold"].map((node) => {
+            const mesh = root?.getObjectByName(node);
+            const material = mesh?.material;
+            return material && "color" in material ? `#${material.color.getHexString()}` : "";
+          });
+        });
+        expect(bands, id).toEqual(["#d12b2b", "#d12b2b", "#6b3a1f", "#d4af37"]);
+      }
+      if (id === "led-5mm") await expect(page.getByTestId("shown-at")).toHaveCount(0);
+      if (id === "trimmer-3362p") await expect(page.getByTestId("shown-at")).toHaveCount(0);
+    }
+    await context.close();
+  });
+}
+
+// Parallel, so CI can shard groups. A describe that shares one page stays in default mode,
+// and that whole describe stays on one shard.
+test.describe.configure({ mode: "parallel" });
+partPages(PART_IDS.slice(0, PART_THIRD));
+
 test.describe("landing", () => {
+  test.describe.configure({ mode: "default" });
   let context: BrowserContext;
   let page: Page;
   let errors: string[] = [];
@@ -365,6 +426,7 @@ test.describe("landing", () => {
 });
 
 test.describe("parts search", () => {
+  test.describe.configure({ mode: "default" });
   let context: BrowserContext;
   let page: Page;
   let errors: string[] = [];
@@ -419,6 +481,7 @@ test.describe("parts search", () => {
 });
 
 test.describe("led-5mm", () => {
+  test.describe.configure({ mode: "default" });
   let context: BrowserContext;
   let page: Page;
   let errors: string[] = [];
@@ -516,7 +579,10 @@ test.describe("led-5mm", () => {
   });
 });
 
+partPages(PART_IDS.slice(PART_THIRD, PART_THIRD * 2));
+
 test.describe("breadboard-830", () => {
+  test.describe.configure({ mode: "default" });
   let context: BrowserContext;
   let page: Page;
   let errors: string[] = [];
@@ -547,6 +613,7 @@ test.describe("breadboard-830", () => {
 });
 
 test.describe("nano-board", () => {
+  test.describe.configure({ mode: "default" });
   let context: BrowserContext;
   let page: Page;
   let errors: string[] = [];
@@ -594,6 +661,7 @@ test.describe("nano-board", () => {
 });
 
 test.describe("uno-board", () => {
+  test.describe.configure({ mode: "default" });
   let context: BrowserContext;
   let page: Page;
 
@@ -627,6 +695,7 @@ test.describe("uno-board", () => {
 
 for (const block of repoBlocks()) {
   test.describe(`${block.id} on its page`, () => {
+    test.describe.configure({ mode: "default" });
     let context: BrowserContext;
     let page: Page;
     let errors: string[] = [];
@@ -687,6 +756,7 @@ for (const block of repoBlocks()) {
 }
 
 test.describe("nano-button-led", () => {
+  test.describe.configure({ mode: "default" });
   let context: BrowserContext;
   let page: Page;
   let errors: string[] = [];
@@ -813,6 +883,8 @@ test.describe("nano-button-led", () => {
     expect(errors, JSON.stringify(errors)).toEqual([]);
   });
 });
+
+partPages(PART_IDS.slice(PART_THIRD * 2));
 
 const README = {
   "/embedded/blocks/nano-button-led/": "A 10k pull-down holds D2 low",
