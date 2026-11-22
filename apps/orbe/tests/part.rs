@@ -338,7 +338,12 @@ fn search_lists_switches_and_boards_before_summary_matches() {
         .iter()
         .position(|name| *name == "barrel-jack-dc21")
         .unwrap();
-    for name in ["nmos-irf520-to220", "npn-2n2222-to92", "tactile-switch-6mm"] {
+    for name in [
+        "nmos-irf520-to220",
+        "npn-2n2222-to92",
+        "pmos-irf9540n-to220",
+        "tactile-switch-6mm",
+    ] {
         let at = names.iter().position(|found| *found == name).unwrap();
         assert!(
             at < rest,
