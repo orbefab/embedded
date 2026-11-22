@@ -34,6 +34,10 @@ const LIMIT_HEADROOM: f64 = 100.0;
 /// Reverse current stays under a nanoamp at a tenth of a volt of back-feed.
 const BLOCK_OHM: f64 = 1e9;
 const BLOCK_A: f64 = 1e-12;
+/// Volt. Pin `in` warns `rating.voltage` below this far under `gnd`. The same margin a chip
+/// pin uses below its ground. LP2985 SLVS522 states -0.3 V. The AMS1117 sheet this repo cites
+/// states 15 V and no negative floor, and the SGM2212 sheet states 22 V and no negative floor.
+pub(crate) const INPUT_FLOOR_V: f64 = 0.3;
 
 pub(crate) struct Law {
     vo: f64,
@@ -102,15 +106,19 @@ pub(crate) fn evaluate(reg: &LinearRegulator, i: f64, vi: f64) -> Law {
     let dvo_di = -ro * ds_da + db_di * ds_db - rlim * sigmoid(over) - BLOCK_OHM * sigmoid(back);
     let dvo_dvi = k * ds_da + db_dvi * ds_db;
 
-    let (h, hp) = step(vi / vdo);
-    let ig = (iq + ratio * i) * h;
+    let x = vi / vdo;
+    let (h, hp) = step(x);
+    // `h(-x)` is 0 for `vi` at least 0, so this term and its derivatives are exactly 0 there.
+    // Below 0 it loads the input: `-Iq` at `-Vdo`, and `Iq * vi / Vdo` further below.
+    let (hoff, hpoff) = step(-x);
+    let ig = (iq + ratio * i) * h + iq * x * hoff;
     Law {
         vo,
         dvo_di,
         dvo_dvi,
         ig,
         dig_di: ratio * h,
-        dig_dvi: (iq + ratio * i) * hp / vdo,
+        dig_dvi: (iq + ratio * i) * hp / vdo + iq / vdo * hoff - iq * vi / (vdo * vdo) * hpoff,
     }
 }
 
@@ -718,6 +726,103 @@ mod tests {
         let vout = op_value(&hot_json, "#net.vout");
         assert!((p - (vin * iin + vout * iout)).abs() <= 1e-12, "{p}");
     }
+
+    #[test]
+    fn ground_current_loads_a_reversed_input_and_stays_put_while_the_input_is_up() {
+        let reg = device(0.0);
+        let iq = reg.quiescent_current.si.get();
+        let vdo = reg.dropout_voltage.si.get();
+        let on = evaluate(&reg, 0.0, 5.0);
+        assert!((on.ig - iq).abs() < 1e-15, "{}", on.ig);
+        let loaded = evaluate(&reg, 0.2, 5.0);
+        assert!((loaded.ig - iq).abs() < 1e-15, "{}", loaded.ig);
+        let at_zero = evaluate(&reg, 0.01, 0.0);
+        assert_eq!(at_zero.ig, 0.0);
+        assert_eq!(at_zero.dig_dvi, 0.0);
+        let reverse = evaluate(&reg, 0.0, -vdo);
+        assert!((reverse.ig + iq).abs() < 1e-15, "{}", reverse.ig);
+        assert!(
+            (reverse.dig_dvi - iq / vdo).abs() < 1e-12,
+            "{}",
+            reverse.dig_dvi
+        );
+        let deep = evaluate(&reg, 0.0, -2.0 * vdo);
+        assert!((deep.ig + 2.0 * iq).abs() < 1e-15, "{}", deep.ig);
+    }
+
+    fn diode(anode: &str, cathode: &str) -> String {
+        format!(
+            r#"{{
+              "name": "d1",
+              "kind": "diode",
+              "pins": {{ "anode": "{anode}", "cathode": "{cathode}" }},
+              "saturation_current": {{ "value": 9.4334e-08, "unit": "A" }},
+              "emission_coefficient": {{ "value": 2.0844, "unit": "1" }},
+              "series_resistance": {{ "value": 0.0317, "unit": "ohm" }},
+              "ratings": {{ "current": {{ "value": 1.0, "unit": "A" }}, "power": null }}
+            }}"#
+        )
+    }
+
+    fn diagnostics_of(json: &str) -> String {
+        let results = crate::simulate(&netlist::parse(json.as_bytes()).unwrap());
+        results
+            .diagnostics()
+            .iter()
+            .map(|d| serde_json::to_string(d).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_reversed_input_warns_and_a_series_diode_holds_it_near_zero() {
+        let reversed = netlist(
+            r#""gnd", "vin", "vout""#,
+            &[
+                &source("v1", "vin", -9.0),
+                &regulator("vin", "vout", "gnd", 0.0),
+            ],
+        );
+        let text = diagnostics_of(&reversed);
+        assert!(text.contains("rating.voltage"), "{text}");
+        assert!(text.contains("#u1.pin.in"), "{text}");
+        assert!(text.contains("-0.3"), "{text}");
+        assert!((op_value(&reversed, "#net.vin") + 9.0).abs() < 1e-9);
+
+        let inside = netlist(
+            r#""gnd", "vin", "vout""#,
+            &[
+                &source("v1", "vin", -0.2),
+                &regulator("vin", "vout", "gnd", 0.0),
+            ],
+        );
+        assert!(
+            !diagnostics_of(&inside).contains("rating.voltage"),
+            "{}",
+            diagnostics_of(&inside)
+        );
+
+        let protected = netlist(
+            r#""gnd", "sleeve", "vin", "vout""#,
+            &[
+                r#"{
+                  "name": "v1",
+                  "kind": "voltage_source",
+                  "pins": { "p": "gnd", "n": "sleeve" },
+                  "voltage": { "value": 9.0, "unit": "V" }
+                }"#,
+                &diode("sleeve", "vin"),
+                &regulator("vin", "vout", "gnd", 0.0),
+            ],
+        );
+        let vin = op_value(&protected, "#net.vin");
+        assert!(vin.abs() < 0.05, "{vin}");
+        assert!(
+            !diagnostics_of(&protected).contains("rating.voltage"),
+            "{}",
+            diagnostics_of(&protected)
+        );
+    }
 }
 
 /// A static linear regulator. The pass branch's voltage falls with its own current.
@@ -733,8 +838,10 @@ mod tests {
 /// that draws current with the input at the pin pulls the output below it.
 /// `i` is the current in the pass branch, from `in` to `out`. The ground current is
 /// `(quiescent_current + ground_current_ratio * i)` times a smooth step of
-/// `(V(in) - V(gnd)) / dropout_voltage`. The constants of that law are in the
-/// engine, not fields.
+/// `vi / dropout_voltage`, plus `quiescent_current * vi / dropout_voltage` times a
+/// smooth step of `-vi / dropout_voltage`. The second term is 0 while `vi` is at
+/// least 0, and it loads a reversed input. The constants of that law are in the
+/// engine, not fields. Pin `in` warns `rating.voltage` below -0.3 V over `gnd`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LinearRegulator {
     /// Nets of pins `in`, `out`, `gnd`.

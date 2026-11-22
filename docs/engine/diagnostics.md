@@ -726,3 +726,7 @@ An LM358 comparator on a 5 V supply, `input_headroom` 1.5 V, with `in_p` at 4 V 
 ```text
 #u1.pin.in_p reaches 4 V over the chip's ground, outside its 3.5 V ceiling
 ```
+
+A capacitor with `ratings.reverse_voltage` uses the same code on pin `a`. The floor is that rating below pin `b`, and there is no ceiling. The message calls pin `b` the chip's ground. A capacitor with no `ratings` object, or with `reverse_voltage` null, is not checked. A forward voltage is not checked. A voltage exactly on the floor is inside.
+
+A `linear_regulator` uses the same code on pin `in`. The floor is -0.3 V over pin `gnd`, and there is no ceiling. The message calls `gnd` the chip's ground. A voltage exactly on -0.3 V is inside. The model has no diode from `out` to `in`, so a reversed input stays at the voltage the circuit drives and the warning is what names it.

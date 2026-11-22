@@ -1,14 +1,33 @@
 {
-  "format": 1, "part": "capacitor-electrolytic-smd", "version": "0.2.0", "title": "Capacitor, SMD aluminum electrolytic, case D", "license": "MIT OR Apache-2.0",
-  "summary": "Panasonic EEE-1EA470WP, 47 µF 25 V, SMD aluminum electrolytic, case D. Lead 1 is positive. The dark mark on the can is the negative end, lead 2.",
+  "format": 1, "part": "capacitor-electrolytic-smd", "version": "0.2.1", "title": "Capacitor, SMD aluminum electrolytic, case D", "license": "MIT OR Apache-2.0",
+  "summary": "Panasonic EEE-1EA470WP, 47 µF 25 V, SMD aluminum electrolytic, case D. Lead 1 is positive. The dark mark on the can is the negative end, lead 2. A reverse voltage past 1 V warns.",
   "tags": ["capacitor", "electrolytic", "polarized", "smd"],
-  "docs": { "Panasonic EEE-1EA470WP": null },
+  "docs": {
+    "Panasonic EEE-1EA470WP": null,
+    "Panasonic aluminum electrolytic application guidelines": "https://industrial.panasonic.com/cdbs/www-data/pdf/RDE0000/RDE0000COL99.pdf",
+    "Nichicon, General Descriptions of Aluminum Electrolytic Capacitors": "https://www.nichicon.co.jp/english/products/pdf/aluminum.pdf",
+  },
   "real": { "generic": true, "maker": "Panasonic", "number": "EEE-1EA470WP", "datasheet": "Panasonic EEE-1EA470WP" },
   "pins": { "pos": [1], "neg": [2] },
   "params": {
     "capacitance": { "unit": "F", "required": true, "example": 4.7e-5, "min_exclusive": 0, "sets": "/capacitance" },
     "initial": { "unit": "V", "default": null, "sets": "/initial" },
   },
-  "model": { "kind": "capacitor", "pins": { "a": "pos", "b": "neg" } },
-  "not_simulated": [{ "what": "polarity", "why": "The engine's capacitor is not polarized, so a reverse voltage never warns." }],
+  "model": {
+    "kind": "capacitor",
+    "pins": { "a": "pos", "b": "neg" },
+    "ratings": {
+      "reverse_voltage": {
+        "value": 1,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "Nichicon, General Descriptions of Aluminum Electrolytic Capacitors",
+            "at": "Section 2-3-2 Reverse Voltage: a cathode foil withstands about 1 V from the natural oxide on its surface. Panasonic's aluminum electrolytic guidelines say not to apply a reverse voltage and state no numeric allowance, so this 1 V is that cathode-foil withstand.",
+            "basis": "absolute_max"
+          }
+        }
+      }
+    }
+  },
 }

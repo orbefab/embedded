@@ -274,6 +274,41 @@ impl Ratings {
                 });
             }
         }
+        // A polarized capacitor and a regulator input use the same window. `vcc` is unread
+        // when `above` is `None`. Pin `b`, and the regulator's `gnd`, are the window's ground.
+        for (_, part) in netlist.parts() {
+            let (pin_name, column, ground, below) = match &part.model {
+                Model::Capacitor(cap) => {
+                    let Some(limit) = &cap.reverse_voltage else {
+                        continue;
+                    };
+                    (
+                        "a",
+                        columns.net(cap.pins[0]),
+                        columns.net(cap.pins[1]),
+                        limit.si.get(),
+                    )
+                }
+                Model::LinearRegulator(reg) => (
+                    "in",
+                    columns.net(reg.pins[0]),
+                    columns.net(reg.pins[2]),
+                    crate::chip::regulator::INPUT_FLOOR_V,
+                ),
+                _ => continue,
+            };
+            windows.push(Window {
+                pin: Ref::Pin(part.name.clone(), Name::new(pin_name).expect("a pin name")),
+                column,
+                vcc: ground,
+                gnd: ground,
+                below: Some(below),
+                above: None,
+                worst: 0.0,
+                over: false,
+                excursion: None,
+            });
+        }
         Ratings {
             timing,
             watches,

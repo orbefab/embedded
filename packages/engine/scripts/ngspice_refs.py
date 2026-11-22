@@ -1119,7 +1119,10 @@ def regulator_lines(name, part, node):
         f"bx_{name}_v x_{name} {gnd} v = {law}",
         f"vx_{name} x_{name} {out} dc 0",
         f"fx_{name} {inn} {gnd} vx_{name} 1",
-        f"bx_{name}_g x_{name}_g {gnd} i = ({iq!r}+{ratio!r}*{current})*h({vi}/{vdo!r})",
+        (
+            f"bx_{name}_g x_{name}_g {gnd} i = ({iq!r}+{ratio!r}*{current})*h({vi}/{vdo!r})"
+            f"+{iq!r}*({vi})/{vdo!r}*h(-({vi})/{vdo!r})"
+        ),
         f"vx_{name}_g {inn} x_{name}_g dc 0",
     ]
 

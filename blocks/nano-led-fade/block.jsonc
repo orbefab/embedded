@@ -2,7 +2,7 @@
 {
   "format": 1,
   "block": "nano-led-fade",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "LED fade on a Nano",
   "summary": "An LED on D9 of an Arduino Nano fades up and down by PWM.",
   "board": "nano-board",

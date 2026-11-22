@@ -79,8 +79,14 @@ def vo(vi, i):
     return smin(a, b) - rlim * d * sp((i - ILIM) / d) + BLOCK_OHM * BLOCK_A * sp(-i / BLOCK_A)
 
 
+def ground_current(iq, ratio, vdo, vi, i):
+    """`ig` of the engine law. The second term is 0 for `vi` at least 0."""
+    x = vi / vdo
+    return (iq + ratio * i) * smooth(x) + iq * x * smooth(-x)
+
+
 def ig(vi, i):
-    return (IQ + GROUND_RATIO * i) * smooth(vi / VDO)
+    return ground_current(IQ, GROUND_RATIO, VDO, vi, i)
 
 
 def solve_current(vi, target):
@@ -264,7 +270,7 @@ def lp2985():
         return law_row(vout, k, ro, rdo, vdo, ilim, i, vi)[0]
 
     def amps_ground(vi, i):
-        return (iq + ratio * i) * smooth(vi / vdo)
+        return ground_current(iq, ratio, vdo, vi, i)
 
     def solve_current(vi, target):
         i = ilim

@@ -4,7 +4,9 @@ use serde::Deserialize;
 use crate::element::{Observed, OwnedCapacitor, OwnedInductor, StoreEnd, TWO_PIN, Update};
 use crate::mna::{Probe, Stamp, Unknowns};
 use crate::name::Quantity;
-use crate::netlist::json::{ParseCtx, PinMap, WireValue, resolve_pins, resolve_value};
+use crate::netlist::json::{
+    ParseCtx, PinMap, WireValue, resolve_pins, resolve_rating, resolve_value,
+};
 use crate::netlist::{Conduction, Kind, NetId, Value};
 use crate::newton::{History, Method, Side, Store};
 
@@ -175,6 +177,9 @@ pub struct Capacitor {
     /// Volt, any finite value. The operating point holds `V(a) - V(b)` here and solves the
     /// current through it. `None` is an explicit `"initial": null`, open at the operating point.
     pub initial: Option<Value>,
+    /// Volt, greater than 0. `V(a) - V(b)` below this warns `rating.voltage`. `None` is no
+    /// `ratings` object, or an explicit `"reverse_voltage": null`.
+    pub reverse_voltage: Option<Value>,
 }
 
 impl Capacitor {
@@ -189,6 +194,17 @@ pub(crate) struct WireCapacitor {
     capacitance: WireValue,
     #[serde(deserialize_with = "Option::deserialize")]
     initial: Option<WireValue>,
+    /// Absent on a capacitor written before reverse voltage was rated.
+    #[serde(default)]
+    ratings: Option<WireCapacitorRatings>,
+}
+
+/// The key is required, and `null` leaves the capacitor unrated.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireCapacitorRatings {
+    #[serde(deserialize_with = "Option::deserialize")]
+    reverse_voltage: Option<WireValue>,
 }
 
 pub(crate) fn resolve_capacitor(ctx: ParseCtx<'_>, wire: WireCapacitor) -> Option<Capacitor> {
@@ -203,6 +219,7 @@ pub(crate) fn resolve_capacitor(ctx: ParseCtx<'_>, wire: WireCapacitor) -> Optio
         pins,
         capacitance,
         initial,
+        ratings,
         ..
     } = wire;
 
@@ -212,11 +229,22 @@ pub(crate) fn resolve_capacitor(ctx: ParseCtx<'_>, wire: WireCapacitor) -> Optio
         None => Some(None),
         Some(initial) => resolve_value(part_ref, "initial", "V", false, initial, out).map(Some),
     };
-    match (pins, capacitance, initial) {
-        (Some(pins), Some(capacitance), Some(initial)) => Some(Capacitor {
+    let reverse_voltage = match ratings {
+        None => Some(None),
+        Some(ratings) => resolve_rating(
+            part_ref,
+            "ratings.reverse_voltage",
+            "V",
+            ratings.reverse_voltage,
+            out,
+        ),
+    };
+    match (pins, capacitance, initial, reverse_voltage) {
+        (Some(pins), Some(capacitance), Some(initial), Some(reverse_voltage)) => Some(Capacitor {
             pins,
             capacitance,
             initial,
+            reverse_voltage,
         }),
         _ => None,
     }
@@ -281,5 +309,57 @@ impl Kind for Capacitor {
     }
     fn conduction(&self) -> Conduction {
         Conduction::Other
+    }
+}
+
+#[cfg(test)]
+mod reverse_voltage {
+    fn circuit(volts: f64, ratings: &str) -> String {
+        format!(
+            r#"{{
+              "version": 1,
+              "seed": 0,
+              "analysis": {{ "op": {{}} }},
+              "ground": "gnd",
+              "nets": ["gnd", "n"],
+              "parts": [
+                {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "n", "n": "gnd" }},
+                  "voltage": {{ "value": {volts}, "unit": "V" }} }},
+                {{ "name": "c1", "kind": "capacitor", "pins": {{ "a": "n", "b": "gnd" }},
+                  "capacitance": {{ "value": 1e-5, "unit": "F" }},
+                  "initial": null{ratings} }}
+              ]
+            }}"#
+        )
+    }
+
+    fn warnings(json: &str) -> String {
+        let results = crate::simulate(&crate::netlist::parse(json.as_bytes()).unwrap());
+        results
+            .diagnostics()
+            .iter()
+            .map(|d| serde_json::to_string(d).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_reverse_voltage_past_the_rating_warns_and_the_edge_does_not() {
+        let rated = r#", "ratings": { "reverse_voltage": { "value": 1.0, "unit": "V" } }"#;
+        let past = warnings(&circuit(-1.1, rated));
+        assert!(past.contains("rating.voltage"), "{past}");
+        assert!(past.contains("#c1.pin.a"), "{past}");
+        assert!(past.contains("-1"), "{past}");
+        let edge = warnings(&circuit(-1.0, rated));
+        assert!(!edge.contains("rating.voltage"), "{edge}");
+        let forward = warnings(&circuit(9.0, rated));
+        assert!(!forward.contains("rating.voltage"), "{forward}");
+        let bare = warnings(&circuit(-9.0, ""));
+        assert!(!bare.contains("rating.voltage"), "{bare}");
+        let unrated = warnings(&circuit(
+            -9.0,
+            r#", "ratings": { "reverse_voltage": null }"#,
+        ));
+        assert!(!unrated.contains("rating.voltage"), "{unrated}");
     }
 }
