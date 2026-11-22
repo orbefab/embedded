@@ -31,7 +31,7 @@ A folder already at `parts/<id>/` for an id you named is `part_exists`. The comm
 
 ## The `buy` field
 
-`buy` is optional on a part. Leave it out when there is no link. An empty list is an error. Each entry has `seller`, `url` and `checked`. `checked` is the day the link was checked, as `YYYY-MM-DD`. `seller` is a name in `packages/scene/buy-sellers.jsonc`, and the URL's host is one of that seller's hosts. A new seller is a one-line addition to that file, reviewed for affiliate and tracking links. `url` is a lowercase `https://` URL with no userinfo, no whitespace, no query and no fragment. Userinfo is an `@` before the host. An entry has no price. A repeated entry is an error.
+`buy` is optional on a part. Leave it out when there is no link. An empty list is an error. Each entry has `seller`, `url` and `checked`. `checked` is the day the link was checked, as `YYYY-MM-DD`. A buy link is an https URL: lowercase `https://`, with no userinfo, no whitespace, no query and no fragment. Userinfo is an `@` before the host. An entry has no price. A repeated entry is an error.
 
 ## Errors
 

@@ -1,4 +1,4 @@
-//! Buy URLs the checker refuses, and one host the seller table allows.
+//! Buy URLs the checker refuses.
 
 mod common;
 
@@ -6,8 +6,6 @@ use std::fs;
 
 use orbe_scene::{Code, Diagnostic, Files};
 use serde_json::{Value, json};
-
-const SELLER_HINT: &str = "sellers are listed in `packages/scene/buy-sellers.jsonc`. a new seller is a one-line addition, reviewed for affiliate and tracking links";
 
 struct Rejected {
     seller: &'static str,
@@ -56,37 +54,9 @@ const REJECTED: &[Rejected] = &[
     },
     Rejected {
         seller: "DigiKey",
-        url: "https://.",
-        message: "`url` host is not this seller's",
-        hint: SELLER_HINT,
-        repeat: false,
-    },
-    Rejected {
-        seller: "DigiKey",
-        url: "https://d\u{0456}gikey.com/",
-        message: "`url` host is not this seller's",
-        hint: SELLER_HINT,
-        repeat: false,
-    },
-    Rejected {
-        seller: "DigiKey",
         url: "HTTPS://www.digikey.com/p",
         message: "`url` is not an https URL",
         hint: "lowercase https://",
-        repeat: false,
-    },
-    Rejected {
-        seller: "Amazon",
-        url: "https://amzn.to/3xYz",
-        message: "`seller` is not an allowed seller",
-        hint: SELLER_HINT,
-        repeat: false,
-    },
-    Rejected {
-        seller: "DigiKey",
-        url: "https://store.arduino.cc/allowed",
-        message: "`url` host is not this seller's",
-        hint: SELLER_HINT,
         repeat: false,
     },
     Rejected {
@@ -164,13 +134,4 @@ fn rejected_buy_urls_name_the_fault() {
             row.hint
         );
     }
-}
-
-#[test]
-fn an_allowed_host_passes() {
-    let found = read_buy(vec![
-        entry("DigiKey", "https://www.digikey.com/allowed"),
-        entry("Arduino", "https://store.arduino.cc/allowed"),
-    ]);
-    assert!(found.is_ok(), "{found:?}");
 }
