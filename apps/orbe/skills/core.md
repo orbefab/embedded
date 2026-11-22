@@ -149,7 +149,7 @@ Give the board an `at`. Then seat every part with leads using `on`: name one pin
 - `@led1`: a part. `get` prints its state, such as `lit`, `dim` or `off`, and its current `i`, voltage `v` and power `p`.
 - `@nano.D13`, `@led1.anode`: a pin. `get` prints its level, `high` or `low`, when a chip pin is on its net, and its voltage.
 - `@led1.i`: one quantity of a part. An unknown one is an error that lists what the part reports.
-- `@led1.color`: the colour an addressable LED, such as the sk68xxmini-hs, last latched, as `rgb(r,g,b)` from 0 to 255, and when. `get @led1` prints it as `color=`.
+- `@led1.color`: the colour an addressable LED last latched, as `rgb(r,g,b)` from 0 to 255, and when. `get @led1` prints it as `color=`.
 - `@nano.mcu.PB5`, `@nano.led_l`: a part inside a part, by its name in that part's file. On the Nano and the Uno the chip is `mcu`, and `led_l` is the L LED, which D13 drives.
 
 `press @btn1` and `release @btn1` close and open a switch. `orbe set light 50` changes a `world` quantity from then on. `orbe get light` reads the value in force, and `orbe get @world.light` reads the same.

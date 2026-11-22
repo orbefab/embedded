@@ -5,7 +5,7 @@ mod common;
 use std::fs;
 use std::path::PathBuf;
 
-use common::{LAMP, invalid, put, record, repo, sha256, third_party, written};
+use common::{LAMP, MANIFEST, invalid, put, record, repo, sha256, third_party, written};
 use orbe_registry::{Error, INDEX_SCHEMA, ITEM_SCHEMA, Item, LARGE, Why, build};
 use orbe_scene::{Code, Diagnostic};
 use serde_json::Value;
@@ -532,6 +532,64 @@ fn the_build_refuses_what_a_client_could_not_trust() {
         };
         assert!(message.contains(says), "{what}: {message}");
     }
+}
+
+/// `unlisted` hides a part without changing its record. A part file's `listed` field does not
+/// hide it, and an id that is not a part is an error that names it.
+#[test]
+fn unlisted_hides_a_part_and_the_part_file_does_not() {
+    let src = third_party();
+    let offered = build(src.path()).unwrap();
+    let offered_record = offered.output["lamp@1.2.0.json"].clone();
+
+    put(
+        src.path(),
+        "registry.jsonc",
+        r#"{ "format": 1, "name": "@acme", "unlisted": ["lamp"] }"#,
+    );
+    let hidden = build(src.path()).unwrap();
+    assert_eq!(hidden.output["lamp@1.2.0.json"], offered_record);
+    let index: Value = serde_json::from_slice(&hidden.output["index.json"]).unwrap();
+    let lamp = index["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "lamp")
+        .unwrap();
+    assert_eq!(lamp["listed"], serde_json::json!(false));
+
+    put(src.path(), "registry.jsonc", MANIFEST);
+    put(
+        src.path(),
+        "parts/lamp/part.jsonc",
+        &LAMP.replace(
+            "\"version\": \"1.2.0\"",
+            "\"version\": \"1.2.0\", \"listed\": false",
+        ),
+    );
+    let flagged = build(src.path()).unwrap();
+    let record: Value = serde_json::from_slice(&flagged.output["lamp@1.2.0.json"]).unwrap();
+    assert!(record.get("listed").is_none(), "{record}");
+    let index: Value = serde_json::from_slice(&flagged.output["index.json"]).unwrap();
+    let lamp = index["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "lamp")
+        .unwrap();
+    assert!(lamp.get("listed").is_none(), "{lamp}");
+
+    put(
+        src.path(),
+        "registry.jsonc",
+        r#"{ "format": 1, "name": "@acme", "unlisted": ["missing"] }"#,
+    );
+    let message = match build(src.path()) {
+        Err(Error::Invalid(message)) => message,
+        Err(other) => panic!("{other}"),
+        Ok(_) => panic!("the build accepted an id that is not a part"),
+    };
+    assert!(message.contains("names `missing`"), "{message}");
 }
 
 /// A required param with no example is refused at that param's key. The in-memory scene's

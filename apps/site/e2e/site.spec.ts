@@ -455,7 +455,7 @@ test.describe("parts search", () => {
     expect(await line("resistor-axial")).toContain("in 4 Blocks");
     expect(await line("lm358-dip8")).toContain("in 1 Block");
     expect(await line("nano-board")).toContain("in 3 Blocks");
-    expect(await line("led-0603")).toContain("on the Nano (CH340 clone)");
+    expect(await line("pin-header-1x15")).toContain("on the Nano (CH340 clone)");
     const unused = await page.locator("[data-part]").evaluateAll((nodes) => nodes.some((node) => (node.textContent ?? "").includes("in no Block yet") || (node.textContent ?? "").includes("Generic")));
     expect(unused).toBe(false);
   });
