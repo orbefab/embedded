@@ -300,9 +300,13 @@ jobs:
           wasm-bindgen: true
           cache-save: ${{ env.CACHE_SAVE }}
 
-      - name: Build the viewer page and the site
+      - name: Build the viewer page, the Block it plays, and the site
         run: |
           pnpm --filter @orbe/viewer-page build
+          scripts/wasm.sh .scratch/wasm/pkg
+          cargo build -p orbe --locked
+          rm -rf .scratch/wasm/registry
+          target/debug/orbe registry build . .scratch/wasm/registry >/dev/null
           scripts/site.sh
 
       - name: Firefox and WebKit
