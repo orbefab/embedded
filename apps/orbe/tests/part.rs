@@ -151,8 +151,10 @@ fn search_with_no_words_lists_the_parts_a_scene_can_place() {
     assert_eq!(code, 0, "{stderr}");
     assert!(stdout.contains("\nldr-5mm  "), "{stdout}");
     assert!(stdout.contains("\nresistor-axial  "), "{stdout}");
-    assert!(stdout.contains("atmega328p-tqfp32"), "{stdout}");
-    assert!(stdout.contains("led-0603"), "{stdout}");
+    assert!(stdout.contains("atmega328p-dip28"), "{stdout}");
+    assert!(stdout.contains("led-5mm"), "{stdout}");
+    assert!(!stdout.contains("atmega328p-tqfp32"), "{stdout}");
+    assert!(!stdout.contains("led-0603"), "{stdout}");
     let blocks = stdout
         .rfind("\nblocks\n")
         .unwrap_or_else(|| panic!("{stdout}"));
@@ -172,8 +174,10 @@ fn search_with_no_words_lists_the_parts_a_scene_can_place() {
         .map(|item| item["id"].as_str().unwrap())
         .collect();
     assert!(ids.contains(&"ldr-5mm") && ids.contains(&"resistor-axial"));
-    assert!(ids.contains(&"atmega328p-tqfp32"));
-    assert!(ids.contains(&"led-0603"));
+    assert!(ids.contains(&"atmega328p-dip28"));
+    assert!(ids.contains(&"led-5mm"));
+    assert!(!ids.contains(&"atmega328p-tqfp32"));
+    assert!(!ids.contains(&"led-0603"));
     assert!(envelope["data"].get("parts").is_none(), "{stdout}");
 }
 
@@ -242,7 +246,10 @@ fn search_prints_title_matches_before_the_rest() {
         .filter(|line| !line.is_empty())
         .map(|line| line.split_whitespace().next().unwrap())
         .collect();
-    assert_eq!(names[0], "led-0603");
+    assert_eq!(names[0], "led-3mm");
+    assert!(!names.contains(&"led-0603"), "{stdout}");
+    assert!(!names.contains(&"led-0805"), "{stdout}");
+    assert!(!names.contains(&"sk68xxmini-hs"), "{stdout}");
     let led = names.iter().position(|name| *name == "led-5mm").unwrap();
     let nano = names.iter().position(|name| *name == "nano-board").unwrap();
     assert!(led < nano);
@@ -324,21 +331,18 @@ fn search_lists_switches_and_boards_before_summary_matches() {
     let (code, stdout, stderr) = orbe(&["search", "switch"]);
     assert_eq!(code, 0, "{stderr}");
     let names = names_of(&stdout);
-    let diode = names
+    assert!(!names.contains(&"tactile-switch-smd"), "{stdout}");
+    assert!(!names.contains(&"tactile-switch-ts42"), "{stdout}");
+    assert!(!names.contains(&"diode-cd1206"), "{stdout}");
+    let rest = names
         .iter()
-        .position(|name| *name == "diode-cd1206")
+        .position(|name| *name == "barrel-jack-dc21")
         .unwrap();
-    for name in [
-        "nmos-irf520-to220",
-        "npn-2n2222-to92",
-        "tactile-switch-6mm",
-        "tactile-switch-smd",
-        "tactile-switch-ts42",
-    ] {
+    for name in ["nmos-irf520-to220", "npn-2n2222-to92", "tactile-switch-6mm"] {
         let at = names.iter().position(|found| *found == name).unwrap();
         assert!(
-            at < diode,
-            "{name} at {at}, diode-cd1206 at {diode}\n{stdout}"
+            at < rest,
+            "{name} at {at}, barrel-jack-dc21 at {rest}\n{stdout}"
         );
     }
 

@@ -7,7 +7,7 @@ mod installed;
 mod item;
 pub mod pattern;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::io;
@@ -215,7 +215,7 @@ impl fmt::Display for Report {
     }
 }
 
-/// `registry.jsonc`: which registry the source builds.
+/// `registry.jsonc`: which registry the source builds, and which parts search leaves out.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Manifest {
@@ -224,6 +224,9 @@ struct Manifest {
     name: String,
     #[serde(default)]
     homepage: Option<String>,
+    /// Part ids search and the parts list leave out. Absent offers every part.
+    #[serde(default)]
+    unlisted: Vec<String>,
 }
 
 fn manifest(src: &Path) -> Result<Manifest, Error> {
@@ -259,6 +262,20 @@ fn manifest(src: &Path) -> Result<Manifest, Error> {
     Ok(manifest)
 }
 
+/// The part ids in `manifest.unlisted`. An id that is not a part in `parts` is an error that names it.
+fn unlisted(
+    manifest: &Manifest,
+    parts: &BTreeMap<String, Folder>,
+) -> Result<BTreeSet<String>, Error> {
+    let hidden: BTreeSet<String> = manifest.unlisted.iter().cloned().collect();
+    if let Some(id) = hidden.iter().find(|id| !parts.contains_key(id.as_str())) {
+        return Err(Error::Invalid(format!(
+            "{MANIFEST} names `{id}` in unlisted, and no part has that id"
+        )));
+    }
+    Ok(hidden)
+}
+
 /// Reads `src`, which holds `registry.jsonc` and `parts/<id>/` and `blocks/<id>/` folders, into
 /// a registry. Only folders there are items. Every published file in an item's folder is one of
 /// its files. Build output is left out, and so are `model.py` and `asset.json`. The error is a
@@ -287,6 +304,7 @@ pub fn build(src: &Path) -> Result<Registry, Error> {
             "`{id}` is both a part and a Block, and one name names one item"
         )));
     }
+    let hidden = unlisted(&manifest, &parts)?;
     // The reader `orbe check` starts with. A file it refuses is not also compiled.
     let refused = reader_findings(&parts, &blocks);
     if !refused.is_empty() {
@@ -317,10 +335,6 @@ pub fn build(src: &Path) -> Result<Registry, Error> {
                 .count(),
         },
     };
-    let offered: BTreeMap<String, bool> = cards
-        .iter()
-        .map(|card| (card.name.clone(), card.listed))
-        .collect();
     let mut items: Vec<Item> = cards.into_iter().map(Item::from).collect();
     items.extend(block_cards.into_iter().map(Item::from));
     items.sort_by(|a, b| a.head().name.cmp(&b.head().name));
@@ -331,7 +345,7 @@ pub fn build(src: &Path) -> Result<Registry, Error> {
     let mut notices = Vec::new();
     for item in &items {
         let record = json(item);
-        let show = offered.get(&item.head().name).copied().unwrap_or(true);
+        let show = !hidden.contains(&item.head().name);
         rows.push(item.row(&record, show));
         output.insert(format!("{}.json", item.address()), record);
         let name = &item.head().name;
