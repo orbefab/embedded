@@ -24,7 +24,7 @@ const embedPages = readdirSync(resolve(import.meta.dirname, "../../blocks"))
   .filter((name) => existsSync(resolve(import.meta.dirname, "../../blocks", name, "block.jsonc")))
   .map((name) => ({ path: `/embedded/blocks/${name}/embed/` }));
 
-/** A part with `"listed": false` is left out of the parts list, so the crawl never finds its page
+/** A part whose index row has `"listed": false` is left out of the parts list, so the crawl never finds its page
  * unless a board page links it. List each one. */
 const index = resolve(import.meta.dirname, "../../.scratch/site/registry/index.json");
 const unlistedPartPages = existsSync(index)
