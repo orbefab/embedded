@@ -1,14 +1,21 @@
-// The red fit, the ratings and their sources are the engine's WP7113ID values, from
-// packages/engine/tests/circuits/led-5v/netlist.json.
+// Each color is a Kingbright WP7113, and its forward fit is that color's datasheet.
+// Red is the engine's WP7113ID, from packages/engine/tests/circuits/led-5v/netlist.json.
+// The model's ratings are the red one's. Yellow, green, blue and white set their own.
 {
   "format": 1,
   "part": "led-5mm",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "title": "5 mm LED",
-  "summary": "Round 5 mm through-hole LED, two leads on 2.54 mm. The longer lead is the anode. Pick its color. The page's glow is the mean current since the last frame, so a PWM-dimmed LED glows at its average.",
+  "summary": "Round 5 mm through-hole LED, two leads on 2.54 mm. The longer lead is the anode. Pick its color: red, yellow, green, blue or white. Red, yellow and green are diffused; blue and white are water clear. Red, yellow, blue and white warn above 30 mA, green above 25 mA. Red and yellow warn above 75 mW, green above 62.5 mW, and blue and white above 120 mW. The page's glow is the mean current since the last frame, so a PWM-dimmed LED glows at its average.",
   "tags": ["led", "light", "indicator", "through-hole"],
   "license": "MIT OR Apache-2.0",
-  "docs": { "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113ID.pdf" },
+  "docs": {
+    "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113ID.pdf",
+    "Kingbright WP7113YD, Spec No DSAF2448, Rev V.11B": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113YD.pdf",
+    "Kingbright WP7113GD, Spec No DSAE9335, Rev V.12B": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113GD.pdf",
+    "Kingbright WP7113QBC/D, Spec No DSAG3481, Rev V.18B": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113QBC-D.pdf",
+    "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113QWC-D.pdf",
+  },
   "real": { "maker": "Kingbright", "number": "WP7113", "datasheet": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A" },
   "buy": [
     { "seller": "DigiKey", "url": "https://www.digikey.com/en/products/detail/kingbright/WP7113ID/1747663", "checked": "2026-11-08" },
@@ -28,6 +35,50 @@
             "/series_resistance": { "value": 2.115, "unit": "ohm", "source": { "datasheet": { "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A", "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.70 V, 2 mA), (1.90 V, 10 mA), (2.00 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
           },
         },
+        "yellow": {
+          "real": { "number": "WP7113YD", "datasheet": "Kingbright WP7113YD, Spec No DSAF2448, Rev V.11B" },
+          "tint": "#f2c12e",
+          "sets": {
+            "/saturation_current": { "value": 1.779e-33, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113YD, Spec No DSAF2448, Rev V.11B", "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; least squares of the stroke centers (1.83 V, 2 mA), (1.86 V, 4 mA), (1.87 V, 5 mA), (1.92 V, 8 mA), (1.95 V, 10 mA), (1.98 V, 12 mA), (2.02 V, 15 mA), (2.07 V, 18 mA) and (2.10 V, 20 mA) at kT/q for 298.15 K. The trace is nearly straight, so no exact three-point solution exists", "basis": "typical" } } },
+            "/emission_coefficient": { "value": 1.001, "unit": "1", "source": { "datasheet": { "doc": "Kingbright WP7113YD, Spec No DSAF2448, Rev V.11B", "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; least squares of the stroke centers (1.83 V, 2 mA), (1.86 V, 4 mA), (1.87 V, 5 mA), (1.92 V, 8 mA), (1.95 V, 10 mA), (1.98 V, 12 mA), (2.02 V, 15 mA), (2.07 V, 18 mA) and (2.10 V, 20 mA) at kT/q for 298.15 K. The trace is nearly straight, so no exact three-point solution exists", "basis": "typical" } } },
+            "/series_resistance": { "value": 12.70, "unit": "ohm", "source": { "datasheet": { "doc": "Kingbright WP7113YD, Spec No DSAF2448, Rev V.11B", "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; least squares of the stroke centers (1.83 V, 2 mA), (1.86 V, 4 mA), (1.87 V, 5 mA), (1.92 V, 8 mA), (1.95 V, 10 mA), (1.98 V, 12 mA), (2.02 V, 15 mA), (2.07 V, 18 mA) and (2.10 V, 20 mA) at kT/q for 298.15 K. The trace is nearly straight, so no exact three-point solution exists", "basis": "typical" } } },
+            "/ratings/current": { "value": 0.03, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113YD, Spec No DSAF2448, Rev V.11B", "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current", "basis": "absolute_max" } } },
+            "/ratings/power": { "value": 0.075, "unit": "W", "source": { "datasheet": { "doc": "Kingbright WP7113YD, Spec No DSAF2448, Rev V.11B", "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation", "basis": "absolute_max" } } },
+          },
+        },
+        "green": {
+          "real": { "number": "WP7113GD", "datasheet": "Kingbright WP7113GD, Spec No DSAE9335, Rev V.12B" },
+          "tint": "#3fae49",
+          "sets": {
+            "/saturation_current": { "value": 6.776e-64, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113GD, Spec No DSAE9335, Rev V.12B", "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.88 V, 2 mA), (2.03 V, 10 mA), (2.20 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+            "/emission_coefficient": { "value": 0.5165, "unit": "1", "source": { "datasheet": { "doc": "Kingbright WP7113GD, Spec No DSAE9335, Rev V.12B", "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.88 V, 2 mA), (2.03 V, 10 mA), (2.20 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+            "/series_resistance": { "value": 16.08, "unit": "ohm", "source": { "datasheet": { "doc": "Kingbright WP7113GD, Spec No DSAE9335, Rev V.12B", "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.88 V, 2 mA), (2.03 V, 10 mA), (2.20 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+            "/ratings/current": { "value": 0.025, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113GD, Spec No DSAE9335, Rev V.12B", "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current", "basis": "absolute_max" } } },
+            "/ratings/power": { "value": 0.0625, "unit": "W", "source": { "datasheet": { "doc": "Kingbright WP7113GD, Spec No DSAE9335, Rev V.12B", "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation", "basis": "absolute_max" } } },
+          },
+        },
+        "blue": {
+          "real": { "number": "WP7113QBC/D", "datasheet": "Kingbright WP7113QBC/D, Spec No DSAG3481, Rev V.18B" },
+          "tint": "#2a62e6",
+          "sets": {
+            "/saturation_current": { "value": 2.371e-15, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113QBC/D, Spec No DSAG3481, Rev V.18B", "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (2.65 V, 2 mA), (2.99 V, 10 mA), (3.29 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+            "/emission_coefficient": { "value": 3.690, "unit": "1", "source": { "datasheet": { "doc": "Kingbright WP7113QBC/D, Spec No DSAG3481, Rev V.18B", "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (2.65 V, 2 mA), (2.99 V, 10 mA), (3.29 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+            "/series_resistance": { "value": 23.43, "unit": "ohm", "source": { "datasheet": { "doc": "Kingbright WP7113QBC/D, Spec No DSAG3481, Rev V.18B", "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (2.65 V, 2 mA), (2.99 V, 10 mA), (3.29 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+            "/ratings/current": { "value": 0.03, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113QBC/D, Spec No DSAG3481, Rev V.18B", "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current", "basis": "absolute_max" } } },
+            "/ratings/power": { "value": 0.12, "unit": "W", "source": { "datasheet": { "doc": "Kingbright WP7113QBC/D, Spec No DSAG3481, Rev V.18B", "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation", "basis": "absolute_max" } } },
+          },
+        },
+        "white": {
+          "real": { "number": "WP7113QWC/D", "datasheet": "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B" },
+          "tint": "#f4f6f8",
+          "sets": {
+            "/saturation_current": { "value": 1.504e-13, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B", "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (2.65 V, 2 mA), (3.00 V, 10 mA), (3.29 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+            "/emission_coefficient": { "value": 4.354, "unit": "1", "source": { "datasheet": { "doc": "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B", "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (2.65 V, 2 mA), (3.00 V, 10 mA), (3.29 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+            "/series_resistance": { "value": 21.25, "unit": "ohm", "source": { "datasheet": { "doc": "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B", "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (2.65 V, 2 mA), (3.00 V, 10 mA), (3.29 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+            "/ratings/current": { "value": 0.03, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B", "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current", "basis": "absolute_max" } } },
+            "/ratings/power": { "value": 0.12, "unit": "W", "source": { "datasheet": { "doc": "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B", "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation", "basis": "absolute_max" } } },
+          },
+        },
       },
     },
   },
@@ -39,17 +90,17 @@
     },
   },
   "readings": {
-    "lit": { "of": "i", "above": { "value": 0.002, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A", "at": "Fig. Forward Current vs. Forward Voltage, the lowest fitted point, 2 mA. Fig. Luminous Intensity vs. Forward Current is a straight line from 0 to 20 mA normalized at 10 mA, so 2 mA is 0.2 of that intensity.", "basis": "typical" } } } },
-    "dim": { "of": "i", "above": { "value": 0.0001, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A", "at": "1 percent of the 10 mA at which Iv is rated. Fig. Luminous Intensity vs. Forward Current is a straight line from 0 to 20 mA normalized at 10 mA, so 100 uA is 0.01 of that intensity. Reverse current is 10 uA max at VR = 5 V, so the floor is ten times that leakage.", "basis": "typical" } } } },
-    "brightness": { "of": "i", "full": { "value": 0.01, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A", "at": "Electrical / Optical Characteristics, Iv rated at IF = 10 mA", "basis": "nominal" } } } },
+    "lit": { "of": "i", "above": { "value": 0.002, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A", "at": "The lowest point of each color's forward fit, 2 mA. Fig. Luminous Intensity vs. Forward Current is a straight line from 0 mA, normalized at 10 mA on the red, yellow and green sheets and at 20 mA on the blue and white sheets.", "basis": "typical" } } } },
+    "dim": { "of": "i", "above": { "value": 0.0001, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A", "at": "100 uA. Reverse current is 10 uA max at VR = 5 V on red, yellow and green, so the floor is ten times that leakage, and 50 uA max on blue and white, so the floor is twice that leakage. Fig. Luminous Intensity vs. Forward Current is a straight line from 0 mA.", "basis": "typical" } } } },
+    "brightness": { "of": "i", "full": { "value": 0.01, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A", "at": "Electrical / Optical Characteristics. Red, yellow and green rate Iv at IF = 10 mA. Blue and white rate Iv at IF = 20 mA; the drawing still scales every color by 10 mA.", "basis": "nominal" } } } },
   },
   "view": {
     "glow": [{ "node": "body", "by": "brightness" }],
     "tint": [{ "node": "body", "by": "color" }],
   },
   "not_simulated": [
-    { "what": "light", "why": "The engine reports current, not luminous intensity. The drawing scales current by 10 mA, so the glow is 1 at 10 mA and blooms above that. The forward curve is fitted from 2 mA to 20 mA through (1.70 V, 2 mA), (1.90 V, 10 mA) and (2.00 V, 20 mA). Below 2 mA and above 20 mA the current is that curve extended. A threshold at 1 mA would sit outside the fit. Luminous intensity versus forward current is drawn as a straight line from 0 mA, so the extended current still glows in proportion." },
-    { "what": "temperature", "why": "The fit is at 25 C and the engine has no temperature." },
+    { "what": "light", "why": "The engine reports current, not luminous intensity. The drawing scales every color by 10 mA, so the glow is 1 at 10 mA and blooms above that. Blue and white rate luminous intensity at 20 mA, and that difference is not modeled. Each color's forward curve is fitted from 2 mA to 20 mA as its source names. Below 2 mA and above 20 mA the current is that curve extended. A threshold at 1 mA would sit outside the fit. Luminous intensity versus forward current is drawn as a straight line from 0 mA on each datasheet, so the extended current still glows in proportion." },
+    { "what": "temperature", "why": "The fits are at 25 C and the engine has no temperature." },
     { "what": "reverse breakdown", "why": "The engine's LED has no breakdown voltage." },
   ],
 }
