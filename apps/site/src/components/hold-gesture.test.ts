@@ -35,9 +35,9 @@ describe("hold gesture", () => {
     const hold = holdGesture(target);
     hold.pointerDown(4, 0);
     hold.pointerEnd(4);
-    vi.advanceTimersByTime(1000);
     hold.click();
     expect(events).toEqual(["press", "release"]);
+    vi.advanceTimersByTime(0);
     hold.click();
     expect(events).toEqual(["press", "release", "press"]);
     vi.advanceTimersByTime(300);
@@ -93,17 +93,20 @@ describe("hold gesture", () => {
     expect(events).toEqual(["press", "release"]);
   });
 
-  it("ignores the click after a pointer leaves", () => {
+  it("ignores the click after a pointer leaves, and a later click presses", () => {
     vi.useFakeTimers();
     const { target, events } = recording();
     const hold = holdGesture(target);
     hold.pointerDown(1, 0);
     hold.pointerLeave(1);
     expect(events).toEqual(["press", "release"]);
-    vi.advanceTimersByTime(1000);
     hold.pointerEnd(1);
     hold.click();
     expect(events).toEqual(["press", "release"]);
+    vi.advanceTimersByTime(0);
+    hold.click();
+    vi.advanceTimersByTime(300);
+    expect(events).toEqual(["press", "release", "press", "release"]);
   });
 
   it("a blur after the pointer has left lets the next click press", () => {

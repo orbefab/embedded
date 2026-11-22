@@ -20,17 +20,18 @@ export interface HoldGesture {
 const CLICK_MS = 300;
 
 /** Holds the circuit button while Space, Enter or a pointer is down, and releases it when that
- * gesture ends or {@link HoldGesture.drop} runs. The click that follows a pointer or a key is
- * ignored, so the browser's extra click does not press twice. A click with no pointer or key
- * before it, such as from a screen reader, presses for {@link CLICK_MS}. A blur while a pointer
- * is still down keeps that click ignored. A blur while only a key is down does not. */
+ * gesture ends or {@link HoldGesture.drop} runs. The click the browser fires for that pointer
+ * or key is ignored, so it does not press twice. A click after that, or a click with no pointer
+ * or key before it, presses for {@link CLICK_MS}. A blur while a pointer is still down keeps
+ * the click that follows ignored. A blur while only a key is down does not. */
 export function holdGesture(target: HoldTarget): HoldGesture {
   let down = 0;
   const keys = new Set<string>();
   const pointers = new Set<number>();
-  /** A pointer or a key already pressed, so the click that follows is not another press. */
+  /** The click that belongs to the pointer or key that just ended. */
   let oweClick = false;
   let clickTimer: ReturnType<typeof setTimeout> | undefined;
+  let settle: ReturnType<typeof setTimeout> | undefined;
 
   const press = () => {
     down += 1;
@@ -46,28 +47,46 @@ export function holdGesture(target: HoldTarget): HoldGesture {
     clearTimeout(clickTimer);
     clickTimer = undefined;
   };
+  const cancelSettle = () => {
+    if (settle === undefined) return;
+    clearTimeout(settle);
+    settle = undefined;
+  };
+  /** This pointer or key owns the click fired for it. A click after this turn does not. */
+  const ownClick = () => {
+    oweClick = true;
+    cancelSettle();
+  };
+  const settleClick = () => {
+    cancelSettle();
+    settle = setTimeout(() => {
+      settle = undefined;
+      if (down === 0 && keys.size === 0 && pointers.size === 0) oweClick = false;
+    }, 0);
+  };
 
   return {
     keyDown(key, repeat) {
       if (key !== " " && key !== "Enter") return;
       if (repeat || keys.has(key)) return;
       keys.add(key);
-      oweClick = true;
+      ownClick();
       press();
     },
     keyUp(key) {
       if (!keys.delete(key)) return;
       releaseOne();
+      if (keys.size === 0 && pointers.size === 0) settleClick();
     },
     pointerDown(id, button) {
       if (button !== 0 || pointers.has(id)) return;
       pointers.add(id);
-      oweClick = true;
+      ownClick();
       press();
     },
     pointerEnd(id) {
-      if (!pointers.delete(id)) return;
-      releaseOne();
+      if (pointers.delete(id)) releaseOne();
+      settleClick();
     },
     pointerLeave(id) {
       if (!pointers.delete(id)) return;
@@ -81,6 +100,7 @@ export function holdGesture(target: HoldTarget): HoldGesture {
       keys.clear();
       pointers.clear();
       cancelClick();
+      cancelSettle();
       if (down === 0) return;
       down = 0;
       target.release();
@@ -88,6 +108,7 @@ export function holdGesture(target: HoldTarget): HoldGesture {
     click() {
       if (oweClick || down > 0) {
         oweClick = false;
+        cancelSettle();
         return;
       }
       press();
