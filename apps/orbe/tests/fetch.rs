@@ -3,15 +3,13 @@
 #[path = "registry_env.rs"]
 mod registry_env;
 
-use std::collections::BTreeSet;
-use std::fs;
-use std::io::{ErrorKind, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::collections::BTreeMap;
+use std::fs::{self, File};
+use std::io::{ErrorKind, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
-use std::thread::{self, JoinHandle};
+use std::process::{Child, Command, Stdio};
+use std::thread;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -28,12 +26,24 @@ impl Drop for Close<'_> {
 }
 
 fn run(dir: &Path, args: &[&str], registry: &str) -> (i32, String, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_orbe"))
+    run_env(dir, args, registry, &[])
+}
+
+fn run_env(
+    dir: &Path,
+    args: &[&str],
+    registry: &str,
+    env: &[(&str, &str)],
+) -> (i32, String, String) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_orbe"));
+    command
         .args(args)
         .current_dir(dir)
-        .env("ORBE_REGISTRY", registry)
-        .output()
-        .unwrap();
+        .env("ORBE_REGISTRY", registry);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let output = command.output().unwrap();
     (
         output.status.code().unwrap_or(1),
         String::from_utf8(output.stdout).unwrap(),
@@ -77,48 +87,114 @@ fn led_index(edit: impl Fn(&mut Value)) -> (tempfile::TempDir, String) {
 
 struct Server {
     port: u16,
-    stop: Arc<Mutex<bool>>,
-    redirects: Receiver<()>,
-    thread: Option<JoinHandle<()>>,
+    cert: PathBuf,
+    count: PathBuf,
+    child: Child,
+    _dir: tempfile::TempDir,
 }
 
 impl Server {
     fn bind(root: PathBuf, mode: Mode) -> Server {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let stop = Arc::new(Mutex::new(false));
-        let flag = Arc::clone(&stop);
-        let (tx, redirects) = mpsc::channel();
-        let thread = thread::spawn(move || serve(listener, root, mode, flag, tx));
-        Server {
-            port,
-            stop,
-            redirects,
-            thread: Some(thread),
-        }
+        let dir = tempfile::tempdir().unwrap();
+        let cert = dir.path().join("cert.pem");
+        let key = dir.path().join("key.pem");
+        let made = Command::new("openssl")
+            .args([
+                "req",
+                "-x509",
+                "-newkey",
+                "rsa:2048",
+                "-keyout",
+                key.to_str().unwrap(),
+                "-out",
+                cert.to_str().unwrap(),
+                "-days",
+                "1",
+                "-nodes",
+                "-subj",
+                "/CN=127.0.0.1",
+                "-addext",
+                "subjectAltName=IP:127.0.0.1",
+                "-addext",
+                "basicConstraints=CA:TRUE",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            made.status.success(),
+            "openssl: {}",
+            String::from_utf8_lossy(&made.stderr)
+        );
+        let script = dir.path().join("serve.py");
+        fs::write(&script, SERVE_PY).unwrap();
+        let port_file = dir.path().join("port");
+        let count = dir.path().join("redirects");
+        let log = File::create(dir.path().join("log")).unwrap();
+        let mode_arg = match mode {
+            Mode::Status(code) => code.to_string(),
+            Mode::RedirectAt => "redirect".to_string(),
+        };
+        let child = Command::new("python3")
+            .arg(&script)
+            .arg(&port_file)
+            .arg(&cert)
+            .arg(&key)
+            .arg(&root)
+            .arg(&mode_arg)
+            .arg(&count)
+            .stdout(log.try_clone().unwrap())
+            .stderr(log)
+            .spawn()
+            .unwrap();
+        let mut server = Server {
+            port: 0,
+            cert,
+            count,
+            child,
+            _dir: dir,
+        };
+        server.port = wait_port(&port_file, server._dir.path().join("log"));
+        server
     }
 
     fn template(&self) -> String {
-        format!("http://127.0.0.1:{}/{{name}}.json", self.port)
+        format!("https://127.0.0.1:{}/{{name}}.json", self.port)
+    }
+
+    fn trust(&self) -> Vec<(&str, String)> {
+        let cert = self.cert.display().to_string();
+        vec![("SSL_CERT_FILE", cert.clone()), ("CURL_CA_BUNDLE", cert)]
     }
 
     fn redirect_count(&self) -> usize {
-        let mut count = 0;
-        while self.redirects.try_recv().is_ok() {
-            count += 1;
-        }
-        count
+        fs::read_to_string(&self.count)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.is_empty())
+            .count()
     }
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
-        *self.stop.lock().unwrap() = true;
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
+}
+
+fn wait_port(port_file: &Path, log: PathBuf) -> u16 {
+    for _ in 0..100 {
+        if let Ok(text) = fs::read_to_string(port_file)
+            && let Ok(port) = text.trim().parse()
+        {
+            return port;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    panic!(
+        "https server wrote no port: {}",
+        fs::read_to_string(log).unwrap_or_default()
+    );
 }
 
 enum Mode {
@@ -129,116 +205,81 @@ enum Mode {
     RedirectAt,
 }
 
-fn serve(
-    listener: TcpListener,
-    root: PathBuf,
-    mode: Mode,
-    stop: Arc<Mutex<bool>>,
-    redirects: Sender<()>,
-) {
-    let mut once = BTreeSet::new();
-    while !*stop.lock().unwrap() {
-        match listener.accept() {
-            Ok((mut stream, _)) => {
-                stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
-                let _ = handle(&mut stream, &root, &mode, &mut once, &redirects);
-            }
-            Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(10));
-            }
-            Err(_) => break,
-        }
-    }
-}
+const SERVE_PY: &str = r#"
+import os
+import ssl
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import unquote
 
-fn handle(
-    stream: &mut TcpStream,
-    root: &Path,
-    mode: &Mode,
-    once: &mut BTreeSet<String>,
-    redirects: &Sender<()>,
-) -> std::io::Result<()> {
-    let mut buf = Vec::new();
-    let mut byte = [0u8; 1];
-    while buf.len() < 16 * 1024 {
-        if stream.read(&mut byte)? == 0 {
-            break;
-        }
-        buf.push(byte[0]);
-        if buf.ends_with(b"\r\n\r\n") {
-            break;
-        }
-    }
-    let text = String::from_utf8_lossy(&buf);
-    let path = text
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or("/")
-        .split('?')
-        .next()
-        .unwrap_or("/");
-    if let Mode::Status(code) = mode {
-        return write_response(stream, &format!("{code} no"), "", b"");
-    }
-    let decoded = percent_decode(path);
-    if matches!(mode, Mode::RedirectAt) && decoded.contains('@') && once.insert(decoded.clone()) {
-        let location = decoded.trim_start_matches('/').replace('@', "%40");
-        let _ = redirects.send(());
-        return write_response(
-            stream,
-            "307 Temporary Redirect",
-            &format!("Location: {location}\r\n"),
-            b"",
-        );
-    }
-    let rel = decoded.trim_start_matches('/');
-    if rel.is_empty() || rel.split('/').any(|segment| segment == "..") {
-        return write_response(stream, "404 Not Found", "", b"no");
-    }
-    match fs::read(root.join(rel)) {
-        Ok(bytes) => write_response(stream, "200 OK", "", &bytes),
-        Err(_) => write_response(stream, "404 Not Found", "", b"no"),
-    }
-}
+port_file, cert, key, root, mode, count_file = sys.argv[1:7]
+seen = set()
 
-fn write_response(
-    stream: &mut TcpStream,
-    status: &str,
-    extra: &str,
-    body: &[u8],
-) -> std::io::Result<()> {
-    let head = format!(
-        "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n{extra}\r\n",
-        body.len()
-    );
-    stream.write_all(head.as_bytes())?;
-    stream.write_all(body)
-}
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
 
-fn percent_decode(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = Vec::new();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).ok();
-            if let Some(byte) = hex.and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
-                out.push(byte);
-                index += 3;
-                continue;
-            }
-        }
-        out.push(bytes[index]);
-        index += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
+    def do_GET(self):
+        path = self.path.split("?", 1)[0]
+        if mode != "redirect":
+            self.send_response(int(mode))
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        decoded = unquote(path)
+        if "@" in decoded and decoded not in seen:
+            seen.add(decoded)
+            location = decoded.lstrip("/").replace("@", "%40")
+            with open(count_file, "a", encoding="utf-8") as handle:
+                handle.write("1\n")
+            self.send_response(307)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        rel = decoded.lstrip("/")
+        if not rel or any(part == ".." for part in rel.split("/")):
+            body = b"no"
+            self.send_response(404)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        try:
+            with open(os.path.join(root, rel), "rb") as handle:
+                body = handle.read()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except OSError:
+            body = b"no"
+            self.send_response(404)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    def log_message(self, fmt, *args):
+        return
+
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+context.load_cert_chain(cert, key)
+server = HTTPServer(("127.0.0.1", 0), Handler)
+server.socket = context.wrap_socket(server.socket, server_side=True)
+with open(port_file, "w", encoding="utf-8") as handle:
+    handle.write(str(server.server_address[1]))
+server.serve_forever()
+"#;
 
 #[test]
 fn a_part_install_follows_an_at_redirect_and_writes_the_copy() {
     let server = Server::bind(registry_env::dir().to_path_buf(), Mode::RedirectAt);
     let dir = tempfile::tempdir().unwrap();
-    let (code, stdout, stderr) = run(dir.path(), &["add", "led-5mm"], &server.template());
+    let trust = server.trust();
+    let env: Vec<(&str, &str)> = trust
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
+    let (code, stdout, stderr) = run_env(dir.path(), &["add", "led-5mm"], &server.template(), &env);
     assert_eq!(code, 0, "{stdout}{stderr}");
     assert_eq!(stdout, "wrote parts/led-5mm 0.1.1\n");
     assert!(dir.path().join("parts/led-5mm/part.jsonc").is_file());
@@ -357,11 +398,16 @@ fn a_record_whose_size_or_hash_disagrees_names_the_url() {
 fn a_registry_that_returns_an_error_names_the_url() {
     let server = Server::bind(PathBuf::new(), Mode::Status(404));
     let dir = tempfile::tempdir().unwrap();
-    let (code, stdout, stderr) = run(dir.path(), &["add", "led-5mm"], &server.template());
+    let trust = server.trust();
+    let env: Vec<(&str, &str)> = trust
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
+    let (code, stdout, stderr) = run_env(dir.path(), &["add", "led-5mm"], &server.template(), &env);
     assert_eq!(code, 1, "{stdout}{stderr}");
     assert!(
         stderr.contains(&format!(
-            "error[registry]: http://127.0.0.1:{}/index.json returned HTTP 404\n",
+            "error[registry]: https://127.0.0.1:{}/index.json returned HTTP 404\n",
             server.port
         )),
         "{stderr}"
@@ -375,12 +421,12 @@ fn an_unreachable_registry_names_the_index_url() {
     let (code, stdout, stderr) = run(
         dir.path(),
         &["add", "led-5mm"],
-        "http://127.0.0.1:1/{name}.json",
+        "https://127.0.0.1:1/{name}.json",
     );
     assert_eq!(code, 1, "{stdout}{stderr}");
     assert!(
         stderr.contains(
-            "error[registry]: http://127.0.0.1:1/index.json could not be reached\n  hint: check the network and run the command again\n"
+            "error[registry]: https://127.0.0.1:1/index.json could not be reached\n  hint: check the network and run the command again\n"
         ),
         "{stderr}"
     );
@@ -415,4 +461,268 @@ fn check_open_and_test_do_not_use_the_network() {
         Err(error) if error.kind() == ErrorKind::WouldBlock => {}
         other => panic!("check, open or test connected: {other:?}"),
     }
+}
+
+#[test]
+fn a_missing_curl_says_orbe_add_needs_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("no-bin");
+    fs::create_dir(&missing).unwrap();
+    let (code, stdout, stderr) = run_env(
+        dir.path(),
+        &["add", "led-5mm"],
+        "https://127.0.0.1:1/{name}.json",
+        &[("PATH", missing.to_str().unwrap())],
+    );
+    assert_eq!(code, 1, "{stdout}{stderr}");
+    assert!(
+        stderr.contains("could not be fetched, because curl is not on PATH"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("hint: `orbe add` needs curl\n"), "{stderr}");
+}
+
+#[test]
+fn a_named_part_keeps_its_latest_when_a_board_uses_an_older_one() {
+    let (_tmp, reg) = cloned_registry();
+    let old = led_version_used_by_nano(&reg);
+    publish_led_0603(&reg, &old, "9.0.0");
+    let template = format!("file://{}/{{name}}.json", reg.display());
+    for order in [["nano-board", "led-0603"], ["led-0603", "nano-board"]] {
+        let project = tempfile::tempdir().unwrap();
+        let (code, stdout, stderr) = run(project.path(), &["add", order[0], order[1]], &template);
+        assert_eq!(code, 0, "{order:?}\n{stdout}{stderr}");
+        assert!(
+            stdout.contains("wrote parts/led-0603 9.0.0\n"),
+            "{order:?}\n{stdout}"
+        );
+        assert!(
+            stdout.contains("wrote parts/nano-board "),
+            "{order:?}\n{stdout}"
+        );
+        assert_eq!(
+            declared_version(&project.path().join("parts/led-0603/part.jsonc")),
+            "9.0.0",
+            "{order:?}"
+        );
+        assert_eq!(
+            declared_version(
+                &project
+                    .path()
+                    .join("parts/nano-board/parts/led-0603/part.jsonc")
+            ),
+            old,
+            "{order:?}"
+        );
+    }
+}
+
+#[test]
+fn a_part_can_hold_two_versions_of_one_grandchild() {
+    let (_tmp, reg) = cloned_registry();
+    let index: Value = serde_json::from_slice(&fs::read(reg.join("index.json")).unwrap()).unwrap();
+    let names: Vec<&str> = index["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["name"].as_str().unwrap())
+        .collect();
+    assert!(!names.contains(&"led-holder"), "{names:?}");
+    assert!(!names.contains(&"two-leds"), "{names:?}");
+    let old = led_version_used_by_nano(&reg);
+    publish_led_0603(&reg, &old, "9.0.0");
+    let nano = highest_version(&reg, "nano-board");
+    add_part_from_led(&reg, "led-holder", "0.1.0", &["led-0603@9.0.0".to_string()]);
+    add_part_from_led(
+        &reg,
+        "two-leds",
+        "0.1.0",
+        &[format!("nano-board@{nano}"), "led-holder@0.1.0".to_string()],
+    );
+    let template = format!("file://{}/{{name}}.json", reg.display());
+    let project = tempfile::tempdir().unwrap();
+    let (code, stdout, stderr) = run(project.path(), &["add", "two-leds"], &template);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(stdout.contains("wrote parts/two-leds 0.1.0\n"), "{stdout}");
+    assert_eq!(
+        declared_version(
+            &project
+                .path()
+                .join("parts/two-leds/parts/nano-board/parts/led-0603/part.jsonc")
+        ),
+        old
+    );
+    assert_eq!(
+        declared_version(
+            &project
+                .path()
+                .join("parts/two-leds/parts/led-holder/parts/led-0603/part.jsonc")
+        ),
+        "9.0.0"
+    );
+}
+
+fn cloned_registry() -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let dest = tmp.path().join("reg");
+    let status = Command::new("cp")
+        .args(["-a", "--link"])
+        .arg(registry_env::dir())
+        .arg(&dest)
+        .status()
+        .unwrap();
+    assert!(status.success());
+    (tmp, dest)
+}
+
+fn led_version_used_by_nano(reg: &Path) -> String {
+    let version = highest_version(reg, "nano-board");
+    let record: Value =
+        serde_json::from_slice(&fs::read(reg.join(format!("nano-board@{version}.json"))).unwrap())
+            .unwrap();
+    record["registryDependencies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find_map(|dep| dep.as_str().unwrap().strip_prefix("led-0603@"))
+        .expect("nano-board uses led-0603")
+        .to_string()
+}
+
+fn highest_version(reg: &Path, name: &str) -> String {
+    let index: Value = serde_json::from_slice(&fs::read(reg.join("index.json")).unwrap()).unwrap();
+    index["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["name"] == name)
+        .max_by_key(|row| version_tuple(row["version"].as_str().unwrap()))
+        .unwrap()["version"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn version_tuple(text: &str) -> (u64, u64, u64) {
+    let mut parts = text.split('.');
+    (
+        parts.next().unwrap().parse().unwrap(),
+        parts.next().unwrap().parse().unwrap(),
+        parts.next().unwrap().parse().unwrap(),
+    )
+}
+
+/// Publishes `led-0603` at `new`, with that version written into its `part.jsonc`.
+fn publish_led_0603(reg: &Path, old: &str, new: &str) {
+    let path = reg.join(format!("led-0603@{old}.json"));
+    let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let files = record["files"].as_array_mut().unwrap();
+    let part = files
+        .iter_mut()
+        .find(|file| file["path"] == "part.jsonc")
+        .unwrap();
+    let old_sha = part["sha256"].as_str().unwrap().to_string();
+    let bytes = fs::read(reg.join("files").join(&old_sha)).unwrap();
+    let text = String::from_utf8(bytes).unwrap();
+    let from = format!("\"version\": \"{old}\"");
+    assert_eq!(text.matches(&from).count(), 1, "{text}");
+    let text = text.replacen(&from, &format!("\"version\": \"{new}\""), 1);
+    let bytes = text.into_bytes();
+    let sha = sha256_hex(&bytes);
+    fs::write(reg.join("files").join(&sha), &bytes).unwrap();
+    part["sha256"] = json!(sha);
+    part["bytes"] = json!(bytes.len());
+    part["url"] = json!(format!("files/{sha}"));
+    let mut folder = BTreeMap::new();
+    for file in record["files"].as_array().unwrap() {
+        let path = file["path"].as_str().unwrap().to_string();
+        let sha = file["sha256"].as_str().unwrap();
+        folder.insert(path, fs::read(reg.join("files").join(sha)).unwrap());
+    }
+    record["hash"] = json!(folder_hash(&folder));
+    record["version"] = json!(new);
+    write_record(reg, "led-0603", new, &record);
+}
+
+/// A part whose files are `led-0603`'s, so the folder hash stays, and whose record depends on `deps`.
+fn add_part_from_led(reg: &Path, name: &str, version: &str, deps: &[String]) {
+    let source = highest_version(reg, "led-0603");
+    let mut record: Value =
+        serde_json::from_slice(&fs::read(reg.join(format!("led-0603@{source}.json"))).unwrap())
+            .unwrap();
+    record["name"] = json!(name);
+    record["version"] = json!(version);
+    record["registryDependencies"] = json!(deps);
+    write_record(reg, name, version, &record);
+}
+
+fn write_record(reg: &Path, name: &str, version: &str, record: &Value) {
+    let body = serde_json::to_vec(record).unwrap();
+    let sha = sha256_hex(&body);
+    let url = format!("{name}@{version}.json");
+    write_fresh(&reg.join(&url), &body);
+    let mut index: Value =
+        serde_json::from_slice(&fs::read(reg.join("index.json")).unwrap()).unwrap();
+    let mut row = index["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == "led-0603")
+        .unwrap()
+        .clone();
+    row["name"] = json!(name);
+    row["version"] = json!(version);
+    row["url"] = json!(url);
+    row["sha256"] = json!(sha);
+    row["bytes"] = json!(body.len());
+    index["items"].as_array_mut().unwrap().push(row);
+    write_fresh(
+        &reg.join("index.json"),
+        &serde_json::to_vec(&index).unwrap(),
+    );
+}
+
+fn write_fresh(path: &Path, bytes: &[u8]) {
+    if path.exists() {
+        fs::remove_file(path).unwrap();
+    }
+    fs::write(path, bytes).unwrap();
+}
+
+fn folder_hash(files: &BTreeMap<String, Vec<u8>>) -> String {
+    let mut lines = String::new();
+    for (path, bytes) in files {
+        lines.push_str(&sha256_hex(bytes));
+        lines.push_str("  ");
+        lines.push_str(path);
+        lines.push('\n');
+    }
+    format!("sha256:{}", sha256_hex(lines.as_bytes()))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut child = Command::new("sha256sum")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(bytes).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .to_string()
+}
+
+fn declared_version(path: &Path) -> String {
+    let text = fs::read_to_string(path).unwrap();
+    let key = "\"version\": \"";
+    let at = text
+        .find(key)
+        .unwrap_or_else(|| panic!("{}", path.display()));
+    let rest = &text[at + key.len()..];
+    rest[..rest.find('"').unwrap()].to_string()
 }

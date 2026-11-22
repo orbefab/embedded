@@ -746,6 +746,53 @@ fn a_folder_in_parts_with_no_part_file_names_itself() {
     );
 }
 
+/// A broken copy nested inside a board names the board, which is the folder `orbe add` replaces.
+#[test]
+fn a_broken_child_inside_a_board_names_the_board() {
+    let project = scene_only();
+    let (output, stdout, stderr) = orbe_in(project.path(), &["add", "nano-board"]);
+    assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
+    let nested = project.path().join("parts/nano-board/parts/led-0603");
+    fs::write(
+        project.path().join("scene.jsonc"),
+        "{ \"format\": 1, \"parts\": { \"nano\": { \"type\": \"nano-board\", \"firmware\": \"missing.hex\" } } }\n",
+    )
+    .unwrap();
+    let hint = "hint: remove parts/nano-board and run `orbe add nano-board`\n";
+    fs::remove_file(nested.join("part.jsonc")).unwrap();
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(
+        stdout.contains("parts/nano-board/parts/led-0603 has no part.jsonc\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains(hint), "{stdout}");
+
+    fs::remove_dir_all(&nested).unwrap();
+    fs::write(&nested, "x").unwrap();
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(
+        stdout.contains(
+            "part `led-0603` is parts/nano-board/parts/led-0603, which is a file, not a folder\n"
+        ),
+        "{stdout}"
+    );
+    assert!(stdout.contains(hint), "{stdout}");
+
+    fs::remove_file(&nested).unwrap();
+    std::os::unix::fs::symlink("missing", &nested).unwrap();
+    let (output, stdout, _) = orbe_in(project.path(), &["check", "scene.jsonc"]);
+    assert_eq!(output.status.code(), Some(1), "{stdout}");
+    assert!(
+        stdout.contains(
+            "part `led-0603` is parts/nano-board/parts/led-0603, which is a link, not a folder\n"
+        ),
+        "{stdout}"
+    );
+    assert!(stdout.contains(hint), "{stdout}");
+}
+
 #[test]
 fn a_user_folder_at_the_old_add_trash_is_left_in_place() {
     let project = scene_only();

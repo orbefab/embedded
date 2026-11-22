@@ -23,7 +23,7 @@ A folder already at `parts/<id>/` for an id you named is `part_exists`. The comm
 
 ## Finding a part
 
-`orbe search` and `orbe part` read the registry, so they need the network. When the registry cannot be reached, each prints `registry` and names the index URL.
+`orbe add`, `orbe search` and `orbe part` need curl. When the registry cannot be reached, each prints `registry` and names the URL.
 
 `orbe search <words>` lists parts whose id, title, maker, number, summary or tags hold every word, then Blocks whose id, title, description or categories do. An exact id comes first. Then a part whose every word is a whole word of its id, its title or its tags. Then the rest. Ids break ties. `orbe search <words> --json` puts the parts under `data.parts` and the Blocks under `data.blocks`. `orbe search` with no words lists every part a scene can place, by its first category, then the Blocks.
 
@@ -37,7 +37,7 @@ A folder already at `parts/<id>/` for an id you named is `part_exists`. The comm
 
 | Code | What to do |
 | --- | --- |
-| `part_missing` | The folder `parts/<id>/` is not there, or it has no `part.jsonc`. Run the `orbe add` command in the hint. A folder with no `part.jsonc` says to remove `parts/<id>` first. |
+| `part_missing` | The folder `parts/<id>/` is not there, or it has no `part.jsonc`. Run the `orbe add` command in the hint. A folder with no `part.jsonc`, a file, or a link says to remove the folder the hint names first. |
 | `part_exists` | A folder you named, or one the Block's scene names, is already at `parts/<id>/`, so `orbe add` wrote nothing. Remove the folders the message names and run the command in the hint. |
 | `unknown_part` | No Block or part has that id. Pick one the hint names, or find one with `orbe search <words>`. |
 | `registry` | The registry could not be read. The message names the URL. A network failure says to check the network and run the command again. A size or hash that does not match says the file does not match its record. |

@@ -83,11 +83,8 @@ jobs:
 
       # Release builds also target macOS arm64, where some libc types differ (`st_dev` is an
       # `i32`). Clippy for that target catches a build that breaks only there. It needs no Mac,
-      # since it type-checks without linking. `orbe add` downloads over TLS through `ring`, whose
-      # build script compiles C for the target, so this step compiles it with clang.
+      # since it type-checks without linking.
       - name: Lint for macOS
-        env:
-          CC_aarch64_apple_darwin: clang
         run: |
           rustup target add aarch64-apple-darwin
           cargo clippy --workspace --all-targets --locked --target aarch64-apple-darwin -- -D warnings

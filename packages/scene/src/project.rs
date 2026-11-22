@@ -591,8 +591,8 @@ impl Loader<'_> {
     }
 
     /// One finding per missing id. A scene-level id that is simply absent shares one
-    /// `orbe add`. A folder with no `part.jsonc`, and a child that is not inside its parent,
-    /// each name the folder to remove.
+    /// `orbe add`. A folder with no `part.jsonc`, a file or a link in its place, and a child
+    /// that is not inside its parent, each name the top part folder to remove.
     fn report_missing(&mut self) {
         let root = self.sources.root().to_path_buf();
         let mut found: Vec<Gap> = Vec::new();
@@ -699,21 +699,21 @@ fn gap_text(
     match gap.kind {
         GapKind::NoFile => (
             format!("{} has no part.jsonc", gap.place),
-            format!("remove {} and run `{again}`", gap.place),
+            format!("remove parts/{top} and run `{again}`"),
         ),
         GapKind::File => (
             format!(
                 "part `{}` is {}, which is a file, not a folder",
                 gap.id, gap.place
             ),
-            format!("remove {} and run `{again}`", gap.place),
+            format!("remove parts/{top} and run `{again}`"),
         ),
         GapKind::Link => (
             format!(
                 "part `{}` is {}, which is a link, not a folder",
                 gap.id, gap.place
             ),
-            format!("remove {} and run `{again}`", gap.place),
+            format!("remove parts/{top} and run `{again}`"),
         ),
         GapKind::Absent if !gap.scene_level() => {
             let message = match gap.place.rfind("/parts/") {

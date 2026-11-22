@@ -10,28 +10,30 @@ use std::sync::OnceLock;
 pub fn dir() -> &'static Path {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
     DIR.get_or_init(|| {
-        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("registry");
-        std::fs::create_dir_all(&dir).unwrap();
-        if !dir.join("index.json").is_file() {
-            let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../..")
-                .canonicalize()
-                .unwrap();
-            let output = Command::new(env!("CARGO_BIN_EXE_orbe"))
-                .args([
-                    "registry",
-                    "build",
-                    repo.to_str().unwrap(),
-                    dir.to_str().unwrap(),
-                ])
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "registry build: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+        let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("registry-{}", std::process::id()));
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).unwrap();
         }
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .unwrap();
+        let output = Command::new(env!("CARGO_BIN_EXE_orbe"))
+            .args([
+                "registry",
+                "build",
+                repo.to_str().unwrap(),
+                dir.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "registry build: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         dir
     })
 }

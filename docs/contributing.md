@@ -9,7 +9,7 @@ cargo install --locked --path apps/orbe
 scripts/check.sh fast
 ```
 
-`cargo install` puts `orbe` on `PATH`. An `orbe` built without the viewer page still runs every headless command, and `orbe show` then says how to build the page. `ORBE_REGISTRY` replaces the registry URL template, which is how a test points `orbe add` at a registry built from this tree. The header of `scripts/check.sh` says what each tier runs, and the header of [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) says what CI runs, and when.
+`cargo install` puts `orbe` on `PATH`. An `orbe` built without the viewer page still runs every headless command, and `orbe show` then says how to build the page. `ORBE_REGISTRY` replaces the registry URL template, which is how a test points `orbe add` at a registry built from this tree. `orbe add`, `orbe search` and `orbe part` need curl. The header of `scripts/check.sh` says what each tier runs, and the header of [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) says what CI runs, and when.
 
 ## Folders
 

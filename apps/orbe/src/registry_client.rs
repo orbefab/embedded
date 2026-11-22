@@ -2,15 +2,18 @@
 //! `https://orbefab.com/embedded/r/{name}.json`. `ORBE_REGISTRY` replaces that template, which
 //! is how a test points at a registry built from the same tree. `{name}` is replaced with
 //! `index` and with nothing else. Every other URL is resolved against the document that holds it.
+//! An `https` URL is fetched by running `curl`. A `file` URL is read from disk.
 //!
 //! The copy written into the project is the copy orbe reads. Nothing here compares it with the
 //! registry again. `check`, `open`, `test` and `show` do not use this module.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
 
 use orbe_registry::{Index, Item, Kind, Row};
 use orbe_scene::{
@@ -29,7 +32,7 @@ const MISMATCH: &str = "the file does not match its record";
 const TEMPLATE: &str = "https://orbefab.com/embedded/r/{name}.json";
 /// A response larger than this is refused before it is kept. The largest part file is well under it.
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
-const REDIRECTS: u32 = 3;
+const REDIRECTS: &str = "3";
 
 pub struct Done {
     pub text: String,
@@ -50,7 +53,6 @@ pub enum Outcome {
 }
 
 struct Client {
-    agent: ureq::Agent,
     index_url: String,
     /// File bytes by their SHA-256, so one blob written in two folders is downloaded once.
     files: BTreeMap<String, Vec<u8>>,
@@ -59,21 +61,15 @@ struct Client {
 }
 
 struct Node {
-    version: String,
     files: BTreeMap<String, Vec<u8>>,
     /// Dependency ids, at the version the record names. The bytes live in `Forest::nodes`.
     uses: Vec<(String, Version)>,
 }
 
+/// One node per id and version. A named part is written at its highest version, and a board
+/// that uses an older one keeps that older copy in its own folder.
 struct Forest {
-    nodes: BTreeMap<String, Node>,
-}
-
-enum Exchange {
-    Bytes(Vec<u8>),
-    Status(u16),
-    Redirect(Option<String>),
-    TooBig,
+    nodes: BTreeMap<String, BTreeMap<String, Node>>,
 }
 
 pub fn add(dir: Option<&Path>, ids: &[String]) -> Outcome {
@@ -334,20 +330,19 @@ fn install(
     let mut forest = Forest {
         nodes: BTreeMap::new(),
     };
+    let mut versions = BTreeMap::new();
     for id in ids {
-        fetch_part(client, index, id, None, &mut Vec::new(), &mut forest)?;
+        let version = fetch_part(client, index, id, None, &mut Vec::new(), &mut forest)?;
+        versions.insert(id.clone(), version);
     }
-    place_all(root, dir, ids, &forest)?;
+    place_all(root, dir, ids, &versions, &forest)?;
     let wrote: Vec<Value> = ids
         .iter()
-        .map(|id| {
-            let node = &forest.nodes[id];
-            json!({ "id": id, "version": node.version, "path": format!("parts/{id}") })
-        })
+        .map(|id| json!({ "id": id, "version": versions[id], "path": format!("parts/{id}") }))
         .collect();
     let mut lines = Vec::new();
     for id in ids {
-        lines.push(format!("wrote parts/{id} {}", forest.nodes[id].version));
+        lines.push(format!("wrote parts/{id} {}", versions[id]));
     }
     Ok(Done {
         text: ended(lines),
@@ -378,12 +373,13 @@ fn install_block(
     let mut forest = Forest {
         nodes: BTreeMap::new(),
     };
+    let mut versions = BTreeMap::new();
     let mut stack = Vec::new();
     for dep in &block.head.registry_dependencies {
         if dep.registry.is_some() {
             return Err(scoped_dep(&url, dep));
         }
-        fetch_part(
+        let version = fetch_part(
             client,
             index,
             &dep.id,
@@ -391,10 +387,20 @@ fn install_block(
             &mut stack,
             &mut forest,
         )?;
+        if let Some(have) = versions.get(&dep.id)
+            && have != &version
+        {
+            return Err(registry(
+                &url,
+                &format!("`{}` is required at `{have}` and at `{version}`", dep.id),
+                "",
+            ));
+        }
+        versions.insert(dep.id.clone(), version);
     }
     let part_ids = scene_part_ids(scene);
     for id in &part_ids {
-        if !forest.nodes.contains_key(id) {
+        if !versions.contains_key(id) {
             return Err(registry(
                 &url,
                 &format!("names `{id}` in its scene, and its record does not depend on `{id}`"),
@@ -416,36 +422,38 @@ fn install_block(
             &existing,
         ));
     }
-    place_all(root, dir, &part_ids, &forest)?;
+    place_all(root, dir, &part_ids, &versions, &forest)?;
     let wrote_files = match write_block_files(root, &owned, &kept) {
         Ok(wrote) => wrote,
-        Err(mut error) => {
-            if !part_ids.is_empty() {
-                error.message = format!(
+        Err(mut failed) => {
+            let mut names = failed.written;
+            names.extend(part_ids.iter().map(|id| format!("parts/{id}")));
+            if !names.is_empty() {
+                failed.error.message = format!(
                     "{}. remove {} and run `{}`",
-                    error.message,
-                    folder_list(&part_ids),
+                    failed.error.message,
+                    name_list(&names),
                     command(dir, std::slice::from_ref(&block.head.name))
                 );
             }
-            return Err(error);
+            return Err(failed.error);
         }
     };
     let mut lines = Vec::new();
     let mut written = Vec::new();
     let mut kept_paths = Vec::new();
-    for (path, did) in &wrote_files {
-        let verb = if *did { "wrote" } else { "kept" };
-        lines.push(format!("{verb} {path}"));
-        if *did {
-            written.push(path.clone());
+    for file in &wrote_files {
+        let verb = if file.wrote { "wrote" } else { "kept" };
+        lines.push(format!("{verb} {}", file.path));
+        if file.wrote {
+            written.push(file.path.clone());
         } else {
-            kept_paths.push(path.clone());
+            kept_paths.push(file.path.clone());
         }
     }
     let mut wrote = Vec::new();
     for id in &part_ids {
-        let version = &forest.nodes[id].version;
+        let version = &versions[id];
         lines.push(format!("wrote parts/{id} {version}"));
         wrote.push(json!({ "id": id, "version": version, "path": format!("parts/{id}") }));
     }
@@ -788,28 +796,13 @@ fn fetch_part(
     version: Option<Version>,
     stack: &mut Vec<String>,
     forest: &mut Forest,
-) -> Result<(), Fail> {
+) -> Result<String, Fail> {
     if stack.iter().any(|seen| seen == id) {
         return Err(registry(
             &client.index_url,
             &format!("`{id}` depends on itself through {}", stack.join(", ")),
             "",
         ));
-    }
-    if let Some(have) = forest.nodes.get(id) {
-        if let Some(version) = version
-            && have.version != version.to_string()
-        {
-            return Err(registry(
-                &client.index_url,
-                &format!(
-                    "`{id}` is required at `{}` and at `{version}`",
-                    have.version
-                ),
-                "",
-            ));
-        }
-        return Ok(());
     }
     let row = match version {
         Some(version) => row_at(index, id, version)?,
@@ -824,6 +817,14 @@ fn fetch_part(
             &format!("`{id}` is a Block, and a part depends on it"),
             "",
         ));
+    }
+    let stored = row.version.clone();
+    if forest
+        .nodes
+        .get(id)
+        .is_some_and(|versions| versions.contains_key(&stored))
+    {
+        return Ok(stored);
     }
     let (url, item) = client.record(row)?;
     let Item::Part(part) = item else {
@@ -842,10 +843,9 @@ fn fetch_part(
         }
         uses.push((dep.id.clone(), dep.version));
     }
-    forest.nodes.insert(
-        id.to_string(),
+    forest.nodes.entry(id.to_string()).or_default().insert(
+        stored.clone(),
         Node {
-            version: part.head.version.clone(),
             files,
             uses: uses.clone(),
         },
@@ -855,7 +855,7 @@ fn fetch_part(
         fetch_part(client, index, &dep, Some(version), stack, forest)?;
     }
     stack.pop();
-    Ok(())
+    Ok(stored)
 }
 
 fn row_at<'a>(index: &'a Index, id: &str, version: Version) -> Result<&'a Row, Fail> {
@@ -1147,11 +1147,17 @@ fn is_a_link(dir: Option<&Path>, id: &str, rel: &str) -> Fail {
     )
 }
 
-fn place_all(root: &Path, dir: Option<&Path>, ids: &[String], forest: &Forest) -> Result<(), Fail> {
+fn place_all(
+    root: &Path,
+    dir: Option<&Path>,
+    ids: &[String],
+    versions: &BTreeMap<String, String>,
+    forest: &Forest,
+) -> Result<(), Fail> {
     let mut staged: Vec<PathBuf> = Vec::new();
     for id in ids {
         let stage = root.join("parts").join(format!(".add-{id}"));
-        if let Err(error) = write_tree(&stage, id, forest, &mut Vec::new()) {
+        if let Err(error) = write_tree(&stage, id, &versions[id], forest, &mut Vec::new()) {
             let _ = remove_path(&stage);
             for other in &staged {
                 let _ = remove_path(other);
@@ -1184,7 +1190,13 @@ fn place_all(root: &Path, dir: Option<&Path>, ids: &[String], forest: &Forest) -
     Ok(())
 }
 
-fn write_tree(dest: &Path, id: &str, forest: &Forest, stack: &mut Vec<String>) -> Result<(), Fail> {
+fn write_tree(
+    dest: &Path,
+    id: &str,
+    version: &str,
+    forest: &Forest,
+    stack: &mut Vec<String>,
+) -> Result<(), Fail> {
     if stack.iter().any(|seen| seen == id) {
         return Err(fail(
             "registry",
@@ -1193,7 +1205,11 @@ fn write_tree(dest: &Path, id: &str, forest: &Forest, stack: &mut Vec<String>) -
             FAILED,
         ));
     }
-    let Some(node) = forest.nodes.get(id) else {
+    let Some(node) = forest
+        .nodes
+        .get(id)
+        .and_then(|versions| versions.get(version))
+    else {
         return Err(fail(
             "registry",
             format!("`{id}` was not fetched"),
@@ -1207,30 +1223,53 @@ fn write_tree(dest: &Path, id: &str, forest: &Forest, stack: &mut Vec<String>) -
         write_new(&join_rel(dest, rel), bytes)?;
     }
     stack.push(id.to_string());
-    for (dep, _) in &uses {
-        write_tree(&dest.join("parts").join(dep), dep, forest, stack)?;
+    for (dep, dep_version) in &uses {
+        write_tree(
+            &dest.join("parts").join(dep),
+            dep,
+            &dep_version.to_string(),
+            forest,
+            stack,
+        )?;
     }
     stack.pop();
     Ok(())
+}
+
+struct BlockFile {
+    path: String,
+    wrote: bool,
+}
+
+struct BlockWrite {
+    error: Fail,
+    written: Vec<String>,
 }
 
 fn write_block_files(
     root: &Path,
     files: &[(String, Vec<u8>)],
     kept: &BTreeSet<String>,
-) -> Result<Vec<(String, bool)>, Fail> {
+) -> Result<Vec<BlockFile>, BlockWrite> {
     let mut out = Vec::new();
+    let mut written = Vec::new();
     let mut ordered: Vec<&(String, Vec<u8>)> = files
         .iter()
         .filter(|file| file.0 == "scene.jsonc")
         .collect();
     ordered.extend(files.iter().filter(|file| file.0 != "scene.jsonc"));
     for (rel, bytes) in ordered {
-        let did = !kept.contains(rel);
-        if did {
-            write_new(&join_rel(root, rel), bytes)?;
+        let wrote = !kept.contains(rel);
+        if wrote {
+            if let Err(error) = write_new(&join_rel(root, rel), bytes) {
+                return Err(BlockWrite { error, written });
+            }
+            written.push(rel.clone());
         }
-        out.push((rel.clone(), did));
+        out.push(BlockFile {
+            path: rel.clone(),
+            wrote,
+        });
     }
     Ok(out)
 }
@@ -1262,13 +1301,34 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), Fail> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
         Err(error) => return Err(io_at(path, error)),
     }
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|error| io_at(path, error))?;
-    file.write_all(bytes).map_err(|error| io_at(path, error))?;
-    Ok(())
+    let tmp = temp_beside(path);
+    let result = (|| -> Result<(), Fail> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .map_err(|error| io_at(path, error))?;
+        file.write_all(bytes).map_err(|error| io_at(path, error))?;
+        drop(file);
+        fs::rename(&tmp, path).map_err(|error| io_at(path, error))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
+fn temp_beside(path: &Path) -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let name = format!(
+        ".add-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    );
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join(name),
+        _ => PathBuf::from(name),
+    }
 }
 
 fn mkdir(path: &Path) -> Result<(), Fail> {
@@ -1369,12 +1429,20 @@ fn join_rel(root: &Path, rel: &str) -> PathBuf {
 
 fn folder_list(ids: &[String]) -> String {
     let names: Vec<String> = ids.iter().map(|id| format!("parts/{id}")).collect();
-    match names.as_slice() {
-        [] => "the part folders".into(),
+    if names.is_empty() {
+        "the part folders".into()
+    } else {
+        name_list(&names)
+    }
+}
+
+fn name_list(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
         [one] => one.clone(),
         [first, second] => format!("{first} and {second}"),
-        _ => {
-            let (last, rest) = names.split_last().expect("at least three");
+        many => {
+            let (last, rest) = many.split_last().expect("at least three");
             format!("{} and {last}", rest.join(", "))
         }
     }
@@ -1453,15 +1521,7 @@ fn registry(url: &str, detail: &str, hint: &str) -> Fail {
 
 impl Client {
     fn new() -> Client {
-        let config = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(60)))
-            .timeout_connect(Some(Duration::from_secs(10)))
-            .max_redirects(0)
-            .http_status_as_error(false)
-            .user_agent(format!("orbe/{}", env!("CARGO_PKG_VERSION")))
-            .build();
         Client {
-            agent: ureq::Agent::new_with_config(config),
             index_url: String::new(),
             files: BTreeMap::new(),
             pages: BTreeMap::new(),
@@ -1643,8 +1703,10 @@ impl Client {
         }
         let got = if url.starts_with("file:") {
             self.fetch_file(url, size)?
+        } else if url.starts_with("https://") {
+            self.fetch_https(url, size)?
         } else {
-            self.fetch_http(url, size)?
+            return Err(registry(url, "is not an https URL", ""));
         };
         self.pages.insert(got.url.clone(), got.bytes.clone());
         if got.url != url {
@@ -1674,110 +1736,91 @@ impl Client {
         })
     }
 
-    fn fetch_http(&self, start: &str, size: u64) -> Result<Got, Fail> {
-        let mut url = start.to_string();
-        let mut hops = 0;
-        loop {
-            match self.exchange(&url, size)? {
-                Exchange::Bytes(bytes) => return Ok(Got { url, bytes }),
-                Exchange::TooBig => {
-                    return Err(registry(
-                        &url,
-                        &format!("is larger than {size} bytes"),
-                        MISMATCH,
-                    ));
-                }
-                Exchange::Status(code) if retryable(code) => {
-                    return Err(registry(&url, &format!("returned HTTP {code}"), NETWORK));
-                }
-                Exchange::Status(code) => {
-                    return Err(registry(&url, &format!("returned HTTP {code}"), ""));
-                }
-                Exchange::Redirect(location) => {
-                    let Some(location) = location else {
-                        return Err(registry(&url, "redirected with no location", ""));
-                    };
-                    if hops == REDIRECTS {
-                        return Err(registry(
-                            &url,
-                            &format!(
-                                "redirected to `{location}`, and that is more than {REDIRECTS} redirects"
-                            ),
-                            "",
-                        ));
-                    }
-                    let next = resolve(&url, &location)?;
-                    same_origin(&url, &next)?;
-                    url = next;
-                    hops += 1;
-                }
+    fn fetch_https(&self, url: &str, size: u64) -> Result<Got, Fail> {
+        let agent = format!("orbe/{}", env!("CARGO_PKG_VERSION"));
+        let mut child = match Command::new("curl")
+            .args([
+                "-q",
+                "--silent",
+                "--show-error",
+                "--fail",
+                "--location",
+                "--proto",
+                "=https",
+                "--proto-redir",
+                "=https",
+                "--max-redirs",
+                REDIRECTS,
+                "--connect-timeout",
+                "10",
+                "--max-time",
+                "60",
+                "--output",
+                "-",
+                "--user-agent",
+                &agent,
+                "--write-out",
+                "%{stderr}%{url_effective}",
+                url,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Err(registry(
+                    url,
+                    "could not be fetched, because curl is not on PATH",
+                    "`orbe add` needs curl",
+                ));
             }
-        }
-    }
-
-    fn exchange(&self, url: &str, size: u64) -> Result<Exchange, Fail> {
-        match self.once(url, size) {
-            Ok(Exchange::Status(code)) if retryable(code) => {
-                std::thread::sleep(Duration::from_secs(1));
-                self.once(url, size)
-                    .map_err(|_| registry(url, "could not be reached", NETWORK))
+            Err(_) => return Err(registry(url, "could not be reached", NETWORK)),
+        };
+        let mut stdout = child.stdout.take().expect("curl stdout is piped");
+        let mut stderr = child.stderr.take().expect("curl stderr is piped");
+        let err_thread = thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stderr.read_to_end(&mut buf);
+            buf
+        });
+        let read = read_limited(&mut stdout, size);
+        let (body, too_big) = match read {
+            Ok(got) => got,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = err_thread.join();
+                return Err(registry(url, "could not be reached", NETWORK));
             }
-            Ok(other) => Ok(other),
-            Err(error) if error.retry => {
-                std::thread::sleep(Duration::from_secs(1));
-                self.once(url, size)
-                    .map_err(|_| registry(url, "could not be reached", NETWORK))
+        };
+        if too_big {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = err_thread.join();
+            return Err(registry(
+                url,
+                &format!("is larger than {size} bytes"),
+                MISMATCH,
+            ));
+        }
+        let status = match child.wait() {
+            Ok(status) => status,
+            Err(_) => {
+                let _ = err_thread.join();
+                return Err(registry(url, "could not be reached", NETWORK));
             }
-            Err(_) => Err(registry(url, "could not be reached", NETWORK)),
+        };
+        let err_bytes = err_thread.join().unwrap_or_default();
+        let err_text = String::from_utf8_lossy(&err_bytes);
+        if !status.success() {
+            return Err(curl_failed(url, &err_text));
         }
-    }
-
-    fn once(&self, url: &str, size: u64) -> Result<Exchange, Attempt> {
-        let mut response = self.agent.get(url).call().map_err(Attempt::from_ureq)?;
-        let status = response.status().as_u16();
-        if matches!(status, 301 | 302 | 303 | 307 | 308) {
-            let location = response
-                .headers()
-                .get("location")
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_string);
-            let _ = response
-                .body_mut()
-                .with_config()
-                .limit(65_536)
-                .read_to_vec();
-            return Ok(Exchange::Redirect(location));
-        }
-        if status != 200 {
-            let _ = response
-                .body_mut()
-                .with_config()
-                .limit(65_536)
-                .read_to_vec();
-            return Ok(Exchange::Status(status));
-        }
-        match response.body_mut().with_config().limit(size).read_to_vec() {
-            Ok(bytes) => Ok(Exchange::Bytes(bytes)),
-            Err(ureq::Error::BodyExceedsLimit(_)) => Ok(Exchange::TooBig),
-            Err(error) => Err(Attempt::from_ureq(error)),
-        }
-    }
-}
-
-struct Attempt {
-    retry: bool,
-}
-
-impl Attempt {
-    fn from_ureq(error: ureq::Error) -> Attempt {
-        let retry = matches!(
-            error,
-            ureq::Error::Timeout(_)
-                | ureq::Error::Io(_)
-                | ureq::Error::HostNotFound
-                | ureq::Error::ConnectionFailed
-        );
-        Attempt { retry }
+        Ok(Got {
+            url: effective_url(&err_text).unwrap_or_else(|| url.to_string()),
+            bytes: body,
+        })
     }
 }
 
@@ -1786,31 +1829,61 @@ struct Got {
     bytes: Vec<u8>,
 }
 
-fn retryable(code: u16) -> bool {
-    matches!(code, 408 | 429 | 500 | 502 | 503 | 504)
+fn read_limited(reader: &mut impl Read, size: u64) -> io::Result<(Vec<u8>, bool)> {
+    let mut body = Vec::new();
+    let mut buf = [0u8; 8192];
+    let cap = size.saturating_add(1);
+    loop {
+        if body.len() as u64 >= cap {
+            return Ok((body, true));
+        }
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            return Ok((body, false));
+        }
+        let room = cap - body.len() as u64;
+        let take = n.min(usize::try_from(room).unwrap_or(usize::MAX));
+        body.extend_from_slice(&buf[..take]);
+        if n > take {
+            return Ok((body, true));
+        }
+    }
+}
+
+fn curl_failed(url: &str, stderr: &str) -> Fail {
+    if let Some(code) = http_status(stderr) {
+        return registry(url, &format!("returned HTTP {code}"), "");
+    }
+    if stderr.contains("redirects followed") {
+        return registry(
+            url,
+            &format!("followed more than {REDIRECTS} redirects"),
+            "",
+        );
+    }
+    registry(url, "could not be reached", NETWORK)
+}
+
+fn http_status(stderr: &str) -> Option<u16> {
+    let marker = "returned error: ";
+    let rest = stderr.get(stderr.rfind(marker)? + marker.len()..)?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let code = digits.parse().ok()?;
+    (100..600).contains(&code).then_some(code)
+}
+
+fn effective_url(stderr: &str) -> Option<String> {
+    stderr
+        .lines()
+        .rev()
+        .map(str::trim)
+        .find(|line| line.starts_with("https://"))
+        .map(str::to_string)
 }
 
 fn index_url() -> String {
     let template = std::env::var("ORBE_REGISTRY").unwrap_or_else(|_| TEMPLATE.to_string());
     template.replacen("{name}", "index", 1)
-}
-
-fn same_origin(from: &str, to: &str) -> Result<(), Fail> {
-    match (origin(from), origin(to)) {
-        (Some(left), Some(right)) if left == right => Ok(()),
-        _ => Err(registry(
-            from,
-            &format!("redirected to `{to}`, which is a different host"),
-            "",
-        )),
-    }
-}
-
-fn origin(url: &str) -> Option<(String, String)> {
-    let (scheme, rest) = url.split_once("://")?;
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let host = authority.rsplit('@').next().unwrap_or(authority);
-    Some((scheme.to_ascii_lowercase(), host.to_ascii_lowercase()))
 }
 
 fn resolve(base: &str, rel: &str) -> Result<String, Fail> {
