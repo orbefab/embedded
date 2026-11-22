@@ -84,9 +84,14 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
         for key in ["title", "summary", "license"] {
             assert!(non_empty_text(&block[key]), "{id}: {key}");
         }
+        let license = if id == "nano-neopixel-stick" {
+            "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND LGPL-3.0-or-later"
+        } else {
+            "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
+        };
         assert_eq!(
-            block["license"], "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
-            "{id}: license is the SPDX expression for the sketch and the LGPL runtime"
+            block["license"], license,
+            "{id}: license is the SPDX expression for the sketch and what its image links"
         );
         assert!(spdx_parses(block["license"].as_str().unwrap()), "{id}");
         assert!(!spdx_parses("MIT OR"), "{id}");
@@ -158,15 +163,25 @@ fn each_block_ships_the_image_arduino_cli_writes() {
             images += 1;
         }
         assert!(images > 0, "{}", build.display());
+        let notice = fs::read_to_string(firmware.join("NOTICE")).unwrap();
         for file in fs::read_dir(&firmware).unwrap() {
             let name = file.unwrap().file_name().into_string().unwrap();
             if name.starts_with("LICENSE-") {
-                assert_eq!(
-                    fs::read(firmware.join(&name)).unwrap(),
-                    fs::read(sketches.join(&name)).unwrap(),
-                    "{}: {name}",
-                    firmware.display()
-                );
+                let pinned = sketches.join(&name);
+                if pinned.is_file() {
+                    assert_eq!(
+                        fs::read(firmware.join(&name)).unwrap(),
+                        fs::read(&pinned).unwrap(),
+                        "{}: {name}",
+                        firmware.display()
+                    );
+                } else {
+                    assert!(
+                        notice.contains(&name),
+                        "{}: {name} is not a runtime licence, and NOTICE does not name it",
+                        firmware.display()
+                    );
+                }
             }
         }
     }

@@ -123,6 +123,7 @@ fn lint_on_the_uno_block_warns_only_as_the_nano_block_does() {
         "nano-button-led",
         "nano-led-fade",
         "nano-light-comparator",
+        "nano-neopixel-stick",
         "uno-button-led",
     ] {
         let run = orbe(&repo, &["lint", &format!("blocks/{block}/scene.jsonc")]);
