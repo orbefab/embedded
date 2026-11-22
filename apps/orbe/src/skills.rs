@@ -24,7 +24,7 @@ pub const SKILLS: &[Skill] = &[
     },
     Skill {
         name: "parts",
-        about: "How a project keeps its parts: copies, parts.lock, versions, Blocks and the buy field.",
+        about: "How a project keeps its parts: the copy it owns, versions, Blocks and the buy field.",
         text: include_str!("../skills/parts.md"),
     },
     Skill {
@@ -499,9 +499,6 @@ mod tests {
             Scene::NameTooLong,
             Scene::PartMissing,
             Scene::FirmwareMissing,
-            Scene::PartModified,
-            Scene::PartOutdated,
-            Scene::PartNewer,
             Scene::PartFormat,
             Scene::Io,
             Scene::World,
@@ -513,13 +510,9 @@ mod tests {
             | Add::NotAProject
             | Add::SceneExists
             | Add::FileExists
-            | Add::LockSyntax
             | Add::Registry
             | Add::UnknownPart
-            | Add::UnknownVersion
-            | Add::PartConflict
-            | Add::PartDiffers
-            | Add::PartModified
+            | Add::PartExists
             | Add::Symlink => code.as_str(),
         };
         let added = [
@@ -529,13 +522,9 @@ mod tests {
             Add::SceneExists,
             Add::FileExists,
             Add::Symlink,
-            Add::LockSyntax,
             Add::Registry,
             Add::UnknownPart,
-            Add::UnknownVersion,
-            Add::PartConflict,
-            Add::PartDiffers,
-            Add::PartModified,
+            Add::PartExists,
         ];
         let known: Vec<&str> = live
             .iter()

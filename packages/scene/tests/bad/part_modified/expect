@@ -1,1 +1,0 @@
-part_modified parts/resistor-axial/part.jsonc:20:38 | differs from `resistor-axial@0.1.1` in `model.ratings.power.value`

@@ -283,7 +283,7 @@ fn explain(id: &str, diagnostics: &[Diagnostic]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "{id}: field {fields}. Raise parts/{id}/part.jsonc to the next format, move its model onto what this binary reads, and drop the format that file leaves. Add that format to the formats this binary reads. Drop an older format from those formats only once every part under parts/ has left it, apart from a released.lock id whose file is an older format this binary no longer reads. An old copy of {id} is then refused with `orbe add {id} --overwrite` instead of a field error.\n{shown}"
+        "{id}: field {fields}. Raise parts/{id}/part.jsonc to the next format, move its model onto what this binary reads, and drop the format that file leaves. Add that format to the formats this binary reads. Drop an older format from those formats only once every part under parts/ has left it, apart from a released.lock id whose file is an older format this binary no longer reads. An old copy of {id} is the project's file. The hint says to remove the folder and run `orbe add {id}`.\n{shown}"
     )
 }
 

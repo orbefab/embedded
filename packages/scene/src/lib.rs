@@ -1,10 +1,10 @@
 //! Reads a `scene.jsonc` and the part files it uses into the engine's netlist v1, or into
 //! the findings that stop it.
 //!
-//! A scene's folder is its project root. An id such as `led-5mm` reads `parts/led-5mm/` there
-//! and needs a line in `parts.lock`. In a Block, a folder that holds `block.jsonc`, an id reads
-//! the copy in this binary's catalog. A `./` or `../` path reads a part of the user's own,
-//! relative to the file that names it.
+//! A scene's folder is its project root. An id such as `led-5mm` reads `parts/led-5mm/` there,
+//! as the project left it. In a Block, a folder that holds `block.jsonc`, an id reads the copy
+//! in this binary's catalog. A `./` or `../` path reads a part of the user's own, relative to
+//! the file that names it.
 //!
 //! [`Files`] says where those files are read from. `orbe add`, which writes them, is on Unix only.
 
@@ -95,8 +95,7 @@ pub fn read(files: &Files, scene: &Path) -> Result<Netlist, Vec<Diagnostic>> {
 
 /// The catalog part ids a scene names, including ids reached through other parts.
 /// A comment is not a name. The ids are in order. A missing catalog part is one of
-/// the ids, and so is a modified, outdated or newer copy. An id the catalog does not have, and any
-/// other finding, is the error.
+/// the ids. An id the catalog does not have, and any other finding, is the error.
 pub fn catalog_ids(files: &Files, scene: &Path) -> Result<Vec<String>, Vec<Diagnostic>> {
     let mut findings = diagnostic::Findings::default();
     let project = match project::load(files, scene, &mut findings) {
@@ -105,12 +104,9 @@ pub fn catalog_ids(files: &Files, scene: &Path) -> Result<Vec<String>, Vec<Diagn
     };
     let diagnostics = findings.into_diagnostics(&project.sources);
     let blocked = project.unknown_part
-        || diagnostics.iter().any(|d| {
-            !matches!(
-                d.code,
-                Code::PartMissing | Code::PartModified | Code::PartOutdated | Code::PartNewer
-            )
-        });
+        || diagnostics
+            .iter()
+            .any(|d| !matches!(d.code, Code::PartMissing));
     if blocked {
         Err(diagnostics)
     } else {

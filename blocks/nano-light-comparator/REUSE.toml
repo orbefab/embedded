@@ -2,8 +2,8 @@
 # annotations whose path matches a file, the last one applies, and a file's own SPDX line wins.
 version = 1
 
-# The files `orbe add` copies from this Block, `block.jsonc`, which stays with the Block,
-# and `parts.lock`, which `orbe add` writes. A file outside this list is not covered.
+# The files `orbe add` copies from this Block, and `block.jsonc`, which stays with the Block.
+# A file outside this list is not covered.
 [[annotations]]
 path = [
   "block.jsonc",
@@ -13,7 +13,6 @@ path = [
   "firmware/NOTICE",
   "firmware/light/light.ino",
   "tests/light.test",
-  "parts.lock",
 ]
 SPDX-License-Identifier = "MIT OR Apache-2.0"
 

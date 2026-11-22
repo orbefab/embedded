@@ -124,9 +124,6 @@ fn run_shown(runtime: &Runtime, dir: &Path, transcript: &str) {
 fn add_parts(dir: &Path, ids: &[&str]) {
     let request = orbe_scene::Request {
         ids: ids.iter().map(|id| id.to_string()).collect(),
-        overwrite: false,
-        diff: false,
-        relock: false,
     };
     let reply = orbe_scene::add_parts(Some(dir), &request).unwrap();
     assert_eq!(reply.code(), 0, "{}", reply.text());
@@ -780,7 +777,7 @@ fn the_session_name_rule_core_states_is_the_one_orbe_follows() {
     assert_eq!(stem(&name(&plain)), "plain");
     says(
         &skill("reference"),
-        "By default it comes from the project folder, the nearest one up with `scene.jsonc` or `parts.lock`, so each project gets its own, and its `tests/` folder shares it. Outside a project it comes from the git repository's root folder, else the current folder.",
+        "By default it comes from the project folder, the nearest one up with `scene.jsonc` or `parts/`, so each project gets its own, and its `tests/` folder shares it. Outside a project it comes from the git repository's root folder, else the current folder.",
     );
 }
 
@@ -791,7 +788,9 @@ fn the_check_findings_core_states_are_the_ones_orbe_reports() {
     let runtime = Runtime::new();
     let core = skill("core");
 
-    fs::rename(dir.join("parts.lock"), dir.join("parts.lock.kept")).unwrap();
+    let led = dir.join("parts/led-5mm");
+    let kept = dir.join("led-5mm.kept");
+    fs::rename(&led, &kept).unwrap();
     let json = runtime
         .orbe(dir, &["check", "scene.jsonc", "--json"])
         .json();
@@ -810,7 +809,7 @@ fn the_check_findings_core_states_are_the_ones_orbe_reports() {
             json["error"]["code"].as_str().unwrap()
         ),
     );
-    fs::rename(dir.join("parts.lock.kept"), dir.join("parts.lock")).unwrap();
+    fs::rename(&kept, &led).unwrap();
 
     let scene = fs::read_to_string(dir.join("scene.jsonc")).unwrap();
     let drawn = scene.replace(
@@ -832,23 +831,23 @@ fn the_check_findings_core_states_are_the_ones_orbe_reports() {
     );
     fs::write(dir.join("scene.jsonc"), &scene).unwrap();
 
-    for (id, code) in [("led-5mm", 1), ("nano-board", 0)] {
+    for id in ["led-5mm", "nano-board"] {
         let file = dir.join("parts").join(id).join("part.jsonc");
         let text = fs::read_to_string(&file).unwrap();
         fs::write(&file, format!("{text}\n")).unwrap();
         let run = runtime.orbe(dir, &["check", "scene.jsonc"]);
-        assert_eq!(run.code, code, "{id}: {}", run.stdout);
-        let shown = if code == 1 {
-            "error[part_modified]"
-        } else {
-            "note: `nano-board` differs from its parts.lock line"
-        };
-        assert!(run.stdout.contains(shown), "{id}: {}", run.stdout);
+        assert_eq!(run.code, 0, "{id}: {}", run.stdout);
+        assert!(
+            !run.stdout.contains("part_modified"),
+            "{id}: {}",
+            run.stdout
+        );
+        assert!(!run.stdout.contains("note:"), "{id}: {}", run.stdout);
         fs::write(&file, text).unwrap();
     }
     says(
         &skill("parts"),
-        "A copy that differs, even in spacing, is a `part_modified` error. A board built from other parts, such as `nano-board`, is the exception. An edit to it checks, with a note.",
+        "The copy is the project's. Edit it. `orbe check` reads `parts/<id>/` as it is and does not compare it to the catalog.",
     );
 }
 
@@ -989,8 +988,14 @@ fn a_flag_before_the_command_gets_a_hint_whose_line_runs() {
         assert!(printed.starts_with(says), "orbe {line}: {printed}");
         if let Some(folder) = lock {
             let id = line.split(' ').nth(1).unwrap();
-            let lock = fs::read_to_string(dir.join(folder).join("parts.lock")).unwrap();
-            assert!(lock.contains(id), "orbe {line} adds {id} to {folder}");
+            assert!(
+                dir.join(folder)
+                    .join("parts")
+                    .join(id)
+                    .join("part.jsonc")
+                    .is_file(),
+                "orbe {line} copies {id} into {folder}"
+            );
         }
     }
     runtime.orbe(dir, &["close", "--all"]).ok();
@@ -1138,7 +1143,6 @@ fn a_failed_test_prints_what_core_shows() {
 fn a_load_over_the_usb_supply_warns_and_a_wire_across_it_is_a_short() {
     let project = worked_example();
     let dir = project.path();
-    add_parts(dir, &["resistor-axial"]);
     let scene = fs::read_to_string(dir.join("scene.jsonc")).unwrap();
     let cathode = "[\"led1.cathode\", \"nano.GND\"],";
     let loaded = scene

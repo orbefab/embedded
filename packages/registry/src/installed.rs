@@ -3,7 +3,7 @@
 //! The part-file reader and the scene reader have already accepted these folders. This places
 //! each part in a scene, and reads each Block's scene, through the reader `orbe check` uses. The
 //! parts are the folders being built, so a board's children and a Block's parts resolve from this
-//! source. A Block's project is those part folders, the Block's own files and the lock.
+//! source. A Block's project is those part folders and the Block's own files.
 //!
 //! A part is read as placed, before a user's scene sets it: a required param with no default
 //! has no value, so a body that param writes is not compiled, and a scene ground is not needed.
@@ -11,10 +11,10 @@
 //! is read from the part's folder, and a required one with no default names no file. A Block's
 //! scene sets what it uses, so it is read in full.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 
-use orbe_scene::{Card, Diagnostic, FilePath, Files, Folder, REGISTRY};
+use orbe_scene::{Card, Diagnostic, FilePath, Files, Folder};
 use serde_json::json;
 
 /// Each part placed, and each Block scene, as `orbe check` reads it after an install. A file
@@ -27,17 +27,11 @@ pub(crate) enum Refusal {
 }
 
 pub(crate) fn refusal(
-    registry: &str,
     parts: &BTreeMap<String, Folder>,
     blocks: &BTreeMap<String, Folder>,
     cards: &[Card],
 ) -> Option<Refusal> {
-    let catalog = orbe_scene::catalog_cards();
-    let official: BTreeSet<&str> = catalog.iter().map(|card| card.name.as_str()).collect();
-    // An id this binary catalogs locks as `@orbefab`, the line an install of that part uses.
-    // `read` then runs the lock check, so a sealed folder that differs from this binary is
-    // refused the same way that install is. A line this build does not write is not a finding.
-    let project = project_files(parts, &lock_text(cards, &official, registry));
+    let project = project_files(parts);
     let mut read = Vec::new();
     for card in cards.iter().filter(|card| parts.contains_key(&card.name)) {
         let placed = orbe_scene::read_placed(&part_project(&project, card), Path::new(SCENE), true);
@@ -86,35 +80,14 @@ pub(crate) fn refusal(
 
 const SCENE: &str = "scene.jsonc";
 
-fn project_files(parts: &BTreeMap<String, Folder>, lock: &str) -> BTreeMap<PathBuf, Vec<u8>> {
+fn project_files(parts: &BTreeMap<String, Folder>) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut files = BTreeMap::new();
     for (id, folder) in parts {
         for (rel, bytes) in folder {
             files.insert(PathBuf::from(format!("parts/{id}/{rel}")), bytes.clone());
         }
     }
-    files.insert(PathBuf::from("parts.lock"), lock.as_bytes().to_vec());
     files
-}
-
-fn lock_text(cards: &[Card], official: &BTreeSet<&str>, registry: &str) -> String {
-    let mut lines: Vec<String> = cards
-        .iter()
-        .map(|card| {
-            let registry = if official.contains(card.name.as_str()) {
-                REGISTRY
-            } else {
-                registry
-            };
-            format!("{} {} {} {}", card.name, card.version, registry, card.hash)
-        })
-        .collect();
-    lines.sort();
-    if lines.is_empty() {
-        String::new()
-    } else {
-        format!("{}\n", lines.join("\n"))
-    }
 }
 
 /// The project with a scene that places the part and sets nothing.
@@ -130,7 +103,7 @@ fn part_project(project: &BTreeMap<PathBuf, Vec<u8>>, card: &Card) -> Files {
     Files::memory(files)
 }
 
-/// The project an install of the Block makes: the part folders, the Block's files and the lock.
+/// The project an install of the Block makes: the part folders and the Block's files.
 fn block_project(project: &BTreeMap<PathBuf, Vec<u8>>, folder: &Folder) -> Files {
     let mut files = project.clone();
     for (rel, bytes) in folder {
@@ -224,8 +197,7 @@ fn name_block(id: &str, found: Vec<Diagnostic>) -> Vec<Diagnostic> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SCENE, lock_text, part_project, project_files, within};
-    use std::collections::BTreeSet;
+    use super::{SCENE, part_project, project_files, within};
     use std::path::{Path, PathBuf};
 
     /// The catalog's ESP32-S3 parts, probed as the build probes them. The chip's `rom` default
@@ -235,8 +207,7 @@ mod tests {
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
         let parts = crate::folders(&repo, "parts").unwrap();
         let cards = orbe_scene::cards(&parts).unwrap();
-        let official = BTreeSet::new();
-        let project = project_files(&parts, &lock_text(&cards, &official, "@orbefab"));
+        let project = project_files(&parts);
         for (id, rom) in [
             ("esp32s3-qfn56", "r1.rom"),
             ("esp32s3-wroom-1-n16r8", "r1.u1.rom"),

@@ -5,7 +5,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use orbe_scene::{REGISTRY, folder_hash};
 use orbe_session::{Command, Data, Files, Live};
 
 fn repo() -> PathBuf {
@@ -59,22 +58,9 @@ fn project() -> tempfile::TempDir {
         .filter(|id| catalog.join(id).join("part.jsonc").is_file())
         .collect();
     ids.sort();
-    let mut lock = String::new();
     for id in &ids {
-        let folder = catalog.join(id);
-        copy_dir(&folder, &dir.path().join("parts").join(id));
-        let text = fs::read_to_string(folder.join("part.jsonc")).unwrap();
-        let version = text
-            .split("\"version\": \"")
-            .nth(1)
-            .and_then(|rest| rest.split('"').next())
-            .unwrap();
-        lock.push_str(&format!(
-            "{id} {version} {REGISTRY} {}\n",
-            folder_hash(&folder).unwrap()
-        ));
+        copy_dir(&catalog.join(id), &dir.path().join("parts").join(id));
     }
-    fs::write(dir.path().join("parts.lock"), lock).unwrap();
     dir
 }
 
