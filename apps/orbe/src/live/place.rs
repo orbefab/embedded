@@ -164,29 +164,19 @@ impl Place {
         self.dir.join(format!("{name}.log.crashed"))
     }
 
-    /// Moves `<name>.log` onto the crash log when no process holds that log, empty or not, so a
-    /// crash that wrote nothing replaces an older crash's output. A running process locks its
-    /// log, and the lock stays when it renames the log onto this name, so a locked log is left
-    /// where the process writes. When `<name>.log` is missing, an earlier command already took
-    /// this crash's log and the crash log stays. An empty crash log that no process holds is
-    /// removed. The path when the crash log then holds output.
+    /// Moves `<name>.log` onto the crash log when this process can lock it, empty or not, so a
+    /// crash that wrote nothing replaces an older crash's output. A locked log stays where its
+    /// process writes. When `<name>.log` is missing, an earlier command already took this
+    /// crash's log and the crash log stays. An empty crash log is removed. The path when the
+    /// crash log then holds output.
     pub fn take_crash_log(&self, name: &Name) -> Option<PathBuf> {
         let log = self.log(name);
         let crashed = self.crashed_log(name);
-        match lock_if_free(&log) {
-            Some(fd) => {
-                let _ = fs::rename(&log, &crashed);
-                drop(fd);
-            }
-            None if process_holds(&log) => {}
-            None => {
-                let _ = fs::rename(&log, &crashed);
-            }
+        if let Some(_fd) = lock_if_free(&log) {
+            let _ = fs::rename(&log, &crashed);
         }
         if holds_output(&crashed) {
             Some(crashed)
-        } else if process_holds(&crashed) {
-            None
         } else {
             let _ = fs::remove_file(&crashed);
             None
@@ -202,20 +192,6 @@ fn lock_if_free(path: &Path) -> Option<std::os::fd::OwnedFd> {
     let fd = rustix::fs::open(path, flags, Mode::empty()).ok()?;
     rustix::fs::flock(&fd, FlockOperation::NonBlockingLockExclusive).ok()?;
     Some(fd)
-}
-
-/// Whether a running process holds `path`. The lock is the one a session's process keeps on
-/// its log for as long as it runs.
-fn process_holds(path: &Path) -> bool {
-    use rustix::fs::{FlockOperation, Mode, OFlags};
-    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-    let Ok(fd) = rustix::fs::open(path, flags, Mode::empty()) else {
-        return false;
-    };
-    matches!(
-        rustix::fs::flock(&fd, FlockOperation::NonBlockingLockExclusive),
-        Err(rustix::io::Errno::WOULDBLOCK)
-    )
 }
 
 pub(super) fn holds_output(path: &Path) -> bool {

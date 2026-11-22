@@ -125,13 +125,13 @@ Each line is a live command without `orbe`. `--json`, `--session`, `--help` or `
 
 - `orbe open` starts a background process that holds the session, and every later command talks to it. The process ends on `orbe close`, or after 1 hour with no command while it is not playing and no page watches it.
 - A session has a name. By default it comes from the project folder, the nearest one up with `scene.jsonc` or `parts/`, so each project gets its own, and its `tests/` folder shares it. Outside a project it comes from the git repository's root folder, else the current folder. `--session <name>` after the command, or `ORBE_SESSION=<name>`, picks another.
-- `orbe close --all` closes every session and cleans up after crashed ones. `session_crashed` names `<name>.log.crashed` when the process left output. A crash that wrote nothing removes it.
+- `orbe close --all` closes every session and cleans up after crashed ones. `session_crashed` names `<name>.log.crashed` when the process left output. A failed `open` after an earlier crash names `<name>.log`, the retry's output. A crash that wrote nothing removes it.
 - A command other than `close` refuses a session another orbe version started, as `version_mismatch`. Run `orbe close`.
 - A command sent while a `step` runs waits for it. Ctrl-C during a long `step` stops it, and the session stays paused at the time it reached.
 
 ## The 3D page
 
-Only this machine can reach the page's address. From another machine it works through a tunnel, such as `ssh -L <port>:127.0.0.1:<port>`, opened at `http://127.0.0.1:<port>/` with the same `#t=` key. Several pages can watch one session, and `orbe close` ends every page. A click on a button is `press`, and letting go is `release`. While the session is paused a click changes no pin, since the firmware runs only as time moves. `play` reports nothing as time runs. The next `step` lists the changes since the `step` before it, play included, so run `step 1ms` first to see them. `show` failing with "this orbe was built without the viewer page" means this `orbe` has no page in it. Tell the user, since the fix is a rebuild of `orbe`.
+Only this machine reaches the page. From another, `ssh -L <port>:127.0.0.1:<port>` and open `http://127.0.0.1:<port>/` with the same `#t=` key. Several pages watch one session; `orbe close` ends them. A click is `press`; letting go is `release`. While paused a click changes no pin: the firmware runs only as time moves. `play` reports nothing as time runs. Next `step` lists changes since the last one, play included. Run `step 1ms` first. `show` failing with "this orbe was built without the viewer page" means this `orbe` has no page. Tell the user to rebuild `orbe`.
 
 ## Warnings
 
@@ -158,7 +158,7 @@ The part and `orbe add` codes are in `orbe skills get parts`.
 | `scene.unknown_pin`, `scene.param`, `scene.syntax` | A typo or a wrong value at that line and column. The hint names what is valid. |
 | `scene.world` | A `world` quantity that does not exist, a value outside its range, or a step at 0, too close to the one before it, or that does not change the value. |
 | `no_session` | No session runs under this name. Run the `orbe open` in the hint. |
-| `session_crashed` | The session's process died. Run `orbe open` again. It names `<name>.log.crashed` when the process left output. A crash that wrote nothing removes the older one. |
+| `session_crashed` | The session's process died. Run `orbe open` again. It names `<name>.log.crashed` when the process left output. A failed `open` after an earlier crash names `<name>.log`, the retry's output. A crash that wrote nothing removes the older one. |
 | `version_mismatch` | Another version of orbe started this session. Run `orbe close`. |
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |
 | `not_settable` | `press` and `release` work only on a switch. `set` works only on a quantity the scene's `world` names or a part reads. |

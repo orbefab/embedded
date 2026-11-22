@@ -452,6 +452,132 @@ fn a_leg_already_on_the_holes_net_is_not_an_unseated_leg() {
     );
 }
 
+/// The contact wire in the first hint for a leg drawn in a hole it does not join.
+fn drawn_contact(stdout: &str) -> Option<String> {
+    let mut want = false;
+    for line in stdout.lines() {
+        if want {
+            let hint = line.trim().strip_prefix("hint:").unwrap().trim();
+            let wire = hint
+                .strip_prefix("join it with a contact wire, as ")
+                .unwrap_or_else(|| {
+                    panic!("a drawn leg's hint seats a held hole: {hint}\n{stdout}")
+                });
+            return Some(wire.to_string());
+        }
+        want = line.contains("joins nothing there");
+    }
+    None
+}
+
+/// A hole a jumper or another part already holds is not where the hint seats the leg. The hint
+/// is a contact wire to a free hole in that strip, and each hint in turn leaves a scene that
+/// `check` accepts.
+#[test]
+fn a_held_hole_hints_a_free_hole_and_following_the_hints_checks() {
+    let nano = serde_json::json!({
+        "type": "nano-board",
+        "firmware": "build/button.ino.hex"
+    });
+    let resistor = serde_json::json!({ "type": "resistor-axial", "resistance": "10k" });
+    let drawn = serde_json::json!({ "at": [-31.75, -13.97, 8.5] });
+    let mut base = serde_json::json!({
+        "format": 1,
+        "parts": {
+            "bb": { "type": "breadboard-400" },
+            "nano": nano,
+            "r1": resistor.clone()
+        },
+        "nets": { "GND": "nano.GND" },
+        "layout": {
+            "bb": { "at": [0, 0, 0] },
+            "nano": { "at": [200, 0, 0] },
+            "r1": drawn
+        }
+    });
+    let contact =
+        |leg: &str, hole: &str| format!("[\"{leg}\", \"{hole}\", {{ \"kind\": \"contact\" }}]");
+    let jumper_a5 = serde_json::json!(["bb.a5", "nano.D2"]);
+    let jumper_a1 = serde_json::json!(["bb.a1", "nano.D2"]);
+    let seated = base.clone();
+    base["wires"] = serde_json::json!([["r1.a", "bb.a1", { "kind": "contact" }], jumper_a5]);
+    let held_by_jumper_at_the_other_leg = base.clone();
+    base["wires"] = serde_json::json!([jumper_a1]);
+    let held_by_a_jumper = base;
+    let mut held_by_a_leg = seated;
+    held_by_a_leg["parts"]["r2"] = resistor;
+    held_by_a_leg["layout"]["r2"] = serde_json::json!({ "on": { "a": "bb.a1" } });
+    let cases = [
+        (
+            held_by_jumper_at_the_other_leg,
+            "`r1.b` is drawn in `bb.a5` and joins nothing there",
+            contact("r1.b", "bb.b5"),
+            vec![contact("r1.b", "bb.b5")],
+        ),
+        (
+            held_by_a_jumper,
+            "`r1.a` is drawn in `bb.a1` and joins nothing there",
+            contact("r1.a", "bb.b1"),
+            vec![contact("r1.a", "bb.b1"), contact("r1.b", "bb.a5")],
+        ),
+        (
+            held_by_a_leg,
+            "`r1.a` is drawn in `bb.a1` and joins nothing there",
+            contact("r1.a", "bb.b1"),
+            vec![contact("r1.a", "bb.b1"), contact("r1.b", "bb.b5")],
+        ),
+    ];
+    for (mut scene, warning, hint, wires) in cases {
+        let dir = project(&serde_json::to_string(&scene).unwrap());
+        let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+        assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+        assert!(
+            run.stdout
+                .contains(&format!("warning[scene.unplaced]: {warning}")),
+            "{}",
+            run.stdout
+        );
+        assert!(
+            run.stdout
+                .contains(&format!("hint: join it with a contact wire, as {hint}")),
+            "{}",
+            run.stdout
+        );
+        let mut applied = Vec::new();
+        for _ in 0..8 {
+            let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+            assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+            let Some(wire) = drawn_contact(&run.stdout) else {
+                break;
+            };
+            applied.push(wire.clone());
+            let wires = scene
+                .as_object_mut()
+                .unwrap()
+                .entry("wires")
+                .or_insert_with(|| serde_json::json!([]));
+            wires
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::from_str(&wire).unwrap());
+            fs::write(
+                dir.path().join("scene.jsonc"),
+                serde_json::to_string(&scene).unwrap(),
+            )
+            .unwrap();
+        }
+        assert_eq!(applied, wires, "{}", warning);
+        let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+        assert!(
+            !run.stdout.contains("joins nothing there"),
+            "{}",
+            run.stdout
+        );
+        let run = orbe(dir.path(), &["check", "scene.jsonc"]);
+        assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    }
+}
+
 /// A part whose legs are further below the holes than the board is thick is not drawn in them.
 #[test]
 fn a_part_below_the_board_is_not_an_unseated_leg() {
