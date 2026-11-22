@@ -570,18 +570,59 @@ fn relative(from: &Path, to: &Path) -> PathBuf {
 }
 
 /// Binds the socket. A socket file nothing answers on is one a crashed process left, and is
-/// replaced. Anything else at the path stays, and the bind fails.
+/// replaced by the one start that holds the claim. Another start cannot delete the socket this
+/// one just bound. Anything else at the path stays, and the bind fails.
 fn bind(socket: &Path) -> io::Result<UnixListener> {
+    let _claim = claim(socket)?;
     match UnixListener::bind(socket) {
-        Err(error) if error.kind() == io::ErrorKind::AddrInUse => {
-            let is_socket = std::fs::symlink_metadata(socket)?.file_type().is_socket();
-            if !is_socket || UnixStream::connect(socket).is_ok() {
+        Ok(listener) => Ok(listener),
+        Err(error) if error.kind() == io::ErrorKind::AddrInUse => replace_dead(socket, error),
+        Err(error) => Err(error),
+    }
+}
+
+/// Replaces a dead socket. The caller holds the claim. A file that is already gone is bound.
+/// A socket that answers is another start's, and stays.
+fn replace_dead(socket: &Path, busy: io::Error) -> io::Result<UnixListener> {
+    match std::fs::symlink_metadata(socket) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => UnixListener::bind(socket),
+        Err(error) => Err(error),
+        Ok(meta) if !meta.file_type().is_socket() || UnixStream::connect(socket).is_ok() => {
+            Err(busy)
+        }
+        Ok(_) => {
+            if let Err(error) = std::fs::remove_file(socket)
+                && error.kind() != io::ErrorKind::NotFound
+            {
                 return Err(error);
             }
-            std::fs::remove_file(socket)?;
             UnixListener::bind(socket)
         }
-        bound => bound,
+    }
+}
+
+/// Exclusive right to replace `socket`, held until dropped. The file is removed while the lock
+/// is held, so the session folder does not keep it. A lock on a file that was already removed
+/// is not this right: that start takes it again.
+fn claim(socket: &Path) -> io::Result<std::os::fd::OwnedFd> {
+    use rustix::fs::{FlockOperation, Mode, OFlags};
+    let path = socket.with_extension("claim");
+    let flags = OFlags::RDWR | OFlags::CREATE | OFlags::CLOEXEC | OFlags::NOFOLLOW;
+    loop {
+        let fd =
+            rustix::fs::open(&path, flags, Mode::RUSR | Mode::WUSR).map_err(io::Error::from)?;
+        rustix::fs::flock(&fd, FlockOperation::LockExclusive).map_err(io::Error::from)?;
+        let held = rustix::fs::fstat(&fd).map_err(io::Error::from)?;
+        let same = rustix::fs::stat(&path)
+            .is_ok_and(|st| st.st_dev == held.st_dev && st.st_ino == held.st_ino);
+        if !same {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => return Ok(fd),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        }
     }
 }
 

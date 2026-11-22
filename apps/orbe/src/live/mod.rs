@@ -698,6 +698,11 @@ impl Client {
                 return Ok((stream, log));
             }
             if let Ok(Some(status)) = child.try_wait() {
+                // This start lost the socket. Another start may already be listening, and
+                // that listener is the session.
+                if let Ok(Found::Listening(stream)) = self.find() {
+                    return Ok((stream, log));
+                }
                 if status.success() {
                     return Err(self.no_session());
                 }
