@@ -249,8 +249,8 @@ fn the_nano_pins_the_skills_call_not_simulated_are_the_ones_the_reader_leaves_ou
         .filter(|(_, net)| net.is_none())
         .map(|(pin, _)| pin.as_str())
         .collect();
-    assert_eq!(left_out, BTreeSet::from(["3V3", "VIN"]));
-    assert!(skill("reference").contains("The Nano's 3V3 and VIN pins"));
+    assert_eq!(left_out, BTreeSet::from(["3V3"]));
+    assert!(skill("reference").contains("The Nano's 3V3 pin"));
     let arduino = skill("arduino");
     let nano = board_section(&arduino, "nano-board");
     for pin in &left_out {
@@ -1362,7 +1362,7 @@ fn a_resistor_over_its_power_rating_warns_as_orbe_part_says() {
     let open = runtime.orbe(dir, &["open", "hot.jsonc"]).ok().stdout;
     assert!(
         open.contains(
-            "warning[rating.power] #r9.p peaks at 2.158099861018882 W, over its 0.25 W rating"
+            "warning[rating.power] #r9.p peaks at 2.158099860411514 W, over its 0.25 W rating"
         ),
         "{open}"
     );

@@ -17,9 +17,9 @@ fn read(scene: &str) -> (orbe_scene::Netlist, Value) {
 }
 
 #[test]
-fn first_target_has_19_parts_and_34_nets() {
+fn first_target_has_20_parts_and_35_nets() {
     let (netlist, json) = read("scene.jsonc");
-    assert_eq!(netlist.parts, 19);
+    assert_eq!(netlist.parts, 20);
     assert_eq!(netlist.ground, "GND");
     let mut nets = netlist.nets.clone();
     nets.sort();
@@ -28,6 +28,7 @@ fn first_target_has_19_parts_and_34_nets() {
         "led1__anode",
         "nano__5V",
         "nano__AREF",
+        "nano__VIN",
         "nano__RESET",
         "nano__diode__anode",
         "nano__led_l__anode",
@@ -121,8 +122,8 @@ fn scene_params_are_user_values_and_defaults_fill_the_rest() {
 #[test]
 fn two_buttons_ground_is_gnd() {
     let (netlist, json) = read("two-buttons.jsonc");
-    assert_eq!(netlist.parts, 19);
-    assert_eq!(netlist.nets.len(), 33);
+    assert_eq!(netlist.parts, 20);
+    assert_eq!(netlist.nets.len(), 34);
     assert_eq!(netlist.ground, "GND");
     for net in ["btn1__out", "btn1__vcc", "btn2__out"] {
         assert!(netlist.nets.contains(&net.to_string()), "no net {net}");
@@ -151,7 +152,7 @@ fn two_buttons_ground_is_gnd() {
 #[test]
 fn two_buttons_with_nets_names_ground_gnd() {
     let (netlist, _) = read("two-buttons-nets.jsonc");
-    assert_eq!(netlist.nets.len(), 33);
+    assert_eq!(netlist.nets.len(), 34);
     assert_eq!(netlist.ground, "GND");
     for net in ["VCC", "btn1__out", "btn2__out"] {
         assert!(netlist.nets.contains(&net.to_string()), "no net {net}");

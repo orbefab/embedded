@@ -102,18 +102,18 @@ fn the_first_target_reads_the_engine_values_while_pressed() {
     assert_eq!(run.code, 0, "{}", run.stdout);
     assert!(
         run.stdout
-            .contains("\n  nano.D13 high 4.400713547712648 V\n"),
+            .contains("\n  nano.D13 high 4.400713544697176 V\n"),
         "{}",
         run.stdout
     );
     assert!(
         run.stdout
-            .contains("\n  led1 lit i=11.292504388060703 mA v="),
+            .contains("\n  led1 lit i=11.292504375073456 mA v="),
         "{}",
         run.stdout
     );
     assert!(
-        run.stdout.contains("\n  led1.i 11.292504388060703 mA\n"),
+        run.stdout.contains("\n  led1.i 11.292504375073456 mA\n"),
         "{}",
         run.stdout
     );
@@ -123,14 +123,14 @@ fn the_first_target_reads_the_engine_values_while_pressed() {
     assert_eq!(json[4]["data"]["ref"], "@nano.D13");
     assert_eq!(json[4]["data"]["kind"], "pin");
     assert_eq!(json[4]["data"]["value"]["level"], "high");
-    assert_eq!(json[4]["data"]["value"]["v"], 4.400713547712648);
+    assert_eq!(json[4]["data"]["value"]["v"], 4.400713544697176);
     assert_eq!(json[5]["data"]["kind"], "part");
     assert_eq!(json[5]["data"]["value"]["state"], "lit");
-    assert_eq!(json[5]["data"]["value"]["i"], 0.011292504388060703);
-    assert_eq!(json[5]["data"]["value"]["brightness"], 0.011292504388060728);
+    assert_eq!(json[5]["data"]["value"]["i"], 0.011292504375073457);
+    assert_eq!(json[5]["data"]["value"]["brightness"], 0.011292504375073537);
     assert_eq!(json[5]["data"]["value"]["over_ps"], 20_000_000_000u64);
     assert_eq!(json[6]["data"]["kind"], "quantity");
-    assert_eq!(json[6]["data"]["value"], 0.011292504388060703);
+    assert_eq!(json[6]["data"]["value"], 0.011292504375073457);
     assert_eq!(json[6]["t_ps"], 100_000_000_000u64);
 }
 
@@ -162,7 +162,7 @@ fn each_command_replies_in_text() {
         block(0),
         [
             "2> open",
-            "  opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 19 engine parts, 34 nets)",
+            "  opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 20 engine parts, 35 nets)",
         ]
     );
     assert_eq!(
@@ -170,9 +170,9 @@ fn each_command_replies_in_text() {
         [
             "3> step 100ms",
             "  t=100ms (from 0s)",
-            "    brightness led1 off 1.2775403302174304e-13 A over 20ms",
+            "    brightness led1 off 1.2775403141982445e-13 A over 20ms",
             "    brightness nano.led_l off 1.2775344350286488e-13 A over 20ms",
-            "    brightness nano.led_pwr lit 3.0136985454632046 mA over 20ms",
+            "    brightness nano.led_pwr lit 3.01369854053549 mA over 20ms",
         ]
     );
     assert_eq!(block(2)[0], "4> expect @led1 off");
@@ -200,11 +200,11 @@ fn each_command_replies_in_text() {
     );
     assert_eq!(
         until[4],
-        "    by 103ms led1 dim, brightness=1.6915818683638897 mA over 20ms"
+        "    by 103ms led1 dim, brightness=1.6915818664184332 mA over 20ms"
     );
     assert_eq!(
         until[6],
-        "    by 104ms led1 lit, brightness=2.2562070877605347 mA over 20ms"
+        "    by 104ms led1 lit, brightness=2.256207085165713 mA over 20ms"
     );
 
     assert_eq!(
@@ -218,7 +218,7 @@ fn each_command_replies_in_text() {
         block(6),
         [
             "8> expect @led1.i > 5mA",
-            "  passed @led1.i > 5mA (led1.i = 11.2925043880606 mA)"
+            "  passed @led1.i > 5mA (led1.i = 11.292504375073351 mA)"
         ]
     );
 
@@ -246,7 +246,7 @@ fn each_command_replies_in_text() {
     );
     assert_eq!(
         snapshot[6],
-        "  led1  led-5mm             lit i=11.2925043880606 mA brightness=2.2562070877605347 mA over 20ms"
+        "  led1  led-5mm             lit i=11.292504375073351 mA brightness=2.256207085165713 mA over 20ms"
     );
     assert_eq!(snapshot[7], "  diagnostics  none");
     assert_eq!(snapshot.len(), 8, "{}", snapshot.join("\n"));
@@ -325,7 +325,7 @@ fn each_command_replies_with_one_json_envelope() {
             open["data"]["engine_parts"].as_u64(),
             open["data"]["nets"].as_u64()
         ),
-        (Some(19), Some(34))
+        (Some(20), Some(35))
     );
     assert_eq!(open["data"]["diagnostics"].as_array().unwrap().len(), 0);
 
@@ -340,9 +340,9 @@ fn each_command_replies_with_one_json_envelope() {
             "changes": [],
             "more": 0,
             "leds": [
-                { "ref": "@led1", "state": "off", "brightness": 1.2775403302174304e-13, "over_ps": 20_000_000_000u64 },
+                { "ref": "@led1", "state": "off", "brightness": 1.2775403141982445e-13, "over_ps": 20_000_000_000u64 },
                 { "ref": "@nano.led_l", "state": "off", "brightness": 1.2775344350286488e-13, "over_ps": 20_000_000_000u64 },
-                { "ref": "@nano.led_pwr", "state": "lit", "brightness": 0.0030136985454632045, "over_ps": 20_000_000_000u64 },
+                { "ref": "@nano.led_pwr", "state": "lit", "brightness": 0.00301369854053549, "over_ps": 20_000_000_000u64 },
             ]
         })
     );
@@ -370,20 +370,20 @@ fn each_command_replies_with_one_json_envelope() {
             "by_ps": 103_000_000_000u64,
             "ref": "@led1",
             "state": "dim",
-            "brightness": 0.0016915818683638896,
+            "brightness": 0.0016915818664184333,
             "over_ps": 20_000_000_000u64
         })
     );
 
     assert_eq!(high["data"]["actual"], "nano.D13 high");
-    assert_eq!(compare["data"]["actual"], "led1.i = 11.2925043880606 mA");
+    assert_eq!(compare["data"]["actual"], "led1.i = 11.292504375073351 mA");
 
     let parts = snapshot["data"]["parts"].as_array().unwrap();
     assert_eq!(parts[0]["ref"], "@nano");
     assert_eq!(parts[0]["type"], "nano-board");
     assert_eq!(parts[0]["pins"]["D13"]["level"], "high");
     assert_eq!(parts[4]["value"]["state"], "lit");
-    assert_eq!(parts[4]["value"]["brightness"], 0.0022562070877605346);
+    assert_eq!(parts[4]["value"]["brightness"], 0.002256207085165713);
     assert_eq!(snapshot["data"]["serial"], "");
     assert_eq!(snapshot["data"]["diagnostics"].as_array().unwrap().len(), 0);
 

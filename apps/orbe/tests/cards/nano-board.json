@@ -46,13 +46,6 @@
     },
     {
       "pins": [
-        "VIN"
-      ],
-      "what": "VIN",
-      "why": "It feeds the AMS1117, which has no model yet. The board runs from USB."
-    },
-    {
-      "pins": [
         "5V"
       ],
       "what": "a measured USB rail",
