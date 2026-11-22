@@ -6,7 +6,7 @@
   "real": { "generic": true, "maker": "Murata", "number": "GRM18", "datasheet": "Murata GRM18" },
   "pins": { "a": [1], "b": [2] },
   "params": {
-    "capacitance": { "unit": "F", "required": true, "sets": "/capacitance" },
+    "capacitance": { "unit": "F", "required": true, "example": 1e-7, "sets": "/capacitance" },
     "initial": { "unit": "V", "default": null, "sets": "/initial" },
   },
   "model": { "kind": "capacitor" },

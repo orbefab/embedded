@@ -61,6 +61,7 @@
   ],
   "params": [
     {
+      "example": "example.hex",
       "file": "hex",
       "name": "firmware",
       "required": true

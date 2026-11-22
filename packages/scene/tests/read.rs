@@ -315,7 +315,7 @@ fn clock_project(clock: Option<&str>) -> tempfile::TempDir {
     let project = project("nano-button");
     let catalog =
         fs::read_to_string(common::repo().join("parts/atmega328p-tqfp32/part.jsonc")).unwrap();
-    let firmware = "\"firmware\": { \"file\": \"hex\", \"as\": \"text\", \"required\": true, \"sets\": \"/firmware\" }";
+    let firmware = "\"firmware\": { \"file\": \"hex\", \"as\": \"text\", \"required\": true, \"example\": \"example.hex\", \"sets\": \"/firmware\" }";
     assert!(catalog.contains(firmware));
     let version = orbe_scene::card(&common::repo().join("parts"), "atmega328p-tqfp32")
         .unwrap()

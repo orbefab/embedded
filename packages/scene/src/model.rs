@@ -1592,6 +1592,19 @@ fn decode_params(node: &Node, part: &Part, format: u32, out: &mut Findings) -> V
         if let Some((message, hint)) = nowhere {
             out.push(Code::Param, prop.key_span, message, hint);
         }
+        // A `default` already reported the syntax error. A through-param does not read `example`.
+        if let Some(example) = field("example")
+            && default.is_none()
+            && !matches!(kind, ParamKind::Through)
+            && let Err((message, hint)) = example_value(&prop.key, &kind, example)
+        {
+            out.push(
+                Code::Param,
+                example.span,
+                format!("param `{}` example: {message}", prop.key),
+                hint,
+            );
+        }
         params.push(ParamDecl {
             name: prop.key.clone(),
             span: prop.key_span,
@@ -1602,6 +1615,41 @@ fn decode_params(node: &Node, part: &Part, format: u32, out: &mut Findings) -> V
         });
     }
     params
+}
+
+/// Why `example` is not a value a scene could set on this param.
+fn example_value(name: &str, kind: &ParamKind, node: &Node) -> Result<(), (String, String)> {
+    match kind {
+        ParamKind::Number { unit, range } => crate::params::number(*unit, *range, node)
+            .map(|_| ())
+            .map_err(|(_, message, hint)| (message, hint)),
+        ParamKind::Choice(choices) => {
+            let names: Vec<&str> = choices.iter().map(|(choice, _)| choice.as_str()).collect();
+            match node.str() {
+                Some(text) if names.contains(&text) => Ok(()),
+                Some(text) => Err((
+                    format!("`{text}` is not a choice of `{name}`"),
+                    format!("the choices: {}", names.join(", ")),
+                )),
+                None => Err((
+                    format!("expected a choice name, found {}", node.what()),
+                    format!("write one of {}", names.join(", ")),
+                )),
+            }
+        }
+        ParamKind::File(_) => match node.str() {
+            Some(path) if crate::params::catalog_rel(path).is_some() => Ok(()),
+            Some(path) => Err((
+                format!("`{path}` is outside this part's folder"),
+                "name a file in this part's folder".into(),
+            )),
+            None => Err((
+                format!("expected a file path, found {}", node.what()),
+                "name a file in this part's folder".into(),
+            )),
+        },
+        ParamKind::Through => Ok(()),
+    }
 }
 
 /// Why a param's value would reach nothing: it writes no `model` this part has, and no

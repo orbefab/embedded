@@ -6,7 +6,7 @@
   "real": { "generic": true, "maker": "Panasonic", "number": "EEE-1EA470WP", "datasheet": "Panasonic EEE-1EA470WP" },
   "pins": { "pos": [1], "neg": [2] },
   "params": {
-    "capacitance": { "unit": "F", "required": true, "min_exclusive": 0, "sets": "/capacitance" },
+    "capacitance": { "unit": "F", "required": true, "example": 4.7e-5, "min_exclusive": 0, "sets": "/capacitance" },
     "initial": { "unit": "V", "default": null, "sets": "/initial" },
   },
   "model": { "kind": "capacitor", "pins": { "a": "pos", "b": "neg" } },

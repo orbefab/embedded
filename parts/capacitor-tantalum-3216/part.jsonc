@@ -6,7 +6,7 @@
   "real": { "generic": true, "maker": null, "number": null, "datasheet": "KEMET T491, case A" },
   "pins": { "pos": [1], "neg": [2] },
   "params": {
-    "capacitance": { "unit": "F", "required": true, "sets": "/capacitance" },
+    "capacitance": { "unit": "F", "required": true, "example": 1e-5, "sets": "/capacitance" },
     "initial": { "unit": "V", "default": null, "sets": "/initial" },
   },
   "model": { "kind": "capacitor", "pins": { "a": "pos", "b": "neg" } },

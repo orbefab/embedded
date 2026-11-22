@@ -9,8 +9,8 @@ use std::fs;
 use std::path::Path;
 
 use common::repo;
-use jsonc_parser::{JsonValue, ParseOptions, parse_to_value};
-use orbe_scene::{Diagnostic, Files, Literal, Param, catalog_cards};
+use jsonc_parser::{JsonValue, ParseOptions, parse_to_serde_value, parse_to_value};
+use orbe_scene::{Diagnostic, Files, Literal, catalog_cards};
 use serde_json::{Map, Value, json};
 
 #[test]
@@ -27,20 +27,6 @@ fn every_part_under_parts_loads_in_a_format_this_binary_reads() {
     fs::write(
         dir.path().join("probe-ground.jsonc"),
         serde_json::to_string_pretty(&probe_ground()).unwrap(),
-    )
-    .unwrap();
-    fs::copy(
-        root.join("blocks/nano-button-led/firmware/button.hex"),
-        dir.path().join("firmware.hex"),
-    )
-    .unwrap();
-    // An ESP32-S3 `app` and `partitions` are one image. The AVR hex is not an app the
-    // bootloader would start, so those two params get the hello_world blobs.
-    let hello = root.join("packages/scene/tests/fixtures/esp32s3-devkitc");
-    fs::copy(hello.join("app.bin"), dir.path().join("app.bin")).unwrap();
-    fs::copy(
-        hello.join("partitions.bin"),
-        dir.path().join("partitions.bin"),
     )
     .unwrap();
     let released = released_ids(&root);
@@ -63,7 +49,7 @@ fn every_part_under_parts_loads_in_a_format_this_binary_reads() {
             .iter()
             .find(|card| card.name == *id)
             .unwrap_or_else(|| panic!("{id} is in parts/ and has no card"));
-        let scene = scene_for(card, has_ground(&text));
+        let scene = scene_for(&root, card, has_ground(&text));
         let path = dir.path().join("scene.jsonc");
         fs::write(&path, &scene).unwrap();
         match orbe_scene::read(&Files::disk(), &path) {
@@ -201,75 +187,93 @@ fn top_level<'a>(text: &'a str, key: &str) -> Option<JsonValue<'a>> {
         .map(|(_, value)| value)
 }
 
-fn scene_for(card: &orbe_scene::Card, own_ground: bool) -> String {
+fn scene_for(root: &Path, card: &orbe_scene::Card, own_ground: bool) -> String {
     let mut parts = Map::new();
-    parts.insert("u1".into(), Value::Object(instance(card)));
-    let mut root = Map::new();
-    root.insert("format".into(), json!(scene_format()));
+    parts.insert("u1".into(), Value::Object(instance(root, card)));
+    let mut scene = Map::new();
+    scene.insert("format".into(), json!(scene_format()));
     if !own_ground {
         // The ground is a file this test writes, not a catalog part. A catalog resistor here
         // makes a resistor field change look like every part broke.
         parts.insert("g".into(), json!({ "type": "./probe-ground.jsonc" }));
-        root.insert("ground".into(), json!("g.neg"));
+        scene.insert("ground".into(), json!("g.neg"));
     }
-    root.insert("parts".into(), Value::Object(parts));
-    serde_json::to_string_pretty(&Value::Object(root)).unwrap()
+    scene.insert("parts".into(), Value::Object(parts));
+    serde_json::to_string_pretty(&Value::Object(scene)).unwrap()
 }
 
-fn instance(card: &orbe_scene::Card) -> Map<String, Value> {
+fn instance(root: &Path, card: &orbe_scene::Card) -> Map<String, Value> {
     let mut object = Map::new();
     object.insert("type".into(), Value::String(card.name.clone()));
     for param in card.params.iter().filter(|param| param.required) {
-        object.insert(param.name.clone(), param_value(param));
+        let Some(example) = &param.example else {
+            continue;
+        };
+        let value = match example {
+            Literal::Number(raw) => {
+                serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.clone()))
+            }
+            Literal::Name(name) if param.file.is_some() => {
+                Value::String(flat_example(root, &card.name, &param.name, name))
+            }
+            Literal::Name(name) => Value::String(name.clone()),
+        };
+        object.insert(param.name.clone(), value);
     }
     object
 }
 
-fn param_value(param: &Param) -> Value {
-    if let Some(choices) = &param.choices {
-        let name = choices
-            .first()
-            .unwrap_or_else(|| panic!("{} has a required choice and no choice", param.name));
-        return Value::String(name.name.clone());
-    }
-    if param.file.is_some() {
-        let name = match param.name.as_str() {
-            "app" => "app.bin",
-            "partitions" => "partitions.bin",
-            _ => "firmware.hex",
+/// `parts/<id>/<file>` in this test's flat catalog. A param that only passes its value on
+/// names the file in the folder of the part that declares it.
+fn flat_example(root: &Path, id: &str, param: &str, file: &str) -> String {
+    let mut current = id.to_string();
+    let mut name = param.to_string();
+    for _ in 0..16 {
+        let path = root.join("parts").join(&current).join("part.jsonc");
+        let Ok(text) = fs::read_to_string(&path) else {
+            break;
         };
-        return json!(name);
+        let Ok(value) = parse_to_serde_value::<Value>(&text, &ParseOptions::default()) else {
+            break;
+        };
+        if owns_param(&value, &name) {
+            return format!("parts/{current}/{file}");
+        }
+        let Some((child, child_param)) = passed_to(&value, &name) else {
+            break;
+        };
+        current = child;
+        name = child_param;
     }
-    json!(number_text(param))
+    format!("parts/{current}/{file}")
 }
 
-fn number_text(param: &Param) -> String {
-    let above = param.above.as_ref().and_then(literal_f64);
-    let below = param.below.as_ref().and_then(literal_f64);
-    let mut value = match param.unit.as_deref() {
-        Some("F") | Some("H") => 1e-6,
-        Some("s") => 1e-3,
-        _ => 1000.0,
+fn owns_param(part: &Value, name: &str) -> bool {
+    let Some(decl) = part
+        .get("params")
+        .and_then(|node| node.get(name))
+        .and_then(|node| node.as_object())
+    else {
+        return true;
     };
-    if let Some(low) = above
-        && value <= low
-    {
-        value = low + low.abs() + 1.0;
-    }
-    if let Some(high) = below
-        && value >= high
-    {
-        let low = above.unwrap_or(0.0);
-        value = (low + high) / 2.0;
-    }
-    format!("{value}")
+    decl.contains_key("file") || decl.contains_key("unit") || decl.contains_key("choices")
 }
 
-fn literal_f64(literal: &Literal) -> Option<f64> {
-    match literal {
-        Literal::Number(raw) => raw.parse().ok(),
-        Literal::Name(_) => None,
+fn passed_to(part: &Value, name: &str) -> Option<(String, String)> {
+    let specs = part.get("parts")?.as_object()?;
+    for spec in specs.values() {
+        let spec = spec.as_object()?;
+        let ty = spec.get("type")?.as_str()?;
+        if ty.starts_with('.') || ty.starts_with('@') {
+            continue;
+        }
+        for (key, value) in spec {
+            if value.get("param").and_then(|node| node.as_str()) == Some(name) {
+                return Some((ty.to_string(), key.clone()));
+            }
+        }
     }
+    None
 }
 
 fn explain(id: &str, diagnostics: &[Diagnostic]) -> String {

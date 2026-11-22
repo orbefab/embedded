@@ -62,17 +62,6 @@ pub fn part_findings(id: &str, files: &Folder) -> Vec<Diagnostic> {
     project::part_diagnostics(id, &text)
 }
 
-/// A finding at each required param of `parts/<id>/part.jsonc` in `files` that has no default
-/// and whose `min_exclusive` and `max_exclusive` hold no value a scene could set: no finite
-/// number, or for a duration no whole number of picoseconds, zero or more. [`read`] refuses every
-/// value such a param is set to. Empty when the file is missing, not UTF-8, or does not read.
-pub fn unusable_params(id: &str, files: &Folder) -> Vec<Diagnostic> {
-    let Some(text) = utf8_file(files, "part.jsonc") else {
-        return Vec::new();
-    };
-    project::unusable_params(id, &text)
-}
-
 /// Findings the scene reader reports for `blocks/<id>/scene.jsonc` in `files`. [`read`] uses
 /// that reader on a scene. Empty when the file is missing or not UTF-8.
 pub fn block_findings(id: &str, files: &Folder) -> Vec<Diagnostic> {
@@ -90,7 +79,7 @@ fn utf8_file(files: &Folder, rel: &str) -> Option<String> {
 /// Type-checks a scene and every part file it reaches. On success, the netlist the engine
 /// opens. Otherwise every finding, sorted by file, line and column.
 pub fn read(files: &Files, scene: &Path) -> Result<Netlist, Vec<Diagnostic>> {
-    compile(files, scene, false, false, None).map(|(netlist, _)| netlist)
+    compile(files, scene, false, None).map(|(netlist, _)| netlist)
 }
 
 /// The catalog part ids a scene names, including ids reached through other parts.
@@ -133,7 +122,7 @@ pub fn view(files: &Files, scene: &Path) -> Result<View, Vec<Diagnostic>> {
 /// [`read`], then on a scene that reads, the lint rules' warnings, sorted by file, line and
 /// column. Otherwise `read`'s errors.
 pub fn lint(files: &Files, scene: &Path) -> Result<Vec<Diagnostic>, Vec<Diagnostic>> {
-    compile(files, scene, true, false, None).map(|(_, warnings)| warnings)
+    compile(files, scene, true, None).map(|(_, warnings)| warnings)
 }
 
 /// How `orbe check` and `orbe open` name the two counts: the parts the scene lists, and the
@@ -164,9 +153,9 @@ mod tests {
     }
 }
 
-/// What [`read_placed`] gives: the findings, and each path a file param takes.
+/// What [`read_paths`] gives: the findings, and each path a file param takes.
 #[derive(Clone, Debug, Default)]
-pub struct Placed {
+pub struct ReadPaths {
     /// Every finding, sorted as [`read`] sorts them. Empty when the scene reads.
     pub findings: Vec<Diagnostic>,
     /// Each path a file param takes in the scene and the part files it reaches, the way
@@ -175,19 +164,14 @@ pub struct Placed {
     pub file_paths: Vec<FilePath>,
 }
 
-/// [`read`], with the file paths it reads. With `placing`, only the placement of the scene's
-/// parts is read, before a scene gives them what only it can: a value for each required param
-/// with no default, and a ground. An instance the scene places may then leave such a param out.
-/// Its model is not whole, so neither it nor a part under it that the param passes to goes to
-/// the engine. A scene that names no ground, with parts that name none, is not a finding. Every
-/// other finding is `read`'s.
-pub fn read_placed(files: &Files, scene: &Path, placing: bool) -> Placed {
+/// [`read`], with the file paths it reads.
+pub fn read_paths(files: &Files, scene: &Path) -> ReadPaths {
     let mut file_paths = Vec::new();
-    let findings = match compile(files, scene, false, placing, Some(&mut file_paths)) {
+    let findings = match compile(files, scene, false, Some(&mut file_paths)) {
         Ok(_) => Vec::new(),
         Err(found) => found,
     };
-    Placed {
+    ReadPaths {
         findings,
         file_paths,
     }
@@ -197,7 +181,6 @@ fn compile(
     files: &Files,
     scene: &Path,
     lint: bool,
-    placing: bool,
     paths: Option<&mut Vec<FilePath>>,
 ) -> Result<(Netlist, Vec<Diagnostic>), Vec<Diagnostic>> {
     let mut findings = diagnostic::Findings::default();
@@ -210,7 +193,6 @@ fn compile(
         &project,
         &mut findings,
         lint.then_some(&mut warnings),
-        placing,
         paths,
     );
     match netlist {

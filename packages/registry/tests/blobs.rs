@@ -1,6 +1,5 @@
-//! Blob params in a registry build. A blob param with a default is probed at that default. A
-//! required one with no default stays unset, and the build holds back only the bodies it
-//! reaches. No file stands in for a value only a scene gives.
+//! Blob params in a registry build. A blob param with a default is read at that default. A
+//! required one is read at its example, and the file it names is the copy in the part's folder.
 
 mod common;
 
@@ -19,6 +18,16 @@ fn test_elf() -> PathBuf {
 /// The mask ROM the catalog chip commits as the default of its `rom` param.
 fn rom_elf() -> PathBuf {
     repo().join("parts/esp32s3-qfn56/esp32s3_rev0_rom.elf")
+}
+
+/// The app image the catalog chip commits as the example of its `app` param.
+fn hello_app() -> PathBuf {
+    repo().join("packages/scene/tests/fixtures/esp32s3-hello/firmware/hello_world.bin")
+}
+
+/// The partition table the catalog chip commits as the example of its `partitions` param.
+fn hello_table() -> PathBuf {
+    repo().join("packages/scene/tests/fixtures/esp32s3-hello/firmware/partition-table.bin")
 }
 
 /// The fields of an `esp32s3` model besides its firmware.
@@ -71,8 +80,8 @@ fn flash_chip(resistance: &str) -> String {
   "license": "MIT",
   "pins": {{ "VCC": [1], "GND": [2], "OUT": [3] }},
   "params": {{
-    "app": {{ "file": "bin", "as": "blob", "required": true, "sets": "/mcu/firmware/flash/1" }},
-    "partitions": {{ "file": "bin", "as": "blob", "required": true, "sets": "/mcu/firmware/flash/0" }},
+    "app": {{ "file": "bin", "as": "blob", "required": true, "example": "app.bin", "sets": "/mcu/firmware/flash/1" }},
+    "partitions": {{ "file": "bin", "as": "blob", "required": true, "example": "partitions.bin", "sets": "/mcu/firmware/flash/0" }},
     "rom": {{ "file": "elf", "as": "blob", "default": "rom.elf", "sets": "/mcu/rom" }}
   }},
   "model": {{
@@ -182,22 +191,28 @@ fn a_blob_param_with_a_default_is_probed_at_that_default() {
     );
 }
 
-/// `app` and `partitions` stay unset, so the chip body they write waits for a scene. The
-/// resistor body beside it, and the module's own resistor, have their values and are checked.
-/// The `rom` default is still read.
+/// `app` and `partitions` are read at their examples, so the chip body is checked. The
+/// resistor body beside it, and the module's own resistor, are checked too. The `rom` default
+/// is still read.
 #[test]
-fn a_required_blob_param_holds_back_only_the_bodies_it_reaches() {
+fn a_required_blob_param_is_read_at_its_example() {
     let src = source(&[
         ("flash-chip", flash_chip(LOAD)),
         ("flash-module", flash_module(LOAD)),
     ]);
     copy(&rom_elf(), src.path(), "parts/flash-chip/rom.elf");
+    copy(&hello_app(), src.path(), "parts/flash-chip/app.bin");
+    copy(
+        &hello_table(),
+        src.path(),
+        "parts/flash-chip/partitions.bin",
+    );
     let registry = build(src.path()).unwrap();
     for address in ["flash-chip@0.1.0", "flash-module@0.1.0"] {
         record(&registry.output, address);
     }
 
-    // The chip's resistor body is checked while the chip body waits.
+    // The chip's resistor body is checked, and so is the chip body at its examples.
     let chip = flash_chip(r#""220""#);
     fs::write(src.path().join("parts/flash-chip/part.jsonc"), &chip).unwrap();
     let found = refused(src.path());
@@ -221,7 +236,7 @@ fn a_required_blob_param_holds_back_only_the_bodies_it_reaches() {
     )
     .unwrap();
 
-    // The module's resistor is checked while the chip it passes `app` to waits.
+    // The module's resistor is checked. The chip it passes `app` to is checked at the example.
     let module = flash_module(r#""220""#);
     fs::write(src.path().join("parts/flash-module/part.jsonc"), &module).unwrap();
     let found = refused(src.path());
@@ -238,7 +253,7 @@ fn a_required_blob_param_holds_back_only_the_bodies_it_reaches() {
     )
     .unwrap();
 
-    // The `rom` default is read though the body it writes waits, for the chip and the module.
+    // The `rom` default is read, for the chip and the module.
     fs::remove_file(src.path().join("parts/flash-chip/rom.elf")).unwrap();
     let (line, column) = place(&flash_chip(LOAD), r#""rom.elf""#);
     let missing = |file: &str, site: &str| {
@@ -256,13 +271,19 @@ fn a_required_blob_param_holds_back_only_the_bodies_it_reaches() {
     );
 }
 
-/// The catalog's ESP32-S3 chip, module and board build. Their `app` and `partitions` wait for a
-/// scene, so no record ships a file for them. The chip's `rom` is the committed ROM, stored with
-/// the chip.
+/// The catalog's ESP32-S3 chip, module and board build. The chip ships its `rom` and the `app`
+/// and `partitions` examples. The module and the board pass those params on, so they ship no
+/// image of their own.
 #[test]
-fn the_catalog_esp32s3_parts_build_with_the_rom_and_without_an_app() {
+fn the_catalog_esp32s3_parts_build_with_the_rom_and_the_app_examples() {
     let registry = build(&repo()).unwrap();
     let chip = record(&registry.output, "esp32s3-qfn56@0.2.0");
+    let paths: Vec<&str> = chip["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|file| file["path"].as_str().unwrap())
+        .collect();
     let rom = chip["files"]
         .as_array()
         .unwrap()
@@ -270,11 +291,9 @@ fn the_catalog_esp32s3_parts_build_with_the_rom_and_without_an_app() {
         .find(|file| file["path"] == "esp32s3_rev0_rom.elf")
         .unwrap_or_else(|| panic!("no ROM in {chip:#}"));
     assert_eq!(rom["bytes"], 949_552, "{rom}");
-    for id in [
-        "esp32s3-qfn56",
-        "esp32s3-wroom-1-n16r8",
-        "esp32s3-devkitc-1",
-    ] {
+    assert!(paths.contains(&"hello_world.bin"), "{paths:?}");
+    assert!(paths.contains(&"partition-table.bin"), "{paths:?}");
+    for id in ["esp32s3-wroom-1-n16r8", "esp32s3-devkitc-1"] {
         let item = record(&registry.output, &format!("{id}@0.2.0"));
         for file in item["files"].as_array().unwrap() {
             let path = file["path"].as_str().unwrap();

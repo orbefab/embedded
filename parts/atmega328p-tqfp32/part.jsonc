@@ -16,7 +16,7 @@
     "ADC6": [19], "AREF": [20], "ADC7": [22], "PC0": [23], "PC1": [24], "PC2": [25], "PC3": [26], "PC4": [27],
     "PC5": [28], "PC6": [29], "PD0": [30], "PD1": [31], "PD2": [32],
   },
-  "params": { "firmware": { "file": "hex", "as": "text", "required": true, "sets": "/firmware" } },
+  "params": { "firmware": { "file": "hex", "as": "text", "required": true, "example": "example.hex", "sets": "/firmware" } },
   "model": {
     "kind": "atmega328p",
     "clock_hz": { "value": 16000000, "unit": "Hz", "source": { "datasheet": { "doc": "avr-1.8.6 boards.txt", "at": "f_cpu 16000000, the resonator CSTCE16M0V53-R0 frequency the runtime programs", "basis": "nominal" } } },

@@ -422,15 +422,27 @@ fn every_file_of_a_board_is_mit_or_apache() {
 #[test]
 fn the_esp32s3_rom_is_apache_and_the_part_names_it() {
     let chip = card(&parts_dir(), "esp32s3-qfn56").unwrap();
-    assert!(chip.license.contains("Apache-2.0"), "{}", chip.license);
+    assert_eq!(
+        chip.license,
+        "(MIT OR Apache-2.0) AND Apache-2.0 AND MIT AND BSD-3-Clause AND BSD-2-Clause AND LicenseRef-Cadence-Xtensa AND LicenseRef-newlib AND LicenseRef-GCC-Runtime-Library-Exception"
+    );
     let licence = |path: &str| {
         chip.files
             .iter()
             .find(|file| file.path == path)
             .map(|file| file.license.as_str())
     };
+    let image = "Apache-2.0 AND MIT AND BSD-3-Clause AND BSD-2-Clause AND LicenseRef-Cadence-Xtensa AND LicenseRef-newlib AND LicenseRef-GCC-Runtime-Library-Exception";
     assert_eq!(licence("esp32s3_rev0_rom.elf"), Some("Apache-2.0"));
     assert_eq!(licence("LICENSE-rom"), Some("Apache-2.0"));
     assert_eq!(licence("NOTICE"), Some("Apache-2.0"));
     assert_eq!(licence("part.jsonc"), Some("MIT OR Apache-2.0"));
+    assert_eq!(licence("hello_world.bin"), Some(image));
+    assert_eq!(licence("partition-table.bin"), Some(image));
+    assert_eq!(licence("NOTICE-hello"), Some(image));
+    assert_eq!(licence("LICENSE-freertos"), Some("MIT"));
+    assert_eq!(licence("LICENSE-tlsf"), Some("BSD-3-Clause"));
+    assert_eq!(licence("LICENSE-ubsan"), Some("BSD-2-Clause"));
+    assert_eq!(licence("LICENSE-xtensa"), Some("LicenseRef-Cadence-Xtensa"));
+    assert_eq!(licence("LICENSE-newlib"), Some("LicenseRef-newlib"));
 }

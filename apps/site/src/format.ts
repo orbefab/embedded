@@ -41,10 +41,16 @@ export function paramSentence(param: Param): string {
     if (param.above !== undefined) takes += ` above ${si(param.above, param.unit)}`;
     if (param.below !== undefined) takes += `${param.above === undefined ? "" : " and"} below ${si(param.below, param.unit)}`;
   }
-  if (param.required) return `${takes} (required)`;
-  if (param.default === null) return `${takes}, not set by default`;
-  if (param.default !== undefined) return `${takes}, ${value(param.default, param.unit)} by default`;
-  return takes;
+  let sentence: string;
+  if (param.required) sentence = `${takes} (required)`;
+  else if (param.default === null) sentence = `${takes}, not set by default`;
+  else if (param.default !== undefined) sentence = `${takes}, ${value(param.default, param.unit)} by default`;
+  else sentence = takes;
+  if (param.example !== undefined) {
+    const shown = typeof param.example === "number" ? si(param.example, param.unit) : param.example;
+    sentence += `, example ${shown}`;
+  }
+  return sentence;
 }
 
 /** A byte count in B, kB or MB. */
