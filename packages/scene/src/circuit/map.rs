@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::Circuit;
 use crate::diagnostic::Findings;
+use crate::model::ParamKind;
 use crate::syntax;
 
 /// Every instance the reader built, by its dotted path.
@@ -35,6 +36,24 @@ pub struct MapPart {
     pub readings: BTreeMap<String, Reading>,
     /// Hole pin names, when this part is a board other parts plug into.
     pub holes: Vec<String>,
+    /// Each param its part file declares, by name. A part with children hands its own params
+    /// to them, so it lists none.
+    pub params: BTreeMap<String, MapParam>,
+}
+
+/// A param as a live session sees it: whether `set` changes it while the session runs, and
+/// the range a value must fall in.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MapParam {
+    /// A number param's unit, as the part file writes it, such as `1` or `ohm`. Empty for a
+    /// choice or a file.
+    pub unit: String,
+    /// The value is above this, from `min_exclusive`.
+    pub above: Option<f64>,
+    /// The value is below this, from `max_exclusive`.
+    pub below: Option<f64>,
+    /// `"live": true`: `set` changes it while the session runs, as a person turns a knob.
+    pub live: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -76,6 +95,19 @@ impl Circuit<'_> {
                 part.readings = self.readings(file.file);
                 if let Some(board) = &file.holes {
                     part.holes = board.strips.iter().flatten().cloned().collect();
+                }
+                for decl in &file.params {
+                    let param = match &decl.kind {
+                        ParamKind::Number { unit, range } => MapParam {
+                            unit: unit.as_str().to_string(),
+                            above: range.above,
+                            below: range.below,
+                            live: decl.live.is_some(),
+                        },
+                        ParamKind::Choice(_) | ParamKind::File(_) => MapParam::default(),
+                        ParamKind::Through => continue,
+                    };
+                    part.params.insert(decl.name.clone(), param);
                 }
                 for pin in &file.pins {
                     let net = self.pin_net(inst, &pin.name, nets);

@@ -86,6 +86,20 @@ export interface SlideBinding {
   readonly channel: number;
 }
 
+/** A node that turns with a param, such as a potentiometer's shaft with its `position`. */
+export interface TurnBinding {
+  readonly node: Object3D;
+  readonly rest: Quaternion;
+  /** The turn axis in the node's parent frame, a unit vector. */
+  readonly axis: Vector3;
+  /** The turn in radians from where the model draws the node, at a value of the param. */
+  readonly angle: (value: number) => number;
+  /** The param's index in a frame's `params`, or -1 when the session does not run it live. */
+  readonly channel: number;
+  /** The instance's own value of the param, which poses the node when no frame says more. */
+  readonly value: number;
+}
+
 export interface DrawnWire {
   readonly path: WirePath;
   readonly colour: string;
@@ -96,6 +110,7 @@ export interface BuiltScene {
   readonly root: Group;
   readonly glows: readonly GlowBinding[];
   readonly slides: readonly SlideBinding[];
+  readonly turns: readonly TurnBinding[];
   readonly wires: readonly DrawnWire[];
   /** One box per top-level instance and per wire, in the viewer's world. */
   readonly boxes: readonly Box[];
@@ -155,6 +170,15 @@ interface Press {
   readonly channel: number;
 }
 
+interface Turn {
+  readonly node: Object3D;
+  readonly owner: Group;
+  readonly axis: Vec3;
+  readonly angle: (value: number) => number;
+  readonly channel: number;
+  readonly value: number;
+}
+
 interface Builder {
   readonly scene: SceneMessage;
   /** Each model URL's body, or why it could not be read. */
@@ -163,6 +187,7 @@ interface Builder {
   readonly groups: Map<string, Group>;
   readonly glows: GlowBinding[];
   readonly presses: Press[];
+  readonly turns: Turn[];
   readonly errors: string[];
 }
 
@@ -223,16 +248,34 @@ function drawBody(builder: Builder, group: Group, instance: InstanceBase, path: 
   if (press !== undefined && switchChannel >= 0) {
     const joint = part.joints[press.joint];
     if (joint === undefined) throw new Error(`controls.press names no joint "${press.joint}"`);
+    const { slide } = joint;
+    if (slide === undefined) throw new Error(`controls.press names joint "${press.joint}", which does not slide`);
     presses.push({
       node: namedNode(body, joint.node, instance.part),
       owner: group,
-      slide: [joint.slide[0] * joint.range, joint.slide[1] * joint.range, joint.slide[2] * joint.range],
+      slide: [slide[0] * joint.range, slide[1] * joint.range, slide[2] * joint.range],
       channel: switchChannel,
+    });
+  }
+  const turns: Turn[] = [];
+  for (const joint of Object.values(part.joints)) {
+    const { turn, by } = joint;
+    if (turn === undefined || by === undefined) continue;
+    const own = instance.params[by.param];
+    const radians = (joint.range * Math.PI) / 180;
+    turns.push({
+      node: namedNode(body, joint.node, instance.part),
+      owner: group,
+      axis: turn,
+      angle: (value) => ((value - by.min) / (by.max - by.min) - 0.5) * radians,
+      channel: (scene.params ?? []).findIndex((param) => param.ref === `${ref}.${by.param}`),
+      value: typeof own === "number" ? own : (by.min + by.max) / 2,
     });
   }
   group.add(body);
   builder.glows.push(...glows);
   builder.presses.push(...presses);
+  builder.turns.push(...turns);
 }
 
 function build(builder: Builder, instance: InstanceBase, path: readonly string[]): Group {
@@ -324,6 +367,7 @@ export function buildScene(scene: SceneMessage, models: ReadonlyMap<string, Grou
     groups: new Map(),
     glows: [],
     presses: [],
+    turns: [],
     errors: [],
   };
   const root = new Group();
@@ -356,6 +400,12 @@ export function buildScene(scene: SceneMessage, models: ReadonlyMap<string, Grou
     const to = parent.worldToLocal(owner.localToWorld(new Vector3(...slide)));
     return { node, rest: node.position.clone(), delta: to.sub(from), channel };
   });
+  const turns = builder.turns.map(({ node, owner, axis, angle, channel, value }) => {
+    const parent = node.parent ?? owner;
+    const from = parent.worldToLocal(owner.localToWorld(new Vector3(0, 0, 0)));
+    const to = parent.worldToLocal(owner.localToWorld(new Vector3(...axis)));
+    return { node, rest: node.quaternion.clone(), axis: to.sub(from).normalize(), angle, channel, value };
+  });
 
   const boxes = groups.map(boxOf);
   const wires: DrawnWire[] = [];
@@ -382,5 +432,5 @@ export function buildScene(scene: SceneMessage, models: ReadonlyMap<string, Grou
     return { min: box.min.toArray(), max: box.max.toArray() };
   });
   if (builder.errors.length > 0) console.error(`the viewer could not draw all of the scene:\n${builder.errors.join("\n")}`);
-  return { root, glows: builder.glows, slides, wires, boxes: [...boxes, ...wireBoxes], errors: builder.errors };
+  return { root, glows: builder.glows, slides, turns, wires, boxes: [...boxes, ...wireBoxes], errors: builder.errors };
 }

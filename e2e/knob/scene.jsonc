@@ -1,0 +1,30 @@
+// A potentiometer on A0 of a Nano, from GND at `a` to 5V at `b`, and an LED on D13 that lights
+// while A0 reads above half scale. The Nano straddles the center channel over columns 1 to 15,
+// so A0 is column 4, 5V column 12 and GND column 14 on the a to e side.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "../../packages/engine/tests/firmware/sketch/pot_threshold.hex" },
+    "pot1": { "type": "potentiometer-wh148", "resistance": "10k", "position": 0.2 },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+    "led1": { "type": "led-5mm", "color": "red" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "pot1": { "on": { "a": "bb.c18" } },
+    "r1": { "on": { "a": "bb.d25" } }, // b in column 29
+    "led1": { "on": { "anode": "bb.c29" } }, // cathode in column 30
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["bb.a12", "bb.W11", { "color": "#d12b2b" }], // 5V to the + rail
+    ["bb.a14", "bb.X14", { "color": "#161616" }], // GND to the - rail
+    ["bb.a18", "bb.X17", { "color": "#161616" }], // pot1.a to GND
+    ["bb.a22", "bb.W22", { "color": "#d12b2b" }], // pot1.b to 5V
+    ["bb.a4", "bb.a20"], // A0 to the wiper
+    ["bb.c1", "bb.c25"], // D13 to r1.a
+    ["bb.a30", "bb.X29", { "color": "#161616" }], // led1.cathode to GND
+  ],
+}

@@ -1,0 +1,7 @@
+scene.param parts/dial.jsonc:9:127 | param `resistance`: the engine changes only `/position` of a `potentiometer` while a session runs | point `sets` at "/position", or remove "live": true
+scene.param parts/dial.jsonc:10:97 | param `position`: a live param needs `min_exclusive` and `max_exclusive`, the range `set` and a page's slider take | add both bounds, or remove "live": true
+scene.param parts/dial.jsonc:15:85 | joint `knob` turns, so its `range` is in deg | write the range in degrees, as "unit": "deg"
+scene.param parts/dial.jsonc:15:99 | joint `knob` follows param `position`, which is not a number with `min_exclusive` and `max_exclusive` | give `position` both bounds, or remove `by`
+scene.param parts/dial.jsonc:16:97 | joint `lever` follows param `style`, which is not a number with `min_exclusive` and `max_exclusive` | give `style` both bounds, or remove `by`
+scene.unknown_ref parts/dial.jsonc:17:95 | this part has no param named `angle` | its params are resistance, position and style
+scene.param parts/trim.jsonc:9:126 | param `resistance`: the engine changes no field of a `resistor` while a session runs | remove "live": true

@@ -6,10 +6,12 @@ z = 0 and the shaft up +Z on the Z axis. The three pins run down on 5.0
 along X at y = -7.5. Seen from the shaft with the pins down, terminal 1
 is on the left (-X), the wiper 2 in the middle and terminal 3 on the
 right. These are leads 1 to 3, `pin-1` to `pin-3`. The knob's pointer line
-faces -Y at the end of a clockwise turn.
+faces +Y, away from the pins, at mid travel. The track turns 300°, so each end
+of the travel is 150° from there, and a clockwise turn moves the wiper from
+terminal 1 toward terminal 3.
 
 The shaft, the knob and its pointer are one node, `shaft`, whose origin is
-on the turn axis.
+on the turn axis. The part's joint `knob` turns it about -Z with `position`.
 
 From the WH148 outline: can 16 × 7, bushing 7 × 7, knurled shaft 6 rising
 15 from the can's face, pins on 5.0, a locating lug at radius 7. The knob
@@ -73,7 +75,7 @@ def potentiometer_wh148_shape():
     knob_d, knob_h, gap = POT_KNOB
     knob_z = deep + bushing_l + gap
     knob = cyl_z(0, 0, knob_z, knob_z + knob_h, knob_d / 2.0) - cyl_z(0, 0, knob_z - 0.1, deep + shaft_l, shaft_d / 2.0)
-    pointer = box(0, -knob_d / 4.0, knob_z + knob_h + 0.01, 0.8, knob_d / 2.0 - 1.0, 0.02)
+    pointer = box(0, knob_d / 4.0, knob_z + knob_h + 0.01, 0.8, knob_d / 2.0 - 1.0, 0.02)
     turning += [paint(knob, "knob", _KNOB), paint(pointer, "knob-pointer", _POINTER)]
     children.append(bd.Compound(children=turning, label="shaft"))
     pin_w, pin_t, below = POT_PIN
