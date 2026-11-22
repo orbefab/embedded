@@ -29,7 +29,7 @@ fn errors(validator: &Validator, value: &Value) -> Vec<String> {
 
 /// Every record and the index of the registry built from `src` validate against its schemas.
 fn every_file_validates(src: &std::path::Path) -> usize {
-    let registry = build(src, None).unwrap();
+    let registry = build(src).unwrap();
     let items = validator(&registry.output, ITEM_SCHEMA);
     let index = validator(&registry.output, INDEX_SCHEMA);
     let value: Value = serde_json::from_slice(&registry.output["index.json"]).unwrap();
@@ -48,13 +48,13 @@ fn every_file_validates(src: &std::path::Path) -> usize {
 #[test]
 fn every_record_and_the_index_validate_against_the_schemas() {
     let records = every_file_validates(&repo());
-    assert_eq!(records, build(&repo(), None).unwrap().items.len());
+    assert_eq!(records, build(&repo()).unwrap().items.len());
     assert_eq!(every_file_validates(third_party().path()), 2);
 }
 
 #[test]
 fn the_schemas_refuse_what_the_contract_forbids_and_allow_new_fields() {
-    let registry = build(&repo(), None).unwrap();
+    let registry = build(&repo()).unwrap();
     let items = validator(&registry.output, ITEM_SCHEMA);
     let index = validator(&registry.output, INDEX_SCHEMA);
     let led = record(&registry.output, "led-5mm@0.1.1");
@@ -202,7 +202,7 @@ fn nullable(schema: &Value, at: String, found: &mut Vec<String>) {
 
 #[test]
 fn an_absent_field_is_left_out_and_null_is_only_ever_a_value() {
-    let registry = build(&repo(), None).unwrap();
+    let registry = build(&repo()).unwrap();
     let mut found = Vec::new();
     for (path, bytes) in &registry.output {
         if path.ends_with(".json") && !path.contains("schema") {
@@ -284,7 +284,7 @@ fn record_to_card(record: &Value) -> Value {
 
 #[test]
 fn a_part_record_maps_to_orbe_part_json_both_ways() {
-    let registry = build(&repo(), None).unwrap();
+    let registry = build(&repo()).unwrap();
     for card in orbe_scene::catalog_cards(&repo().join("parts")) {
         let cli = serde_json::to_value(&card).unwrap();
         let record = record(&registry.output, &format!("{}@{}", card.name, card.version));

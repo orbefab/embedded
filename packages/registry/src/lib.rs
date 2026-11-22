@@ -7,7 +7,7 @@ mod installed;
 mod item;
 pub mod pattern;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::io;
@@ -43,8 +43,7 @@ pub const RESERVED: [&str; 25] = [
 #[derive(Debug, PartialEq)]
 pub enum Error {
     /// The source holds something a registry cannot: a part that does not read, a Block whose
-    /// parts are missing, two items with one name. Or `--previous` is not a registry this
-    /// build can carry forward.
+    /// parts are missing, two items with one name.
     Invalid(String),
     /// A part file or a Block scene the reader `orbe check` uses would refuse, with those findings.
     Check(Vec<Diagnostic>),
@@ -101,8 +100,7 @@ fn io_error(path: &Path, error: io::Error) -> Error {
 
 /// A registry, before it is written.
 pub struct Registry {
-    /// The items built from the source, by name and version. Records carried from a previous
-    /// build are in `output` and the index, not here.
+    /// The items built from the source, by name and version.
     pub items: Vec<Item>,
     /// Every file of the registry by its `/`-separated path from the registry's root.
     pub output: BTreeMap<String, Vec<u8>>,
@@ -113,11 +111,9 @@ pub struct Registry {
 pub struct Report {
     pub parts: usize,
     pub blocks: usize,
-    /// Records carried from the previous build, at versions the source no longer holds.
-    pub carried: usize,
     /// Files the built records list, once per record that lists them.
     pub listed: usize,
-    /// Files stored under `files/`, once per distinct content, carried ones included.
+    /// Files stored under `files/`, once per distinct content.
     pub stored: usize,
     /// Every file the registry holds: index, schemas, records and stored files.
     pub files: usize,
@@ -207,19 +203,14 @@ impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{} parts and {} Blocks: {} records list {} files",
+            "{} parts and {} Blocks: {} records list {} files. {} files are stored by hash. {} files, {} bytes in all",
             self.parts,
             self.blocks,
             self.parts + self.blocks,
             self.listed,
-        )?;
-        if self.carried > 0 {
-            write!(f, ", and {} records are carried forward", self.carried)?;
-        }
-        write!(
-            f,
-            ". {} files are stored by hash. {} files, {} bytes in all",
-            self.stored, self.files, self.bytes
+            self.stored,
+            self.files,
+            self.bytes
         )
     }
 }
@@ -270,12 +261,9 @@ fn manifest(src: &Path) -> Result<Manifest, Error> {
 
 /// Reads `src`, which holds `registry.jsonc` and `parts/<id>/` and `blocks/<id>/` folders, into
 /// a registry. Only folders there are items. Every published file in an item's folder is one of
-/// its files, and build output is left out. With `previous`, a folder an earlier build wrote,
-/// every record it serves stays served: a version the source still holds must build to the same
-/// bytes, and the others are carried forward with their files. The error is a sentence that
-/// says what does not read, or the findings `orbe check` would print for an installed copy of a
-/// part or a Block.
-pub fn build(src: &Path, previous: Option<&Path>) -> Result<Registry, Error> {
+/// its files, and build output is left out. The error is a sentence that says what does not
+/// read, or the findings `orbe check` would print for an installed copy of a part or a Block.
+pub fn build(src: &Path) -> Result<Registry, Error> {
     match fs::metadata(src) {
         Ok(meta) if meta.is_dir() => {}
         Ok(_) => return Err(Error::Invalid(format!("no folder at {}", src.display()))),
@@ -352,10 +340,6 @@ pub fn build(src: &Path, previous: Option<&Path>) -> Result<Registry, Error> {
             );
         }
     }
-    let carried = match previous {
-        Some(dir) => carry(dir, &manifest.name, &items, &mut output, &mut rows)?,
-        None => 0,
-    };
     rows.sort_by_key(|row| (row.name.clone(), Version::parse(&row.version)));
     let index = Index {
         schema: INDEX_SCHEMA.to_string(),
@@ -374,7 +358,6 @@ pub fn build(src: &Path, previous: Option<&Path>) -> Result<Registry, Error> {
     let report = Report {
         parts: parts.len(),
         blocks: blocks.len(),
-        carried,
         listed,
         stored,
         files: output.len(),
@@ -424,124 +407,6 @@ fn notice(item: &Item, file: &File) -> Vec<Notice> {
         found.push(at(Why::Large));
     }
     found
-}
-
-/// What a carried record must hold for the build to check it: its identity and its files.
-#[derive(Deserialize)]
-struct Served {
-    #[serde(rename = "type")]
-    kind: Kind,
-    name: String,
-    version: String,
-    files: Vec<File>,
-}
-
-/// Adds every record the registry in `dir` serves, and its files, to `output` and `rows`, after
-/// checking each against its hashes. A record the new build also wrote must be byte for byte
-/// the same. Returns how many records were carried.
-fn carry(
-    dir: &Path,
-    name: &str,
-    items: &[Item],
-    output: &mut BTreeMap<String, Vec<u8>>,
-    rows: &mut Vec<Row>,
-) -> Result<usize, Error> {
-    let read = |rel: &str| {
-        let path = dir.join(rel);
-        fs::read(&path).map_err(|e| io_error(&path, e))
-    };
-    let invalid = |what: String| Error::Invalid(format!("--previous {}: {what}", dir.display()));
-    let index: Index = serde_json::from_slice(&read(&format!("{INDEX}.json"))?)
-        .map_err(|e| invalid(format!("index.json is not a registry index: {e}")))?;
-    if index.name != name {
-        return Err(invalid(format!(
-            "it is the registry `{}`, and {MANIFEST} names `{name}`",
-            index.name
-        )));
-    }
-    let mut seen = BTreeSet::new();
-    let mut carried = 0;
-    for row in index.items {
-        let at = item::address(&row.name, &row.version);
-        if !orbe_scene::is_id(&row.name) || Version::parse(&row.version).is_none() {
-            return Err(invalid(format!(
-                "index.json lists `{at}`, which is not an id and a version"
-            )));
-        }
-        if !seen.insert(at.clone()) {
-            return Err(invalid(format!("index.json lists `{at}` twice")));
-        }
-        if row.url != item::record_url(&row.name, &row.version) {
-            return Err(invalid(format!(
-                "index.json gives `{at}` the URL `{}`, and a record's URL is `{at}.json`",
-                row.url
-            )));
-        }
-        let bytes = read(&row.url)?;
-        if sha256(&bytes) != row.sha256 || bytes.len() as u64 != row.bytes {
-            return Err(invalid(format!(
-                "{} does not match the hash and size its index row gives",
-                row.url
-            )));
-        }
-        let served: Served = serde_json::from_slice(&bytes)
-            .map_err(|e| invalid(format!("{} is not a record: {e}", row.url)))?;
-        if (served.kind, &served.name, &served.version) != (row.kind, &row.name, &row.version) {
-            return Err(invalid(format!(
-                "{} is not the {} its index row names",
-                row.url, row.kind
-            )));
-        }
-        if let Some(built) = items.iter().find(|item| item.head().name == row.name)
-            && built.kind() != row.kind
-        {
-            return Err(invalid(format!(
-                "`{}` is a {} there and a {} in this build, and one name names one item",
-                row.name,
-                row.kind,
-                built.kind()
-            )));
-        }
-        if let Some(rebuilt) = output.get(&row.url) {
-            if *rebuilt != bytes {
-                return Err(invalid(format!(
-                    "`{at}` builds to a record other than the one served at that version. A served version never changes, so give the change a new version"
-                )));
-            }
-            continue;
-        }
-        for file in &served.files {
-            if let Some(problem) = path_problem(&file.path) {
-                return Err(invalid(format!(
-                    "{} lists `{}`, which has {problem}",
-                    row.url, file.path
-                )));
-            }
-            let hex = file.sha256.len() == 64
-                && file
-                    .sha256
-                    .bytes()
-                    .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
-            if !hex || file.url != file_url(&file.sha256) {
-                return Err(invalid(format!(
-                    "{} lists `{}` at `{}`, and a file's URL is `files/<sha256>`",
-                    row.url, file.path, file.url
-                )));
-            }
-            let stored = read(&file.url)?;
-            if sha256(&stored) != file.sha256 || stored.len() as u64 != file.bytes {
-                return Err(invalid(format!(
-                    "{} does not match the hash and size {} gives",
-                    file.url, row.url
-                )));
-            }
-            output.insert(file.url.clone(), stored);
-        }
-        output.insert(row.url.clone(), bytes);
-        rows.push(row);
-        carried += 1;
-    }
-    Ok(carried)
 }
 
 impl Registry {
@@ -757,7 +622,7 @@ fn record_pins(src: &Path) -> Result<BTreeMap<String, RecordPin>, Error> {
     if folders(src, "parts")?.is_empty() && folders(src, "blocks")?.is_empty() {
         return Ok(BTreeMap::new());
     }
-    let registry = build(src, None)?;
+    let registry = build(src)?;
     let mut pins = BTreeMap::new();
     for item in &registry.items {
         let name = &item.head().name;
@@ -899,9 +764,9 @@ fn read_released(src: &Path) -> Result<BTreeMap<String, ReleasedLine>, Error> {
 }
 
 /// The items in `src` whose record differs from `released.lock` at the version that file
-/// records. The record is the one [`build`] writes, so this refuses a tree `--previous` would
-/// refuse. A line that names no folder is left, and an item with no line passes. A folder at a
-/// newer version than its line passes. The same version with another record asks for a bump.
+/// records. The record is the one [`build`] writes. A line that names no folder is left, and an
+/// item with no line passes. A folder at a newer version than its line passes. The same version
+/// with another record asks for a bump.
 pub fn released_changes(src: &Path) -> Result<Vec<String>, Error> {
     let lines = read_released(src)?;
     let mut changes = Vec::new();

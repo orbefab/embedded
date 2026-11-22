@@ -526,6 +526,42 @@ fn an_open_after_a_crash_names_that_crash_not_a_retry() {
     assert_ne!(hint, path);
 }
 
+/// Every process of this `open` dies before it writes. The earlier crash stays in the
+/// previous-session note. This `open` names no output of its own.
+#[test]
+fn a_silent_open_after_an_earlier_crash_names_that_file_only_as_the_previous_session() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    runtime.orbe(dir.path(), &["open", "--session", "g"]).ok();
+    kill_daemon(&runtime);
+    fs::write(runtime.sessions().join("g.log"), "panic: earlier\n").unwrap();
+
+    let run = runtime
+        .command(dir.path(), &["open", "--session", "g"])
+        .env("ORBE_TEST_IDLE_TIMEOUT", "300ms")
+        .env("ORBE_TEST_READ_DELAY", "3s")
+        .output()
+        .unwrap();
+    let run = Run::new(run);
+    let path = runtime.sessions().join("g.log.crashed");
+    assert_eq!(
+        (run.code, run.stdout.as_str(), run.stderr.as_str()),
+        (
+            1,
+            "",
+            format!(
+                "error[session_crashed]: the process of session `g` ended before it answered `open`, 5 times\nthe previous session crashed; its last output is in {}\n",
+                path.display()
+            )
+            .as_str(),
+        ),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), "panic: earlier\n");
+    wait_until("every process ended", || runtime.daemons().is_empty());
+}
+
 /// A socket nothing answers on, put in place of a live session's, is not that process's log.
 /// `step` and `close` name the earlier crash and leave the live log in place.
 #[test]

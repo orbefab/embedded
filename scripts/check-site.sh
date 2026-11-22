@@ -15,36 +15,19 @@
 # the site serves unchanged, so a Block's README or block.jsonc still says `orbe add`.
 #
 # Needs what scripts/site.sh needs, and a Chromium found as check-viewer-e2e.sh finds it. It
-# installs nothing. scripts/check.sh web runs this with `--first-deploy`. One of two arguments is
-# required: `--previous <dir>` builds the registry on the one the live site serves, and
-# `--first-deploy` is a local build with no registry to download. A build for a deploy always
-# passes `--previous`. `--renders <dir>` saves screenshots there.
+# installs nothing. `--renders <dir>` saves screenshots there.
 # `--servers vite` or `--servers wrangler` drives the suite on that one host. `wrangler` skips
 # the install-line build, which Playwright drives on `vite preview`. `--shard N/M` passes that
 # shard to the suite. The arguments can be in any order. With none of `--servers` or `--shard`,
 # the check runs both hosts, as `scripts/check.sh web` does. An unknown argument is an error.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-previous=()
-first=0
 renders=""
 saw_renders=0
 servers=both
 shard=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --first-deploy)
-      first=1
-      shift
-      ;;
-    --previous)
-      if [[ $# -lt 2 || -z ${2:-} || ${2:-} == --* ]]; then
-        echo "check-site: --previous needs a directory" >&2
-        exit 2
-      fi
-      previous=(--previous "$2")
-      shift 2
-      ;;
     --renders)
       if [[ $# -lt 2 || -z ${2:-} || ${2:-} == --* ]]; then
         echo "check-site: --renders needs a directory" >&2
@@ -84,18 +67,6 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
-if [[ $first -eq 1 && ${#previous[@]} -gt 0 ]]; then
-  echo "check-site: pass --previous or --first-deploy, not both" >&2
-  exit 2
-fi
-if [[ ${#previous[@]} -gt 0 ]]; then
-  site=("${previous[@]}")
-elif [[ $first -eq 1 ]]; then
-  site=(--first-deploy)
-else
-  echo "check-site: pass --previous <dir>, the registry the live site serves, or --first-deploy for a local build with no registry" >&2
-  exit 2
-fi
 if [[ $saw_renders -eq 1 ]]; then
   export ORBE_RENDERS=$renders
 fi
@@ -114,7 +85,7 @@ own() { grep -rlE "$1" "$dist" --exclude-dir=r --exclude-dir=orbe-wasm --exclude
 source scripts/site-port.sh
 
 if [[ $servers != wrangler ]]; then
-ORBE_SITE_INSTALL=1 scripts/site.sh "${site[@]}" >/dev/null
+ORBE_SITE_INSTALL=1 scripts/site.sh >/dev/null
 scripts/site-install.sh
 
 export ORBE_E2E=site
@@ -125,7 +96,7 @@ with_fresh_ports ORBE_SITE_VITE_PORT -- pnpm exec playwright test apps/site/e2e/
 unset ORBE_SITE_INSTALL_E2E ORBE_SITE_SERVERS
 fi
 
-scripts/site.sh "${site[@]}"
+scripts/site.sh
 [[ ! -e $dist/install.sh ]] || fail "install.sh is served with ORBE_SITE_INSTALL unset"
 shown=$(own 'orbe add|cargo install|orbefab\.com/embedded/install\.sh')
 [[ -z $shown ]] || fail "these files of the site's own show an install line with ORBE_SITE_INSTALL unset: $shown"

@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbe_engine::diagnostic::Diagnostic;
 use orbe_engine::name::Ref;
 
+use super::plug::Join;
 use super::{Circuit, ROOT};
 use crate::diagnostic::{Code, Findings, Lint};
 use crate::model::{Instance, Part, TypeRef};
@@ -38,8 +39,8 @@ struct Scope<'c, 'p> {
     /// Nets left out of `net.floating`. See [`Circuit::quiet_floating`].
     quiet: BTreeSet<String>,
     /// A part drawn in a board's hole while it is not seated: the board, the hole, the pin,
-    /// and whether seating that pin would put another leg in a hole a wire already holds.
-    hovering: BTreeMap<String, (String, String, String, bool)>,
+    /// and how to join that pin without claiming a hole something already holds.
+    hovering: BTreeMap<String, (String, String, String, Join)>,
 }
 
 impl Scope<'_, '_> {
@@ -230,7 +231,7 @@ fn unplaced(s: &Scope, out: &mut Findings) {
         );
     }
     for &(instance, _, _) in &s.tops {
-        let Some((board, hole, pin, blocked)) = s.hovering.get(&instance.name) else {
+        let Some((board, hole, pin, join)) = s.hovering.get(&instance.name) else {
             continue;
         };
         let turn = layout
@@ -248,13 +249,12 @@ fn unplaced(s: &Scope, out: &mut Findings) {
                 instance.name
             ),
         };
-        // Seating the free leg would also plug the leg a wire already holds into that hole.
-        let hint = if *blocked {
-            format!(
-                "join it with a contact wire, as [\"{leg}\", \"{board}.{hole}\", {{ \"kind\": \"contact\" }}]"
-            )
-        } else {
-            format!("seat it with \"on\", as {seat}")
+        let hint = match join {
+            Join::Seat => format!("seat it with \"on\", as {seat}"),
+            Join::Contact(target) => format!(
+                "join it with a contact wire, as [\"{leg}\", \"{target}\", {{ \"kind\": \"contact\" }}]"
+            ),
+            Join::Full => super::FULL_STRIP_HINT.to_string(),
         };
         out.push(
             Code::Lint(Lint::Unplaced),
