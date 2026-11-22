@@ -26,14 +26,13 @@ impl Name {
         Ok(Name(text.to_string()))
     }
 
-    /// The project folder above `cwd` (the nearest one with scene.jsonc or parts.lock), else
+    /// The project folder above `cwd` (the nearest one with scene.jsonc or parts/), else
     /// the git worktree root, else `cwd`: its folder name and a short hash of its path.
     pub fn default_for(cwd: &Path) -> Name {
         let above = |marker: fn(&Path) -> bool| cwd.ancestors().find(|dir| marker(dir));
-        let folder =
-            above(|dir| dir.join("scene.jsonc").is_file() || dir.join("parts.lock").is_file())
-                .or_else(|| above(|dir| dir.join(".git").exists()))
-                .unwrap_or(cwd);
+        let folder = above(|dir| dir.join("scene.jsonc").is_file() || dir.join("parts").is_dir())
+            .or_else(|| above(|dir| dir.join(".git").exists()))
+            .unwrap_or(cwd);
         let file = folder
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -158,25 +157,68 @@ impl Place {
         left
     }
 
-    /// `<name>.crashed.log`, the output of a session that ended without closing. The next crash
-    /// replaces it.
+    /// `<name>.log.crashed`, the output of a session that ended without closing. The next crash
+    /// replaces it. The name is not a session's log, socket, version or start log: a session
+    /// may contain `.`, and a start log's id is a number.
     pub fn crashed_log(&self, name: &Name) -> PathBuf {
-        self.dir.join(format!("{name}.crashed.log"))
+        self.dir.join(format!("{name}.log.crashed"))
     }
 
-    /// Moves `<name>.log` onto `<name>.crashed.log` when the log holds output, replacing any
-    /// older crashed log. The crashed log's path when that file holds output.
+    /// Moves `<name>.log` onto the crash log when no process holds that log, empty or not, so a
+    /// crash that wrote nothing replaces an older crash's output. A running process locks its
+    /// log, and the lock stays when it renames the log onto this name, so a locked log is left
+    /// where the process writes. When `<name>.log` is missing, an earlier command already took
+    /// this crash's log and the crash log stays. An empty crash log that no process holds is
+    /// removed. The path when the crash log then holds output.
     pub fn take_crash_log(&self, name: &Name) -> Option<PathBuf> {
         let log = self.log(name);
         let crashed = self.crashed_log(name);
-        if holds_output(&log) {
-            let _ = fs::rename(&log, &crashed);
+        match lock_if_free(&log) {
+            Some(fd) => {
+                let _ = fs::rename(&log, &crashed);
+                drop(fd);
+            }
+            None if process_holds(&log) => {}
+            None => {
+                let _ = fs::rename(&log, &crashed);
+            }
         }
-        holds_output(&crashed).then_some(crashed)
+        if holds_output(&crashed) {
+            Some(crashed)
+        } else if process_holds(&crashed) {
+            None
+        } else {
+            let _ = fs::remove_file(&crashed);
+            None
+        }
     }
 }
 
-fn holds_output(path: &Path) -> bool {
+/// An exclusive lock on `path`, held until the returned file is dropped. `None` when the path
+/// is missing, not a file this can open, or a process already holds it.
+fn lock_if_free(path: &Path) -> Option<std::os::fd::OwnedFd> {
+    use rustix::fs::{FlockOperation, Mode, OFlags};
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let fd = rustix::fs::open(path, flags, Mode::empty()).ok()?;
+    rustix::fs::flock(&fd, FlockOperation::NonBlockingLockExclusive).ok()?;
+    Some(fd)
+}
+
+/// Whether a running process holds `path`. The lock is the one a session's process keeps on
+/// its log for as long as it runs.
+fn process_holds(path: &Path) -> bool {
+    use rustix::fs::{FlockOperation, Mode, OFlags};
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let Ok(fd) = rustix::fs::open(path, flags, Mode::empty()) else {
+        return false;
+    };
+    matches!(
+        rustix::fs::flock(&fd, FlockOperation::NonBlockingLockExclusive),
+        Err(rustix::io::Errno::WOULDBLOCK)
+    )
+}
+
+pub(super) fn holds_output(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() > 0)
 }
 

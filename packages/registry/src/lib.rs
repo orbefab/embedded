@@ -297,7 +297,7 @@ pub fn build(src: &Path) -> Result<Registry, Error> {
         block_cards.push(orbe_scene::block_card(id, files, &cards).map_err(Error::Invalid)?);
     }
     // The rest of `orbe check`: load the folders and compile, once per part and once per Block.
-    match installed::refusal(&manifest.name, &parts, &blocks, &cards) {
+    match installed::refusal(&parts, &blocks, &cards) {
         Some(installed::Refusal::Outside(lines)) => return Err(Error::Invalid(lines.join("\n"))),
         Some(installed::Refusal::Check(found)) => return Err(Error::Check(found)),
         None => {}

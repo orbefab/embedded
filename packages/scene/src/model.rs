@@ -376,9 +376,9 @@ fn format_refusal(
         };
         let message = format!("{label} is written for an older orbe");
         let hint = if is_id(label) {
-            let command = crate::project::add_writing(add, &[label.to_string()], true)
-                .expect("the id is named");
-            format!("run `{command}`")
+            let command =
+                crate::project::add_writing(add, &[label.to_string()]).expect("the id is named");
+            format!("the copy is this project's file. remove the folder and run `{command}`")
         } else {
             format!(
                 "update this file to format {max}, including its model. if it copies a catalog part, point the scene at that id instead of this path"

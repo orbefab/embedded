@@ -1,5 +1,5 @@
 //! `orbe add <block>` installs a Block into a project. It copies each part the scene names into
-//! `parts/` and lists them in `parts.lock`, then writes the scene, firmware, tests and README.
+//! `parts/`, then writes the scene, firmware, tests and README.
 
 #![cfg(unix)]
 
@@ -69,14 +69,13 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
                 assert_eq!(installed.get(&rel), Some(&bytes), "{id}: {rel}");
             }
         }
-        let lock = fs::read_to_string(dir.join("parts.lock")).unwrap();
-        let locked: Vec<&str> = lock.lines().filter_map(|l| l.split(' ').next()).collect();
+        assert!(!dir.join("parts.lock").exists(), "{id}");
         let mut copied: Vec<String> = fs::read_dir(dir.join("parts"))
             .unwrap()
             .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .filter(|name| dir.join("parts").join(name).join("part.jsonc").is_file())
             .collect();
         copied.sort();
-        assert_eq!(locked, copied, "{id}: parts.lock lists each copy");
         assert!(copied.iter().any(|part| part == "led-5mm"), "{id}");
         for part in &copied {
             assert_eq!(
@@ -96,12 +95,16 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
         );
 
         let again = orbe(dir, &["add", id]);
-        assert_eq!(again.code, 0, "{id}: {}", again.stdout);
-        assert!(!again.stdout.contains("wrote"), "{id}: {}", again.stdout);
+        assert_eq!(again.code, 1, "{id}: {}", again.stdout);
+        assert!(
+            again.stdout.contains("error[part_exists]"),
+            "{id}: {}",
+            again.stdout
+        );
         assert_eq!(
             tree(dir),
             installed,
-            "{id}: a second install changes nothing"
+            "{id}: a second install writes nothing"
         );
     }
 }
@@ -131,32 +134,21 @@ fn a_block_json_names_the_same_next_as_the_text() {
 }
 
 #[test]
-fn a_second_add_writes_the_scene_a_stopped_install_left_out() {
+fn a_second_add_refuses_when_the_part_folders_are_already_there() {
     let project = tempfile::tempdir().unwrap();
     let dir = project.path();
     let first = orbe(dir, &["add", "nano-button-led"]);
     assert_eq!(first.code, 0, "{}", first.stdout);
     fs::remove_file(dir.join("scene.jsonc")).unwrap();
     let again = orbe(dir, &["add", "nano-button-led"]);
-    assert_eq!(again.code, 0, "{}{}", again.stdout, again.stderr);
+    assert_eq!(again.code, 1, "{}{}", again.stdout, again.stderr);
     assert!(
-        again.stdout.contains("wrote scene.jsonc\n"),
+        again.stdout.contains("error[part_exists]"),
         "{}",
         again.stdout
     );
-    assert!(
-        again.stdout.contains("kept firmware/button.hex\n"),
-        "{}",
-        again.stdout
-    );
-    assert!(
-        again.stdout.contains("parts.lock unchanged\n"),
-        "{}",
-        again.stdout
-    );
-    assert!(!again.stdout.contains("wrote parts/"), "{}", again.stdout);
-    let check = orbe(dir, &["check", "scene.jsonc"]);
-    assert_eq!(check.code, 0, "{}", check.stdout);
+    assert!(!dir.join("scene.jsonc").exists());
+    assert!(!again.stdout.contains("wrote "), "{}", again.stdout);
 }
 
 #[test]
@@ -344,7 +336,6 @@ fn a_block_installs_alone() {
     let project = tempfile::tempdir().unwrap();
     for args in [
         &["add", "nano-button-led", "led-5mm"][..],
-        &["add", "nano-button-led", "--overwrite"],
         &["add", "nano-button-led@0.1.3"],
     ] {
         let run = orbe(project.path(), args);

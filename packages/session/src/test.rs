@@ -92,7 +92,7 @@ pub struct Located {
 }
 
 /// Finds a test file's project from `real`, its path with every symlink resolved: the nearest
-/// folder above it that holds `scene.jsonc` or `parts.lock`, as `orbe add` finds one. The file
+/// folder above it that holds `scene.jsonc` or a `parts/` folder, as `orbe add` finds one. The file
 /// must sit under that folder's `tests/`, resolved too, so a linked `tests/` is its target.
 /// `named` is the path as given, and `cwd` is the working folder, resolved. A refusal is its
 /// message and hint.
@@ -102,7 +102,7 @@ pub fn locate(real: &Path, named: &Path, cwd: &Path) -> Result<Located, (String,
         return Err((
             format!("{} is in no orbe project", named.display()),
             format!(
-                "{really}no folder above it holds scene.jsonc or parts.lock; put it in the project's tests/ folder, beside scene.jsonc"
+                "{really}no folder above it holds scene.jsonc or parts/; put it in the project's tests/ folder, beside scene.jsonc"
             ),
         ));
     };
@@ -117,7 +117,7 @@ pub fn locate(real: &Path, named: &Path, cwd: &Path) -> Result<Located, (String,
         return Err((
             format!("{} is not in its project's tests/ folder", named.display()),
             format!(
-                "{really}its project is {}, the nearest folder above it with scene.jsonc or parts.lock; put the file in {}/",
+                "{really}its project is {}, the nearest folder above it with scene.jsonc or parts/; put the file in {}/",
                 named_root.display(),
                 root.join("tests").display()
             ),
@@ -135,7 +135,7 @@ pub fn cwd() -> std::io::Result<PathBuf> {
 }
 
 fn is_project(dir: &Path) -> bool {
-    dir.join("scene.jsonc").is_file() || dir.join("parts.lock").is_file()
+    dir.join("scene.jsonc").is_file() || dir.join("parts").is_dir()
 }
 
 /// `path` from `cwd`, both resolved: below it as is, else up with `..` to a folder they share

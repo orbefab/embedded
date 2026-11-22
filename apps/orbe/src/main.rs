@@ -67,24 +67,15 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Copies catalog parts into `parts/` and writes `parts.lock`, or installs a Block by
-    /// copying its parts first, then writing its scene, firmware, tests and README.
+    /// Copies catalog parts into `parts/<id>/`, or installs a Block by copying its parts
+    /// first, then writing its scene, firmware, tests and README. The project owns the copy.
     #[command(display_order = 4)]
     Add {
         /// Part ids, or one Block id. A part's version is `id@<version>`.
         ids: Vec<String>,
-        /// The project folder, the one with scene.jsonc. The current folder by default.
+        /// The project folder, the one with scene.jsonc or parts/. The current folder by default.
         #[arg(short = 'C', value_name = "DIR", allow_hyphen_values = true)]
         dir: Option<PathBuf>,
-        /// Replace a copy that differs within the same major version.
-        #[arg(long)]
-        overwrite: bool,
-        /// Show what would change, and write nothing.
-        #[arg(long)]
-        diff: bool,
-        /// Rebuild `parts.lock` from the part folders.
-        #[arg(long)]
-        relock: bool,
         /// Print one JSON envelope instead of text.
         #[arg(long)]
         json: bool,
@@ -314,14 +305,7 @@ fn main() -> ExitCode {
             Command::Check { scene, json } => check(&scene_or_default(scene), json),
             Command::Lint { scene, json } => lint(&scene_or_default(scene), json),
             Command::Nets { scene, json } => nets(&scene_or_default(scene), json),
-            Command::Add {
-                ids,
-                dir,
-                overwrite,
-                diff,
-                relock,
-                json,
-            } => add(dir.as_deref(), ids, overwrite, diff, relock, json),
+            Command::Add { ids, dir, json } => add(dir.as_deref(), ids, json),
             Command::Part { id, json } => show_part(&id, json),
             Command::Search { words, json } => search_parts(&words, json),
             Command::Blocks { json } => list_blocks(json),
@@ -733,7 +717,6 @@ fn check(scene: &Path, json: bool) -> ExitCode {
                 "parts": netlist.parts,
                 "nets": netlist.nets.len(),
                 "ground": netlist.ground,
-                "modified": netlist.modified,
             },
         }));
     } else {
@@ -744,11 +727,6 @@ fn check(scene: &Path, json: bool) -> ExitCode {
             netlist.nets.len(),
             netlist.ground
         );
-        for id in &netlist.modified {
-            println!(
-                "note: `{id}` differs from its parts.lock line; it has children and no model, so the edit is allowed"
-            );
-        }
     }
     ExitCode::SUCCESS
 }
@@ -1098,20 +1076,8 @@ fn build_registry(src: &Path, out: &Path, json: bool) -> ExitCode {
 }
 
 #[cfg(unix)]
-fn add(
-    dir: Option<&Path>,
-    ids: Vec<String>,
-    overwrite: bool,
-    diff: bool,
-    relock: bool,
-    json: bool,
-) -> ExitCode {
-    let request = Request {
-        ids,
-        overwrite,
-        diff,
-        relock,
-    };
+fn add(dir: Option<&Path>, ids: Vec<String>, json: bool) -> ExitCode {
+    let request = Request { ids };
     match orbe_scene::add_parts(dir, &request) {
         Ok(reply) => print_reply(reply, json),
         Err(error) => io_exit(&error.to_string(), json),
@@ -1119,14 +1085,7 @@ fn add(
 }
 
 #[cfg(not(unix))]
-fn add(
-    _dir: Option<&Path>,
-    _ids: Vec<String>,
-    _overwrite: bool,
-    _diff: bool,
-    _relock: bool,
-    json: bool,
-) -> ExitCode {
+fn add(_dir: Option<&Path>, _ids: Vec<String>, json: bool) -> ExitCode {
     let message = "`orbe add` needs Unix for now";
     if json {
         print_json(&json!({

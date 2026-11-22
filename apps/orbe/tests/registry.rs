@@ -211,9 +211,7 @@ fn refused_part(id: &str, part: &str, snippet: &str) {
     std::fs::write(copy.join("part.jsonc"), part).unwrap();
     std::fs::write(
         project.join("scene.jsonc"),
-        format!(
-            "{{ \"format\": 1, \"parts\": {{ \"chip\": {{ \"type\": \"./parts/{id}/part.jsonc\" }} }} }}\n"
-        ),
+        format!("{{ \"format\": 1, \"parts\": {{ \"chip\": {{ \"type\": \"{id}\" }} }} }}\n"),
     )
     .unwrap();
     let found = check_finding(&project.join("scene.jsonc"), snippet);
@@ -384,13 +382,6 @@ fn copy_tree(from: &Path, to: &Path) {
     }
 }
 
-fn lock_line(folder: &Path, id: &str, version: &str, registry: &str) -> String {
-    format!(
-        "{id} {version} {registry} {}",
-        orbe_scene::folder_hash(folder).unwrap()
-    )
-}
-
 /// A scene that places the part `id` as `r1` and grounds its pin `a`.
 fn grounded(id: &str) -> String {
     format!(
@@ -398,22 +389,13 @@ fn grounded(id: &str) -> String {
     )
 }
 
-/// The project an install of these folders would check: the part folders, a lock line per
-/// folder, and `scene.jsonc` read from the project directory.
+/// The project an install of these folders would check: the part folders and `scene.jsonc`.
 fn project_locked(project: &Path, scene: &str, parts: &[(&str, &Path, &str, &str)]) {
     std::fs::create_dir_all(project).unwrap();
-    let mut lines = Vec::new();
-    for (id, folder, version, registry) in parts {
+    for (id, folder, _version, _registry) in parts {
         copy_tree(folder, &project.join("parts").join(id));
-        lines.push(lock_line(folder, id, version, registry));
     }
-    lines.sort();
     std::fs::write(project.join("scene.jsonc"), scene).unwrap();
-    std::fs::write(
-        project.join("parts.lock"),
-        format!("{}\n", lines.join("\n")),
-    )
-    .unwrap();
 }
 
 struct Checked {
@@ -756,33 +738,6 @@ fn a_block_scene_that_names_an_unknown_hole_is_not_published() {
         ],
     );
     refuse_installed(&src, &project, "blocks/bad-hole/scene.jsonc", "zz99");
-}
-
-#[test]
-fn a_changed_sealed_catalog_part_is_not_published() {
-    let dir = tempfile::tempdir().unwrap();
-    let src = dir.path().join("src");
-    manifest(&src);
-    let folder = src.join("parts/resistor-axial");
-    copy_tree(&repo().join("parts/resistor-axial"), &folder);
-    let path = folder.join("part.jsonc");
-    let text = std::fs::read_to_string(&path).unwrap();
-    let edited = text.replacen("Resistor, 1/4 W axial", "Resistor, edited", 1);
-    assert_ne!(text, edited);
-    std::fs::write(&path, edited).unwrap();
-    let scene = "{ \"format\": 1, \"parts\": { \"r1\": { \"type\": \"resistor-axial\", \"resistance\": \"220\" } }, \"ground\": \"r1.b\" }\n";
-    let project = dir.path().join("project");
-    project_locked(
-        &project,
-        scene,
-        &[("resistor-axial", &folder, "0.1.1", "@orbefab")],
-    );
-    refuse_installed(
-        &src,
-        &project,
-        "parts/resistor-axial/part.jsonc",
-        "in `title`",
-    );
 }
 
 #[test]

@@ -16,7 +16,7 @@ fn a_test_file_outside_its_projects_tests_folder_is_refused() {
     assert_eq!(
         run.stderr,
         format!(
-            "error[usage]: smoke.test is not in its project's tests/ folder\n  hint: its real path is {}; its project is ., the nearest folder above it with scene.jsonc or parts.lock; put the file in tests/\n",
+            "error[usage]: smoke.test is not in its project's tests/ folder\n  hint: its real path is {}; its project is ., the nearest folder above it with scene.jsonc or parts/; put the file in tests/\n",
             dir.path()
                 .canonicalize()
                 .unwrap()
@@ -49,7 +49,7 @@ fn a_test_belongs_to_the_nearest_project_above_it() {
     assert_eq!(
         run.stderr,
         format!(
-            "error[usage]: tests/proj/smoke.test is not in its project's tests/ folder\n  hint: its real path is {}; its project is tests/proj, the nearest folder above it with scene.jsonc or parts.lock; put the file in tests/proj/tests/\n",
+            "error[usage]: tests/proj/smoke.test is not in its project's tests/ folder\n  hint: its real path is {}; its project is tests/proj, the nearest folder above it with scene.jsonc or parts/; put the file in tests/proj/tests/\n",
             inner.canonicalize().unwrap().join("smoke.test").display()
         )
     );
@@ -89,7 +89,7 @@ fn a_test_is_found_from_its_real_path() {
         assert_eq!(
             run.stderr,
             format!(
-                "error[usage]: {named} is not in its project's tests/ folder\n  hint: its real path is {}; its project is {}, the nearest folder above it with scene.jsonc or parts.lock; put the file in {}/tests/\n",
+                "error[usage]: {named} is not in its project's tests/ folder\n  hint: its real path is {}; its project is {}, the nearest folder above it with scene.jsonc or parts/; put the file in {}/tests/\n",
                 real.join("a.test").display(),
                 elsewhere.display(),
                 elsewhere.display()

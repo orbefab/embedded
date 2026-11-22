@@ -214,8 +214,6 @@ pub struct Netlist {
     /// Net names, ground first, then by name.
     pub nets: Vec<String>,
     pub ground: String,
-    /// Catalog copies with children and no model that differ from `parts.lock`.
-    pub modified: Vec<String>,
     pub refs: RefMap,
     pub view: View,
     /// The bytes of each blob the netlist names, read from the blob params' files.
@@ -1563,7 +1561,6 @@ impl<'p> Circuit<'p> {
             parts: parts.len() - left_out.len(),
             nets: names,
             ground: ground_name,
-            modified: self.project.modified.clone(),
             refs,
             view,
             blobs: std::mem::take(&mut self.blobs),

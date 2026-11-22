@@ -325,11 +325,11 @@ fn a_block_names_an_id_the_catalog_lacks() {
 fn a_block_that_holds_a_lock_is_refused() {
     let dir = block_with(
         r#"{ "format": 1, "parts": { "led1": { "type": "led-5mm", "color": "red" } } }"#,
-        &["parts.lock"],
+        &["parts"],
     );
     assert_eq!(
         findings(dir.path())[0],
-        "scene.role: this folder holds block.jsonc, so it is a Block, which reads its parts from the catalog built into orbe, and it also holds `parts.lock` | remove `parts.lock`, or remove block.jsonc to make the folder a project that reads its own copies"
+        "scene.role: this folder holds block.jsonc, so it is a Block, which reads its parts from the catalog built into orbe, and it also holds `parts` | remove `parts`, or remove block.jsonc to make the folder a project that reads its own copies"
     );
 }
 

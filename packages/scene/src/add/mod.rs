@@ -1,14 +1,13 @@
 //! `orbe add` decides what to copy, then writes it as one transaction.
 //!
 //! [`plan::plan`] is a pure function of the request, the catalog and a snapshot of the folders
-//! it may write or compare. [`txn::apply`] is the only code that writes part folders or
-//! `parts.lock`. It logs each step, and a run that stops part way is rolled back or finished by
-//! the next run, which [`journal::next`] decides from the log and the hashes on disk. [`held`]
-//! keeps a second run out while one is at work.
+//! it may write. [`txn::apply`] is the only code that writes part folders. It logs each step,
+//! and a run that stops part way is rolled back or finished by the next run, which
+//! [`journal::next`] decides from the log and the hashes on disk. [`held`] keeps a second run
+//! out while one is at work.
 
 mod at;
 mod block;
-mod diff;
 mod held;
 mod journal;
 mod plan;
@@ -29,29 +28,23 @@ use held::Hold;
 use plan::Plan;
 #[cfg(test)]
 use txn::Inject;
-use txn::{Change, Fault, Pending, Stop};
+use txn::{Change, Fault, Stop};
 
 /// What the CLI asked `orbe add` to do.
 pub struct Request {
     pub ids: Vec<String>,
-    pub overwrite: bool,
-    pub diff: bool,
-    pub relock: bool,
 }
 
 /// A reply the CLI prints as text or as one JSON envelope.
 pub enum Reply {
     Add(AddReply),
     Block(BlockReply),
-    Diff(DiffReply),
-    Relock(RelockReply),
     Refuse(Refusal),
     Usage(String),
 }
 
 pub struct AddReply {
     pub parts: Vec<Copied>,
-    pub lock_written: bool,
     pub notes: Vec<String>,
 }
 
@@ -59,20 +52,6 @@ pub struct Copied {
     pub id: String,
     pub version: String,
     pub wrote: bool,
-    /// What was at `parts/<id>` before this add replaced it.
-    pub replaced: Option<String>,
-}
-
-pub struct DiffReply {
-    pub notes: Vec<String>,
-    pub files: String,
-}
-
-pub struct RelockReply {
-    pub lock_written: bool,
-    pub parts: Vec<String>,
-    pub modified: Vec<String>,
-    pub notes: Vec<String>,
 }
 
 pub struct Refusal {
@@ -90,13 +69,9 @@ pub enum AddCode {
     SceneExists,
     FileExists,
     Symlink,
-    LockSyntax,
     Registry,
     UnknownPart,
-    UnknownVersion,
-    PartConflict,
-    PartDiffers,
-    PartModified,
+    PartExists,
 }
 
 impl AddCode {
@@ -108,13 +83,9 @@ impl AddCode {
             AddCode::SceneExists => "scene_exists",
             AddCode::FileExists => "file_exists",
             AddCode::Symlink => "symlink",
-            AddCode::LockSyntax => "lock_syntax",
             AddCode::Registry => "registry",
             AddCode::UnknownPart => "unknown_part",
-            AddCode::UnknownVersion => "unknown_version",
-            AddCode::PartConflict => "part_conflict",
-            AddCode::PartDiffers => "part_differs",
-            AddCode::PartModified => "part_modified",
+            AddCode::PartExists => "part_exists",
         }
     }
 }
@@ -145,8 +116,6 @@ impl Reply {
         match self {
             Reply::Add(reply) => add_text(reply),
             Reply::Block(reply) => block::text(reply),
-            Reply::Diff(reply) => diff_text(reply),
-            Reply::Relock(reply) => relock_text(reply),
             Reply::Refuse(refusal) => refuse_text(refusal),
             Reply::Usage(message) => format!("error[usage]: {message}"),
         }
@@ -156,19 +125,6 @@ impl Reply {
         match self {
             Reply::Add(reply) => json!({ "ok": true, "data": add_data(reply) }),
             Reply::Block(reply) => block::json(reply),
-            Reply::Diff(reply) => json!({
-                "ok": true,
-                "data": { "diff": reply.files, "notes": reply.notes }
-            }),
-            Reply::Relock(reply) => json!({
-                "ok": true,
-                "data": {
-                    "lock_written": reply.lock_written,
-                    "parts": reply.parts,
-                    "modified": reply.modified,
-                    "notes": reply.notes,
-                }
-            }),
             Reply::Refuse(refusal) => refuse_json(refusal),
             Reply::Usage(message) => json!({
                 "ok": false,
@@ -178,8 +134,8 @@ impl Reply {
     }
 }
 
-/// Copies parts into a project and writes `parts.lock`, or installs the one Block the request
-/// names. A refusal writes nothing. `dir` is the folder `-C` named, as the user wrote it, so
+/// Copies parts into a project, or installs the one Block the request names. A refusal writes
+/// nothing. `dir` is the folder `-C` named, as the user wrote it, so
 /// hints can repeat it. With none, a folder inside another project must already be one. An
 /// empty folder, and any folder with no project above it, is where a new project starts. An
 /// id the catalog does not have is reported before either of those.
@@ -213,33 +169,12 @@ fn run_in(dir: Option<&Path>, request: &Request, fault: &mut Fault) -> Result<Re
     let _held = match held::hold(root) {
         Ok(held) => Some(held),
         Err(Hold::Busy) => return Ok(Reply::Refuse(busy(&again))),
-        Err(Hold::Io(_)) if request.diff => None,
         Err(Hold::Io(error)) => return Err(error),
     };
-    let recovered = if request.diff {
-        txn::Recovered {
-            lines: pending_note(
-                root,
-                &request_command(
-                    &add,
-                    &Request {
-                        ids: request.ids.clone(),
-                        diff: false,
-                        ..*request
-                    },
-                ),
-            ),
-            planned: Vec::new(),
-        }
-    } else {
-        txn::recover(root, &again, fault).map_err(stop_error)?
-    };
+    let recovered = txn::recover(root, &again, fault).map_err(stop_error)?;
     let catalog = Catalog::builtin();
     let snapshot = snapshot::load(root, &plan::wanted(&catalog, request))?;
     let reply = match plan::plan(&catalog, &snapshot, request, &add) {
-        Plan::Add(planned) if let Some(refusal) = unreadable(root, &planned, &again) => {
-            Reply::Refuse(refusal)
-        }
         Plan::Add(planned) => {
             let folders = planned
                 .write
@@ -253,54 +188,16 @@ fn run_in(dir: Option<&Path>, request: &Request, fault: &mut Fault) -> Result<Re
                 .collect();
             let change = Change {
                 folders,
-                lock: planned.lock.as_deref(),
+                lock: None,
             };
             let mut notes = txn::apply(root, &change, &again, fault).map_err(stop_error)?;
             notes.extend(planned.notes);
-            Reply::Add(add_reply(
-                planned.write,
-                planned.skip,
-                planned.lock.is_some(),
-                notes,
-            ))
+            Reply::Add(add_reply(planned.write, notes))
         }
-        Plan::Relock(planned) => {
-            let change = Change {
-                folders: Vec::new(),
-                lock: planned.lock.as_deref(),
-            };
-            let notes = txn::apply(root, &change, &again, fault).map_err(stop_error)?;
-            Reply::Relock(RelockReply {
-                lock_written: planned.lock.is_some(),
-                parts: planned.parts,
-                modified: planned.modified,
-                notes,
-            })
-        }
-        Plan::Diff(planned) => Reply::Diff(DiffReply {
-            notes: planned.notes,
-            files: planned.files,
-        }),
         Plan::Refuse(refusal) => Reply::Refuse(refusal),
         Plan::Usage(message) => Reply::Usage(message),
     };
-    let mut notes = recovered.lines;
-    let holes = txn::lock_holes(root, &recovered.planned);
-    if !holes.is_empty() {
-        let folders = holes
-            .iter()
-            .map(|id| format!("parts/{id}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let command = project::add_writing(&add, &holes, false).expect("a missing part");
-        notes.push(format!(
-            "parts.lock lists {}, and {folders} {} missing. run `{command}` to copy {} back",
-            holes.join(", "),
-            if holes.len() == 1 { "is" } else { "are" },
-            if holes.len() == 1 { "it" } else { "them" },
-        ));
-    }
-    Ok(with_notes(reply, notes))
+    Ok(with_notes(reply, recovered.lines))
 }
 
 /// The command a hint says to run again, and the folder `-C` named as the user wrote it, so a
@@ -339,33 +236,6 @@ impl std::fmt::Display for Again {
     }
 }
 
-/// An add that would move a folder or file aside, and below it is one orbe cannot read. Its
-/// bytes could change without its hash changing, so the add stops before it moves anything.
-fn unreadable(root: &Path, planned: &plan::AddPlan, again: &Again) -> Option<Refusal> {
-    planned
-        .write
-        .iter()
-        .filter(|write| write.replacing.is_some())
-        .find_map(|write| {
-            let dest = Path::new("parts").join(&write.id);
-            let path = txn::unreadable(&root.join(&dest))?;
-            let rel = path.strip_prefix(root).unwrap_or(&path);
-            let holder = if rel == dest { Path::new("parts") } else { &dest };
-            Some(Refusal {
-                code: AddCode::Unreadable,
-                message: format!(
-                    "{} cannot be read, so orbe could not tell later that the copy it moves aside is unchanged. nothing was written",
-                    again.path(rel)
-                ),
-                hint: format!(
-                    "make {} readable or move it out of {}, then run `{again}` again",
-                    again.path(rel),
-                    again.path(holder)
-                ),
-            })
-        })
-}
-
 fn stop_error(stop: Stop) -> RunError {
     match stop {
         Stop::Failed(error) => error,
@@ -383,39 +253,11 @@ fn busy(again: &Again) -> Refusal {
     }
 }
 
-/// `--diff` writes nothing, so an interrupted add stays for the next writing run.
-fn pending_note(root: &Path, next: &str) -> Vec<String> {
-    let what = match txn::pending(root) {
-        Pending::None => return Vec::new(),
-        Pending::Leftover(name) => {
-            return vec![format!(
-                "an interrupted add left {name}. --diff leaves it, and the next `{next}` without --diff deletes it"
-            )];
-        }
-        Pending::Uncommitted => "rolls it back".to_string(),
-        Pending::Committed => "finishes it".to_string(),
-        Pending::Clearing => "finishes deleting it".to_string(),
-        Pending::Fails(error) => format!("hits `{error}` and stops"),
-        Pending::Stops(steps) => {
-            let stops = "names what it cannot prove the add made, and stops";
-            if steps.is_empty() {
-                stops.to_string()
-            } else {
-                format!("{}, then {stops}", steps.join(", "))
-            }
-        }
-    };
-    vec![format!(
-        "an interrupted add is pending in parts/{}. --diff leaves it, and the next `{next}` without --diff {what}",
-        txn::STAGE
-    )]
-}
-
-/// With no `-C`, a folder inside another project must hold `scene.jsonc` or `parts.lock`.
-/// Anywhere else, `orbe add` would make a second project, so it names the folder above that
-/// is one. A folder with no project above it is where a new project starts, including an
-/// empty one. `--relock` still needs a project, because it rebuilds a lock already there.
-/// A folder `-C` names is trusted, since `orbe check` names it for a scene of any name.
+/// With no `-C`, a folder inside another project must hold `scene.jsonc` or a `parts/`
+/// folder. Anywhere else, `orbe add` would make a second project, so it names the folder
+/// above that is one. A folder with no project above it is where a new project starts,
+/// including an empty one. A folder `-C` names is trusted, since `orbe check` names it for
+/// a scene of any name.
 fn not_a_project(dir: Option<&Path>, request: &Request) -> Option<Refusal> {
     if let Some(dir) = dir {
         return (!dir.is_dir()).then(|| Refusal {
@@ -428,31 +270,22 @@ fn not_a_project(dir: Option<&Path>, request: &Request) -> Option<Refusal> {
     if is_project(here) {
         return None;
     }
-    let above = project_above(here);
-    if above.is_none() && !request.relock {
-        return None;
-    }
-    let hint = match above {
-        Some(dir) => format!(
-            "run `{}`",
-            request_command(&project::add_command(Some(&dir)), request)
-        ),
-        None => format!(
-            "run it in the project's folder, the one with scene.jsonc, or name that folder with `{}`",
-            project::add_command(Some(Path::new("<folder>")))
-        ),
-    };
+    let above = project_above(here)?;
+    let hint = format!(
+        "run `{}`",
+        request_command(&project::add_command(Some(&above)), request)
+    );
     Some(Refusal {
         code: AddCode::NotAProject,
         message:
-            "the current folder is not an orbe project. it has no scene.jsonc and no parts.lock"
+            "the current folder is not an orbe project. it has no scene.jsonc and no parts folder"
                 .into(),
         hint,
     })
 }
 
 fn is_project(dir: &Path) -> bool {
-    dir.join("scene.jsonc").is_file() || dir.join("parts.lock").is_file()
+    dir.join("scene.jsonc").is_file() || dir.join("parts").is_dir()
 }
 
 fn project_above(root: &Path) -> Option<PathBuf> {
@@ -481,30 +314,18 @@ fn up(dir: &Path) -> PathBuf {
 }
 
 fn request_command(add: &str, request: &Request) -> String {
-    project::format_add(
-        add,
-        &request.ids,
-        request.overwrite,
-        request.diff,
-        request.relock,
-    )
-    .expect("a request names an id or is --relock")
+    project::format_add(add, &request.ids).expect("a request names an id")
 }
 
 /// The command a missing-part hint prints for `ids`. It is the command planning an add of
-/// those ids would print, so a child that differs is named with `--overwrite`. `None` when
-/// the folders cannot be read or the lock itself does not parse; `--relock` is that
-/// finding's own hint. A plan that would write names the requested ids, not every child.
+/// those ids would print. A folder already there makes that command the one `part_exists`
+/// names, so retrying runs the whole add. `None` when the folders cannot be read. A plan
+/// that would write names the requested ids, not every child.
 pub(crate) fn repair_command(root: &Path, add: &str, ids: &[String]) -> Option<String> {
     if ids.is_empty() {
         return None;
     }
-    let request = Request {
-        ids: ids.to_vec(),
-        overwrite: false,
-        diff: false,
-        relock: false,
-    };
+    let request = Request { ids: ids.to_vec() };
     if plan::usage(&request).is_some() {
         return None;
     }
@@ -512,8 +333,7 @@ pub(crate) fn repair_command(root: &Path, add: &str, ids: &[String]) -> Option<S
     let wanted = plan::wanted(&catalog, &request);
     let snapshot = snapshot::load(root, &wanted).ok()?;
     match plan::plan(&catalog, &snapshot, &request, add) {
-        Plan::Add(_) => project::add_writing(add, ids, false),
-        Plan::Refuse(refusal) if refusal.code == AddCode::LockSyntax => None,
+        Plan::Add(_) => project::add_writing(add, ids),
         Plan::Refuse(refusal) => command_in(&refusal.hint),
         _ => None,
     }
@@ -550,14 +370,6 @@ fn with_notes(reply: Reply, lines: Vec<String>) -> Reply {
             reply.parts.notes.splice(0..0, lines);
             Reply::Block(reply)
         }
-        Reply::Diff(mut reply) => {
-            reply.notes.splice(0..0, lines);
-            Reply::Diff(reply)
-        }
-        Reply::Relock(mut reply) => {
-            reply.notes.splice(0..0, lines);
-            Reply::Relock(reply)
-        }
         Reply::Refuse(mut refusal) => {
             refusal.message.push('\n');
             refusal.message.push_str(&lines.join("\n"));
@@ -584,40 +396,22 @@ fn io_at(path: &Path, error: io::Error) -> RunError {
     }
 }
 
-fn add_reply(
-    write: Vec<plan::Write>,
-    skip: Vec<(String, crate::catalog::Version)>,
-    lock_written: bool,
-    notes: Vec<String>,
-) -> AddReply {
+fn add_reply(write: Vec<plan::Write>, notes: Vec<String>) -> AddReply {
     let mut parts: Vec<Copied> = write
         .into_iter()
         .map(|write| Copied {
             id: write.id,
             version: write.version.to_string(),
             wrote: true,
-            replaced: write.replacing,
         })
-        .chain(skip.into_iter().map(|(id, version)| Copied {
-            id,
-            version: version.to_string(),
-            wrote: false,
-            replaced: None,
-        }))
         .collect();
     parts.sort_by(|a, b| a.id.cmp(&b.id));
-    AddReply {
-        parts,
-        lock_written,
-        notes,
-    }
+    AddReply { parts, notes }
 }
 
 fn add_data(reply: &AddReply) -> Value {
     json!({
-        "written": versions(&reply.parts, true),
-        "skipped": versions(&reply.parts, false),
-        "lock_written": reply.lock_written,
+        "written": versions(&reply.parts),
         "notes": reply.notes,
     })
 }
@@ -626,38 +420,8 @@ fn add_text(reply: &AddReply) -> String {
     let mut lines: Vec<String> = reply
         .parts
         .iter()
-        .map(|part| match (&part.replaced, part.wrote) {
-            (Some(was), _) => format!("wrote parts/{} {}, replacing {was}", part.id, part.version),
-            (None, true) => format!("wrote parts/{} {}", part.id, part.version),
-            (None, false) => format!("skipped parts/{} {}", part.id, part.version),
-        })
+        .map(|part| format!("wrote parts/{} {}", part.id, part.version))
         .collect();
-    lines.push(if reply.lock_written {
-        "wrote parts.lock".into()
-    } else {
-        "parts.lock unchanged".into()
-    });
-    lines.extend(reply.notes.iter().cloned());
-    lines.join("\n")
-}
-
-fn diff_text(reply: &DiffReply) -> String {
-    let mut lines = reply.notes.clone();
-    if !reply.files.is_empty() {
-        lines.push(reply.files.trim_end().to_string());
-    }
-    lines.join("\n")
-}
-
-fn relock_text(reply: &RelockReply) -> String {
-    let mut lines = vec![if reply.lock_written {
-        "wrote parts.lock".into()
-    } else {
-        "parts.lock unchanged".into()
-    }];
-    for id in &reply.modified {
-        lines.push(format!("`{id}` is modified"));
-    }
     lines.extend(reply.notes.iter().cloned());
     lines.join("\n")
 }
@@ -691,14 +455,10 @@ fn refuse_json(refusal: &Refusal) -> Value {
     }
 }
 
-fn versions(parts: &[Copied], wrote: bool) -> Vec<Value> {
+fn versions(parts: &[Copied]) -> Vec<Value> {
     parts
         .iter()
-        .filter(|part| part.wrote == wrote)
-        .map(|part| match &part.replaced {
-            Some(was) => json!({ "id": part.id, "version": part.version, "replaced": was }),
-            None => json!({ "id": part.id, "version": part.version }),
-        })
+        .map(|part| json!({ "id": part.id, "version": part.version }))
         .collect()
 }
 

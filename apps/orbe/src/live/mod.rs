@@ -7,6 +7,15 @@
 //!
 //! `orbe show` asks the process for a viewer's URL and opens it in the default browser.
 
+// `Refusal` holds the same `String`s as `Reply`. Boxing it would add a conversion at every return.
+#![cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        clippy::result_large_err,
+        reason = "session and previous_crash match Reply's String"
+    )
+)]
+
 mod daemon;
 mod page;
 mod place;
@@ -287,7 +296,7 @@ enum Done {
 
 struct Stale {
     session: Name,
-    /// `<name>.crashed.log` when the process left output.
+    /// `<name>.log.crashed` when the process left output.
     log: Option<PathBuf>,
     /// The session's start logs no process held, removed.
     starts: Vec<PathBuf>,
@@ -370,6 +379,8 @@ struct Refusal {
     session: String,
     error: Error,
     at: Option<(u64, State)>,
+    /// The crash this command found, in the same place a process's reply puts it.
+    previous_crash: Option<String>,
 }
 
 impl Refusal {
@@ -381,7 +392,7 @@ impl Refusal {
             state,
             data: Data::None,
             error: Some(self.error.clone()),
-            previous_crash: None,
+            previous_crash: self.previous_crash.clone(),
         }
     }
 
@@ -415,6 +426,7 @@ fn refusal(
         session: session.to_string(),
         error: Error::new(code, message, hint),
         at: None,
+        previous_crash: None,
     }
 }
 
@@ -557,16 +569,18 @@ impl Client {
     /// reached ends before it answers, it starts again.
     fn open(&self, command: Command) -> Result<Box<Reply>, Refusal> {
         let mut started = None;
+        // Only a session that was already dead when this open began is "previous". A socket
+        // this open's own process left is the attempt that just died.
+        let mut began = false;
         let mut recovered = None;
         for attempt in 1..=TRIES {
             let answered = match self.find()? {
                 Found::Listening(stream) => self.send(stream, Ask::Run(Ok(command.clone()))),
-                Found::Missing => self.start(attempt).and_then(|(stream, log)| {
-                    started = Some(log);
-                    self.send_started(stream, Ask::Run(Ok(command.clone())))
-                }),
-                Found::Stale => {
-                    recovered = Some(self.crash_log());
+                stale @ (Found::Missing | Found::Stale) => {
+                    if matches!(stale, Found::Stale) && !began {
+                        recovered = Some(self.crash_log());
+                    }
+                    began = true;
                     self.start(attempt).and_then(|(stream, log)| {
                         started = Some(log);
                         self.send_started(stream, Ask::Run(Ok(command.clone())))
@@ -579,25 +593,37 @@ impl Client {
                 answered => return self.with_crash(answered, recovered),
             }
         }
-        let hint = [Some(self.place.log(&self.name)), started]
-            .into_iter()
-            .flatten()
-            .find(|log| holds_output(log))
-            .map(|log| format!("its last output is in {}", log.display()))
-            .unwrap_or_default();
-        Err(self.refuse(
-            Code::SessionCrashed,
-            format!(
-                "the process of session `{}` ended before it answered `open`, {TRIES} times",
-                self.name
-            ),
-            hint,
-        ))
+        // Park this open's own output when that does not replace an earlier crash the note
+        // already names. A retry must not park: that would replace the earlier output.
+        if !matches!(recovered, Some(Some(_))) {
+            let _ = self.place.take_crash_log(&self.name);
+        }
+        let hint = [
+            Some(self.place.log(&self.name)),
+            started,
+            Some(self.place.crashed_log(&self.name)),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|log| place::holds_output(log))
+        .map(|log| format!("its last output is in {}", log.display()))
+        .unwrap_or_default();
+        self.with_crash(
+            Err(self.refuse(
+                Code::SessionCrashed,
+                format!(
+                    "the process of session `{}` ended before it answered `open`, {TRIES} times",
+                    self.name
+                ),
+                hint,
+            )),
+            recovered,
+        )
     }
 
     /// Ends the session: `close` to its process, or, for a socket a crashed process left, the
     /// socket and the session's start logs no process holds removed. Output that process left
-    /// is kept as `<name>.crashed.log` until the next crash replaces it.
+    /// is kept as `<name>.log.crashed` until the next crash replaces it.
     fn close(&self) -> Result<Done, Refusal> {
         match self.find()? {
             Found::Listening(stream) => self
@@ -613,10 +639,6 @@ impl Client {
                     )
                 })?;
                 let kept = self.place.take_crash_log(&self.name);
-                let log = self.place.log(&self.name);
-                if !holds_output(&log) {
-                    let _ = fs::remove_file(&log);
-                }
                 let starts = self.place.remove_left_logs(|name| name == &self.name);
                 let _ = fs::remove_file(self.place.version(&self.name));
                 Ok(Done::Stale(Stale {
@@ -650,6 +672,7 @@ impl Client {
             session: self.name.to_string(),
             error,
             at,
+            previous_crash: None,
         }
     }
 
@@ -753,7 +776,7 @@ impl Client {
 
     /// A start that failed. Its log stays, named in the hint, only when it holds output.
     fn failed_start(&self, log: &Path, message: impl Into<String>) -> Refusal {
-        let hint = if holds_output(log) {
+        let hint = if place::holds_output(log) {
             format!("its output is in {}", log.display())
         } else {
             let _ = fs::remove_file(log);
@@ -797,16 +820,18 @@ impl Client {
         if !matches!(&ask, Ask::Run(Ok(Command::Close))) {
             self.refuse_other_version()?;
         }
-        self.dispatch(stream, ask)
+        self.dispatch(stream, ask, true)
     }
 
     /// `send` for the process this client just started. Its version file may still name the
-    /// session it replaced.
+    /// session it replaced. This does not park a crash log: `open` parks one for a session
+    /// that was already dead, and parks this process's output only when that leaves the
+    /// earlier one in place.
     fn send_started(&self, stream: UnixStream, ask: Ask) -> Result<Box<Reply>, Refusal> {
-        self.dispatch(stream, ask)
+        self.dispatch(stream, ask, false)
     }
 
-    fn dispatch(&self, stream: UnixStream, ask: Ask) -> Result<Box<Reply>, Refusal> {
+    fn dispatch(&self, stream: UnixStream, ask: Ask, park: bool) -> Result<Box<Reply>, Refusal> {
         if let Ok(hangup) = stream.try_clone() {
             let pressed = AtomicBool::new(false);
             let _ = ctrlc::set_handler(move || {
@@ -837,7 +862,7 @@ impl Client {
         wire.push('\n');
         (&stream)
             .write_all(wire.as_bytes())
-            .map_err(|_| self.unanswered())?;
+            .map_err(|_| self.unanswered(park))?;
         let mut line = String::new();
         match BufReader::new(&stream).take(LINE).read_line(&mut line) {
             Ok(_) if line.ends_with('\n') => {}
@@ -848,7 +873,7 @@ impl Client {
                     "",
                 ));
             }
-            _ => return Err(self.unanswered()),
+            _ => return Err(self.unanswered(park)),
         }
         let mut reply = serde_json::from_str::<Box<Reply>>(&line).map_err(|error| {
             self.refuse(
@@ -888,12 +913,12 @@ impl Client {
     /// A connection that ended with no reply: the process it reached ended before it answered.
     /// A socket that still answers after `DYING` looks is a new process's, which the command
     /// never reached.
-    fn unanswered(&self) -> Refusal {
+    fn unanswered(&self, park: bool) -> Refusal {
         for _ in 0..=DYING {
             match self.find() {
                 Ok(Found::Listening(_)) => std::thread::sleep(POLL),
                 Ok(Found::Missing | Found::Stale) => {
-                    return self.crashed("ended before it answered");
+                    return self.report_crash("ended before it answered", park);
                 }
                 Err(refused) => return refused,
             }
@@ -909,7 +934,13 @@ impl Client {
     }
 
     fn crashed(&self, how: &str) -> Refusal {
-        let log = self.crash_log();
+        self.report_crash(how, true)
+    }
+
+    /// `park` moves `<name>.log` onto the crash log. A retry of `open` passes false so it does
+    /// not replace output an earlier session left.
+    fn report_crash(&self, how: &str, park: bool) -> Refusal {
+        let log = if park { self.crash_log() } else { None };
         let mut hint = self.open_hint("to start it again");
         if let Some(log) = log {
             hint.push_str(&format!("; its last output is in {log}"));
@@ -947,8 +978,8 @@ impl Client {
         ))
     }
 
-    /// Moves `<name>.log` to `<name>.crashed.log` when it holds output. The path named in the
-    /// crash message, when that file holds output.
+    /// Moves `<name>.log` to `<name>.log.crashed`. The path named in the crash message, when
+    /// that file holds output.
     fn crash_log(&self) -> Option<String> {
         self.place
             .take_crash_log(&self.name)
@@ -974,10 +1005,7 @@ impl Client {
                 Ok(reply)
             }
             Err(mut refused) => {
-                if !refused.error.hint.is_empty() {
-                    refused.error.hint.push('\n');
-                }
-                refused.error.hint.push_str(&note);
+                refused.previous_crash = Some(note);
                 Err(refused)
             }
         }
@@ -1053,10 +1081,6 @@ fn what_is(meta: &fs::Metadata) -> (&'static str, &'static str) {
     } else {
         ("a special file", "rm")
     }
-}
-
-fn holds_output(path: &Path) -> bool {
-    fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.len() > 0)
 }
 
 fn print_all(closed: &[Result<Done, Refusal>], json: bool) -> ExitCode {

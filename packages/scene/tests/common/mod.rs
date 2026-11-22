@@ -1,6 +1,5 @@
 //! A temporary project built from a fixture, as `orbe add` would leave it: the fixture's own
-//! files, a copy of every catalog part, and the firmware build output. `parts.lock` is written
-//! from those copies, so a part change does not rewrite a committed lock.
+//! files, a copy of every catalog part, and the firmware build output.
 
 #![allow(dead_code)]
 
@@ -101,14 +100,13 @@ pub fn project(name: &str) -> TempDir {
     let dir = tempfile::tempdir().unwrap();
     copy_dir(&fixture(name), dir.path());
     let catalog = repo().join("parts");
-    let lock = catalog_lock();
-    for id in lock
-        .lines()
-        .filter_map(|line| line.split_whitespace().next())
-    {
-        copy_dir(&catalog.join(id), &dir.path().join("parts").join(id));
+    for id in fs::read_dir(&catalog).unwrap() {
+        let id = id.unwrap().file_name();
+        let from = catalog.join(&id);
+        if from.join("part.jsonc").is_file() {
+            copy_dir(&from, &dir.path().join("parts").join(id));
+        }
     }
-    fs::write(dir.path().join("parts.lock"), lock).unwrap();
     fs::create_dir_all(dir.path().join("build")).unwrap();
     fs::copy(firmware(), dir.path().join("build/button.ino.hex")).unwrap();
     dir
