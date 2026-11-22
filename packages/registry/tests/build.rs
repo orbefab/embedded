@@ -40,7 +40,7 @@ fn records_of_three_parts_and_a_block_match_their_snapshots() {
     for address in [
         "led-5mm@0.3.0",
         "atmega328p-dip28@0.2.0",
-        "nano-board@0.2.0",
+        "nano-board@0.2.1",
         "nano-button-led@0.3.0",
     ] {
         let text = std::str::from_utf8(&registry.output[&format!("{address}.json")]).unwrap();
@@ -156,14 +156,14 @@ fn a_block_depends_on_every_part_it_runs_at_the_versions_in_the_same_build() {
         .map(|dep| dep.as_str().unwrap())
         .collect();
     for direct in [
-        "nano-board@0.2.0",
+        "nano-board@0.2.1",
         "tactile-switch-6mm@0.2.0",
         "resistor-axial@0.2.0",
         "led-5mm@0.3.0",
     ] {
         assert!(deps.contains(&direct), "{direct} in {deps:?}");
     }
-    let board = record(&registry.output, "nano-board@0.2.0");
+    let board = record(&registry.output, "nano-board@0.2.1");
     for through_the_board in board["registryDependencies"].as_array().unwrap() {
         assert!(deps.contains(&through_the_board.as_str().unwrap()));
     }

@@ -95,6 +95,96 @@ fn an_uno_with_aref_on_either_rail_raises_no_diagnostic() {
     }
 }
 
+/// A 9 V adapter on VIN the wrong way warns. A series 1N4007 holds VIN near 0 V.
+/// Wired the right way, VIN stays 9 V and 5V stays 5 V.
+#[test]
+fn a_reversed_adapter_on_nano_vin_warns_unless_a_series_diode_holds_it() {
+    let scene = |extra: &str, wires: &str| {
+        format!(
+            r#"{{
+  "format": 1,
+  "parts": {{
+    "nano": {{ "type": "nano-board", "firmware": "build/button.ino.hex" }},
+    "jack": {{ "type": "barrel-jack-dc21", "voltage": 9 }}{extra}
+  }},
+  "wires": [{wires}]
+}}"#
+        )
+    };
+    let run_scene = |text: &str, test: &str| {
+        let dir = project(test);
+        fs::write(dir.path().join("scene.jsonc"), text).unwrap();
+        orbe(dir.path(), &["test", "-v"])
+    };
+
+    let bare = run_scene(
+        &scene(
+            "",
+            r#"["jack.center", "nano.GND"], ["jack.sleeve", "nano.VIN"]"#,
+        ),
+        "open\nstep 20ms\nsnapshot\nget @nano.VIN\n",
+    );
+    assert_eq!(bare.code, 0, "{}{}", bare.stdout, bare.stderr);
+    assert!(bare.stdout.contains("nano.VIN -9"), "{}", bare.stdout);
+    assert!(
+        bare.stdout.contains("warning[rating.voltage]"),
+        "{}",
+        bare.stdout
+    );
+    assert!(bare.stdout.contains("pin.in"), "{}", bare.stdout);
+    assert!(bare.stdout.contains("-0.3"), "{}", bare.stdout);
+
+    let protected = run_scene(
+        &scene(
+            r#", "d1": { "type": "diode-1n4007" }"#,
+            r#"["jack.center", "nano.GND"], ["jack.sleeve", "d1.anode"], ["d1.cathode", "nano.VIN"]"#,
+        ),
+        "open\nstep 20ms\nget @nano.VIN\nexpect no diagnostics\n",
+    );
+    assert_eq!(
+        protected.code, 0,
+        "{}{}",
+        protected.stdout, protected.stderr
+    );
+    let vin = vin_line(&protected.stdout);
+    assert!(vin.abs() < 0.05, "VIN {vin}\n{}", protected.stdout);
+    assert!(
+        protected.stdout.contains("passed no diagnostics"),
+        "{}",
+        protected.stdout
+    );
+
+    let forward = run_scene(
+        &scene(
+            "",
+            r#"["jack.center", "nano.VIN"], ["jack.sleeve", "nano.GND"]"#,
+        ),
+        "open\nstep 20ms\nget @nano.VIN\nget @nano.5V\nexpect no diagnostics\n",
+    );
+    assert_eq!(forward.code, 0, "{}{}", forward.stdout, forward.stderr);
+    assert!(forward.stdout.contains("nano.VIN 9"), "{}", forward.stdout);
+    assert!(
+        forward.stdout.contains("5.000023891291546"),
+        "{}",
+        forward.stdout
+    );
+    assert!(
+        forward.stdout.contains("passed no diagnostics"),
+        "{}",
+        forward.stdout
+    );
+}
+
+fn vin_line(stdout: &str) -> f64 {
+    stdout
+        .lines()
+        .find_map(|line| {
+            let rest = line.trim().strip_prefix("nano.VIN ")?;
+            rest.split_whitespace().next()?.parse().ok()
+        })
+        .unwrap_or_else(|| panic!("no VIN in {stdout}"))
+}
+
 #[test]
 fn the_first_target_reads_the_engine_values_while_pressed() {
     let dir =

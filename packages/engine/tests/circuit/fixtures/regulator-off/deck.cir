@@ -7,7 +7,7 @@ rrl vout 0 330.0
 bx_u1_v x_u1 0 v = smin((3.3+9.75609756097561e-05*(v(vin,0)-3.3)-0.00125*i(vx_u1)), (-0.25*i(vx_u1)+1e-3*sp(((v(vin,0)-1.0857142857142859-0.14285714285714288*i(vx_u1))+0.25*i(vx_u1))/1e-3))) - 275.0*0.0012*sp((i(vx_u1)-1.2)/0.0012) + 1000000000.0*1e-12*sp(-i(vx_u1)/1e-12)
 vx_u1 x_u1 vout dc 0
 fx_u1 vin 0 vx_u1 1
-bx_u1_g x_u1_g 0 i = (0.005+0.0*i(vx_u1))*h(v(vin,0)/1.0857142857142859)
+bx_u1_g x_u1_g 0 i = (0.005+0.0*i(vx_u1))*h(v(vin,0)/1.0857142857142859)+0.005*(v(vin,0))/1.0857142857142859*h(-(v(vin,0))/1.0857142857142859)
 vx_u1_g vin x_u1_g dc 0
 vv1 vin 0 dc 0.0
 * The engine's gmin on every external node. The regulator's internal nodes are not shunted.

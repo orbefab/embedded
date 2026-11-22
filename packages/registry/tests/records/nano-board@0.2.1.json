@@ -3,7 +3,7 @@
   "$schema": "item.schema.json",
   "format": 1,
   "name": "nano-board",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "Nano (CH340 clone)",
   "description": "ATmega328P board, 18 x 43.2 mm, 30 pins on two rows 15.24 mm apart. D13 drives the L LED. Powered from USB.",
   "categories": [
@@ -18,7 +18,7 @@
     "ams1117-sot223@0.2.0",
     "atmega328p-tqfp32@0.2.0",
     "capacitor-0603@0.2.0",
-    "capacitor-tantalum-3216@0.2.0",
+    "capacitor-tantalum-3216@0.2.1",
     "ch340g@0.2.0",
     "crystal-3215@0.2.0",
     "diode-sod123@0.2.0",

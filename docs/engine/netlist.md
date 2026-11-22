@@ -289,7 +289,7 @@ A `step` or a `pulse` jump between equal levels is still a jump. A `serial` wave
 
 A capacitor with `"initial": null` is open at the operating point, so `#c1.i` is 0 there. A capacitor with a value is held there, behind a series resistance of 1 fs divided by its capacitance. That resistance is the backward Euler companion of a 1 fs step. `V(a) - V(b)` is the value plus `#c1.i` times the resistance, and `#c1.i` is the current the hold takes. For 1 uF and 5 mA the voltage moves by 5 pV. A held capacitor across a voltage source, held capacitors in parallel, and held capacitors in series across a source then solve instead of making the matrix singular. Capacitors in parallel share their current by capacitance. Two in parallel at different values meet at their capacitance-weighted mean, as their charge would. A held value that disagrees with a voltage source across it draws the difference over the resistance, 1e9 A per volt for 1 uF. That current also enters the error estimate of the first steps, so they fall to the 1 ps floor and grow back. A missing key is `netlist.syntax`. A wrong unit is `netlist.unit` with field `initial`. In a step the current follows from the voltage across it and the last accepted point.
 
-A capacitor has no `ratings` field.
+`ratings` is optional. When present it holds `reverse_voltage`, in `V`: how far `V(a) - V(b)` may sit below 0. Past that, pin `a` warns [`rating.voltage`](diagnostics.md#ratingvoltage), measured over pin `b`. A voltage exactly on the floor is inside. A netlist without the object leaves the capacitor unrated, as one written before capacitors had a reverse rating does. `"reverse_voltage": null` is deliberately unrated. A forward voltage has no rating. A missing key inside a present object is `netlist.syntax`.
 
 ### Inductor
 
@@ -453,10 +453,10 @@ a    = vset - Ro * i
 raw  = vi - Vdo - Rdo * i
 b    = -Rf * i + s * sp((raw + Rf * i) / s)
 vo   = smin(a, b) - Rlim * d * sp((i - Ilim) / d) + Rblk * db * sp(-i / db)
-ig   = (Iq + r * i) * h(vi / Vdo)
+ig   = (Iq + r * i) * h(vi / Vdo) + Iq * (vi / Vdo) * h(-vi / Vdo)
 ```
 
-`sp(x)` is `ln(1 + e^x)`, written as `x + ln(1 + e^-x)` when `x` is positive, so the exponential's argument stays at or below 0. `smin(a, b)` is `a - s * sp((a - b) / s)`. `b` is that same smooth maximum of `raw` and `-Rf * i`. `h(x)` is 0 at and below 0, `3x^2 - 2x^3` from 0 to 1, and 1 at and above 1. `ln` and `exp` come from `libm`.
+`sp(x)` is `ln(1 + e^x)`, written as `x + ln(1 + e^-x)` when `x` is positive, so the exponential's argument stays at or below 0. `smin(a, b)` is `a - s * sp((a - b) / s)`. `b` is that same smooth maximum of `raw` and `-Rf * i`. `h(x)` is 0 at and below 0, `3x^2 - 2x^3` from 0 to 1, and 1 at and above 1. `ln` and `exp` come from `libm`. The second term of `ig` is 0 for `vi` at least 0, derivative included, so a circuit whose input stays up is unchanged. Below 0 it loads the input. It is `-Iq` at `vi` = `-Vdo`, and `Iq * vi / Vdo` further below. That current leaves pin `in`, so a series diode's leakage holds a reversed input near 0 V instead of letting the leak set the pin to the source.
 
 `s` is 1e-3 V, the width of the smooth maximum and of the dropout knee. `Rf` is 0.25 ohm. `db/di` stays between `-Rf` and `-Rdo`, and `db/dvi` stays between 0 and 1. Below the ground pin the softplus of `raw` alone underflows to 0, and the floor keeps a slope of `-Rf`. With the input at the ground pin and no load, `b` is 0. A load that draws pass current `i` then sits near `-Rf * i`, which is below the pin. A current source of 0.5 A from `out` to `gnd`, with the input held at 0 V, solves at -0.12499999999996891 V. A 10 us trapezoidal run of `packages/engine/tests/circuits/regulator-load-step` stops when the floor is 0.15 ohm, at 1.21482e-09 s on `vx_u1#branch`, and finishes when the floor is 0.2 ohm. A floor of 0.25 ohm finishes that run, the same deck with 100 uF on the output, the same deck stepping the input to 4 V, and the same deck with a 1 ohm dropout resistance. `d` is `1e-3 * Ilim`. `Rlim` is `100 * Vout / Ilim`, so a short sits about 1% above `Ilim`. `Rblk` is 1e9 ohm and `db` is 1e-12 A, so a reverse current stays under a nanoamp per volt. These numbers are constants of the law. They are not fields.
 
@@ -481,7 +481,7 @@ The stamp reads the last solution, because the row is the law linearised at that
 
 `ratings` holds `current` and `power`. `current` bounds `|iout|`.
 
-The law is the DC table. It has no internal pole and no output inductance. It has no enable pin and no input-voltage rating. It has no diode from `out` to `in`. A circuit that needs that diode adds a `diode` part. The current limit is flat. There is no thermal shutdown, and a `power` rating warns instead. `ig` follows `h` and does not add a further rise in dropout. There is no minimum load. Ripple from the input reaches the output through the static `k`.
+The law is the DC table. It has no internal pole and no output inductance. It has no enable pin. Pin `in` warns [`rating.voltage`](diagnostics.md#ratingvoltage) below -0.3 V over `gnd`. LP2985, TI SLVS522, states that floor. The AMS1117 sheet this repo cites states a 15 V maximum and no negative floor, and the SGM2212 sheet states 22 V and no negative floor, so -0.3 V is the model's floor for every `linear_regulator`, the margin a chip pin uses below its ground. A pin exactly on -0.3 V is inside. It has no diode from `out` to `in`. A circuit that needs that diode adds a `diode` part. The current limit is flat. There is no thermal shutdown, and a `power` rating warns instead. `ig` follows `h` while `vi` is positive and the reverse term while `vi` is negative, and it does not add a further rise in dropout. There is no minimum load. Ripple from the input reaches the output through the static `k`.
 
 `packages/engine/scripts/fit_regulator.py` fits the LM1117-3.3 row of TI LM1117, SNOS412Q. `output_voltage` is 3.3 V, the p5 typical at 10 mA and VIN 5 V. `line_regulation` is `0.001 / 10.25` = 9.75609756097561e-05, the p5 typical of 1 mV from 4.75 V to 15 V at 0 mA. `output_resistance` is `0.001 / 0.8` = 0.00125 ohm, the p5 typical of 1 mV from 0 to 800 mA at VIN 4.75 V. `dropout_resistance` is `0.1 / 0.7` = 0.14285714285714288 ohm and `dropout_voltage` is 1.0857142857142859 V, the line through the p6 typicals of 1.10 V at 100 mA and 1.20 V at 800 mA. `current_limit` is 1.2 A, the p6 typical at a 5 V differential. `quiescent_current` is 0.005 A, the p6 LM1117-3.3 typical. The maximum on that row is 10 mA, at VIN of at most 15 V, and the model uses the typical. `ground_current_ratio` is 0. The p6 table gives no load term, and the model holds the ground current at 5 mA wherever `h` is 1. `ratings.current` is 0.8 A, the p1 output current, which is also the top of the p5 load-regulation range from 0 to 800 mA. `ratings.power` is `(125 - 25) / 61.6` = 1.6233766233766234 W. Section 7.3's recommended junction limit is 125 C and section 7.4's SOT-223 RθJA is 61.6 C/W. The ambient in that figure is 25 C. Section 7.1's absolute junction limit is 150 C, which would be 2.029220779220779 W. The rating uses 125 C.
 
@@ -1315,7 +1315,7 @@ A blob the document names that no folder has, a name whose every file hashes to 
 
 ## Ratings
 
-A rating bounds the stress on a part. Every key of a kind's `ratings` object is required. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p` and `voltage_source`, where it is optional.
+A rating bounds the stress on a part. Every key of a kind's `ratings` object is required. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `voltage_source` and `capacitor`, where it is optional.
 
 | Kind | Keys | Checked quantity |
 | --- | --- | --- |
@@ -1325,10 +1325,11 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
 | `nmos`, `pmos` | `current`, `power` | `#<part>.id`, `#<part>.p` |
 | `voltage_source` | `current` | `#<part>.i` |
+| `capacitor` | `reverse_voltage`, optional | pin `a` over pin `b` |
 | `atmega328p` | `pin_current`, `supply_current`, `rail_margin`, `reset_voltage`, `supply_voltage` | each port pin's current, the current through `VCC` and `GND_8`, and each pin's voltage over `GND_8`, each named `#<part>.pin.<pin>` |
-| `current_source`, `capacitor`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `ws2812`, `dht22` | none | |
+| `current_source`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `ws2812`, `dht22` | none | |
 
-`current`, `pin_current` and `supply_current` are in `A`. `power` is in `W`. `rail_margin`, `reset_voltage` and `supply_voltage` are in `V`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object where it is required are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.<key>`, such as `ratings.current`. A value of 0 or below is `netlist.value` with the same field.
+`current`, `pin_current` and `supply_current` are in `A`. `power` is in `W`. `rail_margin`, `reset_voltage`, `supply_voltage` and `reverse_voltage` are in `V`. A rating must be greater than 0. A missing key, an unknown key, and a missing `ratings` object where it is required are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.<key>`, such as `ratings.current`. A value of 0 or below is `netlist.value` with the same field.
 
 ```json
 "ratings": { "power": { "value": 0.25, "unit": "W" } }

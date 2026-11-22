@@ -34,3 +34,5 @@ Right after `step --until @led1 lit` the pin is already high and `i` is about 12
 | `scene.shorted` | Two pins of one part sit in one breadboard strip, such as a resistor turned along a column. Turn the part a quarter turn, as the hint shows. |
 
 A `warning[rating.current]`, `warning[rating.power]` or `warning[rating.voltage]` during `step` or `open` means a part or a chip pin went past its datasheet rating. Fix the circuit. `chip.floating_input` names an input nothing drives. Load `orbe skills get arduino`.
+
+A polarized capacitor warns `rating.voltage` past 1 V reverse. A regulator input warns below -0.3 V. Reversed 9 V on Nano VIN warns `#nano__regulator.pin.in (nano.VIN)`. A series 1N4007 holds it near 0 V; 9 V forwards makes 5 V. Rail tantalums stay out, and output-to-input current stays blocked, so USB-only VIN stays near 0.
