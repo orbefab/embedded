@@ -531,7 +531,7 @@ test.describe("led-5mm", () => {
     expect(/DigiKey\s*2026-11-08/.test(body), body.match(/Where to buy[\s\S]{0,120}/i)?.[0] ?? "").toBe(true);
   });
 
-  test("it shows the ratings as names, with a Datasheet link and no citation", async () => {
+  test("it shows the ratings as names, with a Datasheet link, and lists each other color's datasheet", async () => {
     const section = page.locator("section", { has: page.getByRole("heading", { name: "Ratings" }) });
     await expect(section).toContainText("Current");
     await expect(section).toContainText("30 mA");
@@ -539,7 +539,8 @@ test.describe("led-5mm", () => {
     const body = await bodyText(page);
     expect(body).not.toContain("Brightness is the average");
     expect(body).not.toContain("Absolute Maximum Ratings");
-    await expect(page.getByRole("heading", { name: "Docs" })).toHaveCount(0);
+    const docs = page.locator("section", { has: page.getByRole("heading", { name: "Docs" }) });
+    for (const number of ["WP7113YD", "WP7113GD", "WP7113QBC/D", "WP7113QWC/D"]) await expect(docs.getByRole("link", { name: new RegExp(number) })).toBeVisible();
     expect(body).not.toContain("not affiliated");
     expect(body).not.toContain("No summary yet");
   });
