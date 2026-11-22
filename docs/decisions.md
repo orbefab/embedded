@@ -149,10 +149,10 @@ One private repo for the whole branch: `orbefab/embedded`. The current sim-engin
 Every part (circuit parts, sensors, dev boards) should eventually have its sim model, specs and 3D model, organized together. An inventory of what exists is the next step.
 
 ## 3D models (Oct 31 2026)
-`orbefab/models` is where 3D models are built. The finished models a part needs end up living in this repo with that part.
+The finished models a part needs end up living in this repo with that part.
 
 ## Part model scripts (Nov 8 2026)
-A part's 3D model is `parts/<id>/model.py`. The script uses build123d and the helpers in `packages/cad`. `scripts/model.sh` builds `<id>.glb` and runs the asset step. Rebuild only the parts you changed. The same bytes on every run are proven on Linux x86_64. A part with no `model.py` yet still comes from the commit its `asset.json` records.
+A part's 3D model is `parts/<id>/model.py`. The script uses build123d and the helpers in `packages/cad`. `scripts/model.sh` builds `<id>.glb` and runs the asset step. Rebuild only the parts you changed. The same bytes on every run are proven on Linux x86_64.
 
 ## Naming and nesting (Oct 31 2026)
 - Parts use generic names (e.g. `uno-board`, `led-5mm`), not brand or product names.
@@ -174,7 +174,6 @@ The ESP32-C3 and the original ESP32 come later (sim-engine models only the S3 to
 - The code is under MIT OR Apache-2.0, at the user's option (Nov 2 2026), the same as `orbefab/sim-engine`.
 - Part files here (sim models, specs, 3D) use the same license as the code.
 - A third-party file a part carries, such as the ESP32-S3 ROM, keeps its own license. It ships with the upstream license files, unchanged, beside it.
-- Our own models in `orbefab/models` are Orbefab copyright, so they can be relicensed.
 - Third-party CAD keeps its own license (SO-ARM100 Apache-2.0, Adafruit MIT).
 - The Waveshare Bus Servo Adapter model has no license and can't go public; it would need our own remodel.
 
@@ -186,7 +185,6 @@ A web visualizer (the sandbox) and a local-computer visualizer share one viewer:
 - Locally it's a browser tab that the session process serves, with the page built into the CLI. Nothing else installs.
 - In the sandbox the same page runs the engine's session loop in a Web Worker, compiled to WebAssembly.
 - The viewer's world is Y-up in mm. Parts are authored in their own frame, mm with +Z up, and one mapping converts between the two.
-- 3D models are GLBs exported by each `orbefab/models` script, with part names kept and a pin-anchor file beside them.
 - Whole-scene screenshots use an open viewer, or else a Chrome, Chromium or Edge already on the machine.
 - The viewer sends input commands only. It can't restart a session. Its edits go to the file that holds what they change (see "Scenes") and show as not simulated until the next open.
 
