@@ -19,7 +19,7 @@ const PART_FUSES: FuseBytes = FuseBytes {
     extended: 0xFD,
 };
 
-const DEFAULT_HEX: &str = "blocks/nano-led-fade/firmware/fade.hex";
+const DEFAULT_HEX: &str = "blocks/nano-led-fade/build/fade.ino.hex";
 
 struct Sample {
     secs: f64,

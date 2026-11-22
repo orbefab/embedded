@@ -82,7 +82,7 @@ fn use_ids(text: &str) -> Vec<String> {
 
 /// The `button.ino.hex` the first target builds: the Block's own build of the same sketch.
 pub fn firmware() -> PathBuf {
-    repo().join("blocks/nano-button-led/firmware/button.hex")
+    repo().join("blocks/nano-button-led/build/button.ino.hex")
 }
 
 pub fn copy_dir(from: &Path, to: &Path) {

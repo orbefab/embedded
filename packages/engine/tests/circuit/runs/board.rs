@@ -597,7 +597,7 @@ fn the_led_follows_the_button() {
     ));
     assert_eq!(
         records(part(&netlist, "mcu")["firmware"].as_str().unwrap()),
-        records(&fs::read_to_string(repo("blocks/nano-button-led/firmware/button.hex")).unwrap())
+        records(&fs::read_to_string(repo("blocks/nano-button-led/build/button.ino.hex")).unwrap())
     );
     assert_eq!(
         netlist["analysis"]["transient"]["stop_ps"],

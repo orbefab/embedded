@@ -27,7 +27,7 @@ impl Block {
     }
 
     /// Adds one file: `parts/<id>/<path>` is a file of the catalog part `id`, and any other path
-    /// is the Block's own, from its folder, such as `scene.jsonc` or `firmware/button.hex`.
+    /// is the Block's own, from its folder, such as `scene.jsonc` or `build/button.ino.hex`.
     pub fn add(&mut self, path: &str, bytes: Vec<u8>) {
         match path.strip_prefix("parts/") {
             Some(part) => self.parts.push((part.to_string(), bytes)),

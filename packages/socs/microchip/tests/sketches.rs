@@ -143,7 +143,7 @@ fn blink_without_delay_toggles_as_millis_passes_each_second() {
 
 #[test]
 fn button_copies_pin_2_to_the_led() {
-    let mut cpu = load("blocks/nano-button-led/firmware/button.hex");
+    let mut cpu = load("blocks/nano-button-led/build/button.ino.hex");
     let mut led = edges(&mut cpu, PB5, 100_000);
     assert_eq!(
         led.iter().map(|&(_, high)| high).collect::<Vec<_>>(),
@@ -178,7 +178,7 @@ fn fade_steps_the_duty_on_pin_9_every_30_ms() {
     // The glitch spans the few instructions of `digitalWrite` between its two stores. This bound
     // is a tenth of the narrowest pulse, 128 * 5 cycles.
     const GLITCH: u64 = 64;
-    let mut cpu = load("blocks/nano-led-fade/firmware/fade.hex");
+    let mut cpu = load("blocks/nano-led-fade/build/fade.ino.hex");
     let edges = edges(&mut cpu, PB1, 1700 * MS);
     assert!(!edges[0].1, "pinMode drives the pin low");
     let pulses: Vec<(u64, u64)> = edges[1..]

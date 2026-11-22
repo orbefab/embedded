@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Rebuilds each <dir>/<name>.hex from <dir>/<name>/<name>.ino, where <dir> is
+# Rebuilds each sketch image from <dir>/<name>/<name>.ino, where <dir> is
 # packages/engine/tests/firmware/sketch or a Block's blocks/<id>/firmware, with a pinned AVR
 # toolchain and the standard AVR runtime, for the ATmega328P, with the flags the standard IDE
-# uses. The clock is 16 MHz unless the sketch directory contains `f_cpu`, one integer of hertz.
+# uses. An engine sketch is written to <dir>/<name>.hex. A Block's image is written to
+# blocks/<id>/build/<name>.ino.hex, the path arduino-cli compile --output-dir build writes
+# for that sketch. The clock is 16 MHz unless the sketch directory contains `f_cpu`, one integer of hertz.
 # The runtime's core is compiled into an archive and linked with each sketch, and main() comes
 # from the core. The runtime's Wire library is compiled into a second archive, which a sketch
 # that includes Wire.h also links. A clock other than 16 MHz gets its own core and Wire archives.
@@ -133,6 +135,15 @@ for dir in "$repo"/packages/engine/tests/firmware/sketch/*/ "$repo"/blocks/*/fir
     "$dir/$name.ino" -o "$work/$name.o"
   "$bin/avr-gcc" "${link_flags[@]}" -o "$work/$name.elf" "$work/$name.o" "${archives[@]}" \
     "$core_a" -L"$work" -lm
-  "$bin/avr-objcopy" -O ihex -R .eeprom "$work/$name.elf" "$firmware/$name.hex"
+  case $dir in
+    "$repo"/blocks/*/firmware/*)
+      out=$(dirname "$firmware")/build/$name.ino.hex
+      mkdir -p "$(dirname "$out")"
+      ;;
+    *)
+      out=$firmware/$name.hex
+      ;;
+  esac
+  "$bin/avr-objcopy" -O ihex -R .eeprom "$work/$name.elf" "$out"
   "$bin/avr-size" "$work/$name.elf" | tail -n 1 | awk -v n="${dir#"$repo"/}" '{print n ": " $1 + $2 " flash bytes"}'
 done

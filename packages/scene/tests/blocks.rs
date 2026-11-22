@@ -120,8 +120,15 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
             if let Some(firmware) = part.get("firmware") {
                 let firmware = firmware.as_str().unwrap();
                 assert!(
-                    firmware.starts_with("firmware/") && dir.join(firmware).is_file(),
-                    "{id}: `{name}` runs `{firmware}`, which must be in the Block's firmware/"
+                    firmware.starts_with("build/")
+                        && firmware.ends_with(".ino.hex")
+                        && dir.join(firmware).is_file(),
+                    "{id}: `{name}` runs `{firmware}`, the file arduino-cli writes under build/"
+                );
+                let notice = fs::read_to_string(dir.join("firmware/NOTICE")).unwrap();
+                assert!(
+                    notice.contains(firmware),
+                    "{id}: firmware/NOTICE does not name `{firmware}`"
                 );
             }
         }
@@ -132,21 +139,28 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
     }
 }
 
-/// `sketches.sh` rebuilds a Block's image from the sketch beside it, and the licences it carries
-/// are the ones that build needs.
+/// `sketches.sh` rebuilds a Block's image to the path arduino-cli writes, from the sketch in
+/// `firmware/`, and the licences it carries are the ones that build needs.
 #[test]
-fn each_block_firmware_is_built_from_the_sketch_beside_it() {
+fn each_block_ships_the_image_arduino_cli_writes() {
     let sketches = common::repo().join("packages/engine/tests/firmware/sketch");
     for dir in block_dirs() {
         let firmware = dir.join("firmware");
+        let build = dir.join("build");
         let mut images = 0;
+        for file in fs::read_dir(&build).unwrap() {
+            let name = file.unwrap().file_name().into_string().unwrap();
+            let Some(sketch) = name.strip_suffix(".ino.hex") else {
+                continue;
+            };
+            let source = firmware.join(format!("{sketch}/{sketch}.ino"));
+            assert!(source.is_file(), "{}", source.display());
+            images += 1;
+        }
+        assert!(images > 0, "{}", build.display());
         for file in fs::read_dir(&firmware).unwrap() {
             let name = file.unwrap().file_name().into_string().unwrap();
-            if let Some(sketch) = name.strip_suffix(".hex") {
-                let source = firmware.join(format!("{sketch}/{sketch}.ino"));
-                assert!(source.is_file(), "{}", source.display());
-                images += 1;
-            } else if name.starts_with("LICENSE-") {
+            if name.starts_with("LICENSE-") {
                 assert_eq!(
                     fs::read(firmware.join(&name)).unwrap(),
                     fs::read(sketches.join(&name)).unwrap(),
@@ -155,7 +169,6 @@ fn each_block_firmware_is_built_from_the_sketch_beside_it() {
                 );
             }
         }
-        assert!(images > 0, "{}", firmware.display());
     }
 }
 

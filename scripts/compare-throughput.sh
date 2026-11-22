@@ -10,7 +10,7 @@
 # the cycle count, and the pin-edge count.
 #
 # --hex and --cycles are the example's arguments. With neither, the example
-# loads blocks/nano-led-fade/firmware/fade.hex for 16,000,000 cycles.
+# loads blocks/nano-led-fade/build/fade.ino.hex for 16,000,000 cycles.
 #
 # Exits 2 when the 1-minute load is above 2, when python3 is missing, or when
 # the arguments are wrong. Exits 1 when an invocation fails, its line cannot be

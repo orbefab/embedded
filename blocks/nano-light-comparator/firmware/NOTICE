@@ -1,4 +1,4 @@
-`light.hex` is built from `light/light.ino`, the sketch beside it, for the ATmega328P at 16 MHz.
+`build/light.ino.hex` is built from `firmware/light/light.ino` for the ATmega328P at 16 MHz.
 It links the standard AVR runtime, version 1.8.6. The runtime is free software under the GNU
 Lesser General Public License, version 2.1 or any later version, whose text is in
 LICENSE-runtime. Its source is the archive at
@@ -23,5 +23,5 @@ These files and their licences:
 `block.jsonc`, `README.md`, `scene.jsonc`, `firmware/NOTICE`, `firmware/light/light.ino` and
 `tests/light.test` are under MIT OR Apache-2.0.
 
-`firmware/light.hex` and `firmware/LICENSE-runtime` are under LGPL-2.1-or-later.
+`build/light.ino.hex` and `firmware/LICENSE-runtime` are under LGPL-2.1-or-later.
 `firmware/LICENSE-libc` is under BSD-3-Clause.

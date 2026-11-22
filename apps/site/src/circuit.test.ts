@@ -147,14 +147,14 @@ describe("readCatalogUse", () => {
       "nano-board",
       JSON.stringify({
         parts: {
-          nano: { type: "nano-board", firmware: "firmware/fade.hex" },
+          nano: { type: "nano-board", firmware: "build/fade.ino.hex" },
           r1: { type: "resistor", note: "1/4" },
         },
       }),
       [resistor, board],
     );
     expect(circuits.fade?.placed.find((part) => part.ref === "r1")?.values).toEqual(["1/4"]);
-    expect(circuits.fade?.placed.find((part) => part.ref === "nano")?.values).toEqual(["fade.hex"]);
+    expect(circuits.fade?.placed.find((part) => part.ref === "nano")?.values).toEqual(["fade.ino.hex"]);
   });
 
   it("shows a sketch's .h and .cpp and counts test files, not expect lines", () => {
@@ -162,7 +162,7 @@ describe("readCatalogUse", () => {
       file("firmware/fade/fade.ino", "ino"),
       file("firmware/fade/fade.cpp", "cpp"),
       file("firmware/fade/fade.h", "h"),
-      file("firmware/fade.hex", "hex"),
+      file("build/fade.ino.hex", "hex"),
       file("README.md", "readme"),
       file("tests/fade.test", "test"),
       file("tests/notes.txt", "notes"),

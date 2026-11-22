@@ -2,7 +2,7 @@
 {
   "format": 1,
   "parts": {
-    "nano": { "type": "nano-board", "firmware": "firmware/light.hex" },
+    "nano": { "type": "nano-board", "firmware": "build/light.ino.hex" },
     "u1": { "type": "lm358-dip8" },
     "ldr": { "type": "ldr-5mm" },
     "trim": { "type": "trimmer-3362p", "resistance": "10k", "position": "0.5" },
