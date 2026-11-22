@@ -254,7 +254,7 @@ fn unplaced(s: &Scope, out: &mut Findings) {
             Join::Contact(target) => format!(
                 "join it with a contact wire, as [\"{leg}\", \"{target}\", {{ \"kind\": \"contact\" }}]"
             ),
-            Join::Full => super::FULL_STRIP_HINT.to_string(),
+            Join::Full => super::shared_hole_hint(&[]),
         };
         out.push(
             Code::Lint(Lint::Unplaced),

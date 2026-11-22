@@ -3,7 +3,7 @@
 
 mod common;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -348,8 +348,8 @@ fn at_line_col(text: &str, line: usize, column: usize) -> usize {
             .sum::<usize>()
 }
 
-/// Move each shared lead to the hole its hint names. The hints of one check name different
-/// holes, and the scene checks once every one of them is applied.
+/// Move each shared lead to the first free hole its hint lists. With one conflict in a
+/// strip, the scene then checks. Two leads moved to that same hole are the next check's finding.
 fn apply_every_hint(dir: &Path) -> Vec<String> {
     let found = findings(dir);
     let layout: Vec<&Diagnostic> = found.iter().filter(|d| d.code == Code::Layout).collect();
@@ -357,37 +357,19 @@ fn apply_every_hint(dir: &Path) -> Vec<String> {
     let mut suggested = Vec::new();
     let mut edits: BTreeMap<String, Vec<(usize, usize, String)>> = BTreeMap::new();
     for d in &layout {
-        let hole = d
-            .hint
-            .split("such as ")
-            .nth(1)
-            .unwrap_or_else(|| panic!("no hole in {}", d.hint));
-        suggested.push(hole.to_string());
+        let hole = listed_holes(&d.hint)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("no free hole in {}", d.hint));
+        suggested.push(hole.clone());
         let path = dir.join(&d.file);
         let text = fs::read_to_string(&path).unwrap();
-        let offset = at_line_col(&text, d.line, d.column);
-        let literal = &text[offset..];
-        assert!(
-            literal.starts_with('"'),
-            "{}:{}:{} is not a wire end",
-            d.file,
-            d.line,
-            d.column
-        );
-        let end = literal[1..].find('"').expect("the end of the wire ref") + 1;
+        let (start, end, _) = quoted_span(&text, d);
         edits
             .entry(d.file.clone())
             .or_default()
-            .push((offset + 1, offset + end, hole.to_string()));
+            .push((start, end, hole));
     }
-    let mut unique = suggested.clone();
-    unique.sort();
-    unique.dedup();
-    assert_eq!(
-        unique.len(),
-        suggested.len(),
-        "two hints name one hole: {suggested:?}"
-    );
     for (file, mut spans) in edits {
         spans.sort_by_key(|span| std::cmp::Reverse(span.0));
         let path = dir.join(file);
@@ -410,15 +392,29 @@ fn apply_every_hint(dir: &Path) -> Vec<String> {
     suggested
 }
 
-/// One check's hints name different holes, including the two `e31` ends and the two `f31`
-/// ends, and both orders of a wire whose other end is the nearest hole.
+/// One check lists every free hole of a shared hole's strip. Two leads in that strip get the
+/// same list. A wire whose other end is the next rail hole lists neither of its own ends.
 #[test]
-fn applying_every_hint_in_one_check_leaves_each_hole_with_one_lead() {
+fn a_shared_hole_lists_every_free_hole_in_its_strip() {
     let case = common::repo().join("packages/scene/tests/bad/a_hole_holds_one_lead");
     let dir = common::overlaid(&case);
-    let holes = apply_every_hint(dir.path());
-    assert_eq!(holes.iter().filter(|hole| *hole == "bb.d31").count(), 1);
-    assert_eq!(holes.iter().filter(|hole| *hole == "bb.g31").count(), 1);
+    let found = layout_of(dir.path());
+    assert_shared_hints(dir.path(), &found);
+    let mut by_hole: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    for diag in &found {
+        by_hole
+            .entry(taken_hole(&diag.message))
+            .or_default()
+            .push(diag.hint.as_str());
+    }
+    for (hole, hints) in &by_hole {
+        assert!(
+            hints.windows(2).all(|pair| pair[0] == pair[1]),
+            "{hole} lists different holes: {hints:?}"
+        );
+    }
+    assert!(by_hole["bb.e31"].len() > 1, "e31 is shared by two leads");
+    assert!(by_hole["bb.f31"].len() > 1, "f31 is shared by two leads");
 
     for (first, second) in [("X22", "X21"), ("X21", "X22")] {
         let dir = on_400(
@@ -426,10 +422,20 @@ fn applying_every_hint_in_one_check_leaves_each_hole_with_one_lead() {
             r#""r2": { "on": { "a": "bb.b22" }, "rotate": [0, 0, -90] }"#,
             &format!(r#"["bb.{first}", "bb.{second}"]"#),
         );
-        let holes = apply_every_hint(dir.path());
-        assert_eq!(holes.len(), 1, "{first} then {second}: {holes:?}");
-        assert_ne!(holes[0], format!("bb.{first}"));
-        assert_ne!(holes[0], format!("bb.{second}"));
+        let found = layout_of(dir.path());
+        assert_eq!(found.len(), 1, "{first} then {second}: {found:#?}");
+        assert_shared_hints(dir.path(), &found);
+        let holes = listed_holes(&found[0].hint);
+        assert!(
+            holes
+                .iter()
+                .all(|hole| hole != &format!("bb.{first}") && hole != &format!("bb.{second}")),
+            "{first} then {second} lists an end: {holes:?}"
+        );
+        let followed = apply_every_hint(dir.path());
+        assert_eq!(followed.len(), 1, "{first} then {second}: {followed:?}");
+        assert_ne!(followed[0], format!("bb.{first}"));
+        assert_ne!(followed[0], format!("bb.{second}"));
     }
 }
 
@@ -452,15 +458,97 @@ fn loose(kind: &str, parts: &str, layout: &str, wires: &str, ground: &str) -> te
     dir
 }
 
-const FULL_STRIP: &str = "a hole holds one lead, and every hole in this strip is taken; free one first, for example by moving one of its leads to an empty strip and wiring that strip back to the hole it left";
-const ALREADY_NAMED: &str = "a hole holds one lead; every free hole in this strip is already named by another hint in this check";
-const FREE_HOLE: &str = "a hole holds one lead; move one of them to a free hole in the same strip";
+const FREE_HOLES: &str = "a hole holds one lead. free holes in this strip: ";
+const NO_FREE_HOLE: &str = "a hole holds one lead, and this strip has no free hole";
+
+/// The holes a shared-hole hint lists, in the order it prints them.
+fn listed_holes(hint: &str) -> Vec<String> {
+    if hint == NO_FREE_HOLE {
+        return Vec::new();
+    }
+    let rest = hint
+        .strip_prefix(FREE_HOLES)
+        .unwrap_or_else(|| panic!("hint is neither form: {hint}"));
+    assert!(!rest.is_empty() && !rest.ends_with(' '), "{hint}");
+    rest.split(", ").map(str::to_string).collect()
+}
+
+/// `names bb.a1, which …` → `bb.a1`.
+fn taken_hole(message: &str) -> String {
+    message
+        .split(" names ")
+        .nth(1)
+        .and_then(|rest| rest.split(", which").next())
+        .unwrap_or_else(|| panic!("{message}"))
+        .to_string()
+}
+
+/// Column number, then the row, which is the order a strip lists its holes.
+fn hole_order(name: &str) -> (u32, String) {
+    let local = name.rsplit('.').next().unwrap_or_else(|| panic!("{name}"));
+    let at = local
+        .find(|c: char| c.is_ascii_digit())
+        .unwrap_or_else(|| panic!("{name}"));
+    let (row, col) = local.split_at(at);
+    let col: u32 = col.parse().unwrap_or_else(|_| panic!("{name}"));
+    (col, row.to_string())
+}
+
+fn names_same(listed: &str, taken: &str) -> bool {
+    listed == taken
+        || taken.ends_with(&format!(".{listed}"))
+        || listed.ends_with(&format!(".{taken}"))
+}
+
+/// Each hint is the free-hole list or the no-free sentence. Listed holes are in strip order,
+/// and moving the reported lead onto one of them leaves that hole unclaimed.
+fn assert_shared_hints(dir: &Path, found: &[Diagnostic]) {
+    assert!(!found.is_empty(), "{}", scene_text(dir));
+    for diag in found {
+        let holes = listed_holes(&diag.hint);
+        let mut order: Vec<_> = holes.iter().map(|hole| hole_order(hole)).collect();
+        let mut sorted = order.clone();
+        sorted.sort();
+        assert_eq!(order, sorted, "not in strip order: {}", diag.hint);
+        order.dedup();
+        assert_eq!(
+            order.len(),
+            holes.len(),
+            "lists a hole twice: {}",
+            diag.hint
+        );
+        let taken = taken_hole(&diag.message);
+        for hole in &holes {
+            assert!(
+                !names_same(hole, &taken),
+                "{hole} is the hole that is taken: {}",
+                diag.message
+            );
+            let path = dir.join(&diag.file);
+            let original = fs::read_to_string(&path).unwrap();
+            let (start, end, _) = quoted_span(&original, diag);
+            let mut text = original.clone();
+            text.replace_range(start..end, hole);
+            fs::write(&path, &text).unwrap();
+            let later = findings(dir);
+            fs::write(&path, &original).unwrap();
+            let claimed = later
+                .iter()
+                .any(|d| d.code == Code::Layout && d.message.contains(&format!("{hole}, which")));
+            assert!(
+                !claimed,
+                "{hole} is not free after the move:\n{later:#?}\n{}",
+                diag.hint
+            );
+        }
+    }
+}
 
 /// A full column, the 400's full X rail, and both at once name no hole. A strip filled
 /// with part legs, a board with no empty hole, and a full strip inside a part say the
-/// same sentence. The reference skill and the decision record quote it.
+/// same sentence.
 #[test]
-fn a_full_strip_says_the_strip_is_full() {
+fn a_full_strip_says_the_strip_has_no_free_hole() {
     let cases = [
         ("column", full_column(false)),
         ("rail", full_rail(false)),
@@ -473,29 +561,13 @@ fn a_full_strip_says_the_strip_is_full() {
         let found = layout_of(dir.path());
         assert!(!found.is_empty(), "{name}: {}", scene_text(dir.path()));
         for diag in &found {
-            assert_eq!(diag.hint, FULL_STRIP, "{name}: {}", diag.message);
+            assert_eq!(diag.hint, NO_FREE_HOLE, "{name}: {}", diag.message);
             assert!(
-                holes_named(&diag.hint).is_empty(),
+                listed_holes(&diag.hint).is_empty(),
                 "{name} names a hole: {}",
                 diag.hint
             );
         }
-    }
-    let repo = common::repo();
-    for path in ["apps/orbe/skills/reference.md", "docs/decisions.md"] {
-        let text = fs::read_to_string(repo.join(path)).unwrap();
-        assert!(
-            text.contains(FULL_STRIP),
-            "{path} does not quote the full-strip hint"
-        );
-        assert!(
-            text.contains(ALREADY_NAMED),
-            "{path} does not quote the already-named hint"
-        );
-        assert!(
-            text.contains(&format!("{FREE_HOLE}, such as bb.c1")),
-            "{path} does not quote the free-hole hint"
-        );
     }
 }
 
@@ -568,12 +640,7 @@ fn a_breadboard_inside_a_part_holds_one_lead_per_hole() {
         "{}",
         found[0].message
     );
-    assert_eq!(
-        found[0].hint,
-        format!("{FREE_HOLE}, such as bb.b1"),
-        "{}",
-        found[0].hint
-    );
+    assert_shared_hints(two.path(), &found);
     apply_every_hint(two.path());
 
     let shared = kit(
@@ -604,12 +671,7 @@ fn a_breadboard_inside_a_part_holds_one_lead_per_hole() {
         "{}",
         found[0].message
     );
-    assert_eq!(
-        found[0].hint,
-        format!("{FREE_HOLE}, such as kit.bb.b1"),
-        "{}",
-        found[0].hint
-    );
+    assert_shared_hints(shared.path(), &found);
     apply_every_hint(shared.path());
 
     let header = kit(
@@ -659,18 +721,14 @@ fn following_a_free_hole_hint_keeps_each_lead_on_its_net() {
         let broken = make(false);
         let found = layout_of(broken.path());
         assert!(!found.is_empty(), "{}", scene_text(broken.path()));
+        assert_shared_hints(broken.path(), &found);
         for diag in &found {
-            assert!(
-                diag.hint.starts_with(FREE_HOLE),
-                "hint reverted: {}",
-                diag.hint
-            );
             assert!(
                 !diag.hint.contains("move one lead to another strip"),
                 "hint reverted: {}",
                 diag.hint
             );
-            assert_eq!(holes_named(&diag.hint).len(), 1, "{}", diag.hint);
+            assert!(!listed_holes(&diag.hint).is_empty(), "{}", diag.hint);
         }
         apply_every_hint(broken.path());
         same_nets(&before, &pin_nets(broken.path()))
@@ -686,10 +744,10 @@ fn following_a_free_hole_hint_keeps_each_lead_on_its_net() {
     }
 }
 
-/// One free hole, two extra leads. The first hint names that hole. The second does not
-/// call the strip full, and it names no hole.
+/// One free hole, two extra leads. Both hints list that hole. Moving one lead there leaves
+/// the strip with no free hole, which the next check says.
 #[test]
-fn a_free_hole_already_named_is_not_called_taken() {
+fn two_leads_can_be_sent_to_the_same_listed_hole() {
     let dir = loose(
         "breadboard-400",
         r#""r1": { "type": "resistor-axial", "resistance": "220" },
@@ -701,9 +759,23 @@ fn a_free_hole_already_named_is_not_called_taken() {
     );
     let found = layout_of(dir.path());
     assert_eq!(found.len(), 2, "{found:#?}");
-    assert_eq!(found[0].hint, format!("{FREE_HOLE}, such as bb.d30"));
-    assert_eq!(found[1].hint, ALREADY_NAMED);
-    assert!(holes_named(&found[1].hint).is_empty(), "{}", found[1].hint);
+    assert_eq!(found[0].hint, found[1].hint, "{found:#?}");
+    assert_shared_hints(dir.path(), &found);
+    assert!(
+        !listed_holes(&found[0].hint).is_empty(),
+        "{}",
+        found[0].hint
+    );
+    let path = dir.path().join(&found[0].file);
+    let text = fs::read_to_string(&path).unwrap();
+    let (start, end, _) = quoted_span(&text, &found[0]);
+    let hole = listed_holes(&found[0].hint).remove(0);
+    let mut moved = text;
+    moved.replace_range(start..end, &hole);
+    fs::write(&path, moved).unwrap();
+    let later = layout_of(dir.path());
+    assert_eq!(later.len(), 1, "{later:#?}");
+    assert_eq!(later[0].hint, NO_FREE_HOLE, "{}", later[0].hint);
 }
 
 fn scene_text(dir: &Path) -> String {
@@ -1003,20 +1075,6 @@ fn same_nets(
         }
     }
     Ok(())
-}
-
-fn holes_named(hint: &str) -> BTreeSet<String> {
-    hint.split(|c: char| !(c.is_ascii_alphanumeric() || c == '.'))
-        .filter(|token| {
-            token.contains('.')
-                && token
-                    .chars()
-                    .next()
-                    .is_some_and(|c| c.is_ascii_alphabetic())
-                && token.chars().any(|c| c.is_ascii_digit())
-        })
-        .map(str::to_string)
-        .collect()
 }
 
 fn quoted_span(text: &str, diag: &Diagnostic) -> (usize, usize, String) {
