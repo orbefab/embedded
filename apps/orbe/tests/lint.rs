@@ -1156,6 +1156,49 @@ fn a_resistor_beside_an_led_limits_nothing_and_one_in_series_on_either_side_does
     );
 }
 
+/// A 2N2222 with its leads formed to 2.54 mm sits one leg in each strip. Turned along a column,
+/// the three legs share a strip and short. The Nano drives the base, and 220 ohm limits the LED.
+#[test]
+fn a_2n2222_formed_to_the_breadboard_pitch_seats_one_leg_per_strip() {
+    for (rotate, shorted) in [("0", false), ("90", true)] {
+        let scene = format!(
+            r#"{{
+  "format": 1,
+  "parts": {{
+    "bb": {{ "type": "breadboard-400" }},
+    "nano": {{ "type": "nano-board", "firmware": "build/button.ino.hex" }},
+    "q1": {{ "type": "npn-2n2222-to92" }},
+    "rb": {{ "type": "resistor-axial", "resistance": "1k" }},
+    "rc": {{ "type": "resistor-axial", "resistance": "220" }},
+    "led": {{ "type": "led-5mm", "color": "red" }},
+  }},
+  "nets": {{ "GND": "nano.GND" }},
+  "layout": {{
+    "bb": {{ "at": [0, 0, 0] }},
+    "nano": {{ "on": {{ "D13": "bb.d1" }} }},
+    "q1": {{ "on": {{ "collector": "bb.c21" }}, "rotate": [0, 0, {rotate}] }},
+    "rb": {{ "on": {{ "a": "bb.a22" }} }},
+    "rc": {{ "on": {{ "a": "bb.c12" }} }},
+    "led": {{ "on": {{ "anode": "bb.b16" }} }},
+  }},
+  "wires": [
+    ["bb.c1", "bb.b26"],
+    ["bb.a17", "bb.b21"],
+    ["bb.a23", "bb.X23"],
+    ["bb.a14", "bb.X14"],
+  ],
+}}
+"#
+        );
+        let dir = project(&scene);
+        let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+        assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+        let codes: Vec<String> = warned(&run.stdout).into_iter().map(|(_, c)| c).collect();
+        let want: &[&str] = if shorted { &["scene.shorted"] } else { &[] };
+        assert_eq!(codes, want, "rotate {rotate}: {}", run.stdout);
+    }
+}
+
 /// A resistor plugged in along a column has both legs in one strip, which shorts it. Across the
 /// strips it does not. The breadboard's hundreds of empty holes warn of nothing either way. The
 /// jumpers use a free hole of each strip: along the row `r1.b` is `a34`, and along the column it

@@ -1,0 +1,44 @@
+{
+  "part": "zener-1n4733a",
+  "source": {
+    "script": "model.py",
+    "sha256": "9ed7b57511b8746c975a791bf5045ea61a631168e199e535a5fa503628a5bb89",
+    "bytes": 1912
+  },
+  "files": {
+    "zener-1n4733a.glb": {
+      "sha256": "fdf765f8675ce3e030b7de445984ab772294c304f46dcac32854c9dad34492ae",
+      "bytes": 40460
+    },
+    "zener-1n4733a.anchors.json": {
+      "sha256": "1d57822792ced6f856806f439b218a68810fe68f62d112b27049a18c3f215872",
+      "bytes": 293
+    }
+  },
+  "box": {
+    "min": [-5.48, -1.296365, -8],
+    "max": [5.48, 1.296365, 2.6]
+  },
+  "kept_nodes": ["lead-1", "lead-2"],
+  "draw_calls": 4,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0.004706
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 5,
+      "primitives_out": 4
+    }
+  }
+}

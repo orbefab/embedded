@@ -190,12 +190,13 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
     let switches = search(&parts_dir(), "switch");
     let names: Vec<&str> = switches.iter().map(|card| card.name.as_str()).collect();
     assert_eq!(
-        &names[..8],
+        &names[..9],
         [
             "nmos-irf520-to220",
             "npn-2n2222-to92",
             "npn-l8050-sot23",
             "pmos-irf9540n-to220",
+            "pnp-2n3906-to92",
             "tactile-switch-6mm",
             "tactile-switch-ntc013",
             "tactile-switch-smd",
@@ -206,7 +207,7 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
         .iter()
         .position(|name| *name == "diode-cd1206")
         .unwrap();
-    assert!(diode > 7, "{names:?}");
+    assert!(diode > 8, "{names:?}");
 
     let boards = search(&parts_dir(), "board");
     let names: Vec<&str> = boards.iter().map(|card| card.name.as_str()).collect();

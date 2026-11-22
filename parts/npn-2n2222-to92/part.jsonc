@@ -1,9 +1,9 @@
 {
   "format": 1,
   "part": "npn-2n2222-to92",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "NPN transistor, 2N2222A (TO-92)",
-  "summary": "General-purpose NPN for switching up to 600 mA, in plastic TO-92. With the flat face toward you and the leads down, the legs are collector, base, emitter from left to right, as on onsemi's P2N2222A. A PN2222A, and many kit parts sold as 2N2222, have them the other way round, emitter, base, collector, so check yours.",
+  "summary": "General-purpose NPN for switching up to 600 mA, in plastic TO-92, with its leads formed to 2.54 mm (0.1 inch) for a breadboard. With the flat face toward you and the leads down, the legs are collector, base, emitter from left to right, as on onsemi's P2N2222A. A PN2222A, and many kit parts sold as 2N2222, have them the other way round, emitter, base, collector, so check yours.",
   "tags": ["transistor", "bjt", "npn", "switch", "amplifier", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "docs": { "onsemi P2N2222A/D, Rev. 7": "https://www.onsemi.com/pdf/datasheet/p2n2222a-d.pdf" },
