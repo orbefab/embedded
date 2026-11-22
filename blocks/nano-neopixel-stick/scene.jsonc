@@ -1,6 +1,7 @@
 // A Nano drives an 8-pixel NeoPixel stick. The Nano straddles the centre channel over
-// columns 1 to 15. D6 is column 7 on the f to j side. The stick's header is GND, DIN, 5V
-// along +X, in a18, a19 and a20.
+// columns 1 to 15. D6 is column 7 on the f to j side. The stick's header is GND, 5V, DIN
+// across the board width, so the stick turns a quarter turn and hangs off the a side,
+// in a18, a19 and a20.
 {
   "format": 1,
   "parts": {
@@ -13,13 +14,13 @@
     "bb": { "at": [0, 0, 0] },
     "nano": { "on": { "D13": "bb.d1" } },
     "r1": { "on": { "a": "bb.j16" } }, // b in column 20
-    "stick": { "on": { "GND": "bb.a18" } }, // DIN in a19, 5V in a20
+    "stick": { "on": { "GND": "bb.a18" }, "rotate": [0, 0, -90] }, // 5V in a19, DIN in a20
   },
   "nets": { "GND": "nano.GND" },
   "wires": [
     ["bb.j7", "bb.f16"], // D6 to r1.a
-    ["bb.f20", "bb.b19"], // r1.b to stick.DIN
-    ["bb.a12", "bb.b20"], // 5V to stick.5V
+    ["bb.f20", "bb.b20"], // r1.b to stick.DIN
+    ["bb.a12", "bb.b19"], // 5V to stick.5V
     ["bb.a14", "bb.b18"], // GND to stick.GND
   ],
 }
