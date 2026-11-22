@@ -261,8 +261,9 @@ fn manifest(src: &Path) -> Result<Manifest, Error> {
 
 /// Reads `src`, which holds `registry.jsonc` and `parts/<id>/` and `blocks/<id>/` folders, into
 /// a registry. Only folders there are items. Every published file in an item's folder is one of
-/// its files, and build output is left out. The error is a sentence that says what does not
-/// read, or the findings `orbe check` would print for an installed copy of a part or a Block.
+/// its files. Build output is left out, and so are `model.py` and `asset.json`. The error is a
+/// sentence that says what does not read, or the findings `orbe check` would print for an
+/// installed copy of a part or a Block.
 pub fn build(src: &Path) -> Result<Registry, Error> {
     match fs::metadata(src) {
         Ok(meta) if meta.is_dir() => {}

@@ -23,14 +23,6 @@
   "files": [
     {
       "license": "MIT OR Apache-2.0",
-      "path": "asset.json"
-    },
-    {
-      "license": "MIT OR Apache-2.0",
-      "path": "model.py"
-    },
-    {
-      "license": "MIT OR Apache-2.0",
       "path": "part.jsonc"
     },
     {
@@ -92,5 +84,5 @@
   },
   "title": "Resistor, 1/4 W axial",
   "uses": {},
-  "version": "0.1.1"
+  "version": "0.2.0"
 }

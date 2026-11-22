@@ -34,7 +34,7 @@ The build fails, and writes nothing, when:
 - installing the part or the Block and running `orbe check` would refuse it, as [What the build checks](#what-the-build-checks) says. The finding has the same code, place and message;
 - a part and a Block share a name.
 
-It prints the item counts and the file counts: files the records list, files stored by hash, and every file in `<out>`, which is the number a static host counts. It warns with counts of the parts that lack a summary, tags, docs, a datasheet URL or buy links, and of the Blocks that lack a summary or tags. It also names, per item, each hidden file (a path segment that starts with `.`) and each file over 1 MB, since a file in an item's folder is published, apart from build output, and cached by its hash. `--json` prints the same as one envelope.
+It prints the item counts and the file counts: files the records list, files stored by hash, and every file in `<out>`, which is the number a static host counts. It warns with counts of the parts that lack a summary, tags, docs, a datasheet URL or buy links, and of the Blocks that lack a summary or tags. It also names, per item, each hidden file (a path segment that starts with `.`) and each file over 1 MB, since a file in an item's folder is published, apart from build output and the model inputs `model.py` and `asset.json`, and cached by its hash. `--json` prints the same as one envelope.
 
 ### What the build checks
 
@@ -137,7 +137,7 @@ Every record has these fields:
 
 Each entry of `files` is `{ "path", "url", "sha256", "bytes", "license" }`. `path` is the file's `/`-separated path in the item's folder. `url` is `files/<sha256>`, relative to the record's URL. `license` is the file's licence as [REUSE 3.3](https://reuse.software/spec-3.3/) reads it from the item's folder. When the folder holds a `REUSE.toml`, the last of its `[[annotations]]` whose `path` matches the file gives the licence, weighed against the file's own `SPDX-License-Identifier:` line by the annotation's `precedence`: `closest`, the default, keeps the file's own line, `override` keeps the annotation's, and `aggregate` joins both with `AND`. A file no annotation matches takes the expression on its `SPDX-License-Identifier:` line within its first 40 lines, else the item's `license`. A `REUSE.toml` that does not read fails the build. A file that cannot carry a line of its own, such as a firmware image or a licence text, gets its licence this way. A part names its `license` in `part.jsonc`, and the build refuses a part that does not, so no record carries a licence its author did not write.
 
-This repo's parts carry `MIT OR Apache-2.0`, every file of them, except the ESP32-S3 chip part's ROM: in `parts/esp32s3-qfn56`, `esp32s3_rev0_rom.elf`, `LICENSE-rom` and `NOTICE` are `Apache-2.0` only, so that part as a whole is `(MIT OR Apache-2.0) AND Apache-2.0`. A Block is `(MIT OR Apache-2.0) AND LGPL-2.1-or-later` as a whole, and its `REUSE.toml` gives each file its own: its firmware images and `firmware/LICENSE-runtime` are `LGPL-2.1-or-later`, `firmware/LICENSE-libc` is `BSD-3-Clause`, and every other file is `MIT OR Apache-2.0`.
+This repo's parts carry `MIT OR Apache-2.0`, every file of them, except the ESP32-S3 chip part's ROM: in `parts/esp32s3-qfn56`, `REUSE.toml` gives `esp32s3_rev0_rom.elf`, `LICENSE-rom` and `NOTICE` `Apache-2.0` only, so that part as a whole is `(MIT OR Apache-2.0) AND Apache-2.0`. A Block is `(MIT OR Apache-2.0) AND LGPL-2.1-or-later` as a whole. No Block file carries its own `SPDX-License-Identifier:` line, so each file's record takes that expression. `firmware/NOTICE` states which file carries which licence: the firmware image and `firmware/LICENSE-runtime` are `LGPL-2.1-or-later`, `firmware/LICENSE-libc` is `BSD-3-Clause`, and the Block's own files are `MIT OR Apache-2.0`.
 
 **A part** adds what its page shows: `real`, `pins`, `params`, `ratings`, `notSimulated`, `docs`, `buy`, `lit`, `dim`, `pressable` and `holes`. `lit` and `dim` are an LED's brightness thresholds, each `{ "of", "above", "unit" }`. `holes` is a board's, such as a breadboard's: `depth` in mm, and `strips`, the holes each strip joins, each of them also in `pins`. `docs`, `buy`, `lit`, `dim` and `holes` are absent when the part has none, `pressable` is absent when false, and a doc with no `url` is a name with no link. `orbe add` writes each file to `parts/<id>/<path>`.
 
@@ -167,7 +167,7 @@ In the index and in a record, `$schema` names the schema file beside it, for edi
 
 - A file's SHA-256 is over its bytes, in lowercase hex. The file is stored once at `files/<sha256>`, however many records list it.
 - A record's `hash` is the SHA-256 of one line `<sha256>  <path>\n` per entry of `files`, sorted by path, written as `sha256:<hex>`. A part's is the folder hash over those files.
-- Build output in the folder is not one of those files. A `__pycache__` directory, a `.pyc` file, and a `.pytest_cache` or `.venv` directory are left out of `files`, out of the folder hash, and out of what `orbe add` copies. Any other file counts, including one an author added beside `part.jsonc`. The names are fixed. A project has no copy of this repo's `.gitignore`.
+- Build output in the folder is not one of those files, and neither are `model.py` and `asset.json`, the inputs a part's 3D model is built from. The GLB still ships. A `__pycache__` directory, a `.pyc` file, and a `.pytest_cache` or `.venv` directory are left out of `files`, out of the folder hash, and out of what `orbe add` copies, and so are those two names, at any depth. Any other file counts, including one an author added beside `part.jsonc`. The names are fixed. A project has no copy of this repo's `.gitignore`.
 - A record's SHA-256 is in its index row.
 
 ## Verify what you fetch
@@ -198,7 +198,7 @@ TLS to the registry's host is the trust root. The index is not signed. Its hashe
 
 ## Where a copy comes from
 
-`orbe add <id>` downloads the latest version of that part or Block from `@orbefab` and writes it into the project. A part goes to `parts/<id>/`, and the parts it is built from go to `parts/<id>/parts/<dep>/`. A Block writes its scene, firmware, tests and README, and the parts its scene names, the same way. The project owns those copies. `orbe` reads them as they are and does not compare them to the registry. `@<registry>/<id>` is refused: this orbe reads `@orbefab` only. `orbe check`, `orbe open`, `orbe test` and `orbe show` never use the network.
+`orbe add <id>` downloads the latest version of that part or Block from `@orbefab` and writes the published files into the project. A part goes to `parts/<id>/`, and the parts it is built from go to `parts/<id>/parts/<dep>/`. `model.py` and `asset.json` are not in that copy. The GLB is. A Block writes its scene, firmware, tests and README, and the parts its scene names, the same way. The project owns those copies. `orbe` reads them as they are and does not compare them to the registry. `@<registry>/<id>` is refused: this orbe reads `@orbefab` only. `orbe check`, `orbe open`, `orbe test` and `orbe show` never use the network.
 
 ## Not in this version
 

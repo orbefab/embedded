@@ -3,7 +3,7 @@
 // through its VOH and VOL rows, as each field's source says. input_headroom is 5 V minus the
 // VICR typical upper end of 4.2 V. The stage keeps comparing above it, and the run warns.
 {
-  "format": 1, "part": "lmv358-msop8", "version": "0.1.1", "title": "LMV358 dual op-amp, MSOP-8", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "lmv358-msop8", "version": "0.2.0", "title": "LMV358 dual op-amp, MSOP-8", "license": "MIT OR Apache-2.0",
   "summary": "TI LMV358 dual op-amp in VSSOP-8 (MSOP-8). The dot marks lead 1.",
   "tags": ["op-amp", "amplifier", "smd"],
   "docs": { "TI SLOS263Y": "https://www.ti.com/lit/ds/symlink/lmv358.pdf" },

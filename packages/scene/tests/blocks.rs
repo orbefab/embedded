@@ -331,8 +331,10 @@ fn a_block_that_holds_a_lock_is_refused() {
     );
 }
 
+/// A Block ships no `REUSE.toml`. Each file's record takes the Block's licence, and
+/// `firmware/NOTICE` states which file carries which licence.
 #[test]
-fn each_block_file_names_its_own_licence() {
+fn each_block_file_takes_the_block_licence() {
     fn walk(root: &Path, dir: &Path, into: &mut BTreeMap<String, Vec<u8>>) {
         for entry in fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();
@@ -354,15 +356,16 @@ fn each_block_file_names_its_own_licence() {
         let mut files = BTreeMap::new();
         walk(&dir, &dir, &mut files);
         let card = orbe_scene::block_card(&id, &files, &parts).unwrap();
+        assert!(
+            !files.contains_key("REUSE.toml"),
+            "{id} still has REUSE.toml"
+        );
+        let notice = std::str::from_utf8(files.get("firmware/NOTICE").unwrap()).unwrap();
+        for fact in ["MIT OR Apache-2.0", "LGPL-2.1-or-later", "BSD-3-Clause"] {
+            assert!(notice.contains(fact), "{id}: NOTICE does not state {fact}");
+        }
         for file in &card.files {
-            let want = if file.path.ends_with(".hex") || file.path == "firmware/LICENSE-runtime" {
-                "LGPL-2.1-or-later"
-            } else if file.path == "firmware/LICENSE-libc" {
-                "BSD-3-Clause"
-            } else {
-                "MIT OR Apache-2.0"
-            };
-            assert_eq!(file.license, want, "{id}/{}", file.path);
+            assert_eq!(file.license, card.license, "{id}/{}", file.path);
         }
     }
 }

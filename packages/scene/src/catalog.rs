@@ -193,6 +193,8 @@ mod tests {
         fs::create_dir(&lamp).unwrap();
         fs::write(lamp.join("part.jsonc"), "{}\n").unwrap();
         fs::write(lamp.join("notes.txt"), b"kept\n").unwrap();
+        fs::write(lamp.join("model.py"), b"print('lamp')\n").unwrap();
+        fs::write(lamp.join("asset.json"), b"{}\n").unwrap();
         fs::write(lamp.join("a.pyc"), b"bytecode").unwrap();
         fs::create_dir(lamp.join("__pycache__")).unwrap();
         fs::write(
@@ -345,13 +347,13 @@ mod tests {
             let id = id.as_str();
             let files = load_folder(id);
             let glb = format!("{id}.glb");
-            if !files.contains_key(&glb) && !files.contains_key("asset.json") {
+            let asset_path = parts_root().join(id).join("asset.json");
+            if !files.contains_key(&glb) && !asset_path.is_file() {
                 continue;
             }
-            let asset_bytes = files
-                .get("asset.json")
-                .unwrap_or_else(|| panic!("{id} is missing asset.json"));
-            let asset: Value = serde_json::from_slice(asset_bytes)
+            let asset_bytes = fs::read(&asset_path)
+                .unwrap_or_else(|error| panic!("{id} is missing asset.json: {error}"));
+            let asset: Value = serde_json::from_slice(&asset_bytes)
                 .unwrap_or_else(|e| panic!("{id}: asset.json: {e}"));
             let anchors_name = format!("{id}.anchors.json");
             let mut want = vec![glb.as_str()];
@@ -374,7 +376,9 @@ mod tests {
                     "{id}: sha256 of {name}"
                 );
             }
-            if let Some(script) = files.get("model.py") {
+            let script_path = parts_root().join(id).join("model.py");
+            if script_path.is_file() {
+                let script = fs::read(&script_path).unwrap();
                 let recorded = asset["source"]["sha256"].as_str().unwrap_or("");
                 assert_eq!(
                     recorded,

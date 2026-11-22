@@ -1,4 +1,4 @@
-//! A part's or a Block's `REUSE.toml`, read as REUSE 3.3 reads one
+//! A folder's `REUSE.toml`, read as REUSE 3.3 reads one
 //! (<https://reuse.software/spec-3.3/>, "REUSE.toml"). It gives each file the folder holds its
 //! licence, so a file that cannot carry an SPDX line, such as a firmware image or a licence text,
 //! still names its own.

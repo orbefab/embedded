@@ -2,9 +2,10 @@
 //!
 //! [`is_published`] is that set. The folder hash, the catalog this binary embeds, the registry
 //! build and `orbe add` each keep a file when it says so, and leave it out otherwise. Build
-//! output is left out. The names are fixed, because an installed project has no copy of the
-//! repo's `.gitignore` to read. Any other file is published, including one an author added
-//! beside `part.jsonc`.
+//! output is left out, and so are `model.py` and `asset.json`, the inputs a part's 3D model is
+//! built from. The GLB still ships. The names are fixed, because an installed project has no
+//! copy of the repo's `.gitignore` to read. Any other file is published, including one an
+//! author added beside `part.jsonc`.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -17,7 +18,13 @@ const BUILD_DIRS: &[&str] = &["__pycache__", ".pytest_cache", ".venv"];
 /// folder, or below `parts/` or `blocks/` with the id as its first segment.
 pub fn is_published(rel: &str) -> bool {
     rel.split('/')
-        .all(|segment| !is_build_dir(segment) && !is_bytecode(segment))
+        .all(|segment| !is_build_dir(segment) && !is_bytecode(segment) && !is_model_input(segment))
+}
+
+/// `model.py` builds the part's body and `asset.json` records that build. A project needs the
+/// GLB, not these two.
+fn is_model_input(name: &str) -> bool {
+    name == "model.py" || name == "asset.json"
 }
 
 fn is_build_dir(name: &str) -> bool {
@@ -74,6 +81,10 @@ mod tests {
             "lamp/a.pyc",
             ".pytest_cache/v",
             ".venv/pyvenv.cfg",
+            "model.py",
+            "asset.json",
+            "lamp/model.py",
+            "lamp/asset.json",
         ] {
             assert!(!is_published(rel), "{rel}");
         }
@@ -81,6 +92,7 @@ mod tests {
             "part.jsonc",
             "notes.txt",
             "lamp/notes.txt",
+            "lamp/lamp.glb",
             ".env",
             ".gitignore",
         ] {

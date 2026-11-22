@@ -1,7 +1,7 @@
 // The load values and sources are the engine's resonator loads, from
 // packages/engine/tests/circuits/atmega-board-button/netlist.json, parts `res_xtal1` and `res_xtal2`.
 {
-  "format": 1, "part": "resonator-cstce", "version": "0.1.1", "title": "Ceramic resonator, 16 MHz, 3 terminals", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "resonator-cstce", "version": "0.2.0", "title": "Ceramic resonator, 16 MHz, 3 terminals", "license": "MIT OR Apache-2.0",
   "summary": "Murata CSTCE 16 MHz ceramic resonator with built-in load capacitors. Three terminals: IN, GND in the middle, OUT.",
   "tags": ["resonator", "clock", "ceramic", "smd"],
   "docs": { "Murata CSTCE16M0V53-R0": null },

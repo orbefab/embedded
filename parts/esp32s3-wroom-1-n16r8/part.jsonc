@@ -12,7 +12,7 @@
 {
   "format": 1,
   "part": "esp32s3-wroom-1-n16r8",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "title": "ESP32-S3-WROOM-1-N16R8",
   "summary": "ESP32-S3 module, 18 x 25.5 mm, 16 MB flash and 8 MB octal PSRAM. GPIO26 to GPIO32 and GPIO33 to GPIO34 are not brought out. IO35 to IO37 are castellated and note b says they are not available.",
   "tags": ["microcontroller", "esp32-s3", "module"],
@@ -22,7 +22,7 @@
     "ESP32-S3 Series Datasheet v2.2": "https://www.espressif.com/sites/default/files/documentation/esp32-s3_datasheet_en.pdf"
   },
   "real": { "maker": "Espressif", "number": "ESP32-S3-WROOM-1-N16R8", "datasheet": "ESP32-S3-WROOM-1 & WROOM-1U Datasheet v1.8" },
-  "uses": { "esp32s3-qfn56": "0.1.0" },
+  "uses": { "esp32s3-qfn56": "0.2.0" },
   "params": {
     "app": {},
     "partitions": {}

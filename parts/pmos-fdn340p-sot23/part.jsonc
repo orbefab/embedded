@@ -1,7 +1,7 @@
 // The resistor is the engine's T1 stand-in, from packages/engine/tests/circuits/atmega-board-button/netlist.json,
 // part `usb_switch`.
 {
-  "format": 1, "part": "pmos-fdn340p-sot23", "version": "0.1.1", "title": "FDN340P P-channel MOSFET, SOT-23", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "pmos-fdn340p-sot23", "version": "0.2.0", "title": "FDN340P P-channel MOSFET, SOT-23", "license": "MIT OR Apache-2.0",
   "summary": "onsemi FDN340P P-channel MOSFET in SOT-23. Lead 1 is the gate, lead 2 the source and lead 3 the drain. The dot marks lead 1.",
   "tags": ["transistor", "mosfet", "pmos", "sot-23"],
   "docs": {

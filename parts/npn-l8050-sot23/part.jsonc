@@ -1,7 +1,7 @@
 {
   "format": 1,
   "part": "npn-l8050-sot23",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "title": "NPN transistor, L8050 (SOT-23)",
   "summary": "Leshan L8050QLT1G, an NPN in SOT-23 marked 1YC, for up to 800 mA. Pin 1 is the base, pin 2 the emitter and pin 3 the collector. The fit is the 25 C curves, with the collector resistance held at 0.01 ohm because the unconstrained fit went negative.",
   "tags": ["transistor", "bjt", "npn", "switch", "sot-23"],

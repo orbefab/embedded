@@ -10,7 +10,7 @@
 {
   "format": 2,
   "part": "esp32s3-qfn56",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "title": "ESP32-S3, QFN-56",
   "summary": "ESP32-S3 in a 7 x 7 mm QFN-56. GPIO names match the esp32s3 kind. The mask ROM is the default of rom.",
   "tags": ["microcontroller", "esp32-s3", "qfn"],

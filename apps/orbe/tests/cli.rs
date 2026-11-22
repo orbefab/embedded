@@ -404,7 +404,6 @@ fn adding_parts_for_the_first_target() {
     for id in &copied {
         let names = [
             "part.jsonc".to_string(),
-            "asset.json".to_string(),
             format!("{id}.glb"),
             format!("{id}.anchors.json"),
         ];
@@ -414,6 +413,12 @@ fn adding_parts_for_the_first_target() {
             if catalog.exists() || name.ends_with(".glb") {
                 assert_eq!(fs::read(&copy).ok(), fs::read(&catalog).ok(), "{id}/{name}");
             }
+        }
+        for skipped in ["asset.json", "model.py"] {
+            assert!(
+                !dir.path().join("parts").join(id).join(skipped).exists(),
+                "{id}/{skipped}"
+            );
         }
     }
     for id in &copied {
@@ -611,7 +616,7 @@ fn add_refuses_a_folder_that_is_not_a_project() {
 
     let (output, stdout, stderr) = orbe_in(lonely.path(), &["add", "led-5mm"]);
     assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
-    assert!(stdout.contains("wrote parts/led-5mm 0.1.1\n"), "{stdout}");
+    assert!(stdout.contains("wrote parts/led-5mm 0.2.0\n"), "{stdout}");
     assert!(lonely.path().join("parts/led-5mm/part.jsonc").is_file());
     assert!(!lonely.path().join("scene.jsonc").exists());
 
@@ -806,6 +811,6 @@ fn a_user_folder_at_the_old_add_trash_is_left_in_place() {
     .unwrap();
     let (output, stdout, stderr) = orbe_in(project.path(), &["add", "led-5mm"]);
     assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
-    assert_eq!(stdout, "wrote parts/led-5mm 0.1.1\n");
+    assert_eq!(stdout, "wrote parts/led-5mm 0.2.0\n");
     assert_eq!(fs::read(&note).unwrap(), b"KEEP-ME\n");
 }

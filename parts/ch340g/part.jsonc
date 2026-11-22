@@ -1,5 +1,5 @@
 {
-  "format": 1, "part": "ch340g", "version": "0.1.1", "title": "CH340G USB to serial, SOIC-16", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "ch340g", "version": "0.2.0", "title": "CH340G USB to serial, SOIC-16", "license": "MIT OR Apache-2.0",
   "summary": "WCH CH340G USB-to-serial bridge in SOIC-16. The dot marks lead 1.",
   "tags": ["usb", "uart", "bridge", "soic"],
   "docs": {

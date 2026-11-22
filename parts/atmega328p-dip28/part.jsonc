@@ -1,6 +1,6 @@
 // The model is atmega328p-tqfp32's, the engine's ATmega328P values. A test keeps the two equal.
 {
-  "format": 1, "part": "atmega328p-dip28", "version": "0.1.1", "title": "ATmega328P, PDIP-28", "license": "MIT OR Apache-2.0",
+  "format": 1, "part": "atmega328p-dip28", "version": "0.2.0", "title": "ATmega328P, PDIP-28", "license": "MIT OR Apache-2.0",
   "summary": "ATmega328P-PU in a 300 mil PDIP-28. The notch is at one end and marks the lead-1 corner. The part needs firmware.",
   "tags": ["microcontroller", "avr", "dip"],
   "docs": {

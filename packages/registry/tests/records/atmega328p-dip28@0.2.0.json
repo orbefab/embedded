@@ -3,7 +3,7 @@
   "$schema": "item.schema.json",
   "format": 1,
   "name": "atmega328p-dip28",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "title": "ATmega328P, PDIP-28",
   "description": "ATmega328P-PU in a 300 mil PDIP-28. The notch is at one end and marks the lead-1 corner. The part needs firmware.",
   "categories": [
@@ -15,13 +15,6 @@
   "registryDependencies": [],
   "files": [
     {
-      "path": "asset.json",
-      "url": "files/<sha256>",
-      "sha256": "<sha256>",
-      "bytes": 0,
-      "license": "MIT OR Apache-2.0"
-    },
-    {
       "path": "atmega328p-dip28.anchors.json",
       "url": "files/<sha256>",
       "sha256": "<sha256>",
@@ -30,13 +23,6 @@
     },
     {
       "path": "atmega328p-dip28.glb",
-      "url": "files/<sha256>",
-      "sha256": "<sha256>",
-      "bytes": 0,
-      "license": "MIT OR Apache-2.0"
-    },
-    {
-      "path": "model.py",
       "url": "files/<sha256>",
       "sha256": "<sha256>",
       "bytes": 0,

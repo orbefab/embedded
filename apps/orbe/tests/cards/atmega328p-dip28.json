@@ -17,19 +17,11 @@
   "files": [
     {
       "license": "MIT OR Apache-2.0",
-      "path": "asset.json"
-    },
-    {
-      "license": "MIT OR Apache-2.0",
       "path": "atmega328p-dip28.anchors.json"
     },
     {
       "license": "MIT OR Apache-2.0",
       "path": "atmega328p-dip28.glb"
-    },
-    {
-      "license": "MIT OR Apache-2.0",
-      "path": "model.py"
     },
     {
       "license": "MIT OR Apache-2.0",
@@ -293,5 +285,5 @@
   },
   "title": "ATmega328P, PDIP-28",
   "uses": {},
-  "version": "0.1.1"
+  "version": "0.2.0"
 }
