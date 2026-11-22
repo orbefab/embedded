@@ -295,6 +295,7 @@ fn a_part_left_out_of_search_is_false_on_its_index_row_and_absent_from_its_recor
         "ch340g",
         "cp2102n-qfn28",
         "atmega16u2-qfn32",
+        "lesd5d5-sod523",
     ] {
         assert_eq!(row(name)["listed"], json!(false), "{name}");
         let record = record(&registry.output, &format!("{name}@0.2.0"));
