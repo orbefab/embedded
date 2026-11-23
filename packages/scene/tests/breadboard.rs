@@ -74,7 +74,7 @@ fn scene(layout: &str, wires: &str) -> tempfile::TempDir {
     "bb": {{ "type": "breadboard-830" }},
     "nano": {{ "type": "nano-board", "firmware": "build/button.ino.hex" }},
     "r1": {{ "type": "resistor-axial", "resistance": "220" }},
-    "led1": {{ "type": "led-5mm", "color": "red" }},
+    "led1": {{ "type": "led-5mm" }},
   }},
   "layout": {{ "bb": {{ "at": [10, 20, 0], "rotate": [0, 0, 90] }}, {layout} }},
   "wires": [{wires}],
@@ -273,7 +273,7 @@ fn a_pin_on_two_legs_goes_in_by_its_lowest_lead() {
 #[test]
 fn a_missed_leg_s_hint_names_only_a_placement_that_seats_the_part() {
     let led = on_400(
-        r#""led1": { "type": "led-5mm", "color": "red" },"#,
+        r#""led1": { "type": "led-5mm" },"#,
         r#""led1": { "on": { "anode": "bb.j30" } }"#,
         "",
     );
@@ -1138,7 +1138,7 @@ fn follow_old_move(dir: &Path) -> Result<(), Vec<Diagnostic>> {
 #[test]
 fn a_hole_past_the_board_names_the_range_and_only_a_near_hole() {
     let dir = on_400(
-        r#""led1": { "type": "led-5mm", "color": "red" },"#,
+        r#""led1": { "type": "led-5mm" },"#,
         r#""led1": { "on": { "anode": "bb.j99" } },"#,
         r#"["bb.j99", "nano.GND"], ["bb.j31", "nano.5V"], ["bb.W6", "nano.D2"], ["bb.J9", "nano.D13"], ["bb.k31", "nano.A0"]"#,
     );

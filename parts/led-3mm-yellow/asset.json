@@ -1,0 +1,44 @@
+{
+  "part": "led-3mm-yellow",
+  "source": {
+    "script": "model.py",
+    "sha256": "1e3724e8f72e09064417a939b560d4dabfb357a662e86bd2e7515691767a09e4",
+    "bytes": 625
+  },
+  "files": {
+    "led-3mm-yellow.glb": {
+      "sha256": "11f49bd82a0d173889e3879039b06c2f44ebf897e002debc4f15c1e88c6915f0",
+      "bytes": 20940
+    },
+    "led-3mm-yellow.anchors.json": {
+      "sha256": "006e3f3b4e215139a04f000264c79e7b3a3799b64e245cb12b8e468afa4bfaf5",
+      "bytes": 296
+    }
+  },
+  "box": {
+    "min": [-1.894872, -1.899276, -27.4],
+    "max": [1.6, 1.899276, 5.3]
+  },
+  "kept_nodes": ["body", "lead-1", "lead-2"],
+  "draw_calls": 3,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": ["body"]
+    },
+    "merge": {
+      "primitives_in": 3,
+      "primitives_out": 3
+    }
+  }
+}

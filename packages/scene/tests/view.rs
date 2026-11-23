@@ -40,10 +40,7 @@ fn instances_carry_their_parsed_params_and_placements() {
         instance(instances, "r2")["params"],
         json!({ "resistance": 10000.0 })
     );
-    assert_eq!(
-        instance(instances, "led1")["params"],
-        json!({ "color": "red" })
-    );
+    assert_eq!(instance(instances, "led1")["params"], json!({}));
     assert_eq!(
         instance(instances, "btn1")["placement"],
         json!({ "at": [13.97, 0.0, 8.5], "rotate": [0.0, 0.0, 90.0] }),
@@ -90,21 +87,10 @@ fn parts_carry_their_3d_fields() {
 
     let led = &view["parts"]["led-5mm"];
     assert_eq!(led["readings"], json!({ "brightness": { "full": 0.01 } }));
-    assert_eq!(
-        led["tints"],
-        json!({
-            "color": {
-                "red": "#d8342a",
-                "yellow": "#f2c12e",
-                "green": "#3fae49",
-                "blue": "#2a62e6",
-                "white": "#f4f6f8"
-            }
-        })
-    );
+    assert_eq!(led["tints"], json!({}));
     assert_eq!(
         led["view"],
-        json!({ "glow": [{ "node": "body", "by": "brightness" }], "tint": [{ "node": "body", "by": "color" }] })
+        json!({ "glow": [{ "node": "body", "by": "brightness" }] })
     );
 
     let nano = &view["parts"]["nano-board"];

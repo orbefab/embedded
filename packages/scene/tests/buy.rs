@@ -91,8 +91,8 @@ fn read_buy(entries: Vec<Value>) -> Result<(), Vec<Diagnostic>> {
     let scene_path = dir.path().join("scene.jsonc");
     let scene = fs::read_to_string(&scene_path).unwrap();
     let scene = scene.replacen(
-        "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },",
-        "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },\n    \"probe\": { \"type\": \"./parts/probe.jsonc\" },",
+        "\"led1\": { \"type\": \"led-5mm\" },",
+        "\"led1\": { \"type\": \"led-5mm\" },\n    \"probe\": { \"type\": \"./parts/probe.jsonc\" },",
         1,
     );
     assert!(

@@ -7,6 +7,8 @@ breadboard's top on z = 0, leads down -Z.
 
 import build123d as bd
 
+from cad import paint
+from cad.color import plastic, tin
 from cad.geom import box, cyl_z, fuse
 
 BREADBOARD_PITCH = 2.54
@@ -64,6 +66,44 @@ def led_body(d, flange_d, flange_h, height, flat_x=None):
     dome = bd.Pos(0, 0, height - r) * bd.Sphere(r)
     dome &= cyl_z(0, 0, height - r, height + 0.1, r + 0.1)
     return fuse([flange, barrel, dome]).clean()
+
+
+# Kingbright L-7113 (T-1 3/4): body Φ5.0, flange Φ5.8 × 1.0, 8.6 tall, leads
+# 0.5 square on 2.54, at least 25.4 long. The anode is drawn 2 longer. The
+# flat's x is on the cathode side.  # verify
+# (body Φ, flange Φ, flange height, overall), flat x, lead section,
+# leads (number, x, length below the seating plane).
+LED_5MM = (
+    (5.0, 5.8, 1.0, 8.6),
+    2.5,
+    0.5,
+    ((1, -1.27, 27.4), (2, 1.27, 25.4)),
+)
+
+# Kingbright L-934 (T-1): body Φ3.0, about 5.3 tall, leads 0.5 square on
+# 2.54, at least 25.4 long. The flange (Φ3.8 × 0.8), the flat's x and the
+# anode drawn 2 longer are estimates.  # verify
+LED_3MM = (
+    (3.0, 3.8, 0.8, 5.3),
+    1.6,
+    0.5,
+    ((1, -1.27, 27.4), (2, 1.27, 25.4)),
+)
+
+
+def round_led(part, size, color):
+    """A round through-hole LED. `size` is `LED_5MM` or `LED_3MM`.
+
+    The body is painted `color`, a hex string. The leads are tin. Returns
+    the compound and the lead table `(lead, x, below)` the anchors use.
+    Each colour's part calls this and sets its own tint.
+    """
+    body, flat_x, lead_w, leads = size
+    d, fd, fh, h = body
+    children = [paint(led_body(d, fd, fh, h, flat_x=flat_x), "body", plastic(color))]
+    for lead, x, below in leads:
+        children.append(paint(square_lead(x, 0, -below, 0.0, lead_w), f"lead-{lead}", tin()))
+    return bd.Compound(children=children, label=part.replace("-", "_")), leads
 
 
 # The bend sits above the board, so each leg is already on the formed pitch

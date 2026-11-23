@@ -14,7 +14,7 @@ const SCENE: &str = r#"{
     "nano": { "type": "nano-board", "firmware": "build/pot.hex" },
     "pot1": { "type": "potentiometer-wh148", "resistance": "10k", "position": 0.2 },
     "r1": { "type": "resistor-axial", "resistance": "220" },
-    "led1": { "type": "led-5mm", "color": "red" },
+    "led1": { "type": "led-5mm" },
   },
   "wires": [
     ["pot1.a", "nano.GND"],

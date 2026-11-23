@@ -269,6 +269,15 @@ fn search_prints_title_matches_before_the_rest() {
     let nano = names.iter().position(|name| *name == "nano-board").unwrap();
     assert!(led < nano);
 
+    let (code, stdout, stderr) = orbe(&["search", "blue", "led"]);
+    assert_eq!(code, 0, "{stderr}");
+    let blue: Vec<&str> = stdout
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| line.split_whitespace().next().unwrap())
+        .collect();
+    assert_eq!(blue, ["led-3mm-blue", "led-5mm-blue"]);
+
     let (code, stdout, _) = orbe(&["search", "led-5mm", "--json"]);
     assert_eq!(code, 0);
     let envelope: Value = serde_json::from_str(&stdout).unwrap();
@@ -452,10 +461,10 @@ fn a_unique_id_segment_prints_that_part_and_several_list_like_an_unknown_id() {
 
 #[test]
 fn a_null_rating_prints_unrated() {
-    let (code, stdout, stderr) = orbe(&["part", "led-3mm"]);
+    let (code, stdout, stderr) = orbe(&["part", "diode-1n4007"]);
     assert_eq!(code, 0, "{stderr}");
-    assert!(stdout.contains("current  unrated\n"), "{stdout}");
     assert!(stdout.contains("power  unrated\n"), "{stdout}");
+    assert!(!stdout.contains("current  unrated\n"), "{stdout}");
     let (code, stdout, stderr) = orbe(&["part", "resistor-0603", "--json"]);
     assert_eq!(code, 0, "{stderr}");
     let ratings = &card_json(&stdout)["ratings"];

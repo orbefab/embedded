@@ -1,6 +1,6 @@
-//! Each color of the 3 mm and 5 mm LEDs, driven at its datasheet test current, sits within
-//! 2% of that sheet's typical forward voltage. The drive and the typical are the datasheet's.
-//! The diode parameters are the ones the part file sets for that color.
+//! Each 3 mm and 5 mm LED colour is its own part. Driven at its datasheet test current, it
+//! sits within 2% of that sheet's typical forward voltage. The diode parameters are the ones
+//! that part's model sets.
 
 use std::path::PathBuf;
 
@@ -10,69 +10,58 @@ use serde_json::{Value, json};
 
 struct Expect {
     part: &'static str,
-    color: &'static str,
     milliamps: f64,
     typical: f64,
 }
 
-const COLORS: &[Expect] = &[
+const PARTS: &[Expect] = &[
     Expect {
         part: "led-5mm",
-        color: "red",
         milliamps: 10.0,
         typical: 1.9,
     },
     Expect {
-        part: "led-5mm",
-        color: "yellow",
+        part: "led-5mm-yellow",
         milliamps: 10.0,
         typical: 1.95,
     },
     Expect {
-        part: "led-5mm",
-        color: "green",
+        part: "led-5mm-green",
         milliamps: 10.0,
         typical: 2.0,
     },
     Expect {
-        part: "led-5mm",
-        color: "blue",
+        part: "led-5mm-blue",
         milliamps: 20.0,
         typical: 3.3,
     },
     Expect {
-        part: "led-5mm",
-        color: "white",
+        part: "led-5mm-white",
         milliamps: 20.0,
         typical: 3.3,
     },
     Expect {
         part: "led-3mm",
-        color: "red",
         milliamps: 10.0,
         typical: 1.9,
     },
     Expect {
-        part: "led-3mm",
-        color: "yellow",
+        part: "led-3mm-yellow",
         milliamps: 10.0,
         typical: 1.95,
     },
     Expect {
-        part: "led-3mm",
-        color: "green",
+        part: "led-3mm-green",
         milliamps: 10.0,
         typical: 2.0,
     },
     Expect {
-        part: "led-3mm",
-        color: "blue",
+        part: "led-3mm-blue",
         milliamps: 20.0,
         typical: 3.3,
     },
     Expect {
-        part: "led-3mm",
-        color: "white",
+        part: "led-3mm-white",
         milliamps: 20.0,
         typical: 3.3,
     },
@@ -88,10 +77,10 @@ fn part_file(id: &str) -> Value {
         .unwrap_or_else(|err| panic!("{path:?}: {err}"))
 }
 
-fn set_number(choice: &Value, pointer: &str) -> f64 {
-    choice["sets"][pointer]["value"]
+fn model_number(model: &Value, field: &str) -> f64 {
+    model[field]["value"]
         .as_f64()
-        .unwrap_or_else(|| panic!("{pointer} in {choice}"))
+        .unwrap_or_else(|| panic!("{field} in {model}"))
 }
 
 fn forward(is: f64, n: f64, rs: f64, amps: f64) -> f64 {
@@ -135,34 +124,22 @@ fn forward(is: f64, n: f64, rs: f64, amps: f64) -> f64 {
 
 #[test]
 fn every_led_color_matches_its_datasheet_forward_voltage() {
-    for part in ["led-3mm", "led-5mm"] {
-        let file = part_file(part);
-        let choices = file["params"]["color"]["choices"]
-            .as_object()
-            .unwrap_or_else(|| panic!("{part} has no color choices"));
-        let rows: Vec<_> = COLORS.iter().filter(|row| row.part == part).collect();
-        let mut names: Vec<_> = choices.keys().map(String::as_str).collect();
-        let mut want: Vec<_> = rows.iter().map(|row| row.color).collect();
-        names.sort_unstable();
-        want.sort_unstable();
-        assert_eq!(names, want, "{part}");
-        for row in rows {
-            let choice = &choices[row.color];
-            let v = forward(
-                set_number(choice, "/saturation_current"),
-                set_number(choice, "/emission_coefficient"),
-                set_number(choice, "/series_resistance"),
-                row.milliamps * 1e-3,
-            );
-            let limit = 0.02 * row.typical;
-            assert!(
-                (v - row.typical).abs() <= limit,
-                "{} {} is {v} V at {} mA, datasheet {} V",
-                row.part,
-                row.color,
-                row.milliamps,
-                row.typical
-            );
-        }
+    for row in PARTS {
+        let file = part_file(row.part);
+        let model = &file["model"];
+        let v = forward(
+            model_number(model, "saturation_current"),
+            model_number(model, "emission_coefficient"),
+            model_number(model, "series_resistance"),
+            row.milliamps * 1e-3,
+        );
+        let limit = 0.02 * row.typical;
+        assert!(
+            (v - row.typical).abs() <= limit,
+            "{} is {v} V at {} mA, datasheet {} V",
+            row.part,
+            row.milliamps,
+            row.typical
+        );
     }
 }
