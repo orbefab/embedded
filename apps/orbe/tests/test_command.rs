@@ -833,15 +833,33 @@ expect @ldr.v > 4.7V    # the dark: 1 Mohm, 4.715 V
     let json = live::replies_in(&dir);
     assert_eq!(
         json[2]["data"],
-        serde_json::json!({ "quantity": "light", "value": 80.0, "unit": "lx", "landed_ps": 20_000_002_000u64 }),
-        "a set lands after the scene's last step, at 20 ms, plus the 2 ns gap"
+        serde_json::json!({
+            "quantity": "light",
+            "value": 80.0,
+            "unit": "lx",
+            "landed_ps": 1_000_000_000u64,
+            "dropped": 1,
+        }),
+        "a set at 1 ms lands then, and drops the scene's step at 20 ms"
+    );
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            .contains("\n  set light to 80 lx at t=1ms; dropped 1 later scheduled step of light\n"),
+        "{}",
+        run.stdout
     );
 
-    fs::write(dir.path().join("tests/light.test"), "open\nset light 50\n").unwrap();
+    fs::write(
+        dir.path().join("tests/light.test"),
+        "open\nstep 25ms\nset light 50\n",
+    )
+    .unwrap();
     let json = live::replies_in(&dir);
-    assert_eq!(json[1]["ok"], true, "{}", json[1]);
+    assert_eq!(json[2]["ok"], true, "{}", json[2]);
     assert_eq!(
-        json[1]["data"],
+        json[2]["data"],
         serde_json::json!({
             "quantity": "light",
             "value": 50.0,
@@ -849,13 +867,12 @@ expect @ldr.v > 4.7V    # the dark: 1 Mohm, 4.715 V
             "landed_ps": 20_000_000_000u64,
             "already": true,
         }),
-        "50 lx is the scene's step at 20 ms, and setting it again names that time"
+        "50 lx is already in force after the scene's step at 20 ms"
     );
     let run = orbe(dir.path(), &["test", "-v"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(
-        run.stdout
-            .contains("\n  light is already set to 50 lx from t=20ms\n"),
+        run.stdout.contains("\n  light is already 50 lx\n"),
         "{}",
         run.stdout
     );
@@ -904,9 +921,10 @@ get @world.light
             "quantity": "light",
             "value": 80.0,
             "unit": "lx",
-            "landed_ps": 20_000_002_000u64,
+            "landed_ps": 1,
+            "dropped": 1,
         }),
-        "the set still lands after the scene's last step, with no already flag"
+        "the set lands at 1 ps, drops the 20 ms step, and carries no already flag"
     );
     world(3, 300.0);
     world(5, 80.0);
@@ -921,15 +939,92 @@ get @world.light
         run.stdout
     );
     assert!(
-        run.stdout.contains(
-            "\n  set light to 80 lx at t=20.000002ms; reads show it after t=20.000002ms\n"
-        ),
+        run.stdout
+            .contains("\n  set light to 80 lx at t=1ps; dropped 1 later scheduled step of light\n"),
         "{}",
         run.stdout
     );
     assert_eq!(
         run.stdout.matches("\n  light 80 lx\n").count(),
         2,
+        "{}",
+        run.stdout
+    );
+}
+
+/// Setting light while three later steps are pending lands now and drops them. Temperature's
+/// step still runs. A test file's `set` is this same command.
+#[test]
+fn set_light_now_drops_later_steps_and_leaves_temperature() {
+    let dir = common::overlaid(&common::repo().join("packages/scene/tests/good/world_ldr"));
+    live::edit_scene(
+        &dir,
+        "    \"temperature\": 30,\n    \"light\": { \"initial\": 300, \"steps\": [{ \"at\": \"20ms\", \"to\": 50 }] },",
+        "    \"temperature\": { \"initial\": 30, \"steps\": [{ \"at\": \"40ms\", \"to\": 40 }] },\n    \"light\": { \"initial\": 300, \"steps\": [{ \"at\": \"30ms\", \"to\": 80 }, { \"at\": \"50ms\", \"to\": 50 }, { \"at\": \"70ms\", \"to\": 10 }] },",
+    );
+    fs::create_dir_all(dir.path().join("tests")).unwrap();
+    fs::write(
+        dir.path().join("tests/light.test"),
+        "\
+open
+step 1ms
+set light 1000
+step 20ms
+get light
+get temperature
+step 60ms
+get light
+get temperature
+",
+    )
+    .unwrap();
+    let json = live::replies_in(&dir);
+    assert_eq!(
+        json[2]["data"],
+        serde_json::json!({
+            "quantity": "light",
+            "value": 1000.0,
+            "unit": "lx",
+            "landed_ps": 1_000_000_000u64,
+            "dropped": 3,
+        }),
+        "{}",
+        json[2]
+    );
+    let world = |n: usize, quantity: &str, value: f64, unit: &str| {
+        assert_eq!(
+            json[n]["data"],
+            serde_json::json!({ "quantity": quantity, "value": value, "unit": unit }),
+            "{}",
+            json[n]
+        );
+    };
+    world(4, "light", 1000.0, "lx");
+    world(5, "temperature", 30.0, "degC");
+    world(7, "light", 1000.0, "lx");
+    world(8, "temperature", 40.0, "degC");
+
+    fs::write(
+        dir.path().join("tests/light.test"),
+        "\
+open
+step 1ms
+set light 1000
+step 20ms
+expect @ldr.v > 0.045V
+expect @ldr.v < 0.050V
+step 60ms
+expect @ldr.v > 0.045V
+expect @ldr.v < 0.050V
+",
+    )
+    .unwrap();
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains(
+            "\n  set light to 1000 lx at t=1ms; dropped 3 later scheduled steps of light\n"
+        ),
         "{}",
         run.stdout
     );

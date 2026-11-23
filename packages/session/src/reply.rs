@@ -253,14 +253,17 @@ pub enum Data {
         landed_ps: u64,
     },
     /// A world quantity's value from `landed_ps` on, in its unit. `already` is set when that
-    /// value was already scheduled. It is left out of the JSON when false. When the scheduled
-    /// value has not landed yet, `landed_ps` is that time.
+    /// value was already in force and no later step was dropped. It is left out of the JSON
+    /// when false. When that change has not landed yet, `landed_ps` is its time. `dropped` is
+    /// how many later scheduled steps of this quantity the set removed, left out when none.
     Set {
         quantity: Quantity,
         value: f64,
         landed_ps: u64,
         #[serde(default, skip_serializing_if = "is_false")]
         already: bool,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        dropped: u32,
     },
     /// A part's live param from `landed_ps` on, in the param's unit, such as `pot1.position`.
     /// `already` is as on `Set`.
@@ -682,6 +685,10 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
 /// A current in A, mA, µA or nA. The digits are the shortest decimal in that unit that
 /// parses back to the same amperes. Under 1 nA stays in A, in scientific form. Zero is `0 A`.
 pub(crate) fn current(amperes: f64) -> String {
@@ -1079,6 +1086,7 @@ impl Data {
                 value,
                 landed_ps,
                 already,
+                dropped,
             } => {
                 let mut body = json!({
                     "quantity": quantity.name(),
@@ -1088,6 +1096,9 @@ impl Data {
                 });
                 if *already {
                     body["already"] = json!(true);
+                }
+                if *dropped > 0 {
+                    body["dropped"] = json!(dropped);
                 }
                 body
             }
@@ -1191,6 +1202,7 @@ impl Data {
                 value,
                 landed_ps,
                 already,
+                dropped,
             } => {
                 if *already && *landed_ps > 0 && *landed_ps >= t_ps {
                     let _ = write!(
@@ -1211,10 +1223,20 @@ impl Data {
                     let at = t(*landed_ps);
                     let _ = write!(
                         out,
-                        "set {} to {value} {} at t={at}; reads show it after t={at}",
+                        "set {} to {value} {} at t={at}",
                         quantity.name(),
                         quantity.unit()
                     );
+                    if *dropped > 0 {
+                        let steps = if *dropped == 1 { "step" } else { "steps" };
+                        let _ = write!(
+                            out,
+                            "; dropped {dropped} later scheduled {steps} of {}",
+                            quantity.name()
+                        );
+                    } else {
+                        let _ = write!(out, "; reads show it after t={at}");
+                    }
                 }
             }
             Data::SetParam {

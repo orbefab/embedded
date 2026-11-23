@@ -85,6 +85,14 @@ impl World {
         schedule.append_level(at, level);
     }
 
+    /// Drops events of a declared quantity at or after `from`, and returns how many.
+    pub(crate) fn drop_from(&mut self, quantity: Quantity, from: Time) -> usize {
+        self.declared[quantity as usize]
+            .as_mut()
+            .expect("a dropped quantity is declared")
+            .drop_from(from)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.declared.iter().all(Option::is_none)
     }

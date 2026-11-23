@@ -30,8 +30,25 @@ fn lux(value: f64) -> String {
     format!(r#"{{ "value": {value:?}, "unit": "lx" }}"#)
 }
 
+fn deg(value: f64) -> String {
+    format!(r#"{{ "value": {value:?}, "unit": "degC" }}"#)
+}
+
+fn steps(initial: &str, events: &[(u64, &str)]) -> String {
+    let events = events
+        .iter()
+        .map(|(t_ps, level)| format!(r#"{{ "t_ps": {t_ps}, "level": {level} }}"#))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(r#"{{ "kind": "steps", "initial": {initial}, "events": [{events}] }}"#)
+}
+
 /// A 5 V source over 10 kohm on top and the LDR below, `mid` between them.
 fn divider(light: &str, stop_ps: u64, max_step_ps: u64) -> String {
+    divider_in(&format!(r#""light": {light}"#), stop_ps, max_step_ps)
+}
+
+fn divider_in(world: &str, stop_ps: u64, max_step_ps: u64) -> String {
     format!(
         r#"{{
       "version": 1,
@@ -39,7 +56,7 @@ fn divider(light: &str, stop_ps: u64, max_step_ps: u64) -> String {
       "analysis": {{ "transient": {{ "stop_ps": {stop_ps}, "max_step_ps": {max_step_ps}, "grid_ps": {max_step_ps} }} }},
       "ground": "gnd",
       "nets": ["gnd", "vcc", "mid"],
-      "world": {{ "light": {light} }},
+      "world": {{ {world} }},
       "parts": [
         {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "vcc", "n": "gnd" }},
            "voltage": {{ "value": {VOLTS:?}, "unit": "V" }} }},
@@ -115,6 +132,115 @@ fn a_set_the_session_cannot_take_is_refused() {
         ..light(30.0)
     };
     assert_eq!(session.set(&temperature), Err(Rejected::Undeclared));
+}
+
+/// Light steps at 1 ms, 5 ms and 10 ms, and temperature steps at 5 ms. A `set` at 500 µs
+/// lands there, drops only light's later steps, and the divider follows at once.
+#[test]
+fn a_set_drops_later_steps_and_leaves_the_other_quantity() {
+    let (lx300, lx100, lx50, lx10) = (lux(300.0), lux(100.0), lux(50.0), lux(10.0));
+    let light_steps = steps(
+        &lx300,
+        &[
+            (1_000_000_000, lx100.as_str()),
+            (5_000_000_000, lx50.as_str()),
+            (10_000_000_000, lx10.as_str()),
+        ],
+    );
+    let (deg25, deg40) = (deg(25.0), deg(40.0));
+    let temperature = steps(&deg25, &[(5_000_000_000, deg40.as_str())]);
+    let json = divider_in(
+        &format!(r#""light": {light_steps}, "temperature": {temperature}"#),
+        20_000_000_000,
+        100_000_000,
+    );
+    let net: Ref = "#net.mid".parse().unwrap();
+    let world: Ref = "#world.light".parse().unwrap();
+    let room: Ref = "#world.temperature".parse().unwrap();
+    let asked = Time::from_ps(500_000_000);
+
+    let mut session = Session::open(netlist::parse(json.as_bytes()).unwrap()).unwrap();
+    session.advance_to(asked);
+    assert_eq!(
+        session.set(&light(100_001.0)),
+        Err(Rejected::Value(orbe_engine::diagnostic::ValueRule::Range)),
+        "a refused set drops nothing"
+    );
+    assert_eq!(event_times(&session, Quantity::Light).len(), 3);
+
+    let applied = session.set(&light(1000.0)).unwrap();
+    assert_eq!(applied.status, Status::Running);
+    assert_eq!(applied.dropped, 3);
+    assert_eq!(applied.at, asked, "the set lands at the session's time");
+    assert_eq!(session.now(), asked);
+    assert_eq!(
+        session.next_at(),
+        Some(Time::from_ps(asked.as_ps() + 1_000)),
+        "the new edge is taken, and the ramp after it is the next step"
+    );
+    assert_eq!(event_times(&session, Quantity::Light), vec![asked.as_ps()]);
+    assert_eq!(
+        event_times(&session, Quantity::Temperature),
+        vec![5_000_000_000]
+    );
+
+    session.advance_to(Time::from_ps(asked.as_ps() + 1_000));
+    let probe = session.probe();
+    assert_eq!(probe.get(&world).unwrap().get(), 1000.0);
+    assert!(
+        close(probe.get(&net).unwrap().get(), mid(100.0)),
+        "mid {} at 1000 lx",
+        probe.get(&net).unwrap().get()
+    );
+    assert_eq!(probe.get(&room).unwrap().get(), 25.0);
+
+    session.advance_to(Time::from_ps(12_000_000_000));
+    let probe = session.probe();
+    assert_eq!(probe.get(&world).unwrap().get(), 1000.0);
+    assert_eq!(probe.get(&room).unwrap().get(), 40.0);
+    assert!(
+        close(probe.get(&net).unwrap().get(), mid(100.0)),
+        "a later light step must not return: {}",
+        probe.get(&net).unwrap().get()
+    );
+
+    let mut session = Session::open(netlist::parse(json.as_bytes()).unwrap()).unwrap();
+    session.advance_to(asked);
+    let applied = session.set(&light(300.0)).unwrap();
+    assert_eq!(applied.dropped, 3);
+    assert_eq!(applied.at, asked);
+    assert!(
+        session
+            .world()
+            .schedule(Quantity::Light)
+            .unwrap()
+            .events()
+            .is_empty(),
+        "the value already in force drops the later steps and appends none"
+    );
+    assert_eq!(
+        event_times(&session, Quantity::Temperature),
+        vec![5_000_000_000]
+    );
+    session.advance_to(Time::from_ps(12_000_000_000));
+    let probe = session.probe();
+    assert_eq!(probe.get(&world).unwrap().get(), 300.0);
+    assert_eq!(probe.get(&room).unwrap().get(), 40.0);
+    assert!(close(
+        probe.get(&net).unwrap().get(),
+        mid(10_000.0 * 10.0 / 300.0)
+    ));
+}
+
+fn event_times(session: &Session, quantity: Quantity) -> Vec<u64> {
+    session
+        .world()
+        .schedule(quantity)
+        .unwrap()
+        .events()
+        .iter()
+        .map(|event| event.at.as_ps())
+        .collect()
 }
 
 #[test]

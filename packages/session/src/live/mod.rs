@@ -695,6 +695,7 @@ impl Open {
                     value: set.value,
                     landed_ps,
                     already: true,
+                    dropped: 0,
                 });
             }
             Err(error) => return Err(fail(rejected(error, set.quantity.name()))),
@@ -706,6 +707,7 @@ impl Open {
             value: set.value,
             landed_ps: applied.at.as_ps(),
             already: false,
+            dropped: applied.dropped,
         };
         match applied.status {
             Status::Faulted => Err(failed(self.faulted(), data)),

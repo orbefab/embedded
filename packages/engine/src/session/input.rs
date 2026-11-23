@@ -1,7 +1,9 @@
 use orbe_model::{Time, Value as FieldValue};
 
 use crate::device::Mismatch;
-use crate::netlist::{Appended, Baud, Contact, Frame, Model, Schedule, SerialSend, Value};
+use crate::netlist::{
+    Appended, Baud, Contact, Frame, MIN_GAP_PS, Model, Schedule, SerialSend, Value,
+};
 use crate::passive::position_rule;
 
 use crate::diagnostic::ValueRule;
@@ -67,6 +69,18 @@ pub struct Applied {
     pub status: Status,
 }
 
+/// A world `set`: where it landed, the session afterwards, and how many of that quantity's
+/// later scheduled steps it removed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WorldApplied {
+    /// Where it landed, the time asked for or later.
+    pub at: Time,
+    /// The session's status after the re-solve.
+    pub status: Status,
+    /// Later scheduled steps of this quantity that the set removed.
+    pub dropped: u32,
+}
+
 /// Why `apply` changed nothing.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rejected {
@@ -93,7 +107,7 @@ pub enum Rejected {
     /// time the engine can store.
     PastStop,
     /// The setting equals the value after the part's last event, or a serial send has no bytes.
-    /// A world change equals the value after its quantity's last change.
+    /// A world change equals the value in force, and that quantity has no later scheduled step.
     NoChange,
     /// The netlist does not declare the world quantity, so no part reads it and the trace has
     /// no column for it.
@@ -127,30 +141,61 @@ impl Session {
         Ok(self.land(Changer::Part(id), at))
     }
 
-    /// Appends `change` to its quantity's schedule at the first time from the one it asks for
-    /// that `apply` would land an input at, and solves the held step again, as `apply` does. A
-    /// world change is a jump, so that solve restarts, and every part field that reads the
-    /// quantity takes its new value there.
-    pub fn set(&mut self, change: &WorldChange) -> Result<Applied, Rejected> {
+    /// Lands `change` at the first time from the one it asks for that `apply` would land an
+    /// input at, and drops that quantity's steps at or after that time. A step at the landing
+    /// has not taken effect yet: a read there is the value from before it. Other quantities
+    /// keep their steps. The value in force, with nothing left to drop, is [`Rejected::NoChange`].
+    /// A change of the value appends one step there. Either way the held step is solved again
+    /// from the accepted one, as `apply` does, and a jump restarts. Every part field that reads
+    /// the quantity follows the schedule this leaves.
+    pub fn set(&mut self, change: &WorldChange) -> Result<WorldApplied, Rejected> {
         let from = self.from(change.at)?;
+        let accepted_at = match &self.state {
+            State::Running { accepted, .. } => accepted.at,
+            State::Ended { .. } => unreachable!("from() accepted a running session"),
+        };
         let quantity = change.quantity;
-        let schedule = self
+        let (at, appends) = {
+            let schedule = self
+                .circuit
+                .netlist
+                .world()
+                .schedule(quantity)
+                .ok_or(Rejected::Undeclared)?;
+            if !quantity.holds(change.value.get()) {
+                return Err(Rejected::Value(ValueRule::Range));
+            }
+            let in_force = schedule.before(from).si;
+            let later = schedule.events().iter().any(|event| event.at >= from);
+            if in_force == change.value && !later {
+                return Err(Rejected::NoChange);
+            }
+            let at = if in_force == change.value {
+                from
+            } else {
+                landing_without_later(schedule, from).ok_or(Rejected::PastStop)?
+            };
+            (at, in_force != change.value)
+        };
+        let at = self.before_stop(Some(at))?;
+        let dropped = self.circuit.netlist.drop_world_from(quantity, from);
+        if appends {
+            self.circuit
+                .netlist
+                .append_world(quantity, at, change.value);
+        }
+        let next = self
             .circuit
             .netlist
             .world()
-            .schedule(quantity)
-            .ok_or(Rejected::Undeclared)?;
-        if !quantity.holds(change.value.get()) {
-            return Err(Rejected::Value(ValueRule::Range));
-        }
-        if schedule.after_last().si == change.value {
-            return Err(Rejected::NoChange);
-        }
-        let at = self.before_stop(schedule.earliest(from, 0))?;
-        self.circuit
-            .netlist
-            .append_world(quantity, at, change.value);
-        Ok(self.land(Changer::World(quantity), at))
+            .next_change_after(quantity, accepted_at);
+        self.breakpoints.retarget(Changer::World(quantity), next);
+        let applied = self.resettle(at);
+        Ok(WorldApplied {
+            at: applied.at,
+            status: applied.status,
+            dropped: u32::try_from(dropped).expect("a quantity's steps fit in the reply"),
+        })
     }
 
     /// The first time an input asked for at `asked` may land: after the accepted step, at or
@@ -171,6 +216,12 @@ impl Session {
     /// Arms `changer`'s new edge at `at` and solves the held step again from the accepted one.
     fn land(&mut self, changer: Changer, at: Time) -> Applied {
         self.breakpoints.arm(changer, at);
+        self.resettle(at)
+    }
+
+    /// Solves the held step again from the accepted one. The breakpoints are already the
+    /// schedule's.
+    fn resettle(&mut self, at: Time) -> Applied {
         let State::Running { accepted, now, .. } = std::mem::replace(&mut self.state, State::TAKEN)
         else {
             unreachable!("the session runs");
@@ -179,6 +230,18 @@ impl Session {
         let status = self.advance_to(now);
         Applied { at, status }
     }
+}
+
+/// The first time at or after `from` that a new step can land once events at or after `from`
+/// are gone. That is 1 ps with none left before `from`, and [`MIN_GAP_PS`] after the last one
+/// that stays. `None` when that time does not fit in a time.
+fn landing_without_later(schedule: &Schedule<Value>, from: Time) -> Option<Time> {
+    let last = schedule.events().iter().rev().find(|event| event.at < from);
+    let first = match last {
+        None => 1,
+        Some(event) => event.at.as_ps().checked_add(MIN_GAP_PS)?,
+    };
+    Some(Time::from_ps(from.as_ps().max(first)))
 }
 
 /// The appended event, the first legal landing at or after `from`, and whether the setting

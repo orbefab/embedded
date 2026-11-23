@@ -6,7 +6,7 @@ Load this when a step or a set lands at the wrong time, a session's name or stop
 
 - `orbe step <duration>` takes `ps`, `ns`, `us`, `ms` or `s`, such as `100ms` or `20us`. Serial edges on D1 can fill the 20 lines `step` prints.
 - `step` lists pin edges with their times, LED changes and diagnostics. It lists at most 20, for what `play` held and again for what the step did, then `and N more`, then every LED's `brightness`.
-- An input lands at the session's time or later. The reply gives that time. A world `set` also lands after the last change the scene's `steps` schedule, so it never undoes one. A part's `set`, such as `@pot1.position`, lands at once. Load `orbe skills get page` to turn a knob.
+- An input lands at the session's time or later. The reply gives that time. A world `set` lands at the session's time and drops that quantity's later scheduled steps. The reply names how many when it drops any. A part's `set`, such as `@pot1.position`, lands at once. Load `orbe skills get page` to turn a knob.
 - `step --until` reads the condition now. If it already holds, it takes no time. A pin condition stops 1 ps after the edge. `@led1.i` shows the current there. The light state follows the 20 ms average. Other conditions are read every 1 ms, so the reply says `by 104ms`.
 - Serial can arrive up to one engine step (`sim.max_step`, 10 ms by default) after the chip sends it. Step past a print before you expect it.
 - A session stops at 2 hours. Reads still work. `press`, `release`, `set`, `step` and `play` fail with `ended`. `step <duration>` past the stop fails with `past_stop`, and the hint names the time left. `step --until` stops there and fails with `ended`. An input that would land past the stop fails with `past_stop`. The hint says to run `orbe open`.

@@ -92,10 +92,23 @@ impl Netlist {
     /// `Schedule::earliest` returned for it, and moves every part field that reads it.
     pub fn append_world(&mut self, quantity: Quantity, at: Time, level: Finite) {
         self.world.append(quantity, at, level);
+        self.follow_world(quantity);
+    }
+
+    /// Drops events of declared quantity `quantity` at or after `from`. A read at `from` is
+    /// still the value from before those events, so they have not taken effect. Moves every
+    /// part field that reads the quantity. Returns how many events it dropped.
+    pub fn drop_world_from(&mut self, quantity: Quantity, from: Time) -> usize {
+        let dropped = self.world.drop_from(quantity, from);
+        self.follow_world(quantity);
+        dropped
+    }
+
+    fn follow_world(&mut self, quantity: Quantity) {
         let schedule = self
             .world
             .schedule(quantity)
-            .expect("an appended quantity is declared");
+            .expect("a revised quantity is declared");
         for part in &mut self.parts {
             if let Some(driven) = part.model.driven_mut()
                 && driven.quantity == quantity
@@ -451,6 +464,13 @@ impl<T> Schedule<T> {
     pub fn next_change_after(&self, at: Time) -> Option<Time> {
         let k = self.events.partition_point(|event| event.at <= at);
         self.events.get(k).map(|event| event.at)
+    }
+
+    /// Drops events at or after `from`. Events are ascending, so this removes a suffix.
+    pub(crate) fn drop_from(&mut self, from: Time) -> usize {
+        let before = self.events.len();
+        self.events.retain(|event| event.at < from);
+        before - self.events.len()
     }
 
     /// The first time at or after `from` that one more event passes the schedule rules.

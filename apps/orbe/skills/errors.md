@@ -21,7 +21,7 @@ With `--json` a command prints one object, `{"ok": true, "data": {...}}` or `{"o
 | `not_settable` | `press` and `release` work only on a switch. `set` works on a quantity the scene's `world` names or a part reads, and on a live param. Other params are fixed. The hint names the live ones. |
 | `value` | A live param set out of range. |
 | `wrong_setting` | The part takes a different input, such as a `press` on a part that is not a switch. |
-| `no_change` | `press` or `release` asks for the switch state already there. `set` of a value already scheduled succeeds, and names the time it lands when that time is still ahead. |
+| `no_change` | `press` or `release` asks for the switch state already there. `set` of the value already in force succeeds, and names the time when that change is still ahead. A world `set` lands now and drops that quantity's later steps. |
 | `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`, then fix the circuit or the firmware, or step longer. |
 | `ended` | The session reached its 2-hour stop. Reads still work. Run `orbe open` to start again. |
 | `past_stop` | A `step` would end past the stop, or an input would land past it. Do what the hint says. |
