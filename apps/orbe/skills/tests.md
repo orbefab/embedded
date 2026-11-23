@@ -11,11 +11,13 @@ A test is `tests/<name>.test`. Each line is a live command without `orbe`. `#` s
 `expect` and `step --until` take the same conditions. Quote `<`, `>` and a colour in a shell.
 
 - `@led1 lit`, `@led1 dim`, `@led1 off`. Load `orbe skills get ratings` for the current each state needs.
+- `@disp.digit 8` on a 7-segment display, or `blank` when none of a to g is lit. Another pattern names the lit segments. The decimal point stays out of the digit.
 - `@nano.D13 high`, `@nano.D13 low`.
 - `@led1 rgb(255,0,0)`, an addressable LED's latched colour. `#` starts a comment, so a colour is never hex. In a shell, `orbe expect @led1 'rgb(255,0,0)'`.
 - `@led1.i > 5mA`, `@nano.D2 < 1V`, with `<`, `<=`, `>` or `>=`. In a shell, `orbe expect @led1.i '>' 5mA`. A test line accepts a quoted comparison the same way a shell does, as `'>'` or `"<="`.
 - `serial contains "text"`, all the serial text since `open`. `snapshot` shows the last 10 lines, joined with `\n`.
 - `no diagnostics`. A chip warning can show up to one engine step (`sim.max_step`, 10 ms by default) late, so step that far past its cause first.
+- `@disp.digit 8` on a 7-segment display. `blank` is none of segments a to g lit. Another pattern names the lit segments, and the decimal point stays out of the digit. `orbe get @disp.digit` prints the same word.
 
 A failure prints the line, what was expected and what it saw, then `0 passed, 1 failed`.
 

@@ -150,15 +150,18 @@ function namedNode(body: Object3D, name: string, part: string): Object3D {
   return node;
 }
 
-/** What drives a glow `by` names. `"brightness"` is the LED's current, which needs its
- * `full`. Any other name is the part's colour reading, and the session sends its colour when
- * the part is on `channels.pixels`. Undefined when the scene sends nothing to draw it by. */
+/** What drives a glow `by` names. `"brightness"` is the part's one LED. A segment name is
+ * that body's current, on `channels.leds` as `@disp.seg_a`, using the same `full`. Any other
+ * name is the part's colour reading, and the session sends its colour when the part is on
+ * `channels.pixels`. Undefined when the scene sends nothing to draw it by. */
 function glowDrive(scene: SceneMessage, ref: Ref, part: PartData, by: string): GlowDrive | undefined {
+  const full = part.readings.brightness?.full;
   if (by === "brightness") {
     const channel = scene.channels.leds.indexOf(ref);
-    const full = part.readings.brightness?.full;
     return channel >= 0 && full !== undefined ? { kind: "current", full, channel } : undefined;
   }
+  const segment = scene.channels.leds.indexOf(`${ref}.${by}`);
+  if (segment >= 0 && full !== undefined) return { kind: "current", full, channel: segment };
   const channel = scene.channels.pixels.indexOf(ref);
   return channel >= 0 ? { kind: "pixel", channel } : undefined;
 }

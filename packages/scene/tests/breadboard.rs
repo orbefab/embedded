@@ -20,6 +20,7 @@ fn read(dir: &std::path::Path) -> Netlist {
 #[test]
 fn each_block_on_its_breadboard_runs_the_netlist_of_its_circuit_wired_directly() {
     for block in [
+        "nano-7seg-count",
         "nano-button-led",
         "nano-led-fade",
         "nano-light-comparator",

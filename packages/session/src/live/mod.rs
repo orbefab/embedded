@@ -876,6 +876,26 @@ impl Open {
         )
     }
 
+    /// The digit `path` shows. Each of `seg_a` through `seg_g` is one LED lamp.
+    pub(super) fn shown_digit(&self, path: &str) -> Result<String, Error> {
+        let probe = self.engine.probe();
+        let mut lit = Vec::new();
+        for letter in crate::digit::LETTERS {
+            let child = format!("{path}.{}", crate::digit::segment(letter));
+            let Some(index) = self.light.position(&child) else {
+                return Err(Error::new(
+                    Code::NoReading,
+                    format!("`{path}` has no segment `{letter}`"),
+                    "a digit reading needs segments seg_a through seg_g, each an LED",
+                ));
+            };
+            if self.light.glow(index, &probe).state == crate::reply::Light::Lit {
+                lit.push(letter);
+            }
+        }
+        Ok(crate::digit::shown(&lit))
+    }
+
     fn get(&self, r: &Ref) -> Result<Got, Error> {
         let (target, value) = match self.resolve(r)? {
             Target::Pin { path, pin, net } => {
@@ -912,6 +932,10 @@ impl Open {
                 format!("{path}.{reading}"),
                 Reading::Color(self.colors(&engine)),
             ),
+            Target::Digit { path } => (
+                format!("{path}.digit"),
+                Reading::Shown(self.shown_digit(&path)?),
+            ),
             Target::Param { .. } => {
                 let (label, engine, spec) = self.live_param(r, Code::NoReading)?;
                 let level = self
@@ -928,6 +952,12 @@ impl Open {
                 )
             }
             Target::Part(path) => {
+                if crate::target::digit_reading(&self.refs.parts[&path]) {
+                    return Ok(Got {
+                        target: path.clone(),
+                        value: Reading::Shown(self.shown_digit(&path)?),
+                    });
+                }
                 let value = self.part(&path).ok_or_else(|| {
                     Error::new(
                         Code::NoReading,
