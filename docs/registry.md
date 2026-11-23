@@ -166,7 +166,7 @@ In the index and in a record, `$schema` names the schema file beside it, for edi
 
 ## Verify what you fetch
 
-TLS to the registry's host is the trust root. The index is not signed. Its hashes tie each record to the index, and each record's hashes tie its files to it. A client that installs an item does this:
+TLS to the registry's host is the trust root. The index is not signed. Its hashes tie each record to the index, and each record's hashes tie its files to it. A client may fetch records and files that do not depend on each other at the same time. It still runs every check below, and it writes only after they pass. A client that installs an item does this:
 
 1. Fetch the index from the template with `{name}` replaced by `index`. Refuse a `format` it does not know. Reject the index if two rows share a name and version.
 2. Pick the row. Take the highest version of the name. `orbe add <id>@<version>` is a usage error, and the hint is the bare id. Require the row's `url` to be `<name>@<version>.json`.
@@ -189,6 +189,8 @@ TLS to the registry's host is the trust root. The index is not signed. Its hashe
 ## Caching
 
 `files/<sha256>` and `<id>@<version>.json` never change, so a client or a CDN caches them forever. `index.json`, `item.schema.json` and `index.schema.json` change in place at the same URL, so a client revalidates them on each use.
+
+`orbe add` and `orbe part` fetch the index on every command, and each record they need. A URL is fetched at most once in that command. Independent fetches run together, at most 8 at a time. An `https` URL is fetched by running `curl`. The bytes of a `files/<sha256>` object are cached under `$XDG_CACHE_HOME/orbe/files/<sha256>`, or `~/.cache/orbe/files/<sha256>` when `XDG_CACHE_HOME` is unset, or `~/Library/Caches/orbe/files/<sha256>` on macOS. A cached file is read only when its bytes hash to that name and its length is the length the record states. Anything else is a miss, and the file is fetched again. The cache is written by renaming a temporary file in that directory into place. When the directory cannot be created, the command fetches and does not cache. Records and the index are not stored in that cache. Each command fetches the index, then the records that index names.
 
 ## Where a copy comes from
 

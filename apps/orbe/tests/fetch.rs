@@ -3,7 +3,7 @@
 #[path = "registry_env.rs"]
 mod registry_env;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{ErrorKind, Write};
 use std::net::TcpListener;
@@ -133,6 +133,7 @@ impl Server {
         let mode_arg = match mode {
             Mode::Status(code) => code.to_string(),
             Mode::RedirectAt => "redirect".to_string(),
+            Mode::Observe => "observe".to_string(),
         };
         let child = Command::new("python3")
             .arg(&script)
@@ -173,6 +174,27 @@ impl Server {
             .filter(|line| !line.is_empty())
             .count()
     }
+
+    fn paths(&self) -> Vec<String> {
+        fs::read_to_string(&self.count)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn clear_paths(&self) {
+        fs::write(&self.count, "").unwrap();
+    }
+
+    fn max_inflight(&self) -> usize {
+        fs::read_to_string(self.count.with_extension("max"))
+            .unwrap_or_default()
+            .trim()
+            .parse()
+            .unwrap_or(0)
+    }
 }
 
 impl Drop for Server {
@@ -203,23 +225,37 @@ enum Mode {
     /// The first request for a path that contains `@` is a 307 to the same path with `@`
     /// written `%40`. The next request for it is the file.
     RedirectAt,
+    /// Serve the registry. Each path is logged, and overlapping requests are counted.
+    Observe,
 }
 
 const SERVE_PY: &str = r#"
 import os
+import socketserver
 import ssl
 import sys
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import unquote
 
 port_file, cert, key, root, mode, count_file = sys.argv[1:7]
 seen = set()
+lock = threading.Lock()
+inflight = 0
+max_inflight = 0
+
+class ThreadingServer(socketserver.ThreadingMixIn, HTTPServer):
+    daemon_threads = True
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def do_GET(self):
         path = self.path.split("?", 1)[0]
+        if mode == "observe":
+            self.observe(path)
+            return
         if mode != "redirect":
             self.send_response(int(mode))
             self.send_header("Content-Length", "0")
@@ -258,12 +294,51 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
 
+    def observe(self, path):
+        global inflight, max_inflight
+        with lock:
+            inflight += 1
+            if inflight > max_inflight:
+                max_inflight = inflight
+            with open(count_file, "a", encoding="utf-8") as handle:
+                handle.write(path + "\n")
+            with open(count_file + ".max", "w", encoding="utf-8") as handle:
+                handle.write(str(max_inflight) + "\n")
+        try:
+            time.sleep(0.03)
+            self.serve_file(path)
+        finally:
+            with lock:
+                inflight -= 1
+
+    def serve_file(self, path):
+        decoded = unquote(path)
+        rel = decoded.lstrip("/")
+        if not rel or any(part == ".." for part in rel.split("/")):
+            body = b"no"
+            code = 404
+        else:
+            try:
+                with open(os.path.join(root, rel), "rb") as handle:
+                    body = handle.read()
+                code = 200
+            except OSError:
+                body = b"no"
+                code = 404
+        self.send_response(code)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def log_message(self, fmt, *args):
         return
 
 context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 context.load_cert_chain(cert, key)
-server = HTTPServer(("127.0.0.1", 0), Handler)
+if mode == "observe":
+    server = ThreadingServer(("127.0.0.1", 0), Handler)
+else:
+    server = HTTPServer(("127.0.0.1", 0), Handler)
 server.socket = context.wrap_socket(server.socket, server_side=True)
 with open(port_file, "w", encoding="utf-8") as handle:
     handle.write(str(server.server_address[1]))
@@ -560,6 +635,185 @@ fn a_part_can_hold_two_versions_of_one_grandchild() {
         ),
         "9.0.0"
     );
+}
+
+#[test]
+fn fetched_files_match_the_registry_and_a_cached_copy_is_reused() {
+    let registry = registry_env::dir();
+    let server = Server::bind(registry.to_path_buf(), Mode::Observe);
+    let cache = tempfile::tempdir().unwrap();
+    let cache_home = cache.path().display().to_string();
+    let trust = server.trust();
+    let mut env: Vec<(&str, &str)> = trust
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
+    env.push(("XDG_CACHE_HOME", cache_home.as_str()));
+
+    let first = tempfile::tempdir().unwrap();
+    let (code, stdout, stderr) = run_env(
+        first.path(),
+        &["add", "nano-board"],
+        &server.template(),
+        &env,
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(
+        server.max_inflight() >= 2,
+        "in flight {}",
+        server.max_inflight()
+    );
+    let paths = server.paths();
+    let mut once = BTreeSet::new();
+    for path in &paths {
+        assert!(once.insert(path.clone()), "fetched twice: {path}");
+    }
+    assert!(paths.iter().any(|path| path.ends_with("/index.json")));
+    let files: Vec<&String> = paths
+        .iter()
+        .filter(|path| path.contains("/files/"))
+        .collect();
+    assert!(files.len() >= 2, "{paths:?}");
+    assert_parts_match(first.path(), registry);
+
+    server.clear_paths();
+    let second = tempfile::tempdir().unwrap();
+    let (code, stdout, stderr) = run_env(
+        second.path(),
+        &["add", "nano-board"],
+        &server.template(),
+        &env,
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let again = server.paths();
+    assert!(
+        again.iter().any(|path| path.ends_with("/index.json")),
+        "{again:?}"
+    );
+    assert!(
+        again.iter().any(|path| path.contains("nano-board@")),
+        "{again:?}"
+    );
+    assert!(
+        again.iter().all(|path| !path.contains("/files/")),
+        "{again:?}"
+    );
+    assert_parts_match(second.path(), registry);
+
+    let part_sha = file_sha(registry, "nano-board", "part.jsonc");
+    server.clear_paths();
+    let (code, stdout, stderr) = run_env(
+        second.path(),
+        &["part", "nano-board"],
+        &server.template(),
+        &env,
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let part_paths = server.paths();
+    assert!(
+        part_paths.iter().any(|path| path.ends_with("/index.json")),
+        "{part_paths:?}"
+    );
+    assert!(
+        part_paths.iter().all(|path| !path.contains(&part_sha)),
+        "{part_paths:?}"
+    );
+
+    let sha = files[0].rsplit('/').next().unwrap();
+    let kept = files[1].rsplit('/').next().unwrap();
+    let cached = cache.path().join("orbe").join("files").join(sha);
+    assert!(cached.is_file(), "{}", cached.display());
+    fs::write(&cached, b"not the file").unwrap();
+    server.clear_paths();
+    let third = tempfile::tempdir().unwrap();
+    let (code, stdout, stderr) = run_env(
+        third.path(),
+        &["add", "nano-board"],
+        &server.template(),
+        &env,
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let refetched = server.paths();
+    assert!(
+        refetched.iter().any(|path| path.contains(sha)),
+        "{refetched:?}"
+    );
+    assert!(
+        refetched.iter().all(|path| !path.contains(kept)),
+        "{refetched:?}"
+    );
+    assert_parts_match(third.path(), registry);
+}
+
+#[test]
+fn a_cache_that_cannot_be_created_still_installs() {
+    let project = tempfile::tempdir().unwrap();
+    let blocked = project.path().join("not-a-directory");
+    fs::write(&blocked, b"x").unwrap();
+    let home = blocked.display().to_string();
+    let (code, stdout, stderr) = run_env(
+        project.path(),
+        &["add", "led-5mm"],
+        &registry_env::template(),
+        &[("XDG_CACHE_HOME", home.as_str())],
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(project.path().join("parts/led-5mm/part.jsonc").is_file());
+    assert_parts_match(project.path(), registry_env::dir());
+}
+
+fn assert_parts_match(project: &Path, registry: &Path) {
+    let mut dirs = Vec::new();
+    collect_part_dirs(&project.join("parts"), &mut dirs);
+    assert!(!dirs.is_empty(), "{}", project.display());
+    for dir in dirs {
+        let id = dir.file_name().unwrap().to_str().unwrap();
+        let version = declared_version(&dir.join("part.jsonc"));
+        let record: Value = serde_json::from_slice(
+            &fs::read(registry.join(format!("{id}@{version}.json")))
+                .unwrap_or_else(|error| panic!("{id}@{version}: {error}")),
+        )
+        .unwrap();
+        for file in record["files"].as_array().unwrap() {
+            let rel = file["path"].as_str().unwrap();
+            let sha = file["sha256"].as_str().unwrap();
+            let got = fs::read(dir.join(rel)).unwrap_or_else(|error| panic!("{id} {rel}: {error}"));
+            let want = fs::read(registry.join("files").join(sha)).unwrap();
+            assert_eq!(got, want, "{id} {rel}");
+        }
+    }
+}
+
+fn collect_part_dirs(root: &Path, dirs: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if path.join("part.jsonc").is_file() {
+            dirs.push(path.clone());
+        }
+        collect_part_dirs(&path, dirs);
+    }
+}
+
+fn file_sha(registry: &Path, id: &str, path: &str) -> String {
+    let version = highest_version(registry, id);
+    let record: Value =
+        serde_json::from_slice(&fs::read(registry.join(format!("{id}@{version}.json"))).unwrap())
+            .unwrap();
+    record["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|file| file["path"] == path)
+        .unwrap()["sha256"]
+        .as_str()
+        .unwrap()
+        .to_string()
 }
 
 fn cloned_registry() -> (tempfile::TempDir, PathBuf) {
