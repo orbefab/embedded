@@ -866,15 +866,15 @@ test.describe("viewer page", () => {
     });
 
     test("hover on a not-simulated pin shows its reason", async () => {
-      await lookAt(page, "@nano.j2", "pin-15", 45);
+      await lookAt(page, "@header", "housing-1", 45);
       await page.waitForTimeout(300);
-      const pin = await hoverUntil(page, await pointOn(page, "@nano.j2", "pin-15"), "@nano.VIN");
+      const pin = await hoverUntil(page, await pointOn(page, "@header", "housing-1"), "@header.1");
       const text = await label(page);
       expect({ pin: pin !== null, text }).toEqual({
         pin: true,
-        text: "@nano.VIN\nnot simulated: The AMS1117 has an internal diode from OUT to IN. The model blocks reverse current, so with USB only VIN reads about 0 V and a load from VIN to GND gets nothing. A real board shows about 4 V there, one diode drop under the 5V rail, and VIN can source a little current from USB.",
+        text: "@header.1\nnot simulated: Nothing in the circuit is wired to it.",
       });
-      await shot(page, "hover-vin");
+      await shot(page, "hover-header");
     });
 
     test("hover on a not-simulated part shows its reason", async () => {

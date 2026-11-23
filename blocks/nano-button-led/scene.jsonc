@@ -10,6 +10,8 @@
     "r2": { "type": "resistor-axial", "resistance": "10k" }, // pull-down, so D2 reads low while open
     "r1": { "type": "resistor-axial", "resistance": "220" },
     "led1": { "type": "led-5mm" },
+    // Nothing reaches it, so its pins stay out of the simulation.
+    "header": { "type": "pin-header-1x3", "not_simulated": "Nothing in the circuit is wired to it." },
   },
   "layout": {
     "bb": { "at": [0, 0, 0] },
@@ -18,6 +20,7 @@
     "r2": { "on": { "a": "bb.b22" }, "rotate": [0, 0, -90] }, // b in X22, the - rail
     "r1": { "on": { "a": "bb.d25" } }, // b in column 29
     "led1": { "on": { "anode": "bb.c29" } }, // cathode in column 30
+    "header": { "on": { "1": "bb.f26" } }, // columns 26 to 28, clear of the Nano and the button
   },
   "nets": { "GND": "nano.GND" },
   "wires": [

@@ -33,7 +33,7 @@ fn instances_carry_their_parsed_params_and_placements() {
         .collect();
     assert_eq!(
         names,
-        ["bb", "nano", "btn1", "r2", "r1", "led1"],
+        ["bb", "nano", "btn1", "r2", "r1", "led1", "header"],
         "the scene's order"
     );
     assert_eq!(
@@ -142,6 +142,8 @@ fn not_simulated_pins_take_the_ref_hover_shows() {
         idle.iter().all(|p| p["ref"] != "@nano.3V3"),
         "3V3 is the CH340G's V3 output"
     );
+    let pin = idle.iter().find(|p| p["ref"] == "@header.1").unwrap();
+    assert_eq!(pin["why"], "Nothing in the circuit is wired to it.");
     let pin = idle.iter().find(|p| p["ref"] == "@nano.crystal.1").unwrap();
     assert_eq!(
         pin["why"],
