@@ -1,0 +1,13 @@
+# shiftOut of 0x55, most significant bit first, leaves the least significant
+# bit in QA. led1 is QA. The other odd LEDs are on and the even ones are off.
+open
+step 50ms
+expect @led1 lit
+expect @led2 off
+expect @led3 lit
+expect @led4 off
+expect @led5 lit
+expect @led6 off
+expect @led7 lit
+expect @led8 off
+expect no diagnostics

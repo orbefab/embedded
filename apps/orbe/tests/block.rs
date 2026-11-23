@@ -14,13 +14,14 @@ use std::path::Path;
 
 use live::{common, orbe};
 
-const BLOCKS: [&str; 6] = [
+const BLOCKS: [&str; 7] = [
     "devkitc-button-led",
     "nano-button-led",
     "uno-button-led",
     "nano-led-fade",
     "nano-light-comparator",
     "nano-neopixel-stick",
+    "nano-shift-leds",
 ];
 
 /// Every file below `dir` with its bytes, by its path from `dir`.

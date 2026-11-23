@@ -19,7 +19,7 @@ A folder already at `parts/<id>/` is `part_exists` and nothing is written. The m
 
 `@<registry>/<id>` is a usage error. This orbe reads the `@orbefab` registry only.
 
-For addressable RGB LEDs, use `neopixel-stick-8`. `orbe search neopixel` finds it.
+Addressable LEDs: `neopixel-stick-8`. Eight from three pins: `hc595-dip16`, Block `nano-shift-leds`.
 
 Between a 5 V board and a 3.3 V module, use `bss138-level-shifter`.
 
