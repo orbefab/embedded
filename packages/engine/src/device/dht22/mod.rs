@@ -71,6 +71,7 @@ pub(crate) fn chip(part: PartId, dev: &Dht22) -> Chip {
         twi: false,
         sends: false,
         supply: None,
+        pixels: None,
         takes: Takes::default(),
         core: Core::Device(Box::new(Native::new(
             model::Dht22::new(&Fields::NONE).expect("a dht22 takes no params"),

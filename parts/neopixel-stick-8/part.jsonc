@@ -9,7 +9,7 @@
   "part": "neopixel-stick-8",
   "version": "0.1.0",
   "title": "NeoPixel stick, 8 RGB LED",
-  "summary": "Eight addressable RGB LEDs on a 50.8 x 10.2 mm board, chained DOUT to DIN, with a 3-pin header (GND, 5V, DIN) on 2.54 mm that plugs into a breadboard. Each LED is a WS2812-style pixel. The last LED's DOUT stays on the board.",
+  "summary": "Eight addressable RGB LEDs on a 50.8 x 10.2 mm board, chained DOUT to DIN, with a 3-pin header (GND, 5V, DIN) on 2.54 mm that plugs into a breadboard. Each LED is a WS2812-style pixel and draws 1 mA idle plus 12 mA per channel at 255 from 5V, so eight at full white draw 296 mA. The last LED's DOUT stays on the board.",
   "tags": ["led", "rgb", "neopixel", "ws2812", "strip", "addressable"],
   "license": "MIT OR Apache-2.0",
   "docs": {
@@ -25,7 +25,7 @@
   "buy": [
     { "seller": "Adafruit", "url": "https://www.adafruit.com/product/1426", "checked": "2026-11-22" },
   ],
-  "uses": { "pin-header-1x3": "0.1.0", "sk68xxmini-hs": "0.2.0" },
+  "uses": { "pin-header-1x3": "0.1.0", "sk68xxmini-hs": "0.3.0" },
   "parts": {
     "j": { "type": "pin-header-1x3" },
     "px1": { "type": "sk68xxmini-hs" },
@@ -79,10 +79,6 @@
     {
       "what": "the drawing's connectors",
       "why": "Product 1426's Eagle board uses two 1x4 surface-mount connectors. This module fits a 1x3 through-hole header at the input end, across the board width, GND then 5V then DIN, so it plugs into a breadboard. The fourth pin, a second GND, and the last pixel's DOUT are not brought out."
-    },
-    {
-      "what": "the supply current",
-      "why": "The pixels draw no supply current, so the 5V pin's load and a USB overload don't show."
     },
     {
       "what": "the series resistor and the supply capacitors",

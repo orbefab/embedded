@@ -1155,8 +1155,8 @@ impl Session {
         let charges = &self.charges;
         let transient = &self.transient;
         let (ratio, method) = (error.ratio, error.method);
-        // A watch cuts the step. A changed stamp, a chip's, an active chip's image, a
-        // contact's or a source's, takes a restart solve.
+        // A watch cuts the step. A changed stamp, a chip's, an active chip's image or
+        // its supply current, a contact's or a source's, takes a restart solve.
         let chips = circuit.react(&accepted.chips, &accepted.levels, &levels);
         let (driven, stopped) = self.actives.land(
             circuit,

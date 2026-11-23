@@ -590,6 +590,17 @@ fn a_record_past_the_chain_warns_dout_record_and_drives_nothing() {
     let last = end(START, &pulses);
     settle(&mut core, last);
     core.land(Time::from_ps(START), false, &pulses, Time::from_ps(last));
+    assert_eq!(core.hosted.load(), 0);
+    let drawn = core.run_until(Time::from_ps(last + 2 * RES));
+    assert_eq!(
+        drawn,
+        Some(Stop {
+            at: Time::from_ps(last + 1),
+            sample: false,
+            record: false,
+        })
+    );
+    assert_eq!(core.hosted.load(), 0x12 + 0x34 + 0x56_u64);
     assert_eq!(core.run_until(Time::from_ps(last + 2 * RES)), None);
     assert_eq!(core.observed().pixels, vec![[0x12, 0x34, 0x56]]);
     let first_past: u64 = START + pulses[..48].iter().map(|&(_, ps)| ps).sum::<u64>();
@@ -598,4 +609,35 @@ fn a_record_past_the_chain_warns_dout_record_and_drives_nothing() {
         Some((ProtocolRule::DoutRecord, Time::from_ps(first_past)))
     );
     assert_eq!(core.hosted.drive(), &[Drive::Low]);
+}
+
+#[test]
+fn the_draw_follows_a_latch_by_one_picosecond_and_a_repeat_adds_none() {
+    let pulses = train(&[0xFF, 0x00, 0x01], ZERO, ONE);
+    let mut core = Core::new(1);
+    core.input(Time::ZERO, &[false]);
+    let last = end(START, &pulses);
+    settle(&mut core, last);
+    core.land(Time::from_ps(START), false, &pulses, Time::from_ps(last));
+    assert_eq!(core.hosted.load(), 0);
+    let drawn = core.run_until(Time::from_ps(last + RES));
+    assert_eq!(
+        drawn,
+        Some(Stop {
+            at: Time::from_ps(last + 1),
+            sample: false,
+            record: false,
+        })
+    );
+    let sum = 0xFF + 0x01_u64;
+    assert_eq!(core.hosted.load(), sum);
+    assert_eq!(core.hosted.drive(), &[] as &[Drive]);
+    assert_eq!(core.run_until(Time::from_ps(last + 2 * RES)), None);
+
+    let start = last + 2 * RES;
+    let again = end(start, &pulses);
+    settle(&mut core, again);
+    core.land(Time::from_ps(start), false, &pulses, Time::from_ps(again));
+    assert_eq!(core.run_until(Time::from_ps(again + 2 * RES)), None);
+    assert_eq!(core.hosted.load(), sum);
 }

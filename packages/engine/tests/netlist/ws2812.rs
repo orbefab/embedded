@@ -169,6 +169,36 @@ fn a_dout_delay_past_1_us_is_rule_delay() {
 }
 
 #[test]
+fn an_omitted_draw_is_12_ma_per_channel_and_1_ma_idle() {
+    let netlist = netlist::parse(wired(PINS, "").as_bytes()).unwrap();
+    let ring = part(&netlist);
+    assert_eq!((ring.channel_current, ring.idle_current), (0.012, 0.001));
+}
+
+#[test]
+fn a_negative_channel_current_is_refused_and_zero_is_kept() {
+    let negative = wired(
+        PINS,
+        r#""channel_current": { "value": -0.001, "unit": "A" },"#,
+    );
+    let err = netlist::parse(negative.as_bytes()).unwrap_err();
+    assert!(
+        err.iter().any(|diagnostic| matches!(
+            diagnostic,
+            Diagnostic::NetlistValue { rule: ValueRule::NonNegative, field, .. } if field == "channel_current"
+        )),
+        "{err:?}"
+    );
+    let zero = wired(
+        PINS,
+        r#""channel_current": { "value": 0.0, "unit": "A" }, "idle_current": { "value": 0.0, "unit": "A" },"#,
+    );
+    let netlist = netlist::parse(zero.as_bytes()).unwrap();
+    let ring = part(&netlist);
+    assert_eq!((ring.channel_current, ring.idle_current), (0.0, 0.0));
+}
+
+#[test]
 fn a_dout_output_field_is_named_under_dout() {
     let err = netlist::parse(wired(DOUT_PIN, &dout(500_000, "V")).as_bytes()).unwrap_err();
     assert!(

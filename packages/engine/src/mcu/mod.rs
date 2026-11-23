@@ -150,6 +150,7 @@ where
         twi: M::TWI,
         sends: M::SENDS,
         supply: None,
+        pixels: None,
         takes: Takes::default(),
         core: crate::active::Core::Mcu(Mcu::from(host)),
     }

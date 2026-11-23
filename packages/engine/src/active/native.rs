@@ -18,6 +18,8 @@ use crate::world::World;
 pub(crate) trait Hosted: Send + fmt::Debug {
     fn run_until(&mut self, world: &World, limit: Time) -> Option<Stop>;
     fn drive(&self) -> &[Drive];
+    /// The load its device is drawing for, snapshotted with the drives.
+    fn load(&self) -> u64;
     fn sample(&mut self, world: &World, at: Time, volts: &[f64]);
     fn input(&mut self, world: &World, at: Time, levels: &[bool]);
     fn event(&mut self, world: &World, at: Time, event: Event<'_>);
@@ -407,6 +409,8 @@ pub(crate) struct Native<D, P> {
     port: P,
     /// The device's drives after its last stop.
     drives: Drives,
+    /// The device's load after its last stop.
+    load: u64,
     /// The port's drives, then the device's, up to `len`.
     image: [Drive; IMAGE],
     len: usize,
@@ -418,6 +422,7 @@ impl<D: Device, P: Clone> Clone for Native<D, P> {
             dev: self.dev.clone(),
             port: self.port.clone(),
             drives: self.drives,
+            load: self.load,
             image: self.image,
             len: self.len,
         }
@@ -433,6 +438,7 @@ impl<D: Device, P: Port<D>> Native<D, P> {
             dev: Hosting::new(device),
             port,
             drives: Drives::OFF,
+            load: 0,
             image: [Drive::Off; IMAGE],
             len: P::PINS + outputs,
         };
@@ -447,6 +453,7 @@ impl<D: Device, P: Port<D>> Native<D, P> {
 
     fn refresh(&mut self) {
         self.drives = self.dev.device.drive();
+        self.load = self.dev.device.load();
         self.port.drive(&mut self.image[..P::PINS]);
         for (k, drive) in self.image[P::PINS..self.len].iter_mut().enumerate() {
             *drive = self.drives.get(k);
@@ -454,7 +461,7 @@ impl<D: Device, P: Port<D>> Native<D, P> {
     }
 
     fn held(&self) -> bool {
-        self.dev.device.drive() == self.drives
+        self.dev.device.drive() == self.drives && self.dev.device.load() == self.load
     }
 
     /// Hands the port the train a call at `at` queued. A device on a port that plays no train
@@ -468,13 +475,14 @@ impl<D: Device, P: Port<D>> Native<D, P> {
     }
 
     /// What the port has due at `at`, and whether a record it sent ends there. A call it makes
-    /// there leaves the device's drives alone.
+    /// there leaves the device's drives and its load alone.
     fn take_due(&mut self, world: &World, at: Time) -> bool {
         let drives = self.dev.device.drive();
+        let load = self.dev.device.load();
         let record = self.port.take_due(&mut self.dev, world, at);
         assert!(
-            self.dev.device.drive() == drives,
-            "a call the port makes never changes the drives"
+            self.dev.device.drive() == drives && self.dev.device.load() == load,
+            "a call the port makes never changes the drives or the load"
         );
         record
     }
@@ -511,11 +519,15 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
         &self.image[..self.len]
     }
 
+    fn load(&self) -> u64 {
+        self.load
+    }
+
     fn sample(&mut self, world: &World, at: Time, volts: &[f64]) {
         self.dev
             .call(world, at, |device, cx| device.sample(cx, at, volts));
         self.claim(at);
-        assert!(self.held(), "a sample never changes the drives");
+        assert!(self.held(), "a sample never changes the drives or the load");
     }
 
     fn input(&mut self, world: &World, at: Time, levels: &[bool]) {
@@ -528,26 +540,30 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
             device.input(cx, at, Levels::from_slice(levels));
         });
         self.claim(at);
-        assert!(self.held(), "an input never changes the drives");
+        assert!(self.held(), "an input never changes the drives or the load");
     }
 
     fn event(&mut self, world: &World, at: Time, event: Event<'_>) {
         self.dev
             .call(world, at, |device, cx| device.event(cx, at, event));
         self.claim(at);
-        assert!(self.held(), "an event never changes the drives");
+        assert!(self.held(), "an event never changes the drives or the load");
     }
 
     fn take(&mut self, world: &World, at: Time, records: &[LinkRow]) {
+        let kept = self.load;
         self.port.take_records(&mut self.dev, world, at, records);
+        self.dev.device.after_record(at, kept);
         self.claim(at);
-        assert!(self.held(), "a record never changes the drives");
+        assert!(self.held(), "a record never changes the drives or the load");
     }
 
     fn cut(&mut self, world: &World, at: Time, record: &Record) {
+        let kept = self.load;
         self.port.cut_record(&mut self.dev, world, at, record);
+        self.dev.device.after_record(at, kept);
         self.claim(at);
-        assert!(self.held(), "a record never changes the drives");
+        assert!(self.held(), "a record never changes the drives or the load");
     }
 
     fn reads(&self) -> &'static [Quantity] {
@@ -620,6 +636,7 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
         self.dev.clone_from(&source.dev);
         self.port.clone_from(&source.port);
         self.drives = source.drives;
+        self.load = source.load;
         self.image = source.image;
         self.len = source.len;
     }

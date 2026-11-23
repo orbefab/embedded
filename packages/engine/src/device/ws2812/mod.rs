@@ -8,12 +8,12 @@ use orbe_model::{Device, Fields, Value as FieldValue};
 
 use crate::active::native::{Hosted, Native};
 use crate::active::pulse::Pulse;
-use crate::active::{Chip, Core, Output, Stage, Takes};
+use crate::active::{Chip, Core, Output, PixelDraw, Stage, Takes};
 use crate::diagnostic::{Diagnostic, ValueRule};
 use crate::mna::Node;
 use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
-use crate::netlist::json::{PinMap, WireInt, resolve_int, resolve_pins};
+use crate::netlist::json::{PinMap, WireInt, WireValue, bounded, resolve_int, resolve_pins};
 use crate::netlist::{IntValue, NetId, PartId, Threshold, Value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage_at};
 use crate::watch::{Signal, Watch};
@@ -39,6 +39,14 @@ pub(crate) fn dc_paths(chain: &Ws2812) -> &'static [(usize, usize)] {
 /// The longest `dout.delay`, picoseconds: T1H's longest high, so the edges still due at once
 /// stay few.
 pub const DOUT_DELAY_MAX: u64 = 1_000_000;
+
+/// Amperes at a channel value of 255 when the part omits `channel_current`. SK6812MINI-HS
+/// section 9 names that part at 12 mA, and the sheet gives one current, so each channel uses it.
+pub const CHANNEL_CURRENT: f64 = 0.012;
+
+/// Amperes per LED when the part omits `idle_current`. SK6812MINI-HS section 10, static IDD
+/// typical, is 1 mA.
+pub const IDLE_CURRENT: f64 = 0.001;
 
 /// No events. A chain takes its bits from the line.
 pub(crate) const ROW: crate::device::Row = crate::device::Row::new(&[]);
@@ -86,6 +94,13 @@ pub(crate) fn chip(part: PartId, chain: &Ws2812) -> Chip {
         twi: false,
         sends: false,
         supply: None,
+        pixels: Some(PixelDraw {
+            vcc: pins[VCC],
+            gnd: pins[GND],
+            channel: chain.channel_current,
+            idle: chain.idle_current,
+            count: chain.leds,
+        }),
         takes: Takes {
             spi: None,
             duty: None,
@@ -129,6 +144,10 @@ pub struct Ws2812 {
     pub pins: Vec<NetId>,
     pub leds: u16,
     pub input_threshold: Threshold,
+    /// Amperes at a channel value of 255.
+    pub channel_current: f64,
+    /// Amperes per LED, at every colour.
+    pub idle_current: f64,
     pub dout: Option<Dout>,
 }
 
@@ -164,6 +183,10 @@ pub(crate) struct WireWs2812 {
     #[serde(default = "default_leds")]
     leds: u16,
     input_threshold: WireThreshold,
+    #[serde(default)]
+    channel_current: Option<WireValue>,
+    #[serde(default)]
+    idle_current: Option<WireValue>,
     #[serde(default)]
     dout: Option<WireDout>,
 }
@@ -214,6 +237,20 @@ pub(crate) fn resolve_ws2812(ctx: ParseCtx<'_>, wire: WireWs2812) -> Option<Ws28
         wire.input_threshold,
         out,
     );
+    let channel_current = resolve_draw(
+        part_ref,
+        "channel_current",
+        wire.channel_current,
+        CHANNEL_CURRENT,
+        out,
+    );
+    let idle_current = resolve_draw(
+        part_ref,
+        "idle_current",
+        wire.idle_current,
+        IDLE_CURRENT,
+        out,
+    );
     let leds = if (1..=Ws2812::LED_MAX).contains(&wire.leds) {
         Some(wire.leds)
     } else {
@@ -233,6 +270,30 @@ pub(crate) fn resolve_ws2812(ctx: ParseCtx<'_>, wire: WireWs2812) -> Option<Ws28
         pins: pins?,
         leds: leds?,
         input_threshold: input_threshold?,
+        channel_current: channel_current?,
+        idle_current: idle_current?,
         dout,
     })
+}
+
+/// `wire` in amperes, or `absent` when the part omits it. Zero is legal.
+fn resolve_draw(
+    part: &crate::name::Ref,
+    field: &'static str,
+    wire: Option<WireValue>,
+    absent: f64,
+    out: &mut Vec<Diagnostic>,
+) -> Option<f64> {
+    let Some(wire) = wire else {
+        return Some(absent);
+    };
+    bounded(
+        part,
+        field,
+        "A",
+        wire,
+        |number| (number < 0.0).then_some(ValueRule::NonNegative),
+        out,
+    )
+    .map(|value| value.si.get())
 }

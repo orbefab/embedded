@@ -1131,6 +1131,8 @@ The same sheet, page 2, gives `VIH` as at least 0.7 VDD and `VIL` as at most 0.7
 | Field | Unit | Rule |
 | --- | --- | --- |
 | `leds` | count | an integer from 1 to 1024. 0 to 65535 outside that is rule `leds`, and any other number is `netlist.syntax`. Absent means 13 |
+| `channel_current` | `A` | at least 0, else rule `non_negative`. Absent means 0.012 |
+| `idle_current` | `A` | at least 0, else rule `non_negative`. Absent means 0.001 |
 | `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
 | `dout.output.high_drop`, `dout.output.low_drop` | `V` | at least 0, else rule `non_negative` |
 | `dout.output.high_resistance`, `dout.output.low_resistance` | `ohm` | the resistor's |
@@ -1138,7 +1140,7 @@ The same sheet, page 2, gives `VIH` as at least 0.7 VDD and `VIL` as at most 0.7
 
 `dout` may be absent, and the chain then has no `DOUT`. `dout` without a `DOUT` pin, or a `DOUT` pin without `dout`, is `netlist.pins`. A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
 
-A `ws2812` has no `ratings` object and no `i`, `v`, or `p`. Its logic signal is `DIN`. It joins `DOUT` to `VCC` and to `GND` through the stage its drive stamps, and no other pins, so `VCC`, `GND` and `DIN` each need another DC path.
+A `ws2812` has no `ratings` object and no `i`, `v`, or `p`. Its logic signal is `DIN`. It joins `DOUT` to `VCC` and to `GND` through the stage its drive stamps, and no other pins, so `VCC`, `GND` and `DIN` each need another DC path. The chain also sinks a current from `VCC` into `GND`. Each LED draws `idle_current` at every colour, black included, and each channel draws `channel_current` times its latched value over 255. The three channels of every LED are one current source, and that source joins no DC path. The pixel's PWM is 1.2 kHz typical (SK6812MINI-HS Rev. 04, section 10), far faster than the 10.2 ms rating window, so the source is that average. A latch does not change the current. The source takes the new sum 1 ps later, and that stop takes a restart. At power-on every channel is 0, so the chain draws `leds` times `idle_current`. The absent values are the SK6812MINI-HS figures: section 9's 12 mA for the part, used for each channel, and section 10's static IDD of 1 mA typical.
 
 ### DHT22
 

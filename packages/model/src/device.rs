@@ -19,11 +19,11 @@ pub trait State: Clone + Send + 'static {
 ///
 /// The host keeps the contract the run depends on:
 /// - `run_until(limit)` runs from the last time it reached and stops at the first time in
-///   `(reached, limit]` where its drives may change or it samples, or returns `None` once it has
-///   done everything up to `limit`. Two calls to `l1` then `l2` leave the state one call to `l2`
-///   does. All of a time's effects are one stop.
-/// - Only `run_until` changes the drives. What any other call causes comes at least 1 ps
-///   later, at a stop.
+///   `(reached, limit]` where its drives or its load may change, or it samples, or returns
+///   `None` once it has done everything up to `limit`. Two calls to `l1` then `l2` leave the
+///   state one call to `l2` does. All of a time's effects are one stop.
+/// - Only `run_until` changes the drives and the load. What any other call causes comes at
+///   least 1 ps later, at a stop.
 pub trait Device: State {
     /// What it shows besides its drives. Nothing, unless it says otherwise.
     const SHOWS: Shows = Shows::Nothing;
@@ -32,11 +32,22 @@ pub trait Device: State {
     const WORLD: &'static [Quantity] = &[];
     /// Parses the part's logic params. Electrical params never reach the device.
     fn new(params: &Params<'_>) -> Result<Self, Error>;
-    /// The first time in `(reached, limit]` where the drives may change or a sample is due.
-    /// `None` once everything up to `limit` is done.
+    /// The first time in `(reached, limit]` where the drives or the load may change, or a sample
+    /// is due. `None` once everything up to `limit` is done.
     fn run_until(&mut self, cx: &mut Cx, limit: Time) -> Option<Stop>;
     /// One drive per declared output, in declaration order.
     fn drive(&self) -> Drives;
+    /// The supply the stamp is drawing for. `0` draws nothing, and a device that draws nothing
+    /// leaves it there. The host maps any other code to current. Only [`run_until`](Device::run_until)
+    /// changes it.
+    fn load(&self) -> u64 {
+        0
+    }
+    /// A record just rewound this device, and the landing is at `at`. The load stays `kept`.
+    /// The host calls this after the record and before it reads [`load`](Self::load) again. When
+    /// the restored colours draw a different load, the device stops after `at` to apply it. The
+    /// default does nothing, which is every device a record cannot rewind onto a different load.
+    fn after_record(&mut self, _at: Time, _kept: u64) {}
     /// Its watches' levels from `at` on.
     fn input(&mut self, _cx: &mut Cx, _at: Time, _levels: Levels) {}
     /// The volts of each of its samples at its stop at `at`, in declaration order.

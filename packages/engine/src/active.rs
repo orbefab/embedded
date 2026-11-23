@@ -1,7 +1,7 @@
 //! The active chip seam: a chip whose core runs on the circuit's clock. Its core sees the time,
 //! names its own future events, holds state no stamp reads, and samples a voltage at a time it
-//! picks. The circuit sees only its drive image, one `Drive` per output pin. `docs/engine/engine.md`,
-//! Active chips, holds the loop's protocol.
+//! picks. The circuit sees its drive image, one `Drive` per output pin, and a `ws2812`'s supply
+//! current. `docs/engine/engine.md`, Active chips, holds the loop's protocol.
 
 use orbe_mcu::{Frame, Phase};
 use orbe_model::{Drawn, Drive, Event, Quantity, Shows, Stop, Time};
@@ -64,6 +64,19 @@ pub(crate) struct Output {
     pub(crate) leakage: Option<f64>,
 }
 
+/// An addressable chain's draw from its supply. [`Core::load`] is the sum of the channel bytes
+/// the circuit is drawing for. Each LED also draws `idle`, at every colour, black included.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PixelDraw {
+    pub(crate) vcc: NetId,
+    pub(crate) gnd: NetId,
+    /// Amperes at a channel value of 255.
+    pub(crate) channel: f64,
+    /// Amperes per LED.
+    pub(crate) idle: f64,
+    pub(crate) count: u16,
+}
+
 /// A chip's own draw: a conductance from its supply pin to its ground pin.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Supply {
@@ -108,6 +121,9 @@ pub(crate) struct Chip {
     /// Its own draw from its supply, one conductance while it runs and another while a reset
     /// holds it. `None` on a chip that draws nothing but what its outputs pass.
     pub(crate) supply: Option<Supply>,
+    /// A chain's draw from its supply, from the channel sum [`Core::load`] reports. `None` on a
+    /// chip that draws nothing this way.
+    pub(crate) pixels: Option<PixelDraw>,
     /// The records it takes.
     pub(crate) takes: Takes,
     /// The core at power-on.
@@ -147,13 +163,13 @@ impl Takes {
 ///
 /// Every kind keeps this contract:
 /// - `run_until(limit)` runs from the last time it reached and stops at the first time in
-///   `(reached, limit]` where its image may change or it samples, or returns `None` once it has
-///   done everything up to `limit`. Two calls to `l1` then `l2` leave the state one call to `l2`
-///   does. All of a time's effects are one stop.
+///   `(reached, limit]` where its image or its load may change, or it samples, or returns `None`
+///   once it has done everything up to `limit`. Two calls to `l1` then `l2` leave the state one
+///   call to `l2` does. All of a time's effects are one stop.
 /// - A clocked kind runs to cycle `floor(limit_ps * f / 1e12)` and puts a stop at cycle `c` at
 ///   `ceil(c * 1e12 / f)` ps, counting from its clock domain's last frequency change.
-/// - `sample`, `input` and `take` never change the image. What they cause comes at least 1 ps
-///   later.
+/// - `sample`, `input` and `take` never change the image or the load. What they cause comes at
+///   least 1 ps later.
 /// - Each record a core sends ends at a stop with `record` set, and the core holds it from that
 ///   stop until `drain_records` takes it. A core numbers its records from 0, and the count
 ///   carries in its copies.
@@ -212,6 +228,17 @@ impl Core {
             Core::Mcu(ref mcu) => mcu.drive(),
             #[cfg(test)]
             Core::Script(ref core) => core.drive(),
+        }
+    }
+
+    /// The supply a `ws2812` is drawing for: the sum of its channel bytes. Every other core
+    /// draws nothing this way.
+    pub(crate) fn load(&self) -> u64 {
+        match *self {
+            Core::Device(ref core) => core.load(),
+            Core::Mcu(_) => 0,
+            #[cfg(test)]
+            Core::Script(_) => 0,
         }
     }
 
@@ -400,6 +427,10 @@ pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, source_scale: f6
     debug_assert_eq!(drive.len(), chip.outputs.len());
     if let Some(supply) = chip.supply {
         sys.conductance(supply.vcc, supply.gnd, supply.conductance(core));
+    }
+    if let Some(draw) = chip.pixels {
+        let amps = f64::from(draw.count) * draw.idle + draw.channel * core.load() as f64 / 255.0;
+        sys.current(draw.vcc, draw.gnd, amps);
     }
     let pulled_down = core.pulled_down();
     debug_assert!(pulled_down.is_empty() || pulled_down.len() == chip.outputs.len());
@@ -665,18 +696,18 @@ impl Ahead {
             self.rewind(world, committed, at);
             self.core.input(world, at, levels);
             assert_eq!(
-                (self.core.drive(), self.core.pulled_down()),
-                (committed.drive(), committed.pulled_down()),
-                "an input on the held solve never changes an image"
+                (self.core.drive(), self.core.pulled_down(), self.core.load()),
+                (committed.drive(), committed.pulled_down(), committed.load()),
+                "an input on the held solve never changes an image or its load"
             );
             self.commit(committed, staged);
             return;
         }
         committed.input(world, at, levels);
         assert_eq!(
-            (committed.drive(), committed.pulled_down()),
-            (self.core.drive(), self.core.pulled_down()),
-            "an input on the held solve never changes an image"
+            (committed.drive(), committed.pulled_down(), committed.load()),
+            (self.core.drive(), self.core.pulled_down(), self.core.load()),
+            "an input on the held solve never changes an image or its load"
         );
         self.core.input(world, at, levels);
     }
@@ -710,9 +741,9 @@ impl Actives {
                     levels.of(circuit.active_watches(k)),
                 );
                 assert_eq!(
-                    (core.drive(), core.pulled_down()),
-                    (chip.core.drive(), chip.core.pulled_down()),
-                    "the power-on input never changes an image"
+                    (core.drive(), core.pulled_down(), core.load()),
+                    (chip.core.drive(), chip.core.pulled_down(), chip.core.load()),
+                    "the power-on input never changes an image or its load"
                 );
                 core
             })
@@ -992,9 +1023,11 @@ impl Actives {
             ahead.rewind(world, committed, at);
             let image = ahead.core.drive().to_vec();
             let pulled_down = ahead.core.pulled_down().to_vec();
+            let load = ahead.core.load();
             changed |= image != committed.drive()
                 || pulled_down != committed.pulled_down()
-                || ahead.core.held() != committed.held();
+                || ahead.core.held() != committed.held()
+                || load != committed.load();
             if stop.is_some_and(|stop| stop.sample) {
                 let volts: Vec<f64> = circuit.actives[k]
                     .samples
@@ -1013,9 +1046,13 @@ impl Actives {
                 ahead.core.event(world, at, event.event());
             }
             assert_eq!(
-                (ahead.core.drive(), ahead.core.pulled_down()),
-                (&image[..], &pulled_down[..]),
-                "a sample, an input, a record or an event at a landing never changes an image"
+                (
+                    ahead.core.drive(),
+                    ahead.core.pulled_down(),
+                    ahead.core.load()
+                ),
+                (&image[..], &pulled_down[..], load),
+                "a sample, an input, a record or an event at a landing never changes an image or its load"
             );
             ahead.commit(committed, &mut self.staged);
         }

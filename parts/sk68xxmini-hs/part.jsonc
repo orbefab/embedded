@@ -1,9 +1,9 @@
 {
   "format": 3,
   "part": "sk68xxmini-hs",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "title": "SK68XXMINI-HS addressable RGB LED",
-  "summary": "One addressable RGB LED in a 3.7 x 3.5 x 1.95 mm package. Pin 1 is GND, pin 2 DIN, pin 3 VDD and pin 4 DOUT. It keeps the first 24 bits it reads and passes the rest to the next LED on DOUT, so a chain on one pin shows one colour per LED. Its reading `color` is the last colour it latched. The sheet's supply is 3.7 V to 5.5 V. The engine times the bits as a Worldsemi WS2812E, and this sheet's longest 0-bit high is 0.4 us, past that window. Adafruit NeoPixel (16 MHz AVR) drives this part within its windows.",
+  "summary": "One addressable RGB LED in a 3.7 x 3.5 x 1.95 mm package. Pin 1 is GND, pin 2 DIN, pin 3 VDD and pin 4 DOUT. It keeps the first 24 bits it reads and passes the rest to the next LED on DOUT, so a chain on one pin shows one colour per LED. Its reading `color` is the last colour it latched. Each channel draws 12 mA at 255 and the LED draws 1 mA idle, both from VDD. The sheet's supply is 3.7 V to 5.5 V. The engine times the bits as a Worldsemi WS2812E, and this sheet's longest 0-bit high is 0.4 us, past that window. Adafruit NeoPixel (16 MHz AVR) drives this part within its windows.",
   "tags": ["led", "rgb", "addressable", "ws2812"],
   "license": "MIT OR Apache-2.0",
   "docs": { "SPC / SK68XX MINI-HS Rev. 04": null },
@@ -34,6 +34,28 @@
             "at": "Section 10, VIH 0.7 VDD minimum, test condition VDD = 5.0 V",
             "basis": "min"
           }
+        }
+      }
+    },
+    "channel_current": {
+      "value": 0.012,
+      "unit": "A",
+      "source": {
+        "datasheet": {
+          "doc": "SPC / SK68XX MINI-HS Rev. 04",
+          "at": "Section 9 names SK6812MINI-HS at 12 mA, the 12 mA current version of section 7. The sheet gives one current for the part, so each channel draws 12 mA at 255",
+          "basis": "typical"
+        }
+      }
+    },
+    "idle_current": {
+      "value": 0.001,
+      "unit": "A",
+      "source": {
+        "datasheet": {
+          "doc": "SPC / SK68XX MINI-HS Rev. 04",
+          "at": "Section 10, static IDD, typical 1 mA",
+          "basis": "typical"
         }
       }
     },
@@ -73,8 +95,8 @@
       "why": "The reading `color` is the 8-bit red, green and blue the LED latched, not its luminous intensity. The sheet rates each colour's intensity separately, and the model does not weigh them. The drawing lights the lens in the latched colour, at full glow when its brightest channel is 255."
     },
     {
-      "what": "supply and current",
-      "why": "Section 8 lists VDD from +3.7 V to +5.5 V. The ESP32-S3-DevKitC-1 ties this LED to 3.3 V, which is below that range, and the kind does not check the supply. Section 9 names SK6805MINI-HS at 5 mA and SK6812MINI-HS at 12 mA. Section 10's static IDD typical is 1 mA. The part does not pick one of those currents."
+      "what": "supply voltage",
+      "why": "Section 8 lists VDD from +3.7 V to +5.5 V. The ESP32-S3-DevKitC-1 ties this LED to 3.3 V, which is below that range, and the kind does not check the supply."
     },
     {
       "what": "bit times",

@@ -88,6 +88,7 @@ fn widths(netlist: &Netlist, records: bool) -> active::Chip {
         twi: false,
         sends: false,
         supply: None,
+        pixels: None,
         takes: Takes {
             pulses: records.then_some(line),
             ..Takes::default()
@@ -327,6 +328,7 @@ fn answer(netlist: &Netlist) -> active::Chip {
         twi: false,
         sends: false,
         supply: None,
+        pixels: None,
         takes: Takes::default(),
         core: Core::Device(Box::new(Native::new(
             Answer::new(&orbe_model::Fields::NONE).unwrap(),

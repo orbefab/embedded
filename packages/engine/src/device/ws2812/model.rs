@@ -60,6 +60,11 @@ pub struct Ws2812<const N: usize> {
     edges: [(u64, bool); EDGES],
     first: u8,
     queued: u8,
+    /// The sum of the channel bytes the circuit is drawing for. `0` at power-on, every channel
+    /// off. Only [`Device::run_until`] changes it.
+    stamped: u32,
+    /// When `stamped` becomes the latched sum, if they differ.
+    apply_at: Option<u64>,
 }
 
 impl<const N: usize> State for Ws2812<N> {}
@@ -115,6 +120,31 @@ impl<const N: usize> Ws2812<N> {
         self.edges[slot] = (at, level);
         self.queued += 1;
     }
+
+    /// The latched green, red and blue bytes, added.
+    fn shown_sum(&self) -> u32 {
+        self.leds[..usize::from(self.count)]
+            .iter()
+            .flatten()
+            .map(|&byte| u32::from(byte))
+            .sum()
+    }
+
+    /// The latched colours draw from at least 1 ps after this call and after `reached`. The
+    /// same sum again draws nothing new.
+    fn follow(&mut self, at: Time) {
+        let sum = self.shown_sum();
+        if sum == self.stamped {
+            self.apply_at = None;
+            return;
+        }
+        let when = self
+            .reached
+            .as_ps()
+            .saturating_add(1)
+            .max(at.as_ps().saturating_add(1));
+        self.apply_at = Some(when);
+    }
 }
 
 impl<const N: usize> Device for Ws2812<N> {
@@ -154,15 +184,23 @@ impl<const N: usize> Device for Ws2812<N> {
             edges: [(0, false); EDGES],
             first: 0,
             queued: 0,
+            stamped: 0,
+            apply_at: None,
         })
     }
 
-    /// Stops at each `DOUT` edge.
+    /// Stops at each `DOUT` edge and when the latched colours start to draw.
     fn run_until(&mut self, _cx: &mut Cx, limit: Time) -> Option<Stop> {
-        let Some(at) = self.next_edge().filter(|&at| at <= limit) else {
+        let edge = self.next_edge().filter(|&at| at <= limit);
+        let draw = self.apply_at.map(Time::from_ps).filter(|&at| at <= limit);
+        let Some(at) = edge.into_iter().chain(draw).min() else {
             self.reached = limit;
             return None;
         };
+        if self.apply_at == Some(at.as_ps()) {
+            self.stamped = self.shown_sum();
+            self.apply_at = None;
+        }
         while self.next_edge() == Some(at) {
             self.out = self.take_edge();
         }
@@ -179,6 +217,23 @@ impl<const N: usize> Device for Ws2812<N> {
             return Drives::OFF;
         }
         Drives::new([if self.out { Drive::High } else { Drive::Low }])
+    }
+
+    /// The sum of the channel bytes the circuit is drawing for.
+    fn load(&self) -> u64 {
+        u64::from(self.stamped)
+    }
+
+    /// The undo of a latch puts the chain back, colours and all, which would rewind the load.
+    /// The load stays `kept`. Colours that draw a different sum take it after the landing.
+    fn after_record(&mut self, at: Time, kept: u64) {
+        self.stamped = u32::try_from(kept).expect("a chain's load is its channel-byte sum");
+        if self.shown_sum() == self.stamped {
+            self.apply_at = None;
+            return;
+        }
+        let when = at.as_ps().saturating_add(1);
+        self.apply_at = Some(self.apply_at.map_or(when, |pending| pending.max(when)));
     }
 
     fn view(&self) -> View<'_> {
@@ -224,7 +279,7 @@ impl<const N: usize> PulseTarget for Ws2812<N> {
         };
     }
 
-    fn idle(&mut self, cx: &mut Cx, _at: Time, _level: bool) {
+    fn idle(&mut self, cx: &mut Cx, at: Time, _level: bool) {
         if let Some(bit) = self.open.take() {
             self.shift(bit);
         }
@@ -233,6 +288,7 @@ impl<const N: usize> PulseTarget for Ws2812<N> {
         self.index = 0;
         self.acc = 0;
         self.got = 0;
+        self.follow(at);
         cx.show();
     }
 }
