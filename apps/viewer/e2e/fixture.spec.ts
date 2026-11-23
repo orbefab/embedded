@@ -866,15 +866,15 @@ test.describe("viewer page", () => {
     });
 
     test("hover on a not-simulated pin shows its reason", async () => {
-      await lookAt(page, "@nano.j2", "pin-2", 45);
+      await lookAt(page, "@header", "housing-1", 45);
       await page.waitForTimeout(300);
-      const pin = await hoverUntil(page, await pointOn(page, "@nano.j2", "pin-2"), "@nano.3V3");
+      const pin = await hoverUntil(page, await pointOn(page, "@header", "housing-1"), "@header.1");
       const text = await label(page);
       expect({ pin: pin !== null, text }).toEqual({
         pin: true,
-        text: "@nano.3V3\nnot simulated: It is the CH340G's 3.3 V output. The engine has no USB-serial chip, so the pin supplies nothing.",
+        text: "@header.1\nnot simulated: Nothing in the circuit is wired to it.",
       });
-      await shot(page, "hover-3v3");
+      await shot(page, "hover-header");
     });
 
     test("hover on a not-simulated part shows its reason", async () => {

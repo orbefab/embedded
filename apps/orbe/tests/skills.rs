@@ -103,7 +103,7 @@ fn the_nano_pins_the_skills_call_not_simulated_are_the_ones_the_reader_leaves_ou
         .filter(|(_, net)| net.is_none())
         .map(|(pin, _)| pin.as_str())
         .collect();
-    assert_eq!(left_out, BTreeSet::from(["3V3"]));
+    assert_eq!(left_out, BTreeSet::new());
 }
 
 #[test]
