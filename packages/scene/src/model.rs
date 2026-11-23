@@ -21,8 +21,9 @@ const SCENE_KEYS: &[&str] = &[
 ];
 /// Part `format` values this binary reads. A part's `format` covers its `model`, its params and
 /// its readings. Format 2 is format 1 plus `"as": "blob"` on a file param. Format 3 is format 2
-/// plus `DOUT` on a `ws2812` and a reading `"of": "rgb"`.
-pub const PART_FORMATS: &[u32] = &[1, 2, 3];
+/// plus `DOUT` on a `ws2812` and a reading `"of": "rgb"`. Format 4 is format 3 plus `readings`
+/// on a choice.
+pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4];
 /// Scene `format` values this binary reads.
 pub const SCENE_FORMATS: &[u32] = &[1];
 /// The oldest part format whose file params take `"as": "blob"`.
@@ -30,6 +31,8 @@ const BLOB_FORMAT: u32 = 2;
 /// The oldest part format whose `ws2812` has `DOUT`, and whose readings take `"of": "rgb"`.
 /// An older part's `DOUT` pin stays off the chain, as it did when the engine had none.
 const DOUT_FORMAT: u32 = 3;
+/// The oldest part format whose choices set `readings`.
+const CHOICE_READINGS_FORMAT: u32 = 4;
 const WIRE_KINDS: &[&str] = &["jumper", "trace", "contact"];
 /// A live session's stop, investigation 1's 2-hour cap.
 pub const STOP_PS: u64 = 7_200 * 1_000_000_000_000;
@@ -558,6 +561,9 @@ pub(crate) fn decode_part(
     if let Some(model) = part.model.clone() {
         part.bodies = decode_bodies(&model, &part, format, out);
         check_sets(&mut part, &model, out);
+    }
+    if let Some(params) = root.get("params") {
+        check_choice_readings(params, root.get("readings"), format, out);
     }
     check_live(&part, out);
     if let Some(joints) = root.get("joints") {
@@ -1521,6 +1527,100 @@ fn check_joints(joints: &Node, part: &Part, out: &mut Findings) {
                 format!("joint `{}` turns, so its `range` is in deg", joint.key),
                 "write the range in degrees, as \"unit\": \"deg\"".into(),
             );
+        }
+    }
+}
+
+/// A choice's `readings` sets `above` or `full` of a reading the part states, in the part's unit.
+/// Two params never set the same field, so no order decides which one a reading takes.
+fn check_choice_readings(params: &Node, readings: Option<&Node>, format: u32, out: &mut Findings) {
+    let names: Vec<&str> = readings
+        .and_then(Node::props)
+        .unwrap_or_default()
+        .iter()
+        .map(|p| p.key.as_str())
+        .collect();
+    let mut setter: BTreeMap<(String, String), String> = BTreeMap::new();
+    for param in params.props().unwrap_or_default() {
+        let choices = param.value.get("choices").and_then(Node::props);
+        for choice in choices.unwrap_or_default() {
+            let Some(sets) = choice.value.get("readings") else {
+                continue;
+            };
+            if format < CHOICE_READINGS_FORMAT {
+                out.push(
+                    Code::Syntax,
+                    sets.span,
+                    format!("choice `{}` sets `readings` only in part format {CHOICE_READINGS_FORMAT}; this file is format {format}", choice.key),
+                    format!("set \"format\": {CHOICE_READINGS_FORMAT} in this part file"),
+                );
+                continue;
+            }
+            for reading in sets.props().unwrap_or_default() {
+                let Some(own) = readings.and_then(|r| r.get(&reading.key)) else {
+                    let hint = match names.as_slice() {
+                        [] => format!("add `{}` to the part's `readings`", reading.key),
+                        _ => format!(
+                            "{}the part's readings are {}",
+                            did_you_mean(&reading.key, names.iter().copied(), ""),
+                            and_list(&names)
+                        ),
+                    };
+                    out.push(
+                        Code::Syntax,
+                        reading.key_span,
+                        format!(
+                            "choice `{}` sets reading `{}`, which the part does not state",
+                            choice.key, reading.key
+                        ),
+                        hint,
+                    );
+                    continue;
+                };
+                for field in reading.value.props().unwrap_or_default() {
+                    let Some(base) = own.get(&field.key) else {
+                        out.push(
+                            Code::Syntax,
+                            field.key_span,
+                            format!(
+                                "reading `{}` has no `{}`, so a choice cannot set it",
+                                reading.key, field.key
+                            ),
+                            format!(
+                                "give `readings.{}` a `{}`, or remove it from choice `{}`",
+                                reading.key, field.key, choice.key
+                            ),
+                        );
+                        continue;
+                    };
+                    let unit = |n: &Node| n.get("unit").and_then(Node::str).map(str::to_string);
+                    if let (Some(want), Some(got)) = (unit(base), unit(&field.value))
+                        && want != got
+                    {
+                        out.push(
+                            Code::Syntax,
+                            field.value.span,
+                            format!("choice `{}` sets `{}.{}` in {got}, and the part states it in {want}", choice.key, reading.key, field.key),
+                            format!("write it in {want}"),
+                        );
+                    }
+                    let key = (reading.key.clone(), field.key.clone());
+                    match setter.get(&key) {
+                        Some(other) if *other != param.key => out.push(
+                            Code::Syntax,
+                            field.key_span,
+                            format!(
+                                "params `{other}` and `{}` both set `{}.{}`",
+                                param.key, reading.key, field.key
+                            ),
+                            "let one param's choices set each reading field".into(),
+                        ),
+                        _ => {
+                            setter.insert(key, param.key.clone());
+                        }
+                    }
+                }
+            }
         }
     }
 }

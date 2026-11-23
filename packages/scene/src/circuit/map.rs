@@ -32,7 +32,8 @@ pub struct MapPart {
     pub pins: BTreeMap<String, Option<String>>,
     /// The engine parts this instance's own model writes.
     pub engine: Vec<EnginePart>,
-    /// The part file's `readings`, such as an LED's `lit`.
+    /// The part file's `readings`, such as an LED's `lit`, with what this instance's choices
+    /// set over them.
     pub readings: BTreeMap<String, Reading>,
     /// Hole pin names, when this part is a board other parts plug into.
     pub holes: Vec<String>,
@@ -70,6 +71,8 @@ pub struct Reading {
     /// The engine quantity it reads, such as `i`.
     pub of: String,
     pub above: Option<Amount>,
+    /// The value a viewer draws at full intensity, such as an LED's rated current.
+    pub full: Option<Amount>,
 }
 
 #[derive(Clone, Debug)]
@@ -92,7 +95,7 @@ impl Circuit<'_> {
             };
             if let Some(file) = self.part(inst) {
                 part.ty.clone_from(&file.label);
-                part.readings = self.readings(file.file);
+                part.readings = self.readings(inst);
                 if let Some(board) = &file.holes {
                     part.holes = board.strips.iter().flatten().cloned().collect();
                 }
@@ -153,27 +156,54 @@ impl Circuit<'_> {
         nets.get(&root).cloned()
     }
 
-    /// The part file's `readings`. The file already read once, so a second parse finds nothing
-    /// new to report.
-    fn readings(&self, file: crate::source::FileId) -> BTreeMap<String, Reading> {
+    /// The `readings` of `inst`'s part file, each field as the instance's choice sets it, else
+    /// as the part states it. The file already read once, so a second parse finds nothing new
+    /// to report.
+    pub(super) fn readings(&self, inst: usize) -> BTreeMap<String, Reading> {
+        let Some(part) = self.part(inst) else {
+            return BTreeMap::new();
+        };
         let mut quiet = Findings::default();
-        let Some(tree) = syntax::parse(&self.project.sources, file, &mut quiet) else {
+        let Some(tree) = syntax::parse(&self.project.sources, part.file, &mut quiet) else {
             return BTreeMap::new();
         };
         let Some(props) = tree.get("readings").and_then(|r| r.props()) else {
             return BTreeMap::new();
         };
+        let chosen: Vec<&syntax::Node> = part
+            .params
+            .iter()
+            .filter(|decl| matches!(decl.kind, ParamKind::Choice(_)))
+            .filter_map(|decl| {
+                let args = &self.insts[inst].args;
+                let node = args
+                    .get(&decl.name)
+                    .map(|a| &a.node)
+                    .or(decl.default.as_ref())?;
+                let choices = tree.get("params")?.get(&decl.name)?.get("choices")?;
+                choices.get(node.str()?)?.get("readings")
+            })
+            .collect();
+        let amount = |node: &syntax::Node| {
+            Some(Amount {
+                value: node.get("value")?.number()?,
+                unit: node.get("unit")?.str()?.to_string(),
+            })
+        };
         props
             .iter()
             .filter_map(|prop| {
+                let field = |key: &str| {
+                    let set = chosen.iter().find_map(|sets| sets.get(&prop.key)?.get(key));
+                    set.or_else(|| prop.value.get(key)).and_then(amount)
+                };
                 let of = prop.value.get("of")?.str()?.to_string();
-                let above = prop.value.get("above").and_then(|a| {
-                    Some(Amount {
-                        value: a.get("value")?.number()?,
-                        unit: a.get("unit")?.str()?.to_string(),
-                    })
-                });
-                Some((prop.key.clone(), Reading { of, above }))
+                let reading = Reading {
+                    of,
+                    above: field("above"),
+                    full: field("full"),
+                };
+                Some((prop.key.clone(), reading))
             })
             .collect()
     }

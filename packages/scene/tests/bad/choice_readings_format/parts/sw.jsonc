@@ -1,0 +1,19 @@
+{
+  "format": 1,
+  "pins": { "a": [1], "b": [2] },
+  "params": {
+    "color": { "default": "red", "choices": { "red": { "tint": "#d8342a" }, "blue": { "readings": { "lit": { "above": { "value": 0.02, "unit": "A", "source": "user" } } } } } },
+  },
+  "model": {
+    "kind": "switch",
+    "on_resistance": { "value": 0.1, "unit": "ohm", "source": "user" },
+    "off_resistance": { "value": 1e8, "unit": "ohm", "source": "user" },
+    "initial": "open",
+    "events": [],
+    "bounce": null,
+  },
+  "readings": {
+    "lit": { "of": "i", "above": { "value": 0.002, "unit": "A", "source": "user" } },
+    "brightness": { "of": "i", "full": { "value": 0.01, "unit": "A", "source": "user" } },
+  },
+}

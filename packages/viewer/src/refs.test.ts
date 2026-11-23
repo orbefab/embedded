@@ -11,7 +11,6 @@ function part(fields: Partial<PartData>): PartData {
     view: {},
     joints: {},
     controls: {},
-    readings: {},
     tints: {},
     ...fields,
   };

@@ -26,6 +26,9 @@ export interface InstanceBase {
   /** A key of `SceneMessage.parts`. */
   readonly part: string;
   readonly params: Params;
+  /** `readings.brightness.full` in amperes, as this instance's choices set it: the current
+   * that draws a glow at intensity 1. Absent when the part states none. */
+  readonly readings?: { readonly brightness?: { readonly full: number } };
   readonly children: readonly Child[];
   /** Why the part is not simulated: its own `not_simulated` reason in its parent's `parts`,
    * else the nearest marked ancestor's. Absent for a simulated part. */
@@ -110,8 +113,6 @@ export interface PartData {
   readonly joints: Readonly<Record<string, Joint>>;
   /** A part with `press` is pressable, and a press drives the joint it names. */
   readonly controls: { readonly press?: { readonly joint: string } };
-  /** `readings.brightness.full` in amperes, the current that draws a glow at intensity 1. */
-  readonly readings: { readonly brightness?: { readonly full: number } };
   /** For each choice param, the `tint` of each choice that has one. */
   readonly tints: Readonly<Record<string, Readonly<Record<string, string>>>>;
   readonly not_simulated?: readonly NotSimulated[];

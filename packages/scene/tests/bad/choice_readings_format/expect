@@ -1,0 +1,1 @@
+scene.syntax parts/sw.jsonc:5:99 | choice `blue` sets `readings` only in part format 4; this file is format 1 | set "format": 4 in this part file

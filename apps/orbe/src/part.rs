@@ -171,6 +171,30 @@ pub fn text(card: &Card, breadboard: Option<&str>) -> String {
             }
             lines.push(format!("  off while that average is at or below {above}"));
         }
+        for param in &card.params {
+            for choice in param.choices.as_deref().unwrap_or_default() {
+                let lit = choice
+                    .lit
+                    .as_ref()
+                    .filter(|lit| card.lit.as_ref() != Some(*lit));
+                let lit = lit.map(|lit| format!("lit above {}", si_amount(lit.above, &lit.unit)));
+                let dim = choice
+                    .dim
+                    .as_ref()
+                    .filter(|dim| card.dim.as_ref() != Some(*dim));
+                let dim =
+                    dim.map(|dim| format!("off at or below {}", si_amount(dim.above, &dim.unit)));
+                let set: Vec<String> = lit.into_iter().chain(dim).collect();
+                if !set.is_empty() {
+                    lines.push(format!(
+                        "  {} {}: {}",
+                        param.name,
+                        choice.name,
+                        set.join(", ")
+                    ));
+                }
+            }
+        }
     }
     if card.pressable {
         lines.push("press and release close and open it".into());

@@ -5,7 +5,7 @@
   "name": "led-5mm",
   "version": "0.3.0",
   "title": "5 mm LED",
-  "description": "Round 5 mm through-hole LED, two leads on 2.54 mm. The longer lead is the anode. Pick its color: red, yellow, green, blue or white. Red, yellow and green are diffused; blue and white are water clear. Red, yellow, blue and white warn above 30 mA, green above 25 mA. Red and yellow warn above 75 mW, green above 62.5 mW, and blue and white above 120 mW. The page's glow is the mean current since the last frame, so a PWM-dimmed LED glows at its average.",
+  "description": "Round 5 mm through-hole LED, two leads on 2.54 mm. The longer lead is the anode. Pick its color: red, yellow, green, blue or white. Red, yellow and green are diffused; blue and white are water clear. Red, yellow, blue and white warn above 30 mA, green above 25 mA. Red and yellow warn above 75 mW, green above 62.5 mW, and blue and white above 120 mW. The page's glow is the mean current since the last frame, so a PWM-dimmed LED glows at its average. Red, yellow and green glow fully at 10 mA, and blue and white at 20 mA, the currents their datasheets rate light at. Red, yellow and green are off at or below 100 uA, and blue and white at or below 500 uA.",
   "categories": [
     "led",
     "light",
@@ -69,22 +69,42 @@
         {
           "name": "yellow",
           "number": "WP7113YD",
-          "tint": "#f2c12e"
+          "tint": "#f2c12e",
+          "dim": {
+            "of": "i",
+            "above": 0.0001,
+            "unit": "A"
+          }
         },
         {
           "name": "green",
           "number": "WP7113GD",
-          "tint": "#3fae49"
+          "tint": "#3fae49",
+          "dim": {
+            "of": "i",
+            "above": 0.0001,
+            "unit": "A"
+          }
         },
         {
           "name": "blue",
           "number": "WP7113QBC/D",
-          "tint": "#2a62e6"
+          "tint": "#2a62e6",
+          "dim": {
+            "of": "i",
+            "above": 0.0005,
+            "unit": "A"
+          }
         },
         {
           "name": "white",
           "number": "WP7113QWC/D",
-          "tint": "#f4f6f8"
+          "tint": "#f4f6f8",
+          "dim": {
+            "of": "i",
+            "above": 0.0005,
+            "unit": "A"
+          }
         }
       ],
       "required": true,
@@ -120,7 +140,7 @@
   "notSimulated": [
     {
       "what": "light",
-      "why": "The engine reports current, not luminous intensity. The drawing scales every color by 10 mA, so the glow is 1 at 10 mA and blooms above that. Blue and white rate luminous intensity at 20 mA, and that difference is not modeled. Each color's forward curve is fitted from 2 mA to 20 mA as its source names. Below 2 mA and above 20 mA the current is that curve extended. A threshold at 1 mA would sit outside the fit. Luminous intensity versus forward current is drawn as a straight line from 0 mA on each datasheet, so the extended current still glows in proportion."
+      "why": "The engine reports current, not luminous intensity. Each color's glow is 1 at the current its datasheet rates luminous intensity at, 10 mA for red, yellow and green and 20 mA for blue and white, and blooms above that. The colors' intensities at that current differ and are not modeled. Each color's forward curve is fitted from 2 mA to 20 mA as its source names. Below 2 mA and above 20 mA the current is that curve extended. A threshold at 1 mA would sit outside the fit. Luminous intensity versus forward current is drawn as a straight line from 0 mA on each datasheet, so the extended current still glows in proportion."
     },
     {
       "what": "temperature",

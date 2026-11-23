@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 #[path = "registry_env.rs"]
 mod registry_env;
@@ -74,7 +74,7 @@ fn a_part_prints_where_to_buy_it_and_a_part_without_buy_says_none() {
     );
     assert!(
         stdout.contains(
-            "\nbrightness\n  the average i over 20ms\n  lit while that average is above 2 mA\n  dim while that average is above 100 uA and at or below 2 mA\n  off while that average is at or below 100 uA\n"
+            "\nbrightness\n  the average i over 20ms\n  lit while that average is above 2 mA\n  dim while that average is above 100 uA and at or below 2 mA\n  off while that average is at or below 100 uA\n  color blue: off at or below 500 uA\n  color white: off at or below 500 uA\n"
         ),
         "{stdout}"
     );
@@ -84,6 +84,11 @@ fn a_part_prints_where_to_buy_it_and_a_part_without_buy_says_none() {
     assert_eq!(data["lit"]["above"], 0.002);
     assert_eq!(data["lit"]["of"], "i");
     assert_eq!(data["dim"]["above"], 0.0001);
+    let blue = &data["params"][0]["choices"][3];
+    assert_eq!(
+        (&blue["name"], &blue["dim"]["above"], &blue["lit"]),
+        (&json!("blue"), &json!(0.0005), &Value::Null)
+    );
     assert_eq!(
         data["buy"],
         serde_json::json!([

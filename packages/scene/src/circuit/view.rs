@@ -36,6 +36,9 @@ pub struct Instance {
     pub part: String,
     /// Each number param as a number in its SI unit, and each choice as its name.
     pub params: BTreeMap<String, Value>,
+    /// The readings a viewer draws by, as this instance's choices set them.
+    #[serde(skip_serializing_if = "Readings::is_empty")]
+    pub readings: Readings,
     pub children: Vec<Instance>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub not_simulated: Option<String>,
@@ -60,7 +63,6 @@ pub struct PartData {
     pub view: Value,
     pub joints: BTreeMap<String, Joint>,
     pub controls: Controls,
-    pub readings: Readings,
     pub tints: BTreeMap<String, BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub not_simulated: Vec<Value>,
@@ -113,6 +115,12 @@ pub struct Press {
 pub struct Readings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub brightness: Option<Full>,
+}
+
+impl Readings {
+    fn is_empty(&self) -> bool {
+        self.brightness.is_none()
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -247,10 +255,16 @@ impl Circuit<'_> {
                         Some((key.clone(), value))
                     })
                     .collect();
+                let brightness = self.readings(id).remove("brightness");
                 Some(Instance {
                     name,
                     part: part.label.clone(),
                     params,
+                    readings: Readings {
+                        brightness: brightness
+                            .and_then(|r| r.full)
+                            .map(|full| Full { full: full.value }),
+                    },
                     children: self.instances(id, trees),
                     not_simulated: inst.dropped.clone(),
                     placement,
@@ -319,11 +333,6 @@ impl Circuit<'_> {
                     .map(|joint| Press {
                         joint: joint.to_string(),
                     }),
-            },
-            readings: Readings {
-                brightness: tree["readings"]["brightness"]["full"]["value"]
-                    .as_f64()
-                    .map(|full| Full { full }),
             },
             tints,
             not_simulated: tree["not_simulated"]

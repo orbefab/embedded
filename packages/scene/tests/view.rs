@@ -45,6 +45,10 @@ fn instances_carry_their_parsed_params_and_placements() {
         json!({ "color": "red" })
     );
     assert_eq!(
+        instance(instances, "led1")["readings"],
+        json!({ "brightness": { "full": 0.01 } })
+    );
+    assert_eq!(
         instance(instances, "btn1")["placement"],
         json!({ "at": [13.97, 0.0, 8.5], "rotate": [0.0, 0.0, 90.0] }),
         "plugged in across the breadboard's channel, on its top"
@@ -89,7 +93,10 @@ fn parts_carry_their_3d_fields() {
     assert_eq!(button["anchors"].as_array().unwrap().len(), 4);
 
     let led = &view["parts"]["led-5mm"];
-    assert_eq!(led["readings"], json!({ "brightness": { "full": 0.01 } }));
+    assert!(
+        led.get("readings").is_none(),
+        "an instance carries its readings"
+    );
     assert_eq!(
         led["tints"],
         json!({

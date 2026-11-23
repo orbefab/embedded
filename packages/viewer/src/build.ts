@@ -7,7 +7,7 @@ import type { GLTF } from "three/addons/loaders/GLTFLoader.js";
 import { fourBands } from "./bands";
 import { glowColour } from "./glow";
 import { type Footprint, layOut } from "./layout";
-import type { Anchor, InstanceBase, PartData, Placement, Ref, SceneMessage, Vec3, Wire } from "./protocol";
+import type { Anchor, InstanceBase, Placement, Ref, SceneMessage, Vec3, Wire } from "./protocol";
 import { instanceAt, type LeadAt, leadRef, leadsOf, partOf, refOf } from "./refs";
 import { type Box, routeWire, type WireEnd, type WirePath } from "./wire-geometry";
 
@@ -150,13 +150,14 @@ function namedNode(body: Object3D, name: string, part: string): Object3D {
   return node;
 }
 
-/** What drives a glow `by` names. `"brightness"` is the LED's current, which needs its
- * `full`. Any other name is the part's colour reading, and the session sends its colour when
- * the part is on `channels.pixels`. Undefined when the scene sends nothing to draw it by. */
-function glowDrive(scene: SceneMessage, ref: Ref, part: PartData, by: string): GlowDrive | undefined {
+/** What drives a glow `by` names. `"brightness"` is the LED's current, which needs the
+ * instance's `full`. Any other name is the part's colour reading, and the session sends its
+ * colour when the part is on `channels.pixels`. Undefined when the scene sends nothing to draw
+ * it by. */
+function glowDrive(scene: SceneMessage, ref: Ref, instance: InstanceBase, by: string): GlowDrive | undefined {
   if (by === "brightness") {
     const channel = scene.channels.leds.indexOf(ref);
-    const full = part.readings.brightness?.full;
+    const full = instance.readings?.brightness?.full;
     return channel >= 0 && full !== undefined ? { kind: "current", full, channel } : undefined;
   }
   const channel = scene.channels.pixels.indexOf(ref);
@@ -234,7 +235,7 @@ function drawBody(builder: Builder, group: Group, instance: InstanceBase, path: 
     });
   }
   for (const { node, by } of part.view.glow ?? []) {
-    const drive = glowDrive(scene, ref, part, by);
+    const drive = glowDrive(scene, ref, instance, by);
     if (drive === undefined) continue;
     for (const material of ownMaterials(namedNode(body, node, instance.part))) {
       material.emissive.copy(glowColour(material.color));

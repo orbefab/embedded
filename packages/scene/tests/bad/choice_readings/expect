@@ -1,0 +1,4 @@
+scene.syntax parts/sw.jsonc:6:7 | choice `blue` sets reading `dimm`, which the part does not state | the part's readings are lit and brightness
+scene.syntax parts/sw.jsonc:7:16 | reading `lit` has no `full`, so a choice cannot set it | give `readings.lit` a `full`, or remove it from choice `blue`
+scene.syntax parts/sw.jsonc:8:31 | choice `blue` sets `brightness.full` in mA, and the part states it in A | write it in A
+scene.syntax parts/sw.jsonc:10:89 | params `color` and `lens` both set `brightness.full` | let one param's choices set each reading field

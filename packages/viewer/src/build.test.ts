@@ -25,7 +25,6 @@ function partData(model: string, fields: Partial<PartData> = {}): PartData {
     view: {},
     joints: {},
     controls: {},
-    readings: {},
     tints: {},
     ...fields,
   };
@@ -36,7 +35,8 @@ const parts: Record<string, PartData> = {
   resistor: partData("resistor.glb", {
     view: { recolour: [{ nodes: BANDS, by: "resistance", rule: "iec60062-4-band" }] },
   }),
-  lamp: partData("lamp.glb", { view: { glow: [{ node: "lens", by: "brightness" }] }, readings: { brightness: { full: 0.01 } } }),
+  lamp: partData("lamp.glb", { view: { glow: [{ node: "lens", by: "brightness" }] } }),
+  bulb: partData("lamp.glb", { view: { glow: [{ node: "body", by: "brightness" }] } }),
   pixel: partData("pixel.glb", { view: { glow: [{ node: "lens", by: "color" }] } }),
   board: partData("board.glb"),
   pot: partData("pot.glb", {
@@ -115,7 +115,7 @@ describe("buildScene", () => {
     const built = buildScene(
       scene(
         [
-          { name: "led1", part: "lamp", params: {}, placement: at, children: [] },
+          { name: "led1", part: "lamp", params: {}, readings: { brightness: { full: 0.01 } }, placement: at, children: [] },
           { name: "nano", part: "board", params: {}, placement: at, children: [] },
         ],
         { channels: { pins: [], leds: ["@led1"], switches: [], pixels: [] } }
@@ -151,6 +151,24 @@ describe("buildScene", () => {
     expect(built.errors).toEqual(["@nano.r_l: the scene message gives this child no placement"]);
     expect(built.root.getObjectByName("@nano.r_l")).toBeUndefined();
     expect(built.root.getObjectByName("@nano")?.getObjectByName("pcb")).toBeDefined();
+  });
+
+  test("two instances of one LED part glow by each instance's own full current", () => {
+    const built = buildScene(
+      scene(
+        [
+          { name: "red", part: "bulb", params: { color: "red" }, readings: { brightness: { full: 0.01 } }, placement: at, children: [] },
+          { name: "blue", part: "bulb", params: { color: "blue" }, readings: { brightness: { full: 0.02 } }, placement: at, children: [] },
+        ],
+        { channels: { pins: [], leds: ["@red", "@blue"], switches: [], pixels: [] } }
+      ),
+      models
+    );
+    expect(built.errors).toEqual([]);
+    expect(built.glows.map((glow) => glow.by)).toEqual([
+      { kind: "current", full: 0.01, channel: 0 },
+      { kind: "current", full: 0.02, channel: 1 },
+    ]);
   });
 
   test("an addressable LED's lens glows by its channel on the scene's pixels", () => {

@@ -53,7 +53,14 @@ const CHOICE: Shape = Shape::Obj(
         ("sets", Shape::Map(&Shape::Any)),
         ("tint", Shape::Str),
         ("real", REAL),
+        ("readings", Shape::Map(&CHOICE_READING)),
     ],
+);
+
+/// What a choice sets of one of the part's readings. The quantity stays the part's.
+const CHOICE_READING: Shape = Shape::Obj(
+    "a reading a choice sets",
+    &[("above", VALUE), ("full", VALUE)],
 );
 
 const PARAM_KEYS: &[(&str, Shape)] = &[

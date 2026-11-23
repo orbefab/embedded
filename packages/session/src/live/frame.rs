@@ -262,9 +262,9 @@ pub(super) fn contacts(json: &str) -> BTreeMap<String, (bool, Vec<(u64, bool)>)>
 }
 
 impl Open {
-    /// The scene's board pins that `snapshot` shows and that a chip pin drives, every LED the
-    /// part data says glows, every pressable switch, and every addressable LED, each with what
-    /// reads it.
+    /// The scene's board pins that `snapshot` shows and that a chip pin drives, every LED whose
+    /// brightness reading has a `full`, every pressable switch, and every addressable LED, each
+    /// with what reads it.
     pub(super) fn bind_channels(&self) -> Bound {
         let mut bound = Bound::default();
         let wired = self.wired_nets();
@@ -289,11 +289,10 @@ impl Open {
             let Some(data) = self.view.parts.get(&part.ty) else {
                 continue;
             };
-            let column = data
+            let column = part
                 .readings
-                .brightness
-                .as_ref()
-                .and_then(|_| part.readings.get("brightness"))
+                .get("brightness")
+                .filter(|reading| reading.full.is_some())
                 .and_then(|reading| QUANTITIES.into_iter().find(|q| q.as_str() == reading.of))
                 .and_then(|q| {
                     let engine = one_engine(path, part, Code::NoReading).ok()?;

@@ -1,7 +1,7 @@
 import type { BrowserContext, Page } from "@playwright/test";
 import { collectLogs, expect, headedSession, ledGlow, orbeJson, pointOn, shot, test, textOf, waitState, type OrbeEnvelope } from "../../../e2e/support";
 
-/** led-5mm's `readings.brightness.full`, the current the viewer draws at glow 1. */
+/** A red led-5mm's `readings.brightness.full`, the current the viewer draws at glow 1. */
 const LED_FULL_A = 0.01;
 const VIEW = { width: 1280, height: 720 };
 

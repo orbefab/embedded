@@ -180,6 +180,14 @@ pub struct Choice {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "String"))]
     pub tint: Option<String>,
+    /// The part's `lit` as this choice sets it. Absent when the choice leaves it as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Threshold"))]
+    pub lit: Option<Threshold>,
+    /// The part's `dim` as this choice sets it. Absent when the choice leaves it as it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Threshold"))]
+    pub dim: Option<Threshold>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -916,6 +924,8 @@ fn param<'t>(
                             .get("tint")
                             .and_then(Node::str)
                             .map(str::to_string),
+                        lit: choice_threshold(tree, &choice.value, "lit"),
+                        dim: choice_threshold(tree, &choice.value, "dim"),
                     })
                     .collect(),
             ),
@@ -1198,7 +1208,16 @@ fn threshold(tree: &Node, name: &str) -> Option<Threshold> {
     let reading = tree
         .get("readings")
         .and_then(|readings| readings.get(name))?;
-    let above = reading.get("above")?;
+    above(reading, reading.get("above")?)
+}
+
+/// The threshold `name` as `choice` sets it, with the quantity the part reads.
+fn choice_threshold(tree: &Node, choice: &Node, name: &str) -> Option<Threshold> {
+    let set = choice.get("readings")?.get(name)?.get("above")?;
+    above(tree.get("readings")?.get(name)?, set)
+}
+
+fn above(reading: &Node, above: &Node) -> Option<Threshold> {
     Some(Threshold {
         of: reading.get("of")?.str()?.to_string(),
         above: above.get("value")?.number()?,
