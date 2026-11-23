@@ -243,7 +243,7 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "button" | "fade" | "light" | "pixels";
+export type BlockKind = "button" | "fade" | "light" | "pixels" | "rgb";
 
 export interface RepoBlock {
   id: string;
@@ -266,10 +266,11 @@ export function blockKind(scene: string, id: string): BlockKind {
     .map((line) => line.replace(/\/\/.*$/, ""))
     .join("\n");
   if (/"type"\s*:\s*"neopixel-stick-8"/.test(code)) return "pixels";
+  if (/"type"\s*:\s*"esp32s3-devkitc-1"/.test(code)) return "rgb";
   if (/"world"\s*:\s*\{[^}]*"light"\s*:/.test(code)) return "light";
   if (/"btn1"\s*:/.test(code)) return "button";
   if (/"led1"\s*:/.test(code)) return "fade";
-  throw new Error(`${id} names no button, no fading LED, no light and no pixel stick`);
+  throw new Error(`${id} names no button, no fading LED, no light, no pixel stick and no DevKitC-1`);
 }
 
 export async function simulatedSeconds(page: Page): Promise<number> {
@@ -311,6 +312,43 @@ async function stepLight(page: Page, key: "ArrowLeft" | "ArrowRight", want: stri
 
 const FADE_CYCLE_S = 3.1;
 
+function lensColour(page: Page): Promise<{ r: number; g: number } | null> {
+  return page.evaluate(() => {
+    const node = window.orbeViewer.get().scene.getObjectByName("@board.led")?.getObjectByName("lens");
+    const material = node?.material ?? node?.children?.[0]?.material;
+    if (material === undefined) return null;
+    return { r: material.emissive.r, g: material.emissive.g };
+  });
+}
+
+/** The DevKitC-1 Block: a press changes `@board.led` from red to green. */
+async function showRgb(page: Page, block: RepoBlock, canvas: boolean, shotName: string | null): Promise<void> {
+  await page.waitForFunction(() => {
+    const node = window.orbeViewer.get().scene.getObjectByName("@board.led")?.getObjectByName("lens");
+    const material = node?.material ?? node?.children?.[0]?.material;
+    return material !== undefined && material.emissive.r > material.emissive.g && material.emissiveIntensity > 0.05;
+  }, null, { timeout: 120_000 });
+  const wall0 = Date.now();
+  const sim0 = await simulatedSeconds(page);
+  const stem = await pointOn(page, "@btn1", "stem", canvas);
+  await page.mouse.move(stem.x, stem.y);
+  await page.mouse.down();
+  await page.waitForFunction(() => {
+    const node = window.orbeViewer.get().scene.getObjectByName("@board.led")?.getObjectByName("lens");
+    const material = node?.material ?? node?.children?.[0]?.material;
+    return material !== undefined && material.emissive.g > material.emissive.r;
+  }, null, { timeout: 120_000 });
+  const rate = ((await simulatedSeconds(page)) - sim0) / ((Date.now() - wall0) / 1000);
+  console.log(`${block.id}: ${rate.toFixed(3)} simulated seconds per wall second`);
+  expect(rate, `${block.id} time`).toBeGreaterThan(0);
+  expect((await lensColour(page))?.g).toBeGreaterThan((await lensColour(page))?.r ?? 1);
+  if (shotName !== null) {
+    await page.locator("canvas").scrollIntoViewIfNeeded();
+    await shot(page, shotName);
+  }
+  await page.mouse.up();
+}
+
 /** Play, require simulated time to move, and check the behaviour the scene declares. */
 export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, shotName: string | null): Promise<void> {
   await page.locator("canvas").scrollIntoViewIfNeeded();
@@ -346,6 +384,10 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
       await page.locator("canvas").scrollIntoViewIfNeeded();
       await shot(page, shotName);
     }
+    return;
+  }
+  if (block.kind === "rgb") {
+    await showRgb(page, block, canvas, shotName);
     return;
   }
   if (block.kind === "pixels") {

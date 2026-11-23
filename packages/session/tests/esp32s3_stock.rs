@@ -79,6 +79,7 @@ fn a_stock_blink_lights_the_led_and_prints_ready() {
             r#"expect serial contains "ready""#,
             "step 500ms",
             "expect @led1 off",
+            "expect no diagnostics",
         ],
     );
 }
@@ -91,6 +92,7 @@ fn a_stock_sketch_prints_ready_and_ticks() {
             "step 300ms",
             r#"expect serial contains "ready""#,
             r#"expect serial contains "tick""#,
+            "expect no diagnostics",
         ],
     );
 }
@@ -99,7 +101,11 @@ fn a_stock_sketch_prints_ready_and_ticks() {
 fn a_stock_sketch_reads_the_divider_in_millivolts() {
     play(
         "esp32s3-stock-adc",
-        &["step 400ms", r#"expect serial contains "raw 1779 mv 1650""#],
+        &[
+            "step 400ms",
+            r#"expect serial contains "raw 1779 mv 1650""#,
+            "expect no diagnostics",
+        ],
     );
 }
 
@@ -113,6 +119,7 @@ fn a_stock_sketch_reads_a_button() {
             "press @btn1",
             "step 100ms",
             r#"expect serial contains "down""#,
+            "expect no diagnostics",
         ],
     );
 }
@@ -125,6 +132,7 @@ fn a_stock_sketch_latches_the_board_rgb_led() {
             "step 300ms",
             "expect @board.led rgb(0,40,0)",
             r#"expect serial contains "ready""#,
+            "expect no diagnostics",
         ],
     );
 }

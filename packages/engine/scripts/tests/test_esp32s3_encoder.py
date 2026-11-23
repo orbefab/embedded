@@ -34,11 +34,11 @@ def test_edges_polls_and_manifest() -> None:
     timed = [
         (5, "I (57) cpu_start: Unicore app\r\n"),
         (110 * ms, READY),
-        (200 * ms + 30 * US_PS, "edge a=1 b=0 t=200001\r\n"),
+        (200 * ms + 30 * US_PS, "edge a=1 b=0 t=190975\r\n"),
         (204 * ms, "poll a=1 b=0\r\n"),
-        (300 * ms + 30 * US_PS, "edge a=1 b=1 t=300001\r\n"),
+        (300 * ms + 30 * US_PS, "edge a=1 b=1 t=290975\r\n"),
         (304 * ms, "poll a=1 b=1\r\n"),
-        (400 * ms + 30 * US_PS, "edge a=2 b=1 t=400001\r\n"),
+        (400 * ms + 30 * US_PS, "edge a=2 b=1 t=390975\r\n"),
         (404 * ms, "poll a=2 b=1\r\n"),
     ]
 
@@ -51,11 +51,11 @@ def test_edges_polls_and_manifest() -> None:
     expect("a good run counts each contact", check_console(console(), closed) == (2, 1))
     expect(
         "a late edge fails",
-        raises(lambda: check_console(console(lambda line: line.replace("t=300001", "t=300011")), closed)),
+        raises(lambda: check_console(console(lambda line: line.replace("t=290975", "t=290985")), closed)),
     )
     expect(
         "an early edge fails",
-        raises(lambda: check_console(console(lambda line: line.replace("t=300001", "t=299999")), closed)),
+        raises(lambda: check_console(console(lambda line: line.replace("t=290975", "t=290973")), closed)),
     )
     expect(
         "a miscounted edge fails",
@@ -63,7 +63,7 @@ def test_edges_polls_and_manifest() -> None:
     )
     expect(
         "a lost edge fails",
-        raises(lambda: check_console(console(lambda line: "" if "t=400001" in line else line), closed)),
+        raises(lambda: check_console(console(lambda line: "" if "t=390975" in line else line), closed)),
     )
     expect(
         "a lost poll fails",
