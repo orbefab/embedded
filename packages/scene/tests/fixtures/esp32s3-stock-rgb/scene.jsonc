@@ -1,0 +1,13 @@
+// rgbLedWrite on the board's RGB LED. The app is the stock sketch
+// packages/engine/tests/firmware/esp32s3/arduino/stock/rgb.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    }
+  },
+  "ground": "board.GND"
+}

@@ -1,0 +1,33 @@
+The sketches in this directory are stock Arduino-ESP32 programs. Each uses ordinary Arduino
+calls and nothing else. They were compiled with Arduino CLI 1.5.1 and esp32:esp32 3.3.12, fqbn
+esp32:esp32:esp32s3, which is the ESP32S3 Dev Module defaults: USB CDC on boot disabled, PSRAM
+disabled, 4MB flash, the default partition table, QIO 80MHz, and the sketch on core 1. The core
+is not kept here. Its package is LGPL-2.1-or-later. The HAL files it builds with are Apache-2.0.
+The prebuilt libraries under esp32s3-libs are ESP-IDF's, under the terms named in
+packages/engine/tests/firmware/esp32s3/idf/NOTICE.
+Every app also links Mbed TLS objects (sha.c, platform.c and platform_util.c from
+libmbedcrypto.a), Copyright The Mbed TLS Contributors, which ESP-IDF carries under Apache-2.0 OR
+GPL-2.0-or-later, used here under the Apache License 2.0.
+
+The compile rewrites source paths with -ffile-prefix-map, the same way
+packages/engine/scripts/esp32s3-arduino.sh does, so the committed app does not record the build
+directory. A sketch built without that map is the same program with different path strings.
+
+The app and the partition table are kept in the scene fixture named below, as app.bin and
+partitions.bin. The partition table is the core's default 4MB table, the same bytes for every
+sketch. The bootloader and the merged image are not kept. The chip starts where the bootloader
+leaves the app.
+
+Each fixture's partitions.bin is the same file: 3072 bytes,
+148b959cbff1c38aa8e1d5c0ba9d612c54997b945e56a63f41223eef650653a1.
+
+blink    packages/scene/tests/fixtures/esp32s3-stock-blink
+         app 301680 a5faa1331d45b12836f38ca88e995e8ed0ca95b17f5a320e6dfc57a5c42996c3
+serial   packages/scene/tests/fixtures/esp32s3-stock-serial
+         app 273456 9eab1869881ae6796497b86f11aaff1fd5deaf54b55b303814209591e9c11316
+adc      packages/scene/tests/fixtures/esp32s3-stock-adc
+         app 287424 84c8ef3a47e9aa81d3f06c255417c187960c6fa6de7103336c817a557d96b934
+button   packages/scene/tests/fixtures/esp32s3-stock-button
+         app 278048 7c3c80627cd25d2fbeac49443bbeb381b657a5a1c79af65e793c8b7d6380c0ee
+rgb      packages/scene/tests/fixtures/esp32s3-stock-rgb
+         app 298416 d22888507a5cd7c537154cb96e5a588a2079720da32847540941413ab0514fb3

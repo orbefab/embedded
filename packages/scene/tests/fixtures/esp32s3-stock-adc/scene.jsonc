@@ -1,0 +1,21 @@
+// A 10k/10k divider from 3V3 to GND feeds GPIO6. The app is the stock sketch
+// packages/engine/tests/firmware/esp32s3/arduino/stock/adc.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    },
+    "rhi": { "type": "resistor-axial", "resistance": "10k" },
+    "rlo": { "type": "resistor-axial", "resistance": "10k" }
+  },
+  "wires": [
+    ["board.3V3", "rhi.a"],
+    ["rhi.b", "board.GPIO6"],
+    ["board.GPIO6", "rlo.a"],
+    ["rlo.b", "board.GND"]
+  ],
+  "ground": "board.GND"
+}
