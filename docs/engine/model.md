@@ -73,9 +73,12 @@ The WS2812 is a pulse target whose line rests low. It reads `pulse` and `idle`, 
 
 An `SpiTarget` is a device on an SPI bus. The engine takes each `Spi` record whose CS and SCLK sit on the device's pins. It drops one while the device's reset pin reads low, and one whose lanes sit on other nets than the device's data pins, which is `chip.link_miswired` at the first time. The device sees each other transaction whole, with its phases, data, lanes and whether CS is held at its end.
 
+A transaction's `miso` says what the host reads back on MISO, D1: nothing, one byte beside each data byte in full duplex, or a number of bytes in a read phase after the data. Before `transaction`, the engine asks `answer` for each byte the host reads, in order. A byte no device answers reads `0xFF`, and where two devices answer one byte, a bit reads low when either drives it low.
+
 | Method | What it does |
 | --- | --- |
 | `transaction(cx, at, spi)` | A transaction that ended at `at`. |
+| `answer(cx, at, phases, data, index)` | The byte it shifts out after `phases` and `index` bytes of the data stage, where `data` is what the host sent before that byte. `None` by default, which leaves MISO alone. |
 
 The engine walks a landing's records on the concrete device, so a transaction's bytes and pixels never cross a call through a trait object.
 

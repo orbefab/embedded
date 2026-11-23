@@ -187,7 +187,7 @@ fn a_chip_held_in_reset_draws_its_reset_current() {
     );
 }
 
-fn board(stop_ps: u64, nets: &[&str], parts: &[String], mcu: String) -> Netlist {
+pub(super) fn board(stop_ps: u64, nets: &[&str], parts: &[String], mcu: String) -> Netlist {
     let pins: Vec<String> = pin_nets().map(|(net, _)| net).collect();
     let nets: Vec<&str> = pins
         .iter()

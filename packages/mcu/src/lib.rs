@@ -69,6 +69,11 @@ pub trait Mcu: Clone + Send + std::fmt::Debug + 'static {
     /// Hands over each record it sent at the stop `run_until` last returned with `record` set,
     /// in the order it sent them. Each ends at that stop.
     fn take_sent(&mut self, _sent: impl FnMut(Sent)) {}
+    /// The bytes the targets answered on MISO for the SPI record it sent that ended at `at`,
+    /// one for each byte the record reads. A chip sends at most one record that reads per stop,
+    /// and the engine hands this over at that stop before the chip runs on. A byte no target
+    /// drives is `0xFF`. A chip whose records never read keeps the default, which does nothing.
+    fn answered(&mut self, _at: Time, _miso: &[u8]) {}
     /// The records it started by `at` and has not ended, where the run ends at `at` and every
     /// stop up to `at` has landed. `self` is the committed chip, and `ahead` its copy run on
     /// from there.

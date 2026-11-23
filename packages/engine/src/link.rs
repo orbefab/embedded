@@ -71,6 +71,47 @@ pub struct LinkRow {
     pub record: Record,
 }
 
+/// What the targets answered on MISO at one landing: one entry for each SPI record that reads,
+/// from a sender stopped there. Each byte starts at `0xFF`, which a line no target drives reads.
+/// A bit reads low where any target that answers drives it low.
+#[derive(Debug, Default)]
+pub(crate) struct Answers(Vec<Answer>);
+
+#[derive(Debug)]
+pub(crate) struct Answer {
+    /// The sender's slot among the run's cores.
+    pub(crate) slot: usize,
+    sender: u16,
+    seq: u64,
+    pub(crate) miso: Vec<u8>,
+}
+
+impl Answers {
+    /// An answer of `reads` bytes for `sender`'s record `seq`, which no target has driven yet.
+    pub(crate) fn open(&mut self, slot: usize, sender: u16, seq: u64, reads: usize) {
+        self.0.push(Answer {
+            slot,
+            sender,
+            seq,
+            miso: vec![0xff; reads],
+        });
+    }
+
+    /// A target drives `byte` as byte `index` of the answer to `row`'s record.
+    pub(crate) fn drive(&mut self, row: &LinkRow, index: usize, byte: u8) {
+        let answer = self
+            .0
+            .iter_mut()
+            .find(|answer| answer.sender == row.sender && answer.seq == row.record.seq)
+            .expect("a record that reads has an open answer");
+        answer.miso[index] &= byte;
+    }
+
+    pub(crate) fn into_vec(self) -> Vec<Answer> {
+        self.0
+    }
+}
+
 /// A run's senders, each as its part's name, and the records they sent, ordered by end, then
 /// by sender name, then by sequence.
 #[derive(Debug, PartialEq)]
@@ -174,7 +215,7 @@ pub fn hash(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orbe_model::Lanes;
+    use orbe_model::{Lanes, Miso};
 
     fn spi(seq: u64, end: u64, cs: Cs, data: &[u8]) -> Record {
         Record {
@@ -200,6 +241,7 @@ mod tests {
                     data: data.into(),
                     clock_hz: 40_000_000,
                     cs,
+                    miso: Miso::None,
                 },
                 nets: SpiNets {
                     cs: Some(NetId::GROUND),
@@ -208,6 +250,28 @@ mod tests {
                 },
             },
         }
+    }
+
+    /// An undriven byte reads `0xFF`, and two targets that answer one byte pull low each bit
+    /// either drives low.
+    #[test]
+    fn an_answer_starts_at_0xff_and_ands_what_targets_drive() {
+        let row = LinkRow {
+            sender: 1,
+            record: spi(4, 500, Cs::Released, b""),
+        };
+        let mut answers = Answers::default();
+        answers.open(0, 0, 4, 1);
+        answers.open(2, 1, 4, 3);
+        answers.drive(&row, 0, 0xf0);
+        answers.drive(&row, 0, 0x3c);
+        answers.drive(&row, 2, 0x5a);
+        let answers = answers.into_vec();
+        assert_eq!(answers[0].miso, [0xff]);
+        assert_eq!(
+            (answers[1].slot, &answers[1].miso[..]),
+            (2, &[0x30, 0xff, 0x5a][..])
+        );
     }
 
     #[test]

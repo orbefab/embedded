@@ -335,6 +335,10 @@ impl Mcu {
         each!(self, host => host.mcu.deliver(through, sent, saw))
     }
 
+    pub(crate) fn answered(&mut self, at: Time, miso: &[u8]) {
+        each!(self, host => host.mcu.answered(at, miso))
+    }
+
     pub(crate) fn records(&self) -> &[Record] {
         each!(self, host => &host.records)
     }

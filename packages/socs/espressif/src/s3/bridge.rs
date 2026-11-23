@@ -256,6 +256,7 @@ impl Bridge {
                     } else {
                         Cs::Released
                     },
+                    miso: transfer.miso,
                 },
                 pins: SpiPins {
                     cs: output(pads.cs),
@@ -393,6 +394,11 @@ impl Mcu for Bridge {
         for train in trains {
             sent(self.pulses(train));
         }
+    }
+
+    /// SPI2's read, into `SPI_W0` on.
+    fn answered(&mut self, _at: Time, miso: &[u8]) {
+        self.chip.answered(miso);
     }
 
     fn in_flight(&self, ahead: &Self, at: Time) -> Vec<Sent> {

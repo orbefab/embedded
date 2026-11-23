@@ -24,6 +24,7 @@ A chip is its state. `Mcu` needs `Clone`, and a copy is a checkpoint. The engine
 | `sample(at, volts, world)` | The volts of its samples at a stop that asked for them, and each `WORLD` quantity the netlist declares, as it stands just before `at`. A chip that never asks keeps the default, which does nothing. |
 | `deliver(through, sent, saw)` | Hands over each USART byte whose stop bit ended at or before `through`, as a `Frame`, and each TWI phase that ended by then, as a `Phase`. |
 | `take_sent(sent)` | Hands over each record it sent at the stop `run_until` last returned with `record` set. |
+| `answered(at, miso)` | The bytes the targets answered on MISO to the one record of the stop at `at` that reads, `0xFF` where none answered. It comes before the chip runs past `at`. Does nothing by default. |
 | `in_flight(ahead, at)` | The records it started by `at` and has not ended, where the run ends at `at`. `ahead` is its copy run on from there. Empty by default. |
 | `fault()` | The fault that ended its run, and its time. `None` by default. |
 | `notes(through)` | What it noted at or before `through`, each at its time. Empty by default. |

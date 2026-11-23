@@ -766,6 +766,11 @@ impl Esp32s3 {
         }
     }
 
+    /// Puts the bytes SPI2's last transfer read on MISO into `SPI_W0` on.
+    pub fn answered(&mut self, miso: &[u8]) {
+        self.soc.spi2.answered(miso);
+    }
+
     /// The SPI2 transfers whose ends were reported, in the order they started.
     pub fn take_transfers(&mut self) -> impl Iterator<Item = Transfer> + '_ {
         let n = std::mem::take(&mut self.reported);

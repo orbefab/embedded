@@ -4,7 +4,7 @@
 use orbe_model::{Drive, DutyTarget, Time};
 
 use super::native::{Hosting, Port};
-use crate::link::{LinkRow, RecordKind};
+use crate::link::{Answers, LinkRow, RecordKind};
 use crate::world::World;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -25,7 +25,14 @@ impl<D: DutyTarget> Port<D> for Pin {
 
     fn input(&mut self, _dev: &mut Hosting<D>, _world: &World, _at: Time, _levels: &[bool]) {}
 
-    fn take_records(&mut self, dev: &mut Hosting<D>, world: &World, at: Time, records: &[LinkRow]) {
+    fn take_records(
+        &mut self,
+        dev: &mut Hosting<D>,
+        world: &World,
+        at: Time,
+        records: &[LinkRow],
+        _answers: &mut Answers,
+    ) {
         for row in records {
             if let RecordKind::Duty { duty, .. } = &row.record.kind {
                 dev.call(world, at, |device, cx| device.duty(cx, at, *duty));
