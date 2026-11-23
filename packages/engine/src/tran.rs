@@ -366,6 +366,22 @@ impl Breakpoints {
         }
     }
 
+    /// Aims `changer` at `at`, or at nothing when `at` is `None` or not before `stop`. A world
+    /// `set` can delete the edge this changer was waiting on, and the walk does not go back to
+    /// an earlier one, so the old entry is replaced rather than left for [`Self::arm`].
+    pub(crate) fn retarget(&mut self, changer: Changer, at: Option<Time>) {
+        let mut kept = Vec::new();
+        while let Some(Reverse((time, other))) = self.edges.pop() {
+            if other != changer {
+                kept.push(Reverse((time, other)));
+            }
+        }
+        self.edges.extend(kept);
+        if let Some(at) = at.filter(|at| *at < self.stop) {
+            self.edges.push(Reverse((at, changer)));
+        }
+    }
+
     /// Whether an edge, a jump, or a move falls at `at`, a time `next_after` returned.
     pub(crate) fn is_edge(&self, at: Time) -> bool {
         self.edges
