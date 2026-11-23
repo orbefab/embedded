@@ -1,0 +1,37 @@
+`build/button.ino.bin` and `build/button.ino.partitions.bin` are built from
+`firmware/button/button.ino` with Arduino CLI 1.5.1 and esp32:esp32 3.3.12, fqbn
+`esp32:esp32:esp32s3`. That is the ESP32S3 Dev Module defaults: USB CDC on boot disabled, PSRAM
+disabled, 4MB flash, the default partition table, QIO 80MHz, and the sketch on core 1. The
+compile rewrites source paths with `-ffile-prefix-map`, so the app does not record the build
+directory. The chip starts where the bootloader leaves the app, so the image needs neither the
+bootloader nor the merged binary.
+
+The sketch links the Arduino-ESP32 core. The core is free software under the GNU Lesser General
+Public License, version 2.1 or any later version, whose text is in LICENSE-runtime. Its package
+is the one Arduino publishes as esp32:esp32 3.3.12. The sketch is under MIT or Apache-2.0, and
+those terms permit modifying the image and reverse engineering it to debug such modifications.
+
+The image also links ESP-IDF's components, the ones that core builds with. They are under the
+Apache License 2.0, whose text is in LICENSE-apache, apart from the files whose headers name
+other terms. Among those, the FreeRTOS kernel is under the MIT License, reproduced with its
+notice in LICENSE-freertos, and the Xtensa core HAL under the notice reproduced in
+LICENSE-xtensa. The FreeRTOS Xtensa port and the Xtensa interrupt, context and vector files are
+under that same notice, with the line Copyright (c) 2015-2019 Cadence Design Systems, Inc. The
+TLSF heap allocator is under the BSD-3-Clause License, reproduced with its notice in
+LICENSE-tlsf, and the undefined behaviour sanitizer hooks under the BSD-2-Clause terms
+reproduced with their notice in LICENSE-ubsan. The image also holds routines of the toolchain's
+C library, newlib, under the notices of LICENSE-newlib, and of the compiler's support library,
+under the GCC Runtime Library Exception.
+
+These files and their licences:
+
+`block.jsonc`, `README.md`, `scene.jsonc`, `firmware/NOTICE`, `firmware/button/button.ino` and
+`tests/button.test` are under MIT OR Apache-2.0.
+
+`build/button.ino.bin`, `build/button.ino.partitions.bin` and `firmware/LICENSE-runtime` are
+under LGPL-2.1-or-later.
+
+`firmware/LICENSE-apache` is under Apache-2.0. `firmware/LICENSE-freertos` is under MIT.
+`firmware/LICENSE-tlsf` is under BSD-3-Clause. `firmware/LICENSE-newlib` holds newlib's notices.
+`firmware/LICENSE-ubsan` is under BSD-2-Clause. `firmware/LICENSE-xtensa` is under the notice
+in that file.

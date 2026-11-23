@@ -1,0 +1,10 @@
+# Pressing the button cycles the board's RGB LED and prints the colour.
+open
+step 400ms
+expect @board.led rgb(40,0,0)
+expect serial contains "red"
+press @btn1
+step 80ms
+expect @board.led rgb(0,40,0)
+expect serial contains "green"
+expect no diagnostics

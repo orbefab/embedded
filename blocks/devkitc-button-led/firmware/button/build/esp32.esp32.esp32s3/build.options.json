@@ -1,0 +1,9 @@
+{
+  "additionalFiles": "",
+  "compiler.optimization_flags": "-Os",
+  "customBuildProperties": "compiler.c.extra_flags=-ffile-prefix-map=/home/alwurts/.t3/worktrees/embedded/t3-devkitc-block-67fa4955e692c9dd=/src -ffile-prefix-map=/home/alwurts/.arduino15=/arduino15 -ffile-prefix-map=/home/alwurts/.t3/worktrees/embedded/t3-devkitc-block-67fa4955e692c9dd/.scratch/arduino/devkitc-button=/build,compiler.cpp.extra_flags=-ffile-prefix-map=/home/alwurts/.t3/worktrees/embedded/t3-devkitc-block-67fa4955e692c9dd=/src -ffile-prefix-map=/home/alwurts/.arduino15=/arduino15 -ffile-prefix-map=/home/alwurts/.t3/worktrees/embedded/t3-devkitc-block-67fa4955e692c9dd/.scratch/arduino/devkitc-button=/build,compiler.S.extra_flags=-ffile-prefix-map=/home/alwurts/.t3/worktrees/embedded/t3-devkitc-block-67fa4955e692c9dd=/src -ffile-prefix-map=/home/alwurts/.arduino15=/arduino15 -ffile-prefix-map=/home/alwurts/.t3/worktrees/embedded/t3-devkitc-block-67fa4955e692c9dd/.scratch/arduino/devkitc-button=/build",
+  "fqbn": "esp32:esp32:esp32s3",
+  "hardwareFolders": "/home/alwurts/.arduino15/packages/esp32/hardware/esp32/3.3.12,/home/alwurts/.arduino15/packages/esp32/hardware/esp32/3.3.12",
+  "otherLibrariesFolders": "/home/alwurts/Arduino/libraries",
+  "sketchLocation": "/home/alwurts/.t3/worktrees/embedded/t3-devkitc-block-67fa4955e692c9dd/blocks/devkitc-button-led/firmware/button"
+}

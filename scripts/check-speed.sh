@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Checks that every Block of this repo's registry plays live in a browser. It runs
+# Checks that every AVR Block of this repo's registry plays live in a browser. An id that
+# starts with devkitc- is not timed and is not held to the bar. It runs
 # packages/wasm/tests/speed.mjs, which plays each Block in orbe-wasm's worker.js in headless
 # Chromium, 5 times interleaved, and fails when a median misses its bar: 1.5x real time in a
 # dedicated Worker, and 1.0x on the page's main thread under Chrome's 4x CPU throttle.

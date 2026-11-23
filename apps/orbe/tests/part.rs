@@ -313,6 +313,7 @@ fn search_finds_a_block_and_part_describes_it() {
     let (code, stdout, stderr) = orbe(&["blocks"]);
     assert_eq!(code, 0, "{stderr}");
     for id in [
+        "devkitc-button-led",
         "nano-button-led",
         "nano-led-fade",
         "nano-light-comparator",
