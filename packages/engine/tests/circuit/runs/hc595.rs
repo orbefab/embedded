@@ -77,6 +77,8 @@ fn register(
             "ratings": {
                 "pin_current": val(0.035, "A"),
                 "supply_current": val(0.07, "A"),
+                "input_margin": val(0.5, "V"),
+                "output_margin": val(0.5, "V"),
             },
         }),
     ];
@@ -253,6 +255,8 @@ fn loaded(supply: Option<f64>) -> serde_json::Value {
             "ratings": {
                 "pin_current": val(0.035, "A"),
                 "supply_current": val(0.07, "A"),
+                "input_margin": serde_json::Value::Null,
+                "output_margin": serde_json::Value::Null,
             },
         }),
     ];
@@ -327,6 +331,8 @@ fn shifted(vcc0: f64, vcc_at_5ms: f64) -> f64 {
                 "ratings": {
                     "pin_current": val(0.035, "A"),
                     "supply_current": val(0.07, "A"),
+                    "input_margin": serde_json::Value::Null,
+                    "output_margin": serde_json::Value::Null,
                 },
             }),
         ],
@@ -345,4 +351,131 @@ fn a_clock_below_2v_does_not_shift_and_the_same_clock_at_5v_does() {
     );
     let latched = shifted(5.0, 5.0);
     assert!(latched > 4.5, "QA after a clock at 5 V is {latched}");
+}
+
+fn rated() -> serde_json::Value {
+    serde_json::json!({
+        "pin_current": val(0.035, "A"),
+        "supply_current": val(0.07, "A"),
+        "input_margin": val(0.5, "V"),
+        "output_margin": val(0.5, "V"),
+    })
+}
+
+fn voltage_pins(session: &Session) -> Vec<String> {
+    session
+        .diagnostics()
+        .iter()
+        .filter_map(|d| match d {
+            Diagnostic::RatingVoltage(excursion) => Some(excursion.pin.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// One `SRCLK` with `SER` at `high`, then `RCLK`. `SRCLR` sits on `VCC`.
+fn shifted_from(supply: f64, high: f64) -> (f64, Vec<String>) {
+    let netlist = serde_json::json!({
+        "version": 1,
+        "seed": 0,
+        "analysis": { "transient": { "stop_ps": 4_000_000_000u64, "max_step_ps": 1_000_000_000u64, "grid_ps": 1_000_000_000u64 } },
+        "ground": "gnd",
+        "nets": ["gnd", "vcc", "ser", "srclk", "rclk", "qa"],
+        "parts": [
+            source("vcc", "vcc", supply),
+            source("ser", "ser", high),
+            steps("srclk", "srclk", &[(1_000_000_000, high), (1_020_000_000, 0.0)]),
+            steps("rclk", "rclk", &[(2_000_000_000, high)]),
+            resistor("qa_dn", "qa", "gnd", 10_000.0),
+            serde_json::json!({
+                "name": "u1",
+                "kind": "hc595",
+                "pins": {
+                    "QB": "gnd", "QC": "gnd", "QD": "gnd", "QE": "gnd", "QF": "gnd", "QG": "gnd", "QH": "gnd",
+                    "GND": "gnd", "QHp": "gnd", "SRCLR": "vcc", "SRCLK": "srclk", "RCLK": "rclk",
+                    "OE": "gnd", "SER": "ser", "QA": "qa", "VCC": "vcc",
+                },
+                "output": stage(33.333333333333336, 28.333333333333332),
+                "serial_output": stage(50.0, 42.5),
+                "input_threshold": { "low": val(0.3, "1"), "high": val(0.7, "1") },
+                "ratings": rated(),
+            }),
+        ],
+    });
+    let mut session = open(netlist);
+    session.advance_to(Time::from_ps(3_000_000_000));
+    (amps(&session, "#net.qa"), voltage_pins(&session))
+}
+
+#[test]
+fn a_3v3_part_with_5v_inputs_warns_and_still_shifts() {
+    let (qa, names) = shifted_from(3.3, 5.0);
+    assert!(qa > 3.0, "QA is {qa}");
+    for pin in ["SER", "SRCLK", "RCLK"] {
+        assert!(
+            names.iter().any(|name| name.contains(pin)),
+            "{pin} missing from {names:?}"
+        );
+    }
+}
+
+#[test]
+fn a_5v_part_with_5v_inputs_stays_quiet() {
+    let (qa, names) = shifted_from(5.0, 5.0);
+    assert!(qa > 4.5, "QA is {qa}");
+    assert!(names.is_empty(), "{names:?}");
+}
+
+/// Eight highs, so `QHp` rises. `OE` is high and `QA` is pulled to `pull`.
+fn cascaded(supply: f64, pull: f64) -> (f64, Vec<String>) {
+    let mut clocks = Vec::new();
+    for n in 0..8 {
+        let t = 200_000_000 + n * 100_000_000;
+        clocks.push((t, supply));
+        clocks.push((t + 20_000_000, 0.0));
+    }
+    let netlist = serde_json::json!({
+        "version": 1,
+        "seed": 0,
+        "analysis": { "transient": { "stop_ps": 2_000_000_000u64, "max_step_ps": 100_000_000u64, "grid_ps": 100_000_000u64 } },
+        "ground": "gnd",
+        "nets": ["gnd", "vcc", "srclk", "pull", "qa", "qhp"],
+        "parts": [
+            source("vcc", "vcc", supply),
+            source("pull", "pull", pull),
+            steps("srclk", "srclk", &clocks),
+            resistor("qa_up", "pull", "qa", 100_000.0),
+            resistor("qhp_dn", "qhp", "gnd", 10_000.0),
+            serde_json::json!({
+                "name": "u1",
+                "kind": "hc595",
+                "pins": {
+                    "QB": "gnd", "QC": "gnd", "QD": "gnd", "QE": "gnd", "QF": "gnd", "QG": "gnd", "QH": "gnd",
+                    "GND": "gnd", "QHp": "qhp", "SRCLR": "vcc", "SRCLK": "srclk", "RCLK": "gnd",
+                    "OE": "vcc", "SER": "vcc", "QA": "qa", "VCC": "vcc",
+                },
+                "output": stage(33.333333333333336, 28.333333333333332),
+                "serial_output": stage(50.0, 42.5),
+                "input_threshold": { "low": val(0.3, "1"), "high": val(0.7, "1") },
+                "ratings": rated(),
+            }),
+        ],
+    });
+    let mut session = open(netlist);
+    session.advance_to(Time::from_ps(1_200_000_000));
+    (amps(&session, "#net.qhp"), voltage_pins(&session))
+}
+
+#[test]
+fn an_output_pulled_above_vcc_warns_and_qhp_still_shifts() {
+    let (qhp, names) = cascaded(3.3, 5.0);
+    assert!(qhp > 3.0, "QHp is {qhp}");
+    assert!(names.iter().any(|name| name.contains("QA")), "{names:?}");
+}
+
+#[test]
+fn a_5v_output_on_a_5v_part_stays_quiet() {
+    let (qhp, names) = cascaded(5.0, 5.0);
+    assert!(qhp > 4.5, "QHp is {qhp}");
+    assert!(names.is_empty(), "{names:?}");
 }

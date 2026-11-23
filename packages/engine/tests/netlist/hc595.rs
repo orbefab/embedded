@@ -35,7 +35,9 @@ fn part() -> String {
         },
         "ratings": {
           "pin_current": { "value": 0.035, "unit": "A" },
-          "supply_current": { "value": 0.07, "unit": "A" }
+          "supply_current": { "value": 0.07, "unit": "A" },
+          "input_margin": { "value": 0.5, "unit": "V" },
+          "output_margin": { "value": 0.5, "unit": "V" }
         }
       }]
     }"#
@@ -62,6 +64,8 @@ fn an_hc595_keeps_its_drive_and_its_ratings() {
     assert_eq!(dev.input_threshold.high.si.get(), 0.7);
     assert_eq!(dev.ratings.pin_current.as_ref().unwrap().si.get(), 0.035);
     assert_eq!(dev.ratings.supply_current.as_ref().unwrap().si.get(), 0.07);
+    assert_eq!(dev.ratings.input_margin.as_ref().unwrap().si.get(), 0.5);
+    assert_eq!(dev.ratings.output_margin.as_ref().unwrap().si.get(), 0.5);
 }
 
 #[test]

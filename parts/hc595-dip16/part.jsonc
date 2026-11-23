@@ -5,7 +5,7 @@
   "part": "hc595-dip16",
   "version": "0.1.0",
   "title": "74HC595 8-bit shift register (DIP-16)",
-  "summary": "Serial-in, parallel-out shift register in a 300 mil DIP-16. SER shifts in on the rising edge of SRCLK, RCLK's rising edge copies that register to QA–QH, SRCLR low clears the shift register, and OE high makes QA–QH high impedance. QHp follows the shift register's last bit and stays driven, so it cascades into the next 595's SER. Each output is push-pull. An output past 35 mA, or VCC or GND past 70 mA, warns, which eight LEDs on small resistors will do. Arduino shiftOut drives SER, SRCLK and RCLK. Tie SRCLR high and OE low.",
+  "summary": "Serial-in, parallel-out shift register in a 300 mil DIP-16. SER shifts in on the rising edge of SRCLK, RCLK's rising edge copies that register to QA–QH, SRCLR low clears the shift register, and OE high makes QA–QH high impedance. QHp follows the shift register's last bit and stays driven, so it cascades into the next 595's SER. Each output is push-pull. An output past 35 mA, or VCC or GND past 70 mA, warns, which eight LEDs on small resistors will do. A pin more than 0.5 V past GND or VCC warns, and the part still shifts. Below 2 V the outputs release. Arduino shiftOut drives SER, SRCLK and RCLK. Tie SRCLR high and OE low.",
   "tags": ["74hc595", "shift-register", "output", "through-hole", "dip"],
   "license": "MIT OR Apache-2.0",
   "docs": {
@@ -36,7 +36,9 @@
     },
     "ratings": {
       "pin_current": { "value": 0.035, "unit": "A", "basis": { "sustained": { "average": "rms", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } }, "source": { "datasheet": { "doc": "TI SNx4HC595 datasheet, SCLS041J", "at": "section 6.1 Absolute Maximum Ratings, continuous output current, ±35 mA", "basis": "absolute_max" } } },
-      "supply_current": { "value": 0.07, "unit": "A", "basis": { "sustained": { "average": "rms", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } }, "source": { "datasheet": { "doc": "TI SNx4HC595 datasheet, SCLS041J", "at": "section 6.1 Absolute Maximum Ratings, continuous current through VCC or GND, ±70 mA", "basis": "absolute_max" } } }
+      "supply_current": { "value": 0.07, "unit": "A", "basis": { "sustained": { "average": "rms", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } }, "source": { "datasheet": { "doc": "TI SNx4HC595 datasheet, SCLS041J", "at": "section 6.1 Absolute Maximum Ratings, continuous current through VCC or GND, ±70 mA", "basis": "absolute_max" } } },
+      "input_margin": { "value": 0.5, "unit": "V", "source": { "datasheet": { "doc": "TI SNx4HC595 datasheet, SCLS041J", "at": "section 6.1, VI -0.5 V to VCC + 0.5 V, and IIK ±20 mA when VI is below GND or above VCC", "basis": "absolute_max" } } },
+      "output_margin": { "value": 0.5, "unit": "V", "source": { "datasheet": { "doc": "TI SNx4HC595 datasheet, SCLS041J", "at": "section 6.1, VO -0.5 V to VCC + 0.5 V, and IOK ±20 mA when VO is below GND or above VCC", "basis": "absolute_max" } } }
     },
     "pins": {
       "QB": "QB", "QC": "QC", "QD": "QD", "QE": "QE", "QF": "QF", "QG": "QG", "QH": "QH", "GND": "GND",

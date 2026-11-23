@@ -18,10 +18,12 @@ use crate::diagnostic::Diagnostic;
 use crate::mna::Node;
 use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
-use crate::netlist::json::{PinMap, WireRating, resolve_pins, resolve_rating};
-use crate::netlist::{NetId, PartId, Rating, Threshold};
+use crate::netlist::json::{
+    PinMap, WireRating, WireValue, resolve_limit, resolve_pins, resolve_rating,
+};
+use crate::netlist::{NetId, PartId, Rating, Threshold, Value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage_at};
-use crate::ratings::PinRatings;
+use crate::ratings::{Ceiling, PinRatings, PinWindow};
 use crate::watch::{Signal, Watch};
 use crate::world::World;
 
@@ -161,23 +163,44 @@ pub(crate) fn chip(part: PartId, dev: &Hc595) -> Chip {
     }
 }
 
-/// The part's ratings on `QA`–`QH`, `QHp`, `VCC` and `GND`.
+/// The part's ratings on `QA`–`QH`, `QHp`, `VCC` and `GND`, and the voltage window on
+/// each input and output when the part rates one.
 pub(crate) fn pin_ratings(part: &Hc595) -> Option<PinRatings> {
+    let mut windows = Vec::new();
+    let mut add = |pins: &[usize], margin: Option<&Value>| {
+        let Some(margin) = margin else {
+            return;
+        };
+        let margin = margin.si.get();
+        for &pin in pins {
+            windows.push(PinWindow {
+                pin: Hc595::PINS[pin],
+                net: part.pins[pin],
+                below: Some(margin),
+                above: Some(Ceiling::OverSupply(margin)),
+            });
+        }
+    };
+    add(
+        &[SRCLR, SRCLK, RCLK, OE, SER],
+        part.ratings.input_margin.as_ref(),
+    );
+    add(&OUTPUT_PINS, part.ratings.output_margin.as_ref());
     Some(PinRatings {
         outputs: OUTPUT_PINS.iter().map(|&pin| Hc595::PINS[pin]).collect(),
         pin_current: part.ratings.pin_current.clone(),
         supply_current: part.ratings.supply_current.clone(),
         vcc: (Hc595::PINS[VCC], part.pins[VCC]),
         gnd: (Hc595::PINS[GND], part.pins[GND]),
-        windows: Vec::new(),
+        windows,
     })
 }
 
 /// A 74HC595 8-bit shift register. `QA` to `QH` drive the storage register
 /// through `output`, and `QHp` drives the shift register's last stage through
 /// `serial_output`. The inputs read through `input_threshold`, fractions of
-/// the supply. `ratings` bounds each output's current and the current through
-/// `VCC` and `GND`.
+/// the supply. `ratings` bounds each output's current, the current through
+/// `VCC` and `GND`, and how far an input or an output may sit past either rail.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Hc595 {
     pub pins: [NetId; 16],
@@ -187,13 +210,18 @@ pub struct Hc595 {
     pub ratings: Hc595Ratings,
 }
 
-/// Absolute maximum currents. Each is `None` when the part leaves it unrated.
+/// Absolute maximum ratings. Each is `None` when the part leaves it unrated.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Hc595Ratings {
     /// Ampere. The current through any one of `QA`–`QH` and `QHp`.
     pub pin_current: Option<Rating>,
     /// Ampere. The current through `VCC`, and the current through `GND`.
     pub supply_current: Option<Rating>,
+    /// Volt. How far `SER`, `SRCLK`, `RCLK`, `SRCLR` and `OE` may sit below `GND`
+    /// and above `VCC`.
+    pub input_margin: Option<Value>,
+    /// Volt. How far `QA`–`QH` and `QHp` may sit below `GND` and above `VCC`.
+    pub output_margin: Option<Value>,
 }
 
 impl Hc595 {
@@ -222,6 +250,10 @@ struct WireRatings {
     pin_current: Option<WireRating>,
     #[serde(deserialize_with = "Option::deserialize")]
     supply_current: Option<WireRating>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    input_margin: Option<WireValue>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    output_margin: Option<WireValue>,
 }
 
 pub(crate) fn resolve_hc595(ctx: ParseCtx<'_>, wire: WireHc595) -> Option<Hc595> {
@@ -264,8 +296,12 @@ fn resolve_ratings(
         wire.supply_current,
         out,
     );
+    let input_margin = resolve_limit(part, "ratings.input_margin", "V", wire.input_margin, out);
+    let output_margin = resolve_limit(part, "ratings.output_margin", "V", wire.output_margin, out);
     Some(Hc595Ratings {
         pin_current: pin_current?,
         supply_current: supply_current?,
+        input_margin: input_margin?,
+        output_margin: output_margin?,
     })
 }
