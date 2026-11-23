@@ -22,10 +22,12 @@ fn each_block_passes() {
     assert_eq!(
         ids,
         [
+            "devkitc-button-led",
             "nano-button-led",
             "nano-led-fade",
             "nano-light-comparator",
             "nano-neopixel-stick",
+            "nano-shift-leds",
             "uno-button-led",
         ]
     );

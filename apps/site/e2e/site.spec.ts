@@ -794,6 +794,10 @@ for (const block of releasedBlocks()) {
         (kind) => {
           const scene = window.orbeViewer?.get().scene;
           if (kind === "pixels") return scene?.getObjectByName("@stick.px1")?.getObjectByName("lens") !== undefined;
+          if (kind === "rgb") {
+            return scene?.getObjectByName("@board.led")?.getObjectByName("lens") !== undefined
+              && scene?.getObjectByName("@btn1")?.getObjectByName("stem") !== undefined;
+          }
           const led = scene?.getObjectByName("@led1")?.getObjectByName("body") !== undefined;
           const button = kind !== "button" || scene?.getObjectByName("@btn1")?.getObjectByName("stem") !== undefined;
           return led && button;

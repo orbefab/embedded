@@ -868,6 +868,9 @@ impl Gauge {
                 from_vcc += (vcc - vp) / ohm;
                 into_gnd += (vp - gnd) / ohm;
             }
+            // The same release as `active::stamp`: below the minimum supply the stage is off.
+            let released = active::supply_released(core, vcc, gnd);
+            let drive = if released { Drive::Off } else { drive };
             match drive {
                 Drive::High => from_vcc += (vcc - pin.high.drop - vp) / pin.high.resistance,
                 Drive::Low => into_gnd += (vp - gnd - pin.low.drop) / pin.low.resistance,
@@ -877,7 +880,8 @@ impl Gauge {
                 }
                 Drive::Off => {}
             }
-            if let Some(ohm) = pin.pull_down
+            if !released
+                && let Some(ohm) = pin.pull_down
                 && core.pulls_down(n)
             {
                 into_gnd += (vp - gnd) / ohm;

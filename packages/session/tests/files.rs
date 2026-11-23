@@ -450,9 +450,20 @@ fn break_install(dir: &Path) -> [(&'static str, bool, &'static str); 3] {
         edit_part(part);
     }
     let image = dir.join("build");
+    // The image path is a param of one part. Removing that part means the read never reaches
+    // the path, so it cannot report the missing image.
+    let image_owner = parts.first().and_then(|part| {
+        let id = part.file_name()?.to_str()?;
+        let scene = fs::read_to_string(dir.join("scene.jsonc")).ok()?;
+        scene.split("\"type\"").skip(1).find_map(|chunk| {
+            let ty = chunk.split('"').nth(1)?;
+            (ty == id && (chunk.contains("\"app\"") || chunk.contains("\"firmware\"")))
+                .then_some(())
+        })
+    });
     let firmware_missing = if image.is_dir() {
         fs::remove_dir_all(&image).unwrap();
-        true
+        image_owner.is_none()
     } else {
         false
     };
