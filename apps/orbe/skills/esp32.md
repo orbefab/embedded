@@ -74,7 +74,8 @@ expect @led1 off
 - `Serial` reaches `serial`, on UART0 by default or over USB with `CDCOnBoot=cdc` in the FQBN.
 - The model runs the pins, the one-shot ADC, LEDC, RMT channel 0, SPI2 and I2C0 as masters, UART0 to UART2, the timers and both cores.
 - `SPI` runs on SPI2. `SPI.transfer` returns what an SPI part answers, and `0xFF` when none does.
-- A stock sketch reads and writes a few registers the model does not keep at start-up, such as the radio's. Each is `warning[chip.unmodeled_register]`, so `expect no diagnostics` fails. Check pins, LEDs and `serial contains` instead.
+- A stock sketch's boot clears the radio's force-up bits and turns on the APP CPU's debug trace, and `gpio_config` on an RTC pad reads the pad word and leaves it on digital GPIO. Those accesses are quiet, so `expect no diagnostics` passes. An access that sketch does not make is still `warning[chip.unmodeled_register]`.
+- `orbe add devkitc-button-led` is the DevKitC-1. A button on GPIO4 cycles `@board.led`, and each colour is printed on `serial`.
 - Keep PSRAM off, the FQBN's default. With `PSRAM=opi` the run stops at boot with `error[chip.flash_command]`.
 - Wi-Fi and Bluetooth are not simulated.
 - An unmodelled setting stops the run with `error[chip.unsupported_setting]` and names the peripheral and the setting.

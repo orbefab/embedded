@@ -1621,7 +1621,7 @@ mod tests {
         let system = [
             (0x18, 1 << 29),
             (0x1c, 1 << 10),
-            (0x20, 1 << 13),
+            (0x20, 1 << 1),
             (0x24, 1 << 10),
         ];
         let spi0 = (0x18..=0x20)
@@ -3204,5 +3204,31 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    /// Boot clears the radio force-up bits and reads an RTC pad to leave it digital. The
+    /// register beside the baseband word, and a store that sets the pad's `MUX_SEL`, are listed.
+    #[test]
+    fn a_radio_force_up_and_a_digital_pad_read_are_quiet() {
+        let mut program = Program::new(&[0x6001_d054, 0x6001_d050, 0x6000_8494, 1 << 19]);
+        program
+            .l32r(2, 0)
+            .rri8(2, 3, 2, 0)
+            .l32r(2, 0)
+            .movi(3, 0)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 1)
+            .rri8(2, 3, 2, 0)
+            .l32r(2, 2)
+            .l32r(3, 3)
+            .rri8(6, 3, 2, 0)
+            .raw(&LOOP);
+        let mut chip = program.chip();
+        assert_eq!(chip.run_until(c(200)), None);
+        let names: Vec<String> = chip
+            .unmodeled()
+            .map(|(addr, _)| Touch::register(addr))
+            .collect();
+        assert_eq!(names, ["RTCIO+0x94", "BB+0x50"]);
     }
 }

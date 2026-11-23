@@ -268,6 +268,31 @@ fn reset_cause(store6: Option<u32>) -> Option<ResetCause> {
     })
 }
 
+/// An access whose effect on a pin, a clock or a reading is nil with Wi-Fi and Bluetooth off.
+/// A read returns 0 and a store is dropped, and the run does not list it. Any other address
+/// is still listed. `value` is the stored word, and it is 0 for a load.
+fn quiet(word: u32, write: bool, value: u32) -> bool {
+    match word {
+        // `rtc_sleep_pu` clears the baseband FFT and DC-estimator force-up. Wi-Fi is off, so neither runs.
+        0x6001_d054 => true,
+        // `rtc_sleep_pu` clears the RX rotator, Viterbi and demapper force-up. Wi-Fi is off, so none runs.
+        0x6001_ccd4 => true,
+        // `rtc_sleep_pu` clears the front-end IQ-estimator force-up. Wi-Fi is off, so it does not run.
+        0x6000_6090 => true,
+        // `rtc_sleep_pu` clears the TX interpolator force-up. Wi-Fi is off, so it does not run.
+        0x6000_50f0 => true,
+        // `call_start_cpu1` enables the APP CPU's debug trace. The trace moves no pin, clock or reading.
+        0x600c_e0d8 | 0x600c_e0dc => true,
+        // `gpio_config` clears `MUX_SEL`, leaving digital GPIO, which the model drives. Setting it is still listed.
+        0x6000_8484 | 0x6000_8494 | 0x6000_8498 | 0x6000_849c
+            if !write || value & (1 << 19) == 0 =>
+        {
+            true
+        }
+        _ => false,
+    }
+}
+
 /// What a write does that the model does not run.
 #[derive(Clone, Copy, Debug)]
 enum Effect {
@@ -1185,6 +1210,9 @@ impl Soc {
 
     /// Lets an access to an unmodeled register through, or stops the core at the first one.
     /// `kept` marks a write the register keeps while its effect does not run.
+    ///
+    /// [`quiet`] names the accesses that are not listed. A read of one returns 0 and a store
+    /// is dropped, the same as any other register the model does not keep.
     fn touch(&mut self, now: Tick, addr: u32, write: bool, kept: bool) -> Result<(), Exit> {
         if self.unmodeled.contains_key(&addr) {
             return Ok(());
@@ -1488,6 +1516,7 @@ impl Soc {
         }
         match kept {
             Some(value) => Ok((value >> shift) & mask),
+            None if quiet(word, false, 0) => Ok(0),
             None => self.touch(now, word, false, false).map(|()| 0),
         }
     }
@@ -1593,6 +1622,9 @@ impl Soc {
             _ => None,
         };
         if kept.is_none() {
+            if quiet(word, true, value) {
+                return Ok(());
+            }
             return self.touch(now, word, true, false);
         }
         let base = word & !(BLOCK - 1);
