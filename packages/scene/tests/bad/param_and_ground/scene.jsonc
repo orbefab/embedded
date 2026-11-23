@@ -8,7 +8,7 @@
     "r1": { "type": "resistor-axial", "resistance": "220x" },
     "led1": { "type": "led-5mm" },
   },
-  "ground": "nano.3V3",
+  "ground": "nano.crystal.1",
   "wires": [
     ["nano.D2", "btn1.a"],
     ["btn1.b", "nano.5V"],

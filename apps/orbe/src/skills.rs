@@ -510,7 +510,11 @@ mod tests {
                 .iter()
                 .filter(|pin| pin.r#ref.chars().filter(|c| *c == '.').count() == 1)
                 .collect();
-            assert!(!pins.is_empty(), "{id} reports no unsimulated pin");
+            if id == "nano-board" {
+                assert!(pins.is_empty(), "{id} still leaves a pin out: {pins:?}");
+            } else {
+                assert!(!pins.is_empty(), "{id} reports no unsimulated pin");
+            }
             let missing: Vec<String> = pins
                 .iter()
                 .filter(|pin| {
