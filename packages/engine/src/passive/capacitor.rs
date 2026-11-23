@@ -1,12 +1,11 @@
 use orbe_model::Time;
 use serde::Deserialize;
 
+use crate::diagnostic::ValueRule;
 use crate::element::{Observed, OwnedCapacitor, OwnedInductor, StoreEnd, TWO_PIN, Update};
 use crate::mna::{Probe, Stamp, Unknowns};
 use crate::name::Quantity;
-use crate::netlist::json::{
-    ParseCtx, PinMap, WireValue, resolve_pins, resolve_rating, resolve_value,
-};
+use crate::netlist::json::{ParseCtx, PinMap, WireValue, bounded, resolve_pins, resolve_value};
 use crate::netlist::{Conduction, Kind, NetId, Value};
 use crate::newton::{History, Method, Side, Store};
 
@@ -167,23 +166,37 @@ mod tests {
     }
 }
 
-/// An ideal capacitor.
+/// A capacitance, with an optional series resistance. With none, the capacitance runs from `a`
+/// to `b`. With one, the resistance runs from `a` to an internal node and the capacitance from
+/// that node to `b`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Capacitor {
     /// Nets of pins `a`, `b`.
     pub pins: [NetId; 2],
     /// Farad, greater than 0.
     pub capacitance: Value,
-    /// Volt, any finite value. The operating point holds `V(a) - V(b)` here and solves the
-    /// current through it. `None` is an explicit `"initial": null`, open at the operating point.
+    /// Volt, any finite value. The operating point holds the voltage across the capacitance here
+    /// and solves the current through it. `None` is an explicit `"initial": null`, open at the
+    /// operating point.
     pub initial: Option<Value>,
-    /// Volt, greater than 0. `V(a) - V(b)` below this warns `rating.voltage`. `None` is no
-    /// `ratings` object, or an explicit `"reverse_voltage": null`.
+    /// Volt, at least 0. `V(a) - V(b)` below minus this warns `rating.voltage`. 0 warns on any
+    /// reverse voltage, and a pin sitting on pin `b` is inside. `None` is no `ratings` object,
+    /// or an explicit `"reverse_voltage": null`.
     pub reverse_voltage: Option<Value>,
+    /// Ohm, greater than 0. Between pin `a` and the capacitance. `None` is no series resistance.
+    pub series_resistance: Option<Value>,
 }
 
 impl Capacitor {
     pub const PINS: [&'static str; 2] = ["a", "b"];
+
+    /// The pins, or the internal node and pin `b` when a series resistance is set.
+    fn dielectric(&self) -> [StoreEnd; 2] {
+        match self.series_resistance {
+            None => self.pins.map(StoreEnd::Net),
+            Some(_) => [StoreEnd::Internal(0), StoreEnd::Net(self.pins[1])],
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -197,6 +210,9 @@ pub(crate) struct WireCapacitor {
     /// Absent on a capacitor written before reverse voltage was rated.
     #[serde(default)]
     ratings: Option<WireCapacitorRatings>,
+    /// Absent on a capacitor with no series resistance. The capacitance then joins `a` to `b`.
+    #[serde(default)]
+    series_resistance: Option<WireValue>,
 }
 
 /// The key is required, and `null` leaves the capacitor unrated.
@@ -220,6 +236,7 @@ pub(crate) fn resolve_capacitor(ctx: ParseCtx<'_>, wire: WireCapacitor) -> Optio
         capacitance,
         initial,
         ratings,
+        series_resistance,
         ..
     } = wire;
 
@@ -229,22 +246,53 @@ pub(crate) fn resolve_capacitor(ctx: ParseCtx<'_>, wire: WireCapacitor) -> Optio
         None => Some(None),
         Some(initial) => resolve_value(part_ref, "initial", "V", false, initial, out).map(Some),
     };
+    // 0 is a continuous reverse limit of none. Any reverse voltage then warns, and 0 V is inside.
     let reverse_voltage = match ratings {
         None => Some(None),
-        Some(ratings) => resolve_rating(
-            part_ref,
-            "ratings.reverse_voltage",
-            "V",
-            ratings.reverse_voltage,
-            out,
-        ),
+        Some(ratings) => match ratings.reverse_voltage {
+            None => Some(None),
+            Some(value) => bounded(
+                part_ref,
+                "ratings.reverse_voltage",
+                "V",
+                value,
+                |number| (number < 0.0).then_some(ValueRule::NonNegative),
+                out,
+            )
+            .map(Some),
+        },
     };
-    match (pins, capacitance, initial, reverse_voltage) {
-        (Some(pins), Some(capacitance), Some(initial), Some(reverse_voltage)) => Some(Capacitor {
+    let series_resistance = match series_resistance {
+        None => Some(None),
+        Some(series_resistance) => resolve_value(
+            part_ref,
+            "series_resistance",
+            "ohm",
+            true,
+            series_resistance,
+            out,
+        )
+        .map(Some),
+    };
+    match (
+        pins,
+        capacitance,
+        initial,
+        reverse_voltage,
+        series_resistance,
+    ) {
+        (
+            Some(pins),
+            Some(capacitance),
+            Some(initial),
+            Some(reverse_voltage),
+            Some(series_resistance),
+        ) => Some(Capacitor {
             pins,
             capacitance,
             initial,
             reverse_voltage,
+            series_resistance,
         }),
         _ => None,
     }
@@ -256,6 +304,7 @@ impl Kind for Capacitor {
     }
     fn unknowns(&self) -> Unknowns {
         Unknowns {
+            internal_nodes: usize::from(self.series_resistance.is_some()),
             branches: 1,
             ..Unknowns::default()
         }
@@ -263,7 +312,7 @@ impl Kind for Capacitor {
     fn charges(&self) -> Vec<OwnedCapacitor> {
         vec![OwnedCapacitor {
             k: 0,
-            ends: self.pins.map(StoreEnd::Net),
+            ends: self.dielectric(),
             farad: self.capacitance.si.get(),
             sized_by_kind: false,
         }]
@@ -281,10 +330,13 @@ impl Kind for Capacitor {
         } else {
             self.initial.as_ref().map(|initial| initial.si.get())
         };
+        if let Some(esr) = &self.series_resistance {
+            stamp.conductance(self.pins[0], stamp.internal(0), 1.0 / esr.si.get());
+        }
         stamp_capacitor(
             stamp,
             0,
-            self.pins.map(StoreEnd::Net),
+            self.dielectric(),
             self.capacitance.si.get(),
             initial,
         );
@@ -367,5 +419,217 @@ mod reverse_voltage {
             r#", "ratings": { "reverse_voltage": null }"#,
         ));
         assert!(!unrated.contains("rating.voltage"), "{unrated}");
+    }
+
+    /// A continuous reverse limit of none. 0 V is inside. Any reverse voltage warns.
+    #[test]
+    fn a_reverse_rating_of_zero_warns_on_any_reverse_voltage() {
+        let rated = r#", "ratings": { "reverse_voltage": { "value": 0.0, "unit": "V" } }"#;
+        let reverse = warnings(&circuit(-1e-3, rated));
+        assert!(reverse.contains("rating.voltage"), "{reverse}");
+        let edge = warnings(&circuit(0.0, rated));
+        assert!(!edge.contains("rating.voltage"), "{edge}");
+        let forward = warnings(&circuit(5.0, rated));
+        assert!(!forward.contains("rating.voltage"), "{forward}");
+        let rejected = crate::netlist::parse(
+            circuit(
+                -1.0,
+                r#", "ratings": { "reverse_voltage": { "value": -1.0, "unit": "V" } }"#,
+            )
+            .as_bytes(),
+        );
+        let err = rejected.expect_err("a negative reverse rating is refused");
+        assert!(
+            err.iter().any(|d| {
+                matches!(
+                    d,
+                    crate::diagnostic::Diagnostic::NetlistValue {
+                        rule: crate::diagnostic::ValueRule::NonNegative,
+                        ..
+                    }
+                )
+            }),
+            "{err:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod series_resistance {
+    use crate::diagnostic::Diagnostic;
+    use crate::name::Ref;
+    use crate::run_folder::Results;
+
+    /// Nichicon UVR, 16 V, tan δ max 0.20 at 120 Hz and 20 °C, on the 100 µF the radial model
+    /// is drawn as. ESR = tan δ / (2 π f C).
+    const ESR_OHM: f64 = 2.65;
+    /// The MBR0520 fit's series resistance, the Schottky between USB and the Nano's 5 V rail.
+    const DIODE_RS_OHM: f64 = 0.091562;
+    const FARAD: f64 = 100e-6;
+    const USB_V: f64 = 5.0;
+
+    fn op_of(json: &str) -> Results {
+        let netlist = crate::netlist::parse(json.as_bytes()).expect("the netlist parses");
+        let results = crate::simulate(&netlist);
+        assert!(
+            results.observations().op().is_some(),
+            "{:?}",
+            results.diagnostics()
+        );
+        results
+    }
+
+    fn quantity(results: &Results, reference: &str) -> f64 {
+        let op = results.observations().op().expect("an operating point");
+        op.values[&reference.parse::<Ref>().unwrap()].get()
+    }
+
+    fn held(esr: Option<f64>) -> String {
+        let series = esr.map_or(String::new(), |ohm| {
+            format!(r#", "series_resistance": {{ "value": {ohm}, "unit": "ohm" }}"#)
+        });
+        format!(
+            r#"{{
+              "version": 1,
+              "seed": 0,
+              "analysis": {{ "op": {{}} }},
+              "ground": "gnd",
+              "nets": ["gnd", "n"],
+              "parts": [
+                {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "n", "n": "gnd" }},
+                  "voltage": {{ "value": 5.0, "unit": "V" }} }},
+                {{ "name": "c1", "kind": "capacitor", "pins": {{ "a": "n", "b": "gnd" }},
+                  "capacitance": {{ "value": {FARAD}, "unit": "F" }},
+                  "initial": {{ "value": 5.0, "unit": "V" }}{series} }}
+              ]
+            }}"#
+        )
+    }
+
+    fn divider(esr: Option<f64>) -> String {
+        let series = esr.map_or(String::new(), |ohm| {
+            format!(r#", "series_resistance": {{ "value": {ohm}, "unit": "ohm" }}"#)
+        });
+        format!(
+            r#"{{
+              "version": 1,
+              "seed": 0,
+              "analysis": {{ "op": {{}} }},
+              "ground": "gnd",
+              "nets": ["gnd", "vin", "mid"],
+              "parts": [
+                {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "vin", "n": "gnd" }},
+                  "voltage": {{ "value": 5.0, "unit": "V" }} }},
+                {{ "name": "r1", "kind": "resistor", "pins": {{ "a": "vin", "b": "mid" }},
+                  "resistance": {{ "value": 1000.0, "unit": "ohm" }},
+                  "ratings": {{ "power": null }} }},
+                {{ "name": "r2", "kind": "resistor", "pins": {{ "a": "mid", "b": "gnd" }},
+                  "resistance": {{ "value": 1000.0, "unit": "ohm" }},
+                  "ratings": {{ "power": null }} }},
+                {{ "name": "c1", "kind": "capacitor", "pins": {{ "a": "mid", "b": "gnd" }},
+                  "capacitance": {{ "value": {FARAD}, "unit": "F" }},
+                  "initial": null{series} }}
+              ]
+            }}"#
+        )
+    }
+
+    /// 5 V through the Nano's Schottky into 100 µF held at 0 V. That hold is a short, so the
+    /// current is the inrush peak.
+    fn inrush(esr: Option<f64>) -> String {
+        let series = esr.map_or(String::new(), |ohm| {
+            format!(r#", "series_resistance": {{ "value": {ohm}, "unit": "ohm" }}"#)
+        });
+        format!(
+            r#"{{
+              "version": 1,
+              "seed": 0,
+              "analysis": {{ "op": {{}} }},
+              "ground": "gnd",
+              "nets": ["gnd", "vbus", "rail"],
+              "parts": [
+                {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "vbus", "n": "gnd" }},
+                  "voltage": {{ "value": {USB_V}, "unit": "V" }} }},
+                {{ "name": "d1", "kind": "diode", "pins": {{ "anode": "vbus", "cathode": "rail" }},
+                  "saturation_current": {{ "value": 2.1308e-06, "unit": "A" }},
+                  "emission_coefficient": {{ "value": 0.97642, "unit": "1" }},
+                  "series_resistance": {{ "value": {DIODE_RS_OHM}, "unit": "ohm" }},
+                  "ratings": {{ "current": {{ "value": 0.5, "unit": "A" }}, "power": null }} }},
+                {{ "name": "c1", "kind": "capacitor", "pins": {{ "a": "rail", "b": "gnd" }},
+                  "capacitance": {{ "value": {FARAD}, "unit": "F" }},
+                  "initial": {{ "value": 0.0, "unit": "V" }}{series} }}
+              ]
+            }}"#
+        )
+    }
+
+    /// A capacitor held at the source voltage draws no surge, with or without series resistance.
+    #[test]
+    fn a_held_capacitor_at_its_initial_voltage_draws_no_surge() {
+        for esr in [None, Some(ESR_OHM)] {
+            let results = op_of(&held(esr));
+            let current = quantity(&results, "#c1.i").abs();
+            assert!(
+                current < 1e-6,
+                "esr {esr:?}: {current} A is a surge, not a hold at the source voltage"
+            );
+            let volts = quantity(&results, "#c1.v");
+            assert!((volts - 5.0).abs() < 1e-9, "esr {esr:?}: {volts} V");
+        }
+    }
+
+    /// An open capacitor at DC does not move a resistive divider when it gains series resistance.
+    #[test]
+    fn a_steady_divider_is_unchanged_by_series_resistance() {
+        let plain = op_of(&divider(None));
+        let with = op_of(&divider(Some(ESR_OHM)));
+        for reference in ["#net.mid", "#r1.i", "#c1.i"] {
+            let a = quantity(&plain, reference);
+            let b = quantity(&with, reference);
+            assert!(
+                (a - b).abs() < 1e-8,
+                "{reference}: {a} without series resistance, {b} with it"
+            );
+        }
+        assert!((quantity(&plain, "#net.mid") - 2.5).abs() < 1e-6);
+    }
+
+    /// No series resistance leaves the Schottky's own resistance, and the peak is tens of
+    /// amps. The electrolytic's ESR brings it under 5 V / 2.65 ohm.
+    #[test]
+    fn inrush_through_the_schottky_falls_from_tens_of_amps_to_a_few() {
+        let bare = quantity(&op_of(&inrush(None)), "#c1.i");
+        assert!(
+            bare > 10.0,
+            "without ESR the peak is {bare} A, not the tens of amps a shorted capacitor draws"
+        );
+        let limited = quantity(&op_of(&inrush(Some(ESR_OHM))), "#c1.i");
+        assert!(
+            bare > 10.0,
+            "without ESR the peak is {bare} A, not the tens of amps a shorted capacitor draws"
+        );
+        let ceiling = USB_V / ESR_OHM;
+        assert!(
+            limited > 1.0 && limited < ceiling,
+            "with {ESR_OHM} ohm the peak is {limited} A, which should sit between 1 A and {ceiling} A"
+        );
+    }
+
+    #[test]
+    fn a_series_resistance_of_zero_is_refused() {
+        let json = inrush(Some(0.0));
+        let err = crate::netlist::parse(json.as_bytes()).expect_err("zero ESR is refused");
+        assert!(
+            err.iter().any(|d| {
+                matches!(
+                    d,
+                    Diagnostic::NetlistValue {
+                        rule: crate::diagnostic::ValueRule::Positive,
+                        ..
+                    }
+                )
+            }),
+            "{err:?}"
+        );
     }
 }
