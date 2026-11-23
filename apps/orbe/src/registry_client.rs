@@ -2,7 +2,11 @@
 //! `https://orbefab.com/orbe/r/{name}.json`. `ORBE_REGISTRY` replaces that template, which
 //! is how a test points at a registry built from the same tree. `{name}` is replaced with
 //! `index` and with nothing else. Every other URL is resolved against the document that holds it.
-//! An `https` URL is fetched by running `curl`. A `file` URL is read from disk.
+//! An `https` URL is fetched by running `curl`. A `file` URL is read from disk. Records and
+//! files that do not depend on each other are fetched together, at most 8 at a time. A file is
+//! fetched only after its path and `url` have been checked. A record and a file are cached by
+//! their SHA-256 and checked against the hash and size named for them.
+//! The index is fetched on every command. Each URL is fetched at most once in one command.
 //!
 //! The copy written into the project is the copy orbe reads. The part reader runs on each
 //! fetched part before anything is written, and a part this binary cannot read is not written.
@@ -14,6 +18,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
@@ -37,13 +42,15 @@ const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const REDIRECTS: &str = "3";
 /// What `orbe add` prints when a fetched part is newer than this binary reads.
 const UPDATE: &str = "curl -fsSL https://orbefab.com/orbe/install.sh | sh";
+/// How many registry URLs are fetched at once. An `https` URL is fetched by running `curl`.
+const FETCH_LIMIT: usize = 8;
 
 pub struct Done {
     pub text: String,
     pub json: Value,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Fail {
     pub code: &'static str,
     pub message: String,
@@ -58,10 +65,14 @@ pub enum Outcome {
 
 struct Client {
     index_url: String,
-    /// File bytes by their SHA-256, so one blob written in two folders is downloaded once.
+    /// Record and file bytes by their SHA-256, so one blob used twice is downloaded once.
+    /// A record is checked against its index row, and a file against its record.
     files: BTreeMap<String, Vec<u8>>,
-    /// Response bodies by the URL that returned them, so a record fetched for a card is not fetched again.
-    pages: BTreeMap<String, Vec<u8>>,
+    /// A response by the URL that was requested, and by the URL a redirect landed on.
+    /// The stored URL is the one the fetch landed on, so a later read still names it.
+    pages: BTreeMap<String, Got>,
+    /// A URL this command already failed to fetch, so it is not fetched again.
+    failed: BTreeMap<String, Fail>,
 }
 
 struct Node {
@@ -331,6 +342,9 @@ fn install(
     if !existing.is_empty() {
         return Err(part_exists(dir, ids, &existing));
     }
+    let records = client.row_blobs(&chosen);
+    client.prefetch(&records);
+    client.prefetch_level(index, &chosen);
     let mut forest = Forest {
         nodes: BTreeMap::new(),
     };
@@ -362,6 +376,11 @@ fn install_block(
     dir: Option<&Path>,
     row: &Row,
 ) -> Result<Done, Fail> {
+    let mut records = Vec::new();
+    if let Some(blob) = client.blob_for_row(row) {
+        records.push(blob);
+    }
+    client.prefetch(&records);
     let (url, item) = client.record(row)?;
     let Item::Block(block) = item else {
         return Err(registry(
@@ -371,6 +390,8 @@ fn install_block(
         ));
     };
     require_same(&url, &block.head.name, &block.head.version, row)?;
+    let block_row = [row];
+    client.prefetch_level(index, &block_row);
     let files = client.folder(&url, &block.head)?;
     let scene = files
         .get("scene.jsonc")
@@ -380,6 +401,19 @@ fn install_block(
     };
     let mut versions = BTreeMap::new();
     let mut stack = Vec::new();
+    let dep_rows: Vec<&Row> = block
+        .head
+        .registry_dependencies
+        .iter()
+        .filter_map(|dep| {
+            if dep.registry.is_some() {
+                None
+            } else {
+                row_at(index, &dep.id, dep.version).ok()
+            }
+        })
+        .collect();
+    client.prefetch_level(index, &dep_rows);
     for dep in &block.head.registry_dependencies {
         if dep.registry.is_some() {
             return Err(scoped_dep(&url, dep));
@@ -522,6 +556,37 @@ fn breadboard(client: &mut Client, index: &Index, card: &Card) -> Result<Option<
     want.extend(card.uses.keys().cloned());
     want.push("breadboard-400".into());
     want.push("breadboard-830".into());
+    if let Ok(best) = highest(index) {
+        let mut rows = Vec::new();
+        let mut seen = BTreeSet::new();
+        for id in &want {
+            let Some(row) = best.get(id).copied() else {
+                continue;
+            };
+            if row.kind != Kind::Part {
+                continue;
+            }
+            if seen.insert((row.name.clone(), row.version.clone())) {
+                rows.push(row);
+            }
+        }
+        let records = client.row_blobs(&rows);
+        client.prefetch(&records);
+        let mut files = Vec::new();
+        for row in &rows {
+            let Some((record_url, item)) = client.item_from_cache(row) else {
+                continue;
+            };
+            let anchors = format!("{}.anchors.json", row.name);
+            // A bad path or url is not fetched here. `plug` reports it.
+            if check_files(&record_url, &item.head().files).is_ok() {
+                files.extend(file_blobs(&record_url, &item.head().files, |path| {
+                    path == "part.jsonc" || path == anchors
+                }));
+            }
+        }
+        client.prefetch(&files);
+    }
     for id in want {
         if let Some(plug) = client.plug(index, &id)? {
             plugs.insert(id, plug);
@@ -863,6 +928,11 @@ fn fetch_part(
         },
     );
     stack.push(id.to_string());
+    let child_rows: Vec<&Row> = uses
+        .iter()
+        .filter_map(|(dep, version)| row_at(index, dep, *version).ok())
+        .collect();
+    client.prefetch_level(index, &child_rows);
     for (dep, version) in uses {
         fetch_part(client, index, &dep, Some(version), stack, forest)?;
     }
@@ -1564,6 +1634,7 @@ impl Client {
             index_url: String::new(),
             files: BTreeMap::new(),
             pages: BTreeMap::new(),
+            failed: BTreeMap::new(),
         }
     }
 
@@ -1600,45 +1671,7 @@ impl Client {
         record_url: &str,
         head: &orbe_registry::Head,
     ) -> Result<BTreeMap<String, Vec<u8>>, Fail> {
-        let mut paths = BTreeSet::new();
-        let mut folded: BTreeMap<String, String> = BTreeMap::new();
-        for file in &head.files {
-            if let Some(problem) = orbe_registry::path_problem(&file.path) {
-                return Err(registry(
-                    record_url,
-                    &format!("lists `{}`, which has {problem}", file.path),
-                    "",
-                ));
-            }
-            if !paths.insert(file.path.clone()) {
-                return Err(registry(
-                    record_url,
-                    &format!("lists `{}` twice", file.path),
-                    "",
-                ));
-            }
-            if let Some(other) = folded.insert(file.path.to_lowercase(), file.path.clone()) {
-                return Err(registry(
-                    record_url,
-                    &format!(
-                        "lists `{other}` and `{}`, which are one file on a disk that ignores case",
-                        file.path
-                    ),
-                    "",
-                ));
-            }
-            let want = format!("files/{}", file.sha256);
-            if file.url != want {
-                return Err(registry(
-                    record_url,
-                    &format!(
-                        "lists `{}` at `{}`, and the file's url is `{want}`",
-                        file.path, file.url
-                    ),
-                    "",
-                ));
-            }
-        }
+        check_files(record_url, &head.files)?;
         let mut files = BTreeMap::new();
         for file in &head.files {
             let url = resolve(record_url, &file.url)?;
@@ -1676,6 +1709,7 @@ impl Client {
         else {
             return Err(registry(&url, "has no part.jsonc", ""));
         };
+        check_files(&url, &part.head.files)?;
         let part_url = resolve(&url, &part_file.url)?;
         let part_bytes =
             self.checked(&part_url, &part_file.sha256, part_file.bytes, "its record")?;
@@ -1699,6 +1733,122 @@ impl Client {
         Ok(Some(PlugPart { value, anchors }))
     }
 
+    /// Fetches `blobs` that this command does not already hold, at most [`FETCH_LIMIT`]
+    /// at a time. A cached blob is used when its bytes hash to `sha` and its length is
+    /// `size`. Records and files share that cache. A failure is kept, and the walk
+    /// reports the first one in its own order.
+    fn prefetch(&mut self, blobs: &[Blob]) {
+        let mut pending = Vec::new();
+        let mut shas = Vec::new();
+        let mut seen_url = BTreeSet::new();
+        let mut seen_sha = BTreeSet::new();
+        for blob in blobs {
+            if blob.size > MAX_BYTES {
+                continue;
+            }
+            if self.cached_file(&blob.sha, blob.size).is_some() {
+                continue;
+            }
+            if self.pages.contains_key(&blob.url) || self.failed.contains_key(&blob.url) {
+                continue;
+            }
+            if !seen_sha.insert(blob.sha.clone()) || !seen_url.insert(blob.url.clone()) {
+                continue;
+            }
+            pending.push((blob.url.clone(), blob.size));
+            shas.push(blob.sha.clone());
+        }
+        let results = fetch_many(&pending);
+        for (index, result) in results.into_iter().enumerate() {
+            let (url, size) = &pending[index];
+            let sha = &shas[index];
+            match result {
+                Ok(got) => {
+                    let matches = got.bytes.len() as u64 == *size && sha256(&got.bytes) == *sha;
+                    if matches {
+                        self.keep_file(sha, &got.bytes);
+                    }
+                    self.store_page(url, &got);
+                }
+                Err(fail) => {
+                    self.failed.insert(url.clone(), fail);
+                }
+            }
+        }
+    }
+
+    /// The files of `rows`, and the records of the parts they depend on. A row whose
+    /// bytes are not already checked is skipped. The walk reports that row.
+    fn prefetch_level(&mut self, index: &Index, rows: &[&Row]) {
+        let mut blobs = Vec::new();
+        for row in rows {
+            let Some((record_url, item)) = self.item_from_cache(row) else {
+                continue;
+            };
+            // Steps 5 and 6 run before any file of this record is fetched. A bad
+            // path or url is left for the walk, which reports it.
+            if check_files(&record_url, &item.head().files).is_ok() {
+                blobs.extend(file_blobs(&record_url, &item.head().files, |_| true));
+            }
+            for dep in &item.head().registry_dependencies {
+                if dep.registry.is_some() {
+                    continue;
+                }
+                let Ok(child) = row_at(index, &dep.id, dep.version) else {
+                    continue;
+                };
+                if let Some(blob) = self.blob_for_row(child) {
+                    blobs.push(blob);
+                }
+            }
+        }
+        self.prefetch(&blobs);
+    }
+
+    fn row_blobs(&self, rows: &[&Row]) -> Vec<Blob> {
+        rows.iter()
+            .filter_map(|row| self.blob_for_row(row))
+            .collect()
+    }
+
+    fn blob_for_row(&self, row: &Row) -> Option<Blob> {
+        Some(Blob {
+            url: resolve(&self.index_url, &row.url).ok()?,
+            sha: row.sha256.clone(),
+            size: row.bytes,
+        })
+    }
+
+    /// The record, when this command already holds bytes that match the row.
+    fn item_from_cache(&mut self, row: &Row) -> Option<(String, Item)> {
+        let url = resolve(&self.index_url, &row.url).ok()?;
+        let bytes = if let Some(bytes) = self.cached_file(&row.sha256, row.bytes) {
+            bytes
+        } else {
+            let got = self.pages.get(&url)?;
+            if got.bytes.len() as u64 != row.bytes || sha256(&got.bytes) != row.sha256 {
+                return None;
+            }
+            got.bytes.clone()
+        };
+        let item: Item = serde_json::from_slice(&bytes).ok()?;
+        if item.kind() != row.kind {
+            return None;
+        }
+        let head = item.head();
+        if head.name != row.name || head.version != row.version {
+            return None;
+        }
+        Some((url, item))
+    }
+
+    fn store_page(&mut self, requested: &str, got: &Got) {
+        self.pages.insert(got.url.clone(), got.clone());
+        if got.url != requested {
+            self.pages.insert(requested.to_string(), got.clone());
+        }
+    }
+
     fn checked(&mut self, url: &str, sha: &str, size: u64, says: &str) -> Result<Vec<u8>, Fail> {
         if size > MAX_BYTES {
             return Err(registry(
@@ -1707,11 +1857,8 @@ impl Client {
                 MISMATCH,
             ));
         }
-        if let Some(bytes) = self.files.get(sha)
-            && bytes.len() as u64 == size
-            && sha256(bytes) == sha
-        {
-            return Ok(bytes.clone());
+        if let Some(bytes) = self.cached_file(sha, size) {
+            return Ok(bytes);
         }
         let got = self.fetch(url, size)?;
         if got.bytes.len() as u64 != size {
@@ -1729,140 +1876,290 @@ impl Client {
                 MISMATCH,
             ));
         }
-        self.files.insert(sha.to_string(), got.bytes.clone());
+        self.keep_file(sha, &got.bytes);
         Ok(got.bytes)
     }
 
+    /// A record or file this command already holds, or a cached copy whose bytes hash to `sha`.
+    fn cached_file(&mut self, sha: &str, size: u64) -> Option<Vec<u8>> {
+        if let Some(bytes) = self.files.get(sha) {
+            if bytes.len() as u64 == size {
+                return Some(bytes.clone());
+            }
+            return None;
+        }
+        let bytes = read_cache(sha, size)?;
+        if sha256(&bytes) != sha || bytes.len() as u64 != size {
+            return None;
+        }
+        self.files.insert(sha.to_string(), bytes.clone());
+        Some(bytes)
+    }
+
+    fn keep_file(&mut self, sha: &str, bytes: &[u8]) {
+        self.files.insert(sha.to_string(), bytes.to_vec());
+        write_cache(sha, bytes);
+    }
+
     fn fetch(&mut self, url: &str, size: u64) -> Result<Got, Fail> {
-        if let Some(bytes) = self.pages.get(url) {
-            return Ok(Got {
-                url: url.to_string(),
-                bytes: bytes.clone(),
-            });
+        if let Some(got) = self.pages.get(url) {
+            return Ok(got.clone());
         }
-        let got = if url.starts_with("file:") {
-            self.fetch_file(url, size)?
-        } else if url.starts_with("https://") {
-            self.fetch_https(url, size)?
-        } else {
-            return Err(registry(url, "is not an https URL", ""));
-        };
-        self.pages.insert(got.url.clone(), got.bytes.clone());
-        if got.url != url {
-            self.pages.insert(url.to_string(), got.bytes.clone());
+        if let Some(fail) = self.failed.get(url) {
+            return Err(fail.clone());
         }
-        Ok(got)
-    }
-
-    fn fetch_file(&self, url: &str, size: u64) -> Result<Got, Fail> {
-        let path = file_path(url)?;
-        let meta = fs::symlink_metadata(&path)
-            .map_err(|_| registry(url, "could not be reached", NETWORK))?;
-        if !meta.is_file() {
-            return Err(registry(url, "is not a file", ""));
-        }
-        if meta.len() > size {
-            return Err(registry(
-                url,
-                &format!("is {} bytes, and the fetch allows {size}", meta.len()),
-                MISMATCH,
-            ));
-        }
-        let bytes = fs::read(&path).map_err(|_| registry(url, "could not be reached", NETWORK))?;
-        Ok(Got {
-            url: url.to_string(),
-            bytes,
-        })
-    }
-
-    fn fetch_https(&self, url: &str, size: u64) -> Result<Got, Fail> {
-        let agent = format!("orbe/{}", env!("CARGO_PKG_VERSION"));
-        let mut child = match Command::new("curl")
-            .args([
-                "-q",
-                "--silent",
-                "--show-error",
-                "--fail",
-                "--location",
-                "--proto",
-                "=https",
-                "--proto-redir",
-                "=https",
-                "--max-redirs",
-                REDIRECTS,
-                "--connect-timeout",
-                "10",
-                "--max-time",
-                "60",
-                "--output",
-                "-",
-                "--user-agent",
-                &agent,
-                "--write-out",
-                "%{stderr}%{url_effective}",
-                url,
-            ])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return Err(registry(
-                    url,
-                    "could not be fetched, because curl is not on PATH",
-                    "`orbe add` needs curl",
-                ));
+        match fetch_url(url, size) {
+            Ok(got) => {
+                self.store_page(url, &got);
+                Ok(got)
             }
-            Err(_) => return Err(registry(url, "could not be reached", NETWORK)),
-        };
-        let mut stdout = child.stdout.take().expect("curl stdout is piped");
-        let mut stderr = child.stderr.take().expect("curl stderr is piped");
-        let err_thread = thread::spawn(move || {
-            let mut buf = Vec::new();
-            let _ = stderr.read_to_end(&mut buf);
-            buf
-        });
-        let read = read_limited(&mut stdout, size);
-        let (body, too_big) = match read {
-            Ok(got) => got,
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = err_thread.join();
-                return Err(registry(url, "could not be reached", NETWORK));
+            Err(fail) => {
+                self.failed.insert(url.to_string(), fail.clone());
+                Err(fail)
             }
-        };
-        if too_big {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = err_thread.join();
-            return Err(registry(
-                url,
-                &format!("is larger than {size} bytes"),
-                MISMATCH,
-            ));
         }
-        let status = match child.wait() {
-            Ok(status) => status,
-            Err(_) => {
-                let _ = err_thread.join();
-                return Err(registry(url, "could not be reached", NETWORK));
-            }
-        };
-        let err_bytes = err_thread.join().unwrap_or_default();
-        let err_text = String::from_utf8_lossy(&err_bytes);
-        if !status.success() {
-            return Err(curl_failed(url, &err_text));
-        }
-        Ok(Got {
-            url: effective_url(&err_text).unwrap_or_else(|| url.to_string()),
-            bytes: body,
-        })
     }
 }
 
+struct Blob {
+    url: String,
+    sha: String,
+    size: u64,
+}
+
+/// Steps 5 and 6 of "Verify what you fetch": every path is one this registry can
+/// store, no two paths are the same or the same after case folding, and each `url`
+/// is exactly `files/<sha256>` for that entry. Nothing is fetched here.
+fn check_files(record_url: &str, files: &[orbe_registry::File]) -> Result<(), Fail> {
+    let mut paths = BTreeSet::new();
+    let mut folded: BTreeMap<String, String> = BTreeMap::new();
+    for file in files {
+        if let Some(problem) = orbe_registry::path_problem(&file.path) {
+            return Err(registry(
+                record_url,
+                &format!("lists `{}`, which has {problem}", file.path),
+                "",
+            ));
+        }
+        if !paths.insert(file.path.clone()) {
+            return Err(registry(
+                record_url,
+                &format!("lists `{}` twice", file.path),
+                "",
+            ));
+        }
+        if let Some(other) = folded.insert(file.path.to_lowercase(), file.path.clone()) {
+            return Err(registry(
+                record_url,
+                &format!(
+                    "lists `{other}` and `{}`, which are one file on a disk that ignores case",
+                    file.path
+                ),
+                "",
+            ));
+        }
+        let want = format!("files/{}", file.sha256);
+        if file.url != want {
+            return Err(registry(
+                record_url,
+                &format!(
+                    "lists `{}` at `{}`, and the file's url is `{want}`",
+                    file.path, file.url
+                ),
+                "",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn file_blobs(
+    record_url: &str,
+    files: &[orbe_registry::File],
+    keep: impl Fn(&str) -> bool,
+) -> Vec<Blob> {
+    let mut blobs = Vec::new();
+    for file in files {
+        if !keep(&file.path) {
+            continue;
+        }
+        let Ok(url) = resolve(record_url, &file.url) else {
+            continue;
+        };
+        blobs.push(Blob {
+            url,
+            sha: file.sha256.clone(),
+            size: file.bytes,
+        });
+    }
+    blobs
+}
+
+fn fetch_url(url: &str, size: u64) -> Result<Got, Fail> {
+    fetch_in(url, size, 1)
+}
+
+fn fetch_in(url: &str, size: u64, parallel: usize) -> Result<Got, Fail> {
+    if url.starts_with("file:") {
+        fetch_file(url, size)
+    } else if url.starts_with("https://") {
+        fetch_https(url, size, parallel)
+    } else {
+        Err(registry(url, "is not an https URL", ""))
+    }
+}
+
+/// Fetches in waves of at most [`FETCH_LIMIT`]. Each https request names the width of
+/// its wave, so a test server can hold that wave until every request in it has arrived.
+fn fetch_many(requests: &[(String, u64)]) -> Vec<Result<Got, Fail>> {
+    if requests.len() <= 1 {
+        return requests
+            .iter()
+            .map(|(url, size)| fetch_url(url, *size))
+            .collect();
+    }
+    let mut results = Vec::with_capacity(requests.len());
+    for chunk in requests.chunks(FETCH_LIMIT) {
+        let width = chunk.len();
+        let slots = Mutex::new(Vec::with_capacity(width));
+        slots
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .resize_with(width, || None);
+        thread::scope(|scope| {
+            for (index, (url, size)) in chunk.iter().enumerate() {
+                let slots = &slots;
+                scope.spawn(move || {
+                    let result = fetch_in(url, *size, width);
+                    slots.lock().unwrap_or_else(|err| err.into_inner())[index] = Some(result);
+                });
+            }
+        });
+        results.extend(
+            slots
+                .into_inner()
+                .unwrap_or_else(|err| err.into_inner())
+                .into_iter()
+                .map(|slot| slot.expect("each fetch stores its result")),
+        );
+    }
+    results
+}
+
+fn fetch_file(url: &str, size: u64) -> Result<Got, Fail> {
+    let path = file_path(url)?;
+    let meta =
+        fs::symlink_metadata(&path).map_err(|_| registry(url, "could not be reached", NETWORK))?;
+    if !meta.is_file() {
+        return Err(registry(url, "is not a file", ""));
+    }
+    if meta.len() > size {
+        return Err(registry(
+            url,
+            &format!("is {} bytes, and the fetch allows {size}", meta.len()),
+            MISMATCH,
+        ));
+    }
+    let bytes = fs::read(&path).map_err(|_| registry(url, "could not be reached", NETWORK))?;
+    Ok(Got {
+        url: url.to_string(),
+        bytes,
+    })
+}
+
+fn fetch_https(url: &str, size: u64, parallel: usize) -> Result<Got, Fail> {
+    let agent = format!("orbe/{}", env!("CARGO_PKG_VERSION"));
+    let header = format!("X-Orbe-Parallel: {parallel}");
+    let mut command = Command::new("curl");
+    command.args([
+        "-q",
+        "--silent",
+        "--show-error",
+        "--fail",
+        "--location",
+        "--proto",
+        "=https",
+        "--proto-redir",
+        "=https",
+        "--max-redirs",
+        REDIRECTS,
+        "--connect-timeout",
+        "10",
+        "--max-time",
+        "60",
+        "--output",
+        "-",
+        "--user-agent",
+        &agent,
+        "--write-out",
+        "%{stderr}%{url_effective}",
+    ]);
+    if parallel > 1 {
+        command.args(["--header", header.as_str()]);
+    }
+    let mut child = match command
+        .arg(url)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(registry(
+                url,
+                "could not be fetched, because curl is not on PATH",
+                "`orbe add` needs curl",
+            ));
+        }
+        Err(_) => return Err(registry(url, "could not be reached", NETWORK)),
+    };
+    let mut stdout = child.stdout.take().expect("curl stdout is piped");
+    let mut stderr = child.stderr.take().expect("curl stderr is piped");
+    let err_thread = thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stderr.read_to_end(&mut buf);
+        buf
+    });
+    let read = read_limited(&mut stdout, size);
+    let (body, too_big) = match read {
+        Ok(got) => got,
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = err_thread.join();
+            return Err(registry(url, "could not be reached", NETWORK));
+        }
+    };
+    if too_big {
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = err_thread.join();
+        return Err(registry(
+            url,
+            &format!("is larger than {size} bytes"),
+            MISMATCH,
+        ));
+    }
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(_) => {
+            let _ = err_thread.join();
+            return Err(registry(url, "could not be reached", NETWORK));
+        }
+    };
+    let err_bytes = err_thread.join().unwrap_or_default();
+    let err_text = String::from_utf8_lossy(&err_bytes);
+    if !status.success() {
+        return Err(curl_failed(url, &err_text));
+    }
+    Ok(Got {
+        url: effective_url(&err_text).unwrap_or_else(|| url.to_string()),
+        bytes: body,
+    })
+}
+
+#[derive(Clone)]
 struct Got {
     url: String,
     bytes: Vec<u8>,
@@ -2004,6 +2301,96 @@ fn jsonc_value(bytes: &[u8]) -> Option<Value> {
 
 fn sha256(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
+}
+
+/// `$XDG_CACHE_HOME/orbe` when that is an absolute path. A relative path is ignored, as the
+/// XDG spec says. Otherwise `~/Library/Caches/orbe` on macOS and `~/.cache/orbe` on Linux.
+/// Records and files are stored by their SHA-256 under `files/`. A missing home, or a cache
+/// that cannot be written, means the command fetches without a cache.
+fn cache_dir() -> Option<PathBuf> {
+    let nonempty = |key: &str| std::env::var_os(key).filter(|value| !value.is_empty());
+    if let Some(dir) = nonempty("XDG_CACHE_HOME") {
+        let path = PathBuf::from(dir);
+        if path.is_absolute() {
+            return Some(path.join("orbe"));
+        }
+    }
+    let home = PathBuf::from(nonempty("HOME")?);
+    if cfg!(target_os = "macos") {
+        Some(home.join("Library").join("Caches").join("orbe"))
+    } else {
+        Some(home.join(".cache").join("orbe"))
+    }
+}
+
+fn cache_path(sha: &str) -> Option<PathBuf> {
+    if sha.len() != 64
+        || !sha
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return None;
+    }
+    Some(cache_dir()?.join("files").join(sha))
+}
+
+/// Cached bytes for `sha` when the file is a regular file of exactly `size` bytes.
+/// A size above [`MAX_BYTES`] is a miss. The file is opened without following a symlink,
+/// and nothing is read until the open handle is a regular file of that length.
+fn read_cache(sha: &str, size: u64) -> Option<Vec<u8>> {
+    if size > MAX_BYTES {
+        return None;
+    }
+    let path = cache_path(sha)?;
+    let file = open_cache(&path)?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.len() != size {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(size as usize);
+    io::Read::take(file, size).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 != size {
+        return None;
+    }
+    Some(bytes)
+}
+
+/// Opens a cache path. On Unix the open does not follow a symlink, so a link planted at a
+/// real hash's path is a miss rather than a read of whatever it points at.
+#[cfg(unix)]
+fn open_cache(path: &Path) -> Option<fs::File> {
+    use rustix::fs::{Mode, OFlags};
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let fd = rustix::fs::open(path, flags, Mode::empty()).ok()?;
+    Some(fs::File::from(fd))
+}
+
+#[cfg(not(unix))]
+fn open_cache(path: &Path) -> Option<fs::File> {
+    fs::File::open(path).ok()
+}
+
+fn write_cache(sha: &str, bytes: &[u8]) {
+    let Some(path) = cache_path(sha) else {
+        return;
+    };
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let tmp = temp_beside(&path);
+    let written = (|| -> io::Result<()> {
+        let mut file = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        file.write_all(bytes)?;
+        file.flush()?;
+        drop(file);
+        fs::rename(&tmp, &path)
+    })();
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
 }
 
 fn hex(bytes: &[u8]) -> String {
