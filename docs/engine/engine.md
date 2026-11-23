@@ -64,7 +64,7 @@ Every core keeps one contract. A run up to a limit stops at its first stop after
 
 A `cst816` is an I2C target at address 0x15. `SDA` and `INT` are open drain into the chip's own `GND`. `SCL` is an input. The part does not hold `SCL`, so a target that clock-stretches is not modelled. It drives `SDA` low to acknowledge and to send a 0, and it releases `SDA` otherwise. It answers its own address and does not answer a general call. The model answers while idle, including on the first transfer after `RST` rises. Auto-sleep, and the time a part needs to start after reset, are not modelled.
 
-An `ssd1306` is an I2C target at its `address`, 0x3C or 0x3D. `SDA` is open drain into the chip's own `VSS`, and `SCL` and `RES` are inputs, held by neither. It acknowledges every byte written to it, and its `RES` is the reset the steps below name `RST`. [netlist.md](netlist.md#ssd1306) has its commands.
+An `ssd1306` is an I2C target at its `address`, 0x3C or 0x3D. `SDA` is open drain into the chip's own `VSS`, and `SCL` and `RES` are inputs, held by neither. It acknowledges a byte only while `V(VDD) - V(VSS)` is inside the window [netlist.md](netlist.md#ssd1306) names, and its `RES` is the reset the steps below name `RST`. [netlist.md](netlist.md#ssd1306) has its commands.
 
 A START is `SDA` falling while `SCL` is high. A STOP is `SDA` rising while `SCL` is high. The target samples a bit on its own `SCL` rise. It moves `SDA` 300 ns after the `SCL` fall that asked for the new level. That 300 ns hold is this model's choice. UM10204 Rev. 7.0 puts the bus timing in Table 11. `tHD;DAT` for an I2C device is minimum 0. Note [2] on that row says `SCL` must cross 0.3 VDD before `SDA` changes. The 300 ns figure in that table is `tf`. `tSU;DAT` is 250 ns, 100 ns and 50 ns. Fast-mode Plus `tVD;DAT` max is 0.45 us. The hold clears the 0.3 VDD fall note with margin, and it stays inside `tVD;DAT` for every mode in the table. The target needs `SCL` low for more than 300 ns. A 20 MHz TWI with `TWBR` 0 holds `SCL` low for 450 ns. That low is shorter than Fast-mode's minimum `tLOW`, and the engine still handles it.
 
@@ -72,8 +72,8 @@ When a move comes due and `SCL` is already high, the target leaves `SDA` where i
 
 The engine runs `SCL` and `SDA` for the target and calls the `I2cTarget` methods [model.md](model.md) lists, in this order.
 
-1. The eighth `SCL` rise of the target's own address calls `start` with the time and whether the master reads or writes. Another device's address calls nothing.
-2. The next `SCL` fall drives the address ACK when the address was the target's, and leaves `SDA` released when it was not.
+1. The eighth `SCL` rise of the target's own address calls `start` with the time and whether the master reads or writes, when the target answers. Another device's address calls nothing, and so does a target that does not answer.
+2. The next `SCL` fall drives the address ACK when the address was the target's and it answers, and leaves `SDA` released otherwise.
 3. The `SCL` fall after that ACK calls `read` with the time when the transfer is a read, and releases `SDA` when the transfer is a write.
 4. The eighth `SCL` rise of a written byte calls `write` with the time and the byte. `write` returns whether to ACK.
 5. The next `SCL` fall drives that level.

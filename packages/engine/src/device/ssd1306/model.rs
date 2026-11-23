@@ -28,10 +28,13 @@ const PAGES: usize = HEIGHT as usize / 8;
 /// The GDDRAM, one bit a pixel.
 pub const FRAME_BYTES: usize = COLUMNS * PAGES;
 
-/// Watch order: SCL, SDA, RES#.
+/// Watch order: SCL, SDA, RES#, then the supply window. `WATCH_VDD` is high at or above the
+/// logic minimum, and `WATCH_VDD_MAX` is high at or below the absolute maximum.
 pub const WATCH_SCL: usize = 0;
 pub const WATCH_SDA: usize = 1;
 pub const WATCH_RES: usize = 2;
+pub const WATCH_VDD: usize = 3;
+pub const WATCH_VDD_MAX: usize = 4;
 
 /// It drives no output of its own. The I2C engine drives `SDA`.
 pub const OUTPUTS: usize = 0;
@@ -181,6 +184,9 @@ struct Run {
 pub struct Ssd1306 {
     ram: [u8; FRAME_BYTES],
     registers: Registers,
+    /// `VDD` is inside the supply window. Outside it the controller is off: the bus gets no
+    /// ACK, the GDDRAM is lost, and the registers sit at their reset values until power returns.
+    powered: bool,
     /// RES# reads low.
     reset: bool,
     next: Next,
@@ -202,6 +208,7 @@ impl Device for Ssd1306 {
         Ok(Ssd1306 {
             ram: [0; FRAME_BYTES],
             registers: Registers::RESET,
+            powered: false,
             reset: false,
             next: Next::Closed,
             pending: None,
@@ -217,9 +224,26 @@ impl Device for Ssd1306 {
         Drives::OFF
     }
 
-    /// `RES#` going low resets every register and drops a command short of its parameters and
-    /// an open run of data, with no row. The GDDRAM keeps what it holds (datasheet 8.9).
+    /// `VDD` leaving the supply window loses the GDDRAM and holds the controller reset. Entering
+    /// the window is the power-on reset: the registers take their reset values and the GDDRAM
+    /// stays empty, which is what a static RAM holds with its supply gone. `RES#` going low,
+    /// while the supply is inside the window, resets every register and drops a command short
+    /// of its parameters and an open run of data, with no row. The GDDRAM keeps what it holds
+    /// (datasheet 8.9).
     fn input(&mut self, _cx: &mut Cx, _at: Time, levels: Levels) {
+        let powered = levels.high(WATCH_VDD) && levels.high(WATCH_VDD_MAX);
+        if powered != self.powered {
+            self.ram = [0; FRAME_BYTES];
+            self.registers = Registers::RESET;
+            self.next = Next::Closed;
+            self.pending = None;
+            self.run = None;
+            self.powered = powered;
+        }
+        if !self.powered {
+            self.reset = false;
+            return;
+        }
         let low = !levels.high(WATCH_RES);
         if low && !self.reset {
             self.registers = Registers::RESET;
@@ -235,10 +259,10 @@ impl Device for Ssd1306 {
         View::Screen {
             frame: &self.ram,
             panel: Panel {
-                on: registers.display_on,
+                on: self.powered && registers.display_on,
                 inverted: registers.inverted,
                 reset: self.reset,
-                asleep: !registers.display_on,
+                asleep: !self.powered || !registers.display_on,
                 settings: registers.settings(),
                 registers: registers.stored.count_ones() as u16,
                 backlight: None,
@@ -248,7 +272,14 @@ impl Device for Ssd1306 {
 }
 
 impl I2cTarget for Ssd1306 {
+    fn awake(&self) -> bool {
+        self.powered && !self.reset
+    }
+
     fn start(&mut self, cx: &mut Cx, at: Time, dir: Dir) {
+        if !self.awake() {
+            return;
+        }
         self.close(cx);
         self.next = match dir {
             Dir::Write => Next::Control,
@@ -260,6 +291,9 @@ impl I2cTarget for Ssd1306 {
     }
 
     fn write(&mut self, cx: &mut Cx, at: Time, byte: u8) -> Ack {
+        if !self.awake() {
+            return Ack::No;
+        }
         match self.next {
             Next::Closed => {}
             Next::Control => {

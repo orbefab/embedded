@@ -1,6 +1,6 @@
 //! The SSD1306 decoder, called the way the I2C engine calls it: a START, the bytes, a STOP.
 
-use orbe_model::{Cx, Device, Dir, Drawn, Fields, I2cTarget, Levels, Time, View};
+use orbe_model::{Ack, Cx, Device, Dir, Drawn, Fields, I2cTarget, Levels, Time, View};
 
 use super::model::{Addressing, FRAME_BYTES, Ssd1306, WATCH_RES};
 use crate::display::panel;
@@ -33,11 +33,7 @@ struct Bus {
 impl Bus {
     fn new() -> Bus {
         let mut dev = Ssd1306::new(&Fields::NONE).unwrap();
-        dev.input(
-            &mut Cx::default(),
-            Time::ZERO,
-            Levels::from_slice(&[true, true, true]),
-        );
+        dev.input(&mut Cx::default(), Time::ZERO, powered(true));
         Bus {
             dev,
             t: 0,
@@ -241,14 +237,52 @@ fn res_low_resets_the_registers_and_keeps_the_ram() {
     let mut bus = Bus::new();
     bus.init();
     bus.send(&[0x40, 0xaa]);
-    bus.dev.input(
-        &mut Cx::default(),
-        Time::from_ps(9),
-        Levels::from_slice(&[true, true, false]),
-    );
+    bus.dev
+        .input(&mut Cx::default(), Time::from_ps(9), powered_res(false));
     let r = *bus.dev.registers();
     assert!(!r.display_on);
     assert_eq!(r.addressing, Addressing::Page);
     assert_eq!(bus.frame()[127], 0xaa);
     let _ = WATCH_RES;
+}
+
+#[test]
+fn a_supply_outside_the_window_nacks_and_the_glass_stays_dark_until_power_returns() {
+    let mut bus = Bus::new();
+    bus.init();
+    bus.send(&[0x40, 0xff]);
+    assert!(!bus.lit().is_empty(), "the pump is on and a byte is set");
+    bus.dev
+        .input(&mut Cx::default(), Time::from_ps(9), powered(false));
+    assert!(bus.lit().is_empty(), "an unpowered glass is dark");
+    assert_eq!(bus.frame(), &[0; FRAME_BYTES], "the GDDRAM is lost");
+    assert!(!bus.dev.awake());
+    assert_eq!(
+        bus.dev.write(&mut Cx::default(), Time::from_ps(10), 0x00),
+        Ack::No
+    );
+    assert_eq!(bus.frame(), &[0; FRAME_BYTES], "a NACK writes nothing");
+    bus.dev
+        .input(&mut Cx::default(), Time::from_ps(11), powered(true));
+    assert!(bus.dev.awake());
+    assert!(!bus.dev.registers().display_on);
+    assert_eq!(bus.dev.registers().charge_pump, 0x10);
+    bus.init();
+    assert!(bus.dev.registers().display_on);
+    assert_eq!(bus.dev.registers().charge_pump, 0x14);
+    assert!(bus.lit().is_empty(), "power-on RAM is empty");
+}
+
+/// SCL and SDA high, RES# high, and both supply watches high.
+fn powered(on: bool) -> Levels {
+    powered_res_supply(true, on)
+}
+
+/// SCL and SDA high, RES# at `res_high`, supply inside the window.
+fn powered_res(res_high: bool) -> Levels {
+    powered_res_supply(res_high, true)
+}
+
+fn powered_res_supply(res_high: bool, on: bool) -> Levels {
+    Levels::from_slice(&[true, true, res_high, on, on])
 }

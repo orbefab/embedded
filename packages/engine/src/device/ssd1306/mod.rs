@@ -40,6 +40,15 @@ const RES: usize = 4;
 /// The 7-bit addresses `SA0` selects, `0111100` and `0111101` (datasheet 8.1.5.1).
 const ADDRESSES: [u8; 2] = [0x3c, 0x3d];
 
+/// Table 12-1, logic supply minimum, volt. The comparator is high above `offset`, so each
+/// bound sits 1 µV inside the inclusive end the sheet names.
+const VDD_MIN_V: f64 = 1.65;
+/// Table 11-1, absolute maximum of `VDD`, volt. Table 12-1's recommended maximum is 3.3 V.
+/// The module's regulator, from 5 V, sits a few millivolts over that recommended maximum and
+/// inside this absolute maximum, and the controller runs there, as those modules do.
+const VDD_MAX_V: f64 = 4.0;
+const BOUND_INSIDE_V: f64 = 1e-6;
+
 /// No events. A panel takes its commands from the bus.
 pub(crate) const ROW: Row = Row::new(&[]);
 
@@ -63,6 +72,15 @@ pub(crate) fn chip(part: PartId, dev: &Ssd1306) -> Chip {
     let watch = |pin: usize| Watch {
         rise: against(pin, dev.input_threshold.high.si.get()),
         fall: against(pin, dev.input_threshold.low.si.get()),
+    };
+    let supply = |scale: f64, offset: f64| {
+        Watch::comparator(Signal {
+            terms: vec![
+                (Node::from(pins[VDD]), scale),
+                (Node::from(pins[VSS]), -scale),
+            ],
+            offset,
+        })
     };
     let mut signals = [
         (Ssd1306::PINS[SCL], model::WATCH_SCL),
@@ -88,7 +106,13 @@ pub(crate) fn chip(part: PartId, dev: &Ssd1306) -> Chip {
             pull_down: None,
             leakage: None,
         }],
-        watches: vec![watch(SCL), watch(SDA), watch(RES)],
+        watches: vec![
+            watch(SCL),
+            watch(SDA),
+            watch(RES),
+            supply(1.0, VDD_MIN_V - BOUND_INSIDE_V),
+            supply(-1.0, -(VDD_MAX_V + BOUND_INSIDE_V)),
+        ],
         signals: signals.to_vec(),
         samples: Vec::new(),
         usarts: &[],
@@ -109,7 +133,9 @@ pub(crate) fn chip(part: PartId, dev: &Ssd1306) -> Chip {
 /// an I2C target at `address`, 0x3C or 0x3D. `SDA` is open drain into `VSS` through
 /// `low_resistance` above `low_drop`. `SCL` and `RES` are inputs, and the part holds neither.
 /// `RES` low resets it. It reads each of those three pins through `input_threshold`, fractions
-/// of its supply.
+/// of its supply. It answers the bus and lights the glass only while `V(VDD) - V(VSS)` is at
+/// least 1.65 V and at most 4.0 V. Below that window, or above it, the bus sees no ACK, the
+/// glass is dark, and it draws nothing.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ssd1306 {
     pub pins: [NetId; 5],

@@ -49,6 +49,7 @@ An `I2cTarget` is a device on an I2C bus. The engine runs the bus: it watches `S
 
 | Method | What it does |
 | --- | --- |
+| `awake()` | Whether it answers its address. A target that does not leaves the address unacknowledged, and the host calls nothing else for that transfer. Awake, unless the device says otherwise. |
 | `start(cx, at, dir)` | The master addressed it, to read or to write. |
 | `write(cx, at, byte)` | A byte the master wrote. It returns whether to ACK. |
 | `read(cx, at)` | The next byte the master reads. |

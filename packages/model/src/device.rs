@@ -215,6 +215,12 @@ pub struct Drawn {
 /// address the device declares, drives SDA for each ACK and each read bit, and holds SDA's
 /// timing. The device sees only transfers and bytes.
 pub trait I2cTarget: Device {
+    /// Whether this target answers its address. A target that is not awake leaves the address
+    /// unacknowledged, and the host calls nothing else for that transfer. Awake, unless it
+    /// says otherwise.
+    fn awake(&self) -> bool {
+        true
+    }
     /// The master addressed this target, to write to it or to read from it.
     fn start(&mut self, _cx: &mut Cx, _at: Time, _dir: Dir) {}
     /// A byte the master wrote. The host ACKs it on [`Ack::Yes`].
