@@ -912,6 +912,17 @@ impl Open {
                 format!("{path}.{reading}"),
                 Reading::Color(self.colors(&engine)),
             ),
+            Target::Angle {
+                path,
+                reading,
+                engine,
+            } => (
+                format!("{path}.{reading}"),
+                Reading::Quantity {
+                    unit: Unit::Degree,
+                    value: self.angle_of(&engine),
+                },
+            ),
             Target::Param { .. } => {
                 let (label, engine, spec) = self.live_param(r, Code::NoReading)?;
                 let level = self
@@ -1009,6 +1020,13 @@ impl Open {
             format!("`{path}.{pin}` is not simulated"),
             hint,
         )
+    }
+
+    /// The shaft angle of engine part `engine`, in degrees.
+    fn angle_of(&self, engine: &str) -> f64 {
+        self.engine
+            .angle(&engine_name(engine))
+            .expect("a part with a reading of angle is a servo")
     }
 
     /// The colours engine part `engine`, an LED chain, last latched, red then green then blue.

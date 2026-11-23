@@ -256,7 +256,7 @@ export function SceneView({
       if (live?.switches[slide.channel] === 1) slide.node.position.add(slide.delta);
     }
     for (const turn of built.turns) {
-      const value = live?.params?.[turn.channel] ?? turn.value;
+      const value = turn.horn ? (live?.horn_deg?.[turn.channel] ?? turn.value) : (live?.params?.[turn.channel] ?? turn.value);
       turned.setFromAxisAngle(turn.axis, turn.angle(value));
       turn.node.quaternion.copy(turned).multiply(turn.rest);
     }

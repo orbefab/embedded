@@ -1,0 +1,37 @@
+// Tower Pro SG90, the 9 g micro servo in Arduino starter kits. The pulse map is the
+// Luxorparts SG90 sheet: 1 ms is 0°, 1.5 ms is 90° and 2 ms is 180°. Tower Pro's page gives
+// the 4.8 V speed and the 1 µs dead band. SunFounder's SF0180 specification gives the currents.
+{
+  "format": 6,
+  "part": "servo-sg90",
+  "version": "0.3.0",
+  "title": "SG90 micro servo",
+  "summary": "9 g hobby servo with signal, 5 V and ground. A 1 ms high holds the shaft at 0°, 1.5 ms at 90° and 2 ms at 180°, and a pulse outside that clamps. It slews at 0.12 s per 60° on 4.8 V or more, holds when it arrives, and stays where it is when the pulses stop. Below 4.5 V it moves slower and warns. It draws 5 mA while it holds and 140 mA while it moves. `angle` is the shaft in degrees, and the page turns the horn.",
+  "tags": ["servo", "sg90", "motor", "pwm", "hobby", "starter"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Tower Pro SG90 Analog": "https://towerpro.com.tw/product/sg90-analog/",
+    "Luxorparts SG90 datasheet, Kjell 87897": "https://www.kjell.com/globalassets/mediaassets/701916_87897_datasheet_en.pdf",
+    "SunFounder SF0180 electrical specification": "https://www.sunfounder.com/products/sf0180-servo-motor"
+  },
+  "real": { "maker": "Tower Pro", "number": "SG90", "datasheet": "Tower Pro SG90 Analog" },
+  "pins": { "GND": [1], "VCC": [2], "SIGNAL": [3] },
+  "model": {
+    "kind": "sg90",
+    "input_threshold": {
+      "low": { "value": 0.3, "unit": "1", "source": { "closed_form": { "note": "The sheets give no logic threshold. 0.3 and 0.7 of the supply are a CMOS input, which a 5 V pulse on a powered servo crosses." } } },
+      "high": { "value": 0.7, "unit": "1", "source": { "closed_form": { "note": "The sheets give no logic threshold. 0.3 and 0.7 of the supply are a CMOS input, which a 5 V pulse on a powered servo crosses." } } }
+    },
+    "pins": { "VCC": "VCC", "GND": "GND", "SIGNAL": "SIGNAL" }
+  },
+  "readings": {
+    "angle": { "of": "angle" }
+  },
+  "joints": {
+    "horn": { "node": "horn", "turn": [0, 0, -1], "range": { "value": 180, "unit": "deg" }, "by": "angle" }
+  },
+  "not_simulated": [
+    { "what": "load and stall", "why": "Nothing pushes on the shaft, so the 1.8 kg·cm stall torque and the 520 mA stall current from the sheets are not states. The current is 140 mA while the shaft is moving and 5 mA while it holds." },
+    { "what": "speed above 4.8 V", "why": "Tower Pro states 0.12 s per 60° at 4.8 V and no faster figure. At 4.5 V and above the shaft uses that speed, so a Nano's 5 V pin, which sits a diode drop under 5 V, does not warn. From 1 V up to 4.5 V the speed scales by the supply over 4.8 V and the part warns supply. Below 1 V it is unpowered: the shaft stays put and the draw is none." }
+  ]
+}

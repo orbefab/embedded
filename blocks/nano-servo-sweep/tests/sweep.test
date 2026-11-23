@@ -1,0 +1,14 @@
+# write(0), wait 400 ms, write(180), wait 500 ms, write(0). The first pulse is at
+# about 53 ms. By 250 ms the shaft has reached 0° and the 5 V diode is at idle.
+# By 550 ms it is slewing toward 180°, and by 800 ms it is there.
+open
+step 250ms
+expect @servo.angle < 1deg
+expect @nano.diode.i < 40mA
+step 300ms
+expect @servo.angle > 55deg
+expect @servo.angle < 70deg
+expect @nano.diode.i > 100mA
+step 250ms
+expect @servo.angle > 179deg
+expect no diagnostics

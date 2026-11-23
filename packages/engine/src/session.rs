@@ -745,6 +745,12 @@ impl Session {
 
     /// The LED chain `part` as it stands after the last accepted step, which is its colours at
     /// `now`. `None` when `part` is no chain.
+    /// The shaft angle of `part`, in degrees, after the last accepted step. `None` when `part`
+    /// is not a servo.
+    pub fn angle(&self, part: &Name) -> Option<f64> {
+        self.actives.horn_degrees(part)
+    }
+
     pub fn leds(&self, part: &Name) -> Option<Leds<'_>> {
         let k = self
             .actives

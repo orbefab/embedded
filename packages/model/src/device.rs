@@ -112,6 +112,8 @@ pub enum Shows {
         height: u16,
         format: &'static str,
     },
+    /// A shaft angle. [`View::Degrees`] is that angle in millidegrees.
+    Angle,
 }
 
 /// What a device shows now.
@@ -125,6 +127,8 @@ pub enum View<'a> {
         frame: &'a [u8],
         panel: Panel,
     },
+    /// The shaft angle in millidegrees. 0 is one end of the travel and 180_000 the other.
+    Degrees(i32),
 }
 
 /// A screen controller's state besides its frame memory.

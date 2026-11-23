@@ -60,7 +60,7 @@ function scene(instances: Instance[], extra: Partial<SceneMessage> = {}): SceneM
     instances,
     parts,
     wires: [],
-    channels: { pins: [], leds: [], switches: [], pixels: [] },
+    channels: { pins: [], leds: [], switches: [], pixels: [], horns: [] },
     ...extra,
   };
 }
@@ -118,7 +118,7 @@ describe("buildScene", () => {
           { name: "led1", part: "lamp", params: {}, placement: at, children: [] },
           { name: "nano", part: "board", params: {}, placement: at, children: [] },
         ],
-        { channels: { pins: [], leds: ["@led1"], switches: [], pixels: [] } }
+        { channels: { pins: [], leds: ["@led1"], switches: [], pixels: [], horns: [] } }
       ),
       models
     );
@@ -157,7 +157,7 @@ describe("buildScene", () => {
     const built = buildScene(
       scene(
         [0, 1].map((k) => ({ name: `pixel${k}`, part: "pixel", params: {}, placement: at, children: [] })),
-        { channels: { pins: [], leds: [], switches: [], pixels: ["@pixel1", "@pixel0"] } }
+        { channels: { pins: [], leds: [], switches: [], pixels: ["@pixel1", "@pixel0"], horns: [] } }
       ),
       models
     );

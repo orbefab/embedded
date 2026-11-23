@@ -198,16 +198,19 @@ pub enum ProtocolRule {
     /// A high a `Pulses` record carried, which a chain with `DOUT` would pass on. The record
     /// lands at its end, after that high, so `DOUT` does not drive it.
     DoutRecord,
+    /// The supply is up, and under the voltage the part holds its rated speed at.
+    Supply,
 }
 
 impl ProtocolRule {
-    pub(crate) const ALL: [ProtocolRule; 6] = [
+    pub(crate) const ALL: [ProtocolRule; 7] = [
         ProtocolRule::Command,
         ProtocolRule::PixelFormat,
         ProtocolRule::SdaWhileSclHigh,
         ProtocolRule::Bit,
         ProtocolRule::Interval,
         ProtocolRule::DoutRecord,
+        ProtocolRule::Supply,
     ];
 
     /// Its place in [`ALL`](Self::ALL).
@@ -224,6 +227,7 @@ impl ProtocolRule {
             "bit" => Some(ProtocolRule::Bit),
             "interval" => Some(ProtocolRule::Interval),
             "dout_record" => Some(ProtocolRule::DoutRecord),
+            "supply" => Some(ProtocolRule::Supply),
             _ => None,
         }
     }
@@ -1281,6 +1285,18 @@ impl Diagnostic {
                     "{part} did not pass a high from a record on to DOUT, breaking rule {} at {} ps, the first time",
                     rule_text(&ProtocolRule::DoutRecord),
                     at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::Supply,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} is below 4.5 V at {} ps, so it moves slower, breaking rule {}, the first time",
+                    at.as_ps(),
+                    rule_text(&ProtocolRule::Supply)
                 )
             }
             Diagnostic::ChipProtocol { part, at, rule } => {

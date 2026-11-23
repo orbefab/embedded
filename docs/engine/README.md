@@ -2,7 +2,7 @@
 
 The engine reads a resolved netlist and writes a deterministic run folder. `orbe-scene` turns a scene into that netlist, and `orbe-session` runs it live.
 
-The input is JSON. The folder holds `manifest.json`, `netlist.json`, `diagnostics.json`, and `observations.json`, and a transient run adds `traces/`. The engine solves resistors, voltage and current sources, diodes, LEDs, transistors, op-amps, capacitors, inductors, relays and timed switches at one operating point or over time, runs ATmega328P and ESP32-S3 firmware instruction by instruction, runs a 74HC595 shift register, and reports parts run past their ratings.
+The input is JSON. The folder holds `manifest.json`, `netlist.json`, `diagnostics.json`, and `observations.json`, and a transient run adds `traces/`. The engine solves resistors, voltage and current sources, diodes, LEDs, transistors, op-amps, capacitors, inductors, relays and timed switches at one operating point or over time, runs ATmega328P and ESP32-S3 firmware instruction by instruction, runs a 74HC595 shift register and an SG90 servo, and reports parts run past their ratings.
 
 ## Crates
 

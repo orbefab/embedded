@@ -7,7 +7,8 @@
 # for that sketch. The clock is 16 MHz unless the sketch directory contains `f_cpu`, one integer of hertz.
 # The runtime's core is compiled into an archive and linked with each sketch, and main() comes
 # from the core. The runtime's Wire library is compiled into a second archive, which a sketch
-# that includes Wire.h also links. A sketch that includes Adafruit_NeoPixel.h also links that
+# that includes Wire.h also links. A sketch that includes Servo.h also links the Arduino
+# Servo library, pinned below. A sketch that includes Adafruit_NeoPixel.h also links that
 # library, pinned below, compiled for the sketch's clock. A clock other than 16 MHz gets its
 # own core and Wire archives.
 # A build of the engine reads only the committed hex.
@@ -25,6 +26,8 @@ runtime_url=https://downloads.arduino.cc/cores/staging/avr-1.8.6.tar.bz2
 runtime_sha256=ff1d17274b5a952f172074bd36c3924336baefded0232e10982f8999c2f7c3b6
 neopixel_url=https://github.com/adafruit/Adafruit_NeoPixel/archive/refs/tags/1.15.5.tar.gz
 neopixel_sha256=3aa189a5a397a13539fcb58ff297ab9dc4a4faf45115e48afd533f1337cb0f3b
+servo_url=https://github.com/arduino-libraries/Servo/archive/refs/tags/1.3.0.tar.gz
+servo_sha256=7b829d24f9165e9d2689d157568f066f290cbe41734a9384b9a06250a69e7993
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
   echo "usage: $0 TOOLS_DIR [DOWNLOAD_DIR]" >&2
@@ -62,10 +65,12 @@ unpack() {
 unpack avr-gcc-7.3.0 "$toolchain_url" "$toolchain_sha256"
 unpack avr-runtime-1.8.6 "$runtime_url" "$runtime_sha256"
 unpack adafruit-neopixel-1.15.5 "$neopixel_url" "$neopixel_sha256"
+unpack arduino-servo-1.3.0 "$servo_url" "$servo_sha256"
 
 bin=$tools/avr-gcc-7.3.0/avr/bin
 runtime=$tools/avr-runtime-1.8.6/avr-1.8.6
 neopixel=$tools/adafruit-neopixel-1.15.5/Adafruit_NeoPixel-1.15.5
+servo=$tools/arduino-servo-1.3.0/Servo-1.3.0/src
 core=$runtime/cores/arduino
 target=(-mmcu=atmega328p -DF_CPU=16000000L -I"$core" -I"$runtime/variants/standard")
 c_flags=(-c -g -Os -w -std=gnu11 -ffunction-sections -fdata-sections -flto -fno-fat-lto-objects)
@@ -125,6 +130,10 @@ clock_archives() {
 for dir in "$repo"/packages/engine/tests/firmware/sketch/*/ "$repo"/blocks/*/firmware/*/; do
   dir=${dir%/}
   name=$(basename "$dir")
+  # The DevKitC block's sketch is ESP32 firmware. This toolchain is the AVR one.
+  if grep -q 'rgbLedWrite' "$dir/$name.ino"; then
+    continue
+  fi
   firmware=$(dirname "$dir")
   library=()
   archives=()
@@ -143,6 +152,12 @@ for dir in "$repo"/packages/engine/tests/firmware/sketch/*/ "$repo"/blocks/*/fir
   if grep -q '^#include <Wire.h>' "$dir/$name.ino"; then
     library=(-I"$wire")
     archives=("$wire_a")
+  fi
+  if grep -q '^#include <Servo.h>' "$dir/$name.ino"; then
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" -DARDUINO=10806 -DARDUINO_ARCH_AVR -I"$servo" \
+      "$servo/avr/Servo.cpp" -o "$work/$name-servo.o"
+    library+=(-I"$servo" -DARDUINO=10806 -DARDUINO_ARCH_AVR)
+    archives+=("$work/$name-servo.o")
   fi
   if grep -q '^#include <Adafruit_NeoPixel.h>' "$dir/$name.ino"; then
     "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" -DARDUINO=10806 -I"$neopixel" \

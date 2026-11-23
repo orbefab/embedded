@@ -92,6 +92,12 @@ pub enum Target {
         reading: String,
         engine: String,
     },
+    /// A servo's shaft angle, in degrees.
+    Angle {
+        path: String,
+        reading: String,
+        engine: String,
+    },
     /// A param the part file declares, live or fixed for the run.
     Param {
         path: String,
@@ -101,6 +107,14 @@ pub enum Target {
 }
 
 /// The name of the part's reading `"of": "rgb"`, the colours its LED chain latched.
+/// The name of the part's reading `"of": "angle"`, its shaft angle in degrees.
+pub(crate) fn angle_reading(part: &MapPart) -> Option<&str> {
+    part.readings
+        .iter()
+        .find(|(_, reading)| reading.of == "angle")
+        .map(|(name, _)| name.as_str())
+}
+
 pub(crate) fn rgb_reading(part: &MapPart) -> Option<&str> {
     part.readings
         .iter()
@@ -155,6 +169,14 @@ pub fn resolve(
         if last && rgb_reading(part) == Some(seg.as_str()) {
             let engine = one_engine(&path, part, Code::NoReading)?;
             return Ok(Target::Color {
+                path,
+                reading: seg.clone(),
+                engine,
+            });
+        }
+        if last && angle_reading(part) == Some(seg.as_str()) {
+            let engine = one_engine(&path, part, Code::NoReading)?;
+            return Ok(Target::Angle {
                 path,
                 reading: seg.clone(),
                 engine,
@@ -253,6 +275,9 @@ pub(crate) fn names(part: &MapPart, reported: &[Quantity]) -> String {
         found.push("brightness".to_string());
     }
     if let Some(reading) = rgb_reading(part) {
+        found.push(reading.to_string());
+    }
+    if let Some(reading) = angle_reading(part) {
         found.push(reading.to_string());
     }
     let live = live_params(part);

@@ -4,7 +4,7 @@
 //! its supply. `docs/engine/engine.md`, Active chips, holds the loop's protocol.
 
 use orbe_mcu::{Frame, Phase};
-use orbe_model::{Draw, Drawn, Drive, Event, Quantity, Shows, Stop, Time};
+use orbe_model::{Draw, Drawn, Drive, Event, Quantity, Shows, Stop, Time, View};
 
 use crate::netlist::{NetId, PartId};
 
@@ -19,7 +19,7 @@ pub(crate) mod spi;
 #[cfg(test)]
 pub(crate) mod spi_pins;
 
-use crate::device::{cst816, dht22, hc595, pulses_replay, spi_replay, st77916, ws2812};
+use crate::device::{cst816, dht22, hc595, pulses_replay, sg90, spi_replay, st77916, ws2812};
 use crate::mcu::{self, Mcu, atmega328p, esp32s3};
 use native::Hosted;
 
@@ -395,6 +395,16 @@ impl Core {
         }
     }
 
+    /// What the device shows now. A chip shows nothing.
+    fn view(&self) -> View<'_> {
+        match self {
+            Core::Device(core) => core.view(),
+            Core::Mcu(_) => View::Nothing,
+            #[cfg(test)]
+            Core::Script(_) => View::Nothing,
+        }
+    }
+
     /// The world quantities its device reads. A chip reads none.
     fn reads(&self) -> &'static [Quantity] {
         match self {
@@ -427,6 +437,7 @@ pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
         Active::Hc595(dev) => hc595::chip(part, dev),
         Active::Esp32s3(mcu) => esp32s3::chip(part, mcu),
         Active::Ws2812(chain) => ws2812::chip(part, chain),
+        Active::Sg90(dev) => sg90::chip(part, dev),
     }
 }
 
@@ -511,6 +522,8 @@ pub(crate) struct Actives {
     displays: Vec<Name>,
     /// The name of each LED chain, in part order. A latch's `part` indexes this.
     leds: Vec<Name>,
+    /// The name of each shaft, in part order.
+    horns: Vec<Name>,
 }
 
 struct Ahead {
@@ -750,6 +763,7 @@ impl Actives {
         let mut senders = Vec::new();
         let mut displays = Vec::new();
         let mut leds = Vec::new();
+        let mut horns = Vec::new();
         let committed: Vec<Core> = circuit
             .actives
             .iter()
@@ -795,6 +809,7 @@ impl Actives {
                 match core.shows() {
                     Shows::Screen { .. } => displays.push(name(circuit, chip)),
                     Shows::Leds { .. } => leds.push(name(circuit, chip)),
+                    Shows::Angle => horns.push(name(circuit, chip)),
                     Shows::Nothing => {}
                 }
                 Ahead {
@@ -813,6 +828,7 @@ impl Actives {
             senders,
             displays,
             leds,
+            horns,
         }
     }
 
@@ -857,6 +873,23 @@ impl Actives {
 
     pub(crate) fn led_names(&self) -> &[Name] {
         &self.leds
+    }
+
+    /// The shaft angle of horn `name`, in degrees, at the committed core's time.
+    pub(crate) fn horn_degrees(&self, name: &Name) -> Option<f64> {
+        let k = self.horns.iter().position(|horn| horn == name)?;
+        self.committed
+            .iter()
+            .filter_map(|core| {
+                if !matches!(core.shows(), Shows::Angle) {
+                    return None;
+                }
+                let View::Degrees(mdeg) = core.view() else {
+                    panic!("a shaft shows its angle in millidegrees");
+                };
+                Some(mdeg as f64 / 1_000.0)
+            })
+            .nth(k)
     }
 
     /// Has every LED chain keep each latch, for a run that writes `leds.csv`. A session that

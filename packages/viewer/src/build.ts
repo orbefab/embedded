@@ -94,9 +94,11 @@ export interface TurnBinding {
   readonly axis: Vector3;
   /** The turn in radians from where the model draws the node, at a value of the param. */
   readonly angle: (value: number) => number;
-  /** The param's index in a frame's `params`, or -1 when the session does not run it live. */
+  /** The param's index in a frame's `params`, or the servo's index in `horn_deg`. -1 when neither runs it. */
   readonly channel: number;
-  /** The instance's own value of the param, which poses the node when no frame says more. */
+  /** The angle comes from a frame's `horn_deg` rather than `params`. */
+  readonly horn: boolean;
+  /** The instance's own value of the param, or 90° for a horn, which poses the node when no frame says more. */
   readonly value: number;
 }
 
@@ -263,13 +265,17 @@ function drawBody(builder: Builder, group: Group, instance: InstanceBase, path: 
     if (turn === undefined || by === undefined) continue;
     const own = instance.params[by.param];
     const radians = (joint.range * Math.PI) / 180;
+    const paramChannel = (scene.params ?? []).findIndex((param) => param.ref === `${ref}.${by.param}`);
+    const hornChannel = scene.channels.horns.indexOf(ref);
+    const horn = paramChannel < 0 && hornChannel >= 0;
     turns.push({
       node: namedNode(body, joint.node, instance.part),
       owner: group,
       axis: turn,
       angle: (value) => ((value - by.min) / (by.max - by.min) - 0.5) * radians,
-      channel: (scene.params ?? []).findIndex((param) => param.ref === `${ref}.${by.param}`),
-      value: typeof own === "number" ? own : (by.min + by.max) / 2,
+      channel: horn ? hornChannel : paramChannel,
+      horn,
+      value: horn ? 90 : typeof own === "number" ? own : (by.min + by.max) / 2,
     });
   }
   group.add(body);
@@ -400,11 +406,11 @@ export function buildScene(scene: SceneMessage, models: ReadonlyMap<string, Grou
     const to = parent.worldToLocal(owner.localToWorld(new Vector3(...slide)));
     return { node, rest: node.position.clone(), delta: to.sub(from), channel };
   });
-  const turns = builder.turns.map(({ node, owner, axis, angle, channel, value }) => {
+  const turns = builder.turns.map(({ node, owner, axis, angle, channel, horn, value }) => {
     const parent = node.parent ?? owner;
     const from = parent.worldToLocal(owner.localToWorld(new Vector3(0, 0, 0)));
     const to = parent.worldToLocal(owner.localToWorld(new Vector3(...axis)));
-    return { node, rest: node.quaternion.clone(), axis: to.sub(from).normalize(), angle, channel, value };
+    return { node, rest: node.quaternion.clone(), axis: to.sub(from).normalize(), angle, channel, horn, value };
   });
 
   const boxes = groups.map(boxOf);
