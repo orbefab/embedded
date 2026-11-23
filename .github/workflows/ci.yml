@@ -9,7 +9,10 @@
 # includes the install-line build, and the Firefox and WebKit smoke run on
 # main and nightly. The engine checks (`check.sh engine-chips`, `engine-circuits` and
 # `engine-wasm`) run in parallel on main and nightly, and on a pull request
-# when scripts/ci-engine-changed.sh prints run=true. The cargo cache keeps
+# when scripts/ci-engine-changed.sh prints run=true. The released-client job
+# downloads the newest published Linux binary and requires that it read every
+# part and Block, or refuse the item because the format is newer than that
+# binary reads. The cargo cache keeps
 # dependencies only. Caching the workspace crates still rebuilt them after
 # checkout, so those artifacts are left out. scripts/check-speed.sh stays
 # a local check.
@@ -317,9 +320,22 @@ jobs:
       - name: Firefox and WebKit
         run: scripts/check-engines.sh
 
+  client:
+    name: released client
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: The published orbe reads every part and Block, or asks for a newer orbe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/check-client.sh
+
   ci-ok:
     name: ci-ok
-    needs: [scope, lint, rust-tests, viewer, viewer-blocks, site, engine-chips, engine-circuits, engine-wasm]
+    needs: [scope, lint, rust-tests, viewer, viewer-blocks, site, engine-chips, engine-circuits, engine-wasm, client]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -335,9 +351,10 @@ jobs:
           ENGINE_CHIPS: ${{ needs.engine-chips.result }}
           ENGINE_CIRCUITS: ${{ needs.engine-circuits.result }}
           ENGINE_WASM: ${{ needs.engine-wasm.result }}
+          CLIENT: ${{ needs.client.result }}
         run: |
           failed=
-          for name in SCOPE LINT RUST VIEWER VIEWER_BLOCKS SITE ENGINE_CHIPS ENGINE_CIRCUITS ENGINE_WASM; do
+          for name in SCOPE LINT RUST VIEWER VIEWER_BLOCKS SITE ENGINE_CHIPS ENGINE_CIRCUITS ENGINE_WASM CLIENT; do
             result=${!name}
             case $result in
               success|skipped) ;;

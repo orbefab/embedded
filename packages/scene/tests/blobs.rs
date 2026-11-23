@@ -136,13 +136,13 @@ fn a_blob_param_in_part_format_1_needs_format_2() {
 }
 
 #[test]
-fn a_part_in_format_4_needs_a_newer_orbe() {
+fn a_part_in_format_5_needs_a_newer_orbe() {
     let project = project();
     edit(
         project.path(),
         "chip/part.jsonc",
         "\"format\": 2",
-        "\"format\": 4",
+        "\"format\": 5",
     );
     let found = errors(project.path());
     assert_eq!(found.len(), 1, "{found:#?}");
@@ -150,9 +150,9 @@ fn a_part_in_format_4_needs_a_newer_orbe() {
     assert_eq!(found[0].file, "chip/part.jsonc");
     assert_eq!(
         found[0].message,
-        "format 4 is newer than this binary reads; this project needs a newer orbe"
+        "format 5 is newer than this binary reads; this project needs a newer orbe"
     );
-    assert_eq!(found[0].hint, "this binary reads format 1, 2, 3");
+    assert_eq!(found[0].hint, "this binary reads format 1, 2, 3, 4");
 }
 
 /// A project a newer orbe wrote holds `parts/<id>/` for an id this binary does not carry.

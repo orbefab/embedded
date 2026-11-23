@@ -8,8 +8,10 @@
 //! their SHA-256 and checked against the hash and size named for them.
 //! The index is fetched on every command. Each URL is fetched at most once in one command.
 //!
-//! The copy written into the project is the copy orbe reads. Nothing here compares it with the
-//! registry again. `check`, `open`, `test` and `show` do not use this module.
+//! The copy written into the project is the copy orbe reads. The part reader runs on each
+//! fetched part before anything is written, and a part this binary cannot read is not written.
+//! Nothing here compares a written copy with the registry again. `check`, `open`, `test` and
+//! `show` do not use this module.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, OpenOptions};
@@ -22,7 +24,7 @@ use std::thread;
 
 use orbe_registry::{Index, Item, Kind, Row};
 use orbe_scene::{
-    BlockCard, Card, CardFile, PlugPart, Version, breadboard_line, is_id, shell_word,
+    BlockCard, Card, CardFile, Code, PlugPart, Version, breadboard_line, is_id, shell_word,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -38,6 +40,8 @@ const TEMPLATE: &str = "https://orbefab.com/orbe/r/{name}.json";
 /// A response larger than this is refused before it is kept. The largest part file is well under it.
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const REDIRECTS: &str = "3";
+/// What `orbe add` prints when a fetched part is newer than this binary reads.
+const UPDATE: &str = "curl -fsSL https://orbefab.com/orbe/install.sh | sh";
 /// How many registry URLs are fetched at once. An `https` URL is fetched by running `curl`.
 const FETCH_LIMIT: usize = 8;
 
@@ -349,6 +353,7 @@ fn install(
         let version = fetch_part(client, index, id, None, &mut Vec::new(), &mut forest)?;
         versions.insert(id.clone(), version);
     }
+    refuse_unreadable(&forest)?;
     place_all(root, dir, ids, &versions, &forest)?;
     let wrote: Vec<Value> = ids
         .iter()
@@ -456,6 +461,7 @@ fn install_block(
             &existing,
         ));
     }
+    refuse_unreadable(&forest)?;
     place_all(root, dir, &part_ids, &versions, &forest)?;
     let wrote_files = match write_block_files(root, &owned, &kept) {
         Ok(wrote) => wrote,
@@ -1221,6 +1227,33 @@ fn is_a_link(dir: Option<&Path>, id: &str, rel: &str) -> Fail {
         ),
         FAILED,
     )
+}
+
+/// A part this binary's reader refuses is not written. A format newer than this binary reads
+/// asks for the install command. Any other finding keeps that finding's own hint.
+fn refuse_unreadable(forest: &Forest) -> Result<(), Fail> {
+    for (id, versions) in &forest.nodes {
+        for node in versions.values() {
+            let found = orbe_scene::part_findings(id, &node.files);
+            let Some(first) = found.first() else {
+                continue;
+            };
+            let newer = first.code == Code::PartFormat
+                && first.message.contains("newer than this binary reads");
+            let hint = if newer {
+                UPDATE.to_string()
+            } else {
+                first.hint.clone()
+            };
+            return Err(fail(
+                first.code.as_str(),
+                format!("{id}: {}. nothing was written", first.message),
+                hint,
+                FAILED,
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn place_all(
