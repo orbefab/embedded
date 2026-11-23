@@ -1,5 +1,5 @@
 {
-  "format": 4, "part": "capacitor-electrolytic-smd", "version": "0.2.1", "title": "Capacitor, SMD aluminum electrolytic, case D", "license": "MIT OR Apache-2.0",
+  "format": 5, "part": "capacitor-electrolytic-smd", "version": "0.2.1", "title": "Capacitor, SMD aluminum electrolytic, case D", "license": "MIT OR Apache-2.0",
   "summary": "Panasonic EEE-1EA470WP, 47 µF 25 V, SMD aluminum electrolytic, case D. Lead 1 is positive. The dark mark on the can is the negative end, lead 2. A reverse voltage past 1 V warns.",
   "tags": ["capacitor", "electrolytic", "polarized", "smd"],
   "docs": {
@@ -17,15 +17,18 @@
     "kind": "capacitor",
     "pins": { "a": "pos", "b": "neg" },
     "series_resistance": {
-      "value": 5.64,
-      "unit": "ohm",
-      "source": {
-        "datasheet": {
-          "doc": "Panasonic EEE-1EA470WP",
-          "at": "Dissipation factor (tan δ) 0.20 at 120 Hz, +20 °C, for this 47 µF 25 V part. ESR = tan δ / (2 π f C) = 5.64 ohm. The sheet states tan δ, not a 100 kHz ESR. The value does not change when the capacitance param does.",
-          "basis": "max"
+      "tan_delta": {
+        "value": 0.2,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "Panasonic EEE-1EA470WP",
+            "at": "Dissipation factor (tan δ) 0.20 at 120 Hz, +20 °C. The series resistance is tan δ / (2 π f C) at the capacitance set, 5.64 ohm at 47 µF.",
+            "basis": "max"
+          }
         }
-      }
+      },
+      "frequency": { "value": 120, "unit": "Hz", "source": { "datasheet": { "doc": "Panasonic EEE-1EA470WP", "at": "The frequency tan δ is stated at", "basis": "nominal" } } }
     },
     "ratings": {
       "reverse_voltage": {
@@ -42,6 +45,6 @@
     }
   },
   "not_simulated": [
-    { "what": "ESR versus capacitance", "why": "The series resistance is the 47 µF figure from tan δ at 120 Hz. It does not fall when the capacitance param is set lower." },
+    { "what": "ESR versus frequency", "why": "The series resistance is tan δ at 120 Hz, held at every frequency." },
   ],
 }

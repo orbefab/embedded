@@ -12,4 +12,5 @@ mod pulse;
 mod replay;
 mod serial;
 mod session;
+mod spi;
 mod steps;

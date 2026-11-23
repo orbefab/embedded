@@ -1,5 +1,7 @@
 use crate::world::World;
-use orbe_model::{Cs, Device, Drawn, Fields, Lanes, Panel, Sha256, Spi, SpiPhase, Time, View};
+use orbe_model::{
+    Cs, Device, Drawn, Fields, Lanes, Miso, Panel, Sha256, Spi, SpiPhase, Time, View,
+};
 
 use super::Port;
 use super::model::{
@@ -9,7 +11,7 @@ use super::model::{
 use crate::active::native::{Hosted, Native};
 use crate::active::{duty, spi};
 use crate::diagnostic::ProtocolRule;
-use crate::link::{LinkRow, Record, RecordKind, SpiNets};
+use crate::link::{Answers, LinkRow, Record, RecordKind, SpiNets};
 use crate::netlist::NetId;
 
 const OPCODE_PIXELS: u32 = 0x32;
@@ -62,7 +64,8 @@ impl Core {
     }
 
     fn take(&mut self, at: Time, records: &[LinkRow]) {
-        self.native.take(&World::default(), at, records);
+        self.native
+            .take(&World::default(), at, records, &mut Answers::default());
         let closed = &mut self.closed;
         self.native.drain_rows(&mut |at, drawn: Drawn| {
             closed.push(Closed {
@@ -119,6 +122,7 @@ fn spi(phases: &[(u8, u32)], data: &[u8], data_lanes: Lanes, cs: Cs) -> LinkRow 
                     data: data.into(),
                     clock_hz: 1,
                     cs,
+                    miso: Miso::None,
                 },
                 nets: SpiNets {
                     cs: Some(NetId::GROUND),

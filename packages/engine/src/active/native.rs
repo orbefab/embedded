@@ -6,11 +6,12 @@ use std::fmt;
 use std::sync::Arc;
 
 use orbe_model::{
-    Cx, Device, Drawn, Drive, Drives, Event, Levels, Pulses, Quantity, Shows, Stop, Time, View,
+    Cx, Device, Draw, Drawn, Drive, Drives, Event, Levels, Pulses, Quantity, Shows, Stop, Time,
+    View,
 };
 
 use crate::diagnostic::ProtocolRule;
-use crate::link::{LinkRow, Record};
+use crate::link::{Answers, LinkRow, Record};
 use crate::world::World;
 
 /// A device's core, with the contract every `Core` keeps. Each call that reaches the device
@@ -18,11 +19,14 @@ use crate::world::World;
 pub(crate) trait Hosted: Send + fmt::Debug {
     fn run_until(&mut self, world: &World, limit: Time) -> Option<Stop>;
     fn drive(&self) -> &[Drive];
+    /// The device's draw at its last stop, which the stamp reads.
+    fn draw(&self) -> Draw;
     fn sample(&mut self, world: &World, at: Time, volts: &[f64]);
     fn input(&mut self, world: &World, at: Time, levels: &[bool]);
     fn event(&mut self, world: &World, at: Time, event: Event<'_>);
-    /// One call per landing. The port walks each record on the concrete device.
-    fn take(&mut self, world: &World, at: Time, records: &[LinkRow]);
+    /// One call per landing. The port walks each record on the concrete device, and drives
+    /// each byte the device answers into `answers`.
+    fn take(&mut self, world: &World, at: Time, records: &[LinkRow], answers: &mut Answers);
     /// The part of one record sent by `at`, where the run ends inside it.
     fn cut(&mut self, world: &World, at: Time, record: &Record);
     /// The world quantities the device reads.
@@ -304,13 +308,15 @@ pub(crate) trait Port<D>: Clone + Send + 'static {
     fn claim(&mut self, _dev: &mut Hosting<D>, _at: Time) {}
     /// Each rule the port saw broken, at the first time.
     fn broke(&self, _found: &mut Vec<(ProtocolRule, Time)>) {}
-    /// The records that end at `at`. A port with no record pin does nothing.
+    /// The records that end at `at`, and the bytes the device answers on MISO to those that
+    /// read. A port with no record pin does nothing.
     fn take_records(
         &mut self,
         _dev: &mut Hosting<D>,
         _world: &World,
         _at: Time,
         _records: &[LinkRow],
+        _answers: &mut Answers,
     ) {
     }
     /// The part of `record` sent by `at`. A port with no record pin does nothing.
@@ -370,9 +376,16 @@ impl<D, A: Port<D>, B: Port<D>> Port<D> for (A, B) {
         self.1.broke(found);
     }
 
-    fn take_records(&mut self, dev: &mut Hosting<D>, world: &World, at: Time, records: &[LinkRow]) {
-        self.0.take_records(dev, world, at, records);
-        self.1.take_records(dev, world, at, records);
+    fn take_records(
+        &mut self,
+        dev: &mut Hosting<D>,
+        world: &World,
+        at: Time,
+        records: &[LinkRow],
+        answers: &mut Answers,
+    ) {
+        self.0.take_records(dev, world, at, records, answers);
+        self.1.take_records(dev, world, at, records, answers);
     }
 
     fn cut_record(&mut self, dev: &mut Hosting<D>, world: &World, at: Time, record: &Record) {
@@ -407,6 +420,10 @@ pub(crate) struct Native<D, P> {
     port: P,
     /// The device's drives after its last stop.
     drives: Drives,
+    /// The device's draw after its last stop.
+    draw: Draw,
+    /// A stop 1 ps after a call other than `run_until` changed the device's draw.
+    redraw: Option<Time>,
     /// The port's drives, then the device's, up to `len`.
     image: [Drive; IMAGE],
     len: usize,
@@ -418,6 +435,8 @@ impl<D: Device, P: Clone> Clone for Native<D, P> {
             dev: self.dev.clone(),
             port: self.port.clone(),
             drives: self.drives,
+            draw: self.draw,
+            redraw: self.redraw,
             image: self.image,
             len: self.len,
         }
@@ -433,6 +452,8 @@ impl<D: Device, P: Port<D>> Native<D, P> {
             dev: Hosting::new(device),
             port,
             drives: Drives::OFF,
+            draw: Draw::NONE,
+            redraw: None,
             image: [Drive::Off; IMAGE],
             len: P::PINS + outputs,
         };
@@ -447,6 +468,8 @@ impl<D: Device, P: Port<D>> Native<D, P> {
 
     fn refresh(&mut self) {
         self.drives = self.dev.device.drive();
+        self.draw = self.dev.device.draw();
+        self.redraw = None;
         self.port.drive(&mut self.image[..P::PINS]);
         for (k, drive) in self.image[P::PINS..self.len].iter_mut().enumerate() {
             *drive = self.drives.get(k);
@@ -455,6 +478,14 @@ impl<D: Device, P: Port<D>> Native<D, P> {
 
     fn held(&self) -> bool {
         self.dev.device.drive() == self.drives
+    }
+
+    /// After a call at `at` other than `run_until`: a draw that call changed takes effect at a
+    /// stop 1 ps later, or at an earlier stop already due.
+    fn follow_draw(&mut self, at: Time) {
+        if self.dev.device.draw() != self.draw && self.redraw.is_none() {
+            self.redraw = Some(Time::from_ps(at.as_ps() + 1));
+        }
     }
 
     /// Hands the port the train a call at `at` queued. A device on a port that plays no train
@@ -485,23 +516,17 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
     /// falls at the same time as the other is the same stop.
     fn run_until(&mut self, world: &World, limit: Time) -> Option<Stop> {
         let due = self.port.due_at().filter(|&due| due <= limit);
-        let stop = self.dev.run_until(world, due.unwrap_or(limit));
-        self.claim(stop.map_or(due.unwrap_or(limit), |stop| stop.at));
-        let stop = match (stop, due) {
-            (Some(stop), Some(due)) if stop.at == due => {
-                let record = self.take_due(world, due);
-                Stop {
-                    record: stop.record || record,
-                    ..stop
-                }
-            }
-            (Some(stop), _) => stop,
-            (None, Some(due)) => Stop {
-                at: due,
-                sample: false,
-                record: self.take_due(world, due),
-            },
-            (None, None) => return None,
+        let redraw = self.redraw.filter(|&redraw| redraw <= limit);
+        let bound = due.into_iter().chain(redraw).min();
+        let stop = self.dev.run_until(world, bound.unwrap_or(limit));
+        self.claim(stop.map_or(bound.unwrap_or(limit), |stop| stop.at));
+        let at = stop.map_or(bound, |stop| Some(stop.at));
+        let at = at?;
+        let record = due == Some(at) && self.take_due(world, at);
+        let stop = Stop {
+            at,
+            sample: stop.is_some_and(|stop| stop.sample),
+            record: stop.is_some_and(|stop| stop.record) || record,
         };
         self.refresh();
         Some(stop)
@@ -511,11 +536,16 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
         &self.image[..self.len]
     }
 
+    fn draw(&self) -> Draw {
+        self.draw
+    }
+
     fn sample(&mut self, world: &World, at: Time, volts: &[f64]) {
         self.dev
             .call(world, at, |device, cx| device.sample(cx, at, volts));
         self.claim(at);
         assert!(self.held(), "a sample never changes the drives");
+        self.follow_draw(at);
     }
 
     fn input(&mut self, world: &World, at: Time, levels: &[bool]) {
@@ -529,6 +559,7 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
         });
         self.claim(at);
         assert!(self.held(), "an input never changes the drives");
+        self.follow_draw(at);
     }
 
     fn event(&mut self, world: &World, at: Time, event: Event<'_>) {
@@ -536,18 +567,22 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
             .call(world, at, |device, cx| device.event(cx, at, event));
         self.claim(at);
         assert!(self.held(), "an event never changes the drives");
+        self.follow_draw(at);
     }
 
-    fn take(&mut self, world: &World, at: Time, records: &[LinkRow]) {
-        self.port.take_records(&mut self.dev, world, at, records);
+    fn take(&mut self, world: &World, at: Time, records: &[LinkRow], answers: &mut Answers) {
+        self.port
+            .take_records(&mut self.dev, world, at, records, answers);
         self.claim(at);
         assert!(self.held(), "a record never changes the drives");
+        self.follow_draw(at);
     }
 
     fn cut(&mut self, world: &World, at: Time, record: &Record) {
         self.port.cut_record(&mut self.dev, world, at, record);
         self.claim(at);
         assert!(self.held(), "a record never changes the drives");
+        self.follow_draw(at);
     }
 
     fn reads(&self) -> &'static [Quantity] {
@@ -620,6 +655,8 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
         self.dev.clone_from(&source.dev);
         self.port.clone_from(&source.port);
         self.drives = source.drives;
+        self.draw = source.draw;
+        self.redraw = source.redraw;
         self.image = source.image;
         self.len = source.len;
     }

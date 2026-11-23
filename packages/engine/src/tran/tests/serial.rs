@@ -55,7 +55,7 @@ fn alone(netlist: &Netlist, clocks: &[u32], stop: Time) -> Vec<Frame> {
             .collect();
         while let Some(halt) = core.run_until(stop) {
             if halt.sample {
-                core.sample(halt.at, &volts);
+                core.sample(halt.at, &volts, &orbe_model::Readings::NONE);
             }
         }
         let mut cpu = core.cpu().clone();

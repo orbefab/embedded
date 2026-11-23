@@ -193,6 +193,11 @@ pub struct Rating {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "Value"))]
     pub source: Option<Value>,
+    /// How the datasheet means it, `"peak"` or `{ "sustained": { "average", "tau" } }`, when
+    /// the part says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Value"))]
+    pub basis: Option<Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1029,6 +1034,7 @@ fn ratings(tree: &Node) -> Vec<Rating> {
                     value: None,
                     unit: None,
                     source: None,
+                    basis: None,
                 });
             }
             let value_node = prop.value.get("value")?;
@@ -1050,6 +1056,7 @@ fn ratings(tree: &Node) -> Vec<Rating> {
                 value,
                 unit,
                 source: prop.value.get("source").map(Node::to_value),
+                basis: prop.value.get("basis").map(Node::to_value),
             })
         })
         .collect()

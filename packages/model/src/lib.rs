@@ -13,12 +13,12 @@ mod time;
 mod world;
 
 pub use device::{
-    Ack, Cx, Device, Dir, Drawn, DutyTarget, Error, Event, Fields, I2cTarget, Idle, Panel, Params,
-    PulseTarget, Shows, SpiTarget, State, Value, View,
+    Ack, Cx, Device, Dir, Draw, Drawn, DutyTarget, Error, Event, Fields, I2cTarget, Idle, Panel,
+    Params, PulseTarget, Shows, SpiTarget, State, Value, View,
 };
 pub use pages::Pages;
 pub use pins::{Drive, Drives, Levels, Stop};
-pub use record::{Cs, Duty, Lanes, Pulses, Spi, SpiPhase};
+pub use record::{Cs, Duty, Lanes, Miso, Pulses, Spi, SpiPhase};
 pub use sha256::Sha256;
 pub use time::Time;
 pub use world::{Quantity, Readings, Row};

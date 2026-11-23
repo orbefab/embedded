@@ -5,6 +5,7 @@ use crate::diagnostic::Diagnostic;
 use crate::diagnostic::ValueRule;
 use crate::netlist::Contact;
 use crate::netlist::NetId;
+use crate::netlist::Rating;
 use crate::netlist::Value;
 use crate::netlist::json::AMPERE;
 use crate::netlist::json::PinMap;
@@ -219,7 +220,7 @@ impl Kind for Relay {
     fn quantities(&self) -> &'static [Quantity] {
         TWO_PIN
     }
-    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+    fn ratings(&self) -> (Option<(Quantity, &Rating)>, Option<&Rating>) {
         (None, None)
     }
     fn observe(&self, probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {

@@ -3,7 +3,7 @@
 //! console bytes, take records, and log what it took.
 
 use orbe_mcu::Frame;
-use orbe_model::{Cs, Drive, Duty, Lanes, Spi, Stop, Time};
+use orbe_model::{Cs, Drive, Duty, Lanes, Miso, Spi, Stop, Time};
 
 use crate::netlist::NetId;
 
@@ -129,6 +129,7 @@ pub(crate) fn chip(
         twi: false,
         sends: false,
         supply: None,
+        draw: None,
         takes: Takes::default(),
         core: super::Core::Script(Box::new(Core::new(script, echo, out))),
     }
@@ -362,6 +363,7 @@ fn spi(bus: SpiTarget, tag: u8) -> RecordKind {
             data: vec![tag].into(),
             clock_hz: 1,
             cs: Cs::Released,
+            miso: Miso::None,
         },
         nets: SpiNets {
             cs: Some(bus.cs),

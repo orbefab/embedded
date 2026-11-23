@@ -113,7 +113,8 @@ fn catalog_value(rel: &str, field: &str, unit: &str) -> f64 {
         .unwrap_or_else(|| panic!("{rel} {field} has no number"))
 }
 
-/// Both bodies of `parts/lm358-dip8/part.jsonc`, which have to carry one set of values.
+/// Both bodies of `parts/lm358-dip8/part.jsonc`, which have to carry one set of values. Only
+/// `a` carries `ratings.supply_voltage`, since both share the supply pins.
 fn part_values() -> Values {
     let path = super::common::repo("parts/lm358-dip8/part.jsonc");
     let text =
@@ -127,6 +128,11 @@ fn part_values() -> Values {
             .unwrap_or_else(|| panic!("{} model is not an object", path.display()))
             .remove("pins");
     }
+    a["ratings"]
+        .as_object_mut()
+        .unwrap_or_else(|| panic!("{} model.a has no ratings", path.display()))
+        .remove("supply_voltage")
+        .unwrap_or_else(|| panic!("{} model.a rates no supply", path.display()));
     assert_eq!(
         a,
         b,

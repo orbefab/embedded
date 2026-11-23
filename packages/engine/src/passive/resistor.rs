@@ -1,11 +1,13 @@
+use crate::netlist::Rating;
+use crate::netlist::json::WireRating;
 use orbe_model::Time;
 use serde::Deserialize;
 
 use crate::element::{Observed, OwnedCapacitor, OwnedInductor, TWO_PIN, Update};
 use crate::mna::{Probe, Stamp, Unknowns};
 use crate::name::Quantity;
-use crate::netlist::json::{ParseCtx, PinMap, WireValue, resolve_pins, resolve_rating};
-use crate::netlist::{Conduction, Kind, NetId, Value, broken_positive};
+use crate::netlist::json::{ParseCtx, PinMap, resolve_pins, resolve_rating};
+use crate::netlist::{Conduction, Kind, NetId, broken_positive};
 use crate::newton::Side;
 use crate::world::json::{FieldRule, WireParam, resolve_param};
 use crate::world::{Driven, Param};
@@ -17,7 +19,7 @@ pub struct Resistor {
     /// Ohm, greater than 0 with a finite reciprocal, fixed or driven by a world quantity.
     pub resistance: Param,
     /// Watt, greater than 0. `None` is an explicit `"power": null`.
-    pub max_power: Option<Value>,
+    pub max_power: Option<Rating>,
 }
 
 impl Resistor {
@@ -30,7 +32,7 @@ impl Resistor {
 #[serde(deny_unknown_fields)]
 pub(crate) struct WireResistorRatings {
     #[serde(deserialize_with = "Option::deserialize")]
-    power: Option<WireValue>,
+    power: Option<WireRating>,
 }
 
 #[derive(Deserialize)]
@@ -108,7 +110,7 @@ impl Kind for Resistor {
     fn quantities(&self) -> &'static [Quantity] {
         TWO_PIN
     }
-    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+    fn ratings(&self) -> (Option<(Quantity, &Rating)>, Option<&Rating>) {
         (None, self.max_power.as_ref())
     }
     fn observe(&self, probe: &Probe<'_>, at: Time, side: Side) -> Option<Observed> {

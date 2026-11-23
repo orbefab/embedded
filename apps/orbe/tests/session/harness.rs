@@ -85,8 +85,15 @@ impl Runtime {
         let mut names: Vec<String> = fs::read_dir(self.sessions())
             .map(|entries| {
                 entries
-                    .filter_map(|e| e.ok()?.file_name().into_string().ok())
-                    .filter(|n| n.ends_with(".sock"))
+                    .filter_map(|entry| {
+                        let entry = entry.ok()?;
+                        let name = entry.file_name().into_string().ok()?;
+                        entry
+                            .path()
+                            .join("sock")
+                            .exists()
+                            .then_some(format!("{name}/sock"))
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -126,7 +133,7 @@ impl Runtime {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        let socket = format!("{name}.sock");
+        let socket = format!("{name}/sock");
         wait_until("the process listens", || self.sockets().contains(&socket));
         child
     }
@@ -162,6 +169,20 @@ pub fn gone(pid: u32) -> bool {
     });
     let threads = fs::read_dir(format!("/proc/{pid}/task")).map_or(0, Iterator::count);
     zombie && threads <= 1
+}
+
+/// Waits until `pid` has been scheduled, so a step has entered the process.
+pub fn wait_scheduled(pid: u32) {
+    let utime = || {
+        let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+        let rest = stat.split_once(") ").map(|(_, rest)| rest).unwrap_or("");
+        rest.split_whitespace()
+            .nth(11)
+            .and_then(|field| field.parse::<u64>().ok())
+            .unwrap_or(0)
+    };
+    let start = utime();
+    wait_until("the process runs", || gone(pid) || utime() > start);
 }
 
 pub fn wait_until(what: &str, done: impl Fn() -> bool) {

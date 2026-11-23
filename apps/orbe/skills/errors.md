@@ -15,7 +15,7 @@ With `--json` a command prints one object, `{"ok": true, "data": {...}}` or `{"o
 | `scene.unknown_pin`, `scene.param`, `scene.syntax` | A typo or a wrong value at that line and column. The hint names what is valid. |
 | `scene.world` | A `world` quantity that does not exist, a value outside its range, or a step at 0, too close to the one before it, or that does not change the value. |
 | `no_session` | No session runs under this name. Run the `orbe open` in the hint. |
-| `session_crashed` | The session's process died. Run `orbe open` again. It names `<name>.log.crashed` when the process left output. A failed `open` after an earlier crash names `<name>.log`. A crash that wrote nothing removes the older one. |
+| `session_crashed` | The session's process died. Run `orbe open` again. It names `<runtime>/orbe/<name>/<pid>.crashed` when that process left output. A crash that wrote nothing does not name an older crash file, and that file stays. Exit 4. |
 | `version_mismatch` | Another version of orbe started this session. Run `orbe close`. |
 | `unknown_ref`, `no_reading` | The ref names nothing, or nothing to read. The hint lists what exists. |
 | `not_settable` | `press` and `release` work only on a switch. `set` works on a quantity the scene's `world` names or a part reads, and on a live param. Other params are fixed. The hint names the live ones. |
@@ -25,7 +25,7 @@ With `--json` a command prints one object, `{"ok": true, "data": {...}}` or `{"o
 | `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`, then fix the circuit or the firmware, or step longer. |
 | `ended` | The session reached its 2-hour stop. Reads still work. Run `orbe open` to start again. |
 | `past_stop` | A `step` would end past the stop, or an input would land past it. Do what the hint says. |
-| `cancelled` | Ctrl-C stopped a `step`. Step again. |
+| `cancelled` | Ctrl-C stopped a `step`. The session stays. Step again. `orbe close` during a `step` ends the session. The message says it was closed, and the hint says how to open it. |
 | `faulted` | The engine stopped the session. The message names why. Fix it and run `orbe open`. |
 
 A chip error such as `chip.unsupported_setting` names the peripheral and the setting. Load `orbe skills get arduino`.

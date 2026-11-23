@@ -15,8 +15,10 @@
 //! firmware flushed it.
 
 use orbe_mcu::{self as mcu, Frame, Mcu, Note, Phase, Sent, SentKind, SpiPins};
-use orbe_model::{Cs, Drive, Lanes, Pulses, Spi, SpiPhase, Stop, Time};
-use orbe_xtensa::{CoreId, Missing};
+use orbe_model::{Cs, Drive, Lanes, Pulses, Readings, Spi, SpiPhase, Stop, Time};
+use orbe_xtensa::Missing;
+
+use super::CoreId;
 
 use super::{
     Duty, Esp32s3, Fault, FlashRefusal, Halt, PadDrive, Pc, Refused, ResetCause, TICK_HZ, Tick,
@@ -254,6 +256,7 @@ impl Bridge {
                     } else {
                         Cs::Released
                     },
+                    miso: transfer.miso,
                 },
                 pins: SpiPins {
                     cs: output(pads.cs),
@@ -336,7 +339,7 @@ impl Mcu for Bridge {
     }
 
     /// Its ADC pads' voltages, in `sampled` order.
-    fn sample(&mut self, _at: Time, volts: &[f64]) {
+    fn sample(&mut self, _at: Time, volts: &[f64], _world: &Readings) {
         let sampled = &self.sampled;
         self.chip.sample(|gpio| {
             let k = sampled.iter().position(|&pad| pad == gpio);
@@ -391,6 +394,11 @@ impl Mcu for Bridge {
         for train in trains {
             sent(self.pulses(train));
         }
+    }
+
+    /// SPI2's read, into `SPI_W0` on.
+    fn answered(&mut self, _at: Time, miso: &[u8]) {
+        self.chip.answered(miso);
     }
 
     fn in_flight(&self, ahead: &Self, at: Time) -> Vec<Sent> {

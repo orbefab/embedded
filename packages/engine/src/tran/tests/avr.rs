@@ -187,7 +187,7 @@ fn a_chip_held_in_reset_draws_its_reset_current() {
     );
 }
 
-fn board(stop_ps: u64, nets: &[&str], parts: &[String], mcu: String) -> Netlist {
+pub(super) fn board(stop_ps: u64, nets: &[&str], parts: &[String], mcu: String) -> Netlist {
     let pins: Vec<String> = pin_nets().map(|(net, _)| net).collect();
     let nets: Vec<&str> = pins
         .iter()
@@ -500,7 +500,11 @@ fn a_clone_from_leaves_the_state_a_clone_does() {
                 .run_until(orbe_model::Time::from_ps(20_000 * US))
                 .expect("a stop before the end");
             if halt.sample {
-                core.sample(halt.at, &[3.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 5.0, 5.0]);
+                core.sample(
+                    halt.at,
+                    &[3.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 5.0, 5.0],
+                    &orbe_model::Readings::NONE,
+                );
             }
             if halt.at.as_ps() >= from && core.drive()[txd] == drive {
                 break halt.at;

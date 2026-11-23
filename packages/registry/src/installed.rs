@@ -106,8 +106,7 @@ fn example_gaps(parts: &BTreeMap<String, Folder>, card: &Card) -> Vec<Gap> {
 fn example_gap(parts: &BTreeMap<String, Folder>, root: &str, param: &str) -> Option<Gap> {
     let (id, name) = declaring(parts, root, param)?;
     let text = part_text(parts.get(&id)?)?;
-    let at = param_key(&text, &name)?;
-    let (line, column) = line_col(&text, at);
+    let (line, column) = orbe_scene::param_key_at(&text, &name)?;
     Some(Gap {
         name: param.to_string(),
         diagnostic: Diagnostic {
@@ -131,75 +130,20 @@ fn declaring(
     let mut id = root.to_string();
     let mut name = param.to_string();
     for _ in 0..16 {
-        let value = parts.get(&id).and_then(part_value)?;
-        if declares_param(&value, &name) {
+        let text = part_text(parts.get(&id)?)?;
+        if orbe_scene::declares_param(&text, &name) {
             return Some((id, name));
         }
-        let (child, child_param) = passed_to(&value, &name)?;
+        let (child, child_param) = orbe_scene::passed_to(&text, &name)?;
         id = child;
         name = child_param;
     }
     None
 }
 
-fn declares_param(part: &Value, name: &str) -> bool {
-    let Some(decl) = part
-        .get("params")
-        .and_then(|node| node.get(name))
-        .and_then(|node| node.as_object())
-    else {
-        return false;
-    };
-    decl.contains_key("file") || decl.contains_key("unit") || decl.contains_key("choices")
-}
-
 fn part_text(folder: &Folder) -> Option<String> {
     let text = String::from_utf8_lossy(folder.get("part.jsonc")?);
     Some(text.strip_prefix('\u{feff}').unwrap_or(&text).to_string())
-}
-
-/// The byte offset of `name`'s key in `params`, including its quotes.
-fn param_key(text: &str, name: &str) -> Option<usize> {
-    let parsed = jsonc_parser::parse_to_ast(
-        text,
-        &jsonc_parser::CollectOptions::default(),
-        &json_options(),
-    )
-    .ok()?;
-    let root = parsed.value?;
-    let params = root.as_object()?.get("params")?.value.as_object()?;
-    Some(name_start(&params.get(name)?.name))
-}
-
-fn name_start(name: &jsonc_parser::ast::ObjectPropName<'_>) -> usize {
-    match name {
-        jsonc_parser::ast::ObjectPropName::String(lit) => lit.range.start,
-        jsonc_parser::ast::ObjectPropName::Word(lit) => lit.range.start,
-    }
-}
-
-/// The 1-based line and column of `offset`, the column counted in characters.
-fn line_col(text: &str, offset: usize) -> (usize, usize) {
-    let before = &text[..offset.min(text.len())];
-    let line = before.matches('\n').count() + 1;
-    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
-    (line, before[line_start..].chars().count() + 1)
-}
-
-/// JSON as the scene reader takes it: comments and trailing commas, and nothing looser.
-fn json_options() -> jsonc_parser::ParseOptions {
-    jsonc_parser::ParseOptions {
-        allow_comments: true,
-        allow_trailing_commas: true,
-        allow_loose_object_property_names: false,
-        allow_missing_commas: false,
-        allow_single_quoted_strings: false,
-        allow_hexadecimal_numbers: false,
-        allow_unary_plus_numbers: false,
-        allow_bare_decimal_point_numbers: false,
-        allow_non_finite_numbers: false,
-        allow_extended_string_escapes: false,
-    }
 }
 
 /// The in-memory scene's `` `r1` needs param `` line for a param whose missing example was
@@ -276,13 +220,13 @@ fn nested_example(parts: &BTreeMap<String, Folder>, root: &str, param: &str, fil
     let mut name = param.to_string();
     let mut prefix = format!("parts/{root}");
     for _ in 0..16 {
-        let Some(value) = parts.get(&id).and_then(part_value) else {
+        let Some(text) = parts.get(&id).and_then(part_text) else {
             break;
         };
-        if owns_param(&value, &name) {
+        if orbe_scene::owns_param(&text, &name) {
             return format!("{prefix}/{file}");
         }
-        let Some((child, child_param)) = passed_to(&value, &name) else {
+        let Some((child, child_param)) = orbe_scene::passed_to(&text, &name) else {
             break;
         };
         prefix = format!("{prefix}/parts/{child}");
@@ -292,65 +236,23 @@ fn nested_example(parts: &BTreeMap<String, Folder>, root: &str, param: &str, fil
     format!("{prefix}/{file}")
 }
 
-fn owns_param(part: &Value, name: &str) -> bool {
-    let Some(decl) = part
-        .get("params")
-        .and_then(|node| node.get(name))
-        .and_then(|node| node.as_object())
-    else {
-        return true;
-    };
-    decl.contains_key("file") || decl.contains_key("unit") || decl.contains_key("choices")
-}
-
-fn passed_to(part: &Value, name: &str) -> Option<(String, String)> {
-    let specs = part.get("parts")?.as_object()?;
-    for spec in specs.values() {
-        let spec = spec.as_object()?;
-        let ty = spec.get("type")?.as_str()?;
-        if !orbe_scene::is_id(ty) {
-            continue;
-        }
-        for (key, value) in spec {
-            if value.get("param").and_then(|node| node.as_str()) == Some(name) {
-                return Some((ty.to_string(), key.clone()));
-            }
-        }
-    }
-    None
-}
-
 /// Whether `id` or a part inside it names a ground. A scene ground would hide those.
 fn tree_names_ground(parts: &BTreeMap<String, Folder>, id: &str, stack: &mut Vec<String>) -> bool {
     if stack.iter().any(|seen| seen == id) {
         return false;
     }
-    let Some(folder) = parts.get(id) else {
+    let Some(text) = parts.get(id).and_then(part_text) else {
         return false;
     };
-    if part_value(folder)
-        .and_then(|value| {
-            value
-                .get("ground")
-                .and_then(|node| node.as_str())
-                .map(|_| ())
-        })
-        .is_some()
-    {
+    if orbe_scene::names_ground(&text) {
         return true;
     }
     stack.push(id.to_string());
-    let named = child_ids(folder)
+    let named = orbe_scene::catalog_part_ids(&text)
         .iter()
         .any(|child| tree_names_ground(parts, child, stack));
     stack.pop();
     named
-}
-
-fn part_value(folder: &Folder) -> Option<Value> {
-    let bytes = folder.get("part.jsonc")?;
-    let text = String::from_utf8_lossy(bytes);
-    jsonc_parser::parse_to_serde_value(&text, &jsonc_parser::ParseOptions::default()).ok()
 }
 
 /// A voltage source the scene names as ground when the part names none. It is not a catalog part.
@@ -380,7 +282,7 @@ fn block_project(parts: &BTreeMap<String, Folder>, cards: &[Card], folder: &Fold
         files.insert(PathBuf::from(rel), bytes.clone());
     }
     if let Some(scene) = folder.get("scene.jsonc") {
-        for id in scene_part_ids(scene) {
+        for id in orbe_scene::catalog_part_ids(&String::from_utf8_lossy(scene)) {
             let mut stack = Vec::new();
             nest(
                 &mut files,
@@ -417,7 +319,10 @@ fn nest(
         .find(|card| card.name == id)
         .map(|card| card.uses.keys().cloned().collect())
         .unwrap_or_default();
-    for child in child_ids(folder) {
+    let children = part_text(folder)
+        .map(|text| orbe_scene::catalog_part_ids(&text))
+        .unwrap_or_default();
+    for child in children {
         if !deps.iter().any(|seen| seen == &child) {
             deps.push(child);
         }
@@ -434,50 +339,6 @@ fn nest(
         );
     }
     stack.pop();
-}
-
-/// Catalog ids a part file's `parts` name. `uses` lists the same ids when the part was
-/// published; a part that only names them here still nests those copies.
-fn child_ids(folder: &Folder) -> Vec<String> {
-    let Some(bytes) = folder.get("part.jsonc") else {
-        return Vec::new();
-    };
-    let text = String::from_utf8_lossy(bytes);
-    let Ok(value) = jsonc_parser::parse_to_serde_value::<serde_json::Value>(
-        &text,
-        &jsonc_parser::ParseOptions::default(),
-    ) else {
-        return Vec::new();
-    };
-    let Some(parts) = value.get("parts").and_then(|node| node.as_object()) else {
-        return Vec::new();
-    };
-    parts
-        .values()
-        .filter_map(|spec| spec.get("type").and_then(|node| node.as_str()))
-        .filter(|ty| orbe_scene::is_id(ty))
-        .map(str::to_string)
-        .collect()
-}
-
-/// Ids the scene names, skipping a `./` or `../` path.
-fn scene_part_ids(bytes: &[u8]) -> Vec<String> {
-    let text = String::from_utf8_lossy(bytes);
-    let Ok(value) = jsonc_parser::parse_to_serde_value::<serde_json::Value>(
-        &text,
-        &jsonc_parser::ParseOptions::default(),
-    ) else {
-        return Vec::new();
-    };
-    let Some(parts) = value.get("parts").and_then(|node| node.as_object()) else {
-        return Vec::new();
-    };
-    parts
-        .values()
-        .filter_map(|spec| spec.get("type").and_then(|node| node.as_str()))
-        .filter(|ty| !ty.starts_with('.') && !ty.starts_with('@'))
-        .map(str::to_string)
-        .collect()
 }
 
 fn current_format() -> u32 {

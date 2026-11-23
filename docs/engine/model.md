@@ -19,6 +19,7 @@ Equal generations mean equal pages only between a state and a copy made before o
 | `new(params)` | Builds the device from its part's logic params, at power-on. Electrical params stay in the engine. |
 | `run_until(cx, limit)` | Runs from the last time it reached. Returns the first stop in `(reached, limit]` where its drives may change or it samples, or `None` once it has done everything up to `limit`. A run split at any limit is the same run. |
 | `drive()` | One `Drive` per output it declares, in order: high, low, pull-up or off. |
+| `draw()` | The `Draw` it takes from its supply: `amps` while the supply is at or above `holds_above_v`, fading as `3 x^2 - 2 x^3` of it below, with `x` the supply over `holds_above_v`, to none at 0 V. `Draw::NONE` by default. |
 | `input(cx, at, levels)` | Its watches' levels from `at` on. |
 | `sample(cx, at, volts)` | The volts of its samples at a stop that asked for them. |
 | `event(cx, at, event)` | An event it declares, with fields the engine has checked against the declaration. |
@@ -32,7 +33,7 @@ Equal generations mean equal pages only between a state and a copy made before o
 
 The engine lists a part in `observations.json` `leds` only when its device declares an LED chain, and in `displays` only when it declares a screen.
 
-Only `run_until` changes the drives. `input`, `sample`, `event`, and every call of a role, such as `write` or `pulse`, leave them alone. What they cause comes at least 1 ps later, at a stop. The engine checks this after each of those calls, in every build, and panics on a device that breaks it.
+Only `run_until` changes the drives. Any call may change the draw. The host stamps the draw it read at the last stop, and a change from another call takes effect at a stop the host adds 1 ps after it. `input`, `sample`, `event`, and every call of a role, such as `write` or `pulse`, leave them alone. What they cause comes at least 1 ps later, at a stop. The engine checks this after each of those calls, in every build, and panics on a device that breaks it.
 
 `cx` is what a device may do during a call besides change its own state. The engine reads it after every call. `broke(rule, at)` names a rule and the time. The first time a device breaks each rule in a run is a `chip.protocol` warning, and the rule is the warning's `rule`, such as `bit`. One call keeps the first rule it names. A rule the engine does not know panics. `show()` says what an LED chain shows changed. The engine copies the view after that call, at the call's time, as a latch row. `drew(drawn)` is a pixel write a screen closed: its window, the bytes it took, and the first 8 bytes of their SHA-256, which `orbe_model::Sha256` makes. A call closes at most one. The engine writes it as a `display.csv` row at the call's time. A device that is not an LED chain and calls `show`, or is not a screen and calls `drew`, panics. A row from `run_until` takes the time of the stop it returns. `replayed()` says the call replays a level a `Pulses` record carried. The record lands at its end, so such a call's time is at or before the device's own, and a drive it changes would land in the past. `world(quantity)` and `pulses(start, train)` are in [The world](#the-world) and [Pulse targets](#pulse-targets).
 
@@ -67,15 +68,18 @@ A `PulseTarget` is a device on a pulsed line. The engine watches the line, times
 | `pulse(cx, at, level, width)` | A level that held for `width` picoseconds ended at `at`. |
 | `idle(cx, at, level)` | The line has rested at `level`, `IDLE`'s level, for `IDLE`'s time, at `at`. |
 
-The WS2812 is a pulse target whose line rests low. It reads `pulse` and `idle`, latches at `idle`, and shows its colours as an LED chain. With `DOUT`, it queues each high past its last LED's bits a delay later and stops at each `DOUT` edge. A `pulse` call that `replayed()` cannot drive `DOUT`, so it breaks rule `dout_record` instead. The DHT22 is an open-drain pulse target whose line rests high. A low of at least 0.8 ms is a start, and it queues its 40-bit reply 30 us after the line rises. [netlist.md](netlist.md#dht22) gives its timings. [engine.md](engine.md#pulse-targets) gives what the engine keeps, and [engine.md](engine.md#records) gives the WS2812's windows.
+The WS2812 is a pulse target whose line rests low. It reads `pulse` and `idle`, latches at `idle`, and shows its colours as an LED chain. Its draw follows its latched colours. With `DOUT`, it queues each high past its last LED's bits a delay later and stops at each `DOUT` edge. A `pulse` call that `replayed()` cannot drive `DOUT`, so it breaks rule `dout_record` instead. The DHT22 is an open-drain pulse target whose line rests high. A low of at least 0.8 ms is a start, and it queues its 40-bit reply 30 us after the line rises. [netlist.md](netlist.md#dht22) gives its timings. [engine.md](engine.md#pulse-targets) gives what the engine keeps, and [engine.md](engine.md#records) gives the WS2812's windows.
 
 ## SPI targets
 
 An `SpiTarget` is a device on an SPI bus. The engine takes each `Spi` record whose CS and SCLK sit on the device's pins. It drops one while the device's reset pin reads low, and one whose lanes sit on other nets than the device's data pins, which is `chip.link_miswired` at the first time. The device sees each other transaction whole, with its phases, data, lanes and whether CS is held at its end.
 
+A transaction's `miso` says what the host reads back on MISO, D1: nothing, one byte beside each data byte in full duplex, or a number of bytes in a read phase after the data. Before `transaction`, the engine asks `answer` for each byte the host reads, in order. A byte no device answers reads `0xFF`, and where two devices answer one byte, a bit reads low when either drives it low.
+
 | Method | What it does |
 | --- | --- |
 | `transaction(cx, at, spi)` | A transaction that ended at `at`. |
+| `answer(cx, at, phases, data, index)` | The byte it shifts out after `phases` and `index` bytes of the data stage, where `data` is what the host sent before that byte. `None` by default, which leaves MISO alone. |
 
 The engine walks a landing's records on the concrete device, so a transaction's bytes and pixels never cross a call through a trait object.
 

@@ -1,10 +1,10 @@
 //! The active chip seam: a chip whose core runs on the circuit's clock. Its core sees the time,
 //! names its own future events, holds state no stamp reads, and samples a voltage at a time it
-//! picks. The circuit sees only its drive image, one `Drive` per output pin. `docs/engine/engine.md`,
-//! Active chips, holds the loop's protocol.
+//! picks. The circuit sees its drive image, one `Drive` per output pin, and a device's draw from
+//! its supply. `docs/engine/engine.md`, Active chips, holds the loop's protocol.
 
 use orbe_mcu::{Frame, Phase};
-use orbe_model::{Drawn, Drive, Event, Quantity, Shows, Stop, Time};
+use orbe_model::{Draw, Drawn, Drive, Event, Quantity, Shows, Stop, Time};
 
 use crate::netlist::{NetId, PartId};
 
@@ -16,6 +16,8 @@ pub(crate) mod replay;
 #[cfg(test)]
 pub(crate) mod script;
 pub(crate) mod spi;
+#[cfg(test)]
+pub(crate) mod spi_pins;
 
 use crate::device::{cst816, dht22, pulses_replay, spi_replay, st77916, ws2812};
 use crate::mcu::{self, Mcu, atmega328p, esp32s3};
@@ -25,7 +27,7 @@ use crate::device::Declared;
 use crate::diagnostic::Diagnostic;
 use crate::display::Rectangle;
 use crate::i2c::I2cRow;
-use crate::link::{LinkRow, Record, RecordKind};
+use crate::link::{Answers, LinkRow, Record, RecordKind};
 use crate::name::{Name, Ref};
 
 use crate::serial::SerialByte;
@@ -108,6 +110,9 @@ pub(crate) struct Chip {
     /// Its own draw from its supply, one conductance while it runs and another while a reset
     /// holds it. `None` on a chip that draws nothing but what its outputs pass.
     pub(crate) supply: Option<Supply>,
+    /// The supply and ground nets its device's [`Draw`] runs between. `None` on a chip whose
+    /// core draws nothing that way.
+    pub(crate) draw: Option<(NetId, NetId)>,
     /// The records it takes.
     pub(crate) takes: Takes,
     /// The core at power-on.
@@ -215,6 +220,16 @@ impl Core {
         }
     }
 
+    /// What its device draws from its supply, as at its last stop. Only a device draws so.
+    pub(crate) fn draw(&self) -> Draw {
+        match *self {
+            Core::Device(ref core) => core.draw(),
+            Core::Mcu(_) => Draw::NONE,
+            #[cfg(test)]
+            Core::Script(_) => Draw::NONE,
+        }
+    }
+
     /// Whether each output pulls down, in the order of its image, or empty when none does. Only a
     /// microcontroller says so, and only at a stop.
     pub(crate) fn pulled_down(&self) -> &[bool] {
@@ -309,9 +324,9 @@ impl Core {
 
     /// Takes the records that end at `at` on its record pins, ordered by end, then by sender name,
     /// then by sequence.
-    fn take(&mut self, world: &World, at: Time, records: &[LinkRow]) {
+    fn take(&mut self, world: &World, at: Time, records: &[LinkRow], answers: &mut Answers) {
         match *self {
-            Core::Device(ref mut core) => core.take(world, at, records),
+            Core::Device(ref mut core) => core.take(world, at, records, answers),
             Core::Mcu(_) => {
                 unreachable!(
                     "a chip with no record pins took {} records at {at:?}",
@@ -320,6 +335,16 @@ impl Core {
             }
             #[cfg(test)]
             Core::Script(ref mut core) => core.take(at, records),
+        }
+    }
+
+    /// The bytes the targets answered on MISO to the SPI record it sent that ended at `at`.
+    fn answered(&mut self, at: Time, miso: &[u8]) {
+        match *self {
+            Core::Mcu(ref mut mcu) => mcu.answered(at, miso),
+            Core::Device(_) => unreachable!("a device sends no record that reads"),
+            #[cfg(test)]
+            Core::Script(_) => unreachable!("a script sends no record that reads"),
         }
     }
 
@@ -394,12 +419,19 @@ pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
     }
 }
 
-/// The drops are sources, so they scale.
-pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, source_scale: f64) {
+/// The drops are sources, so they scale. A device's draw is linearised at `x`, the iterate:
+/// its current there, and its slope as a conductance.
+pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, x: &Solution, source_scale: f64) {
     let drive = core.drive();
     debug_assert_eq!(drive.len(), chip.outputs.len());
     if let Some(supply) = chip.supply {
         sys.conductance(supply.vcc, supply.gnd, supply.conductance(core));
+    }
+    if let Some((vcc, gnd)) = chip.draw {
+        let volts = x.voltage(vcc) - x.voltage(gnd);
+        let (amps, slope) = core.draw().at(volts);
+        sys.conductance(vcc, gnd, slope);
+        sys.current(vcc, gnd, amps - slope * volts);
     }
     let pulled_down = core.pulled_down();
     debug_assert!(pulled_down.is_empty() || pulled_down.len() == chip.outputs.len());
@@ -951,7 +983,10 @@ impl Actives {
     /// Two passes keep the landing free of part order. The first only reads: each sender stopped
     /// at `at` holds its records there, and they go to their receivers. The second is the only
     /// rewind and the only commit, so a receiver ahead of its sender in part order still takes
-    /// the record, and the sender is still committed on its stop.
+    /// the record, and the sender is still committed on its stop. A receiver answers each byte
+    /// an SPI record reads as it takes it. After the second pass each sender of such a record
+    /// takes the answer, on its kept core and on the copy that twins it, so the answer lands at
+    /// the record's end whatever the part order.
     pub(crate) fn land(
         &mut self,
         circuit: &Circuit,
@@ -962,7 +997,7 @@ impl Actives {
         keep: bool,
     ) -> (bool, u64) {
         let world = circuit.netlist.world();
-        let mut incoming = self.incoming(circuit, at);
+        let (mut incoming, mut answers) = self.incoming(circuit, at);
         let mut changed = false;
         let mut stops = 0u64;
         for (k, (committed, ahead)) in self.committed.iter_mut().zip(&mut self.ahead).enumerate() {
@@ -992,9 +1027,11 @@ impl Actives {
             ahead.rewind(world, committed, at);
             let image = ahead.core.drive().to_vec();
             let pulled_down = ahead.core.pulled_down().to_vec();
+            let draw = ahead.core.draw();
             changed |= image != committed.drive()
                 || pulled_down != committed.pulled_down()
-                || ahead.core.held() != committed.held();
+                || ahead.core.held() != committed.held()
+                || draw != committed.draw();
             if stop.is_some_and(|stop| stop.sample) {
                 let volts: Vec<f64> = circuit.actives[k]
                     .samples
@@ -1007,17 +1044,38 @@ impl Actives {
                 ahead.core.input(world, at, levels);
             }
             if !records.is_empty() {
-                ahead.core.take(world, at, &records);
+                ahead.core.take(world, at, &records, &mut answers);
             }
             if let Some(event) = event {
                 ahead.core.event(world, at, event.event());
             }
             assert_eq!(
-                (ahead.core.drive(), ahead.core.pulled_down()),
-                (&image[..], &pulled_down[..]),
+                (
+                    ahead.core.drive(),
+                    ahead.core.pulled_down(),
+                    ahead.core.draw()
+                ),
+                (&image[..], &pulled_down[..], draw),
                 "a sample, an input, a record or an event at a landing never changes an image"
             );
             ahead.commit(committed, &mut self.staged);
+        }
+        for answer in answers.into_vec() {
+            let (committed, ahead) = (
+                &mut self.committed[answer.slot],
+                &mut self.ahead[answer.slot],
+            );
+            assert!(
+                matches!(ahead.reach, Reach::Twin(twin) if twin == at),
+                "a sender is kept at its record's end"
+            );
+            committed.answered(at, &answer.miso);
+            ahead.core.answered(at, &answer.miso);
+            assert_eq!(
+                (committed.drive(), committed.pulled_down()),
+                (ahead.core.drive(), ahead.core.pulled_down()),
+                "an answer never changes an image"
+            );
         }
         (changed, stops)
     }
@@ -1057,14 +1115,16 @@ impl Actives {
     }
 
     /// The records that end at `at`, read from each sender stopped there and listed for each
-    /// chip that takes them, ordered by end, then by sender name, then by sequence. Reads only:
-    /// no rewind, no commit, no cursor and no reach moves.
-    fn incoming(&self, circuit: &Circuit, at: Time) -> Vec<Vec<LinkRow>> {
+    /// chip that takes them, ordered by end, then by sender name, then by sequence, and an open
+    /// answer for each SPI record that reads. Reads only: no rewind, no commit, no cursor and no
+    /// reach moves.
+    fn incoming(&self, circuit: &Circuit, at: Time) -> (Vec<Vec<LinkRow>>, Answers) {
+        let mut answers = Answers::default();
         if self.senders.is_empty() {
-            return Vec::new();
+            return (Vec::new(), answers);
         }
         let mut incoming = vec![Vec::new(); self.ahead.len()];
-        for ahead in &self.ahead {
+        for (slot, ahead) in self.ahead.iter().enumerate() {
             let Reach::Stopped(stop) = ahead.reach else {
                 continue;
             };
@@ -1081,6 +1141,11 @@ impl Actives {
                     record.end > after && record.end == at,
                     "a held record ends at its sender's stop"
                 );
+                if let RecordKind::Spi { spi, .. } = &record.kind
+                    && spi.reads() > 0
+                {
+                    answers.open(slot, ahead.delivered.sender, record.seq, spi.reads());
+                }
                 for (list, chip) in incoming.iter_mut().zip(&circuit.actives) {
                     if chip.takes.record(record) {
                         list.push(LinkRow {
@@ -1094,7 +1159,7 @@ impl Actives {
         for list in &mut incoming {
             list.sort_by(|a, b| self.record_key(a).cmp(&self.record_key(b)));
         }
-        incoming
+        (incoming, answers)
     }
 
     fn record_key<'a>(&'a self, row: &LinkRow) -> (Time, &'a Name, u64) {

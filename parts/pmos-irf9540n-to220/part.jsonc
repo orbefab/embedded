@@ -1,5 +1,5 @@
 {
-  "format": 1,
+  "format": 5,
   "part": "pmos-irf9540n-to220",
   "version": "0.2.0",
   "title": "P-channel MOSFET, IRF9540N (TO-220)",
@@ -81,6 +81,7 @@
       "current": {
         "value": 23,
         "unit": "A",
+        "basis": { "sustained": { "average": "rms", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } },
         "source": {
           "datasheet": {
             "doc": "Infineon IRF9540NPbF, Rev. 2.1, 2026-07-17",
@@ -92,6 +93,7 @@
       "power": {
         "value": 2.4193548387096775,
         "unit": "W",
+        "basis": { "sustained": { "average": "mean", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } },
         "source": {
           "closed_form": {
             "note": "with no heat sink: (TJ maximum 175 C minus TA 25 C) over RθJA maximum 62 C/W, from the operating range and thermal resistance of Infineon IRF9540NPbF Rev. 2.1. The 140 W rating needs the case held at 25 C."

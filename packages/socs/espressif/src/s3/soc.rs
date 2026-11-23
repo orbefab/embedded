@@ -13,7 +13,9 @@ use std::iter;
 use std::ops::Range;
 use std::sync::Arc;
 
-use orbe_xtensa::{Bus, Cause, Config, CoreId, Cycle, Exit, PagedRam, Width};
+use orbe_xtensa::{Bus, Cause, Cycle, Exit, PagedRam, Width};
+
+use super::CoreId;
 
 use super::analog::Analog;
 use super::app::{self, AppControl, Hold, Steer};
@@ -730,9 +732,19 @@ impl Soc {
         Ok(Self::sram_offset(addr, false))
     }
 
+    /// Instruction RAM and the mask ROM, where only an aligned word load or store goes. The S3
+    /// board's `s3-unaligned.txt` faults `iram l32 +=01` with cause 9 at `40378dc1`, `iram l16u
+    /// +=00` and `iram l8 +=01` with cause 3, and `irom l32 +=01` with cause 9 at `40000401`.
+    /// The windows around those two addresses come from the memory map. `dram l32 +=01` and
+    /// `drom l32 +=01` complete, so data RAM and data ROM are not in them. Cached instruction ROM
+    /// and RTC instruction RAM are not classified.
+    pub(crate) fn on_instruction_bus(addr: u32) -> bool {
+        matches!(addr, 0x4037_0000..0x403e_0000 | 0x4000_0000..0x4006_0000)
+    }
+
     /// Through instruction RAM and the ROM only an aligned word goes.
     fn instruction_bus(addr: u32, width: Width) -> Result<(), Exit> {
-        if orbe_xtensa::Esp32s3::instruction_bus(addr) {
+        if Self::on_instruction_bus(addr) {
             if !addr.is_multiple_of(width.bytes()) {
                 return Err(Exit::Fault(Cause::LoadStoreAlignment));
             }
@@ -1798,6 +1810,10 @@ impl CoreBus<'_> {
 }
 
 impl Bus for CoreBus<'_> {
+    fn instruction_bus(&self, addr: u32) -> bool {
+        Soc::on_instruction_bus(addr)
+    }
+
     fn fetch(&mut self, _now: Cycle, addr: u32) -> Result<u32, Exit> {
         self.soc.fetch(addr)
     }

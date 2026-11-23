@@ -1,3 +1,4 @@
+use crate::netlist::Rating;
 use orbe_model::Time;
 use serde::Deserialize;
 
@@ -5,7 +6,9 @@ use crate::diagnostic::ValueRule;
 use crate::element::{Observed, OwnedCapacitor, OwnedInductor, StoreEnd, Update};
 use crate::mna::{Node, Probe, Stamp, Unknowns};
 use crate::name::Quantity;
-use crate::netlist::json::{ParseCtx, PinMap, WireValue, bounded, resolve_pins, resolve_value};
+use crate::netlist::json::{
+    ParseCtx, PinMap, WireValue, bounded, resolve_limit, resolve_pins, resolve_value,
+};
 use crate::netlist::{Conduction, Kind, NetId, Value};
 use crate::newton::{RELTOL, Side, VNTOL};
 use crate::passive::capacitor::stamp_capacitor;
@@ -95,6 +98,12 @@ pub struct OpAmp {
     /// Volt, at least 0. Above 0, an input past `V(vcc) - input_headroom` is `rating.voltage`.
     /// Zero rates no ceiling. The differential stage does not read it.
     pub input_headroom: Value,
+    /// Volt, greater than 0. `V(vcc) - V(gnd)` above this warns `rating.voltage`. `None` when
+    /// the part rates none.
+    pub max_supply: Option<Value>,
+    /// Volt, at least 0. An input more than this below `gnd` warns `rating.voltage`. `None`
+    /// when the part rates none.
+    pub input_below_gnd: Option<Value>,
 }
 
 impl OpAmp {
@@ -125,6 +134,19 @@ pub(crate) struct WireOpAmp {
     short_circuit_current: WireValue,
     supply_current: WireValue,
     input_headroom: WireValue,
+    /// Absent on an op-amp written before it had voltage ratings.
+    #[serde(default)]
+    ratings: Option<WireOpAmpRatings>,
+}
+
+/// Each key is optional, and an absent one rates nothing.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireOpAmpRatings {
+    #[serde(default)]
+    supply_voltage: Option<WireValue>,
+    #[serde(default)]
+    input_below_gnd: Option<WireValue>,
 }
 
 pub(crate) fn resolve_op_amp(ctx: ParseCtx<'_>, wire: WireOpAmp) -> Option<OpAmp> {
@@ -158,6 +180,14 @@ pub(crate) fn resolve_op_amp(ctx: ParseCtx<'_>, wire: WireOpAmp) -> Option<OpAmp
     let swing_low = non_negative("swing_low", "V", wire.swing_low);
     let supply_current = non_negative("supply_current", "A", wire.supply_current);
     let input_headroom = non_negative("input_headroom", "V", wire.input_headroom);
+    let (supply_voltage, input_below_gnd) = wire
+        .ratings
+        .map_or((None, None), |r| (r.supply_voltage, r.input_below_gnd));
+    let input_below_gnd = match input_below_gnd {
+        None => Some(None),
+        Some(value) => non_negative("ratings.input_below_gnd", "V", value).map(Some),
+    };
+    let max_supply = resolve_limit(part_ref, "ratings.supply_voltage", "V", supply_voltage, out);
     Some(OpAmp {
         pins: pins?,
         gain_bandwidth: gain_bandwidth?,
@@ -170,6 +200,8 @@ pub(crate) fn resolve_op_amp(ctx: ParseCtx<'_>, wire: WireOpAmp) -> Option<OpAmp
         short_circuit_current: short_circuit_current?,
         supply_current: supply_current?,
         input_headroom: input_headroom?,
+        max_supply: max_supply?,
+        input_below_gnd: input_below_gnd?,
     })
 }
 
@@ -354,7 +386,7 @@ impl Kind for OpAmp {
     fn quantities(&self) -> &'static [Quantity] {
         &[]
     }
-    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+    fn ratings(&self) -> (Option<(Quantity, &Rating)>, Option<&Rating>) {
         (None, None)
     }
     fn observe(&self, _probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {

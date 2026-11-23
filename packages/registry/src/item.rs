@@ -378,6 +378,7 @@ impl Item {
             sha256: crate::sha256(bytes),
             bytes: bytes.len() as u64,
             listed,
+            orbe: None,
         }
     }
 }
@@ -463,6 +464,12 @@ pub struct Row {
     #[schemars(pattern(pattern::SHA256))]
     pub sha256: String,
     pub bytes: u64,
+    /// The lowest orbe that reads this record, such as `0.2.0`. Absent when the registry was
+    /// built from a working tree: every orbe may try the record, and the part reader still
+    /// refuses a format it does not know. A registry built from release tags sets it.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[schemars(with = "String", pattern(pattern::VERSION))]
+    pub orbe: Option<String>,
 }
 
 fn listed_when_absent() -> bool {

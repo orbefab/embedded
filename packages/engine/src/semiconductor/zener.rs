@@ -1,6 +1,7 @@
 use crate::diagnostic::Diagnostic;
 use crate::diagnostic::ValueRule;
 use crate::netlist::NetId;
+use crate::netlist::Rating;
 use crate::netlist::Value;
 use crate::netlist::json::PinMap;
 use crate::netlist::json::WireJunctionRatings;
@@ -261,9 +262,9 @@ pub struct Zener {
     /// The breakdown junction derived from the row and the two resistances.
     pub breakdown: Breakdown,
     /// Ampere, greater than 0. Bounds `|i|`. `None` is an explicit `"current": null`.
-    pub max_current: Option<Value>,
+    pub max_current: Option<Rating>,
     /// Watt, greater than 0. `None` is an explicit `"power": null`.
-    pub max_power: Option<Value>,
+    pub max_power: Option<Rating>,
 }
 
 /// `Isb`, `nbvt` and `vcrit` of a zener's breakdown junction.
@@ -495,7 +496,7 @@ impl Kind for Zener {
     fn quantities(&self) -> &'static [Quantity] {
         TWO_PIN
     }
-    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+    fn ratings(&self) -> (Option<(Quantity, &Rating)>, Option<&Rating>) {
         let current = self.max_current.as_ref().map(|v| (Quantity::I, v));
         (current, self.max_power.as_ref())
     }

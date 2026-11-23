@@ -42,6 +42,7 @@ mod gates;
 mod gdma;
 mod gpio;
 mod i2c;
+mod image;
 mod ledc;
 mod matrix;
 mod rmt;
@@ -70,9 +71,10 @@ use timers::{Action, Watchdogs};
 pub use boot::Segment;
 pub use bridge::{Bridge, PINS};
 pub use clock::{TICK_HZ, Tick};
+pub use cores::CoreId;
 pub use efuse::EfuseSet;
 pub use gpio::PadDrive;
-pub use orbe_xtensa::CoreId;
+pub use image::{App, ImageRule};
 pub use rmt::{Flight, Train};
 pub use spi1::FlashRefusal;
 pub use spi2::{Pads, Phase, Setting, Transfer};
@@ -301,7 +303,7 @@ impl Esp32s3 {
             );
             soc.poke(addr, data);
         }
-        let mut core = Core::new();
+        let mut core = Core::new(CoreId::Pro.reset());
         core.set_pc(entry);
         Esp32s3::with(core, soc)
     }
@@ -315,7 +317,7 @@ impl Esp32s3 {
         let mut soc = Soc::new(CpuClock::new(source), netted, Watchdogs::new(source.apb()));
         load_rom(&mut soc, boot.rom);
         soc.attach_flash(Flash::new(boot.flash));
-        let mut core = Core::new();
+        let mut core = Core::new(CoreId::Pro.reset());
         boot::apply(&state, &mut core, &mut soc);
         boot::program_rom_uart(&state, &mut soc);
         for segment in boot.segments {
@@ -762,6 +764,11 @@ impl Esp32s3 {
                 self.ended = true;
             }
         }
+    }
+
+    /// Puts the bytes SPI2's last transfer read on MISO into `SPI_W0` on.
+    pub fn answered(&mut self, miso: &[u8]) {
+        self.soc.spi2.answered(miso);
     }
 
     /// The SPI2 transfers whose ends were reported, in the order they started.
@@ -2428,6 +2435,17 @@ mod tests {
             chip.run_until(c(10)),
             Some(Halt::Fault(c(0), Fault::UnmappedFetch(pro(data)))),
             "the data bus does not fetch"
+        );
+    }
+
+    /// The code window is instruction RAM, all of it on the instruction bus.
+    #[test]
+    fn the_code_window_is_on_the_instruction_bus() {
+        let [code, data] = RAM;
+        assert!(code.code && !data.code);
+        assert_eq!(
+            [code.start - 1, code.start, code.end - 1, code.end].map(Soc::on_instruction_bus),
+            [false, true, true, false]
         );
     }
 

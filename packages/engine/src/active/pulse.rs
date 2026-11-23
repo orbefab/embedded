@@ -12,7 +12,7 @@ use std::sync::Arc;
 use orbe_model::{Device, Drive, PulseTarget, Time};
 
 use super::native::{Hosting, Port};
-use crate::link::{LinkRow, Record, RecordKind};
+use crate::link::{Answers, LinkRow, Record, RecordKind};
 use crate::world::World;
 
 /// Where the line is, against the level it rests at. `Fresh` is before the first level, so a
@@ -318,7 +318,14 @@ impl<D: PulseTarget> Port<D> for Pulse<D> {
         });
     }
 
-    fn take_records(&mut self, dev: &mut Hosting<D>, world: &World, at: Time, records: &[LinkRow]) {
+    fn take_records(
+        &mut self,
+        dev: &mut Hosting<D>,
+        world: &World,
+        at: Time,
+        records: &[LinkRow],
+        _answers: &mut Answers,
+    ) {
         debug_assert!(
             !D::OPEN_DRAIN,
             "an open-drain line is read from its watch, not from records"

@@ -740,7 +740,7 @@ pub fn folder_hash(dir: &Path) -> io::Result<String> {
     ))
 }
 
-pub(crate) fn hash_files<'a>(files: impl Iterator<Item = (&'a str, &'a [u8])>) -> String {
+pub fn hash_files<'a>(files: impl Iterator<Item = (&'a str, &'a [u8])>) -> String {
     let mut lines: Vec<String> = files
         .map(|(path, bytes)| format!("{}  {path}\n", hex(&Sha256::digest(bytes))))
         .collect();
@@ -748,7 +748,7 @@ pub(crate) fn hash_files<'a>(files: impl Iterator<Item = (&'a str, &'a [u8])>) -
     format!("sha256:{}", hex(&Sha256::digest(lines.concat().as_bytes())))
 }
 
-pub(crate) fn hex(bytes: &[u8]) -> String {
+pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 

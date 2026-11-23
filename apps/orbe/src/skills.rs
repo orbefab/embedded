@@ -18,6 +18,11 @@ pub const SKILLS: &[Skill] = &[
         text: include_str!("../skills/arduino.md"),
     },
     Skill {
+        name: "esp32",
+        about: "Load when building ESP32-S3 firmware for an esp32s3-devkitc-1.",
+        text: include_str!("../skills/esp32.md"),
+    },
+    Skill {
         name: "parts",
         about: "Load when keeping a part copy, a version, a Block, a buy link, or an addressable LED.",
         text: include_str!("../skills/parts.md"),

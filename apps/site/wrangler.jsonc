@@ -4,6 +4,8 @@
 // dist/client, which scripts/site.sh builds, are mounted at /orbe. A request under /orbe is an
 // asset, so the Worker does not see it. The build bundles redirect.js and writes
 // dist/orbefab_embedded/wrangler.json from this file. Its assets are dist/client.
+// Registry paths run the Worker first, so a 200 for a hashed file can keep for a year
+// and a path that contains @ is read as the percent-encoded asset.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "orbefab-embedded",
@@ -26,5 +28,6 @@
     "base_path": "/orbe",
     "html_handling": "auto-trailing-slash",
     "not_found_handling": "404-page",
+    "run_worker_first": ["/orbe/r/*"],
   },
 }

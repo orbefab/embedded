@@ -71,9 +71,19 @@ fn chain<'v>(netlist: &'v Value, name: &str) -> &'v Value {
         .unwrap_or_else(|| panic!("no part {name}"))
 }
 
-/// The part file in format `format` with its `dout` and its reading taken out, as 0.1.1 was.
+/// The part file in format `format` with its `draw` taken out, as format 3 wrote it.
+fn before_draw(text: String, format: u32) -> String {
+    let mut text = text.replacen("\"format\": 5,", &format!("\"format\": {format},"), 1);
+    let start = text.find("    \"draw\": {").unwrap();
+    let end = text.find("    \"dout\": {").unwrap();
+    text.replace_range(start..end, "");
+    text
+}
+
+/// The part file in format `format` with its `draw`, its `dout` and its reading taken out, as
+/// 0.1.1 was.
 fn before_dout(text: String, format: u32) -> String {
-    let mut text = text.replacen("\"format\": 3,", &format!("\"format\": {format},"), 1);
+    let mut text = before_draw(text, format);
     let start = text.find("    \"dout\": {").unwrap();
     let end = text.find("  \"readings\"").unwrap();
     text.replace_range(start..end, "  },\n");
@@ -115,7 +125,7 @@ fn a_part_before_format_3_keeps_its_dout_pin_off_the_chain() {
 
 #[test]
 fn a_part_before_format_3_that_maps_dout_is_told_to_move_to_format_3() {
-    let project = project(|text| text.replacen("\"format\": 3,", "\"format\": 2,", 1));
+    let project = project(|text| before_draw(text, 2));
     let found = read(project.path()).unwrap_err();
     let found: Vec<(Code, &str, &str)> = found
         .iter()

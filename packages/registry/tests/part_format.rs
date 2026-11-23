@@ -1,10 +1,7 @@
 //! Every part under `parts/` is in a format this binary reads, and loads under this engine.
-//! A `released.lock` id whose folder is an older format this binary stopped reading is the one
-//! skip: that file is refused on purpose, and loading it would only repeat the refusal.
 
 mod common;
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 
@@ -29,18 +26,14 @@ fn every_part_under_parts_loads_in_a_format_this_binary_reads() {
         serde_json::to_string_pretty(&probe_ground()).unwrap(),
     )
     .unwrap();
-    let released = released_ids(&root);
     let cards = catalog_cards(&root.join("parts"));
     let mut loaded = 0usize;
     let mut failures = Vec::new();
     for id in &ids {
         let text = fs::read_to_string(root.join("parts").join(id).join("part.jsonc")).unwrap();
-        if released_older(id, &text, &released) {
-            continue;
-        }
         if !reads_format(&text) {
             failures.push(format!(
-                "{id}: format {} is not one this binary reads. Every part under parts/ has to be in a format this binary reads, and load. The only skip is a released.lock id whose file is an older format this binary stopped reading.",
+                "{id}: format {} is not one this binary reads. Every part under parts/ has to be in a format this binary reads, and load.",
                 format_token(&text)
             ));
             continue;
@@ -106,43 +99,15 @@ fn probe_ground() -> Value {
     })
 }
 
-/// Part ids in `parts/`, plus any `released.lock` part whose folder is still there. A line
-/// whose folder is gone cannot be rebuilt. A Block has no `model`.
+/// Part ids in `parts/`. A Block has no `model`.
 fn part_ids(root: &Path) -> Vec<String> {
     let mut ids: Vec<String> = fs::read_dir(root.join("parts"))
         .unwrap()
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .filter(|id| root.join("parts").join(id).join("part.jsonc").is_file())
         .collect();
-    for id in released_ids(root) {
-        if root.join("parts").join(&id).join("part.jsonc").is_file()
-            && !ids.iter().any(|seen| seen == &id)
-        {
-            ids.push(id);
-        }
-    }
     ids.sort();
     ids
-}
-
-fn released_ids(root: &Path) -> BTreeSet<String> {
-    let lock = fs::read_to_string(root.join("released.lock")).unwrap_or_default();
-    lock.lines()
-        .filter(|line| !line.is_empty())
-        .filter_map(|line| line.split_whitespace().next().map(str::to_string))
-        .collect()
-}
-
-/// `id` is in `released.lock` and its file's format is older than every format this binary
-/// reads. The binary refuses that file on purpose.
-fn released_older(id: &str, text: &str, released: &BTreeSet<String>) -> bool {
-    let Some(n) = declared_format(text) else {
-        return false;
-    };
-    let Some(oldest) = orbe_scene::PART_FORMATS.iter().copied().min() else {
-        return false;
-    };
-    released.contains(id) && n < oldest
 }
 
 fn reads_format(text: &str) -> bool {
@@ -284,7 +249,7 @@ fn explain(id: &str, diagnostics: &[Diagnostic]) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "{id}: field {fields}. Raise parts/{id}/part.jsonc to the next format, move its model onto what this binary reads, and drop the format that file leaves. Add that format to the formats this binary reads. Drop an older format from those formats only once every part under parts/ has left it, apart from a released.lock id whose file is an older format this binary no longer reads. An old copy of {id} is the project's file. The hint says to remove the folder and run `orbe add {id}`.\n{shown}"
+        "{id}: field {fields}. Raise parts/{id}/part.jsonc to the next format, move its model onto what this binary reads, and drop the format that file leaves. Add that format to the formats this binary reads. Drop an older format from those formats only once every part under parts/ has left it. An old copy of {id} is the project's file. The hint says to remove the folder and run `orbe add {id}`.\n{shown}"
     )
 }
 

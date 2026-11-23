@@ -66,8 +66,9 @@ impl fmt::Display for Name {
     }
 }
 
-/// The folder of this user's sessions: `$XDG_RUNTIME_DIR/orbe`, else `<temp>/orbe-<uid>`.
-/// It is the user's own, with mode 0700. Every version of orbe uses this one folder.
+/// The folder of this user's sessions: `$XDG_RUNTIME_DIR/orbe`, else `/tmp/orbe-<uid>`.
+/// `/tmp` keeps the socket path under the system's limit on macOS, where the default
+/// temporary folder is already long. The folder is the user's own, mode 0700.
 #[derive(Clone)]
 pub struct Place {
     dir: PathBuf,
@@ -78,15 +79,29 @@ impl Place {
     pub fn find() -> Result<Place, (String, String)> {
         let dir = match std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from) {
             Some(runtime) if runtime.is_absolute() => runtime.join("orbe"),
-            _ => std::env::temp_dir().join(format!("orbe-{}", rustix::process::getuid().as_raw())),
+            _ => PathBuf::from(format!("/tmp/orbe-{}", rustix::process::getuid().as_raw())),
         };
         private(&dir)?;
         Ok(Place { dir })
     }
 
+    /// `<runtime>/orbe/<name>/`, the session's pid, socket, log and crash files.
+    pub fn state(&self, name: &Name) -> PathBuf {
+        self.dir.join(name.as_str())
+    }
+
+    /// Creates the session's folder, after refusing a socket path the system cannot bind.
+    /// A refusal is its message and hint.
+    pub fn ensure(&self, name: &Name) -> Result<PathBuf, (String, String)> {
+        let _ = self.socket(name)?;
+        let state = self.state(name);
+        private(&state)?;
+        Ok(state)
+    }
+
     /// The session's socket path, refused when it is longer than the system can bind.
     pub fn socket(&self, name: &Name) -> Result<PathBuf, (String, String)> {
-        let socket = self.dir.join(format!("{name}.sock"));
+        let socket = self.state(name).join("sock");
         let length = socket.as_os_str().len();
         if length > SOCKET_PATH {
             return Err((
@@ -100,112 +115,68 @@ impl Place {
         Ok(socket)
     }
 
-    /// What the session's process wrote to stderr, such as a panic, kept when it crashes.
+    pub fn pid(&self, name: &Name) -> PathBuf {
+        self.state(name).join("pid")
+    }
+
+    /// What the session's process writes to stderr.
     pub fn log(&self, name: &Name) -> PathBuf {
-        self.dir.join(format!("{name}.log"))
+        self.state(name).join("log")
     }
 
     /// The orbe version that started the session, one line, written when that process binds.
     pub fn version(&self, name: &Name) -> PathBuf {
-        self.dir.join(format!("{name}.version"))
+        self.state(name).join("version")
     }
 
-    /// The log one start of the session's process writes until it holds the socket, so a
-    /// start that loses to another never writes in the session's log.
-    pub fn start_log(&self, name: &Name, id: u64) -> PathBuf {
-        self.dir.join(format!("{name}.log.{id}"))
+    /// Held for as long as the session's process runs, so a second start leaves it alone.
+    pub fn lock(&self, name: &Name) -> PathBuf {
+        self.state(name).join("lock")
     }
 
-    /// Every session with a socket, live or left by a crash, sorted.
+    /// `<pid>.crashed`, the output of a session that ended without closing.
+    pub fn crashed(&self, name: &Name, pid: u32) -> PathBuf {
+        self.state(name).join(format!("{pid}.crashed"))
+    }
+
+    /// Every session that still has a socket or a pid file, sorted.
     pub fn names(&self) -> io::Result<Vec<Name>> {
         let mut names: Vec<Name> = fs::read_dir(&self.dir)?
             .filter_map(Result::ok)
             .filter_map(|entry| {
                 let file = entry.file_name();
-                let stem = file.to_str()?.strip_suffix(".sock")?;
-                Name::parse(stem).ok()
+                let name = Name::parse(file.to_str()?).ok()?;
+                let state = entry.path();
+                (state.join("sock").exists() || state.join("pid").exists()).then_some(name)
             })
             .collect();
         names.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(names)
     }
 
-    /// Removes the start logs no process holds, of the sessions `of` picks, and returns them
-    /// sorted. The client that makes a start log locks it before the process starts, and the
-    /// process holds that lock for as long as it runs.
-    pub fn remove_left_logs(&self, of: impl Fn(&Name) -> bool) -> Vec<(Name, PathBuf)> {
-        use rustix::fs::{FlockOperation, Mode, OFlags};
-        let Ok(entries) = fs::read_dir(&self.dir) else {
-            return Vec::new();
-        };
-        let mut left: Vec<(Name, PathBuf)> = entries
-            .filter_map(Result::ok)
-            .filter_map(|entry| {
-                let file = entry.file_name();
-                let (stem, id) = file.to_str()?.rsplit_once(".log.")?;
-                id.parse::<u64>().ok()?;
-                let name = Name::parse(stem).ok().filter(|name| of(name))?;
-                let path = entry.path();
-                let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-                let fd = rustix::fs::open(&path, flags, Mode::empty()).ok()?;
-                rustix::fs::flock(&fd, FlockOperation::NonBlockingLockExclusive).ok()?;
-                fs::remove_file(&path).ok()?;
-                Some((name, path))
-            })
-            .collect();
-        left.sort_by(|a, b| a.1.cmp(&b.1));
-        left
-    }
-
-    /// `<name>.log.crashed`, the output of a session that ended without closing. The next crash
-    /// replaces it. The name is not a session's log, socket, version or start log: a session
-    /// may contain `.`, and a start log's id is a number.
-    pub fn crashed_log(&self, name: &Name) -> PathBuf {
-        self.dir.join(format!("{name}.log.crashed"))
-    }
-
-    /// Moves `<name>.log` onto the crash log when this process can lock it, empty or not, so a
-    /// crash that wrote nothing replaces an older crash's output. A locked log stays where its
-    /// process writes. When `<name>.log` is missing, an earlier command already took this
-    /// crash's log and the crash log stays. An empty crash log is removed. The path when the
-    /// crash log then holds output.
-    pub fn take_crash_log(&self, name: &Name) -> Option<PathBuf> {
-        let log = self.log(name);
-        let crashed = self.crashed_log(name);
-        if let Some(_fd) = lock_if_free(&log) {
-            let _ = fs::rename(&log, &crashed);
-        }
-        if holds_output(&crashed) {
-            Some(crashed)
-        } else {
-            let _ = fs::remove_file(&crashed);
-            None
-        }
+    /// The pid in the pid file, when it is one number.
+    pub fn read_pid(&self, name: &Name) -> Option<u32> {
+        let text = fs::read_to_string(self.pid(name)).ok()?;
+        text.trim().parse().ok()
     }
 }
 
-/// An exclusive lock on `path`, held until the returned file is dropped. `None` when the path
-/// is missing, not a file this can open, or a process already holds it.
-fn lock_if_free(path: &Path) -> Option<std::os::fd::OwnedFd> {
-    use rustix::fs::{FlockOperation, Mode, OFlags};
-    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-    let fd = rustix::fs::open(path, flags, Mode::empty()).ok()?;
-    rustix::fs::flock(&fd, FlockOperation::NonBlockingLockExclusive).ok()?;
-    Some(fd)
-}
-
-/// Whether a process holds `path`. A session's process locks its log for as long as it runs,
-/// and a killed one can still hold that lock while its threads exit.
-pub(super) fn process_holds(path: &Path) -> bool {
-    use rustix::fs::{FlockOperation, Mode, OFlags};
-    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-    let Ok(fd) = rustix::fs::open(path, flags, Mode::empty()) else {
+/// `kill(pid, 0)`: the process exists and is not a zombie. A zombie has ended; its parent
+/// has not reaped it yet. A client that sees the socket close must still keep the crash log.
+pub(super) fn pid_alive(pid: u32) -> bool {
+    let Some(raw) = rustix::process::Pid::from_raw(pid as i32) else {
         return false;
     };
-    matches!(
-        rustix::fs::flock(&fd, FlockOperation::NonBlockingLockExclusive),
-        Err(rustix::io::Errno::WOULDBLOCK)
-    )
+    rustix::process::test_kill_process(raw).is_ok() && !zombie(pid)
+}
+
+fn zombie(pid: u32) -> bool {
+    let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    stat.rsplit(") ")
+        .next()
+        .is_some_and(|rest| rest.starts_with('Z'))
 }
 
 pub(super) fn holds_output(path: &Path) -> bool {

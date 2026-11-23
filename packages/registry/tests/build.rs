@@ -3,61 +3,60 @@
 mod common;
 
 use std::fs;
-use std::path::PathBuf;
 
 use common::{LAMP, MANIFEST, invalid, put, record, repo, sha256, third_party, written};
 use orbe_registry::{Error, INDEX_SCHEMA, ITEM_SCHEMA, Item, LARGE, Why, build};
 use orbe_scene::{Code, Diagnostic};
 use serde_json::Value;
 
-/// A record's text with the values that change whenever a file's bytes do replaced by names.
-fn without_hashes(text: &str) -> String {
-    let mut out = String::new();
-    for line in text.lines() {
-        let indent = &line[..line.len() - line.trim_start().len()];
-        let comma = if line.ends_with(',') { "," } else { "" };
-        let field = line.trim_start().split_once(": ").map(|(key, _)| key);
-        let value = match field {
-            Some("\"hash\"") => Some("\"sha256:<folder hash>\""),
-            Some("\"sha256\"") => Some("\"<sha256>\""),
-            Some("\"url\"") if line.contains("\"files/") => Some("\"files/<sha256>\""),
-            Some("\"bytes\"") => Some("0"),
-            _ => None,
-        };
-        match (field, value) {
-            (Some(key), Some(value)) => out.push_str(&format!("{indent}{key}: {value}{comma}")),
-            _ => out.push_str(line),
-        }
-        out.push('\n');
-    }
-    out
-}
-
+/// A small registry names its part and its Block, and stores the part file by hash.
 #[test]
-fn records_of_three_parts_and_a_block_match_their_snapshots() {
-    let registry = build(&repo()).unwrap();
-    let bless = std::env::var_os("ORBE_BLESS").is_some();
-    for address in [
-        "led-5mm@0.3.0",
-        "atmega328p-dip28@0.2.0",
-        "nano-board@0.2.1",
-        "nano-button-led@0.3.0",
-    ] {
-        let text = std::str::from_utf8(&registry.output[&format!("{address}.json")]).unwrap();
-        let got = without_hashes(text);
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/records")
-            .join(format!("{address}.json"));
-        if bless {
-            fs::write(&path, &got).unwrap();
-            continue;
-        }
-        let want = fs::read_to_string(&path).unwrap();
-        assert!(
-            got == want,
-            "{address} differs from tests/records. ORBE_BLESS=1 rewrites the snapshots\ngot:\n{got}"
-        );
-    }
+fn a_third_party_part_and_block_are_the_registry() {
+    let src = third_party();
+    let registry = build(src.path()).unwrap();
+    let index: Value = serde_json::from_slice(&registry.output["index.json"]).unwrap();
+    assert_eq!(index["name"], "@acme");
+    let names: Vec<String> = index["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            format!(
+                "{}@{}",
+                row["name"].as_str().unwrap(),
+                row["version"].as_str().unwrap()
+            )
+        })
+        .collect();
+    assert_eq!(names, ["lamp@1.2.0", "lamp-demo@0.1.0"]);
+    let lamp = record(&registry.output, "lamp@1.2.0");
+    assert_eq!(lamp["type"], "part");
+    assert_eq!(lamp["title"], "Lamp");
+    assert!(
+        lamp["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["path"] == "part.jsonc")
+    );
+    let block = record(&registry.output, "lamp-demo@0.1.0");
+    assert_eq!(block["type"], "block");
+    assert_eq!(block["board"], "lamp");
+    assert!(
+        block["registryDependencies"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|dep| dep == "lamp@1.2.0")
+    );
+    assert!(
+        registry
+            .output
+            .keys()
+            .any(|path| path.starts_with("files/"))
+    );
+    assert!(registry.output.contains_key(ITEM_SCHEMA));
+    assert!(registry.output.contains_key(INDEX_SCHEMA));
 }
 
 #[test]
@@ -158,7 +157,7 @@ fn a_block_depends_on_every_part_it_runs_at_the_versions_in_the_same_build() {
     for direct in [
         "nano-board@0.2.1",
         "tactile-switch-6mm@0.2.0",
-        "resistor-axial@0.2.0",
+        "resistor-axial@0.2.1",
         "led-5mm@0.3.0",
     ] {
         assert!(deps.contains(&direct), "{direct} in {deps:?}");

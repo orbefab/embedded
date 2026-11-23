@@ -21,11 +21,11 @@ const EXCM: u32 = 1 << 4;
 const SOFT1: u32 = 1 << 7;
 const LINE2: u32 = 1 << 19;
 const TIMER0: u32 = 1 << 6;
-const KERNEL: u32 = 0x4000_0300;
-const LEVEL2: u32 = 0x4000_0180;
-const DEBUG: u32 = 0x4000_0280;
-const OVERFLOW12: u32 = 0x4000_0100;
-const DEVICE: u32 = 0x6000_0000;
+const KERNEL: u32 = 0x4020_0300;
+const LEVEL2: u32 = 0x4020_0180;
+const DEBUG: u32 = 0x4020_0280;
+const OVERFLOW12: u32 = 0x4020_0100;
+const DEVICE: u32 = 0x5000_0000;
 
 struct Ran {
     stop: Stop,

@@ -129,6 +129,7 @@ An error prints `error[<code>]: <message>` and usually a `hint:`. Do what the hi
 | Load | When you need |
 | --- | --- |
 | `orbe skills get arduino` | Building Nano or Uno firmware, or a chip warning |
+| `orbe skills get esp32` | Building ESP32-S3 firmware for an `esp32s3-devkitc-1` |
 | `orbe skills get scenes` | A scene key, a part name, a param or `world` |
 | `orbe skills get breadboards` | Seating a part, a hole, or a breadboard error |
 | `orbe skills get parts` | The copy in `parts/`, a version, a Block, `buy`, or an addressable LED |

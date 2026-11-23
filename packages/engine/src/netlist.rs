@@ -2,7 +2,6 @@
 
 pub mod bounce;
 pub mod elf;
-pub mod flash;
 pub(crate) mod json;
 pub(crate) mod waveform;
 
@@ -563,4 +562,44 @@ impl RatingKind {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Value {
     pub si: Finite,
+}
+
+/// A current or power rating: its limit in SI units and how its datasheet means it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rating {
+    pub si: Finite,
+    /// `None` when the netlist names no basis. The kind's default then applies, as
+    /// `ratings::Ratings` says.
+    pub basis: Option<Basis>,
+    /// The most any one sample may take, in the same unit, when the datasheet gives a peak or
+    /// surge limit beside a sustained one. Only a sustained basis carries it.
+    pub peak: Option<Finite>,
+}
+
+/// How a datasheet means a rating.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Basis {
+    /// Never to be passed, so each sample is checked against it.
+    Peak,
+    /// A limit on the heat a held value makes: `average` of the samples through a first-order
+    /// filter with time constant `tau_ps`, which starts cold.
+    Sustained { tau_ps: u64, average: Average },
+}
+
+/// What a sustained rating's filter takes of each sample.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Average {
+    /// The square, and the reading is its root. A current through a resistance heats so.
+    Rms,
+    /// The magnitude. A power, or a current across a near-fixed drop, heats so.
+    Mean,
+}
+
+impl Average {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Average::Rms => "rms",
+            Average::Mean => "mean",
+        }
+    }
 }

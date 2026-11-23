@@ -1,3 +1,4 @@
+use crate::netlist::Rating;
 use orbe_model::Time;
 
 use crate::diagnostic::Diagnostic;
@@ -224,7 +225,7 @@ impl Kind for Switch {
     fn quantities(&self) -> &'static [Quantity] {
         TWO_PIN
     }
-    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+    fn ratings(&self) -> (Option<(Quantity, &Rating)>, Option<&Rating>) {
         (None, None)
     }
     fn observe(&self, probe: &Probe<'_>, at: Time, side: Side) -> Option<Observed> {

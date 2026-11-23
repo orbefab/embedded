@@ -1,3 +1,5 @@
+use crate::netlist::Rating;
+use crate::netlist::json::WireRating;
 use orbe_model::Time;
 use serde::Deserialize;
 
@@ -7,7 +9,7 @@ use crate::mna::{Probe, Stamp, Unknowns};
 use crate::name::Quantity;
 use crate::name::{Name, Ref};
 use crate::netlist::json::waveform::{VOLT, VOLTAGE, WireWaveform, resolve_waveform};
-use crate::netlist::json::{ParseCtx, PinMap, WireValue, resolve_pins, resolve_rating};
+use crate::netlist::json::{ParseCtx, PinMap, resolve_pins, resolve_rating};
 use crate::netlist::{
     Conduction, Kind, LevelField, NetId, Schedule, Serial, SerialField, Value, Waveform,
 };
@@ -23,7 +25,7 @@ pub struct VoltageSource {
     pub voltage: Waveform,
     /// Ampere, greater than 0: the most the supply delivers, which bounds `i`. `None` when the
     /// part has no `ratings` object or its `current` is `null`.
-    pub max_current: Option<Value>,
+    pub max_current: Option<Rating>,
 }
 
 impl VoltageSource {
@@ -46,7 +48,7 @@ pub(crate) struct WireVoltageSource {
 #[serde(deny_unknown_fields)]
 pub(crate) struct WireVoltageSourceRatings {
     #[serde(deserialize_with = "Option::deserialize")]
-    current: Option<WireValue>,
+    current: Option<WireRating>,
 }
 
 pub(crate) fn resolve_voltage_source(
@@ -131,7 +133,7 @@ impl Kind for VoltageSource {
     fn quantities(&self) -> &'static [Quantity] {
         TWO_PIN
     }
-    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+    fn ratings(&self) -> (Option<(Quantity, &Rating)>, Option<&Rating>) {
         (self.max_current.as_ref().map(|v| (Quantity::I, v)), None)
     }
     fn observe(&self, probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {

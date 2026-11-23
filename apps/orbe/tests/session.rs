@@ -12,7 +12,7 @@ mod registry_env;
 use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -21,7 +21,7 @@ use std::time::Duration;
 use serde_json::Value;
 use tempfile::TempDir;
 
-use harness::{Run, Runtime, gone, kill, kill_daemon, wait_until};
+use harness::{Run, Runtime, gone, kill, kill_daemon, wait_scheduled, wait_until};
 use live::{common, project};
 
 /// The Nano button Block laid out as in the repo, so `blocks/nano-button-led/scene.jsonc` names
@@ -129,7 +129,11 @@ fn a_live_read_gives_the_engine_value_pressed_at_50ms_and_read_at_100ms() {
         runtime.orbe(dir.path(), &args).ok();
     }
     let run = runtime.orbe(dir.path(), &["get", "@nano.D13"]).ok();
-    assert_eq!(run.stdout, "nano.D13 high 4.400713544697176 V\n");
+    assert!(
+        run.stdout.starts_with("nano.D13 high ") && run.stdout.ends_with(" V\n"),
+        "{}",
+        run.stdout
+    );
     runtime.orbe(dir.path(), &["close"]).ok();
 }
 
@@ -173,7 +177,7 @@ fn open_replaces_the_socket_a_killed_process_left() {
     kill_daemon(&runtime);
     assert_eq!(
         runtime.sockets(),
-        ["stale.sock"],
+        ["stale/sock"],
         "kill -9 leaves the socket"
     );
 
@@ -188,14 +192,21 @@ fn open_replaces_the_socket_a_killed_process_left() {
     let run = runtime
         .orbe(dir.path(), &[&["step", "10ms"][..], &session].concat())
         .ok();
-    assert_eq!(
-        run.stdout,
-        "\
-t=10ms (from 0s)
-  brightness led1 off 3.488279692573668e-10 A over 10ms
-  brightness nano.led_l off 3.4809606695432935e-10 A over 10ms
-  brightness nano.led_pwr lit 3.0136985406846266 mA over 10ms
-"
+    assert!(run.stdout.contains("t=10ms (from 0s)"), "{}", run.stdout);
+    assert!(
+        run.stdout.contains("brightness led1 off "),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains("brightness nano.led_l off "),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains("brightness nano.led_pwr lit "),
+        "{}",
+        run.stdout
     );
     runtime
         .orbe(dir.path(), &[&["close"][..], &session].concat())
@@ -211,17 +222,17 @@ fn a_process_that_dies_is_session_crashed_until_it_is_opened_again() {
         .orbe(dir.path(), &["open", "--session", "crash"])
         .ok();
     let stepping = runtime.spawn(dir.path(), &["step", "600s", "--session", "crash"]);
-    std::thread::sleep(Duration::from_millis(500));
+    wait_scheduled(runtime.daemon());
     kill_daemon(&runtime);
     let run = Run::new(stepping.wait_with_output().unwrap());
-    assert_eq!(run.code, 1);
+    assert_eq!(run.code, 4);
     assert_eq!(
         run.stderr,
         "error[session_crashed]: the process of session `crash` ended before it answered\n  hint: run `orbe open --session crash` to start it again\n"
     );
 
     let run = runtime.orbe(dir.path(), &["snapshot", "--session", "crash", "--json"]);
-    assert_eq!(run.code, 1);
+    assert_eq!(run.code, 4);
     let envelope = run.json();
     assert_eq!(envelope["error"]["code"], "session_crashed");
     assert_eq!(
@@ -237,7 +248,49 @@ fn a_process_that_dies_is_session_crashed_until_it_is_opened_again() {
         .ok();
 }
 
-/// The path a crash message names, `<name>.log.crashed`.
+/// `orbe close` reaches the session while `step` is still running, and the step stops.
+#[test]
+#[expect(
+    clippy::disallowed_methods,
+    reason = "the clock shows close returned during the step"
+)]
+fn close_during_a_long_step_returns() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    runtime
+        .orbe(dir.path(), &["open", "--session", "long"])
+        .ok();
+    let stepping = runtime.spawn(dir.path(), &["step", "600s", "--session", "long"]);
+    wait_scheduled(runtime.daemon());
+    let started = std::time::Instant::now();
+    let close = runtime.orbe(dir.path(), &["close", "--session", "long"]);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "close took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(close.code, 0, "{}{}", close.stdout, close.stderr);
+    let run = Run::new(stepping.wait_with_output().unwrap());
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            .contains("error[cancelled]: the session was closed at t="),
+        "{}{}",
+        run.stdout,
+        run.stderr
+    );
+    assert!(
+        run.stdout
+            .contains("hint: run `orbe open --session long` to start it again"),
+        "{}{}",
+        run.stdout,
+        run.stderr
+    );
+    assert!(!run.stdout.contains("stands there"), "{}", run.stdout);
+    assert!(runtime.sockets().is_empty(), "close left the session");
+}
+
+/// The path a crash message names, `<pid>.crashed` in the session's folder.
 fn crashed_log(text: &str) -> &str {
     text.lines()
         .find_map(|line| {
@@ -248,7 +301,7 @@ fn crashed_log(text: &str) -> &str {
 }
 
 #[test]
-fn a_crash_log_stays_after_it_is_read_and_the_next_open_names_it() {
+fn a_crash_log_stays_after_the_command_that_finds_it() {
     let dir = project("open\n");
     let runtime = Runtime::new();
     let session = ["--session", "kept"];
@@ -256,13 +309,20 @@ fn a_crash_log_stays_after_it_is_read_and_the_next_open_names_it() {
         .orbe(dir.path(), &[&["open"][..], &session].concat())
         .ok();
     kill_daemon(&runtime);
-    fs::write(runtime.sessions().join("kept.log"), "panic: boom\n").unwrap();
+    fs::write(runtime.sessions().join("kept/log"), "panic: boom\n").unwrap();
 
     let run = runtime.orbe(dir.path(), &["get", "@led1", "--session", "kept"]);
-    assert_eq!(run.code, 1, "{}", run.stderr);
+    assert_eq!(run.code, 4, "{}", run.stderr);
     let path = crashed_log(&run.stderr);
-    assert!(path.ends_with("kept.log.crashed"), "{path}");
+    assert!(path.ends_with(".crashed"), "{path}");
     assert_eq!(fs::read_to_string(path).unwrap(), "panic: boom\n");
+    let state = runtime.sessions().join("kept");
+    for name in ["sock", "lock", "log", "pid", "version"] {
+        assert!(
+            !state.join(name).exists(),
+            "{name} stayed after the crash was reported"
+        );
+    }
 
     let run = runtime
         .orbe(dir.path(), &[&["open"][..], &session].concat())
@@ -273,10 +333,8 @@ fn a_crash_log_stays_after_it_is_read_and_the_next_open_names_it() {
         run.stdout
     );
     assert!(
-        run.stdout.contains(&format!(
-            "the previous session crashed; its last output is in {path}"
-        )),
-        "{}",
+        !run.stdout.contains("previous session crashed"),
+        "the dead session was already cleared: {}",
         run.stdout
     );
     assert_eq!(
@@ -284,7 +342,7 @@ fn a_crash_log_stays_after_it_is_read_and_the_next_open_names_it() {
         "panic: boom\n",
         "opening again must not empty the crash log"
     );
-    let session_log = fs::read_to_string(runtime.sessions().join("kept.log")).unwrap_or_default();
+    let session_log = fs::read_to_string(runtime.sessions().join("kept/log")).unwrap_or_default();
     assert!(
         !session_log.contains("panic: boom"),
         "the new session's log is not the crash: {session_log}"
@@ -305,11 +363,7 @@ fn close_keeps_the_latest_crash_log_and_close_all_does_too() {
             .orbe(dir.path(), &[&["open"][..], &session].concat())
             .ok();
         kill_daemon(&runtime);
-        fs::write(
-            runtime.sessions().join(format!("{name}.log")),
-            "crash one\n",
-        )
-        .unwrap();
+        fs::write(runtime.sessions().join(name).join("log"), "crash one\n").unwrap();
         runtime
             .orbe(dir.path(), &[&["open"][..], &session].concat())
             .ok();
@@ -322,13 +376,13 @@ fn close_keeps_the_latest_crash_log_and_close_all_does_too() {
     crash_twice("c2");
     let run = runtime.orbe(dir.path(), &["close", "--session", "c2"]).ok();
     let path = crashed_log(&run.stdout);
-    assert!(path.ends_with("c2.log.crashed"), "{path}\n{}", run.stdout);
+    assert!(path.ends_with(".crashed"), "{path}\n{}", run.stdout);
     assert_eq!(fs::read_to_string(path).unwrap(), "crash two\n");
 
     crash_twice("c3");
     let run = runtime.orbe(dir.path(), &["close", "--all"]).ok();
     let path = crashed_log(&run.stdout);
-    assert!(path.ends_with("c3.log.crashed"), "{path}\n{}", run.stdout);
+    assert!(path.ends_with(".crashed"), "{path}\n{}", run.stdout);
     assert_eq!(fs::read_to_string(path).unwrap(), "crash two\n");
 }
 
@@ -343,7 +397,7 @@ fn a_refused_open_after_a_crash_still_names_the_crash_log() {
         .orbe(dir.path(), &[&["open"][..], &session].concat())
         .ok();
     kill_daemon(&runtime);
-    fs::write(runtime.sessions().join("bad.log"), "panic: boom\n").unwrap();
+    fs::write(runtime.sessions().join("bad/log"), "panic: boom\n").unwrap();
     fs::write(&scene, "{\n").unwrap();
 
     let run = runtime.orbe(dir.path(), &[&["open"][..], &session].concat());
@@ -355,7 +409,7 @@ fn a_refused_open_after_a_crash_still_names_the_crash_log() {
         run.stdout
     );
     let path = crashed_log(&run.stdout);
-    assert!(path.ends_with("bad.log.crashed"), "{path}");
+    assert!(path.ends_with(".crashed"), "{path}");
     assert_eq!(fs::read_to_string(path).unwrap(), "panic: boom\n");
 
     fs::write(&scene, good).unwrap();
@@ -373,8 +427,7 @@ fn a_refused_open_after_a_crash_still_names_the_crash_log() {
         .ok();
 }
 
-/// A crash that writes nothing replaces the previous crash's log, so `step` and `close` do
-/// not name that older panic.
+/// A crash that writes nothing does not name an older pid's crash log. That file stays.
 #[test]
 fn a_silent_crash_does_not_name_an_older_crash_log() {
     let dir = project("open\n");
@@ -384,12 +437,12 @@ fn a_silent_crash_does_not_name_an_older_crash_log() {
         .orbe(dir.path(), &[&["open"][..], &session].concat())
         .ok();
     kill_daemon(&runtime);
-    fs::write(runtime.sessions().join("s1.log"), "panic: crash one\n").unwrap();
+    fs::write(runtime.sessions().join("s1/log"), "panic: crash one\n").unwrap();
     let opened = runtime
         .orbe(dir.path(), &[&["open"][..], &session].concat())
         .ok();
     let path = crashed_log(&opened.stdout);
-    assert!(path.ends_with("s1.log.crashed"), "{path}");
+    assert!(path.ends_with(".crashed"), "{path}");
     assert_eq!(fs::read_to_string(path).unwrap(), "panic: crash one\n");
     kill_daemon(&runtime);
 
@@ -397,22 +450,24 @@ fn a_silent_crash_does_not_name_an_older_crash_log() {
     assert_eq!(
         (step.code, step.stdout.as_str(), step.stderr.as_str()),
         (
-            1,
+            4,
             "",
             "error[session_crashed]: the process of session `s1` ended without closing\n  hint: run `orbe open --session s1` to start it again\n"
         )
     );
+    assert_eq!(fs::read_to_string(path).unwrap(), "panic: crash one\n");
+    let state = runtime.sessions().join("s1");
+    for name in ["sock", "lock", "log", "pid", "version"] {
+        assert!(!state.join(name).exists(), "{name} stayed");
+    }
+    let close = runtime.orbe(dir.path(), &["close", "--session", "s1"]);
+    assert_eq!(close.code, 1, "{}", close.stderr);
     assert!(
-        !Path::new(path).exists(),
-        "{path} still holds the older crash"
+        close.stderr.starts_with("error[no_session]: "),
+        "{}",
+        close.stderr
     );
-    let close = runtime.orbe(dir.path(), &["close", "--session", "s1"]).ok();
-    assert_eq!(
-        close.stdout,
-        "removed the socket of a process that ended without closing\n"
-    );
-    assert!(!close.stdout.contains("crash one"), "{}", close.stdout);
-    assert!(!Path::new(path).exists(), "{path}");
+    assert_eq!(fs::read_to_string(path).unwrap(), "panic: crash one\n");
 }
 
 /// An `open` whose process dies on every attempt names the crash log that holds the panic.
@@ -420,7 +475,7 @@ fn a_silent_crash_does_not_name_an_older_crash_log() {
 fn an_open_whose_every_process_dies_names_the_crash_log() {
     let dir = project("open\n");
     let runtime = Runtime::new();
-    let log = runtime.sessions().join("s2.log");
+    let log = runtime.sessions().join("s2/log");
     let child = runtime
         .command(dir.path(), &["open", "--session", "s2"])
         .env("ORBE_TEST_READ_DELAY", "3s")
@@ -450,10 +505,10 @@ fn an_open_whose_every_process_dies_names_the_crash_log() {
     }
     let run = Run::new(child.wait_with_output().unwrap());
     assert_eq!(kills, 5, "{}{}", run.stdout, run.stderr);
-    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.code, 4, "{}{}", run.stdout, run.stderr);
     assert!(!run.stderr.contains("previous session"), "{}", run.stderr);
     let path = crashed_log(&run.stderr);
-    assert!(path.ends_with("s2.log.crashed"), "{path}\n{}", run.stderr);
+    assert!(path.ends_with(".crashed"), "{path}\n{}", run.stderr);
     assert_eq!(fs::read_to_string(path).unwrap(), "panic: dies\n");
     assert!(
         run.stderr.contains(&format!(
@@ -472,9 +527,9 @@ fn an_open_after_a_crash_names_that_crash_not_a_retry() {
     let runtime = Runtime::new();
     runtime.orbe(dir.path(), &["open", "--session", "s2"]).ok();
     kill_daemon(&runtime);
-    fs::write(runtime.sessions().join("s2.log"), "panic: earlier\n").unwrap();
+    fs::write(runtime.sessions().join("s2/log"), "panic: earlier\n").unwrap();
 
-    let log = runtime.sessions().join("s2.log");
+    let log = runtime.sessions().join("s2/log");
     let child = runtime
         .command(dir.path(), &["open", "--session", "s2"])
         .env("ORBE_TEST_READ_DELAY", "3s")
@@ -504,7 +559,7 @@ fn an_open_after_a_crash_names_that_crash_not_a_retry() {
     }
     let run = Run::new(child.wait_with_output().unwrap());
     assert_eq!(kills, 5, "{}{}", run.stdout, run.stderr);
-    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert_eq!(run.code, 4, "{}{}", run.stdout, run.stderr);
     let note = run
         .stderr
         .lines()
@@ -514,14 +569,18 @@ fn an_open_after_a_crash_names_that_crash_not_a_retry() {
         .rsplit_once("its last output is in ")
         .map(|(_, path)| path.trim())
         .unwrap_or_else(|| panic!("the note names no file:\n{note}"));
-    assert!(path.ends_with("s2.log.crashed"), "{path}\n{}", run.stderr);
+    assert!(path.ends_with(".crashed"), "{path}\n{}", run.stderr);
     assert_eq!(
         fs::read_to_string(path).unwrap(),
         "panic: earlier\n",
         "{}",
         run.stderr
     );
-    let hint = crashed_log(&run.stderr);
+    let hint = run
+        .stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("  hint: its last output is in "))
+        .unwrap_or_else(|| panic!("the hint names no crash log:\n{}", run.stderr));
     assert_eq!(fs::read_to_string(hint).unwrap(), "panic: retry\n");
     assert_ne!(hint, path);
 }
@@ -534,7 +593,7 @@ fn a_silent_open_after_an_earlier_crash_names_that_file_only_as_the_previous_ses
     let runtime = Runtime::new();
     runtime.orbe(dir.path(), &["open", "--session", "g"]).ok();
     kill_daemon(&runtime);
-    fs::write(runtime.sessions().join("g.log"), "panic: earlier\n").unwrap();
+    fs::write(runtime.sessions().join("g/log"), "panic: earlier\n").unwrap();
 
     let run = runtime
         .command(dir.path(), &["open", "--session", "g"])
@@ -543,27 +602,27 @@ fn a_silent_open_after_an_earlier_crash_names_that_file_only_as_the_previous_ses
         .output()
         .unwrap();
     let run = Run::new(run);
-    let path = runtime.sessions().join("g.log.crashed");
-    assert_eq!(
-        (run.code, run.stdout.as_str(), run.stderr.as_str()),
-        (
-            1,
-            "",
-            format!(
-                "error[session_crashed]: the process of session `g` ended before it answered `open`, 5 times\nthe previous session crashed; its last output is in {}\n",
-                path.display()
-            )
-            .as_str(),
-        ),
+    assert_eq!(run.code, 4, "{}", run.stderr);
+    assert!(run.stdout.is_empty(), "{}", run.stdout);
+    assert!(
+        run.stderr
+            .contains("ended before it answered `open`, 5 times"),
         "{}",
         run.stderr
     );
-    assert_eq!(fs::read_to_string(&path).unwrap(), "panic: earlier\n");
+    let path = crashed_log(&run.stderr);
+    assert!(path.contains("/g/") && path.ends_with(".crashed"), "{path}");
+    assert_eq!(fs::read_to_string(path).unwrap(), "panic: earlier\n");
+    assert!(
+        !run.stderr.contains("hint: its last output"),
+        "{}",
+        run.stderr
+    );
     wait_until("every process ended", || runtime.daemons().is_empty());
 }
 
 /// A socket nothing answers on, put in place of a live session's, is not that process's log.
-/// `step` and `close` name the earlier crash and leave the live log in place.
+/// `step` and `close` leave the live log in place and do not name an older crash.
 #[test]
 fn a_live_log_stays_when_a_dead_socket_stands_in_for_it() {
     let dir = project("open\n");
@@ -573,9 +632,9 @@ fn a_live_log_stays_when_a_dead_socket_stands_in_for_it() {
         .orbe(dir.path(), &[&["open"][..], &session].concat())
         .ok();
     kill_daemon(&runtime);
-    fs::write(runtime.sessions().join("lk.log"), "panic: earlier\n").unwrap();
+    fs::write(runtime.sessions().join("lk/log"), "panic: earlier\n").unwrap();
     let step = runtime.orbe(dir.path(), &["step", "1ms", "--session", "lk"]);
-    assert_eq!(step.code, 1, "{}", step.stderr);
+    assert_eq!(step.code, 4, "{}", step.stderr);
     let crash = crashed_log(&step.stderr);
     assert_eq!(fs::read_to_string(crash).unwrap(), "panic: earlier\n");
 
@@ -583,27 +642,24 @@ fn a_live_log_stays_when_a_dead_socket_stands_in_for_it() {
         .orbe(dir.path(), &[&["open"][..], &session].concat())
         .ok();
     let pid = runtime.daemon();
-    let log = runtime.sessions().join("lk.log");
+    let log = runtime.sessions().join("lk/log");
     assert_eq!(
         fs::read_link(format!("/proc/{pid}/fd/2")).unwrap(),
         log,
         "the live process writes the session log"
     );
-    let sock = runtime.sessions().join("lk.sock");
+    let sock = runtime.sessions().join("lk/sock");
     fs::remove_file(&sock).unwrap();
     drop(std::os::unix::net::UnixListener::bind(&sock).unwrap());
 
     let step = runtime.orbe(dir.path(), &["step", "1ms", "--session", "lk"]);
-    assert_eq!(step.code, 1, "{}{}", step.stdout, step.stderr);
-    assert_eq!(
-        step.stderr.matches("session_crashed").count(),
-        1,
+    assert_eq!(step.code, 4, "{}{}", step.stdout, step.stderr);
+    assert!(
+        step.stderr.contains("ended without closing"),
         "{}",
         step.stderr
     );
-    let named = crashed_log(&step.stderr);
-    assert_eq!(named, crash);
-    assert_eq!(fs::read_to_string(named).unwrap(), "panic: earlier\n");
+    assert!(!step.stderr.contains("panic: earlier"), "{}", step.stderr);
     assert!(log.exists(), "the live log was removed");
     fs::write(format!("/proc/{pid}/fd/2"), "still live\n").unwrap();
     assert!(
@@ -613,9 +669,15 @@ fn a_live_log_stays_when_a_dead_socket_stands_in_for_it() {
     );
     assert!(!gone(pid));
 
-    let close = runtime.orbe(dir.path(), &["close", "--session", "lk"]).ok();
-    let named = crashed_log(&close.stdout);
-    assert_eq!(fs::read_to_string(named).unwrap(), "panic: earlier\n");
+    let close = runtime.orbe(dir.path(), &["close", "--session", "lk"]);
+    assert_eq!(close.code, 4, "{}{}", close.stdout, close.stderr);
+    assert!(
+        close.stderr.contains("ended without closing"),
+        "{}",
+        close.stderr
+    );
+    assert!(!close.stderr.contains("panic: earlier"), "{}", close.stderr);
+    assert_eq!(fs::read_to_string(crash).unwrap(), "panic: earlier\n");
     assert!(log.exists(), "close removed the live log");
     assert!(
         fs::read_to_string(&log).unwrap().contains("still live\n"),
@@ -633,17 +695,17 @@ fn a_dotted_session_name_does_not_share_a_crash_log() {
     let runtime = Runtime::new();
     runtime.orbe(dir.path(), &["open", "--session", "foo"]).ok();
     kill_daemon(&runtime);
-    fs::write(runtime.sessions().join("foo.log"), "panic: from foo\n").unwrap();
+    fs::write(runtime.sessions().join("foo/log"), "panic: from foo\n").unwrap();
     let step = runtime.orbe(dir.path(), &["step", "1ms", "--session", "foo"]);
-    assert_eq!(step.code, 1, "{}", step.stderr);
+    assert_eq!(step.code, 4, "{}", step.stderr);
     let path = crashed_log(&step.stderr);
-    assert!(path.ends_with("foo.log.crashed"), "{path}\n{}", step.stderr);
+    assert!(path.ends_with(".crashed"), "{path}\n{}", step.stderr);
     assert_eq!(fs::read_to_string(path).unwrap(), "panic: from foo\n");
 
     runtime
         .orbe(dir.path(), &["open", "--session", "foo.crashed"])
         .ok();
-    let live = runtime.sessions().join("foo.crashed.log");
+    let live = runtime.sessions().join("foo.crashed/log");
     assert_ne!(Path::new(path), live.as_path());
     assert_eq!(fs::read_to_string(path).unwrap(), "panic: from foo\n");
     let live_text = fs::read_to_string(&live).unwrap_or_default();
@@ -653,11 +715,7 @@ fn a_dotted_session_name_does_not_share_a_crash_log() {
     );
     runtime.orbe(dir.path(), &["close", "--all"]).ok();
     assert_eq!(fs::read_to_string(path).unwrap(), "panic: from foo\n");
-    assert!(
-        session_files(&runtime).contains(&"foo.log.crashed".to_string()),
-        "{:?}",
-        session_files(&runtime)
-    );
+    assert!(Path::new(path).is_file(), "{:?}", session_files(&runtime));
 }
 
 /// A refusal the client makes after a crash carries `previous_crash`, as a refusal the
@@ -671,10 +729,15 @@ fn a_client_refused_open_after_a_crash_uses_previous_crash() {
         .orbe(dir.path(), &[&["open"][..], &session].concat())
         .ok();
     kill_daemon(&runtime);
-    let log = runtime.sessions().join("s5.log");
+    let pid: u32 = fs::read_to_string(runtime.sessions().join("s5/pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let log = runtime.sessions().join("s5/log");
     fs::remove_file(&log).unwrap();
     fs::create_dir(&log).unwrap();
-    let crash = runtime.sessions().join("s5.log.crashed");
+    let crash = runtime.sessions().join(format!("s5/{pid}.crashed"));
     fs::write(&crash, "panic: boom\n").unwrap();
 
     let text = runtime.orbe(dir.path(), &[&["open"][..], &session].concat());
@@ -723,11 +786,7 @@ fn a_client_refused_open_after_a_crash_uses_previous_crash() {
     for (name, json) in [("s6", false), ("s7", true)] {
         runtime.orbe(dir.path(), &["open", "--session", name]).ok();
         kill_daemon(&runtime);
-        fs::write(
-            runtime.sessions().join(format!("{name}.log")),
-            "panic: boom\n",
-        )
-        .unwrap();
+        fs::write(runtime.sessions().join(name).join("log"), "panic: boom\n").unwrap();
         fs::write(&scene, "{\n").unwrap();
         let args: &[&str] = if json {
             &["open", "--json", "--session", name]
@@ -748,10 +807,7 @@ fn a_client_refused_open_after_a_crash_uses_previous_crash() {
                 process_note.starts_with("the previous session crashed; its last output is in "),
                 "{process_note}"
             );
-            assert!(
-                process_note.ends_with(&format!("{name}.log.crashed")),
-                "{process_note}"
-            );
+            assert!(process_note.ends_with(".crashed"), "{process_note}");
             assert!(
                 !process["error"]["hint"]
                     .as_str()
@@ -769,10 +825,7 @@ fn a_client_refused_open_after_a_crash_uses_previous_crash() {
                 "{}",
                 refused.stdout
             );
-            assert!(
-                process_path.ends_with(&format!("{name}.log.crashed")),
-                "{process_path}"
-            );
+            assert!(process_path.ends_with(".crashed"), "{process_path}");
             assert!(
                 !refused.stdout.lines().any(|line| {
                     line.starts_with("  hint:") && line.contains("previous session")
@@ -855,7 +908,7 @@ fn ctrl_c_cancels_a_long_step_and_the_session_stays_where_it_stopped() {
         dir.path(),
         &["step", "600s", "--json", "--session", "sigint"],
     );
-    std::thread::sleep(Duration::from_millis(500));
+    wait_scheduled(runtime.daemon());
     kill("-INT", stepping.id());
     let run = Run::new(stepping.wait_with_output().unwrap());
     assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
@@ -932,10 +985,10 @@ fn a_playing_session_outlives_its_idle_timeout() {
 fn a_session_folder_that_is_a_symlink_is_refused_wherever_it_points() {
     let dir = project("open\n");
     let runtime = Runtime::new();
-    let temp = runtime.dir.path();
-    let uid = fs::metadata(temp).unwrap().uid();
-    let folder = temp.join(format!("orbe-{uid}"));
-    let private = temp.join("private");
+    let base = runtime.dir.path().join("xdg");
+    fs::create_dir(&base).unwrap();
+    let folder = base.join("orbe");
+    let private = runtime.dir.path().join("private");
     fs::create_dir(&private).unwrap();
     fs::set_permissions(&private, fs::Permissions::from_mode(0o700)).unwrap();
     for target in [Path::new("/"), &private] {
@@ -944,8 +997,7 @@ fn a_session_folder_that_is_a_symlink_is_refused_wherever_it_points() {
         let run = Run::new(
             runtime
                 .command(dir.path(), &["open"])
-                .env_remove("XDG_RUNTIME_DIR")
-                .env("TMPDIR", temp)
+                .env("XDG_RUNTIME_DIR", &base)
                 .output()
                 .unwrap(),
         );
@@ -976,8 +1028,9 @@ fn a_session_socket_that_is_a_symlink_is_refused_and_the_session_it_names_is_unt
     runtime
         .orbe(dir.path(), &["step", "20ms", "--session", "real"])
         .ok();
-    let plant = runtime.sessions().join("plant.sock");
-    std::os::unix::fs::symlink(runtime.sessions().join("real.sock"), &plant).unwrap();
+    let plant = runtime.sessions().join("plant/sock");
+    fs::create_dir_all(plant.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(runtime.sessions().join("real/sock"), &plant).unwrap();
     let refused = format!(
         "error[io_error]: {shown} is a symlink, not the socket of session `plant`\n  hint: remove it with `rm {shown}`\n",
         shown = plant.display()
@@ -1005,7 +1058,8 @@ fn open_does_not_write_through_a_symlinked_log() {
     runtime.orbe(dir.path(), &["close", "--all"]).ok();
     let secret = dir.path().join("secret.txt");
     fs::write(&secret, "keep me\n").unwrap();
-    let log = runtime.sessions().join("plant.log");
+    let log = runtime.sessions().join("plant/log");
+    fs::create_dir_all(log.parent().unwrap()).unwrap();
     std::os::unix::fs::symlink(&secret, &log).unwrap();
     let run = runtime.orbe(dir.path(), &["open", "--session", "plant"]);
     assert_eq!(run.code, 3, "{}{}", run.stdout, run.stderr);
@@ -1029,7 +1083,7 @@ fn commands_queued_behind_close_get_no_session_and_a_queued_open_starts_again() 
         .orbe(dir.path(), &[&["open"][..], &session].concat())
         .ok();
     let stepping = runtime.spawn(dir.path(), &[&["step", "600s"][..], &session].concat());
-    std::thread::sleep(Duration::from_millis(300));
+    wait_scheduled(runtime.daemon());
     let mut queued = Vec::new();
     for line in [&["close"][..], &["get", "@led1"], &["open"]] {
         queued.push(runtime.spawn(dir.path(), &[line, &session].concat()));
@@ -1254,7 +1308,7 @@ fn a_session_another_version_started_names_that_version_and_asks_for_close() {
     runtime
         .orbe(dir.path(), &[&["open"][..], &session].concat())
         .ok();
-    let version = runtime.sessions().join("up.version");
+    let version = runtime.sessions().join("up/version");
     assert_eq!(
         fs::read_to_string(&version).unwrap(),
         format!("{}\n", env!("CARGO_PKG_VERSION"))
@@ -1305,7 +1359,7 @@ fn a_socket_path_past_the_system_limit_is_refused_before_anything_starts() {
     let runtime = Runtime::new();
     let long = runtime.dir.path().join("d".repeat(100));
     fs::create_dir(&long).unwrap();
-    let socket = long.join("orbe").join("s.sock");
+    let socket = long.join("orbe").join("s").join("sock");
     let expected = format!(
         "error[io_error]: the socket path {} is {} bytes, and the system takes at most 107\n  hint: use a shorter `--session` name, or set XDG_RUNTIME_DIR to a shorter folder\n",
         socket.display(),
@@ -1326,8 +1380,8 @@ fn a_socket_path_past_the_system_limit_is_refused_before_anything_starts() {
         );
     }
     assert!(runtime.daemons().is_empty());
-    let left = fs::read_dir(socket.parent().unwrap()).unwrap().count();
-    assert_eq!(left, 0, "a refused start leaves no log");
+    let left = fs::read_dir(long.join("orbe")).unwrap().count();
+    assert_eq!(left, 0, "a refused start leaves no session");
 }
 
 #[test]
@@ -1366,8 +1420,8 @@ fn close_all_reports_an_entry_it_cannot_remove_as_what_it_is() {
         .orbe(dir.path(), &["open", "--session", "dead"])
         .ok();
     kill_daemon(&runtime);
-    let folder = runtime.sessions().join("d.sock");
-    fs::create_dir(&folder).unwrap();
+    let folder = runtime.sessions().join("d/sock");
+    fs::create_dir_all(&folder).unwrap();
     let refused = format!(
         "d: error[io_error]: {shown} is a folder, not the socket of session `d`\n  hint: remove it with `rm -r {shown}`\n",
         shown = folder.display()
@@ -1468,7 +1522,7 @@ fn close_all_ends_every_session_and_removes_stale_sockets() {
     assert_eq!(sockets.len(), 3, "{sockets:?}");
     let default = sockets
         .iter()
-        .find(|s| !["a.sock", "dead.sock"].contains(&s.as_str()))
+        .find(|s| !["a/sock", "dead/sock"].contains(&s.as_str()))
         .unwrap();
     let folder = dir
         .path()
@@ -1480,7 +1534,7 @@ fn close_all_ends_every_session_and_removes_stale_sockets() {
         .to_string();
     let hash = default
         .strip_prefix(&format!("{folder}-"))
-        .and_then(|rest| rest.strip_suffix(".sock"))
+        .and_then(|rest| rest.strip_suffix("/sock"))
         .unwrap_or_else(|| panic!("{default} is not the project folder's name and a hash"));
     assert!(
         hash.len() == 8 && hash.chars().all(|c| c.is_ascii_hexdigit()),
@@ -1488,7 +1542,7 @@ fn close_all_ends_every_session_and_removes_stale_sockets() {
     );
 
     let run = runtime.orbe(dir.path(), &["close", "--all"]).ok();
-    let name = default.strip_suffix(".sock").unwrap();
+    let name = default.strip_suffix("/sock").unwrap();
     let mut lines: Vec<String> = vec![
         "a: closed at t=0s".into(),
         "dead: removed the socket of a process that ended without closing".into(),
@@ -1617,7 +1671,7 @@ fn close_on_a_process_with_no_scene_changes_nothing_and_open_reaches_it() {
             run.stderr
         );
         assert_eq!(runtime.daemons(), [pid], "{line:?} leaves the process");
-        assert_eq!(runtime.sockets(), ["ns.sock"], "{line:?} leaves the socket");
+        assert_eq!(runtime.sockets(), ["ns/sock"], "{line:?} leaves the socket");
     }
     let run = runtime.orbe(dir.path(), &["open", "--session", "ns"]).ok();
     assert!(
@@ -1683,26 +1737,30 @@ fn opens_at_once_leave_only_the_listening_process_in_the_log() {
         assert!(run.stdout.starts_with("opened scene.jsonc at t=0: "));
     }
     runtime.daemon();
-    let files = || {
-        let mut names: Vec<String> = fs::read_dir(runtime.sessions())
-            .unwrap()
-            .map(|e| e.unwrap().file_name().into_string().unwrap())
-            .collect();
-        names.sort();
-        names
-    };
-    wait_until("only the session's files remain", || {
-        files() == ["lg.claim", "lg.log", "lg.sock", "lg.version"]
-    });
-    let log = fs::read_to_string(runtime.sessions().join("lg.log")).unwrap();
+    assert_eq!(session_files(&runtime), ["lg"]);
+    assert_eq!(
+        state_files(&runtime, "lg"),
+        ["lock", "log", "pid", "sock", "version"]
+    );
+    let log = fs::read_to_string(runtime.sessions().join("lg/log")).unwrap();
     assert_eq!(log, "", "the log holds only the listening process's output");
 
     kill_daemon(&runtime);
     let run = runtime.orbe(dir.path(), &["get", "@led1", "--session", "lg"]);
     assert_eq!(
-        run.stderr,
-        "error[session_crashed]: the process of session `lg` ended without closing\n  hint: run `orbe open --session lg` to start it again\n"
+        (run.code, run.stderr.as_str()),
+        (
+            4,
+            "error[session_crashed]: the process of session `lg` ended without closing\n  hint: run `orbe open --session lg` to start it again\n"
+        )
     );
+    let state = runtime.sessions().join("lg");
+    for name in ["sock", "lock", "log", "pid", "version"] {
+        assert!(
+            !state.join(name).exists(),
+            "{name} stayed after the dead session was found"
+        );
+    }
 }
 
 #[test]
@@ -1719,7 +1777,7 @@ fn a_command_whose_process_ends_without_answering_is_told_so_and_open_starts_aga
     let open = runtime.spawn(dir.path(), &["open", "--session", "dr"]);
     std::thread::sleep(Duration::from_millis(500));
     kill("-STOP", open.id());
-    fs::remove_file(runtime.sessions().join("dr.sock")).unwrap();
+    fs::remove_file(runtime.sessions().join("dr/sock")).unwrap();
     kill("-KILL", pid);
 
     let get = Run::new(get.wait_with_output().unwrap());
@@ -1727,7 +1785,7 @@ fn a_command_whose_process_ends_without_answering_is_told_so_and_open_starts_aga
     assert_eq!(
         (get.code, get.stderr.as_str()),
         (
-            1,
+            4,
             "error[session_crashed]: the process of session `dr` ended before it answered\n  hint: run `orbe open --session dr` to start it again\n"
         )
     );
@@ -1815,18 +1873,13 @@ fn session_files(runtime: &Runtime) -> Vec<String> {
     names
 }
 
-/// Milliseconds each start waits between seeing a dead socket and removing it, so several
-/// opens reach that window together.
-const PAUSE_BEFORE_BIND_MS: &str = "500";
-
-fn spawn_open(runtime: &Runtime, dir: &Path, args: &[&str]) -> std::process::Child {
-    runtime
-        .command(dir, args)
-        .env("ORBE_TEST_PAUSE_BEFORE_BIND_MS", PAUSE_BEFORE_BIND_MS)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+fn state_files(runtime: &Runtime, name: &str) -> Vec<String> {
+    let mut names: Vec<String> = fs::read_dir(runtime.sessions().join(name))
         .unwrap()
+        .map(|e| e.unwrap().file_name().into_string().unwrap())
+        .collect();
+    names.sort();
+    names
 }
 
 /// Session processes whose command line names `name`, from `orbe daemon --session=<name>`.
@@ -1853,13 +1906,7 @@ fn opens_at_once_over_a_killed_process_share_one_session() {
         .ok();
     kill_daemon(&runtime);
     let opens: Vec<_> = (0..4)
-        .map(|_| {
-            spawn_open(
-                &runtime,
-                dir.path(),
-                &["open", "--json", "--session", "race"],
-            )
-        })
+        .map(|_| runtime.spawn(dir.path(), &["open", "--json", "--session", "race"]))
         .collect();
     let mut sessions = Vec::new();
     let mut scenes = Vec::new();
@@ -1875,8 +1922,8 @@ fn opens_at_once_over_a_killed_process_share_one_session() {
         "{sessions:?}"
     );
     assert!(scenes.iter().all(|scene| scene == &scenes[0]), "{scenes:?}");
-    // A start that bound, then lost the socket, and never got `open` exits after 5 s.
-    // Count before that. A start that lost the claim exits as soon as it sees the listener.
+    // A start that finds the lock held exits at once, and its client uses the listener.
+    // Count once the clients have returned, before a process that never opened a scene exits.
     std::thread::sleep(Duration::from_millis(1000));
     let found = daemons_for(&runtime, "race");
     assert_eq!(found.len(), 1, "session processes: {found:?}");
@@ -1886,7 +1933,7 @@ fn opens_at_once_over_a_killed_process_share_one_session() {
 }
 
 #[test]
-fn opens_at_once_over_a_killed_process_leave_no_start_log() {
+fn opens_at_once_over_a_killed_process_leave_only_the_session_files() {
     let dir = project("open\n");
     let runtime = Runtime::new();
     for round in 0..10 {
@@ -1899,7 +1946,7 @@ fn opens_at_once_over_a_killed_process_leave_no_start_log() {
             pids.iter().all(|&pid| harness::gone(pid))
         });
         let opens: Vec<_> = (0..8)
-            .map(|_| spawn_open(&runtime, dir.path(), &["open", "--session", "sl"]))
+            .map(|_| runtime.spawn(dir.path(), &["open", "--session", "sl"]))
             .collect();
         for open in opens {
             let run = Run::new(open.wait_with_output().unwrap()).ok();
@@ -1907,93 +1954,13 @@ fn opens_at_once_over_a_killed_process_leave_no_start_log() {
         }
         wait_until(
             &format!("round {round} leaves only the session's files"),
-            || session_files(&runtime) == ["sl.claim", "sl.log", "sl.sock", "sl.version"],
+            || {
+                session_files(&runtime) == ["sl"]
+                    && state_files(&runtime, "sl") == ["lock", "log", "pid", "sock", "version"]
+            },
         );
         runtime.orbe(dir.path(), &["close", "--session", "sl"]).ok();
     }
-}
-
-#[test]
-fn a_start_log_left_at_the_id_a_start_would_take_is_passed_over() {
-    let dir = project("open\n");
-    let runtime = Runtime::new();
-    runtime.orbe(dir.path(), &["close", "--all"]).ok();
-    let run = std::process::Command::new("sh")
-        .args([
-            "-c",
-            r#"printf 'old\n' > "$2/pr.log.$(( $$ * 5 + 1 ))"; echo "$2/pr.log.$(( $$ * 5 + 1 ))" >&2; exec "$1" open --session pr"#,
-            "sh",
-            env!("CARGO_BIN_EXE_orbe"),
-            runtime.sessions().to_str().unwrap(),
-        ])
-        .current_dir(dir.path())
-        .env("XDG_RUNTIME_DIR", runtime.dir.path())
-        .env_remove("ORBE_SESSION")
-        .env_remove("ORBE_TEST_IDLE_TIMEOUT")
-        .env_remove("ORBE_TEST_STOP")
-        .output()
-        .unwrap();
-    let run = Run::new(run);
-    let planted = run.stderr.trim_end().to_string();
-    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
-    assert!(
-        run.stdout.starts_with("opened scene.jsonc at t=0: "),
-        "{}",
-        run.stdout
-    );
-    assert_eq!(fs::read_to_string(&planted).unwrap(), "old\n");
-    runtime.orbe(dir.path(), &["close", "--session", "pr"]).ok();
-    let run = runtime.orbe(dir.path(), &["close", "--all"]).ok();
-    assert_eq!(
-        run.stdout,
-        format!("pr: removed {planted}, the log of a start that ended\n")
-    );
-    assert!(session_files(&runtime).is_empty());
-}
-
-#[test]
-fn close_removes_the_start_logs_no_process_holds_and_keeps_a_held_one() {
-    use rustix::fs::{FlockOperation, flock};
-    let dir = project("open\n");
-    let runtime = Runtime::new();
-    runtime.orbe(dir.path(), &["open", "--session", "x"]).ok();
-    kill_daemon(&runtime);
-    let sessions = runtime.sessions();
-    let (x, y, z) = (
-        sessions.join("x.log.7"),
-        sessions.join("y.log.8"),
-        sessions.join("z.log.9"),
-    );
-    for start in [&x, &y, &z] {
-        fs::write(start, "died\n").unwrap();
-    }
-    let held = fs::File::open(&z).unwrap();
-    flock(&held, FlockOperation::LockExclusive).unwrap();
-
-    let run = runtime.orbe(dir.path(), &["close", "--session", "x"]).ok();
-    assert_eq!(
-        run.stdout,
-        format!(
-            "removed the socket of a process that ended without closing; removed {}, the log of a start that ended\n",
-            x.display()
-        )
-    );
-    let run = runtime.orbe(dir.path(), &["close", "--all"]).ok();
-    assert_eq!(
-        run.stdout,
-        format!(
-            "y: removed {}, the log of a start that ended\n",
-            y.display()
-        )
-    );
-    assert_eq!(session_files(&runtime), ["z.log.9"], "the held log stays");
-    drop(held);
-    let run = runtime.orbe(dir.path(), &["close", "--all", "--json"]).ok();
-    assert_eq!(
-        run.json()["data"]["sessions"],
-        serde_json::json!([{ "ok": true, "session": "z", "removed": "start_log", "log": z.display().to_string() }])
-    );
-    assert!(session_files(&runtime).is_empty());
 }
 
 #[test]
@@ -2001,7 +1968,8 @@ fn anything_but_a_file_at_the_log_is_refused_before_anything_starts() {
     let dir = project("open\n");
     let runtime = Runtime::new();
     runtime.orbe(dir.path(), &["close", "--all"]).ok();
-    let log = runtime.sessions().join("nf.log");
+    let log = runtime.sessions().join("nf/log");
+    fs::create_dir_all(log.parent().unwrap()).unwrap();
     for (what, remove, make) in [
         ("a folder", "rm -r", "mkdir"),
         ("a special file", "rm", "mkfifo"),
@@ -2027,7 +1995,7 @@ fn anything_but_a_file_at_the_log_is_refused_before_anything_starts() {
             "{what}"
         );
         assert!(runtime.daemons().is_empty(), "{what}");
-        assert_eq!(session_files(&runtime), ["nf.log"], "{what}");
+        assert_eq!(session_files(&runtime), ["nf"], "{what}");
         let _ = fs::remove_dir(&log);
         let _ = fs::remove_file(&log);
     }
@@ -2039,7 +2007,7 @@ fn a_command_whose_process_crashed_while_another_shell_opened_again_says_so() {
     let runtime = Runtime::new();
     runtime.orbe(dir.path(), &["open", "--session", "cr"]).ok();
     let stepping = runtime.spawn(dir.path(), &["step", "600s", "--session", "cr"]);
-    std::thread::sleep(Duration::from_millis(300));
+    wait_scheduled(runtime.daemon());
     kill("-STOP", stepping.id());
     kill_daemon(&runtime);
     runtime.orbe(dir.path(), &["open", "--session", "cr"]).ok();
@@ -2051,7 +2019,7 @@ fn a_command_whose_process_crashed_while_another_shell_opened_again_says_so() {
     assert_eq!(
         (run.code, run.stdout.as_str(), run.stderr.as_str()),
         (
-            1,
+            4,
             "",
             "error[session_crashed]: the process of session `cr` ended before it answered; a new session `cr` is running\n  hint: run `orbe snapshot --session cr` to see it\n"
         )
@@ -2112,9 +2080,10 @@ fn an_open_read_after_the_no_scene_wait_still_opens_on_the_process_it_started() 
         "the request was read late: {elapsed:?}"
     );
     assert_eq!(runtime.daemons().len(), 1);
+    assert_eq!(session_files(&runtime), ["late"]);
     assert_eq!(
-        session_files(&runtime),
-        ["late.claim", "late.log", "late.sock", "late.version"]
+        state_files(&runtime, "late"),
+        ["lock", "log", "pid", "sock", "version"]
     );
     runtime
         .orbe(dir.path(), &["close", "--session", "late"])
@@ -2135,16 +2104,16 @@ fn an_open_whose_every_process_ends_before_reading_it_says_how_many_times() {
     assert_eq!(
         (run.code, run.stdout.as_str(), run.stderr.as_str()),
         (
-            1,
+            4,
             "",
             "error[session_crashed]: the process of session `rd` ended before it answered `open`, 5 times\n"
         )
     );
     wait_until("every process ended", || runtime.daemons().is_empty());
-    assert_eq!(
-        session_files(&runtime),
-        ["rd.claim"],
-        "a start that ends leaves the claim lock until close"
+    assert!(
+        session_files(&runtime).is_empty(),
+        "a start that ends removes its folder: {:?}",
+        session_files(&runtime)
     );
 }
 

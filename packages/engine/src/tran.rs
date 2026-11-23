@@ -64,13 +64,9 @@ impl Rows {
 /// The recorded session on a transient, and the one way `simulate` opens one. The session holds the netlist's floating-net warnings,
 /// which its run reports. A grid with more rows than a trace holds is `trace.too_large`, before
 /// any solve. Then the operating point and the step after it.
-// With 32-bit pointers the error is under the lint's size limit, and the lint stays silent.
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::result_large_err,
-        reason = "the session in Ok is larger than the error, so boxing it saves nothing"
-    )
+#[expect(
+    clippy::result_large_err,
+    reason = "the session in Ok is larger than the error, so boxing it saves nothing"
 )]
 pub(crate) fn record(
     netlist: Netlist,
