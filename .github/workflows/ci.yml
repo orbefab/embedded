@@ -5,8 +5,11 @@
 # every push to main. The viewer fixture is two shards of one Playwright run.
 # Each shard plays the page with no session, which runs a Block, so those jobs
 # install Rust and wasm-bindgen. The page build itself does not. The site is
-# built once, and that build is shared. The wrangler suite is three shards that
-# download it. The vite preview suite downloads it too, then builds the
+# built once, and that build is shared, including the wrangler deploy pointer.
+# The wrangler suite is three shards that download it and put the pointer back
+# before wrangler starts. The source config names assets and no directory, so
+# wrangler does not start without that pointer. The vite preview suite downloads
+# the build too, then builds the
 # install-line site, and the Firefox and WebKit smoke downloads it. Those two
 # jobs run on main and nightly. ci-ok requires every job. A job this run did
 # not ask for is skipped, and any other result fails ci-ok. The engine checks

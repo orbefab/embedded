@@ -5,7 +5,10 @@
 # apps/site renders every page from them. Needs what scripts/wasm.sh needs, Node 24, pnpm and
 # cargo. It installs nothing. ORBE_SITE_INSTALL=1 shows install lines, once the repo and the
 # binaries are public, and copies scripts/install.sh to /orbe/install.sh. The footer links the
-# repo either way.
+# repo either way. The build writes apps/site/.wrangler/deploy/config.json, which points
+# wrangler at dist/orbefab_embedded/wrangler.json. That built config has the assets directory.
+# The source wrangler.jsonc does not, so wrangler does not start without the pointer. The
+# pointer is copied to dist/wrangler-deploy.json so a job that has only the build can put it back.
 #
 # The Block firmware links the AVR runtime under the LGPL, so the site serves the runtime's source
 # beside it, at /orbe/sources/. The archive is the one packages/engine/scripts/sketches.sh
@@ -55,3 +58,9 @@ cp "$blob" "$scratch/sources/${runtime_url##*/}"
 scripts/registry.sh "$target/debug/orbe" "$scratch/registry"
 scripts/wasm.sh "$scratch/wasm"
 pnpm --filter @orbe/site build
+pointer=apps/site/.wrangler/deploy/config.json
+if [[ ! -f $pointer ]]; then
+  echo "scripts/site.sh: the build wrote no $pointer, so wrangler has no assets directory." >&2
+  exit 1
+fi
+cp "$pointer" apps/site/dist/wrangler-deploy.json

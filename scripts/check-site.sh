@@ -19,8 +19,11 @@
 # `--servers vite` or `--servers wrangler` drives the suite on that one host. `wrangler` skips
 # the install-line build, which Playwright drives on `vite preview`. `--shard N/M` passes that
 # shard to the suite. `--no-build` uses the site already at apps/site/dist and does not run the
-# deploy build. The install-line build still runs unless `--servers wrangler`. Set ORBE to the
-# orbe binary when this machine has not built it. `--no-playwright` stops after the file checks.
+# deploy build. The install-line build still runs unless `--servers wrangler`. The build
+# carries dist/wrangler-deploy.json, the pointer wrangler follows. Before wrangler starts,
+# the check copies it to apps/site/.wrangler/deploy/config.json. The source wrangler.jsonc
+# names assets and no directory, so wrangler does not start without that pointer. Set ORBE to
+# the orbe binary when this machine has not built it. `--no-playwright` stops after the file checks.
 # The arguments can be in any order. With none of `--servers` or `--shard`, the check runs both
 # hosts, as `scripts/check.sh web` does. An unknown argument is an error.
 set -euo pipefail
@@ -161,9 +164,31 @@ for (const row of index.items.filter((row) => row.type === "block")) {
   }
 }' "$dist/r" "https://orbefab.com/embedded/sources/$archive"
 echo "check-site: the build serves sources/$archive, the runtime source each Block NOTICE names"
+[[ -f apps/site/dist/wrangler-deploy.json ]] ||
+  fail "the build has no wrangler deploy pointer at apps/site/dist/wrangler-deploy.json"
 
 if [[ $no_playwright -eq 1 ]]; then
   exit 0
+fi
+
+# wrangler dev in apps/site follows this pointer to the built config. The source
+# wrangler.jsonc has an assets binding and no directory.
+if [[ $servers != vite ]]; then
+  mkdir -p apps/site/.wrangler/deploy
+  cp apps/site/dist/wrangler-deploy.json apps/site/.wrangler/deploy/config.json
+  # shellcheck disable=SC2016 # javascript
+  node -e '
+const fs = require("node:fs");
+const path = require("node:path");
+const pointer = "apps/site/.wrangler/deploy/config.json";
+const cfg = JSON.parse(fs.readFileSync(pointer, "utf8"));
+const configPath = path.resolve(path.dirname(pointer), cfg.configPath);
+const built = JSON.parse(fs.readFileSync(configPath, "utf8"));
+if (typeof built.assets?.directory !== "string" || built.assets.directory === "") {
+  console.error(`check-site: ${configPath} has no assets directory`);
+  process.exit(1);
+}
+'
 fi
 
 if [[ $no_build -eq 0 || -z ${ORBE:-} ]]; then
