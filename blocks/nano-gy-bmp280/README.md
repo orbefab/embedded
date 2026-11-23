@@ -1,6 +1,6 @@
 # Temperature and pressure on a Nano
 
-The sketch is Adafruit's BMP280 example. It calls `begin(0x76)` because this module pulls SDO to ground, then `readTemperature` and `readPressure`, and prints both on Serial. An LP2985 makes 3.3 V for the module from the Nano's 5V. The module itself has no regulator.
+The sketch is Adafruit's BMP280 example. It calls `begin(0x76)` because this module pulls SDO to ground, then `readTemperature` and `readPressure`, and prints both on Serial. An LP2985 makes 3.3 V for the module from the Nano's 5V. The module itself has no regulator. A 68 kΩ from SDA to ground and another from SCL to ground keep the Nano's 5 V I2C pull-ups from feeding that regulator.
 
 `orbe set temperature` and `orbe set pressure` change what it prints. Pressure is in Pa, and 101325 is sea level.
 

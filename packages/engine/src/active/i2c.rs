@@ -43,6 +43,10 @@ pub(crate) trait Target {
     fn master_ack(&mut self, at: Time, more: bool);
     /// A STOP, from any phase.
     fn stop(&mut self, at: Time);
+    /// Whether the address match is answered. A target that is off the bus says no.
+    fn answers(&self) -> bool {
+        true
+    }
 }
 
 /// A device's calls in one landing, in the world they read.
@@ -75,6 +79,10 @@ impl<D: I2cTarget> Target for Calls<'_, D> {
     fn stop(&mut self, at: Time) {
         self.dev
             .call(self.world, at, |device, cx| device.stop(cx, at));
+    }
+
+    fn answers(&self) -> bool {
+        self.dev.device().answers()
     }
 }
 
@@ -283,7 +291,8 @@ impl Engine {
                     Recv::Address => {
                         let address = shifter >> 1;
                         let read = shifter & 1 == 1;
-                        let matched = address == self.bus.address + u8::from(self.address_bit);
+                        let matched = address == self.bus.address + u8::from(self.address_bit)
+                            && dev.answers();
                         let next = if !matched {
                             Next::Idle
                         } else if read {

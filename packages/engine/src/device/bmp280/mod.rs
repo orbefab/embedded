@@ -24,9 +24,9 @@ use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
 use crate::netlist::json::{PinMap, WireValue, resolve_pins, resolve_value};
 use crate::netlist::{NetId, PartId, Threshold, Value};
+use crate::ratings::{Ceiling, PinRatings, PinWindow};
 use crate::watch::{Signal, Watch};
 
-#[allow(dead_code)]
 const VDD: usize = 0;
 const VDDIO: usize = 1;
 const GND: usize = 2;
@@ -75,6 +75,51 @@ pub(crate) fn chip(part: PartId, dev: &Bmp280) -> Chip {
         (Bmp280::PINS[SDO], model::WATCH_SDO),
     ];
     signals.sort_unstable();
+    // Inclusive of the sheet's end by a microvolt. The comparator is true strictly above 0.
+    let slop = 1e-6;
+    let rail = |pin: usize, sign: f64, offset: f64| {
+        Watch::comparator(Signal {
+            terms: vec![
+                (Node::from(pins[pin]), sign),
+                (Node::from(pins[GND]), -sign),
+            ],
+            offset,
+        })
+    };
+    let above = |pin: usize, limit: f64| rail(pin, 1.0, limit - slop);
+    let below = |pin: usize, limit: f64| rail(pin, -1.0, -(limit + slop));
+    // Table 3: inside from GND - 0.3 to VDDIO + 0.3, the edge included.
+    let pin_window = |pin: usize| {
+        let margin = model::PIN_MARGIN_V + slop;
+        (
+            Watch::comparator(Signal {
+                terms: vec![
+                    (Node::from(pins[VDDIO]), 1.0),
+                    (Node::from(pins[pin]), -1.0),
+                ],
+                offset: -margin,
+            }),
+            Watch::comparator(Signal {
+                terms: vec![(Node::from(pins[pin]), 1.0), (Node::from(pins[GND]), -1.0)],
+                offset: -margin,
+            }),
+        )
+    };
+    let mut watches = vec![
+        watch(SCK),
+        watch(SDI),
+        watch(CSB),
+        watch(SDO),
+        above(VDD, model::VDD_MIN_V),
+        below(VDD, model::VDD_MAX_V),
+        above(VDDIO, model::VDDIO_MIN_V),
+        below(VDDIO, model::VDDIO_MAX_V),
+    ];
+    for pin in [SDI, SCK, CSB, SDO] {
+        let (under, over) = pin_window(pin);
+        watches.push(under);
+        watches.push(over);
+    }
     Chip {
         part: Some(part),
         outputs: vec![Output {
@@ -87,14 +132,14 @@ pub(crate) fn chip(part: PartId, dev: &Bmp280) -> Chip {
             pull_down: None,
             leakage: None,
         }],
-        watches: vec![watch(SCK), watch(SDI), watch(CSB), watch(SDO)],
+        watches,
         signals: signals.to_vec(),
         samples: Vec::new(),
         usarts: &[],
         twi: false,
         sends: false,
         supply: None,
-        draw: None,
+        draw: Some((pins[VDD], pins[GND])),
         takes: crate::active::Takes::default(),
         core: Core::Device(Box::new(Native::new(
             model::Bmp280::new(&Fields::NONE).expect("a bmp280 takes no params"),
@@ -108,13 +153,53 @@ pub(crate) fn chip(part: PartId, dev: &Bmp280) -> Chip {
 /// I2C target at 0x76 when `SDO` is low and at 0x77 when `SDO` is high. `SDI` is open drain
 /// into `GND` through `low_resistance`. `SCK`, `CSB` and `SDO` are inputs. It reads each of
 /// those four through `input_threshold`, fractions of `VDDIO`. `CSB` low is SPI mode, and the
-/// part does not answer on I2C then. It reads the netlist's `temperature` and `pressure`.
+/// part does not answer on I2C then. It answers only while `VDD` and `VDDIO` are inside Table 2.
+/// It reads the netlist's `temperature` and `pressure`. `VDD` draws the Table 2 typical current.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bmp280 {
     pub pins: [NetId; 7],
     /// Ohm.
     pub low_resistance: Value,
     pub input_threshold: Threshold,
+    pub ratings: Bmp280Ratings,
+}
+
+/// Table 3. `supply_voltage` is the ceiling on `VDD` and `VDDIO` over `GND`. `pin_margin` is how
+/// far a pin may sit below `GND`, and an interface pin above `VDDIO`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bmp280Ratings {
+    /// Volt, greater than 0.
+    pub supply_voltage: Value,
+    /// Volt, greater than 0.
+    pub pin_margin: Value,
+}
+
+/// The part's Table 3 windows. `VDD` and `VDDIO` use `supply_voltage`. `CSB`, `SDI`, `SCK` and
+/// `SDO` use `pin_margin` over `VDDIO`. Every pin but `GND` also uses `pin_margin` below `GND`.
+pub(crate) fn pin_ratings(dev: &Bmp280) -> Option<PinRatings> {
+    let margin = dev.ratings.pin_margin.si.get();
+    let supply = dev.ratings.supply_voltage.si.get();
+    let window = |pin: usize, above: Ceiling| PinWindow {
+        pin: Bmp280::PINS[pin],
+        net: dev.pins[pin],
+        below: Some(margin),
+        above: Some(above),
+    };
+    let mut windows = vec![
+        window(VDD, Ceiling::Fixed(supply)),
+        window(VDDIO, Ceiling::Fixed(supply)),
+    ];
+    for pin in [CSB, SDI, SCK, SDO] {
+        windows.push(window(pin, Ceiling::OverSupply(margin)));
+    }
+    Some(PinRatings {
+        outputs: vec![Bmp280::PINS[SDI]],
+        pin_current: None,
+        supply_current: None,
+        vcc: (Bmp280::PINS[VDDIO], dev.pins[VDDIO]),
+        gnd: (Bmp280::PINS[GND], dev.pins[GND]),
+        windows,
+    })
 }
 
 impl Bmp280 {
@@ -128,6 +213,14 @@ pub(crate) struct WireBmp280 {
     pins: PinMap,
     low_resistance: WireValue,
     input_threshold: WireThreshold,
+    ratings: WireRatings,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireRatings {
+    supply_voltage: WireValue,
+    pin_margin: WireValue,
 }
 
 pub(crate) fn resolve_bmp280(ctx: ParseCtx<'_>, wire: WireBmp280) -> Option<Bmp280> {
@@ -154,6 +247,22 @@ pub(crate) fn resolve_bmp280(ctx: ParseCtx<'_>, wire: WireBmp280) -> Option<Bmp2
         wire.input_threshold,
         out,
     );
+    let supply_voltage = resolve_value(
+        part_ref,
+        "ratings.supply_voltage",
+        "V",
+        true,
+        wire.ratings.supply_voltage,
+        out,
+    );
+    let pin_margin = resolve_value(
+        part_ref,
+        "ratings.pin_margin",
+        "V",
+        true,
+        wire.ratings.pin_margin,
+        out,
+    );
     let mut declared = true;
     for &quantity in model::Bmp280::WORLD {
         if world.schedule(quantity).is_none() {
@@ -170,6 +279,10 @@ pub(crate) fn resolve_bmp280(ctx: ParseCtx<'_>, wire: WireBmp280) -> Option<Bmp2
         pins: pins?,
         low_resistance: low_resistance?,
         input_threshold: input_threshold?,
+        ratings: Bmp280Ratings {
+            supply_voltage: supply_voltage?,
+            pin_margin: pin_margin?,
+        },
     };
     declared.then_some(bmp280)
 }

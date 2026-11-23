@@ -19,13 +19,42 @@
 //! (§4.3.5). A mode write during a conversion waits until that conversion ends (§3.6.4); a
 //! second one before then is ignored.
 
-use orbe_model::{Ack, Cx, Device, Dir, Drives, Error, I2cTarget, Params, Quantity, State, Time};
+use orbe_model::{
+    Ack, Cx, Device, Dir, Draw, Drives, Error, I2cTarget, Params, Quantity, State, Stop, Time,
+};
 
-/// Watch order: SCK, SDI, CSB, SDO.
+/// Watch order: SCK, SDI, CSB, SDO, then the supply window. A supply watch is high while that
+/// rail is inside Table 2, both ends included.
 pub const WATCH_SCK: usize = 0;
 pub const WATCH_SDI: usize = 1;
 pub const WATCH_CSB: usize = 2;
 pub const WATCH_SDO: usize = 3;
+pub const WATCH_VDD_MIN: usize = 4;
+pub const WATCH_VDD_MAX: usize = 5;
+pub const WATCH_VDDIO_MIN: usize = 6;
+pub const WATCH_VDDIO_MAX: usize = 7;
+/// Eight watches: each interface pin under `VDDIO + 0.3` and over `GND - 0.3`, Table 3.
+pub const WATCH_PIN: usize = 8;
+pub const WATCH_PINS: usize = 8;
+
+/// Table 2 operating range. The part answers on I2C only while both supplies are inside it
+/// and every interface pin is inside Table 3.
+pub const VDD_MIN_V: f64 = 1.71;
+pub const VDD_MAX_V: f64 = 3.6;
+pub const VDDIO_MIN_V: f64 = 1.2;
+pub const VDDIO_MAX_V: f64 = 3.6;
+
+/// Table 2 typical supply current from `VDD`. Sleep is `IDDSL`, standby is `IDDSB`, temperature
+/// measurement is `IDDT` and pressure measurement is `Ipeak`.
+pub const SLEEP_A: f64 = 0.1e-6;
+pub const STANDBY_A: f64 = 0.2e-6;
+pub const TEMPERATURE_A: f64 = 325e-6;
+pub const PRESSURE_A: f64 = 720e-6;
+/// Full current at and above the VDD minimum. Below that it fades to none at 0 V.
+pub const DRAW_HOLDS_ABOVE_V: f64 = VDD_MIN_V;
+
+/// Table 3. An interface pin outside this of `GND` and `VDDIO` is not a level the part answers.
+pub const PIN_MARGIN_V: f64 = 0.3;
 
 /// The device drives no pin of its own. The host's I2C engine drives SDI.
 pub const OUTPUTS: usize = 0;
@@ -84,6 +113,13 @@ pub struct Bmp280 {
     filter_p: Option<i32>,
     /// `t_fine` from the last temperature conversion, for a pressure reading that skips it.
     t_fine: i32,
+    /// When a conversion that measures both switches from the temperature current to the
+    /// pressure current. `None` once that switch has happened, or when only one is measured.
+    pressure_at: Option<Time>,
+    /// The conversion is in its pressure measurement, so the draw is [`PRESSURE_A`].
+    in_pressure: bool,
+    /// Both supplies are inside Table 2 and every interface pin is inside Table 3.
+    awake: bool,
 }
 
 impl State for Bmp280 {}
@@ -128,6 +164,24 @@ impl Bmp280 {
             filter_t: None,
             filter_p: None,
             t_fine: 0,
+            pressure_at: None,
+            in_pressure: false,
+            awake: false,
+        }
+    }
+
+    /// Table 2. Asleep, in the standby between normal-mode measurements, or measuring.
+    fn supply_amps(&self) -> f64 {
+        if self.measuring_until.is_some() {
+            if self.in_pressure || self.started_t == 0 {
+                PRESSURE_A
+            } else {
+                TEMPERATURE_A
+            }
+        } else if self.standby_until.is_some() {
+            STANDBY_A
+        } else {
+            SLEEP_A
         }
     }
 
@@ -166,6 +220,8 @@ impl Bmp280 {
         }
         self.started_t = osr_count(self.mem[REG_CTRL] >> 5);
         self.started_p = osr_count(self.mem[REG_CTRL] >> 2);
+        self.in_pressure = self.started_t == 0 && self.started_p > 0;
+        self.pressure_at = None;
         let us = measure_us(self.started_t, self.started_p);
         if us == 0 {
             self.store(REG_TEMP, 0x80000);
@@ -174,6 +230,11 @@ impl Bmp280 {
             return;
         }
         self.mem[REG_STATUS] |= MEASURING;
+        if self.started_t > 0 && self.started_p > 0 {
+            // The 1.5 ms overhead sits with the temperature measurement. Pressure follows.
+            let temp_us = 1_500 + 2_000 * u64::from(self.started_t);
+            self.pressure_at = after(at, temp_us);
+        }
         self.measuring_until = after(at, us);
     }
 
@@ -193,6 +254,8 @@ impl Bmp280 {
 
     fn finish(&mut self, cx: &Cx, at: Time) {
         self.measuring_until = None;
+        self.pressure_at = None;
+        self.in_pressure = false;
         self.mem[REG_STATUS] &= !MEASURING;
         self.capture(cx);
         self.after_conversion(at);
@@ -236,42 +299,64 @@ impl Device for Bmp280 {
         Ok(Bmp280::power_on())
     }
 
-    fn run_until(&mut self, cx: &mut Cx, limit: Time) -> Option<orbe_model::Stop> {
-        loop {
-            let next = [self.measuring_until, self.standby_until]
-                .into_iter()
-                .flatten()
-                .min();
-            let Some(at) = next else {
-                break;
-            };
-            if at > limit {
-                break;
-            }
-            if self.measuring_until == Some(at) {
-                self.finish(cx, at);
-            } else {
-                self.standby_until = None;
-                self.kick(at);
-            }
+    fn run_until(&mut self, cx: &mut Cx, limit: Time) -> Option<Stop> {
+        let next = [self.pressure_at, self.measuring_until, self.standby_until]
+            .into_iter()
+            .flatten()
+            .min();
+        let at = next.filter(|&at| at <= limit)?;
+        if self.pressure_at == Some(at) {
+            self.pressure_at = None;
+            self.in_pressure = true;
         }
-        None
+        if self.measuring_until == Some(at) {
+            self.finish(cx, at);
+        } else if self.standby_until == Some(at) {
+            self.standby_until = None;
+            self.kick(at);
+        }
+        Some(Stop {
+            at,
+            sample: false,
+            record: false,
+        })
     }
 
     fn drive(&self) -> Drives {
         Drives::OFF
     }
 
-    /// CSB low is SPI mode. I2C does not answer while the host holds the engine there, and the
-    /// part names the mode.
+    fn draw(&self) -> Draw {
+        Draw {
+            amps: self.supply_amps(),
+            holds_above_v: DRAW_HOLDS_ABOVE_V,
+        }
+    }
+
+    /// CSB low is SPI mode while the part is powered. I2C does not answer while the host holds
+    /// the engine there, and the part names the mode. A supply outside Table 2 is not that mode:
+    /// the part is simply off the bus.
     fn input(&mut self, cx: &mut Cx, at: Time, levels: orbe_model::Levels) {
-        if !levels.high(WATCH_CSB) {
+        let powered = levels.high(WATCH_VDD_MIN)
+            && levels.high(WATCH_VDD_MAX)
+            && levels.high(WATCH_VDDIO_MIN)
+            && levels.high(WATCH_VDDIO_MAX);
+        let pins_ok = (0..WATCH_PINS).all(|k| levels.high(WATCH_PIN + k));
+        if self.awake && !powered {
+            *self = Bmp280::power_on();
+        }
+        self.awake = powered && pins_ok;
+        if powered && !levels.high(WATCH_CSB) {
             cx.broke("spi", at);
         }
     }
 }
 
 impl I2cTarget for Bmp280 {
+    fn answers(&self) -> bool {
+        self.awake
+    }
+
     fn start(&mut self, _cx: &mut Cx, _at: Time, dir: Dir) {
         if dir == Dir::Write {
             self.set_pointer = true;

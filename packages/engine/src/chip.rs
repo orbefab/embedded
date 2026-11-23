@@ -206,12 +206,12 @@ pub(crate) fn dc_paths(chip: &Chip) -> &'static [(usize, usize)] {
 pub(crate) fn pin_ratings(chip: &Chip) -> Option<crate::ratings::PinRatings> {
     match chip {
         Chip::Atmega328p(mcu) => crate::mcu::atmega328p::pin_ratings(mcu),
+        Chip::Bmp280(dev) => crate::device::bmp280::pin_ratings(dev),
         Chip::Ne555(_)
         | Chip::SpiReplay(_)
         | Chip::St77916(_)
         | Chip::Cst816(_)
         | Chip::Dht22(_)
-        | Chip::Bmp280(_)
         | Chip::Esp32s3(_)
         | Chip::Ws2812(_)
         | Chip::PulsesReplay(_) => None,

@@ -169,6 +169,11 @@ pub trait I2cTarget: Device {
     fn master_ack(&mut self, _cx: &mut Cx, _at: Time, _more: bool) {}
     /// A STOP.
     fn stop(&mut self, _cx: &mut Cx, _at: Time) {}
+    /// Whether an address match is answered. A sensor whose supply is outside its operating
+    /// range says no, and the host leaves SDA released for that address.
+    fn answers(&self) -> bool {
+        true
+    }
 }
 
 /// A device on a pulsed line. The host watches the line, times each level, and calls the device

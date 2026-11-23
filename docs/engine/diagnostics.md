@@ -754,6 +754,8 @@ A window with no floor reads `outside its {high} V ceiling`, and one with no cei
 
 An `atmega328p` with a `ratings` object checks every pin but its two ground pins. The floor is `ratings.rail_margin` below ground. The ceiling is `ratings.rail_margin` above the chip's own `VCC`, so it follows the supply. `VCC`'s ceiling is `ratings.supply_voltage`, and `PC6`'s is `ratings.reset_voltage` while it is `RESET`. A pin exactly on the edge is inside. The model has no clamp diodes, so a pin outside the window draws no clamp current and its voltage is what the circuit drives. A real pin conducts into its clamp there, which is the damage the rating guards against.
 
+A `bmp280` checks Table 3 the same way. `VDD` and `VDDIO` warn below -0.3 V or above 4.25 V over `GND`. `CSB`, `SDI`, `SCK` and `SDO` warn below -0.3 V or above `VDDIO` + 0.3 V. A pin exactly on the edge is inside. The model has no clamp diodes, so a pin outside the window draws no clamp current.
+
 A `linear_regulator`'s `ratings.input_voltage` is the ceiling on `#<part>.pin.in` over its `gnd`, and an op-amp's `ratings.supply_voltage` the ceiling on `#<part>.pin.vcc`, as [netlist.md](netlist.md) says. An LM7805 on 40 V is outside its 35 V ceiling.
 
 A Nano with a 9 V source through 1 kohm on A0 reads, at the operating point:

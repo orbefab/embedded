@@ -69,6 +69,30 @@
           }
         }
       }
+    },
+    "ratings": {
+      "supply_voltage": {
+        "value": 4.25,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "BST-BMP280-DS001-26",
+            "at": "Table 3, voltage at any supply pin, VDD and VDDIO, maximum 4.25 V",
+            "basis": "absolute_max"
+          }
+        }
+      },
+      "pin_margin": {
+        "value": 0.3,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "BST-BMP280-DS001-26",
+            "at": "Table 3, voltage at any supply pin and at any interface pin, -0.3 V to VDDIO + 0.3 V",
+            "basis": "absolute_max"
+          }
+        }
+      }
     }
   },
   "not_simulated": [
@@ -81,8 +105,8 @@
       "why": "im_update is 1 while the trimming words are copied at power-on and before each conversion (section 4.3.3). That copy takes no time here, so the bit stays 0 and the words are readable from t = 0."
     },
     {
-      "what": "supply current",
-      "why": "Table 12 gives the current at 1 Hz. The part draws none. VDD and VDDIO need another path to a supply."
+      "what": "the supply current's maximum column, and a separate VDDIO current",
+      "why": "VDD draws Table 2's typical: 0.1 µA asleep, 0.2 µA in the standby of normal mode, 325 µA while temperature is measured and 720 µA while pressure is measured. The maximum column is not used, and VDDIO draws none of its own."
     },
     {
       "what": "accuracy",

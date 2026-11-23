@@ -1297,6 +1297,128 @@ expect no diagnostics
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
 }
 
+fn bmp_scene(dir: &std::path::Path, extra_parts: &str, wires: &str) {
+    fs::copy(
+        common::repo().join("blocks/nano-gy-bmp280/build/bmp280.ino.hex"),
+        dir.join("build/bmp280.ino.hex"),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("scene.jsonc"),
+        format!(
+            r#"{{
+  "format": 1,
+  "parts": {{
+    "nano": {{ "type": "nano-board", "firmware": "build/bmp280.ino.hex" }},
+    {extra_parts}
+    "mod": {{ "type": "gy-bmp280" }}
+  }},
+  "wires": [{wires}]
+}}"#
+        ),
+    )
+    .unwrap();
+}
+
+/// Powering the 3.3 V module from the Nano's 5V pin is past Table 3, so the run warns.
+#[test]
+fn a_bmp280_on_5v_warns_it_is_past_the_sheet() {
+    let dir = project(
+        "open\nstep --until serial contains \"BMP280 test\" --timeout 2s\nstep 100ms\nget @mod.VCC\n",
+    );
+    bmp_scene(
+        dir.path(),
+        "",
+        r#"["nano.5V", "mod.VCC"], ["nano.GND", "mod.GND"], ["nano.A4", "mod.SDA"], ["nano.A5", "mod.SCL"]"#,
+    );
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("warning[rating.voltage]") && run.stdout.contains("4.25"),
+        "{}",
+        run.stdout
+    );
+}
+
+/// The Nano's I2C pull-ups, through the module's 10 kΩ, lift SDA and SCL past VDDIO + 0.3 V.
+/// The run warns on those pins.
+#[test]
+fn bmp280_pull_ups_into_an_lp2985_warn_past_4_25_v() {
+    let dir = project(
+        "open\nstep --until serial contains \"BMP280 test\" --timeout 2s\nstep 100ms\nget @mod.VCC\n",
+    );
+    bmp_scene(
+        dir.path(),
+        r#""reg": { "type": "lp2985-sot23-5" },"#,
+        r#"["nano.5V", "reg.IN"], ["reg.GND", "nano.GND"], ["reg.OUT", "mod.VCC"], ["mod.GND", "nano.GND"], ["nano.A4", "mod.SDA"], ["nano.A5", "mod.SCL"]"#,
+    );
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("warning[rating.voltage]")
+            && (run.stdout.contains("mod.SDA") || run.stdout.contains("mod.SCL")),
+        "{}",
+        run.stdout
+    );
+}
+
+/// An open VCC leaves the BMP280 outside its operating range, so the sketch says it is missing.
+#[test]
+fn an_unpowered_bmp280_is_not_found() {
+    let dir = project("open\nstep --until serial contains \"Could not find\" --timeout 2s\n");
+    bmp_scene(
+        dir.path(),
+        "",
+        r#"["nano.GND", "mod.GND"], ["nano.A4", "mod.SDA"], ["nano.A5", "mod.SCL"]"#,
+    );
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("serial contains \"Could not find\""),
+        "{}",
+        run.stdout
+    );
+}
+
+/// `set pressure 30000` then `set pressure 101325` before time moves drops the pending step.
+/// The same for temperature. The value a read sees never changed.
+#[test]
+fn set_pressure_back_before_time_moves_keeps_the_value_in_force() {
+    let dir = project(
+        "open\nset pressure 30000\nset pressure 101325\nset temperature 0\nset temperature 25\n",
+    );
+    fs::copy(
+        common::repo().join("blocks/nano-gy-bmp280/scene.jsonc"),
+        dir.path().join("scene.jsonc"),
+    )
+    .unwrap();
+    fs::copy(
+        common::repo().join("blocks/nano-gy-bmp280/build/bmp280.ino.hex"),
+        dir.path().join("build/bmp280.ino.hex"),
+    )
+    .unwrap();
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("set pressure to 30000 Pa at t=1ps"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .contains("pressure is already 101325 Pa; dropped 1 later scheduled step of pressure"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains(
+            "temperature is already 25 degC; dropped 1 later scheduled step of temperature"
+        ),
+        "{}",
+        run.stdout
+    );
+}
+
 #[test]
 fn a_set_the_table_refuses_is_a_usage_error() {
     for (line, message) in [

@@ -227,6 +227,10 @@ impl<D: Device> Hosting<D> {
         out
     }
 
+    pub(crate) fn device(&self) -> &D {
+        &self.device
+    }
+
     /// The device's next stop up to `limit`. What it left in its `Cx` is at that stop, or at
     /// `limit` with none. It reads the world at `limit`: a change of a quantity it reads lands
     /// it, so no run crosses one.

@@ -1213,10 +1213,13 @@ It reads the netlist's `temperature` and `pressure`, which the netlist's `world`
 | --- | --- | --- |
 | `low_resistance` | `ohm` | the resistor's |
 | `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+| `ratings.supply_voltage`, `ratings.pin_margin` | `V` | greater than 0, else rule `positive` |
 
 A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
 
-A `bmp280` has no `ratings` object and no `i`, `v`, or `p`. Its logic signals are `SCK`, `SDI`, `CSB` and `SDO`. It joins `SDI` to `GND` through the stage its drive stamps. `VDD` and `VDDIO` draw no current, so each needs another DC path.
+`ratings.supply_voltage` is the ceiling on `VDD` and `VDDIO` over `GND`. `ratings.pin_margin` is how far any pin but `GND` may sit below `GND`, and how far `CSB`, `SDI`, `SCK` and `SDO` may sit above `VDDIO`. A pin exactly on the edge is inside. Table 3 gives 4.25 V and 0.3 V. Past either, the pin warns [`rating.voltage`](diagnostics.md#ratingvoltage).
+
+`VDD` draws the Table 2 typical into `GND`: 0.1 µA asleep, 0.2 µA in the standby of normal mode, 325 µA while temperature is measured and 720 µA while pressure is measured. The current is full at and above the 1.71 V operating minimum and fades to none at 0 V. The part answers on I2C only while `VDD` is from 1.71 V to 3.6 V and `VDDIO` is from 1.2 V to 3.6 V, both ends included, and `CSB`, `SDI`, `SCK` and `SDO` are each from -0.3 V to `VDDIO` + 0.3 V over `GND`. A supply that leaves that range resets the part. Outside either window it leaves `SDI` released. A `bmp280` has no `i`, `v`, or `p`. Its logic signals are `SCK`, `SDI`, `CSB` and `SDO`. It joins `SDI` to `GND` through the stage its drive stamps. `VDDIO` draws no current of its own, so it needs another DC path. The draw on `VDD` is a current, so a net reached only through it still floats.
 
 ### Pulses replay
 
