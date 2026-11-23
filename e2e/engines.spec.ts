@@ -24,6 +24,14 @@ const FIREFOX_WEBGL = [
   "Error",
 ];
 
+function expectLoaded(response: { status(): number } | null, where: string): void {
+  const status = response?.status() ?? 0;
+  // Status 0 is a refused page. Playwright's ok() treats it as success, and Firefox
+  // answers a refused page with that status. A page that loaded answers 2xx.
+  expect(status, where).toBeGreaterThanOrEqual(200);
+  expect(status, where).toBeLessThan(300);
+}
+
 function drawnOrRefused(page: Page): Promise<"board" | "refused"> {
   return page
     .waitForFunction(
@@ -59,7 +67,7 @@ async function timeMoves(page: Page): Promise<void> {
 test("the page runs the Block, and WebKit shows the board", async ({ page }, info) => {
   const errors = collectLogs(page, "errors");
   const response = await page.goto(`${viewer}/`);
-  expect(response?.ok()).toBe(true);
+  expectLoaded(response, "viewer");
   const outcome = await drawnOrRefused(page);
   await timeMoves(page);
   if (outcome === "board") {
@@ -79,7 +87,7 @@ test("the site's main pages load", async ({ page }, info) => {
   for (const [path, heading] of PAGES) {
     errors.length = 0;
     const response = await page.goto(`${site}${path}`);
-    expect(response?.ok(), path).toBe(true);
+    expectLoaded(response, path);
     await expect(page.locator("h1")).toHaveText(heading);
     await page.waitForLoadState("networkidle");
     expect(errors, `${path} ${JSON.stringify(errors)}`).toEqual([]);
@@ -89,7 +97,7 @@ test("the site's main pages load", async ({ page }, info) => {
 test("a Block page draws in WebKit", async ({ page }, info) => {
   const errors = collectLogs(page, "errors");
   const response = await page.goto(`${site}/orbe/blocks/nano-button-led/`);
-  expect(response?.ok()).toBe(true);
+  expectLoaded(response, "block");
   await expect(page.locator("h1")).toHaveText("Button and LED on a Nano");
   const outcome = await drawnOrRefused(page);
   if (outcome === "board") {
