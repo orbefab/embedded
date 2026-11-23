@@ -171,6 +171,23 @@ impl Log {
             .collect()
     }
 
+    /// Which of the lamps `indices`, the segments of one display, a viewer sees as part of
+    /// the shown figure now. See [`seen`].
+    pub(super) fn seen(&self, indices: &[usize], probe: &Probe, above: f64) -> Vec<bool> {
+        let segments: Vec<Segment<'_>> = indices
+            .iter()
+            .map(|&index| {
+                let column = &self.lamps[index].column;
+                Segment {
+                    samples: &self.samples[index],
+                    integral: integral(probe, column),
+                    instant: probe.get(column).expect("a checked column").get(),
+                }
+            })
+            .collect();
+        seen(&segments, probe.at().as_ps(), above)
+    }
+
     /// The timeout hint when `want` is unmet at `end`. `None` when the average does not
     /// yet cover a full window, so the caller asks for a longer step.
     ///
@@ -226,6 +243,73 @@ fn average(samples: &VecDeque<Span>, now: u64, integral_now: f64, instant: f64) 
         return (instant, 0);
     }
     ((integral_now - start.integral) / dt as f64, dt)
+}
+
+/// One segment's log and its integral and current now.
+struct Segment<'a> {
+    samples: &'a VecDeque<Span>,
+    integral: f64,
+    instant: f64,
+}
+
+/// Which segments a viewer sees now, each `true` when it is part of the shown figure.
+///
+/// Each sample in the last [`BRIGHTNESS_WINDOW`], and now, has a pattern: the segments whose
+/// current is above `above` at that instant. PWM and multiplexing switch between patterns
+/// that recur, so the window holds each of them again and again. A pattern that is not
+/// earlier in the window is new drive, and the figure starts there: at the window's start
+/// when nothing changed, or at the sample that first showed the new pattern. A segment is
+/// seen when it is in any pattern from that start on, or when its average current since then
+/// is above `above`, which catches a short pulse that falls between samples.
+///
+/// So a static change shows at the next sample, 1 ms apart while a step runs, and a segment
+/// that went dark before it never counts. Drive that repeats at 100 Hz or faster repeats
+/// within the window, so its figure holds through each dark part of its cycle.
+fn seen(segments: &[Segment<'_>], now: u64, above: f64) -> Vec<bool> {
+    let horizon = now.saturating_sub(BRIGHTNESS_WINDOW.as_ps());
+    let Some(first) = segments.first() else {
+        return Vec::new();
+    };
+    // Every lamp is noted at the same times, so the k-th sample is one time for all of them.
+    let skip = first.samples.partition_point(|span| span.t_ps < horizon);
+    let logged = first
+        .samples
+        .iter()
+        .skip(skip)
+        .take_while(|span| span.t_ps < now)
+        .count();
+    let at = |k: usize, segment: &Segment<'_>| -> (u64, f64, f64) {
+        if k < logged {
+            let span = segment.samples[skip + k];
+            (span.t_ps, span.integral, span.instant)
+        } else {
+            (now, segment.integral, segment.instant)
+        }
+    };
+    let patterns: Vec<Vec<bool>> = (0..=logged)
+        .map(|k| {
+            segments
+                .iter()
+                .map(|segment| at(k, segment).2 > above)
+                .collect()
+        })
+        .collect();
+    let start = (0..patterns.len())
+        .rev()
+        .find(|&k| !patterns[..k].contains(&patterns[k]))
+        .expect("the first pattern is new");
+    segments
+        .iter()
+        .enumerate()
+        .map(|(n, segment)| {
+            if patterns[start..].iter().any(|pattern| pattern[n]) {
+                return true;
+            }
+            let (t, integral, _) = at(start, segment);
+            let dt = now.saturating_sub(t);
+            dt > 0 && (segment.integral - integral) / dt as f64 > above
+        })
+        .collect()
 }
 
 /// What a full window measured, and the range `want` needs.
@@ -579,5 +663,74 @@ mod tests {
                 "off needs the average at or below 100 uA",
             )
         );
+    }
+
+    const US: u64 = 1_000_000;
+
+    /// One segment carrying `amps(t_us)`, sampled each 1 ms up to `now_us` and read at `now_us`.
+    fn segment_log(now_us: u64, amps: impl Fn(u64) -> f64) -> (VecDeque<Span>, f64, f64) {
+        let mut samples = VecDeque::new();
+        let mut integral = 0.0;
+        for t in 0..=now_us {
+            if t % 1000 == 0 {
+                samples.push_back(Span {
+                    t_ps: t * US,
+                    integral,
+                    instant: amps(t),
+                });
+            }
+            if t < now_us {
+                integral += amps(t) * US as f64;
+            }
+        }
+        (samples, integral, amps(now_us))
+    }
+
+    fn seen_at(now_us: u64, waves: &[&dyn Fn(u64) -> f64]) -> Vec<bool> {
+        let logs: Vec<_> = waves.iter().map(|wave| segment_log(now_us, wave)).collect();
+        let segments: Vec<Segment<'_>> = logs
+            .iter()
+            .map(|(samples, integral, instant)| Segment {
+                samples,
+                integral: *integral,
+                instant: *instant,
+            })
+            .collect();
+        seen(&segments, now_us * US, 2e-4)
+    }
+
+    #[test]
+    fn a_static_change_shows_at_the_next_sample_without_the_old_segment() {
+        let old = |t: u64| if t < 400_080 { 0.01 } else { 0.0 };
+        let new = |t: u64| if t < 400_080 { 0.0 } else { 0.01 };
+        assert_eq!(seen_at(400_000, &[&old, &new]), [true, false]);
+        for now in [401_000, 403_000, 410_000, 425_000] {
+            assert_eq!(seen_at(now, &[&old, &new]), [false, true], "at {now} us");
+        }
+        let dark = |t: u64| if t < 400_080 { 0.01 } else { 0.0 };
+        assert_eq!(seen_at(401_000, &[&dark]), [false]);
+    }
+
+    #[test]
+    fn drive_lit_a_quarter_of_each_10_ms_holds_through_the_dark_part() {
+        let lit = |t: u64| if t % 10_000 < 2_500 { 0.009 } else { 0.0 };
+        let dark = |_: u64| 0.0;
+        for now in (30_000..60_000).step_by(1_000) {
+            assert_eq!(seen_at(now, &[&lit, &dark]), [true, false], "at {now} us");
+        }
+    }
+
+    #[test]
+    fn a_pulse_between_samples_counts_by_its_average() {
+        // 0.1 ms at 10 mA in each 2 ms, never at a whole millisecond: 0.5 mA on average.
+        let pulse = |t: u64| {
+            if t % 2_000 >= 500 && t % 2_000 < 600 {
+                0.01
+            } else {
+                0.0
+            }
+        };
+        let faint = |_: u64| 1e-4;
+        assert_eq!(seen_at(40_000, &[&pulse, &faint]), [true, false]);
     }
 }

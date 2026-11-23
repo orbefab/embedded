@@ -2,7 +2,8 @@
 # Builds the viewer page, orbe-wasm's package and this repo's registry, then drives the page in
 # `?block=` mode in headless Chromium. Every Block under blocks/ opens in the Worker, plays, and
 # shows what it does: a button lights @led1 while it is held, the fade's LED changes brightness,
-# and the light comparator's slider lights @led1 in the dark and turns it off in the light.
+# the light comparator's slider lights @led1 in the dark and turns it off in the light, and a
+# 7-segment count lights a segment.
 # The package and the registry go to .scratch/wasm/pkg and .scratch/wasm/registry, where the
 # page's dev and preview servers serve them. Needs what scripts/wasm.sh needs, Node 24, pnpm,
 # cargo and a Chromium, found as check-viewer-e2e.sh finds it. It installs nothing.

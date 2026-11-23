@@ -133,6 +133,43 @@ impl Circuit<'_> {
                         });
                     }
                 }
+                // Each named LED of a multi-segment part is its own lamp, so `@disp.seg_a`
+                // reads that segment the way `@led1` reads one LED. The part file's
+                // readings apply to every segment.
+                if part.readings.contains_key("lit") {
+                    let flat = self.insts[inst].flat();
+                    let prefix = format!("{flat}__");
+                    let mut segments: Vec<EnginePart> = part
+                        .engine
+                        .iter()
+                        .filter(|body| body.kind == "led")
+                        .filter(|body| {
+                            body.name
+                                .strip_prefix(&prefix)
+                                .is_some_and(|name| !name.is_empty() && !name.contains("__"))
+                        })
+                        .cloned()
+                        .collect();
+                    if segments.len() > 1 {
+                        segments.sort_by(|a, b| a.name.cmp(&b.name));
+                        for body in segments {
+                            let name = body
+                                .name
+                                .strip_prefix(&prefix)
+                                .expect("just filtered")
+                                .to_string();
+                            let mut child = MapPart {
+                                ty: part.ty.clone(),
+                                readings: part.readings.clone(),
+                                engine: vec![body],
+                                ..MapPart::default()
+                            };
+                            child.readings.remove("digit");
+                            part.children.push(name.clone());
+                            map.parts.insert(format!("{path}.{name}"), child);
+                        }
+                    }
+                }
             }
             map.parts.insert(path, part);
         }

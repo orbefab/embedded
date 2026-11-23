@@ -14,8 +14,9 @@ use std::path::Path;
 
 use live::{common, orbe};
 
-const BLOCKS: [&str; 8] = [
+const BLOCKS: [&str; 9] = [
     "devkitc-button-led",
+    "nano-7seg-count",
     "nano-button-led",
     "uno-button-led",
     "nano-led-fade",
@@ -83,6 +84,7 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
         copied.sort();
         // Each Block installs the part that makes it that Block.
         let marker = match id {
+            "nano-7seg-count" => "display-7seg-cc",
             "nano-neopixel-stick" => "neopixel-stick-8",
             "devkitc-button-led" => "esp32s3-devkitc-1",
             "nano-servo-sweep" => "servo-sg90",

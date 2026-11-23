@@ -413,6 +413,8 @@ pub enum Reading {
         unit: String,
         value: f64,
     },
+    /// What a 7-segment part shows: `0` to `9`, `blank`, or `segments a,b`.
+    Shown(String),
     /// A part: its light state and brightness when it states them, its colours when it latches
     /// them, and each engine quantity.
     Part {
@@ -893,6 +895,7 @@ impl Reading {
             Reading::Quantity { value, .. } => json!(value),
             Reading::Brightness { value, over_ps } => json!({ "a": value, "over_ps": over_ps }),
             Reading::Color(colors) => colors.json(),
+            Reading::Shown(text) => json!({ "shown": text }),
             Reading::Param { value, .. } => json!(value),
             Reading::Part {
                 state,
@@ -925,6 +928,7 @@ impl Reading {
             Reading::Quantity { .. } => "quantity",
             Reading::Brightness { .. } => "brightness",
             Reading::Color(_) => "color",
+            Reading::Shown(_) => "shown",
             Reading::Param { .. } => "param",
             Reading::Part { .. } => "part",
         }
@@ -940,6 +944,7 @@ impl Reading {
             Reading::Quantity { .. }
             | Reading::Brightness { .. }
             | Reading::Color(_)
+            | Reading::Shown(_)
             | Reading::Param { .. } => self.text(),
             Reading::Part {
                 state,
@@ -974,6 +979,7 @@ impl Reading {
                 format!("{} over {}", current(*value), t(*over_ps))
             }
             Reading::Color(colors) => colors.text(),
+            Reading::Shown(text) => text.clone(),
             Reading::Param { unit, value } => with_unit(*value, unit),
             Reading::Part {
                 state,
