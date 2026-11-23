@@ -22,6 +22,7 @@ const BLOCKS: [&str; 7] = [
     "nano-led-fade",
     "nano-light-comparator",
     "nano-neopixel-stick",
+    "nano-shift-leds",
 ];
 
 /// Every file below `dir` with its bytes, by its path from `dir`.

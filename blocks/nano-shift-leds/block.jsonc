@@ -1,0 +1,11 @@
+// A Block: a small circuit that works. `orbe add nano-shift-leds` installs it into a project.
+{
+  "format": 1,
+  "block": "nano-shift-leds",
+  "version": "0.1.0",
+  "title": "Eight LEDs on a 74HC595",
+  "summary": "An Arduino Nano drives eight LEDs through one 74HC595. The sketch calls shiftOut, so no library is needed.",
+  "board": "nano-board",
+  "tags": ["led", "74hc595", "shift register", "nano"],
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
+}

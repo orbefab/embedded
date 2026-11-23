@@ -1,0 +1,46 @@
+{
+  "part": "bss138-level-shifter",
+  "source": {
+    "script": "model.py",
+    "sha256": "adc5df1be8a97d5b2afa2a05e0d4632d1548d3e6a78c3fd50d891adaa7c6e934",
+    "bytes": 1366
+  },
+  "files": {
+    "bss138-level-shifter.glb": {
+      "sha256": "dacab98df03952cef18df01bd36aa976c23652a31b7051f076e2a85d4a3157b1",
+      "bytes": 1780
+    }
+  },
+  "box": {
+    "min": [-7.62, -6.35, 2.54],
+    "max": [7.62, 6.35, 4.14]
+  },
+  "kept_nodes": [],
+  "draw_calls": 1,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 0,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "pcb",
+      "z_mm": 2.54
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 1,
+      "primitives_out": 1
+    },
+    "composition": {
+      "children": 14,
+      "lowest_node": "pcb",
+      "z_mm": 2.54,
+      "draw_calls": 53
+    }
+  }
+}

@@ -304,6 +304,7 @@ impl Model {
         match chip {
             Chip::Cst816(dev) => Some((&crate::device::cst816::ROW, &dev.events)),
             Chip::Dht22(_) => Some((&crate::device::dht22::ROW, &crate::device::NO_EVENTS)),
+            Chip::Hc595(_) => Some((&crate::device::hc595::ROW, &crate::device::NO_EVENTS)),
             Chip::Ws2812(_) => Some((&crate::device::ws2812::ROW, &crate::device::NO_EVENTS)),
             Chip::St77916(_) => Some((&crate::device::st77916::ROW, &crate::device::NO_EVENTS)),
             Chip::SpiReplay(_) => {
@@ -511,6 +512,7 @@ pub enum Chip {
     St77916(Box<St77916>),
     Cst816(Box<Cst816>),
     Dht22(Box<Dht22>),
+    Hc595(Box<crate::device::Hc595>),
     Ws2812(Box<Ws2812>),
     PulsesReplay(Box<PulsesReplay>),
     Esp32s3(Box<Esp32s3>),
