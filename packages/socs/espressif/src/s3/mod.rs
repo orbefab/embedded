@@ -3269,10 +3269,16 @@ mod tests {
         ]);
         let mut chip = systimer.chip();
         assert_eq!(chip.run_until(c(21)), None);
-        assert!(word(&mut chip, SYSTIMER + 0x44) > 0x1000, "the count had moved");
+        assert!(
+            word(&mut chip, SYSTIMER + 0x44) > 0x1000,
+            "the count had moved"
+        );
         assert_eq!(word(&mut chip, SYSTIMER + 0x34), 1 << 30 | 100);
         assert_eq!(chip.run_until(c(1000)), None);
-        assert!(word(&mut chip, SYSTIMER + 0x44) < 10, "the count is back at 0");
+        assert!(
+            word(&mut chip, SYSTIMER + 0x44) < 10,
+            "the count is back at 0"
+        );
         assert_eq!(word(&mut chip, SYSTIMER + 0x34), 0, "the alarm is cleared");
         assert_eq!(word(&mut chip, SYSTIMER), 0x4600_0000);
         assert_eq!(chip.unmodeled().count(), 0);
@@ -3301,7 +3307,11 @@ mod tests {
             assert_eq!(chip.run_until(c(200)), None, "group {group} watchdog");
             assert_eq!(word(&mut chip, base), 0x6000_2000, "group {group} timer");
             assert_eq!(word(&mut chip, base + 0x04), 0, "group {group} count");
-            assert_eq!(word(&mut chip, base + 0x48), 0x0004_c000, "group {group} watchdog");
+            assert_eq!(
+                word(&mut chip, base + 0x48),
+                0x0004_c000,
+                "group {group} watchdog"
+            );
             assert_eq!(chip.unmodeled().count(), 0, "group {group}");
         };
         timer(0, 13);
