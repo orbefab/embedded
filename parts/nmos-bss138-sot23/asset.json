@@ -1,0 +1,44 @@
+{
+  "part": "nmos-bss138-sot23",
+  "source": {
+    "script": "model.py",
+    "sha256": "31f1965a64744159fc24a5b0dae61747a1f89d507aba4be7b111e0b3ec34a566",
+    "bytes": 1416
+  },
+  "files": {
+    "nmos-bss138-sot23.glb": {
+      "sha256": "e18af28ef4e0d165ee53ff1a6751e44e0442db6d39389f643ee9a10bdd9e84df",
+      "bytes": 8428
+    },
+    "nmos-bss138-sot23.anchors.json": {
+      "sha256": "eac86a2570c776df15e119ddde673f637f6b1cb0dc8d9f28593ead9badbb0416",
+      "bytes": 414
+    }
+  },
+  "box": {
+    "min": [-1.45, -1.25, 0],
+    "max": [1.45, 1.25, 1.04]
+  },
+  "kept_nodes": [],
+  "draw_calls": 3,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 3,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0.1
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 5,
+      "primitives_out": 3
+    }
+  }
+}

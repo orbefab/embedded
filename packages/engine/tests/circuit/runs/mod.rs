@@ -13,6 +13,7 @@ mod dht22;
 mod esp32s3;
 mod fade;
 mod floating_input;
+mod hc595;
 mod i2c;
 mod knob;
 mod link;

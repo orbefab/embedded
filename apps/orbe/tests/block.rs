@@ -14,13 +14,15 @@ use std::path::Path;
 
 use live::{common, orbe};
 
-const BLOCKS: [&str; 6] = [
+const BLOCKS: [&str; 8] = [
+    "devkitc-button-led",
     "nano-button-led",
     "uno-button-led",
     "nano-led-fade",
     "nano-light-comparator",
     "nano-neopixel-stick",
     "nano-oled",
+    "nano-shift-leds",
 ];
 
 /// Every file below `dir` with its bytes, by its path from `dir`.
@@ -79,11 +81,12 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
             .filter(|name| dir.join("parts").join(name).join("part.jsonc").is_file())
             .collect();
         copied.sort();
-        // The rainbow Block drives a pixel module and the OLED Block a screen module. The
-        // others light a 5 mm LED.
+        // The rainbow Block drives a pixel module, the OLED Block a screen module and the
+        // DevKitC-1 Block its board's own LED. The others light a 5 mm LED.
         let marker = match id {
             "nano-neopixel-stick" => "neopixel-stick-8",
             "nano-oled" => "oled-ssd1306-128x64",
+            "devkitc-button-led" => "esp32s3-devkitc-1",
             _ => "led-5mm",
         };
         assert!(copied.iter().any(|part| part == marker), "{id}: {copied:?}");
@@ -106,6 +109,9 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
             .is_file()
             || dir
                 .join("parts/uno-board/parts/atmega328p-dip28/part.jsonc")
+                .is_file()
+            || dir
+                .join("parts/esp32s3-devkitc-1/parts/esp32s3-wroom-1-n16r8/part.jsonc")
                 .is_file();
         assert!(chip, "{id}: the board nests its chip");
 

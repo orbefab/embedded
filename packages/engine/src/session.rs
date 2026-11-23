@@ -120,6 +120,9 @@ pub(crate) struct Landing {
     /// The accepted step's reach, or the furthest end of an attempt toward this landing when
     /// that is later.
     pub(crate) reach: Time,
+    /// The 1 ps step converged only as backward Euler. The multistep formula stalled on it, so
+    /// the segment starts again here.
+    euler: bool,
 }
 
 /// A display part's state, read from a session.
@@ -923,6 +926,7 @@ impl Session {
         // rejected for its error converged, and does not count.
         let mut iterations = 0;
         let mut reach = accepted.reach;
+        let mut euler = false;
         let work = self.solver.work;
         loop {
             if self.solver.work - work > self.budget.work {
@@ -949,12 +953,14 @@ impl Session {
                 cores,
                 h,
                 &accepted.iterate,
+                euler,
                 self.budget.step,
             ) {
                 Ok(converged) => {
+                    let past = if euler { &Past::Start } else { &accepted.past };
                     let error = lte::error(
                         &self.stores,
-                        &accepted.past,
+                        past,
                         accepted.at,
                         &accepted.iterate.solution,
                         h,
@@ -986,6 +992,7 @@ impl Session {
                                     cores,
                                     h,
                                     &accepted.iterate,
+                                    false,
                                     self.budget.probe,
                                 )
                             },
@@ -1016,6 +1023,7 @@ impl Session {
                         row,
                         plan,
                         reach,
+                        euler,
                     });
                 }
                 Err(Failure::Singular { row }) => {
@@ -1032,14 +1040,26 @@ impl Session {
                 }
                 Err(Failure::Stalled(stall)) => {
                     iterations += stall.iterations;
-                    plan = Plan::halve(h).ok_or_else(|| Diagnostic::SolverConvergence {
+                    if let Some(next) = Plan::halve(h) {
+                        plan = next;
+                        continue;
+                    }
+                    // A 1 ps multistep step can stall where backward Euler from the same
+                    // point converges. The Uno's 3.3 V rail does this on the step after a
+                    // button edge, and the session was ending with the LED stuck. One Euler
+                    // step starts the segment again.
+                    if !euler {
+                        euler = true;
+                        continue;
+                    }
+                    return Err(Diagnostic::SolverConvergence {
                         at: accepted.at,
                         unknown: stall.offender.describe(circuit),
                         iterations,
                         gmin: None,
                         source_scale: 1.0,
                         solve: Solve::Step { step_ps: h },
-                    })?;
+                    });
                 }
             }
         }
@@ -1093,6 +1113,7 @@ impl Session {
             row,
             plan,
             reach,
+            euler,
         } = landing;
         let circuit = &self.circuit;
         let stores = &self.stores;
@@ -1154,7 +1175,7 @@ impl Session {
             // A restart that moved no store's slope keeps the segment and its step.
             let smooth = stores.smooth(&converged.iterate.solution, &held.iterate.solution);
             self.plan = planned(!smooth);
-            let past = match smooth {
+            let past = match smooth && !euler {
                 true => {
                     accepted
                         .past
@@ -1162,6 +1183,9 @@ impl Session {
                 }
                 false => Past::Start,
             };
+            if euler {
+                self.plan = Plan::RESTART;
+            }
             Accepted {
                 at,
                 ranges: ranges.with(stores, &held.iterate.solution),
@@ -1174,14 +1198,16 @@ impl Session {
                 reach,
             }
         } else {
-            self.plan = planned(false);
+            self.plan = if euler { Plan::RESTART } else { planned(false) };
             Accepted {
                 at,
-                past: accepted.past.advance(
-                    accepted.at,
-                    accepted.iterate.solution,
-                    keep(self.plan),
-                ),
+                past: if euler {
+                    Past::Start
+                } else {
+                    accepted
+                        .past
+                        .advance(accepted.at, accepted.iterate.solution, keep(self.plan))
+                },
                 ranges,
                 iterate: converged.iterate,
                 row,
@@ -1284,6 +1310,7 @@ impl Span<'_> {
             self.cores,
             h,
             start,
+            false,
             self.budget,
         )
         .map_err(|failure| match failure {
@@ -1414,8 +1441,9 @@ fn line(from: (Time, &[Finite]), to: (Time, &[Finite]), at: Time) -> Vec<Finite>
         .collect()
 }
 
-/// One step of `h` ps from `from`, on the formula its past gives. `from` is only read, so a
-/// retry calls this again.
+/// One step of `h` ps from `from`. `euler` uses backward Euler. Otherwise the step uses the
+/// formula `from`'s past gives. `from` is only read, so a retry calls this again.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn attempt(
     circuit: &Circuit,
     solver: &mut Solver,
@@ -1423,11 +1451,13 @@ pub(crate) fn attempt(
     cores: &[active::Core],
     h: u64,
     start: &Iterate,
+    euler: bool,
     budget: u32,
 ) -> Result<Converged, Failure> {
+    let past = if euler { &Past::Start } else { &from.past };
     let conditions = Conditions {
         at: Time::from_ps(from.at.as_ps() + h),
-        history: History::Step(from.past.integration(from.at, &from.iterate.solution, h)),
+        history: History::Step(past.integration(from.at, &from.iterate.solution, h)),
         chips: &from.chips,
         cores,
         ..Conditions::NOMINAL

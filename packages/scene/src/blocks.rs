@@ -70,13 +70,19 @@ mod tests {
                     .unwrap_or_else(|| panic!("{id} has no firmware/NOTICE")),
             )
             .unwrap();
-            for fact in [
+            let mut facts = vec![
                 "MIT OR Apache-2.0",
                 "LGPL-2.1-or-later",
                 "BSD-3-Clause",
                 "LICENSE-runtime",
-                "LICENSE-libc",
-            ] {
+            ];
+            // An AVR image names the C library. An ESP32-S3 image names newlib instead.
+            if files.contains_key("firmware/LICENSE-libc") {
+                facts.push("LICENSE-libc");
+            } else {
+                facts.push("LICENSE-newlib");
+            }
+            for fact in facts {
                 assert!(notice.contains(fact), "{id}: NOTICE does not state {fact}");
             }
         }

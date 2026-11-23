@@ -1,0 +1,13 @@
+// Serial.println on UART0. The app is the stock sketch
+// packages/engine/tests/firmware/esp32s3/arduino/stock/serial.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    }
+  },
+  "ground": "board.GND"
+}

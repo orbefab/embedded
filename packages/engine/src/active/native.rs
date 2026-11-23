@@ -19,6 +19,8 @@ use crate::world::World;
 pub(crate) trait Hosted: Send + fmt::Debug {
     fn run_until(&mut self, world: &World, limit: Time) -> Option<Stop>;
     fn drive(&self) -> &[Drive];
+    /// [`orbe_model::Device::MIN_SUPPLY_V`] for this device.
+    fn min_supply_v(&self) -> Option<f64>;
     /// The device's draw at its last stop, which the stamp reads.
     fn draw(&self) -> Draw;
     fn sample(&mut self, world: &World, at: Time, volts: &[f64]);
@@ -534,6 +536,10 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
 
     fn drive(&self) -> &[Drive] {
         &self.image[..self.len]
+    }
+
+    fn min_supply_v(&self) -> Option<f64> {
+        D::MIN_SUPPLY_V
     }
 
     fn draw(&self) -> Draw {

@@ -1,0 +1,21 @@
+// A button on GPIO4 cycles the board's RGB LED. The app is firmware/button/button.ino.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "build/button.ino.bin",
+      "partitions": "build/button.ino.partitions.bin",
+    },
+    "btn1": { "type": "tactile-switch-6mm" },
+  },
+  "wires": [
+    ["board.GPIO4", "btn1.a"],
+    ["btn1.b", "board.GND"],
+  ],
+  "ground": "board.GND",
+  "layout": {
+    "board": { "at": [0, 0, 0] },
+    "btn1": { "at": [40, 0, 0] },
+  },
+}

@@ -40,7 +40,7 @@ fn a_button_block_lists_its_parts_in_file_order() {
     let scene = root.join("blocks/nano-button-led/scene.jsonc");
     let parts = scene_parts(&Files::disk(), &scene).expect("the button scene reads");
     let refs: Vec<_> = parts.iter().map(|part| part.r#ref.as_str()).collect();
-    assert_eq!(refs, ["bb", "nano", "btn1", "r2", "r1", "led1"]);
+    assert_eq!(refs, ["bb", "nano", "btn1", "r2", "r1", "led1", "header"]);
 
     let r1 = parts.iter().find(|part| part.r#ref == "r1").unwrap();
     assert_eq!(r1.part, "resistor-axial");

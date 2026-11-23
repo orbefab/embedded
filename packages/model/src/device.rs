@@ -32,6 +32,9 @@ pub trait Device: State {
     /// The world quantities it reads with [`Cx::world`]. A scene with a part of this device
     /// declares each one. None, unless it says otherwise.
     const WORLD: &'static [Quantity] = &[];
+    /// Volt. Below this supply the host stamps every output off. [`Device::drive`] still
+    /// reports the logical level. `None` drives at any supply.
+    const MIN_SUPPLY_V: Option<f64> = None;
     /// Parses the part's logic params. Electrical params never reach the device.
     fn new(params: &Params<'_>) -> Result<Self, Error>;
     /// The first time in `(reached, limit]` where the drives may change or a sample is due.

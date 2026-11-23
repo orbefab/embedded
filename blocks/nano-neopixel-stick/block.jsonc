@@ -2,7 +2,7 @@
 {
   "format": 1,
   "block": "nano-neopixel-stick",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "Rainbow on a NeoPixel stick",
   "summary": "An Arduino Nano drives an 8-pixel NeoPixel stick through a 470 ohm resistor on DIN. The sketch lights a rainbow.",
   "board": "nano-board",
