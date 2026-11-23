@@ -2,8 +2,8 @@
   "part": "led-5mm",
   "source": {
     "script": "model.py",
-    "sha256": "90f9c579f57f6dac3e752d37f74c02e33ea33c33b62718241e86786716c60119",
-    "bytes": 1584
+    "sha256": "c4dba470571422e844933e944bdc0aee3cbf2bc4f99652fc1beb0e3a913b656e",
+    "bytes": 619
   },
   "files": {
     "led-5mm.glb": {

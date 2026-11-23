@@ -14,7 +14,7 @@
     "rset": { "type": "resistor-axial", "resistance": "4.7k" }, // above the trimmer, so its top stays under 3.5 V
     "rhys": { "type": "resistor-axial", "resistance": "68k" }, // output back to IN1+, so the threshold snaps
     "rled": { "type": "resistor-axial", "resistance": "220" },
-    "led1": { "type": "led-5mm", "color": "red" },
+    "led1": { "type": "led-5mm" },
   },
   "layout": {
     "bb": { "at": [0, 0, 0] },

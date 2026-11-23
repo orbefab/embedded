@@ -1,0 +1,41 @@
+// Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B.
+{
+  "format": 1,
+  "part": "led-5mm-white",
+  "version": "0.1.0",
+  "title": "5 mm LED, white",
+  "summary": "Round 5 mm through-hole LED, white and water clear, two leads on 2.54 mm. The longer lead is the anode. It warns above 30 mA and 120 mW. The page's glow is the mean current since the last frame, so a PWM-dimmed LED glows at its average.",
+  "tags": ["led", "light", "indicator", "through-hole", "white"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113QWC-D.pdf",
+  },
+  "real": { "maker": "Kingbright", "number": "WP7113QWC/D", "datasheet": "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B" },
+  "buy": [
+    { "seller": "DigiKey", "url": "https://www.digikey.com/en/products/detail/kingbright/WP7113QWC-D/26231031", "checked": "2026-11-22" },
+  ],
+  "pins": { "anode": [1], "cathode": [2] },
+  "model": {
+    "kind": "led",
+    "saturation_current": { "value": 1.504e-13, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B", "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (2.65 V, 2 mA), (3.00 V, 10 mA), (3.29 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+    "emission_coefficient": { "value": 4.354, "unit": "1", "source": { "datasheet": { "doc": "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B", "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (2.65 V, 2 mA), (3.00 V, 10 mA), (3.29 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+    "series_resistance": { "value": 21.25, "unit": "ohm", "source": { "datasheet": { "doc": "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B", "at": "Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (2.65 V, 2 mA), (3.00 V, 10 mA), (3.29 V, 20 mA) at kT/q for 298.15 K", "basis": "typical" } } },
+    "ratings": {
+      "current": { "value": 0.03, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B", "at": "Absolute Maximum Ratings at Ta = 25 C, DC forward current", "basis": "absolute_max" } } },
+      "power": { "value": 0.12, "unit": "W", "source": { "datasheet": { "doc": "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B", "at": "Absolute Maximum Ratings at Ta = 25 C, power dissipation", "basis": "absolute_max" } } },
+    },
+  },
+  "readings": {
+    "lit": { "of": "i", "above": { "value": 0.002, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B", "at": "The lowest point of the forward fit, 2 mA. Fig. Luminous Intensity vs. Forward Current is a straight line from 0 mA.", "basis": "typical" } } } },
+    "dim": { "of": "i", "above": { "value": 0.0005, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B", "at": "Electrical / Optical Characteristics, Reverse Current (VR = 5V), 50 uA max; the floor is ten times that leakage", "basis": "max" } } } },
+    "brightness": { "of": "i", "full": { "value": 0.02, "unit": "A", "source": { "datasheet": { "doc": "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B", "at": "Selection Guide. Iv is rated at IF = 20 mA", "basis": "nominal" } } } },
+  },
+  "view": {
+    "glow": [{ "node": "body", "by": "brightness" }],
+  },
+  "not_simulated": [
+    { "what": "light", "why": "The engine reports current, not luminous intensity. The drawing scales current by 20 mA, so the glow is 1 at 20 mA and blooms above that. The candela at that current is not modeled. The forward curve is fitted from 2 mA to 20 mA as its source names. Below 2 mA and above 20 mA the current is that curve extended. A threshold at 1 mA would sit outside the fit. Luminous intensity versus forward current is drawn as a straight line from 0 mA, so the extended current still glows in proportion." },
+    { "what": "temperature", "why": "The fits are at 25 C and the engine has no temperature." },
+    { "what": "reverse breakdown", "why": "The engine's LED has no breakdown voltage." },
+  ],
+}

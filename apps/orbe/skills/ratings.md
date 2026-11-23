@@ -14,9 +14,9 @@ The board's USB supply is rated 500 mA. A load over that on 5V, such as 2.5 ohm 
 
 ## LED brightness
 
-`brightness` is an LED's average forward current over the last 20 ms, or over the time since t = 0 when the session is younger. The reply names the span, as `over 20ms`. It reads `lit` above 2 mA, `dim` above 100 uA and at or below 2 mA, and `off` at or below 100 uA. `step` lists a new state once it has held for 2 ms. `step --until` on an LED stops on the slice where the average crosses.
+`brightness` is an LED's average forward current over the last 20 ms, or over the time since t = 0 when the session is younger. The reply names the span, as `over 20ms`. A red 5 mm LED reads `lit` above 2 mA, `dim` above 100 uA and at or below 2 mA, and `off` at or below 100 uA. Another colour can use other currents. `orbe part` prints them. `step` lists a new state once it has held for 2 ms. `step --until` on an LED stops on the slice where the average crosses.
 
-Right after `step --until @led1 lit` the pin is already high and `i` is about 12 mA, while `brightness` is only about 2.4 mA, because most of the 20 ms was still dark. `step 20ms` fills the window, and `brightness` then matches `i`. Under `analogWrite` the window covers about ten PWM cycles, so `brightness` reads the duty. A brightness within about 0.6 mA of a threshold can read either neighbouring state. An LED behind 10 kohm from 5 V carries about 0.35 mA and reads `dim`. When `step --until` on an LED times out, the hint names the average, the state and the range the wanted state needs.
+Right after `step --until @led1 lit` the pin is already high and `i` is about 12 mA, while `brightness` is only about 2.4 mA, because most of the 20 ms was still dark. `step 20ms` fills the window, and `brightness` then matches `i`. Under `analogWrite` the window covers about ten PWM cycles, so `brightness` reads the duty. A brightness within about 0.6 mA of a threshold can read either neighbouring state. A red 5 mm LED behind 10 kohm from 5 V carries about 0.35 mA and reads `dim`. When `step --until` on an LED times out, the hint names the average, the state and the range the wanted state needs.
 
 `@led1.color` is the colour an addressable LED last latched, as `rgb(r,g,b)` from 0 to 255, and when. `get @led1` prints it as `color=`. For addressable RGB LEDs, load `orbe skills get parts`.
 

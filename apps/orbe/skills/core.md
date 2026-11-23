@@ -42,7 +42,7 @@ A button on D2 lights an LED on D13 of a Nano. The folder holds `scene.jsonc`, t
     "btn1": { "type": "tactile-switch-6mm" },
     "r2": { "type": "resistor-axial", "resistance": "10k" }, // pull-down, so D2 reads low while open
     "r1": { "type": "resistor-axial", "resistance": "220" }, // in series, so led1 stays under its rating
-    "led1": { "type": "led-5mm", "color": "red" },
+    "led1": { "type": "led-5mm" },
   },
   "wires": [
     ["nano.D2", "btn1.a"],

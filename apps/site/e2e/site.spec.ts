@@ -532,16 +532,16 @@ test.describe("led-5mm", () => {
     expect(/DigiKey\s*2026-11-08/.test(body), body.match(/Where to buy[\s\S]{0,120}/i)?.[0] ?? "").toBe(true);
   });
 
-  test("it shows the ratings as names, with a Datasheet link, and lists each other color's datasheet", async () => {
+  test("it shows the ratings as names, with a link to its own datasheet", async () => {
     const section = page.locator("section", { has: page.getByRole("heading", { name: "Ratings" }) });
     await expect(section).toContainText("Current");
     await expect(section).toContainText("30 mA");
-    await expect(section.getByRole("link", { name: "Datasheet" }).first()).toBeVisible();
+    const hrefs = await section.getByRole("link", { name: "Datasheet" }).evaluateAll((links) => links.map((link) => link.getAttribute("href")));
+    expect(hrefs.length).toBeGreaterThan(0);
+    expect(hrefs.every((href) => href?.endsWith("WP7113ID.pdf")), hrefs.join(" ")).toBe(true);
     const body = await bodyText(page);
     expect(body).not.toContain("Brightness is the average");
     expect(body).not.toContain("Absolute Maximum Ratings");
-    const docs = page.locator("section", { has: page.getByRole("heading", { name: "Docs" }) });
-    for (const number of ["WP7113YD", "WP7113GD", "WP7113QBC/D", "WP7113QWC/D"]) await expect(docs.getByRole("link", { name: new RegExp(number) })).toBeVisible();
     expect(body).not.toContain("not affiliated");
     expect(body).not.toContain("No summary yet");
   });
@@ -579,6 +579,25 @@ test.describe("led-5mm", () => {
     await shot(page, "site-part-led-5mm-files");
     expect(errors, JSON.stringify(errors)).toEqual([]);
   });
+});
+
+test("each other 5 mm colour links its own datasheet from Ratings", async ({ page, host }) => {
+  const sheets = [
+    ["led-5mm-yellow", "WP7113YD.pdf"],
+    ["led-5mm-green", "WP7113GD.pdf"],
+    ["led-5mm-blue", "WP7113QBC-D.pdf"],
+    ["led-5mm-white", "WP7113QWC-D.pdf"],
+  ] as const;
+  for (const [id, file] of sheets) {
+    const response = await page.goto(`${host.base}/orbe/parts/${id}/`);
+    expect(response?.ok(), id).toBe(true);
+    const hrefs = await page
+      .locator("section", { has: page.getByRole("heading", { name: "Ratings" }) })
+      .getByRole("link", { name: "Datasheet" })
+      .evaluateAll((links) => links.map((link) => link.getAttribute("href")));
+    expect(hrefs.length, id).toBeGreaterThan(0);
+    expect(hrefs.every((href) => href?.endsWith(file)), `${id} ${hrefs.join(" ")}`).toBe(true);
+  }
 });
 
 partPages(PART_IDS.slice(PART_THIRD, PART_THIRD * 2));
@@ -1026,7 +1045,7 @@ test("a same-page hash stays on the page, including a second click and a page op
   page.on("pageerror", (error) => errors.push(error.message));
   await page.locator('a[href="/orbe/parts/led-5mm/"]').first().click();
   await page.waitForURL(/\/orbe\/parts\/led-5mm\/$/);
-  await expect(page.locator("h1")).toHaveText("5 mm LED");
+  await expect(page.locator("h1")).toHaveText("5 mm LED, red");
   await hydrated(page);
   await page.locator('a[href="/orbe/blocks/nano-button-led/"]').first().click();
   await page.waitForURL(/\/orbe\/blocks\/nano-button-led\/$/);

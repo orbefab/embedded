@@ -616,8 +616,8 @@ fn jumper_board(root: &std::path::Path, drop_jumper: bool) {
     let scene = root.join("scene.jsonc");
     let text = fs::read_to_string(&scene).unwrap();
     let text = text.replacen(
-        "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },",
-        "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },\n    \"board\": { \"type\": \"./parts/board.jsonc\" },",
+        "\"led1\": { \"type\": \"led-5mm\" },",
+        "\"led1\": { \"type\": \"led-5mm\" },\n    \"board\": { \"type\": \"./parts/board.jsonc\" },",
         1,
     );
     let text = text.replacen(
@@ -980,8 +980,8 @@ fn a_bad_item_at_the_end_of_a_long_list_is_placed_quickly() {
 #[expect(clippy::disallowed_methods, reason = "the clock is the measurement")]
 fn bad_item_at_the_end_of(count: usize) -> std::time::Duration {
     let project = with_scene(
-        "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },",
-        "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },\n    \"tx\": { \"type\": \"./parts/ser.jsonc\" },",
+        "\"led1\": { \"type\": \"led-5mm\" },",
+        "\"led1\": { \"type\": \"led-5mm\" },\n    \"tx\": { \"type\": \"./parts/ser.jsonc\" },",
     );
     let scene = project.path().join("scene.jsonc");
     let text = fs::read_to_string(&scene).unwrap().replacen(
@@ -1131,8 +1131,8 @@ fn a_comment_is_not_a_catalog_id_and_a_split_type_is() {
     let scene = project.path().join("scene.jsonc");
     let text = fs::read_to_string(&scene).unwrap();
     let text = text.replacen(
-        "\"led1\": { \"type\": \"led-5mm\", \"color\": \"red\" },",
-        "\"led1\": {\n      \"type\":\n        \"led-5mm\",\n      \"color\": \"red\"\n    },",
+        "\"led1\": { \"type\": \"led-5mm\" },",
+        "\"led1\": {\n      \"type\":\n        \"led-5mm\"\n    },",
         1,
     );
     let text =

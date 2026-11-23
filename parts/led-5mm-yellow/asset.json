@@ -1,0 +1,44 @@
+{
+  "part": "led-5mm-yellow",
+  "source": {
+    "script": "model.py",
+    "sha256": "930d77a491af6e544553d2c4e17783467f84caf3789622342759f33068bce686",
+    "bytes": 629
+  },
+  "files": {
+    "led-5mm-yellow.glb": {
+      "sha256": "352dba8a55a74688e4503056738b41104a1c617cea17b05387876b8a136e8e39",
+      "bytes": 20960
+    },
+    "led-5mm-yellow.anchors.json": {
+      "sha256": "3767e9ae5b61bc42a920ab647d5fed793f371022ffa6fa362c6102ca50e5833e",
+      "bytes": 296
+    }
+  },
+  "box": {
+    "min": [-2.89194, -2.899968, -27.4],
+    "max": [2.5, 2.899968, 8.6]
+  },
+  "kept_nodes": ["body", "lead-1", "lead-2"],
+  "draw_calls": 3,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": ["body"]
+    },
+    "merge": {
+      "primitives_in": 3,
+      "primitives_out": 3
+    }
+  }
+}

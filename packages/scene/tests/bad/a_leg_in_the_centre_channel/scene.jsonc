@@ -4,7 +4,7 @@
   "parts": {
     "bb": { "type": "breadboard-400" },
     "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
-    "led1": { "type": "led-5mm", "color": "red" },
+    "led1": { "type": "led-5mm" },
   },
   "layout": {
     "bb": { "at": [0, 0, 0] },
