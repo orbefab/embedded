@@ -399,9 +399,37 @@ function effectDelta(page: Page, hide: boolean | "full", effect: "bloom" | "outl
 }
 
 const bloomDelta = (page: Page, hide: boolean | "full") => effectDelta(page, hide, "bloom");
-const unlit = (page: Page, label: string) =>
-  expect.poll(() => bloomDelta(page, false), { message: label, timeout: 10_000 }).toMatchObject({ pixels: 0 });
 const outlineDelta = (page: Page) => effectDelta(page, false, "outline");
+
+/** The session is paused and damping is off, so two frames differ only by the effect.
+ * A click on the page would move the pointer, so the play control is clicked in the page. */
+async function withStill<T>(page: Page, read: () => Promise<T>): Promise<T> {
+  const playing = (await textOf(page, "state")) === "playing";
+  if (playing) {
+    await page.evaluate(() => document.querySelector<HTMLButtonElement>('[data-testid="play"]')?.click());
+    await waitState(page, "paused");
+  }
+  await page.evaluate(() => {
+    const controls = window.orbeViewer.get().controls;
+    controls.enableDamping = false;
+    controls.update();
+  });
+  try {
+    return await read();
+  } finally {
+    await page.evaluate(() => {
+      window.orbeViewer.get().controls.enableDamping = true;
+    });
+    if (playing) {
+      await page.evaluate(() => document.querySelector<HTMLButtonElement>('[data-testid="play"]')?.click());
+      await waitState(page, "playing");
+    }
+  }
+}
+
+function expectNoPixels(page: Page, read: () => Promise<{ pixels: number }>, message: string): Promise<void> {
+  return withStill(page, () => expect.poll(read, { message, timeout: 10_000 }).toMatchObject({ pixels: 0 }));
+}
 
 async function orbit(page: Page, polarDeg: number, azimuthDeg: number) {
   await page.evaluate(({ polarDeg, azimuthDeg }) => {
@@ -440,16 +468,20 @@ async function restPointer(page: Page) {
 /** An LED at intensity 1 or more blooms. One below that does not, which is read with the
  * brighter bodies hidden, because their halo reaches a dimmer LED's window. */
 async function expectBloomFollowsCurrent(page: Page, label: string) {
-  const glow = await intensities(page);
-  const lit = await bloomDelta(page, false);
-  for (const [ref, intensity] of Object.entries(glow)) {
-    if (intensity < 1) continue;
-    expect(lit.leds[ref] ?? 0, `${label} ${ref} at ${intensity} ${JSON.stringify(lit)}`).toBeGreaterThan(0);
-  }
-  expect(Object.values(glow).some((intensity) => intensity >= 1), `${label} no LED at full ${JSON.stringify(glow)}`).toBe(true);
-  const below = await bloomDelta(page, "full");
-  expect(below.pixels, `${label} an LED below its full current bloomed ${JSON.stringify(below)}`).toBe(0);
-  return lit;
+  return withStill(page, async () => {
+    const glow = await intensities(page);
+    const lit = await bloomDelta(page, false);
+    for (const [ref, intensity] of Object.entries(glow)) {
+      if (intensity < 1) continue;
+      expect(lit.leds[ref] ?? 0, `${label} ${ref} at ${intensity} ${JSON.stringify(lit)}`).toBeGreaterThan(0);
+    }
+    expect(Object.values(glow).some((intensity) => intensity >= 1), `${label} no LED at full ${JSON.stringify(glow)}`).toBe(true);
+    await expect.poll(() => bloomDelta(page, "full"), {
+      message: `${label} an LED below its full current bloomed`,
+      timeout: 10_000,
+    }).toMatchObject({ pixels: 0 });
+    return lit;
+  });
 }
 
 async function holdButton(page: Page, rest: number[]) {
@@ -886,20 +918,17 @@ test.describe("viewer page", () => {
       try {
         await setStageTheme(page, theme);
         await restPointer(page);
-        const outline = await outlineDelta(page);
-        expect(outline.pixels, `${theme} nothing hovered, yet the outline drew ${JSON.stringify(outline)}`).toBe(0);
+        await expectNoPixels(page, () => outlineDelta(page), `${theme} nothing hovered, yet the outline drew`);
         await holdButton(page, rest);
         await still(page);
         const lit = await expectBloomFollowsCurrent(page, theme);
         expect(Object.keys(lit.leds).sort(), `${theme} lit LEDs ${JSON.stringify(lit)}`).toEqual(["@led1", "@nano.led_l", "@nano.led_pwr"]);
         for (const pose of ORBIT_POSES) {
           await orbit(page, pose.polar, pose.azimuth);
-          const beside = await bloomDelta(page, true);
-          expect(beside.pixels, `${theme} ${pose.name} ${JSON.stringify(beside)}`).toBe(0);
+          await expectNoPixels(page, () => bloomDelta(page, true), `${theme} ${pose.name}`);
         }
         await toggleView(page, "OrthographicCamera");
-        const top = await bloomDelta(page, true);
-        expect(top.pixels, `${theme} top view ${JSON.stringify(top)}`).toBe(0);
+        await expectNoPixels(page, () => bloomDelta(page, true), `${theme} top view`);
         await page.mouse.up();
         await waitHeld(page, "@btn1", rest, false);
         await page.waitForFunction(
@@ -909,12 +938,11 @@ test.describe("viewer page", () => {
         );
         const dark = await intensities(page);
         expect(Object.values(dark).every((intensity) => intensity < 1), `${theme} ${JSON.stringify(dark)}`).toBe(true);
-        await unlit(page, `${theme} top view, the button released`);
+        await expectNoPixels(page, () => bloomDelta(page, false), `${theme} top view, the button released`);
         await toggleView(page, "PerspectiveCamera");
         for (const pose of ORBIT_POSES) {
           await orbit(page, pose.polar, pose.azimuth);
-          const off = await bloomDelta(page, false);
-          expect(off.pixels, `${theme} ${pose.name}, button released ${JSON.stringify(off)}`).toBe(0);
+          await expectNoPixels(page, () => bloomDelta(page, false), `${theme} ${pose.name}, button released`);
         }
       } finally {
         await context.close();
