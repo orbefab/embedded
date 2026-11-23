@@ -120,11 +120,7 @@ function servedRecord(id: string): ServedRecord {
   const index = JSON.parse(readFileSync(join(registry, "index.json"), "utf8")) as {
     items: { name: string; version: string; url: string }[];
   };
-  const newest = index.items
-    .filter((row) => row.name === id)
-    .sort((a, b) => compareVersions(a.version, b.version))
-    .at(-1);
-  if (newest === undefined) throw new Error(`${id} is not in the registry`);
+  const newest = newestRow(index.items, id);
   return JSON.parse(readFileSync(join(registry, newest.url), "utf8")) as ServedRecord;
 }
 
@@ -172,6 +168,23 @@ const compareVersions = (a: string, b: string) => {
   for (let i = 0; i < 3; i += 1) if (x[i] !== y[i]) return (x[i] ?? 0) - (y[i] ?? 0);
   return 0;
 };
+
+/** The newest index row for one name. The site and the client show that version. */
+function newestRow<T extends { name: string; version: string }>(items: readonly T[], name: string): T {
+  const newest = items.filter((row) => row.name === name).sort((a, b) => compareVersions(a.version, b.version)).at(-1);
+  if (newest === undefined) throw new Error(`${name} is not in the registry`);
+  return newest;
+}
+
+/** One row per name, its newest version. An older listed row does not put a part on the page. */
+function newestPerName<T extends { name: string; version: string }>(items: readonly T[]): T[] {
+  const best = new Map<string, T>();
+  for (const row of items) {
+    const had = best.get(row.name);
+    if (had === undefined || compareVersions(had.version, row.version) < 0) best.set(row.name, row);
+  }
+  return [...best.values()];
+}
 
 let scenes: Promise<SceneReader> | undefined;
 
@@ -484,9 +497,9 @@ test.describe("parts search", () => {
 
   test("the parts page lists every part without a query", async () => {
     const index = JSON.parse(readFileSync(join(registryDir(), "index.json"), "utf8")) as {
-      items: { name: string; type: string; listed?: boolean }[];
+      items: { name: string; version: string; type: string; listed?: boolean }[];
     };
-    const catalog = new Set(index.items.filter((row) => row.type === "part" && row.listed !== false).map((row) => row.name)).size;
+    const catalog = newestPerName(index.items).filter((row) => row.type === "part" && row.listed !== false).length;
     expect(await page.locator("[data-part]").count()).toBe(catalog);
   });
 
@@ -560,14 +573,19 @@ test.describe("led-5mm", () => {
 
   test("a download serves the file's bytes, by the record's SHA-256", async () => {
     const href = await page.locator('[data-testid="license-files"] a[download]', { hasText: /^part\.jsonc$/ }).getAttribute("href");
-    const download = await page.evaluate(async (href) => {
-      const index = await (await fetch("/orbe/r/index.json")).json();
-      const row = index.items.find((item: { name: string }) => item.name === "led-5mm");
-      const record = await (await fetch(new URL(row.url, `${location.origin}/orbe/r/index.json`))).json();
-      const bytes = new Uint8Array(await (await fetch(href)).arrayBuffer());
-      const hex = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
-      return { hex, want: record.files.find((file: { path: string; sha256: string }) => file.path === "part.jsonc").sha256 };
-    }, href);
+    const index = (await page.evaluate(async () => (await fetch("/orbe/r/index.json")).json())) as {
+      items: { name: string; version: string; url: string }[];
+    };
+    const row = newestRow(index.items, "led-5mm");
+    const download = await page.evaluate(
+      async ({ href, url }) => {
+        const record = await (await fetch(new URL(url, `${location.origin}/orbe/r/index.json`))).json();
+        const bytes = new Uint8Array(await (await fetch(href)).arrayBuffer());
+        const hex = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+        return { hex, want: record.files.find((file: { path: string; sha256: string }) => file.path === "part.jsonc").sha256 };
+      },
+      { href, url: row.url },
+    );
     expect(download.hex, JSON.stringify(download)).toBe(download.want);
   });
 
@@ -1482,8 +1500,10 @@ test.describe("cache", () => {
   }
 
   test("a registry file revalidates against its ETag, and an unchanged one answers 304", async ({ host }) => {
-    const index = await (await fetch(`${host.base}/orbe/r/index.json`)).json();
-    const row = index.items.find((item: { name: string; url: string }) => item.name === "led-5mm");
+    const index = (await (await fetch(`${host.base}/orbe/r/index.json`)).json()) as {
+      items: { name: string; version: string; url: string }[];
+    };
+    const row = newestRow(index.items, "led-5mm");
     const record = await (await fetch(new URL(row.url, `${host.base}/orbe/r/index.json`))).json();
     const file = `/orbe/r/files/${record.files[0].sha256}`;
     const hit = await head(host.base, file);
