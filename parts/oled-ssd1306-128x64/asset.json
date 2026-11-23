@@ -2,8 +2,8 @@
   "part": "oled-ssd1306-128x64",
   "source": {
     "script": "model.py",
-    "sha256": "cae95ac702d4901cd2ed1588a8525686eee2aee83a719f2cbbd58461e838358b",
-    "bytes": 1658
+    "sha256": "e170c05e58996be9823110811ba638dbaff13314eebb017a4be8d6b56a305f62",
+    "bytes": 1599
   },
   "files": {
     "oled-ssd1306-128x64.glb": {

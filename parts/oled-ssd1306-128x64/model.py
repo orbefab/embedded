@@ -8,7 +8,7 @@ the header edge at +Y. The panel, the header and the parts on the back are
 their own models.
 
 The drawing dimensions one 2 mm hole, 2.00 mm in from the right and bottom
-edges. The other three sit the same way in their corners (`# verify`).
+edges. The other three sit the same way in their corners.
 """
 
 import sys
@@ -26,10 +26,8 @@ BOARD_H = 27.80
 PCB_T = 1.6
 BOARD_Z = PLASTIC
 HOLE_D = 2.0
-HOLE_IN = 2.0  # verify for three of the four corners
-HOLES = tuple(
-    (sx * (BOARD_W / 2.0 - HOLE_IN), sy * (BOARD_H / 2.0 - HOLE_IN)) for sx in (-1, 1) for sy in (-1, 1)
-)
+HOLE_IN = 2.0
+HOLES = tuple((sx * (BOARD_W / 2.0 - HOLE_IN), sy * (BOARD_H / 2.0 - HOLE_IN)) for sx in (-1, 1) for sy in (-1, 1))
 
 _BLUE = plastic("#1D4E9E")
 
