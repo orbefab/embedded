@@ -6,15 +6,18 @@
 //! its power-on state, and it stays there until they clear. The SHA accelerator is held by the
 //! digital signature and HMAC reset bits too, as IDF's `sha_ll_reset_register` says.
 //!
-//! The clock and reset bits of TIMG0 and TIMG1 stay reported, and a write that changes one is
-//! still listed, because the group's watchdog does not run them. The group's general timers do:
-//! while the reset bit is set they sit at their reset values, and while the clock bit is clear
-//! they keep their count and do not advance. A load or a store of a general timer is not refused
-//! while the group is gated. The watchdog keeps counting through both.
+//! The clock bits of TIMG0, TIMG1, SYSTIMER and `SYSTEM_WDG` stay reported. Their reset bits
+//! run. `SYSTIMER_RST` puts the system timer back to its power-on registers, count and alarms
+//! included. A timer-group reset does that for the group's general timers, its watchdog and its
+//! interrupt enable. `SYSTEM_WDG_RST` does it for the RTC watchdog. `esp_perip_clk_init` sets
+//! that bit by copying the inverted clock word into the reset word after a CPU reset, and leaves
+//! it set, so the RTC watchdog stays there while the timer-group watchdogs keep running. While a
+//! timer-group clock bit is clear the general timers keep their count and do not advance. A load
+//! or a store of one is not refused while the group is gated.
 //!
-//! The clock and reset bits of SYSTIMER, SPI0 and SPI1, the eFuse controller, the USB Serial/JTAG
-//! unit, and the bits IDF names `SYSTEM_TIMERS_*` and `SYSTEM_WDG_*` are kept and not run, and
-//! every write that changes one is reported.
+//! The clock and reset bits of SPI0 and SPI1, the eFuse controller, the USB Serial/JTAG unit, and
+//! the bits IDF names `SYSTEM_TIMERS_*` are kept and not run, and every write that changes one is
+//! reported.
 //! Every other bit gates or resets a peripheral the model does not keep, so it has no effect,
 //! apart from `SYSTEM_UART_MEM_CLK_EN`, bit 24 of `CLK_EN0`. That bit stays stored here. A UART
 //! FIFO access or a frame while it is clear ends the run, as the UART model says. The write of
@@ -84,17 +87,17 @@ impl Block {
     }
 }
 
-/// In each word of each kind, the bits a change of which is reported: SYSTIMER, TIMG0, TIMG1,
-/// SPI0 and SPI1, the eFuse controller, and `SYSTEM_TIMERS_*` and `SYSTEM_WDG_*` in the first,
-/// the USB Serial/JTAG unit in the second. TIMG0 and TIMG1 stay here because the group's
-/// watchdog does not run them. The general timers do, as [`Gates::timg`] reads the bits. IDF's
-/// headers leave the `SYSTEM_TIMERS_*` and `SYSTEM_WDG_*` bits undescribed and no IDF driver
-/// gates a block with them, so a change is reported in case they gate a timer or a watchdog the
-/// model runs.
-const REPORTED: [u32; 2] = [
+/// In each clock word, the bits a change of which is reported. The reset word uses
+/// [`REPORTED_RESET`]. `SYSTIMER_RST`, `TIMERGROUP_RST`, `TIMERGROUP1_RST` and `SYSTEM_WDG_RST`
+/// are absent because the model runs them.
+const REPORTED_CLOCK: [u32; 2] = [
     1 << 29 | 1 << 15 | 1 << 14 | 1 << 13 | 1 << 3 | 1 << 1 | 1 << 0,
     1 << 10,
 ];
+
+/// In each reset word, the bits a change of which is reported: the eFuse controller, SPI0 and
+/// SPI1, `SYSTEM_TIMERS_RST`, and the USB Serial/JTAG unit in the second word.
+const REPORTED_RESET: [u32; 2] = [1 << 14 | 1 << 1 | 1 << 0, 1 << 10];
 
 const CLOCK_RESET: [u32; 2] = [0xf9c1_e06f, 0x0000_0600];
 const RESET_RESET: [u32; 2] = [0, 0x0000_01fe];
@@ -128,7 +131,12 @@ impl Gates {
     /// Whether writing `value` at `offset` changes a bit the model keeps without running.
     pub(crate) fn reports(&self, offset: u32, value: u32) -> bool {
         let k = Self::index(offset);
-        (self.words[k] ^ value) & REPORTED[k % 2] != 0
+        let mask = if k < 2 {
+            REPORTED_CLOCK
+        } else {
+            REPORTED_RESET
+        };
+        (self.words[k] ^ value) & mask[k % 2] != 0
     }
 
     /// Writes `value` at `offset`, and returns each block a reset bit now holds.
@@ -148,7 +156,7 @@ impl Gates {
     }
 
     /// Timer group `group`'s clock bit and reset bit: bit 13 for group 0, bit 15 for group 1.
-    /// The general timers run them. The group's watchdog does not, and a change is still reported.
+    /// The general timers and the group's watchdog run the reset bit.
     pub(crate) fn timg(&self, group: usize) -> (bool, bool) {
         let bit = 1 << if group == 0 { 13 } else { 15 };
         (self.words[0] & bit != 0, self.words[2] & bit != 0)
@@ -157,6 +165,16 @@ impl Gates {
     /// `SYSTEM_UART_MEM_CLK_EN`. One clock for the RAM of UART0, UART1 and UART2.
     pub(crate) fn uart_mem_clock(&self) -> bool {
         self.words[0] & (1 << 24) != 0
+    }
+
+    /// `SYSTEM_SYSTIMER_RST`.
+    pub(crate) fn systimer_reset(&self) -> bool {
+        self.words[2] & (1 << 29) != 0
+    }
+
+    /// `SYSTEM_WDG_RST`, which resets the RTC watchdog.
+    pub(crate) fn system_wdg_reset(&self) -> bool {
+        self.words[2] & (1 << 3) != 0
     }
 }
 
@@ -183,7 +201,8 @@ mod tests {
     #[test]
     fn a_change_of_a_kept_bit_is_reported_and_other_bits_are_not() {
         let mut gates = Gates::new();
-        assert!(gates.reports(0x20, 1 << 29));
+        assert!(!gates.reports(0x20, 1 << 29), "SYSTIMER_RST");
+        assert!(!gates.reports(0x20, 1 << 15 | 1 << 13 | 1 << 3));
         assert!(gates.reports(0x18, CLOCK_RESET[0] & !(1 << 13)));
         assert!(gates.reports(0x24, RESET_RESET[1] | 1 << 10));
         assert!(gates.reports(0x20, 1 << 0), "SYSTEM_TIMERS_RST");

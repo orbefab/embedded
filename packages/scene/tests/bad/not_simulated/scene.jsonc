@@ -13,7 +13,7 @@
     ["btn1.b", "nano.5V"],
     ["nano.D2", "r2.a"],
     ["r2.b", "nano.GND"],
-    ["nano.3V3", "r1.a"],
+    ["nano.crystal.1", "r1.a"],
     ["nano.VIN", "r2.b"],
     ["r1.b", "led1.anode"],
     ["led1.cathode", "nano.GND"],

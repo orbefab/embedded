@@ -22,6 +22,7 @@ fn each_block_passes() {
     assert_eq!(
         ids,
         [
+            "devkitc-button-led",
             "nano-button-led",
             "nano-led-fade",
             "nano-light-comparator",
@@ -171,6 +172,66 @@ fn a_reversed_adapter_on_nano_vin_warns_unless_a_series_diode_holds_it() {
         "{}",
         forward.stdout
     );
+}
+
+/// A light load on the Nano's 3V3 reads about 3.3 V. A load past the CH340G's
+/// 30 mA rating warns. With the USB host at 0 V the pin is off.
+#[test]
+fn the_nano_3v3_pin_follows_the_ch340g_and_warns_past_its_rating() {
+    let scene = |ohms: &str| {
+        format!(
+            r#"{{
+  "format": 1,
+  "parts": {{
+    "nano": {{ "type": "nano-board", "firmware": "build/button.ino.hex" }},
+    "load": {{ "type": "resistor-axial", "resistance": "{ohms}" }}
+  }},
+  "wires": [["nano.3V3", "load.a"], ["load.b", "nano.GND"]]
+}}"#
+        )
+    };
+    let run_scene = |ohms: &str, test: &str| {
+        let dir = project(test);
+        fs::write(dir.path().join("scene.jsonc"), scene(ohms)).unwrap();
+        orbe(dir.path(), &["test", "-v"])
+    };
+
+    let light = run_scene(
+        "3300",
+        "open\nstep 10ms\nget @nano.3V3\nexpect no diagnostics\n",
+    );
+    assert_eq!(light.code, 0, "{}{}", light.stdout, light.stderr);
+    let v = labeled(&light.stdout, "nano.3V3");
+    assert!((v - 3.3).abs() < 0.05, "3V3 {v}\n{}", light.stdout);
+
+    let heavy = run_scene("10", "open\nstep 10ms\nget @nano.3V3\n");
+    assert_eq!(heavy.code, 0, "{}{}", heavy.stdout, heavy.stderr);
+    assert!(
+        heavy.stdout.contains("warning[rating.current]"),
+        "{}",
+        heavy.stdout
+    );
+    assert!(
+        heavy.stdout.contains("usb_serial__rail"),
+        "{}",
+        heavy.stdout
+    );
+
+    let dead = project("open\nstep 10ms\nget @nano.3V3\n");
+    fs::write(dead.path().join("scene.jsonc"), scene("3300")).unwrap();
+    let usb = dead
+        .path()
+        .join("parts/nano-board/parts/usb-mini-b/part.jsonc");
+    let text = fs::read_to_string(&usb).unwrap();
+    assert!(
+        text.contains("\"value\": 5.0"),
+        "the host source is not 5.0 V:\n{text}"
+    );
+    fs::write(&usb, text.replace("\"value\": 5.0", "\"value\": 0.0")).unwrap();
+    let off = orbe(dead.path(), &["test", "-v"]);
+    assert_eq!(off.code, 0, "{}{}", off.stdout, off.stderr);
+    let v = labeled(&off.stdout, "nano.3V3");
+    assert!(v.abs() < 0.2, "unpowered 3V3 {v}\n{}", off.stdout);
 }
 
 fn vin_line(stdout: &str) -> f64 {
@@ -423,7 +484,7 @@ fn each_command_replies_in_text() {
         block(0),
         [
             "2> open",
-            "  opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 20 engine parts, 35 nets)",
+            "  opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 21 engine parts, 36 nets)",
         ]
     );
     assert_eq!(block(1)[0], "3> step 100ms");
@@ -593,7 +654,7 @@ fn each_command_replies_with_one_json_envelope() {
             open["data"]["engine_parts"].as_u64(),
             open["data"]["nets"].as_u64()
         ),
-        (Some(20), Some(35))
+        (Some(21), Some(36))
     );
     assert_eq!(open["data"]["diagnostics"].as_array().unwrap().len(), 0);
 

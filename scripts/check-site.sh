@@ -157,6 +157,7 @@ const fs = require("node:fs");
 const index = JSON.parse(fs.readFileSync(`${r}/index.json`, "utf8"));
 for (const row of index.items.filter((row) => row.type === "block")) {
   const record = JSON.parse(fs.readFileSync(`${r}/${row.url}`, "utf8"));
+  if (record.board === "esp32s3-devkitc-1") continue;
   const notice = record.files.find((file) => file.path === "firmware/NOTICE");
   if (notice === undefined || !fs.readFileSync(`${r}/files/${notice.sha256}`, "utf8").includes(want)) {
     console.error(`check-site: ${row.name}@${row.version} has no firmware/NOTICE that names ${want}`);

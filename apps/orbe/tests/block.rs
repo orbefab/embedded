@@ -14,7 +14,8 @@ use std::path::Path;
 
 use live::{common, orbe};
 
-const BLOCKS: [&str; 6] = [
+const BLOCKS: [&str; 7] = [
+    "devkitc-button-led",
     "nano-button-led",
     "uno-button-led",
     "nano-led-fade",
@@ -80,10 +81,10 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
             .collect();
         copied.sort();
         // The rainbow Block drives a pixel module. The others light a 5 mm LED.
-        let marker = if id == "nano-neopixel-stick" {
-            "neopixel-stick-8"
-        } else {
-            "led-5mm"
+        let marker = match id {
+            "nano-neopixel-stick" => "neopixel-stick-8",
+            "devkitc-button-led" => "esp32s3-devkitc-1",
+            _ => "led-5mm",
         };
         assert!(copied.iter().any(|part| part == marker), "{id}: {copied:?}");
         for part in &copied {
@@ -105,6 +106,9 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
             .is_file()
             || dir
                 .join("parts/uno-board/parts/atmega328p-dip28/part.jsonc")
+                .is_file()
+            || dir
+                .join("parts/esp32s3-devkitc-1/parts/esp32s3-wroom-1-n16r8/part.jsonc")
                 .is_file();
         assert!(chip, "{id}: the board nests its chip");
 
