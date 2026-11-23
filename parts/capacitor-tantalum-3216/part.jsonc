@@ -1,6 +1,6 @@
 {
   "format": 1, "part": "capacitor-tantalum-3216", "version": "0.2.1", "title": "Capacitor, 3216 tantalum", "license": "MIT OR Apache-2.0",
-  "summary": "Polarized 3216 (3.2 x 1.6 mm) tantalum chip. Lead 1 is the anode, marked by the stripe. Set its capacitance. Any reverse voltage warns.",
+  "summary": "Polarized 3216 (3.2 x 1.6 mm) tantalum chip. Lead 1 is the anode, marked by the stripe. Set its capacitance. A reverse voltage past 25 mV warns.",
   "tags": ["capacitor", "tantalum", "polarized", "smd"],
   "docs": { "KEMET T491, case A": null },
   "real": { "generic": true, "maker": null, "number": null, "datasheet": "KEMET T491, case A" },
@@ -25,12 +25,12 @@
     },
     "ratings": {
       "reverse_voltage": {
-        "value": 0,
+        "value": 0.025,
         "unit": "V",
         "source": {
           "datasheet": {
             "doc": "KEMET T491, case A",
-            "at": "Reverse Voltage: a transient reverse voltage of 15% of rated voltage at 25 °C, 5% at 85 °C, or 1% at 125 °C is allowed for a short period. Continuous reverse operation is not permitted, even within that table. The model warns on any reverse voltage. Each sample is checked, so a short transient the table allows also warns.",
+            "at": "Reverse Voltage: a transient reverse voltage of 15% of rated voltage at 25 °C, 5% at 85 °C, or 1% at 125 °C is allowed for a short period. Continuous reverse operation is not permitted, even within that table. The lowest rating is 2.5 V, so the strictest figure is 1% of 2.5 V, 25 mV, the 125 °C figure on a 2.5 V part. That sits below every T491 rating's allowance at every temperature. A reverse voltage past 25 mV warns.",
             "basis": "absolute_max"
           }
         }
