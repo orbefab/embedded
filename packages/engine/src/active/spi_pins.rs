@@ -1,7 +1,7 @@
 //! An SPI target on the pins, for a controller that clocks SPI on its pads, as the ATmega328P's
-//! SPI does. It watches CS, SCLK and MOSI and drives MISO, in mode 0, most significant bit
-//! first, and calls the device through [`SpiTarget`] as the record engine does. No part hosts it
-//! yet. The ATmega328P read-back test does.
+//! SPI does. It watches CS, SCLK and MOSI and drives MISO, in the mode and bit order it is
+//! given, and calls the device through [`SpiTarget`] as the record engine does. No part hosts it
+//! yet. The ATmega328P read-back tests do.
 
 use std::sync::Arc;
 
@@ -22,13 +22,34 @@ pub(crate) struct Lines {
     pub(crate) mosi: usize,
 }
 
-/// A target on the pins. CS falling starts a transaction and asks for the first byte, each SCLK
-/// rise samples MOSI, and each SCLK fall shifts out the next bit, asking for the next byte after
-/// a whole one came in. CS rising ends it: the device gets the whole bytes as one full-duplex
-/// [`Spi`], and MISO is released. A byte the device does not answer leaves MISO released.
+/// The clock mode and bit order. SCLK idles at `cpol`. With `cpha` false MOSI is sampled on the
+/// edge that leaves idle, and with `cpha` true on the edge that returns to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Mode {
+    pub(crate) cpol: bool,
+    pub(crate) cpha: bool,
+    pub(crate) lsb_first: bool,
+}
+
+impl Mode {
+    /// Mode 0, most significant bit first.
+    pub(crate) const ZERO: Mode = Mode {
+        cpol: false,
+        cpha: false,
+        lsb_first: false,
+    };
+}
+
+/// A target on the pins. CS falling starts a transaction. Each sample edge takes a MOSI bit, and
+/// each other SCLK edge shifts out the next MISO bit, asking for the next byte when a whole one
+/// came in. With `cpha` false CS falling also asks for the first byte and puts out its first bit,
+/// and with `cpha` true the first leading edge does. CS rising ends the transaction: the device
+/// gets the whole bytes as one full-duplex [`Spi`], and MISO is released. A byte the device does
+/// not answer leaves MISO released.
 #[derive(Clone, Debug)]
 pub(crate) struct Pins {
     lines: Lines,
+    mode: Mode,
     /// The levels at the last input, from power-on.
     cs: bool,
     sclk: bool,
@@ -39,16 +60,17 @@ pub(crate) struct Pins {
     /// The byte going out, or `None` while MISO is released for it.
     out: Option<u8>,
     data: Vec<u8>,
-    /// The first two SCLK rises of the transaction, for its clock.
+    /// The first two sample edges of the transaction, for its clock.
     rises: [Option<Time>; 2],
     miso: Drive,
     due: Option<(Time, Drive)>,
 }
 
 impl Pins {
-    pub(crate) const fn new(lines: Lines) -> Pins {
+    pub(crate) const fn new(lines: Lines, mode: Mode) -> Pins {
         Pins {
             lines,
+            mode,
             cs: true,
             sclk: false,
             selected: false,
@@ -62,8 +84,13 @@ impl Pins {
         }
     }
 
-    /// Bit `bit` of the byte going out, from `at` plus the delay.
-    fn shift(&mut self, at: Time, bit: u8) {
+    /// The `index`th bit in wire order of the byte going out, from `at` plus the delay.
+    fn shift(&mut self, at: Time, index: u8) {
+        let bit = if self.mode.lsb_first {
+            index
+        } else {
+            7 - index
+        };
         let drive = match self.out {
             Some(byte) if byte >> bit & 1 == 1 => Drive::High,
             Some(_) => Drive::Low,
@@ -72,13 +99,13 @@ impl Pins {
         self.due = Some((Time::from_ps(at.as_ps() + MISO_DELAY_PS), drive));
     }
 
-    /// Asks for the byte that goes out beside data byte `data.len()`, and puts out its bit 7.
+    /// Asks for the byte that goes out beside data byte `data.len()`, and puts out its first bit.
     fn next_byte<D: SpiTarget>(&mut self, dev: &mut Hosting<D>, world: &World, at: Time) {
         let (data, index) = (&self.data, self.data.len());
         self.out = dev.call(world, at, |device, cx| {
             device.answer(cx, at, &[], data, index)
         });
-        self.shift(at, 7);
+        self.shift(at, 0);
     }
 
     fn end<D: SpiTarget>(&mut self, dev: &mut Hosting<D>, world: &World, at: Time) {
@@ -128,7 +155,9 @@ impl<D: SpiTarget> Port<D> for Pins {
     fn input(&mut self, dev: &mut Hosting<D>, world: &World, at: Time, levels: &[bool]) {
         let (cs, sclk) = (levels[self.lines.cs], levels[self.lines.sclk]);
         let (cs_fell, cs_rose) = (!cs && self.cs, cs && !self.cs);
-        let (rose, fell) = (sclk && !self.sclk, !sclk && self.sclk);
+        let edge = sclk != self.sclk;
+        // The edge that leaves idle is leading, and `cpha` false samples on it.
+        let sample = (sclk != self.mode.cpol) != self.mode.cpha;
         self.cs = cs;
         self.sclk = sclk;
         if cs_rose && self.selected {
@@ -137,9 +166,18 @@ impl<D: SpiTarget> Port<D> for Pins {
             self.selected = true;
             self.bits = 0;
             self.rises = [None; 2];
-            self.next_byte(dev, world, at);
-        } else if self.selected && rose {
-            self.shifter = self.shifter << 1 | u8::from(levels[self.lines.mosi]);
+            if self.mode.cpha {
+                self.out = None;
+            } else {
+                self.next_byte(dev, world, at);
+            }
+        } else if self.selected && edge && sample {
+            let bit = u8::from(levels[self.lines.mosi]);
+            self.shifter = if self.mode.lsb_first {
+                self.shifter >> 1 | bit << 7
+            } else {
+                self.shifter << 1 | bit
+            };
             self.bits += 1;
             if let Some(slot) = self.rises.iter_mut().find(|rise| rise.is_none()) {
                 *slot = Some(at);
@@ -148,11 +186,11 @@ impl<D: SpiTarget> Port<D> for Pins {
                 self.data.push(self.shifter);
                 self.bits = 0;
             }
-        } else if self.selected && fell {
+        } else if self.selected && edge {
             if self.bits == 0 {
                 self.next_byte(dev, world, at);
             } else {
-                self.shift(at, 7 - self.bits);
+                self.shift(at, self.bits);
             }
         }
     }

@@ -11,7 +11,7 @@ use super::active::{US, at, net, resistor, run_active, volts};
 use super::avr::{FUSES, MHZ_16, atmega, board};
 use crate::active::native::Native;
 use crate::active::spi::{self, Bus};
-use crate::active::spi_pins::{Lines, Pins};
+use crate::active::spi_pins::{Lines, Mode, Pins};
 use crate::active::{self, Core, Output, SpiTarget as Target, Stage, Takes};
 use crate::blob::Blobs;
 use crate::diagnostic::Severity;
@@ -68,8 +68,8 @@ impl SpiTarget for JedecId {
 }
 
 /// The target on PB2 as CS, PB5 as SCLK and PB3 as MOSI, each read at 2.5 V, driving PB4, MISO,
-/// through 25 ohm.
-fn target(netlist: &Netlist) -> active::Chip {
+/// through 25 ohm, in `mode`.
+fn target(netlist: &Netlist, mode: Mode) -> active::Chip {
     let watch = |name| {
         Watch::comparator(Signal {
             terms: vec![(Node::from(net(netlist, name)), 1.0)],
@@ -102,11 +102,14 @@ fn target(netlist: &Netlist) -> active::Chip {
         takes: Takes::default(),
         core: Core::Device(Box::new(Native::new(
             JedecId,
-            Pins::new(Lines {
-                cs: 0,
-                sclk: 1,
-                mosi: 2,
-            }),
+            Pins::new(
+                Lines {
+                    cs: 0,
+                    sclk: 1,
+                    mosi: 2,
+                },
+                mode,
+            ),
             0,
         ))),
     }
@@ -128,8 +131,30 @@ fn portd(trace: &crate::trace::Trace) -> Vec<u8> {
     bytes
 }
 
-#[test]
-fn the_firmware_reads_back_the_bytes_the_target_answers() {
+/// `hex` with the `ldi r16,K` that `spi_read.S` writes to `SPCR` loading `spcr` instead.
+fn with_spcr(hex: &str, spcr: u8) -> String {
+    let (first, rest) = hex.split_once('\n').unwrap();
+    let first = first.trim_end();
+    let mut bytes: Vec<u8> = (1..first.len())
+        .step_by(2)
+        .map(|k| u8::from_str_radix(&first[k..k + 2], 16).unwrap())
+        .collect();
+    // Record bytes 4 on are data: `ldi r16,0x51` is word 5, 0xE501, little-endian.
+    assert_eq!(bytes[4 + 10..4 + 12], [0x01, 0xE5]);
+    bytes[4 + 10] = spcr & 0x0F;
+    bytes[4 + 11] = 0xE0 | spcr >> 4;
+    let last = bytes.len() - 1;
+    bytes[last] = bytes[..last]
+        .iter()
+        .fold(0u8, |sum, byte| sum.wrapping_add(*byte))
+        .wrapping_neg();
+    let line: String = bytes.iter().map(|byte| format!("{byte:02X}")).collect();
+    format!(":{line}\n{rest}")
+}
+
+/// `spi_read.S` with `SPCR` at `spcr` against a target in `mode`: each byte PORTD held, and
+/// each error.
+fn read_back(spcr: u8, mode: Mode) -> (Vec<u8>, Vec<String>) {
     let netlist = board(
         60 * US,
         &[],
@@ -137,18 +162,46 @@ fn the_firmware_reads_back_the_bytes_the_target_answers() {
             resistor("rcs", "vcc", "pb2", 10e3),
             resistor("rmiso", "vcc", "pb4", 10e3),
         ],
-        atmega("vcc", SPI_READ, MHZ_16, FUSES),
+        atmega("vcc", &with_spcr(SPI_READ, spcr), MHZ_16, FUSES),
     );
-    let target = target(&netlist);
+    let target = target(&netlist, mode);
     let (trace, diagnostics) = run_active(&netlist, vec![target]);
-    assert!(
-        diagnostics
-            .iter()
-            .all(|diagnostic| diagnostic.severity() != Severity::Error),
-        "{diagnostics:?}"
-    );
+    let errors = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity() == Severity::Error)
+        .map(|diagnostic| format!("{diagnostic:?}"))
+        .collect();
+    (portd(&trace), errors)
+}
+
+#[test]
+fn the_firmware_reads_back_the_bytes_the_target_answers() {
+    let (bytes, errors) = read_back(0x51, Mode::ZERO);
+    assert_eq!(errors, Vec::<String>::new());
     // PORTD reads 0 until the firmware drives it, then each byte the target answered.
-    assert_eq!(portd(&trace), [0x00, 0xEF, 0x40, 0x18]);
+    assert_eq!(bytes, [0x00, 0xEF, 0x40, 0x18]);
+}
+
+/// In each of the 4 modes and both bit orders, a target with the same settings is read back
+/// exactly. `SPCR` is `SPE`, `MSTR` and `SPR0`, with `DORD`, `CPOL` and `CPHA` as the mode says.
+#[test]
+fn the_firmware_reads_back_in_every_mode_and_bit_order() {
+    let mut wrong = Vec::new();
+    for lsb_first in [false, true] {
+        for (cpol, cpha) in [(false, false), (false, true), (true, false), (true, true)] {
+            let mode = Mode {
+                cpol,
+                cpha,
+                lsb_first,
+            };
+            let spcr = 0x51 | u8::from(lsb_first) << 5 | u8::from(cpol) << 3 | u8::from(cpha) << 2;
+            let (bytes, errors) = read_back(spcr, mode);
+            if bytes != [0x00, 0xEF, 0x40, 0x18] || !errors.is_empty() {
+                wrong.push(format!("SPCR {spcr:#04x}: {bytes:02X?} {errors:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
 const IRAM: u32 = 0x4037_0000;
