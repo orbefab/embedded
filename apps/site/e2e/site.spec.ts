@@ -188,7 +188,8 @@ function newestPerName<T extends { name: string; version: string }>(items: reado
 
 let scenes: Promise<SceneReader> | undefined;
 
-/** The parts each Block places, from the same `sceneParts` the build called. */
+/** The parts each Block places, from the same `sceneParts` the build called.
+ * The copy is the one the site serves. A shared build has that copy and not `.scratch/site`. */
 function sceneReader(): Promise<SceneReader> {
   scenes ??= openSceneReader();
   return scenes;
@@ -196,7 +197,7 @@ function sceneReader(): Promise<SceneReader> {
 
 async function openSceneReader(): Promise<SceneReader> {
   const registry = registryDir();
-  const wasmDir = join(REPO, ".scratch/site/wasm");
+  const wasmDir = join(REPO, "apps/site/dist/client/orbe-wasm");
   const wasm = (await import(pathToFileURL(join(wasmDir, "orbe_wasm.js")).href)) as {
     initSync(options: { module: Uint8Array }): void;
     Block: new () => { add(path: string, bytes: Uint8Array): void };
