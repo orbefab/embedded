@@ -349,11 +349,14 @@ server.serve_forever()
 fn a_part_install_follows_an_at_redirect_and_writes_the_copy() {
     let server = Server::bind(registry_env::dir().to_path_buf(), Mode::RedirectAt);
     let dir = tempfile::tempdir().unwrap();
+    let cache = tempfile::tempdir().unwrap();
+    let cache_home = cache.path().display().to_string();
     let trust = server.trust();
-    let env: Vec<(&str, &str)> = trust
+    let mut env: Vec<(&str, &str)> = trust
         .iter()
         .map(|(key, value)| (*key, value.as_str()))
         .collect();
+    env.push(("XDG_CACHE_HOME", cache_home.as_str()));
     let (code, stdout, stderr) = run_env(dir.path(), &["add", "led-5mm"], &server.template(), &env);
     assert_eq!(code, 0, "{stdout}{stderr}");
     assert_eq!(stdout, "wrote parts/led-5mm 0.3.0\n");
@@ -686,18 +689,8 @@ fn fetched_files_match_the_registry_and_a_cached_copy_is_reused() {
     );
     assert_eq!(code, 0, "{stdout}{stderr}");
     let again = server.paths();
-    assert!(
-        again.iter().any(|path| path.ends_with("/index.json")),
-        "{again:?}"
-    );
-    assert!(
-        again.iter().any(|path| path.contains("nano-board@")),
-        "{again:?}"
-    );
-    assert!(
-        again.iter().all(|path| !path.contains("/files/")),
-        "{again:?}"
-    );
+    assert_eq!(again.len(), 1, "{again:?}");
+    assert!(again[0].ends_with("/index.json"), "{again:?}");
     assert_parts_match(second.path(), registry);
 
     let part_sha = file_sha(registry, "nano-board", "part.jsonc");
@@ -743,6 +736,80 @@ fn fetched_files_match_the_registry_and_a_cached_copy_is_reused() {
         "{refetched:?}"
     );
     assert_parts_match(third.path(), registry);
+}
+
+#[test]
+fn a_warm_add_and_part_fetch_only_the_index_and_a_bad_record_is_fetched_again() {
+    let registry = registry_env::dir();
+    let server = Server::bind(registry.to_path_buf(), Mode::Observe);
+    let cache = tempfile::tempdir().unwrap();
+    let cache_home = cache.path().display().to_string();
+    let trust = server.trust();
+    let mut env: Vec<(&str, &str)> = trust
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
+    env.push(("XDG_CACHE_HOME", cache_home.as_str()));
+
+    let first = tempfile::tempdir().unwrap();
+    let (code, stdout, stderr) =
+        run_env(first.path(), &["add", "led-5mm"], &server.template(), &env);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    server.clear_paths();
+    let second = tempfile::tempdir().unwrap();
+    let (code, stdout, stderr) =
+        run_env(second.path(), &["add", "led-5mm"], &server.template(), &env);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let warm_add = server.paths();
+    assert_eq!(warm_add.len(), 1, "{warm_add:?}");
+    assert!(warm_add[0].ends_with("/index.json"), "{warm_add:?}");
+
+    let sha = record_sha(registry, "led-5mm");
+    let cached = cache.path().join("orbe").join("files").join(&sha);
+    assert!(cached.is_file(), "{}", cached.display());
+    fs::write(&cached, b"not the record").unwrap();
+    server.clear_paths();
+    let third = tempfile::tempdir().unwrap();
+    let (code, stdout, stderr) =
+        run_env(third.path(), &["add", "led-5mm"], &server.template(), &env);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let refetched = server.paths();
+    assert!(
+        refetched.iter().any(|path| path.contains("led-5mm@")),
+        "{refetched:?}"
+    );
+    assert!(
+        refetched.iter().all(|path| !path.contains("/files/")),
+        "{refetched:?}"
+    );
+    assert_parts_match(third.path(), registry);
+
+    let part_cache = tempfile::tempdir().unwrap();
+    let part_home = part_cache.path().display().to_string();
+    let mut part_env: Vec<(&str, &str)> = trust
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
+    part_env.push(("XDG_CACHE_HOME", part_home.as_str()));
+    let project = tempfile::tempdir().unwrap();
+    let (code, stdout, stderr) = run_env(
+        project.path(),
+        &["part", "led-5mm"],
+        &server.template(),
+        &part_env,
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    server.clear_paths();
+    let (code, stdout, stderr) = run_env(
+        project.path(),
+        &["part", "led-5mm"],
+        &server.template(),
+        &part_env,
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let warm_part = server.paths();
+    assert_eq!(warm_part.len(), 1, "{warm_part:?}");
+    assert!(warm_part[0].ends_with("/index.json"), "{warm_part:?}");
 }
 
 #[test]
@@ -798,6 +865,21 @@ fn collect_part_dirs(root: &Path, dirs: &mut Vec<PathBuf>) {
         }
         collect_part_dirs(&path, dirs);
     }
+}
+
+fn record_sha(registry: &Path, name: &str) -> String {
+    let version = highest_version(registry, name);
+    let index: Value =
+        serde_json::from_slice(&fs::read(registry.join("index.json")).unwrap()).unwrap();
+    index["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["name"] == name && row["version"] == version)
+        .unwrap()["sha256"]
+        .as_str()
+        .unwrap()
+        .to_string()
 }
 
 fn file_sha(registry: &Path, id: &str, path: &str) -> String {

@@ -3,9 +3,9 @@
 //! is how a test points at a registry built from the same tree. `{name}` is replaced with
 //! `index` and with nothing else. Every other URL is resolved against the document that holds it.
 //! An `https` URL is fetched by running `curl`. A `file` URL is read from disk. Records and
-//! files that do not depend on each other are fetched together, at most 8 at a time. The bytes
-//! of a file are cached by their SHA-256. The index and the records are fetched again on the
-//! next command, and each URL at most once in one command.
+//! files that do not depend on each other are fetched together, at most 8 at a time. A record
+//! and a file are cached by their SHA-256 and checked against the hash and size named for them.
+//! The index is fetched on every command. Each URL is fetched at most once in one command.
 //!
 //! The copy written into the project is the copy orbe reads. Nothing here compares it with the
 //! registry again. `check`, `open`, `test` and `show` do not use this module.
@@ -60,12 +60,12 @@ pub enum Outcome {
 
 struct Client {
     index_url: String,
-    /// File bytes by their SHA-256, so one blob written in two folders is downloaded once.
+    /// Record and file bytes by their SHA-256, so one blob used twice is downloaded once.
+    /// A record is checked against its index row, and a file against its record.
     files: BTreeMap<String, Vec<u8>>,
-    /// Response bodies by the URL that was requested, and by the URL a redirect landed on.
-    pages: BTreeMap<String, Vec<u8>>,
-    /// The URL a request landed on. A later read of the requested URL still names this one.
-    landed: BTreeMap<String, String>,
+    /// A response by the URL that was requested, and by the URL a redirect landed on.
+    /// The stored URL is the one the fetch landed on, so a later read still names it.
+    pages: BTreeMap<String, Got>,
     /// A URL this command already failed to fetch, so it is not fetched again.
     failed: BTreeMap<String, Fail>,
 }
@@ -337,7 +337,9 @@ fn install(
     if !existing.is_empty() {
         return Err(part_exists(dir, ids, &existing));
     }
-    client.warm_ids(index, ids);
+    let records = client.row_blobs(&chosen);
+    client.prefetch(&records);
+    client.prefetch_level(index, &chosen);
     let mut forest = Forest {
         nodes: BTreeMap::new(),
     };
@@ -368,7 +370,11 @@ fn install_block(
     dir: Option<&Path>,
     row: &Row,
 ) -> Result<Done, Fail> {
-    client.warm_ids(index, std::slice::from_ref(&row.name));
+    let mut records = Vec::new();
+    if let Some(blob) = client.blob_for_row(row) {
+        records.push(blob);
+    }
+    client.prefetch(&records);
     let (url, item) = client.record(row)?;
     let Item::Block(block) = item else {
         return Err(registry(
@@ -378,6 +384,8 @@ fn install_block(
         ));
     };
     require_same(&url, &block.head.name, &block.head.version, row)?;
+    let block_row = [row];
+    client.prefetch_level(index, &block_row);
     let files = client.folder(&url, &block.head)?;
     let scene = files
         .get("scene.jsonc")
@@ -387,6 +395,19 @@ fn install_block(
     };
     let mut versions = BTreeMap::new();
     let mut stack = Vec::new();
+    let dep_rows: Vec<&Row> = block
+        .head
+        .registry_dependencies
+        .iter()
+        .filter_map(|dep| {
+            if dep.registry.is_some() {
+                None
+            } else {
+                row_at(index, &dep.id, dep.version).ok()
+            }
+        })
+        .collect();
+    client.prefetch_level(index, &dep_rows);
     for dep in &block.head.registry_dependencies {
         if dep.registry.is_some() {
             return Err(scoped_dep(&url, dep));
@@ -528,7 +549,34 @@ fn breadboard(client: &mut Client, index: &Index, card: &Card) -> Result<Option<
     want.extend(card.uses.keys().cloned());
     want.push("breadboard-400".into());
     want.push("breadboard-830".into());
-    client.warm_plugs(index, &want);
+    if let Ok(best) = highest(index) {
+        let mut rows = Vec::new();
+        let mut seen = BTreeSet::new();
+        for id in &want {
+            let Some(row) = best.get(id).copied() else {
+                continue;
+            };
+            if row.kind != Kind::Part {
+                continue;
+            }
+            if seen.insert((row.name.clone(), row.version.clone())) {
+                rows.push(row);
+            }
+        }
+        let records = client.row_blobs(&rows);
+        client.prefetch(&records);
+        let mut files = Vec::new();
+        for row in &rows {
+            let Some((record_url, item)) = client.item_from_cache(row) else {
+                continue;
+            };
+            let anchors = format!("{}.anchors.json", row.name);
+            files.extend(file_blobs(&record_url, &item.head().files, |path| {
+                path == "part.jsonc" || path == anchors
+            }));
+        }
+        client.prefetch(&files);
+    }
     for id in want {
         if let Some(plug) = client.plug(index, &id)? {
             plugs.insert(id, plug);
@@ -870,6 +918,11 @@ fn fetch_part(
         },
     );
     stack.push(id.to_string());
+    let child_rows: Vec<&Row> = uses
+        .iter()
+        .filter_map(|(dep, version)| row_at(index, dep, *version).ok())
+        .collect();
+    client.prefetch_level(index, &child_rows);
     for (dep, version) in uses {
         fetch_part(client, index, &dep, Some(version), stack, forest)?;
     }
@@ -1544,7 +1597,6 @@ impl Client {
             index_url: String::new(),
             files: BTreeMap::new(),
             pages: BTreeMap::new(),
-            landed: BTreeMap::new(),
             failed: BTreeMap::new(),
         }
     }
@@ -1681,170 +1733,11 @@ impl Client {
         Ok(Some(PlugPart { value, anchors }))
     }
 
-    /// Fetches the named items, their files and the parts they are built from, before the
-    /// install walks that same tree. The walk then reads what this stored, and it still
-    /// reports the first error in its own order.
-    fn warm_ids(&mut self, index: &Index, ids: &[String]) {
-        let Ok(best) = highest(index) else {
-            return;
-        };
-        let mut frontier = Vec::new();
-        let mut seen = BTreeSet::new();
-        for id in ids {
-            let Some(row) = best.get(id).copied() else {
-                continue;
-            };
-            if seen.insert((row.name.clone(), row.version.clone())) {
-                frontier.push(row);
-            }
-        }
-        self.warm_rows(index, frontier, seen);
-    }
-
-    fn warm_rows<'a>(
-        &mut self,
-        index: &'a Index,
-        mut frontier: Vec<&'a Row>,
-        mut seen: BTreeSet<(String, String)>,
-    ) {
-        while !frontier.is_empty() {
-            let rows = std::mem::take(&mut frontier);
-            let records: Vec<(String, u64)> = rows
-                .iter()
-                .filter_map(|row| {
-                    resolve(&self.index_url, &row.url)
-                        .ok()
-                        .map(|url| (url, row.bytes))
-                })
-                .collect();
-            self.pull(&records);
-            let mut blobs = Vec::new();
-            let mut next_records = Vec::new();
-            for row in &rows {
-                let Some(item) = self.item_from_page(row) else {
-                    continue;
-                };
-                let Ok(record_url) = resolve(&self.index_url, &row.url) else {
-                    continue;
-                };
-                for file in &item.head().files {
-                    let Ok(url) = resolve(&record_url, &file.url) else {
-                        continue;
-                    };
-                    blobs.push(Blob {
-                        url,
-                        sha: file.sha256.clone(),
-                        size: file.bytes,
-                    });
-                }
-                for dep in &item.head().registry_dependencies {
-                    if dep.registry.is_some() {
-                        continue;
-                    }
-                    let Ok(child) = row_at(index, &dep.id, dep.version) else {
-                        continue;
-                    };
-                    if seen.insert((child.name.clone(), child.version.clone())) {
-                        frontier.push(child);
-                        if let Ok(url) = resolve(&self.index_url, &child.url) {
-                            next_records.push((url, child.bytes));
-                        }
-                    }
-                }
-            }
-            self.pull_blobs(&blobs, &next_records);
-        }
-    }
-
-    /// The part card only needs `part.jsonc` and the anchors, for the part, the parts it
-    /// uses, and the two breadboards. The other files of those parts stay unfetched.
-    fn warm_plugs(&mut self, index: &Index, ids: &[String]) {
-        let Ok(best) = highest(index) else {
-            return;
-        };
-        let mut rows = Vec::new();
-        let mut seen = BTreeSet::new();
-        for id in ids {
-            let Some(row) = best.get(id).copied() else {
-                continue;
-            };
-            if row.kind != Kind::Part {
-                continue;
-            }
-            if seen.insert((row.name.clone(), row.version.clone())) {
-                rows.push(row);
-            }
-        }
-        let records: Vec<(String, u64)> = rows
-            .iter()
-            .filter_map(|row| {
-                resolve(&self.index_url, &row.url)
-                    .ok()
-                    .map(|url| (url, row.bytes))
-            })
-            .collect();
-        self.pull(&records);
-        let mut blobs = Vec::new();
-        for row in &rows {
-            let Some(item) = self.item_from_page(row) else {
-                continue;
-            };
-            let Ok(record_url) = resolve(&self.index_url, &row.url) else {
-                continue;
-            };
-            let anchors = format!("{}.anchors.json", row.name);
-            for file in &item.head().files {
-                if file.path != "part.jsonc" && file.path != anchors {
-                    continue;
-                }
-                let Ok(url) = resolve(&record_url, &file.url) else {
-                    continue;
-                };
-                blobs.push(Blob {
-                    url,
-                    sha: file.sha256.clone(),
-                    size: file.bytes,
-                });
-            }
-        }
-        self.pull_blobs(&blobs, &[]);
-    }
-
-    fn item_from_page(&self, row: &Row) -> Option<Item> {
-        let url = resolve(&self.index_url, &row.url).ok()?;
-        let bytes = self.pages.get(&url)?;
-        if bytes.len() as u64 != row.bytes || sha256(bytes) != row.sha256 {
-            return None;
-        }
-        let item: Item = serde_json::from_slice(bytes).ok()?;
-        if item.kind() != row.kind {
-            return None;
-        }
-        let head = item.head();
-        if head.name != row.name || head.version != row.version {
-            return None;
-        }
-        Some(item)
-    }
-
-    fn pull(&mut self, requests: &[(String, u64)]) {
-        let mut pending = Vec::new();
-        let mut seen = BTreeSet::new();
-        for (url, size) in requests {
-            if *size > MAX_BYTES {
-                continue;
-            }
-            if self.pages.contains_key(url) || self.failed.contains_key(url) {
-                continue;
-            }
-            if seen.insert(url.clone()) {
-                pending.push((url.clone(), *size));
-            }
-        }
-        self.store_fetches(&pending, &[]);
-    }
-
-    fn pull_blobs(&mut self, blobs: &[Blob], records: &[(String, u64)]) {
+    /// Fetches `blobs` that this command does not already hold, at most [`FETCH_LIMIT`]
+    /// at a time. A cached blob is used when its bytes hash to `sha` and its length is
+    /// `size`. Records and files share that cache. A failure is kept, and the walk
+    /// reports the first one in its own order.
+    fn prefetch(&mut self, blobs: &[Blob]) {
         let mut pending = Vec::new();
         let mut shas = Vec::new();
         let mut seen_url = BTreeSet::new();
@@ -1865,35 +1758,17 @@ impl Client {
             pending.push((blob.url.clone(), blob.size));
             shas.push(blob.sha.clone());
         }
-        for (url, size) in records {
-            if *size > MAX_BYTES {
-                continue;
-            }
-            if self.pages.contains_key(url) || self.failed.contains_key(url) {
-                continue;
-            }
-            if seen_url.insert(url.clone()) {
-                pending.push((url.clone(), *size));
-            }
-        }
-        self.store_fetches(&pending, &shas);
-    }
-
-    /// `shas` names the file hash of each leading request. A request past `shas` is a record,
-    /// which is kept for this command and not written to the file cache.
-    fn store_fetches(&mut self, requests: &[(String, u64)], shas: &[String]) {
-        let results = fetch_many(requests);
-        for (index, ((url, size), result)) in requests.iter().zip(results).enumerate() {
+        let results = fetch_many(&pending);
+        for (index, result) in results.into_iter().enumerate() {
+            let (url, size) = &pending[index];
+            let sha = &shas[index];
             match result {
                 Ok(got) => {
-                    let bytes = got.bytes.clone();
-                    self.store_page(url, &got);
-                    if let Some(sha) = shas.get(index)
-                        && bytes.len() as u64 == *size
-                        && sha256(&bytes) == *sha
-                    {
-                        self.keep_file(sha, &bytes);
+                    let matches = got.bytes.len() as u64 == *size && sha256(&got.bytes) == *sha;
+                    if matches {
+                        self.keep_file(sha, &got.bytes);
                     }
+                    self.store_page(url, &got);
                 }
                 Err(fail) => {
                     self.failed.insert(url.clone(), fail);
@@ -1902,12 +1777,71 @@ impl Client {
         }
     }
 
+    /// The files of `rows`, and the records of the parts they depend on. A row whose
+    /// bytes are not already checked is skipped. The walk reports that row.
+    fn prefetch_level(&mut self, index: &Index, rows: &[&Row]) {
+        let mut blobs = Vec::new();
+        for row in rows {
+            let Some((record_url, item)) = self.item_from_cache(row) else {
+                continue;
+            };
+            blobs.extend(file_blobs(&record_url, &item.head().files, |_| true));
+            for dep in &item.head().registry_dependencies {
+                if dep.registry.is_some() {
+                    continue;
+                }
+                let Ok(child) = row_at(index, &dep.id, dep.version) else {
+                    continue;
+                };
+                if let Some(blob) = self.blob_for_row(child) {
+                    blobs.push(blob);
+                }
+            }
+        }
+        self.prefetch(&blobs);
+    }
+
+    fn row_blobs(&self, rows: &[&Row]) -> Vec<Blob> {
+        rows.iter()
+            .filter_map(|row| self.blob_for_row(row))
+            .collect()
+    }
+
+    fn blob_for_row(&self, row: &Row) -> Option<Blob> {
+        Some(Blob {
+            url: resolve(&self.index_url, &row.url).ok()?,
+            sha: row.sha256.clone(),
+            size: row.bytes,
+        })
+    }
+
+    /// The record, when this command already holds bytes that match the row.
+    fn item_from_cache(&mut self, row: &Row) -> Option<(String, Item)> {
+        let url = resolve(&self.index_url, &row.url).ok()?;
+        let bytes = if let Some(bytes) = self.cached_file(&row.sha256, row.bytes) {
+            bytes
+        } else {
+            let got = self.pages.get(&url)?;
+            if got.bytes.len() as u64 != row.bytes || sha256(&got.bytes) != row.sha256 {
+                return None;
+            }
+            got.bytes.clone()
+        };
+        let item: Item = serde_json::from_slice(&bytes).ok()?;
+        if item.kind() != row.kind {
+            return None;
+        }
+        let head = item.head();
+        if head.name != row.name || head.version != row.version {
+            return None;
+        }
+        Some((url, item))
+    }
+
     fn store_page(&mut self, requested: &str, got: &Got) {
-        self.pages.insert(got.url.clone(), got.bytes.clone());
-        self.landed.insert(got.url.clone(), got.url.clone());
+        self.pages.insert(got.url.clone(), got.clone());
         if got.url != requested {
-            self.pages.insert(requested.to_string(), got.bytes.clone());
-            self.landed.insert(requested.to_string(), got.url.clone());
+            self.pages.insert(requested.to_string(), got.clone());
         }
     }
 
@@ -1942,7 +1876,7 @@ impl Client {
         Ok(got.bytes)
     }
 
-    /// A file this command already holds, or a cached copy whose bytes hash to `sha`.
+    /// A record or file this command already holds, or a cached copy whose bytes hash to `sha`.
     fn cached_file(&mut self, sha: &str, size: u64) -> Option<Vec<u8>> {
         if let Some(bytes) = self.files.get(sha) {
             if bytes.len() as u64 == size {
@@ -1964,16 +1898,8 @@ impl Client {
     }
 
     fn fetch(&mut self, url: &str, size: u64) -> Result<Got, Fail> {
-        if let Some(bytes) = self.pages.get(url) {
-            let landed = self
-                .landed
-                .get(url)
-                .cloned()
-                .unwrap_or_else(|| url.to_string());
-            return Ok(Got {
-                url: landed,
-                bytes: bytes.clone(),
-            });
+        if let Some(got) = self.pages.get(url) {
+            return Ok(got.clone());
         }
         if let Some(fail) = self.failed.get(url) {
             return Err(fail.clone());
@@ -1995,6 +1921,28 @@ struct Blob {
     url: String,
     sha: String,
     size: u64,
+}
+
+fn file_blobs(
+    record_url: &str,
+    files: &[orbe_registry::File],
+    keep: impl Fn(&str) -> bool,
+) -> Vec<Blob> {
+    let mut blobs = Vec::new();
+    for file in files {
+        if !keep(&file.path) {
+            continue;
+        }
+        let Ok(url) = resolve(record_url, &file.url) else {
+            continue;
+        };
+        blobs.push(Blob {
+            url,
+            sha: file.sha256.clone(),
+            size: file.bytes,
+        });
+    }
+    blobs
 }
 
 fn fetch_url(url: &str, size: u64) -> Result<Got, Fail> {
@@ -2154,6 +2102,7 @@ fn fetch_https(url: &str, size: u64) -> Result<Got, Fail> {
     })
 }
 
+#[derive(Clone)]
 struct Got {
     url: String,
     bytes: Vec<u8>,
@@ -2298,8 +2247,8 @@ fn sha256(bytes: &[u8]) -> String {
 }
 
 /// `$XDG_CACHE_HOME/orbe` when that is set. Otherwise `~/Library/Caches/orbe` on macOS and
-/// `~/.cache/orbe` on Linux. A missing home, or a cache that cannot be written, means the
-/// command fetches without a cache.
+/// `~/.cache/orbe` on Linux. Records and files are stored by their SHA-256 under `files/`.
+/// A missing home, or a cache that cannot be written, means the command fetches without a cache.
 fn cache_dir() -> Option<PathBuf> {
     let nonempty = |key: &str| std::env::var_os(key).filter(|value| !value.is_empty());
     if let Some(dir) = nonempty("XDG_CACHE_HOME") {
