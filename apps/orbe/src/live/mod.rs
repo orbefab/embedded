@@ -515,7 +515,7 @@ impl Client {
                     self.send(stream, Ask::Run(Ok(command))).map(Done::Reply)
                 }
                 Found::Missing => Err(self.no_session()),
-                Found::Stale => Err(self.crashed("ended without closing")),
+                Found::Stale => Err(self.stale_session()),
             },
         }
     }
@@ -614,14 +614,7 @@ impl Client {
                 .map(Done::Reply),
             Found::Missing => Err(self.no_session()),
             Found::Stale => {
-                if self
-                    .place
-                    .read_pid(&self.name)
-                    .is_some_and(place::pid_alive)
-                {
-                    return Err(self.crashed("ended without closing"));
-                }
-                let log = self.remove_dead()?;
+                let log = self.dead_files()?;
                 Ok(Done::Stale(Stale {
                     session: self.name.clone(),
                     log,
@@ -748,7 +741,7 @@ impl Client {
         match self.find()? {
             Found::Listening(stream) => self.send(stream, Ask::Show { page }),
             Found::Missing => Err(self.no_session()),
-            Found::Stale => Err(self.crashed("ended without closing")),
+            Found::Stale => Err(self.stale_session()),
         }
     }
 
@@ -833,6 +826,9 @@ impl Client {
             match error.code {
                 Code::NoSession => return Err(self.no_session()),
                 Code::Ended => error.hint = self.open_hint("to start again"),
+                Code::Cancelled if error.message.starts_with("the session was closed at ") => {
+                    error.hint = self.open_hint("to start it again");
+                }
                 Code::Faulted => {
                     error.hint = format!(
                         "run `orbe snapshot{}` to see the diagnostics, fix the scene or firmware, then {}",
@@ -944,8 +940,31 @@ impl Client {
         !place::pid_alive(pid)
     }
 
+    /// A socket nothing answers on. A process that is still alive is reported and left in
+    /// place. A process that has ended loses its runtime files, the same way `close` removes
+    /// them, and the error names the log when that log is kept.
+    fn stale_session(&self) -> Refusal {
+        match self.dead_files() {
+            Ok(log) => self.crash_refusal("ended without closing", log),
+            Err(refused) => refused,
+        }
+    }
+
+    /// The runtime files of a dead session, removed. `Err` is a process that is still alive,
+    /// reported as `session_crashed` and left in place, or a file that could not be removed.
+    fn dead_files(&self) -> Result<Option<PathBuf>, Refusal> {
+        if self
+            .place
+            .read_pid(&self.name)
+            .is_some_and(place::pid_alive)
+        {
+            return Err(self.crashed("ended without closing"));
+        }
+        self.remove_dead()
+    }
+
     /// Removes the runtime files of a session whose process has ended. `<pid>.crashed` stays.
-    /// The directory goes when nothing remains in it.
+    /// A log that holds output is kept as that file. The directory goes when nothing remains.
     fn remove_dead(&self) -> Result<Option<PathBuf>, Refusal> {
         let crash = self.preserve_crash();
         for path in [

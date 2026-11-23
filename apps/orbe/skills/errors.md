@@ -25,7 +25,7 @@ With `--json` a command prints one object, `{"ok": true, "data": {...}}` or `{"o
 | `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`, then fix the circuit or the firmware, or step longer. |
 | `ended` | The session reached its 2-hour stop. Reads still work. Run `orbe open` to start again. |
 | `past_stop` | A `step` would end past the stop, or an input would land past it. Do what the hint says. |
-| `cancelled` | Ctrl-C stopped a `step`. Step again. |
+| `cancelled` | Ctrl-C stopped a `step`. The session stays. Step again. `orbe close` during a `step` ends the session. The message says it was closed, and the hint says how to open it. |
 | `faulted` | The engine stopped the session. The message names why. Fix it and run `orbe open`. |
 
 A chip error such as `chip.unsupported_setting` names the peripheral and the setting. Load `orbe skills get arduino`.

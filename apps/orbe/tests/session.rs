@@ -273,11 +273,21 @@ fn close_during_a_long_step_returns() {
     let run = Run::new(stepping.wait_with_output().unwrap());
     assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
     assert!(
-        run.stdout.contains("the step was cancelled at t="),
+        run.stdout
+            .contains("error[cancelled]: the session was closed at t="),
         "{}{}",
         run.stdout,
         run.stderr
     );
+    assert!(
+        run.stdout
+            .contains("hint: run `orbe open --session long` to start it again"),
+        "{}{}",
+        run.stdout,
+        run.stderr
+    );
+    assert!(!run.stdout.contains("stands there"), "{}", run.stdout);
+    assert!(runtime.sockets().is_empty(), "close left the session");
 }
 
 /// The path a crash message names, `<pid>.crashed` in the session's folder.
@@ -291,7 +301,7 @@ fn crashed_log(text: &str) -> &str {
 }
 
 #[test]
-fn a_crash_log_stays_after_it_is_read_and_the_next_open_names_it() {
+fn a_crash_log_stays_after_the_command_that_finds_it() {
     let dir = project("open\n");
     let runtime = Runtime::new();
     let session = ["--session", "kept"];
@@ -306,6 +316,13 @@ fn a_crash_log_stays_after_it_is_read_and_the_next_open_names_it() {
     let path = crashed_log(&run.stderr);
     assert!(path.ends_with(".crashed"), "{path}");
     assert_eq!(fs::read_to_string(path).unwrap(), "panic: boom\n");
+    let state = runtime.sessions().join("kept");
+    for name in ["sock", "lock", "log", "pid", "version"] {
+        assert!(
+            !state.join(name).exists(),
+            "{name} stayed after the crash was reported"
+        );
+    }
 
     let run = runtime
         .orbe(dir.path(), &[&["open"][..], &session].concat())
@@ -316,10 +333,8 @@ fn a_crash_log_stays_after_it_is_read_and_the_next_open_names_it() {
         run.stdout
     );
     assert!(
-        run.stdout.contains(&format!(
-            "the previous session crashed; its last output is in {path}"
-        )),
-        "{}",
+        !run.stdout.contains("previous session crashed"),
+        "the dead session was already cleared: {}",
         run.stdout
     );
     assert_eq!(
@@ -441,12 +456,17 @@ fn a_silent_crash_does_not_name_an_older_crash_log() {
         )
     );
     assert_eq!(fs::read_to_string(path).unwrap(), "panic: crash one\n");
-    let close = runtime.orbe(dir.path(), &["close", "--session", "s1"]).ok();
-    assert_eq!(
-        close.stdout,
-        "removed the socket of a process that ended without closing\n"
+    let state = runtime.sessions().join("s1");
+    for name in ["sock", "lock", "log", "pid", "version"] {
+        assert!(!state.join(name).exists(), "{name} stayed");
+    }
+    let close = runtime.orbe(dir.path(), &["close", "--session", "s1"]);
+    assert_eq!(close.code, 1, "{}", close.stderr);
+    assert!(
+        close.stderr.starts_with("error[no_session]: "),
+        "{}",
+        close.stderr
     );
-    assert!(!close.stdout.contains("crash one"), "{}", close.stdout);
     assert_eq!(fs::read_to_string(path).unwrap(), "panic: crash one\n");
 }
 
@@ -1734,6 +1754,13 @@ fn opens_at_once_leave_only_the_listening_process_in_the_log() {
             "error[session_crashed]: the process of session `lg` ended without closing\n  hint: run `orbe open --session lg` to start it again\n"
         )
     );
+    let state = runtime.sessions().join("lg");
+    for name in ["sock", "lock", "log", "pid", "version"] {
+        assert!(
+            !state.join(name).exists(),
+            "{name} stayed after the dead session was found"
+        );
+    }
 }
 
 #[test]

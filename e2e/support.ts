@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test as base, expect, chromium, firefox, webkit, type Page } from "@playwright/test";
 
 export { expect };
@@ -8,6 +9,37 @@ export { expect };
 export const REPO = resolve(__dirname, "..");
 export const HEADED_SESSION = join(REPO, ".scratch/headed/session.json");
 export const LAUNCH_ARGS = ["--use-angle=swiftshader", "--enable-unsafe-swiftshader"];
+
+/** The registry this site build serves. `orbe search` reads the same folder. */
+export function registryDir(): string {
+  const spec = process.env.ORBE_REGISTRY;
+  if (spec !== undefined && spec.startsWith("file://")) {
+    const path = fileURLToPath(spec);
+    return path.slice(0, path.lastIndexOf("/"));
+  }
+  return join(REPO, ".scratch/site/registry");
+}
+
+const compareVersions = (a: string, b: string) => {
+  const [x, y] = [a.split(".").map(Number), b.split(".").map(Number)];
+  for (let i = 0; i < 3; i += 1) if (x[i] !== y[i]) return (x[i] ?? 0) - (y[i] ?? 0);
+  return 0;
+};
+
+/** Part or Block ids the registry serves, one per name. An id that is only in the repo is absent. */
+export function registryIds(type: "part" | "block"): string[] {
+  const index = join(registryDir(), "index.json");
+  const body = JSON.parse(readFileSync(index, "utf8")) as {
+    items: { name: string; type: string; version: string }[];
+  };
+  const best = new Map<string, string>();
+  for (const row of body.items) {
+    if (row.type !== type) continue;
+    const had = best.get(row.name);
+    if (had === undefined || compareVersions(had, row.version) < 0) best.set(row.name, row.version);
+  }
+  return [...best.keys()].sort();
+}
 
 const MISSING = [
   "This check installs no browser. Set ORBE_CHROMIUM to a Chromium or Chrome binary,",
@@ -225,10 +257,10 @@ export function repoBlocks(): RepoBlock[] {
     .filter((id) => existsSync(join(root, id, "block.jsonc")))
     .sort();
   if (ids.length === 0) throw new Error("blocks/ has no Block");
-  return ids.map((id) => ({ id, kind: kindOf(readFileSync(join(root, id, "scene.jsonc"), "utf8"), id) }));
+  return ids.map((id) => ({ id, kind: blockKind(readFileSync(join(root, id, "scene.jsonc"), "utf8"), id) }));
 }
 
-function kindOf(scene: string, id: string): BlockKind {
+export function blockKind(scene: string, id: string): BlockKind {
   const code = scene
     .split("\n")
     .map((line) => line.replace(/\/\/.*$/, ""))

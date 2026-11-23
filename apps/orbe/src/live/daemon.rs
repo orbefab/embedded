@@ -2,7 +2,7 @@
 //! commands in the order they arrive on one channel, and writes each reply itself, so every
 //! command it took is answered before it exits. Each connection carries one request. A client
 //! that hangs up cancels the command it sent. A `close` from another connection stops a
-//! running `step` before that `close` runs.
+//! running `step` before that `close` runs, and that step's reply says the session was closed.
 //!
 //! Viewers' commands, their comings and goings, and `play`'s ticks reach the same thread on the
 //! same channel, so a viewer's `press` runs between two commands or two ticks, never inside a
@@ -128,6 +128,23 @@ impl Watchers {
     }
 }
 
+/// A step `close` stopped says the session was closed. The client turns the hint into the
+/// `orbe open` for this folder. A hang-up keeps the hint that the session still stands.
+fn say_session_closed(reply: &mut Reply) {
+    let Some(error) = &mut reply.error else {
+        return;
+    };
+    if error.code != Code::Cancelled {
+        return;
+    }
+    let Some(at) = error.message.strip_prefix("the step was cancelled at ") else {
+        return;
+    };
+    let at = at.to_string();
+    error.message = format!("the session was closed at {at}");
+    error.hint = "run `open` to start it again".into();
+}
+
 impl Held {
     fn run(&mut self, job: &Job) -> Reply {
         if matches!(
@@ -177,16 +194,24 @@ impl Held {
         }
         let closing = Arc::clone(&self.closing);
         let watchers = &mut self.watchers;
+        let mut closed = false;
         let mut reply = self.live.run_with(command, &mut |progress| {
             if watchers.due() {
                 watchers.frame(progress.sample(), progress.serial(), None);
             }
-            if job.hung_up.load(Ordering::Relaxed) || closing.load(Ordering::Relaxed) {
+            // `close` ends the session. A hang-up leaves it where the step stopped.
+            if closing.load(Ordering::Relaxed) {
+                closed = true;
+                ControlFlow::Break(())
+            } else if job.hung_up.load(Ordering::Relaxed) {
                 ControlFlow::Break(())
             } else {
                 ControlFlow::Continue(())
             }
         });
+        if closed {
+            say_session_closed(&mut reply);
+        }
         match (command, &mut reply.data) {
             (Command::Open(scene), Data::Opened { .. }) => {
                 self.scene = scene
