@@ -16,6 +16,17 @@
   "model": {
     "kind": "capacitor",
     "pins": { "a": "pos", "b": "neg" },
+    "series_resistance": {
+      "value": 5.64,
+      "unit": "ohm",
+      "source": {
+        "datasheet": {
+          "doc": "Panasonic EEE-1EA470WP",
+          "at": "Dissipation factor (tan δ) 0.20 at 120 Hz, +20 °C, for this 47 µF 25 V part. ESR = tan δ / (2 π f C) = 5.64 ohm. The sheet states tan δ, not a 100 kHz ESR. The value does not change when the capacitance param does.",
+          "basis": "max"
+        }
+      }
+    },
     "ratings": {
       "reverse_voltage": {
         "value": 1,
@@ -30,4 +41,7 @@
       }
     }
   },
+  "not_simulated": [
+    { "what": "ESR versus capacitance", "why": "The series resistance is the 47 µF figure from tan δ at 120 Hz. It does not fall when the capacitance param is set lower." },
+  ],
 }

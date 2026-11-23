@@ -176,13 +176,96 @@ fn a_reversed_adapter_on_nano_vin_warns_unless_a_series_diode_holds_it() {
 }
 
 fn vin_line(stdout: &str) -> f64 {
+    labeled(stdout, "nano.VIN")
+}
+
+fn labeled(stdout: &str, label: &str) -> f64 {
+    let prefix = format!("{label} ");
     stdout
         .lines()
         .find_map(|line| {
-            let rest = line.trim().strip_prefix("nano.VIN ")?;
+            let rest = line.trim().strip_prefix(prefix.as_str())?;
             rest.split_whitespace().next()?.parse().ok()
         })
-        .unwrap_or_else(|| panic!("no VIN in {stdout}"))
+        .unwrap_or_else(|| panic!("no {label} in {stdout}"))
+}
+
+/// Lines where this tantalum, not another part on its net, is past its reverse rating.
+fn tantalum_voltage_warnings(stdout: &str) -> Vec<&str> {
+    stdout
+        .lines()
+        .filter(|line| line.contains("warning[rating.voltage]") && line.contains("#c1"))
+        .collect()
+}
+
+/// USB-only VIN, and VIN held by a series 1N4007, sit near 0 V. That is inside 25 mV.
+/// A tantalum taken to about -1 V still warns.
+#[test]
+fn a_tantalum_on_nano_vin_stays_quiet_near_zero_and_warns_when_reversed() {
+    let scene = |extra: &str, wires: &str| {
+        format!(
+            r#"{{
+  "format": 1,
+  "parts": {{
+    "nano": {{ "type": "nano-board", "firmware": "build/button.ino.hex" }},
+    "c1": {{ "type": "capacitor-tantalum-3216", "capacitance": "10u" }}{extra}
+  }},
+  "wires": [{wires}]
+}}"#
+        )
+    };
+    let run_scene = |text: &str| {
+        let dir = project("open\nstep 20ms\nget @nano.VIN\nget @c1.v\n");
+        fs::write(dir.path().join("scene.jsonc"), text).unwrap();
+        orbe(dir.path(), &["test", "-v"])
+    };
+    let quiet = |name: &str, run: &live::Run| {
+        let vin = labeled(&run.stdout, "nano.VIN");
+        let cap = labeled(&run.stdout, "c1.v");
+        let warnings = tantalum_voltage_warnings(&run.stdout);
+        assert!(
+            warnings.is_empty(),
+            "{name}: VIN {vin} V, c1.v {cap} V\n{warnings:?}\n{}",
+            run.stdout
+        );
+        assert!(
+            cap >= -0.025,
+            "{name}: c1.v {cap} V is past the 25 mV rating, VIN {vin} V\n{}",
+            run.stdout
+        );
+    };
+
+    let usb = run_scene(&scene(
+        "",
+        r#"["c1.pos", "nano.VIN"], ["c1.neg", "nano.GND"]"#,
+    ));
+    assert_eq!(usb.code, 0, "{}{}", usb.stdout, usb.stderr);
+    quiet("USB only", &usb);
+
+    let held = run_scene(&scene(
+        r#", "jack": { "type": "barrel-jack-dc21", "voltage": 9 }, "d1": { "type": "diode-1n4007" }"#,
+        r#"["jack.center", "nano.GND"], ["jack.sleeve", "d1.anode"], ["d1.cathode", "nano.VIN"], ["c1.pos", "nano.VIN"], ["c1.neg", "nano.GND"]"#,
+    ));
+    assert_eq!(held.code, 0, "{}{}", held.stdout, held.stderr);
+    quiet("reversed 9 V behind 1N4007", &held);
+
+    let reversed = run_scene(&scene(
+        r#", "jack": { "type": "barrel-jack-dc21", "voltage": 1 }"#,
+        r#"["jack.center", "nano.GND"], ["jack.sleeve", "nano.VIN"], ["c1.pos", "nano.VIN"], ["c1.neg", "nano.GND"]"#,
+    ));
+    assert_eq!(reversed.code, 0, "{}{}", reversed.stdout, reversed.stderr);
+    let vin = labeled(&reversed.stdout, "nano.VIN");
+    let cap = labeled(&reversed.stdout, "c1.v");
+    assert!(
+        cap < -0.5,
+        "reversed c1.v {cap} V, VIN {vin} V\n{}",
+        reversed.stdout
+    );
+    assert!(
+        !tantalum_voltage_warnings(&reversed.stdout).is_empty(),
+        "reversed c1.v {cap} V, VIN {vin} V\n{}",
+        reversed.stdout
+    );
 }
 
 #[test]

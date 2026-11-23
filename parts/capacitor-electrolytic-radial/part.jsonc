@@ -19,6 +19,17 @@
   "model": {
     "kind": "capacitor",
     "pins": { "a": "pos", "b": "neg" },
+    "series_resistance": {
+      "value": 2.65,
+      "unit": "ohm",
+      "source": {
+        "datasheet": {
+          "doc": "Nichicon UVR",
+          "at": "Tangent of loss angle (tan δ) max 0.20 at 120 Hz, 20 °C, for a rated voltage of 16 V. This model is the 100 µF 16 V can. ESR = tan δ / (2 π f C) = 2.65 ohm. The sheet states tan δ, not a 100 kHz ESR. The value does not change when the capacitance param does.",
+          "basis": "max"
+        }
+      }
+    },
     "ratings": {
       "reverse_voltage": {
         "value": 1,
@@ -35,6 +46,7 @@
   },
   "not_simulated": [
     { "what": "voltage rating", "why": "A forward voltage past the can's working voltage never warns. The reverse rating is separate: pos more than 1 V below neg warns." },
-    { "what": "tolerance, ESR and leakage", "why": "The capacitor is ideal." },
+    { "what": "tolerance and leakage", "why": "The capacitance is the value set, with no tolerance and no leakage." },
+    { "what": "ESR versus capacitance", "why": "The series resistance is the 100 µF 16 V figure from tan δ at 120 Hz. It does not fall when the capacitance param is set lower." },
   ],
 }
