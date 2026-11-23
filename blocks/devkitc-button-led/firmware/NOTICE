@@ -13,7 +13,9 @@ those terms permit modifying the image and reverse engineering it to debug such 
 
 The image also links ESP-IDF's components, the ones that core builds with. They are under the
 Apache License 2.0, whose text is in LICENSE-apache, apart from the files whose headers name
-other terms. Among those, the FreeRTOS kernel is under the MIT License, reproduced with its
+other terms. It links Mbed TLS's platform_util.c from libmbedcrypto.a
+(mbedtls_platform_zeroize), Copyright The Mbed TLS Contributors, which ESP-IDF carries under
+Apache-2.0 OR GPL-2.0-or-later, used here under the Apache License 2.0. Among those, the FreeRTOS kernel is under the MIT License, reproduced with its
 notice in LICENSE-freertos, and the Xtensa core HAL under the notice reproduced in
 LICENSE-xtensa. The FreeRTOS Xtensa port and the Xtensa interrupt, context and vector files are
 under that same notice, with the line Copyright (c) 2015-2019 Cadence Design Systems, Inc. The
