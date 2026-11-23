@@ -132,9 +132,9 @@ fn an_overloaded_led_is_over_for_exactly_the_time_the_button_is_closed() {
         peak_ps > 2_000_000_000 && peak_ps < 12_000_000_000,
         "{current}"
     );
-    // Power is the average over 10.2 ms. It crosses after the press and stays over through
-    // the short bounce gaps, so the time over is the closed span, within a window of it.
-    assert_eq!(power["data"]["window_ps"], 10_200_000_000_u64, "{power}");
+    // Power is a mean with a 10.2 ms time constant. It crosses after the press and stays over
+    // through the short bounce gaps.
+    assert_eq!(power["data"]["tau_ps"], 10_200_000_000_u64, "{power}");
     let message = power["message"].as_str().unwrap();
     assert!(
         message.contains("averages") && message.contains("10.2"),

@@ -11,7 +11,10 @@ pub(crate) mod waveform;
 use orbe_model::Time;
 
 use super::catalog::WirePart;
-use super::{Analysis, Event, IntValue, MIN_GAP_PS, NetId, Netlist, Part, Transient, Value};
+use super::{
+    Analysis, Average, Basis, Event, IntValue, MIN_GAP_PS, NetId, Netlist, Part, Rating, Transient,
+    Value,
+};
 use crate::blob::{Blobs, Sha256};
 use crate::diagnostic::{AnalysisRule, Diagnostic, ScheduleRule, ValueRule};
 use crate::finite::Finite;
@@ -81,9 +84,40 @@ pub(crate) struct WireInt<T> {
 #[serde(deny_unknown_fields)]
 pub(crate) struct WireJunctionRatings {
     #[serde(deserialize_with = "Option::deserialize")]
-    pub(crate) current: Option<WireValue>,
+    pub(crate) current: Option<WireRating>,
     #[serde(deserialize_with = "Option::deserialize")]
-    pub(crate) power: Option<WireValue>,
+    pub(crate) power: Option<WireRating>,
+}
+
+/// A current or power rating. Without `basis` the kind's default applies.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WireRating {
+    value: Finite,
+    unit: String,
+    #[serde(default)]
+    basis: Option<WireBasis>,
+}
+
+/// `"peak"`, or `{ "sustained": { "average": "rms" | "mean", "tau": <seconds> } }`, which may
+/// also carry the sheet's `peak` limit in the rating's unit.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+enum WireBasis {
+    Peak,
+    Sustained {
+        average: WireAverage,
+        tau: WireValue,
+        #[serde(default)]
+        peak: Option<WireValue>,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum WireAverage {
+    Rms,
+    Mean,
 }
 
 /// Pin objects reject a repeated key. `BTreeMap` would keep the last one.
@@ -642,6 +676,51 @@ pub(crate) fn resolve_some_pins(
 
 /// `None` when the rating is invalid. `Some(None)` is an explicit `null`.
 pub(crate) fn resolve_rating(
+    part: &Ref,
+    field: &'static str,
+    expected: &'static str,
+    rating: Option<WireRating>,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Option<Rating>> {
+    let Some(WireRating { value, unit, basis }) = rating else {
+        return Some(None);
+    };
+    let limit = resolve_value(part, field, expected, true, WireValue { value, unit }, out);
+    let (basis, peak) = match basis {
+        None => (Some(None), Some(None)),
+        Some(WireBasis::Peak) => (Some(Some(Basis::Peak)), Some(None)),
+        Some(WireBasis::Sustained { average, tau, peak }) => {
+            let tau_field = format!("{field}.basis.sustained.tau");
+            let basis = resolve_value(part, tau_field, "s", true, tau, out).map(|tau| {
+                Some(Basis::Sustained {
+                    tau_ps: (tau.si.get() * 1e12).round().max(1.0) as u64,
+                    average: match average {
+                        WireAverage::Rms => Average::Rms,
+                        WireAverage::Mean => Average::Mean,
+                    },
+                })
+            });
+            let peak = match peak {
+                None => Some(None),
+                Some(peak) => {
+                    let peak_field = format!("{field}.basis.sustained.peak");
+                    resolve_value(part, peak_field, expected, true, peak, out)
+                        .map(|peak| Some(peak.si))
+                }
+            };
+            (basis, peak)
+        }
+    };
+    Some(Some(Rating {
+        si: limit?.si,
+        basis: basis?,
+        peak: peak?,
+    }))
+}
+
+/// A voltage rating, which has no basis: each sample is checked against it. `None` when it is
+/// invalid, and `Some(None)` is an explicit `null`.
+pub(crate) fn resolve_limit(
     part: &Ref,
     field: &'static str,
     expected: &'static str,

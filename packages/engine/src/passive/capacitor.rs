@@ -1,8 +1,10 @@
+use crate::netlist::Rating;
 use orbe_model::Time;
 use serde::Deserialize;
 
-use crate::diagnostic::ValueRule;
+use crate::diagnostic::{Diagnostic, ValueRule};
 use crate::element::{Observed, OwnedCapacitor, OwnedInductor, StoreEnd, TWO_PIN, Update};
+use crate::finite::Finite;
 use crate::mna::{Probe, Stamp, Unknowns};
 use crate::name::Quantity;
 use crate::netlist::json::{ParseCtx, PinMap, WireValue, bounded, resolve_pins, resolve_value};
@@ -184,6 +186,8 @@ pub struct Capacitor {
     /// or an explicit `"reverse_voltage": null`.
     pub reverse_voltage: Option<Value>,
     /// Ohm, greater than 0. Between pin `a` and the capacitance. `None` is no series resistance.
+    /// A netlist gives it in ohms, or as a dissipation factor `tan δ` at a frequency `f`, which
+    /// is `tan δ / (2 π f C)` at this capacitance.
     pub series_resistance: Option<Value>,
 }
 
@@ -212,7 +216,22 @@ pub(crate) struct WireCapacitor {
     ratings: Option<WireCapacitorRatings>,
     /// Absent on a capacitor with no series resistance. The capacitance then joins `a` to `b`.
     #[serde(default)]
-    series_resistance: Option<WireValue>,
+    series_resistance: Option<WireSeriesResistance>,
+}
+
+/// Ohms, or the dissipation factor a datasheet states and the frequency it states it at.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum WireSeriesResistance {
+    Ohms(WireValue),
+    Loss(WireLoss),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireLoss {
+    tan_delta: WireValue,
+    frequency: WireValue,
 }
 
 /// The key is required, and `null` leaves the capacitor unrated.
@@ -264,15 +283,44 @@ pub(crate) fn resolve_capacitor(ctx: ParseCtx<'_>, wire: WireCapacitor) -> Optio
     };
     let series_resistance = match series_resistance {
         None => Some(None),
-        Some(series_resistance) => resolve_value(
-            part_ref,
-            "series_resistance",
-            "ohm",
-            true,
-            series_resistance,
-            out,
-        )
-        .map(Some),
+        Some(WireSeriesResistance::Ohms(ohms)) => {
+            resolve_value(part_ref, "series_resistance", "ohm", true, ohms, out).map(Some)
+        }
+        Some(WireSeriesResistance::Loss(loss)) => {
+            let tan_delta = resolve_value(
+                part_ref,
+                "series_resistance.tan_delta",
+                "1",
+                true,
+                loss.tan_delta,
+                out,
+            );
+            let frequency = resolve_value(
+                part_ref,
+                "series_resistance.frequency",
+                "Hz",
+                true,
+                loss.frequency,
+                out,
+            );
+            match (tan_delta, frequency, &capacitance) {
+                (Some(tan_delta), Some(frequency), Some(farad)) => {
+                    let ohms = tan_delta.si.get()
+                        / (std::f64::consts::TAU * frequency.si.get() * farad.si.get());
+                    let si = Finite::new(ohms);
+                    if si.is_none() {
+                        out.push(Diagnostic::NetlistValue {
+                            part: part_ref.clone(),
+                            field: "series_resistance.tan_delta".into(),
+                            value: tan_delta.si.get(),
+                            rule: ValueRule::FiniteReciprocal,
+                        });
+                    }
+                    si.map(|si| Some(Value { si }))
+                }
+                _ => None,
+            }
+        }
     };
     match (
         pins,
@@ -359,7 +407,7 @@ impl Kind for Capacitor {
     fn quantities(&self) -> &'static [Quantity] {
         TWO_PIN
     }
-    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+    fn ratings(&self) -> (Option<(Quantity, &Rating)>, Option<&Rating>) {
         (None, None)
     }
     fn observe(&self, probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {

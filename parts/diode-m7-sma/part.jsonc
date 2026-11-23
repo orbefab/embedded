@@ -1,8 +1,8 @@
 // Comchip's CGRA4001-G through CGRA4007-G share one forward curve. They differ in reverse voltage.
 {
-  "format": 1,
+  "format": 5,
   "part": "diode-m7-sma",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "Rectifier diode, M7 (1N4007), SMA",
   "summary": "M7 (1N4007) rectifier in SMA (DO-214AC). The band marks the cathode, lead 1.",
   "tags": ["diode", "rectifier", "smd"],
@@ -55,6 +55,7 @@
       "current": {
         "value": 1.0,
         "unit": "A",
+        "basis": { "sustained": { "average": "mean", "tau": { "value": 0.16, "unit": "s", "source": { "closed_form": { "note": "One 8.3 ms half sine of the 30 A IFSM, from cold, reaches the 1 A IF(AV) on a mean with this time constant, by the filter's exact step." } } }, "peak": { "value": 30.0, "unit": "A", "source": { "datasheet": { "doc": "Comchip CGRA4001-G thru CGRA4007-G, QW-BG002, Rev. E", "at": "page 1, Maximum Ratings, peak forward surge current IFSM, 8.3 ms single half sine-wave", "basis": "absolute_max" } } } } },
         "source": {
           "datasheet": {
             "doc": "Comchip CGRA4001-G thru CGRA4007-G, QW-BG002, Rev. E",

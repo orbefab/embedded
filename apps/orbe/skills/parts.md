@@ -8,7 +8,7 @@ Load this for the copy in `parts/`, a version, a Block, a buy link, or an addres
 
 ```console
 $ orbe add resistor-axial
-wrote parts/resistor-axial 0.2.0
+wrote parts/resistor-axial 0.2.1
 ```
 
 The copy is the project's. Edit it. `orbe check`, `orbe open` and `orbe test` read `parts/<id>/` as it is and never use the network. For a part of your own, put it in a folder and name that folder as `"type": "./my-resistor"`.
@@ -49,4 +49,4 @@ For addressable RGB LEDs, use `neopixel-stick-8`. `orbe search neopixel` finds i
 | `scene_exists`, `file_exists` | `orbe add <block>` found another scene, or a file whose bytes differ. Nothing was written. Matching files are kept when the part folders are not there yet. Use a new folder when the bytes differ, as the hint shows. |
 | `symlink` | `orbe add <block>` found a link where it would write. It does not follow the link. Remove the link, then run the command in the hint again. |
 | `engine_model` | `part.jsonc` names an engine model this orbe does not have. Install the orbe the hint names. |
-| `part_format` | The part file's format is not one this orbe reads. An older copy is this project's file: remove the folder and run `orbe add <id>`. A part opened by a `./` path is the user's file: update that file to the format this orbe reads, including its model, or point the scene at the part id if the file copies one. A newer part means this project needs a newer orbe. This orbe reads part formats 1, 2, 3 and 4. Format 2 adds `"as": "blob"`. Format 3 adds an addressable LED's `DOUT` and a colour reading. Format 4 adds `live`, a joint's `by`, a capacitor's `ratings` and `series_resistance`, and a pixel's `channel_current` and `idle_current`. A scene is format 1. |
+| `part_format` | The part file's format is not one this orbe reads. An older copy is this project's file: remove the folder and run `orbe add <id>`. A part opened by a `./` path is the user's file: update that file to the format this orbe reads, including its model, or point the scene at the part id if the file copies one. A newer part means this project needs a newer orbe. This orbe reads part formats 1 to 5. Format 2 adds `"as": "blob"`. Format 3 adds an addressable LED's `DOUT` and a colour reading. Format 4 adds `live`, a joint's `by`, and a capacitor's `ratings` and `series_resistance`. Format 5 adds a rating's `basis` and the model keys that came with it. A scene is format 1. |

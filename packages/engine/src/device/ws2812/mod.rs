@@ -13,7 +13,9 @@ use crate::diagnostic::{Diagnostic, ValueRule};
 use crate::mna::Node;
 use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
-use crate::netlist::json::{PinMap, WireInt, resolve_int, resolve_pins};
+use crate::netlist::json::{
+    PinMap, WireInt, WireValue, bounded, resolve_int, resolve_pins, resolve_value,
+};
 use crate::netlist::{IntValue, NetId, PartId, Threshold, Value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage_at};
 use crate::watch::{Signal, Watch};
@@ -86,34 +88,50 @@ pub(crate) fn chip(part: PartId, chain: &Ws2812) -> Chip {
         twi: false,
         sends: false,
         supply: None,
+        draw: chain.draw.as_ref().map(|_| (pins[VCC], pins[GND])),
         takes: Takes {
             spi: None,
             duty: None,
             pulses: Some(pins[DIN]),
         },
-        core: Core::Device(core(chain.leds, delay)),
+        core: Core::Device(core(chain.leds, delay, chain.draw.as_ref())),
     }
 }
 
 /// The device sized to the chain: the smallest of 16, 64, 256 and 1024 LEDs that holds it. A
 /// landing copies the state, so a short chain copies little. `delay` is `DIN` to `DOUT` in
 /// picoseconds, 0 for a chain with no `DOUT`.
-fn core(leds: u16, delay: u64) -> Box<dyn Hosted> {
+fn core(leds: u16, delay: u64, draw: Option<&PixelDraw>) -> Box<dyn Hosted> {
     match leds {
-        0..=16 => sized::<16>(leds, delay),
-        17..=64 => sized::<64>(leds, delay),
-        65..=256 => sized::<256>(leds, delay),
-        _ => sized::<{ Ws2812::LED_MAX as usize }>(leds, delay),
+        0..=16 => sized::<16>(leds, delay, draw),
+        17..=64 => sized::<64>(leds, delay, draw),
+        65..=256 => sized::<256>(leds, delay, draw),
+        _ => sized::<{ Ws2812::LED_MAX as usize }>(leds, delay, draw),
     }
 }
 
-fn sized<const N: usize>(leds: u16, delay: u64) -> Box<dyn Hosted> {
+/// The device takes its draw as whole nanoamperes and millivolts.
+fn sized<const N: usize>(leds: u16, delay: u64, draw: Option<&PixelDraw>) -> Box<dyn Hosted> {
     let delay = i64::try_from(delay).expect("parse bounds the delay");
-    let device = model::Ws2812::<N>::new(&Fields::new(&[
+    let whole = |value: &Value, scale: f64| (value.si.get() * scale).round() as i64;
+    let mut fields = vec![
         ("leds", FieldValue::Int(i64::from(leds))),
         ("delay", FieldValue::Int(delay)),
-    ]))
-    .expect("the state holds the chain");
+    ];
+    if let Some(draw) = draw {
+        fields.extend([
+            (
+                "channel_na",
+                FieldValue::Int(whole(&draw.channel_current, 1e9)),
+            ),
+            ("idle_na", FieldValue::Int(whole(&draw.idle_current, 1e9))),
+            (
+                "holds_above_mv",
+                FieldValue::Int(whole(&draw.holds_above, 1e3)),
+            ),
+        ]);
+    }
+    let device = model::Ws2812::<N>::new(&Fields::new(&fields)).expect("the state holds the chain");
     let outputs = if delay > 0 { model::OUTPUTS } else { 0 };
     Box::new(Native::new(device, Pulse::new(), outputs))
 }
@@ -130,6 +148,21 @@ pub struct Ws2812 {
     pub leds: u16,
     pub input_threshold: Threshold,
     pub dout: Option<Dout>,
+    /// What each LED draws from `VCC` into `GND`. `None` draws nothing.
+    pub draw: Option<PixelDraw>,
+}
+
+/// Each LED's draw from `VCC` into `GND`: `idle_current` at every colour, black included, and
+/// `channel_current` times each channel's latched value over 255, while the supply is at or
+/// above `holds_above`. Below that it fades to none at 0 V, as `orbe_model::Draw` says.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PixelDraw {
+    /// Ampere, at least 0, at a channel value of 255.
+    pub channel_current: Value,
+    /// Ampere, at least 0.
+    pub idle_current: Value,
+    /// Volt, greater than 0.
+    pub holds_above: Value,
 }
 
 /// How a chain drives `DOUT`: through `output` from its own rails, each `DIN` high once every
@@ -166,6 +199,16 @@ pub(crate) struct WireWs2812 {
     input_threshold: WireThreshold,
     #[serde(default)]
     dout: Option<WireDout>,
+    #[serde(default)]
+    draw: Option<WireDraw>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireDraw {
+    channel_current: WireValue,
+    idle_current: WireValue,
+    holds_above: WireValue,
 }
 
 #[derive(Deserialize)]
@@ -225,8 +268,39 @@ pub(crate) fn resolve_ws2812(ctx: ParseCtx<'_>, wire: WireWs2812) -> Option<Ws28
         });
         None
     };
+    let draw = wire.draw.map(|draw| {
+        let current = |field, value, out: &mut Vec<Diagnostic>| {
+            bounded(
+                part_ref,
+                field,
+                "A",
+                value,
+                |number| (number < 0.0).then_some(ValueRule::NonNegative),
+                out,
+            )
+        };
+        let channel_current = current("draw.channel_current", draw.channel_current, out);
+        let idle_current = current("draw.idle_current", draw.idle_current, out);
+        let holds_above = resolve_value(
+            part_ref,
+            "draw.holds_above",
+            "V",
+            true,
+            draw.holds_above,
+            out,
+        );
+        Some(PixelDraw {
+            channel_current: channel_current?,
+            idle_current: idle_current?,
+            holds_above: holds_above?,
+        })
+    });
     let dout = match dout {
         Some(dout) => Some(dout?),
+        None => None,
+    };
+    let draw = match draw {
+        Some(draw) => Some(draw?),
         None => None,
     };
     Some(Ws2812 {
@@ -234,5 +308,6 @@ pub(crate) fn resolve_ws2812(ctx: ParseCtx<'_>, wire: WireWs2812) -> Option<Ws28
         leds: leds?,
         input_threshold: input_threshold?,
         dout,
+        draw,
     })
 }

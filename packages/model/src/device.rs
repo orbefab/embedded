@@ -24,6 +24,8 @@ pub trait State: Clone + Send + 'static {
 ///   does. All of a time's effects are one stop.
 /// - Only `run_until` changes the drives. What any other call causes comes at least 1 ps
 ///   later, at a stop.
+/// - The host stamps the [`Draw`] it read at the device's last stop. A draw that another call
+///   changes takes effect at a stop the host puts 1 ps after that call.
 pub trait Device: State {
     /// What it shows besides its drives. Nothing, unless it says otherwise.
     const SHOWS: Shows = Shows::Nothing;
@@ -37,6 +39,10 @@ pub trait Device: State {
     fn run_until(&mut self, cx: &mut Cx, limit: Time) -> Option<Stop>;
     /// One drive per declared output, in declaration order.
     fn drive(&self) -> Drives;
+    /// What it draws from its supply now. [`Draw::NONE`] unless it says otherwise.
+    fn draw(&self) -> Draw {
+        Draw::NONE
+    }
     /// Its watches' levels from `at` on.
     fn input(&mut self, _cx: &mut Cx, _at: Time, _levels: Levels) {}
     /// The volts of each of its samples at its stop at `at`, in declaration order.
@@ -47,6 +53,41 @@ pub trait Device: State {
     /// after a call that ran [`Cx::show`], and at the end of a run.
     fn view(&self) -> View<'_> {
         View::Nothing
+    }
+}
+
+/// A device's draw from its supply: `amps` from its supply pin into its ground pin while the
+/// supply is at or above `holds_above_v`. Below that it fades smoothly to none at 0 V, so it
+/// never pulls the supply below its ground. The host stamps it with its slope.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Draw {
+    /// Ampere, at least 0.
+    pub amps: f64,
+    /// Volt, greater than 0.
+    pub holds_above_v: f64,
+}
+
+impl Draw {
+    /// No draw.
+    pub const NONE: Draw = Draw {
+        amps: 0.0,
+        holds_above_v: 1.0,
+    };
+
+    /// The current at a supply of `volts`, and its slope in siemens. A cubic ramp,
+    /// `3 x^2 - 2 x^3` of `amps` with `x = volts / holds_above_v`, joins none at 0 V to all of
+    /// it at `holds_above_v`, with no step in the current or its slope at either end.
+    pub fn at(&self, volts: f64) -> (f64, f64) {
+        let x = volts / self.holds_above_v;
+        if x <= 0.0 {
+            (0.0, 0.0)
+        } else if x >= 1.0 {
+            (self.amps, 0.0)
+        } else {
+            let ramp = x * x * (3.0 - 2.0 * x);
+            let slope = 6.0 * x * (1.0 - x) / self.holds_above_v;
+            (self.amps * ramp, self.amps * slope)
+        }
     }
 }
 
@@ -400,5 +441,30 @@ mod tests {
         };
         cx.drew(drawn);
         assert_eq!(cx.drawn(), Some(drawn));
+    }
+
+    #[test]
+    fn a_draw_ramps_from_none_at_0_v_to_all_of_it_at_its_hold() {
+        let draw = Draw {
+            amps: 0.6,
+            holds_above_v: 3.7,
+        };
+        assert_eq!(draw.at(-1.0), (0.0, 0.0));
+        assert_eq!(draw.at(0.0), (0.0, 0.0));
+        assert_eq!(draw.at(3.7), (0.6, 0.0));
+        assert_eq!(draw.at(5.0), (0.6, 0.0));
+        let (half, slope) = draw.at(1.85);
+        assert!((half - 0.3).abs() < 1e-15, "{half}");
+        assert!((slope - 1.5 * 0.6 / 3.7).abs() < 1e-15, "{slope}");
+        let h = 1e-6;
+        for volts in [0.1, 1.0, 2.0, 3.0, 3.6] {
+            let (up, down) = (draw.at(volts + h).0, draw.at(volts - h).0);
+            let slope = draw.at(volts).1;
+            assert!(
+                ((up - down) / (2.0 * h) - slope).abs() < 1e-8,
+                "at {volts} V"
+            );
+            assert!(up >= down, "at {volts} V");
+        }
     }
 }

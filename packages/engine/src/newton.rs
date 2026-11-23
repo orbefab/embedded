@@ -27,8 +27,10 @@ pub(crate) struct Circuit {
     pub(crate) actives: Vec<active::Chip>,
     /// Every chip a netlist part builds, sorted by part, which is the order of the logic refs.
     logic: Vec<(PartId, Slot)>,
-    /// No part's stamp reads the iterate, so one Newton call stamps one system. A test's `extra`
-    /// actives do not count, because `active::stamp` never sees the iterate.
+    /// No part's stamp reads the iterate, and no active chip draws through a [`Draw`], so one
+    /// Newton call stamps one system.
+    ///
+    /// [`Draw`]: orbe_model::Draw
     pub(crate) linear: bool,
 }
 
@@ -83,7 +85,8 @@ impl Circuit {
             )
             .collect();
         logic.sort_unstable_by_key(|&(id, _)| id);
-        let linear = netlist.parts().all(|(_, part)| !part.model.reads_iterate());
+        let linear = netlist.parts().all(|(_, part)| !part.model.reads_iterate())
+            && actives.iter().all(|chip| chip.draw.is_none());
         let mut circuit = Circuit {
             netlist,
             layout,
@@ -108,14 +111,16 @@ impl Circuit {
         };
         let mut system = System::new(&circuit.layout);
         system.reset(&circuit.layout, conditions.gmin);
-        stamp_parts(
-            &circuit,
-            &mut system,
-            &conditions,
-            &Iterate::initial(&circuit),
-        );
+        let initial = Iterate::initial(&circuit);
+        stamp_parts(&circuit, &mut system, &conditions, &initial);
         for chip in &circuit.actives {
-            active::stamp(chip, &chip.core, &mut system, conditions.source_scale);
+            active::stamp(
+                chip,
+                &chip.core,
+                &mut system,
+                &initial.solution,
+                conditions.source_scale,
+            );
         }
         circuit.layout.order_by(&system);
         Ok(circuit)
@@ -525,7 +530,13 @@ pub(crate) fn newton(
 fn stamp(circuit: &Circuit, system: &mut System, conditions: &Conditions, iterate: &Iterate) {
     stamp_parts(circuit, system, conditions, iterate);
     for (k, chip) in circuit.actives.iter().enumerate() {
-        active::stamp(chip, &conditions.cores[k], system, conditions.source_scale);
+        active::stamp(
+            chip,
+            &conditions.cores[k],
+            system,
+            &iterate.solution,
+            conditions.source_scale,
+        );
     }
 }
 

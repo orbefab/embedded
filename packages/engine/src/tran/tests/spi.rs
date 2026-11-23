@@ -98,6 +98,7 @@ fn target(netlist: &Netlist, mode: Mode) -> active::Chip {
         usarts: &[],
         twi: false,
         sends: false,
+        draw: None,
         supply: None,
         takes: Takes::default(),
         core: Core::Device(Box::new(Native::new(
@@ -404,6 +405,7 @@ fn record_target(netlist: &Netlist) -> active::Chip {
         usarts: &[],
         twi: false,
         sends: false,
+        draw: None,
         supply: None,
         takes: Takes {
             spi: Some(Target {

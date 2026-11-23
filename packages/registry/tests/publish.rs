@@ -84,6 +84,41 @@ fn an_older_release_keeps_its_record_and_a_row_names_the_lowest_orbe() {
 }
 
 #[test]
+fn a_format_no_release_reads_names_the_next_release() {
+    let body = common::LAMP.replace("\"format\": 1", "\"format\": 5");
+    let src = source("lamp", "1.2.0", "Lamp", &body);
+    put(
+        src.path(),
+        "blocks/lamp-demo/block.jsonc",
+        r#"{ "format": 1, "block": "lamp-demo", "version": "0.1.0", "title": "A lamp", "board": "lamp", "license": "MIT" }"#,
+    );
+    put(
+        src.path(),
+        "blocks/lamp-demo/scene.jsonc",
+        r#"{ "format": 1, "parts": { "l1": { "type": "lamp" } }, "ground": "l1.a" }"#,
+    );
+    let registry = build(src.path()).unwrap();
+    let merged = publish(&[Release {
+        version: "0.2.1".into(),
+        formats: vec![1, 2, 3, 4],
+        registry,
+    }])
+    .unwrap();
+    let index: serde_json::Value = serde_json::from_slice(&merged["index.json"]).unwrap();
+    let row = |name: &str| {
+        index["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == name)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(row("lamp")["orbe"], "0.2.2");
+    assert_eq!(row("lamp-demo")["orbe"], "0.2.2");
+}
+
+#[test]
 fn a_release_with_no_tag_is_refused() {
     let error = publish(&[]).unwrap_err().to_string();
     assert!(error.contains("v0.2.0"), "{error}");

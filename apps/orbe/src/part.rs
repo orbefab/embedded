@@ -97,7 +97,8 @@ pub fn text(card: &Card, breadboard: Option<&str>) -> String {
             (Some(value), Some(unit)) => si_amount(value, unit),
             _ => "unrated".to_string(),
         };
-        lines.push(format!("  {}  {shown}", rating.name));
+        let basis = rating.basis.as_ref().map(basis_text).unwrap_or_default();
+        lines.push(format!("  {}  {shown}{basis}", rating.name));
     }
     lines.push(String::new());
     lines.push("not simulated".into());
@@ -296,4 +297,30 @@ fn push_or_none(lines: &mut Vec<String>, empty: bool) {
     if empty {
         lines.push("  none".into());
     }
+}
+
+/// `, peak`, `, mean with a 54.5 ms time constant`, or that and `, peak 5.5 A`, from a
+/// rating's `basis`.
+fn basis_text(basis: &serde_json::Value) -> String {
+    if basis.as_str() == Some("peak") {
+        return ", peak".into();
+    }
+    let sustained = &basis["sustained"];
+    let average = match sustained["average"].as_str() {
+        Some("rms") => "RMS",
+        Some("mean") => "mean",
+        _ => return String::new(),
+    };
+    let Some(seconds) = sustained["tau"]["value"].as_f64() else {
+        return String::new();
+    };
+    let peak = &sustained["peak"];
+    let peak = match (peak["value"].as_f64(), peak["unit"].as_str()) {
+        (Some(value), Some(unit)) => format!(", peak {}", si_amount(value, unit)),
+        _ => String::new(),
+    };
+    format!(
+        ", {average} with a {} time constant{peak}",
+        si_amount(seconds, "s")
+    )
 }

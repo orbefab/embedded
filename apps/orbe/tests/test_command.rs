@@ -196,8 +196,9 @@ fn tantalum_voltage_warnings(stdout: &str) -> Vec<&str> {
         .collect()
 }
 
-/// USB-only VIN, and VIN held by a series 1N4007, sit near 0 V. That is inside 25 mV.
-/// A tantalum taken to about -1 V still warns.
+/// USB-only VIN, and VIN held by a series 1N4007, sit within 25 mV of 0 V, far inside the
+/// 2.4 V reverse rating, so the solver's small reverse never warns. A tantalum taken to about
+/// -3 V warns.
 #[test]
 fn a_tantalum_on_nano_vin_stays_quiet_near_zero_and_warns_when_reversed() {
     let scene = |extra: &str, wires: &str| {
@@ -228,7 +229,7 @@ fn a_tantalum_on_nano_vin_stays_quiet_near_zero_and_warns_when_reversed() {
         );
         assert!(
             cap >= -0.025,
-            "{name}: c1.v {cap} V is past the 25 mV rating, VIN {vin} V\n{}",
+            "{name}: c1.v {cap} V is more than 25 mV reversed, VIN {vin} V\n{}",
             run.stdout
         );
     };
@@ -248,14 +249,14 @@ fn a_tantalum_on_nano_vin_stays_quiet_near_zero_and_warns_when_reversed() {
     quiet("reversed 9 V behind 1N4007", &held);
 
     let reversed = run_scene(&scene(
-        r#", "jack": { "type": "barrel-jack-dc21", "voltage": 1 }"#,
+        r#", "jack": { "type": "barrel-jack-dc21", "voltage": 3 }"#,
         r#"["jack.center", "nano.GND"], ["jack.sleeve", "nano.VIN"], ["c1.pos", "nano.VIN"], ["c1.neg", "nano.GND"]"#,
     ));
     assert_eq!(reversed.code, 0, "{}{}", reversed.stdout, reversed.stderr);
     let vin = labeled(&reversed.stdout, "nano.VIN");
     let cap = labeled(&reversed.stdout, "c1.v");
     assert!(
-        cap < -0.5,
+        cap < -2.5,
         "reversed c1.v {cap} V, VIN {vin} V\n{}",
         reversed.stdout
     );
@@ -304,10 +305,10 @@ fn rating_changes(step: &serde_json::Value) -> Vec<(String, String, u64, serde_j
         .collect()
 }
 
-/// Pressed at 50 ms, the resistor is over its rating now. Its 10.2 ms average reaches 0.25 W
-/// only after (0.2505 / 0.989) of the window, 2.58 ms, so the step to 2 ms lists it over now
-/// and `expect no diagnostics` fails. The next step lists the window's warning beside the
-/// sample.
+/// Pressed at 50 ms, the resistor is over its rating now. Its mean with a 10.2 ms time
+/// constant rounds above 0.25 W only after `tau * ln(0.989 / (0.989 - 0.2505))`, 2.98 ms, so
+/// the step to 2 ms lists it over now and `expect no diagnostics` fails. The next step lists
+/// the filter's warning beside the sample.
 #[test]
 fn an_overload_that_starts_mid_run_is_over_now_before_its_window_warns() {
     const MS: u64 = 1_000_000_000;
@@ -332,9 +333,10 @@ fn an_overload_that_starts_mid_run_is_over_now_before_its_window_warns() {
         "{now}"
     );
     assert!(now["peak"].as_f64().unwrap() < 0.25, "{now}");
-    // Listed at the step's first 1 ms slice, when the window holds 1 ms of 0.989 W.
+    // Listed at the step's first 1 ms slice, when the filter has risen 1 ms toward 0.989 W, so
+    // `tau * ln((0.989 - 0.0924) / (0.989 - 0.25))` more holds it to the rating.
     let held = now["held_ps"].as_u64().unwrap();
-    assert!(held.abs_diff(1_578_000_000) < 20_000_000, "{held}");
+    assert!(held.abs_diff(1_972_000_000) < 20_000_000, "{held}");
 
     let [(code, part, t_ps, window)] = rating_changes(&replies[5]).try_into().unwrap();
     assert_eq!((code.as_str(), part.as_str()), ("rating.power", "#r1.p"));
@@ -344,7 +346,7 @@ fn an_overload_that_starts_mid_run_is_over_now_before_its_window_warns() {
         "{window}"
     );
     assert!(window["peak"].as_f64().unwrap() > 0.25, "{window}");
-    let crossing = pressed + 2_583_000_000;
+    let crossing = pressed + 2_979_000_000;
     assert!(t_ps >= crossing && t_ps < crossing + MS, "{t_ps}");
 }
 

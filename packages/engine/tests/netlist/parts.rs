@@ -209,6 +209,60 @@ fn a_rating_in_the_wrong_unit_or_not_positive_names_its_field() {
     assert!(value.contains(r#""field":"ratings.power""#), "{value}");
 }
 
+/// A sustained rating may carry its sheet's peak limit, in the rating's unit and above 0.
+#[test]
+fn a_sustained_rating_keeps_its_peak_limit_and_checks_it_as_a_value() {
+    let sustained = |peak: &str| {
+        led_with_ratings(&format!(
+            r#"{{
+            "current": {{ "value": 0.03, "unit": "A", "basis": {{ "sustained": {{ "average": "mean", "tau": {{ "value": 0.001, "unit": "s" }}, "peak": {peak} }} }} }},
+            "power": null
+          }}"#
+        ))
+    };
+    let netlist =
+        netlist::parse(sustained(r#"{ "value": 0.16, "unit": "A" }"#).as_bytes()).unwrap();
+    let (_, led) = netlist.parts().next().unwrap();
+    let [(_, _, rating)] = led.model.ratings().try_into().unwrap();
+    assert_eq!(rating.peak.map(|peak| peak.get()), Some(0.16));
+
+    let err =
+        netlist::parse(sustained(r#"{ "value": 160.0, "unit": "mA" }"#).as_bytes()).unwrap_err();
+    let [unit] = err.as_slice() else {
+        panic!("{err:?}")
+    };
+    let unit = serde_json::to_string(unit).unwrap();
+    assert!(unit.contains(r#""code":"netlist.unit""#), "{unit}");
+    assert!(
+        unit.contains(r#""field":"ratings.current.basis.sustained.peak""#),
+        "{unit}"
+    );
+    let err = netlist::parse(sustained(r#"{ "value": 0.0, "unit": "A" }"#).as_bytes()).unwrap_err();
+    let [value] = err.as_slice() else {
+        panic!("{err:?}")
+    };
+    let value = serde_json::to_string(value).unwrap();
+    assert!(value.contains(r#""rule":"positive""#), "{value}");
+    assert!(
+        value.contains(r#""field":"ratings.current.basis.sustained.peak""#),
+        "{value}"
+    );
+}
+
+/// A peak basis has nothing beside it to bound.
+#[test]
+fn a_peak_basis_takes_no_peak_limit() {
+    let json = led_with_ratings(
+        r#"{
+            "current": { "value": 0.03, "unit": "A", "basis": { "peak": { "value": 0.16, "unit": "A" } } },
+            "power": null
+          }"#,
+    );
+    let err = netlist::parse(json.as_bytes()).unwrap_err();
+    assert_eq!(err.len(), 1, "{err:?}");
+    assert_eq!(err[0].code(), "netlist.syntax");
+}
+
 #[test]
 fn a_resistor_without_ratings_is_syntax() {
     let json = br#"{

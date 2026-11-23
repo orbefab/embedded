@@ -281,7 +281,13 @@ A `step` or a `pulse` jump between equal levels is still a jump. A `serial` wave
 
 `capacitance.value` is in `F`. It follows the resistance rules. It must be greater than 0, and its reciprocal must be finite.
 
-`series_resistance` is optional. When present, `series_resistance.value` is in `ohm` and follows the resistance rules. It must be greater than 0, and its reciprocal must be finite. It runs from `a` to an internal node, and the capacitance runs from that node to `b`. The internal node is not observed. `#c1.v` is still `V(a) - V(b)`, and `#c1.i` is the current entering `a`. A missing key leaves the capacitance between `a` and `b`, with no internal node, which is the ideal capacitor. A value of 0 or below is `netlist.value` with rule `positive` on `series_resistance`. A wrong unit is `netlist.unit` with that field.
+`series_resistance` is optional. When present, it is a value in `ohm`, or a dissipation factor `tan_delta`, in `1`, with the `frequency` it is stated at, in `Hz`. The resistance is then `tan_delta / (2 pi frequency capacitance)` at the capacitance in force, so it follows the `capacitance` a part sets. Either way it follows the resistance rules. It must be greater than 0, and its reciprocal must be finite. A `tan_delta` or `frequency` of 0 or below is `netlist.value` with rule `positive` on `series_resistance.tan_delta` or `series_resistance.frequency`, and a resistance whose reciprocal is not finite is rule `finite_reciprocal` on `series_resistance.tan_delta`.
+
+```json
+"series_resistance": { "tan_delta": { "value": 0.2, "unit": "1" }, "frequency": { "value": 120, "unit": "Hz" } }
+```
+
+It runs from `a` to an internal node, and the capacitance runs from that node to `b`. The internal node is not observed. `#c1.v` is still `V(a) - V(b)`, and `#c1.i` is the current entering `a`. A missing key leaves the capacitance between `a` and `b`, with no internal node, which is the ideal capacitor. A value of 0 or below is `netlist.value` with rule `positive` on `series_resistance`. A wrong unit is `netlist.unit` with that field.
 
 `initial` is required. It is a value in `V`, any finite number, or `null`.
 
@@ -481,7 +487,7 @@ The stamp reads the last solution, because the row is the law linearised at that
 
 `output_voltage`, `output_resistance`, `dropout_voltage`, `dropout_resistance` and `current_limit` must be greater than 0, and each reciprocal must be finite. `line_regulation` must be at least 0 and below 1. A value outside that is `netlist.value` with rule `below_one`. `quiescent_current` and `ground_current_ratio` must be at least 0. A negative value is `netlist.value` with rule `non_negative`.
 
-`ratings` holds `current` and `power`. `current` bounds `|iout|`.
+`ratings` holds `current` and `power`, and may hold `input_voltage`, in `V`. `current` bounds `|iout|`. `input_voltage` is the most `V(in) - V(gnd)` may be. Past it, pin `in` warns [`rating.voltage`](diagnostics.md#ratingvoltage). It must be greater than 0, else `netlist.value` with rule `positive` on `ratings.input_voltage`. An absent key or `null` rates no ceiling. The catalog's regulators carry their sheets' absolute maxima: LM7805 35 V, AMS1117 15 V, SGM2212 22 V and LP2985 16 V.
 
 The law is the DC table. It has no internal pole and no output inductance. It has no enable pin. Pin `in` warns [`rating.voltage`](diagnostics.md#ratingvoltage) below -0.3 V over `gnd`. LP2985, TI SLVS522, states that floor. The AMS1117 sheet this repo cites states a 15 V maximum and no negative floor, and the SGM2212 sheet states 22 V and no negative floor, so -0.3 V is the model's floor for every `linear_regulator`, the margin a chip pin uses below its ground. A pin exactly on -0.3 V is inside. It has no diode from `out` to `in`. A circuit that needs that diode adds a `diode` part. The current limit is flat. There is no thermal shutdown, and a `power` rating warns instead. `ig` follows `h` while `vi` is positive and the reverse term while `vi` is negative, and it does not add a further rise in dropout. There is no minimum load. Ripple from the input reaches the output through the static `k`.
 
@@ -541,9 +547,9 @@ The stamp reads the last solution, as the regulator's does. Convergence compares
 
 `gain_bandwidth`, `slew_rate`, `open_loop_gain`, `output_resistance` and `short_circuit_current` must be greater than 0, and each reciprocal must be finite. Zero or a negative value is `netlist.value` with rule `positive`. At exactly 0 ohm the output row has no current slope below the limit, so Newton's matrix is singular when another source fixes the output. Any positive resistance gives that row a slope. `input_bias_current`, `swing_high`, `swing_low`, `supply_current` and `input_headroom` must be at least 0. A negative value is `netlist.value` with rule `non_negative`.
 
-An op-amp has no quantities and no `ratings` object. A positive `input_headroom` is checked as [`rating.voltage`](diagnostics.md#ratingvoltage) on `in_p` and `in_n`. The ceiling is `V(vcc) - input_headroom`, measured over the part's `gnd`, and there is no floor. A pin exactly on the ceiling is inside. Zero rates no ceiling. The differential stage does not read the field, so the pin voltages stay what the law above gives. Read the output current from what the output drives.
+An op-amp has no quantities. Its `ratings` object is optional, and each of its keys is too: `supply_voltage`, the most `V(vcc) - V(gnd)` may be, checked as [`rating.voltage`](diagnostics.md#ratingvoltage) on `vcc`, and `input_below_gnd`, how far `in_p` and `in_n` may sit below `gnd`. Both are in `V`. `supply_voltage` must be greater than 0, and `input_below_gnd` at least 0, else `netlist.value` with rule `positive` or `non_negative` on the dotted field. Two amplifiers that share a supply carry `supply_voltage` on one, so the pin warns once. A positive `input_headroom` is checked as `rating.voltage` on `in_p` and `in_n`. The ceiling is `V(vcc) - input_headroom`, measured over the part's `gnd`, and the floor is `input_below_gnd` under it, or none. A pin exactly on the ceiling is inside. Zero rates no ceiling. The differential stage does not read the field, so the pin voltages stay what the law above gives. Read the output current from what the output drives.
 
-Not modelled: input offset voltage, CMRR, PSRR and noise. A second internal pole and the phase margin: the law has one pole, so the part does not peak on its own. `Ro` and a capacitor on the output add a pole outside the part. A follower into 200 pF does not ring, and into 100 nF it rings near 230 kHz. Overdrive recovery past the clamp, and supply current that follows the output current beyond the split above. Temperature. The input stage does not collapse above `input_headroom`: the law keeps comparing, and the run warns. On an LM358, TI SLOS068AB section 7.3.3, page 26, says the output phase is correct while at least one input stays in the common-mode range, and undefined when both inputs are outside it. The warning is per input, so one input above the ceiling warns even when the other is inside. An input more than 0.3 V below the negative rail, where that section limits the input current to 1 mA and calls the phase undefined, is not checked. One output resistance covers sourcing and sinking alike, so a load returned above ground sees the sourcing slope while sinking.
+Not modelled: input offset voltage, CMRR, PSRR and noise. A second internal pole and the phase margin: the law has one pole, so the part does not peak on its own. `Ro` and a capacitor on the output add a pole outside the part. A follower into 200 pF does not ring, and into 100 nF it rings near 230 kHz. Overdrive recovery past the clamp, and supply current that follows the output current beyond the split above. Temperature. The input stage does not collapse above `input_headroom`: the law keeps comparing, and the run warns. On an LM358, TI SLOS068AB section 7.3.3, page 26, says the output phase is correct while at least one input stays in the common-mode range, and undefined when both inputs are outside it. The warning is per input, so one input above the ceiling warns even when the other is inside. An input below the negative rail is checked through `input_below_gnd`. The law does not change there. One output resistance covers sourcing and sinking alike, so a load returned above ground sees the sourcing slope while sinking.
 
 `packages/engine/tests/circuits/op-amp-*` run the LMV358's electrical values, the typicals of TI SLOS263Y p7 section 6.8 at VCC 5 V, and set `input_headroom` to 0. Zero rates no ceiling, so those runs stay free of `rating.voltage`. The ramp reaches the supply and the step that reverses its current carries the node a little past it. A ceiling at the rail would warn on that step. `parts/lm358-dip8` carries 1.5 V, the SLOS068AB p10 section 5.7 maximum of `(V+) - 1.5 V` for the LM358 at 25 °C, and `parts/lmv358-msop8` carries 0.8 V, which is 5 V minus the section 6.8 typical upper end of 4.2 V. That row's guaranteed upper end is 4 V. `packages/engine/tests/circuit/runs/op_amp.rs` holds each circuit to a band from that table and to the law above. `op-amp-bias` is a follower with `in_p` behind 1 Mohm from 2.5 V, and a second with `in_p` behind 1 Mohm from 4.95 V, where the bias current is off. `op-amp-swing` overdrives four channels into 10 kohm and 2 kohm to 2.5 V. `op-amp-slew` steps a follower from 0.5 V to 4.0 V and back. `op-amp-gain-10k` and `op-amp-gain-200k` drive a gain of 10 with a 64-level staircase of a 10 mV sine. `op-amp-short` holds one output at 0 V and one at 5 V. `op-amp-ramp`, `op-amp-square` and `op-amp-hysteresis` are comparators against 2.5 V, driven by a 500 V/s ramp, a 10 kHz square and the ramp with 10 kohm in and 100 kohm of feedback. `packages/engine/tests/circuit/runs/lm358.rs` runs the same circuits on the values in `parts/lm358-dip8/part.jsonc`, the LM358 column of TI SLOS068AB p10 section 5.7, and returns the swing loads to `gnd`.
 
@@ -556,9 +562,12 @@ The part is ngspice's Gummel-Poon bipolar transistor at its defaults, which is t
 ```text
 ibe = IS * (exp(vbe / (NF*VT)) - 1)
 ibc = IS * (exp(vbc / (NR*VT)) - 1)
-ic  = (ibe - ibc) * (1 - vbc/VAF) - ibc/BR - GMIN*vbc
+qb  = (1 + sqrt(1 + 4*ibe/IKF)) / 2
+ic  = (ibe - ibc) * (1 - vbc/VAF) / qb - ibc/BR - GMIN*vbc
 ib  = ibe/BF + ibc/BR + GMIN*(vbe + vbc)
 ```
+
+`qb` is ngspice-42's high-injection term. With `vbc` at 0 it gives `ic / ib = BF / (1 + ic/IKF)`, so the gain falls above the knee. A part with no `forward_knee_current` has `qb` of 1.
 
 Below `vbe = -3 * NF*VT`, `ibe` is `-IS * (1 + (3 * NF*VT / (e * vbe))^3)` in place of the exponential, and below `vbc = -3 * NR*VT`, `ibc` is `-IS * (1 + (3 * NR*VT / (e * vbc))^3)`. That is the diode's reverse law, which ngspice-42's `bjtload` takes on each junction. `s * ic` enters `c'` and `s * ib` enters `b'`. `GMIN` is 1e-12 S across each junction, where ngspice puts it. `CJE` is a constant capacitance from `b'` to `e'`, and `CJC` one from `b'` to `c'`. The step's error control holds both as it holds a capacitor part.
 
@@ -575,6 +584,7 @@ Below `vbe = -3 * NF*VT`, `ibe` is `-IS * (1 + (3 * NF*VT / (e * vbe))^3)` in pl
 | `emitter_resistance` | `RE` | `re` | `ohm` |
 | `base_emitter_capacitance` | `CJE` | `cje` with `mje=0` | `F` |
 | `base_collector_capacitance` | `CJC` | `cjc` with `mjc=0` | `F` |
+| `forward_knee_current`, optional | `IKF` | `ikf` | `A` |
 
 Each value must be greater than 0, and its reciprocal must be finite. Those are the resistor's rules. A PNP takes the same positive values as an NPN. `saturation_current` with `forward_emission`, and `saturation_current` with `reverse_emission`, must each keep the diode's `finite_junction` rule. A pair that breaks it names `forward_emission` or `reverse_emission` where the diode names `emission_coefficient`. When both pairs break it on `saturation_current`, that field is reported once.
 
@@ -582,7 +592,7 @@ Each value must be greater than 0, and its reciprocal must be finite. Those are 
 
 The model leaves out these effects.
 
-- Beta does not fall at high or low current. 2N3903/D Rev. 8 Figure 15 shows hFE at 100 mA at about 0.45 of its peak, so a 100 mA switch needs about twice the base current the model says. A design that saturates with the datasheet's minimum hFE still saturates here.
+- Beta does not fall at low current, and without `forward_knee_current` it does not fall at high current either. 2N3903/D Rev. 8 Figure 15 shows hFE at 100 mA at about 0.45 of its peak, so a 100 mA switch on a part with no knee needs about twice the base current the model says. A design that saturates with the datasheet's minimum hFE still saturates here. `parts/npn-2n2222-to92` sets `IKF` to 0.57 A, which keeps P2N2222A/D Figure 3's typical fall from 150 mA to 500 mA.
 - There is no reverse Early voltage. Only reverse-active operation sees it.
 - The capacitances do not depend on voltage, and there is no transit time. So a saturated switch has no storage time and turns off early, by up to 200 ns for the 2N3904 row of 2N3903/D and 225 ns for 2N3906/D. At MCU and relay timescales that does not show.
 - The device is at 25 C, as the diode is.
@@ -1137,10 +1147,22 @@ The same sheet, page 2, gives `VIH` as at least 0.7 VDD and `VIL` as at most 0.7
 | `dout.output.high_drop`, `dout.output.low_drop` | `V` | at least 0, else rule `non_negative` |
 | `dout.output.high_resistance`, `dout.output.low_resistance` | `ohm` | the resistor's |
 | `dout.delay` | `ps` | an integer from 1 to 1000000. 0 is rule `positive`, and above 1000000, T1H's longest high, is rule `delay` |
+| `draw.channel_current`, `draw.idle_current` | `A` | at least 0, else rule `non_negative` |
+| `draw.holds_above` | `V` | greater than 0, else rule `positive` |
 
 `dout` may be absent, and the chain then has no `DOUT`. `dout` without a `DOUT` pin, or a `DOUT` pin without `dout`, is `netlist.pins`. A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
 
 A `ws2812` has no `ratings` object and no `i`, `v`, or `p`. Its logic signal is `DIN`. It joins `DOUT` to `VCC` and to `GND` through the stage its drive stamps, and no other pins, so `VCC`, `GND` and `DIN` each need another DC path.
+
+`draw` is optional, and all three of its keys are required when it is there. With it, the chain draws a current from `VCC` into `GND`: each LED's `idle_current` at every colour, black included, plus `channel_current` times each latched channel over 255. The pixel's PWM is far faster than any rating's time constant, so the draw is that average. It holds while `V(VCC) - V(GND)` is at least `holds_above`. Below that it fades as `3 x^2 - 2 x^3` of it, with `x` the supply over `holds_above`, to none at 0 V, so a chain behind a resistor settles where the resistor feeds it and never pulls `VCC` below `GND`. The current and its slope are stamped at each Newton iterate. A latch takes effect 1 ps after it, at a stop that takes a restart. Without `draw` the chain draws nothing.
+
+```json
+"draw": {
+  "channel_current": { "value": 0.012, "unit": "A" },
+  "idle_current": { "value": 0.001, "unit": "A" },
+  "holds_above": { "value": 3.7, "unit": "V" }
+}
+```
 
 ### DHT22
 
@@ -1331,13 +1353,19 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `atmega328p` | `pin_current`, `supply_current`, `rail_margin`, `reset_voltage`, `supply_voltage` | each port pin's current, the current through `VCC` and `GND_8`, and each pin's voltage over `GND_8`, each named `#<part>.pin.<pin>` |
 | `current_source`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `ws2812`, `dht22` | none | |
 
+A `current`, `power`, `pin_current` or `supply_current` value object may also carry `basis`, the datasheet's basis for the figure. `"peak"` bounds each sample. `{ "sustained": { "average": "rms" | "mean", "tau": { "value": <s>, "unit": "s" } } }` bounds a first-order filter of the samples with time constant `tau`: of their squares for `rms`, read back as the root, and of their magnitudes for `mean`. A sustained basis may also carry `peak`, the sheet's peak or surge limit in the rating's unit, such as a diode's IFSM beside its average forward current. Each sample is checked against it as a peak rating. A `tau` or `peak` of 0 or below is `netlist.value` with rule `positive` on `ratings.<key>.basis.sustained.tau` or `.peak`, and a wrong unit is `netlist.unit` on that field. A rating with no `basis` takes its kind's: a `power` is a 10.2 ms `mean`, a `voltage_source`'s `current` and an `atmega328p`'s `pin_current` and `supply_current` are a 10.2 ms `rms`, and every other `current` is a `peak`.
+
+```json
+"current": { "value": 0.5, "unit": "A", "basis": { "sustained": { "average": "mean", "tau": { "value": 0.055, "unit": "s" }, "peak": { "value": 5.5, "unit": "A" } } } }
+```
+
 `current`, `pin_current` and `supply_current` are in `A`. `power` is in `W`. `rail_margin`, `reset_voltage`, `supply_voltage` and `reverse_voltage` are in `V`. A rating must be greater than 0, except a capacitor's `reverse_voltage`, which may be 0. A reverse rating of 0 warns on any reverse voltage, and a pin exactly at pin `b` is inside. A missing key, an unknown key, and a missing `ratings` object where it is required are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.<key>`, such as `ratings.current`. A value of 0 or below is `netlist.value` with the same field, except a `reverse_voltage` of 0. A negative `reverse_voltage` is `netlist.value` with rule `non_negative`.
 
 ```json
 "ratings": { "power": { "value": 0.25, "unit": "W" } }
 ```
 
-The run compares the magnitude of each rated quantity with its rating, and each rated pin's voltage with its window. A DC rating, an `atmega328p`'s `pin_current` and `supply_current` and a `voltage_source`'s `current`, is compared through the quantity's RMS over the last 10.2 ms. A power rating, on every kind that has one, is compared through the average of its magnitude over that same window. Each window starts at 0 and fills from the first step after t = 0, and the operating point at t = 0 is no sample. A value and its rating are compared rounded to 3 significant digits. Going over is a warning, `rating.current`, `rating.power` or `rating.voltage`, in [diagnostics.md](diagnostics.md). A windowed rating whose latest value is over it before the window crosses is listed as [over now](diagnostics.md#over-now).
+The run compares the magnitude of each rated quantity with its rating, and each rated pin's voltage with its window. A peak rating is compared with each sample. A sustained rating is compared through its filter, which steps exactly over each held sample, `y = x + (y - x) e^(-dt / tau)`. A pulse much shorter than `tau` counts by its share of it, a PWM load by its period's average once the filter settles, and a load held over the rating crosses after `tau ln(x / (x - rating))` for `mean`. Each filter starts at 0 and takes the first step after t = 0, and the operating point at t = 0 is no sample. A value and its rating are compared rounded to 3 significant digits. Going over is a warning, `rating.current`, `rating.power` or `rating.voltage`, in [diagnostics.md](diagnostics.md). A sustained rating with no `peak` whose latest value is over it before its filter crosses is listed as [over now](diagnostics.md#over-now).
 
 ## Sign rules
 

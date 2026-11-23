@@ -7,7 +7,7 @@ use serde::Deserialize;
 use orbe_model::Time;
 
 use super::json::ParseCtx;
-use super::{Chip, LevelField, NetId, RatingKind, Schedule, Serial, SerialField, Value};
+use super::{Chip, LevelField, NetId, Rating, RatingKind, Schedule, Serial, SerialField, Value};
 use crate::element::{Device, Observed, OwnedCapacitor, OwnedInductor, Update};
 use crate::mna::{Probe, Stamp, Unknowns};
 use crate::name::Quantity;
@@ -50,7 +50,7 @@ pub(crate) trait Kind {
     fn quantities(&self) -> &'static [Quantity];
     /// Its current rating with the quantity that rating bounds, and its power rating, which
     /// bounds `p`.
-    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>);
+    fn ratings(&self) -> (Option<(Quantity, &Rating)>, Option<&Rating>);
     /// Its `quantities` at `at`, in that order. `None` when it has none.
     fn observe(&self, probe: &Probe<'_>, at: Time, side: Side) -> Option<Observed>;
     /// How it carries a steady current between its pins.
@@ -211,7 +211,7 @@ macro_rules! define_kinds {
             /// Rated quantities in `RatingKind` order, each with the quantity it bounds. A
             /// current rating bounds `iout` on a linear regulator, `ic` on a BJT, `id` on an
             /// `nmos` or a `pmos`, and `i` on every other part. A `null` rating is left out.
-            pub fn ratings(&self) -> Vec<(RatingKind, Quantity, &Value)> {
+            pub fn ratings(&self) -> Vec<(RatingKind, Quantity, &Rating)> {
                 let (current, power) = match self {
                     $(Model::$variant(part) => <$ty as Kind>::ratings(part),)*
                     Model::Chip(_) => (None, None),

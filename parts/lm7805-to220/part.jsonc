@@ -1,5 +1,5 @@
 {
-  "format": 1,
+  "format": 5,
   "part": "lm7805-to220",
   "version": "0.2.0",
   "title": "LM7805 5 V regulator, TO-220",
@@ -99,6 +99,7 @@
       "current": {
         "value": 1.5,
         "unit": "A",
+        "basis": "peak",
         "source": {
           "datasheet": {
             "doc": "TI SNOSBT0L, LM340, LM340A, LM7805, LM7812, LM7815, February 2000, revised September 2016",
@@ -110,12 +111,14 @@
       "power": {
         "value": 1.8518518518518519,
         "unit": "W",
+        "basis": { "sustained": { "average": "mean", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } },
         "source": {
           "closed_form": {
             "note": "(125 C - 25 C) / 54 C/W. 125 C is the LM7805 operating junction maximum, and the absolute-maximum note gives the TO-220 (NDE) junction-to-ambient thermal resistance as 54 C/W. Shutdown is above 150 C. The thermal table's 23.9 C/W is a board figure. This rating is the bare part, so a breadboard warns before the 1.5 A current rating does."
           }
         }
-      }
+      },
+      "input_voltage": { "value": 35, "unit": "V", "source": { "datasheet": { "doc": "TI SNOSBT0L, LM340, LM340A, LM7805, LM7812, LM7815, February 2000, revised September 2016", "at": "Section 6.1 Absolute Maximum Ratings, DC input voltage, 35 V", "basis": "absolute_max" } } },
     },
     "pins": { "in": "IN", "out": "OUT", "gnd": "GND" }
   },

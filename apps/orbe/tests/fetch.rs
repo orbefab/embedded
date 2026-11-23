@@ -478,9 +478,34 @@ fn a_part_this_orbe_reads_is_installed() {
 }
 
 #[test]
+fn a_format_5_part_named_for_a_newer_orbe_is_not_written() {
+    let (dir, _) = led_index(|row| {
+        row["orbe"] = json!("0.2.2");
+    });
+    let project = tempfile::tempdir().unwrap();
+    let (code, stdout, stderr) = run(
+        project.path(),
+        &["add", "led-5mm"],
+        &file_template(dir.path()),
+    );
+    assert_eq!(code, 1, "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.starts_with("error[part_format]:"), "{stderr}");
+    assert!(
+        stderr.contains("`led-5mm`") && stderr.contains("needs a newer orbe. nothing was written"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("hint: curl -fsSL https://orbefab.com/orbe/install.sh | sh\n"),
+        "{stderr}"
+    );
+    assert!(!project.path().join("parts").exists());
+}
+
+#[test]
 fn a_part_in_a_newer_format_is_not_written() {
     let (_kept, reg) = cloned_registry();
-    raise_part_format(&reg, "resistor-axial", 5);
+    raise_part_format(&reg, "resistor-axial", 6);
     let dir = tempfile::tempdir().unwrap();
     let (code, stdout, stderr) = run(dir.path(), &["add", "resistor-axial"], &file_template(&reg));
     assert_eq!(code, 1, "{stdout}{stderr}");
@@ -488,7 +513,7 @@ fn a_part_in_a_newer_format_is_not_written() {
     assert!(stderr.starts_with("error[part_format]:"), "{stderr}");
     assert!(
         stderr.contains(
-            "resistor-axial: format 5 is newer than this binary reads; this project needs a newer orbe. nothing was written\n"
+            "resistor-axial: format 6 is newer than this binary reads; this project needs a newer orbe. nothing was written\n"
         ),
         "{stderr}"
     );
@@ -502,7 +527,7 @@ fn a_part_in_a_newer_format_is_not_written() {
 #[test]
 fn a_block_whose_part_needs_a_newer_orbe_is_not_written() {
     let (_kept, reg) = cloned_registry();
-    raise_part_format(&reg, "trimmer-3362p", 5);
+    raise_part_format(&reg, "trimmer-3362p", 6);
     let dir = tempfile::tempdir().unwrap();
     let (code, stdout, stderr) = run(
         dir.path(),
@@ -513,7 +538,7 @@ fn a_block_whose_part_needs_a_newer_orbe_is_not_written() {
     assert!(stdout.is_empty(), "{stdout}");
     assert!(stderr.starts_with("error[part_format]:"), "{stderr}");
     assert!(
-        stderr.contains("trimmer-3362p: format 5 is newer than this binary reads"),
+        stderr.contains("trimmer-3362p: format 6 is newer than this binary reads"),
         "{stderr}"
     );
     assert!(stderr.contains("nothing was written"), "{stderr}");

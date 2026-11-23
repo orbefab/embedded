@@ -305,8 +305,9 @@ fn the_ratings_are_read_in_si_and_a_null_key_is_unrated() {
     );
     let ratings = chip.ratings.unwrap();
     let si = |value: Option<orbe_engine::netlist::Value>| value.map(|value| value.si.get());
-    assert_eq!(si(ratings.pin_current), Some(0.04));
-    assert_eq!(si(ratings.supply_current), Some(0.2));
+    let rated = |rating: Option<orbe_engine::netlist::Rating>| rating.map(|r| r.si.get());
+    assert_eq!(rated(ratings.pin_current), Some(0.04));
+    assert_eq!(rated(ratings.supply_current), Some(0.2));
     assert_eq!(si(ratings.rail_margin), Some(0.5));
     assert_eq!(si(ratings.reset_voltage), None);
     assert_eq!(si(ratings.supply_voltage), Some(6.0));

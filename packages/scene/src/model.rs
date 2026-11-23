@@ -22,9 +22,11 @@ const SCENE_KEYS: &[&str] = &[
 /// Part `format` values this binary reads. A part's `format` covers its `model`, its params and
 /// its readings. Format 2 is format 1 plus `"as": "blob"` on a file param. Format 3 is format 2
 /// plus `DOUT` on a `ws2812` and a reading `"of": "rgb"`. Format 4 is format 3 plus `"live"` on
-/// a number param, `"by"` on a joint, a capacitor's `ratings` and `series_resistance`, and a
-/// `ws2812`'s `channel_current` and `idle_current`.
-pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4];
+/// a number param, `"by"` on a joint, and a capacitor's `ratings` and `series_resistance`.
+/// Format 5 is format 4 plus a rating's `basis`, a capacitor's `series_resistance` as
+/// `tan_delta` at a `frequency`, a regulator's `ratings.input_voltage`, an op-amp's `ratings`, a
+/// BJT's `forward_knee_current`, and a `ws2812`'s `draw`.
+pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5];
 /// Scene `format` values this binary reads.
 pub const SCENE_FORMATS: &[u32] = &[1];
 /// The oldest part format whose file params take `"as": "blob"`.
@@ -32,10 +34,12 @@ const BLOB_FORMAT: u32 = 2;
 /// The oldest part format whose `ws2812` has `DOUT`, and whose readings take `"of": "rgb"`.
 /// An older part's `DOUT` pin stays off the chain, as it did when the engine had none.
 const DOUT_FORMAT: u32 = 3;
-/// The oldest part format that carries the keys the published 0.2.0 binary refuses. The release
-/// and the registry share one tree, so a catalog part that uses one of these says format 4 and
-/// that binary asks for a newer orbe.
+/// The oldest part format that carries the keys the published 0.2.0 binary refuses. A catalog
+/// part that uses one of these says format 4, and that binary asks for a newer orbe.
 const FIELD_FORMAT: u32 = 4;
+/// The oldest part format that carries the keys orbe 0.2.0 and 0.2.1 refuse, so those binaries
+/// ask for a newer orbe.
+const BASIS_FORMAT: u32 = 5;
 const WIRE_KINDS: &[&str] = &["jumper", "trace", "contact"];
 /// A live session's stop, investigation 1's 2-hour cap.
 pub const STOP_PS: u64 = 7_200 * 1_000_000_000_000;
@@ -2422,6 +2426,63 @@ fn decode_bodies(model: &Node, part: &Part, format: u32, out: &mut Findings) -> 
 /// Each value object in an engine part, an object with a `value` and a `unit`, says where its
 /// value came from in `source`. The netlist leaves `source` out, so the reader checks it here.
 /// `pointer` is where `node` sits in the engine part.
+/// `the engine's `kind` takes `key` only in part format `needs``.
+fn gate(out: &mut Findings, kind: &str, key: &str, span: Span, needs: u32, format: u32) {
+    out.push(
+        Code::Syntax,
+        span,
+        format!(
+            "the engine's `{kind}` takes `{key}` only in part format {needs}; this file is format {format}"
+        ),
+        format!("set \"format\": {needs} in this part file"),
+    );
+}
+
+/// The keys [`BASIS_FORMAT`] adds to an engine model: `basis` on any rating, and the fields
+/// below on their kinds. A dotted key is a field of an object.
+fn basis_gate(node: &Node, kind: &str, format: u32, out: &mut Findings) {
+    let gated: &[&str] = match kind {
+        "ws2812" => &["draw"],
+        "linear_regulator" => &["ratings.input_voltage"],
+        "op_amp" => &["ratings"],
+        "npn" | "pnp" => &["forward_knee_current"],
+        "capacitor" => &["series_resistance.tan_delta", "series_resistance.frequency"],
+        _ => &[],
+    };
+    for key in gated {
+        let (parent, field) = key.rsplit_once('.').unwrap_or(("", key));
+        let holder = if parent.is_empty() {
+            Some(node)
+        } else {
+            node.get(parent)
+        };
+        if let Some(prop) = holder
+            .and_then(Node::props)
+            .unwrap_or_default()
+            .iter()
+            .find(|prop| prop.key == *field)
+        {
+            gate(out, kind, key, prop.key_span, BASIS_FORMAT, format);
+        }
+    }
+    let ratings = node
+        .get("ratings")
+        .and_then(Node::props)
+        .unwrap_or_default();
+    for rating in ratings {
+        if let Some(prop) = rating
+            .value
+            .props()
+            .unwrap_or_default()
+            .iter()
+            .find(|prop| prop.key == "basis")
+        {
+            let key = format!("ratings.{}.basis", rating.key);
+            gate(out, kind, &key, prop.key_span, BASIS_FORMAT, format);
+        }
+    }
+}
+
 fn check_sources(node: &Node, pointer: &str, out: &mut Findings) {
     if let Some(props) = node.props() {
         if node.get("value").is_some() && node.get("unit").is_some() {
@@ -2488,22 +2549,16 @@ fn decode_body(
     if format < FIELD_FORMAT {
         let gated: &[&str] = match kind {
             "capacitor" => &["ratings", "series_resistance"],
-            "ws2812" => &["channel_current", "idle_current"],
             _ => &[],
         };
         for prop in node.props().unwrap_or_default() {
             if gated.contains(&prop.key.as_str()) {
-                out.push(
-                    Code::Syntax,
-                    prop.key_span,
-                    format!(
-                        "the engine's `{kind}` takes `{}` only in part format {FIELD_FORMAT}; this file is format {format}",
-                        prop.key
-                    ),
-                    format!("set \"format\": {FIELD_FORMAT} in this part file"),
-                );
+                gate(out, kind, &prop.key, prop.key_span, FIELD_FORMAT, format);
             }
         }
+    }
+    if format < BASIS_FORMAT {
+        basis_gate(node, kind, format, out);
     }
     let before_dout = kind == "ws2812" && format < DOUT_FORMAT;
     let engine_pins = if before_dout {

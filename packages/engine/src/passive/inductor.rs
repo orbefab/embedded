@@ -1,3 +1,4 @@
+use crate::netlist::Rating;
 use orbe_model::Time;
 use serde::Deserialize;
 
@@ -263,7 +264,7 @@ impl Kind for Inductor {
     fn quantities(&self) -> &'static [Quantity] {
         TWO_PIN
     }
-    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+    fn ratings(&self) -> (Option<(Quantity, &Rating)>, Option<&Rating>) {
         (None, None)
     }
     fn observe(&self, probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {

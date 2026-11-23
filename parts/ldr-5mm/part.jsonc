@@ -3,9 +3,9 @@
 // the fit holds 3.77 kohm at 100 lx. Above 100 lx the sheet gives no value, and the fit is the
 // same line extended.
 {
-  "format": 1,
+  "format": 5,
   "part": "ldr-5mm",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "Photoresistor, 5 mm CdS (GL5528)",
   "summary": "Light-dependent resistor: a 5 mm cadmium-sulphide cell whose resistance falls as the scene's `light` rises. 15 kΩ at 10 lx, 3.8 kΩ at 100 lx, 0.95 kΩ at 1000 lx and 1 MΩ in the dark. The curve follows the datasheet table (10 to 20 kΩ at 10 lx, gamma 0.6); the sheet's own graph reads about 17 to 49 kΩ at 10 lx, and the value at 1000 lx extends the curve past anything the sheet gives. Two leads on 3 mm, either way round. Set the light with the scene's `world`, or live with `orbe set light 50`.",
   "tags": ["ldr", "photoresistor", "light sensor", "light", "sensor", "voltage divider", "analog", "through-hole"],
@@ -30,7 +30,7 @@
       },
     },
     "ratings": {
-      "power": { "value": 0.1, "unit": "W", "source": { "datasheet": { "doc": "Senba GL55 Series CdS Photoresistor Manual", "at": "p1 Types and Specifications, GL5528 max power 100 mW, at 25 C per p2 Test Conditions", "basis": "absolute_max" } } },
+      "power": { "value": 0.1, "unit": "W", "basis": { "sustained": { "average": "mean", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } }, "source": { "datasheet": { "doc": "Senba GL55 Series CdS Photoresistor Manual", "at": "p1 Types and Specifications, GL5528 max power 100 mW, at 25 C per p2 Test Conditions", "basis": "absolute_max" } } },
     },
   },
   "not_simulated": [

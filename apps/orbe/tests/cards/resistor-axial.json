@@ -71,8 +71,28 @@
   ],
   "ratings": [
     {
+      "basis": {
+        "sustained": {
+          "average": "mean",
+          "tau": {
+            "source": {
+              "closed_form": {
+                "note": "The sheet's overloads are pass-or-fail tests, not a pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM."
+              }
+            },
+            "unit": "s",
+            "value": 0.0102
+          }
+        }
+      },
       "name": "power",
-      "source": "user",
+      "source": {
+        "datasheet": {
+          "at": "Product specification, September 27, 2023, V.2, Table 1, CFR-25 Power Rating at 70 °C, 1/4 W",
+          "basis": "absolute_max",
+          "doc": "Yageo CFR-25"
+        }
+      },
       "unit": "W",
       "value": 0.25
     }
@@ -85,5 +105,5 @@
   },
   "title": "Resistor, 1/4 W axial",
   "uses": {},
-  "version": "0.2.0"
+  "version": "0.2.1"
 }

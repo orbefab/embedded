@@ -2,7 +2,8 @@
 # Builds the registry the site serves from release tags v0.2.0 and later.
 # An older tag's record at id@version stays. The newest tag supplies the index
 # name and the schemas. Each index row names the lowest orbe whose part formats
-# include that record's format.
+# include that record's format. A format no tag reads names the patch after
+# the newest tag.
 #
 # usage: scripts/registry.sh <orbe> <out>
 set -euo pipefail

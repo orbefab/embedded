@@ -1,10 +1,12 @@
 use crate::diagnostic::ValueRule;
 use crate::netlist::NetId;
+use crate::netlist::Rating;
 use crate::netlist::Value;
 use crate::netlist::json::PinMap;
-use crate::netlist::json::WireJunctionRatings;
+use crate::netlist::json::WireRating;
 use crate::netlist::json::WireValue;
 use crate::netlist::json::bounded;
+use crate::netlist::json::resolve_limit;
 use crate::netlist::json::resolve_pins;
 use crate::netlist::json::resolve_rating;
 use crate::netlist::json::resolve_value;
@@ -863,9 +865,12 @@ pub struct LinearRegulator {
     /// Unit `1`. The extra ground current per ampere of pass current. Zero is a constant ground current.
     pub ground_current_ratio: Value,
     /// Ampere, greater than 0. Bounds `|iout|`. `None` is an explicit `"current": null`.
-    pub max_current: Option<Value>,
+    pub max_current: Option<Rating>,
     /// Watt, greater than 0. `None` is an explicit `"power": null`.
-    pub max_power: Option<Value>,
+    pub max_power: Option<Rating>,
+    /// Volt, greater than 0. `V(in) - V(gnd)` above this warns `rating.voltage`. `None` when
+    /// the part rates none.
+    pub max_input: Option<Value>,
 }
 
 impl LinearRegulator {
@@ -885,7 +890,20 @@ pub(crate) struct WireLinearRegulator {
     current_limit: WireValue,
     quiescent_current: WireValue,
     ground_current_ratio: WireValue,
-    ratings: WireJunctionRatings,
+    ratings: WireRegulatorRatings,
+}
+
+/// `current` and `power` are required, and `null` leaves either out. `input_voltage` is
+/// optional.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireRegulatorRatings {
+    #[serde(deserialize_with = "Option::deserialize")]
+    current: Option<WireRating>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    power: Option<WireRating>,
+    #[serde(default)]
+    input_voltage: Option<WireValue>,
 }
 
 pub(crate) fn resolve_regulator(
@@ -934,6 +952,13 @@ pub(crate) fn resolve_regulator(
     let ratings = wire.ratings;
     let max_current = resolve_rating(part_ref, "ratings.current", "A", ratings.current, out);
     let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
+    let max_input = resolve_limit(
+        part_ref,
+        "ratings.input_voltage",
+        "V",
+        ratings.input_voltage,
+        out,
+    );
     Some(LinearRegulator {
         pins: pins?,
         output_voltage: output_voltage?,
@@ -946,6 +971,7 @@ pub(crate) fn resolve_regulator(
         ground_current_ratio: ground_current_ratio?,
         max_current: max_current?,
         max_power: max_power?,
+        max_input: max_input?,
     })
 }
 
@@ -1018,7 +1044,7 @@ impl Kind for LinearRegulator {
     fn quantities(&self) -> &'static [Quantity] {
         &[Quantity::Iin, Quantity::Iout, Quantity::P]
     }
-    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+    fn ratings(&self) -> (Option<(Quantity, &Rating)>, Option<&Rating>) {
         let current = self.max_current.as_ref().map(|v| (Quantity::Iout, v));
         (current, self.max_power.as_ref())
     }

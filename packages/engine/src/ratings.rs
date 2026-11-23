@@ -4,7 +4,7 @@ use std::num::NonZeroU64;
 use orbe_model::{Drive, Time};
 
 use crate::active::{self, Output, Stage};
-use crate::netlist::{Model, NetId, Netlist, RatingKind};
+use crate::netlist::{Average, Basis, Model, NetId, Netlist, Rating, RatingKind};
 
 use crate::diagnostic::{Diagnostic, Excursion, VoltageExcursion, exceeds};
 use crate::finite::Finite;
@@ -18,22 +18,29 @@ use crate::observe::Columns;
 /// writes. A chip's pin ratings read the row's net voltages and the drive its core had in
 /// force for that row, and work out each pin's current the way `active::stamp` stamps it.
 ///
-/// A DC current rating, a chip pin's, a chip supply's or a supply source's, bounds the heat
-/// the current makes, which follows its square over time. So it is checked on the current's
-/// RMS over the last [`DC_WINDOW_PS`], not on each sample: the pulse that charges a
-/// capacitor through a pin stays under it, a PWM load counts by the RMS of its period, and a
-/// load that holds the current over its rating for a fraction of the window goes over.
+/// Each current or power rating carries its datasheet's basis. A peak rating is checked on
+/// each sample. A sustained rating bounds the heat a held value makes, so it is checked on a
+/// first-order filter of the samples with the rating's time constant: of their squares for
+/// [`Average::Rms`], read back as the root, and of their magnitudes for [`Average::Mean`]. A
+/// pulse much shorter than the time constant counts by its share of it, a PWM load counts by
+/// its period's average once the filter has settled, and a load held over the rating crosses
+/// it within a few time constants. A rating with no basis takes its kind's: a power rating and
+/// a supply source's current are sustained, with [`DEFAULT_TAU_PS`], RMS for the current and
+/// mean for the power, and every other current rating is a peak. A chip pin's and a chip
+/// supply's current are sustained RMS with that time constant unless the part says otherwise.
 ///
-/// A power rating is the heat the part can shed, so it uses that same window on the average
-/// of the power's magnitude. A switching edge that spends its rating for a few hundred
-/// nanoseconds stays under it, and a load held over the rating crosses it within the window.
+/// A sustained rating may also carry its sheet's peak limit, such as a diode's surge current or
+/// an LED's pulsed forward current. That limit is a second watch on the same quantity, a peak
+/// rating, so a sample over it warns at once while the filter still bounds the heat.
 ///
-/// Each window starts at zero, as a cold part does. A solve that holds each capacitor at a
+/// Each filter starts at zero, as a cold part does. A solve that holds each capacitor at a
 /// voltage is never a sample: the t = 0 solve, and the restart solve at an edge. A capacitor
 /// held there draws whatever its hold takes, which is no current the circuit carries. The first
 /// accepted step is the first sample. Each sample holds until the next, except after an edge,
-/// where the next sample holds back to the edge, [`Self::restarted`]. A windowed rating whose
-/// last sample is over is over now, [`Self::over_now`], before its window crosses.
+/// where the next sample holds back to the edge, [`Self::restarted`]. A sustained rating with no
+/// peak limit whose last sample is over is over now, [`Self::over_now`], before its filter
+/// crosses. One with a peak limit is not: its sheet bounds a pulse by that limit and the filter,
+/// so a pulse the sheet allows stays quiet throughout.
 #[derive(Clone)]
 pub(crate) struct Ratings {
     timing: Timing,
@@ -45,20 +52,18 @@ pub(crate) struct Ratings {
     restarted: bool,
 }
 
-/// The window a DC current rating averages over, 10.2 ms: five periods of the slowest PWM an
-/// Arduino core makes by default, 490.2 Hz (16 MHz / (2 * 64 * 255), 2.04 ms), and ten of
-/// the 976.6 Hz one, within 0.4%. Judging a PWM load by its RMS assumes the pin heats slower
-/// than one period, so the window holds whole periods and the RMS it reports for a steady PWM
-/// is the period's. A pulse longer than the window fills it and counts at its full value. A
-/// pin that holds a capacitor's charging pulse, `I0^2 * tau / 2` of `i^2 * t`, stays well
-/// under it, and a steady load over the rating crosses it within a fraction of it.
-pub(crate) const DC_WINDOW_PS: u64 = 10_200_000_000;
+/// The time constant of a sustained rating whose netlist names no basis, 10.2 ms: five periods
+/// of the slowest PWM an Arduino core makes by default, 490.2 Hz (16 MHz / (2 * 64 * 255),
+/// 2.04 ms). A filter that slow reads a steady 490 Hz PWM within a few percent of its period's
+/// RMS, and a capacitor's charging pulse through a pin, `I0^2 * tau / 2` of `i^2 * t`, stays
+/// well under it.
+pub(crate) const DEFAULT_TAU_PS: u64 = 10_200_000_000;
 
-/// The span a windowed rating also averages over to say whether it is over now, 2.04 ms: one
+/// The span a sustained rating also averages over to say whether it is over now, 2.04 ms: one
 /// period of the 490.2 Hz PWM. A PWM load whose RMS is under the rating stays under it, though
 /// each pulse is over, and so does a switching spike of a few hundred nanoseconds. A load held
 /// over the rating crosses it within the span, or at once while the run is younger than it.
-pub(crate) const RECENT_PS: u64 = DC_WINDOW_PS / 5;
+pub(crate) const RECENT_PS: u64 = 2_040_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Timing {
@@ -73,11 +78,11 @@ pub(crate) struct PinRatings {
     /// Each output's package pin, in the order of the chip's outputs.
     pub(crate) outputs: Vec<&'static str>,
     /// Ampere, through any one output.
-    pub(crate) pin_current: Option<f64>,
+    pub(crate) pin_current: Option<Rating>,
     /// Ampere, through the supply pin and through the ground pin. Every output draws its high
     /// side, its pull-up and its leakage from the one and sinks its low side and its leakage
     /// into the other, and the chip's own draw passes through both.
-    pub(crate) supply_current: Option<f64>,
+    pub(crate) supply_current: Option<Rating>,
     /// The supply pin and its net.
     pub(crate) vcc: (&'static str, NetId),
     /// The ground pin and its net. Every window is over it.
@@ -108,8 +113,8 @@ struct Watch {
     quantity: Ref,
     read: Read,
     limit: f64,
-    /// `Some` when the rating is checked over [`DC_WINDOW_PS`]. A DC current stores squares
-    /// and reads the RMS. A power rating stores the magnitude and reads the mean.
+    basis: Basis,
+    /// `Some` for a sustained rating.
     heat: Option<Heat>,
     /// Whether the last reading was over.
     over: bool,
@@ -120,35 +125,54 @@ struct Watch {
     since: Option<Time>,
 }
 
-/// A windowed rating's two averages of the same samples.
+/// A sustained rating's readings of the same samples.
 #[derive(Clone)]
 struct Heat {
-    /// Over [`DC_WINDOW_PS`]. It warns when it crosses.
-    window: Square,
-    /// Over [`RECENT_PS`]. With the last sample over, it says the rating is over now.
-    recent: Square,
+    /// The rating's thermal filter. It warns when it crosses.
+    filter: Filter,
+    /// Over [`RECENT_PS`]. With the last sample over, it says the rating is over now. `None`
+    /// when the rating has a peak limit, which bounds a pulse in its place.
+    recent: Option<Recent>,
 }
 
-/// What a window folds each sample into.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Reduce {
-    /// Store the square and report the root of the mean. Heat of a current.
-    Rms,
-    /// Store the sample and report the mean. Heat of a power.
-    Mean,
+/// What a filter or an average stores of a sample, and how it reads the store back.
+fn stored(average: Average, magnitude: f64) -> f64 {
+    match average {
+        Average::Rms => magnitude * magnitude,
+        Average::Mean => magnitude,
+    }
 }
 
-/// A quantity over the last `length` ps, each sample held until the next. Before the first
-/// sample the window holds 0, so it starts cold. The stored sample is the square for
-/// [`Reduce::Rms`] and the magnitude for [`Reduce::Mean`].
+fn root(average: Average, store: f64) -> f64 {
+    let store = store.max(0.0);
+    match average {
+        Average::Rms => store.sqrt(),
+        Average::Mean => store,
+    }
+}
+
+/// A first-order filter with time constant `tau_ps`, each sample held until the next. It holds
+/// 0 before its first sample, so it starts cold. A sample `x` held for `t` moves the level `y`
+/// to `x + (y - x) * exp(-t / tau)`, exactly, so the step sizes do not change the reading.
 #[derive(Clone)]
-struct Square {
-    reduce: Reduce,
+struct Filter {
+    average: Average,
+    tau_ps: f64,
+    level: f64,
+    /// The last sample's time and stored value.
+    held: Option<(i64, f64)>,
+}
+
+/// The average over the last `length` ps, each sample held until the next, from the first
+/// sample on.
+#[derive(Clone)]
+struct Recent {
+    average: Average,
     length: i64,
-    /// Spans `(from_ps, to_ps, sample)`, oldest first, which tile the window from the first
+    /// Spans `(from_ps, to_ps, stored)`, oldest first, which tile the span from the first
     /// sample on.
     spans: VecDeque<(i64, i64, f64)>,
-    /// `sample * t` over the spans.
+    /// `stored * t` over the spans.
     sum: f64,
     /// The last sample's time and stored value.
     held: Option<(i64, f64)>,
@@ -205,6 +229,14 @@ struct Window {
     excursion: Option<VoltageExcursion>,
 }
 
+/// The basis a sustained rating with no basis of its own takes.
+const fn sustained(average: Average) -> Basis {
+    Basis::Sustained {
+        tau_ps: DEFAULT_TAU_PS,
+        average,
+    }
+}
+
 impl Ratings {
     pub(crate) fn new(
         netlist: &Netlist,
@@ -215,25 +247,26 @@ impl Ratings {
         let mut watches = Vec::new();
         for (_, part) in netlist.parts() {
             // A supply source's current rating is the most it delivers steadily. Every power
-            // rating, on every kind, is the heat the part sheds, so it takes the same window.
+            // rating, on every kind, is the heat the part sheds.
             let supply = matches!(part.model, Model::VoltageSource(_));
-            for (kind, quantity, value) in part.model.ratings() {
+            for (kind, quantity, rating) in part.model.ratings() {
                 let quantity = Ref::Quantity(part.name.clone(), quantity);
                 let column = columns
                     .index(&quantity)
                     .expect("every part quantity is a column");
-                let reduce = match kind {
-                    RatingKind::Power => Some(Reduce::Mean),
-                    RatingKind::Current if supply => Some(Reduce::Rms),
-                    RatingKind::Current => None,
+                let default = match kind {
+                    RatingKind::Power => sustained(Average::Mean),
+                    RatingKind::Current if supply => sustained(Average::Rms),
+                    RatingKind::Current => Basis::Peak,
                 };
-                watches.push(Watch::new(
+                watch(
+                    &mut watches,
                     kind,
                     quantity,
                     Read::Column(column),
-                    value.si.get(),
-                    reduce,
-                ));
+                    rating,
+                    default,
+                );
             }
         }
         let mut windows = Vec::new();
@@ -252,27 +285,30 @@ impl Ratings {
                 |name: &str| Ref::Pin(part.name.clone(), Name::new(name).expect("a pin name"));
             let net = |id: NetId| columns.net(id);
             let gauge = chips.len();
-            if let Some(limit) = rated.pin_current {
+            let default = sustained(Average::Rms);
+            if let Some(rating) = &rated.pin_current {
                 for (k, &name) in rated.outputs.iter().enumerate() {
-                    watches.push(Watch::new(
+                    watch(
+                        &mut watches,
                         RatingKind::Current,
                         pin(name),
                         Read::Gauge { gauge, k },
-                        limit,
-                        Some(Reduce::Rms),
-                    ));
+                        rating,
+                        default,
+                    );
                 }
             }
             let outputs = chip.outputs.len();
-            if let Some(limit) = rated.supply_current {
+            if let Some(rating) = &rated.supply_current {
                 for (k, name) in [(outputs, rated.vcc.0), (outputs + 1, rated.gnd.0)] {
-                    watches.push(Watch::new(
+                    watch(
+                        &mut watches,
                         RatingKind::Current,
                         pin(name),
                         Read::Gauge { gauge, k },
-                        limit,
-                        Some(Reduce::Rms),
-                    ));
+                        rating,
+                        default,
+                    );
                 }
             }
             for window in &rated.windows {
@@ -302,34 +338,44 @@ impl Ratings {
             });
         }
         // An input above `vcc - input_headroom` is the same window as a chip pin above its
-        // ceiling. The differential stage does not read the field. Zero rates no ceiling:
+        // ceiling, and an input below `gnd` past `input_below_gnd` as a pin below its floor.
+        // The differential stage does not read either. A headroom of zero rates no ceiling:
         // the law examples use that, and a step can carry a node a little past the supply.
+        // The supply's own rating is a window on `vcc`.
         for (_, part) in netlist.parts() {
             let Model::OpAmp(op) = &part.model else {
                 continue;
             };
-            if op.input_headroom.si.get() == 0.0 {
-                continue;
-            }
             let pin =
                 |name: &str| Ref::Pin(part.name.clone(), Name::new(name).expect("a pin name"));
             let (inputs, vcc, gnd) = op.common_mode();
-            for (name, net) in inputs {
+            let headroom = op.input_headroom.si.get();
+            let above = (headroom > 0.0).then_some(Ceiling::OverSupply(-headroom));
+            let below = op.input_below_gnd.as_ref().map(|floor| floor.si.get());
+            let mut window = |name, net, below, above| {
                 windows.push(Window {
                     pin: pin(name),
                     column: columns.net(net),
                     vcc: columns.net(vcc),
                     gnd: columns.net(gnd),
-                    below: None,
-                    above: Some(Ceiling::OverSupply(-op.input_headroom.si.get())),
+                    below,
+                    above,
                     worst: 0.0,
                     over: false,
                     excursion: None,
                 });
+            };
+            if above.is_some() || below.is_some() {
+                for (name, net) in inputs {
+                    window(name, net, below, above);
+                }
+            }
+            if let Some(supply) = &op.max_supply {
+                window("vcc", vcc, None, Some(Ceiling::Fixed(supply.si.get())));
             }
         }
-        // A polarized capacitor and a regulator input use the same window. `vcc` is unread
-        // when `above` is `None`. Pin `b`, and the regulator's `gnd`, are the window's ground.
+        // A polarized capacitor and a regulator input use the same window. `vcc` is unread,
+        // since `above` is `None` or fixed. Pin `b`, and the regulator's `gnd`, are the window's ground.
         for (_, part) in netlist.parts() {
             let (pin_name, column, ground, below) = match &part.model {
                 Model::Capacitor(cap) => {
@@ -351,13 +397,20 @@ impl Ratings {
                 ),
                 _ => continue,
             };
+            let above = match &part.model {
+                Model::LinearRegulator(reg) => reg
+                    .max_input
+                    .as_ref()
+                    .map(|max| Ceiling::Fixed(max.si.get())),
+                _ => None,
+            };
             windows.push(Window {
                 pin: Ref::Pin(part.name.clone(), Name::new(pin_name).expect("a pin name")),
                 column,
                 vcc: ground,
                 gnd: ground,
                 below: Some(below),
-                above: None,
+                above,
                 worst: 0.0,
                 over: false,
                 excursion: None,
@@ -375,17 +428,17 @@ impl Ratings {
 
     /// The step sampled last restarted at an edge. Its row holds the state before the edge,
     /// and the restart solve holds each capacitor, so neither is the state after it. The next
-    /// sample is, and it holds back to the edge in each window.
+    /// sample is, and it holds back to the edge in each filter.
     pub(crate) fn restarted(&mut self) {
         self.restarted = true;
     }
 
-    /// Over means a magnitude above the limit, the RMS over the window for a DC current, the
-    /// average over the window for a power rating, or a voltage outside its window. A magnitude
+    /// Over means a magnitude above the limit, a sustained rating's filter reading above it, or
+    /// a voltage outside its window. A magnitude
     /// is over when it is over after both are rounded to 3 significant digits. The first time
     /// over stays; the peak rises. A sample that was over adds the time until this one to
     /// `over_ps`. `cores` are the active chips' cores whose drive was in force for `row`. An
-    /// operating point, [`Timing::Point`], has no duration, so its DC value fills each window.
+    /// operating point, [`Timing::Point`], has no duration, so its DC value fills each filter.
     pub(crate) fn sample(&mut self, at: Time, row: &[Finite], cores: &[active::Core]) {
         for gauge in &mut self.chips {
             gauge.read(row, &cores[gauge.active]);
@@ -405,8 +458,10 @@ impl Ratings {
             let sample = magnitude(watch, &self.chips, row);
             let reading = match (&mut watch.heat, self.timing) {
                 (Some(heat), Timing::Run) => {
-                    heat.recent.take(at, sample, back.is_some());
-                    heat.window.take(at, sample, back.is_some())
+                    if let Some(recent) = &mut heat.recent {
+                        recent.take(at, sample, back.is_some());
+                    }
+                    heat.filter.take(at, sample, back.is_some())
                 }
                 _ => sample,
             };
@@ -426,7 +481,7 @@ impl Ratings {
                         peak_at: at,
                         first: at,
                         over_ps: self.timing.over_ps(),
-                        window_ps: watch.heat.as_ref().map(|_| DC_WINDOW_PS),
+                        basis: watch.basis,
                         sample,
                         held_ps: None,
                     });
@@ -503,28 +558,31 @@ impl Ratings {
         currents.chain(voltages).collect()
     }
 
-    /// Each windowed rating over now, through the last sample: that sample is over the rating,
-    /// the average over [`RECENT_PS`] is over it too, and the window has not crossed, so no
-    /// finding names the rating yet. While the run is younger than [`RECENT_PS`] that average
-    /// runs from the first sample, and at the first sample it is that sample.
+    /// Each sustained rating with no peak limit over now, through the last sample: that sample
+    /// is over the rating, the average over [`RECENT_PS`] is over it too, and the filter has not
+    /// crossed, so no finding names the rating yet. While the run is younger than
+    /// [`RECENT_PS`] that average runs from the first sample, and at the first sample it is
+    /// that sample.
     fn over_now(&self) -> impl Iterator<Item = Diagnostic> + '_ {
         self.watches.iter().filter_map(|watch| {
             let heat = watch.heat.as_ref()?;
+            let recent = heat.recent.as_ref()?;
             let since = watch.since?;
             let at = self.last?;
-            if watch.excursion.is_some() || !exceeds(heat.recent.since_origin(), watch.limit) {
+            if watch.excursion.is_some() || !exceeds(recent.since_origin(), watch.limit) {
                 return None;
             }
+            let held = heat.filter.held_ps(watch.limit)?;
             let excursion = Excursion {
                 quantity: watch.quantity.clone(),
                 limit: watch.limit,
-                peak: heat.window.reading(),
+                peak: heat.filter.reading(),
                 peak_at: at,
                 first: since,
                 over_ps: Some(at.as_ps() - since.as_ps()),
-                window_ps: Some(DC_WINDOW_PS),
+                basis: watch.basis,
                 sample: watch.last,
-                held_ps: NonZeroU64::new(heat.window.held_ps(watch.limit).max(1)),
+                held_ps: NonZeroU64::new(held.max(1)),
             };
             Some(match watch.kind {
                 RatingKind::Current => Diagnostic::RatingCurrent(excursion),
@@ -561,23 +619,54 @@ impl Timing {
     }
 }
 
+/// Pushes `rating`'s watch on `quantity`, with `default` as its basis when it names none, and a
+/// peak watch beside it when it carries a peak limit.
+fn watch(
+    watches: &mut Vec<Watch>,
+    kind: RatingKind,
+    quantity: Ref,
+    read: Read,
+    rating: &Rating,
+    default: Basis,
+) {
+    let peak = rating.peak.map(Finite::get);
+    let basis = rating.basis.unwrap_or(default);
+    watches.push(Watch::new(
+        kind,
+        quantity.clone(),
+        read,
+        rating.si.get(),
+        basis,
+        peak.is_none(),
+    ));
+    if let Some(peak) = peak {
+        watches.push(Watch::new(kind, quantity, read, peak, Basis::Peak, false));
+    }
+}
+
 impl Watch {
+    /// `early` gives a sustained rating its over-now average.
     fn new(
         kind: RatingKind,
         quantity: Ref,
         read: Read,
         limit: f64,
-        reduce: Option<Reduce>,
+        basis: Basis,
+        early: bool,
     ) -> Watch {
         Watch {
             kind,
             quantity,
             read,
             limit,
-            heat: reduce.map(|reduce| Heat {
-                window: Square::new(reduce, DC_WINDOW_PS),
-                recent: Square::new(reduce, RECENT_PS),
-            }),
+            basis,
+            heat: match basis {
+                Basis::Peak => None,
+                Basis::Sustained { tau_ps, average } => Some(Heat {
+                    filter: Filter::new(average, tau_ps),
+                    recent: early.then(|| Recent::new(average, RECENT_PS)),
+                }),
+            },
             over: false,
             excursion: None,
             last: 0.0,
@@ -594,11 +683,59 @@ fn magnitude(watch: &Watch, chips: &[Gauge], row: &[Finite]) -> f64 {
     .abs()
 }
 
-impl Square {
-    fn new(reduce: Reduce, length: u64) -> Square {
-        Square {
-            reduce,
-            length: i64::try_from(length).expect("a window fits in i64 ps"),
+/// Picoseconds as an `i64`, which every run's time fits.
+fn ps(at: Time) -> i64 {
+    i64::try_from(at.as_ps()).expect("a run's time fits in i64 ps")
+}
+
+impl Filter {
+    fn new(average: Average, tau_ps: u64) -> Filter {
+        Filter {
+            average,
+            tau_ps: tau_ps as f64,
+            level: 0.0,
+            held: None,
+        }
+    }
+
+    /// Takes `magnitude` at `at`, and returns the reading there. The sample held since the
+    /// last one fills the time up to `at`, or with `back` this one does.
+    fn take(&mut self, at: Time, magnitude: f64, back: bool) -> f64 {
+        let at = ps(at);
+        let sample = stored(self.average, magnitude);
+        if let Some((last, held)) = self.held
+            && at > last
+        {
+            let x = if back { sample } else { held };
+            let decay = libm::exp(-((at - last) as f64) / self.tau_ps);
+            self.level = x + (self.level - x) * decay;
+        }
+        self.held = Some((at, sample));
+        self.reading()
+    }
+
+    fn reading(&self) -> f64 {
+        root(self.average, self.level)
+    }
+
+    /// How long the last sample would have to hold for the reading to pass `limit`, or `None`
+    /// when it never would.
+    fn held_ps(&self, limit: f64) -> Option<u64> {
+        let (_, x) = self.held?;
+        let target = stored(self.average, limit);
+        if self.level >= target {
+            return Some(0);
+        }
+        (x > target)
+            .then(|| (self.tau_ps * libm::log((x - self.level) / (x - target))).ceil() as u64)
+    }
+}
+
+impl Recent {
+    fn new(average: Average, length: u64) -> Recent {
+        Recent {
+            average,
+            length: i64::try_from(length).expect("a span fits in i64 ps"),
             spans: VecDeque::new(),
             sum: 0.0,
             held: None,
@@ -606,14 +743,11 @@ impl Square {
         }
     }
 
-    /// Takes `magnitude` at `at`, and returns the window's reading there. The sample held
-    /// since the last one fills the time up to `at`, or with `back` this one does.
-    fn take(&mut self, at: Time, magnitude: f64, back: bool) -> f64 {
-        let at = i64::try_from(at.as_ps()).expect("a run's time fits in i64 ps");
-        let sample = match self.reduce {
-            Reduce::Rms => magnitude * magnitude,
-            Reduce::Mean => magnitude,
-        };
+    /// Takes `magnitude` at `at`. The sample held since the last one fills the time up to
+    /// `at`, or with `back` this one does.
+    fn take(&mut self, at: Time, magnitude: f64, back: bool) {
+        let at = ps(at);
+        let sample = stored(self.average, magnitude);
         if let Some((last, held)) = self.held
             && at > last
         {
@@ -643,63 +777,18 @@ impl Square {
         }
         self.origin.get_or_insert(at);
         self.held = Some((at, sample));
-        self.reading()
     }
 
-    /// The reading over the whole length, through the last sample.
-    fn reading(&self) -> f64 {
-        self.root(self.sum / self.length as f64)
-    }
-
-    /// The reading over the time since the first sample while that is shorter than the
+    /// The average over the time since the first sample while that is shorter than the
     /// length, and the first sample itself until time has passed.
     fn since_origin(&self) -> f64 {
         let (Some((at, sample)), Some(origin)) = (self.held, self.origin) else {
             return 0.0;
         };
         match (at - origin).min(self.length) {
-            0 => self.root(sample),
-            filled => self.root(self.sum / filled as f64),
+            0 => root(self.average, sample),
+            filled => root(self.average, self.sum / filled as f64),
         }
-    }
-
-    fn root(&self, mean: f64) -> f64 {
-        let mean = mean.max(0.0);
-        match self.reduce {
-            Reduce::Rms => mean.sqrt(),
-            Reduce::Mean => mean,
-        }
-    }
-
-    /// How long the last sample would have to hold for the reading to pass `limit`. As it
-    /// holds, it enters the window and the oldest of the window leaves, the cold time before
-    /// the first sample included.
-    fn held_ps(&self, limit: f64) -> u64 {
-        let Some((at, held)) = self.held else {
-            return self.length.unsigned_abs();
-        };
-        let target = match self.reduce {
-            Reduce::Rms => limit * limit,
-            Reduce::Mean => limit,
-        } * self.length as f64;
-        let start = at - self.length;
-        let cold = self
-            .spans
-            .front()
-            .map_or(at, |&(from, _, _)| from)
-            .max(start);
-        let leaving = std::iter::once((start, cold, 0.0)).chain(self.spans.iter().copied());
-        let (mut sum, mut elapsed) = (self.sum, 0.0);
-        for (from, to, stored) in leaving {
-            let length = (to - from) as f64;
-            let slope = held - stored;
-            if slope > 0.0 && sum + slope * length > target {
-                return (elapsed + (target - sum) / slope).ceil() as u64;
-            }
-            sum += slope * length;
-            elapsed += length;
-        }
-        self.length.unsigned_abs()
     }
 }
 
@@ -820,6 +909,8 @@ mod tests {
         (Ratings::new(&netlist, &[], &columns, timing), columns)
     }
 
+    const TAU: f64 = DEFAULT_TAU_PS as f64;
+
     #[test]
     fn exactly_the_limit_is_not_over() {
         let (mut ratings, columns) = ratings(Timing::Run);
@@ -847,7 +938,7 @@ mod tests {
                 peak_at: Time::from_ps(20),
                 first: Time::from_ps(10),
                 over_ps: None,
-                window_ps: None,
+                basis: Basis::Peak,
                 sample: 0.05,
                 held_ps: None,
             })]
@@ -873,92 +964,143 @@ mod tests {
         assert_eq!(excursion.over_ps, Some(15 + 5 + 5));
     }
 
-    /// `ratings` with its one watch, `#d1.i`, a DC rating over the window, as a supply's is.
-    fn windowed() -> (Ratings, Columns) {
+    /// `ratings` with its one watch, `#d1.i`, sustained with `average`, as a supply's is.
+    fn sustained_as(average: Average) -> (Ratings, Columns) {
         let (mut ratings, columns) = ratings(Timing::Run);
         ratings.watches[0] = Watch::new(
             RatingKind::Current,
             ratings.watches[0].quantity.clone(),
             ratings.watches[0].read,
             ratings.watches[0].limit,
-            Some(Reduce::Rms),
+            sustained(average),
+            true,
         );
         (ratings, columns)
     }
 
+    fn rms() -> (Ratings, Columns) {
+        sustained_as(Average::Rms)
+    }
+
     fn close(got: f64, want: f64) {
         assert!(
-            (got - want).abs() <= 1e-12 * want.max(1.0),
+            (got - want).abs() <= 1e-9 * want.abs().max(1e-12),
             "{got} against {want}"
         );
     }
 
-    /// The window holds 0 before its first sample, as a cold part does.
+    /// The filter holds 0 before its first sample, as a cold part does, and a held sample
+    /// moves it by `1 - exp(-t / tau)` of the way.
     #[test]
-    fn a_window_starts_cold() {
-        let mut square = Square::new(Reduce::Rms, DC_WINDOW_PS);
-        close(square.take(Time::ZERO, 0.3, false), 0.0);
+    fn a_filter_starts_cold() {
+        let mut filter = Filter::new(Average::Rms, DEFAULT_TAU_PS);
+        close(filter.take(Time::ZERO, 0.3, false), 0.0);
+        let half = DEFAULT_TAU_PS / 2;
+        let rise = 0.09 * (1.0 - libm::exp(-0.5f64));
+        close(filter.take(Time::from_ps(half), 0.0, false), rise.sqrt());
         close(
-            square.take(Time::from_ps(DC_WINDOW_PS / 2), 0.0, false),
-            0.3 / 2f64.sqrt(),
-        );
-        close(
-            square.take(Time::from_ps(DC_WINDOW_PS), 0.0, false),
-            0.3 / 2f64.sqrt(),
-        );
-        close(
-            square.take(Time::from_ps(3 * DC_WINDOW_PS / 2), 0.0, false),
-            0.0,
+            filter.take(Time::from_ps(2 * half), 0.0, false),
+            (rise * libm::exp(-0.5f64)).sqrt(),
         );
     }
 
-    /// A pin into 100 pF carries about 0.2 A for 4 ns, which is 0.2 * sqrt(4 ns / 10.2 ms),
-    /// 0.13 mA RMS over the window.
+    /// A pin into 100 pF carries about 0.2 A for 4 ns, which reads 0.2 * sqrt(4 ns / 10.2 ms),
+    /// 0.13 mA RMS, and then decays.
     #[test]
-    fn a_short_pulse_counts_by_its_share_of_the_window() {
-        let mut square = Square::new(Reduce::Rms, DC_WINDOW_PS);
-        square.take(Time::ZERO, 0.0, false);
-        square.take(Time::from_ps(1_000), 0.2, false);
-        let rms = square.take(Time::from_ps(5_000), 0.0, false);
-        close(rms, 0.2 * (4_000.0 / DC_WINDOW_PS as f64).sqrt());
-        assert!(rms < 0.001);
-        square.take(Time::from_ps(DC_WINDOW_PS + 2_000), 0.0, false);
-        close(
-            square.take(Time::from_ps(DC_WINDOW_PS + 3_000), 0.0, false),
-            0.2 * (2_000.0 / DC_WINDOW_PS as f64).sqrt(),
-        );
-        close(
-            square.take(Time::from_ps(DC_WINDOW_PS + 5_000), 0.0, false),
-            0.0,
-        );
+    fn a_short_pulse_counts_by_its_share_of_the_time_constant() {
+        let mut filter = Filter::new(Average::Rms, DEFAULT_TAU_PS);
+        filter.take(Time::ZERO, 0.0, false);
+        filter.take(Time::from_ps(1_000), 0.2, false);
+        let rms = filter.take(Time::from_ps(5_000), 0.0, false);
+        close(rms, (0.04 * -libm::expm1(-4_000.0 / TAU)).sqrt());
+        assert!((rms / (0.2 * (4_000.0 / TAU).sqrt()) - 1.0).abs() < 1e-6);
+        let later = filter.take(Time::from_ps(5_000 + DEFAULT_TAU_PS), 0.0, false);
+        close(later, rms * libm::exp(-0.5f64));
     }
 
-    /// A steady 69 mA from 0 crosses 40 mA once (40 / 69)^2 of the window has filled.
+    /// The filter reads the same whichever steps the samples come in.
     #[test]
-    fn a_steady_overload_crosses_its_rating_inside_the_window() {
-        let (mut ratings, columns) = windowed();
+    fn the_step_sizes_do_not_change_the_reading() {
+        let mut one = Filter::new(Average::Mean, DEFAULT_TAU_PS);
+        let mut many = Filter::new(Average::Mean, DEFAULT_TAU_PS);
+        one.take(Time::ZERO, 0.5, false);
+        many.take(Time::ZERO, 0.5, false);
+        for k in 1..=1_000 {
+            many.take(Time::from_ps(k * DEFAULT_TAU_PS / 1_000), 0.5, false);
+        }
+        let whole = one.take(Time::from_ps(DEFAULT_TAU_PS), 0.5, false);
+        assert!((whole / many.reading() - 1.0).abs() < 1e-12);
+        close(whole, 0.5 * (1.0 - libm::exp(-1f64)));
+    }
+
+    /// A steady 69 mA from 0 crosses 30 mA RMS at `tau * ln(x^2 / (x^2 - L^2))`. The rating
+    /// rounds to 0.03 A, and the reading is over once it rounds above that.
+    #[test]
+    fn a_steady_overload_crosses_its_rating_after_its_share_of_the_time_constant() {
+        let (mut ratings, columns) = rms();
         let values = |current| row(&columns, current);
         ratings.sample(Time::ZERO, &values(0.0), &[]);
         ratings.sample(Time::from_ps(1), &values(0.069), &[]);
-        let step = DC_WINDOW_PS / 1_000;
-        for k in 1..=2_000 {
+        let step = DEFAULT_TAU_PS / 1_000;
+        for k in 1..=5_000 {
             ratings.sample(Time::from_ps(1 + k * step), &values(0.069), &[]);
         }
         let found = ratings.findings();
         let [Diagnostic::RatingCurrent(excursion)] = found.as_slice() else {
             panic!("not one current finding: {found:?}");
         };
-        let crossing = (0.03f64 / 0.069) * (0.03 / 0.069) * DC_WINDOW_PS as f64;
+        let (x, limit) = (0.069f64 * 0.069, 0.03005f64 * 0.03005);
+        let crossing = TAU * libm::log(x / (x - limit));
         assert!(
             excursion.first.as_ps().abs_diff(crossing as u64) <= step,
-            "{:?}",
+            "{:?} against {crossing}",
             excursion.first
         );
-        close(excursion.peak, 0.069);
-        assert_eq!(excursion.window_ps, Some(DC_WINDOW_PS));
+        assert!((excursion.peak / 0.069 - 1.0).abs() < 1e-2);
+        assert_eq!(excursion.basis, sustained(Average::Rms));
         assert_eq!(
             excursion.over_ps,
-            Some(1 + 2_000 * step - excursion.first.as_ps())
+            Some(1 + 5_000 * step - excursion.first.as_ps())
+        );
+    }
+
+    /// A load that ran under its rating for a while and then rises over it crosses from the
+    /// level it had, not from cold: 20 mA for 50 ms, then 50 mA, against 30 mA mean.
+    #[test]
+    fn a_mid_run_overload_crosses_from_the_level_it_had() {
+        let (mut ratings, columns) = sustained_as(Average::Mean);
+        let values = |current| row(&columns, current);
+        let step = DEFAULT_TAU_PS / 1_000;
+        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        let start = 5 * DEFAULT_TAU_PS;
+        let mut at = 1;
+        while at < start {
+            ratings.sample(Time::from_ps(at), &values(0.02), &[]);
+            at += step;
+        }
+        let level = 0.02 * -libm::expm1(-((start - 1) as f64) / TAU);
+        // Once the last 2.04 ms average is over too, 1 ms on, the rating is over now.
+        for k in 0..=100 {
+            ratings.sample(Time::from_ps(start + k * step), &values(0.05), &[]);
+        }
+        assert!(ratings.findings().is_empty());
+        let [excursion] = over_now(&ratings).try_into().unwrap();
+        let now = 0.05 + (level - 0.05) * libm::exp(-0.1f64);
+        let held = TAU * libm::log((0.05 - now) / (0.05 - 0.03));
+        let got = excursion.held_ps.unwrap().get() as f64;
+        assert!((got / held - 1.0).abs() < 1e-3, "{got} against {held}");
+        for k in 101..=2_000 {
+            ratings.sample(Time::from_ps(start + k * step), &values(0.05), &[]);
+        }
+        let found = ratings.findings();
+        let [Diagnostic::RatingCurrent(excursion)] = found.as_slice() else {
+            panic!("not one current finding: {found:?}");
+        };
+        let crossing = start as f64 + TAU * libm::log((0.05 - level) / (0.05 - 0.03005));
+        assert!(
+            excursion.first.as_ps().abs_diff(crossing as u64) <= step,
+            "{:?} against {crossing}",
+            excursion.first
         );
     }
 
@@ -966,15 +1108,11 @@ mod tests {
     /// 255), 490.2 Hz: 2.04 ms a period, high for `duty / 255` of it.
     const PWM_490_PS: u64 = 2_040_000_000;
 
-    // The window holds a whole number of those periods, at least four.
-    const _: () =
-        assert!(DC_WINDOW_PS.is_multiple_of(PWM_490_PS) && DC_WINDOW_PS >= 4 * PWM_490_PS);
-
     /// `ratings` with its one watch a 40 mA DC rating, a port pin's, sampled at each edge of
     /// a PWM of `period` ps, high at `peak` amperes for `high` ps of each period, until `stop`
     /// ps.
     fn pwm(peak: f64, period: u64, high: u64, stop: u64) -> Vec<Diagnostic> {
-        let (mut ratings, columns) = windowed();
+        let (mut ratings, columns) = rms();
         ratings.watches[0].limit = 0.04;
         let values = |current| row(&columns, current);
         ratings.sample(Time::ZERO, &values(0.0), &[]);
@@ -989,7 +1127,8 @@ mod tests {
     }
 
     /// `analogWrite(9, 128)` into 75 ohm behind the 25 ohm stage is 50 mA for 128 / 255 of
-    /// each period: 35.4 mA RMS, under 40 mA, though each pulse is over 1 ms long.
+    /// each period: 35.4 mA RMS, under 40 mA, though each pulse is over 1 ms long. The
+    /// filter's ripple tops out at 36.3 mA.
     #[test]
     fn a_490_hz_pwm_under_its_rating_on_its_period_rms_is_not_over() {
         assert_eq!(
@@ -998,27 +1137,23 @@ mod tests {
         );
     }
 
-    /// The window holds a whole number of 490 Hz periods, so the RMS it reports for a steady
-    /// 490 Hz PWM is the period's: 69.4 mA into 47 ohm at 128 / 255 is 49.2 mA RMS.
+    /// A steady PWM settles to its period's RMS, and the reading at the top of each pulse is
+    /// within a few percent above it: 69.4 mA at 128 / 255 is 49.2 mA RMS.
     #[test]
-    fn a_490_hz_pwm_over_its_rating_reads_its_period_rms() {
+    fn a_490_hz_pwm_over_its_rating_reads_near_its_period_rms() {
         let found = pwm(0.0694, PWM_490_PS, PWM_490_PS * 128 / 255, 100 * PWM_490_PS);
         let [Diagnostic::RatingCurrent(excursion)] = found.as_slice() else {
             panic!("not one current finding: {found:?}");
         };
         let rms = 0.0694 * (128.0f64 / 255.0).sqrt();
-        assert!(
-            (excursion.peak / rms - 1.0).abs() < 1e-6,
-            "{}",
-            excursion.peak
-        );
+        let ratio = excursion.peak / rms;
+        assert!((1.0..1.03).contains(&ratio), "{}", excursion.peak);
     }
 
     /// Timer0's fast PWM on D5 and D6, 16 MHz / (64 * 256), is 976.6 Hz, high for
-    /// `(duty + 1) / 256` of each 1.024 ms. Its RMS over the window is within 1% of the
-    /// period's.
+    /// `(duty + 1) / 256` of each 1.024 ms. Its reading is within 2% of the period's RMS.
     #[test]
-    fn a_980_hz_pwm_reads_within_a_percent_of_its_period_rms() {
+    fn a_980_hz_pwm_reads_within_two_percent_of_its_period_rms() {
         let period = 1_024_000_000;
         let high = period * 129 / 256;
         let found = pwm(0.0694, period, high, 200 * period);
@@ -1026,22 +1161,24 @@ mod tests {
             panic!("not one current finding: {found:?}");
         };
         let rms = 0.0694 * (129.0f64 / 256.0).sqrt();
-        assert!(
-            (excursion.peak / rms - 1.0).abs() < 0.01,
-            "{}",
-            excursion.peak
-        );
+        let ratio = excursion.peak / rms;
+        assert!((1.0..1.02).contains(&ratio), "{}", excursion.peak);
         assert_eq!(pwm(0.05, period, high, 200 * period), []);
     }
 
-    /// A pulse longer than the window fills it, so it counts at its full value.
+    /// A pulse held for many time constants reads its own value.
     #[test]
-    fn a_pulse_longer_than_the_window_counts_at_its_value() {
-        let found = pwm(0.1, 4 * DC_WINDOW_PS, 2 * DC_WINDOW_PS, 8 * DC_WINDOW_PS);
+    fn a_pulse_held_for_many_time_constants_reads_its_value() {
+        let long = 10 * DEFAULT_TAU_PS;
+        let found = pwm(0.1, 2 * long, long, 4 * long);
         let [Diagnostic::RatingCurrent(excursion)] = found.as_slice() else {
             panic!("not one current finding: {found:?}");
         };
-        close(excursion.peak, 0.1);
+        assert!(
+            (excursion.peak / 0.1 - 1.0).abs() < 1e-4,
+            "{}",
+            excursion.peak
+        );
     }
 
     #[test]
@@ -1089,7 +1226,8 @@ mod tests {
         row
     }
 
-    /// 3 W for 136 ns is 0.4 µJ. Over 10.2 ms that averages about 40 µW, under a 2.419 W rating.
+    /// 3 W for 136 ns is 0.4 µJ. Against a 10.2 ms time constant that reads about 40 µW,
+    /// under a 2.419 W rating.
     #[test]
     fn a_switching_spike_of_a_few_hundred_nanoseconds_stays_under() {
         let (mut ratings, columns) = power_ratings(2.419);
@@ -1097,34 +1235,34 @@ mod tests {
         ratings.sample(Time::ZERO, &values(0.0), &[]);
         ratings.sample(Time::from_ps(2_000), &values(3.008), &[]);
         ratings.sample(Time::from_ps(2_000 + 136_000), &values(0.0), &[]);
-        ratings.sample(Time::from_ps(DC_WINDOW_PS), &values(0.0), &[]);
+        ratings.sample(Time::from_ps(DEFAULT_TAU_PS), &values(0.0), &[]);
         assert!(ratings.findings().is_empty());
     }
 
-    /// A steady 3 W from 0 crosses 2.419 W once about 2.419 / 3 of the window has filled.
+    /// A steady 3 W from 0 crosses 2.419 W at `tau * ln(3 / (3 - 2.425))`, since the rating
+    /// rounds to 2.42 W and the reading is over once it rounds above that.
     #[test]
-    fn a_held_power_overload_crosses_by_its_share_of_the_window() {
+    fn a_held_power_overload_crosses_by_its_share_of_the_time_constant() {
         let (mut ratings, columns) = power_ratings(2.419);
         let values = |power| row_power(&columns, power);
         ratings.sample(Time::ZERO, &values(0.0), &[]);
         ratings.sample(Time::from_ps(1), &values(3.0), &[]);
-        let step = DC_WINDOW_PS / 1_000;
-        for k in 1..=2_000 {
+        let step = DEFAULT_TAU_PS / 1_000;
+        for k in 1..=5_000 {
             ratings.sample(Time::from_ps(1 + k * step), &values(3.0), &[]);
         }
         let found = ratings.findings();
         let [Diagnostic::RatingPower(excursion)] = found.as_slice() else {
             panic!("not one power finding: {found:?}");
         };
-        // The rating rounds to 2.42 W, and the window is over once it rounds above that.
-        let crossing = (2.425 / 3.0) * DC_WINDOW_PS as f64;
+        let crossing = TAU * libm::log(3.0f64 / (3.0 - 2.425));
         assert!(
             excursion.first.as_ps().abs_diff(crossing as u64) <= step,
             "{:?}",
             excursion.first
         );
-        close(excursion.peak, 3.0);
-        assert_eq!(excursion.window_ps, Some(DC_WINDOW_PS));
+        assert!((excursion.peak / 3.0 - 1.0).abs() < 1e-2);
+        assert_eq!(excursion.basis, sustained(Average::Mean));
     }
 
     /// `peak` watts for `high` ps of each 490 Hz period, `periods` of them, on a power rating.
@@ -1147,24 +1285,20 @@ mod tests {
     #[test]
     fn a_power_pulse_train_under_its_average_is_not_over() {
         let half = PWM_490_PS / 2;
-        assert!(power_pwm(1.5, 2.5, half, 20).is_empty());
-        assert!(power_pwm(1.0, 2.5, PWM_490_PS / 10, 20).is_empty());
+        assert!(power_pwm(1.5, 2.5, half, 40).is_empty());
+        assert!(power_pwm(1.0, 2.5, PWM_490_PS / 10, 40).is_empty());
     }
 
-    /// 2.5 W at 50% averages 1.25 W. The window holds whole 490 Hz periods, so the average it
-    /// reports is the period's.
+    /// 2.5 W at 50% averages 1.25 W, and the reading at the top of each pulse is within 5%
+    /// above that.
     #[test]
-    fn a_power_pulse_train_over_its_average_reads_the_period_mean() {
-        let found = power_pwm(1.0, 2.5, PWM_490_PS / 2, 20);
+    fn a_power_pulse_train_over_its_average_reads_near_the_period_mean() {
+        let found = power_pwm(1.0, 2.5, PWM_490_PS / 2, 40);
         let [Diagnostic::RatingPower(excursion)] = found.as_slice() else {
             panic!("not one power finding: {found:?}");
         };
-        assert!(
-            (excursion.peak / 1.25 - 1.0).abs() < 1e-6,
-            "{}",
-            excursion.peak
-        );
-        assert_eq!(excursion.window_ps, Some(DC_WINDOW_PS));
+        let ratio = excursion.peak / 1.25;
+        assert!((1.0..1.06).contains(&ratio), "{}", excursion.peak);
     }
 
     /// The one rating over now, through the last sample.
@@ -1182,11 +1316,12 @@ mod tests {
 
     const MS: u64 = 1_000_000_000;
 
-    /// 0.989 W into a 0.25 W resistor from 50 ms on. 2 ms later the window averages 0.194 W,
-    /// under the rating, so it does not warn, and the rating is over now. Held, the sample
-    /// lifts the window past 0.25 W in (0.25 * 10.2 - 0.989 * 2) / 0.989 ms, 0.578 ms.
+    /// 0.989 W into a 0.25 W resistor from 50 ms on. 2 ms later the filter reads
+    /// `0.989 * (1 - exp(-2 / 10.2))`, 0.176 W, under the rating, so it does not warn, and the
+    /// rating is over now. Held, the sample lifts it past 0.25 W after
+    /// `tau * ln((0.989 - 0.176) / (0.989 - 0.25))` more.
     #[test]
-    fn a_fresh_overload_is_over_now_before_its_window_crosses() {
+    fn a_fresh_overload_is_over_now_before_its_filter_crosses() {
         let (mut ratings, columns) = power_ratings(0.25);
         let values = |power| row_power(&columns, power);
         for k in 0..50 {
@@ -1201,13 +1336,16 @@ mod tests {
         assert_eq!(excursion.first, Time::from_ps(start));
         assert_eq!(excursion.over_ps, Some(2 * MS));
         close(excursion.sample, 0.989);
-        close(excursion.peak, 0.989 * 2.0 / 10.2);
+        let level = 0.989 * -libm::expm1(-2.0 * MS as f64 / TAU);
+        assert!((excursion.peak / level - 1.0).abs() < 1e-9);
         let held = excursion.held_ps.unwrap().get() as f64;
-        assert!((held / (0.578 * MS as f64) - 1.0).abs() < 0.01, "{held}");
-        assert_eq!(excursion.window_ps, Some(DC_WINDOW_PS));
+        let want = TAU * libm::log((0.989 - level) / (0.989 - 0.25));
+        assert!((held / want - 1.0).abs() < 1e-6, "{held} against {want}");
+        assert_eq!(excursion.basis, sustained(Average::Mean));
     }
 
-    /// A load on at the first sample is over now there, before any time has passed.
+    /// A load on at the first sample is over now there, before any time has passed. It warns
+    /// after `tau * ln(2.5 / (2.5 - 0.25))`.
     #[test]
     fn a_steady_overload_is_over_now_at_its_first_sample() {
         let (mut ratings, columns) = power_ratings(0.25);
@@ -1215,7 +1353,8 @@ mod tests {
         assert!(ratings.findings().is_empty());
         let [excursion] = over_now(&ratings).try_into().unwrap();
         close(excursion.sample, 2.5);
-        assert_eq!(excursion.held_ps, NonZeroU64::new(DC_WINDOW_PS / 10));
+        let want = (TAU * libm::log(2.5f64 / 2.25)).ceil() as u64;
+        assert_eq!(excursion.held_ps, NonZeroU64::new(want));
     }
 
     /// 3 W for 136 ns, over a 2.419 W rating, stays under the average over the last 2.04 ms,
@@ -1238,12 +1377,12 @@ mod tests {
     /// pulse is over and the RMS of each period, 35.4 mA, is under, so no sample is over now.
     #[test]
     fn a_pwm_whose_rms_is_under_is_never_over_now() {
-        let (mut ratings, columns) = windowed();
+        let (mut ratings, columns) = rms();
         ratings.watches[0].limit = 0.04;
         let values = |current| row(&columns, current);
         let high = PWM_490_PS * 128 / 255;
         ratings.sample(Time::ZERO, &values(0.0), &[]);
-        let mut start = DC_WINDOW_PS;
+        let mut start = DEFAULT_TAU_PS;
         for _ in 0..20 {
             ratings.sample(Time::from_ps(start), &values(0.05), &[]);
             for k in 1..=10 {
@@ -1258,7 +1397,7 @@ mod tests {
 
     /// A load switched on at an edge, 50 ms in. The step's row holds the state before the edge,
     /// 0 W, and the next step, 1 ms later, reads 0.989 W. That sample holds back to the edge, so
-    /// the window holds 1 ms of it and the rating is over now from the edge.
+    /// the filter holds 1 ms of it and the rating is over now from the edge.
     #[test]
     fn after_an_edge_the_next_sample_holds_back_to_it() {
         let (mut ratings, columns) = power_ratings(0.25);
@@ -1270,9 +1409,119 @@ mod tests {
         ratings.sample(Time::from_ps(51 * MS), &values(0.989), &[]);
         let [excursion] = over_now(&ratings).try_into().unwrap();
         assert_eq!(excursion.first, Time::from_ps(50 * MS));
-        close(excursion.peak, 0.989 / 10.2);
+        let rise = |ms: f64| 0.989 * -libm::expm1(-ms * MS as f64 / TAU);
+        assert!((excursion.peak / rise(1.0) - 1.0).abs() < 1e-9);
         ratings.sample(Time::from_ps(52 * MS), &values(0.989), &[]);
         let [excursion] = over_now(&ratings).try_into().unwrap();
-        close(excursion.peak, 2.0 * 0.989 / 10.2);
+        assert!((excursion.peak / rise(2.0) - 1.0).abs() < 1e-9);
+    }
+
+    /// A diode rated 30 mA as a mean with a 1 ms time constant and 160 mA peak, as an LED's
+    /// sheet gives its DC and pulsed forward currents.
+    fn with_peak() -> (Ratings, Columns) {
+        let netlist = crate::netlist::parse(
+            br#"{
+          "version": 1,
+          "seed": 0,
+          "analysis": { "op": {} },
+          "ground": "gnd",
+          "nets": ["gnd", "a"],
+          "parts": [{
+            "name": "d1",
+            "kind": "diode",
+            "pins": { "anode": "a", "cathode": "gnd" },
+            "saturation_current": { "value": 1e-14, "unit": "A" },
+            "emission_coefficient": { "value": 1.0, "unit": "1" },
+            "series_resistance": { "value": 1.0, "unit": "ohm" },
+            "ratings": {
+              "current": { "value": 0.03, "unit": "A", "basis": { "sustained": {
+                "average": "mean", "tau": { "value": 0.001, "unit": "s" },
+                "peak": { "value": 0.16, "unit": "A" } } } },
+              "power": null
+            }
+          }]
+        }"#,
+        )
+        .unwrap();
+        let columns = Columns::new(&netlist);
+        (Ratings::new(&netlist, &[], &columns, Timing::Run), columns)
+    }
+
+    /// The sheet's pulse, 0.1 ms at 1/10 duty, at its 160 mA peak, and a held 2 ms pulse at
+    /// 100 mA, each over the 30 mA rating: no sample is over now and nothing warns, since the
+    /// peak limit bounds a pulse in place of over now.
+    #[test]
+    fn a_pulse_under_its_peak_limit_is_never_over_now() {
+        let (mut ratings, columns) = with_peak();
+        let values = |current| row(&columns, current);
+        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        let tenth = MS / 10;
+        for period in 1..=30 {
+            let start = period * MS;
+            ratings.sample(Time::from_ps(start), &values(0.16), &[]);
+            ratings.sample(Time::from_ps(start + tenth / 2), &values(0.16), &[]);
+            assert!(over_now(&ratings).is_empty(), "period {period}");
+            ratings.sample(Time::from_ps(start + tenth), &values(0.0), &[]);
+        }
+        assert_eq!(ratings.findings(), []);
+        let (mut ratings, columns) = with_peak();
+        let values = |current| row(&columns, current);
+        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        for k in 1..=20 {
+            ratings.sample(Time::from_ps(MS + k * tenth), &values(0.1), &[]);
+            assert!(over_now(&ratings).is_empty(), "at {k}");
+        }
+    }
+
+    /// A sample over the peak limit warns at once on its peak basis. A held load under it still
+    /// warns when the filter crosses, `tau * ln(50 / 20)` after it starts.
+    #[test]
+    fn a_rating_with_a_peak_limit_warns_on_either() {
+        let (mut ratings, columns) = with_peak();
+        let values = |current| row(&columns, current);
+        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        ratings.sample(Time::from_ps(MS), &values(0.2), &[]);
+        let found = ratings.findings();
+        let [Diagnostic::RatingCurrent(peak)] = found.as_slice() else {
+            panic!("not one current finding: {found:?}");
+        };
+        assert_eq!(peak.basis, Basis::Peak);
+        assert_eq!(peak.limit, 0.16);
+        close(peak.peak, 0.2);
+
+        let (mut ratings, columns) = with_peak();
+        let values = |current| row(&columns, current);
+        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        let step = MS / 100;
+        for k in 0..=300 {
+            ratings.sample(Time::from_ps(MS + k * step), &values(0.05), &[]);
+            assert!(over_now(&ratings).is_empty(), "at {k}");
+        }
+        let found = ratings.findings();
+        let [Diagnostic::RatingCurrent(held)] = found.as_slice() else {
+            panic!("not one current finding: {found:?}");
+        };
+        assert!(matches!(held.basis, Basis::Sustained { .. }));
+        let crossing = MS as f64 * (1.0 + libm::log(0.05f64 / (0.05 - 0.03005)));
+        assert!(
+            held.first.as_ps().abs_diff(crossing as u64) <= step,
+            "{:?} against {crossing}",
+            held.first
+        );
+    }
+
+    /// A peak rating has no filter and is never over now: it warns on the sample.
+    #[test]
+    fn a_peak_rating_warns_on_its_first_sample_over() {
+        let (mut ratings, columns) = ratings(Timing::Run);
+        ratings.sample(Time::ZERO, &row(&columns, 0.0), &[]);
+        ratings.sample(Time::from_ps(MS), &row(&columns, 0.031), &[]);
+        assert!(over_now(&ratings).is_empty());
+        let found = ratings.findings();
+        let [Diagnostic::RatingCurrent(excursion)] = found.as_slice() else {
+            panic!("not one current finding: {found:?}");
+        };
+        assert_eq!(excursion.basis, Basis::Peak);
+        close(excursion.peak, 0.031);
     }
 }

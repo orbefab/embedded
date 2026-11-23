@@ -108,6 +108,7 @@ pub(crate) fn chip(part: PartId, replay: &SpiReplay) -> Chip {
         twi: false,
         sends: true,
         supply: None,
+        draw: None,
         takes: Takes::default(),
         core: Core::Device(Box::new(Native::new(
             model::SpiReplay::new(&Fields::NONE).expect("a spi_replay takes no params"),

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # The newest published orbe reads every part and Block in this tree, or refuses
 # the item because its format is newer than that binary reads. Any other
-# refusal fails. The published release and the registry share one tree, so a
-# key that release refuses has to raise the part format.
+# refusal fails. A key that release refuses has to raise the part format.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

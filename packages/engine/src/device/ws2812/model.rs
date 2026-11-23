@@ -13,7 +13,8 @@
 //! rule `dout_record`.
 
 use orbe_model::{
-    Cx, Device, Drive, Drives, Error, Idle, Params, PulseTarget, Shows, State, Stop, Time, View,
+    Cx, Device, Draw, Drive, Drives, Error, Idle, Params, PulseTarget, Shows, State, Stop, Time,
+    View,
 };
 
 /// The most LEDs one part holds.
@@ -60,6 +61,14 @@ pub struct Ws2812<const N: usize> {
     edges: [(u64, bool); EDGES],
     first: u8,
     queued: u8,
+    /// The latched green, red and blue bytes of every LED, added.
+    lit: u32,
+    /// Ampere at a channel value of 255.
+    channel: f64,
+    /// Ampere per LED, at every colour.
+    idle: f64,
+    /// The supply at and above which the draw holds, volt.
+    holds_above_v: f64,
 }
 
 impl<const N: usize> State for Ws2812<N> {}
@@ -124,7 +133,9 @@ impl<const N: usize> Device for Ws2812<N> {
     };
 
     /// `leds`, the chain's length, and `delay`, `DIN` to `DOUT` in picoseconds, 0 or absent for
-    /// a chain with no `DOUT`.
+    /// a chain with no `DOUT`. `channel_na` and `idle_na` are its draw in nanoamperes, at a
+    /// channel value of 255 and per LED, 0 or absent for none, and `holds_above_mv` the supply
+    /// in millivolts at and above which it holds.
     fn new(params: &Params<'_>) -> Result<Ws2812<N>, Error> {
         let Some(count) = params
             .int("leds")
@@ -138,6 +149,15 @@ impl<const N: usize> Device for Ws2812<N> {
         }
         let Ok(delay) = u64::try_from(params.int("delay").unwrap_or(0)) else {
             return Err(Error("delay is 0 or more"));
+        };
+        let amps = |field| match params.int(field).unwrap_or(0) {
+            nanoamps @ 0.. => Ok(nanoamps as f64 * 1e-9),
+            _ => Err(Error("a draw is 0 or more nanoamperes")),
+        };
+        let (channel, idle) = (amps("channel_na")?, amps("idle_na")?);
+        let holds_above_v = match params.int("holds_above_mv").unwrap_or(1_000) {
+            millivolts @ 1.. => millivolts as f64 * 1e-3,
+            _ => return Err(Error("holds_above_mv is more than 0")),
         };
         Ok(Ws2812 {
             count,
@@ -154,6 +174,10 @@ impl<const N: usize> Device for Ws2812<N> {
             edges: [(0, false); EDGES],
             first: 0,
             queued: 0,
+            lit: 0,
+            channel,
+            idle,
+            holds_above_v,
         })
     }
 
@@ -179,6 +203,14 @@ impl<const N: usize> Device for Ws2812<N> {
             return Drives::OFF;
         }
         Drives::new([if self.out { Drive::High } else { Drive::Low }])
+    }
+
+    /// Each LED's idle current, and each channel's current at its latched value.
+    fn draw(&self) -> Draw {
+        Draw {
+            amps: f64::from(self.count) * self.idle + self.channel * f64::from(self.lit) / 255.0,
+            holds_above_v: self.holds_above_v,
+        }
     }
 
     fn view(&self) -> View<'_> {
@@ -230,6 +262,11 @@ impl<const N: usize> PulseTarget for Ws2812<N> {
         }
         let index = usize::from(self.index);
         self.leds[..index].copy_from_slice(&self.pending[..index]);
+        self.lit = self.leds[..usize::from(self.count)]
+            .as_flattened()
+            .iter()
+            .map(|&byte| u32::from(byte))
+            .sum();
         self.index = 0;
         self.acc = 0;
         self.got = 0;

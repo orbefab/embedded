@@ -1,7 +1,7 @@
-//! Power ratings are the average over the same 10.2 ms window a DC current uses, and each window
-//! starts cold at the first step after t = 0. A switching edge stays under. A held overload,
-//! and a pulse train whose average is over, warn. A session lists a load over its rating now
-//! before its window crosses.
+//! A power rating is a mean through a first-order filter with a 10.2 ms time constant unless its
+//! part names another basis, and each filter starts cold at the first step after t = 0. A
+//! switching edge stays under. A held overload, and a pulse train whose average is over, warn.
+//! A session lists a load over its rating now before its filter crosses.
 
 use crate::common::simulate;
 
@@ -11,7 +11,7 @@ use orbe_engine::trace::Trace;
 use orbe_model::Time;
 use serde_json::Value;
 
-const WINDOW_PS: u64 = 10_200_000_000;
+const TAU_PS: u64 = 10_200_000_000;
 const PWM_490_PS: u64 = 2_040_000_000;
 
 /// IRF520, Vishay Rev. C typical fit. Power rating is the free-air limit, 2.419 W.
@@ -178,7 +178,7 @@ fn an_irf520_turned_fully_on_and_off_for_a_second_stays_under_its_power_rating()
 }
 
 /// Vgs just above the 3.18 V threshold, so the 12 ohm load drops about half of 12 V
-/// and the MOSFET dissipates about 3 W. The window fills with that, and it warns.
+/// and the MOSFET dissipates about 3 W. The filter rises toward that, and it warns.
 #[test]
 fn an_irf520_held_half_on_warns_on_its_average_power() {
     let gate = r#"{ "value": 4.07, "unit": "V" }"#;
@@ -189,10 +189,10 @@ fn an_irf520_held_half_on_warns_on_its_average_power() {
     assert_eq!(warning["refs"][0], "#q1.p", "{warning}");
     let message = warning["message"].as_str().unwrap();
     assert!(
-        message.contains("averages") && message.contains("over the last 10.2 ms"),
+        message.contains("averages") && message.contains("with a 10.2 ms time constant"),
         "{message}"
     );
-    assert_eq!(warning["data"]["window_ps"], WINDOW_PS, "{warning}");
+    assert_eq!(warning["data"]["tau_ps"], TAU_PS, "{warning}");
     let peak = warning["data"]["peak"].as_f64().unwrap();
     let limit = warning["data"]["limit"].as_f64().unwrap();
     assert!((limit - 2.419).abs() < 1e-9, "{limit}");
@@ -247,17 +247,18 @@ fn a_resistor_at_twice_its_power_rating_warns_on_the_average() {
     let warning = &found[0];
     assert_eq!(warning["refs"][0], "#r1.p");
     assert_eq!(warning["t_ps"], 0);
-    assert_eq!(warning["data"]["window_ps"], WINDOW_PS);
+    assert_eq!(warning["data"]["tau_ps"], TAU_PS);
     let peak = warning["data"]["peak"].as_f64().unwrap();
     assert!((peak - 2.5).abs() < 1e-9, "{peak}");
     assert_eq!(
         warning["message"],
-        "#r1.p averages 2.5 W over the last 10.2 ms, over its 1.25 W rating"
+        "#r1.p averages 2.5 W with a 10.2 ms time constant, over its 1.25 W rating"
     );
 }
 
 /// 5 V onto 10 ohm is 2.5 W while the pulse is high. At 50% of 490 Hz the average is 1.25 W,
-/// over a 1 W rating. At 10% it is 0.25 W, under that rating, and the peaks are still 2.5 W.
+/// over a 1 W rating, and the filter reads it within 5% above. At 10% it is 0.25 W, under that
+/// rating, and the peaks are still 2.5 W.
 #[test]
 fn a_pulse_train_warns_only_when_its_average_power_is_over() {
     let run = |width: u64| {
@@ -297,12 +298,12 @@ fn a_pulse_train_warns_only_when_its_average_power_is_over() {
     assert_eq!(warning["refs"][0], "#r1.p");
     let message = warning["message"].as_str().unwrap();
     assert!(
-        message.contains("averages") && message.contains("over the last 10.2 ms"),
+        message.contains("averages") && message.contains("with a 10.2 ms time constant"),
         "{message}"
     );
-    assert_eq!(warning["data"]["window_ps"], WINDOW_PS);
+    assert_eq!(warning["data"]["tau_ps"], TAU_PS);
     let peak = warning["data"]["peak"].as_f64().unwrap();
-    assert!((peak - 1.25).abs() < 0.02, "{peak}");
+    assert!((1.25..1.32).contains(&peak), "{peak}");
     assert!(run(PWM_490_PS / 10).is_empty());
 }
 
@@ -315,8 +316,9 @@ fn over_ratings(session: &Session) -> Vec<Value> {
         .collect()
 }
 
-/// An ideal 5 V source rated 0.5 A, 100 uF across it held at `initial` volts, and 1 kohm.
-fn held_across_a_source(initial: f64) -> String {
+/// An ideal 5 V source rated 0.5 A on `basis`, 100 uF across it held at `initial` volts, and
+/// 1 kohm. An empty `basis` takes the source's default.
+fn held_across_a_source(initial: f64, basis: &str) -> String {
     format!(
         r#"{{
       "version": 1,
@@ -330,7 +332,7 @@ fn held_across_a_source(initial: f64) -> String {
           "kind": "voltage_source",
           "pins": {{ "p": "vcc", "n": "gnd" }},
           "voltage": {{ "value": 5.0, "unit": "V" }},
-          "ratings": {{ "current": {{ "value": 0.5, "unit": "A" }} }}
+          "ratings": {{ "current": {{ "value": 0.5, "unit": "A"{basis} }} }}
         }},
         {{
           "name": "c1",
@@ -353,29 +355,38 @@ fn held_across_a_source(initial: f64) -> String {
 
 /// A capacitor held at a voltage its source disagrees with draws 1e9 A per volt per uF for
 /// the t = 0 solve, which is the hold and no current the source carries. The source is at
-/// 5 V from the first step on and carries 5 mA, so neither a run nor a session warns.
+/// 5 V from the first step on and carries 5 mA, so neither a run nor a session warns, on a
+/// peak rating as on a sustained one.
 #[test]
 fn a_held_capacitor_that_disagrees_with_its_source_does_not_warn() {
-    for initial in [4.999, 0.0] {
-        let json = held_across_a_source(initial);
+    let bases = [
+        "",
+        r#", "basis": "peak""#,
+        r#", "basis": { "sustained": { "average": "mean", "tau": { "value": 0.001, "unit": "s" } } }"#,
+    ];
+    for (initial, basis) in [4.999, 0.0]
+        .into_iter()
+        .flat_map(|initial| bases.map(|basis| (initial, basis)))
+    {
+        let json = held_across_a_source(initial, basis);
         let found: Vec<_> = simulate(&json)
             .diagnostics()
             .iter()
             .map(|diagnostic| serde_json::to_value(diagnostic).unwrap())
             .collect();
-        assert_eq!(found, Vec::<Value>::new(), "initial {initial}");
+        assert_eq!(found, Vec::<Value>::new(), "initial {initial}{basis}");
         let netlist = orbe_engine::netlist::parse(json.as_bytes()).unwrap();
         let mut session = Session::open(netlist).unwrap();
         assert_eq!(
             over_ratings(&session),
             Vec::<Value>::new(),
-            "initial {initial}"
+            "initial {initial}{basis}"
         );
         session.advance_to(Time::from_ps(1_000_000));
         assert_eq!(
             over_ratings(&session),
             Vec::<Value>::new(),
-            "initial {initial}"
+            "initial {initial}{basis}"
         );
     }
 }
@@ -430,9 +441,9 @@ fn a_capacitor_starting_discharged_does_not_count_its_first_surge_as_a_window_of
 
 /// 1 mohm from `mid` to ground puts 2.5 W on r1, ten times its rating, and 0.5 A through the
 /// source, rated 0.2 A, from t = 0. A session lists both over now at open, with the sample and
-/// how long it would hold: r1's window rounds above 0.25 W after 1.02 ms of 2.5 W, and the
-/// source's RMS rounds above 0.2 A after (0.2005 / 0.5)^2 of the window, 1.64 ms. A run warns
-/// on the first step past each crossing.
+/// how long it would hold: r1's filter passes 0.25 W after `tau * ln(2.5 / 2.25)`, 1.07 ms, and
+/// the source's RMS passes 0.2 A after `tau * ln(0.25 / 0.21)`, 1.78 ms. A run warns on the
+/// first step past each crossing, once the reading rounds above the rating.
 #[test]
 fn a_steady_overload_from_t_0_is_over_now_at_open_and_warns_once_its_window_crosses() {
     let json = into_mid(
@@ -456,10 +467,10 @@ fn a_steady_overload_from_t_0_is_over_now_at_open_and_warns_once_its_window_cros
             (&"rating.power".into(), &"#r1.p".into())
         ]
     );
-    for (warning, sample, held_ms) in [(&now[0], 0.5, 1.63), (&now[1], 2.5, 1.02)] {
+    for (warning, sample, held_ms) in [(&now[0], 0.5, 1.78), (&now[1], 2.5, 1.07)] {
         let data = &warning["data"];
         assert_eq!(data["now"], true, "{warning}");
-        assert_eq!(data["window_ps"], WINDOW_PS);
+        assert_eq!(data["tau_ps"], TAU_PS);
         assert!(
             (data["sample"].as_f64().unwrap() / sample - 1.0).abs() < 1e-3,
             "{warning}"
@@ -473,8 +484,8 @@ fn a_steady_overload_from_t_0_is_over_now_at_open_and_warns_once_its_window_cros
 
     let run = |code| warnings(&json, code);
     for (warning, first_ms) in [
-        (&run("rating.power")[0], 1.02),
-        (&run("rating.current")[0], 1.64),
+        (&run("rating.power")[0], 1.08),
+        (&run("rating.current")[0], 1.79),
     ] {
         assert_eq!(warning["data"]["now"], false, "{warning}");
         assert_eq!(warning["data"]["held_ps"], Value::Null, "{warning}");
@@ -540,13 +551,12 @@ fn a_farad_held_at_0_v_does_not_warn_on_a_cold_load() {
     assert!(high < 1e-4, "{high}");
 }
 
-/// 1000 µF, so RC is 5 ms. The average over the first 10.2 ms is about 0.24 W, under 0.25 W,
-/// while the resistor's own power climbs past the rating. 10 µs steps keep the held-sample
-/// average within a few milliwatts of that integral. At the stop the resistor takes about
-/// 0.47 W and has been over for the last 2.04 ms, so the run lists it over now.
+/// 1000 µF, so RC is 5 ms. Through the first 10.2 ms the filter reads under 0.25 W, about
+/// 0.18 W, while the resistor's own power climbs past the rating. At the stop the resistor
+/// takes about 0.47 W and has been over for the last 2.04 ms, so the run lists it over now.
 #[test]
 fn a_1000_uf_cold_load_does_not_warn_over_its_first_window() {
-    let json = midpoint_held("0.001", WINDOW_PS, 10_000_000);
+    let json = midpoint_held("0.001", TAU_PS, 10_000_000);
     let results = simulate(&json);
     let found = power_of(&results);
     assert!(
@@ -558,15 +568,15 @@ fn a_1000_uf_cold_load_does_not_warn_over_its_first_window() {
     };
     assert_eq!(
         over_now["data"]["now"], true,
-        "warned while the average over the first 10.2 ms stays under 0.25 W: {found:?}"
+        "warned while the filter stays under 0.25 W: {found:?}"
     );
-    let window = over_now["data"]["peak"].as_f64().unwrap();
-    assert!(window > 0.23 && window < 0.25, "{window}");
+    let filter = over_now["data"]["peak"].as_f64().unwrap();
+    assert!(filter > 0.15 && filter < 0.25, "{filter}");
     assert!(
         over_now["data"]["sample"].as_f64().unwrap() > 0.4,
         "{found:?}"
     );
-    assert_eq!(over_now["data"]["peak_ps"], WINDOW_PS);
+    assert_eq!(over_now["data"]["peak_ps"], TAU_PS);
     let (_low, high) = span(results.trace().expect("a trace"), "#r1.p");
     assert!(high > 0.4, "{high}");
 }

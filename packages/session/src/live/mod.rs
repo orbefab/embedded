@@ -107,14 +107,16 @@ struct Open {
 }
 
 /// A rating over now and the same rating's window warning are two keys, so a step lists the
-/// window warning when it crosses after the rating was listed over now.
-type Key = (&'static str, Vec<String>, bool);
+/// window warning when it crosses after the rating was listed over now. A peak limit's warning
+/// on the same quantity is a third.
+type Key = (&'static str, Vec<String>, bool, bool);
 
 fn key(d: &EngineDiagnostic) -> Key {
     (
         d.code(),
         d.refs().iter().map(ToString::to_string).collect(),
         d.over_now(),
+        d.peak(),
     )
 }
 

@@ -1,7 +1,8 @@
 //! The registry a release serves: every part and Block from each release, oldest first.
 //! A record at `id@version` is the one from the oldest release that contains it. A later
 //! release does not replace those bytes. Each index row names the lowest orbe whose part
-//! formats include that record's format.
+//! formats include that record's format. A format no release reads names the next release,
+//! the patch after the newest one.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -51,6 +52,8 @@ pub fn publish(releases: &[Release]) -> Result<BTreeMap<String, Vec<u8>>, Error>
                 .or_insert_with(|| release.version.clone());
         }
     }
+    let newest_version = &releases[*order.last().expect("releases is not empty")].version;
+    let unread = next_patch(newest_version);
 
     let mut output = BTreeMap::new();
     let mut rows = Vec::new();
@@ -91,6 +94,7 @@ pub fn publish(releases: &[Release]) -> Result<BTreeMap<String, Vec<u8>>, Error>
                     item,
                     &release.registry,
                     &release.version,
+                    &unread,
                     &format_orbe,
                     &rows,
                 ));
@@ -153,13 +157,18 @@ fn orbe_for(
     item: &Item,
     registry: &Registry,
     publishing: &str,
+    unread: &str,
     format_orbe: &BTreeMap<u32, String>,
     rows: &[Row],
 ) -> String {
     if item.kind() == Kind::Part {
-        return part_format(registry, item)
-            .and_then(|format| format_orbe.get(&format).cloned())
-            .unwrap_or_else(|| publishing.to_string());
+        return match part_format(registry, item) {
+            Some(format) => format_orbe
+                .get(&format)
+                .cloned()
+                .unwrap_or_else(|| unread.to_string()),
+            None => publishing.to_string(),
+        };
     }
     let mut best = None;
     for dep in &item.head().registry_dependencies {
@@ -185,6 +194,18 @@ fn orbe_for(
     }
     best.map(|version| version.to_string())
         .unwrap_or_else(|| publishing.to_string())
+}
+
+/// The patch after `version`. A format no release reads names this, so the newest
+/// published orbe does not install that part.
+fn next_patch(version: &str) -> String {
+    let Some((head, patch)) = version.rsplit_once('.') else {
+        return version.to_string();
+    };
+    let Ok(patch) = patch.parse::<u64>() else {
+        return version.to_string();
+    };
+    format!("{head}.{}", patch + 1)
 }
 
 /// A registry `orbe registry build` wrote into `dir`.

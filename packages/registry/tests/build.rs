@@ -157,7 +157,7 @@ fn a_block_depends_on_every_part_it_runs_at_the_versions_in_the_same_build() {
     for direct in [
         "nano-board@0.2.1",
         "tactile-switch-6mm@0.2.0",
-        "resistor-axial@0.2.0",
+        "resistor-axial@0.2.1",
         "led-5mm@0.3.0",
     ] {
         assert!(deps.contains(&direct), "{direct} in {deps:?}");

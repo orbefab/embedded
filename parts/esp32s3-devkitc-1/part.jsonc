@@ -20,9 +20,9 @@
 // engine's other boards leave rail capacitors out, and the bridge model
 // does not read RSTb or VBUS.
 {
-  "format": 1,
+  "format": 5,
   "part": "esp32s3-devkitc-1",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "ESP32-S3-DevKitC-1 v1.1",
   "summary": "ESP32-S3-DevKitC-1 v1.1 with the N16R8 module. Two 1x22 headers, USB-UART on U0RXD, and the addressable RGB LED on GPIO38.",
   "tags": ["microcontroller", "esp32-s3", "usb"],
@@ -35,9 +35,9 @@
   "real": { "maker": "Espressif", "number": "ESP32-S3-DevKitC-1-N16R8", "datasheet": "ESP32-S3-DevKitC-1 v1.1 User Guide" },
   "uses": {
     "cp2102n-qfn28": "0.2.0", "esp32s3-wroom-1-n16r8": "0.2.0", "lesd5d5-sod523": "0.2.0",
-    "npn-l8050-sot23": "0.2.0", "pin-header-1x22": "0.2.0", "resistor-0603": "0.2.0",
-    "sgm2212-sot223": "0.2.0", "sk68xxmini-hs": "0.2.0", "tactile-switch-ntc013": "0.2.0",
-    "usb-micro-b": "0.2.0"
+    "npn-l8050-sot23": "0.2.1", "pin-header-1x22": "0.2.0", "resistor-0603": "0.2.0",
+    "sgm2212-sot223": "0.2.1", "sk68xxmini-hs": "0.2.1", "tactile-switch-ntc013": "0.2.0",
+    "usb-micro-b": "0.2.1"
   },
   "params": { "app": {}, "partitions": {} },
   "ground": "j2.GND",

@@ -7,7 +7,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use orbe_engine::diagnostic::{significant_ps, significant_text, while_it_is};
+use orbe_engine::diagnostic::{significant_ps, significant_text, sustained_text, while_it_is};
+use orbe_engine::netlist::Average;
 use orbe_engine::world::Quantity;
 
 use crate::condition::Unit;
@@ -866,21 +867,21 @@ fn rating_message(code: &str, message: &str, json: &Value) -> Option<String> {
             Duration::from_ps(significant_ps(held))
         ));
     }
-    Some(match data["window_ps"].as_u64() {
-        Some(window) => {
-            let (verb, rms) = if code == "rating.current" {
-                ("carries", " RMS")
+    Some(match (data["tau_ps"].as_u64(), data["average"].as_str()) {
+        (Some(tau), Some(average)) => {
+            let average = if average == "rms" {
+                Average::Rms
             } else {
-                ("averages", "")
+                Average::Mean
             };
             format!(
-                "{head} {verb} {}{rms} over the last {} ms{}, {rating}",
-                value(peak),
-                window as f64 / 1e9,
+                "{head} {} with a {} time constant{}, {rating}",
+                sustained_text(average, value(peak)),
+                Duration::from_ps(tau),
                 while_it_is(value(sample), value(peak)),
             )
         }
-        None => format!("{head} peaks at {}, {rating}", value(peak)),
+        _ => format!("{head} peaks at {}, {rating}", value(peak)),
     })
 }
 

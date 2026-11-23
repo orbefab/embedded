@@ -1,5 +1,5 @@
 {
-  "format": 1,
+  "format": 5,
   "part": "pnp-2n3906-to92",
   "version": "0.1.0",
   "title": "PNP transistor, 2N3906 (TO-92)",
@@ -23,8 +23,8 @@
     "base_emitter_capacitance": { "value": 1e-11, "unit": "F", "source": { "datasheet": { "doc": "onsemi 2N3906/D, Rev. 4", "at": "SMALL-SIGNAL CHARACTERISTICS, Cibo at VEB = 0.5 V, IC = 0, f = 1.0 MHz", "basis": "max" } } },
     "base_collector_capacitance": { "value": 4.5e-12, "unit": "F", "source": { "datasheet": { "doc": "onsemi 2N3906/D, Rev. 4", "at": "SMALL-SIGNAL CHARACTERISTICS, Cobo at VCB = 5.0 V, IE = 0, f = 1.0 MHz", "basis": "max" } } },
     "ratings": {
-      "current": { "value": 0.2, "unit": "A", "source": { "datasheet": { "doc": "onsemi 2N3906/D, Rev. 4", "at": "MAXIMUM RATINGS, IC continuous, 200 mA", "basis": "absolute_max" } } },
-      "power": { "value": 0.625, "unit": "W", "source": { "datasheet": { "doc": "onsemi 2N3906/D, Rev. 4", "at": "MAXIMUM RATINGS, PD at TA = 25 C, 625 mW", "basis": "absolute_max" } } },
+      "current": { "value": 0.2, "unit": "A", "basis": { "sustained": { "average": "rms", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } }, "source": { "datasheet": { "doc": "onsemi 2N3906/D, Rev. 4", "at": "MAXIMUM RATINGS, IC continuous, 200 mA", "basis": "absolute_max" } } },
+      "power": { "value": 0.625, "unit": "W", "basis": { "sustained": { "average": "mean", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } }, "source": { "datasheet": { "doc": "onsemi 2N3906/D, Rev. 4", "at": "MAXIMUM RATINGS, PD at TA = 25 C, 625 mW", "basis": "absolute_max" } } },
     },
   },
   "not_simulated": [

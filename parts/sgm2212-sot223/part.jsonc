@@ -1,7 +1,7 @@
 {
-  "format": 1,
+  "format": 5,
   "part": "sgm2212-sot223",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "SGM2212 3.3 V regulator, SOT-223",
   "summary": "SG Micro SGM2212-3.3XKC3G/TR, a fixed 3.3 V 800 mA LDO in SOT-223-3. Pin 1 is GND, pin 2 and the tab are VOUT, and pin 3 is VIN. Dropout on the sheet is the input-to-output gap when the output has fallen to 95 percent of nominal.",
   "tags": ["regulator", "ldo", "sot-223", "power"],
@@ -93,6 +93,7 @@
       "current": {
         "value": 0.8,
         "unit": "A",
+        "basis": "peak",
         "source": {
           "datasheet": {
             "doc": "SG Micro SGM2212, JULY 2023",
@@ -104,12 +105,14 @@
       "power": {
         "value": 0.8547008547008547,
         "unit": "W",
+        "basis": { "sustained": { "average": "mean", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } },
         "source": {
           "closed_form": {
             "note": "(125 C - 25 C) / 117 C/W. 125 C is the operating junction maximum in the electrical characteristics, and 117 C/W is the SOT-223-3 θJA."
           }
         }
-      }
+      },
+      "input_voltage": { "value": 22, "unit": "V", "source": { "datasheet": { "doc": "SG Micro SGM2212, JULY 2023", "at": "ABSOLUTE MAXIMUM RATINGS, VIN to GND, 22 V", "basis": "absolute_max" } } },
     },
     "pins": { "in": "IN", "out": "OUT", "gnd": "GND" }
   },
