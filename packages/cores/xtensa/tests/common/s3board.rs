@@ -14,6 +14,8 @@ use super::elf::Elf;
 const IRAM: Range<u32> = 0x4037_0000..0x403e_0000;
 const DRAM: Range<u32> = 0x3fc8_8000..0x3fd0_0000;
 const PERIPHERALS: Range<u32> = 0x6000_0000..0x6010_0000;
+/// The mask ROM on the instruction bus.
+const IROM: Range<u32> = 0x4000_0000..0x4006_0000;
 
 /// `USB_SERIAL_JTAG_EP1_REG` and `USB_SERIAL_JTAG_EP1_CONF_REG`.
 const USB_EP1: u32 = 0x6003_8000;
@@ -125,6 +127,11 @@ impl Board {
 }
 
 impl Bus for Board {
+    /// Instruction RAM and the mask ROM, as the S3's memory map places them.
+    fn instruction_bus(&self, addr: u32) -> bool {
+        IRAM.contains(&addr) || IROM.contains(&addr)
+    }
+
     fn fetch(&mut self, _now: Cycle, addr: u32) -> Result<u32, Exit> {
         if self.served.contains(&addr) {
             Err(Exit::Stop)
@@ -211,7 +218,7 @@ pub fn run_answering_on(
     limit: Cycle,
     mut answer: impl FnMut(&mut Core<Esp32s3>, Unimplemented) -> bool,
 ) -> Run {
-    let mut core = Core::<Esp32s3>::new();
+    let mut core = Core::<Esp32s3>::new(crate::core::RESET);
     core.set_pc(elf.entry);
     let end = format!("END {probe}\n");
     loop {

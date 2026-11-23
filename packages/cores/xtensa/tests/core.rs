@@ -4,12 +4,20 @@
 use std::ops::Range;
 
 use orbe_xtensa::{
-    Bus, Cause, Config, Core, CoreId, Cycle, Esp32, Esp32s3, Exit, Missing, Op, PagedRam, Sr, Stop,
+    Bus, Cause, Config, Core, Cycle, Esp32, Esp32s3, Exit, Missing, Op, PagedRam, Reset, Sr, Stop,
     Unimplemented, Width,
 };
 
 pub const CODE: u32 = 0x4037_0000;
 pub const RAM: u32 = 0x3fc8_8000;
+
+/// The reset the boards' first CPU takes: the PC and `VECBASE` their ROMs start from, and the
+/// `PRID` IDF reads there.
+pub const RESET: Reset = Reset {
+    pc: 0x4000_0400,
+    vecbase: 0x4000_0000,
+    prid: 0xcdcd,
+};
 
 #[derive(Clone)]
 pub struct Flat {
@@ -17,6 +25,8 @@ pub struct Flat {
     pub ram: PagedRam,
     /// RAM that loads and refuses stores.
     pub read_only: Range<u32>,
+    /// Addresses on the instruction bus.
+    pub instruction: Range<u32>,
     /// Interrupt lines that are high from the start.
     pub lines: u32,
     /// Interrupt lines that rise at a cycle and stay high.
@@ -40,6 +50,7 @@ impl Flat {
             code,
             ram: PagedRam::new(RAM, 512 * 1024),
             read_only: 0..0,
+            instruction: 0..0,
             lines: 0,
             rise: None,
             polls: 0,
@@ -49,6 +60,10 @@ impl Flat {
 }
 
 impl Bus for Flat {
+    fn instruction_bus(&self, addr: u32) -> bool {
+        self.instruction.contains(&addr)
+    }
+
     fn fetch(&mut self, _now: Cycle, addr: u32) -> Result<u32, Exit> {
         let at = addr.wrapping_sub(CODE) as usize;
         match self.code.get(at..at + 4) {
@@ -102,7 +117,7 @@ impl Bus for Flat {
 }
 
 pub fn core_at<C: Config>(pc: u32) -> Core<C> {
-    let mut core = Core::new();
+    let mut core = Core::new(RESET);
     core.set_pc(pc);
     core
 }
@@ -195,9 +210,12 @@ fn two_byte_op_before_an_unmapped_word_runs() {
 fn a_reset_app_cpu_reads_its_prid_and_counts_from_its_reset() {
     // rsr.prid a5; rsr.ccount a6.
     let mut bus = Flat::new("50eb0360ea03");
-    let mut core = Core::<Esp32s3>::reset(CoreId::App, Cycle(1000));
+    let app = Reset {
+        prid: 0xabab,
+        ..RESET
+    };
+    let mut core = Core::<Esp32s3>::reset(app, Cycle(1000));
     core.set_pc(CODE);
-    assert_eq!(core.id(), CoreId::App);
     assert_eq!(core.special(Sr::Ccount), 0);
     assert_eq!(core.run_until(&mut bus, Cycle(2000)), Stop::Bus);
     assert_eq!((core.a(5), core.a(6)), (0xabab, 1));

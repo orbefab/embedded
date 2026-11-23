@@ -4,7 +4,7 @@
 
 A microcontroller is a chip crate in `packages/socs`, such as `orbe-microchip` for the ATmega328P and `orbe-espressif` for the ESP32-S3. The chip crate holds the chip and its `bridge` module, which implements `Mcu` beside the registers it reads. A chip crate never depends on `orbe-engine`. `scripts/check.sh fast` runs `scripts/core-deps.sh`, which fails when a crate in `packages/socs` depends on `packages/engine`, or when `orbe-mcu` depends on anything but `orbe-model`.
 
-The engine keeps what the circuit sees, in `packages/engine/src/mcu/`. `mod.rs` holds the table of kinds, one row per chip crate's type. Each kind has its own file there with its netlist struct, its JSON wire type and its parse, and the outputs, watches and samples it builds from its part's pins and electrical params. The engine parses an ESP32-S3 executable and builds the chip crate's chip from it. The engine reads an ATmega328P's Intel HEX with `orbe-microchip`'s `parse_hex`. `orbe-espressif` maps the ROM by section, reading its ELF bytes with the `object` crate and keeping its own windows and refusals.
+The engine keeps what the circuit sees, in `packages/engine/src/mcu/`. `mod.rs` holds the table of kinds, one row per chip crate's type. Each kind has its own file there with its netlist struct, its JSON wire type and its parse, and the samples it builds from its part's pins and electrical params. Each file describes its pads in one `Pads`: the supply pins, the output stage and the leakage they share, and each pad's net, pull-up, pull-down and thresholds. `Pads::build` makes one output and one watch per pad from it, the same way for every kind. The engine parses an ESP32-S3 executable and builds the chip crate's chip from it. `orbe-espressif`'s `App::parse` reads the app on an ESP32-S3's flash, and the engine names its blobs. The engine reads an ATmega328P's Intel HEX with `orbe-microchip`'s `parse_hex`. `orbe-espressif` maps the ROM by section, reading its ELF bytes with the `object` crate and keeping its own windows and refusals.
 
 ## Mcu
 
@@ -15,12 +15,13 @@ A chip is its state. `Mcu` needs `Clone`, and a copy is a checkpoint. The engine
 | `USARTS` | The datasheet name of each USART it sends on. `serial.csv` names each byte's USART with it. |
 | `TWI` | Whether it has a TWI master, whose phases go to `i2c.csv`. `false` by default. |
 | `SENDS` | Whether it sends records, which go to `link.csv`. `false` by default. |
+| `WORLD` | The world quantities it reads at a sample, each when the netlist declares it. None by default. The ATmega328P's temperature sensor reads `temperature`. |
 | `run_until(limit)` | Runs from the last time it reached. Returns the first stop in `(reached, limit]` where its drives may change, it samples, or a record it sent ends, or `None` once it has done everything up to `limit`. A run split at any limit is the same run. |
 | `drive()` | One `Drive` per output, in the order the engine built its outputs. |
 | `pulled_down()` | Whether each output pulls down to the chip's own GND pin, in the order of `drive()`. Empty by default, which pulls none down. |
 | `held()` | Whether a reset holds it, which changes its own supply current. `false` by default. |
 | `input(at, levels)` | Its watches' levels from `at` on, in the order the engine built its watches. |
-| `sample(at, volts)` | The volts of its samples at a stop that asked for them. A chip that never asks keeps the default, which does nothing. |
+| `sample(at, volts, world)` | The volts of its samples at a stop that asked for them, and each `WORLD` quantity the netlist declares, as it stands just before `at`. A chip that never asks keeps the default, which does nothing. |
 | `deliver(through, sent, saw)` | Hands over each USART byte whose stop bit ended at or before `through`, as a `Frame`, and each TWI phase that ended by then, as a `Phase`. |
 | `take_sent(sent)` | Hands over each record it sent at the stop `run_until` last returned with `record` set. |
 | `in_flight(ahead, at)` | The records it started by `at` and has not ended, where the run ends at `at`. `ahead` is its copy run on from there. Empty by default. |

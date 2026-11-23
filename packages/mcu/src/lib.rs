@@ -8,7 +8,7 @@
 mod fault;
 mod sent;
 
-use orbe_model::{Drive, Stop, Time};
+use orbe_model::{Drive, Quantity, Readings, Stop, Time};
 
 pub use fault::{Fault, FlashRefusal, Note, Pc, ResetReason, Setting, Unsupported};
 pub use sent::{Sent, SentKind, SpiPins};
@@ -35,6 +35,9 @@ pub trait Mcu: Clone + Send + std::fmt::Debug + 'static {
     const TWI: bool = false;
     /// Whether it sends records, which [`take_sent`](Self::take_sent) hands over.
     const SENDS: bool = false;
+    /// The world quantities it reads at a sample, each when the scene declares it. None, unless
+    /// it says otherwise.
+    const WORLD: &'static [Quantity] = &[];
 
     /// The first time in `(reached, limit]` where the drives may change, it samples, or a record
     /// it sent ends. `None` once everything up to `limit` is done.
@@ -56,8 +59,9 @@ pub trait Mcu: Clone + Send + std::fmt::Debug + 'static {
     /// Its watches' levels from `at` on, in the order the engine built its watches.
     fn input(&mut self, at: Time, levels: &[bool]);
     /// The volts of each of its samples at its stop at `at`, which asked for them, in the order
-    /// the engine built its samples. A chip that never asks takes none.
-    fn sample(&mut self, _at: Time, _volts: &[f64]) {}
+    /// the engine built its samples, and each of its [`WORLD`](Self::WORLD) quantities the scene
+    /// declares, as it stands just before `at`. A chip that never asks takes none.
+    fn sample(&mut self, _at: Time, _volts: &[f64], _world: &Readings) {}
     /// Hands over each byte a USART sent whose stop bit ended at or before `through`, in the
     /// order they ended on each USART, and each TWI phase that ended by then, in the order they
     /// ended.

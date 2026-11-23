@@ -4,7 +4,7 @@
 use std::fmt;
 use std::marker::PhantomData;
 
-use crate::bus::{Bus, Cause, CoreId, Cycle, Exit, Width};
+use crate::bus::{Bus, Cause, Cycle, Exit, Reset, Width};
 use crate::config::Config;
 use crate::decode::{Decoded, Insn, Op};
 use crate::special::{Access, CCOMPARE, EPC, EPS, Sr};
@@ -23,8 +23,6 @@ const PS_CALLINC_SHIFT: u32 = 16;
 const PS_CALLINC: u32 = 3 << PS_CALLINC_SHIFT;
 const PS_WOE: u32 = 1 << 18;
 
-const RESET_VECTOR: u32 = 0x4000_0400;
-const RESET_VECBASE: u32 = 0x4000_0000;
 const RESET_PS: u32 = PS_EXCM | PS_INTLEVEL;
 
 const KERNEL_VECTOR: u32 = 0x300;
@@ -173,7 +171,8 @@ struct Watch {
 /// One Xtensa core of chip `C`.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Core<C: Config> {
-    id: CoreId,
+    /// What `PRID` reads.
+    prid: u32,
     /// The physical address registers. `a(n)` is `ar[(WindowBase * 4 + n) % 64]`.
     ar: [u32; 64],
     /// Indexed by [`Sr`]. `Ccount` holds `CCOUNT` minus the low 32 bits of `cycle`, and
@@ -219,29 +218,22 @@ impl<C: Config> fmt::Debug for Core<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Core")
             .field("chip", &C::NAME)
-            .field("id", &self.id)
+            .field("prid", &format_args!("{:#06x}", self.prid))
             .field("pc", &format_args!("{:#010x}", self.pc))
             .field("cycle", &self.cycle.0)
             .finish_non_exhaustive()
     }
 }
 
-impl<C: Config> Default for Core<C> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<C: Config> Core<C> {
-    /// The reset state: PC at the reset vector, `PS` with `EXCM` set and `INTLEVEL` 15,
-    /// `WindowStart` 1, `VECBASE` at its reset value, and cycle 0. The registers the ISA leaves
-    /// undefined at reset are 0.
-    pub fn new() -> Self {
+    /// The reset state: PC and `VECBASE` at `reset`'s, `PS` with `EXCM` set and `INTLEVEL` 15,
+    /// `WindowStart` 1, and cycle 0. The registers the ISA leaves undefined at reset are 0.
+    pub fn new(reset: Reset) -> Self {
         let mut core = Core {
-            id: CoreId::Pro,
+            prid: reset.prid,
             ar: [0; 64],
             sr: [0; Sr::COUNT],
-            pc: RESET_VECTOR,
+            pc: reset.pc,
             cycle: Cycle(0),
             refetch: false,
             wait: Wait::No,
@@ -262,24 +254,19 @@ impl<C: Config> Core<C> {
         };
         core.sr[Sr::Ps as usize] = RESET_PS;
         core.sr[Sr::WindowStart as usize] = 1;
-        core.sr[Sr::Vecbase as usize] = RESET_VECBASE;
+        core.sr[Sr::Vecbase as usize] = reset.vecbase;
         for i in 0..3 {
             core.arm_timer(i);
         }
         core
     }
 
-    /// `id`'s reset state with its cycle at `at` and `CCOUNT` 0.
-    pub fn reset(id: CoreId, at: Cycle) -> Self {
-        let mut core = Self::new();
-        core.id = id;
+    /// The reset state with its cycle at `at` and `CCOUNT` 0.
+    pub fn reset(reset: Reset, at: Cycle) -> Self {
+        let mut core = Self::new(reset);
         core.cycle = at;
         core.set_special(Sr::Ccount, 0);
         core
-    }
-
-    pub fn id(&self) -> CoreId {
-        self.id
     }
 
     /// `WAITI` suspended it until it takes an interrupt.
@@ -358,7 +345,7 @@ impl<C: Config> Core<C> {
     /// poll read them. `ACCHI` reads sign-extended from its 8 bits, and `PRID` is the core's.
     pub fn special(&self, sr: Sr) -> u32 {
         match sr {
-            Sr::Prid => self.id.prid(),
+            Sr::Prid => self.prid,
             Sr::Ccount => self.sr[sr as usize].wrapping_add(self.cycle.0 as u32),
             Sr::Interrupt => self.sr[sr as usize] | (self.lines & C::INTERRUPTS.extern_level),
             Sr::Acchi => self.sr[sr as usize] as u8 as i8 as u32,
@@ -864,7 +851,7 @@ impl<C: Config> Core<C> {
 
     /// Loads the bytes from `addr`, little-endian, one bus access per aligned part.
     fn load<B: Bus>(&mut self, bus: &mut B, op: Op, addr: u32, width: Width) -> Result<u32, Trap> {
-        self.guard_access(op, addr, width)?;
+        self.guard_access(&*bus, op, addr, width)?;
         if self.watching {
             self.watch_hit(addr, width, false)?;
         }
@@ -887,7 +874,7 @@ impl<C: Config> Core<C> {
         width: Width,
         value: u32,
     ) -> Result<(), Trap> {
-        self.guard_access(op, addr, width)?;
+        self.guard_access(&*bus, op, addr, width)?;
         if self.watching {
             self.watch_hit(addr, width, true)?;
         }
@@ -901,10 +888,10 @@ impl<C: Config> Core<C> {
 
     /// Instruction-bus and unaligned-sync faults are raised before any bus access, so a store
     /// writes nothing. Anything else is split, and a faulting part of that split stops.
-    fn guard_access(&self, op: Op, addr: u32, width: Width) -> Result<(), Trap> {
+    fn guard_access<B: Bus>(&self, bus: &B, op: Op, addr: u32, width: Width) -> Result<(), Trap> {
         let natural = addr.is_multiple_of(width.bytes());
         let sync = matches!(op, Op::L32AI | Op::S32RI | Op::S32C1I);
-        if C::instruction_bus(addr) {
+        if bus.instruction_bus(addr) {
             if !natural {
                 return Err(Trap::Exception(Cause::LoadStoreAlignment, Some(addr)));
             }

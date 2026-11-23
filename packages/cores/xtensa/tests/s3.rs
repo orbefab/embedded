@@ -446,16 +446,16 @@ fn placed(parts: &[(usize, &[u8])]) -> String {
     code.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// `0x40370000` and `0x40040000` sit in the instruction windows and outside the two probed
-/// addresses. An aligned byte load there is cause 3. Dropping either address from the window
-/// lets the load fault as prohibited instead.
+/// An aligned byte load from an address the bus puts on the instruction bus is cause 3, before
+/// the bus sees it.
 #[test]
-fn instruction_windows_follow_the_memory_map_past_the_probes() {
+fn a_byte_load_on_the_instruction_bus_is_cause_3() {
     let l8ui = [0x22u8, 0x03, 0x00];
     let decoded = Esp32s3::decode(&l8ui, CODE).unwrap();
     assert_eq!(Esp32s3::render(&decoded), "l8ui\ta2, a3, 0");
     for addr in [0x4037_0000, 0x4004_0000] {
         let mut bus = Flat::new("220300");
+        bus.instruction = addr..addr + 4;
         let mut core: Core<Esp32s3> = core_at(CODE);
         core.set_special(Sr::Ps, WOE);
         core.set_a(2, 0x5a);

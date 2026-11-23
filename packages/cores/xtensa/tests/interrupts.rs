@@ -237,6 +237,10 @@ fn a_waiting_core_has_a_wake_once_it_has_idled() {
 struct EventNow(Flat);
 
 impl Bus for EventNow {
+    fn instruction_bus(&self, addr: u32) -> bool {
+        self.0.instruction_bus(addr)
+    }
+
     fn fetch(&mut self, now: Cycle, addr: u32) -> Result<u32, Exit> {
         self.0.fetch(now, addr)
     }

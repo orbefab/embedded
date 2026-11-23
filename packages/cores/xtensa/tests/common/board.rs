@@ -237,7 +237,7 @@ pub fn run_probe_on(
     limit: Cycle,
     mut pieces: Option<Pieces>,
 ) -> Run {
-    let mut core = Core::<Esp32>::new();
+    let mut core = Core::<Esp32>::new(crate::core::RESET);
     core.set_pc(elf.entry);
     core.set_special(Sr::Sar, ROM_SAR);
     core.set_a(1, ROM_A1);
