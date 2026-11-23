@@ -243,7 +243,7 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "button" | "fade" | "light" | "pixels";
+export type BlockKind = "button" | "fade" | "light" | "pixels" | "serial";
 
 export interface RepoBlock {
   id: string;
@@ -269,7 +269,8 @@ export function blockKind(scene: string, id: string): BlockKind {
   if (/"world"\s*:\s*\{[^}]*"light"\s*:/.test(code)) return "light";
   if (/"btn1"\s*:/.test(code)) return "button";
   if (/"led1"\s*:/.test(code)) return "fade";
-  throw new Error(`${id} names no button, no fading LED, no light and no pixel stick`);
+  if (/"type"\s*:\s*"gy-bmp280"/.test(code)) return "serial";
+  throw new Error(`${id} names no button, no fading LED, no light, no pixel stick and no serial sensor`);
 }
 
 export async function simulatedSeconds(page: Page): Promise<number> {
@@ -289,6 +290,21 @@ export function waitSimulatedPast(page: Page, seconds: number): Promise<unknown>
     seconds,
     { timeout: 30_000 },
   );
+}
+
+const SERIAL = '[data-testid="serial"]';
+
+/** The readings a Serial block prints. That text is what the page shows for it. */
+export async function showSerial(page: Page, block: RepoBlock): Promise<void> {
+  const start = await simulatedSeconds(page);
+  await waitSimulatedPast(page, Math.max(0.05, start));
+  const strip = page.locator(SERIAL);
+  await expect(strip).toContainText("Temperature =", { timeout: 30_000 });
+  await expect(strip).toContainText("Pressure =", { timeout: 30_000 });
+  const text = await strip.innerText();
+  expect(text, `${block.id} temperature`).toMatch(/Temperature = \d+\.\d+/);
+  expect(text, `${block.id} pressure`).toMatch(/Pressure = \d+\.\d+ Pa/);
+  expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(0.05);
 }
 
 const LIGHT = '[data-testid="world-light"]';
@@ -363,6 +379,14 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
     const seen = new Set(colours.map((colour) => `${colour!.r.toFixed(3)},${colour!.g.toFixed(3)},${colour!.b.toFixed(3)}`));
     expect(seen.size, `${block.id} colours`).toBeGreaterThan(1);
     expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(0.05);
+    if (shotName !== null) {
+      await page.locator("canvas").scrollIntoViewIfNeeded();
+      await shot(page, shotName);
+    }
+    return;
+  }
+  if (block.kind === "serial") {
+    await showSerial(page, block);
     if (shotName !== null) {
       await page.locator("canvas").scrollIntoViewIfNeeded();
       await shot(page, shotName);

@@ -18,6 +18,7 @@ for (const block of repoBlocks()) {
         (kind) => {
           const scene = window.orbeViewer?.get().scene;
           if (kind === "pixels") return scene?.getObjectByName("@stick.px1")?.getObjectByName("lens") !== undefined;
+          if (kind === "serial") return document.querySelector('[data-testid="world-temperature"]') !== null;
           const led = scene?.getObjectByName("@led1")?.getObjectByName("body") !== undefined;
           const button = kind !== "button" || scene?.getObjectByName("@btn1")?.getObjectByName("stem") !== undefined;
           return led && button;
@@ -34,7 +35,7 @@ for (const block of repoBlocks()) {
 
     test("opens paused in the Worker, plays, and shows what it does", async () => {
       expect(await textOf(page, "time")).toBe("t = 0.000000 s");
-      expect(await page.locator('[data-testid="world"]').count()).toBe(block.kind === "light" ? 1 : 0);
+      expect(await page.locator('[data-testid="world"]').count()).toBe(block.kind === "light" || block.kind === "serial" ? 1 : 0);
       expect(await page.evaluate(() => !("orbeFixture" in window))).toBe(true);
       await shot(page, `${block.id}-opened`);
       await showBlock(page, block, false, null);
