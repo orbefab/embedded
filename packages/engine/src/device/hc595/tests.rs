@@ -16,13 +16,16 @@ const RCLK: usize = model::WATCH_RCLK;
 const SRCLR: usize = model::WATCH_SRCLR;
 const OE: usize = model::WATCH_OE;
 
-fn levels(ser: bool, srclk: bool, rclk: bool, srclr: bool, oe: bool) -> [bool; 5] {
-    let mut levels = [false; 5];
+const SUPPLY: usize = model::WATCH_SUPPLY;
+
+fn levels(ser: bool, srclk: bool, rclk: bool, srclr: bool, oe: bool) -> [bool; 6] {
+    let mut levels = [false; 6];
     levels[SER] = ser;
     levels[SRCLK] = srclk;
     levels[RCLK] = rclk;
     levels[SRCLR] = srclr;
     levels[OE] = oe;
+    levels[SUPPLY] = true;
     levels
 }
 
@@ -30,7 +33,7 @@ struct Host {
     core: Core,
     world: World,
     now: u64,
-    pins: [bool; 5],
+    pins: [bool; 6],
 }
 
 impl Host {
@@ -60,7 +63,7 @@ impl Host {
         self.now = to;
     }
 
-    fn set(&mut self, at: u64, pins: [bool; 5]) {
+    fn set(&mut self, at: u64, pins: [bool; 6]) {
         assert!(at >= self.now, "time moves forward");
         self.run(at);
         self.core.input(&self.world, Time::from_ps(at), &pins);
@@ -170,6 +173,25 @@ fn output_enable_releases_the_pins_and_clear_drops_qhp() {
     let cleared = settled(&mut host);
     assert_eq!(cleared[model::QHP], Drive::Low);
     assert_eq!(cleared[model::QA], Drive::High);
+}
+
+#[test]
+fn a_clock_while_the_supply_is_down_does_not_shift() {
+    let mut host = Host::new();
+    let mut pins = host.pins;
+    pins[SUPPLY] = false;
+    host.set(10_000, pins);
+    host.clock(host.now + 10_000, true);
+    // Past the shift delay, so a clock the part accepted would already be in the register.
+    host.run(host.now + 100_000);
+    pins = host.pins;
+    pins[SUPPLY] = true;
+    host.set(host.now + 10_000, pins);
+    host.latch(host.now + 100_000);
+    assert_eq!(settled(&mut host)[model::QA], Drive::Low);
+    host.clock(host.now + 100_000, true);
+    host.latch(host.now + 100_000);
+    assert_eq!(settled(&mut host)[model::QA], Drive::High);
 }
 
 #[test]

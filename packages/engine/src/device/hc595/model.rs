@@ -10,6 +10,9 @@
 //!
 //! Each delay is the typical at VCC = 4.5 V, CL = 50 pF and 25 C, section 6.7.
 //! A drive changes in `run_until`, after the edge that caused it.
+//!
+//! Below [`MIN_VCC_V`] the host releases every output, and the device ignores its
+//! inputs, so a supply that returns has not shifted.
 
 use orbe_model::{Cx, Device, Drive, Drives, Error, Levels, Params, State, Stop, Time};
 
@@ -19,7 +22,9 @@ pub const WATCH_SRCLK: usize = 1;
 pub const WATCH_RCLK: usize = 2;
 pub const WATCH_SRCLR: usize = 3;
 pub const WATCH_OE: usize = 4;
-pub const WATCHES: usize = 5;
+pub const WATCH_SUPPLY: usize = 5;
+/// The logic levels in `prev`. The supply watch is not one of them.
+const LOGIC: usize = 5;
 
 /// `QA` through `QH`, then `QHp`.
 pub const OUTPUTS: usize = 9;
@@ -37,6 +42,8 @@ pub const CLEAR_PS: u64 = 18_000;
 pub const ENABLE_PS: u64 = 15_000;
 /// `OE` high to the outputs off, tdis typical.
 pub const DISABLE_PS: u64 = 23_000;
+/// Recommended minimum supply, section 6.3. The host releases the outputs below it.
+pub const MIN_VCC_V: f64 = 2.0;
 
 /// Bit 0 is the first stage (`QA`). Bit 7 is the last (`QH` and `QHp`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,7 +52,7 @@ pub struct Hc595 {
     storage: u8,
     /// `QA`–`QH` follow `storage`. `OE` high turns them off.
     enabled: bool,
-    prev: Option<[bool; WATCHES]>,
+    prev: Option<[bool; LOGIC]>,
     /// The bit `SER` held at the rising edge, shifted in at this time.
     shift_due: Option<(Time, bool)>,
     /// The shift register captured at the rising edge, stored at this time.
@@ -95,6 +102,8 @@ impl Hc595 {
 }
 
 impl Device for Hc595 {
+    const MIN_SUPPLY_V: Option<f64> = Some(MIN_VCC_V);
+
     fn new(_params: &Params<'_>) -> Result<Hc595, Error> {
         Ok(Hc595::power_on())
     }
@@ -153,6 +162,16 @@ impl Device for Hc595 {
     }
 
     fn input(&mut self, _cx: &mut Cx, at: Time, levels: Levels) {
+        // Below the recommended minimum the part does nothing. Dropping a pending edge
+        // here does not change the drive image; the host is what releases the pins.
+        if !levels.high(WATCH_SUPPLY) {
+            self.prev = None;
+            self.shift_due = None;
+            self.latch_due = None;
+            self.clear_due = None;
+            self.oe_due = None;
+            return;
+        }
         let now = [0, 1, 2, 3, 4].map(|watch| levels.high(watch));
         let Some(prev) = self.prev else {
             self.prev = Some(now);

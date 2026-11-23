@@ -220,6 +220,16 @@ impl Core {
         }
     }
 
+    /// [`orbe_model::Device::MIN_SUPPLY_V`], or `None` for a core that drives at any supply.
+    pub(crate) fn min_supply_v(&self) -> Option<f64> {
+        match *self {
+            Core::Device(ref core) => core.min_supply_v(),
+            Core::Mcu(_) => None,
+            #[cfg(test)]
+            Core::Script(_) => None,
+        }
+    }
+
     /// What its device draws from its supply, as at its last stop. Only a device draws so.
     pub(crate) fn draw(&self) -> Draw {
         match *self {
@@ -420,8 +430,14 @@ pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
     }
 }
 
+/// Whether `vcc` over `gnd` is below the supply at which `core` still drives.
+pub(crate) fn supply_released(core: &Core, vcc: f64, gnd: f64) -> bool {
+    core.min_supply_v().is_some_and(|min| vcc - gnd < min)
+}
+
 /// The drops are sources, so they scale. A device's draw is linearised at `x`, the iterate:
-/// its current there, and its slope as a conductance.
+/// its current there, and its slope as a conductance. A device below its minimum supply
+/// stamps no stage: its [`Core::drive`] image stays, and the pins are released.
 pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, x: &Solution, source_scale: f64) {
     let drive = core.drive();
     debug_assert_eq!(drive.len(), chip.outputs.len());
@@ -440,6 +456,9 @@ pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, x: &Solution, so
         if let Some(ohm) = output.leakage {
             sys.conductance(output.pin, output.vcc, 1.0 / ohm);
             sys.conductance(output.pin, output.gnd, 1.0 / ohm);
+        }
+        if supply_released(core, x.voltage(output.vcc), x.voltage(output.gnd)) {
+            continue;
         }
         if let Some(ohm) = output.pull_down
             && pulled_down.get(n) == Some(&true)

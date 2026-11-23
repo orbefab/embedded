@@ -130,10 +130,17 @@ pub(crate) fn chip(part: PartId, dev: &Hc595) -> Chip {
         fall: against(pin, dev.input_threshold.low.si.get()),
     };
     let watched = [SER, SRCLK, RCLK, SRCLR, OE];
+    // High once the supply is at the recommended minimum. The comparator is strict, so the
+    // offset is the next value down and exactly 2 V reads high.
+    let mut watches: Vec<Watch> = watched.into_iter().map(watch).collect();
+    watches.push(Watch::comparator(Signal {
+        terms: vec![(Node::from(pins[VCC]), 1.0), (Node::from(pins[GND]), -1.0)],
+        offset: model::MIN_VCC_V.next_down(),
+    }));
     Chip {
         part: Some(part),
         outputs,
-        watches: watched.into_iter().map(watch).collect(),
+        watches,
         signals: watched
             .into_iter()
             .enumerate()

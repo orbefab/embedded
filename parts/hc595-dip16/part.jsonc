@@ -45,7 +45,7 @@
   },
   "not_simulated": [
     { "what": "power-on state", "why": "The shift register and the storage register power on cleared, and the outputs follow that while OE is low. A real part's power-on state is undefined." },
-    { "what": "supply range", "why": "The part runs at the circuit's VCC. Section 6.3 recommends 2 V to 6 V, and section 6.1 allows -0.5 V to 7 V. Neither limit is a voltage rating." },
+    { "what": "supply ceiling", "why": "The outputs and QHp release, and the inputs are ignored, while VCC is below 2 V, the section 6.3 recommended minimum. At 2 V they drive. Section 6.3's 6 V recommended maximum and section 6.1's 7 V absolute maximum are not voltage ratings. A pin above VCC does not charge VCC: the model has no clamp diode." },
     { "what": "thresholds at 2 V", "why": "The thresholds are 0.3 VCC and 0.7 VCC, the 4.5 V and 6 V columns of section 6.3. At 2 V the sheet's limits are 0.5 V and 1.5 V, 0.25 VCC and 0.75 VCC." },
     { "what": "output curve", "why": "Each stage is the section 6.5 typical resistance at VCC = 4.5 V and 25 C, QA–QH at 6 mA and QH' at 4 mA, and it does not saturate. A shorted output therefore reads more current than a real pin. rating.current reads the model's current." },
     { "what": "timing spread", "why": "SRCLK moves QHp after 17 ns, RCLK moves QA–QH after 17 ns, SRCLR clears after 18 ns, and OE enables in 15 ns and disables in 23 ns. Those are the section 6.7 typicals at VCC = 4.5 V, CL = 50 pF and 25 C. They do not move with VCC or load. Setup time, hold time and minimum pulse width are not checked." }
