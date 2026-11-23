@@ -21,15 +21,15 @@ A folder already at `parts/<id>/` is `part_exists` and nothing is written. The m
 
 Addressable LEDs: `neopixel-stick-8`. Eight from three pins: `hc595-dip16`, Block `nano-shift-leds`.
 
-From a 5 V board to a 3.3 V module: `bss138-level-shifter`.
+5 V to 3.3 V logic: `bss138-level-shifter`.
 
 ## Blocks
 
-`orbe add <block>` installs a Block. It downloads the parts the scene names into `parts/`, nesting each part's own parts inside that folder, then writes `scene.jsonc`, `firmware/`, `tests/` and `README.md`. It does not write `block.jsonc`. A part folder the scene names that is already there is `part_exists`. The message names those folders, and the hint is `orbe add <block>`. Remove them and run it again. Another `scene.jsonc` is `scene_exists`. A file with other bytes is `file_exists`. Either refusal writes nothing. A file with the Block's bytes is kept when those part folders are not there yet.
+`orbe add <block>` installs a Block. It downloads the parts the scene names into `parts/`, nesting each part's own parts inside that folder, then writes `scene.jsonc`, `firmware/`, `tests/` and `README.md`. It does not write `block.jsonc`. A part folder the scene names that is already there is `part_exists`. The message names those folders, and the hint is the same `orbe add <block>`. Remove them and run it again. Another `scene.jsonc` is `scene_exists`. A file with other bytes is `file_exists`. Either refusal writes nothing. A file with the Block's bytes is kept when those part folders are not there yet.
 
 ## Finding a part
 
-`orbe add`, `orbe search` and `orbe part` need curl. When the registry is unreachable, each prints `registry` and names the URL.
+`orbe add`, `orbe search` and `orbe part` need curl. When the registry cannot be reached, each prints `registry` and names the URL.
 
 `orbe search <words>` lists parts whose id, title, maker, number, summary or tags hold every word, then Blocks whose id, title, description or categories do. An exact id comes first, then a part whose every word is a whole word of its id, title or tags, then the rest. Ids break ties. `orbe search <words> --json` puts parts in `data.parts` and Blocks in `data.blocks`. With no words, `orbe search` lists every listed part by its first category, then the Blocks. A part the registry's `unlisted` names is left out of search and of the site's list. `orbe part <id>` and `orbe add <id>` still read it. A part file's `listed` field does not decide that.
 
