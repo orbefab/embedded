@@ -17,6 +17,12 @@ pub(super) enum Bound {
         index: usize,
         want: Light,
     },
+    /// `@relay closed` or `@relay open`.
+    Contact {
+        label: String,
+        signal: usize,
+        closed: bool,
+    },
     /// `@led1.brightness > 2mA`, the average forward current.
     Brightness {
         label: String,
@@ -53,6 +59,14 @@ impl Open {
             Condition::SerialContains(text) => Bound::SerialContains(text.as_str().to_string()),
             Condition::State(r, want) => {
                 match (self.resolve(r)?, want) {
+                    (Target::Part(path), Want::Closed | Want::Open) => {
+                        let signal = self.contact_signal(&path)?;
+                        Bound::Contact {
+                            label: path,
+                            signal,
+                            closed: *want == Want::Closed,
+                        }
+                    }
                     (Target::Part(path), want) if want.light().is_some() => {
                         let index = self.light.require(&self.refs, &path)?;
                         Bound::Light {
@@ -102,7 +116,7 @@ impl Open {
                         return Err(Error::new(
                             Code::NoReading,
                             format!("{r} cannot be {}", want.as_str()),
-                            "a part with `lit` and `dim` readings is lit, dim or off, and a pin on a chip's net is high or low",
+                            "a part with `lit` and `dim` readings is lit, dim or off, a relay contact is closed or open, and a pin on a chip's net is high or low",
                         ));
                     }
                 }
@@ -253,6 +267,18 @@ impl Open {
                         current(glow.amperes),
                         t(glow.over_ps)
                     ),
+                )
+            }
+            Bound::Contact {
+                label,
+                signal,
+                closed,
+            } => {
+                let level = self.level_before_now(*signal);
+                let is_closed = level == Level::High;
+                (
+                    is_closed == *closed,
+                    format!("{label} {}", if is_closed { "closed" } else { "open" }),
                 )
             }
             Bound::Level { pin, signal, want } => {

@@ -14,13 +14,14 @@ use std::path::Path;
 
 use live::{common, orbe};
 
-const BLOCKS: [&str; 7] = [
+const BLOCKS: [&str; 8] = [
     "devkitc-button-led",
     "nano-button-led",
     "uno-button-led",
     "nano-led-fade",
     "nano-light-comparator",
     "nano-neopixel-stick",
+    "nano-relay-led",
     "nano-shift-leds",
 ];
 

@@ -1,0 +1,44 @@
+{
+  "part": "relay-srd-05vdc-sl-c",
+  "source": {
+    "script": "model.py",
+    "sha256": "cfc25fab1026c65855108afdd6d3216e052491c3954f3d826cdc53e5cc34d199",
+    "bytes": 1663
+  },
+  "files": {
+    "relay-srd-05vdc-sl-c.glb": {
+      "sha256": "4ddd7d4517e1cd5c7a2dfd0c15da9a662fcb0dd970a3a1df4cd69bd1c05140f6",
+      "bytes": 3056
+    },
+    "relay-srd-05vdc-sl-c.anchors.json": {
+      "sha256": "646de2a9300c0bd6e10bfe85ac0786bc5e3f7a8dfb570c4fcc41b7785a84a63b",
+      "bytes": 622
+    }
+  },
+  "box": {
+    "min": [-9.5, -7.75, -3],
+    "max": [9.5, 7.75, 15.5]
+  },
+  "kept_nodes": ["pin-1", "pin-2", "pin-3", "pin-4", "pin-5"],
+  "draw_calls": 6,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 5,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 6,
+      "primitives_out": 6
+    }
+  }
+}

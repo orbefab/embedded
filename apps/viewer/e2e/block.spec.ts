@@ -17,6 +17,10 @@ for (const block of repoBlocks()) {
       await page.waitForFunction(
         (kind) => {
           const scene = window.orbeViewer?.get().scene;
+          if (kind === "relay") {
+            return scene?.getObjectByName("@relay.led")?.getObjectByName("body") !== undefined
+              && scene?.getObjectByName("@led1")?.getObjectByName("body") !== undefined;
+          }
           if (kind === "pixels") return scene?.getObjectByName("@stick.px1")?.getObjectByName("lens") !== undefined;
           if (kind === "rgb") {
             return scene?.getObjectByName("@board.led")?.getObjectByName("lens") !== undefined

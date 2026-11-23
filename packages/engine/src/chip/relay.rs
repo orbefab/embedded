@@ -9,8 +9,10 @@ use crate::netlist::Rating;
 use crate::netlist::Value;
 use crate::netlist::json::AMPERE;
 use crate::netlist::json::PinMap;
+use crate::netlist::json::WireRating;
 use crate::netlist::json::WireValue;
 use crate::netlist::json::resolve_pins;
+use crate::netlist::json::resolve_rating;
 use crate::netlist::json::resolve_value;
 use serde::Deserialize;
 
@@ -117,6 +119,10 @@ pub struct Relay {
     pub on_resistance: Value,
     /// Ohm, greater than 0.
     pub off_resistance: Value,
+    /// Ampere on the coil. `None` when the part states no coil-current rating.
+    pub max_current: Option<Rating>,
+    /// Watt on the coil. `None` when the part states no coil-power rating.
+    pub max_power: Option<Rating>,
 }
 
 impl Relay {
@@ -139,6 +145,17 @@ pub(crate) struct WireRelay {
     drop_out_current: WireValue,
     on_resistance: WireValue,
     off_resistance: WireValue,
+    #[serde(default)]
+    ratings: WireRelayRatings,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct WireRelayRatings {
+    #[serde(default)]
+    current: Option<WireRating>,
+    #[serde(default)]
+    power: Option<WireRating>,
 }
 
 pub(crate) fn resolve_relay(ctx: ParseCtx<'_>, wire: WireRelay) -> Option<Relay> {
@@ -158,6 +175,14 @@ pub(crate) fn resolve_relay(ctx: ParseCtx<'_>, wire: WireRelay) -> Option<Relay>
     let drop_out_current = positive("drop_out_current", AMPERE, wire.drop_out_current);
     let on_resistance = positive("on_resistance", "ohm", wire.on_resistance);
     let off_resistance = positive("off_resistance", "ohm", wire.off_resistance);
+    let max_current = resolve_rating(
+        part_ref,
+        "ratings.current",
+        AMPERE,
+        wire.ratings.current,
+        out,
+    );
+    let max_power = resolve_rating(part_ref, "ratings.power", "W", wire.ratings.power, out);
     if let (Some(pull), Some(drop)) = (&pull_in_current, &drop_out_current)
         && drop.si.get() >= pull.si.get()
     {
@@ -177,6 +202,8 @@ pub(crate) fn resolve_relay(ctx: ParseCtx<'_>, wire: WireRelay) -> Option<Relay>
         drop_out_current: drop_out_current?,
         on_resistance: on_resistance?,
         off_resistance: off_resistance?,
+        max_current: max_current?,
+        max_power: max_power?,
     })
 }
 
@@ -221,7 +248,12 @@ impl Kind for Relay {
         TWO_PIN
     }
     fn ratings(&self) -> (Option<(Quantity, &Rating)>, Option<&Rating>) {
-        (None, None)
+        (
+            self.max_current
+                .as_ref()
+                .map(|rating| (Quantity::I, rating)),
+            self.max_power.as_ref(),
+        )
     }
     fn observe(&self, probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {
         let coil = [self.pins[Relay::COIL_A], self.pins[Relay::COIL_B]];

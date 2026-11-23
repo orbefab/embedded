@@ -27,6 +27,7 @@ fn each_block_passes() {
             "nano-led-fade",
             "nano-light-comparator",
             "nano-neopixel-stick",
+            "nano-relay-led",
             "nano-shift-leds",
             "uno-button-led",
         ]

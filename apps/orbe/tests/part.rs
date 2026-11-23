@@ -318,6 +318,7 @@ fn search_finds_a_block_and_part_describes_it() {
         "nano-led-fade",
         "nano-light-comparator",
         "nano-neopixel-stick",
+        "nano-relay-led",
         "nano-shift-leds",
         "uno-button-led",
     ] {

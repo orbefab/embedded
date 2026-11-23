@@ -243,7 +243,7 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "button" | "fade" | "light" | "pixels" | "shift" | "rgb";
+export type BlockKind = "button" | "fade" | "light" | "pixels" | "shift" | "rgb" | "relay";
 
 export interface RepoBlock {
   id: string;
@@ -265,6 +265,7 @@ export function blockKind(scene: string, id: string): BlockKind {
     .split("\n")
     .map((line) => line.replace(/\/\/.*$/, ""))
     .join("\n");
+  if (/"type"\s*:\s*"relay-module-1ch"/.test(code)) return "relay";
   if (/"type"\s*:\s*"neopixel-stick-8"/.test(code)) return "pixels";
   if (/"type"\s*:\s*"hc595-dip16"/.test(code)) return "shift";
   if (/"type"\s*:\s*"esp32s3-devkitc-1"/.test(code)) return "rgb";
@@ -370,6 +371,35 @@ async function showRgb(page: Page, block: RepoBlock, canvas: boolean, shotName: 
   await page.mouse.up();
 }
 
+function relayLit(page: Page, ref: string, above: boolean, full: boolean): Promise<unknown> {
+  return page.waitForFunction(
+    ({ above, ref, full }) => {
+      const glow = window.orbeViewer.get().scene.getObjectByName(ref)?.getObjectByName("body")?.material?.emissiveIntensity ?? 0;
+      const on = full ? 0.5 : 0.15;
+      return above ? glow > on : glow < 0.05;
+    },
+    { above, ref, full },
+    { timeout: 120_000 },
+  );
+}
+
+/** The Nano toggles the module once a second. The indicator and the load LED follow. */
+async function showRelay(page: Page, id: string, shotName: string | null): Promise<void> {
+  const indicator = "@relay.led";
+  await relayLit(page, indicator, true, false);
+  await relayLit(page, "@led1", true, true);
+  expect(await ledGlow(page, indicator), `${id} indicator`).toBeGreaterThan(0.15);
+  expect(await ledGlow(page), `${id} load`).toBeGreaterThan(0.5);
+  await relayLit(page, indicator, false, false);
+  await relayLit(page, "@led1", false, true);
+  expect(await ledGlow(page, indicator), `${id} indicator off`).toBeLessThan(0.05);
+  expect(await ledGlow(page), `${id} load off`).toBeLessThan(0.05);
+  if (shotName !== null) {
+    await page.locator("canvas").scrollIntoViewIfNeeded();
+    await shot(page, shotName);
+  }
+}
+
 /** Play, require simulated time to move, and check the behaviour the scene declares. */
 export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, shotName: string | null): Promise<void> {
   await page.locator("canvas").scrollIntoViewIfNeeded();
@@ -379,6 +409,10 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
   }
   // The site is already playing when its page opens, so measure from here, not from t = 0.
   const start = await simulatedSeconds(page);
+  if (block.kind === "relay") {
+    await showRelay(page, block.id, shotName);
+    return;
+  }
   if (block.kind === "fade") {
     await page.evaluate(() => {
       window.orbeGlowSpan = undefined;
