@@ -287,9 +287,9 @@ fn refused(json: &str) -> Diagnostic {
     };
     assert_eq!(
         orbe_engine::simulate(&netlist).diagnostics(),
-        std::slice::from_ref(&diagnostic)
+        std::slice::from_ref(&*diagnostic)
     );
-    diagnostic
+    *diagnostic
 }
 
 #[ignore = "full tier"]
@@ -1244,18 +1244,26 @@ fn an_input_keeps_a_rating_and_its_first_time() {
         ],
     );
     let mut session = opened(&json);
-    let before = session.diagnostics();
-    let crossing = rating_at(&before, "rating.current").expect("over at t = 0");
-    assert_eq!(crossing, 0);
-    assert!(peak(&before, "rating.current") > 0.03);
+    // The operating point at t = 0 is no sample, so the rating crosses at the first step.
+    assert_eq!(session.diagnostics(), []);
     assert_eq!(
         session.advance_to(Time::from_ps(1_000_000)),
         Status::Running
     );
     let running = session.diagnostics();
-    for stamp in before.iter().map(kept) {
-        assert!(running.iter().map(kept).any(|later| later == stamp));
-    }
+    let crossing = rating_at(&running, "rating.current").expect("over by 1 us");
+    assert!(crossing > 0);
+    assert!(peak(&running, "rating.current") > 0.03);
+    let mut earlier = opened(&json);
+    earlier.advance_to(Time::from_ps(crossing - 1));
+    assert_eq!(earlier.diagnostics(), [], "a step before {crossing} ps");
+    // The LED's power is over now while the source is on, and not once it is off.
+    let power_now = |found: &[Diagnostic]| {
+        found
+            .iter()
+            .any(|d| d.code() == "rating.power" && d.over_now())
+    };
+    assert!(power_now(&running), "{running:?}");
     session
         .apply(&Input {
             part: Name::new("v1").unwrap(),
@@ -1264,7 +1272,7 @@ fn an_input_keeps_a_rating_and_its_first_time() {
         })
         .unwrap();
     let landed = session.diagnostics();
-    for stamp in running.iter().map(kept) {
+    for stamp in running.iter().filter(|d| !d.over_now()).map(kept) {
         assert!(
             landed.iter().map(kept).any(|later| later == stamp),
             "lost {stamp:?} after the input"
@@ -1272,10 +1280,11 @@ fn an_input_keeps_a_rating_and_its_first_time() {
     }
     assert_eq!(session.advance_to(Time::from_ps(stop)), Status::Stopped);
     let ended = session.diagnostics();
-    for stamp in landed.iter().map(kept) {
+    for stamp in landed.iter().filter(|d| !d.over_now()).map(kept) {
         assert!(ended.iter().map(kept).any(|later| later == stamp));
     }
-    assert_eq!(rating_at(&ended, "rating.current"), Some(0));
+    assert_eq!(rating_at(&ended, "rating.current"), Some(crossing));
+    assert!(!power_now(&ended), "{ended:?}");
 }
 
 fn diagnostic_fixture(name: &str) -> Vec<u8> {
@@ -1409,7 +1418,13 @@ fn a_nine_volt_led_transient_matches_its_folder() {
     );
     let codes: Vec<_> = found.iter().map(Diagnostic::code).collect();
     assert!(codes.contains(&"rating.current"), "{codes:?}");
-    assert!(codes.contains(&"rating.power"), "{codes:?}");
+    // 1 us fills little of a power window, so each power rating is listed over now.
+    let over_now: Vec<_> = found
+        .iter()
+        .filter(|d| d.code() == "rating.power" && d.over_now())
+        .map(|d| d.refs()[0].to_string())
+        .collect();
+    assert_eq!(over_now, ["#led1.p", "#r1.p"], "{codes:?}");
     assert!(found.iter().all(|d| d.code() != "trace.row_interpolated"));
     assert!(found.iter().all(|d| d.severity() == Severity::Warning));
 }

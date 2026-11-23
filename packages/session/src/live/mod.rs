@@ -106,10 +106,16 @@ struct Open {
     light: light::Log,
 }
 
-type Key = (&'static str, Vec<String>);
+/// A rating over now and the same rating's window warning are two keys, so a step lists the
+/// window warning when it crosses after the rating was listed over now.
+type Key = (&'static str, Vec<String>, bool);
 
 fn key(d: &EngineDiagnostic) -> Key {
-    (d.code(), d.refs().iter().map(ToString::to_string).collect())
+    (
+        d.code(),
+        d.refs().iter().map(ToString::to_string).collect(),
+        d.over_now(),
+    )
 }
 
 impl Live {
@@ -583,9 +589,11 @@ impl Open {
     }
 
     /// The engine's diagnostics, the fault, and each rating the probe is over that the engine
-    /// has not yet found on an accepted step.
+    /// has not yet found on an accepted step. A rating over now is the probe's, not the last
+    /// accepted step's.
     fn findings(&self, probe: &Probe) -> Vec<EngineDiagnostic> {
         let mut found = self.engine.diagnostics();
+        found.retain(|diagnostic| !diagnostic.over_now());
         let known: BTreeSet<Key> = found.iter().map(key).collect();
         for over in self.engine.over_ratings(probe) {
             if !known.contains(&key(&over)) {

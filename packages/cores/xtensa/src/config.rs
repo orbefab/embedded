@@ -68,11 +68,6 @@ pub trait Config: Copy + Eq + fmt::Debug + 'static {
         false
     }
 
-    /// Instruction RAM or instruction ROM, where an unaligned or sub-word data access faults.
-    fn instruction_bus(_addr: u32) -> bool {
-        false
-    }
-
     /// An `l32ai`, `s32ri` or `s32c1i` that is not word-aligned raises `LoadStoreAlignment`
     /// instead of stopping.
     fn sync_unaligned_excepts() -> bool {
@@ -255,15 +250,6 @@ impl Config for Esp32s3 {
     /// read while `INTLEVEL` is not below `ICOUNTLEVEL`.
     fn icount_read_lag() -> bool {
         true
-    }
-
-    /// `iram l32 +=01` is cause 9 at `40378dc1`, `iram l16u +=00` is cause 3, `iram l8 +=01` is
-    /// cause 3, and `irom l32 +=01` is cause 9 at `40000401`. The board probed `0x40378dc0` and
-    /// `0x40000400`. The windows around those two addresses come from the memory map.
-    /// `dram l32 +=01` and `drom l32 +=01` complete, so data RAM and data ROM are not in
-    /// this range.
-    fn instruction_bus(addr: u32) -> bool {
-        matches!(addr, 0x4037_0000..0x403e_0000 | 0x4000_0000..0x4006_0000)
     }
 
     /// `dram l32ai +=01` is cause 9 at `3fcb0101` and the words stay as they were. `dram s32ri +=02`

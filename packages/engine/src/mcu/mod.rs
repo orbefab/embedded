@@ -14,11 +14,13 @@ mod report;
 use std::sync::Arc;
 
 use orbe_mcu::{Frame, Mcu as _, Note, Phase, Sent, SentKind};
-use orbe_model::{Drive, Stop, Time};
+use orbe_model::{Drive, Readings, Stop, Time};
 
-use crate::active::{Chip, Output, Takes};
+use crate::active::{Chip, Output, Stage, Takes};
 use crate::link::{Record, RecordKind, SpiNets};
-use crate::netlist::{NetId, PartId};
+use crate::mna::Node;
+use crate::netlist::{NetId, PartId, Threshold};
+use crate::output_stage::OutputStage;
 use crate::watch::{Signal, Watch};
 
 pub use atmega328p::{Atmega328p, Atmega328pRatings, Firmware, Fuses};
@@ -77,6 +79,16 @@ impl<M: orbe_mcu::Mcu> Host<M> {
         Some(stop)
     }
 
+    fn sample(&mut self, world: &crate::world::World, at: Time, volts: &[f64]) {
+        let readings = M::WORLD.iter().fold(Readings::NONE, |readings, &quantity| {
+            match world.before(quantity, at) {
+                Some(value) => readings.with(quantity, value),
+                None => readings,
+            }
+        });
+        self.mcu.sample(at, volts, &readings);
+    }
+
     fn drain_records(&mut self, through: Time, sent: impl FnMut(Record)) {
         let ended = self.records.partition_point(|record| record.end <= through);
         self.records.drain(..ended).for_each(sent);
@@ -117,6 +129,73 @@ fn record(nets: &[NetId], sent: Sent, seq: u64) -> Record {
                 net: nets[output],
             },
         },
+    }
+}
+
+/// A chip's pads as its part wires them: what every pad shares, and each pad.
+pub(crate) struct Pads<'a> {
+    pub(crate) vcc: NetId,
+    pub(crate) gnd: NetId,
+    pub(crate) output: &'a OutputStage,
+    /// Ohm. Every pad's to `vcc` and again to `gnd`, in every drive state.
+    pub(crate) leakage: f64,
+    pub(crate) pads: Vec<Pad<'a>>,
+}
+
+/// One pad with a net.
+pub(crate) struct Pad<'a> {
+    pub(crate) net: NetId,
+    /// Ohm.
+    pub(crate) pull_up: f64,
+    /// Ohm. `None` on a pad that never pulls down.
+    pub(crate) pull_down: Option<f64>,
+    /// The fractions of its supply it reads a level at.
+    pub(crate) threshold: &'a Threshold,
+}
+
+impl Pads<'_> {
+    /// One output and one watch per pad, in its order. A pad drives through the output stage
+    /// from `vcc` and into `gnd`, and reads high above `threshold.high` of its supply and low
+    /// below `threshold.low`.
+    pub(crate) fn build(&self) -> (Vec<Output>, Vec<Watch>) {
+        let stage = |drop: &crate::netlist::Value, resistance: &crate::netlist::Value| Stage {
+            drop: drop.si.get(),
+            resistance: resistance.si.get(),
+        };
+        let high = stage(&self.output.high_drop, &self.output.high_resistance);
+        let low = stage(&self.output.low_drop, &self.output.low_resistance);
+        let outputs = self
+            .pads
+            .iter()
+            .map(|pad| Output {
+                pin: pad.net,
+                vcc: self.vcc,
+                gnd: self.gnd,
+                high,
+                low,
+                pull_up: Some(pad.pull_up),
+                pull_down: pad.pull_down,
+                leakage: Some(self.leakage),
+            })
+            .collect();
+        // V(pin) - f * V(VCC) - (1 - f) * V(GND): the pin against a fraction of its own supply.
+        let against = |net, fraction: f64| Signal {
+            terms: vec![
+                (Node::from(net), 1.0),
+                (Node::from(self.vcc), -fraction),
+                (Node::from(self.gnd), fraction - 1.0),
+            ],
+            offset: 0.0,
+        };
+        let watches = self
+            .pads
+            .iter()
+            .map(|pad| Watch {
+                rise: against(pad.net, pad.threshold.high.si.get()),
+                fall: against(pad.net, pad.threshold.low.si.get()),
+            })
+            .collect();
+        (outputs, watches)
     }
 }
 
@@ -237,15 +316,10 @@ impl Mcu {
         each!(self, host => host.mcu.held())
     }
 
-    /// The volts of its samples at `at`. The ATmega328P's §24.8 sensor also reads the world's
-    /// temperature there, when the scene declares one, and its 25 °C default when not.
+    /// The volts of its samples at `at`, and each world quantity it reads that the scene
+    /// declares.
     pub(crate) fn sample(&mut self, world: &crate::world::World, at: Time, volts: &[f64]) {
-        if let Mcu::Atmega328p(host) = self
-            && let Some(celsius) = world.before(crate::world::Quantity::Temperature, at)
-        {
-            host.mcu.set_temperature_c(celsius);
-        }
-        each!(self, host => host.mcu.sample(at, volts))
+        each!(self, host => host.sample(world, at, volts))
     }
 
     pub(crate) fn input(&mut self, at: Time, levels: &[bool]) {
@@ -259,6 +333,10 @@ impl Mcu {
         saw: impl FnMut(Phase),
     ) {
         each!(self, host => host.mcu.deliver(through, sent, saw))
+    }
+
+    pub(crate) fn answered(&mut self, at: Time, miso: &[u8]) {
+        each!(self, host => host.mcu.answered(at, miso))
     }
 
     pub(crate) fn records(&self) -> &[Record] {

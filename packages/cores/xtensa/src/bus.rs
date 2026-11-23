@@ -1,21 +1,11 @@
 //! What the core asks of its SoC. The core knows no SoC and owns no memory.
 
-/// Which of a chip's two cores, by the `PRID` it reads.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum CoreId {
-    Pro,
-    App,
-}
-
-impl CoreId {
-    /// `0xCDCD` on the PRO CPU and `0xABAB` on the APP CPU. IDF v5.5.5,
-    /// `components/xtensa/include/xtensa_context.h`.
-    pub const fn prid(self) -> u32 {
-        match self {
-            CoreId::Pro => 0xcdcd,
-            CoreId::App => 0xabab,
-        }
-    }
+/// What a core holds at reset that its chip sets: the PC, `VECBASE`, and what `PRID` reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Reset {
+    pub pc: u32,
+    pub vecbase: u32,
+    pub prid: u32,
 }
 
 /// A core's cycle on its own clock.
@@ -103,6 +93,13 @@ pub trait Bus {
     /// every address its `store` refuses, since `s32c1i` loads first.
     fn check_store(&mut self, _now: Cycle, _addr: u32) -> Result<(), Exit> {
         Ok(())
+    }
+    /// Whether `addr` is on the instruction bus, where only an aligned word load or store goes.
+    /// The core raises `LoadStoreAlignment` for an unaligned access there, and `LoadStoreError`
+    /// for a sub-word access or an `l32ai`, `s32ri` or `s32c1i`, before it reaches the bus. The
+    /// default is no address.
+    fn instruction_bus(&self, _addr: u32) -> bool {
+        false
     }
     /// The levels of the interrupt lines at `now`, one bit per interrupt number. The core reads
     /// the bits of the external level, edge and NMI interrupts before an instruction when this

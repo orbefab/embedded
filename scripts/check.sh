@@ -110,7 +110,7 @@ engine_poll() {
   cargo clippy -p orbe-xtensa -p orbe-espressif -p orbe-engine --all-targets --locked \
     --features orbe-xtensa/poll-skip-check -- -D warnings
   rust_tests -p orbe-xtensa -p orbe-espressif --features orbe-xtensa/poll-skip-check
-  rust_tests -p orbe-engine --test circuit -E 'test(/^runs::/)' --features orbe-xtensa/poll-skip-check
+  rust_tests -p orbe-engine --test circuit -E 'test(/^runs::/)' --features orbe-espressif/poll-skip-check
 }
 
 engine_wasm() {

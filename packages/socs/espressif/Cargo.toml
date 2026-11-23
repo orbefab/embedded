@@ -13,5 +13,9 @@ orbe-mcu.workspace = true
 orbe-model.workspace = true
 object.workspace = true
 
+[features]
+# The core's `poll-skip-check`, for a build that reaches the core only through this crate.
+poll-skip-check = ["orbe-xtensa/poll-skip-check"]
+
 [lints]
 workspace = true

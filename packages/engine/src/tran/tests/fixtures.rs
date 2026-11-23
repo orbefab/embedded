@@ -61,7 +61,7 @@ pub(super) fn transient(netlist: &Netlist) -> Transient {
 
 /// 1 V through 1 kohm into 1 pF, and a 1 kohm switch across it that closes at 1 us.
 /// The capacitor then discharges with a 0.5 ns time constant. `bleed` adds 10 ohm
-/// across the source, rated 1 mW.
+/// across the source, rated 1 uW. Its 0.1 W crosses that over the window by 0.102 us.
 pub(super) fn fast_discharge(bleed: bool) -> Netlist {
     let bleeder = if bleed {
         r#"{
@@ -69,7 +69,7 @@ pub(super) fn fast_discharge(bleed: bool) -> Netlist {
               "kind": "resistor",
               "pins": { "a": "vcc", "b": "gnd" },
               "resistance": { "value": 10.0, "unit": "ohm" },
-              "ratings": { "power": { "value": 0.001, "unit": "W" } }
+              "ratings": { "power": { "value": 1e-6, "unit": "W" } }
             },"#
     } else {
         ""

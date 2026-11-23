@@ -197,6 +197,7 @@ fn skills_list_and_get_print_text_and_json_and_name_the_skills_on_a_typo() {
         [
             "core",
             "arduino",
+            "esp32",
             "parts",
             "scenes",
             "breadboards",
@@ -227,7 +228,7 @@ fn skills_list_and_get_print_text_and_json_and_name_the_skills_on_a_typo() {
     assert_eq!(typo.code, 2);
     assert_eq!(
         typo.stderr,
-        "error[usage]: no skill named `cor`\n  hint: the skills are core, arduino, parts, scenes, breadboards, sessions-and-time, tests, ratings, errors, page, not-simulated\n"
+        "error[usage]: no skill named `cor`\n  hint: the skills are core, arduino, esp32, parts, scenes, breadboards, sessions-and-time, tests, ratings, errors, page, not-simulated\n"
     );
     let typo = runtime
         .orbe(here, &["skills", "get", "cor", "--json"])

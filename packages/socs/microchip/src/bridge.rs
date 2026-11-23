@@ -4,7 +4,7 @@
 //! and notes.
 
 use orbe_mcu::{Fault, Frame, I2cPhase, Mcu, Note, Pc, Phase, Setting, Unsupported};
-use orbe_model::{Drive, Stop, Time};
+use orbe_model::{Drive, Quantity, Readings, Stop, Time};
 
 use crate::{Channel, Cpu, FuseBytes, I2cNote, PinDrive, Port, Refused, Timeline};
 
@@ -145,11 +145,6 @@ impl Bridge {
         self.timeline.cpu()
     }
 
-    /// The die temperature the §24.8 sensor reads from here on.
-    pub fn set_temperature_c(&mut self, celsius: f64) {
-        self.timeline.set_temperature_c(celsius as f32);
-    }
-
     /// The last oscillator cycle at or before `at`.
     fn cycle(&self, at: Time) -> u64 {
         u64::try_from(u128::from(at.as_ps()) * u128::from(self.clock_hz) / 1_000_000_000_000)
@@ -178,6 +173,7 @@ impl Bridge {
 impl Mcu for Bridge {
     const USARTS: &'static [&'static str] = &["USART0"];
     const TWI: bool = true;
+    const WORLD: &'static [Quantity] = &[Quantity::Temperature];
 
     #[inline]
     fn run_until(&mut self, limit: Time) -> Option<Stop> {
@@ -226,8 +222,12 @@ impl Mcu for Bridge {
         self.cpu().pin_read_at(pin).map(|cycle| self.time(cycle))
     }
 
-    /// ADC0 to ADC7, `AVCC`, and `AREF`, each against the analog GND.
-    fn sample(&mut self, _at: Time, volts: &[f64]) {
+    /// ADC0 to ADC7, `AVCC`, and `AREF`, each against the analog GND. The §24.8 sensor reads
+    /// the world's temperature when the scene declares one, and its 25 °C default when not.
+    fn sample(&mut self, _at: Time, volts: &[f64], world: &Readings) {
+        if let Some(celsius) = world.get(Quantity::Temperature) {
+            self.timeline.set_temperature_c(celsius as f32);
+        }
         let v = |k: usize| volts[k] as f32;
         self.timeline.sample(std::array::from_fn(v), v(8), v(9));
     }

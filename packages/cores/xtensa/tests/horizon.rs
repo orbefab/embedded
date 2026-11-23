@@ -11,8 +11,8 @@ use crate::core::{CODE, core_at};
 
 const WOE: u32 = 1 << 18;
 const LINE2: u32 = 1 << 19;
-const RAM: u32 = 0x3ffb_0000;
-const DEVICE: u32 = 0x6001_3000;
+const RAM: u32 = 0x2010_0000;
+const DEVICE: u32 = 0x5001_3000;
 const STATUS: u32 = DEVICE + 4;
 
 struct Device {
@@ -111,7 +111,7 @@ fn a_load_that_raises_a_line_is_seen_at_the_next_step() {
     let mut core = setup(DEVICE);
     core.run_until(&mut bus, Cycle(4));
     assert_eq!(core.special(Sr::Epc2), CODE + 3, "taken after the load");
-    assert_eq!(core.pc(), 0x4000_0100 + 0x40 * 2);
+    assert_eq!(core.pc(), 0x4020_0100 + 0x40 * 2);
     // A check build reads the lines on the steps this one skips.
     #[cfg(not(feature = "poll-skip-check"))]
     assert_eq!(
@@ -159,7 +159,7 @@ fn a_store_that_raises_a_line_is_seen_at_the_next_step() {
     let mut core = setup(DEVICE);
     core.run_until(&mut bus, Cycle(4));
     assert_eq!(core.special(Sr::Epc2), CODE + 3, "taken after the store");
-    assert_eq!(core.pc(), 0x4000_0100 + 0x40 * 2);
+    assert_eq!(core.pc(), 0x4020_0100 + 0x40 * 2);
 }
 
 /// A run that stops on the step of the read never asks when the lines can change.

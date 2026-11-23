@@ -1,6 +1,6 @@
 use orbe_model::Time;
 
-use crate::netlist::{Analysis, Model, Netlist, Transient};
+use crate::netlist::{Analysis, Netlist, Transient};
 
 use std::mem::size_of;
 
@@ -305,7 +305,7 @@ pub enum Refused {
     Op,
     /// `solver.too_large`, or the operating point at t = 0 failed to settle or gave a quantity
     /// that is not finite.
-    Failed(Diagnostic),
+    Failed(Box<Diagnostic>),
     /// The bytes `open_json` read are not a valid netlist.
     Invalid(Vec<Diagnostic>),
 }
@@ -378,47 +378,6 @@ pub(crate) struct StartFailure {
     pub(crate) warnings: Vec<Diagnostic>,
 }
 
-/// A held capacitor's branch current above this is a t = 0 surge, not a settled point a
-/// rating window should take as given. The ATmega's leakage bound, 5 V / 5.5 MΩ, stays under it.
-const HOLD_SURGE_A: f64 = 1e-4;
-
-/// Whether a capacitor held at `initial` carries more than [`HOLD_SURGE_A`] at the t = 0 solve.
-fn hold_surge(circuit: &Circuit, solution: &Solution) -> bool {
-    circuit.netlist.parts().any(|(id, part)| {
-        let Model::Capacitor(capacitor) = &part.model else {
-            return false;
-        };
-        capacitor.initial.is_some()
-            && solution.get(circuit.layout.branch_row(id, 0)).abs() > HOLD_SURGE_A
-    })
-}
-
-/// The DC point with every capacitor open, warmed from the real operating point and the
-/// chips already settled. `None` when that solve fails. The run still starts.
-fn dc_row(
-    circuit: &Circuit,
-    columns: &Columns,
-    chips: &[chip::State],
-    cores: &[active::Core],
-    warm: &Iterate,
-) -> Option<Vec<Finite>> {
-    let conditions = Conditions {
-        capacitors_open: true,
-        chips,
-        cores,
-        ..Conditions::NOMINAL
-    };
-    let converged = newton(circuit, None, &conditions, warm.clone(), op::OP_BUDGET).ok()?;
-    observe::observe(
-        circuit,
-        columns,
-        &converged.iterate.solution,
-        Time::ZERO,
-        Side::Before,
-    )
-    .ok()
-}
-
 impl Session {
     /// Solves the operating point at t = 0 and the step after it, and keeps no trace. The step
     /// after t = 0 can fail, and then the session it returns has faulted.
@@ -436,7 +395,7 @@ impl Session {
         let transient = transient(&netlist)?;
         let columns = Columns::new(&netlist);
         Session::start(netlist, &transient, Vec::new(), budget, columns, None)
-            .map_err(|failure| Refused::Failed(failure.error))
+            .map_err(|failure| Refused::Failed(Box::new(failure.error)))
     }
 
     /// Solves t = 0 and records it when `rows` is set, then solves the step after it. Fails only
@@ -486,26 +445,9 @@ impl Session {
         if rows.is_some() {
             actives.keep_shown();
         }
-        let mut ratings = Ratings::new(&circuit.netlist, &circuit.actives, &columns, Timing::Run);
-        // A held capacitor's t = 0 current is the hold, not a settled DC point. When that
-        // current is a surge, each window is filled from the t = 0 value and the DC point
-        // with every capacitor open, and the two that differ take the smaller. A surge then
-        // counts only from t = 0 on, and a higher DC point does not warn for a load the
-        // circuit has not reached. The ATmega's leakage, 5 V / 5.5 MΩ, is not a surge, and
-        // that window stays the operating point.
-        if hold_surge(&circuit, &start.iterate.solution) && ratings.averages() {
-            match dc_row(
-                &circuit,
-                &columns,
-                &start.chips,
-                actives.cores(),
-                &start.iterate,
-            ) {
-                Some(steady) => ratings.prefill_dc(Time::ZERO, &steady, &row, actives.cores()),
-                None => ratings.prefill_empty(Time::ZERO),
-            }
-        }
-        ratings.sample(Time::ZERO, &row, actives.cores());
+        // The t = 0 row is no rating sample. A capacitor held at `initial` draws what its hold
+        // takes there, which no part carries. The first accepted step is the first sample.
+        let ratings = Ratings::new(&circuit.netlist, &circuit.actives, &columns, Timing::Run);
         let inputs = Inputs::new(&circuit.netlist, &circuit.actives);
         let record = rows
             .map(|rows| Record::start(transient, &columns, rows, &row, &signals, &logic))
@@ -614,7 +556,9 @@ impl Session {
     ///
     /// Static warnings come first in that file's order, each with `t_ps` null. One
     /// `rating.current` or `rating.power` follows for each rated quantity that has gone
-    /// over. Its `t_ps` is the first accepted step over. `peak` and `peak_ps` run through the
+    /// over, and one for each windowed rating over now at the last accepted step, so a run
+    /// that stops before a held overload fills its window still names it. Its `t_ps` is the
+    /// first accepted step over. `peak` and `peak_ps` run through the
     /// last accepted step. `over_ps` runs through that step, not to `now`. A step that is over
     /// adds its time when the next step is accepted, so a quantity first over on the last
     /// accepted step reads 0. The fault that ends a run is [`Self::fault`].
@@ -622,27 +566,30 @@ impl Session {
     /// has those rows.
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         let mut found = self.warnings.clone();
-        found.extend(self.ratings.findings());
+        found.extend(self.ratings.now(None));
         found.extend_from_slice(self.inputs.findings());
         found.extend(self.actives.warnings(&self.circuit, self.accepted()));
         crate::run_folder::sort_diagnostics(&mut found);
         found
     }
 
-    /// Each rating `probe` is over at its time alone, as a `rating.*` warning with no duration.
-    /// A chip's pin ratings are checked only between accepted steps, where the probe was
-    /// solved with the drive the cores now hold. At an accepted step [`Self::diagnostics`]
-    /// already has them, from the drive that step was solved with.
+    /// Each `rating.*` warning through `probe`, and each windowed rating over now there, as
+    /// one whose `held_ps` is set. Between accepted steps the probe is a sample, solved with
+    /// the drive the cores now hold, and it is not kept. At an accepted step the warnings are
+    /// that step's. At t = 0 the only accepted row is the operating point, which is no
+    /// sample, so the warnings are those of the step after it, the first sample. A session
+    /// that faulted there has none.
     pub fn over_ratings(&self, probe: &Probe<'_>) -> Vec<Diagnostic> {
-        let between = matches!(
-            &self.state,
-            State::Running { accepted, .. } if probe.at() > accepted.at
-        );
-        self.ratings.point(
-            probe.at(),
-            probe.values(),
-            between.then(|| self.actives.cores()),
-        )
+        let cores = self.actives.cores();
+        match &self.state {
+            State::Running { accepted, .. } if probe.at() > accepted.at => {
+                self.ratings.now(Some((probe.at(), probe.values(), cores)))
+            }
+            State::Running { accepted, next, .. } if accepted.at == Time::ZERO => {
+                self.ratings.now(Some((next.at, &next.row, cores)))
+            }
+            _ => self.ratings.now(None),
+        }
     }
 
     /// The error that ended a faulted session. `None` while it runs and once it stops.
@@ -851,7 +798,7 @@ impl Session {
             unreachable!("a recorded run finishes once it has ended");
         };
         diagnostics.extend(self.warnings);
-        diagnostics.extend(self.ratings.findings());
+        diagnostics.extend(self.ratings.now(None));
         diagnostics.extend_from_slice(self.inputs.findings());
         diagnostics.extend(self.actives.warnings(&self.circuit, at));
         let (mut observations, mut trace) =
@@ -1208,6 +1155,7 @@ impl Session {
                     return self.ended(at, row, End::Fault(fault));
                 }
             };
+            self.ratings.restarted();
             self.actives.input(circuit, at, &levels, &held.levels);
             let step = &converged.iterate.solution;
             let segment = continued(segment, accepted.iterate.solution, step).across(

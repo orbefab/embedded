@@ -7,7 +7,7 @@ mod registry_env;
 
 use std::fs;
 
-use live::{common, failed, orbe, project, replies};
+use live::{common, failed, orbe, project, replies, replies_in};
 
 /// Every Block's tests pass where it sits in the repo, reading the `parts/` beside `blocks/`.
 #[test]
@@ -264,6 +264,88 @@ fn a_tantalum_on_nano_vin_stays_quiet_near_zero_and_warns_when_reversed() {
         "reversed c1.v {cap} V, VIN {vin} V\n{}",
         reversed.stdout
     );
+}
+
+/// A button on 5V through 22 ohm puts 0.989 W on a 0.25 W resistor while it is pressed.
+fn pressed_overload(test: &str) -> tempfile::TempDir {
+    let dir = project(test);
+    fs::write(
+        dir.path().join("scene.jsonc"),
+        r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "btn1": { "type": "tactile-switch-6mm" },
+    "r1": { "type": "resistor-axial", "resistance": "22" }
+  },
+  "wires": [["nano.5V", "btn1.a"], ["btn1.b", "r1.a"], ["r1.b", "nano.GND"]]
+}"#,
+    )
+    .unwrap();
+    dir
+}
+
+/// Each rating warning a step lists: its code, ref, `t_ps` and data.
+fn rating_changes(step: &serde_json::Value) -> Vec<(String, String, u64, serde_json::Value)> {
+    step["data"]["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|change| change["kind"] == "diagnostic")
+        .map(|change| &change["diagnostic"])
+        .map(|d| {
+            (
+                d["code"].as_str().unwrap().to_string(),
+                d["refs"][0].as_str().unwrap().to_string(),
+                d["t_ps"].as_u64().unwrap(),
+                d["data"].clone(),
+            )
+        })
+        .collect()
+}
+
+/// Pressed at 50 ms, the resistor is over its rating now. Its 10.2 ms average reaches 0.25 W
+/// only after (0.2505 / 0.989) of the window, 2.58 ms, so the step to 2 ms lists it over now
+/// and `expect no diagnostics` fails. The next step lists the window's warning beside the
+/// sample.
+#[test]
+fn an_overload_that_starts_mid_run_is_over_now_before_its_window_warns() {
+    const MS: u64 = 1_000_000_000;
+    let failing =
+        pressed_overload("open\nstep 50ms\npress @btn1\nstep 2ms\nexpect no diagnostics\n");
+    let run = orbe(failing.path(), &["test", "--json"]);
+    let entry = run.json()["data"]["tests"][0].clone();
+    assert_eq!(entry["error"]["code"], "expect_failed", "{}", run.stdout);
+    assert_eq!(run.code, 1);
+
+    let replies = replies_in(&pressed_overload(
+        "open\nstep 50ms\nexpect no diagnostics\npress @btn1\nstep 2ms\nstep 5ms\n",
+    ));
+    let pressed = replies[3]["data"]["landed_ps"].as_u64().unwrap();
+    assert!((50 * MS..50 * MS + 1_000).contains(&pressed), "{pressed}");
+    let [(code, part, t_ps, now)] = rating_changes(&replies[4]).try_into().unwrap();
+    assert_eq!((code.as_str(), part.as_str()), ("rating.power", "#r1.p"));
+    assert_eq!(t_ps, pressed);
+    assert_eq!(now["now"], true, "{now}");
+    assert!(
+        (now["sample"].as_f64().unwrap() - 0.989).abs() < 1e-3,
+        "{now}"
+    );
+    assert!(now["peak"].as_f64().unwrap() < 0.25, "{now}");
+    // Listed at the step's first 1 ms slice, when the window holds 1 ms of 0.989 W.
+    let held = now["held_ps"].as_u64().unwrap();
+    assert!(held.abs_diff(1_578_000_000) < 20_000_000, "{held}");
+
+    let [(code, part, t_ps, window)] = rating_changes(&replies[5]).try_into().unwrap();
+    assert_eq!((code.as_str(), part.as_str()), ("rating.power", "#r1.p"));
+    assert_eq!(window["now"], false, "{window}");
+    assert!(
+        (window["sample"].as_f64().unwrap() - 0.989).abs() < 1e-3,
+        "{window}"
+    );
+    assert!(window["peak"].as_f64().unwrap() > 0.25, "{window}");
+    let crossing = pressed + 2_583_000_000;
+    assert!(t_ps >= crossing && t_ps < crossing + MS, "{t_ps}");
 }
 
 #[test]

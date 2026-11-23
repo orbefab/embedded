@@ -163,6 +163,10 @@ impl<B: Bus> Straight<B> {
 }
 
 impl<B: Bus> Bus for Straight<B> {
+    fn instruction_bus(&self, addr: u32) -> bool {
+        self.bus.instruction_bus(addr)
+    }
+
     fn fetch(&mut self, now: Cycle, addr: u32) -> Result<u32, Exit> {
         self.bus.fetch(now, addr)
     }
