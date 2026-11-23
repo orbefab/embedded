@@ -347,6 +347,9 @@ pub enum Diagnostic {
     },
     /// The run accepted `limit` steps and had not reached its stop.
     SolverStepLimit { at: Time, limit: u64 },
+    /// The linear solves toward the step after `at`, the last accepted step, took more than
+    /// `limit` multiply-adds.
+    SolverStepWork { at: Time, limit: u64 },
     /// The chips kept changing state for `rounds` solves at one time. `chips` changed in the last.
     ChipUnsettled {
         at: Time,
@@ -613,6 +616,7 @@ impl Diagnostic {
             Diagnostic::SolverNonFinite { .. } => "solver.nonfinite",
             Diagnostic::SolverTooLarge { .. } => "solver.too_large",
             Diagnostic::SolverStepLimit { .. } => "solver.step_limit",
+            Diagnostic::SolverStepWork { .. } => "solver.step_work",
             Diagnostic::SolverConvergence { .. } => "solver.convergence",
             Diagnostic::ChipUnsettled { .. } => "chip.unsettled",
             Diagnostic::ChipProtocol { .. } => "chip.protocol",
@@ -671,6 +675,7 @@ impl Diagnostic {
             | Diagnostic::SolverNonFinite { .. }
             | Diagnostic::SolverTooLarge { .. }
             | Diagnostic::SolverStepLimit { .. }
+            | Diagnostic::SolverStepWork { .. }
             | Diagnostic::SolverConvergence { .. }
             | Diagnostic::ChipUnsettled { .. }
             | Diagnostic::ChipUnsupportedInstruction { .. }
@@ -693,6 +698,7 @@ impl Diagnostic {
             | Diagnostic::SolverNonFinite { at, .. }
             | Diagnostic::SolverTooLarge { at, .. }
             | Diagnostic::SolverStepLimit { at, .. }
+            | Diagnostic::SolverStepWork { at, .. }
             | Diagnostic::SolverConvergence { at, .. }
             | Diagnostic::ChipUnsettled { at, .. }
             | Diagnostic::ChipProtocol { at, .. }
@@ -778,6 +784,7 @@ impl Diagnostic {
             | Diagnostic::ChipUnmodeledRegister { part, .. } => vec![part.clone()],
             Diagnostic::SolverTooLarge { .. }
             | Diagnostic::SolverStepLimit { .. }
+            | Diagnostic::SolverStepWork { .. }
             | Diagnostic::TraceTooLarge { .. }
             | Diagnostic::TraceRowInterpolated { .. } => Vec::new(),
             Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
@@ -1167,9 +1174,12 @@ impl Diagnostic {
             }
             Diagnostic::SolverTooLarge {
                 unknowns, limit, ..
-            } => format!("{unknowns} unknowns exceeds the dense solver limit of {limit}"),
+            } => format!("{unknowns} unknowns exceeds the solver limit of {limit}"),
             Diagnostic::SolverStepLimit { limit, .. } => format!(
                 "the run accepted {limit} steps, its limit; dense switch or source schedules cost steps, not rows"
+            ),
+            Diagnostic::SolverStepWork { limit, .. } => format!(
+                "one step took more than {limit} solver operations, its limit; the circuit is too large or too stiff to step"
             ),
             Diagnostic::SolverConvergence {
                 at,
@@ -1717,7 +1727,10 @@ impl Diagnostic {
             Diagnostic::SolverTooLarge {
                 unknowns, limit, ..
             } => serde_json::json!({ "limit": limit, "unknowns": unknowns }),
-            Diagnostic::SolverStepLimit { limit, .. } => serde_json::json!({ "limit": limit }),
+            Diagnostic::SolverStepLimit { limit, .. }
+            | Diagnostic::SolverStepWork { limit, .. } => {
+                serde_json::json!({ "limit": limit })
+            }
             Diagnostic::SolverConvergence {
                 iterations,
                 gmin,

@@ -12,8 +12,8 @@ use crate::name::Ref;
 use crate::active::{self, Actives};
 use crate::chip;
 use crate::ladder::{self, Next, Rung};
-use crate::mna::Memo;
-use crate::newton::{Circuit, Conditions, Failure, Iterate, Offender, Side, newton};
+use crate::mna::Solver;
+use crate::newton::{Circuit, Conditions, Failure, Iterate, Side, newton};
 use crate::observe::{self, Columns};
 use crate::ratings::{Ratings, Timing};
 use crate::watch::Levels;
@@ -50,7 +50,7 @@ fn solve(
     let cores = Actives::power_on(&circuit);
     let settled = settle(
         &circuit,
-        None,
+        &mut Solver::new(&circuit.layout),
         Conditions::NOMINAL,
         start,
         circuit.power_on(),
@@ -84,7 +84,7 @@ pub(crate) struct Settled {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn settle(
     circuit: &Circuit,
-    mut memo: Option<&mut Memo>,
+    solver: &mut Solver,
     base: Conditions<'_>,
     start: Iterate,
     chips: Vec<chip::State>,
@@ -102,7 +102,7 @@ pub(crate) fn settle(
             cores,
             ..base
         };
-        let iterate = climb(circuit, memo.as_deref_mut(), conditions, start, |_| budget)?;
+        let iterate = climb(circuit, solver, conditions, start, |_| budget)?;
         let levels = circuit.watches.levels(&iterate.solution, prior.as_ref());
         let next = circuit.react(&chips, prior.as_ref().unwrap_or(&levels), &levels);
         if next == chips {
@@ -132,7 +132,7 @@ pub(crate) fn settle(
 /// The ladder driver. `budget` gives each rung's Newton budget, so a test can make a rung fail.
 pub(crate) fn climb(
     circuit: &Circuit,
-    mut memo: Option<&mut Memo>,
+    solver: &mut Solver,
     base: Conditions<'_>,
     start: Iterate,
     budget: impl Fn(Rung) -> u32,
@@ -148,13 +148,7 @@ pub(crate) fn climb(
             Some(iterate) if rung.warm() => iterate.clone(),
             _ => start.clone(),
         };
-        let converged = match newton(
-            circuit,
-            memo.as_deref_mut(),
-            &rung.conditions(base),
-            from,
-            budget(rung),
-        ) {
+        let converged = match newton(circuit, solver, &rung.conditions(base), from, budget(rung)) {
             Ok(converged) => {
                 iterations += converged.iterations;
                 match rung {
@@ -171,16 +165,13 @@ pub(crate) fn climb(
                     unknown: circuit.layout.describe(&circuit.netlist, row),
                 });
             }
+            Err(Failure::NonFinite { row }) => {
+                return Err(Diagnostic::SolverNonFinite {
+                    at: base.at,
+                    unknown: circuit.layout.describe(&circuit.netlist, row),
+                });
+            }
             Err(Failure::Stalled(stall)) => {
-                // A linear circuit stays non-finite on every rung.
-                if let Offender::NonFinite(_) = stall.offender
-                    && circuit.linear
-                {
-                    return Err(Diagnostic::SolverNonFinite {
-                        at: base.at,
-                        unknown: stall.offender.describe(circuit),
-                    });
-                }
                 iterations += stall.iterations;
                 offender = Some(stall.offender);
                 false
@@ -215,7 +206,7 @@ mod tests {
 
     use super::*;
     use crate::mna::{SOLVES, Solution};
-    use crate::newton::{Converged, History, Integration, Method};
+    use crate::newton::{Converged, History, Integration};
 
     fn example(name: &str) -> Vec<u8> {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -240,7 +231,7 @@ mod tests {
     fn climb_op(circuit: &Circuit, budget: impl Fn(Rung) -> u32) -> Result<Iterate, Diagnostic> {
         climb(
             circuit,
-            None,
+            &mut Solver::new(&circuit.layout),
             Conditions::NOMINAL,
             Iterate::initial(circuit),
             budget,
@@ -349,7 +340,7 @@ mod tests {
         };
         let converged = newton(
             &circuit,
-            None,
+            &mut Solver::new(&circuit.layout),
             &conditions,
             Iterate::initial(&circuit),
             OP_BUDGET,
@@ -370,7 +361,14 @@ mod tests {
         let circuit = Circuit::new(parse(&example(name))).unwrap();
         let start = Iterate::initial(&circuit);
         let before = solves();
-        let converged = newton(&circuit, None, &Conditions::NOMINAL, start, OP_BUDGET).unwrap();
+        let converged = newton(
+            &circuit,
+            &mut Solver::new(&circuit.layout),
+            &Conditions::NOMINAL,
+            start,
+            OP_BUDGET,
+        )
+        .unwrap();
         (converged, solves() - before)
     }
 
@@ -404,7 +402,7 @@ mod tests {
         let mut circuit = Circuit::new(parse(netlist.as_bytes())).unwrap();
         let v1 = circuit.netlist.part_id(&Name::new("v1").unwrap()).unwrap();
         let h_ps = 100_000_000;
-        let mut memo = Memo::default();
+        let mut memo = Solver::new(&circuit.layout);
         let mut previous = Solution::zeros(circuit.layout.size());
         let mut vout = Vec::new();
         let mut memo_solves = [0; 3];
@@ -420,10 +418,10 @@ mod tests {
             let step = Conditions {
                 at,
                 history: History::Step(Integration {
-                    method: Method::BackwardEuler,
-                    stiff: &[],
                     h_ps,
+                    coefficients: [1.0, -1.0, 0.0],
                     previous: &previous,
+                    before: None,
                 }),
                 ..Conditions::NOMINAL
             };
@@ -433,16 +431,17 @@ mod tests {
                     junctions: Vec::new(),
                 };
                 let before = solves();
-                let warm = newton(
+                let warm =
+                    newton(&circuit, &mut memo, conditions, start.clone(), OP_BUDGET).unwrap();
+                memo_solves[usize::from(k >= 100) + usize::from(k >= 150)] += solves() - before;
+                let cold = newton(
                     &circuit,
-                    Some(&mut memo),
+                    &mut Solver::new(&circuit.layout),
                     conditions,
-                    start.clone(),
+                    start,
                     OP_BUDGET,
                 )
                 .unwrap();
-                memo_solves[usize::from(k >= 100) + usize::from(k >= 150)] += solves() - before;
-                let cold = newton(&circuit, None, conditions, start, OP_BUDGET).unwrap();
                 assert_eq!(bits(&warm), bits(&cold), "at step {k}");
                 assert_eq!(warm.iterations, cold.iterations, "at step {k}");
                 warm
@@ -480,7 +479,7 @@ mod tests {
         };
         let converged = newton(
             &circuit,
-            None,
+            &mut Solver::new(&circuit.layout),
             &conditions,
             Iterate::initial(&circuit),
             OP_BUDGET,

@@ -202,12 +202,15 @@ pub(super) fn backward_euler(v_src: f64, v0: f64, h_ps: u64, g_load: f64) -> f64
     (g_series * v_src + c_over_h * v0) / (g_series + g_load + c_over_h)
 }
 
-/// The trapezoidal rule for that RC, from `v0` and the capacitor current `i0`.
-pub(super) fn trapezoidal(v_src: f64, v0: f64, i0: f64, h_ps: u64, g_load: f64) -> f64 {
+/// Variable-step BDF2 for that RC, from `v1` at the step's start and `v0` one step of `h0_ps`
+/// before it.
+pub(super) fn bdf2(v_src: f64, (v0, v1): (f64, f64), h0_ps: u64, h_ps: u64, g_load: f64) -> f64 {
     let h = h_ps as f64 * 1e-12;
+    let w = h_ps as f64 / h0_ps as f64;
+    let [a0, a1, a2] = [(1.0 + 2.0 * w) / (1.0 + w), -(1.0 + w), w * w / (1.0 + w)];
     let g_series = 1.0 / 1000.0;
-    let two_c_over_h = 2e-9 / h;
-    (g_series * v_src + two_c_over_h * v0 + i0) / (g_series + g_load + two_c_over_h)
+    let c_over_h = 1e-9 / h;
+    (g_series * v_src - c_over_h * (a1 * v1 + a2 * v0)) / (g_series + g_load + a0 * c_over_h)
 }
 
 /// A session on the grid, opened with `chips` beside the netlist's.

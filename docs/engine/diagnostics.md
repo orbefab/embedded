@@ -298,13 +298,13 @@ Parse checks it, so the netlist is refused and nothing solves. An ideal source a
 
 ## solver.singular
 
-Severity `error`. Refs is the unknown the zero pivot names, a net or a part. `t_ps` is 0 for the operating point. In a transient it is the end of the step that failed, the probe's time for a probe locating a chip event, or the restart's time for the restart solve after a switch edge, a source jump or a chip drive change.
+Severity `error`. Refs is the unknown the elimination found no pivot for, a net or a part: every entry left in its column is zero, or within the rounding of the sums that made it. `t_ps` is 0 for the operating point. In a transient it is the end of the step that failed, the probe's time for a probe locating a chip event, or the restart's time for the restart solve after a switch edge, a source jump or a chip drive change.
 
 The message is `singular matrix at {ref}`.
 
 `data` is `{}`.
 
-A voltage source whose two pins are on one net never gets here. Parse refuses it as [net.short](#netshort). Two voltage sources in parallel, set to different voltages, are singular. With `v1` at 5 V and `v2` at 3 V, both from `vin` to `gnd`, the ref is `#v2`.
+A voltage source whose two pins are on one net never gets here. Parse refuses it as [net.short](#netshort). Two voltage sources in parallel, set to different voltages, are singular. With `v1` at 5 V and `v2` at 3 V, both from `vin` to `gnd`, the ref is `#v2`, with or without a diode beside them.
 
 ## solver.nonfinite
 
@@ -314,15 +314,15 @@ The message is `non-finite number at {ref}`.
 
 `data` is `{}`.
 
-In a circuit with no diode, LED or zener, a solution component that is not finite names that unknown. With one, the fallback ladder retries instead, and a ladder that runs out reports `solver.convergence`. An observed `ib`, `ic`, `id`, `iin`, `iout`, `i`, `v`, or `p` that is not finite names the part. A 1e200 V source across 1 ohm overflows `p` on the resistor.
+A stamped value, a factor or a solution component that is not finite names that unknown, in a linear circuit or a nonlinear one alike. No change of gmin or source scale makes it finite, so no fallback retries it. A 1e200 V source across 1e-300 ohm overflows the solution at `#net.vin`, with or without a diode after the resistor. An observed `ib`, `ic`, `id`, `iin`, `iout`, `i`, `v`, or `p` that is not finite names the part. A 1e200 V source across 1 ohm overflows `p` on the resistor.
 
 ## solver.too_large
 
 Severity `error`. No refs. `t_ps` is 0 for the operating point.
 
-The message is `{unknowns} unknowns exceeds the dense solver limit of {limit}`.
+The message is `{unknowns} unknowns exceeds the solver limit of {limit}`.
 
-`data` holds `limit` and `unknowns`. `limit` is 4096. The solver checks the count before it allocates the dense matrix, at t = 0, so `observations.json` is `{}`.
+`data` holds `limit` and `unknowns`. `limit` is 4096. The solver checks the count before it allocates any system, at t = 0, so `observations.json` is `{}`.
 
 ## solver.convergence
 
@@ -351,7 +351,7 @@ The restart solve runs the same ladder, with every capacitor held at its voltage
 Newton did not converge at {ref} after {iterations} iterations in the restart solve at {t_ps} ps; source stepping reached {source_scale}
 ```
 
-A fallback that succeeds is not reported. Its answer converged at nominal conditions, the same as plain Newton's. A singular matrix at any step ends the run as `solver.singular`.
+A fallback that succeeds is not reported. Its answer converged at nominal conditions, the same as plain Newton's. A singular matrix at any step ends the run as `solver.singular`, and a value that is not finite as `solver.nonfinite`.
 
 In a transient, a step whose Newton solve stalls is halved and retried, down to 1 ps. When the 1 ps step stalls too, the code is reported with `t_ps` at the last accepted time, which is also the trace's `end_ps`. The message is:
 
@@ -382,6 +382,18 @@ the run accepted {limit} steps, its limit; dense switch or source schedules cost
 `data` holds `limit`. The limit is 100000000 accepted steps. The operating point at t = 0 does not count. The run keeps the observations and the last row up to that time.
 
 A grid that fits in the trace can still ask for more steps than the limit. Edges and jumps are landings, not rows, so a dense switch or source schedule reaches the limit on steps.
+
+## solver.step_work
+
+Severity `error`. No refs. `t_ps` is the last accepted time, which is the trace's `end_ps`.
+
+The message is:
+
+```text
+one step took more than {limit} solver operations, its limit; the circuit is too large or too stiff to step
+```
+
+`data` holds `limit`. The limit is 1073741824 multiply-adds, 2^30, about a second of solving on one core. It counts the linear solves toward one accepted step: every try, retry and probe since the last accepted step. The run keeps the observations and the last row up to that time.
 
 ## chip.unsettled
 

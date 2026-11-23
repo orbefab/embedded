@@ -16,7 +16,9 @@ pub const VCC: f64 = 5.0;
 const GMIN: f64 = 1e-12;
 /// The law's supply split, ampere.
 const SPLIT_A: f64 = 1e-6;
-const MIN_STEP_PS: f64 = 100.0;
+/// A store that has not moved yet is held to the 1 nV floor, so the first steps after the
+/// square's edge are short. Each accepted step widens its range and can double the next.
+const MIN_STEP_PS: f64 = 5.0;
 const MAX_TRANSITION_STEPS: usize = 2000;
 const HYSTERESIS_LAW_V: f64 = 1e-3;
 

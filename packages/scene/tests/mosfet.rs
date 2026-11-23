@@ -17,10 +17,10 @@ use orbe_scene::Files;
 
 const STOP_PS: u64 = 300_000_000_000;
 
-/// Accepted steps over the 300 ms, 1.5 times the most any shape takes. The shapes take 800 to
-/// 1452. The 5V pin moves each time the sketch changes a pin's load, and D9's high and the gate
+/// Accepted steps over the 300 ms, 1.5 times the most any shape takes. The shapes take 1427 to
+/// 2290. The 5V pin moves each time the sketch changes a pin's load, and D9's high and the gate
 /// move with it, so the steps resolve more edges than on a fixed rail.
-const MOST_STEPS: u64 = 1452 * 3 / 2;
+const MOST_STEPS: u64 = 2290 * 3 / 2;
 
 /// The part's values, from `parts/nmos-irf520-to220/part.jsonc`.
 const KP: f64 = 1.259;

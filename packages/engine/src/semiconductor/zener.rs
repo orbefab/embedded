@@ -217,7 +217,7 @@ mod tests {
         let circuit = Circuit::new(netlist::parse(&bytes).unwrap()).unwrap();
         let converged = crate::newton::newton(
             &circuit,
-            None,
+            &mut crate::mna::Solver::new(&circuit.layout),
             &Conditions::NOMINAL,
             Iterate::initial(&circuit),
             crate::op::OP_BUDGET,

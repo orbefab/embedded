@@ -258,10 +258,10 @@ fn a_pin_edge_lands_at_its_cycles_picosecond_into_an_rc() {
     assert!(at(&cap, edges[2]) > 4.9, "{}", at(&cap, edges[2]));
 }
 
-/// 5_760_000 puts the crossing in a step that has already run the core to the 6.5 µs stop.
+/// 5_764_000 puts the crossing in a step that has already run the core to the 6.5 µs stop.
 #[test]
 fn toggle_stops_follow_the_firmware_when_a_watch_is_located() {
-    let edge_ps = 5_760_000;
+    let edge_ps = 5_764_000;
     let step = format!(
         r#"{{ "name": "vs", "kind": "voltage_source", "pins": {{ "p": "src", "n": "gnd" }},
           "voltage": {{ "kind": "step", "initial": {{ "value": 0.0, "unit": "V" }},

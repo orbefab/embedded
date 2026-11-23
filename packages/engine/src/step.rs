@@ -1,17 +1,15 @@
 //! The step policy. Pure, like the ladder: each function sees one outcome and
 //! names the next plan.
 //!
-//! A segment starts at t = 0 and at every restart solve whose jump on a capacitor or an
-//! inductor exceeds Newton's tolerance on that row, and its first step is `EDGE_STEP`.
+//! A segment starts at t = 0 and at every restart solve, and its first step is `EDGE_STEP`.
 //! From then on the local truncation error sets it. An accepted step grows by
 //! `0.9 * ratio^(-1/(p+1))`, at most 2, and a rejected one shrinks by the same rule,
-//! between 0.25 and 0.9. p is 1 for backward Euler and 2 for trapezoidal.
+//! between 0.25 and 0.9. p is the order of the step's formula, 1 for backward Euler and 2 for
+//! BDF2.
 
 use orbe_model::Time;
 
 use crate::netlist::Transient;
-
-use crate::newton::Method;
 
 /// The first step of a segment, in ps. It must equal `Transient::MIN_MAX_STEP_PS`.
 pub(crate) const EDGE_STEP: u64 = 1_000;
@@ -34,16 +32,16 @@ impl Plan {
     /// After an accepted step of `tried` ps whose error was `ratio` of its tolerance.
     /// A ratio of 0 doubles. A factor over 1 grows by at least 1 ps, so a step can leave
     /// the 1 ps floor. Capped at `max_step`.
-    pub(crate) fn accepted(tried: u64, ratio: f64, method: Method, max_step: u64) -> Plan {
-        let factor = factor(ratio, method).min(MOST_GROWTH);
+    pub(crate) fn accepted(tried: u64, ratio: f64, order: u32, max_step: u64) -> Plan {
+        let factor = factor(ratio, order).min(MOST_GROWTH);
         let h = scaled(tried, factor);
         let h = if factor > 1.0 { h.max(tried + 1) } else { h };
         Plan { h: h.min(max_step) }
     }
 
     /// After a step of `tried` ps whose error was `ratio` of its tolerance, over 1.
-    pub(crate) fn rejected(tried: u64, ratio: f64, method: Method) -> Plan {
-        let factor = factor(ratio, method).clamp(MOST_SHRINK, SAFETY);
+    pub(crate) fn rejected(tried: u64, ratio: f64, order: u32) -> Plan {
+        let factor = factor(ratio, order).clamp(MOST_SHRINK, SAFETY);
         Plan {
             h: scaled(tried, factor),
         }
@@ -61,11 +59,11 @@ impl Plan {
     }
 }
 
-/// `SAFETY * ratio^(-1/(p+1))`. Infinite at a ratio of 0.
-fn factor(ratio: f64, method: Method) -> f64 {
-    let root = match method {
-        Method::BackwardEuler => ratio.sqrt(),
-        Method::Trapezoidal => libm::cbrt(ratio),
+/// `SAFETY * ratio^(-1/(p+1))`, `p` being `order`, 1 or 2. Infinite at a ratio of 0.
+fn factor(ratio: f64, order: u32) -> f64 {
+    let root = match order {
+        1 => ratio.sqrt(),
+        _ => libm::cbrt(ratio),
     };
     SAFETY / root
 }
@@ -86,50 +84,41 @@ mod tests {
         let mut h = EDGE_STEP;
         let mut steps = vec![h];
         while h < MAX {
-            h = Plan::accepted(h, 0.0, Method::Trapezoidal, MAX).h;
+            h = Plan::accepted(h, 0.0, 2, MAX).h;
             steps.push(h);
         }
         assert_eq!(steps.len(), 16, "{steps:?}");
         assert_eq!(steps[14], 16_384_000);
         assert_eq!(steps[15], MAX);
-        assert_eq!(Plan::accepted(MAX, 0.0, Method::BackwardEuler, MAX).h, MAX);
+        assert_eq!(Plan::accepted(MAX, 0.0, 1, MAX).h, MAX);
     }
 
     #[test]
     fn an_accepted_step_grows_by_the_root_of_its_order() {
         // 0.9 / sqrt(0.36) = 1.5, and 0.9 / cbrt(0.125) = 1.8.
-        assert_eq!(
-            Plan::accepted(1_000, 0.36, Method::BackwardEuler, MAX).h,
-            1_500
-        );
-        assert_eq!(
-            Plan::accepted(1_000, 0.125, Method::Trapezoidal, MAX).h,
-            1_800
-        );
+        assert_eq!(Plan::accepted(1_000, 0.36, 1, MAX).h, 1_500);
+        assert_eq!(Plan::accepted(1_000, 0.125, 2, MAX).h, 1_800);
         // A step right at its tolerance shrinks by the safety factor.
-        assert_eq!(Plan::accepted(1_000, 1.0, Method::Trapezoidal, MAX).h, 900);
+        assert_eq!(Plan::accepted(1_000, 1.0, 2, MAX).h, 900);
     }
 
     #[test]
     fn an_accepted_step_that_may_grow_grows_by_at_least_one_picosecond() {
         // 0.9 / cbrt(0.5) is about 1.13, and 0.9 / cbrt(0.7) about 1.01.
-        assert_eq!(Plan::accepted(1, 0.5, Method::Trapezoidal, MAX).h, 2);
-        assert_eq!(Plan::accepted(10, 0.7, Method::Trapezoidal, MAX).h, 11);
+        assert_eq!(Plan::accepted(1, 0.5, 2, MAX).h, 2);
+        assert_eq!(Plan::accepted(10, 0.7, 2, MAX).h, 11);
         // 0.9 / sqrt(0.9) is under 1, so the step shrinks.
-        assert_eq!(Plan::accepted(10, 0.9, Method::BackwardEuler, MAX).h, 9);
-        assert_eq!(Plan::accepted(1, 1.0, Method::BackwardEuler, MAX).h, 1);
+        assert_eq!(Plan::accepted(10, 0.9, 1, MAX).h, 9);
+        assert_eq!(Plan::accepted(1, 1.0, 1, MAX).h, 1);
     }
 
     #[test]
     fn a_rejected_step_shrinks_between_a_quarter_and_nine_tenths() {
         // 0.9 / sqrt(4) = 0.45.
-        assert_eq!(Plan::rejected(1_000, 4.0, Method::BackwardEuler).h, 450);
-        assert_eq!(Plan::rejected(1_000, 1e12, Method::Trapezoidal).h, 250);
-        assert_eq!(
-            Plan::rejected(1_000, 1.0 + 1e-12, Method::Trapezoidal).h,
-            899
-        );
-        assert_eq!(Plan::rejected(3, 1e12, Method::BackwardEuler).h, 1);
+        assert_eq!(Plan::rejected(1_000, 4.0, 1).h, 450);
+        assert_eq!(Plan::rejected(1_000, 1e12, 2).h, 250);
+        assert_eq!(Plan::rejected(1_000, 1.0 + 1e-12, 2).h, 899);
+        assert_eq!(Plan::rejected(3, 1e12, 1).h, 1);
     }
 
     #[test]

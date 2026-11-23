@@ -9,7 +9,7 @@ use crate::name::{Name, Ref};
 use crate::active;
 use crate::chip;
 use crate::element;
-use crate::mna::{GMIN, Layout, Memo, Probe, Solution, Stamp, System};
+use crate::mna::{GMIN, Layout, Probe, Solution, Solver, Stamp, System};
 use crate::watch::{Levels, Watches};
 
 pub(crate) const RELTOL: f64 = 1e-6;
@@ -41,7 +41,7 @@ enum Slot {
 }
 
 impl Circuit {
-    /// Fails with `solver.too_large` before the matrix is allocated.
+    /// Fails with `solver.too_large` before any system is allocated.
     pub(crate) fn new(netlist: Netlist) -> Result<Circuit, Diagnostic> {
         Circuit::with_actives(netlist, Vec::new())
     }
@@ -65,11 +65,11 @@ impl Circuit {
         }
         actives.extend(extra);
         let layout = Layout::new(&netlist, passives);
-        if layout.size() > crate::dense::MAX_UNKNOWNS {
+        if layout.size() > crate::sparse::MAX_UNKNOWNS {
             return Err(Diagnostic::SolverTooLarge {
                 at: Time::ZERO,
                 unknowns: layout.size(),
-                limit: crate::dense::MAX_UNKNOWNS,
+                limit: crate::sparse::MAX_UNKNOWNS,
             });
         }
         let mut logic: Vec<(PartId, Slot)> = layout
@@ -101,28 +101,6 @@ impl Circuit {
             .chain(circuit.actives.iter().map(|chip| chip.watches.clone()))
             .collect();
         circuit.watches = Watches::new(watches);
-        // The pattern at t = 0 with every chip at power-on, from which the solve takes its
-        // elimination order.
-        // Each chip stamps with the core it holds, so no core is copied.
-        let chips = circuit.power_on();
-        let conditions = Conditions {
-            chips: &chips,
-            ..Conditions::NOMINAL
-        };
-        let mut system = System::new(&circuit.layout);
-        system.reset(&circuit.layout, conditions.gmin);
-        let initial = Iterate::initial(&circuit);
-        stamp_parts(&circuit, &mut system, &conditions, &initial);
-        for chip in &circuit.actives {
-            active::stamp(
-                chip,
-                &chip.core,
-                &mut system,
-                &initial.solution,
-                conditions.source_scale,
-            );
-        }
-        circuit.layout.order_by(&system);
         Ok(circuit)
     }
 
@@ -302,52 +280,17 @@ pub(crate) enum History<'h> {
     Step(Integration<'h>),
 }
 
-/// One capacitor in the circuit's charge list. Stiffness keys on this, so two capacitors of
-/// one part can take different rules.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ChargeIndex(usize);
-
-impl ChargeIndex {
-    pub(crate) const fn new(index: usize) -> ChargeIndex {
-        ChargeIndex(index)
-    }
-}
-
-/// One inductor in the circuit's flux list.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct FluxIndex(usize);
-
-impl FluxIndex {
-    pub(crate) const fn new(index: usize) -> FluxIndex {
-        FluxIndex(index)
-    }
-}
-
-/// A capacitor or an inductor. Stiffness keys on this. Every capacitor orders before every
-/// inductor, which is the order of every per-store list.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum Store {
-    Charge(ChargeIndex),
-    Flux(FluxIndex),
-}
-
-/// Backward Euler when `store` is in `stiff`, which is ascending. Otherwise `method`.
-pub(crate) fn method_on(stiff: &[Store], method: Method, store: Store) -> Method {
-    if stiff.binary_search(&store).is_ok() {
-        Method::BackwardEuler
-    } else {
-        method
-    }
-}
-
-/// One time step's view of the past. The last accepted solution is the whole history.
+/// One time step's view of the past: the accepted solution it starts from, and for BDF2 the
+/// accepted point before that.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Integration<'h> {
-    pub(crate) method: Method,
-    /// Stores that take backward Euler whatever `method` is. Ascending.
-    pub(crate) stiff: &'h [Store],
     pub(crate) h_ps: u64,
+    /// A store's slope at the step's end is `(c[0] * x + c[1] * x0 + c[2] * x1) / h`, with `x`
+    /// its state there, `x0` in `previous` and `x1` in `before`.
+    pub(crate) coefficients: [f64; 3],
     pub(crate) previous: &'h Solution,
+    /// `None` for backward Euler, whose `c[2]` is 0.
+    pub(crate) before: Option<&'h Solution>,
 }
 
 impl Integration<'_> {
@@ -356,15 +299,16 @@ impl Integration<'_> {
         self.h_ps as f64 / 1e12
     }
 
-    pub(crate) fn method_of(&self, store: Store) -> Method {
-        method_on(self.stiff, self.method, store)
+    /// The companion of a store of `size`, a capacitance or an inductance, whose state is
+    /// read from a solution by `state`: its slope times `size` at the step's end is
+    /// `g * x + rhs`, as `(g, rhs)`. That is a capacitor's current from its voltage, and an
+    /// inductor's voltage from its current.
+    pub(crate) fn companion(&self, size: f64, state: impl Fn(&Solution) -> f64) -> (f64, f64) {
+        let [c0, c1, c2] = self.coefficients;
+        let k = size / self.h();
+        let older = self.before.map_or(0.0, &state);
+        (k * c0, k * (c1 * state(self.previous) + c2 * older))
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Method {
-    BackwardEuler,
-    Trapezoidal,
 }
 
 /// All of Newton's state. A value: passed in, returned, or dropped.
@@ -395,12 +339,21 @@ impl Iterate {
 pub(crate) struct Converged {
     pub(crate) iterate: Iterate,
     pub(crate) iterations: u32,
+    /// How far each unknown moved on the last iteration, which is how closely the solve has
+    /// settled it. 0 on a linear circuit, which one solve settles exactly.
+    pub(crate) moved: Vec<f64>,
 }
 
 #[derive(Debug)]
 pub(crate) enum Failure {
-    /// Zero pivot. No change of conditions fixes it.
+    /// No pivot for the unknown at `row`: every entry left in its column is zero, or within
+    /// the rounding of the sums that made it. No change of conditions fixes it.
     Singular {
+        row: usize,
+    },
+    /// A stamped value, a factor or the solution overflowed, at `row`. The circuit's values are
+    /// past what a double holds, and no change of conditions fixes that either.
+    NonFinite {
         row: usize,
     },
     Stalled(Stall),
@@ -419,34 +372,30 @@ pub(crate) enum Offender {
     Junction(PartId),
     /// Moved more than its tolerance.
     Row(usize),
-    /// Not finite after the solve.
-    NonFinite(usize),
 }
 
 impl Offender {
     pub(crate) fn describe(self, circuit: &Circuit) -> Ref {
         match self {
             Offender::Junction(part) => Ref::Part(circuit.netlist.part(part).name.clone()),
-            Offender::Row(row) | Offender::NonFinite(row) => {
-                circuit.layout.describe(&circuit.netlist, row)
-            }
+            Offender::Row(row) => circuit.layout.describe(&circuit.netlist, row),
         }
     }
 }
 
-/// Newton with junction limiting, at most `budget` solves. On a linear circuit `memo`, when
-/// there is one, answers a system it kept.
+/// Newton with junction limiting, at most `budget` solves, each on `solver`. On a linear
+/// circuit the solver's memo answers a system it kept.
 ///
 /// Converged means three checks pass in one iteration: no unknown moved more
 /// than its tolerance, every junction's current check passed, and no junction
-/// was limited. A held capacitor's current is not one of those unknowns, as `worst_row` says.
+/// was limited. A capacitor's current is not one of those unknowns, as `worst_row` says.
 ///
 /// On a linear circuit the second iteration would stamp the first one's system, solve it to the
 /// same bits and pass every check, so the call returns after one solve with that iteration's
 /// count.
 pub(crate) fn newton(
     circuit: &Circuit,
-    mut memo: Option<&mut Memo>,
+    solver: &mut Solver,
     conditions: &Conditions,
     start: Iterate,
     budget: u32,
@@ -454,24 +403,17 @@ pub(crate) fn newton(
     let layout = &circuit.layout;
     let mut iterate = start;
     let mut offender = None;
-    let mut system = System::new(layout);
-    let held = !matches!(conditions.history, History::Step(_));
     for iteration in 1..=budget {
-        system.reset(layout, conditions.gmin);
-        stamp(circuit, &mut system, conditions, &iterate);
+        let system = solver.reset(layout, conditions.gmin);
+        stamp(circuit, system, conditions, &iterate);
         // A linear circuit's systems repeat whenever its sources, contacts, drives, step and
         // held voltages do. With a junction they seldom repeat, and a miss copies the system.
-        let solved = match memo.as_deref_mut() {
-            Some(memo) if circuit.linear => memo.solve(&mut system),
-            _ => system.solve(),
-        };
-        let solution = solved.map_err(|singular| Failure::Singular { row: singular.row })?;
-        if let Some(row) = solution.components().iter().position(|x| !x.is_finite()) {
-            return Err(Failure::Stalled(Stall {
-                iterations: iteration,
-                offender: Offender::NonFinite(row),
-            }));
-        }
+        let solution = solver
+            .solve(circuit.linear)
+            .map_err(|failure| match failure {
+                crate::sparse::Failure::Singular { col } => Failure::Singular { row: col },
+                crate::sparse::Failure::NonFinite { col } => Failure::NonFinite { row: col },
+            })?;
 
         let mut junctions = vec![0.0; layout.junctions()];
         let mut worst_junction: Option<(f64, PartId)> = None;
@@ -496,25 +438,35 @@ pub(crate) fn newton(
                 worst_junction = Some((score, id));
             }
         }
-        let (worst_row, row_ratio) =
-            worst_row(layout, held, iterate.solution.components(), &solution);
-
-        iterate = Iterate {
-            solution,
-            junctions,
-        };
+        let (worst_row, row_ratio) = worst_row(layout, iterate.solution.components(), &solution);
+        let before = std::mem::replace(
+            &mut iterate,
+            Iterate {
+                solution,
+                junctions,
+            },
+        );
         offender = Some(match worst_junction {
             Some((_, part)) => Offender::Junction(part),
             None if row_ratio <= 1.0 => {
+                let moved = match circuit.linear {
+                    true => vec![0.0; layout.size()],
+                    false => (before.solution.components().iter())
+                        .zip(iterate.solution.components())
+                        .map(|(before, after)| (after - before).abs())
+                        .collect(),
+                };
                 return Ok(Converged {
                     iterate,
                     iterations: iteration,
+                    moved,
                 });
             }
             None if circuit.linear && iteration < budget => {
                 return Ok(Converged {
                     iterate,
                     iterations: iteration + 1,
+                    moved: vec![0.0; layout.size()],
                 });
             }
             None => Offender::Row(worst_row),
@@ -550,15 +502,15 @@ fn stamp_parts(circuit: &Circuit, system: &mut System, conditions: &Conditions, 
     }
 }
 
-/// The row whose step is largest against its tolerance, and that ratio. When `held`, every
-/// capacitor's current is left out. A held capacitor's current is the voltage across its hold
-/// times C / 1 fs, 1e8 S for 100 nF, and the voltages at its ends are checked. Its own 1 pA
-/// floor would need them to agree to 1e-20 V, far below one ulp of a volt, so only a solve
-/// that repeats to the bit passed it.
-fn worst_row(layout: &Layout, held: bool, old: &[f64], new: &Solution) -> (usize, f64) {
+/// The row whose step is largest against its tolerance, and that ratio. Every capacitor's
+/// current is left out. Each solve gives it as the voltage across the capacitor times a fixed
+/// conductance, `C / h` on a step and C / 1 fs on a hold, so it has settled once the voltages
+/// at its ends have. Its own 1 pA floor would need them to agree to `1e-12 * h / C` V, 1e-19 V
+/// for 10 uF at 1 ps, far below one ulp of a volt.
+fn worst_row(layout: &Layout, old: &[f64], new: &Solution) -> (usize, f64) {
     let mut worst = (0, 0.0);
     for (row, (&before, &after)) in old.iter().zip(new.components()).enumerate() {
-        if held && layout.is_charge_row(row) {
+        if layout.is_charge_row(row) {
             continue;
         }
         let floor = if layout.is_node_row(row) {

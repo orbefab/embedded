@@ -71,22 +71,8 @@ fn at_most(got: u64, measured: u64, label: &str) {
     assert!(got <= bound, "{label}: {got}, bound {bound}");
 }
 
-fn stiffens(bytes: &[u8]) -> u64 {
-    let netlist = orbe_engine::netlist::parse(bytes).unwrap();
-    let (results, stats) = orbe_engine::simulate_stats(&netlist);
-    let errors: Vec<_> = results
-        .diagnostics()
-        .iter()
-        .filter(|d| d.severity() == Severity::Error)
-        .map(|d| serde_json::to_string(d).unwrap())
-        .collect();
-    assert!(errors.is_empty(), "{errors:?}");
-    stats.stiffens
-}
-
-/// Measured 289 accepted steps on the load step and 80 on the ideal source. Each bound is
-/// ten percent above that count. The load step stiffens once. The ideal source does not.
-/// The ratio is under ten.
+/// Measured 226 accepted steps on the load step and 68 on the ideal source. Each bound is
+/// ten percent above that count. The ratio is under ten.
 #[test]
 fn load_step_stays_within_ten_times_the_ideal_source() {
     let example_bytes = read("tests/circuits/regulator-load-step/netlist.json");
@@ -95,11 +81,8 @@ fn load_step_stays_within_ten_times_the_ideal_source() {
     let baseline = landings(&baseline_bytes);
     eprintln!("load-step landings {example}");
     eprintln!("baseline landings {baseline}");
-    at_most(example, 289, "load-step landings");
-    at_most(baseline, 80, "baseline landings");
-    let baseline_stiff = stiffens(&baseline_bytes);
-    eprintln!("baseline stiffens {baseline_stiff}");
-    assert_eq!(baseline_stiff, 0, "baseline stiffens");
+    at_most(example, 226, "load-step landings");
+    at_most(baseline, 68, "baseline landings");
     assert!(example <= baseline * 10);
 }
 
@@ -116,9 +99,9 @@ fn load_step_shape_stays_at_the_measured_counts() {
     eprintln!("ro_x10: {stiff:?}");
     eprintln!("ro_div10: {soft:?}");
     let cases = [
-        ("fitted", fitted, [289, 2, 38, 5, 178]),
-        ("ro_x10", stiff, [274, 2, 42, 8, 178]),
-        ("ro_div10", soft, [533, 2, 37, 5, 162]),
+        ("fitted", fitted, [226, 2, 89, 5, 84]),
+        ("ro_x10", stiff, [310, 4, 123, 21, 134]),
+        ("ro_div10", soft, [189, 2, 76, 5, 60]),
     ];
     for (label, got, measured) in cases {
         for (index, (count, measured)) in [got.0, got.1, got.2, got.3, got.4]

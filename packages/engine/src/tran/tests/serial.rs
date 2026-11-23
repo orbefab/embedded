@@ -78,7 +78,7 @@ fn alone(netlist: &Netlist, clocks: &[u32], stop: Time) -> Vec<Frame> {
 fn settled(circuit: &Circuit) -> op::Settled {
     op::settle(
         circuit,
-        None,
+        &mut crate::mna::Solver::new(&circuit.layout),
         Conditions::NOMINAL,
         Iterate::initial(circuit),
         circuit.power_on(),
@@ -376,10 +376,10 @@ fn a_rewind_past_a_delivered_byte_delivers_it_once() {
     assert_eq!(log(&session), rows(&want));
 }
 
-/// `packages/engine/tests/circuits/atmega-analog-serial` with `RESET` through 5 nF from a node that 12.1 kohm and 5 nF
-/// filter off `vd`, and 10 kohm from `RESET` to VCC. `vd` falls from 13.609 V to 0 V at `fall`,
-/// and `RESET` dips under its low threshold for about 1.2 us, 41.7 us later. `sw2` closes 10 kohm
-/// from VCC to GND, on a net no chip watches.
+/// `packages/engine/tests/circuits/atmega-analog-serial` with `RESET` through 50 nF from a node that 12.1 kohm and 50 nF
+/// filter off `vd`, and 10 kohm from `RESET` to VCC. `vd` falls from 13.608876 V to 0 V at
+/// `fall`, and `RESET` dips under its low threshold for a few us, about 415 us later. `sw2` closes
+/// 10 kohm from VCC to GND, on a net no chip watches.
 fn analog_serial_with_a_reset_dip(fall: Time) -> Vec<u8> {
     let mut json: serde_json::Value =
         serde_json::from_slice(&example("atmega-analog-serial", u64::MAX)).unwrap();
@@ -388,7 +388,7 @@ fn analog_serial_with_a_reset_dip(fall: Time) -> Vec<u8> {
         "name": "vd", "kind": "voltage_source", "pins": { "p": "d", "n": "gnd" },
         "voltage": {
             "kind": "steps",
-            "initial": { "value": 13.609, "unit": "V" },
+            "initial": { "value": 13.608876, "unit": "V" },
             "events": [{ "t_ps": fall.as_ps(), "level": { "value": 0.0, "unit": "V" } }]
         }
     }));
@@ -398,7 +398,7 @@ fn analog_serial_with_a_reset_dip(fall: Time) -> Vec<u8> {
     for (name, a, b) in [("cd1", "a", "gnd"), ("cd2", "a", "pc6")] {
         parts.push(serde_json::json!({
             "name": name, "kind": "capacitor", "pins": { "a": a, "b": b },
-            "capacitance": { "value": 5e-9, "unit": "F" }, "initial": null
+            "capacitance": { "value": 5e-8, "unit": "F" }, "initial": null
         }));
     }
     parts.push(serde_json::json!({
@@ -418,10 +418,12 @@ fn analog_serial_with_a_reset_dip(fall: Time) -> Vec<u8> {
 /// the wire. The session never read the `\n`. Its bytes are the first bytes of one call on its
 /// netlist with `sw2` landed, and once it has ended they are all of them.
 ///
-/// The 13.609 V and the 41.7 us lead came from a search over `vd`'s level near where the dip
-/// first crosses 2.1 V, with 12.1 kohm, for a dip that no step end falls inside, with margin each
-/// side. A change to the steps around that end fails one of the premise assertions, and
-/// re-tuning is the same search.
+/// The 13.608876 V and the 415.65 us lead came from a search over `vd`'s level near where the dip
+/// first crosses 2.1 V, with 12.1 kohm and 50 nF, for a dip that no step end falls inside, with
+/// neighbours each side that pass too. The steps there are 3 us long, so the dip is a few uV
+/// deep and starts 2 us before the end, which leaves the reset its synchronizer's cycles. A
+/// change to the steps around that end fails one of the premise assertions, and re-tuning is
+/// the same search.
 #[test]
 fn a_byte_after_the_accepted_step_waits_for_the_steps_an_input_moves() {
     let end = alone(
@@ -433,7 +435,7 @@ fn a_byte_after_the_accepted_step_waits_for_the_steps_an_input_moves() {
     .find(|frame| frame.byte.byte == b'\n')
     .unwrap()
     .end;
-    let json = analog_serial_with_a_reset_dip(Time::from_ps(end.as_ps() - 41_700_000));
+    let json = analog_serial_with_a_reset_dip(Time::from_ps(end.as_ps() - 415_650_000));
     let netlist = crate::netlist::parse(&json).unwrap();
     let stop = transient(&netlist).stop;
     let want = alone(&netlist, &[MHZ_16], stop);
