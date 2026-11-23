@@ -25,7 +25,7 @@ The core example on a breadboard. The Nano crosses the channel over columns 1 to
     "btn1": { "type": "tactile-switch-6mm" },
     "r2": { "type": "resistor-axial", "resistance": "10k" },
     "r1": { "type": "resistor-axial", "resistance": "220" },
-    "led1": { "type": "led-5mm", "color": "red" },
+    "led1": { "type": "led-5mm" },
   },
   "layout": {
     "bb": { "at": [0, 0, 0] },

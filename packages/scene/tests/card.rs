@@ -158,7 +158,15 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
             "led-0603",
             "led-0805",
             "led-3mm",
+            "led-3mm-blue",
+            "led-3mm-green",
+            "led-3mm-white",
+            "led-3mm-yellow",
             "led-5mm",
+            "led-5mm-blue",
+            "led-5mm-green",
+            "led-5mm-white",
+            "led-5mm-yellow",
             "neopixel-stick-8",
             "sk68xxmini-hs",
         ]
@@ -268,7 +276,18 @@ fn a_null_rating_stays_on_the_card_and_a_number_default_keeps_its_unit() {
         .map(|rating| rating.name.as_str())
         .collect();
     assert_eq!(names, ["current", "power"]);
-    assert!(led.ratings.iter().all(|rating| rating.value.is_none()));
+    let led_current = led
+        .ratings
+        .iter()
+        .find(|rating| rating.name == "current")
+        .unwrap();
+    let led_power = led
+        .ratings
+        .iter()
+        .find(|rating| rating.name == "power")
+        .unwrap();
+    assert_eq!(led_current.value, Some(0.03));
+    assert_eq!(led_power.value, Some(0.075));
 
     let diode = card(&parts_dir(), "diode-1n4007").unwrap();
     let current = diode

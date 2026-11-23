@@ -100,8 +100,8 @@ fn a_pin_condition_meets_at_the_edge_on_its_net_whatever_the_part_order_or_label
     );
     edit_scene(
         &dir,
-        "\"color\": \"red\" },",
-        "\"color\": \"red\" },\n    \"nano\": { \"type\": \"nano-board\", \"firmware\": \"build/button.ino.hex\" },",
+        "\"type\": \"led-5mm\" },",
+        "\"type\": \"led-5mm\" },\n    \"nano\": { \"type\": \"nano-board\", \"firmware\": \"build/button.ino.hex\" },",
     );
     let reordered = replies_in(&dir);
     assert_eq!(reordered[0]["data"]["parts"][4], "nano");

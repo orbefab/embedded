@@ -54,7 +54,8 @@ fn a_button_block_lists_its_parts_in_file_order() {
     assert_eq!(r2.values[0].amount, Some(10_000.0));
 
     let led = parts.iter().find(|part| part.r#ref == "led1").unwrap();
-    assert_eq!(led.values[0].text.as_deref(), Some("red"));
+    assert_eq!(led.part, "led-5mm");
+    assert!(led.values.is_empty());
 
     let nano = parts.iter().find(|part| part.r#ref == "nano").unwrap();
     assert_eq!(nano.values[0].file.as_deref(), Some("build/button.ino.hex"));

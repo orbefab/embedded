@@ -10,7 +10,7 @@
     "rset": { "type": "resistor-axial", "resistance": "4.7k" },
     "rhys": { "type": "resistor-axial", "resistance": "68k" },
     "rled": { "type": "resistor-axial", "resistance": "220" },
-    "led1": { "type": "led-5mm", "color": "red" },
+    "led1": { "type": "led-5mm" },
   },
   "nets": { "GND": "nano.GND" },
   "world": { "light": 300 },

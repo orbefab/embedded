@@ -336,7 +336,7 @@ fn findings(dir: &Path) -> Vec<String> {
 #[test]
 fn a_block_names_an_id_the_catalog_lacks() {
     let dir = block_with(
-        r#"{ "format": 1, "parts": { "led1": { "type": "led-5mn", "color": "red" } } }"#,
+        r#"{ "format": 1, "parts": { "led1": { "type": "led-5mn" } } }"#,
         &[],
     );
     assert_eq!(
@@ -351,7 +351,7 @@ fn a_block_names_an_id_the_catalog_lacks() {
 #[test]
 fn a_block_that_holds_a_lock_is_refused() {
     let dir = block_with(
-        r#"{ "format": 1, "parts": { "led1": { "type": "led-5mm", "color": "red" } } }"#,
+        r#"{ "format": 1, "parts": { "led1": { "type": "led-5mm" } } }"#,
         &["parts"],
     );
     assert_eq!(

@@ -70,7 +70,7 @@ fn scene(drive: Drive, load: Load) -> String {
     match load {
         Load::Led => {
             parts.push(r#""rl": { "type": "resistor-axial", "resistance": "220" }"#.into());
-            parts.push(r#""led1": { "type": "led-3mm", "color": "red" }"#.into());
+            parts.push(r#""led1": { "type": "led-3mm" }"#.into());
             wires.push(r#"["nano.5V", "rl.a"]"#.into());
             wires.push(r#"["rl.b", "led1.anode"]"#.into());
             wires.push(r#"["led1.cathode", "m1.drain"]"#.into());

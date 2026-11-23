@@ -40,6 +40,38 @@ fn ground_pin_of(part: &Part) -> Option<String> {
     part.pin(declared).is_some().then(|| declared.to_string())
 }
 
+/// A string of letters, such as `blue`. A number, a path or two words is not one.
+fn plain_word(node: &Node) -> Option<&str> {
+    let word = node.str()?;
+    if !word.is_empty() && word.chars().all(|c| c.is_ascii_alphabetic()) {
+        Some(word)
+    } else {
+        None
+    }
+}
+
+/// What to try when a part is given a param it does not declare. A plain word may name a
+/// variant that is its own part. Any other value keeps the list of params the part does take.
+fn unknown_param_hint(label: &str, key: &str, names: &[&str], value: &Node) -> String {
+    let close = did_you_mean(key, names.iter().copied(), "");
+    let known = if names.is_empty() {
+        "it takes no params".to_string()
+    } else {
+        format!("its params: {}", names.join(", "))
+    };
+    let Some(word) = plain_word(value) else {
+        return format!("{close}{known}");
+    };
+    let takes = if names.is_empty() {
+        format!("{label} has no params")
+    } else {
+        known
+    };
+    format!(
+        "{close}{takes}; a variant such as {word} may be its own part, so run orbe search {label} {word}"
+    )
+}
+
 const GRID_PS: u64 = 1_000_000_000;
 
 /// What `orbe check` says when a hole already holds a lead. `free` is every hole of that
@@ -466,12 +498,7 @@ impl<'p> Circuit<'p> {
         for prop in &instance.params {
             if part.param(&prop.key).is_none() {
                 let names: Vec<&str> = part.params.iter().map(|p| p.name.as_str()).collect();
-                let list = if names.is_empty() {
-                    "it takes no params".to_string()
-                } else {
-                    format!("its params: {}", names.join(", "))
-                };
-                let hint = did_you_mean(&prop.key, names.iter().copied(), "");
+                let hint = unknown_param_hint(&part.label, &prop.key, &names, &prop.value);
                 self.out.push(
                     Code::Param,
                     prop.key_span,
@@ -481,7 +508,7 @@ impl<'p> Circuit<'p> {
                         part.label,
                         prop.key
                     ),
-                    format!("{hint}{list}"),
+                    hint,
                 );
                 continue;
             }
