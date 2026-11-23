@@ -3,8 +3,9 @@
 //! is how a test points at a registry built from the same tree. `{name}` is replaced with
 //! `index` and with nothing else. Every other URL is resolved against the document that holds it.
 //! An `https` URL is fetched by running `curl`. A `file` URL is read from disk. Records and
-//! files that do not depend on each other are fetched together, at most 8 at a time. A record
-//! and a file are cached by their SHA-256 and checked against the hash and size named for them.
+//! files that do not depend on each other are fetched together, at most 8 at a time. A file is
+//! fetched only after its path and `url` have been checked. A record and a file are cached by
+//! their SHA-256 and checked against the hash and size named for them.
 //! The index is fetched on every command. Each URL is fetched at most once in one command.
 //!
 //! The copy written into the project is the copy orbe reads. Nothing here compares it with the
@@ -571,9 +572,12 @@ fn breadboard(client: &mut Client, index: &Index, card: &Card) -> Result<Option<
                 continue;
             };
             let anchors = format!("{}.anchors.json", row.name);
-            files.extend(file_blobs(&record_url, &item.head().files, |path| {
-                path == "part.jsonc" || path == anchors
-            }));
+            // A bad path or url is not fetched here. `plug` reports it.
+            if check_files(&record_url, &item.head().files).is_ok() {
+                files.extend(file_blobs(&record_url, &item.head().files, |path| {
+                    path == "part.jsonc" || path == anchors
+                }));
+            }
         }
         client.prefetch(&files);
     }
@@ -1634,45 +1638,7 @@ impl Client {
         record_url: &str,
         head: &orbe_registry::Head,
     ) -> Result<BTreeMap<String, Vec<u8>>, Fail> {
-        let mut paths = BTreeSet::new();
-        let mut folded: BTreeMap<String, String> = BTreeMap::new();
-        for file in &head.files {
-            if let Some(problem) = orbe_registry::path_problem(&file.path) {
-                return Err(registry(
-                    record_url,
-                    &format!("lists `{}`, which has {problem}", file.path),
-                    "",
-                ));
-            }
-            if !paths.insert(file.path.clone()) {
-                return Err(registry(
-                    record_url,
-                    &format!("lists `{}` twice", file.path),
-                    "",
-                ));
-            }
-            if let Some(other) = folded.insert(file.path.to_lowercase(), file.path.clone()) {
-                return Err(registry(
-                    record_url,
-                    &format!(
-                        "lists `{other}` and `{}`, which are one file on a disk that ignores case",
-                        file.path
-                    ),
-                    "",
-                ));
-            }
-            let want = format!("files/{}", file.sha256);
-            if file.url != want {
-                return Err(registry(
-                    record_url,
-                    &format!(
-                        "lists `{}` at `{}`, and the file's url is `{want}`",
-                        file.path, file.url
-                    ),
-                    "",
-                ));
-            }
-        }
+        check_files(record_url, &head.files)?;
         let mut files = BTreeMap::new();
         for file in &head.files {
             let url = resolve(record_url, &file.url)?;
@@ -1710,6 +1676,7 @@ impl Client {
         else {
             return Err(registry(&url, "has no part.jsonc", ""));
         };
+        check_files(&url, &part.head.files)?;
         let part_url = resolve(&url, &part_file.url)?;
         let part_bytes =
             self.checked(&part_url, &part_file.sha256, part_file.bytes, "its record")?;
@@ -1785,7 +1752,11 @@ impl Client {
             let Some((record_url, item)) = self.item_from_cache(row) else {
                 continue;
             };
-            blobs.extend(file_blobs(&record_url, &item.head().files, |_| true));
+            // Steps 5 and 6 run before any file of this record is fetched. A bad
+            // path or url is left for the walk, which reports it.
+            if check_files(&record_url, &item.head().files).is_ok() {
+                blobs.extend(file_blobs(&record_url, &item.head().files, |_| true));
+            }
             for dep in &item.head().registry_dependencies {
                 if dep.registry.is_some() {
                     continue;
@@ -1884,7 +1855,7 @@ impl Client {
             }
             return None;
         }
-        let bytes = read_cache(sha)?;
+        let bytes = read_cache(sha, size)?;
         if sha256(&bytes) != sha || bytes.len() as u64 != size {
             return None;
         }
@@ -1923,6 +1894,52 @@ struct Blob {
     size: u64,
 }
 
+/// Steps 5 and 6 of "Verify what you fetch": every path is one this registry can
+/// store, no two paths are the same or the same after case folding, and each `url`
+/// is exactly `files/<sha256>` for that entry. Nothing is fetched here.
+fn check_files(record_url: &str, files: &[orbe_registry::File]) -> Result<(), Fail> {
+    let mut paths = BTreeSet::new();
+    let mut folded: BTreeMap<String, String> = BTreeMap::new();
+    for file in files {
+        if let Some(problem) = orbe_registry::path_problem(&file.path) {
+            return Err(registry(
+                record_url,
+                &format!("lists `{}`, which has {problem}", file.path),
+                "",
+            ));
+        }
+        if !paths.insert(file.path.clone()) {
+            return Err(registry(
+                record_url,
+                &format!("lists `{}` twice", file.path),
+                "",
+            ));
+        }
+        if let Some(other) = folded.insert(file.path.to_lowercase(), file.path.clone()) {
+            return Err(registry(
+                record_url,
+                &format!(
+                    "lists `{other}` and `{}`, which are one file on a disk that ignores case",
+                    file.path
+                ),
+                "",
+            ));
+        }
+        let want = format!("files/{}", file.sha256);
+        if file.url != want {
+            return Err(registry(
+                record_url,
+                &format!(
+                    "lists `{}` at `{}`, and the file's url is `{want}`",
+                    file.path, file.url
+                ),
+                "",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn file_blobs(
     record_url: &str,
     files: &[orbe_registry::File],
@@ -1946,15 +1963,21 @@ fn file_blobs(
 }
 
 fn fetch_url(url: &str, size: u64) -> Result<Got, Fail> {
+    fetch_in(url, size, 1)
+}
+
+fn fetch_in(url: &str, size: u64, parallel: usize) -> Result<Got, Fail> {
     if url.starts_with("file:") {
         fetch_file(url, size)
     } else if url.starts_with("https://") {
-        fetch_https(url, size)
+        fetch_https(url, size, parallel)
     } else {
         Err(registry(url, "is not an https URL", ""))
     }
 }
 
+/// Fetches in waves of at most [`FETCH_LIMIT`]. Each https request names the width of
+/// its wave, so a test server can hold that wave until every request in it has arrived.
 fn fetch_many(requests: &[(String, u64)]) -> Vec<Result<Got, Fail>> {
     if requests.len() <= 1 {
         return requests
@@ -1962,36 +1985,32 @@ fn fetch_many(requests: &[(String, u64)]) -> Vec<Result<Got, Fail>> {
             .map(|(url, size)| fetch_url(url, *size))
             .collect();
     }
-    let mut slots = Vec::with_capacity(requests.len());
-    slots.resize_with(requests.len(), || None);
-    let slots = Mutex::new(slots);
-    let next = Mutex::new(0usize);
-    thread::scope(|scope| {
-        let workers = requests.len().min(FETCH_LIMIT);
-        for _ in 0..workers {
-            scope.spawn(|| {
-                loop {
-                    let index = {
-                        let mut next = next.lock().unwrap_or_else(|err| err.into_inner());
-                        if *next >= requests.len() {
-                            return;
-                        }
-                        let index = *next;
-                        *next += 1;
-                        index
-                    };
-                    let result = fetch_url(&requests[index].0, requests[index].1);
+    let mut results = Vec::with_capacity(requests.len());
+    for chunk in requests.chunks(FETCH_LIMIT) {
+        let width = chunk.len();
+        let slots = Mutex::new(Vec::with_capacity(width));
+        slots
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .resize_with(width, || None);
+        thread::scope(|scope| {
+            for (index, (url, size)) in chunk.iter().enumerate() {
+                let slots = &slots;
+                scope.spawn(move || {
+                    let result = fetch_in(url, *size, width);
                     slots.lock().unwrap_or_else(|err| err.into_inner())[index] = Some(result);
-                }
-            });
-        }
-    });
-    slots
-        .into_inner()
-        .unwrap_or_else(|err| err.into_inner())
-        .into_iter()
-        .map(|slot| slot.expect("each fetch stores its result"))
-        .collect()
+                });
+            }
+        });
+        results.extend(
+            slots
+                .into_inner()
+                .unwrap_or_else(|err| err.into_inner())
+                .into_iter()
+                .map(|slot| slot.expect("each fetch stores its result")),
+        );
+    }
+    results
 }
 
 fn fetch_file(url: &str, size: u64) -> Result<Got, Fail> {
@@ -2015,33 +2034,38 @@ fn fetch_file(url: &str, size: u64) -> Result<Got, Fail> {
     })
 }
 
-fn fetch_https(url: &str, size: u64) -> Result<Got, Fail> {
+fn fetch_https(url: &str, size: u64, parallel: usize) -> Result<Got, Fail> {
     let agent = format!("orbe/{}", env!("CARGO_PKG_VERSION"));
-    let mut child = match Command::new("curl")
-        .args([
-            "-q",
-            "--silent",
-            "--show-error",
-            "--fail",
-            "--location",
-            "--proto",
-            "=https",
-            "--proto-redir",
-            "=https",
-            "--max-redirs",
-            REDIRECTS,
-            "--connect-timeout",
-            "10",
-            "--max-time",
-            "60",
-            "--output",
-            "-",
-            "--user-agent",
-            &agent,
-            "--write-out",
-            "%{stderr}%{url_effective}",
-            url,
-        ])
+    let header = format!("X-Orbe-Parallel: {parallel}");
+    let mut command = Command::new("curl");
+    command.args([
+        "-q",
+        "--silent",
+        "--show-error",
+        "--fail",
+        "--location",
+        "--proto",
+        "=https",
+        "--proto-redir",
+        "=https",
+        "--max-redirs",
+        REDIRECTS,
+        "--connect-timeout",
+        "10",
+        "--max-time",
+        "60",
+        "--output",
+        "-",
+        "--user-agent",
+        &agent,
+        "--write-out",
+        "%{stderr}%{url_effective}",
+    ]);
+    if parallel > 1 {
+        command.args(["--header", header.as_str()]);
+    }
+    let mut child = match command
+        .arg(url)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2246,13 +2270,17 @@ fn sha256(bytes: &[u8]) -> String {
     hex(&Sha256::digest(bytes))
 }
 
-/// `$XDG_CACHE_HOME/orbe` when that is set. Otherwise `~/Library/Caches/orbe` on macOS and
-/// `~/.cache/orbe` on Linux. Records and files are stored by their SHA-256 under `files/`.
-/// A missing home, or a cache that cannot be written, means the command fetches without a cache.
+/// `$XDG_CACHE_HOME/orbe` when that is an absolute path. A relative path is ignored, as the
+/// XDG spec says. Otherwise `~/Library/Caches/orbe` on macOS and `~/.cache/orbe` on Linux.
+/// Records and files are stored by their SHA-256 under `files/`. A missing home, or a cache
+/// that cannot be written, means the command fetches without a cache.
 fn cache_dir() -> Option<PathBuf> {
     let nonempty = |key: &str| std::env::var_os(key).filter(|value| !value.is_empty());
     if let Some(dir) = nonempty("XDG_CACHE_HOME") {
-        return Some(PathBuf::from(dir).join("orbe"));
+        let path = PathBuf::from(dir);
+        if path.is_absolute() {
+            return Some(path.join("orbe"));
+        }
     }
     let home = PathBuf::from(nonempty("HOME")?);
     if cfg!(target_os = "macos") {
@@ -2273,13 +2301,40 @@ fn cache_path(sha: &str) -> Option<PathBuf> {
     Some(cache_dir()?.join("files").join(sha))
 }
 
-fn read_cache(sha: &str) -> Option<Vec<u8>> {
-    let path = cache_path(sha)?;
-    let meta = fs::symlink_metadata(&path).ok()?;
-    if !meta.is_file() {
+/// Cached bytes for `sha` when the file is a regular file of exactly `size` bytes.
+/// A size above [`MAX_BYTES`] is a miss. The file is opened without following a symlink,
+/// and nothing is read until the open handle is a regular file of that length.
+fn read_cache(sha: &str, size: u64) -> Option<Vec<u8>> {
+    if size > MAX_BYTES {
         return None;
     }
-    fs::read(&path).ok()
+    let path = cache_path(sha)?;
+    let file = open_cache(&path)?;
+    let meta = file.metadata().ok()?;
+    if !meta.is_file() || meta.len() != size {
+        return None;
+    }
+    let mut bytes = Vec::with_capacity(size as usize);
+    io::Read::take(file, size).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 != size {
+        return None;
+    }
+    Some(bytes)
+}
+
+/// Opens a cache path. On Unix the open does not follow a symlink, so a link planted at a
+/// real hash's path is a miss rather than a read of whatever it points at.
+#[cfg(unix)]
+fn open_cache(path: &Path) -> Option<fs::File> {
+    use rustix::fs::{Mode, OFlags};
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let fd = rustix::fs::open(path, flags, Mode::empty()).ok()?;
+    Some(fs::File::from(fd))
+}
+
+#[cfg(not(unix))]
+fn open_cache(path: &Path) -> Option<fs::File> {
+    fs::File::open(path).ok()
 }
 
 fn write_cache(sha: &str, bytes: &[u8]) {

@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{ErrorKind, Write};
 use std::net::TcpListener;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
@@ -235,7 +236,6 @@ import socketserver
 import ssl
 import sys
 import threading
-import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import unquote
 
@@ -244,6 +244,15 @@ seen = set()
 lock = threading.Lock()
 inflight = 0
 max_inflight = 0
+# The gate for the wave currently held open. `entered` counts requests that
+# have joined it. A finished wave (entered == width) is replaced by the next.
+gate = None
+
+class Gate:
+    def __init__(self, width):
+        self.width = width
+        self.entered = 0
+        self.barrier = threading.Barrier(width)
 
 class ThreadingServer(socketserver.ThreadingMixIn, HTTPServer):
     daemon_threads = True
@@ -295,7 +304,16 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def observe(self, path):
-        global inflight, max_inflight
+        global inflight, max_inflight, gate
+        width = 1
+        raw = self.headers.get("X-Orbe-Parallel")
+        if raw:
+            try:
+                width = int(raw.strip())
+            except ValueError:
+                width = 1
+        if width < 1:
+            width = 1
         with lock:
             inflight += 1
             if inflight > max_inflight:
@@ -304,8 +322,16 @@ class Handler(BaseHTTPRequestHandler):
                 handle.write(path + "\n")
             with open(count_file + ".max", "w", encoding="utf-8") as handle:
                 handle.write(str(max_inflight) + "\n")
+            if width > 1:
+                if gate is None or gate.entered >= gate.width:
+                    gate = Gate(width)
+                burst = gate
+                burst.entered += 1
+            else:
+                burst = None
         try:
-            time.sleep(0.03)
+            if burst is not None:
+                burst.barrier.wait()
             self.serve_file(path)
         finally:
             with lock:
@@ -661,11 +687,8 @@ fn fetched_files_match_the_registry_and_a_cached_copy_is_reused() {
         &env,
     );
     assert_eq!(code, 0, "{stdout}{stderr}");
-    assert!(
-        server.max_inflight() >= 2,
-        "in flight {}",
-        server.max_inflight()
-    );
+    let inflight = server.max_inflight();
+    assert!((2..=8).contains(&inflight), "in flight {inflight}");
     let paths = server.paths();
     let mut once = BTreeSet::new();
     for path in &paths {
@@ -716,7 +739,7 @@ fn fetched_files_match_the_registry_and_a_cached_copy_is_reused() {
     let kept = files[1].rsplit('/').next().unwrap();
     let cached = cache.path().join("orbe").join("files").join(sha);
     assert!(cached.is_file(), "{}", cached.display());
-    fs::write(&cached, b"not the file").unwrap();
+    write_same_length_wrong_bytes(&cached);
     server.clear_paths();
     let third = tempfile::tempdir().unwrap();
     let (code, stdout, stderr) = run_env(
@@ -736,6 +759,28 @@ fn fetched_files_match_the_registry_and_a_cached_copy_is_reused() {
         "{refetched:?}"
     );
     assert_parts_match(third.path(), registry);
+
+    let kept_path = cache.path().join("orbe").join("files").join(kept);
+    let aside = cache
+        .path()
+        .join("orbe")
+        .join("files")
+        .join(format!("{kept}-real"));
+    fs::rename(&kept_path, &aside).unwrap();
+    symlink(&aside, &kept_path).unwrap();
+    server.clear_paths();
+    let fourth = tempfile::tempdir().unwrap();
+    let (code, stdout, stderr) = run_env(
+        fourth.path(),
+        &["add", "nano-board"],
+        &server.template(),
+        &env,
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let linked = server.paths();
+    assert!(linked.iter().any(|path| path.contains(kept)), "{linked:?}");
+    assert!(linked.iter().all(|path| !path.contains(sha)), "{linked:?}");
+    assert_parts_match(fourth.path(), registry);
 }
 
 #[test]
@@ -767,7 +812,7 @@ fn a_warm_add_and_part_fetch_only_the_index_and_a_bad_record_is_fetched_again() 
     let sha = record_sha(registry, "led-5mm");
     let cached = cache.path().join("orbe").join("files").join(&sha);
     assert!(cached.is_file(), "{}", cached.display());
-    fs::write(&cached, b"not the record").unwrap();
+    write_same_length_wrong_bytes(&cached);
     server.clear_paths();
     let third = tempfile::tempdir().unwrap();
     let (code, stdout, stderr) =
@@ -813,6 +858,118 @@ fn a_warm_add_and_part_fetch_only_the_index_and_a_bad_record_is_fetched_again() 
 }
 
 #[test]
+fn a_file_url_that_is_not_its_hash_is_refused_before_it_is_fetched() {
+    let (_tmp, reg) = cloned_registry();
+    let version = highest_version(&reg, "led-5mm");
+    let record_name = format!("led-5mm@{version}.json");
+    let mut record: Value =
+        serde_json::from_slice(&fs::read(reg.join(&record_name)).unwrap()).unwrap();
+    let file = record["files"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|file| file["path"] == "part.jsonc")
+        .unwrap();
+    let sha = file["sha256"].as_str().unwrap().to_string();
+    file["url"] = json!("https://other.host/secret");
+    let body = serde_json::to_vec(&record).unwrap();
+    let record_sha = sha256_hex(&body);
+    fs::write(reg.join(&record_name), &body).unwrap();
+    let mut index: Value =
+        serde_json::from_slice(&fs::read(reg.join("index.json")).unwrap()).unwrap();
+    let row = index["items"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|row| row["name"] == "led-5mm" && row["version"] == version)
+        .unwrap();
+    row["sha256"] = json!(record_sha);
+    row["bytes"] = json!(body.len());
+    fs::write(reg.join("index.json"), serde_json::to_vec(&index).unwrap()).unwrap();
+
+    let server = Server::bind(reg, Mode::Observe);
+    let bin = tempfile::tempdir().unwrap();
+    let log = bin.path().join("curl-log");
+    let real_curl =
+        String::from_utf8(Command::new("which").arg("curl").output().unwrap().stdout).unwrap();
+    let real_curl = real_curl.trim();
+    let curl = bin.path().join("curl");
+    fs::write(
+        &curl,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> {}\nexec {real_curl} \"$@\"\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&curl, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.path().display(),
+        std::env::var("PATH").unwrap()
+    );
+    let cache = tempfile::tempdir().unwrap();
+    let cache_home = cache.path().display().to_string();
+    let path_for_env = path;
+    let trust = server.trust();
+    let mut env: Vec<(&str, &str)> = trust
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect();
+    env.push(("XDG_CACHE_HOME", cache_home.as_str()));
+    env.push(("PATH", path_for_env.as_str()));
+
+    let project = tempfile::tempdir().unwrap();
+    let (code, stdout, stderr) = run_env(
+        project.path(),
+        &["add", "led-5mm"],
+        &server.template(),
+        &env,
+    );
+    assert_eq!(code, 1, "{stdout}{stderr}");
+    assert!(
+        stderr.contains("lists `part.jsonc` at `https://other.host/secret`"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!("and the file's url is `files/{sha}`")),
+        "{stderr}"
+    );
+    let paths = server.paths();
+    assert!(
+        paths.iter().all(|path| !path.contains("/files/")),
+        "{paths:?}"
+    );
+    let curled = fs::read_to_string(&log).unwrap_or_default();
+    assert!(!curled.contains("other.host"), "{curled}");
+    assert!(!project.path().join("parts").exists());
+}
+
+#[test]
+fn a_relative_cache_dir_is_ignored() {
+    let project = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let home_dir = home.path().display().to_string();
+    let (code, stdout, stderr) = run_env(
+        project.path(),
+        &["add", "led-5mm"],
+        &registry_env::template(),
+        &[
+            ("XDG_CACHE_HOME", "relative-cache"),
+            ("HOME", home_dir.as_str()),
+        ],
+    );
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    assert!(!project.path().join("relative-cache").exists());
+    let fallback = if cfg!(target_os = "macos") {
+        home.path().join("Library/Caches/orbe/files")
+    } else {
+        home.path().join(".cache/orbe/files")
+    };
+    assert!(fallback.is_dir(), "{}", fallback.display());
+}
+
+#[test]
 fn a_cache_that_cannot_be_created_still_installs() {
     let project = tempfile::tempdir().unwrap();
     let blocked = project.path().join("not-a-directory");
@@ -827,6 +984,14 @@ fn a_cache_that_cannot_be_created_still_installs() {
     assert_eq!(code, 0, "{stdout}{stderr}");
     assert!(project.path().join("parts/led-5mm/part.jsonc").is_file());
     assert_parts_match(project.path(), registry_env::dir());
+}
+
+fn write_same_length_wrong_bytes(path: &Path) {
+    let mut bytes = fs::read(path).unwrap();
+    assert!(!bytes.is_empty(), "{}", path.display());
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0xff;
+    fs::write(path, bytes).unwrap();
 }
 
 fn assert_parts_match(project: &Path, registry: &Path) {
