@@ -3231,4 +3231,95 @@ mod tests {
             .collect();
         assert_eq!(names, ["RTCIO+0x94", "BB+0x50"]);
     }
+
+    fn word(chip: &mut Esp32s3, addr: u32) -> u32 {
+        chip.soc
+            .bus()
+            .load(Cycle(0), addr, Width::Word)
+            .unwrap_or_else(|err| panic!("{addr:#x}: {err:?}"))
+    }
+
+    /// Boot pulses each reset bit while the peripheral is still at reset, and that lists nothing.
+    /// The same pulse after the peripheral has moved puts it back, and lists nothing because the
+    /// model runs the bit.
+    #[test]
+    fn a_reset_pulse_restores_the_peripheral_and_the_boot_pulse_is_quiet() {
+        let boot: Vec<(u32, u32)> = [29, 13, 15, 3]
+            .into_iter()
+            .flat_map(|bit| [(SYSTEM + 0x20, 1 << bit), (SYSTEM + 0x20, 0)])
+            .collect();
+        let mut chip = stores(&boot).chip();
+        assert_eq!(chip.run_until(c(200)), None);
+        assert_eq!(chip.unmodeled().count(), 0, "the boot pulse is quiet");
+        assert_eq!(word(&mut chip, SYSTIMER), 0x4600_0000);
+        assert_eq!(word(&mut chip, TIMG0 + 0x48), 0x0004_c000);
+        assert_eq!(word(&mut chip, RTC_CNTL + 0x98), 0x0001_3214);
+
+        let systimer = stores(&[
+            (SYSTIMER + 0x10, 0x123456),
+            (SYSTIMER + 0x5c, 1),
+            (SYSTIMER + 0x20, 50),
+            (SYSTIMER + 0x34, 1 << 30 | 100),
+            (SYSTIMER + 0x50, 1),
+            (SYSTIMER, 0x4600_0000 | 1 << 24),
+            (SYSTIMER + 0x04, 1 << 30),
+            (SYSTEM + 0x20, 1 << 29),
+            (SYSTEM + 0x20, 0),
+            (SYSTIMER + 0x04, 1 << 30),
+        ]);
+        let mut chip = systimer.chip();
+        assert_eq!(chip.run_until(c(21)), None);
+        assert!(word(&mut chip, SYSTIMER + 0x44) > 0x1000, "the count had moved");
+        assert_eq!(word(&mut chip, SYSTIMER + 0x34), 1 << 30 | 100);
+        assert_eq!(chip.run_until(c(1000)), None);
+        assert!(word(&mut chip, SYSTIMER + 0x44) < 10, "the count is back at 0");
+        assert_eq!(word(&mut chip, SYSTIMER + 0x34), 0, "the alarm is cleared");
+        assert_eq!(word(&mut chip, SYSTIMER), 0x4600_0000);
+        assert_eq!(chip.unmodeled().count(), 0);
+
+        let timer = |group: u32, bit: u32| {
+            let base = if group == 0 { TIMG0 } else { TIMG1 };
+            let mut pairs = vec![
+                (base + 0x18, 0x99),
+                (base + 0x20, 1),
+                (base, 1 << 31 | 1 << 30 | 1 << 13),
+                (base + 0x0c, 1),
+                (base + 0x48, 0),
+                (base + 0x50, 40),
+                (base + 0x48, 1 << 31 | 3 << 29),
+                (SYSTEM + 0x20, 1 << bit),
+                (SYSTEM + 0x20, 0),
+                (base + 0x0c, 1),
+            ];
+            if group == 1 {
+                pairs.insert(0, (TIMG0 + 0x48, 0));
+            }
+            let mut chip = stores(&pairs).chip();
+            let before = if group == 1 { c(15) } else { c(12) };
+            assert_eq!(chip.run_until(before), None, "group {group}");
+            assert_ne!(word(&mut chip, base + 0x04), 0, "group {group} had counted");
+            assert_eq!(chip.run_until(c(200)), None, "group {group} watchdog");
+            assert_eq!(word(&mut chip, base), 0x6000_2000, "group {group} timer");
+            assert_eq!(word(&mut chip, base + 0x04), 0, "group {group} count");
+            assert_eq!(word(&mut chip, base + 0x48), 0x0004_c000, "group {group} watchdog");
+            assert_eq!(chip.unmodeled().count(), 0, "group {group}");
+        };
+        timer(0, 13);
+        timer(1, 15);
+
+        let rtc = stores(&[
+            (TIMG0 + 0x48, 0),
+            (RTC_CNTL + 0x98, 0),
+            (RTC_CNTL + 0x9c, 1),
+            (RTC_CNTL + 0x98, 1 << 31 | 3 << 28),
+            (SYSTEM + 0x20, 1 << 3),
+            (SYSTEM + 0x20, 0),
+        ]);
+        let mut chip = rtc.chip();
+        assert_eq!(chip.run_until(c(12)), None);
+        assert_eq!(word(&mut chip, RTC_CNTL + 0x98), 1 << 31 | 3 << 28);
+        assert_eq!(chip.run_until(c(2000)), None, "the RTC watchdog was reset");
+        assert_eq!(word(&mut chip, RTC_CNTL + 0x98), 0x0001_3214);
+        assert_eq!(chip.unmodeled().count(), 0);
+    }
 }

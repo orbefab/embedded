@@ -1196,7 +1196,8 @@ impl Soc {
         }
     }
 
-    /// The general timers follow TIMG0's and TIMG1's clock and reset bits. The watchdog does not.
+    /// The timer groups, the system timer and the RTC watchdog follow their reset bits, and the
+    /// general timers follow their clock bits.
     fn sync_timg(&mut self, now: Tick) {
         let mut clocked = [false; 2];
         let mut held = [false; 2];
@@ -1206,6 +1207,9 @@ impl Soc {
             held[group] = reset;
         }
         self.watchdogs.apply_gates(now, clocked, held);
+        self.watchdogs
+            .apply_system_wdg(now, self.gates.system_wdg_reset());
+        self.systimer.set_reset(now, self.gates.systimer_reset());
     }
 
     /// Lets an access to an unmodeled register through, or stops the core at the first one.
