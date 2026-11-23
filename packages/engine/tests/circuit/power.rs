@@ -542,7 +542,8 @@ fn a_farad_held_at_0_v_does_not_warn_on_a_cold_load() {
 
 /// 1000 µF, so RC is 5 ms. The average over the first 10.2 ms is about 0.24 W, under 0.25 W,
 /// while the resistor's own power climbs past the rating. 10 µs steps keep the held-sample
-/// average within a few milliwatts of that integral.
+/// average within a few milliwatts of that integral. At the stop the resistor takes about
+/// 0.47 W and has been over for the last 2.04 ms, so the run lists it over now.
 #[test]
 fn a_1000_uf_cold_load_does_not_warn_over_its_first_window() {
     let json = midpoint_held("0.001", WINDOW_PS, 10_000_000);
@@ -552,10 +553,20 @@ fn a_1000_uf_cold_load_does_not_warn_over_its_first_window() {
         found.iter().all(|warning| warning["t_ps"] != 0),
         "warned at open: {found:?}"
     );
-    assert!(
-        found.is_empty(),
+    let [over_now] = found.as_slice() else {
+        panic!("not one power warning: {found:?}");
+    };
+    assert_eq!(
+        over_now["data"]["now"], true,
         "warned while the average over the first 10.2 ms stays under 0.25 W: {found:?}"
     );
+    let window = over_now["data"]["peak"].as_f64().unwrap();
+    assert!(window > 0.23 && window < 0.25, "{window}");
+    assert!(
+        over_now["data"]["sample"].as_f64().unwrap() > 0.4,
+        "{found:?}"
+    );
+    assert_eq!(over_now["data"]["peak_ps"], WINDOW_PS);
     let (_low, high) = span(results.trace().expect("a trace"), "#r1.p");
     assert!(high > 0.4, "{high}");
 }

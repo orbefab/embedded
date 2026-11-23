@@ -589,9 +589,11 @@ impl Open {
     }
 
     /// The engine's diagnostics, the fault, and each rating the probe is over that the engine
-    /// has not yet found on an accepted step, a rating over now among them.
+    /// has not yet found on an accepted step. A rating over now is the probe's, not the last
+    /// accepted step's.
     fn findings(&self, probe: &Probe) -> Vec<EngineDiagnostic> {
         let mut found = self.engine.diagnostics();
+        found.retain(|diagnostic| !diagnostic.over_now());
         let known: BTreeSet<Key> = found.iter().map(key).collect();
         for over in self.engine.over_ratings(probe) {
             if !known.contains(&key(&over)) {

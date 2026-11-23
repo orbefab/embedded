@@ -556,7 +556,9 @@ impl Session {
     ///
     /// Static warnings come first in that file's order, each with `t_ps` null. One
     /// `rating.current` or `rating.power` follows for each rated quantity that has gone
-    /// over. Its `t_ps` is the first accepted step over. `peak` and `peak_ps` run through the
+    /// over, and one for each windowed rating over now at the last accepted step, so a run
+    /// that stops before a held overload fills its window still names it. Its `t_ps` is the
+    /// first accepted step over. `peak` and `peak_ps` run through the
     /// last accepted step. `over_ps` runs through that step, not to `now`. A step that is over
     /// adds its time when the next step is accepted, so a quantity first over on the last
     /// accepted step reads 0. The fault that ends a run is [`Self::fault`].
@@ -564,7 +566,7 @@ impl Session {
     /// has those rows.
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         let mut found = self.warnings.clone();
-        found.extend(self.ratings.findings());
+        found.extend(self.ratings.now(None));
         found.extend_from_slice(self.inputs.findings());
         found.extend(self.actives.warnings(&self.circuit, self.accepted()));
         crate::run_folder::sort_diagnostics(&mut found);
@@ -796,7 +798,7 @@ impl Session {
             unreachable!("a recorded run finishes once it has ended");
         };
         diagnostics.extend(self.warnings);
-        diagnostics.extend(self.ratings.findings());
+        diagnostics.extend(self.ratings.now(None));
         diagnostics.extend_from_slice(self.inputs.findings());
         diagnostics.extend(self.actives.warnings(&self.circuit, at));
         let (mut observations, mut trace) =
