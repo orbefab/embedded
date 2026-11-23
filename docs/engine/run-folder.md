@@ -1,6 +1,6 @@
 # Run folder
 
-`orbe-run run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so do an ATmega328P and an ESP32-S3. It adds `traces/serial.csv` when a chip has a USART, as an ATmega328P does, or a console, as an ESP32-S3 does, `traces/i2c.csv` when a chip has a TWI, as an ATmega328P does, `traces/link.csv` when a chip can send records, as an SPI replay and an ESP32-S3 do, `traces/display.csv` and one `traces/display-<part>.rgb565` for each display part, an `st77916`, and `traces/leds.csv` when a `ws2812` is in the netlist.
+`orbe-run run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so do an ATmega328P and an ESP32-S3. It adds `traces/serial.csv` when a chip has a USART, as an ATmega328P does, or a console, as an ESP32-S3 does, `traces/i2c.csv` when a chip has a TWI, as an ATmega328P does, `traces/link.csv` when a chip can send records, as an SPI replay and an ESP32-S3 do, `traces/display.csv`, one `traces/display-<part>.<format>` and one `traces/display-<part>.png` for each display part, an `st77916` or an `ssd1306`, and `traces/leds.csv` when a `ws2812` is in the netlist.
 
 ```text
 <dir>/

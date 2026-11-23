@@ -12,7 +12,8 @@
 //!   i2c.csv       when a chip in the netlist has a TWI, see `i2c`
 //!   link.csv      when a chip in the netlist can send records, see `link`
 //!   display.csv   when the netlist has a display part, see `display`
-//!   display-<part>.rgb565
+//!   display-<part>.<format>
+//!   display-<part>.png
 //!   leds.csv      when the netlist has a ws2812 part, see `leds`
 //! ```
 
