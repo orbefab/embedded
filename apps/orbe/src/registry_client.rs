@@ -27,13 +27,10 @@ use orbe_scene::{
     BlockCard, Card, CardFile, Code, PlugPart, Version, breadboard_line, is_id, shell_word,
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::part;
 
-const FAILED: u8 = 1;
-const USAGE: u8 = 2;
-const IO: u8 = 3;
+use orbe_session::{EXIT_FAILED as FAILED, EXIT_IO as IO, EXIT_USAGE as USAGE};
 const NETWORK: &str = "check the network and run the command again";
 const MISMATCH: &str = "the file does not match its record";
 const TEMPLATE: &str = "https://orbefab.com/orbe/r/{name}.json";
@@ -314,6 +311,9 @@ fn install(
     let mut chosen = Vec::new();
     for id in ids {
         let Some(row) = rows.get(id).copied() else {
+            if let Some(fail) = needs_newer(index, id) {
+                return Err(fail);
+            }
             return Err(unknown(id, &rows, false));
         };
         chosen.push(row);
@@ -362,6 +362,9 @@ fn install(
     let mut lines = Vec::new();
     for id in ids {
         lines.push(format!("wrote parts/{id} {}", versions[id]));
+        if let Some(note) = newer_note(index, id, &versions[id]) {
+            lines.push(note);
+        }
     }
     Ok(Done {
         text: ended(lines),
@@ -437,7 +440,7 @@ fn install_block(
         }
         versions.insert(dep.id.clone(), version);
     }
-    let part_ids = scene_part_ids(scene);
+    let part_ids = orbe_scene::catalog_part_ids(&String::from_utf8_lossy(scene));
     for id in &part_ids {
         if !versions.contains_key(id) {
             return Err(registry(
@@ -815,55 +818,72 @@ fn near_names(name: &str, ids: &[String]) -> Vec<String> {
     scored.into_iter().map(|(_, id)| id).collect()
 }
 
+fn this_orbe() -> Version {
+    Version::parse(env!("CARGO_PKG_VERSION")).expect("the package version is three numbers")
+}
+
+/// A row with no `orbe` is one every orbe may try. A row that names a newer orbe is skipped.
+fn readable(row: &Row) -> bool {
+    match &row.orbe {
+        None => true,
+        Some(orbe) => Version::parse(orbe).is_some_and(|need| need <= this_orbe()),
+    }
+}
+
+/// The newest version of each item this orbe can read. The index is checked first.
 fn highest(index: &Index) -> Result<BTreeMap<String, &Row>, Fail> {
     let url = index_url();
-    let mut seen = BTreeSet::new();
-    for row in &index.items {
-        if !seen.insert((row.name.clone(), row.version.clone())) {
-            return Err(registry(
-                &url,
-                &format!("lists `{}@{}` twice", row.name, row.version),
-                "",
-            ));
-        }
-        let want = format!("{}@{}.json", row.name, row.version);
-        if row.url != want {
-            return Err(registry(
-                &url,
-                &format!(
-                    "lists `{}` at `{}`, and the row's url is `{want}`",
-                    row.name, row.url
-                ),
-                "",
-            ));
-        }
-        if Version::parse(&row.version).is_none() {
-            return Err(registry(
-                &url,
-                &format!(
-                    "lists `{}` at `{}`, which is not three numbers",
-                    row.name, row.version
-                ),
-                "",
-            ));
-        }
+    if let Err(detail) = orbe_registry::validate_index(index) {
+        return Err(registry(&url, &detail, ""));
     }
     let mut best: BTreeMap<String, &Row> = BTreeMap::new();
-    for row in &index.items {
+    for row in index.items.iter().filter(|row| readable(row)) {
+        let version = Version::parse(&row.version).expect("validate_index checked the version");
         match best.get(&row.name) {
-            Some(have) => {
-                let newer = Version::parse(&row.version).expect("the version was checked");
-                let have_version = Version::parse(&have.version).expect("the version was checked");
-                if newer > have_version {
-                    best.insert(row.name.clone(), row);
-                }
+            Some(have)
+                if version
+                    > Version::parse(&have.version)
+                        .expect("validate_index checked the version") =>
+            {
+                best.insert(row.name.clone(), row);
             }
+            Some(_) => {}
             None => {
                 best.insert(row.name.clone(), row);
             }
         }
     }
     Ok(best)
+}
+
+/// The installed version is not the newest row. The newer one needs a newer orbe.
+fn newer_note(index: &Index, id: &str, installed: &str) -> Option<String> {
+    let installed = Version::parse(installed)?;
+    let newer = index
+        .items
+        .iter()
+        .filter(|row| row.name == id)
+        .any(|row| Version::parse(&row.version).is_some_and(|version| version > installed));
+    newer.then(|| format!("`{id}` has a newer version. {UPDATE}"))
+}
+
+/// Every version of `id` needs a newer orbe. `None` when the index has no such id.
+fn needs_newer(index: &Index, id: &str) -> Option<Fail> {
+    let mut versions: Vec<&Row> = index.items.iter().filter(|row| row.name == id).collect();
+    if versions.is_empty() {
+        return None;
+    }
+    versions.sort_by_key(|row| Version::parse(&row.version));
+    let row = versions.last().copied()?;
+    Some(fail(
+        "part_format",
+        format!(
+            "`{id}` {} needs a newer orbe. nothing was written",
+            row.version
+        ),
+        UPDATE,
+        FAILED,
+    ))
 }
 
 fn fetch_part(
@@ -1052,29 +1072,6 @@ fn card_files(files: &[orbe_registry::File]) -> Vec<CardFile> {
             license: file.license.clone(),
         })
         .collect()
-}
-
-fn scene_part_ids(bytes: &[u8]) -> Vec<String> {
-    let text = String::from_utf8_lossy(bytes);
-    let Ok(value) =
-        jsonc_parser::parse_to_serde_value::<Value>(&text, &jsonc_parser::ParseOptions::default())
-    else {
-        return Vec::new();
-    };
-    let Some(parts) = value.get("parts").and_then(|node| node.as_object()) else {
-        return Vec::new();
-    };
-    let mut ids = Vec::new();
-    for spec in parts.values() {
-        let Some(ty) = spec.get("type").and_then(|node| node.as_str()) else {
-            continue;
-        };
-        if ty.starts_with('.') || ty.starts_with('@') || ids.iter().any(|id| id == ty) {
-            continue;
-        }
-        ids.push(ty.to_string());
-    }
-    ids
 }
 
 fn existing_parts(root: &Path, ids: &[String]) -> Vec<String> {
@@ -1678,14 +1675,8 @@ impl Client {
             let bytes = self.checked(&url, &file.sha256, file.bytes, "its record")?;
             files.insert(file.path.clone(), bytes);
         }
-        let hash = folder_hash(&files);
-        if hash != head.hash {
-            return Err(registry(
-                record_url,
-                &format!("folder hash is {hash}, and the record says {}", head.hash),
-                MISMATCH,
-            ));
-        }
+        orbe_registry::validate_record(&head.files, Some(&files), &head.hash)
+            .map_err(|detail| registry(record_url, &detail, MISMATCH))?;
         Ok(files)
     }
 
@@ -1927,50 +1918,10 @@ struct Blob {
     size: u64,
 }
 
-/// Steps 5 and 6 of "Verify what you fetch": every path is one this registry can
-/// store, no two paths are the same or the same after case folding, and each `url`
-/// is exactly `files/<sha256>` for that entry. Nothing is fetched here.
+/// Steps 5 and 6 of "Verify what you fetch". Nothing is fetched here.
 fn check_files(record_url: &str, files: &[orbe_registry::File]) -> Result<(), Fail> {
-    let mut paths = BTreeSet::new();
-    let mut folded: BTreeMap<String, String> = BTreeMap::new();
-    for file in files {
-        if let Some(problem) = orbe_registry::path_problem(&file.path) {
-            return Err(registry(
-                record_url,
-                &format!("lists `{}`, which has {problem}", file.path),
-                "",
-            ));
-        }
-        if !paths.insert(file.path.clone()) {
-            return Err(registry(
-                record_url,
-                &format!("lists `{}` twice", file.path),
-                "",
-            ));
-        }
-        if let Some(other) = folded.insert(file.path.to_lowercase(), file.path.clone()) {
-            return Err(registry(
-                record_url,
-                &format!(
-                    "lists `{other}` and `{}`, which are one file on a disk that ignores case",
-                    file.path
-                ),
-                "",
-            ));
-        }
-        let want = format!("files/{}", file.sha256);
-        if file.url != want {
-            return Err(registry(
-                record_url,
-                &format!(
-                    "lists `{}` at `{}`, and the file's url is `{want}`",
-                    file.path, file.url
-                ),
-                "",
-            ));
-        }
-    }
-    Ok(())
+    orbe_registry::validate_record(files, None, "")
+        .map_err(|detail| registry(record_url, &detail, ""))
 }
 
 fn file_blobs(
@@ -2068,6 +2019,9 @@ fn fetch_file(url: &str, size: u64) -> Result<Got, Fail> {
 }
 
 fn fetch_https(url: &str, size: u64, parallel: usize) -> Result<Got, Fail> {
+    // A record URL contains `@`. Asking for `%40` skips the redirect a host inserts
+    // before it serves the same file.
+    let request = url.replace('@', "%40");
     let agent = format!("orbe/{}", env!("CARGO_PKG_VERSION"));
     let header = format!("X-Orbe-Parallel: {parallel}");
     let mut command = Command::new("curl");
@@ -2098,7 +2052,7 @@ fn fetch_https(url: &str, size: u64, parallel: usize) -> Result<Got, Fail> {
         command.args(["--header", header.as_str()]);
     }
     let mut child = match command
-        .arg(url)
+        .arg(&request)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -2300,7 +2254,7 @@ fn jsonc_value(bytes: &[u8]) -> Option<Value> {
 }
 
 fn sha256(bytes: &[u8]) -> String {
-    hex(&Sha256::digest(bytes))
+    orbe_registry::sha256(bytes)
 }
 
 /// `$XDG_CACHE_HOME/orbe` when that is an absolute path. A relative path is ignored, as the
@@ -2391,19 +2345,6 @@ fn write_cache(sha: &str, bytes: &[u8]) {
     if written.is_err() {
         let _ = fs::remove_file(&tmp);
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn folder_hash(files: &BTreeMap<String, Vec<u8>>) -> String {
-    let mut lines: Vec<String> = files
-        .iter()
-        .map(|(path, bytes)| format!("{}  {path}\n", sha256(bytes)))
-        .collect();
-    lines.sort_by(|a, b| a[66..].cmp(&b[66..]));
-    format!("sha256:{}", sha256(lines.concat().as_bytes()))
 }
 
 #[cfg(test)]

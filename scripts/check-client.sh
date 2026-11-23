@@ -22,3 +22,19 @@ if [[ ! -x "$work/orbe" ]]; then
   exit 1
 fi
 python3 scripts/check_client.py "$work/orbe"
+
+# orbe 0.2.0 installs a part it can read from a registry that also lists one it cannot.
+old=$work/v0.2.0
+mkdir -p "$old"
+gh release download v0.2.0 -R orbefab/orbe -D "$old" --pattern 'orbe-*-x86_64-unknown-linux-gnu.tar.gz'
+old_archive=$(find "$old" -maxdepth 1 -name 'orbe-*-x86_64-unknown-linux-gnu.tar.gz' -print -quit)
+if [[ -z "$old_archive" ]]; then
+  echo "scripts/check-client.sh: v0.2.0 has no Linux binary" >&2
+  exit 1
+fi
+tar -xzf "$old_archive" -C "$old"
+if [[ ! -x "$old/orbe" ]]; then
+  echo "scripts/check-client.sh: the v0.2.0 archive has no orbe binary" >&2
+  exit 1
+fi
+python3 scripts/check_client.py --released-add "$old/orbe"
