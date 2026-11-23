@@ -1,6 +1,6 @@
 {
   "format": 1, "part": "capacitor-tantalum-3216", "version": "0.2.1", "title": "Capacitor, 3216 tantalum", "license": "MIT OR Apache-2.0",
-  "summary": "Polarized 3216 (3.2 x 1.6 mm) tantalum chip. Lead 1 is the anode, marked by the stripe. Set its capacitance. A reverse voltage past 1 V warns.",
+  "summary": "Polarized 3216 (3.2 x 1.6 mm) tantalum chip. Lead 1 is the anode, marked by the stripe. Set its capacitance. Any reverse voltage warns.",
   "tags": ["capacitor", "tantalum", "polarized", "smd"],
   "docs": { "KEMET T491, case A": null },
   "real": { "generic": true, "maker": null, "number": null, "datasheet": "KEMET T491, case A" },
@@ -12,18 +12,32 @@
   "model": {
     "kind": "capacitor",
     "pins": { "a": "pos", "b": "neg" },
+    "series_resistance": {
+      "value": 3.0,
+      "unit": "ohm",
+      "source": {
+        "datasheet": {
+          "doc": "KEMET T491, case A",
+          "at": "T491A106M016AT, the 10 µF 16 V case A the Nano's bulk capacitors match. ESR 3.0 ohm maximum at 100 kHz, 25 °C. This is that 100 kHz maximum, not the dissipation factor at 120 Hz. It does not change when the capacitance param does.",
+          "basis": "max"
+        }
+      }
+    },
     "ratings": {
       "reverse_voltage": {
-        "value": 1,
+        "value": 0,
         "unit": "V",
         "source": {
           "datasheet": {
             "doc": "KEMET T491, case A",
-            "at": "Reverse Voltage, 25 °C: a transient reverse voltage of 15% of the rated voltage is allowed, and a continuous reverse voltage is not. This part has no rated voltage, so the model warns past 1 V. 1 V is 15% of 6.67 V and under 15% of every T491 rating of 6.8 V and above. A 2.5 V part's 15% is 0.375 V.",
+            "at": "Reverse Voltage: a transient reverse voltage of 15% of rated voltage at 25 °C, 5% at 85 °C, or 1% at 125 °C is allowed for a short period. Continuous reverse operation is not permitted, even within that table. The model warns on any reverse voltage. Each sample is checked, so a short transient the table allows also warns.",
             "basis": "absolute_max"
           }
         }
       }
     }
   },
+  "not_simulated": [
+    { "what": "ESR versus capacitance", "why": "The series resistance is the 10 µF 16 V case A figure at 100 kHz. It does not fall when the capacitance param is set lower." },
+  ],
 }
