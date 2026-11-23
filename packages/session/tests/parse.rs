@@ -284,8 +284,8 @@ fn a_bad_line_names_the_command_and_its_usage() {
             "`@pot1` is a part; name its param, such as `@pot1.position`",
         ),
         (
-            "set @pot1.position half",
-            "`half` is not a number; write the param's value, such as 0.5",
+            "set @pot1.position",
+            "takes a quantity and a value, such as `light 50`, or a part's param and a value, such as `@pot1.position 0.8`",
         ),
         (
             "set pot1.position 0.5",
@@ -360,7 +360,14 @@ fn set_takes_a_world_quantity_or_a_part_s_param() {
         line_ok("set @pot1.position 0.8"),
         Command::SetParam(ParamSet {
             target: Ref::parse("@pot1.position").unwrap(),
-            value: 0.8,
+            text: "0.8".to_string(),
+        })
+    );
+    assert_eq!(
+        line_ok("set @jack.voltage 9V"),
+        Command::SetParam(ParamSet {
+            target: Ref::parse("@jack.voltage").unwrap(),
+            text: "9V".to_string(),
         })
     );
     assert_eq!(line_ok("set @world.light 50"), line_ok("set light 50"));

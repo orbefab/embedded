@@ -53,6 +53,22 @@ pub use project::{
     shell_word,
 };
 pub use published::is_published;
+/// The SI value of `text` in `unit`, using the grammar a scene param uses: `220`, `10k`,
+/// `10kohm`, `4.7 kΩ`, `3.3V`. `unit` is the part file's unit, such as `V`, `ohm` or `1`.
+pub fn parse_quantity(text: &str, unit: &str) -> Result<f64, String> {
+    let Some(unit) = units::Unit::parse(unit) else {
+        return Err(format!("`{unit}` is not a unit"));
+    };
+    units::parse(text, unit, 0)
+}
+
+/// An example of [`parse_quantity`]'s grammar for `unit`, for an error message.
+pub fn quantity_example(unit: &str) -> &'static str {
+    units::Unit::parse(unit)
+        .map(units::Unit::example)
+        .unwrap_or("0.5")
+}
+
 pub use summary::{
     BlockCard, Buy, Card, CardFile, Choice, Doc, Folder, Holes, Literal, Missing, NotSimulated,
     Param, Pin, Rating, Real, Threshold, block_card, builtin_block, builtin_blocks, card, cards,

@@ -237,6 +237,7 @@ function Slider({
         }}
         onPointerDown={(event) => {
           live.current.pointer = true;
+          window.clearTimeout(live.current.timer);
           event.currentTarget.setPointerCapture(event.pointerId);
         }}
         onPointerUp={letGo}

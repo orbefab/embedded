@@ -38,12 +38,13 @@ pub struct WorldSet {
     pub value: f64,
 }
 
-/// A part's live param, named as `@pot1.position`, and its new value in the param's unit. The
-/// open scene decides whether the param is live and whether the value is in its range.
+/// A part's param, named as `@pot1.position`, and the text written for its value. The open
+/// scene reads that text in the param's unit, with the same grammar a scene uses, after it
+/// knows whether the param can change while the session runs.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ParamSet {
     pub target: Ref,
-    pub value: f64,
+    pub text: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -103,7 +104,7 @@ pub const COMMANDS: &[Spec] = &[
     Spec {
         name: "set",
         usage: "set <quantity> <value> | set <ref> <value>",
-        about: "Sets a world quantity the scene declares, from now on: temperature in degC, humidity in %RH or light in lx, such as `set light 50`. Or turns a part's live param, such as a potentiometer's position, as in `set @pot1.position 0.8`.",
+        about: "Sets a world quantity the scene declares, from now on: temperature in degC, humidity in %RH or light in lx, such as `set light 50`. Or turns a part's live param, such as a potentiometer's position, as in `set @pot1.position 0.8`. A param takes the same quantity text a scene does, such as `9V` or `10k`.",
         parse: |args, _| parse_set(args),
     },
     Spec {
@@ -220,19 +221,15 @@ fn parse_set(args: &[String]) -> Result<Command, String> {
     let world = name.strip_prefix("@world.");
     if let Some(r) = name.strip_prefix('@').filter(|_| world.is_none()) {
         let target = Ref::parse(name)?;
-        let value = value
-            .parse::<f64>()
-            .ok()
-            .filter(|v| v.is_finite())
-            .ok_or_else(|| {
-                format!("`{value}` is not a number; write the param's value, such as 0.5")
-            })?;
         if !r.contains('.') {
             return Err(format!(
                 "`{name}` is a part; name its param, such as `{name}.position`"
             ));
         }
-        return Ok(Command::SetParam(ParamSet { target, value }));
+        return Ok(Command::SetParam(ParamSet {
+            target,
+            text: value.clone(),
+        }));
     }
     let name = world.unwrap_or(name);
     let quantity = Quantity::parse(name).ok_or_else(|| {

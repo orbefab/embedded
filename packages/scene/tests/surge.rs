@@ -76,6 +76,13 @@ fn tenth_duty(peak: f64) -> String {
 
 /// The rating warnings of `id` driven by `current`, read after each millisecond up to `ms`.
 fn warnings(id: &str, extra: &str, current: &str, ms: u64) -> Vec<String> {
+    let times: Vec<u64> = (1..=ms).map(|at| at * MS).collect();
+    drive(id, extra, current, false, &times)
+}
+
+/// The rating warnings at each time in `times`, which must ascend. `reverse` drives the
+/// cathode, as a zener surge does.
+fn drive(id: &str, extra: &str, current: &str, reverse: bool, times: &[u64]) -> Vec<String> {
     let project = common::project("nano-button");
     let dir = project.path();
     let source = format!(
@@ -88,6 +95,11 @@ fn warnings(id: &str, extra: &str, current: &str, ms: u64) -> Vec<String> {
     );
     fs::create_dir_all(dir.join("source")).unwrap();
     fs::write(dir.join("source/part.jsonc"), source).unwrap();
+    let (hot, cold) = if reverse {
+        ("cathode", "anode")
+    } else {
+        ("anode", "cathode")
+    };
     let scene = format!(
         r#"{{
   "format": 1,
@@ -95,27 +107,27 @@ fn warnings(id: &str, extra: &str, current: &str, ms: u64) -> Vec<String> {
     "i1": {{ "type": "./source/part.jsonc" }},
     "d1": {{ "type": "{id}"{extra} }}
   }},
-  "wires": [["i1.out", "d1.anode"], ["d1.cathode", "i1.back"]],
+  "wires": [["i1.out", "d1.{hot}"], ["d1.{cold}", "i1.back"]],
   "ground": "i1.back"
 }}
 "#
     );
     fs::write(dir.join("scene.jsonc"), scene).unwrap();
-    run(dir, ms)
+    sample(dir, times)
 }
 
-fn run(dir: &Path, ms: u64) -> Vec<String> {
+fn sample(dir: &Path, times: &[u64]) -> Vec<String> {
     let netlist = orbe_scene::read(&Files::disk(), &dir.join("scene.jsonc"))
         .unwrap_or_else(|found| panic!("{found:#?}"));
     let mut session = Session::open_json(netlist.json.as_bytes(), &Blobs::new()).unwrap();
     let mut seen = Vec::new();
-    for at in 1..=ms {
-        session.advance_to(Time::from_ps(at * MS));
+    for at in times {
+        session.advance_to(Time::from_ps(*at));
         assert!(session.fault().is_none(), "{:?}", session.fault());
         for d in session.diagnostics() {
             if let Diagnostic::RatingCurrent(e) | Diagnostic::RatingPower(e) = &d {
                 let now = if d.over_now() { " now" } else { "" };
-                let seen_at = format!("{} {}{now} by {at}ms", d.code(), e.quantity);
+                let seen_at = format!("{} {}{now} by {}ps", d.code(), e.quantity, at);
                 if !seen
                     .iter()
                     .any(|s: &String| s.split(" by ").next() == seen_at.split(" by ").next())
@@ -179,4 +191,22 @@ fn each_sustained_rating_rides_out_its_sheet_s_surge_and_warns_when_held_over() 
             "{id} held: {held:?}"
         );
     }
+}
+
+/// A step that lands inside the sheet's surge used to call power over now, because the power
+/// rating has no peak of its own. The current peak bounds that pulse.
+#[test]
+fn a_step_inside_a_legal_surge_does_not_call_power_over_now() {
+    let short = |peak| square(peak, 100_000_000);
+    assert_eq!(
+        drive("diode-cd1206", "", &short(4.0), false, &[1_050_000_000]),
+        Vec::<String>::new(),
+        "CD1206 at 4 A, 50 us into its 100 us surge"
+    );
+    let zener = |peak| square(peak, 8_300_000_000);
+    assert_eq!(
+        drive("zener-1n4733a", "", &zener(0.89), true, &[2_000_000_000]),
+        Vec::<String>::new(),
+        "1N4733A at 0.89 A reverse, 1 ms into the surge"
+    );
 }

@@ -79,6 +79,9 @@ pub struct WorldApplied {
     pub status: Status,
     /// Later scheduled steps of this quantity that the set removed.
     pub dropped: u32,
+    /// The value was already in force from the landing on. Later steps may still have been
+    /// dropped. Nothing was appended.
+    pub already: bool,
 }
 
 /// Why `apply` changed nothing.
@@ -142,12 +145,14 @@ impl Session {
     }
 
     /// Lands `change` at the first time from the one it asks for that `apply` would land an
-    /// input at, and drops that quantity's steps at or after that time. A step at the landing
-    /// has not taken effect yet: a read there is the value from before it. Other quantities
-    /// keep their steps. The value in force, with nothing left to drop, is [`Rejected::NoChange`].
-    /// A change of the value appends one step there. Either way the held step is solved again
-    /// from the accepted one, as `apply` does, and a jump restarts. Every part field that reads
-    /// the quantity follows the schedule this leaves.
+    /// input at, and drops that quantity's later steps. A step at the landing has not taken
+    /// effect yet: a read there is the value from before it. Other quantities keep their steps.
+    /// The value already in force from the landing on, when no later step differs from it, is
+    /// [`Rejected::NoChange`]. A later step that differs is dropped and, when the value was
+    /// already that, nothing is appended. An event exactly at the landing stays when it already
+    /// holds the value. A change of the value appends one step there. Either way the held step
+    /// is solved again from the accepted one, as `apply` does, and a jump restarts. Every part
+    /// field that reads the quantity follows the schedule this leaves.
     pub fn set(&mut self, change: &WorldChange) -> Result<WorldApplied, Rejected> {
         let from = self.from(change.at)?;
         let accepted_at = match &self.state {
@@ -155,7 +160,7 @@ impl Session {
             State::Ended { .. } => unreachable!("from() accepted a running session"),
         };
         let quantity = change.quantity;
-        let (at, appends) = {
+        let (at, same) = {
             let schedule = self
                 .circuit
                 .netlist
@@ -165,21 +170,30 @@ impl Session {
             if !quantity.holds(change.value.get()) {
                 return Err(Rejected::Value(ValueRule::Range));
             }
-            let in_force = schedule.before(from).si;
-            let later = schedule.events().iter().any(|event| event.at >= from);
-            if in_force == change.value && !later {
+            let pending = schedule.after(from).si;
+            let differs = schedule
+                .events()
+                .iter()
+                .any(|event| event.at > from && event.to.si != change.value);
+            if pending == change.value && !differs {
                 return Err(Rejected::NoChange);
             }
-            let at = if in_force == change.value {
+            let at = if pending == change.value {
                 from
             } else {
                 landing_without_later(schedule, from).ok_or(Rejected::PastStop)?
             };
-            (at, in_force != change.value)
+            (at, pending == change.value)
         };
         let at = self.before_stop(Some(at))?;
-        let dropped = self.circuit.netlist.drop_world_from(quantity, from);
-        if appends {
+        // An event at the landing that already holds the value stays. A different one is replaced.
+        let drop_at = if same {
+            Time::from_ps(from.as_ps().saturating_add(1))
+        } else {
+            from
+        };
+        let dropped = self.circuit.netlist.drop_world_from(quantity, drop_at);
+        if !same {
             self.circuit
                 .netlist
                 .append_world(quantity, at, change.value);
@@ -195,6 +209,7 @@ impl Session {
             at: applied.at,
             status: applied.status,
             dropped: u32::try_from(dropped).expect("a quantity's steps fit in the reply"),
+            already: same,
         })
     }
 

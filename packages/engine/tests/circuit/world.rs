@@ -208,6 +208,7 @@ fn a_set_drops_later_steps_and_leaves_the_other_quantity() {
     session.advance_to(asked);
     let applied = session.set(&light(300.0)).unwrap();
     assert_eq!(applied.dropped, 3);
+    assert!(applied.already);
     assert_eq!(applied.at, asked);
     assert!(
         session
@@ -230,6 +231,20 @@ fn a_set_drops_later_steps_and_leaves_the_other_quantity() {
         probe.get(&net).unwrap().get(),
         mid(10_000.0 * 10.0 / 300.0)
     ));
+}
+
+/// A second `set` of a value that is pending and not yet in force changes nothing.
+#[test]
+fn a_repeated_set_of_a_pending_value_is_no_change() {
+    let json = divider(&lux(300.0), 10_000_000_000, 100_000_000);
+    let mut session = Session::open(netlist::parse(json.as_bytes()).unwrap()).unwrap();
+    let first = session.set(&light(1000.0)).unwrap();
+    assert!(!first.already);
+    assert_eq!(session.set(&light(1000.0)), Err(Rejected::NoChange));
+    assert_eq!(
+        event_times(&session, Quantity::Light),
+        vec![first.at.as_ps()]
+    );
 }
 
 fn event_times(session: &Session, quantity: Quantity) -> Vec<u64> {

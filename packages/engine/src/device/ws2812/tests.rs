@@ -239,8 +239,13 @@ fn a_bit_is_told_by_its_high_alone() {
         ("the sketch", ZERO, ONE),
         ("an RMT at 10 MHz", (300_000, 900_000), (900_000, 300_000)),
         (
+            "Arduino rgbLedWrite",
+            (400_000, 800_000),
+            (800_000, 400_000),
+        ),
+        (
             "T0H max over T0L min",
-            (380_000, 580_000),
+            (400_000, 580_000),
             (850_000, 400_000),
         ),
         (
@@ -288,7 +293,7 @@ fn a_low_of_up_to_280_us_between_bits_ends_the_bit_and_does_not_latch() {
 
 #[test]
 fn a_high_outside_both_windows_warns_once_and_drops_the_bit() {
-    for high in [219_999, 380_001, 579_999, 1_000_001] {
+    for high in [219_999, 400_001, 579_999, 1_000_001] {
         let mut pulses = vec![(true, high), (false, ZERO.1)];
         pulses.extend(train(&[0x0F, 0xF0, 0x3C], ZERO, ONE));
         pulses.extend([(true, high), (false, ZERO.1)]);

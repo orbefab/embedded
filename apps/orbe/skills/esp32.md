@@ -65,7 +65,7 @@ expect @led1 off
 
 - `esp32s3-devkitc-1`, the DevKitC-1 v1.1 with an N16R8 module. `orbe part esp32s3-devkitc-1` lists its pins.
 - `TX` and `RX` are GPIO43 and GPIO44, wired to the USB-UART bridge.
-- GPIO38 drives the board's RGB LED, `@board.led`. `rgbLedWrite` does not light it yet: the LED drops the bits with `warning[chip.protocol]`.
+- GPIO38 drives the board's RGB LED, `@board.led`. `rgbLedWrite(38, 0, 40, 0)` latches `rgb(0,40,0)`. Its 0-bit high is 400 ns, the SK68xx sheet's maximum, and the chain takes it.
 - `RST` and GPIO35 to GPIO37 are not simulated. A wire to them is `not_simulated`.
 
 ## The chip

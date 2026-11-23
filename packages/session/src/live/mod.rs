@@ -451,6 +451,26 @@ fn fail(error: Error) -> Box<Failed> {
     failed(error, Data::None)
 }
 
+/// How to write a param's value. Unit `1` has no suffix, and its scene example sits outside
+/// a position's range, so a position is shown as `0.5`.
+fn quantity_hint(unit: &str) -> String {
+    if unit == "1" {
+        return "write the param's value, such as 0.5".to_string();
+    }
+    format!(
+        "write the param's value, such as {}",
+        orbe_scene::quantity_example(unit)
+    )
+}
+
+fn number_error(label: &str, text: &str, unit: &str) -> Error {
+    Error::new(
+        Code::Usage,
+        format!("`{text}` is not a number; {}", quantity_hint(unit)),
+        format!("write {label} in its unit"),
+    )
+}
+
 impl Open {
     fn new(
         json: &str,
@@ -716,7 +736,7 @@ impl Open {
             quantity: set.quantity,
             value: set.value,
             landed_ps: applied.at.as_ps(),
-            already: false,
+            already: applied.already,
             dropped: applied.dropped,
         };
         match applied.status {
@@ -731,9 +751,22 @@ impl Open {
         let (label, engine, spec) = self
             .live_param(&set.target, Code::NotSettable)
             .map_err(fail)?;
+        let value = match orbe_scene::parse_quantity(&set.text, &spec.unit) {
+            Ok(value) if value.is_finite() => value,
+            Ok(_) => {
+                return Err(fail(number_error(&label, &set.text, &spec.unit)));
+            }
+            Err(reason) => {
+                return Err(fail(Error::new(
+                    Code::Usage,
+                    format!("{reason}; {}", quantity_hint(&spec.unit)),
+                    format!("write {label} in its unit"),
+                )));
+            }
+        };
         let (above, below) = (spec.above, spec.below);
-        let inside = above.is_none_or(|above| set.value > above)
-            && below.is_none_or(|below| set.value < below);
+        let inside =
+            above.is_none_or(|above| value > above) && below.is_none_or(|below| value < below);
         if !inside {
             let bounds = match (above, below) {
                 (Some(above), Some(below)) => format!("above {above} and below {below}"),
@@ -743,7 +776,7 @@ impl Open {
             };
             return Err(fail(Error::new(
                 Code::Value,
-                format!("{label} is {bounds}, not {}", set.value),
+                format!("{label} is {bounds}, not {value}"),
                 format!("set {label} to a value {bounds}"),
             )));
         }
@@ -751,11 +784,11 @@ impl Open {
         let input = Input {
             part: name.clone(),
             at: self.engine.now(),
-            setting: Setting::Level(Finite::new(set.value).expect("the command's value is finite")),
+            setting: Setting::Level(Finite::new(value).expect("the command's value is finite")),
         };
         let data = |landed_ps: u64, already: bool| Data::SetParam {
             target: label.clone(),
-            value: set.value,
+            value,
             unit: spec.unit.clone(),
             landed_ps,
             already,
