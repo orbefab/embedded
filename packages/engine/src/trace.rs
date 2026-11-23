@@ -291,9 +291,9 @@ impl Trace {
         files
     }
 
-    /// Each pixel panel's frame memory file under `traces/`, with its bytes. Their names come
+    /// Each pixel panel's frame memory file and glass under `traces/`, with their bytes. Their names come
     /// from part names, so they are not in `files`.
-    pub(crate) fn images(&self) -> impl Iterator<Item = (String, &[u8])> {
+    pub(crate) fn images(&self) -> impl Iterator<Item = (String, Vec<u8>)> + '_ {
         self.displays.iter().flat_map(Displays::images)
     }
 

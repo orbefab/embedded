@@ -2,13 +2,14 @@
 //! whether it holds now.
 
 use std::fmt::Write;
+use std::path::Path;
 
 use orbe_engine::name::Ref as EngineRef;
 
 use super::{Open, Outcome, engine_name, fail, failed, quantity, t, unit_of};
 use crate::condition::{Condition, Op, Rgb, State as Want, Unit};
 use crate::reply::{Check, Code, Data, Diagnostic, Error, Level, Light, current, number};
-use crate::target::{Target, one_engine, rgb_reading};
+use crate::target::{Target, one_engine, rgb_reading, screen_reading};
 
 /// What a condition reads, resolved against the open scene.
 pub(super) enum Bound {
@@ -42,6 +43,19 @@ pub(super) enum Bound {
         engine: String,
         want: Rgb,
     },
+    /// `@oled.display.screen lit` or `off`: whether any pixel of the glass is lit.
+    ScreenLit {
+        label: String,
+        engine: String,
+        want: bool,
+    },
+    /// `@oled.display.screen shows <file>`: each row of the glass, as the file writes it.
+    Shows {
+        label: String,
+        engine: String,
+        file: String,
+        rows: Vec<String>,
+    },
     SerialContains(String),
     NoDiagnostics,
 }
@@ -51,8 +65,30 @@ impl Open {
         Ok(match condition {
             Condition::NoDiagnostics => Bound::NoDiagnostics,
             Condition::SerialContains(text) => Bound::SerialContains(text.as_str().to_string()),
+            Condition::Shows(r, file) => {
+                let (label, engine) = self.screen_target(r)?;
+                let rows = self.picture(file)?;
+                Bound::Shows {
+                    label,
+                    engine,
+                    file: file.clone(),
+                    rows,
+                }
+            }
             Condition::State(r, want) => {
                 match (self.resolve(r)?, want) {
+                    (
+                        Target::Screen {
+                            path,
+                            reading,
+                            engine,
+                        },
+                        Want::Lit | Want::Off,
+                    ) => Bound::ScreenLit {
+                        label: format!("{path}.{reading}"),
+                        engine,
+                        want: *want == Want::Lit,
+                    },
                     (Target::Part(path), want) if want.light().is_some() => {
                         let index = self.light.require(&self.refs, &path)?;
                         Bound::Light {
@@ -175,6 +211,15 @@ impl Open {
                         pin,
                         net: None,
                     } => return Err(self.not_simulated(&path, &pin)),
+                    Target::Screen { .. } => {
+                        return Err(Error::new(
+                            Code::NoReading,
+                            format!("{r} is a screen, not a value to compare"),
+                            format!(
+                                "expect what it shows, such as `{r} lit` or `{r} shows tests/screen.txt`"
+                            ),
+                        ));
+                    }
                     Target::Color { .. } => {
                         return Err(Error::new(
                             Code::NoReading,
@@ -289,6 +334,39 @@ impl Open {
                     format!("{label} {}", colors.text()),
                 )
             }
+            Bound::ScreenLit {
+                label,
+                engine,
+                want,
+            } => {
+                let screen = self.screen(engine);
+                (
+                    (screen.lit > 0) == *want,
+                    format!("{label} {}", screen.brief()),
+                )
+            }
+            Bound::Shows {
+                label,
+                engine,
+                file,
+                rows,
+            } => {
+                let screen = self.screen(engine);
+                let differs = (0..rows.len().max(screen.rows.len()))
+                    .find(|&k| rows.get(k) != screen.rows.get(k));
+                match differs {
+                    None => (true, format!("{label} {}, as {file}", screen.brief())),
+                    Some(k) => (
+                        false,
+                        format!(
+                            "{label} {}; row {k} is `{}`, and {file} has `{}`",
+                            screen.brief(),
+                            screen.rows.get(k).map_or("", String::as_str),
+                            rows.get(k).map_or("", String::as_str),
+                        ),
+                    ),
+                }
+            }
             Bound::SerialContains(text) => {
                 let found = self.serial.contains(text);
                 let mut actual = self.serial.actual();
@@ -341,6 +419,54 @@ impl Open {
         );
         Err(failed(error, Data::Checked(check)))
     }
+}
+
+impl Open {
+    /// The screen a `shows` condition reads, as its label and its engine part.
+    fn screen_target(&self, r: &crate::target::Ref) -> Result<(String, String), Error> {
+        match self.resolve(r)? {
+            Target::Screen {
+                path,
+                reading,
+                engine,
+            } => Ok((format!("{path}.{reading}"), engine)),
+            Target::Part(path) => {
+                let part = &self.refs.parts[&path];
+                let Some(reading) = screen_reading(part) else {
+                    return Err(no_screen(r));
+                };
+                let engine = one_engine(&path, part, Code::NoReading)?;
+                Ok((format!("{path}.{reading}"), engine))
+            }
+            _ => Err(no_screen(r)),
+        }
+    }
+
+    /// The rows of `file`, by its path from the scene's folder: one line a row, `#` lit and
+    /// `.` dark, as `get` writes them.
+    fn picture(&self, file: &str) -> Result<Vec<String>, Error> {
+        let dir = Path::new(&self.scene).parent().unwrap_or(Path::new(""));
+        let text = self.files.read_to_string(&dir.join(file)).map_err(|err| {
+            Error::new(
+                Code::NoReading,
+                format!("cannot read `{file}`: {err}"),
+                "name a file by its path from the scene's folder, with the rows `get` prints for the screen",
+            )
+        })?;
+        Ok(text
+            .lines()
+            .map(|row| row.trim_end().to_string())
+            .filter(|row| !row.is_empty())
+            .collect())
+    }
+}
+
+fn no_screen(r: &crate::target::Ref) -> Error {
+    Error::new(
+        Code::NoReading,
+        format!("{r} is not a screen"),
+        "a display, a part with a reading of screen, shows rows, such as `@oled.display.screen shows tests/hello.screen`",
+    )
 }
 
 fn no_color(r: &crate::target::Ref) -> Error {

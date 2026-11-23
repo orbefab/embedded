@@ -408,6 +408,8 @@ pub enum Reading {
     },
     /// The colours an addressable LED part last latched.
     Color(Colors),
+    /// What a screen part's glass shows now.
+    Screen(Screen),
     /// A live param's value, in the param's unit as the part file writes it, such as `1`.
     Param {
         unit: String,
@@ -472,6 +474,56 @@ impl Colors {
             None => "not latched yet".to_string(),
         });
         words.join(" ")
+    }
+}
+
+/// What a screen's glass shows: its controller kind, its size, whether it shows anything,
+/// how many pixels are lit, and each row of pixels as text, `#` lit and `.` dark, top row
+/// first. `settings` holds the controller's named settings, such as its contrast.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Screen {
+    pub kind: String,
+    pub width: u16,
+    pub height: u16,
+    pub on: bool,
+    pub lit: usize,
+    pub rows: Vec<String>,
+    pub settings: Vec<(String, u16)>,
+}
+
+impl Screen {
+    fn json(&self) -> Value {
+        json!({
+            "kind": self.kind,
+            "width": self.width,
+            "height": self.height,
+            "on": self.on,
+            "lit": self.lit,
+            "rows": self.rows,
+            "settings": self.settings.iter().map(|(k, v)| (k.clone(), json!(v))).collect::<serde_json::Map<_, _>>(),
+        })
+    }
+
+    /// `ssd1306 128x64 on, 412 pixels lit`.
+    pub fn brief(&self) -> String {
+        format!(
+            "{} {}x{} {}, {} pixels lit",
+            self.kind,
+            self.width,
+            self.height,
+            if self.on { "on" } else { "off" },
+            self.lit
+        )
+    }
+
+    /// The brief line, then each row.
+    pub fn text(&self) -> String {
+        let mut text = self.brief();
+        for row in &self.rows {
+            text.push('\n');
+            text.push_str(row);
+        }
+        text
     }
 }
 
@@ -893,6 +945,7 @@ impl Reading {
             Reading::Quantity { value, .. } => json!(value),
             Reading::Brightness { value, over_ps } => json!({ "a": value, "over_ps": over_ps }),
             Reading::Color(colors) => colors.json(),
+            Reading::Screen(screen) => screen.json(),
             Reading::Param { value, .. } => json!(value),
             Reading::Part {
                 state,
@@ -925,6 +978,7 @@ impl Reading {
             Reading::Quantity { .. } => "quantity",
             Reading::Brightness { .. } => "brightness",
             Reading::Color(_) => "color",
+            Reading::Screen(_) => "screen",
             Reading::Param { .. } => "param",
             Reading::Part { .. } => "part",
         }
@@ -937,6 +991,7 @@ impl Reading {
                 level: Some(level), ..
             } => level.as_str().to_string(),
             Reading::Pin { level: None, v } => format!("{}V", number(*v)),
+            Reading::Screen(screen) => screen.brief(),
             Reading::Quantity { .. }
             | Reading::Brightness { .. }
             | Reading::Color(_)
@@ -974,6 +1029,7 @@ impl Reading {
                 format!("{} over {}", current(*value), t(*over_ps))
             }
             Reading::Color(colors) => colors.text(),
+            Reading::Screen(screen) => screen.text(),
             Reading::Param { unit, value } => with_unit(*value, unit),
             Reading::Part {
                 state,

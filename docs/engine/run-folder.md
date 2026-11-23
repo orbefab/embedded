@@ -18,7 +18,8 @@
     i2c.csv
     link.csv
     display.csv
-    display-<part>.rgb565
+    display-<part>.<format>
+    display-<part>.png
     leds.csv
 ```
 
@@ -184,7 +185,7 @@ falls = [t for t, level in edges("run/traces/logic.vcd", "#u1.logic.out") if lev
 period_s = (falls[-1] - falls[0]) / (len(falls) - 1) * 1e-12
 ```
 
-A netlist with a display part adds `displays` after `logic`. It maps each display part's name to its state at `end_ps`. `kind` is the part's kind, `width` and `height` are its pixels, and `format` is how its frame memory file holds a pixel. `flags` holds `display_on`, `inverted`, `reset`, which is whether its reset pin reads low, and `sleep`. `madctl` and `colmod` are those registers as integers. `registers` is how many registers hold a stored last write, at most 256. `brightness` is the last duty its backlight pin took, as `duty` of `steps` at `hz`, or `null` before the first. `image` is its frame memory file and `sha256` that file's SHA-256 in lowercase hex. `packages/engine/tests/circuits/st77916-replay` writes:
+A netlist with a display part adds `displays` after `logic`. It maps each display part's name to its state at `end_ps`. `kind` is the part's kind, `width` and `height` are its pixels, and `format` is how its frame memory file holds a pixel. `flags` holds `display_on`, `inverted`, `reset`, which is whether its reset pin reads low, and `sleep`. The controller's own settings follow `flags` as integers, each by its name. An `st77916` has `madctl` and `colmod`, those registers. An `ssd1306` has `contrast`, `entire_on`, `addressing`, `start_line`, `offset`, `multiplex`, `segment_remap`, `com_scan`, `com_pins` and `charge_pump`, as [netlist.md](netlist.md#ssd1306) says. `addressing` is 0 for horizontal, 1 for vertical and 2 for page mode, and `entire_on`, `segment_remap` and `com_scan` are 0 or 1. `registers` is how many registers hold a stored last write, at most 256. `brightness` is the last duty its backlight pin took, as `duty` of `steps` at `hz`, or `null` before the first. `image` is its frame memory file and `sha256` that file's SHA-256 in lowercase hex. `packages/engine/tests/circuits/st77916-replay` writes:
 
 ```json
 "displays": {
@@ -449,13 +450,17 @@ t_ps,part,x0,y0,x1,y1,bytes,hash
 ```
 
 - `t_ps` is the time the write closed, the end of the record that closed it, in integer picoseconds. `part` is the display part's name.
-- `x0`, `y0`, `x1` and `y1` name the window, first and last column and row, both ends included, before the memory access order maps them. A `RAMWR` begins at that window's top-left. A `RAMWRC` row names the same window, not the column and row where the continuation started. A write that wraps past the window's end still names that window.
+- `x0`, `y0`, `x1` and `y1` name the window, first and last column and row, both ends included, before the memory access order maps them. An `ssd1306` row is a run of data bytes, and its window is the pixel rows of its pages: page `p` is rows `8p` to `8p + 7`. In page mode the window is the page from the run's first column to column 127. A `RAMWR` begins at that window's top-left. A `RAMWRC` row names the same window, not the column and row where the continuation started. A write that wraps past the window's end still names that window.
 - `bytes` is how many bytes the write took, and `hash` is the first 8 bytes of their SHA-256, in lowercase hex.
 - Rows are in the order writes closed, then by part name, then in the order each part closed them.
 - A write still open at `stop_ps`, a write that took no bytes, and a write a reset dropped are not in the file. After an error the file keeps the writes that closed by `end_ps`.
 - A display part writes the file even when it closed no write, as the header alone.
 
-Each display part also adds `display-<part>.rgb565`, its frame memory at `end_ps`. An `st77916` file is 259200 bytes, 360 rows of 360 pixels, rows top to bottom and each row left to right. The file keeps each pixel's bytes in the order they arrived. Firmware that sends the high byte first, as `packages/engine/tests/circuits/st77916-replay` does and as `COLMOD` 0x55 on this panel expects, gives big-endian RGB565. A reader must not assume little-endian. A pixel no write reached is two zero bytes. [netlist.md](netlist.md#st77916) says how a write maps its pixels, and [What the glass shows](#what-the-glass-shows) how a reader turns the file into the pixels a person sees.
+Each display part also adds `display-<part>.<format>`, its frame memory at `end_ps`, named by the `format` in its `displays` entry, and `display-<part>.png`, what its glass shows at `end_ps`. The PNG is 8 bits a channel, red, green, blue and alpha, unfiltered, in stored deflate blocks, so its bytes depend on the pixels alone. [What the glass shows](#what-the-glass-shows) gives its pixels.
+
+An `ssd1306` file, `display-<part>.mono-pages`, is its GDDRAM, 1024 bytes: page 0 to page 7, each 128 bytes, byte `c` of a page the segment `c` drives, and bit 0 of a byte the page's top row. A byte no write reached is zero. Segment remap is in the bytes, as [netlist.md](netlist.md#ssd1306) says.
+
+An `st77916` file, `display-<part>.rgb565`, is 259200 bytes, 360 rows of 360 pixels, rows top to bottom and each row left to right. The file keeps each pixel's bytes in the order they arrived. Firmware that sends the high byte first, as `packages/engine/tests/circuits/st77916-replay` does and as `COLMOD` 0x55 on this panel expects, gives big-endian RGB565. A reader must not assume little-endian. A pixel no write reached is two zero bytes. [netlist.md](netlist.md#st77916) says how a write maps its pixels, and [What the glass shows](#what-the-glass-shows) how a reader turns the file into the pixels a person sees.
 
 `packages/engine/scripts/render_st77916.py` plays a replay list into a panel apart from the engine and checks a run's `display.csv`, without `t_ps`, its frame memory file, and the `displays` entry's `registers`, `flags`, `madctl` and `colmod` against it, as [reference.md](reference.md#st77916) says.
 
@@ -505,6 +510,15 @@ For an `st77916` the pixels are 360 rows of 360, rows top to bottom and each row
 The glass does not dim. `brightness` stays a separate number in the `displays` entry, and a viewer applies it.
 
 `packages/engine/tests/circuits/st77916-replay` ends with `inverted` false, so its unwritten pixels, all zero bytes, show white on the glass.
+
+For an `ssd1306` the pixels are 64 rows of 128, each opaque white when lit and opaque black when dark. The panel is wired for the settings the module's makers, Adafruit SSD1306 and U8g2 send, segment remap `A1h`, COM scan `C8h` and COM pins `DAh 12h`, which put column address 0 at the left and page 0 at the top, the header's side:
+
+- When `display_on` is false, `reset` is true, or the charge pump is off, bit 2 of `charge_pump` clear, every pixel is dark. The module has no other supply for the panel's drive voltage.
+- Glass column `x` shows segment `127 - x`, byte `127 - x` of each page.
+- Glass row `y` is the COM line row `y` of the scan reaches with `com_scan` 1, and row `63 - y` with `com_scan` 0, so a normal scan shows the picture upside down. With bit 4 of `com_pins` clear, sequential COM, scan row `r` is `2r` in the top half and `2r - 63` in the bottom half. Bit 5, left and right remap, adds 32 modulo 64. Adding `offset` modulo 64 gives the row counter. A counter past `multiplex` is dark. Otherwise the GDDRAM row is the counter plus `start_line`, modulo 64.
+- A pixel is lit when its GDDRAM bit is set, or for every pixel when `entire_on` is 1, and `inverted` flips that.
+
+Contrast dims nothing on the glass. `contrast` stays a setting, and a viewer may apply it. The panel's colour is not drawn.
 
 ## Determinism
 

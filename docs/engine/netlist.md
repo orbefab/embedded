@@ -1109,6 +1109,53 @@ A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.u
 
 A `cst816` has no `ratings` object and no `i`, `v`, or `p`. Its logic signals are `SCL`, `SDA`, `INT` and `RST`. It joins `SDA` to `GND` and `INT` to `GND` through the stage its drive stamps. `SCL`, `RST` and `VCC` draw no current, so each needs another DC path.
 
+### SSD1306
+
+`kind` is `ssd1306`, the controller of a 128 by 64 monochrome OLED panel on I2C. It is an active chip with no clock of its own, and an I2C target at `address`, 0x3C or 0x3D, the two addresses `SA0` selects. Pins are `VDD`, `VSS`, `SCL`, `SDA` and `RES`. Every pin is required. `SDA` is open drain into `VSS`, `low_drop` over `VSS` behind `low_resistance`. `SCL` and `RES` are inputs, and the part holds neither, as [engine.md](engine.md#i2c-targets) says. `RES` reads high above `input_threshold.high` times `V(VDD) - V(VSS)` over `VSS`, and low at or below `input_threshold.low` times it, and so do `SCL` and `SDA`.
+
+`blocks/nano-oled` puts one, inside the `oled-ssd1306-128x64` module, on a Nano that runs Adafruit SSD1306 2.5.17. The panel part the module's part writes is:
+
+```json
+{
+  "name": "oled__display",
+  "kind": "ssd1306",
+  "pins": { "VDD": "v3v3", "VSS": "gnd", "SCL": "scl", "SDA": "sda", "RES": "res" },
+  "address": 60,
+  "low_drop": { "value": 0.0, "unit": "V" },
+  "low_resistance": { "value": 133.333, "unit": "ohm" },
+  "input_threshold": {
+    "low": { "value": 0.2, "unit": "1" },
+    "high": { "value": 0.8, "unit": "1" }
+  }
+}
+```
+
+`low_resistance` of 133.333 ohm is the I2C bus's 0.4 V at 3 mA. `input_threshold` of 0.2 and 0.8 is the datasheet's input low and high voltage over `VDD`.
+
+The model is the controller's I2C command set and its 1024-byte GDDRAM, page `p` of 8 rows at bytes `128p` to `128p + 127`, bit 0 the page's top row.
+
+- A write transfer starts with a control byte. Bit 7 is Co and bit 6 is D/C#. With Co clear every byte to the STOP is a command byte, or a data byte with D/C# set. With Co set one byte follows, and then another control byte. A control byte with any of its low six bits set still counts, rule `command`.
+- A command takes its parameter bytes from the command stream, across transfers. Adafruit SSD1306 sends some parameters in a transfer of their own, so a STOP leaves a command waiting for its parameters.
+- A data byte writes the GDDRAM at the address pointer, the column and the page. With segment remap, `A1h`, column `c` writes byte `127 - c` of its page, so the remap is in the GDDRAM, as the datasheet has it. The pointer then moves by the addressing mode, `20h`. Page mode, the reset mode, moves along the page and wraps to the column `00h` to `0Fh` and `10h` to `17h` set, on the same page. Horizontal mode moves along the column window `21h` sets, then to the next page of the page window `22h` sets, then back to the window's first page. Vertical mode moves down the page window, then to the next column. `21h` and `22h` also move the pointer to the window's start. `B0h` to `B7h` set the page. A run of data bytes is one row of `traces/display.csv` when the next command, START or STOP closes it, with the window it began in, as [run-folder.md](run-folder.md#traces) says.
+- `AEh` and `AFh` clear and set the display flag. `A6h` and `A7h` clear and set the inverted flag. `A4h` and `A5h`, entire display on, `40h` to `7Fh`, the display start line, `81h`, contrast, `8Dh`, the charge pump, `A8h`, the multiplex ratio, `D3h`, the display offset, `C0h` and `C8h`, the COM scan direction, and `DAh`, the COM pins configuration, set the panel's settings of those names. [run-folder.md](run-folder.md#what-the-glass-shows) says how each moves what the glass shows.
+- `D5h`, `D9h` and `DBh`, the clock, the precharge and the VCOMH level, are stored and change nothing. `registers` in the panel state is how many of the three took a write. `E3h` is a no-op, and so is `2Eh`, deactivate scroll.
+- The scroll commands, `26h`, `27h`, `29h`, `2Ah`, `2Fh` and `A3h`, take their parameters and change nothing, rule `scroll`. A read transfer is answered with 0xFF bytes, rule `read`, since the model has no status byte. Addressing mode 3, a multiplex ratio below 15 and every command the datasheet does not list change nothing, rule `command`.
+- `RES` low resets every register, drops a waiting command and an open run with no row, and keeps the GDDRAM, as the datasheet says. The reset values are display off, contrast 0x7F, page mode, column window 0 to 127, page window 0 to 7, multiplex ratio 63, COM pins 0x12 and the charge pump off, 0x10. The GDDRAM is all zero bytes at power-on.
+- The controller waits for nothing. The 100 ms a real panel needs after the charge pump turns on is not kept.
+
+A command that breaks a rule is the warning `chip.protocol`, once per rule at its first time. [diagnostics.md](diagnostics.md) has it.
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `address` | | 0x3C or 0x3D, else rule `unsupported` |
+| `low_resistance` | `ohm` | the resistor's |
+| `low_drop` | `V` | at least 0, else rule `non_negative` |
+| `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+
+A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
+
+An `ssd1306` has no `ratings` object and no `i`, `v`, or `p`. Its logic signals are `SCL`, `SDA` and `RES`. It joins `SDA` to `VSS` through the stage its drive stamps. `SCL`, `RES` and `VDD` draw no current, so each needs another DC path.
+
 ### WS2812
 
 `kind` is `ws2812`, a chain of addressable LEDs on one data pin. It is an active chip with no clock of its own. It watches `DIN` and takes the `Pulses` records on that net, as [engine.md](engine.md#records) says. Pins are `VCC`, `GND` and `DIN`, each required, and `DOUT`, which a part wires exactly when it gives `dout`. Each LED takes the next 24 bits. Without `dout` the bits past the last LED are discarded, and with it they go on through `DOUT`. Green is the first byte, then red, then blue, most significant bit first. A low longer than the reset latches the colours into `observations.json` and `traces/leds.csv`.
@@ -1351,7 +1398,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `voltage_source` | `current` | `#<part>.i` |
 | `capacitor` | `reverse_voltage`, optional | pin `a` over pin `b` |
 | `atmega328p` | `pin_current`, `supply_current`, `rail_margin`, `reset_voltage`, `supply_voltage` | each port pin's current, the current through `VCC` and `GND_8`, and each pin's voltage over `GND_8`, each named `#<part>.pin.<pin>` |
-| `current_source`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `ws2812`, `dht22` | none | |
+| `current_source`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `ssd1306`, `pulses_replay`, `ws2812`, `dht22` | none | |
 
 A `current`, `power`, `pin_current` or `supply_current` value object may also carry `basis`, the datasheet's basis for the figure. `"peak"` bounds each sample. `{ "sustained": { "average": "rms" | "mean", "tau": { "value": <s>, "unit": "s" } } }` bounds a first-order filter of the samples with time constant `tau`: of their squares for `rms`, read back as the root, and of their magnitudes for `mean`. A sustained basis may also carry `peak`, the sheet's peak or surge limit in the rating's unit, such as a diode's IFSM beside its average forward current. Each sample is checked against it as a peak rating. A `tau` or `peak` of 0 or below is `netlist.value` with rule `positive` on `ratings.<key>.basis.sustained.tau` or `.peak`, and a wrong unit is `netlist.unit` on that field. A rating with no `basis` takes its kind's: a `power` is a 10.2 ms `mean`, a `voltage_source`'s `current` and an `atmega328p`'s `pin_current` and `supply_current` are a 10.2 ms `rms`, and every other `current` is a `peak`.
 

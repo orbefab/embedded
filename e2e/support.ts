@@ -243,7 +243,7 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "button" | "fade" | "light" | "pixels";
+export type BlockKind = "button" | "fade" | "light" | "pixels" | "screen";
 
 export interface RepoBlock {
   id: string;
@@ -266,10 +266,11 @@ export function blockKind(scene: string, id: string): BlockKind {
     .map((line) => line.replace(/\/\/.*$/, ""))
     .join("\n");
   if (/"type"\s*:\s*"neopixel-stick-8"/.test(code)) return "pixels";
+  if (/"type"\s*:\s*"oled-ssd1306-128x64"/.test(code)) return "screen";
   if (/"world"\s*:\s*\{[^}]*"light"\s*:/.test(code)) return "light";
   if (/"btn1"\s*:/.test(code)) return "button";
   if (/"led1"\s*:/.test(code)) return "fade";
-  throw new Error(`${id} names no button, no fading LED, no light and no pixel stick`);
+  throw new Error(`${id} names no button, no fading LED, no light, no pixel stick and no screen`);
 }
 
 export async function simulatedSeconds(page: Page): Promise<number> {
@@ -310,6 +311,33 @@ async function stepLight(page: Page, key: "ArrowLeft" | "ArrowRight", want: stri
 }
 
 const FADE_CYCLE_S = 3.1;
+
+// The OLED Block's sketch turns the display on and starts sending its frame at about 130 ms
+// of simulated time, and the frame is whole by 170 ms. Its I2C traffic runs at a few ms a
+// second in the Worker, so the check waits on the glass, not on the clock, and asks only for
+// the first lit pixels the session sends.
+const SCREEN_WAIT_MS = 150_000;
+
+/** Waits until the page draws a frame the OLED holds: the `glass` node of `@oled.display`
+ * shows, as its emissive map, at least one white pixel. */
+async function showScreen(page: Page, shotName: string | null): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      const glass = window.orbeViewer.get().scene.getObjectByName("@oled.display")?.getObjectByName("glass");
+      const material = glass?.material ?? glass?.children?.[0]?.material;
+      const data = material?.emissiveMap?.image?.data;
+      if (data === undefined) return false;
+      for (let k = 0; k < data.length; k += 4) if (data[k] === 255) return true;
+      return false;
+    },
+    undefined,
+    { timeout: SCREEN_WAIT_MS },
+  );
+  if (shotName !== null) {
+    await page.locator("canvas").scrollIntoViewIfNeeded();
+    await shot(page, shotName);
+  }
+}
 
 /** Play, require simulated time to move, and check the behaviour the scene declares. */
 export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, shotName: string | null): Promise<void> {
@@ -367,6 +395,10 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
       await page.locator("canvas").scrollIntoViewIfNeeded();
       await shot(page, shotName);
     }
+    return;
+  }
+  if (block.kind === "screen") {
+    await showScreen(page, shotName);
     return;
   }
   await waitSimulatedPast(page, Math.max(1, start));

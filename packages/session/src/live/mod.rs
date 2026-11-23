@@ -31,7 +31,7 @@ use crate::command::{Command, ParamSet, Step, WorldSet};
 use crate::condition::Unit;
 use crate::duration::Duration;
 use crate::reply::{
-    Code, Colors, Data, Diagnostic, Error, Finding, Got, Level, PartState, Reading, Reply,
+    Code, Colors, Data, Diagnostic, Error, Finding, Got, Level, PartState, Reading, Reply, Screen,
     Snapshot, State, Stepped,
 };
 use crate::target::{
@@ -48,7 +48,7 @@ pub use light::BRIGHTNESS_WINDOW;
 
 #[cfg(test)]
 pub(crate) use frame::WorldName;
-pub use frame::{Channels, FrameState, Pace, Sample};
+pub use frame::{Channels, FrameState, Glass, Pace, Sample};
 pub(crate) use frame::{LiveParam, WorldQuantity};
 pub use step::{CHANGES, Progress};
 
@@ -104,6 +104,8 @@ struct Open {
     param_sets: BTreeMap<String, Time>,
     /// Each LED's forward-current integral, sampled as time advances, for its brightness.
     light: light::Log,
+    /// The files the scene came from, for a file a condition names, such as `shows`'s rows.
+    files: Files,
 }
 
 /// A rating over now and the same rating's window warning are two keys, so a step lists the
@@ -273,6 +275,7 @@ impl Live {
             netlist.refs,
             netlist.view,
             shown.clone(),
+            self.files.clone(),
         )?;
         let data = Data::Opened {
             scene: shown,
@@ -478,6 +481,7 @@ impl Open {
         refs: RefMap,
         view: View,
         scene: String,
+        files: Files,
     ) -> Result<Open, Box<Failed>> {
         let engine = Session::open_json(json.as_bytes(), blobs).map_err(|refused| {
             let (code, message) = match &refused {
@@ -537,6 +541,7 @@ impl Open {
             world_sets: BTreeMap::new(),
             param_sets: BTreeMap::new(),
             light,
+            files,
         };
         open.channels = open.bind_channels();
         Ok(open)
@@ -912,6 +917,14 @@ impl Open {
                 format!("{path}.{reading}"),
                 Reading::Color(self.colors(&engine)),
             ),
+            Target::Screen {
+                path,
+                reading,
+                engine,
+            } => (
+                format!("{path}.{reading}"),
+                Reading::Screen(self.screen(&engine)),
+            ),
             Target::Param { .. } => {
                 let (label, engine, spec) = self.live_param(r, Code::NoReading)?;
                 let level = self
@@ -1022,6 +1035,34 @@ impl Open {
         Colors {
             leds: chain.pixels.iter().map(|&[g, r, b]| [r, g, b]).collect(),
             latched_ps: leds.latched().map(|at| at.as_ps()),
+        }
+    }
+
+    /// What engine part `engine`, a screen, shows now.
+    fn screen(&self, engine: &str) -> Screen {
+        let display = self
+            .engine
+            .display(&engine_name(engine))
+            .expect("a part with a reading of screen is a display");
+        let panel = display.panel();
+        let pixels = display.pixels();
+        let lit = orbe_engine::display::lit_count(&pixels);
+        let rows = orbe_engine::display::art(panel.width, &pixels)
+            .lines()
+            .map(str::to_string)
+            .collect();
+        Screen {
+            kind: panel.kind.to_string(),
+            width: panel.width,
+            height: panel.height,
+            on: panel.flags.display_on && !panel.flags.sleep && !panel.flags.reset,
+            lit,
+            rows,
+            settings: panel
+                .settings
+                .iter()
+                .map(|(name, value)| (name.to_string(), value))
+                .collect(),
         }
     }
 
@@ -1186,6 +1227,7 @@ mod tests {
                 netlist.refs,
                 netlist.view,
                 "scene.jsonc".into(),
+                Files::disk(),
             )
             .unwrap_or_else(|f| panic!("{:?}", f.error)),
         );

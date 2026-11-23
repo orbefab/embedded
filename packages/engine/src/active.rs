@@ -19,7 +19,7 @@ pub(crate) mod spi;
 #[cfg(test)]
 pub(crate) mod spi_pins;
 
-use crate::device::{cst816, dht22, pulses_replay, spi_replay, st77916, ws2812};
+use crate::device::{cst816, dht22, pulses_replay, spi_replay, ssd1306, st77916, ws2812};
 use crate::mcu::{self, Mcu, atmega328p, esp32s3};
 use native::Hosted;
 
@@ -162,8 +162,10 @@ impl Takes {
 /// - Each record a core sends ends at a stop with `record` set, and the core holds it from that
 ///   stop until `drain_records` takes it. A core numbers its records from 0, and the count
 ///   carries in its copies.
-/// - A core that takes records makes its display rows only in `take`, at the landing's time,
-///   and holds them until `drain_rows` takes them.
+/// - A core makes each display row at the time of the call that closed the write, and holds
+///   it until `drain_rows` takes it. A core that takes records makes them only in `take`, at the
+///   landing's time. A device on a bus, such as an I2C target, makes one in the call that closes
+///   it, which may be an input on a twin, before the landing that commits it.
 /// - `input`, `take`, `deliver`, `drain_records` and `drain_rows` read nothing but the core and
 ///   their arguments, so they take two equal cores to two equal cores. A clone shares only what
 ///   no call writes: the AVR core's flash and decoded ops behind an `Arc`, a replay's records,
@@ -412,6 +414,7 @@ pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
         Active::SpiReplay(replay) => spi_replay::chip(part, replay),
         Active::PulsesReplay(replay) => pulses_replay::chip(part, replay),
         Active::St77916(panel) => st77916::chip(part, panel),
+        Active::Ssd1306(panel) => ssd1306::chip(part, panel),
         Active::Cst816(dev) => cst816::chip(part, dev),
         Active::Dht22(dev) => dht22::chip(part, dev),
         Active::Esp32s3(mcu) => esp32s3::chip(part, mcu),
@@ -552,8 +555,8 @@ struct Staging {
 /// receivers. The committed core then holds no record, and a run again from it makes only
 /// records after its commit.
 ///
-/// A display row is made only where a core takes records, in a landing that commits it at
-/// once, and that commit stages it. So the committed core holds no row.
+/// A display row is made at or before the landing that commits it, and that commit stages it
+/// with its own time. So the committed core holds no row.
 struct Delivered {
     through: Time,
     /// The index in `Actives::usarts` of the chip's first USART.
@@ -623,12 +626,12 @@ impl Delivered {
         self.records = to;
     }
 
-    /// Stages each display row the copy made, all at `at`, and drops it from the copy. Only
-    /// `Ahead::commit` calls this.
+    /// Stages each display row the copy made, each at its own time, at or before `at`, and drops
+    /// it from the copy. Only `Ahead::commit` calls this.
     fn take_rows(&self, core: &mut Core, at: Time, staged: &mut Staging) {
         let part = self.display;
         core.drain_rows(|made, row| {
-            debug_assert_eq!(made, at, "a row is made at the landing that commits it");
+            debug_assert!(made <= at, "a row is made by the landing that commits it");
             staged.rows.push(Rectangle {
                 at: made,
                 part,

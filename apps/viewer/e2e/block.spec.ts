@@ -18,6 +18,7 @@ for (const block of repoBlocks()) {
         (kind) => {
           const scene = window.orbeViewer?.get().scene;
           if (kind === "pixels") return scene?.getObjectByName("@stick.px1")?.getObjectByName("lens") !== undefined;
+          if (kind === "screen") return scene?.getObjectByName("@oled.display")?.getObjectByName("glass") !== undefined;
           const led = scene?.getObjectByName("@led1")?.getObjectByName("body") !== undefined;
           const button = kind !== "button" || scene?.getObjectByName("@btn1")?.getObjectByName("stem") !== undefined;
           return led && button;

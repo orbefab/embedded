@@ -14,6 +14,9 @@ pub enum Condition {
     Compare(Ref, Op, Amount),
     /// `@pixel rgb(255,0,0)`: every LED of an addressable part shows that colour.
     Color(Ref, Rgb),
+    /// `@oled.display.screen shows tests/hello.screen`: the screen shows the rows the file
+    /// holds, by its path from the scene's folder.
+    Shows(Ref, String),
     /// `serial contains "pressed"`.
     SerialContains(Needle),
     /// `no diagnostics`.
@@ -272,6 +275,9 @@ impl Condition {
                 let colour = words[1..].concat();
                 Ok(Condition::Color(Ref::parse(r)?, Rgb::parse(&colour)?))
             }
+            [r, "shows", file] if r.starts_with('@') => {
+                Ok(Condition::Shows(Ref::parse(r)?, file.to_string()))
+            }
             [r, word] if r.starts_with('@') => {
                 let state = State::parse(word).ok_or_else(|| {
                     format!("`{word}` is not a state; use lit, dim, off, high, low or a colour such as rgb(255,0,0)")
@@ -307,6 +313,7 @@ impl fmt::Display for Condition {
                 write!(f, "{r} {} {}", op.as_str(), amount.written)
             }
             Condition::Color(r, rgb) => write!(f, "{r} {rgb}"),
+            Condition::Shows(r, file) => write!(f, "{r} shows {file}"),
             Condition::SerialContains(text) => write!(f, "serial contains {:?}", text.as_str()),
             Condition::NoDiagnostics => f.write_str("no diagnostics"),
         }

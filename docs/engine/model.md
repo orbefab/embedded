@@ -29,7 +29,7 @@ Equal generations mean equal pages only between a state and a copy made before o
 
 - `Shows::Nothing`, the default.
 - `Shows::Leds { kind, order }`, an LED chain. Its view is three bytes per LED in `order`.
-- `Shows::Screen { kind, width, height, format }`, a screen. Its view is the frame memory, rows top to bottom, each pixel in `format`, and a `Panel`: whether the display is on, inverted, in reset or asleep, its MADCTL and COLMOD bytes, how many registers hold a write it stores and does not run, and the last duty its backlight pin took.
+- `Shows::Screen { kind, width, height, format }`, a screen. Its view is the frame memory, in `format`, and a `Panel`: whether the display is on, inverted, in reset or asleep, its controller's `Settings`, how many registers hold a write it stores and does not run, and the last duty its backlight pin took. `rgb565` is rows top to bottom, two bytes a pixel, as an ST77916 holds them. `mono-pages` is 8-row pages top to bottom, one byte a column of a page with bit 0 its top row, as an SSD1306 holds them. `Settings` names each of a controller's own values that changes what the glass shows, such as an ST77916's MADCTL and COLMOD or an SSD1306's contrast and COM scan, at most 12, in an order the device fixes. A screen kind is one the engine draws, as [run-folder.md](run-folder.md#what-the-glass-shows) says.
 
 The engine lists a part in `observations.json` `leds` only when its device declares an LED chain, and in `displays` only when it declares a screen.
 

@@ -21,7 +21,6 @@ use crate::RunStats;
 use crate::active::native::Hosted;
 use crate::active::{self, Actives};
 use crate::chip;
-use crate::device::st77916;
 use crate::inputs::Inputs;
 use crate::lte::{self, Past, Ranges, Stores};
 use crate::mna::Solver;
@@ -152,17 +151,15 @@ impl Display<'_> {
         crate::display::panel(self.screen.shows(), self.screen.view())
     }
 
-    /// Its frame memory, as `traces/display-<part>.rgb565` holds it.
+    /// Its frame memory, as `traces/display-<part>.<format>` holds it.
     pub fn image(&self) -> Vec<u8> {
         crate::display::frame(self.screen.view()).to_vec()
     }
 
-    /// What its glass shows, as [`st77916::glass`] draws its flags and frame memory.
+    /// What its glass shows, as [`glass`](crate::display::glass) draws its panel and frame
+    /// memory.
     pub fn pixels(&self) -> Vec<u8> {
-        st77916::glass(
-            self.panel().flags,
-            crate::display::frame(self.screen.view()),
-        )
+        crate::display::glass(&self.panel(), crate::display::frame(self.screen.view()))
     }
 }
 
@@ -826,7 +823,14 @@ impl Session {
                     (name.clone(), panel, crate::display::frame(view).to_vec())
                 })
                 .collect();
-            let displays = Displays::new(parts, self.display);
+            // A row a twin's input closed is staged at the next commit, which may follow another
+            // part's later row, so the rows sort once more across the whole run.
+            let mut rows = self.display;
+            rows.sort_by(|a, b| {
+                let key = |row: &Rectangle| (row.at, &names[usize::from(row.part)]);
+                key(a).cmp(&key(b))
+            });
+            let displays = Displays::new(parts, rows);
             if let Observations::Transient { displays: seen, .. } = &mut observations {
                 *seen = Some(displays.observed());
             }

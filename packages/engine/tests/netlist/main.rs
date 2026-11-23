@@ -13,6 +13,7 @@ mod regulator;
 mod relay;
 mod sources;
 mod spi_replay;
+mod ssd1306;
 mod switch;
 mod transient;
 mod transistor;

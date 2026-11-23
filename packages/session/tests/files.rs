@@ -167,7 +167,7 @@ fn played(files: &Files, base: &Path, block: &str) -> Vec<String> {
     out
 }
 
-/// Files directly in the Block's `tests/` folder, in sorted order. A missing directory is
+/// The `.test` files directly in the Block's `tests/` folder, in sorted order. A missing directory is
 /// none, and so is an entry that is not a file.
 fn test_files(block: &str) -> Vec<PathBuf> {
     let tests = repo().join("blocks").join(block).join("tests");
@@ -176,7 +176,7 @@ fn test_files(block: &str) -> Vec<PathBuf> {
     };
     let mut paths: Vec<_> = entries
         .map(|entry| entry.unwrap().path())
-        .filter(|path| path.is_file())
+        .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "test"))
         .collect();
     paths.sort();
     paths

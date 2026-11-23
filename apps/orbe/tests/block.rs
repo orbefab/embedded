@@ -14,12 +14,13 @@ use std::path::Path;
 
 use live::{common, orbe};
 
-const BLOCKS: [&str; 5] = [
+const BLOCKS: [&str; 6] = [
     "nano-button-led",
     "uno-button-led",
     "nano-led-fade",
     "nano-light-comparator",
     "nano-neopixel-stick",
+    "nano-oled",
 ];
 
 /// Every file below `dir` with its bytes, by its path from `dir`.
@@ -78,11 +79,12 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
             .filter(|name| dir.join("parts").join(name).join("part.jsonc").is_file())
             .collect();
         copied.sort();
-        // The rainbow Block drives a pixel module. The others light a 5 mm LED.
-        let marker = if id == "nano-neopixel-stick" {
-            "neopixel-stick-8"
-        } else {
-            "led-5mm"
+        // The rainbow Block drives a pixel module and the OLED Block a screen module. The
+        // others light a 5 mm LED.
+        let marker = match id {
+            "nano-neopixel-stick" => "neopixel-stick-8",
+            "nano-oled" => "oled-ssd1306-128x64",
+            _ => "led-5mm",
         };
         assert!(copied.iter().any(|part| part == marker), "{id}: {copied:?}");
         for part in &copied {

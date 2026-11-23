@@ -1,0 +1,44 @@
+{
+  "part": "ssd1306-oled-128x64",
+  "source": {
+    "script": "model.py",
+    "sha256": "5f4b73ef3f88402ff15b25ffb8811edc6cead50ee6e06ad904da64a4337ffe70",
+    "bytes": 2955
+  },
+  "files": {
+    "ssd1306-oled-128x64.glb": {
+      "sha256": "f228b722e5bf275416535a77b1b2418d6d454dbaf040e7e32ab253a1a2a41b38",
+      "bytes": 25216
+    },
+    "ssd1306-oled-128x64.anchors.json": {
+      "sha256": "1956ee873f0aa5e6ebf4c73af46883a729f59b0cb5302cf0150ec016da58ef26",
+      "bytes": 3581
+    }
+  },
+  "box": {
+    "min": [-13.35, -12.63, 0],
+    "max": [13.35, 9.63, 1.45]
+  },
+  "kept_nodes": ["glass"],
+  "draw_calls": 4,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 30,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "panel",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": ["glass"]
+    },
+    "merge": {
+      "primitives_in": 33,
+      "primitives_out": 4
+    }
+  }
+}
