@@ -2,9 +2,11 @@
 """Songle SRD-05VDC-SL-C. The body is the sheet's outline, drawn at 19 x 15.5 x 15.5 mm.
 
 Part frame: the seating face is z = 0, the body standing on it, length along X.
-The coil pins are lead 1 and lead 2 toward -X. COM, NO and NC are leads 3, 4
-and 5 toward +X. The pins are a PCB footprint, so their anchors point up and
-the part does not seat in a breadboard.
+The drilling drawing, read from above: COM (lead 1) stands alone at -X. The
+coil leads are 2 mm toward +X, at +6 and -6 mm (leads 2 and 5). NO and NC are
+12.2 mm further, at +6 and -6 mm (leads 3 and 4). Lead 4 meets lead 1 with the
+coil off, so it is NC. The pins are a PCB footprint, so their anchors point up
+and the part does not seat in a breadboard.
 """
 
 import sys
@@ -26,13 +28,16 @@ _BLUE = plastic("#24558C")
 _TIN = tin()
 UP = (0.0, 0.0, 1.0)
 
-# Bottom view, looking at the pins: coil pair at -X, contact row at +X.
+# COM is 1 mm inside the -X end of the 19 mm body. The sheet's rows then follow.
+_COM_X = -8.5
+_COIL_X = _COM_X + 2.0
+_CONTACT_X = _COIL_X + 12.2
 _PINS = (
-    (1, -6.0, -3.8),
-    (2, -6.0, 3.8),
-    (3, 6.0, 0.0),
-    (4, 6.0, 5.0),
-    (5, 6.0, -5.0),
+    (1, _COM_X, 0.0),
+    (2, _COIL_X, 6.0),
+    (3, _CONTACT_X, 6.0),
+    (4, _CONTACT_X, -6.0),
+    (5, _COIL_X, -6.0),
 )
 
 

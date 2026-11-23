@@ -11,7 +11,7 @@ A test is `tests/<name>.test`. Each line is a live command without `orbe`. `#` s
 `expect` and `step --until` take the same conditions. Quote `<`, `>` and a colour in a shell.
 
 - `@led1 lit`, `@led1 dim`, `@led1 off`. Load `orbe skills get ratings` for the current each state needs.
-- `@relay closed`, `@relay open`. A relay contact. The coil current is that part's `i`, and on the 1-channel module it is `@relay.k1.i`.
+- `@relay closed`, `@relay open`. A relay contact. The coil current is that part's `i`, and on the 1-channel module it is `@relay.k.i`.
 - `@nano.D13 high`, `@nano.D13 low`.
 - `@led1 rgb(255,0,0)`, an addressable LED's latched colour. `#` starts a comment, so a colour is never hex. In a shell, `orbe expect @led1 'rgb(255,0,0)'`.
 - `@led1.i > 5mA`, `@nano.D2 < 1V`, with `<`, `<=`, `>` or `>=`. In a shell, `orbe expect @led1.i '>' 5mA`. A test line accepts a quoted comparison the same way a shell does, as `'>'` or `"<="`.

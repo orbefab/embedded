@@ -2,17 +2,17 @@
   "part": "relay-srd-05vdc-sl-c",
   "source": {
     "script": "model.py",
-    "sha256": "cfc25fab1026c65855108afdd6d3216e052491c3954f3d826cdc53e5cc34d199",
-    "bytes": 1663
+    "sha256": "b9a9ea9349e8fdb0b9a64dcdd3177884ccba16f4b4a44fd367f0453c255370f3",
+    "bytes": 1922
   },
   "files": {
     "relay-srd-05vdc-sl-c.glb": {
-      "sha256": "4ddd7d4517e1cd5c7a2dfd0c15da9a662fcb0dd970a3a1df4cd69bd1c05140f6",
-      "bytes": 3056
+      "sha256": "1f55afd63615c23eec33659ef3119bddcd76408457027b4dea0e1e0828ec4b1c",
+      "bytes": 3116
     },
     "relay-srd-05vdc-sl-c.anchors.json": {
-      "sha256": "646de2a9300c0bd6e10bfe85ac0786bc5e3f7a8dfb570c4fcc41b7785a84a63b",
-      "bytes": 622
+      "sha256": "b523238725449836bf808da1a575f5a9ef54145d2d7df3feff121f9c9a9bdae6",
+      "bytes": 623
     }
   },
   "box": {

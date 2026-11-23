@@ -1,6 +1,6 @@
 // A Nano toggles a 5 V relay module once a second. COM and NO switch an LED from the 5 V rail.
 // The Nano straddles the center channel over columns 1 to 15. The module's header sits on the
-// f to j side, and the LED sits on the a to e side.
+// f to j side at columns 23 to 25, clear of the Nano, and the LED sits on the a to e side.
 {
   "format": 1,
   "parts": {
@@ -13,7 +13,7 @@
   "layout": {
     "bb": { "at": [0, 0, 0] },
     "nano": { "on": { "D13": "bb.d1" } },
-    "relay": { "on": { "IN": "bb.f20" } },
+    "relay": { "on": { "IN": "bb.f23" } },
     "r1": { "on": { "a": "bb.d25" } },
     "led1": { "on": { "anode": "bb.c29" } }
   },

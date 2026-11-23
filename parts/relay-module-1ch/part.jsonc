@@ -105,7 +105,7 @@
   "not_simulated": [
     {
       "what": "the silkscreen and the screw heads",
-      "why": "The drawing is the 34 x 26 mm outline, the header, the relay and the indicator. The screw terminals are the COM, NO and NC pins."
+      "why": "The drawing is the 34 x 27 mm outline, the header, the relay and the indicator. The screw terminals are the COM, NO and NC pins."
     },
     {
       "what": "a coil below its supply",

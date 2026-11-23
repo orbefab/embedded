@@ -18,11 +18,11 @@
     "datasheet": "Songle SRD, coil data chart at 20 C"
   },
   "pins": {
-    "coil_a": [1],
-    "coil_b": [2],
-    "COM": [3],
-    "NO": [4],
-    "NC": [5]
+    "COM": [1],
+    "coil_a": [2],
+    "NO": [3],
+    "NC": [4],
+    "coil_b": [5]
   },
   "model": {
     "kind": "relay",
