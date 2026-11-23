@@ -270,7 +270,7 @@ mod tests {
     fn solve(circuit: &Circuit) -> (crate::newton::Iterate, u32) {
         let converged = crate::newton::newton(
             circuit,
-            None,
+            &mut crate::mna::Solver::new(&circuit.layout),
             &Conditions::NOMINAL,
             Iterate::initial(circuit),
             OP_BUDGET,

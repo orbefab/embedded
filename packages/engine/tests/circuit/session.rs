@@ -301,7 +301,7 @@ fn an_op_analysis_opens_no_session() {
 
 #[ignore = "full tier"]
 #[test]
-fn a_chain_one_past_the_dense_limit_opens_no_session() {
+fn a_chain_one_past_the_solver_limit_opens_no_session() {
     let nets: Vec<String> = (0..4097).map(|k| format!(r#""n{k}""#)).collect();
     let parts: Vec<String> = (0..4097)
         .map(|k| {

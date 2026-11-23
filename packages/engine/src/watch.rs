@@ -267,6 +267,7 @@ mod tests {
                 junctions: Vec::new(),
             },
             iterations: 1,
+            moved: Vec::new(),
         }
     }
 

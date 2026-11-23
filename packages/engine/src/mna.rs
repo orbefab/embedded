@@ -6,10 +6,10 @@ use std::sync::Arc;
 use crate::name::Ref;
 
 use crate::chip;
-use crate::dense::{Matrix, Singular};
 use crate::element;
 use crate::element::Device;
-use crate::newton::{ChargeIndex, Conditions, FluxIndex, Iterate};
+use crate::newton::{Conditions, Iterate};
+use crate::sparse::{self, Factors, Failure, Pattern, Scratch, Shape};
 
 pub(crate) const GMIN: f64 = 1e-12;
 
@@ -35,11 +35,7 @@ struct PartRows {
     branch: usize,
     branches: usize,
     junctions: Range<usize>,
-    /// Index of this part's first capacitor in the circuit's charge list.
-    charge: usize,
     charges: usize,
-    /// Index of this part's first inductor in the circuit's flux list.
-    flux: usize,
     fluxes: usize,
 }
 
@@ -56,9 +52,6 @@ pub(crate) struct Layout {
     junctions: usize,
     /// The passive chips, ascending. A chip's index here is its slot in `Conditions::chips`.
     chips: Vec<PartId>,
-    /// Each unknown's place in the order the solve eliminates them, which is its row and column
-    /// in a [`System`]'s storage. The layout's own order until [`Layout::order_by`] sets it.
-    place: Arc<[usize]>,
 }
 
 /// A part's unknowns, and how many capacitors and inductors it owns.
@@ -74,30 +67,13 @@ fn shape(model: &impl Device) -> (Unknowns, usize, usize) {
 impl Layout {
     /// `chips` are the passive chips in part order.
     pub(crate) fn new(netlist: &Netlist, chips: Vec<PartId>) -> Layout {
-        assemble::<crate::netlist::Model>(netlist, chips, None)
-    }
-
-    /// `part` takes `model` in place of its netlist model. Tests only.
-    #[cfg(test)]
-    pub(crate) fn with_stand_in(
-        netlist: &Netlist,
-        chips: Vec<PartId>,
-        part: PartId,
-        model: &impl Device,
-    ) -> Layout {
-        assemble(netlist, chips, Some((part, model)))
+        assemble(netlist, chips)
     }
 }
 
-fn assemble<T: Device>(
-    netlist: &Netlist,
-    chips: Vec<PartId>,
-    stand: Option<(PartId, &T)>,
-) -> Layout {
+fn assemble(netlist: &Netlist, chips: Vec<PartId>) -> Layout {
     let mut row = 0;
     let mut junction = 0;
-    let mut charge = 0;
-    let mut flux = 0;
     let mut node_rows = Vec::new();
     let mut gmin_rows = Vec::new();
     let mut charge_rows = Vec::new();
@@ -108,11 +84,8 @@ fn assemble<T: Device>(
         row += 1;
     }
     let mut part_rows = Vec::with_capacity(netlist.parts().len());
-    for (id, part) in netlist.parts() {
-        let (extra, charges, fluxes) = match stand {
-            Some((part_id, model)) if part_id == id => shape(model),
-            _ => shape(&part.model),
-        };
+    for (_, part) in netlist.parts() {
+        let (extra, charges, fluxes) = shape(&part.model);
         debug_assert!(
             charges + fluxes <= extra.branches,
             "a part's capacitors and inductors exceed its branches"
@@ -135,13 +108,9 @@ fn assemble<T: Device>(
             branch,
             branches: extra.branches,
             junctions,
-            charge,
             charges,
-            flux,
             fluxes,
         });
-        charge += charges;
-        flux += fluxes;
     }
     Layout {
         net_rows,
@@ -152,7 +121,6 @@ fn assemble<T: Device>(
         size: row,
         junctions: junction,
         chips,
-        place: (0..row).collect(),
     }
 }
 
@@ -160,51 +128,6 @@ impl Layout {
     /// The passive chips in slot order.
     pub(crate) fn chips(&self) -> &[PartId] {
         &self.chips
-    }
-
-    /// Sets the order the solve eliminates the unknowns in from `system`, stamped in the
-    /// layout's own order: the node rows by how many other unknowns `system` couples each to,
-    /// fewest first and ties in row order, then the branch rows in row order.
-    ///
-    /// Eliminating an unknown fills each row that touches it with every unknown its pivot row
-    /// touches. A net that many parts touch, such as a supply rail behind a diode, couples to
-    /// each of them, so eliminating it early fills nearly the whole matrix, and eliminating it
-    /// after them fills almost nothing. A branch row of a voltage source has no entry on its diagonal, so the
-    /// branch rows stay after every node row, as in the layout's own order. The order changes
-    /// which rounding each solution carries, never what it solves.
-    pub(crate) fn order_by(&mut self, system: &System) {
-        let n = self.size;
-        assert!(
-            system
-                .place
-                .iter()
-                .enumerate()
-                .all(|(k, &place)| k == place),
-            "the pattern is read in the layout's own order"
-        );
-        let a = system.a.entries();
-        let mut order: Vec<(usize, usize)> = self
-            .node_rows
-            .iter()
-            .map(|&row| {
-                let coupled = (0..n)
-                    .filter(|&col| {
-                        col != row && (a[row * n + col] != 0.0 || a[col * n + row] != 0.0)
-                    })
-                    .count();
-                (coupled, row)
-            })
-            .collect();
-        order.sort_unstable();
-        let rows = order
-            .into_iter()
-            .map(|(_, row)| row)
-            .chain((0..n).filter(|&row| !self.is_node_row(row)));
-        let mut place = vec![0; n];
-        for (k, row) in rows.enumerate() {
-            place[row] = k;
-        }
-        self.place = place.into();
     }
 
     /// `part`'s internal node `k`.
@@ -225,20 +148,6 @@ impl Layout {
         let rows = &self.part_rows[part.index()];
         debug_assert!(k < rows.branches, "branch {k} is past this part's branches");
         rows.branch + k
-    }
-
-    /// The charge-list index of `part`'s capacitor `k`.
-    pub(crate) fn charge_index(&self, part: PartId, k: usize) -> ChargeIndex {
-        let rows = &self.part_rows[part.index()];
-        debug_assert!(k < rows.charges, "charge {k} is past this part's charges");
-        ChargeIndex::new(rows.charge + k)
-    }
-
-    /// The flux-list index of `part`'s inductor `k`.
-    pub(crate) fn flux_index(&self, part: PartId, k: usize) -> FluxIndex {
-        let rows = &self.part_rows[part.index()];
-        debug_assert!(k < rows.fluxes, "flux {k} is past this part's inductors");
-        FluxIndex::new(rows.flux + k)
     }
 
     /// The branch of `part`'s inductor `k`, after the part's capacitors.
@@ -298,47 +207,66 @@ impl From<NetId> for Node {
     }
 }
 
-/// A linear system, stored with each unknown at its place in the layout's elimination order.
-/// Every method takes and gives the layout's own rows.
+/// A linear system on a sparse pattern, in the layout's own rows. A stamp that adds an entry
+/// off the pattern keeps it aside, and `widen` moves it onto a wider pattern.
 pub(crate) struct System {
-    a: Matrix,
+    pattern: Arc<Pattern>,
+    /// One per entry of `pattern`.
+    values: Vec<f64>,
     b: Vec<f64>,
-    /// The layout's `place`.
-    place: Arc<[usize]>,
+    /// Entries a stamp added off `pattern`.
+    off: Vec<(usize, usize, f64)>,
 }
 
 impl System {
     /// The stamped coefficient of column `col` on row `row`. Tests read the regulator's input column.
     #[cfg(test)]
     pub(crate) fn term(&self, row: usize, col: usize) -> f64 {
-        let n = self.b.len();
-        self.a.entries()[self.place[row] * n + self.place[col]]
+        let on = self
+            .pattern
+            .slot(row, col)
+            .map_or(0.0, |slot| self.values[slot]);
+        let off = self
+            .off
+            .iter()
+            .filter(|e| (e.0, e.1) == (row, col))
+            .map(|e| e.2);
+        on + off.sum::<f64>()
     }
 
-    /// Empty storage. `reset` loads `gmin` before each stamp.
+    /// No entry yet. `reset` loads `gmin` before each stamp.
     pub(crate) fn new(layout: &Layout) -> System {
+        System::on(Arc::new(Pattern::empty(layout.size())))
+    }
+
+    fn on(pattern: Arc<Pattern>) -> System {
         System {
-            a: Matrix::zeros(layout.size()),
-            b: vec![0.0; layout.size()],
-            place: Arc::clone(&layout.place),
+            values: vec![0.0; pattern.len()],
+            b: vec![0.0; pattern.n()],
+            pattern,
+            off: Vec::new(),
         }
     }
 
     /// Adds `value` to the coefficient of column `col` on row `row`.
     fn add(&mut self, row: usize, col: usize, value: f64) {
-        self.a.add(self.place[row], self.place[col], value);
+        match self.pattern.slot(row, col) {
+            Some(slot) => self.values[slot] += value,
+            None => self.off.push((row, col, value)),
+        }
     }
 
     /// Adds `value` to row `row` of the right-hand side.
     fn add_rhs(&mut self, row: usize, value: f64) {
-        self.b[self.place[row]] += value;
+        self.b[row] += value;
     }
 
-    /// Drop the last factorization and stamp `gmin` on every net row and on each internal row
-    /// that is not bare.
+    /// Clears every value and stamps `gmin` on every net row and on each internal row that is
+    /// not bare.
     pub(crate) fn reset(&mut self, layout: &Layout, gmin: f64) {
-        self.a.clear();
+        self.values.fill(0.0);
         self.b.fill(0.0);
+        self.off.clear();
         for &row in &layout.gmin_rows {
             self.add(row, row, gmin);
         }
@@ -355,7 +283,7 @@ impl System {
     /// `amps` flows out of `from`, through the element, into `to`.
     pub(crate) fn current(&mut self, from: impl Into<Node>, to: impl Into<Node>, amps: f64) {
         if let Node::Row(row) = from.into() {
-            self.b[self.place[row]] -= amps;
+            self.b[row] -= amps;
         }
         if let Node::Row(row) = to.into() {
             self.add_rhs(row, amps);
@@ -369,112 +297,262 @@ impl System {
         self.add(row, col, value);
     }
 
-    /// The solution in the layout's own rows. A singular system names the unknown whose place
-    /// had no pivot.
-    pub(crate) fn solve(&mut self) -> Result<Solution, Singular> {
-        #[cfg(test)]
-        SOLVES.with(|solves| solves.set(solves.get() + 1));
-        let x = crate::dense::solve(&mut self.a, &mut self.b).map_err(|singular| Singular {
-            row: self
-                .place
-                .iter()
-                .position(|&place| place == singular.row)
-                .expect("every place holds an unknown"),
-        })?;
-        Ok(Solution::from(
-            self.place
-                .iter()
-                .map(|&place| x[place])
-                .collect::<Vec<f64>>(),
-        ))
+    /// Moves every entry added off the pattern onto a pattern that has it.
+    fn widen(&mut self) {
+        if self.off.is_empty() {
+            return;
+        }
+        let wider = self
+            .pattern
+            .with(self.off.iter().map(|&(row, col, _)| (row, col)));
+        let mut values = vec![0.0; wider.len()];
+        for col in 0..wider.n() {
+            for slot in self.pattern.column_slots(col) {
+                let row = self.pattern.row(slot);
+                values[wider.slot(row, col).expect("a wider pattern")] += self.values[slot];
+            }
+        }
+        for &(row, col, value) in &self.off {
+            values[wider.slot(row, col).expect("a wider pattern")] += value;
+        }
+        self.pattern = Arc::new(wider);
+        self.values = values;
+        self.off.clear();
+    }
+
+    /// The first row whose value or right-hand side is not finite.
+    fn nonfinite(&self) -> Option<usize> {
+        let row = (0..self.pattern.n()).find(|&row| !self.b[row].is_finite());
+        let entry = (0..self.pattern.n()).find_map(|col| {
+            self.pattern
+                .column_slots(col)
+                .find(|&slot| !self.values[slot].is_finite())
+                .map(|slot| self.pattern.row(slot))
+        });
+        match (row, entry) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// Solves this system alone, on a pattern and factors made for it. Tests only.
+    #[cfg(test)]
+    pub(crate) fn solve(&mut self) -> Result<Solution, Failure> {
+        let n = self.pattern.n();
+        let mut solver = Solver {
+            system: std::mem::replace(self, System::on(Arc::new(Pattern::empty(0)))),
+            nodes: vec![false; n].into(),
+            lus: Vec::new(),
+            scratch: Scratch::default(),
+            memo: Memo::default(),
+            work: 0,
+        };
+        let solved = solver.solve(false);
+        *self = solver.system;
+        solved
     }
 }
 
-/// The most unknowns a system `Memo` keeps. An entry holds n² + 3n values, and a memo holds
-/// its kept systems and the one it is filling, so at most 9 × (128² + 3 × 128) values, about
-/// 1.15 MiB. At `dense::MAX_UNKNOWNS` it would be about 1.1 GiB.
-const MEMO_UNKNOWNS: usize = 128;
+/// How many factorizations a solver keeps: one for a step's systems and one for a restart's,
+/// whose held capacitors make other unknowns late.
+const KEEP: usize = 2;
 
-/// How many systems a `Memo` keeps.
-const MEMO_SYSTEMS: usize = 8;
-
-/// The ceiling on the bytes a full `Memo` holds, 1.25 MiB. A full one holds about 1.15 MiB.
-const MEMO_BYTES: usize = 5 << 18;
-
-const _: () = assert!(
-    (MEMO_SYSTEMS + 1) * (MEMO_UNKNOWNS * MEMO_UNKNOWNS + 3 * MEMO_UNKNOWNS) * size_of::<f64>()
-        <= MEMO_BYTES
-);
-
-/// The latest systems solved, each with its solution. `dense::solve` reads nothing but the
-/// matrix and the right-hand side, so a system equal to a kept one to the bit has the kept
-/// solution. The key is the whole system, so nothing goes stale. A source step, a switch
-/// toggle, a pin's new drive, a live `set`, another step length or another held voltage
-/// changes a stamped value, which is a different key, or stamps the same system again, whose
-/// solution has not changed.
-#[derive(Default)]
-pub(crate) struct Memo {
-    /// Most recent first.
-    systems: Vec<Kept>,
-    /// A copy of a missed system, taken before the solve factors the system in place. It joins
-    /// `systems` with its solution only once the solve succeeds, so a singular miss evicts nothing.
-    next: Kept,
+/// The factors of a system a solver factored, and the pattern they are for.
+#[derive(Clone)]
+struct Lu {
+    pattern: Arc<Pattern>,
+    shape: Arc<Shape>,
+    factors: Factors,
 }
 
-#[derive(Default)]
-struct Kept {
-    a: Vec<f64>,
-    /// The diagonal of `a`. Systems that share `b` mostly differ there, in a step's companion
-    /// conductance or a pin's drive, so it rejects them before the whole matrix is compared.
-    diagonal: Vec<f64>,
-    b: Vec<f64>,
-    x: Vec<f64>,
+/// A circuit's system, and what one solve keeps for the next: the pattern its stamps have
+/// filled, the column order and pivots of its factors, and the memo. A run steps on one
+/// solver. A row's probe takes a [`Solver::scratch`] copy, so nothing a probe does reaches the
+/// run's solves.
+pub(crate) struct Solver {
+    system: System,
+    /// Whether each unknown is a node's voltage, which the column order reads.
+    nodes: Arc<[bool]>,
+    /// The latest factorizations, the newest first, each for its own late unknowns.
+    lus: Vec<Lu>,
+    scratch: Scratch,
+    memo: Memo,
+    /// The multiply-adds of every factorization and solve so far.
+    pub(crate) work: u64,
 }
 
-impl Memo {
-    /// `system`'s solution, the kept one when `system` is kept. Any other system up to
-    /// `MEMO_UNKNOWNS` is solved and kept unless it is singular.
-    pub(crate) fn solve(&mut self, system: &mut System) -> Result<Solution, Singular> {
-        let n = system.b.len();
-        if n > MEMO_UNKNOWNS {
-            return system.solve();
+impl Solver {
+    pub(crate) fn new(layout: &Layout) -> Solver {
+        Solver {
+            system: System::new(layout),
+            nodes: (0..layout.size())
+                .map(|row| layout.is_node_row(row))
+                .collect(),
+            lus: Vec::new(),
+            scratch: Scratch::default(),
+            memo: Memo::default(),
+            work: 0,
         }
-        let a = system.a.entries();
-        if let Some(k) = self.systems.iter().position(|kept| kept.is(a, &system.b)) {
-            let kept = self.systems.remove(k);
-            let x = Solution::from(kept.x.clone());
-            self.systems.insert(0, kept);
+    }
+
+    /// This solver's pattern and factors, with an empty memo and no work counted.
+    pub(crate) fn scratch(&self) -> Solver {
+        Solver {
+            system: System::on(Arc::clone(&self.system.pattern)),
+            nodes: Arc::clone(&self.nodes),
+            lus: self.lus.clone(),
+            scratch: Scratch::default(),
+            memo: Memo::default(),
+            work: 0,
+        }
+    }
+
+    /// The system, cleared and loaded with `gmin` for the next stamp.
+    pub(crate) fn reset(&mut self, layout: &Layout, gmin: f64) -> &mut System {
+        self.system.reset(layout, gmin);
+        &mut self.system
+    }
+
+    /// The stamped system's solution. A value that is not finite is `NonFinite` at its row.
+    /// When `remember`, a system kept in the memo has the solution kept with it, and any other
+    /// is kept. A system on the pattern and with the late unknowns of kept factors is
+    /// refactored on their pivots. When a pivot no longer passes it is factored again with
+    /// pivoting, and those factors replace them. Any other system is factored on a fresh order,
+    /// and its factors are kept in place of the oldest.
+    pub(crate) fn solve(&mut self, remember: bool) -> Result<Solution, Failure> {
+        self.system.widen();
+        if let Some(row) = self.system.nonfinite() {
+            return Err(Failure::NonFinite { col: row });
+        }
+        if remember && let Some(x) = self.memo.find(&self.system) {
             return Ok(x);
         }
-        let next = &mut self.next;
-        next.a.clear();
-        next.a.extend_from_slice(a);
-        next.diagonal.clear();
-        next.diagonal.extend((0..n).map(|k| a[k * (n + 1)]));
-        next.b.clear();
-        next.b.extend_from_slice(&system.b);
-        let x = system.solve()?;
-        next.x.clear();
-        next.x.extend_from_slice(x.components());
-        let spare = if self.systems.len() == MEMO_SYSTEMS {
-            self.systems.pop().expect("the memo is full")
-        } else {
-            Kept::default()
+        #[cfg(test)]
+        SOLVES.with(|solves| solves.set(solves.get() + 1));
+        let system = &self.system;
+        let late = system.pattern.late(&system.values, &self.nodes);
+        let kept = self
+            .lus
+            .iter()
+            .position(|lu| Arc::ptr_eq(&lu.pattern, &system.pattern) && lu.shape.late() == late);
+        let refactored = match kept {
+            Some(k) => {
+                let lu = &mut self.lus[k];
+                sparse::refactor(
+                    &lu.shape,
+                    &system.pattern,
+                    &system.values,
+                    &mut lu.factors,
+                    &mut self.scratch,
+                    &mut self.work,
+                )
+            }
+            None => Err(sparse::Refused::Pivot),
         };
-        self.systems
-            .insert(0, std::mem::replace(&mut self.next, spare));
+        let k = match (refactored, kept) {
+            (Ok(()), Some(k)) => k,
+            (Err(sparse::Refused::NonFinite { col }), _) => {
+                return Err(Failure::NonFinite { col });
+            }
+            (_, kept) => {
+                let order = match kept {
+                    Some(k) => self.lus[k].shape.order(),
+                    None => system.pattern.order(late),
+                };
+                let (shape, factors) = sparse::factor(
+                    &system.pattern,
+                    &system.values,
+                    order,
+                    &mut self.scratch,
+                    &mut self.work,
+                )?;
+                let lu = Lu {
+                    pattern: Arc::clone(&system.pattern),
+                    shape: Arc::new(shape),
+                    factors,
+                };
+                match kept {
+                    Some(k) => {
+                        self.lus[k] = lu;
+                        k
+                    }
+                    None => {
+                        self.lus.truncate(KEEP - 1);
+                        self.lus.insert(0, lu);
+                        0
+                    }
+                }
+            }
+        };
+        let lu = &self.lus[k];
+        let x = Solution::from(
+            lu.factors
+                .solve(&lu.shape, &self.system.b, &mut self.work)?,
+        );
+        if remember {
+            self.memo.keep(&self.system, &x);
+        }
         Ok(x)
     }
 }
 
-impl Kept {
-    /// Whether `a` and `b` are this system to the bit.
-    fn is(&self, a: &[f64], b: &[f64]) -> bool {
-        let n = b.len();
-        same_bits(&self.b, b)
-            && (self.diagonal.iter().enumerate())
-                .all(|(k, value)| value.to_bits() == a[k * (n + 1)].to_bits())
-            && same_bits(&self.a, a)
+/// How many systems a `Memo` keeps.
+const MEMO_SYSTEMS: usize = 8;
+
+/// The most bytes the systems a `Memo` keeps may take, 4 MiB. A system larger than its share is
+/// never kept.
+const MEMO_BYTES: usize = 4 << 20;
+
+/// The latest systems solved, each with its solution. The key is the whole system, its pattern,
+/// values and right-hand side, so nothing goes stale. A source step, a switch toggle, a pin's
+/// new drive, a live `set`, another step length or another held voltage changes a stamped
+/// value, which is a different key, or stamps the same system again, whose solution has not
+/// changed.
+#[derive(Default)]
+struct Memo {
+    /// Most recent first.
+    systems: Vec<Kept>,
+}
+
+struct Kept {
+    pattern: Arc<Pattern>,
+    values: Vec<f64>,
+    b: Vec<f64>,
+    x: Solution,
+}
+
+impl Memo {
+    /// The solution kept with `system`, which then becomes the most recent.
+    fn find(&mut self, system: &System) -> Option<Solution> {
+        let k = self.systems.iter().position(|kept| {
+            Arc::ptr_eq(&kept.pattern, &system.pattern)
+                && same_bits(&kept.b, &system.b)
+                && same_bits(&kept.values, &system.values)
+        })?;
+        let kept = self.systems.remove(k);
+        let x = kept.x.clone();
+        self.systems.insert(0, kept);
+        Some(x)
+    }
+
+    /// Keeps `system` with its solution `x`, dropping the oldest past `MEMO_SYSTEMS`.
+    fn keep(&mut self, system: &System, x: &Solution) {
+        let bytes = (system.values.len() + 2 * system.b.len()) * size_of::<f64>();
+        if bytes * MEMO_SYSTEMS > MEMO_BYTES {
+            return;
+        }
+        if self.systems.len() == MEMO_SYSTEMS {
+            self.systems.pop();
+        }
+        self.systems.insert(
+            0,
+            Kept {
+                pattern: Arc::clone(&system.pattern),
+                values: system.values.clone(),
+                b: system.b.clone(),
+                x: x.clone(),
+            },
+        );
     }
 }
 
@@ -513,6 +591,7 @@ impl Solution {
         self.x[row]
     }
 
+    #[cfg(test)]
     pub(crate) fn add(&mut self, row: usize, by: f64) {
         self.x[row] += by;
     }
@@ -678,18 +757,27 @@ mod tests {
     use super::*;
 
     /// `n` unknowns, `diagonal` on the diagonal, `above` just above it, and `rhs` in `b`.
-    fn system(n: usize, diagonal: f64, above: f64, rhs: f64) -> System {
-        let mut a = Matrix::zeros(n);
+    fn stamped(solver: &mut Solver, n: usize, diagonal: f64, above: f64, rhs: f64) {
+        let system = &mut solver.system;
+        system.values.fill(0.0);
+        system.off.clear();
+        system.b = vec![rhs; n];
         for k in 0..n {
-            a.add(k, k, diagonal);
+            system.add(k, k, diagonal);
             if k + 1 < n {
-                a.add(k, k + 1, above);
+                system.add(k, k + 1, above);
             }
         }
-        System {
-            a,
-            b: vec![rhs; n],
-            place: (0..n).collect(),
+    }
+
+    fn solver(n: usize) -> Solver {
+        Solver {
+            system: System::on(Arc::new(Pattern::empty(n))),
+            nodes: vec![false; n].into(),
+            lus: Vec::new(),
+            scratch: Scratch::default(),
+            memo: Memo::default(),
+            work: 0,
         }
     }
 
@@ -697,94 +785,101 @@ mod tests {
         solution.components().iter().map(|v| v.to_bits()).collect()
     }
 
-    /// The solution's bits, and whether the memo solved the system to get them.
-    fn through(memo: &mut Memo, mut system: System) -> (Vec<u64>, bool) {
-        let before = SOLVES.with(|solves| solves.get());
-        let x = memo.solve(&mut system).unwrap();
-        (bits(&x), SOLVES.with(|solves| solves.get()) > before)
-    }
-
-    fn fresh(mut system: System) -> Vec<u64> {
-        bits(&system.solve().unwrap())
+    /// The solution's bits, and whether the solver factored to get them.
+    fn through(
+        solver: &mut Solver,
+        n: usize,
+        diagonal: f64,
+        above: f64,
+        rhs: f64,
+    ) -> (Vec<u64>, bool) {
+        stamped(solver, n, diagonal, above, rhs);
+        let before = solver.work;
+        let x = solver.solve(true).unwrap();
+        (bits(&x), solver.work > before)
     }
 
     #[test]
-    fn a_kept_system_returns_the_bits_of_a_fresh_solve_without_solving() {
-        let mut memo = Memo::default();
-        let solved = fresh(system(3, 4.0, 1.0, 1.0));
-        assert_eq!(
-            through(&mut memo, system(3, 4.0, 1.0, 1.0)),
-            (solved.clone(), true)
-        );
-        assert_eq!(
-            through(&mut memo, system(3, 4.0, 1.0, 1.0)),
-            (solved, false)
-        );
+    fn a_kept_system_returns_its_solution_without_solving() {
+        let mut solver = solver(3);
+        let (first, ran) = through(&mut solver, 3, 4.0, 1.0, 1.0);
+        assert!(ran);
+        assert_eq!(through(&mut solver, 3, 4.0, 1.0, 1.0), (first, false));
     }
 
     /// Each one shares the other two parts with the kept system: the right-hand side, the
     /// diagonal, and the entries off it.
     #[test]
     fn a_system_that_differs_in_any_bit_is_solved() {
-        for other in [
-            system(3, 4.0, 1.0, 2.0),
-            system(3, 5.0, 1.0, 1.0),
-            system(3, 4.0, 2.0, 1.0),
-        ] {
-            let mut memo = Memo::default();
-            through(&mut memo, system(3, 4.0, 1.0, 1.0));
-            let solved = fresh(system(3, 4.0, 1.0, 1.0));
-            let (x, ran) = through(&mut memo, other);
-            assert!(ran && x != solved, "{x:?}");
+        for (diagonal, above, rhs) in [(4.0, 1.0, 2.0), (5.0, 1.0, 1.0), (4.0, 2.0, 1.0)] {
+            let mut solver = solver(3);
+            let (kept, _) = through(&mut solver, 3, 4.0, 1.0, 1.0);
+            let (x, ran) = through(&mut solver, 3, diagonal, above, rhs);
+            assert!(ran && x != kept, "{x:?}");
         }
     }
 
     #[test]
     fn a_singular_system_is_not_kept() {
-        let mut memo = Memo::default();
-        assert!(memo.solve(&mut system(3, 0.0, 1.0, 1.0)).is_err());
-        assert!(memo.systems.is_empty());
-    }
-
-    #[test]
-    fn a_singular_system_on_a_full_memo_evicts_nothing() {
-        let mut memo = Memo::default();
-        for rhs in 1..=MEMO_SYSTEMS {
-            through(&mut memo, system(3, 4.0, 1.0, rhs as f64));
-        }
-        assert!(memo.solve(&mut system(3, 0.0, 1.0, 1.0)).is_err());
-        for rhs in 1..=MEMO_SYSTEMS {
-            let kept = system(3, 4.0, 1.0, rhs as f64);
-            assert!(!through(&mut memo, kept).1, "{rhs} was evicted");
-        }
-    }
-
-    #[test]
-    fn a_system_above_the_cap_is_never_kept() {
-        let mut memo = Memo::default();
-        through(&mut memo, system(MEMO_UNKNOWNS, 4.0, 1.0, 1.0));
-        assert_eq!(memo.systems.len(), 1);
-        let mut memo = Memo::default();
-        let solved = fresh(system(MEMO_UNKNOWNS + 1, 4.0, 1.0, 1.0));
-        for _ in 0..2 {
-            let x = through(&mut memo, system(MEMO_UNKNOWNS + 1, 4.0, 1.0, 1.0));
-            assert_eq!(x, (solved.clone(), true));
-            assert!(memo.systems.is_empty());
-        }
+        let mut solver = solver(3);
+        stamped(&mut solver, 3, 0.0, 1.0, 1.0);
+        assert!(solver.solve(true).is_err());
+        assert!(solver.memo.systems.is_empty());
     }
 
     #[test]
     fn the_memo_keeps_the_latest_systems() {
-        let mut memo = Memo::default();
+        let mut solver = solver(3);
         for rhs in 1..=MEMO_SYSTEMS + 1 {
-            through(&mut memo, system(3, 4.0, 1.0, rhs as f64));
+            through(&mut solver, 3, 4.0, 1.0, rhs as f64);
         }
-        assert_eq!(memo.systems.len(), MEMO_SYSTEMS);
-        let latest = system(3, 4.0, 1.0, MEMO_SYSTEMS as f64 + 1.0);
-        assert!(!through(&mut memo, latest).1, "the latest was not kept");
+        assert_eq!(solver.memo.systems.len(), MEMO_SYSTEMS);
+        let latest = MEMO_SYSTEMS as f64 + 1.0;
         assert!(
-            through(&mut memo, system(3, 4.0, 1.0, 1.0)).1,
+            !through(&mut solver, 3, 4.0, 1.0, latest).1,
+            "the latest was not kept"
+        );
+        assert!(
+            through(&mut solver, 3, 4.0, 1.0, 1.0).1,
             "the oldest was kept"
+        );
+    }
+
+    /// 1000 unknowns, far past what a dense memo held, are kept.
+    #[test]
+    fn a_large_sparse_system_is_kept() {
+        let mut solver = solver(1000);
+        assert!(through(&mut solver, 1000, 4.0, 1.0, 1.0).1);
+        assert!(!through(&mut solver, 1000, 4.0, 1.0, 1.0).1);
+    }
+
+    /// A system whose pattern grew is factored on the wider pattern, and the next system on it
+    /// refactors on the kept pivots, to the same bits as a solver that never had the narrower
+    /// pattern.
+    #[test]
+    fn a_wider_pattern_is_factored_again_and_then_reused() {
+        let mut grown = solver(3);
+        grown.system.b = vec![1.0; 3];
+        for k in 0..3 {
+            grown.system.add(k, k, 4.0);
+        }
+        grown.solve(true).unwrap();
+        let narrow = Arc::clone(&grown.system.pattern);
+        let (wide, ran) = through(&mut grown, 3, 4.0, 1.0, 2.0);
+        assert!(ran && !Arc::ptr_eq(&narrow, &grown.system.pattern));
+        let mut fresh = solver(3);
+        through(&mut fresh, 3, 4.0, 1.0, 5.0);
+        assert_eq!(through(&mut fresh, 3, 4.0, 1.0, 2.0).0, wide);
+    }
+
+    #[test]
+    fn a_value_that_is_not_finite_names_its_row() {
+        let mut solver = solver(3);
+        stamped(&mut solver, 3, 4.0, 1.0, 1.0);
+        solver.system.b[2] = f64::INFINITY;
+        assert_eq!(
+            solver.solve(false).unwrap_err(),
+            Failure::NonFinite { col: 2 }
         );
     }
 }

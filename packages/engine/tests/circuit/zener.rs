@@ -166,8 +166,8 @@ fn zener_examples_solve() {
     eprintln!("zener-shunt #net.vz {cathode} #dz1.v {voltage} #dz1.i {current} #dz1.p {power}");
     assert_eq!(cathode, 4.996963715824736);
     assert_eq!(voltage, -4.996963715824736);
-    assert_eq!(current, -0.03503339912093115);
-    assert_eq!(power, 0.17506062424929916);
+    assert_eq!(current, -0.03503339912093094);
+    assert_eq!(power, 0.1750606242492981);
     let sweep = std::fs::read(root.join("packages/engine/tests/circuits/zener-sweep/netlist.json"))
         .unwrap();
     let sweep_net = orbe_engine::netlist::parse(&sweep).unwrap();

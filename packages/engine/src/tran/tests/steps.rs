@@ -113,55 +113,58 @@ fn rc_two_switches(edge_a: u64, edge_b: u64, stop: u64, max_step: u64) -> Netlis
     crate::netlist::parse(json.as_bytes()).unwrap()
 }
 
+/// The step after each edge is backward Euler from the edge, and every step after that is BDF2
+/// on the two points before it.
 #[test]
-fn each_edge_restarts_on_backward_euler_and_the_next_step_is_trapezoidal() {
+fn each_edge_restarts_on_backward_euler_and_the_next_steps_are_bdf2() {
     let netlist = rc_two_switches(10_000, 10_500, 20_000, EDGE_STEP);
     let trace = run_steps(&netlist);
     let rows: Vec<u64> = trace.time().iter().map(|t| t.as_ps()).collect();
-    assert_eq!(
-        rows,
-        [
-            0, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10_000, 10_500, 11_000,
-            11_500, 12_500, 13_500, 14_500, 15_500, 16_500, 17_500, 18_500, 19_500, 20_000,
-        ]
-    );
-    let column = |name: &str| {
-        let index = trace
+    let vout = trace.column(
+        trace
             .columns()
             .iter()
-            .position(|r| r.to_string() == name)
-            .unwrap();
-        trace.column(index)
-    };
-    let (vout, current) = (column("#net.vout"), column("#c1.i"));
-    let at = |values: &[f64], t: u64| values[rows.binary_search(&t).unwrap()];
+            .position(|r| r.to_string() == "#net.vout")
+            .unwrap(),
+    );
+    let index = |t: u64| rows.binary_search(&t).unwrap();
     // s1 closes at 10 ns. s2 closes at 10.5 ns. gmin is 1e-12 S.
     let one_closed = 1.0 / 1000.0 + 1e-9 + 1e-12;
     let both_closed = 2.0 / 1000.0 + 1e-12;
     // The restart holds c1 through 1e-6 ohm, so it starts within 1e-9 V of the row at the edge.
-    for (start, end, g_load) in [(10_000, 10_500, one_closed), (10_500, 11_000, both_closed)] {
-        let got = at(vout, end);
-        let want = backward_euler(1.0, at(vout, start), end - start, g_load);
+    for (edge, g_load) in [(10_000, one_closed), (10_500, both_closed)] {
+        let k = index(edge);
+        let h = rows[k + 1] - edge;
+        let want = backward_euler(1.0, vout[k], h, g_load);
         assert!(
-            (got - want).abs() < 1e-8,
-            "{start} -> {end}: {got} vs backward Euler {want}"
+            (vout[k + 1] - want).abs() < 1e-8,
+            "{edge} + {h}: {} vs backward Euler {want}",
+            vout[k + 1]
         );
     }
-    let (start, end) = (11_000, 11_500);
-    let got = at(vout, end);
-    let want = trapezoidal(
-        1.0,
-        at(vout, start),
-        at(current, start),
-        end - start,
-        both_closed,
-    );
-    let euler = backward_euler(1.0, at(vout, start), end - start, both_closed);
-    assert!((want - euler).abs() > 1e-7, "{want} vs {euler}");
-    assert!(
-        (got - want).abs() < 1e-12,
-        "{start} -> {end}: {got} vs trapezoidal {want}"
-    );
+    let mut separated = false;
+    for j in index(10_000) + 1..rows.len() - 1 {
+        if rows[j] == 10_500 {
+            continue;
+        }
+        let (h0, h) = (rows[j] - rows[j - 1], rows[j + 1] - rows[j]);
+        let g_load = if rows[j] < 10_500 {
+            one_closed
+        } else {
+            both_closed
+        };
+        let want = bdf2(1.0, (vout[j - 1], vout[j]), h0, h, g_load);
+        let euler = backward_euler(1.0, vout[j], h, g_load);
+        separated |= (want - euler).abs() > 1e-6;
+        assert!(
+            (vout[j + 1] - want).abs() < 1e-8,
+            "{} -> {}: {} vs BDF2 {want}",
+            rows[j],
+            rows[j + 1],
+            vout[j + 1]
+        );
+    }
+    assert!(separated, "no step separates BDF2 from backward Euler");
 }
 
 #[test]

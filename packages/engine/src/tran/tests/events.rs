@@ -129,9 +129,9 @@ fn with_row_budget(netlist: &Netlist, grid: u64, row: u32) -> (Outcome, Vec<Diag
 /// every row no step lands on fails twice. Each is the line between the accepted steps around
 /// it, with a warning, and the run reaches `stop`.
 /// A grid with no row inside a step takes the same steps and warns of nothing.
-/// The latch's set feeds no capacitor, so the step from it is long and one row falls inside. That
-/// line starts at the restart solve, which is the operating point with the latch set and `cr`
-/// held where the step left it.
+/// A line inside the step after the latch's set would start at the restart solve, which is the
+/// operating point with the latch set and `cr` held where the step left it. The steps there are
+/// shorter than the grid, so no row falls inside.
 #[test]
 fn a_row_that_fails_twice_is_the_line_between_its_steps() {
     let netlist = reset_release(None, 0.0);
@@ -203,7 +203,7 @@ fn a_row_that_fails_twice_is_the_line_between_its_steps() {
             );
         }
     }
-    assert_eq!(from_restart, 1);
+    assert_eq!(from_restart, 0);
 }
 
 /// Every probe is the run's row at its time, and only a probe between steps can be the line.
@@ -283,7 +283,10 @@ fn a_row_after_a_restart_is_the_line_from_the_restart() {
     let steps = run_steps(&netlist);
     let edge = steps.time().binary_search(&Time::from_ps(10_000)).unwrap();
     let (edge_at, to) = (steps.time()[edge], steps.time()[edge + 1]);
-    assert_eq!(to, Time::from_ps(10_000 + EDGE_STEP));
+    // A segment starts with a 1 ns step, or a shorter one where its error refuses that. The
+    // row is the middle of that step.
+    assert!(to <= Time::from_ps(10_000 + EDGE_STEP), "{to:?}");
+    let at = Time::from_ps(10_000 + (to.as_ps() - 10_000) / 2);
     let column = |name: &str| {
         steps
             .columns()
@@ -299,11 +302,10 @@ fn a_row_after_a_restart_is_the_line_from_the_restart() {
         vout,
     ));
 
-    let (outcome, lines) = with_row_budget(&netlist, 10_500, 1);
+    let (outcome, lines) = with_row_budget(&netlist, at.as_ps(), 1);
     let [line] = lines.as_slice() else {
         panic!("{lines:?}");
     };
-    let at = Time::from_ps(10_500);
     assert_eq!(line.at(), Some(at));
     assert_eq!(
         serde_json::to_value(line).unwrap()["data"],
@@ -313,8 +315,10 @@ fn a_row_after_a_restart_is_the_line_from_the_restart() {
     let row = trace.time().binary_search(&at).unwrap();
     assert_eq!(trace.column(column("#net.src"))[row], 5.0);
     assert_eq!(trace.column(column("#i1.i"))[row], -1e-3);
+    let share = (at.as_ps() - 10_000) as f64 / (to.as_ps() - 10_000) as f64;
     for (j, quantity) in trace.columns().iter().enumerate() {
-        let want = (restart.column(j)[0] + steps.column(j)[edge + 1]) / 2.0;
+        let (a, b) = (restart.column(j)[0], steps.column(j)[edge + 1]);
+        let want = a + (b - a) * share;
         assert_eq!(trace.column(j)[row], want, "{quantity}");
     }
 }
@@ -346,12 +350,12 @@ fn led_charge() -> Netlist {
     crate::netlist::parse(json.as_bytes()).unwrap()
 }
 
-/// With three iterations some rows do not converge from the last accepted step and do from the
-/// step's end, and the trace stores that second solve.
+/// With two iterations some rows do not converge from the last accepted step and do from the
+/// step's end, and the trace stores that second solve. A row that fails both is the line.
 #[test]
 fn a_row_whose_second_solve_converges_is_solved() {
     let netlist = led_charge();
-    let mut session = open(&netlist, Vec::new(), Budget { row: 3, ..BUDGET });
+    let mut session = open(&netlist, Vec::new(), Budget { row: 2, ..BUDGET });
     let mut retried = Vec::new();
     while let State::Running { accepted, next, .. } = &session.state {
         let span = session.span(accepted, next);
@@ -363,13 +367,24 @@ fn a_row_whose_second_solve_converges_is_solved() {
         let landing = next.at;
         session.advance_to(landing);
     }
-    let mut none = Vec::new();
-    let trace = session.outcome(&mut none).trace.unwrap();
-    assert_eq!(none, []);
-    assert!(!retried.is_empty());
+    let mut lines = Vec::new();
+    let trace = session.outcome(&mut lines).trace.unwrap();
+    let failed: Vec<Time> = retried
+        .iter()
+        .filter(|(_, solved)| solved.is_err())
+        .map(|&(at, _)| at)
+        .collect();
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line.at().unwrap())
+            .collect::<Vec<_>>(),
+        failed
+    );
+    assert!(retried.len() > failed.len());
     for (at, from_step_end) in retried {
         let Ok(solved) = from_step_end else {
-            panic!("the row at {at:?} did not solve from the step's end: {from_step_end:?}");
+            continue;
         };
         let row = trace.time().binary_search(&at).unwrap();
         for (j, quantity) in trace.columns().iter().enumerate() {
@@ -450,7 +465,7 @@ fn a_source_jump_on_a_switch_edge_restarts_once() {
             .unwrap();
         trace.column(index)
     };
-    let (vout, current) = (column("#net.vout"), column("#c1.i"));
+    let vout = column("#net.vout");
     let closed = 1.0 / 1000.0 + 1e-12;
     let open = 1e-9 + 1e-12;
     let got = vout[k + 1];
@@ -463,10 +478,10 @@ fn a_source_jump_on_a_switch_edge_restarts_once() {
     // A second restart would take another 1 ns. This step has already left that.
     assert!(rows[k + 2] - rows[k + 1] > EDGE_STEP, "{rows:?}");
     let h = rows[k + 2] - rows[k + 1];
-    let trap = trapezoidal(2.0, got, current[k + 1], h, closed);
+    let bdf2 = bdf2(2.0, (vout[k], got), EDGE_STEP, h, closed);
     assert!(
-        (vout[k + 2] - trap).abs() < 1e-8,
-        "{} vs {trap}",
+        (vout[k + 2] - bdf2).abs() < 1e-8,
+        "{} vs {bdf2}",
         vout[k + 2]
     );
 }
@@ -515,12 +530,7 @@ fn a_source_jump_on_a_located_chip_event_restarts_once() {
             .unwrap();
         trace.column(index)
     };
-    let (vs, src, out_v, current) = (
-        column("#net.vs"),
-        column("#net.src"),
-        column("#net.out"),
-        column("#cs.i"),
-    );
+    let (vs, src, out_v) = (column("#net.vs"), column("#net.src"), column("#net.out"));
     assert!(vs[k].abs() < 1e-6, "#net.vs {vs}", vs = vs[k]);
     assert_eq!(src[k], 0.0, "old level");
     assert_eq!(src[k + 1], 1.0, "new level");
@@ -534,18 +544,21 @@ fn a_source_jump_on_a_located_chip_event_restarts_once() {
     assert!((got - euler).abs() < 1e-8, "{got} vs {euler} over {h} ps");
     assert!((euler - held).abs() > 1e-6, "{euler} vs {held}");
     // Steps of a few tens of picoseconds do not separate the two rules.
+    let rule = |j: usize| {
+        let (h0, h) = (rows[j] - rows[j - 1], rows[j + 1] - rows[j]);
+        (
+            bdf2(1.0, (vs[j - 1], vs[j]), h0, h, gmin),
+            backward_euler(1.0, vs[j], h, gmin),
+        )
+    };
     let j = (k + 1..rows.len() - 1)
         .find(|&j| {
-            let h = rows[j + 1] - rows[j];
-            (trapezoidal(1.0, vs[j], current[j], h, gmin) - backward_euler(1.0, vs[j], h, gmin))
-                .abs()
-                > 1e-7
+            let (bdf2, euler) = rule(j);
+            (bdf2 - euler).abs() > 1e-7
         })
-        .expect("no later step separates the trapezoidal rule from backward Euler");
-    let h = rows[j + 1] - rows[j];
-    let trap = trapezoidal(1.0, vs[j], current[j], h, gmin);
-    let still = backward_euler(1.0, vs[j], h, gmin);
+        .expect("no later step separates BDF2 from backward Euler");
+    let (bdf2, still) = rule(j);
     let later = vs[j + 1];
-    assert!((later - trap).abs() < 1e-8, "{later} vs {trap}");
-    assert!((trap - still).abs() > 1e-7, "{trap} vs {still}");
+    assert!((later - bdf2).abs() < 1e-8, "{later} vs {bdf2}");
+    assert!((bdf2 - still).abs() > 1e-7, "{bdf2} vs {still}");
 }

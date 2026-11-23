@@ -1061,8 +1061,8 @@ fn an_input_at_the_accepted_step_lands_1_ps_after_it() {
     ends_as_its_landings(session);
 }
 
-/// The fixture's first step is tried at 1 ns and rejected down to 40 ps. An input at 41 ps
-/// lands at 1 ns, because a batch run with the edge at 41 ps takes another first step.
+/// The fixture's first step is tried at 1 ns and rejected down to 1 ps. An input at 2 ps
+/// lands at 1 ns, because an edge at 2 ps would have cut that attempt.
 #[test]
 fn an_input_inside_a_rejected_attempt_lands_at_the_reach() {
     let input = without_events(STIFF_ROW);
@@ -1077,21 +1077,16 @@ fn an_input_inside_a_rejected_attempt_lands_at_the_reach() {
     };
     assert_eq!(
         (accepted.at, accepted.reach),
-        (Time::from_ps(40), Time::from_ps(1_000))
+        (Time::from_ps(1), Time::from_ps(1_000))
     );
     assert_eq!(
-        session.apply(&set("sw1", 41, Contact::Closed)),
+        session.apply(&set("sw1", 2, Contact::Closed)),
         Ok(Applied {
             at: Time::from_ps(1_000),
             status: Status::Running,
         })
     );
     ends_as_its_landings(session);
-
-    let mut json: serde_json::Value = serde_json::from_slice(&input).unwrap();
-    json["parts"][5]["events"] = serde_json::json!([{ "t_ps": 41, "state": "closed" }]);
-    let early = netlist::parse(&serde_json::to_vec(&json).unwrap()).unwrap();
-    assert_ne!(run_steps(&early).time()[1], first);
 }
 
 /// Stands on the step the 1 ns attempt after an edge at `edge` shrank to.
@@ -1501,10 +1496,10 @@ fn a_level_inside_a_rejected_attempt_lands_at_the_reach() {
     };
     assert_eq!(
         (accepted.at, accepted.reach),
-        (Time::from_ps(40), Time::from_ps(1_000))
+        (Time::from_ps(1), Time::from_ps(1_000))
     );
     assert_eq!(
-        session.apply(&level("v1", 41, 1.5)),
+        session.apply(&level("v1", 2, 1.5)),
         Ok(Applied {
             at: Time::from_ps(1_000),
             status: Status::Running,
@@ -2176,10 +2171,10 @@ fn a_serial_send_inside_a_rejected_attempt_lands_at_the_reach() {
     };
     assert_eq!(
         (accepted.at, accepted.reach),
-        (Time::from_ps(40), Time::from_ps(1_000))
+        (Time::from_ps(1), Time::from_ps(1_000))
     );
     assert_eq!(
-        session.apply(&send("v1", 41, 9600, &[0x31])),
+        session.apply(&send("v1", 2, 9600, &[0x31])),
         Ok(Applied {
             at: Time::from_ps(1_000),
             status: Status::Running,

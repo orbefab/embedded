@@ -78,6 +78,10 @@ fn samples() -> Vec<Diagnostic> {
             at: Time::ZERO,
             limit: 100_000_000,
         },
+        Diagnostic::SolverStepWork {
+            at: Time::ZERO,
+            limit: 1 << 30,
+        },
         Diagnostic::SolverConvergence {
             at: Time::ZERO,
             unknown: part("led1"),
@@ -187,7 +191,7 @@ fn codes_are_unique_and_match_the_grammar() {
         assert!(is_code(code), "{code}");
         assert!(seen.insert(code), "duplicate code {code}");
     }
-    assert_eq!(seen.len(), 24);
+    assert_eq!(seen.len(), 25);
 }
 
 /// `docs/engine/diagnostics.md` gives each code its own `## <code>` heading.
@@ -224,6 +228,7 @@ fn severity_refs_and_time_follow_the_variant() {
             "solver.nonfinite",
             "solver.too_large",
             "solver.step_limit",
+            "solver.step_work",
             "solver.convergence",
             "rating.current",
             "rating.power",
@@ -302,7 +307,19 @@ fn severity_refs_and_time_follow_the_variant() {
         ),
         "{step_limit}"
     );
+    assert!(by_code(&found, "solver.step_work").refs().is_empty());
+    let step_work = serde_json::to_string(by_code(&found, "solver.step_work")).unwrap();
+    assert!(
+        step_work.contains(
+            r#""refs":[],"t_ps":0,"message":"one step took more than 1073741824 solver operations, its limit; the circuit is too large or too stiff to step","data":{"limit":1073741824}"#
+        ),
+        "{step_work}"
+    );
     let too_large = serde_json::to_string(by_code(&found, "solver.too_large")).unwrap();
+    assert!(
+        too_large.contains(r#""message":"4097 unknowns exceeds the solver limit of 4096""#),
+        "{too_large}"
+    );
     assert!(
         too_large.contains(r#""data":{"limit":4096,"unknowns":4097}"#),
         "{too_large}"

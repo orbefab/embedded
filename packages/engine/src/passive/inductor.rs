@@ -7,7 +7,7 @@ use crate::mna::{Probe, Stamp, Unknowns};
 use crate::name::Quantity;
 use crate::netlist::json::{ParseCtx, PinMap, WireValue, resolve_pins, resolve_value};
 use crate::netlist::{Conduction, Kind, NetId, Value};
-use crate::newton::{History, Method, Side, Store};
+use crate::newton::{History, Side};
 
 /// Seconds. A held inductor sits beside `HOLD / L` siemens, the backward Euler companion of a
 /// step this long, the dual of a held capacitor's `HOLD / C` ohm. An exact hold would leave two
@@ -43,8 +43,9 @@ pub(crate) fn stamp_coil(stamp: &mut Stamp<'_>, a: NetId, coil: OwnedInductor) {
 
 /// Stamp inductor `k` from `ends[0]` to `ends[1]`. Its branch, the part's after its capacitors',
 /// is the current entering `ends[0]`. The operating point is a short. A restart holds the current
-/// in the solution before the edge, scaled with the sources. A step follows the companion. `v0`
-/// and `i0` come from the last accepted solution.
+/// in the solution before the edge, scaled with the sources. A step follows the step's
+/// companion, `v = g * i + rhs`, read from the currents in the accepted solutions it reads, and
+/// stamps it as `i = v / g - rhs / g`.
 pub(crate) fn stamp_inductor(stamp: &mut Stamp<'_>, k: usize, ends: [StoreEnd; 2], henry: f64) {
     let [x, b] = ends.map(|end| end.node(stamp.layout, stamp.part));
     let branch = stamp.layout.flux_branch(stamp.part, k);
@@ -57,23 +58,8 @@ pub(crate) fn stamp_inductor(stamp: &mut Stamp<'_>, k: usize, ends: [StoreEnd; 2
             stamp.branch_row(x, b, branch, 1.0, -HOLD / henry, i0 * scale);
         }
         History::Step(step) => {
-            let previous = stamp.probe(step.previous);
-            let v0 = previous.v(x) - previous.v(b);
-            let index = stamp.layout.flux_index(stamp.part, k);
-            let method = step.method_of(Store::Flux(index));
-            let (g, rhs) = companion(henry, method, step.h(), v0, previous.branch(branch));
-            stamp.branch_row(x, b, branch, 1.0, -g, rhs);
-        }
-    }
-}
-
-/// The step's companion `i = g * v + rhs`, as `(g, rhs)`.
-fn companion(henry: f64, method: Method, h: f64, v0: f64, i0: f64) -> (f64, f64) {
-    match method {
-        Method::BackwardEuler => (h / henry, i0),
-        Method::Trapezoidal => {
-            let g = h / (2.0 * henry);
-            (g, i0 + g * v0)
+            let (g, rhs) = step.companion(henry, |x| stamp.probe(x).branch(branch));
+            stamp.branch_row(x, b, branch, 1.0, -1.0 / g, -rhs / g);
         }
     }
 }
@@ -87,21 +73,21 @@ mod tests {
     use crate::mna::{Solution, System};
     use crate::newton::{Circuit, Conditions, Iterate};
 
+    /// One backward Euler step of 1 ns from 50 mA moves the current by the step times the
+    /// voltage across the inductance over L, the companion read the other way round.
     #[test]
-    fn backward_euler_is_the_voltage_over_the_step() {
-        let (g, rhs) = companion(0.5, Method::BackwardEuler, 1e-3, 2.0, 5e-3);
-        assert_eq!(g, 2e-3);
-        assert_eq!(g * 3.0 + rhs, 5e-3 + 1e-3 * 3.0 / 0.5);
-    }
-
-    #[test]
-    fn trapezoidal_averages_the_two_voltages() {
-        let (g, rhs) = companion(0.5, Method::Trapezoidal, 1e-3, 2.0, 5e-3);
-        let i1 = g * 3.0 + rhs;
-        assert!(
-            (i1 - (5e-3 + 1e-3 * (2.0 + 3.0) / 2.0 / 0.5)).abs() <= 1e-18,
-            "{i1}"
-        );
+    fn a_backward_euler_step_moves_the_current_by_v_h_over_l() {
+        let (i, v) = solved(|previous| {
+            History::Step(crate::newton::Integration {
+                h_ps: 1_000,
+                coefficients: [1.0, -1.0, 0.0],
+                previous,
+                before: None,
+            })
+        });
+        let want = 0.05 + 1e-9 * v / 1e-9;
+        assert!((i - want).abs() <= 1e-12, "{i} vs {want}");
+        assert!((v - (5.0 - 70.0 * i)).abs() <= 1e-9, "{v}");
     }
 
     /// 5 V onto 1 nH behind 70 ohm. `history` sees `previous`, with 50 mA in the coil.

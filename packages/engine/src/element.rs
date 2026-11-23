@@ -3,8 +3,6 @@ use crate::netlist::{NetId, PartId};
 
 use crate::mna::{Layout, Node, Probe, Stamp, Unknowns};
 pub(crate) use crate::passive::inductor::{coil, stamp_coil};
-#[cfg(test)]
-use crate::passive::{capacitor, inductor};
 
 /// What the layout and the stamp read from a part. A netlist `Model` is one. A test
 /// passes its own value through the same calls.
@@ -39,10 +37,6 @@ pub(crate) struct OwnedCapacitor {
     pub(crate) k: usize,
     pub(crate) ends: [StoreEnd; 2],
     pub(crate) farad: f64,
-    /// The kind fixes `farad` as a constant of its law, as the op-amp's integrator, and the
-    /// netlist does not give it. [`Charges::floor_warnings`](crate::lte::Charges::floor_warnings)
-    /// checks only these.
-    pub(crate) sized_by_kind: bool,
 }
 
 /// One inductor a part owns. `k` is its index in that part's inductor list, and its current is
@@ -94,102 +88,5 @@ impl IntoIterator for Observed {
 
     fn into_iter(self) -> Self::IntoIter {
         self.values.into_iter().take(self.len)
-    }
-}
-
-/// Two capacitors on one part. Tests only. Not a netlist kind. `branches` is the count
-/// `unknowns` reserves, so a port that leaves it at 0 fails when the layout is built.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Pair {
-    pub(crate) ends: [[StoreEnd; 2]; 2],
-    pub(crate) farad: [f64; 2],
-    pub(crate) internal_nodes: usize,
-    pub(crate) branches: usize,
-}
-
-#[cfg(test)]
-impl Device for Pair {
-    fn unknowns(&self) -> Unknowns {
-        Unknowns {
-            internal_nodes: self.internal_nodes,
-            bare_internal: false,
-            branches: self.branches,
-            junctions: 0,
-        }
-    }
-
-    fn charges(&self) -> Vec<OwnedCapacitor> {
-        self.ends
-            .iter()
-            .zip(self.farad)
-            .enumerate()
-            .map(|(k, (ends, farad))| OwnedCapacitor {
-                k,
-                ends: *ends,
-                farad,
-                sized_by_kind: false,
-            })
-            .collect()
-    }
-
-    fn inductors(&self) -> Vec<OwnedInductor> {
-        Vec::new()
-    }
-
-    fn stamp(&self, stamp: &mut Stamp<'_>) {
-        for cap in self.charges() {
-            capacitor::stamp_capacitor(stamp, cap.k, cap.ends, cap.farad, None);
-        }
-    }
-}
-
-/// One capacitor and one inductor on one part, so its charge 0 and its flux 0 share a part.
-/// Tests only. Not a netlist kind. The capacitor takes branch 0 and the inductor branch 1, and
-/// `branches` is the count `unknowns` reserves.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct Mixed {
-    pub(crate) capacitor: [StoreEnd; 2],
-    pub(crate) farad: f64,
-    pub(crate) inductor: [StoreEnd; 2],
-    pub(crate) henry: f64,
-    pub(crate) ohm: f64,
-    pub(crate) internal_nodes: usize,
-    pub(crate) branches: usize,
-}
-
-#[cfg(test)]
-impl Device for Mixed {
-    fn unknowns(&self) -> Unknowns {
-        Unknowns {
-            internal_nodes: self.internal_nodes,
-            bare_internal: false,
-            branches: self.branches,
-            junctions: 0,
-        }
-    }
-
-    fn charges(&self) -> Vec<OwnedCapacitor> {
-        vec![OwnedCapacitor {
-            k: 0,
-            ends: self.capacitor,
-            farad: self.farad,
-            sized_by_kind: false,
-        }]
-    }
-
-    fn inductors(&self) -> Vec<OwnedInductor> {
-        vec![OwnedInductor {
-            k: 0,
-            ends: self.inductor,
-            henry: self.henry,
-            ohm: self.ohm,
-        }]
-    }
-
-    fn stamp(&self, stamp: &mut Stamp<'_>) {
-        capacitor::stamp_capacitor(stamp, 0, self.capacitor, self.farad, None);
-        inductor::stamp_inductor(stamp, 0, self.inductor, self.henry);
     }
 }

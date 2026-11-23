@@ -11,10 +11,9 @@ use super::active::{NS, US, capacitor, circuit, resistor, scripted};
 use super::fixtures::*;
 use crate::active;
 use crate::active::script::Op;
-use crate::lte::Segment;
-use crate::newton::Side;
+use crate::lte::Past;
 use crate::session::Budget;
-use crate::session::{SerialCursor, State, Status, attempt};
+use crate::session::{SerialCursor, State, Status};
 
 /// A seeded xorshift, so a failing chunking replays.
 pub(super) struct Rng(pub(super) u64);
@@ -215,8 +214,8 @@ fn relay_flyback_in_chunks_writes_the_batch_folder() {
 }
 
 /// 1 V through 1 kohm into 30 pF, which a 1 ohm switch shorts at 5.5 ns into a 30 ps mode,
-/// beside 10 pF held at 1 V that discharges through 1 kohm. The steps after the edge stiffen
-/// `cf`, and the 1 ns grid puts rows inside them.
+/// beside 10 pF held at 1 V that discharges through 1 kohm. The steps after the edge are
+/// short, and the 1 ns grid puts rows inside them.
 pub(super) const STIFF_ROW: &[u8] = br#"{
   "version": 1,
   "seed": 0,
@@ -274,204 +273,6 @@ pub(super) const STIFF_ROW: &[u8] = br#"{
 #[test]
 fn stiff_row_in_chunks_writes_the_batch_folder() {
     input_in_chunks_writes_the_batch_folder("stiff-row", STIFF_ROW, BUDGET, 0x5eed_000a);
-}
-
-/// `npn-blinker` cut to 1 us on a 1 ns grid. A ringing stiffen there retries a step that
-/// holds a grid row.
-fn long_stiff_blinker() -> Vec<u8> {
-    let path = format!(
-        "{}/tests/circuits/npn-blinker/netlist.json",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let mut json: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    let transient = &mut json["analysis"]["transient"];
-    transient["stop_ps"] = serde_json::json!(1_000_000);
-    transient["max_step_ps"] = serde_json::json!(1_000_000);
-    transient["grid_ps"] = serde_json::json!(1_000);
-    serde_json::to_vec(&json).unwrap()
-}
-
-/// Grid rows strictly inside a stiffened step longer than 1 ps, each solved on that step's
-/// stiffened segment. The batch trace has to match these bits.
-fn rows_inside_long_stiffened_steps(netlist: &Netlist) -> Vec<(Time, Vec<u64>)> {
-    let spec = transient(netlist);
-    let mut session = open(netlist, Vec::new(), BUDGET);
-    let mut rows = Vec::new();
-    let mut longest = 0u64;
-    loop {
-        let at = {
-            let State::Running { accepted, next, .. } = &session.state else {
-                break;
-            };
-            let h = next.at.as_ps() - accepted.at.as_ps();
-            if next.stiffened.is_some() {
-                longest = longest.max(h);
-            }
-            if let Some(stiffened) = &next.stiffened
-                && h > 1
-            {
-                let mut row = spec.next_row_after(accepted.at);
-                while row < next.at {
-                    let step = row.as_ps() - accepted.at.as_ps();
-                    let solve = |segment: &Segment| {
-                        let cores = session.actives.cores();
-                        let converged = attempt(
-                            &session.circuit,
-                            None,
-                            accepted,
-                            segment,
-                            cores,
-                            step,
-                            &accepted.iterate,
-                            BUDGET.row,
-                        )
-                        .unwrap();
-                        observe::row(
-                            &session.circuit,
-                            &session.columns,
-                            &converged.iterate.solution,
-                            row,
-                            Side::Before,
-                        )
-                        .unwrap()
-                    };
-                    let stiff = solve(stiffened);
-                    let smooth = solve(&accepted.segment);
-                    let stiff_bits: Vec<u64> = stiff.iter().map(|v| v.get().to_bits()).collect();
-                    let smooth_bits: Vec<u64> = smooth.iter().map(|v| v.get().to_bits()).collect();
-                    assert_ne!(
-                        stiff_bits, smooth_bits,
-                        "the stiffen at {row:?} moves the row"
-                    );
-                    rows.push((row, stiff_bits));
-                    let next_row = spec.next_row_after(row);
-                    if next_row <= row {
-                        break;
-                    }
-                    row = next_row;
-                }
-            }
-            next.at
-        };
-        session.advance_to(at);
-    }
-    assert!(
-        !rows.is_empty(),
-        "no grid row falls inside a stiffened step longer than 1 ps, longest {longest} ps"
-    );
-    rows
-}
-
-/// A call that stops strictly inside a long stiffened step reads that step's stiffened
-/// solve, and the run still writes the batch's folder.
-#[test]
-fn a_call_inside_a_stiffened_step_holds_it() {
-    let input = long_stiff_blinker();
-    let netlist = crate::netlist::parse(&input).unwrap();
-    let batch = batch(&netlist, BUDGET);
-    let spec = transient(&netlist);
-    let mut session = open(&netlist, Vec::new(), BUDGET);
-    let inside = loop {
-        let at = {
-            let State::Running { accepted, next, .. } = &session.state else {
-                panic!("the run ends at {:?}", spec.stop);
-            };
-            let row = spec.next_row_after(accepted.at);
-            if next.stiffened.is_some()
-                && next.at.as_ps() - accepted.at.as_ps() > 1
-                && accepted.at < row
-                && row < next.at
-            {
-                break row;
-            }
-            next.at
-        };
-        session.advance_to(at);
-    };
-    session.advance_to(inside);
-    let probe: Vec<u64> = session
-        .probe()
-        .values()
-        .iter()
-        .map(|value| value.get().to_bits())
-        .collect();
-    {
-        let State::Running {
-            accepted,
-            now,
-            next,
-            ..
-        } = &session.state
-        else {
-            panic!("the run ends at {:?}", spec.stop);
-        };
-        assert!(
-            next.stiffened.is_some(),
-            "{inside:?} leaves the retry waiting"
-        );
-        assert!(accepted.at < inside && inside < next.at && *now == inside);
-        let h = inside.as_ps() - accepted.at.as_ps();
-        let stiffened = next.stiffened.clone().unwrap();
-        let solve = |segment: &Segment| {
-            let cores = session.actives.cores();
-            let converged = attempt(
-                &session.circuit,
-                None,
-                accepted,
-                segment,
-                cores,
-                h,
-                &accepted.iterate,
-                BUDGET.row,
-            )
-            .unwrap();
-            observe::row(
-                &session.circuit,
-                &session.columns,
-                &converged.iterate.solution,
-                inside,
-                Side::Before,
-            )
-            .unwrap()
-        };
-        let stiff: Vec<u64> = solve(&stiffened)
-            .iter()
-            .map(|value| value.get().to_bits())
-            .collect();
-        let smooth: Vec<u64> = solve(&accepted.segment)
-            .iter()
-            .map(|value| value.get().to_bits())
-            .collect();
-        assert_ne!(stiff, smooth, "the stiffen at {inside:?} moves the probe");
-        assert_eq!(
-            probe, stiff,
-            "the probe at {inside:?} is the stiffened solve"
-        );
-    }
-    session.advance_to(spec.stop);
-    assert_same_folder(&input, &netlist, &finish(session), &batch);
-}
-
-/// A grid row inside a step that a stiffen retried equals a direct solve on the stiffened
-/// segment, and differs from a solve on the accepted segment.
-#[test]
-fn a_row_inside_a_stiffened_step_is_solved_on_the_stiffened_segment() {
-    let netlist = crate::netlist::parse(&long_stiff_blinker()).unwrap();
-    let rows = rows_inside_long_stiffened_steps(&netlist);
-    let results = batch(&netlist, BUDGET);
-    let trace = results.trace().unwrap();
-    for (at, want) in rows {
-        let k = trace.time().binary_search(&at).unwrap();
-        for (j, bits) in want.iter().enumerate() {
-            assert_eq!(
-                trace.column(j)[k].to_bits(),
-                *bits,
-                "{} at {at:?}",
-                trace.columns()[j]
-            );
-        }
-    }
 }
 
 #[test]
@@ -673,7 +474,7 @@ fn a_cut_after_a_stall_plans_from_the_halved_step() {
         session.advance_to(at);
         if let State::Running { accepted, .. } = &session.state
             && halved
-            && !matches!(accepted.segment, Segment::Start { .. })
+            && !matches!(accepted.past, Past::Start)
         {
             assert_eq!(session.plan, wanted, "the plan after the cut at {at:?}");
             cuts += 1;

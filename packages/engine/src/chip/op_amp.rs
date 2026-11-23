@@ -262,7 +262,6 @@ impl Kind for OpAmp {
             k: 0,
             ends: [StoreEnd::Internal(0), StoreEnd::Net(self.pins[GND])],
             farad: C_INT,
-            sized_by_kind: true,
         }]
     }
     fn inductors(&self) -> Vec<OwnedInductor> {

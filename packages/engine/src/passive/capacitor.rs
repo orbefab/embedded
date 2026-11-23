@@ -9,7 +9,7 @@ use crate::mna::{Probe, Stamp, Unknowns};
 use crate::name::Quantity;
 use crate::netlist::json::{ParseCtx, PinMap, WireValue, bounded, resolve_pins, resolve_value};
 use crate::netlist::{Conduction, Kind, NetId, Value};
-use crate::newton::{History, Method, Side, Store};
+use crate::newton::{History, Side};
 
 /// Seconds. A held capacitor sits behind `HOLD / C` ohm, the backward Euler companion
 /// of a step this long. An exact hold would make a capacitor across a voltage source,
@@ -20,8 +20,8 @@ const HOLD: f64 = 1e-15;
 /// Stamp capacitor `k` from `ends[0]` to `ends[1]`. Branch `k` is the current entering
 /// `ends[0]`. A held voltage scales with the sources. `initial` is the voltage held at
 /// t = 0, and `None` leaves the capacitor open. A restart holds the voltage in the
-/// solution before the edge. A step follows the companion. `v0` and `i0` come from the
-/// last accepted solution on branch `k`.
+/// solution before the edge. A step follows the step's companion, read from the voltages
+/// across the capacitor in the accepted solutions it reads.
 pub(crate) fn stamp_capacitor(
     stamp: &mut Stamp<'_>,
     k: usize,
@@ -42,129 +42,9 @@ pub(crate) fn stamp_capacitor(
         },
         History::Restart { previous } => held(stamp, previous.node(a) - previous.node(b)),
         History::Step(step) => {
-            let previous = stamp.probe(step.previous);
-            let v0 = previous.v(a) - previous.v(b);
-            let index = stamp.layout.charge_index(stamp.part, k);
-            let method = step.method_of(Store::Charge(index));
-            let (g, rhs) = companion(capacitance, method, step.h(), v0, previous.branch(k));
+            let (g, rhs) = step.companion(capacitance, |x| x.node(a) - x.node(b));
             stamp.branch_row(a, b, k, 1.0, -g, rhs);
         }
-    }
-}
-
-/// The step's companion `i = g * v + rhs`, as `(g, rhs)`.
-fn companion(capacitance: f64, method: Method, h: f64, v0: f64, i0: f64) -> (f64, f64) {
-    match method {
-        Method::BackwardEuler => {
-            let g = capacitance / h;
-            (g, -g * v0)
-        }
-        Method::Trapezoidal => {
-            let g = 2.0 * capacitance / h;
-            (g, -g * v0 - i0)
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::netlist::{self};
-
-    use super::*;
-
-    #[test]
-    fn backward_euler_is_the_slope_over_the_step() {
-        let (g, rhs) = companion(1e-6, Method::BackwardEuler, 1e-3, 2.0, 5.0);
-        assert_eq!(g, 1e-3);
-        assert_eq!(g * 3.0 + rhs, 1e-6 * (3.0 - 2.0) / 1e-3);
-        assert_eq!(g * 2.0 + rhs, 0.0);
-    }
-
-    #[test]
-    fn trapezoidal_averages_the_two_currents() {
-        let (g, rhs) = companion(1e-6, Method::Trapezoidal, 1e-3, 2.0, 5e-4);
-        let i1 = g * 3.0 + rhs;
-        let mean = (i1 + 5e-4) / 2.0;
-        assert!((mean - 1e-6 * (3.0 - 2.0) / 1e-3).abs() <= 1e-18, "{mean}");
-        let held = g * 2.0 + rhs;
-        assert!((held + 5e-4).abs() <= 1e-15, "{held}");
-    }
-
-    /// `a_r` then `b_v` then `c_c`, so the capacitor's part index is not its charge index.
-    /// A stiff charge takes backward Euler. Stiffening the part index leaves trapezoidal.
-    #[test]
-    fn a_step_stiffens_the_charge_index_and_not_the_part_index() {
-        use crate::name::Name;
-
-        use crate::mna::{Solution, System};
-        use crate::newton::{ChargeIndex, Circuit, Conditions, Integration, Iterate, Store};
-
-        let netlist = netlist::parse(
-            br#"{
-              "version": 1,
-              "seed": 0,
-              "analysis": { "op": {} },
-              "ground": "gnd",
-              "nets": ["gnd", "n"],
-              "parts": [
-                { "name": "a_r", "kind": "resistor", "pins": { "a": "n", "b": "gnd" },
-                  "resistance": { "value": 1000.0, "unit": "ohm" },
-                  "ratings": { "power": null } },
-                { "name": "b_v", "kind": "voltage_source", "pins": { "p": "n", "n": "gnd" },
-                  "voltage": { "value": 2.0, "unit": "V" } },
-                { "name": "c_c", "kind": "capacitor", "pins": { "a": "n", "b": "gnd" },
-                  "capacitance": { "value": 1e-6, "unit": "F" },
-                  "initial": null }
-              ]
-            }"#,
-        )
-        .unwrap();
-        let circuit = Circuit::new(netlist).unwrap();
-        let cap = circuit.netlist.part_id(&Name::new("c_c").unwrap()).unwrap();
-        let charge = circuit.layout.charge_index(cap, 0);
-        assert_ne!(charge, ChargeIndex::new(cap.index()));
-        let previous = Solution::from(vec![2.0, 0.0, 5e-4]);
-
-        let solved = |stiff: &[Store]| -> f64 {
-            let conditions = Conditions {
-                history: History::Step(Integration {
-                    method: Method::Trapezoidal,
-                    stiff,
-                    h_ps: 1_000_000_000,
-                    previous: &previous,
-                }),
-                ..Conditions::NOMINAL
-            };
-            let iterate = Iterate::initial(&circuit);
-            let mut system = System::new(&circuit.layout);
-            system.reset(&circuit.layout, conditions.gmin);
-            for (id, part) in circuit.netlist.parts() {
-                crate::element::Device::stamp(
-                    &part.model,
-                    &mut Stamp::new(&mut system, &circuit.layout, id, &iterate, &conditions),
-                );
-            }
-            let solution = system.solve().expect("the held source is nonsingular");
-            solution.get(circuit.layout.branch_row(cap, 0))
-        };
-
-        let at_v0 = |method: Method| {
-            let (g, rhs) = companion(1e-6, method, 1e-3, 2.0, 5e-4);
-            g * 2.0 + rhs
-        };
-        let backward = solved(&[Store::Charge(charge)]);
-        let trapezoidal = solved(&[]);
-        let by_part = solved(&[Store::Charge(ChargeIndex::new(cap.index()))]);
-        assert!(
-            (backward - at_v0(Method::BackwardEuler)).abs() < 1e-9,
-            "{backward}"
-        );
-        assert!(
-            (trapezoidal - at_v0(Method::Trapezoidal)).abs() < 1e-9,
-            "{trapezoidal}"
-        );
-        assert!((by_part - trapezoidal).abs() < 1e-12, "{by_part}");
-        assert!((backward - trapezoidal).abs() > 1e-4);
     }
 }
 
@@ -362,7 +242,6 @@ impl Kind for Capacitor {
             k: 0,
             ends: self.dielectric(),
             farad: self.capacitance.si.get(),
-            sized_by_kind: false,
         }]
     }
     fn inductors(&self) -> Vec<OwnedInductor> {

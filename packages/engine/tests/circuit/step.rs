@@ -118,7 +118,7 @@ fn a_100_ps_discharge_after_an_edge_stays_on_its_closed_form() {
         let v = after + (before - after) * libm::exp(-t / 1e-10);
         worst = worst.max((vout[row] - v).abs() / (before - after));
     }
-    // The trapezoidal rule holds it within 1e-4 of span. Backward Euler alone is near 2e-3.
+    // BDF2 holds it within 1e-4 of span. Backward Euler alone is near 2e-3.
     assert!(worst <= 1e-4, "{worst}");
 }
 
@@ -264,8 +264,8 @@ fn a_10_ps_discharge_after_an_edge_is_within_the_documented_floor_error() {
         let v = after + (before - after) * libm::exp(-t / 1e-11);
         worst = worst.max((vout[row] - v).abs() / (before - after));
     }
-    // docs/engine/engine.md gives 1.8e-2 for a 10 ps time constant.
-    assert!(worst <= 1.8e-2, "{worst}");
+    // docs/engine/engine.md gives 5.1e-3 for a 10 ps time constant.
+    assert!(worst <= 5.1e-3, "{worst}");
 }
 
 /// Runs `slow`, `fast`, and both side by side, each a list of nets besides ground and its parts.
@@ -460,7 +460,7 @@ fn full_swing(share: f64) -> (orbe_engine::run_folder::Results, ([[f64; 2]; 2], 
 
 #[test]
 fn a_stiff_capacitor_whose_own_voltage_keeps_moving_stays_on_its_closed_form() {
-    // A 2 ohm share is a 20 ps mode, so c2 turns stiff. A 200 kohm share is 2 us, and nothing does.
+    // A 2 ohm share is a 20 ps mode. A 200 kohm share is 2 us.
     let (stiff, closed) = full_swing(2.0);
     let (smooth, smooth_closed) = full_swing(2e5);
     let (stiff, smooth) = (trace(&stiff), trace(&smooth));
@@ -470,7 +470,7 @@ fn a_stiff_capacitor_whose_own_voltage_keeps_moving_stays_on_its_closed_form() {
     assert!(worst <= 1e-4, "{worst}");
     let control = two_pole_error(smooth, ["va", "m"], 1_000, 0, smooth_closed, 4.95);
     assert!(control <= 1e-4, "{control}");
-    // Stiff, c2 takes 1 ps steps until its 20 ps mode is under Newton's tolerance, at most
+    // The 20 ps mode takes 1 ps steps until it is under Newton's tolerance, at most
     // ln(4.95 V / 1 nV) of its time constants. Then it costs what the smooth pair does.
     let floor = libm::log(4.95 / 1e-9) * 20.0;
     assert!(

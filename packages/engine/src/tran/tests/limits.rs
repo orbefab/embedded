@@ -243,6 +243,45 @@ fn a_dense_pulse_stops_at_the_step_limit_and_keeps_what_it_reached() {
     );
 }
 
+/// With no work to spend past its first try, a step whose first try is refused ends the run
+/// at the step before it, with `solver.step_work`. The stiff row's first step is refused.
+#[test]
+fn a_step_past_its_work_stops_the_run_at_the_step_before() {
+    let netlist = crate::netlist::parse(super::session::STIFF_ROW).unwrap();
+    let mut diagnostics = Vec::new();
+    let outcome = run_with(
+        &netlist,
+        &transient(&netlist),
+        Vec::new(),
+        Budget { work: 0, ..BUDGET },
+        Rows::Grid,
+        &mut diagnostics,
+    );
+    let end = reached(&outcome);
+    assert_eq!(end, Time::ZERO);
+    let [failed] = diagnostics.as_slice() else {
+        panic!("{diagnostics:?}");
+    };
+    let text = serde_json::to_string(failed).unwrap();
+    assert_eq!(
+        text,
+        format!(
+            r#"{{"code":"solver.step_work","severity":"error","refs":[],"t_ps":{},"message":"one step took more than 0 solver operations, its limit; the circuit is too large or too stiff to step","data":{{"limit":0}}}}"#,
+            end.as_ps()
+        )
+    );
+    let mut diagnostics = Vec::new();
+    run_with(
+        &netlist,
+        &transient(&netlist),
+        Vec::new(),
+        BUDGET,
+        Rows::Grid,
+        &mut diagnostics,
+    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
 /// Eight steps of the dense pulse end off the 20 ms grid, on a low level after interior
 /// highs. The failed run stores that last accepted step as its last row, so the interval
 /// ending there covers the steps folded after the previous row, and only those steps reach 1 V.

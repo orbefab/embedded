@@ -108,7 +108,7 @@ fn the_output_current_is_limited_both_ways() {
 /// 2 uF ramps the input at 500 V/s from 1 ms to 11 ms and back down to 21 ms. The square is
 /// 0 V and 5 V at 10 kHz. The hysteresis circuit puts the ramp through 10 kohm into `in_p`,
 /// with 100 kohm from the output, so `in_p` reaches 2.5 V when the ramp is
-/// `2.75 - 0.1 * V(out)`. Each run has no diagnostic, no accepted step shorter than 100 ps, and
+/// `2.75 - 0.1 * V(out)`. Each run has no diagnostic, no accepted step shorter than 5 ps, and
 /// no transition over 2000 steps.
 ///
 /// Each output crosses 2.5 V after `in_p` does by what one pole allows. The integrator waits

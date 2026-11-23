@@ -21,7 +21,6 @@ pub mod trace;
 
 mod active;
 pub mod chip;
-mod dense;
 pub mod device;
 mod element;
 mod inputs;
@@ -39,6 +38,7 @@ mod ratings;
 pub mod runner;
 pub mod semiconductor;
 mod session;
+mod sparse;
 mod step;
 mod topology;
 mod tran;
@@ -59,17 +59,15 @@ pub use session::{
 };
 pub use topology::floating_nets;
 
-/// Accepted steps after t = 0, chip stops on those steps, and stiffen retries.
+/// Accepted steps after t = 0, and chip stops on those steps.
 ///
 /// t = 0 is the operating point and is not a landing. A stop is counted on the accepted
-/// step that reaches it. Two chips stopped on one landing count as two stops. A stiffen
-/// is a step retried with a store on backward Euler, a failed try included. None of these
-/// numbers is written into the run folder.
+/// step that reaches it. Two chips stopped on one landing count as two stops. Neither number
+/// is written into the run folder.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RunStats {
     pub landings: u64,
     pub stops: u64,
-    pub stiffens: u64,
 }
 
 /// What `orbe-run run` makes of netlist.json bytes: the results and the folder they render to.

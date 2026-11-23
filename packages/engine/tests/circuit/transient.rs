@@ -402,13 +402,14 @@ fn rlc_closed_form(t_ps: f64, r: f64) -> f64 {
     vin * (1.0 - decay * (libm::cos(wd * t) + (alpha / wd) * libm::sin(wd * t)))
 }
 
-/// The two series RLC controls follow the underdamped step, and no store turns stiff.
+/// The two series RLC controls follow the underdamped step.
 /// The row bound is the measured drift of that ring. The step count is a ceiling, ten
-/// percent above the measured run, so a later policy can take fewer steps.
+/// percent above the measured run, so a later policy can take fewer steps. BDF2 damps a ring
+/// by about `(w h)^4 / 4` a step, so holding the ring to its share takes short steps.
 #[ignore = "full tier"]
 #[test]
 fn the_rlc_controls_follow_the_underdamped_step() {
-    for (name, r, steps) in [("rlc-q31", 1.0, 5329), ("rlc-q316", 0.1, 3482)] {
+    for (name, r, steps) in [("rlc-q31", 1.0, 11_366), ("rlc-q316", 0.1, 6_380)] {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/circuit/controls")
             .join(format!("{name}.json"));
@@ -420,7 +421,6 @@ fn the_rlc_controls_follow_the_underdamped_step() {
             "{name}: {:?}",
             results.diagnostics()
         );
-        assert_eq!(stats.stiffens, 0, "{name} turns a store stiff");
         let bound = steps + steps / 10;
         assert!(
             stats.landings <= bound,
@@ -823,4 +823,72 @@ fn held_capacitors_in_series_across_a_source_split_its_voltage() {
     let half = (2e-6 + 2e-12) / 2.0;
     assert!((upper - half).abs() <= 1e-9 * half, "{upper}");
     assert!((lower + half).abs() <= 1e-9 * half, "{lower}");
+}
+
+/// An LC tank, 1 mH into 1 uF behind 1 uohm, rung by a 1 mV step from `level` at 100 us. It
+/// rings about `level` + 1 mV for 20 periods. The 1 uohm decays the ring by 2e-6 over the run.
+fn lc_tank(level: f64) -> String {
+    let source = format!(
+        r#"{{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "vin", "n": "gnd" }},
+          "voltage": {{ "kind": "steps", "initial": {{ "value": {level:?}, "unit": "V" }},
+            "events": [{{ "t_ps": 100000000, "level": {{ "value": {top:?}, "unit": "V" }} }}] }} }}"#,
+        top = level + 1e-3
+    );
+    let coil = r#"{ "name": "l1", "kind": "inductor", "pins": { "a": "vin", "b": "x" },
+          "inductance": { "value": 0.001, "unit": "H" },
+          "series_resistance": { "value": 1e-6, "unit": "ohm" } }"#;
+    let cap = r#"{ "name": "c1", "kind": "capacitor", "pins": { "a": "x", "b": "gnd" },
+          "capacitance": { "value": 1e-6, "unit": "F" }, "initial": null }"#;
+    transient(
+        4_100_000_000,
+        10_000_000,
+        r#""gnd", "vin", "x""#,
+        &[&source, coil, cap],
+    )
+}
+
+/// The tank's ring takes the same steps at 0 V and at 5 V, because a store's tolerance follows
+/// its range and not its level. It decays by the same share at both, and by what BDF2 takes
+/// from a ring: about `(w h)^4 / 4` of its amplitude each step of `h`, plus the 1 uohm's share.
+/// The amplitude is read from the tank's energy at every step, so it needs no peak.
+#[test]
+fn an_lc_ring_decays_by_bdf2_s_damping_whatever_its_dc_level() {
+    let (l, c, r) = (1e-3f64, 1e-6f64, 1e-6f64);
+    let w = 1.0 / (l * c).sqrt();
+    let decay = |level: f64| {
+        let results = simulate_steps(&lc_tank(level));
+        let trace = trace(&results);
+        let (v, i) = (column(trace, "#net.x"), column(trace, "#l1.i"));
+        let t: Vec<f64> = trace
+            .time()
+            .iter()
+            .map(|t| t.as_ps() as f64 * 1e-12)
+            .collect();
+        let amplitude = |k: usize| {
+            let dv = v[k] - level - 1e-3;
+            (dv * dv + (l / c) * i[k] * i[k]).sqrt()
+        };
+        // The edge's restart and its first step, then the ring.
+        let first = t.iter().position(|&at| at > 100e-6).unwrap() + 1;
+        let last = t.len() - 1;
+        let damping: f64 = (first + 1..=last)
+            .map(|k| {
+                let x = w * (t[k] - t[k - 1]);
+                x * x * x * x / 4.0
+            })
+            .sum();
+        let want = damping + r / (2.0 * l) * (t[last] - t[first]);
+        (libm::log(amplitude(first) / amplitude(last)), want, t.len())
+    };
+    let (low, want, steps) = decay(0.0);
+    let (high, _, steps_high) = decay(5.0);
+    assert_eq!(steps, steps_high, "steps at 0 V and at 5 V");
+    assert!(
+        (high - low).abs() <= 0.01 * low,
+        "{low:e} at 0 V, {high:e} at 5 V"
+    );
+    assert!(
+        (low - want).abs() <= 0.05 * want,
+        "{low:e} against {want:e}"
+    );
 }

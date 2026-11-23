@@ -23,11 +23,9 @@ use crate::active::{self, Actives};
 use crate::chip;
 use crate::device::st77916;
 use crate::inputs::Inputs;
-use crate::lte::{self, Charges, Segment, Verdict};
-use crate::mna::{Memo, Solution};
-use crate::newton::{
-    Circuit, Conditions, Converged, Failure, History, Integration, Iterate, Offender, Side, newton,
-};
+use crate::lte::{self, Past, Ranges, Stores};
+use crate::mna::Solver;
+use crate::newton::{Circuit, Conditions, Converged, Failure, History, Iterate, Side, newton};
 use crate::observe::{self, Columns};
 use crate::op;
 use crate::ratings::{Ratings, Timing};
@@ -43,19 +41,25 @@ pub use input::{
 
 const STEP_BUDGET: u32 = 50;
 
+/// The multiply-adds the linear solves toward one step may take: every try, retry and probe
+/// between two accepted steps. About a second of solving on one core. A circuit too large or
+/// too stiff to step within it ends the run with `solver.step_work` at the last accepted step.
+const STEP_WORK: u64 = 1 << 30;
+
 /// Accepted steps one transient run may take. The operating point at t = 0 is not one of
 /// them. A dense switch or source schedule spends them on landings, and reaching the limit
 /// before `stop` ends the run with `solver.step_limit`.
 ///
 /// 100000000 sits far above the steps a run whose rows fit needs on ordinary circuits.
-/// At this step policy a 1 MHz pin into a 10 ns load costs about 170000 steps per
-/// simulated ms, so the limit allows about 590 ms of it. The step policy, not this limit,
+/// At this step policy a 1 MHz pin into a 10 ns load costs about 850000 steps per
+/// simulated ms, so the limit allows about 117 ms of it. The step policy, not this limit,
 /// bounds an MCU-rate run.
 const MAX_STEPS: u64 = 100_000_000;
 
 /// Newton's budget for each step, each probe locating a chip event, each solve of a row, and
-/// each rung of a restart's ladder, plus the accepted steps one run may take. A test lowers one
-/// to make that solve fail, or `steps` to end a dense schedule at the step limit.
+/// each rung of a restart's ladder, plus the accepted steps one run may take and the work one
+/// step may take. A test lowers one to make that solve fail, `steps` to end a dense schedule at
+/// the step limit, or `work` to end a run at the work limit.
 #[derive(Clone, Copy)]
 pub(crate) struct Budget {
     pub(crate) step: u32,
@@ -63,6 +67,7 @@ pub(crate) struct Budget {
     pub(crate) row: u32,
     pub(crate) restart: u32,
     pub(crate) steps: u64,
+    pub(crate) work: u64,
 }
 
 pub(crate) const BUDGET: Budget = Budget {
@@ -71,6 +76,7 @@ pub(crate) const BUDGET: Budget = Budget {
     row: STEP_BUDGET,
     restart: op::OP_BUDGET,
     steps: MAX_STEPS,
+    work: STEP_WORK,
 };
 
 /// The whole state a step starts from. Replaced, never mutated, on accept. A retry, a
@@ -83,13 +89,16 @@ pub(crate) struct Accepted {
     pub(crate) row: Vec<Finite>,
     /// After a restart, `iterate` read on the interval that starts at `at`.
     pub(crate) restart_row: Option<Vec<Finite>>,
-    pub(crate) segment: Segment,
+    /// The accepted points before this one that the next step reads.
+    pub(crate) past: Past,
+    /// Each store's range since t = 0, this step included.
+    ranges: Ranges,
     /// Each chip's state, by slot.
     chips: Vec<chip::State>,
     /// Each watch's level at `at`.
     levels: Levels,
-    /// The furthest end of any attempt toward this step or one before it, rejected, stalled,
-    /// stiffened or cut by a watch. An edge there or later cuts none of them.
+    /// The furthest end of any attempt toward this step or one before it, rejected, stalled
+    /// or cut by a watch. An edge there or later cuts none of them.
     pub(crate) reach: Time,
 }
 
@@ -99,8 +108,6 @@ pub(crate) struct Landing {
     /// The step attempted, before a watch cut it.
     h: u64,
     pub(crate) at: Time,
-    /// Where the step attempted ends.
-    step_end: Time,
     pub(crate) converged: Converged,
     /// Each watch's level at `at`.
     levels: Levels,
@@ -111,8 +118,6 @@ pub(crate) struct Landing {
     pub(crate) row: Vec<Finite>,
     /// The plan the step was attempted with, after any reject or stall.
     pub(crate) plan: Plan,
-    /// The accepted segment with the capacitors a stiffen holds on backward Euler, when one did.
-    pub(crate) stiffened: Option<Segment>,
     /// The accepted step's reach, or the furthest end of an attempt toward this landing when
     /// that is later.
     pub(crate) reach: Time,
@@ -170,15 +175,15 @@ pub struct Session {
     pub(crate) columns: Columns,
     transient: Transient,
     pub(crate) budget: Budget,
-    charges: Charges,
+    stores: Stores,
     pub(crate) breakpoints: Breakpoints,
     pub(crate) actives: Actives,
     /// The plan for the step after the last accepted one, before any reject or stall.
     pub(crate) plan: Plan,
     pub(crate) stats: RunStats,
-    /// The latest systems the run's steps, restarts and event probes solved. A row inside a span
-    /// and `Session::probe` solve without it, because both only read the session.
-    memo: Memo,
+    /// The run's steps, restarts and event probes solve on this. A row inside a span and
+    /// `Session::probe` solve on a scratch copy, because both only read the session.
+    solver: Solver,
     /// Each chip signal, `Ref::Logic`, chips in part order.
     signals: Vec<Ref>,
     /// The level of each signal at `now`, in the order of `signals`.
@@ -416,12 +421,12 @@ impl Session {
             })
         };
         let circuit = Circuit::with_actives(netlist, actives).map_err(fail)?;
-        let charges = Charges::new(&circuit.netlist, &circuit.layout);
+        let stores = Stores::new(&circuit.netlist, &circuit.layout);
         let start = Iterate::initial(&circuit);
-        let mut memo = Memo::default();
+        let mut solver = Solver::new(&circuit.layout);
         let start = op::settle(
             &circuit,
-            Some(&mut memo),
+            &mut solver,
             Conditions::NOMINAL,
             start,
             circuit.power_on(),
@@ -454,19 +459,14 @@ impl Session {
             .transpose()
             .map_err(fail)?;
         let breakpoints = Breakpoints::new(&circuit.netlist, transient.stop);
-        if cfg!(debug_assertions) {
-            let solution = &start.iterate.solution;
-            for warning in charges.floor_warnings(&circuit.netlist, solution, transient.max_step) {
-                eprintln!("{warning}");
-            }
-        }
-        let segment = Segment::start(&charges, &start.iterate.solution);
+        let ranges = Ranges::start(&stores, &start.iterate.solution);
         let accepted = Accepted {
             at: Time::ZERO,
             iterate: start.iterate,
             row,
             restart_row: None,
-            segment,
+            past: Past::Start,
+            ranges,
             chips: start.chips,
             levels: start.levels,
             reach: Time::ZERO,
@@ -476,12 +476,12 @@ impl Session {
             columns,
             transient: *transient,
             budget,
-            charges,
+            stores,
             breakpoints,
             actives,
             plan: Plan::RESTART,
             stats: RunStats::default(),
-            memo,
+            solver,
             signals,
             logic,
             edges: Vec::new(),
@@ -915,13 +915,18 @@ impl Session {
         }
         let circuit = &self.circuit;
         let mut plan = self.plan;
-        let mut stiffened: Option<Segment> = None;
         // Newton iterations over every stalled attempt since the last accepted step. An attempt
         // rejected for its error converged, and does not count.
         let mut iterations = 0;
         let mut reach = accepted.reach;
+        let work = self.solver.work;
         loop {
-            let segment = stiffened.as_ref().unwrap_or(&accepted.segment);
+            if self.solver.work - work > self.budget.work {
+                return Err(Diagnostic::SolverStepWork {
+                    at: accepted.at,
+                    limit: self.budget.work,
+                });
+            }
             let h = plan.clip(
                 accepted.at,
                 self.breakpoints.next_after(&circuit.netlist, accepted.at),
@@ -935,9 +940,8 @@ impl Session {
             let cores = self.actives.cores();
             match attempt(
                 circuit,
-                Some(&mut self.memo),
+                &mut self.solver,
                 accepted,
-                segment,
                 cores,
                 h,
                 &accepted.iterate,
@@ -945,29 +949,22 @@ impl Session {
             ) {
                 Ok(converged) => {
                     let error = lte::error(
-                        &self.charges,
-                        segment,
+                        &self.stores,
+                        &accepted.past,
                         accepted.at,
                         &accepted.iterate.solution,
                         h,
-                        &converged.iterate.solution,
+                        (&converged.iterate.solution, &converged.moved),
+                        &accepted.ranges,
                     );
-                    match error.verdict(h) {
-                        Verdict::Accept => {}
-                        Verdict::Reject => {
-                            plan = Plan::rejected(h, error.ratio, error.method);
-                            continue;
-                        }
-                        Verdict::Stiffen(more) => {
-                            self.stats.stiffens += 1;
-                            stiffened = Some(segment.clone().stiffen(&more, h));
-                            continue;
-                        }
+                    // A step of 1 ps is accepted whatever its error.
+                    if error.ratio > 1.0 && h > 1 {
+                        plan = Plan::rejected(h, error.ratio, error.order);
+                        continue;
                     }
                     let levels = circuit
                         .watches
                         .levels(&converged.iterate.solution, Some(&accepted.levels));
-                    let step_end = at;
                     let cut = levels != accepted.levels;
                     let (at, converged, levels) = if !cut {
                         (at, converged, levels)
@@ -980,9 +977,8 @@ impl Session {
                             |h| {
                                 attempt(
                                     circuit,
-                                    Some(&mut self.memo),
+                                    &mut self.solver,
                                     accepted,
-                                    segment,
                                     cores,
                                     h,
                                     &accepted.iterate,
@@ -1009,14 +1005,12 @@ impl Session {
                     return Ok(Landing {
                         h,
                         at,
-                        step_end,
                         converged,
                         levels,
                         cut,
                         error,
                         row,
                         plan,
-                        stiffened,
                         reach,
                     });
                 }
@@ -1026,16 +1020,13 @@ impl Session {
                         unknown: circuit.layout.describe(&circuit.netlist, row),
                     });
                 }
+                Err(Failure::NonFinite { row }) => {
+                    return Err(Diagnostic::SolverNonFinite {
+                        at,
+                        unknown: circuit.layout.describe(&circuit.netlist, row),
+                    });
+                }
                 Err(Failure::Stalled(stall)) => {
-                    // A linear circuit stays non-finite at any step length.
-                    if let Offender::NonFinite(_) = stall.offender
-                        && circuit.linear
-                    {
-                        return Err(Diagnostic::SolverNonFinite {
-                            at,
-                            unknown: stall.offender.describe(circuit),
-                        });
-                    }
                     iterations += stall.iterations;
                     plan = Plan::halve(h).ok_or_else(|| Diagnostic::SolverConvergence {
                         at: accepted.at,
@@ -1058,6 +1049,7 @@ impl Session {
         let span = Span {
             circuit: &self.circuit,
             columns: &self.columns,
+            solver: &self.solver,
             cores: self.actives.cores(),
             budget: self.budget.row,
             from: &accepted,
@@ -1090,20 +1082,17 @@ impl Session {
         let Landing {
             h,
             at,
-            step_end,
             converged,
             levels,
             cut,
             error,
             row,
             plan,
-            stiffened,
             reach,
         } = landing;
         let circuit = &self.circuit;
-        let charges = &self.charges;
+        let stores = &self.stores;
         let transient = &self.transient;
-        let (ratio, method) = (error.ratio, error.method);
         // A watch cuts the step. A changed stamp, a chip's, an active chip's image, a
         // contact's or a source's, takes a restart solve.
         let chips = circuit.react(&accepted.chips, &accepted.levels, &levels);
@@ -1119,19 +1108,20 @@ impl Session {
         let restart = (self.breakpoints.is_edge(at) || chips != accepted.chips || driven)
             && at < transient.stop;
         let landed = at.as_ps() - accepted.at.as_ps();
-        let segment = stiffened.unwrap_or(accepted.segment);
-        let continued = |segment: Segment, last: Solution, next: &Solution| {
-            let swings = if cut {
-                segment.swings(charges, &last, landed, next)
-            } else {
-                error.swings
-            };
-            segment.advance(accepted.at, last, landed, swings)
+        let ranges = accepted.ranges.with(stores, &converged.iterate.solution);
+        // A segment's start takes the first step. A step cut short by a breakpoint or a watch
+        // keeps the step it wanted. The point it started from is dropped from the past when the
+        // next step would be more than twice the one it took.
+        let planned = |start: bool| match (start, h == plan.h && !cut) {
+            (true, _) => Plan::RESTART,
+            (false, true) => Plan::accepted(h, error.ratio, error.order, transient.max_step),
+            (false, false) => plan,
         };
+        let keep = |plan: Plan| landed.saturating_mul(2) >= plan.h;
         let next = if restart {
             let held = restart_solve(
                 circuit,
-                &mut self.memo,
+                &mut self.solver,
                 at,
                 &converged.iterate,
                 chips,
@@ -1157,31 +1147,38 @@ impl Session {
             };
             self.ratings.restarted();
             self.actives.input(circuit, at, &levels, &held.levels);
-            let step = &converged.iterate.solution;
-            let segment = continued(segment, accepted.iterate.solution, step).across(
-                charges,
-                step,
-                &held.iterate.solution,
-                transient.max_step,
-            );
+            // A restart that moved no store's slope keeps the segment and its step.
+            let smooth = stores.smooth(&converged.iterate.solution, &held.iterate.solution);
+            self.plan = planned(!smooth);
+            let past = match smooth {
+                true => {
+                    accepted
+                        .past
+                        .advance(accepted.at, accepted.iterate.solution, keep(self.plan))
+                }
+                false => Past::Start,
+            };
             Accepted {
                 at,
+                ranges: ranges.with(stores, &held.iterate.solution),
                 iterate: held.iterate,
                 row,
                 restart_row: Some(restart_row),
-                segment,
+                past,
                 chips: held.chips,
                 levels: held.levels,
                 reach,
             }
         } else {
+            self.plan = planned(false);
             Accepted {
                 at,
-                segment: continued(
-                    segment,
+                past: accepted.past.advance(
+                    accepted.at,
                     accepted.iterate.solution,
-                    &converged.iterate.solution,
+                    keep(self.plan),
                 ),
+                ranges,
                 iterate: converged.iterate,
                 row,
                 restart_row: None,
@@ -1189,12 +1186,6 @@ impl Session {
                 levels: levels.clone(),
                 reach,
             }
-        };
-        // A step cut short by a breakpoint or a watch keeps the step it wanted.
-        self.plan = match (&next.segment, h == plan.h && at == step_end) {
-            (Segment::Start { .. }, _) => Plan::RESTART,
-            (_, true) => Plan::accepted(h, ratio, method, transient.max_step),
-            (_, false) => plan,
         };
         // A flip the chips reacted to is recorded at `at`, even when the restart's
         // solve is back across the threshold. The restart's level is the next step's
@@ -1230,6 +1221,7 @@ impl Session {
         Span {
             circuit: &self.circuit,
             columns: &self.columns,
+            solver: &self.solver,
             cores: self.actives.cores(),
             budget: self.budget.row,
             from,
@@ -1242,6 +1234,8 @@ impl Session {
 pub(crate) struct Span<'s> {
     circuit: &'s Circuit,
     columns: &'s Columns,
+    /// Each row solves on a scratch copy of the run's solver.
+    solver: &'s Solver,
     cores: &'s [active::Core],
     /// Newton's budget for each solve.
     budget: u32,
@@ -1279,19 +1273,19 @@ impl Span<'_> {
             "a row at {at:?} is not inside the span"
         );
         let h = at.as_ps() - self.from.at.as_ps();
-        let segment = self.to.stiffened.as_ref().unwrap_or(&self.from.segment);
         let converged = attempt(
             self.circuit,
-            None,
+            &mut self.solver.scratch(),
             self.from,
-            segment,
             self.cores,
             h,
             start,
             self.budget,
         )
         .map_err(|failure| match failure {
-            Failure::Singular { row } => self.circuit.layout.describe(&self.circuit.netlist, row),
+            Failure::Singular { row } | Failure::NonFinite { row } => {
+                self.circuit.layout.describe(&self.circuit.netlist, row)
+            }
             Failure::Stalled(stall) => stall.offender.describe(self.circuit),
         })?;
         observe::row(
@@ -1309,6 +1303,10 @@ impl Span<'_> {
 fn probe_failure(circuit: &Circuit, from: Time, probe: Time, failure: Failure) -> Diagnostic {
     match failure {
         Failure::Singular { row } => Diagnostic::SolverSingular {
+            at: probe,
+            unknown: circuit.layout.describe(&circuit.netlist, row),
+        },
+        Failure::NonFinite { row } => Diagnostic::SolverNonFinite {
             at: probe,
             unknown: circuit.layout.describe(&circuit.netlist, row),
         },
@@ -1412,14 +1410,12 @@ fn line(from: (Time, &[Finite]), to: (Time, &[Finite]), at: Time) -> Vec<Finite>
         .collect()
 }
 
-/// One step of `h` ps from `from`, each capacitor on its method in `segment`. Both are only
-/// read, so a retry calls this again.
-#[allow(clippy::too_many_arguments)]
+/// One step of `h` ps from `from`, on the formula its past gives. `from` is only read, so a
+/// retry calls this again.
 pub(crate) fn attempt(
     circuit: &Circuit,
-    memo: Option<&mut Memo>,
+    solver: &mut Solver,
     from: &Accepted,
-    segment: &Segment,
     cores: &[active::Core],
     h: u64,
     start: &Iterate,
@@ -1427,17 +1423,12 @@ pub(crate) fn attempt(
 ) -> Result<Converged, Failure> {
     let conditions = Conditions {
         at: Time::from_ps(from.at.as_ps() + h),
-        history: History::Step(Integration {
-            method: segment.method(),
-            stiff: segment.stiff(),
-            h_ps: h,
-            previous: &from.iterate.solution,
-        }),
+        history: History::Step(from.past.integration(from.at, &from.iterate.solution, h)),
         chips: &from.chips,
         cores,
         ..Conditions::NOMINAL
     };
-    newton(circuit, memo, &conditions, start.clone(), budget)
+    newton(circuit, solver, &conditions, start.clone(), budget)
 }
 
 /// The solve after a switch edge, a source jump or a chip drive change at `at`: every capacitor
@@ -1447,7 +1438,7 @@ pub(crate) fn attempt(
 #[allow(clippy::too_many_arguments)]
 fn restart_solve(
     circuit: &Circuit,
-    memo: &mut Memo,
+    solver: &mut Solver,
     at: Time,
     step: &Iterate,
     chips: Vec<chip::State>,
@@ -1464,7 +1455,7 @@ fn restart_solve(
     };
     op::settle(
         circuit,
-        Some(memo),
+        solver,
         conditions,
         step.clone(),
         chips,

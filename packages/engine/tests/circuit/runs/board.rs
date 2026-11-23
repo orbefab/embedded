@@ -753,7 +753,8 @@ fn regulator_open(reg: &orbe_engine::chip::LinearRegulator, vi: f64) -> (f64, f6
     (volts, i, slope)
 }
 
-/// `v3v3` stays between the lowest and highest open-circuit setpoints the run visits.
+/// `v3v3` stays between the lowest and highest open-circuit setpoints the run visits, within
+/// Newton's tolerance on its row.
 ///
 /// The output cannot sink when its only load is `GMIN`, so a fall in the setpoint
 /// settles with a time constant of about 36 s.
@@ -794,7 +795,7 @@ fn v3v3_stays_between_the_setpoints_the_run_visits() {
     eprintln!("stops {}", stats.stops);
     eprintln!("pb5_edges {pb5}");
     eprintln!("pin_edges {pin_edges}");
-    assert_eq!(stats.landings, 778, "accepted steps after t = 0");
+    assert_eq!(stats.landings, 887, "accepted steps after t = 0");
     assert_eq!(pb5, 4, "PB5 edges");
     assert_eq!(pin_edges, 4, "pin edges");
     let name = Name::new("reg_3v3").unwrap();
@@ -837,14 +838,17 @@ fn v3v3_stays_between_the_setpoints_the_run_visits() {
             sample(trace, "#c3.i", ps),
         );
     }
+    // The output's only load is GMIN, so the solve settles its row to Newton's tolerance on
+    // it, 1e-6 of the voltage plus 1 nV, and not to the bits of the law.
+    let settled = 1e-6 * law0 + 1e-9;
     assert!(
-        (v3_col[0] - law0).abs() <= 1e-9,
+        (v3_col[0] - law0).abs() <= settled,
         "t0 v3v3 {} law {law0}",
         v3_col[0]
     );
     for (index, (&v3, time)) in v3_col.iter().zip(trace.time()).enumerate() {
         assert!(
-            (low - 1e-9) <= v3 && v3 <= (high_set + 1e-9),
+            (low - settled) <= v3 && v3 <= (high_set + settled),
             "row {index} at {} ps v3 {v3} outside {low} to {high_set}",
             time.as_ps()
         );
