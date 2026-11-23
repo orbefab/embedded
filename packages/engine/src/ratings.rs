@@ -6,7 +6,9 @@ use orbe_model::{Drive, Time};
 use crate::active::{self, Output, Stage};
 use crate::netlist::{Average, Basis, Model, NetId, Netlist, Rating, RatingKind};
 
-use crate::diagnostic::{Diagnostic, Excursion, VoltageExcursion, exceeds};
+use crate::diagnostic::{
+    Diagnostic, Excursion, VoltageExcursion, exceeds, exceeds_rounded, significant,
+};
 use crate::finite::Finite;
 use crate::name::{Name, Ref};
 
@@ -115,6 +117,8 @@ struct Watch {
     quantity: Ref,
     read: Read,
     limit: f64,
+    /// [`significant`] of `limit`, compared on each sample so the limit is not formatted again.
+    limit_rounded: f64,
     basis: Basis,
     /// `Some` for a sustained rating.
     heat: Option<Heat>,
@@ -476,8 +480,9 @@ impl Ratings {
             };
             watch.last = sample;
             let from = back.filter(|_| watch.heat.is_some()).unwrap_or(at);
-            watch.since = exceeds(sample, watch.limit).then(|| watch.since.unwrap_or(from));
-            watch.over = exceeds(reading, watch.limit);
+            watch.since =
+                exceeds_rounded(sample, watch.limit_rounded).then(|| watch.since.unwrap_or(from));
+            watch.over = exceeds_rounded(reading, watch.limit_rounded);
             if !watch.over {
                 continue;
             }
@@ -683,6 +688,7 @@ impl Watch {
             quantity,
             read,
             limit,
+            limit_rounded: significant(limit),
             basis,
             heat: match basis {
                 Basis::Peak => None,
@@ -697,6 +703,14 @@ impl Watch {
             since: None,
             surge,
         }
+    }
+
+    /// Points the watch at another rating. The rounded limit moves with it, so a later
+    /// sample still compares against this rating.
+    #[cfg(test)]
+    fn set_limit(&mut self, limit: f64) {
+        self.limit_rounded = significant(limit);
+        self.limit = limit;
     }
 }
 
@@ -1139,7 +1153,7 @@ mod tests {
     /// ps.
     fn pwm(peak: f64, period: u64, high: u64, stop: u64) -> Vec<Diagnostic> {
         let (mut ratings, columns) = rms();
-        ratings.watches[0].limit = 0.04;
+        ratings.watches[0].set_limit(0.04);
         let values = |current| row(&columns, current);
         ratings.sample(Time::ZERO, &values(0.0), &[]);
         let mut start = 1;
@@ -1404,7 +1418,7 @@ mod tests {
     #[test]
     fn a_pwm_whose_rms_is_under_is_never_over_now() {
         let (mut ratings, columns) = rms();
-        ratings.watches[0].limit = 0.04;
+        ratings.watches[0].set_limit(0.04);
         let values = |current| row(&columns, current);
         let high = PWM_490_PS * 128 / 255;
         ratings.sample(Time::ZERO, &values(0.0), &[]);
