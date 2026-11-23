@@ -21,8 +21,10 @@ const SCENE_KEYS: &[&str] = &[
 ];
 /// Part `format` values this binary reads. A part's `format` covers its `model`, its params and
 /// its readings. Format 2 is format 1 plus `"as": "blob"` on a file param. Format 3 is format 2
-/// plus `DOUT` on a `ws2812` and a reading `"of": "rgb"`.
-pub const PART_FORMATS: &[u32] = &[1, 2, 3];
+/// plus `DOUT` on a `ws2812` and a reading `"of": "rgb"`. Format 4 is format 3 plus `"live"` on
+/// a number param, `"by"` on a joint, a capacitor's `ratings` and `series_resistance`, and a
+/// `ws2812`'s `channel_current` and `idle_current`.
+pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4];
 /// Scene `format` values this binary reads.
 pub const SCENE_FORMATS: &[u32] = &[1];
 /// The oldest part format whose file params take `"as": "blob"`.
@@ -30,6 +32,10 @@ const BLOB_FORMAT: u32 = 2;
 /// The oldest part format whose `ws2812` has `DOUT`, and whose readings take `"of": "rgb"`.
 /// An older part's `DOUT` pin stays off the chain, as it did when the engine had none.
 const DOUT_FORMAT: u32 = 3;
+/// The oldest part format that carries the keys the published 0.2.0 binary refuses. The release
+/// and the registry share one tree, so a catalog part that uses one of these says format 4 and
+/// that binary asks for a newer orbe.
+const FIELD_FORMAT: u32 = 4;
 const WIRE_KINDS: &[&str] = &["jumper", "trace", "contact"];
 /// A live session's stop, investigation 1's 2-hour cap.
 pub const STOP_PS: u64 = 7_200 * 1_000_000_000_000;
@@ -561,7 +567,7 @@ pub(crate) fn decode_part(
     }
     check_live(&part, out);
     if let Some(joints) = root.get("joints") {
-        check_joints(joints, &part, out);
+        check_joints(joints, &part, format, out);
     }
     if let Some(layout) = root.get("layout") {
         decode_layout(layout, &part.comp, false, out);
@@ -1482,8 +1488,24 @@ fn check_live(part: &Part, out: &mut Findings) {
 
 /// A joint `by` a param follows that param across its range, so the param is a number with both
 /// bounds. A joint that turns has its `range` in degrees.
-fn check_joints(joints: &Node, part: &Part, out: &mut Findings) {
+fn check_joints(joints: &Node, part: &Part, format: u32, out: &mut Findings) {
     for joint in joints.props().unwrap_or_default() {
+        if format < FIELD_FORMAT
+            && let Some(by) = joint
+                .value
+                .props()
+                .and_then(|props| props.iter().find(|prop| prop.key == "by"))
+        {
+            out.push(
+                Code::Param,
+                by.key_span,
+                format!(
+                    "joint `{}` takes \"by\" only in part format {FIELD_FORMAT}; this file is format {format}",
+                    joint.key
+                ),
+                format!("set \"format\": {FIELD_FORMAT} in this part file"),
+            );
+        }
         if let Some(by) = joint.value.get("by")
             && let Some(name) = by.str()
             && let Some(decl) = part.param(name)
@@ -1613,6 +1635,22 @@ fn decode_params(node: &Node, part: &Part, format: u32, out: &mut Findings) -> V
         name_ok(&prop.key, prop.key_span, NameKind::Name, "param", out);
         if prop.value.props().is_none() {
             continue;
+        }
+        if format < FIELD_FORMAT
+            && let Some(live) = prop
+                .value
+                .props()
+                .and_then(|props| props.iter().find(|entry| entry.key == "live"))
+        {
+            out.push(
+                Code::Param,
+                live.key_span,
+                format!(
+                    "param `{}` takes \"live\" only in part format {FIELD_FORMAT}; this file is format {format}",
+                    prop.key
+                ),
+                format!("set \"format\": {FIELD_FORMAT} in this part file"),
+            );
         }
         let field = |key: &str| prop.value.get(key);
         let shape = shape::param_shape(&prop.value, out);
@@ -2447,6 +2485,26 @@ fn decode_body(
         );
         return None;
     };
+    if format < FIELD_FORMAT {
+        let gated: &[&str] = match kind {
+            "capacitor" => &["ratings", "series_resistance"],
+            "ws2812" => &["channel_current", "idle_current"],
+            _ => &[],
+        };
+        for prop in node.props().unwrap_or_default() {
+            if gated.contains(&prop.key.as_str()) {
+                out.push(
+                    Code::Syntax,
+                    prop.key_span,
+                    format!(
+                        "the engine's `{kind}` takes `{}` only in part format {FIELD_FORMAT}; this file is format {format}",
+                        prop.key
+                    ),
+                    format!("set \"format\": {FIELD_FORMAT} in this part file"),
+                );
+            }
+        }
+    }
     let before_dout = kind == "ws2812" && format < DOUT_FORMAT;
     let engine_pins = if before_dout {
         &engine_pins[..required]

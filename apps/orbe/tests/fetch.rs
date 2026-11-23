@@ -360,6 +360,64 @@ fn an_interrupted_block_names_the_block_and_the_folders_to_remove() {
 }
 
 #[test]
+fn a_part_this_orbe_reads_is_installed() {
+    let registry = registry_env::template();
+    let dir = tempfile::tempdir().unwrap();
+    let (code, stdout, stderr) = run(dir.path(), &["add", "trimmer-3362p"], &registry);
+    assert_eq!(code, 0, "{stdout}{stderr}");
+    let text = fs::read_to_string(dir.path().join("parts/trimmer-3362p/part.jsonc")).unwrap();
+    assert!(text.contains("\"format\": 4"), "{text}");
+}
+
+#[test]
+fn a_part_in_a_newer_format_is_not_written() {
+    let (_kept, reg) = cloned_registry();
+    raise_part_format(&reg, "resistor-axial", 5);
+    let dir = tempfile::tempdir().unwrap();
+    let (code, stdout, stderr) = run(dir.path(), &["add", "resistor-axial"], &file_template(&reg));
+    assert_eq!(code, 1, "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.starts_with("error[part_format]:"), "{stderr}");
+    assert!(
+        stderr.contains(
+            "resistor-axial: format 5 is newer than this binary reads; this project needs a newer orbe. nothing was written\n"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("hint: curl -fsSL https://orbefab.com/orbe/install.sh | sh\n"),
+        "{stderr}"
+    );
+    assert!(!dir.path().join("parts").exists());
+}
+
+#[test]
+fn a_block_whose_part_needs_a_newer_orbe_is_not_written() {
+    let (_kept, reg) = cloned_registry();
+    raise_part_format(&reg, "trimmer-3362p", 5);
+    let dir = tempfile::tempdir().unwrap();
+    let (code, stdout, stderr) = run(
+        dir.path(),
+        &["add", "nano-light-comparator"],
+        &file_template(&reg),
+    );
+    assert_eq!(code, 1, "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.starts_with("error[part_format]:"), "{stderr}");
+    assert!(
+        stderr.contains("trimmer-3362p: format 5 is newer than this binary reads"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("nothing was written"), "{stderr}");
+    assert!(
+        stderr.contains("hint: curl -fsSL https://orbefab.com/orbe/install.sh | sh\n"),
+        "{stderr}"
+    );
+    assert!(!dir.path().join("parts").exists());
+    assert!(!dir.path().join("scene.jsonc").exists());
+}
+
+#[test]
 fn a_record_whose_size_or_hash_disagrees_names_the_url() {
     let (dir, url) = led_index(|row| {
         let bytes = row["bytes"].as_u64().unwrap();
@@ -654,6 +712,56 @@ fn add_part_from_led(reg: &Path, name: &str, version: &str, deps: &[String]) {
     record["version"] = json!(version);
     record["registryDependencies"] = json!(deps);
     write_record(reg, name, version, &record);
+}
+
+/// Rewrites `name`'s newest `part.jsonc` to part format `format` and the hashes that cover it.
+fn raise_part_format(reg: &Path, name: &str, format: u32) {
+    let version = highest_version(reg, name);
+    let path = reg.join(format!("{name}@{version}.json"));
+    let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let part = record["files"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|file| file["path"] == "part.jsonc")
+        .unwrap();
+    let old_sha = part["sha256"].as_str().unwrap().to_string();
+    let text = String::from_utf8(fs::read(reg.join("files").join(&old_sha)).unwrap()).unwrap();
+    let key = "\"format\": ";
+    let at = text.find(key).unwrap() + key.len();
+    let end = text[at..]
+        .find(|c: char| !c.is_ascii_digit())
+        .map_or(text.len(), |n| at + n);
+    let bytes = format!("{}{format}{}", &text[..at], &text[end..]).into_bytes();
+    let sha = sha256_hex(&bytes);
+    fs::write(reg.join("files").join(&sha), &bytes).unwrap();
+    part["sha256"] = json!(sha);
+    part["bytes"] = json!(bytes.len());
+    part["url"] = json!(format!("files/{sha}"));
+    let mut folder = BTreeMap::new();
+    for file in record["files"].as_array().unwrap() {
+        let rel = file["path"].as_str().unwrap().to_string();
+        let file_sha = file["sha256"].as_str().unwrap();
+        folder.insert(rel, fs::read(reg.join("files").join(file_sha)).unwrap());
+    }
+    record["hash"] = json!(folder_hash(&folder));
+    let body = serde_json::to_vec(&record).unwrap();
+    let record_sha = sha256_hex(&body);
+    write_fresh(&path, &body);
+    let mut index: Value =
+        serde_json::from_slice(&fs::read(reg.join("index.json")).unwrap()).unwrap();
+    let row = index["items"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|row| row["name"] == name && row["version"] == version)
+        .unwrap();
+    row["sha256"] = json!(record_sha);
+    row["bytes"] = json!(body.len());
+    write_fresh(
+        &reg.join("index.json"),
+        &serde_json::to_vec(&index).unwrap(),
+    );
 }
 
 fn write_record(reg: &Path, name: &str, version: &str, record: &Value) {
