@@ -1,4 +1,7 @@
-//! The classic board as the probe kit sees it after `esptool load-ram`: 128 KB of instruction RAM
+//! The classic ESP32 board as the probe kit sees it after `esptool load-ram`.
+//!
+//! The classic ESP32 has no chip crate. These addresses are Espressif's, so the harness lives
+//! here, next to the ESP32-S3 one, and not in the core. 128 KB of instruction RAM
 //! that takes only word accesses, the internal data RAM, peripheral stores that land nowhere, and
 //! stand-ins for the ROM functions the kit calls.
 

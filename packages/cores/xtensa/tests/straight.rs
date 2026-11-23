@@ -7,12 +7,9 @@
 
 use std::ops::Range;
 
-use orbe_xtensa::{
-    Bus, Cause, Config, Core, Cycle, Decoded, Esp32s3, Exit, Missing, Op, PagedRam, Sr, Stop, Width,
-};
+use orbe_xtensa::{Bus, Cause, Core, Cycle, Esp32s3, Exit, PagedRam, Sr, Stop, Width};
 
-use crate::common::elf::Elf;
-use crate::common::{Pieces, Straight, board, read_fixture, run_in_pieces, s3board};
+use crate::common::{Pieces, Straight, bytes_of, run_in_pieces};
 use crate::core::{CODE, Flat, RAM, core_at};
 use crate::interrupts::sleeper;
 
@@ -253,7 +250,7 @@ struct Gate {
 impl Gate {
     fn new(hex: &str, effect: Effect) -> Gate {
         let mut code = PagedRam::new(CODE, 4096);
-        code.write_bytes(CODE, &crate::common::board::bytes_of(hex));
+        code.write_bytes(CODE, &bytes_of(hex));
         Gate {
             code,
             ram: PagedRam::new(RAM, 4096),
@@ -432,75 +429,5 @@ fn the_sleeper_runs_the_same_straight() {
         assert_eq!(stop, Stop::Limit, "seed {seed:?}");
         assert_eq!(split, whole, "seed {seed:?}");
         assert_eq!(kept.trace, plain.trace, "seed {seed:?}");
-    }
-}
-
-/// Each classic probe prints the same text, stops alike, ends in the same state and makes the
-/// same loads and stores on the same cycles, plain and kept.
-#[test]
-fn the_classic_probes_run_the_same_straight() {
-    for probe in ["alu", "icount", "window", "loop", "fpu", "mac", "ccount"] {
-        let elf = Elf::parse(&read_fixture(&format!("{probe}.elf")));
-        let limit = Cycle(1_000_000_000);
-        let load = || board::Board::load(&elf, &[]);
-        let plain = board::run_probe_on(Straight::plain(load()), &elf, probe, limit, None);
-        let kept = board::run_probe_on(load().kept(), &elf, probe, limit, None);
-        assert_eq!(kept.uart, plain.uart, "{probe}");
-        assert_eq!(kept.stop, plain.stop, "{probe}");
-        assert_eq!(kept.core, plain.core, "{probe}");
-        assert_eq!(kept.trace, plain.trace, "{probe}");
-        #[cfg(not(feature = "poll-skip-check"))]
-        assert!(kept.steps < plain.steps, "{probe}");
-        println!(
-            "{probe}: {} full steps kept, {} plain, to cycle {}",
-            kept.steps,
-            plain.steps,
-            kept.core.cycle().0
-        );
-    }
-}
-
-/// The same for each S3 probe. `cop` carries out the `ee.zero.q` its handler reruns.
-#[test]
-fn the_s3_probes_run_the_same_straight() {
-    let probes = [
-        "ccount",
-        "cop",
-        "fpu",
-        "mac",
-        "salt",
-        "unaligned",
-        "icounthold",
-    ];
-    for probe in probes {
-        let elf = Elf::parse(&read_fixture(&format!("s3-{probe}.elf")));
-        let limit = Cycle(20_000_000);
-        let answer = |core: &mut Core<Esp32s3>, stop: orbe_xtensa::Unimplemented| {
-            if stop.missing != Missing::Op(Op::EE_ZERO_Q) {
-                return false;
-            }
-            let Some(Decoded::Insn(insn)) = Esp32s3::decode(elf.bytes_at(stop.pc, 3), stop.pc)
-            else {
-                return false;
-            };
-            core.set_q(insn.fields[0], 0);
-            core.set_pc(stop.pc + u32::from(insn.len));
-            true
-        };
-        let load = || s3board::Board::load(&elf, &[]);
-        let plain = s3board::run_answering_on(Straight::plain(load()), &elf, probe, limit, answer);
-        let kept = s3board::run_answering_on(load().kept(), &elf, probe, limit, answer);
-        assert_eq!(kept.uart, plain.uart, "{probe}");
-        assert_eq!(kept.stop, plain.stop, "{probe}");
-        assert_eq!(kept.core, plain.core, "{probe}");
-        assert_eq!(kept.trace, plain.trace, "{probe}");
-        #[cfg(not(feature = "poll-skip-check"))]
-        assert!(kept.steps < plain.steps, "{probe}");
-        println!(
-            "s3 {probe}: {} full steps kept, {} plain, to cycle {}",
-            kept.steps,
-            plain.steps,
-            kept.core.cycle().0
-        );
     }
 }

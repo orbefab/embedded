@@ -40,7 +40,9 @@ use crate::observe::Columns;
 /// where the next sample holds back to the edge, [`Self::restarted`]. A sustained rating with no
 /// peak limit whose last sample is over is over now, [`Self::over_now`], before its filter
 /// crosses. One with a peak limit is not: its sheet bounds a pulse by that limit and the filter,
-/// so a pulse the sheet allows stays quiet throughout.
+/// so a pulse the sheet allows stays quiet throughout. A diode or zener power rating is never
+/// over now: its current peak warns at once past the surge, and the power filter warns when the
+/// heat crosses. An LED's power stays over now.
 #[derive(Clone)]
 pub(crate) struct Ratings {
     timing: Timing,
@@ -123,6 +125,9 @@ struct Watch {
     last: f64,
     /// The first of the samples that have each been over, through the last one.
     since: Option<Time>,
+    /// A diode or a zener. Its power rating is never over now. An LED is not, so `#led1.p`
+    /// stays over now in the no-resistor example.
+    surge: bool,
 }
 
 /// A sustained rating's readings of the same samples.
@@ -249,6 +254,7 @@ impl Ratings {
             // A supply source's current rating is the most it delivers steadily. Every power
             // rating, on every kind, is the heat the part sheds.
             let supply = matches!(part.model, Model::VoltageSource(_));
+            let surge = matches!(part.model, Model::Diode(_) | Model::Zener(_));
             for (kind, quantity, rating) in part.model.ratings() {
                 let quantity = Ref::Quantity(part.name.clone(), quantity);
                 let column = columns
@@ -266,6 +272,7 @@ impl Ratings {
                     Read::Column(column),
                     rating,
                     default,
+                    surge,
                 );
             }
         }
@@ -295,6 +302,7 @@ impl Ratings {
                         Read::Gauge { gauge, k },
                         rating,
                         default,
+                        false,
                     );
                 }
             }
@@ -308,6 +316,7 @@ impl Ratings {
                         Read::Gauge { gauge, k },
                         rating,
                         default,
+                        false,
                     );
                 }
             }
@@ -562,9 +571,13 @@ impl Ratings {
     /// is over the rating, the average over [`RECENT_PS`] is over it too, and the filter has not
     /// crossed, so no finding names the rating yet. While the run is younger than
     /// [`RECENT_PS`] that average runs from the first sample, and at the first sample it is
-    /// that sample.
+    /// that sample. A diode or zener power rating is never over now: its current peak warns at
+    /// once past the surge, and the power filter warns when the heat crosses.
     fn over_now(&self) -> impl Iterator<Item = Diagnostic> + '_ {
         self.watches.iter().filter_map(|watch| {
+            if watch.kind == RatingKind::Power && watch.surge {
+                return None;
+            }
             let heat = watch.heat.as_ref()?;
             let recent = heat.recent.as_ref()?;
             let since = watch.since?;
@@ -628,6 +641,7 @@ fn watch(
     read: Read,
     rating: &Rating,
     default: Basis,
+    surge: bool,
 ) {
     let peak = rating.peak.map(Finite::get);
     let basis = rating.basis.unwrap_or(default);
@@ -638,9 +652,18 @@ fn watch(
         rating.si.get(),
         basis,
         peak.is_none(),
+        surge,
     ));
     if let Some(peak) = peak {
-        watches.push(Watch::new(kind, quantity, read, peak, Basis::Peak, false));
+        watches.push(Watch::new(
+            kind,
+            quantity,
+            read,
+            peak,
+            Basis::Peak,
+            false,
+            surge,
+        ));
     }
 }
 
@@ -653,6 +676,7 @@ impl Watch {
         limit: f64,
         basis: Basis,
         early: bool,
+        surge: bool,
     ) -> Watch {
         Watch {
             kind,
@@ -671,6 +695,7 @@ impl Watch {
             excursion: None,
             last: 0.0,
             since: None,
+            surge,
         }
     }
 }
@@ -974,6 +999,7 @@ mod tests {
             ratings.watches[0].limit,
             sustained(average),
             true,
+            false,
         );
         (ratings, columns)
     }
@@ -1523,5 +1549,99 @@ mod tests {
         };
         assert_eq!(excursion.basis, Basis::Peak);
         close(excursion.peak, 0.031);
+    }
+
+    /// A diode whose current rating names a surge peak. Power has no peak of its own.
+    fn diode_power() -> (Ratings, Columns) {
+        let netlist = crate::netlist::parse(
+            br#"{
+          "version": 1,
+          "seed": 0,
+          "analysis": { "op": {} },
+          "ground": "gnd",
+          "nets": ["gnd", "a"],
+          "parts": [{
+            "name": "d1",
+            "kind": "diode",
+            "pins": { "anode": "a", "cathode": "gnd" },
+            "saturation_current": { "value": 1e-12, "unit": "A" },
+            "emission_coefficient": { "value": 1.0, "unit": "1" },
+            "series_resistance": { "value": 1.0, "unit": "ohm" },
+            "ratings": {
+              "current": { "value": 0.15, "unit": "A", "basis": { "sustained": {
+                "average": "mean", "tau": { "value": 0.0102, "unit": "s" },
+                "peak": { "value": 4.0, "unit": "A" } } } },
+              "power": { "value": 0.4, "unit": "W", "basis": { "sustained": {
+                "average": "mean", "tau": { "value": 0.0102, "unit": "s" } } } }
+            }
+          }]
+        }"#,
+        )
+        .unwrap();
+        let columns = Columns::new(&netlist);
+        (Ratings::new(&netlist, &[], &columns, Timing::Run), columns)
+    }
+
+    fn row_at(columns: &Columns, current: f64, power: f64) -> Vec<Finite> {
+        let mut row = vec![Finite::new(0.0).unwrap(); columns.refs().len()];
+        row[columns.index(&"#d1.i".parse().unwrap()).unwrap()] = Finite::new(current).unwrap();
+        row[columns.index(&"#d1.p".parse().unwrap()).unwrap()] = Finite::new(power).unwrap();
+        row
+    }
+
+    /// 4 A and 16 W is inside the CD1206's surge peak and far over its 0.4 W power rating.
+    /// A diode's power is never over now. 5 A is past the peak, so the current warns at once
+    /// and power still is not. 0.5 A stays inside the peak and the power filter still warns
+    /// when held.
+    #[test]
+    fn power_inside_a_current_peak_is_not_over_now_and_a_held_overload_still_warns() {
+        let (mut ratings, columns) = diode_power();
+        let values = |current, power| row_at(&columns, current, power);
+        ratings.sample(Time::ZERO, &values(0.0, 0.0), &[]);
+        ratings.sample(Time::from_ps(MS), &values(4.0, 16.1), &[]);
+        ratings.sample(Time::from_ps(MS + 50_000_000), &values(4.0, 16.1), &[]);
+        assert!(over_now(&ratings).is_empty(), "{:?}", over_now(&ratings));
+        assert!(ratings.findings().is_empty());
+
+        let (mut ratings, columns) = diode_power();
+        let values = |current, power| row_at(&columns, current, power);
+        ratings.sample(Time::ZERO, &values(0.0, 0.0), &[]);
+        ratings.sample(Time::from_ps(MS), &values(5.0, 20.0), &[]);
+        // 100 us later the recent average is over and the 10.2 ms filter has not crossed.
+        // The current peak has already warned, so power is still not over now.
+        ratings.sample(Time::from_ps(MS + 100_000_000), &values(5.0, 20.0), &[]);
+        assert!(
+            over_now(&ratings).is_empty(),
+            "past the peak, power is not over now: {:?}",
+            over_now(&ratings)
+        );
+        let found = ratings.findings();
+        assert!(
+            found.iter().any(|d| {
+                matches!(d, Diagnostic::RatingCurrent(excursion) if excursion.basis == Basis::Peak)
+            }),
+            "the current peak warns at once: {found:?}"
+        );
+
+        let (mut ratings, columns) = diode_power();
+        let values = |current, power| row_at(&columns, current, power);
+        ratings.sample(Time::ZERO, &values(0.0, 0.0), &[]);
+        let step = MS / 10;
+        for k in 0..=200 {
+            ratings.sample(Time::from_ps(MS + k * step), &values(0.5, 0.664), &[]);
+            assert!(
+                over_now(&ratings)
+                    .iter()
+                    .all(|e| e.quantity.to_string() != "#d1.p"),
+                "at {k}"
+            );
+        }
+        let found = ratings.findings();
+        assert!(
+            found
+                .iter()
+                .any(|d| matches!(d, Diagnostic::RatingPower(_))),
+            "a held overload warns on the filter: {found:?}"
+        );
     }
 }

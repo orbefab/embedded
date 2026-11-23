@@ -255,9 +255,10 @@ pub enum Data {
         landed_ps: u64,
     },
     /// A world quantity's value from `landed_ps` on, in its unit. `already` is set when that
-    /// value was already in force and no later step was dropped. It is left out of the JSON
-    /// when false. When that change has not landed yet, `landed_ps` is its time. `dropped` is
-    /// how many later scheduled steps of this quantity the set removed, left out when none.
+    /// value was already in force from the landing on, whether or not later steps were dropped.
+    /// It is left out of the JSON when false. When that change has not landed yet, `landed_ps`
+    /// is its time. `dropped` is how many later scheduled steps of this quantity the set
+    /// removed, left out when none.
     Set {
         quantity: Quantity,
         value: f64,
@@ -1247,21 +1248,21 @@ impl Data {
                 already,
                 dropped,
             } => {
-                if *already && *landed_ps > 0 && *landed_ps >= t_ps {
-                    let _ = write!(
-                        out,
-                        "{} is already set to {value} {} from t={}",
-                        quantity.name(),
-                        quantity.unit(),
-                        t(*landed_ps)
-                    );
-                } else if *already {
+                if *already {
                     let _ = write!(
                         out,
                         "{} is already {value} {}",
                         quantity.name(),
                         quantity.unit()
                     );
+                    if *dropped > 0 {
+                        let steps = if *dropped == 1 { "step" } else { "steps" };
+                        let _ = write!(
+                            out,
+                            "; dropped {dropped} later scheduled {steps} of {}",
+                            quantity.name()
+                        );
+                    }
                 } else {
                     let at = t(*landed_ps);
                     let _ = write!(
@@ -1290,13 +1291,7 @@ impl Data {
                 already,
             } => {
                 let shown = with_unit(*value, unit);
-                if *already && *landed_ps > 0 && *landed_ps >= t_ps {
-                    let _ = write!(
-                        out,
-                        "{target} is already set to {shown} from t={}",
-                        t(*landed_ps)
-                    );
-                } else if *already {
+                if *already {
                     let _ = write!(out, "{target} is already {shown}");
                 } else {
                     let at = t(*landed_ps);

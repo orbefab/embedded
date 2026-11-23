@@ -1,5 +1,8 @@
-//! The S3 board as the probe kit sees it after `load-ram`: instruction RAM, internal data RAM,
-//! the mask ROM bytes the unaligned probe reads, and the USB serial console the kit writes.
+//! The ESP32-S3 board as the probe kit sees it after `load-ram`.
+//!
+//! The addresses are the chip's, so the harness lives in this crate and not in the core.
+//! It has instruction RAM, internal data RAM, the mask ROM bytes the unaligned probe reads,
+//! and the USB serial console the kit writes.
 
 use std::collections::VecDeque;
 use std::ops::Range;

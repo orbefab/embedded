@@ -1,6 +1,4 @@
-pub mod board;
 pub mod elf;
-pub mod s3board;
 
 use std::cell::Cell;
 use std::ops::Range;
@@ -25,7 +23,6 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 /// A board fixture: its `key: value` header and the UART text after `---`.
 pub struct Fixture {
-    header: Vec<(String, String)>,
     pub body: String,
 }
 
@@ -33,47 +30,11 @@ impl Fixture {
     pub fn read(name: &str) -> Fixture {
         let text = String::from_utf8(read_fixture(name)).unwrap();
         let (head, body) = text.split_once("---\n").expect("fixture has a --- line");
-        let header = head
-            .lines()
-            .map(|line| {
-                let (key, value) = line.split_once(": ").expect("header line is key: value");
-                (key.to_string(), value.to_string())
-            })
-            .collect();
-        Fixture {
-            header,
-            body: body.to_string(),
+        for line in head.lines() {
+            line.split_once(": ").expect("header line is key: value");
         }
-    }
-
-    pub fn get(&self, key: &str) -> &str {
-        &self
-            .header
-            .iter()
-            .find(|(k, _)| k == key)
-            .unwrap_or_else(|| panic!("fixture header has {key}"))
-            .1
-    }
-}
-
-/// The 1-based line where two texts first differ, with both lines, or `None` when they are equal.
-pub fn first_difference(have: &str, want: &str) -> Option<(usize, String, String)> {
-    if have == want {
-        return None;
-    }
-    let mut have_lines = have.split_inclusive('\n');
-    let mut want_lines = want.split_inclusive('\n');
-    let mut line = 1;
-    loop {
-        match (have_lines.next(), want_lines.next()) {
-            (Some(a), Some(b)) if a == b => line += 1,
-            (a, b) => {
-                return Some((
-                    line,
-                    a.unwrap_or("<end>").escape_debug().to_string(),
-                    b.unwrap_or("<end>").escape_debug().to_string(),
-                ));
-            }
+        Fixture {
+            body: body.to_string(),
         }
     }
 }
@@ -227,4 +188,11 @@ impl<B: Bus> Bus for Straight<B> {
     fn fetch_held(&self) -> bool {
         self.bus.fetch_held()
     }
+}
+
+pub fn bytes_of(hex: &str) -> Vec<u8> {
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+        .collect()
 }

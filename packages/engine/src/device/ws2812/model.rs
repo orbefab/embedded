@@ -2,9 +2,10 @@
 //! [`PulseTarget`]. This device keeps the bits and the colours, shows the colours, and drives
 //! `DOUT` when the chain has one.
 //!
-//! The times are the Worldsemi WS2812E-1313 datasheet's, V1.1, page 3, "Data Transfer Time":
-//! T0H 220 ns to 380 ns, T1H 580 ns to 1 µs, and RES a low of more than 280 µs. A bit is a 0 or
-//! a 1 by its high alone. A high outside both windows is rule `bit` and is dropped. The line
+//! T1H and RES are the Worldsemi WS2812E-1313 datasheet's, V1.1, page 3. T0H runs to 400 ns,
+//! that sheet's 380 ns extended to the SK68xx T0H maximum: 220 ns to 400 ns, 580 ns to 1 µs,
+//! and a low of more than 280 µs. A bit is a 0 or a 1 by its high alone. A high outside both
+//! windows is rule `bit` and is dropped. The line
 //! rests low, and a rest past RES is idle: the chain latches there.
 //!
 //! Once every LED holds its 24 bits, each high on `DIN` goes on to `DOUT` `delay` later, its
@@ -20,8 +21,9 @@ use orbe_model::{
 /// The most LEDs one part holds.
 pub const LED_MAX: u16 = 1024;
 
-/// T0H, inclusive, picoseconds.
-const T0H: std::ops::RangeInclusive<u64> = 220_000..=380_000;
+/// T0H, inclusive, picoseconds. 400 ns is the SK68xx sheet's T0H maximum. Arduino
+/// `rgbLedWrite` sends that high, four ticks of a 10 MHz RMT, and it is still below T1H.
+const T0H: std::ops::RangeInclusive<u64> = 220_000..=400_000;
 /// T1H, inclusive.
 const T1H: std::ops::RangeInclusive<u64> = 580_000..=1_000_000;
 
