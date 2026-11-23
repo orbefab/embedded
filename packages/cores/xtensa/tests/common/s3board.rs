@@ -5,11 +5,18 @@ use std::collections::VecDeque;
 use std::ops::Range;
 
 use orbe_xtensa::{
-    Bus, Cause, Core, Cycle, Esp32s3, Exit, PagedRam, Sr, Stop, Unimplemented, Width,
+    Bus, Cause, Core, Cycle, Esp32s3, Exit, PagedRam, Reset, Sr, Stop, Unimplemented, Width,
 };
 
 use super::Straight;
 use super::elf::Elf;
+
+/// The board's first CPU at reset: its ROM's PC and `VECBASE`, and the `PRID` IDF reads there.
+const RESET: Reset = Reset {
+    pc: 0x4000_0400,
+    vecbase: 0x4000_0000,
+    prid: 0xcdcd,
+};
 
 const IRAM: Range<u32> = 0x4037_0000..0x403e_0000;
 const DRAM: Range<u32> = 0x3fc8_8000..0x3fd0_0000;
@@ -218,7 +225,7 @@ pub fn run_answering_on(
     limit: Cycle,
     mut answer: impl FnMut(&mut Core<Esp32s3>, Unimplemented) -> bool,
 ) -> Run {
-    let mut core = Core::<Esp32s3>::new(crate::core::RESET);
+    let mut core = Core::<Esp32s3>::new(RESET);
     core.set_pc(elf.entry);
     let end = format!("END {probe}\n");
     loop {

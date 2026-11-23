@@ -453,7 +453,7 @@ fn a_byte_load_on_the_instruction_bus_is_cause_3() {
     let l8ui = [0x22u8, 0x03, 0x00];
     let decoded = Esp32s3::decode(&l8ui, CODE).unwrap();
     assert_eq!(Esp32s3::render(&decoded), "l8ui\ta2, a3, 0");
-    for addr in [0x4037_0000, 0x4004_0000] {
+    for addr in [0x4010_0000, 0x4024_0000] {
         let mut bus = Flat::new("220300");
         bus.instruction = addr..addr + 4;
         let mut core: Core<Esp32s3> = core_at(CODE);

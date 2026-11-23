@@ -9,7 +9,7 @@ use crate::core::{CODE, Flat, RAM, core_at};
 
 const WOE: u32 = 1 << 18;
 const EXCM: u32 = 1 << 4;
-const KERNEL: u32 = 0x4000_0300;
+const KERNEL: u32 = 0x4020_0300;
 
 /// `loop a2, 1f; addi.n a3, a3, 1; 1: nop.n`
 const COUNT: &str = "7682011b333df0";
@@ -19,7 +19,7 @@ const BRANCH: &str = "7682041614001b33";
 const TAKEN: &str = "7682041b335633003df03df0";
 /// `loop a2, 1f; addi.n a3, a3, 1; l32i.n a5, a6, 0; 1:`
 const FAULT: &str = "7682031b335806";
-/// `loop a2, 1f; addi.n a3, a3, 1; call0 0x4037000c; 1:`, the call as bytes, since GNU `as`
+/// `loop a2, 1f; addi.n a3, a3, 1; call0 0x4010000c; 1:`, the call as bytes, since GNU `as`
 /// refuses a call as a loop's last op.
 const CALL: &str = "7682041b33450000";
 /// `loop a2, 1f; addi.n a3, a3, 1; wsr.intset a5; 1:`
@@ -157,7 +157,7 @@ fn vector_after_loop<C: Config>() {
     let lend = CODE + 5;
     assert_eq!(
         C::render(&decode::<C>(&loop_op)),
-        "loop\ta2, 0x40370005",
+        "loop\ta2, 0x40100005",
         "{}",
         C::NAME
     );

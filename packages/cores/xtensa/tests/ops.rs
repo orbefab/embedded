@@ -21,13 +21,13 @@ const CALLINC3: u32 = 3 << 16;
 pub(crate) const NEXT: u32 = CODE + 3;
 pub(crate) const TAKEN: u32 = CODE + 16;
 const TO: u32 = CODE + 0x40;
-pub(crate) const KERNEL: u32 = 0x4000_0300;
-pub(crate) const OF4: u32 = 0x4000_0000;
-const UF4: u32 = 0x4000_0040;
-const OF8: u32 = 0x4000_0080;
-const UF8: u32 = 0x4000_00c0;
-const OF12: u32 = 0x4000_0100;
-const UF12: u32 = 0x4000_0140;
+pub(crate) const KERNEL: u32 = 0x4020_0300;
+pub(crate) const OF4: u32 = 0x4020_0000;
+const UF4: u32 = 0x4020_0040;
+const OF8: u32 = 0x4020_0080;
+const UF8: u32 = 0x4020_00c0;
+const OF12: u32 = 0x4020_0100;
+const UF12: u32 = 0x4020_0140;
 
 /// `PS.OWB` holding `base`.
 const fn owb(base: u32) -> u32 {
@@ -295,7 +295,7 @@ const ROWS: &[Row] = &[
         NEXT,
     ),
     stops(
-        "l32r\ta2, 0x4036fffc",
+        "l32r\ta2, 0x400ffffc",
         "21ffff",
         &[A(2, 7), S(Sr::Litbase, RAM | 1)],
         &[A(2, 7)],
@@ -520,172 +520,172 @@ const ROWS: &[Row] = &[
         Missing::Unaligned(Op::S32I),
     ),
     runs(
-        "ball\ta2, a3, 0x40370010",
+        "ball\ta2, a3, 0x40100010",
         "37420c",
         &[A(2, 0xff), A(3, 0x0f)],
         &[],
         TAKEN,
     ),
     runs(
-        "ball\ta2, a3, 0x40370010",
+        "ball\ta2, a3, 0x40100010",
         "37420c",
         &[A(2, 0xf0), A(3, 0x0f)],
         &[],
         NEXT,
     ),
     runs(
-        "bnall\ta2, a3, 0x40370010",
+        "bnall\ta2, a3, 0x40100010",
         "37c20c",
         &[A(2, 0xf0), A(3, 0x0f)],
         &[],
         TAKEN,
     ),
     runs(
-        "bnall\ta2, a3, 0x40370010",
+        "bnall\ta2, a3, 0x40100010",
         "37c20c",
         &[A(2, 0xff), A(3, 0x0f)],
         &[],
         NEXT,
     ),
     runs(
-        "bany\ta2, a3, 0x40370010",
+        "bany\ta2, a3, 0x40100010",
         "37820c",
         &[A(2, 0x10), A(3, 0x30)],
         &[],
         TAKEN,
     ),
     runs(
-        "bany\ta2, a3, 0x40370010",
+        "bany\ta2, a3, 0x40100010",
         "37820c",
         &[A(2, 0x10), A(3, 0x20)],
         &[],
         NEXT,
     ),
     runs(
-        "bnone\ta2, a3, 0x40370010",
+        "bnone\ta2, a3, 0x40100010",
         "37020c",
         &[A(2, 0x10), A(3, 0x20)],
         &[],
         TAKEN,
     ),
     runs(
-        "bnone\ta2, a3, 0x40370010",
+        "bnone\ta2, a3, 0x40100010",
         "37020c",
         &[A(2, 0x10), A(3, 0x30)],
         &[],
         NEXT,
     ),
     runs(
-        "bbc\ta2, a3, 0x40370010",
+        "bbc\ta2, a3, 0x40100010",
         "37520c",
         &[A(2, 0xffff_fffd), A(3, 1)],
         &[],
         TAKEN,
     ),
     runs(
-        "bbc\ta2, a3, 0x40370010",
+        "bbc\ta2, a3, 0x40100010",
         "37520c",
         &[A(2, 2), A(3, 33)],
         &[],
         NEXT,
     ),
     runs(
-        "bbs\ta2, a3, 0x40370010",
+        "bbs\ta2, a3, 0x40100010",
         "37d20c",
         &[A(2, 2), A(3, 33)],
         &[],
         TAKEN,
     ),
     runs(
-        "bbs\ta2, a3, 0x40370010",
+        "bbs\ta2, a3, 0x40100010",
         "37d20c",
         &[A(2, 1), A(3, 33)],
         &[],
         NEXT,
     ),
     runs(
-        "bbsi\ta2, 31, 0x40370010",
+        "bbsi\ta2, 31, 0x40100010",
         "f7f20c",
         &[A(2, 1 << 31)],
         &[],
         TAKEN,
     ),
     runs(
-        "bbsi\ta2, 31, 0x40370010",
+        "bbsi\ta2, 31, 0x40100010",
         "f7f20c",
         &[A(2, 0x7fff_ffff)],
         &[],
         NEXT,
     ),
-    runs("bgei\ta2, -1, 0x40370010", "e6020c", &[A(2, 0)], &[], TAKEN),
+    runs("bgei\ta2, -1, 0x40100010", "e6020c", &[A(2, 0)], &[], TAKEN),
     runs(
-        "bgei\ta2, -1, 0x40370010",
+        "bgei\ta2, -1, 0x40100010",
         "e6020c",
         &[A(2, 0xffff_fffe)],
         &[],
         NEXT,
     ),
     runs(
-        "blti\ta2, 1, 0x40370010",
+        "blti\ta2, 1, 0x40100010",
         "a6120c",
         &[A(2, u32::MAX)],
         &[],
         TAKEN,
     ),
-    runs("blti\ta2, 1, 0x40370010", "a6120c", &[A(2, 1)], &[], NEXT),
+    runs("blti\ta2, 1, 0x40100010", "a6120c", &[A(2, 1)], &[], NEXT),
     runs(
-        "bgeu\ta2, a3, 0x40370010",
+        "bgeu\ta2, a3, 0x40100010",
         "37b20c",
         &[A(2, 1 << 31), A(3, 1)],
         &[],
         TAKEN,
     ),
     runs(
-        "bgeu\ta2, a3, 0x40370010",
+        "bgeu\ta2, a3, 0x40100010",
         "37b20c",
         &[A(2, 1), A(3, 1 << 31)],
         &[],
         NEXT,
     ),
     runs(
-        "bltu\ta2, a3, 0x40370010",
+        "bltu\ta2, a3, 0x40100010",
         "37320c",
         &[A(2, 1), A(3, 1 << 31)],
         &[],
         TAKEN,
     ),
     runs(
-        "bltu\ta2, a3, 0x40370010",
+        "bltu\ta2, a3, 0x40100010",
         "37320c",
         &[A(2, 1 << 31), A(3, 1)],
         &[],
         NEXT,
     ),
-    runs("bgez\ta2, 0x40370010", "d6c200", &[A(2, 0)], &[], TAKEN),
+    runs("bgez\ta2, 0x40100010", "d6c200", &[A(2, 0)], &[], TAKEN),
     runs(
-        "bgez\ta2, 0x40370010",
+        "bgez\ta2, 0x40100010",
         "d6c200",
         &[A(2, 1 << 31)],
         &[],
         NEXT,
     ),
     runs(
-        "bltz\ta2, 0x40370010",
+        "bltz\ta2, 0x40100010",
         "96c200",
         &[A(2, 1 << 31)],
         &[],
         TAKEN,
     ),
-    runs("bltz\ta2, 0x40370010", "96c200", &[A(2, 0)], &[], NEXT),
+    runs("bltz\ta2, 0x40100010", "96c200", &[A(2, 0)], &[], NEXT),
     runs(
-        "blt\ta2, a3, 0x40370010",
+        "blt\ta2, a3, 0x40100010",
         "37220c",
         &[A(2, u32::MAX), A(3, 0)],
         &[],
         TAKEN,
     ),
     runs(
-        "blt\ta2, a3, 0x40370010",
+        "blt\ta2, a3, 0x40100010",
         "37220c",
         &[A(2, 0), A(3, u32::MAX)],
         &[],
@@ -693,31 +693,31 @@ const ROWS: &[Row] = &[
     ),
     runs("callx0\ta2", "c00200", &[A(2, TO)], &[A(0, NEXT)], TO),
     runs(
-        "call4\t0x40370010",
+        "call4\t0x40100010",
         "d50000",
         &[],
-        &[A(4, 0x4037_0003), S(Sr::Ps, WOE | CALLINC1)],
+        &[A(4, 0x4010_0003), S(Sr::Ps, WOE | CALLINC1)],
         TAKEN,
     ),
     runs(
-        "call12\t0x40370010",
+        "call12\t0x40100010",
         "f50000",
         &[],
-        &[A(12, 0xc037_0003), S(Sr::Ps, WOE | CALLINC3)],
+        &[A(12, 0xc010_0003), S(Sr::Ps, WOE | CALLINC3)],
         TAKEN,
     ),
     runs(
         "callx4\ta2",
         "d00200",
         &[A(2, TO)],
-        &[A(4, 0x4037_0003), S(Sr::Ps, WOE | CALLINC1)],
+        &[A(4, 0x4010_0003), S(Sr::Ps, WOE | CALLINC1)],
         TO,
     ),
     runs(
         "callx12\ta2",
         "f00200",
         &[A(2, TO)],
-        &[A(12, 0xc037_0003), S(Sr::Ps, WOE | CALLINC3)],
+        &[A(12, 0xc010_0003), S(Sr::Ps, WOE | CALLINC3)],
         TO,
     ),
     runs("jx\ta2", "a00200", &[A(2, TO)], &[], TO),
@@ -746,7 +746,7 @@ const ROWS: &[Row] = &[
             S(Sr::Eps6, WOE),
             S(Sr::Ps, WOE | EXCM | 6),
         ],
-        0x4000_0280,
+        0x4020_0280,
     ),
     runs(
         "ill.n",
@@ -757,7 +757,7 @@ const ROWS: &[Row] = &[
             S(Sr::Epc1, CODE),
             S(Sr::Ps, WOE | UM | EXCM),
         ],
-        0x4000_0340,
+        0x4020_0340,
     ),
     // With `PS.EXCM` set, the double exception: `DEPC` takes the PC and `EPC1` and `PS` stay.
     runs(
@@ -774,7 +774,7 @@ const ROWS: &[Row] = &[
             S(Sr::Epc1, 0x1234),
             S(Sr::Ps, WOE | EXCM),
         ],
-        0x4000_03c0,
+        0x4020_03c0,
     ),
     runs(
         "xsr.icount\ta2",
@@ -786,11 +786,11 @@ const ROWS: &[Row] = &[
     runs(
         "entry\ta1, 32",
         "364100",
-        &[S(Sr::Ps, WOE | CALLINC1), A(1, 0x3fc9_0000)],
+        &[S(Sr::Ps, WOE | CALLINC1), A(1, 0x2001_0000)],
         &[
             S(Sr::WindowBase, 1),
             S(Sr::WindowStart, 0b11),
-            A(1, 0x3fc8_ffe0),
+            A(1, 0x2000_ffe0),
         ],
         NEXT,
     ),
@@ -798,11 +798,11 @@ const ROWS: &[Row] = &[
     runs(
         "entry\ta1, 32",
         "364100",
-        &[A(1, 0x3fc9_0000)],
+        &[A(1, 0x2001_0000)],
         &[
             S(Sr::WindowBase, 0),
             S(Sr::WindowStart, 1),
-            A(1, 0x3fc8_ffe0),
+            A(1, 0x2000_ffe0),
         ],
         NEXT,
     ),
@@ -814,7 +814,7 @@ const ROWS: &[Row] = &[
         &[
             S(Sr::Ps, WOE | CALLINC1),
             S(Sr::WindowStart, 0b11),
-            A(1, 0x3fc9_0000),
+            A(1, 0x2001_0000),
         ],
         &[
             S(Sr::WindowBase, 1),
@@ -830,7 +830,7 @@ const ROWS: &[Row] = &[
         &[
             S(Sr::Ps, WOE | CALLINC3),
             S(Sr::WindowStart, 0b1_1001),
-            A(1, 0x3fc9_0000),
+            A(1, 0x2001_0000),
         ],
         &[
             S(Sr::WindowBase, 3),
@@ -847,20 +847,20 @@ const ROWS: &[Row] = &[
         &[
             S(Sr::Ps, WOE | CALLINC1),
             S(Sr::WindowStart, 0b1_0001),
-            A(1, 0x3fc9_0000),
+            A(1, 0x2001_0000),
         ],
         &[
             S(Sr::WindowBase, 1),
             S(Sr::WindowStart, 0b1_0011),
-            A(1, 0x3fc8_ffe0),
+            A(1, 0x2000_ffe0),
         ],
         NEXT,
     ),
     stops(
         "entry\ta1, 32",
         "364100",
-        &[S(Sr::Ps, WOE | EXCM | CALLINC1), A(1, 0x3fc9_0000)],
-        &[S(Sr::WindowBase, 0), A(1, 0x3fc9_0000)],
+        &[S(Sr::Ps, WOE | EXCM | CALLINC1), A(1, 0x2001_0000)],
+        &[S(Sr::WindowBase, 0), A(1, 0x2001_0000)],
         CODE,
         Missing::Op(Op::ENTRY),
     ),
@@ -947,7 +947,7 @@ const ROWS: &[Row] = &[
     ),
     // A call checks the quarters up to the register it writes, before it writes it.
     runs(
-        "call4\t0x40370010",
+        "call4\t0x40100010",
         "d50000",
         &[S(Sr::WindowStart, 0b11)],
         &[
@@ -958,7 +958,7 @@ const ROWS: &[Row] = &[
         OF12,
     ),
     runs(
-        "call8\t0x40370010",
+        "call8\t0x40100010",
         "e50000",
         &[S(Sr::WindowStart, 0b101)],
         &[
@@ -981,7 +981,7 @@ const ROWS: &[Row] = &[
         &[
             S(Sr::WindowBase, 1),
             S(Sr::WindowStart, 0b11),
-            A(0, 0x4037_0040),
+            A(0, 0x4010_0040),
         ],
         &[S(Sr::WindowBase, 0), S(Sr::WindowStart, 1)],
         TO,
@@ -994,7 +994,7 @@ const ROWS: &[Row] = &[
         &[
             S(Sr::WindowBase, 1),
             S(Sr::WindowStart, 0b10),
-            A(0, 0x4037_0040),
+            A(0, 0x4010_0040),
         ],
         &[
             S(Sr::WindowBase, 0),
@@ -1010,7 +1010,7 @@ const ROWS: &[Row] = &[
         &[
             S(Sr::WindowBase, 2),
             S(Sr::WindowStart, 0b100),
-            A(0, 0x8037_0040),
+            A(0, 0x8010_0040),
         ],
         &[S(Sr::WindowBase, 0), S(Sr::Ps, WOE | EXCM | owb(2))],
         UF8,
@@ -1021,7 +1021,7 @@ const ROWS: &[Row] = &[
         &[
             S(Sr::WindowBase, 3),
             S(Sr::WindowStart, 0b1000),
-            A(0, 0xc037_0040),
+            A(0, 0xc010_0040),
         ],
         &[S(Sr::WindowBase, 0), S(Sr::Ps, WOE | EXCM | owb(3))],
         UF12,
@@ -1032,7 +1032,7 @@ const ROWS: &[Row] = &[
         &[
             S(Sr::WindowBase, 1),
             S(Sr::WindowStart, 0b10),
-            A(0, 0x8037_0040),
+            A(0, 0x8010_0040),
         ],
         &[S(Sr::WindowBase, 15), S(Sr::Ps, WOE | EXCM | owb(1))],
         UF8,
@@ -1043,7 +1043,7 @@ const ROWS: &[Row] = &[
         &[
             S(Sr::WindowBase, 1),
             S(Sr::WindowStart, 0b10),
-            A(0, 0x4037_0040),
+            A(0, 0x4010_0040),
         ],
         &[S(Sr::WindowBase, 0), S(Sr::Epc1, CODE)],
         UF4,
@@ -1056,7 +1056,7 @@ const ROWS: &[Row] = &[
         &[
             S(Sr::WindowBase, 3),
             S(Sr::WindowStart, 0b1100),
-            A(0, 0x8037_0040),
+            A(0, 0x8010_0040),
         ],
         &[S(Sr::WindowBase, 3), S(Sr::WindowStart, 0b1100)],
         CODE,
@@ -1068,7 +1068,7 @@ const ROWS: &[Row] = &[
         &[
             S(Sr::WindowBase, 1),
             S(Sr::WindowStart, 0b11),
-            A(0, 0x0037_0040),
+            A(0, 0x0010_0040),
         ],
         &[S(Sr::WindowBase, 1)],
         CODE,
@@ -1081,7 +1081,7 @@ const ROWS: &[Row] = &[
             S(Sr::Ps, WOE | EXCM),
             S(Sr::WindowBase, 1),
             S(Sr::WindowStart, 0b11),
-            A(0, 0x4037_0040),
+            A(0, 0x4010_0040),
         ],
         &[S(Sr::WindowBase, 1), S(Sr::WindowStart, 0b11)],
         CODE,
@@ -1095,9 +1095,9 @@ const ROWS: &[Row] = &[
         &[
             S(Sr::WindowBase, 1),
             S(Sr::WindowStart, 0b11),
-            A(2, 0x3fc8_0000),
+            A(2, 0x2000_0000),
         ],
-        &[A(1, 0x3fc8_0000)],
+        &[A(1, 0x2000_0000)],
         NEXT,
     ),
     runs(
@@ -1106,9 +1106,9 @@ const ROWS: &[Row] = &[
         &[
             S(Sr::WindowBase, 3),
             S(Sr::WindowStart, 0b1001),
-            A(2, 0x3fc8_0000),
+            A(2, 0x2000_0000),
         ],
-        &[A(1, 0x3fc8_0000)],
+        &[A(1, 0x2000_0000)],
         NEXT,
     ),
     runs(
@@ -1118,7 +1118,7 @@ const ROWS: &[Row] = &[
             S(Sr::WindowBase, 1),
             S(Sr::WindowStart, 0b10),
             A(1, 7),
-            A(2, 0x3fc8_0000),
+            A(2, 0x2000_0000),
         ],
         &[
             A(1, 7),
@@ -1238,7 +1238,7 @@ const ROWS: &[Row] = &[
         TO,
     ),
     runs(
-        "loop\ta2, 0x40370010",
+        "loop\ta2, 0x40100010",
         "76820c",
         &[A(2, 3)],
         &[S(Sr::Lcount, 2), S(Sr::Lbeg, NEXT), S(Sr::Lend, TAKEN)],
@@ -1246,7 +1246,7 @@ const ROWS: &[Row] = &[
     ),
     // A count of 0 loops 2^32 times.
     runs(
-        "loop\ta2, 0x40370010",
+        "loop\ta2, 0x40100010",
         "76820c",
         &[A(2, 0)],
         &[S(Sr::Lcount, u32::MAX)],
@@ -1254,7 +1254,7 @@ const ROWS: &[Row] = &[
     ),
     // A loop op that skips the body still sets the loop registers.
     runs(
-        "loopnez\ta2, 0x40370010",
+        "loopnez\ta2, 0x40100010",
         "76920c",
         &[A(2, 0)],
         &[
@@ -1265,28 +1265,28 @@ const ROWS: &[Row] = &[
         TAKEN,
     ),
     runs(
-        "loopnez\ta2, 0x40370010",
+        "loopnez\ta2, 0x40100010",
         "76920c",
         &[A(2, 5)],
         &[S(Sr::Lcount, 4)],
         NEXT,
     ),
     runs(
-        "loopgtz\ta2, 0x40370010",
+        "loopgtz\ta2, 0x40100010",
         "76a20c",
         &[A(2, 1 << 31)],
         &[S(Sr::Lcount, 0x7fff_ffff), S(Sr::Lend, TAKEN)],
         TAKEN,
     ),
     runs(
-        "loopgtz\ta2, 0x40370010",
+        "loopgtz\ta2, 0x40100010",
         "76a20c",
         &[A(2, 0)],
         &[S(Sr::Lcount, u32::MAX)],
         TAKEN,
     ),
     runs(
-        "loopgtz\ta2, 0x40370010",
+        "loopgtz\ta2, 0x40100010",
         "76a20c",
         &[A(2, 1)],
         &[S(Sr::Lcount, 0)],
@@ -1535,14 +1535,14 @@ fn a_call12_chain_spills_frame_0_at_the_sixth_call() {
     let mut bus = Flat::new("35000000362100f5ffff");
     let mut core: Core<Esp32> = core_at(CODE);
     core.set_special(Sr::Ps, WOE);
-    core.set_a(1, 0x3fc9_0000);
+    core.set_a(1, 0x2001_0000);
     assert_eq!(core.run_until(&mut bus, Cycle(1000)), Stop::Bus);
     assert_eq!(core.pc(), OF12);
     assert_eq!(core.special(Sr::Epc1), CODE + 7);
     assert_eq!(core.special(Sr::WindowBase), 0);
     assert_eq!(core.special(Sr::WindowStart), 0b1001_0010_0100_1001);
     assert_eq!(core.special(Sr::Ps), WOE | EXCM | CALLINC3 | owb(15));
-    assert_eq!(core.a(1), 0x3fc9_0000);
+    assert_eq!(core.a(1), 0x2001_0000);
 }
 
 #[test]
@@ -1550,18 +1550,18 @@ fn the_new_stops_say_what_is_missing() {
     let at = |missing| Unimplemented { pc: CODE, missing }.to_string();
     assert_eq!(
         at(Missing::Unaligned(Op::L32AI)),
-        "unaligned `l32ai` at 0x40370000 is not modeled"
+        "unaligned `l32ai` at 0x40100000 is not modeled"
     );
     assert_eq!(
         at(Missing::Litbase),
-        "`l32r` with LITBASE at 0x40370000 is not modeled"
+        "`l32r` with LITBASE at 0x40100000 is not modeled"
     );
     assert_eq!(
         at(Missing::Unaligned(Op::S32I)),
-        "unaligned `s32i` at 0x40370000 is not modeled"
+        "unaligned `s32i` at 0x40100000 is not modeled"
     );
     assert_eq!(
         at(Missing::LoopEnd(Op::CALL0)),
-        "`call0` as the last op of a loop at 0x40370000 is not modeled"
+        "`call0` as the last op of a loop at 0x40100000 is not modeled"
     );
 }

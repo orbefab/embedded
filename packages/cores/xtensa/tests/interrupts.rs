@@ -9,8 +9,8 @@ use crate::core::{CODE, Flat, core_at};
 const WOE: u32 = 1 << 18;
 const EXCM: u32 = 1 << 4;
 const UM: u32 = 1 << 5;
-const KERNEL: u32 = 0x4000_0300;
-const USER: u32 = 0x4000_0340;
+const KERNEL: u32 = 0x4020_0300;
+const USER: u32 = 0x4020_0340;
 
 /// Software interrupt 7 at level 1, software interrupt 29 at level 3, external level interrupts
 /// 19 at level 2 and 24 at level 4, external edge interrupt 10 at level 1, the NMI 14, and timer
@@ -30,7 +30,7 @@ fn nops() -> Flat {
 }
 
 fn level_vector(level: u32) -> u32 {
-    0x4000_0100 + 0x40 * level
+    0x4020_0100 + 0x40 * level
 }
 
 fn setup(ps: u32, enabled: u32) -> Core<Esp32> {
