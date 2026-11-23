@@ -276,12 +276,12 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
             let edges = console.lines().filter(|line| line.starts_with("edge "));
             assert_eq!(edges.count(), 7, "{name}: {console}");
         } else if name == "esp32s3-hello" {
-            // The restart's write of SPI0 and SPI1's reset, which the model keeps and does not
-            // run, then the restart.
-            let mut want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 1];
+            // The restart sets SYSTEM_PERIP_RST_EN0_REG, then writes 0. Both stores change
+            // TIMERS_RST and SPI01_RST, which the model keeps and does not run, then the restart.
+            let mut want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 2];
             want.push(("chip.restart".to_string(), "#u1".to_string()));
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
-            assert_kept_resets(&name, &doc, 1);
+            assert_kept_resets(&name, &doc, 2);
         } else if name == "esp32s3-screen" {
             // The read of RTCIO+0xc8, GPIO17's pad. A stock sketch does not read it.
             let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 1];
