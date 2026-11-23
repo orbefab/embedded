@@ -306,6 +306,7 @@ const HIDDEN: &[&str] = &[
     "lmv358-msop8",
     "lp2985-sot23-5",
     "npn-l8050-sot23",
+    "nmos-bss138-sot23",
     "pmos-fdn340p-sot23",
     "ptc-fuse-1812",
     "resistor-0603",
