@@ -3,9 +3,14 @@
 //! Not every test binary calls every helper.
 #![allow(dead_code)]
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
+
+thread_local! {
+    static CACHE_DIRS: RefCell<Vec<tempfile::TempDir>> = const { RefCell::new(Vec::new()) };
+}
 
 pub fn dir() -> &'static Path {
     static DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -44,6 +49,9 @@ pub fn template() -> String {
 
 pub fn apply(command: &mut Command) {
     command.env("ORBE_REGISTRY", template());
+    let cache = tempfile::tempdir().unwrap();
+    command.env("XDG_CACHE_HOME", cache.path());
+    CACHE_DIRS.with(|dirs| dirs.borrow_mut().push(cache));
 }
 
 /// Sets `ORBE_REGISTRY` when `args` is a command that fetches.
