@@ -1,8 +1,10 @@
 //! The digit a single 7-segment part shows, from which of a–g are lit.
 //!
 //! The decimal point is not part of the digit. A pattern that is one of 0–9 is
-//! that digit. None of a–g lit is `blank`. Any other pattern names the lit
-//! segments, so a caller can still see the display.
+//! that digit. 6 without its top bar and 9 without its bottom bar are 6 and 9, as the
+//! 74LS47 draws them, and 7 with `f` is 7, as many firmwares draw it. None of a–g lit is
+//! `blank`. Any other pattern names the lit segments, so a caller can still see the
+//! display.
 
 /// `lit` is the letters among `a`–`g` that are lit, in letter order.
 pub(crate) fn shown(lit: &[&str]) -> String {
@@ -13,10 +15,10 @@ pub(crate) fn shown(lit: &[&str]) -> String {
         "abcdg" => "3".to_string(),
         "bcfg" => "4".to_string(),
         "acdfg" => "5".to_string(),
-        "acdefg" => "6".to_string(),
-        "abc" => "7".to_string(),
+        "acdefg" | "cdefg" => "6".to_string(),
+        "abc" | "abcf" => "7".to_string(),
         "abcdefg" => "8".to_string(),
-        "abcdfg" => "9".to_string(),
+        "abcdfg" | "abcfg" => "9".to_string(),
         "" => "blank".to_string(),
         _ => format!("segments {}", lit.join(",")),
     }
@@ -41,5 +43,13 @@ mod tests {
         assert_eq!(shown(&["a", "b", "c", "d", "f", "g"]), "9");
         assert_eq!(shown(&[]), "blank");
         assert_eq!(shown(&["a", "g"]), "segments a,g");
+        assert_eq!(shown(&["b", "c", "g"]), "segments b,c,g");
+    }
+
+    #[test]
+    fn a_six_seven_or_nine_without_its_tail_is_that_digit() {
+        assert_eq!(shown(&["c", "d", "e", "f", "g"]), "6");
+        assert_eq!(shown(&["a", "b", "c", "f", "g"]), "9");
+        assert_eq!(shown(&["a", "b", "c", "f"]), "7");
     }
 }

@@ -876,10 +876,11 @@ impl Open {
         )
     }
 
-    /// The digit `path` shows. Each of `seg_a` through `seg_g` is one LED lamp.
+    /// The digit `path` shows. Each of `seg_a` through `seg_g` is one LED lamp. A segment
+    /// counts when a viewer sees it glow, above the `digit` reading's `above`, or above the
+    /// segment's `dim` reading when the part states none.
     pub(super) fn shown_digit(&self, path: &str) -> Result<String, Error> {
-        let probe = self.engine.probe();
-        let mut lit = Vec::new();
+        let mut indices = Vec::new();
         for letter in crate::digit::LETTERS {
             let child = format!("{path}.{}", crate::digit::segment(letter));
             let Some(index) = self.light.position(&child) else {
@@ -889,10 +890,20 @@ impl Open {
                     "a digit reading needs segments seg_a through seg_g, each an LED",
                 ));
             };
-            if self.light.glow(index, &probe).state == crate::reply::Light::Lit {
-                lit.push(letter);
-            }
+            indices.push(index);
         }
+        let above = self.refs.parts[path]
+            .readings
+            .get("digit")
+            .and_then(|reading| reading.above.as_ref())
+            .filter(|above| above.unit == "A")
+            .map_or(self.light.lamps()[indices[0]].dim, |above| above.value);
+        let seen = self.light.seen(&indices, &self.engine.probe(), above);
+        let lit: Vec<&str> = crate::digit::LETTERS
+            .into_iter()
+            .zip(seen)
+            .filter_map(|(letter, seen)| seen.then_some(letter))
+            .collect();
         Ok(crate::digit::shown(&lit))
     }
 
@@ -1280,9 +1291,9 @@ mod tests {
             held.text(),
             "\
 t=50ms (from 50ms), @led1 off at 50ms
-  brightness led1 off 1.2775403141982445e-13 A over 20ms
+  brightness led1 off 1.2775403302174304e-13 A over 20ms
   brightness nano.led_l off 1.2775344350286488e-13 A over 20ms
-  brightness nano.led_pwr lit 3.013698540531949 mA over 20ms"
+  brightness nano.led_pwr lit 3.013698540531921 mA over 20ms"
         );
 
         let unmet = step(&mut live, "--until @led1 lit");
