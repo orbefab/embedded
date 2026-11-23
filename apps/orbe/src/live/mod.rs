@@ -12,16 +12,17 @@ mod page;
 mod place;
 mod viewer;
 
-use std::fs::{self, File};
+use std::fs;
 use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
 use std::net::Shutdown;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{ExitCode, Stdio};
+use std::process::{ChildStderr, ExitCode, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::sync::{Mutex, Once};
+use std::time::{Duration, Instant};
 
 use orbe_session::{Code, Command, Data, Error, Reply, Spec, State};
 use serde::{Deserialize, Serialize};
@@ -70,10 +71,28 @@ fn read_line(reader: &mut impl BufRead) -> Option<String> {
     }
 }
 
+/// A print to a pipe the reader closed. The process exits 0 instead of panicking with 101.
+pub(crate) fn broken_pipe(info: &std::panic::PanicHookInfo<'_>) -> bool {
+    if info
+        .payload()
+        .downcast_ref::<std::io::Error>()
+        .is_some_and(|error| error.kind() == ErrorKind::BrokenPipe)
+    {
+        return true;
+    }
+    let text = info
+        .payload()
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| info.payload().downcast_ref::<&str>().copied())
+        .unwrap_or("");
+    text.contains("Broken pipe") || text.contains("os error 32")
+}
+
 /// `orbe daemon --session <name>`.
-pub fn daemon(session: &str, start_log: Option<u64>) -> ExitCode {
+pub fn daemon(session: &str) -> ExitCode {
     match Name::parse(session) {
-        Ok(name) => daemon::run(&name, start_log),
+        Ok(name) => daemon::run(&name),
         Err(message) => {
             eprintln!("error[usage]: {message}");
             ExitCode::from(2)
@@ -291,84 +310,59 @@ enum Done {
     Stale(Stale),
     /// `close --all` found a process with no scene, which ends on its own.
     Unopened(Name),
-    /// `close --all` removed a start log no process held.
-    Left(Name, PathBuf),
 }
 
 struct Stale {
     session: Name,
-    /// `<name>.log.crashed` when the process left output.
+    /// `<pid>.crashed` when the process left output.
     log: Option<PathBuf>,
-    /// The session's start logs no process held, removed.
-    starts: Vec<PathBuf>,
 }
-
-const ENDED_START: &str = "the log of a start that ended";
 
 impl Done {
     fn session(&self) -> &str {
         match self {
             Done::Reply(reply) => &reply.session,
             Done::Stale(stale) => stale.session.as_str(),
-            Done::Unopened(session) | Done::Left(session, _) => session.as_str(),
+            Done::Unopened(session) => session.as_str(),
         }
     }
 
     fn text(&self) -> String {
         match self {
             Done::Reply(reply) => reply.text(),
-            Done::Stale(Stale { log, starts, .. }) => {
+            Done::Stale(Stale { log, .. }) => {
                 let mut text =
                     String::from("removed the socket of a process that ended without closing");
                 if let Some(log) = log {
                     text.push_str(&format!("; its last output is in {}", log.display()));
                 }
-                for start in starts {
-                    text.push_str(&format!("; removed {}, {ENDED_START}", start.display()));
-                }
                 text
             }
             Done::Unopened(_) => "no scene is open; its process is starting or ending".into(),
-            Done::Left(_, start) => format!("removed {}, {ENDED_START}", start.display()),
         }
     }
 
     fn json(&self) -> Value {
         match self {
             Done::Reply(reply) => reply.json(),
-            Done::Stale(Stale {
-                session,
-                log,
-                starts,
-            }) => {
+            Done::Stale(Stale { session, log }) => {
                 let mut entry =
                     json!({ "ok": true, "session": session.as_str(), "removed": "stale_socket" });
                 if let Some(log) = log {
                     entry["log"] = log.display().to_string().into();
-                }
-                if !starts.is_empty() {
-                    let starts: Vec<String> =
-                        starts.iter().map(|s| s.display().to_string()).collect();
-                    entry["start_logs"] = starts.into();
                 }
                 entry
             }
             Done::Unopened(session) => {
                 json!({ "ok": true, "session": session.as_str(), "skipped": "no_scene" })
             }
-            Done::Left(session, start) => json!({
-                "ok": true,
-                "session": session.as_str(),
-                "removed": "start_log",
-                "log": start.display().to_string(),
-            }),
         }
     }
 
     fn exit(&self) -> u8 {
         match self {
             Done::Reply(reply) => reply.exit(),
-            Done::Stale(_) | Done::Unopened(_) | Done::Left(..) => 0,
+            Done::Stale(_) | Done::Unopened(_) => 0,
         }
     }
 }
@@ -521,7 +515,7 @@ impl Client {
                     self.send(stream, Ask::Run(Ok(command))).map(Done::Reply)
                 }
                 Found::Missing => Err(self.no_session()),
-                Found::Stale => Err(self.report_crash("ended without closing", true)),
+                Found::Stale => Err(self.crashed("ended without closing")),
             },
         }
     }
@@ -569,23 +563,20 @@ impl Client {
     /// `open` to the session's process, starting one when none listens. When the process it
     /// reached ends before it answers, it starts again.
     fn open(&self, command: Command) -> Result<Box<Reply>, Refusal> {
-        let mut started = None;
         // Only a session that was already dead when this open began is "previous". A socket
         // this open's own process left is the attempt that just died.
         let mut began = false;
         let mut recovered = None;
-        for attempt in 1..=TRIES {
+        for _ in 1..=TRIES {
             let answered = match self.find()? {
                 Found::Listening(stream) => self.send(stream, Ask::Run(Ok(command.clone()))),
                 stale @ (Found::Missing | Found::Stale) => {
                     if matches!(stale, Found::Stale) && !began {
-                        recovered = Some(self.crash_log());
+                        recovered = Some(self.preserve_crash());
                     }
                     began = true;
-                    self.start(attempt).and_then(|(stream, log)| {
-                        started = Some(log);
-                        self.send_started(stream, Ask::Run(Ok(command.clone())))
-                    })
+                    self.start()
+                        .and_then(|stream| self.send_started(stream, Ask::Run(Ok(command.clone()))))
                 }
             };
             match answered {
@@ -594,32 +585,12 @@ impl Client {
                 answered => return self.with_crash(answered, recovered),
             }
         }
-        // Park this open's own output when that does not replace an earlier crash the note
-        // already names. That earlier file is not this open's output, so the hint leaves it out.
-        // The socket can close while the process still holds the log, and the next start
-        // replaces `<name>.log`, so wait for that lock and name the crash log.
-        let parked = if matches!(recovered, Some(Some(_))) {
-            None
-        } else {
-            self.park_exited_log();
-            Some(self.place.crashed_log(&self.name))
-        };
-        let live = self.place.log(&self.name);
-        // A process that still holds `<name>.log` is the one writing it. Otherwise the
-        // crash log is the copy that stays: a new file at the live path is replaced by the
-        // next start.
-        let writing = place::holds_output(&live) && place::process_holds(&live);
-        let kept = parked.as_ref().is_some_and(|log| place::holds_output(log));
-        let hint = if kept && !writing {
-            parked
-        } else {
-            [Some(live), started, parked]
-                .into_iter()
-                .flatten()
-                .find(|log| place::holds_output(log))
-        }
-        .map(|log| format!("its last output is in {}", log.display()))
-        .unwrap_or_default();
+        // The last attempt's output, when it wrote any. An earlier crash stays the file the
+        // previous-session note names; this one is a different pid's.
+        let hint = self
+            .preserve_crash()
+            .map(|log| format!("its last output is in {}", log.display()))
+            .unwrap_or_default();
         self.with_crash(
             Err(self.refuse(
                 Code::SessionCrashed,
@@ -634,34 +605,26 @@ impl Client {
     }
 
     /// Ends the session: `close` to its process, or, for a socket a crashed process left, the
-    /// socket and the session's start logs no process holds removed. Output that process left
-    /// is kept as `<name>.log.crashed` until the next crash replaces it.
+    /// socket and the other runtime files removed. Output that process left stays as
+    /// `<pid>.crashed`.
     fn close(&self) -> Result<Done, Refusal> {
         match self.find()? {
-            Found::Listening(stream) => {
-                let done = self
-                    .send(stream, Ask::Run(Ok(Command::Close)))
-                    .map(Done::Reply);
-                remove_claim(&self.socket);
-                done
-            }
+            Found::Listening(stream) => self
+                .send(stream, Ask::Run(Ok(Command::Close)))
+                .map(Done::Reply),
             Found::Missing => Err(self.no_session()),
             Found::Stale => {
-                fs::remove_file(&self.socket).map_err(|error| {
-                    self.refuse(
-                        Code::IoError,
-                        format!("cannot remove {}: {error}", self.socket.display()),
-                        "",
-                    )
-                })?;
-                let kept = self.place.take_crash_log(&self.name);
-                let starts = self.place.remove_left_logs(|name| name == &self.name);
-                let _ = fs::remove_file(self.place.version(&self.name));
-                remove_claim(&self.socket);
+                if self
+                    .place
+                    .read_pid(&self.name)
+                    .is_some_and(place::pid_alive)
+                {
+                    return Err(self.crashed("ended without closing"));
+                }
+                let log = self.remove_dead()?;
                 Ok(Done::Stale(Stale {
                     session: self.name.clone(),
-                    log: kept,
-                    starts: starts.into_iter().map(|(_, start)| start).collect(),
+                    log,
                 }))
             }
         }
@@ -694,117 +657,85 @@ impl Client {
     }
 
     /// Starts the session's process, detached in its own process group so a terminal's Ctrl-C
-    /// reaches only the client, and waits for it to listen. It returns the connection and the
-    /// process's start log, which is the process's own until it holds the socket.
-    fn start(&self, attempt: u32) -> Result<(UnixStream, PathBuf), Refusal> {
-        let (id, log, stderr) = self.create_log(attempt)?;
+    /// reaches only the client, and waits for it to listen. Stderr is a pipe until the process
+    /// opens its own log, so a failure before that is still visible.
+    fn start(&self) -> Result<UnixStream, Refusal> {
+        self.refuse_bad_log()?;
         let spawned = std::env::current_exe().and_then(|exe| {
             std::process::Command::new(exe)
-                .args([
-                    "daemon",
-                    &format!("--session={}", self.name),
-                    &format!("--start-log={id}"),
-                ])
+                .args(["daemon", &format!("--session={}", self.name)])
                 .current_dir("/")
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(stderr)
+                .stderr(Stdio::piped())
                 .process_group(0)
                 .spawn()
         });
         let mut child = spawned.map_err(|error| {
-            let _ = fs::remove_file(&log);
             self.refuse(
                 Code::IoError,
                 format!("cannot start the session process: {error}"),
                 "",
             )
         })?;
+        let mut stderr = child.stderr.take();
+        let mut lost = false;
         for _ in 0..POLLS {
             if let Ok(Some(status)) = child.try_wait() {
-                // Exit `LOST` is the only one that means another start is the session. A
-                // failed log rename, a failed version write, or a signal still fails this open.
-                if status.code() == Some(i32::from(daemon::LOST))
-                    && let Ok(Found::Listening(stream)) = self.find()
-                {
-                    return Ok((stream, log));
-                }
-                if status.success() {
+                let err = read_stderr(&mut stderr);
+                if status.code() == Some(i32::from(orbe_session::EXIT_LOST)) {
+                    lost = true;
+                } else if status.success() {
                     return Err(self.no_session());
+                } else {
+                    return Err(self.failed_start(
+                        format!("the session process exited ({status}) before it listened"),
+                        &err,
+                    ));
                 }
-                return Err(self.failed_start(
-                    &log,
-                    format!("the session process exited ({status}) before it listened"),
-                ));
             }
             if let Ok(Found::Listening(stream)) = self.find() {
-                return Ok((stream, log));
+                return Ok(stream);
             }
             std::thread::sleep(POLL);
         }
         let _ = child.kill();
         let _ = child.wait();
-        Err(self.failed_start(&log, "the session process did not listen within 2 s"))
+        let err = read_stderr(&mut stderr);
+        let message = if lost {
+            "the session process lost the session and no listener appeared within 2 s"
+        } else {
+            "the session process did not listen within 2 s"
+        };
+        Err(self.failed_start(message.into(), &err))
     }
 
-    /// This start's log, its id, and the file, locked for as long as the process it is given
-    /// to runs. The id is this client's pid and attempt, and an id a start that ended left is
-    /// passed over. Anything but a file at the session's log is refused, since the process that
-    /// wins the socket renames its log over it.
-    fn create_log(&self, attempt: u32) -> Result<(u64, PathBuf, File), Refusal> {
-        use rustix::fs::{FlockOperation, Mode, OFlags};
+    /// Anything but a file where the session log goes is refused before a process starts.
+    fn refuse_bad_log(&self) -> Result<(), Refusal> {
         let log = self.place.log(&self.name);
-        if let Ok(meta) = fs::symlink_metadata(&log)
-            && !meta.is_file()
-        {
-            let shown = log.display();
-            let (what, remove) = what_is(&meta);
-            return Err(self.refuse(
-                Code::IoError,
-                format!("{shown} is {what}, not the log of session `{}`", self.name),
-                format!("remove it with `{remove} {shown}`"),
-            ));
+        let Ok(meta) = fs::symlink_metadata(&log) else {
+            return Ok(());
+        };
+        if meta.is_file() {
+            return Ok(());
         }
-        let flags =
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-        let mut id = u64::from(std::process::id()) * u64::from(TRIES) + u64::from(attempt);
-        loop {
-            let start = self.place.start_log(&self.name, id);
-            let cannot = |errno| {
-                self.refuse(
-                    Code::IoError,
-                    format!("cannot write the log {}: {errno}", start.display()),
-                    "",
-                )
-            };
-            let fd = match rustix::fs::open(&start, flags, Mode::RUSR | Mode::WUSR) {
-                Ok(fd) => fd,
-                Err(rustix::io::Errno::EXIST) => {
-                    id += 1 << 40;
-                    continue;
-                }
-                Err(errno) => return Err(cannot(errno)),
-            };
-            match rustix::fs::flock(&fd, FlockOperation::NonBlockingLockExclusive) {
-                Ok(()) if rustix::fs::fstat(&fd).is_ok_and(|stat| stat.st_nlink > 0) => {
-                    return Ok((id, start, File::from(fd)));
-                }
-                Ok(()) | Err(rustix::io::Errno::WOULDBLOCK) => id += 1 << 40,
-                Err(errno) => {
-                    let _ = fs::remove_file(&start);
-                    return Err(cannot(errno));
-                }
-            }
-        }
+        let shown = log.display();
+        let (what, remove) = what_is(&meta);
+        Err(self.refuse(
+            Code::IoError,
+            format!("{shown} is {what}, not the log of session `{}`", self.name),
+            format!("remove it with `{remove} {shown}`"),
+        ))
     }
 
     /// A start that failed. Its log stays, named in the hint, only when it holds output.
-    fn failed_start(&self, log: &Path, message: impl Into<String>) -> Refusal {
-        let hint = if place::holds_output(log) {
+    /// Otherwise the process's own stderr, from before it opened the log, is the hint.
+    fn failed_start(&self, message: String, stderr: &str) -> Refusal {
+        let log = self.place.log(&self.name);
+        let hint = if place::holds_output(&log) {
             format!("its output is in {}", log.display())
         } else {
-            let _ = fs::remove_file(log);
-            String::new()
+            stderr.trim().to_string()
         };
         self.refuse(Code::IoError, message, hint)
     }
@@ -817,7 +748,7 @@ impl Client {
         match self.find()? {
             Found::Listening(stream) => self.send(stream, Ask::Show { page }),
             Found::Missing => Err(self.no_session()),
-            Found::Stale => Err(self.report_crash("ended without closing", true)),
+            Found::Stale => Err(self.crashed("ended without closing")),
         }
     }
 
@@ -856,15 +787,7 @@ impl Client {
     }
 
     fn dispatch(&self, stream: UnixStream, ask: Ask, park: bool) -> Result<Box<Reply>, Refusal> {
-        if let Ok(hangup) = stream.try_clone() {
-            let pressed = AtomicBool::new(false);
-            let _ = ctrlc::set_handler(move || {
-                if pressed.swap(true, Ordering::Relaxed) {
-                    std::process::exit(130);
-                }
-                let _ = hangup.shutdown(Shutdown::Write);
-            });
-        }
+        arm_ctrlc(&stream);
         #[cfg(debug_assertions)]
         let stop = matches!(ask, Ask::Run(Ok(Command::Open(_))))
             .then(|| std::env::var("ORBE_TEST_STOP").ok())
@@ -876,6 +799,7 @@ impl Client {
             ask,
             stop,
         };
+        let deadline = reply_deadline(&request.ask);
         let mut wire = serde_json::to_string(&request).map_err(|error| {
             self.refuse(
                 Code::IoError,
@@ -887,18 +811,17 @@ impl Client {
         (&stream)
             .write_all(wire.as_bytes())
             .map_err(|_| self.unanswered(park))?;
-        let mut line = String::new();
-        match BufReader::new(&stream).take(LINE).read_line(&mut line) {
-            Ok(_) if line.ends_with('\n') => {}
-            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+        let line = match read_reply(&stream, deadline, || self.process_dead()) {
+            Ok(line) => line,
+            Err(ReadEnd::TimedOut) => {
                 return Err(self.refuse(
                     Code::IoError,
                     format!("session `{}` did not answer in time", self.name),
                     "",
                 ));
             }
-            _ => return Err(self.unanswered(park)),
-        }
+            Err(ReadEnd::Closed) => return Err(self.unanswered(park)),
+        };
         let mut reply = serde_json::from_str::<Box<Reply>>(&line).map_err(|error| {
             self.refuse(
                 Code::IoError,
@@ -942,7 +865,7 @@ impl Client {
             match self.find() {
                 Ok(Found::Listening(_)) => std::thread::sleep(POLL),
                 Ok(Found::Missing | Found::Stale) => {
-                    return self.report_crash("ended before it answered", park);
+                    return self.crashed_parked("ended before it answered", park);
                 }
                 Err(refused) => return refused,
             }
@@ -957,19 +880,96 @@ impl Client {
         )
     }
 
-    /// `park` moves `<name>.log` onto the crash log. A retry of `open` passes false so it does
-    /// not replace output an earlier session left.
-    fn report_crash(&self, how: &str, park: bool) -> Refusal {
-        let log = if park { self.crash_log() } else { None };
+    /// The session's process is gone. `park` keeps a nonempty log as `<pid>.crashed` and names
+    /// it. A retry of `open` passes false so this attempt's log stays for the attempt that
+    /// follows to keep, and an earlier crash file is left where it is.
+    fn crashed_parked(&self, how: &str, park: bool) -> Refusal {
+        let log = if park { self.preserve_crash() } else { None };
+        self.crash_refusal(how, log)
+    }
+
+    fn crashed(&self, how: &str) -> Refusal {
+        self.crashed_parked(how, true)
+    }
+
+    fn crash_refusal(&self, how: &str, log: Option<PathBuf>) -> Refusal {
         let mut hint = self.open_hint("to start it again");
         if let Some(log) = log {
-            hint.push_str(&format!("; its last output is in {log}"));
+            hint.push_str(&format!("; its last output is in {}", log.display()));
         }
         self.refuse(
             Code::SessionCrashed,
             format!("the process of session `{}` {how}", self.name),
             hint,
         )
+    }
+
+    /// The pid in the pid file is not a live process. No pid file is a process that has gone.
+    fn process_dead(&self) -> bool {
+        match self.place.read_pid(&self.name) {
+            Some(pid) => !place::pid_alive(pid),
+            None => true,
+        }
+    }
+
+    /// Renames a dead session's nonempty log to `<pid>.crashed` before a new process truncates
+    /// it. An empty log names nothing, and neither does an older pid's crash file. A live
+    /// process keeps its log. The socket closes before `/proc` shows the process as a zombie,
+    /// so a pid that still looks alive is given a moment to exit.
+    fn preserve_crash(&self) -> Option<PathBuf> {
+        let pid = self.place.read_pid(&self.name)?;
+        if !Self::exited(pid) {
+            return None;
+        }
+        let crash = self.place.crashed(&self.name, pid);
+        if crash.exists() {
+            return place::holds_output(&crash).then_some(crash);
+        }
+        let log = self.place.log(&self.name);
+        if !place::holds_output(&log) {
+            return None;
+        }
+        fs::rename(&log, &crash).ok()?;
+        place::holds_output(&crash).then_some(crash)
+    }
+
+    /// `pid` has exited. A process that is still alive after the wait is running.
+    fn exited(pid: u32) -> bool {
+        for _ in 0..100 {
+            if !place::pid_alive(pid) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        !place::pid_alive(pid)
+    }
+
+    /// Removes the runtime files of a session whose process has ended. `<pid>.crashed` stays.
+    /// The directory goes when nothing remains in it.
+    fn remove_dead(&self) -> Result<Option<PathBuf>, Refusal> {
+        let crash = self.preserve_crash();
+        for path in [
+            self.socket.clone(),
+            self.place.pid(&self.name),
+            self.place.log(&self.name),
+            self.place.version(&self.name),
+            self.place.lock(&self.name),
+        ] {
+            if let Err(error) = fs::remove_file(&path)
+                && error.kind() != ErrorKind::NotFound
+            {
+                return Err(self.refuse(
+                    Code::IoError,
+                    format!("cannot remove {}: {error}", path.display()),
+                    "",
+                ));
+            }
+        }
+        let state = self.place.state(&self.name);
+        if fs::read_dir(&state).is_ok_and(|mut entries| entries.next().is_none()) {
+            let _ = fs::remove_dir(&state);
+        }
+        Ok(crash)
     }
 
     /// A live session another version started. `close` is the way off it, so `close` does
@@ -998,39 +998,22 @@ impl Client {
         ))
     }
 
-    /// Moves `<name>.log` onto the crash log once a process that has ended releases it. The
-    /// socket closes first. The threads can still hold the log, and the next start replaces
-    /// `<name>.log`, so a hint that did not wait would name a file that then disappears.
-    fn park_exited_log(&self) {
-        let log = self.place.log(&self.name);
-        for _ in 0..POLLS {
-            if !place::process_holds(&log) {
-                break;
-            }
-            std::thread::sleep(POLL);
-        }
-        let _ = self.place.take_crash_log(&self.name);
-    }
-
-    /// Moves `<name>.log` to `<name>.log.crashed`. The path named in the crash message, when
-    /// that file holds output.
-    fn crash_log(&self) -> Option<String> {
-        self.place
-            .take_crash_log(&self.name)
-            .map(|log| log.display().to_string())
-    }
-
     /// The open that found a stale session says so, whether the open then succeeds or is refused.
     fn with_crash(
         &self,
         answered: Result<Box<Reply>, Refusal>,
-        recovered: Option<Option<String>>,
+        recovered: Option<Option<PathBuf>>,
     ) -> Result<Box<Reply>, Refusal> {
         let Some(path) = recovered else {
             return answered;
         };
         let note = match path {
-            Some(path) => format!("the previous session crashed; its last output is in {path}"),
+            Some(path) => {
+                format!(
+                    "the previous session crashed; its last output is in {}",
+                    path.display()
+                )
+            }
             None => "the previous session crashed".into(),
         };
         match answered {
@@ -1072,9 +1055,8 @@ impl Client {
         }
     }
 
-    /// Closes every session for this user, whichever version started it, and removes the
-    /// sockets and start logs that ended processes left. A process with no scene is left to
-    /// end on its own.
+    /// Closes every session for this user, whichever version started it, and removes what a
+    /// process that ended left. A process with no scene is left to end on its own.
     fn close_all(&self) -> Result<Vec<Result<Done, Refusal>>, Refusal> {
         let names = self.place.names().map_err(|error| {
             self.refuse(
@@ -1083,7 +1065,7 @@ impl Client {
                 "",
             )
         })?;
-        let mut closed: Vec<Result<Done, Refusal>> = names
+        let closed = names
             .into_iter()
             .map(|name| {
                 let client = Client::named(name, true, self.place.clone(), self.cwd.clone())?;
@@ -1095,28 +1077,107 @@ impl Client {
                 }
             })
             .collect();
-        let left = self.place.remove_left_logs(|_| true);
-        closed.extend(
-            left.into_iter()
-                .map(|(name, start)| Ok(Done::Left(name, start))),
-        );
         Ok(closed)
     }
 }
 
-/// Removes `<name>.claim` when no start holds it. A start keeps that file for the bind and
-/// never unlinks it, so two starts wait on one lock. `close` is what removes it.
-fn remove_claim(socket: &Path) {
-    use rustix::fs::{FlockOperation, Mode, OFlags};
-    let path = socket.with_extension("claim");
-    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-    let Ok(fd) = rustix::fs::open(&path, flags, Mode::empty()) else {
-        return;
-    };
-    if rustix::fs::flock(&fd, FlockOperation::NonBlockingLockExclusive).is_err() {
-        return;
+/// One Ctrl-C handler for the process. The first press stops the command in flight. The
+/// second exits 130.
+fn arm_ctrlc(stream: &UnixStream) {
+    if let Ok(cloned) = stream.try_clone()
+        && let Ok(mut slot) = HANGUP.lock()
+    {
+        *slot = Some(cloned);
     }
-    let _ = fs::remove_file(path);
+    CTRLC.call_once(|| {
+        let _ = ctrlc::set_handler(|| {
+            static PRESSED: AtomicBool = AtomicBool::new(false);
+            if PRESSED.swap(true, Ordering::Relaxed) {
+                std::process::exit(130);
+            }
+            if let Ok(slot) = HANGUP.lock()
+                && let Some(stream) = slot.as_ref()
+            {
+                let _ = stream.shutdown(Shutdown::Write);
+            }
+        });
+    });
+}
+
+static CTRLC: Once = Once::new();
+static HANGUP: Mutex<Option<UnixStream>> = Mutex::new(None);
+
+enum ReadEnd {
+    TimedOut,
+    Closed,
+}
+
+/// Reads one reply line. Each wait is a second. A dead session process ends the wait. `step`
+/// may run for its duration plus slack; `play` has no such bound, and a dead process still ends it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a read ends when its deadline passes"
+)]
+fn read_reply(
+    stream: &UnixStream,
+    deadline: Duration,
+    dead: impl Fn() -> bool,
+) -> Result<String, ReadEnd> {
+    let until = Instant::now() + deadline;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    loop {
+        if line.len() as u64 >= LINE {
+            return Err(ReadEnd::Closed);
+        }
+        let now = Instant::now();
+        if now >= until {
+            return Err(ReadEnd::TimedOut);
+        }
+        let _ = stream.set_read_timeout(Some((until - now).min(Duration::from_secs(1))));
+        match reader.read_line(&mut line) {
+            Ok(0) => return Err(ReadEnd::Closed),
+            Ok(_) if line.ends_with('\n') => return Ok(line),
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                if dead() {
+                    return Err(ReadEnd::Closed);
+                }
+            }
+            Err(_) => return Err(ReadEnd::Closed),
+        }
+    }
+}
+
+fn reply_deadline(ask: &Ask) -> Duration {
+    let slack = Duration::from_secs(30);
+    match ask {
+        Ask::Run(Ok(Command::Step(step))) => wall_of(step_bound(step)) + slack,
+        Ask::Run(Ok(Command::Play)) => Duration::from_secs(24 * 60 * 60),
+        Ask::Run(Err(_)) => Duration::from_secs(1),
+        _ => Duration::from_secs(30),
+    }
+}
+
+fn step_bound(step: &orbe_session::Step) -> orbe_session::Duration {
+    match step {
+        orbe_session::Step::For(duration) => *duration,
+        orbe_session::Step::Until { timeout, .. } => *timeout,
+    }
+}
+
+fn wall_of(duration: orbe_session::Duration) -> Duration {
+    Duration::from_nanos(duration.as_ps() / 1000)
+}
+
+fn read_stderr(stderr: &mut Option<ChildStderr>) -> String {
+    let Some(mut stderr) = stderr.take() else {
+        return String::new();
+    };
+    let mut buf = String::new();
+    let _ = stderr.read_to_string(&mut buf);
+    buf
 }
 
 /// What is at a path that should be a socket or a log, and the `rm` that removes it.

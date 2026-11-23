@@ -13,11 +13,11 @@ Load this when a step or a set lands at the wrong time, a session's name or stop
 
 ## Sessions
 
-`orbe open` starts a background process. Later commands talk to it. It ends on `orbe close`, or after 1 hour with no command while it is not playing and no page watches it.
+`orbe open` starts a background process. Later commands talk to it. It ends on `orbe close`, or after 1 hour with no command while it is not playing. A viewer tab does not keep it alive. `orbe close` during a `step` stops the step and ends the session.
 
 The session name comes from the project folder, the nearest one up with `scene.jsonc` or `parts/`. Each project gets its own, and its `tests/` shares it. Outside a project it comes from the git repository's root, else the current folder. `--session <name>`, or `ORBE_SESSION=<name>`, picks another.
 
-`orbe close --all` closes every session and cleans up after crashed ones. `session_crashed` names `<name>.log.crashed` when the process left output. A failed `open` after an earlier crash names `<name>.log`, the retry's output. A crash that wrote nothing removes it.
+`orbe close --all` closes every session and removes the socket a crashed process left. `session_crashed` names `<runtime>/orbe/<name>/<pid>.crashed` when that process left output. A crash that wrote nothing does not name an older crash file, and that file stays. The runtime is `$XDG_RUNTIME_DIR/orbe`, or `/tmp/orbe-<uid>` when that is unset.
 
 A command other than `close` refuses a session another orbe version started, as `version_mismatch`. Run `orbe close`.
 

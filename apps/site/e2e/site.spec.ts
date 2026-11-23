@@ -519,7 +519,9 @@ test.describe("led-5mm", () => {
   test("a download serves the file's bytes, by the record's SHA-256", async () => {
     const href = await page.locator('[data-testid="license-files"] a[download]', { hasText: /^part\.jsonc$/ }).getAttribute("href");
     const download = await page.evaluate(async (href) => {
-      const record = await (await fetch("/orbe/r/led-5mm@0.3.0.json")).json();
+      const index = await (await fetch("/orbe/r/index.json")).json();
+      const row = index.items.find((item: { name: string }) => item.name === "led-5mm");
+      const record = await (await fetch(new URL(row.url, `${location.origin}/orbe/r/index.json`))).json();
       const bytes = new Uint8Array(await (await fetch(href)).arrayBuffer());
       const hex = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
       return { hex, want: record.files.find((file: { path: string; sha256: string }) => file.path === "part.jsonc").sha256 };
@@ -1456,7 +1458,10 @@ test.describe("cache", () => {
     const file = `/orbe/r/files/${record.files[0].sha256}`;
     const hit = await head(host.base, file);
     const again = await head(host.base, file, { "If-None-Match": hit.etag ?? "" });
-    expect(hit.status === 200 && hit.etag !== null && again.status === 304, JSON.stringify({ hit, again })).toBe(true);
+    expect(
+      hit.status === 200 && hit.etag !== null && /max-age=31536000, immutable/.test(hit.cache) && again.status === 304,
+      JSON.stringify({ hit, again }),
+    ).toBe(true);
   });
 
   test("a missing registry file answers 404 with no immutable cache", async ({ host }) => {
@@ -1471,9 +1476,11 @@ test.describe("cache", () => {
     expect(built.status === 200 && /max-age=31536000, immutable/.test(built.cache), JSON.stringify({ asset, built })).toBe(true);
   });
 
-  test("a path with @ answers 307 to the same path with %40", async ({ host }) => {
-    const at = await head(host.base, "/orbe/r/led-5mm@0.2.0.json");
-    expect(at.status, JSON.stringify(at)).toBe(307);
+  test("a path with @ answers the record", async ({ host }) => {
+    const index = await (await fetch(`${host.base}/orbe/r/index.json`)).json();
+    const row = index.items.find((item: { url: string }) => item.url.includes("@"));
+    const at = await head(host.base, `/orbe/r/${row.url}`);
+    expect(at.status === 200 && /max-age=31536000, immutable/.test(at.cache), JSON.stringify(at)).toBe(true);
   });
 
   test("a path that only starts with /orbe is not this site's", async ({ host }) => {

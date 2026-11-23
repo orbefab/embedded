@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Builds the site into apps/site/dist from this commit. `orbe registry build` writes the registry
-# of parts/ and blocks/, scripts/wasm.sh builds orbe-wasm, and the AVR runtime's source archive
-# comes from the blob cache. All three go to .scratch/site, and `vite build` in apps/site renders
-# every page from them. Needs what scripts/wasm.sh needs, Node 24, pnpm and cargo. It installs
-# nothing. ORBE_SITE_INSTALL=1 shows install lines, once the repo and the binaries are public,
-# and copies scripts/install.sh to /orbe/install.sh. The footer links the repo either way.
+# Builds the site into apps/site/dist from this commit. scripts/registry.sh writes the registry
+# from release tags v0.2.0 and later, scripts/wasm.sh builds orbe-wasm, and the AVR runtime's
+# source archive comes from the blob cache. All three go to .scratch/site, and `vite build` in
+# apps/site renders every page from them. Needs what scripts/wasm.sh needs, Node 24, pnpm and
+# cargo. It installs nothing. ORBE_SITE_INSTALL=1 shows install lines, once the repo and the
+# binaries are public, and copies scripts/install.sh to /orbe/install.sh. The footer links the
+# repo either way.
 #
 # The Block firmware links the AVR runtime under the LGPL, so the site serves the runtime's source
 # beside it, at /orbe/sources/. The archive is the one packages/engine/scripts/sketches.sh
@@ -51,6 +52,6 @@ target=$(cargo metadata --format-version 1 --no-deps |
 rm -rf "$scratch/registry" "$scratch/sources"
 mkdir -p "$scratch/sources"
 cp "$blob" "$scratch/sources/${runtime_url##*/}"
-"$target/debug/orbe" registry build . "$scratch/registry"
+scripts/registry.sh "$target/debug/orbe" "$scratch/registry"
 scripts/wasm.sh "$scratch/wasm"
 pnpm --filter @orbe/site build

@@ -13,6 +13,15 @@ pub mod test;
 mod typescript;
 pub mod viewer;
 
+/// A command failed.
+pub const EXIT_FAILED: u8 = 1;
+/// The command line is not one this orbe runs.
+pub const EXIT_USAGE: u8 = 2;
+/// A file or a socket could not be read or written.
+pub const EXIT_IO: u8 = 3;
+/// The session's process is gone.
+pub const EXIT_LOST: u8 = 4;
+
 pub use command::{COMMANDS, Command, ParamSet, Spec, Step, UNTIL_TIMEOUT, WorldSet, spec};
 pub use condition::{Amount, Condition, Needle, Op, Rgb, State as Want, Unit};
 pub use duration::Duration;
