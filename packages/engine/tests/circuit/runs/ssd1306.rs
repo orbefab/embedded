@@ -1,7 +1,8 @@
 //! An SSD1306 behind the module's regulator. The module's VCC source is 0 V until 40 ms, so
-//! the regulator output is below the controller's supply window. The bus is pulled up to the
-//! MCU's 5 V, so a transmission can finish and be refused. After VCC steps to 5 V the
-//! regulator is inside the window and Adafruit SSD1306's `begin` is acknowledged.
+//! the regulator output is below the controller's 1.65 V logic minimum. The bus is pulled up to
+//! the MCU's 5 V, so a transmission can finish and be refused. After VCC steps to 5 V the
+//! regulator is over the minimum and Adafruit SSD1306's `begin` is acknowledged. The same
+//! controller on 5 V, over its 4.0 V absolute maximum, still answers and draws.
 
 use std::collections::BTreeMap;
 
@@ -10,14 +11,14 @@ use crate::runs::common::repo;
 /// After the sketch's first `begin`, which talks at about 22 ms, and before its `delay(40)` ends.
 const POWER_AT_PS: u64 = 40_000_000_000;
 const STOP_PS: u64 = 160_000_000_000;
+/// The Block's sketch has its frame whole by about 170 ms.
+const HELLO_STOP_PS: u64 = 250_000_000_000;
 
-#[test]
-fn an_open_vcc_fails_begin_and_power_later_lets_it_succeed() {
-    let hex = std::fs::read_to_string(repo(
-        "packages/engine/tests/firmware/sketch/ssd1306_power.hex",
-    ))
-    .unwrap();
-    let mut netlist: serde_json::Value = serde_json::from_str(&circuit()).unwrap();
+/// Runs `circuit(vdd, stop_ps)` with the image at `hex`, a path from the repo, and returns its
+/// run folder. The run has no diagnostics.
+fn run(hex: &str, vdd: &str, stop_ps: u64) -> orbe_engine::run_folder::RunFolder {
+    let hex = std::fs::read_to_string(repo(hex)).unwrap();
+    let mut netlist: serde_json::Value = serde_json::from_str(&circuit(vdd, stop_ps)).unwrap();
     netlist["parts"]
         .as_array_mut()
         .unwrap()
@@ -31,11 +32,20 @@ fn an_open_vcc_fails_begin_and_power_later_lets_it_succeed() {
         serde_json::to_value(results.diagnostics()).unwrap(),
         serde_json::json!([]),
     );
-    let folder = orbe_engine::run_folder::render(
+    orbe_engine::run_folder::render(
         &bytes,
         Some(&parsed),
         &results,
         orbe_engine::timestamp::Timestamp::from_unix_seconds(0),
+    )
+}
+
+#[test]
+fn an_open_vcc_fails_begin_and_power_later_lets_it_succeed() {
+    let folder = run(
+        "packages/engine/tests/firmware/sketch/ssd1306_power.hex",
+        "vdd",
+        STOP_PS,
     );
     let serial = serial_text(folder.file("traces/serial.csv").unwrap());
     let text = serial.values().next().unwrap();
@@ -56,6 +66,23 @@ fn an_open_vcc_fails_begin_and_power_later_lets_it_succeed() {
         acks.contains(&1),
         "a later address to 0x3C is acknowledged, {acks:?}"
     );
+}
+
+/// `VDD` on the 5 V rail, over Table 11-1's 4.0 V absolute maximum. The controller keeps
+/// running: every address is acknowledged and the Block's sketch draws its frame.
+#[test]
+fn a_vdd_over_four_volts_still_answers_and_draws() {
+    let folder = run("blocks/nano-oled/build/hello.ino.hex", "vcc", HELLO_STOP_PS);
+    let acks = address_acks(folder.file("traces/i2c.csv").unwrap());
+    assert!(!acks.is_empty(), "the sketch addresses 0x3C");
+    assert!(acks.iter().all(|ack| *ack == 1), "{acks:?}");
+    let observations: serde_json::Value =
+        serde_json::from_slice(folder.file("observations.json").unwrap()).unwrap();
+    let display = &observations["displays"]["oled"];
+    assert_eq!(display["flags"]["display_on"], true);
+    assert_eq!(display["charge_pump"], 0x14);
+    let frame = folder.file("traces/display-oled.mono-pages").unwrap();
+    assert!(frame.iter().any(|byte| *byte != 0), "the frame is drawn");
 }
 
 fn serial_text(csv: &[u8]) -> BTreeMap<String, String> {
@@ -82,15 +109,16 @@ fn address_acks(csv: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// The module's VCC, its regulator and the panel, on a 5 V ATmega328P. 4.7 kohm to 5 V hold
+/// The module's VCC, its regulator and the panel, on a 5 V ATmega328P, with the panel's `VDD`
+/// on `vdd`: `"vdd"` is the regulator output and `"vcc"` the 5 V rail. 4.7 kohm to 5 V hold
 /// the bus and `RES` while the regulator output is down, so a transmission finishes with
 /// reset released and the controller can refuse it.
-fn circuit() -> String {
+fn circuit(vdd: &str, stop_ps: u64) -> String {
     format!(
         r#"{{
       "version": 1,
       "seed": 1,
-      "analysis": {{ "transient": {{ "stop_ps": {STOP_PS}, "max_step_ps": 1000000000, "grid_ps": 1000000000 }} }},
+      "analysis": {{ "transient": {{ "stop_ps": {stop_ps}, "max_step_ps": 1000000000, "grid_ps": 1000000000 }} }},
       "ground": "gnd",
       "nets": ["gnd", "vcc", "vmod", "vdd", "res", "aref", "xtal1", "xtal2",
         "pb0", "pb1", "pb2", "pb3", "pb4", "pb5",
@@ -132,7 +160,7 @@ fn circuit() -> String {
           "capacitance": {{ "value": 1e-7, "unit": "F" }},
           "initial": {{ "value": 0.0, "unit": "V" }} }},
         {{ "name": "oled", "kind": "ssd1306",
-          "pins": {{ "VDD": "vdd", "VSS": "gnd", "SCL": "pc5", "SDA": "pc4", "RES": "res" }},
+          "pins": {{ "VDD": "{vdd}", "VSS": "gnd", "SCL": "pc5", "SDA": "pc4", "RES": "res" }},
           "address": 60,
           "low_drop": {{ "value": 0.0, "unit": "V" }},
           "low_resistance": {{ "value": 133.33333333333334, "unit": "ohm" }},

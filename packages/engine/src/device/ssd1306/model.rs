@@ -28,13 +28,12 @@ const PAGES: usize = HEIGHT as usize / 8;
 /// The GDDRAM, one bit a pixel.
 pub const FRAME_BYTES: usize = COLUMNS * PAGES;
 
-/// Watch order: SCL, SDA, RES#, then the supply window. `WATCH_VDD` is high at or above the
-/// logic minimum, and `WATCH_VDD_MAX` is high at or below the absolute maximum.
+/// Watch order: SCL, SDA, RES#, then the supply. `WATCH_VDD` is high at or above the logic
+/// minimum.
 pub const WATCH_SCL: usize = 0;
 pub const WATCH_SDA: usize = 1;
 pub const WATCH_RES: usize = 2;
 pub const WATCH_VDD: usize = 3;
-pub const WATCH_VDD_MAX: usize = 4;
 
 /// It drives no output of its own. The I2C engine drives `SDA`.
 pub const OUTPUTS: usize = 0;
@@ -184,7 +183,7 @@ struct Run {
 pub struct Ssd1306 {
     ram: [u8; FRAME_BYTES],
     registers: Registers,
-    /// `VDD` is inside the supply window. Outside it the controller is off: the bus gets no
+    /// `VDD` is at or above the logic minimum. Below it the controller is off: the bus gets no
     /// ACK, the GDDRAM is lost, and the registers sit at their reset values until power returns.
     powered: bool,
     /// RES# reads low.
@@ -224,14 +223,14 @@ impl Device for Ssd1306 {
         Drives::OFF
     }
 
-    /// `VDD` leaving the supply window loses the GDDRAM and holds the controller reset. Entering
-    /// the window is the power-on reset: the registers take their reset values and the GDDRAM
-    /// stays empty, which is what a static RAM holds with its supply gone. `RES#` going low,
-    /// while the supply is inside the window, resets every register and drops a command short
+    /// `VDD` falling below the logic minimum loses the GDDRAM and holds the controller reset.
+    /// Rising back to it is the power-on reset: the registers take their reset values and the
+    /// GDDRAM stays empty, which is what a static RAM holds with its supply gone. `RES#` going
+    /// low, while the controller is powered, resets every register and drops a command short
     /// of its parameters and an open run of data, with no row. The GDDRAM keeps what it holds
     /// (datasheet 8.9).
     fn input(&mut self, _cx: &mut Cx, _at: Time, levels: Levels) {
-        let powered = levels.high(WATCH_VDD) && levels.high(WATCH_VDD_MAX);
+        let powered = levels.high(WATCH_VDD);
         if powered != self.powered {
             self.ram = [0; FRAME_BYTES];
             self.registers = Registers::RESET;

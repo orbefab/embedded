@@ -4,7 +4,7 @@
 
 // 128 x 64 on Wire, with no reset pin. The module's VCC source is 0 V at the start and steps
 // to 5 V during the delay. The first transmission is refused. begin works once the regulator
-// is inside the controller's supply window.
+// is over the controller's logic minimum.
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
 
 void probe() {

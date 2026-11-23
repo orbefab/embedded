@@ -247,7 +247,7 @@ fn res_low_resets_the_registers_and_keeps_the_ram() {
 }
 
 #[test]
-fn a_supply_outside_the_window_nacks_and_the_glass_stays_dark_until_power_returns() {
+fn a_supply_below_the_minimum_nacks_and_the_glass_stays_dark_until_power_returns() {
     let mut bus = Bus::new();
     bus.init();
     bus.send(&[0x40, 0xff]);
@@ -273,16 +273,16 @@ fn a_supply_outside_the_window_nacks_and_the_glass_stays_dark_until_power_return
     assert!(bus.lit().is_empty(), "power-on RAM is empty");
 }
 
-/// SCL and SDA high, RES# high, and both supply watches high.
+/// SCL and SDA high, RES# high, and the supply watch at `on`.
 fn powered(on: bool) -> Levels {
     powered_res_supply(true, on)
 }
 
-/// SCL and SDA high, RES# at `res_high`, supply inside the window.
+/// SCL and SDA high, RES# at `res_high`, supply at or above the minimum.
 fn powered_res(res_high: bool) -> Levels {
     powered_res_supply(res_high, true)
 }
 
 fn powered_res_supply(res_high: bool, on: bool) -> Levels {
-    Levels::from_slice(&[true, true, res_high, on, on])
+    Levels::from_slice(&[true, true, res_high, on])
 }

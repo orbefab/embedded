@@ -22,7 +22,7 @@ const DARK: [u8; RGBA] = [0, 0, 0, 255];
 ///
 /// - With the display off, `RES#` low, or the charge pump off, every pixel is dark. The module
 ///   has no supply for the panel's high voltage besides the charge pump, and the pump is off
-///   while the controller's `VDD` is outside its supply window, so the glass is dark then too.
+///   while the controller's `VDD` is below its logic minimum, so the glass is dark then too.
 /// - A row the scan does not reach, past the multiplex ratio, is dark.
 /// - Otherwise a pixel is lit when its GDDRAM bit is set, or for every pixel with entire display
 ///   on, `A5h`, and inverse display, `A7h`, flips it.
