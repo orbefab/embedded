@@ -2,6 +2,9 @@ The console sketch in this directory is built by packages/engine/scripts/esp32s3
 its partition table are not kept in this repository. The script pins them by SHA-256 in
 checks/console/netlist.json and files those bytes in the blob cache.
 
+The sketches in stock/ are the exception. They are built with the plain fqbn esp32:esp32:esp32s3, and each
+app and partition table is kept in packages/scene/tests/fixtures/esp32s3-stock-*. stock/NOTICE names the hashes.
+
 The sketch compiles with Arduino CLI 1.5.1 and the esp32:esp32 core 3.3.12. That core is not
 kept here. Its package is LGPL-2.1-or-later. HWCDC and the HAL files it builds with are
 Apache-2.0. The prebuilt libraries under esp32s3-libs are ESP-IDF's, under the terms named in
