@@ -33,7 +33,7 @@ fn instances_carry_their_parsed_params_and_placements() {
         .collect();
     assert_eq!(
         names,
-        ["bb", "nano", "btn1", "r2", "r1", "led1"],
+        ["bb", "nano", "btn1", "r2", "r1", "led1", "header"],
         "the scene's order"
     );
     assert_eq!(
@@ -138,10 +138,16 @@ fn wires_hold_the_scene_s_and_each_part_s_with_prefixed_ends() {
 fn not_simulated_pins_take_the_ref_hover_shows() {
     let view = first_target();
     let idle = view["not_simulated"].as_array().unwrap();
-    let pin = idle.iter().find(|p| p["ref"] == "@nano.3V3").unwrap();
+    assert!(
+        idle.iter().all(|p| p["ref"] != "@nano.3V3"),
+        "3V3 is the CH340G's V3 output"
+    );
+    let pin = idle.iter().find(|p| p["ref"] == "@header.1").unwrap();
+    assert_eq!(pin["why"], "Nothing in the circuit is wired to it.");
+    let pin = idle.iter().find(|p| p["ref"] == "@nano.crystal.1").unwrap();
     assert_eq!(
         pin["why"],
-        "It is the CH340G's 3.3 V output. The engine has no USB-serial chip, so the pin supplies nothing."
+        "The engine's chips take their clock as a value."
     );
     assert!(
         idle.iter().all(|p| p["ref"] != "@nano.j2.2"),

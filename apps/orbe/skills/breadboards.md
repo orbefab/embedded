@@ -50,7 +50,7 @@ The core example on a breadboard. The Nano crosses the channel over columns 1 to
 $ orbe add breadboard-400
 ...
 $ orbe check breadboard.jsonc
-breadboard.jsonc: ok, 6 scene parts, expanding to 20 engine parts, 35 nets, ground GND
+breadboard.jsonc: ok, 6 scene parts, expanding to 21 engine parts, 36 nets, ground GND
 ```
 
 `orbe open breadboard.jsonc` opens it. A path is optional.

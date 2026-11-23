@@ -5,6 +5,9 @@ disabled, 4MB flash, the default partition table, QIO 80MHz, and the sketch on c
 is not kept here. Its package is LGPL-2.1-or-later. The HAL files it builds with are Apache-2.0.
 The prebuilt libraries under esp32s3-libs are ESP-IDF's, under the terms named in
 packages/engine/tests/firmware/esp32s3/idf/NOTICE.
+Every app also links Mbed TLS objects (sha.c, platform.c and platform_util.c from
+libmbedcrypto.a), Copyright The Mbed TLS Contributors, which ESP-IDF carries under Apache-2.0 OR
+GPL-2.0-or-later, used here under the Apache License 2.0.
 
 The compile rewrites source paths with -ffile-prefix-map, the same way
 packages/engine/scripts/esp32s3-arduino.sh does, so the committed app does not record the build

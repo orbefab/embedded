@@ -29,7 +29,7 @@ fn a_step_that_fails_down_to_one_picosecond_ends_the_run_at_the_last_accepted_ti
     let text = serde_json::to_string(failed).unwrap();
     assert_eq!(
         text,
-        r##"{"code":"solver.convergence","severity":"error","refs":["#v1"],"t_ps":1000000,"message":"Newton did not converge at #v1 after 10 iterations; the time step halved to 1 ps","data":{"gmin":null,"iterations":10,"source_scale":1.0,"step_ps":1}}"##
+        r##"{"code":"solver.convergence","severity":"error","refs":["#v1"],"t_ps":1000000,"message":"Newton did not converge at #v1 after 11 iterations; the time step halved to 1 ps","data":{"gmin":null,"iterations":11,"source_scale":1.0,"step_ps":1}}"##
     );
 }
 
@@ -108,7 +108,7 @@ fn a_junction_step_that_fails_down_to_one_picosecond_names_the_junction() {
     let text = serde_json::to_string(failed).unwrap();
     assert_eq!(
         text,
-        r##"{"code":"solver.convergence","severity":"error","refs":["#led1"],"t_ps":1000000,"message":"Newton did not converge at #led1 after 20 iterations; the time step halved to 1 ps","data":{"gmin":null,"iterations":20,"source_scale":1.0,"step_ps":1}}"##
+        r##"{"code":"solver.convergence","severity":"error","refs":["#led1"],"t_ps":1000000,"message":"Newton did not converge at #led1 after 22 iterations; the time step halved to 1 ps","data":{"gmin":null,"iterations":22,"source_scale":1.0,"step_ps":1}}"##
     );
     let mut diagnostics = Vec::new();
     let outcome = run(&netlist, &transient(&netlist), Rows::Grid, &mut diagnostics);
