@@ -35,7 +35,7 @@ use crate::reply::{
     Snapshot, State, Stepped,
 };
 use crate::target::{
-    Ref, Target, live_params, names, one_engine, reports_hint, resolve, rgb_reading,
+    Ref, Target, hz_reading, live_params, names, one_engine, reports_hint, resolve, rgb_reading,
 };
 
 mod bound;
@@ -43,6 +43,7 @@ mod frame;
 mod light;
 mod serial;
 mod step;
+mod tone;
 
 pub use light::BRIGHTNESS_WINDOW;
 
@@ -104,6 +105,8 @@ struct Open {
     param_sets: BTreeMap<String, Time>,
     /// Each LED's forward-current integral, sampled as time advances, for its brightness.
     light: light::Log,
+    /// The drive frequency of each part whose reading is `"of": "hz"`.
+    tone: tone::Log,
 }
 
 /// A rating over now and the same rating's window warning are two keys, so a step lists the
@@ -516,6 +519,8 @@ impl Open {
         let contacts = frame::contacts(json);
         let mut light = light::Log::build(&refs, &reports);
         light.note(&engine.probe());
+        let mut tone = tone::Log::build(&refs, &reports, &signals);
+        tone.note(&engine.probe());
         let mut open = Open {
             engine,
             refs,
@@ -537,6 +542,7 @@ impl Open {
             world_sets: BTreeMap::new(),
             param_sets: BTreeMap::new(),
             light,
+            tone,
         };
         open.channels = open.bind_channels();
         Ok(open)
@@ -912,6 +918,25 @@ impl Open {
                 format!("{path}.{reading}"),
                 Reading::Color(self.colors(&engine)),
             ),
+            Target::Hertz { path } => {
+                let index = self.tone.position(&path).ok_or_else(|| {
+                    Error::new(
+                        Code::NoReading,
+                        format!("`{path}` has no frequency reading"),
+                        "the part file's reading `of` `hz` needs a voltage the engine reports",
+                    )
+                })?;
+                let hz = self
+                    .tone
+                    .hz(index, self.engine.now().as_ps(), &self.engine.probe());
+                (
+                    format!("{path}.{}", self.tone.reading(index)),
+                    Reading::Quantity {
+                        unit: Unit::Hertz,
+                        value: hz,
+                    },
+                )
+            }
             Target::Param { .. } => {
                 let (label, engine, spec) = self.live_param(r, Code::NoReading)?;
                 let level = self
@@ -1032,7 +1057,7 @@ impl Open {
         let engine = one_engine(path, part, Code::NoReading).ok()?;
         let color = rgb_reading(part).map(|_| self.colors(&engine));
         let probe = self.engine.probe();
-        let quantities: Vec<(String, Unit, f64)> = self
+        let mut quantities: Vec<(String, Unit, f64)> = self
             .reports
             .get(&engine)
             .map_or(&[][..], Vec::as_slice)
@@ -1042,6 +1067,12 @@ impl Open {
                 (q.as_str().to_string(), unit_of(q), value.get())
             })
             .collect();
+        if let Some(name) = hz_reading(part)
+            && let Some(index) = self.tone.position(path)
+        {
+            let hz = self.tone.hz(index, self.engine.now().as_ps(), &probe);
+            quantities.push((name.to_string(), Unit::Hertz, hz));
+        }
         let glow = self
             .light
             .position(path)

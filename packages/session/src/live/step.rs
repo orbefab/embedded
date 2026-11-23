@@ -195,6 +195,7 @@ impl Open {
         };
         self.playing = false;
         self.light.note(&self.engine.probe());
+        self.tone.note(&self.engine.probe());
         let probe = self.engine.probe();
         let mut held: Vec<Held> = self
             .light
@@ -241,6 +242,7 @@ impl Open {
             }
             let mut found = slice.changes;
             self.light.note(&self.engine.probe());
+            self.tone.note(&self.engine.probe());
             let probe = self.engine.probe();
             let glows = self.light.glows(&probe);
             let met_light = until.as_ref().and_then(|(_, _, bound)| match bound {
@@ -397,6 +399,7 @@ impl Open {
         let now = self.engine.now();
         let mut slice = Slice::default();
         if let Some((edges, _)) = self.engine.edges_since(self.edges) {
+            self.tone.note_edges(edges, now.as_ps());
             let base = u64::from(self.edges);
             let listed = (u64::from(self.listed) - base) as usize;
             for edge in &edges[listed..] {

@@ -1,0 +1,11 @@
+// A Block: a small circuit that works. `orbe add nano-buzzer` installs it into a project.
+{
+  "format": 1,
+  "block": "nano-buzzer",
+  "version": "0.1.0",
+  "title": "Buzzer on a Nano",
+  "summary": "A passive 12 mm buzzer on D8 of an Arduino Nano plays 440 Hz, rests, plays 880 Hz and rests. A 220 ohm resistor keeps the pin inside its rating.",
+  "board": "nano-board",
+  "tags": ["buzzer", "tone", "nano"],
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
+}

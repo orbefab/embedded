@@ -24,6 +24,7 @@ fn each_block_passes() {
         [
             "devkitc-button-led",
             "nano-button-led",
+            "nano-buzzer",
             "nano-led-fade",
             "nano-light-comparator",
             "nano-neopixel-stick",

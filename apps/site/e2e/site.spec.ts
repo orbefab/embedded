@@ -283,6 +283,7 @@ function testCount(id: string): number {
 const VALUES: Record<string, Record<string, readonly string[]>> = {
   "nano-button-led": { r1: ["220 Ω"], r2: ["10 kΩ"], led1: ["red"], nano: ["button.ino.hex"] },
   "nano-led-fade": { r1: ["220 Ω"], led1: ["red"], nano: ["fade.ino.hex"] },
+  "nano-buzzer": { r1: ["220 Ω"], nano: ["tune.ino.hex"] },
   "nano-light-comparator": {
     rbot: ["2.2 kΩ"],
     rset: ["4.7 kΩ"],
@@ -794,6 +795,7 @@ for (const block of releasedBlocks()) {
         (kind) => {
           const scene = window.orbeViewer?.get().scene;
           if (kind === "pixels") return scene?.getObjectByName("@stick.px1")?.getObjectByName("lens") !== undefined;
+          if (kind === "tone") return scene?.getObjectByName("@bz1") !== undefined;
           if (kind === "rgb") {
             return scene?.getObjectByName("@board.led")?.getObjectByName("lens") !== undefined
               && scene?.getObjectByName("@btn1")?.getObjectByName("stem") !== undefined;

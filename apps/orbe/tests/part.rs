@@ -315,6 +315,7 @@ fn search_finds_a_block_and_part_describes_it() {
     for id in [
         "devkitc-button-led",
         "nano-button-led",
+        "nano-buzzer",
         "nano-led-fade",
         "nano-light-comparator",
         "nano-neopixel-stick",

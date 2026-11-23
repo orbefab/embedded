@@ -98,6 +98,8 @@ pub enum Target {
         param: String,
         spec: MapParam,
     },
+    /// The frequency a part's `"of": "hz"` reading reports, in hertz.
+    Hertz { path: String },
 }
 
 /// The name of the part's reading `"of": "rgb"`, the colours its LED chain latched.
@@ -105,6 +107,14 @@ pub(crate) fn rgb_reading(part: &MapPart) -> Option<&str> {
     part.readings
         .iter()
         .find(|(_, reading)| reading.of == "rgb")
+        .map(|(name, _)| name.as_str())
+}
+
+/// The name of the part's reading `"of": "hz"`, the frequency across it.
+pub(crate) fn hz_reading(part: &MapPart) -> Option<&str> {
+    part.readings
+        .iter()
+        .find(|(_, reading)| reading.of == "hz")
         .map(|(name, _)| name.as_str())
 }
 
@@ -159,6 +169,9 @@ pub fn resolve(
                 reading: seg.clone(),
                 engine,
             });
+        }
+        if last && hz_reading(part) == Some(seg.as_str()) {
+            return Ok(Target::Hertz { path });
         }
         if last && let Some(&quantity) = QUANTITIES.iter().find(|q| q.as_str() == seg) {
             let engine = one_engine(&path, part, Code::NoReading)?;
@@ -253,6 +266,9 @@ pub(crate) fn names(part: &MapPart, reported: &[Quantity]) -> String {
         found.push("brightness".to_string());
     }
     if let Some(reading) = rgb_reading(part) {
+        found.push(reading.to_string());
+    }
+    if let Some(reading) = hz_reading(part) {
         found.push(reading.to_string());
     }
     let live = live_params(part);

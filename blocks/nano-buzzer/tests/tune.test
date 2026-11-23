@@ -1,0 +1,13 @@
+# 440 Hz, a rest, 880 Hz, a rest. The series resistor keeps the pin inside its rating.
+open
+step 100ms
+expect @bz1.hz > 420Hz
+expect @bz1.hz < 460Hz
+step 200ms
+expect @bz1.hz < 1Hz
+step 200ms
+expect @bz1.hz > 840Hz
+expect @bz1.hz < 920Hz
+step 200ms
+expect @bz1.hz < 1Hz
+expect no diagnostics

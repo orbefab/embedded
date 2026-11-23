@@ -1,0 +1,44 @@
+{
+  "part": "buzzer-12mm",
+  "source": {
+    "script": "model.py",
+    "sha256": "45296ef98bbe68fc89fb7c56aee82de71f203b639571e55bad15c2574c561cfa",
+    "bytes": 1621
+  },
+  "files": {
+    "buzzer-12mm.glb": {
+      "sha256": "aa88e7f1bb699784ad64a55c007956c0c6e4752088611039fe3bc3ef49984017",
+      "bytes": 17208
+    },
+    "buzzer-12mm.anchors.json": {
+      "sha256": "fb511f49e2794a94b0d7ca83d2a81ea1903dfbea6fc86c691cf9f933274cda12",
+      "bytes": 291
+    }
+  },
+  "box": {
+    "min": [-6, -5.983223, -8],
+    "max": [6, 5.983223, 8.5]
+  },
+  "kept_nodes": ["lead-1", "lead-2"],
+  "draw_calls": 3,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0.002941
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 3,
+      "primitives_out": 3
+    }
+  }
+}

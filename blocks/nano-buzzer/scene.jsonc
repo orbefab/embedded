@@ -1,0 +1,24 @@
+// A passive buzzer on D8 of a Nano plays two notes, built on a half-size breadboard.
+// The Nano straddles the center channel over columns 1 to 15. D8 is column 5 on the f to j side.
+// The coil is 42 ohm, so a 220 ohm resistor keeps D8 under its 40 mA rating.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "build/tune.ino.hex" },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+    "bz1": { "type": "buzzer-12mm" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "r1": { "on": { "a": "bb.f18" } }, // b in column 22
+    "bz1": { "on": { "1": "bb.h22" } }, // pin 2 about three columns along, in column 25
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["bb.j5", "bb.j18"], // D8 to r1.a
+    ["bb.j12", "bb.Z13", { "color": "#161616" }], // GND to the - rail
+    ["bb.j25", "bb.Z25", { "color": "#161616" }], // bz1.2 to GND
+  ],
+}

@@ -1,0 +1,40 @@
+// Same Sky CEM-1203(42), magnetic buzzer transducer, rev 1.05, 2025-01-29.
+// The coil is the engine's resistor. Sound pressure, inductance and the resonant current are not.
+{
+  "format": 1,
+  "part": "buzzer-12mm",
+  "version": "0.1.0",
+  "title": "12 mm magnetic buzzer",
+  "summary": "Externally driven 12 mm magnetic transducer, Same Sky CEM-1203(42). The coil is 42 ohm and the pins are 6.5 mm apart. `hz` is the frequency of the square wave driving it, and 0 while that wave is absent. A Nano pin wired straight across the coil draws more than the pin's 40 mA, so the run warns. Put a resistor in series.",
+  "tags": ["buzzer", "sound", "transducer", "passive", "through-hole", "tone"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Same Sky CEM-1203(42), rev 1.05, 2025-01-29": "https://www.sameskydevices.com/product/resource/cem-1203-42-.pdf",
+  },
+  "real": { "maker": "Same Sky", "number": "CEM-1203(42)", "datasheet": "Same Sky CEM-1203(42), rev 1.05, 2025-01-29" },
+  "pins": { "1": [1], "2": [2] },
+  "model": {
+    "kind": "resistor",
+    "resistance": {
+      "value": 42,
+      "unit": "ohm",
+      "source": {
+        "datasheet": {
+          "doc": "Same Sky CEM-1203(42), rev 1.05, 2025-01-29",
+          "at": "Specifications, coil resistance, typical 42 ohm (36 to 48)",
+          "basis": "typical",
+        },
+      },
+    },
+    "ratings": { "power": null },
+    "pins": { "a": "1", "b": "2" },
+  },
+  "readings": {
+    "hz": { "of": "hz" },
+  },
+  "not_simulated": [
+    { "what": "sound", "why": "The engine reports the frequency of the square wave across the coil, as `hz`, and 0 when that wave is absent. It does not report sound pressure. The sheet's 85 dBA minimum is at 3.5 V peak, 2048 Hz, half duty, at 10 cm." },
+    { "what": "inductance and resonance", "why": "The coil is its DC resistance, 42 ohm. At the 2048 Hz rated frequency the sheet's current is 35 mA maximum at 3.5 V peak, so the impedance there is higher than 42 ohm. A 5 V pin across 42 ohm draws more than that pin's 40 mA and the run warns. There is no inductance, so there is no flyback pulse and the sheet's diode is not required for this model." },
+    { "what": "self oscillation", "why": "This part is quiet on DC. A buzzer with its own oscillator sounds at its resonant frequency whenever DC is applied, and that part is not this one." },
+  ],
+}

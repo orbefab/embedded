@@ -243,7 +243,7 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "button" | "fade" | "light" | "pixels" | "rgb";
+export type BlockKind = "button" | "fade" | "light" | "pixels" | "rgb" | "tone";
 
 export interface RepoBlock {
   id: string;
@@ -269,8 +269,9 @@ export function blockKind(scene: string, id: string): BlockKind {
   if (/"type"\s*:\s*"esp32s3-devkitc-1"/.test(code)) return "rgb";
   if (/"world"\s*:\s*\{[^}]*"light"\s*:/.test(code)) return "light";
   if (/"btn1"\s*:/.test(code)) return "button";
+  if (/"type"\s*:\s*"buzzer-12mm"/.test(code)) return "tone";
   if (/"led1"\s*:/.test(code)) return "fade";
-  throw new Error(`${id} names no button, no fading LED, no light, no pixel stick and no DevKitC-1`);
+  throw new Error(`${id} names no button, no fading LED, no light, no pixel stick, no buzzer and no DevKitC-1`);
 }
 
 export async function simulatedSeconds(page: Page): Promise<number> {
@@ -388,6 +389,15 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
   }
   if (block.kind === "rgb") {
     await showRgb(page, block, canvas, shotName);
+    return;
+  }
+  if (block.kind === "tone") {
+    await waitSimulatedPast(page, Math.max(1, start));
+    expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(Math.max(1, start));
+    if (shotName !== null) {
+      await page.locator("canvas").scrollIntoViewIfNeeded();
+      await shot(page, shotName);
+    }
     return;
   }
   if (block.kind === "pixels") {
