@@ -9,7 +9,7 @@
   "part": "neopixel-stick-8",
   "version": "0.1.0",
   "title": "NeoPixel stick, 8 RGB LED",
-  "summary": "Eight addressable RGB LEDs on a 50.8 x 10.2 mm board, chained DOUT to DIN, with a 3-pin header (GND, 5V, DIN) on 2.54 mm that plugs into a breadboard. Each LED is a WS2812-style pixel and draws 1 mA idle plus 12 mA per channel at 255 from 5V, so eight at full white draw 296 mA. The last LED's DOUT stays on the board.",
+  "summary": "Eight addressable RGB LEDs on a 50.8 x 10.2 mm board, chained DOUT to DIN, with a 3-pin header (GND, 5V, DIN) on 2.54 mm that plugs into a breadboard. Each LED is modelled by the SK6812MINI-HS: 1 mA idle plus 12 mA per channel at 255 from 5V, so eight at full white draw 296 mA. The stick's current SKC6812 is also a 12 mA-per-channel part, while older WS2812B sticks can draw up to 60 mA per pixel at full white, about 480 mA for eight. The last LED's DOUT stays on the board.",
   "tags": ["led", "rgb", "neopixel", "ws2812", "strip", "addressable"],
   "license": "MIT OR Apache-2.0",
   "docs": {
