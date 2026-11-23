@@ -2,7 +2,6 @@
 
 pub mod bounce;
 pub mod elf;
-pub mod flash;
 pub(crate) mod json;
 pub(crate) mod waveform;
 

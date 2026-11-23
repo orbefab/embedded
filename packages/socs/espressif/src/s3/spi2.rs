@@ -1,7 +1,10 @@
-//! SPI2, the general-purpose SPI host IDF calls GPSPI2, as a master that sends: the firmware
-//! writes up to 64 bytes into `SPI_W0` to `SPI_W15`, or points a GDMA channel at them with
-//! `SPI_DMA_TX_ENA` set, and sets `SPI_USR`, and the host sends a command phase, an address
-//! phase and the data on one, two or four lanes.
+//! SPI2, the general-purpose SPI host IDF calls GPSPI2, as a master: the firmware writes up to
+//! 64 bytes into `SPI_W0` to `SPI_W15`, or points a GDMA channel at them with `SPI_DMA_TX_ENA`
+//! set, and sets `SPI_USR`, and the host sends a command phase, an address phase and the data
+//! on one, two or four lanes. With `SPI_USR_MISO` it reads up to 64 bytes on MISO into
+//! `SPI_W0` on: in a read phase after the data, or with `SPI_DOUTDIN` one byte beside each byte
+//! it sends, on one lane. The read is `SPI_MS_DATA_BITLEN` long, as the data is. The target's
+//! bytes come at the transfer's end, before the firmware can read `SPI_USR` as 0.
 //!
 //! Each transfer is one [`Transfer`], with the phases and the data as the registers set them when
 //! `SPI_USR` was written, and the pads the GPIO matrix routed its signals to then. It lasts its
@@ -12,11 +15,13 @@
 //!
 //! The pads carry the signals' idle levels for as long as they are routed, never the bits: CS
 //! deasserted, SCLK at `SPI_CK_IDLE_EDGE`, and each data line at its `SPI_*_POL` bit. A setting
-//! the model does not run, such as a read phase, or a register written since the last
+//! the model does not run, such as a dummy phase, or a register written since the last
 //! `SPI_UPDATE`, refuses the transfer with a [`Setting`]. The registers come from IDF's
 //! `soc/esp32s3/register/soc/spi_reg.h`.
 
 use std::collections::VecDeque;
+
+use orbe_model::Miso;
 
 use super::clock::{TICK_HZ, Tick, XTAL};
 use super::gpio::Gpio;
@@ -47,10 +52,14 @@ const USR: u32 = 1 << 24;
 const UPDATE: u32 = 1 << 23;
 
 const WR_BIT_ORDER: u32 = 0x3 << 25;
+const RD_BIT_ORDER: u32 = 0x3 << 23;
 const WP_POL: u32 = 1 << 21;
 const HOLD_POL: u32 = 1 << 20;
 const D_POL: u32 = 1 << 19;
 const Q_POL: u32 = 1 << 18;
+const FREAD_OCT: u32 = 1 << 16;
+const FREAD_QUAD: u32 = 1 << 15;
+const FREAD_DUAL: u32 = 1 << 14;
 const FCMD_OCT: u32 = 1 << 10;
 const FCMD_QUAD: u32 = 1 << 9;
 const FCMD_DUAL: u32 = 1 << 8;
@@ -66,6 +75,7 @@ const USR_DUMMY: u32 = 1 << 29;
 const USR_MISO: u32 = 1 << 28;
 const USR_MOSI: u32 = 1 << 27;
 const USR_MOSI_HIGHPART: u32 = 1 << 25;
+const USR_MISO_HIGHPART: u32 = 1 << 24;
 const SIO: u32 = 1 << 17;
 const FWRITE_OCT: u32 = 1 << 14;
 const FWRITE_QUAD: u32 = 1 << 13;
@@ -99,7 +109,7 @@ const CLK_EN: u32 = 1 << 0;
 /// `SPI_TRANS_DONE_INT_*`, the one interrupt SPI2 raises here.
 pub(crate) const TRANS_DONE: u32 = 1 << 12;
 
-/// The GPIO matrix's output signals of SPI2, from IDF's `soc/esp32s3/include/soc/gpio_sig_map.h`.
+/// The GPIO matrix's signals of SPI2, from IDF's `soc/esp32s3/include/soc/gpio_sig_map.h`.
 pub(crate) const FSPICLK: u16 = 101;
 pub(crate) const FSPIQ: u16 = 102;
 pub(crate) const FSPID: u16 = 103;
@@ -137,7 +147,7 @@ pub enum Setting {
     DmaDescriptor,
     /// A GDMA descriptor list that holds more or fewer bytes than the data phase sends.
     DmaLength,
-    /// A nonzero `SPI_WR_BIT_ORDER`.
+    /// A nonzero `SPI_WR_BIT_ORDER`, or `SPI_RD_BIT_ORDER` on a read.
     LsbFirst,
     /// `SPI_QPI_MODE`.
     Qpi,
@@ -147,19 +157,20 @@ pub enum Setting {
     Dtr,
     /// `SPI_USR_DUMMY`.
     Dummy,
-    /// `SPI_USR_MISO`.
+    /// `SPI_USR_MISO` with `SPI_FREAD_DUAL` or `SPI_FREAD_QUAD`, a read on more than one lane.
     Read,
-    /// `SPI_USR_MOSI_HIGHPART`.
+    /// `SPI_USR_MOSI_HIGHPART` or `SPI_USR_MISO_HIGHPART`.
     HighPart,
     /// `SPI_SIO`, MOSI and MISO on one line.
     ThreeLine,
-    /// `SPI_DOUTDIN`, which reads into the buffer while it sends.
+    /// `SPI_DOUTDIN` with the data on more than one lane.
     FullDuplex,
     /// `SPI_CK_OUT_EDGE`, which samples on the falling edge of SCLK in modes 1 and 2.
     ClockMode,
     /// `SPI_CS0_DIS`.
     CsDisabled,
-    /// A data length that is not whole bytes, or more than the 64-byte buffer without DMA.
+    /// A data length that is not whole bytes, or more than the 64-byte buffer without DMA or
+    /// with a read.
     DataLength,
     /// `SPI_CLK_EN` or `SPI_MST_CLK_ACTIVE` clear, so SPI2 has no clock.
     ClockOff,
@@ -207,7 +218,7 @@ pub struct Phase {
 pub struct Pads {
     pub cs: Option<u8>,
     pub sclk: Option<u8>,
-    /// D0 to D3.
+    /// D0 to D3. On a read with no pad driving `FSPIQ`, D1 is the pad its input reads.
     pub data: [Option<u8>; 4],
 }
 
@@ -223,6 +234,8 @@ pub struct Transfer {
     /// The data's lanes.
     pub lanes: u8,
     pub data: Vec<u8>,
+    /// What it reads on MISO into `SPI_W0` on.
+    pub miso: Miso,
     pub clock_hz: u32,
     /// Whether CS stays asserted after it.
     pub held: bool,
@@ -356,29 +369,45 @@ impl Spi2 {
         let (ctrl, user, misc) = (self.reg(CTRL), self.reg(USER), self.reg(MISC));
         let data_bits = (self.reg(MS_DLEN) & 0x3ffff) + 1;
         let clocked = CLK_EN | MST_CLK_ACTIVE;
+        let reads = user & USR_MISO != 0;
         [
             (self.reg(SLAVE) & SLAVE_MODE != 0, Setting::Slave),
             (
                 self.reg(DMA_CONF) & DMA_RX_ENA != 0 || self.reg(SLAVE) & USR_CONF != 0,
                 Setting::Dma,
             ),
-            (ctrl & WR_BIT_ORDER != 0, Setting::LsbFirst),
+            (
+                ctrl & WR_BIT_ORDER != 0 || reads && ctrl & RD_BIT_ORDER != 0,
+                Setting::LsbFirst,
+            ),
             (user & QPI_MODE != 0, Setting::Qpi),
             (
-                user & (OPI_MODE | FWRITE_OCT) != 0 || ctrl & (FCMD_OCT | FADDR_OCT) != 0,
+                user & (OPI_MODE | FWRITE_OCT) != 0
+                    || ctrl & (FCMD_OCT | FADDR_OCT) != 0
+                    || reads && ctrl & FREAD_OCT != 0,
                 Setting::Octal,
             ),
             (misc & DTR != 0, Setting::Dtr),
             (user & USR_DUMMY != 0, Setting::Dummy),
-            (user & USR_MISO != 0, Setting::Read),
-            (user & USR_MOSI_HIGHPART != 0, Setting::HighPart),
+            (
+                reads && ctrl & (FREAD_DUAL | FREAD_QUAD) != 0,
+                Setting::Read,
+            ),
+            (
+                user & (USR_MOSI_HIGHPART | USR_MISO_HIGHPART) != 0,
+                Setting::HighPart,
+            ),
             (user & SIO != 0, Setting::ThreeLine),
-            (user & DOUTDIN != 0, Setting::FullDuplex),
+            (
+                user & DOUTDIN != 0 && user & (FWRITE_DUAL | FWRITE_QUAD) != 0,
+                Setting::FullDuplex,
+            ),
             (user & CK_OUT_EDGE != 0, Setting::ClockMode),
             (misc & CS0_DIS != 0, Setting::CsDisabled),
             (
                 user & USR_MOSI != 0
-                    && (!data_bits.is_multiple_of(8) || data_bits > self.data_limit()),
+                    && (!data_bits.is_multiple_of(8) || data_bits > self.data_limit())
+                    || reads && (!data_bits.is_multiple_of(8) || data_bits > 8 * BUFFER as u32),
                 Setting::DataLength,
             ),
             (self.reg(CLK_GATE) & clocked != clocked, Setting::ClockOff),
@@ -452,6 +481,18 @@ impl Spi2 {
                 .take(bytes)
                 .collect()
         };
+        let miso = match (
+            user & USR_MISO != 0,
+            user & DOUTDIN != 0 && !data.is_empty(),
+        ) {
+            (false, _) => Miso::None,
+            (true, true) => Miso::Duplex,
+            (true, false) => Miso::Read(bytes as u32),
+        };
+        let read = match miso {
+            Miso::Read(n) => 8 * u64::from(n),
+            Miso::None | Miso::Duplex => 0,
+        };
         let setup = if user & CS_SETUP != 0 {
             u64::from((user1 >> 17) & 0x1f) + 1
         } else {
@@ -468,6 +509,7 @@ impl Spi2 {
                 .map(|phase| u64::from(phase.bits).div_ceil(u64::from(phase.lanes)))
                 .sum::<u64>()
             + (8 * data.len() as u64).div_ceil(u64::from(data_lanes))
+            + read
             + hold;
         let clock = self.reg(CLOCK);
         let divider = if clock & CLK_EQU_SYSCLK != 0 {
@@ -487,12 +529,16 @@ impl Spi2 {
             phases,
             lanes: data_lanes,
             data,
+            miso,
             clock_hz: u32::try_from(source / divider).expect("an SPI clock below 4 GHz"),
             held: self.reg(MISC) & CS_KEEP_ACTIVE != 0,
             pads: Pads {
                 cs: gpio.routed(FSPICS0),
                 sclk: gpio.routed(FSPICLK),
-                data: LANES.map(|signal| gpio.routed(signal)),
+                data: LANES.map(|signal| match gpio.routed(signal) {
+                    None if signal == FSPIQ && miso != Miso::None => gpio.reads(FSPIQ),
+                    routed => routed,
+                }),
             },
         })
     }
@@ -527,6 +573,16 @@ impl Spi2 {
     /// The end of the `n`th transfer not yet taken, counting from 0.
     pub(crate) fn end(&self, n: usize) -> Option<Tick> {
         self.transfers.get(n).map(|transfer| transfer.end)
+    }
+
+    /// Puts the bytes a transfer read into `SPI_W0` on, the first in the low byte of `SPI_W0`.
+    pub(crate) fn answered(&mut self, miso: &[u8]) {
+        debug_assert!(miso.len() <= BUFFER, "a read fits the buffer");
+        let words = &mut self.regs[(W0 / 4) as usize..=(W15 / 4) as usize];
+        for (k, &byte) in miso.iter().enumerate() {
+            let shift = 8 * (k % 4);
+            words[k / 4] = words[k / 4] & !(0xff << shift) | u32::from(byte) << shift;
+        }
     }
 
     /// Takes the first `n` transfers.
@@ -633,6 +689,52 @@ mod tests {
         assert_eq!((transfer.start, transfer.end), (c(100), c(100 + 38 * 4)));
     }
 
+    /// A command and a 3-byte read: the read adds its 24 clocks, and the bytes the target
+    /// answered land in `SPI_W0` from its low byte. MISO is read on the pad `FSPIQ`'s input reads.
+    #[test]
+    fn a_read_phase_lasts_its_clocks_and_its_bytes_land_in_w0() {
+        let (mut spi, _) = spi();
+        let mut gpio = Gpio::new(&[13]);
+        gpio.write(0x154 + 4 * u32::from(FSPIQ), 1 << 7 | 13)
+            .unwrap();
+        set(
+            &mut spi,
+            &gpio,
+            &[
+                (CLOCK, 3 << 12 | 1 << 6 | 3),
+                (USER, USR_COMMAND | USR_MISO),
+                (USER2, 7 << 28 | 0x9f),
+                (MS_DLEN, 8 * 3 - 1),
+                (W0, 0xaaaa_aaaa),
+            ],
+        );
+        assert_eq!(spi.write(c(100), XTAL, CMD, USR, &gpio, no_dma), Ok(true));
+        let transfer = spi.transfers.back().unwrap().clone();
+        assert_eq!(transfer.miso, Miso::Read(3));
+        assert!(transfer.data.is_empty());
+        assert_eq!(transfer.pads.data[1], Some(13));
+        // 8 clocks for the command and 24 for the read, of 4 cycles each.
+        assert_eq!(transfer.end, c(100 + 32 * 4));
+        spi.answered(&[0xef, 0x40, 0x18]);
+        assert_eq!(spi.read(transfer.end, W0), Some(0xaa18_40ef));
+    }
+
+    /// With `SPI_DOUTDIN` the read is one byte beside each byte it sends, and adds no clocks.
+    #[test]
+    fn a_full_duplex_transfer_reads_beside_its_data() {
+        let (mut spi, gpio) = spi();
+        command_and_data(&mut spi, &gpio, &[1, 2], false);
+        set(
+            &mut spi,
+            &gpio,
+            &[(USER, USR_COMMAND | USR_ADDR | USR_MOSI | USR_MISO | DOUTDIN)],
+        );
+        assert_eq!(spi.write(c(100), XTAL, CMD, USR, &gpio, no_dma), Ok(true));
+        let transfer = spi.transfers.back().unwrap().clone();
+        assert_eq!(transfer.miso, Miso::Duplex);
+        assert_eq!(transfer.end, c(100 + (8 + 24 + 16) * 4));
+    }
+
     #[test]
     fn usr_reads_1_and_done_reads_0_until_the_end() {
         let (mut spi, gpio) = spi();
@@ -692,24 +794,47 @@ mod tests {
             (vec![(SLAVE, slave | USR_CONF)], Setting::Dma),
             (vec![(CTRL, ctrl | 1 << 25)], Setting::LsbFirst),
             (vec![(CTRL, ctrl | 2 << 25)], Setting::LsbFirst),
+            (
+                vec![(USER, user | USR_MISO), (CTRL, ctrl | 1 << 23)],
+                Setting::LsbFirst,
+            ),
             (vec![(USER, user | QPI_MODE)], Setting::Qpi),
             (vec![(USER, user | OPI_MODE)], Setting::Octal),
             (vec![(USER, user | FWRITE_OCT)], Setting::Octal),
             (vec![(CTRL, ctrl | FCMD_OCT)], Setting::Octal),
             (vec![(CTRL, ctrl | FADDR_OCT)], Setting::Octal),
+            (
+                vec![(USER, user | USR_MISO), (CTRL, ctrl | FREAD_OCT)],
+                Setting::Octal,
+            ),
             (vec![(MISC, CS_KEEP_ACTIVE | 1 << 16)], Setting::Dtr),
             (vec![(MISC, CS_KEEP_ACTIVE | 1 << 17)], Setting::Dtr),
             (vec![(MISC, CS_KEEP_ACTIVE | 1 << 18)], Setting::Dtr),
             (vec![(MISC, CS_KEEP_ACTIVE | 1 << 19)], Setting::Dtr),
             (vec![(USER, user | USR_DUMMY)], Setting::Dummy),
-            (vec![(USER, user | USR_MISO)], Setting::Read),
+            (
+                vec![(USER, user | USR_MISO), (CTRL, ctrl | FREAD_QUAD)],
+                Setting::Read,
+            ),
+            (
+                vec![(USER, user | USR_MISO), (CTRL, ctrl | FREAD_DUAL)],
+                Setting::Read,
+            ),
             (vec![(USER, user | USR_MOSI_HIGHPART)], Setting::HighPart),
+            (vec![(USER, user | USR_MISO_HIGHPART)], Setting::HighPart),
             (vec![(USER, user | SIO)], Setting::ThreeLine),
-            (vec![(USER, user | DOUTDIN)], Setting::FullDuplex),
+            (
+                vec![(USER, user | DOUTDIN | FWRITE_QUAD)],
+                Setting::FullDuplex,
+            ),
             (vec![(USER, user | CK_OUT_EDGE)], Setting::ClockMode),
             (vec![(MISC, CS_KEEP_ACTIVE | CS0_DIS)], Setting::CsDisabled),
             (vec![(MS_DLEN, 8 * 65 - 1)], Setting::DataLength),
             (vec![(MS_DLEN, 11)], Setting::DataLength),
+            (
+                vec![(USER, USR_COMMAND | USR_MISO), (MS_DLEN, 11)],
+                Setting::DataLength,
+            ),
             (vec![(CLK_GATE, 0)], Setting::ClockOff),
             (vec![(CLK_GATE, CLK_EN)], Setting::ClockOff),
             (

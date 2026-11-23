@@ -56,7 +56,7 @@ fn the_program_is_the_one_described() {
             "s32i\ta4, a2, 0",
             "addmi\ta2, a2, 0x1000",
             "addi\ta5, a5, -1",
-            "bnez\ta5, 0x40370000",
+            "bnez\ta5, 0x40100000",
         ]
     );
 }

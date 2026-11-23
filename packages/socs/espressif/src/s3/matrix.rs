@@ -14,7 +14,7 @@
 //! `components/soc/esp32s3/include/soc/interrupts.h`,
 //! `interrupt_core0_reg.h` and `interrupt_core1_reg.h`.
 
-use orbe_xtensa::CoreId;
+use super::CoreId;
 
 /// The sources, `ETS_MAX_INTR_SOURCE`.
 const SOURCES: u32 = 99;

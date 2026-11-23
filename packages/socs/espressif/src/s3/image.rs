@@ -1,4 +1,4 @@
-//! The flash of a chip that boots from it: the regions a netlist places, and the app the
+//! The app on a flash the chip boots from: the regions a netlist places, and the app the
 //! second-stage bootloader would start there, as its entry and segments.
 //!
 //! The flash is 16 MB, and every byte no region places reads `0xFF`. The partition table is at
@@ -15,10 +15,11 @@
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::blob::{Blob, Sha256};
-use crate::diagnostic::FirmwareRule;
+use sha2::{Digest, Sha256};
 
-pub const SIZE: u32 = 16 << 20;
+use super::Segment;
+
+const SIZE: u32 = 16 << 20;
 const PARTITION_TABLE: usize = 0x8000;
 const PARTITION_ROWS: usize = 0xc00 / 32;
 const PARTITION_MAGIC: [u8; 2] = [0xaa, 0x50];
@@ -44,75 +45,59 @@ const LOADED: [Range<u32>; 4] = [
     0x5000_0000..0x5000_2000,
 ];
 
-/// A parsed flash. Only parse builds one, so the regions lie in the flash and no two share a
-/// byte, and the app's segments each lie in one memory, with the entry in the first window.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Flash {
-    /// Each a [`Role::Flash`](crate::blob::Role::Flash) blob.
-    regions: Vec<Blob>,
-    bytes: Arc<[u8]>,
-    entry: u32,
-    segments: Vec<Segment>,
-}
-
-/// A segment of the app: `len` bytes at bus address `addr`, from flash offset `offset`.
+/// Why a flash does not boot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Segment {
-    pub addr: u32,
-    pub offset: u32,
-    pub len: u32,
+pub enum ImageRule {
+    /// A region past the flash's end, or one that shares a byte with another.
+    Region,
+    /// No app the bootloader would start: no partition for it, otadata that is not blank, or an
+    /// image whose header, checksum, hash or mapping is wrong.
+    Image,
+    /// A segment outside every memory, or an entry in no segment on the instruction bus.
+    Unmapped,
 }
 
-impl Flash {
-    /// Places `regions`, each a [`Role::Flash`](crate::blob::Role::Flash) blob, and finds the app.
-    pub fn parse(regions: Vec<Blob>) -> Result<Flash, FirmwareRule> {
+/// The flash the regions make, and the app on it. Only [`App::parse`] builds one, so the
+/// segments each lie in one memory, with the entry in the first window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct App {
+    /// The whole flash.
+    pub flash: Arc<[u8]>,
+    pub entry: u32,
+    /// In the image's order.
+    pub segments: Vec<Segment>,
+}
+
+impl App {
+    /// Places `regions`, each a flash offset and its bytes, and finds the app.
+    pub fn parse(regions: &[(u32, &[u8])]) -> Result<App, ImageRule> {
         let mut bytes = vec![0xff; SIZE as usize];
         let mut placed: Vec<Range<u64>> = Vec::new();
-        for region in &regions {
-            let start = u64::from(region.role.offset().expect("a flash region"));
-            let span = start..start + region.bytes.len() as u64;
+        for &(offset, region) in regions {
+            let start = u64::from(offset);
+            let span = start..start + region.len() as u64;
             if span.end > u64::from(SIZE)
                 || placed
                     .iter()
                     .any(|p| p.start < span.end && span.start < p.end)
             {
-                return Err(FirmwareRule::Region);
+                return Err(ImageRule::Region);
             }
-            bytes[span.start as usize..span.end as usize].copy_from_slice(&region.bytes);
+            bytes[span.start as usize..span.end as usize].copy_from_slice(region);
             placed.push(span);
         }
         let app = app_partition(&bytes)?;
         let (entry, segments) = app_image(&bytes, app)?;
-        Ok(Flash {
-            regions,
-            bytes: bytes.into(),
+        Ok(App {
+            flash: bytes.into(),
             entry,
             segments,
         })
     }
-
-    /// In netlist order.
-    pub fn regions(&self) -> &[Blob] {
-        &self.regions
-    }
-
-    /// The whole flash.
-    pub fn bytes(&self) -> &Arc<[u8]> {
-        &self.bytes
-    }
-
-    pub fn entry(&self) -> u32 {
-        self.entry
-    }
-
-    /// In the image's order.
-    pub fn segments(&self) -> &[Segment] {
-        &self.segments
-    }
 }
 
 /// The flash the app partition the bootloader would pick spans.
-fn app_partition(bytes: &[u8]) -> Result<Range<usize>, FirmwareRule> {
+fn app_partition(bytes: &[u8]) -> Result<Range<usize>, ImageRule> {
     let mut factory = None;
     let mut ota_0 = None;
     for row in bytes[PARTITION_TABLE..][..32 * PARTITION_ROWS].chunks(32) {
@@ -125,36 +110,36 @@ fn app_partition(bytes: &[u8]) -> Result<Range<usize>, FirmwareRule> {
         // In u32, so a 32-bit build adds as a 64-bit one does.
         let span = match offset.checked_add(size) {
             Some(end) if end <= SIZE => offset as usize..end as usize,
-            _ => return Err(FirmwareRule::Image),
+            _ => return Err(ImageRule::Image),
         };
         match (kind, subtype) {
             (APP, FACTORY) => factory = Some(span),
             (APP, OTA_0) => ota_0 = Some(span),
             (DATA, OTADATA) if bytes[span].iter().any(|&byte| byte != 0xff) => {
-                return Err(FirmwareRule::Image);
+                return Err(ImageRule::Image);
             }
             _ => {}
         }
     }
-    factory.or(ota_0).ok_or(FirmwareRule::Image)
+    factory.or(ota_0).ok_or(ImageRule::Image)
 }
 
 /// The entry and segments of the app image at the start of `partition`.
-fn app_image(bytes: &[u8], partition: Range<usize>) -> Result<(u32, Vec<Segment>), FirmwareRule> {
+fn app_image(bytes: &[u8], partition: Range<usize>) -> Result<(u32, Vec<Segment>), ImageRule> {
     let image = &bytes[partition.clone()];
     let word = |at: usize| {
         image
             .get(at..at + 4)
             .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-            .ok_or(FirmwareRule::Image)
+            .ok_or(ImageRule::Image)
     };
-    let header = image.get(..HEADER).ok_or(FirmwareRule::Image)?;
+    let header = image.get(..HEADER).ok_or(ImageRule::Image)?;
     let count = header[1];
     if header[0] != IMAGE_MAGIC
         || count > MAX_SEGMENTS
         || u16::from_le_bytes([header[12], header[13]]) != CHIP_ID_ESP32S3
     {
-        return Err(FirmwareRule::Image);
+        return Err(ImageRule::Image);
     }
     let entry = word(4)?;
     let mut segments = Vec::new();
@@ -165,7 +150,7 @@ fn app_image(bytes: &[u8], partition: Range<usize>) -> Result<(u32, Vec<Segment>
         let data = image
             .get(at + 8..)
             .and_then(|rest| rest.get(..len as usize))
-            .ok_or(FirmwareRule::Image)?;
+            .ok_or(ImageRule::Image)?;
         checksum = data.iter().fold(checksum, |sum, &byte| sum ^ byte);
         segments.push(Segment {
             addr,
@@ -176,12 +161,12 @@ fn app_image(bytes: &[u8], partition: Range<usize>) -> Result<(u32, Vec<Segment>
     }
     let end = (at + 1).next_multiple_of(16);
     if image.get(end - 1) != Some(&checksum) {
-        return Err(FirmwareRule::Image);
+        return Err(ImageRule::Image);
     }
     if header[23] == 1 {
-        let digest = image.get(end..end + 32).ok_or(FirmwareRule::Image)?;
-        if Sha256::of(&image[..end]).bytes() != digest {
-            return Err(FirmwareRule::Image);
+        let digest = image.get(end..end + 32).ok_or(ImageRule::Image)?;
+        if Sha256::digest(&image[..end])[..] != *digest {
+            return Err(ImageRule::Image);
         }
     }
     check_layout(&segments, entry)?;
@@ -190,7 +175,7 @@ fn app_image(bytes: &[u8], partition: Range<usize>) -> Result<(u32, Vec<Segment>
 
 /// Each segment lies in one memory, a mapped one at its flash offset modulo the MMU page, and the
 /// entry in a segment on the instruction bus.
-fn check_layout(segments: &[Segment], entry: u32) -> Result<(), FirmwareRule> {
+fn check_layout(segments: &[Segment], entry: u32) -> Result<(), ImageRule> {
     let inside = |range: &Range<u32>, segment: &Segment| {
         range.start <= segment.addr
             && u64::from(segment.addr) + u64::from(segment.len) <= u64::from(range.end)
@@ -199,14 +184,14 @@ fn check_layout(segments: &[Segment], entry: u32) -> Result<(), FirmwareRule> {
         if MAPPED.iter().any(|range| inside(range, segment))
             && segment.addr % MMU_PAGE != segment.offset % MMU_PAGE
         {
-            return Err(FirmwareRule::Image);
+            return Err(ImageRule::Image);
         }
         if !MAPPED
             .iter()
             .chain(&LOADED)
             .any(|range| inside(range, segment))
         {
-            return Err(FirmwareRule::Unmapped);
+            return Err(ImageRule::Unmapped);
         }
     }
     let code = &LOADED[0];
@@ -216,7 +201,7 @@ fn check_layout(segments: &[Segment], entry: u32) -> Result<(), FirmwareRule> {
             && u64::from(entry) < u64::from(segment.addr) + u64::from(segment.len)
     });
     if !starts {
-        return Err(FirmwareRule::Unmapped);
+        return Err(ImageRule::Unmapped);
     }
     Ok(())
 }
@@ -224,15 +209,6 @@ fn check_layout(segments: &[Segment], entry: u32) -> Result<(), FirmwareRule> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::blob::Role;
-
-    fn blob(offset: u32, bytes: Vec<u8>) -> Blob {
-        Blob {
-            role: Role::Flash(offset),
-            sha256: Sha256::of(&bytes),
-            bytes: bytes.into(),
-        }
-    }
 
     fn row(kind: u8, subtype: u8, offset: u32, size: u32) -> Vec<u8> {
         let mut row = vec![0xaa, 0x50, kind, subtype];
@@ -271,21 +247,21 @@ mod tests {
         image.resize((image.len() + 1).next_multiple_of(16) - 1, 0);
         image.push(checksum);
         if sha {
-            let digest = *Sha256::of(&image).bytes();
+            let digest = Sha256::digest(&image);
             image.extend(digest);
         }
         image
     }
 
-    fn flash(table: Vec<u8>, image: Vec<u8>) -> Result<Flash, FirmwareRule> {
-        Flash::parse(vec![blob(0x8000, table), blob(0x10000, image)])
+    fn flash(table: Vec<u8>, image: Vec<u8>) -> Result<App, ImageRule> {
+        App::parse(&[(0x8000, &table), (0x10000, &image)])
     }
 
     #[test]
     fn the_bootloader_picks_ota_0_and_its_segments() {
-        let flash = flash(table(), image(true)).unwrap();
-        assert_eq!(flash.entry(), 0x4037_5000);
-        let segments = flash.segments();
+        let app = flash(table(), image(true)).unwrap();
+        assert_eq!(app.entry, 0x4037_5000);
+        let segments = &app.segments;
         assert_eq!(segments.len(), 2);
         assert_eq!(
             segments[1],
@@ -295,8 +271,8 @@ mod tests {
                 len: 4
             }
         );
-        assert_eq!(flash.bytes()[0x1002c..0x10030], [5, 6, 7, 8]);
-        assert_eq!(flash.bytes()[0xe000], 0xff, "a byte no region places");
+        assert_eq!(app.flash[0x1002c..0x10030], [5, 6, 7, 8]);
+        assert_eq!(app.flash[0xe000], 0xff, "a byte no region places");
     }
 
     #[test]
@@ -304,20 +280,15 @@ mod tests {
         let mut bad = image(false);
         let last = bad.len() - 1;
         bad[last] ^= 1;
-        assert_eq!(
-            flash(table(), bad),
-            Err(FirmwareRule::Image),
-            "the checksum"
-        );
+        assert_eq!(flash(table(), bad), Err(ImageRule::Image), "the checksum");
         let mut bad = image(true);
         let last = bad.len() - 1;
         bad[last] ^= 1;
-        assert_eq!(flash(table(), bad), Err(FirmwareRule::Image), "the hash");
-        let mut regions = flash(table(), image(true)).unwrap().regions;
-        regions.push(blob(0xe000, vec![1; 32]));
+        assert_eq!(flash(table(), bad), Err(ImageRule::Image), "the hash");
+        let (table, image, otadata) = (table(), image(true), [1; 32]);
         assert_eq!(
-            Flash::parse(regions),
-            Err(FirmwareRule::Image),
+            App::parse(&[(0x8000, &table), (0x10000, &image), (0xe000, &otadata)]),
+            Err(ImageRule::Image),
             "a set otadata"
         );
     }
@@ -329,7 +300,7 @@ mod tests {
         let mut shifted = image(false);
         let at = HEADER + 12;
         shifted[at..at + 4].copy_from_slice(&0x4200_0030u32.to_le_bytes());
-        assert_eq!(flash(table(), shifted), Err(FirmwareRule::Image));
+        assert_eq!(flash(table(), shifted), Err(ImageRule::Image));
     }
 
     /// A row whose offset plus size passes 2^32 is refused, as u32 sums are the same on a 32-bit
@@ -339,28 +310,17 @@ mod tests {
         let mut table = row(APP, OTA_0, 0xffff_0000, 0x0002_0000);
         table.extend(row(APP, OTA_0, 0x10000, 0x10000));
         table.extend([0xff; 32]);
-        assert_eq!(flash(table, image(true)), Err(FirmwareRule::Image));
+        assert_eq!(flash(table, image(true)), Err(ImageRule::Image));
         let mut table = row(DATA, OTADATA, 0xffff_0000, 0x0002_0000);
         table.extend([0xff; 32]);
-        assert_eq!(
-            flash(table, image(true)),
-            Err(FirmwareRule::Image),
-            "otadata"
-        );
+        assert_eq!(flash(table, image(true)), Err(ImageRule::Image), "otadata");
     }
 
     #[test]
     fn regions_lie_in_the_flash_and_apart() {
-        let regions = |offset| vec![blob(0x8000, table()), blob(offset, image(true))];
-        assert_eq!(
-            Flash::parse(regions(SIZE - 16)),
-            Err(FirmwareRule::Region),
-            "past the end"
-        );
-        assert_eq!(
-            Flash::parse(regions(0x8010)),
-            Err(FirmwareRule::Region),
-            "on the table"
-        );
+        let (table, image) = (table(), image(true));
+        let regions = |offset| App::parse(&[(0x8000, &table), (offset, &image)]);
+        assert_eq!(regions(SIZE - 16), Err(ImageRule::Region), "past the end");
+        assert_eq!(regions(0x8010), Err(ImageRule::Region), "on the table");
     }
 }

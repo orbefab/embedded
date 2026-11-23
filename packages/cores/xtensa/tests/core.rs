@@ -4,12 +4,19 @@
 use std::ops::Range;
 
 use orbe_xtensa::{
-    Bus, Cause, Config, Core, CoreId, Cycle, Esp32, Esp32s3, Exit, Missing, Op, PagedRam, Sr, Stop,
+    Bus, Cause, Config, Core, Cycle, Esp32, Esp32s3, Exit, Missing, Op, PagedRam, Reset, Sr, Stop,
     Unimplemented, Width,
 };
 
-pub const CODE: u32 = 0x4037_0000;
-pub const RAM: u32 = 0x3fc8_8000;
+pub const CODE: u32 = 0x4010_0000;
+pub const RAM: u32 = 0x2000_8000;
+
+/// The reset a core on the flat bus takes.
+pub const RESET: Reset = Reset {
+    pc: 0x4020_0400,
+    vecbase: 0x4020_0000,
+    prid: 0x1111,
+};
 
 #[derive(Clone)]
 pub struct Flat {
@@ -17,6 +24,8 @@ pub struct Flat {
     pub ram: PagedRam,
     /// RAM that loads and refuses stores.
     pub read_only: Range<u32>,
+    /// Addresses on the instruction bus.
+    pub instruction: Range<u32>,
     /// Interrupt lines that are high from the start.
     pub lines: u32,
     /// Interrupt lines that rise at a cycle and stay high.
@@ -28,8 +37,8 @@ pub struct Flat {
 }
 
 impl Flat {
-    /// `hex` is the code from `CODE`, padded with zero bytes to whole words. RAM is the S3's
-    /// 512 KB of internal SRAM.
+    /// `hex` is the code from `CODE`, padded with zero bytes to whole words. RAM is 512 KB from
+    /// `RAM`.
     pub fn new(hex: &str) -> Flat {
         let mut code: Vec<u8> = (0..hex.len())
             .step_by(2)
@@ -40,6 +49,7 @@ impl Flat {
             code,
             ram: PagedRam::new(RAM, 512 * 1024),
             read_only: 0..0,
+            instruction: 0..0,
             lines: 0,
             rise: None,
             polls: 0,
@@ -49,6 +59,10 @@ impl Flat {
 }
 
 impl Bus for Flat {
+    fn instruction_bus(&self, addr: u32) -> bool {
+        self.instruction.contains(&addr)
+    }
+
     fn fetch(&mut self, _now: Cycle, addr: u32) -> Result<u32, Exit> {
         let at = addr.wrapping_sub(CODE) as usize;
         match self.code.get(at..at + 4) {
@@ -102,7 +116,7 @@ impl Bus for Flat {
 }
 
 pub fn core_at<C: Config>(pc: u32) -> Core<C> {
-    let mut core = Core::new();
+    let mut core = Core::new(RESET);
     core.set_pc(pc);
     core
 }
@@ -125,7 +139,7 @@ fn unmodeled_op_stops_before_it<C: Config>() {
     assert_eq!(stop, Stop::Unimplemented(want), "{}", C::NAME);
     assert_eq!(core.pc(), CODE);
     assert_eq!(core.cycle(), Cycle(0));
-    assert_eq!(want.to_string(), "`rfdo` at 0x40370000 is not modeled");
+    assert_eq!(want.to_string(), "`rfdo` at 0x40100000 is not modeled");
 }
 
 #[test]
@@ -143,19 +157,19 @@ fn region_prid_and_external_registers<C: Config>() {
     let mut bus = Flat::new("20635020e35040735070f85090335050eb0360634060734000e0f1");
     let mut core = core_at::<C>(CODE);
     core.set_a(2, 0xf);
-    core.set_a(3, 0x4123_4567);
+    core.set_a(3, 0x8123_4567);
     core.set_a(6, 0x5a5a);
-    core.set_a(8, 0x6000_0010);
+    core.set_a(8, 0xa000_0010);
     let stop = core.run_until(&mut bus, Cycle(100));
     let want = Unimplemented {
         pc: CODE + 0x18,
         missing: Missing::Op(Op::RFDO),
     };
     assert_eq!(stop, Stop::Unimplemented(want), "{}", C::NAME);
-    assert_eq!(core.a(4), 0x4000_000f, "{}", C::NAME);
-    assert_eq!(core.a(7), 0x6000_0002, "{}", C::NAME);
-    assert_eq!(core.a(9), 0x4000_0000, "{}", C::NAME);
-    assert_eq!(core.a(5), 0xcdcd, "{}", C::NAME);
+    assert_eq!(core.a(4), 0x8000_000f, "{}", C::NAME);
+    assert_eq!(core.a(7), 0xa000_0002, "{}", C::NAME);
+    assert_eq!(core.a(9), 0x8000_0000, "{}", C::NAME);
+    assert_eq!(core.a(5), 0x1111, "{}", C::NAME);
     assert_eq!(core.a(6), 0, "{}", C::NAME);
 }
 
@@ -170,12 +184,12 @@ fn undefined_word_raises_illegal_instruction() {
     let mut bus = Flat::new("000100");
     let mut core = core_at::<Esp32s3>(CODE);
     core.set_special(Sr::Ps, 0);
-    core.set_special(Sr::Vecbase, 0x4000_0000);
+    core.set_special(Sr::Vecbase, 0x4020_0000);
     assert_eq!(core.run_until(&mut bus, Cycle(100)), Stop::Bus);
     assert_eq!(core.special(Sr::ExcCause), Cause::IllegalInstruction as u32);
     assert_eq!(core.special(Sr::Epc1), CODE);
     assert_eq!(core.special(Sr::Ps), 1 << 4, "PS.EXCM is set");
-    assert_eq!(core.pc(), 0x4000_0300);
+    assert_eq!(core.pc(), 0x4020_0300);
 }
 
 /// `nop.n` in the last two bytes of the code runs without a fetch of the next word, so the core
@@ -192,15 +206,18 @@ fn two_byte_op_before_an_unmapped_word_runs() {
 /// A core reset at a cycle reads its own `PRID` and counts `CCOUNT` from 0 there. `skip_to`
 /// never moves the cycle back, and `CCOUNT` counts the gap it skips.
 #[test]
-fn a_reset_app_cpu_reads_its_prid_and_counts_from_its_reset() {
+fn a_reset_core_reads_its_prid_and_counts_from_its_reset() {
     // rsr.prid a5; rsr.ccount a6.
     let mut bus = Flat::new("50eb0360ea03");
-    let mut core = Core::<Esp32s3>::reset(CoreId::App, Cycle(1000));
+    let second = Reset {
+        prid: 0x2222,
+        ..RESET
+    };
+    let mut core = Core::<Esp32s3>::reset(second, Cycle(1000));
     core.set_pc(CODE);
-    assert_eq!(core.id(), CoreId::App);
     assert_eq!(core.special(Sr::Ccount), 0);
     assert_eq!(core.run_until(&mut bus, Cycle(2000)), Stop::Bus);
-    assert_eq!((core.a(5), core.a(6)), (0xabab, 1));
+    assert_eq!((core.a(5), core.a(6)), (0x2222, 1));
     core.skip_to(Cycle(500));
     assert_eq!(core.cycle(), Cycle(1002));
     core.skip_to(Cycle(3000));
@@ -229,8 +246,8 @@ fn core_size_is_pinned() {
 #[test]
 fn the_data_breakpoint_registers_read_back() {
     let regs = [
-        (144u8, 0x3fc8_8000),
-        (145, 0x3fc8_8020),
+        (144u8, 0x2000_8000),
+        (145, 0x2000_8020),
         (160, 0x8000_0020),
         (161, 0x3f),
     ];
@@ -297,11 +314,11 @@ fn a_store_on_watch_1_stops_inside_its_window() {
 }
 
 /// A load watch stops `l32i a3, a3, 0` before the load, so `a3` stays the address. `DBREAKC0` is
-/// `0x40000020`.
+/// `0x40200020`.
 #[test]
 fn a_load_watch_stops_before_the_load() {
     let base = RAM + 32;
-    let load = access_on(0, base, "322300", base, 0x4000_0020);
+    let load = access_on(0, base, "322300", base, 0x4020_0020);
     assert!(
         matches!(load.stop, Stop::Watchpoint { pc, addr } if pc == CODE && addr == base),
         "{:?}",

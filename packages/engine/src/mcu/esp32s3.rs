@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use orbe_model::Time;
 
-use crate::active::{Chip, Output, Stage};
+use crate::active::Chip;
 use crate::blob::{Blob, Blobs, Role, Sha256};
 use crate::diagnostic::{BlobRule, Diagnostic, FirmwareRule, ScheduleRule};
 use crate::mna::Node;
@@ -16,12 +16,11 @@ use crate::netlist::PartId;
 use crate::netlist::Threshold;
 use crate::netlist::Value;
 use crate::netlist::elf::{self, Elf};
-use crate::netlist::flash::{self, Flash};
 use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
 use crate::netlist::json::{PinMap, WireValue, resolve_some_pins, resolve_value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
-use crate::watch::{Signal, Watch};
+use crate::watch::Signal;
 use orbe_espressif::s3::{self, Bridge};
 
 /// The pin pairs the chip joins at DC, for `net.floating`, by pin index: each GPIO to `VCC`
@@ -45,47 +44,26 @@ pub(crate) fn dc_paths(mcu: &Esp32s3) -> &'static [(usize, usize)] {
 pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
     let (vcc, gnd) = (mcu.pins[0], mcu.pins[1]);
     let gpios: Vec<u8> = mcu.gpios().collect();
-    let stage = |drop: &Value, resistance: &Value| Stage {
-        drop: drop.si.get(),
-        resistance: resistance.si.get(),
-    };
-    let high = stage(&mcu.output.high_drop, &mcu.output.high_resistance);
-    let low = stage(&mcu.output.low_drop, &mcu.output.low_resistance);
     let pins = &mcu.pins[2..];
-    let outputs = pins
-        .iter()
-        .map(|&pin| Output {
-            pin,
-            vcc,
-            gnd,
-            high,
-            low,
-            pull_up: Some(mcu.pull_up_resistance.si.get()),
-            pull_down: mcu
-                .pull_down_resistance
-                .as_ref()
-                .map(|value| value.si.get()),
-            leakage: Some(mcu.leakage_resistance.si.get()),
-        })
-        .collect();
-
-    // V(pin) - f * V(VCC) - (1 - f) * V(GND): the pin against a fraction of its own supply.
-    let against = |pin, fraction: f64| Signal {
-        terms: vec![
-            (Node::from(pin), 1.0),
-            (Node::from(vcc), -fraction),
-            (Node::from(gnd), fraction - 1.0),
-        ],
-        offset: 0.0,
+    let pads = super::Pads {
+        vcc,
+        gnd,
+        output: &mcu.output,
+        leakage: mcu.leakage_resistance.si.get(),
+        pads: pins
+            .iter()
+            .map(|&net| super::Pad {
+                net,
+                pull_up: mcu.pull_up_resistance.si.get(),
+                pull_down: mcu
+                    .pull_down_resistance
+                    .as_ref()
+                    .map(|value| value.si.get()),
+                threshold: &mcu.input_threshold,
+            })
+            .collect(),
     };
-    let threshold = &mcu.input_threshold;
-    let watches = pins
-        .iter()
-        .map(|&pin| Watch {
-            rise: against(pin, threshold.high.si.get()),
-            fall: against(pin, threshold.low.si.get()),
-        })
-        .collect();
+    let (outputs, watches) = pads.build();
     // V(pin) - V(GND) of each ADC pad, in the order the bridge reads them.
     let samples = pins
         .iter()
@@ -111,21 +89,12 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
                 .map(|segment| (segment.addr, elf.data(segment)));
             s3::Esp32s3::new(&gpios, elf.entry(), segments, None)
         }
-        Esp32s3Firmware::Flash { rom, flash } => {
-            let segments: Vec<s3::Segment> = flash
-                .segments()
-                .iter()
-                .map(|segment| s3::Segment {
-                    addr: segment.addr,
-                    offset: segment.offset,
-                    len: segment.len,
-                })
-                .collect();
+        Esp32s3Firmware::Flash { rom, app, .. } => {
             let boot = s3::Boot {
                 rom: &rom.bytes,
-                flash: flash.bytes().clone(),
-                entry: flash.entry(),
-                segments: &segments,
+                flash: app.flash.clone(),
+                entry: app.entry,
+                segments: &app.segments,
             };
             s3::Esp32s3::boot(&gpios, boot)
         }
@@ -139,37 +108,6 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
     let console = mcu.console.iter().map(|send| (send.at, send.to.as_slice()));
     let bridge = Bridge::new(chip, gpios, console);
     super::chip(part, outputs, watches, signals, samples, bridge)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_ram_windows_are_the_netlists() {
-        let windows: Vec<(u32, u32, u32, bool)> = Esp32s3::RAM
-            .iter()
-            .map(|w| (w.start, w.end, w.offset, w.code))
-            .collect();
-        let soc: Vec<(u32, u32, u32, bool)> = s3::RAM
-            .iter()
-            .map(|w| (w.start, w.end, w.offset, w.code))
-            .collect();
-        assert_eq!(windows, soc);
-    }
-
-    #[test]
-    fn the_code_window_is_the_cores_instruction_ram() {
-        use orbe_xtensa::Config;
-
-        let [code, _] = Esp32s3::RAM;
-        assert!(code.code);
-        assert_eq!(
-            [code.start - 1, code.start, code.end - 1, code.end]
-                .map(orbe_xtensa::Esp32s3::instruction_bus),
-            [false, true, true, false]
-        );
-    }
 }
 
 /// An ESP32-S3 running `firmware`: a bare-metal program whose core starts at its entry at
@@ -212,8 +150,12 @@ pub struct Esp32s3 {
 pub enum Esp32s3Firmware {
     /// A bare-metal program in SRAM.
     Elf(elf::Elf),
-    /// The app on the flash, booted with the mask ROM.
-    Flash { rom: Blob, flash: flash::Flash },
+    /// The app on the flash, booted with the mask ROM, and the flash's regions in netlist order.
+    Flash {
+        rom: Blob,
+        regions: Vec<Blob>,
+        app: s3::App,
+    },
 }
 
 impl Esp32s3Firmware {
@@ -221,8 +163,8 @@ impl Esp32s3Firmware {
     pub fn blobs(&self) -> Vec<&Blob> {
         match self {
             Esp32s3Firmware::Elf(elf) => vec![elf.blob()],
-            Esp32s3Firmware::Flash { rom, flash } => {
-                std::iter::once(rom).chain(flash.regions()).collect()
+            Esp32s3Firmware::Flash { rom, regions, .. } => {
+                std::iter::once(rom).chain(regions).collect()
             }
         }
     }
@@ -247,25 +189,6 @@ impl Esp32s3 {
     pub const PINS: [&'static str; 42] = s3::PINS;
     /// How many of [`PINS`](Self::PINS) a part must wire: the supply pins, `VCC` and `GND`.
     pub(crate) const REQUIRED: usize = 2;
-
-    /// Where a bare-metal program may load: the 512 KB of internal SRAM, through its window on
-    /// the instruction bus and through its window on the data bus. Each window's `offset` is
-    /// its first byte's place in the SRAM, so code at `0x4037_8000` and data at `0x3fc8_8000`
-    /// are one byte.
-    pub const RAM: [elf::Window; 2] = [
-        elf::Window {
-            start: 0x4037_0000,
-            end: 0x403e_0000,
-            offset: 0,
-            code: true,
-        },
-        elf::Window {
-            start: 0x3fc8_8000,
-            end: 0x3fd0_0000,
-            offset: 0x8000,
-            code: false,
-        },
-    ];
 
     /// The GPIO number of each of `pins` past `VCC` and `GND`.
     pub fn gpios(&self) -> impl Iterator<Item = u8> + '_ {
@@ -478,7 +401,13 @@ fn resolve_firmware(
     match (rom, wire) {
         (None, WireFirmware::Elf(elf)) => {
             let blob = find(part, Role::Elf, &elf, blobs, out)?;
-            match Elf::parse(blob, &Esp32s3::RAM) {
+            let windows = s3::RAM.map(|window| elf::Window {
+                start: window.start,
+                end: window.end,
+                offset: window.offset,
+                code: window.code,
+            });
+            match Elf::parse(blob, &windows) {
                 Ok(elf) => Some(Esp32s3Firmware::Elf(elf)),
                 Err(rule) => fail(rule, out),
             }
@@ -499,10 +428,20 @@ fn resolve_firmware(
             }
             let regions: Option<Vec<_>> = regions.into_iter().collect();
             let (rom, regions) = (rom?, regions?);
-            match Flash::parse(regions) {
-                Ok(flash) => Some(Esp32s3Firmware::Flash { rom, flash }),
-                Err(rule) => fail(rule, out),
-            }
+            let placed: Vec<(u32, &[u8])> = regions
+                .iter()
+                .map(|region| {
+                    let offset = region.role.offset().expect("a flash region");
+                    (offset, &region.bytes[..])
+                })
+                .collect();
+            let rule = match s3::App::parse(&placed) {
+                Ok(app) => return Some(Esp32s3Firmware::Flash { rom, regions, app }),
+                Err(s3::ImageRule::Region) => FirmwareRule::Region,
+                Err(s3::ImageRule::Image) => FirmwareRule::Image,
+                Err(s3::ImageRule::Unmapped) => FirmwareRule::Unmapped,
+            };
+            fail(rule, out)
         }
         _ => fail(FirmwareRule::Rom, out),
     }

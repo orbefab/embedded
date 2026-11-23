@@ -8,7 +8,7 @@
 mod fault;
 mod sent;
 
-use orbe_model::{Drive, Stop, Time};
+use orbe_model::{Drive, Quantity, Readings, Stop, Time};
 
 pub use fault::{Fault, FlashRefusal, Note, Pc, ResetReason, Setting, Unsupported};
 pub use sent::{Sent, SentKind, SpiPins};
@@ -35,6 +35,9 @@ pub trait Mcu: Clone + Send + std::fmt::Debug + 'static {
     const TWI: bool = false;
     /// Whether it sends records, which [`take_sent`](Self::take_sent) hands over.
     const SENDS: bool = false;
+    /// The world quantities it reads at a sample, each when the scene declares it. None, unless
+    /// it says otherwise.
+    const WORLD: &'static [Quantity] = &[];
 
     /// The first time in `(reached, limit]` where the drives may change, it samples, or a record
     /// it sent ends. `None` once everything up to `limit` is done.
@@ -56,8 +59,9 @@ pub trait Mcu: Clone + Send + std::fmt::Debug + 'static {
     /// Its watches' levels from `at` on, in the order the engine built its watches.
     fn input(&mut self, at: Time, levels: &[bool]);
     /// The volts of each of its samples at its stop at `at`, which asked for them, in the order
-    /// the engine built its samples. A chip that never asks takes none.
-    fn sample(&mut self, _at: Time, _volts: &[f64]) {}
+    /// the engine built its samples, and each of its [`WORLD`](Self::WORLD) quantities the scene
+    /// declares, as it stands just before `at`. A chip that never asks takes none.
+    fn sample(&mut self, _at: Time, _volts: &[f64], _world: &Readings) {}
     /// Hands over each byte a USART sent whose stop bit ended at or before `through`, in the
     /// order they ended on each USART, and each TWI phase that ended by then, in the order they
     /// ended.
@@ -65,6 +69,11 @@ pub trait Mcu: Clone + Send + std::fmt::Debug + 'static {
     /// Hands over each record it sent at the stop `run_until` last returned with `record` set,
     /// in the order it sent them. Each ends at that stop.
     fn take_sent(&mut self, _sent: impl FnMut(Sent)) {}
+    /// The bytes the targets answered on MISO for the SPI record it sent that ended at `at`,
+    /// one for each byte the record reads. A chip sends at most one record that reads per stop,
+    /// and the engine hands this over at that stop before the chip runs on. A byte no target
+    /// drives is `0xFF`. A chip whose records never read keeps the default, which does nothing.
+    fn answered(&mut self, _at: Time, _miso: &[u8]) {}
     /// The records it started by `at` and has not ended, where the run ends at `at` and every
     /// stop up to `at` has landed. `self` is the committed chip, and `ahead` its copy run on
     /// from there.

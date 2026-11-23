@@ -10,7 +10,7 @@ use orbe_model::{
 };
 
 use crate::diagnostic::ProtocolRule;
-use crate::link::{LinkRow, Record};
+use crate::link::{Answers, LinkRow, Record};
 use crate::world::World;
 
 /// A device's core, with the contract every `Core` keeps. Each call that reaches the device
@@ -21,8 +21,9 @@ pub(crate) trait Hosted: Send + fmt::Debug {
     fn sample(&mut self, world: &World, at: Time, volts: &[f64]);
     fn input(&mut self, world: &World, at: Time, levels: &[bool]);
     fn event(&mut self, world: &World, at: Time, event: Event<'_>);
-    /// One call per landing. The port walks each record on the concrete device.
-    fn take(&mut self, world: &World, at: Time, records: &[LinkRow]);
+    /// One call per landing. The port walks each record on the concrete device, and drives
+    /// each byte the device answers into `answers`.
+    fn take(&mut self, world: &World, at: Time, records: &[LinkRow], answers: &mut Answers);
     /// The part of one record sent by `at`, where the run ends inside it.
     fn cut(&mut self, world: &World, at: Time, record: &Record);
     /// The world quantities the device reads.
@@ -304,13 +305,15 @@ pub(crate) trait Port<D>: Clone + Send + 'static {
     fn claim(&mut self, _dev: &mut Hosting<D>, _at: Time) {}
     /// Each rule the port saw broken, at the first time.
     fn broke(&self, _found: &mut Vec<(ProtocolRule, Time)>) {}
-    /// The records that end at `at`. A port with no record pin does nothing.
+    /// The records that end at `at`, and the bytes the device answers on MISO to those that
+    /// read. A port with no record pin does nothing.
     fn take_records(
         &mut self,
         _dev: &mut Hosting<D>,
         _world: &World,
         _at: Time,
         _records: &[LinkRow],
+        _answers: &mut Answers,
     ) {
     }
     /// The part of `record` sent by `at`. A port with no record pin does nothing.
@@ -370,9 +373,16 @@ impl<D, A: Port<D>, B: Port<D>> Port<D> for (A, B) {
         self.1.broke(found);
     }
 
-    fn take_records(&mut self, dev: &mut Hosting<D>, world: &World, at: Time, records: &[LinkRow]) {
-        self.0.take_records(dev, world, at, records);
-        self.1.take_records(dev, world, at, records);
+    fn take_records(
+        &mut self,
+        dev: &mut Hosting<D>,
+        world: &World,
+        at: Time,
+        records: &[LinkRow],
+        answers: &mut Answers,
+    ) {
+        self.0.take_records(dev, world, at, records, answers);
+        self.1.take_records(dev, world, at, records, answers);
     }
 
     fn cut_record(&mut self, dev: &mut Hosting<D>, world: &World, at: Time, record: &Record) {
@@ -538,8 +548,9 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
         assert!(self.held(), "an event never changes the drives");
     }
 
-    fn take(&mut self, world: &World, at: Time, records: &[LinkRow]) {
-        self.port.take_records(&mut self.dev, world, at, records);
+    fn take(&mut self, world: &World, at: Time, records: &[LinkRow], answers: &mut Answers) {
+        self.port
+            .take_records(&mut self.dev, world, at, records, answers);
         self.claim(at);
         assert!(self.held(), "a record never changes the drives");
     }

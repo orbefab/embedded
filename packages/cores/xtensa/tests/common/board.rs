@@ -4,10 +4,17 @@
 
 use std::ops::Range;
 
-use orbe_xtensa::{Bus, Cause, Core, Cycle, Esp32, Exit, PagedRam, Sr, Stop, Width};
+use orbe_xtensa::{Bus, Cause, Core, Cycle, Esp32, Exit, PagedRam, Reset, Sr, Stop, Width};
 
 use super::elf::Elf;
 use super::{Pieces, Straight, run_in_pieces};
+
+/// The board's first CPU at reset: its ROM's PC and `VECBASE`, and the `PRID` IDF reads there.
+const RESET: Reset = Reset {
+    pc: 0x4000_0400,
+    vecbase: 0x4000_0000,
+    prid: 0xcdcd,
+};
 
 const ROM: Range<u32> = 0x4000_0000..0x4006_0000;
 const IRAM: Range<u32> = 0x4008_0000..0x400a_0000;
@@ -237,7 +244,7 @@ pub fn run_probe_on(
     limit: Cycle,
     mut pieces: Option<Pieces>,
 ) -> Run {
-    let mut core = Core::<Esp32>::new();
+    let mut core = Core::<Esp32>::new(RESET);
     core.set_pc(elf.entry);
     core.set_special(Sr::Sar, ROM_SAR);
     core.set_a(1, ROM_A1);
