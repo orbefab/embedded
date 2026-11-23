@@ -87,7 +87,17 @@ fn parts_carry_their_3d_fields() {
 
     let led = &view["parts"]["led-5mm"];
     assert_eq!(led["readings"], json!({ "brightness": { "full": 0.01 } }));
-    assert_eq!(led["tints"], json!({}));
+    let chip = &view["parts"]["led-0603"];
+    assert_eq!(
+        chip["tints"],
+        json!({
+            "color": {
+                "green": "#c5d6b0",
+                "red": "#e0b0a4",
+                "yellow": "#e8c56a",
+            }
+        })
+    );
     assert_eq!(
         led["view"],
         json!({ "glow": [{ "node": "body", "by": "brightness" }] })

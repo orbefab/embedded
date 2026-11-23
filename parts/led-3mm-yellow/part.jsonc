@@ -11,6 +11,9 @@
     "Kingbright L-934YD, Spec No DSAA9497, Rev V.11B": null,
   },
   "real": { "maker": "Kingbright", "number": "L-934YD", "datasheet": "Kingbright L-934YD, Spec No DSAA9497, Rev V.11B" },
+  "buy": [
+    { "seller": "Rapid Electronics", "url": "https://www.rapidonline.com/kingbright-l-934yd-3mm-yellow-diffused-10mcd-55-0812", "checked": "2026-11-22" },
+  ],
   "pins": { "anode": [1], "cathode": [2] },
   "model": {
     "kind": "led",

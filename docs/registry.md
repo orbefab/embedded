@@ -99,7 +99,7 @@ A template is an `https://` URL with exactly one `{name}`. `{name}` starts its l
       "version": "0.1.0",
       "title": "5 mm LED, red",
       "description": "Round 5 mm through-hole LED, red and diffused, two leads on 2.54 mm. The longer lead is the anode.",
-      "categories": ["led", "light", "indicator", "through-hole"],
+      "categories": ["led", "light", "indicator", "through-hole", "red"],
       "url": "led-5mm@0.1.0.json",
       "sha256": "28b7ae2beb1a39ba0444667b0208f03887f4aec3fb01e81e6ebd9382986a2b20",
       "bytes": 3832

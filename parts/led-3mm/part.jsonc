@@ -8,7 +8,7 @@
   "tags": ["led", "light", "indicator", "through-hole", "red"],
   "license": "MIT OR Apache-2.0",
   "docs": {
-    "Kingbright L-934ID, Spec No DSAA4904, Rev V.12A": null,
+    "Kingbright L-934ID, Spec No DSAA4904, Rev V.12A": "https://static.rapidonline.com/pdf/55-0798.pdf",
   },
   "real": { "maker": "Kingbright", "number": "L-934ID", "datasheet": "Kingbright L-934ID, Spec No DSAA4904, Rev V.12A" },
   "pins": { "anode": [1], "cathode": [2] },

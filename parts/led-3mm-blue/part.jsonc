@@ -11,6 +11,9 @@
     "Kingbright L-934VBC-D, Spec No DSAP9934, Rev V.1B": null,
   },
   "real": { "maker": "Kingbright", "number": "L-934VBC-D", "datasheet": "Kingbright L-934VBC-D, Spec No DSAP9934, Rev V.1B" },
+  "buy": [
+    { "seller": "TME", "url": "https://www.tme.eu/en/details/l-934vbc-d/tht-leds-round/kingbright-electronic/", "checked": "2026-11-22" },
+  ],
   "pins": { "anode": [1], "cathode": [2] },
   "model": {
     "kind": "led",

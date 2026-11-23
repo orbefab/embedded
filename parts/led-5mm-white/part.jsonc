@@ -11,6 +11,9 @@
     "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113QWC-D.pdf",
   },
   "real": { "maker": "Kingbright", "number": "WP7113QWC/D", "datasheet": "Kingbright WP7113QWC/D, Spec No DSAI6407, Rev V.6B" },
+  "buy": [
+    { "seller": "DigiKey", "url": "https://www.digikey.com/en/products/detail/kingbright/WP7113QWC-D/26231031", "checked": "2026-11-22" },
+  ],
   "pins": { "anode": [1], "cathode": [2] },
   "model": {
     "kind": "led",

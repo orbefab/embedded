@@ -11,6 +11,9 @@
     "Kingbright WP7113QBC/D, Spec No DSAG3481, Rev V.18B": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113QBC-D.pdf",
   },
   "real": { "maker": "Kingbright", "number": "WP7113QBC/D", "datasheet": "Kingbright WP7113QBC/D, Spec No DSAG3481, Rev V.18B" },
+  "buy": [
+    { "seller": "DigiKey", "url": "https://www.digikey.com/en/products/detail/kingbright/WP7113QBC-D/2261460", "checked": "2026-11-22" },
+  ],
   "pins": { "anode": [1], "cathode": [2] },
   "model": {
     "kind": "led",

@@ -11,6 +11,9 @@
     "Kingbright L-934GD, Spec No DSAA6381, Rev V.15B": null,
   },
   "real": { "maker": "Kingbright", "number": "L-934GD", "datasheet": "Kingbright L-934GD, Spec No DSAA6381, Rev V.15B" },
+  "buy": [
+    { "seller": "Rapid Electronics", "url": "https://www.rapidonline.com/kingbright-l-934gd-3mm-led-green-diffused-20mcd-55-0804", "checked": "2026-11-22" },
+  ],
   "pins": { "anode": [1], "cathode": [2] },
   "model": {
     "kind": "led",

@@ -11,6 +11,9 @@
     "Kingbright WP7113YD, Spec No DSAF2448, Rev V.11B": "https://www.kingbrightusa.com/images/catalog/SPEC/WP7113YD.pdf",
   },
   "real": { "maker": "Kingbright", "number": "WP7113YD", "datasheet": "Kingbright WP7113YD, Spec No DSAF2448, Rev V.11B" },
+  "buy": [
+    { "seller": "DigiKey", "url": "https://www.digikey.com/en/products/detail/kingbright/WP7113YD/1747683", "checked": "2026-11-22" },
+  ],
   "pins": { "anode": [1], "cathode": [2] },
   "model": {
     "kind": "led",

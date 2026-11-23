@@ -1,0 +1,1 @@
+scene.param scene.jsonc:9:34 | has no param `color` | led-5mm has no params; a variant such as blue may be its own part, so run orbe search led-5mm blue
