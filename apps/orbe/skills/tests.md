@@ -11,6 +11,7 @@ A test is `tests/<name>.test`. Each line is a live command without `orbe`. `#` s
 `expect` and `step --until` take the same conditions. Quote `<`, `>` and a colour in a shell.
 
 - `@led1 lit`, `@led1 dim`, `@led1 off`. Load `orbe skills get ratings` for the current each state needs.
+- `@disp.digit 8` on a 7-segment display, or `blank` when none of a to g glows. A dim segment counts. Another pattern names the glowing segments, and the decimal point stays out of the digit. A new digit reads within 1 ms. `orbe get @disp.digit` prints the same word.
 - `@nano.D13 high`, `@nano.D13 low`.
 - `@led1 rgb(255,0,0)`, an addressable LED's latched colour. `#` starts a comment, so a colour is never hex. In a shell, `orbe expect @led1 'rgb(255,0,0)'`.
 - `@led1.i > 5mA`, `@nano.D2 < 1V`, with `<`, `<=`, `>` or `>=`. In a shell, `orbe expect @led1.i '>' 5mA`. A test line accepts a quoted comparison the same way a shell does, as `'>'` or `"<="`.

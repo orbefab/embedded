@@ -98,6 +98,15 @@ pub enum Target {
         param: String,
         spec: MapParam,
     },
+    /// The digit a 7-segment part shows, from its `digit` reading.
+    Digit { path: String },
+}
+
+/// The part states a `digit` reading of its lit segments.
+pub(crate) fn digit_reading(part: &MapPart) -> bool {
+    part.readings
+        .get("digit")
+        .is_some_and(|reading| reading.of == "segments")
 }
 
 /// The name of the part's reading `"of": "rgb"`, the colours its LED chain latched.
@@ -151,6 +160,9 @@ pub fn resolve(
         }
         if last && seg == "brightness" && part.readings.contains_key("lit") {
             return Ok(Target::Brightness { path });
+        }
+        if last && seg == "digit" && digit_reading(part) {
+            return Ok(Target::Digit { path });
         }
         if last && rgb_reading(part) == Some(seg.as_str()) {
             let engine = one_engine(&path, part, Code::NoReading)?;
@@ -251,6 +263,9 @@ pub(crate) fn names(part: &MapPart, reported: &[Quantity]) -> String {
     }
     if part.readings.contains_key("lit") {
         found.push("brightness".to_string());
+    }
+    if digit_reading(part) {
+        found.push("digit".to_string());
     }
     if let Some(reading) = rgb_reading(part) {
         found.push(reading.to_string());

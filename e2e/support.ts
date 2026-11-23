@@ -243,7 +243,7 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "button" | "fade" | "light" | "pixels" | "shift" | "rgb";
+export type BlockKind = "button" | "digit" | "fade" | "light" | "pixels" | "shift" | "rgb";
 
 export interface RepoBlock {
   id: string;
@@ -265,13 +265,16 @@ export function blockKind(scene: string, id: string): BlockKind {
     .split("\n")
     .map((line) => line.replace(/\/\/.*$/, ""))
     .join("\n");
+  if (/"type"\s*:\s*"display-7seg-cc"/.test(code) || /"type"\s*:\s*"display-7seg-ca"/.test(code)) return "digit";
   if (/"type"\s*:\s*"neopixel-stick-8"/.test(code)) return "pixels";
   if (/"type"\s*:\s*"hc595-dip16"/.test(code)) return "shift";
   if (/"type"\s*:\s*"esp32s3-devkitc-1"/.test(code)) return "rgb";
   if (/"world"\s*:\s*\{[^}]*"light"\s*:/.test(code)) return "light";
   if (/"btn1"\s*:/.test(code)) return "button";
   if (/"led1"\s*:/.test(code)) return "fade";
-  throw new Error(`${id} names no button, no fading LED, no light, no pixel stick, no 74HC595 and no DevKitC-1`);
+  throw new Error(
+    `${id} names no button, no fading LED, no light, no pixel stick, no 7-segment display, no 74HC595 and no DevKitC-1`,
+  );
 }
 
 export async function simulatedSeconds(page: Page): Promise<number> {
@@ -370,6 +373,25 @@ async function showRgb(page: Page, block: RepoBlock, canvas: boolean, shotName: 
   await page.mouse.up();
 }
 
+/** The 7-segment Block: after a short count, at least one segment is lit. */
+async function showDigit(page: Page, block: RepoBlock, shotName: string | null): Promise<void> {
+  await waitSimulatedPast(page, 0.3);
+  const brightest = await page.evaluate(() => {
+    const root = window.orbeViewer.get().scene.getObjectByName("@disp");
+    return ["a", "b", "c", "d", "e", "f", "g"].reduce((best, name) => {
+      const node = root?.getObjectByName(`seg-${name}`);
+      const material = node?.material ?? node?.children?.[0]?.material;
+      return Math.max(best, Number(material?.emissiveIntensity ?? 0));
+    }, 0);
+  });
+  expect(brightest, `${block.id} segment`).toBeGreaterThan(0.2);
+  expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(0.3);
+  if (shotName !== null) {
+    await page.locator("canvas").scrollIntoViewIfNeeded();
+    await shot(page, shotName);
+  }
+}
+
 /** Play, require simulated time to move, and check the behaviour the scene declares. */
 export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, shotName: string | null): Promise<void> {
   await page.locator("canvas").scrollIntoViewIfNeeded();
@@ -413,6 +435,10 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
   }
   if (block.kind === "rgb") {
     await showRgb(page, block, canvas, shotName);
+    return;
+  }
+  if (block.kind === "digit") {
+    await showDigit(page, block, shotName);
     return;
   }
   if (block.kind === "pixels") {

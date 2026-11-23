@@ -15,7 +15,7 @@ use std::f64::consts::SQRT_2;
 use orbe_model::Time;
 
 use crate::element::{Observed, OwnedCapacitor, OwnedInductor, TWO_PIN, Update};
-use crate::mna::{GMIN, Probe, Stamp, Unknowns};
+use crate::mna::{GMIN, Node, Probe, Stamp, Unknowns};
 use crate::name::Quantity;
 use crate::netlist::json::ParseCtx;
 use crate::netlist::{Conduction, Kind};
@@ -284,6 +284,73 @@ mod tests {
         assert!(report.limited);
     }
 
+    /// Up to eight segments of a common-anode display whose anode is on no other net, each
+    /// cathode through 330 ohm to an input pin that leaks 5.5 Mohm to the supply and to
+    /// ground. The anode settles a little below the pins, where node gmin balances the
+    /// reverse junctions. Stamped as two conductances, six segments at 3.3 V never settled.
+    #[test]
+    fn a_floating_common_anode_settles_on_plain_newton() {
+        for segments in 1..=8 {
+            for supply in [3.3, 5.0] {
+                floating_common_anode(segments, supply);
+            }
+        }
+    }
+
+    fn floating_common_anode(segments: usize, supply: f64) {
+        let mut nets = vec!["gnd".to_string(), "vcc".to_string(), "com".to_string()];
+        let mut parts = vec![serde_json::json!({
+            "name": "vcc", "kind": "voltage_source", "pins": { "p": "vcc", "n": "gnd" },
+            "voltage": { "value": supply, "unit": "V" }
+        })];
+        for k in 0..segments {
+            let (cathode, pin) = (format!("k{k}"), format!("p{k}"));
+            nets.extend([cathode.clone(), pin.clone()]);
+            parts.extend([
+                serde_json::json!({
+                    "name": format!("seg{k}"), "kind": "led",
+                    "pins": { "anode": "com", "cathode": cathode },
+                    "saturation_current": { "value": 3.272e-14, "unit": "A" },
+                    "emission_coefficient": { "value": 2.509, "unit": "1" },
+                    "series_resistance": { "value": 9.532, "unit": "ohm" },
+                    "ratings": { "current": null, "power": null }
+                }),
+                serde_json::json!({
+                    "name": format!("r{k}"), "kind": "resistor",
+                    "pins": { "a": cathode, "b": pin },
+                    "resistance": { "value": 330.0, "unit": "ohm" }, "ratings": { "power": null }
+                }),
+                serde_json::json!({
+                    "name": format!("up{k}"), "kind": "resistor",
+                    "pins": { "a": pin, "b": "vcc" },
+                    "resistance": { "value": 5.5e6, "unit": "ohm" }, "ratings": { "power": null }
+                }),
+                serde_json::json!({
+                    "name": format!("down{k}"), "kind": "resistor",
+                    "pins": { "a": pin, "b": "gnd" },
+                    "resistance": { "value": 5.5e6, "unit": "ohm" }, "ratings": { "power": null }
+                }),
+            ]);
+        }
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "version": 1, "seed": 0, "analysis": { "op": {} }, "ground": "gnd",
+            "nets": nets, "parts": parts
+        }))
+        .unwrap();
+        let circuit = Circuit::new(crate::netlist::parse(&bytes).unwrap()).unwrap();
+        let converged = crate::newton::newton(
+            &circuit,
+            &mut crate::mna::Solver::new(&circuit.layout),
+            &crate::newton::Conditions::NOMINAL,
+            crate::newton::Iterate::initial(&circuit),
+            crate::op::OP_BUDGET,
+        );
+        assert!(
+            converged.is_ok(),
+            "{segments} segments at {supply} V: {converged:?}"
+        );
+    }
+
     fn diode() -> Netlist {
         crate::netlist::parse(
             br#"{
@@ -479,19 +546,34 @@ impl Kind for Junction {
     /// cathode, linearised at the voltage `evaluate` used. `GMIN` is across that
     /// junction. ngspice-42's `dioload` adds `CKTgmin` to `gd` and `CKTgmin * vd`
     /// to the current, and it puts no conductance from the internal node to ground.
+    ///
+    /// The internal node's row is its own current law. The anode and cathode rows carry
+    /// Rs and the junction in series, `G * g / (G + g)`, which is what eliminating the
+    /// internal node gives, so no other row reads the internal node. Stamped as two
+    /// conductances, a node that reaches the rest only through reverse junctions, such as
+    /// a floating common anode, would be left by LU as `G - G * G / (G + g)`. With `G`
+    /// near 0.1 S and `g` near 1 pS that difference keeps about five digits, too few for
+    /// Newton to settle on that node's voltage.
     #[inline]
     fn stamp(&self, stamp: &mut Stamp<'_>) {
         let params = shockley(self);
         let [anode, cathode] = self.pins;
         let inner = stamp.internal(0);
-        stamp.conductance(anode, inner, 1.0 / self.series_resistance.si.get());
+        let rs = self.series_resistance.si.get();
         let vj = stamp.junction(0);
         let (id, gd, _, voltage) = params.evaluate(vj);
-        stamp.conductance(inner, cathode, gd + GMIN);
+        let g = gd + GMIN;
         // The companion is the derivative at the clamped voltage, not at an argument `exp`
         // never saw. ngspice's is `cd - gd * vd` with `GMIN` in `cd` and `gd`, and `GMIN * vd`
         // cancels there.
-        stamp.current(inner, cathode, id - gd * voltage);
+        let companion = id - gd * voltage;
+        stamp.add(inner, inner, 1.0 / rs + g);
+        stamp.add(inner, anode, -1.0 / rs);
+        stamp.add(inner, cathode, -g);
+        stamp.current(inner, Node::Ground, companion);
+        let share = 1.0 / (1.0 + rs * g);
+        stamp.conductance(anode, cathode, g * share);
+        stamp.current(anode, cathode, companion * share);
     }
     fn reads_iterate(&self) -> bool {
         true
