@@ -397,6 +397,7 @@ fn search_finds_a_block_by_a_word_of_its_id() {
         names,
         [
             "nano-button-led",
+            "nano-gy-bmp280",
             "nano-led-fade",
             "nano-light-comparator",
             "nano-neopixel-stick",

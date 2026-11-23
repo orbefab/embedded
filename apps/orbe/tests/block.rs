@@ -14,12 +14,13 @@ use std::path::Path;
 
 use live::{common, orbe};
 
-const BLOCKS: [&str; 5] = [
+const BLOCKS: [&str; 6] = [
     "nano-button-led",
     "uno-button-led",
     "nano-led-fade",
     "nano-light-comparator",
     "nano-neopixel-stick",
+    "nano-gy-bmp280",
 ];
 
 /// Every file below `dir` with its bytes, by its path from `dir`.
@@ -81,6 +82,8 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
         // The rainbow Block drives a pixel module. The others light a 5 mm LED.
         let marker = if id == "nano-neopixel-stick" {
             "neopixel-stick-8"
+        } else if id == "nano-gy-bmp280" {
+            "gy-bmp280"
         } else {
             "led-5mm"
         };

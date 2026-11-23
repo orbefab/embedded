@@ -198,16 +198,22 @@ pub enum ProtocolRule {
     /// A high a `Pulses` record carried, which a chain with `DOUT` would pass on. The record
     /// lands at its end, after that high, so `DOUT` does not drive it.
     DoutRecord,
+    /// `CSB` was low, so the part is in SPI mode and does not answer on I2C.
+    Spi,
+    /// `spi3w_en` was set. 3-wire SPI is not modelled.
+    Spi3w,
 }
 
 impl ProtocolRule {
-    pub(crate) const ALL: [ProtocolRule; 6] = [
+    pub(crate) const ALL: [ProtocolRule; 8] = [
         ProtocolRule::Command,
         ProtocolRule::PixelFormat,
         ProtocolRule::SdaWhileSclHigh,
         ProtocolRule::Bit,
         ProtocolRule::Interval,
         ProtocolRule::DoutRecord,
+        ProtocolRule::Spi,
+        ProtocolRule::Spi3w,
     ];
 
     /// Its place in [`ALL`](Self::ALL).
@@ -224,6 +230,8 @@ impl ProtocolRule {
             "bit" => Some(ProtocolRule::Bit),
             "interval" => Some(ProtocolRule::Interval),
             "dout_record" => Some(ProtocolRule::DoutRecord),
+            "spi" => Some(ProtocolRule::Spi),
+            "spi3w" => Some(ProtocolRule::Spi3w),
             _ => None,
         }
     }
@@ -1268,6 +1276,30 @@ impl Diagnostic {
                 format!(
                     "{part} did not answer a read that broke rule {} at {} ps, the first time",
                     rule_text(&ProtocolRule::Interval),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::Spi,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} did not answer on I2C because CSB was low, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::Spi),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::Spi3w,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} was set to 3-wire SPI, which is not modelled, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::Spi3w),
                     at.as_ps()
                 )
             }

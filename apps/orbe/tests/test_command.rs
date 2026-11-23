@@ -23,6 +23,7 @@ fn each_block_passes() {
         ids,
         [
             "nano-button-led",
+            "nano-gy-bmp280",
             "nano-led-fade",
             "nano-light-comparator",
             "nano-neopixel-stick",
@@ -1301,7 +1302,7 @@ fn a_set_the_table_refuses_is_a_usage_error() {
     for (line, message) in [
         (
             "set lite 50",
-            "`lite` is not a world quantity; the quantities are temperature, humidity, light; usage: set <quantity> <value> | set <ref> <value>",
+            "`lite` is not a world quantity; the quantities are temperature, humidity, light, pressure; usage: set <quantity> <value> | set <ref> <value>",
         ),
         (
             "set light 200000",

@@ -265,7 +265,7 @@ fn a_bad_line_names_the_command_and_its_usage() {
         ),
         (
             "set lite 50",
-            "`lite` is not a world quantity; the quantities are temperature, humidity, light",
+            "`lite` is not a world quantity; the quantities are temperature, humidity, light, pressure",
         ),
         (
             "set light 200000",

@@ -392,7 +392,7 @@ pub fn live_field(kind: &str) -> Option<&'static str> {
 
 fn chip_pin_names(chip: &Chip) -> &[&'static str] {
     use crate::chip::Ne555;
-    use crate::device::{Cst816, Dht22, PulsesReplay, SpiReplay, St77916, Ws2812};
+    use crate::device::{Bmp280, Cst816, Dht22, PulsesReplay, SpiReplay, St77916, Ws2812};
 
     match chip {
         Chip::Ne555(_) => &Ne555::PINS,
@@ -401,6 +401,7 @@ fn chip_pin_names(chip: &Chip) -> &[&'static str] {
         Chip::St77916(_) => &St77916::PINS,
         Chip::Cst816(_) => &Cst816::PINS,
         Chip::Dht22(_) => &Dht22::PINS,
+        Chip::Bmp280(_) => &Bmp280::PINS,
         Chip::Esp32s3(mcu) => &mcu.names,
         Chip::Ws2812(part) => &Ws2812::PINS[..part.pins.len()],
         Chip::PulsesReplay(_) => &PulsesReplay::PINS,
@@ -415,6 +416,7 @@ fn chip_pins(chip: &Chip) -> &[NetId] {
         Chip::St77916(part) => &part.pins,
         Chip::Cst816(part) => &part.pins,
         Chip::Dht22(part) => &part.pins,
+        Chip::Bmp280(part) => &part.pins,
         Chip::Ws2812(part) => &part.pins,
         Chip::PulsesReplay(part) => &part.pins,
         Chip::Esp32s3(part) => &part.pins,
@@ -509,6 +511,9 @@ define_kinds! {
         Dht22, "dht22",
             crate::device::dht22::WireDht22, crate::device::dht22::resolve_dht22,
             &crate::device::Dht22::PINS;
+        Bmp280, "bmp280",
+            crate::device::bmp280::WireBmp280, crate::device::bmp280::resolve_bmp280,
+            &crate::device::Bmp280::PINS;
         Esp32s3 required crate::mcu::Esp32s3::REQUIRED, "esp32s3",
             crate::mcu::esp32s3::WireEsp32s3, crate::mcu::esp32s3::resolve_esp32s3,
             &crate::mcu::Esp32s3::PINS;

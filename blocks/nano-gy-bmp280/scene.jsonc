@@ -1,0 +1,24 @@
+// A Nano reads a GY-BMP280-3.3. The module is 3.3 V only and has no regulator, and the
+// Nano's 3V3 pin supplies nothing, so an LP2985 makes 3.3 V from 5V. SDA is A4 and SCL is
+// A5. The module pulls SDO to ground, so the address is 0x76.
+{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/bmp280.ino.hex" },
+    "reg": { "type": "lp2985-sot23-5" },
+    "mod": { "type": "gy-bmp280" },
+  },
+  "layout": {
+    "nano": { "at": [0, 0, 0] },
+    "reg": { "at": [55, 0, 0] },
+    "mod": { "at": [80, 0, 0] },
+  },
+  "wires": [
+    ["nano.5V", "reg.IN"],
+    ["reg.GND", "nano.GND"],
+    ["reg.OUT", "mod.VCC"],
+    ["mod.GND", "nano.GND"],
+    ["nano.A4", "mod.SDA"],
+    ["nano.A5", "mod.SCL"],
+  ],
+}

@@ -1,0 +1,92 @@
+// Bosch BMP280, BST-BMP280-DS001-26. The LGA-8 pin order is the sheet's Table 29.
+// The engine kind reads the scene's temperature and pressure and answers on I2C.
+{
+  "format": 1,
+  "part": "bmp280",
+  "version": "0.1.0",
+  "title": "BMP280 temperature and pressure sensor",
+  "summary": "Bosch BMP280 in an 8-pad LGA, 2.0 x 2.5 mm. It reads the scene's temperature and pressure over I2C. SDO low is address 0x76 and SDO high is 0x77. CSB must stay high; low is SPI, which is not modelled. The chip id is 0x58. A compensated read matches the world within 1 °C and 1 hPa.",
+  "tags": ["bmp280", "temperature", "pressure", "sensor", "i2c", "lga"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "BST-BMP280-DS001-26": "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmp280-ds001.pdf"
+  },
+  "real": {
+    "generic": false,
+    "maker": "Bosch Sensortec",
+    "number": "BMP280",
+    "datasheet": "BST-BMP280-DS001-26"
+  },
+  "pins": {
+    "GND": [1, 7],
+    "CSB": [2],
+    "SDI": [3],
+    "SCK": [4],
+    "SDO": [5],
+    "VDDIO": [6],
+    "VDD": [8]
+  },
+  "model": {
+    "kind": "bmp280",
+    "pins": {
+      "VDD": "VDD",
+      "VDDIO": "VDDIO",
+      "GND": "GND",
+      "CSB": "CSB",
+      "SDI": "SDI",
+      "SCK": "SCK",
+      "SDO": "SDO"
+    },
+    "low_resistance": {
+      "value": 108.0,
+      "unit": "ohm",
+      "source": {
+        "closed_form": {
+          "note": "Table 26, Vol_SDI maximum 0.2 * VDDIO at 3 mA with VDDIO 1.62 V. 0.324 V / 3 mA. The sheet gives no typical, so the open drain is that maximum."
+        }
+      }
+    },
+    "input_threshold": {
+      "low": {
+        "value": 0.2,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "BST-BMP280-DS001-26",
+            "at": "Table 26, Vil_si maximum 0.2 * VDDIO, VDDIO from 1.2 V to 3.6 V",
+            "basis": "max"
+          }
+        }
+      },
+      "high": {
+        "value": 0.8,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "BST-BMP280-DS001-26",
+            "at": "Table 26, Vih_si minimum 0.8 * VDDIO, VDDIO from 1.2 V to 3.6 V",
+            "basis": "min"
+          }
+        }
+      }
+    }
+  },
+  "not_simulated": [
+    {
+      "what": "SPI",
+      "why": "CSB low selects SPI (section 5.3). The part does not answer on I2C then, and the first time is chip.protocol rule spi. No SPI transfer is modelled. spi3w_en set to 1 is rule spi3w."
+    },
+    {
+      "what": "NVM copy",
+      "why": "im_update is 1 while the trimming words are copied at power-on and before each conversion (section 4.3.3). That copy takes no time here, so the bit stays 0 and the words are readable from t = 0."
+    },
+    {
+      "what": "supply current",
+      "why": "Table 12 gives the current at 1 Hz. The part draws none. VDD and VDDIO need another path to a supply."
+    },
+    {
+      "what": "accuracy",
+      "why": "A compensated read is the world's value, clamped to -40 to 85 °C and 300 to 1100 hPa, then quantized by the 20-bit sample and the integer formulas. The sheet allows ±1.0 °C from 0 to 65 °C and ±1 hPa absolute."
+    }
+  ]
+}

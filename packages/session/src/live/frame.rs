@@ -42,7 +42,7 @@ pub(super) struct Bound {
     params: Vec<(String, String, orbe_scene::MapParam)>,
 }
 
-/// A world quantity's name: `temperature`, `humidity` or `light`.
+/// A world quantity's name: `temperature`, `humidity`, `light` or `pressure`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -50,6 +50,7 @@ pub(crate) enum WorldName {
     Temperature,
     Humidity,
     Light,
+    Pressure,
 }
 
 impl From<Quantity> for WorldName {
@@ -58,6 +59,7 @@ impl From<Quantity> for WorldName {
             Quantity::Temperature => Self::Temperature,
             Quantity::Humidity => Self::Humidity,
             Quantity::Light => Self::Light,
+            Quantity::Pressure => Self::Pressure,
         }
     }
 }
@@ -94,6 +96,7 @@ impl WorldQuantity {
             Quantity::Temperature => Scale::Linear { step: 0.5 },
             Quantity::Humidity => Scale::Linear { step: 1.0 },
             Quantity::Light => Scale::Log,
+            Quantity::Pressure => Scale::Linear { step: 100.0 },
         };
         WorldQuantity {
             name: quantity.into(),

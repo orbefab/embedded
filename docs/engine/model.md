@@ -39,7 +39,7 @@ Only `run_until` changes the drives. Any call may change the draw. The host stam
 
 ## The world
 
-`WORLD` lists the world quantities a device reads, `temperature`, `humidity` or `light`. It is empty by default. The device declares them in its code, so the host fills exactly the quantities the code reads, and a part file cannot drift from them. A netlist with a part whose device reads a quantity must declare that quantity in its `world`, or the part is `netlist.world` with rule `undeclared` on field `kind`. A scene adds each quantity its devices read to the ones it must declare.
+`WORLD` lists the world quantities a device reads, `temperature`, `humidity`, `light` or `pressure`. It is empty by default. The device declares them in its code, so the host fills exactly the quantities the code reads, and a part file cannot drift from them. A netlist with a part whose device reads a quantity must declare that quantity in its `world`, or the part is `netlist.world` with rule `undeclared` on field `kind`. A scene adds each quantity its devices read to the ones it must declare.
 
 `cx.world(quantity)` is that quantity's value at the call's time: the value after every change strictly before that time, the rule the trace and `World::before` use. A call at a change's own time reads the value before it. For `run_until` the time is `limit`. The engine lands every core whose device reads a quantity at each change of that quantity, so a run from a commit never crosses a change and reads one value for its whole span. A quantity the device did not declare in `WORLD` panics. A device that reads nothing gets an empty `Cx`, and its calls cost what they cost before the world existed.
 

@@ -26,6 +26,8 @@ pub(crate) struct Bus {
     pub(crate) scl: usize,
     pub(crate) sda: usize,
     pub(crate) reset: Option<usize>,
+    /// A high level on this watch selects `address + 1`. None keeps `address`.
+    pub(crate) address_high: Option<usize>,
 }
 
 /// What the engine calls for the bytes: a device's [`I2cTarget`], or a test's recorder.
@@ -149,6 +151,8 @@ impl Pending {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Engine {
     bus: Bus,
+    /// The address bit from [`Bus::address_high`] at the last input.
+    address_bit: bool,
     phase: Phase,
     seen: bool,
     in_reset: bool,
@@ -166,6 +170,7 @@ impl Engine {
     pub(crate) const fn new(bus: Bus) -> Engine {
         Engine {
             bus,
+            address_bit: false,
             phase: Phase::Idle,
             seen: false,
             in_reset: false,
@@ -278,7 +283,7 @@ impl Engine {
                     Recv::Address => {
                         let address = shifter >> 1;
                         let read = shifter & 1 == 1;
-                        let matched = address == self.bus.address;
+                        let matched = address == self.bus.address + u8::from(self.address_bit);
                         let next = if !matched {
                             Next::Idle
                         } else if read {
@@ -422,8 +427,13 @@ impl<D: I2cTarget> Port<D> for Engine {
 
     fn input(&mut self, dev: &mut Hosting<D>, world: &World, at: Time, levels: &[bool]) {
         let Bus {
-            scl, sda, reset, ..
+            scl,
+            sda,
+            reset,
+            address_high,
+            ..
         } = self.bus;
+        self.address_bit = address_high.is_some_and(|pin| levels[pin]);
         let reset = reset.is_some_and(|pin| !levels[pin]);
         self.edge(
             at,
@@ -536,6 +546,7 @@ mod tests {
                     scl: 0,
                     sda: 1,
                     reset: None,
+                    address_high: None,
                 }),
                 t: 0,
                 scl: true,

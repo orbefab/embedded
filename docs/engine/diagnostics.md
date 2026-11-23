@@ -231,7 +231,7 @@ Severity `error`. Refs is the part whose field reads the quantity, or empty for 
 
 `data` holds `field`, `name`, and `rule`. `name` is the quantity's name as the netlist wrote it. `rule` is one of these.
 
-- `unknown`: the name is not a row of the [world table](netlist.md#world). The message is ``{field} names `{name}`, which is not a world quantity; the quantities are temperature, humidity, light``, with the ref before it for a part's field, for example ``#r1 resistance.quantity names `lite`, which is not a world quantity; the quantities are temperature, humidity, light``. `field` is `world` for a name in `world` and `<field>.quantity` for a part's.
+- `unknown`: the name is not a row of the [world table](netlist.md#world). The message is ``{field} names `{name}`, which is not a world quantity; the quantities are temperature, humidity, light, pressure``, with the ref before it for a part's field, for example ``#r1 resistance.quantity names `lite`, which is not a world quantity; the quantities are temperature, humidity, light, pressure``. `field` is `world` for a name in `world` and `<field>.quantity` for a part's.
 - `undeclared`: a part's field reads a quantity the netlist's `world` does not declare. The message is ``{ref} {field} reads {name}, which the netlist's `world` does not declare``. `field` is `<field>.quantity`, or `kind` when the part's device reads the quantity, as a `dht22` reads `temperature` and `humidity`.
 - `temperature`: a `beta` curve reads a quantity other than `temperature`. The message is `{ref} {field} is a B equation, which reads temperature, not {name}`. `field` is `<field>.curve.kind`.
 - `non_negative`: a `power` curve reads a quantity whose range goes below 0, which is `temperature`. The message is `{ref} {field} is a power curve, which reads a quantity that does not go below 0, not {name}`. `field` is `<field>.curve.kind`.
@@ -419,6 +419,8 @@ The message for a dropped transfer is `{part} dropped a transfer that broke rule
 | `bit` | A `ws2812` high was in neither the T0H window, 220 ns to 400 ns, nor the T1H window, 580 ns to 1 µs. That bit is dropped, and its time is the fall that ended the high. The chain reports the first one. |
 | `dout_record` | A `ws2812` with `DOUT` took a high past its last LED's bits from a `Pulses` record. `DOUT` stays low, and the time is the rise that started the high. The chain reports the first one. |
 | `interval` | A `dht22` start came within 2 s of power-on or of the last start it answered. The sensor does not answer it, and its time is the end of the start's low. |
+| `spi` | A `bmp280` saw `CSB` low, so it is in SPI mode and does not answer on I2C. The time is the first sample that read `CSB` low. |
+| `spi3w` | A `bmp280` took a `config` write with `spi3w_en` set. 3-wire SPI is not modelled, and the time is that write. |
 
 ## chip.link_miswired
 

@@ -19,7 +19,7 @@ A folder already at `parts/<id>/` is `part_exists` and nothing is written. The m
 
 `@<registry>/<id>` is a usage error. This orbe reads the `@orbefab` registry only.
 
-For addressable RGB LEDs, use `neopixel-stick-8`. `orbe search neopixel` finds it.
+For addressable RGB LEDs, use `neopixel-stick-8`. For temperature and pressure over I2C, use `gy-bmp280`.
 
 ## Blocks
 

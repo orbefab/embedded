@@ -8,7 +8,9 @@
 # The runtime's core is compiled into an archive and linked with each sketch, and main() comes
 # from the core. The runtime's Wire library is compiled into a second archive, which a sketch
 # that includes Wire.h also links. A sketch that includes Adafruit_NeoPixel.h also links that
-# library, pinned below, compiled for the sketch's clock. A clock other than 16 MHz gets its
+# library, pinned below, compiled for the sketch's clock. A sketch that includes
+# Adafruit_BMP280.h also links that library and Adafruit BusIO and Adafruit Unified Sensor,
+# pinned below. A clock other than 16 MHz gets its
 # own core and Wire archives.
 # A build of the engine reads only the committed hex.
 #
@@ -25,6 +27,12 @@ runtime_url=https://downloads.arduino.cc/cores/staging/avr-1.8.6.tar.bz2
 runtime_sha256=ff1d17274b5a952f172074bd36c3924336baefded0232e10982f8999c2f7c3b6
 neopixel_url=https://github.com/adafruit/Adafruit_NeoPixel/archive/refs/tags/1.15.5.tar.gz
 neopixel_sha256=3aa189a5a397a13539fcb58ff297ab9dc4a4faf45115e48afd533f1337cb0f3b
+bmp280_url=https://github.com/adafruit/Adafruit_BMP280_Library/archive/refs/tags/3.0.0.tar.gz
+bmp280_sha256=54018faa0cb89ef25b54c79b1ab274e4010e9b2e41632446c72ac6ceed8f1241
+busio_url=https://github.com/adafruit/Adafruit_BusIO/archive/refs/tags/1.17.0.tar.gz
+busio_sha256=45c22f2d73c150257fdeec62f0f23ecdd62eab538a31b3652e1f3ff1cec863d2
+sensor_url=https://github.com/adafruit/Adafruit_Sensor/archive/refs/tags/1.1.15.tar.gz
+sensor_sha256=1763c21c969a74d69e4d29082c7458a2d474d51e5ad0e2c4803dda8e1c372d9a
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
   echo "usage: $0 TOOLS_DIR [DOWNLOAD_DIR]" >&2
@@ -62,10 +70,17 @@ unpack() {
 unpack avr-gcc-7.3.0 "$toolchain_url" "$toolchain_sha256"
 unpack avr-runtime-1.8.6 "$runtime_url" "$runtime_sha256"
 unpack adafruit-neopixel-1.15.5 "$neopixel_url" "$neopixel_sha256"
+unpack adafruit-bmp280-3.0.0 "$bmp280_url" "$bmp280_sha256"
+unpack adafruit-busio-1.17.0 "$busio_url" "$busio_sha256"
+unpack adafruit-sensor-1.1.15 "$sensor_url" "$sensor_sha256"
 
 bin=$tools/avr-gcc-7.3.0/avr/bin
 runtime=$tools/avr-runtime-1.8.6/avr-1.8.6
 neopixel=$tools/adafruit-neopixel-1.15.5/Adafruit_NeoPixel-1.15.5
+bmp280=$tools/adafruit-bmp280-3.0.0/Adafruit_BMP280_Library-3.0.0
+busio=$tools/adafruit-busio-1.17.0/Adafruit_BusIO-1.17.0
+sensor=$tools/adafruit-sensor-1.1.15/Adafruit_Sensor-1.1.15
+spi=$runtime/libraries/SPI/src
 core=$runtime/cores/arduino
 target=(-mmcu=atmega328p -DF_CPU=16000000L -I"$core" -I"$runtime/variants/standard")
 c_flags=(-c -g -Os -w -std=gnu11 -ffunction-sections -fdata-sections -flto -fno-fat-lto-objects)
@@ -149,6 +164,22 @@ for dir in "$repo"/packages/engine/tests/firmware/sketch/*/ "$repo"/blocks/*/fir
       "$neopixel/Adafruit_NeoPixel.cpp" -o "$work/$name-neopixel.o"
     library+=(-I"$neopixel" -DARDUINO=10806)
     archives+=("$work/$name-neopixel.o")
+  fi
+  if grep -q '^#include <Adafruit_BMP280.h>' "$dir/$name.ino"; then
+    bmp_flags=(-I"$bmp280" -I"$busio" -I"$sensor" -I"$spi" -I"$wire" -DARDUINO=10806)
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${bmp_flags[@]}" \
+      "$bmp280/Adafruit_BMP280.cpp" -o "$work/$name-bmp280.o"
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${bmp_flags[@]}" -I"$wire" \
+      "$busio/Adafruit_I2CDevice.cpp" -o "$work/$name-i2cdevice.o"
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${bmp_flags[@]}" \
+      "$busio/Adafruit_SPIDevice.cpp" -o "$work/$name-spidevice.o"
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${bmp_flags[@]}" \
+      "$sensor/Adafruit_Sensor.cpp" -o "$work/$name-sensor.o"
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" -I"$spi" \
+      "$spi/SPI.cpp" -o "$work/$name-spi.o"
+    library+=("${bmp_flags[@]}")
+    archives+=("$work/$name-bmp280.o" "$work/$name-i2cdevice.o" "$work/$name-spidevice.o" \
+      "$work/$name-sensor.o" "$work/$name-spi.o")
   fi
   "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${library[@]}" -x c++ -include Arduino.h \
     "$dir/$name.ino" -o "$work/$name.o"
