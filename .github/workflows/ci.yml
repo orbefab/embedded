@@ -4,12 +4,15 @@
 # and the site suite on wrangler run in parallel on every pull request and on
 # every push to main. The viewer fixture is two shards of one Playwright run.
 # Each shard plays the page with no session, which runs a Block, so those jobs
-# install Rust and wasm-bindgen. The page build itself does not. The site
-# suite on wrangler is three shards. The site suite on vite preview, which
-# includes the install-line build, and the Firefox and WebKit smoke run on
-# main and nightly. The engine checks (`check.sh engine-chips`, `engine-circuits` and
-# `engine-wasm`) run in parallel on main and nightly, and on a pull request
-# when scripts/ci-engine-changed.sh prints run=true. The released-client job
+# install Rust and wasm-bindgen. The page build itself does not. The site is
+# built once, and that build is shared. The wrangler suite is three shards that
+# download it. The vite preview suite downloads it too, then builds the
+# install-line site, and the Firefox and WebKit smoke downloads it. Those two
+# jobs run on main and nightly. ci-ok requires every job. A job this run did
+# not ask for is skipped, and any other result fails ci-ok. The engine checks
+# (`check.sh engine-chips`, `engine-circuits` and `engine-wasm`) run in parallel
+# on main and nightly, and on a pull request when scripts/ci-engine-changed.sh
+# prints run=true. The released-client job
 # downloads the newest published Linux binary and requires that it read every
 # part and Block, or refuse the item because the format is newer than that
 # binary reads. The cargo cache keeps
@@ -28,6 +31,7 @@ on:
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -164,8 +168,46 @@ jobs:
           scripts/check-block.sh
           scripts/check-headed.sh
 
+  site-build:
+    name: site build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup
+        uses: ./.github/actions/setup
+        with:
+          node: true
+          rust: true
+          cargo-cache-key: web
+          wasm-bindgen: true
+          cache-save: ${{ env.CACHE_SAVE }}
+
+      - name: Build the site
+        run: scripts/check-site.sh --servers wrangler --no-playwright
+
+      - name: Upload the site
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: site
+          path: apps/site/dist
+          retention-days: 1
+          if-no-files-found: error
+          include-hidden-files: true
+
+      - name: Upload orbe
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: orbe
+          path: target/debug/orbe
+          retention-days: 1
+          if-no-files-found: error
+
   site:
     name: site ${{ matrix.shard }}
+    needs: site-build
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     strategy:
@@ -181,13 +223,26 @@ jobs:
         with:
           node: true
           playwright: chromium
-          rust: true
-          cargo-cache-key: web
-          wasm-bindgen: true
           cache-save: ${{ env.CACHE_SAVE }}
 
+      - name: Download the site
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: site
+          path: apps/site/dist
+
+      - name: Download orbe
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: orbe
+          path: .scratch/orbe
+
       - name: Site on wrangler
-        run: scripts/check-site.sh --servers wrangler --shard "${{ matrix.shard }}"
+        env:
+          ORBE: ${{ github.workspace }}/.scratch/orbe/orbe
+        run: |
+          chmod +x "$ORBE"
+          scripts/check-site.sh --servers wrangler --shard "${{ matrix.shard }}" --no-build
 
   engine-chips:
     name: engine-chips
@@ -269,6 +324,7 @@ jobs:
 
   site-vite:
     name: site vite
+    needs: site-build
     if: github.event_name == 'schedule' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -286,11 +342,18 @@ jobs:
           wasm-bindgen: true
           cache-save: ${{ env.CACHE_SAVE }}
 
+      - name: Download the site
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: site
+          path: apps/site/dist
+
       - name: Site on vite preview
-        run: scripts/check-site.sh --servers vite
+        run: scripts/check-site.sh --servers vite --no-build
 
   engines:
     name: engines
+    needs: site-build
     if: github.event_name == 'schedule' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -308,14 +371,19 @@ jobs:
           wasm-bindgen: true
           cache-save: ${{ env.CACHE_SAVE }}
 
-      - name: Build the viewer page, the Block it plays, and the site
+      - name: Download the site
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: site
+          path: apps/site/dist
+
+      - name: Build the viewer page, the Block it plays, and the registry
         run: |
           pnpm --filter @orbe/viewer-page build
           scripts/wasm.sh .scratch/wasm/pkg
           cargo build -p orbe --locked
           rm -rf .scratch/wasm/registry
           target/debug/orbe registry build . .scratch/wasm/registry >/dev/null
-          scripts/site.sh
 
       - name: Firefox and WebKit
         run: scripts/check-engines.sh
@@ -335,7 +403,7 @@ jobs:
 
   ci-ok:
     name: ci-ok
-    needs: [scope, lint, rust-tests, viewer, viewer-blocks, site, engine-chips, engine-circuits, engine-wasm, client]
+    needs: [scope, lint, rust-tests, viewer, viewer-blocks, site-build, site, site-vite, engines, engine-chips, engine-circuits, engine-wasm, client]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -347,14 +415,17 @@ jobs:
           RUST: ${{ needs.rust-tests.result }}
           VIEWER: ${{ needs.viewer.result }}
           VIEWER_BLOCKS: ${{ needs.viewer-blocks.result }}
+          SITE_BUILD: ${{ needs.site-build.result }}
           SITE: ${{ needs.site.result }}
+          SITE_VITE: ${{ needs.site-vite.result }}
+          ENGINES: ${{ needs.engines.result }}
           ENGINE_CHIPS: ${{ needs.engine-chips.result }}
           ENGINE_CIRCUITS: ${{ needs.engine-circuits.result }}
           ENGINE_WASM: ${{ needs.engine-wasm.result }}
           CLIENT: ${{ needs.client.result }}
         run: |
           failed=
-          for name in SCOPE LINT RUST VIEWER VIEWER_BLOCKS SITE ENGINE_CHIPS ENGINE_CIRCUITS ENGINE_WASM CLIENT; do
+          for name in SCOPE LINT RUST VIEWER VIEWER_BLOCKS SITE_BUILD SITE SITE_VITE ENGINES ENGINE_CHIPS ENGINE_CIRCUITS ENGINE_WASM CLIENT; do
             result=${!name}
             case $result in
               success|skipped) ;;
