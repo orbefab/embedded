@@ -85,7 +85,8 @@ pub fn runs_a_core(netlist: &Netlist) -> bool {
             | Chip::Esp32s3(_)
             | Chip::Ws2812(_)
             | Chip::Dht22(_)
-            | Chip::PulsesReplay(_) => true,
+            | Chip::PulsesReplay(_)
+            | Chip::Hc595(_) => true,
         },
         _ => false,
     })

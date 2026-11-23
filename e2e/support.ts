@@ -243,7 +243,7 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "button" | "fade" | "light" | "pixels";
+export type BlockKind = "button" | "fade" | "light" | "pixels" | "shift";
 
 export interface RepoBlock {
   id: string;
@@ -266,10 +266,11 @@ export function blockKind(scene: string, id: string): BlockKind {
     .map((line) => line.replace(/\/\/.*$/, ""))
     .join("\n");
   if (/"type"\s*:\s*"neopixel-stick-8"/.test(code)) return "pixels";
+  if (/"type"\s*:\s*"hc595-dip16"/.test(code)) return "shift";
   if (/"world"\s*:\s*\{[^}]*"light"\s*:/.test(code)) return "light";
   if (/"btn1"\s*:/.test(code)) return "button";
   if (/"led1"\s*:/.test(code)) return "fade";
-  throw new Error(`${id} names no button, no fading LED, no light and no pixel stick`);
+  throw new Error(`${id} names no button, no fading LED, no light, no pixel stick and no 74HC595`);
 }
 
 export async function simulatedSeconds(page: Page): Promise<number> {
@@ -311,6 +312,26 @@ async function stepLight(page: Page, key: "ArrowLeft" | "ArrowRight", want: stri
 
 const FADE_CYCLE_S = 3.1;
 
+/** Eight LEDs on a 74HC595. QA is led1, the least significant bit of 0x55. */
+async function showShift(page: Page, id: string, shotName: string | null): Promise<void> {
+  await waitSimulatedPast(page, 0.2);
+  const glows = await page.evaluate(() =>
+    [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
+      const body = window.orbeViewer.get().scene.getObjectByName(`@led${n}`)?.getObjectByName("body");
+      const material = body?.material;
+      return typeof material?.emissiveIntensity === "number" ? material.emissiveIntensity : -1;
+    }),
+  );
+  glows.forEach((glow, index) => {
+    if (index % 2 === 0) expect(glow, `${id} led${index + 1}`).toBeGreaterThan(0.15);
+    else expect(glow, `${id} led${index + 1}`).toBeLessThan(0.05);
+  });
+  if (shotName !== null) {
+    await page.locator("canvas").scrollIntoViewIfNeeded();
+    await shot(page, shotName);
+  }
+}
+
 /** Play, require simulated time to move, and check the behaviour the scene declares. */
 export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, shotName: string | null): Promise<void> {
   await page.locator("canvas").scrollIntoViewIfNeeded();
@@ -346,6 +367,10 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
       await page.locator("canvas").scrollIntoViewIfNeeded();
       await shot(page, shotName);
     }
+    return;
+  }
+  if (block.kind === "shift") {
+    await showShift(page, block.id, shotName);
     return;
   }
   if (block.kind === "pixels") {

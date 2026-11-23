@@ -1202,6 +1202,25 @@ A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.u
 
 A `dht22` has no `ratings` object and no `i`, `v`, or `p`. Its logic signal is `DATA`. It joins `DATA` to `GND` through the stage its drive stamps. `VCC` draws no current, so it needs another DC path.
 
+### 74HC595
+
+`kind` is `hc595`, a 74HC595 8-bit shift register with 3-state storage outputs. It is an active chip with no clock of its own. Pins, in DIP order, are `QB`, `QC`, `QD`, `QE`, `QF`, `QG`, `QH`, `GND`, `QHp`, `SRCLR`, `SRCLK`, `RCLK`, `OE`, `SER`, `QA` and `VCC`. `QHp` is the datasheet's QH'. Every pin is required.
+
+`SER` shifts into the first stage on the rising edge of `SRCLK`. `RCLK` rising copies the shift register to the storage register, which drives `QA` to `QH`. When both clocks rise at the same time the storage register takes the shift register as it was, so the shift register stays one clock ahead. `SRCLR` low clears the shift register and leaves the storage register alone. `OE` high turns `QA` to `QH` off. `QHp` follows the shift register's last stage and stays driven. The registers power on cleared. Each change waits its propagation delay, then the drives update: 17 ns from `SRCLK` to `QHp` and from `RCLK` to `QA`–`QH`, 18 ns from `SRCLR` low to `QHp`, 15 ns for `OE` to enable and 23 ns for `OE` to disable. Those are the typicals at 4.5 V, 50 pF and 25 C.
+
+`QA` to `QH` drive through `output`, and `QHp` through `serial_output`. High is `high_drop` under `VCC` behind `high_resistance`, and low is `low_drop` over `GND` behind `low_resistance`. The inputs read through `input_threshold`, fractions of the supply. `ratings.pin_current` bounds the current of each output, and `ratings.supply_current` bounds the current through `VCC` and through `GND`. With no `basis`, each is a 10.2 ms RMS, the same default as an `atmega328p` pin current.
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `output.high_resistance`, `output.low_resistance`, `serial_output.high_resistance`, `serial_output.low_resistance` | `ohm` | the resistor's |
+| `output.high_drop`, `output.low_drop`, `serial_output.high_drop`, `serial_output.low_drop` | `V` | at least 0, else rule `non_negative` |
+| `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+| `ratings.pin_current`, `ratings.supply_current` | `A` | greater than 0, or `null` to leave that current unrated |
+
+A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`. The `ratings` object is required. A missing key is `netlist.syntax`.
+
+An `hc595` has no `i`, `v`, or `p`. Its logic signals are `SER`, `SRCLK`, `RCLK`, `SRCLR` and `OE`. It joins each output to `VCC` and to `GND` through the stage its drive stamps, so those nets are not floating while the output is off. `VCC` draws only what the outputs source, so it needs another DC path, and so does `GND`.
+
 ### Pulses replay
 
 `kind` is `pulses_replay`, a pin that replays a list of timed levels. It is an active chip with no clock of its own, and its records are the trains, as [engine.md](engine.md#records) says. Pins are `VCC`, `GND` and `OUT`. Every pin is required.
@@ -1351,9 +1370,10 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `voltage_source` | `current` | `#<part>.i` |
 | `capacitor` | `reverse_voltage`, optional | pin `a` over pin `b` |
 | `atmega328p` | `pin_current`, `supply_current`, `rail_margin`, `reset_voltage`, `supply_voltage` | each port pin's current, the current through `VCC` and `GND_8`, and each pin's voltage over `GND_8`, each named `#<part>.pin.<pin>` |
+| `hc595` | `pin_current`, `supply_current` | each of `QA`–`QH` and `QHp`, and the current through `VCC` and `GND`, each named `#<part>.pin.<pin>` |
 | `current_source`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `ws2812`, `dht22` | none | |
 
-A `current`, `power`, `pin_current` or `supply_current` value object may also carry `basis`, the datasheet's basis for the figure. `"peak"` bounds each sample. `{ "sustained": { "average": "rms" | "mean", "tau": { "value": <s>, "unit": "s" } } }` bounds a first-order filter of the samples with time constant `tau`: of their squares for `rms`, read back as the root, and of their magnitudes for `mean`. A sustained basis may also carry `peak`, the sheet's peak or surge limit in the rating's unit, such as a diode's IFSM beside its average forward current. Each sample is checked against it as a peak rating. A `tau` or `peak` of 0 or below is `netlist.value` with rule `positive` on `ratings.<key>.basis.sustained.tau` or `.peak`, and a wrong unit is `netlist.unit` on that field. A rating with no `basis` takes its kind's: a `power` is a 10.2 ms `mean`, a `voltage_source`'s `current` and an `atmega328p`'s `pin_current` and `supply_current` are a 10.2 ms `rms`, and every other `current` is a `peak`.
+A `current`, `power`, `pin_current` or `supply_current` value object may also carry `basis`, the datasheet's basis for the figure. `"peak"` bounds each sample. `{ "sustained": { "average": "rms" | "mean", "tau": { "value": <s>, "unit": "s" } } }` bounds a first-order filter of the samples with time constant `tau`: of their squares for `rms`, read back as the root, and of their magnitudes for `mean`. A sustained basis may also carry `peak`, the sheet's peak or surge limit in the rating's unit, such as a diode's IFSM beside its average forward current. Each sample is checked against it as a peak rating. A `tau` or `peak` of 0 or below is `netlist.value` with rule `positive` on `ratings.<key>.basis.sustained.tau` or `.peak`, and a wrong unit is `netlist.unit` on that field. A rating with no `basis` takes its kind's: a `power` is a 10.2 ms `mean`, a `voltage_source`'s `current` and an `atmega328p`'s or an `hc595`'s `pin_current` and `supply_current` are a 10.2 ms `rms`, and every other `current` is a `peak`.
 
 ```json
 "current": { "value": 0.5, "unit": "A", "basis": { "sustained": { "average": "mean", "tau": { "value": 0.055, "unit": "s" }, "peak": { "value": 5.5, "unit": "A" } } } }

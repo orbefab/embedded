@@ -19,7 +19,7 @@ pub(crate) mod spi;
 #[cfg(test)]
 pub(crate) mod spi_pins;
 
-use crate::device::{cst816, dht22, pulses_replay, spi_replay, st77916, ws2812};
+use crate::device::{cst816, dht22, hc595, pulses_replay, spi_replay, st77916, ws2812};
 use crate::mcu::{self, Mcu, atmega328p, esp32s3};
 use native::Hosted;
 
@@ -414,6 +414,7 @@ pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
         Active::St77916(panel) => st77916::chip(part, panel),
         Active::Cst816(dev) => cst816::chip(part, dev),
         Active::Dht22(dev) => dht22::chip(part, dev),
+        Active::Hc595(dev) => hc595::chip(part, dev),
         Active::Esp32s3(mcu) => esp32s3::chip(part, mcu),
         Active::Ws2812(chain) => ws2812::chip(part, chain),
     }
