@@ -866,15 +866,15 @@ test.describe("viewer page", () => {
     });
 
     test("hover on a not-simulated pin shows its reason", async () => {
-      await lookAt(page, "@nano.j2", "pin-2", 45);
+      await lookAt(page, "@nano.j2", "pin-15", 45);
       await page.waitForTimeout(300);
-      const pin = await hoverUntil(page, await pointOn(page, "@nano.j2", "pin-2"), "@nano.3V3");
+      const pin = await hoverUntil(page, await pointOn(page, "@nano.j2", "pin-15"), "@nano.VIN");
       const text = await label(page);
       expect({ pin: pin !== null, text }).toEqual({
         pin: true,
-        text: "@nano.3V3\nnot simulated: It is the CH340G's 3.3 V output. The engine has no USB-serial chip, so the pin supplies nothing.",
+        text: "@nano.VIN\nnot simulated: The AMS1117 has an internal diode from OUT to IN. The model blocks reverse current, so with USB only VIN reads about 0 V and a load from VIN to GND gets nothing. A real board shows about 4 V there, one diode drop under the 5V rail, and VIN can source a little current from USB.",
       });
-      await shot(page, "hover-3v3");
+      await shot(page, "hover-vin");
     });
 
     test("hover on a not-simulated part shows its reason", async () => {
