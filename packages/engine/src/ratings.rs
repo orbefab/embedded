@@ -1,11 +1,12 @@
 use std::collections::VecDeque;
+use std::num::NonZeroU64;
 
 use orbe_model::{Drive, Time};
 
 use crate::active::{self, Output, Stage};
 use crate::netlist::{Model, NetId, Netlist, RatingKind};
 
-use crate::diagnostic::{Diagnostic, Excursion, VoltageExcursion};
+use crate::diagnostic::{Diagnostic, Excursion, VoltageExcursion, exceeds};
 use crate::finite::Finite;
 use crate::name::{Name, Ref};
 
@@ -26,6 +27,13 @@ use crate::observe::Columns;
 /// A power rating is the heat the part can shed, so it uses that same window on the average
 /// of the power's magnitude. A switching edge that spends its rating for a few hundred
 /// nanoseconds stays under it, and a load held over the rating crosses it within the window.
+///
+/// Each window starts at zero, as a cold part does. A solve that holds each capacitor at a
+/// voltage is never a sample: the t = 0 solve, and the restart solve at an edge. A capacitor
+/// held there draws whatever its hold takes, which is no current the circuit carries. The first
+/// accepted step is the first sample. Each sample holds until the next, except after an edge,
+/// where the next sample holds back to the edge, [`Self::restarted`]. A windowed rating whose
+/// last sample is over is over now, [`Self::over_now`], before its window crosses.
 #[derive(Clone)]
 pub(crate) struct Ratings {
     timing: Timing,
@@ -33,6 +41,8 @@ pub(crate) struct Ratings {
     windows: Vec<Window>,
     chips: Vec<Gauge>,
     last: Option<Time>,
+    /// The last sample was a step that restarted, so the next sample holds back to it.
+    restarted: bool,
 }
 
 /// The window a DC current rating averages over, 10.2 ms: five periods of the slowest PWM an
@@ -43,6 +53,12 @@ pub(crate) struct Ratings {
 /// pin that holds a capacitor's charging pulse, `I0^2 * tau / 2` of `i^2 * t`, stays well
 /// under it, and a steady load over the rating crosses it within a fraction of it.
 pub(crate) const DC_WINDOW_PS: u64 = 10_200_000_000;
+
+/// The span a windowed rating also averages over to say whether it is over now, 2.04 ms: one
+/// period of the 490.2 Hz PWM. A PWM load whose RMS is under the rating stays under it, though
+/// each pulse is over, and so does a switching spike of a few hundred nanoseconds. A load held
+/// over the rating crosses it within the span, or at once while the run is younger than it.
+pub(crate) const RECENT_PS: u64 = DC_WINDOW_PS / 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Timing {
@@ -94,10 +110,23 @@ struct Watch {
     limit: f64,
     /// `Some` when the rating is checked over [`DC_WINDOW_PS`]. A DC current stores squares
     /// and reads the RMS. A power rating stores the magnitude and reads the mean.
-    window: Option<Square>,
-    /// Whether the last sample was over.
+    heat: Option<Heat>,
+    /// Whether the last reading was over.
     over: bool,
     excursion: Option<Excursion>,
+    /// The last sample's own magnitude.
+    last: f64,
+    /// The first of the samples that have each been over, through the last one.
+    since: Option<Time>,
+}
+
+/// A windowed rating's two averages of the same samples.
+#[derive(Clone)]
+struct Heat {
+    /// Over [`DC_WINDOW_PS`]. It warns when it crosses.
+    window: Square,
+    /// Over [`RECENT_PS`]. With the last sample over, it says the rating is over now.
+    recent: Square,
 }
 
 /// What a window folds each sample into.
@@ -109,21 +138,22 @@ enum Reduce {
     Mean,
 }
 
-/// A quantity over the last [`DC_WINDOW_PS`], each sample held until the next. The window
-/// starts full of the first sample. For a run, that sample is the t = 0 value, or the smaller
-/// of it and the open-capacitor DC point when [`Ratings::prefill_dc`] has fed one and the two
-/// differ. The stored sample is the square for [`Reduce::Rms`] and the magnitude for
-/// [`Reduce::Mean`].
+/// A quantity over the last `length` ps, each sample held until the next. Before the first
+/// sample the window holds 0, so it starts cold. The stored sample is the square for
+/// [`Reduce::Rms`] and the magnitude for [`Reduce::Mean`].
 #[derive(Clone)]
 struct Square {
     reduce: Reduce,
-    /// Spans `(from_ps, to_ps, sample)`, oldest first, which tile the window. A span may start
-    /// before t = 0.
+    length: i64,
+    /// Spans `(from_ps, to_ps, sample)`, oldest first, which tile the window from the first
+    /// sample on.
     spans: VecDeque<(i64, i64, f64)>,
     /// `sample * t` over the spans.
     sum: f64,
     /// The last sample's time and stored value.
     held: Option<(i64, f64)>,
+    /// The first sample's time.
+    origin: Option<i64>,
 }
 
 /// Where a watch reads its value.
@@ -339,70 +369,23 @@ impl Ratings {
             windows,
             chips,
             last: None,
+            restarted: false,
         }
     }
 
-    /// Whether a DC current or a power rating averages over [`DC_WINDOW_PS`].
-    pub(crate) fn averages(&self) -> bool {
-        self.watches.iter().any(|watch| watch.window.is_some())
-    }
-
-    /// Fills each window before the first sample. `steady` is the DC point with every capacitor
-    /// open and `real` is the t = 0 solve. When the two agree the window is `real`, so a steady
-    /// overload is already the whole window. When they differ the window is the smaller one, so
-    /// a hold's surge stays out of the past and a DC point the circuit has not reached does not
-    /// warn. A later [`Self::sample`] at the same time keeps this fill and carries `real` forward.
-    pub(crate) fn prefill_dc(
-        &mut self,
-        at: Time,
-        steady: &[Finite],
-        real: &[Finite],
-        cores: &[active::Core],
-    ) {
-        let steady_values = self.magnitudes(steady, cores);
-        let real_values = self.magnitudes(real, cores);
-        for (watch, (steady, real)) in self
-            .watches
-            .iter_mut()
-            .zip(steady_values.into_iter().zip(real_values))
-        {
-            let Some(window) = &mut watch.window else {
-                continue;
-            };
-            let fill = if is_surge(steady, real) {
-                steady.min(real)
-            } else {
-                real
-            };
-            window.reading(at, fill);
-        }
-    }
-
-    /// The window starts empty. Used when the DC point did not solve, so a t = 0 surge is not
-    /// taken as the whole window.
-    pub(crate) fn prefill_empty(&mut self, at: Time) {
-        for watch in &mut self.watches {
-            if let Some(window) = &mut watch.window {
-                window.reading(at, 0.0);
-            }
-        }
-    }
-
-    /// Each watch's magnitude on `row`, after the gauges have read it.
-    fn magnitudes(&mut self, row: &[Finite], cores: &[active::Core]) -> Vec<f64> {
-        for gauge in &mut self.chips {
-            gauge.read(row, &cores[gauge.active]);
-        }
-        self.watches
-            .iter()
-            .map(|watch| magnitude(watch, &self.chips, row))
-            .collect()
+    /// The step sampled last restarted at an edge. Its row holds the state before the edge,
+    /// and the restart solve holds each capacitor, so neither is the state after it. The next
+    /// sample is, and it holds back to the edge in each window.
+    pub(crate) fn restarted(&mut self) {
+        self.restarted = true;
     }
 
     /// Over means a magnitude above the limit, the RMS over the window for a DC current, the
-    /// average over the window for a power rating, or a voltage outside its window. The first
-    /// time over stays; the peak rises. A sample that was over adds the time until this one to
-    /// `over_ps`. `cores` are the active chips' cores whose drive was in force for `row`.
+    /// average over the window for a power rating, or a voltage outside its window. A magnitude
+    /// is over when it is over after both are rounded to 3 significant digits. The first time
+    /// over stays; the peak rises. A sample that was over adds the time until this one to
+    /// `over_ps`. `cores` are the active chips' cores whose drive was in force for `row`. An
+    /// operating point, [`Timing::Point`], has no duration, so its DC value fills each window.
     pub(crate) fn sample(&mut self, at: Time, row: &[Finite], cores: &[active::Core]) {
         for gauge in &mut self.chips {
             gauge.read(row, &cores[gauge.active]);
@@ -412,17 +395,25 @@ impl Ratings {
                 *over_ps += at.as_ps() - last.as_ps();
             }
         };
+        let back = self.restarted.then_some(self.last).flatten();
         for watch in &mut self.watches {
             elapsed(
                 watch.over,
                 watch.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
                 self.last,
             );
-            let mut magnitude = magnitude(watch, &self.chips, row);
-            if let Some(window) = &mut watch.window {
-                magnitude = window.reading(at, magnitude);
-            }
-            watch.over = magnitude > watch.limit;
+            let sample = magnitude(watch, &self.chips, row);
+            let reading = match (&mut watch.heat, self.timing) {
+                (Some(heat), Timing::Run) => {
+                    heat.recent.take(at, sample, back.is_some());
+                    heat.window.take(at, sample, back.is_some())
+                }
+                _ => sample,
+            };
+            watch.last = sample;
+            let from = back.filter(|_| watch.heat.is_some()).unwrap_or(at);
+            watch.since = exceeds(sample, watch.limit).then(|| watch.since.unwrap_or(from));
+            watch.over = exceeds(reading, watch.limit);
             if !watch.over {
                 continue;
             }
@@ -431,16 +422,19 @@ impl Ratings {
                     watch.excursion = Some(Excursion {
                         quantity: watch.quantity.clone(),
                         limit: watch.limit,
-                        peak: magnitude,
+                        peak: reading,
                         peak_at: at,
                         first: at,
                         over_ps: self.timing.over_ps(),
-                        window_ps: watch.window.as_ref().map(|_| DC_WINDOW_PS),
+                        window_ps: watch.heat.as_ref().map(|_| DC_WINDOW_PS),
+                        sample,
+                        held_ps: None,
                     });
                 }
-                Some(excursion) if magnitude > excursion.peak => {
-                    excursion.peak = magnitude;
+                Some(excursion) if reading > excursion.peak => {
+                    excursion.peak = reading;
                     excursion.peak_at = at;
+                    excursion.sample = sample;
                 }
                 Some(_) => {}
             }
@@ -490,6 +484,7 @@ impl Ratings {
             }
         }
         self.last = Some(at);
+        self.restarted = false;
     }
 
     /// One `rating.*` diagnostic per quantity that went over, through the last sample.
@@ -508,37 +503,52 @@ impl Ratings {
         currents.chain(voltages).collect()
     }
 
-    /// The findings of one sample at `at` alone, each with no duration. A DC rating's window
-    /// runs through the last sample to `at`. With no `cores` it leaves the chips' pin ratings
-    /// out.
-    pub(crate) fn point(
-        &self,
-        at: Time,
-        row: &[Finite],
-        cores: Option<&[active::Core]>,
-    ) -> Vec<Diagnostic> {
-        let mut point = self.clone();
-        point.timing = Timing::Point;
-        point.last = None;
-        for watch in &mut point.watches {
-            watch.over = false;
-            watch.excursion = None;
+    /// Each windowed rating over now, through the last sample: that sample is over the rating,
+    /// the average over [`RECENT_PS`] is over it too, and the window has not crossed, so no
+    /// finding names the rating yet. While the run is younger than [`RECENT_PS`] that average
+    /// runs from the first sample, and at the first sample it is that sample.
+    fn over_now(&self) -> impl Iterator<Item = Diagnostic> + '_ {
+        self.watches.iter().filter_map(|watch| {
+            let heat = watch.heat.as_ref()?;
+            let since = watch.since?;
+            let at = self.last?;
+            if watch.excursion.is_some() || !exceeds(heat.recent.since_origin(), watch.limit) {
+                return None;
+            }
+            let excursion = Excursion {
+                quantity: watch.quantity.clone(),
+                limit: watch.limit,
+                peak: heat.window.reading(),
+                peak_at: at,
+                first: since,
+                over_ps: Some(at.as_ps() - since.as_ps()),
+                window_ps: Some(DC_WINDOW_PS),
+                sample: watch.last,
+                held_ps: NonZeroU64::new(heat.window.held_ps(watch.limit).max(1)),
+            };
+            Some(match watch.kind {
+                RatingKind::Current => Diagnostic::RatingCurrent(excursion),
+                RatingKind::Power => Diagnostic::RatingPower(excursion),
+            })
+        })
+    }
+
+    /// [`Self::findings`] and each rating [`Self::over_now`], through `probe` when it is after
+    /// the last sample: the time, the row there, and the cores whose drive the row was solved
+    /// with. A probe is not kept, so the next accepted step samples as though it had not run.
+    pub(crate) fn now(&self, probe: Option<(Time, &[Finite], &[active::Core])>) -> Vec<Diagnostic> {
+        let mut probed = None;
+        if let Some((at, row, cores)) = probe
+            && self.last.is_none_or(|last| at > last)
+        {
+            let mut ratings = self.clone();
+            ratings.sample(at, row, cores);
+            probed = Some(ratings);
         }
-        for window in &mut point.windows {
-            window.worst = 0.0;
-            window.over = false;
-            window.excursion = None;
-        }
-        let cores = cores.unwrap_or_else(|| {
-            point
-                .watches
-                .retain(|watch| matches!(watch.read, Read::Column(_)));
-            point.windows.clear();
-            point.chips.clear();
-            &[]
-        });
-        point.sample(at, row, cores);
-        point.findings()
+        let ratings = probed.as_ref().unwrap_or(self);
+        let mut found = ratings.findings();
+        found.extend(ratings.over_now());
+        found
     }
 }
 
@@ -564,19 +574,16 @@ impl Watch {
             quantity,
             read,
             limit,
-            window: reduce.map(Square::new),
+            heat: reduce.map(|reduce| Heat {
+                window: Square::new(reduce, DC_WINDOW_PS),
+                recent: Square::new(reduce, RECENT_PS),
+            }),
             over: false,
             excursion: None,
+            last: 0.0,
+            since: None,
         }
     }
-}
-
-/// The t = 0 value disagrees with the DC point, so the window takes the smaller of the two.
-/// 1e-3 of a unit, and at least a milliamp or a milliwatt, is far above the ATmega's leakage
-/// bound, 5 V / 5.5 MΩ, and far below a rating this window is checked against.
-fn is_surge(steady: f64, real: f64) -> bool {
-    let scale = steady.abs().max(real.abs()).max(1.0);
-    (steady - real).abs() > 1e-3 * scale
 }
 
 fn magnitude(watch: &Watch, chips: &[Gauge], row: &[Finite]) -> f64 {
@@ -588,61 +595,111 @@ fn magnitude(watch: &Watch, chips: &[Gauge], row: &[Finite]) -> f64 {
 }
 
 impl Square {
-    fn new(reduce: Reduce) -> Square {
+    fn new(reduce: Reduce, length: u64) -> Square {
         Square {
             reduce,
+            length: i64::try_from(length).expect("a window fits in i64 ps"),
             spans: VecDeque::new(),
             sum: 0.0,
             held: None,
+            origin: None,
         }
     }
 
     /// Takes `magnitude` at `at`, and returns the window's reading there. The sample held
-    /// since the last one fills the time up to `at`.
-    fn reading(&mut self, at: Time, magnitude: f64) -> f64 {
-        let window = DC_WINDOW_PS as i64;
+    /// since the last one fills the time up to `at`, or with `back` this one does.
+    fn take(&mut self, at: Time, magnitude: f64, back: bool) -> f64 {
         let at = i64::try_from(at.as_ps()).expect("a run's time fits in i64 ps");
         let sample = match self.reduce {
             Reduce::Rms => magnitude * magnitude,
             Reduce::Mean => magnitude,
         };
-        match self.held {
-            None => {
-                self.spans.push_back((at - window, at, sample));
-                self.sum = sample * window as f64;
+        if let Some((last, held)) = self.held
+            && at > last
+        {
+            let held = if back { sample } else { held };
+            match self.spans.back_mut() {
+                Some((_, to, back)) if *to == last && *back == held => *to = at,
+                _ => self.spans.push_back((last, at, held)),
             }
-            Some((last, held)) if at > last => {
-                match self.spans.back_mut() {
-                    Some((_, to, back)) if *to == last && *back == held => *to = at,
-                    _ => self.spans.push_back((last, at, held)),
-                }
-                self.sum += held * (at - last) as f64;
-                let start = at - window;
-                while let Some((from, to, stored)) = self.spans.front_mut() {
-                    if *to <= start {
-                        self.sum -= *stored * (*to - *from) as f64;
-                        self.spans.pop_front();
-                    } else {
-                        if *from < start {
-                            self.sum -= *stored * (start - *from) as f64;
-                            *from = start;
-                        }
-                        break;
+            self.sum += held * (at - last) as f64;
+            let start = at - self.length;
+            while let Some((from, to, stored)) = self.spans.front_mut() {
+                if *to <= start {
+                    self.sum -= *stored * (*to - *from) as f64;
+                    self.spans.pop_front();
+                } else {
+                    if *from < start {
+                        self.sum -= *stored * (start - *from) as f64;
+                        *from = start;
                     }
-                }
-                // One span left is a steady sample, whose sum is exact again.
-                if let (1, Some(&(from, to, stored))) = (self.spans.len(), self.spans.front()) {
-                    self.sum = stored * (to - from) as f64;
+                    break;
                 }
             }
-            Some(_) => {}
+            // One span left is a steady sample, whose sum is exact again.
+            if let (1, Some(&(from, to, stored))) = (self.spans.len(), self.spans.front()) {
+                self.sum = stored * (to - from) as f64;
+            }
         }
+        self.origin.get_or_insert(at);
         self.held = Some((at, sample));
-        let mean = self.sum.max(0.0) / window as f64;
+        self.reading()
+    }
+
+    /// The reading over the whole length, through the last sample.
+    fn reading(&self) -> f64 {
+        self.root(self.sum / self.length as f64)
+    }
+
+    /// The reading over the time since the first sample while that is shorter than the
+    /// length, and the first sample itself until time has passed.
+    fn since_origin(&self) -> f64 {
+        let (Some((at, sample)), Some(origin)) = (self.held, self.origin) else {
+            return 0.0;
+        };
+        match (at - origin).min(self.length) {
+            0 => self.root(sample),
+            filled => self.root(self.sum / filled as f64),
+        }
+    }
+
+    fn root(&self, mean: f64) -> f64 {
+        let mean = mean.max(0.0);
         match self.reduce {
             Reduce::Rms => mean.sqrt(),
             Reduce::Mean => mean,
         }
+    }
+
+    /// How long the last sample would have to hold for the reading to pass `limit`. As it
+    /// holds, it enters the window and the oldest of the window leaves, the cold time before
+    /// the first sample included.
+    fn held_ps(&self, limit: f64) -> u64 {
+        let Some((at, held)) = self.held else {
+            return self.length.unsigned_abs();
+        };
+        let target = match self.reduce {
+            Reduce::Rms => limit * limit,
+            Reduce::Mean => limit,
+        } * self.length as f64;
+        let start = at - self.length;
+        let cold = self
+            .spans
+            .front()
+            .map_or(at, |&(from, _, _)| from)
+            .max(start);
+        let leaving = std::iter::once((start, cold, 0.0)).chain(self.spans.iter().copied());
+        let (mut sum, mut elapsed) = (self.sum, 0.0);
+        for (from, to, stored) in leaving {
+            let length = (to - from) as f64;
+            let slope = held - stored;
+            if slope > 0.0 && sum + slope * length > target {
+                return (elapsed + (target - sum) / slope).ceil() as u64;
+            }
+            sum += slope * length;
+            elapsed += length;
+        }
+        self.length.unsigned_abs()
     }
 }
 
@@ -791,6 +848,8 @@ mod tests {
                 first: Time::from_ps(10),
                 over_ps: None,
                 window_ps: None,
+                sample: 0.05,
+                held_ps: None,
             })]
         );
     }
@@ -814,6 +873,19 @@ mod tests {
         assert_eq!(excursion.over_ps, Some(15 + 5 + 5));
     }
 
+    /// `ratings` with its one watch, `#d1.i`, a DC rating over the window, as a supply's is.
+    fn windowed() -> (Ratings, Columns) {
+        let (mut ratings, columns) = ratings(Timing::Run);
+        ratings.watches[0] = Watch::new(
+            RatingKind::Current,
+            ratings.watches[0].quantity.clone(),
+            ratings.watches[0].read,
+            ratings.watches[0].limit,
+            Some(Reduce::Rms),
+        );
+        (ratings, columns)
+    }
+
     fn close(got: f64, want: f64) {
         assert!(
             (got - want).abs() <= 1e-12 * want.max(1.0),
@@ -821,18 +893,21 @@ mod tests {
         );
     }
 
-    /// The window starts full of the operating point, which is DC.
+    /// The window holds 0 before its first sample, as a cold part does.
     #[test]
-    fn a_window_starts_full_of_its_first_sample() {
-        let mut square = Square::new(Reduce::Rms);
-        close(square.reading(Time::ZERO, 0.3), 0.3);
-        close(square.reading(Time::from_ps(DC_WINDOW_PS / 2), 0.0), 0.3);
+    fn a_window_starts_cold() {
+        let mut square = Square::new(Reduce::Rms, DC_WINDOW_PS);
+        close(square.take(Time::ZERO, 0.3, false), 0.0);
         close(
-            square.reading(Time::from_ps(DC_WINDOW_PS), 0.0),
+            square.take(Time::from_ps(DC_WINDOW_PS / 2), 0.0, false),
             0.3 / 2f64.sqrt(),
         );
         close(
-            square.reading(Time::from_ps(3 * DC_WINDOW_PS / 2), 0.0),
+            square.take(Time::from_ps(DC_WINDOW_PS), 0.0, false),
+            0.3 / 2f64.sqrt(),
+        );
+        close(
+            square.take(Time::from_ps(3 * DC_WINDOW_PS / 2), 0.0, false),
             0.0,
         );
     }
@@ -841,19 +916,19 @@ mod tests {
     /// 0.13 mA RMS over the window.
     #[test]
     fn a_short_pulse_counts_by_its_share_of_the_window() {
-        let mut square = Square::new(Reduce::Rms);
-        square.reading(Time::ZERO, 0.0);
-        square.reading(Time::from_ps(1_000), 0.2);
-        let rms = square.reading(Time::from_ps(5_000), 0.0);
+        let mut square = Square::new(Reduce::Rms, DC_WINDOW_PS);
+        square.take(Time::ZERO, 0.0, false);
+        square.take(Time::from_ps(1_000), 0.2, false);
+        let rms = square.take(Time::from_ps(5_000), 0.0, false);
         close(rms, 0.2 * (4_000.0 / DC_WINDOW_PS as f64).sqrt());
         assert!(rms < 0.001);
-        square.reading(Time::from_ps(DC_WINDOW_PS + 2_000), 0.0);
+        square.take(Time::from_ps(DC_WINDOW_PS + 2_000), 0.0, false);
         close(
-            square.reading(Time::from_ps(DC_WINDOW_PS + 3_000), 0.0),
+            square.take(Time::from_ps(DC_WINDOW_PS + 3_000), 0.0, false),
             0.2 * (2_000.0 / DC_WINDOW_PS as f64).sqrt(),
         );
         close(
-            square.reading(Time::from_ps(DC_WINDOW_PS + 5_000), 0.0),
+            square.take(Time::from_ps(DC_WINDOW_PS + 5_000), 0.0, false),
             0.0,
         );
     }
@@ -861,8 +936,7 @@ mod tests {
     /// A steady 69 mA from 0 crosses 40 mA once (40 / 69)^2 of the window has filled.
     #[test]
     fn a_steady_overload_crosses_its_rating_inside_the_window() {
-        let (mut ratings, columns) = ratings(Timing::Run);
-        ratings.watches[0].window = Some(Square::new(Reduce::Rms));
+        let (mut ratings, columns) = windowed();
         let values = |current| row(&columns, current);
         ratings.sample(Time::ZERO, &values(0.0), &[]);
         ratings.sample(Time::from_ps(1), &values(0.069), &[]);
@@ -900,8 +974,7 @@ mod tests {
     /// a PWM of `period` ps, high at `peak` amperes for `high` ps of each period, until `stop`
     /// ps.
     fn pwm(peak: f64, period: u64, high: u64, stop: u64) -> Vec<Diagnostic> {
-        let (mut ratings, columns) = ratings(Timing::Run);
-        ratings.watches[0].window = Some(Square::new(Reduce::Rms));
+        let (mut ratings, columns) = windowed();
         ratings.watches[0].limit = 0.04;
         let values = |current| row(&columns, current);
         ratings.sample(Time::ZERO, &values(0.0), &[]);
@@ -1016,62 +1089,6 @@ mod tests {
         row
     }
 
-    /// A t = 0 value above the DC point is a hold's surge. The window fills with the DC point,
-    /// so the surge does not warn at once.
-    #[test]
-    fn a_prefill_drops_a_surge_the_dc_point_does_not_share() {
-        let (mut ratings, columns) = power_ratings(0.25);
-        let steady = row_power(&columns, 0.0);
-        let real = row_power(&columns, 2.5);
-        ratings.prefill_dc(Time::ZERO, &steady, &real, &[]);
-        ratings.sample(Time::ZERO, &real, &[]);
-        assert!(ratings.findings().is_empty());
-    }
-
-    /// A DC point above the t = 0 value has not been reached. The window fills with the t = 0
-    /// value, so that higher point does not warn.
-    #[test]
-    fn a_prefill_drops_a_dc_point_above_the_value_at_open() {
-        let (mut ratings, columns) = power_ratings(0.25);
-        let steady = row_power(&columns, 0.625);
-        let real = row_power(&columns, 0.0);
-        ratings.prefill_dc(Time::ZERO, &steady, &real, &[]);
-        ratings.sample(Time::ZERO, &real, &[]);
-        assert!(ratings.findings().is_empty());
-    }
-
-    /// Both values are over the rating. The window is the lower one, so it warns at once
-    /// with that value.
-    #[test]
-    fn a_prefill_warns_at_the_lower_of_two_values_over_the_rating() {
-        let (mut ratings, columns) = power_ratings(0.25);
-        let steady = row_power(&columns, 0.625);
-        let real = row_power(&columns, 2.5);
-        ratings.prefill_dc(Time::ZERO, &steady, &real, &[]);
-        ratings.sample(Time::ZERO, &real, &[]);
-        let found = ratings.findings();
-        let [Diagnostic::RatingPower(excursion)] = found.as_slice() else {
-            panic!("not one power finding: {found:?}");
-        };
-        assert_eq!(excursion.first, Time::ZERO);
-        close(excursion.peak, 0.625);
-    }
-
-    /// A value the DC point shares is the window at once.
-    #[test]
-    fn a_prefill_keeps_a_steady_overload() {
-        let (mut ratings, columns) = power_ratings(0.25);
-        let row = row_power(&columns, 2.5);
-        ratings.prefill_dc(Time::ZERO, &row, &row, &[]);
-        ratings.sample(Time::ZERO, &row, &[]);
-        let found = ratings.findings();
-        let [Diagnostic::RatingPower(excursion)] = found.as_slice() else {
-            panic!("not one power finding: {found:?}");
-        };
-        assert_eq!(excursion.first, Time::ZERO);
-        close(excursion.peak, 2.5);
-    }
-
     /// 3 W for 136 ns is 0.4 µJ. Over 10.2 ms that averages about 40 µW, under a 2.419 W rating.
     #[test]
     fn a_switching_spike_of_a_few_hundred_nanoseconds_stays_under() {
@@ -1084,7 +1101,7 @@ mod tests {
         assert!(ratings.findings().is_empty());
     }
 
-    /// A steady 3 W from 0 crosses 2.419 W once 2.419 / 3 of the window has filled.
+    /// A steady 3 W from 0 crosses 2.419 W once about 2.419 / 3 of the window has filled.
     #[test]
     fn a_held_power_overload_crosses_by_its_share_of_the_window() {
         let (mut ratings, columns) = power_ratings(2.419);
@@ -1099,7 +1116,8 @@ mod tests {
         let [Diagnostic::RatingPower(excursion)] = found.as_slice() else {
             panic!("not one power finding: {found:?}");
         };
-        let crossing = (2.419 / 3.0) * DC_WINDOW_PS as f64;
+        // The rating rounds to 2.42 W, and the window is over once it rounds above that.
+        let crossing = (2.425 / 3.0) * DC_WINDOW_PS as f64;
         assert!(
             excursion.first.as_ps().abs_diff(crossing as u64) <= step,
             "{:?}",
@@ -1147,5 +1165,114 @@ mod tests {
             excursion.peak
         );
         assert_eq!(excursion.window_ps, Some(DC_WINDOW_PS));
+    }
+
+    /// The one rating over now, through the last sample.
+    fn over_now(ratings: &Ratings) -> Vec<Excursion> {
+        ratings
+            .over_now()
+            .map(|diagnostic| match diagnostic {
+                Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
+                    excursion
+                }
+                other => panic!("not a rating: {other:?}"),
+            })
+            .collect()
+    }
+
+    const MS: u64 = 1_000_000_000;
+
+    /// 0.989 W into a 0.25 W resistor from 50 ms on. 2 ms later the window averages 0.194 W,
+    /// under the rating, so it does not warn, and the rating is over now. Held, the sample
+    /// lifts the window past 0.25 W in (0.25 * 10.2 - 0.989 * 2) / 0.989 ms, 0.578 ms.
+    #[test]
+    fn a_fresh_overload_is_over_now_before_its_window_crosses() {
+        let (mut ratings, columns) = power_ratings(0.25);
+        let values = |power| row_power(&columns, power);
+        for k in 0..50 {
+            ratings.sample(Time::from_ps(k * MS), &values(0.0), &[]);
+        }
+        let start = 50 * MS;
+        for k in 0..=20 {
+            ratings.sample(Time::from_ps(start + k * MS / 10), &values(0.989), &[]);
+        }
+        assert!(ratings.findings().is_empty());
+        let [excursion] = over_now(&ratings).try_into().unwrap();
+        assert_eq!(excursion.first, Time::from_ps(start));
+        assert_eq!(excursion.over_ps, Some(2 * MS));
+        close(excursion.sample, 0.989);
+        close(excursion.peak, 0.989 * 2.0 / 10.2);
+        let held = excursion.held_ps.unwrap().get() as f64;
+        assert!((held / (0.578 * MS as f64) - 1.0).abs() < 0.01, "{held}");
+        assert_eq!(excursion.window_ps, Some(DC_WINDOW_PS));
+    }
+
+    /// A load on at the first sample is over now there, before any time has passed.
+    #[test]
+    fn a_steady_overload_is_over_now_at_its_first_sample() {
+        let (mut ratings, columns) = power_ratings(0.25);
+        ratings.sample(Time::from_ps(1), &row_power(&columns, 2.5), &[]);
+        assert!(ratings.findings().is_empty());
+        let [excursion] = over_now(&ratings).try_into().unwrap();
+        close(excursion.sample, 2.5);
+        assert_eq!(excursion.held_ps, NonZeroU64::new(DC_WINDOW_PS / 10));
+    }
+
+    /// 3 W for 136 ns, over a 2.419 W rating, stays under the average over the last 2.04 ms,
+    /// so a probe inside the spike is not over now.
+    #[test]
+    fn a_switching_spike_is_not_over_now() {
+        let (mut ratings, columns) = power_ratings(2.419);
+        let values = |power| row_power(&columns, power);
+        for k in 0..=10 {
+            ratings.sample(Time::from_ps(k * MS), &values(0.0), &[]);
+        }
+        ratings.sample(Time::from_ps(10 * MS + 2_000), &values(3.008), &[]);
+        let inside = values(3.0);
+        let probe = Some((Time::from_ps(10 * MS + 70_000), inside.as_slice(), &[][..]));
+        assert_eq!(ratings.now(probe), []);
+        assert_eq!(ratings.now(None), []);
+    }
+
+    /// `analogWrite` at 128 / 255 into a pin rated 40 mA, 50 mA a pulse, from 10.2 ms on. Each
+    /// pulse is over and the RMS of each period, 35.4 mA, is under, so no sample is over now.
+    #[test]
+    fn a_pwm_whose_rms_is_under_is_never_over_now() {
+        let (mut ratings, columns) = windowed();
+        ratings.watches[0].limit = 0.04;
+        let values = |current| row(&columns, current);
+        let high = PWM_490_PS * 128 / 255;
+        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        let mut start = DC_WINDOW_PS;
+        for _ in 0..20 {
+            ratings.sample(Time::from_ps(start), &values(0.05), &[]);
+            for k in 1..=10 {
+                ratings.sample(Time::from_ps(start + k * high / 10), &values(0.05), &[]);
+                assert!(over_now(&ratings).is_empty(), "at {start} + {k}");
+            }
+            ratings.sample(Time::from_ps(start + high), &values(0.0), &[]);
+            start += PWM_490_PS;
+        }
+        assert_eq!(ratings.findings(), []);
+    }
+
+    /// A load switched on at an edge, 50 ms in. The step's row holds the state before the edge,
+    /// 0 W, and the next step, 1 ms later, reads 0.989 W. That sample holds back to the edge, so
+    /// the window holds 1 ms of it and the rating is over now from the edge.
+    #[test]
+    fn after_an_edge_the_next_sample_holds_back_to_it() {
+        let (mut ratings, columns) = power_ratings(0.25);
+        let values = |power| row_power(&columns, power);
+        for k in 0..=50 {
+            ratings.sample(Time::from_ps(k * MS), &values(0.0), &[]);
+        }
+        ratings.restarted();
+        ratings.sample(Time::from_ps(51 * MS), &values(0.989), &[]);
+        let [excursion] = over_now(&ratings).try_into().unwrap();
+        assert_eq!(excursion.first, Time::from_ps(50 * MS));
+        close(excursion.peak, 0.989 / 10.2);
+        ratings.sample(Time::from_ps(52 * MS), &values(0.989), &[]);
+        let [excursion] = over_now(&ratings).try_into().unwrap();
+        close(excursion.peak, 2.0 * 0.989 / 10.2);
     }
 }

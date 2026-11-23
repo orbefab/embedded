@@ -1233,12 +1233,16 @@ fn a_load_over_the_usb_supply_warns_and_a_wire_across_it_is_a_short() {
             .unwrap_or_else(|| panic!("{open}"))
             .clone()
     };
-    // The same current passes the USB supply and the Schottky behind 5V, each rated 0.5 A.
+    // The same current passes the USB supply and the Schottky behind 5V, each rated 0.5 A. The
+    // supply's rating is the RMS over 10.2 ms, so at open it is over now. The diode's is checked
+    // on each sample.
     let supply = over("#nano__usb__host.i (nano.usb) ");
     let diode = over("#nano__diode.i (nano.diode) ");
     orbe(&["close"]).ok();
-    let peak = supply["data"]["peak"].as_f64().unwrap();
-    assert!(peak > 0.5, "{peak}");
+    assert_eq!(supply["data"]["now"], true, "{supply}");
+    let sample = supply["data"]["sample"].as_f64().unwrap();
+    assert!(sample > 1.5, "{sample}");
+    assert!(diode["data"]["peak"].as_f64().unwrap() > 1.5, "{diode}");
     assert_eq!(supply["data"]["limit"], 0.5);
     assert_eq!(diode["data"]["limit"], 0.5);
 
@@ -1319,30 +1323,62 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     assert!(!open.contains("scene.led_no_resistor"), "{open}");
     orbe(&["step", "100ms"]).ok();
     orbe(&["press", "@btn1"]).ok();
-    let step = orbe(&["step", "--until", "@led1", "lit", "--timeout", "50ms"])
-        .ok()
-        .stdout;
-    for warning in [
-        "warning[rating.current] #led1.i peaks at ",
-        "mA, over its 30 mA rating",
-    ] {
-        assert!(step.contains(warning), "{step}");
-    }
-    // Brightness crosses `lit` about 0.4 ms after the pin rises. The LED's power average
-    // crosses 75 mW later, about 3.5 ms in, so this step has no power warning yet.
-    assert!(!step.contains("warning[rating.power]"), "{step}");
-    // The pin's rating is DC: its RMS over the last 10.2 ms crosses 40 mA (40 / 94)^2 of the
-    // window after the press, 1.8 ms, and a chip warning can show up to one 10 ms engine step
-    // late. The LED's power is the average over that same window, full by 20 ms.
-    let held = orbe(&["step", "20ms"]).ok().stdout;
-    for warning in [
-        "warning[rating.current] #nano__mcu.pin.PB5 (nano.D13) carries ",
-        "mA RMS over the last 10.2 ms, over its 40 mA rating",
-        "warning[rating.power] #led1.p averages ",
-        "over the last 10.2 ms, over its 0.075 W rating",
-    ] {
-        assert!(held.contains(warning), "{held}");
-    }
+    // Each rating warning a step lists, as `(code, ref, over now)`.
+    let listed = |step: &Value| -> Vec<(String, String, bool)> {
+        step["data"]["changes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|change| change["kind"] == "diagnostic")
+            .map(|change| &change["diagnostic"])
+            .filter(|d| d["code"].as_str().unwrap().starts_with("rating."))
+            .map(|d| {
+                (
+                    d["code"].as_str().unwrap().to_string(),
+                    d["refs"][0].as_str().unwrap().to_string(),
+                    d["data"]["now"].as_bool().unwrap(),
+                )
+            })
+            .collect()
+    };
+    let owned = |code: &str, r: &str, now: bool| (code.to_string(), r.to_string(), now);
+    let step = orbe(&[
+        "step",
+        "--until",
+        "@led1",
+        "lit",
+        "--timeout",
+        "50ms",
+        "--json",
+    ])
+    .ok()
+    .json();
+    // At the pin's edge the LED carries about 94 mA, over its 30 mA rating on each sample.
+    // The pin's 40 mA and the LED's 75 mW are over 10.2 ms, so they are over now.
+    let mut found = listed(&step);
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            owned("rating.current", "#led1.i", false),
+            owned("rating.current", "#nano__mcu.pin.PB5", true),
+            owned("rating.power", "#led1.p", true),
+        ],
+        "{step}"
+    );
+    // The pin's RMS over the last 10.2 ms crosses 40 mA (40 / 94)^2 of the window after the
+    // press, 1.8 ms. The LED's power average crosses 75 mW about 3.5 ms in.
+    let held = orbe(&["step", "20ms", "--json"]).ok().json();
+    let mut found = listed(&held);
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            owned("rating.current", "#nano__mcu.pin.PB5", false),
+            owned("rating.power", "#led1.p", false),
+        ],
+        "{held}"
+    );
     let led = orbe(&["get", "@led1", "--json"]).ok().json()["data"]["value"].clone();
     let pin = orbe(&["get", "@nano.D13", "--json"]).ok().json()["data"]["value"].clone();
     assert_eq!(pin["level"], "low", "{pin}");
@@ -1351,12 +1387,11 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     assert!(current_ma > 40.0, "{current_ma}");
     let volts = pin["v"].as_f64().unwrap();
     assert!((2.0..=2.6).contains(&volts), "{volts}");
-    let expect = orbe(&["expect", "no", "diagnostics"]);
+    let expect = orbe(&["expect", "no", "diagnostics", "--json"]);
     assert_eq!(expect.code, 1);
-    assert!(
-        expect
-            .stdout
-            .contains("actual:   rating.current, rating.current, rating.power"),
+    assert_eq!(
+        expect.json()["data"]["actual"],
+        "rating.current, rating.current, rating.power",
         "{}",
         expect.stdout
     );
@@ -1387,13 +1422,25 @@ fn a_resistor_over_its_power_rating_warns() {
 "#,
     );
     let runtime = Runtime::new();
-    let open = runtime.orbe(dir, &["open", "hot.jsonc"]).ok().stdout;
+    let open = runtime
+        .orbe(dir, &["open", "hot.jsonc", "--json"])
+        .ok()
+        .json();
+    let [power] = open["data"]["diagnostics"].as_array().unwrap().as_slice() else {
+        panic!("{open}");
+    };
+    // 10 ohm on 5V is about 2.16 W from the first step, over the 0.25 W rating now. Held, the
+    // average over 10.2 ms crosses 0.25 W in about 1.2 ms.
+    assert_eq!(power["code"], "rating.power");
+    assert_eq!(power["refs"][0], "#r9.p");
+    let data = &power["data"];
+    assert_eq!(data["now"], true, "{power}");
     assert!(
-        open.contains(
-            "warning[rating.power] #r9.p averages 2.158099860411514 W over the last 10.2 ms, over its 0.25 W rating"
-        ),
-        "{open}"
+        (data["sample"].as_f64().unwrap() - 2.158).abs() < 1e-3,
+        "{power}"
     );
+    let held = data["held_ps"].as_f64().unwrap();
+    assert!((held / 1.18e9 - 1.0).abs() < 0.02, "{power}");
     runtime.orbe(dir, &["close"]).ok();
     let card = runtime.orbe(dir, &["part", "resistor-axial"]).ok().stdout;
     assert!(card.contains("ratings\n  power  250 mW\n"), "{card}");

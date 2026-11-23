@@ -241,8 +241,9 @@ fn an_off_grid_failure_keeps_that_accepted_step_as_its_last_row() {
     assert_eq!(observations["end_ps"], end.as_ps());
 }
 
-/// `led_switch` plus 10 ohm from `vcc` to ground, rated 1 mW. That resistor is over at t = 0.
-/// The switch still closes at 1 us.
+/// `led_switch` plus 10 ohm from `vcc` to ground, rated 0.1 mW. That resistor is over from
+/// t = 0, and its window crosses once 2.5 W has run 0.1 mW / 2.5 W of 10.2 ms, 0.408 us. The
+/// switch still closes at 1 us.
 fn led_switch_over_from_the_start() -> Netlist {
     crate::netlist::parse(
         br#"{
@@ -263,7 +264,7 @@ fn led_switch_over_from_the_start() -> Netlist {
               "kind": "resistor",
               "pins": { "a": "vcc", "b": "gnd" },
               "resistance": { "value": 10.0, "unit": "ohm" },
-              "ratings": { "power": { "value": 0.001, "unit": "W" } }
+              "ratings": { "power": { "value": 0.0001, "unit": "W" } }
             },
             {
               "name": "r1",
@@ -308,6 +309,17 @@ fn rated_power(session: &Session) -> crate::diagnostic::Excursion {
         .expect("rating.power")
 }
 
+/// The ratings `session` is over now at its probe, as `(code, ref, held_ps set)`.
+fn over_now(session: &Session) -> Vec<(&'static str, String, bool)> {
+    session
+        .over_ratings(&session.probe())
+        .iter()
+        .map(|d| (d.code(), d.refs()[0].to_string(), d.over_now()))
+        .collect()
+}
+
+/// A session that faults on the step after t = 0 has no rating sample, because the t = 0 row is
+/// none. One that runs keeps each rating it sampled before the fault.
 #[test]
 fn a_faulted_session_keeps_ratings_sampled_before_the_fault() {
     let netlist = led_switch_over_from_the_start();
@@ -315,17 +327,13 @@ fn a_faulted_session_keeps_ratings_sampled_before_the_fault() {
     assert_eq!(limited.status(), Status::Faulted);
     assert_eq!(limited.now(), Time::ZERO);
     assert_eq!(limited.fault().unwrap().code(), "solver.step_limit");
-    let power = rated_power(&limited);
-    assert_eq!(power.quantity.to_string(), "#rbleed.p");
-    assert_eq!(power.first, Time::ZERO);
-    assert_eq!(power.over_ps, Some(0));
-    assert!(power.peak > power.limit);
     assert!(
         limited
             .diagnostics()
             .iter()
-            .all(|diagnostic| diagnostic.code() != "solver.step_limit")
+            .all(|diagnostic| !diagnostic.code().starts_with("rating."))
     );
+    assert_eq!(over_now(&limited), []);
 
     let mut restarted = open(
         &netlist,
@@ -336,9 +344,16 @@ fn a_faulted_session_keeps_ratings_sampled_before_the_fault() {
         },
     );
     assert_eq!(restarted.status(), Status::Running);
-    let at_open = rated_power(&restarted);
-    assert_eq!(at_open.first, Time::ZERO);
-    assert_eq!(at_open.over_ps, Some(0));
+    assert!(
+        restarted
+            .diagnostics()
+            .iter()
+            .all(|diagnostic| !diagnostic.code().starts_with("rating."))
+    );
+    assert_eq!(
+        over_now(&restarted),
+        [("rating.power", "#rbleed.p".to_string(), true)]
+    );
     let edge = Time::from_ps(1_000_000);
     assert_eq!(
         restarted.advance_to(transient(&netlist).stop),
@@ -349,9 +364,14 @@ fn a_faulted_session_keeps_ratings_sampled_before_the_fault() {
     assert_eq!(fault.code(), "solver.convergence");
     assert_eq!(fault.at(), Some(edge));
     let power = rated_power(&restarted);
-    assert_eq!(power.first, Time::ZERO);
-    assert_eq!(power.over_ps, Some(edge.as_ps()));
+    assert!(
+        power.first > Time::from_ps(400_000) && power.first < Time::from_ps(500_000),
+        "{:?}",
+        power.first
+    );
+    assert_eq!(power.over_ps, Some(edge.as_ps() - power.first.as_ps()));
     assert!(power.peak > power.limit);
+    assert_eq!(power.held_ps, None);
     assert!(
         restarted
             .diagnostics()

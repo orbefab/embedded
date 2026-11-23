@@ -7,6 +7,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use orbe_engine::diagnostic::{significant_ps, significant_text, while_it_is};
 use orbe_engine::world::Quantity;
 
 use crate::condition::Unit;
@@ -715,6 +716,22 @@ pub(crate) fn current(amperes: f64) -> String {
     format!("{sign}{} {unit}", shortest_scaled(abs, prefix))
 }
 
+/// `amperes` in the unit [`current`] picks, to 3 significant digits in that unit.
+fn rated_current(amperes: f64) -> String {
+    let abs = amperes.abs();
+    let (prefix, unit) = if abs >= 1.0 || abs == 0.0 || !abs.is_finite() {
+        (1.0, "A")
+    } else if abs >= 1e-3 {
+        (1e-3, "mA")
+    } else if abs >= 1e-6 {
+        (1e-6, "µA")
+    } else {
+        (1e-9, "nA")
+    };
+    let sign = if amperes.is_sign_negative() { "-" } else { "" };
+    format!("{sign}{} {unit}", significant_text(abs / prefix))
+}
+
 fn quantity_text(unit: Unit, value: f64) -> String {
     match unit {
         Unit::Ampere => current(value),
@@ -791,15 +808,15 @@ fn shorter(new: &str, old: &str) -> bool {
     (new.len(), new.contains(['e', 'E']), new) < (old.len(), old.contains(['e', 'E']), old)
 }
 
-/// A rating message with its currents in [`current`] and a lasted `for … ps` in a duration.
+/// A rating message as [`rating_message`] writes it, and a lasted `for … ps` in a duration.
 fn shown_message(code: &str, json: &Value) -> String {
     let message = json["message"].as_str().unwrap_or_default();
-    if code == "rating.current"
-        && let Some(text) = rating_current(message, json)
+    if matches!(code, "rating.current" | "rating.power")
+        && let Some(text) = rating_message(code, message, json)
     {
         return text;
     }
-    if matches!(code, "rating.power" | "rating.voltage") {
+    if code == "rating.voltage" {
         return with_over(message, json);
     }
     message.to_string()
@@ -816,30 +833,55 @@ fn with_over(message: &str, json: &Value) -> String {
     }
 }
 
-fn rating_current(message: &str, json: &Value) -> Option<String> {
-    let peak = json["data"]["peak"].as_f64()?;
-    let limit = json["data"]["limit"].as_f64()?;
-    let duration = json["data"]["over_ps"]
+/// The engine's rating message with currents in [`current`], each value to 3 significant
+/// digits, and times as durations. The head, the quantity as the message names it, is kept.
+fn rating_message(code: &str, message: &str, json: &Value) -> Option<String> {
+    let data = &json["data"];
+    let value = |v: f64| {
+        if code == "rating.current" {
+            rated_current(v)
+        } else {
+            format!("{} W", significant_text(v))
+        }
+    };
+    let peak = data["peak"].as_f64()?;
+    let limit = data["limit"].as_f64()?;
+    let sample = data["sample"].as_f64().unwrap_or(peak);
+    let duration = data["over_ps"]
         .as_u64()
         .filter(|over| *over > 0)
         .map(|over| format!(" for {}", Duration::from_ps(over)))
         .unwrap_or_default();
-    if let Some(window) = json["data"]["window_ps"].as_u64() {
-        let head = message.split(" carries ").next()?;
-        let ms = window as f64 / 1e9;
-        Some(format!(
-            "{head} carries {} RMS over the last {ms} ms, over its {} rating{duration}",
-            current(peak),
-            current(limit),
-        ))
-    } else {
-        let head = message.split(" peaks at ").next()?;
-        Some(format!(
-            "{head} peaks at {}, over its {} rating{duration}",
-            current(peak),
-            current(limit),
-        ))
+    let rating = format!("over its {} rating{duration}", value(limit));
+    let head = [" is ", " averages ", " carries ", " peaks at "]
+        .iter()
+        .filter_map(|verb| message.find(verb))
+        .min()
+        .map(|end| &message[..end])?;
+    if let Some(held) = data["held_ps"].as_u64() {
+        return Some(format!(
+            "{head} is {} now, over its {} rating; it warns if held about {}",
+            value(sample),
+            value(limit),
+            Duration::from_ps(significant_ps(held))
+        ));
     }
+    Some(match data["window_ps"].as_u64() {
+        Some(window) => {
+            let (verb, rms) = if code == "rating.current" {
+                ("carries", " RMS")
+            } else {
+                ("averages", "")
+            };
+            format!(
+                "{head} {verb} {}{rms} over the last {} ms{}, {rating}",
+                value(peak),
+                window as f64 / 1e9,
+                while_it_is(value(sample), value(peak)),
+            )
+        }
+        None => format!("{head} peaks at {}, {rating}", value(peak)),
+    })
 }
 
 impl Reading {
