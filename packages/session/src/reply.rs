@@ -1371,14 +1371,16 @@ impl Reply {
         self.error.is_none()
     }
 
-    /// `orbe check`'s exit codes: 0 when it succeeded, 2 for a usage error, 3 for an io error,
-    /// and 1 for any other refusal.
+    /// Exit codes: 0 when it succeeded, [`crate::EXIT_USAGE`] for a usage error,
+    /// [`crate::EXIT_IO`] for an io error, [`crate::EXIT_LOST`] when the session's process
+    /// is gone, and [`crate::EXIT_FAILED`] for any other refusal.
     pub fn exit(&self) -> u8 {
         match self.error.as_ref().map(|e| &e.code) {
             None => 0,
-            Some(Code::Usage) => 2,
-            Some(Code::IoError) => 3,
-            Some(_) => 1,
+            Some(Code::Usage) => crate::EXIT_USAGE,
+            Some(Code::IoError) => crate::EXIT_IO,
+            Some(Code::SessionCrashed) => crate::EXIT_LOST,
+            Some(_) => crate::EXIT_FAILED,
         }
     }
 

@@ -223,8 +223,8 @@ fn wait_port(port_file: &Path, log: PathBuf) -> u16 {
 enum Mode {
     /// Every request is this status, with an empty body.
     Status(u16),
-    /// The first request for a path that contains `@` is a 307 to the same path with `@`
-    /// written `%40`. The next request for it is the file.
+    /// A request whose path still contains `@` is a 307 to the same path with `@` written
+    /// `%40`. A request that is already percent-encoded is the file.
     RedirectAt,
     /// Serve the registry. Each path is logged, and overlapping requests are counted.
     Observe,
@@ -271,7 +271,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         decoded = unquote(path)
-        if "@" in decoded and decoded not in seen:
+        if "@" in path and "%40" not in path and decoded not in seen:
             seen.add(decoded)
             location = decoded.lstrip("/").replace("@", "%40")
             with open(count_file, "a", encoding="utf-8") as handle:
@@ -387,7 +387,11 @@ fn a_part_install_follows_an_at_redirect_and_writes_the_copy() {
     assert_eq!(code, 0, "{stdout}{stderr}");
     assert_eq!(stdout, "wrote parts/led-5mm 0.3.0\n");
     assert!(dir.path().join("parts/led-5mm/part.jsonc").is_file());
-    assert_eq!(server.redirect_count(), 1, "the record url holds @");
+    assert_eq!(
+        server.redirect_count(),
+        0,
+        "the client asks for the percent-encoded record"
+    );
 }
 
 #[test]
@@ -471,6 +475,31 @@ fn a_part_this_orbe_reads_is_installed() {
     assert_eq!(code, 0, "{stdout}{stderr}");
     let text = fs::read_to_string(dir.path().join("parts/trimmer-3362p/part.jsonc")).unwrap();
     assert!(text.contains("\"format\": 4"), "{text}");
+}
+
+#[test]
+fn a_format_5_part_named_for_a_newer_orbe_is_not_written() {
+    let (dir, _) = led_index(|row| {
+        row["orbe"] = json!("0.2.2");
+    });
+    let project = tempfile::tempdir().unwrap();
+    let (code, stdout, stderr) = run(
+        project.path(),
+        &["add", "led-5mm"],
+        &file_template(dir.path()),
+    );
+    assert_eq!(code, 1, "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.starts_with("error[part_format]:"), "{stderr}");
+    assert!(
+        stderr.contains("`led-5mm`") && stderr.contains("needs a newer orbe. nothing was written"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("hint: curl -fsSL https://orbefab.com/orbe/install.sh | sh\n"),
+        "{stderr}"
+    );
+    assert!(!project.path().join("parts").exists());
 }
 
 #[test]
@@ -878,7 +907,9 @@ fn a_warm_add_and_part_fetch_only_the_index_and_a_bad_record_is_fetched_again() 
     assert_eq!(code, 0, "{stdout}{stderr}");
     let refetched = server.paths();
     assert!(
-        refetched.iter().any(|path| path.contains("led-5mm@")),
+        refetched
+            .iter()
+            .any(|path| path.contains("led-5mm%40") || path.contains("led-5mm@")),
         "{refetched:?}"
     );
     assert!(
@@ -932,7 +963,7 @@ fn a_file_url_that_is_not_its_hash_is_refused_before_it_is_fetched() {
     file["url"] = json!("https://other.host/secret");
     let body = serde_json::to_vec(&record).unwrap();
     let record_sha = sha256_hex(&body);
-    fs::write(reg.join(&record_name), &body).unwrap();
+    write_fresh(&reg.join(&record_name), &body);
     let mut index: Value =
         serde_json::from_slice(&fs::read(reg.join("index.json")).unwrap()).unwrap();
     let row = index["items"]
@@ -943,7 +974,10 @@ fn a_file_url_that_is_not_its_hash_is_refused_before_it_is_fetched() {
         .unwrap();
     row["sha256"] = json!(record_sha);
     row["bytes"] = json!(body.len());
-    fs::write(reg.join("index.json"), serde_json::to_vec(&index).unwrap()).unwrap();
+    write_fresh(
+        &reg.join("index.json"),
+        &serde_json::to_vec(&index).unwrap(),
+    );
 
     let server = Server::bind(reg, Mode::Observe);
     let bin = tempfile::tempdir().unwrap();
@@ -1121,6 +1155,8 @@ fn file_sha(registry: &Path, id: &str, path: &str) -> String {
         .to_string()
 }
 
+/// A private registry. Its files are hard links to the shared build, so a change
+/// goes through [`write_fresh`], which unlinks a path before writing it.
 fn cloned_registry() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let dest = tmp.path().join("reg");

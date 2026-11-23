@@ -20,6 +20,7 @@ mod holes;
 mod listed;
 mod model;
 mod name;
+mod outline;
 mod params;
 mod project;
 mod published;
@@ -44,8 +45,12 @@ pub use holes::{holes_text, strip_text};
 pub use listed::{ScenePart, WrittenValue, scene_parts};
 pub use model::{PART_FORMATS, SCENE_FORMATS, STOP_PS, is_id};
 pub use name::did_you_mean;
+pub use outline::{
+    catalog_part_ids, declares_param, names_ground, owns_param, param_key_at, passed_to,
+};
 pub use project::{
-    BLOCK, REGISTRY, folder_hash, is_registry_name, part_file, shell_join, shell_word,
+    BLOCK, REGISTRY, folder_hash, hash_files, hex, is_registry_name, part_file, shell_join,
+    shell_word,
 };
 pub use published::is_published;
 pub use summary::{

@@ -1,16 +1,8 @@
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-import { expect, REPO, test } from "../../../e2e/support";
+import { expect, registryIds, test } from "../../../e2e/support";
 
 // The install-off build has no `orbe add` line, so the phone-width and Copy checks that depend
 // on it run here, against the build `check-site.sh` makes with ORBE_SITE_INSTALL=1.
 test.skip(process.env.ORBE_SITE_INSTALL_E2E !== "1", "runs against a build with install lines");
-
-function ids(dir: string, file: string): string[] {
-  return readdirSync(join(REPO, dir))
-    .filter((name) => existsSync(join(REPO, dir, name, file)))
-    .sort();
-}
 
 test("the start page shows each command and the Block's scene", async ({ browser, host }) => {
   const context = await browser.newContext();
@@ -52,8 +44,8 @@ test("every part and Block page fits a phone width with its install line", async
   const page = await context.newPage();
   const fits = () => page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1);
   const pages = [
-    ...ids("parts", "part.jsonc").map((id) => `/orbe/parts/${id}/`),
-    ...ids("blocks", "block.jsonc").map((id) => `/orbe/blocks/${id}/`),
+    ...registryIds("part").map((id) => `/orbe/parts/${id}/`),
+    ...registryIds("block").map((id) => `/orbe/blocks/${id}/`),
   ];
   for (const path of pages) {
     await page.goto(`${host.base}${path}`);

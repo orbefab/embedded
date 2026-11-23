@@ -1,9 +1,25 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 import type { BrowserContext, Page } from "@playwright/test";
-import { collectLogs, expect, ledGlow, orbeJson, rendersDir, REPO, repoBlocks, shot, showBlock, test, waitGlow, waitState } from "../../../e2e/support";
+import {
+  blockKind,
+  collectLogs,
+  expect,
+  ledGlow,
+  orbeJson,
+  registryDir,
+  registryIds,
+  rendersDir,
+  REPO,
+  type RepoBlock,
+  shot,
+  showBlock,
+  test,
+  waitGlow,
+  waitState,
+} from "../../../e2e/support";
 
 const INSTALL = /orbe add|cargo install|orbefab\.com\/orbe\/install\.sh/;
 const VIEW = { width: 1280, height: 900 };
@@ -85,9 +101,54 @@ async function openTracked(browser: { newContext(options: { viewport: { width: n
 const bodyText = (page: Page) => page.evaluate(() => document.body.innerText);
 
 function blockIds(): string[] {
-  return readdirSync(join(REPO, "blocks"))
-    .filter((id) => existsSync(join(REPO, "blocks", id, "scene.jsonc")))
+  return registryIds("block");
+}
+
+interface RecordFile {
+  path: string;
+  sha256: string;
+}
+
+interface ServedRecord {
+  title: string;
+  files: RecordFile[];
+}
+
+/** The newest record the registry serves for `id`. */
+function servedRecord(id: string): ServedRecord {
+  const registry = registryDir();
+  const index = JSON.parse(readFileSync(join(registry, "index.json"), "utf8")) as {
+    items: { name: string; version: string; url: string }[];
+  };
+  const newest = newestRow(index.items, id);
+  return JSON.parse(readFileSync(join(registry, newest.url), "utf8")) as ServedRecord;
+}
+
+/** The card line for a part the served Blocks place. A part only in the repo is not on the page. */
+async function blocksLine(part: string): Promise<string> {
+  const read = await sceneReader();
+  const count = blockIds().filter((id) => read.parts(id).some((row) => row.part === part)).length;
+  if (count < 1) throw new Error(`${part} is in no Block the registry serves`);
+  return count === 1 ? "in 1 Block" : `in ${count} Blocks`;
+}
+
+/** Pages of the served Blocks whose scenes place `part`. */
+async function blocksPlacing(part: string): Promise<string[]> {
+  const read = await sceneReader();
+  return blockIds()
+    .filter((id) => read.parts(id).some((row) => row.part === part))
+    .map((id) => `/orbe/blocks/${id}/`)
     .sort();
+}
+
+/** Blocks the registry serves, classified from the scene it serves. */
+function releasedBlocks(): RepoBlock[] {
+  return blockIds().map((id) => {
+    const scene = servedRecord(id).files.find((file) => file.path === "scene.jsonc");
+    if (scene === undefined) throw new Error(`${id} has no scene.jsonc in the registry`);
+    const text = readFileSync(join(registryDir(), "files", scene.sha256), "utf8");
+    return { id, kind: blockKind(text, id) };
+  });
 }
 
 interface ListedPart {
@@ -108,14 +169,21 @@ const compareVersions = (a: string, b: string) => {
   return 0;
 };
 
-/** The registry this build wrote. `orbe search` reads the same folder. */
-function registryDir(): string {
-  const spec = process.env.ORBE_REGISTRY;
-  if (spec !== undefined && spec.startsWith("file://")) {
-    const path = fileURLToPath(spec);
-    return path.slice(0, path.lastIndexOf("/"));
+/** The newest index row for one name. The site and the client show that version. */
+function newestRow<T extends { name: string; version: string }>(items: readonly T[], name: string): T {
+  const newest = items.filter((row) => row.name === name).sort((a, b) => compareVersions(a.version, b.version)).at(-1);
+  if (newest === undefined) throw new Error(`${name} is not in the registry`);
+  return newest;
+}
+
+/** One row per name, its newest version. An older listed row does not put a part on the page. */
+function newestPerName<T extends { name: string; version: string }>(items: readonly T[]): T[] {
+  const best = new Map<string, T>();
+  for (const row of items) {
+    const had = best.get(row.name);
+    if (had === undefined || compareVersions(had.version, row.version) < 0) best.set(row.name, row);
   }
-  return join(REPO, ".scratch/site/registry");
+  return [...best.values()];
 }
 
 let scenes: Promise<SceneReader> | undefined;
@@ -199,26 +267,16 @@ function summaries(): ReadonlyMap<string, string | undefined> {
   return cachedSummaries;
 }
 
-/** Sketch, scene and test files the Code view lists, from the Block's folder. */
+/** Sketch, scene and test files the Code view lists, from the record the page serves. */
 function codePaths(id: string): string[] {
-  const root = join(REPO, "blocks", id);
-  const paths = ["scene.jsonc"];
-  const walk = (dir: string) => {
-    if (!existsSync(dir)) return;
-    for (const name of readdirSync(dir)) {
-      const path = join(dir, name);
-      if (statSync(path).isDirectory()) {
-        walk(path);
-        continue;
-      }
-      const rel = path.slice(root.length + 1);
-      if (rel.startsWith("firmware/") && /\.(?:ino|c|cpp|h)$/.test(rel)) paths.push(rel);
-      if (rel.startsWith("tests/")) paths.push(rel);
-    }
-  };
-  walk(join(root, "firmware"));
-  walk(join(root, "tests"));
-  return paths.sort();
+  return servedRecord(id)
+    .files.map((file) => file.path)
+    .filter((path) => path === "scene.jsonc" || path.startsWith("tests/") || /^firmware\/.+\.(?:ino|c|cpp|h)$/.test(path))
+    .sort();
+}
+
+function testCount(id: string): number {
+  return servedRecord(id).files.filter((file) => file.path.startsWith("tests/") && file.path.endsWith(".test")).length;
 }
 
 const VALUES: Record<string, Record<string, readonly string[]>> = {
@@ -234,7 +292,6 @@ const VALUES: Record<string, Record<string, readonly string[]>> = {
     nano: ["light.ino.hex"],
   },
   "uno-button-led": { r1: ["220 Ω"], r2: ["10 kΩ"], led1: ["red"], uno: ["button.ino.hex"] },
-  "nano-neopixel-stick": { r1: ["470 Ω"], nano: ["rainbow.ino.hex"] },
 };
 
 async function hydrated(page: Page): Promise<void> {
@@ -280,9 +337,7 @@ function searchNames(query: string): string[] {
   return orbeJson(process.env.ORBE ?? "", ["search", ...query.split(" ")]).data?.parts?.map((part) => part.id) ?? [];
 }
 
-const PART_IDS = readdirSync(join(REPO, "parts"))
-  .filter((id) => existsSync(join(REPO, "parts", id, "part.jsonc")))
-  .sort();
+const PART_IDS = registryIds("part");
 const PART_THIRD = Math.ceil(PART_IDS.length / 3);
 
 // Called from three places in this file. A shard keeps a whole group, and the calls sit
@@ -442,20 +497,20 @@ test.describe("parts search", () => {
 
   test("the parts page lists every part without a query", async () => {
     const index = JSON.parse(readFileSync(join(registryDir(), "index.json"), "utf8")) as {
-      items: { name: string; type: string; listed?: boolean }[];
+      items: { name: string; version: string; type: string; listed?: boolean }[];
     };
-    const catalog = new Set(index.items.filter((row) => row.type === "part" && row.listed !== false).map((row) => row.name)).size;
+    const catalog = newestPerName(index.items).filter((row) => row.type === "part" && row.listed !== false).length;
     expect(await page.locator("[data-part]").count()).toBe(catalog);
   });
 
   test("a card says where the part is used", async () => {
     const line = (id: string) => page.locator(`[data-part="${id}"]`).innerText();
     expect(await page.locator("main")).toContainText("Real parts with their pins, ratings and 3D models.");
-    expect(await line("led-5mm")).toContain("in 4 Blocks");
+    expect(await line("led-5mm")).toContain(await blocksLine("led-5mm"));
     expect(await line("led-5mm")).not.toContain("led-5mm");
-    expect(await line("resistor-axial")).toContain("in 5 Blocks");
-    expect(await line("lm358-dip8")).toContain("in 1 Block");
-    expect(await line("nano-board")).toContain("in 4 Blocks");
+    expect(await line("resistor-axial")).toContain(await blocksLine("resistor-axial"));
+    expect(await line("lm358-dip8")).toContain(await blocksLine("lm358-dip8"));
+    expect(await line("nano-board")).toContain(await blocksLine("nano-board"));
     expect(await line("pin-header-1x15")).toContain("on the Nano (CH340 clone)");
     const unused = await page.locator("[data-part]").evaluateAll((nodes) => nodes.some((node) => (node.textContent ?? "").includes("in no Block yet") || (node.textContent ?? "").includes("Generic")));
     expect(unused).toBe(false);
@@ -518,12 +573,19 @@ test.describe("led-5mm", () => {
 
   test("a download serves the file's bytes, by the record's SHA-256", async () => {
     const href = await page.locator('[data-testid="license-files"] a[download]', { hasText: /^part\.jsonc$/ }).getAttribute("href");
-    const download = await page.evaluate(async (href) => {
-      const record = await (await fetch("/orbe/r/led-5mm@0.3.0.json")).json();
-      const bytes = new Uint8Array(await (await fetch(href)).arrayBuffer());
-      const hex = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
-      return { hex, want: record.files.find((file: { path: string; sha256: string }) => file.path === "part.jsonc").sha256 };
-    }, href);
+    const index = (await page.evaluate(async () => (await fetch("/orbe/r/index.json")).json())) as {
+      items: { name: string; version: string; url: string }[];
+    };
+    const row = newestRow(index.items, "led-5mm");
+    const download = await page.evaluate(
+      async ({ href, url }) => {
+        const record = await (await fetch(new URL(url, `${location.origin}/orbe/r/index.json`))).json();
+        const bytes = new Uint8Array(await (await fetch(href)).arrayBuffer());
+        const hex = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+        return { hex, want: record.files.find((file: { path: string; sha256: string }) => file.path === "part.jsonc").sha256 };
+      },
+      { href, url: row.url },
+    );
     expect(download.hex, JSON.stringify(download)).toBe(download.want);
   });
 
@@ -547,15 +609,11 @@ test.describe("led-5mm", () => {
   });
 
   test("it links the Blocks that place it", async () => {
+    const placing = await blocksPlacing("led-5mm");
     const place = await page.locator("dt", { hasText: /^used in$/ }).locator("xpath=following-sibling::dd[1]").innerText();
-    expect(place.trim()).toBe("4 Blocks");
+    expect(place.trim()).toBe(placing.length === 1 ? "1 Block" : `${placing.length} Blocks`);
     const hrefs = await page.locator('[data-testid="used-in"] a').evaluateAll((links) => links.map((link) => link.getAttribute("href")).sort());
-    expect(hrefs).toEqual([
-      "/orbe/blocks/nano-button-led/",
-      "/orbe/blocks/nano-led-fade/",
-      "/orbe/blocks/nano-light-comparator/",
-      "/orbe/blocks/uno-button-led/",
-    ]);
+    expect(hrefs).toEqual(placing);
   });
 
   test("it shows what is not simulated", async () => {
@@ -581,12 +639,11 @@ test.describe("led-5mm", () => {
   });
 });
 
-test("each other 5 mm colour links its own datasheet from Ratings", async ({ page, host }) => {
+test("a released part's ratings link its own datasheet", async ({ page, host }) => {
   const sheets = [
-    ["led-5mm-yellow", "WP7113YD.pdf"],
-    ["led-5mm-green", "WP7113GD.pdf"],
-    ["led-5mm-blue", "WP7113QBC-D.pdf"],
-    ["led-5mm-white", "WP7113QWC-D.pdf"],
+    ["diode-1n4007", "1n4001.pdf"],
+    ["npn-2n2222-to92", "p2n2222a-d.pdf"],
+    ["nmos-irf520-to220", "irf520.pdf"],
   ] as const;
   for (const [id, file] of sheets) {
     const response = await page.goto(`${host.base}/orbe/parts/${id}/`);
@@ -714,7 +771,7 @@ test.describe("uno-board", () => {
   });
 });
 
-for (const block of repoBlocks()) {
+for (const block of releasedBlocks()) {
   test.describe(`${block.id} on its page`, () => {
     test.describe.configure({ mode: "default" });
     let context: BrowserContext;
@@ -913,7 +970,6 @@ const README = {
   "/orbe/blocks/nano-led-fade/": "fades up and down about every 3 seconds",
   "/orbe/blocks/nano-light-comparator/": "prints dark and a count",
   "/orbe/blocks/uno-button-led/": "A 10k pull-down holds D2 low",
-  "/orbe/blocks/nano-neopixel-stick/": "Each pixel keeps its own colour",
 } as const;
 
 test("every Block page shows its README and no install line", async ({ browser, host }) => {
@@ -996,9 +1052,7 @@ test("each Block lists its scene files and its values", async ({ browser, host }
     }
     await expect(page.locator("details summary", { hasText: "brings" }), id).toHaveCount(0);
     await expect(page.getByText("See them on the board's page"), id).toHaveCount(0);
-    const tests = existsSync(join(REPO, "blocks", id, "tests"))
-      ? readdirSync(join(REPO, "blocks", id, "tests")).filter((name) => name.endsWith(".test")).length
-      : 0;
+    const tests = testCount(id);
     const body = await bodyText(page);
     expect(body, id).toContain(tests === 1 ? "1 test" : `${tests} tests`);
     expect(body, id).not.toContain("parts.lock");
@@ -1045,7 +1099,7 @@ test("a same-page hash stays on the page, including a second click and a page op
   page.on("pageerror", (error) => errors.push(error.message));
   await page.locator('a[href="/orbe/parts/led-5mm/"]').first().click();
   await page.waitForURL(/\/orbe\/parts\/led-5mm\/$/);
-  await expect(page.locator("h1")).toHaveText("5 mm LED, red");
+  await expect(page.locator("h1")).toHaveText(servedRecord("led-5mm").title);
   await hydrated(page);
   await page.locator('a[href="/orbe/blocks/nano-button-led/"]').first().click();
   await page.waitForURL(/\/orbe\/blocks\/nano-button-led\/$/);
@@ -1247,12 +1301,8 @@ test("hold to press shows the brand outline on keyboard focus", async ({ browser
 });
 
 test("sitemap.xml lists the site pages and no embed route", async ({ browser, host }) => {
-  const blockIds = readdirSync(join(REPO, "blocks"))
-    .filter((id) => existsSync(join(REPO, "blocks", id, "block.jsonc")))
-    .sort();
-  const partIds = readdirSync(join(REPO, "parts"))
-    .filter((id) => existsSync(join(REPO, "parts", id, "part.jsonc")))
-    .sort();
+  const blockIds = registryIds("block");
+  const partIds = registryIds("part");
   expect(blockIds.length).toBeGreaterThan(0);
   expect(partIds.length).toBeGreaterThan(0);
   const context = await browser.newContext();
@@ -1450,13 +1500,18 @@ test.describe("cache", () => {
   }
 
   test("a registry file revalidates against its ETag, and an unchanged one answers 304", async ({ host }) => {
-    const index = await (await fetch(`${host.base}/orbe/r/index.json`)).json();
-    const row = index.items.find((item: { name: string; url: string }) => item.name === "led-5mm");
+    const index = (await (await fetch(`${host.base}/orbe/r/index.json`)).json()) as {
+      items: { name: string; version: string; url: string }[];
+    };
+    const row = newestRow(index.items, "led-5mm");
     const record = await (await fetch(new URL(row.url, `${host.base}/orbe/r/index.json`))).json();
     const file = `/orbe/r/files/${record.files[0].sha256}`;
     const hit = await head(host.base, file);
     const again = await head(host.base, file, { "If-None-Match": hit.etag ?? "" });
-    expect(hit.status === 200 && hit.etag !== null && again.status === 304, JSON.stringify({ hit, again })).toBe(true);
+    expect(
+      hit.status === 200 && hit.etag !== null && /max-age=31536000, immutable/.test(hit.cache) && again.status === 304,
+      JSON.stringify({ hit, again }),
+    ).toBe(true);
   });
 
   test("a missing registry file answers 404 with no immutable cache", async ({ host }) => {
@@ -1471,9 +1526,11 @@ test.describe("cache", () => {
     expect(built.status === 200 && /max-age=31536000, immutable/.test(built.cache), JSON.stringify({ asset, built })).toBe(true);
   });
 
-  test("a path with @ answers 307 to the same path with %40", async ({ host }) => {
-    const at = await head(host.base, "/orbe/r/led-5mm@0.2.0.json");
-    expect(at.status, JSON.stringify(at)).toBe(307);
+  test("a path with @ answers the record", async ({ host }) => {
+    const index = await (await fetch(`${host.base}/orbe/r/index.json`)).json();
+    const row = index.items.find((item: { url: string }) => item.url.includes("@"));
+    const at = await head(host.base, `/orbe/r/${row.url}`);
+    expect(at.status === 200 && /max-age=31536000, immutable/.test(at.cache), JSON.stringify(at)).toBe(true);
   });
 
   test("a path that only starts with /orbe is not this site's", async ({ host }) => {

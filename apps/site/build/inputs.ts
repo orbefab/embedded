@@ -20,8 +20,9 @@ export const PUBLIC = join(INPUT, "public");
 const MODULE = "virtual:orbe-site";
 
 /** Workers static assets read `_headers` at the top of the assets folder, with public URL paths.
- * Hashed build files keep for a year. Registry files keep their default, a revalidation each use
- * against their ETag, since a rule here would also reach a 404 at the same path. */
+ * Hashed build files keep for a year. Hashed registry files keep for a year too, set on the
+ * 200 by the Worker, since a rule here would also reach a 404 at the same path. The index and
+ * the schemas keep their default, a revalidation each use against their ETag. */
 const HEADERS = `${BASE}*
   X-Content-Type-Options: nosniff
 ${BASE}assets/*

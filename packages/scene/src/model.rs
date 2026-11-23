@@ -34,9 +34,8 @@ const BLOB_FORMAT: u32 = 2;
 /// The oldest part format whose `ws2812` has `DOUT`, and whose readings take `"of": "rgb"`.
 /// An older part's `DOUT` pin stays off the chain, as it did when the engine had none.
 const DOUT_FORMAT: u32 = 3;
-/// The oldest part format that carries the keys the published 0.2.0 binary refuses. The release
-/// and the registry share one tree, so a catalog part that uses one of these says format 4 and
-/// that binary asks for a newer orbe.
+/// The oldest part format that carries the keys the published 0.2.0 binary refuses. A catalog
+/// part that uses one of these says format 4, and that binary asks for a newer orbe.
 const FIELD_FORMAT: u32 = 4;
 /// The oldest part format that carries the keys orbe 0.2.0 and 0.2.1 refuse, so those binaries
 /// ask for a newer orbe.

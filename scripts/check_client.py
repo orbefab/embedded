@@ -6,6 +6,7 @@ A part is checked in a small scene that sets its required params. A Block is
 every diagnostic says the format is newer than that binary reads.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -187,7 +188,115 @@ def show(item: str, diags: list[dict]) -> None:
         print(f"  {diag.get('code')} {file}{place} {diag.get('message')}", file=sys.stderr)
 
 
+def sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def folder_hash(files: dict[str, bytes]) -> str:
+    lines = [f"{sha256(body)}  {path}\n" for path, body in files.items()]
+    lines.sort(key=lambda line: line[66:])
+    return "sha256:" + sha256("".join(lines).encode())
+
+
+def write_record(root: Path, name: str, part: bytes, orbe: str) -> dict:
+    digest = sha256(part)
+    (root / "files").mkdir(exist_ok=True)
+    (root / "files" / digest).write_bytes(part)
+    record = {
+        "$schema": "item.schema.json",
+        "type": "part",
+        "format": 1,
+        "name": name,
+        "version": "1.0.0",
+        "title": name,
+        "license": "MIT",
+        "registryDependencies": [],
+        "files": [
+            {
+                "path": "part.jsonc",
+                "url": f"files/{digest}",
+                "sha256": digest,
+                "bytes": len(part),
+                "license": "MIT",
+            }
+        ],
+        "hash": folder_hash({"part.jsonc": part}),
+        "real": {},
+        "pins": [],
+        "params": [],
+        "ratings": [],
+        "notSimulated": [],
+    }
+    raw = json.dumps(record, separators=(",", ":")).encode()
+    (root / f"{name}@1.0.0.json").write_bytes(raw)
+    return {
+        "name": name,
+        "type": "part",
+        "version": "1.0.0",
+        "title": name,
+        "url": f"{name}@1.0.0.json",
+        "sha256": sha256(raw),
+        "bytes": len(raw),
+        "orbe": orbe,
+    }
+
+
+def released_add(orbe: Path) -> int:
+    """orbe 0.2.0 installs a part it can read, and is told to update for one it cannot."""
+    with tempfile.TemporaryDirectory(prefix="orbe-v020-") as raw:
+        root = Path(raw) / "registry"
+        root.mkdir()
+        rows = [
+            write_record(root, "lamp", b'{"format":1,"part":"lamp","pins":["a","b"]}\n', "0.2.0"),
+            write_record(root, "glow", b'{"format":4,"part":"glow","pins":["a","b"]}\n', "0.2.1"),
+        ]
+        rows.sort(key=lambda row: row["name"])
+        index = {"$schema": "index.schema.json", "format": 1, "name": "@acme", "items": rows}
+        (root / "index.json").write_text(json.dumps(index, separators=(",", ":")))
+        env = os.environ.copy()
+        env["ORBE_REGISTRY"] = f"file://{root}/{{name}}.json"
+        project = Path(raw) / "project"
+        project.mkdir()
+
+        def invoke(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+            return subprocess.run(
+                [str(orbe), *args],
+                cwd=cwd,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        added = invoke(["add", "lamp"], project)
+        lamp = project / "parts" / "lamp" / "part.jsonc"
+        if added.returncode != 0 or not lamp.is_file():
+            print(added.stdout + added.stderr, file=sys.stderr)
+            print("orbe 0.2.0 did not install lamp", file=sys.stderr)
+            return 1
+        glow = invoke(["add", "glow"], project)
+        told = glow.stdout + glow.stderr
+        if glow.returncode != 0:
+            if NEWER not in told and "needs a newer orbe" not in told:
+                print(told, file=sys.stderr)
+                print("orbe 0.2.0 refused glow without asking for a newer orbe", file=sys.stderr)
+                return 1
+        else:
+            scene = project / "scene.jsonc"
+            scene.write_text('{"format":1,"parts":{"g":{"type":"glow"}}}\n')
+            checked = invoke(["check", str(scene)], project)
+            told = checked.stdout + checked.stderr
+            if NEWER not in told and "needs a newer orbe" not in told:
+                print(told, file=sys.stderr)
+                print("orbe 0.2.0 installed glow and did not ask for a newer orbe", file=sys.stderr)
+                return 1
+        print("orbe 0.2.0 installed lamp and asked for a newer orbe for glow")
+        return 0
+
+
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] == "--released-add":
+        return released_add(Path(sys.argv[2]).resolve())
     if len(sys.argv) != 2:
         print("usage: scripts/check_client.py <orbe>", file=sys.stderr)
         return 2

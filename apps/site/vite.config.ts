@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { cloudflare } from "@cloudflare/vite-plugin";
 import tailwindcss from "@tailwindcss/vite";
@@ -19,19 +19,23 @@ if (!["", "0", "1"].includes(flag)) {
 const isPage = (path: string) =>
   path === "/orbe/404" || (path.startsWith("/orbe/") && path.endsWith("/") && !path.startsWith("/orbe/r/"));
 
-/** Embed routes are unlinked, so the crawl never finds them. List each Block's. */
-const embedPages = readdirSync(resolve(import.meta.dirname, "../../blocks"))
-  .filter((name) => existsSync(resolve(import.meta.dirname, "../../blocks", name, "block.jsonc")))
-  .map((name) => ({ path: `/orbe/blocks/${name}/embed/` }));
+/** The registry this build serves. A part or Block that is only in the repo has no page yet. */
+const index = resolve(import.meta.dirname, "../../.scratch/site/registry/index.json");
+const registryItems = existsSync(index)
+  ? (JSON.parse(readFileSync(index, "utf8")) as { items: IndexRow[] }).items
+  : [];
+const names = (rows: readonly IndexRow[]) => [...new Set(rows.map((row) => row.name))];
+
+/** Embed routes are unlinked, so the crawl never finds them. List each Block the registry serves. */
+const embedPages = names(registryItems.filter((row) => row.type === "block")).map((name) => ({
+  path: `/orbe/blocks/${name}/embed/`,
+}));
 
 /** A part whose index row has `"listed": false` is left out of the parts list, so the crawl never finds its page
- * unless a board page links it. List each one. */
-const index = resolve(import.meta.dirname, "../../.scratch/site/registry/index.json");
-const unlistedPartPages = existsSync(index)
-  ? (JSON.parse(readFileSync(index, "utf8")) as { items: IndexRow[] }).items
-      .filter((row) => row.type === "part" && row.listed === false)
-      .map((row) => ({ path: `/orbe/parts/${row.name}/` }))
-  : [];
+ * unless a board page links it. List each one the registry serves. */
+const unlistedPartPages = names(registryItems.filter((row) => row.type === "part" && row.listed === false)).map(
+  (name) => ({ path: `/orbe/parts/${name}/` }),
+);
 
 /** The Worker Start renders pages in, from its server entry. */
 const renderer = { name: "orbefab-embedded-render", main: "@tanstack/react-start/server-entry" };

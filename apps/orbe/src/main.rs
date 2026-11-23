@@ -151,8 +151,6 @@ enum Command {
     Daemon {
         #[arg(long)]
         session: String,
-        #[arg(long)]
-        start_log: Option<u64>,
     },
 }
 
@@ -261,13 +259,15 @@ fn live_help(spec: &orbe_session::Spec) -> clap::Command {
     command
 }
 
-const FAILED: u8 = 1;
-const IO: u8 = 3;
-
-const USAGE: u8 = 2;
+use orbe_session::{EXIT_FAILED as FAILED, EXIT_IO as IO, EXIT_USAGE as USAGE};
 
 fn main() -> ExitCode {
+    install_panic_hook();
     let mut args: Vec<OsString> = std::env::args_os().collect();
+    if args.iter().skip(1).any(|arg| arg.to_str().is_none()) {
+        eprintln!("error[usage]: orbe takes UTF-8 arguments");
+        return ExitCode::from(USAGE);
+    }
     if let Some(words) = flag_before_command(&args[1..]) {
         args.truncate(1);
         args.extend(words);
@@ -325,7 +325,7 @@ fn main() -> ExitCode {
                 no_browser,
                 json,
             } => show(session.as_deref(), json, !no_browser),
-            Command::Daemon { session, start_log } => daemon(&session, start_log),
+            Command::Daemon { session } => daemon(&session),
         },
         Err(err) => usage(err),
     }
@@ -432,8 +432,8 @@ fn live_command(spec: &orbe_session::Spec, args: &[String]) -> ExitCode {
 }
 
 #[cfg(unix)]
-fn daemon(session: &str, start_log: Option<u64>) -> ExitCode {
-    live::daemon(session, start_log)
+fn daemon(session: &str) -> ExitCode {
+    live::daemon(session)
 }
 
 #[cfg(unix)]
@@ -460,9 +460,32 @@ fn live_command(spec: &orbe_session::Spec, args: &[String]) -> ExitCode {
 }
 
 #[cfg(not(unix))]
-fn daemon(_session: &str, _start_log: Option<u64>) -> ExitCode {
+fn daemon(_session: &str) -> ExitCode {
     eprintln!("error[usage]: the session process needs Unix for now");
     ExitCode::from(USAGE)
+}
+
+/// A write to a closed pipe exits 0. Any other panic keeps the default report and exit 101.
+fn install_panic_hook() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let text = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| info.payload().downcast_ref::<&str>().copied())
+            .unwrap_or("");
+        let broken = text.contains("Broken pipe")
+            || text.contains("os error 32")
+            || info
+                .payload()
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::BrokenPipe);
+        if broken {
+            std::process::exit(0);
+        }
+        default(info);
+    }));
 }
 
 #[cfg(not(unix))]
