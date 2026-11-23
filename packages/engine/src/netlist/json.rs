@@ -99,7 +99,8 @@ pub(crate) struct WireRating {
     basis: Option<WireBasis>,
 }
 
-/// `"peak"`, or `{ "sustained": { "average": "rms" | "mean", "tau": <seconds> } }`.
+/// `"peak"`, or `{ "sustained": { "average": "rms" | "mean", "tau": <seconds> } }`, which may
+/// also carry the sheet's `peak` limit in the rating's unit.
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 enum WireBasis {
@@ -107,6 +108,8 @@ enum WireBasis {
     Sustained {
         average: WireAverage,
         tau: WireValue,
+        #[serde(default)]
+        peak: Option<WireValue>,
     },
 }
 
@@ -683,12 +686,12 @@ pub(crate) fn resolve_rating(
         return Some(None);
     };
     let limit = resolve_value(part, field, expected, true, WireValue { value, unit }, out);
-    let basis = match basis {
-        None => Some(None),
-        Some(WireBasis::Peak) => Some(Some(Basis::Peak)),
-        Some(WireBasis::Sustained { average, tau }) => {
+    let (basis, peak) = match basis {
+        None => (Some(None), Some(None)),
+        Some(WireBasis::Peak) => (Some(Some(Basis::Peak)), Some(None)),
+        Some(WireBasis::Sustained { average, tau, peak }) => {
             let tau_field = format!("{field}.basis.sustained.tau");
-            resolve_value(part, tau_field, "s", true, tau, out).map(|tau| {
+            let basis = resolve_value(part, tau_field, "s", true, tau, out).map(|tau| {
                 Some(Basis::Sustained {
                     tau_ps: (tau.si.get() * 1e12).round().max(1.0) as u64,
                     average: match average {
@@ -696,12 +699,22 @@ pub(crate) fn resolve_rating(
                         WireAverage::Mean => Average::Mean,
                     },
                 })
-            })
+            });
+            let peak = match peak {
+                None => Some(None),
+                Some(peak) => {
+                    let peak_field = format!("{field}.basis.sustained.peak");
+                    resolve_value(part, peak_field, expected, true, peak, out)
+                        .map(|peak| Some(peak.si))
+                }
+            };
+            (basis, peak)
         }
     };
     Some(Some(Rating {
         si: limit?.si,
         basis: basis?,
+        peak: peak?,
     }))
 }
 

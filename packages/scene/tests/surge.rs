@@ -1,6 +1,7 @@
-//! Each catalog part whose current rating is sustained rides out the surge its sheet allows,
-//! from cold, and warns on a current held just over its rating. A current source drives the
-//! part from anode to cathode, as the sheet's forward rows do.
+//! Each catalog part whose current rating is sustained with a peak limit rides out the surge its
+//! sheet allows, from cold, with no diagnostic at any step during it or after it. A surge just
+//! over the sheet's peak warns, and so does a current held just over the sustained rating. A
+//! current source drives the part from anode to cathode, as the sheet's forward rows do.
 
 use std::f64::consts::PI;
 use std::fs;
@@ -73,7 +74,7 @@ fn tenth_duty(peak: f64) -> String {
     )
 }
 
-/// The rating warnings of `id` driven by `current` for `ms` milliseconds.
+/// The rating warnings of `id` driven by `current`, read after each millisecond up to `ms`.
 fn warnings(id: &str, extra: &str, current: &str, ms: u64) -> Vec<String> {
     let project = common::project("nano-button");
     let dir = project.path();
@@ -107,29 +108,40 @@ fn run(dir: &Path, ms: u64) -> Vec<String> {
     let netlist = orbe_scene::read(&Files::disk(), &dir.join("scene.jsonc"))
         .unwrap_or_else(|found| panic!("{found:#?}"));
     let mut session = Session::open_json(netlist.json.as_bytes(), &Blobs::new()).unwrap();
-    session.advance_to(Time::from_ps(ms * MS));
-    assert!(session.fault().is_none(), "{:?}", session.fault());
-    session
-        .diagnostics()
-        .iter()
-        .filter_map(|d| match d {
-            Diagnostic::RatingCurrent(e) | Diagnostic::RatingPower(e) => {
-                Some(format!("{} {}", d.code(), e.quantity))
+    let mut seen = Vec::new();
+    for at in 1..=ms {
+        session.advance_to(Time::from_ps(at * MS));
+        assert!(session.fault().is_none(), "{:?}", session.fault());
+        for d in session.diagnostics() {
+            if let Diagnostic::RatingCurrent(e) | Diagnostic::RatingPower(e) = &d {
+                let now = if d.over_now() { " now" } else { "" };
+                let seen_at = format!("{} {}{now} by {at}ms", d.code(), e.quantity);
+                if !seen
+                    .iter()
+                    .any(|s: &String| s.split(" by ").next() == seen_at.split(" by ").next())
+                {
+                    seen.push(seen_at);
+                }
             }
-            _ => None,
-        })
-        .collect()
+        }
+    }
+    seen
 }
 
-/// Each part, its scene extras, the surge its sheet allows, and its current rating.
-fn cases() -> Vec<(&'static str, &'static str, String, f64)> {
-    let mut cases = vec![
-        ("diode-sod123", "", half_sine(5.5), 0.5),
-        ("diode-1n4007", "", half_sine(30.0), 1.0),
-        ("diode-m7-sma", "", half_sine(30.0), 1.0),
-        // The sheet's 4 A surge gives no width. 100 us of it fills a hundredth of the 10.2 ms
-        // time constant.
-        ("diode-cd1206", "", square(4.0, 100_000_000), 0.15),
+/// The sheet's surge at a peak.
+type Surge = fn(f64) -> String;
+
+/// Each part, its scene extras, the shape of the surge its sheet allows, that surge's peak, and
+/// its current rating.
+fn cases() -> Vec<(&'static str, &'static str, Surge, f64, f64)> {
+    // The CD1206's 4 A surge gives no width. 100 us of it fills a hundredth of the 10.2 ms time
+    // constant.
+    let short: Surge = |peak| square(peak, 100_000_000);
+    let mut cases: Vec<(&str, &str, Surge, f64, f64)> = vec![
+        ("diode-sod123", "", half_sine, 5.5, 0.5),
+        ("diode-1n4007", "", half_sine, 30.0, 1.0),
+        ("diode-m7-sma", "", half_sine, 30.0, 1.0),
+        ("diode-cd1206", "", short, 4.0, 0.15),
     ];
     for (id, extra, peak, dc) in [
         ("led-5mm", "", 0.16, 0.03),
@@ -138,18 +150,25 @@ fn cases() -> Vec<(&'static str, &'static str, String, f64)> {
         ("led-0603", r#", "color": "red""#, 0.185, 0.03),
         ("led-0805", r#", "color": "red""#, 0.185, 0.03),
     ] {
-        cases.push((id, extra, tenth_duty(peak), dc));
+        cases.push((id, extra, tenth_duty as Surge, peak, dc));
     }
     cases
 }
 
 #[test]
 fn each_sustained_rating_rides_out_its_sheet_s_surge_and_warns_when_held_over() {
-    for (id, extra, surge, rating) in cases() {
+    for (id, extra, surge, peak, rating) in cases() {
         assert_eq!(
-            warnings(id, extra, &surge, 30),
+            warnings(id, extra, &surge(peak), 30),
             Vec::<String>::new(),
             "{id} surge"
+        );
+        // 10% over the sheet's peak warns on the peak limit, during the surge.
+        let over = warnings(id, extra, &surge(1.1 * peak), 30);
+        assert!(
+            over.iter()
+                .any(|w| w.starts_with("rating.current #d1.i by ")),
+            "{id} over its peak: {over:?}"
         );
         // Held at 1.1 times the rating, a mean crosses after `tau * ln(11)`, under three time
         // constants. The slowest here is 0.16 s.

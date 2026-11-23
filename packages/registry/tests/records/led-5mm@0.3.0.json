@@ -74,6 +74,17 @@
       "basis": {
         "sustained": {
           "average": "mean",
+          "peak": {
+            "source": {
+              "datasheet": {
+                "at": "Absolute Maximum Ratings at Ta = 25 C, peak forward current, 1/10 duty and 0.1 ms pulse width",
+                "basis": "absolute_max",
+                "doc": "Kingbright WP7113ID, Spec No DSAF0012, Rev V.14A"
+              }
+            },
+            "unit": "A",
+            "value": 0.16
+          },
           "tau": {
             "source": {
               "closed_form": {

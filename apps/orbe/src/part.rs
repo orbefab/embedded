@@ -299,7 +299,8 @@ fn push_or_none(lines: &mut Vec<String>, empty: bool) {
     }
 }
 
-/// `, peak`, or `, mean with a 54.5 ms time constant`, from a rating's `basis`.
+/// `, peak`, `, mean with a 54.5 ms time constant`, or that and `, peak 5.5 A`, from a
+/// rating's `basis`.
 fn basis_text(basis: &serde_json::Value) -> String {
     if basis.as_str() == Some("peak") {
         return ", peak".into();
@@ -310,11 +311,16 @@ fn basis_text(basis: &serde_json::Value) -> String {
         Some("mean") => "mean",
         _ => return String::new(),
     };
-    match sustained["tau"]["value"].as_f64() {
-        Some(seconds) => format!(
-            ", {average} with a {} time constant",
-            si_amount(seconds, "s")
-        ),
-        None => String::new(),
-    }
+    let Some(seconds) = sustained["tau"]["value"].as_f64() else {
+        return String::new();
+    };
+    let peak = &sustained["peak"];
+    let peak = match (peak["value"].as_f64(), peak["unit"].as_str()) {
+        (Some(value), Some(unit)) => format!(", peak {}", si_amount(value, unit)),
+        _ => String::new(),
+    };
+    format!(
+        ", {average} with a {} time constant{peak}",
+        si_amount(seconds, "s")
+    )
 }

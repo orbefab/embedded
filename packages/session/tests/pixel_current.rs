@@ -106,10 +106,11 @@ fn expect_colour(live: &mut Live, target: &str, rgb: &str) {
     assert!(reply.ok(), "{line}: {}", reply.text());
 }
 
-/// The stick after the sketch has latched, with the USB current and the current warnings.
-fn settled(hex: &str, extra: usize, rgb: &str) -> (f64, Vec<String>) {
+/// The stick `step` after open, once the sketch has latched, with the USB current and the
+/// current warnings.
+fn settled(hex: &str, extra: usize, rgb: &str, step: &str) -> (f64, Vec<String>) {
     let mut live = opened(hex, extra);
-    let stepped = run(&mut live, "step 20ms");
+    let stepped = run(&mut live, step);
     assert!(stepped.ok(), "{}", stepped.text());
     for n in 1..=8 {
         expect_colour(&mut live, &format!("@stick.px{n}"), rgb);
@@ -122,8 +123,8 @@ fn settled(hex: &str, extra: usize, rgb: &str) -> (f64, Vec<String>) {
 
 #[test]
 fn eight_white_pixels_stay_under_the_usb_rating_and_sixteen_go_over() {
-    let (white, white_over) = settled("ws2812-white", 0, "rgb(255,255,255)");
-    let (dim, dim_over) = settled("ws2812-dim", 0, "rgb(0,8,0)");
+    let (white, white_over) = settled("ws2812-white", 0, "rgb(255,255,255)", "step 20ms");
+    let (dim, dim_over) = settled("ws2812-dim", 0, "rgb(0,8,0)", "step 20ms");
     assert!(
         white_over.is_empty(),
         "eight full white pixels draw {white} A and warn {white_over:?}"
@@ -138,7 +139,10 @@ fn eight_white_pixels_stay_under_the_usb_rating_and_sixteen_go_over() {
         "white {white} A, dim {dim} A, rise {rise} A"
     );
 
-    let (full, over) = settled("ws2812-white", 8, "rgb(255,255,255)");
+    // The USB supply's 0.5 A is a peak. The Schottky's 0.5 A is a mean with a 55 ms time
+    // constant, which about 0.62 A crosses `55 ms * ln(0.62 / 0.12)`, about 90 ms, after it
+    // starts.
+    let (full, over) = settled("ws2812-white", 8, "rgb(255,255,255)", "step 120ms");
     assert!(full > 0.5, "sixteen pixels draw {full} A");
     for part in [
         "#nano__usb__host.i (nano.usb)",

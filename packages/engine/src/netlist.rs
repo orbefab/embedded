@@ -571,6 +571,9 @@ pub struct Rating {
     /// `None` when the netlist names no basis. The kind's default then applies, as
     /// `ratings::Ratings` says.
     pub basis: Option<Basis>,
+    /// The most any one sample may take, in the same unit, when the datasheet gives a peak or
+    /// surge limit beside a sustained one. Only a sustained basis carries it.
+    pub peak: Option<Finite>,
 }
 
 /// How a datasheet means a rating.

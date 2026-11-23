@@ -801,6 +801,21 @@ impl Diagnostic {
         )
     }
 
+    /// Whether this is a peak rating's warning. A sustained rating with a peak limit warns on
+    /// the same quantity under both bases.
+    pub fn peak(&self) -> bool {
+        matches!(
+            self,
+            Diagnostic::RatingCurrent(Excursion {
+                basis: Basis::Peak,
+                ..
+            }) | Diagnostic::RatingPower(Excursion {
+                basis: Basis::Peak,
+                ..
+            })
+        )
+    }
+
     /// `(time, code, refs)`. `Results` sorts by this and then by JSON bytes.
     pub fn sort_key(&self) -> (Option<Time>, &'static str, Vec<Ref>) {
         (self.at(), self.code(), self.refs())

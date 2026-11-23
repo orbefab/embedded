@@ -29,12 +29,18 @@ use crate::observe::Columns;
 /// mean for the power, and every other current rating is a peak. A chip pin's and a chip
 /// supply's current are sustained RMS with that time constant unless the part says otherwise.
 ///
+/// A sustained rating may also carry its sheet's peak limit, such as a diode's surge current or
+/// an LED's pulsed forward current. That limit is a second watch on the same quantity, a peak
+/// rating, so a sample over it warns at once while the filter still bounds the heat.
+///
 /// Each filter starts at zero, as a cold part does. A solve that holds each capacitor at a
 /// voltage is never a sample: the t = 0 solve, and the restart solve at an edge. A capacitor
 /// held there draws whatever its hold takes, which is no current the circuit carries. The first
 /// accepted step is the first sample. Each sample holds until the next, except after an edge,
-/// where the next sample holds back to the edge, [`Self::restarted`]. A sustained rating whose
-/// last sample is over is over now, [`Self::over_now`], before its filter crosses.
+/// where the next sample holds back to the edge, [`Self::restarted`]. A sustained rating with no
+/// peak limit whose last sample is over is over now, [`Self::over_now`], before its filter
+/// crosses. One with a peak limit is not: its sheet bounds a pulse by that limit and the filter,
+/// so a pulse the sheet allows stays quiet throughout.
 #[derive(Clone)]
 pub(crate) struct Ratings {
     timing: Timing,
@@ -119,13 +125,14 @@ struct Watch {
     since: Option<Time>,
 }
 
-/// A sustained rating's two readings of the same samples.
+/// A sustained rating's readings of the same samples.
 #[derive(Clone)]
 struct Heat {
     /// The rating's thermal filter. It warns when it crosses.
     filter: Filter,
-    /// Over [`RECENT_PS`]. With the last sample over, it says the rating is over now.
-    recent: Recent,
+    /// Over [`RECENT_PS`]. With the last sample over, it says the rating is over now. `None`
+    /// when the rating has a peak limit, which bounds a pulse in its place.
+    recent: Option<Recent>,
 }
 
 /// What a filter or an average stores of a sample, and how it reads the store back.
@@ -252,13 +259,14 @@ impl Ratings {
                     RatingKind::Current if supply => sustained(Average::Rms),
                     RatingKind::Current => Basis::Peak,
                 };
-                watches.push(Watch::new(
+                watch(
+                    &mut watches,
                     kind,
                     quantity,
                     Read::Column(column),
-                    rating.si.get(),
-                    rating.basis.unwrap_or(default),
-                ));
+                    rating,
+                    default,
+                );
             }
         }
         let mut windows = Vec::new();
@@ -277,28 +285,30 @@ impl Ratings {
                 |name: &str| Ref::Pin(part.name.clone(), Name::new(name).expect("a pin name"));
             let net = |id: NetId| columns.net(id);
             let gauge = chips.len();
-            let basis = |rating: &Rating| rating.basis.unwrap_or(sustained(Average::Rms));
+            let default = sustained(Average::Rms);
             if let Some(rating) = &rated.pin_current {
                 for (k, &name) in rated.outputs.iter().enumerate() {
-                    watches.push(Watch::new(
+                    watch(
+                        &mut watches,
                         RatingKind::Current,
                         pin(name),
                         Read::Gauge { gauge, k },
-                        rating.si.get(),
-                        basis(rating),
-                    ));
+                        rating,
+                        default,
+                    );
                 }
             }
             let outputs = chip.outputs.len();
             if let Some(rating) = &rated.supply_current {
                 for (k, name) in [(outputs, rated.vcc.0), (outputs + 1, rated.gnd.0)] {
-                    watches.push(Watch::new(
+                    watch(
+                        &mut watches,
                         RatingKind::Current,
                         pin(name),
                         Read::Gauge { gauge, k },
-                        rating.si.get(),
-                        basis(rating),
-                    ));
+                        rating,
+                        default,
+                    );
                 }
             }
             for window in &rated.windows {
@@ -448,7 +458,9 @@ impl Ratings {
             let sample = magnitude(watch, &self.chips, row);
             let reading = match (&mut watch.heat, self.timing) {
                 (Some(heat), Timing::Run) => {
-                    heat.recent.take(at, sample, back.is_some());
+                    if let Some(recent) = &mut heat.recent {
+                        recent.take(at, sample, back.is_some());
+                    }
                     heat.filter.take(at, sample, back.is_some())
                 }
                 _ => sample,
@@ -546,16 +558,18 @@ impl Ratings {
         currents.chain(voltages).collect()
     }
 
-    /// Each sustained rating over now, through the last sample: that sample is over the
-    /// rating, the average over [`RECENT_PS`] is over it too, and the filter has not crossed,
-    /// so no finding names the rating yet. While the run is younger than [`RECENT_PS`] that
-    /// average runs from the first sample, and at the first sample it is that sample.
+    /// Each sustained rating with no peak limit over now, through the last sample: that sample
+    /// is over the rating, the average over [`RECENT_PS`] is over it too, and the filter has not
+    /// crossed, so no finding names the rating yet. While the run is younger than
+    /// [`RECENT_PS`] that average runs from the first sample, and at the first sample it is
+    /// that sample.
     fn over_now(&self) -> impl Iterator<Item = Diagnostic> + '_ {
         self.watches.iter().filter_map(|watch| {
             let heat = watch.heat.as_ref()?;
+            let recent = heat.recent.as_ref()?;
             let since = watch.since?;
             let at = self.last?;
-            if watch.excursion.is_some() || !exceeds(heat.recent.since_origin(), watch.limit) {
+            if watch.excursion.is_some() || !exceeds(recent.since_origin(), watch.limit) {
                 return None;
             }
             let held = heat.filter.held_ps(watch.limit)?;
@@ -605,8 +619,41 @@ impl Timing {
     }
 }
 
+/// Pushes `rating`'s watch on `quantity`, with `default` as its basis when it names none, and a
+/// peak watch beside it when it carries a peak limit.
+fn watch(
+    watches: &mut Vec<Watch>,
+    kind: RatingKind,
+    quantity: Ref,
+    read: Read,
+    rating: &Rating,
+    default: Basis,
+) {
+    let peak = rating.peak.map(Finite::get);
+    let basis = rating.basis.unwrap_or(default);
+    watches.push(Watch::new(
+        kind,
+        quantity.clone(),
+        read,
+        rating.si.get(),
+        basis,
+        peak.is_none(),
+    ));
+    if let Some(peak) = peak {
+        watches.push(Watch::new(kind, quantity, read, peak, Basis::Peak, false));
+    }
+}
+
 impl Watch {
-    fn new(kind: RatingKind, quantity: Ref, read: Read, limit: f64, basis: Basis) -> Watch {
+    /// `early` gives a sustained rating its over-now average.
+    fn new(
+        kind: RatingKind,
+        quantity: Ref,
+        read: Read,
+        limit: f64,
+        basis: Basis,
+        early: bool,
+    ) -> Watch {
         Watch {
             kind,
             quantity,
@@ -617,7 +664,7 @@ impl Watch {
                 Basis::Peak => None,
                 Basis::Sustained { tau_ps, average } => Some(Heat {
                     filter: Filter::new(average, tau_ps),
-                    recent: Recent::new(average, RECENT_PS),
+                    recent: early.then(|| Recent::new(average, RECENT_PS)),
                 }),
             },
             over: false,
@@ -926,6 +973,7 @@ mod tests {
             ratings.watches[0].read,
             ratings.watches[0].limit,
             sustained(average),
+            true,
         );
         (ratings, columns)
     }
@@ -1366,6 +1414,100 @@ mod tests {
         ratings.sample(Time::from_ps(52 * MS), &values(0.989), &[]);
         let [excursion] = over_now(&ratings).try_into().unwrap();
         assert!((excursion.peak / rise(2.0) - 1.0).abs() < 1e-9);
+    }
+
+    /// A diode rated 30 mA as a mean with a 1 ms time constant and 160 mA peak, as an LED's
+    /// sheet gives its DC and pulsed forward currents.
+    fn with_peak() -> (Ratings, Columns) {
+        let netlist = crate::netlist::parse(
+            br#"{
+          "version": 1,
+          "seed": 0,
+          "analysis": { "op": {} },
+          "ground": "gnd",
+          "nets": ["gnd", "a"],
+          "parts": [{
+            "name": "d1",
+            "kind": "diode",
+            "pins": { "anode": "a", "cathode": "gnd" },
+            "saturation_current": { "value": 1e-14, "unit": "A" },
+            "emission_coefficient": { "value": 1.0, "unit": "1" },
+            "series_resistance": { "value": 1.0, "unit": "ohm" },
+            "ratings": {
+              "current": { "value": 0.03, "unit": "A", "basis": { "sustained": {
+                "average": "mean", "tau": { "value": 0.001, "unit": "s" },
+                "peak": { "value": 0.16, "unit": "A" } } } },
+              "power": null
+            }
+          }]
+        }"#,
+        )
+        .unwrap();
+        let columns = Columns::new(&netlist);
+        (Ratings::new(&netlist, &[], &columns, Timing::Run), columns)
+    }
+
+    /// The sheet's pulse, 0.1 ms at 1/10 duty, at its 160 mA peak, and a held 2 ms pulse at
+    /// 100 mA, each over the 30 mA rating: no sample is over now and nothing warns, since the
+    /// peak limit bounds a pulse in place of over now.
+    #[test]
+    fn a_pulse_under_its_peak_limit_is_never_over_now() {
+        let (mut ratings, columns) = with_peak();
+        let values = |current| row(&columns, current);
+        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        let tenth = MS / 10;
+        for period in 1..=30 {
+            let start = period * MS;
+            ratings.sample(Time::from_ps(start), &values(0.16), &[]);
+            ratings.sample(Time::from_ps(start + tenth / 2), &values(0.16), &[]);
+            assert!(over_now(&ratings).is_empty(), "period {period}");
+            ratings.sample(Time::from_ps(start + tenth), &values(0.0), &[]);
+        }
+        assert_eq!(ratings.findings(), []);
+        let (mut ratings, columns) = with_peak();
+        let values = |current| row(&columns, current);
+        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        for k in 1..=20 {
+            ratings.sample(Time::from_ps(MS + k * tenth), &values(0.1), &[]);
+            assert!(over_now(&ratings).is_empty(), "at {k}");
+        }
+    }
+
+    /// A sample over the peak limit warns at once on its peak basis. A held load under it still
+    /// warns when the filter crosses, `tau * ln(50 / 20)` after it starts.
+    #[test]
+    fn a_rating_with_a_peak_limit_warns_on_either() {
+        let (mut ratings, columns) = with_peak();
+        let values = |current| row(&columns, current);
+        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        ratings.sample(Time::from_ps(MS), &values(0.2), &[]);
+        let found = ratings.findings();
+        let [Diagnostic::RatingCurrent(peak)] = found.as_slice() else {
+            panic!("not one current finding: {found:?}");
+        };
+        assert_eq!(peak.basis, Basis::Peak);
+        assert_eq!(peak.limit, 0.16);
+        close(peak.peak, 0.2);
+
+        let (mut ratings, columns) = with_peak();
+        let values = |current| row(&columns, current);
+        ratings.sample(Time::ZERO, &values(0.0), &[]);
+        let step = MS / 100;
+        for k in 0..=300 {
+            ratings.sample(Time::from_ps(MS + k * step), &values(0.05), &[]);
+            assert!(over_now(&ratings).is_empty(), "at {k}");
+        }
+        let found = ratings.findings();
+        let [Diagnostic::RatingCurrent(held)] = found.as_slice() else {
+            panic!("not one current finding: {found:?}");
+        };
+        assert!(matches!(held.basis, Basis::Sustained { .. }));
+        let crossing = MS as f64 * (1.0 + libm::log(0.05f64 / (0.05 - 0.03005)));
+        assert!(
+            held.first.as_ps().abs_diff(crossing as u64) <= step,
+            "{:?} against {crossing}",
+            held.first
+        );
     }
 
     /// A peak rating has no filter and is never over now: it warns on the sample.
