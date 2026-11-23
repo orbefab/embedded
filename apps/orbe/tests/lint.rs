@@ -121,6 +121,7 @@ fn lint_on_the_uno_block_warns_only_as_the_nano_block_does() {
     let repo = common::repo();
     for block in [
         "devkitc-button-led",
+        "nano-7seg-count",
         "nano-button-led",
         "nano-led-fade",
         "nano-light-comparator",

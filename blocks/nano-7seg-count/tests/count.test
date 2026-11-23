@@ -1,0 +1,24 @@
+# The display holds each digit for 200 ms, starting at 0.
+open
+step 50ms
+expect @disp.digit 0
+step 200ms
+expect @disp.digit 1
+step 200ms
+expect @disp.digit 2
+step 200ms
+expect @disp.digit 3
+step 200ms
+expect @disp.digit 4
+step 200ms
+expect @disp.digit 5
+step 200ms
+expect @disp.digit 6
+step 200ms
+expect @disp.digit 7
+step 200ms
+expect @disp.digit 8
+step 200ms
+expect @disp.digit 9
+step 20ms
+expect no diagnostics

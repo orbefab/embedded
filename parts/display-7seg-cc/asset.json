@@ -1,0 +1,44 @@
+{
+  "part": "display-7seg-cc",
+  "source": {
+    "script": "model.py",
+    "sha256": "642f725e2bbfa2857efe0f89689b6823043ff25b8bfc071397b77ea360570b01",
+    "bytes": 724
+  },
+  "files": {
+    "display-7seg-cc.glb": {
+      "sha256": "1f782d500a616af7fab598b3e4bfbda628fc549a888195bd7b4a9ea958c43848",
+      "bytes": 18228
+    },
+    "display-7seg-cc.anchors.json": {
+      "sha256": "8e45b115a8e5e8a33e34f2eacf19c2f53c4cdc3427c8c7e9e4125953dd605bd6",
+      "bytes": 1217
+    }
+  },
+  "box": {
+    "min": [-6.3, -9.5, -3.3],
+    "max": [6.3, 9.5, 8.44]
+  },
+  "kept_nodes": ["lead-1", "lead-10", "lead-2", "lead-3", "lead-4", "lead-5", "lead-6", "lead-7", "lead-8", "lead-9", "seg-a", "seg-b", "seg-c", "seg-d", "seg-dp", "seg-e", "seg-f", "seg-g"],
+  "draw_calls": 19,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 10,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": ["seg-a", "seg-b", "seg-c", "seg-d", "seg-dp", "seg-e", "seg-f", "seg-g"]
+    },
+    "merge": {
+      "primitives_in": 19,
+      "primitives_out": 19
+    }
+  }
+}

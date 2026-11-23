@@ -397,6 +397,7 @@ fn search_finds_a_block_by_a_word_of_its_id() {
         names,
         [
             "devkitc-button-led",
+            "nano-7seg-count",
             "nano-button-led",
             "nano-led-fade",
             "nano-light-comparator",

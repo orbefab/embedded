@@ -797,6 +797,7 @@ for (const block of releasedBlocks()) {
             return scene?.getObjectByName("@relay.led")?.getObjectByName("body") !== undefined
               && scene?.getObjectByName("@led1")?.getObjectByName("body") !== undefined;
           }
+          if (kind === "digit") return scene?.getObjectByName("@disp")?.getObjectByName("seg-a") !== undefined;
           if (kind === "pixels") return scene?.getObjectByName("@stick.px1")?.getObjectByName("lens") !== undefined;
           if (kind === "rgb") {
             return scene?.getObjectByName("@board.led")?.getObjectByName("lens") !== undefined
