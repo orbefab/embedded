@@ -54,6 +54,15 @@ fn half_sine(peak: f64) -> String {
     )
 }
 
+/// `level` from 1 ms on, held.
+fn held(level: f64) -> String {
+    format!(
+        r#"{{ "kind": "steps", "initial": {}, "events": [{{ "t_ps": {MS}, "level": {} }}] }}"#,
+        amps(0.0),
+        amps(level)
+    )
+}
+
 /// `level` for `width_ps` from 1 ms, once.
 fn square(level: f64, width_ps: u64) -> String {
     format!(
@@ -80,9 +89,8 @@ fn warnings(id: &str, extra: &str, current: &str, ms: u64) -> Vec<String> {
     drive(id, extra, current, false, &times)
 }
 
-/// The rating warnings at each time in `times`, which must ascend. `reverse` drives the
-/// cathode, as a zener surge does.
-fn drive(id: &str, extra: &str, current: &str, reverse: bool, times: &[u64]) -> Vec<String> {
+/// A current source on `id`. `reverse` drives the cathode, as a zener surge does.
+fn scene(id: &str, extra: &str, current: &str, reverse: bool) -> tempfile::TempDir {
     let project = common::project("nano-button");
     let dir = project.path();
     let source = format!(
@@ -113,7 +121,14 @@ fn drive(id: &str, extra: &str, current: &str, reverse: bool, times: &[u64]) -> 
 "#
     );
     fs::write(dir.join("scene.jsonc"), scene).unwrap();
-    sample(dir, times)
+    project
+}
+
+/// The rating warnings at each time in `times`, which must ascend. `reverse` drives the
+/// cathode, as a zener surge does.
+fn drive(id: &str, extra: &str, current: &str, reverse: bool, times: &[u64]) -> Vec<String> {
+    let project = scene(id, extra, current, reverse);
+    sample(project.path(), times)
 }
 
 fn sample(dir: &Path, times: &[u64]) -> Vec<String> {
@@ -138,6 +153,22 @@ fn sample(dir: &Path, times: &[u64]) -> Vec<String> {
         }
     }
     seen
+}
+
+/// The rating messages present at `at`, as a user reads them.
+fn messages(id: &str, extra: &str, current: &str, reverse: bool, at: u64) -> Vec<String> {
+    let project = scene(id, extra, current, reverse);
+    let netlist = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc"))
+        .unwrap_or_else(|found| panic!("{found:#?}"));
+    let mut session = Session::open_json(netlist.json.as_bytes(), &Blobs::new()).unwrap();
+    session.advance_to(Time::from_ps(at));
+    assert!(session.fault().is_none(), "{:?}", session.fault());
+    session
+        .diagnostics()
+        .iter()
+        .filter(|d| matches!(d, Diagnostic::RatingCurrent(_) | Diagnostic::RatingPower(_)))
+        .map(|d| d.message_with(&|r| r.to_string()))
+        .collect()
 }
 
 /// The sheet's surge at a peak.
@@ -208,5 +239,63 @@ fn a_step_inside_a_legal_surge_does_not_call_power_over_now() {
         drive("zener-1n4733a", "", &zener(0.89), true, &[2_000_000_000]),
         Vec::<String>::new(),
         "1N4733A at 0.89 A reverse, 1 ms into the surge"
+    );
+}
+
+/// The model's 8.45 W at 0.89 A used to cross the 1 W rating during the sheet's 8.3 ms surge,
+/// because the power time constant was fitted to 4.5 W at the typical 5.1 V.
+#[test]
+fn a_legal_1n4733a_reverse_surge_stays_quiet_and_a_longer_one_warns() {
+    let legal = square(0.89, 8_300_000_000);
+    assert_eq!(
+        drive(
+            "zener-1n4733a",
+            "",
+            &legal,
+            true,
+            &[8 * MS, 9 * MS, 9_300_000_000, 12 * MS]
+        ),
+        Vec::<String>::new(),
+        "0.89 A reverse for the sheet's 8.3 ms"
+    );
+    let held_surge = held(0.89);
+    let warned = messages("zener-1n4733a", "", &held_surge, true, 21 * MS);
+    assert_eq!(
+        warned,
+        vec![
+            "#d1.i averages 0.338 A with a 34 ms time constant while it is 0.89 A, over its 0.196 A rating".to_string(),
+            "#d1.p averages 1.82 W with a 67 ms time constant while it is 8.45 W, over its 1 W rating".to_string(),
+        ]
+    );
+}
+
+/// 4.02 A is just over the CD1206's 4 A surge peak. The current peak warns at once. Power is
+/// never over now: the filter warns once the heat crosses.
+#[test]
+fn a_cd1206_just_over_its_surge_peak_warns_on_current_at_once() {
+    let early = messages("diode-cd1206", "", &held(4.02), false, 1_100_000_000);
+    assert_eq!(
+        early,
+        vec!["#d1.i peaks at 4.02 A, over its 4 A rating".to_string()]
+    );
+    let later = messages("diode-cd1206", "", &held(4.02), false, 2 * MS);
+    assert!(
+        later.iter().any(|w| {
+            w == "#d1.p averages 0.816 W with a 10.2 ms time constant while it is 16.3 W, over its 0.4 W rating"
+        }),
+        "{later:?}"
+    );
+    assert!(later.iter().all(|w| !w.contains(" now")), "{later:?}");
+}
+
+/// An LED held inside its pulse peak is over now on power.
+#[test]
+fn an_led_inside_its_pulse_peak_is_over_now_on_power() {
+    let found = messages("led-5mm", "", &held(0.10), false, 3 * MS);
+    assert!(
+        found
+            .iter()
+            .any(|w| w.starts_with("#d1.p is 0.235 W now, over its 0.075 W rating")),
+        "{found:?}"
     );
 }

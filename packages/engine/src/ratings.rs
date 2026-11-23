@@ -40,10 +40,9 @@ use crate::observe::Columns;
 /// where the next sample holds back to the edge, [`Self::restarted`]. A sustained rating with no
 /// peak limit whose last sample is over is over now, [`Self::over_now`], before its filter
 /// crosses. One with a peak limit is not: its sheet bounds a pulse by that limit and the filter,
-/// so a pulse the sheet allows stays quiet throughout. A diode's or a zener's power rating is
-/// not over now while its current is within its peak. The peak bounds the pulse, and the power
-/// is the heat, so only its filter warns. A sample past the peak is not that pulse, and the
-/// power is over now as a rating with no peak is. An LED's power stays over now.
+/// so a pulse the sheet allows stays quiet throughout. A diode or zener power rating is never
+/// over now: its current peak warns at once past the surge, and the power filter warns when the
+/// heat crosses. An LED's power stays over now.
 #[derive(Clone)]
 pub(crate) struct Ratings {
     timing: Timing,
@@ -126,9 +125,8 @@ struct Watch {
     last: f64,
     /// The first of the samples that have each been over, through the last one.
     since: Option<Time>,
-    /// A diode or a zener. Its current peak is a surge the sheet allows, so power is not over
-    /// now while that current stays inside the peak. An LED is not: `#led1.p` is over now in
-    /// the no-resistor example while its current is still inside its pulse peak.
+    /// A diode or a zener. Its power rating is never over now. An LED is not, so `#led1.p`
+    /// stays over now in the no-resistor example.
     surge: bool,
 }
 
@@ -573,11 +571,11 @@ impl Ratings {
     /// is over the rating, the average over [`RECENT_PS`] is over it too, and the filter has not
     /// crossed, so no finding names the rating yet. While the run is younger than
     /// [`RECENT_PS`] that average runs from the first sample, and at the first sample it is
-    /// that sample. A diode's or a zener's power rating is left out while its current is within
-    /// that peak.
+    /// that sample. A diode or zener power rating is never over now: its current peak warns at
+    /// once past the surge, and the power filter warns when the heat crosses.
     fn over_now(&self) -> impl Iterator<Item = Diagnostic> + '_ {
         self.watches.iter().filter_map(|watch| {
-            if self.pulse_bounds_power(watch) {
+            if watch.kind == RatingKind::Power && watch.surge {
                 return None;
             }
             let heat = watch.heat.as_ref()?;
@@ -622,26 +620,6 @@ impl Ratings {
         let mut found = ratings.findings();
         found.extend(ratings.over_now());
         found
-    }
-}
-
-impl Ratings {
-    /// The part's current peak bounds a pulse, so this power rating is not over now. Only a
-    /// diode or a zener: an LED's power stays over now, as the no-resistor example lists it.
-    /// A current past that peak is not the sheet's pulse.
-    fn pulse_bounds_power(&self, watch: &Watch) -> bool {
-        if watch.kind != RatingKind::Power || !watch.surge {
-            return false;
-        }
-        let Ref::Quantity(part, _) = &watch.quantity else {
-            return false;
-        };
-        self.watches.iter().any(|other| {
-            other.kind == RatingKind::Current
-                && other.basis == Basis::Peak
-                && matches!(&other.quantity, Ref::Quantity(name, _) if name == part)
-                && !exceeds(other.last, other.limit)
-        })
     }
 }
 
@@ -1612,8 +1590,9 @@ mod tests {
     }
 
     /// 4 A and 16 W is inside the CD1206's surge peak and far over its 0.4 W power rating.
-    /// The current peak bounds that pulse, so power is not over now. 5 A is past the peak, so
-    /// power is over now. 0.5 A stays inside the peak and the power filter still warns when held.
+    /// A diode's power is never over now. 5 A is past the peak, so the current warns at once
+    /// and power still is not. 0.5 A stays inside the peak and the power filter still warns
+    /// when held.
     #[test]
     fn power_inside_a_current_peak_is_not_over_now_and_a_held_overload_still_warns() {
         let (mut ratings, columns) = diode_power();
@@ -1629,11 +1608,19 @@ mod tests {
         ratings.sample(Time::ZERO, &values(0.0, 0.0), &[]);
         ratings.sample(Time::from_ps(MS), &values(5.0, 20.0), &[]);
         // 100 us later the recent average is over and the 10.2 ms filter has not crossed.
+        // The current peak has already warned, so power is still not over now.
         ratings.sample(Time::from_ps(MS + 100_000_000), &values(5.0, 20.0), &[]);
-        let now = over_now(&ratings);
         assert!(
-            now.iter().any(|e| e.quantity.to_string() == "#d1.p"),
-            "past the peak, power is over now: {now:?}"
+            over_now(&ratings).is_empty(),
+            "past the peak, power is not over now: {:?}",
+            over_now(&ratings)
+        );
+        let found = ratings.findings();
+        assert!(
+            found.iter().any(|d| {
+                matches!(d, Diagnostic::RatingCurrent(excursion) if excursion.basis == Basis::Peak)
+            }),
+            "the current peak warns at once: {found:?}"
         );
 
         let (mut ratings, columns) = diode_power();
