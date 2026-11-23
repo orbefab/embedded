@@ -2,17 +2,26 @@
 //! [`PulseTarget`] when a level ends. This device maps the high's width to a shaft angle,
 //! slews toward it, and draws its supply current.
 //!
-//! The pulse map is the Luxorparts SG90 sheet (Kjell 87897): 1 ms is 0°, 1.5 ms is 90° and
-//! 2 ms is 180°, and a width outside that clamps to the nearer end. Tower Pro's SG90 Analog
-//! page gives the dead band as 1 µs, the operating point as 4.8 V and the no-load speed as
-//! 0.12 s per 60° at that voltage. SunFounder's SF0180 electrical specification, for the SG90
-//! they sell, gives 5 mA stopped, 140 mA running with no load and 520 mA stalled, at 4.8 V.
-//! Stall is not a state here: nothing loads the shaft.
+//! The mechanical travel is the range a real SG90 turns through, about 180° from 0.5 ms to
+//! 2.4 ms. DroneBot Workshop's ESP32 servo page set an SG90's ends at 500 µs and 2400 µs so the
+//! horn reached both stops. Nick Gammon measured a micro SG90 through 180° on pulses he read as
+//! 0.5 ms to 2.5 ms, and quoted a 500 µs to 2400 µs spec (Arduino forum, "servo pulse widths",
+//! topic 286525). SunFounder's SG90 page lists 500 µs to 2500 µs for 180° ± 10°. The Luxorparts
+//! sheet's 1 ms, 1.5 ms and 2 ms is that nominal 90° around the centre, not the stops. A width
+//! outside 0.5 ms to 2.4 ms clamps at the nearer stop. The middle of the travel is 1.45 ms.
+//! Tower Pro's SG90 Analog page gives the dead band as 1 µs, the operating point as 4.8 V and
+//! the no-load speed as 0.12 s per 60° at that voltage. SunFounder's SF0180 electrical
+//! specification, for the SG90 they sell, gives 5 mA stopped, 140 mA running with no load and
+//! 520 mA stalled, at 4.8 V. Stall is not a state here: nothing loads the shaft.
 //!
 //! The line rests low. A low of 22 ms, longer than the sheet's 20 ms frame, is idle: the shaft
-//! stays where it was and stops following. Below 1 V the part is unpowered and does nothing.
-//! From 1 V up to 4.5 V it still moves, slower in proportion to the voltage over 4.8 V, and the
-//! first such sample is rule `supply`. At 4.5 V and above it holds the 4.8 V speed, so a Nano's
+//! stays where it was and stops following. The control board in a taken-apart SG90 is an
+//! AA51880, whose regulator is specified to put out at least 2.3 V. Below 2.3 V the supply
+//! cannot hold that reference, so the shaft does not follow and the draw is none. A supply that
+//! has fallen through 2.3 V stays stopped until it is back at 4.5 V, so a rail that collapses
+//! and springs back does not creep. From 2.3 V up to 4.5 V, when it has not fallen through
+//! 2.3 V, it still moves, slower in proportion to the voltage over 4.8 V, and the first such
+//! sample is rule `supply`. At 4.5 V and above it holds the 4.8 V speed, so a Nano's
 //! diode-dropped 5 V pin does not warn. The shaft powers on at 90°, the centre the horn is
 //! drawn at.
 
@@ -20,20 +29,22 @@ use orbe_model::{
     Cx, Device, Draw, Drives, Error, Idle, Params, PulseTarget, Shows, State, Stop, Time, View,
 };
 
-/// 1 ms, the Luxorparts sheet's 0°.
-const MIN_US: u64 = 1_000;
-/// 2 ms, the Luxorparts sheet's 180°.
-const MAX_US: u64 = 2_000;
+/// 0.5 ms, one mechanical stop.
+const MIN_US: u64 = 500;
+/// 2.4 ms, the other mechanical stop.
+const MAX_US: u64 = 2_400;
 /// Tower Pro's dead band.
 const DEAD_US: u64 = 1;
 /// 0.12 s per 60° at 4.8 V is 500 °/s, in millidegrees per second.
 const SPEED_MDEG_S: i64 = 500_000;
 /// The speed's voltage, millivolts.
 const RATED_MV: i32 = 4_800;
-/// Below this the shaft does not follow and the draw is none.
-const UNPOWERED_MV: i32 = 1_000;
-/// Below this, and at or above [`UNPOWERED_MV`], the shaft slows and rule `supply` fires.
-/// At and above it the speed is the 4.8 V speed.
+/// Below this the shaft does not follow and the draw is none. The AA51880 regulator's
+/// minimum output is 2.3 V, so a supply under that cannot hold the reference.
+const UNPOWERED_MV: i32 = 2_300;
+/// Below this, and at or above [`UNPOWERED_MV`], the shaft slows and rule `supply` fires,
+/// unless the supply has already fallen through [`UNPOWERED_MV`]. At and above it the speed
+/// is the 4.8 V speed, and a browned-out shaft follows again.
 const FULL_SPEED_MV: i32 = 4_500;
 /// SunFounder SF0180, stopped, at 4.8 V.
 const IDLE_A: f64 = 0.005;
@@ -67,6 +78,9 @@ pub struct Sg90 {
     origin: Time,
     /// The shaft has not reached `command`.
     moving: bool,
+    /// The supply has been below [`UNPOWERED_MV`]. Pulses are ignored until it is back at
+    /// [`FULL_SPEED_MV`], so a rail that sags and recovers does not creep.
+    browned: bool,
     /// The next supply sample. None once the run has no reason to ask again.
     next_sample: Option<Time>,
 }
@@ -169,6 +183,7 @@ impl Device for Sg90 {
             origin_mdeg: CENTRE_MDEG,
             origin: Time::ZERO,
             moving: false,
+            browned: false,
             next_sample: Some(Time::from_ps(1)),
         })
     }
@@ -231,9 +246,16 @@ impl Device for Sg90 {
             cx.broke("supply", at);
         }
         if mv < UNPOWERED_MV {
+            // Hold the angle `catch_up` just reached. Clearing `command` alone would send the
+            // next step back to `origin_mdeg`.
+            self.origin_mdeg = self.angle_mdeg;
+            self.origin = at;
             self.command = None;
             self.command_us = None;
             self.moving = false;
+            self.browned = true;
+        } else if self.browned && mv >= FULL_SPEED_MV {
+            self.browned = false;
         }
         if self.next_sample.is_some_and(|due| due <= at) {
             self.next_sample = Some(Time::from_ps(at.as_ps().saturating_add(SAMPLE_PS)));
@@ -253,7 +275,7 @@ impl PulseTarget for Sg90 {
 
     fn pulse(&mut self, _cx: &mut Cx, at: Time, level: bool, width: u64) {
         self.catch_up(at);
-        if !level || !self.powered() {
+        if !level || !self.powered() || self.browned {
             return;
         }
         let us = width.saturating_add(500_000) / 1_000_000;
@@ -338,7 +360,8 @@ mod tests {
     fn a_centred_pulse_holds_and_draws_the_idle_current() {
         let mut dev = servo();
         power(&mut dev, 5.0);
-        pulse(&mut dev, MS, 1_500);
+        // 1.45 ms is the middle of the 0.5 ms to 2.4 ms travel. The sheet's 1.5 ms sits a few degrees off it.
+        pulse(&mut dev, MS, 1_450);
         assert!(!dev.moving);
         assert_eq!(degrees(&dev), 90.0);
         assert_eq!(dev.draw().amps, IDLE_A);
@@ -348,7 +371,7 @@ mod tests {
     fn it_slews_sixty_degrees_in_the_sheet_time_and_holds() {
         let mut dev = servo();
         power(&mut dev, 5.0);
-        pulse(&mut dev, MS, 1_000);
+        pulse(&mut dev, MS, 500);
         assert!(dev.moving);
         assert_eq!(dev.draw().amps, RUN_A);
         assert!(run(&mut dev, MS + 120 * MS).is_none());
@@ -363,13 +386,47 @@ mod tests {
     }
 
     #[test]
-    fn a_pulse_outside_the_sheet_clamps() {
+    fn a_pulse_past_the_mechanical_stops_clamps_and_the_sheet_band_does_not() {
         let mut dev = servo();
         power(&mut dev, 5.0);
         pulse(&mut dev, MS, 400);
         assert_eq!(dev.command, Some(0));
-        pulse(&mut dev, 2 * MS, 3_000);
+        pulse(&mut dev, 2 * MS, 1_000);
+        // 1 ms is the sheet's nominal end, about 47° along the measured travel.
+        assert_eq!(dev.command, Some(47_368));
+        pulse(&mut dev, 3 * MS, 2_000);
+        assert_eq!(dev.command, Some(142_105));
+        pulse(&mut dev, 4 * MS, 3_000);
         assert_eq!(dev.command, Some(TRAVEL_MDEG));
+    }
+
+    /// Servo 1.3.0 `write(angle)` is `angle * (2400 - 544) / 180 + 544`, integer division.
+    fn library_us(angle: u64) -> u64 {
+        angle * (2_400 - 544) / 180 + 544
+    }
+
+    #[test]
+    fn a_stock_servo_write_moves_the_horn_the_whole_way() {
+        let mut prev = -1;
+        for angle in 0..=180 {
+            let target = Sg90::target_of(library_us(angle));
+            assert!(
+                target > prev,
+                "write({angle}) at {} us is {target}",
+                library_us(angle)
+            );
+            prev = target;
+        }
+        let start = Sg90::target_of(library_us(0));
+        let end = Sg90::target_of(library_us(180));
+        assert_eq!(library_us(0), 544);
+        assert_eq!(library_us(45), 1_008);
+        assert_eq!(library_us(180), 2_400);
+        assert!(start < 5_000, "{start}");
+        assert_eq!(end, TRAVEL_MDEG);
+        assert!(end - start > 170_000);
+        // 1.45 ms is the middle of 0.5 ms and 2.4 ms.
+        assert_eq!(Sg90::target_of(1_450), CENTRE_MDEG);
     }
 
     #[test]
@@ -416,11 +473,67 @@ mod tests {
         let stop = dev.run_until(&mut cx, at(MS)).expect("the first sample");
         dev.sample(&mut cx, stop.at, &[3.0]);
         assert_eq!(cx.broken().map(|broken| broken.0), Some("supply"));
-        pulse(&mut dev, MS, 1_000);
+        pulse(&mut dev, MS, 500);
         assert!(run(&mut dev, MS + 192 * MS).is_none());
         assert_eq!(degrees(&dev), 30.0);
         let stop = run(&mut dev, MS + 400 * MS).expect("it arrives later than at 4.8 V");
         assert_eq!(stop.at.as_ps() - MS, 288 * MS);
         assert_eq!(degrees(&dev), 0.0);
+    }
+
+    #[test]
+    fn a_collapsed_rail_does_not_turn_the_shaft() {
+        let mut dev = servo();
+        power(&mut dev, 1.44);
+        pulse(&mut dev, MS, 500);
+        assert!(dev.browned);
+        assert!(dev.command.is_none());
+        assert_eq!(degrees(&dev), 90.0);
+        assert_eq!(dev.draw().amps, 0.0);
+        assert!(run(&mut dev, MS + 500 * MS).is_none());
+        assert_eq!(degrees(&dev), 90.0);
+    }
+
+    #[test]
+    fn at_the_regulator_minimum_it_still_moves_and_warns() {
+        let mut dev = servo();
+        let mut cx = Cx::default();
+        let stop = dev.run_until(&mut cx, at(MS)).expect("the first sample");
+        dev.sample(&mut cx, stop.at, &[2.3]);
+        assert_eq!(cx.broken().map(|broken| broken.0), Some("supply"));
+        pulse(&mut dev, MS, 500);
+        assert!(dev.moving);
+        assert!(!dev.browned);
+    }
+
+    #[test]
+    fn a_rail_that_springs_back_under_four_and_a_half_volts_stays_stopped() {
+        let mut dev = servo();
+        power(&mut dev, 1.44);
+        let mut cx = Cx::default();
+        dev.sample(&mut cx, at(2 * MS), &[3.3]);
+        pulse(&mut dev, 2 * MS, 500);
+        assert!(dev.browned);
+        assert!(dev.command.is_none());
+        assert_eq!(degrees(&dev), 90.0);
+        dev.sample(&mut cx, at(3 * MS), &[5.0]);
+        assert!(!dev.browned);
+        pulse(&mut dev, 3 * MS, 500);
+        assert_eq!(dev.command, Some(0));
+    }
+
+    #[test]
+    fn losing_power_mid_move_holds_the_angle() {
+        let mut dev = servo();
+        power(&mut dev, 5.0);
+        pulse(&mut dev, MS, 500);
+        assert!(run(&mut dev, MS + 60 * MS).is_none());
+        let held = degrees(&dev);
+        assert!((held - 60.0).abs() < 0.01, "{held}");
+        let mut cx = Cx::default();
+        dev.sample(&mut cx, at(MS + 60 * MS), &[1.44]);
+        assert!(run(&mut dev, MS + 500 * MS).is_none());
+        assert_eq!(degrees(&dev), held);
+        assert_eq!(dev.draw().amps, 0.0);
     }
 }

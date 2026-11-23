@@ -2,8 +2,8 @@
   "part": "servo-sg90",
   "source": {
     "script": "model.py",
-    "sha256": "6a2c323cda950e784ddbe888fa6ef500295ca02f04f9c09b08a5cec95b9467cf",
-    "bytes": 2567
+    "sha256": "fea7ae68e67ab3752a2cb16f3bb3529a53c7be3d4d40db22856160d201663f5d",
+    "bytes": 2545
   },
   "files": {
     "servo-sg90.glb": {

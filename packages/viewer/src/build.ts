@@ -178,6 +178,8 @@ interface Turn {
   readonly axis: Vec3;
   readonly angle: (value: number) => number;
   readonly channel: number;
+  /** The angle comes from a frame's `horn_deg` rather than `params`. */
+  readonly horn: boolean;
   readonly value: number;
 }
 

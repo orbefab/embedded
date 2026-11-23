@@ -35,10 +35,7 @@ _TIN = tin()
 
 
 def servo_sg90_anchors():
-    return [
-        glb.Anchor(lead, f"lead-{lead}", ((lead - 2) * PITCH, CASE[1] / 2.0, -BELOW))
-        for lead in (1, 2, 3)
-    ]
+    return [glb.Anchor(lead, f"lead-{lead}", ((lead - 2) * PITCH, CASE[1] / 2.0, -BELOW)) for lead in (1, 2, 3)]
 
 
 def servo_sg90_shape():
