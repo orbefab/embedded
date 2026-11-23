@@ -191,11 +191,11 @@ fn a_store_through_the_dram_alias_reaches_the_fetch() {
 }
 
 /// The other core stores over an op this core has cached. Each core keeps its own table, and
-/// shares the memory. The PRO CPU's `addi.n` is followed by a jump out of memory, and the APP
-/// CPU's store at `CODE + 0x108` runs through the alias.
+/// shares the memory. The first core's `addi.n` is followed by a jump out of memory, and the
+/// second core's store at `CODE + 0x108` runs through the alias.
 #[test]
 fn a_store_by_the_other_core_reaches_this_one() {
-    says("861e00", CODE + 2, "j\t0x40370080");
+    says("861e00", CODE + 2, "j\t0x40100080");
     for mut bus in Memory::both("1b33861e00") {
         bus.alias = Some(CODE + 0x100);
         bus.banks[0].extend(bytes("5906"));
@@ -246,7 +246,7 @@ fn a_change_in_the_second_word_of_an_op_misses() {
 /// address.
 #[test]
 fn the_same_jump_at_two_pcs_goes_to_two_targets() {
-    says("060000", CODE, "j\t0x40370004");
+    says("060000", CODE, "j\t0x40100004");
     for mut bus in Memory::both("060000") {
         bus.alias = Some(CODE + 0x100);
         let mut core = core_at::<Esp32s3>(CODE);

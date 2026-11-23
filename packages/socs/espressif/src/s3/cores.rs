@@ -36,11 +36,34 @@
 //! [`APP_RESET_BOUND`] PRO CPU cycles pass with no reset. The bound is the model's, not a chip
 //! figure. A jump to itself while that release is pending ends at the bound, not as a halt.
 
-use orbe_xtensa::{Core, CoreId, Cycle, Sr, Stop};
+use orbe_xtensa::{Core, Cycle, Sr, Stop};
 
 use super::Refused;
 use super::app::Steer;
 use super::soc::{CoreBus, Ending, Soc, Step};
+
+/// Which of the S3's two CPUs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CoreId {
+    Pro,
+    App,
+}
+
+impl CoreId {
+    /// What the CPU's core holds at reset: the mask ROM's reset vector and vector base, and its
+    /// `PRID`, `0xCDCD` on the PRO CPU and `0xABAB` on the APP CPU. IDF v5.5.5,
+    /// `components/xtensa/include/xtensa_context.h`.
+    pub(crate) const fn reset(self) -> orbe_xtensa::Reset {
+        orbe_xtensa::Reset {
+            pc: 0x4000_0400,
+            vecbase: 0x4000_0000,
+            prid: match self {
+                CoreId::Pro => 0xcdcd,
+                CoreId::App => 0xabab,
+            },
+        }
+    }
+}
 
 /// PRO CPU cycles an unstarted APP CPU may stay runnable before the run ends.
 const APP_RESET_BOUND: u64 = 1_000;
@@ -310,7 +333,7 @@ impl Cores {
         match steer {
             Steer::Reset(at) => {
                 self.app = App::Started(Box::new(Lane {
-                    core: Core::reset(CoreId::App, at),
+                    core: Core::reset(CoreId::App.reset(), at),
                     run: Run::Ready,
                 }));
             }

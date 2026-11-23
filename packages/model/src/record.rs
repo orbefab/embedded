@@ -14,6 +14,30 @@ pub struct Spi {
     pub clock_hz: u32,
     /// The chip select at the transaction's end.
     pub cs: Cs,
+    /// What the host reads back on MISO, D1.
+    pub miso: Miso,
+}
+
+/// What an SPI host reads on MISO, D1, in one transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Miso {
+    /// Nothing.
+    None,
+    /// One byte for each byte of data, as it sends that byte, on one lane.
+    Duplex,
+    /// This many bytes on one lane after the data, while it sends nothing.
+    Read(u32),
+}
+
+impl Spi {
+    /// How many bytes the host reads.
+    pub fn reads(&self) -> usize {
+        match self.miso {
+            Miso::None => 0,
+            Miso::Duplex => self.data.len(),
+            Miso::Read(n) => n as usize,
+        }
+    }
 }
 
 /// One phase before the data: `bits` bits of `value`, most significant first, on `lanes`.

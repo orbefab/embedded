@@ -18,7 +18,7 @@ pub use device::{
 };
 pub use pages::Pages;
 pub use pins::{Drive, Drives, Levels, Stop};
-pub use record::{Cs, Duty, Lanes, Pulses, Spi, SpiPhase};
+pub use record::{Cs, Duty, Lanes, Miso, Pulses, Spi, SpiPhase};
 pub use sha256::Sha256;
 pub use time::Time;
 pub use world::{Quantity, Readings, Row};

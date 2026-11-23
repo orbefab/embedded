@@ -1,4 +1,4 @@
-use crate::{Drives, Duty, Levels, Pulses, Quantity, Readings, Spi, Stop, Time};
+use crate::{Drives, Duty, Levels, Pulses, Quantity, Readings, Spi, SpiPhase, Stop, Time};
 
 /// Everything a device remembers. A clone is a checkpoint. The host keeps several copies of
 /// each part's state and runs, rewinds and commits them. A move is not a checkpoint, so a
@@ -192,10 +192,27 @@ pub trait PulseTarget: Device {
 
 /// A device that is an SPI target. The host takes each transaction whose CS and SCLK sit on the
 /// device's pins, checks that each lane it used sits on the device's own data pin, and holds the
-/// bus while the device is in reset. The device sees whole transactions.
+/// bus while the device is in reset. The device sees whole transactions, and answers each byte
+/// the host reads on MISO before the transaction ends.
 pub trait SpiTarget: Device {
-    /// A transaction that ended at `at`.
+    /// A transaction that ended at `at`, after the host asked for each byte it reads.
     fn transaction(&mut self, cx: &mut Cx, at: Time, spi: &Spi);
+    /// The byte it shifts out on MISO after `phases` and `index` bytes of the data stage, and
+    /// `data`, the bytes the host sent before it. In a full-duplex transaction the byte goes out
+    /// beside data byte `index`, so `data` is `index` bytes long. In a read phase it follows all
+    /// the data. The host asks for each byte it reads once, in order, at or before the
+    /// transaction's end. `None` leaves MISO to the host, which reads `0xFF` there. A device
+    /// that never answers keeps the default.
+    fn answer(
+        &mut self,
+        _cx: &mut Cx,
+        _at: Time,
+        _phases: &[SpiPhase],
+        _data: &[u8],
+        _index: usize,
+    ) -> Option<u8> {
+        None
+    }
 }
 
 /// A device with a PWM input pin. The host gives it each duty a chip sets on that pin.

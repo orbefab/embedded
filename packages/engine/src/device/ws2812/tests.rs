@@ -4,7 +4,7 @@ use orbe_model::{Drive, Pulses, Stop, Time};
 use crate::active::native::Hosted;
 use crate::diagnostic::ProtocolRule;
 use crate::leds::{self, Chain};
-use crate::link::{LinkRow, Record, RecordKind};
+use crate::link::{Answers, LinkRow, Record, RecordKind};
 use crate::netlist::NetId;
 
 /// The sketch's bits, high then low.
@@ -80,7 +80,8 @@ impl Core {
     fn land(&mut self, start: Time, idle: bool, pulses: &[(bool, u64)], end: Time) {
         let row = record(start.as_ps(), idle, pulses);
         debug_assert_eq!(row.record.end, end);
-        self.hosted.take(&World::default(), end, &[row]);
+        self.hosted
+            .take(&World::default(), end, &[row], &mut Answers::default());
     }
 
     fn observed(&self) -> Chain {

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use orbe_model::{Cs, Device, Fields, Lanes, Spi, SpiPhase, Time};
+use orbe_model::{Cs, Device, Fields, Lanes, Miso, Spi, SpiPhase, Time};
 
 use crate::active::native::Native;
 use crate::active::replay::Replay;
@@ -92,6 +92,7 @@ pub(crate) fn chip(part: PartId, replay: &SpiReplay) -> Chip {
                     data: event.data.clone(),
                     clock_hz,
                     cs: event.cs,
+                    miso: Miso::None,
                 },
                 nets,
             },

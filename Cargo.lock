@@ -786,7 +786,6 @@ dependencies = [
  "orbe-microchip",
  "orbe-model",
  "orbe-scratch",
- "orbe-xtensa",
  "serde",
  "serde_json",
  "serde_path_to_error",

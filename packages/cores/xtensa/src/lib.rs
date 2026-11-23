@@ -7,8 +7,8 @@
 //! their levels, the `CCOMPARE` timers, `WAITI` and the `ICOUNT` debug exception. It also runs
 //! the single-precision FPU, MAC16, the Boolean registers and `s32c1i`, and on the S3 the `q`
 //! registers and `cop_ai` user registers as plain state: `ld.qr`, `st.qr`, `mv.qr`, `rur` and
-//! `wur`. `PRID` reads `0xCDCD` on the PRO CPU and `0xABAB` on the APP CPU, by [`CoreId`]. The
-//! region protection ops `witlb` and `wdtlb` keep each 512 MB region's attribute for `ritlb1` and
+//! `wur`. `PRID` reads what the chip set in the core's [`Reset`], with its reset PC and `VECBASE`.
+//! The region protection ops `witlb` and `wdtlb` keep each 512 MB region's attribute for `ritlb1` and
 //! `rdtlb1` to read back, and no access is checked against it. `iitlb` and `idtlb` do nothing,
 //! and the external registers read 0 through `rer` and drop `wer`. `DBREAKA0`, `DBREAKA1`,
 //! `DBREAKC0` and `DBREAKC1` read back what was written. A load or a store that hits one stops
@@ -44,16 +44,14 @@
 //! instruction and cycle that a full step before each op gives.
 //!
 //! Both chips select the hardware alignment option, so an unaligned load or store in data RAM
-//! completes at its own address. On the S3, instruction RAM (`0x40370000..0x403e0000`) and mask
-//! ROM (`0x40000000..0x40060000`) raise [`Cause::LoadStoreAlignment`] when the address is not
-//! aligned for the access, and [`Cause::LoadStoreError`] for a sub-word access or an aligned
-//! `l32ai` or `s32ri` there. The board probed `0x40378dc0` and `0x40000400`. The rest of each
-//! window is the memory map. An unaligned `l32ai` or `s32ri` anywhere on the S3 raises
+//! completes at its own address. Where [`Bus::instruction_bus`] says an address is on the
+//! instruction bus, the core raises [`Cause::LoadStoreAlignment`] when the address is not aligned
+//! for the access, and [`Cause::LoadStoreError`] for a sub-word access or an aligned `l32ai` or
+//! `s32ri` there, before the bus sees it. An unaligned `l32ai` or `s32ri` anywhere on the S3 raises
 //! `LoadStoreAlignment` and writes nothing, and `s32c1i`, which the ISA lists with them (4.6,
 //! p 168), does the same. The classic core still stops as [`Missing::Unaligned`] for those three
 //! ops, and both chips stop that way when a later part of some other unaligned
-//! access faults. The region is the start address. Cached instruction ROM and RTC instruction RAM
-//! are not classified.
+//! access faults. The region is the start address.
 //!
 //! A vector costs 4 cycles on both chips. No capture isolates that entry. `rsr` and `wsr` cost
 //! one cycle, and the S3 board spends more than that on `epc1` inside an exception handler.
@@ -72,7 +70,7 @@ mod fpu;
 mod paged;
 mod special;
 
-pub use bus::{Bus, Cause, CoreId, Cycle, Exit, Width};
+pub use bus::{Bus, Cause, Cycle, Exit, Reset, Width};
 pub use config::{Config, Esp32, Esp32s3, Interrupts};
 pub use core::{CoprocessorDisabled, Core, Missing, Stop, Unimplemented};
 pub use decode::{Decoded, Insn, Op};
