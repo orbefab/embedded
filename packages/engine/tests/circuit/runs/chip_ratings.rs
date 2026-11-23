@@ -207,21 +207,14 @@ fn a_port_pin_over_its_current_for_its_window_is_named_with_the_stage_s_rms() {
     );
     let over = pin.over_ps.unwrap();
     assert!(over.abs_diff(3 * WINDOW_PS - first) < 20_000_000, "{over}");
-    let message = serde_json::to_value(&found[0]).unwrap()["message"].clone();
-    assert_eq!(
-        message,
-        format!(
-            "#u1.pin.PB5 carries {} A RMS over the last 10.2 ms, over its 0.04 A rating for {over} ps",
-            pin.peak
-        )
-    );
+    assert_eq!(pin.held_ps, None);
 }
 
 /// PB5 held low on the supply's net sinks 5 V across 25 ohm, the 200 mA rating of the ground
-/// pin, and the leakages of the other pins put `GND_8` just over it. Held past the window, the
-/// RMS is the steady current.
+/// pin, and the leakages of the other pins put `GND_8` just over it, by less than rounds to 3
+/// significant digits, so only PB5 warns. Held past the window, the RMS is the steady current.
 #[test]
-fn a_pin_driving_low_on_the_supply_is_over_and_so_is_its_ground() {
+fn a_pin_driving_low_on_the_supply_is_over_and_its_ground_rounds_to_its_rating() {
     let mut netlist = rated();
     chip(&mut netlist)["firmware"] = PB5_LOW.into();
     lasting(&mut netlist, 2 * WINDOW_PS);
@@ -232,11 +225,8 @@ fn a_pin_driving_low_on_the_supply_is_over_and_so_is_its_ground() {
         .unwrap()
         .retain(|net| net != "pb5");
     let found = run(&netlist);
-    assert_eq!(
-        refs(&found),
-        ["rating.current #u1.pin.PB5", "rating.current #u1.pin.GND_8"]
-    );
-    let [pin, ground] = currents(&found)[..] else {
+    assert_eq!(refs(&found), ["rating.current #u1.pin.PB5"]);
+    let [pin] = currents(&found)[..] else {
         unreachable!()
     };
     assert!(
@@ -244,7 +234,6 @@ fn a_pin_driving_low_on_the_supply_is_over_and_so_is_its_ground() {
         "{}",
         pin.peak
     );
-    assert!(ground.peak > 0.2 && ground.peak < 0.2 + 21.0 * 5.0 / LEAKAGE);
 }
 
 /// `ports.S` drives every port pin high. Six of them into 120 ohm each carry 34.5 mA, inside
@@ -343,7 +332,8 @@ fn reset_and_vcc_take_their_own_ceilings() {
 }
 
 /// Between accepted steps a session checks the chip's pins at the probe, its window running
-/// to the probe. PB5's RMS into 47 ohm crosses 40 mA at about 6.85 ms.
+/// to the probe. PB5 carries 69 mA into 47 ohm half of each 12.5 us, so it is over now while
+/// its RMS has not crossed 40 mA. That RMS crosses at about 6.85 ms.
 #[test]
 fn a_session_checks_the_pins_at_its_probe() {
     let mut netlist = rated();
@@ -355,11 +345,16 @@ fn a_session_checks_the_pins_at_its_probe() {
         session.advance_to(Time::from_ps(ps));
         let probe = session.probe();
         assert_eq!(probe.at(), Time::from_ps(ps));
-        refs(&session.over_ratings(&probe))
+        let over = session.over_ratings(&probe);
+        let now: Vec<bool> = over.iter().map(Diagnostic::over_now).collect();
+        (refs(&over), now)
     };
-    assert_eq!(over_at(&mut session, 5_100_333_333), Vec::<String>::new());
+    assert_eq!(
+        over_at(&mut session, 5_100_333_333),
+        (vec!["rating.current #u1.pin.PB5".to_string()], vec![true])
+    );
     assert_eq!(
         over_at(&mut session, 15_300_333_333),
-        ["rating.current #u1.pin.PB5"]
+        (vec!["rating.current #u1.pin.PB5".to_string()], vec![false])
     );
 }

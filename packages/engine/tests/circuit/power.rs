@@ -1,10 +1,15 @@
-//! Power ratings are the average over the same 10.2 ms window a DC current uses.
-//! A switching edge stays under. A held overload, and a pulse train whose average is over, warn.
+//! Power ratings are the average over the same 10.2 ms window a DC current uses, and each window
+//! starts cold at the first step after t = 0. A switching edge stays under. A held overload,
+//! and a pulse train whose average is over, warn. A session lists a load over its rating now
+//! before its window crosses.
 
 use crate::common::simulate;
 
+use orbe_engine::Session;
 use orbe_engine::diagnostic::Diagnostic;
 use orbe_engine::trace::Trace;
+use orbe_model::Time;
+use serde_json::Value;
 
 const WINDOW_PS: u64 = 10_200_000_000;
 const PWM_490_PS: u64 = 2_040_000_000;
@@ -136,6 +141,35 @@ fn a_switching_irf520_at_490_hz_for_a_second_stays_under_its_power_rating() {
     assert_switched(&switched(&gate, 1_000_000_000_000));
 }
 
+/// The same 490 Hz switching in a session, probed every 10 ns across the first rising edge at
+/// 1 us and the falling edge 1.02 ms later. The MOSFET is past its 2.419 W rating for about
+/// 100 ns at each edge, and no probe lists it over now: the average over the last 2.04 ms
+/// stays far under the rating.
+#[test]
+fn a_switching_irf520_is_never_over_now_inside_its_edges() {
+    let gate = pulse(5.0, 1_000_000, PWM_490_PS / 2, PWM_490_PS);
+    let json = switched(&gate, 1_000_000_000_000);
+    let mut session = Session::open(orbe_engine::netlist::parse(json.as_bytes()).unwrap()).unwrap();
+    let power: orbe_engine::name::Ref = "#q1.p".parse().unwrap();
+    let mut over = 0;
+    for edge in [1_000_000, 1_000_000 + PWM_490_PS / 2] {
+        for k in 0..300u64 {
+            session.advance_to(Time::from_ps(edge - 500_000 + k * 10_000));
+            let probe = session.probe();
+            if probe.get(&power).unwrap().get() > 2.42 {
+                over += 1;
+            }
+            assert_eq!(
+                session.over_ratings(&probe),
+                Vec::<Diagnostic>::new(),
+                "at {:?}",
+                probe.at()
+            );
+        }
+    }
+    assert!(over >= 10, "{over} probes past the rating");
+}
+
 /// On for half a second, then off, through one second.
 #[test]
 fn an_irf520_turned_fully_on_and_off_for_a_second_stays_under_its_power_rating() {
@@ -144,7 +178,7 @@ fn an_irf520_turned_fully_on_and_off_for_a_second_stays_under_its_power_rating()
 }
 
 /// Vgs just above the 3.18 V threshold, so the 12 ohm load drops about half of 12 V
-/// and the MOSFET dissipates about 3 W. The window starts full of that, and it warns.
+/// and the MOSFET dissipates about 3 W. The window fills with that, and it warns.
 #[test]
 fn an_irf520_held_half_on_warns_on_its_average_power() {
     let gate = r#"{ "value": 4.07, "unit": "V" }"#;
@@ -272,15 +306,85 @@ fn a_pulse_train_warns_only_when_its_average_power_is_over() {
     assert!(run(PWM_490_PS / 10).is_empty());
 }
 
-/// A capacitor held discharged at t = 0 draws 2.5 W through r1 for that first solve, then
-/// charges in 1 us. The heat is about a microjoule, so the 0.25 W rating and the source's
-/// 0.2 A rating stay quiet. The same resistor with nothing held is a steady overload and
-/// warns at open.
+/// Each `rating.*` warning a session lists through its probe, as JSON.
+fn over_ratings(session: &Session) -> Vec<Value> {
+    session
+        .over_ratings(&session.probe())
+        .iter()
+        .map(|diagnostic| serde_json::to_value(diagnostic).unwrap())
+        .collect()
+}
+
+/// An ideal 5 V source rated 0.5 A, 100 uF across it held at `initial` volts, and 1 kohm.
+fn held_across_a_source(initial: f64) -> String {
+    format!(
+        r#"{{
+      "version": 1,
+      "seed": 1,
+      "analysis": {{ "transient": {{ "stop_ps": 20000000000, "max_step_ps": 1000000000, "grid_ps": 1000000000 }} }},
+      "ground": "gnd",
+      "nets": ["gnd", "vcc"],
+      "parts": [
+        {{
+          "name": "v1",
+          "kind": "voltage_source",
+          "pins": {{ "p": "vcc", "n": "gnd" }},
+          "voltage": {{ "value": 5.0, "unit": "V" }},
+          "ratings": {{ "current": {{ "value": 0.5, "unit": "A" }} }}
+        }},
+        {{
+          "name": "c1",
+          "kind": "capacitor",
+          "pins": {{ "a": "vcc", "b": "gnd" }},
+          "capacitance": {{ "value": 1e-4, "unit": "F" }},
+          "initial": {{ "value": {initial}, "unit": "V" }}
+        }},
+        {{
+          "name": "r1",
+          "kind": "resistor",
+          "pins": {{ "a": "vcc", "b": "gnd" }},
+          "resistance": {{ "value": 1000.0, "unit": "ohm" }},
+          "ratings": {{ "power": null }}
+        }}
+      ]
+    }}"#
+    )
+}
+
+/// A capacitor held at a voltage its source disagrees with draws 1e9 A per volt per uF for
+/// the t = 0 solve, which is the hold and no current the source carries. The source is at
+/// 5 V from the first step on and carries 5 mA, so neither a run nor a session warns.
 #[test]
-fn a_capacitor_starting_discharged_does_not_count_its_first_surge_as_a_window_of_heat() {
-    let json = |cap: &str| {
-        format!(
-            r#"{{
+fn a_held_capacitor_that_disagrees_with_its_source_does_not_warn() {
+    for initial in [4.999, 0.0] {
+        let json = held_across_a_source(initial);
+        let found: Vec<_> = simulate(&json)
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| serde_json::to_value(diagnostic).unwrap())
+            .collect();
+        assert_eq!(found, Vec::<Value>::new(), "initial {initial}");
+        let netlist = orbe_engine::netlist::parse(json.as_bytes()).unwrap();
+        let mut session = Session::open(netlist).unwrap();
+        assert_eq!(
+            over_ratings(&session),
+            Vec::<Value>::new(),
+            "initial {initial}"
+        );
+        session.advance_to(Time::from_ps(1_000_000));
+        assert_eq!(
+            over_ratings(&session),
+            Vec::<Value>::new(),
+            "initial {initial}"
+        );
+    }
+}
+
+/// 5 V, `r1` of 10 ohm rated 0.25 W from `vcc` to `mid`, and `load` from `mid` to ground,
+/// with a source rated 0.2 A.
+fn into_mid(load: &str) -> String {
+    format!(
+        r#"{{
       "version": 1,
       "seed": 1,
       "analysis": {{ "transient": {{ "stop_ps": 22000000000, "max_step_ps": 1000000000, "grid_ps": 10000000000 }} }},
@@ -301,100 +405,90 @@ fn a_capacitor_starting_discharged_does_not_count_its_first_surge_as_a_window_of
           "resistance": {{ "value": 10.0, "unit": "ohm" }},
           "ratings": {{ "power": {{ "value": 0.25, "unit": "W" }} }}
         }},
-        {cap}
+        {load}
       ]
     }}"#
-        )
-    };
-    let held = r#"{
+    )
+}
+
+/// A capacitor held discharged charges through r1 in 1 us. The heat is about a microjoule, so
+/// the 0.25 W rating and the source's 0.2 A stay quiet.
+#[test]
+fn a_capacitor_starting_discharged_does_not_count_its_first_surge_as_a_window_of_heat() {
+    let held = into_mid(
+        r#"{
           "name": "c1",
           "kind": "capacitor",
           "pins": { "a": "mid", "b": "gnd" },
           "capacitance": { "value": 1e-7, "unit": "F" },
           "initial": { "value": 0.0, "unit": "V" }
-        }"#;
-    let held = json(held);
-    assert_eq!(power_warnings(&held), Vec::<serde_json::Value>::new());
-    assert_eq!(
-        warnings(&held, "rating.current"),
-        Vec::<serde_json::Value>::new()
+        }"#,
     );
-    let shorted = r#"{
+    assert_eq!(power_warnings(&held), Vec::<Value>::new());
+    assert_eq!(warnings(&held, "rating.current"), Vec::<Value>::new());
+}
+
+/// 1 mohm from `mid` to ground puts 2.5 W on r1, ten times its rating, and 0.5 A through the
+/// source, rated 0.2 A, from t = 0. A session lists both over now at open, with the sample and
+/// how long it would hold: r1's window rounds above 0.25 W after 1.02 ms of 2.5 W, and the
+/// source's RMS rounds above 0.2 A after (0.2005 / 0.5)^2 of the window, 1.64 ms. A run warns
+/// on the first step past each crossing.
+#[test]
+fn a_steady_overload_from_t_0_is_over_now_at_open_and_warns_once_its_window_crosses() {
+    let json = into_mid(
+        r#"{
           "name": "r2",
           "kind": "resistor",
           "pins": { "a": "mid", "b": "gnd" },
           "resistance": { "value": 0.001, "unit": "ohm" },
           "ratings": { "power": null }
-        }"#;
-    let shorted = json(shorted);
-    let found = power_warnings(&shorted);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert_eq!(found[0]["refs"][0], "#r1.p");
-    assert_eq!(found[0]["t_ps"], 0);
-    let current = warnings(&shorted, "rating.current");
-    assert_eq!(current.len(), 1, "{current:?}");
-    assert_eq!(current[0]["refs"][0], "#v1.i");
-    assert_eq!(current[0]["t_ps"], 0);
+        }"#,
+    );
+    let netlist = orbe_engine::netlist::parse(json.as_bytes()).unwrap();
+    let session = Session::open(netlist).unwrap();
+    let mut now = over_ratings(&session);
+    now.sort_by_key(|d| d["code"].to_string());
+    let codes: Vec<_> = now.iter().map(|d| (&d["code"], &d["refs"][0])).collect();
+    assert_eq!(
+        codes,
+        [
+            (&"rating.current".into(), &"#v1.i".into()),
+            (&"rating.power".into(), &"#r1.p".into())
+        ]
+    );
+    for (warning, sample, held_ms) in [(&now[0], 0.5, 1.63), (&now[1], 2.5, 1.02)] {
+        let data = &warning["data"];
+        assert_eq!(data["now"], true, "{warning}");
+        assert_eq!(data["window_ps"], WINDOW_PS);
+        assert!(
+            (data["sample"].as_f64().unwrap() / sample - 1.0).abs() < 1e-3,
+            "{warning}"
+        );
+        assert!(data["peak"].as_f64().unwrap() < data["limit"].as_f64().unwrap());
+        let held = data["held_ps"].as_f64().unwrap() / 1e9;
+        assert!((held / held_ms - 1.0).abs() < 0.01, "{warning}");
+        let t = warning["t_ps"].as_u64().unwrap();
+        assert!(t > 0 && t <= 1_000_000, "{warning}");
+    }
+
+    let run = |code| warnings(&json, code);
+    for (warning, first_ms) in [
+        (&run("rating.power")[0], 1.02),
+        (&run("rating.current")[0], 1.64),
+    ] {
+        assert_eq!(warning["data"]["now"], false, "{warning}");
+        assert_eq!(warning["data"]["held_ps"], Value::Null, "{warning}");
+        // The first accepted step past the crossing, and steps here reach 1 ms.
+        let first = warning["t_ps"].as_f64().unwrap() / 1e9;
+        assert!(first >= first_ms && first < first_ms + 1.0, "{warning}");
+    }
+    assert_eq!(run("rating.power").len(), 1);
+    assert_eq!(run("rating.current").len(), 1);
 }
 
-/// A steady 2.5 W beside a held capacitor still fills that resistor's window at open. The
-/// surge branch does not.
-#[test]
-fn a_steady_overload_beside_a_held_capacitor_still_warns_at_open() {
-    let json = r#"{
-      "version": 1,
-      "seed": 1,
-      "analysis": { "transient": { "stop_ps": 22000000000, "max_step_ps": 1000000000, "grid_ps": 10000000000 } },
-      "ground": "gnd",
-      "nets": ["gnd", "vcc", "mid"],
-      "parts": [
-        {
-          "name": "v1",
-          "kind": "voltage_source",
-          "pins": { "p": "vcc", "n": "gnd" },
-          "voltage": { "value": 5.0, "unit": "V" }
-        },
-        {
-          "name": "rload",
-          "kind": "resistor",
-          "pins": { "a": "vcc", "b": "gnd" },
-          "resistance": { "value": 10.0, "unit": "ohm" },
-          "ratings": { "power": { "value": 0.25, "unit": "W" } }
-        },
-        {
-          "name": "r_surge",
-          "kind": "resistor",
-          "pins": { "a": "vcc", "b": "mid" },
-          "resistance": { "value": 10.0, "unit": "ohm" },
-          "ratings": { "power": { "value": 0.25, "unit": "W" } }
-        },
-        {
-          "name": "c1",
-          "kind": "capacitor",
-          "pins": { "a": "mid", "b": "gnd" },
-          "capacitance": { "value": 1e-7, "unit": "F" },
-          "initial": { "value": 0.0, "unit": "V" }
-        }
-      ]
-    }"#;
-    let found = power_warnings(json);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert_eq!(found[0]["refs"][0], "#rload.p");
-    assert_eq!(found[0]["t_ps"], 0);
-    let peak = found[0]["data"]["peak"].as_f64().unwrap();
-    assert!((peak - 2.5).abs() < 1e-3, "{peak}");
-}
-
-/// 5 V, two 10 ohm resistors, and a capacitor from their midpoint to ground held at 0 V.
-/// The rated resistor is the top one when `top_rated`, and the bottom one otherwise. The
-/// rated part is `r1`.
-fn midpoint_held(farads: &str, stop_ps: u64, max_step_ps: u64, top_rated: bool) -> String {
-    let rated = r#"{ "value": 0.25, "unit": "W" }"#;
-    let (top_name, bottom_name, top, bottom) = if top_rated {
-        ("r1", "r2", rated, "null")
-    } else {
-        ("r2", "r1", "null", rated)
-    };
+/// 5 V, two 10 ohm resistors, and a capacitor from their midpoint to ground held at 0 V. The
+/// bottom resistor, `r1`, is rated 0.25 W.
+fn midpoint_held(farads: &str, stop_ps: u64, max_step_ps: u64) -> String {
     format!(
         r#"{{
       "version": 1,
@@ -410,18 +504,18 @@ fn midpoint_held(farads: &str, stop_ps: u64, max_step_ps: u64, top_rated: bool) 
           "voltage": {{ "value": 5.0, "unit": "V" }}
         }},
         {{
-          "name": "{top_name}",
+          "name": "r2",
           "kind": "resistor",
           "pins": {{ "a": "vcc", "b": "mid" }},
           "resistance": {{ "value": 10.0, "unit": "ohm" }},
-          "ratings": {{ "power": {top} }}
+          "ratings": {{ "power": null }}
         }},
         {{
-          "name": "{bottom_name}",
+          "name": "r1",
           "kind": "resistor",
           "pins": {{ "a": "mid", "b": "gnd" }},
           "resistance": {{ "value": 10.0, "unit": "ohm" }},
-          "ratings": {{ "power": {bottom} }}
+          "ratings": {{ "power": {{ "value": 0.25, "unit": "W" }} }}
         }},
         {{
           "name": "c1",
@@ -439,7 +533,7 @@ fn midpoint_held(farads: &str, stop_ps: u64, max_step_ps: u64, top_rated: bool) 
 /// the capacitor open it would carry 0.625 W, and it stays at microwatts for tens of milliseconds.
 #[test]
 fn a_farad_held_at_0_v_does_not_warn_on_a_cold_load() {
-    let json = midpoint_held("1", 50_000_000_000, 1_000_000_000, false);
+    let json = midpoint_held("1", 50_000_000_000, 1_000_000_000);
     let results = simulate(&json);
     assert_eq!(power_of(&results), Vec::<serde_json::Value>::new());
     let (_low, high) = span(results.trace().expect("a trace"), "#r1.p");
@@ -451,7 +545,7 @@ fn a_farad_held_at_0_v_does_not_warn_on_a_cold_load() {
 /// average within a few milliwatts of that integral.
 #[test]
 fn a_1000_uf_cold_load_does_not_warn_over_its_first_window() {
-    let json = midpoint_held("0.001", WINDOW_PS, 10_000_000, false);
+    let json = midpoint_held("0.001", WINDOW_PS, 10_000_000);
     let results = simulate(&json);
     let found = power_of(&results);
     assert!(
@@ -464,17 +558,4 @@ fn a_1000_uf_cold_load_does_not_warn_over_its_first_window() {
     );
     let (_low, high) = span(results.trace().expect("a trace"), "#r1.p");
     assert!(high > 0.4, "{high}");
-}
-
-/// The top resistor draws 2.5 W at t = 0 and 0.625 W with the capacitor open. Both are over
-/// 0.25 W, so it warns at open with the lower value.
-#[test]
-fn a_divider_over_at_open_and_at_dc_warns_at_open_with_the_lower_value() {
-    let json = midpoint_held("1e-7", 22_000_000_000, 1_000_000_000, true);
-    let found = power_warnings(&json);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert_eq!(found[0]["refs"][0], "#r1.p");
-    assert_eq!(found[0]["t_ps"], 0);
-    let peak = found[0]["data"]["peak"].as_f64().unwrap();
-    assert!((peak - 0.625).abs() < 1e-3, "{peak}");
 }

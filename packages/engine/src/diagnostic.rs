@@ -4,6 +4,7 @@ use orbe_model::Time;
 use crate::netlist::MIN_GAP_PS;
 
 use std::borrow::Cow;
+use std::num::NonZeroU64;
 
 use serde::{Serialize, Serializer};
 
@@ -561,6 +562,13 @@ pub struct Excursion {
     /// The window a DC current's RMS or a power's average runs over, or `None` for a rating
     /// checked on each sample.
     pub window_ps: Option<u64>,
+    /// The quantity's own magnitude at `peak_at`. For a rating checked on each sample it is
+    /// `peak`.
+    pub sample: f64,
+    /// `Some` when the finding is a windowed rating over now: `sample` is the latest sample,
+    /// over the rating, and the window, `peak`, is still under it. The value is how long that
+    /// sample would hold before the window crosses. `None` for a window that has crossed.
+    pub held_ps: Option<NonZeroU64>,
 }
 
 /// One chip pin outside its rated voltage window, merged over the whole run. Volts are over
@@ -779,6 +787,20 @@ impl Diagnostic {
             }
             Diagnostic::RatingVoltage(excursion) => vec![excursion.pin.clone()],
         }
+    }
+
+    /// Whether this is a windowed rating over now, whose window has not crossed.
+    pub fn over_now(&self) -> bool {
+        matches!(
+            self,
+            Diagnostic::RatingCurrent(Excursion {
+                held_ps: Some(_),
+                ..
+            }) | Diagnostic::RatingPower(Excursion {
+                held_ps: Some(_),
+                ..
+            })
+        )
     }
 
     /// `(time, code, refs)`. `Results` sorts by this and then by JSON bytes.
@@ -1791,10 +1813,13 @@ impl Diagnostic {
             }
             Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
                 serde_json::json!({
+                    "held_ps": excursion.held_ps,
                     "limit": excursion.limit,
+                    "now": excursion.held_ps.is_some(),
                     "over_ps": excursion.over_ps,
                     "peak": excursion.peak,
                     "peak_ps": excursion.peak_at,
+                    "sample": excursion.sample,
                     "window_ps": excursion.window_ps,
                 })
             }
@@ -1854,24 +1879,71 @@ fn over_rating(
         peak,
         over_ps,
         window_ps,
+        sample,
+        held_ps,
         ..
     } = excursion;
     let quantity = namer(quantity);
-    let reading = match window_ps {
-        Some(window) if average => format!(
-            "{quantity} averages {peak} {unit} over the last {} ms",
-            *window as f64 / 1e9
+    let value = |v: f64| format!("{} {unit}", significant_text(v));
+    let rating = format!("over its {} rating{}", value(*limit), for_time(*over_ps));
+    let window = |window: &u64| *window as f64 / 1e9;
+    match (window_ps, held_ps) {
+        (_, Some(held)) => format!(
+            "{quantity} is {} now, over its {} rating; it warns if held about {} ps",
+            value(*sample),
+            value(*limit),
+            significant_ps(held.get())
         ),
-        Some(window) => format!(
-            "{quantity} carries {peak} {unit} RMS over the last {} ms",
-            *window as f64 / 1e9
+        (Some(w), None) => format!(
+            "{quantity} {} {}{} over the last {} ms{}, {rating}",
+            if average { "averages" } else { "carries" },
+            value(*peak),
+            if average { "" } else { " RMS" },
+            window(w),
+            while_it_is(value(*sample), value(*peak))
         ),
-        None => format!("{quantity} peaks at {peak} {unit}"),
-    };
-    format!(
-        "{reading}, over its {limit} {unit} rating{}",
-        for_time(*over_ps)
-    )
+        (None, None) => format!("{quantity} peaks at {}, {rating}", value(*peak)),
+    }
+}
+
+/// `value` to 3 significant digits. A rating message prints its values so, and a value is
+/// over its rating only when it is over after both are rounded.
+pub fn significant(value: f64) -> f64 {
+    if !value.is_finite() || value == 0.0 {
+        return value;
+    }
+    format!("{value:.2e}").parse().unwrap_or(value)
+}
+
+/// [`significant`] as a message prints it: the characters `data` uses, with no `.0`.
+pub fn significant_text(value: f64) -> String {
+    let text = number_text(significant(value));
+    match text.strip_suffix(".0") {
+        Some(whole) => whole.to_string(),
+        None => text,
+    }
+}
+
+/// Whether `value` is over `limit` once both are rounded to 3 significant digits.
+pub(crate) fn exceeds(value: f64, limit: f64) -> bool {
+    significant(value) > significant(limit)
+}
+
+/// `ps` to 2 significant digits, for a time a message gives as "about".
+pub fn significant_ps(ps: u64) -> u64 {
+    let digits = ps.checked_ilog10().unwrap_or(0);
+    let scale = 10u64.pow(digits.saturating_sub(1));
+    (ps + scale / 2) / scale * scale
+}
+
+/// ` while it is {sample}` beside a window's reading, or nothing when the two print the same,
+/// as at an operating point, whose DC value fills the window.
+pub fn while_it_is(sample: String, reading: String) -> String {
+    if sample == reading {
+        String::new()
+    } else {
+        format!(" while it is {sample}")
+    }
 }
 
 /// ` for {over_ps} ps` once a run has been over for some time. Nothing for an operating

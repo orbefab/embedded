@@ -644,24 +644,27 @@ The message is one of:
 
 ```text
 {ref} peaks at {peak} A, over its {limit} A rating for {over_ps} ps
-{ref} carries {peak} A RMS over the last 10.2 ms, over its {limit} A rating for {over_ps} ps
+{ref} carries {peak} A RMS over the last 10.2 ms while it is {sample} A, over its {limit} A rating for {over_ps} ps
+{ref} is {sample} A now, over its {limit} A rating; it warns if held about {held_ps} ps
 ```
 
-The second is a DC rating's, below. ` for {over_ps} ps` is left out for an operating point, and while `over_ps` is 0, as on the step where the quantity first goes over. A session's `diagnostics()` writes each message as it stands through the last accepted step, so a warning seen early reads a shorter time, or none, than the run folder's.
+The second is a DC rating's, below. The third is a DC rating [over now](#over-now), which only a session lists. Each value in a message is rounded to 3 significant digits, and `held_ps` to 2. ` while it is {sample} A` is left out when it prints the same as the RMS, as at an operating point. ` for {over_ps} ps` is left out for an operating point, and while `over_ps` is 0, as on the step where the quantity first goes over. A session's `diagnostics()` writes each message as it stands through the last accepted step, so a warning seen early reads a shorter time, or none, than the run folder's.
 
-`data` holds `limit`, `over_ps`, `peak`, `peak_ps`, and `window_ps`. `limit` is the rating. `peak` is the largest magnitude of the quantity, or of its RMS for a DC current rating. `peak_ps` is when it peaked. `over_ps` is `null` for an operating point, which has no duration. `window_ps` is 10200000000 for a DC current rating and `null` for a current rating checked on each step.
+`data` holds `held_ps`, `limit`, `now`, `over_ps`, `peak`, `peak_ps`, `sample` and `window_ps`, unrounded. `limit` is the rating. `peak` is the largest magnitude of the quantity, or of its RMS for a DC current rating. `peak_ps` is when it peaked. `sample` is the quantity's own magnitude at `peak_ps`, which is `peak` for a rating checked on each step. `over_ps` is `null` for an operating point, which has no duration. `window_ps` is 10200000000 for a DC current rating and `null` for a current rating checked on each step. `now` is `false` and `held_ps` is `null`, except for a rating over now.
 
 A transient checks every accepted step, not only the rows. Each step's value holds until the next accepted step. `t_ps` is the first step over the rating, and `over_ps` adds the time to the next step for every step over it. The last step adds nothing. So `t_ps` and `peak_ps` can fall between rows. At a switch edge the solve at the edge holds the old contact. With 22 ohm in place of 220 ohm in `packages/engine/tests/circuits/button-led`, `#led1.i` is first over 1 ns after the press, and `over_ps` is exactly the time the contact was closed.
 
-A quantity is over when its magnitude is above the rating. Equal is not over. `peak` is the largest magnitude. For an operating point it equals `abs(observations.op[ref])`. The operating point is still written, and `orbe-run run` exits 0.
+A solve that holds each capacitor at a voltage is not a sample. The operating point at t = 0 holds each `initial` voltage, and the restart solve at an edge holds each capacitor where the step left it. A capacitor held against a source draws what the hold takes there, 1e9 A per volt for 1 uF, and no part carries that. So the first accepted step after t = 0 is the first sample, and a DC rating's window holds 0 before it. After an edge, the next step's value holds back to the edge in the window, since the step's own row holds the state before the edge.
+
+A quantity is over when its magnitude, rounded to 3 significant digits, is above the rating rounded the same way. Equal is not over. `peak` is the largest magnitude. For an operating point it equals `abs(observations.op[ref])`. The operating point is still written, and `orbe-run run` exits 0.
 
 ### DC ratings
 
-An `atmega328p`'s `pin_current` and `supply_current` and a voltage source's `current` are DC ratings. DS40002061B §29.1 gives 40 mA and 200 mA as DC currents and gives no pulse rating, and a supply's rating is the current it delivers steadily. What a DC current rating guards against is heat, in the output transistors, the metal and the bond wires, and electromigration, which follows the mean current. Heat follows `i^2` over time. So a transient checks a DC rating against the current's RMS over the 10.2 ms before each accepted step, not against each step's value. RMS is never below the mean, so it covers electromigration too. Each step's value holds until the next, as above. The window starts full of the t = 0 value, so an operating point over its rating warns at once and its RMS is its value. When a capacitor held at its `initial` voltage carries more than 0.1 mA, the run also solves the DC point with every capacitor open, and a rating whose t = 0 value differs from that point starts full of the smaller of the two, as [rating.power](#ratingpower) does. `t_ps` is the first step whose RMS is over, `peak` the largest RMS, and `over_ps` the time the RMS was over.
+An `atmega328p`'s `pin_current` and `supply_current` and a voltage source's `current` are DC ratings. DS40002061B §29.1 gives 40 mA and 200 mA as DC currents and gives no pulse rating, and a supply's rating is the current it delivers steadily. What a DC current rating guards against is heat, in the output transistors, the metal and the bond wires, and electromigration, which follows the mean current. Heat follows `i^2` over time. So a transient checks a DC rating against the current's RMS over the 10.2 ms before each accepted step, not against each step's value. RMS is never below the mean, so it covers electromigration too. Each step's value holds until the next, as above. The window starts at 0, as a cold part does, and fills from the first step after t = 0. A load over its rating from t = 0 warns once enough of the window has filled, and a session lists it [over now](#over-now) before that. An operating point has no duration, so its value fills the window: one over its rating warns at once, and its RMS is its value. `t_ps` is the first step whose RMS is over, `peak` the largest RMS, `sample` the current at that step, and `over_ps` the time the RMS was over.
 
 The window is 10.2 ms because PWM is the load a pin most often switches. Judging a PWM load by its RMS, as a DC rating's heat asks, assumes the pin heats slower than one period, so the window has to hold whole periods. The slowest PWM an Arduino core makes by default is Timer1's and Timer2's phase correct PWM on D3, D9, D10 and D11, 16 MHz / (2 * 64 * 255), 490.2 Hz, a period of exactly 2.04 ms, and 10.2 ms is five of those periods. For a steady 490 Hz PWM the RMS over the window is the RMS of its period, whatever the window's phase. Timer0's fast PWM on D5 and D6, 976.6 Hz, a period of 1.024 ms, fits 9.96 times, so its RMS over the window is within 0.4% of its period's, and faster PWM, such as 62.5 kHz, is closer still. `analogWrite(9, 128)` into 75 ohm is 50 mA at 128 / 255 duty, 35.4 mA RMS, under 40 mA, though each of its pulses lasts 1.02 ms. Into 47 ohm it is 69 mA at the same duty, 49 mA RMS, which is the number the warning gives.
 
-An absolute maximum DC rating is a current the part bears for as long as it flows, and it says nothing of shorter currents. A longer window would read a PWM load the same when its period fits in the window, which every default Arduino PWM does, but would warn later of a load held over the rating and spread a lone pulse thinner, so the window is the shortest that holds whole periods of every default PWM with margin. A slower PWM, such as a software PWM toggled with `delay`, counts each pulse longer than the window as a held level. A pulse longer than the window fills it, so it counts at its full value: 100 mA for 20 ms reads 100 mA RMS. A pulse shorter than the window counts by its share: 100 mA for 1 ms reads 31 mA RMS and does not warn, and the datasheet gives no pulse rating to hold it to. A capacitor that a pin charges through its stage, `R` ohm, takes `I0^2 * R * C / 2` of `i^2 * t` an edge. On the model's 25 ohm stage, 100 pF takes 0.2 A for a few nanoseconds, which over 10.2 ms is well under 1 mA RMS, and a 1 uF load on a 490 Hz PWM pin stays well under 40 mA. 10 uF and 47 uF on that pin go over, as such a load does on a real pin, since every edge charges it again. A pin that charges 10 uF once from 0 V stays under; 47 uF and 100 uF go over. A load held at `k` times the rating goes over once `1 / k^2` of the window has filled: 69 mA from a pin into 47 ohm after 3.4 ms, five LEDs taking 44 mA from one pin after 8.4 ms, and a pin driving low on 5V, 200 mA, after 0.41 ms.
+An absolute maximum DC rating is a current the part bears for as long as it flows, and it says nothing of shorter currents. A longer window would read a PWM load the same when its period fits in the window, which every default Arduino PWM does, but would warn later of a load held over the rating and spread a lone pulse thinner, so the window is the shortest that holds whole periods of every default PWM with margin. A slower PWM, such as a software PWM toggled with `delay`, counts each pulse longer than the window as a held level. A pulse longer than the window fills it, so it counts at its full value: 100 mA for 20 ms reads 100 mA RMS. A pulse shorter than the window counts by its share: 100 mA for 1 ms reads 31 mA RMS and does not warn, and the datasheet gives no pulse rating to hold it to. A capacitor that a pin charges through its stage, `R` ohm, takes `I0^2 * R * C / 2` of `i^2 * t` an edge. On the model's 25 ohm stage, 100 pF takes 0.2 A for a few nanoseconds, which over 10.2 ms is well under 1 mA RMS, and a 1 uF load on a 490 Hz PWM pin stays well under 40 mA. 10 uF and 47 uF on that pin go over, as such a load does on a real pin, since every edge charges it again. A pin that charges 10 uF once from 0 V stays under; 47 uF and 100 uF go over. A load held at `k` times the rating goes over once `1 / k^2` of the window has filled: 69 mA from a pin into 47 ohm after 3.4 ms, five LEDs taking 44 mA from one pin after 8.4 ms, and a pin driving low on 5V, 200 mA, after 0.41 ms. Until then it is over now.
 
 Every other current rating is checked on each accepted step. A power rating uses the same 10.2 ms window, on the average of the power's magnitude, as [rating.power](#ratingpower) says. An LED's `current` is its DC forward current. An LED datasheet gives a higher peak forward current for short pulses at a low duty, which this model does not carry, so a pulse over the DC current warns.
 
@@ -676,12 +679,32 @@ The number is the model's. The stage is linear, 25 ohm from its rail, so a pin s
 A Nano running a sketch that drives D9 high into 47 ohm to ground reads, 40 ms in:
 
 ```text
-#nano__mcu.pin.PB1 carries 0.06944434799653014 A RMS over the last 10.2 ms, over its 0.04 A rating for 32582912000 ps
+#nano__mcu.pin.PB1 carries 0.0694 A RMS over the last 10.2 ms, over its 0.04 A rating for 32582912000 ps
 ```
 
 The time over runs through the last accepted step, which a chip's core can leave behind the session's time.
 
 Six pins each driving 120 ohm to ground carry 34.5 mA each, under the pin rating, and 207 mA together, so `#nano__mcu.pin.VCC` is over its 0.2 A.
+
+### Over now
+
+A DC rating and a power rating can be far over their rating for milliseconds before their window crosses: a load at `k` times a power rating takes `10.2 ms / k`. So a session also lists each such rating that is over now, as a `rating.current` or `rating.power` whose `data.now` is `true`. A rating is over now when the value of the last sample is over the rating, the average over the last 2.04 ms is over it too, and the window has not crossed. That average is the RMS for a DC rating and the mean for a power rating. While the session is younger than 2.04 ms it runs from the first sample, and at the first sample it is that sample. At t = 0 the operating point is no sample, so a session that has accepted nothing since reads the step after it, which it has already solved.
+
+2.04 ms is one period of the 490 Hz PWM. A PWM load whose RMS over a period is under its rating stays quiet, though each pulse is over it, and so does a switching edge that spends a few hundred nanoseconds over a power rating. A load held over the rating crosses that average within 2.04 ms, at once while the session is younger than that.
+
+`t_ps` is the first of the samples that have each been over, through the last. `peak` is the window's reading, still under the rating, and `peak_ps` the last sample. `sample` is that sample's value. `over_ps` is the time from `t_ps` to `peak_ps`. `held_ps` is how long that sample would have to hold for the window to pass the rating. A session lists the rating's window warning when it crosses, beside the over-now warning it listed first. A run folder never holds one.
+
+A Nano with a button from 5V to 22 ohm to GND, pressed at 50 ms and read 1 ms later:
+
+```text
+#r1.p is 0.989 W now, over its 0.25 W rating; it warns if held about 1600000000 ps
+```
+
+The window crosses 2.58 ms after the press. The first step past that, at 53 ms, reads:
+
+```text
+#r1.p averages 0.291 W over the last 10.2 ms while it is 0.989 W, over its 0.25 W rating
+```
 
 ## rating.power
 
@@ -690,12 +713,13 @@ Severity `warning`. Refs is the rated quantity, `#<part>.p`. `t_ps` is the first
 The message is:
 
 ```text
-{ref} averages {peak} W over the last 10.2 ms, over its {limit} W rating for {over_ps} ps
+{ref} averages {peak} W over the last 10.2 ms while it is {sample} W, over its {limit} W rating for {over_ps} ps
+{ref} is {sample} W now, over its {limit} W rating; it warns if held about {held_ps} ps
 ```
 
-` for {over_ps} ps` is left out as for `rating.current`. `data` is the same as `rating.current`. `peak` is the largest average of the power's magnitude over the window. `window_ps` is 10200000000.
+The second is a rating [over now](#over-now). Values are rounded, and ` while it is {sample} W` and ` for {over_ps} ps` are left out, as for `rating.current`. `data` is the same as `rating.current`. `peak` is the largest average of the power's magnitude over the window. `window_ps` is 10200000000.
 
-A power rating is the heat the part can shed. Every kind that has one, a resistor, a diode, an LED, a zener, a bipolar transistor, a MOSFET and a linear regulator, is checked the same way: against the average of the power's magnitude over the same 10.2 ms window a DC current rating uses, not against each step's value. The window starts full of the t = 0 value. When that value and the DC point with every capacitor open agree, an operating point over its rating warns at once, and its average is its value. When a capacitor held at its `initial` voltage carries more than 0.1 mA and the two differ, the window starts full of the smaller one. A t = 0 surge above the DC point then counts only from then on, and a DC point above the t = 0 value does not warn for a load the circuit has not reached. When that smaller value is still over the rating, the warning is at once and the average is the smaller value. A switching edge that spends its rating for a few hundred nanoseconds stays under it. A load held at `k` times the rating goes over once `1 / k` of the window has filled.
+A power rating is the heat the part can shed. Every kind that has one, a resistor, a diode, an LED, a zener, a bipolar transistor, a MOSFET and a linear regulator, is checked the same way: against the average of the power's magnitude over the same 10.2 ms window a DC current rating uses, not against each step's value. The window starts at 0 and fills from the first step after t = 0, as a DC rating's does. An operating point fills it with its value, so one over its rating warns at once, and its average is its value. A switching edge that spends its rating for a few hundred nanoseconds stays under it. A load held at `k` times the rating goes over once `1 / k` of the window has filled, and is over now until then.
 
 The 9 V LED example is a steady overload. It reports `#led1.p` over its 0.075 W rating and `#r1.p` over its 0.25 W rating.
 

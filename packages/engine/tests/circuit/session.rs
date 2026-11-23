@@ -287,9 +287,9 @@ fn refused(json: &str) -> Diagnostic {
     };
     assert_eq!(
         orbe_engine::simulate(&netlist).diagnostics(),
-        std::slice::from_ref(&diagnostic)
+        std::slice::from_ref(&*diagnostic)
     );
-    diagnostic
+    *diagnostic
 }
 
 #[ignore = "full tier"]

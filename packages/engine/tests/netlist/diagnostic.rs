@@ -93,6 +93,8 @@ fn samples() -> Vec<Diagnostic> {
             first: Time::ZERO,
             over_ps: None,
             window_ps: None,
+            sample: 0.5,
+            held_ps: None,
         }),
         Diagnostic::RatingPower(Excursion {
             quantity: "#r1.p".parse().unwrap(),
@@ -102,6 +104,8 @@ fn samples() -> Vec<Diagnostic> {
             first: Time::from_ps(5),
             over_ps: Some(4),
             window_ps: Some(10_200_000_000),
+            sample: 3.25,
+            held_ps: None,
         }),
         Diagnostic::NetlistSchedule {
             part: part("sw1"),
@@ -315,7 +319,7 @@ fn severity_refs_and_time_follow_the_variant() {
     let current = serde_json::to_string(by_code(&found, "rating.current")).unwrap();
     assert!(
         current.contains(
-            r##""message":"#led1.i peaks at 0.5 A, over its 0.03 A rating","data":{"limit":0.03,"over_ps":null,"peak":0.5,"peak_ps":0,"window_ps":null}"##
+            r##""message":"#led1.i peaks at 0.5 A, over its 0.03 A rating","data":{"held_ps":null,"limit":0.03,"now":false,"over_ps":null,"peak":0.5,"peak_ps":0,"sample":0.5,"window_ps":null}"##
         ),
         "{current}"
     );
@@ -365,9 +369,31 @@ fn severity_refs_and_time_follow_the_variant() {
     let power = serde_json::to_string(by_code(&found, "rating.power")).unwrap();
     assert!(
         power.contains(
-            r##""refs":["#r1.p"],"t_ps":5,"message":"#r1.p averages 3 W over the last 10.2 ms, over its 0.25 W rating for 4 ps","data":{"limit":0.25,"over_ps":4,"peak":3.0,"peak_ps":7,"window_ps":10200000000}"##
+            r##""refs":["#r1.p"],"t_ps":5,"message":"#r1.p averages 3 W over the last 10.2 ms while it is 3.25 W, over its 0.25 W rating for 4 ps","data":{"held_ps":null,"limit":0.25,"now":false,"over_ps":4,"peak":3.0,"peak_ps":7,"sample":3.25,"window_ps":10200000000}"##
         ),
         "{power}"
+    );
+}
+
+/// A windowed rating over now names its last sample, to 3 significant digits, and how long that
+/// sample would hold before the window crosses, to 2. Its `t_ps` is when the samples went over.
+#[test]
+fn a_rating_over_now_names_its_sample_and_how_long_it_would_hold() {
+    let now = Diagnostic::RatingPower(Excursion {
+        quantity: "#r1.p".parse().unwrap(),
+        limit: 0.25,
+        peak: 0.19393,
+        peak_at: Time::from_ps(2_000_000_001),
+        first: Time::from_ps(1),
+        over_ps: Some(2_000_000_000),
+        window_ps: Some(10_200_000_000),
+        sample: 0.9894505454260112,
+        held_ps: std::num::NonZeroU64::new(578_337_123),
+    });
+    assert!(now.over_now());
+    assert_eq!(
+        serde_json::to_string(&now).unwrap(),
+        r##"{"code":"rating.power","severity":"warning","refs":["#r1.p"],"t_ps":1,"message":"#r1.p is 0.989 W now, over its 0.25 W rating; it warns if held about 580000000 ps","data":{"held_ps":578337123,"limit":0.25,"now":true,"over_ps":2000000000,"peak":0.19393,"peak_ps":2000000001,"sample":0.9894505454260112,"window_ps":10200000000}}"##
     );
 }
 
