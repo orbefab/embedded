@@ -287,8 +287,9 @@ fn v_steps() -> serde_json::Value {
 }
 
 /// `v-steps` with a floating pair of nets and a power rating the charge pulse's average exceeds.
-/// Charging 5 nF through 1 kohm dumps about 62 nJ. Over the 10.2 ms window that is about 6 µW,
-/// over 1 µW. A 1 mW rating would stay under, because the pulse is gone before the window fills.
+/// Charging 5 nF through 1 kohm dumps about 62 nJ. Through a 10.2 ms time constant that reads
+/// about 6 µW, over 1 µW. A 1 mW rating would stay under, because the pulse is too short to
+/// raise the filter that far.
 fn floating() -> serde_json::Value {
     let mut json = v_steps();
     json["nets"]

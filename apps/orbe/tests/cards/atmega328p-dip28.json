@@ -223,6 +223,20 @@
   ],
   "ratings": [
     {
+      "basis": {
+        "sustained": {
+          "average": "rms",
+          "tau": {
+            "source": {
+              "closed_form": {
+                "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM."
+              }
+            },
+            "unit": "s",
+            "value": 0.0102
+          }
+        }
+      },
       "name": "pin_current",
       "source": {
         "datasheet": {
@@ -235,6 +249,20 @@
       "value": 0.04
     },
     {
+      "basis": {
+        "sustained": {
+          "average": "rms",
+          "tau": {
+            "source": {
+              "closed_form": {
+                "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM."
+              }
+            },
+            "unit": "s",
+            "value": 0.0102
+          }
+        }
+      },
       "name": "supply_current",
       "source": {
         "datasheet": {
@@ -290,5 +318,5 @@
   },
   "title": "ATmega328P, PDIP-28",
   "uses": {},
-  "version": "0.2.0"
+  "version": "0.2.1"
 }

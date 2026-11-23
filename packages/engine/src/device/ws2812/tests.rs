@@ -15,6 +15,23 @@ const START: u64 = 1_000_000_000;
 /// RES is a low longer than this. Exactly this long is no reset.
 const RES: u64 = 280_000_000;
 
+/// The SK6812MINI-HS's draw: 12 mA a channel at 255, 1 mA idle, held above 3.7 V.
+fn draw() -> super::PixelDraw {
+    let value = |si| crate::netlist::Value {
+        si: crate::finite::Finite::new(si).unwrap(),
+    };
+    super::PixelDraw {
+        channel_current: value(0.012),
+        idle_current: value(0.001),
+        holds_above: value(3.7),
+    }
+}
+
+/// The amperes [`draw`] takes for `count` LEDs whose latched bytes add to `lit`.
+fn amps(count: u16, lit: u32) -> f64 {
+    f64::from(count) * 0.001 + 0.012 * f64::from(lit) / 255.0
+}
+
 /// A chain's core, as the engine builds it for a part of `count` LEDs.
 struct Core {
     hosted: Box<dyn Hosted>,
@@ -40,7 +57,14 @@ impl Core {
 
     /// A chain that drives `DOUT` `delay` picoseconds after `DIN`, or has none at 0.
     fn with_dout(count: u16, delay: u64) -> Core {
-        let mut hosted = super::core(count, delay);
+        let mut hosted = super::core(count, delay, None);
+        hosted.keep_shown();
+        Core { hosted }
+    }
+
+    /// A chain of `count` that draws [`draw`] and has no `DOUT`.
+    fn drawing(count: u16) -> Core {
+        let mut hosted = super::core(count, 0, Some(&draw()));
         hosted.keep_shown();
         Core { hosted }
     }
@@ -531,7 +555,7 @@ fn a_chain_that_writes_no_rows_keeps_its_last_latch_alone() {
         .collect();
     let pulses = trains.concat();
     let session = Core {
-        hosted: super::core(1, 0),
+        hosted: super::core(1, 0, None),
     };
     let (session, _) = by_pin_into(session, &pulses);
     let (run, _) = by_pin_into(Core::new(1), &pulses);
@@ -598,4 +622,48 @@ fn a_record_past_the_chain_warns_dout_record_and_drives_nothing() {
         Some((ProtocolRule::DoutRecord, Time::from_ps(first_past)))
     );
     assert_eq!(core.hosted.drive(), &[Drive::Low]);
+}
+
+#[test]
+fn the_draw_follows_a_latch_on_the_pin_at_the_latch() {
+    let pulses = train(&[0xFF, 0x00, 0x01, 0x10, 0x20, 0x30], ZERO, ONE);
+    let mut core = Core::drawing(2);
+    assert_eq!(core.hosted.draw().amps, amps(2, 0));
+    core = by_pin_into(core, &pulses).0;
+    assert_eq!(
+        core.observed().pixels,
+        vec![[0xFF, 0x00, 0x01], [0x10, 0x20, 0x30]]
+    );
+    let lit = 0xFF + 0x01 + 0x10 + 0x20 + 0x30;
+    assert!((core.hosted.draw().amps - amps(2, lit)).abs() < 1e-15);
+    assert_eq!(core.hosted.draw().holds_above_v, 3.7);
+}
+
+#[test]
+fn a_record_that_latches_draws_from_1_ps_after_it_lands_and_a_repeat_adds_no_stop() {
+    let pulses = train(&[0xFF, 0x00, 0x01], ZERO, ONE);
+    let mut core = Core::drawing(1);
+    core.input(Time::ZERO, &[false]);
+    let last = end(START, &pulses);
+    settle(&mut core, last);
+    core.land(Time::from_ps(START), false, &pulses, Time::from_ps(last));
+    assert_eq!(core.hosted.draw().amps, amps(1, 0));
+    let drawn = core.run_until(Time::from_ps(last + RES));
+    assert_eq!(
+        drawn,
+        Some(Stop {
+            at: Time::from_ps(last + 1),
+            sample: false,
+            record: false,
+        })
+    );
+    assert!((core.hosted.draw().amps - amps(1, 0x100)).abs() < 1e-15);
+    assert_eq!(core.run_until(Time::from_ps(last + 2 * RES)), None);
+
+    let start = last + 2 * RES;
+    let again = end(start, &pulses);
+    settle(&mut core, again);
+    core.land(Time::from_ps(start), false, &pulses, Time::from_ps(again));
+    assert_eq!(core.run_until(Time::from_ps(again + 2 * RES)), None);
+    assert!((core.hosted.draw().amps - amps(1, 0x100)).abs() < 1e-15);
 }

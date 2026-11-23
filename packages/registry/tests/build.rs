@@ -39,7 +39,7 @@ fn records_of_three_parts_and_a_block_match_their_snapshots() {
     let bless = std::env::var_os("ORBE_BLESS").is_some();
     for address in [
         "led-5mm@0.3.0",
-        "atmega328p-dip28@0.2.0",
+        "atmega328p-dip28@0.2.1",
         "nano-board@0.2.1",
         "nano-button-led@0.3.0",
     ] {
@@ -158,7 +158,7 @@ fn a_block_depends_on_every_part_it_runs_at_the_versions_in_the_same_build() {
     for direct in [
         "nano-board@0.2.1",
         "tactile-switch-6mm@0.2.0",
-        "resistor-axial@0.2.0",
+        "resistor-axial@0.2.1",
         "led-5mm@0.3.0",
     ] {
         assert!(deps.contains(&direct), "{direct} in {deps:?}");

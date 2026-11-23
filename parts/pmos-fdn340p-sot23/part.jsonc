@@ -1,7 +1,7 @@
 {
-  "format": 1,
+  "format": 5,
   "part": "pmos-fdn340p-sot23",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "FDN340P P-channel MOSFET, SOT-23",
   "license": "MIT OR Apache-2.0",
   "summary": "onsemi FDN340P P-channel MOSFET in SOT-23. Lead 1 is the gate, lead 2 the source and lead 3 the drain. The dot marks lead 1.",
@@ -83,6 +83,7 @@
       "current": {
         "value": 2.0,
         "unit": "A",
+        "basis": { "sustained": { "average": "rms", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } },
         "source": {
           "datasheet": {
             "doc": "onsemi FDN340P/D, Rev. 9, May 2025",
@@ -94,6 +95,7 @@
       "power": {
         "value": 0.5,
         "unit": "W",
+        "basis": { "sustained": { "average": "mean", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } },
         "source": {
           "datasheet": {
             "doc": "onsemi FDN340P/D, Rev. 9, May 2025",

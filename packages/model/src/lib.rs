@@ -13,8 +13,8 @@ mod time;
 mod world;
 
 pub use device::{
-    Ack, Cx, Device, Dir, Drawn, DutyTarget, Error, Event, Fields, I2cTarget, Idle, Panel, Params,
-    PulseTarget, Shows, SpiTarget, State, Value, View,
+    Ack, Cx, Device, Dir, Draw, Drawn, DutyTarget, Error, Event, Fields, I2cTarget, Idle, Panel,
+    Params, PulseTarget, Shows, SpiTarget, State, Value, View,
 };
 pub use pages::Pages;
 pub use pins::{Drive, Drives, Levels, Stop};

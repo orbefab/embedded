@@ -12,13 +12,15 @@ use crate::name::{Name, Ref};
 use crate::netlist::IntValue;
 use crate::netlist::NetId;
 use crate::netlist::PartId;
+use crate::netlist::Rating;
 use crate::netlist::Threshold;
 use crate::netlist::Value;
 use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::WireThreshold;
 use crate::netlist::json::threshold::resolve_threshold;
 use crate::netlist::json::{
-    PinMap, WireInt, WireValue, resolve_int, resolve_rating, resolve_some_pins, resolve_value,
+    PinMap, WireInt, WireRating, WireValue, resolve_int, resolve_limit, resolve_rating,
+    resolve_some_pins, resolve_value,
 };
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
 use crate::ratings::{Ceiling, PinRatings, PinWindow};
@@ -207,8 +209,8 @@ pub(crate) fn pin_ratings(mcu: &Atmega328p) -> Option<PinRatings> {
         .collect();
     Some(PinRatings {
         outputs: PORT_PINS.iter().map(|&k| Atmega328p::PINS[k]).collect(),
-        pin_current: si(&ratings.pin_current),
-        supply_current: si(&ratings.supply_current),
+        pin_current: ratings.pin_current.clone(),
+        supply_current: ratings.supply_current.clone(),
         vcc: (Atmega328p::PINS[VCC], mcu.pins[VCC]),
         gnd: (Atmega328p::PINS[GND_8], mcu.pins[GND_8]),
         windows,
@@ -265,9 +267,9 @@ pub struct Atmega328p {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Atmega328pRatings {
     /// Ampere. The current through any one port pin.
-    pub pin_current: Option<Value>,
+    pub pin_current: Option<Rating>,
     /// Ampere. The current through `VCC`, and the current through the ground pins.
-    pub supply_current: Option<Value>,
+    pub supply_current: Option<Rating>,
     /// Volt. How far a pin may go below `GND_8`, and every pin but `VCC` and `RESET` above
     /// `VCC`.
     pub rail_margin: Option<Value>,
@@ -371,9 +373,9 @@ pub(crate) struct WireAtmega328p {
 #[serde(deny_unknown_fields)]
 struct WireRatings {
     #[serde(deserialize_with = "Option::deserialize")]
-    pin_current: Option<WireValue>,
+    pin_current: Option<WireRating>,
     #[serde(deserialize_with = "Option::deserialize")]
-    supply_current: Option<WireValue>,
+    supply_current: Option<WireRating>,
     #[serde(deserialize_with = "Option::deserialize")]
     rail_margin: Option<WireValue>,
     #[serde(deserialize_with = "Option::deserialize")]
@@ -487,9 +489,9 @@ fn resolve_ratings(
         wire.supply_current,
         out,
     );
-    let rail_margin = resolve_rating(part, "ratings.rail_margin", "V", wire.rail_margin, out);
-    let reset_voltage = resolve_rating(part, "ratings.reset_voltage", "V", wire.reset_voltage, out);
-    let supply_voltage = resolve_rating(
+    let rail_margin = resolve_limit(part, "ratings.rail_margin", "V", wire.rail_margin, out);
+    let reset_voltage = resolve_limit(part, "ratings.reset_voltage", "V", wire.reset_voltage, out);
+    let supply_voltage = resolve_limit(
         part,
         "ratings.supply_voltage",
         "V",

@@ -1,7 +1,7 @@
 {
-  "format": 1,
+  "format": 5,
   "part": "npn-l8050-sot23",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "NPN transistor, L8050 (SOT-23)",
   "summary": "Leshan L8050QLT1G, an NPN in SOT-23 marked 1YC, for up to 800 mA. Pin 1 is the base, pin 2 the emitter and pin 3 the collector. The fit is the 25 C curves, with the collector resistance held at 0.01 ohm because the unconstrained fit went negative.",
   "tags": ["transistor", "bjt", "npn", "switch", "sot-23"],
@@ -108,10 +108,11 @@
       "current": {
         "value": 0.8,
         "unit": "A",
+        "basis": "peak",
         "source": {
           "datasheet": {
             "doc": "Leshan Radio L8050QLT1G Rev.D Jun. 2023",
-            "at": "MAXIMUM RATINGS, collector current IC, 800 mA",
+            "at": "MAXIMUM RATINGS, collector current IC, 800 mA. The sheet does not call it continuous, so it is a peak.",
             "basis": "absolute_max"
           }
         }
@@ -119,6 +120,7 @@
       "power": {
         "value": 0.225,
         "unit": "W",
+        "basis": { "sustained": { "average": "mean", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } },
         "source": {
           "datasheet": {
             "doc": "Leshan Radio L8050QLT1G Rev.D Jun. 2023",

@@ -242,7 +242,7 @@ fn an_off_grid_failure_keeps_that_accepted_step_as_its_last_row() {
 }
 
 /// `led_switch` plus 10 ohm from `vcc` to ground, rated 0.1 mW. That resistor is over from
-/// t = 0, and its window crosses once 2.5 W has run 0.1 mW / 2.5 W of 10.2 ms, 0.408 us. The
+/// t = 0, and its 10.2 ms filter crosses after about 0.1 mW / 2.5 W of that, 0.408 us. The
 /// switch still closes at 1 us.
 fn led_switch_over_from_the_start() -> Netlist {
     crate::netlist::parse(

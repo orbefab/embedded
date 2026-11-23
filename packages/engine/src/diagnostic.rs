@@ -1,7 +1,7 @@
 use orbe_mcu::{FlashRefusal, ResetReason, Setting, Unsupported};
 use orbe_model::Time;
 
-use crate::netlist::MIN_GAP_PS;
+use crate::netlist::{Average, Basis, MIN_GAP_PS};
 
 use std::borrow::Cow;
 use std::num::NonZeroU64;
@@ -551,23 +551,21 @@ pub struct Excursion {
     pub quantity: Ref,
     /// The rating, in SI units.
     pub limit: f64,
-    /// Largest magnitude seen. For a DC current rating, the largest RMS over `window_ps`.
-    /// For a power rating, the largest average of the magnitude over `window_ps`.
+    /// Largest magnitude seen. For a sustained rating, the largest reading of its filter.
     pub peak: f64,
     pub peak_at: Time,
     /// First sample over the limit.
     pub first: Time,
     /// Total time over the limit. `None` for an operating point, which has no duration.
     pub over_ps: Option<u64>,
-    /// The window a DC current's RMS or a power's average runs over, or `None` for a rating
-    /// checked on each sample.
-    pub window_ps: Option<u64>,
-    /// The quantity's own magnitude at `peak_at`. For a rating checked on each sample it is
-    /// `peak`.
+    /// How the datasheet means the rating: a peak, checked on each sample, or sustained, read
+    /// through a filter with its time constant.
+    pub basis: Basis,
+    /// The quantity's own magnitude at `peak_at`. For a peak rating it is `peak`.
     pub sample: f64,
-    /// `Some` when the finding is a windowed rating over now: `sample` is the latest sample,
-    /// over the rating, and the window, `peak`, is still under it. The value is how long that
-    /// sample would hold before the window crosses. `None` for a window that has crossed.
+    /// `Some` when the finding is a sustained rating over now: `sample` is the latest sample,
+    /// over the rating, and the filter, `peak`, is still under it. The value is how long that
+    /// sample would hold before the filter crosses. `None` for a filter that has crossed.
     pub held_ps: Option<NonZeroU64>,
 }
 
@@ -789,7 +787,7 @@ impl Diagnostic {
         }
     }
 
-    /// Whether this is a windowed rating over now, whose window has not crossed.
+    /// Whether this is a sustained rating over now, whose filter has not crossed.
     pub fn over_now(&self) -> bool {
         matches!(
             self,
@@ -1585,8 +1583,8 @@ impl Diagnostic {
                 from.as_ps(),
                 to.as_ps()
             ),
-            Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A", false, namer),
-            Diagnostic::RatingPower(excursion) => over_rating(excursion, "W", true, namer),
+            Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A", namer),
+            Diagnostic::RatingPower(excursion) => over_rating(excursion, "W", namer),
             Diagnostic::RatingVoltage(excursion) => outside_window(excursion, namer),
         }
     }
@@ -1812,7 +1810,12 @@ impl Diagnostic {
                 serde_json::json!({ "from_ps": from, "to_ps": to })
             }
             Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
+                let (tau_ps, average) = match excursion.basis {
+                    Basis::Peak => (None, None),
+                    Basis::Sustained { tau_ps, average } => (Some(tau_ps), Some(average.as_str())),
+                };
                 serde_json::json!({
+                    "average": average,
                     "held_ps": excursion.held_ps,
                     "limit": excursion.limit,
                     "now": excursion.held_ps.is_some(),
@@ -1820,7 +1823,7 @@ impl Diagnostic {
                     "peak": excursion.peak,
                     "peak_ps": excursion.peak_at,
                     "sample": excursion.sample,
-                    "window_ps": excursion.window_ps,
+                    "tau_ps": tau_ps,
                 })
             }
             Diagnostic::RatingVoltage(excursion) => {
@@ -1867,18 +1870,13 @@ pub(crate) fn number_text(value: f64) -> String {
     }
 }
 
-fn over_rating(
-    excursion: &Excursion,
-    unit: &str,
-    average: bool,
-    namer: &dyn Fn(&Ref) -> String,
-) -> String {
+fn over_rating(excursion: &Excursion, unit: &str, namer: &dyn Fn(&Ref) -> String) -> String {
     let Excursion {
         quantity,
         limit,
         peak,
         over_ps,
-        window_ps,
+        basis,
         sample,
         held_ps,
         ..
@@ -1886,23 +1884,28 @@ fn over_rating(
     let quantity = namer(quantity);
     let value = |v: f64| format!("{} {unit}", significant_text(v));
     let rating = format!("over its {} rating{}", value(*limit), for_time(*over_ps));
-    let window = |window: &u64| *window as f64 / 1e9;
-    match (window_ps, held_ps) {
+    match (basis, held_ps) {
         (_, Some(held)) => format!(
             "{quantity} is {} now, over its {} rating; it warns if held about {} ps",
             value(*sample),
             value(*limit),
             significant_ps(held.get())
         ),
-        (Some(w), None) => format!(
-            "{quantity} {} {}{} over the last {} ms{}, {rating}",
-            if average { "averages" } else { "carries" },
-            value(*peak),
-            if average { "" } else { " RMS" },
-            window(w),
+        (Basis::Sustained { tau_ps, average }, None) => format!(
+            "{quantity} {} with a {} ms time constant{}, {rating}",
+            sustained_text(*average, value(*peak)),
+            significant_text(*tau_ps as f64 / 1e9),
             while_it_is(value(*sample), value(*peak))
         ),
-        (None, None) => format!("{quantity} peaks at {}, {rating}", value(*peak)),
+        (Basis::Peak, None) => format!("{quantity} peaks at {}, {rating}", value(*peak)),
+    }
+}
+
+/// `averages 3 W`, or `carries 43.4 mA RMS`: a sustained rating's filter reading.
+pub fn sustained_text(average: Average, reading: String) -> String {
+    match average {
+        Average::Mean => format!("averages {reading}"),
+        Average::Rms => format!("carries {reading} RMS"),
     }
 }
 

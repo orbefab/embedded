@@ -1,7 +1,7 @@
 // The model's values and sources are the engine's LP2985-33, the legacy standard grade of
 // TI SLVS522S, from packages/engine/tests/circuits/atmega-board-button/netlist.json, part `reg_3v3`.
 {
-  "format": 1, "part": "lp2985-sot23-5", "version": "0.2.0", "title": "LP2985 3.3 V regulator, SOT-23-5", "license": "MIT OR Apache-2.0",
+  "format": 5, "part": "lp2985-sot23-5", "version": "0.2.1", "title": "LP2985 3.3 V regulator, SOT-23-5", "license": "MIT OR Apache-2.0",
   "summary": "TI LP2985-33DBVR, a fixed 3.3 V regulator in SOT-23-5. Leads 1 IN, 2 GND and 3 ON/OFF on one side; 4 BYPASS and 5 OUT on the other. The dot marks lead 1.",
   "tags": ["regulator", "ldo", "sot-23", "power"],
   "docs": { "TI SLVS522S": "https://www.ti.com/lit/ds/symlink/lp2985.pdf" },
@@ -18,8 +18,9 @@
     "quiescent_current": { "value": 6.5e-05, "unit": "A", "source": { "datasheet": { "doc": "TI SLVS522S", "at": "p6, legacy GND pin current typical at IOUT = 0", "basis": "typical" } } },
     "ground_current_ratio": { "value": 0.005233333333333334, "unit": "1", "source": { "closed_form": { "note": "p6 legacy GND pin current, 65 uA at 0 mA and 850 uA at 150 mA" } } },
     "ratings": {
-      "current": { "value": 0.15, "unit": "A", "source": { "datasheet": { "doc": "TI SLVS522S", "at": "p4 section 5.3, output current maximum 150 mA", "basis": "max" } } },
-      "power": { "value": 0.48685491723466406, "unit": "W", "source": { "closed_form": { "note": "(125 C - 25 C) / 205.4 C/W, p4 section 5.3 recommended junction and p5 section 5.4 legacy DBV RθJA, ambient 25 C" } } },
+      "current": { "value": 0.15, "unit": "A", "basis": "peak", "source": { "datasheet": { "doc": "TI SLVS522S", "at": "p4 section 5.3, output current maximum 150 mA", "basis": "max" } } },
+      "power": { "value": 0.48685491723466406, "unit": "W", "basis": { "sustained": { "average": "mean", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } }, "source": { "closed_form": { "note": "(125 C - 25 C) / 205.4 C/W, p4 section 5.3 recommended junction and p5 section 5.4 legacy DBV RθJA, ambient 25 C" } } },
+      "input_voltage": { "value": 16, "unit": "V", "source": { "datasheet": { "doc": "TI SLVS522S", "at": "p4 section 5.1 Absolute Maximum Ratings, continuous input voltage, 16 V on the legacy chip and 18 V on the new one. This takes the lower.", "basis": "absolute_max" } } },
     },
     "pins": { "in": "IN", "out": "OUT", "gnd": "GND" },
   },

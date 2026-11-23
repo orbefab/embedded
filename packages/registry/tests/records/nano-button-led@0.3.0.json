@@ -14,25 +14,25 @@
   ],
   "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
   "registryDependencies": [
-    "ams1117-sot223@0.2.0",
-    "atmega328p-tqfp32@0.2.0",
+    "ams1117-sot223@0.2.1",
+    "atmega328p-tqfp32@0.2.1",
     "breadboard-400@0.2.0",
     "capacitor-0603@0.2.0",
     "capacitor-tantalum-3216@0.2.1",
     "ch340g@0.2.0",
     "crystal-3215@0.2.0",
-    "diode-sod123@0.2.0",
-    "led-0603@0.2.0",
+    "diode-sod123@0.2.1",
+    "led-0603@0.2.1",
     "led-5mm@0.3.0",
     "nano-board@0.2.1",
     "pin-header-1x15@0.2.0",
     "pin-header-2x3@0.2.0",
     "resistor-0603@0.2.0",
-    "resistor-axial@0.2.0",
+    "resistor-axial@0.2.1",
     "resonator-cstce@0.2.0",
     "tactile-switch-6mm@0.2.0",
     "tactile-switch-smd@0.2.0",
-    "usb-mini-b@0.2.0"
+    "usb-mini-b@0.2.1"
   ],
   "files": [
     {

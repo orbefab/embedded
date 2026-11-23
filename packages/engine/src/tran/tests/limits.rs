@@ -63,8 +63,14 @@ fn a_rating_samples_every_step_between_the_rows() {
     };
     // The jump at 3 ns holds the old level, and the step 1 ns later the new one, through the
     // fall at 5 ns. The rows stay at 0 V, so this average is the pulse the steps between them
-    // folded in: 2.5 W for 2 ns over the 10.2 ms window.
-    assert_eq!(excursion.window_ps, Some(10_200_000_000));
+    // folded in: 2.5 W for 2 ns against the 10.2 ms time constant.
+    assert_eq!(
+        excursion.basis,
+        crate::netlist::Basis::Sustained {
+            tau_ps: 10_200_000_000,
+            average: crate::netlist::Average::Mean,
+        }
+    );
     let share = 2.5 * 2_000.0 / 10_200_000_000.0;
     assert!(
         (excursion.peak - share).abs() <= 0.05 * share,

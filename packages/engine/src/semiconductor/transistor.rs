@@ -1,6 +1,7 @@
 use crate::diagnostic::Diagnostic;
 use crate::diagnostic::ValueRule;
 use crate::netlist::NetId;
+use crate::netlist::Rating;
 use crate::netlist::Value;
 use crate::netlist::json::PinMap;
 use crate::netlist::json::WireJunctionRatings;
@@ -62,6 +63,8 @@ struct Params {
     bf: f64,
     br: f64,
     vaf: f64,
+    /// `1 / IKF`, 0 for none.
+    inv_ikf: f64,
 }
 
 /// The terminal currents in the `npn` frame at one bias, and their slopes on `vbe` and `vbc`.
@@ -89,19 +92,35 @@ impl Params {
             bf: bjt.forward_beta.si.get(),
             br: bjt.reverse_beta.si.get(),
             vaf: bjt.early_voltage.si.get(),
+            inv_ikf: bjt
+                .forward_knee_current
+                .as_ref()
+                .map_or(0.0, |ikf| 1.0 / ikf.si.get()),
         }
     }
 
-    /// The `Bjt` equations at `vbe` and `vbc`, with `GMIN` across each junction.
+    /// The `Bjt` equations at `vbe` and `vbc`, with `GMIN` across each junction. The
+    /// transport current is divided by ngspice's base charge `qb = q1 * (1 + sqrt(1 + 4 *
+    /// ibe / IKF)) / 2`, with `1 / q1` the Early factor, so above `IKF` the collector current
+    /// grows as the square root of `ibe` and the gain falls as `BF / (1 + ic / IKF)`.
     fn point(&self, vbe: f64, vbc: f64) -> Point {
         let (ibe, gbe, be_capped, vbe) = self.be.evaluate(vbe);
         let (ibc, gbc, bc_capped, vbc) = self.bc.evaluate(vbc);
-        let early = 1.0 - vbc / self.vaf;
+        let root = (1.0 + 4.0 * ibe * self.inv_ikf).max(0.0).sqrt();
+        let knee = (1.0 + root) / 2.0;
+        // The slope of `knee` on `vbe`. Zero where the root is clamped, as ngspice has it.
+        let knee_be = if root > 0.0 {
+            gbe * self.inv_ikf / root
+        } else {
+            0.0
+        };
+        let early = (1.0 - vbc / self.vaf) / knee;
+        let transport = ibe - ibc;
         Point {
-            ic: (ibe - ibc) * early - ibc / self.br - GMIN * vbc,
+            ic: transport * early - ibc / self.br - GMIN * vbc,
             ib: ibe / self.bf + ibc / self.br + GMIN * (vbe + vbc),
-            ic_be: gbe * early,
-            ic_bc: -gbc * early - (ibe - ibc) / self.vaf - gbc / self.br - GMIN,
+            ic_be: gbe * early - transport * early * knee_be / knee,
+            ic_bc: -gbc * early - transport / (self.vaf * knee) - gbc / self.br - GMIN,
             ib_be: gbe / self.bf + GMIN,
             ib_bc: gbc / self.br + GMIN,
             capped: be_capped || bc_capped,
@@ -521,10 +540,50 @@ mod tests {
         }
     }
 
+    /// `npn` with `forward_knee_current` at `ikf` amperes.
+    fn npn_with_knee(ikf: f64) -> Netlist {
+        let part = q1_part("npn", ["c", "b", "gnd"], 1.0).replacen(
+            r#""kind": "npn","#,
+            &format!(
+                r#""kind": "npn", "forward_knee_current": {},"#,
+                value(ikf, "A")
+            ),
+            1,
+        );
+        assemble(r#"{ "op": {} }"#, &["c", "b", "gnd"], &[part])
+    }
+
+    /// With `vbc` at 0 the gain is `BF / qb`, and `qb - 1` is `ic / IKF`, so the gain is
+    /// `BF / (1 + ic / IKF)` at every current, as ngspice-42's high injection has it.
+    #[test]
+    fn above_the_knee_the_gain_falls_as_bf_over_one_plus_ic_over_ikf() {
+        let ikf = 0.57;
+        let params = Params::new(q1(&npn_with_knee(ikf)).1);
+        for vbe in [0.6, 0.7, 0.75, 0.8, 0.85, 0.9] {
+            let p = params.point(vbe, 0.0);
+            let gain = p.ic / (p.ib - GMIN * vbe);
+            let want = BF / (1.0 + p.ic / ikf);
+            assert!(
+                (gain / want - 1.0).abs() < 1e-9,
+                "at vbe {vbe} V: {gain} vs {want}"
+            );
+        }
+        let low = params.point(0.6, 0.0);
+        assert!(
+            (low.ic / low.ib / BF - 1.0).abs() < 1e-3,
+            "{}",
+            low.ic / low.ib
+        );
+    }
+
     #[test]
     fn partials_match_a_difference() {
-        let netlist = npn();
-        let params = Params::new(q1(&netlist).1);
+        partials_match_a_difference_of(&npn());
+        partials_match_a_difference_of(&npn_with_knee(0.05));
+    }
+
+    fn partials_match_a_difference_of(netlist: &Netlist) {
+        let params = Params::new(q1(netlist).1);
         let h = 1e-6;
         for (vbe, vbc) in BIASES {
             let p = params.point(vbe, vbc);
@@ -1212,10 +1271,13 @@ pub struct Bjt {
     pub base_emitter_capacitance: Value,
     /// Farad. `CJC`.
     pub base_collector_capacitance: Value,
+    /// Ampere. `IKF`, the forward knee current, above which high injection lowers the gain.
+    /// `None` keeps the gain at `BF`, as an infinite `IKF` does.
+    pub forward_knee_current: Option<Value>,
     /// Ampere, greater than 0. Bounds `|ic|`. `None` is an explicit `"current": null`.
-    pub max_current: Option<Value>,
+    pub max_current: Option<Rating>,
     /// Watt, greater than 0. `None` is an explicit `"power": null`.
-    pub max_power: Option<Value>,
+    pub max_power: Option<Rating>,
 }
 
 impl Bjt {
@@ -1263,9 +1325,9 @@ pub struct Mosfet {
     /// Farad. From drain to source.
     pub drain_source_capacitance: Value,
     /// Ampere, greater than 0. Bounds `|id|`. `None` is an explicit `"current": null`.
-    pub max_current: Option<Value>,
+    pub max_current: Option<Rating>,
     /// Watt, greater than 0. `None` is an explicit `"power": null`.
-    pub max_power: Option<Value>,
+    pub max_power: Option<Rating>,
 }
 
 impl Mosfet {
@@ -1312,6 +1374,9 @@ pub(crate) struct WireBjt {
     emitter_resistance: WireValue,
     base_emitter_capacitance: WireValue,
     base_collector_capacitance: WireValue,
+    /// Absent on a BJT written before it had one.
+    #[serde(default)]
+    forward_knee_current: Option<WireValue>,
     ratings: WireJunctionRatings,
 }
 
@@ -1359,6 +1424,10 @@ fn resolve_bjt(ctx: ParseCtx<'_>, wire: WireBjt) -> Option<Bjt> {
         "F",
         wire.base_collector_capacitance,
     );
+    let ikf = match wire.forward_knee_current {
+        None => Some(None),
+        Some(ikf) => positive("forward_knee_current", "A", ikf).map(Some),
+    };
     let ratings = wire.ratings;
     let max_current = resolve_rating(part_ref, "ratings.current", "A", ratings.current, out);
     let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
@@ -1401,6 +1470,7 @@ fn resolve_bjt(ctx: ParseCtx<'_>, wire: WireBjt) -> Option<Bjt> {
         emitter_resistance: re?,
         base_emitter_capacitance: cje?,
         base_collector_capacitance: cjc?,
+        forward_knee_current: ikf?,
         max_current: max_current?,
         max_power: max_power?,
     })
@@ -1536,7 +1606,7 @@ macro_rules! bjt_kind {
             fn quantities(&self) -> &'static [Quantity] {
                 &[Quantity::Ib, Quantity::Ic, Quantity::P]
             }
-            fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+            fn ratings(&self) -> (Option<(Quantity, &Rating)>, Option<&Rating>) {
                 let current = self.0.max_current.as_ref().map(|v| (Quantity::Ic, v));
                 (current, self.0.max_power.as_ref())
             }
@@ -1630,7 +1700,7 @@ macro_rules! mos_kind {
             fn quantities(&self) -> &'static [Quantity] {
                 &[Quantity::Id, Quantity::P]
             }
-            fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+            fn ratings(&self) -> (Option<(Quantity, &Rating)>, Option<&Rating>) {
                 let current = self.0.max_current.as_ref().map(|v| (Quantity::Id, v));
                 (current, self.0.max_power.as_ref())
             }

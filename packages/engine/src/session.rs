@@ -556,8 +556,8 @@ impl Session {
     ///
     /// Static warnings come first in that file's order, each with `t_ps` null. One
     /// `rating.current` or `rating.power` follows for each rated quantity that has gone
-    /// over, and one for each windowed rating over now at the last accepted step, so a run
-    /// that stops before a held overload fills its window still names it. Its `t_ps` is the
+    /// over, and one for each sustained rating over now at the last accepted step, so a run
+    /// that stops before a held overload crosses its filter still names it. Its `t_ps` is the
     /// first accepted step over. `peak` and `peak_ps` run through the
     /// last accepted step. `over_ps` runs through that step, not to `now`. A step that is over
     /// adds its time when the next step is accepted, so a quantity first over on the last
@@ -573,7 +573,7 @@ impl Session {
         found
     }
 
-    /// Each `rating.*` warning through `probe`, and each windowed rating over now there, as
+    /// Each `rating.*` warning through `probe`, and each sustained rating over now there, as
     /// one whose `held_ps` is set. Between accepted steps the probe is a sample, solved with
     /// the drive the cores now hold, and it is not kept. At an accepted step the warnings are
     /// that step's. At t = 0 the only accepted row is the operating point, which is no

@@ -1,6 +1,6 @@
 // The model is atmega328p-tqfp32's, the engine's ATmega328P values. A test keeps the two equal.
 {
-  "format": 1, "part": "atmega328p-dip28", "version": "0.2.0", "title": "ATmega328P, PDIP-28", "license": "MIT OR Apache-2.0",
+  "format": 5, "part": "atmega328p-dip28", "version": "0.2.1", "title": "ATmega328P, PDIP-28", "license": "MIT OR Apache-2.0",
   "summary": "ATmega328P-PU in a 300 mil PDIP-28. The notch is at one end and marks the lead-1 corner. The part needs firmware.",
   "tags": ["microcontroller", "avr", "dip"],
   "docs": {
@@ -39,8 +39,8 @@
     "active_current": { "value": 0.0114, "unit": "A", "source": { "closed_form": { "note": "DS40002061B page 502, Figure 31-333, Active Supply Current vs. Frequency: 9.6 mA on the 5.0 V curve at 16 MHz, measured with every PRR bit set. The Arduino core leaves PRR at its reset value 0x00, so the seven modules it gates draw 18.3 % more, page 506, Table 31-16: 9.6 mA x 1.183" } } },
     "reset_current": { "value": 0.002, "unit": "A", "source": { "datasheet": { "doc": "DS40002061B", "at": "page 525, Figure 31-377, Reset Supply Current vs. Frequency: about 2.0 mA on the 5.0 V curve at 16 MHz", "basis": "typical" } } },
     "ratings": {
-      "pin_current": { "value": 0.04, "unit": "A", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: DC Current per I/O Pin, 40.0 mA", "basis": "absolute_max" } } },
-      "supply_current": { "value": 0.2, "unit": "A", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: DC Current VCC and GND Pins, 200.0 mA", "basis": "absolute_max" } } },
+      "pin_current": { "value": 0.04, "unit": "A", "basis": { "sustained": { "average": "rms", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } }, "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: DC Current per I/O Pin, 40.0 mA", "basis": "absolute_max" } } },
+      "supply_current": { "value": 0.2, "unit": "A", "basis": { "sustained": { "average": "rms", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } }, "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: DC Current VCC and GND Pins, 200.0 mA", "basis": "absolute_max" } } },
       "rail_margin": { "value": 0.5, "unit": "V", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: Voltage on any Pin except RESET with respect to Ground, -0.5 V to VCC + 0.5 V", "basis": "absolute_max" } } },
       "reset_voltage": { "value": 13.0, "unit": "V", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: Voltage on RESET with respect to Ground, -0.5 V to +13.0 V", "basis": "absolute_max" } } },
       "supply_voltage": { "value": 6.0, "unit": "V", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: Maximum Operating Voltage, 6.0 V", "basis": "absolute_max" } } },

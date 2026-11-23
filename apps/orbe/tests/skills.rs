@@ -1234,15 +1234,16 @@ fn a_load_over_the_usb_supply_warns_and_a_wire_across_it_is_a_short() {
             .clone()
     };
     // The same current passes the USB supply and the Schottky behind 5V, each rated 0.5 A. The
-    // supply's rating is the RMS over 10.2 ms, so at open it is over now. The diode's is checked
-    // on each sample.
+    // supply's rating is a peak, so the first sample warns. The diode's is a mean with a 55 ms
+    // time constant, so at open it is over now.
     let supply = over("#nano__usb__host.i (nano.usb) ");
     let diode = over("#nano__diode.i (nano.diode) ");
     orbe(&["close"]).ok();
-    assert_eq!(supply["data"]["now"], true, "{supply}");
-    let sample = supply["data"]["sample"].as_f64().unwrap();
+    assert_eq!(supply["data"]["now"], false, "{supply}");
+    assert!(supply["data"]["peak"].as_f64().unwrap() > 1.5, "{supply}");
+    assert_eq!(diode["data"]["now"], true, "{diode}");
+    let sample = diode["data"]["sample"].as_f64().unwrap();
     assert!(sample > 1.5, "{sample}");
-    assert!(diode["data"]["peak"].as_f64().unwrap() > 1.5, "{diode}");
     assert_eq!(supply["data"]["limit"], 0.5);
     assert_eq!(diode["data"]["limit"], 0.5);
 
@@ -1353,8 +1354,9 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
     ])
     .ok()
     .json();
-    // At the pin's edge the LED carries about 94 mA, over its 30 mA rating on each sample.
-    // The pin's 40 mA and the LED's 75 mW are over 10.2 ms, so they are over now.
+    // At the pin's edge the LED carries about 94 mA, and its current filter, with a 1 ms time
+    // constant, passes 30 mA within the millisecond. The pin's 40 mA and the LED's 75 mW have
+    // a 10.2 ms time constant, so they are over now.
     let mut found = listed(&step);
     found.sort();
     assert_eq!(
@@ -1366,8 +1368,8 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
         ],
         "{step}"
     );
-    // The pin's RMS over the last 10.2 ms crosses 40 mA (40 / 94)^2 of the window after the
-    // press, 1.8 ms. The LED's power average crosses 75 mW about 3.5 ms in.
+    // The pin's RMS filter passes 40 mA `tau * ln(94^2 / (94^2 - 40^2))` after the press,
+    // about 2 ms. The LED's mean passes 75 mW about 4 ms in.
     let held = orbe(&["step", "20ms", "--json"]).ok().json();
     let mut found = listed(&held);
     found.sort();
@@ -1399,7 +1401,9 @@ fn an_led_with_no_series_resistor_warns_and_holds_its_pin_low() {
 
     let card = runtime.orbe(dir, &["part", "led-5mm"]).ok().stdout;
     assert!(
-        card.contains("ratings\n  current  30 mA\n  power  75 mW\n"),
+        card.contains(
+            "ratings\n  current  30 mA, mean with a 1 ms time constant\n  power  75 mW, mean with a 10.2 ms time constant\n"
+        ),
         "{card}"
     );
 }
@@ -1430,7 +1434,7 @@ fn a_resistor_over_its_power_rating_warns() {
         panic!("{open}");
     };
     // 10 ohm on 5V is about 2.16 W from the first step, over the 0.25 W rating now. Held, the
-    // average over 10.2 ms crosses 0.25 W in about 1.2 ms.
+    // mean with a 10.2 ms time constant crosses 0.25 W after `tau * ln(2.16 / 1.91)`, 1.26 ms.
     assert_eq!(power["code"], "rating.power");
     assert_eq!(power["refs"][0], "#r9.p");
     let data = &power["data"];
@@ -1440,10 +1444,13 @@ fn a_resistor_over_its_power_rating_warns() {
         "{power}"
     );
     let held = data["held_ps"].as_f64().unwrap();
-    assert!((held / 1.18e9 - 1.0).abs() < 0.02, "{power}");
+    assert!((held / 1.256e9 - 1.0).abs() < 0.02, "{power}");
     runtime.orbe(dir, &["close"]).ok();
     let card = runtime.orbe(dir, &["part", "resistor-axial"]).ok().stdout;
-    assert!(card.contains("ratings\n  power  250 mW\n"), "{card}");
+    assert!(
+        card.contains("ratings\n  power  250 mW, mean with a 10.2 ms time constant\n"),
+        "{card}"
+    );
 }
 
 #[test]

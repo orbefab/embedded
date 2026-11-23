@@ -1,3 +1,4 @@
+use crate::netlist::Rating;
 use serde::Deserialize;
 
 use orbe_model::Time;
@@ -247,7 +248,7 @@ impl Kind for Potentiometer {
     fn quantities(&self) -> &'static [Quantity] {
         &[]
     }
-    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+    fn ratings(&self) -> (Option<(Quantity, &Rating)>, Option<&Rating>) {
         (None, None)
     }
     fn observe(&self, _probe: &Probe<'_>, _at: Time, _side: Side) -> Option<Observed> {

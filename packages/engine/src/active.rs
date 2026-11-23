@@ -1,10 +1,10 @@
 //! The active chip seam: a chip whose core runs on the circuit's clock. Its core sees the time,
 //! names its own future events, holds state no stamp reads, and samples a voltage at a time it
-//! picks. The circuit sees only its drive image, one `Drive` per output pin. `docs/engine/engine.md`,
-//! Active chips, holds the loop's protocol.
+//! picks. The circuit sees its drive image, one `Drive` per output pin, and a device's draw from
+//! its supply. `docs/engine/engine.md`, Active chips, holds the loop's protocol.
 
 use orbe_mcu::{Frame, Phase};
-use orbe_model::{Drawn, Drive, Event, Quantity, Shows, Stop, Time};
+use orbe_model::{Draw, Drawn, Drive, Event, Quantity, Shows, Stop, Time};
 
 use crate::netlist::{NetId, PartId};
 
@@ -108,6 +108,9 @@ pub(crate) struct Chip {
     /// Its own draw from its supply, one conductance while it runs and another while a reset
     /// holds it. `None` on a chip that draws nothing but what its outputs pass.
     pub(crate) supply: Option<Supply>,
+    /// The supply and ground nets its device's [`Draw`] runs between. `None` on a chip whose
+    /// core draws nothing that way.
+    pub(crate) draw: Option<(NetId, NetId)>,
     /// The records it takes.
     pub(crate) takes: Takes,
     /// The core at power-on.
@@ -212,6 +215,16 @@ impl Core {
             Core::Mcu(ref mcu) => mcu.drive(),
             #[cfg(test)]
             Core::Script(ref core) => core.drive(),
+        }
+    }
+
+    /// What its device draws from its supply, as at its last stop. Only a device draws so.
+    pub(crate) fn draw(&self) -> Draw {
+        match *self {
+            Core::Device(ref core) => core.draw(),
+            Core::Mcu(_) => Draw::NONE,
+            #[cfg(test)]
+            Core::Script(_) => Draw::NONE,
         }
     }
 
@@ -394,12 +407,19 @@ pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
     }
 }
 
-/// The drops are sources, so they scale.
-pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, source_scale: f64) {
+/// The drops are sources, so they scale. A device's draw is linearised at `x`, the iterate:
+/// its current there, and its slope as a conductance.
+pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, x: &Solution, source_scale: f64) {
     let drive = core.drive();
     debug_assert_eq!(drive.len(), chip.outputs.len());
     if let Some(supply) = chip.supply {
         sys.conductance(supply.vcc, supply.gnd, supply.conductance(core));
+    }
+    if let Some((vcc, gnd)) = chip.draw {
+        let volts = x.voltage(vcc) - x.voltage(gnd);
+        let (amps, slope) = core.draw().at(volts);
+        sys.conductance(vcc, gnd, slope);
+        sys.current(vcc, gnd, amps - slope * volts);
     }
     let pulled_down = core.pulled_down();
     debug_assert!(pulled_down.is_empty() || pulled_down.len() == chip.outputs.len());
@@ -992,9 +1012,11 @@ impl Actives {
             ahead.rewind(world, committed, at);
             let image = ahead.core.drive().to_vec();
             let pulled_down = ahead.core.pulled_down().to_vec();
+            let draw = ahead.core.draw();
             changed |= image != committed.drive()
                 || pulled_down != committed.pulled_down()
-                || ahead.core.held() != committed.held();
+                || ahead.core.held() != committed.held()
+                || draw != committed.draw();
             if stop.is_some_and(|stop| stop.sample) {
                 let volts: Vec<f64> = circuit.actives[k]
                     .samples
@@ -1013,8 +1035,12 @@ impl Actives {
                 ahead.core.event(world, at, event.event());
             }
             assert_eq!(
-                (ahead.core.drive(), ahead.core.pulled_down()),
-                (&image[..], &pulled_down[..]),
+                (
+                    ahead.core.drive(),
+                    ahead.core.pulled_down(),
+                    ahead.core.draw()
+                ),
+                (&image[..], &pulled_down[..], draw),
                 "a sample, an input, a record or an event at a landing never changes an image"
             );
             ahead.commit(committed, &mut self.staged);

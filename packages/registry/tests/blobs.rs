@@ -293,8 +293,11 @@ fn the_catalog_esp32s3_parts_build_with_the_rom_and_the_app_examples() {
     assert_eq!(rom["bytes"], 949_552, "{rom}");
     assert!(paths.contains(&"hello_world.bin"), "{paths:?}");
     assert!(paths.contains(&"partition-table.bin"), "{paths:?}");
-    for id in ["esp32s3-wroom-1-n16r8", "esp32s3-devkitc-1"] {
-        let item = record(&registry.output, &format!("{id}@0.2.0"));
+    for (id, version) in [
+        ("esp32s3-wroom-1-n16r8", "0.2.0"),
+        ("esp32s3-devkitc-1", "0.2.1"),
+    ] {
+        let item = record(&registry.output, &format!("{id}@{version}"));
         for file in item["files"].as_array().unwrap() {
             let path = file["path"].as_str().unwrap();
             assert!(!path.ends_with(".bin"), "{id} ships {path}");

@@ -608,3 +608,91 @@ fn a_record_does_not_go_on_through_dout_and_says_so_once() {
         )]
     );
 }
+
+/// `packages/engine/tests/circuits/ws2812-replay` cut to 16 LEDs that draw 12 mA a channel and
+/// 1 mA idle down to 3.7 V, fed from 5 V through `ohms` on net `vled`, and sent full white.
+fn behind(ohms: f64) -> Vec<u8> {
+    let path = repo("packages/engine/tests/circuits/ws2812-replay/netlist.json");
+    let mut netlist: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    netlist["analysis"]["transient"]["stop_ps"] = 5_000_000_000u64.into();
+    netlist["nets"].as_array_mut().unwrap().push("vled".into());
+    let amps = |value: f64| serde_json::json!({ "value": value, "unit": "A" });
+    let frame: Vec<_> = train(&[255; 48])
+        .into_iter()
+        .map(|(level, ps)| serde_json::json!({ "level": level, "ps": ps }))
+        .collect();
+    let parts = netlist["parts"].as_array_mut().unwrap();
+    for part in parts.iter_mut() {
+        if part["kind"] == "ws2812" {
+            part["leds"] = 16.into();
+            part["pins"]["VCC"] = "vled".into();
+            part["draw"] = serde_json::json!({
+                "channel_current": amps(0.012),
+                "idle_current": amps(0.001),
+                "holds_above": { "value": 3.7, "unit": "V" },
+            });
+        }
+        if part["kind"] == "pulses_replay" {
+            part["events"] = serde_json::json!([{ "t_ps": 1_000_000_000u64, "pulses": frame }]);
+        }
+    }
+    parts.push(serde_json::json!({
+        "name": "rs",
+        "kind": "resistor",
+        "pins": { "a": "v5", "b": "vled" },
+        "resistance": { "value": ohms, "unit": "ohm" },
+        "ratings": { "power": null },
+    }));
+    serde_json::to_vec(&netlist).unwrap()
+}
+
+/// The supply where `ohms` from 5 V carries what the chain draws there, by bisection.
+fn balance(ohms: f64, draw: orbe_model::Draw) -> f64 {
+    let (mut low, mut high) = (0.0, 5.0);
+    for _ in 0..100 {
+        let mid = (low + high) / 2.0;
+        if (5.0 - mid) / ohms > draw.at(mid).0 {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    low
+}
+
+/// Full white on 16 LEDs is 592 mA, far more than 100 ohm or 1 kohm passes from 5 V. The
+/// draw fades below 3.7 V, so the chain's supply settles where the resistor carries the faded
+/// draw, a few hundred millivolts up, and never goes below ground on the way.
+#[test]
+fn a_chain_behind_100_ohm_or_1_kohm_settles_above_ground_where_the_resistor_feeds_it() {
+    use orbe_engine::Session;
+    use orbe_engine::name::Ref;
+    use orbe_model::Time;
+    let vled: Ref = "#net.vled".parse().unwrap();
+    let white = orbe_model::Draw {
+        amps: 16.0 * 0.037,
+        holds_above_v: 3.7,
+    };
+    for ohms in [100.0, 1000.0] {
+        let json = behind(ohms);
+        let mut session = Session::open(netlist::parse(&json).unwrap()).unwrap();
+        let mut lowest = f64::INFINITY;
+        for k in 1..=500 {
+            session.advance_to(Time::from_ps(k * 10_000_000));
+            assert!(
+                session.fault().is_none(),
+                "{ohms} ohm: {:?}",
+                session.fault()
+            );
+            lowest = lowest.min(session.probe().get(&vled).unwrap().get());
+        }
+        let settled = session.probe().get(&vled).unwrap().get();
+        let expected = balance(ohms, white);
+        assert!(lowest >= 0.0, "{ohms} ohm: vled fell to {lowest} V");
+        assert!(
+            (settled - expected).abs() < 1e-3 && settled > 0.05,
+            "{ohms} ohm: vled {settled} V against {expected} V"
+        );
+    }
+}

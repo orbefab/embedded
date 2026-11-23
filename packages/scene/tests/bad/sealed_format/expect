@@ -1,1 +1,1 @@
-part_format parts/led-5mm/part.jsonc:3:13 | this project needs a newer orbe | this binary reads format 1, 2, 3, 4
+part_format parts/led-5mm/part.jsonc:3:13 | this project needs a newer orbe | this binary reads format 1, 2, 3, 4, 5

@@ -476,7 +476,7 @@ fn a_part_this_orbe_reads_is_installed() {
 #[test]
 fn a_part_in_a_newer_format_is_not_written() {
     let (_kept, reg) = cloned_registry();
-    raise_part_format(&reg, "resistor-axial", 5);
+    raise_part_format(&reg, "resistor-axial", 6);
     let dir = tempfile::tempdir().unwrap();
     let (code, stdout, stderr) = run(dir.path(), &["add", "resistor-axial"], &file_template(&reg));
     assert_eq!(code, 1, "{stdout}{stderr}");
@@ -484,7 +484,7 @@ fn a_part_in_a_newer_format_is_not_written() {
     assert!(stderr.starts_with("error[part_format]:"), "{stderr}");
     assert!(
         stderr.contains(
-            "resistor-axial: format 5 is newer than this binary reads; this project needs a newer orbe. nothing was written\n"
+            "resistor-axial: format 6 is newer than this binary reads; this project needs a newer orbe. nothing was written\n"
         ),
         "{stderr}"
     );
@@ -498,7 +498,7 @@ fn a_part_in_a_newer_format_is_not_written() {
 #[test]
 fn a_block_whose_part_needs_a_newer_orbe_is_not_written() {
     let (_kept, reg) = cloned_registry();
-    raise_part_format(&reg, "trimmer-3362p", 5);
+    raise_part_format(&reg, "trimmer-3362p", 6);
     let dir = tempfile::tempdir().unwrap();
     let (code, stdout, stderr) = run(
         dir.path(),
@@ -509,7 +509,7 @@ fn a_block_whose_part_needs_a_newer_orbe_is_not_written() {
     assert!(stdout.is_empty(), "{stdout}");
     assert!(stderr.starts_with("error[part_format]:"), "{stderr}");
     assert!(
-        stderr.contains("trimmer-3362p: format 5 is newer than this binary reads"),
+        stderr.contains("trimmer-3362p: format 6 is newer than this binary reads"),
         "{stderr}"
     );
     assert!(stderr.contains("nothing was written"), "{stderr}");

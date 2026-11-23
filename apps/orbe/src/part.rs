@@ -97,7 +97,8 @@ pub fn text(card: &Card, breadboard: Option<&str>) -> String {
             (Some(value), Some(unit)) => si_amount(value, unit),
             _ => "unrated".to_string(),
         };
-        lines.push(format!("  {}  {shown}", rating.name));
+        let basis = rating.basis.as_ref().map(basis_text).unwrap_or_default();
+        lines.push(format!("  {}  {shown}{basis}", rating.name));
     }
     lines.push(String::new());
     lines.push("not simulated".into());
@@ -295,5 +296,25 @@ fn maker_line(card: &Card) -> Option<String> {
 fn push_or_none(lines: &mut Vec<String>, empty: bool) {
     if empty {
         lines.push("  none".into());
+    }
+}
+
+/// `, peak`, or `, mean with a 54.5 ms time constant`, from a rating's `basis`.
+fn basis_text(basis: &serde_json::Value) -> String {
+    if basis.as_str() == Some("peak") {
+        return ", peak".into();
+    }
+    let sustained = &basis["sustained"];
+    let average = match sustained["average"].as_str() {
+        Some("rms") => "RMS",
+        Some("mean") => "mean",
+        _ => return String::new(),
+    };
+    match sustained["tau"]["value"].as_f64() {
+        Some(seconds) => format!(
+            ", {average} with a {} time constant",
+            si_amount(seconds, "s")
+        ),
+        None => String::new(),
     }
 }

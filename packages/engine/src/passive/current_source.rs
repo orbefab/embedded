@@ -1,3 +1,4 @@
+use crate::netlist::Rating;
 use orbe_model::Time;
 use serde::Deserialize;
 
@@ -88,7 +89,7 @@ impl Kind for CurrentSource {
     fn quantities(&self) -> &'static [Quantity] {
         TWO_PIN
     }
-    fn ratings(&self) -> (Option<(Quantity, &Value)>, Option<&Value>) {
+    fn ratings(&self) -> (Option<(Quantity, &Rating)>, Option<&Rating>) {
         (None, None)
     }
     /// The current into pin `p`.
