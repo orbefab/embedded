@@ -16,7 +16,7 @@
     "bb": { "at": [0, 0, 0] },
     "nano": { "on": { "D13": "bb.d1" } },
     "rs": { "on": { "a": "bb.f18" } }, // b in f22, the buzzer's + strip
-    "bz1": { "on": { "+": "bb.h22" } }, // - about three columns along, in column 25
+    "bz1": { "on": { "+": "bb.i22" } }, // - about three columns along, in column 25
     "q1": { "on": { "collector": "bb.f25" } }, // base in f26, emitter in f27
     "rb": { "on": { "a": "bb.d22" } }, // b in d26, across the channel from the base
   },
