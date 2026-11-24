@@ -185,6 +185,19 @@ fn the_nano_3v3_pin_follows_the_ch340g_and_warns_past_its_rating() {
     let v = labeled(&light.stdout, "nano.3V3");
     assert!((v - 3.3).abs() < 0.05, "3V3 {v}\n{}", light.stdout);
 
+    // 115 ohm draws ~28.5 mA, just under the CH340G's 30 mA limit: no warning.
+    let just_under = run_scene(
+        "115",
+        "open\nstep 10ms\nget @nano.3V3\nexpect no diagnostics\n",
+    );
+    assert_eq!(
+        just_under.code, 0,
+        "{}{}",
+        just_under.stdout, just_under.stderr
+    );
+    let v = labeled(&just_under.stdout, "nano.3V3");
+    assert!((v - 3.27).abs() < 0.05, "3V3 {v}\n{}", just_under.stdout);
+
     let heavy = run_scene(
         "10",
         "open\nstep 10ms\nget @nano.3V3\nexpect @nano.3V3 < 5V\n",
@@ -196,9 +209,74 @@ fn the_nano_3v3_pin_follows_the_ch340g_and_warns_past_its_rating() {
         heavy.stdout
     );
     assert!(
+        heavy.stdout.contains("warning[regulator.current_limit]"),
+        "{}",
+        heavy.stdout
+    );
+    assert!(
+        heavy.stdout.contains("nano.3V3") && heavy.stdout.contains("30 mA"),
+        "{}",
+        heavy.stdout
+    );
+    assert!(
         heavy.stdout.contains("usb_serial__rail"),
         "{}",
         heavy.stdout
+    );
+
+    // Power-on charging of the Nano's 3V3 decoupling cap (c_usb_a = 100 nF) from 0 V takes ~11 us
+    // at 30 mA and must not raise regulator.current_limit.
+    let power_on = project("open\nstep 10ms\nget @nano.3V3\nsnapshot\nexpect @nano.3V3 > 3.2V\n");
+    fs::write(power_on.path().join("scene.jsonc"), scene("3300")).unwrap();
+    let nano_part = power_on.path().join("parts/nano-board/part.jsonc");
+    let nano_text = fs::read_to_string(&nano_part).unwrap();
+    let needle = r#""c_usb_a": { "type": "capacitor-0603","#;
+    assert!(nano_text.contains(needle), "{nano_text}");
+    fs::write(
+        &nano_part,
+        nano_text.replace(
+            needle,
+            r#""c_usb_a": { "type": "capacitor-0603", "initial": "0","#,
+        ),
+    )
+    .unwrap();
+    let startup = orbe(power_on.path(), &["test", "-v"]);
+    assert_eq!(startup.code, 0, "{}{}", startup.stdout, startup.stderr);
+    assert!(
+        !startup.stdout.contains("regulator.current_limit"),
+        "{}",
+        startup.stdout
+    );
+
+    // Charging a 10 uF bypass capacitor on the Nano's 5V rail from 0 V through the onboard
+    // AMS1117 (powered from VIN = 9 V) takes ~17 us and stays free of regulator.current_limit.
+    let vin_startup = project("open\nstep 10ms\nget @nano.5V\nsnapshot\nexpect @nano.5V high\n");
+    fs::write(
+        vin_startup.path().join("scene.jsonc"),
+        r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "jack": { "type": "barrel-jack-dc21", "voltage": 9 },
+    "c_bypass": { "type": "capacitor-tantalum-3216", "capacitance": "10u", "initial": "0" }
+  },
+  "wires": [
+    ["jack.center", "nano.VIN"], ["jack.sleeve", "nano.GND"],
+    ["c_bypass.pos", "nano.5V"], ["c_bypass.neg", "nano.GND"]
+  ]
+}"#,
+    )
+    .unwrap();
+    let vin_power_on = orbe(vin_startup.path(), &["test", "-v"]);
+    assert_eq!(
+        vin_power_on.code, 0,
+        "{}{}",
+        vin_power_on.stdout, vin_power_on.stderr
+    );
+    assert!(
+        !vin_power_on.stdout.contains("regulator.current_limit"),
+        "{}",
+        vin_power_on.stdout
     );
 
     let dead = project("open\nstep 10ms\nget @nano.3V3\nexpect @nano.3V3 < 1V\n");

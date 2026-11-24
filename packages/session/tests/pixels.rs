@@ -347,3 +347,49 @@ fn power_loss_clears_latch_time_until_a_new_frame_latches() {
         "second latch {second_latched} should be after first {first_latched}"
     );
 }
+
+#[test]
+fn rainbow_on_nano_3v3_sags_resets_pixels_and_warns_regulator_current_limit() {
+    let mut live = open_stick(Some("nano.3V3"));
+    let stepped = run(&mut live, "step 20ms");
+    assert!(stepped.ok(), "{}", stepped.text());
+
+    for n in 1..=8 {
+        let reply = run(&mut live, &format!("get @stick.px{n}.color"));
+        assert_eq!(
+            reply.text(),
+            format!("stick.px{n}.color rgb(0,0,0) not latched yet"),
+            "px{n}"
+        );
+    }
+
+    let snapshot = run(&mut live, "snapshot");
+    let snapshot_text = snapshot.text();
+    assert!(
+        snapshot_text.contains("warning[regulator.current_limit]"),
+        "{snapshot_text}"
+    );
+    assert!(
+        snapshot_text.contains("#nano__usb_serial__rail.pin.out (nano.3V3)"),
+        "{snapshot_text}"
+    );
+    assert!(
+        snapshot_text.contains("can give 30 mA at 3.3 V"),
+        "{snapshot_text}"
+    );
+    assert!(
+        snapshot_text.contains("has dropped as low as 3.13 V"),
+        "{snapshot_text}"
+    );
+
+    let json = snapshot.json();
+    let limits: Vec<_> = json["data"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "regulator.current_limit")
+        .collect();
+    assert_eq!(limits.len(), 1, "{limits:?}");
+    let no_diag = run(&mut live, "expect no diagnostics");
+    assert_eq!(no_diag.error.as_ref().unwrap().code, Code::ExpectFailed);
+}

@@ -914,7 +914,34 @@ fn shown_message(code: &str, json: &Value) -> String {
     if code == "rating.voltage" {
         return with_over(message, json);
     }
+    if code == "regulator.current_limit"
+        && let Some(text) = regulator_limit_message(message, json)
+    {
+        return text;
+    }
     message.to_string()
+}
+
+fn regulator_limit_message(message: &str, json: &Value) -> Option<String> {
+    let data = &json["data"];
+    let limit = data["limit"].as_f64()?;
+    let target = data["target"].as_f64()?;
+    let current = data["current"].as_f64()?;
+    let voltage = data["voltage"].as_f64()?;
+    let duration = data["over_ps"]
+        .as_u64()
+        .filter(|over| *over > 0)
+        .map(|over| format!(" for {}", Duration::from_ps(over)))
+        .unwrap_or_default();
+    let end = message.find(" regulator output ")?;
+    let head = &message[..end];
+    Some(format!(
+        "{head} regulator output can give {} at {} V; the circuit asks for more, so it is giving {} and has dropped as low as {} V{duration}",
+        rated_current(limit),
+        significant_text(target),
+        rated_current(current),
+        significant_text(voltage),
+    ))
 }
 
 fn with_over(message: &str, json: &Value) -> String {
