@@ -958,3 +958,115 @@ fn a_stock_spi_into_hc595_stops_with_link_unsupported() {
         assert!(text.contains("shiftOut or bit-banged SPI"), "{text}");
     }
 }
+
+/// Five `tone(4, f, 200)` notes back to back with no `noTone()` between play each note's
+/// frequency on GPIO4 at 50% duty.
+#[test]
+fn a_stock_tone_melody_without_notone_plays_each_note() {
+    let (project, mut live) = open("esp32s3-stock-tonemelody");
+    let path = project.path();
+    for (i, freq) in [(0, 262u64), (1, 294), (2, 330), (3, 349), (4, 392)] {
+        run(
+            &mut live,
+            path,
+            &format!(r#"step --until serial contains "note {i} {freq}""#),
+        );
+        let (period, high_ps) = cycle_on(&mut live, path, "GPIO4");
+        let got_hz = (1_000_000_000_000 + period / 2) / period;
+        assert!(
+            got_hz.abs_diff(freq) <= 1,
+            "note {i}: got {got_hz} Hz, want {freq} Hz (period {period} ps)"
+        );
+        let want = high(period, 0x1ff, 10);
+        assert!(
+            near(high_ps, want, TICK),
+            "note {i}: high {high_ps} ps, want {want}"
+        );
+    }
+    run(&mut live, path, r#"step --until serial contains "done""#);
+    run(&mut live, path, "expect no diagnostics");
+}
+
+/// `ledcAttach(4, 1000, 10)` then `ledcWriteTone(4, 440)` then `ledcWriteTone(4, 880)` plays
+/// 440 Hz then 880 Hz at 50% duty on GPIO4.
+#[test]
+fn a_stock_ledc_write_tone_changes_frequency_while_running() {
+    let (project, mut live) = open("esp32s3-stock-ledctone");
+    let path = project.path();
+    for (marker, freq) in [("tone440", 440u64), ("tone880", 880)] {
+        run(
+            &mut live,
+            path,
+            &format!(r#"step --until serial contains "{marker}""#),
+        );
+        let (period, high_ps) = cycle_on(&mut live, path, "GPIO4");
+        let got_hz = (1_000_000_000_000 + period / 2) / period;
+        assert!(
+            got_hz.abs_diff(freq) <= 1,
+            "{marker}: got {got_hz} Hz, want {freq} Hz (period {period} ps)"
+        );
+        let want = high(period, 0x1ff, 10);
+        assert!(
+            near(high_ps, want, TICK),
+            "{marker}: high {high_ps} ps, want {want}"
+        );
+    }
+    run(&mut live, path, r#"step --until serial contains "done""#);
+    run(&mut live, path, "expect no diagnostics");
+}
+
+/// `ledcAttach(4, 1000, 10)`, `ledcWrite(4, 256)`, then `ledcChangeFrequency(4, 2000, 10)` keeps
+/// 25% duty while moving GPIO4 from 1 kHz to 2 kHz.
+#[test]
+fn a_stock_ledc_change_frequency_keeps_duty_share_while_running() {
+    let (project, mut live) = open("esp32s3-stock-ledcfreq");
+    let path = project.path();
+    for (marker, want_period) in [("first", MS), ("second", 500 * US)] {
+        run(
+            &mut live,
+            path,
+            &format!(r#"step --until serial contains "{marker}""#),
+        );
+        let (period, high_ps) = cycle_on(&mut live, path, "GPIO4");
+        assert!(
+            near(period, want_period, 1),
+            "{marker}: period {period} ps, want {want_period}"
+        );
+        let want_high = high(period, 256, 10);
+        assert!(
+            near(high_ps, want_high, TICK),
+            "{marker}: high {high_ps} ps, want {want_high}"
+        );
+    }
+    run(&mut live, path, r#"step --until serial contains "done""#);
+    run(&mut live, path, "expect no diagnostics");
+}
+
+/// Two pins attached at the same frequency and resolution share one timer; `ledcChangeFrequency`
+/// on one moves both pins to the new frequency while each keeps its own duty.
+#[test]
+fn a_stock_ledc_shared_timer_frequency_change_moves_both_pins() {
+    let (project, mut live) = open("esp32s3-stock-ledcshared");
+    let path = project.path();
+    for (marker, want_period) in [("first", MS), ("second", 500 * US)] {
+        run(
+            &mut live,
+            path,
+            &format!(r#"step --until serial contains "{marker}""#),
+        );
+        for (pin, duty) in [("GPIO4", 256u64), ("GPIO5", 768)] {
+            let (period, high_ps) = cycle_on(&mut live, path, pin);
+            assert!(
+                near(period, want_period, 1),
+                "{marker} {pin}: period {period} ps, want {want_period}"
+            );
+            let want_high = high(period, duty, 10);
+            assert!(
+                near(high_ps, want_high, TICK),
+                "{marker} {pin}: high {high_ps} ps, want {want_high}"
+            );
+        }
+    }
+    run(&mut live, path, r#"step --until serial contains "done""#);
+    run(&mut live, path, "expect no diagnostics");
+}
