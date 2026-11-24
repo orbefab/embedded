@@ -359,3 +359,141 @@ fn a_weak_five_volt_feed_warns_that_the_moving_draw_sags_the_rail() {
         );
     }
 }
+
+fn replay_pulses(width_us: u64, count: u64) -> String {
+    let width_ps = width_us * 1_000_000;
+    let events: String = (1..=count)
+        .map(|k| {
+            format!(
+                r#"{{ "t_ps": {}, "pulses": [{{ "level": true, "ps": {width_ps} }}] }}"#,
+                k * 20 * MS
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        r#"{{ "name": "drv", "kind": "pulses_replay",
+              "pins": {{ "VCC": "v5", "GND": "gnd", "OUT": "sig" }},
+              "idle": false,
+              "output": {{
+                "high_drop": {{ "value": 0.0, "unit": "V" }},
+                "high_resistance": {{ "value": 25.0, "unit": "ohm" }},
+                "low_drop": {{ "value": 0.0, "unit": "V" }},
+                "low_resistance": {{ "value": 25.0, "unit": "ohm" }}
+              }},
+              "events": [{events}] }}"#
+    )
+}
+
+fn open_replay_series(ohms: f64, width_us: u64, stop: u64, step: u64) -> Session {
+    let json = format!(
+        r#"{{ "version": 1, "seed": 0,
+             "analysis": {{ "transient": {{ "stop_ps": {stop}, "max_step_ps": {step}, "grid_ps": {MS} }} }},
+             "ground": "gnd", "nets": ["gnd", "v5", "vservo", "sig"],
+             "parts": [ {supply}, {driver}, {servo} ] }}"#,
+        supply = series(ohms),
+        driver = replay_pulses(width_us, stop / (20 * MS)),
+        servo = servo()
+    );
+    Session::open_json(json.as_bytes(), &Blobs::new()).unwrap_or_else(|err| {
+        panic!("the netlist did not open: {err:?}\n{json}");
+    })
+}
+
+/// Chip-driven pulses have no voltage-source ramp breakpoint after the falling edge. On a feed
+/// that collapses under the 140 mA moving draw, the shaft must hold at centre across pulses
+/// instead of ratcheting by one solver step per pulse, and on a sagged feed above 3 V the slew
+/// must not depend on `max_step_ps`.
+#[test]
+fn chip_pulses_on_a_weak_supply_do_not_ratchet_or_depend_on_max_step() {
+    let rail: Ref = "#net.vservo".parse().unwrap();
+    let current: Ref = "#rs.i".parse().unwrap();
+    let stop = 300 * MS;
+
+    for ohms in [33.0, 47.0, 68.0] {
+        for width_us in [544, 1_472, 2_400] {
+            let mut session = open_replay_series(ohms, width_us, stop, 10 * MS);
+            for pulse in 1..=15 {
+                let t = pulse * 20 * MS;
+                let status = session.advance_to(Time::from_ps(t));
+                assert_eq!(
+                    status,
+                    if t == stop {
+                        Status::Stopped
+                    } else {
+                        Status::Running
+                    }
+                );
+                let horn = angle(&session);
+                assert!(
+                    (horn - 90.0).abs() < 0.01,
+                    "R={ohms} ohm, width={width_us} us ratcheted to {horn} at {} ms",
+                    pulse * 20
+                );
+            }
+            let text: String = session
+                .diagnostics()
+                .iter()
+                .map(|diagnostic| diagnostic.message_with(&|name| name.to_string()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                text.contains("sags under the servo's moving draw"),
+                "R={ohms} ohm, width={width_us} us did not warn supply_sag: {text}"
+            );
+            let (volts, amps) = feed(&session, &rail, &current);
+            let hold = 5.0 - 0.005 * ohms;
+            assert!(
+                (volts - hold).abs() < 0.02 && (amps - 0.005).abs() < 0.001,
+                "R={ohms} ohm settled at {volts:.3} V and {amps:.4} A"
+            );
+        }
+    }
+
+    for ohms in [10.0, 20.0] {
+        for (width_us, target) in [(544u64, 4.168f64), (2_400u64, 180.0f64)] {
+            let mut traces = Vec::new();
+            for step in [MS, 10 * MS] {
+                let mut session = open_replay_series(ohms, width_us, stop, step);
+                let mut rows = Vec::new();
+                for pulse in 1..=15 {
+                    let t = pulse * 20 * MS;
+                    let status = session.advance_to(Time::from_ps(t));
+                    assert_eq!(
+                        status,
+                        if t == stop {
+                            Status::Stopped
+                        } else {
+                            Status::Running
+                        }
+                    );
+                    rows.push(angle(&session));
+                }
+                let warnings = format!("{:?}", session.diagnostics());
+                assert!(
+                    warnings.contains("Supply"),
+                    "R={ohms} ohm, width={width_us} us did not warn supply: {warnings}"
+                );
+                traces.push(rows);
+            }
+            for (k, (&fine, &coarse)) in traces[0].iter().zip(&traces[1]).enumerate() {
+                assert!(
+                    (fine - coarse).abs() < 0.01,
+                    "R={ohms} ohm, width={width_us} us at {} ms: 1 ms step {fine} vs 10 ms step {coarse}",
+                    (k + 1) * 20
+                );
+                if target > 90.0 {
+                    assert!(
+                        (90.0..=target + 0.01).contains(&coarse),
+                        "R={ohms} ohm overshot {target}: {coarse}"
+                    );
+                } else {
+                    assert!(
+                        (target - 0.01..=90.0).contains(&coarse),
+                        "R={ohms} ohm overshot {target}: {coarse}"
+                    );
+                }
+            }
+        }
+    }
+}

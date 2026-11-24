@@ -1,5 +1,7 @@
 //! A card for every catalog part, and how search ranks them.
 
+mod common;
+
 use std::fs;
 use std::path::PathBuf;
 
@@ -393,24 +395,7 @@ fn search_finds_a_block_by_a_word_of_its_id() {
         .into_iter()
         .map(|card| card.name)
         .collect();
-    assert_eq!(
-        names,
-        [
-            "devkitc-button-led",
-            "nano-7seg-count",
-            "nano-button-led",
-            "nano-buzzer",
-            "nano-lcd1602-i2c",
-            "nano-led-fade",
-            "nano-light-comparator",
-            "nano-neopixel-stick",
-            "nano-oled",
-            "nano-relay-led",
-            "nano-servo-sweep",
-            "nano-shift-leds",
-            "uno-button-led",
-        ]
-    );
+    assert_eq!(names, common::block_ids());
 }
 
 #[test]

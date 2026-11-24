@@ -192,8 +192,8 @@ export type State =
 /** Everything a viewer gets from its session's source. */
 export type ToViewer = SceneMessage | FrameMessage | ClosedMessage;
 
-/** A world quantity's name: `temperature`, `humidity` or `light`. */
-export type WorldName = "temperature" | "humidity" | "light";
+/** A world quantity's name: `temperature`, `humidity`, `light` or `pressure`. */
+export type WorldName = "temperature" | "humidity" | "light" | "pressure";
 
 /** A world quantity the scene declares, as a page shows it. */
 export interface WorldQuantity {

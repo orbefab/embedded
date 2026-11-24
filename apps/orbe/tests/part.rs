@@ -335,22 +335,8 @@ fn search_finds_a_block_and_part_describes_it() {
 
     let (code, stdout, stderr) = orbe(&["blocks"]);
     assert_eq!(code, 0, "{stderr}");
-    for id in [
-        "devkitc-button-led",
-        "nano-7seg-count",
-        "nano-button-led",
-        "nano-buzzer",
-        "nano-lcd1602-i2c",
-        "nano-led-fade",
-        "nano-light-comparator",
-        "nano-neopixel-stick",
-        "nano-oled",
-        "nano-relay-led",
-        "nano-servo-sweep",
-        "nano-shift-leds",
-        "uno-button-led",
-    ] {
-        assert!(stdout.contains(id), "{stdout}");
+    for id in common::block_ids() {
+        assert!(stdout.contains(&id), "{stdout}");
     }
 
     let (code, stdout, stderr) = orbe(&["part", "nano-led-fade"]);

@@ -99,6 +99,15 @@ fn each_condition_form_parses() {
         Condition::parse(&words("no diagnostics")).unwrap(),
         Condition::NoDiagnostics
     );
+    assert_eq!(
+        Condition::parse(&[
+            "diagnostics".into(),
+            "contains".into(),
+            "config_in_normal".into()
+        ])
+        .unwrap(),
+        Condition::DiagnosticContains(Needle::parse("config_in_normal").unwrap())
+    );
 }
 
 #[test]
@@ -268,7 +277,7 @@ fn a_bad_line_names_the_command_and_its_usage() {
         ),
         (
             "set lite 50",
-            "`lite` is not a world quantity; the quantities are temperature, humidity, light",
+            "`lite` is not a world quantity; the quantities are temperature, humidity, light, pressure",
         ),
         (
             "set light 200000",

@@ -233,6 +233,45 @@ fn a_set_drops_later_steps_and_leaves_the_other_quantity() {
     ));
 }
 
+/// `set` away from the value in force, then back, before time moves. The pending step has not
+/// taken effect, so the second set drops it and appends nothing.
+#[test]
+fn setting_a_quantity_back_before_time_moves_drops_the_pending_step() {
+    let pressure = r#"{ "value": 101325.0, "unit": "Pa" }"#;
+    let json = divider_in(
+        &format!(
+            r#""light": {}, "temperature": {}, "pressure": {pressure}"#,
+            lux(300.0),
+            deg(25.0),
+        ),
+        10_000_000_000,
+        100_000_000,
+    );
+    let cases = [
+        (Quantity::Light, 1000.0, 300.0),
+        (Quantity::Temperature, 0.0, 25.0),
+        (Quantity::Pressure, 30_000.0, 101_325.0),
+    ];
+    for (quantity, away, home) in cases {
+        let mut session = Session::open(netlist::parse(json.as_bytes()).unwrap()).unwrap();
+        let change = |value| WorldChange {
+            quantity,
+            at: Time::ZERO,
+            value: Finite::new(value).unwrap(),
+        };
+        let first = session.set(&change(away)).unwrap();
+        assert!(!first.already, "{quantity:?}");
+        assert_eq!(first.dropped, 0, "{quantity:?}");
+        let second = session.set(&change(home)).unwrap();
+        assert!(second.already, "{quantity:?}");
+        assert_eq!(second.dropped, 1, "{quantity:?}");
+        assert!(
+            event_times(&session, quantity).is_empty(),
+            "{quantity:?} kept a step"
+        );
+    }
+}
+
 /// A second `set` of a value that is pending and not yet in force changes nothing.
 #[test]
 fn a_repeated_set_of_a_pending_value_is_no_change() {

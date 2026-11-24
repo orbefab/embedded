@@ -88,6 +88,8 @@ pub(crate) fn chip(part: PartId, dev: &Ssd1306) -> Chip {
         scl: model::WATCH_SCL,
         sda: model::WATCH_SDA,
         reset: Some(model::WATCH_RES),
+        address_high: None,
+        power: &[],
     };
     Chip {
         part: Some(part),

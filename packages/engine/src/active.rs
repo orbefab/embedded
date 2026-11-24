@@ -21,7 +21,8 @@ pub(crate) mod spi;
 pub(crate) mod spi_pins;
 
 use crate::device::{
-    cst816, dht22, hc595, hd44780_i2c, pulses_replay, sg90, spi_replay, ssd1306, st77916, ws2812,
+    bmp280, cst816, dht22, hc595, hd44780_i2c, pulses_replay, sg90, spi_replay, ssd1306, st77916,
+    ws2812,
 };
 use crate::mcu::{self, Mcu, atmega328p, esp32s3};
 use native::Hosted;
@@ -468,6 +469,7 @@ pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
         Active::Hd44780I2c(panel) => hd44780_i2c::chip(part, panel),
         Active::Cst816(dev) => cst816::chip(part, dev),
         Active::Dht22(dev) => dht22::chip(part, dev),
+        Active::Bmp280(dev) => bmp280::chip(part, dev),
         Active::Hc595(dev) => hc595::chip(part, dev),
         Active::Esp32s3(mcu) => esp32s3::chip(part, mcu),
         Active::Ws2812(chain) => ws2812::chip(part, chain),
