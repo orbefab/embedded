@@ -16,8 +16,9 @@
 //! Measurement time is the typical of Table 13: `1.5 ms + 2.0 ms * osr_t + 2.0 ms * osr_p`.
 //! Standby in normal mode is Table 11. The IIR of §3.3.3 resets when `filter` is written, and
 //! the next sample passes through. Writes to `config` while the mode is normal are ignored
-//! (§4.3.5). A mode write during a conversion waits until that conversion ends (§3.6.4); a
-//! second one before then is ignored.
+//! (§4.3.5) and warn `config_in_normal` once when the write would change `config`. A mode write
+//! during a conversion waits until that conversion ends (§3.6.4); a second one before then is
+//! ignored.
 
 use orbe_model::{
     Ack, Cx, Device, Dir, Draw, Drives, Error, I2cTarget, Params, Quantity, State, Stop, Time,
@@ -266,10 +267,15 @@ impl Bmp280 {
         self.kick(at);
     }
 
-    /// §4.3.5: a write in normal mode may be ignored. Sleep and forced take it. A change of
-    /// `filter` clears the IIR memory. `spi3w_en` names 3-wire SPI, which is not modelled.
+    /// §4.3.5: a write in normal mode may be ignored. Sleep and forced take it. A write in normal
+    /// mode that would change `config` warns `config_in_normal` once and is dropped; one that
+    /// leaves `config` unchanged stays silent. A change of `filter` clears the IIR memory.
+    /// `spi3w_en` names 3-wire SPI, which is not modelled.
     fn write_config(&mut self, cx: &mut Cx, at: Time, byte: u8) {
         if self.mem[REG_CTRL] & 0b11 == 0b11 {
+            if byte != self.mem[REG_CONFIG] {
+                cx.broke("config_in_normal", at);
+            }
             return;
         }
         let old = (self.mem[REG_CONFIG] >> 2) & 0b111;

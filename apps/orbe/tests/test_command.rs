@@ -1397,11 +1397,14 @@ fn bmp_scene(dir: &std::path::Path, extra_parts: &str, wires: &str) {
     .unwrap();
 }
 
-/// A transcript that reads one temperature and one pressure, then prints what warned.
+/// A transcript that reads one temperature and one pressure, expects the stock sketch's
+/// `config_in_normal` warning, then prints what else warned.
 const BMP_READS: &str = "open\nstep 1ms\nset temperature 20\nset pressure 101325\n\
 step --until serial contains \" Pa\" --timeout 2s\n\
 expect serial contains \"Temperature = 20.00\"\n\
-expect serial contains \"Pressure = 101325.02\"\nsnapshot\n";
+expect serial contains \"Pressure = 101325.02\"\n\
+expect diagnostics contains \"warning[chip.protocol]\"\n\
+expect diagnostics contains \"config_in_normal\"\nsnapshot\n";
 
 /// Powering the 3.3 V module from the Nano's 5V pin is past Table 3. The sensor still reads,
 /// and the run warns on VDD past 4.25 V.
@@ -1465,6 +1468,7 @@ fn an_unpowered_bmp280_holds_the_bus_and_the_sketch_never_reads() {
     let run = orbe(dir.path(), &["test", "-v"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(!run.stdout.contains("Temperature ="), "{}", run.stdout);
+    assert!(!run.stdout.contains("config_in_normal"), "{}", run.stdout);
 }
 
 /// `set pressure 30000` then `set pressure 101325` before time moves drops the pending step.

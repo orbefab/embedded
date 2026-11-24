@@ -27,6 +27,8 @@ pub enum Condition {
     Digit(Ref, String),
     /// `serial contains "pressed"`.
     SerialContains(Needle),
+    /// `diagnostics contains "config_in_normal"`.
+    DiagnosticContains(Needle),
     /// `no diagnostics`.
     NoDiagnostics,
 }
@@ -305,6 +307,9 @@ impl Condition {
         let words: Vec<&str> = words.iter().map(String::as_str).collect();
         match words.as_slice() {
             ["no", "diagnostics"] => Ok(Condition::NoDiagnostics),
+            ["diagnostics", "contains", text] => {
+                Ok(Condition::DiagnosticContains(Needle::parse(text)?))
+            }
             ["serial", "contains", text] => Ok(Condition::SerialContains(Needle::parse(text)?)),
             [r, first, ..] if r.starts_with('@') && first.starts_with("rgb(") => {
                 let colour = words[1..].concat();
@@ -382,6 +387,9 @@ impl fmt::Display for Condition {
             Condition::TextBlank(r) => write!(f, "{r} blank"),
             Condition::Digit(r, digit) => write!(f, "{r} {digit}"),
             Condition::SerialContains(text) => write!(f, "serial contains {:?}", text.as_str()),
+            Condition::DiagnosticContains(text) => {
+                write!(f, "diagnostics contains {:?}", text.as_str())
+            }
             Condition::NoDiagnostics => f.write_str("no diagnostics"),
         }
     }

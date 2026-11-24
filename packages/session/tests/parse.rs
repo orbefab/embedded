@@ -99,6 +99,15 @@ fn each_condition_form_parses() {
         Condition::parse(&words("no diagnostics")).unwrap(),
         Condition::NoDiagnostics
     );
+    assert_eq!(
+        Condition::parse(&[
+            "diagnostics".into(),
+            "contains".into(),
+            "config_in_normal".into()
+        ])
+        .unwrap(),
+        Condition::DiagnosticContains(Needle::parse("config_in_normal").unwrap())
+    );
 }
 
 #[test]

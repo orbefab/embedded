@@ -199,6 +199,9 @@ pub enum ProtocolRule {
     Spi,
     /// `spi3w_en` was set. 3-wire SPI is not modelled.
     Spi3w,
+    /// A `config` (0xF5) write arrived in normal mode and would have changed `config`, so it was
+    /// ignored (BST-BMP280-DS001 §4.3.5).
+    ConfigInNormal,
     /// The supply is up, and under 4.5 V. The shaft still moves, slower than at 4.8 V.
     Supply,
     /// The moving draw pulled an SG90's supply under 3.0 V. The shaft holds.
@@ -217,7 +220,7 @@ pub enum ProtocolRule {
 }
 
 impl ProtocolRule {
-    pub(crate) const ALL: [ProtocolRule; 14] = [
+    pub(crate) const ALL: [ProtocolRule; 15] = [
         ProtocolRule::Command,
         ProtocolRule::PixelFormat,
         ProtocolRule::SdaWhileSclHigh,
@@ -225,6 +228,7 @@ impl ProtocolRule {
         ProtocolRule::Interval,
         ProtocolRule::Spi,
         ProtocolRule::Spi3w,
+        ProtocolRule::ConfigInNormal,
         ProtocolRule::Supply,
         ProtocolRule::SupplySag,
         ProtocolRule::Scroll,
@@ -249,6 +253,7 @@ impl ProtocolRule {
             "interval" => Some(ProtocolRule::Interval),
             "spi" => Some(ProtocolRule::Spi),
             "spi3w" => Some(ProtocolRule::Spi3w),
+            "config_in_normal" => Some(ProtocolRule::ConfigInNormal),
             "supply" => Some(ProtocolRule::Supply),
             "supply_sag" => Some(ProtocolRule::SupplySag),
             "scroll" => Some(ProtocolRule::Scroll),
@@ -1348,6 +1353,18 @@ impl Diagnostic {
                 format!(
                     "{part} was set to 3-wire SPI, which is not modelled, breaking rule {} at {} ps, the first time",
                     rule_text(&ProtocolRule::Spi3w),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::ConfigInNormal,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} ignored a write to config (0xF5) in normal mode (BST-BMP280-DS001 §4.3.5; write sleep mode to ctrl_meas 0xF4 before config), breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::ConfigInNormal),
                     at.as_ps()
                 )
             }

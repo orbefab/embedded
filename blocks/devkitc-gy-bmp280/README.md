@@ -10,4 +10,6 @@ Rebuild `firmware/bmp280/bmp280.ino` for `esp32:esp32:esp32s3` with Adafruit BMP
 
 SPI, 3-wire SPI and the NVM copy time are not modelled. Pulling CSB low warns `spi`.
 
+The stock sketch warns `config_in_normal` because `setSampling()` writes `config` (0xF5) after `begin()` puts the chip in normal mode (§4.3.5); write sleep mode to `ctrl_meas` (0xF4) first for filter and standby settings to take effect.
+
 Check it with `orbe check scene.jsonc` and run its tests with `orbe test`.

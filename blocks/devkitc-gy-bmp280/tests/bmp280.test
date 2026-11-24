@@ -1,6 +1,8 @@
 # The module's SDO is pulled to ground, so the sketch calls begin(0x76). The compensated
 # print is the world: 20.00 °C exactly, and 101325 Pa within a few hundredths, which prints
-# as 101325.02. The sheet allows 1 °C and 1 hPa.
+# as 101325.02. The sheet allows 1 °C and 1 hPa. The stock Adafruit_BMP280 example calls
+# setSampling() after begin() already entered normal mode, so the config write is ignored
+# and warns config_in_normal (BST-BMP280-DS001 §4.3.5).
 open
 step 1ms
 set temperature 20
@@ -11,4 +13,5 @@ expect serial contains "Temperature = 20.00"
 expect serial contains "Pressure = 101325.02"
 expect @mod.VCC >= 1.71V
 expect @mod.VCC <= 3.6V
-expect no diagnostics
+expect diagnostics contains "warning[chip.protocol]"
+expect diagnostics contains "config_in_normal"
