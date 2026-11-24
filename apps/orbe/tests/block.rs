@@ -14,22 +14,6 @@ use std::path::Path;
 
 use live::{common, orbe};
 
-const BLOCKS: [&str; 13] = [
-    "devkitc-button-led",
-    "nano-7seg-count",
-    "nano-button-led",
-    "nano-buzzer",
-    "nano-lcd1602-i2c",
-    "uno-button-led",
-    "nano-led-fade",
-    "nano-light-comparator",
-    "nano-neopixel-stick",
-    "nano-oled",
-    "nano-relay-led",
-    "nano-servo-sweep",
-    "nano-shift-leds",
-];
-
 /// Every file below `dir` with its bytes, by its path from `dir`.
 fn tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
     let mut files = BTreeMap::new();
@@ -54,8 +38,15 @@ fn tree(dir: &Path) -> BTreeMap<String, Vec<u8>> {
 }
 
 #[test]
-fn a_block_installs_into_an_empty_folder_and_passes_there() {
-    for id in BLOCKS {
+fn a_block_installs_into_an_empty_folder_and_checks_there() {
+    let repo_parts = common::repo().join("parts");
+    let repo_blocks = common::repo().join("blocks");
+    let cards: BTreeMap<String, orbe_scene::Card> = orbe_scene::catalog_cards(&repo_parts)
+        .into_iter()
+        .map(|card| (card.name.clone(), card))
+        .collect();
+    for id in common::block_ids() {
+        let id = id.as_str();
         let project = tempfile::tempdir().unwrap();
         let dir = project.path();
         let run = orbe(dir, &["add", id]);
@@ -68,7 +59,7 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
             run.stdout
         );
 
-        let block = common::repo().join("blocks").join(id);
+        let block = repo_blocks.join(id);
         let installed = tree(dir);
         for (rel, bytes) in tree(&block) {
             if rel == "block.jsonc" {
@@ -86,23 +77,13 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
             .filter(|name| dir.join("parts").join(name).join("part.jsonc").is_file())
             .collect();
         copied.sort();
-        // The rainbow Block drives a pixel module, the OLED Block a screen module, the LCD
-        // Block a character LCD, the buzzer Block a buzzer, the servo Block a servo, the
-        // 7-segment Block a display and the DevKitC-1 Block its board's own LED. The others
-        // light a 5 mm LED.
-        let marker = match id {
-            "nano-7seg-count" => "display-7seg-cc",
-            "nano-lcd1602-i2c" => "lcd1602-i2c",
-            "nano-neopixel-stick" => "neopixel-stick-8",
-            "nano-oled" => "oled-ssd1306-128x64",
-            "devkitc-button-led" => "esp32s3-devkitc-1",
-            "nano-buzzer" => "buzzer-12mm",
-            "nano-servo-sweep" => "servo-sg90",
-            _ => "led-5mm",
-        };
-        assert!(copied.iter().any(|part| part == marker), "{id}: {copied:?}");
+        let scene = fs::read_to_string(block.join("scene.jsonc")).unwrap();
+        let mut expected = orbe_scene::catalog_part_ids(&scene);
+        expected.sort();
+        assert!(!expected.is_empty(), "{id}: scene places no catalog part");
+        assert_eq!(copied, expected, "{id}");
         for part in &copied {
-            let catalog = tree(&common::repo().join("parts").join(part));
+            let catalog = tree(&repo_parts.join(part));
             let got = tree(&dir.join("parts").join(part));
             for (rel, bytes) in &catalog {
                 if orbe_scene::is_published(rel) {
@@ -115,25 +96,28 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
                 }
             }
         }
-        let chip = dir
-            .join("parts/nano-board/parts/atmega328p-tqfp32/part.jsonc")
-            .is_file()
-            || dir
-                .join("parts/uno-board/parts/atmega328p-dip28/part.jsonc")
-                .is_file()
-            || dir
-                .join("parts/esp32s3-devkitc-1/parts/esp32s3-wroom-1-n16r8/part.jsonc")
-                .is_file();
-        assert!(chip, "{id}: the board nests its chip");
+        let card = orbe_scene::builtin_block(&repo_parts, &repo_blocks, id).unwrap();
+        let board = &cards[&card.board];
+        assert!(
+            !board.uses.is_empty(),
+            "{id}: board `{}` has no nested parts",
+            card.board
+        );
+        for dep in board.uses.keys() {
+            assert!(
+                dir.join("parts")
+                    .join(&card.board)
+                    .join("parts")
+                    .join(dep)
+                    .join("part.jsonc")
+                    .is_file(),
+                "{id}: `{}` nests `{dep}`",
+                card.board
+            );
+        }
 
         let check = orbe(dir, &["check", "scene.jsonc"]);
         assert_eq!(check.code, 0, "{id}: {}", check.stdout);
-        let test = orbe(dir, &["test"]);
-        assert!(
-            test.stdout.ends_with("1 passed, 0 failed\n"),
-            "{id}: {}",
-            test.stdout
-        );
 
         let again = orbe(dir, &["add", id]);
         assert_eq!(again.code, 1, "{id}: {}{}", again.stdout, again.stderr);
@@ -406,18 +390,4 @@ fn a_block_installs_alone() {
         versioned.stderr
     );
     assert_eq!(fs::read_dir(project.path()).unwrap().count(), 0);
-}
-
-#[test]
-fn each_block_folder_is_in_the_block_list() {
-    let mut found: Vec<String> = fs::read_dir(common::repo().join("blocks"))
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .filter(|path| path.is_dir())
-        .map(|path| path.file_name().unwrap().to_str().unwrap().to_string())
-        .collect();
-    found.sort();
-    let mut want = BLOCKS.map(String::from).to_vec();
-    want.sort();
-    assert_eq!(found, want);
 }

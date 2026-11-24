@@ -19,16 +19,15 @@ fn read(dir: &std::path::Path) -> Netlist {
 /// the same nets run the same simulation, and the board's empty holes add nothing to solve.
 #[test]
 fn each_block_on_its_breadboard_runs_the_netlist_of_its_circuit_wired_directly() {
-    for block in [
-        "nano-7seg-count",
-        "nano-button-led",
-        "nano-lcd1602-i2c",
-        "nano-led-fade",
-        "nano-light-comparator",
-        "nano-neopixel-stick",
-        "nano-oled",
-        "uno-button-led",
-    ] {
+    let mut blocks: Vec<String> = fs::read_dir(common::fixture("wired"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("jsonc"))
+        .map(|path| path.file_stem().unwrap().to_str().unwrap().to_string())
+        .collect();
+    blocks.sort();
+    assert!(!blocks.is_empty(), "fixtures/wired has no Block fixture");
+    for block in &blocks {
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("blocks").join(block);
         common::copy_dir(&common::repo().join("blocks").join(block), &dir);

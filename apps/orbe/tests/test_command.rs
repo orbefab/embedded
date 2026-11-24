@@ -12,32 +12,7 @@ use live::{common, failed, orbe, project, replies, replies_in};
 /// Every Block's tests pass where it sits in the repo, reading the `parts/` beside `blocks/`.
 #[test]
 fn each_block_passes() {
-    let mut ids: Vec<String> = fs::read_dir(common::repo().join("blocks"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.is_dir())
-        .map(|path| path.file_name().unwrap().to_str().unwrap().to_string())
-        .collect();
-    ids.sort();
-    assert_eq!(
-        ids,
-        [
-            "devkitc-button-led",
-            "nano-7seg-count",
-            "nano-button-led",
-            "nano-buzzer",
-            "nano-lcd1602-i2c",
-            "nano-led-fade",
-            "nano-light-comparator",
-            "nano-neopixel-stick",
-            "nano-oled",
-            "nano-relay-led",
-            "nano-servo-sweep",
-            "nano-shift-leds",
-            "uno-button-led",
-        ]
-    );
-    for id in &ids {
+    for id in common::block_ids() {
         let run = orbe(&common::repo(), &["test", &format!("blocks/{id}")]);
         assert!(
             run.stdout.ends_with("1 passed, 0 failed\n"),
