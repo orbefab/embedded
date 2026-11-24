@@ -161,6 +161,7 @@ fn bus(netlist: &Netlist) -> SpiTarget {
     SpiTarget {
         cs: net(netlist, "cs"),
         sclk: net(netlist, "sclk"),
+        pins: None,
     }
 }
 

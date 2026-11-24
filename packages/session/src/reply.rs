@@ -431,8 +431,8 @@ pub enum Reading {
 }
 
 /// What an addressable LED part last latched: one `[red, green, blue]` per LED, LED 0 first, and
-/// when. `latched_ps` is `None` before the first latch, while every LED shows the black of
-/// power-on.
+/// when. `latched_ps` is `None` before the first latch or after power loss, while every LED shows
+/// black.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Colors {
     pub leds: Vec<[u8; 3]>,

@@ -72,6 +72,15 @@
         }
       }
     },
+    "min_supply": {
+      "value": 3.0,
+      "unit": "V",
+      "source": {
+        "closed_form": {
+          "note": "SPC / SK68XX MINI-HS Rev. 04 section 8 lists VDD +3.7 V to +5.5 V and states no under-voltage floor, while ESP32-S3-DevKitC-1 ties this LED to its 3.3 V regulator (SGM2212-3.3, 3.267 V minimum). 3.0 V sits below that rail so the board LED lights while an unpowered or collapsed supply stays off."
+        }
+      }
+    },
     "dout": {
       "output": {
         "high_drop": { "value": 0.0, "unit": "V", "source": { "closed_form": { "note": "The sheet gives no DOUT output voltage. DOUT drives the next LED's DIN, which draws no current in the engine, so a high sits at VDD" } } },
@@ -109,7 +118,7 @@
     },
     {
       "what": "supply voltage",
-      "why": "Section 8 lists VDD from +3.7 V to +5.5 V. The ESP32-S3-DevKitC-1 ties this LED to 3.3 V, which is below that range. The kind does not warn there, and its draw fades below 3.7 V, to 97% at 3.3 V. Section 9 also names SK6805MINI-HS at 5 mA, and the draw is the 12 mA SK6812MINI-HS."
+      "why": "Section 8 lists VDD from +3.7 V to +5.5 V and states no under-voltage floor. Below 3.0 V the pixel ignores DIN, clears to off (leaving only the faded idle draw, 0 A at 0 V) and releases DOUT, and recovers from the next full frame once VDD returns. The ESP32-S3-DevKitC-1 ties this LED to 3.3 V, above 3.0 V and below 3.7 V; the kind does not warn there, and its draw fades below 3.7 V, to 97% at 3.3 V. Section 9 also names SK6805MINI-HS at 5 mA, and the draw is the 12 mA SK6812MINI-HS."
     },
     {
       "what": "bit times",
