@@ -61,6 +61,9 @@ pub(crate) struct Output {
     pub(crate) low: Stage,
     /// Ohm, greater than 0. `None` on a pin whose core never drives [`Drive::PullUp`].
     pub(crate) pull_up: Option<f64>,
+    /// Ohm, greater than 0. Alternate pull-up resistance when the core asserts `strong_pull_up`
+    /// alongside [`Drive::PullUp`] (such as the ESP32-S3 USB PHY's D+ pull-up on GPIO20).
+    pub(crate) strong_pull_up: Option<f64>,
     /// Ohm, greater than 0, to GND while its core pulls the pin down. `None` on a pin that never
     /// pulls down, where a pull-down its core reports is not stamped.
     pub(crate) pull_down: Option<f64>,
@@ -286,6 +289,22 @@ impl Core {
     /// it has a pull-down.
     pub(crate) fn pulls_down(&self, output: usize) -> bool {
         self.pulled_down().get(output).copied().unwrap_or(false)
+    }
+
+    /// Whether each `Drive::PullUp` output uses its strong pull-up resistor, or empty when none
+    /// does. Only a microcontroller says so, and only at a stop.
+    pub(crate) fn strong_pull_up(&self) -> &[bool] {
+        match *self {
+            Core::Mcu(ref mcu) => mcu.strong_pull_up(),
+            Core::Device(_) => &[],
+            #[cfg(test)]
+            Core::Script(_) => &[],
+        }
+    }
+
+    /// Whether output `output`'s [`Drive::PullUp`] stamps `Output::strong_pull_up`.
+    pub(crate) fn pulls_up_strong(&self, output: usize) -> bool {
+        self.strong_pull_up().get(output).copied().unwrap_or(false)
     }
 
     /// Whether a reset holds it, which changes its own draw as a drive change does. Only a
@@ -526,9 +545,15 @@ pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, x: &Solution, so
                 sys.current(output.gnd, output.pin, output.low.drop * g * source_scale);
             }
             Drive::PullUp => {
-                let ohm = output
-                    .pull_up
-                    .expect("a pull-up drive on a pin that has one");
+                let ohm = if core.pulls_up_strong(n) {
+                    output
+                        .strong_pull_up
+                        .expect("a strong pull-up drive on a pin that has one")
+                } else {
+                    output
+                        .pull_up
+                        .expect("a pull-up drive on a pin that has one")
+                };
                 sys.conductance(output.pin, output.vcc, 1.0 / ohm);
             }
             Drive::Off => {}
@@ -771,8 +796,16 @@ impl Ahead {
             self.rewind(world, committed, at);
             self.core.input(world, at, levels);
             assert_eq!(
-                (self.core.drive(), self.core.pulled_down()),
-                (committed.drive(), committed.pulled_down()),
+                (
+                    self.core.drive(),
+                    self.core.pulled_down(),
+                    self.core.strong_pull_up(),
+                ),
+                (
+                    committed.drive(),
+                    committed.pulled_down(),
+                    committed.strong_pull_up(),
+                ),
                 "an input on the held solve never changes an image"
             );
             self.commit(committed, staged);
@@ -780,8 +813,16 @@ impl Ahead {
         }
         committed.input(world, at, levels);
         assert_eq!(
-            (committed.drive(), committed.pulled_down()),
-            (self.core.drive(), self.core.pulled_down()),
+            (
+                committed.drive(),
+                committed.pulled_down(),
+                committed.strong_pull_up(),
+            ),
+            (
+                self.core.drive(),
+                self.core.pulled_down(),
+                self.core.strong_pull_up(),
+            ),
             "an input on the held solve never changes an image"
         );
         self.core.input(world, at, levels);
@@ -818,8 +859,12 @@ impl Actives {
                     levels.of(circuit.active_watches(k)),
                 );
                 assert_eq!(
-                    (core.drive(), core.pulled_down()),
-                    (chip.core.drive(), chip.core.pulled_down()),
+                    (core.drive(), core.pulled_down(), core.strong_pull_up()),
+                    (
+                        chip.core.drive(),
+                        chip.core.pulled_down(),
+                        chip.core.strong_pull_up(),
+                    ),
                     "the power-on input never changes an image"
                 );
                 core
@@ -1145,9 +1190,11 @@ impl Actives {
             ahead.rewind(world, committed, at);
             let image = ahead.core.drive().to_vec();
             let pulled_down = ahead.core.pulled_down().to_vec();
+            let strong_pull_up = ahead.core.strong_pull_up().to_vec();
             let draw = ahead.core.draw();
             changed |= image != committed.drive()
                 || pulled_down != committed.pulled_down()
+                || strong_pull_up != committed.strong_pull_up()
                 || ahead.core.held() != committed.held()
                 || draw != committed.draw();
             if stop.is_some_and(|stop| stop.sample) || tracks {
@@ -1171,9 +1218,10 @@ impl Actives {
                 (
                     ahead.core.drive(),
                     ahead.core.pulled_down(),
+                    ahead.core.strong_pull_up(),
                     ahead.core.draw()
                 ),
-                (&image[..], &pulled_down[..], draw),
+                (&image[..], &pulled_down[..], &strong_pull_up[..], draw),
                 "a sample, an input, a record or an event at a landing never changes an image"
             );
             ahead.commit(committed, &mut self.staged);
@@ -1190,8 +1238,16 @@ impl Actives {
             committed.answered(at, &answer.miso);
             ahead.core.answered(at, &answer.miso);
             assert_eq!(
-                (committed.drive(), committed.pulled_down()),
-                (ahead.core.drive(), ahead.core.pulled_down()),
+                (
+                    committed.drive(),
+                    committed.pulled_down(),
+                    committed.strong_pull_up(),
+                ),
+                (
+                    ahead.core.drive(),
+                    ahead.core.pulled_down(),
+                    ahead.core.strong_pull_up(),
+                ),
                 "an answer never changes an image"
             );
         }

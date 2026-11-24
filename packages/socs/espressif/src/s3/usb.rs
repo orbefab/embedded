@@ -1,15 +1,19 @@
 //! The USB Serial/JTAG unit's serial port, the console. The firmware writes bytes to the EP1
-//! FIFO, and while attached (`USB_PAD_ENABLE` set and the D+ pull-up on) the unit sends them as
-//! one packet when the firmware writes `WR_DONE` or the FIFO holds its 64th byte. The host takes
-//! each packet at once, so `SERIAL_IN_EP_DATA_FREE` reads 1 while attached. While detached, a
-//! committed packet stays pending in the FIFO and `SERIAL_IN_EP_DATA_FREE` reads 0 until re-attach.
+//! FIFO, and commits a packet when it writes `WR_DONE` or the FIFO holds its 64th byte. While
+//! attached (`USB_PAD_ENABLE` set and the D+ pull-up on), the host reads a committed packet in
+//! [`IN_PACKET_TICKS`] (62.5 us, 16 packets per 1 ms Full-Speed frame = 1,024 B/ms, within the
+//! USB 2.0 §5.8.4 Table 5-9 19-packet ceiling and matching §5.11.3 worst-case bit-stuffing plus
+//! host delay). `SERIAL_IN_EP_DATA_FREE` stays 0 from commit until the host finishes reading the
+//! packet (ESP32-S3 TRM, `USB_SERIAL_JTAG_EP1_CONF_REG`). While detached, a committed packet stays
+//! pending in the FIFO and `SERIAL_IN_EP_DATA_FREE` reads 0 until re-attach starts the host read.
 //!
 //! Each byte the host sends is readable from the tick it arrives, in the order sent, while
 //! attached. `SERIAL_OUT_EP_DATA_AVAIL` reads 1 while one is, and a load of EP1 takes it. EP1
 //! reads 0 while none is.
 //!
-//! `SERIAL_IN_EMPTY` latches at reset and at every flush. `IN_TOKEN_REC_IN_EP1` latches at every
-//! flush and once a 1 ms USB frame has started after that bit was last cleared while attached.
+//! `SERIAL_IN_EMPTY` latches at reset and when the host finishes reading a committed packet.
+//! `IN_TOKEN_REC_IN_EP1` latches when the host finishes reading a committed packet and once a
+//! 1 ms USB frame has started after that bit was last cleared while attached.
 //! `SERIAL_OUT_RECV_PKT` latches when a byte has arrived after that bit was last cleared while
 //! attached. A read or a write of the unit, and `take_received`, apply a due rise. Queueing a
 //! later byte does not. The poll applies a due rise only while `INT_ENA` is nonzero, so while
@@ -19,7 +23,8 @@
 //!
 //! `CONF0` keeps its value from reset (`DP_PULLUP | USB_PAD_ENABLE`, `0x4200`). `USB_PAD_ENABLE`,
 //! `PAD_PULL_OVERRIDE` and `DP_PULLUP` control host attachment and whether the USB PHY claims
-//! GPIO19 and GPIO20. Any other writable `CONF0` field set away from reset ends the run.
+//! GPIO19 and GPIO20 (including the D+ pull-up on GPIO20). Any other writable `CONF0` field set
+//! away from reset ends the run.
 
 use std::collections::VecDeque;
 
@@ -36,6 +41,13 @@ const SERIAL_OUT_EP_DATA_AVAIL: u32 = 1 << 2;
 
 /// Ticks in one USB frame, 1 ms at 480 MHz.
 const FRAME: u64 = 480_000;
+/// Full-Speed bulk IN packets per 1 ms frame: 16 packets/frame = 1,024 B/ms (within USB 2.0
+/// §5.8.4 Table 5-9's 19-transfer ceiling and matching §5.11.3 worst-case bit-stuffing of
+/// 59.23 us plus host delay).
+const IN_PACKETS_PER_FRAME: u64 = 16;
+/// Ticks for the USB Full-Speed host to read one committed EP1 IN packet: 30,000 ticks (62.5 us
+/// at 480 MHz, exact integer cycles at 40/80/160/240 MHz).
+pub(crate) const IN_PACKET_TICKS: u64 = FRAME / IN_PACKETS_PER_FRAME;
 const SOF: u32 = 1 << 1;
 const OUT_RECV: u32 = 1 << 2;
 const IN_EMPTY: u32 = 1 << 3;
@@ -68,10 +80,13 @@ const CONF0_RESET: u32 = DP_PULLUP | USB_PAD_ENABLE;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct UsbSerialJtag {
     fifo: Vec<u8>,
-    /// True when the firmware committed a TX packet (`WR_DONE` or 64th byte) while detached,
-    /// waiting for the host to take it on re-attach.
+    /// True when the firmware committed a TX packet (`WR_DONE` or 64th byte) and the host has not
+    /// finished reading it yet (`SERIAL_IN_EP_DATA_FREE` reads 0).
     tx_pending: bool,
-    /// Each sent byte and its packet's flush, in the order sent.
+    /// When `tx_pending` and attached, the tick at which the host finishes reading the committed
+    /// packet. `None` while no packet is pending or while detached.
+    tx_done: Option<Tick>,
+    /// Each sent byte and the tick its packet was read by the host, in the order sent.
     sent: VecDeque<(Tick, u8)>,
     /// Each byte the host sends and the tick it arrives, in the order sent.
     received: VecDeque<(Tick, u8)>,
@@ -104,6 +119,7 @@ impl Default for UsbSerialJtag {
         Self {
             fifo: Vec::new(),
             tx_pending: false,
+            tx_done: None,
             sent: VecDeque::new(),
             received: VecDeque::new(),
             raw: IN_EMPTY,
@@ -127,7 +143,7 @@ impl UsbSerialJtag {
 
     /// Whether the Full-Speed D+ pull-up is asserted: hardware default when `PAD_PULL_OVERRIDE`
     /// is clear, or `DP_PULLUP` when software overrides pulls.
-    fn dp_pullup_on(&self) -> bool {
+    pub(crate) fn dp_pullup_on(&self) -> bool {
         self.conf0 & PAD_PULL_OVERRIDE == 0 || self.conf0 & DP_PULLUP != 0
     }
 
@@ -222,21 +238,15 @@ impl UsbSerialJtag {
                 if !self.tx_pending && self.fifo.len() < PACKET {
                     self.fifo.push(value as u8);
                     if self.fifo.len() == PACKET {
-                        if self.attached() {
-                            self.flush(now);
-                        } else {
-                            self.tx_pending = true;
-                        }
+                        self.commit_tx(now);
                     }
                 }
             }
             0x04 => {
-                if value & WR_DONE != 0 {
-                    if self.attached() {
-                        self.flush(now);
-                    } else {
-                        self.tx_pending = true;
-                    }
+                // When a packet is already committed (including right after a 64th byte),
+                // WR_DONE is a no-op until the host reads the packet.
+                if value & WR_DONE != 0 && !self.tx_pending {
+                    self.commit_tx(now);
                 }
             }
             0x10 => {
@@ -267,6 +277,7 @@ impl UsbSerialJtag {
                 let attached = self.attached();
                 match (was_attached, attached) {
                     (true, false) => {
+                        self.tx_done = None;
                         self.rises = None;
                         self.token_rises = None;
                     }
@@ -274,7 +285,7 @@ impl UsbSerialJtag {
                         self.sof_cleared = now;
                         self.token_cleared = now;
                         if self.tx_pending {
-                            self.flush(now);
+                            self.tx_done = Some(Tick(now.0.saturating_add(IN_PACKET_TICKS)));
                         }
                         self.arm_rise();
                         self.arm_token();
@@ -296,15 +307,19 @@ impl UsbSerialJtag {
         if self.ena == 0 {
             return false;
         }
-        if self.rises.is_some_and(|at| at <= now) || self.token_rises.is_some_and(|at| at <= now) {
+        if self.rises.is_some_and(|at| at <= now)
+            || self.token_rises.is_some_and(|at| at <= now)
+            || self.tx_done.is_some_and(|at| at <= now)
+        {
             self.latch(now);
         }
         self.level
     }
 
     /// The earliest enabled USB event still ahead of `now`: a host OUT packet while
-    /// `SERIAL_OUT_RECV_PKT` is enabled, or the next 1 ms IN token while `IN_TOKEN_REC_IN_EP1` is
-    /// enabled.
+    /// `SERIAL_OUT_RECV_PKT` is enabled, the host finishing a committed EP1 IN packet while
+    /// `SERIAL_IN_EMPTY` or `IN_TOKEN_REC_IN_EP1` is enabled, or the next 1 ms IN token while
+    /// `IN_TOKEN_REC_IN_EP1` is enabled.
     pub(crate) fn next_event(&self, now: Tick) -> Option<Tick> {
         let recv = (self.ena & OUT_RECV != 0)
             .then(|| self.rises.filter(|&at| at > now))
@@ -312,14 +327,16 @@ impl UsbSerialJtag {
         let token = (self.ena & TOKEN_IN_EP1 != 0)
             .then(|| self.token_rises.filter(|&at| at > now))
             .flatten();
-        match (recv, token) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        let tx = (self.ena & (IN_EMPTY | TOKEN_IN_EP1) != 0)
+            .then(|| self.tx_done.filter(|&at| at > now))
+            .flatten();
+        [recv, token, tx].into_iter().flatten().min()
     }
 
-    /// The first sent byte not taken yet, when its packet flushed at or before `through`.
+    /// The first sent byte not taken yet, when the host finished reading its packet at or before
+    /// `through`.
     pub(crate) fn take_sent(&mut self, through: Tick) -> Option<(Tick, u8)> {
+        self.settle_tx(through);
         let &(at, byte) = self.sent.front()?;
         if at > through {
             return None;
@@ -328,12 +345,24 @@ impl UsbSerialJtag {
         Some((at, byte))
     }
 
-    fn flush(&mut self, now: Tick) {
-        self.sent
-            .extend(self.fifo.drain(..).map(|byte| (now, byte)));
-        self.tx_pending = false;
-        self.raw |= IN_EMPTY | TOKEN_IN_EP1;
-        self.token_rises = None;
+    fn commit_tx(&mut self, now: Tick) {
+        self.tx_pending = true;
+        self.tx_done = self
+            .attached()
+            .then(|| Tick(now.0.saturating_add(IN_PACKET_TICKS)));
+    }
+
+    fn settle_tx(&mut self, now: Tick) {
+        if let Some(at) = self.tx_done
+            && at <= now
+        {
+            self.sent.extend(self.fifo.drain(..).map(|byte| (at, byte)));
+            self.tx_pending = false;
+            self.tx_done = None;
+            self.raw |= IN_EMPTY | TOKEN_IN_EP1;
+            self.token_rises = None;
+            self.refresh();
+        }
     }
 
     fn refresh(&mut self) {
@@ -341,6 +370,7 @@ impl UsbSerialJtag {
     }
 
     fn latch(&mut self, now: Tick) {
+        self.settle_tx(now);
         if self.rises.is_some_and(|at| at <= now) {
             self.raw |= OUT_RECV;
             self.rises = None;
@@ -389,21 +419,63 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_packet_goes_at_wr_done_or_its_64th_byte() {
+    fn a_packet_goes_after_full_speed_host_read_on_wr_done_or_64th_byte() {
         let mut usb = UsbSerialJtag::default();
         usb.write(Tick(1), 0x00, u32::from(b'h')).unwrap();
         usb.write(Tick(2), 0x00, u32::from(b'i')).unwrap();
         assert_eq!(usb.take_sent(Tick(100)), None, "held in the FIFO");
         usb.write(Tick(3), 0x04, WR_DONE).unwrap();
-        assert_eq!(usb.take_sent(Tick(2)), None);
-        assert_eq!(usb.take_sent(Tick(3)), Some((Tick(3), b'h')));
-        assert_eq!(usb.take_sent(Tick(3)), Some((Tick(3), b'i')));
+        let done = Tick(3 + IN_PACKET_TICKS);
+        assert_eq!(
+            usb.read(Tick(3), EP1_CONF),
+            Some(0),
+            "SERIAL_IN_EP_DATA_FREE stays 0 until host reads the packet"
+        );
+        assert_eq!(usb.read(Tick(done.0 - 1), EP1_CONF), Some(0));
+        assert_eq!(usb.take_sent(Tick(done.0 - 1)), None);
+        // A redundant WR_DONE while a packet is already pending is a no-op.
+        usb.write(Tick(100), 0x04, WR_DONE).unwrap();
+        assert_eq!(usb.read(done, EP1_CONF), Some(SERIAL_IN_EP_DATA_FREE));
+        assert_eq!(usb.take_sent(done), Some((done, b'h')));
+        assert_eq!(usb.take_sent(done), Some((done, b'i')));
+
+        let base = done.0 + 10;
         for k in 0..PACKET as u64 {
-            usb.write(Tick(10 + k), 0x00, 0x41).unwrap();
+            usb.write(Tick(base + k), 0x00, 0x41).unwrap();
         }
-        let flush = Tick(10 + PACKET as u64 - 1);
+        let commit = base + PACKET as u64 - 1;
+        let flush = Tick(commit + IN_PACKET_TICKS);
+        assert_eq!(usb.read(Tick(commit), EP1_CONF), Some(0));
+        // Redundant WR_DONE immediately after a 64th byte (as HWCDC does) is a no-op.
+        usb.write(Tick(commit + 1), 0x04, WR_DONE).unwrap();
+        assert_eq!(usb.take_sent(Tick(flush.0 - 1)), None);
         assert!((0..PACKET).all(|_| usb.take_sent(flush) == Some((flush, 0x41))));
         assert_eq!(usb.take_sent(Tick(u64::MAX)), None);
+    }
+
+    #[test]
+    fn full_speed_burst_is_capped_at_16_packets_per_1_ms_frame() {
+        let mut usb = UsbSerialJtag::default();
+        let mut now = 0u64;
+        let mut completions = Vec::new();
+        for _ in 0..160 {
+            assert_eq!(usb.read(Tick(now), EP1_CONF), Some(SERIAL_IN_EP_DATA_FREE));
+            for _ in 0..PACKET {
+                usb.write(Tick(now), 0x00, b'A' as u32).unwrap();
+            }
+            assert_eq!(usb.read(Tick(now), EP1_CONF), Some(0));
+            let done = usb.tx_done.expect("pending TX");
+            completions.push(done.0);
+            now = done.0;
+        }
+        assert_eq!(completions.len(), 160);
+        // 160 packets at 16 packets per 1 ms frame take 10 ms (4,800,000 ticks),
+        // with every inter-packet gap equal to IN_PACKET_TICKS (62.5 us).
+        assert_eq!(completions[0], IN_PACKET_TICKS);
+        assert_eq!(*completions.last().unwrap(), 10 * FRAME);
+        for pair in completions.windows(2) {
+            assert_eq!(pair[1] - pair[0], IN_PACKET_TICKS);
+        }
     }
 
     #[test]
@@ -424,22 +496,31 @@ mod tests {
     }
 
     #[test]
-    fn serial_in_empty_reads_1_from_reset_and_after_a_flush_and_its_clear_drops_it() {
+    fn serial_in_empty_reads_1_from_reset_and_after_host_read_and_its_clear_drops_it() {
         let mut usb = UsbSerialJtag::default();
         assert_eq!(usb.read(Tick(0), 0x08), Some(IN_EMPTY));
         usb.write(Tick(1), 0x14, IN_EMPTY).unwrap();
         assert_eq!(usb.read(Tick(1), 0x08).unwrap() & IN_EMPTY, 0);
         usb.write(Tick(2), 0x00, u32::from(b'a')).unwrap();
         usb.write(Tick(3), 0x04, WR_DONE).unwrap();
-        assert_eq!(usb.read(Tick(3), 0x08).unwrap() & IN_EMPTY, IN_EMPTY);
-        usb.write(Tick(4), 0x14, IN_EMPTY).unwrap();
-        usb.write(Tick(5), 0x04, WR_DONE).unwrap();
-        assert_eq!(usb.read(Tick(5), 0x08).unwrap() & IN_EMPTY, IN_EMPTY);
-        usb.write(Tick(6), 0x14, IN_EMPTY).unwrap();
+        let done1 = Tick(3 + IN_PACKET_TICKS);
+        assert_eq!(usb.read(Tick(3), 0x08).unwrap() & IN_EMPTY, 0);
+        assert_eq!(usb.read(Tick(done1.0 - 1), 0x08).unwrap() & IN_EMPTY, 0);
+        assert_eq!(usb.read(done1, 0x08).unwrap() & IN_EMPTY, IN_EMPTY);
+
+        usb.write(Tick(done1.0 + 1), 0x14, IN_EMPTY).unwrap();
+        usb.write(Tick(done1.0 + 2), 0x04, WR_DONE).unwrap();
+        let done2 = Tick(done1.0 + 2 + IN_PACKET_TICKS);
+        assert_eq!(usb.read(Tick(done2.0 - 1), 0x08).unwrap() & IN_EMPTY, 0);
+        assert_eq!(usb.read(done2, 0x08).unwrap() & IN_EMPTY, IN_EMPTY);
+
+        usb.write(Tick(done2.0 + 1), 0x14, IN_EMPTY).unwrap();
         for _ in 0..PACKET {
-            usb.write(Tick(7), 0x00, 0x41).unwrap();
+            usb.write(Tick(done2.0 + 2), 0x00, 0x41).unwrap();
         }
-        assert_eq!(usb.read(Tick(7), 0x08).unwrap() & IN_EMPTY, IN_EMPTY);
+        let done3 = Tick(done2.0 + 2 + IN_PACKET_TICKS);
+        assert_eq!(usb.read(Tick(done3.0 - 1), 0x08).unwrap() & IN_EMPTY, 0);
+        assert_eq!(usb.read(done3, 0x08).unwrap() & IN_EMPTY, IN_EMPTY);
     }
 
     #[test]
@@ -502,18 +583,18 @@ mod tests {
         assert!(!usb.poll(Tick(2 * FRAME - 1)));
         assert!(usb.poll(Tick(2 * FRAME)));
 
-        // A flush also latches IN_TOKEN_REC_IN_EP1 immediately.
+        // Host pickup of a committed packet also latches IN_TOKEN_REC_IN_EP1 after IN_PACKET_TICKS.
         usb.write(Tick(2 * FRAME), 0x14, TOKEN_IN_EP1).unwrap();
         usb.write(Tick(2 * FRAME + 10), 0x00, u32::from(b'x'))
             .unwrap();
         usb.write(Tick(2 * FRAME + 20), 0x04, WR_DONE).unwrap();
-        assert!(usb.poll(Tick(2 * FRAME + 20)));
-        assert_eq!(
-            usb.read(Tick(2 * FRAME + 20), 0x08).unwrap() & TOKEN_IN_EP1,
-            TOKEN_IN_EP1
-        );
-        usb.write(Tick(2 * FRAME + 25), 0x14, TOKEN_IN_EP1).unwrap();
-        assert_eq!(usb.next_event(Tick(2 * FRAME + 25)), Some(Tick(3 * FRAME)));
+        let done = Tick(2 * FRAME + 20 + IN_PACKET_TICKS);
+        assert_eq!(usb.next_event(Tick(2 * FRAME + 20)), Some(done));
+        assert!(!usb.poll(Tick(done.0 - 1)));
+        assert!(usb.poll(done));
+        assert_eq!(usb.read(done, 0x08).unwrap() & TOKEN_IN_EP1, TOKEN_IN_EP1);
+        usb.write(Tick(done.0 + 5), 0x14, TOKEN_IN_EP1).unwrap();
+        assert_eq!(usb.next_event(Tick(done.0 + 5)), Some(Tick(3 * FRAME)));
     }
 
     #[test]
@@ -533,6 +614,12 @@ mod tests {
         assert_eq!(usb.next_event(Tick(0)), Some(Tick(50)));
         usb.write(Tick(0), 0x10, IN_EMPTY).unwrap();
         assert_eq!(usb.next_event(Tick(0)), None);
+        usb.write(Tick(1), 0x14, IN_EMPTY).unwrap();
+        usb.write(Tick(2), 0x04, WR_DONE).unwrap();
+        assert_eq!(usb.next_event(Tick(2)), Some(Tick(2 + IN_PACKET_TICKS)));
+        usb.write(Tick(2 + IN_PACKET_TICKS), 0x10, OUT_RECV | IN_EMPTY)
+            .unwrap();
+        assert_eq!(usb.next_event(Tick(2 + IN_PACKET_TICKS)), None);
     }
 
     #[test]
@@ -711,25 +798,53 @@ mod tests {
             assert_eq!(usb.take_sent(Tick(u64::MAX)), None);
             assert_eq!(usb.read(Tick(FRAME * 2 + 2), 0x08).unwrap() & IN_EMPTY, 0);
 
-            // Re-attach delivers the pending TX packet, queued RX byte and resumes frames.
+            // Re-attach starts host pickup of the pending TX packet, delivers queued RX byte and resumes frames.
             let reattach = Tick(FRAME * 2 + 10);
+            let tx_done = Tick(reattach.0 + IN_PACKET_TICKS);
             usb.write(reattach, CONF0, CONF0_RESET).unwrap();
             assert!(usb.attached());
-            assert_eq!(usb.take_sent(reattach), Some((reattach, b'q')));
+            assert_eq!(usb.take_sent(reattach), None);
+            assert_eq!(usb.read(reattach, EP1_CONF), Some(SERIAL_OUT_EP_DATA_AVAIL));
+            assert_eq!(usb.read(reattach, 0x00), Some(u32::from(b'k')));
+            assert_eq!(usb.next_event(reattach), Some(tx_done));
+            assert_eq!(usb.take_sent(tx_done), Some((tx_done, b'q')));
             assert_eq!(
-                usb.read(reattach, EP1_CONF),
+                usb.read(tx_done, EP1_CONF),
                 Some(SERIAL_IN_EP_DATA_FREE | SERIAL_OUT_EP_DATA_AVAIL)
             );
-            assert_eq!(usb.read(reattach, 0x00), Some(u32::from(b'k')));
-            let raw = usb.read(reattach, 0x08).unwrap();
+            let raw = usb.read(tx_done, 0x08).unwrap();
             assert_eq!(
                 raw & (IN_EMPTY | OUT_RECV | TOKEN_IN_EP1),
                 IN_EMPTY | OUT_RECV | TOKEN_IN_EP1
             );
-            usb.write(reattach, 0x14, IN_EMPTY | OUT_RECV | TOKEN_IN_EP1 | SOF)
+            usb.write(tx_done, 0x14, IN_EMPTY | OUT_RECV | TOKEN_IN_EP1 | SOF)
                 .unwrap();
-            assert_eq!(usb.next_event(reattach), Some(Tick(FRAME * 3)));
+            assert_eq!(usb.next_event(tx_done), Some(Tick(FRAME * 3)));
             assert_eq!(usb.read(Tick(FRAME * 3), 0x08).unwrap() & SOF, SOF);
         }
+    }
+
+    #[test]
+    fn detaching_while_tx_is_in_flight_pauses_host_read_until_reattach() {
+        let mut usb = UsbSerialJtag::default();
+        usb.write(Tick(0), 0x14, IN_EMPTY).unwrap();
+        usb.write(Tick(10), 0x00, u32::from(b'm')).unwrap();
+        usb.write(Tick(10), 0x04, WR_DONE).unwrap();
+        assert_eq!(usb.read(Tick(10), EP1_CONF), Some(0));
+
+        // Detach halfway through the host read.
+        usb.write(Tick(10 + IN_PACKET_TICKS / 2), CONF0, DP_PULLUP)
+            .unwrap();
+        assert!(!usb.attached());
+        assert_eq!(usb.take_sent(Tick(FRAME * 2)), None);
+        assert_eq!(usb.read(Tick(FRAME * 2), EP1_CONF), Some(0));
+
+        // Re-attach delivers the pending packet after IN_PACKET_TICKS.
+        let reattach = Tick(FRAME * 2 + 100);
+        let done = Tick(reattach.0 + IN_PACKET_TICKS);
+        usb.write(reattach, CONF0, CONF0_RESET).unwrap();
+        assert_eq!(usb.take_sent(Tick(done.0 - 1)), None);
+        assert_eq!(usb.take_sent(done), Some((done, b'm')));
+        assert_eq!(usb.read(done, EP1_CONF), Some(SERIAL_IN_EP_DATA_FREE));
     }
 }

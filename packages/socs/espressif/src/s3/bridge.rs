@@ -46,6 +46,9 @@ pub struct Bridge {
     image: Vec<Drive>,
     /// Whether each output pulls down, beside its drive in `image`.
     pulled_down: Vec<bool>,
+    /// Whether each `Drive::PullUp` output uses the USB PHY's strong pull-up on GPIO20 instead of
+    /// the pad's weak pull-up.
+    strong_pull_up: Vec<bool>,
     /// The levels it last took, in watch order. Empty before the power-on input.
     levels: Vec<bool>,
     /// The fault that ended its run, once a stop reported it.
@@ -124,6 +127,7 @@ impl Bridge {
             sampled: sampled(&gpios),
             image: vec![Drive::Off; gpios.len()],
             pulled_down: vec![false; gpios.len()],
+            strong_pull_up: vec![false; gpios.len()],
             gpios,
             levels: Vec::new(),
             fault: None,
@@ -272,15 +276,20 @@ impl Bridge {
     }
 
     fn refresh(&mut self) {
-        let outputs = self.image.iter_mut().zip(&mut self.pulled_down);
-        for ((drive, pulled_down), &gpio) in outputs.zip(&self.gpios) {
-            (*drive, *pulled_down) = match self.chip.drive(gpio) {
-                PadDrive::High => (Drive::High, false),
-                PadDrive::Low => (Drive::Low, false),
-                PadDrive::PullUp => (Drive::PullUp, false),
-                PadDrive::PullDown => (Drive::Off, true),
-                PadDrive::PullBoth => (Drive::PullUp, true),
-                PadDrive::Off => (Drive::Off, false),
+        let outputs = self
+            .image
+            .iter_mut()
+            .zip(&mut self.pulled_down)
+            .zip(&mut self.strong_pull_up);
+        for (((drive, pulled_down), strong_pull_up), &gpio) in outputs.zip(&self.gpios) {
+            (*drive, *pulled_down, *strong_pull_up) = match self.chip.drive(gpio) {
+                PadDrive::High => (Drive::High, false, false),
+                PadDrive::Low => (Drive::Low, false, false),
+                PadDrive::PullUp => (Drive::PullUp, false, false),
+                PadDrive::UsbPullUp => (Drive::PullUp, false, true),
+                PadDrive::PullDown => (Drive::Off, true, false),
+                PadDrive::PullBoth => (Drive::PullUp, true, false),
+                PadDrive::Off => (Drive::Off, false, false),
             };
         }
     }
@@ -340,6 +349,11 @@ impl Mcu for Bridge {
     #[inline]
     fn pulled_down(&self) -> &[bool] {
         &self.pulled_down
+    }
+
+    #[inline]
+    fn strong_pull_up(&self) -> &[bool] {
+        &self.strong_pull_up
     }
 
     /// Its ADC pads' voltages, in `sampled` order.

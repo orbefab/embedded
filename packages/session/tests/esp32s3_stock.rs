@@ -1431,3 +1431,60 @@ fn a_stock_cdc_sketch_reads_console_bytes_on_both_cores() {
         );
     }
 }
+
+/// GPIO20 (USB D+) reads high from 0 ps under the USB PHY's 2.4 kohm D+ pull-up on both
+/// Arduino-ESP32 3.3.12 and 4.0.0 with CDC on or off, and holds an external 10 kohm pull-down
+/// resistor high (~2.66 V).
+#[test]
+fn gpio20_is_pulled_up_by_usb_phy_on_both_cores_and_drives_external_load() {
+    for fixture in [
+        "esp32s3-stock-cdc",
+        "esp32s3-stock-cdc4",
+        "esp32s3-stock-blink",
+    ] {
+        play(
+            fixture,
+            &[
+                "expect @board.GPIO20 high",
+                "step 50ms",
+                "expect @board.GPIO20 high",
+                "expect no diagnostics",
+            ],
+        );
+    }
+
+    let load_scene = r#"{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    },
+    "r_dp": { "type": "resistor-axial", "resistance": "10k" }
+  },
+  "wires": [
+    ["board.GPIO20", "r_dp.a"],
+    ["r_dp.b", "board.GND"]
+  ],
+  "ground": "board.GND"
+}"#;
+    for fixture in ["esp32s3-stock-cdc", "esp32s3-stock-cdc4"] {
+        let (dir, mut live) = open_scene(fixture, load_scene);
+        run(&mut live, dir.path(), "expect @board.GPIO20 high");
+        run(&mut live, dir.path(), "step 50ms");
+        run(&mut live, dir.path(), "expect @board.GPIO20 high");
+        let reply = live.run(
+            &Command::parse("get @board.GPIO20", dir.path())
+                .unwrap()
+                .unwrap(),
+        );
+        assert!(reply.ok(), "{fixture}: {}", reply.text());
+        assert!(
+            reply.text().contains("high"),
+            "{fixture}: expected high into 10k load, got {}",
+            reply.text()
+        );
+        run(&mut live, dir.path(), "expect no diagnostics");
+    }
+}

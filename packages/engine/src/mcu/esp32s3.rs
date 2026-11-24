@@ -41,6 +41,12 @@ pub(crate) fn dc_paths(mcu: &Esp32s3) -> &'static [(usize, usize)] {
     &DC_PATHS[..2 * (mcu.pins.len() - 2)]
 }
 
+/// USB Serial/JTAG internal PHY Full-Speed D+ pull-up on GPIO20 at `PULLUP_VALUE = 0` (reset):
+/// typical 2.4 kohm per ESP-IDF v5.5.5 `soc/esp32s3/register/soc/usb_wrap_struct.h` and
+/// `hal/esp32s3/include/hal/usb_serial_jtag_ll.h` (the internal FSLS PHY shared by USB
+/// Serial/JTAG and USB OTG).
+const USB_DP_PULL_UP_OHM: f64 = 2_400.0;
+
 pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
     let (vcc, gnd) = (mcu.pins[0], mcu.pins[1]);
     let gpios: Vec<u8> = mcu.gpios().collect();
@@ -52,9 +58,11 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
         leakage: mcu.leakage_resistance.si.get(),
         pads: pins
             .iter()
-            .map(|&net| super::Pad {
+            .zip(&gpios)
+            .map(|(&net, &gpio)| super::Pad {
                 net,
                 pull_up: mcu.pull_up_resistance.si.get(),
+                strong_pull_up: (gpio == 20).then_some(USB_DP_PULL_UP_OHM),
                 pull_down: mcu
                     .pull_down_resistance
                     .as_ref()

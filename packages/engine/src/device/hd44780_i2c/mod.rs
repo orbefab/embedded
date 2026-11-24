@@ -96,6 +96,7 @@ pub(crate) fn chip(part: PartId, dev: &Hd44780I2c) -> Chip {
             high: low,
             low,
             pull_up: None,
+            strong_pull_up: None,
             pull_down: None,
             leakage: None,
         }],

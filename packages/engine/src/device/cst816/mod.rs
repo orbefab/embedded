@@ -77,6 +77,7 @@ pub(crate) fn chip(part: PartId, dev: &Cst816) -> Chip {
         high: low,
         low,
         pull_up: None,
+        strong_pull_up: None,
         pull_down: None,
         leakage: None,
     };

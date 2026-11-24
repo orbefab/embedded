@@ -954,7 +954,8 @@ impl Soc {
             USB_SERIAL_JTAG => match self.usb.write(now, offset, value) {
                 Ok(done) => {
                     if offset == usb::CONF0 {
-                        self.gpio.set_usb_pad_enable(self.usb.pad_enabled());
+                        self.gpio
+                            .set_usb_pads(self.usb.pad_enabled(), self.usb.dp_pullup_on());
                     }
                     done
                 }
