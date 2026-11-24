@@ -151,7 +151,7 @@ fn window(text: &str) -> String {
         .lines()
         .take_while(|line| line.split_whitespace().next() != Some("step"))
         .collect();
-    out.extend([WINDOW, "snapshot"]);
+    out.extend([WINDOW, "snapshot", "expect no diagnostics"]);
     out.join("\n") + "\n"
 }
 

@@ -7,7 +7,7 @@ use orbe_scene::Files;
 
 use crate::command::Command;
 use crate::live::Live;
-use crate::reply::{Code, Error, Reply};
+use crate::reply::{Code, Data, Error, Reply};
 
 #[derive(Clone, Debug)]
 pub struct Line {
@@ -19,6 +19,8 @@ pub struct Line {
 #[derive(Clone, Debug)]
 pub struct Report {
     pub file: PathBuf,
+    /// Each scene the test opened, in the order it opened them.
+    pub scenes: Vec<String>,
     /// Every line that ran. The last one failed when the test failed.
     pub lines: Vec<Line>,
     /// Why the file as a whole did not run, such as a file with no commands.
@@ -28,6 +30,11 @@ pub struct Report {
 impl Report {
     pub fn passed(&self) -> bool {
         self.refused.is_none() && self.failure().is_none()
+    }
+
+    /// The scene the test last opened, when it opened one.
+    pub fn scene(&self) -> Option<&str> {
+        self.scenes.last().map(String::as_str)
     }
 
     pub fn failure(&self) -> Option<&Line> {
@@ -48,7 +55,9 @@ impl Report {
 /// folder above `tests/`.
 pub fn run(files: Files, file: &Path, text: &str, root: &Path) -> Report {
     let mut live = Live::new(file.display().to_string(), files);
+    let mut scenes = Vec::new();
     let mut lines = Vec::new();
+    let mut checked = false;
     for (index, line) in text.lines().enumerate() {
         let reply = match Command::parse(line, root) {
             Ok(None) => continue,
@@ -57,9 +66,18 @@ pub fn run(files: Files, file: &Path, text: &str, root: &Path) -> Report {
                 "`play` and `pause` pace time to the wall clock, which a test does not run on",
                 "advance time with `step`, such as `step 100ms`",
             )),
-            Ok(Some(command)) => live.run(&command),
+            Ok(Some(command)) => {
+                if matches!(command, Command::Expect(_)) {
+                    checked = true;
+                }
+                live.run(&command)
+            }
             Err(reason) => live.refuse(Error::new(Code::Usage, reason, "")),
         };
+        if let Data::Opened { scene, .. } = &reply.data {
+            scenes.retain(|seen| seen != scene);
+            scenes.push(scene.clone());
+        }
         let ok = reply.ok();
         lines.push(Line {
             number: index + 1,
@@ -70,15 +88,27 @@ pub fn run(files: Files, file: &Path, text: &str, root: &Path) -> Report {
             break;
         }
     }
-    let refused = lines.is_empty().then(|| {
-        live.refuse(Error::new(
+    let refused = if lines.is_empty() {
+        Some(live.refuse(Error::new(
             Code::Usage,
             format!("{} has no commands", file.display()),
             "write live commands with `expect` lines, such as `open` and `expect @led1 off`",
-        ))
-    });
+        )))
+    } else if lines.last().is_some_and(|line| line.reply.ok()) && !checked {
+        Some(live.refuse(Error::new(
+            Code::Usage,
+            format!(
+                "{} has no `expect` line, so it checks nothing",
+                file.display()
+            ),
+            "add an `expect` line, such as `expect @led1 off` or `expect no diagnostics`",
+        )))
+    } else {
+        None
+    };
     Report {
         file: file.to_path_buf(),
+        scenes,
         lines,
         refused,
     }

@@ -510,11 +510,21 @@ fn a_held_fall_starts_the_reset_count() {
 /// the next part's `DIN`. The last part has no `DOUT`. Gives each part's pixels by name, `led0`
 /// first, and the run's `diagnostics.json`.
 fn chained(name: &str, counts: &[u16]) -> (Vec<serde_json::Value>, serde_json::Value) {
+    chained_with(name, counts, |_| {})
+}
+
+/// [`chained`], with `edit` made to the netlist first.
+fn chained_with(
+    name: &str,
+    counts: &[u16],
+    edit: impl FnOnce(&mut serde_json::Value),
+) -> (Vec<serde_json::Value>, serde_json::Value) {
     let path = repo(&format!(
         "packages/engine/tests/circuits/{name}/netlist.json"
     ));
     let mut netlist: serde_json::Value =
         serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    edit(&mut netlist);
     let parts = netlist["parts"].as_array_mut().unwrap();
     let k = parts
         .iter()
@@ -583,30 +593,76 @@ fn a_ring_cut_in_three_by_dout_shows_the_whole_ring_s_colours() {
 
 #[ignore = "full tier"]
 #[test]
-fn a_record_does_not_go_on_through_dout_and_says_so_once() {
+fn a_record_goes_on_through_dout_to_the_next_chain() {
     let (pixels, diagnostics) = chained("ws2812-replay", &[1, 12]);
-    assert_eq!(pixels[0], serde_json::json!(palette()[..1]));
-    assert_eq!(pixels[1], serde_json::json!(vec![[0, 0, 0]; 12]));
-    let rules: Vec<_> = diagnostics
-        .as_array()
-        .unwrap()
+    let palette = palette();
+    assert_eq!(pixels[0], serde_json::json!(palette[..1]));
+    assert_eq!(pixels[1], serde_json::json!(palette[1..]));
+    assert_eq!(diagnostics, serde_json::json!([]));
+}
+
+#[ignore = "full tier"]
+#[test]
+fn thirteen_parts_chained_on_a_record_each_show_their_own_colour() {
+    let (pixels, diagnostics) = chained("ws2812-replay", &[1; 13]);
+    let palette = palette();
+    for (k, pixels) in pixels.iter().enumerate() {
+        assert_eq!(pixels, &serde_json::json!([palette[k]]), "led{k}");
+    }
+    assert_eq!(diagnostics, serde_json::json!([]));
+}
+
+/// A high of 450 ns in the second part's bits is in neither window. The first part warns at its
+/// fall, as it does for a bad high on the pin, and the second part warns at the fall on its own
+/// `DIN`, 500 ns later. Both warn the same whether the run ends after the record or inside it,
+/// after that fall.
+#[ignore = "full tier"]
+#[test]
+fn a_bad_high_past_the_first_part_warns_on_the_part_it_reached() {
+    const START: u64 = 1_000_000_000;
+    const DELAY: u64 = 500_000;
+    let mut pulses = train(&[0x12, 0x34, 0x56, 0xA5, 0x5A, 0xC3]);
+    pulses[50].1 = 450_000;
+    let fall = START + pulses[..51].iter().map(|&(_, ps)| ps).sum::<u64>() + DELAY;
+    let frame: Vec<_> = pulses
         .iter()
-        .map(|d| {
-            (
-                d["code"].clone(),
-                d["data"]["rule"].clone(),
-                d["message"].clone(),
-            )
-        })
+        .map(|&(level, ps)| serde_json::json!({ "level": level, "ps": ps }))
         .collect();
-    assert_eq!(
-        rules,
-        vec![(
-            "chip.protocol".into(),
-            "dout_record".into(),
-            "#led0 did not pass a high from a record on to DOUT, breaking rule dout_record at 1030000000 ps, the first time".into()
-        )]
-    );
+    for stop in [2_000_000_000u64, fall + 1_000_000] {
+        let (_, diagnostics) = chained_with("ws2812-replay", &[1, 1], |netlist| {
+            netlist["analysis"]["transient"]["stop_ps"] = stop.into();
+            let parts = netlist["parts"].as_array_mut().unwrap();
+            let replay = parts
+                .iter_mut()
+                .find(|part| part["kind"] == "pulses_replay")
+                .unwrap();
+            replay["events"] = serde_json::json!([{ "t_ps": START, "pulses": frame }]);
+        });
+        let rules: Vec<_> = diagnostics
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| {
+                (
+                    d["code"].clone(),
+                    d["data"]["rule"].clone(),
+                    d["message"].clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rules,
+            [("led0", fall - DELAY), ("led1", fall)]
+                .map(|(part, at)| (
+                    "chip.protocol".into(),
+                    "bit".into(),
+                    format!("#{part} dropped a bit that broke rule bit at {at} ps, the first time")
+                        .into()
+                ))
+                .to_vec(),
+            "stop {stop}"
+        );
+    }
 }
 
 /// `packages/engine/tests/circuits/ws2812-replay` cut to 16 LEDs that draw 12 mA a channel and

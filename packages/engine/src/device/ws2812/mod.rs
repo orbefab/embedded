@@ -1,13 +1,14 @@
 //! A `ws2812` chain behind the seam. It watches `DIN` and takes `Pulses` on that net. The
 //! device in [`model`] keeps the bits and the colours, shows the colours, and drives `DOUT`
-//! when the part wires it. The pulse engine times the line.
+//! when the part wires it. The pulse engine times the line, and sends what a `Pulses` record
+//! passes on to `DOUT` as a record on that net.
 
 use serde::Deserialize;
 
 use orbe_model::{Device, Fields, Value as FieldValue};
 
 use crate::active::native::{Hosted, Native};
-use crate::active::pulse::Pulse;
+use crate::active::pulse::{Pulse, Relay};
 use crate::active::{Chip, Core, Output, Stage, Takes};
 use crate::diagnostic::{Diagnostic, ValueRule};
 use crate::mna::Node;
@@ -75,6 +76,7 @@ pub(crate) fn chip(part: PartId, chain: &Ws2812) -> Chip {
         })
         .collect();
     let delay = chain.dout.as_ref().map_or(0, |dout| dout.delay.value);
+    let dout = chain.dout.as_ref().map(|_| pins[DOUT]);
     Chip {
         part: Some(part),
         outputs,
@@ -86,7 +88,7 @@ pub(crate) fn chip(part: PartId, chain: &Ws2812) -> Chip {
         samples: Vec::new(),
         usarts: &[],
         twi: false,
-        sends: false,
+        sends: dout.is_some(),
         supply: None,
         draw: chain.draw.as_ref().map(|_| (pins[VCC], pins[GND])),
         takes: Takes {
@@ -94,24 +96,30 @@ pub(crate) fn chip(part: PartId, chain: &Ws2812) -> Chip {
             duty: None,
             pulses: Some(pins[DIN]),
         },
-        core: Core::Device(core(chain.leds, delay, chain.draw.as_ref())),
+        core: Core::Device(core(chain.leds, delay, dout, chain.draw.as_ref())),
     }
 }
 
 /// The device sized to the chain: the smallest of 16, 64, 256 and 1024 LEDs that holds it. A
 /// landing copies the state, so a short chain copies little. `delay` is `DIN` to `DOUT` in
-/// picoseconds, 0 for a chain with no `DOUT`.
-fn core(leds: u16, delay: u64, draw: Option<&PixelDraw>) -> Box<dyn Hosted> {
+/// picoseconds, 0 for a chain with no `DOUT`, and `dout` the net of `DOUT`, which the records it
+/// relays go on.
+fn core(leds: u16, delay: u64, dout: Option<NetId>, draw: Option<&PixelDraw>) -> Box<dyn Hosted> {
     match leds {
-        0..=16 => sized::<16>(leds, delay, draw),
-        17..=64 => sized::<64>(leds, delay, draw),
-        65..=256 => sized::<256>(leds, delay, draw),
-        _ => sized::<{ Ws2812::LED_MAX as usize }>(leds, delay, draw),
+        0..=16 => sized::<16>(leds, delay, dout, draw),
+        17..=64 => sized::<64>(leds, delay, dout, draw),
+        65..=256 => sized::<256>(leds, delay, dout, draw),
+        _ => sized::<{ Ws2812::LED_MAX as usize }>(leds, delay, dout, draw),
     }
 }
 
 /// The device takes its draw as whole nanoamperes and millivolts.
-fn sized<const N: usize>(leds: u16, delay: u64, draw: Option<&PixelDraw>) -> Box<dyn Hosted> {
+fn sized<const N: usize>(
+    leds: u16,
+    delay: u64,
+    dout: Option<NetId>,
+    draw: Option<&PixelDraw>,
+) -> Box<dyn Hosted> {
     let delay = i64::try_from(delay).expect("parse bounds the delay");
     let whole = |value: &Value, scale: f64| (value.si.get() * scale).round() as i64;
     let mut fields = vec![
@@ -133,7 +141,11 @@ fn sized<const N: usize>(leds: u16, delay: u64, draw: Option<&PixelDraw>) -> Box
     }
     let device = model::Ws2812::<N>::new(&Fields::new(&fields)).expect("the state holds the chain");
     let outputs = if delay > 0 { model::OUTPUTS } else { 0 };
-    Box::new(Native::new(device, Pulse::new(), outputs))
+    let port = match dout {
+        Some(net) => Pulse::relaying(Relay::new(Ws2812::PINS[DOUT], net)),
+        None => Pulse::new(),
+    };
+    Box::new(Native::new(device, port, outputs))
 }
 
 /// A chain of WS2812E-1313 LEDs, an active chip with no clock of its own. It reads `DIN`

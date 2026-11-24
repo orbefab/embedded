@@ -2140,7 +2140,7 @@ fn a_scene_named_like_a_flag_opens_as_dot_slash_or_after_dashes() {
         runtime.orbe(root, &["close"]).ok();
         fs::write(
             root.join("tests/a.test"),
-            format!("open {}\n", scene.join(" ")),
+            format!("open {}\nexpect @led1 off\n", scene.join(" ")),
         )
         .unwrap();
         runtime.orbe(root, &["test"]).ok();

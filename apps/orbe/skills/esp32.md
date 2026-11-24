@@ -75,6 +75,7 @@ expect @led1 off
 - The model runs the pins, the one-shot ADC, LEDC, RMT channel 0, SPI2 and I2C0 as masters, UART0 to UART2, the timers and both cores.
 - `ledcAttach`, `ledcWrite` and `analogWrite` drive the pin's PWM edges. `analogWrite` is 1 kHz at 8 bits, and `ledcAttach(pin, 50, 14)` is a 50 Hz servo signal. `step --until @board.GPIO18 high` lands on an edge. Each edge costs a circuit solve, so a kHz PWM runs several times slower than real time.
 - `SPI` runs on SPI2. `SPI.transfer` returns what an SPI part answers, and `0xFF` when none does.
+- `Adafruit_NeoPixel` and `rmtWrite` send each frame over RMT, and every pixel of a chained stick or strip takes its colour. Wire DIN straight to the pin: the frame does not cross a series resistor.
 - A stock sketch's boot clears the radio's force-up bits and turns on the APP CPU's debug trace, and `gpio_config` on an RTC pad reads the pad word and leaves it on digital GPIO. It also resets the system timer, the timer groups and the RTC watchdog, and the model runs those. Those accesses are quiet, so `expect no diagnostics` passes. An access that sketch does not make is still `warning[chip.unmodeled_register]`.
 - `orbe add devkitc-button-led` is the DevKitC-1. A button on GPIO4 cycles `@board.led`, and each colour is printed on `serial`.
 - Keep PSRAM off, the FQBN's default. With `PSRAM=opi` the run stops at boot with `error[chip.flash_command]`.
