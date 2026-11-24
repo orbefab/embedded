@@ -9,9 +9,19 @@ Every app also links Mbed TLS objects (sha.c, platform.c and platform_util.c fro
 libmbedcrypto.a), Copyright The Mbed TLS Contributors, which ESP-IDF carries under Apache-2.0 OR
 GPL-2.0-or-later, used here under the Apache License 2.0.
 
+The oled sketch also uses Adafruit SSD1306 2.5.17 and Adafruit GFX Library 1.13.0, installed
+with `arduino-cli lib install`. The app links both. SSD1306 is under the BSD 3-clause license,
+whose notice is in oled/LICENSE-ssd1306, and GFX under the BSD 2-clause license, whose notice is
+in oled/LICENSE-gfx. Adafruit_GFX.h includes the headers of Adafruit BusIO 1.17.0, under the MIT
+license, whose notice is in oled/LICENSE-busio. The app holds none of its code. The sources are
+the archives https://github.com/adafruit/Adafruit_SSD1306/archive/refs/tags/2.5.17.tar.gz,
+https://github.com/adafruit/Adafruit-GFX-Library/archive/refs/tags/1.13.0.tar.gz and
+https://github.com/adafruit/Adafruit_BusIO/archive/refs/tags/1.17.0.tar.gz.
+
 The compile rewrites source paths with -ffile-prefix-map, the same way
 packages/engine/scripts/esp32s3-arduino.sh does, so the committed app does not record the build
-directory. A sketch built without that map is the same program with different path strings.
+directory, and maps the sketchbook's libraries folder to /arduino. A sketch built without that
+map is the same program with different path strings.
 
 The app and the partition table are kept in the scene fixture named below, as app.bin and
 partitions.bin. The partition table is the core's default 4MB table, the same bytes for every
@@ -37,3 +47,9 @@ analogwrite  packages/scene/tests/fixtures/esp32s3-stock-analogwrite
              app 281312 748e82aa3b2af2bd08012c9659f25af3d9c06d17e10ebee2fab6bbb0c5f803fb
 fade         packages/scene/tests/fixtures/esp32s3-stock-fade
              app 281280 b43ecff102c0865c0e5fc23e68a62e820352e9984c939a9ff49801d69f27abab
+oled         packages/scene/tests/fixtures/esp32s3-stock-oled
+             app 337504 58197082b61635e95ed994f395ada8d8bf38fb7c5eaac78d36aaed1a799704a3
+wire         packages/scene/tests/fixtures/esp32s3-stock-wire
+             app 300256 005108713604bb60ed3d3d4099dbf7ebd049f7921e5c20610e418baed80bfb7e
+wirelong     packages/scene/tests/fixtures/esp32s3-stock-wirelong
+             app 300528 8092db5aae86b0199bc7a67a1a89dfb1c734d47856693db5a084bec3406925d0

@@ -232,3 +232,61 @@ fn a_stock_fade_raises_its_duty_over_time() {
     assert!(duties[0] > 0 && duties[1] > duties[0], "{duties:?}");
     run(&mut live, path, "expect no diagnostics");
 }
+
+/// `Wire.begin()` on the default pins, SDA on GPIO8 and SCL on GPIO9, with nothing on the bus.
+#[test]
+fn a_stock_wire_begin_raises_no_diagnostic() {
+    play(
+        "esp32s3-stock-wire",
+        &[
+            "step 300ms",
+            r#"expect serial contains "ready""#,
+            "expect no diagnostics",
+        ],
+    );
+}
+
+/// Adafruit SSD1306 and GFX draw a frame and "orbe" on the module. `display()` writes the frame
+/// in I2C transactions longer than the 32-byte FIFO.
+#[test]
+fn a_stock_adafruit_ssd1306_sketch_draws_on_the_oled() {
+    play(
+        "esp32s3-stock-oled",
+        &[
+            r#"step --until serial contains "drawn" --timeout 1s"#,
+            "expect @oled.display.screen shows oled.screen",
+            "expect no diagnostics",
+        ],
+    );
+}
+
+/// One Wire write of 65 bytes and one read of 40, each one transaction over the 32-byte FIFO.
+/// The write lights GDDRAM page 0's first 64 columns, which the power-on scan puts at the
+/// glass's bottom right. The module answers the read with the released line, 0xFF, and its
+/// warning that it takes no reads is the run's only diagnostic.
+#[test]
+fn a_stock_wire_write_and_read_run_past_the_fifo() {
+    let (project, mut live) = open("esp32s3-stock-wirelong");
+    let path = project.path();
+    for line in [
+        r#"step --until serial contains "read" --timeout 1s"#,
+        r#"expect serial contains "init 0""#,
+        r#"expect serial contains "wrote 0""#,
+        r#"expect serial contains "read 40 ff 40""#,
+        "expect @oled.display.screen shows wirelong.screen",
+    ] {
+        run(&mut live, path, line);
+    }
+    let command = Command::parse("snapshot", path).unwrap().unwrap();
+    let text = live.run(&command).text();
+    let found: Vec<_> = text
+        .lines()
+        .filter(|line| line.starts_with("warning[") || line.starts_with("error["))
+        .collect();
+    assert_eq!(found.len(), 1, "{text}");
+    assert!(
+        found[0].starts_with("warning[chip.protocol] #oled__display")
+            && found[0].contains("rule read"),
+        "{text}"
+    );
+}
