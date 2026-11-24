@@ -1475,10 +1475,12 @@ impl Diagnostic {
                     }
                     (_, Setting::Interrupt) => format!("enabled a {peripheral} interrupt"),
                     (_, Setting::Register(setting)) => format!("set {peripheral} {setting}"),
+                    (_, Setting::Unsimulated(what)) => format!("used {peripheral}, {what},"),
                     (_, Setting::Sleep) => "put the chip to sleep".to_string(),
                 };
                 let why = match (*peripheral, *setting) {
                     (_, Setting::Interrupt) => "which the model never raises",
+                    (_, Setting::Unsimulated(_)) => "which the model does not simulate",
                     ("AC", Setting::Register("aco_read")) => {
                         "which the model works out from the logic level on each input pin, not its voltage"
                     }
@@ -1540,6 +1542,10 @@ impl Diagnostic {
                     FlashRefusal::Unsupported => (
                         format!("sent the flash {command}"),
                         "which the model does not run",
+                    ),
+                    FlashRefusal::Write => (
+                        format!("wrote the flash with {command}"),
+                        "which the model does not simulate; Wi-Fi, Bluetooth and saved settings (Preferences, EEPROM, NVS) write the flash",
                     ),
                     FlashRefusal::StatusWrite => (
                         format!("sent the flash the status write {command}"),

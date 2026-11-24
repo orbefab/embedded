@@ -19,6 +19,7 @@ use super::CoreId;
 
 use super::analog::Analog;
 use super::app::{self, AppControl, Hold, Steer};
+use super::blocks;
 use super::calibration::{self, Calibration};
 use super::clock::{CpuClock, Source, Tick};
 use super::code::Code;
@@ -69,9 +70,7 @@ pub(crate) const SPI2: u32 = 0x6002_4000;
 pub(crate) const LEDC: u32 = 0x6001_9000;
 pub(crate) const RMT: u32 = 0x6001_6000;
 const I2C0: u32 = 0x6001_3000;
-const I2C1: u32 = 0x6002_7000;
 pub(crate) const USB_SERIAL_JTAG: u32 = 0x6003_8000;
-const USB_WRAP: u32 = 0x6003_9000;
 const SHA: u32 = 0x6003_b000;
 const APB_SARADC: u32 = 0x6004_0000;
 pub(crate) const GDMA: u32 = 0x6003_f000;
@@ -306,8 +305,9 @@ enum Effect {
     Gates,
 }
 
-/// The effect of a write of the register at `addr`, when it has one the model does not run.
-fn effect(addr: u32) -> Option<Effect> {
+/// The effect of a write of `value` to the register at `addr`, when it has one the model does not
+/// run.
+fn effect(addr: u32, value: u32) -> Option<Effect> {
     let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
     let interrupt = |peripheral| Ending::Refused(Refused::Interrupt(peripheral));
     let dma = |setting| Ending::Refused(Refused::Register("GDMA", setting));
@@ -327,7 +327,14 @@ fn effect(addr: u32) -> Option<Effect> {
         (RTC_CNTL, _)
             if offset == sar::SENS + sar::CLK_GATE || offset == sar::SENS + sar::RESET_CONF =>
         {
-            Effect::Report(!sar::SARADC_BIT)
+            if value & sar::TSENS_BIT != 0 {
+                Effect::Refuse(
+                    sar::TSENS_BIT,
+                    Ending::Refused(Refused::Unsimulated("SENS", blocks::TSENS)),
+                )
+            } else {
+                Effect::Report(!sar::SARADC_BIT)
+            }
         }
         (RTC_CNTL, _) if offset == sar::SENS + 0x40 => Effect::Report(sar::SLAVE_ADDRS),
         (SPI2, 0x34) => Effect::Refuse(!spi2::TRANS_DONE, interrupt("SPI2")),
@@ -1225,6 +1232,16 @@ impl Soc {
         self.systimer.set_reset(now, self.gates.systimer_reset());
     }
 
+    /// An access to a register no model keeps, at `addr`. In a block the model does not
+    /// simulate it ends the run, naming the block. In one it runs it goes through [`Self::touch`].
+    fn unkept(&mut self, now: Tick, addr: u32, write: bool) -> Result<(), Exit> {
+        if let Some((block, what)) = blocks::unsimulated(addr) {
+            self.ending = Some(Ending::Refused(Refused::Unsimulated(block, what)));
+            return Err(Exit::Stop);
+        }
+        self.touch(now, addr, write, false)
+    }
+
     /// Lets an access to an unmodeled register through, or stops the core at the first one.
     /// `kept` marks a write the register keeps while its effect does not run.
     ///
@@ -1534,7 +1551,7 @@ impl Soc {
         match kept {
             Some(value) => Ok((value >> shift) & mask),
             None if quiet(word, false, 0) => Ok(0),
-            None => self.touch(now, word, false, false).map(|()| 0),
+            None => self.unkept(now, word, false).map(|()| 0),
         }
     }
 
@@ -1597,14 +1614,6 @@ impl Soc {
             self.ending = Some(Ending::Refused(Refused::Register("RMT", "fifo")));
             return Err(Exit::Stop);
         }
-        if word & !(BLOCK - 1) == I2C1 {
-            self.ending = Some(Ending::Refused(Refused::Register("I2C1", "port")));
-            return Err(Exit::Stop);
-        }
-        if word & !(BLOCK - 1) == USB_WRAP {
-            self.ending = Some(Ending::Refused(Refused::Register("USB_WRAP", "otg")));
-            return Err(Exit::Stop);
-        }
         let clock = word == SYSTEM + SYSCLK_CONF || word == SYSTEM + CPU_PER_CONF;
         // The other core's refetched access on a tie can have stamped the cycle after `start`,
         // and a switch at `start` would hold the reported tick until the new clock caught up.
@@ -1621,7 +1630,7 @@ impl Soc {
         }
         let kept = self.read_kept(now, word);
         let value = (kept.unwrap_or(0) & !(mask << shift)) | ((value & mask) << shift);
-        let change = match effect(word) {
+        let change = match effect(word, value) {
             Some(Effect::Refuse(bits, ending)) if value & bits != 0 => {
                 self.ending = Some(ending);
                 return Err(Exit::Stop);
@@ -1642,7 +1651,7 @@ impl Soc {
             if quiet(word, true, value) {
                 return Ok(());
             }
-            return self.touch(now, word, true, false);
+            return self.unkept(now, word, true);
         }
         let base = word & !(BLOCK - 1);
         let pads = matches!(base, GPIO | IO_MUX | SPI2 | RMT)
