@@ -246,6 +246,11 @@ fn a_five_millisecond_dip_slows_the_shaft_off_the_sample_grid() {
         let mut session = open_supply(&supply, 200 * MS, 10 * MS);
         assert_eq!(session.advance_to(Time::from_ps(150 * MS)), Status::Running);
         dipped.push(angle(&session));
+        let warnings = format!("{:?}", session.diagnostics());
+        assert!(
+            !warnings.contains("SupplySag"),
+            "a stiff dip to 2 V is not the moving draw sagging the rail: {warnings}"
+        );
     }
     let lost: Vec<f64> = dipped.iter().map(|horn| undipped - horn).collect();
     assert!(
@@ -256,4 +261,101 @@ fn a_five_millisecond_dip_slows_the_shaft_off_the_sample_grid() {
         (lost[0] - lost[1]).abs() < 2.5,
         "the dip's effect depends on where it sits: lost {lost:?}"
     );
+}
+
+fn series(ohms: f64) -> String {
+    format!(
+        r#"{{ "name": "v5", "kind": "voltage_source",
+             "pins": {{ "p": "v5", "n": "gnd" }},
+             "voltage": {{ "value": 5.0, "unit": "V" }} }},
+           {{ "name": "rs", "kind": "resistor",
+              "pins": {{ "a": "v5", "b": "vservo" }},
+              "resistance": {{ "value": {ohms}, "unit": "ohm" }},
+              "ratings": {{ "power": null }} }}"#
+    )
+}
+
+fn open_series(ohms: f64, stop: u64, step: u64) -> Session {
+    let json = format!(
+        r#"{{ "version": 1, "seed": 0,
+             "analysis": {{ "transient": {{ "stop_ps": {stop}, "max_step_ps": {step}, "grid_ps": {MS} }} }},
+             "ground": "gnd", "nets": ["gnd", "v5", "vservo", "sig"],
+             "parts": [ {supply},
+               {{ "name": "vsig", "kind": "voltage_source",
+                  "pins": {{ "p": "sig", "n": "gnd" }}, "voltage": {pulse} }},
+               {servo} ] }}"#,
+        supply = series(ohms),
+        pulse = pulse(5.0),
+        servo = servo()
+    );
+    Session::open_json(json.as_bytes(), &Blobs::new()).unwrap_or_else(|err| {
+        panic!("the netlist did not open: {err:?}\n{json}");
+    })
+}
+
+fn feed(session: &Session, rail: &Ref, current: &Ref) -> (f64, f64) {
+    let probe = session.probe();
+    (
+        probe.get(rail).unwrap().get(),
+        probe.get(current).unwrap().get(),
+    )
+}
+
+/// 5 V through 22, 25, 30 or 40 ohm cannot hold the 140 mA moving draw. The shaft stays
+/// put and the supply diagnostic says the supply sags under that draw. A read during the
+/// move sees the 5 mA hold, on a 10 ms step and a 20 ms step alike.
+#[test]
+fn a_weak_five_volt_feed_warns_that_the_moving_draw_sags_the_rail() {
+    let rail: Ref = "#net.vservo".parse().unwrap();
+    let current: Ref = "#rs.i".parse().unwrap();
+    for ohms in [22.0, 25.0, 30.0, 40.0] {
+        let mut session = open_series(ohms, 1_000 * MS, MS);
+        assert_eq!(
+            session.advance_to(Time::from_ps(1_000 * MS)),
+            Status::Stopped
+        );
+        let horn = angle(&session);
+        assert!(
+            (horn - 90.0).abs() < 0.01,
+            "R={ohms} ohm let the shaft creep to {horn}"
+        );
+        let text: String = session
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.message_with(&|name| name.to_string()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("sags under the servo's moving draw"),
+            "R={ohms} ohm did not warn about the sag: {text}"
+        );
+        let (volts, amps) = feed(&session, &rail, &current);
+        let hold = 5.0 - 0.005 * ohms;
+        assert!(
+            (volts - hold).abs() < 0.02 && (amps - 0.005).abs() < 0.001,
+            "R={ohms} ohm settled at {volts:.3} V and {amps:.4} A, not the 5 mA hold"
+        );
+    }
+    let mut traces = Vec::new();
+    for step in [10 * MS, 20 * MS] {
+        let mut session = open_series(40.0, 50 * MS, step);
+        let mut rows = Vec::new();
+        let mut t = 22 * MS + MS / 2;
+        while t <= 45 * MS {
+            assert_eq!(session.advance_to(Time::from_ps(t)), Status::Running);
+            rows.push(feed(&session, &rail, &current));
+            t += MS / 2;
+        }
+        traces.push(rows);
+    }
+    for (left, right) in traces[0].iter().zip(&traces[1]) {
+        assert!(
+            (left.0 - right.0).abs() < 0.01 && (left.1 - right.1).abs() < 0.001,
+            "the rail depends on the step: {left:?} vs {right:?}"
+        );
+        assert!(
+            (left.0 - 4.8).abs() < 0.05 && (left.1 - 0.005).abs() < 0.001,
+            "the 40 ohm feed left the collapsed reading {left:?}"
+        );
+    }
 }

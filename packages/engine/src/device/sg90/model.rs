@@ -26,9 +26,13 @@
 //! figure is VREG minimum, the regulator output at Vcc 4.8 V. Below 3.0 V the shaft does not
 //! follow and the draw is none. 3.0 V is the bottom of the operating range 4tronix lists for
 //! an SG90, 3.0 V to 7.2 V, the lowest such minimum among the cited sheets. A supply that
-//! returns above 3.0 V follows the next pulse. The host samples the supply at every accepted
-//! step, and a read of the angle is the shaft's place at that read. The shaft powers on at
-//! 90°, the centre the horn is drawn at.
+//! returns above 3.0 V follows the next pulse. When the moving draw itself pulls the supply
+//! under 3.0 V, the shaft holds and the part warns that the supply sags under that draw. A
+//! real SG90 browns out and jitters there, because the controller resets and tries again. The
+//! model holds the shaft instead of buzzing, and the draw returns to the 5 mA hold as soon as
+//! the rail recovers. The host samples the supply at every accepted step, and a read of the
+//! angle is the shaft's place at that read. The shaft powers on at 90°, the centre the horn
+//! is drawn at.
 
 use orbe_model::{
     Cx, Device, Draw, Drives, Error, Idle, Params, PulseTarget, Shows, State, Stop, Time, View,
@@ -53,6 +57,11 @@ const WARN_BELOW_MV: i32 = 4_500;
 const FAST_MV: i32 = 6_000;
 /// Below this the shaft does not follow and the draw is none. 4tronix lists 3.0 V to 7.2 V.
 const FLOOR_MV: i32 = 3_000;
+/// After a moving draw reads under the floor, look again this much later. The host applies a
+/// draw change 1 ps after the sample that made it, on the solution the old draw produced, so
+/// the recovered rail is the sample one step after that. Without this stop that step is the
+/// solver's, and the collapsed reading lasts as long as `max_step_ps`.
+const CONFIRM_PS: u64 = 2;
 /// SunFounder SF0180, stopped, at 4.8 V.
 const IDLE_A: f64 = 0.005;
 /// SunFounder SF0180, running with no load, at 4.8 V.
@@ -83,6 +92,9 @@ pub struct Sg90 {
     origin: Time,
     /// The shaft has not reached `command`.
     moving: bool,
+    /// When to read the rail again after the moving draw pulled it under the floor. The sample
+    /// there decides whether the supply sagged under that draw or is itself under the floor.
+    confirm: Option<Time>,
 }
 
 impl State for Sg90 {}
@@ -215,12 +227,24 @@ impl Device for Sg90 {
             origin_mdeg: CENTRE_MDEG,
             origin: Time::ZERO,
             moving: false,
+            confirm: None,
         })
     }
 
     fn run_until(&mut self, _cx: &mut Cx, limit: Time) -> Option<Stop> {
         if self.reached >= limit {
             return None;
+        }
+        if let Some(confirm) = self.confirm
+            && confirm > self.reached
+            && confirm <= limit
+        {
+            let _ = self.integrate(confirm);
+            return Some(Stop {
+                at: confirm,
+                sample: true,
+                record: false,
+            });
         }
         let arrived = self.integrate(limit);
         arrived.then_some(Stop {
@@ -250,15 +274,14 @@ impl Device for Sg90 {
         self.catch_up(at);
         let mv = volts.first().map_or(0, |v| (v * 1_000.0).round() as i32);
         let mv = mv.max(0);
+        let trying = self.moving || self.command.is_some();
         let was = Self::speed_mdeg_s(self.supply_mv.unwrap_or(0));
         if self.command.is_some() && was != Self::speed_mdeg_s(mv) {
             self.origin_mdeg = self.angle_mdeg;
             self.origin = at;
         }
         self.supply_mv = Some(mv);
-        if (FLOOR_MV..WARN_BELOW_MV).contains(&mv) {
-            cx.broke("supply", at);
-        }
+        let sag = self.confirm.is_some_and(|due| due <= at);
         if mv < FLOOR_MV {
             // Hold the angle `catch_up` just reached. Clearing `command` alone would send the
             // next step back to `origin_mdeg`.
@@ -267,6 +290,21 @@ impl Device for Sg90 {
             self.command = None;
             self.command_us = None;
             self.moving = false;
+            if trying && self.confirm.is_none() {
+                self.confirm = Some(Time::from_ps(at.as_ps().saturating_add(CONFIRM_PS)));
+            } else if sag {
+                // The rail is still under the floor with the moving draw gone, so the supply
+                // itself is low. That is not a sag.
+                self.confirm = None;
+            }
+        } else if sag {
+            self.confirm = None;
+            // The rail came back once the moving draw dropped, so that draw pulled it under
+            // the floor. The shaft stays. The draw is the hold, because the supply is up.
+            // One call reports one rule, so the slow-range warning waits for the next sample.
+            cx.broke("supply_sag", at);
+        } else if (FLOOR_MV..WARN_BELOW_MV).contains(&mv) {
+            cx.broke("supply", at);
         }
     }
 
@@ -561,5 +599,41 @@ mod tests {
         assert!(run(&mut dev, MS + 500 * MS).is_none());
         assert_eq!(degrees(&dev), held);
         assert_eq!(dev.draw().amps, 0.0);
+    }
+
+    #[test]
+    fn a_moving_draw_that_collapses_the_rail_warns_and_holds() {
+        let mut dev = servo();
+        power(&mut dev, 5.0);
+        pulse(&mut dev, MS, 2_400);
+        assert!(dev.moving);
+        let mut cx = Cx::default();
+        dev.sample(&mut cx, at(MS), &[2.8]);
+        assert!(
+            cx.broken().is_none(),
+            "one low sample is not yet known to be the moving draw"
+        );
+        assert_eq!(dev.draw().amps, 0.0);
+        assert_eq!(degrees(&dev), 90.0);
+        let mut cx = Cx::default();
+        dev.sample(&mut cx, at(MS + 2), &[5.0]);
+        assert_eq!(cx.broken().map(|broken| broken.0), Some("supply_sag"));
+        assert_eq!(dev.draw().amps, IDLE_A);
+        assert_eq!(degrees(&dev), 90.0);
+        assert!(run(&mut dev, MS + 200 * MS).is_none());
+        assert_eq!(degrees(&dev), 90.0);
+    }
+
+    #[test]
+    fn a_supply_that_stays_under_the_floor_is_not_a_sag() {
+        let mut dev = servo();
+        power(&mut dev, 5.0);
+        pulse(&mut dev, MS, 2_400);
+        let mut cx = Cx::default();
+        dev.sample(&mut cx, at(MS), &[2.0]);
+        dev.sample(&mut cx, at(MS + 2), &[2.0]);
+        assert!(cx.broken().is_none());
+        assert_eq!(dev.draw().amps, 0.0);
+        assert_eq!(degrees(&dev), 90.0);
     }
 }

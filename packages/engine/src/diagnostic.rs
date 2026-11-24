@@ -200,10 +200,12 @@ pub enum ProtocolRule {
     DoutRecord,
     /// The supply is up, and under 4.5 V. The shaft still moves, slower than at 4.8 V.
     Supply,
+    /// The moving draw pulled an SG90's supply under 3.0 V. The shaft holds.
+    SupplySag,
 }
 
 impl ProtocolRule {
-    pub(crate) const ALL: [ProtocolRule; 7] = [
+    pub(crate) const ALL: [ProtocolRule; 8] = [
         ProtocolRule::Command,
         ProtocolRule::PixelFormat,
         ProtocolRule::SdaWhileSclHigh,
@@ -211,6 +213,7 @@ impl ProtocolRule {
         ProtocolRule::Interval,
         ProtocolRule::DoutRecord,
         ProtocolRule::Supply,
+        ProtocolRule::SupplySag,
     ];
 
     /// Its place in [`ALL`](Self::ALL).
@@ -228,6 +231,7 @@ impl ProtocolRule {
             "interval" => Some(ProtocolRule::Interval),
             "dout_record" => Some(ProtocolRule::DoutRecord),
             "supply" => Some(ProtocolRule::Supply),
+            "supply_sag" => Some(ProtocolRule::SupplySag),
             _ => None,
         }
     }
@@ -1297,6 +1301,18 @@ impl Diagnostic {
                     "{part} is below 4.5 V at {} ps, so it moves slower, breaking rule {}, the first time",
                     at.as_ps(),
                     rule_text(&ProtocolRule::Supply)
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::SupplySag,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} supply sags under the servo's moving draw at {} ps, so the shaft holds, breaking rule {}, the first time",
+                    at.as_ps(),
+                    rule_text(&ProtocolRule::SupplySag)
                 )
             }
             Diagnostic::ChipProtocol { part, at, rule } => {
