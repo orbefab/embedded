@@ -1646,3 +1646,159 @@ fn ack_check_en_and_ack_exp_follow_trm_write_rules() {
     play(&mut chip, c(4000).0, c(4000).0, |rises| rises == 9).unwrap();
     assert_eq!(word(&mut chip, INT_RAW) & (NACK | TRANS_COMPLETE), NACK);
 }
+
+/// A `TRANS_START` or `CONF_UPGATE` during the `STOP` of an acknowledged transfer, during a
+/// standalone `STOP` that did not follow a NACK, or during a NACK's automatic stop before
+/// `COMD0 = STOP` is written must still be refused as `busy_write`.
+#[test]
+fn a_strobe_during_an_acked_stop_or_non_nack_stop_is_refused_as_busy_write() {
+    for nops in [960, 1000, 1040, 1080] {
+        for strobe in [
+            MODE | TRANS_START,
+            MODE | CONF_UPGATE,
+            MODE | CONF_UPGATE | TRANS_START,
+        ] {
+            let mut program = Program::new(&[I2C0, GO, strobe]);
+            program.l32r(2, 0).l32r(3, 1).rri8(6, 3, 2, CTR as u8);
+            for _ in 0..nops {
+                program.raw(&NOP);
+            }
+            program.l32r(3, 2).rri8(6, 3, 2, CTR as u8).raw(&LOOP);
+            let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD]);
+            one_byte(&mut chip);
+            let halt = play(&mut chip, c(4000).0, c(4000).0, |rises| rises == 9);
+            assert_eq!(
+                refused(halt.err()),
+                ("I2C0", "busy_write"),
+                "nops={nops}, strobe={strobe:#x}"
+            );
+        }
+    }
+
+    // Direct store at the acknowledged STOP's SCL rise (10th SCL release).
+    for strobe in [
+        MODE | TRANS_START,
+        MODE | CONF_UPGATE,
+        MODE | CONF_UPGATE | TRANS_START,
+    ] {
+        let mut chip = go(CTR as u8).chip_on(&[SCL_PAD, SDA_PAD]);
+        one_byte(&mut chip);
+        let mut wire = [true, true];
+        let mut rises = 0u32;
+        let stop_rise = loop {
+            match chip.run_until(c(4000)) {
+                Some(Halt::Moved(at)) => {
+                    let drives = [chip.drive(SCL_PAD), chip.drive(SDA_PAD)];
+                    if !matches!(drives[0], PadDrive::Low) && !wire[0] {
+                        rises += 1;
+                    }
+                    let hold_sda = rises == 9;
+                    let mut changed = Vec::new();
+                    for (k, pad) in [SCL_PAD, SDA_PAD].into_iter().enumerate() {
+                        let level = !(k == 1 && hold_sda) && !matches!(drives[k], PadDrive::Low);
+                        if level != wire[k] {
+                            wire[k] = level;
+                            changed.push((pad, level));
+                        }
+                    }
+                    chip.input(at, changed);
+                    if rises == 10 {
+                        break at;
+                    }
+                }
+                other => panic!("before stop rise: {other:?}"),
+            }
+        };
+        let soc = &mut chip.soc;
+        assert_eq!(
+            soc.i2c.write(stop_rise, CTR, strobe, &mut soc.gpio),
+            Err("busy_write"),
+            "direct store at stop SCL rise, strobe={strobe:#x}"
+        );
+    }
+
+    // A standalone STOP on an idle bus with no preceding NACK still refuses a second start.
+    for strobe in [
+        MODE | TRANS_START,
+        MODE | CONF_UPGATE,
+        MODE | CONF_UPGATE | TRANS_START,
+    ] {
+        let mut program = Program::new(&[I2C0, GO, strobe]);
+        program
+            .l32r(2, 0)
+            .l32r(3, 1)
+            .rri8(6, 3, 2, CTR as u8)
+            .l32r(3, 2)
+            .rri8(6, 3, 2, CTR as u8)
+            .raw(&LOOP);
+        let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD]);
+        arm(&mut chip);
+        poke(&mut chip, COMD0, stop_cmd());
+        let halt = play(&mut chip, c(2000).0, c(2000).0, |_| false);
+        assert_eq!(
+            refused(halt.err()),
+            ("I2C0", "busy_write"),
+            "non-NACK standalone stop, strobe={strobe:#x}"
+        );
+    }
+
+    // A NACK followed by an ordinary acknowledged transfer (no recovery STOP) must still refuse
+    // a strobe during the acknowledged transfer's STOP.
+    {
+        let mut program = Program::new(&[
+            I2C0,
+            GO,
+            I2C0 + INT_CLR,
+            NACK,
+            I2C0 + DATA,
+            0xa5,
+            I2C0 + COMD0,
+            rstart(),
+            I2C0 + COMD0 + 4,
+            write_cmd(1),
+            I2C0 + COMD0 + 8,
+            stop_cmd(),
+            MODE | TRANS_START,
+        ]);
+        program.l32r(2, 0).l32r(3, 1).rri8(6, 3, 2, CTR as u8);
+        wait_bit(&mut program, INT_RAW, 10, true);
+        wait_bit(&mut program, SR, 4, false);
+        for k in 0..5 {
+            program
+                .l32r(5, 2 + 2 * k)
+                .l32r(6, 3 + 2 * k)
+                .rri8(6, 6, 5, 0);
+        }
+        program.l32r(3, 1).rri8(6, 3, 2, CTR as u8);
+        for _ in 0..1000 {
+            program.raw(&NOP);
+        }
+        program.l32r(3, 12).rri8(6, 3, 2, CTR as u8).raw(&LOOP);
+        let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD]);
+        one_byte(&mut chip);
+        // First transfer (rises 1..=10) NACKs; second transfer (rises 11..=20) ACKs on rise 19.
+        let halt = play(&mut chip, c(8000).0, c(8000).0, |rises| rises == 19);
+        assert_eq!(
+            refused(halt.err()),
+            ("I2C0", "busy_write"),
+            "acked transfer after a NACK"
+        );
+    }
+
+    // During a NACK's automatic stop, a TRANS_START before COMD0 = STOP is written is still
+    // refused as busy_write.
+    {
+        let mut program = Program::new(&[I2C0, GO, MODE | TRANS_START]);
+        program.l32r(2, 0).l32r(3, 1).rri8(6, 3, 2, CTR as u8);
+        wait_bit(&mut program, INT_RAW, 10, true);
+        program.l32r(3, 2).rri8(6, 3, 2, CTR as u8).raw(&LOOP);
+        let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD]);
+        one_byte(&mut chip);
+        let halt = play(&mut chip, c(4000).0, c(4000).0, |_| false);
+        assert_eq!(
+            refused(halt.err()),
+            ("I2C0", "busy_write"),
+            "TRANS_START during NACK stop without COMD0 = STOP"
+        );
+    }
+}

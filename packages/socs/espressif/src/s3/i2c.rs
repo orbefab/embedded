@@ -27,11 +27,12 @@
 //! the stop and clears `I2C_BUS_BUSY` with no `I2C_TRANS_COMPLETE_INT_RAW`. A list's stop raises
 //! `I2C_TRANS_COMPLETE_INT_RAW`. While a NACK's automatic stop is running, `CMD_Controller` reads
 //! no further command registers (TRM v1.8, 27.4.9), so a command-register store updates the
-//! register without disturbing the stop; while either a NACK stop or a `STOP` command is running,
-//! a `CONF_UPGATE` with unchanged `CTR` and timing registers is a no-op and a `TRANS_START` is
-//! ignored, as IDF v5.5.5's `s_i2c_send_commands` writes `COMD0 = STOP` and two
-//! `i2c_hal_master_trans_start` calls on `I2C_STATUS_ACK_ERROR`. Reading `I2C_DATA_REG` from an
-//! empty RX FIFO returns 0 and sets `I2C_RXFIFO_UDF_INT_RAW` (TRM v1.8, 27.6 and Register 27.22).
+//! register without disturbing the stop. While a NACK's automatic stop runs or a standalone `STOP`
+//! command started right after a NACK runs, and `COMD0` holds `STOP`, a `CONF_UPGATE` with
+//! unchanged `CTR` and timing registers is a no-op and a `TRANS_START` is ignored, as IDF v5.5.5's
+//! `s_i2c_send_commands` writes `COMD0 = STOP` and two `i2c_hal_master_trans_start` calls on
+//! `I2C_STATUS_ACK_ERROR`. Reading `I2C_DATA_REG` from an empty RX FIFO returns 0 and sets
+//! `I2C_RXFIFO_UDF_INT_RAW` (TRM v1.8, 27.6 and Register 27.22).
 //!
 //! An END command, as the ESP32-S3 TRM v1.8 (27.4.9 and 27.5.4) describes it, marks its command
 //! done, raises `I2C_END_DETECT_INT_RAW` and stops the list with SCL held low and the bus busy.
@@ -171,6 +172,9 @@ pub(crate) struct I2c {
     held: bool,
     /// From the start this master made to the stop it made.
     busy: bool,
+    /// The last finished transfer ended in a NACK, so a standalone `STOP` started next is IDF's
+    /// NACK recovery stop.
+    after_nack: bool,
     /// The drive move that waits for its halt: its tick, signal and level.
     moved: Option<(Tick, u16, bool)>,
     /// The setting a run met that the model does not run, and its tick.
@@ -322,6 +326,8 @@ struct Run {
     left: u8,
     /// A write read no ACK, so the run makes its stop and ends with no `TRANS_COMPLETE`.
     nack: bool,
+    /// A standalone `STOP` started right after a transfer ended in a NACK.
+    nack_stop: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -410,6 +416,7 @@ impl I2c {
             run: None,
             held: false,
             busy: false,
+            after_nack: false,
             moved: None,
             refused: None,
             seen: [(true, Tick(0)); 2],
@@ -462,13 +469,14 @@ impl I2c {
         self.settle(now, gpio);
         let running = self.run.is_some();
         let nack_stopping = self.run.is_some_and(|run| run.nack);
-        let stopping = self.run.is_some_and(|run| run.nack || run.op == Op::Stop);
+        let nack_recovery = self.run.is_some_and(|run| run.nack || run.nack_stop)
+            && Op::of(self.reg(COMD0) & COMMAND) == Ok(Op::Stop);
         let busy_write = match offset {
             CTR if value & (TRANS_START | CONF_UPGATE) != 0 => {
                 let same_ctr = value & !CTR_STROBES == self.reg(CTR) & !CTR_STROBES;
                 let same_timing =
                     value & CONF_UPGATE == 0 || Timing::from_regs(&self.regs) == self.timing;
-                !(stopping && same_ctr && same_timing)
+                !(nack_recovery && same_ctr && same_timing)
             }
             CTR => false,
             FIFO_CONF => value & (TX_FIFO_RST | RX_FIFO_RST) != 0,
@@ -586,6 +594,7 @@ impl I2c {
     /// on an idle bus, and any command on one an END holds.
     fn start(&mut self, now: Tick, op: Op, gpio: &Gpio) {
         let timing = self.timing;
+        let after_nack = std::mem::take(&mut self.after_nack);
         self.observe(now, gpio);
         if self.held {
             self.held = false;
@@ -602,11 +611,12 @@ impl I2c {
                 byte: 0,
                 left: 0,
                 nack: false,
+                nack_stop: false,
             });
             return;
         }
         if op == Op::Stop {
-            self.start_stop(now, gpio);
+            self.start_stop(now, gpio, after_nack);
             return;
         }
         self.run = Some(Run {
@@ -622,13 +632,14 @@ impl I2c {
             byte: 0,
             left: 0,
             nack: false,
+            nack_stop: false,
         });
     }
 
     /// A STOP that is the first command. Both lines already high, the bus is idle and the
     /// command only waits its setup and hold. SCL still low, it makes the stop from this tick.
     /// SDA still low while SCL is high, it releases SDA after the setup.
-    fn start_stop(&mut self, now: Tick, gpio: &Gpio) {
+    fn start_stop(&mut self, now: Tick, gpio: &Gpio, nack_stop: bool) {
         let timing = self.timing;
         let scl_high = gpio.input(SCL) == Some(true);
         let sda_high = gpio.input(SDA) == Some(true);
@@ -646,6 +657,7 @@ impl I2c {
             byte: 0,
             left: 0,
             nack: false,
+            nack_stop,
         };
         if scl_high && sda_high {
             let wait = timing.stop_setup + timing.stop_hold;
@@ -921,7 +933,9 @@ impl I2c {
             }
             Phase::Stop { released: true } => {
                 self.busy = false;
-                if !run.nack {
+                if run.nack {
+                    self.after_nack = true;
+                } else {
                     self.regs[(COMD0 / 4) as usize + run.cmd] |= COMMAND_DONE;
                     self.int_raw |= TRANS_COMPLETE;
                 }
