@@ -11,6 +11,7 @@ pub enum Quantity {
     Temperature,
     Humidity,
     Light,
+    Pressure,
 }
 
 /// One quantity's row of the table: its name in a netlist and a ref, the unit its values are
@@ -25,7 +26,7 @@ pub struct Row {
     pub default: f64,
 }
 
-const ROWS: [Row; 3] = [
+const ROWS: [Row; 4] = [
     Row {
         name: "temperature",
         unit: "degC",
@@ -47,11 +48,23 @@ const ROWS: [Row; 3] = [
         max: 100_000.0,
         default: 300.0,
     },
+    Row {
+        name: "pressure",
+        unit: "Pa",
+        min: 30_000.0,
+        max: 110_000.0,
+        default: 101_325.0,
+    },
 ];
 
 impl Quantity {
     /// Every quantity, in table order.
-    pub const ALL: [Quantity; 3] = [Quantity::Temperature, Quantity::Humidity, Quantity::Light];
+    pub const ALL: [Quantity; 4] = [
+        Quantity::Temperature,
+        Quantity::Humidity,
+        Quantity::Light,
+        Quantity::Pressure,
+    ];
 
     pub fn row(self) -> &'static Row {
         &ROWS[self as usize]

@@ -161,7 +161,7 @@ fn an_unknown_quantity_is_netlist_world() {
         one(&json),
         (
             "netlist.world".into(),
-            "world names `lite`, which is not a world quantity; the quantities are temperature, humidity, light".into()
+            "world names `lite`, which is not a world quantity; the quantities are temperature, humidity, light, pressure".into()
         )
     );
     let json = document(
@@ -170,7 +170,7 @@ fn an_unknown_quantity_is_netlist_world() {
     );
     assert_eq!(
         one(&json).1,
-        "#r1 resistance.quantity names `lite`, which is not a world quantity; the quantities are temperature, humidity, light"
+        "#r1 resistance.quantity names `lite`, which is not a world quantity; the quantities are temperature, humidity, light, pressure"
     );
 }
 

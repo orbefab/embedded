@@ -86,6 +86,8 @@ pub(crate) fn chip(part: PartId, dev: &Hd44780I2c) -> Chip {
         scl: model::WATCH_SCL,
         sda: model::WATCH_SDA,
         reset: None,
+        address_high: None,
+        power: &[],
     };
     Chip {
         part: Some(part),

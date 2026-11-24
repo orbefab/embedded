@@ -90,6 +90,7 @@ The world is the room the circuit sits in. Its quantities are a closed table, ex
 | `temperature` | `degC` | -40 to 125 | 25 |
 | `humidity` | `%RH` | 0 to 100 | 50 |
 | `light` | `lx` | 0 to 100000 | 300 |
+| `pressure` | `Pa` | 30000 to 110000 | 101325 |
 
 `world` maps each quantity the netlist declares to a value object or a `steps` waveform in the quantity's unit, as a potentiometer's `position` is. A value holds at every time. A `steps` waveform holds `initial`, then each event's `level` from its `t_ps` on. A quantity the netlist leaves out has no value, no part may read it, and the run writes no column for it. `{}` declares none, as a missing `world` does.
 
@@ -136,7 +137,7 @@ A curve reads the quantity's value `w`. `x`, `x0` and `x1` are in the quantity's
 | `beta` | `y * exp(beta * (1 / (w + 273.15) - 1 / (x + 273.15)))` | `x`, `y`, `beta` in `K` | an NTC thermistor's B equation, on `temperature` only |
 | `linear` | the line through `(x0, y0)` and `(x1, y1)` | `x0`, `y0`, `x1`, `y1` | a sensor with a linear output, such as an LM35's 10 mV per degC |
 
-Each curve is monotonic in `w` over the range of a quantity it may read, so its values over that range lie between its values at the range's two ends. A `beta` or `linear` curve is monotonic for every `w` it may read. A `power` curve is monotonic only where `w / x` is not negative, so it reads only a quantity whose range does not go below 0, `light` or `humidity`. At `w` 0 a negative exponent makes `y * (w / x)^exponent` infinite, and the curve is `max` there, the dark resistance of a light-dependent resistor. Any other value above `max` is `max` too. A value that is not a number is never capped. Parse checks the field's own rule at both ends, so every value a schedule or a session can set keeps it. An end that breaks it is `netlist.value` on field `<field>.curve at <end> <unit>`, such as `resistance.curve at 0.0 lx`, with the field's rule, or rule `finite` when the curve is not finite there, such as a `power` curve with `y` 0 and a negative exponent at 0 lx. A `power` curve on `temperature` is `netlist.world` with rule `non_negative` on field `<field>.curve.kind`. A quantity the netlist does not declare is `netlist.world` with rule `undeclared` on field `<field>.quantity`, and a name the table lacks is rule `unknown` there. A `beta` curve on another quantity is `netlist.world` with rule `temperature` on field `<field>.curve.kind`. A `power` curve's `x` at or below 0 is `netlist.value` with rule `positive`. A `linear` curve whose `x1` equals its `x0` is `netlist.value` with rule `distinct`. A unit that is not the one the table above names is `netlist.unit` on field `<field>.curve.<name>`. An unknown `kind`, a missing field and an unknown field are `netlist.syntax`.
+Each curve is monotonic in `w` over the range of a quantity it may read, so its values over that range lie between its values at the range's two ends. A `beta` or `linear` curve is monotonic for every `w` it may read. A `power` curve is monotonic only where `w / x` is not negative, so it reads only a quantity whose range does not go below 0, `light`, `humidity` or `pressure`. At `w` 0 a negative exponent makes `y * (w / x)^exponent` infinite, and the curve is `max` there, the dark resistance of a light-dependent resistor. Any other value above `max` is `max` too. A value that is not a number is never capped. Parse checks the field's own rule at both ends, so every value a schedule or a session can set keeps it. An end that breaks it is `netlist.value` on field `<field>.curve at <end> <unit>`, such as `resistance.curve at 0.0 lx`, with the field's rule, or rule `finite` when the curve is not finite there, such as a `power` curve with `y` 0 and a negative exponent at 0 lx. A `power` curve on `temperature` is `netlist.world` with rule `non_negative` on field `<field>.curve.kind`. A quantity the netlist does not declare is `netlist.world` with rule `undeclared` on field `<field>.quantity`, and a name the table lacks is rule `unknown` there. A `beta` curve on another quantity is `netlist.world` with rule `temperature` on field `<field>.curve.kind`. A `power` curve's `x` at or below 0 is `netlist.value` with rule `positive`. A `linear` curve whose `x1` equals its `x0` is `netlist.value` with rule `distinct`. A unit that is not the one the table above names is `netlist.unit` on field `<field>.curve.<name>`. An unknown `kind`, a missing field and an unknown field are `netlist.syntax`.
 
 ## Names
 
@@ -1287,6 +1288,24 @@ A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.u
 
 A `dht22` has no `ratings` object and no `i`, `v`, or `p`. Its logic signal is `DATA`. It joins `DATA` to `GND` through the stage its drive stamps. `VCC` draws no current, so it needs another DC path.
 
+### BMP280
+
+`kind` is `bmp280`, a Bosch BMP280 temperature and pressure sensor, BST-BMP280-DS001-26. It is an active chip with no clock of its own and an I2C target. Pins are `VDD`, `VDDIO`, `GND`, `CSB`, `SDI`, `SCK` and `SDO`. Every pin is required. `SDI` is open drain into `GND` behind `low_resistance`. `SCK`, `CSB` and `SDO` are inputs. The part reads those four through `input_threshold`, fractions of `VDDIO`. It does not hold `SCK`. `SDO` low selects address 0x76 and `SDO` high selects 0x77. `CSB` low is SPI mode: the part does not answer on I2C, and the first time is `chip.protocol` rule `spi`. A `1` written to `spi3w_en` is rule `spi3w`. 3-wire SPI and every SPI transfer are not modelled.
+
+It reads the netlist's `temperature` and `pressure`, which the netlist's `world` must declare. Register `0xD0` reads `0x58`. The trimming words at `0x88` to `0x9F` are the compensation example's, and a measurement stores the raw sample that §3.11.3's integer formulas compensate back to the world. Temperature is clamped to -40 to 85 °C and pressure to 30000 to 110000 Pa. The typical measurement time is Table 13, `1.5 ms + 2.0 ms * osr_t + 2.0 ms * osr_p`. Normal mode then waits the `t_sb` of Table 11. Forced mode measures once and returns to sleep. A mode write during a conversion waits until it ends, and a second write before then is ignored. A write to `config` (0xF5) in normal mode is ignored (§4.3.5); the first write that would change `config` is `chip.protocol` rule `config_in_normal`, while a write that leaves `config` unchanged is silent. Write sleep mode to `ctrl_meas` (0xF4) before `config`; writes in sleep or forced mode are silent and take effect. Writing `filter` clears the IIR, and the next sample passes through (§3.3.3). Writing `0xB6` to `0xE0` is the power-on reset. The NVM copy that sets `im_update` takes no time, so that bit stays 0.
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `low_resistance` | `ohm` | the resistor's |
+| `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+| `ratings.supply_voltage`, `ratings.pin_margin` | `V` | greater than 0, else rule `positive` |
+
+A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
+
+`ratings.supply_voltage` is the ceiling on `VDD` and `VDDIO` over `GND`. `ratings.pin_margin` is how far any pin but `GND` may sit below `GND`, and how far `CSB`, `SDI`, `SCK` and `SDO` may sit above `VDDIO`. A pin exactly on the edge is inside. Table 3 gives 4.25 V and 0.3 V. Past either, the pin warns [`rating.voltage`](diagnostics.md#ratingvoltage).
+
+`VDD` draws the Table 2 typical into `GND`: 0.1 µA asleep, 0.2 µA in the standby of normal mode, 325 µA while temperature is measured and 720 µA while pressure is measured. The part runs while `VDD` is at or above 1.71 V and `VDDIO` at or above 1.2 V, the Table 2 minimums. Below either it is off: it draws nothing, leaves `SDI` released, and starts from reset when the supply comes back. Above the 3.6 V operating maximum, and with `CSB`, `SDI`, `SCK` or `SDO` past `VDDIO` + 0.3 V, it keeps answering, as a real part mostly does, and the ratings warn. A `bmp280` has no `i`, `v`, or `p`. Its logic signals are `SCK`, `SDI`, `CSB` and `SDO`. It joins `SDI` to `GND` through the stage its drive stamps. `VDDIO` draws no current of its own, so it needs another DC path. The draw on `VDD` is a current, so a net reached only through it still floats.
+
 ### 74HC595
 
 `kind` is `hc595`, a 74HC595 8-bit shift register with 3-state storage outputs. It is an active chip with no clock of its own. Pins, in DIP order, are `QB`, `QC`, `QD`, `QE`, `QF`, `QG`, `QH`, `GND`, `QHp`, `SRCLR`, `SRCLK`, `RCLK`, `OE`, `SER`, `QA` and `VCC`. `QHp` is the datasheet's QH'. Every pin is required.
@@ -1520,7 +1539,7 @@ A ref names one net, part, pin, quantity, or logic signal.
 ```text
 ref      = "#" ( "net." name | "world." world | name [ "." ( quantity | "pin." name | "logic." name ) ] )
 quantity = "ib" | "ic" | "id" | "iin" | "iout" | "i" | "v" | "p"
-world    = "temperature" | "humidity" | "light"
+world    = "temperature" | "humidity" | "light" | "pressure"
 ```
 
 `#<part>.usart.<name>`, such as `#u1.usart.USART0`, is reserved and is not a ref.

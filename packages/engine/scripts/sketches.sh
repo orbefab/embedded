@@ -6,13 +6,15 @@
 # blocks/<id>/build/<name>.ino.hex, the path arduino-cli compile --output-dir build writes
 # for that sketch. The clock is 16 MHz unless the sketch directory contains `f_cpu`, one integer of hertz.
 # The runtime's core is compiled into an archive and linked with each sketch, and main() comes
-# from the core. The runtime's Wire library is compiled into a second archive, which a sketch
-# that includes Wire.h also links. A sketch that includes Servo.h also links the Arduino
-# Servo library, pinned below. A sketch that includes Adafruit_NeoPixel.h also links that
+# from the core. A Block whose board is not nano-board or uno-board is skipped. The runtime's
+# Wire library is compiled into a second archive, which a sketch that includes Wire.h also links.
+# A sketch that includes Servo.h also links the Arduino Servo library, pinned below. A sketch that
+# includes Adafruit_NeoPixel.h also links that
 # library, pinned below, compiled for the sketch's clock. A sketch that includes
 # Adafruit_SSD1306.h also links Adafruit SSD1306, Adafruit GFX and the runtime's SPI library,
-# and compiles against Adafruit BusIO's headers, which Adafruit_GFX.h includes. A clock other
-# than 16 MHz gets its own core and Wire archives.
+# and compiles against Adafruit BusIO's headers, which Adafruit_GFX.h includes. A sketch that
+# includes Adafruit_BMP280.h also links that library, Adafruit BusIO, Adafruit Unified Sensor
+# and the runtime's SPI library. A clock other than 16 MHz gets its own core and Wire archives.
 # A build of the engine reads only the committed hex.
 #
 # Usage: packages/engine/scripts/sketches.sh TOOLS_DIR [DOWNLOAD_DIR]
@@ -28,6 +30,10 @@ runtime_url=https://downloads.arduino.cc/cores/staging/avr-1.8.6.tar.bz2
 runtime_sha256=ff1d17274b5a952f172074bd36c3924336baefded0232e10982f8999c2f7c3b6
 neopixel_url=https://github.com/adafruit/Adafruit_NeoPixel/archive/refs/tags/1.15.5.tar.gz
 neopixel_sha256=3aa189a5a397a13539fcb58ff297ab9dc4a4faf45115e48afd533f1337cb0f3b
+bmp280_url=https://github.com/adafruit/Adafruit_BMP280_Library/archive/refs/tags/3.0.0.tar.gz
+bmp280_sha256=54018faa0cb89ef25b54c79b1ab274e4010e9b2e41632446c72ac6ceed8f1241
+sensor_url=https://github.com/adafruit/Adafruit_Sensor/archive/refs/tags/1.1.15.tar.gz
+sensor_sha256=1763c21c969a74d69e4d29082c7458a2d474d51e5ad0e2c4803dda8e1c372d9a
 servo_url=https://github.com/arduino-libraries/Servo/archive/refs/tags/1.3.0.tar.gz
 servo_sha256=7b829d24f9165e9d2689d157568f066f290cbe41734a9384b9a06250a69e7993
 ssd1306_url=https://github.com/adafruit/Adafruit_SSD1306/archive/refs/tags/2.5.17.tar.gz
@@ -75,6 +81,8 @@ unpack() {
 unpack avr-gcc-7.3.0 "$toolchain_url" "$toolchain_sha256"
 unpack avr-runtime-1.8.6 "$runtime_url" "$runtime_sha256"
 unpack adafruit-neopixel-1.15.5 "$neopixel_url" "$neopixel_sha256"
+unpack adafruit-bmp280-3.0.0 "$bmp280_url" "$bmp280_sha256"
+unpack adafruit-sensor-1.1.15 "$sensor_url" "$sensor_sha256"
 unpack arduino-servo-1.3.0 "$servo_url" "$servo_sha256"
 unpack adafruit-ssd1306-2.5.17 "$ssd1306_url" "$ssd1306_sha256"
 unpack adafruit-gfx-1.13.0 "$gfx_url" "$gfx_sha256"
@@ -84,10 +92,13 @@ unpack liquidcrystal-i2c-2.0.0 "$lcd_i2c_url" "$lcd_i2c_sha256"
 bin=$tools/avr-gcc-7.3.0/avr/bin
 runtime=$tools/avr-runtime-1.8.6/avr-1.8.6
 neopixel=$tools/adafruit-neopixel-1.15.5/Adafruit_NeoPixel-1.15.5
+bmp280=$tools/adafruit-bmp280-3.0.0/Adafruit_BMP280_Library-3.0.0
+sensor=$tools/adafruit-sensor-1.1.15/Adafruit_Sensor-1.1.15
 servo=$tools/arduino-servo-1.3.0/Servo-1.3.0/src
 ssd1306=$tools/adafruit-ssd1306-2.5.17/Adafruit_SSD1306-2.5.17
 gfx=$tools/adafruit-gfx-1.13.0/Adafruit-GFX-Library-1.13.0
 busio=$tools/adafruit-busio-1.17.4/Adafruit_BusIO-1.17.4
+spi=$runtime/libraries/SPI/src
 lcd_i2c=$tools/liquidcrystal-i2c-2.0.0/LiquidCrystal_I2C-2.0.0
 core=$runtime/cores/arduino
 target=(-mmcu=atmega328p -DF_CPU=16000000L -I"$core" -I"$runtime/variants/standard")
@@ -153,6 +164,11 @@ for dir in "$repo"/packages/engine/tests/firmware/sketch/*/ "$repo"/blocks/*/fir
     continue
   fi
   firmware=$(dirname "$dir")
+  # A Block on a board other than the Nano or the Uno is not an ATmega328P sketch.
+  card=$(dirname "$firmware")/block.jsonc
+  if [[ -f $card ]] && ! grep -Eq '"board": "(nano|uno)-board"' "$card"; then
+    continue
+  fi
   library=()
   archives=()
   sketch_target=("${target[@]}")
@@ -183,8 +199,23 @@ for dir in "$repo"/packages/engine/tests/firmware/sketch/*/ "$repo"/blocks/*/fir
     library+=(-I"$neopixel" -DARDUINO=10806)
     archives+=("$work/$name-neopixel.o")
   fi
+  if grep -q '^#include <Adafruit_BMP280.h>' "$dir/$name.ino"; then
+    bmp_flags=(-I"$bmp280" -I"$busio" -I"$sensor" -I"$spi" -I"$wire" -DARDUINO=10806)
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${bmp_flags[@]}" \
+      "$bmp280/Adafruit_BMP280.cpp" -o "$work/$name-bmp280.o"
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${bmp_flags[@]}" \
+      "$busio/Adafruit_I2CDevice.cpp" -o "$work/$name-i2cdevice.o"
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${bmp_flags[@]}" \
+      "$busio/Adafruit_SPIDevice.cpp" -o "$work/$name-spidevice.o"
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${bmp_flags[@]}" \
+      "$sensor/Adafruit_Sensor.cpp" -o "$work/$name-sensor.o"
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" -I"$spi" \
+      "$spi/SPI.cpp" -o "$work/$name-spi.o"
+    library+=("${bmp_flags[@]}")
+    archives+=("$work/$name-bmp280.o" "$work/$name-i2cdevice.o" "$work/$name-spidevice.o" \
+      "$work/$name-sensor.o" "$work/$name-spi.o")
+  fi
   if grep -q '^#include <Adafruit_SSD1306.h>' "$dir/$name.ino"; then
-    spi=$runtime/libraries/SPI/src
     oled=(-DARDUINO=10806 -I"$ssd1306" -I"$gfx" -I"$busio" -I"$wire" -I"$spi")
     "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${oled[@]}" \
       "$ssd1306/Adafruit_SSD1306.cpp" -o "$work/$name-ssd1306.o"
