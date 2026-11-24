@@ -6,14 +6,11 @@ import { Stage } from "./stage";
 const BlockView = lazy(() => import("./live").then((live) => ({ default: live.BlockView })));
 
 export interface BlockPlayerProps {
-  readonly blocks: readonly {
-    readonly name: string;
-    readonly title: string;
-    /** The Block's summary. No line under the stage when this is missing. */
-    readonly summary?: string;
-    /** The part Hold to press drives, or null when the scene places nothing pressable. */
-    readonly hold: `@${string}` | null;
-  }[];
+  readonly name: string;
+  /** The Block's summary. No line under the stage when this is missing. */
+  readonly summary?: string;
+  /** The part Hold to press drives, or null when the scene places nothing pressable. */
+  readonly hold: `@${string}` | null;
   readonly registry: string;
   readonly wasm: string;
   /** Fill the frame: the stage grows, and the summary and hold control sit under it. */
@@ -89,42 +86,21 @@ function PressControl({ hold }: { hold: { readonly current: ButtonHold | null } 
   );
 }
 
-/** The first Block live in 3D, with a tab for each other Block. Switching a tab frees the
- * Block before it. The line under the stage is the Block's summary. Hold to press drives the
- * part the page named. */
-export function BlockPlayer({ blocks, registry, wasm, fill = false }: BlockPlayerProps) {
-  const [shown, setShown] = useState(blocks[0]?.name ?? "");
+/** One Block live in 3D. The line under the stage is the Block's summary. Hold to press drives
+ * the part the page named. */
+export function BlockPlayer({ name, summary: rawSummary, hold: press, registry, wasm, fill = false }: BlockPlayerProps) {
   const [webgl, setWebgl] = useState<boolean | null>(null);
   const hold = useRef<ButtonHold | null>(null);
-  const block = blocks.find((item) => item.name === shown) ?? blocks[0];
-  const summary = block?.summary?.trim() ?? "";
-  const press = block?.hold ?? null;
+  const summary = rawSummary?.trim() ?? "";
   const pressable = press !== null && webgl === true;
 
   return (
     <div className={fill ? "flex h-full min-h-0 min-w-0 flex-col" : undefined}>
-      {blocks.length > 1 ? (
-        <div className="mb-3 flex flex-wrap gap-2" role="tablist">
-          {blocks.map((item) => (
-            <button
-              aria-selected={item.name === shown}
-              className="border border-border px-3 py-1.5 font-mono text-xs transition-colors hover:border-foreground aria-selected:border-brand aria-selected:text-brand"
-              data-block={item.name}
-              key={item.name}
-              onClick={() => setShown(item.name)}
-              role="tab"
-              type="button"
-            >
-              {item.title}
-            </button>
-          ))}
-        </div>
-      ) : null}
       <div className={fill ? "min-h-0 min-w-0 flex-1" : undefined} data-testid="block-stage">
         <Stage fill={fill} label="Loading the Block" onWebgl={setWebgl}>
           {() => (
             <Suspense fallback={null}>
-              <BlockView hold={hold} id={shown} key={shown} press={press} registry={registry} wasm={wasm} />
+              <BlockView hold={hold} id={name} key={name} press={press} registry={registry} wasm={wasm} />
             </Suspense>
           )}
         </Stage>
@@ -135,7 +111,7 @@ export function BlockPlayer({ blocks, registry, wasm, fill = false }: BlockPlaye
         </p>
       )}
       {pressable ? (
-        <div className={fill ? "shrink-0 px-3 pb-3" : undefined} key={shown}>
+        <div className={fill ? "shrink-0 px-3 pb-3" : undefined} key={name}>
           <PressControl hold={hold} />
         </div>
       ) : null}

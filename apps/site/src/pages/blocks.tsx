@@ -152,8 +152,10 @@ export function BlockPage({ block }: { block: BlockView }) {
 
       <BlockStage install={<InstallSlot name={record.name} />} sources={circuit.sources}>
         <BlockPlayer
-          blocks={[{ name: record.name, title: record.title, summary: record.description, hold: circuit.hold }]}
+          hold={circuit.hold}
+          name={record.name}
           registry={at.registry}
+          summary={record.description}
           wasm={at.wasm}
         />
       </BlockStage>
