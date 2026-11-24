@@ -553,6 +553,34 @@ fn a_coil_whose_supply_is_cut_reads_0_while_the_pin_still_plays() {
 }
 
 #[test]
+fn a_31_hz_coil_whose_supply_is_cut_reads_0_within_17_ms_while_the_base_still_toggles() {
+    // `tone(8, 31)` switches the coil through the 2N2222 while D9 feeds it through 10 ohm. D9
+    // goes low about 132.5 ms after `drop` prints, and D8 plays on for 60 ms after that.
+    let mut live = opened(
+        "drop",
+        r#""rs": { "type": "resistor-axial", "resistance": "10" },
+          "rb": { "type": "resistor-axial", "resistance": "1k" },
+          "q1": { "type": "npn-2n2222-to92" },
+          "bz": { "type": "buzzer-12mm" }"#,
+        r#"["nano.D9", "rs.a"], ["rs.b", "bz.+"], ["bz.-", "q1.collector"],
+           ["q1.emitter", "nano.GND"], ["nano.D8", "rb.a"], ["rb.b", "q1.base"]"#,
+    );
+    phase(&mut live, "drop");
+    let (mut got, mut v) = (Vec::new(), Vec::new());
+    for _ in 0..185 {
+        assert!(run(&mut live, "step 1ms").ok());
+        got.push(hz(&mut live));
+        v.push(volts(&mut live));
+    }
+    // Sample `k` is `k + 1` ms in.
+    assert_near(got[127], 31.0, 0.005);
+    assert!(v[114..132].iter().any(|v| *v > 1.0), "{v:?}");
+    assert!(v[133..].iter().all(|v| *v < 0.01), "{v:?}");
+    // D9 fell before 134 ms and the coil has not swung since, so 17 ms later it reads 0.
+    assert!(got[149..].iter().all(|hz| *hz == 0.0), "{got:?}");
+}
+
+#[test]
 fn thirty_ms_of_110_hz_just_after_880_hz_reads_110() {
     // `tone(8, 880)` for 40 ms, then `tone(8, 110)` for 30 ms, then `noTone`.
     let mut live = drive_scene(DRIVE);

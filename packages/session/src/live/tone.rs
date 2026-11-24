@@ -23,10 +23,12 @@
 //! rested, the reading is 0, never an older note on another pin. So `noTone()` or the end of
 //! `tone(pin, f, ms)` reads 0 once 17 ms have passed with no edge.
 //!
-//! The coil must swing by 0.2 V from the start of that latest cycle to now, so a coil whose
-//! supply is cut or whose circuit is open reads 0 within one cycle. Play probes the coil every
-//! 20 us and keeps its average between probes too, so a pulse narrower than that still moves
-//! it. A pitch above 20 kHz is not heard and reads 0.
+//! The coil must swing by 0.2 V from the start of that latest cycle to now, and within the
+//! last 17 ms, so a coil whose supply is cut or whose circuit is open reads 0 within 17 ms of
+//! its last swing, whatever the pins keep doing. A pin that has not rested moved within those
+//! 17 ms, so a coil it still drives swings there. Play probes the coil every 20 us and keeps
+//! its average between probes too, so a pulse narrower than that still moves it. A pitch
+//! above 20 kHz is not heard and reads 0.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -37,7 +39,8 @@ use orbe_scene::RefMap;
 
 use crate::reply::Code;
 
-/// Below this swing across the coil since the latest cycle began, the coil is not driven.
+/// Below this swing across the coil since the latest cycle began and within a rest, the coil
+/// is not driven.
 const EDGE_V: f64 = 0.2;
 /// The pin has rested when it has not moved for this long.
 const REST_PS: u64 = orbe_engine::passive::DRIVE_REST_PS;
@@ -254,8 +257,9 @@ impl Log {
             return 0.0;
         };
         let hz = 1e12 / period as f64;
+        let since = cycle.from.max(now_ps.saturating_sub(REST_PS));
         let heard =
-            !track.rested(now_ps) && meter.swing(cycle.from, now_ps) >= EDGE_V && hz <= AUDIBLE_HZ;
+            !track.rested(now_ps) && meter.swing(since, now_ps) >= EDGE_V && hz <= AUDIBLE_HZ;
         if heard { hz } else { 0.0 }
     }
 }
