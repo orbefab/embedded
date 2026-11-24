@@ -3269,8 +3269,8 @@ mod tests {
     }
 
     /// All 22 RTC pad registers (GPIO0 to GPIO21, `RTCIO+0x84..=0xd8`) are quiet on reads and on
-    /// stores that leave `MUX_SEL` clear. Setting `MUX_SEL` on a pad register, or touching any
-    /// other RTCIO register, is still listed.
+    /// stores of 0. Any non-zero store (`MUX_SEL`, `RUE`, `RDE`, `DRV`, `FUN_IE`, `SLP_*`, touch
+    /// bits) on a pad register, or touching any other RTCIO register, is still listed.
     #[test]
     fn every_rtc_pad_read_and_digital_write_is_quiet_and_other_rtcio_registers_warn() {
         let mut chip = Program::new(&[]).raw(&LOOP).chip();
@@ -3287,6 +3287,12 @@ mod tests {
             (0x6000_84c0, true, 1 << 19, "RTCIO+0xc0"),
             (0x6000_84c8, true, 1 << 19, "RTCIO+0xc8"),
             (0x6000_84d8, true, 1 << 19, "RTCIO+0xd8"),
+            (0x6000_84b0, true, 1 << 27, "RTCIO+0xb0"),
+            (0x6000_84b0, true, 1 << 28, "RTCIO+0xb0"),
+            (0x6000_84b0, true, 2 << 29, "RTCIO+0xb0"),
+            (0x6000_84b0, true, 1 << 13, "RTCIO+0xb0"),
+            (0x6000_84b0, true, 1 << 16, "RTCIO+0xb0"),
+            (0x6000_84b0, true, 1 << 20, "RTCIO+0xb0"),
             (0x6000_8400, false, 0, "RTCIO+0x0"),
             (0x6000_8428, false, 0, "RTCIO+0x28"),
             (0x6000_8480, false, 0, "RTCIO+0x80"),
@@ -3305,7 +3311,61 @@ mod tests {
                 .unmodeled()
                 .map(|(at, _)| Touch::register(at))
                 .collect();
-            assert_eq!(names, [expected], "{addr:#x} write={write}");
+            assert_eq!(
+                names,
+                [expected],
+                "{addr:#x} write={write} value={value:#x}"
+            );
+        }
+    }
+
+    /// Setting any pad hold bit in `RTC_CNTL_PAD_HOLD_REG`, `RTC_CNTL_DIG_PAD_HOLD_REG`,
+    /// `RTC_CNTL_PWC_REG` (`PAD_FORCE_HOLD`) or `RTC_CNTL_DIG_ISO_REG` (`DG_PAD_FORCE_HOLD` or
+    /// `DG_PAD_AUTOHOLD_EN`) ends the run with `RTC_CNTL` `pin_hold` and writes nothing.
+    /// Writing those registers with no hold bit set stays quiet.
+    #[test]
+    fn setting_a_pin_hold_bit_ends_the_run_and_clearing_it_stays_quiet() {
+        let refused = Refused::Register("RTC_CNTL", "pin_hold");
+        for (addr, value) in [
+            (RTC_CNTL + 0xd8, 1 << 0),
+            (RTC_CNTL + 0xd8, 1 << 11),
+            (RTC_CNTL + 0xd8, 1 << 21),
+            (RTC_CNTL + 0xdc, 1 << 5),
+            (RTC_CNTL + 0xdc, 1 << 27),
+            (RTC_CNTL + 0x88, 1 << 21),
+            (RTC_CNTL + 0x94, 1 << 11),
+            (RTC_CNTL + 0x94, 1 << 15),
+        ] {
+            let program = store_after_two_loads(addr, value, 0);
+            let mut chip = program.chip();
+            chip.soc.restore(addr, 0);
+            assert_eq!(
+                chip.run_until(c(1000)),
+                Some(Halt::Fault(
+                    c(2),
+                    Fault::Refused(refused, pro(program.entry() + 6))
+                )),
+                "{addr:#x} = {value:#x}"
+            );
+            assert_eq!(word(&mut chip, addr), 0, "{addr:#x} writes nothing");
+        }
+
+        for (addr, initial, value) in [
+            (RTC_CNTL + 0xd8, 0, 0),
+            (RTC_CNTL + 0xdc, 0, 0),
+            (RTC_CNTL + 0x88, 0, 1 << 5 | 1 << 8 | 1 << 11),
+            (
+                RTC_CNTL + 0x94,
+                0x1000_0080,
+                0x1000_0080 | 1 << 14 | 1 << 10,
+            ),
+        ] {
+            let program = store_after_two_loads(addr, value, 0);
+            let mut chip = program.chip();
+            chip.soc.restore(addr, initial);
+            assert_eq!(chip.run_until(c(1000)), None, "{addr:#x} = {value:#x}");
+            assert_eq!(chip.unmodeled().count(), 0, "{addr:#x} stays quiet");
+            assert_eq!(word(&mut chip, addr), value);
         }
     }
 

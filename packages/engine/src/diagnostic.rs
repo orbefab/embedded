@@ -1443,6 +1443,9 @@ impl Diagnostic {
                     ("CPU", Setting::Sleep) => {
                         "put the chip to sleep in a reserved sleep mode".to_string()
                     }
+                    ("RTC_CNTL", Setting::Register("pin_hold")) => {
+                        "enabled pin hold (gpio_hold_en)".to_string()
+                    }
                     (_, Setting::Transfer(setting)) => {
                         format!("started a {peripheral} transfer with setting {setting}")
                     }

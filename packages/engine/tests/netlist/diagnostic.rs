@@ -647,6 +647,18 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
         "#u1 put the chip to sleep at 0x00000010, which the model does not run, at 5 ps"
     );
     assert_eq!(data["peripheral"], "RTC_CNTL");
+    let (message, data) = chip_json(setting(Setting::Register("pin_hold"), "RTC_CNTL"));
+    assert_eq!(
+        message,
+        "#u1 enabled pin hold (gpio_hold_en) at 0x00000010, which the model does not run, at 5 ps"
+    );
+    assert_eq!(
+        (&data["peripheral"], &data["setting"]),
+        (
+            &serde_json::json!("RTC_CNTL"),
+            &serde_json::json!("pin_hold")
+        )
+    );
 
     let restart = |reason| Diagnostic::ChipFaultRestart {
         part: part("u1"),

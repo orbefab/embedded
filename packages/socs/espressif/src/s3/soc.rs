@@ -283,10 +283,11 @@ fn quiet(word: u32, write: bool, value: u32) -> bool {
         0x6000_50f0 => true,
         // `call_start_cpu1` enables the APP CPU's debug trace. The trace moves no pin, clock or reading.
         0x600c_e0d8 | 0x600c_e0dc => true,
-        // `gpio_config` clears `MUX_SEL` on RTC pads GPIO0 to GPIO21 (`RTC_IO_TOUCH_PAD0_REG`
-        // through `RTC_IO_RTC_PAD21_REG`, `RTCIO+0x84..=0xd8`), leaving digital GPIO, which the
-        // model drives. Setting `MUX_SEL` is still listed.
-        0x6000_8484..=0x6000_84d8 if !write || value & (1 << 19) == 0 => true,
+        // `gpio_config` calls `rtc_gpio_deinit`, which clears `MUX_SEL` on RTC pads GPIO0 to
+        // GPIO21 (`RTC_IO_TOUCH_PAD0_REG` through `RTC_IO_RTC_PAD21_REG`, `RTCIO+0x84..=0xd8`),
+        // reading 0 and writing 0 back. Any non-zero store (`MUX_SEL`, `RUE`, `RDE`, `DRV`,
+        // `FUN_IE`, `SLP_*`, touch bits) is still listed so nothing is silently dropped.
+        0x6000_8484..=0x6000_84d8 if !write || value == 0 => true,
         _ => false,
     }
 }
@@ -310,10 +311,18 @@ fn effect(addr: u32) -> Option<Effect> {
     let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
     let interrupt = |peripheral| Ending::Refused(Refused::Interrupt(peripheral));
     let dma = |setting| Ending::Refused(Refused::Register("GDMA", setting));
+    let pin_hold = Ending::Refused(Refused::Register("RTC_CNTL", "pin_hold"));
     let pads = Ending::FlashCommand(FlashRefusal::Pads);
     Some(match (base, offset) {
         (RTC_CNTL, 0x18) => Effect::Refuse(1 << 31, Ending::Refused(Refused::Sleep)),
         (RTC_CNTL, 0x74) => Effect::Report(u32::MAX),
+        // `RTC_CNTL_PAD_FORCE_HOLD` (bit 21), `RTC_CNTL_DG_PAD_FORCE_HOLD` (bit 15) and
+        // `RTC_CNTL_DG_PAD_AUTOHOLD_EN` (bit 11), `RTC_CNTL_PAD_HOLD_REG` (bits 0..=21), and
+        // `RTC_CNTL_DIG_PAD_HOLD_REG` (bits 0..=31).
+        (RTC_CNTL, 0x88) => Effect::Refuse(1 << 21, pin_hold),
+        (RTC_CNTL, 0x94) => Effect::Refuse(1 << 15 | 1 << 11, pin_hold),
+        (RTC_CNTL, 0xd8) => Effect::Refuse(0x3f_ffff, pin_hold),
+        (RTC_CNTL, 0xdc) => Effect::Refuse(u32::MAX, pin_hold),
         (RTC_CNTL, sar::INT_ENA) => Effect::Refuse(sar::INT_BITS, interrupt("SENS")),
         (RTC_CNTL, _)
             if offset == sar::SENS + sar::CLK_GATE || offset == sar::SENS + sar::RESET_CONF =>
