@@ -97,7 +97,7 @@ t=104ms (from 100ms), @led1 lit by 104ms
 $ orbe close
 closed at t=104ms
 $ orbe test
-PASS tests/button.test
+PASS tests/button.test (scene.jsonc)
 1 passed, 0 failed
 ```
 

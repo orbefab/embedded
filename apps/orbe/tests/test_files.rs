@@ -327,7 +327,7 @@ fn a_folder_named_like_a_test_file_is_skipped_and_the_run_summarizes() {
         (run.code, run.stdout.as_str(), run.stderr.as_str()),
         (
             0,
-            "PASS tests/a.test\nPASS tests/z.test\n2 passed, 0 failed\n",
+            "PASS tests/a.test (scene.jsonc)\nPASS tests/z.test (scene.jsonc)\n2 passed, 0 failed\n",
             ""
         )
     );
@@ -362,6 +362,91 @@ fn a_utf8_byte_order_mark_on_a_scene_or_a_test_is_accepted() {
     let run = orbe(dir.path(), &["test"]);
     assert_eq!(
         (run.code, run.stdout.as_str(), run.stderr.as_str()),
-        (0, "PASS tests/a.test\n1 passed, 0 failed\n", "")
+        (
+            0,
+            "PASS tests/a.test (scene.jsonc)\n1 passed, 0 failed\n",
+            ""
+        )
     );
+}
+
+#[test]
+fn a_test_with_no_expect_line_fails() {
+    let dir = project("open\n");
+    fs::write(
+        dir.path().join("tests/b.test"),
+        "open\nstep 10ms\nget @led1\n",
+    )
+    .unwrap();
+    let run = orbe(dir.path(), &["test"]);
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    assert_eq!(
+        run.stdout,
+        "FAIL tests/a.test (scene.jsonc)\n  error[usage]: tests/a.test has no `expect` line, so it checks nothing\n    hint: add an `expect` line, such as `expect @led1 off` or `expect no diagnostics`\n\
+         FAIL tests/b.test (scene.jsonc)\n  error[usage]: tests/b.test has no `expect` line, so it checks nothing\n    hint: add an `expect` line, such as `expect @led1 off` or `expect no diagnostics`\n\
+         0 passed, 2 failed\n"
+    );
+    let run = orbe(dir.path(), &["test", "--json"]);
+    assert_eq!(run.code, 2, "{}", run.stdout);
+    let json = run.json();
+    assert_eq!(json["ok"], false);
+    assert_eq!(json["data"]["tests"][0]["ok"], false);
+    assert_eq!(json["data"]["tests"][0]["scene"], "scene.jsonc");
+    assert_eq!(json["data"]["tests"][0]["error"]["code"], "usage");
+    assert!(
+        json["data"]["tests"][0]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("checks nothing"),
+        "{}",
+        json
+    );
+}
+
+#[test]
+fn orbe_test_names_the_scene_each_test_opened() {
+    let dir = project("open\nexpect @led1 off\n");
+    fs::copy(dir.path().join("scene.jsonc"), dir.path().join("alt.jsonc")).unwrap();
+    fs::write(
+        dir.path().join("tests/b.test"),
+        "open alt.jsonc\nexpect @led1 off\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("tests/c.test"),
+        "open alt.jsonc\nexpect @led1 lit\n",
+    )
+    .unwrap();
+
+    let run = orbe(dir.path(), &["test"]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    assert!(
+        run.stdout.contains("PASS tests/a.test (scene.jsonc)\n"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains("PASS tests/b.test (alt.jsonc)\n"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .contains("FAIL tests/c.test:2 (alt.jsonc): expect @led1 lit\n"),
+        "{}",
+        run.stdout
+    );
+
+    let run = orbe(dir.path(), &["test", "--json"]);
+    assert_eq!(run.code, 1, "{}", run.stdout);
+    let tests = run.json()["data"]["tests"].as_array().unwrap().clone();
+    assert_eq!(tests[0]["file"], "tests/a.test");
+    assert_eq!(tests[0]["scene"], "scene.jsonc");
+    assert_eq!(tests[0]["ok"], true);
+    assert_eq!(tests[1]["file"], "tests/b.test");
+    assert_eq!(tests[1]["scene"], "alt.jsonc");
+    assert_eq!(tests[1]["ok"], true);
+    assert_eq!(tests[2]["file"], "tests/c.test");
+    assert_eq!(tests[2]["scene"], "alt.jsonc");
+    assert_eq!(tests[2]["ok"], false);
 }

@@ -7,7 +7,8 @@
 # it runs the build as it deploys, whose own files must show no install line.
 # The footer links the repo either way. The build must serve the AVR runtime source every
 # Block's NOTICE names.
-# Playwright then drives that build in headless Chromium twice: on `vite preview`, and on
+# Playwright then drives that build in headless Chromium: a short `@vite-smoke` subset on
+# `vite preview` (home, one part page, one Block page) and the full site suite on
 # `wrangler dev --local`.
 #
 # The flag gates the site's own text and links: the pages, the build's scripts and styles, the
@@ -16,8 +17,9 @@
 #
 # Needs what scripts/site.sh needs, and a Chromium found as check-viewer-e2e.sh finds it. It
 # installs nothing. `--renders <dir>` saves screenshots there.
-# `--servers vite` or `--servers wrangler` drives the suite on that one host. `wrangler` skips
-# the install-line build, which Playwright drives on `vite preview`. `--shard N/M` passes that
+# `--servers vite` runs the install-line checks (`install.spec.ts`) and the `@vite-smoke` subset
+# on `vite preview`. `--servers wrangler` skips the install-line build and drives the full suite
+# on `wrangler dev --local`. `--shard N/M` passes that
 # shard to the suite. `--no-build` uses the site already at apps/site/dist and does not run the
 # deploy build. The install-line build still runs unless `--servers wrangler`. The build
 # carries dist/wrangler-deploy.json, the pointer `vite preview` and wrangler follow. Before
