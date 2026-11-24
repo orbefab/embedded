@@ -3,6 +3,10 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 import type { BrowserContext, Page } from "@playwright/test";
+import type { SceneMessage } from "@orbe/viewer";
+import { buildScene, fromGltf } from "@orbe/viewer/build";
+import { type Group, Mesh } from "three";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import {
   blockKind,
   collectLogs,
@@ -339,62 +343,119 @@ function searchNames(query: string): string[] {
 }
 
 const PART_IDS = registryIds("part");
-const PART_THIRD = Math.ceil(PART_IDS.length / 3);
-
-// Called from three places in this file. A shard keeps a whole group, and the calls sit
-// where each third of a 3-way shard begins, so each job opens about a third of the parts.
-function partPages(ids: readonly string[]) {
-  const last = ids[ids.length - 1];
-  test(`part pages ${ids[0]} through ${last} draw with no viewer error`, async ({ browser, host }) => {
-    test.setTimeout(300_000);
-    expect(ids.length).toBeGreaterThan(0);
-    const context = await browser.newContext();
-    const page = await context.newPage();
-    const errors = collectLogs(page, "errors");
-    for (const id of ids) {
-      errors.length = 0;
-      const response = await page.goto(`${host.base}/orbe/parts/${id}/`);
-      expect(response?.ok(), id).toBe(true);
-      const ref = `@${id.replaceAll("-", "_")}`;
-      await page.waitForFunction(
-        (name) => {
-          if (document.querySelector("[data-testid='no-webgl']") !== null) return true;
-          if (document.querySelector("[data-testid='errors']") !== null) return true;
-          return window.orbeViewer?.get().scene.getObjectByName(name) !== undefined;
-        },
-        ref,
-        { timeout: 60_000 },
-      );
-      expect(await page.locator('[data-testid="errors"]').count(), id).toBe(0);
-      expect(errors, `${id} ${JSON.stringify(errors)}`).toEqual([]);
-      if (id === "resistor-axial") {
-        await expect(page.getByTestId("shown-at")).toHaveText("Shown at 220 Ω.");
-        const sentence = await bodyText(page);
-        expect(sentence, id).toContain("above 0 Ω (required)");
-        await expect(page.getByRole("heading", { name: "Settings" }), id).toBeVisible();
-        expect(sentence, id).not.toContain("0 pΩ");
-        expect(sentence, id).not.toContain(", required");
-        const bands = await page.evaluate(() => {
-          const root = window.orbeViewer.get().scene.getObjectByName("@resistor_axial");
-          return ["band1-brown", "band2-black", "band3-orange", "band4-gold"].map((node) => {
-            const mesh = root?.getObjectByName(node);
-            const material = mesh?.material;
-            return material && "color" in material ? `#${material.color.getHexString()}` : "";
-          });
-        });
-        expect(bands, id).toEqual(["#d12b2b", "#d12b2b", "#6b3a1f", "#d4af37"]);
-      }
-      if (id === "led-5mm") await expect(page.getByTestId("shown-at")).toHaveCount(0);
-      if (id === "trimmer-3362p") await expect(page.getByTestId("shown-at")).toHaveCount(0);
-    }
-    await context.close();
-  });
-}
+// Display parts join the browser sample once a release tag includes them.
+const DISPLAY_CANDIDATES = ["oled-ssd1306-128x64", "display-7seg-cc"] as const;
+const BROWSER_PART_IDS = [
+  "resistor-axial",
+  "led-5mm",
+  "trimmer-3362p",
+  "esp32s3-devkitc-1",
+  "neopixel-stick-8",
+  ...DISPLAY_CANDIDATES.filter((id) => PART_IDS.includes(id)),
+];
 
 // Parallel, so CI can shard groups. A describe that shares one page stays in default mode,
 // and that whole describe stays on one shard.
 test.describe.configure({ mode: "parallel" });
-partPages(PART_IDS.slice(0, PART_THIRD));
+
+// Every part's page, view.json and referenced GLB are checked in Node through the viewer's own
+// GLTFLoader, fromGltf and buildScene, without booting a WebGL page per part.
+test("every part's page, view.json and GLB build with no viewer error", async ({ host }) => {
+  expect(PART_IDS.length).toBeGreaterThan(0);
+  const loader = new GLTFLoader();
+  const models = new Map<string, Group | Error>();
+  const consoleErrors: string[] = [];
+  const realError = console.error;
+  console.error = (...args: unknown[]) => {
+    consoleErrors.push(args.map((arg) => String(arg)).join(" "));
+  };
+  try {
+    for (const id of PART_IDS) {
+      consoleErrors.length = 0;
+      const pageResponse = await fetch(`${host.base}/orbe/parts/${id}/`);
+      expect(pageResponse.ok, `${id} page answered ${pageResponse.status}`).toBe(true);
+      const html = await pageResponse.text();
+      expect(html, `${id} page error`).not.toContain("Something went wrong");
+      expect(html, `${id} viewer errors element`).not.toContain('data-testid="errors"');
+      expect(html, `${id} title`).toContain(servedRecord(id).title);
+
+      const viewUrl = `/orbe/parts/${id}/view.json`;
+      const viewResponse = await fetch(`${host.base}${viewUrl}`);
+      expect(viewResponse.ok, `${id} ${viewUrl} answered ${viewResponse.status}`).toBe(true);
+      const scene = (await viewResponse.json()) as SceneMessage;
+      expect(scene.type, `${id} view.json type`).toBe("scene");
+      expect(scene.instances.length, `${id} view.json instances`).toBeGreaterThan(0);
+
+      for (const part of Object.values(scene.parts)) {
+        if (part.model === null || models.has(part.model)) continue;
+        const glbResponse = await fetch(`${host.base}${part.model}`);
+        expect(glbResponse.ok, `${id} GLB ${part.model} answered ${glbResponse.status}`).toBe(true);
+        const buffer = await glbResponse.arrayBuffer();
+        const gltf = await loader.parseAsync(buffer, "");
+        models.set(part.model, fromGltf(gltf, part.model));
+      }
+
+      const built = buildScene(scene, models);
+      expect(built.errors, `${id} ${JSON.stringify(built.errors)}`).toEqual([]);
+      expect(consoleErrors, `${id} ${JSON.stringify(consoleErrors)}`).toEqual([]);
+      const ref = `@${id.replaceAll("-", "_")}`;
+      const root = built.root.getObjectByName(ref);
+      expect(root, `${id} missing ${ref}`).toBeDefined();
+      let meshes = 0;
+      root?.traverse((object) => {
+        if (object instanceof Mesh) meshes += 1;
+      });
+      expect(meshes, `${id} has no mesh under ${ref}`).toBeGreaterThan(0);
+    }
+  } finally {
+    console.error = realError;
+  }
+});
+
+test("representative part pages draw with no viewer error", async ({ browser, host }) => {
+  expect(BROWSER_PART_IDS.length).toBeGreaterThan(0);
+  for (const id of BROWSER_PART_IDS) expect(PART_IDS, id).toContain(id);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const errors = collectLogs(page, "errors");
+  for (const id of BROWSER_PART_IDS) {
+    errors.length = 0;
+    const response = await page.goto(`${host.base}/orbe/parts/${id}/`);
+    expect(response?.ok(), id).toBe(true);
+    const ref = `@${id.replaceAll("-", "_")}`;
+    await page.waitForFunction(
+      (name) => {
+        if (document.querySelector("[data-testid='no-webgl']") !== null) return true;
+        if (document.querySelector("[data-testid='errors']") !== null) return true;
+        return window.orbeViewer?.get().scene.getObjectByName(name) !== undefined;
+      },
+      ref,
+      { timeout: 60_000 },
+    );
+    expect(await page.locator('[data-testid="errors"]').count(), id).toBe(0);
+    expect(errors, `${id} ${JSON.stringify(errors)}`).toEqual([]);
+    if (id === "resistor-axial") {
+      await expect(page.getByTestId("shown-at")).toHaveText("Shown at 220 Ω.");
+      const sentence = await bodyText(page);
+      expect(sentence, id).toContain("above 0 Ω (required)");
+      await expect(page.getByRole("heading", { name: "Settings" }), id).toBeVisible();
+      expect(sentence, id).not.toContain("0 pΩ");
+      expect(sentence, id).not.toContain(", required");
+      const bands = await page.evaluate(() => {
+        const root = window.orbeViewer.get().scene.getObjectByName("@resistor_axial");
+        return ["band1-brown", "band2-black", "band3-orange", "band4-gold"].map((node) => {
+          const mesh = root?.getObjectByName(node);
+          const material = mesh?.material;
+          return material && "color" in material ? `#${material.color.getHexString()}` : "";
+        });
+      });
+      expect(bands, id).toEqual(["#d12b2b", "#d12b2b", "#6b3a1f", "#d4af37"]);
+    }
+    if (id === "led-5mm") await expect(page.getByTestId("shown-at")).toHaveCount(0);
+    if (id === "trimmer-3362p") await expect(page.getByTestId("shown-at")).toHaveCount(0);
+  }
+  await context.close();
+});
 
 test.describe("landing", () => {
   test.describe.configure({ mode: "default" });
@@ -411,7 +472,7 @@ test.describe("landing", () => {
     await context?.close();
   });
 
-  test("the start page says what orbe is", async () => {
+  test("the start page says what orbe is", { tag: "@vite-smoke" }, async () => {
     expect(await page.textContent("h1")).toBe("A hardware simulator for the AI agent you already use.");
     expect(await page.title()).toBe("Get orbe | Orbefab");
     const body = await bodyText(page);
@@ -461,7 +522,7 @@ test.describe("landing", () => {
     expect(await bodyText(page)).not.toContain("Catalog @orbefab");
   });
 
-  test("the landing page logged no error", () => {
+  test("the landing page logged no error", { tag: "@vite-smoke" }, () => {
     expect(errors, JSON.stringify(errors)).toEqual([]);
   });
 
@@ -553,7 +614,7 @@ test.describe("led-5mm", () => {
     await context?.close();
   });
 
-  test("led-5mm's page draws its model", async () => {
+  test("led-5mm's page draws its model", { tag: "@vite-smoke" }, async () => {
     expect(await page.evaluate(() => window.orbeViewer?.get().scene.getObjectByName("@led_5mm") !== undefined)).toBe(true);
   });
 
@@ -626,7 +687,7 @@ test.describe("led-5mm", () => {
     expect(INSTALL.test(body), body.match(INSTALL)?.[0] ?? "").toBe(false);
   });
 
-  test("led-5mm's page logged no error", async () => {
+  test("led-5mm's page logged no error", { tag: "@vite-smoke" }, async () => {
     await page.waitForTimeout(800);
     const loaded = await weight();
     console.log(`     led-5mm: ${loaded.requests} requests, ${loaded.bytes} bytes, ${loaded.gzip} gzipped`);
@@ -657,8 +718,6 @@ test("a released part's ratings link its own datasheet", async ({ page, host }) 
     expect(hrefs.every((href) => href?.endsWith(file)), `${id} ${hrefs.join(" ")}`).toBe(true);
   }
 });
-
-partPages(PART_IDS.slice(PART_THIRD, PART_THIRD * 2));
 
 test.describe("breadboard-830", () => {
   test.describe.configure({ mode: "default" });
@@ -781,7 +840,7 @@ for (const block of releasedBlocks()) {
 
     test.beforeAll(async ({ browser, host }) => {
       const renders = rendersDir();
-      const record = renders !== undefined && block.kind === "light" && host.name === "vite preview" ? renders : undefined;
+      const record = renders !== undefined && block.kind === "light" && host.name === "wrangler dev --local" ? renders : undefined;
       if (record !== undefined) mkdirSync(record, { recursive: true });
       context = await browser.newContext({
         viewport: VIEW,
@@ -861,7 +920,7 @@ test.describe("nano-button-led", () => {
     await context?.close();
   });
 
-  test("Code shows the sketch and the scene, and Copy copies the sketch", async () => {
+  test("Code shows the sketch and the scene, and Copy copies the sketch", { tag: "@vite-smoke" }, async () => {
     await expect(page.locator('[data-testid="view-preview-panel"]')).toBeVisible();
     await expect(page.locator('[data-testid="view-code-panel"]')).toBeHidden();
     await page.locator('[data-testid="view-code"]').click();
@@ -902,7 +961,7 @@ test.describe("nano-button-led", () => {
     expect(names.includes("firmware/NOTICE") && !names.includes("REUSE.toml"), JSON.stringify(names)).toBe(true);
   });
 
-  test("Space on the hold control presses the button, and the window losing focus releases it", async () => {
+  test("Space on the hold control presses the button, and the window losing focus releases it", { tag: "@vite-smoke" }, async () => {
     const control = page.getByTestId("hold-to-press");
     await control.focus();
     await page.keyboard.down("Space");
@@ -970,12 +1029,10 @@ test.describe("nano-button-led", () => {
     expect(await page.locator('[data-testid="errors"]').count()).toBe(0);
   });
 
-  test("the Block's page logged no error", () => {
+  test("the Block's page logged no error", { tag: "@vite-smoke" }, () => {
     expect(errors, JSON.stringify(errors)).toEqual([]);
   });
 });
-
-partPages(PART_IDS.slice(PART_THIRD * 2));
 
 const README = {
   "/orbe/blocks/nano-button-led/": "A 10k pull-down holds D2 low",
