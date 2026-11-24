@@ -61,9 +61,14 @@ impl<D: orbe_model::Device> Port<D> for Replay {
         }
     }
 
-    fn in_flight(&self, at: Time) -> Option<Record> {
-        let record = self.records.get(self.made)?;
+    fn in_flight(&self, at: Time) -> Vec<Record> {
+        let Some(record) = self.records.get(self.made) else {
+            return Vec::new();
+        };
         debug_assert!(record.end > at, "a record that ended by `at` was made");
-        (record.start <= at).then(|| record.clone())
+        (record.start <= at)
+            .then(|| record.clone())
+            .into_iter()
+            .collect()
     }
 }

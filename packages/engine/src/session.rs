@@ -799,7 +799,8 @@ impl Session {
 
     /// The observations and trace of a recorded session advanced to its end, and its warnings,
     /// ratings and fault in `diagnostics`. The trace holds the serial log when a chip has a USART,
-    /// the TWI phases when a chip has a TWI, and the records when a chip can send them.
+    /// the TWI phases when a chip has a TWI, and the records when a chip can send records of its
+    /// own.
     pub(crate) fn outcome(self, diagnostics: &mut Vec<Diagnostic>) -> Outcome {
         let (State::Ended { at, row, end }, Some(record)) = (self.state, self.record) else {
             unreachable!("a recorded run finishes once it has ended");
@@ -818,8 +819,8 @@ impl Session {
         if !twis.is_empty() {
             trace.attach_i2c(I2c::new(twis.to_vec(), self.i2c));
         }
-        let senders = self.actives.senders();
-        if !senders.is_empty() {
+        if self.actives.links() {
+            let senders = self.actives.senders();
             trace.attach_link(Link::new(senders.to_vec(), self.link));
         }
         let names = self.actives.displays();
