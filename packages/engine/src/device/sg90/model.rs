@@ -57,10 +57,11 @@ const WARN_BELOW_MV: i32 = 4_500;
 const FAST_MV: i32 = 6_000;
 /// Below this the shaft does not follow and the draw is none. 4tronix lists 3.0 V to 7.2 V.
 const FLOOR_MV: i32 = 3_000;
-/// After a moving draw reads under the floor, look again this much later. The host applies a
-/// draw change 1 ps after the sample that made it, on the solution the old draw produced, so
-/// the recovered rail is the sample one step after that. Without this stop that step is the
-/// solver's, and the collapsed reading lasts as long as `max_step_ps`.
+/// After a call changes the draw, look at the rail again this much later. The host applies a
+/// draw change 1 ps after the call that made it, on the solution the old draw produced, so the
+/// rail under the new draw is the sample one step after that. Without this stop that step is
+/// the solver's, so the shaft would integrate at the stale voltage, or leave a collapsed
+/// reading, for as long as `max_step_ps`.
 const CONFIRM_PS: u64 = 2;
 /// SunFounder SF0180, stopped, at 4.8 V.
 const IDLE_A: f64 = 0.005;
@@ -73,6 +74,23 @@ const IDLE_AFTER_PS: u64 = 22_000_000_000;
 const PS_PER_S: i128 = 1_000_000_000_000;
 const TRAVEL_MDEG: i32 = 180_000;
 const CENTRE_MDEG: i32 = 90_000;
+
+/// A follow-up supply sample scheduled after a draw change.
+#[derive(Clone, Copy, Debug)]
+enum Probe {
+    /// Sample the loaded rail once the moving draw takes effect.
+    Load(Time),
+    /// Sample again once the moving draw drops, to tell a sag from a low supply.
+    Sag(Time),
+}
+
+impl Probe {
+    fn at(self) -> Time {
+        match self {
+            Probe::Load(at) | Probe::Sag(at) => at,
+        }
+    }
+}
 
 /// The shaft and the pulse it is following.
 #[derive(Clone, Copy, Debug)]
@@ -92,9 +110,8 @@ pub struct Sg90 {
     origin: Time,
     /// The shaft has not reached `command`.
     moving: bool,
-    /// When to read the rail again after the moving draw pulled it under the floor. The sample
-    /// there decides whether the supply sagged under that draw or is itself under the floor.
-    confirm: Option<Time>,
+    /// Pending supply sample after turning the moving draw on or off.
+    probe: Option<Probe>,
 }
 
 impl State for Sg90 {}
@@ -227,7 +244,7 @@ impl Device for Sg90 {
             origin_mdeg: CENTRE_MDEG,
             origin: Time::ZERO,
             moving: false,
-            confirm: None,
+            probe: None,
         })
     }
 
@@ -235,13 +252,13 @@ impl Device for Sg90 {
         if self.reached >= limit {
             return None;
         }
-        if let Some(confirm) = self.confirm
-            && confirm > self.reached
-            && confirm <= limit
+        if let Some(due) = self.probe.map(Probe::at)
+            && due > self.reached
+            && due <= limit
         {
-            let _ = self.integrate(confirm);
+            let _ = self.integrate(due);
             return Some(Stop {
-                at: confirm,
+                at: due,
                 sample: true,
                 record: false,
             });
@@ -281,7 +298,10 @@ impl Device for Sg90 {
             self.origin = at;
         }
         self.supply_mv = Some(mv);
-        let sag = self.confirm.is_some_and(|due| due <= at);
+        if matches!(self.probe, Some(Probe::Load(due)) if due <= at) {
+            self.probe = None;
+        }
+        let sag = matches!(self.probe, Some(Probe::Sag(due)) if due <= at);
         if mv < FLOOR_MV {
             // Hold the angle `catch_up` just reached. Clearing `command` alone would send the
             // next step back to `origin_mdeg`.
@@ -290,15 +310,17 @@ impl Device for Sg90 {
             self.command = None;
             self.command_us = None;
             self.moving = false;
-            if trying && self.confirm.is_none() {
-                self.confirm = Some(Time::from_ps(at.as_ps().saturating_add(CONFIRM_PS)));
+            if trying && !matches!(self.probe, Some(Probe::Sag(_))) {
+                self.probe = Some(Probe::Sag(Time::from_ps(
+                    at.as_ps().saturating_add(CONFIRM_PS),
+                )));
             } else if sag {
                 // The rail is still under the floor with the moving draw gone, so the supply
                 // itself is low. That is not a sag.
-                self.confirm = None;
+                self.probe = None;
             }
         } else if sag {
-            self.confirm = None;
+            self.probe = None;
             // The rail came back once the moving draw dropped, so that draw pulled it under
             // the floor. The shaft stays. The draw is the hold, because the supply is up.
             // One call reports one rule, so the slow-range warning waits for the next sample.
@@ -335,12 +357,20 @@ impl PulseTarget for Sg90 {
         {
             return;
         }
+        let was_moving = self.moving;
         let target = Self::target_of(us);
         self.origin_mdeg = self.angle_mdeg;
         self.origin = at;
         self.command_us = Some(us);
         self.command = Some(target);
         self.moving = target != self.angle_mdeg;
+        if !was_moving && self.moving {
+            let due = at
+                .as_ps()
+                .max(self.reached.as_ps())
+                .saturating_add(CONFIRM_PS);
+            self.probe = Some(Probe::Load(Time::from_ps(due)));
+        }
     }
 
     fn idle(&mut self, _cx: &mut Cx, at: Time, _level: bool) {
@@ -350,6 +380,9 @@ impl PulseTarget for Sg90 {
         self.command = None;
         self.command_us = None;
         self.moving = false;
+        if matches!(self.probe, Some(Probe::Load(_))) {
+            self.probe = None;
+        }
     }
 }
 
@@ -635,5 +668,54 @@ mod tests {
         assert!(cx.broken().is_none());
         assert_eq!(dev.draw().amps, 0.0);
         assert_eq!(degrees(&dev), 90.0);
+    }
+
+    #[test]
+    fn a_moving_draw_samples_the_loaded_rail_before_slewing() {
+        // Collapsing rail: stop at +2 ps before slewing, drop the draw, confirm sag at +4 ps.
+        let mut dev = servo();
+        power(&mut dev, 4.83);
+        pulse(&mut dev, MS, 2_400);
+        let stop = dev
+            .run_until(&mut Cx::default(), at(MS + 10 * MS))
+            .expect("it stops to sample the loaded rail");
+        assert_eq!(stop.at, at(MS + CONFIRM_PS));
+        assert!(stop.sample);
+        assert_eq!(degrees(&dev), 90.0);
+        let mut cx = Cx::default();
+        dev.sample(&mut cx, stop.at, &[2.52]);
+        assert!(cx.broken().is_none());
+        assert_eq!(dev.draw().amps, 0.0);
+        assert_eq!(degrees(&dev), 90.0);
+        let confirm = dev
+            .run_until(&mut Cx::default(), at(MS + 10 * MS))
+            .expect("it stops to confirm recovery");
+        assert_eq!(confirm.at, at(MS + 2 * CONFIRM_PS));
+        assert!(confirm.sample);
+        let mut cx = Cx::default();
+        dev.sample(&mut cx, confirm.at, &[5.0]);
+        assert_eq!(cx.broken().map(|broken| broken.0), Some("supply_sag"));
+        assert_eq!(dev.draw().amps, IDLE_A);
+        assert_eq!(degrees(&dev), 90.0);
+
+        // Sagged rail above the floor: stop at +2 ps, then slew at the sagged speed.
+        let mut slow = servo();
+        power(&mut slow, 4.9);
+        pulse(&mut slow, MS, 2_400);
+        let stop = slow
+            .run_until(&mut Cx::default(), at(MS + 10 * MS))
+            .expect("it stops to sample the loaded rail");
+        assert_eq!(stop.at, at(MS + CONFIRM_PS));
+        assert!(stop.sample);
+        let mut cx = Cx::default();
+        slow.sample(&mut cx, stop.at, &[3.05]);
+        assert_eq!(cx.broken().map(|broken| broken.0), Some("supply"));
+        assert!(run(&mut slow, MS + 100 * MS).is_none());
+        let expected = 90.0 + (Sg90::speed_mdeg_s(3_050) as f64 / 1_000.0) * 0.1;
+        assert!(
+            (degrees(&slow) - expected).abs() < 0.05,
+            "got {}, expected {expected}",
+            degrees(&slow)
+        );
     }
 }
