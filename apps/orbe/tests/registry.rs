@@ -37,6 +37,12 @@ fn build(out: &Path, json: bool) -> (Option<i32>, String, String) {
 
 #[test]
 fn build_writes_a_registry_and_reports_its_files_and_gaps() {
+    let blocks = std::fs::read_dir(repo().join("blocks"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_dir())
+        .count();
+    assert!(blocks > 0);
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("registry");
     let (code, stdout, stderr) = build(&out, false);
@@ -45,7 +51,10 @@ fn build_writes_a_registry_and_reports_its_files_and_gaps() {
         stdout.starts_with(&format!("wrote {}: ", out.display())),
         "{stdout}"
     );
-    assert!(stdout.contains(" parts and 14 Blocks: "), "{stdout}");
+    assert!(
+        stdout.contains(&format!(" parts and {blocks} Blocks: ")),
+        "{stdout}"
+    );
     assert!(stderr.starts_with("warning: "), "{stderr}");
     assert!(stderr.contains("lack buy"), "{stderr}");
     assert!(out.join("index.json").is_file());
@@ -62,7 +71,7 @@ fn build_writes_a_registry_and_reports_its_files_and_gaps() {
     let reply: Value = serde_json::from_str(stdout.trim()).unwrap();
     assert_eq!(reply["ok"], true);
     let report = &reply["data"]["report"];
-    assert_eq!(report["blocks"], 14);
+    assert_eq!(report["blocks"], blocks);
     assert!(report["stored"].as_u64() < report["listed"].as_u64());
     assert!(!reply["data"]["warnings"].as_array().unwrap().is_empty());
 }

@@ -3,8 +3,9 @@ import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test as base, expect, chromium, firefox, webkit, type Page } from "@playwright/test";
+import { compareVersions } from "../packages/viewer/src/registry";
 
-export { expect };
+export { compareVersions, expect };
 // Playwright compiles this file as CommonJS, because the root package has no "type": "module".
 export const REPO = resolve(__dirname, "..");
 export const HEADED_SESSION = join(REPO, ".scratch/headed/session.json");
@@ -19,12 +20,6 @@ export function registryDir(): string {
   }
   return join(REPO, ".scratch/site/registry");
 }
-
-const compareVersions = (a: string, b: string) => {
-  const [x, y] = [a.split(".").map(Number), b.split(".").map(Number)];
-  for (let i = 0; i < 3; i += 1) if (x[i] !== y[i]) return (x[i] ?? 0) - (y[i] ?? 0);
-  return 0;
-};
 
 /** Part or Block ids the registry serves, one per name. An id that is only in the repo is absent. */
 export function registryIds(type: "part" | "block"): string[] {
@@ -279,7 +274,38 @@ export function blockKind(scene: string, id: string): BlockKind {
   if (/"type"\s*:\s*"buzzer-12mm"/.test(code)) return "tone";
   if (/"led1"\s*:/.test(code)) return "fade";
   throw new Error(
-    `${id} names no button, no fading LED, no light, no pixel stick, no screen, no 7-segment display, no relay module, no 74HC595, no buzzer, no DevKitC-1, no servo and no serial sensor`,
+    `${id} names no button, no fading LED, no light, no pixel stick, no screen, no LCD, no 7-segment display, no relay module, no 74HC595, no buzzer, no DevKitC-1, no servo and no serial sensor`,
+  );
+}
+
+const READY_NODES: Record<BlockKind, readonly (readonly [string, string?])[]> = {
+  button: [["@led1", "body"], ["@btn1", "stem"]],
+  digit: [["@disp", "seg-a"]],
+  fade: [["@led1", "body"]],
+  lcd: [["@lcd.display", "glass"]],
+  light: [["@led1", "body"]],
+  pixels: [["@stick.px1", "lens"]],
+  relay: [["@relay.led", "body"], ["@led1", "body"]],
+  rgb: [["@board.led", "lens"], ["@btn1", "stem"]],
+  screen: [["@oled.display", "glass"]],
+  serial: [["@board.led", "lens"]],
+  servo: [["@servo", "horn"]],
+  shift: [["@led1", "body"]],
+  tone: [["@bz1"]],
+};
+
+/** Waits until the viewer has built the 3D nodes this Block kind drives. */
+export function waitBlockReady(page: Page, kind: BlockKind, timeout = 120_000): Promise<unknown> {
+  return page.waitForFunction(
+    (checks) => {
+      const scene = window.orbeViewer?.get().scene;
+      return checks.every(([ref, node]) => {
+        const group = scene?.getObjectByName(ref);
+        return (node === undefined ? group : group?.getObjectByName(node)) !== undefined;
+      });
+    },
+    READY_NODES[kind],
+    { timeout },
   );
 }
 

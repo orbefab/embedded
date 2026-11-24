@@ -152,7 +152,7 @@ function checkPaths(paths: readonly string[], record: string): void {
   }
 }
 
-function compareVersions(a: string, b: string): number {
+export function compareVersions(a: string, b: string): number {
   const x = a.split(".").map(Number);
   const y = b.split(".").map(Number);
   for (let i = 0; i < 3; i += 1) {
