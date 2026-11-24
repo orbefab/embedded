@@ -305,10 +305,11 @@ struct Settle {
 struct PendingLimit {
     first: Time,
     over_ps: Option<u64>,
-    high_vo: f64,
     pulled_since: Option<Time>,
     progress_vo: f64,
     progress_at: Time,
+    low_vo: f64,
+    forgave_dip: bool,
 }
 
 /// The basis a sustained rating with no basis of its own takes.
@@ -785,24 +786,27 @@ impl Ratings {
                 }
                 continue;
             }
-            let pulled_below_baseline = limit.baseline_vo.is_some_and(|before| before - vo >= sag);
+            let pulled = limit.baseline_vo.is_some_and(|before| before - vo >= sag);
             let mut stalled = false;
             let warn = if self.timing == Timing::Point {
                 true
             } else if let Some(pending) = &mut limit.pending {
-                let pulled = pulled_below_baseline || pending.high_vo - vo >= sag;
                 if pulled {
                     let since = *pending.pulled_since.get_or_insert(at);
                     at.as_ps() - since.as_ps() >= LIMIT_HOLD_PS
                 } else {
                     pending.pulled_since = None;
-                    pending.high_vo = pending.high_vo.max(vo);
+                    pending.low_vo = pending.low_vo.min(vo);
                     let dt_ps = at.as_ps() - pending.progress_at.as_ps();
                     if dt_ps >= STALL_PS {
-                        let dv = vo - pending.progress_vo;
-                        if dv >= MIN_CHARGE_RATE * drop * (dt_ps as f64 * 1e-12) {
+                        let required = MIN_CHARGE_RATE * drop * (dt_ps as f64 * 1e-12);
+                        let climbed = vo - pending.progress_vo >= required;
+                        let recovered = !pending.forgave_dip && vo - pending.low_vo >= required;
+                        if climbed || recovered {
+                            pending.forgave_dip = !climbed;
                             pending.progress_vo = vo;
                             pending.progress_at = at;
+                            pending.low_vo = vo;
                             false
                         } else {
                             stalled = true;
@@ -816,10 +820,11 @@ impl Ratings {
                 limit.pending = Some(PendingLimit {
                     first: at,
                     over_ps: self.timing.over_ps(),
-                    high_vo: vo,
-                    pulled_since: pulled_below_baseline.then_some(at),
+                    pulled_since: pulled.then_some(at),
                     progress_vo: vo,
                     progress_at: at,
+                    low_vo: vo,
+                    forgave_dip: false,
                 });
                 false
             };

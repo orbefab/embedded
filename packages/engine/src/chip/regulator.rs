@@ -42,11 +42,11 @@ const BLOCK_A: f64 = 1e-12;
 pub(crate) const INPUT_FLOOR_V: f64 = 0.3;
 /// Fraction of `output_voltage` dropped by the current-limit term before the regulator is treated
 /// as actively clamped (0.5%, i.e. 16.5 mV on 3.3 V or 25 mV on 5 V), and also the drop below
-/// the pre-overload baseline (or high-water mark while clamped) that confirms a pull-down rather
-/// than a charging rail. At 99.5% of `current_limit` the softplus term is 0.07% of
-/// `output_voltage` and an ideal 100% nominal load is 0.35%; at 0.5% the pass current is 99.7%
-/// of `current_limit`, catching 105% overloads even on regulators whose own `output_resistance`
-/// already takes 3.5% of `output_voltage` (LP2985, XC6206).
+/// the pre-overload baseline that confirms a pull-down rather than a charging rail. At 99.5% of
+/// `current_limit` the softplus term is 0.07% of `output_voltage` and an ideal 100% nominal load
+/// is 0.35%; at 0.5% the pass current is 99.7% of `current_limit`, catching 105% overloads even
+/// on regulators whose own `output_resistance` already takes 3.5% of `output_voltage` (LP2985,
+/// XC6206).
 pub(crate) const LIMIT_SAG_FRACTION: f64 = 0.005;
 /// Below this fraction of `output_voltage` the regulator is clear of the current-limit knee, so
 /// its unclamped output voltage updates the pre-overload baseline.

@@ -644,3 +644,116 @@ fn pwm_mosfet_under_limit_stays_quiet_and_105_percent_warns_with_pulse_voltage()
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
+
+#[test]
+fn mid_charge_overload_step_reports_settled_voltage_not_rising_charge_dip() {
+    let cases = [
+        (
+            "ams1117-sot223",
+            "IN",
+            "OUT",
+            "GND",
+            9.0,
+            5.0,
+            1.1,
+            "1000u",
+            2 * MS,
+            40 * MS,
+        ),
+        (
+            "lp2985-sot23-5",
+            "IN",
+            "OUT",
+            "GND",
+            5.0,
+            3.3,
+            0.35,
+            "1000u",
+            3_800_000_000,
+            80 * MS,
+        ),
+        (
+            "ch340g",
+            "VCC",
+            "V3",
+            "GND",
+            5.0,
+            3.3,
+            0.03,
+            "100u",
+            4_400_000_000,
+            100 * MS,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (id, vin, vout, gnd, supply, target, ilim, cap, step_ps, stop_ps) in cases {
+        let light = target / (0.20 * ilim);
+        let overload = target / (1.10 * ilim);
+        let project = common::project("nano-button");
+        fs::create_dir_all(project.path().join("step_sw")).unwrap();
+        fs::write(
+            project.path().join("step_sw/part.jsonc"),
+            format!(
+                r#"{{
+  "format": 1,
+  "pins": {{ "a": [1], "b": [2] }},
+  "model": {{
+    "kind": "switch",
+    "pins": {{ "a": "a", "b": "b" }},
+    "on_resistance": {{ "value": 0.001, "unit": "ohm", "source": "user" }},
+    "off_resistance": {{ "value": 1e9, "unit": "ohm", "source": "user" }},
+    "initial": "open",
+    "events": [{{ "t_ps": {step_ps}, "state": "closed" }}],
+    "bounce": null
+  }}
+}}
+"#
+            ),
+        )
+        .unwrap();
+        let parts = format!(
+            r#""v1": {{ "type": "./supply/part.jsonc", "voltage": "{supply}" }},
+            "u1": {{ "type": "{id}" }},
+            "c1": {{ "type": "capacitor-electrolytic-radial", "capacitance": "{cap}", "initial": "0" }},
+            "rb": {{ "type": "resistor-axial", "resistance": "{light}" }},
+            "sw": {{ "type": "./step_sw/part.jsonc" }},
+            "rl": {{ "type": "resistor-axial", "resistance": "{overload}" }}"#
+        );
+        let wires = format!(
+            r#"["v1.pos", "u1.{vin}"], ["v1.neg", "u1.{gnd}"],
+            ["u1.{vout}", "c1.pos"], ["c1.neg", "v1.neg"],
+            ["u1.{vout}", "rb.a"], ["rb.b", "v1.neg"],
+            ["u1.{vout}", "sw.a"], ["sw.b", "rl.a"], ["rl.b", "v1.neg"]"#
+        );
+        let mut session = open(project.path(), &parts, &wires);
+        session.advance_to(Time::from_ps(step_ps + 200_000_000));
+        let early = limit_warnings(&session);
+        if !early.is_empty() {
+            failures.push(format!(
+                "{id} {cap} warned 200 us after step while still charging: {} (voltage={})",
+                early[0]["message"], early[0]["data"]["voltage"]
+            ));
+        }
+        session.advance_to(Time::from_ps(stop_ps));
+        let probe_v = session
+            .probe()
+            .get(&"#rb.v".parse::<Ref>().unwrap())
+            .unwrap()
+            .get();
+        let found = limit_warnings(&session);
+        if found.len() != 1 {
+            failures.push(format!(
+                "{id} {cap} expected 1 warning at settled overload ({probe_v:.4} V), got {found:?}"
+            ));
+            continue;
+        }
+        let reported_v = found[0]["data"]["voltage"].as_f64().unwrap();
+        if (reported_v - probe_v).abs() >= 0.02 {
+            failures.push(format!(
+                "{id} {cap} reported {reported_v:.4} V vs settled {probe_v:.4} V ({})",
+                found[0]["message"]
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
