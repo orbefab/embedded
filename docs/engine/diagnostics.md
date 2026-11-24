@@ -419,7 +419,7 @@ The message for a dropped transfer is `{part} dropped a transfer that broke rule
 | `bit` | A `ws2812` high was in neither the T0H window, 220 ns to 400 ns, nor the T1H window, 580 ns to 1 µs. That bit is dropped, and its time is the fall that ended the high. The chain reports the first one. |
 | `dout_record` | A `ws2812` with `DOUT` took a high past its last LED's bits from a `Pulses` record. `DOUT` stays low, and the time is the rise that started the high. The chain reports the first one. |
 | `interval` | A `dht22` start came within 2 s of power-on or of the last start it answered. The sensor does not answer it, and its time is the end of the start's low. |
-| `supply` | An `sg90` supply was at least 2.3 V and below 4.5 V. The shaft keeps moving, slower in proportion to the supply over 4.8 V, unless the supply has already fallen below 2.3 V, in which case it stays stopped until the supply is back at 4.5 V. The part reports the first sample in the slow range. |
+| `supply` | An `sg90` supply was at least 3.0 V and below 4.5 V. The shaft keeps moving. Below 4.8 V the speed is the 4.8 V figure times the supply over 4.8 V. 4.5 V is the low end of the range the Nano's 5 V pin can read, so a pin in that range does not warn. Below 3.0 V the shaft does not follow and the draw is none, and a supply that returns above 3.0 V follows the next pulse. The part reports the first sample in the slow range. |
 
 ## chip.link_miswired
 

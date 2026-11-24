@@ -1,7 +1,8 @@
 # write(0), wait 400 ms, write(180), wait 500 ms, write(0). The first pulse is at
 # about 53 ms. write(0) is 544 us, just inside the 500 us stop, so the shaft sits
 # a few degrees off that end. By 250 ms it is there and the 5 V diode is at idle.
-# By 550 ms it is slewing toward 180°, and by 800 ms it is there.
+# By 550 ms it is slewing toward 180°. A Nano 5 V pin sits above 4.8 V, so the
+# shaft is a little ahead of the 4.8 V figure. By 800 ms it is there.
 open
 step 250ms
 expect @servo.angle > 3deg
@@ -9,7 +10,7 @@ expect @servo.angle < 6deg
 expect @nano.diode.i < 40mA
 step 300ms
 expect @servo.angle > 55deg
-expect @servo.angle < 70deg
+expect @servo.angle < 75deg
 expect @nano.diode.i > 100mA
 step 250ms
 expect @servo.angle > 179deg

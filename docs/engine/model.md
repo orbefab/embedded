@@ -21,7 +21,7 @@ Equal generations mean equal pages only between a state and a copy made before o
 | `drive()` | One `Drive` per output it declares, in order: high, low, pull-up or off. |
 | `draw()` | The `Draw` it takes from its supply: `amps` while the supply is at or above `holds_above_v`, fading as `3 x^2 - 2 x^3` of it below, with `x` the supply over `holds_above_v`, to none at 0 V. `Draw::NONE` by default. |
 | `input(cx, at, levels)` | Its watches' levels from `at` on. |
-| `sample(cx, at, volts)` | The volts of its samples at a stop that asked for them. |
+| `sample(cx, at, volts)` | The volts of its samples at a stop that asked for them. A device with `TRACKS_SUPPLY` is also sampled at every accepted step. |
 | `event(cx, at, event)` | An event it declares, with fields the engine has checked against the declaration. |
 | `view()` | What it shows now, the `View` that `SHOWS` declares. `View::Nothing` by default. |
 

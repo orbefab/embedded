@@ -230,6 +230,26 @@ impl Core {
         }
     }
 
+    /// Whether the host samples it at every accepted step.
+    pub(crate) fn tracks_supply(&self) -> bool {
+        match self {
+            Core::Device(core) => core.tracks_supply(),
+            Core::Mcu(_) => false,
+            #[cfg(test)]
+            Core::Script(_) => false,
+        }
+    }
+
+    /// The shaft angle in millidegrees at `at`, when the device shows one.
+    pub(crate) fn angle_at(&self, at: Time) -> Option<i32> {
+        match self {
+            Core::Device(core) => core.angle_at(at),
+            Core::Mcu(_) => None,
+            #[cfg(test)]
+            Core::Script(_) => None,
+        }
+    }
+
     /// What its device draws from its supply, as at its last stop. Only a device draws so.
     pub(crate) fn draw(&self) -> Draw {
         match *self {
@@ -875,8 +895,8 @@ impl Actives {
         &self.leds
     }
 
-    /// The shaft angle of horn `name`, in degrees, at the committed core's time.
-    pub(crate) fn horn_degrees(&self, name: &Name) -> Option<f64> {
+    /// The shaft angle of horn `name`, in degrees, at `at`.
+    pub(crate) fn horn_degrees(&self, name: &Name, at: Time) -> Option<f64> {
         let k = self.horns.iter().position(|horn| horn == name)?;
         self.committed
             .iter()
@@ -884,9 +904,12 @@ impl Actives {
                 if !matches!(core.shows(), Shows::Angle) {
                     return None;
                 }
-                let View::Degrees(mdeg) = core.view() else {
-                    panic!("a shaft shows its angle in millidegrees");
-                };
+                let mdeg = core.angle_at(at).unwrap_or_else(|| {
+                    let View::Degrees(mdeg) = core.view() else {
+                        panic!("a shaft shows its angle in millidegrees");
+                    };
+                    mdeg
+                });
                 Some(mdeg as f64 / 1_000.0)
             })
             .nth(k)
@@ -1063,11 +1086,13 @@ impl Actives {
             };
             let records = incoming.get_mut(k).map(std::mem::take).unwrap_or_default();
             let event = Self::due_event(circuit, k, at);
+            let tracks = committed.tracks_supply();
             if stop.is_none()
                 && !flipped
                 && records.is_empty()
                 && event.is_none()
                 && !keep
+                && !tracks
                 && !world.changes_at(committed.reads(), at)
             {
                 continue;
@@ -1085,7 +1110,7 @@ impl Actives {
                 || pulled_down != committed.pulled_down()
                 || ahead.core.held() != committed.held()
                 || draw != committed.draw();
-            if stop.is_some_and(|stop| stop.sample) {
+            if stop.is_some_and(|stop| stop.sample) || tracks {
                 let volts: Vec<f64> = circuit.actives[k]
                     .samples
                     .iter()

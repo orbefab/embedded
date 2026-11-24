@@ -198,7 +198,7 @@ pub enum ProtocolRule {
     /// A high a `Pulses` record carried, which a chain with `DOUT` would pass on. The record
     /// lands at its end, after that high, so `DOUT` does not drive it.
     DoutRecord,
-    /// The supply is up, and under the voltage the part holds its rated speed at.
+    /// The supply is up, and under 4.5 V. The shaft still moves, slower than at 4.8 V.
     Supply,
 }
 
