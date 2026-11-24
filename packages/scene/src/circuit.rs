@@ -1189,11 +1189,14 @@ impl<'p> Circuit<'p> {
     }
 
     fn flat_pin(&self, key: usize) -> String {
-        format!(
-            "{}__{}",
-            self.insts[self.pins[key].inst].flat(),
-            self.pins[key].name
-        )
+        // The engine name is a letter then letters, digits and `_`. A sheet pin `+` or `-`
+        // stays that in the scene and becomes `plus` or `minus` on the net.
+        let pin = match self.pins[key].name.as_str() {
+            "+" => "plus",
+            "-" => "minus",
+            name => name,
+        };
+        format!("{}__{pin}", self.insts[self.pins[key].inst].flat())
     }
 
     fn kept(&self, key: usize) -> bool {

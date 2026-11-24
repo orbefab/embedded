@@ -24,6 +24,7 @@ for (const block of repoBlocks()) {
           if (kind === "digit") return scene?.getObjectByName("@disp")?.getObjectByName("seg-a") !== undefined;
           if (kind === "pixels") return scene?.getObjectByName("@stick.px1")?.getObjectByName("lens") !== undefined;
           if (kind === "servo") return scene?.getObjectByName("@servo")?.getObjectByName("horn") !== undefined;
+          if (kind === "tone") return scene?.getObjectByName("@bz1") !== undefined;
           if (kind === "screen") return scene?.getObjectByName("@oled.display")?.getObjectByName("glass") !== undefined;
           if (kind === "lcd") return scene?.getObjectByName("@lcd.display")?.getObjectByName("glass") !== undefined;
           if (kind === "rgb") {

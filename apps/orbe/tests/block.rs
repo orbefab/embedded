@@ -14,10 +14,11 @@ use std::path::Path;
 
 use live::{common, orbe};
 
-const BLOCKS: [&str; 12] = [
+const BLOCKS: [&str; 13] = [
     "devkitc-button-led",
     "nano-7seg-count",
     "nano-button-led",
+    "nano-buzzer",
     "nano-lcd1602-i2c",
     "uno-button-led",
     "nano-led-fade",
@@ -85,14 +86,17 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
             .filter(|name| dir.join("parts").join(name).join("part.jsonc").is_file())
             .collect();
         copied.sort();
-        // The rainbow Block drives a pixel module, the OLED Block a screen module, the servo
-        // Block a servo and the DevKitC-1 Block its board's own LED. The others light a 5 mm LED.
+        // The rainbow Block drives a pixel module, the OLED Block a screen module, the LCD
+        // Block a character LCD, the buzzer Block a buzzer, the servo Block a servo, the
+        // 7-segment Block a display and the DevKitC-1 Block its board's own LED. The others
+        // light a 5 mm LED.
         let marker = match id {
             "nano-7seg-count" => "display-7seg-cc",
             "nano-lcd1602-i2c" => "lcd1602-i2c",
             "nano-neopixel-stick" => "neopixel-stick-8",
             "nano-oled" => "oled-ssd1306-128x64",
             "devkitc-button-led" => "esp32s3-devkitc-1",
+            "nano-buzzer" => "buzzer-12mm",
             "nano-servo-sweep" => "servo-sg90",
             _ => "led-5mm",
         };

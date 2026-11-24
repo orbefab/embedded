@@ -122,6 +122,8 @@ pub enum Target {
         param: String,
         spec: MapParam,
     },
+    /// The frequency a part's `"of": "hz"` reading reports, in hertz.
+    Hertz { path: String },
     /// The digit a 7-segment part shows, from its `digit` reading.
     Digit { path: String },
 }
@@ -146,6 +148,14 @@ pub(crate) fn rgb_reading(part: &MapPart) -> Option<&str> {
     part.readings
         .iter()
         .find(|(_, reading)| reading.of == "rgb")
+        .map(|(name, _)| name.as_str())
+}
+
+/// The name of the part's reading `"of": "hz"`, the frequency across it.
+pub(crate) fn hz_reading(part: &MapPart) -> Option<&str> {
+    part.readings
+        .iter()
+        .find(|(_, reading)| reading.of == "hz")
         .map(|(name, _)| name.as_str())
 }
 
@@ -260,6 +270,9 @@ pub fn resolve(
                 reading: seg.clone(),
                 engine,
             });
+        }
+        if last && hz_reading(part) == Some(seg.as_str()) {
+            return Ok(Target::Hertz { path });
         }
         if last && angle_reading(part) == Some(seg.as_str()) {
             let engine = one_engine(&path, part, Code::NoReading)?;
@@ -389,6 +402,9 @@ pub(crate) fn names(part: &MapPart, reported: &[Quantity]) -> String {
         found.push("digit".to_string());
     }
     if let Some(reading) = rgb_reading(part) {
+        found.push(reading.to_string());
+    }
+    if let Some(reading) = hz_reading(part) {
         found.push(reading.to_string());
     }
     if let Some(reading) = angle_reading(part) {

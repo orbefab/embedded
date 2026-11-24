@@ -25,6 +25,7 @@ fn each_block_passes() {
             "devkitc-button-led",
             "nano-7seg-count",
             "nano-button-led",
+            "nano-buzzer",
             "nano-lcd1602-i2c",
             "nano-led-fade",
             "nano-light-comparator",

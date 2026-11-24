@@ -514,9 +514,9 @@ The message is `{part} started a {peripheral} transfer with setting {setting} at
 - `slave_mode`, `push_pull`, `not_routed`, `lsb_first`, `arbitration`, `sample_scl_level`, `clock_off` and `timing`, with `peripheral` `I2C0`: `I2C_TRANS_START` left `MS_MODE` clear, left `SDA_FORCE_OUT` or `SCL_FORCE_OUT` clear or a routed pad without `PAD_DRIVER`, left signal 89 or 90 unrouted both ways, set `TX_LSB_FIRST` or `RX_LSB_FIRST`, set `ARBITRATION_EN`, set `SAMPLE_SCL_LEVEL`, left `SCLK_ACTIVE` clear, or copied a timing whose SDA hold is at least the SCL low period or whose SDA sample is at least `I2C_SCL_HIGH_PERIOD`. `I2C_CLK_EN` is kept and is not this `clock_off`.
 - `rc_fast_clock`, `fractional_divider`, `nonfifo`, `fsm_reset`, `clear_bus`, `power_down` and `int_ena`, with `peripheral` `I2C0`: the store set `SCLK_SEL`, a nonzero `SCLK_DIV_A` or `SCLK_DIV_B`, `NONFIFO_EN`, `FSM_RST`, `SCL_RST_SLV_EN`, `SCL_PD_EN` or `SDA_PD_EN`, or an `INT_ENA` bit outside the NACK, timeout, transfer-complete, arbitration-lost and end-detect bits.
 - `opcode`, with `peripheral` `I2C0`: a command is op 0, 5 or 7, or a read or a write whose byte count is 0, or the first command on a bus no END holds is neither a repeated START nor a STOP.
-- `tx_underflow`, `tx_overflow`, `rx_overflow` and `rx_underflow`, with `peripheral` `I2C0`: a write command finds the TX FIFO short, a store to `I2C_DATA_REG` finds it full, a read command finds the RX FIFO full, or a load of `I2C_DATA_REG` finds it empty.
+- `tx_underflow`, `tx_overflow` and `rx_overflow`, with `peripheral` `I2C0`: a write command finds the TX FIFO short, a store to `I2C_DATA_REG` finds it full, or a read command finds the RX FIFO full.
 - `rx_full_ack_level`, with `peripheral` `I2C0`: a read command's byte fills the 32-byte RX FIFO, and the command's ACK is not the level `I2C_RX_FULL_ACK_LEVEL` sets.
-- `busy_write`, with `peripheral` `I2C0`: a store of `TRANS_START`, `CONF_UPGATE`, a command, a FIFO reset or a timing word came while a transfer ran.
+- `busy_write`, with `peripheral` `I2C0`: a store of `TRANS_START`, `CONF_UPGATE`, a command, a FIFO reset or a timing word came while a transfer ran, except command writes while a NACK's automatic stop runs and no-op `CONF_UPGATE` or `TRANS_START` strobes with `COMD0` holding `STOP` while a NACK's automatic stop or a standalone `STOP` started right after a NACK runs.
 - `timeout`, with `peripheral` `I2C0`: a wait for SCL to read high reached `2^I2C_TIME_OUT_VALUE` sclk cycles. The register header says APB cycles, so the sclk count is inferred from IDF's driver, as [esp32s3.md](esp32s3.md#what-it-models) says.
 - `glitch`, with `peripheral` `I2C0`: with the filter on, SCL or SDA held a level for fewer sclk cycles than its threshold while a transfer ran.
 - `reset_while_sending`, with `peripheral` `I2C0`: a gate store cleared I2C0's clock bit or set its reset bit while a transfer ran.
@@ -785,6 +785,14 @@ An LM358 comparator on a 5 V supply, `input_headroom` 1.5 V, with `in_p` at 4 V 
 ```text
 #u1.pin.in_p reaches 4 V over the chip's ground, outside its 3.5 V ceiling
 ```
+
+A resistor with `ratings.voltage` uses the same code on `#<part>.v`. The window is that operating voltage. The message names the peak of a drive that leaves a level under 0.2 V, not a pin over the chip's ground:
+
+```text
+#bz.v peaks at 0.692 V, outside its 3 V to 5 V operating voltage
+```
+
+A peak inside the window is quiet. A part that never leaves the low level, including DC, is quiet. The part still conducts. The time counts from the start of the first pulse outside the window to the end of the last, with each gap under 17 ms between them, and stops once the part rests longer than that. A pulse ends at its last sample at or above 0.2 V, so a long solver step into the rest after it adds nothing.
 
 A capacitor with `ratings.reverse_voltage` uses the same code on pin `a`. The floor is that rating below pin `b`, and there is no ceiling. The message calls pin `b` the chip's ground. A capacitor with no `ratings` object, or with `reverse_voltage` null, is not checked. A forward voltage is not checked. A voltage exactly on the floor is inside. A reverse rating of 0 warns on any reverse voltage, and 0 V is inside.
 
