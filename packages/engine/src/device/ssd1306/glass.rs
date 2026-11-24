@@ -8,7 +8,7 @@
 
 use crate::display::Panel;
 
-use super::model::{FRAME_BYTES, HEIGHT, WIDTH};
+use super::model::{FRAME_BYTES, HEIGHT, Scan, WIDTH};
 
 /// Red, green, blue and alpha, a byte each.
 const RGBA: usize = 4;
@@ -68,39 +68,6 @@ pub fn glass(panel: &Panel, frame: &[u8]) -> Vec<u8> {
         }
     }
     pixels
-}
-
-/// The settings that pick the GDDRAM row each glass row shows.
-struct Scan {
-    start_line: u8,
-    offset: u8,
-    multiplex: u8,
-    remapped: bool,
-    com_pins: u8,
-}
-
-impl Scan {
-    /// The GDDRAM row glass row `y` shows, or `None` when the scan does not reach it.
-    ///
-    /// The panel's row `y` sits on the COM line that row `y` of an alternative, remapped scan
-    /// drives. A normal scan, `C0h`, runs the other way, so the picture turns upside down. A
-    /// sequential COM pin configuration on this panel puts the scan's row `2y` on the top half's
-    /// row `y` and row `2y - 63` on the bottom half's, so the picture shows every other row
-    /// twice over. Left and right COM remap, bit 5, swaps the scan's halves. The display offset
-    /// moves the picture up by its rows, a row of the scan past the multiplex ratio stays dark,
-    /// and the display start line is the GDDRAM row the scan's first row shows (datasheet 10.1.6,
-    /// 10.1.12, 10.1.14, 10.1.15 and 10.1.18).
-    fn row(&self, y: u8) -> Option<u8> {
-        let mut line = if self.remapped { y } else { 63 - y };
-        if self.com_pins & 0x10 == 0 {
-            line = if line < 32 { 2 * line } else { 2 * line - 63 };
-        }
-        if self.com_pins & 0x20 != 0 {
-            line = (line + 32) % 64;
-        }
-        let counter = (line + self.offset) % 64;
-        (counter <= self.multiplex).then_some((counter + self.start_line) % 64)
-    }
 }
 
 #[cfg(test)]

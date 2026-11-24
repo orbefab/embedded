@@ -271,6 +271,9 @@ pub(crate) struct Scratch {
     terms: Vec<u32>,
     /// The last step whose search reached each row, plus one.
     seen: Vec<usize>,
+    /// Each row's largest entry in the system being factored, which [`choose`] weighs a
+    /// candidate against.
+    scale: Vec<f64>,
 }
 
 impl Scratch {
@@ -280,6 +283,15 @@ impl Scratch {
             self.bound = vec![0.0; n];
             self.terms = vec![0; n];
             self.seen = vec![0; n];
+            self.scale = vec![0.0; n];
+        }
+    }
+
+    /// Each row's largest entry in `values` on `pattern`.
+    fn scale(&mut self, pattern: &Pattern, values: &[f64]) {
+        self.scale.fill(0.0);
+        for (&row, &value) in pattern.rows.iter().zip(values) {
+            self.scale[row] = self.scale[row].max(value.abs());
         }
     }
 
@@ -301,7 +313,8 @@ fn rounding_zero(x: f64, bound: f64, terms: u32) -> bool {
 }
 
 /// Factors `values` on `pattern` in the column `order`, choosing each pivot: the diagonal when it
-/// is at least `THRESHOLD` of the largest candidate, else the largest, ties to the lowest row.
+/// is at least `THRESHOLD` of the largest candidate, else the largest against its own row's
+/// largest entry, ties to the lowest row.
 /// A candidate within its rounding of zero is never chosen. `work` counts the multiply-adds.
 pub(crate) fn factor(
     pattern: &Pattern,
@@ -312,6 +325,7 @@ pub(crate) fn factor(
 ) -> Result<(Shape, Factors), Failure> {
     let n = pattern.n;
     scratch.fit(n);
+    scratch.scale(pattern, values);
     scratch.seen.fill(0);
     let mut pivoted = vec![usize::MAX; n];
     let mut shape = Shape {
@@ -407,7 +421,10 @@ pub(crate) fn factor(
 
 /// The pivot among `candidates`, the rows column `col` has left, ascending. Of those at least
 /// `THRESHOLD` of the largest, it is a row with one entry, then a late unknown's row, then the
-/// diagonal, then the largest, then the lowest row. A row with one entry is a source's
+/// diagonal, then the largest against its row's largest entry in the system, then the lowest
+/// row. Against its row, a source's current is solved from the net whose other entries are
+/// smallest. Its 1 in a supply net's row beside 1e5 S would make it a difference of terms that
+/// size and carry their rounding, far over Newton's 1 pA on a current near 0. A row with one entry is a source's
 /// constraint, so its unknown comes out of the solve as the source's value, with no rounding.
 /// A late row is a held capacitor's, so the voltage it holds comes out of that row.
 /// A candidate within its rounding of zero is never chosen. A candidate that overflowed is
@@ -419,6 +436,7 @@ fn choose(
     scratch: &Scratch,
 ) -> Result<usize, Failure> {
     let rank = |row: usize| (shape.single[row], shape.late[row]);
+    let scaled = |row: usize| scratch.x[row].abs() / scratch.scale[row];
     if candidates.iter().any(|&row| !scratch.x[row].is_finite()) {
         return Err(Failure::NonFinite { col });
     }
@@ -439,7 +457,7 @@ fn choose(
             rank(b)
                 .cmp(&rank(a))
                 .then((b == col).cmp(&(a == col)))
-                .then(scratch.x[b].abs().total_cmp(&scratch.x[a].abs()))
+                .then(scaled(b).total_cmp(&scaled(a)))
                 .then(a.cmp(&b))
         })
         .copied()
@@ -493,6 +511,7 @@ pub(crate) fn refactor(
 ) -> Result<(), Refused> {
     let n = pattern.n;
     scratch.fit(n);
+    scratch.scale(pattern, values);
     let mut candidates = Vec::new();
     for k in 0..n {
         let col = shape.order[k];
@@ -805,6 +824,56 @@ mod tests {
             "{x:?}"
         );
         assert!(scratch.x.iter().all(|&v| v == 0.0));
+    }
+
+    /// A 0 V source from a light net to a stiff one, as a USB bridge's idle DTR sits on its
+    /// 5 V rail beside a module's 1 uF at a 10 ps step. Its current is the light net's gmin
+    /// draw, about 5 pA. Three more nets in a ring on the rail put the current's column first,
+    /// with an entry of 1 in the rail's row and in the light net's. Pivoted on the rail's row,
+    /// the lower one, the current would be the difference of terms near 5e5 A and carry their
+    /// rounding, about 1e-10 A.
+    #[test]
+    fn a_source_current_pivots_on_the_row_where_its_entry_is_largest_for_that_row() {
+        let (rail, light, branch) = (0, 4, 5);
+        let g = 1e5;
+        let mut entries = vec![
+            (rail, rail, g + 3.0 * 1e-3),
+            (rail, branch, -1.0),
+            (light, light, 1e-12),
+            (light, branch, 1.0),
+            (branch, light, 1.0),
+            (branch, rail, -1.0),
+        ];
+        for net in 1..4 {
+            let next = net % 3 + 1;
+            entries.extend([
+                (net, net, 4e-3),
+                (net, rail, -1e-3),
+                (rail, net, -1e-3),
+                (net, next, -1e-3),
+                (next, net, -1e-3),
+            ]);
+        }
+        let mut b = vec![0.0; 6];
+        b[rail] = g * 5.000_000_3;
+        let (pattern, values) = sparse(6, &entries);
+        let node = [true, true, true, true, true, false];
+        let (mut scratch, mut work) = (Scratch::default(), 0);
+        let (shape, factors) = factor(
+            &pattern,
+            &values,
+            pattern.order(pattern.late(&values, &node)),
+            &mut scratch,
+            &mut work,
+        )
+        .unwrap();
+        let x = factors.solve(&shape, &b, &mut work).unwrap();
+        let exact = -1e-12 * x[light];
+        assert!(
+            (x[branch] - exact).abs() <= 1e-6 * exact.abs(),
+            "{} A against {exact} A",
+            x[branch]
+        );
     }
 
     #[test]

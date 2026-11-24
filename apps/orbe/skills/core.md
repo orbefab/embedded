@@ -80,12 +80,12 @@ $ orbe add led-5mm nano-board resistor-axial tactile-switch-6mm
 wrote parts/led-5mm 0.3.0
 ...
 $ orbe check scene.jsonc
-scene.jsonc: ok, 5 scene parts, expanding to 21 engine parts, 36 nets, ground GND
+scene.jsonc: ok, 5 scene parts, expanding to 22 engine parts, 36 nets, ground GND
 $ orbe lint scene.jsonc
 ...
 1 warning in scene.jsonc
 $ orbe open
-opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 21 engine parts, 36 nets)
+opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 22 engine parts, 36 nets)
 $ orbe step 100ms
 t=100ms (from 0s)
 ...

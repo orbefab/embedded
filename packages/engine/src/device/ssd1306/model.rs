@@ -13,11 +13,11 @@
 //! `8 * page + 7` of segment `seg`, bit 0 the top one. Segment remap, `A1h`, maps column address
 //! `c` to segment `127 - c` as each byte is written (datasheet 10.1.8). The rows the glass shows
 //! come from the display start line, the display offset, the multiplex ratio, the COM scan
-//! direction and the COM pins configuration as it draws them, in `glass.rs`.
+//! direction and the COM pins configuration, as `Scan` maps them and `glass.rs` draws them.
 
 use orbe_model::{
-    Ack, Cx, Device, Dir, Drawn, Drives, Error, I2cTarget, Levels, Panel, Params, Settings, Sha256,
-    Shows, State, Stop, Time, View,
+    Ack, Cx, Device, Dir, Draw, Drawn, Drives, Error, I2cTarget, Levels, Panel, Params, Settings,
+    Sha256, Shows, State, Stop, Time, View,
 };
 
 /// The panel's pixels across and down.
@@ -27,6 +27,8 @@ const COLUMNS: usize = WIDTH as usize;
 const PAGES: usize = HEIGHT as usize / 8;
 /// The GDDRAM, one bit a pixel.
 pub const FRAME_BYTES: usize = COLUMNS * PAGES;
+/// The pixels on the glass.
+const PIXELS: f64 = (WIDTH as usize * HEIGHT as usize) as f64;
 
 /// Watch order: SCL, SDA, RES#, then the supply. `WATCH_VDD` is high at or above the logic
 /// minimum.
@@ -178,8 +180,18 @@ struct Run {
     hash: Sha256,
 }
 
+/// What the panel draws, in ampere, and the supply in volt at and above which it holds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Supply {
+    sleep: f64,
+    logic: f64,
+    half_lit: f64,
+    all_lit: f64,
+    holds_above_v: f64,
+}
+
 /// The controller and its 1024-byte GDDRAM.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ssd1306 {
     ram: [u8; FRAME_BYTES],
     registers: Registers,
@@ -191,6 +203,10 @@ pub struct Ssd1306 {
     next: Next,
     pending: Option<Pending>,
     run: Option<Run>,
+    supply: Supply,
+    /// The pixels the glass would light with the display on, counted at each STOP and each
+    /// power or reset change. Its draw follows them.
+    lit: u16,
 }
 
 impl State for Ssd1306 {}
@@ -203,7 +219,25 @@ impl Device for Ssd1306 {
         format: "mono-pages",
     };
 
-    fn new(_params: &Params<'_>) -> Result<Ssd1306, Error> {
+    /// `sleep_na`, `logic_na`, `half_lit_na` and `all_lit_na` are its draw in nanoamperes, as
+    /// `PanelDraw` names them, 0 or absent for none, and `holds_above_mv` the supply in
+    /// millivolts at and above which it holds.
+    fn new(params: &Params<'_>) -> Result<Ssd1306, Error> {
+        let amps = |field| match params.int(field).unwrap_or(0) {
+            nanoamps @ 0.. => Ok(nanoamps as f64 * 1e-9),
+            _ => Err(Error("a draw is 0 or more nanoamperes")),
+        };
+        let holds_above_v = match params.int("holds_above_mv").unwrap_or(1_000) {
+            millivolts @ 1.. => millivolts as f64 * 1e-3,
+            _ => return Err(Error("holds_above_mv is more than 0")),
+        };
+        let supply = Supply {
+            sleep: amps("sleep_na")?,
+            logic: amps("logic_na")?,
+            half_lit: amps("half_lit_na")?,
+            all_lit: amps("all_lit_na")?,
+            holds_above_v,
+        };
         Ok(Ssd1306 {
             ram: [0; FRAME_BYTES],
             registers: Registers::RESET,
@@ -212,6 +246,8 @@ impl Device for Ssd1306 {
             next: Next::Closed,
             pending: None,
             run: None,
+            supply,
+            lit: 0,
         })
     }
 
@@ -238,6 +274,7 @@ impl Device for Ssd1306 {
             self.pending = None;
             self.run = None;
             self.powered = powered;
+            self.lit = self.count_lit();
         }
         if !self.powered {
             self.reset = false;
@@ -249,8 +286,30 @@ impl Device for Ssd1306 {
             self.next = Next::Closed;
             self.pending = None;
             self.run = None;
+            self.lit = self.count_lit();
         }
         self.reset = low;
+    }
+
+    /// The sleep current with the display off, `RES#` low or `VDD` under its logic minimum.
+    /// With the display on, the logic current, and while the charge pump is on the pump's
+    /// current for the pixels lit, on the line through half and all of them lit.
+    fn draw(&self) -> Draw {
+        let s = &self.supply;
+        let r = &self.registers;
+        let amps = if !self.powered || self.reset || !r.display_on {
+            s.sleep
+        } else if r.charge_pump & 0x04 == 0 {
+            s.logic
+        } else {
+            let share = f64::from(self.lit) / PIXELS;
+            let pump = s.half_lit + (s.all_lit - s.half_lit) * (2.0 * share - 1.0);
+            s.logic + pump.max(0.0)
+        };
+        Draw {
+            amps,
+            holds_above_v: s.holds_above_v,
+        }
     }
 
     fn view(&self) -> View<'_> {
@@ -322,6 +381,7 @@ impl I2cTarget for Ssd1306 {
     fn stop(&mut self, cx: &mut Cx, _at: Time) {
         self.close(cx);
         self.next = Next::Closed;
+        self.lit = self.count_lit();
     }
 }
 
@@ -329,6 +389,36 @@ impl Ssd1306 {
     #[cfg(test)]
     pub(crate) fn registers(&self) -> &Registers {
         &self.registers
+    }
+
+    /// The pixels the glass lights with the display on: each row the scan reaches, from its
+    /// GDDRAM row, all of them with entire display on, and flipped by inverse display, as
+    /// `glass.rs` draws them.
+    fn count_lit(&self) -> u16 {
+        let r = &self.registers;
+        let scan = Scan {
+            start_line: r.start_line,
+            offset: r.offset,
+            multiplex: r.multiplex,
+            remapped: r.com_scan,
+            com_pins: r.com_pins,
+        };
+        let mut lit = 0;
+        for y in 0..HEIGHT as u8 {
+            let Some(row) = scan.row(y) else {
+                continue;
+            };
+            let (page, bit) = (usize::from(row / 8), row % 8);
+            let set = match r.entire_on {
+                true => WIDTH,
+                false => self.ram[page * COLUMNS..][..COLUMNS]
+                    .iter()
+                    .map(|byte| u16::from(byte >> bit & 1))
+                    .sum(),
+            };
+            lit += if r.inverted { WIDTH - set } else { set };
+        }
+        lit
     }
 
     fn take(&mut self, cx: &mut Cx, at: Time, data: bool, byte: u8) {
@@ -516,5 +606,38 @@ fn params(command: u8) -> u8 {
         0x29 | 0x2a => 5,
         0x26 | 0x27 => 6,
         _ => 0,
+    }
+}
+
+/// The settings that pick the GDDRAM row each glass row shows.
+pub(super) struct Scan {
+    pub(super) start_line: u8,
+    pub(super) offset: u8,
+    pub(super) multiplex: u8,
+    pub(super) remapped: bool,
+    pub(super) com_pins: u8,
+}
+
+impl Scan {
+    /// The GDDRAM row glass row `y` shows, or `None` when the scan does not reach it.
+    ///
+    /// The panel's row `y` sits on the COM line that row `y` of an alternative, remapped scan
+    /// drives. A normal scan, `C0h`, runs the other way, so the picture turns upside down. A
+    /// sequential COM pin configuration on this panel puts the scan's row `2y` on the top half's
+    /// row `y` and row `2y - 63` on the bottom half's, so the picture shows every other row
+    /// twice over. Left and right COM remap, bit 5, swaps the scan's halves. The display offset
+    /// moves the picture up by its rows, a row of the scan past the multiplex ratio stays dark,
+    /// and the display start line is the GDDRAM row the scan's first row shows (datasheet 10.1.6,
+    /// 10.1.12, 10.1.14, 10.1.15 and 10.1.18).
+    pub(super) fn row(&self, y: u8) -> Option<u8> {
+        let mut line = if self.remapped { y } else { 63 - y };
+        if self.com_pins & 0x10 == 0 {
+            line = if line < 32 { 2 * line } else { 2 * line - 63 };
+        }
+        if self.com_pins & 0x20 != 0 {
+            line = (line + 32) % 64;
+        }
+        let counter = (line + self.offset) % 64;
+        (counter <= self.multiplex).then_some((counter + self.start_line) % 64)
     }
 }

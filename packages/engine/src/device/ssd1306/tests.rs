@@ -1,6 +1,8 @@
 //! The SSD1306 decoder, called the way the I2C engine calls it: a START, the bytes, a STOP.
 
-use orbe_model::{Ack, Cx, Device, Dir, Drawn, Fields, I2cTarget, Levels, Time, View};
+use orbe_model::{
+    Ack, Cx, Device, Dir, Drawn, Fields, I2cTarget, Levels, Time, Value as FieldValue, View,
+};
 
 use super::model::{Addressing, FRAME_BYTES, Ssd1306, WATCH_RES};
 use crate::display::panel;
@@ -271,6 +273,72 @@ fn a_supply_below_the_minimum_nacks_and_the_glass_stays_dark_until_power_returns
     assert!(bus.dev.registers().display_on);
     assert_eq!(bus.dev.registers().charge_pump, 0x14);
     assert!(bus.lit().is_empty(), "power-on RAM is empty");
+}
+
+/// The panel part's draw: 1 uA asleep, 180 uA of logic, and the pump's 17.3 mA with half the
+/// glass lit and 23.1 mA with all of it, held above 1.65 V.
+const DRAW: [(&str, FieldValue); 5] = [
+    ("sleep_na", FieldValue::Int(1_000)),
+    ("logic_na", FieldValue::Int(180_000)),
+    ("half_lit_na", FieldValue::Int(17_300_000)),
+    ("all_lit_na", FieldValue::Int(23_100_000)),
+    ("holds_above_mv", FieldValue::Int(1_650)),
+];
+
+fn amps(bus: &Bus) -> f64 {
+    let draw = bus.dev.draw();
+    assert!((draw.holds_above_v - 1.65).abs() < 1e-12);
+    draw.amps
+}
+
+fn close(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-12
+}
+
+#[test]
+fn the_draw_sleeps_with_the_display_off_and_follows_the_lit_pixels_with_it_on() {
+    let mut bus = Bus::new();
+    bus.dev = Ssd1306::new(&Fields::new(&DRAW)).unwrap();
+    assert!(
+        close(amps(&bus), 1e-6),
+        "unpowered, it is the sleep current"
+    );
+    bus.dev
+        .input(&mut Cx::default(), Time::from_ps(1), powered(true));
+    assert!(close(amps(&bus), 1e-6), "the display is off after power-on");
+    bus.init();
+    // The line through half and all lit meets 11.5 mA with none lit.
+    assert!(close(amps(&bus), 180e-6 + 11.5e-3), "{}", amps(&bus));
+    bus.send(&[0x40, 0xff, 0x0f]);
+    assert!(close(
+        amps(&bus),
+        180e-6 + 11.5e-3 + 11.6e-3 * 12.0 / 8192.0
+    ));
+    bus.send(&[0x00, 0xa5]);
+    assert!(
+        close(amps(&bus), 180e-6 + 23.1e-3),
+        "entire display on lights all"
+    );
+    bus.send(&[0x00, 0xa4, 0xa7]);
+    assert!(close(
+        amps(&bus),
+        180e-6 + 11.5e-3 + 11.6e-3 * 8180.0 / 8192.0
+    ));
+    bus.send(&[0x00, 0x8d, 0x10]);
+    assert!(
+        close(amps(&bus), 180e-6),
+        "with the pump off, the logic alone"
+    );
+    bus.send(&[0x00, 0x8d, 0x14, 0xae]);
+    assert!(close(amps(&bus), 1e-6), "display off is sleep");
+    bus.send(&[0x00, 0xaf]);
+    bus.dev
+        .input(&mut Cx::default(), Time::from_ps(9), powered_res(false));
+    assert!(close(amps(&bus), 1e-6), "RES# low holds it reset");
+    bus.dev
+        .input(&mut Cx::default(), Time::from_ps(10), powered(false));
+    assert!(close(amps(&bus), 1e-6), "below the logic minimum");
+    assert!(close(Ssd1306::new(&Fields::NONE).unwrap().draw().amps, 0.0));
 }
 
 /// SCL and SDA high, RES# high, and the supply watch at `on`.

@@ -1292,9 +1292,9 @@ mod tests {
             held.text(),
             "\
 t=50ms (from 50ms), @led1 off at 50ms
-  brightness led1 off 1.2775403141982445e-13 A over 20ms
+  brightness led1 off 1.2775403302174304e-13 A over 20ms
   brightness nano.led_l off 1.2775344350286488e-13 A over 20ms
-  brightness nano.led_pwr lit 3.013698540531949 mA over 20ms"
+  brightness nano.led_pwr lit 3.0136985405319647 mA over 20ms"
         );
 
         let unmet = step(&mut live, "--until @led1 lit");

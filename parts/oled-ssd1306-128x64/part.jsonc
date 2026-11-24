@@ -11,7 +11,7 @@
   "part": "oled-ssd1306-128x64",
   "version": "0.1.0",
   "title": "OLED display module, 0.96 inch 128 x 64, SSD1306, I2C",
-  "summary": "A 0.96 inch 128 x 64 white OLED on a 27.3 x 27.8 mm board, with a 4-pin header, GND, VCC, SCL, SDA, on 2.54 mm that plugs into a breadboard. The SSD1306 answers at I2C address 0x3C. A 3.3 V regulator feeds the panel, so VCC takes 3.3 V to 5 V, and the board pulls SCL and SDA up to 3.3 V through 4.7 kohm. Read the screen as `@<module>.display.screen`: `get` prints its lit pixels as text art. Adafruit SSD1306 and U8g2 drive it.",
+  "summary": "A 0.96 inch 128 x 64 white OLED on a 27.3 x 27.8 mm board, with a 4-pin header, GND, VCC, SCL, SDA, on 2.54 mm that plugs into a breadboard. The SSD1306 answers at I2C address 0x3C. A 3.3 V regulator feeds the panel, so VCC takes 3.3 V to 5 V, and the board pulls SCL and SDA up to 3.3 V through 4.7 kohm. The panel draws about 1 uA with the display off, and with it on from 11.7 mA with no pixel lit to 23.3 mA with all of them. Read the screen as `@<module>.display.screen`: `get` prints its lit pixels as text art. Adafruit SSD1306 and U8g2 drive it.",
   "tags": ["oled", "display", "screen", "ssd1306", "128x64", "i2c", "0.96"],
   "license": "MIT OR Apache-2.0",
   "docs": {
@@ -101,15 +101,11 @@
     },
     {
       "what": "the reset diode",
-      "why": "The schematic puts an SS14 Schottky diode D2 across R3, which empties C3 when the supply falls. The supply here does not fall, so it is left off."
+      "why": "The schematic puts an SS14 Schottky diode D2 across R3, which empties C3 into the 3.3 V rail when the supply falls. Without it C3 drains through R3, with a 47 ms time constant, so a supply that comes back sooner gives RES# a shorter low pulse. The controller resets as its VDD rises over 1.65 V all the same."
     },
     {
       "what": "the supply jumper and the header order",
       "why": "The schematic's note says J1 is open for 5 V in and shorted for 3.3 V in, bypassing U1. This module keeps it open, so U1 always regulates. The MC096 drawing's silkscreen reads VCC, GND, SCL, SDA. Boards with GND first, as this module is, are sold as often. Check the board in hand."
-    },
-    {
-      "what": "the panel current",
-      "why": "The panel draws nothing in the engine, so U1 and the VCC pin carry only the pull-ups' and the regulator's own current. UG-2864HSWEG01 section 3.2 gives 23.1 mA typical with every pixel lit."
     },
     {
       "what": "the bus voltage limit",
