@@ -243,7 +243,7 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "button" | "digit" | "fade" | "light" | "pixels" | "relay" | "rgb" | "screen" | "serial" | "servo" | "shift" | "tone";
+export type BlockKind = "button" | "digit" | "fade" | "lcd" | "light" | "pixels" | "relay" | "rgb" | "screen" | "serial" | "servo" | "shift" | "tone";
 
 export interface RepoBlock {
   id: string;
@@ -270,6 +270,7 @@ export function blockKind(scene: string, id: string): BlockKind {
   if (/"type"\s*:\s*"servo-sg90"/.test(code)) return "servo";
   if (/"type"\s*:\s*"neopixel-stick-8"/.test(code)) return "pixels";
   if (/"type"\s*:\s*"oled-ssd1306-128x64"/.test(code)) return "screen";
+  if (/"type"\s*:\s*"lcd1602-i2c"/.test(code)) return "lcd";
   if (/"type"\s*:\s*"hc595-dip16"/.test(code)) return "shift";
   if (/"type"\s*:\s*"gy-bmp280"/.test(code)) return "serial";
   if (/"type"\s*:\s*"esp32s3-devkitc-1"/.test(code)) return "rgb";
@@ -342,19 +343,19 @@ const FADE_CYCLE_S = 3.1;
 // the first lit pixels the session sends.
 const SCREEN_WAIT_MS = 150_000;
 
-/** Waits until the page draws a frame the OLED holds: the `glass` node of `@oled.display`
+/** Waits until the page draws a frame the screen holds: the `glass` node of `ref`
  * shows, as its emissive map, at least one white pixel. */
-async function showScreen(page: Page, shotName: string | null): Promise<void> {
+async function showScreen(page: Page, ref: string, shotName: string | null): Promise<void> {
   await page.waitForFunction(
-    () => {
-      const glass = window.orbeViewer.get().scene.getObjectByName("@oled.display")?.getObjectByName("glass");
+    (name) => {
+      const glass = window.orbeViewer.get().scene.getObjectByName(name)?.getObjectByName("glass");
       const material = glass?.material ?? glass?.children?.[0]?.material;
       const data = material?.emissiveMap?.image?.data;
       if (data === undefined) return false;
       for (let k = 0; k < data.length; k += 4) if (data[k] === 255) return true;
       return false;
     },
-    undefined,
+    ref,
     { timeout: SCREEN_WAIT_MS },
   );
   if (shotName !== null) {
@@ -576,7 +577,11 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
     return;
   }
   if (block.kind === "screen") {
-    await showScreen(page, shotName);
+    await showScreen(page, "@oled.display", shotName);
+    return;
+  }
+  if (block.kind === "lcd") {
+    await showScreen(page, "@lcd.display", shotName);
     return;
   }
   await waitSimulatedPast(page, Math.max(1, start));

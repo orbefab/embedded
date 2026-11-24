@@ -1,0 +1,46 @@
+{
+  "part": "lcd1602-i2c",
+  "source": {
+    "script": "model.py",
+    "sha256": "d374474357fe58333d582dcee35e9bc94ddf7ff5c707815d39c9094eb97028d7",
+    "bytes": 2522
+  },
+  "files": {
+    "lcd1602-i2c.glb": {
+      "sha256": "738f6b9976d0ab8e9c887abaf1e1cfd9fff937a1e7af9d65b92644485ad45bea",
+      "bytes": 16924
+    }
+  },
+  "box": {
+    "min": [-34.5, -2, 0],
+    "max": [7.5, 17, 10.5]
+  },
+  "kept_nodes": [],
+  "draw_calls": 5,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 0,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "backlight-jumper",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 21,
+      "primitives_out": 5
+    },
+    "composition": {
+      "children": 5,
+      "lowest_node": "backlight-jumper",
+      "z_mm": 0,
+      "draw_calls": 28
+    }
+  }
+}

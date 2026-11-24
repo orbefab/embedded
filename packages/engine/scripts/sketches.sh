@@ -42,6 +42,8 @@ gfx_url=https://github.com/adafruit/Adafruit-GFX-Library/archive/refs/tags/1.13.
 gfx_sha256=8ab038fb445d99f320feb9d463c7afe4cd91475fd8ea9c4047be444aacbb3b29
 busio_url=https://github.com/adafruit/Adafruit_BusIO/archive/refs/tags/1.17.4.tar.gz
 busio_sha256=59efa3acd5466e381c1b0313d5f0e824832db1bb24e4e328667e12b7d235d56d
+lcd_i2c_url=https://github.com/markub3327/LiquidCrystal_I2C/archive/refs/tags/2.0.0.tar.gz
+lcd_i2c_sha256=627b804fae7b078796817b24f8ac83adc19ddaaeb2c6aaa8e1b3937befe08649
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
   echo "usage: $0 TOOLS_DIR [DOWNLOAD_DIR]" >&2
@@ -85,6 +87,7 @@ unpack arduino-servo-1.3.0 "$servo_url" "$servo_sha256"
 unpack adafruit-ssd1306-2.5.17 "$ssd1306_url" "$ssd1306_sha256"
 unpack adafruit-gfx-1.13.0 "$gfx_url" "$gfx_sha256"
 unpack adafruit-busio-1.17.4 "$busio_url" "$busio_sha256"
+unpack liquidcrystal-i2c-2.0.0 "$lcd_i2c_url" "$lcd_i2c_sha256"
 
 bin=$tools/avr-gcc-7.3.0/avr/bin
 runtime=$tools/avr-runtime-1.8.6/avr-1.8.6
@@ -96,6 +99,7 @@ ssd1306=$tools/adafruit-ssd1306-2.5.17/Adafruit_SSD1306-2.5.17
 gfx=$tools/adafruit-gfx-1.13.0/Adafruit-GFX-Library-1.13.0
 busio=$tools/adafruit-busio-1.17.4/Adafruit_BusIO-1.17.4
 spi=$runtime/libraries/SPI/src
+lcd_i2c=$tools/liquidcrystal-i2c-2.0.0/LiquidCrystal_I2C-2.0.0
 core=$runtime/cores/arduino
 target=(-mmcu=atmega328p -DF_CPU=16000000L -I"$core" -I"$runtime/variants/standard")
 c_flags=(-c -g -Os -w -std=gnu11 -ffunction-sections -fdata-sections -flto -fno-fat-lto-objects)
@@ -221,6 +225,13 @@ for dir in "$repo"/packages/engine/tests/firmware/sketch/*/ "$repo"/blocks/*/fir
       -o "$work/$name-spi.o"
     library+=("${oled[@]}")
     archives+=("$work/$name-ssd1306.o" "$work/$name-gfx.o" "$work/$name-spi.o")
+  fi
+  if grep -q '^#include <LiquidCrystal_I2C.h>' "$dir/$name.ino"; then
+    lcd=(-DARDUINO=10806 -I"$lcd_i2c" -I"$wire")
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${lcd[@]}" \
+      "$lcd_i2c/LiquidCrystal_I2C.cpp" -o "$work/$name-lcd-i2c.o"
+    library+=("${lcd[@]}")
+    archives=("$work/$name-lcd-i2c.o" "${archives[@]}")
   fi
   "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${library[@]}" -x c++ -include Arduino.h \
     "$dir/$name.ino" -o "$work/$name.o"

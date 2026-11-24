@@ -1,0 +1,35 @@
+`build/hello.ino.hex` is built from `firmware/hello/hello.ino` for the ATmega328P at 16 MHz.
+It links the standard AVR runtime, version 1.8.6. The runtime is free software under the GNU
+Lesser General Public License, version 2.1 or any later version, whose text is in
+LICENSE-runtime. Its source is the archive at
+
+https://orbefab.com/embedded/sources/avr-1.8.6.tar.bz2
+
+with SHA-256 ff1d17274b5a952f172074bd36c3924336baefded0232e10982f8999c2f7c3b6, served with this
+image. It is the archive Arduino publishes at
+https://downloads.arduino.cc/cores/staging/avr-1.8.6.tar.bz2. The image was
+built with avr-gcc 7.3.0-atmel3.6.1-arduino7 by packages/engine/scripts/sketches.sh in
+https://github.com/orbefab/embedded, which pins every archive and relinks the sketch, the
+libraries and the runtime, so the image can be rebuilt against a modified runtime. The sketch is
+under MIT or Apache-2.0, and those terms permit modifying the image and reverse engineering it to
+debug such modifications.
+
+The image also links LiquidCrystal_I2C 2.0.0, under the MIT license, whose notice is in
+LICENSE-liquidcrystal-i2c. Its source is the archive at
+https://github.com/markub3327/LiquidCrystal_I2C/archive/refs/tags/2.0.0.tar.gz
+with SHA-256 627b804fae7b078796817b24f8ac83adc19ddaaeb2c6aaa8e1b3937befe08649.
+
+The image also holds the start-up code of the toolchain's C library, version 2.0.0, under that
+library's modified BSD license, whose notice is in LICENSE-libc as the license requires, and
+routines of the compiler's support library, under the GCC Runtime Library Exception.
+
+These files and their licences:
+
+`block.jsonc`, `README.md`, `scene.jsonc`, `firmware/NOTICE`, `firmware/hello/hello.ino` and
+`tests/hello.test` are under MIT OR Apache-2.0.
+
+`build/hello.ino.hex` links the runtime and LiquidCrystal_I2C, so it is under
+LGPL-2.1-or-later and MIT.
+`firmware/LICENSE-runtime` is under LGPL-2.1-or-later.
+`firmware/LICENSE-liquidcrystal-i2c` is under MIT.
+`firmware/LICENSE-libc` is under BSD-3-Clause.

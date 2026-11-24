@@ -9,7 +9,7 @@ use orbe_engine::name::Ref as EngineRef;
 use super::{Open, Outcome, engine_name, fail, failed, quantity, t, unit_of};
 use crate::condition::{Condition, Op, Rgb, State as Want, Unit};
 use crate::reply::{Check, Code, Data, Diagnostic, Error, Level, Light, current, number};
-use crate::target::{Target, one_engine, rgb_reading, screen_reading};
+use crate::target::{Target, lcd_engine, one_engine, rgb_reading, screen_reading, text_reading};
 
 /// What a condition reads, resolved against the open scene.
 pub(super) enum Bound {
@@ -76,6 +76,30 @@ pub(super) enum Bound {
         file: String,
         rows: Vec<String>,
     },
+    /// `@lcd.text contains "Hello"`.
+    TextContains {
+        label: String,
+        engine: String,
+        needle: String,
+    },
+    /// `@lcd.text line 0 "Hello"`.
+    TextLine {
+        label: String,
+        engine: String,
+        row: u8,
+        want: String,
+    },
+    /// `@lcd.text blank`.
+    TextBlank {
+        label: String,
+        engine: String,
+    },
+    /// `@lcd.backlight lit` or `off`.
+    Backlight {
+        label: String,
+        engine: String,
+        want: bool,
+    },
     SerialContains(String),
     NoDiagnostics,
     /// `@disp.digit 8`.
@@ -116,6 +140,27 @@ impl Open {
                     rows,
                 }
             }
+            Condition::TextContains(r, needle) => {
+                let (label, engine) = self.text_target(r)?;
+                Bound::TextContains {
+                    label,
+                    engine,
+                    needle: needle.as_str().to_string(),
+                }
+            }
+            Condition::TextLine(r, row, want) => {
+                let (label, engine) = self.text_target(r)?;
+                Bound::TextLine {
+                    label,
+                    engine,
+                    row: *row,
+                    want: want.clone(),
+                }
+            }
+            Condition::TextBlank(r) => {
+                let (label, engine) = self.text_target(r)?;
+                Bound::TextBlank { label, engine }
+            }
             Condition::State(r, want) => {
                 match (self.resolve(r)?, want) {
                     (Target::Part(path), Want::Closed | Want::Open) => {
@@ -134,6 +179,18 @@ impl Open {
                         },
                         Want::Lit | Want::Off,
                     ) => Bound::ScreenLit {
+                        label: format!("{path}.{reading}"),
+                        engine,
+                        want: *want == Want::Lit,
+                    },
+                    (
+                        Target::Backlight {
+                            path,
+                            reading,
+                            engine,
+                        },
+                        Want::Lit | Want::Off,
+                    ) => Bound::Backlight {
                         label: format!("{path}.{reading}"),
                         engine,
                         want: *want == Want::Lit,
@@ -293,6 +350,22 @@ impl Open {
                             format!(
                                 "expect what it shows, such as `{r} lit` or `{r} shows tests/screen.txt`"
                             ),
+                        ));
+                    }
+                    Target::Text { .. } => {
+                        return Err(Error::new(
+                            Code::NoReading,
+                            format!("{r} is LCD text, not a value to compare"),
+                            format!(
+                                "expect what it shows, such as `{r} contains \"Hello\"` or `{r} line 0 \"Hello\"`"
+                            ),
+                        ));
+                    }
+                    Target::Backlight { .. } => {
+                        return Err(Error::new(
+                            Code::NoReading,
+                            format!("{r} is a backlight, not a value to compare"),
+                            format!("expect its state, such as `{r} lit` or `{r} off`"),
                         ));
                     }
                     Target::Color { .. } => {
@@ -501,6 +574,47 @@ impl Open {
                     ),
                 }
             }
+            Bound::TextContains {
+                label,
+                engine,
+                needle,
+            } => {
+                let lcd = self.lcd_text(engine);
+                let joined = lcd.text();
+                (
+                    joined.contains(needle.as_str()),
+                    format!("{label} is {}", lcd.brief()),
+                )
+            }
+            Bound::TextLine {
+                label,
+                engine,
+                row,
+                want,
+            } => {
+                let lcd = self.lcd_text(engine);
+                let actual = lcd.lines[usize::from(*row)].trim_end();
+                (
+                    actual == want.trim_end(),
+                    format!("{label} line {row} is {actual:?} ({})", lcd.brief()),
+                )
+            }
+            Bound::TextBlank { label, engine } => {
+                let lcd = self.lcd_text(engine);
+                let blank = lcd.lines.iter().all(|line| line.trim().is_empty());
+                (blank, format!("{label} is {}", lcd.brief()))
+            }
+            Bound::Backlight {
+                label,
+                engine,
+                want,
+            } => {
+                let on = self.lcd_backlight(engine);
+                (
+                    on == *want,
+                    format!("{label} {}", if on { "lit" } else { "off" }),
+                )
+            }
             Bound::SerialContains(text) => {
                 let found = self.serial.contains(text);
                 let mut actual = self.serial.actual();
@@ -580,6 +694,26 @@ impl Open {
         }
     }
 
+    /// The character LCD a text condition reads, as its label and its engine part.
+    fn text_target(&self, r: &crate::target::Ref) -> Result<(String, String), Error> {
+        match self.resolve(r)? {
+            Target::Text {
+                path,
+                reading,
+                engine,
+            } => Ok((format!("{path}.{reading}"), engine)),
+            Target::Part(path) => {
+                let part = &self.refs.parts[&path];
+                let Some(reading) = text_reading(part) else {
+                    return Err(no_text(r));
+                };
+                let engine = lcd_engine(&self.refs, &path)?;
+                Ok((format!("{path}.{reading}"), engine))
+            }
+            _ => Err(no_text(r)),
+        }
+    }
+
     /// The rows of `file`, by its path from the scene's folder: one line a row, `#` lit and
     /// `.` dark, as `get` writes them.
     fn picture(&self, file: &str) -> Result<Vec<String>, Error> {
@@ -604,6 +738,14 @@ fn no_screen(r: &crate::target::Ref) -> Error {
         Code::NoReading,
         format!("{r} is not a screen"),
         "a display, a part with a reading of screen, shows rows, such as `@oled.display.screen shows tests/hello.screen`",
+    )
+}
+
+fn no_text(r: &crate::target::Ref) -> Error {
+    Error::new(
+        Code::NoReading,
+        format!("{r} has no LCD text"),
+        "a character LCD with a reading of text shows lines, such as `@lcd.text contains \"Hello\"` or `@lcd.text line 0 \"Hello\"`",
     )
 }
 

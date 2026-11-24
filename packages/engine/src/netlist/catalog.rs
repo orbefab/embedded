@@ -396,7 +396,8 @@ pub fn live_field(kind: &str) -> Option<&'static str> {
 fn chip_pin_names(chip: &Chip) -> &[&'static str] {
     use crate::chip::Ne555;
     use crate::device::{
-        Bmp280, Cst816, Dht22, Hc595, PulsesReplay, Sg90, SpiReplay, Ssd1306, St77916, Ws2812,
+        Bmp280, Cst816, Dht22, Hc595, Hd44780I2c, PulsesReplay, Sg90, SpiReplay, Ssd1306, St77916,
+        Ws2812,
     };
 
     match chip {
@@ -405,6 +406,7 @@ fn chip_pin_names(chip: &Chip) -> &[&'static str] {
         Chip::SpiReplay(_) => &SpiReplay::PINS,
         Chip::St77916(_) => &St77916::PINS,
         Chip::Ssd1306(_) => &Ssd1306::PINS,
+        Chip::Hd44780I2c(_) => &Hd44780I2c::PINS,
         Chip::Cst816(_) => &Cst816::PINS,
         Chip::Dht22(_) => &Dht22::PINS,
         Chip::Bmp280(_) => &Bmp280::PINS,
@@ -423,6 +425,7 @@ fn chip_pins(chip: &Chip) -> &[NetId] {
         Chip::SpiReplay(part) => &part.pins,
         Chip::St77916(part) => &part.pins,
         Chip::Ssd1306(part) => &part.pins,
+        Chip::Hd44780I2c(part) => &part.pins,
         Chip::Cst816(part) => &part.pins,
         Chip::Dht22(part) => &part.pins,
         Chip::Bmp280(part) => &part.pins,
@@ -519,6 +522,9 @@ define_kinds! {
         Ssd1306, "ssd1306",
             crate::device::ssd1306::WireSsd1306, crate::device::ssd1306::resolve_ssd1306,
             &crate::device::Ssd1306::PINS;
+        Hd44780I2c, "hd44780_i2c",
+            crate::device::hd44780_i2c::WireHd44780I2c, crate::device::hd44780_i2c::resolve_hd44780_i2c,
+            &crate::device::Hd44780I2c::PINS;
         Cst816, "cst816",
             crate::device::cst816::WireCst816, crate::device::cst816::resolve_cst816,
             &crate::device::Cst816::PINS;

@@ -27,6 +27,7 @@ for (const block of repoBlocks()) {
           if (kind === "servo") return scene?.getObjectByName("@servo")?.getObjectByName("horn") !== undefined;
           if (kind === "tone") return scene?.getObjectByName("@bz1") !== undefined;
           if (kind === "screen") return scene?.getObjectByName("@oled.display")?.getObjectByName("glass") !== undefined;
+          if (kind === "lcd") return scene?.getObjectByName("@lcd.display")?.getObjectByName("glass") !== undefined;
           if (kind === "rgb") {
             return scene?.getObjectByName("@board.led")?.getObjectByName("lens") !== undefined
               && scene?.getObjectByName("@btn1")?.getObjectByName("stem") !== undefined;
