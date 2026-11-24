@@ -176,7 +176,7 @@ describe("buildScene", () => {
   test("a screen's glass maps its top face from the +y edge down and starts dark", () => {
     const oled = { name: "oled", part: "oled", params: {}, placement: at, children: [] };
     const built = buildScene(
-      scene([oled], { channels: { pins: [], leds: [], switches: [], pixels: [], screens: ["@oled"] } }),
+      scene([oled], { channels: { pins: [], leds: [], switches: [], pixels: [], horns: [], screens: ["@oled"] } }),
       models
     );
     expect(built.errors).toEqual([]);
