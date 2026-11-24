@@ -306,8 +306,9 @@ enum Effect {
     Gates,
 }
 
-/// The effect of a write of the register at `addr`, when it has one the model does not run.
-fn effect(addr: u32) -> Option<Effect> {
+/// The effect of a write of `value` to the register at `addr`, when it has one the model does not
+/// run.
+fn effect(addr: u32, value: u32) -> Option<Effect> {
     let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
     let interrupt = |peripheral| Ending::Refused(Refused::Interrupt(peripheral));
     let dma = |setting| Ending::Refused(Refused::Register("GDMA", setting));
@@ -319,7 +320,14 @@ fn effect(addr: u32) -> Option<Effect> {
         (RTC_CNTL, _)
             if offset == sar::SENS + sar::CLK_GATE || offset == sar::SENS + sar::RESET_CONF =>
         {
-            Effect::Report(!sar::SARADC_BIT)
+            if value & sar::TSENS_BIT != 0 {
+                Effect::Refuse(
+                    sar::TSENS_BIT,
+                    Ending::Refused(Refused::Unsimulated("SENS", blocks::TSENS)),
+                )
+            } else {
+                Effect::Report(!sar::SARADC_BIT)
+            }
         }
         (RTC_CNTL, _) if offset == sar::SENS + 0x40 => Effect::Report(sar::SLAVE_ADDRS),
         (SPI2, 0x34) => Effect::Refuse(!spi2::TRANS_DONE, interrupt("SPI2")),
@@ -1609,7 +1617,7 @@ impl Soc {
         }
         let kept = self.read_kept(now, word);
         let value = (kept.unwrap_or(0) & !(mask << shift)) | ((value & mask) << shift);
-        let change = match effect(word) {
+        let change = match effect(word, value) {
             Some(Effect::Refuse(bits, ending)) if value & bits != 0 => {
                 self.ending = Some(ending);
                 return Err(Exit::Stop);

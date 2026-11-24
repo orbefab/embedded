@@ -282,6 +282,7 @@ impl Port {
         let shifting = self.tx.is_some() || self.rx.is_some();
         let format = |mask: u32, old: u32| shifting && value & mask != old & mask;
         match offset {
+            FIFO if self.words[slot(FLOW)] & (1 << 3) != 0 => Some("sw_flow"),
             CLKDIV if format(0xfff | 0xf << 20, self.words[slot(CLKDIV)]) => {
                 Some("baud_while_sending")
             }
@@ -308,7 +309,9 @@ impl Port {
                 Some("baud_while_sending")
             }
             RX_FILT if value & 1 << 8 != 0 => Some("glitch"),
-            FLOW if value & 0x3f != 0 => Some("sw_flow"),
+            // `uart_ll_force_xoff` sets `SW_FLOW_CON_EN | FORCE_XOFF` while preparing for light
+            // sleep; letting that bit pair through lets light sleep reach `RTC_CNTL_SLEEP_EN`.
+            FLOW if value & 0x3f != 0 && value & 0x3f != (1 | 1 << 3) => Some("sw_flow"),
             IDLE if format(0x3ff << 10, self.words[slot(IDLE)]) && shifting => {
                 Some("baud_while_sending")
             }
@@ -1255,9 +1258,34 @@ mod tests {
             Err("baud_while_sending")
         );
         assert_eq!(port.write(Tick(10), FLOW, 1, apb()), Err("sw_flow"));
+        assert_eq!(
+            port.write(Tick(10), FLOW, 1 | 1 << 1, apb()),
+            Err("sw_flow")
+        );
+        assert_eq!(port.write(Tick(10), FLOW, 1 << 2, apb()), Err("sw_flow"));
+        assert_eq!(port.write(Tick(10), FLOW, 1 << 3, apb()), Err("sw_flow"));
+        assert_eq!(port.write(Tick(10), FLOW, 1 << 4, apb()), Err("sw_flow"));
+        assert_eq!(port.write(Tick(10), FLOW, 1 << 5, apb()), Err("sw_flow"));
         assert_eq!(port.write(Tick(10), RS485, 1, apb()), Err("rs485"));
         let rtc = (CLK_RESET & !(3 << 20)) | (2 << 20);
         assert_eq!(port.write(Tick(10), CLK, rtc, apb()), Err("clock"));
+    }
+
+    /// `uart_ll_force_xoff` sets `SW_FLOW_CON_EN | FORCE_XOFF` while preparing for light sleep.
+    /// That write completes so light sleep reaches `RTC_CNTL_SLEEP_EN`, and a TX FIFO write while
+    /// `FORCE_XOFF` stays set is still refused as `sw_flow`.
+    #[test]
+    fn force_xoff_for_sleep_completes_and_refuses_a_later_fifo_write() {
+        let mut port = Port::new(0);
+        megabaud(&mut port);
+        assert_eq!(port.write(Tick(0), FLOW, 1 | 1 << 3, apb()), Ok(()));
+        assert_eq!(port.read(FSM), Some(0));
+        assert_eq!(
+            port.write(Tick(10), FIFO, b'A'.into(), apb()),
+            Err("sw_flow")
+        );
+        assert_eq!(port.write(Tick(20), FLOW, 0, apb()), Ok(()));
+        assert_eq!(port.write(Tick(30), FIFO, b'A'.into(), apb()), Ok(()));
     }
 
     #[test]

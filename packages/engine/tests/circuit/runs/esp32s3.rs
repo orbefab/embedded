@@ -866,6 +866,80 @@ fn a_pull_down_on_a_part_that_names_none_ends_the_run() {
     );
 }
 
+/// Enabling the temperature sensor clock in `SENS_SAR_PERI_CLK_GATE_CONF_REG` or reading
+/// `SENS_SAR_TSENS_CTRL_REG` ends the run at that first access, naming the temperature sensor
+/// with no prior warning.
+#[test]
+fn a_temperature_sensor_access_ends_the_run_naming_the_temperature_sensor() {
+    let (literals, code) = stores(&[(0x6000_8904, 1 << 29)]);
+    let doc = run_program(&literals, &code, 10_000_000_000);
+    assert_eq!(doc["status"], "failed", "{doc}");
+    let found = diagnostics(&doc);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["code"], "chip.unsupported_setting");
+    assert_eq!(found[0]["severity"], "error");
+    assert_eq!(
+        found[0]["data"],
+        serde_json::json!({
+            "peripheral": "SENS",
+            "pc": IRAM + 8 + 6,
+            "setting": "unsimulated",
+            "symbol": "main+0x6",
+        })
+    );
+    let message = found[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("used SENS, the temperature sensor that temperatureRead uses, at ")
+            && message.contains("which the model does not simulate"),
+        "{message}"
+    );
+
+    // l32r a2 <- SENS_SAR_TSENS_CTRL_REG; l32i a3, a2, 0; then idle.
+    let mut read_code = vec![0x21, 0xff, 0xff, 0x32, 0x22, 0x00];
+    read_code.extend(IDLE);
+    let doc = run_program(&[0x6000_8850], &read_code, 10_000_000_000);
+    assert_eq!(doc["status"], "failed", "{doc}");
+    let found = diagnostics(&doc);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["code"], "chip.unsupported_setting");
+    assert_eq!(found[0]["data"]["peripheral"], "SENS");
+    assert_eq!(found[0]["data"]["setting"], "unsimulated");
+    let message = found[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("used SENS, the temperature sensor that temperatureRead uses, at "),
+        "{message}"
+    );
+}
+
+/// ESP-IDF's light sleep suspends UART0 with `uart_ll_force_xoff` (`SW_FLOW_CON_EN | FORCE_XOFF`)
+/// before writing `RTC_CNTL_SLEEP_EN`. The force-xoff completes so the run stops at the sleep
+/// register and names sleep rather than `UART0 sw_flow`.
+#[test]
+fn light_sleep_uart_suspend_reaches_sleep_and_names_sleep() {
+    let (literals, code) = stores(&[(0x6000_0034, 1 | 1 << 3), (0x6000_8018, 1 << 31)]);
+    let doc = run_program(&literals, &code, 10_000_000_000);
+    assert_eq!(doc["status"], "failed", "{doc}");
+    let found = diagnostics(&doc);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["code"], "chip.unsupported_setting");
+    assert_eq!(found[0]["severity"], "error");
+    assert_eq!(
+        found[0]["data"],
+        serde_json::json!({
+            "peripheral": "RTC_CNTL",
+            "pc": IRAM + 16 + 15,
+            "setting": "sleep",
+            "symbol": "main+0xf",
+        })
+    );
+    let message = found[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("put the chip to sleep at ")
+            && message.contains("which the model does not run"),
+        "{message}"
+    );
+}
+
 #[test]
 fn a_jump_out_of_the_instruction_window_ends_the_run() {
     // movi a2, 0; jx a2.

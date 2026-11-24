@@ -1593,6 +1593,16 @@ mod tests {
             ),
             (0x6003_1204, "RADIO", "the Wi-Fi and Bluetooth radio"),
             (0x6002_7000, "I2C1", "the second I2C port, Wire1"),
+            (
+                0x6000_8850,
+                "SENS",
+                "the temperature sensor that temperatureRead uses",
+            ),
+            (
+                0x6000_8854,
+                "SENS",
+                "the temperature sensor that temperatureRead uses",
+            ),
         ];
         for (address, block, what) in refused {
             let program = store_after_two_loads(address, 1, 0);
@@ -1604,6 +1614,25 @@ mod tests {
                 )),
                 "{address:#x}"
             );
+        }
+        for address in [0x6000_8904, 0x6000_8908] {
+            let program = store_after_two_loads(address, 1 << 29, 0);
+            let mut chip = program.chip();
+            assert_eq!(
+                chip.run_until(c(1000)),
+                Some(Halt::Fault(
+                    c(2),
+                    Fault::Refused(
+                        Refused::Unsimulated(
+                            "SENS",
+                            "the temperature sensor that temperatureRead uses"
+                        ),
+                        pro(program.entry() + 6)
+                    )
+                )),
+                "{address:#x}"
+            );
+            assert_eq!(chip.unmodeled().count(), 0, "{address:#x}");
         }
     }
 

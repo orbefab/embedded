@@ -5,8 +5,9 @@
 //! `I2C_MST_ANA_CONF0_REG`'s block, and `USB_OTG` is TinyUSB's `DWC2_FS_REG_BASE`. `RADIO` is the
 //! space between UART2 and USB Serial/JTAG, where Wi-Fi and Bluetooth keep the registers IDF
 //! does not document, such as `WDEV_RND_REG`. `RESERVED` fills each gap the headers leave, so
-//! every address in peripheral space has a row. SENS's touch registers,
-//! `SENS_SAR_TOUCH_CONF_REG` to `SENS_SAR_TOUCH_APPR_STATUS_REG`, are a row of their own, named
+//! every address in peripheral space has a row. SENS's temperature-sensor registers,
+//! `SENS_SAR_TSENS_CTRL_REG` and `SENS_SAR_TSENS_CTRL2_REG`, and its touch registers,
+//! `SENS_SAR_TOUCH_CONF_REG` to `SENS_SAR_TOUCH_APPR_STATUS_REG`, are rows of their own, named
 //! SENS.
 //!
 //! A register that a model keeps, or that [`quiet`](super::soc) names, works whatever its row
@@ -33,6 +34,7 @@ const I2S: Sim = Not("an I2S audio port");
 const MCPWM: Sim = Not("the motor-control PWM that ESP32Servo drives servos with");
 const OTG: Sim = Not("the USB OTG port that TinyUSB, USB MSC and USB HID use");
 const CACHE_TAGS: Sim = Not("the cache tag memory");
+pub(crate) const TSENS: &str = "the temperature sensor that temperatureRead uses";
 
 const BLOCKS: &[(u32, &str, Sim)] = &[
     (0x6000_0000, "UART0", Runs),
@@ -51,6 +53,8 @@ const BLOCKS: &[(u32, &str, Sim)] = &[
     (0x6000_8000, "RTC_CNTL", Runs),
     (0x6000_8400, "RTCIO", Runs),
     (0x6000_8800, "SENS", Runs),
+    (0x6000_8850, "SENS", Not(TSENS)),
+    (0x6000_8858, "SENS", Runs),
     (
         0x6000_885c,
         "SENS",
@@ -198,6 +202,7 @@ mod tests {
         assert_eq!(name(0x600c_0018), "SYSTEM+0x18");
         assert_eq!(name(0x600c_5004), "MMU_TABLE+0x4");
         assert_eq!(name(0x600c_cffc), "EXT_MEM_ENC+0xffc");
+        assert_eq!(name(0x6000_8850), "SENS+0x50");
         assert_eq!(name(0x6000_889c), "SENS+0x9c");
         assert_eq!(name(0x6000_88e4), "SENS+0xe4");
         assert_eq!(name(0x6003_1204), "RADIO+0x2204");
@@ -269,6 +274,8 @@ mod tests {
             (0x6002_7054, "I2C1", "the second I2C port, Wire1"),
             (0x6003_1204, "RADIO", "the Wi-Fi and Bluetooth radio"),
             (0x6001_1000, "BT", "the Bluetooth radio"),
+            (0x6000_8850, "SENS", TSENS),
+            (0x6000_8854, "SENS", TSENS),
             (0x6000_889c, "SENS", "the touch sensor that touchRead uses"),
             (0x6000_885c, "SENS", "the touch sensor that touchRead uses"),
             (0x6000_88e0, "SENS", "the touch sensor that touchRead uses"),
@@ -292,6 +299,7 @@ mod tests {
             assert_eq!(unsimulated(addr), Some((block, what)), "{addr:#x}");
         }
         for addr in [
+            0x6000_884c,
             0x6000_8858,
             0x6000_88e4,
             0x6000_8488,
