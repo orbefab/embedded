@@ -23,22 +23,21 @@ use crate::newton::{ABSTOL, Integration, RELTOL, VNTOL};
 /// share a 10 ns RC edge stays within 1e-5 of its swing.
 const SHARE: f64 = 1e-7;
 
-/// The charge a device's capacitance may be off by on one step, as SPICE's `chgtol`. A
-/// junction or a gate of a few picofarads is then held to its charge and not to Newton's 1 nV.
-/// Held to 1 nV, an idle junction that ripples a few microvolts kept every step after a pin
-/// edge short. [`IDLE`] and [`DEVICE_SHARE`] bound what this allows in volts.
+/// The charge a device's capacitance may be off by on one step, as SPICE's `chgtol`, up to
+/// [`DEVICE_SHARE`] of its range. A junction or a gate of a few picofarads that swings is then
+/// held to its charge and not to Newton's 1 nV.
 const CHGTOL: f64 = 2e-16;
 
-/// A device's capacitance that has moved less than this since t = 0 is idle: what is left of it
-/// bounds the charge floor, so the store's whole motion and its error stay within it. An idle
-/// junction beside a level shifter's other channel ripples about 1 mV with its rail.
-const IDLE: f64 = 2e-3;
-
-/// The share of its range a device's capacitance that carries a swing may be off by on one step,
-/// when its charge floor is more. A 1 fF gate driven through 1 Gohm swings 5 V, and its charge
-/// floor of 0.2 V a step left the ngspice reference by 80 times the bound. At this share, 30
-/// times [`SHARE`], no ngspice fixture moves from where 1 nV holds it by more than half the
-/// bound, and a BSS138's few picofarads still take steps of nanoseconds.
+/// The share of its range a device's capacitance may be off by on one step, when its charge
+/// floor is more. A 1 fF gate driven through 1 Gohm swings 5 V, and its charge floor of 0.2 V a
+/// step left the ngspice reference by 80 times the bound. At this share, 30 times [`SHARE`], every
+/// ngspice fixture holds its bound, the 1 fF gate an NE555 drives at 0.79 of it, and a BSS138's
+/// few picofarads still take steps of nanoseconds.
+///
+/// The share is of the store's own range, as the bound is of each reading's own span. A floor
+/// in volts on a store that has barely moved left a 1 fF gate and a 100 pF one that swing
+/// 1.5 mV outside the bound, and a floor that is a share of the level left a 1.5 mV swing at
+/// 5 V outside it. So an idle junction that ripples a few microvolts is held to about 1 nV.
 const DEVICE_SHARE: f64 = 3e-6;
 
 /// A capacitor or an inductor. A capacitor's state is the voltage across it, and its slope
@@ -115,9 +114,8 @@ impl Store {
 
     /// The absolute tolerance on a state that has moved `range` since t = 0: `ABSTOL` on an
     /// inductor's current, and on a capacitor `VNTOL` for each end on a row, or its charge floor
-    /// over its capacitance when that is more. The charge floor is at most what is left of
-    /// `IDLE`, or `DEVICE_SHARE` of the range when that is more. An idle store keeps its whole
-    /// floor, and one that carries a swing is held to a share of it.
+    /// over its capacitance when that is more. The charge floor is at most `DEVICE_SHARE` of the
+    /// range.
     fn floor(&self, range: f64) -> f64 {
         match self.inductor {
             false => {
@@ -126,8 +124,7 @@ impl Store {
                     .iter()
                     .filter(|end| matches!(end, Node::Row(_)))
                     .count();
-                let charge =
-                    (self.charge / self.size).min((IDLE - range).max(DEVICE_SHARE * range));
+                let charge = (self.charge / self.size).min(DEVICE_SHARE * range);
                 (ends as f64 * VNTOL).max(charge)
             }
             true => ABSTOL,
@@ -513,11 +510,10 @@ mod tests {
         assert_eq!(ratio([0.0, 1.0]), ratio([0.0, 0.0]));
     }
 
-    /// A device's capacitance is held to its charge, 2e-16 C, while it has moved under 2 mV, to
-    /// no more than what is left of the 2 mV, and once it carries a swing to 3e-6 of it. A
-    /// capacitor part and a large capacitance keep Newton's 1 nV an end.
+    /// A device's capacitance is held to its charge, 2e-16 C, up to 3e-6 of its range. One that
+    /// has not moved, a capacitor part and a large capacitance keep Newton's 1 nV an end.
     #[test]
-    fn a_device_s_capacitance_is_held_to_its_charge_while_idle_and_to_a_share_of_its_swing() {
+    fn a_device_s_capacitance_is_held_to_its_charge_up_to_a_share_of_its_swing() {
         let cap = |farad: f64, charge: f64| Store {
             ends: [Node::Row(0), Node::Row(1)],
             branch: 2,
@@ -526,13 +522,11 @@ mod tests {
             charge,
         };
         let near = |got: f64, want: f64| (got - want).abs() <= 1e-9 * want;
-        // 1 pF idle: 2e-16 / 1e-12 = 0.2 mV, under what is left of 2 mV.
-        assert!(near(cap(1e-12, CHGTOL).floor(0.0), 2e-4));
-        assert!(near(cap(1e-12, CHGTOL).floor(1e-3), 2e-4));
-        // 0.1 mV left of the 2 mV.
-        assert!(near(cap(1e-12, CHGTOL).floor(1.9e-3), 1e-4));
-        // 1 fF idle: its 0.2 V floor is cut to the 2 mV.
-        assert!(near(cap(1e-15, CHGTOL).floor(0.0), 2e-3));
+        // 1 pF that has not moved, or has rippled 0.1 mV: 3e-6 of it is under 1 nV an end.
+        assert_eq!(cap(1e-12, CHGTOL).floor(0.0), 2.0 * VNTOL);
+        assert_eq!(cap(1e-12, CHGTOL).floor(1e-4), 2.0 * VNTOL);
+        // 1 fF over 1.5 mV: 3e-6 of it, 4.5 nV, not 0.2 V.
+        assert!(near(cap(1e-15, CHGTOL).floor(1.5e-3), 4.5e-9));
         // 1 fF over 5 V: 3e-6 of 5 V, not 0.2 V.
         assert!(near(cap(1e-15, CHGTOL).floor(5.0), 1.5e-5));
         // 21 pF over 3.3 V: its charge, 9.5 uV, is under 3e-6 of 3.3 V.

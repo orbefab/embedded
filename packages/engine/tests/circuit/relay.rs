@@ -353,10 +353,10 @@ fn accepted_steps(rel: &str) -> u64 {
     stats.landings
 }
 
-/// Measured 1337 accepted steps. The bound is 10 percent above that count, in integer math.
+/// Measured 1486 accepted steps. The bound is 10 percent above that count, in integer math.
 #[test]
 fn relay_flyback_stays_near_its_step_count() {
-    let measured = 1_337;
+    let measured = 1_486;
     let steps = accepted_steps("tests/circuits/relay-flyback/netlist.json");
     eprintln!("relay-flyback steps {steps}");
     assert!(
@@ -395,10 +395,10 @@ fn fb_null_window(bytes: &[u8]) -> (u64, f64) {
     (steps, reversal)
 }
 
-/// Measured 14368 accepted steps. The bound is 10 percent above that count, in integer math.
+/// Measured 14417 accepted steps. The bound is 10 percent above that count, in integer math.
 #[test]
 fn the_bare_inductor_stays_near_its_step_count() {
-    let measured = 14_368;
+    let measured = 14_417;
     let steps = accepted_steps("tests/circuit/controls/bare-inductor.json");
     eprintln!("bare-inductor steps {steps}");
     assert!(
@@ -408,11 +408,11 @@ fn the_bare_inductor_stays_near_its_step_count() {
     );
 }
 
-/// Measured 1325 accepted steps. From 30.01 ms to 41 ms the node no longer reverses by
+/// Measured 1474 accepted steps. From 30.01 ms to 41 ms the node no longer reverses by
 /// more than 1e-10 V. That window takes 171 steps, and the bound is 1000.
 #[test]
 fn fb_null_20000_stops_zigzagging_on_net_b() {
-    let measured = 1_325;
+    let measured = 1_474;
     let bytes = std::fs::read(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/circuit/controls/fb-null-20000.json"),
@@ -430,11 +430,11 @@ fn fb_null_20000_stops_zigzagging_on_net_b() {
     assert!(reversal < 1e-10, "reversal {reversal:e} V");
 }
 
-/// Measured 14374 accepted steps. The bound is 10 percent above that count, in integer math.
+/// Measured 14423 accepted steps. The bound is 10 percent above that count, in integer math.
 /// The fixture can carry a power warning, so the run check is the absence of an error.
 #[test]
 fn the_bare_relay_stays_near_its_step_count() {
-    let measured = 14_374;
+    let measured = 14_423;
     let steps = accepted_steps("tests/circuit/fixtures/p-relay-npn-bare/netlist.json");
     eprintln!("p-relay-npn-bare steps {steps}");
     assert!(

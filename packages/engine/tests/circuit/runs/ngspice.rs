@@ -174,7 +174,11 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
 /// 1 fF gate from an NE555's output through 2 Gohm. Each gate or base is the only store on its
 /// node, so its error is what the gate, the drain and the collector read. Each time constant
 /// is microseconds, so neither the deck's 1 ns ramp nor the NE555's edge times move a row past
-/// the bound. `nmos-regions` biases the drain through reverse, linear and saturation.
+/// the bound. `nmos-gate-1ff-1mv5` and `nmos-gate-10ff-1mv5` hold the 1 fF and 10 fF gates at
+/// 0 V, then drive them 1.5 mV through 1 Gohm, `nmos-gate-100pf-1mv5` drives 100 pF the same
+/// 1.5 mV through 100 kohm, and `nmos-gate-1ff-5v-1mv5` drives the 1 fF gate from 5 V to
+/// 5.0015 V. Each grid is at most a fortieth of its time constant, so ngspice's points follow
+/// the swing. `nmos-regions` biases the drain through reverse, linear and saturation.
 /// `pmos-regions` is that circuit with the supplies negated. `nmos-follower` holds the source off ground. `zener-forward`, `zener-reverse`,
 /// `zener-breakdown` and `zener-overload` hold the fitted zener forward, below the knee,
 /// at its test current, and past both ratings. `regulator-off-cap` holds the input at 0 V
@@ -215,8 +219,12 @@ fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "ne555-gate-1ff",
             "nmos-follower",
             "nmos-gate-100ff",
+            "nmos-gate-100pf-1mv5",
             "nmos-gate-10ff",
+            "nmos-gate-10ff-1mv5",
             "nmos-gate-1ff",
+            "nmos-gate-1ff-1mv5",
+            "nmos-gate-1ff-5v-1mv5",
             "nmos-off",
             "nmos-pulse",
             "nmos-regions",
