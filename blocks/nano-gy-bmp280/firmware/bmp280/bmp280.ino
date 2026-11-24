@@ -63,10 +63,6 @@ void loop() {
     Serial.print(bmp.readPressure());
     Serial.println(" Pa");
 
-    Serial.print(F("Approx altitude = "));
-    Serial.print(bmp.readAltitude(1013.25)); /* Adjusted to local forecast! */
-    Serial.println(" m");
-
     Serial.println();
     delay(2000);
 }

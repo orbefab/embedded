@@ -20,10 +20,10 @@ https://github.com/adafruit/Adafruit_BMP280_Library/archive/refs/tags/3.0.0.tar.
 with SHA-256 54018faa0cb89ef25b54c79b1ab274e4010e9b2e41632446c72ac6ceed8f1241. sketches.sh
 pins that archive and relinks it with the sketch.
 
-The image also links Adafruit BusIO 1.17.0, which is free software under the MIT license. Its
+The image also links Adafruit BusIO 1.17.4, which is free software under the MIT license. Its
 text is in LICENSE-busio. Its source is the archive at
-https://github.com/adafruit/Adafruit_BusIO/archive/refs/tags/1.17.0.tar.gz
-with SHA-256 45c22f2d73c150257fdeec62f0f23ecdd62eab538a31b3652e1f3ff1cec863d2.
+https://github.com/adafruit/Adafruit_BusIO/archive/refs/tags/1.17.4.tar.gz
+with SHA-256 59efa3acd5466e381c1b0313d5f0e824832db1bb24e4e328667e12b7d235d56d.
 
 The image also links Adafruit Unified Sensor 1.1.15, which is free software under the Apache
 License 2.0. Its text is in LICENSE-sensor. Its source is the archive at

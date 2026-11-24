@@ -1,36 +1,29 @@
-// A Nano reads a GY-BMP280-3.3. The module is 3.3 V only and has no regulator, and the
-// Nano's 3V3 pin supplies nothing, so an LP2985 makes 3.3 V from 5V. SDA is A4 and SCL is
-// A5. The module pulls SDO to ground, so the address is 0x76.
-// Wire turns on the Nano's pull-ups to 5 V. Through the module's 10 kΩ those pull-ups would
-// feed the LP2985, which cannot sink, and would lift SDA and SCL past the BMP280's
-// VDDIO + 0.3 V limit. A 68 kΩ from each line to ground holds the idle level under 3.3 V,
-// so the regulator stays inside the sheet and both chips still read a high.
+// A Nano reads a GY-BMP280-3.3. The module has no regulator: its VCC is the BMP280's supply,
+// 1.71 V to 3.6 V, so it runs from the Nano's 3V3 pin. Its 10 kΩ pull-ups hold SDA and SCL at
+// that 3.3 V. A BSS138 level shifter joins them to the Nano's 5 V I2C: HV is 5V, LV is 3V3,
+// A4 (SDA) is HV1 and A5 (SCL) is HV2. The module pulls SDO to ground, so the address is 0x76.
 {
   "format": 1,
   "parts": {
     "nano": { "type": "nano-board", "firmware": "build/bmp280.ino.hex" },
-    "reg": { "type": "lp2985-sot23-5" },
+    "shifter": { "type": "bss138-level-shifter" },
     "mod": { "type": "gy-bmp280" },
-    "r_sda": { "type": "resistor-axial", "resistance": "68k" },
-    "r_scl": { "type": "resistor-axial", "resistance": "68k" },
   },
   "layout": {
     "nano": { "at": [0, 0, 0] },
-    "reg": { "at": [55, 0, 0] },
+    "shifter": { "at": [55, 0, 0] },
     "mod": { "at": [80, 0, 0] },
-    "r_sda": { "at": [68, 10, 0] },
-    "r_scl": { "at": [68, -10, 0] },
   },
+  "nets": { "GND": "nano.GND" },
   "wires": [
-    ["nano.5V", "reg.IN"],
-    ["reg.GND", "nano.GND"],
-    ["reg.OUT", "mod.VCC"],
-    ["mod.GND", "nano.GND"],
-    ["nano.A4", "mod.SDA"],
-    ["nano.A5", "mod.SCL"],
-    ["r_sda.a", "mod.SDA"],
-    ["r_sda.b", "nano.GND"],
-    ["r_scl.a", "mod.SCL"],
-    ["r_scl.b", "nano.GND"],
+    ["nano.GND", "shifter.GND"],
+    ["nano.GND", "mod.GND"],
+    ["nano.5V", "shifter.HV"],
+    ["nano.3V3", "shifter.LV"],
+    ["nano.3V3", "mod.VCC"],
+    ["nano.A4", "shifter.HV1"],
+    ["nano.A5", "shifter.HV2"],
+    ["shifter.LV1", "mod.SDA"],
+    ["shifter.LV2", "mod.SCL"],
   ],
 }

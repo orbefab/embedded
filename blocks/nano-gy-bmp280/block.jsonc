@@ -4,7 +4,7 @@
   "block": "nano-gy-bmp280",
   "version": "0.1.0",
   "title": "Temperature and pressure on a Nano",
-  "summary": "An Arduino Nano reads a GY-BMP280-3.3 over I2C. A 3.3 V regulator powers the module from 5V. The sketch prints temperature and pressure.",
+  "summary": "An Arduino Nano reads a GY-BMP280-3.3 over I2C. The module runs from the Nano's 3V3, and a BSS138 level shifter joins its 3.3 V SDA and SCL to the Nano's 5 V lines. The sketch prints temperature and pressure.",
   "board": "nano-board",
   "tags": ["bmp280", "temperature", "pressure", "i2c", "nano"],
   "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",

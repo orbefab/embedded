@@ -2,7 +2,8 @@
 // https://startingelectronics.org/pinout/GY-BMP280-pressure-sensor-module/ and
 // https://domoticx.net/docs/bmp280-information/ : SCL, SDA and CSB pull up to VCC, and SDO
 // pulls down to GND, so the I2C address is 0x76 unless SDO is tied high. The module has no
-// regulator and no level shifter. It runs from 1.71 V to 3.6 V. The two supply capacitors are
+// regulator and no level shifter: VCC is the BMP280's VDD and VDDIO, 1.71 V to 3.6 V, and the
+// pull-ups hold SDA and SCL at VCC. The two supply capacitors are
 // 100 nF, the value Bosch recommends for C1 and C2; the module diagram shows two capacitors
 // and does not print the value.
 {
@@ -10,7 +11,7 @@
   "part": "gy-bmp280",
   "version": "0.1.0",
   "title": "GY-BMP280-3.3 pressure module",
-  "summary": "BMP280 breakout, 6 pins on 2.54 mm: VCC, GND, SCL, SDA, CSB, SDO. Three 10 kΩ resistors pull SCL, SDA and CSB up to VCC, and one 10 kΩ pulls SDO down, so I2C address 0x76 is the default and CSB stays high. Two 100 nF capacitors sit on VDD and VDDIO. There is no regulator and no level shifter. Power it from 3.3 V. It reads the scene's temperature and pressure.",
+  "summary": "BMP280 breakout, 6 pins on 2.54 mm: VCC, GND, SCL, SDA, CSB, SDO. Three 10 kΩ resistors pull SCL, SDA and CSB up to VCC, and one 10 kΩ pulls SDO down, so I2C address 0x76 is the default and CSB stays high. Two 100 nF capacitors sit on VDD and VDDIO. There is no regulator and no level shifter. Power it from 3.3 V, such as a Nano's 3V3 pin, and put a level shifter on SDA and SCL from a 5 V board. It reads the scene's temperature and pressure.",
   "tags": ["bmp280", "gy-bmp280", "temperature", "pressure", "sensor", "i2c", "breakout"],
   "license": "MIT OR Apache-2.0",
   "docs": {
@@ -72,7 +73,7 @@
   "not_simulated": [
     {
       "what": "the regulator and the level shifters",
-      "why": "This GY-BMP280-3.3 has neither. VCC is the BMP280 supply, 1.71 V to 3.6 V. A 5 V board needs its own 3.3 V regulator. The Nano's 3V3 pin supplies nothing."
+      "why": "This GY-BMP280-3.3 has neither. VCC is the BMP280 supply, 1.71 V to 3.6 V, so a 5 V board powers it from its 3.3 V pin. Its SDA and SCL want a level shifter such as bss138-level-shifter. Wired straight to 5 V it still answers and rating.voltage warns."
     },
     {
       "what": "SPI",

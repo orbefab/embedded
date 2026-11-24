@@ -1384,12 +1384,17 @@ fn bmp_scene(dir: &std::path::Path, extra_parts: &str, wires: &str) {
     .unwrap();
 }
 
-/// Powering the 3.3 V module from the Nano's 5V pin is past Table 3, so the run warns.
+/// A transcript that reads one temperature and one pressure, then prints what warned.
+const BMP_READS: &str = "open\nstep 1ms\nset temperature 20\nset pressure 101325\n\
+step --until serial contains \" Pa\" --timeout 2s\n\
+expect serial contains \"Temperature = 20.00\"\n\
+expect serial contains \"Pressure = 101325.02\"\nsnapshot\n";
+
+/// Powering the 3.3 V module from the Nano's 5V pin is past Table 3. The sensor still reads,
+/// and the run warns on VDD past 4.25 V.
 #[test]
-fn a_bmp280_on_5v_warns_it_is_past_the_sheet() {
-    let dir = project(
-        "open\nstep --until serial contains \"BMP280 test\" --timeout 2s\nstep 100ms\nget @mod.VCC\n",
-    );
+fn a_bmp280_on_5v_still_reads_and_warns_it_is_past_the_sheet() {
+    let dir = project(BMP_READS);
     bmp_scene(
         dir.path(),
         "",
@@ -1398,38 +1403,47 @@ fn a_bmp280_on_5v_warns_it_is_past_the_sheet() {
     let run = orbe(dir.path(), &["test", "-v"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(
-        run.stdout.contains("warning[rating.voltage]") && run.stdout.contains("4.25"),
+        run.stdout
+            .contains("warning[rating.voltage] #mod__u.pin.VDD")
+            && run.stdout.contains("4.25 V rating"),
         "{}",
         run.stdout
     );
 }
 
-/// The Nano's I2C pull-ups, through the module's 10 kΩ, lift SDA and SCL past VDDIO + 0.3 V.
-/// The run warns on those pins.
+/// The module on the Nano's 3V3 with SDA and SCL straight to A4 and A5, no level shifter.
+/// The Nano's 5 V pull-ups lift both lines past VDDIO + 0.3 V. The sensor still reads, and the
+/// run warns on both pins.
 #[test]
-fn bmp280_pull_ups_into_an_lp2985_warn_past_4_25_v() {
-    let dir = project(
-        "open\nstep --until serial contains \"BMP280 test\" --timeout 2s\nstep 100ms\nget @mod.VCC\n",
-    );
+fn a_bmp280_on_the_nano_s_5_v_i2c_lines_reads_and_warns_on_sda_and_scl() {
+    let dir = project(BMP_READS);
     bmp_scene(
         dir.path(),
-        r#""reg": { "type": "lp2985-sot23-5" },"#,
-        r#"["nano.5V", "reg.IN"], ["reg.GND", "nano.GND"], ["reg.OUT", "mod.VCC"], ["mod.GND", "nano.GND"], ["nano.A4", "mod.SDA"], ["nano.A5", "mod.SCL"]"#,
+        "",
+        r#"["nano.3V3", "mod.VCC"], ["nano.GND", "mod.GND"], ["nano.A4", "mod.SDA"], ["nano.A5", "mod.SCL"]"#,
     );
     let run = orbe(dir.path(), &["test", "-v"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
-    assert!(
-        run.stdout.contains("warning[rating.voltage]")
-            && (run.stdout.contains("mod.SDA") || run.stdout.contains("mod.SCL")),
-        "{}",
-        run.stdout
-    );
+    for pin in ["SDI (mod.SDA)", "SCK (mod.SCL)"] {
+        assert!(
+            run.stdout.contains(&format!(
+                "warning[rating.voltage] #mod__u.pin.{pin} reaches"
+            )),
+            "{pin}: {}",
+            run.stdout
+        );
+    }
+    assert!(!run.stdout.contains("pin.VDD"), "{}", run.stdout);
 }
 
-/// An open VCC leaves the BMP280 outside its operating range, so the sketch says it is missing.
+/// An open VCC leaves the BMP280 off. The module's pull-ups then tie SDA and SCL to its dead
+/// rail: once the Nano pulls SDA low, SCL sits near 1.7 V, under the Nano's input high, and
+/// Wire waits on it. The sketch prints its banner and never a reading.
 #[test]
-fn an_unpowered_bmp280_is_not_found() {
-    let dir = project("open\nstep --until serial contains \"Could not find\" --timeout 2s\n");
+fn an_unpowered_bmp280_holds_the_bus_and_the_sketch_never_reads() {
+    let dir = project(
+        "open\nstep 500ms\nexpect serial contains \"BMP280 test\"\nexpect @mod.VCC < 1.71V\nexpect @mod.SCL < 2V\nsnapshot\n",
+    );
     bmp_scene(
         dir.path(),
         "",
@@ -1437,11 +1451,7 @@ fn an_unpowered_bmp280_is_not_found() {
     );
     let run = orbe(dir.path(), &["test", "-v"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
-    assert!(
-        run.stdout.contains("serial contains \"Could not find\""),
-        "{}",
-        run.stdout
-    );
+    assert!(!run.stdout.contains("Temperature ="), "{}", run.stdout);
 }
 
 /// `set pressure 30000` then `set pressure 101325` before time moves drops the pending step.
