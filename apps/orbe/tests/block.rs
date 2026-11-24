@@ -14,7 +14,7 @@ use std::path::Path;
 
 use live::{common, orbe};
 
-const BLOCKS: [&str; 9] = [
+const BLOCKS: [&str; 10] = [
     "devkitc-button-led",
     "nano-7seg-count",
     "nano-button-led",
@@ -23,6 +23,7 @@ const BLOCKS: [&str; 9] = [
     "nano-light-comparator",
     "nano-neopixel-stick",
     "nano-oled",
+    "nano-servo-sweep",
     "nano-shift-leds",
 ];
 
@@ -82,13 +83,14 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
             .filter(|name| dir.join("parts").join(name).join("part.jsonc").is_file())
             .collect();
         copied.sort();
-        // The rainbow Block drives a pixel module, the OLED Block a screen module and the
-        // DevKitC-1 Block its board's own LED. The others light a 5 mm LED.
+        // The rainbow Block drives a pixel module, the OLED Block a screen module, the servo
+        // Block a servo and the DevKitC-1 Block its board's own LED. The others light a 5 mm LED.
         let marker = match id {
             "nano-7seg-count" => "display-7seg-cc",
             "nano-neopixel-stick" => "neopixel-stick-8",
             "nano-oled" => "oled-ssd1306-128x64",
             "devkitc-button-led" => "esp32s3-devkitc-1",
+            "nano-servo-sweep" => "servo-sg90",
             _ => "led-5mm",
         };
         assert!(copied.iter().any(|part| part == marker), "{id}: {copied:?}");

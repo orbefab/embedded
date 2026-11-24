@@ -742,6 +742,13 @@ impl Session {
 
     /// The LED chain `part` as it stands after the last accepted step, which is its colours at
     /// `now`. `None` when `part` is no chain.
+    /// The shaft angle of `part`, in degrees, at [`now`](Self::now). `None` when `part` is
+    /// not a servo. The shaft keeps moving between stops, so the angle is where it is at the
+    /// read and not where it was at the last stop.
+    pub fn angle(&self, part: &Name) -> Option<f64> {
+        self.actives.horn_degrees(part, self.now())
+    }
+
     pub fn leds(&self, part: &Name) -> Option<Leds<'_>> {
         let k = self
             .actives

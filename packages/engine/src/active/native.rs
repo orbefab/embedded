@@ -46,6 +46,14 @@ pub(crate) trait Hosted: Send + fmt::Debug {
     fn shows(&self) -> Shows;
     /// What the device shows now.
     fn view(&self) -> View<'_>;
+    /// [`orbe_model::Device::TRACKS_SUPPLY`].
+    fn tracks_supply(&self) -> bool {
+        false
+    }
+    /// [`orbe_model::Device::angle_at`].
+    fn angle_at(&self, _at: Time) -> Option<i32> {
+        None
+    }
     /// Each time what an LED chain shows changed, in time order. A core keeps every one only
     /// once [`keep_shown`](Self::keep_shown) asked it to, and otherwise the last alone.
     fn shown(&self) -> Vec<Shown>;
@@ -619,6 +627,14 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
 
     fn view(&self) -> View<'_> {
         self.dev.device.view()
+    }
+
+    fn tracks_supply(&self) -> bool {
+        D::TRACKS_SUPPLY
+    }
+
+    fn angle_at(&self, at: Time) -> Option<i32> {
+        self.dev.device.angle_at(at)
     }
 
     fn shown(&self) -> Vec<Shown> {

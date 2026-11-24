@@ -37,6 +37,13 @@ pub(super) enum Bound {
         value: f64,
         unit: Unit,
     },
+    /// `@servo.angle > 60deg`, the shaft angle in degrees.
+    Angle {
+        label: String,
+        engine: String,
+        op: Op,
+        value: f64,
+    },
     /// `@pixel rgb(255,0,0)`, every LED of the part's chain.
     Color {
         label: String,
@@ -248,6 +255,25 @@ impl Open {
                             format!("expect the colour itself, such as `{r} rgb(255,0,0)`"),
                         ));
                     }
+                    Target::Angle {
+                        path,
+                        reading,
+                        engine,
+                    } => {
+                        if amount.unit != Unit::Degree {
+                            return Err(Error::new(
+                                Code::NoReading,
+                                format!("{r} is in deg, not {}", amount.unit.as_str()),
+                                "write the angle in deg, such as `60deg`".to_string(),
+                            ));
+                        }
+                        return Ok(Bound::Angle {
+                            label: format!("{path}.{reading}"),
+                            engine,
+                            op: *op,
+                            value: amount.value,
+                        });
+                    }
                     Target::Param { .. } => {
                         return Err(Error::new(
                             Code::NoReading,
@@ -349,6 +375,18 @@ impl Open {
                             _ => format!("{} {}", number(seen), unit.as_str()),
                         }
                     ),
+                )
+            }
+            Bound::Angle {
+                label,
+                engine,
+                op,
+                value,
+            } => {
+                let seen = self.angle_of(engine);
+                (
+                    op.holds(seen, *value),
+                    format!("{label} = {} deg", number(seen)),
                 )
             }
             Bound::Color {

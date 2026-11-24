@@ -26,7 +26,7 @@ const SCENE_KEYS: &[&str] = &[
 /// Format 5 is format 4 plus a rating's `basis`, a capacitor's `series_resistance` as
 /// `tan_delta` at a `frequency`, a regulator's `ratings.input_voltage`, an op-amp's `ratings`, a
 /// BJT's `forward_knee_current`, and a `ws2812`'s `draw`. Format 6 is format 5 plus a reading
-/// `"of": "screen"` and `view.screen`.
+/// `"of": "angle"` on an `sg90`, and a reading `"of": "screen"` and `view.screen`.
 pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5, 6];
 /// Scene `format` values this binary reads.
 pub const SCENE_FORMATS: &[u32] = &[1];
@@ -41,6 +41,8 @@ const FIELD_FORMAT: u32 = 4;
 /// The oldest part format that carries the keys orbe 0.2.0 and 0.2.1 refuse, so those binaries
 /// ask for a newer orbe.
 const BASIS_FORMAT: u32 = 5;
+/// The oldest part format whose readings take `"of": "angle"`.
+const ANGLE_FORMAT: u32 = 6;
 /// The oldest part format whose readings take `"of": "screen"` and whose view takes `screen`.
 const SCREEN_FORMAT: u32 = 6;
 /// The engine kinds that show a screen, which a reading `"of": "screen"` reads.
@@ -542,6 +544,7 @@ pub(crate) fn decode_part(
             "readings" => {
                 decode_names(value, "reading", out);
                 check_rgb(value, format, out);
+                check_angle(value, format, out);
                 check_screen(value, format, out);
             }
             "not_simulated" => part.not_simulated = decode_not_simulated(value, out),
@@ -567,6 +570,7 @@ pub(crate) fn decode_part(
     }
     if let Some(readings) = root.get("readings") {
         check_rgb_kind(readings, part.model.as_ref(), out);
+        check_angle_kind(readings, part.model.as_ref(), out);
         check_screen_kind(readings, part.model.as_ref(), out);
     }
     if let Some(params) = root.get("params") {
@@ -1417,7 +1421,17 @@ fn check_own_names(root: &Node, out: &mut Findings) {
         joints
             .iter()
             .filter_map(|joint| joint.value.get("by"))
-            .map(|by| (by, "params", "param")),
+            .filter_map(|by| {
+                let name = by.str()?;
+                let readings = root
+                    .get("readings")
+                    .and_then(Node::props)
+                    .unwrap_or_default();
+                let angle = readings.iter().any(|prop| {
+                    prop.key == name && prop.value.get("of").and_then(Node::str) == Some("angle")
+                });
+                (!angle).then_some((by, "params", "param"))
+            }),
     );
     let view = root.get("view");
     let glow_bodies = model_led_names(root);
@@ -1573,6 +1587,45 @@ fn check_joints(joints: &Node, part: &Part, format: u32, out: &mut Findings) {
                 unit.span,
                 format!("joint `{}` turns, so its `range` is in deg", joint.key),
                 "write the range in degrees, as \"unit\": \"deg\"".into(),
+            );
+        }
+    }
+}
+
+/// A reading `"of": "angle"` is a part format 6 reading.
+fn check_angle(readings: &Node, format: u32, out: &mut Findings) {
+    if format >= ANGLE_FORMAT {
+        return;
+    }
+    for prop in readings.props().unwrap_or_default() {
+        if let Some(of) = prop.value.get("of").filter(|of| of.str() == Some("angle")) {
+            out.push(
+                Code::Syntax,
+                of.span,
+                format!("reading `{}` takes \"of\": \"angle\" only in part format {ANGLE_FORMAT}; this file is format {format}", prop.key),
+                format!("set \"format\": {ANGLE_FORMAT} in this part file"),
+            );
+        }
+    }
+}
+
+/// Only a servo has a shaft angle, so `"of": "angle"` needs a model of kind `sg90`.
+fn check_angle_kind(readings: &Node, model: Option<&Node>, out: &mut Findings) {
+    let kind = model.and_then(|m| m.get("kind")).and_then(Node::str);
+    if kind == Some("sg90") {
+        return;
+    }
+    for prop in readings.props().unwrap_or_default() {
+        if let Some(of) = prop.value.get("of").filter(|of| of.str() == Some("angle")) {
+            out.push(
+                Code::Syntax,
+                of.span,
+                format!(
+                    "reading `{}` takes \"of\": \"angle\" only on a part whose model is `sg90`",
+                    prop.key
+                ),
+                "read an angle only from a servo, whose \"model\" has \"kind\": \"sg90\""
+                    .to_string(),
             );
         }
     }

@@ -320,6 +320,7 @@ fn search_finds_a_block_and_part_describes_it() {
         "nano-light-comparator",
         "nano-neopixel-stick",
         "nano-oled",
+        "nano-servo-sweep",
         "nano-shift-leds",
         "uno-button-led",
     ] {

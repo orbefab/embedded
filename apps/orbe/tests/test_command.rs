@@ -29,6 +29,7 @@ fn each_block_passes() {
             "nano-light-comparator",
             "nano-neopixel-stick",
             "nano-oled",
+            "nano-servo-sweep",
             "nano-shift-leds",
             "uno-button-led",
         ]

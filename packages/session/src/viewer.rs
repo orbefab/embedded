@@ -107,6 +107,9 @@ pub(crate) struct FrameMessage<'a> {
     /// Red, green and blue from 0 to 255, per `channels.pixels`: the colour that part's first LED
     /// last latched, black before its first latch.
     pixel_rgb: &'a [[u8; 3]],
+    /// The shaft angle in degrees, per `channels.horns`. Absent when the scene has no servo.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    horn_deg: Option<&'a [f64]>,
     /// Per `channels.screens`, the glass of each screen that shows something new since the
     /// previous frame, else null. Absent when no screen changed. The first frame a page gets
     /// carries every screen.
@@ -426,6 +429,7 @@ impl Feed {
             led_a,
             switches: &sample.switches,
             pixel_rgb: &sample.pixels,
+            horn_deg: (!sample.horns.is_empty()).then_some(sample.horns.as_slice()),
             screens: screens(self.last.as_ref(), &sample),
             world: (!sample.world.is_empty()).then_some(sample.world.as_slice()),
             params: (!sample.params.is_empty()).then_some(sample.params.as_slice()),
@@ -590,6 +594,7 @@ mod tests {
             leds: vec![],
             switches: vec![],
             pixels: vec![],
+            horns: vec![],
             screens: vec![],
             world: vec![],
             params: vec![],

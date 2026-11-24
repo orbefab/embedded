@@ -243,7 +243,7 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "button" | "digit" | "fade" | "light" | "pixels" | "screen" | "shift" | "rgb";
+export type BlockKind = "button" | "digit" | "fade" | "light" | "pixels" | "screen" | "shift" | "rgb" | "servo";
 
 export interface RepoBlock {
   id: string;
@@ -266,6 +266,7 @@ export function blockKind(scene: string, id: string): BlockKind {
     .map((line) => line.replace(/\/\/.*$/, ""))
     .join("\n");
   if (/"type"\s*:\s*"display-7seg-cc"/.test(code) || /"type"\s*:\s*"display-7seg-ca"/.test(code)) return "digit";
+  if (/"type"\s*:\s*"servo-sg90"/.test(code)) return "servo";
   if (/"type"\s*:\s*"neopixel-stick-8"/.test(code)) return "pixels";
   if (/"type"\s*:\s*"oled-ssd1306-128x64"/.test(code)) return "screen";
   if (/"type"\s*:\s*"hc595-dip16"/.test(code)) return "shift";
@@ -274,7 +275,7 @@ export function blockKind(scene: string, id: string): BlockKind {
   if (/"btn1"\s*:/.test(code)) return "button";
   if (/"led1"\s*:/.test(code)) return "fade";
   throw new Error(
-    `${id} names no button, no fading LED, no light, no pixel stick, no screen, no 7-segment display, no 74HC595 and no DevKitC-1`,
+    `${id} names no button, no fading LED, no light, no pixel stick, no screen, no 7-segment display, no 74HC595, no DevKitC-1 and no servo`,
   );
 }
 
@@ -463,6 +464,25 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
   }
   if (block.kind === "rgb") {
     await showRgb(page, block, canvas, shotName);
+    return;
+  }
+  if (block.kind === "servo") {
+    const horn = () =>
+      page.evaluate(() => {
+        const node = window.orbeViewer.get().scene.getObjectByName("@servo")?.getObjectByName("horn");
+        const q = node?.quaternion;
+        return q === undefined ? null : [q.x, q.y, q.z, q.w];
+      });
+    const before = await horn();
+    await waitSimulatedPast(page, Math.max(0.4, start + 0.3));
+    const after = await horn();
+    expect(before, `${block.id} horn`).not.toBeNull();
+    expect(after, `${block.id} horn`).not.toEqual(before);
+    expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(0.3);
+    if (shotName !== null) {
+      await page.locator("canvas").scrollIntoViewIfNeeded();
+      await shot(page, shotName);
+    }
     return;
   }
   if (block.kind === "digit") {

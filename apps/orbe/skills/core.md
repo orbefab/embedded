@@ -137,5 +137,5 @@ An error prints `error[<code>]: <message>` and usually a `hint:`. Do what the hi
 | `orbe skills get tests` | A test file beyond the example above, or a screen |
 | `orbe skills get ratings` | A warning names a rating, or an LED is lit, dim or off |
 | `orbe skills get errors` | An error code not in the table above |
-| `orbe skills get page` | The 3D page, or turning a knob |
+| `orbe skills get page` | The 3D page, a knob, or a servo horn |
 | `orbe skills get not-simulated` | A pin or a feature does nothing, or `error[not_simulated]` |
