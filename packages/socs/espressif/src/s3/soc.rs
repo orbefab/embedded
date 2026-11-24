@@ -114,8 +114,8 @@ pub(crate) struct Soc {
     pub(crate) i2c: I2c,
     pub(crate) rmt: Rmt,
     pub(crate) uart: Uarts,
-    /// The LEDC updates that took effect and that the chip has not taken.
-    pub(crate) effects: Vec<ledc::Effect>,
+    /// The changes of the LEDC channels' signals that the chip has not taken, in time order.
+    pub(crate) edges: Vec<ledc::Edge>,
     /// The `Duty` records those updates and the routes to netted pads made, in time order.
     pub(crate) duties: Vec<Duty>,
     gates: Gates,
@@ -389,7 +389,7 @@ impl Soc {
             i2c: I2c::new(),
             rmt: Rmt::new(),
             uart: Uarts::new(),
-            effects: Vec::new(),
+            edges: Vec::new(),
             duties: Vec::new(),
             gates: Gates::new(),
             analog: Analog::default(),
@@ -473,7 +473,7 @@ impl Soc {
     }
 
     /// Lets every LEDC update due at or before `through` take effect, each with a `Duty` record
-    /// on every netted pad that carries its channel.
+    /// on every netted pad that carries its channel, and every PWM edge then pass.
     pub(crate) fn settle_ledc(&mut self, through: Tick) {
         self.ledc.settle(through, self.clock.source.apb());
         for effect in self.ledc.take_done() {
@@ -482,15 +482,15 @@ impl Soc {
                     self.duties.push(duty(effect, pad, inverted));
                 }
             }
-            self.effects.push(effect);
         }
+        self.edges.extend(self.ledc.take_edges());
     }
 
-    /// Whether a netted pad carries an LEDC channel, or an update has yet to take effect or to
-    /// drive its signal. A reset then would leave a pad's last `Duty` record stale, or let the
-    /// update drive its signal after the reset.
+    /// Whether a netted pad carries an LEDC channel, or an update has yet to take effect or an
+    /// edge to drive its signal. A reset then would leave a pad's last `Duty` record stale, or
+    /// let the edge drive its signal after the reset.
     fn ledc_runs(&self) -> bool {
-        self.ledc.pending() || !self.effects.is_empty() || !self.ledc_pads().is_empty()
+        self.ledc.pending() || !self.edges.is_empty() || !self.ledc_pads().is_empty()
     }
 
     /// Each netted pad that drives an LEDC channel's signal from the matrix, lowest first, with
@@ -847,7 +847,7 @@ impl Soc {
             SPI2 => self.spi2.read(now, offset),
             GDMA => self.gdma.read(offset),
             SHA => self.sha.read(offset),
-            LEDC => self.ledc.read(offset),
+            LEDC => self.ledc.read(now, offset, self.clock.source.apb()),
             RMT => self.rmt.read(now, offset),
             I2C0 => self.i2c.read(now, offset, &mut self.gpio),
             base if uart::Uarts::index(base).is_some() => {

@@ -7,6 +7,7 @@ pub(crate) mod dht22;
 pub(crate) mod hc595;
 pub(crate) mod pulses_replay;
 pub(crate) mod spi_replay;
+pub mod ssd1306;
 pub mod st77916;
 pub(crate) mod ws2812;
 
@@ -15,6 +16,7 @@ pub use dht22::Dht22;
 pub use hc595::Hc595;
 pub use pulses_replay::{PulseTrain, PulsesReplay};
 pub use spi_replay::{SpiEvent, SpiReplay};
+pub use ssd1306::Ssd1306;
 pub use st77916::St77916;
 pub use ws2812::Ws2812;
 

@@ -66,6 +66,8 @@ export interface PartView {
   readonly glow?: readonly { readonly node: string; readonly by: string }[];
   /** The node takes the `tint` of the choice the param `by` picks. */
   readonly tint?: readonly { readonly node: string; readonly by: string }[];
+  /** The node's top face shows the glass of the part's reading `by`, `"of": "screen"`. */
+  readonly screen?: readonly { readonly node: string; readonly by: string }[];
   readonly recolour?: readonly {
     readonly nodes: readonly string[];
     readonly by: string;

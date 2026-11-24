@@ -11,13 +11,20 @@
 //! idle level, a clear `LEDC_SIG_OUT_EN_LSCHn` and the update bit, and `LEDC_DUTY_START_LSCHn`
 //! does not clear itself, so after `ledc_update_duty` that update takes the duty register again.
 //!
-//! The channel's signal is high while its duty is above 0 and low at 0. While
-//! `LEDC_SIG_OUT_EN_LSCHn` is clear the channel sends its idle level, a duty of 0 or of every
-//! step. At power-on every signal is low.
+//! The channel's signal is the PWM of the ESP32-S3 TRM (v1.8, 35.3.3): high when the timer's
+//! counter is `Hpoint`, which is 0, and low when it is `Lpoint`, the duty. So from each overflow
+//! of its timer the signal is high for the duty's steps and low for the rest of the period. A
+//! step that is not whole ticks of 480 MHz rounds the high time to the nearest tick. A duty of 0
+//! is low throughout and a duty of every step high throughout. While `LEDC_SIG_OUT_EN_LSCHn` is
+//! clear the channel sends its idle level, a duty of 0 or of every step. At power-on every signal
+//! is low.
 //!
-//! The interrupt registers read 0, and the self-clearing update bits read 0.
-//! `LEDC_LSCHn_DUTY_R_REG` and `LEDC_LSTIMERn_VALUE_REG` are not kept. The registers come from
-//! IDF's `soc/esp32s3/register/soc/ledc_reg.h`, with the reset values its field comments give.
+//! `LEDC_LSCHn_DUTY_R_REG` reads the duty in force, from the last update that took effect, with
+//! its 4 fraction bits clear, and 0 before the first (TRM 35.5, Register 35.6). ESP-IDF's
+//! `ledc_get_duty` reads it, and arduino-esp32's `ledcAttach` keeps the duty it reads. The
+//! interrupt registers read 0, and the self-clearing update bits read 0.
+//! `LEDC_LSTIMERn_VALUE_REG` is not kept. The registers come from IDF's
+//! `soc/esp32s3/register/soc/ledc_reg.h`, with the reset values its field comments give.
 
 use super::clock::{TICK_HZ, Tick, XTAL};
 
@@ -82,6 +89,30 @@ pub(crate) struct Ledc {
     sent: [Option<Effect>; CHANNELS],
     /// The updates that took effect and that the chip has not taken.
     done: Vec<Effect>,
+    /// Each channel's PWM, while its signal switches.
+    pwm: [Option<Pwm>; CHANNELS],
+    /// Each channel's signal.
+    level: [bool; CHANNELS],
+    /// The changes of a channel's signal that the chip has not taken, in time order.
+    edges: Vec<Edge>,
+}
+
+/// A channel's PWM at a duty above 0 and below every step: high from `start`, the overflow its
+/// cycle began at, for `high` ticks of the `period`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Pwm {
+    timer: usize,
+    start: Tick,
+    period: u64,
+    high: u64,
+}
+
+/// Channel `channel`'s signal goes to `level` at `at`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Edge {
+    pub(crate) at: Tick,
+    pub(crate) channel: u8,
+    pub(crate) level: bool,
 }
 
 /// A channel's registers as a store of its update bit left them.
@@ -111,6 +142,8 @@ enum Kind {
     Kept,
     /// It reads 0 and keeps nothing.
     Clear,
+    /// `LEDC_LSCHn_DUTY_R_REG`: it reads the channel's duty in force and keeps nothing.
+    DutyRead,
     /// A word with bits that clear themselves.
     Strobed(u32),
 }
@@ -120,6 +153,7 @@ fn kind(offset: u32) -> Option<Kind> {
         _ if offset < CHANNELS as u32 * CHANNEL => match offset % CHANNEL {
             0x00 => Kind::Strobed(CHANNEL_STROBES),
             0x04 | 0x08 | 0x0c => Kind::Kept,
+            0x10 => Kind::DutyRead,
             _ => return None,
         },
         TIMER_BASE..INT_RAW => match offset % TIMER {
@@ -149,6 +183,9 @@ impl Ledc {
             duty: [0; CHANNELS],
             sent: [None; CHANNELS],
             done: Vec::new(),
+            pwm: [None; CHANNELS],
+            level: [false; CHANNELS],
+            edges: Vec::new(),
         }
     }
 
@@ -164,13 +201,24 @@ impl Ledc {
         self.reg(TIMER_BASE + timer as u32 * TIMER)
     }
 
-    pub(crate) fn read(&self, offset: u32) -> Option<u32> {
+    /// Reads the register at `offset` at `now`, with `apb` ticks per APB cycle.
+    pub(crate) fn read(&self, now: Tick, offset: u32, apb: u64) -> Option<u32> {
         let word = self.reg(offset);
         Some(match kind(offset)? {
             Kind::Kept => word,
             Kind::Clear => 0,
             Kind::Strobed(strobes) => word & !strobes,
+            Kind::DutyRead => self.duty_at((offset / CHANNEL) as usize, now, apb) << 4,
         })
+    }
+
+    /// Channel `channel`'s duty in force at `now`: that of an update due by then, or else that
+    /// of the last one that took effect.
+    fn duty_at(&self, channel: usize, now: Tick, apb: u64) -> u32 {
+        match (self.pending[channel], self.due(channel, apb)) {
+            (Some(update), Some(due)) if due <= now => update.duty,
+            _ => self.duty[channel],
+        }
     }
 
     /// Writes the register at `offset` at `now`, with `apb` ticks per APB cycle. `Ok(false)` for
@@ -183,8 +231,10 @@ impl Ledc {
         value: u32,
         apb: u64,
     ) -> Result<bool, &'static str> {
-        if kind(offset).is_none() {
-            return Ok(false);
+        match kind(offset) {
+            None => return Ok(false),
+            Some(Kind::DutyRead) => return Ok(true),
+            Some(_) => {}
         }
         self.settle(now, apb);
         let old = self.reg(offset);
@@ -202,6 +252,9 @@ impl Ledc {
                 }
                 if value & (RST | PAUSE) == PAUSE {
                     return Err("pause");
+                }
+                if !counts && self.pwm.iter().flatten().any(|pwm| pwm.timer == timer) {
+                    return Err("timer_reset_while_running");
                 }
             }
             self.started[timer] = match self.started[timer] {
@@ -314,36 +367,92 @@ impl Ledc {
         Some(Tick(since.0 + cycles * period))
     }
 
-    /// The tick of the next update to take effect.
-    pub(crate) fn next(&self, apb: u64) -> Option<Tick> {
-        (0..CHANNELS).filter_map(|k| self.due(k, apb)).min()
+    /// The next change of a channel's signal from its PWM, as the tick, the channel and the
+    /// level. A PWM whose timer does not count makes none.
+    fn next_edge(&self) -> Option<(Tick, usize, bool)> {
+        (0..CHANNELS)
+            .filter_map(|k| {
+                let pwm = self.pwm[k]?;
+                self.started[pwm.timer]?;
+                Some(if self.level[k] {
+                    (Tick(pwm.start.0 + pwm.high), k, false)
+                } else {
+                    (Tick(pwm.start.0 + pwm.period), k, true)
+                })
+            })
+            .min()
     }
 
-    /// Lets every update due at or before `through` take effect, in time order.
+    /// The tick of the next update to take effect or of the next PWM edge.
+    pub(crate) fn next(&self, apb: u64) -> Option<Tick> {
+        let update = (0..CHANNELS).filter_map(|k| self.due(k, apb)).min();
+        let edge = self.next_edge().map(|(at, ..)| at);
+        [update, edge].into_iter().flatten().min()
+    }
+
+    /// Lets every update due at or before `through` take effect and every PWM edge then pass, in
+    /// time order. An update at the overflow of a PWM's rising edge starts its own cycle there.
     pub(crate) fn settle(&mut self, through: Tick, apb: u64) {
-        while let Some((at, channel)) = (0..CHANNELS)
-            .filter_map(|k| Some((self.due(k, apb)?, k)))
-            .min()
-            .filter(|&(at, _)| at <= through)
-        {
-            let update = self.pending[channel].take().expect("due");
-            let (period, resolution) = self.period(update.timer, apb).expect("checked");
-            let steps = 1 << resolution;
-            self.duty[channel] = update.duty;
-            let duty = match (update.out, update.idle) {
-                (true, _) => update.duty,
-                (false, true) => steps,
-                (false, false) => 0,
-            };
-            let effect = Effect {
+        loop {
+            let update = (0..CHANNELS)
+                .filter_map(|k| Some((self.due(k, apb)?, k)))
+                .min()
+                .filter(|&(at, _)| at <= through);
+            let edge = self.next_edge().filter(|&(at, ..)| at <= through);
+            match (update, edge) {
+                (Some((at, channel)), edge) if edge.is_none_or(|(edge, ..)| at <= edge) => {
+                    self.take_update(at, channel, apb);
+                }
+                (_, Some((at, channel, level))) => {
+                    if level {
+                        let pwm = self.pwm[channel].as_mut().expect("a PWM");
+                        pwm.start = at;
+                    }
+                    self.drive(at, channel, level);
+                }
+                _ => break,
+            }
+        }
+    }
+
+    /// Channel `channel`'s pending update takes effect at `at`, an overflow of its timer.
+    fn take_update(&mut self, at: Tick, channel: usize, apb: u64) {
+        let update = self.pending[channel].take().expect("due");
+        let (period, resolution) = self.period(update.timer, apb).expect("checked");
+        let steps = 1 << resolution;
+        self.duty[channel] = update.duty;
+        let duty = match (update.out, update.idle) {
+            (true, _) => update.duty,
+            (false, true) => steps,
+            (false, false) => 0,
+        };
+        let effect = Effect {
+            at,
+            channel: channel as u8,
+            duty,
+            resolution,
+            hz: u32::try_from((TICK_HZ + period / 2) / period).expect("at most 480 MHz"),
+        };
+        self.sent[channel] = Some(effect);
+        self.done.push(effect);
+        self.pwm[channel] = (duty > 0 && duty < steps).then(|| Pwm {
+            timer: update.timer,
+            start: at,
+            period,
+            high: (u64::from(duty) * period + u64::from(steps >> 1)) >> resolution,
+        });
+        self.drive(at, channel, duty > 0);
+    }
+
+    /// Puts channel `channel`'s signal at `level` from `at`, and notes the change.
+    fn drive(&mut self, at: Tick, channel: usize, level: bool) {
+        if self.level[channel] != level {
+            self.level[channel] = level;
+            self.edges.push(Edge {
                 at,
                 channel: channel as u8,
-                duty,
-                resolution,
-                hz: u32::try_from((TICK_HZ + period / 2) / period).expect("at most 480 MHz"),
-            };
-            self.sent[channel] = Some(effect);
-            self.done.push(effect);
+                level,
+            });
         }
     }
 
@@ -355,6 +464,11 @@ impl Ledc {
     /// The updates that took effect since the last call, in the order they did.
     pub(crate) fn take_done(&mut self) -> Vec<Effect> {
         std::mem::take(&mut self.done)
+    }
+
+    /// The changes of the channels' signals since the last call, in time order.
+    pub(crate) fn take_edges(&mut self) -> Vec<Edge> {
+        std::mem::take(&mut self.edges)
     }
 }
 
@@ -385,22 +499,22 @@ mod tests {
     #[test]
     fn a_channel_and_a_timer_keep_their_setup_and_their_update_bits_read_0() {
         let mut ledc = Ledc::new();
-        assert_eq!(ledc.read(0x0c), Some(CONF1_RESET));
-        assert_eq!(ledc.read(TIMER_BASE), Some(TIMER_RESET));
-        assert_eq!(ledc.read(DATE), Some(DATE_RESET));
+        assert_eq!(ledc.read(Tick(0), 0x0c, APB), Some(CONF1_RESET));
+        assert_eq!(ledc.read(Tick(0), TIMER_BASE, APB), Some(TIMER_RESET));
+        assert_eq!(ledc.read(Tick(0), DATE, APB), Some(DATE_RESET));
         assert_eq!(ledc.write(Tick(0), 0x14 + 0x08, 4095 << 4, APB), Ok(true));
         assert_eq!(ledc.write(Tick(0), 0x14, 1 << 2 | 1 << 4, APB), Ok(true));
         let conf = TIMER_STROBE | RST | 12;
         assert_eq!(ledc.write(Tick(0), TIMER_BASE + TIMER, conf, APB), Ok(true));
-        assert_eq!(ledc.read(0x14 + 0x08), Some(4095 << 4));
-        assert_eq!(ledc.read(0x14), Some(1 << 2));
-        assert_eq!(ledc.read(TIMER_BASE + TIMER), Some(RST | 12));
+        assert_eq!(ledc.read(Tick(0), 0x14 + 0x08, APB), Some(4095 << 4));
+        assert_eq!(ledc.read(Tick(0), 0x14, APB), Some(1 << 2));
+        assert_eq!(ledc.read(Tick(0), TIMER_BASE + TIMER, APB), Some(RST | 12));
         assert_eq!(ledc.write(Tick(0), INT_CLR, u32::MAX, APB), Ok(true));
-        assert_eq!(ledc.read(INT_ST), Some(0));
-        assert_eq!(ledc.read(INT_CLR), Some(0));
-        assert_eq!(ledc.read(0x10), None, "DUTY_R");
-        assert_eq!(ledc.read(TIMER_BASE + 4), None, "VALUE");
-        assert_eq!(ledc.write(Tick(0), 0x10, 1, APB), Ok(false));
+        assert_eq!(ledc.read(Tick(0), INT_ST, APB), Some(0));
+        assert_eq!(ledc.read(Tick(0), INT_CLR, APB), Some(0));
+        assert_eq!(ledc.read(Tick(0), 0x10, APB), Some(0), "DUTY_R");
+        assert_eq!(ledc.read(Tick(0), TIMER_BASE + 4, APB), None, "VALUE");
+        assert_eq!(ledc.write(Tick(0), TIMER_BASE + 4, 1, APB), Ok(false));
     }
 
     /// ESP-IDF's 5 kHz at 12 bits from the 80 MHz APB clock: a divider of 1000, so a period of
@@ -428,7 +542,11 @@ mod tests {
                 hz: 5000,
             }]
         );
-        assert_eq!(ledc.next(APB), None);
+        assert_eq!(
+            ledc.next(APB),
+            Some(Tick(due.0 + 95_977)),
+            "the fall at 4095 of 4096 steps of 96,000 ticks"
+        );
     }
 
     /// A divider of 1.5 at 1 bit is 18 ticks a period, 26,666,666.7 Hz, sent as 26,666,667.
@@ -583,6 +701,127 @@ mod tests {
         let mut ledc = Ledc::new();
         ledc.write(Tick(0), TIMER_BASE, 256 << 4 | 4, APB).unwrap();
         assert_eq!(duty(&mut ledc, Tick(1), 1), Err("clock"), "no clock picked");
+    }
+
+    /// `LEDC_LSCH0_DUTY_R_REG` reads the duty in force: 0 at reset, the old duty until the
+    /// update's overflow and the new one from it, with the fraction bits clear. A store to it
+    /// keeps nothing.
+    #[test]
+    fn duty_r_reads_the_duty_in_force() {
+        let mut ledc = Ledc::new();
+        timer(&mut ledc, Tick(0), 256, 4);
+        let period = 16 * APB;
+        assert_eq!(ledc.read(Tick(0), 0x10, APB), Some(0));
+        duty(&mut ledc, Tick(1), 5).unwrap();
+        assert_eq!(ledc.read(Tick(period - 1), 0x10, APB), Some(0));
+        assert_eq!(ledc.read(Tick(period), 0x10, APB), Some(5 << 4));
+        ledc.settle(Tick(period), APB);
+        duty(&mut ledc, Tick(period + 1), 9).unwrap();
+        assert_eq!(ledc.read(Tick(2 * period - 1), 0x10, APB), Some(5 << 4));
+        assert_eq!(ledc.write(Tick(period + 2), 0x10, 3 << 4, APB), Ok(true));
+        assert_eq!(ledc.read(Tick(2 * period), 0x10, APB), Some(9 << 4));
+        assert_eq!(
+            ledc.read(Tick(2 * period), 0x14 + 0x10, APB),
+            Some(0),
+            "channel 1"
+        );
+    }
+
+    fn edges(ledc: &mut Ledc, through: u64) -> Vec<(u64, bool)> {
+        ledc.settle(Tick(through), APB);
+        ledc.take_edges()
+            .iter()
+            .map(|edge| (edge.at.0, edge.level))
+            .collect()
+    }
+
+    /// TRM 35.3.3: high at each overflow, where the counter is `Hpoint` 0, and low at the duty.
+    /// Duty 5 of 16 steps of 6 ticks: high for 30 of each 96 ticks.
+    #[test]
+    fn a_partial_duty_is_high_from_each_overflow_for_its_steps() {
+        let mut ledc = Ledc::new();
+        timer(&mut ledc, Tick(0), 256, 4);
+        duty(&mut ledc, Tick(1), 5).unwrap();
+        assert_eq!(ledc.next(APB), Some(Tick(96)));
+        assert_eq!(
+            edges(&mut ledc, 300),
+            [
+                (96, true),
+                (126, false),
+                (192, true),
+                (222, false),
+                (288, true)
+            ]
+        );
+        assert_eq!(ledc.next(APB), Some(Tick(318)));
+    }
+
+    /// A divider of 264 at 5 bits is 198 ticks a period, so a step is 6.1875 ticks. Duty 3 is
+    /// 18.5625 ticks high, which rounds to 19.
+    #[test]
+    fn a_high_time_that_is_not_whole_ticks_rounds_to_the_nearest() {
+        let mut ledc = Ledc::new();
+        timer(&mut ledc, Tick(0), 264, 5);
+        duty(&mut ledc, Tick(1), 3).unwrap();
+        assert_eq!(edges(&mut ledc, 198 + 19), [(198, true), (217, false)]);
+    }
+
+    /// An update due at the overflow of a rising edge starts its own cycle there, and the edges
+    /// after it follow the new duty.
+    #[test]
+    fn an_update_at_an_overflow_starts_the_new_duty_there() {
+        let mut ledc = Ledc::new();
+        timer(&mut ledc, Tick(0), 256, 4);
+        duty(&mut ledc, Tick(1), 5).unwrap();
+        duty(&mut ledc, Tick(100), 10).unwrap();
+        assert_eq!(
+            edges(&mut ledc, 288),
+            [
+                (96, true),
+                (126, false),
+                (192, true),
+                (252, false),
+                (288, true)
+            ]
+        );
+        duty(&mut ledc, Tick(290), 0).unwrap();
+        assert_eq!(edges(&mut ledc, 1000), [(348, false)]);
+        assert_eq!(ledc.next(APB), None, "duty 0 has no edge");
+    }
+
+    /// Every step, an idle level and a stopped output hold one level and have no edge.
+    #[test]
+    fn a_duty_of_every_step_or_an_idle_level_holds_its_level() {
+        let mut ledc = Ledc::new();
+        timer(&mut ledc, Tick(0), 256, 4);
+        duty(&mut ledc, Tick(1), 16).unwrap();
+        assert_eq!(edges(&mut ledc, 1000), [(96, true)]);
+        assert_eq!(ledc.next(APB), None);
+        duty(&mut ledc, Tick(1001), 5).unwrap();
+        ledc.write(Tick(1002), 0x00, PARA_UP, APB).unwrap();
+        assert_eq!(edges(&mut ledc, 2000), [(1056, false)], "idle low");
+        assert_eq!(ledc.next(APB), None);
+    }
+
+    /// A reset of a timer that a channel's PWM counts on ends the run, since TRM 35.3.2.3 does
+    /// not say what the output does while the counter is held. With no PWM on it, the reset
+    /// goes through.
+    #[test]
+    fn a_reset_of_a_timer_under_a_pwm_is_refused() {
+        let mut ledc = Ledc::new();
+        timer(&mut ledc, Tick(0), 256, 4);
+        duty(&mut ledc, Tick(1), 5).unwrap();
+        ledc.settle(Tick(96), APB);
+        let reset = 256 << 4 | 4 | RST;
+        assert_eq!(
+            ledc.write(Tick(100), TIMER_BASE, reset, APB),
+            Err("timer_reset_while_running")
+        );
+        let mut ledc = Ledc::new();
+        timer(&mut ledc, Tick(0), 256, 4);
+        duty(&mut ledc, Tick(1), 16).unwrap();
+        ledc.settle(Tick(96), APB);
+        assert_eq!(ledc.write(Tick(100), TIMER_BASE, reset, APB), Ok(true));
     }
 
     #[test]

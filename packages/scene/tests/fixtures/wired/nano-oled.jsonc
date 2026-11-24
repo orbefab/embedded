@@ -1,0 +1,15 @@
+// A Nano drives a 0.96 inch SSD1306 OLED module over I2C.
+{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/hello.ino.hex" },
+    "oled": { "type": "oled-ssd1306-128x64" },
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["nano.GND", "oled.GND"],
+    ["nano.5V", "oled.VCC"],
+    ["nano.A5", "oled.SCL"],
+    ["nano.A4", "oled.SDA"],
+  ],
+}

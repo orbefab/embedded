@@ -8,8 +8,10 @@
 # The runtime's core is compiled into an archive and linked with each sketch, and main() comes
 # from the core. The runtime's Wire library is compiled into a second archive, which a sketch
 # that includes Wire.h also links. A sketch that includes Adafruit_NeoPixel.h also links that
-# library, pinned below, compiled for the sketch's clock. A clock other than 16 MHz gets its
-# own core and Wire archives.
+# library, pinned below, compiled for the sketch's clock. A sketch that includes
+# Adafruit_SSD1306.h also links Adafruit SSD1306, Adafruit GFX and the runtime's SPI library,
+# and compiles against Adafruit BusIO's headers, which Adafruit_GFX.h includes. A clock other
+# than 16 MHz gets its own core and Wire archives.
 # A build of the engine reads only the committed hex.
 #
 # Usage: packages/engine/scripts/sketches.sh TOOLS_DIR [DOWNLOAD_DIR]
@@ -25,6 +27,12 @@ runtime_url=https://downloads.arduino.cc/cores/staging/avr-1.8.6.tar.bz2
 runtime_sha256=ff1d17274b5a952f172074bd36c3924336baefded0232e10982f8999c2f7c3b6
 neopixel_url=https://github.com/adafruit/Adafruit_NeoPixel/archive/refs/tags/1.15.5.tar.gz
 neopixel_sha256=3aa189a5a397a13539fcb58ff297ab9dc4a4faf45115e48afd533f1337cb0f3b
+ssd1306_url=https://github.com/adafruit/Adafruit_SSD1306/archive/refs/tags/2.5.17.tar.gz
+ssd1306_sha256=5228d4d2e915f6a4aa15b681bcd27a9f848627f7542283dd3cb3b76445a32ef9
+gfx_url=https://github.com/adafruit/Adafruit-GFX-Library/archive/refs/tags/1.13.0.tar.gz
+gfx_sha256=8ab038fb445d99f320feb9d463c7afe4cd91475fd8ea9c4047be444aacbb3b29
+busio_url=https://github.com/adafruit/Adafruit_BusIO/archive/refs/tags/1.17.4.tar.gz
+busio_sha256=59efa3acd5466e381c1b0313d5f0e824832db1bb24e4e328667e12b7d235d56d
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
   echo "usage: $0 TOOLS_DIR [DOWNLOAD_DIR]" >&2
@@ -62,10 +70,16 @@ unpack() {
 unpack avr-gcc-7.3.0 "$toolchain_url" "$toolchain_sha256"
 unpack avr-runtime-1.8.6 "$runtime_url" "$runtime_sha256"
 unpack adafruit-neopixel-1.15.5 "$neopixel_url" "$neopixel_sha256"
+unpack adafruit-ssd1306-2.5.17 "$ssd1306_url" "$ssd1306_sha256"
+unpack adafruit-gfx-1.13.0 "$gfx_url" "$gfx_sha256"
+unpack adafruit-busio-1.17.4 "$busio_url" "$busio_sha256"
 
 bin=$tools/avr-gcc-7.3.0/avr/bin
 runtime=$tools/avr-runtime-1.8.6/avr-1.8.6
 neopixel=$tools/adafruit-neopixel-1.15.5/Adafruit_NeoPixel-1.15.5
+ssd1306=$tools/adafruit-ssd1306-2.5.17/Adafruit_SSD1306-2.5.17
+gfx=$tools/adafruit-gfx-1.13.0/Adafruit-GFX-Library-1.13.0
+busio=$tools/adafruit-busio-1.17.4/Adafruit_BusIO-1.17.4
 core=$runtime/cores/arduino
 target=(-mmcu=atmega328p -DF_CPU=16000000L -I"$core" -I"$runtime/variants/standard")
 c_flags=(-c -g -Os -w -std=gnu11 -ffunction-sections -fdata-sections -flto -fno-fat-lto-objects)
@@ -149,6 +163,18 @@ for dir in "$repo"/packages/engine/tests/firmware/sketch/*/ "$repo"/blocks/*/fir
       "$neopixel/Adafruit_NeoPixel.cpp" -o "$work/$name-neopixel.o"
     library+=(-I"$neopixel" -DARDUINO=10806)
     archives+=("$work/$name-neopixel.o")
+  fi
+  if grep -q '^#include <Adafruit_SSD1306.h>' "$dir/$name.ino"; then
+    spi=$runtime/libraries/SPI/src
+    oled=(-DARDUINO=10806 -I"$ssd1306" -I"$gfx" -I"$busio" -I"$wire" -I"$spi")
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${oled[@]}" \
+      "$ssd1306/Adafruit_SSD1306.cpp" -o "$work/$name-ssd1306.o"
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${oled[@]}" \
+      "$gfx/Adafruit_GFX.cpp" -o "$work/$name-gfx.o"
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" -I"$spi" "$spi/SPI.cpp" \
+      -o "$work/$name-spi.o"
+    library+=("${oled[@]}")
+    archives+=("$work/$name-ssd1306.o" "$work/$name-gfx.o" "$work/$name-spi.o")
   fi
   "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${library[@]}" -x c++ -include Arduino.h \
     "$dir/$name.ino" -o "$work/$name.o"

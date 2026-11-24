@@ -1,0 +1,46 @@
+{
+  "part": "oled-ssd1306-128x64",
+  "source": {
+    "script": "model.py",
+    "sha256": "e170c05e58996be9823110811ba638dbaff13314eebb017a4be8d6b56a305f62",
+    "bytes": 1599
+  },
+  "files": {
+    "oled-ssd1306-128x64.glb": {
+      "sha256": "3d01bf107da82af9daad15dc7db094ec315fde6757a744f1afeb245526aa67a7",
+      "bytes": 22212
+    }
+  },
+  "box": {
+    "min": [-13.65, -13.9, 2.54],
+    "max": [13.65, 13.9, 4.14]
+  },
+  "kept_nodes": [],
+  "draw_calls": 1,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 0,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "pcb",
+      "z_mm": 2.54
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 1,
+      "primitives_out": 1
+    },
+    "composition": {
+      "children": 11,
+      "lowest_node": "u1/(unnamed)",
+      "z_mm": 1.495,
+      "draw_calls": 32
+    }
+  }
+}

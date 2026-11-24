@@ -1,0 +1,5 @@
+# The sketch draws a frame, "Hello" and a filled circle, and the glass shows them.
+open
+step 200ms
+expect @oled.display.screen shows tests/hello.screen
+expect no diagnostics
