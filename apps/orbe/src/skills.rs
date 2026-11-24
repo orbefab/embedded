@@ -456,7 +456,9 @@ mod tests {
             | Lint::NoModel
             | Lint::Floating
             | Lint::LedNoResistor
-            | Lint::Shorted => Code::Lint(lint).as_str(),
+            | Lint::Shorted
+            | Lint::CoveredHole
+            | Lint::Overlap => Code::Lint(lint).as_str(),
         };
         let rules: std::collections::BTreeSet<&str> = [
             Lint::Unplaced,
@@ -465,6 +467,8 @@ mod tests {
             Lint::Floating,
             Lint::LedNoResistor,
             Lint::Shorted,
+            Lint::CoveredHole,
+            Lint::Overlap,
         ]
         .map(code)
         .into();

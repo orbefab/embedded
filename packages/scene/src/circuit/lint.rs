@@ -8,21 +8,40 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbe_engine::diagnostic::Diagnostic;
 use orbe_engine::name::Ref;
 
+use super::footprint::{Aabb, BoxCache, Mat4};
 use super::plug::Join;
+use super::view::{Placement, placement};
 use super::{Circuit, ROOT};
 use crate::diagnostic::{Code, Findings, Lint};
 use crate::model::{Instance, Part, TypeRef};
 use crate::name::and_list;
+use crate::source::Span;
 use crate::syntax::{self, Node};
 
-const RULES: [fn(&Scope, &mut Findings); 6] = [
+const RULES: [fn(&Scope, &mut Findings); 8] = [
     unplaced,
     shorted,
+    covered_hole,
+    overlap,
     unconnected,
     no_model,
     floating,
     led_no_resistor,
 ];
+
+/// A top-level scene part with a known position (`on` or `at`) and its body boxes, computed once.
+struct Placed<'p> {
+    instance: &'p Instance,
+    id: usize,
+    part: &'p Part,
+    placement: Placement,
+    /// The board this part is seated on via `on`, when it is plugged into one.
+    board: Option<usize>,
+    /// Body boxes in this part's own frame (mm, +Z up).
+    local_boxes: Vec<Aabb>,
+    /// Body boxes in the scene's world frame (mm, +Z up).
+    world_boxes: Vec<Aabb>,
+}
 
 struct Scope<'c, 'p> {
     circuit: &'c Circuit<'p>,
@@ -34,6 +53,8 @@ struct Scope<'c, 'p> {
     wired: BTreeSet<usize>,
     /// The scene's own instances, in its order, with their ids and parts.
     tops: Vec<(&'p Instance, usize, &'p Part)>,
+    /// Placed top-level instances, in scene order, with their body footprints computed once.
+    placed: Vec<Placed<'p>>,
     scene: Node,
     engine: Netlist,
     /// Nets left out of `net.floating`. See [`Circuit::quiet_floating`].
@@ -108,7 +129,7 @@ impl Circuit<'_> {
             .chain(contacts)
             .map(|key| root[key])
             .collect();
-        let tops = scene
+        let tops: Vec<_> = scene
             .comp
             .parts
             .iter()
@@ -124,12 +145,42 @@ impl Circuit<'_> {
         let tree = syntax::parse(&project.sources, scene.file, &mut Findings::default())
             .expect("the scene parsed when it checked");
         let hovering = self.hovering(&root);
+        let mut trees = BTreeMap::new();
+        let scene_val = tree.to_value();
+        trees.insert(scene.file, scene_val.clone());
+        let mut box_cache = BoxCache::default();
+        let placed = tops
+            .iter()
+            .filter_map(|&(instance, id, part)| {
+                let (place, board) = match self.seated.get(&id) {
+                    Some(seated) => (
+                        seated.placement,
+                        seated.contacts.first().map(|contact| contact.board),
+                    ),
+                    None => (placement(&scene_val["layout"][&instance.name])?, None),
+                };
+                let local_boxes =
+                    self.instance_boxes(id, &Mat4::IDENTITY, &mut trees, &mut box_cache);
+                let to_world = Mat4::from_placement(place);
+                let world_boxes = local_boxes.iter().map(|b| b.transform(&to_world)).collect();
+                Some(Placed {
+                    instance,
+                    id,
+                    part,
+                    placement: place,
+                    board,
+                    local_boxes,
+                    world_boxes,
+                })
+            })
+            .collect();
         let scope = Scope {
             circuit: &*self,
             root,
             nets,
             wired,
             tops,
+            placed,
             scene: tree,
             engine: orbe_engine::netlist::parse_with(netlist.json.as_bytes(), &netlist.blobs)
                 .expect("the engine read this netlist when it checked"),
@@ -323,6 +374,225 @@ fn shorted(s: &Scope, out: &mut Findings) {
                     and_list(&shown.iter().map(String::as_str).collect::<Vec<_>>())
                 ),
                 seated.parted.clone().unwrap_or_default(),
+            );
+        }
+    }
+}
+
+/// A body covers a hole when the hole centre sits more than this far inside the body's XY
+/// footprint, so touching or grazing edges do not warn.
+const HOLE_TOL_MM: f64 = 0.5;
+/// Height a jumper housing stands above the board (`HOUSING_MM - INSERT_MM` in
+/// `packages/viewer/src/wire-geometry.ts`). A body raised past this on long leads (an LED at
+/// 19.4 mm, an LDR at 23.9 mm) leaves room underneath and does not cover the hole.
+const HOLE_HEADROOM_MM: f64 = 11.5;
+/// Two bodies overlap when they intersect by more than this on all three axes, so parts sitting
+/// flush against each other (or on a board's silkscreen) do not warn.
+const OVERLAP_TOL_MM: f64 = 0.5;
+
+/// A breadboard hole used by a scene wire end or a seated part's lead that another part's body
+/// covers, so a jumper or lead could not enter it on a real bench.
+fn covered_hole(s: &Scope, out: &mut Findings) {
+    let boards: Vec<&Placed> = s.placed.iter().filter(|p| p.part.holes.is_some()).collect();
+    if boards.is_empty() {
+        return;
+    }
+    let held = s.circuit.held_holes();
+    let wire_nodes = s.scene.get("wires").and_then(Node::items);
+    let scene_wires = &s.circuit.project.scene.comp.wires;
+
+    for board in boards {
+        let board_name = &board.instance.name;
+        let holes = s.circuit.holes(board.id, board.part);
+        if holes.is_empty() {
+            continue;
+        }
+        let by_key: BTreeMap<usize, usize> = holes
+            .iter()
+            .enumerate()
+            .map(|(idx, hole)| (hole.key, idx))
+            .collect();
+        let inv_board = Mat4::inverse_placement(board.placement);
+        let others: Vec<(usize, &str, Vec<Aabb>)> = s
+            .placed
+            .iter()
+            .filter(|p| p.id != board.id)
+            .map(|p| {
+                let rel = inv_board.mul(&Mat4::from_placement(p.placement));
+                let boxes = p.local_boxes.iter().map(|b| b.transform(&rel)).collect();
+                (p.id, p.instance.name.as_str(), boxes)
+            })
+            .collect();
+
+        let covering = |at: [f64; 3], skip: Option<usize>| -> Option<&str> {
+            for &(other_id, other_name, ref boxes) in &others {
+                if Some(other_id) == skip {
+                    continue;
+                }
+                if boxes.iter().any(|b| {
+                    b.min[2] < at[2] + HOLE_HEADROOM_MM
+                        && b.max[2] > at[2] - 0.1
+                        && at[0] > b.min[0] + HOLE_TOL_MM
+                        && at[0] < b.max[0] - HOLE_TOL_MM
+                        && at[1] > b.min[1] + HOLE_TOL_MM
+                        && at[1] < b.max[1] - HOLE_TOL_MM
+                }) {
+                    return Some(other_name);
+                }
+            }
+            None
+        };
+
+        let clear_in_strip = |hole_key: usize| -> Vec<String> {
+            let Some(strip) = s.circuit.strip_of(hole_key) else {
+                return Vec::new();
+            };
+            strip
+                .into_iter()
+                .filter_map(|name| {
+                    let &key = s.circuit.keys.get(&(board.id, name.clone()))?;
+                    if held.contains(&key) {
+                        return None;
+                    }
+                    let hole = &holes[*by_key.get(&key)?];
+                    covering(hole.at, None)
+                        .is_none()
+                        .then(|| format!("{board_name}.{name}"))
+                })
+                .collect()
+        };
+
+        // Wire ends that land in a covered hole.
+        for (wire_idx, wire) in scene_wires.iter().enumerate() {
+            let is_contact = wire_nodes
+                .and_then(|items| items.get(wire_idx))
+                .and_then(Node::items)
+                .and_then(|parts| parts.get(2))
+                .and_then(|hint| hint.get("kind"))
+                .and_then(Node::str)
+                == Some("contact");
+            for (end_idx, end) in wire.ends.iter().enumerate() {
+                let Some(key) = s.circuit.lookup(ROOT, end).ok().flatten() else {
+                    continue;
+                };
+                let Some(&hole_idx) = by_key.get(&key) else {
+                    continue;
+                };
+                let skip = if is_contact {
+                    wire.ends[1 - end_idx]
+                        .segs
+                        .first()
+                        .and_then(|name| s.circuit.insts[ROOT].children.get(name).copied())
+                } else {
+                    None
+                };
+                let hole = &holes[hole_idx];
+                let Some(coverer) = covering(hole.at, skip) else {
+                    continue;
+                };
+                let full = format!("{board_name}.{}", hole.name);
+                let clear = clear_in_strip(hole.key);
+                let hint = if clear.is_empty() {
+                    format!(
+                        "move the wire end off `{full}`, or move `{coverer}` so it does not cover `{full}`"
+                    )
+                } else {
+                    format!(
+                        "move the wire end from `{full}` to a clear hole in the same strip: {}",
+                        clear.join(", ")
+                    )
+                };
+                out.push(
+                    Code::Lint(Lint::CoveredHole),
+                    end.span,
+                    format!(
+                        "wire end `{full}` sits under `{coverer}`'s body, so a jumper cannot reach that hole"
+                    ),
+                    hint,
+                );
+            }
+        }
+
+        // Seated parts' leads that land in a hole another part's body covers.
+        for &(instance, id, _) in &s.tops {
+            let Some(seated) = s.circuit.seated.get(&id) else {
+                continue;
+            };
+            let mut reported: BTreeSet<&str> = BTreeSet::new();
+            for contact in &seated.contacts {
+                if contact.board != board.id {
+                    continue;
+                }
+                let Some(&hole_idx) = by_key.get(&contact.hole_key) else {
+                    continue;
+                };
+                let hole = &holes[hole_idx];
+                let Some(coverer) = covering(hole.at, Some(id)) else {
+                    continue;
+                };
+                if !reported.insert(coverer) {
+                    continue;
+                }
+                let full = format!("{board_name}.{}", hole.name);
+                out.push(
+                    Code::Lint(Lint::CoveredHole),
+                    instance.name_span,
+                    format!(
+                        "`{}` sits in `{full}`, which `{coverer}`'s body covers",
+                        contact.shown
+                    ),
+                    format!(
+                        "move `{}` or `{coverer}` so `{coverer}` does not cover `{full}`",
+                        instance.name
+                    ),
+                );
+            }
+        }
+    }
+}
+
+/// Two placed top-level parts whose bodies intersect in 3D space (excluding a part and the board
+/// it is seated on).
+fn overlap(s: &Scope, out: &mut Findings) {
+    for (i, a) in s.placed.iter().enumerate() {
+        for b in &s.placed[i + 1..] {
+            if a.board == Some(b.id) || b.board == Some(a.id) {
+                continue;
+            }
+            let hits = a.world_boxes.iter().any(|ba| {
+                b.world_boxes.iter().any(|bb| {
+                    let o = ba.overlap(bb);
+                    o[0] > OVERLAP_TOL_MM && o[1] > OVERLAP_TOL_MM && o[2] > OVERLAP_TOL_MM
+                })
+            });
+            if !hits {
+                continue;
+            }
+            let (Some(ua), Some(ub)) = (
+                Aabb::union_all(&a.world_boxes),
+                Aabb::union_all(&b.world_boxes),
+            ) else {
+                continue;
+            };
+            let o = ua.overlap(&ub);
+            let (sep, axis) = if o[0] <= o[1] {
+                (o[0].max(0.1), "X")
+            } else {
+                (o[1].max(0.1), "Y")
+            };
+            let sep = (sep * 10.0).ceil() / 10.0;
+            let span: Span = b.instance.name_span;
+            out.push(
+                Code::Lint(Lint::Overlap),
+                span,
+                format!(
+                    "`{}` and `{}` overlap in space",
+                    a.instance.name, b.instance.name
+                ),
+                format!(
+                    "move `{}` or `{}` in \"layout\" by at least {sep:.1} mm along {axis} so their bodies do not overlap",
+                    a.instance.name, b.instance.name
+                ),
             );
         }
     }
