@@ -1,7 +1,7 @@
 //! The records active chips sent each other in a transient run.
 //!
 //! ```text
-//! traces/link.csv   when a chip in the netlist can send records
+//! traces/link.csv   when a chip in the netlist can send records of its own
 //!   t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash,lanes
 //!   <end ps>,<start ps>,<sender part name>,<sender pin>,<spi, pulses or duty>,<cs>,<phases>,<bytes>,<hash>,<lanes>
 //! ```

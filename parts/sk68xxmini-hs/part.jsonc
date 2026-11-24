@@ -101,7 +101,7 @@
   "not_simulated": [
     {
       "what": "data output",
-      "why": "DOUT follows DIN 500 ns later, rise and fall alike, once this LED holds its 24 bits, and is low before that and until the next reset. Section 11 gives that delay as a maximum and no typical, and gives no output widths, so DOUT passes each high as long as it came. The sheet gives no DOUT drive strength either; the output stage is 100 ohm to each rail. Bits a Pulses record carried, such as an ESP32-S3 RMT train, reach DIN only when the record ends, so they do not go on to DOUT, and the part reports chip.protocol rule dout_record."
+      "why": "DOUT follows DIN 500 ns later, rise and fall alike, once this LED holds its 24 bits, and is low before that and until the next reset. Section 11 gives that delay as a maximum and no typical, and gives no output widths, so DOUT passes each high as long as it came. The sheet gives no DOUT drive strength either; the output stage is 100 ohm to each rail. Bits a Pulses record carried, such as an ESP32-S3 RMT train, reach DIN only when the record ends. Past this LED's 24 bits they go on to the next LED as a record of their own, 500 ns later, and DOUT itself stays low."
     },
     {
       "what": "light",

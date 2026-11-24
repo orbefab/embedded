@@ -1211,7 +1211,7 @@ fn the_warnings_table_lists_the_codes_lint_prints_and_open_shows_only_the_engine
         )
         .replace(
             "\"wires\": [",
-            "\"layout\": {\n    \"btn1\": { \"at\": [0, 0, 0], \"rotate\": [0, 0, 270] },\n    \"bb\": { \"at\": [0, 60, 0] },\n    \"r1\": { \"on\": { \"a\": \"bb.a5\" }, \"rotate\": [0, 0, 90] },\n  },\n  \"wires\": [",
+            "\"layout\": {\n    \"btn1\": { \"at\": [0, 0, 0], \"rotate\": [0, 0, 270] },\n    \"bb\": { \"at\": [0, 0, 0] },\n    \"r1\": { \"on\": { \"a\": \"bb.a5\" }, \"rotate\": [0, 0, 90] },\n  },\n  \"wires\": [\n    [\"bb.c5\", \"bb.j5\"],",
         );
     assert_ne!(broken, scene);
     fs::write(dir.join("scene.jsonc"), &broken).unwrap();

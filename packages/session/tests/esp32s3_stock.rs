@@ -173,6 +173,62 @@ fn a_stock_sketch_latches_the_board_rgb_led() {
     );
 }
 
+/// Each pixel of the stick and the colour it shows, `0xRRGGBB`, after each frame the sketch
+/// sends: eight colours, then eight others 20 ms later.
+const FIRST: [&str; 8] = [
+    "rgb(255,0,0)",
+    "rgb(0,255,0)",
+    "rgb(0,0,255)",
+    "rgb(255,255,0)",
+    "rgb(0,255,255)",
+    "rgb(255,0,255)",
+    "rgb(16,32,48)",
+    "rgb(128,64,32)",
+];
+const SECOND: [&str; 8] = [
+    "rgb(1,2,3)",
+    "rgb(64,0,0)",
+    "rgb(0,64,0)",
+    "rgb(0,0,64)",
+    "rgb(128,128,128)",
+    "rgb(10,20,30)",
+    "rgb(192,255,238)",
+    "rgb(255,255,255)",
+];
+
+/// The sketch sends each frame as one RMT transmission. Every pixel of the stick shows its
+/// own colour, after the first frame and again after the second.
+fn stick_frames(name: &str) {
+    let (project, mut live) = open(name);
+    let path = project.path();
+    for (marker, colors) in [("first", FIRST), ("second", SECOND)] {
+        run(
+            &mut live,
+            path,
+            &format!(r#"step --until serial contains "{marker}""#),
+        );
+        run(&mut live, path, "step 1ms");
+        for (k, color) in colors.iter().enumerate() {
+            run(
+                &mut live,
+                path,
+                &format!("expect @stick.px{} {color}", k + 1),
+            );
+        }
+    }
+    run(&mut live, path, "expect no diagnostics");
+}
+
+#[test]
+fn a_stock_neopixel_sketch_lights_every_pixel_of_the_stick() {
+    stick_frames("esp32s3-stock-neopixel");
+}
+
+#[test]
+fn a_stock_rmt_write_lights_every_pixel_of_the_stick() {
+    stick_frames("esp32s3-stock-rmtstrip");
+}
+
 const MS: u64 = 1_000_000_000;
 const US: u64 = 1_000_000;
 const TICK: u64 = 2_084;
@@ -231,4 +287,62 @@ fn a_stock_fade_raises_its_duty_over_time() {
     }
     assert!(duties[0] > 0 && duties[1] > duties[0], "{duties:?}");
     run(&mut live, path, "expect no diagnostics");
+}
+
+/// `Wire.begin()` on the default pins, SDA on GPIO8 and SCL on GPIO9, with nothing on the bus.
+#[test]
+fn a_stock_wire_begin_raises_no_diagnostic() {
+    play(
+        "esp32s3-stock-wire",
+        &[
+            "step 300ms",
+            r#"expect serial contains "ready""#,
+            "expect no diagnostics",
+        ],
+    );
+}
+
+/// Adafruit SSD1306 and GFX draw a frame and "orbe" on the module. `display()` writes the frame
+/// in I2C transactions longer than the 32-byte FIFO.
+#[test]
+fn a_stock_adafruit_ssd1306_sketch_draws_on_the_oled() {
+    play(
+        "esp32s3-stock-oled",
+        &[
+            r#"step --until serial contains "drawn" --timeout 1s"#,
+            "expect @oled.display.screen shows oled.screen",
+            "expect no diagnostics",
+        ],
+    );
+}
+
+/// One Wire write of 65 bytes and one read of 40, each one transaction over the 32-byte FIFO.
+/// The write lights GDDRAM page 0's first 64 columns, which the power-on scan puts at the
+/// glass's bottom right. The module answers the read with the released line, 0xFF, and its
+/// warning that it takes no reads is the run's only diagnostic.
+#[test]
+fn a_stock_wire_write_and_read_run_past_the_fifo() {
+    let (project, mut live) = open("esp32s3-stock-wirelong");
+    let path = project.path();
+    for line in [
+        r#"step --until serial contains "read" --timeout 1s"#,
+        r#"expect serial contains "init 0""#,
+        r#"expect serial contains "wrote 0""#,
+        r#"expect serial contains "read 40 ff 40""#,
+        "expect @oled.display.screen shows wirelong.screen",
+    ] {
+        run(&mut live, path, line);
+    }
+    let command = Command::parse("snapshot", path).unwrap().unwrap();
+    let text = live.run(&command).text();
+    let found: Vec<_> = text
+        .lines()
+        .filter(|line| line.starts_with("warning[") || line.starts_with("error["))
+        .collect();
+    assert_eq!(found.len(), 1, "{text}");
+    assert!(
+        found[0].starts_with("warning[chip.protocol] #oled__display")
+            && found[0].contains("rule read"),
+        "{text}"
+    );
 }

@@ -1,0 +1,19 @@
+// Adafruit_NeoPixel on GPIO4 drives an 8-pixel NeoPixel stick from 5V. The
+// app is the stock sketch packages/engine/tests/firmware/esp32s3/arduino/stock/neopixel.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    },
+    "stick": { "type": "neopixel-stick-8" }
+  },
+  "wires": [
+    ["board.GPIO4", "stick.DIN"],
+    ["board.5V", "stick.5V"],
+    ["board.GND", "stick.GND"]
+  ],
+  "ground": "board.GND"
+}
