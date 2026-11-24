@@ -113,6 +113,7 @@ pub enum Unit {
     Ampere,
     Volt,
     Watt,
+    Hertz,
     /// A shaft angle, as `90deg`.
     Degree,
 }
@@ -123,14 +124,21 @@ impl Unit {
             Unit::Ampere => "A",
             Unit::Volt => "V",
             Unit::Watt => "W",
+            Unit::Hertz => "Hz",
             Unit::Degree => "deg",
         }
     }
 
     pub fn parse(text: &str) -> Option<Unit> {
-        [Unit::Ampere, Unit::Volt, Unit::Watt, Unit::Degree]
-            .into_iter()
-            .find(|u| u.as_str() == text)
+        [
+            Unit::Ampere,
+            Unit::Volt,
+            Unit::Watt,
+            Unit::Hertz,
+            Unit::Degree,
+        ]
+        .into_iter()
+        .find(|u| u.as_str() == text)
     }
 }
 

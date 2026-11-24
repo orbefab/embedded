@@ -399,6 +399,7 @@ fn search_finds_a_block_by_a_word_of_its_id() {
             "devkitc-button-led",
             "nano-7seg-count",
             "nano-button-led",
+            "nano-buzzer",
             "nano-led-fade",
             "nano-light-comparator",
             "nano-neopixel-stick",

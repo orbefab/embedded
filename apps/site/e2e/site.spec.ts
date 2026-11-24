@@ -287,6 +287,7 @@ function testCount(id: string): number {
 const VALUES: Record<string, Record<string, readonly string[]>> = {
   "nano-button-led": { r1: ["220 Ω"], r2: ["10 kΩ"], led1: ["red"], nano: ["button.ino.hex"] },
   "nano-led-fade": { r1: ["220 Ω"], led1: ["red"], nano: ["fade.ino.hex"] },
+  "nano-buzzer": { rs: ["10 Ω"], rb: ["1 kΩ"], nano: ["tune.ino.hex"] },
   "nano-light-comparator": {
     rbot: ["2.2 kΩ"],
     rset: ["4.7 kΩ"],
@@ -859,6 +860,7 @@ for (const block of releasedBlocks()) {
           if (kind === "digit") return scene?.getObjectByName("@disp")?.getObjectByName("seg-a") !== undefined;
           if (kind === "pixels") return scene?.getObjectByName("@stick.px1")?.getObjectByName("lens") !== undefined;
           if (kind === "servo") return scene?.getObjectByName("@servo")?.getObjectByName("horn") !== undefined;
+          if (kind === "tone") return scene?.getObjectByName("@bz1") !== undefined;
           if (kind === "screen") return scene?.getObjectByName("@oled.display")?.getObjectByName("glass") !== undefined;
           if (kind === "rgb") {
             return scene?.getObjectByName("@board.led")?.getObjectByName("lens") !== undefined

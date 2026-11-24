@@ -243,7 +243,7 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "button" | "digit" | "fade" | "light" | "pixels" | "relay" | "rgb" | "screen" | "servo" | "shift";
+export type BlockKind = "button" | "digit" | "fade" | "light" | "pixels" | "relay" | "rgb" | "screen" | "servo" | "shift" | "tone";
 
 export interface RepoBlock {
   id: string;
@@ -274,9 +274,10 @@ export function blockKind(scene: string, id: string): BlockKind {
   if (/"type"\s*:\s*"esp32s3-devkitc-1"/.test(code)) return "rgb";
   if (/"world"\s*:\s*\{[^}]*"light"\s*:/.test(code)) return "light";
   if (/"btn1"\s*:/.test(code)) return "button";
+  if (/"type"\s*:\s*"buzzer-12mm"/.test(code)) return "tone";
   if (/"led1"\s*:/.test(code)) return "fade";
   throw new Error(
-    `${id} names no button, no fading LED, no light, no pixel stick, no screen, no 7-segment display, no relay module, no 74HC595, no DevKitC-1 and no servo`,
+    `${id} names no button, no fading LED, no light, no pixel stick, no screen, no 7-segment display, no relay module, no 74HC595, no buzzer, no DevKitC-1 and no servo`,
   );
 }
 
@@ -287,7 +288,7 @@ export async function simulatedSeconds(page: Page): Promise<number> {
   return time;
 }
 
-export function waitSimulatedPast(page: Page, seconds: number): Promise<unknown> {
+export function waitSimulatedPast(page: Page, seconds: number, timeout = 30_000): Promise<unknown> {
   return page.waitForFunction(
     (seconds) => {
       const text = document.querySelector('[data-testid="time"]')?.textContent ?? "";
@@ -295,7 +296,7 @@ export function waitSimulatedPast(page: Page, seconds: number): Promise<unknown>
       return Number.isFinite(time) && time > seconds;
     },
     seconds,
-    { timeout: 30_000 },
+    { timeout },
   );
 }
 
@@ -494,6 +495,16 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
   }
   if (block.kind === "rgb") {
     await showRgb(page, block, canvas, shotName);
+    return;
+  }
+  if (block.kind === "tone") {
+    // A transistor switching the coil takes a few hundred steps on each edge.
+    await waitSimulatedPast(page, Math.max(1, start), 60_000);
+    expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(Math.max(1, start));
+    if (shotName !== null) {
+      await page.locator("canvas").scrollIntoViewIfNeeded();
+      await shot(page, shotName);
+    }
     return;
   }
   if (block.kind === "servo") {

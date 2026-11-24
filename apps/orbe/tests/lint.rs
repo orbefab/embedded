@@ -123,6 +123,7 @@ fn lint_on_the_uno_block_warns_only_as_the_nano_block_does() {
         "devkitc-button-led",
         "nano-7seg-count",
         "nano-button-led",
+        "nano-buzzer",
         "nano-led-fade",
         "nano-light-comparator",
         "nano-neopixel-stick",
