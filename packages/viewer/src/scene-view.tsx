@@ -10,7 +10,8 @@ import type { CameraMode } from "./camera-frame";
 import { CameraRig } from "./camera-rig";
 import { glowIntensity, litColour, pixelGlow, shownCurrent } from "./glow";
 import type { Hovered, HoverStore } from "./hover";
-import type { Command, FrameMessage, Ref, SceneMessage, Vec3 } from "./protocol";
+import type { Command, FrameMessage, Ref, SceneMessage, ScreenImage, Vec3 } from "./protocol";
+import { showScreen } from "./screen";
 import { holeAt, instanceAt, refOf, stripText } from "./refs";
 import { applyRoom, roomTexture, StageFloor, StageLights, StageRoom } from "./stage";
 import type { StageTheme } from "./stage-theme";
@@ -169,6 +170,7 @@ export function SceneView({
   scene,
   frame,
   ledPeak,
+  screens,
   send,
   hover,
   mode,
@@ -180,6 +182,8 @@ export function SceneView({
   frame: RefObject<FrameMessage | null>;
   /** Brightest LED current since the previous drawn frame, one entry per channel. */
   ledPeak: RefObject<number[]>;
+  /** Each screen's last glass, per `channels.screens`. */
+  screens: RefObject<(ScreenImage | undefined)[]>;
   send: (command: Command) => void;
   hover: HoverStore;
   mode: CameraMode;
@@ -251,6 +255,10 @@ export function SceneView({
     const count = Math.max(peaks.length, live?.led_a.length ?? 0);
     for (let channel = 0; channel < count; channel += 1) peaks[channel] = live?.led_a[channel] ?? 0;
     peaks.length = count;
+    for (const screen of built.screens) {
+      const image = screens.current[screen.channel];
+      if (image !== undefined && image !== screen.shown) showScreen(screen, image);
+    }
     for (const slide of built.slides) {
       slide.node.position.copy(slide.rest);
       if (live?.switches[slide.channel] === 1) slide.node.position.add(slide.delta);

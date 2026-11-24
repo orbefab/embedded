@@ -30,6 +30,11 @@ pub(crate) struct Bus {
 
 /// What the engine calls for the bytes: a device's [`I2cTarget`], or a test's recorder.
 pub(crate) trait Target {
+    /// Whether the target answers its address. One that does not leaves the address
+    /// unacknowledged, and the engine calls nothing else for that transfer.
+    fn awake(&mut self) -> bool {
+        true
+    }
     /// The address matched, to write to the target or to read from it.
     fn start(&mut self, at: Time, dir: Dir);
     /// The eighth SCL rise of a write delivered `byte`.
@@ -50,6 +55,11 @@ struct Calls<'a, D> {
 }
 
 impl<D: I2cTarget> Target for Calls<'_, D> {
+    fn awake(&mut self) -> bool {
+        self.dev
+            .call(self.world, Time::ZERO, |device, _cx| device.awake())
+    }
+
     fn start(&mut self, at: Time, dir: Dir) {
         self.dev
             .call(self.world, at, |device, cx| device.start(cx, at, dir));
@@ -278,7 +288,7 @@ impl Engine {
                     Recv::Address => {
                         let address = shifter >> 1;
                         let read = shifter & 1 == 1;
-                        let matched = address == self.bus.address;
+                        let matched = address == self.bus.address && dev.awake();
                         let next = if !matched {
                             Next::Idle
                         } else if read {

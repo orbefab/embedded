@@ -29,6 +29,7 @@ fn each_block_passes() {
             "nano-led-fade",
             "nano-light-comparator",
             "nano-neopixel-stick",
+            "nano-oled",
             "nano-shift-leds",
             "uno-button-led",
         ]
@@ -486,7 +487,7 @@ fn each_command_replies_in_text() {
         block(0),
         [
             "2> open",
-            "  opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 21 engine parts, 36 nets)",
+            "  opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 22 engine parts, 36 nets)",
         ]
     );
     assert_eq!(block(1)[0], "3> step 100ms");
@@ -656,7 +657,7 @@ fn each_command_replies_with_one_json_envelope() {
             open["data"]["engine_parts"].as_u64(),
             open["data"]["nets"].as_u64()
         ),
-        (Some(21), Some(36))
+        (Some(22), Some(36))
     );
     assert_eq!(open["data"]["diagnostics"].as_array().unwrap().len(), 0);
 

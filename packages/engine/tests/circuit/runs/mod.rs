@@ -27,5 +27,6 @@ mod relay;
 mod run;
 mod serial_echo;
 mod session;
+mod ssd1306;
 mod transistor;
 mod ws2812;

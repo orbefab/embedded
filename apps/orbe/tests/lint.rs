@@ -127,6 +127,7 @@ fn lint_on_the_uno_block_warns_only_as_the_nano_block_does() {
         "nano-led-fade",
         "nano-light-comparator",
         "nano-neopixel-stick",
+        "nano-oled",
         "nano-shift-leds",
         "uno-button-led",
     ] {

@@ -198,16 +198,22 @@ pub enum ProtocolRule {
     /// A high a `Pulses` record carried, which a chain with `DOUT` would pass on. The record
     /// lands at its end, after that high, so `DOUT` does not drive it.
     DoutRecord,
+    /// A scroll command, which the model does not run. The picture stays still.
+    Scroll,
+    /// A read transfer from a target that answers none.
+    Read,
 }
 
 impl ProtocolRule {
-    pub(crate) const ALL: [ProtocolRule; 6] = [
+    pub(crate) const ALL: [ProtocolRule; 8] = [
         ProtocolRule::Command,
         ProtocolRule::PixelFormat,
         ProtocolRule::SdaWhileSclHigh,
         ProtocolRule::Bit,
         ProtocolRule::Interval,
         ProtocolRule::DoutRecord,
+        ProtocolRule::Scroll,
+        ProtocolRule::Read,
     ];
 
     /// Its place in [`ALL`](Self::ALL).
@@ -224,6 +230,8 @@ impl ProtocolRule {
             "bit" => Some(ProtocolRule::Bit),
             "interval" => Some(ProtocolRule::Interval),
             "dout_record" => Some(ProtocolRule::DoutRecord),
+            "scroll" => Some(ProtocolRule::Scroll),
+            "read" => Some(ProtocolRule::Read),
             _ => None,
         }
     }
@@ -1283,6 +1291,30 @@ impl Diagnostic {
                 format!(
                     "{part} did not pass a high from a record on to DOUT, breaking rule {} at {} ps, the first time",
                     rule_text(&ProtocolRule::DoutRecord),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::Scroll,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} did not run a scroll command, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::Scroll),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::Read,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} answered a read with 0xFF bytes, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::Read),
                     at.as_ps()
                 )
             }

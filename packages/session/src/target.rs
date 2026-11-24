@@ -92,6 +92,12 @@ pub enum Target {
         reading: String,
         engine: String,
     },
+    /// What a screen part shows, by its reading `"of": "screen"`.
+    Screen {
+        path: String,
+        reading: String,
+        engine: String,
+    },
     /// A param the part file declares, live or fixed for the run.
     Param {
         path: String,
@@ -124,6 +130,14 @@ pub(crate) fn hz_reading(part: &MapPart) -> Option<&str> {
     part.readings
         .iter()
         .find(|(_, reading)| reading.of == "hz")
+        .map(|(name, _)| name.as_str())
+}
+
+/// The name of the part's reading `"of": "screen"`, what its glass shows.
+pub(crate) fn screen_reading(part: &MapPart) -> Option<&str> {
+    part.readings
+        .iter()
+        .find(|(_, reading)| reading.of == "screen")
         .map(|(name, _)| name.as_str())
 }
 
@@ -184,6 +198,14 @@ pub fn resolve(
         }
         if last && hz_reading(part) == Some(seg.as_str()) {
             return Ok(Target::Hertz { path });
+        }
+        if last && screen_reading(part) == Some(seg.as_str()) {
+            let engine = one_engine(&path, part, Code::NoReading)?;
+            return Ok(Target::Screen {
+                path,
+                reading: seg.clone(),
+                engine,
+            });
         }
         if last && let Some(&quantity) = QUANTITIES.iter().find(|q| q.as_str() == seg) {
             let engine = one_engine(&path, part, Code::NoReading)?;
@@ -284,6 +306,9 @@ pub(crate) fn names(part: &MapPart, reported: &[Quantity]) -> String {
         found.push(reading.to_string());
     }
     if let Some(reading) = hz_reading(part) {
+        found.push(reading.to_string());
+    }
+    if let Some(reading) = screen_reading(part) {
         found.push(reading.to_string());
     }
     let live = live_params(part);

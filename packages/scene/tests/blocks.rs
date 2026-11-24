@@ -84,10 +84,14 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
         for key in ["title", "summary", "license"] {
             assert!(non_empty_text(&block[key]), "{id}: {key}");
         }
-        let license = if id == "nano-neopixel-stick" {
-            "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND LGPL-3.0-or-later"
-        } else {
-            "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
+        let license = match id {
+            "nano-neopixel-stick" => {
+                "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND LGPL-3.0-or-later"
+            }
+            "nano-oled" => {
+                "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND BSD-2-Clause"
+            }
+            _ => "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
         };
         assert_eq!(
             block["license"], license,

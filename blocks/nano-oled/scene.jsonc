@@ -1,0 +1,23 @@
+// A Nano drives a 0.96 inch SSD1306 OLED module over I2C. The Nano straddles the centre channel
+// over columns 1 to 15. On the a to e side A4 (SDA) is column 8, A5 (SCL) column 9, 5V column 12
+// and GND column 14. The module's header, GND, VCC, SCL, SDA, plugs into a20 to a23.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "build/hello.ino.hex" },
+    "oled": { "type": "oled-ssd1306-128x64" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "oled": { "on": { "GND": "bb.a20" } }, // VCC in a21, SCL in a22, SDA in a23
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["bb.b14", "bb.b20"], // GND
+    ["bb.b12", "bb.b21"], // 5V to VCC
+    ["bb.b9", "bb.b22"], // A5 to SCL
+    ["bb.b8", "bb.b23"], // A4 to SDA
+  ],
+}
