@@ -403,7 +403,13 @@ impl Esp32s3 {
             }
             let watchdog = self.soc.watchdogs.deadline();
             let due = watchdog.map(|expiry| self.soc.clock.round_up(expiry.at));
-            let ledc = self.soc.ledc.next(self.soc.clock.source.apb());
+            let ledc = [
+                self.soc.ledc.next(self.soc.clock.source.apb()),
+                self.soc.ledc.first_output(),
+            ]
+            .into_iter()
+            .flatten()
+            .min();
             let i2c = self.soc.i2c.next_event();
             let rmt = self.soc.rmt.upcoming().map(|at| Tick(at.0 + 1));
             let uart = self
@@ -1514,7 +1520,7 @@ mod tests {
             (gdma + 0x10, 1, Refused::Interrupt("GDMA")),
             (out + 0x10, 1, Refused::Interrupt("GDMA")),
             (0x6003_b028, 1, Refused::Interrupt("SHA")),
-            (0x6001_90c8, 1 << 3, Refused::Interrupt("LEDC")),
+            (0x6001_90c8, 1 << 12, Refused::Interrupt("LEDC")),
             (gdma, 1 << 4, Refused::Register("GDMA", "memory_copy")),
             (out, 1 << 2, Refused::Register("GDMA", "write_back")),
             (gdma + 0x20, 1 << 23, Refused::Register("GDMA", "restart")),
@@ -2940,6 +2946,156 @@ mod tests {
             last(&xtal),
             Some(image_at(c(5))),
             "the crystal does not change"
+        );
+    }
+
+    /// Resetting a paused timer while a routed channel is low drives the pad high at the `RST`
+    /// store (`Timer0_cnt == Hpoint == 0`, TRM 35.3.3), and releasing `RST` restarts the cycle
+    /// from that store, matching across any `run_until` split.
+    #[test]
+    fn an_led_timer_reset_drives_the_pad_high_and_restarts_its_pwm() {
+        let mut on = ledc_on(3);
+        let conf = 2 | 256 << 4;
+        on[5].1 = conf | 1 << 25;
+        // Period = 4 crystal cycles, duty 1 -> high [29, 30), low [30, 33).
+        // Store 9 at cycle 29: already in high; wait until cycle 32 (low half) via one dummy store,
+        // pause at cycle 32 (low), assert RST at cycle 35 (drives high!), release RST at cycle 38
+        // (restarts: fall at 39, rise at 42, fall at 43).
+        let pairs = [
+            on,
+            duty(1).to_vec(),
+            vec![
+                (RAM[1].start + 0x100, 0),
+                (LEDC + 0xa0, conf | 1 << 22),
+                (LEDC + 0xa0, conf | 1 << 22 | 1 << 23),
+                (LEDC + 0xa0, conf),
+            ],
+        ];
+        let program = stores(&pairs.concat());
+        let expected = [
+            (image_at(c(5)), PadDrive::Low),
+            (record_at(c(29)), PadDrive::Low),
+            (Halt::Moved(c(29)), PadDrive::High),
+            (Halt::Moved(c(30)), PadDrive::Low),
+            (Halt::Moved(c(35)), PadDrive::High),
+            (Halt::Moved(c(39)), PadDrive::Low),
+            (Halt::Moved(c(42)), PadDrive::High),
+            (Halt::Moved(c(43)), PadDrive::Low),
+        ];
+        for step in [1, 1000] {
+            let mut chip = program.chip();
+            assert_eq!(halts(&mut chip, 44, step), expected, "step {step}");
+        }
+    }
+
+    /// LEDC's `DUTY_CHNG_END_LSCH0` and `LSTIMER0_OVF` interrupts raise source 35 and wake a
+    /// core in `WAITI` at the exact cycle, across any split of `run_until` limits.
+    #[test]
+    fn an_ledc_fade_end_or_timer_overflow_interrupt_wakes_waiti() {
+        // 2-bit timer on XTAL (period = 4 crystal cycles).
+        // Fade ch0 from duty 1 by +1 every 1 cycle for 2 steps (1 -> 2 -> 3).
+        let fade_prog = {
+            let mut program = Program::new(&[
+                SYSTEM + 0x18,
+                0xf9c1_e06f | 1 << 11,
+                LEDC,
+                2 | 256 << 4 | 1 << 25,
+                1 << 31 | 1 << 30 | 2 << 20 | 1 << 10 | 1,
+                1 << 2 | 1 << 4,
+            ]);
+            program
+                .l32r(2, 0)
+                .l32r(3, 1)
+                .rri8(6, 3, 2, 0)
+                .l32r(2, 2)
+                .movi(3, 3)
+                .rri8(6, 3, 2, 0xd0)
+                .l32r(3, 3)
+                .rri8(6, 3, 2, 0xa0)
+                .movi(3, 1 << 4)
+                .rri8(6, 3, 2, 0xc8)
+                .rri8(6, 3, 2, 0x08)
+                .l32r(3, 4)
+                .rri8(6, 3, 2, 0x0c)
+                .l32r(3, 5)
+                .rri8(6, 3, 2, 0x00)
+                .movi(7, 2)
+                .wsr(7, INTENABLE)
+                .movi(7, 0)
+                .wsr(7, PS)
+                .raw(&WAITI)
+                .raw(&LOOP);
+            program
+        };
+        let make = || {
+            let mut chip = fade_prog.chip();
+            chip.soc.restore(0x600c_2000 + 4 * 35, 1);
+            chip
+        };
+        let whole = halts(&mut make(), 200, 200);
+        for step in [1, 7, 200] {
+            let mut chip = make();
+            assert_eq!(halts(&mut chip, 200, step), whole, "steps of {step}");
+            assert_eq!(
+                chip.soc.bus().load(Cycle(0), LEDC + 0x10, Width::Word),
+                Ok(3 << 4),
+                "final duty in DUTY_R"
+            );
+            assert_eq!(
+                chip.soc.bus().load(Cycle(0), LEDC + 0xc4, Width::Word),
+                Ok(1 << 4),
+                "DUTY_CHNG_END_LSCH0 in INT_ST"
+            );
+        }
+        assert!(
+            matches!(
+                whole[..],
+                [(Halt::Fault(_, Fault::UnmappedFetch(pc)), _)] if pc == pro(0x4000_0300)
+            ),
+            "{whole:?}"
+        );
+
+        // Timer 0 overflow interrupt (bit 0) wakes WAITI at the first overflow.
+        let ovf_prog = {
+            let mut program = Program::new(&[
+                SYSTEM + 0x18,
+                0xf9c1_e06f | 1 << 11,
+                LEDC,
+                2 | 256 << 4 | 1 << 25,
+            ]);
+            program
+                .l32r(2, 0)
+                .l32r(3, 1)
+                .rri8(6, 3, 2, 0)
+                .l32r(2, 2)
+                .movi(3, 3)
+                .rri8(6, 3, 2, 0xd0)
+                .movi(3, 1)
+                .rri8(6, 3, 2, 0xc8)
+                .l32r(3, 3)
+                .rri8(6, 3, 2, 0xa0)
+                .movi(7, 2)
+                .wsr(7, INTENABLE)
+                .movi(7, 0)
+                .wsr(7, PS)
+                .raw(&WAITI)
+                .raw(&LOOP);
+            program
+        };
+        let mut chip = ovf_prog.chip();
+        chip.soc.restore(0x600c_2000 + 4 * 35, 1);
+        let seen = halts(&mut chip, 200, 1);
+        assert!(
+            matches!(
+                seen[..],
+                [(Halt::Fault(_, Fault::UnmappedFetch(pc)), _)] if pc == pro(0x4000_0300)
+            ),
+            "{seen:?}"
+        );
+        assert_eq!(
+            chip.soc.bus().load(Cycle(0), LEDC + 0xc4, Width::Word),
+            Ok(1),
+            "LSTIMER0_OVF in INT_ST"
         );
     }
 
