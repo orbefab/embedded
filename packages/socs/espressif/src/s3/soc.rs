@@ -283,12 +283,10 @@ fn quiet(word: u32, write: bool, value: u32) -> bool {
         0x6000_50f0 => true,
         // `call_start_cpu1` enables the APP CPU's debug trace. The trace moves no pin, clock or reading.
         0x600c_e0d8 | 0x600c_e0dc => true,
-        // `gpio_config` clears `MUX_SEL`, leaving digital GPIO, which the model drives. Setting it is still listed.
-        0x6000_8484 | 0x6000_8494 | 0x6000_8498 | 0x6000_849c
-            if !write || value & (1 << 19) == 0 =>
-        {
-            true
-        }
+        // `gpio_config` clears `MUX_SEL` on RTC pads GPIO0 to GPIO21 (`RTC_IO_TOUCH_PAD0_REG`
+        // through `RTC_IO_RTC_PAD21_REG`, `RTCIO+0x84..=0xd8`), leaving digital GPIO, which the
+        // model drives. Setting `MUX_SEL` is still listed.
+        0x6000_8484..=0x6000_84d8 if !write || value & (1 << 19) == 0 => true,
         _ => false,
     }
 }

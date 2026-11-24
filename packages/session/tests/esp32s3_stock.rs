@@ -232,3 +232,22 @@ fn a_stock_fade_raises_its_duty_over_time() {
     assert!(duties[0] > 0 && duties[1] > duties[0], "{duties:?}");
     run(&mut live, path, "expect no diagnostics");
 }
+
+#[test]
+fn a_stock_sketch_configures_rtc_pads_with_no_diagnostics() {
+    play(
+        "esp32s3-stock-rtcio",
+        &[
+            "step 300ms",
+            r#"expect serial contains "adc 1779 1178 2431 spi ff""#,
+            r#"expect serial contains "ready""#,
+            "expect @board.GPIO7 high",
+            "expect @board.GPIO8 high",
+            "expect @board.GPIO10 high",
+            "expect @board.GPIO15 high",
+            "expect @board.GPIO17 high",
+            "expect @board.GPIO21 high",
+            "expect no diagnostics",
+        ],
+    );
+}

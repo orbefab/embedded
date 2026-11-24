@@ -259,11 +259,8 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 0);
         } else if name == "esp32s3-encoder" {
-            // Reads of RTCIO+0x88 and RTCIO+0x8c, the pads `gpio_config` reads for GPIO1 and
-            // GPIO2. A stock sketch does not read those pads, so they stay listed.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 2];
-            assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
-            assert_kept_resets(&name, &doc, 0);
+            // GPIO1 and GPIO2 pad reads and start-up's radio and reset writes are quiet.
+            assert!(found.is_empty(), "{name}: {}", doc["diagnostics"]);
             // The ISR prints one `edge` line for each of the 7 closings, so it fails when the
             // seam hands the chip no pad.
             let serial = fs::read_to_string(out.join("traces/serial.csv")).unwrap();
@@ -283,14 +280,12 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 2);
         } else if name == "esp32s3-screen" {
-            // The read of RTCIO+0xc8, GPIO17's pad. A stock sketch does not read it.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 1];
-            assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
-            assert_kept_resets(&name, &doc, 0);
+            // GPIO17's pad read and start-up's radio and reset writes are quiet.
+            assert!(found.is_empty(), "{name}: {}", doc["diagnostics"]);
         } else if name == "esp32s3-touch" {
-            // Reads of RTCIO+0xa4 and RTCIO+0xa0, and the write of `I2C_CTR_REG` that changes
-            // bits the model keeps and does not run.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 3];
+            // GPIO7 and GPIO8 pad reads are quiet; only the write of `I2C_CTR_REG` that changes
+            // bits the model keeps and does not run stays listed.
+            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 1];
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
             let kept: Vec<_> = doc["diagnostics"]
                 .as_array()
