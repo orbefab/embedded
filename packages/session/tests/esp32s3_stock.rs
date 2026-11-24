@@ -626,3 +626,22 @@ fn a_stock_melody_plays_each_note_at_its_frequency() {
     run(&mut live, path, r#"step --until serial contains "done""#);
     run(&mut live, path, "expect no diagnostics");
 }
+
+#[test]
+fn a_stock_sketch_configures_rtc_pads_with_no_diagnostics() {
+    play(
+        "esp32s3-stock-rtcio",
+        &[
+            "step 300ms",
+            r#"expect serial contains "adc 1779 1178 2431 spi ff""#,
+            r#"expect serial contains "ready""#,
+            "expect @board.GPIO7 high",
+            "expect @board.GPIO8 high",
+            "expect @board.GPIO10 high",
+            "expect @board.GPIO15 high",
+            "expect @board.GPIO17 high",
+            "expect @board.GPIO21 high",
+            "expect no diagnostics",
+        ],
+    );
+}

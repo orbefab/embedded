@@ -60,6 +60,8 @@ oled         packages/scene/tests/fixtures/esp32s3-stock-oled
              app 337504 58197082b61635e95ed994f395ada8d8bf38fb7c5eaac78d36aaed1a799704a3
 rmtstrip     packages/scene/tests/fixtures/esp32s3-stock-rmtstrip
              app 298496 1a93820b57033f425268872709911bc64de1853cf22769b3ddafbe5b44b159a7
+rtcio        packages/scene/tests/fixtures/esp32s3-stock-rtcio
+             app 315184 9eb9c6d76353c1038fb0d70117469ee9a5f1f0be5b8fe802257a3718f341ef0c
 wire         packages/scene/tests/fixtures/esp32s3-stock-wire
              app 300256 005108713604bb60ed3d3d4099dbf7ebd049f7921e5c20610e418baed80bfb7e
 wirelong     packages/scene/tests/fixtures/esp32s3-stock-wirelong
