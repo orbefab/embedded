@@ -2,7 +2,7 @@
 
 `orbe-model`, in `packages/model`, is the contract a device implements. It is unstable: the crate is 0.x, and any release may change a trait or a type.
 
-A built-in device is a folder in `packages/engine/src/device/<kind>/`. `model.rs` is the device, written against `orbe_model` and `std` alone. `mod.rs` holds the netlist struct, the JSON wire type, and the device's `Row`, which names the events it takes. A device kind is also a row in the `chip` group of `define_kinds!` in `packages/engine/src/netlist/catalog.rs`, which reads its JSON and gives `orbe check` its pins, and a `Chip` variant in `packages/engine/src/netlist.rs`. The compiler then names each `match` on `Chip` that needs an arm. One is `Model::device`, the device table, whose arm maps a part to its row. [add-a-kind.md](add-a-kind.md#a-chip-or-a-device) covers the row. `orbe-device-check` builds every `model.rs` in a crate whose only dependency is `orbe-model`, so a `model.rs` that names the engine, or any other crate, fails the workspace build. Every built-in device is on the contract. The CST816 is an I2C target. The WS2812 is a pulse target. The DHT22 is a pulse target on an open-drain line that reads the world and answers with a train. The ST77916 is an SPI target with a PWM pin, and shows a screen. The SPI and pulse replays drive their pins while the engine sends their records.
+A built-in device is a folder in `packages/engine/src/device/<kind>/`. `model.rs` is the device, written against `orbe_model` and `std` alone. `mod.rs` holds the netlist struct, the JSON wire type, and the device's `Row`, which names the events it takes. A device kind is also a row in the `chip` group of `define_kinds!` in `packages/engine/src/netlist/catalog.rs`, which reads its JSON and gives `orbe check` its pins, and a `Chip` variant in `packages/engine/src/netlist.rs`. The compiler then names each `match` on `Chip` that needs an arm. One is `Model::device`, the device table, whose arm maps a part to its row. [add-a-kind.md](add-a-kind.md#a-chip-or-a-device) covers the row. `orbe-device-check` builds every `model.rs` in a crate whose only dependency is `orbe-model`, so a `model.rs` that names the engine, or any other crate, fails the workspace build. Every built-in device is on the contract. The CST816 is an I2C target. The WS2812 is a pulse target. The DHT22 is a pulse target on an open-drain line that reads the world and answers with a train. The ST77916 is an SPI target with a PWM pin, and shows a screen. The 74HC595 watches its logic pins and drives push-pull outputs. The SPI and pulse replays drive their pins while the engine sends their records.
 
 ## State
 
@@ -29,7 +29,7 @@ Equal generations mean equal pages only between a state and a copy made before o
 
 - `Shows::Nothing`, the default.
 - `Shows::Leds { kind, order }`, an LED chain. Its view is three bytes per LED in `order`.
-- `Shows::Screen { kind, width, height, format }`, a screen. Its view is the frame memory, rows top to bottom, each pixel in `format`, and a `Panel`: whether the display is on, inverted, in reset or asleep, its MADCTL and COLMOD bytes, how many registers hold a write it stores and does not run, and the last duty its backlight pin took.
+- `Shows::Screen { kind, width, height, format }`, a screen. Its view is the frame memory, in `format`, and a `Panel`: whether the display is on, inverted, in reset or asleep, its controller's `Settings`, how many registers hold a write it stores and does not run, and the last duty its backlight pin took. `rgb565` is rows top to bottom, two bytes a pixel, as an ST77916 holds them. `mono-pages` is 8-row pages top to bottom, one byte a column of a page with bit 0 its top row, as an SSD1306 holds them. `Settings` names each of a controller's own values that changes what the glass shows, such as an ST77916's MADCTL and COLMOD or an SSD1306's contrast and COM scan, at most 12, in an order the device fixes. A screen kind is one the engine draws, as [run-folder.md](run-folder.md#what-the-glass-shows) says.
 
 The engine lists a part in `observations.json` `leds` only when its device declares an LED chain, and in `displays` only when it declares a screen.
 
@@ -49,6 +49,7 @@ An `I2cTarget` is a device on an I2C bus. The engine runs the bus: it watches `S
 
 | Method | What it does |
 | --- | --- |
+| `awake()` | Whether it answers its address. A target that does not leaves the address unacknowledged, and the host calls nothing else for that transfer. Awake, unless the device says otherwise. |
 | `start(cx, at, dir)` | The master addressed it, to read or to write. |
 | `write(cx, at, byte)` | A byte the master wrote. It returns whether to ACK. |
 | `read(cx, at)` | The next byte the master reads. |

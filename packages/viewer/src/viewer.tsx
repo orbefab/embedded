@@ -16,7 +16,7 @@ import { Color } from "three";
 import type { BuiltScene } from "./build";
 import type { CameraMode } from "./camera-frame";
 import { createHoverStore, type HoverStore } from "./hover";
-import type { Command, FrameMessage, FrameState, Reply, SceneMessage } from "./protocol";
+import type { Command, FrameMessage, FrameState, Reply, SceneMessage, ScreenImage } from "./protocol";
 import { SceneView } from "./scene-view";
 import { useStageTheme } from "./stage-theme";
 import { applySerial, EMPTY_SERIAL, serialShown, type SerialView } from "./serial";
@@ -472,6 +472,7 @@ export function Viewer({ source, onCreated, pageScroll = false }: ViewerProps) {
   const [mode, setMode] = useState<CameraMode>("tilted");
   const frame = useRef<FrameMessage | null>(null);
   const ledPeak = useRef<number[]>([]);
+  const screens = useRef<(ScreenImage | undefined)[]>([]);
   const hover = useMemo(createHoverStore, []);
   const [partErrors, setPartErrors] = useState<readonly string[]>([]);
   const [sendErrors, setSendErrors] = useState<readonly string[]>([]);
@@ -506,12 +507,16 @@ export function Viewer({ source, onCreated, pageScroll = false }: ViewerProps) {
         if (message.type === "scene") {
           frame.current = null;
           ledPeak.current = [];
+          screens.current = [];
           setSendErrors([]);
           setScene(message);
         } else if (message.type === "frame") {
           const peaks = ledPeak.current;
           for (let channel = 0; channel < message.led_a.length; channel += 1) {
             peaks[channel] = Math.max(peaks[channel] ?? 0, message.led_a[channel] ?? 0);
+          }
+          for (const [channel, image] of (message.screens ?? []).entries()) {
+            if (image !== null) screens.current[channel] = image;
           }
           frame.current = message;
         } else {
@@ -608,6 +613,7 @@ export function Viewer({ source, onCreated, pageScroll = false }: ViewerProps) {
                 frame={frame}
                 hover={hover}
                 ledPeak={ledPeak}
+                screens={screens}
                 mode={mode}
                 onBuilt={onBuilt}
                 pageScroll={pageScroll}

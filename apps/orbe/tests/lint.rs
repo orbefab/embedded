@@ -120,11 +120,15 @@ fn lint_warns_on_the_nano_block_exits_zero_and_writes_nothing() {
 fn lint_on_the_uno_block_warns_only_as_the_nano_block_does() {
     let repo = common::repo();
     for block in [
+        "devkitc-button-led",
+        "nano-7seg-count",
         "nano-button-led",
         "nano-gy-bmp280",
         "nano-led-fade",
         "nano-light-comparator",
         "nano-neopixel-stick",
+        "nano-oled",
+        "nano-shift-leds",
         "uno-button-led",
     ] {
         let run = orbe(&repo, &["lint", &format!("blocks/{block}/scene.jsonc")]);

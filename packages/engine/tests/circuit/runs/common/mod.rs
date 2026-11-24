@@ -207,9 +207,10 @@ impl TransientFolder {
 /// its files, with `traces/logic.vcd` exactly when its observations have logic,
 /// `traces/serial.csv` exactly when it has an ATmega328P or an ESP32-S3, `traces/i2c.csv`
 /// exactly when it has an ATmega328P, which has a TWI, `traces/link.csv` exactly when a chip
-/// can send records, `traces/display.csv` and one `traces/display-<part>.rgb565` per part
-/// exactly when it has display parts, a row at each `grid_ps` to `stop_ps`, row 0 equal to
-/// `observations.op`, and an envelope that holds both rows of each interval.
+/// can send records, `traces/display.csv`, one `traces/display-<part>.rgb565` and one
+/// `traces/display-<part>.png` per part exactly when it has display parts, a row at each
+/// `grid_ps` to `stop_ps`, row 0 equal to `observations.op`, and an envelope that holds both
+/// rows of each interval.
 pub fn transient_folder(name: &str, out: &Path) -> TransientFolder {
     let found = files(out);
     let names: Vec<_> = found.keys().map(String::as_str).collect();
@@ -230,6 +231,7 @@ pub fn transient_folder(name: &str, out: &Path) -> TransientFolder {
     .to_vec();
     let displays = display_parts(&input);
     for part in &displays {
+        expected.push(format!("traces/display-{part}.png"));
         expected.push(format!("traces/display-{part}.rgb565"));
     }
     if !displays.is_empty() {

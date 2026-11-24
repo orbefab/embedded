@@ -1,0 +1,47 @@
+`build/button.ino.bin` and `build/button.ino.partitions.bin` are built from
+`firmware/button/button.ino` with Arduino CLI 1.5.1 and esp32:esp32 3.3.12, fqbn
+`esp32:esp32:esp32s3`. That is the ESP32S3 Dev Module defaults: USB CDC on boot disabled, PSRAM
+disabled, 4MB flash, the default partition table, QIO 80MHz, and the sketch on core 1. The
+sketch is copied into an empty temporary directory and compiled from there, with
+`SOURCE_DATE_EPOCH=1767225600` and
+`-ffile-prefix-map=$work=/src -ffile-prefix-map=$build=/build -ffile-prefix-map=$HOME/.arduino15=/arduino15`
+on the C, C++ and assembler flags. `$work` is that directory, `$sketch` is `$work/button`,
+`$build` is the build directory and `$out` is the output directory. The command, run with `$work`
+as the working directory, is `SOURCE_DATE_EPOCH=1767225600 arduino-cli compile --clean --fqbn esp32:esp32:esp32s3 --jobs 2 --build-path "$build" --output-dir "$out" --build-property "compiler.c.extra_flags=$map" --build-property "compiler.cpp.extra_flags=$map" --build-property "compiler.S.extra_flags=$map" "$sketch"`.
+Two such builds in different directories are the same bytes. The app is 301696 bytes,
+8fff3bc353ce8a857959f81216a382887adbd50b0aad382039cd855b1d22bf5b. The ELF is
+df3d5cb3419eb722a2ed69a58e7c7d064e6d9e5151f789270bfcbb2e3a78392d. The partition table is 3072
+bytes, 148b959cbff1c38aa8e1d5c0ba9d612c54997b945e56a63f41223eef650653a1. The chip starts where
+the bootloader leaves the app, so the image needs neither the bootloader nor the merged binary.
+
+The sketch links the Arduino-ESP32 core. The core is free software under the GNU Lesser General
+Public License, version 2.1 or any later version, whose text is in LICENSE-runtime. Its package
+is the one Arduino publishes as esp32:esp32 3.3.12. The sketch is under MIT or Apache-2.0, and
+those terms permit modifying the image and reverse engineering it to debug such modifications.
+
+The image also links ESP-IDF's components, the ones that core builds with. They are under the
+Apache License 2.0, whose text is in LICENSE-apache, apart from the files whose headers name
+other terms. Among those, the FreeRTOS kernel is under the MIT License, reproduced with its
+notice in LICENSE-freertos, and the Xtensa core HAL under the notice reproduced in
+LICENSE-xtensa. The FreeRTOS Xtensa port and the Xtensa interrupt, context and vector files are
+under that same notice, with the line Copyright (c) 2015-2019 Cadence Design Systems, Inc. The
+TLSF heap allocator is under the BSD-3-Clause License, reproduced with its notice in
+LICENSE-tlsf, and the undefined behaviour sanitizer hooks under the BSD-2-Clause terms
+reproduced with their notice in LICENSE-ubsan. The image also holds routines of the toolchain's
+C library, newlib, under the notices of LICENSE-newlib, and of the compiler's support library,
+under the GCC Runtime Library Exception. The image also links Mbed TLS's platform_util.c from
+libmbedcrypto.a (mbedtls_platform_zeroize), Copyright The Mbed TLS Contributors, which ESP-IDF
+carries under Apache-2.0 OR GPL-2.0-or-later, used here under the Apache License 2.0.
+
+These files and their licences:
+
+`block.jsonc`, `README.md`, `scene.jsonc`, `firmware/NOTICE`, `firmware/button/button.ino` and
+`tests/button.test` are under MIT OR Apache-2.0.
+
+`build/button.ino.bin`, `build/button.ino.partitions.bin` and `firmware/LICENSE-runtime` are
+under LGPL-2.1-or-later.
+
+`firmware/LICENSE-apache` is under Apache-2.0. `firmware/LICENSE-freertos` is under MIT.
+`firmware/LICENSE-tlsf` is under BSD-3-Clause. `firmware/LICENSE-newlib` holds newlib's notices.
+`firmware/LICENSE-ubsan` is under BSD-2-Clause. `firmware/LICENSE-xtensa` is under the notice
+in that file.

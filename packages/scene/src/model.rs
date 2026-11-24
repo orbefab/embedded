@@ -25,8 +25,9 @@ const SCENE_KEYS: &[&str] = &[
 /// a number param, `"by"` on a joint, and a capacitor's `ratings` and `series_resistance`.
 /// Format 5 is format 4 plus a rating's `basis`, a capacitor's `series_resistance` as
 /// `tan_delta` at a `frequency`, a regulator's `ratings.input_voltage`, an op-amp's `ratings`, a
-/// BJT's `forward_knee_current`, and a `ws2812`'s `draw`.
-pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5];
+/// BJT's `forward_knee_current`, and a `ws2812`'s `draw`. Format 6 is format 5 plus a reading
+/// `"of": "screen"` and `view.screen`.
+pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5, 6];
 /// Scene `format` values this binary reads.
 pub const SCENE_FORMATS: &[u32] = &[1];
 /// The oldest part format whose file params take `"as": "blob"`.
@@ -40,6 +41,10 @@ const FIELD_FORMAT: u32 = 4;
 /// The oldest part format that carries the keys orbe 0.2.0 and 0.2.1 refuse, so those binaries
 /// ask for a newer orbe.
 const BASIS_FORMAT: u32 = 5;
+/// The oldest part format whose readings take `"of": "screen"` and whose view takes `screen`.
+const SCREEN_FORMAT: u32 = 6;
+/// The engine kinds that show a screen, which a reading `"of": "screen"` reads.
+const SCREEN_KINDS: [&str; 1] = ["ssd1306"];
 const WIRE_KINDS: &[&str] = &["jumper", "trace", "contact"];
 /// A live session's stop, investigation 1's 2-hour cap.
 pub const STOP_PS: u64 = 7_200 * 1_000_000_000_000;
@@ -537,6 +542,7 @@ pub(crate) fn decode_part(
             "readings" => {
                 decode_names(value, "reading", out);
                 check_rgb(value, format, out);
+                check_screen(value, format, out);
             }
             "not_simulated" => part.not_simulated = decode_not_simulated(value, out),
             "buy" => crate::buy::check(value, out),
@@ -561,6 +567,7 @@ pub(crate) fn decode_part(
     }
     if let Some(readings) = root.get("readings") {
         check_rgb_kind(readings, part.model.as_ref(), out);
+        check_screen_kind(readings, part.model.as_ref(), out);
     }
     if let Some(params) = root.get("params") {
         part.params = decode_params(params, &part, format, out);
@@ -1376,10 +1383,28 @@ fn decode_pins(node: &Node, out: &mut Findings) -> Vec<Pin> {
     pins
 }
 
+/// Names of the LED bodies in a part whose `model` is several engine parts. A single
+/// `"kind": "led"` model has no body name.
+fn model_led_names(root: &Node) -> Vec<&str> {
+    let Some(model) = root.get("model") else {
+        return Vec::new();
+    };
+    if model.get("kind").is_some() {
+        return Vec::new();
+    }
+    model
+        .props()
+        .unwrap_or_default()
+        .iter()
+        .filter(|prop| prop.value.get("kind").and_then(Node::str) == Some("led"))
+        .map(|prop| prop.key.as_str())
+        .collect()
+}
+
 /// Each name a part file gives to another of its own sections: `controls.press.joint` to a key
-/// of `joints`, each `view.glow` entry's `by` to a reading, and each `view.tint` and
-/// `view.recolour` entry's `by` and each joint's `by` to a param. A section that is not an
-/// object has its own finding.
+/// of `joints`, each `view.glow` entry's `by` to a reading or to a named LED in `model`, and
+/// each `view.tint` and `view.recolour` entry's `by` and each joint's `by` to a param. A
+/// section that is not an object has its own finding.
 fn check_own_names(root: &Node, out: &mut Findings) {
     let press = root.get("controls").and_then(|c| c.get("press"));
     let mut names: Vec<(&Node, &str, &str)> = press
@@ -1395,10 +1420,12 @@ fn check_own_names(root: &Node, out: &mut Findings) {
             .map(|by| (by, "params", "param")),
     );
     let view = root.get("view");
+    let glow_bodies = model_led_names(root);
     for (list, section, what) in [
         ("glow", "readings", "reading"),
         ("tint", "params", "param"),
         ("recolour", "params", "param"),
+        ("screen", "readings", "reading"),
     ] {
         let entries = view.and_then(|v| v.get(list)).and_then(Node::items);
         let by = entries
@@ -1414,7 +1441,7 @@ fn check_own_names(root: &Node, out: &mut Findings) {
             found => found.flatten().unwrap_or_default(),
         };
         let keys: Vec<&str> = props.iter().map(|p| p.key.as_str()).collect();
-        if keys.contains(&name) {
+        if keys.contains(&name) || (section == "readings" && glow_bodies.contains(&name)) {
             continue;
         }
         let hint = match keys.as_slice() {
@@ -1583,6 +1610,64 @@ fn check_rgb_kind(readings: &Node, model: Option<&Node>, out: &mut Findings) {
                 "read a colour only from an addressable LED, whose \"model\" has \"kind\": \"ws2812\"".to_string(),
             );
         }
+    }
+}
+
+/// Each reading `"of": "screen"`, by its key and its `of` node.
+fn screen_readings(readings: &Node) -> impl Iterator<Item = (&str, &Node)> {
+    readings
+        .props()
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|prop| {
+            let of = prop
+                .value
+                .get("of")
+                .filter(|of| of.str() == Some("screen"))?;
+            Some((prop.key.as_str(), of))
+        })
+}
+
+/// A reading `"of": "screen"` is a part format 6 reading.
+fn check_screen(readings: &Node, format: u32, out: &mut Findings) {
+    if format >= SCREEN_FORMAT {
+        return;
+    }
+    for (key, of) in screen_readings(readings) {
+        out.push(
+            Code::Syntax,
+            of.span,
+            format!("reading `{key}` takes \"of\": \"screen\" only in part format {SCREEN_FORMAT}; this file is format {format}"),
+            format!("set \"format\": {SCREEN_FORMAT} in this part file"),
+        );
+    }
+}
+
+/// Only a screen controller has a screen, so `"of": "screen"` needs a model of a kind that
+/// shows one.
+fn check_screen_kind(readings: &Node, model: Option<&Node>, out: &mut Findings) {
+    let kind = model.and_then(|m| m.get("kind")).and_then(Node::str);
+    if kind.is_some_and(|kind| SCREEN_KINDS.contains(&kind)) {
+        return;
+    }
+    for (key, of) in screen_readings(readings) {
+        out.push(
+            Code::Syntax,
+            of.span,
+            format!(
+                "reading `{key}` takes \"of\": \"screen\" only on a part whose model shows a screen"
+            ),
+            format!(
+                "read a screen only from a part whose \"model\" has \"kind\": {}",
+                and_list(
+                    &SCREEN_KINDS
+                        .map(|kind| format!("\"{kind}\""))
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                )
+            ),
+        );
     }
 }
 

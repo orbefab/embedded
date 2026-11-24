@@ -12,6 +12,12 @@ Wire.h also links the runtime's Wire library, from the same archive and under th
 directory are under the repository's MIT or Apache-2.0 terms, and those terms permit modifying
 each image and reverse engineering it to debug such modifications.
 
+`ssd1306_power.hex` also links Adafruit SSD1306 2.5.17, under the BSD 3-clause license, and
+Adafruit GFX 1.13.0, under the BSD 2-clause license. Their notices are in the `nano-oled` Block,
+`blocks/nano-oled/firmware/LICENSE-ssd1306` and `LICENSE-gfx`. Adafruit_GFX.h includes the
+headers of Adafruit BusIO 1.17.4, under the MIT license, and the image holds none of its code.
+`packages/engine/scripts/sketches.sh` pins those three archives.
+
 The images also hold the start-up code of the toolchain's C library, version 2.0.0, under that
 library's modified BSD license, whose notice is reproduced in full in LICENSE-libc as the license
 requires, and routines of the compiler's support library, under the GCC Runtime

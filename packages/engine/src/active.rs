@@ -19,7 +19,9 @@ pub(crate) mod spi;
 #[cfg(test)]
 pub(crate) mod spi_pins;
 
-use crate::device::{bmp280, cst816, dht22, pulses_replay, spi_replay, st77916, ws2812};
+use crate::device::{
+    bmp280, cst816, dht22, hc595, pulses_replay, spi_replay, ssd1306, st77916, ws2812,
+};
 use crate::mcu::{self, Mcu, atmega328p, esp32s3};
 use native::Hosted;
 
@@ -162,8 +164,10 @@ impl Takes {
 /// - Each record a core sends ends at a stop with `record` set, and the core holds it from that
 ///   stop until `drain_records` takes it. A core numbers its records from 0, and the count
 ///   carries in its copies.
-/// - A core that takes records makes its display rows only in `take`, at the landing's time,
-///   and holds them until `drain_rows` takes them.
+/// - A core makes each display row at the time of the call that closed the write, and holds
+///   it until `drain_rows` takes it. A core that takes records makes them only in `take`, at the
+///   landing's time. A device on a bus, such as an I2C target, makes one in the call that closes
+///   it, which may be an input on a twin, before the landing that commits it.
 /// - `input`, `take`, `deliver`, `drain_records` and `drain_rows` read nothing but the core and
 ///   their arguments, so they take two equal cores to two equal cores. A clone shares only what
 ///   no call writes: the AVR core's flash and decoded ops behind an `Arc`, a replay's records,
@@ -217,6 +221,16 @@ impl Core {
             Core::Mcu(ref mcu) => mcu.drive(),
             #[cfg(test)]
             Core::Script(ref core) => core.drive(),
+        }
+    }
+
+    /// [`orbe_model::Device::MIN_SUPPLY_V`], or `None` for a core that drives at any supply.
+    pub(crate) fn min_supply_v(&self) -> Option<f64> {
+        match *self {
+            Core::Device(ref core) => core.min_supply_v(),
+            Core::Mcu(_) => None,
+            #[cfg(test)]
+            Core::Script(_) => None,
         }
     }
 
@@ -412,16 +426,24 @@ pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
         Active::SpiReplay(replay) => spi_replay::chip(part, replay),
         Active::PulsesReplay(replay) => pulses_replay::chip(part, replay),
         Active::St77916(panel) => st77916::chip(part, panel),
+        Active::Ssd1306(panel) => ssd1306::chip(part, panel),
         Active::Cst816(dev) => cst816::chip(part, dev),
         Active::Dht22(dev) => dht22::chip(part, dev),
         Active::Bmp280(dev) => bmp280::chip(part, dev),
+        Active::Hc595(dev) => hc595::chip(part, dev),
         Active::Esp32s3(mcu) => esp32s3::chip(part, mcu),
         Active::Ws2812(chain) => ws2812::chip(part, chain),
     }
 }
 
+/// Whether `vcc` over `gnd` is below the supply at which `core` still drives.
+pub(crate) fn supply_released(core: &Core, vcc: f64, gnd: f64) -> bool {
+    core.min_supply_v().is_some_and(|min| vcc - gnd < min)
+}
+
 /// The drops are sources, so they scale. A device's draw is linearised at `x`, the iterate:
-/// its current there, and its slope as a conductance.
+/// its current there, and its slope as a conductance. A device below its minimum supply
+/// stamps no stage: its [`Core::drive`] image stays, and the pins are released.
 pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, x: &Solution, source_scale: f64) {
     let drive = core.drive();
     debug_assert_eq!(drive.len(), chip.outputs.len());
@@ -440,6 +462,9 @@ pub(crate) fn stamp(chip: &Chip, core: &Core, sys: &mut System, x: &Solution, so
         if let Some(ohm) = output.leakage {
             sys.conductance(output.pin, output.vcc, 1.0 / ohm);
             sys.conductance(output.pin, output.gnd, 1.0 / ohm);
+        }
+        if supply_released(core, x.voltage(output.vcc), x.voltage(output.gnd)) {
+            continue;
         }
         if let Some(ohm) = output.pull_down
             && pulled_down.get(n) == Some(&true)
@@ -553,8 +578,8 @@ struct Staging {
 /// receivers. The committed core then holds no record, and a run again from it makes only
 /// records after its commit.
 ///
-/// A display row is made only where a core takes records, in a landing that commits it at
-/// once, and that commit stages it. So the committed core holds no row.
+/// A display row is made at or before the landing that commits it, and that commit stages it
+/// with its own time. So the committed core holds no row.
 struct Delivered {
     through: Time,
     /// The index in `Actives::usarts` of the chip's first USART.
@@ -624,12 +649,12 @@ impl Delivered {
         self.records = to;
     }
 
-    /// Stages each display row the copy made, all at `at`, and drops it from the copy. Only
-    /// `Ahead::commit` calls this.
+    /// Stages each display row the copy made, each at its own time, at or before `at`, and drops
+    /// it from the copy. Only `Ahead::commit` calls this.
     fn take_rows(&self, core: &mut Core, at: Time, staged: &mut Staging) {
         let part = self.display;
         core.drain_rows(|made, row| {
-            debug_assert_eq!(made, at, "a row is made at the landing that commits it");
+            debug_assert!(made <= at, "a row is made by the landing that commits it");
             staged.rows.push(Rectangle {
                 at: made,
                 part,

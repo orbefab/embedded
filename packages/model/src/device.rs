@@ -32,6 +32,9 @@ pub trait Device: State {
     /// The world quantities it reads with [`Cx::world`]. A scene with a part of this device
     /// declares each one. None, unless it says otherwise.
     const WORLD: &'static [Quantity] = &[];
+    /// Volt. Below this supply the host stamps every output off. [`Device::drive`] still
+    /// reports the logical level. `None` drives at any supply.
+    const MIN_SUPPLY_V: Option<f64> = None;
     /// Parses the part's logic params. Electrical params never reach the device.
     fn new(params: &Params<'_>) -> Result<Self, Error>;
     /// The first time in `(reached, limit]` where the drives may change or a sample is due.
@@ -101,8 +104,11 @@ pub enum Shows {
         kind: &'static str,
         order: &'static str,
     },
-    /// A screen of `width` by `height` pixels whose frame memory holds each pixel in `format`,
-    /// such as `rgb565`. `kind` names its controller, such as `st77916`.
+    /// A screen of `width` by `height` pixels whose frame memory holds each pixel in `format`:
+    /// `rgb565`, two bytes a pixel, rows top to bottom and each row left to right, or `mono-pages`,
+    /// one bit a pixel in pages of 8 rows, where byte `page * width + column` holds rows
+    /// `8 * page` to `8 * page + 7`, bit 0 the top one. `kind` names its controller, such as
+    /// `st77916` or `ssd1306`.
     Screen {
         kind: &'static str,
         width: u16,
@@ -117,7 +123,7 @@ pub enum View<'a> {
     Nothing,
     /// Three bytes per LED, LED 0 first, in the declared order.
     Leds(&'a [u8]),
-    /// The frame memory, rows top to bottom, each row left to right, and the panel's state.
+    /// The frame memory in the declared format, and the panel's state.
     Screen {
         frame: &'a [u8],
         panel: Panel,
@@ -133,14 +139,67 @@ pub struct Panel {
     /// Its reset pin reads low.
     pub reset: bool,
     pub asleep: bool,
-    /// The memory access control byte, which orders and mirrors writes.
-    pub madctl: u8,
-    /// The pixel format byte.
-    pub colmod: u8,
+    /// The controller's own settings, such as the ST77916's `madctl` or the SSD1306's
+    /// `contrast`: what a reader needs besides the flags to draw the glass from the frame memory.
+    pub settings: Settings,
     /// How many registers hold a write it stores and does not run.
     pub registers: u16,
     /// The last duty its backlight pin took, `None` before the first.
     pub backlight: Option<Duty>,
+}
+
+/// A screen controller's own settings, each a name and a value, in the order the controller
+/// declares them. At most [`Settings::MAX`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Settings {
+    names: &'static [&'static str],
+    values: [u16; Settings::MAX],
+}
+
+impl Settings {
+    /// The most settings a panel carries.
+    pub const MAX: usize = 12;
+
+    /// `values[k]` is the setting `names[k]`. Panics when there are more than
+    /// [`MAX`](Self::MAX).
+    pub const fn new<const N: usize>(
+        names: &'static [&'static str; N],
+        values: [u16; N],
+    ) -> Settings {
+        assert!(N <= Settings::MAX, "a panel carries at most 12 settings");
+        let mut all = [0; Settings::MAX];
+        let mut k = 0;
+        while k < N {
+            all[k] = values[k];
+            k += 1;
+        }
+        Settings { names, values: all }
+    }
+
+    /// The value of the setting `name`.
+    pub fn get(&self, name: &str) -> Option<u16> {
+        self.iter()
+            .find(|&(setting, _)| setting == name)
+            .map(|(_, value)| value)
+    }
+
+    /// Each setting and its value, in declaration order.
+    pub fn iter(&self) -> impl Iterator<Item = (&'static str, u16)> + '_ {
+        self.names.iter().copied().zip(self.values)
+    }
+}
+
+/// A map of each name to its value, in declaration order.
+#[cfg(feature = "serde")]
+impl serde::Serialize for Settings {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(self.names.len()))?;
+        for (name, value) in self.iter() {
+            map.serialize_entry(name, &value)?;
+        }
+        map.end()
+    }
 }
 
 /// A pixel write a screen closed: its window, both ends included, before any mirroring, the
@@ -159,6 +218,12 @@ pub struct Drawn {
 /// address the device declares, drives SDA for each ACK and each read bit, and holds SDA's
 /// timing. The device sees only transfers and bytes.
 pub trait I2cTarget: Device {
+    /// Whether this target answers its address. A target that is not awake leaves the address
+    /// unacknowledged, and the host calls nothing else for that transfer. Awake, unless it
+    /// says otherwise.
+    fn awake(&self) -> bool {
+        true
+    }
     /// The master addressed this target, to write to it or to read from it.
     fn start(&mut self, _cx: &mut Cx, _at: Time, _dir: Dir) {}
     /// A byte the master wrote. The host ACKs it on [`Ack::Yes`].
@@ -169,11 +234,6 @@ pub trait I2cTarget: Device {
     fn master_ack(&mut self, _cx: &mut Cx, _at: Time, _more: bool) {}
     /// A STOP.
     fn stop(&mut self, _cx: &mut Cx, _at: Time) {}
-    /// Whether an address match is answered. A sensor whose supply is outside its operating
-    /// range says no, and the host leaves SDA released for that address.
-    fn answers(&self) -> bool {
-        true
-    }
 }
 
 /// A device on a pulsed line. The host watches the line, times each level, and calls the device

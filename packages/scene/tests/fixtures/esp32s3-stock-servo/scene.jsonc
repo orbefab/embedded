@@ -1,0 +1,20 @@
+// GPIO18 drives an LED through LEDC: a 50 Hz, 14-bit signal of 1.0, 1.5 and 2.0 ms pulses.
+// The app is the stock sketch packages/engine/tests/firmware/esp32s3/arduino/stock/servo.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+    "led1": { "type": "led-5mm" }
+  },
+  "wires": [
+    ["board.GPIO18", "r1.a"],
+    ["r1.b", "led1.anode"],
+    ["led1.cathode", "board.GND"]
+  ],
+  "ground": "board.GND"
+}

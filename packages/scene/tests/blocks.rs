@@ -84,10 +84,14 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
         for key in ["title", "summary", "license"] {
             assert!(non_empty_text(&block[key]), "{id}: {key}");
         }
-        let license = if id == "nano-neopixel-stick" {
-            "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND LGPL-3.0-or-later"
-        } else {
-            "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
+        let license = match id {
+            "nano-neopixel-stick" => {
+                "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND LGPL-3.0-or-later"
+            }
+            "nano-oled" => {
+                "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND BSD-2-Clause"
+            }
+            _ => "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
         };
         assert_eq!(
             block["license"], license,
@@ -121,6 +125,7 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
         assert_eq!(boards.len(), 1, "{id}: the scene holds one `{board}`");
 
         let written = read_jsonc(&scene);
+        let notice = fs::read_to_string(dir.join("firmware/NOTICE")).unwrap();
         for (name, part) in written["parts"].as_object().unwrap() {
             if let Some(firmware) = part.get("firmware") {
                 let firmware = firmware.as_str().unwrap();
@@ -130,11 +135,22 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
                         && dir.join(firmware).is_file(),
                     "{id}: `{name}` runs `{firmware}`, the file arduino-cli writes under build/"
                 );
-                let notice = fs::read_to_string(dir.join("firmware/NOTICE")).unwrap();
                 assert!(
                     notice.contains(firmware),
                     "{id}: firmware/NOTICE does not name `{firmware}`"
                 );
+            }
+            for key in ["app", "partitions"] {
+                if let Some(image) = part.get(key).and_then(|value| value.as_str()) {
+                    assert!(
+                        image.starts_with("build/") && dir.join(image).is_file(),
+                        "{id}: `{name}` {key} `{image}` is not a file under build/"
+                    );
+                    assert!(
+                        notice.contains(image),
+                        "{id}: firmware/NOTICE does not name `{image}`"
+                    );
+                }
             }
         }
         assert!(
@@ -155,11 +171,21 @@ fn each_block_ships_the_image_arduino_cli_writes() {
         let mut images = 0;
         for file in fs::read_dir(&build).unwrap() {
             let name = file.unwrap().file_name().into_string().unwrap();
-            let Some(sketch) = name.strip_suffix(".ino.hex") else {
+            let sketch = name
+                .strip_suffix(".ino.hex")
+                .or_else(|| name.strip_suffix(".ino.bin"));
+            let Some(sketch) = sketch else {
                 continue;
             };
             let source = firmware.join(format!("{sketch}/{sketch}.ino"));
             assert!(source.is_file(), "{}", source.display());
+            if name.ends_with(".ino.bin") {
+                assert!(
+                    build.join(format!("{sketch}.ino.partitions.bin")).is_file(),
+                    "{}: the app has no partition table",
+                    build.display()
+                );
+            }
             images += 1;
         }
         assert!(images > 0, "{}", build.display());
@@ -210,6 +236,18 @@ fn each_block_notice_names_the_runtime_sketches_sh_pins_and_where_the_site_serve
     );
     for dir in block_dirs() {
         let notice = fs::read_to_string(dir.join("firmware/NOTICE")).unwrap();
+        let board = read_jsonc(&dir.join("block.jsonc"))["board"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        if board == "esp32s3-devkitc-1" {
+            assert!(
+                notice.contains("esp32:esp32 3.3.12") && notice.contains("esp32:esp32:esp32s3"),
+                "{} notice does not name the ESP32S3 Dev Module core and fqbn",
+                dir.display()
+            );
+            continue;
+        }
         assert!(
             notice.contains(&hosted),
             "{} notice does not name {hosted}, where scripts/site.sh serves the source",

@@ -12,9 +12,10 @@ The app of `packages/engine/tests/firmware/esp32s3/idf/encoder` counts the closi
 `esp_timer` polls both pins and prints `poll a=<n> b=<m>` for each press it counts.
 
 `traces/serial.csv` must hold `encoder ready` before the first closing, then one `edge` line for
-each closing in the netlist's events, in time order, with the counts after that closing. The
-SYSTIMER counts from the run's start, so `t` is the run's time in microseconds, and it must lie
-from the closing's microsecond to `LATENCY_US` after it. The `poll` lines must hold the same counts
+each closing in the netlist's events, in time order, with the counts after that closing. Boot
+resets SYSTIMER `BOOT_RESET_US` microseconds into the run, and `esp_timer` reads that count, so
+`t` is the closing's microsecond minus `BOOT_RESET_US`, to `LATENCY_US` after that. The `poll`
+lines must hold the same counts
 in the same order, each printed from `POLL_US` to two periods and `PRINT_SLACK_US` after its closing,
 and the last counts must be each contact's number of closings. The run must
 hold no error, and its `manifest.json` must list the netlist's ROM, then each flash region with
@@ -39,6 +40,8 @@ US_PS = 10**6
 # The interrupt's entry, IDF's dispatch and `esp_timer_get_time` take a few hundred cycles at
 # 240 MHz, and the timer reads whole microseconds.
 LATENCY_US = 10
+# The app's boot pulse of SYSTIMER_RST, measured as run time minus the printed `t`.
+BOOT_RESET_US = 9026
 POLL_US = 3000
 # The timer counts a press at its second low read, one to two periods after the closing. Its
 # dispatch, the queue and the print add a fraction of a millisecond, so a third of a period is
@@ -94,7 +97,7 @@ def check_console(got: list[tuple[int, str]], closed: list[tuple[int, int]]) -> 
         counts[k] += 1
         if (a, b) != tuple(counts):
             raise ValueError(f"the edge at {at} ps counts a={a} b={b}, not a={counts[0]} b={counts[1]}")
-        start = at // US_PS
+        start = at // US_PS - BOOT_RESET_US
         if not start <= t <= start + LATENCY_US:
             raise ValueError(f"the edge at {at} ps took the time {t} us, not {start} to {start + LATENCY_US} us")
     if [counts for _, counts in polls] != [(a, b) for a, b, _ in edges]:

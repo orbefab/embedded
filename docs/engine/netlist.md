@@ -1110,6 +1110,65 @@ A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.u
 
 A `cst816` has no `ratings` object and no `i`, `v`, or `p`. Its logic signals are `SCL`, `SDA`, `INT` and `RST`. It joins `SDA` to `GND` and `INT` to `GND` through the stage its drive stamps. `SCL`, `RST` and `VCC` draw no current, so each needs another DC path.
 
+### SSD1306
+
+`kind` is `ssd1306`, the controller of a 128 by 64 monochrome OLED panel on I2C. It is an active chip with no clock of its own, and an I2C target at `address`, 0x3C or 0x3D, the two addresses `SA0` selects. Pins are `VDD`, `VSS`, `SCL`, `SDA` and `RES`. Every pin is required. `SDA` is open drain into `VSS`, `low_drop` over `VSS` behind `low_resistance`. `SCL` and `RES` are inputs, and the part holds neither, as [engine.md](engine.md#i2c-targets) says. `RES` reads high above `input_threshold.high` times `V(VDD) - V(VSS)` over `VSS`, and low at or below `input_threshold.low` times it, and so do `SCL` and `SDA`.
+
+`blocks/nano-oled` puts one, inside the `oled-ssd1306-128x64` module, on a Nano that runs Adafruit SSD1306 2.5.17. The panel part the module's part writes is:
+
+```json
+{
+  "name": "oled__display",
+  "kind": "ssd1306",
+  "pins": { "VDD": "v3v3", "VSS": "gnd", "SCL": "scl", "SDA": "sda", "RES": "res" },
+  "address": 60,
+  "low_drop": { "value": 0.0, "unit": "V" },
+  "low_resistance": { "value": 133.333, "unit": "ohm" },
+  "input_threshold": {
+    "low": { "value": 0.2, "unit": "1" },
+    "high": { "value": 0.8, "unit": "1" }
+  },
+  "draw": {
+    "sleep_current": { "value": 1e-6, "unit": "A" },
+    "logic_current": { "value": 0.00018, "unit": "A" },
+    "half_lit_current": { "value": 0.0173, "unit": "A" },
+    "all_lit_current": { "value": 0.0231, "unit": "A" },
+    "holds_above": { "value": 1.65, "unit": "V" }
+  }
+}
+```
+
+`low_resistance` of 133.333 ohm is the I2C bus's 0.4 V at 3 mA. `input_threshold` of 0.2 and 0.8 is the datasheet's input low and high voltage over `VDD`. `draw` is UG-2864HSWEG01 section 3.2: 1 uA asleep, 180 uA of logic, and the charge pump's VBAT current of 17.3 mA with half the display area on and 23.1 mA with all of it, held above the 1.65 V logic minimum.
+
+The model is the controller's I2C command set and its 1024-byte GDDRAM, page `p` of 8 rows at bytes `128p` to `128p + 127`, bit 0 the page's top row.
+
+- A write transfer starts with a control byte. Bit 7 is Co and bit 6 is D/C#. With Co clear every byte to the STOP is a command byte, or a data byte with D/C# set. With Co set one byte follows, and then another control byte. A control byte with any of its low six bits set still counts, rule `command`.
+- A command takes its parameter bytes from the command stream, across transfers. Adafruit SSD1306 sends some parameters in a transfer of their own, so a STOP leaves a command waiting for its parameters.
+- A data byte writes the GDDRAM at the address pointer, the column and the page. With segment remap, `A1h`, column `c` writes byte `127 - c` of its page, so the remap is in the GDDRAM, as the datasheet has it. The pointer then moves by the addressing mode, `20h`. Page mode, the reset mode, moves along the page and wraps to the column `00h` to `0Fh` and `10h` to `17h` set, on the same page. Horizontal mode moves along the column window `21h` sets, then to the next page of the page window `22h` sets, then back to the window's first page. Vertical mode moves down the page window, then to the next column. `21h` and `22h` also move the pointer to the window's start. `B0h` to `B7h` set the page. A run of data bytes is one row of `traces/display.csv` when the next command, START or STOP closes it, with the window it began in, as [run-folder.md](run-folder.md#traces) says.
+- `AEh` and `AFh` clear and set the display flag. `A6h` and `A7h` clear and set the inverted flag. `A4h` and `A5h`, entire display on, `40h` to `7Fh`, the display start line, `81h`, contrast, `8Dh`, the charge pump, `A8h`, the multiplex ratio, `D3h`, the display offset, `C0h` and `C8h`, the COM scan direction, and `DAh`, the COM pins configuration, set the panel's settings of those names. [run-folder.md](run-folder.md#what-the-glass-shows) says how each moves what the glass shows.
+- `D5h`, `D9h` and `DBh`, the clock, the precharge and the VCOMH level, are stored and change nothing. `registers` in the panel state is how many of the three took a write. `E3h` is a no-op, and so is `2Eh`, deactivate scroll.
+- The scroll commands, `26h`, `27h`, `29h`, `2Ah`, `2Fh` and `A3h`, take their parameters and change nothing, rule `scroll`. A read transfer is answered with 0xFF bytes, rule `read`, since the model has no status byte. Addressing mode 3, a multiplex ratio below 15 and every command the datasheet does not list change nothing, rule `command`.
+- `RES` low resets every register, drops a waiting command and an open run with no row, and keeps the GDDRAM, as the datasheet says. The reset values are display off, contrast 0x7F, page mode, column window 0 to 127, page window 0 to 7, multiplex ratio 63, COM pins 0x12 and the charge pump off, 0x10. The GDDRAM is all zero bytes at power-on.
+- The controller answers the bus while `V(VDD) - V(VSS)` is at least 1.65 V, Table 12-1's logic minimum, that end included. Below it the bus sees no ACK and the glass is dark. Falling below it loses the GDDRAM. Rising back to it resets the controller: the registers take the values above and the GDDRAM stays empty, which is what the static RAM holds with its supply gone. There is no upper bound. Table 12-1's recommended maximum is 3.3 V and Table 11-1's absolute maximum is 4.0 V. The module's regulator, from 5 V, sits a few millivolts over the first, and the controller runs there, as those modules do. Over 4.0 V the controller keeps answering and drawing, the way a real part mostly does past its ratings. The part carries no `VDD` rating, so a supply over 4.0 V does not warn yet. The panel's `VCC` is 7 V to 15 V in Table 12-1. The charge pump makes it, section 8.10, and the glass stays dark unless the pump is on, so a controller below the minimum lights nothing. `packages/engine/tests/circuit/runs/ssd1306.rs` runs `packages/engine/tests/firmware/sketch/ssd1306_power.hex` across that minimum. The module's VCC source is 0 V until 40 ms, the controller does not acknowledge, and the frame stays empty. After VCC steps to 5 V the regulator is over the minimum, the address is acknowledged and `begin` prints `BEGIN 1`. The same file runs `blocks/nano-oled/build/hello.ino.hex` with `VDD` on 5 V: every address is acknowledged and the frame is drawn.
+- The controller waits for nothing. The 100 ms a real panel needs after the charge pump turns on is not kept.
+
+A command that breaks a rule is the warning `chip.protocol`, once per rule at its first time. [diagnostics.md](diagnostics.md) has it.
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `address` | | 0x3C or 0x3D, else rule `unsupported` |
+| `low_resistance` | `ohm` | the resistor's |
+| `low_drop` | `V` | at least 0, else rule `non_negative` |
+| `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+| `draw.sleep_current`, `draw.logic_current`, `draw.half_lit_current`, `draw.all_lit_current` | `A` | at least 0, else rule `non_negative` |
+| `draw.holds_above` | `V` | greater than 0, else rule `positive` |
+
+A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
+
+`draw` is optional, and all five of its keys are required when it is there. With it, the panel draws a current from `VDD` into `VSS`, its logic and its charge pump together, since the modules tie `VBAT` to `VDD`. With the display off, `RES` low, or `VDD` under the logic minimum it is `sleep_current`. With the display on it is `logic_current`, and while the charge pump is on, `8Dh` bit 2, it adds the pump's current for the pixels the glass lights: the line through `half_lit_current` at half of them and `all_lit_current` at all of them, at no less than 0. The panel part's line gives 11.5 mA with none lit, where the sheet gives no figure. The lit pixels are the ones [run-folder.md](run-folder.md#what-the-glass-shows) draws with the display on, counted at each STOP and at each power or `RES` change, so a frame changes the draw a transfer at a time. The draw holds while `V(VDD) - V(VSS)` is at least `holds_above`, fades below it as a `ws2812`'s does, and takes effect 1 ps after the call that changed it. Without `draw` the panel draws nothing. `runs::ssd1306::opening_the_vcc_wire_under_a_lit_panel_drops_its_rail_and_darkens_the_glass` opens a switch in the module's VCC wire at 200 ms under the Block's frame. The regulator held 3.3 V, and the lit panel drains C6, C7 and C8 under 1.65 V within a millisecond, so the GDDRAM is lost and the glass stays dark. The Nano's 35.7 kohm pull-ups then charge the 3.3 V rail through the module's 4.7 kohm with the controller asleep, at about 15 uA a line, so it acknowledges its address again with an empty, dark glass.
+
+An `ssd1306` has no `ratings` object and no `i`, `v`, or `p`. Its logic signals are `SCL`, `SDA` and `RES`. It joins `SDA` to `VSS` through the stage its drive stamps. `SCL` and `RES` draw no current, so each needs another DC path, and so does `VDD`, whose draw is a current.
+
 ### WS2812
 
 `kind` is `ws2812`, a chain of addressable LEDs on one data pin. It is an active chip with no clock of its own. It watches `DIN` and takes the `Pulses` records on that net, as [engine.md](engine.md#records) says. Pins are `VCC`, `GND` and `DIN`, each required, and `DOUT`, which a part wires exactly when it gives `dout`. Each LED takes the next 24 bits. Without `dout` the bits past the last LED are discarded, and with it they go on through `DOUT`. Green is the first byte, then red, then blue, most significant bit first. A low longer than the reset latches the colours into `observations.json` and `traces/leds.csv`.
@@ -1220,6 +1279,25 @@ A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.u
 `ratings.supply_voltage` is the ceiling on `VDD` and `VDDIO` over `GND`. `ratings.pin_margin` is how far any pin but `GND` may sit below `GND`, and how far `CSB`, `SDI`, `SCK` and `SDO` may sit above `VDDIO`. A pin exactly on the edge is inside. Table 3 gives 4.25 V and 0.3 V. Past either, the pin warns [`rating.voltage`](diagnostics.md#ratingvoltage).
 
 `VDD` draws the Table 2 typical into `GND`: 0.1 µA asleep, 0.2 µA in the standby of normal mode, 325 µA while temperature is measured and 720 µA while pressure is measured. The current is full at and above the 1.71 V operating minimum and fades to none at 0 V. The part answers on I2C only while `VDD` is from 1.71 V to 3.6 V and `VDDIO` is from 1.2 V to 3.6 V, both ends included, and `CSB`, `SDI`, `SCK` and `SDO` are each from -0.3 V to `VDDIO` + 0.3 V over `GND`. A supply that leaves that range resets the part. Outside either window it leaves `SDI` released. A `bmp280` has no `i`, `v`, or `p`. Its logic signals are `SCK`, `SDI`, `CSB` and `SDO`. It joins `SDI` to `GND` through the stage its drive stamps. `VDDIO` draws no current of its own, so it needs another DC path. The draw on `VDD` is a current, so a net reached only through it still floats.
+### 74HC595
+
+`kind` is `hc595`, a 74HC595 8-bit shift register with 3-state storage outputs. It is an active chip with no clock of its own. Pins, in DIP order, are `QB`, `QC`, `QD`, `QE`, `QF`, `QG`, `QH`, `GND`, `QHp`, `SRCLR`, `SRCLK`, `RCLK`, `OE`, `SER`, `QA` and `VCC`. `QHp` is the datasheet's QH'. Every pin is required.
+
+`SER` shifts into the first stage on the rising edge of `SRCLK`. `RCLK` rising copies the shift register to the storage register, which drives `QA` to `QH`. When both clocks rise at the same time the storage register takes the shift register as it was, so the shift register stays one clock ahead. `SRCLR` low clears the shift register and leaves the storage register alone. `OE` high turns `QA` to `QH` off. `QHp` follows the shift register's last stage and stays driven. The registers power on cleared. Each change waits its propagation delay, then the drives update: 17 ns from `SRCLK` to `QHp` and from `RCLK` to `QA`–`QH`, 18 ns from `SRCLR` low to `QHp`, 15 ns for `OE` to enable and 23 ns for `OE` to disable. Those are the typicals at 4.5 V, 50 pF and 25 C.
+
+`QA` to `QH` drive through `output`, and `QHp` through `serial_output`. High is `high_drop` under `VCC` behind `high_resistance`, and low is `low_drop` over `GND` behind `low_resistance`. Below 2 V from `VCC` to `GND`, the section 6.3 recommended minimum, those stages are open and the inputs do nothing: a clock, a latch or a clear there does not change the registers. At 2 V and above the stages drive. The model has no clamp diode, so a pin above `VCC` does not charge `VCC`. The inputs read through `input_threshold`, fractions of the supply. `ratings.pin_current` bounds the current of each output, and `ratings.supply_current` bounds the current through `VCC` and through `GND`. With no `basis`, each is a 10.2 ms RMS, the same default as an `atmega328p` pin current. `ratings.input_margin` is how far `SER`, `SRCLK`, `RCLK`, `SRCLR` and `OE` may sit below `GND` and above `VCC`, and `ratings.output_margin` is the same for `QA` to `QH` and `QHp`. The part uses 0.5 V, section 6.1: an input may be -0.5 V to VCC + 0.5 V, and IIK is ±20 mA when it is outside 0 to VCC; an output has the same voltage range, and IOK is ±20 mA when it is outside 0 to VCC. A pin exactly on the edge is inside. The part keeps shifting. There is no clamp diode, so the pin stays where the circuit drives it and draws no clamp current.
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `output.high_resistance`, `output.low_resistance`, `serial_output.high_resistance`, `serial_output.low_resistance` | `ohm` | the resistor's |
+| `output.high_drop`, `output.low_drop`, `serial_output.high_drop`, `serial_output.low_drop` | `V` | at least 0, else rule `non_negative` |
+| `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+| `ratings.pin_current`, `ratings.supply_current` | `A` | greater than 0, or `null` to leave that current unrated |
+| `ratings.input_margin`, `ratings.output_margin` | `V` | greater than 0, or `null` to leave that window unrated |
+
+A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`. The `ratings` object is required. A missing key is `netlist.syntax`.
+
+An `hc595` has no `i`, `v`, or `p`. Its logic signals are `SER`, `SRCLK`, `RCLK`, `SRCLR` and `OE`. It joins each output to `VCC` and to `GND` through the stage its drive stamps, so those nets are not floating while the output is off. `VCC` draws only what the outputs source, so it needs another DC path, and so does `GND`.
 
 ### Pulses replay
 
@@ -1370,9 +1448,10 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `voltage_source` | `current` | `#<part>.i` |
 | `capacitor` | `reverse_voltage`, optional | pin `a` over pin `b` |
 | `atmega328p` | `pin_current`, `supply_current`, `rail_margin`, `reset_voltage`, `supply_voltage` | each port pin's current, the current through `VCC` and `GND_8`, and each pin's voltage over `GND_8`, each named `#<part>.pin.<pin>` |
-| `current_source`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `ws2812`, `dht22` | none | |
+| `hc595` | `pin_current`, `supply_current`, `input_margin`, `output_margin` | each of `QA`–`QH` and `QHp`, the current through `VCC` and `GND`, and each input and output voltage over `GND`, each named `#<part>.pin.<pin>` |
+| `current_source`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `ssd1306`, `pulses_replay`, `ws2812`, `dht22` | none | |
 
-A `current`, `power`, `pin_current` or `supply_current` value object may also carry `basis`, the datasheet's basis for the figure. `"peak"` bounds each sample. `{ "sustained": { "average": "rms" | "mean", "tau": { "value": <s>, "unit": "s" } } }` bounds a first-order filter of the samples with time constant `tau`: of their squares for `rms`, read back as the root, and of their magnitudes for `mean`. A sustained basis may also carry `peak`, the sheet's peak or surge limit in the rating's unit, such as a diode's IFSM beside its average forward current. Each sample is checked against it as a peak rating. A `tau` or `peak` of 0 or below is `netlist.value` with rule `positive` on `ratings.<key>.basis.sustained.tau` or `.peak`, and a wrong unit is `netlist.unit` on that field. A rating with no `basis` takes its kind's: a `power` is a 10.2 ms `mean`, a `voltage_source`'s `current` and an `atmega328p`'s `pin_current` and `supply_current` are a 10.2 ms `rms`, and every other `current` is a `peak`.
+A `current`, `power`, `pin_current` or `supply_current` value object may also carry `basis`, the datasheet's basis for the figure. `"peak"` bounds each sample. `{ "sustained": { "average": "rms" | "mean", "tau": { "value": <s>, "unit": "s" } } }` bounds a first-order filter of the samples with time constant `tau`: of their squares for `rms`, read back as the root, and of their magnitudes for `mean`. A sustained basis may also carry `peak`, the sheet's peak or surge limit in the rating's unit, such as a diode's IFSM beside its average forward current. Each sample is checked against it as a peak rating. A `tau` or `peak` of 0 or below is `netlist.value` with rule `positive` on `ratings.<key>.basis.sustained.tau` or `.peak`, and a wrong unit is `netlist.unit` on that field. A rating with no `basis` takes its kind's: a `power` is a 10.2 ms `mean`, a `voltage_source`'s `current` and an `atmega328p`'s or an `hc595`'s `pin_current` and `supply_current` are a 10.2 ms `rms`, and every other `current` is a `peak`.
 
 ```json
 "current": { "value": 0.5, "unit": "A", "basis": { "sustained": { "average": "mean", "tau": { "value": 0.055, "unit": "s" }, "peak": { "value": 5.5, "unit": "A" } } } }

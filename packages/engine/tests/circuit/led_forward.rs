@@ -123,6 +123,24 @@ fn forward(is: f64, n: f64, rs: f64, amps: f64) -> f64 {
 }
 
 #[test]
+fn a_segment_matches_the_forward_figure_at_20_milliamps() {
+    for id in ["display-7seg-cc", "display-7seg-ca"] {
+        let file = part_file(id);
+        let model = &file["model"]["seg_a"];
+        let v = forward(
+            model_number(model, "saturation_current"),
+            model_number(model, "emission_coefficient"),
+            model_number(model, "series_resistance"),
+            0.020,
+        );
+        assert!(
+            (v - 1.94).abs() <= 0.02 * 1.94,
+            "{id} segment a is {v} V at 20 mA, figure 1.94 V"
+        );
+    }
+}
+
+#[test]
 fn every_led_color_matches_its_datasheet_forward_voltage() {
     for row in PARTS {
         let file = part_file(row.part);

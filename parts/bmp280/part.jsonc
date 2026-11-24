@@ -1,7 +1,7 @@
 // Bosch BMP280, BST-BMP280-DS001-26. The LGA-8 pin order is the sheet's Table 29.
 // The engine kind reads the scene's temperature and pressure and answers on I2C.
 {
-  "format": 1,
+  "format": 6,
   "part": "bmp280",
   "version": "0.1.0",
   "title": "BMP280 temperature and pressure sensor",

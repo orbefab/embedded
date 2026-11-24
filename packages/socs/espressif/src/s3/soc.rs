@@ -114,8 +114,8 @@ pub(crate) struct Soc {
     pub(crate) i2c: I2c,
     pub(crate) rmt: Rmt,
     pub(crate) uart: Uarts,
-    /// The LEDC updates that took effect and that the chip has not taken.
-    pub(crate) effects: Vec<ledc::Effect>,
+    /// The changes of the LEDC channels' signals that the chip has not taken, in time order.
+    pub(crate) edges: Vec<ledc::Edge>,
     /// The `Duty` records those updates and the routes to netted pads made, in time order.
     pub(crate) duties: Vec<Duty>,
     gates: Gates,
@@ -268,6 +268,31 @@ fn reset_cause(store6: Option<u32>) -> Option<ResetCause> {
     })
 }
 
+/// An access whose effect on a pin, a clock or a reading is nil with Wi-Fi and Bluetooth off.
+/// A read returns 0 and a store is dropped, and the run does not list it. Any other address
+/// is still listed. `value` is the stored word, and it is 0 for a load.
+fn quiet(word: u32, write: bool, value: u32) -> bool {
+    match word {
+        // `rtc_sleep_pu` clears the baseband FFT and DC-estimator force-up. Wi-Fi is off, so neither runs.
+        0x6001_d054 => true,
+        // `rtc_sleep_pu` clears the RX rotator, Viterbi and demapper force-up. Wi-Fi is off, so none runs.
+        0x6001_ccd4 => true,
+        // `rtc_sleep_pu` clears the front-end IQ-estimator force-up. Wi-Fi is off, so it does not run.
+        0x6000_6090 => true,
+        // `rtc_sleep_pu` clears the TX interpolator force-up. Wi-Fi is off, so it does not run.
+        0x6000_50f0 => true,
+        // `call_start_cpu1` enables the APP CPU's debug trace. The trace moves no pin, clock or reading.
+        0x600c_e0d8 | 0x600c_e0dc => true,
+        // `gpio_config` clears `MUX_SEL`, leaving digital GPIO, which the model drives. Setting it is still listed.
+        0x6000_8484 | 0x6000_8494 | 0x6000_8498 | 0x6000_849c
+            if !write || value & (1 << 19) == 0 =>
+        {
+            true
+        }
+        _ => false,
+    }
+}
+
 /// What a write does that the model does not run.
 #[derive(Clone, Copy, Debug)]
 enum Effect {
@@ -364,7 +389,7 @@ impl Soc {
             i2c: I2c::new(),
             rmt: Rmt::new(),
             uart: Uarts::new(),
-            effects: Vec::new(),
+            edges: Vec::new(),
             duties: Vec::new(),
             gates: Gates::new(),
             analog: Analog::default(),
@@ -448,7 +473,7 @@ impl Soc {
     }
 
     /// Lets every LEDC update due at or before `through` take effect, each with a `Duty` record
-    /// on every netted pad that carries its channel.
+    /// on every netted pad that carries its channel, and every PWM edge then pass.
     pub(crate) fn settle_ledc(&mut self, through: Tick) {
         self.ledc.settle(through, self.clock.source.apb());
         for effect in self.ledc.take_done() {
@@ -457,15 +482,15 @@ impl Soc {
                     self.duties.push(duty(effect, pad, inverted));
                 }
             }
-            self.effects.push(effect);
         }
+        self.edges.extend(self.ledc.take_edges());
     }
 
-    /// Whether a netted pad carries an LEDC channel, or an update has yet to take effect or to
-    /// drive its signal. A reset then would leave a pad's last `Duty` record stale, or let the
-    /// update drive its signal after the reset.
+    /// Whether a netted pad carries an LEDC channel, or an update has yet to take effect or an
+    /// edge to drive its signal. A reset then would leave a pad's last `Duty` record stale, or
+    /// let the edge drive its signal after the reset.
     fn ledc_runs(&self) -> bool {
-        self.ledc.pending() || !self.effects.is_empty() || !self.ledc_pads().is_empty()
+        self.ledc.pending() || !self.edges.is_empty() || !self.ledc_pads().is_empty()
     }
 
     /// Each netted pad that drives an LEDC channel's signal from the matrix, lowest first, with
@@ -822,7 +847,7 @@ impl Soc {
             SPI2 => self.spi2.read(now, offset),
             GDMA => self.gdma.read(offset),
             SHA => self.sha.read(offset),
-            LEDC => self.ledc.read(offset),
+            LEDC => self.ledc.read(now, offset, self.clock.source.apb()),
             RMT => self.rmt.read(now, offset),
             I2C0 => self.i2c.read(now, offset, &mut self.gpio),
             base if uart::Uarts::index(base).is_some() => {
@@ -1171,7 +1196,8 @@ impl Soc {
         }
     }
 
-    /// The general timers follow TIMG0's and TIMG1's clock and reset bits. The watchdog does not.
+    /// The timer groups, the system timer and the RTC watchdog follow their reset bits, and the
+    /// general timers follow their clock bits.
     fn sync_timg(&mut self, now: Tick) {
         let mut clocked = [false; 2];
         let mut held = [false; 2];
@@ -1181,10 +1207,16 @@ impl Soc {
             held[group] = reset;
         }
         self.watchdogs.apply_gates(now, clocked, held);
+        self.watchdogs
+            .apply_system_wdg(now, self.gates.system_wdg_reset());
+        self.systimer.set_reset(now, self.gates.systimer_reset());
     }
 
     /// Lets an access to an unmodeled register through, or stops the core at the first one.
     /// `kept` marks a write the register keeps while its effect does not run.
+    ///
+    /// [`quiet`] names the accesses that are not listed. A read of one returns 0 and a store
+    /// is dropped, the same as any other register the model does not keep.
     fn touch(&mut self, now: Tick, addr: u32, write: bool, kept: bool) -> Result<(), Exit> {
         if self.unmodeled.contains_key(&addr) {
             return Ok(());
@@ -1488,6 +1520,7 @@ impl Soc {
         }
         match kept {
             Some(value) => Ok((value >> shift) & mask),
+            None if quiet(word, false, 0) => Ok(0),
             None => self.touch(now, word, false, false).map(|()| 0),
         }
     }
@@ -1593,6 +1626,9 @@ impl Soc {
             _ => None,
         };
         if kept.is_none() {
+            if quiet(word, true, value) {
+                return Ok(());
+            }
             return self.touch(now, word, true, false);
         }
         let base = word & !(BLOCK - 1);

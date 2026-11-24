@@ -7,6 +7,7 @@ import type { GLTF } from "three/addons/loaders/GLTFLoader.js";
 import { fourBands } from "./bands";
 import { glowColour } from "./glow";
 import { type Footprint, layOut } from "./layout";
+import { darkGlass, planarUv, type ScreenBinding } from "./screen";
 import type { Anchor, InstanceBase, PartData, Placement, Ref, SceneMessage, Vec3, Wire } from "./protocol";
 import { instanceAt, type LeadAt, leadRef, leadsOf, partOf, refOf } from "./refs";
 import { type Box, routeWire, type WireEnd, type WirePath } from "./wire-geometry";
@@ -109,6 +110,8 @@ export interface BuiltScene {
   /** In the viewer's world. */
   readonly root: Group;
   readonly glows: readonly GlowBinding[];
+  /** Each screen node the session sends a glass for. */
+  readonly screens: readonly ScreenBinding[];
   readonly slides: readonly SlideBinding[];
   readonly turns: readonly TurnBinding[];
   readonly wires: readonly DrawnWire[];
@@ -150,15 +153,18 @@ function namedNode(body: Object3D, name: string, part: string): Object3D {
   return node;
 }
 
-/** What drives a glow `by` names. `"brightness"` is the LED's current, which needs its
- * `full`. Any other name is the part's colour reading, and the session sends its colour when
- * the part is on `channels.pixels`. Undefined when the scene sends nothing to draw it by. */
+/** What drives a glow `by` names. `"brightness"` is the part's one LED. A segment name is
+ * that body's current, on `channels.leds` as `@disp.seg_a`, using the same `full`. Any other
+ * name is the part's colour reading, and the session sends its colour when the part is on
+ * `channels.pixels`. Undefined when the scene sends nothing to draw it by. */
 function glowDrive(scene: SceneMessage, ref: Ref, part: PartData, by: string): GlowDrive | undefined {
+  const full = part.readings.brightness?.full;
   if (by === "brightness") {
     const channel = scene.channels.leds.indexOf(ref);
-    const full = part.readings.brightness?.full;
     return channel >= 0 && full !== undefined ? { kind: "current", full, channel } : undefined;
   }
+  const segment = scene.channels.leds.indexOf(`${ref}.${by}`);
+  if (segment >= 0 && full !== undefined) return { kind: "current", full, channel: segment };
   const channel = scene.channels.pixels.indexOf(ref);
   return channel >= 0 ? { kind: "pixel", channel } : undefined;
 }
@@ -186,6 +192,7 @@ interface Builder {
   readonly pinReasons: ReadonlyMap<Ref, string>;
   readonly groups: Map<string, Group>;
   readonly glows: GlowBinding[];
+  readonly screens: ScreenBinding[];
   readonly presses: Press[];
   readonly turns: Turn[];
   readonly errors: string[];
@@ -243,6 +250,16 @@ function drawBody(builder: Builder, group: Group, instance: InstanceBase, path: 
       glows.push({ material, base: material.color.clone(), by: drive });
     }
   }
+  const screens: ScreenBinding[] = [];
+  for (const { node } of part.view.screen ?? []) {
+    const channel = scene.channels.screens?.indexOf(ref) ?? -1;
+    if (channel < 0) continue;
+    const glass = namedNode(body, node, instance.part);
+    planarUv(glass);
+    const materials = ownMaterials(glass);
+    darkGlass(materials);
+    screens.push({ materials, channel, shown: undefined, texture: undefined });
+  }
   const press = part.controls.press;
   const switchChannel = scene.channels.switches.indexOf(ref);
   if (press !== undefined && switchChannel >= 0) {
@@ -274,6 +291,7 @@ function drawBody(builder: Builder, group: Group, instance: InstanceBase, path: 
   }
   group.add(body);
   builder.glows.push(...glows);
+  builder.screens.push(...screens);
   builder.presses.push(...presses);
   builder.turns.push(...turns);
 }
@@ -366,6 +384,7 @@ export function buildScene(scene: SceneMessage, models: ReadonlyMap<string, Grou
     pinReasons: new Map((scene.not_simulated ?? []).map(({ ref, why }) => [ref, why])),
     groups: new Map(),
     glows: [],
+    screens: [],
     presses: [],
     turns: [],
     errors: [],
@@ -432,5 +451,5 @@ export function buildScene(scene: SceneMessage, models: ReadonlyMap<string, Grou
     return { min: box.min.toArray(), max: box.max.toArray() };
   });
   if (builder.errors.length > 0) console.error(`the viewer could not draw all of the scene:\n${builder.errors.join("\n")}`);
-  return { root, glows: builder.glows, slides, turns, wires, boxes: [...boxes, ...wireBoxes], errors: builder.errors };
+  return { root, glows: builder.glows, screens: builder.screens, slides, turns, wires, boxes: [...boxes, ...wireBoxes], errors: builder.errors };
 }

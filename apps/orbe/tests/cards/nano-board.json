@@ -6,7 +6,7 @@
     "atmega328p",
     "usb"
   ],
-  "description": "ATmega328P board, 18 x 43.2 mm, 30 pins on two rows 15.24 mm apart. D13 drives the L LED. Powered from USB.",
+  "description": "ATmega328P board, 18 x 43.2 mm, 30 pins on two rows 15.24 mm apart. D13 drives the L LED. Powered from USB. 3V3 holds about 3.3 V from the CH340G while 5V is up.",
   "docs": [
     {
       "name": "Arduino Nano A000005 datasheet",
@@ -22,6 +22,10 @@
     },
     {
       "name": "development board schematic, revision 3"
+    },
+    {
+      "name": "WCH CH340 datasheet, version 3D",
+      "url": "https://www.wch-ic.com/download/file?id=79"
     }
   ],
   "files": [
@@ -37,13 +41,6 @@
   "license": "MIT OR Apache-2.0",
   "name": "nano-board",
   "not_simulated": [
-    {
-      "pins": [
-        "3V3"
-      ],
-      "what": "3V3",
-      "why": "It is the CH340G's 3.3 V output. The engine has no USB-serial chip, so the pin supplies nothing."
-    },
     {
       "pins": [
         "5V"
@@ -252,7 +249,7 @@
     "atmega328p-tqfp32": "0.2.1",
     "capacitor-0603": "0.2.0",
     "capacitor-tantalum-3216": "0.2.1",
-    "ch340g": "0.2.0",
+    "ch340g": "0.2.1",
     "crystal-3215": "0.2.0",
     "diode-sod123": "0.2.1",
     "led-0603": "0.2.1",
@@ -263,5 +260,5 @@
     "tactile-switch-smd": "0.2.0",
     "usb-mini-b": "0.2.1"
   },
-  "version": "0.2.1"
+  "version": "0.2.2"
 }

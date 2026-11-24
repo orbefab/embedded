@@ -396,11 +396,15 @@ fn search_finds_a_block_by_a_word_of_its_id() {
     assert_eq!(
         names,
         [
+            "devkitc-button-led",
+            "nano-7seg-count",
             "nano-button-led",
             "nano-gy-bmp280",
             "nano-led-fade",
             "nano-light-comparator",
             "nano-neopixel-stick",
+            "nano-oled",
+            "nano-shift-leds",
             "uno-button-led",
         ]
     );

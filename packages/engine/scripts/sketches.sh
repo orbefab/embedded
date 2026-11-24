@@ -9,9 +9,10 @@
 # from the core. The runtime's Wire library is compiled into a second archive, which a sketch
 # that includes Wire.h also links. A sketch that includes Adafruit_NeoPixel.h also links that
 # library, pinned below, compiled for the sketch's clock. A sketch that includes
-# Adafruit_BMP280.h also links that library and Adafruit BusIO and Adafruit Unified Sensor,
-# pinned below. A clock other than 16 MHz gets its
-# own core and Wire archives.
+# Adafruit_SSD1306.h also links Adafruit SSD1306, Adafruit GFX and the runtime's SPI library,
+# and compiles against Adafruit BusIO's headers, which Adafruit_GFX.h includes. A sketch that
+# includes Adafruit_BMP280.h also links that library, Adafruit BusIO, Adafruit Unified Sensor
+# and the runtime's SPI library. A clock other than 16 MHz gets its own core and Wire archives.
 # A build of the engine reads only the committed hex.
 #
 # Usage: packages/engine/scripts/sketches.sh TOOLS_DIR [DOWNLOAD_DIR]
@@ -29,10 +30,14 @@ neopixel_url=https://github.com/adafruit/Adafruit_NeoPixel/archive/refs/tags/1.1
 neopixel_sha256=3aa189a5a397a13539fcb58ff297ab9dc4a4faf45115e48afd533f1337cb0f3b
 bmp280_url=https://github.com/adafruit/Adafruit_BMP280_Library/archive/refs/tags/3.0.0.tar.gz
 bmp280_sha256=54018faa0cb89ef25b54c79b1ab274e4010e9b2e41632446c72ac6ceed8f1241
-busio_url=https://github.com/adafruit/Adafruit_BusIO/archive/refs/tags/1.17.0.tar.gz
-busio_sha256=45c22f2d73c150257fdeec62f0f23ecdd62eab538a31b3652e1f3ff1cec863d2
 sensor_url=https://github.com/adafruit/Adafruit_Sensor/archive/refs/tags/1.1.15.tar.gz
 sensor_sha256=1763c21c969a74d69e4d29082c7458a2d474d51e5ad0e2c4803dda8e1c372d9a
+ssd1306_url=https://github.com/adafruit/Adafruit_SSD1306/archive/refs/tags/2.5.17.tar.gz
+ssd1306_sha256=5228d4d2e915f6a4aa15b681bcd27a9f848627f7542283dd3cb3b76445a32ef9
+gfx_url=https://github.com/adafruit/Adafruit-GFX-Library/archive/refs/tags/1.13.0.tar.gz
+gfx_sha256=8ab038fb445d99f320feb9d463c7afe4cd91475fd8ea9c4047be444aacbb3b29
+busio_url=https://github.com/adafruit/Adafruit_BusIO/archive/refs/tags/1.17.4.tar.gz
+busio_sha256=59efa3acd5466e381c1b0313d5f0e824832db1bb24e4e328667e12b7d235d56d
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
   echo "usage: $0 TOOLS_DIR [DOWNLOAD_DIR]" >&2
@@ -71,15 +76,19 @@ unpack avr-gcc-7.3.0 "$toolchain_url" "$toolchain_sha256"
 unpack avr-runtime-1.8.6 "$runtime_url" "$runtime_sha256"
 unpack adafruit-neopixel-1.15.5 "$neopixel_url" "$neopixel_sha256"
 unpack adafruit-bmp280-3.0.0 "$bmp280_url" "$bmp280_sha256"
-unpack adafruit-busio-1.17.0 "$busio_url" "$busio_sha256"
 unpack adafruit-sensor-1.1.15 "$sensor_url" "$sensor_sha256"
+unpack adafruit-ssd1306-2.5.17 "$ssd1306_url" "$ssd1306_sha256"
+unpack adafruit-gfx-1.13.0 "$gfx_url" "$gfx_sha256"
+unpack adafruit-busio-1.17.4 "$busio_url" "$busio_sha256"
 
 bin=$tools/avr-gcc-7.3.0/avr/bin
 runtime=$tools/avr-runtime-1.8.6/avr-1.8.6
 neopixel=$tools/adafruit-neopixel-1.15.5/Adafruit_NeoPixel-1.15.5
 bmp280=$tools/adafruit-bmp280-3.0.0/Adafruit_BMP280_Library-3.0.0
-busio=$tools/adafruit-busio-1.17.0/Adafruit_BusIO-1.17.0
 sensor=$tools/adafruit-sensor-1.1.15/Adafruit_Sensor-1.1.15
+ssd1306=$tools/adafruit-ssd1306-2.5.17/Adafruit_SSD1306-2.5.17
+gfx=$tools/adafruit-gfx-1.13.0/Adafruit-GFX-Library-1.13.0
+busio=$tools/adafruit-busio-1.17.4/Adafruit_BusIO-1.17.4
 spi=$runtime/libraries/SPI/src
 core=$runtime/cores/arduino
 target=(-mmcu=atmega328p -DF_CPU=16000000L -I"$core" -I"$runtime/variants/standard")
@@ -169,7 +178,7 @@ for dir in "$repo"/packages/engine/tests/firmware/sketch/*/ "$repo"/blocks/*/fir
     bmp_flags=(-I"$bmp280" -I"$busio" -I"$sensor" -I"$spi" -I"$wire" -DARDUINO=10806)
     "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${bmp_flags[@]}" \
       "$bmp280/Adafruit_BMP280.cpp" -o "$work/$name-bmp280.o"
-    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${bmp_flags[@]}" -I"$wire" \
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${bmp_flags[@]}" \
       "$busio/Adafruit_I2CDevice.cpp" -o "$work/$name-i2cdevice.o"
     "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${bmp_flags[@]}" \
       "$busio/Adafruit_SPIDevice.cpp" -o "$work/$name-spidevice.o"
@@ -180,6 +189,17 @@ for dir in "$repo"/packages/engine/tests/firmware/sketch/*/ "$repo"/blocks/*/fir
     library+=("${bmp_flags[@]}")
     archives+=("$work/$name-bmp280.o" "$work/$name-i2cdevice.o" "$work/$name-spidevice.o" \
       "$work/$name-sensor.o" "$work/$name-spi.o")
+  fi
+  if grep -q '^#include <Adafruit_SSD1306.h>' "$dir/$name.ino"; then
+    oled=(-DARDUINO=10806 -I"$ssd1306" -I"$gfx" -I"$busio" -I"$wire" -I"$spi")
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${oled[@]}" \
+      "$ssd1306/Adafruit_SSD1306.cpp" -o "$work/$name-ssd1306.o"
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${oled[@]}" \
+      "$gfx/Adafruit_GFX.cpp" -o "$work/$name-gfx.o"
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" -I"$spi" "$spi/SPI.cpp" \
+      -o "$work/$name-spi.o"
+    library+=("${oled[@]}")
+    archives+=("$work/$name-ssd1306.o" "$work/$name-gfx.o" "$work/$name-spi.o")
   fi
   "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${library[@]}" -x c++ -include Arduino.h \
     "$dir/$name.ino" -o "$work/$name.o"

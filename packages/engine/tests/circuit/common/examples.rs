@@ -81,12 +81,14 @@ pub fn runs_a_core(netlist: &Netlist) -> bool {
             Chip::Atmega328p(_)
             | Chip::SpiReplay(_)
             | Chip::St77916(_)
+            | Chip::Ssd1306(_)
             | Chip::Cst816(_)
             | Chip::Esp32s3(_)
             | Chip::Ws2812(_)
             | Chip::Dht22(_)
             | Chip::Bmp280(_)
-            | Chip::PulsesReplay(_) => true,
+            | Chip::PulsesReplay(_)
+            | Chip::Hc595(_) => true,
         },
         _ => false,
     })

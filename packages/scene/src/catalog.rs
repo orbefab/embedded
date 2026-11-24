@@ -280,7 +280,7 @@ mod tests {
 
     fn named_nodes(part: &Value) -> Vec<&str> {
         let view = &part["view"];
-        let entries = ["glow", "tint"]
+        let entries = ["glow", "tint", "screen"]
             .iter()
             .filter_map(|key| view[key].as_array())
             .flatten()

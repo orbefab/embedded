@@ -353,7 +353,7 @@ impl Device for Bmp280 {
 }
 
 impl I2cTarget for Bmp280 {
-    fn answers(&self) -> bool {
+    fn awake(&self) -> bool {
         self.awake
     }
 

@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use super::{Live, Open, Progress};
 use crate::reply::{Code, Diagnostic, Level};
-use crate::target::{QUANTITIES, one_engine, rgb_reading};
+use crate::target::{QUANTITIES, one_engine, rgb_reading, screen_reading};
 use crate::viewer;
 
 /// The refs each frame array follows, in order.
@@ -27,6 +27,10 @@ pub struct Channels {
     /// Each addressable LED part, by its reading `"of": "rgb"`.
     #[cfg_attr(test, schemars(with = "Vec<crate::Ref>"))]
     pub pixels: Vec<String>,
+    /// Each screen part, by its reading `"of": "screen"`. Absent when the scene has none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(test, schemars(with = "Vec<crate::Ref>"))]
+    pub screens: Vec<String>,
 }
 
 /// The channels with what reads each: a logic signal, a probe column, a switch's engine name,
@@ -38,6 +42,7 @@ pub(super) struct Bound {
     leds: Vec<usize>,
     switches: Vec<String>,
     pixels: Vec<String>,
+    screens: Vec<String>,
     /// Each live param, as `@pot1.position`, with its engine part and the param.
     params: Vec<(String, String, orbe_scene::MapParam)>,
 }
@@ -151,6 +156,8 @@ pub struct Sample {
     pub switches: Vec<u8>,
     /// Each addressable LED part's first LED, the red, green and blue it last latched.
     pub pixels: Vec<[u8; 3]>,
+    /// What each screen's glass shows.
+    pub screens: Vec<Glass>,
     /// Each declared world quantity's value from `t_ps` on, or from where its last `set` lands
     /// when that is later, in table order. Empty when the scene declares none.
     pub world: Vec<f64>,
@@ -159,6 +166,15 @@ pub struct Sample {
     pub diagnostics: usize,
     /// The fault's diagnostic as `orbe snapshot` prints it, once the session faulted.
     pub fault: Option<String>,
+}
+
+/// A screen's glass: `width` by `height` pixels of red, green, blue and alpha, a byte each, rows
+/// top to bottom and each row left to right.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Glass {
+    pub width: u16,
+    pub height: u16,
+    pub rgba: Vec<u8>,
 }
 
 /// `play`'s pace for a frame: simulated time over wall time as the session achieved it.
@@ -323,6 +339,12 @@ impl Open {
                 bound.names.pixels.push(format!("@{path}"));
                 bound.pixels.push(engine);
             }
+            let screen =
+                screen_reading(part).and_then(|_| one_engine(path, part, Code::NoReading).ok());
+            if let Some(engine) = screen {
+                bound.names.screens.push(format!("@{path}"));
+                bound.screens.push(engine);
+            }
         }
         for (path, part) in &self.refs.parts {
             let Ok(engine) = one_engine(path, part, Code::NotSettable) else {
@@ -389,6 +411,22 @@ impl Open {
                         .first()
                         .copied()
                         .unwrap_or_default()
+                })
+                .collect(),
+            screens: bound
+                .screens
+                .iter()
+                .map(|engine| {
+                    let display = self
+                        .engine
+                        .display(&super::engine_name(engine))
+                        .expect("a part with a reading of screen is a display");
+                    let panel = display.panel();
+                    Glass {
+                        width: panel.width,
+                        height: panel.height,
+                        rgba: display.pixels(),
+                    }
                 })
                 .collect(),
             world: self

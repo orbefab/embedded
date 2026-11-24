@@ -43,6 +43,8 @@ if (profiled !== undefined && !ids.includes(profiled)) {
   console.error(`speed: the registry has no Block ${profiled}. It has ${ids.join(", ")}`);
   process.exit(2);
 }
+// An ESP32-S3 Block is not held to the AVR bar. It is not real time.
+const paced = ids.filter((id) => !id.startsWith("devkitc-"));
 const blocks = new Map();
 for (const id of ids) {
   const { files } = await loadBlock(index, id, readBytes);
@@ -141,10 +143,12 @@ if (profiled !== undefined) {
   process.exit(0);
 }
 
-console.log(`speed: Chromium ${browser.version()}, ${ids.length} Blocks, ${RUNS} runs each, ${SIM_MS} simulated ms after ${WARM_MS} ms. Load ${load()}`);
+const aside = ids.filter((id) => !paced.includes(id));
+if (aside.length > 0) console.log(`speed: not held to the bar: ${aside.join(", ")}`);
+console.log(`speed: Chromium ${browser.version()}, ${paced.length} Blocks, ${RUNS} runs each, ${SIM_MS} simulated ms after ${WARM_MS} ms. Load ${load()}`);
 const rows = [];
 for (let run = 0; run < RUNS; run += 1) {
-  for (const block of ids) {
+  for (const block of paced) {
     for (const [mode, how] of Object.entries(MODES)) {
       const { wallMs, simMs } = await measure(block, how);
       rows.push({ block, mode, run, msPerSimS: (wallMs / simMs) * 1000 });
@@ -156,14 +160,14 @@ await browser.close();
 server.close();
 
 /** Wall ms per simulated s of each (Block, mode), and its real-time factor at the median. */
-const cells = ids.flatMap((block) =>
+const cells = paced.flatMap((block) =>
   Object.entries(MODES).map(([mode, how]) => {
     const ms = rows.filter((r) => r.block === block && r.mode === mode).map((r) => r.msPerSimS).sort((a, b) => a - b);
     const median = ms[Math.floor(ms.length / 2)];
     return { block, how, median, min: ms[0], max: ms[ms.length - 1], x: 1000 / median };
   }),
 );
-const width = Math.max(...ids.map((id) => id.length));
+const width = Math.max(...paced.map((id) => id.length));
 const labelWidth = Math.max(...Object.values(MODES).map((how) => how.label.length));
 let failed = 0;
 for (const c of cells) {

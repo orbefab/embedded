@@ -1,4 +1,4 @@
-import type { ClosedMessage, Command, FrameMessage, FromSession, Reply, SceneMessage, ToViewer } from "./protocol";
+import type { ClosedMessage, Command, FrameMessage, FromSession, Reply, SceneMessage, ScreenImage, ToViewer } from "./protocol";
 import { applySerial, EMPTY_SERIAL, serialReplay, type SerialView } from "./serial";
 import type { SessionSource } from "./session";
 
@@ -33,15 +33,27 @@ export function receive(inbox: Inbox, text: string, from: string): void {
   inbox.message(parsed as FromSession);
 }
 
-/** The latest frame, with the serial text this page still holds in place of that frame's own. */
-function replayFrame(frame: FrameMessage, view: SerialView): FrameMessage {
+/** The latest frame, with the serial text this page still holds in place of that frame's own,
+ * and the last glass of each screen, which a frame carries only when it changed. */
+function replayFrame(frame: FrameMessage, view: SerialView, screens: readonly (ScreenImage | null)[]): FrameMessage {
   const serial = serialReplay(view);
-  return serial === undefined ? frame : { ...frame, serial };
+  const shown = screens.some((image) => image !== null) ? { screens } : {};
+  return serial === undefined ? { ...frame, ...shown } : { ...frame, ...shown, serial };
+}
+
+/** `held` with each screen a frame carries in place of the one before. */
+function heldScreens(held: readonly (ScreenImage | null)[], frame: FrameMessage): (ScreenImage | null)[] {
+  const next = [...held];
+  for (const [channel, image] of (frame.screens ?? []).entries()) {
+    if (image !== null) next[channel] = image;
+  }
+  return Array.from(next, (image) => image ?? null);
 }
 
 /** A session over a channel that carries its messages: `connect` opens the channel. A new
  * listener gets the current scene, then the latest frame. That frame carries the serial text
- * already delivered, bounded to 4096 bytes, with `trimmed` when earlier bytes were dropped.
+ * already delivered, bounded to 4096 bytes, with `trimmed` when earlier bytes were dropped,
+ * and each screen's last glass.
  * Once the session closes or the channel drops, every listener gets a `closed` message,
  * commands reject, and listeners get nothing more. A drop also frees the channel, as `close`
  * does. */
@@ -51,6 +63,7 @@ export function channelSource(connect: (inbox: Inbox) => Channel): SessionSource
   let scene: SceneMessage | null = null;
   let frame: FrameMessage | null = null;
   let serialView: SerialView = EMPTY_SERIAL;
+  let screens: (ScreenImage | null)[] = [];
   let closed: ClosedMessage | null = null;
   let next = 1;
 
@@ -73,11 +86,13 @@ export function channelSource(connect: (inbox: Inbox) => Channel): SessionSource
           scene = message;
           frame = null;
           serialView = EMPTY_SERIAL;
+          screens = [];
           broadcast(message);
           break;
         case "frame":
           frame = message;
           if (message.serial !== undefined) serialView = applySerial(serialView, message.serial);
+          if (message.screens !== undefined) screens = heldScreens(screens, message);
           broadcast(message);
           break;
         case "reply":
@@ -100,7 +115,7 @@ export function channelSource(connect: (inbox: Inbox) => Channel): SessionSource
     subscribe(listener) {
       listeners.add(listener);
       if (scene !== null) listener(scene);
-      if (frame !== null) listener(replayFrame(frame, serialView));
+      if (frame !== null) listener(replayFrame(frame, serialView, screens));
       if (closed !== null) listener(closed);
       return () => {
         listeners.delete(listener);

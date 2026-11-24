@@ -80,12 +80,12 @@ $ orbe add led-5mm nano-board resistor-axial tactile-switch-6mm
 wrote parts/led-5mm 0.3.0
 ...
 $ orbe check scene.jsonc
-scene.jsonc: ok, 5 scene parts, expanding to 20 engine parts, 35 nets, ground GND
+scene.jsonc: ok, 5 scene parts, expanding to 22 engine parts, 36 nets, ground GND
 $ orbe lint scene.jsonc
 ...
 1 warning in scene.jsonc
 $ orbe open
-opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 20 engine parts, 35 nets)
+opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 22 engine parts, 36 nets)
 $ orbe step 100ms
 t=100ms (from 0s)
 ...
@@ -132,9 +132,9 @@ An error prints `error[<code>]: <message>` and usually a `hint:`. Do what the hi
 | `orbe skills get esp32` | Building ESP32-S3 firmware for an `esp32s3-devkitc-1` |
 | `orbe skills get scenes` | A scene key, a part name, a param or `world` |
 | `orbe skills get breadboards` | Seating a part, a hole, or a breadboard error |
-| `orbe skills get parts` | The copy in `parts/`, a version, a Block, `buy`, or an addressable LED |
+| `orbe skills get parts` | The copy in `parts/`, a version, a Block, `buy`, an addressable LED, or a 5 V board wired to a 3.3 V module |
 | `orbe skills get sessions-and-time` | When a step or a set lands, a session name, bounce, or the 2-hour stop |
-| `orbe skills get tests` | A test file beyond the example above |
+| `orbe skills get tests` | A test file beyond the example above, or a screen |
 | `orbe skills get ratings` | A warning names a rating, or an LED is lit, dim or off |
 | `orbe skills get errors` | An error code not in the table above |
 | `orbe skills get page` | The 3D page, or turning a knob |

@@ -1,0 +1,11 @@
+// A Block: a small circuit that works. `orbe add nano-7seg-count` installs it into a project.
+{
+  "format": 1,
+  "block": "nano-7seg-count",
+  "version": "0.1.0",
+  "title": "Count on a 7-segment display",
+  "summary": "An Arduino Nano counts 0 to 9 on a common-cathode 7-segment display. Each segment has its own 330 ohm resistor.",
+  "board": "nano-board",
+  "tags": ["display", "7-segment", "counter", "nano"],
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
+}

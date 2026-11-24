@@ -524,9 +524,10 @@ impl Esp32s3 {
         }
     }
 
-    /// Lets every LEDC update take effect that is due at a tick whose instructions have all run,
-    /// before any fault. An update that moves a pad's drive waits for its `Moved` halt to change
-    /// the signal, and the others change it at once.
+    /// Lets every LEDC update take effect and every PWM edge pass that is due at a tick whose
+    /// instructions have all run, before any fault. An edge that moves a pad's drive waits for
+    /// its `Moved` halt to change the signal, and so does every later edge of that signal, so
+    /// they land in order. The others change it at once.
     fn settle_ledc(&mut self) {
         let Some(through) = self.now().0.checked_sub(1) else {
             return;
@@ -540,16 +541,21 @@ impl Esp32s3 {
             .drain(..)
             .filter(|duty| before_fault(duty.at));
         self.duties.extend(duties);
-        for effect in std::mem::take(&mut self.soc.effects) {
-            if !before_fault(effect.at) {
+        for edge in std::mem::take(&mut self.soc.edges) {
+            if !before_fault(edge.at) {
                 continue;
             }
-            let signal = ledc::SIGNAL + u16::from(effect.channel);
-            let level = effect.duty > 0;
-            if self.soc.gpio.moves(signal, level) {
-                self.moves.push((effect.at, signal, level));
-            } else {
-                self.soc.gpio.set_signal(signal, level);
+            let signal = ledc::SIGNAL + u16::from(edge.channel);
+            let queued = self.moves.iter().rev().find(|m| m.1 == signal);
+            let moves = match queued {
+                Some(&(_, _, level)) => level != edge.level,
+                None => self.soc.gpio.moves(signal, edge.level),
+            };
+            if moves {
+                let at = self.moves.partition_point(|m| m.0 <= edge.at);
+                self.moves.insert(at, (edge.at, signal, edge.level));
+            } else if queued.is_none() {
+                self.soc.gpio.set_signal(signal, edge.level);
             }
         }
     }
@@ -1621,7 +1627,7 @@ mod tests {
         let system = [
             (0x18, 1 << 29),
             (0x1c, 1 << 10),
-            (0x20, 1 << 13),
+            (0x20, 1 << 1),
             (0x24, 1 << 10),
         ];
         let spi0 = (0x18..=0x20)
@@ -2578,9 +2584,10 @@ mod tests {
 
     /// The updates at cycles 26 and 35 take effect at the timer's next overflows, 24 ticks
     /// apart from cycle 17: cycles 27 and 37. Each sends its record, then the drive it moves.
+    /// Every step, 2 of 2, and 0 have no PWM edge.
     #[test]
     fn an_led_duty_update_sends_its_record_then_moves_the_pads_drive() {
-        let program = stores(&[ledc_on(3), duty(1).to_vec(), duty(0).to_vec()].concat());
+        let program = stores(&[ledc_on(3), duty(2).to_vec(), duty(0).to_vec()].concat());
         for step in [1, 1000] {
             let mut chip = program.chip();
             assert_eq!(
@@ -2602,13 +2609,13 @@ mod tests {
                 resolution: 1,
                 hz: 20_000_000,
             };
-            assert_eq!(duties, [sent(c(27), 1), sent(c(37), 0)]);
+            assert_eq!(duties, [sent(c(27), 2), sent(c(37), 0)]);
         }
     }
 
     #[test]
     fn a_duty_change_that_keeps_the_drive_sends_only_its_record() {
-        let program = stores(&[ledc_on(3), duty(1).to_vec(), duty(2).to_vec()].concat());
+        let program = stores(&[ledc_on(3), duty(2).to_vec(), duty(2).to_vec()].concat());
         let mut chip = program.chip();
         assert_eq!(
             halts(&mut chip, 1000, 1000),
@@ -2747,21 +2754,50 @@ mod tests {
         assert_eq!(duties, [0, 2]);
     }
 
-    /// At a partial duty an inverted pad drives low, and the record sends the steps the channel
-    /// does not: 3 of the 4 steps of a 2-bit timer at duty 1, from cycle 29.
+    /// Duty 1 of the 4 steps of a 2-bit timer, a period of 4 crystal cycles, from the overflow
+    /// at cycle 29: the signal is high for one cycle of each four. Each edge is a stop of its
+    /// own, after the update's record.
     #[test]
-    fn an_inverted_pad_at_a_partial_duty_drives_low() {
+    fn a_partial_duty_sends_its_pwm_edges() {
+        let mut on = ledc_on(3);
+        on[5].1 = 2 | 256 << 4 | 1 << 25;
+        let program = stores(&[on, duty(1).to_vec()].concat());
+        let mut chip = program.chip();
+        assert_eq!(
+            halts(&mut chip, 38, 1000),
+            [
+                (image_at(c(5)), PadDrive::Low),
+                (record_at(c(29)), PadDrive::Low),
+                (Halt::Moved(c(29)), PadDrive::High),
+                (Halt::Moved(c(30)), PadDrive::Low),
+                (Halt::Moved(c(33)), PadDrive::High),
+                (Halt::Moved(c(34)), PadDrive::Low),
+                (Halt::Moved(c(37)), PadDrive::High),
+                (Halt::Moved(c(38)), PadDrive::Low),
+            ]
+        );
+        let duties: Vec<u32> = chip.take_duties().map(|d| d.duty).collect();
+        assert_eq!(duties, [1]);
+    }
+
+    /// An inverted pad drives the PWM inverted, and the record sends the steps the channel does
+    /// not: 3 of the 4 steps of a 2-bit timer at duty 1, from cycle 29.
+    #[test]
+    fn an_inverted_pad_at_a_partial_duty_drives_the_inverted_pwm() {
         let mut on = ledc_on(3);
         on[1].1 |= 1 << 9;
         on[5].1 = 2 | 256 << 4 | 1 << 25;
         let program = stores(&[on, duty(1).to_vec()].concat());
         let mut chip = program.chip();
         assert_eq!(
-            halts(&mut chip, 1000, 1000),
+            halts(&mut chip, 34, 1000),
             [
                 (image_at(c(5)), PadDrive::High),
                 (record_at(c(29)), PadDrive::High),
                 (Halt::Moved(c(29)), PadDrive::Low),
+                (Halt::Moved(c(30)), PadDrive::High),
+                (Halt::Moved(c(33)), PadDrive::Low),
+                (Halt::Moved(c(34)), PadDrive::High),
             ]
         );
         let duties: Vec<u32> = chip.take_duties().map(|d| d.duty).collect();
@@ -2776,7 +2812,7 @@ mod tests {
         let route = |signal| [(GPIO + 0x554 + 4 * 21, signal)];
         let pairs = [
             ledc_on(3),
-            duty(1).to_vec(),
+            duty(2).to_vec(),
             route(0x100).to_vec(),
             vec![(SYSTEM + 0x20, 1 << 11)],
             route(u32::from(ledc::SIGNAL)).to_vec(),
@@ -2834,7 +2870,7 @@ mod tests {
             on[..4].to_vec(),
             vec![(SYSTEM + 0x20, 0)],
             on[4..].to_vec(),
-            duty(1).to_vec(),
+            duty(2).to_vec(),
         ];
         let program = stores(&pairs.concat());
         let mut chip = program.chip();
@@ -3204,5 +3240,132 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    /// Boot clears the radio force-up bits and reads an RTC pad to leave it digital. The
+    /// register beside the baseband word, and a store that sets the pad's `MUX_SEL`, are listed.
+    #[test]
+    fn a_radio_force_up_and_a_digital_pad_read_are_quiet() {
+        let mut program = Program::new(&[0x6001_d054, 0x6001_d050, 0x6000_8494, 1 << 19]);
+        program
+            .l32r(2, 0)
+            .rri8(2, 3, 2, 0)
+            .l32r(2, 0)
+            .movi(3, 0)
+            .rri8(6, 3, 2, 0)
+            .l32r(2, 1)
+            .rri8(2, 3, 2, 0)
+            .l32r(2, 2)
+            .l32r(3, 3)
+            .rri8(6, 3, 2, 0)
+            .raw(&LOOP);
+        let mut chip = program.chip();
+        assert_eq!(chip.run_until(c(200)), None);
+        let names: Vec<String> = chip
+            .unmodeled()
+            .map(|(addr, _)| Touch::register(addr))
+            .collect();
+        assert_eq!(names, ["RTCIO+0x94", "BB+0x50"]);
+    }
+
+    fn word(chip: &mut Esp32s3, addr: u32) -> u32 {
+        chip.soc
+            .bus()
+            .load(Cycle(0), addr, Width::Word)
+            .unwrap_or_else(|err| panic!("{addr:#x}: {err:?}"))
+    }
+
+    /// Boot pulses each reset bit while the peripheral is still at reset, and that lists nothing.
+    /// The same pulse after the peripheral has moved puts it back, and lists nothing because the
+    /// model runs the bit.
+    #[test]
+    fn a_reset_pulse_restores_the_peripheral_and_the_boot_pulse_is_quiet() {
+        let boot: Vec<(u32, u32)> = [29, 13, 15, 3]
+            .into_iter()
+            .flat_map(|bit| [(SYSTEM + 0x20, 1 << bit), (SYSTEM + 0x20, 0)])
+            .collect();
+        let mut chip = stores(&boot).chip();
+        assert_eq!(chip.run_until(c(200)), None);
+        assert_eq!(chip.unmodeled().count(), 0, "the boot pulse is quiet");
+        assert_eq!(word(&mut chip, SYSTIMER), 0x4600_0000);
+        assert_eq!(word(&mut chip, TIMG0 + 0x48), 0x0004_c000);
+        assert_eq!(word(&mut chip, RTC_CNTL + 0x98), 0x0001_3214);
+
+        let systimer = stores(&[
+            (SYSTIMER + 0x10, 0x123456),
+            (SYSTIMER + 0x5c, 1),
+            (SYSTIMER + 0x20, 50),
+            (SYSTIMER + 0x34, 1 << 30 | 100),
+            (SYSTIMER + 0x50, 1),
+            (SYSTIMER, 0x4600_0000 | 1 << 24),
+            (SYSTIMER + 0x04, 1 << 30),
+            (SYSTEM + 0x20, 1 << 29),
+            (SYSTEM + 0x20, 0),
+            (SYSTIMER + 0x04, 1 << 30),
+        ]);
+        let mut chip = systimer.chip();
+        assert_eq!(chip.run_until(c(21)), None);
+        assert!(
+            word(&mut chip, SYSTIMER + 0x44) > 0x1000,
+            "the count had moved"
+        );
+        assert_eq!(word(&mut chip, SYSTIMER + 0x34), 1 << 30 | 100);
+        assert_eq!(chip.run_until(c(1000)), None);
+        assert!(
+            word(&mut chip, SYSTIMER + 0x44) < 10,
+            "the count is back at 0"
+        );
+        assert_eq!(word(&mut chip, SYSTIMER + 0x34), 0, "the alarm is cleared");
+        assert_eq!(word(&mut chip, SYSTIMER), 0x4600_0000);
+        assert_eq!(chip.unmodeled().count(), 0);
+
+        let timer = |group: u32, bit: u32| {
+            let base = if group == 0 { TIMG0 } else { TIMG1 };
+            let mut pairs = vec![
+                (base + 0x18, 0x99),
+                (base + 0x20, 1),
+                (base, 1 << 31 | 1 << 30 | 1 << 13),
+                (base + 0x0c, 1),
+                (base + 0x48, 0),
+                (base + 0x50, 40),
+                (base + 0x48, 1 << 31 | 3 << 29),
+                (SYSTEM + 0x20, 1 << bit),
+                (SYSTEM + 0x20, 0),
+                (base + 0x0c, 1),
+            ];
+            if group == 1 {
+                pairs.insert(0, (TIMG0 + 0x48, 0));
+            }
+            let mut chip = stores(&pairs).chip();
+            let before = if group == 1 { c(15) } else { c(12) };
+            assert_eq!(chip.run_until(before), None, "group {group}");
+            assert_ne!(word(&mut chip, base + 0x04), 0, "group {group} had counted");
+            assert_eq!(chip.run_until(c(200)), None, "group {group} watchdog");
+            assert_eq!(word(&mut chip, base), 0x6000_2000, "group {group} timer");
+            assert_eq!(word(&mut chip, base + 0x04), 0, "group {group} count");
+            assert_eq!(
+                word(&mut chip, base + 0x48),
+                0x0004_c000,
+                "group {group} watchdog"
+            );
+            assert_eq!(chip.unmodeled().count(), 0, "group {group}");
+        };
+        timer(0, 13);
+        timer(1, 15);
+
+        let rtc = stores(&[
+            (TIMG0 + 0x48, 0),
+            (RTC_CNTL + 0x98, 0),
+            (RTC_CNTL + 0x9c, 1),
+            (RTC_CNTL + 0x98, 1 << 31 | 3 << 28),
+            (SYSTEM + 0x20, 1 << 3),
+            (SYSTEM + 0x20, 0),
+        ]);
+        let mut chip = rtc.chip();
+        assert_eq!(chip.run_until(c(12)), None);
+        assert_eq!(word(&mut chip, RTC_CNTL + 0x98), 1 << 31 | 3 << 28);
+        assert_eq!(chip.run_until(c(2000)), None, "the RTC watchdog was reset");
+        assert_eq!(word(&mut chip, RTC_CNTL + 0x98), 0x0001_3214);
+        assert_eq!(chip.unmodeled().count(), 0);
     }
 }

@@ -17,8 +17,15 @@ for (const block of repoBlocks()) {
       await page.waitForFunction(
         (kind) => {
           const scene = window.orbeViewer?.get().scene;
+          if (kind === "digit") return scene?.getObjectByName("@disp")?.getObjectByName("seg-a") !== undefined;
+          if (kind === "digit") return scene?.getObjectByName("@disp")?.getObjectByName("seg-a") !== undefined;
           if (kind === "pixels") return scene?.getObjectByName("@stick.px1")?.getObjectByName("lens") !== undefined;
           if (kind === "serial") return document.querySelector('[data-testid="world-temperature"]') !== null;
+          if (kind === "screen") return scene?.getObjectByName("@oled.display")?.getObjectByName("glass") !== undefined;
+          if (kind === "rgb") {
+            return scene?.getObjectByName("@board.led")?.getObjectByName("lens") !== undefined
+              && scene?.getObjectByName("@btn1")?.getObjectByName("stem") !== undefined;
+          }
           const led = scene?.getObjectByName("@led1")?.getObjectByName("body") !== undefined;
           const button = kind !== "button" || scene?.getObjectByName("@btn1")?.getObjectByName("stem") !== undefined;
           return led && button;

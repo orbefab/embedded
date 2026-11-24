@@ -38,7 +38,7 @@ a `release` and a `press` with no `step` between land 2 ms apart. `step --until 
 
 ```console
 $ orbe open
-opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 20 engine parts, 35 nets)
+opened scene.jsonc at t=0: nano, btn1, r2, r1, led1 (5 scene parts, expanding to 22 engine parts, 36 nets)
 ...
 $ orbe step 100ms
 t=100ms (from 0s)

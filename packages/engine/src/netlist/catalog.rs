@@ -392,16 +392,20 @@ pub fn live_field(kind: &str) -> Option<&'static str> {
 
 fn chip_pin_names(chip: &Chip) -> &[&'static str] {
     use crate::chip::Ne555;
-    use crate::device::{Bmp280, Cst816, Dht22, PulsesReplay, SpiReplay, St77916, Ws2812};
+    use crate::device::{
+        Bmp280, Cst816, Dht22, Hc595, PulsesReplay, SpiReplay, Ssd1306, St77916, Ws2812,
+    };
 
     match chip {
         Chip::Ne555(_) => &Ne555::PINS,
         Chip::Atmega328p(mcu) => &mcu.names,
         Chip::SpiReplay(_) => &SpiReplay::PINS,
         Chip::St77916(_) => &St77916::PINS,
+        Chip::Ssd1306(_) => &Ssd1306::PINS,
         Chip::Cst816(_) => &Cst816::PINS,
         Chip::Dht22(_) => &Dht22::PINS,
         Chip::Bmp280(_) => &Bmp280::PINS,
+        Chip::Hc595(_) => &Hc595::PINS,
         Chip::Esp32s3(mcu) => &mcu.names,
         Chip::Ws2812(part) => &Ws2812::PINS[..part.pins.len()],
         Chip::PulsesReplay(_) => &PulsesReplay::PINS,
@@ -414,9 +418,11 @@ fn chip_pins(chip: &Chip) -> &[NetId] {
         Chip::Atmega328p(part) => &part.pins,
         Chip::SpiReplay(part) => &part.pins,
         Chip::St77916(part) => &part.pins,
+        Chip::Ssd1306(part) => &part.pins,
         Chip::Cst816(part) => &part.pins,
         Chip::Dht22(part) => &part.pins,
         Chip::Bmp280(part) => &part.pins,
+        Chip::Hc595(part) => &part.pins,
         Chip::Ws2812(part) => &part.pins,
         Chip::PulsesReplay(part) => &part.pins,
         Chip::Esp32s3(part) => &part.pins,
@@ -505,6 +511,9 @@ define_kinds! {
         St77916, "st77916",
             crate::device::st77916::WireSt77916, crate::device::st77916::resolve_st77916,
             &crate::device::St77916::PINS;
+        Ssd1306, "ssd1306",
+            crate::device::ssd1306::WireSsd1306, crate::device::ssd1306::resolve_ssd1306,
+            &crate::device::Ssd1306::PINS;
         Cst816, "cst816",
             crate::device::cst816::WireCst816, crate::device::cst816::resolve_cst816,
             &crate::device::Cst816::PINS;
@@ -524,6 +533,9 @@ define_kinds! {
             crate::device::pulses_replay::WirePulsesReplay,
             crate::device::pulses_replay::resolve_pulses_replay,
             &crate::device::PulsesReplay::PINS;
+        Hc595, "hc595",
+            crate::device::hc595::WireHc595, crate::device::hc595::resolve_hc595,
+            &crate::device::Hc595::PINS;
     }
 }
 

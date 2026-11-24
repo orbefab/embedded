@@ -11,7 +11,7 @@
 
 use orbe_model::{
     Cs, Cx, Device, Drawn, Drive, Drives, Duty, DutyTarget, Error, Lanes, Levels, Panel, Params,
-    Sha256, Shows, Spi, SpiTarget, State, Stop, Time, View,
+    Settings, Sha256, Shows, Spi, SpiTarget, State, Stop, Time, View,
 };
 
 /// The panel's pixels across and down.
@@ -49,6 +49,9 @@ pub(crate) const RAMWRC: u8 = 0x3c;
 pub(crate) const MY: u8 = 0x80;
 pub(crate) const MX: u8 = 0x40;
 pub(crate) const MV: u8 = 0x20;
+
+/// The settings its panel carries, by name.
+pub(crate) const SETTINGS: [&str; 2] = ["madctl", "colmod"];
 
 /// COLMOD after a reset: 18 bits a pixel.
 const COLMOD_RESET: u8 = 0x66;
@@ -262,8 +265,10 @@ impl Device for St77916 {
                 inverted: registers.inverted,
                 reset,
                 asleep: registers.sleep,
-                madctl: registers.madctl,
-                colmod: registers.colmod,
+                settings: Settings::new(
+                    &SETTINGS,
+                    [registers.madctl, registers.colmod].map(u16::from),
+                ),
                 registers: stored as u16,
                 backlight,
             },
