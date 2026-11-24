@@ -1,4 +1,4 @@
-scene.world scene.jsonc:19:17 | `lite` is not a world quantity | the quantities are temperature, humidity and light
+scene.world scene.jsonc:19:17 | `lite` is not a world quantity | the quantities are temperature, humidity, light and pressure
 scene.world scene.jsonc:19:39 | light is from 0 to 100000 lx, not 200000
 scene.world scene.jsonc:19:112 | step 1 of `humidity` is not at least 2 ns after the step before it
 scene.world scene.jsonc:19:138 | step 2 of `humidity` does not change humidity

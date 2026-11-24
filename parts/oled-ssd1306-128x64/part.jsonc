@@ -7,7 +7,7 @@
 // 3.3 V, R3 4.7 kohm and C3 10 uF on RES#, R6 4.7 kohm from SA0 to ground. The back-side
 // placement is this model's own: the drawing gives no positions for those parts.
 {
-  "format": 1,
+  "format": 6,
   "part": "oled-ssd1306-128x64",
   "version": "0.1.0",
   "title": "OLED display module, 0.96 inch 128 x 64, SSD1306, I2C",
@@ -108,8 +108,8 @@
       "why": "The schematic's note says J1 is open for 5 V in and shorted for 3.3 V in, bypassing U1. This module keeps it open, so U1 always regulates. The MC096 drawing's silkscreen reads VCC, GND, SCL, SDA. Boards with GND first, as this module is, are sold as often. Check the board in hand."
     },
     {
-      "what": "the bus voltage limit",
-      "why": "R1 and R2 pull SCL and SDA to 3.3 V. A 5 V board that also pulls them up, as Wire does on a Nano, holds them near 4.1 V, above the SSD1306's VDD + 0.3 V input limit in Table 11-1. The engine warns on no input voltage of this chip, and modules like this one run on 5 V boards all the same."
+      "what": "clamp diodes",
+      "why": "R1 and R2 pull SCL and SDA to the 3.3 V regulator. On a 5 V board with only weak internal pull-ups (as Wire enables on a Nano), the divider stays near 3.46 V, inside the SSD1306's VDD + 0.3 V input limit in Table 11-1. A 5 V bus with stronger pull-ups pulls SCL and SDA past VDD + 0.3 V; the model has no clamp diodes, so the pins stay where the circuit drives them, the run warns `rating.voltage`, and the controller keeps answering."
     },
   ],
 }

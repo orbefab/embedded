@@ -92,6 +92,18 @@
         "source": { "datasheet": { "doc": "Hitachi HD44780U (ADE-207-272)", "at": "DC Characteristics, operating voltage VDD 2.7 V minimum", "basis": "min" } },
       },
     },
+    "ratings": {
+      "rail_margin": {
+        "value": 0.5,
+        "unit": "V",
+        "source": { "datasheet": { "doc": "NXP PCF8574", "at": "Rev. 5, Table 7 Limiting values, p. 15: VI input voltage VSS - 0.5 V to VDD + 0.5 V, and VDD min -0.5 V", "basis": "absolute_max" } },
+      },
+      "supply_voltage": {
+        "value": 7.0,
+        "unit": "V",
+        "source": { "datasheet": { "doc": "NXP PCF8574", "at": "Rev. 5, Table 7 Limiting values, p. 15: VDD supply voltage -0.5 V to +7 V (Hitachi HD44780U ADE-207-272 p. 47 also rates VCC-GND max +7.0 V)", "basis": "absolute_max" } },
+      },
+    },
     "pins": { "VCC": "VCC", "GND": "GND", "SCL": "SCL", "SDA": "SDA" },
   },
   "readings": {

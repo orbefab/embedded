@@ -1,5 +1,5 @@
 {
-  "format": 5,
+  "format": 6,
   "part": "sk68xxmini-hs",
   "version": "0.2.1",
   "title": "SK68XXMINI-HS addressable RGB LED",
@@ -96,6 +96,30 @@
             "doc": "SPC / SK68XX MINI-HS Rev. 04",
             "at": "Section 11, DIN to DOUT transmission delay, 500 ns maximum",
             "basis": "max"
+          }
+        }
+      }
+    },
+    "ratings": {
+      "rail_margin": {
+        "value": 0.5,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "SPC / SK68XX MINI-HS Rev. 04",
+            "at": "Section 8, Absolute Maximum Ratings: Logic input voltage VIN, -0.5 V to VDD + 0.5 V",
+            "basis": "absolute_max"
+          }
+        }
+      },
+      "supply_voltage": {
+        "value": 5.5,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "SPC / SK68XX MINI-HS Rev. 04",
+            "at": "Section 8, Absolute Maximum Ratings: Power supply voltage VDD, +3.5 V to +5.5 V",
+            "basis": "absolute_max"
           }
         }
       }

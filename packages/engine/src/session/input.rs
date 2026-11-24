@@ -150,7 +150,9 @@ impl Session {
     /// The value already in force from the landing on, when no later step differs from it, is
     /// [`Rejected::NoChange`]. A later step that differs is dropped and, when the value was
     /// already that, nothing is appended. An event exactly at the landing stays when it already
-    /// holds the value. A change of the value appends one step there. Either way the held step
+    /// holds the value. One that holds something else is dropped. When the value from before
+    /// that event is the one asked for, nothing is appended: a read at the landing still sees
+    /// it. A change of the value appends one step there. Either way the held step
     /// is solved again from the accepted one, as `apply` does, and a jump restarts. Every part
     /// field that reads the quantity follows the schedule this leaves.
     pub fn set(&mut self, change: &WorldChange) -> Result<WorldApplied, Rejected> {
@@ -160,7 +162,7 @@ impl Session {
             State::Ended { .. } => unreachable!("from() accepted a running session"),
         };
         let quantity = change.quantity;
-        let (at, same) = {
+        let (at, keep_landing, append) = {
             let schedule = self
                 .circuit
                 .netlist
@@ -171,6 +173,7 @@ impl Session {
                 return Err(Rejected::Value(ValueRule::Range));
             }
             let pending = schedule.after(from).si;
+            let kept = schedule.before(from).si;
             let differs = schedule
                 .events()
                 .iter()
@@ -183,17 +186,23 @@ impl Session {
             } else {
                 landing_without_later(schedule, from).ok_or(Rejected::PastStop)?
             };
-            (at, pending == change.value)
+            // A step at `from` has not taken effect: a read there is `kept`. Keeping the step
+            // is right only when it already holds the value. Dropping it restores `kept`, so a
+            // set of that value appends nothing.
+            let keep_landing = pending == change.value;
+            let append = !keep_landing && kept != change.value;
+            (at, keep_landing, append)
         };
         let at = self.before_stop(Some(at))?;
-        // An event at the landing that already holds the value stays. A different one is replaced.
-        let drop_at = if same {
+        // An event at the landing that already holds the value stays. A different one is
+        // dropped, and replaced only when the value from before it differs.
+        let drop_at = if keep_landing {
             Time::from_ps(from.as_ps().saturating_add(1))
         } else {
             from
         };
         let dropped = self.circuit.netlist.drop_world_from(quantity, drop_at);
-        if !same {
+        if append {
             self.circuit
                 .netlist
                 .append_world(quantity, at, change.value);
@@ -209,7 +218,7 @@ impl Session {
             at: applied.at,
             status: applied.status,
             dropped: u32::try_from(dropped).expect("a quantity's steps fit in the reply"),
-            already: same,
+            already: !append,
         })
     }
 
