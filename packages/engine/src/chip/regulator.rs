@@ -41,34 +41,42 @@ const BLOCK_A: f64 = 1e-12;
 /// states 15 V and no negative floor, and the SGM2212 sheet states 22 V and no negative floor.
 pub(crate) const INPUT_FLOOR_V: f64 = 0.3;
 /// Fraction of `output_voltage` dropped by the current-limit term before the regulator is treated
-/// as actively clamped (0.5%, i.e. 16.5 mV on 3.3 V or 25 mV on 5 V). At 99.5% of `current_limit`
-/// the softplus term is 0.07% of `output_voltage` and an ideal 100% nominal load is 0.35%; at
-/// 0.5% the pass current is 99.7% of `current_limit`, catching 105% overloads even on regulators
-/// whose own `output_resistance` already takes 3.5% of `output_voltage` (LP2985, XC6206).
+/// as actively clamped (0.5%, i.e. 16.5 mV on 3.3 V or 25 mV on 5 V), and also the drop below
+/// the pre-overload baseline (or high-water mark while clamped) that confirms a pull-down rather
+/// than a charging rail. At 99.5% of `current_limit` the softplus term is 0.07% of
+/// `output_voltage` and an ideal 100% nominal load is 0.35%; at 0.5% the pass current is 99.7%
+/// of `current_limit`, catching 105% overloads even on regulators whose own `output_resistance`
+/// already takes 3.5% of `output_voltage` (LP2985, XC6206).
 pub(crate) const LIMIT_SAG_FRACTION: f64 = 0.005;
 /// Below this fraction of `output_voltage` the regulator is clear of the current-limit knee, so
 /// its unclamped output voltage updates the pre-overload baseline.
 pub(crate) const LIMIT_KNEE_FRACTION: f64 = 0.001;
-/// Fraction of `output_voltage` the output must fall below its pre-overload baseline (or below
-/// its high-water mark while clamped) to confirm that the rail was pulled down rather than
-/// charging up at power-on.
-pub(crate) const PULL_DOWN_FRACTION: f64 = 0.005;
-/// Minimum upward slope, in `output_voltage` per second, that counts as an output capacitor
-/// actively charging toward its target (0.5/s, i.e. up to 2 s from 0 V to `output_voltage`).
-/// Covers even a 1000 uF cap on the 30 mA CH340G with a 90% parallel load while catching a rail
-/// stalled below target.
-pub(crate) const MIN_CHARGE_RATE: f64 = 0.5;
-/// Minimum picoseconds over which a non-rising clamped rail is checked before declaring it
-/// stalled (50 us). At `MIN_CHARGE_RATE` that spans 2.5e-5 * `output_voltage`, roughly 25x above
-/// Newton's `RELTOL * vo` so nanosecond solver steps never mistake solver noise for a stall.
-pub(crate) const STALL_PS: u64 = 50_000_000;
-/// Fraction of `output_voltage` within which a clamped output must stay for [`SETTLE_PS`] to
+/// Minimum picoseconds a pulled-down clamp must persist before warning, and the minimum plateau
+/// hold within [`SETTLE_BAND_FRACTION`] to lock in a settled clamped voltage (1 us). Real linear
+/// regulators' error-amplifier and current-limit loops and required output bypass capacitors
+/// respond on microsecond-to-hundreds-of-microsecond timescales (TI SLVS522S LP2985 load
+/// transient curves at 20 us/div with 1 A/us steps and >= 2.2 uF Cout; AMS1117 20 us/div with
+/// 22 uF Cout; SGM2212 200 us/div with >= 1 uF Cout; Torex XC6206 1 ms/div with 1 uF CL;
+/// TI SNOSBT0L LM7805 0.1 uF output bypass; CH340G 0.1 uF V3 bypass), so picosecond to
+/// tens-of-nanosecond capacitive switching spikes do not trip or settle the limit, while
+/// microsecond brownouts (such as the 1.7 us Nano 3V3 NeoPixel reset) and PWM overloads warn.
+pub(crate) const LIMIT_HOLD_PS: u64 = 1_000_000;
+/// Fraction of `output_voltage` within which a clamped output must hold for [`LIMIT_HOLD_PS`] to
 /// count as a settled plateau rather than a switching-edge spike or charging ramp.
 pub(crate) const SETTLE_BAND_FRACTION: f64 = 0.002;
-/// Picoseconds a clamped output must hold inside [`SETTLE_BAND_FRACTION`] to be recorded as a
-/// settled clamped voltage (1 us). Long enough to skip nanosecond MOSFET capacitive kickback
-/// edges while settling inside microsecond PWM pulses.
-pub(crate) const SETTLE_PS: u64 = 1_000_000;
+/// Minimum fractional rate (per second) at which a charging clamped output starting below target
+/// must close its remaining current-limit gap `drop = vo_min - vo` (0.5/s, a 2 s RC time
+/// constant). Any capacitive load in parallel with a resistor at or under the limit closes `drop`
+/// at least as fast as `1 / (R * C)` all the way into regulation (1.93/s even for 4700 uF at 100%
+/// load on the 30 mA CH340G), while a rail stalled below target slows exponentially and must
+/// warn within at most `ln(1 / LIMIT_SAG_FRACTION) / MIN_CHARGE_RATE` (~10.6 s), and in practice
+/// within a few `R * C` time constants or [`STALL_PS`] with no capacitor.
+pub(crate) const MIN_CHARGE_RATE: f64 = 0.5;
+/// Minimum picoseconds over which a charging clamped rail is checked before declaring it stalled
+/// (500 us). At `MIN_CHARGE_RATE` and the smallest clamped `drop` (`LIMIT_SAG_FRACTION * vout`),
+/// the required rise is `1.25e-6 * vout`, above Newton's `RELTOL * vo`, while an immediate
+/// no-capacitor overload still warns well inside a 1 ms run.
+pub(crate) const STALL_PS: u64 = 500_000_000;
 
 pub(crate) struct Law {
     vo: f64,

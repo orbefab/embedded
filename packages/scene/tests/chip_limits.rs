@@ -383,3 +383,264 @@ fn pwm_mosfet_overload_reports_settled_pulse_voltage_matching_probe() {
         );
     }
 }
+
+#[test]
+fn charging_large_capacitor_with_heavy_load_stays_quiet_while_overload_warns() {
+    let quiet_cases = [
+        (
+            "ch340g",
+            "VCC",
+            "V3",
+            "GND",
+            5.0,
+            "122.2",
+            "4700u",
+            Some(800 * MS),
+            3_000 * MS,
+            3.25,
+        ),
+        (
+            "ch340g",
+            "VCC",
+            "V3",
+            "GND",
+            5.0,
+            "110",
+            "1000u",
+            None,
+            1_000 * MS,
+            3.25,
+        ),
+        (
+            "ch340g",
+            "VCC",
+            "V3",
+            "GND",
+            5.0,
+            "110",
+            "4700u",
+            None,
+            3_000 * MS,
+            3.25,
+        ),
+        (
+            "ams1117-sot223",
+            "IN",
+            "OUT",
+            "GND",
+            9.0,
+            "4.545",
+            "4700u",
+            Some(100 * MS),
+            300 * MS,
+            4.95,
+        ),
+        (
+            "sgm2212-sot223",
+            "IN",
+            "OUT",
+            "GND",
+            5.0,
+            "3.000",
+            "4700u",
+            None,
+            200 * MS,
+            3.25,
+        ),
+        (
+            "xc6206-sot23",
+            "VIN",
+            "VOUT",
+            "VSS",
+            5.0,
+            "16.5",
+            "4700u",
+            None,
+            500 * MS,
+            3.15,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (id, vin, vout, gnd, supply, ohms, cap, mid_ps, stop_ps, min_v) in quiet_cases {
+        let project = common::project("nano-button");
+        let parts = format!(
+            r#""v1": {{ "type": "./supply/part.jsonc", "voltage": "{supply}" }},
+            "u1": {{ "type": "{id}" }},
+            "c1": {{ "type": "capacitor-electrolytic-radial", "capacitance": "{cap}", "initial": "0" }},
+            "rl": {{ "type": "resistor-axial", "resistance": "{ohms}" }}"#
+        );
+        let wires = format!(
+            r#"["v1.pos", "u1.{vin}"], ["v1.neg", "u1.{gnd}"],
+            ["u1.{vout}", "c1.pos"], ["c1.neg", "v1.neg"],
+            ["u1.{vout}", "rl.a"], ["rl.b", "v1.neg"]"#
+        );
+        let mut session = open(project.path(), &parts, &wires);
+        if let Some(mid) = mid_ps {
+            session.advance_to(Time::from_ps(mid));
+            let mid_found = limit_warnings(&session);
+            if !mid_found.is_empty() {
+                failures.push(format!(
+                    "{id} {ohms} ohm {cap} warned mid-charge at {mid} ps: {}",
+                    mid_found[0]["message"]
+                ));
+            }
+        }
+        session.advance_to(Time::from_ps(stop_ps));
+        let probe = session.probe();
+        let v_out = probe.get(&"#rl.v".parse::<Ref>().unwrap()).unwrap().get();
+        let i_out = probe
+            .get(&"#rl.i".parse::<Ref>().unwrap())
+            .unwrap()
+            .get()
+            .abs();
+        let found = limit_warnings(&session);
+        if v_out <= min_v {
+            failures.push(format!(
+                "{id} {ohms} ohm {cap} did not reach regulation: vout={v_out:.4} V i={i_out:.4} A"
+            ));
+        }
+        if !found.is_empty() {
+            failures.push(format!(
+                "{id} {ohms} ohm {cap} (vout={v_out:.4} V i={i_out:.4} A) warned: {}",
+                found[0]["message"]
+            ));
+        }
+    }
+
+    let overload_cases = [
+        (
+            "ams1117-sot223",
+            "IN",
+            "OUT",
+            "GND",
+            9.0,
+            "4.329",
+            "4700u",
+            300 * MS,
+        ),
+        (
+            "ch340g",
+            "VCC",
+            "V3",
+            "GND",
+            5.0,
+            "104.76",
+            "4700u",
+            3_000 * MS,
+        ),
+    ];
+    for (id, vin, vout, gnd, supply, ohms, cap, stop_ps) in overload_cases {
+        let project = common::project("nano-button");
+        let parts = format!(
+            r#""v1": {{ "type": "./supply/part.jsonc", "voltage": "{supply}" }},
+            "u1": {{ "type": "{id}" }},
+            "c1": {{ "type": "capacitor-electrolytic-radial", "capacitance": "{cap}", "initial": "0" }},
+            "rl": {{ "type": "resistor-axial", "resistance": "{ohms}" }}"#
+        );
+        let wires = format!(
+            r#"["v1.pos", "u1.{vin}"], ["v1.neg", "u1.{gnd}"],
+            ["u1.{vout}", "c1.pos"], ["c1.neg", "v1.neg"],
+            ["u1.{vout}", "rl.a"], ["rl.b", "v1.neg"]"#
+        );
+        let mut session = open(project.path(), &parts, &wires);
+        session.advance_to(Time::from_ps(stop_ps));
+        let probe_v = session
+            .probe()
+            .get(&"#rl.v".parse::<Ref>().unwrap())
+            .unwrap()
+            .get();
+        let found = limit_warnings(&session);
+        if found.len() != 1 {
+            failures.push(format!(
+                "{id} {ohms} ohm {cap} overload did not warn (vout={probe_v:.4} V): {found:?}"
+            ));
+            continue;
+        }
+        let reported_v = found[0]["data"]["voltage"].as_f64().unwrap();
+        if (reported_v - probe_v).abs() >= 0.05 {
+            failures.push(format!(
+                "{id} {ohms} ohm {cap} reported {reported_v} V vs probe {probe_v} V ({})",
+                found[0]["message"]
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn pwm_mosfet_under_limit_stays_quiet_and_105_percent_warns_with_pulse_voltage() {
+    let cases = [
+        ("ams1117-sot223", "IN", "OUT", "GND", 9.0, 5.0, 1.1),
+        ("lm7805-to220", "IN", "OUT", "GND", 9.0, 5.0, 2.4),
+        ("sgm2212-sot223", "IN", "OUT", "GND", 5.0, 3.3, 1.1),
+        ("lp2985-sot23-5", "IN", "OUT", "GND", 5.0, 3.3, 0.35),
+        ("xc6206-sot23", "VIN", "VOUT", "VSS", 5.0, 3.3, 0.2),
+        ("ch340g", "VCC", "V3", "GND", 5.0, 3.3, 0.03),
+    ];
+    let mut failures = Vec::new();
+    for (id, vin, vout, gnd, supply, target, ilim) in cases {
+        let bleed = target / 0.005;
+        let load_80 = target / (0.80 * ilim);
+        let project = common::project("nano-button");
+        let parts = format!(
+            r#""v1": {{ "type": "./supply/part.jsonc", "voltage": "{supply}" }},
+            "vg": {{ "type": "./pulse/part.jsonc" }},
+            "u1": {{ "type": "{id}" }},
+            "rl": {{ "type": "resistor-axial", "resistance": "{load_80}" }},
+            "q1": {{ "type": "nmos-irf520-to220" }}"#
+        );
+        let wires = format!(
+            r#"["v1.pos", "u1.{vin}"], ["v1.neg", "u1.{gnd}"],
+            ["u1.{vout}", "rl.a"], ["rl.b", "q1.drain"], ["q1.source", "v1.neg"],
+            ["vg.pos", "q1.gate"], ["vg.neg", "v1.neg"]"#
+        );
+        let mut session = open(project.path(), &parts, &wires);
+        session.advance_to(Time::from_ps(5 * MS));
+        let found = limit_warnings(&session);
+        if !found.is_empty() {
+            failures.push(format!(
+                "{id} 80% PWM (R={load_80:.3}) warned: {}",
+                found[0]["message"]
+            ));
+        }
+
+        // 105% PWM overload (subtracting IRF520's ~0.12 ohm Rds(on) at 10 V gate).
+        let load_105 = target / (1.05 * ilim) - 0.12;
+        let project = common::project("nano-button");
+        let parts = format!(
+            r#""v1": {{ "type": "./supply/part.jsonc", "voltage": "{supply}" }},
+            "vg": {{ "type": "./pulse/part.jsonc" }},
+            "u1": {{ "type": "{id}" }},
+            "rb": {{ "type": "resistor-axial", "resistance": "{bleed}" }},
+            "rl": {{ "type": "resistor-axial", "resistance": "{load_105}" }},
+            "q1": {{ "type": "nmos-irf520-to220" }}"#
+        );
+        let wires = format!(
+            r#"["v1.pos", "u1.{vin}"], ["v1.neg", "u1.{gnd}"],
+            ["u1.{vout}", "rb.a"], ["rb.b", "v1.neg"],
+            ["u1.{vout}", "rl.a"], ["rl.b", "q1.drain"], ["q1.source", "v1.neg"],
+            ["vg.pos", "q1.gate"], ["vg.neg", "v1.neg"]"#
+        );
+        let mut session = open(project.path(), &parts, &wires);
+        session.advance_to(Time::from_ps(1_050_000_000));
+        let in_pulse_v = session
+            .probe()
+            .get(&"#rb.v".parse::<Ref>().unwrap())
+            .unwrap()
+            .get();
+        session.advance_to(Time::from_ps(5 * MS));
+        let found = limit_warnings(&session);
+        if found.len() != 1 {
+            failures.push(format!("{id} 105% PWM overload: {found:?}"));
+            continue;
+        }
+        let reported_v = found[0]["data"]["voltage"].as_f64().unwrap();
+        if (reported_v - in_pulse_v).abs() >= 0.02 {
+            failures.push(format!(
+                "{id} 105% PWM reported {reported_v} V vs in-pulse {in_pulse_v} V ({})",
+                found[0]["message"]
+            ));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}

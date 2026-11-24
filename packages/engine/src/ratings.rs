@@ -7,8 +7,8 @@ use crate::active::{self, Output, Stage};
 use crate::netlist::{Average, Basis, Model, NetId, Netlist, Rating, RatingKind};
 
 use crate::chip::regulator::{
-    LIMIT_KNEE_FRACTION, LIMIT_SAG_FRACTION, MIN_CHARGE_RATE, PULL_DOWN_FRACTION,
-    SETTLE_BAND_FRACTION, SETTLE_PS, STALL_PS, limit_drop,
+    LIMIT_HOLD_PS, LIMIT_KNEE_FRACTION, LIMIT_SAG_FRACTION, MIN_CHARGE_RATE, SETTLE_BAND_FRACTION,
+    STALL_PS, limit_drop,
 };
 use crate::diagnostic::{
     CurrentLimitExcursion, Diagnostic, Excursion, VoltageExcursion, exceeds_rounded, significant,
@@ -274,6 +274,7 @@ struct PendingLimit {
     first: Time,
     over_ps: Option<u64>,
     high_vo: f64,
+    pulled_since: Option<Time>,
     progress_vo: f64,
     progress_at: Time,
 }
@@ -651,12 +652,10 @@ impl Ratings {
                 }
                 continue;
             }
-            let pulled_down = limit
-                .baseline_vo
-                .is_some_and(|before| before - vo >= PULL_DOWN_FRACTION * vout);
+            let sag = LIMIT_SAG_FRACTION * vout;
             let settled_now = match limit.settle {
                 Some(s) if (vo - s.vo).abs() <= SETTLE_BAND_FRACTION * vout => {
-                    at.as_ps() - s.since.as_ps() >= SETTLE_PS
+                    at.as_ps() - s.since.as_ps() >= LIMIT_HOLD_PS
                 }
                 _ => {
                     limit.settle = Some(Settle { vo, since: at });
@@ -678,34 +677,45 @@ impl Ratings {
                 }
                 continue;
             }
-            let charge_step = MIN_CHARGE_RATE * vout * (STALL_PS as f64 * 1e-12);
-            let stalled = if let Some(pending) = &mut limit.pending {
-                if pending.high_vo - vo >= PULL_DOWN_FRACTION * vout {
-                    true
+            let pulled_below_baseline = limit.baseline_vo.is_some_and(|before| before - vo >= sag);
+            let mut stalled = false;
+            let warn = if self.timing == Timing::Point {
+                true
+            } else if let Some(pending) = &mut limit.pending {
+                let pulled = pulled_below_baseline || pending.high_vo - vo >= sag;
+                if pulled {
+                    let since = *pending.pulled_since.get_or_insert(at);
+                    at.as_ps() - since.as_ps() >= LIMIT_HOLD_PS
                 } else {
+                    pending.pulled_since = None;
                     pending.high_vo = pending.high_vo.max(vo);
                     let dt_ps = at.as_ps() - pending.progress_at.as_ps();
-                    let dv = vo - pending.progress_vo;
                     if dt_ps >= STALL_PS {
-                        if dv >= MIN_CHARGE_RATE * vout * (dt_ps as f64 * 1e-12) {
+                        let dv = vo - pending.progress_vo;
+                        if dv >= MIN_CHARGE_RATE * drop * (dt_ps as f64 * 1e-12) {
                             pending.progress_vo = vo;
                             pending.progress_at = at;
                             false
                         } else {
+                            stalled = true;
                             true
                         }
                     } else {
-                        if dv >= charge_step {
-                            pending.progress_vo = vo;
-                            pending.progress_at = at;
-                        }
                         false
                     }
                 }
             } else {
+                limit.pending = Some(PendingLimit {
+                    first: at,
+                    over_ps: self.timing.over_ps(),
+                    high_vo: vo,
+                    pulled_since: pulled_below_baseline.then_some(at),
+                    progress_vo: vo,
+                    progress_at: at,
+                });
                 false
             };
-            if self.timing == Timing::Point || pulled_down || stalled {
+            if warn {
                 let (first, over_ps) = match limit.pending.take() {
                     Some(pending) => (pending.first, pending.over_ps),
                     None => (at, self.timing.over_ps()),
@@ -729,14 +739,6 @@ impl Ratings {
                     peak_at: at,
                     first,
                     over_ps,
-                });
-            } else if limit.pending.is_none() {
-                limit.pending = Some(PendingLimit {
-                    first: at,
-                    over_ps: self.timing.over_ps(),
-                    high_vo: vo,
-                    progress_vo: vo,
-                    progress_at: at,
                 });
             }
         }
