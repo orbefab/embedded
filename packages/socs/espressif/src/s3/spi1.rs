@@ -12,8 +12,9 @@
 //! The chip is the board's 16 MB Boya BY25Q128, JEDEC ID `68 40 18`, its quad enable bit set.
 //! It reads, and reports its ID and status. A status write can lock the flash for good, so it is
 //! refused before any status bit changes, with or without `WREN`. The chip has no program or
-//! erase here, so those, a read past the flash's end, and every other command the model does not
-//! know are refused too. A refusal ends the run.
+//! erase here, so those are refused as a write, which Wi-Fi, Bluetooth and saved settings make.
+//! A read past the flash's end and every other command the model does not know are refused too.
+//! A refusal ends the run.
 //! IDF v5.5.5, `components/soc/esp32s3/include/soc/spi_mem_reg.h`,
 //! `components/hal/esp32s3/include/hal/spimem_flash_ll.h` and `components/spi_flash`.
 
@@ -72,8 +73,10 @@ const QE: u8 = 1 << 1;
 /// Why the chip refused a flash command, which ends the run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FlashRefusal {
-    /// A program, an erase, or another command the model does not run.
+    /// A command the model does not know.
     Command(u8),
+    /// A page program or an erase, which the model does not simulate.
+    Write(u8),
     /// A status write: `SPI_MEM_FLASH_WRSR`, or a user `0x01`, `0x31` or `0x11`.
     StatusWrite(u8),
     /// A user command with no command phase, or a write that sets only `SPI_MEM_FLASH_PE`.
@@ -153,7 +156,7 @@ impl Spi1 {
             }
             one if one.is_power_of_two() => {
                 let (_, command) = FIXED.iter().find(|&&(bit, _)| bit == one).expect("fixed");
-                return Err(FlashRefusal::Command(*command));
+                return Err(refusal(*command));
             }
             _ => return Err(FlashRefusal::StartBits),
         }
@@ -240,8 +243,18 @@ impl Spi1 {
                 }
             }
             0xab | 0xb9 | 0x66 | 0x99 | 0x7a | 0x75 | 0xff => repeat(0),
-            other => return Err(FlashRefusal::Command(other)),
+            other => return Err(refusal(other)),
         })
+    }
+}
+
+/// Why the chip refuses `command`, one it does not run: a write when it programs a page or
+/// erases, as the BY25Q128's page program `0x02`, quad page program `0x32`, sector erase `0x20`,
+/// block erases `0x52` and `0xd8` and chip erases `0x60` and `0xc7` do.
+fn refusal(command: u8) -> FlashRefusal {
+    match command {
+        0x02 | 0x32 | 0x20 | 0x52 | 0xd8 | 0x60 | 0xc7 => FlashRefusal::Write(command),
+        other => FlashRefusal::Command(other),
     }
 }
 
@@ -353,18 +366,28 @@ mod tests {
     }
 
     #[test]
-    fn an_erase_ends_the_run() {
-        let mut spi1 = spi1();
-        spi1.write(USER, USR_COMMAND | USR_ADDR, &[]).unwrap();
-        spi1.write(USER2, 7 << 28 | 0x20, &[]).unwrap();
+    fn an_erase_or_a_program_ends_the_run_as_a_write() {
+        for command in [0x02, 0x32, 0x20, 0x52, 0xd8, 0x60, 0xc7] {
+            let mut spi1 = spi1();
+            spi1.write(USER, USR_COMMAND | USR_ADDR, &[]).unwrap();
+            spi1.write(USER2, 7 << 28 | command, &[]).unwrap();
+            assert_eq!(
+                spi1.write(CMD, USR | 1 << 17, &[0xff]),
+                Err(FlashRefusal::Write(command as u8)),
+                "{command:#x}"
+            );
+        }
+        for (bit, command) in [(25, 0x02), (24, 0x20), (23, 0xd8), (22, 0xc7)] {
+            assert_eq!(
+                spi1().write(CMD, 1 << bit, &[0xff]),
+                Err(FlashRefusal::Write(command)),
+                "the fixed {command:#x}"
+            );
+        }
         assert_eq!(
-            spi1.write(CMD, USR | 1 << 17, &[0xff]),
-            Err(FlashRefusal::Command(0x20))
-        );
-        assert_eq!(
-            spi1.write(CMD, 1 << 24, &[0xff]),
-            Err(FlashRefusal::Command(0x20)),
-            "the fixed sector erase"
+            spi1().write(CMD, 1 << 21, &[0xff]),
+            Err(FlashRefusal::Command(0xb9)),
+            "the fixed deep power-down"
         );
     }
 

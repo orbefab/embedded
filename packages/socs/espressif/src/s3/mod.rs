@@ -19,9 +19,11 @@
 //! the board does. A load or store anywhere else outside the peripherals raises
 //! `LoadStoreError`. A fetch from anywhere else ends the run.
 //!
-//! A peripheral register the model does not keep reads 0 and drops writes. [`Esp32s3::unmodeled`]
-//! lists each one the firmware touched, with the first access's cycle and PC. That access stops
-//! the core once, so the timeline can read the PC, and then runs again. A byte or halfword
+//! A peripheral register the model does not keep, in a block it runs, reads 0 and drops writes.
+//! [`Esp32s3::unmodeled`] lists each one the firmware touched, with the first access's cycle and
+//! PC. That access stops the core once, so the timeline can read the PC, and then runs again. An
+//! access to such a register in a block the model does not simulate ends the run, naming the
+//! block, as `blocks` says. A byte or halfword
 //! access to a kept register reads or merges into its word.
 
 mod analog;
@@ -164,6 +166,9 @@ pub enum Refused {
     Interrupt(&'static str),
     /// A setting of this peripheral, by name, that the model does not run.
     Register(&'static str, &'static str),
+    /// An access to a register of this block, which the model does not simulate, and the
+    /// words that say what the block is.
+    Unsimulated(&'static str, &'static str),
     /// `RTC_CNTL_SLEEP_EN`.
     Sleep,
 }
@@ -1579,21 +1584,61 @@ mod tests {
         assert_eq!(chip.run_until(c(1000)), None);
     }
 
+    /// A store to a block the model does not simulate ends the run at the store, naming the
+    /// block and what it is.
     #[test]
-    fn a_store_to_usb_wrap_ends_the_run() {
-        for address in [0x6003_9000, 0x6003_9004] {
+    fn a_store_to_a_block_the_model_does_not_simulate_ends_the_run() {
+        let otg = "the USB OTG port that TinyUSB, USB MSC and USB HID use";
+        let refused = [
+            (0x6003_9000, "USB_WRAP", otg),
+            (0x6003_9004, "USB_WRAP", otg),
+            (
+                0x6001_704c,
+                "PCNT",
+                "the pulse counter that encoder libraries use",
+            ),
+            (0x6003_1204, "RADIO", "the Wi-Fi and Bluetooth radio"),
+            (0x6002_7000, "I2C1", "the second I2C port, Wire1"),
+            (
+                0x6000_8850,
+                "SENS",
+                "the temperature sensor that temperatureRead uses",
+            ),
+            (
+                0x6000_8854,
+                "SENS",
+                "the temperature sensor that temperatureRead uses",
+            ),
+        ];
+        for (address, block, what) in refused {
             let program = store_after_two_loads(address, 1, 0);
             assert_eq!(
                 program.chip().run_until(c(1000)),
                 Some(Halt::Fault(
                     c(2),
+                    Fault::Refused(Refused::Unsimulated(block, what), pro(program.entry() + 6))
+                )),
+                "{address:#x}"
+            );
+        }
+        for address in [0x6000_8904, 0x6000_8908] {
+            let program = store_after_two_loads(address, 1 << 29, 0);
+            let mut chip = program.chip();
+            assert_eq!(
+                chip.run_until(c(1000)),
+                Some(Halt::Fault(
+                    c(2),
                     Fault::Refused(
-                        Refused::Register("USB_WRAP", "otg"),
+                        Refused::Unsimulated(
+                            "SENS",
+                            "the temperature sensor that temperatureRead uses"
+                        ),
                         pro(program.entry() + 6)
                     )
                 )),
                 "{address:#x}"
             );
+            assert_eq!(chip.unmodeled().count(), 0, "{address:#x}");
         }
     }
 
@@ -1612,15 +1657,32 @@ mod tests {
         assert!(Soc::load_moves_lines(USB_SERIAL_JTAG + 0x08));
     }
 
+    /// A load from a block the model does not simulate ends the run at the load, where one
+    /// from a block it runs is listed and reads 0.
     #[test]
-    fn a_load_of_usb_wrap_is_unmodeled() {
+    fn a_load_of_a_block_the_model_does_not_simulate_ends_the_run() {
         let mut program = Program::new(&[0x6003_9000]);
+        program.l32r(2, 0);
+        let load = program.pc();
+        program.rri8(2, 3, 2, 0).raw(&LOOP);
+        let otg = "the USB OTG port that TinyUSB, USB MSC and USB HID use";
+        let mut chip = program.chip();
+        assert_eq!(
+            chip.run_until(c(1000)),
+            Some(Halt::Fault(
+                c(1),
+                Fault::Refused(Refused::Unsimulated("USB_WRAP", otg), pro(load))
+            ))
+        );
+        assert_eq!(chip.unmodeled().count(), 0);
+
+        let mut program = Program::new(&[0x6000_8400]);
         program.l32r(2, 0).rri8(2, 3, 2, 0).raw(&LOOP);
         let mut chip = program.chip();
         assert_eq!(chip.run_until(c(1000)), None);
         let touched: Vec<(u32, Touch)> = chip.unmodeled().collect();
         assert_eq!(touched.len(), 1);
-        assert_eq!(touched[0].0, 0x6003_9000);
+        assert_eq!(touched[0].0, 0x6000_8400);
         assert!(!touched[0].1.write);
     }
 
@@ -1897,9 +1959,9 @@ mod tests {
         let image = chip.run_until(c(1000));
         assert_eq!(chip.drive(21), PadDrive::Low);
 
-        let mut probe = store_after_two_loads(0x6001_7000, 0, 0).chip();
+        let mut probe = store_after_two_loads(0x6000_8400, 0, 0).chip();
         assert_eq!(probe.run_until(c(1000)), None);
-        let (_, touch) = probe.unmodeled().next().expect("the store touched PCNT");
+        let (_, touch) = probe.unmodeled().next().expect("the store touched RTCIO");
         assert_eq!(image, Some(image_at(touch.at)));
     }
 
@@ -3398,8 +3460,9 @@ mod tests {
         );
     }
 
-    /// Boot clears the radio force-up bits and reads an RTC pad to leave it digital. The
-    /// register beside the baseband word, and a store that sets the pad's `MUX_SEL`, are listed.
+    /// Boot clears the radio force-up bits and reads an RTC pad to leave it digital. A store
+    /// that sets the pad's `MUX_SEL` is listed, and the register beside the baseband word ends
+    /// the run, since the model does not simulate the radio.
     #[test]
     fn a_radio_force_up_and_a_digital_pad_read_are_quiet() {
         let mut program = Program::new(&[0x6001_d054, 0x6001_d050, 0x6000_8494, 1 << 19]);
@@ -3409,19 +3472,24 @@ mod tests {
             .l32r(2, 0)
             .movi(3, 0)
             .rri8(6, 3, 2, 0)
-            .l32r(2, 1)
-            .rri8(2, 3, 2, 0)
             .l32r(2, 2)
             .l32r(3, 3)
             .rri8(6, 3, 2, 0)
-            .raw(&LOOP);
+            .l32r(2, 1);
+        let load = program.pc();
+        program.rri8(2, 3, 2, 0).raw(&LOOP);
         let mut chip = program.chip();
-        assert_eq!(chip.run_until(c(200)), None);
+        let halt = chip.run_until(c(200));
         let names: Vec<String> = chip
             .unmodeled()
             .map(|(addr, _)| Touch::register(addr))
             .collect();
-        assert_eq!(names, ["RTCIO+0x94", "BB+0x50"]);
+        assert_eq!(names, ["RTCIO+0x94"]);
+        let radio = Refused::Unsimulated("BB", "the Wi-Fi and Bluetooth radio");
+        assert!(
+            matches!(halt, Some(Halt::Fault(_, Fault::Refused(refused, pc))) if refused == radio && pc == pro(load)),
+            "{halt:?}"
+        );
     }
 
     /// All 22 RTC pad registers (GPIO0 to GPIO21, `RTCIO+0x84..=0xd8`) are quiet on reads and on
