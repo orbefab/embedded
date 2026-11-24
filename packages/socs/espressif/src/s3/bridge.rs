@@ -160,6 +160,7 @@ impl Bridge {
         Sent {
             start: time(train.start),
             end: time(train.end),
+            peripheral: "RMT",
             pin: pin(train.pad).expect("a pad with a net has a pin"),
             kind: SentKind::Pulses {
                 pulses: Pulses {
@@ -192,6 +193,7 @@ impl Bridge {
                 Some(Sent {
                     start: time(flight.start),
                     end,
+                    peripheral: "RMT",
                     pin: pin(pad)?,
                     kind: SentKind::Pulses {
                         pulses: Pulses {
@@ -210,6 +212,7 @@ impl Bridge {
         Sent {
             start: time(duty.at),
             end: time(duty.at),
+            peripheral: "LEDC",
             pin: pin(duty.pad).expect("a pad with a net has a pin"),
             kind: SentKind::Duty {
                 duty: orbe_model::Duty {
@@ -236,6 +239,7 @@ impl Bridge {
         Sent {
             start: time(transfer.start),
             end: time(transfer.end),
+            peripheral: "SPI2",
             pin: pads.cs.and_then(pin).unwrap_or("SPI2"),
             kind: SentKind::Spi {
                 spi: Spi {

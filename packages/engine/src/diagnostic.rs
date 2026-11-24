@@ -195,9 +195,6 @@ pub enum ProtocolRule {
     /// A read that came sooner than the sensor answers one: inside its warm-up after power-on,
     /// or before its minimum interval after the last read it answered.
     Interval,
-    /// A high a `Pulses` record carried, which a chain with `DOUT` would pass on. The record
-    /// lands at its end, after that high, so `DOUT` does not drive it.
-    DoutRecord,
     /// The supply is up, and under 4.5 V. The shaft still moves, slower than at 4.8 V.
     Supply,
     /// The moving draw pulled an SG90's supply under 3.0 V. The shaft holds.
@@ -209,13 +206,12 @@ pub enum ProtocolRule {
 }
 
 impl ProtocolRule {
-    pub(crate) const ALL: [ProtocolRule; 10] = [
+    pub(crate) const ALL: [ProtocolRule; 9] = [
         ProtocolRule::Command,
         ProtocolRule::PixelFormat,
         ProtocolRule::SdaWhileSclHigh,
         ProtocolRule::Bit,
         ProtocolRule::Interval,
-        ProtocolRule::DoutRecord,
         ProtocolRule::Supply,
         ProtocolRule::SupplySag,
         ProtocolRule::Scroll,
@@ -235,7 +231,6 @@ impl ProtocolRule {
             "sda_while_scl_high" => Some(ProtocolRule::SdaWhileSclHigh),
             "bit" => Some(ProtocolRule::Bit),
             "interval" => Some(ProtocolRule::Interval),
-            "dout_record" => Some(ProtocolRule::DoutRecord),
             "supply" => Some(ProtocolRule::Supply),
             "supply_sag" => Some(ProtocolRule::SupplySag),
             "scroll" => Some(ProtocolRule::Scroll),
@@ -381,6 +376,15 @@ pub enum Diagnostic {
     /// A chip whose CS and SCLK sit on `sender`'s nets dropped an SPI transaction whose data
     /// lanes are not on its own data pins, first at `at`.
     ChipLinkMiswired { part: Ref, at: Time, sender: Name },
+    /// A chip's `peripheral` sent a `kind` record on `pin`, whose net also reaches `other`,
+    /// which does not take that record kind on that pin. It ends the run.
+    ChipLinkUnsupported {
+        pin: Ref,
+        other: Ref,
+        at: Time,
+        peripheral: &'static str,
+        kind: LinkKind,
+    },
     /// `pin` floats at `at`: it is an input with its pull-up off, no DC path joins `net` to a
     /// supply or to ground but the chip's own leakage, and its firmware has taken in its level
     /// since it last became such an input, alone or with the rest of its port. Once per pin.
@@ -551,6 +555,14 @@ pub enum Diagnostic {
     RatingVoltage(VoltageExcursion),
 }
 
+/// Which record kind [`Diagnostic::ChipLinkUnsupported`] could not route faithfully.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkKind {
+    Spi,
+    Pulses,
+}
+
 /// The solve that did not converge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Solve {
@@ -637,6 +649,7 @@ impl Diagnostic {
             Diagnostic::ChipUnsettled { .. } => "chip.unsettled",
             Diagnostic::ChipProtocol { .. } => "chip.protocol",
             Diagnostic::ChipLinkMiswired { .. } => "chip.link_miswired",
+            Diagnostic::ChipLinkUnsupported { .. } => "chip.link_unsupported",
             Diagnostic::ChipFloatingInput { .. } => "chip.floating_input",
             Diagnostic::ChipUnsupportedInstruction { .. } => "chip.unsupported_instruction",
             Diagnostic::ChipUnmappedFetch { .. } => "chip.unmapped_fetch",
@@ -694,6 +707,7 @@ impl Diagnostic {
             | Diagnostic::SolverStepWork { .. }
             | Diagnostic::SolverConvergence { .. }
             | Diagnostic::ChipUnsettled { .. }
+            | Diagnostic::ChipLinkUnsupported { .. }
             | Diagnostic::ChipUnsupportedInstruction { .. }
             | Diagnostic::ChipUnmappedFetch { .. }
             | Diagnostic::ChipHalted { .. }
@@ -719,6 +733,7 @@ impl Diagnostic {
             | Diagnostic::ChipUnsettled { at, .. }
             | Diagnostic::ChipProtocol { at, .. }
             | Diagnostic::ChipLinkMiswired { at, .. }
+            | Diagnostic::ChipLinkUnsupported { at, .. }
             | Diagnostic::ChipFloatingInput { at, .. }
             | Diagnostic::ChipUnsupportedInstruction { at, .. }
             | Diagnostic::ChipUnmappedFetch { at, .. }
@@ -779,6 +794,7 @@ impl Diagnostic {
             Diagnostic::NetlistWorld { part, .. } => part.iter().cloned().collect(),
             Diagnostic::NetFloating { net } => vec![net.clone()],
             Diagnostic::ChipFloatingInput { pin, net, .. } => vec![pin.clone(), net.clone()],
+            Diagnostic::ChipLinkUnsupported { pin, other, .. } => vec![pin.clone(), other.clone()],
             Diagnostic::NetShort { part, net } => vec![part.clone(), net.clone()],
             Diagnostic::SolverSingular { unknown, .. }
             | Diagnostic::SolverNonFinite { unknown, .. }
@@ -1290,18 +1306,6 @@ impl Diagnostic {
             Diagnostic::ChipProtocol {
                 part,
                 at,
-                rule: ProtocolRule::DoutRecord,
-            } => {
-                let part = namer(part);
-                format!(
-                    "{part} did not pass a high from a record on to DOUT, breaking rule {} at {} ps, the first time",
-                    rule_text(&ProtocolRule::DoutRecord),
-                    at.as_ps()
-                )
-            }
-            Diagnostic::ChipProtocol {
-                part,
-                at,
                 rule: ProtocolRule::Supply,
             } => {
                 let part = namer(part);
@@ -1370,6 +1374,26 @@ impl Diagnostic {
                     sender.as_str(),
                     at.as_ps()
                 )
+            }
+            Diagnostic::ChipLinkUnsupported {
+                pin,
+                other,
+                at,
+                peripheral,
+                kind,
+            } => {
+                let pin = namer(pin);
+                let other = namer(other);
+                match kind {
+                    LinkKind::Spi => format!(
+                        "{pin} sent an SPI record from {peripheral} at {} ps, but its net reaches {other}, which does not take SPI records there; the model sends {peripheral} output as records rather than pin edges and runs hardware SPI only into parts that take SPI directly, so use shiftOut or bit-banged SPI instead",
+                        at.as_ps()
+                    ),
+                    LinkKind::Pulses => format!(
+                        "{pin} sent a pulse record from {peripheral} at {} ps, but its net reaches {other}, which does not take pulse records there; the model sends {peripheral} output as records rather than pin edges, so the data line must be wired straight to the pixel's data input",
+                        at.as_ps()
+                    ),
+                }
             }
             Diagnostic::ChipUnsupportedInstruction {
                 part,
@@ -1442,6 +1466,9 @@ impl Diagnostic {
                     }
                     ("CPU", Setting::Sleep) => {
                         "put the chip to sleep in a reserved sleep mode".to_string()
+                    }
+                    ("RTC_CNTL", Setting::Register("pin_hold")) => {
+                        "enabled pin hold (gpio_hold_en)".to_string()
                     }
                     (_, Setting::Transfer(setting)) => {
                         format!("started a {peripheral} transfer with setting {setting}")
@@ -1822,6 +1849,11 @@ impl Diagnostic {
             Diagnostic::ChipProtocol { rule, .. } => serde_json::json!({ "rule": rule }),
             Diagnostic::ChipLinkMiswired { sender, .. } => {
                 serde_json::json!({ "sender": sender.as_str() })
+            }
+            Diagnostic::ChipLinkUnsupported {
+                peripheral, kind, ..
+            } => {
+                serde_json::json!({ "kind": kind, "peripheral": peripheral })
             }
             Diagnostic::ChipUnsupportedInstruction {
                 op,
