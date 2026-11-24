@@ -317,12 +317,9 @@ fn a_pin_past_either_rail_is_outside_its_window() {
         assert_eq!((window.first, window.over_ps), (Time::ZERO, None));
     }
     let message = serde_json::to_value(&found[0]).unwrap()["message"].clone();
-    assert!(
-        message
-            .as_str()
-            .unwrap()
-            .ends_with("V over the chip's ground, outside its -0.5 V to 5.5 V rating"),
-        "{message}"
+    assert_eq!(
+        message,
+        "#u1.pin.PD2 reaches 9 V over the chip's ground, outside its -0.5 V to 5.5 V rating"
     );
 }
 

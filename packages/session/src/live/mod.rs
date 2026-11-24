@@ -35,7 +35,8 @@ use crate::reply::{
     Screen, Snapshot, State, Stepped,
 };
 use crate::target::{
-    Ref, Target, hz_reading, live_params, names, one_engine, reports_hint, resolve, rgb_reading,
+    Ref, Target, angle_reading, digit_reading, hz_reading, lcd_engine, live_params, names,
+    one_engine, reports_hint, resolve, rgb_reading, screen_engine, text_reading,
 };
 
 mod bound;
@@ -1191,10 +1192,22 @@ impl Open {
         orbe_engine::device::hd44780_i2c::backlight_on(&display.panel())
     }
 
-    /// A part's light state, its brightness, its colours, its relay contact, and its engine
-    /// quantities. `None` when it has none.
+    /// A part's own reading: its 7-segment digit, character LCD text, screen glass, or its light
+    /// state, brightness, colours, relay contact, frequency, shaft angle and engine quantities.
+    /// `None` when it has none.
     fn part(&self, path: &str) -> Option<Reading> {
         let part = &self.refs.parts[path];
+        if digit_reading(part) {
+            return self.shown_digit(path).ok().map(Reading::Shown);
+        }
+        if text_reading(part).is_some() {
+            return lcd_engine(&self.refs, path)
+                .ok()
+                .map(|engine| Reading::Text(self.lcd_text(&engine)));
+        }
+        if let Some(engine) = screen_engine(&self.refs, path) {
+            return Some(Reading::Screen(self.screen(&engine)));
+        }
         let contact = self.contact_closed(path);
         let engine = one_engine(path, part, Code::NoReading).ok();
         let color = engine
@@ -1220,6 +1233,11 @@ impl Open {
         {
             let hz = self.tone.hz(index, self.engine.now().as_ps());
             quantities.push((name.to_string(), Unit::Hertz, hz));
+        }
+        if let Some(engine) = engine.as_deref()
+            && let Some(name) = angle_reading(part)
+        {
+            quantities.push((name.to_string(), Unit::Degree, self.angle_of(engine)));
         }
         let glow = self
             .light
