@@ -80,3 +80,15 @@ ledcfadedetach packages/scene/tests/fixtures/esp32s3-stock-ledcfadedetach
              app 313744 1f7b94a9173821b3ec89c3616fe35eb1703d3ca98461b0c47dc33cd4deb426a6
 melody       packages/scene/tests/fixtures/esp32s3-stock-melody
              app 282560 16c3352c337b30dcfd8bba79829aa2015c9c445412e960e700b9f3c780a96ee30
+tonemelody   packages/scene/tests/fixtures/esp32s3-stock-tonemelody
+             app 282416 c4723e4f26049a16ba4fa0eb1550993e5ef6a7b428a52bfd4ed4c5ef45cdc382
+ledctone     packages/scene/tests/fixtures/esp32s3-stock-ledctone
+             app 281744 19f504b0a8badd40ccd2dac5344381087169a67057367de12f4e3c781dda8697
+ledcfreq     packages/scene/tests/fixtures/esp32s3-stock-ledcfreq
+             app 281744 53970be2b166bc0442b7930254f9bc6ddb6411ee17c9092751f46e18cf79dac7
+ledcshared   packages/scene/tests/fixtures/esp32s3-stock-ledcshared
+             app 281760 9f0074f1a930e9a5550c0b0287f224c5166816fe6ca25831713b29709bc5be41
+ledcres      packages/scene/tests/fixtures/esp32s3-stock-ledcres
+             app 282128 27de7a70f64c1da8062c871c1236b3cc0793416f51f35215d8596c456689fafc
+tonefast     packages/scene/tests/fixtures/esp32s3-stock-tonefast
+             app 282320 28d7a572fd714878c2d07eb534772dd4642de3bc7299fa3b7997d4eaf5918780
