@@ -1985,7 +1985,12 @@ pub fn significant_text(value: f64) -> String {
 }
 
 /// Whether `value` is over `limit` once both are rounded to 3 significant digits.
+///
+/// A non-finite value has no 3-digit rounding, so it compares as [`significant`] leaves it.
 pub(crate) fn exceeds(value: f64, limit: f64) -> bool {
+    if !value.is_finite() || !limit.is_finite() {
+        return significant(value) > significant(limit);
+    }
     match (rounded_sig(value), rounded_sig(limit)) {
         (Some(value), Some(limit)) => sig_greater(value, limit),
         (Some((digits, _)), None) => digits > 0,
