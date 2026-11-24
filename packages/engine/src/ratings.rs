@@ -11,6 +11,7 @@ use crate::diagnostic::{
 };
 use crate::finite::Finite;
 use crate::name::{Name, Quantity, Ref};
+use crate::passive::DRIVE_REST_PS;
 
 use crate::observe::Columns;
 
@@ -224,9 +225,19 @@ struct CoilDrive {
     column: usize,
     min: f64,
     max: f64,
+    /// `max` rounded as [`significant`] rounds it, for [`exceeds_rounded`].
+    max_rounded: f64,
     /// Highest `|v|` since the coil was last near zero.
     peak: f64,
+    /// The sample before this pulse left zero. `None` while the coil is quiet.
+    pulse_from: Option<Time>,
+    /// The last sample the coil was driven.
+    loud_at: Option<Time>,
+    /// The last judged pulse sat outside the window and the drive has not rested since.
     over: bool,
+    /// How far `over_ps` has counted. A quiet gap shorter than a rest counts once the next
+    /// pulse arrives, so a tone counts both its half-cycles and its rest counts nothing.
+    counted_to: Time,
     /// How far past the window the excursion's peak was.
     worst: f64,
     excursion: Option<VoltageExcursion>,
@@ -268,16 +279,20 @@ const fn sustained(average: Average) -> Basis {
 }
 
 /// Records `drive.peak` when it sits outside the operating window. A peak inside clears
-/// `over` and leaves an earlier finding in place.
+/// `over` and leaves an earlier finding in place. A drive that turns `over` counts from the
+/// start of this pulse.
 fn judge_drive(drive: &mut CoilDrive, at: Time, over_ps: Option<u64>) {
     let peak = drive.peak;
-    let below = significant(peak) < significant(drive.min);
-    let above = significant(peak) > significant(drive.max);
+    let below = exceeds(drive.min, peak);
+    let above = exceeds(peak, drive.max);
     if !below && !above {
         drive.over = false;
         return;
     }
-    drive.over = true;
+    if !drive.over {
+        drive.over = true;
+        drive.counted_to = drive.pulse_from.unwrap_or(at);
+    }
     let past = if below {
         drive.min - peak
     } else {
@@ -509,8 +524,12 @@ impl Ratings {
                 column,
                 min,
                 max,
+                max_rounded: significant(max),
                 peak: 0.0,
+                pulse_from: None,
+                loud_at: None,
                 over: false,
+                counted_to: Time::ZERO,
                 worst: 0.0,
                 excursion: None,
             });
@@ -641,21 +660,35 @@ impl Ratings {
             }
         }
         for drive in &mut self.drives {
-            elapsed(
-                drive.over,
-                drive.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
-                self.last,
-            );
             let volts = row[drive.column].get().abs();
-            if volts < DRIVE_QUIET_V {
-                if drive.peak >= DRIVE_QUIET_V {
-                    judge_drive(drive, at, self.timing.over_ps());
+            let loud = volts >= DRIVE_QUIET_V;
+            let ended = !loud && drive.peak >= DRIVE_QUIET_V;
+            if loud {
+                drive.pulse_from.get_or_insert(self.last.unwrap_or(at));
+                drive.loud_at = Some(at);
+                if volts > drive.peak {
+                    drive.peak = volts;
+                    if exceeds_rounded(volts, drive.max_rounded) {
+                        judge_drive(drive, at, self.timing.over_ps());
+                    }
                 }
+            } else if ended {
+                judge_drive(drive, at, self.timing.over_ps());
+            }
+            if drive.over && (loud || ended) {
+                if let Some(over_ps) = drive.excursion.as_mut().and_then(|e| e.over_ps.as_mut()) {
+                    *over_ps += at.as_ps().saturating_sub(drive.counted_to.as_ps());
+                }
+                drive.counted_to = at;
+            }
+            if !loud {
                 drive.peak = 0.0;
-            } else if volts > drive.peak {
-                drive.peak = volts;
-                if exceeds(volts, drive.max) {
-                    judge_drive(drive, at, self.timing.over_ps());
+                drive.pulse_from = None;
+                let rested = drive
+                    .loud_at
+                    .is_none_or(|loud_at| at.as_ps() - loud_at.as_ps() > DRIVE_REST_PS);
+                if rested {
+                    drive.over = false;
                 }
             }
         }

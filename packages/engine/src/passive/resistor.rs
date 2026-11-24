@@ -13,6 +13,11 @@ use crate::newton::Side;
 use crate::world::json::{FieldRule, WireParam, resolve_param};
 use crate::world::{Driven, Param};
 
+/// A sounding drive that leaves the coil quiet for longer than this has stopped. It is the
+/// half-cycle of 31 Hz, the lowest note an Uno or Nano plays with `tone()`, plus the most a note
+/// change can stretch one half-cycle, rounded up: 16.384 ms is 256 timer ticks at 64 us.
+pub const DRIVE_REST_PS: u64 = 17_000_000_000;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Resistor {
     /// Nets of pins `a`, `b`.
@@ -196,6 +201,42 @@ mod operating_voltage {
         )
     }
 
+    /// Five 6 V pulses, 100 us wide every 200 us from 100 us, then 4 ms of quiet.
+    fn burst() -> String {
+        let mut events = Vec::new();
+        for pulse in 0..5u64 {
+            let rise = 100_000_000 + pulse * 200_000_000;
+            events.push(format!(
+                r#"{{ "t_ps": {rise}, "level": {{ "value": 6.0, "unit": "V" }} }}"#
+            ));
+            events.push(format!(
+                r#"{{ "t_ps": {}, "level": {{ "value": 0.0, "unit": "V" }} }}"#,
+                rise + 100_000_000
+            ));
+        }
+        format!(
+            r#"{{
+              "version": 1,
+              "seed": 0,
+              "analysis": {{ "transient": {{ "stop_ps": 5000000000, "max_step_ps": 10000000, "grid_ps": 10000000 }} }},
+              "ground": "gnd",
+              "nets": ["gnd", "n"],
+              "parts": [
+                {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "n", "n": "gnd" }},
+                  "voltage": {{ "kind": "steps",
+                    "initial": {{ "value": 0.0, "unit": "V" }},
+                    "events": [{}] }} }},
+                {{ "name": "r1", "kind": "resistor", "pins": {{ "a": "n", "b": "gnd" }},
+                  "resistance": {{ "value": 42.0, "unit": "ohm" }},
+                  "ratings": {{ "power": null, "voltage": {{
+                    "min": {{ "value": 3.0, "unit": "V" }},
+                    "max": {{ "value": 5.0, "unit": "V" }} }} }} }}
+              ]
+            }}"#,
+            events.join(", ")
+        )
+    }
+
     fn warnings(json: &str) -> String {
         let netlist = crate::netlist::parse(json.as_bytes()).unwrap();
         crate::simulate(&netlist)
@@ -217,5 +258,24 @@ mod operating_voltage {
         let hot = warnings(&pulse(6.0));
         assert!(hot.contains("rating.voltage"), "{hot}");
         assert!(hot.contains("operating voltage"), "{hot}");
+    }
+
+    #[test]
+    fn a_drive_outside_3_v_to_5_v_counts_while_it_sounds_and_not_after() {
+        let netlist = crate::netlist::parse(burst().as_bytes()).unwrap();
+        let results = crate::simulate(&netlist);
+        let over_ps: Vec<u64> = results
+            .diagnostics()
+            .iter()
+            .map(|d| serde_json::to_value(d).unwrap())
+            .filter(|d| d["code"] == "rating.voltage")
+            .map(|d| d["data"]["over_ps"].as_u64().unwrap())
+            .collect();
+        // From the first rise to the last fall is 900 us. The 4 ms of quiet after it is a rest.
+        assert_eq!(over_ps.len(), 1, "{over_ps:?}");
+        assert!(
+            (900_000_000..=950_000_000).contains(&over_ps[0]),
+            "{over_ps:?}"
+        );
     }
 }

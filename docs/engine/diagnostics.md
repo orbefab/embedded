@@ -776,7 +776,7 @@ A resistor with `ratings.voltage` uses the same code on `#<part>.v`. The window 
 #bz.v peaks at 0.692 V, outside its 3 V to 5 V operating voltage
 ```
 
-A peak inside the window is quiet. A part that never leaves the low level, including DC, is quiet. The part still conducts.
+A peak inside the window is quiet. A part that never leaves the low level, including DC, is quiet. The part still conducts. The time counts from the start of the first pulse outside the window to the end of the last, with each gap under 17 ms between them, and stops once the part rests longer than that.
 
 A capacitor with `ratings.reverse_voltage` uses the same code on pin `a`. The floor is that rating below pin `b`, and there is no ceiling. The message calls pin `b` the chip's ground. A capacitor with no `ratings` object, or with `reverse_voltage` null, is not checked. A forward voltage is not checked. A voltage exactly on the floor is inside. A reverse rating of 0 warns on any reverse voltage, and 0 V is inside.
 
