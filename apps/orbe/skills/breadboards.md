@@ -10,7 +10,7 @@ Give the board an `at`, `[x, y, z]` in mm, and a `rotate` in degrees. Seat each 
 
 Run `orbe check` and `orbe lint` after seating. A lead in the channel, off the board or in a taken hole is an error. The hint names a fit when one exists. Two pins of one part in one strip warn `scene.shorted`.
 
-A seated part sits on the board's top, and each leg joins its hole's strip. At no turn, a resistor's legs are 4 columns apart and an LED's are 1, along the row. A leg longer than a hole is deep stands the part up. An LED's 27.4 mm legs hold its body 19.4 mm above the board. `orbe part` prints the hole depth.
+A seated part sits on the board's top, and each leg joins its hole's strip. A lead whose tip stays above that top, trimmed on its own module, is not a leg. At no turn, a resistor's legs are 4 columns apart and an LED's are 1, along the row. A leg longer than a hole is deep stands the part up. An LED's 27.4 mm legs hold its body 19.4 mm above the board. `orbe part` prints the hole depth.
 
 A pin on two or more legs goes in by its lowest lead. `orbe part` lists each pin's leads. A switch's `a` is on leads 1 and 2, so `"a": "bb.f22"` puts lead 1 in `f22`. Naming a hole another leg would land in moves the whole part. With `"a": "bb.e22"`, lead 1 goes in `e22`, lead 2 lands in `b22`, and the switch no longer crosses the channel. A label on legs of two parts, such as the Nano's `GND` on two header pins, names no one hole, and `on` refuses it. Name a pin on one leg, such as `D13`.
 

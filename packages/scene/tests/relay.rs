@@ -264,7 +264,8 @@ fn the_srd_outline_matches_the_drilling_drawing() {
 }
 
 /// The screw terminal, the relay, the diode and the small parts each keep their own space.
-/// The diode lies on the board. The relay and the header are the leads through it.
+/// The relay, the header and the diode send leads through the board. A through-hole lead,
+/// other than the header's breadboard pins, ends inside the board or just under it.
 #[test]
 fn the_module_bodies_do_not_share_space() {
     let repo = common::repo();
@@ -318,7 +319,7 @@ fn the_module_bodies_do_not_share_space() {
         for (b_name, b) in owned.iter().skip(i + 1) {
             let through = matches!(
                 (a_name.as_str(), b_name.as_str()),
-                ("pcb", "k" | "hdr") | ("k" | "hdr", "pcb")
+                ("pcb", "k" | "hdr" | "d") | ("k" | "hdr" | "d", "pcb")
             );
             if through {
                 continue;
@@ -330,11 +331,68 @@ fn the_module_bodies_do_not_share_space() {
             );
         }
     }
-    let diode = owned.iter().find(|(name, _)| name == "d").unwrap().1;
-    assert!(
-        diode.min[2] >= 4.14 - 1e-3,
-        "the diode enters the board: {diode:?}"
-    );
+    let board = owned.iter().find(|(name, _)| name == "pcb").unwrap().1;
+    // A trimmed lead may stand this far proud of the underside. The header is the
+    // breadboard pins, so its tips end below the module on purpose.
+    let just_under = 0.5;
+    for (name, place) in layout {
+        if name == "hdr" {
+            continue;
+        }
+        let kind = part["parts"][name]["type"].as_str().unwrap();
+        let anchors_path = repo
+            .join("parts")
+            .join(kind)
+            .join(format!("{kind}.anchors.json"));
+        let Ok(text) = fs::read_to_string(&anchors_path) else {
+            continue;
+        };
+        let anchors: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let at = [0, 1, 2].map(|i| place["at"][i].as_f64().unwrap());
+        let rotate = match place.get("rotate") {
+            Some(rotate) => [0, 1, 2].map(|i| rotate[i].as_f64().unwrap()),
+            None => [0.0; 3],
+        };
+        let spun = rotation(rotate);
+        for anchor in anchors["anchors"].as_array().unwrap() {
+            if anchor["kind"] != "leg" {
+                continue;
+            }
+            let local = [0, 1, 2].map(|i| anchor["at"][i].as_f64().unwrap());
+            let tip = {
+                let p = turn(&spun, local);
+                [0, 1, 2].map(|i| p[i] + at[i])
+            };
+            let on_board =
+                (0..2).all(|i| tip[i] >= board.min[i] - 0.2 && tip[i] <= board.max[i] + 0.2);
+            let in_board = tip[2] <= board.max[2] + 1e-3 && tip[2] >= board.min[2] - just_under;
+            assert!(
+                on_board && in_board,
+                "{name} lead {} ends at {tip:?}, not inside the board or just under it\nboard {board:?}",
+                anchor["lead"]
+            );
+        }
+        let asset: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(repo.join("parts").join(kind).join("asset.json")).unwrap(),
+        )
+        .unwrap();
+        let num = |side: &str, i: usize| asset["box"][side][i].as_f64().unwrap();
+        // The body is the part above its seating plane. Leads are what pass through.
+        let body = world_box(
+            Aabb {
+                min: [num("min", 0), num("min", 1), num("min", 2).max(0.0)],
+                max: [num("max", 0), num("max", 1), num("max", 2)],
+            },
+            at,
+            rotate,
+        );
+        if name == "d" {
+            assert!(
+                body.min[2] >= board.max[2] - 1e-3,
+                "the diode body enters the board: {body:?}"
+            );
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]

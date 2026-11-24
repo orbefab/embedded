@@ -31,7 +31,7 @@
     "relay-srd-05vdc-sl-c": "0.1.0",
     "npn-l8050-sot23": "0.2.1",
     "resistor-0603": "0.2.0",
-    "diode-1n4007": "0.2.1",
+    "diode-do41-flush": "0.1.0",
     "led-0805": "0.2.1",
     "pin-header-1x3": "0.1.0"
   },
@@ -67,7 +67,7 @@
         }
       }
     },
-    "d": { "type": "diode-1n4007" },
+    "d": { "type": "diode-do41-flush" },
     "led": { "type": "led-0805", "color": "red" }
   },
   "wires": [
@@ -82,16 +82,16 @@
     ["rled.b", "led.anode", { "kind": "trace" }],
     ["led.cathode", "q.collector", { "kind": "trace" }]
   ],
-  // The relay sits under the screw terminal. The diode lies on its side in the
-  // free margin, so its leads stay on the board, with the transistor, the
-  // resistors and the LED.
+  // The relay sits under the screw terminal. The diode lies on the board in the
+  // free margin, its leads through the board and trimmed at the underside, with
+  // the transistor, the resistors and the LED.
   "layout": {
     "hdr": { "at": [0, -11.5, 0] },
     "k": { "at": [7, -0.8, 4.14] },
     "q": { "at": [-10, -2.6, 4.14] },
     "rb": { "at": [-10, -5.4, 4.14] },
     "rled": { "at": [-10, -7.2, 4.14] },
-    "d": { "at": [-10, 2.5, 5.49], "rotate": [90, 0, 0] },
+    "d": { "at": [-10, 2.5, 4.14] },
     "led": { "at": [-10, -9.2, 4.14] }
   },
   "pins": {

@@ -1310,6 +1310,43 @@ fn a_relay_contact_into_an_led_warns_without_a_series_resistor() {
     }
 }
 
+/// 5 V on NO, the LED on NC, COM left open. The coil is tied so its nets are not the
+/// question. The two throws never conduct through COM, so the LED is not across the
+/// supply and lint stays quiet.
+#[test]
+fn an_led_on_the_other_relay_contact_from_the_supply_stays_quiet() {
+    let scene = r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "k": { "type": "relay-srd-05vdc-sl-c" },
+    "led1": { "type": "led-5mm" }
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["nano.5V", "k.NO"],
+    ["k.NC", "led1.anode"],
+    ["led1.cathode", "nano.GND"],
+    ["nano.5V", "k.coil_a"],
+    ["k.coil_b", "nano.GND"]
+  ],
+  "layout": {
+    "nano": { "at": [0, 0, 0] },
+    "k": { "at": [40, 0, 0] },
+    "led1": { "at": [80, 0, 0] }
+  }
+}
+"#;
+    let dir = project(scene);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.ends_with("scene.jsonc: no warnings\n"),
+        "{}",
+        run.stdout
+    );
+}
+
 /// A 2N2222 with its leads formed to 2.54 mm sits one leg in each strip. Turned along a column,
 /// the three legs share a strip and short. The Nano drives the base, and 220 ohm limits the LED.
 #[test]

@@ -468,8 +468,14 @@ fn unite(parent: &mut [usize], a: usize, b: usize) {
 
 /// Nets `model` joins to `net` without limiting the current. A junction or a switch joins
 /// every pin. A transistor joins its switched pin when that pin is held. A relay joins `com`
-/// to `no` and to `nc`.
-fn joined(model: &Model, net: usize, held: impl Fn(usize) -> bool) -> Vec<usize> {
+/// to the one contact `contact` names, `no` or `nc`. One path does not run from `no` through
+/// `com` to `nc`.
+fn joined(
+    model: &Model,
+    net: usize,
+    held: impl Fn(usize) -> bool,
+    contact: Option<(usize, usize)>,
+) -> Vec<usize> {
     let pins = model.pins();
     match model.conduction() {
         Conduction::Passes if pins.iter().any(|pin| pin.index() == net) => {
@@ -478,26 +484,57 @@ fn joined(model: &Model, net: usize, held: impl Fn(usize) -> bool) -> Vec<usize>
         Conduction::Switches(from, to) if pins[from].index() == net && held(pins[to].index()) => {
             vec![pins[to].index()]
         }
-        Conduction::Contacts(pairs) => pairs
-            .iter()
-            .filter_map(|&(from, to)| {
-                let (a, b) = (pins[from].index(), pins[to].index());
-                if a == net {
-                    Some(b)
-                } else if b == net {
-                    Some(a)
-                } else {
-                    None
-                }
-            })
-            .collect(),
+        Conduction::Contacts(_) => {
+            let Some((from, to)) = contact else {
+                return Vec::new();
+            };
+            let (a, b) = (pins[from].index(), pins[to].index());
+            if a == net {
+                vec![b]
+            } else if b == net {
+                vec![a]
+            } else {
+                Vec::new()
+            }
+        }
         _ => Vec::new(),
     }
 }
 
+/// One closed contact per relay. Each entry is the part index and how many throws it has.
+/// A relay with no entry is not in this netlist.
+fn contact_modes(relays: &[(usize, usize)]) -> Vec<BTreeMap<usize, usize>> {
+    let mut modes = vec![BTreeMap::new()];
+    for &(part, count) in relays {
+        let mut next = Vec::new();
+        for mode in &modes {
+            for index in 0..count {
+                let mut one = mode.clone();
+                one.insert(part, index);
+                next.push(one);
+            }
+        }
+        modes = next;
+    }
+    modes
+}
+
+/// The contact pair `choice` closes on `part`, as pin indexes. `None` when `part` is not a relay.
+fn chosen_contact(
+    model: &Model,
+    part: usize,
+    choice: &BTreeMap<usize, usize>,
+) -> Option<(usize, usize)> {
+    let Conduction::Contacts(pairs) = model.conduction() else {
+        return None;
+    };
+    pairs.get(choice.get(&part).copied().unwrap_or(0)).copied()
+}
+
 /// An LED whose path, through other junctions, switches, relay contacts and transistors
 /// switched to a held net, joins two driven nets with no resistor in series. A relay's `com`
-/// meets `no` and `nc` the way a switch meets its pins. A diode's cathode is driven when its
+/// meets `no` or `nc`, one throw at a time, so a path never runs from `no` through `com` to
+/// `nc`. A diode's cathode is driven when its
 /// anode is a source's net. One side of the LED can reach a supply through a diode while the
 /// other side reaches it only through a resistor. That resistor is in series. A resistor that
 /// bridges two sides which each already reach a driver is in parallel and limits nothing. A
@@ -541,106 +578,118 @@ fn led_no_resistor(s: &Scope, out: &mut Findings) {
             }
         }
     }
+    let relays: Vec<(usize, usize)> = engine
+        .parts()
+        .filter_map(|(id, part)| match part.model.conduction() {
+            Conduction::Contacts(pairs) if !pairs.is_empty() => Some((id.index(), pairs.len())),
+            _ => None,
+        })
+        .collect();
+    let modes = contact_modes(&relays);
     let held = |net: usize| fixed[net] || chip[net];
     for (led_id, led) in engine.parts() {
         if !matches!(led.model, Model::Led(_)) {
             continue;
         }
-        let mut path: BTreeSet<usize> = led.model.pins().iter().map(|n| n.index()).collect();
-        let mut next: Vec<usize> = path.iter().copied().collect();
-        while let Some(net) = next.pop() {
-            if held(net) {
-                continue;
-            }
-            for (_, part) in engine.parts() {
-                let reached = joined(&part.model, net, held);
-                for other in reached {
-                    if path.insert(other) {
-                        next.push(other);
-                    }
+        for choice in &modes {
+            let mut path: BTreeSet<usize> = led.model.pins().iter().map(|n| n.index()).collect();
+            let mut next: Vec<usize> = path.iter().copied().collect();
+            while let Some(net) = next.pop() {
+                if held(net) {
+                    continue;
                 }
-            }
-        }
-        let fed = |net: usize| {
-            engine.parts().any(|(_, part)| {
-                let pins = part.model.pins();
-                part.model.conduction() == Conduction::Limits
-                    && pins.iter().any(|n| n.index() == net)
-                    && pins
-                        .iter()
-                        .any(|n| !path.contains(&n.index()) && held(n.index()))
-            })
-        };
-        // Drop this LED, then split the path. A limiter counts when it is the way out of a
-        // side that has no driver. A diode from the other side back to the supply leaves that
-        // side's resistor in series.
-        let mut parent: Vec<usize> = (0..engine.nets().len()).collect();
-        for (id, part) in engine.parts() {
-            if id == led_id {
-                continue;
-            }
-            let pins = part.model.pins();
-            match part.model.conduction() {
-                Conduction::Passes => {
-                    let on: Vec<usize> = pins
-                        .iter()
-                        .map(|net| net.index())
-                        .filter(|net| path.contains(net))
-                        .collect();
-                    if let Some((&first, rest)) = on.split_first() {
-                        for &other in rest {
-                            unite(&mut parent, first, other);
+                for (id, part) in engine.parts() {
+                    let contact = chosen_contact(&part.model, id.index(), choice);
+                    let reached = joined(&part.model, net, held, contact);
+                    for other in reached {
+                        if path.insert(other) {
+                            next.push(other);
                         }
                     }
                 }
-                Conduction::Switches(from, to) => {
-                    let (a, b) = (pins[from].index(), pins[to].index());
-                    if path.contains(&a) && path.contains(&b) && held(b) {
-                        unite(&mut parent, a, b);
-                    }
+            }
+            let fed = |net: usize| {
+                engine.parts().any(|(_, part)| {
+                    let pins = part.model.pins();
+                    part.model.conduction() == Conduction::Limits
+                        && pins.iter().any(|n| n.index() == net)
+                        && pins
+                            .iter()
+                            .any(|n| !path.contains(&n.index()) && held(n.index()))
+                })
+            };
+            // Drop this LED, then split the path. A limiter counts when it is the way out of a
+            // side that has no driver. A diode from the other side back to the supply leaves that
+            // side's resistor in series.
+            let mut parent: Vec<usize> = (0..engine.nets().len()).collect();
+            for (id, part) in engine.parts() {
+                if id == led_id {
+                    continue;
                 }
-                Conduction::Contacts(pairs) => {
-                    for &(from, to) in pairs {
+                let pins = part.model.pins();
+                match part.model.conduction() {
+                    Conduction::Passes => {
+                        let on: Vec<usize> = pins
+                            .iter()
+                            .map(|net| net.index())
+                            .filter(|net| path.contains(net))
+                            .collect();
+                        if let Some((&first, rest)) = on.split_first() {
+                            for &other in rest {
+                                unite(&mut parent, first, other);
+                            }
+                        }
+                    }
+                    Conduction::Switches(from, to) => {
+                        let (a, b) = (pins[from].index(), pins[to].index());
+                        if path.contains(&a) && path.contains(&b) && held(b) {
+                            unite(&mut parent, a, b);
+                        }
+                    }
+                    Conduction::Contacts(_) => {
+                        let Some((from, to)) = chosen_contact(&part.model, id.index(), choice)
+                        else {
+                            continue;
+                        };
                         let (a, b) = (pins[from].index(), pins[to].index());
                         if path.contains(&a) && path.contains(&b) {
                             unite(&mut parent, a, b);
                         }
                     }
+                    _ => {}
                 }
-                _ => {}
             }
-        }
-        let mut driven = vec![false; engine.nets().len()];
-        for &net in &path {
-            if fixed[net] || (chip[net] && !fed(net)) {
-                driven[find(&mut parent, net)] = true;
+            let mut driven = vec![false; engine.nets().len()];
+            for &net in &path {
+                if fixed[net] || (chip[net] && !fed(net)) {
+                    driven[find(&mut parent, net)] = true;
+                }
             }
-        }
-        let limited = engine.parts().any(|(_, part)| {
-            if part.model.conduction() != Conduction::Limits {
-                return false;
-            }
-            let pins: Vec<usize> = part.model.pins().iter().map(|net| net.index()).collect();
-            pins.iter().any(|&net| {
-                if !path.contains(&net) {
+            let limited = engine.parts().any(|(_, part)| {
+                if part.model.conduction() != Conduction::Limits {
                     return false;
                 }
-                let side = find(&mut parent, net);
-                !driven[side] && pins.iter().any(|&other| find(&mut parent, other) != side)
-            })
-        });
-        let ends: Vec<String> = path
-            .iter()
-            .filter(|&&net| fixed[net] || (chip[net] && !fed(net)))
-            .map(|&net| format!("`{}`", names[net]))
-            .collect();
-        if limited || ends.len() < 2 {
-            continue;
-        }
-        let name = led.name.as_str();
-        let top = s.top_named(name);
-        let shown = name.replace("__", ".");
-        out.push(
+                let pins: Vec<usize> = part.model.pins().iter().map(|net| net.index()).collect();
+                pins.iter().any(|&net| {
+                    if !path.contains(&net) {
+                        return false;
+                    }
+                    let side = find(&mut parent, net);
+                    !driven[side] && pins.iter().any(|&other| find(&mut parent, other) != side)
+                })
+            });
+            let ends: Vec<String> = path
+                .iter()
+                .filter(|&&net| fixed[net] || (chip[net] && !fed(net)))
+                .map(|&net| format!("`{}`", names[net]))
+                .collect();
+            if limited || ends.len() < 2 {
+                continue;
+            }
+            let name = led.name.as_str();
+            let top = s.top_named(name);
+            let shown = name.replace("__", ".");
+            out.push(
             Code::Lint(Lint::LedNoResistor),
             top.name_span,
             format!(
@@ -651,5 +700,7 @@ fn led_no_resistor(s: &Scope, out: &mut Findings) {
                 "put a resistor in series with `{shown}`, such as 220 ohm between a 5 V pin and the LED"
             ),
         );
+            break;
+        }
     }
 }
