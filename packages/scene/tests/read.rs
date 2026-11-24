@@ -17,9 +17,9 @@ fn read(scene: &str) -> (orbe_scene::Netlist, Value) {
 }
 
 #[test]
-fn first_target_has_21_parts_and_36_nets() {
+fn first_target_has_22_parts_and_36_nets() {
     let (netlist, json) = read("scene.jsonc");
-    assert_eq!(netlist.parts, 21);
+    assert_eq!(netlist.parts, 22);
     assert_eq!(netlist.ground, "GND");
     let mut nets = netlist.nets.clone();
     nets.sort();
@@ -123,7 +123,7 @@ fn scene_params_are_user_values_and_defaults_fill_the_rest() {
 #[test]
 fn two_buttons_ground_is_gnd() {
     let (netlist, json) = read("two-buttons.jsonc");
-    assert_eq!(netlist.parts, 21);
+    assert_eq!(netlist.parts, 22);
     assert_eq!(netlist.nets.len(), 35);
     assert_eq!(netlist.ground, "GND");
     for net in ["btn1__out", "btn1__vcc", "btn2__out"] {

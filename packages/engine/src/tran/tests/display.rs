@@ -272,7 +272,16 @@ fn a_transaction_on_other_data_nets_is_dropped_with_one_warning() {
     let netlist = panel_netlist(&events, "dx", US);
     let mut session = open(&netlist, Vec::new(), BUDGET);
     session.advance_to(Time::from_ps(STOP));
-    assert_eq!(session.display(&lcd1()).unwrap().panel().colmod, 0x55);
+    assert_eq!(
+        session
+            .display(&lcd1())
+            .unwrap()
+            .panel()
+            .settings
+            .get("colmod")
+            .unwrap(),
+        0x55
+    );
     let first = 6 * US + (32 + 4) * BYTE_PS / 8;
     let chips: Vec<Diagnostic> = session
         .diagnostics()

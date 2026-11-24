@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::Files;
 use crate::command::{Command, spec};
-use crate::live::{Channels, FrameState, Live, LiveParam, Pace, Sample, WorldQuantity};
+use crate::live::{Channels, FrameState, Glass, Live, LiveParam, Pace, Sample, WorldQuantity};
 use crate::reply::{Code, Data, Envelope, Error, Reply};
 
 /// `play` advances this much simulated time per tick at most, one tick of wall time at speed 1,
@@ -110,6 +110,11 @@ pub(crate) struct FrameMessage<'a> {
     /// The shaft angle in degrees, per `channels.horns`. Absent when the scene has no servo.
     #[serde(skip_serializing_if = "Option::is_none")]
     horn_deg: Option<&'a [f64]>,
+    /// Per `channels.screens`, the glass of each screen that shows something new since the
+    /// previous frame, else null. Absent when no screen changed. The first frame a page gets
+    /// carries every screen.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    screens: Option<Vec<Option<ScreenImage>>>,
     /// Each value per the scene's `world`: the value from `t_ps` on, or from where the
     /// quantity's last `set` lands when that is later, so a `set` shows while paused. Absent
     /// when the scene declares none.
@@ -135,6 +140,46 @@ pub(crate) struct FrameMessage<'a> {
     /// already has.
     #[serde(skip_serializing_if = "Option::is_none")]
     serial: Option<SerialText>,
+}
+
+/// What a screen's glass shows: `width` by `height` pixels, rows top to bottom and each row
+/// left to right, red, green, blue and alpha a byte each, in base64.
+#[derive(Serialize)]
+#[cfg_attr(test, derive(schemars::JsonSchema))]
+pub(crate) struct ScreenImage {
+    width: u16,
+    height: u16,
+    rgba: String,
+}
+
+impl ScreenImage {
+    fn of(glass: &Glass) -> ScreenImage {
+        ScreenImage {
+            width: glass.width,
+            height: glass.height,
+            rgba: base64(&glass.rgba),
+        }
+    }
+}
+
+/// `bytes` in base64 with padding, RFC 4648 section 4.
+fn base64(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut text = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let word = chunk
+            .iter()
+            .enumerate()
+            .fold(0u32, |word, (k, &b)| word | u32::from(b) << (16 - 8 * k));
+        for k in 0..4 {
+            text.push(if k <= chunk.len() {
+                char::from(DIGITS[(word >> (18 - 6 * k) & 0x3f) as usize])
+            } else {
+                '='
+            });
+        }
+    }
+    text
 }
 
 /// UART text since the previous frame, at most 4096 UTF-8 bytes. The session keeps one serial
@@ -385,6 +430,7 @@ impl Feed {
             switches: &sample.switches,
             pixel_rgb: &sample.pixels,
             horn_deg: (!sample.horns.is_empty()).then_some(sample.horns.as_slice()),
+            screens: screens(self.last.as_ref(), &sample),
             world: (!sample.world.is_empty()).then_some(sample.world.as_slice()),
             params: (!sample.params.is_empty()).then_some(sample.params.as_slice()),
             ratio: pace.map(|pace| pace.ratio),
@@ -397,6 +443,24 @@ impl Feed {
         self.last = Some(sample);
         Some(frame)
     }
+}
+
+/// Each screen of `sample` whose glass differs from the one `last` holds, or every screen when
+/// there is no last sample to tell. `None` when the scene has no screen or none changed.
+fn screens(last: Option<&Sample>, sample: &Sample) -> Option<Vec<Option<ScreenImage>>> {
+    let before = last
+        .map(|last| &last.screens)
+        .filter(|before| before.len() == sample.screens.len());
+    let images: Vec<Option<ScreenImage>> = sample
+        .screens
+        .iter()
+        .enumerate()
+        .map(|(k, glass)| {
+            let same = before.is_some_and(|before| &before[k] == glass);
+            (!same).then(|| ScreenImage::of(glass))
+        })
+        .collect();
+    images.iter().any(Option::is_some).then_some(images)
 }
 
 /// The serial a frame should carry, and `shown` advances by the bytes that frame sends. `None`
@@ -531,6 +595,7 @@ mod tests {
             switches: vec![],
             pixels: vec![],
             horns: vec![],
+            screens: vec![],
             world: vec![],
             params: vec![],
             diagnostics: 0,
@@ -647,5 +712,55 @@ mod tests {
         assert_eq!(short.replace, Some(true));
         assert_eq!(short.trimmed, None);
         assert!(serial_snapshot("").is_none());
+    }
+
+    #[test]
+    fn a_screen_arrives_on_the_first_frame_and_again_only_when_its_glass_changes() {
+        let glass = |byte: u8| Glass {
+            width: 1,
+            height: 2,
+            rgba: vec![byte; 8],
+        };
+        let mut feed = Feed::default();
+        let first = Sample {
+            screens: vec![glass(0)],
+            ..paused()
+        };
+        let frame = feed.frame(first.clone(), "", None).unwrap();
+        assert_eq!(
+            frame["screens"],
+            json!([{ "width": 1, "height": 2, "rgba": "AAAAAAAAAAA=" }])
+        );
+        let later = Sample {
+            t_ps: 1,
+            ..first.clone()
+        };
+        let same = feed.frame(later, "", None).unwrap();
+        assert!(same.get("screens").is_none(), "{same}");
+        let changed = Sample {
+            t_ps: 2,
+            screens: vec![glass(255)],
+            ..first
+        };
+        let frame = feed.frame(changed, "", None).unwrap();
+        assert_eq!(frame["screens"][0]["rgba"], "//////////8=");
+        assert!(paused().screens.is_empty());
+        let bare = Feed::default().frame(paused(), "", None).unwrap();
+        assert!(bare.get("screens").is_none(), "{bare}");
+    }
+
+    #[test]
+    fn base64_matches_rfc_4648_test_vectors() {
+        for (text, encoded) in [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("foob", "Zm9vYg=="),
+            ("fooba", "Zm9vYmE="),
+            ("foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(base64(text.as_bytes()), encoded, "{text}");
+        }
     }
 }

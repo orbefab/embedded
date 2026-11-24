@@ -17,6 +17,10 @@
 # manifest hashes this 2 s run instead. `blocks/<id>/orbe-test` is the stdout
 # of `orbe test -v` on that Block, which includes each expect's measured value.
 #
+# A Block scene that names blobs, such as a DevKitC-1 app image and its
+# partition table, has those bytes written into a directory. Each file is named
+# by its SHA-256. The run is given that directory after the ROM cache.
+#
 # A run that does not exit 0 stops the script. It names the circuit and the
 # exit code, prints the runner's report, and exits with that code. A Block
 # test that fails prints its output and exits with the test's status.
@@ -108,9 +112,10 @@ hash_tree() {
 
 run_netlist() {
   local label=$1 netlist=$2 out=$3 code
+  shift 3
   rm -rf "$out"
   set +e
-  "$RUNNER" run "$netlist" --out "$out" --blobs "$blobs" >"$scratch/report.json"
+  "$RUNNER" run "$netlist" --out "$out" --blobs "$blobs" "$@" >"$scratch/report.json"
   code=$?
   set -e
   if ((code != 0)); then
@@ -198,12 +203,13 @@ done
 for scene in blocks/*/scene.jsonc; do
   name=$(basename "$(dirname "$scene")")
   echo "run-hashes: blocks/$name" >&2
-  "$resolve" "$scene" >"$scratch/netlist.json"
+  rm -rf "$scratch/blobs"
+  "$resolve" --blobs "$scratch/blobs" "$scene" >"$scratch/netlist.json"
   digest=$(sha256sum "$scratch/netlist.json")
   digest=${digest%% *}
   printf '%s  %s\n' "$digest" "blocks/$name/netlist.json" >>"$lines"
   cut_stop "$scratch/netlist.json" "$scratch/short.json"
-  run_netlist "blocks/$name" "$scratch/short.json" "$scratch/run"
+  run_netlist "blocks/$name" "$scratch/short.json" "$scratch/run" --blobs "$scratch/blobs"
   hash_tree "$scratch/run" "blocks/$name/run" >>"$lines"
   set +e
   "$orbe" test -v "blocks/$name" >"$scratch/test.out"

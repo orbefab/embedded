@@ -202,10 +202,14 @@ pub enum ProtocolRule {
     Supply,
     /// The moving draw pulled an SG90's supply under 3.0 V. The shaft holds.
     SupplySag,
+    /// A scroll command, which the model does not run. The picture stays still.
+    Scroll,
+    /// A read transfer from a target that answers none.
+    Read,
 }
 
 impl ProtocolRule {
-    pub(crate) const ALL: [ProtocolRule; 8] = [
+    pub(crate) const ALL: [ProtocolRule; 10] = [
         ProtocolRule::Command,
         ProtocolRule::PixelFormat,
         ProtocolRule::SdaWhileSclHigh,
@@ -214,6 +218,8 @@ impl ProtocolRule {
         ProtocolRule::DoutRecord,
         ProtocolRule::Supply,
         ProtocolRule::SupplySag,
+        ProtocolRule::Scroll,
+        ProtocolRule::Read,
     ];
 
     /// Its place in [`ALL`](Self::ALL).
@@ -232,6 +238,8 @@ impl ProtocolRule {
             "dout_record" => Some(ProtocolRule::DoutRecord),
             "supply" => Some(ProtocolRule::Supply),
             "supply_sag" => Some(ProtocolRule::SupplySag),
+            "scroll" => Some(ProtocolRule::Scroll),
+            "read" => Some(ProtocolRule::Read),
             _ => None,
         }
     }
@@ -1313,6 +1321,30 @@ impl Diagnostic {
                     "{part} supply sags under the servo's moving draw at {} ps, so the shaft holds, breaking rule {}, the first time",
                     at.as_ps(),
                     rule_text(&ProtocolRule::SupplySag)
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::Scroll,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} did not run a scroll command, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::Scroll),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::Read,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} answered a read with 0xFF bytes, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::Read),
+                    at.as_ps()
                 )
             }
             Diagnostic::ChipProtocol { part, at, rule } => {

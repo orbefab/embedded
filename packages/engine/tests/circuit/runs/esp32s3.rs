@@ -466,11 +466,13 @@ fn gpio21_edges(vcd: &str) -> Vec<(u64, char)> {
 }
 
 /// LEDC channel 0 on GPIO21, timer 0 on the 40 MHz crystal at 1 bit and divider 1, a period of
-/// two cycles from store 5 at cycle 17. The duty goes from 0 to 1 of 2 steps at store 8, cycle
-/// 26, and back to 0 at store 11, cycle 35. Each takes effect at the timer's next overflow, at
-/// cycles 27 and 37, 675 and 925 ns: a `Duty` row then, and GPIO21's edge 1 ps after it.
+/// two cycles, 50 ns, from store 5 at cycle 17. The duty goes from 0 to 1 of 2 steps at store
+/// 8, cycle 26, and back to 0 at store 11, cycle 35. Each takes effect at the timer's next
+/// overflow, at cycles 27 and 37, 675 and 925 ns: a `Duty` row then. Between them GPIO21 is
+/// high for the first 25 ns of each period, each edge 1 ps after its stop. The update at 925 ns
+/// finds the pin low and moves nothing.
 #[test]
-fn an_led_duty_from_0_to_half_and_back_sends_two_duty_rows_and_two_edges() {
+fn an_led_duty_from_0_to_half_and_back_sends_two_duty_rows_and_its_pwm() {
     let ledc = 0x6001_9000;
     let duty = |duty: u32| {
         [
@@ -503,7 +505,10 @@ fn an_led_duty_from_0_to_half_and_back_sends_two_duty_rows_and_two_edges() {
          925000,925000,u1,GPIO21,duty,,0/2@20000000,,,\n"
     );
     let vcd = fs::read_to_string(dir.join("out/traces/logic.vcd")).unwrap();
-    assert_eq!(gpio21_edges(&vcd), [(675_001, '1'), (925_001, '0')]);
+    let pwm: Vec<(u64, char)> = (0..10)
+        .map(|k| (675_001 + 25_000 * k, if k % 2 == 0 { '1' } else { '0' }))
+        .collect();
+    assert_eq!(gpio21_edges(&vcd), pwm);
 }
 
 /// The replay frame's reset latches while its record is still open, and timer group 0 runs out

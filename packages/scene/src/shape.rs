@@ -211,7 +211,7 @@ const VIEW: Shape = Shape::Obj(
                 ],
             )),
         ),
-        ("screen", Shape::Any),
+        ("screen", Shape::List(&NODE_BY)),
     ],
 );
 

@@ -1,5 +1,7 @@
-//! Each Block, read into a set of files in memory, reads, lints and runs its tests as it does
-//! from disk, and so does each Block installed into a project. Paths in memory start from the
+//! Each Block, read into a set of files in memory, reads, lints and runs a window of each of its
+//! tests as it does from disk, and so does each Block installed into a project. The window is
+//! the same short run for every Block, so these comparisons do not take as long as the slowest
+//! Block's whole test. Each Block's whole test runs on its own elsewhere. Paths in memory start from the
 //! repo, so a disk path shows the same once the repo's folder is taken off it. A Block is a
 //! folder under `blocks/` that holds `block.jsonc`.
 
@@ -139,7 +141,21 @@ fn reading(files: &Files, base: &Path, block: &str) -> Vec<String> {
     ]
 }
 
-/// What `orbe test` makes of one Block. The test text is the Block's own, in the repo.
+/// How far each window runs, from `open`. Every Block's firmware is out of reset by then.
+const WINDOW: &str = "step 20ms";
+
+/// The window of a Block's test text: its lines before its first `step`, then [`WINDOW`] and
+/// `snapshot`, which prints every part's state, the serial text and the diagnostics.
+fn window(text: &str) -> String {
+    let mut out: Vec<&str> = text
+        .lines()
+        .take_while(|line| line.split_whitespace().next() != Some("step"))
+        .collect();
+    out.extend([WINDOW, "snapshot"]);
+    out.join("\n") + "\n"
+}
+
+/// What `orbe test` makes of the [`window`] of each of the Block's test files, in the repo.
 /// A missing `tests/` directory contributes nothing, and so does an entry that is not a file.
 fn played(files: &Files, base: &Path, block: &str) -> Vec<String> {
     let dir = base.join("blocks").join(block);
@@ -149,7 +165,7 @@ fn played(files: &Files, base: &Path, block: &str) -> Vec<String> {
         let report = test::run(
             files.clone(),
             &file,
-            &fs::read_to_string(&path).unwrap(),
+            &window(&fs::read_to_string(&path).unwrap()),
             &dir,
         );
         let passed = if report.passed() { "passed" } else { "failed" };
@@ -167,7 +183,7 @@ fn played(files: &Files, base: &Path, block: &str) -> Vec<String> {
     out
 }
 
-/// Files directly in the Block's `tests/` folder, in sorted order. A missing directory is
+/// The `.test` files directly in the Block's `tests/` folder, in sorted order. A missing directory is
 /// none, and so is an entry that is not a file.
 fn test_files(block: &str) -> Vec<PathBuf> {
     let tests = repo().join("blocks").join(block).join("tests");
@@ -176,13 +192,13 @@ fn test_files(block: &str) -> Vec<PathBuf> {
     };
     let mut paths: Vec<_> = entries
         .map(|entry| entry.unwrap().path())
-        .filter(|path| path.is_file())
+        .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "test"))
         .collect();
     paths.sort();
     paths
 }
 
-/// The read, the lint and the test run.
+/// The read, the lint and the windows played.
 fn outcome(files: &Files, base: &Path, block: &str) -> Vec<String> {
     let mut out = reading(files, base, block);
     out.extend(played(files, base, block));
@@ -250,7 +266,7 @@ fn walk_abs(path: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
     }
 }
 
-/// The read starts with `{` and the lint with `Ok(`. The first played line passed. A Block
+/// The read starts with `{` and the lint with `Ok(`. The first window played passed. A Block
 /// with no test file has nothing to play, and the assertion names that lack.
 fn reads_and_passes(found: &[String], block: &str) {
     assert!(found[0].starts_with('{'), "{block} reads: {}", found[0]);
@@ -489,8 +505,8 @@ fn finds(block: &str, reading: &str, code: &str, present: bool, lack: &str) {
 /// disk, and so is the test transcript. The part removed is the first folder `install` wrote.
 /// The next folder is edited, and that edit is not a finding. A Block with no part folder or
 /// no image under `build/` says so, and the read still has to show every finding that Block can
-/// produce. The transcript is the Block's own test file: its passed or failed line, each
-/// source line's number, and every reply. The read has already failed, so the run does not
+/// produce. The transcript is the window of the Block's own test file: its passed or failed
+/// line, each source line's number, and every reply. The read has already failed, so the run does not
 /// start.
 #[test]
 fn a_broken_install_finds_the_same_from_memory() {

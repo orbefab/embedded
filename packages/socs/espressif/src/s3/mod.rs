@@ -524,9 +524,10 @@ impl Esp32s3 {
         }
     }
 
-    /// Lets every LEDC update take effect that is due at a tick whose instructions have all run,
-    /// before any fault. An update that moves a pad's drive waits for its `Moved` halt to change
-    /// the signal, and the others change it at once.
+    /// Lets every LEDC update take effect and every PWM edge pass that is due at a tick whose
+    /// instructions have all run, before any fault. An edge that moves a pad's drive waits for
+    /// its `Moved` halt to change the signal, and so does every later edge of that signal, so
+    /// they land in order. The others change it at once.
     fn settle_ledc(&mut self) {
         let Some(through) = self.now().0.checked_sub(1) else {
             return;
@@ -540,16 +541,21 @@ impl Esp32s3 {
             .drain(..)
             .filter(|duty| before_fault(duty.at));
         self.duties.extend(duties);
-        for effect in std::mem::take(&mut self.soc.effects) {
-            if !before_fault(effect.at) {
+        for edge in std::mem::take(&mut self.soc.edges) {
+            if !before_fault(edge.at) {
                 continue;
             }
-            let signal = ledc::SIGNAL + u16::from(effect.channel);
-            let level = effect.duty > 0;
-            if self.soc.gpio.moves(signal, level) {
-                self.moves.push((effect.at, signal, level));
-            } else {
-                self.soc.gpio.set_signal(signal, level);
+            let signal = ledc::SIGNAL + u16::from(edge.channel);
+            let queued = self.moves.iter().rev().find(|m| m.1 == signal);
+            let moves = match queued {
+                Some(&(_, _, level)) => level != edge.level,
+                None => self.soc.gpio.moves(signal, edge.level),
+            };
+            if moves {
+                let at = self.moves.partition_point(|m| m.0 <= edge.at);
+                self.moves.insert(at, (edge.at, signal, edge.level));
+            } else if queued.is_none() {
+                self.soc.gpio.set_signal(signal, edge.level);
             }
         }
     }
@@ -2578,9 +2584,10 @@ mod tests {
 
     /// The updates at cycles 26 and 35 take effect at the timer's next overflows, 24 ticks
     /// apart from cycle 17: cycles 27 and 37. Each sends its record, then the drive it moves.
+    /// Every step, 2 of 2, and 0 have no PWM edge.
     #[test]
     fn an_led_duty_update_sends_its_record_then_moves_the_pads_drive() {
-        let program = stores(&[ledc_on(3), duty(1).to_vec(), duty(0).to_vec()].concat());
+        let program = stores(&[ledc_on(3), duty(2).to_vec(), duty(0).to_vec()].concat());
         for step in [1, 1000] {
             let mut chip = program.chip();
             assert_eq!(
@@ -2602,13 +2609,13 @@ mod tests {
                 resolution: 1,
                 hz: 20_000_000,
             };
-            assert_eq!(duties, [sent(c(27), 1), sent(c(37), 0)]);
+            assert_eq!(duties, [sent(c(27), 2), sent(c(37), 0)]);
         }
     }
 
     #[test]
     fn a_duty_change_that_keeps_the_drive_sends_only_its_record() {
-        let program = stores(&[ledc_on(3), duty(1).to_vec(), duty(2).to_vec()].concat());
+        let program = stores(&[ledc_on(3), duty(2).to_vec(), duty(2).to_vec()].concat());
         let mut chip = program.chip();
         assert_eq!(
             halts(&mut chip, 1000, 1000),
@@ -2747,21 +2754,50 @@ mod tests {
         assert_eq!(duties, [0, 2]);
     }
 
-    /// At a partial duty an inverted pad drives low, and the record sends the steps the channel
-    /// does not: 3 of the 4 steps of a 2-bit timer at duty 1, from cycle 29.
+    /// Duty 1 of the 4 steps of a 2-bit timer, a period of 4 crystal cycles, from the overflow
+    /// at cycle 29: the signal is high for one cycle of each four. Each edge is a stop of its
+    /// own, after the update's record.
     #[test]
-    fn an_inverted_pad_at_a_partial_duty_drives_low() {
+    fn a_partial_duty_sends_its_pwm_edges() {
+        let mut on = ledc_on(3);
+        on[5].1 = 2 | 256 << 4 | 1 << 25;
+        let program = stores(&[on, duty(1).to_vec()].concat());
+        let mut chip = program.chip();
+        assert_eq!(
+            halts(&mut chip, 38, 1000),
+            [
+                (image_at(c(5)), PadDrive::Low),
+                (record_at(c(29)), PadDrive::Low),
+                (Halt::Moved(c(29)), PadDrive::High),
+                (Halt::Moved(c(30)), PadDrive::Low),
+                (Halt::Moved(c(33)), PadDrive::High),
+                (Halt::Moved(c(34)), PadDrive::Low),
+                (Halt::Moved(c(37)), PadDrive::High),
+                (Halt::Moved(c(38)), PadDrive::Low),
+            ]
+        );
+        let duties: Vec<u32> = chip.take_duties().map(|d| d.duty).collect();
+        assert_eq!(duties, [1]);
+    }
+
+    /// An inverted pad drives the PWM inverted, and the record sends the steps the channel does
+    /// not: 3 of the 4 steps of a 2-bit timer at duty 1, from cycle 29.
+    #[test]
+    fn an_inverted_pad_at_a_partial_duty_drives_the_inverted_pwm() {
         let mut on = ledc_on(3);
         on[1].1 |= 1 << 9;
         on[5].1 = 2 | 256 << 4 | 1 << 25;
         let program = stores(&[on, duty(1).to_vec()].concat());
         let mut chip = program.chip();
         assert_eq!(
-            halts(&mut chip, 1000, 1000),
+            halts(&mut chip, 34, 1000),
             [
                 (image_at(c(5)), PadDrive::High),
                 (record_at(c(29)), PadDrive::High),
                 (Halt::Moved(c(29)), PadDrive::Low),
+                (Halt::Moved(c(30)), PadDrive::High),
+                (Halt::Moved(c(33)), PadDrive::Low),
+                (Halt::Moved(c(34)), PadDrive::High),
             ]
         );
         let duties: Vec<u32> = chip.take_duties().map(|d| d.duty).collect();
@@ -2776,7 +2812,7 @@ mod tests {
         let route = |signal| [(GPIO + 0x554 + 4 * 21, signal)];
         let pairs = [
             ledc_on(3),
-            duty(1).to_vec(),
+            duty(2).to_vec(),
             route(0x100).to_vec(),
             vec![(SYSTEM + 0x20, 1 << 11)],
             route(u32::from(ledc::SIGNAL)).to_vec(),
@@ -2834,7 +2870,7 @@ mod tests {
             on[..4].to_vec(),
             vec![(SYSTEM + 0x20, 0)],
             on[4..].to_vec(),
-            duty(1).to_vec(),
+            duty(2).to_vec(),
         ];
         let program = stores(&pairs.concat());
         let mut chip = program.chip();

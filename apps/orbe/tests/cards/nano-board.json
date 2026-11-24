@@ -22,6 +22,10 @@
     },
     {
       "name": "development board schematic, revision 3"
+    },
+    {
+      "name": "WCH CH340 datasheet, version 3D",
+      "url": "https://www.wch-ic.com/download/file?id=79"
     }
   ],
   "files": [

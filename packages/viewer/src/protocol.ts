@@ -10,6 +10,8 @@ export interface Channels {
   readonly pins: readonly Ref[];
   /** Each addressable LED part, by its reading `"of": "rgb"`. */
   readonly pixels: readonly Ref[];
+  /** Each screen part, by its reading `"of": "screen"`. Absent when the scene has none. */
+  readonly screens?: readonly Ref[];
   readonly switches: readonly Ref[];
 }
 
@@ -59,6 +61,10 @@ export interface FrameMessage {
   /** On a frame from a `play` tick: simulated time over wall time in that tick, as the session
    * achieved it. Under 1 when the engine runs slower than real time. */
   readonly ratio?: number;
+  /** Per `channels.screens`, the glass of each screen that shows something new since the
+   * previous frame, else null. Absent when no screen changed. The first frame a page gets
+   * carries every screen. */
+  readonly screens?: readonly (ScreenImage | null)[];
   readonly seq: number;
   /** UART text new since the previous frame, at most 4096 bytes, or the bounded log a join
    * shows. Absent when none arrived and this frame is not a join's view of text the session
@@ -145,6 +151,14 @@ export type SceneMessage = View & {
    * Absent when the scene declares none. */
   readonly world?: readonly WorldQuantity[];
 };
+
+/** What a screen's glass shows: `width` by `height` pixels, rows top to bottom and each row left
+ * to right, red, green, blue and alpha a byte each, in base64. */
+export interface ScreenImage {
+  readonly height: number;
+  readonly rgba: string;
+  readonly width: number;
+}
 
 /** UART text since the previous frame, at most 4096 UTF-8 bytes. The session keeps one serial
  * text, the bytes of every USART in the order their stop bits ended, decoded as UTF-8 the way

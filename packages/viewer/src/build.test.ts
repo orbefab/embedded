@@ -38,6 +38,7 @@ const parts: Record<string, PartData> = {
   }),
   lamp: partData("lamp.glb", { view: { glow: [{ node: "lens", by: "brightness" }] }, readings: { brightness: { full: 0.01 } } }),
   pixel: partData("pixel.glb", { view: { glow: [{ node: "lens", by: "color" }] } }),
+  oled: partData("oled.glb", { view: { screen: [{ node: "glass", by: "screen" }] } }),
   board: partData("board.glb"),
   pot: partData("pot.glb", {
     joints: { knob: { node: "shaft", turn: [0, 0, -1], range: 300, by: { param: "position", min: 0, max: 1 } } },
@@ -47,6 +48,7 @@ const models = new Map([
   ["resistor.glb", body(...BANDS)],
   ["lamp.glb", body("body")],
   ["pixel.glb", body("body", "lens")],
+  ["oled.glb", body("pcb", "glass")],
   ["board.glb", body("pcb")],
   ["pot.glb", body("shaft")],
 ]);
@@ -169,6 +171,29 @@ describe("buildScene", () => {
     const lens = built.root.getObjectByName("@pixel0")?.getObjectByName("lens");
     expect(lens instanceof Mesh && lens.material === built.glows[0]?.material).toBe(true);
     expect(built.glows[0]?.material.toneMapped).toBe(false);
+  });
+
+  test("a screen's glass maps its top face from the +y edge down and starts dark", () => {
+    const oled = { name: "oled", part: "oled", params: {}, placement: at, children: [] };
+    const built = buildScene(
+      scene([oled], { channels: { pins: [], leds: [], switches: [], pixels: [], screens: ["@oled"] } }),
+      models
+    );
+    expect(built.errors).toEqual([]);
+    expect(built.screens.map(({ channel, shown }) => ({ channel, shown }))).toEqual([{ channel: 0, shown: undefined }]);
+    const glass = built.root.getObjectByName("@oled")?.getObjectByName("glass");
+    if (!(glass instanceof Mesh)) throw new Error("no glass mesh");
+    expect(glass.material).toBe(built.screens[0]?.materials[0]);
+    expect(`#${glass.material.color.getHexString()}`).toBe("#000000");
+    expect(`#${glass.material.emissive.getHexString()}`).toBe("#000000");
+    const position = glass.geometry.getAttribute("position");
+    const uv = glass.geometry.getAttribute("uv");
+    for (let k = 0; k < position.count; k += 1) {
+      expect(uv.getX(k)).toBeCloseTo(position.getX(k) + 0.5);
+      expect(uv.getY(k)).toBeCloseTo(0.5 - position.getY(k));
+    }
+    const plain = buildScene(scene([oled]), models);
+    expect(plain.screens).toEqual([]);
   });
 
   test("an addressable LED the scene sends no colour for does not glow", () => {
