@@ -1,0 +1,20 @@
+// GPIO18 drives an LED through LEDC: analogWrite(18, 128) at the core's default 1 kHz and 8 bits.
+// The app is the stock sketch packages/engine/tests/firmware/esp32s3/arduino/stock/analogwrite.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+    "led1": { "type": "led-5mm" }
+  },
+  "wires": [
+    ["board.GPIO18", "r1.a"],
+    ["r1.b", "led1.anode"],
+    ["led1.cathode", "board.GND"]
+  ],
+  "ground": "board.GND"
+}
