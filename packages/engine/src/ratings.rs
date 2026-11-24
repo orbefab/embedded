@@ -7,7 +7,8 @@ use crate::active::{self, Output, Stage};
 use crate::netlist::{Average, Basis, Model, NetId, Netlist, Rating, RatingKind};
 
 use crate::chip::regulator::{
-    INRUSH_PS, LIMIT_KNEE_FRACTION, LIMIT_SAG_FRACTION, PULL_DOWN_FRACTION, limit_drop,
+    LIMIT_KNEE_FRACTION, LIMIT_SAG_FRACTION, MIN_CHARGE_RATE, PULL_DOWN_FRACTION,
+    SETTLE_BAND_FRACTION, SETTLE_PS, STALL_PS, limit_drop,
 };
 use crate::diagnostic::{
     CurrentLimitExcursion, Diagnostic, Excursion, VoltageExcursion, exceeds_rounded, significant,
@@ -252,15 +253,29 @@ struct RegulatorLimit {
     baseline_vo: Option<f64>,
     clamped: bool,
     worst_drop: f64,
-    /// A startup or rising current-limit clamp waiting out [`INRUSH_PS`] before warning.
+    /// Whether `excursion` holds a settled clamped reading rather than a provisional sample.
+    settled: bool,
+    /// Current clamped voltage plateau, separating a settled rail from a switching-edge spike.
+    settle: Option<Settle>,
+    /// A clamped rail starting below target (such as capacitor charging) that stays quiet while
+    /// its output keeps rising toward target.
     pending: Option<PendingLimit>,
     excursion: Option<CurrentLimitExcursion>,
 }
 
+#[derive(Clone, Copy)]
+struct Settle {
+    vo: f64,
+    since: Time,
+}
+
 #[derive(Clone)]
 struct PendingLimit {
-    excursion: CurrentLimitExcursion,
-    worst_drop: f64,
+    first: Time,
+    over_ps: Option<u64>,
+    high_vo: f64,
+    progress_vo: f64,
+    progress_at: Time,
 }
 
 /// The basis a sustained rating with no basis of its own takes.
@@ -475,6 +490,8 @@ impl Ratings {
                 baseline_vo: None,
                 clamped: false,
                 worst_drop: 0.0,
+                settled: false,
+                settle: None,
                 pending: None,
                 excursion: None,
             });
@@ -613,14 +630,9 @@ impl Ratings {
                         *over_ps += dt;
                     }
                 } else if let Some(pending) = &mut limit.pending
-                    && let Some(over_ps) = &mut pending.excursion.over_ps
+                    && let Some(over_ps) = &mut pending.over_ps
                 {
                     *over_ps += dt;
-                    if *over_ps >= INRUSH_PS {
-                        let promoted = limit.pending.take().expect("pending exists");
-                        limit.worst_drop = promoted.worst_drop;
-                        limit.excursion = Some(promoted.excursion);
-                    }
                 }
             }
             let ground = row[limit.pin_gnd].get();
@@ -633,6 +645,7 @@ impl Ratings {
             limit.clamped = clamped;
             if !clamped {
                 limit.pending = None;
+                limit.settle = None;
                 if drop < LIMIT_KNEE_FRACTION * vout {
                     limit.baseline_vo = Some(vo);
                 }
@@ -641,48 +654,89 @@ impl Ratings {
             let pulled_down = limit
                 .baseline_vo
                 .is_some_and(|before| before - vo >= PULL_DOWN_FRACTION * vout);
-            let reading = CurrentLimitExcursion {
-                pin: limit.pin.clone(),
-                limit: limit.reg.current_limit.si.get(),
-                target: vout,
-                voltage: vo,
-                current: i,
-                peak_at: at,
-                first: at,
-                over_ps: self.timing.over_ps(),
+            let settled_now = match limit.settle {
+                Some(s) if (vo - s.vo).abs() <= SETTLE_BAND_FRACTION * vout => {
+                    at.as_ps() - s.since.as_ps() >= SETTLE_PS
+                }
+                _ => {
+                    limit.settle = Some(Settle { vo, since: at });
+                    false
+                }
             };
             if let Some(excursion) = &mut limit.excursion {
-                if drop > limit.worst_drop {
+                let replace = if settled_now {
+                    !limit.settled || drop > limit.worst_drop
+                } else {
+                    !limit.settled && drop > limit.worst_drop
+                };
+                if replace {
+                    limit.settled = settled_now;
                     limit.worst_drop = drop;
                     excursion.voltage = vo;
                     excursion.current = i;
                     excursion.peak_at = at;
                 }
-            } else if self.timing == Timing::Point || pulled_down {
-                if let Some(mut pending) = limit.pending.take() {
-                    if drop > pending.worst_drop {
-                        pending.worst_drop = drop;
-                        pending.excursion.voltage = vo;
-                        pending.excursion.current = i;
-                        pending.excursion.peak_at = at;
-                    }
-                    limit.worst_drop = pending.worst_drop;
-                    limit.excursion = Some(pending.excursion);
+                continue;
+            }
+            let charge_step = MIN_CHARGE_RATE * vout * (STALL_PS as f64 * 1e-12);
+            let stalled = if let Some(pending) = &mut limit.pending {
+                if pending.high_vo - vo >= PULL_DOWN_FRACTION * vout {
+                    true
                 } else {
-                    limit.worst_drop = drop;
-                    limit.excursion = Some(reading);
-                }
-            } else if let Some(pending) = &mut limit.pending {
-                if drop > pending.worst_drop {
-                    pending.worst_drop = drop;
-                    pending.excursion.voltage = vo;
-                    pending.excursion.current = i;
-                    pending.excursion.peak_at = at;
+                    pending.high_vo = pending.high_vo.max(vo);
+                    let dt_ps = at.as_ps() - pending.progress_at.as_ps();
+                    let dv = vo - pending.progress_vo;
+                    if dt_ps >= STALL_PS {
+                        if dv >= MIN_CHARGE_RATE * vout * (dt_ps as f64 * 1e-12) {
+                            pending.progress_vo = vo;
+                            pending.progress_at = at;
+                            false
+                        } else {
+                            true
+                        }
+                    } else {
+                        if dv >= charge_step {
+                            pending.progress_vo = vo;
+                            pending.progress_at = at;
+                        }
+                        false
+                    }
                 }
             } else {
+                false
+            };
+            if self.timing == Timing::Point || pulled_down || stalled {
+                let (first, over_ps) = match limit.pending.take() {
+                    Some(pending) => (pending.first, pending.over_ps),
+                    None => (at, self.timing.over_ps()),
+                };
+                // Reset the settle tracker when promoting from a charging stall so an earlier
+                // slow ramp point cannot count as settled ahead of the stalled rail voltage.
+                let settled = if stalled {
+                    limit.settle = Some(Settle { vo, since: at });
+                    false
+                } else {
+                    settled_now
+                };
+                limit.settled = settled;
+                limit.worst_drop = drop;
+                limit.excursion = Some(CurrentLimitExcursion {
+                    pin: limit.pin.clone(),
+                    limit: limit.reg.current_limit.si.get(),
+                    target: vout,
+                    voltage: vo,
+                    current: i,
+                    peak_at: at,
+                    first,
+                    over_ps,
+                });
+            } else if limit.pending.is_none() {
                 limit.pending = Some(PendingLimit {
-                    excursion: reading,
-                    worst_drop: drop,
+                    first: at,
+                    over_ps: self.timing.over_ps(),
+                    high_vo: vo,
+                    progress_vo: vo,
+                    progress_at: at,
                 });
             }
         }

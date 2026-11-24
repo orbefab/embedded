@@ -41,22 +41,34 @@ const BLOCK_A: f64 = 1e-12;
 /// states 15 V and no negative floor, and the SGM2212 sheet states 22 V and no negative floor.
 pub(crate) const INPUT_FLOOR_V: f64 = 0.3;
 /// Fraction of `output_voltage` dropped by the current-limit term before the regulator is treated
-/// as actively clamped (2%, i.e. 66 mV on 3.3 V or 100 mV on 5 V). At 99.5% of `current_limit`
-/// the softplus term is 0.07% of `output_voltage`; at 2% the pass current is 99.85% of
-/// `current_limit` (rounding to `current_limit` at 3 significant digits) and the rail is visibly
-/// below its nominal output.
-pub(crate) const LIMIT_SAG_FRACTION: f64 = 0.02;
+/// as actively clamped (0.5%, i.e. 16.5 mV on 3.3 V or 25 mV on 5 V). At 99.5% of `current_limit`
+/// the softplus term is 0.07% of `output_voltage` and an ideal 100% nominal load is 0.35%; at
+/// 0.5% the pass current is 99.7% of `current_limit`, catching 105% overloads even on regulators
+/// whose own `output_resistance` already takes 3.5% of `output_voltage` (LP2985, XC6206).
+pub(crate) const LIMIT_SAG_FRACTION: f64 = 0.005;
 /// Below this fraction of `output_voltage` the regulator is clear of the current-limit knee, so
 /// its unclamped output voltage updates the pre-overload baseline.
 pub(crate) const LIMIT_KNEE_FRACTION: f64 = 0.001;
-/// Fraction of `output_voltage` the output must fall below its pre-overload baseline to confirm
-/// that a live rail was pulled down rather than charging up at power-on.
-pub(crate) const PULL_DOWN_FRACTION: f64 = 0.01;
-/// Picoseconds a startup or rising current-limit clamp may hold before warning (500 us). Covers
-/// datasheet output-capacitor charging across the catalog regulators (CH340G 0.1 uF = 11 us,
-/// XC6206 2 uF = 33 us, LP2985 10 uF = 94 us, AMS1117 100 uF = 455 us, LM7805 100 uF = 208 us)
-/// while still flagging a steady short within a 1 ms step.
-pub(crate) const INRUSH_PS: u64 = 500_000_000;
+/// Fraction of `output_voltage` the output must fall below its pre-overload baseline (or below
+/// its high-water mark while clamped) to confirm that the rail was pulled down rather than
+/// charging up at power-on.
+pub(crate) const PULL_DOWN_FRACTION: f64 = 0.005;
+/// Minimum upward slope, in `output_voltage` per second, that counts as an output capacitor
+/// actively charging toward its target (0.5/s, i.e. up to 2 s from 0 V to `output_voltage`).
+/// Covers even a 1000 uF cap on the 30 mA CH340G with a 90% parallel load while catching a rail
+/// stalled below target.
+pub(crate) const MIN_CHARGE_RATE: f64 = 0.5;
+/// Minimum picoseconds over which a non-rising clamped rail is checked before declaring it
+/// stalled (50 us). At `MIN_CHARGE_RATE` that spans 2.5e-5 * `output_voltage`, roughly 25x above
+/// Newton's `RELTOL * vo` so nanosecond solver steps never mistake solver noise for a stall.
+pub(crate) const STALL_PS: u64 = 50_000_000;
+/// Fraction of `output_voltage` within which a clamped output must stay for [`SETTLE_PS`] to
+/// count as a settled plateau rather than a switching-edge spike or charging ramp.
+pub(crate) const SETTLE_BAND_FRACTION: f64 = 0.002;
+/// Picoseconds a clamped output must hold inside [`SETTLE_BAND_FRACTION`] to be recorded as a
+/// settled clamped voltage (1 us). Long enough to skip nanosecond MOSFET capacitive kickback
+/// edges while settling inside microsecond PWM pulses.
+pub(crate) const SETTLE_PS: u64 = 1_000_000;
 
 pub(crate) struct Law {
     vo: f64,
@@ -936,7 +948,7 @@ mod tests {
                 parts.join(",")
             )
         };
-        // 10 uF charges to 3.3 V at 1.2 A in ~27.5 us, well under the 500 us startup window.
+        // 10 uF charges monotonically to 3.3 V at 1.2 A in ~27.5 us and must stay quiet.
         let inrush = tran(&[
             step_source,
             &capacitor("c1", "vout", "gnd"),
@@ -951,7 +963,7 @@ mod tests {
             .collect();
         assert!(limits.is_empty(), "{limits:?}");
 
-        // With a 0.5 ohm short on the output, the clamp holds past 500 us and emits one warning.
+        // With a 0.5 ohm short on the output, the rail stalls near 0.6 V and emits one warning.
         let shorted = tran(&[
             step_source,
             &capacitor("c1", "vout", "gnd"),
