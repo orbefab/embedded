@@ -233,7 +233,7 @@ fn a_command_word_sent_as_bytes_opens_the_command_the_next_bytes_continue() {
             spi(&[], &[0x11, 0x22], Lanes::Four, Cs::Released),
         ],
     );
-    assert_eq!(core.panel().madctl, MX);
+    assert_eq!(core.panel().settings.get("madctl").unwrap(), u16::from(MX));
     assert_eq!(pixel(&core.image(), 359, 0), &[0x11, 0x22]);
     assert_eq!(core.closed.len(), 1);
     assert_eq!(core.broke_rules().count(), 0);
@@ -247,7 +247,7 @@ fn a_command_word_sent_as_bytes_opens_the_command_the_next_bytes_continue() {
             Cs::Released,
         )],
     );
-    assert_eq!(split.panel().colmod, 0x66);
+    assert_eq!(split.panel().settings.get("colmod").unwrap(), 0x66);
     assert_eq!(split.broke_rules().count(), 0);
 }
 
@@ -299,7 +299,7 @@ fn a_command_word_a_release_cuts_short_or_phases_past_it_break_command() {
         ],
     );
     assert!(!held.panel().on, "phases inside a command are dropped");
-    assert_eq!(held.panel().colmod, 0x66);
+    assert_eq!(held.panel().settings.get("colmod").unwrap(), 0x66);
     assert_eq!(
         held.broke_rules().collect::<Vec<_>>(),
         [(ProtocolRule::Command, Time::from_ps(8))]
@@ -424,7 +424,7 @@ fn data_lanes_that_do_not_match_the_opcode_run_nothing() {
             Cs::Released,
         )],
     );
-    assert_eq!(core.panel().colmod, 0x55);
+    assert_eq!(core.panel().settings.get("colmod").unwrap(), 0x55);
     let mut pixels = ready();
     pixels.take(Time::from_ps(2), &[write(0x32, RAMWR, &[9, 9])]);
     pixels.take(
@@ -549,8 +549,14 @@ fn a_register_the_model_stores_counts_once_however_often_it_is_written() {
         core.take(Time::from_ps(1), &[write(0x02, 0xf0, &[1, 2, 3])]);
     }
     assert_eq!(core.panel().registers, 1);
-    assert_eq!(core.panel().madctl, before.madctl);
-    assert_eq!(core.panel().colmod, before.colmod);
+    assert_eq!(
+        core.panel().settings.get("madctl").unwrap(),
+        before.settings.get("madctl").unwrap()
+    );
+    assert_eq!(
+        core.panel().settings.get("colmod").unwrap(),
+        before.settings.get("colmod").unwrap()
+    );
     assert_eq!(
         (core.panel().on, core.panel().asleep, core.panel().inverted),
         (before.on, before.asleep, before.inverted)

@@ -49,6 +49,7 @@ function readPart(partsDir, id) {
     viewNodes: [
       ...(view.glow ?? []).map((e) => e.node),
       ...(view.tint ?? []).map((e) => e.node),
+      ...(view.screen ?? []).map((e) => e.node),
       ...(view.recolour ?? []).flatMap((e) => e.nodes),
     ],
     jointNodes: Object.values(tree.joints ?? {}).map((j) => j.node),

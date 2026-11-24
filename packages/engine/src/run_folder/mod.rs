@@ -289,7 +289,7 @@ pub fn render(
             files.insert(format!("traces/{name}"), bytes);
         }
         for (name, bytes) in trace.images() {
-            files.insert(format!("traces/{name}"), bytes.to_vec());
+            files.insert(format!("traces/{name}"), bytes);
         }
     }
     RunFolder { files }

@@ -1,0 +1,44 @@
+{
+  "part": "xc6206-sot23",
+  "source": {
+    "script": "model.py",
+    "sha256": "2070abc7b7f0c897835ed97da2afa1404abbd7192db920759e835facf188ef8d",
+    "bytes": 1382
+  },
+  "files": {
+    "xc6206-sot23.glb": {
+      "sha256": "dc65be88259a8eebb9994c211eeac773393b30286fb077b1018416b65e2f1f5f",
+      "bytes": 8488
+    },
+    "xc6206-sot23.anchors.json": {
+      "sha256": "9a0bc7009cf2c11c88823681ab150d8e6e751e1a1a013df32cc9bd111c4c3aad",
+      "bytes": 414
+    }
+  },
+  "box": {
+    "min": [-1.45, -1.185, 0],
+    "max": [1.45, 1.185, 1.045]
+  },
+  "kept_nodes": [],
+  "draw_calls": 3,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 3,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0.055
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 5,
+      "primitives_out": 3
+    }
+  }
+}

@@ -87,6 +87,28 @@ describe("websocketSource", () => {
     expect(replay.serial).toEqual({ from: 0, text: "light 1\r\ndark 2\r\n", replace: true });
   });
 
+  test("a late listener sees each screen's last glass, which frames carry only when it changes", () => {
+    const socket = new FakeSocket();
+    const source = websocketSource(() => socket as unknown as WebSocket);
+    socket.open();
+    socket.receive(scene);
+    const a = { width: 1, height: 1, rgba: "AAAA/w==" };
+    const b = { width: 1, height: 1, rgba: "////fw==" };
+    socket.receive({ ...frame(0), screens: [a, a] });
+    socket.receive({ ...frame(1), screens: [null, b] });
+    socket.receive(frame(2));
+    const late: ToViewer[] = [];
+    source.subscribe((message) => late.push(message));
+    const replay = late[1] as FrameMessage;
+    expect(replay.seq).toBe(2);
+    expect(replay.screens).toEqual([a, b]);
+    socket.receive(scene);
+    socket.receive(frame(3));
+    const fresh: ToViewer[] = [];
+    source.subscribe((message) => fresh.push(message));
+    expect((fresh[1] as FrameMessage).screens).toBeUndefined();
+  });
+
   test("a late listener sees the tail when earlier bytes were dropped", () => {
     const socket = new FakeSocket();
     const source = websocketSource(() => socket as unknown as WebSocket);

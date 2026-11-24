@@ -14,7 +14,7 @@ mod world;
 
 pub use device::{
     Ack, Cx, Device, Dir, Draw, Drawn, DutyTarget, Error, Event, Fields, I2cTarget, Idle, Panel,
-    Params, PulseTarget, Shows, SpiTarget, State, Value, View,
+    Params, PulseTarget, Settings, Shows, SpiTarget, State, Value, View,
 };
 pub use pages::Pages;
 pub use pins::{Drive, Drives, Levels, Stop};
