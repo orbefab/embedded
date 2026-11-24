@@ -50,6 +50,51 @@ fn block_dirs() -> Vec<std::path::PathBuf> {
     dirs
 }
 
+/// The SPDX expression `block.jsonc` carries: the sketch (`MIT OR Apache-2.0`) and what
+/// `firmware/NOTICE` says the built image under `build/` is under.
+fn expected_license(notice: &str, id: &str) -> String {
+    let (_, tail) = notice
+        .split_once("These files and their licences:")
+        .unwrap_or_else(|| panic!("{id}: firmware/NOTICE has no licence summary"));
+    let flat = tail.split_whitespace().collect::<Vec<_>>().join(" ");
+    let (_, from_build) = flat
+        .split_once("`build/")
+        .unwrap_or_else(|| panic!("{id}: firmware/NOTICE names no build/ image in its summary"));
+    let (_, after_under) = from_build
+        .split_once(" under ")
+        .unwrap_or_else(|| panic!("{id}: firmware/NOTICE gives no licence for its build/ image"));
+    let end = after_under
+        .match_indices('.')
+        .find(|(at, _)| {
+            after_under[*at + 1..].is_empty() || after_under[*at + 1..].starts_with(' ')
+        })
+        .map(|(at, _)| at)
+        .unwrap_or(after_under.len());
+    let terms: Vec<&str> = after_under[..end]
+        .split(", ")
+        .map(|part| part.strip_prefix("and ").unwrap_or(part))
+        .flat_map(|part| part.split(" and "))
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect();
+    assert!(
+        !terms.is_empty(),
+        "{id}: firmware/NOTICE names no licence for its build/ image"
+    );
+    let mut expr = String::from("(MIT OR Apache-2.0)");
+    for term in terms {
+        expr.push_str(" AND ");
+        if term.contains(' ') {
+            expr.push('(');
+            expr.push_str(term);
+            expr.push(')');
+        } else {
+            expr.push_str(term);
+        }
+    }
+    expr
+}
+
 #[test]
 fn each_block_names_itself_and_reads_with_the_catalog_alone() {
     let dirs = block_dirs();
@@ -84,16 +129,12 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
         for key in ["title", "summary", "license"] {
             assert!(non_empty_text(&block[key]), "{id}: {key}");
         }
-        let license = match id {
-            "nano-neopixel-stick" => {
-                "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND LGPL-3.0-or-later"
-            }
-            "nano-oled" => {
-                "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND BSD-2-Clause"
-            }
-            "nano-lcd1602-i2c" => "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND MIT",
-            _ => "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
-        };
+        assert!(
+            dir.join("firmware/NOTICE").is_file(),
+            "{id}: firmware/NOTICE"
+        );
+        let notice = fs::read_to_string(dir.join("firmware/NOTICE")).unwrap();
+        let license = expected_license(&notice, id);
         assert_eq!(
             block["license"], license,
             "{id}: license is the SPDX expression for the sketch and what its image links"
@@ -126,7 +167,6 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
         assert_eq!(boards.len(), 1, "{id}: the scene holds one `{board}`");
 
         let written = read_jsonc(&scene);
-        let notice = fs::read_to_string(dir.join("firmware/NOTICE")).unwrap();
         for (name, part) in written["parts"].as_object().unwrap() {
             if let Some(firmware) = part.get("firmware") {
                 let firmware = firmware.as_str().unwrap();
@@ -154,10 +194,6 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
                 }
             }
         }
-        assert!(
-            dir.join("firmware/NOTICE").is_file(),
-            "{id}: firmware/NOTICE"
-        );
     }
 }
 
