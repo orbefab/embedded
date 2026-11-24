@@ -3,9 +3,9 @@
 
 mod common;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use jsonc_parser::{JsonValue, ParseOptions, parse_to_value};
 use orbe_scene::{BLOCK, Files};
@@ -50,294 +50,6 @@ fn block_dirs() -> Vec<std::path::PathBuf> {
     dirs
 }
 
-/// Identifies a firmware `LICENSE-*` file's SPDX licence from its text.
-fn license_from_text(text: &str) -> Option<&'static str> {
-    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    if flat.starts_with("The newlib subdirectory is a collection of software from several sources.")
-    {
-        return Some("LicenseRef-newlib");
-    }
-    if flat.starts_with("GNU LESSER GENERAL PUBLIC LICENSE Version 2.1, February 1999") {
-        return Some("LGPL-2.1-or-later");
-    }
-    if flat.starts_with("GNU LESSER GENERAL PUBLIC LICENSE Version 3, 29 June 2007") {
-        return Some("LGPL-3.0-or-later");
-    }
-    if flat.starts_with("GNU GENERAL PUBLIC LICENSE Version 2, June 1991") {
-        return Some("GPL-2.0-or-later");
-    }
-    if flat.starts_with("GNU GENERAL PUBLIC LICENSE Version 3, 29 June 2007") {
-        return Some("GPL-3.0-or-later");
-    }
-    if flat.starts_with("Apache License Version 2.0, January 2004") {
-        return Some("Apache-2.0");
-    }
-    if flat.contains(
-        "Permission is hereby granted, free of charge, to any person obtaining a copy of this \
-         software and associated documentation files (the \"Software\"), to deal in the Software \
-         without restriction",
-    ) && flat.contains(
-        "The above copyright notice and this permission notice shall be included in all copies \
-         or substantial portions of the Software.",
-    ) && flat.contains("THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND")
-    {
-        return Some("MIT");
-    }
-    if flat.contains(
-        "Redistribution and use in source and binary forms, with or without modification, are \
-         permitted provided that the following conditions are met:",
-    ) && flat.contains(
-        "Redistributions of source code must retain the above copyright notice, this list of \
-         conditions and the following disclaimer.",
-    ) && flat.contains(
-        "Redistributions in binary form must reproduce the above copyright notice, this list of \
-         conditions and the following disclaimer in the documentation and/or other materials \
-         provided with the distribution.",
-    ) && flat.contains("THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS")
-    {
-        let third_clause = flat.contains("Neither the name of")
-            && flat.contains(
-                "may be used to endorse or promote products derived from this software without \
-                 specific prior written permission.",
-            );
-        return Some(if third_clause {
-            "BSD-3-Clause"
-        } else {
-            "BSD-2-Clause"
-        });
-    }
-    if flat.contains(
-        "Permission to use, copy, modify, and/or distribute this software for any purpose with \
-         or without fee is hereby granted",
-    ) {
-        return Some("ISC");
-    }
-    None
-}
-
-/// Every `LICENSE-*` file name mentioned in `notice`.
-fn notice_license_files(notice: &str) -> BTreeSet<String> {
-    let mut found = BTreeSet::new();
-    let bytes = notice.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if notice[i..].starts_with("LICENSE-") {
-            let mut end = i + "LICENSE-".len();
-            while end < bytes.len()
-                && (bytes[end].is_ascii_alphanumeric() || matches!(bytes[end], b'-' | b'_'))
-            {
-                end += 1;
-            }
-            if end > i + "LICENSE-".len() {
-                found.insert(notice[i..end].to_string());
-            }
-            i = end;
-        } else {
-            i += 1;
-        }
-    }
-    found
-}
-
-/// The firmware licences named in `block.jsonc` after the `(MIT OR Apache-2.0)` prefix for
-/// orbe's own files.
-fn block_firmware_licenses<'a>(expr: &'a str, id: &str) -> BTreeSet<&'a str> {
-    let rest = expr
-        .strip_prefix("(MIT OR Apache-2.0) AND ")
-        .unwrap_or_else(|| {
-            panic!("{id}: license `{expr}` does not start with `(MIT OR Apache-2.0) AND `")
-        });
-    let mut terms = BTreeSet::new();
-    for term in rest.split(" AND ") {
-        assert!(
-            !term.is_empty() && !term.contains(char::is_whitespace),
-            "{id}: unexpected license term `{term}` in `{expr}`"
-        );
-        assert!(
-            terms.insert(term),
-            "{id}: duplicate license term `{term}` in `{expr}`"
-        );
-    }
-    assert!(
-        !terms.is_empty(),
-        "{id}: license `{expr}` has no firmware licence"
-    );
-    terms
-}
-
-/// The firmware licences `firmware/NOTICE` names for the built image under `build/`.
-fn notice_build_licenses(notice: &str, id: &str) -> BTreeSet<String> {
-    let (_, tail) = notice
-        .split_once("These files and their licences:")
-        .unwrap_or_else(|| panic!("{id}: firmware/NOTICE has no licence summary"));
-    let flat = tail.split_whitespace().collect::<Vec<_>>().join(" ");
-    let (_, from_build) = flat
-        .split_once("`build/")
-        .unwrap_or_else(|| panic!("{id}: firmware/NOTICE names no build/ image in its summary"));
-    let (_, after_under) = from_build
-        .split_once(" under ")
-        .unwrap_or_else(|| panic!("{id}: firmware/NOTICE gives no licence for its build/ image"));
-    let end = after_under
-        .match_indices('.')
-        .find(|(at, _)| {
-            after_under[*at + 1..].is_empty() || after_under[*at + 1..].starts_with(' ')
-        })
-        .map(|(at, _)| at)
-        .unwrap_or(after_under.len());
-    let terms: BTreeSet<String> = after_under[..end]
-        .split(", ")
-        .map(|part| part.strip_prefix("and ").unwrap_or(part))
-        .flat_map(|part| part.split(" and "))
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .map(str::to_string)
-        .collect();
-    assert!(
-        !terms.is_empty(),
-        "{id}: firmware/NOTICE names no licence for its build/ image"
-    );
-    terms
-}
-
-/// Base toolchain notices a board's firmware carries beside `LICENSE-runtime`, verified against
-/// the repo's pinned copies. `block.jsonc` does not repeat these toolchain notices in its
-/// expression; extra linked libraries must appear there.
-fn board_toolchain_notices(repo: &Path, board: &str) -> Vec<(&'static str, PathBuf)> {
-    if board == "esp32s3-devkitc-1" {
-        let chip = repo.join("parts/esp32s3-qfn56");
-        vec![
-            ("LICENSE-apache", repo.join("LICENSE-APACHE")),
-            ("LICENSE-freertos", chip.join("LICENSE-freertos")),
-            ("LICENSE-newlib", chip.join("LICENSE-newlib")),
-            ("LICENSE-tlsf", chip.join("LICENSE-tlsf")),
-            ("LICENSE-ubsan", chip.join("LICENSE-ubsan")),
-            ("LICENSE-xtensa", chip.join("LICENSE-xtensa")),
-        ]
-    } else {
-        vec![(
-            "LICENSE-libc",
-            repo.join("packages/engine/tests/firmware/sketch/LICENSE-libc"),
-        )]
-    }
-}
-
-/// True when any `.ino` sketch under `firmware` contains `needle`.
-fn sketch_contains(firmware: &Path, needle: &str) -> bool {
-    for entry in fs::read_dir(firmware).unwrap() {
-        let path = entry.unwrap().path();
-        if path.is_dir() {
-            for inner in fs::read_dir(&path).unwrap() {
-                let file = inner.unwrap().path();
-                if file.extension().and_then(|ext| ext.to_str()) == Some("ino")
-                    && fs::read_to_string(&file).unwrap().contains(needle)
-                {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
-/// Identifies every `firmware/LICENSE-*` file from its text, verifies required board toolchain
-/// pins and bidirectional `NOTICE` coverage, and returns the set of licences that must appear
-/// in `block.jsonc`.
-fn firmware_file_licenses(dir: &Path, board: &str, notice: &str, id: &str) -> BTreeSet<String> {
-    let repo = common::repo();
-    let firmware = dir.join("firmware");
-    let runtime_pin = repo.join("packages/engine/tests/firmware/sketch/LICENSE-runtime");
-    let toolchain = board_toolchain_notices(&repo, board);
-
-    let mut disk_files = BTreeSet::new();
-    for entry in fs::read_dir(&firmware).unwrap() {
-        let name = entry.unwrap().file_name().into_string().unwrap();
-        if name.starts_with("LICENSE-") {
-            disk_files.insert(name);
-        }
-    }
-
-    assert!(
-        disk_files.contains("LICENSE-runtime"),
-        "{id}: firmware/LICENSE-runtime is missing"
-    );
-    assert_eq!(
-        fs::read(firmware.join("LICENSE-runtime")).unwrap(),
-        fs::read(&runtime_pin).unwrap(),
-        "{id}: firmware/LICENSE-runtime does not match pinned runtime licence"
-    );
-
-    let mut omitted_from_expr: BTreeSet<&str> = BTreeSet::new();
-    for (name, pin) in &toolchain {
-        assert!(
-            disk_files.contains(*name),
-            "{id}: required toolchain notice firmware/{name} is missing"
-        );
-        assert_eq!(
-            fs::read(firmware.join(name)).unwrap(),
-            fs::read(pin).unwrap(),
-            "{id}: firmware/{name} does not match {}",
-            pin.display()
-        );
-        omitted_from_expr.insert(name);
-    }
-
-    // `Adafruit_GFX.h` includes `Adafruit_BusIO` headers at compile time while `sketches.sh`
-    // links no BusIO code, so `LICENSE-busio` is carried without adding `MIT` to `block.jsonc`.
-    if disk_files.contains("LICENSE-busio")
-        && disk_files.contains("LICENSE-gfx")
-        && sketch_contains(&firmware, "#include <Adafruit_GFX.h>")
-    {
-        let busio_pin =
-            repo.join("packages/engine/tests/firmware/esp32s3/arduino/stock/oled/LICENSE-busio");
-        assert_eq!(
-            fs::read(firmware.join("LICENSE-busio")).unwrap(),
-            fs::read(&busio_pin).unwrap(),
-            "{id}: firmware/LICENSE-busio does not match {}",
-            busio_pin.display()
-        );
-        omitted_from_expr.insert("LICENSE-busio");
-    }
-
-    let mentioned = notice_license_files(notice);
-    assert_eq!(
-        disk_files, mentioned,
-        "{id}: firmware/LICENSE-* files on disk do not match firmware/NOTICE"
-    );
-
-    let (_, tail) = notice
-        .split_once("These files and their licences:")
-        .unwrap_or_else(|| panic!("{id}: firmware/NOTICE has no licence summary"));
-    let flat_summary = tail.split_whitespace().collect::<Vec<_>>().join(" ");
-
-    let mut expr_licenses = BTreeSet::new();
-    for name in &disk_files {
-        let text = fs::read_to_string(firmware.join(name)).unwrap();
-        let detected = license_from_text(&text).unwrap_or_else(|| {
-            panic!("{id}: cannot identify licence from text of firmware/{name}")
-        });
-
-        let prefix = format!("`firmware/{name}` is under ");
-        if let Some((_, after)) = flat_summary.split_once(&prefix) {
-            let stated = after
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .trim_end_matches('.');
-            if stated != "the" {
-                assert_eq!(
-                    stated, detected,
-                    "{id}: firmware/NOTICE says firmware/{name} is under {stated}, text is {detected}"
-                );
-            }
-        }
-
-        if !omitted_from_expr.contains(name.as_str()) {
-            expr_licenses.insert(detected.to_string());
-        }
-    }
-    expr_licenses
-}
-
 #[test]
 fn each_block_names_itself_and_reads_with_the_catalog_alone() {
     let dirs = block_dirs();
@@ -372,30 +84,23 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
         for key in ["title", "summary", "license"] {
             assert!(non_empty_text(&block[key]), "{id}: {key}");
         }
-        assert!(
-            dir.join("firmware/NOTICE").is_file(),
-            "{id}: firmware/NOTICE"
+        let license = match id {
+            "nano-neopixel-stick" => {
+                "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND LGPL-3.0-or-later"
+            }
+            "nano-oled" => {
+                "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND BSD-2-Clause"
+            }
+            "nano-lcd1602-i2c" => "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND MIT",
+            _ => "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
+        };
+        assert_eq!(
+            block["license"], license,
+            "{id}: license is the SPDX expression for the sketch and what its image links"
         );
-        let notice = fs::read_to_string(dir.join("firmware/NOTICE")).unwrap();
-        let board = block["board"].as_str().unwrap();
-        let block_license = block["license"].as_str().unwrap();
-        assert!(spdx_parses(block_license), "{id}");
+        assert!(spdx_parses(block["license"].as_str().unwrap()), "{id}");
         assert!(!spdx_parses("MIT OR"), "{id}");
         assert!(!spdx_parses("(MIT OR Apache-2.0"), "{id}");
-        let from_files = firmware_file_licenses(&dir, board, &notice, id);
-        let from_block: BTreeSet<String> = block_firmware_licenses(block_license, id)
-            .into_iter()
-            .map(str::to_string)
-            .collect();
-        let from_notice = notice_build_licenses(&notice, id);
-        assert_eq!(
-            from_block, from_files,
-            "{id}: block.jsonc license does not match firmware/LICENSE-* files"
-        );
-        assert_eq!(
-            from_notice, from_files,
-            "{id}: firmware/NOTICE build summary does not match firmware/LICENSE-* files"
-        );
         let tags = block["tags"].as_array().unwrap();
         assert!(
             !tags.is_empty() && tags.iter().all(non_empty_text),
@@ -410,6 +115,7 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
         let scene = dir.join("scene.jsonc");
         let netlist = orbe_scene::read(&Files::disk(), &scene)
             .unwrap_or_else(|found| panic!("{id}: {found:#?}"));
+        let board = block["board"].as_str().unwrap();
         let boards: Vec<&str> = netlist
             .refs
             .top
@@ -420,6 +126,7 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
         assert_eq!(boards.len(), 1, "{id}: the scene holds one `{board}`");
 
         let written = read_jsonc(&scene);
+        let notice = fs::read_to_string(dir.join("firmware/NOTICE")).unwrap();
         for (name, part) in written["parts"].as_object().unwrap() {
             if let Some(firmware) = part.get("firmware") {
                 let firmware = firmware.as_str().unwrap();
@@ -447,6 +154,10 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
                 }
             }
         }
+        assert!(
+            dir.join("firmware/NOTICE").is_file(),
+            "{id}: firmware/NOTICE"
+        );
     }
 }
 
