@@ -21,8 +21,6 @@ A folder already at `parts/<id>/` is `part_exists` and nothing is written. The m
 
 Addressable LEDs: `neopixel-stick-8`. Eight from three pins: `hc595-dip16`, Block `nano-shift-leds`.
 
-Temperature and pressure over I2C: `gy-bmp280`.
-
 5 V to 3.3 V logic: `bss138-level-shifter`.
 
 ## Blocks
