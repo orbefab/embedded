@@ -263,9 +263,11 @@ fn a_push_pull_translates_down_and_up() {
 }
 
 /// Accepted steps and rejected tries an SCL edge, over the whole run. The BSS138s' few
-/// picofarads held to 1 nV kept each edge to about 940 steps and 250 rejected tries.
-const MOST_STEPS_AN_EDGE: u64 = 275;
-const MOST_REJECTIONS_AN_EDGE: u64 = 20;
+/// picofarads held to 1 nV kept each edge to about 940 steps and 250 rejected tries. Held to
+/// their charge, at most 3e-6 of their swing, each edge takes about 306 steps and 20 rejected
+/// tries.
+const MOST_STEPS_AN_EDGE: u64 = 340;
+const MOST_REJECTIONS_AN_EDGE: u64 = 23;
 
 /// The picoseconds from the Nano reading SCL high, or low, on the HV side to the touch
 /// controller reading it on the LV side, at 70% and 30% of 3.3 V. A rise on the LV side

@@ -795,7 +795,7 @@ fn v3v3_stays_between_the_setpoints_the_run_visits() {
     eprintln!("stops {}", stats.stops);
     eprintln!("pb5_edges {pb5}");
     eprintln!("pin_edges {pin_edges}");
-    assert_eq!(stats.landings, 1011, "accepted steps after t = 0");
+    assert_eq!(stats.landings, 871, "accepted steps after t = 0");
     assert_eq!(pb5, 4, "PB5 edges");
     assert_eq!(pin_edges, 4, "pin edges");
     let name = Name::new("reg_3v3").unwrap();

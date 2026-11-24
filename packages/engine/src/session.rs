@@ -1146,7 +1146,7 @@ impl Session {
         // started from is dropped from the past when the next step would be more than twice the
         // one it took.
         let planned = || match h == plan.h && !cut {
-            true => Plan::accepted(h, error.growth, error.order, transient.max_step),
+            true => Plan::accepted(h, error.ratio, error.order, transient.max_step),
             false => plan,
         };
         let keep = |plan: Plan| landed.saturating_mul(2) >= plan.h;

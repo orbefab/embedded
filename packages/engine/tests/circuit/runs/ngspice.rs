@@ -167,7 +167,14 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
 /// so its drain current is the drain-source gmin. `pmos-off` is that circuit with the supplies
 /// negated, so the drain current is the negated gmin. `npn-slow-edge` drives the junction
 /// capacitors through 1 Mohm, and `nmos-pulse` does the same for the gate capacitances, slow
-/// next to the deck's ramp. `nmos-regions` biases the drain through reverse, linear and saturation.
+/// next to the deck's ramp. `nmos-gate-1ff`, `nmos-gate-10ff` and `nmos-gate-100ff` give the
+/// MOSFET 1, 10 and 100 fF on each pair of pins, drive its gate through 1 Gohm, 1 Gohm and
+/// 10 Mohm, and load its drain with 100 ohm. `npn-base-1ff` and `npn-base-10ff` give each
+/// junction 1 and 10 fF and drive the base through 10 and 1 Gohm. `ne555-gate-1ff` drives the
+/// 1 fF gate from an NE555's output through 2 Gohm. Each gate or base is the only store on its
+/// node, so its error is what the gate, the drain and the collector read. Each time constant
+/// is microseconds, so neither the deck's 1 ns ramp nor the NE555's edge times move a row past
+/// the bound. `nmos-regions` biases the drain through reverse, linear and saturation.
 /// `pmos-regions` is that circuit with the supplies negated. `nmos-follower` holds the source off ground. `zener-forward`, `zener-reverse`,
 /// `zener-breakdown` and `zener-overload` hold the fitted zener forward, below the knee,
 /// at its test current, and past both ratings. `regulator-off-cap` holds the input at 0 V
@@ -205,10 +212,16 @@ fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "i2c-stretch",
             "led-off",
             "led-reverse",
+            "ne555-gate-1ff",
             "nmos-follower",
+            "nmos-gate-100ff",
+            "nmos-gate-10ff",
+            "nmos-gate-1ff",
             "nmos-off",
             "nmos-pulse",
             "nmos-regions",
+            "npn-base-10ff",
+            "npn-base-1ff",
             "npn-held-off",
             "npn-nf-nr",
             "npn-off",

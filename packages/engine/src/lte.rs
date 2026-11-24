@@ -26,8 +26,20 @@ const SHARE: f64 = 1e-7;
 /// The charge a device's capacitance may be off by on one step, as SPICE's `chgtol`. A
 /// junction or a gate of a few picofarads is then held to its charge and not to Newton's 1 nV.
 /// Held to 1 nV, an idle junction that ripples a few microvolts kept every step after a pin
-/// edge short. At 3e-16 the ngspice NPN slow edge leaves 0.1% on the transistor's power.
+/// edge short. [`IDLE`] and [`DEVICE_SHARE`] bound what this allows in volts.
 const CHGTOL: f64 = 2e-16;
+
+/// A device's capacitance that has moved less than this since t = 0 is idle: what is left of it
+/// bounds the charge floor, so the store's whole motion and its error stay within it. An idle
+/// junction beside a level shifter's other channel ripples about 1 mV with its rail.
+const IDLE: f64 = 2e-3;
+
+/// The share of its range a device's capacitance that carries a swing may be off by on one step,
+/// when its charge floor is more. A 1 fF gate driven through 1 Gohm swings 5 V, and its charge
+/// floor of 0.2 V a step left the ngspice reference by 80 times the bound. At this share, 30
+/// times [`SHARE`], no ngspice fixture moves from where 1 nV holds it by more than half the
+/// bound, and a BSS138's few picofarads still take steps of nanoseconds.
+const DEVICE_SHARE: f64 = 3e-6;
 
 /// A capacitor or an inductor. A capacitor's state is the voltage across it, and its slope
 /// times its capacitance is its current. An inductor's state is its current, and its slope times
@@ -101,10 +113,12 @@ impl Store {
         }
     }
 
-    /// The absolute tolerance on the state: on a capacitor `VNTOL` for each end on a row, or
-    /// its charge floor over its capacitance when that is more, and `ABSTOL` on an inductor's
-    /// current.
-    fn floor(&self) -> f64 {
+    /// The absolute tolerance on a state that has moved `range` since t = 0: `ABSTOL` on an
+    /// inductor's current, and on a capacitor `VNTOL` for each end on a row, or its charge floor
+    /// over its capacitance when that is more. The charge floor is at most what is left of
+    /// `IDLE`, or `DEVICE_SHARE` of the range when that is more. An idle store keeps its whole
+    /// floor, and one that carries a swing is held to a share of it.
+    fn floor(&self, range: f64) -> f64 {
         match self.inductor {
             false => {
                 let ends = self
@@ -112,7 +126,9 @@ impl Store {
                     .iter()
                     .filter(|end| matches!(end, Node::Row(_)))
                     .count();
-                (ends as f64 * VNTOL).max(self.charge / self.size)
+                let charge =
+                    (self.charge / self.size).min((IDLE - range).max(DEVICE_SHARE * range));
+                (ends as f64 * VNTOL).max(charge)
             }
             true => ABSTOL,
         }
@@ -120,7 +136,7 @@ impl Store {
 
     /// `SHARE` of the range `lo` to `hi` plus the floor.
     fn tolerance(&self, (lo, hi): (f64, f64)) -> f64 {
-        SHARE * (hi - lo) + self.floor()
+        SHARE * (hi - lo) + self.floor(hi - lo)
     }
 }
 
@@ -299,13 +315,8 @@ impl Ranges {
 /// A step's local truncation error.
 #[derive(Debug)]
 pub(crate) struct Error {
-    /// The worst store's error over its tolerance with the last Newton move. At most 1 accepts.
+    /// The worst store's error over its tolerance. At most 1 accepts.
     pub(crate) ratio: f64,
-    /// What the next step grows by: the worst store's error over its tolerance without that
-    /// move, at most 1 and at least `ratio`. A move is the solve's and not the step's, so a
-    /// step that took one more iteration than the last does not grow the next past what its
-    /// error allows. A step accepted only on its move shrinks the next by the safety factor.
-    pub(crate) growth: f64,
     /// The order of the step's formula, which sets how the next step grows or shrinks.
     pub(crate) order: u32,
 }
@@ -315,8 +326,7 @@ pub(crate) struct Error {
 /// `SHARE` of its range, the step's end included, plus its floor, so a store whose range is
 /// still 0 is held to a few nanovolts or its charge tolerance. On a nonlinear circuit the step
 /// is also allowed how far the solve's last iteration moved it: Newton stops within its own
-/// tolerance of the level, and an error under that is the solve's, not the step's. The next
-/// step grows by the error without that allowance, as [`Error::growth`] says.
+/// tolerance of the level, and an error under that is the solve's, not the step's.
 ///
 /// The predictor is the polynomial of the formula's order through the points the formula
 /// reads: the state and the slope at a segment's start for backward Euler, and for BDF2 the
@@ -336,7 +346,6 @@ pub(crate) fn error(
     let h = seconds(h_ps);
     let since = |then: Time| seconds(at.as_ps() - then.as_ps());
     let mut ratio = 0.0f64;
-    let mut growth = 0.0f64;
     for (store, &(lo, hi)) in stores.stores.iter().zip(&ranges.0) {
         let x0 = store.state(last);
         let x = store.state(next);
@@ -367,13 +376,11 @@ pub(crate) fn error(
                 (x - p) * near / (near + (2.0 * h + h1) * (h + h1 + h2))
             }
         };
-        let tolerance = store.tolerance((lo.min(x), hi.max(x)));
-        ratio = ratio.max(error.abs() / (tolerance + store.moved(moved)));
-        growth = growth.max(error.abs() / tolerance);
+        let tolerance = store.tolerance((lo.min(x), hi.max(x))) + store.moved(moved);
+        ratio = ratio.max(error.abs() / tolerance);
     }
     Error {
         ratio,
-        growth: growth.min(1.0).max(ratio),
         order: past.order(),
     }
 }
@@ -506,43 +513,11 @@ mod tests {
         assert_eq!(ratio([0.0, 1.0]), ratio([0.0, 0.0]));
     }
 
-    /// The next step grows by the error over the tolerance without the Newton move, so a step
-    /// accepted on a move does not grow the next past what its own error allows.
+    /// A device's capacitance is held to its charge, 2e-16 C, while it has moved under 2 mV, to
+    /// no more than what is left of the 2 mV, and once it carries a swing to 3e-6 of it. A
+    /// capacitor part and a large capacitance keep Newton's 1 nV an end.
     #[test]
-    fn the_next_step_grows_by_the_error_without_the_newton_move() {
-        let stores = one_cap();
-        let (at, last) = point(|t| t * t, |t| 2.0 * t, 1_000_000_000_000);
-        // Backward Euler's error is 1.
-        let next = Solution::from(vec![5.0, 4.0]);
-        let error = |moved: f64, hi: f64| {
-            let h = 1_000_000_000_000;
-            let ranges = Ranges(vec![(0.0, hi)]);
-            error(
-                &stores,
-                &Past::Start,
-                at,
-                &last,
-                h,
-                (&next, &[moved, 0.0]),
-                &ranges,
-            )
-        };
-        // A range of 2e7 makes the tolerance 2, and a move of 1 makes it 3.
-        let still = error(0.0, 2e7);
-        let moved = error(1.0, 2e7);
-        assert!((moved.ratio - 1.0 / 3.0).abs() < 1e-6, "{moved:?}");
-        assert_eq!(moved.growth, still.growth);
-        assert_eq!(still.growth, still.ratio);
-        // A move that alone accepts the step shrinks the next by the safety factor.
-        let only = error(1e9, 5.0);
-        assert!(only.ratio < 1e-8, "{only:?}");
-        assert_eq!(only.growth, 1.0);
-    }
-
-    /// A device's 1 pF is held to its charge, 2e-16 C, which is 0.2 mV, and its 1 uF to
-    /// Newton's 1 nV an end. A capacitor part of 1 pF is held to Newton's 1 nV.
-    #[test]
-    fn a_device_s_small_capacitance_is_held_to_its_charge() {
+    fn a_device_s_capacitance_is_held_to_its_charge_while_idle_and_to_a_share_of_its_swing() {
         let cap = |farad: f64, charge: f64| Store {
             ends: [Node::Row(0), Node::Row(1)],
             branch: 2,
@@ -550,9 +525,21 @@ mod tests {
             inductor: false,
             charge,
         };
-        assert!((cap(1e-12, CHGTOL).floor() - 2e-4).abs() < 1e-12);
-        assert_eq!(cap(1e-6, CHGTOL).floor(), 2.0 * VNTOL);
-        assert_eq!(cap(1e-12, 0.0).floor(), 2.0 * VNTOL);
+        let near = |got: f64, want: f64| (got - want).abs() <= 1e-9 * want;
+        // 1 pF idle: 2e-16 / 1e-12 = 0.2 mV, under what is left of 2 mV.
+        assert!(near(cap(1e-12, CHGTOL).floor(0.0), 2e-4));
+        assert!(near(cap(1e-12, CHGTOL).floor(1e-3), 2e-4));
+        // 0.1 mV left of the 2 mV.
+        assert!(near(cap(1e-12, CHGTOL).floor(1.9e-3), 1e-4));
+        // 1 fF idle: its 0.2 V floor is cut to the 2 mV.
+        assert!(near(cap(1e-15, CHGTOL).floor(0.0), 2e-3));
+        // 1 fF over 5 V: 3e-6 of 5 V, not 0.2 V.
+        assert!(near(cap(1e-15, CHGTOL).floor(5.0), 1.5e-5));
+        // 21 pF over 3.3 V: its charge, 9.5 uV, is under 3e-6 of 3.3 V.
+        assert!(near(cap(21e-12, CHGTOL).floor(3.3), CHGTOL / 21e-12));
+        assert_eq!(cap(1e-6, CHGTOL).floor(0.0), 2.0 * VNTOL);
+        assert_eq!(cap(1e-12, 0.0).floor(0.0), 2.0 * VNTOL);
+        assert_eq!(cap(1e-12, 0.0).floor(5.0), 2.0 * VNTOL);
     }
 
     /// The time the fastest store takes to move its tolerance at its slope.
