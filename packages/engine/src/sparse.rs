@@ -271,7 +271,7 @@ pub(crate) struct Scratch {
     terms: Vec<u32>,
     /// The last step whose search reached each row, plus one.
     seen: Vec<usize>,
-    /// Each row's largest entry in the system being factored, which [`choose`] weighs a
+    /// Each row's sum of magnitudes in the system being factored, which [`choose`] weighs a
     /// candidate against.
     scale: Vec<f64>,
 }
@@ -287,11 +287,11 @@ impl Scratch {
         }
     }
 
-    /// Each row's largest entry in `values` on `pattern`.
+    /// Each row's sum of magnitudes in `values` on `pattern`.
     fn scale(&mut self, pattern: &Pattern, values: &[f64]) {
         self.scale.fill(0.0);
         for (&row, &value) in pattern.rows.iter().zip(values) {
-            self.scale[row] = self.scale[row].max(value.abs());
+            self.scale[row] += value.abs();
         }
     }
 
@@ -314,7 +314,7 @@ fn rounding_zero(x: f64, bound: f64, terms: u32) -> bool {
 
 /// Factors `values` on `pattern` in the column `order`, choosing each pivot: the diagonal when it
 /// is at least `THRESHOLD` of the largest candidate, else the largest against its own row's
-/// largest entry, ties to the lowest row.
+/// sum of magnitudes, ties to the lowest row.
 /// A candidate within its rounding of zero is never chosen. `work` counts the multiply-adds.
 pub(crate) fn factor(
     pattern: &Pattern,
@@ -421,10 +421,12 @@ pub(crate) fn factor(
 
 /// The pivot among `candidates`, the rows column `col` has left, ascending. Of those at least
 /// `THRESHOLD` of the largest, it is a row with one entry, then a late unknown's row, then the
-/// diagonal, then the largest against its row's largest entry in the system, then the lowest
-/// row. Against its row, a source's current is solved from the net whose other entries are
-/// smallest. Its 1 in a supply net's row beside 1e5 S would make it a difference of terms that
-/// size and carry their rounding, far over Newton's 1 pA on a current near 0. A row with one entry is a source's
+/// diagonal, then the largest against its row's sum of magnitudes in the system, then the
+/// lowest row. Against its row, a source's current is solved from the net whose other entries
+/// are smallest. Its 1 in a supply net's row beside 1e5 S would make it a difference of terms
+/// that size and carry their rounding, far over Newton's 1 pA on a current near 0. A rail whose
+/// entries are the 1s of other sources' and capacitors' currents sums over a light net's 1, where
+/// its largest entry would tie and the tie would go to the rail. A row with one entry is a source's
 /// constraint, so its unknown comes out of the solve as the source's value, with no rounding.
 /// A late row is a held capacitor's, so the voltage it holds comes out of that row.
 /// A candidate within its rounding of zero is never chosen. A candidate that overflowed is
@@ -874,6 +876,40 @@ mod tests {
             "{} A against {exact} A",
             x[branch]
         );
+    }
+
+    /// The same source current when the rail's row holds only the 1s of other branches' currents
+    /// and conductances under 1 S, as a 5 V rail with its capacitors and sources as currents and
+    /// a Schottky's series conductance. The rail's largest entry is then 1, the same as the light
+    /// net's, and the tie would go to the rail, the lower row.
+    #[test]
+    fn a_source_current_pivots_on_the_light_net_when_the_rail_holds_only_currents() {
+        let (rail, light, branch) = (0, 1, 2);
+        let mut entries = vec![
+            (rail, rail, 0.9),
+            (rail, branch, -1.0),
+            (light, light, 1e-12),
+            (light, branch, 1.0),
+            (branch, light, 1.0),
+            (branch, rail, -1.0),
+        ];
+        // Three held capacitors' currents into the rail, each behind 1e-6 ohm to ground.
+        for cap in 3..6 {
+            entries.extend([(rail, cap, 1.0), (cap, rail, 1.0), (cap, cap, -1e-6)]);
+        }
+        let (pattern, values) = sparse(6, &entries);
+        let node = [true, true, false, false, false, false];
+        let (mut scratch, mut work) = (Scratch::default(), 0);
+        let (shape, _) = factor(
+            &pattern,
+            &values,
+            pattern.order(pattern.late(&values, &node)),
+            &mut scratch,
+            &mut work,
+        )
+        .unwrap();
+        let step = shape.order.iter().position(|&col| col == branch).unwrap();
+        assert_eq!(shape.pivot[step], light, "{shape:?}");
     }
 
     #[test]
