@@ -768,6 +768,14 @@ An LM358 comparator on a 5 V supply, `input_headroom` 1.5 V, with `in_p` at 4 V 
 #u1.pin.in_p reaches 4 V over the chip's ground, outside its 3.5 V ceiling
 ```
 
+A resistor with `ratings.voltage` uses the same code on `#<part>.v`. The window is that operating voltage. The message names the peak of a drive that leaves a level under 0.2 V, not a pin over the chip's ground:
+
+```text
+#bz.v peaks at 0.692 V, outside its 3 V to 5 V operating voltage
+```
+
+A peak inside the window is quiet. A part that never leaves the low level, including DC, is quiet. The part still conducts.
+
 A capacitor with `ratings.reverse_voltage` uses the same code on pin `a`. The floor is that rating below pin `b`, and there is no ceiling. The message calls pin `b` the chip's ground. A capacitor with no `ratings` object, or with `reverse_voltage` null, is not checked. A forward voltage is not checked. A voltage exactly on the floor is inside. A reverse rating of 0 warns on any reverse voltage, and 0 V is inside.
 
 A `linear_regulator` uses the same code on pin `in`. The floor is -0.3 V over pin `gnd`, and there is no ceiling. The message calls `gnd` the chip's ground. A voltage exactly on -0.3 V is inside. The model has no diode from `out` to `in`, so a reversed input stays at the voltage the circuit drives and the warning is what names it.

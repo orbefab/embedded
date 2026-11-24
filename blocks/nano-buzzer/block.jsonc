@@ -4,7 +4,7 @@
   "block": "nano-buzzer",
   "version": "0.1.0",
   "title": "Buzzer on a Nano",
-  "summary": "A passive 12 mm buzzer on D8 of an Arduino Nano plays 440 Hz, rests, plays 880 Hz and rests. A 220 ohm resistor keeps the pin inside its rating.",
+  "summary": "A passive 12 mm buzzer on D8 of an Arduino Nano plays 440 Hz, rests, plays 880 Hz and rests. A 2N2222 switches the coil from 5 V through 10 ohm, so the drive sits inside the coil's 3 V to 5 V window.",
   "board": "nano-board",
   "tags": ["buzzer", "tone", "nano"],
   "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",

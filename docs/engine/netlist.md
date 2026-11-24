@@ -156,7 +156,7 @@ Two nets, or two parts, with the same name are `netlist.duplicate`. The ref is `
 
 `resistance.value` is in `ohm`, greater than 0, and its reciprocal must be finite. `resistance` may instead be a world-driven field, as [World-driven fields](#world-driven-fields) says, which keeps the same rule at both ends of its quantity's range. Zero or a negative value is `netlist.value` with rule `positive`. A positive value whose reciprocal overflows is `netlist.value` with rule `finite_reciprocal`. A different unit is `netlist.unit`. A number outside the f64 range is `netlist.syntax`.
 
-`ratings` holds `power`. See [Ratings](#ratings).
+`ratings` holds `power`, and may hold `voltage`. See [Ratings](#ratings).
 
 ### Potentiometer
 
@@ -1339,11 +1339,11 @@ A blob the document names that no folder has, a name whose every file hashes to 
 
 ## Ratings
 
-A rating bounds the stress on a part. Every key of a kind's `ratings` object is required. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `voltage_source` and `capacitor`, where it is optional.
+A rating bounds the stress on a part. Every key of a kind's `ratings` object is required, except a resistor's `voltage`, which may be left out. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `voltage_source` and `capacitor`, where it is optional.
 
 | Kind | Keys | Checked quantity |
 | --- | --- | --- |
-| `resistor` | `power` | `#<part>.p` |
+| `resistor` | `power`, optional `voltage` | `#<part>.p`, and the peak of a sounding drive on `#<part>.v` |
 | `diode`, `led`, `zener` | `current`, `power` | `#<part>.i`, `#<part>.p` |
 | `linear_regulator` | `current`, `power` | `#<part>.iout`, `#<part>.p` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
@@ -1363,6 +1363,12 @@ A `current`, `power`, `pin_current` or `supply_current` value object may also ca
 
 ```json
 "ratings": { "power": { "value": 0.25, "unit": "W" } }
+```
+
+A resistor may also carry `voltage`, with `min` and `max` in `V`. Both are value objects and both are required when `voltage` is present. `min` must be below `max`. A missing `voltage` leaves the drive unrated. The window is the peak of a drive that leaves a level under 0.2 V and comes back, which is the peak a square wave puts across the part. A peak outside the window warns `rating.voltage`. A part that stays quiet, including DC, does not. The part still conducts. Compared like every other rating, at 3 significant digits.
+
+```json
+"voltage": { "min": { "value": 3.0, "unit": "V" }, "max": { "value": 5.0, "unit": "V" } }
 ```
 
 The run compares the magnitude of each rated quantity with its rating, and each rated pin's voltage with its window. A peak rating is compared with each sample. A sustained rating is compared through its filter, which steps exactly over each held sample, `y = x + (y - x) e^(-dt / tau)`. A pulse much shorter than `tau` counts by its share of it, a PWM load by its period's average once the filter settles, and a load held over the rating crosses after `tau ln(x / (x - rating))` for `mean`. Each filter starts at 0 and takes the first step after t = 0, and the operating point at t = 0 is no sample. A value and its rating are compared rounded to 3 significant digits. Going over is a warning, `rating.current`, `rating.power` or `rating.voltage`, in [diagnostics.md](diagnostics.md). A sustained rating with no `peak` whose latest value is over it before its filter crosses is listed as [over now](diagnostics.md#over-now).

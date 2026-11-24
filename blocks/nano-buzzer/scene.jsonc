@@ -1,24 +1,30 @@
 // A passive buzzer on D8 of a Nano plays two notes, built on a half-size breadboard.
 // The Nano straddles the center channel over columns 1 to 15. D8 is column 5 on the f to j side.
-// The coil is 42 ohm, so a 220 ohm resistor keeps D8 under its 40 mA rating.
+// 5V is a12 and GND is a14. The coil wants 3 V to 5 V peak. A 2N2222 switches it from the 5 V
+// rail through 10 ohm, so the coil sees about 3.5 V and D8 only drives the base.
 {
   "format": 1,
   "parts": {
     "bb": { "type": "breadboard-400" },
     "nano": { "type": "nano-board", "firmware": "build/tune.ino.hex" },
-    "r1": { "type": "resistor-axial", "resistance": "220" },
+    "rs": { "type": "resistor-axial", "resistance": "10" },
+    "rb": { "type": "resistor-axial", "resistance": "1k" },
+    "q1": { "type": "npn-2n2222-to92" },
     "bz1": { "type": "buzzer-12mm" },
   },
   "layout": {
     "bb": { "at": [0, 0, 0] },
     "nano": { "on": { "D13": "bb.d1" } },
-    "r1": { "on": { "a": "bb.f18" } }, // b in column 22
-    "bz1": { "on": { "1": "bb.h22" } }, // pin 2 about three columns along, in column 25
+    "rs": { "on": { "a": "bb.f18" } }, // b in f22, the buzzer's + strip
+    "bz1": { "on": { "+": "bb.h22" } }, // - about three columns along, in column 25
+    "q1": { "on": { "collector": "bb.f25" } }, // base in f26, emitter in f27
+    "rb": { "on": { "a": "bb.d22" } }, // b in d26, across the channel from the base
   },
   "nets": { "GND": "nano.GND" },
   "wires": [
-    ["bb.j5", "bb.j18"], // D8 to r1.a
-    ["bb.j12", "bb.Z13", { "color": "#161616" }], // GND to the - rail
-    ["bb.j25", "bb.Z25", { "color": "#161616" }], // bz1.2 to GND
+    ["bb.a12", "bb.j18", { "color": "#d12b2b" }], // 5V to rs.a
+    ["bb.j5", "bb.a22"], // D8 to rb.a's strip
+    ["bb.a26", "bb.j26"], // rb.b's strip to q1.base
+    ["bb.j27", "bb.a14", { "color": "#161616" }], // q1.emitter to GND
   ],
 }

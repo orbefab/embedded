@@ -25,8 +25,9 @@ const SCENE_KEYS: &[&str] = &[
 /// a number param, `"by"` on a joint, and a capacitor's `ratings` and `series_resistance`.
 /// Format 5 is format 4 plus a rating's `basis`, a capacitor's `series_resistance` as
 /// `tan_delta` at a `frequency`, a regulator's `ratings.input_voltage`, an op-amp's `ratings`, a
-/// BJT's `forward_knee_current`, and a `ws2812`'s `draw`.
-pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5];
+/// BJT's `forward_knee_current`, and a `ws2812`'s `draw`. Format 6 is format 5 plus a
+/// resistor's `ratings.voltage`, the operating window of a sounding drive.
+pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5, 6];
 /// Scene `format` values this binary reads.
 pub const SCENE_FORMATS: &[u32] = &[1];
 /// The oldest part format whose file params take `"as": "blob"`.
@@ -40,6 +41,9 @@ const FIELD_FORMAT: u32 = 4;
 /// The oldest part format that carries the keys orbe 0.2.0 and 0.2.1 refuse, so those binaries
 /// ask for a newer orbe.
 const BASIS_FORMAT: u32 = 5;
+/// The oldest part format whose resistor may rate an operating `voltage`. An older orbe
+/// refuses that key, so the part says format 6 and that orbe asks for a newer one.
+const VOLTAGE_FORMAT: u32 = 6;
 const WIRE_KINDS: &[&str] = &["jumper", "trace", "contact"];
 /// A live session's stop, investigation 1's 2-hour cap.
 pub const STOP_PS: u64 = 7_200 * 1_000_000_000_000;
@@ -2559,6 +2563,24 @@ fn decode_body(
     }
     if format < BASIS_FORMAT {
         basis_gate(node, kind, format, out);
+    }
+    if kind == "resistor"
+        && format < VOLTAGE_FORMAT
+        && let Some(prop) = node
+            .get("ratings")
+            .and_then(Node::props)
+            .unwrap_or_default()
+            .iter()
+            .find(|prop| prop.key == "voltage" && !prop.value.is_null())
+    {
+        gate(
+            out,
+            kind,
+            "ratings.voltage",
+            prop.key_span,
+            VOLTAGE_FORMAT,
+            format,
+        );
     }
     let before_dout = kind == "ws2812" && format < DOUT_FORMAT;
     let engine_pins = if before_dout {

@@ -926,9 +926,7 @@ impl Open {
                         "the part file's reading `of` `hz` needs a voltage the engine reports",
                     )
                 })?;
-                let hz = self
-                    .tone
-                    .hz(index, self.engine.now().as_ps(), &self.engine.probe());
+                let hz = self.tone.hz(index, self.engine.now().as_ps());
                 (
                     format!("{path}.{}", self.tone.reading(index)),
                     Reading::Quantity {
@@ -1070,7 +1068,7 @@ impl Open {
         if let Some(name) = hz_reading(part)
             && let Some(index) = self.tone.position(path)
         {
-            let hz = self.tone.hz(index, self.engine.now().as_ps(), &probe);
+            let hz = self.tone.hz(index, self.engine.now().as_ps());
             quantities.push((name.to_string(), Unit::Hertz, hz));
         }
         let glow = self

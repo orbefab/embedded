@@ -1027,39 +1027,51 @@ fn ratings(tree: &Node) -> Vec<Rating> {
         .and_then(Node::props)
         .unwrap_or_default()
         .iter()
-        .filter_map(|prop| {
-            if prop.value.is_null() {
-                return Some(Rating {
-                    name: prop.key.clone(),
-                    value: None,
-                    unit: None,
-                    source: None,
-                    basis: None,
-                });
+        .flat_map(|prop| {
+            if prop.value.get("min").is_some() || prop.value.get("max").is_some() {
+                return ["min", "max"]
+                    .into_iter()
+                    .filter_map(|end| {
+                        prop.value
+                            .get(end)
+                            .and_then(|node| rating_value(format!("{}.{}", prop.key, end), node))
+                    })
+                    .collect::<Vec<_>>();
             }
-            let value_node = prop.value.get("value")?;
-            let value = if value_node.is_null() {
-                None
-            } else {
-                Some(value_node.number()?)
-            };
-            let unit = prop
-                .value
-                .get("unit")
-                .and_then(Node::str)
-                .map(str::to_string);
-            if value.is_some() && unit.is_none() {
-                return None;
-            }
-            Some(Rating {
-                name: prop.key.clone(),
-                value,
-                unit,
-                source: prop.value.get("source").map(Node::to_value),
-                basis: prop.value.get("basis").map(Node::to_value),
-            })
+            rating_value(prop.key.clone(), &prop.value)
+                .into_iter()
+                .collect()
         })
         .collect()
+}
+
+fn rating_value(name: String, node: &Node) -> Option<Rating> {
+    if node.is_null() {
+        return Some(Rating {
+            name,
+            value: None,
+            unit: None,
+            source: None,
+            basis: None,
+        });
+    }
+    let value_node = node.get("value")?;
+    let value = if value_node.is_null() {
+        None
+    } else {
+        Some(value_node.number()?)
+    };
+    let unit = node.get("unit").and_then(Node::str).map(str::to_string);
+    if value.is_some() && unit.is_none() {
+        return None;
+    }
+    Some(Rating {
+        name,
+        value,
+        unit,
+        source: node.get("source").map(Node::to_value),
+        basis: node.get("basis").map(Node::to_value),
+    })
 }
 
 fn gaps(tree: &Node) -> Vec<NotSimulated> {

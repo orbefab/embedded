@@ -6,9 +6,9 @@ use orbe_model::{Drive, Time};
 use crate::active::{self, Output, Stage};
 use crate::netlist::{Average, Basis, Model, NetId, Netlist, Rating, RatingKind};
 
-use crate::diagnostic::{Diagnostic, Excursion, VoltageExcursion, exceeds};
+use crate::diagnostic::{Diagnostic, Excursion, VoltageExcursion, exceeds, significant};
 use crate::finite::Finite;
-use crate::name::{Name, Ref};
+use crate::name::{Name, Quantity, Ref};
 
 use crate::observe::Columns;
 
@@ -48,6 +48,8 @@ pub(crate) struct Ratings {
     timing: Timing,
     watches: Vec<Watch>,
     windows: Vec<Window>,
+    /// A resistor's operating voltage, checked on the peak of a drive that leaves zero.
+    drives: Vec<CoilDrive>,
     chips: Vec<Gauge>,
     last: Option<Time>,
     /// The last sample was a step that restarted, so the next sample holds back to it.
@@ -207,6 +209,25 @@ struct Gauge {
     currents: Vec<f64>,
 }
 
+/// Below this absolute voltage the coil is between pulses. A peak that then sits outside
+/// `[min, max]` is a drive outside its operating voltage.
+const DRIVE_QUIET_V: f64 = 0.2;
+
+/// The peak voltage of a sounding drive across a resistor that rates an operating window.
+#[derive(Clone)]
+struct CoilDrive {
+    quantity: Ref,
+    column: usize,
+    min: f64,
+    max: f64,
+    /// Highest `|v|` since the coil was last near zero.
+    peak: f64,
+    over: bool,
+    /// How far past the window the excursion's peak was.
+    worst: f64,
+    excursion: Option<VoltageExcursion>,
+}
+
 /// An output's stage and the columns of its nets.
 #[derive(Clone)]
 struct Pin {
@@ -242,6 +263,48 @@ const fn sustained(average: Average) -> Basis {
     }
 }
 
+/// Records `drive.peak` when it sits outside the operating window. A peak inside clears
+/// `over` and leaves an earlier finding in place.
+fn judge_drive(drive: &mut CoilDrive, at: Time, over_ps: Option<u64>) {
+    let peak = drive.peak;
+    let below = significant(peak) < significant(drive.min);
+    let above = significant(peak) > significant(drive.max);
+    if !below && !above {
+        drive.over = false;
+        return;
+    }
+    drive.over = true;
+    let past = if below {
+        drive.min - peak
+    } else {
+        peak - drive.max
+    };
+    let reading = VoltageExcursion {
+        pin: drive.quantity.clone(),
+        low: Some(drive.min),
+        high: Some(drive.max),
+        peak,
+        peak_at: at,
+        first: at,
+        over_ps,
+        operating: true,
+    };
+    match &mut drive.excursion {
+        None => {
+            drive.worst = past;
+            drive.excursion = Some(reading);
+        }
+        Some(excursion) if past > drive.worst => {
+            drive.worst = past;
+            excursion.low = reading.low;
+            excursion.high = reading.high;
+            excursion.peak = peak;
+            excursion.peak_at = at;
+        }
+        Some(_) => {}
+    }
+}
+
 impl Ratings {
     pub(crate) fn new(
         netlist: &Netlist,
@@ -250,6 +313,7 @@ impl Ratings {
         timing: Timing,
     ) -> Ratings {
         let mut watches = Vec::new();
+        let mut drives = Vec::new();
         for (_, part) in netlist.parts() {
             // A supply source's current rating is the most it delivers steadily. Every power
             // rating, on every kind, is the heat the part sheds.
@@ -425,10 +489,33 @@ impl Ratings {
                 excursion: None,
             });
         }
+        for (_, part) in netlist.parts() {
+            let Model::Resistor(resistor) = &part.model else {
+                continue;
+            };
+            let Some((min, max)) = resistor.operating else {
+                continue;
+            };
+            let quantity = Ref::Quantity(part.name.clone(), Quantity::V);
+            let column = columns
+                .index(&quantity)
+                .expect("a resistor's voltage is a column");
+            drives.push(CoilDrive {
+                quantity,
+                column,
+                min,
+                max,
+                peak: 0.0,
+                over: false,
+                worst: 0.0,
+                excursion: None,
+            });
+        }
         Ratings {
             timing,
             watches,
             windows,
+            drives,
             chips,
             last: None,
             restarted: false,
@@ -531,6 +618,7 @@ impl Ratings {
                 peak_at: at,
                 first: at,
                 over_ps: self.timing.over_ps(),
+                operating: false,
             };
             match &mut window.excursion {
                 None => {
@@ -545,6 +633,25 @@ impl Ratings {
                     excursion.peak_at = at;
                 }
                 Some(_) => {}
+            }
+        }
+        for drive in &mut self.drives {
+            elapsed(
+                drive.over,
+                drive.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
+                self.last,
+            );
+            let volts = row[drive.column].get().abs();
+            if volts < DRIVE_QUIET_V {
+                if drive.peak >= DRIVE_QUIET_V {
+                    judge_drive(drive, at, self.timing.over_ps());
+                }
+                drive.peak = 0.0;
+            } else if volts > drive.peak {
+                drive.peak = volts;
+                if exceeds(volts, drive.max) {
+                    judge_drive(drive, at, self.timing.over_ps());
+                }
             }
         }
         self.last = Some(at);
@@ -564,7 +671,11 @@ impl Ratings {
             .windows
             .iter()
             .filter_map(|window| Some(Diagnostic::RatingVoltage(window.excursion.clone()?)));
-        currents.chain(voltages).collect()
+        let drives = self
+            .drives
+            .iter()
+            .filter_map(|drive| Some(Diagnostic::RatingVoltage(drive.excursion.clone()?)));
+        currents.chain(voltages).chain(drives).collect()
     }
 
     /// Each sustained rating with no peak limit over now, through the last sample: that sample

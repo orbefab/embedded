@@ -67,9 +67,41 @@ struct Held {
 }
 
 impl Open {
-    /// Advances to `to`. For a pin condition it goes one landing at a time and stops at the
-    /// first edge from `from` on that meets it, then 1 ps past the edge when `end` allows, so
-    /// reads show it. Returns that edge's time.
+    /// The coil voltage at `now`. The pitch comes from the pin edges, so this only has to
+    /// show whether the coil is actually moving.
+    fn note_tone(&mut self) {
+        if self.tone.is_empty() {
+            return;
+        }
+        let probe = self.engine.probe();
+        self.tone.note(&probe);
+    }
+
+    /// Advances to `to`. A part that reads `hz` is probed often enough to see a narrow pulse,
+    /// not once per solved landing: a stiff edge is a few hundred picosecond steps, and the
+    /// pitch comes from the pin edges.
+    fn advance_for(&mut self, to: u64) -> Status {
+        if self.tone.is_empty() {
+            return self.engine.advance_to(Time::from_ps(to));
+        }
+        // Shorter than the high time of `analogWrite` duty 10 at about 490 Hz, so that
+        // pulse still moves the coil watermark.
+        const PROBE_PS: u64 = 20_000_000;
+        loop {
+            let now = self.engine.now().as_ps();
+            if now >= to || self.engine.status() != Status::Running {
+                break;
+            }
+            let dest = now.saturating_add(PROBE_PS).min(to);
+            self.engine.advance_to(Time::from_ps(dest));
+            self.note_tone();
+            if dest >= to || self.engine.status() != Status::Running {
+                break;
+            }
+        }
+        self.engine.status()
+    }
+
     fn advance(
         &mut self,
         to: u64,
@@ -78,7 +110,7 @@ impl Open {
         pin: Option<(usize, Level)>,
     ) -> (Status, Option<u64>) {
         let Some((signal, want)) = pin else {
-            return (self.engine.advance_to(Time::from_ps(to)), None);
+            return (self.advance_for(to), None);
         };
         let mut seen = 0;
         loop {
@@ -93,6 +125,7 @@ impl Open {
                 let after = at + 1;
                 if self.engine.now().as_ps() < after && after <= end {
                     self.engine.advance_to(Time::from_ps(after));
+                    self.note_tone();
                 }
                 return (self.engine.status(), Some(at));
             }
@@ -102,6 +135,7 @@ impl Open {
             }
             let landing = self.engine.next_at().map_or(to, |at| at.as_ps().min(to));
             self.engine.advance_to(Time::from_ps(landing));
+            self.note_tone();
         }
     }
 
@@ -195,7 +229,7 @@ impl Open {
         };
         self.playing = false;
         self.light.note(&self.engine.probe());
-        self.tone.note(&self.engine.probe());
+        self.note_tone();
         let probe = self.engine.probe();
         let mut held: Vec<Held> = self
             .light
@@ -242,7 +276,7 @@ impl Open {
             }
             let mut found = slice.changes;
             self.light.note(&self.engine.probe());
-            self.tone.note(&self.engine.probe());
+            self.note_tone();
             let probe = self.engine.probe();
             let glows = self.light.glows(&probe);
             let met_light = until.as_ref().and_then(|(_, _, bound)| match bound {

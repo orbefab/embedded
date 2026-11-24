@@ -1,5 +1,6 @@
+use crate::diagnostic::ValueRule;
 use crate::netlist::Rating;
-use crate::netlist::json::WireRating;
+use crate::netlist::json::{WireRating, WireValue, resolve_value};
 use orbe_model::Time;
 use serde::Deserialize;
 
@@ -20,6 +21,9 @@ pub struct Resistor {
     pub resistance: Param,
     /// Watt, greater than 0. `None` is an explicit `"power": null`.
     pub max_power: Option<Rating>,
+    /// Operating voltage of a sounding drive, `(min, max)` in volt. `None` when the part
+    /// does not rate one. A quiet part is not checked.
+    pub operating: Option<(f64, f64)>,
 }
 
 impl Resistor {
@@ -33,6 +37,16 @@ impl Resistor {
 pub(crate) struct WireResistorRatings {
     #[serde(deserialize_with = "Option::deserialize")]
     power: Option<WireRating>,
+    /// Absent on a resistor that rates only power. Present, both ends are required.
+    #[serde(default)]
+    voltage: Option<WireOperatingVoltage>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WireOperatingVoltage {
+    min: WireValue,
+    max: WireValue,
 }
 
 #[derive(Deserialize)]
@@ -68,12 +82,42 @@ pub(crate) fn resolve_resistor(ctx: ParseCtx<'_>, wire: WireResistor) -> Option<
     };
     let resistance = resolve_param(part_ref, rule, world, resistance, out);
     let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
-    match (pins, resistance, max_power) {
-        (Some(pins), Some(resistance), Some(max_power)) => Some(Resistor {
+    let operating = resolve_operating(part_ref, ratings.voltage, out);
+    match (pins, resistance, max_power, operating) {
+        (Some(pins), Some(resistance), Some(max_power), Some(operating)) => Some(Resistor {
             pins,
             resistance,
             max_power,
+            operating,
         }),
+        _ => None,
+    }
+}
+
+/// `Some(None)` when the part rates no operating voltage. `None` when `min` or `max` is invalid.
+fn resolve_operating(
+    part: &crate::name::Ref,
+    voltage: Option<WireOperatingVoltage>,
+    out: &mut Vec<crate::diagnostic::Diagnostic>,
+) -> Option<Option<(f64, f64)>> {
+    let Some(WireOperatingVoltage { min, max }) = voltage else {
+        return Some(None);
+    };
+    let min = resolve_value(part, "ratings.voltage.min", "V", true, min, out);
+    let max = resolve_value(part, "ratings.voltage.max", "V", true, max, out);
+    match (min, max) {
+        (Some(min), Some(max)) if min.si.get() < max.si.get() => {
+            Some(Some((min.si.get(), max.si.get())))
+        }
+        (Some(min), Some(_)) => {
+            out.push(crate::diagnostic::Diagnostic::NetlistValue {
+                part: part.clone(),
+                field: "ratings.voltage.min".into(),
+                value: min.si.get(),
+                rule: ValueRule::AboveHigh,
+            });
+            None
+        }
         _ => None,
     }
 }
@@ -123,5 +167,55 @@ impl Kind for Resistor {
     }
     fn driven_mut(&mut self) -> Option<&mut Driven> {
         self.resistance.driven_mut()
+    }
+}
+
+#[cfg(test)]
+mod operating_voltage {
+    fn pulse(volts: f64) -> String {
+        format!(
+            r#"{{
+              "version": 1,
+              "seed": 0,
+              "analysis": {{ "transient": {{ "stop_ps": 2000000, "max_step_ps": 1000000, "grid_ps": 1000000 }} }},
+              "ground": "gnd",
+              "nets": ["gnd", "n"],
+              "parts": [
+                {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "n", "n": "gnd" }},
+                  "voltage": {{ "kind": "pulse",
+                    "initial": {{ "value": 0.0, "unit": "V" }},
+                    "pulsed": {{ "value": {volts}, "unit": "V" }},
+                    "delay_ps": 100000, "width_ps": 400000, "period_ps": 1000000 }} }},
+                {{ "name": "r1", "kind": "resistor", "pins": {{ "a": "n", "b": "gnd" }},
+                  "resistance": {{ "value": 42.0, "unit": "ohm" }},
+                  "ratings": {{ "power": null, "voltage": {{
+                    "min": {{ "value": 3.0, "unit": "V" }},
+                    "max": {{ "value": 5.0, "unit": "V" }} }} }} }}
+              ]
+            }}"#
+        )
+    }
+
+    fn warnings(json: &str) -> String {
+        let netlist = crate::netlist::parse(json.as_bytes()).unwrap();
+        crate::simulate(&netlist)
+            .diagnostics()
+            .iter()
+            .map(|d| serde_json::to_string(d).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_drive_outside_3_v_to_5_v_warns_and_one_inside_does_not() {
+        let quiet = warnings(&pulse(0.7));
+        assert!(quiet.contains("rating.voltage"), "{quiet}");
+        assert!(quiet.contains("operating voltage"), "{quiet}");
+        assert!(quiet.contains("0.7"), "{quiet}");
+        let inside = warnings(&pulse(4.0));
+        assert!(!inside.contains("rating.voltage"), "{inside}");
+        let hot = warnings(&pulse(6.0));
+        assert!(hot.contains("rating.voltage"), "{hot}");
+        assert!(hot.contains("operating voltage"), "{hot}");
     }
 }

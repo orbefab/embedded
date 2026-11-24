@@ -294,9 +294,7 @@ impl Open {
                 op,
                 value,
             } => {
-                let hz = self
-                    .tone
-                    .hz(*index, self.engine.now().as_ps(), &self.engine.probe());
+                let hz = self.tone.hz(*index, self.engine.now().as_ps());
                 (op.holds(hz, *value), format!("{label} = {} Hz", number(hz)))
             }
             Bound::Level { pin, signal, want } => {

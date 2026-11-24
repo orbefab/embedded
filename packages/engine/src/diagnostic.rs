@@ -589,6 +589,9 @@ pub struct VoltageExcursion {
     pub first: Time,
     /// Total time outside the window. `None` for an operating point, which has no duration.
     pub over_ps: Option<u64>,
+    /// The peak is the drive across the part, and `low`/`high` are its operating window.
+    /// A chip pin's window leaves this false.
+    pub operating: bool,
 }
 
 impl Diagnostic {
@@ -1946,6 +1949,32 @@ pub fn significant(value: f64) -> f64 {
     format!("{value:.2e}").parse().unwrap_or(value)
 }
 
+/// Three-digit scientific rounding of `value`, as `(mantissa, exponent)` where the magnitude
+/// is `mantissa * 10^(exponent - 2)` and `mantissa` is in 100..=999. `None` for 0 and for a
+/// non-finite value. The check on every accepted step uses this so it does not format.
+fn rounded_sig(value: f64) -> Option<(i32, i32)> {
+    if !value.is_finite() || value == 0.0 {
+        return None;
+    }
+    let neg = value.is_sign_negative();
+    let abs = value.abs();
+    let mut exp = libm::floor(libm::log10(abs)) as i32;
+    let mut pow = libm::pow(10.0, exp as f64);
+    if abs < pow {
+        exp -= 1;
+        pow /= 10.0;
+    } else if abs >= pow * 10.0 {
+        exp += 1;
+        pow *= 10.0;
+    }
+    let mut digits = (abs / pow * 100.0).round() as i32;
+    if digits >= 1000 {
+        digits = 100;
+        exp += 1;
+    }
+    Some((if neg { -digits } else { digits }, exp))
+}
+
 /// [`significant`] as a message prints it: the characters `data` uses, with no `.0`.
 pub fn significant_text(value: f64) -> String {
     let text = number_text(significant(value));
@@ -1957,7 +1986,27 @@ pub fn significant_text(value: f64) -> String {
 
 /// Whether `value` is over `limit` once both are rounded to 3 significant digits.
 pub(crate) fn exceeds(value: f64, limit: f64) -> bool {
-    significant(value) > significant(limit)
+    match (rounded_sig(value), rounded_sig(limit)) {
+        (Some(value), Some(limit)) => sig_greater(value, limit),
+        (Some((digits, _)), None) => digits > 0,
+        (None, Some((digits, _))) => digits < 0,
+        (None, None) => false,
+    }
+}
+
+/// `(digits, exponent)` from [`rounded_sig`], digits in ±100..=±999.
+fn sig_greater((digits, exp): (i32, i32), (other_digits, other_exp): (i32, i32)) -> bool {
+    if exp == other_exp {
+        return digits > other_digits;
+    }
+    if digits.signum() != other_digits.signum() {
+        return digits > other_digits;
+    }
+    if digits > 0 {
+        exp > other_exp
+    } else {
+        exp < other_exp
+    }
 }
 
 /// `ps` to 2 significant digits, for a time a message gives as "about".
@@ -1993,9 +2042,21 @@ fn outside_window(excursion: &VoltageExcursion, namer: &dyn Fn(&Ref) -> String) 
         high,
         peak,
         over_ps,
+        operating,
         ..
     } = excursion;
     let pin = namer(pin);
+    if *operating {
+        let low = low.unwrap_or(0.0);
+        let high = high.unwrap_or(0.0);
+        return format!(
+            "{pin} peaks at {} V, outside its {} V to {} V operating voltage{}",
+            significant_text(*peak),
+            significant_text(low),
+            significant_text(high),
+            for_time(*over_ps)
+        );
+    }
     let window = match (low, high) {
         (Some(low), Some(high)) => format!("its {low} V to {high} V rating"),
         (Some(low), None) => format!("its {low} V floor"),
@@ -2044,6 +2105,42 @@ impl Serialize for Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exceeds_matches_rounding_both_sides_to_three_digits() {
+        let slow = |value: f64, limit: f64| {
+            let round = |sample: f64| {
+                if !sample.is_finite() || sample == 0.0 {
+                    sample
+                } else {
+                    format!("{sample:.2e}").parse::<f64>().unwrap()
+                }
+            };
+            round(value) > round(limit)
+        };
+        let mut value = 1e-6;
+        while value < 1e4 {
+            for sign in [1.0, -1.0] {
+                let sample = value * sign;
+                let limit = sample * 0.997;
+                assert_eq!(
+                    exceeds(sample, limit),
+                    slow(sample, limit),
+                    "{sample} {limit}"
+                );
+                assert_eq!(
+                    exceeds(limit, sample),
+                    slow(limit, sample),
+                    "{limit} {sample}"
+                );
+            }
+            value *= 1.07;
+        }
+        assert!(!exceeds(0.0, 0.0));
+        assert!(exceeds(1.0, 0.0));
+        assert!(exceeds(0.0, -1.0));
+        assert!(!exceeds(5.0, 5.0));
+    }
 
     #[test]
     fn a_device_names_each_protocol_rule_as_diagnostics_json_does() {

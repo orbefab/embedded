@@ -1,4 +1,4 @@
-# 440 Hz, a rest, 880 Hz, a rest. The series resistor keeps the pin inside its rating.
+# 440 Hz, a rest, 880 Hz, a rest. The transistor drive keeps the coil inside 3 V to 5 V.
 open
 step 100ms
 expect @bz1.hz > 420Hz

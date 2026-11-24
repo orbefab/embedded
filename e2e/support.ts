@@ -281,7 +281,7 @@ export async function simulatedSeconds(page: Page): Promise<number> {
   return time;
 }
 
-export function waitSimulatedPast(page: Page, seconds: number): Promise<unknown> {
+export function waitSimulatedPast(page: Page, seconds: number, timeout = 30_000): Promise<unknown> {
   return page.waitForFunction(
     (seconds) => {
       const text = document.querySelector('[data-testid="time"]')?.textContent ?? "";
@@ -289,7 +289,7 @@ export function waitSimulatedPast(page: Page, seconds: number): Promise<unknown>
       return Number.isFinite(time) && time > seconds;
     },
     seconds,
-    { timeout: 30_000 },
+    { timeout },
   );
 }
 
@@ -392,7 +392,8 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
     return;
   }
   if (block.kind === "tone") {
-    await waitSimulatedPast(page, Math.max(1, start));
+    // A transistor switching the coil takes a few hundred steps on each edge.
+    await waitSimulatedPast(page, Math.max(1, start), 60_000);
     expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(Math.max(1, start));
     if (shotName !== null) {
       await page.locator("canvas").scrollIntoViewIfNeeded();
