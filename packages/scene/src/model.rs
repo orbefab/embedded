@@ -2580,7 +2580,7 @@ fn gate(out: &mut Findings, kind: &str, key: &str, span: Span, needs: u32, forma
 /// below on their kinds. A dotted key is a field of an object.
 fn basis_gate(node: &Node, kind: &str, format: u32, out: &mut Findings) {
     let gated: &[&str] = match kind {
-        "ws2812" => &["draw"],
+        "ws2812" => &["draw", "min_supply"],
         "linear_regulator" => &["ratings.input_voltage"],
         "op_amp" => &["ratings"],
         "npn" | "pnp" => &["forward_knee_current"],

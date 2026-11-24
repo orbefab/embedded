@@ -177,3 +177,38 @@ fn a_dout_output_field_is_named_under_dout() {
         "{err:?}"
     );
 }
+
+#[test]
+fn min_supply_is_optional_and_positive_in_volts() {
+    let absent = netlist::parse(wired(PINS, "").as_bytes()).unwrap();
+    assert_eq!(part(&absent).min_supply, None);
+
+    let present =
+        netlist::parse(wired(PINS, r#""min_supply": { "value": 3.0, "unit": "V" },"#).as_bytes())
+            .unwrap();
+    assert_eq!(part(&present).min_supply.unwrap().si.get(), 3.0);
+
+    for bad in ["0.0", "-1.0"] {
+        let err = netlist::parse(
+            wired(
+                PINS,
+                &format!(r#""min_supply": {{ "value": {bad}, "unit": "V" }},"#),
+            )
+            .as_bytes(),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err[..], [Diagnostic::NetlistValue { rule: ValueRule::Positive, field, .. }]
+                if field == "min_supply"),
+            "{bad}: {err:?}"
+        );
+    }
+
+    let err =
+        netlist::parse(wired(PINS, r#""min_supply": { "value": 3.0, "unit": "A" },"#).as_bytes())
+            .unwrap_err();
+    assert!(
+        matches!(&err[..], [Diagnostic::NetlistUnit { field, .. }] if field == "min_supply"),
+        "{err:?}"
+    );
+}
