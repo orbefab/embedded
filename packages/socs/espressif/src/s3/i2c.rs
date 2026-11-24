@@ -25,7 +25,13 @@
 //! later event runs before it, so each one reads the inputs of every edge before it. A write's
 //! ninth bit that reads no ACK with `ack_en` set raises `I2C_NACK_INT_RAW`, and the master makes
 //! the stop and clears `I2C_BUS_BUSY` with no `I2C_TRANS_COMPLETE_INT_RAW`. A list's stop raises
-//! `I2C_TRANS_COMPLETE_INT_RAW`.
+//! `I2C_TRANS_COMPLETE_INT_RAW`. While a NACK's automatic stop is running, `CMD_Controller` reads
+//! no further command registers (TRM v1.8, 27.4.9), so a command-register store updates the
+//! register without disturbing the stop; while either a NACK stop or a `STOP` command is running,
+//! a `CONF_UPGATE` with unchanged `CTR` and timing registers is a no-op and a `TRANS_START` is
+//! ignored, as IDF v5.5.5's `s_i2c_send_commands` writes `COMD0 = STOP` and two
+//! `i2c_hal_master_trans_start` calls on `I2C_STATUS_ACK_ERROR`. Reading `I2C_DATA_REG` from an
+//! empty RX FIFO returns 0 and sets `I2C_RXFIFO_UDF_INT_RAW` (TRM v1.8, 27.6 and Register 27.22).
 //!
 //! An END command, as the ESP32-S3 TRM v1.8 (27.4.9 and 27.5.4) describes it, marks its command
 //! done, raises `I2C_END_DETECT_INT_RAW` and stops the list with SCL held low and the bus busy.
@@ -130,6 +136,7 @@ const MASTER_EVENTS: u32 = END_DETECT | 1 << 5 | TRANS_COMPLETE | 1 << 8 | NACK;
 const END_DETECT: u32 = 1 << 3;
 const TRANS_COMPLETE: u32 = 1 << 7;
 const NACK: u32 = 1 << 10;
+const RXFIFO_UDF: u32 = 1 << 12;
 
 const SCL_FILTER_EN: u32 = 1 << 8;
 const SDA_FILTER_EN: u32 = 1 << 9;
@@ -432,10 +439,12 @@ impl I2c {
         })
     }
 
-    /// Takes the RX FIFO's first byte, as a load of `I2C_DATA_REG` does, or names the setting an
-    /// empty FIFO refuses.
-    pub(crate) fn take(&mut self) -> Result<(), &'static str> {
-        self.rx.pop().map(drop).ok_or("rx_underflow")
+    /// Takes the RX FIFO's first byte, as a load of `I2C_DATA_REG` does. Reading an empty RX FIFO
+    /// sets `I2C_RXFIFO_UDF_INT_RAW` (TRM v1.8, 27.6 and Register 27.22) and leaves it empty.
+    pub(crate) fn take(&mut self) {
+        if self.rx.pop().is_none() {
+            self.int_raw |= RXFIFO_UDF;
+        }
     }
 
     /// Writes the register at `offset` at `now`. `Ok(false)` for one not kept, which drops the
@@ -452,10 +461,19 @@ impl I2c {
         };
         self.settle(now, gpio);
         let running = self.run.is_some();
+        let nack_stopping = self.run.is_some_and(|run| run.nack);
+        let stopping = self.run.is_some_and(|run| run.nack || run.op == Op::Stop);
         let busy_write = match offset {
-            CTR => value & (TRANS_START | CONF_UPGATE) != 0,
+            CTR if value & (TRANS_START | CONF_UPGATE) != 0 => {
+                let same_ctr = value & !CTR_STROBES == self.reg(CTR) & !CTR_STROBES;
+                let same_timing =
+                    value & CONF_UPGATE == 0 || Timing::from_regs(&self.regs) == self.timing;
+                !(stopping && same_ctr && same_timing)
+            }
+            CTR => false,
             FIFO_CONF => value & (TX_FIFO_RST | RX_FIFO_RST) != 0,
-            _ => TIMING.contains(&offset) || Self::command(offset).is_some(),
+            _ if Self::command(offset).is_some() => !nack_stopping,
+            _ => TIMING.contains(&offset),
         };
         let refused = [
             (offset == CTR && value & FSM_RST != 0, "fsm_reset"),
@@ -492,7 +510,7 @@ impl I2c {
                 } else {
                     self.timing
                 };
-                let start = offset == CTR && value & TRANS_START != 0;
+                let start = !running && offset == CTR && value & TRANS_START != 0;
                 let op = start
                     .then(|| Self::startable(&regs, timing, gpio, self.held))
                     .transpose()?;

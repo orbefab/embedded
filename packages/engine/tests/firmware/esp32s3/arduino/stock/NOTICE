@@ -92,3 +92,7 @@ ledcres      packages/scene/tests/fixtures/esp32s3-stock-ledcres
              app 282128 27de7a70f64c1da8062c871c1236b3cc0793416f51f35215d8596c456689fafc
 tonefast     packages/scene/tests/fixtures/esp32s3-stock-tonefast
              app 282320 28d7a572fd714878c2d07eb534772dd4642de3bc7299fa3b7997d4eaf5918780
+wirenack     packages/scene/tests/fixtures/esp32s3-stock-wirenack
+             app 300864 dd894379fad6922c13025abefffa80272acf7cb8bc441d85b2f83bbd7091e6e4
+wirenackother packages/scene/tests/fixtures/esp32s3-stock-wirenackother
+             app 300832 31b41add3033f4444f805352fcece6bc127fd38ec19e9b4ab4b1bd719c9b1800
