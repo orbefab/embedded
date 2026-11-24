@@ -113,6 +113,7 @@ impl Relay {
             seq: self.seq,
             start,
             end,
+            peripheral: self.pin,
             pin: self.pin,
             kind: RecordKind::Pulses {
                 pulses: Pulses {

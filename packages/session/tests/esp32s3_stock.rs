@@ -365,3 +365,201 @@ fn a_stock_sketch_configures_rtc_pads_with_no_diagnostics() {
         ],
     );
 }
+
+/// Opens `fixture` with `scene` replacing its `scene.jsonc`.
+fn open_scene(fixture: &str, scene: &str) -> (tempfile::TempDir, Live) {
+    let project = project(fixture);
+    fs::write(project.path().join("scene.jsonc"), scene).unwrap();
+    let mut live = Live::new("t", Files::disk());
+    let Data::Opened { diagnostics, .. } = run(&mut live, project.path(), "open") else {
+        panic!("open opened nothing");
+    };
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    (project, live)
+}
+
+/// Steps up to 300 ms and asserts the run faults with `chip.link_unsupported`, returning both
+/// the failed `step` text and the following `snapshot` text that a user sees.
+fn expect_link_unsupported(fixture: &str, scene: &str) -> (String, String) {
+    let (project, mut live) = open_scene(fixture, scene);
+    let path = project.path();
+    let step = Command::parse("step 300ms", path).unwrap().unwrap();
+    let reply = live.run(&step);
+    assert!(
+        !reply.ok(),
+        "expected step to fault with chip.link_unsupported, but it succeeded:\n{}",
+        reply.text()
+    );
+    let step_text = reply.text();
+    assert!(
+        step_text.contains("chip.link_unsupported"),
+        "step text:\n{step_text}"
+    );
+    let snapshot = Command::parse("snapshot", path).unwrap().unwrap();
+    let snap_text = live.run(&snapshot).text();
+    assert!(
+        snap_text.contains("error[chip.link_unsupported]"),
+        "snapshot text:\n{snap_text}"
+    );
+    (step_text, snap_text)
+}
+
+#[test]
+fn a_stock_neopixel_through_a_series_resistor_stops_with_link_unsupported() {
+    let scene = r#"{
+      "format": 1,
+      "parts": {
+        "board": { "type": "esp32s3-devkitc-1", "app": "app.bin", "partitions": "partitions.bin" },
+        "r1": { "type": "resistor-axial", "resistance": "330ohm" },
+        "stick": { "type": "neopixel-stick-8" }
+      },
+      "wires": [
+        ["board.GPIO4", "r1.a"],
+        ["r1.b", "stick.DIN"],
+        ["board.5V", "stick.5V"],
+        ["board.GND", "stick.GND"]
+      ],
+      "ground": "board.GND"
+    }"#;
+    let (step_text, snap_text) = expect_link_unsupported("esp32s3-stock-neopixel", scene);
+    assert!(!snap_text.contains("first"), "{snap_text}");
+    for text in [&step_text, &snap_text] {
+        assert!(text.contains("board.GPIO4"), "{text}");
+        assert!(text.contains("RMT"), "{text}");
+        assert!(text.contains("#r1.pin.a"), "{text}");
+        assert!(
+            text.contains("the data line must be wired straight to the pixel's data input"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn a_stock_neopixel_through_a_bss138_level_shifter_stops_with_link_unsupported() {
+    let scene = r#"{
+      "format": 1,
+      "parts": {
+        "board": { "type": "esp32s3-devkitc-1", "app": "app.bin", "partitions": "partitions.bin" },
+        "shifter": { "type": "bss138-level-shifter" },
+        "stick": { "type": "neopixel-stick-8" }
+      },
+      "wires": [
+        ["board.3V3", "shifter.LV"],
+        ["board.5V", "shifter.HV"],
+        ["board.5V", "stick.5V"],
+        ["board.GND", "shifter.GND"],
+        ["board.GND", "stick.GND"],
+        ["board.GPIO4", "shifter.LV1"],
+        ["shifter.HV1", "stick.DIN"]
+      ],
+      "ground": "board.GND"
+    }"#;
+    let (step_text, snap_text) = expect_link_unsupported("esp32s3-stock-neopixel", scene);
+    assert!(!snap_text.contains("first"), "{snap_text}");
+    for text in [&step_text, &snap_text] {
+        assert!(text.contains("board.GPIO4"), "{text}");
+        assert!(text.contains("RMT"), "{text}");
+        assert!(text.contains("shifter.LV1"), "{text}");
+        assert!(
+            text.contains("the data line must be wired straight to the pixel's data input"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn a_stock_neopixel_with_a_pull_down_resistor_still_works() {
+    let scene = r#"{
+      "format": 1,
+      "parts": {
+        "board": { "type": "esp32s3-devkitc-1", "app": "app.bin", "partitions": "partitions.bin" },
+        "rpd": { "type": "resistor-axial", "resistance": "10k" },
+        "stick": { "type": "neopixel-stick-8" }
+      },
+      "wires": [
+        ["board.GPIO4", "stick.DIN"],
+        ["board.GPIO4", "rpd.a"],
+        ["rpd.b", "board.GND"],
+        ["board.5V", "stick.5V"],
+        ["board.GND", "stick.GND"]
+      ],
+      "ground": "board.GND"
+    }"#;
+    let (project, mut live) = open_scene("esp32s3-stock-neopixel", scene);
+    let path = project.path();
+    run(&mut live, path, r#"step --until serial contains "first""#);
+    run(&mut live, path, "step 1ms");
+    for (k, color) in FIRST.iter().enumerate() {
+        run(
+            &mut live,
+            path,
+            &format!("expect @stick.px{} {color}", k + 1),
+        );
+    }
+    run(&mut live, path, "expect no diagnostics");
+}
+
+#[test]
+fn a_stock_spi_loopback_stops_with_link_unsupported() {
+    let scene = r#"{
+      "format": 1,
+      "parts": {
+        "board": { "type": "esp32s3-devkitc-1", "app": "app.bin", "partitions": "partitions.bin" }
+      },
+      "wires": [
+        ["board.GPIO11", "board.GPIO13"]
+      ],
+      "ground": "board.GND"
+    }"#;
+    let (step_text, snap_text) = expect_link_unsupported("esp32s3-stock-rtcio", scene);
+    assert!(!snap_text.contains("ready"), "{snap_text}");
+    for text in [&step_text, &snap_text] {
+        assert!(text.contains("board.GPIO11"), "{text}");
+        assert!(text.contains("board.GPIO13"), "{text}");
+        assert!(text.contains("SPI2"), "{text}");
+        assert!(
+            text.contains("runs hardware SPI only into parts that take SPI directly"),
+            "{text}"
+        );
+        assert!(text.contains("shiftOut or bit-banged SPI"), "{text}");
+    }
+}
+
+#[test]
+fn a_stock_spi_into_hc595_stops_with_link_unsupported() {
+    let scene = r#"{
+      "format": 1,
+      "parts": {
+        "board": { "type": "esp32s3-devkitc-1", "app": "app.bin", "partitions": "partitions.bin" },
+        "sr": { "type": "hc595-dip16" }
+      },
+      "wires": [
+        ["board.3V3", "sr.VCC"],
+        ["board.3V3", "sr.SRCLR"],
+        ["board.GND", "sr.GND"],
+        ["board.GND", "sr.OE"],
+        ["board.GPIO11", "sr.SER"],
+        ["board.GPIO12", "sr.SRCLK"],
+        ["board.GPIO10", "sr.RCLK"]
+      ],
+      "ground": "board.GND"
+    }"#;
+    let (step_text, snap_text) = expect_link_unsupported("esp32s3-stock-rtcio", scene);
+    assert!(!snap_text.contains("ready"), "{snap_text}");
+    for text in [&step_text, &snap_text] {
+        assert!(text.contains("SPI2"), "{text}");
+        assert!(
+            text.contains("board.GPIO12") || text.contains("board.GPIO11"),
+            "{text}"
+        );
+        assert!(
+            text.contains("#sr.pin.SRCLK") || text.contains("#sr.pin.SER"),
+            "{text}"
+        );
+        assert!(
+            text.contains("runs hardware SPI only into parts that take SPI directly"),
+            "{text}"
+        );
+        assert!(text.contains("shiftOut or bit-banged SPI"), "{text}");
+    }
+}

@@ -95,6 +95,7 @@ pub(crate) fn chip(part: PartId, chain: &Ws2812) -> Chip {
             spi: None,
             duty: None,
             pulses: Some(pins[DIN]),
+            pulses_pin: Some(DIN),
         },
         core: Core::Device(core(chain.leds, delay, dout, chain.draw.as_ref())),
     }

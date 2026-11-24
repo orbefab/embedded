@@ -13,6 +13,7 @@ pub(crate) mod i2c;
 pub(crate) mod native;
 pub(crate) mod pulse;
 pub(crate) mod replay;
+mod route;
 #[cfg(test)]
 pub(crate) mod script;
 pub(crate) mod spi;
@@ -128,6 +129,9 @@ pub(crate) struct Chip {
 pub(crate) struct SpiTarget {
     pub(crate) cs: NetId,
     pub(crate) sclk: NetId,
+    /// Package pin indices of `CS`, `SCLK`, and `D0` to `D3` on a netlist part. `None` on a
+    /// test-only chip with no netlist part.
+    pub(crate) pins: Option<[usize; 6]>,
 }
 
 /// The record pins of a chip: its SPI target's, and the pin that takes `Duty` records. A chip
@@ -137,6 +141,8 @@ pub(crate) struct Takes {
     pub(crate) spi: Option<SpiTarget>,
     pub(crate) duty: Option<NetId>,
     pub(crate) pulses: Option<NetId>,
+    /// Package pin index of the `Pulses` input on a netlist part (`DIN`, `SIGNAL`).
+    pub(crate) pulses_pin: Option<usize>,
 }
 
 impl Takes {
@@ -554,6 +560,10 @@ pub(crate) struct Actives {
     leds: Vec<Name>,
     /// The name of each shaft, in part order.
     horns: Vec<Name>,
+    /// Precomputed net incidence and targets for checking `Pulses` and `Spi` records at landing.
+    routing: route::Routing,
+    /// The first record-routing fault reached, which ends the run at its landing.
+    routing_fault: Option<(Time, Diagnostic)>,
 }
 
 struct Ahead {
@@ -851,6 +861,7 @@ impl Actives {
                 }
             })
             .collect();
+        let routing = route::Routing::new(circuit, !senders.is_empty());
         Actives {
             committed,
             ahead,
@@ -862,6 +873,8 @@ impl Actives {
             displays,
             leds,
             horns,
+            routing,
+            routing_fault: None,
         }
     }
 
@@ -1000,10 +1013,11 @@ impl Actives {
         found
     }
 
-    /// The first fault a committed core reached, which ends the run there, by time and then
-    /// part order.
+    /// The first fault a committed core or a record landing reached, which ends the run there, by
+    /// time and then part order.
     pub(crate) fn fault(&self, circuit: &Circuit) -> Option<Diagnostic> {
-        self.committed
+        let core = self
+            .committed
             .iter()
             .zip(&circuit.actives)
             .filter_map(|(core, chip)| {
@@ -1017,8 +1031,12 @@ impl Actives {
                     mcu::fault(Ref::Part(name(circuit, chip)), at, fault, symbol),
                 ))
             })
-            .min_by_key(|&(at, _)| at)
-            .map(|(_, fault)| fault)
+            .min_by_key(|&(at, _)| at);
+        match (core, self.routing_fault.clone()) {
+            (Some((a, fa)), Some((b, fb))) => Some(if a <= b { fa } else { fb }),
+            (Some((_, f)), None) | (None, Some((_, f))) => Some(f),
+            (None, None) => None,
+        }
     }
 
     /// Each core's record cursor: every record it sent that ended by then is staged.
@@ -1091,7 +1109,10 @@ impl Actives {
         keep: bool,
     ) -> (bool, u64) {
         let world = circuit.netlist.world();
-        let (mut incoming, mut answers) = self.incoming(circuit, at);
+        let (mut incoming, mut answers, routing_fault) = self.incoming(circuit, at);
+        if let Some(fault) = routing_fault {
+            self.routing_fault.get_or_insert((at, fault));
+        }
         let mut changed = false;
         let mut stops = 0u64;
         for (k, (committed, ahead)) in self.committed.iter_mut().zip(&mut self.ahead).enumerate() {
@@ -1218,13 +1239,18 @@ impl Actives {
 
     /// The records that end at `at`, read from each sender stopped there and listed for each
     /// chip that takes them, ordered by end, then by sender name, then by sequence, and an open
-    /// answer for each SPI record that reads. Reads only: no rewind, no commit, no cursor and no
-    /// reach moves.
-    fn incoming(&self, circuit: &Circuit, at: Time) -> (Vec<Vec<LinkRow>>, Answers) {
+    /// answer for each SPI record that reads, plus the first routing fault if any record cannot
+    /// reach its net faithfully. Reads only: no rewind, no commit, no cursor and no reach moves.
+    fn incoming(
+        &self,
+        circuit: &Circuit,
+        at: Time,
+    ) -> (Vec<Vec<LinkRow>>, Answers, Option<Diagnostic>) {
         let mut answers = Answers::default();
         if self.senders.is_empty() {
-            return (Vec::new(), answers);
+            return (Vec::new(), answers, None);
         }
+        let mut routing_fault: Option<((&Name, u64), Diagnostic)> = None;
         let mut incoming = vec![Vec::new(); self.ahead.len()];
         for (slot, ahead) in self.ahead.iter().enumerate() {
             let Reach::Stopped(stop) = ahead.reach else {
@@ -1238,11 +1264,23 @@ impl Actives {
                 continue;
             }
             let after = ahead.delivered.records;
+            let sender_part = circuit.actives[slot].part;
+            let sender_name = &self.senders[usize::from(ahead.delivered.sender)];
             for record in ahead.core.records() {
                 debug_assert!(
                     record.end > after && record.end == at,
                     "a held record ends at its sender's stop"
                 );
+                if let Some(fault) = self
+                    .routing
+                    .check(&circuit.netlist, sender_part, record, at)
+                {
+                    let key = (sender_name, record.seq);
+                    if routing_fault.as_ref().is_none_or(|(best, _)| key < *best) {
+                        routing_fault = Some((key, fault));
+                    }
+                    continue;
+                }
                 if let RecordKind::Spi { spi, .. } = &record.kind
                     && spi.reads() > 0
                 {
@@ -1258,10 +1296,13 @@ impl Actives {
                 }
             }
         }
+        if let Some((_, fault)) = routing_fault {
+            return (Vec::new(), Answers::default(), Some(fault));
+        }
         for list in &mut incoming {
             list.sort_by(|a, b| self.record_key(a).cmp(&self.record_key(b)));
         }
-        (incoming, answers)
+        (incoming, answers, None)
     }
 
     fn record_key<'a>(&'a self, row: &LinkRow) -> (Time, &'a Name, u64) {
