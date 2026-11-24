@@ -18,6 +18,17 @@ void mark(const char *name) {
 }
 
 void loop() {
+  mark("fresh");
+  tone(8, 440, 100);
+  delay(100);
+
+  mark("after");
+  tone(8, 880);
+  delay(40);
+  tone(8, 110);
+  delay(30);
+  noTone(8);
+
   mark("cut");
   digitalWrite(9, HIGH);
   tone(8, 440);

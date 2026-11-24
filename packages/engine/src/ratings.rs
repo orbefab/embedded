@@ -675,11 +675,17 @@ impl Ratings {
             } else if ended {
                 judge_drive(drive, at, self.timing.over_ps());
             }
-            if drive.over && (loud || ended) {
+            // A pulse that ends counts to its last loud sample. The quiet sample after it can
+            // come a whole step later.
+            let through = if loud { Some(at) } else { drive.loud_at };
+            if drive.over
+                && (loud || ended)
+                && let Some(through) = through
+            {
                 if let Some(over_ps) = drive.excursion.as_mut().and_then(|e| e.over_ps.as_mut()) {
-                    *over_ps += at.as_ps().saturating_sub(drive.counted_to.as_ps());
+                    *over_ps += through.as_ps().saturating_sub(drive.counted_to.as_ps());
                 }
-                drive.counted_to = at;
+                drive.counted_to = drive.counted_to.max(through);
             }
             if !loud {
                 drive.peak = 0.0;
