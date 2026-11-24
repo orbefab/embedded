@@ -7,8 +7,7 @@ use crate::active::{self, Output, Stage};
 use crate::netlist::{Average, Basis, Model, NetId, Netlist, Rating, RatingKind};
 
 use crate::chip::regulator::{
-    LIMIT_HOLD_PS, LIMIT_KNEE_FRACTION, LIMIT_SAG_FRACTION, MIN_CHARGE_RATE, SETTLE_BAND_FRACTION,
-    STALL_PS, limit_drop,
+    LIMIT_HOLD_PS, LIMIT_KNEE_FRACTION, LIMIT_SAG_FRACTION, MIN_CHARGE_RATE, STALL_PS, limit_drop,
 };
 use crate::diagnostic::{
     CurrentLimitExcursion, Diagnostic, Excursion, VoltageExcursion, exceeds_rounded, significant,
@@ -283,12 +282,14 @@ struct RegulatorLimit {
     reg: crate::chip::LinearRegulator,
     /// `V(out) - V(gnd)` on the last sample clear of the current-limit knee.
     baseline_vo: Option<f64>,
-    clamped: bool,
-    worst_drop: f64,
-    /// Whether `excursion` holds a settled clamped reading rather than a provisional sample.
-    settled: bool,
-    /// Current clamped voltage plateau, separating a settled rail from a switching-edge spike.
-    settle: Option<Settle>,
+    /// Start of the current continuous clamped spell.
+    clamped_since: Option<Time>,
+    /// Previous sample in the current continuous clamped spell.
+    last_clamped: Option<ClampedSample>,
+    /// Monotone decreasing queue of `(span_end, peak_sample)` over the last [`LIMIT_HOLD_PS`],
+    /// where `peak_sample` is the higher-voltage endpoint of each clamped step. Once the spell
+    /// reaches [`LIMIT_HOLD_PS`], the front is the lowest voltage bound that held across it.
+    hold: VecDeque<(Time, ClampedSample)>,
     /// A clamped rail starting below target (such as capacitor charging) that stays quiet while
     /// its output keeps rising toward target.
     pending: Option<PendingLimit>,
@@ -296,9 +297,10 @@ struct RegulatorLimit {
 }
 
 #[derive(Clone, Copy)]
-struct Settle {
+struct ClampedSample {
+    at: Time,
     vo: f64,
-    since: Time,
+    current: f64,
 }
 
 #[derive(Clone)]
@@ -308,8 +310,6 @@ struct PendingLimit {
     pulled_since: Option<Time>,
     progress_vo: f64,
     progress_at: Time,
-    low_vo: f64,
-    forgave_dip: bool,
 }
 
 /// The basis a sustained rating with no basis of its own takes.
@@ -570,10 +570,9 @@ impl Ratings {
                 iout,
                 reg: reg.clone(),
                 baseline_vo: None,
-                clamped: false,
-                worst_drop: 0.0,
-                settled: false,
-                settle: None,
+                clamped_since: None,
+                last_clamped: None,
+                hold: VecDeque::new(),
                 pending: None,
                 excursion: None,
             });
@@ -731,7 +730,7 @@ impl Ratings {
             }
         }
         for limit in &mut self.limits {
-            if limit.clamped
+            if limit.clamped_since.is_some()
                 && let Some(last) = self.last
             {
                 let dt = at.as_ps() - last.as_ps();
@@ -751,43 +750,53 @@ impl Ratings {
             let i = -row[limit.iout].get();
             let vout = limit.reg.output_voltage.si.get();
             let (vo_min, drop) = limit_drop(&limit.reg, i, vi);
-            let clamped = vo_min > 0.0 && drop >= LIMIT_SAG_FRACTION * vout;
-            limit.clamped = clamped;
+            let sag = LIMIT_SAG_FRACTION * vout;
+            let clamped = vo_min > 0.0 && drop >= sag;
             if !clamped {
+                limit.clamped_since = None;
+                limit.last_clamped = None;
+                limit.hold.clear();
                 limit.pending = None;
-                limit.settle = None;
                 if drop < LIMIT_KNEE_FRACTION * vout {
                     limit.baseline_vo = Some(vo);
                 }
                 continue;
             }
-            let sag = LIMIT_SAG_FRACTION * vout;
-            let settled_now = match limit.settle {
-                Some(s) if (vo - s.vo).abs() <= SETTLE_BAND_FRACTION * vout => {
-                    at.as_ps() - s.since.as_ps() >= LIMIT_HOLD_PS
+            let sample = ClampedSample { at, vo, current: i };
+            let since = *limit.clamped_since.get_or_insert(at);
+            if let Some(prev) = limit.last_clamped.replace(sample) {
+                let high = if sample.vo >= prev.vo { sample } else { prev };
+                while limit
+                    .hold
+                    .back()
+                    .is_some_and(|(_, back)| back.vo <= high.vo)
+                {
+                    limit.hold.pop_back();
                 }
-                _ => {
-                    limit.settle = Some(Settle { vo, since: at });
-                    false
+                limit.hold.push_back((at, high));
+                let cutoff = at.as_ps().saturating_sub(LIMIT_HOLD_PS);
+                while limit
+                    .hold
+                    .front()
+                    .is_some_and(|(to, _)| to.as_ps() <= cutoff)
+                {
+                    limit.hold.pop_front();
                 }
-            };
+            }
+            let held = (at.as_ps() - since.as_ps() >= LIMIT_HOLD_PS)
+                .then(|| limit.hold.front().map(|(_, s)| *s))
+                .flatten();
             if let Some(excursion) = &mut limit.excursion {
-                let replace = if settled_now {
-                    !limit.settled || drop > limit.worst_drop
-                } else {
-                    !limit.settled && drop > limit.worst_drop
-                };
-                if replace {
-                    limit.settled = settled_now;
-                    limit.worst_drop = drop;
-                    excursion.voltage = vo;
-                    excursion.current = i;
-                    excursion.peak_at = at;
+                if let Some(peak) = held
+                    && peak.vo < excursion.voltage
+                {
+                    excursion.voltage = peak.vo;
+                    excursion.current = peak.current;
+                    excursion.peak_at = peak.at;
                 }
                 continue;
             }
             let pulled = limit.baseline_vo.is_some_and(|before| before - vo >= sag);
-            let mut stalled = false;
             let warn = if self.timing == Timing::Point {
                 true
             } else if let Some(pending) = &mut limit.pending {
@@ -796,20 +805,15 @@ impl Ratings {
                     at.as_ps() - since.as_ps() >= LIMIT_HOLD_PS
                 } else {
                     pending.pulled_since = None;
-                    pending.low_vo = pending.low_vo.min(vo);
                     let dt_ps = at.as_ps() - pending.progress_at.as_ps();
                     if dt_ps >= STALL_PS {
-                        let required = MIN_CHARGE_RATE * drop * (dt_ps as f64 * 1e-12);
-                        let climbed = vo - pending.progress_vo >= required;
-                        let recovered = !pending.forgave_dip && vo - pending.low_vo >= required;
-                        if climbed || recovered {
-                            pending.forgave_dip = !climbed;
+                        if vo - pending.progress_vo
+                            >= MIN_CHARGE_RATE * drop * (dt_ps as f64 * 1e-12)
+                        {
                             pending.progress_vo = vo;
                             pending.progress_at = at;
-                            pending.low_vo = vo;
                             false
                         } else {
-                            stalled = true;
                             true
                         }
                     } else {
@@ -823,8 +827,6 @@ impl Ratings {
                     pulled_since: pulled.then_some(at),
                     progress_vo: vo,
                     progress_at: at,
-                    low_vo: vo,
-                    forgave_dip: false,
                 });
                 false
             };
@@ -833,23 +835,14 @@ impl Ratings {
                     Some(pending) => (pending.first, pending.over_ps),
                     None => (at, self.timing.over_ps()),
                 };
-                // Reset the settle tracker when promoting from a charging stall so an earlier
-                // slow ramp point cannot count as settled ahead of the stalled rail voltage.
-                let settled = if stalled {
-                    limit.settle = Some(Settle { vo, since: at });
-                    false
-                } else {
-                    settled_now
-                };
-                limit.settled = settled;
-                limit.worst_drop = drop;
+                let peak = held.unwrap_or(sample);
                 limit.excursion = Some(CurrentLimitExcursion {
                     pin: limit.pin.clone(),
                     limit: limit.reg.current_limit.si.get(),
                     target: vout,
-                    voltage: vo,
-                    current: i,
-                    peak_at: at,
+                    voltage: peak.vo,
+                    current: peak.current,
+                    peak_at: peak.at,
                     first,
                     over_ps,
                 });

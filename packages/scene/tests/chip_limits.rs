@@ -190,7 +190,7 @@ fn ams1117_warns_regulator_current_limit_into_a_short_and_stays_quiet_under_limi
         message.contains("#u1.pin.out regulator output can give 1.1 A at 5 V"),
         "{message}"
     );
-    assert!(message.contains("dropped to"), "{message}");
+    assert!(message.contains("has dropped as low as"), "{message}");
     assert!(shorted[0]["data"]["voltage"].as_f64().unwrap() < 1.0);
 }
 
@@ -204,7 +204,7 @@ fn limit_warnings(session: &Session) -> Vec<serde_json::Value> {
 }
 
 #[test]
-fn every_regulator_warns_at_105_percent_load_and_stays_quiet_at_90_percent() {
+fn every_regulator_warns_at_105_and_110_percent_load_and_stays_quiet_at_90_percent() {
     let cases = [
         ("ams1117-sot223", "IN", "OUT", "GND", 9.0, 5.0, 1.1),
         ("lm7805-to220", "IN", "OUT", "GND", 9.0, 5.0, 2.4),
@@ -214,7 +214,7 @@ fn every_regulator_warns_at_105_percent_load_and_stays_quiet_at_90_percent() {
         ("ch340g", "VCC", "V3", "GND", 5.0, 3.3, 0.03),
     ];
     for (id, vin, vout, gnd, supply, target, ilim) in cases {
-        for (pct, expect_warn) in [(0.90, false), (1.05, true)] {
+        for (pct, expect_warn) in [(0.90, false), (1.05, true), (1.10, true)] {
             let ohms = target / (pct * ilim);
             let project = common::project("nano-button");
             let parts = format!(
@@ -240,7 +240,8 @@ fn every_regulator_warns_at_105_percent_load_and_stays_quiet_at_90_percent() {
                 let reported_v = found[0]["data"]["voltage"].as_f64().unwrap();
                 assert!(
                     (reported_v - v_out).abs() < 0.01,
-                    "{id} reported {reported_v} V vs probe {v_out} V ({})",
+                    "{id} at {:.0}% reported {reported_v} V vs probe {v_out} V ({})",
+                    pct * 100.0,
                     found[0]["message"]
                 );
             } else {
@@ -303,7 +304,7 @@ fn large_electrolytic_power_on_charge_stays_quiet_while_overload_warns() {
     );
 
     // Mid-run short after a 1000 uF rail has charged: quiet until the switch closes at 10 ms,
-    // then warns once with the settled shorted voltage.
+    // then warns once with the lowest held shorted voltage.
     let project = common::project("nano-button");
     let parts = r#""v1": { "type": "./supply/part.jsonc", "voltage": "9" },
         "u1": { "type": "ams1117-sot223" },
@@ -339,7 +340,7 @@ fn large_electrolytic_power_on_charge_stays_quiet_while_overload_warns() {
 }
 
 #[test]
-fn pwm_mosfet_overload_reports_settled_pulse_voltage_matching_probe() {
+fn pwm_mosfet_overload_reports_held_pulse_voltage_matching_probe() {
     let cases = [
         ("ams1117-sot223", "IN", "OUT", "GND", 9.0, 5.0, 1.1),
         ("lp2985-sot23-5", "IN", "OUT", "GND", 5.0, 3.3, 0.35),
@@ -388,6 +389,126 @@ fn pwm_mosfet_overload_reports_settled_pulse_voltage_matching_probe() {
 fn charging_large_capacitor_with_heavy_load_stays_quiet_while_overload_warns() {
     let quiet_cases = [
         (
+            "ams1117-sot223",
+            "IN",
+            "OUT",
+            "GND",
+            9.0,
+            "5.051",
+            "4700u",
+            None,
+            300 * MS,
+            4.95,
+        ),
+        (
+            "ams1117-sot223",
+            "IN",
+            "OUT",
+            "GND",
+            9.0,
+            "4.545",
+            "4700u",
+            Some(100 * MS),
+            300 * MS,
+            4.95,
+        ),
+        (
+            "lm7805-to220",
+            "IN",
+            "OUT",
+            "GND",
+            9.0,
+            "2.315",
+            "4700u",
+            None,
+            150 * MS,
+            4.90,
+        ),
+        (
+            "lm7805-to220",
+            "IN",
+            "OUT",
+            "GND",
+            9.0,
+            "2.083",
+            "4700u",
+            None,
+            150 * MS,
+            4.90,
+        ),
+        (
+            "sgm2212-sot223",
+            "IN",
+            "OUT",
+            "GND",
+            5.0,
+            "3.333",
+            "4700u",
+            None,
+            200 * MS,
+            3.25,
+        ),
+        (
+            "sgm2212-sot223",
+            "IN",
+            "OUT",
+            "GND",
+            5.0,
+            "3.000",
+            "4700u",
+            None,
+            200 * MS,
+            3.25,
+        ),
+        (
+            "lp2985-sot23-5",
+            "IN",
+            "OUT",
+            "GND",
+            5.0,
+            "10.476",
+            "4700u",
+            None,
+            500 * MS,
+            3.10,
+        ),
+        (
+            "lp2985-sot23-5",
+            "IN",
+            "OUT",
+            "GND",
+            5.0,
+            "9.429",
+            "4700u",
+            None,
+            500 * MS,
+            3.10,
+        ),
+        (
+            "xc6206-sot23",
+            "VIN",
+            "VOUT",
+            "VSS",
+            5.0,
+            "18.333",
+            "4700u",
+            None,
+            800 * MS,
+            3.15,
+        ),
+        (
+            "xc6206-sot23",
+            "VIN",
+            "VOUT",
+            "VSS",
+            5.0,
+            "16.5",
+            "4700u",
+            None,
+            800 * MS,
+            3.15,
+        ),
+        (
             "ch340g",
             "VCC",
             "V3",
@@ -422,42 +543,6 @@ fn charging_large_capacitor_with_heavy_load_stays_quiet_while_overload_warns() {
             None,
             3_000 * MS,
             3.25,
-        ),
-        (
-            "ams1117-sot223",
-            "IN",
-            "OUT",
-            "GND",
-            9.0,
-            "4.545",
-            "4700u",
-            Some(100 * MS),
-            300 * MS,
-            4.95,
-        ),
-        (
-            "sgm2212-sot223",
-            "IN",
-            "OUT",
-            "GND",
-            5.0,
-            "3.000",
-            "4700u",
-            None,
-            200 * MS,
-            3.25,
-        ),
-        (
-            "xc6206-sot23",
-            "VIN",
-            "VOUT",
-            "VSS",
-            5.0,
-            "16.5",
-            "4700u",
-            None,
-            500 * MS,
-            3.15,
         ),
     ];
     let mut failures = Vec::new();
@@ -646,7 +731,7 @@ fn pwm_mosfet_under_limit_stays_quiet_and_105_percent_warns_with_pulse_voltage()
 }
 
 #[test]
-fn mid_charge_overload_step_reports_settled_voltage_not_rising_charge_dip() {
+fn mid_charge_overload_step_reports_lowest_held_voltage() {
     let cases = [
         (
             "ams1117-sot223",
@@ -726,7 +811,10 @@ fn mid_charge_overload_step_reports_settled_voltage_not_rising_charge_dip() {
             ["u1.{vout}", "sw.a"], ["sw.b", "rl.a"], ["rl.b", "v1.neg"]"#
         );
         let mut session = open(project.path(), &parts, &wires);
-        session.advance_to(Time::from_ps(step_ps + 200_000_000));
+        let probe_ref: Ref = "#rb.v".parse().unwrap();
+        let mut probed_min: Option<f64> = None;
+        let mut t = step_ps + 200_000_000;
+        session.advance_to(Time::from_ps(t));
         let early = limit_warnings(&session);
         if !early.is_empty() {
             failures.push(format!(
@@ -734,26 +822,92 @@ fn mid_charge_overload_step_reports_settled_voltage_not_rising_charge_dip() {
                 early[0]["message"], early[0]["data"]["voltage"]
             ));
         }
-        session.advance_to(Time::from_ps(stop_ps));
-        let probe_v = session
-            .probe()
-            .get(&"#rb.v".parse::<Ref>().unwrap())
-            .unwrap()
-            .get();
+        while t < stop_ps {
+            t = (t + 500_000_000).min(stop_ps);
+            session.advance_to(Time::from_ps(t));
+            if !limit_warnings(&session).is_empty() {
+                let v = session.probe().get(&probe_ref).unwrap().get();
+                probed_min = Some(probed_min.map_or(v, |m| m.min(v)));
+            }
+        }
         let found = limit_warnings(&session);
         if found.len() != 1 {
-            failures.push(format!(
-                "{id} {cap} expected 1 warning at settled overload ({probe_v:.4} V), got {found:?}"
-            ));
+            failures.push(format!("{id} {cap} expected 1 warning, got {found:?}"));
             continue;
         }
+        let message = found[0]["message"].as_str().unwrap();
+        if !message.contains("has dropped as low as") {
+            failures.push(format!("{id} {cap} unexpected wording: {message}"));
+        }
         let reported_v = found[0]["data"]["voltage"].as_f64().unwrap();
-        if (reported_v - probe_v).abs() >= 0.02 {
+        let probed_min = probed_min.expect("warning appeared before stop_ps");
+        if (reported_v - probed_min).abs() >= 0.02 {
             failures.push(format!(
-                "{id} {cap} reported {reported_v:.4} V vs settled {probe_v:.4} V ({})",
-                found[0]["message"]
+                "{id} {cap} reported {reported_v:.4} V vs probed min {probed_min:.4} V ({message})"
             ));
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn pulsed_overload_during_charge_reports_lowest_held_voltage() {
+    let project = common::project("nano-button");
+    fs::create_dir_all(project.path().join("toggle")).unwrap();
+    fs::write(
+        project.path().join("toggle/part.jsonc"),
+        r#"{
+  "format": 1,
+  "pins": { "pos": [1], "neg": [2] },
+  "model": {
+    "kind": "voltage_source",
+    "pins": { "p": "pos", "n": "neg" },
+    "voltage": {
+      "kind": "pulse",
+      "initial": { "value": 0.0, "unit": "V", "source": "user" },
+      "pulsed": { "value": 10.0, "unit": "V", "source": "user" },
+      "delay_ps": 350000000,
+      "width_ps": 350000000,
+      "period_ps": 700000000
+    }
+  }
+}
+"#,
+    )
+    .unwrap();
+    let parts = r#""v1": { "type": "./supply/part.jsonc", "voltage": "9" },
+        "vg": { "type": "./toggle/part.jsonc" },
+        "u1": { "type": "ams1117-sot223" },
+        "c1": { "type": "capacitor-electrolytic-radial", "capacitance": "1000u", "initial": "0" },
+        "rb": { "type": "resistor-axial", "resistance": "1000" },
+        "rl": { "type": "resistor-axial", "resistance": "2" },
+        "q1": { "type": "nmos-irf520-to220" }"#;
+    let wires = r#"["v1.pos", "u1.IN"], ["v1.neg", "u1.GND"],
+        ["u1.OUT", "c1.pos"], ["c1.neg", "v1.neg"],
+        ["u1.OUT", "rb.a"], ["rb.b", "v1.neg"],
+        ["u1.OUT", "rl.a"], ["rl.b", "q1.drain"], ["q1.source", "v1.neg"],
+        ["vg.pos", "q1.gate"], ["vg.neg", "v1.neg"]"#;
+    let mut session = open(project.path(), parts, wires);
+    let probe_ref: Ref = "#rb.v".parse().unwrap();
+    let mut probed_min: Option<f64> = None;
+    let mut t = 0u64;
+    let stop_ps = 35 * MS;
+    while t < stop_ps {
+        t = (t + 50_000_000).min(stop_ps);
+        session.advance_to(Time::from_ps(t));
+        if !limit_warnings(&session).is_empty() {
+            let v = session.probe().get(&probe_ref).unwrap().get();
+            probed_min = Some(probed_min.map_or(v, |m| m.min(v)));
+        }
+    }
+    let found = limit_warnings(&session);
+    assert_eq!(found.len(), 1, "{found:?}");
+    let message = found[0]["message"].as_str().unwrap();
+    assert!(message.contains("has dropped as low as"), "{message}");
+    let reported_v = found[0]["data"]["voltage"].as_f64().unwrap();
+    let probed_min = probed_min.expect("warning appeared before stop_ps");
+    assert!(
+        (reported_v - probed_min).abs() < 0.05,
+        "reported {reported_v:.4} V vs probed min {probed_min:.4} V ({message})"
+    );
 }

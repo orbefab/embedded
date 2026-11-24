@@ -426,7 +426,7 @@ fn severity_refs_and_time_follow_the_variant() {
     let reg_limit = serde_json::to_string(by_code(&found, "regulator.current_limit")).unwrap();
     assert_eq!(
         reg_limit,
-        r##"{"code":"regulator.current_limit","severity":"warning","refs":["#u1.pin.out"],"t_ps":8000,"message":"#u1.pin.out regulator output can give 0.03 A at 3.3 V; the circuit asks for more, so it is giving 0.03 A and has dropped to 3 V for 2000 ps","data":{"current":0.030007,"limit":0.03,"over_ps":2000,"peak_ps":9000,"target":3.3,"voltage":3.003}}"##
+        r##"{"code":"regulator.current_limit","severity":"warning","refs":["#u1.pin.out"],"t_ps":8000,"message":"#u1.pin.out regulator output can give 0.03 A at 3.3 V; the circuit asks for more, so it is giving 0.03 A and has dropped as low as 3 V for 2000 ps","data":{"current":0.030007,"limit":0.03,"over_ps":2000,"peak_ps":9000,"target":3.3,"voltage":3.003}}"##
     );
 }
 

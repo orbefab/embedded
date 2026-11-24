@@ -936,7 +936,7 @@ fn regulator_limit_message(message: &str, json: &Value) -> Option<String> {
     let end = message.find(" regulator output ")?;
     let head = &message[..end];
     Some(format!(
-        "{head} regulator output can give {} at {} V; the circuit asks for more, so it is giving {} and has dropped to {} V{duration}",
+        "{head} regulator output can give {} at {} V; the circuit asks for more, so it is giving {} and has dropped as low as {} V{duration}",
         rated_current(limit),
         significant_text(target),
         rated_current(current),

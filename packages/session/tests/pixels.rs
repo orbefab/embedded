@@ -377,7 +377,10 @@ fn rainbow_on_nano_3v3_sags_resets_pixels_and_warns_regulator_current_limit() {
         snapshot_text.contains("can give 30 mA at 3.3 V"),
         "{snapshot_text}"
     );
-    assert!(snapshot_text.contains("dropped to 3 V"), "{snapshot_text}");
+    assert!(
+        snapshot_text.contains("has dropped as low as 3.13 V"),
+        "{snapshot_text}"
+    );
 
     let json = snapshot.json();
     let limits: Vec<_> = json["data"]["diagnostics"]

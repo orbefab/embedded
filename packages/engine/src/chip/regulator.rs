@@ -51,19 +51,16 @@ pub(crate) const LIMIT_SAG_FRACTION: f64 = 0.005;
 /// Below this fraction of `output_voltage` the regulator is clear of the current-limit knee, so
 /// its unclamped output voltage updates the pre-overload baseline.
 pub(crate) const LIMIT_KNEE_FRACTION: f64 = 0.001;
-/// Minimum picoseconds a pulled-down clamp must persist before warning, and the minimum plateau
-/// hold within [`SETTLE_BAND_FRACTION`] to lock in a settled clamped voltage (1 us). Real linear
-/// regulators' error-amplifier and current-limit loops and required output bypass capacitors
-/// respond on microsecond-to-hundreds-of-microsecond timescales (TI SLVS522S LP2985 load
-/// transient curves at 20 us/div with 1 A/us steps and >= 2.2 uF Cout; AMS1117 20 us/div with
+/// Minimum picoseconds a pulled-down clamp must persist before warning, and the minimum
+/// continuous clamped hold for an output voltage to count as the lowest held voltage (1 us). Real
+/// linear regulators' error-amplifier and current-limit loops and required output bypass
+/// capacitors respond on microsecond-to-hundreds-of-microsecond timescales (TI SLVS522S LP2985
+/// load transient curves at 20 us/div with 1 A/us steps and >= 2.2 uF Cout; AMS1117 20 us/div with
 /// 22 uF Cout; SGM2212 200 us/div with >= 1 uF Cout; Torex XC6206 1 ms/div with 1 uF CL;
 /// TI SNOSBT0L LM7805 0.1 uF output bypass; CH340G 0.1 uF V3 bypass), so picosecond to
-/// tens-of-nanosecond capacitive switching spikes do not trip or settle the limit, while
+/// tens-of-nanosecond capacitive switching spikes do not trip or set the reported voltage, while
 /// microsecond brownouts (such as the 1.7 us Nano 3V3 NeoPixel reset) and PWM overloads warn.
 pub(crate) const LIMIT_HOLD_PS: u64 = 1_000_000;
-/// Fraction of `output_voltage` within which a clamped output must hold for [`LIMIT_HOLD_PS`] to
-/// count as a settled plateau rather than a switching-edge spike or charging ramp.
-pub(crate) const SETTLE_BAND_FRACTION: f64 = 0.002;
 /// Minimum fractional rate (per second) at which a charging clamped output starting below target
 /// must close its remaining current-limit gap `drop = vo_min - vo` (0.5/s, a 2 s RC time
 /// constant). Any capacitive load in parallel with a resistor at or under the limit closes `drop`

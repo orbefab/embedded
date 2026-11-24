@@ -647,11 +647,11 @@ pub struct CurrentLimitExcursion {
     pub limit: f64,
     /// Nominal `output_voltage`, in V.
     pub target: f64,
-    /// Output voltage over `gnd` where the sag was deepest, in V.
+    /// Lowest output voltage over `gnd` held for at least `LIMIT_HOLD_PS` while clamped, in V.
     pub voltage: f64,
     /// Pass current delivered at `peak_at`, in A.
     pub current: f64,
-    /// When the output sagged farthest.
+    /// When the lowest held output voltage occurred.
     pub peak_at: Time,
     /// First sample held at the current limit.
     pub first: Time,
@@ -2250,7 +2250,7 @@ fn regulator_limit(excursion: &CurrentLimitExcursion, namer: &dyn Fn(&Ref) -> St
     } = excursion;
     let pin = namer(pin);
     format!(
-        "{pin} regulator output can give {} A at {} V; the circuit asks for more, so it is giving {} A and has dropped to {} V{}",
+        "{pin} regulator output can give {} A at {} V; the circuit asks for more, so it is giving {} A and has dropped as low as {} V{}",
         significant_text(*limit),
         significant_text(*target),
         significant_text(*current),
