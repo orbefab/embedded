@@ -2,18 +2,18 @@
   "part": "lcd1602-i2c",
   "source": {
     "script": "model.py",
-    "sha256": "a309af867647e7da09f4552ef037068a130eccba36a4691f2a0907ceb044cf0a",
-    "bytes": 2552
+    "sha256": "d374474357fe58333d582dcee35e9bc94ddf7ff5c707815d39c9094eb97028d7",
+    "bytes": 2522
   },
   "files": {
     "lcd1602-i2c.glb": {
-      "sha256": "f901671711db0e43d4d8fa142832fcfbe74f42a65a58ddf6336f13292532fe23",
-      "bytes": 17568
+      "sha256": "738f6b9976d0ab8e9c887abaf1e1cfd9fff937a1e7af9d65b92644485ad45bea",
+      "bytes": 16924
     }
   },
   "box": {
-    "min": [-20.749999, -18, 2.54],
-    "max": [20.749999, 1.27, 13.1]
+    "min": [-34.5, -2, 0],
+    "max": [7.5, 17, 10.5]
   },
   "kept_nodes": [],
   "draw_calls": 5,
@@ -26,20 +26,20 @@
       "largest_miss_mm": 0
     },
     "seating": {
-      "lowest_node": "header-spacer",
-      "z_mm": 2.54
+      "lowest_node": "backlight-jumper",
+      "z_mm": 0
     },
     "names": {
       "nodes": []
     },
     "merge": {
-      "primitives_in": 22,
+      "primitives_in": 21,
       "primitives_out": 5
     },
     "composition": {
       "children": 5,
-      "lowest_node": "header-spacer",
-      "z_mm": 2.54,
+      "lowest_node": "backlight-jumper",
+      "z_mm": 0,
       "draw_calls": 28
     }
   }

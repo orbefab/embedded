@@ -207,10 +207,13 @@ pub enum ProtocolRule {
     BusWidth,
     /// A 5×10 font selection on a 5×8 character LCD.
     Font,
+    /// An HD44780 command or data write arrived before its power-on reset wait elapsed (15 ms
+    /// after VCC reaches 4.5 V, or 40 ms after 2.7 V).
+    InitWait,
 }
 
 impl ProtocolRule {
-    pub(crate) const ALL: [ProtocolRule; 11] = [
+    pub(crate) const ALL: [ProtocolRule; 12] = [
         ProtocolRule::Command,
         ProtocolRule::PixelFormat,
         ProtocolRule::SdaWhileSclHigh,
@@ -222,6 +225,7 @@ impl ProtocolRule {
         ProtocolRule::Read,
         ProtocolRule::BusWidth,
         ProtocolRule::Font,
+        ProtocolRule::InitWait,
     ];
 
     /// Its place in [`ALL`](Self::ALL).
@@ -243,6 +247,7 @@ impl ProtocolRule {
             "read" => Some(ProtocolRule::Read),
             "bus_width" => Some(ProtocolRule::BusWidth),
             "font" => Some(ProtocolRule::Font),
+            "init_wait" => Some(ProtocolRule::InitWait),
             _ => None,
         }
     }
@@ -1380,6 +1385,18 @@ impl Diagnostic {
                 format!(
                     "{part} does not run the 5x10 font, breaking rule {} at {} ps, the first time",
                     rule_text(&ProtocolRule::Font),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::InitWait,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} dropped a write before the HD44780U power-on reset wait elapsed (15 ms after VCC reaches 4.5 V, or 40 ms after 2.7 V), breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::InitWait),
                     at.as_ps()
                 )
             }

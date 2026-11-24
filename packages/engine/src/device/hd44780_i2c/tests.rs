@@ -2,9 +2,13 @@ use orbe_model::{Ack, Cx, Device, Dir, Fields, I2cTarget, Levels, Time, Value as
 
 use super::glass::{backlight_on, glass, text_visible, visible_lines};
 use super::model::{
-    CLEAR_BUSY_PS, EXEC_BUSY_PS, Hd44780I2c, PIN_BL, PIN_E, PIN_RS, PIN_RW, POWER_ON_BUSY_PS,
+    CLEAR_BUSY_PS, EXEC_BUSY_PS, Hd44780I2c, PIN_BL, PIN_E, PIN_RS, PIN_RW, POWER_ON_WAIT_2V7_PS,
+    POWER_ON_WAIT_4V5_PS,
 };
+use crate::diagnostic::{Diagnostic, ProtocolRule};
 use crate::display;
+use crate::netlist;
+use crate::simulate;
 
 struct Bench {
     dev: Hd44780I2c,
@@ -27,10 +31,18 @@ impl Bench {
         }
     }
 
-    fn power(&mut self, on: bool) {
+    fn power_levels(&mut self, v2v7: bool, v4v5: bool) {
         let mut cx = Cx::default();
-        let levels = Levels::from_slice(&[true, true, on]);
+        let levels = Levels::from_slice(&[true, true, v2v7, v4v5]);
         self.dev.input(&mut cx, Time::from_ps(self.t_ps), levels);
+    }
+
+    fn power(&mut self, on: bool) {
+        self.power_levels(on, on);
+    }
+
+    fn power_3v3(&mut self) {
+        self.power_levels(true, false);
     }
 
     fn advance_us(&mut self, us: u64) {
@@ -139,6 +151,31 @@ impl Bench {
         assert_eq!(self.command(0x06).broken(), None); // entry mode: increment, no shift
     }
 
+    /// Sends the Hitachi Figure 24 8-bit to 4-bit init sequence and writes `ch`, returning the
+    /// first protocol rule broken (if any) along with its timestamp.
+    fn run_fig24_and_write(&mut self, ch: u8) -> Option<(&'static str, Time)> {
+        let mut first = None;
+        let mut note = |cx: Cx| {
+            if first.is_none() {
+                first = cx.broken();
+            }
+        };
+        note(self.pulse_nibble(0x30));
+        self.advance_us(4_500);
+        note(self.pulse_nibble(0x30));
+        self.advance_us(150);
+        note(self.pulse_nibble(0x30));
+        self.advance_us(150);
+        note(self.pulse_nibble(0x20));
+        self.advance_us(150);
+        note(self.command(0x28)); // 4-bit, 2-line, 5x8
+        note(self.command(0x0c)); // display on, cursor off, blink off
+        note(self.command(0x01)); // clear
+        note(self.command(0x06)); // entry mode: increment, no shift
+        note(self.data(ch));
+        first
+    }
+
     fn lines(&self) -> [String; 2] {
         let view = self.dev.view();
         let panel = display::panel(Hd44780I2c::SHOWS, view);
@@ -164,16 +201,17 @@ fn unpowered_part_does_nothing_and_draws_nothing() {
 }
 
 #[test]
-fn power_on_busy_drops_early_commands_and_init_enters_4bit_mode() {
+fn power_on_wait_warns_and_drops_early_commands_until_sheet_wait_elapses() {
     let mut b = Bench::new(true);
     b.power(true);
-    // Inside 10 ms internal reset busy window, switching to 4-bit is dropped.
-    b.t_ps = POWER_ON_BUSY_PS - 10_000_000;
-    assert_eq!(b.pulse_nibble(0x20).broken(), None);
+    // Inside the 15 ms 4.5 V power-on wait, switching to 4-bit warns `init_wait` and is dropped.
+    b.t_ps = POWER_ON_WAIT_4V5_PS - 10_000_000;
+    let cx = b.pulse_nibble(0x20);
+    assert_eq!(cx.broken().map(|(rule, _)| rule), Some("init_wait"));
     assert!(!b.dev.is_four_bit());
 
-    // After 10 ms internal reset completes, Figure 24 init works.
-    b.t_ps = POWER_ON_BUSY_PS + 1_000_000;
+    // After 15 ms at >= 4.5 V, Figure 24 init succeeds with no warning.
+    b.t_ps = POWER_ON_WAIT_4V5_PS + 1_000_000;
     assert_eq!(b.pulse_nibble(0x30).broken(), None);
     b.advance_us(5_000);
     assert_eq!(b.pulse_nibble(0x30).broken(), None);
@@ -182,6 +220,199 @@ fn power_on_busy_drops_early_commands_and_init_enters_4bit_mode() {
     b.advance_us(150);
     assert_eq!(b.pulse_nibble(0x20).broken(), None);
     assert!(b.dev.is_four_bit());
+}
+
+#[test]
+fn early5_and_early15_enforce_hd44780_power_on_reset_waits() {
+    // early5 at 5 V (VCC >= 4.5 V at t = 0): waiting 5 ms before the first Function Set is
+    // inside the 15 ms Fig. 24 wait. The first write at 5.002 ms warns `init_wait` and every
+    // write inside the 15 ms window is dropped as busy, so 'E' never appears.
+    let mut early5 = Bench::new(true);
+    early5.power(true);
+    early5.advance_us(5_000);
+    let broken = early5.run_fig24_and_write(b'E');
+    assert_eq!(broken, Some(("init_wait", Time::from_ps(5_002_000_000))));
+    assert!(!early5.dev.is_four_bit());
+    assert_eq!(early5.lines(), ["                ", "                "]);
+
+    // early15 at 5 V (VCC >= 4.5 V at t = 0): waiting 15 ms means the first E fall lands at
+    // 15.002 ms (>= 15 ms since VCC reached 4.5 V), which satisfies the 4.5 V Fig. 24 line.
+    let mut early15_5v = Bench::new(true);
+    early15_5v.power(true);
+    early15_5v.advance_us(15_000);
+    assert_eq!(early15_5v.run_fig24_and_write(b'E'), None);
+    assert!(early15_5v.dev.is_four_bit());
+    assert_eq!(early15_5v.lines()[0].trim_end(), "E");
+
+    // early15 at 5 V with a delayed supply rise: VCC reaches 2.7 V at 0 ms and 4.5 V at 5 ms,
+    // so ready time is min(0 + 40 ms, 5 + 15 ms) = 20 ms. Writing after 15 ms from t = 0
+    // arrives only 10.002 ms after VCC reached 4.5 V, so it warns `init_wait` and drops.
+    let mut early15_delayed = Bench::new(true);
+    early15_delayed.power_3v3();
+    early15_delayed.advance_us(5_000);
+    early15_delayed.power(true); // crosses 4.5 V at t = 5 ms -> ready at 20 ms
+    early15_delayed.advance_us(10_000); // t = 15 ms
+    let broken = early15_delayed.run_fig24_and_write(b'E');
+    assert_eq!(broken, Some(("init_wait", Time::from_ps(15_002_000_000))));
+    assert!(!early15_delayed.dev.is_four_bit());
+    assert_eq!(
+        early15_delayed.lines(),
+        ["                ", "                "]
+    );
+
+    // early15 at 3.3 V (VCC >= 2.7 V at t = 0, never reaches 4.5 V): the 40 ms Fig. 24 line
+    // applies. Waiting 15 ms warns `init_wait` at 15.002 ms and drops every write, so 'E' does
+    // not appear. Waiting past 40 ms succeeds with no warning.
+    let mut early15_3v3 = Bench::new(true);
+    early15_3v3.power_3v3();
+    early15_3v3.advance_us(15_000);
+    let broken = early15_3v3.run_fig24_and_write(b'E');
+    assert_eq!(broken, Some(("init_wait", Time::from_ps(15_002_000_000))));
+    assert!(!early15_3v3.dev.is_four_bit());
+    assert_eq!(
+        early15_3v3.lines(),
+        ["                ", "                "]
+    );
+
+    let mut ready_3v3 = Bench::new(true);
+    ready_3v3.power_3v3();
+    ready_3v3.t_ps = POWER_ON_WAIT_2V7_PS;
+    assert_eq!(ready_3v3.run_fig24_and_write(b'E'), None);
+    assert!(ready_3v3.dev.is_four_bit());
+    assert_eq!(ready_3v3.lines()[0].trim_end(), "E");
+}
+
+/// Electrical MNA check of both supply comparators (2.7 V and 4.5 V): sends one I2C write pulsing
+/// `E` high then low for Function Set `0x30` at `write_at_ms`, verifying `chip.protocol` rule
+/// `init_wait` fires based on the supply's actual rise time and voltage.
+#[test]
+fn supply_comparators_enforce_15ms_at_5v_and_40ms_at_3v3() {
+    fn run_i2c_write(vcc_v: f64, vcc_step_ms: Option<u64>, write_at_ms: u64) -> Vec<Diagnostic> {
+        let mut scl_ev: Vec<(u64, f64)> = Vec::new();
+        let mut sda_ev: Vec<(u64, f64)> = Vec::new();
+        let mut t = write_at_ms * 1_000_000_000;
+        let high = vcc_v;
+        let half = 5_000_000u64; // 5 us half-period (100 kHz I2C)
+        let mut cur_scl = high;
+        let mut cur_sda = high;
+        let mut set_scl = |t: u64, v: f64| {
+            if (v - cur_scl).abs() > 0.01 {
+                scl_ev.push((t, v));
+                cur_scl = v;
+            }
+        };
+        let mut set_sda = |t: u64, v: f64| {
+            if (v - cur_sda).abs() > 0.01 {
+                sda_ev.push((t, v));
+                cur_sda = v;
+            }
+        };
+        // START: SDA falls while SCL is high.
+        set_sda(t, 0.0);
+        t += half;
+        set_scl(t, 0.0);
+        t += half;
+        // Send address 0x27<<1 (write), then port byte 0x34 (E=1), then 0x30 (E=0).
+        for byte in [0x27u8 << 1, 0x34, 0x30] {
+            for bit in (0..8).rev() {
+                let v = if (byte >> bit) & 1 == 1 { high } else { 0.0 };
+                set_sda(t, v);
+                t += half;
+                set_scl(t, high);
+                t += half;
+                set_scl(t, 0.0);
+                t += half;
+            }
+            // ACK clock (release SDA high).
+            set_sda(t, high);
+            t += half;
+            set_scl(t, high);
+            t += half;
+            set_scl(t, 0.0);
+            t += half;
+        }
+        // STOP: SDA rises while SCL is high.
+        set_sda(t, 0.0);
+        t += half;
+        set_scl(t, high);
+        t += half;
+        set_sda(t, high);
+        let stop_ps = t + 1_000_000_000;
+
+        let fmt_events = |ev: &[(u64, f64)]| -> String {
+            ev.iter()
+                .map(|(at, v)| {
+                    format!(r#"{{ "t_ps": {at}, "level": {{ "value": {v}, "unit": "V" }} }}"#)
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let vcc_source = match vcc_step_ms {
+            None => format!(r#"{{ "value": {vcc_v}, "unit": "V" }}"#),
+            Some(step_ms) => format!(
+                r#"{{ "kind": "steps", "initial": {{ "value": 0.0, "unit": "V" }}, "events": [{{ "t_ps": {}, "level": {{ "value": {vcc_v}, "unit": "V" }} }}] }}"#,
+                step_ms * 1_000_000_000
+            ),
+        };
+        let json = format!(
+            r#"{{
+              "version": 1,
+              "seed": 0,
+              "analysis": {{ "transient": {{ "stop_ps": {stop_ps}, "max_step_ps": 1000000000, "grid_ps": 1000000000 }} }},
+              "ground": "gnd",
+              "nets": ["gnd", "vcc", "scl", "sda", "sda_drv"],
+              "parts": [
+                {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "vcc", "n": "gnd" }}, "voltage": {vcc_source} }},
+                {{ "name": "vscl", "kind": "voltage_source", "pins": {{ "p": "scl", "n": "gnd" }},
+                  "voltage": {{ "kind": "steps", "initial": {{ "value": {high}, "unit": "V" }}, "events": [{}] }} }},
+                {{ "name": "vsda", "kind": "voltage_source", "pins": {{ "p": "sda_drv", "n": "gnd" }},
+                  "voltage": {{ "kind": "steps", "initial": {{ "value": {high}, "unit": "V" }}, "events": [{}] }} }},
+                {{ "name": "rsda", "kind": "resistor", "pins": {{ "a": "sda_drv", "b": "sda" }},
+                  "resistance": {{ "value": 4700.0, "unit": "ohm" }}, "ratings": {{ "power": null }} }},
+                {{ "name": "lcd", "kind": "hd44780_i2c",
+                  "pins": {{ "VCC": "vcc", "GND": "gnd", "SCL": "scl", "SDA": "sda" }},
+                  "address": 39,
+                  "low_drop": {{ "value": 0.0, "unit": "V" }},
+                  "low_resistance": {{ "value": 133.33333333333334, "unit": "ohm" }},
+                  "input_threshold": {{ "low": {{ "value": 0.3, "unit": "1" }}, "high": {{ "value": 0.7, "unit": "1" }} }} }}
+              ]
+            }}"#,
+            fmt_events(&scl_ev),
+            fmt_events(&sda_ev),
+        );
+        let parsed = netlist::parse(json.as_bytes()).unwrap();
+        simulate(&parsed).diagnostics().to_vec()
+    }
+
+    let has_init_wait = |diags: &[Diagnostic]| {
+        diags.iter().any(|d| {
+            matches!(
+                d,
+                Diagnostic::ChipProtocol {
+                    rule: ProtocolRule::InitWait,
+                    ..
+                }
+            )
+        })
+    };
+
+    // 5 V from t = 0: early5 (5 ms) warns; early15 (15 ms) is legal (> 15 ms at E fall).
+    let d_5v_5ms = run_i2c_write(5.0, None, 5);
+    assert!(has_init_wait(&d_5v_5ms), "{d_5v_5ms:?}");
+    let d_5v_15ms = run_i2c_write(5.0, None, 15);
+    assert!(!has_init_wait(&d_5v_15ms), "{d_5v_15ms:?}");
+
+    // 5 V stepping up at 5 ms: write at 15 ms (only 10 ms after 4.5 V) warns; at 20 ms is legal.
+    let d_step_15ms = run_i2c_write(5.0, Some(5), 15);
+    assert!(has_init_wait(&d_step_15ms), "{d_step_15ms:?}");
+    let d_step_20ms = run_i2c_write(5.0, Some(5), 20);
+    assert!(!has_init_wait(&d_step_20ms), "{d_step_20ms:?}");
+
+    // 3.3 V from t = 0: early15 (15 ms < 40 ms) warns; 40 ms is legal (> 40 ms at E fall).
+    let d_3v3_15ms = run_i2c_write(3.3, None, 15);
+    assert!(has_init_wait(&d_3v3_15ms), "{d_3v3_15ms:?}");
+    let d_3v3_40ms = run_i2c_write(3.3, None, 40);
+    assert!(!has_init_wait(&d_3v3_40ms), "{d_3v3_40ms:?}");
 }
 
 #[test]

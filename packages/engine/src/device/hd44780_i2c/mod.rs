@@ -42,6 +42,8 @@ const ADDRESS_MAX: u8 = 0x27;
 
 /// Hitachi ADE-207-272 Table 6, HD44780U operating voltage minimum, 2.7 V.
 const VCC_MIN_V: f64 = 2.7;
+/// Hitachi ADE-207-272 Fig. 23/24: 15 ms power-on reset wait threshold, 4.5 V.
+const VCC_FAST_V: f64 = 4.5;
 const BOUND_INSIDE_V: f64 = 1e-6;
 
 /// No external events; the LCD takes its commands over I2C.
@@ -68,10 +70,12 @@ pub(crate) fn chip(part: PartId, dev: &Hd44780I2c) -> Chip {
         rise: against(pin, dev.input_threshold.high.si.get()),
         fall: against(pin, dev.input_threshold.low.si.get()),
     };
-    let supply = Watch::comparator(Signal {
-        terms: vec![(Node::from(pins[VCC]), 1.0), (Node::from(pins[GND]), -1.0)],
-        offset: VCC_MIN_V - BOUND_INSIDE_V,
-    });
+    let supply = |volts: f64| {
+        Watch::comparator(Signal {
+            terms: vec![(Node::from(pins[VCC]), 1.0), (Node::from(pins[GND]), -1.0)],
+            offset: volts - BOUND_INSIDE_V,
+        })
+    };
     let mut signals = [
         (Hd44780I2c::PINS[SCL], model::WATCH_SCL),
         (Hd44780I2c::PINS[SDA], model::WATCH_SDA),
@@ -95,7 +99,12 @@ pub(crate) fn chip(part: PartId, dev: &Hd44780I2c) -> Chip {
             pull_down: None,
             leakage: None,
         }],
-        watches: vec![watch(SCL), watch(SDA), supply],
+        watches: vec![
+            watch(SCL),
+            watch(SDA),
+            supply(VCC_MIN_V),
+            supply(VCC_FAST_V),
+        ],
         signals: signals.to_vec(),
         samples: Vec::new(),
         usarts: &[],

@@ -6,7 +6,7 @@
   "part": "hd44780-1602-i2c",
   "version": "0.1.0",
   "title": "Character LCD panel, 16 x 2, HD44780 + PCF8574 I2C",
-  "summary": "A blue 16 x 2 character LCD (1602A class) with an HD44780U controller and PCF8574 I2C interface. Default I2C address is 0x27, selectable from 0x20 to 0x27 via `address`. Set `backlight_jumper` to \"off\" to simulate removing the backpack backlight jumper. Read visible text with `text`, backlight state with `backlight`, and the rendered 320 x 68 glass with `screen`. On a breadboard, use the module lcd1602-i2c.",
+  "summary": "A blue 16 x 2 character LCD (1602A class) with an HD44780U controller and PCF8574 I2C interface. Default I2C address is 0x27, selectable from 0x20 to 0x27 via `address`. Set `backlight_jumper` to \"off\" to simulate removing the backpack backlight jumper. Read visible text with `text` (custom CGRAM characters draw on the glass and read as `□`), backlight state with `backlight`, and the rendered 320 x 68 glass with `screen`. For the complete module with backpack, use lcd1602-i2c.",
   "tags": ["lcd", "1602", "16x2", "hd44780", "pcf8574", "display", "screen", "i2c"],
   "license": "MIT OR Apache-2.0",
   "docs": {

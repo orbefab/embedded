@@ -6,9 +6,11 @@
 //! `P3 = backlight`, and `P4..P7 = D4..D7`.
 //!
 //! The HD44780U follows Hitachi ADE-207-272:
-//! - Power-on reset (p. 23): 8-bit bus (`DL = 1`), 1-line (`N = 0`), 5×8 font (`F = 0`), display
-//!   off (`D = 0`, `C = 0`, `B = 0`), entry increment (`I/D = 1`, `S = 0`), DDRAM filled with
-//!   `0x20`, address counter 0, display shift 0, busy for 10 ms.
+//! - Power-on reset (p. 23, Figs. 23–24 pp. 45–46): 8-bit bus (`DL = 1`), 1-line (`N = 0`), 5×8
+//!   font (`F = 0`), display off (`D = 0`, `C = 0`, `B = 0`), entry increment (`I/D = 1`, `S = 0`),
+//!   DDRAM filled with `0x20`, address counter 0, display shift 0. Wait more than 15 ms after `VCC`
+//!   rises to 4.5 V, or more than 40 ms after `VCC` rises to 2.7 V, before the first Function Set;
+//!   writes arriving earlier warn `init_wait` and are dropped as busy.
 //! - 8-bit to 4-bit initialization (Figure 24, p. 46): Function Set with `DL = 1` (`0x30`) keeps
 //!   8-bit mode and resets nibble sync; Function Set with `DL = 0` (`0x20`) enters 4-bit mode.
 //! - Commands and data writes latch on `E`'s falling edge (`RW = 0`). Writes received while busy
@@ -35,10 +37,11 @@ pub const DDRAM_BYTES: usize = 80;
 pub const CGRAM_BYTES: usize = 64;
 pub const FRAME_BYTES: usize = DDRAM_BYTES + CGRAM_BYTES;
 
-/// Watch order: SCL, SDA, then the supply comparator.
+/// Watch order: SCL, SDA, 2.7 V operating supply comparator, and 4.5 V fast-init comparator.
 pub const WATCH_SCL: usize = 0;
 pub const WATCH_SDA: usize = 1;
 pub const WATCH_VDD: usize = 2;
+pub const WATCH_VDD_4V5: usize = 3;
 
 /// It drives no output of its own; the I2C engine drives `SDA`.
 pub const OUTPUTS: usize = 0;
@@ -49,8 +52,10 @@ pub const PIN_RW: u8 = 0x02;
 pub const PIN_E: u8 = 0x04;
 pub const PIN_BL: u8 = 0x08;
 
-/// HD44780U execution times at f_osc = 270 kHz (Hitachi ADE-207-272 p. 23, Table 6 p. 24).
-pub const POWER_ON_BUSY_PS: u64 = 10_000_000_000; // 10 ms internal reset
+/// HD44780U power-on reset waits (Hitachi ADE-207-272 Figs. 23–24, pp. 45–46) and instruction
+/// execution times at f_osc = 270 kHz (Table 6, p. 24).
+pub const POWER_ON_WAIT_4V5_PS: u64 = 15_000_000_000; // 15 ms after VCC rises to 4.5 V
+pub const POWER_ON_WAIT_2V7_PS: u64 = 40_000_000_000; // 40 ms after VCC rises to 2.7 V
 pub const CLEAR_BUSY_PS: u64 = 1_520_000_000; // 1.52 ms Clear Display / Return Home
 pub const EXEC_BUSY_PS: u64 = 37_000_000; // 37 us other instructions and RAM access
 
@@ -58,6 +63,7 @@ pub const EXEC_BUSY_PS: u64 = 37_000_000; // 37 us other instructions and RAM ac
 const BUS_WIDTH: &str = "bus_width";
 const FONT: &str = "font";
 const COMMAND: &str = "command";
+const INIT_WAIT: &str = "init_wait";
 
 /// Panel settings, in [`Hd44780I2c::settings`] order.
 pub const SETTINGS: [&str; 8] = [
@@ -100,6 +106,10 @@ pub struct Hd44780I2c {
     /// `0..80` is DDRAM (line 0 at `0..40`, line 1 at `40..80`), `80..144` is CGRAM.
     ram: [u8; FRAME_BYTES],
     powered: bool,
+    /// Whether `VCC` has reached 4.5 V during the current power cycle.
+    reached_4v5: bool,
+    /// Power-on reset wait completes at this time (15 ms after 4.5 V or 40 ms after 2.7 V).
+    init_ready_at: Time,
     /// Whether the backpack's backlight jumper is fitted.
     backlight_jumper: bool,
     /// PCF8574 8-bit port latch (`0xFF` on power-on).
@@ -175,11 +185,24 @@ impl Device for Hd44780I2c {
 
     fn input(&mut self, _cx: &mut Cx, at: Time, levels: Levels) {
         let powered = levels.high(WATCH_VDD);
+        let fast = powered && levels.high(WATCH_VDD_4V5);
         if powered != self.powered {
             *self = Hd44780I2c::reset_state(self.backlight_jumper, self.supply);
             self.powered = powered;
             if powered {
-                self.busy_until = Time::from_ps(at.as_ps().saturating_add(POWER_ON_BUSY_PS));
+                self.reached_4v5 = fast;
+                let wait = if fast {
+                    POWER_ON_WAIT_4V5_PS
+                } else {
+                    POWER_ON_WAIT_2V7_PS
+                };
+                self.init_ready_at = Time::from_ps(at.as_ps().saturating_add(wait));
+            }
+        } else if powered && fast && !self.reached_4v5 {
+            self.reached_4v5 = true;
+            let fast_ready = Time::from_ps(at.as_ps().saturating_add(POWER_ON_WAIT_4V5_PS));
+            if fast_ready < self.init_ready_at {
+                self.init_ready_at = fast_ready;
             }
         }
     }
@@ -268,6 +291,8 @@ impl Hd44780I2c {
         Hd44780I2c {
             ram,
             powered: false,
+            reached_4v5: false,
+            init_ready_at: Time::ZERO,
             backlight_jumper,
             port: 0xff,
             four_bit: false,
@@ -317,8 +342,12 @@ impl Hd44780I2c {
         }
     }
 
+    fn in_power_on_wait(&self, at: Time) -> bool {
+        at < self.init_ready_at
+    }
+
     fn is_busy(&self, at: Time) -> bool {
-        at < self.busy_until
+        self.in_power_on_wait(at) || at < self.busy_until
     }
 
     fn set_busy(&mut self, at: Time, duration_ps: u64) {
@@ -394,6 +423,11 @@ impl Hd44780I2c {
 
         // Write cycle cancels any unfinished read cycle.
         self.read_cycle = None;
+
+        if self.in_power_on_wait(at) {
+            cx.broke(INIT_WAIT, at);
+            return;
+        }
 
         if self.is_busy(at) {
             return;

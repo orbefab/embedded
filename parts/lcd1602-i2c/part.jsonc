@@ -1,13 +1,14 @@
-// The common blue 16x2 character LCD (1602A) with a PCF8574 I2C backpack.
-// Seated frame: z = 0 is the 4-pin header plastic's underside (GND, VCC, SDA, SCL on 2.54 mm).
-// The backpack PCB sits at z = 5.5 mm (top at z = 7.1 mm) with two 4.7 kohm I2C pull-ups and a
-// 10 kohm contrast trimmer potentiometer, and the 1602A panel mounts above it at z = 12.5 mm.
+// The common blue 16x2 character LCD (1602A) with an FC-113 style PCF8574 I2C backpack.
+// Bench frame: z = 0 is the underside of the backpack components so the module lies flat with
+// the glass facing +Z. The FC-113 backpack PCB sits at z = 5.0 mm (top at z = 6.6 mm) under the
+// 1602A panel (at z = 10.5 mm), with its 4-pin right-angle header (GND, VCC, SDA, SCL on 2.54 mm)
+// pointing sideways along -X parallel to the PCB for female jumper wires.
 {
   "format": 6,
   "part": "lcd1602-i2c",
   "version": "0.1.0",
   "title": "LCD display module, 16 x 2 blue, HD44780 + PCF8574 I2C",
-  "summary": "A blue 16 x 2 character LCD with a PCF8574 I2C backpack and a 4-pin header (GND, VCC, SDA, SCL on 2.54 mm). Wire VCC directly to 5 V and GND to ground; the backpack includes 4.7 kohm pull-ups on SDA and SCL to VCC, a 10 kohm contrast trimmer, a backlight jumper (`backlight_jumper`, default \"on\"), and address jumpers (`address`, default \"0x27\", selectable \"0x20\" to \"0x27\"). Draws about 1.5 mA for logic plus 20 mA with the backlight on. Read the two visible 16-character lines with `@<lcd>.text` (blank when the display or backlight is off, matching the blue transmissive glass) and the backlight with `@<lcd>.backlight`. Standard LiquidCrystal_I2C sketches drive it.",
+  "summary": "A blue 16 x 2 character LCD with an FC-113 style PCF8574 I2C backpack and a right-angle 4-pin header (GND, VCC, SDA, SCL on 2.54 mm, parallel to the board for jumper wires). Place it beside the breadboard with `at` and wire jumpers directly to its pins. Wire VCC to 5 V and GND to ground; the backpack includes 4.7 kohm pull-ups on SDA and SCL to VCC, a 10 kohm contrast trimmer, a backlight jumper (`backlight_jumper`, default \"on\"), and address jumpers (`address`, default \"0x27\", selectable \"0x20\" to \"0x27\"). Draws about 1.5 mA for logic plus 20 mA with the backlight on. Read the two visible 16-character lines with `@<lcd>.text` (blank when the display or backlight is off, matching the blue transmissive glass; custom CGRAM characters draw on the glass and read as `□`) and the backlight with `@<lcd>.backlight`. Standard LiquidCrystal_I2C sketches drive it.",
   "tags": ["lcd", "1602", "16x2", "hd44780", "pcf8574", "display", "screen", "i2c", "backpack"],
   "license": "MIT OR Apache-2.0",
   "docs": {
@@ -77,11 +78,11 @@
     ["contrast.wiper", "display.V0", { "kind": "trace" }],
   ],
   "layout": {
-    "j": { "at": [0, -16.5, 0] },
-    "display": { "at": [0, 0, 12.5] },
-    "r1": { "at": [-10.0, -11.0, 7.1] },
-    "r2": { "at": [-10.0, -9.0, 7.1] },
-    "contrast": { "at": [13.5, -8.5, 7.1] },
+    "j": { "at": [-34.5, 6.5, 3.73], "rotate": [-90, 0, -90] },
+    "display": { "at": [0, 0, 10.5] },
+    "r1": { "at": [-18.5, 1.0, 5.0], "rotate": [180, 0, 0] },
+    "r2": { "at": [-18.5, 3.0, 5.0], "rotate": [180, 0, 0] },
+    "contrast": { "at": [-25.5, 7.5, 5.0], "rotate": [180, 0, 0] },
   },
   "pins": { "GND": "j.1", "VCC": "j.2", "SDA": "j.3", "SCL": "j.4" },
   "readings": {
