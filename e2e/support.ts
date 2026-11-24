@@ -309,11 +309,8 @@ export async function showSerial(page: Page, block: RepoBlock): Promise<void> {
   const start = await simulatedSeconds(page);
   await waitSimulatedPast(page, Math.max(0.05, start));
   const strip = page.locator(SERIAL);
-  await expect(strip).toContainText("Temperature =", { timeout: 30_000 });
-  await expect(strip).toContainText("Pressure =", { timeout: 30_000 });
-  const text = await strip.innerText();
-  expect(text, `${block.id} temperature`).toMatch(/Temperature = \d+\.\d+/);
-  expect(text, `${block.id} pressure`).toMatch(/Pressure = \d+\.\d+ Pa/);
+  await expect(strip, `${block.id} temperature`).toContainText(/Temperature = \d+\.\d+/, { timeout: 30_000 });
+  await expect(strip, `${block.id} pressure`).toContainText(/Pressure = \d+\.\d+ Pa/, { timeout: 30_000 });
   expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(0.05);
 }
 
