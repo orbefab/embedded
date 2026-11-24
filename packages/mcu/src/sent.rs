@@ -6,6 +6,8 @@ use orbe_model::{Duty, Pulses, Spi, Time};
 pub struct Sent {
     pub start: Time,
     pub end: Time,
+    /// The peripheral that sent the record, such as `RMT`, `SPI2` or `LEDC`.
+    pub peripheral: &'static str,
     /// The chip's pin that names the link.
     pub pin: &'static str,
     pub kind: SentKind,

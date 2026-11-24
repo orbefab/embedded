@@ -115,6 +115,7 @@ fn record(start: u64, idle: bool, pulses: &[(bool, u64)]) -> LinkRow {
             seq: 0,
             start: Time::from_ps(start),
             end: Time::from_ps(end),
+            peripheral: "RMT",
             pin: "DIN",
             kind: RecordKind::Pulses {
                 pulses: Pulses {

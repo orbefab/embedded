@@ -31,6 +31,8 @@ pub struct Record {
     pub seq: u64,
     pub start: Time,
     pub end: Time,
+    /// The peripheral that sent the record, such as `RMT`, `SPI2` or `LEDC`.
+    pub peripheral: &'static str,
     /// The sender's pin that names the link.
     pub pin: &'static str,
     pub kind: RecordKind,
@@ -40,9 +42,19 @@ pub struct Record {
 /// record pins sit on those nets takes it.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RecordKind {
-    Spi { spi: Spi, nets: SpiNets },
-    Pulses { pulses: Pulses, net: NetId },
-    Duty { duty: Duty, net: NetId },
+    Spi {
+        spi: Spi,
+        nets: SpiNets,
+        pins: SpiPinNames,
+    },
+    Pulses {
+        pulses: Pulses,
+        net: NetId,
+    },
+    Duty {
+        duty: Duty,
+        net: NetId,
+    },
 }
 
 /// The nets of an SPI host's CS, SCLK and data pins. A receiver takes the transaction when its
@@ -54,6 +66,15 @@ pub struct SpiNets {
     pub sclk: Option<NetId>,
     /// D0 to D3. `None` for a lane the host has no pin for.
     pub data: [Option<NetId>; 4],
+}
+
+/// The sender pin names corresponding to [`SpiNets`], for diagnostics naming an SPI pin.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SpiPinNames {
+    pub cs: Option<&'static str>,
+    pub sclk: Option<&'static str>,
+    /// D0 to D3.
+    pub data: [Option<&'static str>; 4],
 }
 
 /// Why [`Link::csv`] cannot write a row.
@@ -222,6 +243,7 @@ mod tests {
             seq,
             start: Time::from_ps(end - 100),
             end: Time::from_ps(end),
+            peripheral: "SPI2",
             pin: "CS",
             kind: RecordKind::Spi {
                 spi: Spi {
@@ -248,6 +270,7 @@ mod tests {
                     sclk: Some(NetId::GROUND),
                     data: [Some(NetId::GROUND), None, None, None],
                 },
+                pins: SpiPinNames::default(),
             },
         }
     }
@@ -288,6 +311,7 @@ mod tests {
                     seq: 0,
                     start: Time::from_ps(600),
                     end: Time::from_ps(900),
+                    peripheral: "RMT",
                     pin: "GPIO0",
                     kind: RecordKind::Pulses {
                         pulses: Pulses {
@@ -304,6 +328,7 @@ mod tests {
                     seq: 1,
                     start: Time::from_ps(1000),
                     end: Time::from_ps(1000),
+                    peripheral: "LEDC",
                     pin: "GPIO21",
                     kind: RecordKind::Duty {
                         duty: Duty {
@@ -355,6 +380,7 @@ mod tests {
                     seq: 0,
                     start: Time::from_ps(0),
                     end: Time::from_ps(1),
+                    peripheral: "LEDC",
                     pin: "GPIO21",
                     kind: RecordKind::Duty {
                         duty: Duty {

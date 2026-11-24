@@ -211,7 +211,7 @@ const IO_MUX: u32 = 0x6000_9000;
 const SPI2: u32 = 0x6002_4000;
 
 /// Xtensa code after literal words, each op as `Program` in `orbe-espressif`'s tests encodes it.
-struct Program {
+pub(super) struct Program {
     literals: Vec<u32>,
     code: Vec<u8>,
 }
@@ -265,7 +265,7 @@ impl Program {
     }
 
     /// An executable that loads the literals and the code at `IRAM`, and starts at the code.
-    fn elf(&self) -> Vec<u8> {
+    pub(super) fn elf(&self) -> Vec<u8> {
         let mut image: Vec<u8> = self.literals.iter().flat_map(|w| w.to_le_bytes()).collect();
         let entry = IRAM + image.len() as u32;
         image.extend(&self.code);
@@ -280,7 +280,7 @@ impl Program {
 /// Routes CS to GPIO10, MOSI to GPIO11 and SCLK to GPIO12, reads MISO on GPIO13, and runs one
 /// SPI2 transfer: an 8-bit command 0x9F, then a 3-byte read. Raises GPIO21 when `SPI_W0` then
 /// holds `ID`.
-fn jedec_id_program() -> Program {
+pub(super) fn jedec_id_program() -> Program {
     let mut program = Program {
         literals: vec![
             IO_MUX,
@@ -411,6 +411,7 @@ fn record_target(netlist: &Netlist) -> active::Chip {
             spi: Some(Target {
                 cs: net(netlist, "cs"),
                 sclk: net(netlist, "sclk"),
+                pins: None,
             }),
             ..Takes::default()
         },

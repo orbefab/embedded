@@ -107,7 +107,16 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
     chip.use_efuse(mcu.efuse);
     let console = mcu.console.iter().map(|send| (send.at, send.to.as_slice()));
     let bridge = Bridge::new(chip, gpios, console);
-    super::chip(part, outputs, watches, signals, samples, bridge)
+    let output_pins = mcu.names[2..].to_vec();
+    super::chip(
+        part,
+        outputs,
+        output_pins,
+        watches,
+        signals,
+        samples,
+        bridge,
+    )
 }
 
 /// An ESP32-S3 running `firmware`: a bare-metal program whose core starts at its entry at

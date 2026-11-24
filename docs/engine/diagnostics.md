@@ -431,6 +431,14 @@ The message is `{part} dropped an SPI transaction from #{sender} whose data lane
 
 `data` holds `sender`, the part name of the chip that sent it. A transaction goes to every chip whose `CS` and `SCLK` are on the sender's. A lane it uses, up to the most lanes any of its phases or its data take, must be on the receiver's pin of the same number, `D0` to `D3`. Otherwise the receiver drops it, and the run reports the first such drop once per part.
 
+## chip.link_unsupported
+
+Severity `error`. Refs are the sender's pin, then the pin on the same net that does not take that record kind. `t_ps` is the end of the first such record. It ends the run.
+
+The message depends on `kind`. For `spi`, it is `{pin} sent an SPI record from {peripheral} at {t_ps} ps, but its net reaches {other}, which does not take SPI records there; the model sends {peripheral} output as records rather than pin edges and runs hardware SPI only into parts that take SPI directly, so use shiftOut or bit-banged SPI instead`. For `pulses`, it is `{pin} sent a pulse record from {peripheral} at {t_ps} ps, but its net reaches {other}, which does not take pulse records there; the model sends {peripheral} output as records rather than pin edges, so the data line must be wired straight to the pixel's data input`.
+
+`data` holds `kind` (`"spi"` or `"pulses"`) and `peripheral`, the peripheral that sent the record. A `Pulses` or `Spi` record carries no pin edges, so an active net may reach only the sender's pin, parts that take that record kind on that pin, and pull-up or pull-down resistors to ground or a fixed supply rail. Any other element on the net, such as a series resistor, a transistor, a level shifter, another chip input that reads pin edges, or another GPIO pin, stops the run at the first record. `Duty` records also drive pin edges and do not raise this diagnostic.
+
 ## chip.floating_input
 
 Severity `warning`. Refs are the chip's pin, then `#net.<name>`, the pin's net. `t_ps` is the first accepted step that found it.
