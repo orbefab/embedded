@@ -101,6 +101,9 @@ pub(crate) struct Gpio {
     /// Whether a pad with a net may pull down. A part that names no pull-down resistor clears
     /// it, and a store that sets `FUN_WPD` on such a pad ends the run.
     pull_down: bool,
+    /// Whether `USB_SERIAL_JTAG_USB_PAD_ENABLE` claims GPIO19 (D-) and GPIO20 (D+) for the USB
+    /// PHY, disconnecting GPIO matrix outputs on those two pads.
+    usb_pad_enable: bool,
 }
 
 /// `GPIO_PINn`'s `INT_TYPE`.
@@ -171,6 +174,7 @@ impl Gpio {
             status: 0,
             levels: 0,
             pull_down: true,
+            usb_pad_enable: true,
         };
         gpio.levels = gpio.sample();
         gpio
@@ -180,6 +184,14 @@ impl Gpio {
     /// ends the run. A pad with no net keeps the bit, since it is never stamped.
     pub(crate) fn omit_pull_down(&mut self) {
         self.pull_down = false;
+    }
+
+    /// Whether `USB_SERIAL_JTAG_USB_PAD_ENABLE` claims GPIO19 and GPIO20 for the USB PHY.
+    pub(crate) fn set_usb_pad_enable(&mut self, enable: bool) {
+        if self.usb_pad_enable != enable {
+            self.usb_pad_enable = enable;
+            self.sense();
+        }
     }
 
     /// A register at `offset` in the GPIO block, or `None` for one the model does not keep.
@@ -410,6 +422,9 @@ impl Gpio {
 
     /// The output enable and the level the pad drives when enabled.
     fn output(&self, pad: usize) -> (bool, bool) {
+        if self.usb_pad_enable && matches!(pad, 19 | 20) {
+            return (false, false);
+        }
         if let Some(signal) = self.direct_tx(pad) {
             return match self.signals[usize::from(signal)] {
                 Some(level) => (true, level),

@@ -951,7 +951,21 @@ impl Soc {
                     })
             }
             SYSTIMER => self.systimer.write(now, offset, value),
-            USB_SERIAL_JTAG => self.usb.write(now, offset, value),
+            USB_SERIAL_JTAG => match self.usb.write(now, offset, value) {
+                Ok(done) => {
+                    if offset == usb::CONF0 {
+                        self.gpio.set_usb_pad_enable(self.usb.pad_enabled());
+                    }
+                    done
+                }
+                Err(setting) => {
+                    self.ending = Some(Ending::Refused(Refused::Register(
+                        "USB_SERIAL_JTAG",
+                        setting,
+                    )));
+                    true
+                }
+            },
             ANALOG => self.analog.write(offset, value),
             GDMA => self.gdma.write(offset, value).unwrap_or_else(|setting| {
                 self.ending = Some(Ending::Refused(Refused::Register("GDMA", setting)));
@@ -1653,7 +1667,8 @@ impl Soc {
         let base = word & !(BLOCK - 1);
         let pads = matches!(base, GPIO | IO_MUX | SPI2 | RMT)
             || uart::Uarts::index(base).is_some()
-            || (base == SYSTEM && gates::OFFSETS.contains(&(word - SYSTEM)));
+            || (base == SYSTEM && gates::OFFSETS.contains(&(word - SYSTEM)))
+            || word == USB_SERIAL_JTAG + usb::CONF0;
         if !pads {
             // A store to USB Serial/JTAG moves no watchdog, LEDC or I2C event.
             let usb = base == USB_SERIAL_JTAG;
@@ -1709,6 +1724,7 @@ impl Soc {
         let compared = !uart || cfg!(debug_assertions);
         let rmt_due = compared.then(|| self.rmt.next_event());
         let uart_due = self.uart.next_event(now);
+        let usb_due = (base == USB_SERIAL_JTAG).then(|| self.usb.next_event(now));
         let before = self.image();
         let carried = compared.then(|| self.ledc_pads());
         self.write_kept(now, word, value);
@@ -1729,6 +1745,11 @@ impl Soc {
             self.rearmed |= after != due;
         }
         if self.uart.next_event(now) != uart_due {
+            self.rearmed = true;
+        }
+        if let Some(due) = usb_due
+            && self.usb.next_event(now) != due
+        {
             self.rearmed = true;
         }
         if uart {

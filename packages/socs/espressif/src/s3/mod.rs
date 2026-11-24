@@ -1557,10 +1557,11 @@ mod tests {
         assert_eq!(chip.run_until(c(1000)), None, "timer 1's interrupt");
     }
 
-    /// `JTAG_IN_FLUSH` and SOF are not among the USB Serial/JTAG enables the model runs.
+    /// `JTAG_IN_FLUSH`, SOF, error bits and zero-payload bits are not among the USB Serial/JTAG
+    /// enables the model runs.
     #[test]
     fn enabling_sof_or_jtag_in_flush_ends_the_run() {
-        for bit in [1 << 0, 1 << 1] {
+        for bit in [1 << 0, 1 << 1, 1 << 4, 1 << 10] {
             let program = store_after_two_loads(USB_SERIAL_JTAG + 0x10, bit, 0);
             assert_eq!(
                 program.chip().run_until(c(1000)),
@@ -1576,12 +1577,120 @@ mod tests {
         }
     }
 
-    /// `SERIAL_OUT_RECV_PKT`, `SERIAL_IN_EMPTY` and `USB_BUS_RESET` may be enabled together.
+    /// `SERIAL_OUT_RECV_PKT`, `SERIAL_IN_EMPTY`, `IN_TOKEN_REC_IN_EP1` and `USB_BUS_RESET` may
+    /// be enabled together.
     #[test]
-    fn serial_out_recv_pkt_serial_in_empty_and_bus_reset_may_be_enabled() {
-        let value = (1 << 2) | (1 << 3) | (1 << 9);
+    fn serial_out_recv_pkt_serial_in_empty_token_and_bus_reset_may_be_enabled() {
+        let value = (1 << 2) | (1 << 3) | (1 << 8) | (1 << 9);
         let mut chip = store_after_two_loads(USB_SERIAL_JTAG + 0x10, value, 0).chip();
         assert_eq!(chip.run_until(c(1000)), None);
+    }
+
+    /// `USB_SERIAL_JTAG_CONF0_REG` keeps `HWCDC::begin()` and GPIO19/20 pull-up setup with no
+    /// unmodeled-register warning, and refuses unmodeled fields.
+    #[test]
+    fn usb_conf0_keeps_allowed_writes_and_refuses_unmodeled_fields() {
+        let conf0 = USB_SERIAL_JTAG + 0x18;
+        let program = stores(&[
+            (conf0, 0x4200),
+            (conf0, 0x0200),
+            (conf0, 0x0300),
+            (conf0, 0x0100),
+            (conf0, 0x4200),
+        ]);
+        let mut chip = program.chip();
+        assert_eq!(chip.run_until(c(1000)), None);
+        assert_eq!(chip.unmodeled().count(), 0);
+
+        for (bit, setting) in [
+            (1 << 0, "phy_sel"),
+            (1 << 1, "exchg_pins"),
+            (1 << 2, "exchg_pins"),
+            (1 << 7, "vref"),
+            (1 << 10, "pad_pull"),
+            (1 << 11, "pad_pull"),
+            (1 << 12, "pad_pull"),
+            (1 << 13, "pullup_value"),
+            (1 << 15, "phy_tx_edge"),
+            (1 << 16, "jtag_bridge"),
+        ] {
+            let program = store_after_two_loads(conf0, 0x4200 | bit, 0);
+            assert_eq!(
+                program.chip().run_until(c(1000)),
+                Some(Halt::Fault(
+                    c(2),
+                    Fault::Refused(
+                        Refused::Register("USB_SERIAL_JTAG", setting),
+                        pro(program.entry() + 6)
+                    )
+                )),
+                "{bit:#x}"
+            );
+        }
+    }
+
+    /// While `USB_PAD_ENABLE` is set, GPIO19 and GPIO20 do not drive from the GPIO matrix;
+    /// clearing it lets them drive at that store's cycle, and setting it again releases them.
+    #[test]
+    fn usb_pad_enable_gates_gpio19_and_gpio20_output() {
+        let mask = (1u32 << 19) | (1u32 << 20);
+        let conf0 = USB_SERIAL_JTAG + 0x18;
+        let program = stores(&[
+            (GPIO + 0x08, mask),
+            (GPIO + 0x24, mask),
+            (conf0, 0x0200),
+            (conf0, 0x4200),
+        ]);
+        let mut chip = program.chip_on(&[19, 20]);
+        assert_eq!(chip.drive(19), PadDrive::Off);
+        assert_eq!(chip.drive(20), PadDrive::Off);
+        // Clearing USB_PAD_ENABLE moves both pads high.
+        assert_eq!(chip.run_until(c(1000)), Some(image_at(c(8))));
+        assert_eq!(chip.drive(19), PadDrive::High);
+        assert_eq!(chip.drive(20), PadDrive::High);
+        // Setting USB_PAD_ENABLE returns both pads to Off.
+        assert_eq!(chip.run_until(c(1000)), Some(image_at(c(11))));
+        assert_eq!(chip.drive(19), PadDrive::Off);
+        assert_eq!(chip.drive(20), PadDrive::Off);
+        assert_eq!(chip.run_until(c(1000)), None);
+    }
+
+    /// Enabling `IN_TOKEN_REC_IN_EP1` wakes a core in `WAITI` at the 1 ms USB frame boundary
+    /// (480,000 ticks = 40,000 cycles at 40 MHz).
+    #[test]
+    fn in_token_rec_in_ep1_wakes_waiti_at_the_1_ms_frame() {
+        let mut program = Program::new(&[
+            0x600c_2000 + 4 * 96, // INTERRUPT_CORE0_USB_INTR_MAP_REG
+            USB_SERIAL_JTAG + 0x10,
+            USB_SERIAL_JTAG + 0x14,
+            1 << 8,
+            0xfff,
+        ]);
+        program
+            .l32r(2, 0)
+            .movi(3, 1)
+            .rri8(6, 3, 2, 0) // map source 96 -> CPU int 1 (level 1)
+            .l32r(2, 2)
+            .l32r(3, 4)
+            .rri8(6, 3, 2, 0) // INT_CLR = 0xfff
+            .l32r(2, 1)
+            .l32r(3, 3)
+            .rri8(6, 3, 2, 0) // INT_ENA = TOKEN_IN_EP1
+            .movi(7, 2)
+            .wsr(7, INTENABLE)
+            .movi(7, 0)
+            .wsr(7, PS)
+            .raw(&WAITI)
+            .raw(&LOOP);
+        let mut chip = program.chip();
+        assert_eq!(chip.run_until(c(39_999)), None);
+        assert_eq!(
+            chip.run_until(c(50_000)),
+            Some(Halt::Fault(
+                c(40_004),
+                Fault::UnmappedFetch(pro(0x4000_0300))
+            ))
+        );
     }
 
     /// A store to a block the model does not simulate ends the run at the store, naming the

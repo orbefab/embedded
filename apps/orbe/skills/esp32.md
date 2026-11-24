@@ -71,7 +71,7 @@ expect @led1 off
 ## The chip
 
 - `setup()` starts about 9 ms after t = 0. `millis()`, `delay()` and the timers use simulated time.
-- `Serial` reaches `serial`, on UART0 by default or over USB with `CDCOnBoot=cdc` in the FQBN.
+- `Serial` reaches `serial`, on UART0 by default or over USB Serial/JTAG with `CDCOnBoot=cdc` in the FQBN (arduino-esp32 3.3.x and 4.0.x). USB Serial/JTAG claims GPIO19 and GPIO20 until `pinMode` or `gpio_config` clears `USB_PAD_ENABLE`, which also detaches the USB console.
 - The model runs the pins, the one-shot ADC, LEDC, RMT channel 0, SPI2 and I2C0 as masters, UART0 to UART2, the timers and both cores.
 - `ledcAttach`, `ledcDetach`, `ledcWrite`, `ledcFade`, `ledcFadeWithInterrupt`, `analogWrite`, `tone` and `noTone` drive the pin's PWM edges. `analogWrite` is 1 kHz at 8 bits, and `ledcAttach(pin, 50, 14)` is a 50 Hz servo signal. `step --until @board.GPIO18 high` lands on an edge. Each edge costs a circuit solve, so a kHz PWM runs several times slower than real time.
 - `SPI` runs on SPI2. `SPI.transfer` returns what an SPI part answers, and `0xFF` when none does.
