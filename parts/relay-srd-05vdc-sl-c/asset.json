@@ -2,22 +2,22 @@
   "part": "relay-srd-05vdc-sl-c",
   "source": {
     "script": "model.py",
-    "sha256": "b9a9ea9349e8fdb0b9a64dcdd3177884ccba16f4b4a44fd367f0453c255370f3",
-    "bytes": 1922
+    "sha256": "a4efa2daf8dc99e619aa4fd043fdd5e6df4a3d29625c262c8c573b837282ef98",
+    "bytes": 1956
   },
   "files": {
     "relay-srd-05vdc-sl-c.glb": {
-      "sha256": "1f55afd63615c23eec33659ef3119bddcd76408457027b4dea0e1e0828ec4b1c",
-      "bytes": 3116
+      "sha256": "72253a3de2df75ca0795b2cc842783ea059b69984e00cb05643c37fdb56cb194",
+      "bytes": 3136
     },
     "relay-srd-05vdc-sl-c.anchors.json": {
-      "sha256": "b523238725449836bf808da1a575f5a9ef54145d2d7df3feff121f9c9a9bdae6",
+      "sha256": "ac7b0ff799e51657d8cc89368126db128bd77423f7c950ee72d2c8d6e4134b32",
       "bytes": 623
     }
   },
   "box": {
     "min": [-9.5, -7.75, -3],
-    "max": [9.5, 7.75, 15.5]
+    "max": [9.5, 7.75, 15.3]
   },
   "kept_nodes": ["pin-1", "pin-2", "pin-3", "pin-4", "pin-5"],
   "draw_calls": 6,

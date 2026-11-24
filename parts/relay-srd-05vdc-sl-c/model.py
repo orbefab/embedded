@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Orbefab. SPDX-License-Identifier: MIT OR Apache-2.0
-"""Songle SRD-05VDC-SL-C. The body is the sheet's outline, drawn at 19 x 15.5 x 15.5 mm.
+"""Songle SRD-05VDC-SL-C. The body is the sheet's outline, drawn at 19 x 15.5 x 15.3 mm.
 
 Part frame: the seating face is z = 0, the body standing on it, length along X.
 The drilling drawing, read from above: COM (lead 1) stands alone at -X. The
@@ -20,7 +20,7 @@ from cad.geom import box
 
 BODY_L = 19.0
 BODY_W = 15.5
-BODY_H = 15.5
+BODY_H = 15.3  # sheet maximum
 PIN = 0.6
 PIN_BELOW = 3.0
 
@@ -28,8 +28,8 @@ _BLUE = plastic("#24558C")
 _TIN = tin()
 UP = (0.0, 0.0, 1.0)
 
-# COM is 1 mm inside the -X end of the 19 mm body. The sheet's rows then follow.
-_COM_X = -8.5
+# COM is 1.4 mm inside the -X end of the 19 mm body. The sheet's rows then follow.
+_COM_X = -BODY_L / 2.0 + 1.4
 _COIL_X = _COM_X + 2.0
 _CONTACT_X = _COIL_X + 12.2
 _PINS = (

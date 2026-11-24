@@ -219,3 +219,185 @@ fn the_module_input_draws_the_driver_and_an_unpowered_coil_stays_open() {
     let load = at(&results, "#rno.i", 40_000_000_000);
     assert!(load > 0.004, "the contact did not switch the load: {load}");
 }
+
+/// COM is 1.4 mm inside the 19 mm body, and the body is 15.3 mm tall. The rows stay
+/// 2 mm and then 12.2 mm apart, at ±6 mm.
+#[test]
+fn the_srd_outline_matches_the_drilling_drawing() {
+    let dir = common::repo().join("parts/relay-srd-05vdc-sl-c");
+    let anchors: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join("relay-srd-05vdc-sl-c.anchors.json")).unwrap(),
+    )
+    .unwrap();
+    let asset: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(dir.join("asset.json")).unwrap()).unwrap();
+    let at = |lead: u64| -> [f64; 3] {
+        let pin = anchors["anchors"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|pin| pin["lead"] == lead)
+            .unwrap();
+        let nums = pin["at"].as_array().unwrap();
+        [0, 1, 2].map(|i| nums[i].as_f64().unwrap())
+    };
+    let com = at(1);
+    let coil = at(2);
+    let no = at(3);
+    let nc = at(4);
+    let coil_b = at(5);
+    let edge = asset["box"]["min"][0].as_f64().unwrap();
+    assert!((edge - (-9.5)).abs() < 1e-6, "body edge {edge}");
+    assert!(
+        (com[0] - edge - 1.4).abs() < 1e-6,
+        "COM inset {}",
+        com[0] - edge
+    );
+    assert!((asset["box"]["max"][2].as_f64().unwrap() - 15.3).abs() < 1e-6);
+    assert!((coil[0] - com[0] - 2.0).abs() < 1e-6 && (coil[1] - 6.0).abs() < 1e-6);
+    assert!((coil_b[0] - coil[0]).abs() < 1e-6 && (coil_b[1] + 6.0).abs() < 1e-6);
+    assert!((no[0] - coil[0] - 12.2).abs() < 1e-6 && (no[1] - 6.0).abs() < 1e-6);
+    assert!((nc[0] - no[0]).abs() < 1e-6 && (nc[1] + 6.0).abs() < 1e-6);
+    for pin in [com, coil, no, nc, coil_b] {
+        assert!(pin[2].abs() < 1e-6);
+    }
+}
+
+/// The screw terminal, the relay, the diode and the small parts each keep their own space.
+/// The diode lies on the board. The relay and the header are the leads through it.
+#[test]
+fn the_module_bodies_do_not_share_space() {
+    let repo = common::repo();
+    let text = fs::read_to_string(repo.join("parts/relay-module-1ch/part.jsonc")).unwrap();
+    let text: String = text
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let part: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let mut boxes: Vec<(&str, Aabb)> = vec![
+        (
+            "terminal",
+            Aabb {
+                min: [-1.0, 7.5, 4.14],
+                max: [15.0, 15.5, 12.14],
+            },
+        ),
+        (
+            "pcb",
+            Aabb {
+                min: [-17.0, -11.5, 2.54],
+                max: [17.0, 15.5, 4.14],
+            },
+        ),
+    ];
+    let layout = part["layout"].as_object().unwrap();
+    for (name, place) in layout {
+        let kind = part["parts"][name]["type"].as_str().unwrap();
+        let asset: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(repo.join("parts").join(kind).join("asset.json")).unwrap(),
+        )
+        .unwrap();
+        let num = |side: &str, i: usize| asset["box"][side][i].as_f64().unwrap();
+        let local = Aabb {
+            min: [num("min", 0), num("min", 1), num("min", 2)],
+            max: [num("max", 0), num("max", 1), num("max", 2)],
+        };
+        let at = [0, 1, 2].map(|i| place["at"][i].as_f64().unwrap());
+        let rotate = match place.get("rotate") {
+            Some(rotate) => [0, 1, 2].map(|i| rotate[i].as_f64().unwrap()),
+            None => [0.0; 3],
+        };
+        boxes.push((name.as_str(), world_box(local, at, rotate)));
+    }
+    let owned: Vec<(String, Aabb)> = boxes
+        .iter()
+        .map(|(name, aabb)| ((*name).to_string(), *aabb))
+        .collect();
+    for (i, (a_name, a)) in owned.iter().enumerate() {
+        for (b_name, b) in owned.iter().skip(i + 1) {
+            let through = matches!(
+                (a_name.as_str(), b_name.as_str()),
+                ("pcb", "k" | "hdr") | ("k" | "hdr", "pcb")
+            );
+            if through {
+                continue;
+            }
+            let hit = overlap(a, b);
+            assert!(
+                hit.is_none(),
+                "{a_name} overlaps {b_name} by {hit:?}\n{a_name} {a:?}\n{b_name} {b:?}"
+            );
+        }
+    }
+    let diode = owned.iter().find(|(name, _)| name == "d").unwrap().1;
+    assert!(
+        diode.min[2] >= 4.14 - 1e-3,
+        "the diode enters the board: {diode:?}"
+    );
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Aabb {
+    min: [f64; 3],
+    max: [f64; 3],
+}
+
+fn world_box(local: Aabb, at: [f64; 3], rotate: [f64; 3]) -> Aabb {
+    let m = rotation(rotate);
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    for x in [local.min[0], local.max[0]] {
+        for y in [local.min[1], local.max[1]] {
+            for z in [local.min[2], local.max[2]] {
+                let p = turn(&m, [x, y, z]);
+                for i in 0..3 {
+                    let w = p[i] + at[i];
+                    min[i] = min[i].min(w);
+                    max[i] = max[i].max(w);
+                }
+            }
+        }
+    }
+    Aabb { min, max }
+}
+
+fn overlap(a: &Aabb, b: &Aabb) -> Option<[f64; 3]> {
+    let mut depth = [0.0; 3];
+    for (i, slot) in depth.iter_mut().enumerate() {
+        let lo = a.min[i].max(b.min[i]);
+        let hi = a.max[i].min(b.max[i]);
+        if hi - lo <= 1e-4 {
+            return None;
+        }
+        *slot = hi - lo;
+    }
+    Some(depth)
+}
+
+/// Quarter turns only, so the matrix does not depend on the host math library.
+fn sincos(deg: f64) -> (f64, f64) {
+    match deg as i32 {
+        0 => (0.0, 1.0),
+        90 => (1.0, 0.0),
+        -90 | 270 => (-1.0, 0.0),
+        180 | -180 => (0.0, -1.0),
+        _ => panic!("the module test turns on a quarter degree, got {deg}"),
+    }
+}
+
+/// Fixed X, then Y, then Z, matching the scene's placement.
+fn rotation([rx, ry, rz]: [f64; 3]) -> [[f64; 3]; 3] {
+    let (sx, cx) = sincos(rx);
+    let (sy, cy) = sincos(ry);
+    let (sz, cz) = sincos(rz);
+    [
+        [cz * cy, cz * sy * sx - sz * cx, cz * sy * cx + sz * sx],
+        [sz * cy, sz * sy * sx + cz * cx, sz * sy * cx - cz * sx],
+        [-sy, cy * sx, cy * cx],
+    ]
+}
+
+fn turn(m: &[[f64; 3]; 3], v: [f64; 3]) -> [f64; 3] {
+    [0, 1, 2].map(|row| m[row][0] * v[0] + m[row][1] * v[1] + m[row][2] * v[2])
+}

@@ -4,7 +4,8 @@
 Part frame: the header plastic's underside is z = 0, so the board's underside
 is at z = 2.54 and its top at z = 4.14. The outline is 34 x 27 mm, the size
 quoted for the KY-019. The header, the relay, the transistor, the resistors,
-the diode and the LED are their own models. The screw terminal is this body.
+the diode and the LED are their own models. The screw terminal is this body,
+on the edge opposite the header and over the relay.
 """
 
 import sys
@@ -31,7 +32,8 @@ _TERM = plastic("#1A1A1A")
 def _board():
     z = BOARD_Z + PCB_T / 2.0
     pcb = box(0, BOARD_Y, z, BOARD_L, BOARD_W, PCB_T)
-    terminal = box(0, 11, BOARD_Z + PCB_T + 4.0, 16, 8, 8)
+    # 16 x 8 mm, flush with the far edge, over the relay. Its top is 8 mm up.
+    terminal = box(7.0, EDGE_Y + BOARD_W - 4.0, BOARD_Z + PCB_T + 4.0, 16, 8, 8)
     return [paint(pcb, "pcb", _MASK), paint(terminal, "terminal", _TERM)]
 
 

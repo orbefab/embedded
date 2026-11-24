@@ -82,14 +82,17 @@
     ["rled.b", "led.anode", { "kind": "trace" }],
     ["led.cathode", "q.collector", { "kind": "trace" }]
   ],
+  // The relay sits under the screw terminal. The diode lies on its side in the
+  // free margin, so its leads stay on the board, with the transistor, the
+  // resistors and the LED.
   "layout": {
     "hdr": { "at": [0, -11.5, 0] },
-    "k": { "at": [2, 2, 4.14] },
-    "q": { "at": [-8, -2, 4.14] },
-    "rb": { "at": [-8, -6, 4.14] },
-    "rled": { "at": [-12, 0, 4.14] },
-    "d": { "at": [8, -4, 6], "rotate": [0, 90, 0] },
-    "led": { "at": [-12, -6, 4.14] }
+    "k": { "at": [7, -0.8, 4.14] },
+    "q": { "at": [-10, -2.6, 4.14] },
+    "rb": { "at": [-10, -5.4, 4.14] },
+    "rled": { "at": [-10, -7.2, 4.14] },
+    "d": { "at": [-10, 2.5, 5.49], "rotate": [90, 0, 0] },
+    "led": { "at": [-10, -9.2, 4.14] }
   },
   "pins": {
     "IN": "hdr.1",
