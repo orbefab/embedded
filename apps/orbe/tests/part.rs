@@ -314,11 +314,13 @@ fn search_finds_a_block_and_part_describes_it() {
     assert_eq!(code, 0, "{stderr}");
     for id in [
         "devkitc-button-led",
+        "nano-7seg-count",
         "nano-button-led",
         "nano-buzzer",
         "nano-led-fade",
         "nano-light-comparator",
         "nano-neopixel-stick",
+        "nano-shift-leds",
         "uno-button-led",
     ] {
         assert!(stdout.contains(id), "{stdout}");

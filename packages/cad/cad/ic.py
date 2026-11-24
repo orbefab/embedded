@@ -99,7 +99,17 @@ def qfn(count, size, height, pitch, terminal=(0.25, 0.4), thick=0.05, exposed=No
     return children, anchors
 
 
-def dip(count, body, standoff, row=7.62, pitch=2.54, below=3.3, lead=(0.46, 0.25), shoulder=1.5):
+def dip(
+    count,
+    body,
+    standoff,
+    row=7.62,
+    pitch=2.54,
+    below=3.3,
+    lead=(0.46, 0.25),
+    shoulder=1.5,
+    face=BLACK,
+):
     """A DIP: the body (length, width, height) on its standoff above the
     seating plane z = 0, a notch at -X, legs on `pitch` in two rows `row`
     apart running `below` under z = 0. Leads count like `dual_row`."""
@@ -110,7 +120,7 @@ def dip(count, body, standoff, row=7.62, pitch=2.54, below=3.3, lead=(0.46, 0.25
     radius = min(1.0, width * 0.15)
     notch = bd.Pos(-length / 2.0, 0, top) * bd.Rot(90, 0, 0) * bd.Cylinder(radius, width * 0.5)
     body_solid = box(0, 0, standoff + height / 2.0, length, width, height) - notch
-    children = [paint(body_solid, "body", BLACK)]
+    children = [paint(body_solid, "body", face)]
     mid = standoff + height / 2.0
     anchors = []
     y_leg = row / 2.0
@@ -120,4 +130,55 @@ def dip(count, body, standoff, row=7.62, pitch=2.54, below=3.3, lead=(0.46, 0.25
         leg += box(x, y, (standoff + mid) / 2.0, shoulder, thick, mid - standoff)
         children.append(paint(leg, f"lead-{n}", TIN))
         anchors.append(glb.Anchor(n, f"lead-{n}", (x, y, -below)))
+    return children, anchors
+
+
+# TOPLITE A-5161AS / A-5161BS package outline: body 12.6 x 19.0 x 8.0, rows
+# 15.24 apart, digit 14.2 tall. The drawing prints a 2.46 mm pin pitch. The
+# row span is six times 2.54 mm, so the leads sit on 2.54 mm and enter a
+# breadboard. The drawn leg is the 3.3 mm below the seating plane.
+DISPLAY_BODY = (12.6, 19.0, 8.0)
+DISPLAY_RED = plastic("#C23B2E")
+
+
+def seven_segment(face):
+    """A 10-pin 0.56 inch single-digit display. `face` paints the package.
+    Segment bars sit on the top face, A toward +Y and the decimal point at
+    the lower right. Returns (children, anchors), the same shape as `dip`."""
+    children, anchors = dip(
+        10,
+        DISPLAY_BODY,
+        0.0,
+        row=15.24,
+        pitch=2.54,
+        below=3.3,
+        lead=(0.5, 0.5),
+        shoulder=1.2,
+        face=face,
+    )
+    height = DISPLAY_BODY[2]
+    digit_h, digit_w, stroke = 14.2, 7.2, 1.4
+    z = height + 0.22
+    thick = 0.44
+
+    def horizontal(name, y):
+        return paint(box(0, y, z, digit_w - stroke, stroke, thick), name, DISPLAY_RED)
+
+    def vertical(name, x, y):
+        return paint(box(x, y, z, stroke, digit_h / 2 - stroke, thick), name, DISPLAY_RED)
+
+    half_w = digit_w / 2 - stroke / 2
+    half_h = digit_h / 2 - stroke / 2
+    children.extend(
+        [
+            horizontal("seg-a", half_h),
+            vertical("seg-b", half_w, digit_h / 4),
+            vertical("seg-c", half_w, -digit_h / 4),
+            horizontal("seg-d", -half_h),
+            vertical("seg-e", -half_w, -digit_h / 4),
+            vertical("seg-f", -half_w, digit_h / 4),
+            horizontal("seg-g", 0),
+            paint(box(digit_w / 2 + 0.9, -half_h, z, 1.15, 1.15, thick), "seg-dp", DISPLAY_RED),
+        ]
+    )
     return children, anchors

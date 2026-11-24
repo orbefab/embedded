@@ -794,6 +794,8 @@ for (const block of releasedBlocks()) {
       await page.waitForFunction(
         (kind) => {
           const scene = window.orbeViewer?.get().scene;
+          if (kind === "digit") return scene?.getObjectByName("@disp")?.getObjectByName("seg-a") !== undefined;
+          if (kind === "digit") return scene?.getObjectByName("@disp")?.getObjectByName("seg-a") !== undefined;
           if (kind === "pixels") return scene?.getObjectByName("@stick.px1")?.getObjectByName("lens") !== undefined;
           if (kind === "tone") return scene?.getObjectByName("@bz1") !== undefined;
           if (kind === "rgb") {

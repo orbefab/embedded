@@ -1,0 +1,44 @@
+{
+  "part": "hc595-dip16",
+  "source": {
+    "script": "model.py",
+    "sha256": "15051510e8cb13d1706b6244bc42bede832bc3c7015aa32dd01b49bed3df19f2",
+    "bytes": 1355
+  },
+  "files": {
+    "hc595-dip16.glb": {
+      "sha256": "e051f135115ad07748f122e1d4e67d91918c8dffb12f570603c03700556b30a2",
+      "bytes": 20852
+    },
+    "hc595-dip16.anchors.json": {
+      "sha256": "1f6b253f815ed97234b4e96fe521dfc942a12be8767e64105f07fa56334436f5",
+      "bytes": 1918
+    }
+  },
+  "box": {
+    "min": [-9.655, -3.935, -3.3],
+    "max": [9.655, 3.935, 3.681]
+  },
+  "kept_nodes": ["lead-1", "lead-10", "lead-11", "lead-12", "lead-13", "lead-14", "lead-15", "lead-16", "lead-2", "lead-3", "lead-4", "lead-5", "lead-6", "lead-7", "lead-8", "lead-9"],
+  "draw_calls": 17,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 16,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0.381
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 17,
+      "primitives_out": 17
+    }
+  }
+}

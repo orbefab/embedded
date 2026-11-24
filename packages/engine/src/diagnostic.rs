@@ -2009,6 +2009,40 @@ fn sig_greater((digits, exp): (i32, i32), (other_digits, other_exp): (i32, i32))
     }
 }
 
+/// [`exceeds`] when `limit` is already [`significant`].
+///
+/// Rounding to 3 significant digits moves a finite positive number by at most half a
+/// percent, so more than 1% away from `limit` the comparison needs no formatting. Inside
+/// that band, and when `limit` is not a positive finite number, the check rounds `value`.
+#[inline]
+pub(crate) fn exceeds_rounded(value: f64, limit: f64) -> bool {
+    let over = match decided_without_rounding(value, limit) {
+        Some(over) => over,
+        None => significant(value) > limit,
+    };
+    debug_assert!(
+        over == (significant(value) > limit),
+        "value {value:?} rounded limit {limit:?}"
+    );
+    over
+}
+
+/// `Some` when `value` and `limit` are far enough apart that rounding cannot change
+/// [`exceeds_rounded`]. `None` when the exact rounding has to run.
+fn decided_without_rounding(value: f64, limit: f64) -> Option<bool> {
+    if !(value > 0.0 && limit > 0.0) {
+        return None;
+    }
+    let ratio = value / limit;
+    if ratio > 1.01 {
+        Some(true)
+    } else if ratio < 0.99 {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 /// `ps` to 2 significant digits, for a time a message gives as "about".
 pub fn significant_ps(ps: u64) -> u64 {
     let digits = ps.checked_ilog10().unwrap_or(0);
@@ -2148,5 +2182,68 @@ mod tests {
             assert_eq!(ProtocolRule::named(&rule_text(&rule)), Some(rule));
         }
         assert_eq!(ProtocolRule::named("glitch"), None);
+    }
+
+    #[test]
+    fn a_value_far_from_its_rounded_limit_is_over_exactly_when_rounding_says_so() {
+        let mut limits = vec![
+            0.0,
+            -0.0,
+            -1.0,
+            1.0,
+            f64::MIN_POSITIVE,
+            1e-320,
+            f64::MAX,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ];
+        for exp in -12..=12 {
+            let scale = libm::pow(10.0, exp as f64);
+            for digits in [100, 101, 105, 110, 150, 500, 990, 995, 999] {
+                limits.push(digits as f64 * scale / 100.0);
+                limits.push(-(digits as f64) * scale / 100.0);
+            }
+        }
+        for digits in 100..=999 {
+            limits.push(digits as f64 / 100.0);
+        }
+        let mut state = 0x1234_5678_u64;
+        for _ in 0..4_000 {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            let exp = ((state >> 33) % 25) as i32 - 12;
+            let mant = 100.0 + (state % 900) as f64;
+            let sign = if state & 1 == 0 { 1.0 } else { -1.0 };
+            limits.push(sign * mant * libm::pow(10.0, exp as f64) / 100.0);
+        }
+        for limit in limits {
+            let rounded = significant(limit);
+            let mut values = vec![
+                0.0,
+                -0.0,
+                rounded,
+                -rounded,
+                f64::MIN_POSITIVE,
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+            ];
+            if rounded.is_finite() && rounded != 0.0 {
+                for factor in [
+                    0.5, 0.97, 0.989, 0.99, 0.995, 1.0, 1.005, 1.009, 1.01, 1.011, 1.02, 2.0,
+                ] {
+                    values.push(rounded * factor);
+                    values.push(-rounded.abs() * factor);
+                }
+            }
+            for value in values {
+                assert_eq!(
+                    exceeds_rounded(value, rounded),
+                    exceeds(value, limit),
+                    "value {value:?} limit {limit:?} rounded {rounded:?}"
+                );
+            }
+        }
     }
 }

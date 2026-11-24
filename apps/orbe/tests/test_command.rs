@@ -23,11 +23,13 @@ fn each_block_passes() {
         ids,
         [
             "devkitc-button-led",
+            "nano-7seg-count",
             "nano-button-led",
             "nano-buzzer",
             "nano-led-fade",
             "nano-light-comparator",
             "nano-neopixel-stick",
+            "nano-shift-leds",
             "uno-button-led",
         ]
     );

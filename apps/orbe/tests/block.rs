@@ -14,14 +14,16 @@ use std::path::Path;
 
 use live::{common, orbe};
 
-const BLOCKS: [&str; 7] = [
+const BLOCKS: [&str; 9] = [
     "devkitc-button-led",
+    "nano-7seg-count",
     "nano-button-led",
     "nano-buzzer",
     "uno-button-led",
     "nano-led-fade",
     "nano-light-comparator",
     "nano-neopixel-stick",
+    "nano-shift-leds",
 ];
 
 /// Every file below `dir` with its bytes, by its path from `dir`.
@@ -83,6 +85,7 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
         // The rainbow Block drives a pixel module, the buzzer Block a buzzer, and the DevKitC
         // its board. The others light a 5 mm LED.
         let marker = match id {
+            "nano-7seg-count" => "display-7seg-cc",
             "nano-neopixel-stick" => "neopixel-stick-8",
             "devkitc-button-led" => "esp32s3-devkitc-1",
             "nano-buzzer" => "buzzer-12mm",

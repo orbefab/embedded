@@ -51,12 +51,33 @@ pub(super) enum Bound {
     },
     SerialContains(String),
     NoDiagnostics,
+    /// `@disp.digit 8`.
+    Digit {
+        path: String,
+        want: String,
+    },
 }
 
 impl Open {
     pub(super) fn bind(&self, condition: &Condition) -> Result<Bound, Error> {
         Ok(match condition {
             Condition::NoDiagnostics => Bound::NoDiagnostics,
+            Condition::Digit(r, want) => match self.resolve(r)? {
+                Target::Digit { path } => {
+                    self.shown_digit(&path)?;
+                    Bound::Digit {
+                        path,
+                        want: want.clone(),
+                    }
+                }
+                _ => {
+                    return Err(Error::new(
+                        Code::NoReading,
+                        format!("{r} is not a 7-segment digit"),
+                        "expect a digit on a part whose readings include digit, such as `@disp.digit 8`",
+                    ));
+                }
+            },
             Condition::SerialContains(text) => Bound::SerialContains(text.as_str().to_string()),
             Condition::State(r, want) => {
                 match (self.resolve(r)?, want) {
@@ -231,6 +252,13 @@ impl Open {
                             "compare a pin's voltage, a quantity or a brightness, such as `@led1.i > 5mA` or `@led1.brightness > 2mA`",
                         ));
                     }
+                    Target::Digit { .. } => {
+                        return Err(Error::new(
+                            Code::NoReading,
+                            format!("{r} is a digit, not a value to compare"),
+                            format!("expect the digit itself, such as `{r} 8`"),
+                        ));
+                    }
                 };
                 if unit != amount.unit {
                     return Err(Error::new(
@@ -342,6 +370,10 @@ impl Open {
                     );
                 }
                 (found, actual)
+            }
+            Bound::Digit { path, want } => {
+                let shown = self.shown_digit(path).expect("bind checked the segments");
+                (shown == *want, format!("{path}.digit is {shown}"))
             }
             Bound::NoDiagnostics => {
                 let found: Vec<Diagnostic> = self
