@@ -14,13 +14,14 @@
 // R7, R8, R9, R13 and R17 are 0 ohm, 1%, and resistor-0603 cannot be 0, so
 // each is a wire. R24, the sheet's 0 ohm on the module's 3V3 feed, is the
 // wire from the regulator output to the module.
-// The sheet also shows R11 5.1k and D5, the red power LED, the rail
-// capacitors, R16 1k on the bridge RSTb, R14 10k marked NC, and R19 22.1k
-// with R18 47.5k on the bridge VBUS pin. None of those is placed. The
-// engine's other boards leave rail capacitors out, and the bridge model
-// does not read RSTb or VBUS.
+// The sheet also shows R11 5.1k and D5, the red power LED, C6 1 uF on
+// CHIP_PU, R16 1k on the bridge RSTb, R14 10k marked NC, C13, C14 and C15
+// marked NC, and R19 22.1k with R18 47.5k and C12 1 uF on the bridge VBUS
+// pin. None of those is placed: the chip model has no reset pin, and the
+// bridge model does not read RSTb or VBUS. The populated rail capacitors
+// on VCC_3V3 (C1, C2, C9, C10, C11) and VCC_5V (C3, C7, C8) are placed.
 {
-  "format": 5,
+  "format": 6,
   "part": "esp32s3-devkitc-1",
   "version": "0.2.1",
   "title": "ESP32-S3-DevKitC-1 v1.1",
@@ -34,10 +35,10 @@
   },
   "real": { "maker": "Espressif", "number": "ESP32-S3-DevKitC-1-N16R8", "datasheet": "ESP32-S3-DevKitC-1 v1.1 User Guide" },
   "uses": {
-    "cp2102n-qfn28": "0.2.0", "esp32s3-wroom-1-n16r8": "0.2.0", "lesd5d5-sod523": "0.2.0",
-    "npn-l8050-sot23": "0.2.1", "pin-header-1x22": "0.2.0", "resistor-0603": "0.2.0",
-    "sgm2212-sot223": "0.2.1", "sk68xxmini-hs": "0.2.1", "tactile-switch-ntc013": "0.2.0",
-    "usb-micro-b": "0.2.1"
+    "capacitor-0603": "0.2.0", "cp2102n-qfn28": "0.2.0", "esp32s3-wroom-1-n16r8": "0.2.1",
+    "lesd5d5-sod523": "0.2.0", "npn-l8050-sot23": "0.2.1", "pin-header-1x22": "0.2.0",
+    "resistor-0603": "0.2.0", "sgm2212-sot223": "0.2.1", "sk68xxmini-hs": "0.2.1",
+    "tactile-switch-ntc013": "0.2.0", "usb-micro-b": "0.2.1"
   },
   "params": { "app": {}, "partitions": {} },
   "ground": "j2.GND",
@@ -62,7 +63,15 @@
     "d10": { "type": "lesd5d5-sod523" },
     "r_en": { "type": "resistor-0603", "resistance": { "value": 10000, "unit": "ohm", "source": { "datasheet": { "doc": "SCH_ESP32-S3-DevKitC-1_V1.1_20221130", "at": "R5, 10K(1%), from ESP_3V3 to CHIP_PU", "basis": "nominal" } } } },
     "r_dtr": { "type": "resistor-0603", "resistance": { "value": 10000, "unit": "ohm", "source": { "datasheet": { "doc": "SCH_ESP32-S3-DevKitC-1_V1.1_20221130", "at": "R10, 10K(1%), DTR to Q1 base", "basis": "nominal" } } } },
-    "r_rts": { "type": "resistor-0603", "resistance": { "value": 10000, "unit": "ohm", "source": { "datasheet": { "doc": "SCH_ESP32-S3-DevKitC-1_V1.1_20221130", "at": "R12, 10K(1%), RTS to Q2 base", "basis": "nominal" } } } }
+    "r_rts": { "type": "resistor-0603", "resistance": { "value": 10000, "unit": "ohm", "source": { "datasheet": { "doc": "SCH_ESP32-S3-DevKitC-1_V1.1_20221130", "at": "R12, 10K(1%), RTS to Q2 base", "basis": "nominal" } } } },
+    "c1": { "type": "capacitor-0603", "capacitance": { "value": 1e-5, "unit": "F", "source": { "datasheet": { "doc": "SCH_ESP32-S3-DevKitC-1_V1.1_20221130", "at": "C1, 10uF/25V(20%), VCC_3V3 to GND at U4 3V3", "basis": "nominal" } } } },
+    "c2": { "type": "capacitor-0603", "capacitance": { "value": 1e-7, "unit": "F", "source": { "datasheet": { "doc": "SCH_ESP32-S3-DevKitC-1_V1.1_20221130", "at": "C2, 0.1uF/50V(10%), VCC_3V3 to GND at U4 3V3", "basis": "nominal" } } } },
+    "c3": { "type": "capacitor-0603", "capacitance": { "value": 1e-5, "unit": "F", "source": { "datasheet": { "doc": "SCH_ESP32-S3-DevKitC-1_V1.1_20221130", "at": "C3, 10uF/25V(20%), VCC_5V to GND at J2", "basis": "nominal" } } } },
+    "c7": { "type": "capacitor-0603", "capacitance": { "value": 1e-5, "unit": "F", "source": { "datasheet": { "doc": "SCH_ESP32-S3-DevKitC-1_V1.1_20221130", "at": "C7, 10uF/25V(20%), VCC_5V to GND at U2 VIN", "basis": "nominal" } } } },
+    "c8": { "type": "capacitor-0603", "capacitance": { "value": 1e-7, "unit": "F", "source": { "datasheet": { "doc": "SCH_ESP32-S3-DevKitC-1_V1.1_20221130", "at": "C8, 0.1uF/50V(10%), VCC_5V to GND at U2 VIN", "basis": "nominal" } } } },
+    "c9": { "type": "capacitor-0603", "capacitance": { "value": 1e-7, "unit": "F", "source": { "datasheet": { "doc": "SCH_ESP32-S3-DevKitC-1_V1.1_20221130", "at": "C9, 0.1uF/50V(10%), VCC_3V3 to GND at U2 VOUT", "basis": "nominal" } } } },
+    "c10": { "type": "capacitor-0603", "capacitance": { "value": 1e-5, "unit": "F", "source": { "datasheet": { "doc": "SCH_ESP32-S3-DevKitC-1_V1.1_20221130", "at": "C10, 10uF/25V(20%), VCC_3V3 to GND at U2 VOUT", "basis": "nominal" } } } },
+    "c11": { "type": "capacitor-0603", "capacitance": { "value": 1e-5, "unit": "F", "source": { "datasheet": { "doc": "SCH_ESP32-S3-DevKitC-1_V1.1_20221130", "at": "C11, 10uF/25V(20%), VCC_3V3 to GND at U3 VDD and REGIN", "basis": "nominal" } } } }
   },
   "wires": [
     ["j2.GND", "j4.GND", { "kind": "trace" }],
@@ -78,12 +87,28 @@
     ["j2.GND", "j3.22", { "kind": "trace" }],
     ["j2.VBUS", "ldo.IN", { "kind": "trace" }],
     ["j2.VBUS", "j1.21", { "kind": "trace" }],
+    ["j2.VBUS", "c3.a", { "kind": "trace" }],
+    ["j2.GND", "c3.b", { "kind": "trace" }],
+    ["j2.VBUS", "c7.a", { "kind": "trace" }],
+    ["j2.GND", "c7.b", { "kind": "trace" }],
+    ["j2.VBUS", "c8.a", { "kind": "trace" }],
+    ["j2.GND", "c8.b", { "kind": "trace" }],
     ["ldo.OUT", "mod.3V3", { "kind": "trace" }],
     ["ldo.OUT", "bridge.VDD", { "kind": "trace" }],
     ["ldo.OUT", "led.VDD", { "kind": "trace" }],
     ["ldo.OUT", "j1.1", { "kind": "trace" }],
     ["ldo.OUT", "j1.2", { "kind": "trace" }],
     ["ldo.OUT", "r_en.a", { "kind": "trace" }],
+    ["ldo.OUT", "c1.a", { "kind": "trace" }],
+    ["j2.GND", "c1.b", { "kind": "trace" }],
+    ["ldo.OUT", "c2.a", { "kind": "trace" }],
+    ["j2.GND", "c2.b", { "kind": "trace" }],
+    ["ldo.OUT", "c9.a", { "kind": "trace" }],
+    ["j2.GND", "c9.b", { "kind": "trace" }],
+    ["ldo.OUT", "c10.a", { "kind": "trace" }],
+    ["j2.GND", "c10.b", { "kind": "trace" }],
+    ["ldo.OUT", "c11.a", { "kind": "trace" }],
+    ["j2.GND", "c11.b", { "kind": "trace" }],
     ["r_en.b", "mod.EN", { "kind": "trace" }],
     ["mod.EN", "sw_reset.a", { "kind": "trace" }],
     ["mod.EN", "q1.collector", { "kind": "trace" }],
@@ -190,6 +215,10 @@
   // r_en, r_dtr and r_rts are the centres of the 0.508 squares under R5,
   // R10 and R12, 1.016 apart. Those lands are smaller than this 0603. The
   // sheet prints 10K(1%) and does not name the body. Length along X.
+  // c1, c3, c7, c10 and c11 are the centres of the 0.8 by 0.9 mm 0603 lands
+  // on a 1.65 mm pitch (C1 runs along Y; C3, C7, C10 and C11 run along X).
+  // c2, c8 and c9 are the centres of the 0.508 squares on a 1.016 pitch
+  // running along Y; those lands are smaller than this 0603.
   "layout": {
     "mod": { "at": [0.05, 24.9575, 1.6] },
     "j1": { "at": [-11.43, 3.1975, 1.6], "rotate": [0, 0, 270] },
@@ -211,7 +240,15 @@
     "d10": { "at": [7.39, -22.4325, 1.6], "rotate": [0, 0, 90] },
     "r_en": { "at": [-2.2352, 9.0043, 1.6] },
     "r_dtr": { "at": [3.683, -5.6515, 1.6] },
-    "r_rts": { "at": [5.969, -5.6515, 1.6] }
+    "r_rts": { "at": [5.969, -5.6515, 1.6] },
+    "c1": { "at": [-6.1700, 8.2466, 1.6], "rotate": [0, 0, 90] },
+    "c2": { "at": [-5.6618, 4.1832, 1.6], "rotate": [0, 0, 90] },
+    "c3": { "at": [0.0222, -18.3725, 1.6] },
+    "c7": { "at": [-5.4078, 2.4074, 1.6] },
+    "c8": { "at": [-4.3948, 4.1832, 1.6], "rotate": [0, 0, 90] },
+    "c9": { "at": [-6.5529, 4.1832, 1.6], "rotate": [0, 0, 90] },
+    "c10": { "at": [-5.4078, 5.9590, 1.6] },
+    "c11": { "at": [-5.4600, -8.9992, 1.6] }
   },
   "pins": {
     "3V3": ["j1.1", "j1.2"], "RST": "j1.3",
@@ -229,6 +266,6 @@
     { "what": "RST", "pins": ["RST"], "why": "J1 pin 3 is EN, the chip's CHIP_PU. The esp32s3 kind has no reset pin. The sheet's truth table for DTR and RTS still wires Q1 and Q2, and the model does not reset when EN moves." },
     { "what": "GPIO35, GPIO36 and GPIO37", "pins": ["GPIO35", "GPIO36", "GPIO37"], "why": "The user guide says that on an octal-SPI WROOM module these three pins are used inside the module and are not available. J3 still brings them out, as the header table lists them." },
     { "what": "the second USB 5 V", "why": "J2 and J4 are each an ideal 5 V host. The sheet diode-ORs them onto VCC_5V through 1N5819HW-7-F parts D1 and D7. That diode is not the catalog diode, so only J2's VBUS feeds the regulator and the 5V pin. J4's VBUS stays on its own net. J4 D- and D+ still go to GPIO19 and GPIO20." },
-    { "what": "parts the sheet shows and this board does not place", "why": "R11 5.1k and D5, the red power LED. C1, C2, C3, C6, C7, C8, C9, C10, C11, C12 and C15, the rail and reset capacitors, and C13 and C14 marked NC. R16 1k from the bridge RSTb to 3.3 V, R14 10k marked NC, and R19 22.1k with R18 47.5k on the bridge VBUS pin. The bridge model does not read RSTb or VBUS. R7, R8, R9, R13, R17 and R24 are 0 ohm links and are wires." }
+    { "what": "parts the sheet shows and this board does not place", "why": "R11 5.1k and D5, the red power LED. C6 1 uF on CHIP_PU (the reset delay capacitor), C12 1 uF with R19 22.1k and R18 47.5k on the bridge VBUS pin, R16 1k from the bridge RSTb to 3.3 V, and the parts marked NC (R14 10k, C13 0.1 uF, C14 0.1 uF, C15 10 uF). The bridge model does not read RSTb or VBUS. R7, R8, R9, R13, R17 and R24 are 0 ohm links and are wires." }
   ]
 }

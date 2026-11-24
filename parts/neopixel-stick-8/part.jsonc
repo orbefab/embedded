@@ -5,9 +5,9 @@
 // Eagle (1.397, 5.08). From the LED edge outward its pads are GND, 5V, DIN and GND.
 // This header keeps the first three, across the board width, and leaves the outer GND off.
 {
-  "format": 1,
+  "format": 6,
   "part": "neopixel-stick-8",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "NeoPixel stick, 8 RGB LED",
   "summary": "Eight addressable RGB LEDs on a 50.8 x 10.2 mm board, chained DOUT to DIN, with a 3-pin header (GND, 5V, DIN) on 2.54 mm that plugs into a breadboard. Each LED is modelled by the SK6812MINI-HS: 1 mA idle plus 12 mA per channel at 255 from 5V, so eight at full white draw 296 mA. Adafruit gives about 18 mA per channel for the stick's own LEDs, so a real stick can draw more. The last LED's DOUT stays on the board.",
   "tags": ["led", "rgb", "neopixel", "ws2812", "strip", "addressable"],

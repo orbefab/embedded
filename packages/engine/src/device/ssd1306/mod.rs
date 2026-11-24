@@ -25,7 +25,10 @@ use crate::netlist::Threshold;
 use crate::netlist::Value;
 use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
-use crate::netlist::json::{PinMap, WireValue, bounded, resolve_pins, resolve_value};
+use crate::netlist::json::{
+    PinMap, WireValue, bounded, resolve_limit, resolve_pins, resolve_value,
+};
+use crate::ratings::{Ceiling, PinRatings, PinWindow};
 use crate::watch::{Signal, Watch};
 
 pub use glass::glass;
@@ -133,6 +136,43 @@ fn device(draw: Option<&PanelDraw>) -> model::Ssd1306 {
     model::Ssd1306::new(&Fields::new(&fields)).expect("parse bounds the draw")
 }
 
+/// The part's voltage ratings on `VDD`, `SCL`, `SDA` and `RES`, `None` when it has no `ratings`
+/// object. Every window is over `VSS`: `VDD` takes `-rail_margin` to `supply_voltage`, and
+/// `SCL`, `SDA` and `RES` take `-rail_margin` to `VDD + rail_margin`.
+pub(crate) fn pin_ratings(dev: &Ssd1306) -> Option<PinRatings> {
+    let ratings = dev.ratings.as_ref()?;
+    let si = |value: &Option<Value>| value.as_ref().map(|value| value.si.get());
+    let margin = si(&ratings.rail_margin);
+    let supply = si(&ratings.supply_voltage);
+    let mut windows = Vec::new();
+    if margin.is_some() || supply.is_some() {
+        windows.push(PinWindow {
+            pin: Ssd1306::PINS[VDD],
+            net: dev.pins[VDD],
+            below: margin,
+            above: supply.map(Ceiling::Fixed),
+        });
+    }
+    if let Some(margin) = margin {
+        for pin in [SCL, SDA, RES] {
+            windows.push(PinWindow {
+                pin: Ssd1306::PINS[pin],
+                net: dev.pins[pin],
+                below: Some(margin),
+                above: Some(Ceiling::OverSupply(margin)),
+            });
+        }
+    }
+    Some(PinRatings {
+        outputs: Vec::new(),
+        pin_current: None,
+        supply_current: None,
+        vcc: (Ssd1306::PINS[VDD], dev.pins[VDD]),
+        gnd: (Ssd1306::PINS[VSS], dev.pins[VSS]),
+        windows,
+    })
+}
+
 /// An SSD1306 128 by 64 OLED controller on I2C, an active chip with no clock of its own. It is
 /// an I2C target at `address`, 0x3C or 0x3D. `SDA` is open drain into `VSS` through
 /// `low_resistance` above `low_drop`. `SCL` and `RES` are inputs, and the part holds neither.
@@ -151,6 +191,18 @@ pub struct Ssd1306 {
     pub input_threshold: Threshold,
     /// What the panel draws from `VDD` into `VSS`. `None` draws nothing.
     pub draw: Option<PanelDraw>,
+    /// The pin voltage ratings the run checks. `None` when the part has no `ratings` object.
+    pub ratings: Option<Ssd1306Ratings>,
+}
+
+/// An SSD1306's voltage ratings. Each is `None` when the part leaves it unrated.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ssd1306Ratings {
+    /// Volt. How far `VDD`, `SCL`, `SDA` and `RES` may sit below `VSS`, and `SCL`, `SDA` and
+    /// `RES` above `VDD`.
+    pub rail_margin: Option<Value>,
+    /// Volt. The most `VDD` may sit above `VSS`.
+    pub supply_voltage: Option<Value>,
 }
 
 /// The panel's draw from `VDD` into `VSS`, its logic and its charge pump together, as the
@@ -186,6 +238,18 @@ pub(crate) struct WireSsd1306 {
     input_threshold: WireThreshold,
     #[serde(default)]
     draw: Option<WireDraw>,
+    #[serde(default)]
+    ratings: Option<WireRatings>,
+}
+
+/// Every key is required, and `null` leaves that rating out.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireRatings {
+    #[serde(deserialize_with = "Option::deserialize")]
+    rail_margin: Option<WireValue>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    supply_voltage: Option<WireValue>,
 }
 
 #[derive(Deserialize)]
@@ -281,6 +345,10 @@ pub(crate) fn resolve_ssd1306(ctx: ParseCtx<'_>, wire: WireSsd1306) -> Option<Ss
         Some(draw) => Some(draw?),
         None => None,
     };
+    let ratings = match wire.ratings {
+        None => Some(None),
+        Some(wire) => resolve_ratings(part_ref, wire, out).map(Some),
+    };
     Some(Ssd1306 {
         pins: pins?,
         address: address?,
@@ -288,5 +356,25 @@ pub(crate) fn resolve_ssd1306(ctx: ParseCtx<'_>, wire: WireSsd1306) -> Option<Ss
         low_resistance: low_resistance?,
         input_threshold: input_threshold?,
         draw,
+        ratings: ratings?,
+    })
+}
+
+fn resolve_ratings(
+    part: &crate::name::Ref,
+    wire: WireRatings,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Ssd1306Ratings> {
+    let rail_margin = resolve_limit(part, "ratings.rail_margin", "V", wire.rail_margin, out);
+    let supply_voltage = resolve_limit(
+        part,
+        "ratings.supply_voltage",
+        "V",
+        wire.supply_voltage,
+        out,
+    );
+    Some(Ssd1306Ratings {
+        rail_margin: rail_margin?,
+        supply_voltage: supply_voltage?,
     })
 }
