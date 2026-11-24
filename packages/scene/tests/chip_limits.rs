@@ -118,3 +118,40 @@ fn the_2n2222a_gain_falls_from_150_ma_to_500_ma_as_its_sheet_s_curve_does() {
     );
     assert!(beta_500 > 40.0, "{beta_500}");
 }
+
+#[test]
+fn ams1117_warns_regulator_current_limit_into_a_short_and_stays_quiet_under_limit() {
+    let run_load = |ohms: &str| {
+        let project = common::project("nano-button");
+        let parts = format!(
+            r#""v1": {{ "type": "./supply/part.jsonc", "voltage": "9" }},
+            "u1": {{ "type": "ams1117-sot223" }},
+            "rl": {{ "type": "resistor-axial", "resistance": "{ohms}" }}"#
+        );
+        let wires =
+            r#"["v1.pos", "u1.IN"], ["v1.neg", "u1.GND"], ["u1.OUT", "rl.a"], ["rl.b", "v1.neg"]"#;
+        let mut session = open(project.path(), &parts, wires);
+        session.advance_to(Time::from_ps(5 * MS));
+        session
+            .diagnostics()
+            .into_iter()
+            .filter(|d| d.code() == "regulator.current_limit")
+            .map(|d| serde_json::to_value(&d).unwrap())
+            .collect::<Vec<_>>()
+    };
+
+    // 4.75 ohm at 5.0 V draws ~1.05 A, just under AMS1117's 1.1 A current_limit.
+    let under = run_load("4.75");
+    assert!(under.is_empty(), "under limit warned: {under:?}");
+
+    // 0.5 ohm shorts the AMS1117 into its 1.1 A limit and pulls OUT down to ~0.55 V.
+    let shorted = run_load("0.5");
+    assert_eq!(shorted.len(), 1, "{shorted:?}");
+    let message = shorted[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("#u1.pin.out regulator output can give 1.1 A at 5 V"),
+        "{message}"
+    );
+    assert!(message.contains("dropped to"), "{message}");
+    assert!(shorted[0]["data"]["voltage"].as_f64().unwrap() < 1.0);
+}

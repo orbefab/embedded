@@ -15,7 +15,7 @@ A diagnostic is one JSON object. The fields are written in this order.
 
 The run sorts diagnostics by `t_ps`, then `code`, then `refs`, then the JSON bytes of the whole object. A `null` time sorts before a number, so every input finding precedes a solver finding.
 
-A session's `diagnostics()` returns the warnings found so far, and once the session ends they are that list's. While it runs, a `Pulses` record still in flight is not yet counted, as [engine.md](engine.md#sessions) says. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `rating.voltage`, `chip.protocol`, `chip.link_miswired`, `chip.floating_input`, `chip.unmodeled_register` and `chip.restart`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
+A session's `diagnostics()` returns the warnings found so far, and once the session ends they are that list's. While it runs, a `Pulses` record still in flight is not yet counted, as [engine.md](engine.md#sessions) says. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `rating.voltage`, `regulator.current_limit`, `chip.protocol`, `chip.link_miswired`, `chip.floating_input`, `chip.unmodeled_register` and `chip.restart`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
 
 A run whose diagnostics are all warnings still writes the operating point. A run with an error writes the observations it reached, as [run-folder.md](run-folder.md#observationsjson) says. That is `{}` when nothing solved, as at t = 0. A transient keeps its grid rows before the error, and its last accepted step is the last row. Its observations end there. A warning found before that error is kept, including a rating sampled on any accepted step before it.
 
@@ -786,3 +786,19 @@ An LM358 comparator on a 5 V supply, `input_headroom` 1.5 V, with `in_p` at 4 V 
 A capacitor with `ratings.reverse_voltage` uses the same code on pin `a`. The floor is that rating below pin `b`, and there is no ceiling. The message calls pin `b` the chip's ground. A capacitor with no `ratings` object, or with `reverse_voltage` null, is not checked. A forward voltage is not checked. A voltage exactly on the floor is inside. A reverse rating of 0 warns on any reverse voltage, and 0 V is inside.
 
 A `linear_regulator` uses the same code on pin `in`. The floor is -0.3 V over pin `gnd`, and there is no ceiling. The message calls `gnd` the chip's ground. A voltage exactly on -0.3 V is inside. The model has no diode from `out` to `in`, so a reversed input stays at the voltage the circuit drives and the warning is what names it.
+
+## regulator.current_limit
+
+Severity `warning`. Refs is the regulator's output pin, `#<part>.pin.out`. `t_ps` is the first time the regulator was held at its current limit, 0 for the operating point.
+
+The message is:
+
+```text
+{pin} regulator output can give {limit} A at {target} V; the circuit asks for more, so it is giving {current} A and has dropped to {voltage} V for {over_ps} ps
+```
+
+Each value in the message is rounded to 3 significant digits. ` for {over_ps} ps` is left out for an operating point, and while `over_ps` is 0.
+
+`data` holds `current`, `limit`, `over_ps`, `peak_ps`, `target`, and `voltage`, unrounded. `limit` is the part's `current_limit`. `target` is its `output_voltage`. `voltage` is `V(out) - V(gnd)` at `peak_ps`, where the current-limit clamp subtracted the most from the output, and `current` is the pass current delivered there. `over_ps` is `null` for an operating point and sums the time spent clamped across the run, merged into one warning per regulator.
+
+A regulator is clamped on a sample when its unregulated target `vo_min` is positive and the current-limit term `Rlim * d * sp((i - Ilim) / d)` subtracts at least 2% of `output_voltage` (about 99.85% of `current_limit` and above, so a load under the limit and a regulator merely in dropout stay quiet). An operating point warns at once. In a transient, a load that pulls an already-up rail down by at least 1% of `output_voltage` below its pre-overload voltage warns at once, even if the load resets and drops away microseconds later. A startup or rising clamp, such as an output bypass capacitor charging when power turns on, rides through up to 500 us without warning (enough for every catalog regulator's datasheet output capacitors: 11 us for the CH340G's 0.1 uF, 33 us for the OLED's 2 uF on the XC6206, 94 us for 10 uF on the LP2985, 208 us for 100 uF on the LM7805, and 455 us for 100 uF on the AMS1117), and warns if held at the limit for 500 us or more.

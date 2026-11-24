@@ -6,9 +6,14 @@ use orbe_model::{Drive, Time};
 use crate::active::{self, Output, Stage};
 use crate::netlist::{Average, Basis, Model, NetId, Netlist, Rating, RatingKind};
 
-use crate::diagnostic::{Diagnostic, Excursion, VoltageExcursion, exceeds_rounded, significant};
+use crate::chip::regulator::{
+    INRUSH_PS, LIMIT_KNEE_FRACTION, LIMIT_SAG_FRACTION, PULL_DOWN_FRACTION, limit_drop,
+};
+use crate::diagnostic::{
+    CurrentLimitExcursion, Diagnostic, Excursion, VoltageExcursion, exceeds_rounded, significant,
+};
 use crate::finite::Finite;
-use crate::name::{Name, Ref};
+use crate::name::{Name, Quantity, Ref};
 
 use crate::observe::Columns;
 
@@ -48,6 +53,7 @@ pub(crate) struct Ratings {
     timing: Timing,
     watches: Vec<Watch>,
     windows: Vec<Window>,
+    limits: Vec<RegulatorLimit>,
     chips: Vec<Gauge>,
     last: Option<Time>,
     /// The last sample was a step that restarted, so the next sample holds back to it.
@@ -232,6 +238,29 @@ struct Window {
     worst: f64,
     over: bool,
     excursion: Option<VoltageExcursion>,
+}
+
+#[derive(Clone)]
+struct RegulatorLimit {
+    pin: Ref,
+    pin_in: usize,
+    pin_out: usize,
+    pin_gnd: usize,
+    iout: usize,
+    reg: crate::chip::LinearRegulator,
+    /// `V(out) - V(gnd)` on the last sample clear of the current-limit knee.
+    baseline_vo: Option<f64>,
+    clamped: bool,
+    worst_drop: f64,
+    /// A startup or rising current-limit clamp waiting out [`INRUSH_PS`] before warning.
+    pending: Option<PendingLimit>,
+    excursion: Option<CurrentLimitExcursion>,
+}
+
+#[derive(Clone)]
+struct PendingLimit {
+    excursion: CurrentLimitExcursion,
+    worst_drop: f64,
 }
 
 /// The basis a sustained rating with no basis of its own takes.
@@ -427,10 +456,34 @@ impl Ratings {
                 excursion: None,
             });
         }
+        let mut limits = Vec::new();
+        for (_, part) in netlist.parts() {
+            let Model::LinearRegulator(reg) = &part.model else {
+                continue;
+            };
+            let iout_ref = Ref::Quantity(part.name.clone(), Quantity::Iout);
+            let iout = columns
+                .index(&iout_ref)
+                .expect("every linear regulator has an iout column");
+            limits.push(RegulatorLimit {
+                pin: Ref::Pin(part.name.clone(), Name::new("out").expect("a pin name")),
+                pin_in: columns.net(reg.pins[0]),
+                pin_out: columns.net(reg.pins[1]),
+                pin_gnd: columns.net(reg.pins[2]),
+                iout,
+                reg: reg.clone(),
+                baseline_vo: None,
+                clamped: false,
+                worst_drop: 0.0,
+                pending: None,
+                excursion: None,
+            });
+        }
         Ratings {
             timing,
             watches,
             windows,
+            limits,
             chips,
             last: None,
             restarted: false,
@@ -550,11 +603,95 @@ impl Ratings {
                 Some(_) => {}
             }
         }
+        for limit in &mut self.limits {
+            if limit.clamped
+                && let Some(last) = self.last
+            {
+                let dt = at.as_ps() - last.as_ps();
+                if let Some(excursion) = &mut limit.excursion {
+                    if let Some(over_ps) = &mut excursion.over_ps {
+                        *over_ps += dt;
+                    }
+                } else if let Some(pending) = &mut limit.pending
+                    && let Some(over_ps) = &mut pending.excursion.over_ps
+                {
+                    *over_ps += dt;
+                    if *over_ps >= INRUSH_PS {
+                        let promoted = limit.pending.take().expect("pending exists");
+                        limit.worst_drop = promoted.worst_drop;
+                        limit.excursion = Some(promoted.excursion);
+                    }
+                }
+            }
+            let ground = row[limit.pin_gnd].get();
+            let vi = row[limit.pin_in].get() - ground;
+            let vo = row[limit.pin_out].get() - ground;
+            let i = -row[limit.iout].get();
+            let vout = limit.reg.output_voltage.si.get();
+            let (vo_min, drop) = limit_drop(&limit.reg, i, vi);
+            let clamped = vo_min > 0.0 && drop >= LIMIT_SAG_FRACTION * vout;
+            limit.clamped = clamped;
+            if !clamped {
+                limit.pending = None;
+                if drop < LIMIT_KNEE_FRACTION * vout {
+                    limit.baseline_vo = Some(vo);
+                }
+                continue;
+            }
+            let pulled_down = limit
+                .baseline_vo
+                .is_some_and(|before| before - vo >= PULL_DOWN_FRACTION * vout);
+            let reading = CurrentLimitExcursion {
+                pin: limit.pin.clone(),
+                limit: limit.reg.current_limit.si.get(),
+                target: vout,
+                voltage: vo,
+                current: i,
+                peak_at: at,
+                first: at,
+                over_ps: self.timing.over_ps(),
+            };
+            if let Some(excursion) = &mut limit.excursion {
+                if drop > limit.worst_drop {
+                    limit.worst_drop = drop;
+                    excursion.voltage = vo;
+                    excursion.current = i;
+                    excursion.peak_at = at;
+                }
+            } else if self.timing == Timing::Point || pulled_down {
+                if let Some(mut pending) = limit.pending.take() {
+                    if drop > pending.worst_drop {
+                        pending.worst_drop = drop;
+                        pending.excursion.voltage = vo;
+                        pending.excursion.current = i;
+                        pending.excursion.peak_at = at;
+                    }
+                    limit.worst_drop = pending.worst_drop;
+                    limit.excursion = Some(pending.excursion);
+                } else {
+                    limit.worst_drop = drop;
+                    limit.excursion = Some(reading);
+                }
+            } else if let Some(pending) = &mut limit.pending {
+                if drop > pending.worst_drop {
+                    pending.worst_drop = drop;
+                    pending.excursion.voltage = vo;
+                    pending.excursion.current = i;
+                    pending.excursion.peak_at = at;
+                }
+            } else {
+                limit.pending = Some(PendingLimit {
+                    excursion: reading,
+                    worst_drop: drop,
+                });
+            }
+        }
         self.last = Some(at);
         self.restarted = false;
     }
 
-    /// One `rating.*` diagnostic per quantity that went over, through the last sample.
+    /// One `rating.*` diagnostic per quantity that went over, plus one `regulator.current_limit`
+    /// per regulator held at its current limit, through the last sample.
     pub(crate) fn findings(&self) -> Vec<Diagnostic> {
         let currents = self.watches.iter().filter_map(|watch| {
             let excursion = watch.excursion.clone()?;
@@ -567,7 +704,11 @@ impl Ratings {
             .windows
             .iter()
             .filter_map(|window| Some(Diagnostic::RatingVoltage(window.excursion.clone()?)));
-        currents.chain(voltages).collect()
+        let limits = self
+            .limits
+            .iter()
+            .filter_map(|limit| Some(Diagnostic::RegulatorCurrentLimit(limit.excursion.clone()?)));
+        currents.chain(voltages).chain(limits).collect()
     }
 
     /// Each sustained rating with no peak limit over now, through the last sample: that sample

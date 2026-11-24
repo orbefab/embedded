@@ -72,7 +72,7 @@ A Block's tests check what it shipped. Update them when the timing or the pins c
 
 - `nano-board`, Nano (CH340 clone), runs the ATmega328P-AU at 16 MHz.
 - These pins work: `D0` to `D13`, `RESET`, `GND`, `AREF`, `A0` to `A7`, `5V`, `3V3`, and `VIN`.
-- `3V3` is the CH340G's V3 pin. With 5 V it holds about 3.3 V. Past 30 mA it warns `rating.current`. With no 5 V it is off.
+- `3V3` is the CH340G's V3 pin (3.3 V with 5 V, off without). Past 30 mA it sags and warns `regulator.current_limit`.
 - `VIN` feeds `regulator`, an AMS1117-5.0. About 6.1 V or more on VIN holds 5V at 5.0 V. With VIN open the board runs from USB and 5V stays that rail. On USB only, VIN reads 0 V and supplies nothing. A real board shows about 4 V there, through the regulator's internal diode.
 - `D13` drives `led_l` through `r_l`, 1 kohm.
 
