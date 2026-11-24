@@ -1,5 +1,5 @@
 // Phases a buzzer test finds by the line printed just before each one.
-// Timer2 plays tone() on D8. Timer1 PWM is D9, Timer0 PWM is D5.
+// Timer2 plays tone() on D8. Timer1 PWM is D9, Timer0 PWM is D5. In `cut`, D9 powers the coil.
 
 void setup() {
   Serial.begin(115200);
@@ -18,6 +18,15 @@ void mark(const char *name) {
 }
 
 void loop() {
+  mark("cut");
+  digitalWrite(9, HIGH);
+  tone(8, 440);
+  delay(100);
+  digitalWrite(9, LOW);
+  delay(60);
+  noTone(8);
+  delay(60);
+
   mark("khz");
   tone(8, 1000, 120);
   delay(120);
@@ -102,6 +111,56 @@ void loop() {
 
   mark("high");
   tone(8, 10000, 40);
+  delay(40);
+
+  mark("ultra");
+  tone(8, 65535, 40);
+  delay(40);
+
+  mark("flat");
+  analogWrite(8, 128);
+  delay(40);
+
+  mark("rest");
+  tone(8, 1760);
+  delay(40);
+  noTone(8);
+  delay(40);
+  tone(8, 440, 50);
+  delay(90);
+  tone(8, 1000);
+  delay(40);
+
+  mark("fall");
+  tone(8, 1760);
+  delay(40);
+  tone(8, 220);
+  delay(40);
+  tone(8, 880);
+  delay(40);
+  tone(8, 110);
+  delay(60);
+  tone(8, 1000);
+  delay(40);
+  tone(8, 31);
+  delay(150);
+
+  mark("scale");
+  tone(8, 440, 30);
+  delay(30);
+  tone(8, 494, 30);
+  delay(30);
+  tone(8, 523, 30);
+  delay(30);
+
+  mark("climb");
+  tone(8, 31);
+  delay(100);
+  tone(8, 1000);
+  delay(30);
+  tone(8, 110);
+  delay(50);
+  tone(8, 220);
   delay(40);
 
   delay(300);

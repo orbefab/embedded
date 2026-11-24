@@ -5,7 +5,7 @@
   "part": "buzzer-12mm",
   "version": "0.2.0",
   "title": "12 mm magnetic buzzer",
-  "summary": "Externally driven 12 mm magnetic transducer, Same Sky CEM-1203(42). The coil is 42 ohm and the pins, marked + and -, are 6.5 mm apart. `hz` is the frequency of the square wave driving it, and 0 while that wave is absent. The sheet's operating voltage is 3 V to 5 V peak. A drive outside that still sounds, quieter, and the run warns. A Nano pin wired straight across the coil draws more than the pin's 40 mA, so the run warns. Drive it from 5 V through a transistor.",
+  "summary": "Externally driven 12 mm magnetic transducer, Same Sky CEM-1203(42). The coil is 42 ohm and the pins, marked + and -, are 6.5 mm apart. `hz` is the note a listener hears, from the drive's full cycles, and 0 from 17 ms after the drive stops. The sheet's operating voltage is 3 V to 5 V peak. A drive outside that still sounds, quieter, and the run warns. A Nano pin wired straight across the coil draws more than the pin's 40 mA, so the run warns. Drive it from 5 V through a transistor.",
   "tags": ["buzzer", "sound", "transducer", "passive", "through-hole", "tone"],
   "license": "MIT OR Apache-2.0",
   "docs": {
@@ -39,7 +39,7 @@
     "hz": { "of": "hz" },
   },
   "not_simulated": [
-    { "what": "sound", "why": "The engine reports the frequency of the square wave across the coil, as `hz`, and 0 when that wave is absent. It does not report sound pressure. The sheet's 85 dBA minimum is at 3.5 V peak, 2048 Hz, half duty, at 10 cm. A drive outside the 3 V to 5 V operating window still sounds, and the run warns `rating.voltage`." },
+    { "what": "sound", "why": "The engine reports the pitch, as `hz`, and not sound pressure. `hz` is the frequency of the drive's full cycles, rise to rise, as they happen. It is the median cycle of the note now playing and never mixes two notes. A new note reads from its first or second full cycle. A rest, the drive still for 17 ms, longer than a half-cycle of 31 Hz, the lowest note a Nano plays, reads 0 and clears every cycle before it. So `noTone()` reads 0 17 ms after the last edge, and a pulse train slower than 31 Hz reads 0 between its pulses. A cycle counts only while the coil swings by 0.2 V within it, so a coil with no supply or an open circuit reads 0. A pulse more than 4 times shorter than the half-cycles after it, such as the one that starts `tone()`, is not a cycle. Above 20 kHz reads 0. The sheet's 85 dBA minimum is at 3.5 V peak, 2048 Hz, half duty, at 10 cm. A drive outside the 3 V to 5 V operating window still sounds, and the run warns `rating.voltage`." },
     { "what": "inductance and resonance", "why": "The coil is its DC resistance, 42 ohm. At the 2048 Hz rated frequency the sheet's current is 35 mA maximum at 3.5 V peak, so the impedance there is higher than 42 ohm. A 5 V pin across 42 ohm draws more than that pin's 40 mA and the run warns. There is no inductance, so there is no flyback pulse and the sheet's diode is not required for this model." },
     { "what": "self oscillation", "why": "This part is quiet on DC. A buzzer with its own oscillator sounds at its resonant frequency whenever DC is applied, and that part is not this one." },
   ],

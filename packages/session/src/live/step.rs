@@ -74,7 +74,7 @@ impl Open {
             return;
         }
         let probe = self.engine.probe();
-        self.tone.note(&probe);
+        self.tone.note(&probe, self.engine.now().as_ps());
     }
 
     /// Advances to `to`. A part that reads `hz` is probed often enough to see a narrow pulse,

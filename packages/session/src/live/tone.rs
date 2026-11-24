@@ -1,22 +1,28 @@
 //! The frequency a listener would hear from a part whose reading is `"of": "hz"`.
 //!
-//! The pitch is the time from one rise of the driving pin to the next. Those rises are the
-//! chip's edges. The gap between landings is the real half-cycle, so a 1 kHz tone is not read
-//! off a 1 ms sample. A new pitch replaces the old one when the next cycle of the new pitch
-//! finishes, about one period after it starts. One interval that does not match the cycle
-//! before it is the gap where the note changed, and it is not a pitch anyone played.
+//! The pitch is the frequency of the drive's full cycles, rise to rise of the driving pin, as
+//! they happen. Those rises are the chip's own edges, so a 1 kHz tone is not read off a 1 ms
+//! sample. The reading is the median cycle of the note now playing and never mixes two notes.
+//! A cycle within 3% of that median is the same note. Two cycles in a row that agree with each
+//! other and not with it start a new note, so a new note reads its own frequency from its
+//! second full cycle, or its first after a rest. Until then the note before still reads. The
+//! cycle that spans the change, which no one played, never reads.
 //!
-//! The reading falls to 0 when the pin has not moved for 1.5 cycles of that pitch. A listener
-//! hears the note stop once its next cycle does not arrive. A lower note within about an
-//! octave still moves the pin before then, because the wait is measured from the last edge of
-//! either direction, so a falling step does not sound like a rest. A 31 Hz square wave, the
-//! lowest `tone()` on a Nano, changes every half-cycle and stays inside that wait.
+//! A rest is the pin not moving for 17 ms, longer than the half-cycle of 31 Hz, the lowest
+//! note `tone()` plays on an Uno or Nano. A rest reads 0 and clears every cycle before it, so
+//! the next note starts from nothing. Any falling step between notes moves the pin before
+//! then and does not read 0. The cost is that `noTone()` or the end of `tone(pin, f, ms)`
+//! reads 0 only once 17 ms have passed with no edge. A pulse train slower than 31 Hz rests
+//! between pulses and reads 0, as separate clicks with no pitch.
 //!
-//! The coil voltage has to move by at least 0.2 V. Play probes it every 20 us, which is enough
-//! to see a narrow PWM pulse and a whole-kHz tone, and not once per picosecond of a stiff edge.
-//! A rise
-//! followed by a fall in under 15 us is not a cycle. A half-cycle at 20 kHz is 25 us, and the
-//! few-microsecond pulse at the start of `tone()` is shorter than that.
+//! A cycle counts only while the coil swings by at least 0.2 V within the last cycle, so a
+//! coil whose supply is cut or whose circuit is open reads 0 within one cycle. Play probes the
+//! coil every 20 us, which is enough to see a narrow PWM pulse.
+//!
+//! A pulse of either level more than 4 times shorter than both half-cycles after it is a
+//! glitch and not a cycle. `tone()` starts each note from silence with a pulse of 7 us to
+//! 60 us, and a 31 Hz half-cycle is 16 ms. A narrow PWM pulse repeats at its own width, so it
+//! still counts. A pitch above 20 kHz is not heard and reads 0.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
@@ -27,23 +33,30 @@ use orbe_scene::RefMap;
 
 use crate::reply::Code;
 
-/// Below this peak-to-peak voltage the coil is not being driven.
+/// Below this swing across the coil within the last cycle, the coil is not being driven.
 const EDGE_V: f64 = 0.2;
-/// Shorter than a half-cycle at the top of hearing, and longer than `tone()`'s startup pulse.
-const GLITCH_PS: u64 = 15_000_000;
-/// The pin has stopped when this many of the last cycles pass with no edge.
-const STOP_CYCLES: f64 = 1.5;
-/// Two periods within this fraction are the same pitch. It covers a late compare interrupt
-/// and still treats an octave step as a new note.
-const SAME_PITCH: f64 = 0.2;
-/// How many recent cycles to average once a pitch has settled.
-const AVERAGE: usize = 8;
+/// The pin has rested when it has not moved for this long.
+const REST_PS: u64 = orbe_engine::passive::DRIVE_REST_PS;
+/// A pulse this many times shorter than both half-cycles after it is a glitch.
+const GLITCH_RATIO: u64 = 4;
+/// Two cycles within this fraction of the longer are the same note. A semitone is 6%.
+const SAME_PITCH: f64 = 0.03;
+/// Above this no one hears a pitch.
+const AUDIBLE_HZ: f64 = 20_000.0;
+/// Edges kept per pin, 16 ms of a 4 kHz note.
+const HISTORY: usize = 128;
 
 #[derive(Clone, Copy, Debug)]
 struct Flip {
     at: u64,
-    signal: usize,
     high: bool,
+}
+
+/// One pin that can drive the coil, and its edges since it last rested.
+#[derive(Clone, Debug)]
+struct Track {
+    signal: usize,
+    flips: VecDeque<Flip>,
 }
 
 #[derive(Clone, Debug)]
@@ -51,13 +64,9 @@ struct Meter {
     path: String,
     reading: String,
     column: orbe_engine::name::Ref,
-    signals: Vec<usize>,
-    flips: VecDeque<Flip>,
-    /// The coil voltages seen so far. A stiff driver takes many tiny steps, so the swing is
-    /// the extremes, not the last handful of samples.
-    low: f64,
-    high: f64,
-    swung: bool,
+    tracks: Vec<Track>,
+    /// The coil voltage at each probe, back to the longest cycle a note can have.
+    coil: VecDeque<(u64, f64)>,
 }
 
 pub(super) struct Log {
@@ -151,11 +160,14 @@ impl Log {
                 path: path.clone(),
                 reading,
                 column: super::quantity(&engine, Quantity::V),
-                signals: watched,
-                flips: VecDeque::new(),
-                low: 0.0,
-                high: 0.0,
-                swung: false,
+                tracks: watched
+                    .into_iter()
+                    .map(|signal| Track {
+                        signal,
+                        flips: VecDeque::new(),
+                    })
+                    .collect(),
+                coil: VecDeque::new(),
             });
         }
         Log { meters }
@@ -173,133 +185,192 @@ impl Log {
         &self.meters[index].reading
     }
 
-    pub(super) fn note(&mut self, probe: &Probe) {
+    /// The coil voltage at `now_ps`.
+    pub(super) fn note(&mut self, probe: &Probe, now_ps: u64) {
         for meter in &mut self.meters {
-            let volts = probe
-                .get(&meter.column)
-                .expect("a checked column")
-                .get()
-                .abs();
-            if !meter.swung {
-                meter.low = volts;
-                meter.high = volts;
-                meter.swung = true;
-            } else {
-                meter.low = meter.low.min(volts);
-                meter.high = meter.high.max(volts);
+            let volts = probe.get(&meter.column).expect("a checked column").get();
+            if meter.coil.back().is_some_and(|&(at, _)| at >= now_ps) {
+                meter.coil.pop_back();
+            }
+            meter.coil.push_back((now_ps, volts));
+            // One sample older than the longest cycle stays, as the level that cycle began at.
+            let oldest = now_ps.saturating_sub(2 * REST_PS);
+            while meter.coil.get(1).is_some_and(|&(at, _)| at <= oldest) {
+                meter.coil.pop_front();
             }
         }
     }
 
+    /// Edges through `now_ps`. An edge at `now_ps` comes again in the next batch.
     pub(super) fn note_edges(&mut self, edges: &[Change], now_ps: u64) {
         for meter in &mut self.meters {
             for edge in edges {
                 let at = edge.at.as_ps();
-                if at > now_ps || !meter.signals.contains(&edge.signal) {
+                if at > now_ps {
                     continue;
                 }
-                let high = edge.level == EngineLevel::High;
-                if meter.flips.back().is_some_and(|flip| {
-                    flip.at == at && flip.signal == edge.signal && flip.high == high
-                }) {
+                let Some(track) = meter.tracks.iter_mut().find(|t| t.signal == edge.signal) else {
                     continue;
-                }
-                meter.flips.push_back(Flip {
+                };
+                track.push(Flip {
                     at,
-                    signal: edge.signal,
-                    high,
+                    high: edge.level == EngineLevel::High,
                 });
-            }
-            while meter.flips.len() > 48 {
-                meter.flips.pop_front();
             }
         }
     }
 
     pub(super) fn hz(&self, index: usize, now_ps: u64) -> f64 {
         let meter = &self.meters[index];
-        if meter.swing() < EDGE_V {
-            return 0.0;
-        }
         let mut best = 0.0_f64;
-        for &signal in &meter.signals {
-            let flips: Vec<Flip> = meter
-                .flips
-                .iter()
-                .copied()
-                .filter(|flip| flip.signal == signal)
-                .collect();
-            let Some(period) = pitch(&rises(&flips)) else {
+        for track in &meter.tracks {
+            let flips: Vec<Flip> = track.flips.iter().copied().collect();
+            let Some((period, cycle_from)) = period(&flips, now_ps) else {
                 continue;
             };
-            let last = flips.last().map(|flip| flip.at).unwrap_or(0);
-            if (now_ps.saturating_sub(last)) as f64 > STOP_CYCLES * period as f64 {
+            if meter.swing(cycle_from, now_ps) < EDGE_V {
                 continue;
             }
-            best = best.max(1e12 / period as f64);
+            let hz = 1e12 / period as f64;
+            if hz <= AUDIBLE_HZ {
+                best = best.max(hz);
+            }
         }
         best
     }
 }
 
-impl Meter {
-    fn swing(&self) -> f64 {
-        if self.swung {
-            self.high - self.low
-        } else {
-            0.0
+impl Track {
+    fn push(&mut self, flip: Flip) {
+        if let Some(last) = self.flips.back() {
+            if flip.at < last.at || (flip.at == last.at && flip.high == last.high) {
+                return;
+            }
+            if flip.at == last.at {
+                // A pulse of no width is no edge.
+                self.flips.pop_back();
+                return;
+            }
+            if flip.at - last.at > REST_PS {
+                self.flips.clear();
+            }
+        }
+        self.flips.push_back(flip);
+        while self.flips.len() > HISTORY {
+            self.flips.pop_front();
         }
     }
 }
 
-/// Rising edges that are not the start of a pulse shorter than [`GLITCH_PS`].
-fn rises(flips: &[Flip]) -> Vec<u64> {
-    let mut out = Vec::new();
-    for (i, flip) in flips.iter().enumerate() {
-        if !flip.high {
+impl Meter {
+    /// The coil's swing from `from_ps` to `to_ps`, counting the level it held at `from_ps`.
+    fn swing(&self, from_ps: u64, to_ps: u64) -> f64 {
+        let start = self.coil.partition_point(|&(at, _)| at <= from_ps);
+        let (mut low, mut high) = (f64::INFINITY, f64::NEG_INFINITY);
+        for &(at, volts) in self.coil.range(start.saturating_sub(1)..) {
+            if at > to_ps {
+                break;
+            }
+            low = low.min(volts);
+            high = high.max(volts);
+        }
+        if low > high { 0.0 } else { high - low }
+    }
+}
+
+/// The period of the note `flips` play at `now_ps`, in picoseconds, and the rise that began
+/// the latest full cycle. `None` when the pin has rested or no full cycle has passed.
+fn period(flips: &[Flip], now_ps: u64) -> Option<(u64, u64)> {
+    let last = flips.last()?;
+    if now_ps.saturating_sub(last.at) > REST_PS {
+        return None;
+    }
+    let rises = rises(flips, now_ps);
+    let intervals: Vec<u64> = rises.windows(2).map(|pair| pair[1] - pair[0]).collect();
+    Some((note(&intervals)?, rises[rises.len() - 2]))
+}
+
+/// The rises that start a cycle: those of `flips` left once each glitch is taken out.
+fn rises(flips: &[Flip], now_ps: u64) -> Vec<u64> {
+    let length = |k: usize| -> Option<(u64, bool)> {
+        let flip = flips.get(k)?;
+        Some(match flips.get(k + 1) {
+            Some(next) => (next.at - flip.at, true),
+            None => (now_ps.saturating_sub(flip.at), false),
+        })
+    };
+    let mut keep = vec![true; flips.len()];
+    for k in 0..flips.len().saturating_sub(1) {
+        if !keep[k] {
             continue;
         }
-        let glitch = flips
-            .get(i + 1)
-            .is_some_and(|next| !next.high && next.at.saturating_sub(flip.at) < GLITCH_PS);
-        if !glitch {
+        let width = flips[k + 1].at - flips[k].at;
+        let limit = width.saturating_mul(GLITCH_RATIO);
+        let Some((after, _)) = length(k + 1) else {
+            continue;
+        };
+        if after <= limit {
+            continue;
+        }
+        // Until the second half-cycle after it is long, or ends short, the pulse is held out.
+        let glitch = match length(k + 2) {
+            None => true,
+            Some((then, done)) => then > limit || !done,
+        };
+        if glitch {
+            keep[k] = false;
+            keep[k + 1] = false;
+        }
+    }
+    let mut out = Vec::new();
+    let mut level = None;
+    for (flip, kept) in flips.iter().zip(keep) {
+        if !kept || level == Some(flip.high) {
+            continue;
+        }
+        level = Some(flip.high);
+        if flip.high {
             out.push(flip.at);
         }
     }
     out
 }
 
-fn close(a: u64, b: u64) -> bool {
-    let scale = a.max(b) as f64;
-    scale > 0.0 && a.abs_diff(b) as f64 / scale <= SAME_PITCH
+fn same(a: u64, b: u64) -> bool {
+    a.abs_diff(b) as f64 <= SAME_PITCH * a.max(b) as f64
 }
 
-fn pitch(rises: &[u64]) -> Option<u64> {
-    if rises.len() < 2 {
-        return None;
-    }
-    let intervals: Vec<u64> = rises.windows(2).map(|pair| pair[1] - pair[0]).collect();
-    let last = *intervals.last().expect("at least one");
-    if intervals.len() >= 2 {
-        let prev = intervals[intervals.len() - 2];
-        if !close(last, prev) && intervals.len() >= 3 && close(prev, intervals[intervals.len() - 3])
-        {
-            return Some(mean_run(&intervals[..intervals.len() - 1]));
+/// The period of the note the last of `intervals` belong to: the median of its cycles.
+fn note(intervals: &[u64]) -> Option<u64> {
+    let mut run: Vec<u64> = Vec::new();
+    let mut held: Option<u64> = None;
+    for &cycle in intervals {
+        let Some(center) = median(&run) else {
+            run.push(cycle);
+            continue;
+        };
+        if same(cycle, center) {
+            run.push(cycle);
+            held = None;
+            continue;
+        }
+        match held.take() {
+            // A late edge and the early one after it.
+            Some(before) if same((before + cycle) / 2, center) => run.extend([before, cycle]),
+            Some(before) if same(before, cycle) => run = vec![before, cycle],
+            _ => held = Some(cycle),
         }
     }
-    Some(mean_run(&intervals))
+    median(&run)
 }
 
-fn mean_run(intervals: &[u64]) -> u64 {
-    let last = *intervals.last().expect("at least one");
-    let mut sum = 0u64;
-    let mut count = 0u64;
-    for &interval in intervals.iter().rev().take(AVERAGE) {
-        if !close(interval, last) {
-            break;
-        }
-        sum += interval;
-        count += 1;
+fn median(run: &[u64]) -> Option<u64> {
+    let mut sorted = run.to_vec();
+    sorted.sort_unstable();
+    let mid = sorted.len() / 2;
+    match sorted.len() {
+        0 => None,
+        n if n % 2 == 1 => Some(sorted[mid]),
+        _ => Some((sorted[mid - 1] + sorted[mid]) / 2),
     }
-    sum / count.max(1)
 }

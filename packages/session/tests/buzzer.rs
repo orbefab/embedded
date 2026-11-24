@@ -158,6 +158,12 @@ fn a_series_resistor_plays_440_and_warns_that_the_coil_is_under_3_v() {
     assert!(run(&mut live, "step 600ms").ok());
     let quiet = hz(&mut live);
     assert!(quiet < 1.0, "rest read {quiet}");
+    // 708 ms in, `tone(8, 440, 500)` once a second has sounded for 500 ms.
+    let over = drive_over_ps(&mut live);
+    assert!(
+        (490_000_000_000..=510_000_000_000).contains(&over),
+        "500 ms of tone counted {over} ps"
+    );
 }
 
 #[test]
@@ -219,7 +225,7 @@ fn whole_kilohertz_tones_read_steadily() {
 }
 
 #[test]
-fn a_31_hz_tone_and_a_25_hz_click_train_read_steadily() {
+fn a_31_hz_tone_reads_steadily_and_a_25_hz_click_train_reads_0() {
     let mut live = drive_scene(DRIVE);
     phase(&mut live, "low");
     assert!(run(&mut live, "step 70ms").ok());
@@ -227,12 +233,11 @@ fn a_31_hz_tone_and_a_25_hz_click_train_read_steadily() {
     for hz in &low {
         assert_near(*hz, 31.0, 0.01);
     }
+    // 40 ms between clicks is a rest, longer than any half-cycle of a note.
     phase(&mut live, "clicks");
     assert!(run(&mut live, "step 100ms").ok());
     let clicks = sweep(&mut live, "step 10ms", 8);
-    for hz in &clicks {
-        assert_near(*hz, 25.0, 0.05);
-    }
+    assert!(clicks.iter().all(|hz| *hz == 0.0), "{clicks:?}");
 }
 
 #[test]
@@ -384,6 +389,27 @@ fn dc_unpowered_floating_and_a_buzzer_to_5_v_read_as_a_listener_would() {
 }
 
 #[test]
+fn ten_kilohertz_reads_and_a_tone_above_hearing_or_analog_write_on_d8_reads_0() {
+    let mut live = drive_scene(DRIVE);
+    phase(&mut live, "high");
+    assert!(run(&mut live, "step 40ms").ok());
+    assert_near(hz(&mut live), 10_000.0, 0.001);
+    phase(&mut live, "ultra");
+    settle(&mut live);
+    let playing = run(&mut live, "step 5ms").json();
+    let edges = playing["data"]["changes"].as_array().unwrap().len()
+        + playing["data"]["more"].as_u64().unwrap() as usize;
+    assert!(edges > 200, "D8 is not playing above 20 kHz: {playing}");
+    let ultra = sweep(&mut live, "step 5ms", 8);
+    assert!(ultra.iter().all(|hz| *hz == 0.0), "{ultra:?}");
+    // D8 has no PWM, so `analogWrite(8, 128)` holds it high.
+    phase(&mut live, "flat");
+    settle(&mut live);
+    let flat = sweep(&mut live, "step 5ms", 6);
+    assert!(flat.iter().all(|hz| *hz == 0.0), "{flat:?}");
+}
+
+#[test]
 fn expect_on_hz_rejects_a_voltage() {
     let mut live = tone_scene(DIVIDER);
     let reply = run(&mut live, "expect @bz.hz > 4V");
@@ -413,4 +439,168 @@ fn the_old_pin_numbers_are_not_pins() {
     let mut live = Live::new("t", files);
     let open = live.run(&Command::Open(PathBuf::from("scene.jsonc")));
     assert!(!open.ok(), "bz.1 still opened: {}", open.text());
+}
+
+/// Steps past the rest that ends the phase before, to 2 ms before the phase's first note.
+fn settle(live: &mut Live) {
+    assert!(run(live, "step 18ms").ok());
+}
+
+/// Each 1 ms reading is 0 or within 0.5% of one of `notes`. The first cycle after `tone()`
+/// starts is up to 0.5% short, 9 cents, as the timer was part way through a count. Returns
+/// what read in order, each stretch once, with 0 for a rest and no 0 before the first note.
+fn only_notes(got: &[f64], notes: &[f64]) -> Vec<f64> {
+    let mut order: Vec<f64> = Vec::new();
+    for (ms, hz) in got.iter().copied().enumerate() {
+        let note = if hz == 0.0 {
+            0.0
+        } else {
+            notes
+                .iter()
+                .copied()
+                .find(|note| near(hz, *note, 0.005))
+                .unwrap_or_else(|| panic!("{hz} Hz at {} ms is no note played: {got:?}", ms + 1))
+        };
+        if order.last() != Some(&note) && !(order.is_empty() && note == 0.0) {
+            order.push(note);
+        }
+    }
+    order
+}
+
+#[test]
+fn a_rest_clears_the_note_before_it() {
+    // 1760 Hz, 40 ms quiet, `tone(8, 440, 50)`, 40 ms quiet, `tone(8, 1000)`.
+    let mut live = drive_scene(DRIVE);
+    phase(&mut live, "rest");
+    settle(&mut live);
+    let got = sweep(&mut live, "step 1ms", 225);
+    let order = only_notes(&got, &[1760.6, 440.1, 1000.0]);
+    assert_eq!(order, [1760.6, 0.0, 440.1, 0.0, 1000.0], "{got:?}");
+}
+
+#[test]
+fn a_fall_of_more_than_an_octave_holds_the_note_until_the_next_one_reads() {
+    // 1760 to 220, 880 to 110, 1000 to 31, with no rest between.
+    let mut live = drive_scene(DRIVE);
+    phase(&mut live, "fall");
+    assert!(run(&mut live, "step 25ms").ok());
+    let got = sweep(&mut live, "step 1ms", 360);
+    let order = only_notes(&got, &[1760.6, 220.1, 880.3, 110.0, 1000.0, 31.0]);
+    assert_eq!(
+        order,
+        [1760.6, 220.1, 880.3, 110.0, 1000.0, 31.0],
+        "{got:?}"
+    );
+    assert!(got.iter().all(|hz| *hz > 0.0), "a note read 0: {got:?}");
+}
+
+#[test]
+fn a_new_note_reads_its_own_pitch_and_no_blend() {
+    // 30 ms notes at 440, 494 and 523, then 31 to 1000 and 110 to 220 with no rest.
+    let mut live = drive_scene(DRIVE);
+    phase(&mut live, "scale");
+    settle(&mut live);
+    let got = sweep(&mut live, "step 1ms", 100);
+    let order = only_notes(&got, &[440.1, 494.1, 523.0]);
+    assert_eq!(order, [440.1, 494.1, 523.0], "{got:?}");
+    let right = got.iter().filter(|hz| near(**hz, 494.1, 0.002)).count();
+    assert!(right >= 24, "494 read for {right} of 30 ms: {got:?}");
+
+    phase(&mut live, "climb");
+    settle(&mut live);
+    let got = sweep(&mut live, "step 1ms", 225);
+    let order = only_notes(&got, &[31.0, 1000.0, 110.0, 220.1]);
+    assert_eq!(order, [31.0, 1000.0, 110.0, 220.1], "{got:?}");
+}
+
+#[test]
+fn the_first_note_from_silence_reads_its_own_pitch() {
+    let mut live = drive_scene(DRIVE);
+    phase(&mut live, "low");
+    settle(&mut live);
+    let got = sweep(&mut live, "step 1ms", 150);
+    assert_eq!(only_notes(&got, &[31.0]), [31.0], "{got:?}");
+
+    let mut live = opened(
+        "tone",
+        r#""rs": { "type": "resistor-axial", "resistance": "10" },
+          "rb": { "type": "resistor-axial", "resistance": "1k" },
+          "q1": { "type": "npn-2n2222-to92" },
+          "bz": { "type": "buzzer-12mm" }"#,
+        r#"["nano.5V", "rs.a"], ["rs.b", "bz.+"], ["bz.-", "q1.collector"],
+           ["q1.emitter", "nano.GND"], ["nano.D8", "rb.a"], ["rb.b", "q1.base"]"#,
+    );
+    let got = sweep(&mut live, "step 1ms", 60);
+    assert_eq!(only_notes(&got, &[440.1]), [440.1], "{got:?}");
+}
+
+/// D8 switches the coil's `-` to ground through a 2N2222. `supply` feeds `+`.
+fn switched(parts: &str, supply: &str) -> Live {
+    opened(
+        "drive",
+        &format!(
+            r#""rb": {{ "type": "resistor-axial", "resistance": "1k" }},
+          "q1": {{ "type": "npn-2n2222-to92" }},
+          "bz": {{ "type": "buzzer-12mm" }}, {parts}"#
+        ),
+        &format!(
+            r#"{supply}, ["bz.-", "q1.collector"],
+           ["q1.emitter", "nano.GND"], ["nano.D8", "rb.a"], ["rb.b", "q1.base"]"#
+        ),
+    )
+}
+
+#[test]
+fn a_coil_whose_supply_is_cut_reads_0_while_the_pin_still_plays() {
+    // D9 feeds the coil through 10 ohm. It goes low 100 ms into a 440 Hz tone that plays on
+    // for 60 ms.
+    let mut live = switched(
+        r#""rs": { "type": "resistor-axial", "resistance": "10" }"#,
+        r#"["nano.D9", "rs.a"], ["rs.b", "bz.+"]"#,
+    );
+    phase(&mut live, "cut");
+    assert!(run(&mut live, "step 100ms").ok());
+    assert_near(hz(&mut live), 440.1, 0.002);
+    assert!(run(&mut live, "step 25ms").ok());
+    for _ in 0..4 {
+        assert!(volts(&mut live) < 0.01);
+        assert_eq!(hz(&mut live), 0.0);
+        assert!(run(&mut live, "step 10ms").ok());
+    }
+}
+
+fn drive_over_ps(live: &mut Live) -> u64 {
+    let json = run(live, "snapshot").json();
+    let found: Vec<u64> = json["data"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "rating.voltage")
+        .map(|d| d["data"]["over_ps"].as_u64().unwrap())
+        .collect();
+    assert_eq!(found.len(), 1, "{json}");
+    found[0]
+}
+
+#[test]
+fn a_drive_over_5_v_counts_while_it_sounds_and_not_while_it_rests() {
+    // A 6 V jack feeds the coil. `noTone` lands 160 ms into the `cut` phase's tone.
+    let mut live = switched(
+        r#""j1": { "type": "barrel-jack-dc21", "voltage": 6 }"#,
+        r#"["j1.center", "bz.+"], ["j1.sleeve", "nano.GND"]"#,
+    );
+    phase(&mut live, "cut");
+    assert!(run(&mut live, "step 50ms").ok());
+    let sounding = drive_over_ps(&mut live);
+    assert!(run(&mut live, "step 100ms").ok());
+    let grew = drive_over_ps(&mut live) - sounding;
+    assert!(
+        (95_000_000_000..=105_000_000_000).contains(&grew),
+        "100 ms of tone counted {grew} ps"
+    );
+    assert!(run(&mut live, "step 60ms").ok());
+    let after = drive_over_ps(&mut live);
+    assert!(run(&mut live, "step 40ms").ok());
+    assert_eq!(drive_over_ps(&mut live), after, "the rest counted");
 }

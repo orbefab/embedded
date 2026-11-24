@@ -520,7 +520,7 @@ impl Open {
         let mut light = light::Log::build(&refs, &reports);
         light.note(&engine.probe());
         let mut tone = tone::Log::build(&refs, &reports, &signals);
-        tone.note(&engine.probe());
+        tone.note(&engine.probe(), engine.now().as_ps());
         let mut open = Open {
             engine,
             refs,
