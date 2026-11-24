@@ -6,7 +6,12 @@ use orbe_model::{Drive, Time};
 use crate::active::{self, Output, Stage};
 use crate::netlist::{Average, Basis, Model, NetId, Netlist, Rating, RatingKind};
 
-use crate::diagnostic::{Diagnostic, Excursion, VoltageExcursion, exceeds_rounded, significant};
+use crate::chip::regulator::{
+    LIMIT_HOLD_PS, LIMIT_KNEE_FRACTION, LIMIT_SAG_FRACTION, MIN_CHARGE_RATE, STALL_PS, limit_drop,
+};
+use crate::diagnostic::{
+    CurrentLimitExcursion, Diagnostic, Excursion, VoltageExcursion, exceeds_rounded, significant,
+};
 use crate::finite::Finite;
 use crate::name::{Name, Quantity, Ref};
 use crate::passive::DRIVE_REST_PS;
@@ -49,6 +54,7 @@ pub(crate) struct Ratings {
     timing: Timing,
     watches: Vec<Watch>,
     windows: Vec<Window>,
+    limits: Vec<RegulatorLimit>,
     /// A resistor's operating voltage, checked on the peak of a drive that leaves zero.
     drives: Vec<CoilDrive>,
     chips: Vec<Gauge>,
@@ -265,6 +271,46 @@ struct Window {
     worst: f64,
     over: bool,
     excursion: Option<VoltageExcursion>,
+}
+
+#[derive(Clone)]
+struct RegulatorLimit {
+    pin: Ref,
+    pin_in: usize,
+    pin_out: usize,
+    pin_gnd: usize,
+    iout: usize,
+    reg: crate::chip::LinearRegulator,
+    /// `V(out) - V(gnd)` on the last sample clear of the current-limit knee.
+    baseline_vo: Option<f64>,
+    /// Start of the current continuous clamped spell.
+    clamped_since: Option<Time>,
+    /// Previous sample in the current continuous clamped spell.
+    last_clamped: Option<ClampedSample>,
+    /// Monotone decreasing queue of `(span_end, peak_sample)` over the last [`LIMIT_HOLD_PS`],
+    /// where `peak_sample` is the higher-voltage endpoint of each clamped step. Once the spell
+    /// reaches [`LIMIT_HOLD_PS`], the front is the lowest voltage bound that held across it.
+    hold: VecDeque<(Time, ClampedSample)>,
+    /// A clamped rail starting below target (such as capacitor charging) that stays quiet while
+    /// its output keeps rising toward target.
+    pending: Option<PendingLimit>,
+    excursion: Option<CurrentLimitExcursion>,
+}
+
+#[derive(Clone, Copy)]
+struct ClampedSample {
+    at: Time,
+    vo: f64,
+    current: f64,
+}
+
+#[derive(Clone)]
+struct PendingLimit {
+    first: Time,
+    over_ps: Option<u64>,
+    pulled_since: Option<Time>,
+    progress_vo: f64,
+    progress_at: Time,
 }
 
 /// The basis a sustained rating with no basis of its own takes.
@@ -510,6 +556,30 @@ impl Ratings {
                 excursion: None,
             });
         }
+        let mut limits = Vec::new();
+        for (_, part) in netlist.parts() {
+            let Model::LinearRegulator(reg) = &part.model else {
+                continue;
+            };
+            let iout_ref = Ref::Quantity(part.name.clone(), Quantity::Iout);
+            let iout = columns
+                .index(&iout_ref)
+                .expect("every linear regulator has an iout column");
+            limits.push(RegulatorLimit {
+                pin: Ref::Pin(part.name.clone(), Name::new("out").expect("a pin name")),
+                pin_in: columns.net(reg.pins[0]),
+                pin_out: columns.net(reg.pins[1]),
+                pin_gnd: columns.net(reg.pins[2]),
+                iout,
+                reg: reg.clone(),
+                baseline_vo: None,
+                clamped_since: None,
+                last_clamped: None,
+                hold: VecDeque::new(),
+                pending: None,
+                excursion: None,
+            });
+        }
         for (_, part) in netlist.parts() {
             let Model::Resistor(resistor) = &part.model else {
                 continue;
@@ -540,6 +610,7 @@ impl Ratings {
             timing,
             watches,
             windows,
+            limits,
             drives,
             chips,
             last: None,
@@ -661,6 +732,125 @@ impl Ratings {
                 Some(_) => {}
             }
         }
+        for limit in &mut self.limits {
+            if limit.clamped_since.is_some()
+                && let Some(last) = self.last
+            {
+                let dt = at.as_ps() - last.as_ps();
+                if let Some(excursion) = &mut limit.excursion {
+                    if let Some(over_ps) = &mut excursion.over_ps {
+                        *over_ps += dt;
+                    }
+                } else if let Some(pending) = &mut limit.pending
+                    && let Some(over_ps) = &mut pending.over_ps
+                {
+                    *over_ps += dt;
+                }
+            }
+            let ground = row[limit.pin_gnd].get();
+            let vi = row[limit.pin_in].get() - ground;
+            let vo = row[limit.pin_out].get() - ground;
+            let i = -row[limit.iout].get();
+            let vout = limit.reg.output_voltage.si.get();
+            let (vo_min, drop) = limit_drop(&limit.reg, i, vi);
+            let sag = LIMIT_SAG_FRACTION * vout;
+            let clamped = vo_min > 0.0 && drop >= sag;
+            if !clamped {
+                limit.clamped_since = None;
+                limit.last_clamped = None;
+                limit.hold.clear();
+                limit.pending = None;
+                if drop < LIMIT_KNEE_FRACTION * vout {
+                    limit.baseline_vo = Some(vo);
+                }
+                continue;
+            }
+            let sample = ClampedSample { at, vo, current: i };
+            let since = *limit.clamped_since.get_or_insert(at);
+            if let Some(prev) = limit.last_clamped.replace(sample) {
+                let high = if sample.vo >= prev.vo { sample } else { prev };
+                while limit
+                    .hold
+                    .back()
+                    .is_some_and(|(_, back)| back.vo <= high.vo)
+                {
+                    limit.hold.pop_back();
+                }
+                limit.hold.push_back((at, high));
+                let cutoff = at.as_ps().saturating_sub(LIMIT_HOLD_PS);
+                while limit
+                    .hold
+                    .front()
+                    .is_some_and(|(to, _)| to.as_ps() <= cutoff)
+                {
+                    limit.hold.pop_front();
+                }
+            }
+            let held = (at.as_ps() - since.as_ps() >= LIMIT_HOLD_PS)
+                .then(|| limit.hold.front().map(|(_, s)| *s))
+                .flatten();
+            if let Some(excursion) = &mut limit.excursion {
+                if let Some(peak) = held
+                    && peak.vo < excursion.voltage
+                {
+                    excursion.voltage = peak.vo;
+                    excursion.current = peak.current;
+                    excursion.peak_at = peak.at;
+                }
+                continue;
+            }
+            let pulled = limit.baseline_vo.is_some_and(|before| before - vo >= sag);
+            let warn = if self.timing == Timing::Point {
+                true
+            } else if let Some(pending) = &mut limit.pending {
+                if pulled {
+                    let since = *pending.pulled_since.get_or_insert(at);
+                    at.as_ps() - since.as_ps() >= LIMIT_HOLD_PS
+                } else {
+                    pending.pulled_since = None;
+                    let dt_ps = at.as_ps() - pending.progress_at.as_ps();
+                    if dt_ps >= STALL_PS {
+                        if vo - pending.progress_vo
+                            >= MIN_CHARGE_RATE * drop * (dt_ps as f64 * 1e-12)
+                        {
+                            pending.progress_vo = vo;
+                            pending.progress_at = at;
+                            false
+                        } else {
+                            true
+                        }
+                    } else {
+                        false
+                    }
+                }
+            } else {
+                limit.pending = Some(PendingLimit {
+                    first: at,
+                    over_ps: self.timing.over_ps(),
+                    pulled_since: pulled.then_some(at),
+                    progress_vo: vo,
+                    progress_at: at,
+                });
+                false
+            };
+            if warn {
+                let (first, over_ps) = match limit.pending.take() {
+                    Some(pending) => (pending.first, pending.over_ps),
+                    None => (at, self.timing.over_ps()),
+                };
+                let peak = held.unwrap_or(sample);
+                limit.excursion = Some(CurrentLimitExcursion {
+                    pin: limit.pin.clone(),
+                    limit: limit.reg.current_limit.si.get(),
+                    target: vout,
+                    voltage: peak.vo,
+                    current: peak.current,
+                    peak_at: peak.at,
+                    first,
+                    over_ps,
+                });
+            }
+        }
         for drive in &mut self.drives {
             let volts = row[drive.column].get().abs();
             let loud = volts >= DRIVE_QUIET_V;
@@ -704,7 +894,8 @@ impl Ratings {
         self.restarted = false;
     }
 
-    /// One `rating.*` diagnostic per quantity that went over, through the last sample.
+    /// One `rating.*` diagnostic per quantity that went over, plus one `regulator.current_limit`
+    /// per regulator held at its current limit, through the last sample.
     pub(crate) fn findings(&self) -> Vec<Diagnostic> {
         let currents = self.watches.iter().filter_map(|watch| {
             let excursion = watch.excursion.clone()?;
@@ -717,11 +908,19 @@ impl Ratings {
             .windows
             .iter()
             .filter_map(|window| Some(Diagnostic::RatingVoltage(window.excursion.clone()?)));
+        let limits = self
+            .limits
+            .iter()
+            .filter_map(|limit| Some(Diagnostic::RegulatorCurrentLimit(limit.excursion.clone()?)));
         let drives = self
             .drives
             .iter()
             .filter_map(|drive| Some(Diagnostic::RatingVoltage(drive.excursion.clone()?)));
-        currents.chain(voltages).chain(drives).collect()
+        currents
+            .chain(voltages)
+            .chain(limits)
+            .chain(drives)
+            .collect()
     }
 
     /// Each sustained rating with no peak limit over now, through the last sample: that sample

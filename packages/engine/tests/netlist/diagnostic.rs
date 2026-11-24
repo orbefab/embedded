@@ -1,8 +1,8 @@
 use orbe_model::Time;
 
 use orbe_engine::diagnostic::{
-    AnalysisRule, Diagnostic, Excursion, LinkKind, ProtocolRule, ScheduleRule, Severity, Solve,
-    ValueRule, WaveformRule,
+    AnalysisRule, CurrentLimitExcursion, Diagnostic, Excursion, LinkKind, ProtocolRule,
+    ScheduleRule, Severity, Solve, ValueRule, WaveformRule,
 };
 use orbe_engine::name::{Name, NameError, Ref};
 use orbe_engine::netlist::{Average, Basis};
@@ -161,6 +161,16 @@ fn samples() -> Vec<Diagnostic> {
             peripheral: "RMT",
             kind: LinkKind::Pulses,
         },
+        Diagnostic::RegulatorCurrentLimit(CurrentLimitExcursion {
+            pin: Ref::Pin(name("u1"), name("out")),
+            limit: 0.03,
+            target: 3.3,
+            voltage: 3.003,
+            current: 0.030007,
+            peak_at: Time::from_ps(9_000),
+            first: Time::from_ps(8_000),
+            over_ps: Some(2_000),
+        }),
     ]
 }
 
@@ -198,7 +208,7 @@ fn codes_are_unique_and_match_the_grammar() {
         assert!(is_code(code), "{code}");
         assert!(seen.insert(code), "duplicate code {code}");
     }
-    assert_eq!(seen.len(), 26);
+    assert_eq!(seen.len(), 27);
 }
 
 /// `docs/engine/diagnostics.md` gives each code its own `## <code>` heading.
@@ -247,12 +257,14 @@ fn severity_refs_and_time_follow_the_variant() {
             "chip.protocol",
             "chip.link_miswired",
             "chip.link_unsupported",
+            "regulator.current_limit",
         ]
     );
     for diagnostic in &found {
         let code = diagnostic.code();
         let warning = code == "net.floating"
             || code.starts_with("rating.")
+            || code == "regulator.current_limit"
             || code == "chip.protocol"
             || code == "chip.link_miswired";
         assert_eq!(diagnostic.severity() == Severity::Warning, warning);
@@ -268,6 +280,8 @@ fn severity_refs_and_time_follow_the_variant() {
             assert_eq!(diagnostic.at(), Some(Time::from_ps(6_000)));
         } else if code == "chip.link_unsupported" {
             assert_eq!(diagnostic.at(), Some(Time::from_ps(7_000)));
+        } else if code == "regulator.current_limit" {
+            assert_eq!(diagnostic.at(), Some(Time::from_ps(8_000)));
         } else {
             assert_eq!(diagnostic.at(), None);
         }
@@ -408,6 +422,11 @@ fn severity_refs_and_time_follow_the_variant() {
             r##""refs":["#r1.p"],"t_ps":5,"message":"#r1.p averages 3 W with a 10.2 ms time constant while it is 3.25 W, over its 0.25 W rating for 4 ps","data":{"average":"mean","held_ps":null,"limit":0.25,"now":false,"over_ps":4,"peak":3.0,"peak_ps":7,"sample":3.25,"tau_ps":10200000000}"##
         ),
         "{power}"
+    );
+    let reg_limit = serde_json::to_string(by_code(&found, "regulator.current_limit")).unwrap();
+    assert_eq!(
+        reg_limit,
+        r##"{"code":"regulator.current_limit","severity":"warning","refs":["#u1.pin.out"],"t_ps":8000,"message":"#u1.pin.out regulator output can give 0.03 A at 3.3 V; the circuit asks for more, so it is giving 0.03 A and has dropped as low as 3 V for 2000 ps","data":{"current":0.030007,"limit":0.03,"over_ps":2000,"peak_ps":9000,"target":3.3,"voltage":3.003}}"##
     );
 }
 

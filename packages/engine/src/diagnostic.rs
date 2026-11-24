@@ -579,6 +579,8 @@ pub enum Diagnostic {
     RatingPower(Excursion),
     /// A chip pin's voltage left its rated window.
     RatingVoltage(VoltageExcursion),
+    /// A linear regulator was held at its current limit and its output sagged.
+    RegulatorCurrentLimit(CurrentLimitExcursion),
 }
 
 /// Which record kind [`Diagnostic::ChipLinkUnsupported`] could not route faithfully.
@@ -648,6 +650,28 @@ pub struct VoltageExcursion {
     pub operating: bool,
 }
 
+/// One linear regulator held at its current limit with its output pulled below regulation,
+/// merged over the whole run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CurrentLimitExcursion {
+    /// `#<part>.pin.out`.
+    pub pin: Ref,
+    /// `current_limit`, in A.
+    pub limit: f64,
+    /// Nominal `output_voltage`, in V.
+    pub target: f64,
+    /// Lowest output voltage over `gnd` held for at least `LIMIT_HOLD_PS` while clamped, in V.
+    pub voltage: f64,
+    /// Pass current delivered at `peak_at`, in A.
+    pub current: f64,
+    /// When the lowest held output voltage occurred.
+    pub peak_at: Time,
+    /// First sample held at the current limit.
+    pub first: Time,
+    /// Total time held at the current limit. `None` for an operating point, which has no duration.
+    pub over_ps: Option<u64>,
+}
+
 impl Diagnostic {
     pub fn code(&self) -> &'static str {
         match self {
@@ -697,6 +721,7 @@ impl Diagnostic {
             Diagnostic::RatingCurrent(_) => "rating.current",
             Diagnostic::RatingPower(_) => "rating.power",
             Diagnostic::RatingVoltage(_) => "rating.voltage",
+            Diagnostic::RegulatorCurrentLimit(_) => "regulator.current_limit",
         }
     }
 
@@ -711,7 +736,8 @@ impl Diagnostic {
             | Diagnostic::TraceRowInterpolated { .. }
             | Diagnostic::RatingCurrent(_)
             | Diagnostic::RatingPower(_)
-            | Diagnostic::RatingVoltage(_) => Severity::Warning,
+            | Diagnostic::RatingVoltage(_)
+            | Diagnostic::RegulatorCurrentLimit(_) => Severity::Warning,
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
             | Diagnostic::NetlistName { .. }
@@ -782,6 +808,7 @@ impl Diagnostic {
                 Some(excursion.first)
             }
             Diagnostic::RatingVoltage(excursion) => Some(excursion.first),
+            Diagnostic::RegulatorCurrentLimit(excursion) => Some(excursion.first),
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
             | Diagnostic::NetlistName { .. }
@@ -852,6 +879,7 @@ impl Diagnostic {
                 vec![excursion.quantity.clone()]
             }
             Diagnostic::RatingVoltage(excursion) => vec![excursion.pin.clone()],
+            Diagnostic::RegulatorCurrentLimit(excursion) => vec![excursion.pin.clone()],
         }
     }
 
@@ -1809,6 +1837,7 @@ impl Diagnostic {
             Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A", namer),
             Diagnostic::RatingPower(excursion) => over_rating(excursion, "W", namer),
             Diagnostic::RatingVoltage(excursion) => outside_window(excursion, namer),
+            Diagnostic::RegulatorCurrentLimit(excursion) => regulator_limit(excursion, namer),
         }
     }
 
@@ -2066,6 +2095,16 @@ impl Diagnostic {
                     "peak_ps": excursion.peak_at,
                 })
             }
+            Diagnostic::RegulatorCurrentLimit(excursion) => {
+                serde_json::json!({
+                    "current": excursion.current,
+                    "limit": excursion.limit,
+                    "over_ps": excursion.over_ps,
+                    "peak_ps": excursion.peak_at,
+                    "target": excursion.target,
+                    "voltage": excursion.voltage,
+                })
+            }
         }
     }
 }
@@ -2245,6 +2284,27 @@ fn outside_window(excursion: &VoltageExcursion, namer: &dyn Fn(&Ref) -> String) 
     format!(
         "{pin} reaches {peak} V over the chip's ground, outside {window}{}",
         for_time(*over_ps)
+    )
+}
+
+fn regulator_limit(excursion: &CurrentLimitExcursion, namer: &dyn Fn(&Ref) -> String) -> String {
+    let CurrentLimitExcursion {
+        pin,
+        limit,
+        target,
+        voltage,
+        current,
+        over_ps,
+        ..
+    } = excursion;
+    let pin = namer(pin);
+    format!(
+        "{pin} regulator output can give {} A at {} V; the circuit asks for more, so it is giving {} A and has dropped as low as {} V{}",
+        significant_text(*limit),
+        significant_text(*target),
+        significant_text(*current),
+        significant_text(*voltage),
+        for_time(*over_ps),
     )
 }
 
