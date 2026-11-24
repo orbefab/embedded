@@ -203,10 +203,17 @@ pub enum ProtocolRule {
     Scroll,
     /// A read transfer from a target that answers none.
     Read,
+    /// An HD44780 operation attempted in 8-bit bus mode over a 4-bit PCF8574 backpack.
+    BusWidth,
+    /// A 5×10 font selection on a 5×8 character LCD.
+    Font,
+    /// An HD44780 command or data write arrived before its power-on reset wait elapsed (15 ms
+    /// after VCC reaches 4.5 V, or 40 ms after 2.7 V).
+    InitWait,
 }
 
 impl ProtocolRule {
-    pub(crate) const ALL: [ProtocolRule; 9] = [
+    pub(crate) const ALL: [ProtocolRule; 12] = [
         ProtocolRule::Command,
         ProtocolRule::PixelFormat,
         ProtocolRule::SdaWhileSclHigh,
@@ -216,6 +223,9 @@ impl ProtocolRule {
         ProtocolRule::SupplySag,
         ProtocolRule::Scroll,
         ProtocolRule::Read,
+        ProtocolRule::BusWidth,
+        ProtocolRule::Font,
+        ProtocolRule::InitWait,
     ];
 
     /// Its place in [`ALL`](Self::ALL).
@@ -235,6 +245,9 @@ impl ProtocolRule {
             "supply_sag" => Some(ProtocolRule::SupplySag),
             "scroll" => Some(ProtocolRule::Scroll),
             "read" => Some(ProtocolRule::Read),
+            "bus_width" => Some(ProtocolRule::BusWidth),
+            "font" => Some(ProtocolRule::Font),
+            "init_wait" => Some(ProtocolRule::InitWait),
             _ => None,
         }
     }
@@ -619,6 +632,9 @@ pub struct VoltageExcursion {
     pub first: Time,
     /// Total time outside the window. `None` for an operating point, which has no duration.
     pub over_ps: Option<u64>,
+    /// The peak is the drive across the part, and `low`/`high` are its operating window.
+    /// A chip pin's window leaves this false.
+    pub operating: bool,
 }
 
 /// One linear regulator held at its current limit with its output pulled below regulation,
@@ -1376,6 +1392,42 @@ impl Diagnostic {
                 format!(
                     "{part} answered a read with 0xFF bytes, breaking rule {} at {} ps, the first time",
                     rule_text(&ProtocolRule::Read),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::BusWidth,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} dropped an 8-bit bus operation on a 4-bit backpack, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::BusWidth),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::Font,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} does not run the 5x10 font, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::Font),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::InitWait,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} dropped a write before the HD44780U power-on reset wait elapsed (15 ms after VCC reaches 4.5 V, or 40 ms after 2.7 V), breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::InitWait),
                     at.as_ps()
                 )
             }
@@ -2159,9 +2211,21 @@ fn outside_window(excursion: &VoltageExcursion, namer: &dyn Fn(&Ref) -> String) 
         high,
         peak,
         over_ps,
+        operating,
         ..
     } = excursion;
     let pin = namer(pin);
+    if *operating {
+        let low = low.unwrap_or(0.0);
+        let high = high.unwrap_or(0.0);
+        return format!(
+            "{pin} peaks at {} V, outside its {} V to {} V operating voltage{}",
+            significant_text(*peak),
+            significant_text(low),
+            significant_text(high),
+            for_time(*over_ps)
+        );
+    }
     let window = match (low, high) {
         (Some(low), Some(high)) => format!("its {low} V to {high} V rating"),
         (Some(low), None) => format!("its {low} V floor"),
@@ -2231,6 +2295,38 @@ impl Serialize for Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_rounded_limit_compares_what_the_message_prints_on_a_three_digit_tie() {
+        // Each value sits on a tie at the third digit, where binary rounding decides it.
+        let ties = [
+            (0.1255, 0.125),
+            (0.02005, 0.02),
+            (1.005, 1.0),
+            (2.675, 2.67),
+        ];
+        for (value, limit) in ties {
+            for (value, limit) in [(value, limit), (limit, value), (-value, -limit)] {
+                assert_eq!(
+                    exceeds_rounded(value, significant(limit)),
+                    significant(value) > significant(limit),
+                    "{value} {limit}"
+                );
+            }
+        }
+        assert!(exceeds_rounded(0.1255, 0.125), "0.1255 prints as 0.126");
+        assert!(!exceeds_rounded(0.02005, 0.02), "0.02005 prints as 0.02");
+        let mut value = 1e-6;
+        while value < 1e4 {
+            let tie = significant(value) + 5e-3 * libm::pow(10.0, libm::floor(libm::log10(value)));
+            assert_eq!(
+                exceeds_rounded(tie, significant(value)),
+                significant(tie) > significant(value),
+                "{tie} {value}"
+            );
+            value *= 1.07;
+        }
+    }
 
     #[test]
     fn a_device_names_each_protocol_rule_as_diagnostics_json_does() {

@@ -10,6 +10,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import {
   blockKind,
   collectLogs,
+  compareVersions,
   expect,
   ledGlow,
   orbeJson,
@@ -21,6 +22,7 @@ import {
   shot,
   showBlock,
   test,
+  waitBlockReady,
   waitGlow,
   waitState,
 } from "../../../e2e/support";
@@ -167,12 +169,6 @@ interface SceneReader {
   boardTitle(id: string): string;
 }
 
-const compareVersions = (a: string, b: string) => {
-  const [x, y] = [a.split(".").map(Number), b.split(".").map(Number)];
-  for (let i = 0; i < 3; i += 1) if (x[i] !== y[i]) return (x[i] ?? 0) - (y[i] ?? 0);
-  return 0;
-};
-
 /** The newest index row for one name. The site and the client show that version. */
 function newestRow<T extends { name: string; version: string }>(items: readonly T[], name: string): T {
   const newest = items.filter((row) => row.name === name).sort((a, b) => compareVersions(a.version, b.version)).at(-1);
@@ -287,6 +283,7 @@ function testCount(id: string): number {
 const VALUES: Record<string, Record<string, readonly string[]>> = {
   "nano-button-led": { r1: ["220 Ω"], r2: ["10 kΩ"], led1: ["red"], nano: ["button.ino.hex"] },
   "nano-led-fade": { r1: ["220 Ω"], led1: ["red"], nano: ["fade.ino.hex"] },
+  "nano-buzzer": { rs: ["10 Ω"], rb: ["1 kΩ"], nano: ["tune.ino.hex"] },
   "nano-light-comparator": {
     rbot: ["2.2 kΩ"],
     rset: ["4.7 kΩ"],
@@ -344,7 +341,7 @@ function searchNames(query: string): string[] {
 
 const PART_IDS = registryIds("part");
 // Display parts join the browser sample once a release tag includes them.
-const DISPLAY_CANDIDATES = ["oled-ssd1306-128x64", "display-7seg-cc"] as const;
+const DISPLAY_CANDIDATES = ["oled-ssd1306-128x64", "lcd1602-i2c", "display-7seg-cc"] as const;
 const BROWSER_PART_IDS = [
   "resistor-axial",
   "led-5mm",
@@ -849,28 +846,7 @@ for (const block of releasedBlocks()) {
       page = await context.newPage();
       errors = collectLogs(page, "errors");
       await page.goto(`${host.base}/orbe/blocks/${block.id}/`);
-      await page.waitForFunction(
-        (kind) => {
-          const scene = window.orbeViewer?.get().scene;
-          if (kind === "relay") {
-            return scene?.getObjectByName("@relay.led")?.getObjectByName("body") !== undefined
-              && scene?.getObjectByName("@led1")?.getObjectByName("body") !== undefined;
-          }
-          if (kind === "digit") return scene?.getObjectByName("@disp")?.getObjectByName("seg-a") !== undefined;
-          if (kind === "pixels") return scene?.getObjectByName("@stick.px1")?.getObjectByName("lens") !== undefined;
-          if (kind === "servo") return scene?.getObjectByName("@servo")?.getObjectByName("horn") !== undefined;
-          if (kind === "screen") return scene?.getObjectByName("@oled.display")?.getObjectByName("glass") !== undefined;
-          if (kind === "rgb") {
-            return scene?.getObjectByName("@board.led")?.getObjectByName("lens") !== undefined
-              && scene?.getObjectByName("@btn1")?.getObjectByName("stem") !== undefined;
-          }
-          const led = scene?.getObjectByName("@led1")?.getObjectByName("body") !== undefined;
-          const button = kind !== "button" || scene?.getObjectByName("@btn1")?.getObjectByName("stem") !== undefined;
-          return led && button;
-        },
-        block.kind,
-        { timeout: 120_000 },
-      );
+      await waitBlockReady(page, block.kind);
       await waitState(page, "playing");
     });
 
@@ -1034,33 +1010,48 @@ test.describe("nano-button-led", () => {
   });
 });
 
-const README = {
-  "/orbe/blocks/nano-button-led/": "A 10k pull-down holds D2 low",
-  "/orbe/blocks/nano-led-fade/": "fades up and down about every 3 seconds",
-  "/orbe/blocks/nano-light-comparator/": "prints dark and a count",
-  "/orbe/blocks/uno-button-led/": "A 10k pull-down holds D2 low",
-} as const;
+function expectedReadmeParagraphs(id: string): string[] {
+  const file = servedRecord(id).files.find((entry) => entry.path === "README.md");
+  if (file === undefined) throw new Error(`${id} has no README.md in the registry`);
+  const markdown = readFileSync(join(registryDir(), "files", file.sha256), "utf8");
+  return markdown
+    .replace(/^# [^\n]*\n*/, "")
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => paragraph !== "" && !paragraph.includes("orbe add"))
+    .map((paragraph) =>
+      paragraph
+        .replace(/\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`/g, (_match, text, _href, code) => code ?? text ?? "")
+        .replace(/\s+/g, " ")
+        .trim(),
+    );
+}
 
 test("every Block page shows its README and no install line", async ({ browser, host }) => {
-  for (const [path, sentence] of Object.entries(README)) {
-    const context = await browser.newContext();
-    const page = await context.newPage();
+  test.setTimeout(180_000);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  for (const id of blockIds()) {
+    const path = `/orbe/blocks/${id}/`;
     await page.goto(`${host.base}${path}`);
     const body = await bodyText(page);
     const readme = await page.getByTestId("readme").innerText();
+    const paragraphs = (await page.getByTestId("readme").locator("p").allInnerTexts()).map((text) => text.replace(/\s+/g, " ").trim());
+    const expected = expectedReadmeParagraphs(id);
+    expect(expected.length, path).toBeGreaterThan(0);
+    expect(paragraphs, path).toEqual(expected);
     expect(
-      body.includes(sentence) &&
-        body.includes("Check it with orbe check scene.jsonc and run its tests with orbe test.") &&
+      body.includes("orbe check scene.jsonc") &&
+        body.includes("orbe test") &&
         !body.includes("Install it into a project") &&
         !readme.includes("LGPL AVR") &&
-        !readme.includes("firmware/NOTICE") &&
         !readme.includes("490 Hz") &&
-        !(path.endsWith("nano-light-comparator/") && (readme.includes("4.76 V") || !readme.includes("2.52 V") || !readme.includes("orbe set light 10"))) &&
+        !(id === "nano-light-comparator" && (readme.includes("4.76 V") || !readme.includes("2.52 V") || !readme.includes("orbe set light 10"))) &&
         !INSTALL.test(body),
       `${path} ${body.match(INSTALL)?.[0] ?? ""}`,
     ).toBe(true);
-    await context.close();
   }
+  await context.close();
 });
 
 test("the Blocks page counts the parts each scene places", async ({ browser, host }) => {

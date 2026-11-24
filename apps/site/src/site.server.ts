@@ -4,7 +4,7 @@ import data from "virtual:orbe-site";
 import { type BlockCircuit, type PartUse, readCatalogUse, whereLine } from "./circuit";
 import { at } from "./paths";
 import { readmeParagraphs } from "./readme";
-import type { BlockRecord, Item, PartRecord } from "./records";
+import { type BlockRecord, dependencyId, type Item, type PartRecord } from "./records";
 import type { Searchable } from "./search";
 import { STARTER } from "./starter";
 
@@ -69,7 +69,7 @@ const card = ({ record }: Item<BlockRecord>): BlockCard => {
   };
 };
 
-const dependencyIds = (record: PartRecord | BlockRecord) => record.registryDependencies.map((dependency) => dependency.slice(0, dependency.lastIndexOf("@")));
+const dependencyIds = (record: PartRecord | BlockRecord) => record.registryDependencies.map(dependencyId);
 
 export const blockCards = () => data.blocks.map(card);
 

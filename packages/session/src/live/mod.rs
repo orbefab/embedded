@@ -31,11 +31,11 @@ use crate::command::{Command, ParamSet, Step, WorldSet};
 use crate::condition::Unit;
 use crate::duration::Duration;
 use crate::reply::{
-    Code, Colors, Data, Diagnostic, Error, Finding, Got, Level, PartState, Reading, Reply, Screen,
-    Snapshot, State, Stepped,
+    Code, Colors, Data, Diagnostic, Error, Finding, Got, LcdText, Level, PartState, Reading, Reply,
+    Screen, Snapshot, State, Stepped,
 };
 use crate::target::{
-    Ref, Target, live_params, names, one_engine, reports_hint, resolve, rgb_reading,
+    Ref, Target, hz_reading, live_params, names, one_engine, reports_hint, resolve, rgb_reading,
 };
 
 mod bound;
@@ -43,6 +43,7 @@ mod frame;
 mod light;
 mod serial;
 mod step;
+mod tone;
 
 pub use light::BRIGHTNESS_WINDOW;
 
@@ -104,6 +105,8 @@ struct Open {
     param_sets: BTreeMap<String, Time>,
     /// Each LED's forward-current integral, sampled as time advances, for its brightness.
     light: light::Log,
+    /// The drive frequency of each part whose reading is `"of": "hz"`.
+    tone: tone::Log,
     /// The files the scene came from, for a file a condition names, such as `shows`'s rows.
     files: Files,
 }
@@ -520,6 +523,8 @@ impl Open {
         let contacts = frame::contacts(json);
         let mut light = light::Log::build(&refs, &reports);
         light.note(&engine.probe());
+        let mut tone = tone::Log::build(&refs, &reports, &signals);
+        tone.note(&engine.probe(), engine.now().as_ps());
         let mut open = Open {
             engine,
             refs,
@@ -541,6 +546,7 @@ impl Open {
             world_sets: BTreeMap::new(),
             param_sets: BTreeMap::new(),
             light,
+            tone,
             files,
         };
         open.channels = open.bind_channels();
@@ -948,6 +954,23 @@ impl Open {
                 format!("{path}.{reading}"),
                 Reading::Color(self.colors(&engine)),
             ),
+            Target::Hertz { path } => {
+                let index = self.tone.position(&path).ok_or_else(|| {
+                    Error::new(
+                        Code::NoReading,
+                        format!("`{path}` has no frequency reading"),
+                        "the part file's reading `of` `hz` needs a voltage the engine reports",
+                    )
+                })?;
+                let hz = self.tone.hz(index, self.engine.now().as_ps());
+                (
+                    format!("{path}.{}", self.tone.reading(index)),
+                    Reading::Quantity {
+                        unit: Unit::Hertz,
+                        value: hz,
+                    },
+                )
+            }
             Target::Angle {
                 path,
                 reading,
@@ -966,6 +989,22 @@ impl Open {
             } => (
                 format!("{path}.{reading}"),
                 Reading::Screen(self.screen(&engine)),
+            ),
+            Target::Text {
+                path,
+                reading,
+                engine,
+            } => (
+                format!("{path}.{reading}"),
+                Reading::Text(self.lcd_text(&engine)),
+            ),
+            Target::Backlight {
+                path,
+                reading,
+                engine,
+            } => (
+                format!("{path}.{reading}"),
+                Reading::Backlight(self.lcd_backlight(&engine)),
             ),
             Target::Digit { path } => (
                 format!("{path}.digit"),
@@ -1125,6 +1164,33 @@ impl Open {
         }
     }
 
+    /// The visible 16×2 character lines of an `hd44780_i2c` engine part.
+    pub(super) fn lcd_text(&self, engine: &str) -> LcdText {
+        let display = self
+            .engine
+            .display(&engine_name(engine))
+            .expect("a part with a reading of text is a character LCD");
+        let panel = display.panel();
+        let frame = display.image();
+        let lines = orbe_engine::device::hd44780_i2c::visible_lines(&panel, &frame);
+        let backlight = orbe_engine::device::hd44780_i2c::backlight_on(&panel);
+        let on = orbe_engine::device::hd44780_i2c::text_visible(&panel);
+        LcdText {
+            lines,
+            on,
+            backlight,
+        }
+    }
+
+    /// Whether an `hd44780_i2c` engine part's backlight is lit.
+    pub(super) fn lcd_backlight(&self, engine: &str) -> bool {
+        let display = self
+            .engine
+            .display(&engine_name(engine))
+            .expect("a part with a reading of backlight is a character LCD");
+        orbe_engine::device::hd44780_i2c::backlight_on(&display.panel())
+    }
+
     /// A part's light state, its brightness, its colours, its relay contact, and its engine
     /// quantities. `None` when it has none.
     fn part(&self, path: &str) -> Option<Reading> {
@@ -1135,7 +1201,7 @@ impl Open {
             .as_deref()
             .and_then(|engine| rgb_reading(part).map(|_| self.colors(engine)));
         let probe = self.engine.probe();
-        let quantities: Vec<(String, Unit, f64)> = engine
+        let mut quantities: Vec<(String, Unit, f64)> = engine
             .as_deref()
             .map(|engine| {
                 self.reports
@@ -1149,6 +1215,12 @@ impl Open {
                     .collect()
             })
             .unwrap_or_default();
+        if let Some(name) = hz_reading(part)
+            && let Some(index) = self.tone.position(path)
+        {
+            let hz = self.tone.hz(index, self.engine.now().as_ps());
+            quantities.push((name.to_string(), Unit::Hertz, hz));
+        }
         let glow = self
             .light
             .position(path)

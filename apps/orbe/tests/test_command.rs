@@ -12,30 +12,7 @@ use live::{common, failed, orbe, project, replies, replies_in};
 /// Every Block's tests pass where it sits in the repo, reading the `parts/` beside `blocks/`.
 #[test]
 fn each_block_passes() {
-    let mut ids: Vec<String> = fs::read_dir(common::repo().join("blocks"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.is_dir())
-        .map(|path| path.file_name().unwrap().to_str().unwrap().to_string())
-        .collect();
-    ids.sort();
-    assert_eq!(
-        ids,
-        [
-            "devkitc-button-led",
-            "nano-7seg-count",
-            "nano-button-led",
-            "nano-led-fade",
-            "nano-light-comparator",
-            "nano-neopixel-stick",
-            "nano-oled",
-            "nano-relay-led",
-            "nano-servo-sweep",
-            "nano-shift-leds",
-            "uno-button-led",
-        ]
-    );
-    for id in &ids {
+    for id in common::block_ids() {
         let run = orbe(&common::repo(), &["test", &format!("blocks/{id}")]);
         assert!(
             run.stdout.ends_with("1 passed, 0 failed\n"),
@@ -1473,4 +1450,42 @@ fn a_set_the_table_refuses_is_a_usage_error() {
         assert_eq!(error["code"], "usage", "{line}");
         assert_eq!(error["message"], message, "{line}");
     }
+}
+
+#[test]
+fn nano_lcd1602_i2c_reads_and_checks_text_and_backlight() {
+    let dir = tempfile::tempdir().unwrap();
+    common::copy_dir(&common::repo().join("blocks/nano-lcd1602-i2c"), dir.path());
+    fs::remove_file(dir.path().join("block.jsonc")).unwrap();
+    std::os::unix::fs::symlink(common::repo().join("parts"), dir.path().join("parts")).unwrap();
+    fs::write(
+        dir.path().join("tests/hello.test"),
+        "\
+open
+step 1200ms
+get @lcd.text
+get @lcd.backlight
+expect @lcd.backlight lit
+expect @lcd.text line 0 \"Hello\"
+expect @lcd.text line 1 \"orbe 16x2 LCD\"
+expect @lcd.text contains \"orbe\"
+expect no diagnostics
+",
+    )
+    .unwrap();
+
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.stdout.contains("Hello"), "{}", run.stdout);
+    assert!(run.stdout.contains("orbe 16x2 LCD"), "{}", run.stdout);
+    assert!(run.stdout.contains("lcd.backlight lit"), "{}", run.stdout);
+
+    let json = replies_in(&dir);
+    assert_eq!(json[2]["data"]["kind"], "text");
+    assert_eq!(json[2]["data"]["value"]["on"], true);
+    assert_eq!(json[2]["data"]["value"]["backlight"], true);
+    assert_eq!(json[2]["data"]["value"]["lines"][0], "Hello           ");
+    assert_eq!(json[2]["data"]["value"]["lines"][1], "orbe 16x2 LCD   ");
+    assert_eq!(json[3]["data"]["kind"], "backlight");
+    assert_eq!(json[3]["data"]["value"]["state"], "lit");
 }

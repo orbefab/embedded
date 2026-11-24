@@ -1,0 +1,44 @@
+{
+  "part": "hd44780-1602-i2c",
+  "source": {
+    "script": "model.py",
+    "sha256": "ef4e8a5e69c7d280ff75ee2e2cd9349d7f3418bd1758ac7214b0dda52a2a3c40",
+    "bytes": 2985
+  },
+  "files": {
+    "hd44780-1602-i2c.glb": {
+      "sha256": "cbc99fee6e4a282b1e5a0ad2bdca161981731465d17b7e39c51c2b4d27fbe7ac",
+      "bytes": 193508
+    },
+    "hd44780-1602-i2c.anchors.json": {
+      "sha256": "dadd385145207f08e415b19377142388a2a4777bf99ac765b60e6b5160b12b43",
+      "bytes": 640
+    }
+  },
+  "box": {
+    "min": [-39.999999, -17.999999, 0],
+    "max": [39.999999, 17.999999, 9.63]
+  },
+  "kept_nodes": ["glass"],
+  "draw_calls": 6,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 5,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "pcb",
+      "z_mm": 0.03
+    },
+    "names": {
+      "nodes": ["glass"]
+    },
+    "merge": {
+      "primitives_in": 40,
+      "primitives_out": 6
+    }
+  }
+}

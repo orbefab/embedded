@@ -1,0 +1,7 @@
+# The sketch initializes the 16x2 LCD, turns on the backlight, and prints both lines.
+open
+step 1200ms
+expect @lcd.backlight lit
+expect @lcd.text line 0 "Hello"
+expect @lcd.text line 1 "orbe 16x2 LCD"
+expect no diagnostics

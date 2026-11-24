@@ -1,0 +1,15 @@
+// A Nano drives a blue 16x2 character LCD with a PCF8574 I2C backpack at 5 V.
+{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/hello.ino.hex" },
+    "lcd": { "type": "lcd1602-i2c" },
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["nano.GND", "lcd.GND"],
+    ["nano.5V", "lcd.VCC"],
+    ["nano.A4", "lcd.SDA"],
+    ["nano.A5", "lcd.SCL"],
+  ],
+}

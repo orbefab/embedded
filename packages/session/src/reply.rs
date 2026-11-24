@@ -410,6 +410,10 @@ pub enum Reading {
     Color(Colors),
     /// What a screen part's glass shows now.
     Screen(Screen),
+    /// The two visible 16-character lines on a character LCD's glass.
+    Text(LcdText),
+    /// Whether a character LCD's backlight is lit.
+    Backlight(bool),
     /// A live param's value, in the param's unit as the part file writes it, such as `1`.
     Param {
         unit: String,
@@ -529,6 +533,38 @@ impl Screen {
             text.push_str(row);
         }
         text
+    }
+}
+
+/// The two visible 16-character lines on a character LCD's glass, after display shift.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LcdText {
+    pub lines: [String; 2],
+    pub on: bool,
+    pub backlight: bool,
+}
+
+impl LcdText {
+    fn json(&self) -> Value {
+        json!({
+            "lines": self.lines,
+            "on": self.on,
+            "backlight": self.backlight,
+        })
+    }
+
+    pub fn text(&self) -> String {
+        format!("{}\n{}", self.lines[0], self.lines[1])
+    }
+
+    pub fn brief(&self) -> String {
+        let a = self.lines[0].trim_end();
+        let b = self.lines[1].trim_end();
+        if a.is_empty() && b.is_empty() {
+            "blank".to_string()
+        } else {
+            format!("{a:?} / {b:?}")
+        }
     }
 }
 
@@ -978,6 +1014,8 @@ impl Reading {
             Reading::Brightness { value, over_ps } => json!({ "a": value, "over_ps": over_ps }),
             Reading::Color(colors) => colors.json(),
             Reading::Screen(screen) => screen.json(),
+            Reading::Text(lcd) => lcd.json(),
+            Reading::Backlight(on) => json!({ "state": if *on { "lit" } else { "off" }, "on": on }),
             Reading::Shown(text) => json!({ "shown": text }),
             Reading::Param { value, .. } => json!(value),
             Reading::Part {
@@ -1018,6 +1056,8 @@ impl Reading {
             Reading::Brightness { .. } => "brightness",
             Reading::Color(_) => "color",
             Reading::Screen(_) => "screen",
+            Reading::Text(_) => "text",
+            Reading::Backlight(_) => "backlight",
             Reading::Shown(_) => "shown",
             Reading::Param { .. } => "param",
             Reading::Part { .. } => "part",
@@ -1032,6 +1072,8 @@ impl Reading {
             } => level.as_str().to_string(),
             Reading::Pin { level: None, v } => format!("{}V", number(*v)),
             Reading::Screen(screen) => screen.brief(),
+            Reading::Text(lcd) => lcd.brief(),
+            Reading::Backlight(on) => if *on { "lit" } else { "off" }.to_string(),
             Reading::Quantity { .. }
             | Reading::Brightness { .. }
             | Reading::Color(_)
@@ -1073,6 +1115,8 @@ impl Reading {
             }
             Reading::Color(colors) => colors.text(),
             Reading::Screen(screen) => screen.text(),
+            Reading::Text(lcd) => lcd.text(),
+            Reading::Backlight(on) => if *on { "lit" } else { "off" }.to_string(),
             Reading::Shown(text) => text.clone(),
             Reading::Param { unit, value } => with_unit(*value, unit),
             Reading::Part {

@@ -1,5 +1,5 @@
 import type { BrowserContext, Page } from "@playwright/test";
-import { collectLogs, expect, repoBlocks, shot, showBlock, test, textOf, waitState } from "../../../e2e/support";
+import { collectLogs, expect, repoBlocks, shot, showBlock, test, textOf, waitBlockReady, waitState } from "../../../e2e/support";
 
 const VIEW = { width: 1280, height: 720 };
 
@@ -14,28 +14,7 @@ for (const block of repoBlocks()) {
       page = await context.newPage();
       logs = collectLogs(page, "all");
       await page.goto(`${host.base}/?block=${block.id}`);
-      await page.waitForFunction(
-        (kind) => {
-          const scene = window.orbeViewer?.get().scene;
-          if (kind === "relay") {
-            return scene?.getObjectByName("@relay.led")?.getObjectByName("body") !== undefined
-              && scene?.getObjectByName("@led1")?.getObjectByName("body") !== undefined;
-          }
-          if (kind === "digit") return scene?.getObjectByName("@disp")?.getObjectByName("seg-a") !== undefined;
-          if (kind === "pixels") return scene?.getObjectByName("@stick.px1")?.getObjectByName("lens") !== undefined;
-          if (kind === "servo") return scene?.getObjectByName("@servo")?.getObjectByName("horn") !== undefined;
-          if (kind === "screen") return scene?.getObjectByName("@oled.display")?.getObjectByName("glass") !== undefined;
-          if (kind === "rgb") {
-            return scene?.getObjectByName("@board.led")?.getObjectByName("lens") !== undefined
-              && scene?.getObjectByName("@btn1")?.getObjectByName("stem") !== undefined;
-          }
-          const led = scene?.getObjectByName("@led1")?.getObjectByName("body") !== undefined;
-          const button = kind !== "button" || scene?.getObjectByName("@btn1")?.getObjectByName("stem") !== undefined;
-          return led && button;
-        },
-        block.kind,
-        { timeout: 120_000 },
-      );
+      await waitBlockReady(page, block.kind);
       await waitState(page, "paused");
     });
 

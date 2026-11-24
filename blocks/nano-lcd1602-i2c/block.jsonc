@@ -1,0 +1,11 @@
+// A Block: a small circuit that works. `orbe add nano-lcd1602-i2c` installs it into a project.
+{
+  "format": 1,
+  "block": "nano-lcd1602-i2c",
+  "version": "0.1.0",
+  "title": "Hello on a 16x2 I2C LCD",
+  "summary": "An Arduino Nano drives a blue 16 x 2 HD44780 LCD with a PCF8574 I2C backpack at 5 V using LiquidCrystal_I2C. The sketch initializes the display, turns on the backlight, and prints two lines of text.",
+  "board": "nano-board",
+  "tags": ["lcd", "1602", "16x2", "hd44780", "pcf8574", "display", "screen", "i2c", "nano"],
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND MIT",
+}
