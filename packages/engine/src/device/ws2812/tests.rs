@@ -800,13 +800,12 @@ fn a_chain_picks_up_from_the_first_full_frame_after_power_returns() {
     assert_eq!(latch_times(&pin), vec![reset_after(second_start, &second)]);
     assert_eq!(pin.broke(), None);
 
-    // Record path: a straddling record skips its pre-power prefix (including bad widths) and
-    // latches the full frame sent after power returns.
+    // Record path: a record that started before power returned is ignored, and the next full
+    // frame after power-up lights the pixels.
     let mut combined = vec![(true, 450_000), (false, ZERO.1)];
     let prefix_end = end(START, &combined);
     let lead_low = 1_000_000;
     combined.push((false, lead_low));
-    let frame_start = prefix_end + lead_low;
     combined.extend_from_slice(&second);
     let last = end(START, &combined);
 
@@ -817,8 +816,22 @@ fn a_chain_picks_up_from_the_first_full_frame_after_power_returns() {
     settle(&mut rec, last);
     rec.land(Time::from_ps(START), false, &combined, Time::from_ps(last));
     settle(&mut rec, last + 2 * RES);
+    assert_eq!(rec.observed().pixels, vec![[0, 0, 0]]);
+    assert!(rec.latches().is_empty());
+    assert_eq!(rec.broke(), None);
+
+    let next_start = last + 2 * RES;
+    let next_end = end(next_start, &second);
+    settle(&mut rec, next_end);
+    rec.land(
+        Time::from_ps(next_start),
+        false,
+        &second,
+        Time::from_ps(next_end),
+    );
+    settle(&mut rec, next_end + 2 * RES);
     assert_eq!(rec.observed().pixels, vec![[0x44, 0x55, 0x66]]);
-    assert_eq!(latch_times(&rec), vec![reset_after(frame_start, &second)]);
+    assert_eq!(latch_times(&rec), vec![reset_after(next_start, &second)]);
     assert_eq!(rec.broke(), None);
 }
 

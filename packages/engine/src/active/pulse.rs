@@ -347,55 +347,6 @@ impl<D: PulseTarget> Pulse<D> {
         pulses: &[(bool, u64)],
         until: Time,
     ) {
-        if !self.powered {
-            return;
-        }
-        if start < self.powered_since {
-            if until < self.powered_since {
-                return;
-            }
-            let cut = self.powered_since.as_ps();
-            let mut t = start.as_ps();
-            let mut level_at_cut = idle;
-            let mut k = 0;
-            while k < pulses.len() {
-                let (level, ps) = pulses[k];
-                let next = t.saturating_add(ps);
-                if next <= cut {
-                    t = next;
-                    k += 1;
-                } else {
-                    level_at_cut = level;
-                    break;
-                }
-            }
-            self.line = Line::Fresh;
-            self.idle_at = None;
-            self.feed(dev, world, level_at_cut, self.powered_since, true);
-            let until_ps = until.as_ps();
-            if k < pulses.len() {
-                t = t.saturating_add(pulses[k].1);
-                if let Some(idle_at) = self.idle_at
-                    && idle_at.as_ps() <= t.min(until_ps)
-                {
-                    self.fire(dev, world, idle_at, false);
-                }
-                k += 1;
-            }
-            for &(level, ps) in &pulses[k..] {
-                if t > until_ps {
-                    break;
-                }
-                self.feed(dev, world, level, Time::from_ps(t), true);
-                t = t.saturating_add(ps);
-                if let Some(idle_at) = self.idle_at
-                    && idle_at.as_ps() <= t.min(until_ps)
-                {
-                    self.fire(dev, world, idle_at, false);
-                }
-            }
-            return;
-        }
         self.restore(dev, start);
         if self.line == Line::Fresh {
             self.feed(dev, world, idle, start, true);
@@ -441,6 +392,12 @@ impl<D: PulseTarget> Pulse<D> {
         pulses: &[(bool, u64)],
         end: Time,
     ) {
+        if start < self.powered_since {
+            self.line = Line::Fresh;
+            self.idle_at = None;
+            self.undo = None;
+            return;
+        }
         self.walk(dev, world, start, idle, pulses, end);
         self.rest(dev, world, idle, end);
         self.relay(Time::from_ps(end.as_ps() + 1));
@@ -577,6 +534,12 @@ impl<D: PulseTarget> Port<D> for Pulse<D> {
             return None;
         };
         debug_assert!(record.start <= at && at < record.end);
+        if record.start < self.powered_since {
+            self.line = Line::Fresh;
+            self.idle_at = None;
+            self.undo = None;
+            return None;
+        }
         self.walk(dev, world, record.start, pulses.idle, &pulses.pulses, at);
         let end = Time::from_ps(at.as_ps() + 1);
         let relay = self.relay.as_mut()?;
