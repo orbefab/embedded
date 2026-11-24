@@ -124,6 +124,7 @@ fn lint_on_the_uno_block_warns_only_as_the_nano_block_does() {
         "nano-7seg-count",
         "nano-button-led",
         "nano-buzzer",
+        "nano-lcd1602-i2c",
         "nano-led-fade",
         "nano-light-comparator",
         "nano-neopixel-stick",

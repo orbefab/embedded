@@ -12,7 +12,7 @@
 //! The relay answers `unknowns` and `dc_paths` as an element.
 
 use crate::device::{
-    Cst816, Dht22, Hc595, PulsesReplay, Sg90, SpiReplay, Ssd1306, St77916, Ws2812,
+    Cst816, Dht22, Hc595, Hd44780I2c, PulsesReplay, Sg90, SpiReplay, Ssd1306, St77916, Ws2812,
 };
 use crate::mcu::{Atmega328p, Esp32s3};
 use crate::netlist::PartId;
@@ -64,6 +64,7 @@ pub(crate) enum Active<'n> {
     SpiReplay(&'n SpiReplay),
     St77916(&'n St77916),
     Ssd1306(&'n Ssd1306),
+    Hd44780I2c(&'n Hd44780I2c),
     Cst816(&'n Cst816),
     Dht22(&'n Dht22),
     Hc595(&'n Hc595),
@@ -80,6 +81,7 @@ pub(crate) fn kind(chip: &Chip) -> Kind<'_> {
         Chip::SpiReplay(replay) => Kind::Active(Active::SpiReplay(replay)),
         Chip::St77916(panel) => Kind::Active(Active::St77916(panel)),
         Chip::Ssd1306(panel) => Kind::Active(Active::Ssd1306(panel)),
+        Chip::Hd44780I2c(panel) => Kind::Active(Active::Hd44780I2c(panel)),
         Chip::Cst816(dev) => Kind::Active(Active::Cst816(dev)),
         Chip::Dht22(dev) => Kind::Active(Active::Dht22(dev)),
         Chip::Hc595(dev) => Kind::Active(Active::Hc595(dev)),
@@ -114,6 +116,7 @@ pub(crate) fn unknowns(chip: &Chip) -> Unknowns {
         | Chip::SpiReplay(_)
         | Chip::St77916(_)
         | Chip::Ssd1306(_)
+        | Chip::Hd44780I2c(_)
         | Chip::Cst816(_)
         | Chip::Dht22(_)
         | Chip::Hc595(_)
@@ -133,6 +136,7 @@ pub(crate) fn reads_iterate(chip: &Chip) -> bool {
         | Chip::SpiReplay(_)
         | Chip::St77916(_)
         | Chip::Ssd1306(_)
+        | Chip::Hd44780I2c(_)
         | Chip::Cst816(_)
         | Chip::Dht22(_)
         | Chip::Hc595(_)
@@ -204,6 +208,7 @@ pub(crate) fn dc_paths(chip: &Chip) -> &'static [(usize, usize)] {
         Chip::SpiReplay(_) => &crate::device::spi_replay::DC_PATHS,
         Chip::St77916(_) => &crate::device::st77916::DC_PATHS,
         Chip::Ssd1306(_) => &crate::device::ssd1306::DC_PATHS,
+        Chip::Hd44780I2c(_) => &crate::device::hd44780_i2c::DC_PATHS,
         Chip::Cst816(_) => &crate::device::cst816::DC_PATHS,
         Chip::Dht22(_) => &crate::device::dht22::DC_PATHS,
         Chip::Hc595(_) => &crate::device::hc595::DC_PATHS,
@@ -223,6 +228,7 @@ pub(crate) fn pin_ratings(chip: &Chip) -> Option<crate::ratings::PinRatings> {
         | Chip::SpiReplay(_)
         | Chip::St77916(_)
         | Chip::Ssd1306(_)
+        | Chip::Hd44780I2c(_)
         | Chip::Cst816(_)
         | Chip::Dht22(_)
         | Chip::Esp32s3(_)

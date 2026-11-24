@@ -1168,6 +1168,31 @@ A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.u
 
 An `ssd1306` has no `ratings` object and no `i`, `v`, or `p`. Its logic signals are `SCL`, `SDA` and `RES`. It joins `SDA` to `VSS` through the stage its drive stamps. `SCL` and `RES` draw no current, so each needs another DC path, and so does `VDD`, whose draw is a current.
 
+### HD44780 I2C
+
+`kind` is `hd44780_i2c`, a 16 by 2 character LCD (Hitachi HD44780U, ADE-207-272) driven through a PCF8574 I2C backpack. It is an active chip with no clock of its own, and an I2C target at `address`, 0x20 to 0x27 (default 0x27). Pins are `VCC`, `GND`, `SCL` and `SDA`, each required. `SDA` is open drain into `GND`, `low_drop` over `GND` behind `low_resistance`. `SCL` is an input, held by neither.
+
+The PCF8574 is an 8-bit quasi-bidirectional port: I2C writes set the port latch, and I2C reads return the port pins (`P0 = RS`, `P1 = RW`, `P2 = E`, `P3 = backlight`, `P4..P7 = D4..D7`). On each falling edge of `E`, the HD44780U executes the 4-bit write (when `RW = 0`) or completes the nibble read (when `RW = 1`):
+
+- Power-on state (ADE-207-272 p. 23, Figs. 23–24 pp. 45–46): 8-bit interface, 1-line, 5x8 font, display off, cursor off, blink off, increment mode, no shift, DDRAM filled with `0x20`, CGRAM zeroed. The power-on reset wait lasts 15 ms after `VCC` reaches 4.5 V, or 40 ms after `VCC` reaches 2.7 V when `VCC` stays below 4.5 V; any command or data write arriving earlier warns `chip.protocol` rule `init_wait` and is dropped as busy.
+- 8-bit-to-4-bit init sequence (ADE-207-272 Fig. 24): function-set nibbles `0x3` keep 8-bit mode; `0x2` switches to 4-bit mode, after which two nibbles (high then low) assemble each command or data byte. Any other command sent in 8-bit mode, or a 4-bit function set with `DL = 1`, stops loudly with rule `bus_width`. Selecting the 5x10 font (`F = 1`) stops loudly with rule `font`.
+- Supported commands: clear display (`0x01`, 1.52 ms busy), return home (`0x02`, 1.52 ms busy), entry mode set (`0x04..0x07`, 37 us), display on/off/cursor/blink (`0x08..0x0F`, 37 us), cursor/display shift (`0x10..0x1F`, 37 us), function set (`0x20..0x3F`, 37 us), set CGRAM address (`0x40..0x7F`, 37 us), set DDRAM address (`0x80..0xFF`, 37 us), and data writes to DDRAM (row 0 at `0x00..0x27`, row 1 at `0x40..0x67`) and CGRAM (64 bytes, 8 custom 5x8 characters). Commands and data writes arriving while busy are dropped as on the chip.
+- Reads with `RW = 1` and `E` high return the busy flag and 7-bit address counter (`RS = 0`) or DDRAM/CGRAM data (`RS = 1`) high nibble first, then low nibble, advancing the address counter on the low nibble.
+- While `V(VCC) - V(GND)` is below 2.7 V, the PCF8574 does not acknowledge, the glass is dark, and power loss clears DDRAM, CGRAM and registers.
+- `backlight_jumper` (optional boolean, default `true`) models the physical 2-pin jumper on the backpack; when `false`, the backlight stays off regardless of `P3`. `draw` (optional) draws `logic_current` plus `backlight_current` (when the backlight is lit) from `VCC` to `GND`, held above `holds_above`.
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `address` | | 0x20 to 0x27, else rule `unsupported` |
+| `backlight_jumper` | | optional boolean, default `true` |
+| `low_resistance` | `ohm` | the resistor's |
+| `low_drop` | `V` | at least 0, else rule `non_negative` |
+| `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+| `draw.logic_current`, `draw.backlight_current` | `A` | at least 0, else rule `non_negative` |
+| `draw.holds_above` | `V` | greater than 0, else rule `positive` |
+
+An `hd44780_i2c` has no `ratings` object and no `i`, `v`, or `p`. Its logic signals are `SCL` and `SDA`.
+
 ### WS2812
 
 `kind` is `ws2812`, a chain of addressable LEDs on one data pin. It is an active chip with no clock of its own. It watches `DIN` and takes the `Pulses` records on that net, as [engine.md](engine.md#records) says. Pins are `VCC`, `GND` and `DIN`, each required, and `DOUT`, which a part wires exactly when it gives `dout`. Each LED takes the next 24 bits. Without `dout` the bits past the last LED are discarded, and with it they go on through `DOUT`. Green is the first byte, then red, then blue, most significant bit first. A low longer than the reset latches the colours into `observations.json` and `traces/leds.csv`.
@@ -1442,7 +1467,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `capacitor` | `reverse_voltage`, optional | pin `a` over pin `b` |
 | `atmega328p` | `pin_current`, `supply_current`, `rail_margin`, `reset_voltage`, `supply_voltage` | each port pin's current, the current through `VCC` and `GND_8`, and each pin's voltage over `GND_8`, each named `#<part>.pin.<pin>` |
 | `hc595` | `pin_current`, `supply_current`, `input_margin`, `output_margin` | each of `QA`–`QH` and `QHp`, the current through `VCC` and `GND`, and each input and output voltage over `GND`, each named `#<part>.pin.<pin>` |
-| `current_source`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `ssd1306`, `pulses_replay`, `ws2812`, `dht22`, `sg90` | none | |
+| `current_source`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `ssd1306`, `hd44780_i2c`, `pulses_replay`, `ws2812`, `dht22`, `sg90` | none | |
 
 A `current`, `power`, `pin_current` or `supply_current` value object may also carry `basis`, the datasheet's basis for the figure. `"peak"` bounds each sample. `{ "sustained": { "average": "rms" | "mean", "tau": { "value": <s>, "unit": "s" } } }` bounds a first-order filter of the samples with time constant `tau`: of their squares for `rms`, read back as the root, and of their magnitudes for `mean`. A sustained basis may also carry `peak`, the sheet's peak or surge limit in the rating's unit, such as a diode's IFSM beside its average forward current. Each sample is checked against it as a peak rating. A `tau` or `peak` of 0 or below is `netlist.value` with rule `positive` on `ratings.<key>.basis.sustained.tau` or `.peak`, and a wrong unit is `netlist.unit` on that field. A rating with no `basis` takes its kind's: a `power` is a 10.2 ms `mean`, a `voltage_source`'s `current` and an `atmega328p`'s or an `hc595`'s `pin_current` and `supply_current` are a 10.2 ms `rms`, and every other `current` is a `peak`.
 

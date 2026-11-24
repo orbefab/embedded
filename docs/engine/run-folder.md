@@ -520,6 +520,8 @@ For an `ssd1306` the pixels are 64 rows of 128, each opaque white when lit and o
 
 Contrast dims nothing on the glass. `contrast` stays a setting, and a viewer may apply it. The panel's colour is not drawn.
 
+For an `hd44780_i2c` the pixels are 68 rows of 320, drawing a blue negative transmissive 16x2 character glass. Its frame memory file `display-<part>.hd44780` is 144 bytes: 80 bytes of DDRAM (row 0 at `0x00..0x27`, row 1 at `0x40..0x67` stored at bytes `40..79`) followed by 64 bytes of CGRAM (8 custom 5x8 characters). Settings are `backlight`, `cursor`, `blink`, `two_line`, `shift`, `ac`, `in_cgram` and `powered`. When `powered` and `backlight` are on, the glass is blue backlit and each visible character in `display_on` mode is drawn in white using the Hitachi A00 ROM 5x8 font (with `0x00..0x07` and `0x08..0x0F` read from CGRAM), plus the underline cursor and blink block when enabled. When `backlight` or `powered` is off, the glass is dark.
+
 ## Determinism
 
 One binary on one platform writes the same bytes for the same input bytes and the same `created_at`.
