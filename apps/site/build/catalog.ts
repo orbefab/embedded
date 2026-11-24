@@ -2,6 +2,7 @@
 // part's scene with orbe-wasm's `partScene`. Runs in Node, at build time only.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { compareVersions } from "@orbe/viewer/registry";
 import { at } from "../src/paths.ts";
 import { si } from "../src/format.ts";
 import {
@@ -23,12 +24,6 @@ export interface Catalog {
   /** Each file's bytes, by SHA-256, from the registry's `files/`. */
   readonly bytes: (sha256: string) => Uint8Array;
 }
-
-const compareVersions = (a: string, b: string) => {
-  const [x, y] = [a.split(".").map(Number), b.split(".").map(Number)];
-  for (let i = 0; i < 3; i += 1) if (x[i] !== y[i]) return (x[i] ?? 0) - (y[i] ?? 0);
-  return 0;
-};
 
 /** The catalog in a registry folder `orbe registry build` wrote. */
 export function readCatalog(dir: string): Catalog {

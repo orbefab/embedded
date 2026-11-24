@@ -19,7 +19,7 @@ A test is `tests/<name>.test`. Each line is a live command without `orbe`. `#` s
 - `@lcd.text` on a 16 x 2 I2C LCD (`lcd1602-i2c`, Block `nano-lcd1602-i2c`): `orbe get @lcd.text` prints the two visible 16-character lines (blank when the display or backlight is off; custom CGRAM characters read as `□`). Expect `@lcd.text contains "Hello"`, `@lcd.text line 0 "Hello"`, `@lcd.text line 1 "World"`, `@lcd.text blank`, or `@lcd.backlight lit` / `off`.
 - `@led1.i > 5mA`, `@nano.D2 < 1V`, `@bz.hz > 400Hz`, `@servo.angle > 60deg`, with `<`, `<=`, `>` or `>=`. `@bz.hz` is 0 when the buzzer is quiet. In a shell, `orbe expect @led1.i '>' 5mA`. A test line accepts a quoted comparison the same way a shell does, as `'>'` or `"<="`. A servo's angle is in `deg`.
 - `serial contains "text"`, all the serial text since `open`. `snapshot` shows the last 10 lines, joined with `\n`.
-- `no diagnostics`. A chip warning can show up to one engine step (`sim.max_step`, 10 ms by default) late, so step that far past its cause first.
+- `no diagnostics`, or `diagnostics contains "text"`. A chip warning can show up to one engine step (`sim.max_step`, 10 ms by default) late, so step that far past its cause first.
 
 A failure prints the line, what was expected and what it saw, then `0 passed, 1 failed`.
 

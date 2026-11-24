@@ -24,8 +24,11 @@ use crate::diagnostic::{Diagnostic, ValueRule};
 use crate::mna::Node;
 use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
-use crate::netlist::json::{PinMap, WireValue, bounded, resolve_pins, resolve_value};
+use crate::netlist::json::{
+    PinMap, WireValue, bounded, resolve_limit, resolve_pins, resolve_value,
+};
 use crate::netlist::{NetId, PartId, Threshold, Value};
+use crate::ratings::{Ceiling, PinRatings, PinWindow};
 use crate::watch::{Signal, Watch};
 
 pub use glass::{backlight_on, glass, text_visible, visible_lines};
@@ -86,6 +89,8 @@ pub(crate) fn chip(part: PartId, dev: &Hd44780I2c) -> Chip {
         scl: model::WATCH_SCL,
         sda: model::WATCH_SDA,
         reset: None,
+        address_high: None,
+        power: &[],
     };
     Chip {
         part: Some(part),
@@ -135,6 +140,43 @@ fn device(backlight_jumper: bool, draw: Option<&LcdDraw>) -> model::Hd44780I2c {
     model::Hd44780I2c::new(&Fields::new(&fields)).expect("parse bounds the draw")
 }
 
+/// The part's voltage ratings on `VCC`, `SCL` and `SDA`, `None` when it has no `ratings` object.
+/// Every window is over `GND`: `VCC` takes `-rail_margin` to `supply_voltage`, and `SCL` and
+/// `SDA` take `-rail_margin` to `VCC + rail_margin`.
+pub(crate) fn pin_ratings(dev: &Hd44780I2c) -> Option<PinRatings> {
+    let ratings = dev.ratings.as_ref()?;
+    let si = |value: &Option<Value>| value.as_ref().map(|value| value.si.get());
+    let margin = si(&ratings.rail_margin);
+    let supply = si(&ratings.supply_voltage);
+    let mut windows = Vec::new();
+    if margin.is_some() || supply.is_some() {
+        windows.push(PinWindow {
+            pin: Hd44780I2c::PINS[VCC],
+            net: dev.pins[VCC],
+            below: margin,
+            above: supply.map(Ceiling::Fixed),
+        });
+    }
+    if let Some(margin) = margin {
+        for pin in [SCL, SDA] {
+            windows.push(PinWindow {
+                pin: Hd44780I2c::PINS[pin],
+                net: dev.pins[pin],
+                below: Some(margin),
+                above: Some(Ceiling::OverSupply(margin)),
+            });
+        }
+    }
+    Some(PinRatings {
+        outputs: Vec::new(),
+        pin_current: None,
+        supply_current: None,
+        vcc: (Hd44780I2c::PINS[VCC], dev.pins[VCC]),
+        gnd: (Hd44780I2c::PINS[GND], dev.pins[GND]),
+        windows,
+    })
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Hd44780I2c {
     pub pins: [NetId; 4],
@@ -144,6 +186,17 @@ pub struct Hd44780I2c {
     pub low_resistance: Value,
     pub input_threshold: Threshold,
     pub draw: Option<LcdDraw>,
+    /// The pin voltage ratings the run checks. `None` when the part has no `ratings` object.
+    pub ratings: Option<Hd44780I2cRatings>,
+}
+
+/// An HD44780 I2C backpack's voltage ratings. Each is `None` when the part leaves it unrated.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Hd44780I2cRatings {
+    /// Volt. How far `VCC`, `SCL` and `SDA` may sit below `GND`, and `SCL` and `SDA` above `VCC`.
+    pub rail_margin: Option<Value>,
+    /// Volt. The most `VCC` may sit above `GND`.
+    pub supply_voltage: Option<Value>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -174,6 +227,18 @@ pub(crate) struct WireHd44780I2c {
     input_threshold: WireThreshold,
     #[serde(default)]
     draw: Option<WireLcdDraw>,
+    #[serde(default)]
+    ratings: Option<WireRatings>,
+}
+
+/// Every key is required, and `null` leaves that rating out.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireRatings {
+    #[serde(deserialize_with = "Option::deserialize")]
+    rail_margin: Option<WireValue>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    supply_voltage: Option<WireValue>,
 }
 
 #[derive(Deserialize)]
@@ -263,6 +328,10 @@ pub(crate) fn resolve_hd44780_i2c(ctx: ParseCtx<'_>, wire: WireHd44780I2c) -> Op
         Some(draw) => Some(draw?),
         None => None,
     };
+    let ratings = match wire.ratings {
+        None => Some(None),
+        Some(wire) => resolve_ratings(part_ref, wire, out).map(Some),
+    };
     Some(Hd44780I2c {
         pins: pins?,
         address: address?,
@@ -271,5 +340,25 @@ pub(crate) fn resolve_hd44780_i2c(ctx: ParseCtx<'_>, wire: WireHd44780I2c) -> Op
         low_resistance: low_resistance?,
         input_threshold: input_threshold?,
         draw,
+        ratings: ratings?,
+    })
+}
+
+fn resolve_ratings(
+    part: &crate::name::Ref,
+    wire: WireRatings,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Hd44780I2cRatings> {
+    let rail_margin = resolve_limit(part, "ratings.rail_margin", "V", wire.rail_margin, out);
+    let supply_voltage = resolve_limit(
+        part,
+        "ratings.supply_voltage",
+        "V",
+        wire.supply_voltage,
+        out,
+    );
+    Some(Hd44780I2cRatings {
+        rail_margin: rail_margin?,
+        supply_voltage: supply_voltage?,
     })
 }

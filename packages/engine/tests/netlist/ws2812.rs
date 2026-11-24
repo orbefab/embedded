@@ -212,3 +212,34 @@ fn min_supply_is_optional_and_positive_in_volts() {
         "{err:?}"
     );
 }
+
+#[test]
+fn ratings_are_optional_and_validated_when_present() {
+    let absent = netlist::parse(wired(PINS, "").as_bytes()).unwrap();
+    assert_eq!(part(&absent).ratings, None);
+
+    let rated = netlist::parse(
+        wired(
+            PINS,
+            r#""ratings": { "rail_margin": { "value": 0.5, "unit": "V" }, "supply_voltage": { "value": 5.5, "unit": "V" } },"#,
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    let ratings = part(&rated).ratings.unwrap();
+    assert_eq!(ratings.rail_margin.unwrap().si.get(), 0.5);
+    assert_eq!(ratings.supply_voltage.unwrap().si.get(), 5.5);
+
+    let err = netlist::parse(
+        wired(
+            PINS,
+            r#""ratings": { "rail_margin": { "value": 0.5, "unit": "A" }, "supply_voltage": null },"#,
+        )
+        .as_bytes(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&err[..], [Diagnostic::NetlistUnit { field, .. }] if field == "ratings.rail_margin"),
+        "{err:?}"
+    );
+}

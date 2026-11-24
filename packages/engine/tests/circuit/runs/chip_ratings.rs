@@ -378,3 +378,144 @@ fn a_session_checks_the_pins_at_its_probe() {
         (vec!["rating.current #u1.pin.PB5".to_string()], vec![false])
     );
 }
+
+#[test]
+fn esp32s3_pin_and_supply_voltage_windows_warn_past_datasheet_limits() {
+    let mut netlist: serde_json::Value = serde_json::from_slice(
+        &fs::read(repo(
+            "packages/engine/tests/circuits/esp32s3-blink/netlist.json",
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    netlist["analysis"] = serde_json::json!({ "op": {} });
+    let s3 = part(&mut netlist, "u1");
+    s3["ratings"] = serde_json::json!({
+        "rail_margin": { "value": 0.3, "unit": "V" },
+        "supply_voltage": { "value": 3.6, "unit": "V" },
+    });
+    s3["pins"]["GPIO4"] = "gpio4".into();
+    s3["pins"]["GPIO5"] = "gpio5".into();
+    add(
+        &mut netlist,
+        &["gpio4", "gpio5", "v5", "vm1"],
+        serde_json::json!([
+            source("vhi", "v5", "gnd", 5.0),
+            resistor("rhi", "v5", "gpio4", 1000.0),
+            source("vlo", "vm1", "gnd", -0.6),
+            resistor("rlo", "vm1", "gpio5", 1000.0),
+        ]),
+    );
+    let mut blobs = orbe_engine::blob::Blobs::new();
+    for entry in fs::read_dir(repo("packages/engine/tests/circuits/esp32s3-blink/blobs")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() {
+            blobs.add(fs::read(path).unwrap().into());
+        }
+    }
+    let parsed = netlist::parse_with(netlist.to_string().as_bytes(), &blobs).unwrap();
+    let found = orbe_engine::simulate(&parsed).diagnostics().to_vec();
+    assert_eq!(
+        refs(&found),
+        [
+            "rating.voltage #u1.pin.GPIO4",
+            "rating.voltage #u1.pin.GPIO5"
+        ]
+    );
+    let [high, low] = windows(&found)[..] else {
+        unreachable!()
+    };
+    assert_eq!(high.low, Some(-0.3));
+    assert!((high.high.unwrap() - 3.6).abs() < 1e-12, "{:?}", high.high);
+    assert!((high.peak - 5.0).abs() < 1e-3, "{}", high.peak);
+    assert_eq!(low.low, Some(-0.3));
+    assert!((low.high.unwrap() - 3.6).abs() < 1e-12, "{:?}", low.high);
+    assert!((low.peak + 0.6).abs() < 1e-3, "{}", low.peak);
+
+    // Supply above 3.6 V warns on VCC only when GPIOs sit within VCC + 0.3 V.
+    part(&mut netlist, "v1")["voltage"]["value"] = 3.8.into();
+    part(&mut netlist, "vhi")["voltage"]["value"] = 3.3.into();
+    part(&mut netlist, "vlo")["voltage"]["value"] = 0.0.into();
+    let parsed = netlist::parse_with(netlist.to_string().as_bytes(), &blobs).unwrap();
+    let found = orbe_engine::simulate(&parsed).diagnostics().to_vec();
+    assert_eq!(refs(&found), ["rating.voltage #u1.pin.VCC"]);
+    assert_eq!(windows(&found)[0].high, Some(3.6));
+}
+
+#[test]
+fn ssd1306_hd44780_and_ws2812_pin_and_supply_voltage_windows_warn() {
+    let netlist = serde_json::json!({
+        "version": 1,
+        "seed": 0,
+        "analysis": { "op": {} },
+        "ground": "gnd",
+        "nets": ["gnd", "v3", "v5", "vm1", "scl", "sda", "res", "din"],
+        "parts": [
+            source("v3", "v3", "gnd", 3.3),
+            source("v5", "v5", "gnd", 5.0),
+            source("vm1", "vm1", "gnd", -0.8),
+            resistor("rscl", "v5", "scl", 1000.0),
+            resistor("rsda", "vm1", "sda", 1000.0),
+            resistor("rres", "v3", "res", 1000.0),
+            resistor("rdin", "v5", "din", 1000.0),
+            {
+                "name": "oled",
+                "kind": "ssd1306",
+                "pins": { "VDD": "v3", "VSS": "gnd", "SCL": "scl", "SDA": "sda", "RES": "res" },
+                "address": 60,
+                "low_drop": { "value": 0.0, "unit": "V" },
+                "low_resistance": { "value": 133.333, "unit": "ohm" },
+                "input_threshold": {
+                    "low": { "value": 0.2, "unit": "1" },
+                    "high": { "value": 0.8, "unit": "1" }
+                },
+                "ratings": {
+                    "rail_margin": { "value": 0.3, "unit": "V" },
+                    "supply_voltage": { "value": 4.0, "unit": "V" }
+                }
+            },
+            {
+                "name": "lcd",
+                "kind": "hd44780_i2c",
+                "pins": { "VCC": "v3", "GND": "gnd", "SCL": "scl", "SDA": "sda" },
+                "address": 39,
+                "low_drop": { "value": 0.0, "unit": "V" },
+                "low_resistance": { "value": 133.333, "unit": "ohm" },
+                "input_threshold": {
+                    "low": { "value": 0.3, "unit": "1" },
+                    "high": { "value": 0.7, "unit": "1" }
+                },
+                "ratings": {
+                    "rail_margin": { "value": 0.5, "unit": "V" },
+                    "supply_voltage": { "value": 7.0, "unit": "V" }
+                }
+            },
+            {
+                "name": "px",
+                "kind": "ws2812",
+                "pins": { "VCC": "v3", "GND": "gnd", "DIN": "din" },
+                "leds": 1,
+                "input_threshold": {
+                    "low": { "value": 0.3, "unit": "1" },
+                    "high": { "value": 0.7, "unit": "1" }
+                },
+                "ratings": {
+                    "rail_margin": { "value": 0.5, "unit": "V" },
+                    "supply_voltage": { "value": 5.5, "unit": "V" }
+                }
+            }
+        ]
+    });
+    let mut found = refs(&run(&netlist));
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            "rating.voltage #lcd.pin.SCL",
+            "rating.voltage #lcd.pin.SDA",
+            "rating.voltage #oled.pin.SCL",
+            "rating.voltage #oled.pin.SDA",
+            "rating.voltage #px.pin.DIN",
+        ]
+    );
+}

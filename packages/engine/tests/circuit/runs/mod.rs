@@ -5,6 +5,7 @@ mod atmega328p;
 mod atmega_gaps;
 mod blink;
 mod blinker;
+mod bmp280;
 mod board;
 mod button;
 mod chip_ratings;

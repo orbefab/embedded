@@ -370,38 +370,52 @@ impl Ratings {
             let Some(rated) = crate::chip::pin_ratings(model) else {
                 continue;
             };
-            debug_assert_eq!(rated.outputs.len(), chip.outputs.len());
             let pin =
                 |name: &str| Ref::Pin(part.name.clone(), Name::new(name).expect("a pin name"));
             let net = |id: NetId| columns.net(id);
-            let gauge = chips.len();
-            let default = sustained(Average::Rms);
-            if let Some(rating) = &rated.pin_current {
-                for (k, &name) in rated.outputs.iter().enumerate() {
-                    watch(
-                        &mut watches,
-                        RatingKind::Current,
-                        pin(name),
-                        Read::Gauge { gauge, k },
-                        rating,
-                        default,
-                        true,
-                    );
+            if rated.pin_current.is_some() || rated.supply_current.is_some() {
+                debug_assert_eq!(rated.outputs.len(), chip.outputs.len());
+                let gauge = chips.len();
+                let default = sustained(Average::Rms);
+                if let Some(rating) = &rated.pin_current {
+                    for (k, &name) in rated.outputs.iter().enumerate() {
+                        watch(
+                            &mut watches,
+                            RatingKind::Current,
+                            pin(name),
+                            Read::Gauge { gauge, k },
+                            rating,
+                            default,
+                            true,
+                        );
+                    }
                 }
-            }
-            let outputs = chip.outputs.len();
-            if let Some(rating) = &rated.supply_current {
-                for (k, name) in [(outputs, rated.vcc.0), (outputs + 1, rated.gnd.0)] {
-                    watch(
-                        &mut watches,
-                        RatingKind::Current,
-                        pin(name),
-                        Read::Gauge { gauge, k },
-                        rating,
-                        default,
-                        true,
-                    );
+                let outputs = chip.outputs.len();
+                if let Some(rating) = &rated.supply_current {
+                    for (k, name) in [(outputs, rated.vcc.0), (outputs + 1, rated.gnd.0)] {
+                        watch(
+                            &mut watches,
+                            RatingKind::Current,
+                            pin(name),
+                            Read::Gauge { gauge, k },
+                            rating,
+                            default,
+                            true,
+                        );
+                    }
                 }
+                chips.push(Gauge {
+                    active,
+                    outputs: chip
+                        .outputs
+                        .iter()
+                        .map(|output| Pin::new(output, columns))
+                        .collect(),
+                    supply: chip
+                        .supply
+                        .map(|supply| (columns.net(supply.vcc), columns.net(supply.gnd), supply)),
+                    currents: vec![0.0; outputs + 2],
+                });
             }
             for window in &rated.windows {
                 windows.push(Window {
@@ -416,18 +430,6 @@ impl Ratings {
                     excursion: None,
                 });
             }
-            chips.push(Gauge {
-                active,
-                outputs: chip
-                    .outputs
-                    .iter()
-                    .map(|output| Pin::new(output, columns))
-                    .collect(),
-                supply: chip
-                    .supply
-                    .map(|supply| (columns.net(supply.vcc), columns.net(supply.gnd), supply)),
-                currents: vec![0.0; outputs + 2],
-            });
         }
         // An input above `vcc - input_headroom` is the same window as a chip pin above its
         // ceiling, and an input below `gnd` past `input_below_gnd` as a pin below its floor.

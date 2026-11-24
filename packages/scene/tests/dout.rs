@@ -71,11 +71,15 @@ fn chain<'v>(netlist: &'v Value, name: &str) -> &'v Value {
         .unwrap_or_else(|| panic!("no part {name}"))
 }
 
-/// The part file in format `format` with its `draw` taken out, as format 3 wrote it.
+/// The part file in format `format` with its `draw`, `min_supply` and `ratings` taken out, as
+/// format 3 wrote it.
 fn before_draw(text: String, format: u32) -> String {
-    let mut text = text.replacen("\"format\": 5,", &format!("\"format\": {format},"), 1);
+    let mut text = text.replacen("\"format\": 6,", &format!("\"format\": {format},"), 1);
     let start = text.find("    \"draw\": {").unwrap();
     let end = text.find("    \"dout\": {").unwrap();
+    text.replace_range(start..end, "");
+    let start = text.find(",\n    \"ratings\": {").unwrap();
+    let end = text.find("\n  },\n  \"readings\"").unwrap();
     text.replace_range(start..end, "");
     text
 }

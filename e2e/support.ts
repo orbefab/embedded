@@ -3,8 +3,9 @@ import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test as base, expect, chromium, firefox, webkit, type Page } from "@playwright/test";
+import { compareVersions } from "../packages/viewer/src/registry";
 
-export { expect };
+export { compareVersions, expect };
 // Playwright compiles this file as CommonJS, because the root package has no "type": "module".
 export const REPO = resolve(__dirname, "..");
 export const HEADED_SESSION = join(REPO, ".scratch/headed/session.json");
@@ -19,12 +20,6 @@ export function registryDir(): string {
   }
   return join(REPO, ".scratch/site/registry");
 }
-
-const compareVersions = (a: string, b: string) => {
-  const [x, y] = [a.split(".").map(Number), b.split(".").map(Number)];
-  for (let i = 0; i < 3; i += 1) if (x[i] !== y[i]) return (x[i] ?? 0) - (y[i] ?? 0);
-  return 0;
-};
 
 /** Part or Block ids the registry serves, one per name. An id that is only in the repo is absent. */
 export function registryIds(type: "part" | "block"): string[] {
@@ -243,7 +238,7 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "button" | "digit" | "fade" | "lcd" | "light" | "pixels" | "relay" | "rgb" | "screen" | "servo" | "shift" | "tone";
+export type BlockKind = "button" | "digit" | "fade" | "lcd" | "light" | "pixels" | "relay" | "rgb" | "screen" | "serial" | "servo" | "shift" | "tone";
 
 export interface RepoBlock {
   id: string;
@@ -272,13 +267,45 @@ export function blockKind(scene: string, id: string): BlockKind {
   if (/"type"\s*:\s*"oled-ssd1306-128x64"/.test(code)) return "screen";
   if (/"type"\s*:\s*"lcd1602-i2c"/.test(code)) return "lcd";
   if (/"type"\s*:\s*"hc595-dip16"/.test(code)) return "shift";
+  if (/"type"\s*:\s*"gy-bmp280"/.test(code)) return "serial";
   if (/"type"\s*:\s*"esp32s3-devkitc-1"/.test(code)) return "rgb";
   if (/"world"\s*:\s*\{[^}]*"light"\s*:/.test(code)) return "light";
   if (/"btn1"\s*:/.test(code)) return "button";
   if (/"type"\s*:\s*"buzzer-12mm"/.test(code)) return "tone";
   if (/"led1"\s*:/.test(code)) return "fade";
   throw new Error(
-    `${id} names no button, no fading LED, no light, no pixel stick, no screen, no 7-segment display, no relay module, no 74HC595, no buzzer, no DevKitC-1 and no servo`,
+    `${id} names no button, no fading LED, no light, no pixel stick, no screen, no LCD, no 7-segment display, no relay module, no 74HC595, no buzzer, no DevKitC-1, no servo and no serial sensor`,
+  );
+}
+
+const READY_NODES: Record<BlockKind, readonly (readonly [string, string?])[]> = {
+  button: [["@led1", "body"], ["@btn1", "stem"]],
+  digit: [["@disp", "seg-a"]],
+  fade: [["@led1", "body"]],
+  lcd: [["@lcd.display", "glass"]],
+  light: [["@led1", "body"]],
+  pixels: [["@stick.px1", "lens"]],
+  relay: [["@relay.led", "body"], ["@led1", "body"]],
+  rgb: [["@board.led", "lens"], ["@btn1", "stem"]],
+  screen: [["@oled.display", "glass"]],
+  serial: [["@board.led", "lens"]],
+  servo: [["@servo", "horn"]],
+  shift: [["@led1", "body"]],
+  tone: [["@bz1"]],
+};
+
+/** Waits until the viewer has built the 3D nodes this Block kind drives. */
+export function waitBlockReady(page: Page, kind: BlockKind, timeout = 120_000): Promise<unknown> {
+  return page.waitForFunction(
+    (checks) => {
+      const scene = window.orbeViewer?.get().scene;
+      return checks.every(([ref, node]) => {
+        const group = scene?.getObjectByName(ref);
+        return (node === undefined ? group : group?.getObjectByName(node)) !== undefined;
+      });
+    },
+    READY_NODES[kind],
+    { timeout },
   );
 }
 
@@ -299,6 +326,18 @@ export function waitSimulatedPast(page: Page, seconds: number, timeout = 30_000)
     seconds,
     { timeout },
   );
+}
+
+const SERIAL = '[data-testid="serial"]';
+
+/** The readings a Serial block prints. That text is what the page shows for it. */
+export async function showSerial(page: Page, block: RepoBlock): Promise<void> {
+  const start = await simulatedSeconds(page);
+  await waitSimulatedPast(page, Math.max(0.05, start));
+  const strip = page.locator(SERIAL);
+  await expect(strip, `${block.id} temperature`).toContainText(/Temperature = \d+\.\d+/, { timeout: 30_000 });
+  await expect(strip, `${block.id} pressure`).toContainText(/Pressure = \d+\.\d+ Pa/, { timeout: 30_000 });
+  expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(0.05);
 }
 
 const LIGHT = '[data-testid="world-light"]';
@@ -546,6 +585,14 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
     const seen = new Set(colours.map((colour) => `${colour!.r.toFixed(3)},${colour!.g.toFixed(3)},${colour!.b.toFixed(3)}`));
     expect(seen.size, `${block.id} colours`).toBeGreaterThan(1);
     expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(0.05);
+    if (shotName !== null) {
+      await page.locator("canvas").scrollIntoViewIfNeeded();
+      await shot(page, shotName);
+    }
+    return;
+  }
+  if (block.kind === "serial") {
+    await showSerial(page, block);
     if (shotName !== null) {
       await page.locator("canvas").scrollIntoViewIfNeeded();
       await shot(page, shotName);

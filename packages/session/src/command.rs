@@ -104,7 +104,7 @@ pub const COMMANDS: &[Spec] = &[
     Spec {
         name: "set",
         usage: "set <quantity> <value> | set <ref> <value>",
-        about: "Sets a world quantity the scene declares, from now on: temperature in degC, humidity in %RH or light in lx, such as `set light 50`. Or turns a part's live param, such as a potentiometer's position, as in `set @pot1.position 0.8`. A param takes the same quantity text a scene does, such as `9V` or `10k`.",
+        about: "Sets a world quantity the scene declares, from now on: temperature in degC, humidity in %RH, light in lx or pressure in Pa, such as `set light 50`. Or turns a part's live param, such as a potentiometer's position, as in `set @pot1.position 0.8`. A param takes the same quantity text a scene does, such as `9V` or `10k`.",
         parse: |args, _| parse_set(args),
     },
     Spec {

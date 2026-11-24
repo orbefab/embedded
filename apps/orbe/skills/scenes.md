@@ -18,6 +18,7 @@ A scene is JSONC: JSON plus `//` comments and trailing commas.
 | `temperature` | degC | -40 to 125 | 25 |
 | `humidity` | %RH | 0 to 100 | 50 |
 | `light` | lx | 0 to 100000 | 300 |
+| `pressure` | Pa | 30000 to 110000 | 101325 |
 
 A part name starts with a letter and then takes letters, digits and `_`. It may not contain `__` or end in `_`. `i`, `v`, `p`, `ib`, `ic`, `id`, `iin`, `iout`, `pin`, `logic`, `usart` and `net` are taken.
 

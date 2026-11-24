@@ -101,6 +101,7 @@ pub(super) enum Bound {
         want: bool,
     },
     SerialContains(String),
+    DiagnosticContains(String),
     NoDiagnostics,
     /// `@disp.digit 8`.
     Digit {
@@ -113,6 +114,9 @@ impl Open {
     pub(super) fn bind(&self, condition: &Condition) -> Result<Bound, Error> {
         Ok(match condition {
             Condition::NoDiagnostics => Bound::NoDiagnostics,
+            Condition::DiagnosticContains(text) => {
+                Bound::DiagnosticContains(text.as_str().to_string())
+            }
             Condition::Digit(r, want) => match self.resolve(r)? {
                 Target::Digit { path } => {
                     self.shown_digit(&path)?;
@@ -630,6 +634,24 @@ impl Open {
             Bound::Digit { path, want } => {
                 let shown = self.shown_digit(path).expect("bind checked the segments");
                 (shown == *want, format!("{path}.digit is {shown}"))
+            }
+            Bound::DiagnosticContains(text) => {
+                let found: Vec<String> = self
+                    .diagnostics(&self.engine.probe())
+                    .into_iter()
+                    .filter(Diagnostic::runtime)
+                    .map(|d| d.text())
+                    .collect();
+                let matched = found.iter().any(|line| line.contains(text));
+                let actual = if found.is_empty() {
+                    format!(
+                        "no diagnostics; a chip warning can show up to {} late",
+                        t(self.max_step_ps)
+                    )
+                } else {
+                    found.join("; ")
+                };
+                (matched, actual)
             }
             Bound::NoDiagnostics => {
                 let found: Vec<Diagnostic> = self

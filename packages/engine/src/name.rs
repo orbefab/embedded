@@ -3,7 +3,7 @@
 //! ```text
 //! ref      = "#" ( "net." name | "world." world | name [ "." ( quantity | "pin." name | "logic." name ) ] )
 //! quantity = "ib" | "ic" | "id" | "iin" | "iout" | "i" | "v" | "p"
-//! world    = "temperature" | "humidity" | "light"
+//! world    = "temperature" | "humidity" | "light" | "pressure"
 //! name     = ASCII letter, then ASCII letters, digits or "_"; 1..=64 bytes
 //! ```
 

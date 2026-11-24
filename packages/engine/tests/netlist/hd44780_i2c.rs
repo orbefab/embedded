@@ -67,3 +67,29 @@ fn a_negative_low_drop_is_refused() {
         Diagnostic::NetlistValue { field, rule: ValueRule::NonNegative, .. } if field == "low_drop"
     )));
 }
+
+#[test]
+fn ratings_are_optional_and_validated_when_present() {
+    let base = chip(0x27, true, 0.0);
+    let rated = base.replace(
+        "        }\n      }]",
+        "        },\n        \"ratings\": {\n          \"rail_margin\": { \"value\": 0.5, \"unit\": \"V\" },\n          \"supply_voltage\": { \"value\": 7.0, \"unit\": \"V\" }\n        }\n      }]",
+    );
+    let parsed = netlist::parse(rated.as_bytes()).unwrap();
+    let Model::Chip(Chip::Hd44780I2c(dev)) = &parsed.parts().next().unwrap().1.model else {
+        panic!("u1 is an hd44780_i2c");
+    };
+    let ratings = dev.ratings.as_ref().unwrap();
+    assert_eq!(ratings.rail_margin.as_ref().unwrap().si.get(), 0.5);
+    assert_eq!(ratings.supply_voltage.as_ref().unwrap().si.get(), 7.0);
+
+    let bad_unit = rated.replace(
+        r#""value": 0.5, "unit": "V""#,
+        r#""value": 0.5, "unit": "A""#,
+    );
+    let err = netlist::parse(bad_unit.as_bytes()).unwrap_err();
+    assert!(err.iter().any(|d| matches!(
+        d,
+        Diagnostic::NetlistUnit { field, .. } if field == "ratings.rail_margin"
+    )));
+}
