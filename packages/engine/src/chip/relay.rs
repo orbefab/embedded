@@ -259,7 +259,8 @@ impl Kind for Relay {
         let coil = [self.pins[Relay::COIL_A], self.pins[Relay::COIL_B]];
         Some(Observed::two_pin(coil, probe.branch(0), probe))
     }
+    /// `com` meets `no` and `nc` the way a switch meets its pins. The coil does not.
     fn conduction(&self) -> Conduction {
-        Conduction::Other
+        Conduction::Contacts(&[(Relay::COM, Relay::NO), (Relay::COM, Relay::NC)])
     }
 }

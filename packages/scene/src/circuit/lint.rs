@@ -466,8 +466,38 @@ fn unite(parent: &mut [usize], a: usize, b: usize) {
     }
 }
 
-/// An LED whose path, through other junctions, switches and transistors switched to a held
-/// net, joins two driven nets with no resistor in series. A diode's cathode is driven when its
+/// Nets `model` joins to `net` without limiting the current. A junction or a switch joins
+/// every pin. A transistor joins its switched pin when that pin is held. A relay joins `com`
+/// to `no` and to `nc`.
+fn joined(model: &Model, net: usize, held: impl Fn(usize) -> bool) -> Vec<usize> {
+    let pins = model.pins();
+    match model.conduction() {
+        Conduction::Passes if pins.iter().any(|pin| pin.index() == net) => {
+            pins.iter().map(|pin| pin.index()).collect()
+        }
+        Conduction::Switches(from, to) if pins[from].index() == net && held(pins[to].index()) => {
+            vec![pins[to].index()]
+        }
+        Conduction::Contacts(pairs) => pairs
+            .iter()
+            .filter_map(|&(from, to)| {
+                let (a, b) = (pins[from].index(), pins[to].index());
+                if a == net {
+                    Some(b)
+                } else if b == net {
+                    Some(a)
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// An LED whose path, through other junctions, switches, relay contacts and transistors
+/// switched to a held net, joins two driven nets with no resistor in series. A relay's `com`
+/// meets `no` and `nc` the way a switch meets its pins. A diode's cathode is driven when its
 /// anode is a source's net. One side of the LED can reach a supply through a diode while the
 /// other side reaches it only through a resistor. That resistor is in series. A resistor that
 /// bridges two sides which each already reach a driver is in parallel and limits nothing. A
@@ -523,18 +553,7 @@ fn led_no_resistor(s: &Scope, out: &mut Findings) {
                 continue;
             }
             for (_, part) in engine.parts() {
-                let pins = part.model.pins();
-                let reached: Vec<usize> = match part.model.conduction() {
-                    Conduction::Passes if pins.iter().any(|n| n.index() == net) => {
-                        pins.iter().map(|n| n.index()).collect()
-                    }
-                    Conduction::Switches(from, to)
-                        if pins[from].index() == net && held(pins[to].index()) =>
-                    {
-                        vec![pins[to].index()]
-                    }
-                    _ => Vec::new(),
-                };
+                let reached = joined(&part.model, net, held);
                 for other in reached {
                     if path.insert(other) {
                         next.push(other);
@@ -578,6 +597,14 @@ fn led_no_resistor(s: &Scope, out: &mut Findings) {
                     let (a, b) = (pins[from].index(), pins[to].index());
                     if path.contains(&a) && path.contains(&b) && held(b) {
                         unite(&mut parent, a, b);
+                    }
+                }
+                Conduction::Contacts(pairs) => {
+                    for &(from, to) in pairs {
+                        let (a, b) = (pins[from].index(), pins[to].index());
+                        if path.contains(&a) && path.contains(&b) {
+                            unite(&mut parent, a, b);
+                        }
                     }
                 }
                 _ => {}

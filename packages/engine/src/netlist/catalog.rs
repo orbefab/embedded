@@ -96,8 +96,11 @@ pub enum Conduction {
     Switches(usize, usize),
     /// Its resistance limits the current. A resistor or a potentiometer.
     Limits,
-    /// None of these. A current source, a capacitor, an inductor, a relay or a chip.
+    /// None of these. A current source, a capacitor, an inductor, an op-amp or a chip.
     Other,
+    /// Each pair joins the way a switch joins its two pins. A relay's `com` to `no` and
+    /// `com` to `nc`. The coil is not one of them.
+    Contacts(&'static [(usize, usize)]),
 }
 
 /// How many of a row's pins are required: `required <n>` on a chip row names the first `n`,

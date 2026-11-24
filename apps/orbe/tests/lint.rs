@@ -1215,6 +1215,101 @@ fn a_diode_back_to_the_supply_does_not_hide_a_resistor_in_series_with_the_led() 
     );
 }
 
+/// The contact conducts like a switch. The shipped Block keeps 220 ohm in series and stays
+/// quiet. That Block with the resistor removed, and a bare SRD from 5 V on COM into an LED
+/// through NO or through NC, warn.
+#[test]
+fn a_relay_contact_into_an_led_warns_without_a_series_resistor() {
+    let repo = common::repo();
+    let shipped = orbe(&repo, &["lint", "blocks/nano-relay-led/scene.jsonc"]);
+    assert_eq!(shipped.code, 0, "{}{}", shipped.stdout, shipped.stderr);
+    assert!(
+        shipped
+            .stdout
+            .ends_with("blocks/nano-relay-led/scene.jsonc: no warnings\n"),
+        "{}",
+        shipped.stdout
+    );
+
+    let scene = fs::read_to_string(repo.join("blocks/nano-relay-led/scene.jsonc")).unwrap();
+    let dropped = scene
+        .lines()
+        .filter(|line| !line.contains("\"r1\":"))
+        .map(|line| {
+            line.replace(
+                "[\"relay.NO\", \"r1.a\"],",
+                "[\"relay.NO\", \"led1.anode\"],",
+            )
+        })
+        .filter(|line| !line.contains("r1.b"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace("build/relay.ino.hex", "build/button.ino.hex");
+    assert!(
+        !dropped.contains("r1") && dropped.contains("[\"relay.NO\", \"led1.anode\"]"),
+        "{dropped}"
+    );
+    let dir = project(&dropped);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        lines_warned(&run, "scene.led_no_resistor"),
+        [line_of(&dropped, "\"led1\":")],
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains(
+            "nothing limits the current through `led1`: it joins `GND` and `nano__5V` with no resistor in series"
+        ),
+        "{}",
+        run.stdout
+    );
+
+    for contact in ["NO", "NC"] {
+        let bare = format!(
+            r#"{{
+  "format": 1,
+  "parts": {{
+    "nano": {{ "type": "nano-board", "firmware": "build/button.ino.hex" }},
+    "k": {{ "type": "relay-srd-05vdc-sl-c" }},
+    "led1": {{ "type": "led-5mm" }}
+  }},
+  "nets": {{ "GND": "nano.GND" }},
+  "wires": [
+    ["nano.5V", "k.COM"],
+    ["k.{contact}", "led1.anode"],
+    ["led1.cathode", "nano.GND"],
+    ["nano.5V", "k.coil_a"],
+    ["k.coil_b", "nano.GND"]
+  ],
+  "layout": {{
+    "nano": {{ "at": [0, 0, 0] }},
+    "k": {{ "at": [40, 0, 0] }},
+    "led1": {{ "at": [80, 0, 0] }}
+  }}
+}}
+"#
+        );
+        let dir = project(&bare);
+        let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+        assert_eq!(run.code, 0, "{contact}: {}{}", run.stdout, run.stderr);
+        assert_eq!(
+            lines_warned(&run, "scene.led_no_resistor"),
+            [line_of(&bare, "\"led1\":")],
+            "{contact}: {}",
+            run.stdout
+        );
+        assert!(
+            run.stdout.contains(
+                "nothing limits the current through `led1`: it joins `GND` and `nano__5V` with no resistor in series"
+            ),
+            "{contact}: {}",
+            run.stdout
+        );
+    }
+}
+
 /// A 2N2222 with its leads formed to 2.54 mm sits one leg in each strip. Turned along a column,
 /// the three legs share a strip and short. The Nano drives the base, and 220 ohm limits the LED.
 #[test]
