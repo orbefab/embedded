@@ -74,9 +74,9 @@ fn play(name: &str, lines: &[&str]) {
     }
 }
 
-/// The picosecond GPIO18 is at `level`: now, when it already is, or at its next edge.
-fn edge(live: &mut Live, project: &Path, level: &str) -> u64 {
-    let line = format!("step --until @board.GPIO18 {level} --timeout 30ms");
+/// The picosecond `pin` is at `level`: now, when it already is, or at its next edge.
+fn edge_on(live: &mut Live, project: &Path, pin: &str, level: &str) -> u64 {
+    let line = format!("step --until @board.{pin} {level} --timeout 30ms");
     let Data::Stepped(stepped) = run(live, project, &line) else {
         panic!("{line} did not step");
     };
@@ -86,13 +86,18 @@ fn edge(live: &mut Live, project: &Path, level: &str) -> u64 {
     }
 }
 
+/// `pin`'s next whole PWM cycle, from a rising edge: its period and its high time, in ps.
+fn cycle_on(live: &mut Live, project: &Path, pin: &str) -> (u64, u64) {
+    edge_on(live, project, pin, "low");
+    let rise = edge_on(live, project, pin, "high");
+    let fall = edge_on(live, project, pin, "low");
+    let next = edge_on(live, project, pin, "high");
+    (next - rise, fall - rise)
+}
+
 /// GPIO18's next whole PWM cycle, from a rising edge: its period and its high time, in ps.
 fn cycle(live: &mut Live, project: &Path) -> (u64, u64) {
-    edge(live, project, "low");
-    let rise = edge(live, project, "high");
-    let fall = edge(live, project, "low");
-    let next = edge(live, project, "high");
-    (next - rise, fall - rise)
+    cycle_on(live, project, "GPIO18")
 }
 
 /// `duty` of `2^bits` steps of `period` ps, to the nearest ps. The chip rounds the high time
@@ -459,5 +464,299 @@ fn a_stock_wire_write_and_read_run_past_the_fifo() {
         found[0].starts_with("warning[chip.protocol] #oled__display")
             && found[0].contains("rule read"),
         "{text}"
+    );
+}
+
+/// `tone(4, 1000); delay(50); noTone(4);` toggles GPIO4 at 1 kHz and then leaves it steady low.
+#[test]
+fn a_stock_tone_and_notone_toggle_at_1_khz_then_stop_low() {
+    let (project, mut live) = open("esp32s3-stock-tone");
+    let path = project.path();
+    run(&mut live, path, r#"step --until serial contains "tone""#);
+    let (period, high_ps) = cycle_on(&mut live, path, "GPIO4");
+    assert!(near(period, MS, 1), "period {period} ps");
+    let want = high(MS, 0x1ff, 10);
+    assert!(near(high_ps, want, TICK), "high {high_ps} ps, want {want}");
+    run(&mut live, path, r#"step --until serial contains "done""#);
+    run(&mut live, path, "step 10ms");
+    run(&mut live, path, "expect @board.GPIO4 low");
+    run(&mut live, path, "expect no diagnostics");
+}
+
+/// `ledcAttach(4, 5000, 10)` drives 5 kHz PWM, then `ledcDetach(4)` returns GPIO4 to plain GPIO.
+#[test]
+fn a_stock_ledc_detach_returns_the_pin_to_plain_gpio() {
+    let (project, mut live) = open("esp32s3-stock-ledcdetach");
+    let path = project.path();
+    run(
+        &mut live,
+        path,
+        r#"step --until serial contains "attached""#,
+    );
+    let (period, high_ps) = cycle_on(&mut live, path, "GPIO4");
+    assert!(near(period, 200 * US, 1), "period {period} ps");
+    assert!(near(high_ps, 100 * US, TICK), "high {high_ps} ps");
+    run(
+        &mut live,
+        path,
+        r#"step --until serial contains "gpio high""#,
+    );
+    run(&mut live, path, "step 2ms");
+    run(&mut live, path, "expect @board.GPIO4 high");
+    run(
+        &mut live,
+        path,
+        r#"step --until serial contains "gpio low""#,
+    );
+    run(&mut live, path, "step 2ms");
+    run(&mut live, path, "expect @board.GPIO4 low");
+    run(&mut live, path, "expect no diagnostics");
+}
+
+/// `ledcFade(4, 0, 1023, 100)` ramps duty from 0 to full over ~102.4 ms (512 steps of +2 at
+/// 5 kHz, 10 bits), then `ledcFadeWithInterrupt(4, 1023, 0, 100, onFadeDone)` ramps back down
+/// to 0 and runs the fade-end callback.
+#[test]
+fn a_stock_ledc_fade_ramps_duty_and_fires_its_callback() {
+    let (project, mut live) = open("esp32s3-stock-ledcfade");
+    let path = project.path();
+    run(&mut live, path, r#"step --until serial contains "fade1""#);
+    // At 5 kHz (200 us period) and 10 bits (1024 steps), IDF programs scale=2, cycle=1, step=512
+    // so duty increases by 2 every 200 us (10 steps/ms). Sample three points along the ramp.
+    let mut prev = 0u64;
+    let mut prev_t = 0u64;
+    for step_by in ["25ms", "25ms", "25ms"] {
+        run(&mut live, path, &format!("step {step_by}"));
+        edge_on(&mut live, path, "GPIO4", "low");
+        let rise = edge_on(&mut live, path, "GPIO4", "high");
+        let fall = edge_on(&mut live, path, "GPIO4", "low");
+        let next = edge_on(&mut live, path, "GPIO4", "high");
+        let period = next - rise;
+        let high_ps = fall - rise;
+        assert!(near(period, 200 * US, 1), "period {period} ps");
+        let duty = (1..1024)
+            .find(|&d| near(high_ps, high(200 * US, d, 10), TICK))
+            .unwrap_or_else(|| panic!("high {high_ps} ps is no 10-bit step"));
+        assert_eq!(duty % 2, 0, "scale=2 leaves even duties, got {duty}");
+        if prev_t != 0 {
+            // Each 200 us cycle adds 2 to duty.
+            let cycles = (rise - prev_t + 100 * US) / (200 * US);
+            assert_eq!(
+                duty,
+                prev + 2 * cycles,
+                "TRM fade step math: prev {prev} + 2 * {cycles} cycles != {duty}"
+            );
+        }
+        prev = duty;
+        prev_t = rise;
+    }
+    assert!(prev > 600 && prev < 900, "75 ms sample {prev}");
+    run(&mut live, path, r#"step --until serial contains "duty1""#);
+    run(&mut live, path, r#"expect serial contains "duty1 1024""#);
+    run(&mut live, path, "expect @board.GPIO4 high");
+
+    run(&mut live, path, r#"step --until serial contains "fade2""#);
+    // Fading down from 1024 -> 0: IDF starts at 1023 with scale=2, cycle=1, step=511, then
+    // finishes the remainder 1 -> 0 in the ISR. Sample two points on the ramp down.
+    let mut prev_down = 0u64;
+    let mut prev_down_t = 0u64;
+    for step_by in ["30ms", "30ms"] {
+        run(&mut live, path, &format!("step {step_by}"));
+        edge_on(&mut live, path, "GPIO4", "low");
+        let rise = edge_on(&mut live, path, "GPIO4", "high");
+        let fall = edge_on(&mut live, path, "GPIO4", "low");
+        let next = edge_on(&mut live, path, "GPIO4", "high");
+        let period = next - rise;
+        let high_ps = fall - rise;
+        assert!(near(period, 200 * US, 1), "down period {period} ps");
+        let duty = (1..1024)
+            .find(|&d| near(high_ps, high(200 * US, d, 10), TICK))
+            .unwrap_or_else(|| panic!("down high {high_ps} ps is no 10-bit step"));
+        assert_eq!(duty % 2, 1, "1023 - 2*k leaves odd duties, got {duty}");
+        if prev_down_t != 0 {
+            let cycles = (rise - prev_down_t + 100 * US) / (200 * US);
+            assert_eq!(
+                duty + 2 * cycles,
+                prev_down,
+                "TRM down fade step math: {prev_down} - 2 * {cycles} cycles != {duty}"
+            );
+        }
+        prev_down = duty;
+        prev_down_t = rise;
+    }
+    run(
+        &mut live,
+        path,
+        r#"step --until serial contains "done 1 duty2 0""#,
+    );
+    run(&mut live, path, "expect @board.GPIO4 low");
+    run(&mut live, path, "expect no diagnostics");
+}
+
+/// `tone(4, 1000)`, `delay`, `noTone(4)`, `delay`, `tone(4, 2500)`: GPIO4 runs 1 kHz, goes quiet,
+/// then runs 2.5 kHz at 50% duty.
+#[test]
+fn a_stock_tone_notone_and_second_tone_change_frequency() {
+    let (project, mut live) = open("esp32s3-stock-tonerestart");
+    let path = project.path();
+    run(&mut live, path, r#"step --until serial contains "tone1""#);
+    let (period, high_ps) = cycle_on(&mut live, path, "GPIO4");
+    assert!(near(period, MS, 1), "tone1 period {period} ps");
+    let want = high(MS, 0x1ff, 10);
+    assert!(
+        near(high_ps, want, TICK),
+        "tone1 high {high_ps} ps, want {want}"
+    );
+    run(&mut live, path, r#"step --until serial contains "quiet""#);
+    run(&mut live, path, "step 5ms");
+    run(&mut live, path, "expect @board.GPIO4 low");
+    run(&mut live, path, "step 5ms");
+    run(&mut live, path, "expect @board.GPIO4 low");
+    run(&mut live, path, r#"step --until serial contains "tone2""#);
+    let (period, high_ps) = cycle_on(&mut live, path, "GPIO4");
+    assert!(near(period, 400 * US, 1), "tone2 period {period} ps");
+    let want = high(400 * US, 0x1ff, 10);
+    assert!(
+        near(high_ps, want, TICK),
+        "tone2 high {high_ps} ps, want {want}"
+    );
+    run(&mut live, path, "expect no diagnostics");
+}
+
+/// `ledcAttach(4, 5000, 10)`, `ledcWrite(4, 512)`, `ledcDetach(4)`, `ledcAttach(4, 2000, 8)`,
+/// `ledcWrite(4, 64)`: GPIO4 ends at 2 kHz duty 64/256.
+#[test]
+fn a_stock_ledc_detach_and_reattach_updates_frequency_and_resolution() {
+    let (project, mut live) = open("esp32s3-stock-ledcreattach");
+    let path = project.path();
+    run(&mut live, path, r#"step --until serial contains "first""#);
+    let (period, high_ps) = cycle_on(&mut live, path, "GPIO4");
+    assert!(near(period, 200 * US, 1), "first period {period} ps");
+    let want = high(200 * US, 512, 10);
+    assert!(
+        near(high_ps, want, TICK),
+        "first high {high_ps} ps, want {want}"
+    );
+    run(
+        &mut live,
+        path,
+        r#"step --until serial contains "detached""#,
+    );
+    run(&mut live, path, "step 2ms");
+    run(&mut live, path, "expect @board.GPIO4 low");
+    run(&mut live, path, r#"step --until serial contains "second""#);
+    let (period, high_ps) = cycle_on(&mut live, path, "GPIO4");
+    assert!(near(period, 500 * US, 1), "second period {period} ps");
+    let want = high(500 * US, 64, 8);
+    assert!(
+        near(high_ps, want, TICK),
+        "second high {high_ps} ps, want {want}"
+    );
+    run(&mut live, path, "expect no diagnostics");
+}
+
+/// `ledcFadeWithInterrupt(4, 0, 200, 400, onFadeDone)` followed by `ledcDetach(4)` mid-fade stops
+/// the fade, returns GPIO4 to plain GPIO, and fires no fade-end callback even after reattaching.
+#[test]
+fn a_stock_ledc_detach_mid_fade_stops_fade_returns_gpio_and_fires_no_callback() {
+    let (project, mut live) = open("esp32s3-stock-ledcfadedetach");
+    let path = project.path();
+    run(&mut live, path, r#"step --until serial contains "fading""#);
+    run(&mut live, path, "step 20ms");
+    let (period, high_ps) = cycle_on(&mut live, path, "GPIO4");
+    assert!(near(period, 200 * US, 1), "fade period {period} ps");
+    let duty = (1..200)
+        .find(|&d| near(high_ps, high(200 * US, d, 10), TICK))
+        .unwrap_or_else(|| panic!("mid-fade high {high_ps} ps is no 10-bit step in 1..200"));
+    assert!(duty > 0 && duty < 200, "mid-fade duty {duty}");
+    run(
+        &mut live,
+        path,
+        r#"step --until serial contains "gpio high""#,
+    );
+    run(&mut live, path, "step 5ms");
+    run(&mut live, path, "expect @board.GPIO4 high");
+    run(
+        &mut live,
+        path,
+        r#"step --until serial contains "gpio low""#,
+    );
+    run(&mut live, path, "step 5ms");
+    run(&mut live, path, "expect @board.GPIO4 low");
+    run(
+        &mut live,
+        path,
+        r#"step --until serial contains "after_detach 0""#,
+    );
+    run(
+        &mut live,
+        path,
+        r#"step --until serial contains "reattached""#,
+    );
+    let (period, high_ps) = cycle_on(&mut live, path, "GPIO4");
+    assert!(near(period, 500 * US, 1), "reattach period {period} ps");
+    let want = high(500 * US, 64, 8);
+    assert!(
+        near(high_ps, want, TICK),
+        "reattach high {high_ps} ps, want {want}"
+    );
+    run(
+        &mut live,
+        path,
+        r#"step --until serial contains "after_wait 0" --timeout 1s"#,
+    );
+    run(&mut live, path, "expect no diagnostics");
+}
+
+/// A four-note melody loop with `tone()` and `noTone()` plays each note at its frequency on GPIO4.
+#[test]
+fn a_stock_melody_plays_each_note_at_its_frequency() {
+    let (project, mut live) = open("esp32s3-stock-melody");
+    let path = project.path();
+    for (i, freq) in [(0, 262u64), (1, 330), (2, 392), (3, 523)] {
+        run(
+            &mut live,
+            path,
+            &format!(r#"step --until serial contains "note {i} {freq}""#),
+        );
+        let (period, high_ps) = cycle_on(&mut live, path, "GPIO4");
+        let got_hz = (1_000_000_000_000 + period / 2) / period;
+        assert!(
+            got_hz.abs_diff(freq) <= 1,
+            "note {i}: got {got_hz} Hz, want {freq} Hz (period {period} ps)"
+        );
+        let want = high(period, 0x1ff, 10);
+        assert!(
+            near(high_ps, want, TICK),
+            "note {i}: high {high_ps} ps, want {want}"
+        );
+        run(
+            &mut live,
+            path,
+            &format!(r#"step --until serial contains "rest {i}""#),
+        );
+        run(&mut live, path, "step 3ms");
+        run(&mut live, path, "expect @board.GPIO4 low");
+    }
+    run(&mut live, path, r#"step --until serial contains "done""#);
+    run(&mut live, path, "expect no diagnostics");
+}
+
+#[test]
+fn a_stock_sketch_configures_rtc_pads_with_no_diagnostics() {
+    play(
+        "esp32s3-stock-rtcio",
+        &[
+            "step 300ms",
+            r#"expect serial contains "adc 1779 1178 2431 spi ff""#,
+            r#"expect serial contains "ready""#,
+            "expect @board.GPIO7 high",
+            "expect @board.GPIO8 high",
+            "expect @board.GPIO10 high",
+            "expect @board.GPIO15 high",
+            "expect @board.GPIO17 high",
+            "expect @board.GPIO21 high",
+            "expect no diagnostics",
+        ],
     );
 }
