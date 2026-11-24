@@ -3,7 +3,7 @@
   "seed": 0,
   "analysis": {
     "transient": {
-      "stop_ps": 1200000000000,
+      "stop_ps": 2500000000000,
       "max_step_ps": 10000000000,
       "grid_ps": 10000000000
     }

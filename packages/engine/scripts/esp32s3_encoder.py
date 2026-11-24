@@ -41,7 +41,7 @@ US_PS = 10**6
 # 240 MHz, and the timer reads whole microseconds.
 LATENCY_US = 10
 # The app's boot pulse of SYSTIMER_RST, measured as run time minus the printed `t`.
-BOOT_RESET_US = 9026
+BOOT_RESET_US = 10631
 POLL_US = 3000
 # The timer counts a press at its second low read, one to two periods after the closing. Its
 # dispatch, the queue and the print add a fraction of a millisecond, so a third of a period is

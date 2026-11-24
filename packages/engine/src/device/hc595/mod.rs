@@ -107,6 +107,7 @@ pub(crate) fn chip(part: PartId, dev: &Hc595) -> Chip {
         high: stage(&kind.high_drop, &kind.high_resistance),
         low: stage(&kind.low_drop, &kind.low_resistance),
         pull_up: None,
+        strong_pull_up: None,
         pull_down: None,
         leakage: None,
     };

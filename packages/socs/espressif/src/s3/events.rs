@@ -11,6 +11,7 @@
 use super::clock::Tick;
 use super::soc::{LEDC, RMT, SPI2, SYSTIMER, TIMG0, TIMG1, USB_SERIAL_JTAG};
 use super::uart::Uarts;
+use super::usb;
 
 /// The peripherals a poll asks, each a slot of [`Events`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +78,9 @@ impl Events {
         let moved = match addr & !0xfff {
             SYSTIMER => Peripheral::Systimer.bit(),
             TIMG0 | TIMG1 => Peripheral::Timers.bit(),
+            USB_SERIAL_JTAG if addr & !3 == USB_SERIAL_JTAG + usb::CONF0 => {
+                Peripheral::Usb.bit() | Peripheral::Uart.bit()
+            }
             USB_SERIAL_JTAG => Peripheral::Usb.bit(),
             RMT => Peripheral::Rmt.bit() | Peripheral::Uart.bit(),
             SPI2 => Peripheral::Spi2.bit() | Peripheral::Uart.bit(),

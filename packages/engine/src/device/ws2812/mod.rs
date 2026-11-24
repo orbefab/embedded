@@ -72,6 +72,7 @@ pub(crate) fn chip(part: PartId, chain: &Ws2812) -> Chip {
             high: stage(&dout.output.high_drop, &dout.output.high_resistance),
             low: stage(&dout.output.low_drop, &dout.output.low_resistance),
             pull_up: None,
+            strong_pull_up: None,
             pull_down: None,
             leakage: None,
         })

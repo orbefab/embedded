@@ -58,6 +58,7 @@ pub(crate) fn chip(part: PartId, dev: &Dht22) -> Chip {
             high: drain,
             low: drain,
             pull_up: None,
+            strong_pull_up: None,
             pull_down: None,
             leakage: None,
         }],

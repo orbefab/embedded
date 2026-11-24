@@ -101,6 +101,7 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
                 super::Pad {
                     net: mcu.pins[k],
                     pull_up: pull_up.si.get(),
+                    strong_pull_up: None,
                     pull_down: None,
                     threshold,
                 }

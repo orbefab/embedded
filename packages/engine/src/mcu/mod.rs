@@ -161,6 +161,8 @@ pub(crate) struct Pad<'a> {
     pub(crate) net: NetId,
     /// Ohm.
     pub(crate) pull_up: f64,
+    /// Ohm. Alternate strong pull-up when the core asserts `strong_pull_up`, `None` when none.
+    pub(crate) strong_pull_up: Option<f64>,
     /// Ohm. `None` on a pad that never pulls down.
     pub(crate) pull_down: Option<f64>,
     /// The fractions of its supply it reads a level at.
@@ -188,6 +190,7 @@ impl Pads<'_> {
                 high,
                 low,
                 pull_up: Some(pad.pull_up),
+                strong_pull_up: pad.strong_pull_up,
                 pull_down: pad.pull_down,
                 leakage: Some(self.leakage),
             })
@@ -327,6 +330,11 @@ impl Mcu {
     #[inline]
     pub(crate) fn pulled_down(&self) -> &[bool] {
         each!(self, host => host.mcu.pulled_down())
+    }
+
+    #[inline]
+    pub(crate) fn strong_pull_up(&self) -> &[bool] {
+        each!(self, host => host.mcu.strong_pull_up())
     }
 
     #[inline]

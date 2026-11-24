@@ -68,6 +68,7 @@ pub(crate) fn chip(part: PartId, replay: &SpiReplay) -> Chip {
             high,
             low,
             pull_up: None,
+            strong_pull_up: None,
             pull_down: None,
             leakage: None,
         })

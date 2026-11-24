@@ -1557,10 +1557,11 @@ mod tests {
         assert_eq!(chip.run_until(c(1000)), None, "timer 1's interrupt");
     }
 
-    /// `JTAG_IN_FLUSH` and SOF are not among the USB Serial/JTAG enables the model runs.
+    /// `JTAG_IN_FLUSH`, SOF, error bits and zero-payload bits are not among the USB Serial/JTAG
+    /// enables the model runs.
     #[test]
     fn enabling_sof_or_jtag_in_flush_ends_the_run() {
-        for bit in [1 << 0, 1 << 1] {
+        for bit in [1 << 0, 1 << 1, 1 << 4, 1 << 10] {
             let program = store_after_two_loads(USB_SERIAL_JTAG + 0x10, bit, 0);
             assert_eq!(
                 program.chip().run_until(c(1000)),
@@ -1576,12 +1577,177 @@ mod tests {
         }
     }
 
-    /// `SERIAL_OUT_RECV_PKT`, `SERIAL_IN_EMPTY` and `USB_BUS_RESET` may be enabled together.
+    /// `SERIAL_OUT_RECV_PKT`, `SERIAL_IN_EMPTY`, `IN_TOKEN_REC_IN_EP1` and `USB_BUS_RESET` may
+    /// be enabled together.
     #[test]
-    fn serial_out_recv_pkt_serial_in_empty_and_bus_reset_may_be_enabled() {
-        let value = (1 << 2) | (1 << 3) | (1 << 9);
+    fn serial_out_recv_pkt_serial_in_empty_token_and_bus_reset_may_be_enabled() {
+        let value = (1 << 2) | (1 << 3) | (1 << 8) | (1 << 9);
         let mut chip = store_after_two_loads(USB_SERIAL_JTAG + 0x10, value, 0).chip();
         assert_eq!(chip.run_until(c(1000)), None);
+    }
+
+    /// `USB_SERIAL_JTAG_CONF0_REG` keeps `HWCDC::begin()` and GPIO19/20 pull-up setup with no
+    /// unmodeled-register warning, and refuses unmodeled fields.
+    #[test]
+    fn usb_conf0_keeps_allowed_writes_and_refuses_unmodeled_fields() {
+        let conf0 = USB_SERIAL_JTAG + 0x18;
+        let program = stores(&[
+            (conf0, 0x4200),
+            (conf0, 0x0200),
+            (conf0, 0x0300),
+            (conf0, 0x0100),
+            (conf0, 0x4200),
+        ]);
+        let mut chip = program.chip();
+        assert_eq!(chip.run_until(c(1000)), None);
+        assert_eq!(chip.unmodeled().count(), 0);
+
+        for (bit, setting) in [
+            (1 << 0, "phy_sel"),
+            (1 << 1, "exchg_pins"),
+            (1 << 2, "exchg_pins"),
+            (1 << 7, "vref"),
+            (1 << 10, "pad_pull"),
+            (1 << 11, "pad_pull"),
+            (1 << 12, "pad_pull"),
+            (1 << 13, "pullup_value"),
+            (1 << 15, "phy_tx_edge"),
+            (1 << 16, "jtag_bridge"),
+        ] {
+            let program = store_after_two_loads(conf0, 0x4200 | bit, 0);
+            assert_eq!(
+                program.chip().run_until(c(1000)),
+                Some(Halt::Fault(
+                    c(2),
+                    Fault::Refused(
+                        Refused::Register("USB_SERIAL_JTAG", setting),
+                        pro(program.entry() + 6)
+                    )
+                )),
+                "{bit:#x}"
+            );
+        }
+    }
+
+    /// While `USB_PAD_ENABLE` is set, GPIO19 and GPIO20 do not drive from the GPIO matrix and
+    /// GPIO20 carries the USB PHY's D+ pull-up (`UsbPullUp`) while `DP_PULLUP` is active;
+    /// clearing `USB_PAD_ENABLE` releases both pads to GPIO, and setting it again restores USB.
+    #[test]
+    fn usb_pad_enable_gates_gpio19_and_gpio20_output() {
+        let mask = (1u32 << 19) | (1u32 << 20);
+        let conf0 = USB_SERIAL_JTAG + 0x18;
+        let program = stores(&[
+            (GPIO + 0x08, mask),
+            (GPIO + 0x24, mask),
+            (conf0, 0x4100), // USB_PAD_ENABLE=1, PAD_PULL_OVERRIDE=1, DP_PULLUP=0
+            (conf0, 0x0200), // USB_PAD_ENABLE=0: GPIO matrix takes both pads
+            (conf0, 0x4200), // USB_PAD_ENABLE=1, DP_PULLUP=1: USB PHY reclaims both pads
+        ]);
+        let mut chip = program.chip_on(&[19, 20]);
+        assert_eq!(chip.drive(19), PadDrive::Off);
+        assert_eq!(chip.drive(20), PadDrive::UsbPullUp);
+        // Overriding DP_PULLUP off drops GPIO20's USB pull-up while still blocking GPIO output.
+        assert_eq!(chip.run_until(c(1000)), Some(image_at(c(8))));
+        assert_eq!(chip.drive(19), PadDrive::Off);
+        assert_eq!(chip.drive(20), PadDrive::Off);
+        // Clearing USB_PAD_ENABLE lets the GPIO matrix drive both pads high.
+        assert_eq!(chip.run_until(c(1000)), Some(image_at(c(11))));
+        assert_eq!(chip.drive(19), PadDrive::High);
+        assert_eq!(chip.drive(20), PadDrive::High);
+        // Setting USB_PAD_ENABLE and DP_PULLUP returns GPIO19 to Off and GPIO20 to UsbPullUp.
+        assert_eq!(chip.run_until(c(1000)), Some(image_at(c(14))));
+        assert_eq!(chip.drive(19), PadDrive::Off);
+        assert_eq!(chip.drive(20), PadDrive::UsbPullUp);
+        assert_eq!(chip.run_until(c(1000)), None);
+    }
+
+    /// Enabling `SERIAL_IN_EMPTY` after committing a packet wakes a core in `WAITI` when the
+    /// Full-Speed host finishes reading the packet (`IN_PACKET_TICKS` = 30,000 ticks = 2,500
+    /// crystal cycles).
+    #[test]
+    fn serial_in_empty_wakes_waiti_after_full_speed_host_read() {
+        let mut program = Program::new(&[
+            0x600c_2000 + 4 * 96,   // INTERRUPT_CORE0_USB_INTR_MAP_REG
+            USB_SERIAL_JTAG,        // EP1
+            USB_SERIAL_JTAG + 0x04, // EP1_CONF
+            USB_SERIAL_JTAG + 0x10, // INT_ENA
+            USB_SERIAL_JTAG + 0x14, // INT_CLR
+            1 << 3,                 // SERIAL_IN_EMPTY
+            0xfff,
+        ]);
+        program
+            .l32r(2, 0)
+            .movi(3, 1)
+            .rri8(6, 3, 2, 0) // map source 96 -> CPU int 1
+            .l32r(2, 4)
+            .l32r(3, 6)
+            .rri8(6, 3, 2, 0) // INT_CLR = 0xfff
+            .l32r(2, 1)
+            .movi(3, b'Z')
+            .rri8(6, 3, 2, 0) // EP1 = 'Z'
+            .l32r(2, 2)
+            .movi(3, 1)
+            .rri8(6, 3, 2, 0) // WR_DONE (cycle 11)
+            .l32r(2, 3)
+            .l32r(3, 5)
+            .rri8(6, 3, 2, 0) // INT_ENA = SERIAL_IN_EMPTY
+            .movi(7, 2)
+            .wsr(7, INTENABLE)
+            .movi(7, 0)
+            .wsr(7, PS)
+            .raw(&WAITI)
+            .raw(&LOOP);
+        let mut chip = program.chip();
+        // Before 11 + 2,500 = 2,511 cycles, the host has not finished reading the packet yet.
+        assert_eq!(chip.run_until(c(2_500)), None);
+        assert_eq!(chip.take_sent(c(2_500)), None);
+        // Once the host reads the packet, SERIAL_IN_EMPTY wakes WAITI and jumps to vector 0x4000_0300.
+        assert_eq!(
+            chip.run_until(c(3_000)),
+            Some(Halt::Fault(
+                c(2_515),
+                Fault::UnmappedFetch(pro(0x4000_0300))
+            ))
+        );
+        assert_eq!(chip.take_sent(c(3_000)), Some((c(2_511), b'Z')));
+    }
+
+    /// Enabling `IN_TOKEN_REC_IN_EP1` wakes a core in `WAITI` at the 1 ms USB frame boundary
+    /// (480,000 ticks = 40,000 cycles at 40 MHz).
+    #[test]
+    fn in_token_rec_in_ep1_wakes_waiti_at_the_1_ms_frame() {
+        let mut program = Program::new(&[
+            0x600c_2000 + 4 * 96, // INTERRUPT_CORE0_USB_INTR_MAP_REG
+            USB_SERIAL_JTAG + 0x10,
+            USB_SERIAL_JTAG + 0x14,
+            1 << 8,
+            0xfff,
+        ]);
+        program
+            .l32r(2, 0)
+            .movi(3, 1)
+            .rri8(6, 3, 2, 0) // map source 96 -> CPU int 1 (level 1)
+            .l32r(2, 2)
+            .l32r(3, 4)
+            .rri8(6, 3, 2, 0) // INT_CLR = 0xfff
+            .l32r(2, 1)
+            .l32r(3, 3)
+            .rri8(6, 3, 2, 0) // INT_ENA = TOKEN_IN_EP1
+            .movi(7, 2)
+            .wsr(7, INTENABLE)
+            .movi(7, 0)
+            .wsr(7, PS)
+            .raw(&WAITI)
+            .raw(&LOOP);
+        let mut chip = program.chip();
+        assert_eq!(chip.run_until(c(39_999)), None);
+        assert_eq!(
+            chip.run_until(c(50_000)),
+            Some(Halt::Fault(
+                c(40_004),
+                Fault::UnmappedFetch(pro(0x4000_0300))
+            ))
+        );
     }
 
     /// A store to a block the model does not simulate ends the run at the store, naming the
@@ -1912,10 +2078,10 @@ mod tests {
     fn the_console_sends_at_wr_done_and_an_unmodeled_read_is_listed_with_its_pc() {
         let program = blink();
         let mut chip = program.chip();
-        halts(&mut chip, 1000, 1000);
-        let (first, h) = chip.take_sent(c(1000)).expect("h");
+        halts(&mut chip, 3000, 3000);
+        let (first, h) = chip.take_sent(c(3000)).expect("h");
         assert_eq!(h, b'h');
-        assert_eq!(chip.take_sent(c(1000)), Some((first, b'i')));
+        assert_eq!(chip.take_sent(c(3000)), Some((first, b'i')));
         assert_eq!(chip.take_sent(Tick(u64::MAX)), None);
         let touched: Vec<(u32, Touch)> = chip.unmodeled().collect();
         assert_eq!(touched.len(), 1);

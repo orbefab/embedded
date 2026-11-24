@@ -103,6 +103,7 @@ pub(crate) fn chip(part: PartId, dev: &Bmp280) -> Chip {
             low,
             pull_up: None,
             pull_down: None,
+            strong_pull_up: None,
             leakage: None,
         }],
         watches,
