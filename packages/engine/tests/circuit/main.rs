@@ -13,6 +13,7 @@ mod regulator;
 mod relay;
 mod runs;
 mod session;
+mod sg90;
 mod solver;
 mod sources;
 mod step;

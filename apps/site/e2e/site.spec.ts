@@ -799,6 +799,7 @@ for (const block of releasedBlocks()) {
           }
           if (kind === "digit") return scene?.getObjectByName("@disp")?.getObjectByName("seg-a") !== undefined;
           if (kind === "pixels") return scene?.getObjectByName("@stick.px1")?.getObjectByName("lens") !== undefined;
+          if (kind === "servo") return scene?.getObjectByName("@servo")?.getObjectByName("horn") !== undefined;
           if (kind === "screen") return scene?.getObjectByName("@oled.display")?.getObjectByName("glass") !== undefined;
           if (kind === "rgb") {
             return scene?.getObjectByName("@board.led")?.getObjectByName("lens") !== undefined

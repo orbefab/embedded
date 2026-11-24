@@ -62,7 +62,7 @@ function scene(instances: Instance[], extra: Partial<SceneMessage> = {}): SceneM
     instances,
     parts,
     wires: [],
-    channels: { pins: [], leds: [], switches: [], pixels: [] },
+    channels: { pins: [], leds: [], switches: [], pixels: [], horns: [] },
     ...extra,
   };
 }
@@ -120,7 +120,7 @@ describe("buildScene", () => {
           { name: "led1", part: "lamp", params: {}, placement: at, children: [] },
           { name: "nano", part: "board", params: {}, placement: at, children: [] },
         ],
-        { channels: { pins: [], leds: ["@led1"], switches: [], pixels: [] } }
+        { channels: { pins: [], leds: ["@led1"], switches: [], pixels: [], horns: [] } }
       ),
       models
     );
@@ -159,7 +159,7 @@ describe("buildScene", () => {
     const built = buildScene(
       scene(
         [0, 1].map((k) => ({ name: `pixel${k}`, part: "pixel", params: {}, placement: at, children: [] })),
-        { channels: { pins: [], leds: [], switches: [], pixels: ["@pixel1", "@pixel0"] } }
+        { channels: { pins: [], leds: [], switches: [], pixels: ["@pixel1", "@pixel0"], horns: [] } }
       ),
       models
     );
@@ -176,7 +176,7 @@ describe("buildScene", () => {
   test("a screen's glass maps its top face from the +y edge down and starts dark", () => {
     const oled = { name: "oled", part: "oled", params: {}, placement: at, children: [] };
     const built = buildScene(
-      scene([oled], { channels: { pins: [], leds: [], switches: [], pixels: [], screens: ["@oled"] } }),
+      scene([oled], { channels: { pins: [], leds: [], switches: [], pixels: [], horns: [], screens: ["@oled"] } }),
       models
     );
     expect(built.errors).toEqual([]);

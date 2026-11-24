@@ -35,6 +35,9 @@ pub trait Device: State {
     /// Volt. Below this supply the host stamps every output off. [`Device::drive`] still
     /// reports the logical level. `None` drives at any supply.
     const MIN_SUPPLY_V: Option<f64> = None;
+    /// The host reads this device's samples at every accepted step, so a supply it follows
+    /// is the voltage of that step and not a clock of its own.
+    const TRACKS_SUPPLY: bool = false;
     /// Parses the part's logic params. Electrical params never reach the device.
     fn new(params: &Params<'_>) -> Result<Self, Error>;
     /// The first time in `(reached, limit]` where the drives may change or a sample is due.
@@ -56,6 +59,12 @@ pub trait Device: State {
     /// after a call that ran [`Cx::show`], and at the end of a run.
     fn view(&self) -> View<'_> {
         View::Nothing
+    }
+    /// The shaft angle in millidegrees at `at`, for a device that shows one. `None` when it
+    /// shows nothing of the kind. A read can fall between stops, so this is the angle at the
+    /// read and not the angle at the last stop.
+    fn angle_at(&self, _at: Time) -> Option<i32> {
+        None
     }
 }
 
@@ -115,6 +124,8 @@ pub enum Shows {
         height: u16,
         format: &'static str,
     },
+    /// A shaft angle. [`View::Degrees`] is that angle in millidegrees.
+    Angle,
 }
 
 /// What a device shows now.
@@ -128,6 +139,8 @@ pub enum View<'a> {
         frame: &'a [u8],
         panel: Panel,
     },
+    /// The shaft angle in millidegrees. 0 is one end of the travel and 180_000 the other.
+    Degrees(i32),
 }
 
 /// A screen controller's state besides its frame memory.

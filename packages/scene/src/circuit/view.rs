@@ -286,7 +286,12 @@ impl Circuit<'_> {
             .as_object()
             .into_iter()
             .flatten()
-            .filter_map(|(name, joint)| Some((name.clone(), self::joint(joint, &tree["params"])?)))
+            .filter_map(|(name, joint)| {
+                Some((
+                    name.clone(),
+                    self::joint(joint, &tree["params"], &tree["readings"])?,
+                ))
+            })
             .collect();
         let tints = tree["params"]
             .as_object()
@@ -429,7 +434,7 @@ pub(super) fn placement(written: &Value) -> Option<Placement> {
 /// A sliding joint, with `range` read as mm. A turning joint the viewer does not draw yet.
 /// A joint as the viewer reads it. `params` is the part file's, for the bounds of the param a
 /// joint follows.
-fn joint(written: &Value, params: &Value) -> Option<Joint> {
+fn joint(written: &Value, params: &Value, readings: &Value) -> Option<Joint> {
     let axis = |key: &str| -> Option<Option<[f64; 3]>> {
         let Some(list) = written.get(key) else {
             return Some(None);
@@ -453,10 +458,20 @@ fn joint(written: &Value, params: &Value) -> Option<Joint> {
         None => None,
         Some(by) => {
             let param = by.as_str()?;
+            let (min, max) = if params.get(param).is_some() {
+                (
+                    params[param]["min_exclusive"].as_f64()?,
+                    params[param]["max_exclusive"].as_f64()?,
+                )
+            } else if readings[param]["of"].as_str() == Some("angle") {
+                (0.0, 180.0)
+            } else {
+                return None;
+            };
             Some(JointBy {
                 param: param.to_string(),
-                min: params[param]["min_exclusive"].as_f64()?,
-                max: params[param]["max_exclusive"].as_f64()?,
+                min,
+                max,
             })
         }
     };

@@ -4,6 +4,8 @@ export type * from "./view";
 
 /** The refs each frame array follows, in order. */
 export interface Channels {
+  /** Each servo, by its reading `"of": "angle"`. A frame's `horn_deg` follows this. */
+  readonly horns: readonly Ref[];
   readonly leds: readonly Ref[];
   readonly pins: readonly Ref[];
   /** Each addressable LED part, by its reading `"of": "rgb"`. */
@@ -43,6 +45,8 @@ export interface FrameMessage {
   /** The diagnostic that faulted the session, as `orbe snapshot` prints it, such as
    * `error[solver.convergence] Newton did not converge ...`. Absent unless `state` is `faulted`. */
   readonly fault?: string;
+  /** The shaft angle in degrees, per `channels.horns`. Absent when the scene has no servo. */
+  readonly horn_deg?: readonly number[];
   /** Mean current in amperes since the previous frame, per `channels.leds`. The frame after a
    * page joins carries the present current. */
   readonly led_a: readonly number[];

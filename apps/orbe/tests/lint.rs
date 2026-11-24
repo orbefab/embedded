@@ -128,6 +128,7 @@ fn lint_on_the_uno_block_warns_only_as_the_nano_block_does() {
         "nano-neopixel-stick",
         "nano-oled",
         "nano-relay-led",
+        "nano-servo-sweep",
         "nano-shift-leds",
         "uno-button-led",
     ] {

@@ -113,6 +113,7 @@ fn the_scene_message_names_each_channel() {
             "leds": ["@led1", "@nano.led_l", "@nano.led_pwr"],
             "switches": ["@btn1", "@nano.sw_reset"],
             "pixels": [],
+            "horns": [],
         })
     );
     assert_eq!(scene["instances"][2]["name"], "btn1");

@@ -404,6 +404,7 @@ fn search_finds_a_block_by_a_word_of_its_id() {
             "nano-neopixel-stick",
             "nano-oled",
             "nano-relay-led",
+            "nano-servo-sweep",
             "nano-shift-leds",
             "uno-button-led",
         ]
