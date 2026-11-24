@@ -346,7 +346,19 @@ fn an_unpowered_stick_on_s3_latches_nothing_and_lights_after_power_returns() {
             &format!("expect @stick.px{} {color}", k + 1),
         );
     }
-    run(&mut live, dir.path(), "expect no diagnostics");
+    // Driving DIN while stick.5V is switched off (before sw closes) rightly warns `rating.voltage`
+    // on the first pixel's DIN (VDD + 0.5 V); no other diagnostic should appear.
+    let command = Command::parse("snapshot", dir.path()).unwrap().unwrap();
+    let text = live.run(&command).text();
+    let found: Vec<_> = text
+        .lines()
+        .filter(|line| line.starts_with("warning[") || line.starts_with("error["))
+        .collect();
+    assert_eq!(found.len(), 1, "{text}");
+    assert!(
+        found[0].starts_with("warning[rating.voltage] #stick__px1.pin.DIN"),
+        "{text}"
+    );
 }
 
 const MS: u64 = 1_000_000_000;

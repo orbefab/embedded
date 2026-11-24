@@ -36,6 +36,10 @@
       "all_lit_current": { "value": 0.0231, "unit": "A", "source": { "datasheet": { "doc": "Univision UG-2864HSWEG01", "at": "section 3.2 note 8, operating current for VBAT with the internal DC/DC, 23.1 mA typical with 100% of the display area on", "basis": "typical" } } },
       "holds_above": { "value": 1.65, "unit": "V", "source": { "datasheet": { "doc": "Univision UG-2864HSWEG01", "at": "section 3.2, supply voltage for logic VDD 1.65 V minimum", "basis": "min" } } },
     },
+    "ratings": {
+      "rail_margin": { "value": 0.3, "unit": "V", "source": { "datasheet": { "doc": "Solomon Systech SSD1306 Rev 1.1", "at": "Table 11-1, Maximum Ratings (Voltage Referenced to VSS), p. 47: Vin Input voltage VSS - 0.3 to VDD + 0.3 V, and VDD min -0.3 V", "basis": "absolute_max" } } },
+      "supply_voltage": { "value": 4.0, "unit": "V", "source": { "datasheet": { "doc": "Solomon Systech SSD1306 Rev 1.1", "at": "Table 11-1, Maximum Ratings (Voltage Referenced to VSS), p. 47: VDD Supply Voltage -0.3 to +4 V (also Univision UG-2864HSWEG01 section 2, p. 7)", "basis": "absolute_max" } } },
+    },
     "pins": { "VDD": "VDD", "VSS": "VSS", "SCL": "SCL", "SDA": "SDA", "RES": "RES" },
   },
   "readings": {

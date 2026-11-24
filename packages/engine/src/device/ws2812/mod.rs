@@ -15,10 +15,11 @@ use crate::mna::Node;
 use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
 use crate::netlist::json::{
-    PinMap, WireInt, WireValue, bounded, resolve_int, resolve_pins, resolve_value,
+    PinMap, WireInt, WireValue, bounded, resolve_int, resolve_limit, resolve_pins, resolve_value,
 };
 use crate::netlist::{IntValue, NetId, PartId, Threshold, Value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage_at};
+use crate::ratings::{Ceiling, PinRatings, PinWindow};
 use crate::watch::{Signal, Watch};
 
 pub(crate) mod model;
@@ -177,6 +178,41 @@ fn sized<const N: usize>(
     Box::new(Native::new(device, port, outputs))
 }
 
+/// The part's voltage ratings on `VCC` and `DIN`, `None` when it has no `ratings` object.
+/// Every window is over `GND`: `VCC` takes a ceiling of `supply_voltage`, and `DIN` takes
+/// `-rail_margin` to `VCC + rail_margin`.
+pub(crate) fn pin_ratings(chain: &Ws2812) -> Option<PinRatings> {
+    let ratings = chain.ratings.as_ref()?;
+    let si = |value: &Option<Value>| value.as_ref().map(|value| value.si.get());
+    let margin = si(&ratings.rail_margin);
+    let supply = si(&ratings.supply_voltage);
+    let mut windows = Vec::new();
+    if let Some(supply) = supply {
+        windows.push(PinWindow {
+            pin: Ws2812::PINS[VCC],
+            net: chain.pins[VCC],
+            below: None,
+            above: Some(Ceiling::Fixed(supply)),
+        });
+    }
+    if let Some(margin) = margin {
+        windows.push(PinWindow {
+            pin: Ws2812::PINS[DIN],
+            net: chain.pins[DIN],
+            below: Some(margin),
+            above: Some(Ceiling::OverSupply(margin)),
+        });
+    }
+    Some(PinRatings {
+        outputs: Vec::new(),
+        pin_current: None,
+        supply_current: None,
+        vcc: (Ws2812::PINS[VCC], chain.pins[VCC]),
+        gnd: (Ws2812::PINS[GND], chain.pins[GND]),
+        windows,
+    })
+}
+
 /// A chain of WS2812E-1313 LEDs, an active chip with no clock of its own. It reads `DIN`
 /// through `input_threshold`, fractions of its supply, and takes `Pulses` records on that net.
 /// Each LED keeps the first 24 bits, green then red then blue, and passes the rest on. A low
@@ -194,6 +230,17 @@ pub struct Ws2812 {
     pub dout: Option<Dout>,
     /// What each LED draws from `VCC` into `GND`. `None` draws nothing.
     pub draw: Option<PixelDraw>,
+    /// The pin voltage ratings the run checks. `None` when the part has no `ratings` object.
+    pub ratings: Option<Ws2812Ratings>,
+}
+
+/// A WS2812 / SK68XX chain's voltage ratings. Each is `None` when the part leaves it unrated.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ws2812Ratings {
+    /// Volt. How far `DIN` may sit below `GND` and above `VCC`.
+    pub rail_margin: Option<Value>,
+    /// Volt. The most `VCC` may sit above `GND`.
+    pub supply_voltage: Option<Value>,
 }
 
 /// Each LED's draw from `VCC` into `GND`: `idle_current` at every colour, black included, and
@@ -247,6 +294,18 @@ pub(crate) struct WireWs2812 {
     dout: Option<WireDout>,
     #[serde(default)]
     draw: Option<WireDraw>,
+    #[serde(default)]
+    ratings: Option<WireRatings>,
+}
+
+/// Every key is required, and `null` leaves that rating out.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireRatings {
+    #[serde(deserialize_with = "Option::deserialize")]
+    rail_margin: Option<WireValue>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    supply_voltage: Option<WireValue>,
 }
 
 #[derive(Deserialize)]
@@ -353,6 +412,10 @@ pub(crate) fn resolve_ws2812(ctx: ParseCtx<'_>, wire: WireWs2812) -> Option<Ws28
         Some(draw) => Some(draw?),
         None => None,
     };
+    let ratings = match wire.ratings {
+        None => Some(None),
+        Some(wire) => resolve_ratings(part_ref, wire, out).map(Some),
+    };
     Some(Ws2812 {
         pins: pins?,
         leds: leds?,
@@ -360,5 +423,25 @@ pub(crate) fn resolve_ws2812(ctx: ParseCtx<'_>, wire: WireWs2812) -> Option<Ws28
         min_supply: min_supply?,
         dout,
         draw,
+        ratings: ratings?,
+    })
+}
+
+fn resolve_ratings(
+    part: &crate::name::Ref,
+    wire: WireRatings,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Ws2812Ratings> {
+    let rail_margin = resolve_limit(part, "ratings.rail_margin", "V", wire.rail_margin, out);
+    let supply_voltage = resolve_limit(
+        part,
+        "ratings.supply_voltage",
+        "V",
+        wire.supply_voltage,
+        out,
+    );
+    Some(Ws2812Ratings {
+        rail_margin: rail_margin?,
+        supply_voltage: supply_voltage?,
     })
 }
