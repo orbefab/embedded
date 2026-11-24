@@ -1542,11 +1542,8 @@ impl Soc {
         if word == USB_SERIAL_JTAG {
             self.usb.take_received(now);
         }
-        if word == I2C0 + i2c::DATA
-            && let Err(setting) = self.i2c.take()
-        {
-            self.ending = Some(Ending::Refused(Refused::Register("I2C0", setting)));
-            return Err(Exit::Stop);
+        if word == I2C0 + i2c::DATA {
+            self.i2c.take();
         }
         match kept {
             Some(value) => Ok((value >> shift) & mask),

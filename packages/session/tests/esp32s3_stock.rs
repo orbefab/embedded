@@ -1289,3 +1289,68 @@ fn a_stock_1ms_tone_notes_hold_exact_divider_periods() {
     run(&mut live, path, "expect @board.GPIO4 low");
     run(&mut live, path, "expect no diagnostics");
 }
+
+/// Scanner, 1-byte write, 200-byte write, 6-byte read and 40-byte read to an absent address 0x3C
+/// at 100 kHz and 400 kHz on a bus with pull-ups only. On stock Arduino-ESP32 3.3.12, the 0-byte
+/// probe calls `i2c_master_probe` (returning `ESP_ERR_NOT_FOUND` -> 2), non-zero writes call
+/// `i2c_master_transmit` (returning `ESP_ERR_INVALID_STATE` -> 4), and `requestFrom` returns 0.
+#[test]
+fn a_stock_wire_nack_sketch_returns_expected_codes_on_an_empty_bus() {
+    play(
+        "esp32s3-stock-wirenack",
+        &[
+            r#"step --until serial contains "done" --timeout 1s"#,
+            r#"expect serial contains "k100 scan 2 w1 4 w200 4 r6 0 r40 0""#,
+            r#"expect serial contains "k400 scan 2 w1 4 w200 4 r6 0 r40 0""#,
+            "expect no diagnostics",
+        ],
+    );
+}
+
+/// With an OLED wired at 0x3C, probing, writing (1 byte and 200 bytes) and reading (6 and 40
+/// bytes) absent address 0x3D at 100 kHz and 400 kHz returns the expected NACK codes and leaves
+/// I2C0 ready to scan, initialize and draw to the real OLED at 0x3C.
+#[test]
+fn a_stock_wire_nack_with_a_device_at_another_address_still_talks_to_the_oled() {
+    play(
+        "esp32s3-stock-wirenackother",
+        &[
+            r#"step --until serial contains "oled scan 0 init 0 wrote 0" --timeout 1s"#,
+            r#"expect serial contains "k100 scan 2 w1 4 w200 4 r6 0 r40 0""#,
+            r#"expect serial contains "k400 scan 2 w1 4 w200 4 r6 0 r40 0""#,
+            "expect @oled.display.screen shows wirenackother.screen",
+            "expect no diagnostics",
+        ],
+    );
+}
+
+/// Stock Adafruit_SSD1306 `display.begin(SSD1306_SWITCHCAPVCC, 0x3C)` and `display.display()` on
+/// a bus with pull-ups only (no OLED). `Adafruit_SSD1306::begin()` only returns false on malloc
+/// failure, and `display.display()` sends 128-byte writes at 400 kHz that must finish with NACKs
+/// and no diagnostics instead of faulting with `I2C0 busy_write`.
+#[test]
+fn a_stock_adafruit_ssd1306_sketch_with_no_oled_finishes_with_no_diagnostics() {
+    let scene = r#"{
+      "format": 1,
+      "parts": {
+        "board": { "type": "esp32s3-devkitc-1", "app": "app.bin", "partitions": "partitions.bin" },
+        "r_sda": { "type": "resistor-axial", "resistance": "4.7k" },
+        "r_scl": { "type": "resistor-axial", "resistance": "4.7k" }
+      },
+      "wires": [
+        ["board.3V3", "r_sda.a"],
+        ["r_sda.b", "board.GPIO8"],
+        ["board.3V3", "r_scl.a"],
+        ["r_scl.b", "board.GPIO9"]
+      ],
+      "ground": "board.GND"
+    }"#;
+    let (project, mut live) = open_scene("esp32s3-stock-oled", scene);
+    let path = project.path();
+    run(
+        &mut live,
+        path,
+        r#"step --until serial contains "drawn" --timeout 1s"#,
+    );
+    run(&mut live, path, "expect no diagnostics");
+}
