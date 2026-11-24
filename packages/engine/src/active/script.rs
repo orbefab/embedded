@@ -116,6 +116,7 @@ pub(crate) fn chip(
             high: stage,
             low: stage,
             pull_up: None,
+            strong_pull_up: None,
             pull_down: None,
             leakage: None,
         }],

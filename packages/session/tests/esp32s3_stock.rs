@@ -1366,3 +1366,137 @@ fn a_stock_adafruit_ssd1306_sketch_with_no_oled_finishes_with_no_diagnostics() {
     );
     run(&mut live, path, "expect no diagnostics");
 }
+
+/// Stock sketch built with `CDCOnBoot=cdc` on Arduino-ESP32 3.3.12 prints over USB Serial/JTAG
+/// CDC and lights the LED with no diagnostics.
+#[test]
+fn a_stock_cdc_sketch_prints_and_lights_the_led_on_core_3_3_12() {
+    play(
+        "esp32s3-stock-cdc",
+        &[
+            "step 100ms",
+            "expect @led1 lit",
+            r#"expect serial contains "cdc-ready""#,
+            "expect no diagnostics",
+        ],
+    );
+}
+
+/// Same stock sketch built with `CDCOnBoot=cdc` on Arduino-ESP32 4.0.0, whose `HWCDC::begin()`
+/// also enables `IN_TOKEN_REC_IN_EP1` in `INT_ENA`.
+#[test]
+fn a_stock_cdc_sketch_prints_and_lights_the_led_on_core_4_0_0() {
+    play(
+        "esp32s3-stock-cdc4",
+        &[
+            "step 100ms",
+            "expect @led1 lit",
+            r#"expect serial contains "cdc-ready""#,
+            "expect no diagnostics",
+        ],
+    );
+}
+
+/// `Serial.read()` over USB Serial/JTAG CDC reads bytes delivered by the netlist's `console`
+/// input on both Arduino-ESP32 3.3.12 and 4.0.0, with no diagnostics.
+#[test]
+fn a_stock_cdc_sketch_reads_console_bytes_on_both_cores() {
+    for fixture in ["esp32s3-stock-cdc", "esp32s3-stock-cdc4"] {
+        let dir = project(fixture);
+        let netlist = orbe_scene::read(&Files::disk(), &dir.path().join("scene.jsonc"))
+            .unwrap_or_else(|e| panic!("{fixture}: scene read failed: {e:?}"));
+        let mut doc: serde_json::Value = serde_json::from_str(&netlist.json).unwrap();
+        let parts = doc["parts"].as_array_mut().unwrap();
+        let mcu = parts
+            .iter_mut()
+            .find(|p| p["kind"] == "esp32s3")
+            .expect("scene has an esp32s3 part");
+        mcu["console"] = serde_json::json!([
+            { "t_ps": 30_000_000_000u64, "bytes": [103] }
+        ]);
+        let json = serde_json::to_vec(&doc).unwrap();
+        let mut session = orbe_engine::Session::open_json(&json, &netlist.blobs)
+            .unwrap_or_else(|e| panic!("{fixture}: open_json failed: {e:?}"));
+        let status = session.advance_to(orbe_model::Time::from_ps(100_000_000_000));
+        assert_eq!(
+            status,
+            orbe_engine::Status::Running,
+            "{fixture}: expected Running, got {status:?}"
+        );
+        let bytes: Vec<u8> = session
+            .serial_since(orbe_engine::SerialCursor::default())
+            .map(|(slice, _)| slice.iter().map(|b| b.byte).collect())
+            .unwrap_or_default();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            text.contains("cdc-ready"),
+            "{fixture}: missing cdc-ready in {text:?}"
+        );
+        assert!(
+            text.contains("got 103"),
+            "{fixture}: missing echoed console byte in {text:?}"
+        );
+        let diagnostics = session.diagnostics();
+        assert!(
+            diagnostics.is_empty(),
+            "{fixture}: unexpected diagnostics: {diagnostics:?}"
+        );
+    }
+}
+
+/// GPIO20 (USB D+) reads high from 0 ps under the USB PHY's 2.4 kohm D+ pull-up on both
+/// Arduino-ESP32 3.3.12 and 4.0.0 with CDC on or off, and holds an external 10 kohm pull-down
+/// resistor high (~2.66 V).
+#[test]
+fn gpio20_is_pulled_up_by_usb_phy_on_both_cores_and_drives_external_load() {
+    for fixture in [
+        "esp32s3-stock-cdc",
+        "esp32s3-stock-cdc4",
+        "esp32s3-stock-blink",
+    ] {
+        play(
+            fixture,
+            &[
+                "expect @board.GPIO20 high",
+                "step 50ms",
+                "expect @board.GPIO20 high",
+                "expect no diagnostics",
+            ],
+        );
+    }
+
+    let load_scene = r#"{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    },
+    "r_dp": { "type": "resistor-axial", "resistance": "10k" }
+  },
+  "wires": [
+    ["board.GPIO20", "r_dp.a"],
+    ["r_dp.b", "board.GND"]
+  ],
+  "ground": "board.GND"
+}"#;
+    for fixture in ["esp32s3-stock-cdc", "esp32s3-stock-cdc4"] {
+        let (dir, mut live) = open_scene(fixture, load_scene);
+        run(&mut live, dir.path(), "expect @board.GPIO20 high");
+        run(&mut live, dir.path(), "step 50ms");
+        run(&mut live, dir.path(), "expect @board.GPIO20 high");
+        let reply = live.run(
+            &Command::parse("get @board.GPIO20", dir.path())
+                .unwrap()
+                .unwrap(),
+        );
+        assert!(reply.ok(), "{fixture}: {}", reply.text());
+        assert!(
+            reply.text().contains("high"),
+            "{fixture}: expected high into 10k load, got {}",
+            reply.text()
+        );
+        run(&mut live, dir.path(), "expect no diagnostics");
+    }
+}

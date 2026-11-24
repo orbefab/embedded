@@ -89,6 +89,7 @@ fn target(netlist: &Netlist, mode: Mode) -> active::Chip {
             high: stage,
             low: stage,
             pull_up: None,
+            strong_pull_up: None,
             pull_down: None,
             leakage: None,
         }],

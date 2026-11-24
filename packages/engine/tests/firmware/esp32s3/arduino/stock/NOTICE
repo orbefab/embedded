@@ -96,3 +96,9 @@ wirenack     packages/scene/tests/fixtures/esp32s3-stock-wirenack
              app 300864 dd894379fad6922c13025abefffa80272acf7cb8bc441d85b2f83bbd7091e6e4
 wirenackother packages/scene/tests/fixtures/esp32s3-stock-wirenackother
              app 300832 31b41add3033f4444f805352fcece6bc127fd38ec19e9b4ab4b1bd719c9b1800
+cdc          packages/scene/tests/fixtures/esp32s3-stock-cdc
+             fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc (esp32:esp32 3.3.12)
+             app 297328 3c618534c790ce5b586df8a39fb2ceae50582316b468501fbc2373215603c46c
+cdc4         packages/scene/tests/fixtures/esp32s3-stock-cdc4
+             source cdc, fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc (esp32:esp32 4.0.0)
+             app 299744 9ae9eacd8e309cbe3d974255f794a6d26977c175390be6028b2584c5e0df8645

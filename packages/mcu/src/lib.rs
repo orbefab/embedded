@@ -51,6 +51,13 @@ pub trait Mcu: Clone + Send + std::fmt::Debug + 'static {
     fn pulled_down(&self) -> &[bool] {
         &[]
     }
+    /// Whether each output whose drive is [`Drive::PullUp`] uses its alternate (strong) pull-up
+    /// resistor instead of the pad's weak one, in the order the engine built its outputs (such as
+    /// the ESP32-S3 USB PHY's D+ pull-up on GPIO20). Like the drives, it changes only at a stop.
+    /// A chip with only one pull-up per output keeps the default, which is empty.
+    fn strong_pull_up(&self) -> &[bool] {
+        &[]
+    }
     /// Whether a reset holds it, which changes its own supply current. Like the drives, it
     /// changes only at a stop. A chip that never says is never held.
     fn held(&self) -> bool {

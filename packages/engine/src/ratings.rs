@@ -254,6 +254,7 @@ struct Pin {
     high: Stage,
     low: Stage,
     pull_up: Option<f64>,
+    strong_pull_up: Option<f64>,
     pull_down: Option<f64>,
     leakage: Option<f64>,
 }
@@ -1178,6 +1179,7 @@ impl Pin {
             high: output.high,
             low: output.low,
             pull_up: output.pull_up,
+            strong_pull_up: output.strong_pull_up,
             pull_down: output.pull_down,
             leakage: output.leakage,
         }
@@ -1213,8 +1215,13 @@ impl Gauge {
                 Drive::High => from_vcc += (vcc - pin.high.drop - vp) / pin.high.resistance,
                 Drive::Low => into_gnd += (vp - gnd - pin.low.drop) / pin.low.resistance,
                 Drive::PullUp => {
-                    from_vcc +=
-                        (vcc - vp) / pin.pull_up.expect("a pull-up drive on a pin that has one");
+                    let ohm = if core.pulls_up_strong(n) {
+                        pin.strong_pull_up
+                            .expect("a strong pull-up drive on a pin that has one")
+                    } else {
+                        pin.pull_up.expect("a pull-up drive on a pin that has one")
+                    };
+                    from_vcc += (vcc - vp) / ohm;
                 }
                 Drive::Off => {}
             }

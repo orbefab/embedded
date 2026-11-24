@@ -104,6 +104,9 @@ fn the_devkit_plays_and_its_console_starts_with_the_hello_line() {
             break;
         }
     }
+    // hello_world logs to both UART0 (115200 baud) and USB Serial/JTAG; UART0's first byte ('I')
+    // finishes its stop bit before the USB host finishes reading the first Full-Speed packet.
     let got = serial.lines().next().unwrap_or_default();
+    let got = got.strip_prefix('I').unwrap_or(got);
     assert_eq!(masked(got), first, "the console so far: {serial:?}");
 }

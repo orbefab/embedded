@@ -335,16 +335,25 @@ def _groups(sent: list[dict]) -> list[tuple[int, list[tuple[str, list[dict]]]]]:
 
 
 def script_rows(rows: list[dict], usb: list[dict]) -> list[dict]:
-    """UART rows at or after the first `baud` line. Earlier rows are the boot log."""
+    """UART rows after the boot log, before the first `baud` line's USB packet finishes.
+
+    The app prints `baud 115200` and immediately starts the first UART frame, so at Full-Speed USB
+    the `baud` packet finishes slightly after that frame starts. Rows after the preceding console
+    line exclude the boot log while keeping the first frame.
+    """
     text = ""
     at = None
+    prev_at = None
     for row in usb:
         if not text:
             at = int(row["t_ps"])
         text += chr(int(row["byte"]))
         if text.endswith("\n"):
             if text.startswith("baud "):
+                if prev_at is not None:
+                    return [item for item in rows if int(item["t_ps"]) > prev_at]
                 return [item for item in rows if int(item["t_ps"]) >= at]
+            prev_at = at
             text = ""
     raise ValueError("the console has no baud line")
 

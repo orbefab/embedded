@@ -73,6 +73,9 @@ pub enum PadDrive {
     High,
     Low,
     PullUp,
+    /// The USB PHY's Full-Speed D+ pull-up on GPIO20 while `USB_PAD_ENABLE` and `DP_PULLUP` own
+    /// the pad.
+    UsbPullUp,
     PullDown,
     /// Both pulls, each to its rail.
     PullBoth,
@@ -101,6 +104,12 @@ pub(crate) struct Gpio {
     /// Whether a pad with a net may pull down. A part that names no pull-down resistor clears
     /// it, and a store that sets `FUN_WPD` on such a pad ends the run.
     pull_down: bool,
+    /// Whether `USB_SERIAL_JTAG_USB_PAD_ENABLE` claims GPIO19 (D-) and GPIO20 (D+) for the USB
+    /// PHY, disconnecting GPIO matrix outputs on those two pads.
+    usb_pad_enable: bool,
+    /// Whether the USB PHY's Full-Speed D+ pull-up is asserted on GPIO20 (when `usb_pad_enable`
+    /// is also set).
+    usb_dp_pullup: bool,
 }
 
 /// `GPIO_PINn`'s `INT_TYPE`.
@@ -171,6 +180,8 @@ impl Gpio {
             status: 0,
             levels: 0,
             pull_down: true,
+            usb_pad_enable: true,
+            usb_dp_pullup: true,
         };
         gpio.levels = gpio.sample();
         gpio
@@ -180,6 +191,16 @@ impl Gpio {
     /// ends the run. A pad with no net keeps the bit, since it is never stamped.
     pub(crate) fn omit_pull_down(&mut self) {
         self.pull_down = false;
+    }
+
+    /// Updates whether `USB_SERIAL_JTAG_USB_PAD_ENABLE` claims GPIO19 and GPIO20 for the USB PHY
+    /// and whether the PHY's Full-Speed D+ pull-up is asserted on GPIO20.
+    pub(crate) fn set_usb_pads(&mut self, pad_enable: bool, dp_pullup: bool) {
+        if self.usb_pad_enable != pad_enable || self.usb_dp_pullup != dp_pullup {
+            self.usb_pad_enable = pad_enable;
+            self.usb_dp_pullup = dp_pullup;
+            self.sense();
+        }
     }
 
     /// A register at `offset` in the GPIO block, or `None` for one the model does not keep.
@@ -410,6 +431,9 @@ impl Gpio {
 
     /// The output enable and the level the pad drives when enabled.
     fn output(&self, pad: usize) -> (bool, bool) {
+        if self.usb_pad_enable && matches!(pad, 19 | 20) {
+            return (false, false);
+        }
         if let Some(signal) = self.direct_tx(pad) {
             return match self.signals[usize::from(signal)] {
                 Some(level) => (true, level),
@@ -433,6 +457,13 @@ impl Gpio {
     }
 
     pub(crate) fn drive(&self, pad: usize) -> PadDrive {
+        if self.usb_pad_enable && matches!(pad, 19 | 20) {
+            return if pad == 20 && self.usb_dp_pullup {
+                PadDrive::UsbPullUp
+            } else {
+                PadDrive::Off
+            };
+        }
         let open_drain = self.pin[pad] & PAD_DRIVER != 0;
         match self.output(pad) {
             (true, true) if !open_drain => PadDrive::High,
@@ -459,7 +490,7 @@ impl Gpio {
             .filter(|&pad| match self.pads[pad] {
                 Some(level) => level,
                 None => match self.drive(pad) {
-                    PadDrive::High | PadDrive::PullUp => true,
+                    PadDrive::High | PadDrive::PullUp | PadDrive::UsbPullUp => true,
                     PadDrive::PullBoth => self.levels >> pad & 1 != 0,
                     PadDrive::Low | PadDrive::PullDown | PadDrive::Off => false,
                 },
@@ -891,5 +922,30 @@ mod tests {
             Ok(true)
         );
         assert_eq!(gpio.drive(5), PadDrive::PullDown);
+    }
+
+    #[test]
+    fn gpio20_shows_usb_dp_pullup_while_usb_owns_it_and_releases_it_for_gpio() {
+        let mut gpio = Gpio::new(&[]);
+        assert_eq!(gpio.drive(19), PadDrive::Off);
+        assert_eq!(gpio.drive(20), PadDrive::UsbPullUp);
+
+        // An unnetted GPIO20 with input enabled reads high under the USB D+ pull-up.
+        gpio.write_io_mux(0x4 + 4 * 20, GPIO_FUNC | FUN_IE).unwrap();
+        assert_eq!(gpio.read(0x3c).unwrap() & (1 << 20), 1 << 20);
+
+        // Clearing DP_PULLUP while USB_PAD_ENABLE is set drops the pull-up.
+        gpio.set_usb_pads(true, false);
+        assert_eq!(gpio.drive(20), PadDrive::Off);
+        assert_eq!(gpio.read(0x3c).unwrap() & (1 << 20), 0);
+
+        // Restoring DP_PULLUP restores UsbPullUp; clearing USB_PAD_ENABLE hands the pad to GPIO.
+        gpio.set_usb_pads(true, true);
+        assert_eq!(gpio.drive(20), PadDrive::UsbPullUp);
+        gpio.set_usb_pads(false, true);
+        assert_eq!(gpio.drive(20), PadDrive::Off);
+        gpio.write_io_mux(0x4 + 4 * 20, GPIO_FUNC | FUN_IE | FUN_WPU)
+            .unwrap();
+        assert_eq!(gpio.drive(20), PadDrive::PullUp);
     }
 }

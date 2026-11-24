@@ -253,10 +253,9 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
         } else if name == "esp32s3-dualcore" {
             // Start-up's radio, debug-trace and reset writes are quiet.
             assert!(found.is_empty(), "{name}: {}", doc["diagnostics"]);
-        } else if name == "esp32s3-echo" {
-            // The read of USB_SERIAL_JTAG+0x18, which the model does not keep.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 1];
-            assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
+        } else if name == "esp32s3-echo" || name == "esp32s3-uart" {
+            // The driver's USB_SERIAL_JTAG_CONF0_REG access is modeled.
+            assert!(found.is_empty(), "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 0);
         } else if name == "esp32s3-encoder" {
             // GPIO1 and GPIO2 pad reads and start-up's radio and reset writes are quiet.
@@ -289,16 +288,10 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 0);
         } else if name == "esp32s3-timers" {
-            // The read of USB_SERIAL_JTAG+0x18. UART0's early log is modeled, and the general
-            // timers, the RNG and the SAR ADC are modeled, so arming T0, reading `WDEV_RND_REG`
-            // and the SENS start-up add no warning.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 1];
-            assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
-            assert_kept_resets(&name, &doc, 0);
-        } else if name == "esp32s3-uart" {
-            // The read of USB_SERIAL_JTAG+0x18, which the model does not keep.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 1];
-            assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
+            // USB_SERIAL_JTAG_CONF0_REG, UART0's early log, the general timers, the RNG and the
+            // SAR ADC are modeled, so arming T0, reading `WDEV_RND_REG` and the SENS start-up add
+            // no warning.
+            assert!(found.is_empty(), "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 0);
         } else if name == "esp32s3-ring" || name == "esp32s3-pulls" {
             // Start-up's radio and reset writes are quiet.

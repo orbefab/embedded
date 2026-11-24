@@ -1005,16 +1005,19 @@ fn elf(addr: u32, entry: u32, image: &[u8], symbols: &[(&str, u32)]) -> Vec<u8> 
 }
 
 /// Polls `USB_SERIAL_JTAG_EP1_CONF_REG` until `SERIAL_OUT_EP_DATA_AVAIL`, takes the byte from
-/// `USB_SERIAL_JTAG_EP1_REG`, writes it back and `WR_DONE`, and polls again.
-const ECHO: [u8; 24] = [
+/// `USB_SERIAL_JTAG_EP1_REG`, waits for `SERIAL_IN_EP_DATA_FREE`, writes it back and `WR_DONE`,
+/// and polls again.
+const ECHO: [u8; 30] = [
     0x21, 0xff, 0xff, // l32r a2 <- USB_SERIAL_JTAG
     0x32, 0x22, 0x01, // l32i a3, a2, 4
     0x27, 0x63, 0xf9, // bbci a3, 2, back to the l32i
     0x42, 0x22, 0x00, // l32i a4, a2, 0
+    0x32, 0x22, 0x01, // l32i a3, a2, 4
+    0x17, 0x63, 0xf9, // bbci a3, 1, wait SERIAL_IN_EP_DATA_FREE
     0x42, 0x62, 0x00, // s32i a4, a2, 0
     0x52, 0xa0, 0x01, // movi a5, 1
     0x52, 0x62, 0x01, // s32i a5, a2, 4
-    0x86, 0xfa, 0xff, // j back to the first l32i
+    0x06, 0xf9, 0xff, // j back to the first l32i
 ];
 
 #[test]
@@ -1216,4 +1219,197 @@ fn setting_a_pin_hold_bit_ends_the_run_before_a_later_write_moves_the_pin() {
             found[0]["message"]
         );
     }
+}
+
+/// A 10,240-byte CDC burst (160 x 64-byte packets) polling `SERIAL_IN_EP_DATA_FREE` is paced by
+/// the USB 2.0 Full-Speed host read rate (62.5 us per packet, 16 packets per 1 ms frame), so all
+/// 160 packets arrive over >= 10 ms with every inter-packet gap >= 62.5 us.
+#[test]
+fn usb_cdc_burst_is_paced_at_full_speed_and_holds_data_free_low() {
+    // l32r a2 <- USB_SERIAL_JTAG; l32r a3 <- 10240; movi a4, 'A';
+    // loop: l32i a5, a2, 4; bbci a5, 1, loop; s32i a4, a2, 0; addi a3, a3, -1; bnez a3, loop;
+    // j .
+    let code: [u8; 27] = [
+        0x21, 0xfe, 0xff, // l32r a2, lit0 (USB_SERIAL_JTAG)
+        0x31, 0xfe, 0xff, // l32r a3, lit1 (10240)
+        0x42, 0xa0, 0x41, // movi a4, 'A'
+        0x52, 0x22, 0x01, // l32i a5, a2, 4 (EP1_CONF)
+        0x17, 0x65, 0xf9, // bbci a5, 1, -7 (wait SERIAL_IN_EP_DATA_FREE)
+        0x42, 0x62, 0x00, // s32i a4, a2, 0 (EP1)
+        0x32, 0xc3, 0xff, // addi a3, a3, -1
+        0x56, 0x03, 0xff, // bnez a3, -16
+        0x06, 0xff, 0xff, // j .
+    ];
+    let bytes = program(&[0x6003_8000, 10_240], &code);
+    let netlist = netlist_for(&bytes, 20_000_000_000);
+    let dir = Scratch::new();
+    let blobs = dir.join("blobs");
+    fs::create_dir_all(&blobs).unwrap();
+    fs::write(blobs.join(Sha256::of(&bytes).to_string()), &bytes).unwrap();
+    let (code, doc) = run(&dir, &netlist, &[]);
+    assert_eq!((code, doc["status"].as_str()), (0, Some("ok")), "{doc}");
+    assert!(diagnostics(&doc).is_empty(), "{doc}");
+
+    let serial = fs::read_to_string(dir.join("out/traces/serial.csv")).unwrap();
+    let rows: Vec<(u64, u8)> = serial
+        .lines()
+        .skip(1)
+        .filter(|row| row.split(',').nth(2) == Some("USB_SERIAL_JTAG"))
+        .map(|row| {
+            let mut fields = row.split(',');
+            let t_ps: u64 = fields.next().unwrap().parse().unwrap();
+            let byte: u8 = fields.nth(2).unwrap().parse().unwrap();
+            (t_ps, byte)
+        })
+        .collect();
+    assert_eq!(rows.len(), 10_240);
+    assert!(rows.iter().all(|&(_, b)| b == b'A'));
+
+    let mut packet_times = Vec::new();
+    for chunk in rows.as_chunks::<64>().0 {
+        let t = chunk[0].0;
+        assert!(chunk.iter().all(|&(at, _)| at == t));
+        packet_times.push(t);
+    }
+    assert_eq!(packet_times.len(), 160);
+    // Each packet takes at least 62.5 us (62,500,000 ps), so 160 packets finish at >= 10 ms.
+    assert!(
+        packet_times[0] >= 62_500_000,
+        "first packet too early: {} ps",
+        packet_times[0]
+    );
+    assert!(
+        *packet_times.last().unwrap() >= 10_000_000_000,
+        "10 kB burst finished too fast: {} ps",
+        packet_times.last().unwrap()
+    );
+    for pair in packet_times.windows(2) {
+        let gap = pair[1] - pair[0];
+        assert!(
+            gap >= 62_500_000,
+            "packet gap {gap} ps < 62.5 us between {} and {}",
+            pair[0],
+            pair[1]
+        );
+    }
+}
+
+/// Replaces the blink LED load with one pull-down resistor of `ohms` from `GPIO20` to `gnd`.
+fn netlist_with_gpio20_resistor(bytes: &[u8], stop_ps: u64, ohms: f64) -> serde_json::Value {
+    let mut netlist = netlist_for(bytes, stop_ps);
+    let step = stop_ps.min(100_000_000);
+    netlist["analysis"]["transient"]["max_step_ps"] = serde_json::json!(step);
+    netlist["analysis"]["transient"]["grid_ps"] = serde_json::json!(step);
+    netlist["nets"] = serde_json::json!(["gnd", "gpio20", "vcc"]);
+    netlist["parts"][1]["pins"] = serde_json::json!({
+        "VCC": "vcc",
+        "GND": "gnd",
+        "GPIO20": "gpio20"
+    });
+    netlist["parts"].as_array_mut().unwrap().truncate(2);
+    netlist["parts"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "name": "r1",
+            "kind": "resistor",
+            "pins": { "a": "gpio20", "b": "gnd" },
+            "resistance": { "value": ohms, "unit": "ohm" },
+            "ratings": { "power": { "value": 0.25, "unit": "W" } }
+        }));
+    netlist
+}
+
+/// Initial value (`'0'` or `'1'`) and subsequent `(t_ps, char)` changes of `signal` in `vcd`.
+fn vcd_signal(vcd: &str, signal: &str) -> (char, Vec<(u64, char)>) {
+    let id = vcd
+        .lines()
+        .find_map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            (parts.len() == 6 && parts[0] == "$var" && parts[4] == signal).then_some(parts[3])
+        })
+        .unwrap_or_else(|| panic!("no {signal} in VCD:\n{vcd}"));
+    let mut initial = None;
+    let mut changes = Vec::new();
+    let mut in_dumpvars = false;
+    let mut now = 0u64;
+    for line in vcd.lines() {
+        if line == "$dumpvars" {
+            in_dumpvars = true;
+        } else if in_dumpvars && line == "$end" {
+            in_dumpvars = false;
+        } else if let Some(rest) = line.strip_prefix('#') {
+            now = rest.parse().unwrap();
+        } else if let Some(level) = line.strip_suffix(id)
+            && level.len() == 1
+        {
+            let ch = level.chars().next().unwrap();
+            if in_dumpvars {
+                initial = Some(ch);
+            } else {
+                changes.push((now, ch));
+            }
+        }
+    }
+    (initial.expect("initial value in $dumpvars"), changes)
+}
+
+/// GPIO20 starts pulled up through the USB PHY's 2.4 kohm D+ pull-up (so an external 10 kohm
+/// pull-down sees ~2.66 V and `logic.vcd` starts high at 0 ps), and releases it when firmware
+/// clears `USB_PAD_ENABLE` (falling back to Off or the 45 kohm weak IO_MUX pull-up) or overrides
+/// `DP_PULLUP` off.
+#[test]
+fn gpio20_shows_usb_dp_pullup_until_firmware_takes_the_pin() {
+    let run_case = |literals: &[u32], code: &[u8]| {
+        let bytes = program(literals, code);
+        let netlist = netlist_with_gpio20_resistor(&bytes, 1_000_000_000, 10_000.0);
+        let dir = Scratch::new();
+        let blobs = dir.join("blobs");
+        fs::create_dir_all(&blobs).unwrap();
+        fs::write(blobs.join(Sha256::of(&bytes).to_string()), &bytes).unwrap();
+        let (exit, doc) = run(&dir, &netlist, &[]);
+        assert_eq!((exit, doc["status"].as_str()), (0, Some("ok")), "{doc}");
+        assert!(diagnostics(&doc).is_empty(), "{doc}");
+        let obs: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.join("out/observations.json")).unwrap()).unwrap();
+        let v_op = obs["op"]["#net.gpio20"].as_f64().unwrap();
+        let vcd = fs::read_to_string(dir.join("out/traces/logic.vcd")).unwrap();
+        (v_op, vcd_signal(&vcd, "GPIO20"))
+    };
+
+    // Idle chip: USB_PAD_ENABLE=1, DP_PULLUP=1 -> 3.3 V * 10k / (2.4k + 10k) ~= 2.661 V.
+    let (v_op, (init, edges)) = run_case(&[], &IDLE);
+    assert!(
+        (v_op - 3.3 * 10_000.0 / 12_400.0).abs() < 0.01,
+        "expected ~2.661 V from 2.4k D+ pull-up into 10k load, got {v_op} V"
+    );
+    assert_eq!(init, '1', "GPIO20 starts high at 0 ps");
+    assert!(edges.is_empty(), "stays high while idle: {edges:?}");
+
+    // Clearing USB_PAD_ENABLE (CONF0 = 0x0200) releases the D+ pull-up so 10k pulls GPIO20 low.
+    let (literals, code) = stores(&[(0x6003_8018, 0x0200)]);
+    let (v_op, (init, edges)) = run_case(&literals, &code);
+    assert!((v_op - 2.661).abs() < 0.01, "op {v_op} V");
+    assert_eq!(init, '1');
+    assert_eq!(edges.len(), 1, "{edges:?}");
+    assert_eq!(edges[0].1, '0', "clearing USB_PAD_ENABLE releases pull-up");
+
+    // Taking GPIO20 with IO_MUX FUN_WPU (45k weak pull-up) drops the 10k load below VIL (~0.60 V).
+    let (literals, code) = stores(&[
+        (0x6000_9054, 1 << 12 | 1 << 9 | 1 << 8),
+        (0x6003_8018, 0x0200),
+    ]);
+    let (v_op, (init, edges)) = run_case(&literals, &code);
+    assert!((v_op - 2.661).abs() < 0.01, "op {v_op} V");
+    assert_eq!(init, '1');
+    assert_eq!(edges.len(), 1, "{edges:?}");
+    assert_eq!(edges[0].1, '0', "45k weak pull-up into 10k load reads low");
+
+    // Overriding DP_PULLUP off (PAD_PULL_OVERRIDE=1, DP_PULLUP=0) while USB_PAD_ENABLE=1 drops it.
+    let (literals, code) = stores(&[(0x6003_8018, 0x4100)]);
+    let (v_op, (init, edges)) = run_case(&literals, &code);
+    assert!((v_op - 2.661).abs() < 0.01, "op {v_op} V");
+    assert_eq!(init, '1');
+    assert_eq!(edges.len(), 1, "{edges:?}");
+    assert_eq!(edges[0].1, '0', "clearing DP_PULLUP releases pull-up");
 }
