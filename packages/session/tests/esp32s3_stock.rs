@@ -229,6 +229,121 @@ fn a_stock_rmt_write_lights_every_pixel_of_the_stick() {
     stick_frames("esp32s3-stock-rmtstrip");
 }
 
+#[test]
+fn an_unpowered_stick_on_s3_latches_nothing_and_lights_after_power_returns() {
+    let dir = project("esp32s3-stock-neopixel");
+    let scene_path = dir.path().join("scene.jsonc");
+    // Hold stick.5V at 0 V: neither frame latches.
+    let zero_scene = fs::read_to_string(&scene_path).unwrap().replace(
+        r#"["board.5V", "stick.5V"]"#,
+        r#"["board.GND", "stick.5V"]"#,
+    );
+    fs::write(&scene_path, &zero_scene).unwrap();
+    let mut live = Live::new("t", Files::disk());
+    run(&mut live, dir.path(), "open");
+    run(
+        &mut live,
+        dir.path(),
+        r#"step --until serial contains "first""#,
+    );
+    run(&mut live, dir.path(), "step 1ms");
+    for k in 1..=8 {
+        let reply = live.run(
+            &Command::parse(&format!("get @stick.px{k}.color"), dir.path())
+                .unwrap()
+                .unwrap(),
+        );
+        assert_eq!(
+            reply.text(),
+            format!("stick.px{k}.color rgb(0,0,0) not latched yet"),
+            "0 V px{k}"
+        );
+    }
+
+    // Leave stick.5V floating: neither frame latches.
+    let float_scene = fs::read_to_string(&scene_path)
+        .unwrap()
+        .replace("    [\"board.GND\", \"stick.5V\"],\n", "");
+    fs::write(&scene_path, &float_scene).unwrap();
+    let mut live = Live::new("t", Files::disk());
+    run(&mut live, dir.path(), "open");
+    run(
+        &mut live,
+        dir.path(),
+        r#"step --until serial contains "first""#,
+    );
+    run(&mut live, dir.path(), "step 1ms");
+    for k in 1..=8 {
+        let reply = live.run(
+            &Command::parse(&format!("get @stick.px{k}.color"), dir.path())
+                .unwrap()
+                .unwrap(),
+        );
+        assert_eq!(
+            reply.text(),
+            format!("stick.px{k}.color rgb(0,0,0) not latched yet"),
+            "floating px{k}"
+        );
+    }
+
+    // Power switched on between the first and second frames: first is ignored, second lights every pixel.
+    let switched_scene = r#"{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    },
+    "sw": { "type": "tactile-switch-6mm" },
+    "stick": { "type": "neopixel-stick-8" }
+  },
+  "wires": [
+    ["board.GPIO4", "stick.DIN"],
+    ["board.5V", "sw.a"],
+    ["sw.b", "stick.5V"],
+    ["board.GND", "stick.GND"]
+  ],
+  "ground": "board.GND"
+}"#;
+    fs::write(&scene_path, switched_scene).unwrap();
+    let mut live = Live::new("t", Files::disk());
+    run(&mut live, dir.path(), "open");
+    run(
+        &mut live,
+        dir.path(),
+        r#"step --until serial contains "first""#,
+    );
+    run(&mut live, dir.path(), "step 1ms");
+    for k in 1..=8 {
+        let reply = live.run(
+            &Command::parse(&format!("get @stick.px{k}.color"), dir.path())
+                .unwrap()
+                .unwrap(),
+        );
+        assert_eq!(
+            reply.text(),
+            format!("stick.px{k}.color rgb(0,0,0) not latched yet"),
+            "before power px{k}"
+        );
+    }
+    run(&mut live, dir.path(), "press @sw");
+    run(
+        &mut live,
+        dir.path(),
+        r#"step --until serial contains "second""#,
+    );
+    run(&mut live, dir.path(), "step 1ms");
+    for (k, color) in SECOND.iter().enumerate() {
+        run(
+            &mut live,
+            dir.path(),
+            &format!("expect @stick.px{} {color}", k + 1),
+        );
+    }
+    run(&mut live, dir.path(), "expect no diagnostics");
+}
+
 const MS: u64 = 1_000_000_000;
 const US: u64 = 1_000_000;
 const TICK: u64 = 2_084;

@@ -593,7 +593,7 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
     }
 
     fn min_supply_v(&self) -> Option<f64> {
-        D::MIN_SUPPLY_V
+        self.dev.device.min_supply_v()
     }
 
     fn draw(&self) -> Draw {

@@ -162,3 +162,106 @@ fn a_colour_is_no_state_and_a_part_without_one_says_so() {
     let reply = run(&mut live, "expect @led1.color > 2mA");
     assert_eq!(reply.error.unwrap().code, Code::NoReading);
 }
+
+fn stick_scene(supply_wire: Option<&str>) -> String {
+    let power = supply_wire
+        .map(|net| format!(", [\"{net}\", \"stick.5V\"]"))
+        .unwrap_or_default();
+    format!(
+        r#"{{
+  "format": 1,
+  "parts": {{
+    "nano": {{ "type": "nano-board", "firmware": "firmware/rainbow.hex" }},
+    "r1": {{ "type": "resistor-axial", "resistance": "470" }},
+    "stick": {{ "type": "neopixel-stick-8" }},
+  }},
+  "wires": [
+    ["nano.D6", "r1.a"], ["r1.b", "stick.DIN"],
+    ["nano.GND", "stick.GND"]{power}
+  ],
+}}"#
+    )
+}
+
+fn open_stick(supply_wire: Option<&str>) -> Live {
+    let hex =
+        std::fs::read(repo().join("blocks/nano-neopixel-stick/build/rainbow.ino.hex")).unwrap();
+    let block = std::fs::read(repo().join("blocks/nano-neopixel-stick/block.jsonc")).unwrap();
+    let files = Files::memory([
+        ("block.jsonc".to_string(), block),
+        ("firmware/rainbow.hex".to_string(), hex),
+        (
+            "scene.jsonc".to_string(),
+            stick_scene(supply_wire).into_bytes(),
+        ),
+    ])
+    .with_catalog(catalog());
+    let mut live = Live::new("t", files);
+    let open = live.run(&Command::Open(PathBuf::from("scene.jsonc")));
+    assert!(open.ok(), "{}", open.text());
+    live
+}
+
+#[test]
+fn an_unpowered_or_floating_stick_latches_nothing_and_stays_off() {
+    for (label, supply) in [("0 V", Some("nano.GND")), ("floating", None)] {
+        let mut live = open_stick(supply);
+        let stepped = run(&mut live, "step 20ms");
+        assert!(stepped.ok(), "{label}: {}", stepped.text());
+        for n in 1..=8 {
+            let reply = run(&mut live, &format!("get @stick.px{n}.color"));
+            assert_eq!(
+                reply.text(),
+                format!("stick.px{n}.color rgb(0,0,0) not latched yet"),
+                "{label} px{n}"
+            );
+        }
+    }
+
+    // A supply well below what the pixel needs (2 V) must also latch nothing on a 5 V Nano.
+    let low_supply_scene = r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "firmware/rainbow.hex" },
+    "r_top": { "type": "resistor-axial", "resistance": "1.5k" },
+    "r_bot": { "type": "resistor-axial", "resistance": "1k" },
+    "r1": { "type": "resistor-axial", "resistance": "470" },
+    "stick": { "type": "neopixel-stick-8" },
+  },
+  "wires": [
+    ["nano.5V", "r_top.a"], ["r_top.b", "r_bot.a"], ["r_bot.b", "nano.GND"],
+    ["r_top.b", "stick.5V"], ["nano.GND", "stick.GND"],
+    ["nano.D6", "r1.a"], ["r1.b", "stick.DIN"],
+  ],
+}"#;
+    let hex =
+        std::fs::read(repo().join("blocks/nano-neopixel-stick/build/rainbow.ino.hex")).unwrap();
+    let block = std::fs::read(repo().join("blocks/nano-neopixel-stick/block.jsonc")).unwrap();
+    let files = Files::memory([
+        ("block.jsonc".to_string(), block),
+        ("firmware/rainbow.hex".to_string(), hex),
+        (
+            "scene.jsonc".to_string(),
+            low_supply_scene.as_bytes().to_vec(),
+        ),
+    ])
+    .with_catalog(catalog());
+    let mut low = Live::new("t", files);
+    assert!(low.run(&Command::Open(PathBuf::from("scene.jsonc"))).ok());
+    assert!(run(&mut low, "step 20ms").ok());
+    for n in 1..=8 {
+        let reply = run(&mut low, &format!("get @stick.px{n}.color"));
+        assert_eq!(
+            reply.text(),
+            format!("stick.px{n}.color rgb(0,0,0) not latched yet"),
+            "low supply px{n}"
+        );
+    }
+
+    let mut powered = open_stick(Some("nano.5V"));
+    assert!(run(&mut powered, "step 20ms").ok());
+    let reply = run(&mut powered, "expect @stick.px1 rgb(255,0,0)");
+    assert!(reply.ok(), "powered px1: {}", reply.text());
+    let reply = run(&mut powered, "expect @stick.px8 rgb(255,0,120)");
+    assert!(reply.ok(), "powered px8: {}", reply.text());
+}
