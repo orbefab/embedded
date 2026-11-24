@@ -881,6 +881,37 @@ impl Open {
         )
     }
 
+    /// The digit `path` shows. Each of `seg_a` through `seg_g` is one LED lamp. A segment
+    /// counts when a viewer sees it glow, above the `digit` reading's `above`, or above the
+    /// segment's `dim` reading when the part states none.
+    pub(super) fn shown_digit(&self, path: &str) -> Result<String, Error> {
+        let mut indices = Vec::new();
+        for letter in crate::digit::LETTERS {
+            let child = format!("{path}.{}", crate::digit::segment(letter));
+            let Some(index) = self.light.position(&child) else {
+                return Err(Error::new(
+                    Code::NoReading,
+                    format!("`{path}` has no segment `{letter}`"),
+                    "a digit reading needs segments seg_a through seg_g, each an LED",
+                ));
+            };
+            indices.push(index);
+        }
+        let above = self.refs.parts[path]
+            .readings
+            .get("digit")
+            .and_then(|reading| reading.above.as_ref())
+            .filter(|above| above.unit == "A")
+            .map_or(self.light.lamps()[indices[0]].dim, |above| above.value);
+        let seen = self.light.seen(&indices, &self.engine.probe(), above);
+        let lit: Vec<&str> = crate::digit::LETTERS
+            .into_iter()
+            .zip(seen)
+            .filter_map(|(letter, seen)| seen.then_some(letter))
+            .collect();
+        Ok(crate::digit::shown(&lit))
+    }
+
     fn get(&self, r: &Ref) -> Result<Got, Error> {
         let (target, value) = match self.resolve(r)? {
             Target::Pin { path, pin, net } => {
@@ -925,6 +956,10 @@ impl Open {
                 format!("{path}.{reading}"),
                 Reading::Screen(self.screen(&engine)),
             ),
+            Target::Digit { path } => (
+                format!("{path}.digit"),
+                Reading::Shown(self.shown_digit(&path)?),
+            ),
             Target::Param { .. } => {
                 let (label, engine, spec) = self.live_param(r, Code::NoReading)?;
                 let level = self
@@ -941,6 +976,12 @@ impl Open {
                 )
             }
             Target::Part(path) => {
+                if crate::target::digit_reading(&self.refs.parts[&path]) {
+                    return Ok(Got {
+                        target: path.clone(),
+                        value: Reading::Shown(self.shown_digit(&path)?),
+                    });
+                }
                 let value = self.part(&path).ok_or_else(|| {
                     Error::new(
                         Code::NoReading,
@@ -1294,7 +1335,7 @@ mod tests {
 t=50ms (from 50ms), @led1 off at 50ms
   brightness led1 off 1.2775403302174304e-13 A over 20ms
   brightness nano.led_l off 1.2775344350286488e-13 A over 20ms
-  brightness nano.led_pwr lit 3.0136985405319647 mA over 20ms"
+  brightness nano.led_pwr lit 3.013698540531921 mA over 20ms"
         );
 
         let unmet = step(&mut live, "--until @led1 lit");

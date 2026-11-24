@@ -1,0 +1,43 @@
+// A Nano counts 0 to 9 on a common-cathode display. D2 is segment a, then b through g on D3 to D8.
+// Each segment has a 330 ohm resistor. The common cathode goes to the ground rail.
+// The Nano occupies columns 1 to 15. The display's five pins sit in columns 20 to 24, so each
+// resistor runs away from those columns.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "build/count.ino.hex" },
+    "disp": { "type": "display-7seg-cc" },
+    "ra": { "type": "resistor-axial", "resistance": "330" },
+    "rb": { "type": "resistor-axial", "resistance": "330" },
+    "rc": { "type": "resistor-axial", "resistance": "330" },
+    "rd": { "type": "resistor-axial", "resistance": "330" },
+    "re": { "type": "resistor-axial", "resistance": "330" },
+    "rf": { "type": "resistor-axial", "resistance": "330" },
+    "rg": { "type": "resistor-axial", "resistance": "330" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "disp": { "on": { "e": "bb.e20" } },
+    "ra": { "on": { "a": "bb.j23" } }, // b in j27, segment a
+    "rb": { "on": { "a": "bb.j24" } }, // b in j28, segment b
+    "rc": { "on": { "a": "bb.a23" } }, // b in a27, segment c
+    "rd": { "on": { "a": "bb.a21" }, "rotate": [0, 0, 180] }, // b in a17, segment d
+    "re": { "on": { "a": "bb.a20" }, "rotate": [0, 0, 180] }, // b in a16, segment e
+    "rf": { "on": { "a": "bb.j21" }, "rotate": [0, 0, 180] }, // b in j17, segment f
+    "rg": { "on": { "a": "bb.j20" }, "rotate": [0, 0, 180] }, // b in j16, segment g
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["bb.a14", "bb.X14", { "color": "#161616" }], // GND to the - rail
+    ["bb.a22", "bb.X22", { "color": "#161616" }], // common cathode to GND
+    ["bb.f27", "bb.j11"], // a to D2
+    ["bb.f28", "bb.j10"], // b to D3
+    ["bb.b27", "bb.j9"], // c to D4
+    ["bb.b17", "bb.j8"], // d to D5
+    ["bb.b16", "bb.j7"], // e to D6
+    ["bb.f17", "bb.j6"], // f to D7
+    ["bb.f16", "bb.j5"], // g to D8
+  ],
+}

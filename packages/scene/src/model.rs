@@ -1383,10 +1383,28 @@ fn decode_pins(node: &Node, out: &mut Findings) -> Vec<Pin> {
     pins
 }
 
+/// Names of the LED bodies in a part whose `model` is several engine parts. A single
+/// `"kind": "led"` model has no body name.
+fn model_led_names(root: &Node) -> Vec<&str> {
+    let Some(model) = root.get("model") else {
+        return Vec::new();
+    };
+    if model.get("kind").is_some() {
+        return Vec::new();
+    }
+    model
+        .props()
+        .unwrap_or_default()
+        .iter()
+        .filter(|prop| prop.value.get("kind").and_then(Node::str) == Some("led"))
+        .map(|prop| prop.key.as_str())
+        .collect()
+}
+
 /// Each name a part file gives to another of its own sections: `controls.press.joint` to a key
-/// of `joints`, each `view.glow` entry's `by` to a reading, and each `view.tint` and
-/// `view.recolour` entry's `by` and each joint's `by` to a param. A section that is not an
-/// object has its own finding.
+/// of `joints`, each `view.glow` entry's `by` to a reading or to a named LED in `model`, and
+/// each `view.tint` and `view.recolour` entry's `by` and each joint's `by` to a param. A
+/// section that is not an object has its own finding.
 fn check_own_names(root: &Node, out: &mut Findings) {
     let press = root.get("controls").and_then(|c| c.get("press"));
     let mut names: Vec<(&Node, &str, &str)> = press
@@ -1402,6 +1420,7 @@ fn check_own_names(root: &Node, out: &mut Findings) {
             .map(|by| (by, "params", "param")),
     );
     let view = root.get("view");
+    let glow_bodies = model_led_names(root);
     for (list, section, what) in [
         ("glow", "readings", "reading"),
         ("tint", "params", "param"),
@@ -1422,7 +1441,7 @@ fn check_own_names(root: &Node, out: &mut Findings) {
             found => found.flatten().unwrap_or_default(),
         };
         let keys: Vec<&str> = props.iter().map(|p| p.key.as_str()).collect();
-        if keys.contains(&name) {
+        if keys.contains(&name) || (section == "readings" && glow_bodies.contains(&name)) {
             continue;
         }
         let hint = match keys.as_slice() {

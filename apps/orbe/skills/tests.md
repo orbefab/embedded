@@ -11,6 +11,7 @@ A test is `tests/<name>.test`. Each line is a live command without `orbe`. `#` s
 `expect` and `step --until` take the same conditions. Quote `<`, `>` and a colour in a shell.
 
 - `@led1 lit`, `@led1 dim`, `@led1 off`. Load `orbe skills get ratings` for the current each state needs.
+- `@disp.digit 8` on a 7-segment display, or `blank` when none of a to g glows. A dim segment counts. Another pattern names the glowing segments, and the decimal point stays out of the digit. A new digit reads within 1 ms. `orbe get @disp.digit` prints the same word.
 - `@nano.D13 high`, `@nano.D13 low`.
 - `@led1 rgb(255,0,0)`, an addressable LED's latched colour. `#` starts a comment, so a colour is never hex. In a shell, `orbe expect @led1 'rgb(255,0,0)'`.
 - `@oled.display.screen lit` or `off`, whether a screen lights any pixel. For a 128 x 64 I2C OLED, use the part `oled-ssd1306-128x64`, as the Block `nano-oled` does. `@oled.display.screen shows tests/hello.screen` compares each row with that file, from the scene's folder. `orbe get @oled.display.screen` prints the rows to save, `#` lit and `.` dark.

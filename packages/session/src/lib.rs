@@ -4,6 +4,7 @@
 
 mod command;
 mod condition;
+mod digit;
 mod duration;
 mod live;
 mod reply;

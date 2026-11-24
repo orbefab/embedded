@@ -1,0 +1,33 @@
+// The counter Block wired pin to pin, the same circuit as its breadboard scene.
+{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/count.ino.hex" },
+    "disp": { "type": "display-7seg-cc" },
+    "ra": { "type": "resistor-axial", "resistance": "330" },
+    "rb": { "type": "resistor-axial", "resistance": "330" },
+    "rc": { "type": "resistor-axial", "resistance": "330" },
+    "rd": { "type": "resistor-axial", "resistance": "330" },
+    "re": { "type": "resistor-axial", "resistance": "330" },
+    "rf": { "type": "resistor-axial", "resistance": "330" },
+    "rg": { "type": "resistor-axial", "resistance": "330" },
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["disp.a", "ra.a"],
+    ["ra.b", "nano.D2"],
+    ["disp.b", "rb.a"],
+    ["rb.b", "nano.D3"],
+    ["disp.c", "rc.a"],
+    ["rc.b", "nano.D4"],
+    ["disp.d", "rd.a"],
+    ["rd.b", "nano.D5"],
+    ["disp.e", "re.a"],
+    ["re.b", "nano.D6"],
+    ["disp.f", "rf.a"],
+    ["rf.b", "nano.D7"],
+    ["disp.g", "rg.a"],
+    ["rg.b", "nano.D8"],
+    ["disp.com", "nano.GND"],
+  ],
+}

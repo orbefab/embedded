@@ -17,6 +17,8 @@ pub enum Condition {
     /// `@oled.display.screen shows tests/hello.screen`: the screen shows the rows the file
     /// holds, by its path from the scene's folder.
     Shows(Ref, String),
+    /// `@disp.digit 8`, or `@disp.digit blank` when no segment a–g is lit.
+    Digit(Ref, String),
     /// `serial contains "pressed"`.
     SerialContains(Needle),
     /// `no diagnostics`.
@@ -264,6 +266,10 @@ impl Amount {
     }
 }
 
+fn digit_word(word: &str) -> bool {
+    word == "blank" || (word.len() == 1 && word.bytes().all(|b| b.is_ascii_digit()))
+}
+
 impl Condition {
     /// Parses the words after `expect` or `step --until`.
     pub fn parse(words: &[String]) -> Result<Condition, String> {
@@ -277,6 +283,14 @@ impl Condition {
             }
             [r, "shows", file] if r.starts_with('@') => {
                 Ok(Condition::Shows(Ref::parse(r)?, file.to_string()))
+            }
+            [r, word] if r.starts_with('@') && r.ends_with(".digit") => {
+                if !digit_word(word) {
+                    return Err(format!(
+                        "`{word}` is not a digit; use 0 to 9, or blank when no segment is lit"
+                    ));
+                }
+                Ok(Condition::Digit(Ref::parse(r)?, (*word).to_string()))
             }
             [r, word] if r.starts_with('@') => {
                 let state = State::parse(word).ok_or_else(|| {
@@ -314,6 +328,7 @@ impl fmt::Display for Condition {
             }
             Condition::Color(r, rgb) => write!(f, "{r} {rgb}"),
             Condition::Shows(r, file) => write!(f, "{r} shows {file}"),
+            Condition::Digit(r, digit) => write!(f, "{r} {digit}"),
             Condition::SerialContains(text) => write!(f, "serial contains {:?}", text.as_str()),
             Condition::NoDiagnostics => f.write_str("no diagnostics"),
         }

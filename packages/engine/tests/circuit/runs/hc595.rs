@@ -479,3 +479,38 @@ fn a_5v_output_on_a_5v_part_stays_quiet() {
     assert!(qhp > 4.5, "QHp is {qhp}");
     assert!(names.is_empty(), "{names:?}");
 }
+
+#[test]
+fn logic_traces_name_each_input_and_keep_its_level() {
+    let done = orbe_engine::run(
+        &serde_json::to_vec(&loaded(Some(5.0))).unwrap(),
+        orbe_engine::timestamp::Timestamp::from_unix_seconds(0),
+    );
+    let vcd = std::str::from_utf8(done.folder.file("traces/logic.vcd").unwrap()).unwrap();
+    let vars: Vec<&str> = vcd
+        .lines()
+        .filter_map(|line| {
+            let rest = line.strip_prefix("$var wire 1 ")?.strip_suffix(" $end")?;
+            Some(rest.split_once(' ')?.1)
+        })
+        .collect();
+    assert_eq!(vars, ["OE", "RCLK", "SER", "SRCLK", "SRCLR"]);
+    let observations: serde_json::Value =
+        serde_json::from_slice(done.folder.file("observations.json").unwrap()).unwrap();
+    let logic = &observations["logic"];
+    assert_eq!(
+        logic.as_object().unwrap().keys().collect::<Vec<_>>(),
+        [
+            "#u1.logic.OE",
+            "#u1.logic.RCLK",
+            "#u1.logic.SER",
+            "#u1.logic.SRCLK",
+            "#u1.logic.SRCLR",
+        ]
+    );
+    assert_eq!(logic["#u1.logic.OE"]["initial"], "low");
+    assert_eq!(logic["#u1.logic.RCLK"]["initial"], "low");
+    assert_eq!(logic["#u1.logic.SER"]["initial"], "low");
+    assert_eq!(logic["#u1.logic.SRCLK"]["initial"], "low");
+    assert_eq!(logic["#u1.logic.SRCLR"]["initial"], "high");
+}
