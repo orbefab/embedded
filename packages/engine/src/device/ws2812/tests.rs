@@ -58,14 +58,14 @@ impl Core {
     /// A chain that drives `DOUT` `delay` picoseconds after `DIN`, or has none at 0.
     fn with_dout(count: u16, delay: u64) -> Core {
         let dout = (delay > 0).then_some(NetId::GROUND);
-        let mut hosted = super::core(count, delay, dout, None);
+        let mut hosted = super::core(count, delay, dout, None, None);
         hosted.keep_shown();
         Core { hosted }
     }
 
     /// A chain of `count` that draws [`draw`] and has no `DOUT`.
     fn drawing(count: u16) -> Core {
-        let mut hosted = super::core(count, 0, None, Some(&draw()));
+        let mut hosted = super::core(count, 0, None, Some(&draw()), None);
         hosted.keep_shown();
         Core { hosted }
     }
@@ -563,7 +563,7 @@ fn a_chain_that_writes_no_rows_keeps_its_last_latch_alone() {
         .collect();
     let pulses = trains.concat();
     let session = Core {
-        hosted: super::core(1, 0, None, None),
+        hosted: super::core(1, 0, None, None, None),
     };
     let (session, _) = by_pin_into(session, &pulses);
     let (run, _) = by_pin_into(Core::new(1), &pulses);
@@ -721,4 +721,167 @@ fn a_record_that_latches_draws_from_1_ps_after_it_lands_and_a_repeat_adds_no_sto
     core.land(Time::from_ps(start), false, &pulses, Time::from_ps(again));
     assert_eq!(core.run_until(Time::from_ps(again + 2 * RES)), None);
     assert!((core.hosted.draw().amps - amps(1, 0x100)).abs() < 1e-15);
+}
+
+fn min_supply(volts: f64) -> crate::netlist::Value {
+    crate::netlist::Value {
+        si: crate::finite::Finite::new(volts).unwrap(),
+    }
+}
+
+impl Core {
+    fn with_supply(count: u16, delay: u64, with_draw: bool, volts: f64) -> Core {
+        let dout = (delay > 0).then_some(NetId::GROUND);
+        let draw = with_draw.then(draw);
+        let supply = min_supply(volts);
+        let mut hosted = super::core(count, delay, dout, draw.as_ref(), Some(&supply));
+        hosted.keep_shown();
+        Core { hosted }
+    }
+}
+
+#[test]
+fn an_unpowered_chain_ignores_pin_edges_and_records_without_warning() {
+    let mut pulses = vec![(true, 450_000), (false, ZERO.1)];
+    pulses.extend(train(&[0x12, 0x34, 0x56, 0xA5, 0x5A, 0xC3], ZERO, ONE));
+
+    let mut pin = Core::with_supply(1, DELAY, true, 3.0);
+    assert_eq!(pin.hosted.min_supply_v(), Some(3.0));
+    pin.input(Time::ZERO, &[false, false]);
+    let mut t = START;
+    for &(level, ps) in &pulses {
+        settle(&mut pin, t);
+        pin.input(Time::from_ps(t), &[level, false]);
+        t += ps;
+    }
+    settle(&mut pin, t + 2 * RES);
+    assert_eq!(pin.observed().pixels, vec![[0, 0, 0]]);
+    assert!(pin.latches().is_empty());
+    assert_eq!(pin.broke(), None);
+
+    let mut rec = Core::with_supply(1, DELAY, true, 3.0);
+    rec.input(Time::ZERO, &[false, false]);
+    let last = end(START, &pulses);
+    settle(&mut rec, last);
+    rec.land(Time::from_ps(START), false, &pulses, Time::from_ps(last));
+    while let Some(stop) = rec.run_until(Time::from_ps(last + 2 * RES)) {
+        assert!(!stop.record, "unpowered chain must not relay records");
+    }
+    assert_eq!(rec.observed().pixels, vec![[0, 0, 0]]);
+    assert!(rec.latches().is_empty());
+    assert_eq!(rec.broke(), None);
+}
+
+#[test]
+fn a_chain_picks_up_from_the_first_full_frame_after_power_returns() {
+    let first = train(&[0x11, 0x22, 0x33], ZERO, ONE);
+    let second = train(&[0x44, 0x55, 0x66], ZERO, ONE);
+    let power_on = end(START, &first) + RES;
+    let second_start = power_on + 1_000_000;
+
+    // Pin path: first frame ignored while unpowered, second frame latches after power returns.
+    let mut pin = Core::with_supply(1, 0, false, 3.0);
+    pin.input(Time::ZERO, &[false, false]);
+    let mut t = START;
+    for &(level, ps) in &first {
+        settle(&mut pin, t);
+        pin.input(Time::from_ps(t), &[level, false]);
+        t += ps;
+    }
+    settle(&mut pin, power_on);
+    pin.input(Time::from_ps(power_on), &[false, true]);
+    t = second_start;
+    for &(level, ps) in &second {
+        settle(&mut pin, t);
+        pin.input(Time::from_ps(t), &[level, true]);
+        t += ps;
+    }
+    settle(&mut pin, t + 2 * RES);
+    assert_eq!(pin.observed().pixels, vec![[0x44, 0x55, 0x66]]);
+    assert_eq!(latch_times(&pin), vec![reset_after(second_start, &second)]);
+    assert_eq!(pin.broke(), None);
+
+    // Record path: a record that started before power returned is ignored, and the next full
+    // frame after power-up lights the pixels.
+    let mut combined = vec![(true, 450_000), (false, ZERO.1)];
+    let prefix_end = end(START, &combined);
+    let lead_low = 1_000_000;
+    combined.push((false, lead_low));
+    combined.extend_from_slice(&second);
+    let last = end(START, &combined);
+
+    let mut rec = Core::with_supply(1, 0, false, 3.0);
+    rec.input(Time::ZERO, &[false, false]);
+    settle(&mut rec, prefix_end + lead_low / 2);
+    rec.input(Time::from_ps(prefix_end + lead_low / 2), &[false, true]);
+    settle(&mut rec, last);
+    rec.land(Time::from_ps(START), false, &combined, Time::from_ps(last));
+    settle(&mut rec, last + 2 * RES);
+    assert_eq!(rec.observed().pixels, vec![[0, 0, 0]]);
+    assert!(rec.latches().is_empty());
+    assert_eq!(rec.broke(), None);
+
+    let next_start = last + 2 * RES;
+    let next_end = end(next_start, &second);
+    settle(&mut rec, next_end);
+    rec.land(
+        Time::from_ps(next_start),
+        false,
+        &second,
+        Time::from_ps(next_end),
+    );
+    settle(&mut rec, next_end + 2 * RES);
+    assert_eq!(rec.observed().pixels, vec![[0x44, 0x55, 0x66]]);
+    assert_eq!(latch_times(&rec), vec![reset_after(next_start, &second)]);
+    assert_eq!(rec.broke(), None);
+}
+
+#[test]
+fn power_loss_clears_latched_colours_and_lit_draw_and_recovers_on_next_frame() {
+    let first = train(&[0xFF, 0x80, 0x40], ZERO, ONE);
+    let second = train(&[0x10, 0x20, 0x30], ZERO, ONE);
+    let mut core = Core::with_supply(1, DELAY, true, 3.0);
+    core.input(Time::ZERO, &[false, true]);
+    let first_end = end(START, &first);
+    settle(&mut core, first_end);
+    core.land(
+        Time::from_ps(START),
+        false,
+        &first,
+        Time::from_ps(first_end),
+    );
+    settle(&mut core, first_end + 2 * RES);
+    assert_eq!(core.observed().pixels, vec![[0xFF, 0x80, 0x40]]);
+    let first_latch = reset_after(START, &first);
+    assert_eq!(core.hosted.latched(), Some(Time::from_ps(first_latch)));
+    assert!((core.hosted.draw().amps - amps(1, 0xFF + 0x80 + 0x40)).abs() < 1e-15);
+
+    let drop_at = first_end + 2 * RES;
+    core.input(Time::from_ps(drop_at), &[false, false]);
+    assert_eq!(core.observed().pixels, vec![[0, 0, 0]]);
+    assert_eq!(core.hosted.latched(), None);
+    let redraw = core.run_until(Time::from_ps(drop_at + 10));
+    assert_eq!(redraw.map(|s| s.at), Some(Time::from_ps(drop_at + 1)));
+    assert!((core.hosted.draw().amps - amps(1, 0)).abs() < 1e-15);
+
+    let restore_at = drop_at + 1_000_000;
+    settle(&mut core, restore_at);
+    core.input(Time::from_ps(restore_at), &[false, true]);
+    assert_eq!(core.hosted.latched(), None);
+    let second_start = restore_at + 1_000_000;
+    let second_end = end(second_start, &second);
+    settle(&mut core, second_end);
+    core.land(
+        Time::from_ps(second_start),
+        false,
+        &second,
+        Time::from_ps(second_end),
+    );
+    settle(&mut core, second_end + 2 * RES);
+    let second_latch = reset_after(second_start, &second);
+    assert_eq!(core.observed().pixels, vec![[0x10, 0x20, 0x30]]);
+    assert_eq!(core.hosted.latched(), Some(Time::from_ps(second_latch)));
+    assert_eq!(latch_times(&core), vec![first_latch, second_latch]);
+    assert!((core.hosted.draw().amps - amps(1, 0x10 + 0x20 + 0x30)).abs() < 1e-15);
+    assert_eq!(core.broke(), None);
 }

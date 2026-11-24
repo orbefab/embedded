@@ -140,6 +140,13 @@ pub(crate) struct Pulse<D> {
     low: bool,
     /// Where the edges the device passes go. `None` on a device with no output to pass them to.
     relay: Option<Relay>,
+    /// Watch index of the supply comparator, when the device has a minimum supply. Below it the
+    /// port ignores edges and records and starts fresh when power returns.
+    supply: Option<usize>,
+    /// Whether the supply watch reads high. Always true when `supply` is `None`.
+    powered: bool,
+    /// When the supply last rose above its minimum.
+    powered_since: Time,
 }
 
 impl<D: Device> Clone for Pulse<D> {
@@ -151,6 +158,9 @@ impl<D: Device> Clone for Pulse<D> {
             playing: self.playing.clone(),
             low: self.low,
             relay: self.relay.clone(),
+            supply: self.supply,
+            powered: self.powered,
+            powered_since: self.powered_since,
         }
     }
 
@@ -162,6 +172,9 @@ impl<D: Device> Clone for Pulse<D> {
         self.playing.clone_from(&source.playing);
         self.low = source.low;
         self.relay.clone_from(&source.relay);
+        self.supply = source.supply;
+        self.powered = source.powered;
+        self.powered_since = source.powered_since;
     }
 }
 
@@ -174,6 +187,9 @@ impl<D: PulseTarget> Pulse<D> {
             playing: None,
             low: false,
             relay: None,
+            supply: None,
+            powered: true,
+            powered_since: Time::ZERO,
         }
     }
 
@@ -183,6 +199,12 @@ impl<D: PulseTarget> Pulse<D> {
             relay: Some(relay),
             ..Pulse::new()
         }
+    }
+
+    /// Gates edges and records on the supply comparator at watch index `watch`.
+    pub(crate) fn with_supply(mut self, watch: usize) -> Pulse<D> {
+        self.supply = Some(watch);
+        self
     }
 
     /// Keeps the edge the last call on the device passed.
@@ -371,6 +393,12 @@ impl<D: PulseTarget> Pulse<D> {
         pulses: &[(bool, u64)],
         end: Time,
     ) {
+        if start < self.powered_since {
+            self.line = Line::Fresh;
+            self.idle_at = None;
+            self.undo = None;
+            return;
+        }
         self.walk(dev, world, start, idle, pulses, end);
         self.rest(dev, world, idle, end);
         self.relay(Time::from_ps(end.as_ps() + 1));
@@ -418,8 +446,28 @@ impl<D: PulseTarget> Port<D> for Pulse<D> {
     }
 
     fn input(&mut self, dev: &mut Hosting<D>, world: &World, at: Time, levels: &[bool]) {
-        assert_eq!(levels.len(), 1, "a pulse target watches one line");
+        let watches = if self.supply.is_some() { 2 } else { 1 };
+        assert_eq!(levels.len(), watches, "a pulse target watches one line");
         self.undo = None;
+        if let Some(watch) = self.supply {
+            if !levels[watch] {
+                self.powered = false;
+                self.line = Line::Fresh;
+                self.idle_at = None;
+                dev.clear_latched();
+                if let Some(relay) = &mut self.relay {
+                    relay.edges.clear();
+                    relay.due.clear();
+                }
+                return;
+            }
+            if !self.powered {
+                self.powered = true;
+                self.powered_since = at;
+                self.line = Line::Fresh;
+                self.idle_at = None;
+            }
+        }
         self.feed(dev, world, levels[0], at, false);
     }
 
@@ -455,6 +503,9 @@ impl<D: PulseTarget> Port<D> for Pulse<D> {
             !D::OPEN_DRAIN,
             "an open-drain line is read from its watch, not from records"
         );
+        if !self.powered {
+            return;
+        }
         for row in records {
             let RecordKind::Pulses { pulses, .. } = &row.record.kind else {
                 continue;
@@ -478,10 +529,19 @@ impl<D: PulseTarget> Port<D> for Pulse<D> {
         at: Time,
         record: &Record,
     ) -> Option<Record> {
+        if !self.powered {
+            return None;
+        }
         let RecordKind::Pulses { pulses, .. } = &record.kind else {
             return None;
         };
         debug_assert!(record.start <= at && at < record.end);
+        if record.start < self.powered_since {
+            self.line = Line::Fresh;
+            self.idle_at = None;
+            self.undo = None;
+            return None;
+        }
         self.walk(dev, world, record.start, pulses.idle, &pulses.pulses, at);
         let end = Time::from_ps(at.as_ps() + 1);
         let relay = self.relay.as_mut()?;

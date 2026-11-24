@@ -77,14 +77,21 @@ pub(crate) fn chip(part: PartId, chain: &Ws2812) -> Chip {
         .collect();
     let delay = chain.dout.as_ref().map_or(0, |dout| dout.delay.value);
     let dout = chain.dout.as_ref().map(|_| pins[DOUT]);
+    let mut watches = vec![Watch {
+        rise: against(threshold.high.si.get()),
+        fall: against(threshold.low.si.get()),
+    }];
+    if let Some(min_supply) = &chain.min_supply {
+        watches.push(Watch::comparator(Signal {
+            terms: vec![(Node::from(pins[VCC]), 1.0), (Node::from(pins[GND]), -1.0)],
+            offset: min_supply.si.get().next_down(),
+        }));
+    }
     Chip {
         part: Some(part),
         outputs,
-        watches: vec![Watch {
-            rise: against(threshold.high.si.get()),
-            fall: against(threshold.low.si.get()),
-        }],
-        signals: vec![(Ws2812::PINS[DIN], 0)],
+        watches,
+        signals: vec![(Ws2812::PINS[DIN], model::WATCH_DIN)],
         samples: Vec::new(),
         usarts: &[],
         twi: false,
@@ -97,7 +104,13 @@ pub(crate) fn chip(part: PartId, chain: &Ws2812) -> Chip {
             pulses: Some(pins[DIN]),
             pulses_pin: Some(DIN),
         },
-        core: Core::Device(core(chain.leds, delay, dout, chain.draw.as_ref())),
+        core: Core::Device(core(
+            chain.leds,
+            delay,
+            dout,
+            chain.draw.as_ref(),
+            chain.min_supply.as_ref(),
+        )),
     }
 }
 
@@ -105,21 +118,29 @@ pub(crate) fn chip(part: PartId, chain: &Ws2812) -> Chip {
 /// landing copies the state, so a short chain copies little. `delay` is `DIN` to `DOUT` in
 /// picoseconds, 0 for a chain with no `DOUT`, and `dout` the net of `DOUT`, which the records it
 /// relays go on.
-fn core(leds: u16, delay: u64, dout: Option<NetId>, draw: Option<&PixelDraw>) -> Box<dyn Hosted> {
+fn core(
+    leds: u16,
+    delay: u64,
+    dout: Option<NetId>,
+    draw: Option<&PixelDraw>,
+    min_supply: Option<&Value>,
+) -> Box<dyn Hosted> {
     match leds {
-        0..=16 => sized::<16>(leds, delay, dout, draw),
-        17..=64 => sized::<64>(leds, delay, dout, draw),
-        65..=256 => sized::<256>(leds, delay, dout, draw),
-        _ => sized::<{ Ws2812::LED_MAX as usize }>(leds, delay, dout, draw),
+        0..=16 => sized::<16>(leds, delay, dout, draw, min_supply),
+        17..=64 => sized::<64>(leds, delay, dout, draw, min_supply),
+        65..=256 => sized::<256>(leds, delay, dout, draw, min_supply),
+        _ => sized::<{ Ws2812::LED_MAX as usize }>(leds, delay, dout, draw, min_supply),
     }
 }
 
-/// The device takes its draw as whole nanoamperes and millivolts.
+/// The device takes its draw as whole nanoamperes and millivolts, and its minimum supply as
+/// whole microvolts.
 fn sized<const N: usize>(
     leds: u16,
     delay: u64,
     dout: Option<NetId>,
     draw: Option<&PixelDraw>,
+    min_supply: Option<&Value>,
 ) -> Box<dyn Hosted> {
     let delay = i64::try_from(delay).expect("parse bounds the delay");
     let whole = |value: &Value, scale: f64| (value.si.get() * scale).round() as i64;
@@ -140,12 +161,19 @@ fn sized<const N: usize>(
             ),
         ]);
     }
+    if let Some(min_supply) = min_supply {
+        let uv = (min_supply.si.get() * 1e6).round().max(1.0) as i64;
+        fields.push(("min_supply_uv", FieldValue::Int(uv)));
+    }
     let device = model::Ws2812::<N>::new(&Fields::new(&fields)).expect("the state holds the chain");
     let outputs = if delay > 0 { model::OUTPUTS } else { 0 };
-    let port = match dout {
+    let mut port = match dout {
         Some(net) => Pulse::relaying(Relay::new(Ws2812::PINS[DOUT], net)),
         None => Pulse::new(),
     };
+    if min_supply.is_some() {
+        port = port.with_supply(model::WATCH_SUPPLY);
+    }
     Box::new(Native::new(device, port, outputs))
 }
 
@@ -153,13 +181,16 @@ fn sized<const N: usize>(
 /// through `input_threshold`, fractions of its supply, and takes `Pulses` records on that net.
 /// Each LED keeps the first 24 bits, green then red then blue, and passes the rest on. A low
 /// longer than 280 µs latches. `leds` is from 1 to [`Ws2812::LED_MAX`]. With `dout`, the last
-/// LED passes the rest on through `DOUT`. Only parse builds one.
+/// LED passes the rest on through `DOUT`. With `min_supply`, the chain ignores `DIN`, clears to
+/// off and releases `DOUT` while `V(VCC) - V(GND)` is below it. Only parse builds one.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ws2812 {
     /// `VCC`, `GND` and `DIN`, then `DOUT` when `dout` is given.
     pub pins: Vec<NetId>,
     pub leds: u16,
     pub input_threshold: Threshold,
+    /// Volt, greater than 0. `None` runs at any supply.
+    pub min_supply: Option<Value>,
     pub dout: Option<Dout>,
     /// What each LED draws from `VCC` into `GND`. `None` draws nothing.
     pub draw: Option<PixelDraw>,
@@ -210,6 +241,8 @@ pub(crate) struct WireWs2812 {
     #[serde(default = "default_leds")]
     leds: u16,
     input_threshold: WireThreshold,
+    #[serde(default)]
+    min_supply: Option<WireValue>,
     #[serde(default)]
     dout: Option<WireDout>,
     #[serde(default)]
@@ -281,6 +314,10 @@ pub(crate) fn resolve_ws2812(ctx: ParseCtx<'_>, wire: WireWs2812) -> Option<Ws28
         });
         None
     };
+    let min_supply = match wire.min_supply {
+        None => Some(None),
+        Some(value) => resolve_value(part_ref, "min_supply", "V", true, value, out).map(Some),
+    };
     let draw = wire.draw.map(|draw| {
         let current = |field, value, out: &mut Vec<Diagnostic>| {
             bounded(
@@ -320,6 +357,7 @@ pub(crate) fn resolve_ws2812(ctx: ParseCtx<'_>, wire: WireWs2812) -> Option<Ws28
         pins: pins?,
         leds: leds?,
         input_threshold: input_threshold?,
+        min_supply: min_supply?,
         dout,
         draw,
     })

@@ -1203,13 +1203,14 @@ The same sheet, page 2, gives `VIH` as at least 0.7 VDD and `VIL` as at most 0.7
 | --- | --- | --- |
 | `leds` | count | an integer from 1 to 1024. 0 to 65535 outside that is rule `leds`, and any other number is `netlist.syntax`. Absent means 13 |
 | `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+| `min_supply` | `V` | greater than 0, else rule `positive`. Absent runs at any supply |
 | `dout.output.high_drop`, `dout.output.low_drop` | `V` | at least 0, else rule `non_negative` |
 | `dout.output.high_resistance`, `dout.output.low_resistance` | `ohm` | the resistor's |
 | `dout.delay` | `ps` | an integer from 1 to 1000000. 0 is rule `positive`, and above 1000000, T1H's longest high, is rule `delay` |
 | `draw.channel_current`, `draw.idle_current` | `A` | at least 0, else rule `non_negative` |
 | `draw.holds_above` | `V` | greater than 0, else rule `positive` |
 
-`dout` may be absent, and the chain then has no `DOUT`. `dout` without a `DOUT` pin, or a `DOUT` pin without `dout`, is `netlist.pins`. A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
+`dout` may be absent, and the chain then has no `DOUT`. `dout` without a `DOUT` pin, or a `DOUT` pin without `dout`, is `netlist.pins`. A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`. `min_supply` is optional; when given, below that `V(VCC) - V(GND)` the chain ignores `DIN`, clears to off (leaving only the faded idle draw, 0 A at 0 V) and releases `DOUT`, and picks up again from the next full frame once the supply returns.
 
 A `ws2812` has no `ratings` object and no `i`, `v`, or `p`. Its logic signal is `DIN`. It joins `DOUT` to `VCC` and to `GND` through the stage its drive stamps, and no other pins, so `VCC`, `GND` and `DIN` each need another DC path.
 
