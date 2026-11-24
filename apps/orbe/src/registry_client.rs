@@ -518,10 +518,10 @@ fn install_block(
 
 fn part_card(client: &mut Client, index: &Index, id: &str) -> Result<Done, Fail> {
     let rows = highest(index)?;
-    let names: Vec<String> = rows.keys().cloned().collect();
     let row = if let Some(row) = rows.get(id) {
         *row
     } else {
+        let names = listed_names(&rows);
         let matches = segments(id, &names);
         if matches.len() == 1 {
             *rows.get(&matches[0]).expect("the match is a row")
@@ -752,8 +752,15 @@ fn row_json(row: &Row) -> Value {
     value
 }
 
+fn listed_names(rows: &BTreeMap<String, &Row>) -> Vec<String> {
+    rows.iter()
+        .filter(|(_, row)| row.listed)
+        .map(|(name, _)| name.clone())
+        .collect()
+}
+
 fn unknown(id: &str, rows: &BTreeMap<String, &Row>, list: bool) -> Fail {
-    let names: Vec<String> = rows.keys().cloned().collect();
+    let names = listed_names(rows);
     let matches = segments(id, &names);
     // `orbe part` lists every close id, and every id a word is a segment of when several match.
     // `orbe add` names the one closest id, the same suggestion a typo in a scene gets.

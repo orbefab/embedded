@@ -619,6 +619,11 @@ fn run_tests(paths: &[PathBuf], verbose: bool, json: bool) -> ExitCode {
 
 fn print_report(report: &Report, verbose: bool) {
     let file = report.file.display();
+    let scene = if report.scenes.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", report.scenes.join(", "))
+    };
     if verbose {
         for line in &report.lines {
             println!("{file}:{}> {}", line.number, line.text);
@@ -628,17 +633,17 @@ fn print_report(report: &Report, verbose: bool) {
         }
     }
     if let Some(refused) = &report.refused {
-        println!("FAIL {file}");
+        println!("FAIL {file}{scene}");
         for text in refused.text().lines() {
             println!("  {text}");
         }
         return;
     }
     let Some(failure) = report.failure() else {
-        println!("PASS {file}");
+        println!("PASS {file}{scene}");
         return;
     };
-    println!("FAIL {file}:{}: {}", failure.number, failure.text);
+    println!("FAIL {file}:{}{scene}: {}", failure.number, failure.text);
     if !verbose {
         for text in failure.reply.text().lines() {
             println!("  {text}");
@@ -648,6 +653,12 @@ fn print_report(report: &Report, verbose: bool) {
 
 fn report_json(report: &Report, verbose: bool) -> Value {
     let mut entry = json!({ "file": report.file.display().to_string(), "ok": report.passed() });
+    if let Some(scene) = report.scene() {
+        entry["scene"] = json!(scene);
+    }
+    if report.scenes.len() > 1 {
+        entry["scenes"] = json!(report.scenes);
+    }
     if let Some(refused) = &report.refused {
         entry["error"] = refused.json()["error"].clone();
     }

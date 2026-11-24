@@ -341,7 +341,7 @@ fn serial_keeps_a_current_the_sketch_printed() {
     for _ in 0..30 {
         script.push_str("step 100us\n");
     }
-    script.push_str("snapshot\n");
+    script.push_str("expect serial contains \"I=0.25 A\"\nsnapshot\n");
     let dir = with_firmware("amp", &script);
     let json = replies_in(&dir);
     let texts: Vec<&str> = json
