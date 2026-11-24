@@ -6,9 +6,10 @@
 # cargo. It installs nothing. ORBE_SITE_INSTALL=1 shows install lines, once the repo and the
 # binaries are public, and copies scripts/install.sh to /orbe/install.sh. The footer links the
 # repo either way. The build writes apps/site/.wrangler/deploy/config.json, which points
-# wrangler at dist/orbefab_embedded/wrangler.json. That built config has the assets directory.
-# The source wrangler.jsonc does not, so wrangler does not start without the pointer. The
-# pointer is copied to dist/wrangler-deploy.json so a job that has only the build can put it back.
+# wrangler and `vite preview` at dist/orbefab_embedded/wrangler.json. That built config has
+# the assets directory; the source wrangler.jsonc does not, so neither server starts without
+# the pointer. The pointer is copied to dist/wrangler-deploy.json so a job that has only the
+# build can put it back.
 #
 # The Block firmware links the AVR runtime under the LGPL, so the site serves the runtime's source
 # beside it, at /orbe/sources/. The archive is the one packages/engine/scripts/sketches.sh
