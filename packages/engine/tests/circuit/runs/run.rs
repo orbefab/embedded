@@ -288,25 +288,11 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 0);
         } else if name == "esp32s3-touch" {
-            // Reads of RTCIO+0xa4 and RTCIO+0xa0, and the write of `I2C_CTR_REG` that changes
-            // bits the model keeps and does not run.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 3];
+            // Reads of RTCIO+0xa4 and RTCIO+0xa0. IDF's write of `I2C_CTR_REG` clears
+            // `RX_FULL_ACK_LEVEL`, which the model runs, so it is quiet.
+            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 2];
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
-            let kept: Vec<_> = doc["diagnostics"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|d| d["data"]["kept"] == true)
-                .collect();
-            assert_eq!(kept.len(), 1, "{name}: {}", doc["diagnostics"]);
-            assert_eq!(
-                kept.iter()
-                    .filter(|d| d["data"]["register"] == "I2C0+0x4")
-                    .count(),
-                1,
-                "{name}: {}",
-                doc["diagnostics"]
-            );
+            assert_kept_resets(&name, &doc, 0);
         } else if name == "esp32s3-timers" {
             // The read of USB_SERIAL_JTAG+0x18. UART0's early log is modeled, and the general
             // timers, the RNG and the SAR ADC are modeled, so arming T0, reading `WDEV_RND_REG`
