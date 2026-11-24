@@ -265,3 +265,85 @@ fn an_unpowered_or_floating_stick_latches_nothing_and_stays_off() {
     let reply = run(&mut powered, "expect @stick.px8 rgb(255,0,120)");
     assert!(reply.ok(), "powered px8: {}", reply.text());
 }
+
+#[test]
+fn power_loss_clears_latch_time_until_a_new_frame_latches() {
+    let scene = r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "firmware/rainbow.hex" },
+    "sw": { "type": "tactile-switch-6mm" },
+    "r1": { "type": "resistor-axial", "resistance": "470" },
+    "stick": { "type": "neopixel-stick-8" },
+  },
+  "wires": [
+    ["nano.D6", "r1.a"], ["r1.b", "stick.DIN"],
+    ["nano.5V", "sw.a"], ["sw.b", "stick.5V"],
+    ["nano.GND", "stick.GND"],
+  ],
+}"#;
+    let hex =
+        std::fs::read(repo().join("blocks/nano-neopixel-stick/build/rainbow.ino.hex")).unwrap();
+    let block = std::fs::read(repo().join("blocks/nano-neopixel-stick/block.jsonc")).unwrap();
+    let files = Files::memory([
+        ("block.jsonc".to_string(), block),
+        ("firmware/rainbow.hex".to_string(), hex),
+        ("scene.jsonc".to_string(), scene.as_bytes().to_vec()),
+    ])
+    .with_catalog(catalog());
+    let mut live = Live::new("t", files);
+    let open = live.run(&Command::Open(PathBuf::from("scene.jsonc")));
+    assert!(open.ok(), "{}", open.text());
+
+    assert!(run(&mut live, "press @sw").ok());
+    assert!(run(&mut live, "step 20ms").ok());
+    let powered = run(&mut live, "get @stick.px1.color");
+    assert!(
+        powered
+            .text()
+            .starts_with("stick.px1.color rgb(255,0,0) latched at "),
+        "{}",
+        powered.text()
+    );
+    let first_latched = powered.json()["data"]["value"]["latched_ps"]
+        .as_u64()
+        .unwrap();
+
+    // Open the supply switch: the rail drops and the pixel must read as never latched since then.
+    assert!(run(&mut live, "release @sw").ok());
+    assert!(run(&mut live, "step 5ms").ok());
+    let dropped = run(&mut live, "get @stick.px1.color");
+    assert_eq!(dropped.text(), "stick.px1.color rgb(0,0,0) not latched yet");
+    assert_eq!(dropped.json()["data"]["value"]["latched_ps"], json!(null));
+
+    // Close the switch again without a new frame: still not latched yet.
+    assert!(run(&mut live, "press @sw").ok());
+    assert!(run(&mut live, "step 5ms").ok());
+    let repowered = run(&mut live, "get @stick.px1.color");
+    assert_eq!(
+        repowered.text(),
+        "stick.px1.color rgb(0,0,0) not latched yet"
+    );
+    assert_eq!(repowered.json()["data"]["value"]["latched_ps"], json!(null));
+
+    // Reset the Nano so the sketch sends a fresh frame after power returned (past the 65 ms SUT).
+    assert!(run(&mut live, "press @nano.sw_reset").ok());
+    assert!(run(&mut live, "step 1ms").ok());
+    assert!(run(&mut live, "release @nano.sw_reset").ok());
+    assert!(run(&mut live, "step 80ms").ok());
+    let recovered = run(&mut live, "get @stick.px1.color");
+    assert!(
+        recovered
+            .text()
+            .starts_with("stick.px1.color rgb(255,0,0) latched at "),
+        "{}",
+        recovered.text()
+    );
+    let second_latched = recovered.json()["data"]["value"]["latched_ps"]
+        .as_u64()
+        .unwrap();
+    assert!(
+        second_latched > first_latched,
+        "second latch {second_latched} should be after first {first_latched}"
+    );
+}

@@ -903,12 +903,22 @@ fn a_chain_with_min_supply_ignores_data_unpowered_releases_dout_and_recovers() {
         vec![[0x11, 0x22, 0x33]]
     );
     assert!(
+        session.leds(&ring).unwrap().latched().is_some(),
+        "powered pixel should report a latch time"
+    );
+    assert!(
         session.probe().get(&dout0).unwrap().get() < 0.05,
         "powered DOUT should drive low"
     );
     session.advance_to(orbe_model::Time::from_ps(3_500_000_000));
-    // Unpowered: pixel clears to off and DOUT releases so the external 100k/100k divider sits at 2.5 V.
+    // Unpowered: pixel clears to off, latch time clears, and DOUT releases so the external
+    // 100k/100k divider sits at 2.5 V.
     assert_eq!(session.leds(&ring).unwrap().chain().pixels, vec![[0, 0, 0]]);
+    assert_eq!(
+        session.leds(&ring).unwrap().latched(),
+        None,
+        "unpowered pixel must clear its previous latch time"
+    );
     let released = session.probe().get(&dout0).unwrap().get();
     assert!(
         (released - 2.5).abs() < 0.05,

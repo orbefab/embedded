@@ -59,7 +59,8 @@ pub(crate) trait Hosted: Send + fmt::Debug {
     /// Each time what an LED chain shows changed, in time order. A core keeps every one only
     /// once [`keep_shown`](Self::keep_shown) asked it to, and otherwise the last alone.
     fn shown(&self) -> Vec<Shown>;
-    /// When what an LED chain shows last changed. `None` before the first change.
+    /// When what an LED chain shows last latched. `None` before the first latch or after power
+    /// loss cleared it.
     fn latched(&self) -> Option<Time>;
     /// Keeps every change of what an LED chain shows, for a run that writes them.
     fn keep_shown(&mut self);
@@ -105,10 +106,6 @@ impl History {
         self.0 = Some(Arc::new(Link { shown, before }));
     }
 
-    fn last(&self) -> Option<&Shown> {
-        self.0.as_deref().map(|link| &link.shown)
-    }
-
     /// Oldest first.
     fn to_vec(&self) -> Vec<Shown> {
         let mut all = Vec::new();
@@ -151,6 +148,9 @@ pub(crate) struct Hosting<D> {
     broke: [Option<Time>; ProtocolRule::ALL.len()],
     /// Shared with every copy, so a copy copies a pointer.
     shown: History,
+    /// When the LED chain last latched since power-on or the last power loss. Kept separate from
+    /// `shown` so `leds.csv` still holds earlier latches from a recorded run.
+    latched: Option<Time>,
     /// Whether `shown` keeps every change, or the last alone. A run that writes `leds.csv`
     /// keeps them all. A session that writes nothing needs only the last, and keeping every
     /// one would grow without bound in a long session.
@@ -172,6 +172,7 @@ impl<D: Device> Clone for Hosting<D> {
             device: self.device.clone(),
             broke: self.broke,
             shown: self.shown.clone(),
+            latched: self.latched,
             keep: self.keep,
             drawn: self.drawn.clone(),
             queued: self.queued.clone(),
@@ -187,6 +188,7 @@ impl<D: Device> Clone for Hosting<D> {
         if !self.shown.same(&source.shown) {
             self.shown = source.shown.clone();
         }
+        self.latched = source.latched;
         self.keep = source.keep;
         self.drawn.clone_from(&source.drawn);
         self.queued.clone_from(&source.queued);
@@ -200,6 +202,7 @@ impl<D: Device> Hosting<D> {
             device,
             broke: [None; ProtocolRule::ALL.len()],
             shown: History::default(),
+            latched: None,
             keep: false,
             drawn: Vec::new(),
             queued: None,
@@ -265,6 +268,11 @@ impl<D: Device> Hosting<D> {
         self.passed.take()
     }
 
+    /// Clears the current latch timestamp on power loss without dropping `shown` history.
+    pub(crate) fn clear_latched(&mut self) {
+        self.latched = None;
+    }
+
     #[inline]
     fn read(&mut self, at: Time, cx: Cx) {
         if cx.broken().is_some()
@@ -298,6 +306,7 @@ impl<D: Device> Hosting<D> {
                 bytes: Arc::from(bytes),
             };
             self.shown.push(shown, self.keep);
+            self.latched = Some(at);
         }
         if let Some(drawn) = cx.drawn() {
             assert!(
@@ -689,7 +698,7 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
     }
 
     fn latched(&self) -> Option<Time> {
-        self.dev.shown.last().map(|shown| shown.at)
+        self.dev.latched
     }
 
     fn keep_shown(&mut self) {

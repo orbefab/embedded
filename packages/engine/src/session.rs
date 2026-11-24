@@ -142,7 +142,7 @@ impl Leds<'_> {
     }
 
     /// When its colours last latched, which is when [`chain`](Self::chain) took them. `None`
-    /// before its first latch, while every LED shows the black of power-on.
+    /// before its first latch, or after power loss cleared them, while every LED shows black.
     pub fn latched(&self) -> Option<Time> {
         self.chain.latched()
     }

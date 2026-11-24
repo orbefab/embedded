@@ -851,11 +851,14 @@ fn power_loss_clears_latched_colours_and_lit_draw_and_recovers_on_next_frame() {
     );
     settle(&mut core, first_end + 2 * RES);
     assert_eq!(core.observed().pixels, vec![[0xFF, 0x80, 0x40]]);
+    let first_latch = reset_after(START, &first);
+    assert_eq!(core.hosted.latched(), Some(Time::from_ps(first_latch)));
     assert!((core.hosted.draw().amps - amps(1, 0xFF + 0x80 + 0x40)).abs() < 1e-15);
 
     let drop_at = first_end + 2 * RES;
     core.input(Time::from_ps(drop_at), &[false, false]);
     assert_eq!(core.observed().pixels, vec![[0, 0, 0]]);
+    assert_eq!(core.hosted.latched(), None);
     let redraw = core.run_until(Time::from_ps(drop_at + 10));
     assert_eq!(redraw.map(|s| s.at), Some(Time::from_ps(drop_at + 1)));
     assert!((core.hosted.draw().amps - amps(1, 0)).abs() < 1e-15);
@@ -863,6 +866,7 @@ fn power_loss_clears_latched_colours_and_lit_draw_and_recovers_on_next_frame() {
     let restore_at = drop_at + 1_000_000;
     settle(&mut core, restore_at);
     core.input(Time::from_ps(restore_at), &[false, true]);
+    assert_eq!(core.hosted.latched(), None);
     let second_start = restore_at + 1_000_000;
     let second_end = end(second_start, &second);
     settle(&mut core, second_end);
@@ -873,7 +877,10 @@ fn power_loss_clears_latched_colours_and_lit_draw_and_recovers_on_next_frame() {
         Time::from_ps(second_end),
     );
     settle(&mut core, second_end + 2 * RES);
+    let second_latch = reset_after(second_start, &second);
     assert_eq!(core.observed().pixels, vec![[0x10, 0x20, 0x30]]);
+    assert_eq!(core.hosted.latched(), Some(Time::from_ps(second_latch)));
+    assert_eq!(latch_times(&core), vec![first_latch, second_latch]);
     assert!((core.hosted.draw().amps - amps(1, 0x10 + 0x20 + 0x30)).abs() < 1e-15);
     assert_eq!(core.broke(), None);
 }

@@ -453,6 +453,7 @@ impl<D: PulseTarget> Port<D> for Pulse<D> {
                 self.powered = false;
                 self.line = Line::Fresh;
                 self.idle_at = None;
+                dev.clear_latched();
                 if let Some(relay) = &mut self.relay {
                     relay.edges.clear();
                     relay.due.clear();
