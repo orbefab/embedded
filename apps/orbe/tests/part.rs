@@ -6,6 +6,8 @@ use std::process::Command;
 
 use serde_json::Value;
 
+#[path = "../../../packages/scene/tests/common/mod.rs"]
+mod common;
 #[path = "registry_env.rs"]
 mod registry_env;
 
@@ -245,6 +247,27 @@ fn part_says_how_it_plugs_into_a_breadboard() {
         ),
         "{}",
         text("zener-1n4733a")
+    );
+    assert!(
+        text("esp32s3-devkitc-1").contains(
+            "plugs into a breadboard: name one pin's hole with on, such as \"on\": { \"GPIO3\": \"bb.c21\" }, \"rotate\": [0, 0, 90], and orbe seats the other leads\n"
+        ),
+        "{}",
+        text("esp32s3-devkitc-1")
+    );
+    assert!(
+        text("neopixel-stick-8").contains(
+            "plugs into a breadboard: name one pin's hole with on, such as \"on\": { \"GND\": \"bb.c21\" }, \"rotate\": [0, 0, 90], and orbe seats the other leads\n"
+        ),
+        "{}",
+        text("neopixel-stick-8")
+    );
+    assert!(
+        text("tactile-switch-6mm").contains(
+            "plugs into a breadboard: name one pin's hole with on, such as \"on\": { \"b\": \"bb.d1\" }, \"rotate\": [0, 0, 90], and orbe seats the other leads\n"
+        ),
+        "{}",
+        text("tactile-switch-6mm")
     );
 
     let (code, stdout, stderr) = orbe(&["part", "led-5mm", "--json"]);
@@ -530,4 +553,176 @@ fn a_null_rating_prints_unrated() {
     assert_eq!(ratings.as_array().unwrap().len(), 1);
     assert_eq!(ratings[0]["name"], "power");
     assert!(ratings[0]["value"].is_null());
+}
+
+/// Every catalog part whose card prints a breadboard seating line seats as printed on a
+/// breadboard-830 (or the board the card names) with no layout error and no placement warning.
+#[test]
+fn every_part_card_breadboard_line_seats_as_printed() {
+    let repo = common::repo();
+    let parts_dir = repo.join("parts");
+    let mut ids: Vec<String> = fs::read_dir(&parts_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|id| parts_dir.join(id).join("part.jsonc").is_file())
+        .collect();
+    ids.sort();
+
+    let cache = tempfile::tempdir().unwrap();
+    let registry = registry_env::template();
+    let run_part = |args: &[&str]| -> (i32, String, String) {
+        let output = Command::new(env!("CARGO_BIN_EXE_orbe"))
+            .args(args)
+            .env("ORBE_REGISTRY", &registry)
+            .env("XDG_CACHE_HOME", cache.path())
+            .output()
+            .unwrap();
+        (
+            output.status.code().unwrap(),
+            String::from_utf8(output.stdout).unwrap(),
+            String::from_utf8(output.stderr).unwrap(),
+        )
+    };
+
+    let project = common::project("nano-button");
+    let devkitc_build = repo.join("blocks/devkitc-button-led/build");
+    fs::copy(
+        devkitc_build.join("button.ino.bin"),
+        project.path().join("build/button.ino.bin"),
+    )
+    .unwrap();
+    fs::copy(
+        devkitc_build.join("button.ino.partitions.bin"),
+        project.path().join("build/button.ino.partitions.bin"),
+    )
+    .unwrap();
+
+    let mut checked = Vec::new();
+    let mut failures = Vec::new();
+    for id in &ids {
+        let (code, stdout, stderr) = run_part(&["part", id]);
+        assert_eq!(code, 0, "{id}: {stderr}");
+        let Some(line) = stdout
+            .lines()
+            .find(|line| line.starts_with("plugs into a breadboard:"))
+        else {
+            continue;
+        };
+        checked.push(id.as_str());
+
+        let Some(after) = line.split("such as ").nth(1) else {
+            failures.push(format!("{id}: no `such as ` in `{line}`"));
+            continue;
+        };
+        let Some(snippet) = after.split(", and orbe seats").next() else {
+            failures.push(format!("{id}: no `, and orbe seats` in `{line}`"));
+            continue;
+        };
+        let layout_entry: Value = match serde_json::from_str(&format!("{{ {snippet} }}")) {
+            Ok(value) => value,
+            Err(err) => {
+                failures.push(format!("{id}: invalid layout snippet `{snippet}`: {err}"));
+                continue;
+            }
+        };
+
+        let board = if line.contains("breadboard-400") {
+            "breadboard-400"
+        } else {
+            "breadboard-830"
+        };
+
+        let card = serde_json::to_value(orbe_scene::card(&parts_dir, id).unwrap()).unwrap();
+        let mut part_spec = serde_json::Map::new();
+        part_spec.insert("type".into(), Value::String(id.clone()));
+        if let Some(params) = card["params"].as_array() {
+            for param in params {
+                if param["required"].as_bool() != Some(true) {
+                    continue;
+                }
+                let name = param["name"].as_str().unwrap();
+                let value = match name {
+                    "firmware" => Value::String("build/button.ino.hex".into()),
+                    "app" => Value::String("build/button.ino.bin".into()),
+                    "partitions" => Value::String("build/button.ino.partitions.bin".into()),
+                    _ => param["example"].clone(),
+                };
+                assert!(
+                    !value.is_null(),
+                    "{id}: required param `{name}` has no example in card"
+                );
+                part_spec.insert(name.into(), value);
+            }
+        }
+
+        let part_text = fs::read_to_string(parts_dir.join(id).join("part.jsonc")).unwrap();
+        let has_ground = orbe_scene::names_ground(&part_text);
+        let mut parts = serde_json::Map::new();
+        parts.insert("bb".into(), serde_json::json!({ "type": board }));
+        parts.insert("dut".into(), Value::Object(part_spec));
+        let mut layout = serde_json::Map::new();
+        layout.insert("bb".into(), serde_json::json!({ "at": [0, 0, 0] }));
+        layout.insert("dut".into(), layout_entry);
+        let mut scene = serde_json::Map::new();
+        scene.insert("format".into(), serde_json::json!(1));
+        if !has_ground {
+            parts.insert(
+                "ref_gnd".into(),
+                serde_json::json!({ "type": "resistor-axial", "resistance": "10k" }),
+            );
+            layout.insert("ref_gnd".into(), serde_json::json!({ "at": [200, 0, 0] }));
+            scene.insert("ground".into(), serde_json::json!("ref_gnd.a"));
+        }
+        scene.insert("parts".into(), Value::Object(parts));
+        scene.insert("layout".into(), Value::Object(layout));
+
+        let scene_path = project.path().join("scene.jsonc");
+        fs::write(&scene_path, serde_json::to_string_pretty(&scene).unwrap()).unwrap();
+
+        let output = Command::new(env!("CARGO_BIN_EXE_orbe"))
+            .args(["lint", "scene.jsonc", "--json"])
+            .current_dir(project.path())
+            .output()
+            .unwrap();
+        let lint_out = String::from_utf8(output.stdout).unwrap();
+        let lint_err = String::from_utf8(output.stderr).unwrap();
+        let envelope: Value = serde_json::from_str(&lint_out)
+            .unwrap_or_else(|e| panic!("{id}: bad lint json ({e}): {lint_out}{lint_err}"));
+        if envelope["ok"] != true {
+            failures.push(format!("{id}: failed to load ({line})\n  {lint_out}"));
+            continue;
+        }
+        let bad: Vec<&Value> = envelope["data"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|d| {
+                matches!(
+                    d["code"].as_str(),
+                    Some(
+                        "scene.unplaced" | "scene.shorted" | "scene.covered_hole" | "scene.overlap"
+                    )
+                )
+            })
+            .collect();
+        if !bad.is_empty() {
+            failures.push(format!(
+                "{id}: lint warnings ({line})\n  {}",
+                serde_json::to_string_pretty(&bad).unwrap()
+            ));
+        }
+    }
+
+    assert!(
+        checked.contains(&"esp32s3-devkitc-1")
+            && checked.contains(&"tactile-switch-6mm")
+            && checked.contains(&"neopixel-stick-8"),
+        "checked parts: {checked:?}"
+    );
+    assert!(
+        failures.is_empty(),
+        "{} part card(s) failed to seat as printed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
 }

@@ -160,6 +160,7 @@ impl Bridge {
         Sent {
             start: time(train.start),
             end: time(train.end),
+            peripheral: "RMT",
             pin: pin(train.pad).expect("a pad with a net has a pin"),
             kind: SentKind::Pulses {
                 pulses: Pulses {
@@ -192,6 +193,7 @@ impl Bridge {
                 Some(Sent {
                     start: time(flight.start),
                     end,
+                    peripheral: "RMT",
                     pin: pin(pad)?,
                     kind: SentKind::Pulses {
                         pulses: Pulses {
@@ -210,6 +212,7 @@ impl Bridge {
         Sent {
             start: time(duty.at),
             end: time(duty.at),
+            peripheral: "LEDC",
             pin: pin(duty.pad).expect("a pad with a net has a pin"),
             kind: SentKind::Duty {
                 duty: orbe_model::Duty {
@@ -236,6 +239,7 @@ impl Bridge {
         Sent {
             start: time(transfer.start),
             end: time(transfer.end),
+            peripheral: "SPI2",
             pin: pads.cs.and_then(pin).unwrap_or("SPI2"),
             kind: SentKind::Spi {
                 spi: Spi {
@@ -440,6 +444,7 @@ impl Mcu for Bridge {
                     Refused::Register(peripheral, setting) => {
                         (peripheral, mcu::Setting::Register(setting))
                     }
+                    Refused::Unsimulated(block, what) => (block, mcu::Setting::Unsimulated(what)),
                     Refused::Sleep => ("RTC_CNTL", mcu::Setting::Sleep),
                 };
                 mcu::Fault::UnsupportedSetting {
@@ -462,6 +467,7 @@ impl Mcu for Bridge {
                 use mcu::FlashRefusal as To;
                 let (command, reason) = match refusal {
                     FlashRefusal::Command(command) => (Some(command), To::Unsupported),
+                    FlashRefusal::Write(command) => (Some(command), To::Write),
                     FlashRefusal::StatusWrite(command) => (Some(command), To::StatusWrite),
                     FlashRefusal::NoCommandPhase => (None, To::NoCommandPhase),
                     FlashRefusal::StartBits => (None, To::StartBits),

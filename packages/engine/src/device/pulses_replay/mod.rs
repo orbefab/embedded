@@ -56,6 +56,7 @@ pub(crate) fn chip(part: PartId, replay: &PulsesReplay) -> Chip {
             seq,
             start: event.at,
             end: event.end,
+            peripheral: "pulses_replay",
             pin: PulsesReplay::PINS[OUT],
             kind: RecordKind::Pulses {
                 pulses: Pulses {

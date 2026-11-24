@@ -10,6 +10,7 @@ mod limits;
 mod link;
 mod pulse;
 mod replay;
+mod route;
 mod serial;
 mod session;
 mod spi;

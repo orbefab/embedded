@@ -60,7 +60,39 @@ oled         packages/scene/tests/fixtures/esp32s3-stock-oled
              app 337504 58197082b61635e95ed994f395ada8d8bf38fb7c5eaac78d36aaed1a799704a3
 rmtstrip     packages/scene/tests/fixtures/esp32s3-stock-rmtstrip
              app 298496 1a93820b57033f425268872709911bc64de1853cf22769b3ddafbe5b44b159a7
+rtcio        packages/scene/tests/fixtures/esp32s3-stock-rtcio
+             app 315184 9eb9c6d76353c1038fb0d70117469ee9a5f1f0be5b8fe802257a3718f341ef0c
 wire         packages/scene/tests/fixtures/esp32s3-stock-wire
              app 300256 005108713604bb60ed3d3d4099dbf7ebd049f7921e5c20610e418baed80bfb7e
 wirelong     packages/scene/tests/fixtures/esp32s3-stock-wirelong
-             app 300528 8092db5aae86b0199bc7a67a1a89dfb1c734d47856693db5a084bec3406925d0
+             app 300528 8092db5aae86b0199bc7a67a1a89dfb1c734d47856693db5a084bec3406925d
+tone         packages/scene/tests/fixtures/esp32s3-stock-tone
+             app 282240 0dae8c2b3ce0f0ecbf55d41b8bd57f435840e314b30dec5c4524137ab688fb13
+ledcdetach   packages/scene/tests/fixtures/esp32s3-stock-ledcdetach
+             app 309488 981aa0265571dd5cd40926d6626ec9660e977a4c5013275f74109ef3330a9024
+ledcfade     packages/scene/tests/fixtures/esp32s3-stock-ledcfade
+             app 285264 a24e84feda184f578693234ea90c6f5ca60bbb2a34ae95e7c9f8571f6d64aacc
+tonerestart  packages/scene/tests/fixtures/esp32s3-stock-tonerestart
+             app 282288 e7f978f638d0ecb1541529ab92102b02cbadadf69013f73b3cf824b25004bb70
+ledcreattach packages/scene/tests/fixtures/esp32s3-stock-ledcreattach
+             app 281344 68f5b9f342f3af594d3eb0e4f9e249f7b4d01bd7105714a8f4ae6c8ca08a7a29
+ledcfadedetach packages/scene/tests/fixtures/esp32s3-stock-ledcfadedetach
+             app 313744 1f7b94a9173821b3ec89c3616fe35eb1703d3ca98461b0c47dc33cd4deb426a6
+melody       packages/scene/tests/fixtures/esp32s3-stock-melody
+             app 282560 16c3352c337b30dcfd8bba79829aa2015c9c445412e960e700b9f3c780a96ee30
+tonemelody   packages/scene/tests/fixtures/esp32s3-stock-tonemelody
+             app 282416 c4723e4f26049a16ba4fa0eb1550993e5ef6a7b428a52bfd4ed4c5ef45cdc382
+ledctone     packages/scene/tests/fixtures/esp32s3-stock-ledctone
+             app 281744 19f504b0a8badd40ccd2dac5344381087169a67057367de12f4e3c781dda8697
+ledcfreq     packages/scene/tests/fixtures/esp32s3-stock-ledcfreq
+             app 281744 53970be2b166bc0442b7930254f9bc6ddb6411ee17c9092751f46e18cf79dac7
+ledcshared   packages/scene/tests/fixtures/esp32s3-stock-ledcshared
+             app 281760 9f0074f1a930e9a5550c0b0287f224c5166816fe6ca25831713b29709bc5be41
+ledcres      packages/scene/tests/fixtures/esp32s3-stock-ledcres
+             app 282128 27de7a70f64c1da8062c871c1236b3cc0793416f51f35215d8596c456689fafc
+tonefast     packages/scene/tests/fixtures/esp32s3-stock-tonefast
+             app 282320 28d7a572fd714878c2d07eb534772dd4642de3bc7299fa3b7997d4eaf5918780
+wirenack     packages/scene/tests/fixtures/esp32s3-stock-wirenack
+             app 300864 dd894379fad6922c13025abefffa80272acf7cb8bc441d85b2f83bbd7091e6e4
+wirenackother packages/scene/tests/fixtures/esp32s3-stock-wirenackother
+             app 300832 31b41add3033f4444f805352fcece6bc127fd38ec19e9b4ab4b1bd719c9b1800

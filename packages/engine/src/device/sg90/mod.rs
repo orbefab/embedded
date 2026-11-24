@@ -57,6 +57,7 @@ pub(crate) fn chip(part: PartId, dev: &Sg90) -> Chip {
             spi: None,
             duty: None,
             pulses: Some(pins[SIGNAL]),
+            pulses_pin: Some(SIGNAL),
         },
         core: Core::Device(Box::new(Native::new(device, Pulse::new(), 0))),
     }

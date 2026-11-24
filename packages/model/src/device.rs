@@ -35,6 +35,12 @@ pub trait Device: State {
     /// Volt. Below this supply the host stamps every output off. [`Device::drive`] still
     /// reports the logical level. `None` drives at any supply.
     const MIN_SUPPLY_V: Option<f64> = None;
+    /// Volt. Below this supply the host stamps every output off. Defaults to
+    /// [`MIN_SUPPLY_V`](Self::MIN_SUPPLY_V), so a device whose floor comes from its part params
+    /// can override it.
+    fn min_supply_v(&self) -> Option<f64> {
+        Self::MIN_SUPPLY_V
+    }
     /// The host reads this device's samples at every accepted step, so a supply it follows
     /// is the voltage of that step and not a clock of its own.
     const TRACKS_SUPPLY: bool = false;

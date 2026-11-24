@@ -50,7 +50,7 @@ fn each_format_5_key_before_format_5_is_told_to_set_format_5() {
                 "ratings.power.basis",
             ],
         ),
-        ("sk68xxmini-hs", "ws2812", &["draw"]),
+        ("sk68xxmini-hs", "ws2812", &["draw", "min_supply"]),
     ] {
         let found = findings(&in_format_4(id));
         let mut found: Vec<(Code, String, String)> = found
