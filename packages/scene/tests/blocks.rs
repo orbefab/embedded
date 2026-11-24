@@ -91,6 +91,7 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
             "nano-oled" => {
                 "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND BSD-2-Clause"
             }
+            "nano-lcd1602-i2c" => "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND MIT",
             _ => "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
         };
         assert_eq!(

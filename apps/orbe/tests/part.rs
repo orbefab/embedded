@@ -339,6 +339,7 @@ fn search_finds_a_block_and_part_describes_it() {
         "devkitc-button-led",
         "nano-7seg-count",
         "nano-button-led",
+        "nano-lcd1602-i2c",
         "nano-led-fade",
         "nano-light-comparator",
         "nano-neopixel-stick",

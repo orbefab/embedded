@@ -344,7 +344,7 @@ function searchNames(query: string): string[] {
 
 const PART_IDS = registryIds("part");
 // Display parts join the browser sample once a release tag includes them.
-const DISPLAY_CANDIDATES = ["oled-ssd1306-128x64", "display-7seg-cc"] as const;
+const DISPLAY_CANDIDATES = ["oled-ssd1306-128x64", "lcd1602-i2c", "display-7seg-cc"] as const;
 const BROWSER_PART_IDS = [
   "resistor-axial",
   "led-5mm",

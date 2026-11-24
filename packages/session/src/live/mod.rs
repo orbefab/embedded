@@ -31,8 +31,8 @@ use crate::command::{Command, ParamSet, Step, WorldSet};
 use crate::condition::Unit;
 use crate::duration::Duration;
 use crate::reply::{
-    Code, Colors, Data, Diagnostic, Error, Finding, Got, Level, PartState, Reading, Reply, Screen,
-    Snapshot, State, Stepped,
+    Code, Colors, Data, Diagnostic, Error, Finding, Got, LcdText, Level, PartState, Reading, Reply,
+    Screen, Snapshot, State, Stepped,
 };
 use crate::target::{
     Ref, Target, live_params, names, one_engine, reports_hint, resolve, rgb_reading,
@@ -967,6 +967,22 @@ impl Open {
                 format!("{path}.{reading}"),
                 Reading::Screen(self.screen(&engine)),
             ),
+            Target::Text {
+                path,
+                reading,
+                engine,
+            } => (
+                format!("{path}.{reading}"),
+                Reading::Text(self.lcd_text(&engine)),
+            ),
+            Target::Backlight {
+                path,
+                reading,
+                engine,
+            } => (
+                format!("{path}.{reading}"),
+                Reading::Backlight(self.lcd_backlight(&engine)),
+            ),
             Target::Digit { path } => (
                 format!("{path}.digit"),
                 Reading::Shown(self.shown_digit(&path)?),
@@ -1123,6 +1139,33 @@ impl Open {
                 .map(|(name, value)| (name.to_string(), value))
                 .collect(),
         }
+    }
+
+    /// The visible 16×2 character lines of an `hd44780_i2c` engine part.
+    pub(super) fn lcd_text(&self, engine: &str) -> LcdText {
+        let display = self
+            .engine
+            .display(&engine_name(engine))
+            .expect("a part with a reading of text is a character LCD");
+        let panel = display.panel();
+        let frame = display.image();
+        let lines = orbe_engine::device::hd44780_i2c::visible_lines(&panel, &frame);
+        let backlight = orbe_engine::device::hd44780_i2c::backlight_on(&panel);
+        let on = orbe_engine::device::hd44780_i2c::text_visible(&panel);
+        LcdText {
+            lines,
+            on,
+            backlight,
+        }
+    }
+
+    /// Whether an `hd44780_i2c` engine part's backlight is lit.
+    pub(super) fn lcd_backlight(&self, engine: &str) -> bool {
+        let display = self
+            .engine
+            .display(&engine_name(engine))
+            .expect("a part with a reading of backlight is a character LCD");
+        orbe_engine::device::hd44780_i2c::backlight_on(&display.panel())
     }
 
     /// A part's light state, its brightness, its colours, its relay contact, and its engine

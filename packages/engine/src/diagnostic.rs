@@ -203,10 +203,14 @@ pub enum ProtocolRule {
     Scroll,
     /// A read transfer from a target that answers none.
     Read,
+    /// An HD44780 operation attempted in 8-bit bus mode over a 4-bit PCF8574 backpack.
+    BusWidth,
+    /// A 5×10 font selection on a 5×8 character LCD.
+    Font,
 }
 
 impl ProtocolRule {
-    pub(crate) const ALL: [ProtocolRule; 9] = [
+    pub(crate) const ALL: [ProtocolRule; 11] = [
         ProtocolRule::Command,
         ProtocolRule::PixelFormat,
         ProtocolRule::SdaWhileSclHigh,
@@ -216,6 +220,8 @@ impl ProtocolRule {
         ProtocolRule::SupplySag,
         ProtocolRule::Scroll,
         ProtocolRule::Read,
+        ProtocolRule::BusWidth,
+        ProtocolRule::Font,
     ];
 
     /// Its place in [`ALL`](Self::ALL).
@@ -235,6 +241,8 @@ impl ProtocolRule {
             "supply_sag" => Some(ProtocolRule::SupplySag),
             "scroll" => Some(ProtocolRule::Scroll),
             "read" => Some(ProtocolRule::Read),
+            "bus_width" => Some(ProtocolRule::BusWidth),
+            "font" => Some(ProtocolRule::Font),
             _ => None,
         }
     }
@@ -1348,6 +1356,30 @@ impl Diagnostic {
                 format!(
                     "{part} answered a read with 0xFF bytes, breaking rule {} at {} ps, the first time",
                     rule_text(&ProtocolRule::Read),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::BusWidth,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} dropped an 8-bit bus operation on a 4-bit backpack, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::BusWidth),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::Font,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} does not run the 5x10 font, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::Font),
                     at.as_ps()
                 )
             }

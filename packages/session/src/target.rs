@@ -104,6 +104,18 @@ pub enum Target {
         reading: String,
         engine: String,
     },
+    /// The visible text lines of a character LCD, by its reading `"of": "text"`.
+    Text {
+        path: String,
+        reading: String,
+        engine: String,
+    },
+    /// The backlight state of a character LCD, by its reading `"of": "backlight"`.
+    Backlight {
+        path: String,
+        reading: String,
+        engine: String,
+    },
     /// A param the part file declares, live or fixed for the run.
     Param {
         path: String,
@@ -143,6 +155,55 @@ pub(crate) fn screen_reading(part: &MapPart) -> Option<&str> {
         .iter()
         .find(|(_, reading)| reading.of == "screen")
         .map(|(name, _)| name.as_str())
+}
+
+/// The name of the part's reading `"of": "text"`, the visible text on its character LCD.
+pub(crate) fn text_reading(part: &MapPart) -> Option<&str> {
+    part.readings
+        .iter()
+        .find(|(_, reading)| reading.of == "text")
+        .map(|(name, _)| name.as_str())
+}
+
+/// The name of the part's reading `"of": "backlight"`, whether its LCD backlight is lit.
+pub(crate) fn backlight_reading(part: &MapPart) -> Option<&str> {
+    part.readings
+        .iter()
+        .find(|(_, reading)| reading.of == "backlight")
+        .map(|(name, _)| name.as_str())
+}
+
+/// The one character-LCD engine part (`hd44780_i2c`) at `path` or among its descendants.
+pub(crate) fn lcd_engine(map: &RefMap, path: &str) -> Result<String, Error> {
+    let mut found = Vec::new();
+    collect_kind(map, path, "hd44780_i2c", &mut found);
+    match found.as_slice() {
+        [one] => Ok(one.clone()),
+        [] => Err(Error::new(
+            Code::NoReading,
+            format!("`{path}` has no character LCD engine part"),
+            "read text or backlight from a character LCD part or module".to_string(),
+        )),
+        many => Err(Error::new(
+            Code::NoReading,
+            format!("`{path}` holds {} character LCD parts", many.len()),
+            "name one character LCD part".to_string(),
+        )),
+    }
+}
+
+fn collect_kind(map: &RefMap, path: &str, kind: &str, out: &mut Vec<String>) {
+    let Some(part) = map.parts.get(path) else {
+        return;
+    };
+    for engine in &part.engine {
+        if engine.kind == kind {
+            out.push(engine.name.clone());
+        }
+    }
+    for child in &part.children {
+        collect_kind(map, &format!("{path}.{child}"), kind, out);
+    }
 }
 
 pub(crate) const QUANTITIES: [Quantity; 8] = [
@@ -211,6 +272,22 @@ pub fn resolve(
         if last && screen_reading(part) == Some(seg.as_str()) {
             let engine = one_engine(&path, part, Code::NoReading)?;
             return Ok(Target::Screen {
+                path,
+                reading: seg.clone(),
+                engine,
+            });
+        }
+        if last && text_reading(part) == Some(seg.as_str()) {
+            let engine = lcd_engine(map, &path)?;
+            return Ok(Target::Text {
+                path,
+                reading: seg.clone(),
+                engine,
+            });
+        }
+        if last && backlight_reading(part) == Some(seg.as_str()) {
+            let engine = lcd_engine(map, &path)?;
+            return Ok(Target::Backlight {
                 path,
                 reading: seg.clone(),
                 engine,
@@ -318,6 +395,12 @@ pub(crate) fn names(part: &MapPart, reported: &[Quantity]) -> String {
         found.push(reading.to_string());
     }
     if let Some(reading) = screen_reading(part) {
+        found.push(reading.to_string());
+    }
+    if let Some(reading) = text_reading(part) {
+        found.push(reading.to_string());
+    }
+    if let Some(reading) = backlight_reading(part) {
         found.push(reading.to_string());
     }
     let live = live_params(part);

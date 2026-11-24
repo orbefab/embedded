@@ -1,0 +1,24 @@
+// A Nano drives a blue 16x2 character LCD with a PCF8574 I2C backpack at 5 V. The Nano
+// straddles the centre channel over columns 1 to 15. On the a to e side A4 (SDA) is column 8,
+// A5 (SCL) column 9, 5V column 12 and GND column 14. The LCD module's 4-pin header (GND, VCC,
+// SDA, SCL) plugs into j17 to j20 so the display sits clear of the Nano and the wired holes.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "build/hello.ino.hex" },
+    "lcd": { "type": "lcd1602-i2c" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "lcd": { "on": { "GND": "bb.j17" } }, // VCC in j18, SDA in j19, SCL in j20
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["bb.a14", "bb.f17"], // GND
+    ["bb.a12", "bb.f18"], // 5V to VCC
+    ["bb.a8", "bb.f19"], // A4 to SDA
+    ["bb.a9", "bb.f20"], // A5 to SCL
+  ],
+}

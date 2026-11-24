@@ -14,10 +14,11 @@ use std::path::Path;
 
 use live::{common, orbe};
 
-const BLOCKS: [&str; 11] = [
+const BLOCKS: [&str; 12] = [
     "devkitc-button-led",
     "nano-7seg-count",
     "nano-button-led",
+    "nano-lcd1602-i2c",
     "uno-button-led",
     "nano-led-fade",
     "nano-light-comparator",
@@ -88,6 +89,7 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
         // Block a servo and the DevKitC-1 Block its board's own LED. The others light a 5 mm LED.
         let marker = match id {
             "nano-7seg-count" => "display-7seg-cc",
+            "nano-lcd1602-i2c" => "lcd1602-i2c",
             "nano-neopixel-stick" => "neopixel-stick-8",
             "nano-oled" => "oled-ssd1306-128x64",
             "devkitc-button-led" => "esp32s3-devkitc-1",

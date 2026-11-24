@@ -1,0 +1,105 @@
+// The common blue 16x2 character LCD (1602A) with a PCF8574 I2C backpack.
+// Seated frame: z = 0 is the 4-pin header plastic's underside (GND, VCC, SDA, SCL on 2.54 mm).
+// The backpack PCB sits at z = 5.5 mm (top at z = 7.1 mm) with two 4.7 kohm I2C pull-ups and a
+// 10 kohm contrast trimmer potentiometer, and the 1602A panel mounts above it at z = 12.5 mm.
+{
+  "format": 6,
+  "part": "lcd1602-i2c",
+  "version": "0.1.0",
+  "title": "LCD display module, 16 x 2 blue, HD44780 + PCF8574 I2C",
+  "summary": "A blue 16 x 2 character LCD with a PCF8574 I2C backpack and a 4-pin header (GND, VCC, SDA, SCL on 2.54 mm). Wire VCC directly to 5 V and GND to ground; the backpack includes 4.7 kohm pull-ups on SDA and SCL to VCC, a 10 kohm contrast trimmer, a backlight jumper (`backlight_jumper`, default \"on\"), and address jumpers (`address`, default \"0x27\", selectable \"0x20\" to \"0x27\"). Draws about 1.5 mA for logic plus 20 mA with the backlight on. Read the two visible 16-character lines with `@<lcd>.text` (blank when the display or backlight is off, matching the blue transmissive glass) and the backlight with `@<lcd>.backlight`. Standard LiquidCrystal_I2C sketches drive it.",
+  "tags": ["lcd", "1602", "16x2", "hd44780", "pcf8574", "display", "screen", "i2c", "backpack"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Hitachi HD44780U (ADE-207-272)": "https://www.sparkfun.com/datasheets/LCD/HD44780.pdf",
+    "NXP PCF8574": "https://www.nxp.com/docs/en/data-sheet/PCF8574_PCF8574A.pdf",
+    "NXP UM10204 Rev. 7.0": "https://www.nxp.com/docs/en/user-guide/UM10204.pdf",
+  },
+  "real": {
+    "generic": true,
+    "maker": "Hitachi",
+    "number": "1602A + PCF8574",
+    "datasheet": "Hitachi HD44780U (ADE-207-272)",
+  },
+  "uses": {
+    "hd44780-1602-i2c": "0.1.0",
+    "pin-header-1x4": "0.1.0",
+    "resistor-0603": "0.2.0",
+    "trimmer-3362p": "0.2.1",
+  },
+  "params": {
+    "address": { "default": "0x27" },
+    "backlight_jumper": { "default": "on" },
+  },
+  "parts": {
+    "j": { "type": "pin-header-1x4" },
+    "display": {
+      "type": "hd44780-1602-i2c",
+      "address": { "param": "address" },
+      "backlight_jumper": { "param": "backlight_jumper" },
+    },
+    "r1": {
+      "type": "resistor-0603",
+      "resistance": {
+        "value": 4700,
+        "unit": "ohm",
+        "source": { "closed_form": { "note": "standard 4.7 kohm I2C SDA pull-up on the PCF8574 backpack" } },
+      },
+    },
+    "r2": {
+      "type": "resistor-0603",
+      "resistance": {
+        "value": 4700,
+        "unit": "ohm",
+        "source": { "closed_form": { "note": "standard 4.7 kohm I2C SCL pull-up on the PCF8574 backpack" } },
+      },
+    },
+    "contrast": {
+      "type": "trimmer-3362p",
+      "resistance": {
+        "value": 10000,
+        "unit": "ohm",
+        "source": { "closed_form": { "note": "standard 10 kohm contrast trimmer potentiometer on the PCF8574 backpack" } },
+      },
+    },
+  },
+  "wires": [
+    ["j.1", "display.GND", { "kind": "trace" }],
+    ["j.2", "display.VCC", { "kind": "trace" }],
+    ["j.3", "display.SDA", { "kind": "trace" }],
+    ["j.4", "display.SCL", { "kind": "trace" }],
+    ["j.2", "r1.a", { "kind": "trace" }],
+    ["j.3", "r1.b", { "kind": "trace" }],
+    ["j.2", "r2.a", { "kind": "trace" }],
+    ["j.4", "r2.b", { "kind": "trace" }],
+    ["j.2", "contrast.a", { "kind": "trace" }],
+    ["j.1", "contrast.b", { "kind": "trace" }],
+    ["contrast.wiper", "display.V0", { "kind": "trace" }],
+  ],
+  "layout": {
+    "j": { "at": [0, -16.5, 0] },
+    "display": { "at": [0, 0, 12.5] },
+    "r1": { "at": [-10.0, -11.0, 7.1] },
+    "r2": { "at": [-10.0, -9.0, 7.1] },
+    "contrast": { "at": [13.5, -8.5, 7.1] },
+  },
+  "pins": { "GND": "j.1", "VCC": "j.2", "SDA": "j.3", "SCL": "j.4" },
+  "readings": {
+    "text": { "of": "text" },
+    "backlight": { "of": "backlight" },
+  },
+  "not_simulated": [
+    {
+      "what": "contrast pot effect on glass",
+      "why": "The 10 kohm contrast trimmer loads VCC to GND and its rotor turns in 3D, while the glass renders at fixed readable contrast.",
+    },
+    {
+      "what": "blue transmissive visibility",
+      "why": "On a blue negative transmissive 1602 LCD, characters are only visible when both the display and the backlight are on. `@<lcd>.text` is blank when either is off.",
+    },
+    {
+      "what": "backpack power LED",
+      "why": "The small red power indicator LED on the back of the PCF8574 backpack is omitted.",
+    },
+  ],
+}
