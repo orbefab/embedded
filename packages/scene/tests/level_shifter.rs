@@ -119,8 +119,8 @@ fn scl_period_ps(trace: &Trace) -> u64 {
     periods[periods.len() / 2]
 }
 
-#[test]
-fn a_nano_reads_a_3v3_touch_controller_through_the_module() {
+/// The Nano reading the `cst816` through the module for 40 ms, rows every 1 ms.
+fn touch_scene() -> serde_json::Value {
     let mut json = expand(
         r#"{
   "format": 1,
@@ -176,7 +176,12 @@ fn a_nano_reads_a_3v3_touch_controller_through_the_module() {
                 { "t_ps": 8_000_000_000u64, "x": 16, "y": 32, "down": true }
             ]
         }));
-    let (results, serial) = run(&json);
+    json
+}
+
+#[test]
+fn a_nano_reads_a_3v3_touch_controller_through_the_module() {
+    let (results, serial) = run(&touch_scene());
     assert_eq!(
         results.count(Severity::Error),
         0,
@@ -255,6 +260,89 @@ fn a_push_pull_translates_down_and_up() {
     let up = rise_upper_ps(trace, "#net.hv2", 20_000_000, 1.5, 3.5);
     assert!(down <= RISE_LIMIT_PS, "LV1 rose in {down} ps");
     assert!(up <= RISE_LIMIT_PS, "HV2 rose in {up} ps");
+}
+
+/// Accepted steps and rejected tries an SCL edge, over the whole run. The BSS138s' few
+/// picofarads held to 1 nV kept each edge to about 940 steps and 250 rejected tries.
+const MOST_STEPS_AN_EDGE: u64 = 275;
+const MOST_REJECTIONS_AN_EDGE: u64 = 20;
+
+/// The picoseconds from the Nano reading SCL high, or low, on the HV side to the touch
+/// controller reading it on the LV side, at 70% and 30% of 3.3 V. A rise on the LV side
+/// follows its 10 kohm pull-up once the BSS138 turns off, so the delay moves with the rise
+/// time, and both ends are located to the picosecond.
+const SCL_RISE_DELAY_PS: f64 = 14_230.0;
+const SCL_FALL_DELAY_PS: f64 = 795.0;
+
+/// Each SCL edge through the module takes a few hundred steps, and the levels and the rise on
+/// the LV side are what they were at 1 nV.
+#[test]
+fn an_scl_edge_through_the_module_takes_a_few_hundred_steps() {
+    let json = touch_scene();
+    let bytes = serde_json::to_vec(&json).unwrap();
+    let parsed = orbe_engine::netlist::parse(&bytes).unwrap();
+    let (results, stats) = orbe_engine::simulate_stats(&parsed);
+    assert_eq!(
+        results.count(Severity::Error),
+        0,
+        "{:?}",
+        results.diagnostics()
+    );
+    let trace = results.trace().unwrap();
+    let logic = trace.logic().unwrap();
+    let edges = |suffix: &str| -> Vec<(u64, Level)> {
+        let signal = logic
+            .signals()
+            .iter()
+            .position(|signal| signal.to_string().ends_with(suffix))
+            .unwrap_or_else(|| panic!("no signal {suffix}"));
+        logic
+            .changes()
+            .iter()
+            .filter(|change| change.signal == signal && change.at.as_ps() > 0)
+            .map(|change| (change.at.as_ps(), change.level))
+            .collect()
+    };
+    let hv = edges("nano__mcu.logic.PC5");
+    let lv = edges("touch.logic.SCL");
+    assert!(hv.len() > 200, "SCL changed {} times", hv.len());
+    eprintln!(
+        "{} steps, {} rejected, {} SCL edges",
+        stats.landings,
+        stats.rejections,
+        hv.len()
+    );
+    let count = hv.len() as u64;
+    assert!(
+        stats.landings <= MOST_STEPS_AN_EDGE * count,
+        "{} steps over {count} SCL edges",
+        stats.landings
+    );
+    assert!(
+        stats.rejections <= MOST_REJECTIONS_AN_EDGE * count,
+        "{} rejected tries over {count} SCL edges",
+        stats.rejections
+    );
+    assert_eq!(lv.len(), hv.len(), "each SCL edge reaches the LV side");
+    for ((hv_at, level), (lv_at, lv_level)) in hv.iter().zip(&lv) {
+        assert_eq!(level, lv_level);
+        let delay = lv_at.abs_diff(*hv_at) as f64;
+        let want = match level {
+            Level::High => SCL_RISE_DELAY_PS,
+            _ => SCL_FALL_DELAY_PS,
+        };
+        assert!(
+            (delay - want).abs() <= 0.01 * want,
+            "{level:?} at {hv_at} ps reached the LV side {delay} ps later, not {want}"
+        );
+    }
+    for net in ["#net.lv_sda", "#net.lv_scl"] {
+        let high = peak(trace, net);
+        assert!(
+            (3.2..=3.6).contains(&high),
+            "{net} reached {high} V on the 3.3 V side"
+        );
+    }
 }
 
 fn steps(name: &str, net: &str, at_ps: u64, high: f64) -> serde_json::Value {

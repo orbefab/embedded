@@ -12,7 +12,7 @@
 
 use orbe_model::Time;
 
-use crate::netlist::Netlist;
+use crate::netlist::{Model, Netlist};
 
 use crate::element;
 use crate::mna::{Layout, Node, Solution};
@@ -22,6 +22,12 @@ use crate::newton::{ABSTOL, Integration, RELTOL, VNTOL};
 /// has one sign on every step, so the errors of the few hundred steps of a swing add up. At this
 /// share a 10 ns RC edge stays within 1e-5 of its swing.
 const SHARE: f64 = 1e-7;
+
+/// The charge a device's capacitance may be off by on one step, as SPICE's `chgtol`. A
+/// junction or a gate of a few picofarads is then held to its charge and not to Newton's 1 nV.
+/// Held to 1 nV, an idle junction that ripples a few microvolts kept every step after a pin
+/// edge short. At 3e-16 the ngspice NPN slow edge leaves 0.1% on the transistor's power.
+const CHGTOL: f64 = 2e-16;
 
 /// A capacitor or an inductor. A capacitor's state is the voltage across it, and its slope
 /// times its capacitance is its current. An inductor's state is its current, and its slope times
@@ -34,6 +40,10 @@ struct Store {
     /// Farad or henry.
     size: f64,
     inductor: bool,
+    /// The charge floor: `CHGTOL` on a device's capacitance, and 0 on a capacitor part and an
+    /// inductor. A capacitor part's voltage and current are what a user reads, and at a charge
+    /// floor a 1 pF RC edge's current leaves its closed form by more than 1e-4 of its swing.
+    charge: f64,
 }
 
 impl Store {
@@ -91,20 +101,26 @@ impl Store {
         }
     }
 
-    /// Newton's absolute tolerance on the state, `VNTOL` for each end on a row or `ABSTOL` on a
+    /// The absolute tolerance on the state: on a capacitor `VNTOL` for each end on a row, or
+    /// its charge floor over its capacitance when that is more, and `ABSTOL` on an inductor's
     /// current.
     fn floor(&self) -> f64 {
         match self.inductor {
             false => {
-                VNTOL
-                    * self
-                        .ends
-                        .iter()
-                        .filter(|end| matches!(end, Node::Row(_)))
-                        .count() as f64
+                let ends = self
+                    .ends
+                    .iter()
+                    .filter(|end| matches!(end, Node::Row(_)))
+                    .count();
+                (ends as f64 * VNTOL).max(self.charge / self.size)
             }
             true => ABSTOL,
         }
+    }
+
+    /// `SHARE` of the range `lo` to `hi` plus the floor.
+    fn tolerance(&self, (lo, hi): (f64, f64)) -> f64 {
+        SHARE * (hi - lo) + self.floor()
     }
 }
 
@@ -123,6 +139,10 @@ impl Stores {
                     branch: layout.branch_row(id, cap.k),
                     size: cap.farad,
                     inductor: false,
+                    charge: match part.model {
+                        Model::Capacitor(_) => 0.0,
+                        _ => CHGTOL,
+                    },
                 });
             }
         }
@@ -133,6 +153,7 @@ impl Stores {
                     branch: layout.branch_row(id, layout.flux_branch(id, coil.k)),
                     size: coil.henry,
                     inductor: true,
+                    charge: 0.0,
                 });
             }
         }
@@ -148,6 +169,20 @@ impl Stores {
             (store.flow(held) - store.flow(step)).abs()
                 <= store.flow_resolved(step).max(store.flow_resolved(held))
         })
+    }
+
+    /// The shortest time, in whole ps, a store takes to move its tolerance at its slope at `x`,
+    /// the solve that starts a segment. Backward Euler's error is half the step times the
+    /// change of slope over it, so on a slope that decays a first step that long is within
+    /// half its tolerance. `u64::MAX` when no store moves.
+    pub(crate) fn restart_step(&self, x: &Solution, ranges: &Ranges) -> u64 {
+        let seconds = self
+            .stores
+            .iter()
+            .zip(&ranges.0)
+            .map(|(store, &range)| store.tolerance(range) / store.slope(x).abs())
+            .fold(f64::INFINITY, f64::min);
+        (seconds * 1e12) as u64
     }
 }
 
@@ -264,19 +299,24 @@ impl Ranges {
 /// A step's local truncation error.
 #[derive(Debug)]
 pub(crate) struct Error {
-    /// The worst store's error over its tolerance. At most 1 accepts.
+    /// The worst store's error over its tolerance with the last Newton move. At most 1 accepts.
     pub(crate) ratio: f64,
+    /// What the next step grows by: the worst store's error over its tolerance without that
+    /// move, at most 1 and at least `ratio`. A move is the solve's and not the step's, so a
+    /// step that took one more iteration than the last does not grow the next past what its
+    /// error allows. A step accepted only on its move shrinks the next by the safety factor.
+    pub(crate) growth: f64,
     /// The order of the step's formula, which sets how the next step grows or shrinks.
     pub(crate) order: u32,
 }
 
 /// The error of a step of `h` ps from `last` at `at` to `next`, the step's end with how far its
 /// last Newton iteration moved each unknown. Each store's state is held to
-/// `SHARE` of its range, the step's end included, plus Newton's absolute tolerance on it, so a
-/// store whose range is still 0 is held to what the solve resolves. On a nonlinear circuit it
-/// is also allowed how far the solve's last iteration moved it: Newton stops
-/// within its own tolerance of the level, and an error under that is the solve's, not the
-/// step's.
+/// `SHARE` of its range, the step's end included, plus its floor, so a store whose range is
+/// still 0 is held to a few nanovolts or its charge tolerance. On a nonlinear circuit the step
+/// is also allowed how far the solve's last iteration moved it: Newton stops within its own
+/// tolerance of the level, and an error under that is the solve's, not the step's. The next
+/// step grows by the error without that allowance, as [`Error::growth`] says.
 ///
 /// The predictor is the polynomial of the formula's order through the points the formula
 /// reads: the state and the slope at a segment's start for backward Euler, and for BDF2 the
@@ -296,6 +336,7 @@ pub(crate) fn error(
     let h = seconds(h_ps);
     let since = |then: Time| seconds(at.as_ps() - then.as_ps());
     let mut ratio = 0.0f64;
+    let mut growth = 0.0f64;
     for (store, &(lo, hi)) in stores.stores.iter().zip(&ranges.0) {
         let x0 = store.state(last);
         let x = store.state(next);
@@ -326,11 +367,13 @@ pub(crate) fn error(
                 (x - p) * near / (near + (2.0 * h + h1) * (h + h1 + h2))
             }
         };
-        let tolerance = SHARE * (hi.max(x) - lo.min(x)) + store.floor() + store.moved(moved);
-        ratio = ratio.max(error.abs() / tolerance);
+        let tolerance = store.tolerance((lo.min(x), hi.max(x)));
+        ratio = ratio.max(error.abs() / (tolerance + store.moved(moved)));
+        growth = growth.max(error.abs() / tolerance);
     }
     Error {
         ratio,
+        growth: growth.min(1.0).max(ratio),
         order: past.order(),
     }
 }
@@ -351,6 +394,7 @@ mod tests {
                 branch: 1,
                 size: 1.0,
                 inductor: false,
+                charge: CHGTOL,
             }],
         }
     }
@@ -460,6 +504,70 @@ mod tests {
         assert!((ratio([0.0, 0.0]) * tolerance - 1.0).abs() < 1e-12);
         assert!((ratio([1e-6, 0.0]) * (tolerance + 1e-6) - 1.0).abs() < 1e-12);
         assert_eq!(ratio([0.0, 1.0]), ratio([0.0, 0.0]));
+    }
+
+    /// The next step grows by the error over the tolerance without the Newton move, so a step
+    /// accepted on a move does not grow the next past what its own error allows.
+    #[test]
+    fn the_next_step_grows_by_the_error_without_the_newton_move() {
+        let stores = one_cap();
+        let (at, last) = point(|t| t * t, |t| 2.0 * t, 1_000_000_000_000);
+        // Backward Euler's error is 1.
+        let next = Solution::from(vec![5.0, 4.0]);
+        let error = |moved: f64, hi: f64| {
+            let h = 1_000_000_000_000;
+            let ranges = Ranges(vec![(0.0, hi)]);
+            error(
+                &stores,
+                &Past::Start,
+                at,
+                &last,
+                h,
+                (&next, &[moved, 0.0]),
+                &ranges,
+            )
+        };
+        // A range of 2e7 makes the tolerance 2, and a move of 1 makes it 3.
+        let still = error(0.0, 2e7);
+        let moved = error(1.0, 2e7);
+        assert!((moved.ratio - 1.0 / 3.0).abs() < 1e-6, "{moved:?}");
+        assert_eq!(moved.growth, still.growth);
+        assert_eq!(still.growth, still.ratio);
+        // A move that alone accepts the step shrinks the next by the safety factor.
+        let only = error(1e9, 5.0);
+        assert!(only.ratio < 1e-8, "{only:?}");
+        assert_eq!(only.growth, 1.0);
+    }
+
+    /// A device's 1 pF is held to its charge, 2e-16 C, which is 0.2 mV, and its 1 uF to
+    /// Newton's 1 nV an end. A capacitor part of 1 pF is held to Newton's 1 nV.
+    #[test]
+    fn a_device_s_small_capacitance_is_held_to_its_charge() {
+        let cap = |farad: f64, charge: f64| Store {
+            ends: [Node::Row(0), Node::Row(1)],
+            branch: 2,
+            size: farad,
+            inductor: false,
+            charge,
+        };
+        assert!((cap(1e-12, CHGTOL).floor() - 2e-4).abs() < 1e-12);
+        assert_eq!(cap(1e-6, CHGTOL).floor(), 2.0 * VNTOL);
+        assert_eq!(cap(1e-12, 0.0).floor(), 2.0 * VNTOL);
+    }
+
+    /// The time the fastest store takes to move its tolerance at its slope.
+    #[test]
+    fn a_store_moves_its_tolerance_at_its_slope_in_the_restart_step() {
+        let stores = one_cap();
+        let ranges = Ranges(vec![(0.0, 1.0)]);
+        let tolerance = SHARE + VNTOL;
+        // A slope of an eighth of the tolerance a second: 8 s.
+        let x = Solution::from(vec![0.5, tolerance / 8.0]);
+        assert_eq!(stores.restart_step(&x, &ranges), 8_000_000_000_000);
+        let fast = Solution::from(vec![0.5, 1e9]);
+        assert_eq!(stores.restart_step(&fast, &ranges), 0);
+        let still = Solution::from(vec![0.5, 0.0]);
+        assert_eq!(stores.restart_step(&still, &ranges), u64::MAX);
     }
 
     /// The tolerance is a share of the range, so the same motion on another level gives the

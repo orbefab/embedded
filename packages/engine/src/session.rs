@@ -976,6 +976,7 @@ impl Session {
                     );
                     // A step of 1 ps is accepted whatever its error.
                     if error.ratio > 1.0 && h > 1 {
+                        self.stats.rejections += 1;
                         plan = Plan::rejected(h, error.ratio, error.order);
                         continue;
                     }
@@ -1137,17 +1138,16 @@ impl Session {
             to < transient.stop && at.as_ps().saturating_add(transient.max_step) > to.as_ps(),
         );
         self.stats.stops += stopped;
-        let restart = (self.breakpoints.is_edge(at) || chips != accepted.chips || driven)
-            && at < transient.stop;
+        let scheduled = self.breakpoints.is_edge(at);
+        let restart = (scheduled || chips != accepted.chips || driven) && at < transient.stop;
         let landed = at.as_ps() - accepted.at.as_ps();
         let ranges = accepted.ranges.with(stores, &converged.iterate.solution);
-        // A segment's start takes the first step. A step cut short by a breakpoint or a watch
-        // keeps the step it wanted. The point it started from is dropped from the past when the
-        // next step would be more than twice the one it took.
-        let planned = |start: bool| match (start, h == plan.h && !cut) {
-            (true, _) => Plan::RESTART,
-            (false, true) => Plan::accepted(h, error.ratio, error.order, transient.max_step),
-            (false, false) => plan,
+        // A step cut short by a breakpoint or a watch keeps the step it wanted. The point it
+        // started from is dropped from the past when the next step would be more than twice the
+        // one it took.
+        let planned = || match h == plan.h && !cut {
+            true => Plan::accepted(h, error.growth, error.order, transient.max_step),
+            false => plan,
         };
         let keep = |plan: Plan| landed.saturating_mul(2) >= plan.h;
         let next = if restart {
@@ -1179,9 +1179,19 @@ impl Session {
             };
             self.ratings.restarted();
             self.actives.input(circuit, at, &levels, &held.levels);
-            // A restart that moved no store's slope keeps the segment and its step.
+            // A restart that moved no store's slope keeps the segment and its step. A segment a
+            // scheduled edge starts takes `EDGE_STEP`, up to its breakpoint 1 ns after the
+            // edge. One a chip or a core starts takes what its slopes allow, at least that.
             let smooth = stores.smooth(&converged.iterate.solution, &held.iterate.solution);
-            self.plan = planned(!smooth);
+            let ranges = ranges.with(stores, &held.iterate.solution);
+            self.plan = match (smooth, scheduled) {
+                (true, _) => planned(),
+                (false, true) => Plan::RESTART,
+                (false, false) => Plan::driven(
+                    stores.restart_step(&held.iterate.solution, &ranges),
+                    transient.max_step,
+                ),
+            };
             let past = match smooth && !euler {
                 true => {
                     accepted
@@ -1195,7 +1205,7 @@ impl Session {
             }
             Accepted {
                 at,
-                ranges: ranges.with(stores, &held.iterate.solution),
+                ranges,
                 iterate: held.iterate,
                 row,
                 restart_row: Some(restart_row),
@@ -1205,7 +1215,7 @@ impl Session {
                 reach,
             }
         } else {
-            self.plan = if euler { Plan::RESTART } else { planned(false) };
+            self.plan = if euler { Plan::RESTART } else { planned() };
             Accepted {
                 at,
                 past: if euler {
