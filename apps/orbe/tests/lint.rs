@@ -1266,7 +1266,7 @@ fn a_relay_contact_into_an_led_warns_without_a_series_resistor() {
         run.stdout
     );
 
-    for contact in ["NO", "NC"] {
+    for (supply, load) in [("COM", "NO"), ("COM", "NC"), ("NO", "COM")] {
         let bare = format!(
             r#"{{
   "format": 1,
@@ -1277,8 +1277,8 @@ fn a_relay_contact_into_an_led_warns_without_a_series_resistor() {
   }},
   "nets": {{ "GND": "nano.GND" }},
   "wires": [
-    ["nano.5V", "k.COM"],
-    ["k.{contact}", "led1.anode"],
+    ["nano.5V", "k.{supply}"],
+    ["k.{load}", "led1.anode"],
     ["led1.cathode", "nano.GND"],
     ["nano.5V", "k.coil_a"],
     ["k.coil_b", "nano.GND"]
@@ -1293,18 +1293,22 @@ fn a_relay_contact_into_an_led_warns_without_a_series_resistor() {
         );
         let dir = project(&bare);
         let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
-        assert_eq!(run.code, 0, "{contact}: {}{}", run.stdout, run.stderr);
+        assert_eq!(
+            run.code, 0,
+            "{supply}->{load}: {}{}",
+            run.stdout, run.stderr
+        );
         assert_eq!(
             lines_warned(&run, "scene.led_no_resistor"),
             [line_of(&bare, "\"led1\":")],
-            "{contact}: {}",
+            "{supply}->{load}: {}",
             run.stdout
         );
         assert!(
             run.stdout.contains(
                 "nothing limits the current through `led1`: it joins `GND` and `nano__5V` with no resistor in series"
             ),
-            "{contact}: {}",
+            "{supply}->{load}: {}",
             run.stdout
         );
     }
@@ -1344,6 +1348,58 @@ fn an_led_on_the_other_relay_contact_from_the_supply_stays_quiet() {
         run.stdout.ends_with("scene.jsonc: no warnings\n"),
         "{}",
         run.stdout
+    );
+}
+
+/// Twenty-four relays with their contacts tied to limited LEDs lint in polynomial time,
+/// finishing well under a second even in a debug build.
+#[test]
+#[expect(clippy::disallowed_methods, reason = "the clock is the measurement")]
+fn lint_stays_fast_with_twenty_four_relays() {
+    let mut parts = vec![
+        r#"    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" }"#.to_string(),
+    ];
+    let mut wires = Vec::new();
+    let mut layout = vec![r#"    "nano": { "at": [0, 0, 0] }"#.to_string()];
+    for i in 0..24 {
+        let x = 40 * (i + 1);
+        parts.push(format!(
+            r#"    "k{i}": {{ "type": "relay-srd-05vdc-sl-c" }}"#
+        ));
+        parts.push(format!(
+            r#"    "r{i}": {{ "type": "resistor-axial", "resistance": "220" }}"#
+        ));
+        parts.push(format!(r#"    "led{i}": {{ "type": "led-5mm" }}"#));
+        wires.push(format!(r#"    ["nano.5V", "k{i}.coil_a"]"#));
+        wires.push(format!(r#"    ["k{i}.coil_b", "nano.GND"]"#));
+        wires.push(format!(r#"    ["nano.5V", "k{i}.COM"]"#));
+        wires.push(format!(r#"    ["k{i}.NO", "r{i}.a"]"#));
+        wires.push(format!(r#"    ["k{i}.NC", "r{i}.a"]"#));
+        wires.push(format!(r#"    ["r{i}.b", "led{i}.anode"]"#));
+        wires.push(format!(r#"    ["led{i}.cathode", "nano.GND"]"#));
+        layout.push(format!(r#"    "k{i}": {{ "at": [{x}, 0, 0] }}"#));
+        layout.push(format!(r#"    "r{i}": {{ "at": [{x}, 30, 0] }}"#));
+        layout.push(format!(r#"    "led{i}": {{ "at": [{x}, 60, 0] }}"#));
+    }
+    let scene = format!(
+        "{{\n  \"format\": 1,\n  \"parts\": {{\n{}\n  }},\n  \"nets\": {{ \"GND\": \"nano.GND\" }},\n  \"wires\": [\n{}\n  ],\n  \"layout\": {{\n{}\n  }}\n}}\n",
+        parts.join(",\n"),
+        wires.join(",\n"),
+        layout.join(",\n"),
+    );
+    let dir = project(&scene);
+    let start = std::time::Instant::now();
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    let elapsed = start.elapsed();
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.ends_with("scene.jsonc: no warnings\n"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "24 relays took {elapsed:?}"
     );
 }
 
