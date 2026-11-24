@@ -173,6 +173,62 @@ fn a_stock_sketch_latches_the_board_rgb_led() {
     );
 }
 
+/// Each pixel of the stick and the colour it shows, `0xRRGGBB`, after each frame the sketch
+/// sends: eight colours, then eight others 20 ms later.
+const FIRST: [&str; 8] = [
+    "rgb(255,0,0)",
+    "rgb(0,255,0)",
+    "rgb(0,0,255)",
+    "rgb(255,255,0)",
+    "rgb(0,255,255)",
+    "rgb(255,0,255)",
+    "rgb(16,32,48)",
+    "rgb(128,64,32)",
+];
+const SECOND: [&str; 8] = [
+    "rgb(1,2,3)",
+    "rgb(64,0,0)",
+    "rgb(0,64,0)",
+    "rgb(0,0,64)",
+    "rgb(128,128,128)",
+    "rgb(10,20,30)",
+    "rgb(192,255,238)",
+    "rgb(255,255,255)",
+];
+
+/// The sketch sends each frame as one RMT transmission. Every pixel of the stick shows its
+/// own colour, after the first frame and again after the second.
+fn stick_frames(name: &str) {
+    let (project, mut live) = open(name);
+    let path = project.path();
+    for (marker, colors) in [("first", FIRST), ("second", SECOND)] {
+        run(
+            &mut live,
+            path,
+            &format!(r#"step --until serial contains "{marker}""#),
+        );
+        run(&mut live, path, "step 1ms");
+        for (k, color) in colors.iter().enumerate() {
+            run(
+                &mut live,
+                path,
+                &format!("expect @stick.px{} {color}", k + 1),
+            );
+        }
+    }
+    run(&mut live, path, "expect no diagnostics");
+}
+
+#[test]
+fn a_stock_neopixel_sketch_lights_every_pixel_of_the_stick() {
+    stick_frames("esp32s3-stock-neopixel");
+}
+
+#[test]
+fn a_stock_rmt_write_lights_every_pixel_of_the_stick() {
+    stick_frames("esp32s3-stock-rmtstrip");
+}
+
 const MS: u64 = 1_000_000_000;
 const US: u64 = 1_000_000;
 const TICK: u64 = 2_084;

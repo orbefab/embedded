@@ -50,6 +50,10 @@ pub enum Lint {
     LedNoResistor,
     /// Two pins of one part in one breadboard strip.
     Shorted,
+    /// A wire end or seated lead sits in a breadboard hole that another part's body covers.
+    CoveredHole,
+    /// Two placed parts overlap in space.
+    Overlap,
 }
 
 impl Code {
@@ -83,6 +87,8 @@ impl Code {
             Code::Lint(Lint::Floating) => "net.floating",
             Code::Lint(Lint::LedNoResistor) => "scene.led_no_resistor",
             Code::Lint(Lint::Shorted) => "scene.shorted",
+            Code::Lint(Lint::CoveredHole) => "scene.covered_hole",
+            Code::Lint(Lint::Overlap) => "scene.overlap",
         }
     }
 

@@ -107,7 +107,8 @@ pub(crate) struct Chip {
     pub(crate) usarts: &'static [&'static str],
     /// Whether its core has a TWI master, whose phases go to `i2c.csv`.
     pub(crate) twi: bool,
-    /// Whether its core sends records, which go to `link.csv`.
+    /// Whether its core sends records, which go to `link.csv`. A chip that also takes `Pulses`
+    /// records relays them: it sends on only what it took.
     pub(crate) sends: bool,
     /// Its own draw from its supply, one conductance while it runs and another while a reset
     /// holds it. `None` on a chip that draws nothing but what its outputs pass.
@@ -392,13 +393,14 @@ impl Core {
         }
     }
 
-    /// The part of one `Pulses` record sent by `at`, where the run ends inside it.
-    fn cut(&mut self, world: &World, at: Time, record: &Record) {
+    /// The part of one `Pulses` record sent by `at`, where the run ends inside it, and the
+    /// part sent by `at` of the record it relays on from it.
+    fn cut(&mut self, world: &World, at: Time, record: &Record) -> Option<Record> {
         match self {
             Core::Device(core) => core.cut(world, at, record),
-            Core::Mcu(_) => {}
+            Core::Mcu(_) => None,
             #[cfg(test)]
-            Core::Script(_) => {}
+            Core::Script(_) => None,
         }
     }
 
@@ -543,6 +545,9 @@ pub(crate) struct Actives {
     /// The name of each part whose core sends records, in part order. A `LinkRow`'s `sender`
     /// indexes this.
     senders: Vec<Name>,
+    /// Whether a chip sends records of its own, not only relays the `Pulses` records it takes.
+    /// A relay sends nothing unless such a chip sent first.
+    links: bool,
     /// The name of each display part, in part order. A `Rectangle`'s `part` indexes this.
     displays: Vec<Name>,
     /// The name of each LED chain, in part order. A latch's `part` indexes this.
@@ -786,6 +791,7 @@ impl Actives {
         let mut usarts = Vec::new();
         let mut twis = Vec::new();
         let mut senders = Vec::new();
+        let mut links = false;
         let mut displays = Vec::new();
         let mut leds = Vec::new();
         let mut horns = Vec::new();
@@ -830,6 +836,7 @@ impl Actives {
                 }
                 if chip.sends {
                     senders.push(name(circuit, chip));
+                    links |= chip.takes.pulses.is_none();
                 }
                 match core.shows() {
                     Shows::Screen { .. } => displays.push(name(circuit, chip)),
@@ -851,6 +858,7 @@ impl Actives {
             usarts,
             twis,
             senders,
+            links,
             displays,
             leds,
             horns,
@@ -876,6 +884,11 @@ impl Actives {
 
     pub(crate) fn senders(&self) -> &[Name] {
         &self.senders
+    }
+
+    /// Whether a chip sends records of its own, so the run can send any.
+    pub(crate) fn links(&self) -> bool {
+        self.links
     }
 
     pub(crate) fn cores(&self) -> &[Core] {
@@ -1164,14 +1177,16 @@ impl Actives {
     }
 
     /// The run ends at `at`, where every stop up to `at` has landed. Each pulse target takes the
-    /// part sent by then of each `Pulses` record still in flight on its line.
+    /// part sent by then of each `Pulses` record still in flight on its line. A target that
+    /// relays what it takes hands the part it relayed by then on to the next, until a part
+    /// relays nothing sent by `at`.
     pub(crate) fn cut(&mut self, circuit: &Circuit, at: Time) {
-        let flying: Vec<Record> = self
+        let mut flying: Vec<Record> = self
             .committed
             .iter()
             .zip(&self.ahead)
             .flat_map(|(core, ahead)| match core {
-                Core::Device(dev) => dev.in_flight(at).into_iter().collect(),
+                Core::Device(dev) => dev.in_flight(at),
                 Core::Mcu(chip) => match &ahead.core {
                     Core::Mcu(copy) => chip.in_flight(copy, at),
                     _ => unreachable!("a copy is of its core's kind"),
@@ -1181,12 +1196,16 @@ impl Actives {
             })
             .filter(|record| matches!(record.kind, RecordKind::Pulses { .. }))
             .collect();
-        for (core, chip) in self.committed.iter_mut().zip(&circuit.actives) {
-            if chip.takes.pulses.is_some() {
-                for record in flying.iter().filter(|record| chip.takes.record(record)) {
-                    core.cut(circuit.netlist.world(), at, record);
+        while !flying.is_empty() {
+            let mut relayed = Vec::new();
+            for (core, chip) in self.committed.iter_mut().zip(&circuit.actives) {
+                if chip.takes.pulses.is_some() {
+                    for record in flying.iter().filter(|record| chip.takes.record(record)) {
+                        relayed.extend(core.cut(circuit.netlist.world(), at, record));
+                    }
                 }
             }
+            flying = relayed;
         }
     }
 
