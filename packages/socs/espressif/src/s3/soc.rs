@@ -476,14 +476,14 @@ impl Soc {
     /// on every netted pad that carries its channel, and every PWM edge then pass.
     pub(crate) fn settle_ledc(&mut self, through: Tick) {
         self.ledc.settle(through, self.clock.source.apb());
-        for effect in self.ledc.take_done() {
+        for effect in self.ledc.take_done_through(through) {
             for (pad, channel, inverted) in self.ledc_pads() {
                 if channel == effect.channel {
                     self.duties.push(duty(effect, pad, inverted));
                 }
             }
         }
-        self.edges.extend(self.ledc.take_edges());
+        self.edges.extend(self.ledc.take_edges_through(through));
     }
 
     /// Whether a netted pad carries an LEDC channel, or an update has yet to take effect or an
@@ -1683,7 +1683,8 @@ impl Soc {
                 }
                 self.rearmed |= after.deadline != before.deadline
                     || after.ledc != before.ledc
-                    || after.i2c != before.i2c;
+                    || after.i2c != before.i2c
+                    || self.ledc.has_output();
             }
             self.rearmed |= self.usb.next_event(now) != usb_due;
             return Ok(());

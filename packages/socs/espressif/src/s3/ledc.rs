@@ -1,18 +1,24 @@
 //! The LED PWM controller, LEDC: its eight channels and four timers, as ESP-IDF's `ledc` driver
-//! sets fixed duties, pauses timers, and runs hardware duty fades with their interrupts.
+//! sets fixed duties, resets and pauses timers, and runs hardware duty fades with their interrupts.
 //!
 //! A timer counts from the store that leaves its `RST` and `PAUSE` bits clear. Pausing a timer
 //! with `LEDC_LSTIMERn_PAUSE` freezes its counter and holds the output levels of its channels
-//! until `PAUSE` clears, when it resumes from the saved phase. Its period is `LEDC_CLK_DIV` over
-//! 256, times `2^DUTY_RES`, cycles of the clock `LEDC_APB_CLK_SEL` picks: the APB clock, or the
-//! 40 MHz crystal. A store that sets `LEDC_PARA_UP_LSCHn` takes the channel's registers as they
-//! are then, and that update takes effect at the next overflow of the timer the channel names,
-//! the next PWM cycle, as IDF's `ledc_update_duty` says. A later update before that overflow
-//! replaces it. An update whose timer does not count waits until it does. An update with
-//! `LEDC_DUTY_START_LSCHn` clear keeps the duty the last one took and stops any fade. `ledc_stop`
-//! stores only the idle level, a clear `LEDC_SIG_OUT_EN_LSCHn` and the update bit, and
-//! `LEDC_DUTY_START_LSCHn` does not clear itself, so after `ledc_update_duty` that update takes
-//! the duty register again.
+//! until `PAUSE` clears, when it resumes from the saved phase. Setting `LEDC_LSTIMERn_RST` resets
+//! the timer's counter to 0 and holds it at 0 regardless of `PAUSE` (TRM v1.8, 35.3.2.3 and
+//! Register 35.7): no overflows occur while `RST` is set, so pending updates wait and active fades
+//! pause, and each channel on that timer with `LEDC_SIG_OUT_EN_LSCHn` set and nonzero duty sees
+//! `Timerx_cnt == Hpoint` (0) and drives high (TRM 35.3.3). Clearing `RST` with `PAUSE` clear
+//! starts counting from 0 at that store, restarting PWM cycles and remaining fade overflow counts
+//! on the timer's current period; clearing `RST` with `PAUSE` set leaves the counter suspended at
+//! 0. Its period is `LEDC_CLK_DIV` over 256, times `2^DUTY_RES`, cycles of the clock
+//! `LEDC_APB_CLK_SEL` picks: the APB clock, or the 40 MHz crystal. A store that sets
+//! `LEDC_PARA_UP_LSCHn` takes the channel's registers as they are then, and that update takes
+//! effect at the next overflow of the timer the channel names, the next PWM cycle, as IDF's
+//! `ledc_update_duty` says. A later update before that overflow replaces it. An update whose timer
+//! does not count waits until it does. An update with `LEDC_DUTY_START_LSCHn` clear keeps the duty
+//! the last one took and stops any fade. `ledc_stop` stores only the idle level, a clear
+//! `LEDC_SIG_OUT_EN_LSCHn` and the update bit, and `LEDC_DUTY_START_LSCHn` does not clear itself,
+//! so after `ledc_update_duty` that update takes the duty register again.
 //!
 //! When `LEDC_DUTY_START_LSCHn` is set and both `LEDC_DUTY_NUM_LSCHn` and `LEDC_DUTY_CYCLE_LSCHn`
 //! are nonzero, after the initial duty takes effect at the first overflow, the channel steps its
@@ -25,9 +31,9 @@
 //! counter is `Hpoint`, which is 0, and low when it is `Lpoint`, the duty. So from each overflow
 //! of its timer the signal is high for the duty's steps and low for the rest of the period. A
 //! step that is not whole ticks of 480 MHz rounds the high time to the nearest tick. A duty of 0
-//! is low throughout and a duty of every step high throughout. While `LEDC_SIG_OUT_EN_LSCHn` is
-//! clear the channel sends its idle level, a duty of 0 or of every step. At power-on every signal
-//! is low.
+//! is low throughout and a duty at or above `2^DUTY_RES` (and below the 14-bit counter limit
+//! `2^14`) is high throughout. While `LEDC_SIG_OUT_EN_LSCHn` is clear the channel sends its idle
+//! level, a duty of 0 or of every step. At power-on every signal is low.
 //!
 //! `LEDC_LSCHn_DUTY_R_REG` reads the duty in force, from the last update or fade step that took
 //! effect, with its 4 fraction bits clear, and 0 before the first (TRM 35.5, Register 35.6).
@@ -128,8 +134,18 @@ struct ActiveFade {
     cycle: u32,
     /// Steps left to execute (at least 1).
     remaining: u32,
-    /// The tick of the next fade step.
+    /// The tick of the next fade step while `timer` is `Running`.
     next_step: Tick,
+    /// Timer overflows left until `next_step` when `timer` is `Paused` or `Reset` (at least 1).
+    cycles_left: u32,
+}
+
+/// A channel's applied output configuration from its last `PARA_UP` that took effect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Applied {
+    timer: usize,
+    out: bool,
+    idle: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,6 +161,8 @@ pub(crate) struct Ledc {
     pending: [Option<Update>; CHANNELS],
     /// Each channel's active hardware fade.
     fade: [Option<ActiveFade>; CHANNELS],
+    /// Each channel's applied output routing from its last update that took effect.
+    applied: [Option<Applied>; CHANNELS],
     /// Each channel's duty, as its last update or fade step that took effect set it.
     duty: [u32; CHANNELS],
     /// What each channel sends, as its last update or fade step that took effect set it.
@@ -252,6 +270,7 @@ impl Ledc {
             int_raw: 0,
             pending: [None; CHANNELS],
             fade: [None; CHANNELS],
+            applied: [None; CHANNELS],
             duty: [0; CHANNELS],
             sent: [None; CHANNELS],
             done: Vec::new(),
@@ -313,6 +332,7 @@ impl Ledc {
                         cycle: cfg.cycle,
                         remaining: cfg.num,
                         next_step: Tick(due.0 + u64::from(cfg.cycle) * period),
+                        cycles_left: cfg.cycle,
                     })
                 });
                 (update.duty, next_fade)
@@ -442,6 +462,13 @@ impl Ledc {
             Some(_) => {}
         }
         self.settle(now, apb);
+        let old_period = (TIMER_BASE..INT_RAW)
+            .contains(&offset)
+            .then(|| {
+                self.period(((offset - TIMER_BASE) / TIMER) as usize, apb)
+                    .ok()
+            })
+            .flatten();
         let old = self.reg(offset);
         self.regs[(offset / 4) as usize] = value;
         if offset < CHANNELS as u32 * CHANNEL {
@@ -453,25 +480,21 @@ impl Ledc {
             let rst = value & RST != 0;
             let pause = value & PAUSE != 0;
             let was = self.timers[timer];
-            if let Timer::Running { since } = was {
-                if (old ^ value) & TIMER_SETUP != 0 {
-                    return Err("timer_change_while_running");
+            if rst {
+                if let Timer::Running { since } = was {
+                    self.save_fade_cycles(timer, now, since, old_period);
                 }
-                if rst && self.pwm.iter().flatten().any(|pwm| pwm.timer == timer) {
-                    return Err("timer_reset_while_running");
-                }
-                if rst {
-                    self.timers[timer] = Timer::Reset;
-                } else if pause {
-                    let elapsed = self
-                        .period(timer, apb)
-                        .map_or(0, |(period, _)| (now.0 - since.0) % period);
-                    self.timers[timer] = Timer::Paused { at: now, elapsed };
-                }
-            } else if rst {
                 self.timers[timer] = Timer::Reset;
+                self.drive_timer_reset(timer, now);
             } else if pause {
                 match was {
+                    Timer::Running { since } => {
+                        if (old ^ value) & TIMER_SETUP != 0 {
+                            return Err("timer_change_while_running");
+                        }
+                        let elapsed = self.save_fade_cycles(timer, now, since, old_period);
+                        self.timers[timer] = Timer::Paused { at: now, elapsed };
+                    }
                     Timer::Reset => {
                         self.timers[timer] = Timer::Paused {
                             at: now,
@@ -488,45 +511,28 @@ impl Ledc {
                             self.timers[timer] = Timer::Paused { at, elapsed };
                         }
                     }
-                    Timer::Running { .. } => unreachable!(),
                 }
             } else {
                 match was {
+                    Timer::Running { .. } => {
+                        if (old ^ value) & TIMER_SETUP != 0 {
+                            return Err("timer_change_while_running");
+                        }
+                    }
                     Timer::Reset => {
                         self.timers[timer] = Timer::Running { since: now };
                         self.ovf_mark[timer] = now;
+                        self.start_timer(timer, now, now, None, apb);
                     }
                     Timer::Paused { at, elapsed } => {
-                        let delta = now.0 - at.0;
+                        let changed = (old ^ value) & TIMER_SETUP != 0;
+                        let elapsed = if changed { 0 } else { elapsed };
                         let since = Tick(now.0 - elapsed);
                         self.timers[timer] = Timer::Running { since };
                         self.ovf_mark[timer] = now;
-                        let new_period = self.period(timer, apb).ok();
-                        for ch in 0..CHANNELS {
-                            if let Some(pwm) = &mut self.pwm[ch]
-                                && pwm.timer == timer
-                            {
-                                if let Some((period, resolution)) = new_period
-                                    && pwm.period != period
-                                {
-                                    let steps = 1u32 << resolution;
-                                    pwm.start = since;
-                                    pwm.period = period;
-                                    pwm.high = (u64::from(self.duty[ch]) * period
-                                        + u64::from(steps >> 1))
-                                        >> resolution;
-                                } else {
-                                    pwm.start = Tick(pwm.start.0 + delta);
-                                }
-                            }
-                            if let Some(fade) = &mut self.fade[ch]
-                                && fade.timer == timer
-                            {
-                                fade.next_step = Tick(fade.next_step.0 + delta);
-                            }
-                        }
+                        let resume_delta = (!changed && elapsed > 0).then_some(now.0 - at.0);
+                        self.start_timer(timer, now, since, resume_delta, apb);
                     }
-                    Timer::Running { .. } => unreachable!(),
                 }
             }
         } else if offset == CONF && (old ^ value) & CLK_SEL != 0 && self.counts() {
@@ -534,6 +540,95 @@ impl Ledc {
         }
         self.check(apb)?;
         Ok(true)
+    }
+
+    /// Saves each active fade's remaining overflow count on `timer` as it leaves `Running`, and
+    /// returns how many ticks into its current period `timer` was at `now`.
+    fn save_fade_cycles(
+        &mut self,
+        timer: usize,
+        now: Tick,
+        since: Tick,
+        old_period: Option<(u64, u8)>,
+    ) -> u64 {
+        let elapsed = old_period.map_or(0, |(period, _)| (now.0 - since.0) % period);
+        if let Some((period, _)) = old_period {
+            let last_ovf = now.0 - elapsed;
+            for fade in self.fade.iter_mut().flatten() {
+                if fade.timer == timer {
+                    fade.cycles_left =
+                        ((fade.next_step.0.saturating_sub(last_ovf)) / period).max(1) as u32;
+                }
+            }
+        }
+        elapsed
+    }
+
+    /// Resets `timer`'s counter to 0: each enabled channel on `timer` with nonzero duty sees
+    /// `Timerx_cnt == Hpoint` (0) and drives high (TRM v1.8, 35.3.3 and Register 35.7).
+    fn drive_timer_reset(&mut self, timer: usize, now: Tick) {
+        for ch in 0..CHANNELS {
+            if let Some(applied) = self.applied[ch]
+                && applied.timer == timer
+                && applied.out
+                && self.duty[ch] > 0
+            {
+                self.drive(now, ch, true);
+            }
+        }
+    }
+
+    /// Re-anchors channels and active fades on `timer` as it enters `Running { since }`.
+    /// `resume_delta` is `Some(now - paused_at)` when resuming from `Paused` with `elapsed > 0`
+    /// and an unchanged timer setup, preserving the saved phase and output level.
+    fn start_timer(
+        &mut self,
+        timer: usize,
+        now: Tick,
+        since: Tick,
+        resume_delta: Option<u64>,
+        apb: u64,
+    ) {
+        let new_period = self.period(timer, apb).ok();
+        for ch in 0..CHANNELS {
+            if let Some(applied) = self.applied[ch]
+                && applied.timer == timer
+                && applied.out
+                && let Some((period, resolution)) = new_period
+            {
+                let steps = 1u32 << resolution;
+                if self.duty[ch] == 0 {
+                    self.pwm[ch] = None;
+                    self.drive(now, ch, false);
+                } else if self.duty[ch] >= steps {
+                    self.pwm[ch] = None;
+                    self.drive(now, ch, true);
+                } else if let (Some(delta), Some(pwm)) = (resume_delta, self.pwm[ch])
+                    && pwm.period == period
+                {
+                    self.pwm[ch] = Some(Pwm {
+                        start: Tick(pwm.start.0 + delta),
+                        ..pwm
+                    });
+                } else {
+                    let high =
+                        (u64::from(self.duty[ch]) * period + u64::from(steps >> 1)) >> resolution;
+                    self.pwm[ch] = Some(Pwm {
+                        timer,
+                        start: since,
+                        period,
+                        high,
+                    });
+                    self.drive(now, ch, true);
+                }
+            }
+            if let Some(fade) = &mut self.fade[ch]
+                && fade.timer == timer
+                && let Some((period, _)) = new_period
+            {
+                fade.next_step = Tick(since.0 + u64::from(fade.cycles_left) * period);
+            }
+        }
     }
 
     /// Takes channel `channel`'s registers as its next update, from `now`.
@@ -625,18 +720,19 @@ impl Ledc {
     }
 
     /// Refuses an update or fade the model cannot time or send: one whose timer counts with no
-    /// period the model runs, or with more duty than steps (or a fade that runs outside
-    /// `0..=steps`). A duty of every step at the 14 bits of `SOC_LEDC_TIMER_BIT_WIDTH` is
-    /// refused too. IDF's `ledc_channel_config` notes that it messes up the hardware's duty, and
-    /// does not say what the pad then drives.
+    /// period the model runs, or with a duty or fade target at or above `2^14` (which overflows
+    /// the 14-bit counter comparator) or below 0. A duty of `2^14` at 14 bits is refused as
+    /// `full_duty`: IDF's `ledc_channel_config` notes that it messes up the hardware's duty, and
+    /// does not say what the pad then drives. A duty in `2^DUTY_RES..2^14` on a narrower timer
+    /// stays high throughout because `Timerx_cnt` never reaches `Lpoint` (TRM 35.3.3).
     fn check(&self, apb: u64) -> Result<(), &'static str> {
         let check_duty = |duty: u32, resolution: u8| -> Result<(), &'static str> {
-            let steps = 1u32 << resolution;
-            if duty > steps {
-                return Err("duty_range");
-            }
-            if resolution == MAX_RESOLUTION && duty == steps {
+            let limit = 1u32 << MAX_RESOLUTION;
+            if resolution == MAX_RESOLUTION && duty == limit {
                 return Err("full_duty");
+            }
+            if duty >= limit {
+                return Err("duty_range");
             }
             Ok(())
         };
@@ -789,7 +885,7 @@ impl Ledc {
     ) {
         let steps = 1 << resolution;
         let duty = match (out, idle) {
-            (true, _) => raw_duty,
+            (true, _) => raw_duty.min(steps),
             (false, true) => steps,
             (false, false) => 0,
         };
@@ -815,6 +911,11 @@ impl Ledc {
     fn take_update(&mut self, at: Tick, channel: usize, apb: u64) {
         let update = self.pending[channel].take().expect("due");
         let (period, resolution) = self.period(update.timer, apb).expect("checked");
+        self.applied[channel] = Some(Applied {
+            timer: update.timer,
+            out: update.out,
+            idle: update.idle,
+        });
         self.duty[channel] = update.duty;
         self.apply_duty(
             at,
@@ -835,6 +936,7 @@ impl Ledc {
             cycle: cfg.cycle,
             remaining: cfg.num,
             next_step: Tick(at.0 + u64::from(cfg.cycle) * period),
+            cycles_left: cfg.cycle,
         });
     }
 
@@ -864,6 +966,7 @@ impl Ledc {
             self.int_raw |= 1 << (4 + channel);
         } else {
             fade.next_step = Tick(at.0 + u64::from(fade.cycle) * period);
+            fade.cycles_left = fade.cycle;
             self.fade[channel] = Some(fade);
         }
     }
@@ -885,12 +988,42 @@ impl Ledc {
         self.sent[channel]
     }
 
+    /// Whether any settled updates or signal edges wait for the chip to take them.
+    pub(crate) fn has_output(&self) -> bool {
+        !self.done.is_empty() || !self.edges.is_empty()
+    }
+
+    /// The earliest tick of any settled update or signal edge waiting to be taken.
+    pub(crate) fn first_output(&self) -> Option<Tick> {
+        [
+            self.done.first().map(|e| e.at),
+            self.edges.first().map(|e| e.at),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+
+    /// The updates that took effect at or before `through`, in the order they did.
+    pub(crate) fn take_done_through(&mut self, through: Tick) -> Vec<Effect> {
+        let count = self.done.partition_point(|e| e.at <= through);
+        self.done.drain(..count).collect()
+    }
+
+    /// The changes of the channels' signals at or before `through`, in time order.
+    pub(crate) fn take_edges_through(&mut self, through: Tick) -> Vec<Edge> {
+        let count = self.edges.partition_point(|e| e.at <= through);
+        self.edges.drain(..count).collect()
+    }
+
     /// The updates that took effect since the last call, in the order they did.
+    #[cfg(test)]
     pub(crate) fn take_done(&mut self) -> Vec<Effect> {
         std::mem::take(&mut self.done)
     }
 
     /// The changes of the channels' signals since the last call, in time order.
+    #[cfg(test)]
     pub(crate) fn take_edges(&mut self) -> Vec<Edge> {
         std::mem::take(&mut self.edges)
     }
@@ -1075,10 +1208,10 @@ mod tests {
             }),
             "duty_fraction"
         );
-        assert_eq!(refused(&|l| duty(l, Tick(1), 17)), "duty_range");
+        assert_eq!(refused(&|l| duty(l, Tick(1), 1 << 14)), "duty_range");
         assert_eq!(
             refused(&|l| {
-                l.write(Tick(1), 0x08, 10 << 4, APB)?;
+                l.write(Tick(1), 0x08, ((1 << 14) - 4) << 4, APB)?;
                 l.write(
                     Tick(1),
                     0x0c,
@@ -1088,7 +1221,7 @@ mod tests {
                 l.write(Tick(1), 0x00, SIG_OUT_EN | PARA_UP, APB)
             }),
             "duty_range",
-            "fade up past 2^res"
+            "fade up past 2^14"
         );
         assert_eq!(
             refused(&|l| {
@@ -1255,25 +1388,114 @@ mod tests {
         assert_eq!(ledc.next(APB), None);
     }
 
-    /// A reset of a timer that a channel's PWM counts on ends the run, since TRM 35.3.2.3 does
-    /// not say what the output does while the counter is held. With no PWM on it, the reset
-    /// goes through.
+    /// Setting `LEDC_LSTIMERn_RST` while a channel PWM runs resets the counter to 0, drives the
+    /// channel high (`Timerx_cnt == Hpoint == 0`, TRM 35.3.3) with no further edges while `RST`
+    /// stays set, and restarts the PWM cycle from 0 when `RST` clears.
     #[test]
-    fn a_reset_of_a_timer_under_a_pwm_is_refused() {
+    fn a_timer_reset_holds_counter_at_zero_and_restarts_pwm_on_release() {
         let mut ledc = Ledc::new();
+        let conf = 256 << 4 | 4;
+        // Period = 96 ticks, duty 5 -> high for 30 ticks [96, 126), low [126, 192).
         timer(&mut ledc, Tick(0), 256, 4);
         duty(&mut ledc, Tick(1), 5).unwrap();
-        ledc.settle(Tick(96), APB);
-        let reset = 256 << 4 | 4 | RST;
+        assert_eq!(edges(&mut ledc, 150), [(96, true), (126, false)]);
+        // Assert RST at tick 150 while output is low: counter resets to 0 -> signal goes high.
+        ledc.write(Tick(150), TIMER_BASE, conf | RST, APB).unwrap();
+        assert!(!ledc.counts());
+        assert_eq!(ledc.next(APB), None);
+        assert_eq!(edges(&mut ledc, 400), [(150, true)]);
+        // Clear RST at tick 400: cycle restarts at 400 -> fall at 430, rise at 496, fall at 526.
+        ledc.write(Tick(400), TIMER_BASE, conf, APB).unwrap();
+        assert!(ledc.counts());
+        assert_eq!(ledc.next(APB), Some(Tick(430)));
         assert_eq!(
-            ledc.write(Tick(100), TIMER_BASE, reset, APB),
-            Err("timer_reset_while_running")
+            edges(&mut ledc, 530),
+            [(430, false), (496, true), (526, false)]
         );
+    }
+
+    /// `RST` overrides `PAUSE`: resetting a paused timer clears its saved phase and drives an
+    /// active PWM channel high (`Timerx_cnt == 0`). Clearing `RST` while `PAUSE` stays set leaves
+    /// the counter suspended at 0 until `PAUSE` clears.
+    #[test]
+    fn timer_reset_overrides_pause_and_resumes_from_zero() {
         let mut ledc = Ledc::new();
+        let conf = 256 << 4 | 4;
         timer(&mut ledc, Tick(0), 256, 4);
-        duty(&mut ledc, Tick(1), 16).unwrap();
-        ledc.settle(Tick(96), APB);
-        assert_eq!(ledc.write(Tick(100), TIMER_BASE, reset, APB), Ok(true));
+        duty(&mut ledc, Tick(1), 5).unwrap();
+        // Period 96, high [96, 126), low [126, 192). Pause in the low half at tick 140.
+        assert_eq!(edges(&mut ledc, 140), [(96, true), (126, false)]);
+        ledc.write(Tick(140), TIMER_BASE, conf | PAUSE, APB)
+            .unwrap();
+        assert_eq!(edges(&mut ledc, 200), []);
+        // Set RST while PAUSE is set -> counter resets to 0, output goes high.
+        ledc.write(Tick(200), TIMER_BASE, conf | PAUSE | RST, APB)
+            .unwrap();
+        assert_eq!(edges(&mut ledc, 250), [(200, true)]);
+        // Clear RST with PAUSE still set -> stays suspended at 0, no edges.
+        ledc.write(Tick(250), TIMER_BASE, conf | PAUSE, APB)
+            .unwrap();
+        assert!(!ledc.counts());
+        assert_eq!(edges(&mut ledc, 300), []);
+        // Clear PAUSE at tick 300 -> starts from 0: fall at 330, next rise at 396.
+        ledc.write(Tick(300), TIMER_BASE, conf, APB).unwrap();
+        assert_eq!(edges(&mut ledc, 400), [(330, false), (396, true)]);
+    }
+
+    /// Setting `RST` mid-fade stalls the fade and suppresses `DUTY_CHNG_END` while `RST` is set;
+    /// releasing `RST` (even with a new period) re-anchors the remaining fade overflow cycles from
+    /// the release tick.
+    #[test]
+    fn timer_reset_pauses_a_running_fade_and_reanchors_it_on_release() {
+        let mut ledc = Ledc::new();
+        let conf = 256 << 4 | 4;
+        // Period = 96 ticks. Fade: start duty 2, +4 every 2 overflows for 3 steps -> 2, 6, 10, 14.
+        timer(&mut ledc, Tick(0), 256, 4);
+        ledc.write(Tick(1), INT_ENA, 1 << 4, APB).unwrap();
+        ledc.write(Tick(1), 0x08, 2 << 4, APB).unwrap();
+        ledc.write(
+            Tick(1),
+            0x0c,
+            DUTY_START | DUTY_INC | 3 << 20 | 2 << 10 | 4,
+            APB,
+        )
+        .unwrap();
+        ledc.write(Tick(1), 0x00, SIG_OUT_EN | PARA_UP, APB)
+            .unwrap();
+        // Initial load at 96 (duty 2), first step at 288 (duty 6), next step due at 480 (after
+        // overflows at 384 and 480). Reset at tick 400 (after overflow 384, so 1 overflow left!).
+        ledc.settle(Tick(400), APB);
+        assert_eq!(ledc.read(Tick(400), 0x10, APB), Some(6 << 4));
+        ledc.write(Tick(400), TIMER_BASE, conf | RST, APB).unwrap();
+        assert_eq!(ledc.next_int_event(Tick(400), APB), None);
+        assert!(!ledc.line(Tick(2000), APB));
+        // Double the period (divider 512 -> period 192 ticks) while in reset, then release at 1000.
+        // 1 overflow left to step 2 -> at 1000 + 192 = 1192 (duty 10);
+        // 2 more overflows to final step 3 -> at 1192 + 2*192 = 1576 (duty 14, DUTY_CHNG_END).
+        let slow = 512 << 4 | 4;
+        ledc.write(Tick(1000), TIMER_BASE, slow, APB).unwrap();
+        assert_eq!(ledc.next_int_event(Tick(1000), APB), Some(Tick(1576)));
+        assert_eq!(ledc.read(Tick(1191), 0x10, APB), Some(6 << 4));
+        assert_eq!(ledc.read(Tick(1192), 0x10, APB), Some(10 << 4));
+        assert!(!ledc.line(Tick(1575), APB));
+        assert!(ledc.line(Tick(1576), APB));
+        assert_eq!(ledc.read(Tick(1576), 0x10, APB), Some(14 << 4));
+    }
+
+    /// A duty in `2^DUTY_RES..2^14` (as `ledcAttach` writes after reading an older higher-bit
+    /// `DUTY_R`) holds the output high throughout while `DUTY_R` keeps the written value.
+    #[test]
+    fn a_duty_above_timer_resolution_below_14_bits_holds_high() {
+        let mut ledc = Ledc::new();
+        timer(&mut ledc, Tick(0), 256, 8);
+        duty(&mut ledc, Tick(1), 512).unwrap();
+        let period = 256 * APB;
+        assert_eq!(edges(&mut ledc, period * 3), [(period, true)]);
+        assert_eq!(ledc.next(APB), None, "constant high has no PWM edge");
+        assert_eq!(ledc.read(Tick(period * 3), 0x10, APB), Some(512 << 4));
+        let done = ledc.take_done();
+        assert_eq!(done.len(), 1);
+        assert_eq!(done[0].duty, 256);
     }
 
     #[test]
