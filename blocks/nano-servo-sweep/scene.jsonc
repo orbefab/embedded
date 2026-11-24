@@ -1,0 +1,24 @@
+// An SG90 on a Nano. D9 is the signal. The servo's three leads sit in columns 20 to 22
+// on the f-j side: GND, VCC, SIGNAL. D9 is column 4 on that side.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "build/sweep.ino.hex" },
+    "servo": { "type": "servo-sg90" }
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "servo": { "on": { "GND": "bb.f20" } }
+  },
+  "wires": [
+    ["bb.a12", "bb.W11", { "color": "#d12b2b" }],
+    ["bb.a14", "bb.X14", { "color": "#161616" }],
+    ["bb.W20", "bb.Y20", { "color": "#d12b2b" }],
+    ["bb.X20", "bb.Z20", { "color": "#161616" }],
+    ["bb.j20", "bb.Z21", { "color": "#161616" }],
+    ["bb.j21", "bb.Y21", { "color": "#d12b2b" }],
+    ["bb.j4", "bb.j22"]
+  ]
+}

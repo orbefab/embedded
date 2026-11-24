@@ -18,6 +18,12 @@ pub(super) enum Bound {
         index: usize,
         want: Light,
     },
+    /// `@relay closed` or `@relay open`.
+    Contact {
+        label: String,
+        signal: usize,
+        closed: bool,
+    },
     /// `@led1.brightness > 2mA`, the average forward current.
     Brightness {
         label: String,
@@ -43,6 +49,13 @@ pub(super) enum Bound {
         op: Op,
         value: f64,
         unit: Unit,
+    },
+    /// `@servo.angle > 60deg`, the shaft angle in degrees.
+    Angle {
+        label: String,
+        engine: String,
+        op: Op,
+        value: f64,
     },
     /// `@pixel rgb(255,0,0)`, every LED of the part's chain.
     Color {
@@ -105,6 +118,14 @@ impl Open {
             }
             Condition::State(r, want) => {
                 match (self.resolve(r)?, want) {
+                    (Target::Part(path), Want::Closed | Want::Open) => {
+                        let signal = self.contact_signal(&path)?;
+                        Bound::Contact {
+                            label: path,
+                            signal,
+                            closed: *want == Want::Closed,
+                        }
+                    }
                     (
                         Target::Screen {
                             path,
@@ -166,7 +187,7 @@ impl Open {
                         return Err(Error::new(
                             Code::NoReading,
                             format!("{r} cannot be {}", want.as_str()),
-                            "a part with `lit` and `dim` readings is lit, dim or off, and a pin on a chip's net is high or low",
+                            "a part with `lit` and `dim` readings is lit, dim or off, a relay contact is closed or open, and a pin on a chip's net is high or low",
                         ));
                     }
                 }
@@ -281,6 +302,25 @@ impl Open {
                             format!("expect the colour itself, such as `{r} rgb(255,0,0)`"),
                         ));
                     }
+                    Target::Angle {
+                        path,
+                        reading,
+                        engine,
+                    } => {
+                        if amount.unit != Unit::Degree {
+                            return Err(Error::new(
+                                Code::NoReading,
+                                format!("{r} is in deg, not {}", amount.unit.as_str()),
+                                "write the angle in deg, such as `60deg`".to_string(),
+                            ));
+                        }
+                        return Ok(Bound::Angle {
+                            label: format!("{path}.{reading}"),
+                            engine,
+                            op: *op,
+                            value: amount.value,
+                        });
+                    }
                     Target::Param { .. } => {
                         return Err(Error::new(
                             Code::NoReading,
@@ -370,6 +410,18 @@ impl Open {
                 let hz = self.tone.hz(*index, self.engine.now().as_ps());
                 (op.holds(hz, *value), format!("{label} = {} Hz", number(hz)))
             }
+            Bound::Contact {
+                label,
+                signal,
+                closed,
+            } => {
+                let level = self.level_before_now(*signal);
+                let is_closed = level == Level::High;
+                (
+                    is_closed == *closed,
+                    format!("{label} {}", if is_closed { "closed" } else { "open" }),
+                )
+            }
             Bound::Level { pin, signal, want } => {
                 let level = self.level_before_now(*signal);
                 (level == *want, format!("{pin} {}", level.as_str()))
@@ -391,6 +443,18 @@ impl Open {
                             _ => format!("{} {}", number(seen), unit.as_str()),
                         }
                     ),
+                )
+            }
+            Bound::Angle {
+                label,
+                engine,
+                op,
+                value,
+            } => {
+                let seen = self.angle_of(engine);
+                (
+                    op.holds(seen, *value),
+                    format!("{label} = {} deg", number(seen)),
                 )
             }
             Bound::Color {

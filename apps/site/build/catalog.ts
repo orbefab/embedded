@@ -42,26 +42,14 @@ export function readCatalog(dir: string): Catalog {
     const last = sorted[sorted.length - 1] as IndexRow;
     return {
       record: read(last.url) as ItemRecord,
-      versions: sorted.map((row) => row.version),
       listed: last.listed !== false,
     };
   });
-  const usedBy = (name: string) =>
-    newest
-      .filter(({ record }) => record.registryDependencies.some((dependency) => dependencyId(dependency) === name))
-      .map(({ record }) => record.name)
-      .sort();
-  const item = <R extends ItemRecord>(record: R, versions: readonly string[], listed: boolean): Item<R> => ({
-    record,
-    versions,
-    usedBy: usedBy(record.name),
-    listed,
-  });
   const parts: Item<PartRecord>[] = [];
   const blocks: Item<BlockRecord>[] = [];
-  for (const { record, versions, listed } of newest) {
-    if (record.type === "part") parts.push(item(record, versions, listed));
-    else blocks.push(item(record, versions, listed));
+  for (const { record, listed } of newest) {
+    if (record.type === "part") parts.push({ record, listed });
+    else blocks.push({ record, listed });
   }
   return { name: index.name, parts, blocks, bytes: (sha256) => readFileSync(join(dir, "files", sha256)) };
 }

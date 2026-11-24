@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use super::{Live, Open, Progress};
 use crate::reply::{Code, Diagnostic, Level};
-use crate::target::{QUANTITIES, one_engine, rgb_reading, screen_reading};
+use crate::target::{QUANTITIES, angle_reading, one_engine, rgb_reading, screen_reading};
 use crate::viewer;
 
 /// The refs each frame array follows, in order.
@@ -27,6 +27,9 @@ pub struct Channels {
     /// Each addressable LED part, by its reading `"of": "rgb"`.
     #[cfg_attr(test, schemars(with = "Vec<crate::Ref>"))]
     pub pixels: Vec<String>,
+    /// Each servo, by its reading `"of": "angle"`. A frame's `horn_deg` follows this.
+    #[cfg_attr(test, schemars(with = "Vec<crate::Ref>"))]
+    pub horns: Vec<String>,
     /// Each screen part, by its reading `"of": "screen"`. Absent when the scene has none.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     #[cfg_attr(test, schemars(with = "Vec<crate::Ref>"))]
@@ -42,6 +45,7 @@ pub(super) struct Bound {
     leds: Vec<usize>,
     switches: Vec<String>,
     pixels: Vec<String>,
+    horns: Vec<String>,
     screens: Vec<String>,
     /// Each live param, as `@pot1.position`, with its engine part and the param.
     params: Vec<(String, String, orbe_scene::MapParam)>,
@@ -153,6 +157,8 @@ pub struct Sample {
     pub switches: Vec<u8>,
     /// Each addressable LED part's first LED, the red, green and blue it last latched.
     pub pixels: Vec<[u8; 3]>,
+    /// Each servo's shaft angle in degrees, per `channels.horns`.
+    pub horns: Vec<f64>,
     /// What each screen's glass shows.
     pub screens: Vec<Glass>,
     /// Each declared world quantity's value from `t_ps` on, or from where its last `set` lands
@@ -336,6 +342,12 @@ impl Open {
                 bound.names.pixels.push(format!("@{path}"));
                 bound.pixels.push(engine);
             }
+            let horn =
+                angle_reading(part).and_then(|_| one_engine(path, part, Code::NoReading).ok());
+            if let Some(engine) = horn {
+                bound.names.horns.push(format!("@{path}"));
+                bound.horns.push(engine);
+            }
             let screen =
                 screen_reading(part).and_then(|_| one_engine(path, part, Code::NoReading).ok());
             if let Some(engine) = screen {
@@ -409,6 +421,11 @@ impl Open {
                         .copied()
                         .unwrap_or_default()
                 })
+                .collect(),
+            horns: bound
+                .horns
+                .iter()
+                .map(|engine| self.angle_of(engine))
                 .collect(),
             screens: bound
                 .screens

@@ -1,0 +1,46 @@
+{
+  "part": "relay-module-1ch",
+  "source": {
+    "script": "model.py",
+    "sha256": "ab2b305f3c284b806f2dbe0a6c721c10de63019fd957e57c1305484832a80124",
+    "bytes": 1590
+  },
+  "files": {
+    "relay-module-1ch.glb": {
+      "sha256": "9952d794c2b0d9bb91d4d437efb6390ef461bc7d05a52987375ece239e987c08",
+      "bytes": 2868
+    }
+  },
+  "box": {
+    "min": [-17.000001, -11.5, 2.54],
+    "max": [17.000001, 15.5, 12.14]
+  },
+  "kept_nodes": [],
+  "draw_calls": 2,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 0,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "pcb",
+      "z_mm": 2.54
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 2,
+      "primitives_out": 2
+    },
+    "composition": {
+      "children": 7,
+      "lowest_node": "pcb",
+      "z_mm": 2.54,
+      "draw_calls": 29
+    }
+  }
+}

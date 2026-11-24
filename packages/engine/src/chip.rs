@@ -11,7 +11,9 @@
 //! microcontroller builds an `active::Core::Mcu` and adds its row to the table in `mcu/mod.rs`.
 //! The relay answers `unknowns` and `dc_paths` as an element.
 
-use crate::device::{Cst816, Dht22, Hc595, PulsesReplay, SpiReplay, Ssd1306, St77916, Ws2812};
+use crate::device::{
+    Cst816, Dht22, Hc595, PulsesReplay, Sg90, SpiReplay, Ssd1306, St77916, Ws2812,
+};
 use crate::mcu::{Atmega328p, Esp32s3};
 use crate::netlist::PartId;
 
@@ -68,6 +70,7 @@ pub(crate) enum Active<'n> {
     Esp32s3(&'n Esp32s3),
     Ws2812(&'n Ws2812),
     PulsesReplay(&'n PulsesReplay),
+    Sg90(&'n Sg90),
 }
 
 pub(crate) fn kind(chip: &Chip) -> Kind<'_> {
@@ -83,6 +86,7 @@ pub(crate) fn kind(chip: &Chip) -> Kind<'_> {
         Chip::Esp32s3(mcu) => Kind::Active(Active::Esp32s3(mcu)),
         Chip::Ws2812(chain) => Kind::Active(Active::Ws2812(chain)),
         Chip::PulsesReplay(replay) => Kind::Active(Active::PulsesReplay(replay)),
+        Chip::Sg90(dev) => Kind::Active(Active::Sg90(dev)),
     }
 }
 
@@ -115,7 +119,8 @@ pub(crate) fn unknowns(chip: &Chip) -> Unknowns {
         | Chip::Hc595(_)
         | Chip::Esp32s3(_)
         | Chip::Ws2812(_)
-        | Chip::PulsesReplay(_) => Unknowns::default(),
+        | Chip::PulsesReplay(_)
+        | Chip::Sg90(_) => Unknowns::default(),
     }
 }
 
@@ -133,7 +138,8 @@ pub(crate) fn reads_iterate(chip: &Chip) -> bool {
         | Chip::Hc595(_)
         | Chip::Esp32s3(_)
         | Chip::Ws2812(_)
-        | Chip::PulsesReplay(_) => false,
+        | Chip::PulsesReplay(_)
+        | Chip::Sg90(_) => false,
     }
 }
 
@@ -204,6 +210,7 @@ pub(crate) fn dc_paths(chip: &Chip) -> &'static [(usize, usize)] {
         Chip::Esp32s3(mcu) => crate::mcu::esp32s3::dc_paths(mcu),
         Chip::Ws2812(chain) => crate::device::ws2812::dc_paths(chain),
         Chip::PulsesReplay(_) => &crate::device::pulses_replay::DC_PATHS,
+        Chip::Sg90(_) => &crate::device::sg90::DC_PATHS,
     }
 }
 
@@ -220,6 +227,7 @@ pub(crate) fn pin_ratings(chip: &Chip) -> Option<crate::ratings::PinRatings> {
         | Chip::Dht22(_)
         | Chip::Esp32s3(_)
         | Chip::Ws2812(_)
-        | Chip::PulsesReplay(_) => None,
+        | Chip::PulsesReplay(_)
+        | Chip::Sg90(_) => None,
     }
 }

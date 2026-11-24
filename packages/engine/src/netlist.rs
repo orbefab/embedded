@@ -22,7 +22,7 @@ use crate::world::{Quantity, World};
 
 use crate::chip::Ne555;
 use crate::device::{
-    Cst816, Declared, Dht22, Events, PulsesReplay, Row, SpiReplay, Ssd1306, St77916, Ws2812,
+    Cst816, Declared, Dht22, Events, PulsesReplay, Row, Sg90, SpiReplay, Ssd1306, St77916, Ws2812,
 };
 use crate::mcu::{Atmega328p, Esp32s3};
 
@@ -315,6 +315,7 @@ impl Model {
                 &crate::device::pulses_replay::ROW,
                 &crate::device::NO_EVENTS,
             )),
+            Chip::Sg90(_) => Some((&crate::device::sg90::ROW, &crate::device::NO_EVENTS)),
             Chip::Ne555(_) | Chip::Atmega328p(_) | Chip::Esp32s3(_) => None,
         }
     }
@@ -518,6 +519,7 @@ pub enum Chip {
     Ws2812(Box<Ws2812>),
     PulsesReplay(Box<PulsesReplay>),
     Esp32s3(Box<Esp32s3>),
+    Sg90(Box<Sg90>),
 }
 
 /// Where an input reads high and low, as fractions of `V(VCC) - V(GND_8)` over `GND_8`. A low

@@ -418,11 +418,14 @@ pub enum Reading {
     /// What a 7-segment part shows: `0` to `9`, `blank`, or `segments a,b`.
     Shown(String),
     /// A part: its light state and brightness when it states them, its colours when it latches
-    /// them, and each engine quantity.
+    /// them, its relay contact when it states one, and each engine quantity.
     Part {
         state: Option<Light>,
         brightness: Option<(f64, u64)>,
         color: Option<Colors>,
+        /// `Some` when the part's contact reading is closed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        contact: Option<bool>,
         quantities: Vec<(String, Unit, f64)>,
     },
 }
@@ -954,10 +957,16 @@ impl Reading {
                 state,
                 brightness,
                 color,
+                contact,
                 quantities,
             } => {
                 let mut map = serde_json::Map::new();
-                if let Some(state) = state {
+                if let Some(closed) = contact {
+                    map.insert(
+                        "state".into(),
+                        json!(if *closed { "closed" } else { "open" }),
+                    );
+                } else if let Some(state) = state {
                     map.insert("state".into(), json!(state.as_str()));
                 }
                 if let Some((value, over_ps)) = brightness {
@@ -1005,11 +1014,13 @@ impl Reading {
                 state,
                 brightness,
                 color,
+                contact,
                 quantities,
             } => Reading::Part {
                 state: *state,
                 brightness: *brightness,
                 color: color.clone(),
+                contact: *contact,
                 quantities: quantities
                     .iter()
                     .filter(|(n, ..)| n == "i")
@@ -1041,12 +1052,17 @@ impl Reading {
                 state,
                 brightness,
                 color,
+                contact,
                 quantities,
             } => {
-                let mut words: Vec<String> = state
-                    .map(|state| state.as_str().to_string())
-                    .into_iter()
-                    .collect();
+                let mut words: Vec<String> = match contact {
+                    Some(true) => vec!["closed".to_string()],
+                    Some(false) => vec!["open".to_string()],
+                    None => state
+                        .map(|state| state.as_str().to_string())
+                        .into_iter()
+                        .collect(),
+                };
                 words.extend(
                     quantities
                         .iter()

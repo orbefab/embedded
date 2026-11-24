@@ -130,10 +130,6 @@ export function Section({ title, id, children }: { title: string; id?: string; c
   );
 }
 
-export function Code({ children }: { children: ReactNode }) {
-  return <code className="bg-muted px-1.5 py-0.5 font-mono text-[0.9em]">{children}</code>;
-}
-
 /** Says the CLI is coming, where install lines show once it is public, so a page never shows a
  * command that fails. */
 export function CliComing() {

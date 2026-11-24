@@ -133,7 +133,10 @@ fn a_colour_is_rgb_with_or_without_spaces_and_prints_without() {
 #[test]
 fn a_bad_condition_says_what_to_write() {
     for (text, says) in [
-        ("@led1 bright", "use lit, dim, off, high, low or a colour"),
+        (
+            "@led1 bright",
+            "use lit, dim, off, closed, open, high, low or a colour",
+        ),
         ("@led1 rgb(256,0,0)", "red, green and blue from 0 to 255"),
         ("@led1 rgb(1,2)", "red, green and blue from 0 to 255"),
         ("@led1 #ff0000", "not a state"),

@@ -1,0 +1,11 @@
+// A Block: a small circuit that works. `orbe add nano-relay-led` installs it into a project.
+{
+  "format": 1,
+  "block": "nano-relay-led",
+  "version": "0.1.0",
+  "title": "Relay and LED on a Nano",
+  "summary": "A Nano turns a 5 V relay module on and off once a second, and the relay's COM and NO pins switch an LED.",
+  "board": "nano-board",
+  "tags": ["relay", "led", "nano"],
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
+}

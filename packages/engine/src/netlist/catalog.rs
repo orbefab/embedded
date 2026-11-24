@@ -96,8 +96,11 @@ pub enum Conduction {
     Switches(usize, usize),
     /// Its resistance limits the current. A resistor or a potentiometer.
     Limits,
-    /// None of these. A current source, a capacitor, an inductor, a relay or a chip.
+    /// None of these. A current source, a capacitor, an inductor, an op-amp or a chip.
     Other,
+    /// Each pair joins the way a switch joins its two pins. A relay's `com` to `no` and
+    /// `com` to `nc`. The coil is not one of them.
+    Contacts(&'static [(usize, usize)]),
 }
 
 /// How many of a row's pins are required: `required <n>` on a chip row names the first `n`,
@@ -392,7 +395,9 @@ pub fn live_field(kind: &str) -> Option<&'static str> {
 
 fn chip_pin_names(chip: &Chip) -> &[&'static str] {
     use crate::chip::Ne555;
-    use crate::device::{Cst816, Dht22, Hc595, PulsesReplay, SpiReplay, Ssd1306, St77916, Ws2812};
+    use crate::device::{
+        Cst816, Dht22, Hc595, PulsesReplay, Sg90, SpiReplay, Ssd1306, St77916, Ws2812,
+    };
 
     match chip {
         Chip::Ne555(_) => &Ne555::PINS,
@@ -406,6 +411,7 @@ fn chip_pin_names(chip: &Chip) -> &[&'static str] {
         Chip::Esp32s3(mcu) => &mcu.names,
         Chip::Ws2812(part) => &Ws2812::PINS[..part.pins.len()],
         Chip::PulsesReplay(_) => &PulsesReplay::PINS,
+        Chip::Sg90(_) => &Sg90::PINS,
     }
 }
 
@@ -422,6 +428,7 @@ fn chip_pins(chip: &Chip) -> &[NetId] {
         Chip::Ws2812(part) => &part.pins,
         Chip::PulsesReplay(part) => &part.pins,
         Chip::Esp32s3(part) => &part.pins,
+        Chip::Sg90(part) => &part.pins,
     }
 }
 
@@ -529,6 +536,9 @@ define_kinds! {
         Hc595, "hc595",
             crate::device::hc595::WireHc595, crate::device::hc595::resolve_hc595,
             &crate::device::Hc595::PINS;
+        Sg90, "sg90",
+            crate::device::sg90::WireSg90, crate::device::sg90::resolve_sg90,
+            &crate::device::Sg90::PINS;
     }
 }
 

@@ -445,11 +445,213 @@ fn floating(s: &Scope, out: &mut Findings) {
     }
 }
 
-/// An LED whose path, through other junctions, switches and transistors switched to a held
-/// net, joins two driven nets with no resistor in series. A diode's cathode is driven when its
-/// anode is a source's net. A resistor with both ends on that
-/// path is in parallel, so it limits nothing. A chip pin drives its net unless a resistor feeds
-/// that net from a held net off the path, since then the pin more likely reads the net.
+fn find(parent: &mut [usize], mut net: usize) -> usize {
+    let mut root = net;
+    while parent[root] != root {
+        root = parent[root];
+    }
+    while parent[net] != root {
+        let next = parent[net];
+        parent[net] = root;
+        net = next;
+    }
+    root
+}
+
+fn unite(parent: &mut [usize], a: usize, b: usize) {
+    let a = find(parent, a);
+    let b = find(parent, b);
+    if a != b {
+        parent[b] = a;
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Visit {
+    Unvisited,
+    /// Reached only by stepping across this relay; its other contacts stay closed from here.
+    Blocked(usize),
+    /// Reached directly or through two distinct relays; every contact may leave from here.
+    Full,
+}
+
+#[derive(Clone, Copy)]
+enum Target {
+    Held(usize),
+    Group(usize),
+}
+
+#[derive(Clone, Copy)]
+struct Edge {
+    to: Target,
+    relay: Option<usize>,
+}
+
+enum Expand {
+    All,
+    Except(usize),
+    Only(usize),
+}
+
+/// Group non-held nets joined by `Passes` parts other than `skip`, then build the edges leaving
+/// each group through `Passes`, `Switches` and `Contacts`. Contracting `Passes` keeps a dangling
+/// switch or diode on a relay's COM from bouncing a walk back to COM and out the other throw.
+fn conduction_graph(
+    engine: &Netlist,
+    skip: usize,
+    held: impl Fn(usize) -> bool,
+) -> (Vec<usize>, Vec<Vec<Edge>>) {
+    let n = engine.nets().len();
+    let mut parent: Vec<usize> = (0..n).collect();
+    for (id, part) in engine.parts() {
+        if id.index() == skip || part.model.conduction() != Conduction::Passes {
+            continue;
+        }
+        let mut first = None;
+        for pin in part.model.pins() {
+            let net = pin.index();
+            if held(net) {
+                continue;
+            }
+            match first {
+                None => first = Some(net),
+                Some(root) => unite(&mut parent, root, net),
+            }
+        }
+    }
+    let group: Vec<usize> = (0..n).map(|net| find(&mut parent, net)).collect();
+    let target = |net: usize| {
+        if held(net) {
+            Target::Held(net)
+        } else {
+            Target::Group(group[net])
+        }
+    };
+    let mut adj = vec![Vec::new(); n];
+    for (id, part) in engine.parts() {
+        if id.index() == skip {
+            continue;
+        }
+        let pins = part.model.pins();
+        match part.model.conduction() {
+            Conduction::Passes => {
+                for &pin in pins {
+                    let u = pin.index();
+                    if held(u) {
+                        continue;
+                    }
+                    let from = group[u];
+                    for &other in pins {
+                        let v = other.index();
+                        if held(v) {
+                            adj[from].push(Edge {
+                                to: Target::Held(v),
+                                relay: None,
+                            });
+                        }
+                    }
+                }
+            }
+            Conduction::Switches(from_pin, to_pin) => {
+                let u = pins[from_pin].index();
+                let v = pins[to_pin].index();
+                if !held(u) && held(v) {
+                    adj[group[u]].push(Edge {
+                        to: Target::Held(v),
+                        relay: None,
+                    });
+                }
+            }
+            Conduction::Contacts(pairs) => {
+                let relay = Some(id.index());
+                for &(from_pin, to_pin) in pairs {
+                    let u = pins[from_pin].index();
+                    let v = pins[to_pin].index();
+                    if !held(u) && !held(v) && group[u] == group[v] {
+                        continue;
+                    }
+                    if !held(u) {
+                        adj[group[u]].push(Edge {
+                            to: target(v),
+                            relay,
+                        });
+                    }
+                    if !held(v) {
+                        adj[group[v]].push(Edge {
+                            to: target(u),
+                            relay,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    (group, adj)
+}
+
+/// Held nets reachable from `start` without passing through a `held` net or crossing two throws
+/// of the same relay. Each non-held group transitions at most twice (`Unvisited -> Blocked ->
+/// Full`), so each outgoing edge is inspected at most once.
+fn reach_held(
+    start: usize,
+    held: impl Fn(usize) -> bool,
+    group: &[usize],
+    adj: &[Vec<Edge>],
+) -> BTreeSet<usize> {
+    let mut reached = BTreeSet::new();
+    if held(start) {
+        reached.insert(start);
+        return reached;
+    }
+    let mut state = vec![Visit::Unvisited; group.len()];
+    let root = group[start];
+    state[root] = Visit::Full;
+    let mut stack = vec![(root, Expand::All)];
+    while let Some((node, mode)) = stack.pop() {
+        for &edge in &adj[node] {
+            let allowed = match mode {
+                Expand::All => true,
+                Expand::Except(relay) => edge.relay != Some(relay),
+                Expand::Only(relay) => edge.relay == Some(relay),
+            };
+            if !allowed {
+                continue;
+            }
+            match edge.to {
+                Target::Held(net) => {
+                    reached.insert(net);
+                }
+                Target::Group(next) => match (state[next], edge.relay) {
+                    (Visit::Unvisited, None) => {
+                        state[next] = Visit::Full;
+                        stack.push((next, Expand::All));
+                    }
+                    (Visit::Unvisited, Some(relay)) => {
+                        state[next] = Visit::Blocked(relay);
+                        stack.push((next, Expand::Except(relay)));
+                    }
+                    (Visit::Blocked(blocked), via) if via != Some(blocked) => {
+                        state[next] = Visit::Full;
+                        stack.push((next, Expand::Only(blocked)));
+                    }
+                    _ => {}
+                },
+            }
+        }
+    }
+    reached
+}
+
+/// An LED whose path, through other junctions, switches, relay contacts and transistors
+/// switched to a held net, joins two driven nets with no resistor in series. A relay's `com`
+/// meets `no` or `nc`, one throw at a time, so a path never runs from `no` through `com` to
+/// `nc`. A diode's cathode is driven when its
+/// anode is a source's net. One side of the LED can reach a supply through a diode while the
+/// other side reaches it only through a resistor. That resistor is in series. A resistor that
+/// bridges two sides which each already reach a driver is in parallel and limits nothing. A
+/// chip pin drives its net unless a resistor feeds that net from a held net off the path, since
+/// then the pin more likely reads the net.
 fn led_no_resistor(s: &Scope, out: &mut Findings) {
     let engine = &s.engine;
     let mut fixed = vec![false; engine.nets().len()];
@@ -489,36 +691,24 @@ fn led_no_resistor(s: &Scope, out: &mut Findings) {
         }
     }
     let held = |net: usize| fixed[net] || chip[net];
-    for (_, led) in engine.parts() {
+    for (led_id, led) in engine.parts() {
         if !matches!(led.model, Model::Led(_)) {
             continue;
         }
-        let mut path: BTreeSet<usize> = led.model.pins().iter().map(|n| n.index()).collect();
-        let mut next: Vec<usize> = path.iter().copied().collect();
-        while let Some(net) = next.pop() {
-            if held(net) {
-                continue;
-            }
-            for (_, part) in engine.parts() {
-                let pins = part.model.pins();
-                let reached: Vec<usize> = match part.model.conduction() {
-                    Conduction::Passes if pins.iter().any(|n| n.index() == net) => {
-                        pins.iter().map(|n| n.index()).collect()
-                    }
-                    Conduction::Switches(from, to)
-                        if pins[from].index() == net && held(pins[to].index()) =>
-                    {
-                        vec![pins[to].index()]
-                    }
-                    _ => Vec::new(),
-                };
-                for other in reached {
-                    if path.insert(other) {
-                        next.push(other);
-                    }
-                }
-            }
-        }
+        let [a, b] = led.model.pins()[..] else {
+            continue;
+        };
+        let (a, b) = (a.index(), b.index());
+        let (held_a, held_b) = if held(a) && held(b) {
+            (BTreeSet::from([a]), BTreeSet::from([b]))
+        } else {
+            let (group, adj) = conduction_graph(engine, led_id.index(), held);
+            (
+                reach_held(a, held, &group, &adj),
+                reach_held(b, held, &group, &adj),
+            )
+        };
+        let all_held: BTreeSet<usize> = held_a.union(&held_b).copied().collect();
         let fed = |net: usize| {
             engine.parts().any(|(_, part)| {
                 let pins = part.model.pins();
@@ -526,23 +716,20 @@ fn led_no_resistor(s: &Scope, out: &mut Findings) {
                     && pins.iter().any(|n| n.index() == net)
                     && pins
                         .iter()
-                        .any(|n| !path.contains(&n.index()) && held(n.index()))
+                        .any(|n| !all_held.contains(&n.index()) && held(n.index()))
             })
         };
-        let limited = engine.parts().any(|(_, part)| {
-            let pins = part.model.pins();
-            part.model.conduction() == Conduction::Limits
-                && pins
-                    .iter()
-                    .any(|n| path.contains(&n.index()) && !held(n.index()))
-                && pins.iter().any(|n| !path.contains(&n.index()))
-        });
-        let ends: Vec<String> = path
+        let is_driver = |net: usize| fixed[net] || (chip[net] && !fed(net));
+        if !held_a.iter().any(|&net| is_driver(net)) || !held_b.iter().any(|&net| is_driver(net)) {
+            continue;
+        }
+        let ends: Vec<String> = all_held
             .iter()
-            .filter(|&&net| fixed[net] || (chip[net] && !fed(net)))
-            .map(|&net| format!("`{}`", names[net]))
+            .copied()
+            .filter(|&net| is_driver(net))
+            .map(|net| format!("`{}`", names[net]))
             .collect();
-        if limited || ends.len() < 2 {
+        if ends.len() < 2 {
             continue;
         }
         let name = led.name.as_str();

@@ -794,8 +794,13 @@ for (const block of releasedBlocks()) {
       await page.waitForFunction(
         (kind) => {
           const scene = window.orbeViewer?.get().scene;
+          if (kind === "relay") {
+            return scene?.getObjectByName("@relay.led")?.getObjectByName("body") !== undefined
+              && scene?.getObjectByName("@led1")?.getObjectByName("body") !== undefined;
+          }
           if (kind === "digit") return scene?.getObjectByName("@disp")?.getObjectByName("seg-a") !== undefined;
           if (kind === "pixels") return scene?.getObjectByName("@stick.px1")?.getObjectByName("lens") !== undefined;
+          if (kind === "servo") return scene?.getObjectByName("@servo")?.getObjectByName("horn") !== undefined;
           if (kind === "tone") return scene?.getObjectByName("@bz1") !== undefined;
           if (kind === "screen") return scene?.getObjectByName("@oled.display")?.getObjectByName("glass") !== undefined;
           if (kind === "rgb") {

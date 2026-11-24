@@ -1,0 +1,44 @@
+{
+  "part": "diode-do41-flush",
+  "source": {
+    "script": "model.py",
+    "sha256": "3848ed9f70f02687a51b57ee1352e88456b38dd26a3e8c936c0060b81fe54981",
+    "bytes": 1967
+  },
+  "files": {
+    "diode-do41-flush.glb": {
+      "sha256": "83fa9441d3c0aeb3e41613a8ba72df76275e2f7733e0f6d0b19bb4fe47adbd6f",
+      "bytes": 40436
+    },
+    "diode-do41-flush.anchors.json": {
+      "sha256": "fda22660ed90ef700299a6810b5ea6954aedcb81fb828ae95e9baf837cca238f",
+      "bytes": 296
+    }
+  },
+  "box": {
+    "min": [-5.48, -1.346225, -1.6],
+    "max": [5.48, 1.346225, 2.7]
+  },
+  "kept_nodes": ["lead-1", "lead-2"],
+  "draw_calls": 4,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0.004706
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 5,
+      "primitives_out": 4
+    }
+  }
+}

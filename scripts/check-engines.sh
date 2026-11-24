@@ -7,9 +7,11 @@
 # A Block page draws its Block in WebKit. In Firefox it shows one sentence in place of the
 # view and starts no renderer, so it logs none of those lines. Any other page error or
 # console error fails the check.
-# Needs the built viewer page, the built site, the wasm package and the registry under
-# .scratch/wasm, Node 24, pnpm, and the Firefox and WebKit
-# Playwright 1.64.1 expects under ~/.cache/ms-playwright. It installs nothing. A missing
+# Needs the built viewer page, the built site (with dist/wrangler-deploy.json), the wasm
+# package and the registry under .scratch/wasm, Node 24, pnpm, and the Firefox and WebKit
+# Playwright 1.64.1 expects under ~/.cache/ms-playwright. Before starting `vite preview`,
+# `scripts/site-deploy-pointer.sh` restores apps/site/.wrangler/deploy/config.json from the
+# site build so a shared build without .wrangler works. It installs nothing. A missing
 # browser or a missing system library exits 2. Install the browsers with
 # `pnpm exec playwright install firefox webkit`. On Ubuntu, install the libraries with
 # `sudo pnpm exec playwright install-deps firefox webkit`.
@@ -37,6 +39,7 @@ if [[ ! -f .scratch/wasm/registry/index.json ]]; then
   echo "check-engines: no registry at .scratch/wasm/registry/index.json. Run \`cargo build -p orbe --locked\`, then \`orbe registry build . .scratch/wasm/registry\`." >&2
   exit 2
 fi
+scripts/site-deploy-pointer.sh check-engines
 free_port() {
   node -e 'const s = require("node:net").createServer().listen(0, "127.0.0.1", () => { process.stdout.write(String(s.address().port) + "\n"); s.close(); })'
 }

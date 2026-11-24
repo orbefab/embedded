@@ -6,9 +6,7 @@ use orbe_model::{Drive, Time};
 use crate::active::{self, Output, Stage};
 use crate::netlist::{Average, Basis, Model, NetId, Netlist, Rating, RatingKind};
 
-use crate::diagnostic::{
-    Diagnostic, Excursion, VoltageExcursion, exceeds, exceeds_rounded, significant,
-};
+use crate::diagnostic::{Diagnostic, Excursion, VoltageExcursion, exceeds_rounded, significant};
 use crate::finite::Finite;
 use crate::name::{Name, Quantity, Ref};
 use crate::passive::DRIVE_REST_PS;
@@ -132,9 +130,6 @@ struct Watch {
     last: f64,
     /// The first of the samples that have each been over, through the last one.
     since: Option<Time>,
-    /// A diode or a zener. Its power rating is never over now. An LED is not, so `#led1.p`
-    /// stays over now in the no-resistor example.
-    surge: bool,
 }
 
 /// A sustained rating's readings of the same samples.
@@ -143,7 +138,8 @@ struct Heat {
     /// The rating's thermal filter. It warns when it crosses.
     filter: Filter,
     /// Over [`RECENT_PS`]. With the last sample over, it says the rating is over now. `None`
-    /// when the rating has a peak limit, which bounds a pulse in its place.
+    /// when the rating has a peak limit, which bounds a pulse in its place, or on a diode or
+    /// zener power rating.
     recent: Option<Recent>,
 }
 
@@ -283,8 +279,9 @@ const fn sustained(average: Average) -> Basis {
 /// start of this pulse.
 fn judge_drive(drive: &mut CoilDrive, at: Time, over_ps: Option<u64>) {
     let peak = drive.peak;
-    let below = exceeds(drive.min, peak);
-    let above = exceeds(peak, drive.max);
+    // Each side is compared as the message prints it, to 3 significant digits.
+    let below = exceeds_rounded(drive.min, significant(peak));
+    let above = exceeds_rounded(peak, significant(drive.max));
     if !below && !above {
         drive.over = false;
         return;
@@ -348,6 +345,8 @@ impl Ratings {
                     RatingKind::Current if supply => sustained(Average::Rms),
                     RatingKind::Current => Basis::Peak,
                 };
+                // A diode or zener power rating is never over now; an LED's stays over now.
+                let early = !(kind == RatingKind::Power && surge);
                 watch(
                     &mut watches,
                     kind,
@@ -355,7 +354,7 @@ impl Ratings {
                     Read::Column(column),
                     rating,
                     default,
-                    surge,
+                    early,
                 );
             }
         }
@@ -385,7 +384,7 @@ impl Ratings {
                         Read::Gauge { gauge, k },
                         rating,
                         default,
-                        false,
+                        true,
                     );
                 }
             }
@@ -399,7 +398,7 @@ impl Ratings {
                         Read::Gauge { gauge, k },
                         rating,
                         default,
-                        false,
+                        true,
                     );
                 }
             }
@@ -730,14 +729,13 @@ impl Ratings {
     /// once past the surge, and the power filter warns when the heat crosses.
     fn over_now(&self) -> impl Iterator<Item = Diagnostic> + '_ {
         self.watches.iter().filter_map(|watch| {
-            if watch.kind == RatingKind::Power && watch.surge {
-                return None;
-            }
             let heat = watch.heat.as_ref()?;
             let recent = heat.recent.as_ref()?;
             let since = watch.since?;
             let at = self.last?;
-            if watch.excursion.is_some() || !exceeds(recent.since_origin(), watch.limit) {
+            if watch.excursion.is_some()
+                || !exceeds_rounded(recent.since_origin(), watch.limit_rounded)
+            {
                 return None;
             }
             let held = heat.filter.held_ps(watch.limit)?;
@@ -796,7 +794,7 @@ fn watch(
     read: Read,
     rating: &Rating,
     default: Basis,
-    surge: bool,
+    early: bool,
 ) {
     let peak = rating.peak.map(Finite::get);
     let basis = rating.basis.unwrap_or(default);
@@ -806,19 +804,10 @@ fn watch(
         read,
         rating.si.get(),
         basis,
-        peak.is_none(),
-        surge,
+        early && peak.is_none(),
     ));
     if let Some(peak) = peak {
-        watches.push(Watch::new(
-            kind,
-            quantity,
-            read,
-            peak,
-            Basis::Peak,
-            false,
-            surge,
-        ));
+        watches.push(Watch::new(kind, quantity, read, peak, Basis::Peak, false));
     }
 }
 
@@ -831,7 +820,6 @@ impl Watch {
         limit: f64,
         basis: Basis,
         early: bool,
-        surge: bool,
     ) -> Watch {
         Watch {
             kind,
@@ -851,7 +839,6 @@ impl Watch {
             excursion: None,
             last: 0.0,
             since: None,
-            surge,
         }
     }
 
@@ -1167,7 +1154,6 @@ mod tests {
             ratings.watches[0].limit,
             sustained(average),
             true,
-            false,
         );
         (ratings, columns)
     }

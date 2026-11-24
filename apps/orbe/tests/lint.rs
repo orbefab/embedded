@@ -128,6 +128,8 @@ fn lint_on_the_uno_block_warns_only_as_the_nano_block_does() {
         "nano-light-comparator",
         "nano-neopixel-stick",
         "nano-oled",
+        "nano-relay-led",
+        "nano-servo-sweep",
         "nano-shift-leds",
         "uno-button-led",
     ] {
@@ -1158,6 +1160,249 @@ fn a_resistor_beside_an_led_limits_nothing_and_one_in_series_on_either_side_does
         [line_of(scene, "\"beside\":")],
         "{}",
         run.stdout
+    );
+}
+
+/// The module's indicator: 1 kohm from VCC to the LED, and a diode from VCC to the LED's
+/// cathode beside the coil. The resistor is in series. The same LED with no resistor warns.
+#[test]
+fn a_diode_back_to_the_supply_does_not_hide_a_resistor_in_series_with_the_led() {
+    let scene = r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "series": { "type": "led-5mm" },
+    "rled": { "type": "resistor-axial", "resistance": "1k" },
+    "d1": { "type": "diode-1n4007" },
+    "k1": { "type": "relay-srd-05vdc-sl-c" },
+    "q1": { "type": "npn-2n2222-to92" },
+    "rb1": { "type": "resistor-axial", "resistance": "1k" },
+    "bare": { "type": "led-5mm" },
+    "d2": { "type": "diode-1n4007" },
+    "k2": { "type": "relay-srd-05vdc-sl-c" },
+    "q2": { "type": "npn-2n2222-to92" },
+    "rb2": { "type": "resistor-axial", "resistance": "1k" },
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["nano.5V", "rled.a"],
+    ["rled.b", "series.anode"],
+    ["series.cathode", "q1.collector"],
+    ["d1.cathode", "nano.5V"],
+    ["d1.anode", "q1.collector"],
+    ["k1.coil_a", "nano.5V"],
+    ["k1.coil_b", "q1.collector"],
+    ["q1.emitter", "nano.GND"],
+    ["nano.D13", "rb1.a"],
+    ["rb1.b", "q1.base"],
+    ["nano.5V", "bare.anode"],
+    ["bare.cathode", "q2.collector"],
+    ["d2.cathode", "nano.5V"],
+    ["d2.anode", "q2.collector"],
+    ["k2.coil_a", "nano.5V"],
+    ["k2.coil_b", "q2.collector"],
+    ["q2.emitter", "nano.GND"],
+    ["nano.D12", "rb2.a"],
+    ["rb2.b", "q2.base"],
+  ],
+}
+"#;
+    let dir = project(scene);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        lines_warned(&run, "scene.led_no_resistor"),
+        [line_of(scene, "\"bare\":")],
+        "{}",
+        run.stdout
+    );
+}
+
+/// The contact conducts like a switch. The shipped Block keeps 220 ohm in series and stays
+/// quiet. That Block with the resistor removed, and a bare SRD from 5 V on COM into an LED
+/// through NO or through NC, warn.
+#[test]
+fn a_relay_contact_into_an_led_warns_without_a_series_resistor() {
+    let repo = common::repo();
+    let shipped = orbe(&repo, &["lint", "blocks/nano-relay-led/scene.jsonc"]);
+    assert_eq!(shipped.code, 0, "{}{}", shipped.stdout, shipped.stderr);
+    assert!(
+        shipped
+            .stdout
+            .ends_with("blocks/nano-relay-led/scene.jsonc: no warnings\n"),
+        "{}",
+        shipped.stdout
+    );
+
+    let scene = fs::read_to_string(repo.join("blocks/nano-relay-led/scene.jsonc")).unwrap();
+    let dropped = scene
+        .lines()
+        .filter(|line| !line.contains("\"r1\":"))
+        .map(|line| {
+            line.replace(
+                "[\"relay.NO\", \"r1.a\"],",
+                "[\"relay.NO\", \"led1.anode\"],",
+            )
+        })
+        .filter(|line| !line.contains("r1.b"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace("build/relay.ino.hex", "build/button.ino.hex");
+    assert!(
+        !dropped.contains("r1") && dropped.contains("[\"relay.NO\", \"led1.anode\"]"),
+        "{dropped}"
+    );
+    let dir = project(&dropped);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        lines_warned(&run, "scene.led_no_resistor"),
+        [line_of(&dropped, "\"led1\":")],
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains(
+            "nothing limits the current through `led1`: it joins `GND` and `nano__5V` with no resistor in series"
+        ),
+        "{}",
+        run.stdout
+    );
+
+    for (supply, load) in [("COM", "NO"), ("COM", "NC"), ("NO", "COM")] {
+        let bare = format!(
+            r#"{{
+  "format": 1,
+  "parts": {{
+    "nano": {{ "type": "nano-board", "firmware": "build/button.ino.hex" }},
+    "k": {{ "type": "relay-srd-05vdc-sl-c" }},
+    "led1": {{ "type": "led-5mm" }}
+  }},
+  "nets": {{ "GND": "nano.GND" }},
+  "wires": [
+    ["nano.5V", "k.{supply}"],
+    ["k.{load}", "led1.anode"],
+    ["led1.cathode", "nano.GND"],
+    ["nano.5V", "k.coil_a"],
+    ["k.coil_b", "nano.GND"]
+  ],
+  "layout": {{
+    "nano": {{ "at": [0, 0, 0] }},
+    "k": {{ "at": [40, 0, 0] }},
+    "led1": {{ "at": [80, 0, 0] }}
+  }}
+}}
+"#
+        );
+        let dir = project(&bare);
+        let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+        assert_eq!(
+            run.code, 0,
+            "{supply}->{load}: {}{}",
+            run.stdout, run.stderr
+        );
+        assert_eq!(
+            lines_warned(&run, "scene.led_no_resistor"),
+            [line_of(&bare, "\"led1\":")],
+            "{supply}->{load}: {}",
+            run.stdout
+        );
+        assert!(
+            run.stdout.contains(
+                "nothing limits the current through `led1`: it joins `GND` and `nano__5V` with no resistor in series"
+            ),
+            "{supply}->{load}: {}",
+            run.stdout
+        );
+    }
+}
+
+/// 5 V on NO, the LED on NC, COM left open. The coil is tied so its nets are not the
+/// question. The two throws never conduct through COM, so the LED is not across the
+/// supply and lint stays quiet.
+#[test]
+fn an_led_on_the_other_relay_contact_from_the_supply_stays_quiet() {
+    let scene = r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "k": { "type": "relay-srd-05vdc-sl-c" },
+    "led1": { "type": "led-5mm" }
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["nano.5V", "k.NO"],
+    ["k.NC", "led1.anode"],
+    ["led1.cathode", "nano.GND"],
+    ["nano.5V", "k.coil_a"],
+    ["k.coil_b", "nano.GND"]
+  ],
+  "layout": {
+    "nano": { "at": [0, 0, 0] },
+    "k": { "at": [40, 0, 0] },
+    "led1": { "at": [80, 0, 0] }
+  }
+}
+"#;
+    let dir = project(scene);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.ends_with("scene.jsonc: no warnings\n"),
+        "{}",
+        run.stdout
+    );
+}
+
+/// Twenty-four relays with their contacts tied to limited LEDs lint in polynomial time,
+/// finishing well under a second even in a debug build.
+#[test]
+#[expect(clippy::disallowed_methods, reason = "the clock is the measurement")]
+fn lint_stays_fast_with_twenty_four_relays() {
+    let mut parts = vec![
+        r#"    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" }"#.to_string(),
+    ];
+    let mut wires = Vec::new();
+    let mut layout = vec![r#"    "nano": { "at": [0, 0, 0] }"#.to_string()];
+    for i in 0..24 {
+        let x = 40 * (i + 1);
+        parts.push(format!(
+            r#"    "k{i}": {{ "type": "relay-srd-05vdc-sl-c" }}"#
+        ));
+        parts.push(format!(
+            r#"    "r{i}": {{ "type": "resistor-axial", "resistance": "220" }}"#
+        ));
+        parts.push(format!(r#"    "led{i}": {{ "type": "led-5mm" }}"#));
+        wires.push(format!(r#"    ["nano.5V", "k{i}.coil_a"]"#));
+        wires.push(format!(r#"    ["k{i}.coil_b", "nano.GND"]"#));
+        wires.push(format!(r#"    ["nano.5V", "k{i}.COM"]"#));
+        wires.push(format!(r#"    ["k{i}.NO", "r{i}.a"]"#));
+        wires.push(format!(r#"    ["k{i}.NC", "r{i}.a"]"#));
+        wires.push(format!(r#"    ["r{i}.b", "led{i}.anode"]"#));
+        wires.push(format!(r#"    ["led{i}.cathode", "nano.GND"]"#));
+        layout.push(format!(r#"    "k{i}": {{ "at": [{x}, 0, 0] }}"#));
+        layout.push(format!(r#"    "r{i}": {{ "at": [{x}, 30, 0] }}"#));
+        layout.push(format!(r#"    "led{i}": {{ "at": [{x}, 60, 0] }}"#));
+    }
+    let scene = format!(
+        "{{\n  \"format\": 1,\n  \"parts\": {{\n{}\n  }},\n  \"nets\": {{ \"GND\": \"nano.GND\" }},\n  \"wires\": [\n{}\n  ],\n  \"layout\": {{\n{}\n  }}\n}}\n",
+        parts.join(",\n"),
+        wires.join(",\n"),
+        layout.join(",\n"),
+    );
+    let dir = project(&scene);
+    let start = std::time::Instant::now();
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    let elapsed = start.elapsed();
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.ends_with("scene.jsonc: no warnings\n"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "24 relays took {elapsed:?}"
     );
 }
 

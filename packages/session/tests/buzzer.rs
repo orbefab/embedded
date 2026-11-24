@@ -725,10 +725,14 @@ fn melody(n: usize) -> Vec<Event> {
 /// A pin edge, `true` for a rise.
 type Edge = (u64, bool);
 
+/// What a melody played: each event with when it began, each pin's edges, and each reading
+/// with its time.
+type Played = (Vec<(u64, Event)>, BTreeMap<u8, Vec<Edge>>, Vec<(u64, f64)>);
+
 /// Plays `melody` on the 2N2222 switch and reads `@bz.hz` every 1 ms until `n` events have
 /// started and the last has had 300 ms. Returns the events, each with when it began, the
 /// edges of D3, D5, D8 and D9, and each reading with its time.
-fn play_melody(n: usize) -> (Vec<(u64, Event)>, BTreeMap<u8, Vec<Edge>>, Vec<(u64, f64)>) {
+fn play_melody(n: usize) -> Played {
     let mut live = opened(
         "melody",
         r#""rb": { "type": "resistor-axial", "resistance": "1k" },
@@ -849,7 +853,7 @@ fn judge(
             .iter()
             .filter(|(at, _)| *at >= *from && *at < to)
             .map(|(at, _)| *at)
-            .last();
+            .next_back();
         notes.push(Note {
             from: *from,
             to,
