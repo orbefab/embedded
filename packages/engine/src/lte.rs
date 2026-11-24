@@ -40,6 +40,19 @@ const CHGTOL: f64 = 2e-16;
 /// 5 V outside it. So an idle junction that ripples a few microvolts is held to about 1 nV.
 const DEVICE_SHARE: f64 = 3e-6;
 
+/// How long, in ps, a device capacitance whose slope a chip's or a core's edge moved is held to
+/// its charge floor after that edge. Outside it the capacitance keeps 1 nV an end, as a
+/// capacitor part does.
+///
+/// A chip's or a core's clock sets when its next edge comes, so the error the floor lets into an
+/// edge's answer ends with that answer. A circuit that times itself carries each edge's error
+/// into the next. A three-stage NMOS ring with 100 pF on each pin pair, held to its charge on
+/// every step, drifted from ngspice by 0.42 mV each 40 us cycle, against 0.1 mV at 1 nV, and
+/// left the bound by 2.3 times in 300 us. No chip times its edges, so it keeps 1 nV. An SCL edge
+/// through a BSS138 shifter settles within 5 us, half a 100 kHz period, and this window keeps
+/// every step the floor saves there. A 1 us window took 7% more steps.
+const ANSWER_PS: u64 = 5_000_000;
+
 /// A capacitor or an inductor. A capacitor's state is the voltage across it, and its slope
 /// times its capacitance is its current. An inductor's state is its current, and its slope times
 /// its inductance is the voltage across it.
@@ -52,8 +65,9 @@ struct Store {
     size: f64,
     inductor: bool,
     /// The charge floor: `CHGTOL` on a device's capacitance, and 0 on a capacitor part and an
-    /// inductor. A capacitor part's voltage and current are what a user reads, and at a charge
-    /// floor a 1 pF RC edge's current leaves its closed form by more than 1e-4 of its swing.
+    /// inductor. It applies only while the capacitance answers a chip's or a core's edge. A
+    /// capacitor part's voltage and current are what a user reads, and at a charge floor a 1 pF
+    /// RC edge's current leaves its closed form by more than 1e-4 of its swing.
     charge: f64,
 }
 
@@ -113,10 +127,10 @@ impl Store {
     }
 
     /// The absolute tolerance on a state that has moved `range` since t = 0: `ABSTOL` on an
-    /// inductor's current, and on a capacitor `VNTOL` for each end on a row, or its charge floor
-    /// over its capacitance when that is more. The charge floor is at most `DEVICE_SHARE` of the
-    /// range.
-    fn floor(&self, range: f64) -> f64 {
+    /// inductor's current, and on a capacitor `VNTOL` for each end on a row, or, while it
+    /// `answers` a chip's or a core's edge, its charge floor over its capacitance when that is
+    /// more. The charge floor is at most `DEVICE_SHARE` of the range.
+    fn floor(&self, range: f64, answers: bool) -> f64 {
         match self.inductor {
             false => {
                 let ends = self
@@ -124,7 +138,10 @@ impl Store {
                     .iter()
                     .filter(|end| matches!(end, Node::Row(_)))
                     .count();
-                let charge = (self.charge / self.size).min(DEVICE_SHARE * range);
+                let charge = match answers {
+                    true => (self.charge / self.size).min(DEVICE_SHARE * range),
+                    false => 0.0,
+                };
                 (ends as f64 * VNTOL).max(charge)
             }
             true => ABSTOL,
@@ -132,8 +149,15 @@ impl Store {
     }
 
     /// `SHARE` of the range `lo` to `hi` plus the floor.
-    fn tolerance(&self, (lo, hi): (f64, f64)) -> f64 {
-        SHARE * (hi - lo) + self.floor(hi - lo)
+    fn tolerance(&self, (lo, hi): (f64, f64), answers: bool) -> f64 {
+        SHARE * (hi - lo) + self.floor(hi - lo, answers)
+    }
+
+    /// Whether the slope at `held` left the one at `step` by more than Newton's tolerance on
+    /// the flow.
+    fn slope_moved(&self, step: &Solution, held: &Solution) -> bool {
+        (self.flow(step) - self.flow(held)).abs()
+            > self.flow_resolved(step).max(self.flow_resolved(held))
     }
 }
 
@@ -178,22 +202,24 @@ impl Stores {
     /// are held across a restart, so then the points before it still lie on one smooth curve,
     /// and the next step reads them.
     pub(crate) fn smooth(&self, step: &Solution, held: &Solution) -> bool {
-        self.stores.iter().all(|store| {
-            (store.flow(held) - store.flow(step)).abs()
-                <= store.flow_resolved(step).max(store.flow_resolved(held))
-        })
+        !self
+            .stores
+            .iter()
+            .any(|store| store.slope_moved(step, held))
     }
 
     /// The shortest time, in whole ps, a store takes to move its tolerance at its slope at `x`,
     /// the solve that starts a segment. Backward Euler's error is half the step times the
     /// change of slope over it, so on a slope that decays a first step that long is within
     /// half its tolerance. `u64::MAX` when no store moves.
-    pub(crate) fn restart_step(&self, x: &Solution, ranges: &Ranges) -> u64 {
+    pub(crate) fn restart_step(&self, x: &Solution, ranges: &Ranges, at: Time) -> u64 {
         let seconds = self
             .stores
             .iter()
-            .zip(&ranges.0)
-            .map(|(store, &range)| store.tolerance(range) / store.slope(x).abs())
+            .zip(ranges.spans.iter().zip(&ranges.until))
+            .map(|(store, (&range, &until))| {
+                store.tolerance(range, at.as_ps() < until) / store.slope(x).abs()
+            })
             .fold(f64::INFINITY, f64::min);
         (seconds * 1e12) as u64
     }
@@ -277,35 +303,68 @@ impl Past {
     }
 }
 
-/// Each store's lowest and highest state since t = 0, in `Stores` order. The tolerance is a
-/// share of that range, so it does not depend on the level the store sits at.
+/// Each store's lowest and highest state since t = 0, in `Stores` order, and the time in ps
+/// before which a step that starts is held to its charge floor. The tolerance is a share of
+/// that range, so it does not depend on the level the store sits at.
 #[derive(Clone, Debug)]
-pub(crate) struct Ranges(Vec<(f64, f64)>);
+pub(crate) struct Ranges {
+    spans: Vec<(f64, f64)>,
+    until: Vec<u64>,
+}
 
 impl Ranges {
     pub(crate) fn start(stores: &Stores, x: &Solution) -> Ranges {
-        Ranges(
-            stores
+        Ranges {
+            spans: stores
                 .stores
                 .iter()
                 .map(|store| (store.state(x), store.state(x)))
                 .collect(),
-        )
+            until: vec![0; stores.stores.len()],
+        }
     }
 
     /// The ranges widened to the states at `x`.
     pub(crate) fn with(&self, stores: &Stores, x: &Solution) -> Ranges {
-        Ranges(
-            stores
+        Ranges {
+            spans: stores
                 .stores
                 .iter()
-                .zip(&self.0)
+                .zip(&self.spans)
                 .map(|(store, &(lo, hi))| {
                     let state = store.state(x);
                     (lo.min(state), hi.max(state))
                 })
                 .collect(),
-        )
+            until: self.until.clone(),
+        }
+    }
+
+    /// After a chip's or a core's edge at `at`, whose restart solve `held` follows the step's
+    /// end `step`: each device capacitance whose slope the edge moved answers it, and is held to
+    /// its charge floor for `ANSWER_PS`.
+    pub(crate) fn answer(
+        &self,
+        stores: &Stores,
+        step: &Solution,
+        held: &Solution,
+        at: Time,
+    ) -> Ranges {
+        let end = at.as_ps().saturating_add(ANSWER_PS);
+        Ranges {
+            spans: self.spans.clone(),
+            until: stores
+                .stores
+                .iter()
+                .zip(&self.until)
+                .map(
+                    |(store, &until)| match store.charge > 0.0 && store.slope_moved(step, held) {
+                        true => until.max(end),
+                        false => until,
+                    },
+                )
+                .collect(),
+        }
     }
 }
 
@@ -321,9 +380,10 @@ pub(crate) struct Error {
 /// The error of a step of `h` ps from `last` at `at` to `next`, the step's end with how far its
 /// last Newton iteration moved each unknown. Each store's state is held to
 /// `SHARE` of its range, the step's end included, plus its floor, so a store whose range is
-/// still 0 is held to a few nanovolts or its charge tolerance. On a nonlinear circuit the step
-/// is also allowed how far the solve's last iteration moved it: Newton stops within its own
-/// tolerance of the level, and an error under that is the solve's, not the step's.
+/// still 0 is held to a few nanovolts. A device capacitance that answers a chip's or a core's
+/// edge at `at` may use its charge floor. On a nonlinear circuit the step is also allowed how
+/// far the solve's last iteration moved it: Newton stops within its own tolerance of the level,
+/// and an error under that is the solve's, not the step's.
 ///
 /// The predictor is the polynomial of the formula's order through the points the formula
 /// reads: the state and the slope at a segment's start for backward Euler, and for BDF2 the
@@ -343,7 +403,11 @@ pub(crate) fn error(
     let h = seconds(h_ps);
     let since = |then: Time| seconds(at.as_ps() - then.as_ps());
     let mut ratio = 0.0f64;
-    for (store, &(lo, hi)) in stores.stores.iter().zip(&ranges.0) {
+    for (store, (&(lo, hi), &until)) in stores
+        .stores
+        .iter()
+        .zip(ranges.spans.iter().zip(&ranges.until))
+    {
         let x0 = store.state(last);
         let x = store.state(next);
         let predicted = |h1: f64, h2: f64, d1: f64, d2: f64| {
@@ -373,7 +437,8 @@ pub(crate) fn error(
                 (x - p) * near / (near + (2.0 * h + h1) * (h + h1 + h2))
             }
         };
-        let tolerance = store.tolerance((lo.min(x), hi.max(x))) + store.moved(moved);
+        let answers = at.as_ps() < until;
+        let tolerance = store.tolerance((lo.min(x), hi.max(x)), answers) + store.moved(moved);
         ratio = ratio.max(error.abs() / tolerance);
     }
     Error {
@@ -389,6 +454,14 @@ fn seconds(ps: u64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    impl Ranges {
+        /// Spans with no store answering an edge.
+        fn of(spans: Vec<(f64, f64)>) -> Ranges {
+            let until = vec![0; spans.len()];
+            Ranges { spans, until }
+        }
+    }
 
     /// One grounded capacitor of 1 F on net row 0, whose current is row 1.
     fn one_cap() -> Stores {
@@ -416,7 +489,7 @@ mod tests {
         let v = |t: f64| t * t * t;
         let dv = |t: f64| 3.0 * t * t;
         let stores = one_cap();
-        let wide = Ranges(vec![(-1e9, 1e9)]);
+        let wide = Ranges::of(vec![(-1e9, 1e9)]);
         // Steps of 2, 3 and 5 s, in ps.
         let t = [
             1_000_000_000_000u64,
@@ -460,7 +533,7 @@ mod tests {
         let v = |t: f64| t * t;
         let dv = |t: f64| 2.0 * t;
         let stores = one_cap();
-        let wide = Ranges(vec![(-1e9, 1e9)]);
+        let wide = Ranges::of(vec![(-1e9, 1e9)]);
         let (at, last) = point(v, dv, 1_000_000_000_000);
         let h = 1_000_000_000_000;
         // v(2) = v(1) + h v'(2) with v' exact: 1 + 4 = 5 against the true 4.
@@ -487,7 +560,7 @@ mod tests {
     #[test]
     fn the_tolerance_takes_the_last_newton_move_at_the_ends() {
         let stores = one_cap();
-        let ranges = Ranges(vec![(0.0, 0.0)]);
+        let ranges = Ranges::of(vec![(0.0, 0.0)]);
         let (at, last) = point(|t| t * t, |t| 2.0 * t, 1_000_000_000_000);
         let next = Solution::from(vec![5.0, 4.0]);
         let ratio = |moved: [f64; 2]| {
@@ -523,32 +596,64 @@ mod tests {
         };
         let near = |got: f64, want: f64| (got - want).abs() <= 1e-9 * want;
         // 1 pF that has not moved, or has rippled 0.1 mV: 3e-6 of it is under 1 nV an end.
-        assert_eq!(cap(1e-12, CHGTOL).floor(0.0), 2.0 * VNTOL);
-        assert_eq!(cap(1e-12, CHGTOL).floor(1e-4), 2.0 * VNTOL);
+        assert_eq!(cap(1e-12, CHGTOL).floor(0.0, true), 2.0 * VNTOL);
+        assert_eq!(cap(1e-12, CHGTOL).floor(1e-4, true), 2.0 * VNTOL);
         // 1 fF over 1.5 mV: 3e-6 of it, 4.5 nV, not 0.2 V.
-        assert!(near(cap(1e-15, CHGTOL).floor(1.5e-3), 4.5e-9));
+        assert!(near(cap(1e-15, CHGTOL).floor(1.5e-3, true), 4.5e-9));
         // 1 fF over 5 V: 3e-6 of 5 V, not 0.2 V.
-        assert!(near(cap(1e-15, CHGTOL).floor(5.0), 1.5e-5));
+        assert!(near(cap(1e-15, CHGTOL).floor(5.0, true), 1.5e-5));
         // 21 pF over 3.3 V: its charge, 9.5 uV, is under 3e-6 of 3.3 V.
-        assert!(near(cap(21e-12, CHGTOL).floor(3.3), CHGTOL / 21e-12));
-        assert_eq!(cap(1e-6, CHGTOL).floor(0.0), 2.0 * VNTOL);
-        assert_eq!(cap(1e-12, 0.0).floor(0.0), 2.0 * VNTOL);
-        assert_eq!(cap(1e-12, 0.0).floor(5.0), 2.0 * VNTOL);
+        assert!(near(cap(21e-12, CHGTOL).floor(3.3, true), CHGTOL / 21e-12));
+        assert_eq!(cap(1e-6, CHGTOL).floor(0.0, true), 2.0 * VNTOL);
+        assert_eq!(cap(1e-12, 0.0).floor(0.0, true), 2.0 * VNTOL);
+        assert_eq!(cap(1e-12, 0.0).floor(5.0, true), 2.0 * VNTOL);
+        // Outside an edge's answer every capacitance keeps 1 nV an end.
+        assert_eq!(cap(1e-15, CHGTOL).floor(5.0, false), 2.0 * VNTOL);
+        assert_eq!(cap(21e-12, CHGTOL).floor(3.3, false), 2.0 * VNTOL);
+    }
+
+    /// A device's capacitance whose slope a chip's or a core's edge moved answers it for
+    /// `ANSWER_PS`. One whose slope stayed and a capacitor part do not, and an edge that moves
+    /// nothing leaves each answer as it was.
+    #[test]
+    fn a_device_s_capacitance_answers_the_edge_that_moved_its_slope() {
+        let cap = |branch: usize, charge: f64| Store {
+            ends: [Node::Row(0), Node::Ground],
+            branch,
+            size: 1e-12,
+            inductor: false,
+            charge,
+        };
+        let stores = Stores {
+            stores: vec![cap(1, CHGTOL), cap(2, CHGTOL), cap(3, 0.0)],
+        };
+        let step = Solution::from(vec![1.0, 0.0, 1e-6, 0.0]);
+        let held = Solution::from(vec![1.0, 1e-6, 1e-6, 1e-6]);
+        let at = Time::from_ps(7_000);
+        let ranges = Ranges::of(vec![(0.0, 3.3); 3]).answer(&stores, &step, &held, at);
+        assert_eq!(ranges.until, [7_000 + ANSWER_PS, 0, 0]);
+        let later = ranges.answer(&stores, &held, &held, Time::from_ps(9_000));
+        assert_eq!(later.until, ranges.until);
+        let again = ranges.answer(&stores, &step, &held, Time::from_ps(9_000));
+        assert_eq!(again.until, [9_000 + ANSWER_PS, 0, 0]);
     }
 
     /// The time the fastest store takes to move its tolerance at its slope.
     #[test]
     fn a_store_moves_its_tolerance_at_its_slope_in_the_restart_step() {
         let stores = one_cap();
-        let ranges = Ranges(vec![(0.0, 1.0)]);
+        let ranges = Ranges::of(vec![(0.0, 1.0)]);
         let tolerance = SHARE + VNTOL;
         // A slope of an eighth of the tolerance a second: 8 s.
         let x = Solution::from(vec![0.5, tolerance / 8.0]);
-        assert_eq!(stores.restart_step(&x, &ranges), 8_000_000_000_000);
+        assert_eq!(
+            stores.restart_step(&x, &ranges, Time::ZERO),
+            8_000_000_000_000
+        );
         let fast = Solution::from(vec![0.5, 1e9]);
-        assert_eq!(stores.restart_step(&fast, &ranges), 0);
+        assert_eq!(stores.restart_step(&fast, &ranges, Time::ZERO), 0);
         let still = Solution::from(vec![0.5, 0.0]);
-        assert_eq!(stores.restart_step(&still, &ranges), u64::MAX);
+        assert_eq!(stores.restart_step(&still, &ranges, Time::ZERO), u64::MAX);
     }
 
     /// The tolerance is a share of the range, so the same motion on another level gives the
@@ -559,7 +664,7 @@ mod tests {
         let ratio = |level: f64| {
             let last = Solution::from(vec![level, 1e-3]);
             let next = Solution::from(vec![level + 1e-3 + 1e-6, 1e-3]);
-            let ranges = Ranges(vec![(level - 1.0, level + 1.0)]);
+            let ranges = Ranges::of(vec![(level - 1.0, level + 1.0)]);
             error(
                 &stores,
                 &Past::Start,

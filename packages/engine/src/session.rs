@@ -1184,11 +1184,22 @@ impl Session {
             // edge. One a chip or a core starts takes what its slopes allow, at least that.
             let smooth = stores.smooth(&converged.iterate.solution, &held.iterate.solution);
             let ranges = ranges.with(stores, &held.iterate.solution);
+            // A device capacitance whose slope a chip's or a core's edge moved is held to its
+            // charge while it answers that edge.
+            let ranges = match (smooth, scheduled) {
+                (false, false) => ranges.answer(
+                    stores,
+                    &converged.iterate.solution,
+                    &held.iterate.solution,
+                    at,
+                ),
+                _ => ranges,
+            };
             self.plan = match (smooth, scheduled) {
                 (true, _) => planned(),
                 (false, true) => Plan::RESTART,
                 (false, false) => Plan::driven(
-                    stores.restart_step(&held.iterate.solution, &ranges),
+                    stores.restart_step(&held.iterate.solution, &ranges, at),
                     transient.max_step,
                 ),
             };

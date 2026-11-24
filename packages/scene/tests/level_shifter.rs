@@ -264,8 +264,8 @@ fn a_push_pull_translates_down_and_up() {
 
 /// Accepted steps and rejected tries an SCL edge, over the whole run. The BSS138s' few
 /// picofarads held to 1 nV kept each edge to about 940 steps and 250 rejected tries. Held to
-/// their charge, at most 3e-6 of their swing, each edge takes about 364 steps and 35 rejected
-/// tries. The unused channels only ripple with their rails, so they stay at about 1 nV.
+/// their charge for 5 us after each edge that moves them, at most 3e-6 of their swing, each
+/// edge takes about 364 steps and 35 rejected tries. The unused channels only ripple with their rails, so they stay at about 1 nV.
 const MOST_STEPS_AN_EDGE: u64 = 400;
 const MOST_REJECTIONS_AN_EDGE: u64 = 38;
 
