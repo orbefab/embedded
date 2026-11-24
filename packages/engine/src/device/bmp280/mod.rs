@@ -35,13 +35,15 @@ const SDI: usize = 4;
 const SCK: usize = 5;
 const SDO: usize = 6;
 
-/// SDO selects the address bit. CSB low holds the bus out of I2C, which is SPI mode.
+/// SDO selects the address bit. CSB low holds the bus out of I2C, which is SPI mode. A supply
+/// below its minimum holds it too, so the part releases SDA the moment it loses power.
 const BUS: Bus = Bus {
     address: model::ADDRESS,
     scl: model::WATCH_SCK,
     sda: model::WATCH_SDI,
     reset: Some(model::WATCH_CSB),
     address_high: Some(model::WATCH_SDO),
+    power: &[model::WATCH_VDD_MIN, model::WATCH_VDDIO_MIN],
 };
 
 /// `SDI` can pull to `GND`.
@@ -75,51 +77,22 @@ pub(crate) fn chip(part: PartId, dev: &Bmp280) -> Chip {
         (Bmp280::PINS[SDO], model::WATCH_SDO),
     ];
     signals.sort_unstable();
-    // Inclusive of the sheet's end by a microvolt. The comparator is true strictly above 0.
-    let slop = 1e-6;
-    let rail = |pin: usize, sign: f64, offset: f64| {
+    // At or above `limit` over GND, the minimum included by a microvolt. The comparator is true
+    // strictly above 0.
+    let above = |pin: usize, limit: f64| {
         Watch::comparator(Signal {
-            terms: vec![
-                (Node::from(pins[pin]), sign),
-                (Node::from(pins[GND]), -sign),
-            ],
-            offset,
+            terms: vec![(Node::from(pins[pin]), 1.0), (Node::from(pins[GND]), -1.0)],
+            offset: limit - 1e-6,
         })
     };
-    let above = |pin: usize, limit: f64| rail(pin, 1.0, limit - slop);
-    let below = |pin: usize, limit: f64| rail(pin, -1.0, -(limit + slop));
-    // Table 3: inside from GND - 0.3 to VDDIO + 0.3, the edge included.
-    let pin_window = |pin: usize| {
-        let margin = model::PIN_MARGIN_V + slop;
-        (
-            Watch::comparator(Signal {
-                terms: vec![
-                    (Node::from(pins[VDDIO]), 1.0),
-                    (Node::from(pins[pin]), -1.0),
-                ],
-                offset: -margin,
-            }),
-            Watch::comparator(Signal {
-                terms: vec![(Node::from(pins[pin]), 1.0), (Node::from(pins[GND]), -1.0)],
-                offset: -margin,
-            }),
-        )
-    };
-    let mut watches = vec![
+    let watches = vec![
         watch(SCK),
         watch(SDI),
         watch(CSB),
         watch(SDO),
         above(VDD, model::VDD_MIN_V),
-        below(VDD, model::VDD_MAX_V),
         above(VDDIO, model::VDDIO_MIN_V),
-        below(VDDIO, model::VDDIO_MAX_V),
     ];
-    for pin in [SDI, SCK, CSB, SDO] {
-        let (under, over) = pin_window(pin);
-        watches.push(under);
-        watches.push(over);
-    }
     Chip {
         part: Some(part),
         outputs: vec![Output {
@@ -153,8 +126,10 @@ pub(crate) fn chip(part: PartId, dev: &Bmp280) -> Chip {
 /// I2C target at 0x76 when `SDO` is low and at 0x77 when `SDO` is high. `SDI` is open drain
 /// into `GND` through `low_resistance`. `SCK`, `CSB` and `SDO` are inputs. It reads each of
 /// those four through `input_threshold`, fractions of `VDDIO`. `CSB` low is SPI mode, and the
-/// part does not answer on I2C then. It answers only while `VDD` and `VDDIO` are inside Table 2.
-/// It reads the netlist's `temperature` and `pressure`. `VDD` draws the Table 2 typical current.
+/// part does not answer on I2C then. It answers while `VDD` and `VDDIO` are at or above their
+/// Table 2 minimums, past the sheet's maximum too, where the ratings warn. Below them it is off
+/// and draws nothing. It reads the netlist's `temperature` and `pressure`. `VDD` draws the
+/// Table 2 typical current.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Bmp280 {
     pub pins: [NetId; 7],

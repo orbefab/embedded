@@ -6,8 +6,8 @@
 # blocks/<id>/build/<name>.ino.hex, the path arduino-cli compile --output-dir build writes
 # for that sketch. The clock is 16 MHz unless the sketch directory contains `f_cpu`, one integer of hertz.
 # The runtime's core is compiled into an archive and linked with each sketch, and main() comes
-# from the core. The runtime's Wire library is compiled into a second archive, which a sketch
-# that includes Wire.h also links. A sketch that includes Adafruit_NeoPixel.h also links that
+# from the core. A Block whose board is not nano-board or uno-board is skipped. The runtime's
+# Wire library is compiled into a second archive, which a sketch that includes Wire.h also links. A sketch that includes Adafruit_NeoPixel.h also links that
 # library, pinned below, compiled for the sketch's clock. A sketch that includes
 # Adafruit_SSD1306.h also links Adafruit SSD1306, Adafruit GFX and the runtime's SPI library,
 # and compiles against Adafruit BusIO's headers, which Adafruit_GFX.h includes. A sketch that
@@ -150,6 +150,11 @@ for dir in "$repo"/packages/engine/tests/firmware/sketch/*/ "$repo"/blocks/*/fir
   dir=${dir%/}
   name=$(basename "$dir")
   firmware=$(dirname "$dir")
+  # A Block on a board other than the Nano or the Uno is not an ATmega328P sketch.
+  card=$(dirname "$firmware")/block.jsonc
+  if [[ -f $card ]] && ! grep -Eq '"board": "(nano|uno)-board"' "$card"; then
+    continue
+  fi
   library=()
   archives=()
   sketch_target=("${target[@]}")

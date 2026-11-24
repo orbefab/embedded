@@ -23,26 +23,19 @@ use orbe_model::{
     Ack, Cx, Device, Dir, Draw, Drives, Error, I2cTarget, Params, Quantity, State, Stop, Time,
 };
 
-/// Watch order: SCK, SDI, CSB, SDO, then the supply window. A supply watch is high while that
-/// rail is inside Table 2, both ends included.
+/// Watch order: SCK, SDI, CSB, SDO, then the two supply minimums. A supply watch is high while
+/// that rail is at or above its Table 2 minimum.
 pub const WATCH_SCK: usize = 0;
 pub const WATCH_SDI: usize = 1;
 pub const WATCH_CSB: usize = 2;
 pub const WATCH_SDO: usize = 3;
 pub const WATCH_VDD_MIN: usize = 4;
-pub const WATCH_VDD_MAX: usize = 5;
-pub const WATCH_VDDIO_MIN: usize = 6;
-pub const WATCH_VDDIO_MAX: usize = 7;
-/// Eight watches: each interface pin under `VDDIO + 0.3` and over `GND - 0.3`, Table 3.
-pub const WATCH_PIN: usize = 8;
-pub const WATCH_PINS: usize = 8;
+pub const WATCH_VDDIO_MIN: usize = 5;
 
-/// Table 2 operating range. The part answers on I2C only while both supplies are inside it
-/// and every interface pin is inside Table 3.
+/// Table 2 minimums. The part runs while both supplies are at or above them. Past the sheet's
+/// 3.6 V maximum it keeps running, as a real part mostly does, and the ratings warn.
 pub const VDD_MIN_V: f64 = 1.71;
-pub const VDD_MAX_V: f64 = 3.6;
 pub const VDDIO_MIN_V: f64 = 1.2;
-pub const VDDIO_MAX_V: f64 = 3.6;
 
 /// Table 2 typical supply current from `VDD`. Sleep is `IDDSL`, standby is `IDDSB`, temperature
 /// measurement is `IDDT` and pressure measurement is `Ipeak`.
@@ -50,11 +43,8 @@ pub const SLEEP_A: f64 = 0.1e-6;
 pub const STANDBY_A: f64 = 0.2e-6;
 pub const TEMPERATURE_A: f64 = 325e-6;
 pub const PRESSURE_A: f64 = 720e-6;
-/// Full current at and above the VDD minimum. Below that it fades to none at 0 V.
+/// Full current at and above the VDD minimum. Below that the part is off and draws none.
 pub const DRAW_HOLDS_ABOVE_V: f64 = VDD_MIN_V;
-
-/// Table 3. An interface pin outside this of `GND` and `VDDIO` is not a level the part answers.
-pub const PIN_MARGIN_V: f64 = 0.3;
 
 /// The device drives no pin of its own. The host's I2C engine drives SDI.
 pub const OUTPUTS: usize = 0;
@@ -118,7 +108,7 @@ pub struct Bmp280 {
     pressure_at: Option<Time>,
     /// The conversion is in its pressure measurement, so the draw is [`PRESSURE_A`].
     in_pressure: bool,
-    /// Both supplies are inside Table 2 and every interface pin is inside Table 3.
+    /// Both supplies are at or above their Table 2 minimums.
     awake: bool,
 }
 
@@ -170,9 +160,12 @@ impl Bmp280 {
         }
     }
 
-    /// Table 2. Asleep, in the standby between normal-mode measurements, or measuring.
+    /// Table 2. Off below the supply minimums, asleep, in the standby between normal-mode
+    /// measurements, or measuring.
     fn supply_amps(&self) -> f64 {
-        if self.measuring_until.is_some() {
+        if !self.awake {
+            0.0
+        } else if self.measuring_until.is_some() {
             if self.in_pressure || self.started_t == 0 {
                 PRESSURE_A
             } else {
@@ -334,18 +327,14 @@ impl Device for Bmp280 {
     }
 
     /// CSB low is SPI mode while the part is powered. I2C does not answer while the host holds
-    /// the engine there, and the part names the mode. A supply outside Table 2 is not that mode:
-    /// the part is simply off the bus.
+    /// the engine there, and the part names the mode. A supply below its minimum is not that
+    /// mode: the part is off, so it does nothing and the next power-up starts from reset.
     fn input(&mut self, cx: &mut Cx, at: Time, levels: orbe_model::Levels) {
-        let powered = levels.high(WATCH_VDD_MIN)
-            && levels.high(WATCH_VDD_MAX)
-            && levels.high(WATCH_VDDIO_MIN)
-            && levels.high(WATCH_VDDIO_MAX);
-        let pins_ok = (0..WATCH_PINS).all(|k| levels.high(WATCH_PIN + k));
+        let powered = levels.high(WATCH_VDD_MIN) && levels.high(WATCH_VDDIO_MIN);
         if self.awake && !powered {
             *self = Bmp280::power_on();
         }
-        self.awake = powered && pins_ok;
+        self.awake = powered;
         if powered && !levels.high(WATCH_CSB) {
             cx.broke("spi", at);
         }

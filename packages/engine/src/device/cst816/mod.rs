@@ -44,6 +44,7 @@ const BUS: Bus = Bus {
     sda: model::WATCH_SDA,
     reset: Some(model::WATCH_RST),
     address_high: None,
+    power: &[],
 };
 
 /// The largest `x` or `y` of a touch.

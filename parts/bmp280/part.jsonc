@@ -109,6 +109,10 @@
       "why": "VDD draws Table 2's typical: 0.1 µA asleep, 0.2 µA in the standby of normal mode, 325 µA while temperature is measured and 720 µA while pressure is measured. The maximum column is not used, and VDDIO draws none of its own."
     },
     {
+      "what": "damage past Table 3",
+      "why": "Above 3.6 V on VDD or VDDIO, or with an interface pin past VDDIO + 0.3 V, the part keeps answering and rating.voltage warns. A real part there may drift or fail. Below 1.71 V on VDD or 1.2 V on VDDIO it is off and draws nothing."
+    },
+    {
       "what": "accuracy",
       "why": "A compensated read is the world's value, clamped to -40 to 85 °C and 300 to 1100 hPa, then quantized by the 20-bit sample and the integer formulas. The sheet allows ±1.0 °C from 0 to 65 °C and ±1 hPa absolute."
     }

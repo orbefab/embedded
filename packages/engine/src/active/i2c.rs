@@ -28,6 +28,9 @@ pub(crate) struct Bus {
     pub(crate) reset: Option<usize>,
     /// A high level on this watch selects `address + 1`. None keeps `address`.
     pub(crate) address_high: Option<usize>,
+    /// Watches that read high while the target's supplies are up. Any one low holds the bus as
+    /// in reset, so a target that loses its supply releases SDA at once.
+    pub(crate) power: &'static [usize],
 }
 
 /// What the engine calls for the bytes: a device's [`I2cTarget`], or a test's recorder.
@@ -442,10 +445,11 @@ impl<D: I2cTarget> Port<D> for Engine {
             sda,
             reset,
             address_high,
+            power,
             ..
         } = self.bus;
         self.address_bit = address_high.is_some_and(|pin| levels[pin]);
-        let reset = reset.is_some_and(|pin| !levels[pin]);
+        let reset = reset.is_some_and(|pin| !levels[pin]) || power.iter().any(|&pin| !levels[pin]);
         self.edge(
             at,
             levels[scl],
@@ -558,6 +562,7 @@ mod tests {
                     sda: 1,
                     reset: None,
                     address_high: None,
+                    power: &[],
                 }),
                 t: 0,
                 scl: true,
