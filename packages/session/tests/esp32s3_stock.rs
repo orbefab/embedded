@@ -1070,3 +1070,222 @@ fn a_stock_ledc_shared_timer_frequency_change_moves_both_pins() {
     run(&mut live, path, r#"step --until serial contains "done""#);
     run(&mut live, path, "expect no diagnostics");
 }
+
+/// `ledcChangeFrequency` changing resolution across active duties:
+/// - 10 to 8 bits with duty 256 (>= 2^8): `DUTY_R` stays 256 and GPIO4 holds steady high with no
+///   falling edges (TRM v1.8 35.3.3).
+/// - 10 to 8 bits with duty 200: 200/256 at 2000 Hz.
+/// - 8 to 13 bits with duty 64: 64/8192 at 400 Hz.
+#[test]
+fn a_stock_ledc_resolution_change_holds_high_at_or_above_steps_and_rescales_below() {
+    let (project, mut live) = open("esp32s3-stock-ledcres");
+    let path = project.path();
+
+    // p1: 1000 Hz, 10 bits, duty 256 -> 1 ms period, 250 us high.
+    run(&mut live, path, r#"step --until serial contains "p1""#);
+    let (period, high_ps) = cycle_on(&mut live, path, "GPIO4");
+    assert!(near(period, MS, 1), "p1 period {period} ps");
+    assert!(
+        near(high_ps, high(MS, 256, 10), TICK),
+        "p1 high {high_ps} ps"
+    );
+
+    // p2: ledcChangeFrequency(4, 2000, 8) leaves duty 256 >= 2^8 -> steady high, no fall.
+    run(&mut live, path, r#"step --until serial contains "p2 256""#);
+    run(&mut live, path, "expect @board.GPIO4 high");
+    assert_eq!(
+        try_edge_on(&mut live, path, "GPIO4", "low", 15),
+        None,
+        "p2 expected steady high with no falling edge for 15 ms"
+    );
+    run(&mut live, path, "expect @board.GPIO4 high");
+
+    // p3: back to 1000 Hz, 10 bits, duty 200 -> 1 ms period, 200/1024 high.
+    run(&mut live, path, r#"step --until serial contains "p3""#);
+    let (period, high_ps) = cycle_on(&mut live, path, "GPIO4");
+    assert!(near(period, MS, 1), "p3 period {period} ps");
+    assert!(
+        near(high_ps, high(MS, 200, 10), TICK),
+        "p3 high {high_ps} ps"
+    );
+
+    // p4: 10 to 8 bits with duty 200 -> 2000 Hz (500 us period), 200/256 high.
+    run(&mut live, path, r#"step --until serial contains "p4""#);
+    let (period, high_ps) = cycle_on(&mut live, path, "GPIO4");
+    assert!(near(period, 500 * US, 1), "p4 period {period} ps");
+    assert!(
+        near(high_ps, high(500 * US, 200, 8), TICK),
+        "p4 high {high_ps} ps"
+    );
+
+    // p5: 8 to 13 bits with duty 64 -> 400 Hz (2.5 ms period), 64/8192 high.
+    run(&mut live, path, r#"step --until serial contains "p5""#);
+    let (period, high_ps) = cycle_on(&mut live, path, "GPIO4");
+    assert!(near(period, 2500 * US, 1), "p5 period {period} ps");
+    assert!(
+        near(high_ps, high(2500 * US, 64, 13), TICK),
+        "p5 high {high_ps} ps"
+    );
+
+    run(&mut live, path, r#"step --until serial contains "done""#);
+    run(&mut live, path, "expect no diagnostics");
+}
+
+/// Returns the picosecond `pin` reaches `level` within `timeout_ms`, or `None` on timeout.
+fn try_edge_on(
+    live: &mut Live,
+    project: &Path,
+    pin: &str,
+    level: &str,
+    timeout_ms: u32,
+) -> Option<u64> {
+    let line = format!("step --until @board.{pin} {level} --timeout {timeout_ms}ms");
+    let command = Command::parse(&line, project).unwrap().unwrap();
+    let reply = live.run(&command);
+    if reply.ok() {
+        let Data::Stepped(stepped) = reply.data else {
+            panic!("{line} did not step");
+        };
+        match stepped.met {
+            Some(Met::Edge(ps) | Met::At(ps)) => Some(ps),
+            met => panic!("{line}: {met:?}"),
+        }
+    } else {
+        assert!(
+            reply.text().contains("did not hold within"),
+            "{line}: unexpected failure: {}",
+            reply.text()
+        );
+        None
+    }
+}
+
+/// Collects every `(rise_ps, fall_ps)` pulse on `pin`, waiting up to `start_ms` for the first rise
+/// and stopping once `pin` stays low for `quiet_ms`.
+fn collect_pulses(
+    live: &mut Live,
+    project: &Path,
+    pin: &str,
+    start_ms: u32,
+    quiet_ms: u32,
+) -> Vec<(u64, u64)> {
+    let mut pulses = Vec::new();
+    let mut wait = start_ms;
+    while let Some(rise) = try_edge_on(live, project, pin, "high", wait) {
+        let fall = try_edge_on(live, project, pin, "low", 5)
+            .unwrap_or_else(|| panic!("pulse starting at {rise} ps did not fall"));
+        pulses.push((rise, fall));
+        wait = quiet_ms;
+    }
+    pulses
+}
+
+/// 1 ms `tone()` notes at 4000 Hz (divider 2500, 250 us), 8000 Hz (divider 1250, 125 us) and
+/// 4321 Hz (divider 2314, 231.4 us) back to back and spaced by `delay(2)`: every full period
+/// inside each note matches the timer divider's exact period and 511/1024 duty.
+#[test]
+fn a_stock_1ms_tone_notes_hold_exact_divider_periods() {
+    let (project, mut live) = open("esp32s3-stock-tonefast");
+    let path = project.path();
+
+    // Back-to-back 1 ms burst: tone(4, 4000, 1); tone(4, 8000, 1); tone(4, 4321, 1);
+    run(&mut live, path, r#"step --until serial contains "burst""#);
+    let burst = collect_pulses(&mut live, path, "GPIO4", 5, 3);
+    assert!(burst.len() >= 12, "burst pulses: {burst:?}");
+
+    let p4000 = 250 * US;
+    let p8000 = 125 * US;
+    let p4321 = 231_400_000u64; // 40 MHz / (2314 / 256 * 1024) = 4321.521 Hz
+    let mut c4000 = 0usize;
+    let mut c8000 = 0usize;
+    let mut c4321 = 0usize;
+    let mut transitions = 0usize;
+    for pair in burst.windows(2) {
+        let (r0, f0) = pair[0];
+        let (r1, _) = pair[1];
+        let period = r1 - r0;
+        let high_ps = f0 - r0;
+        if near(period, p4000, 1) {
+            assert_eq!(c8000 + c4321, 0, "4000 Hz after later note");
+            assert!(
+                near(high_ps, high(p4000, 0x1ff, 10), TICK),
+                "4000 Hz high {high_ps}"
+            );
+            c4000 += 1;
+        } else if near(period, p8000, 1) {
+            assert_eq!(c4321, 0, "8000 Hz after 4321 Hz");
+            assert!(
+                near(high_ps, high(p8000, 0x1ff, 10), TICK),
+                "8000 Hz high {high_ps}"
+            );
+            c8000 += 1;
+        } else if near(period, p4321, 1) {
+            assert!(
+                near(high_ps, high(p4321, 0x1ff, 10), TICK),
+                "4321 Hz high {high_ps}"
+            );
+            c4321 += 1;
+        } else {
+            // Only boundary pulses at the two note switches may differ from the exact divider period
+            // (a merged high or the 37.5 ns RST pulse width from ledc_ll_timer_rst).
+            transitions += 1;
+            assert!(
+                high_ps >= high(p8000, 0x1ff, 10) - TICK,
+                "unexpected runt high {high_ps} ps in transition {pair:?}"
+            );
+        }
+    }
+    assert!(c4000 >= 2, "4000 Hz full periods: {c4000}");
+    assert!(c8000 >= 5, "8000 Hz full periods: {c8000}");
+    assert!(c4321 >= 3, "4321 Hz full periods: {c4321}");
+    assert!(
+        transitions <= 3,
+        "at most 3 boundary pulses across 2 note switches, got {transitions}"
+    );
+
+    // Spaced 1 ms notes with delay(2) between them: every intra-note period matches its divider.
+    run(&mut live, path, r#"step --until serial contains "spaced""#);
+    let spaced = collect_pulses(&mut live, path, "GPIO4", 5, 3);
+    let mut s4000 = 0usize;
+    let mut s8000 = 0usize;
+    let mut s4321 = 0usize;
+    for pair in spaced.windows(2) {
+        let (r0, f0) = pair[0];
+        let (r1, _) = pair[1];
+        let period = r1 - r0;
+        if period > MS {
+            continue; // silent gap between spaced notes
+        }
+        let high_ps = f0 - r0;
+        if near(period, p4000, 1) {
+            assert_eq!(s8000 + s4321, 0, "spaced 4000 Hz after later note");
+            assert!(
+                near(high_ps, high(p4000, 0x1ff, 10), TICK),
+                "spaced 4000 Hz high {high_ps}"
+            );
+            s4000 += 1;
+        } else if near(period, p8000, 1) {
+            assert_eq!(s4321, 0, "spaced 8000 Hz after 4321 Hz");
+            assert!(
+                near(high_ps, high(p8000, 0x1ff, 10), TICK),
+                "spaced 8000 Hz high {high_ps}"
+            );
+            s8000 += 1;
+        } else if near(period, p4321, 1) {
+            assert!(
+                near(high_ps, high(p4321, 0x1ff, 10), TICK),
+                "spaced 4321 Hz high {high_ps}"
+            );
+            s4321 += 1;
+        } else {
+            panic!("spaced intra-note period {period} ps matches no divider: {pair:?}");
+        }
+    }
+    assert!(s4000 >= 2, "spaced 4000 Hz full periods: {s4000}");
+    assert!(s8000 >= 2, "spaced 8000 Hz full periods: {s8000}");
+    assert!(s4321 >= 1, "spaced 4321 Hz full periods: {s4321}");
+
+    run(&mut live, path, r#"step --until serial contains "done""#);
+    run(&mut live, path, "expect @board.GPIO4 low");
+    run(&mut live, path, "expect no diagnostics");
+}

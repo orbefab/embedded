@@ -2099,4 +2099,30 @@ mod tests {
         assert_eq!(edges(&mut ledc, 500), [(288, false), (480, true)]);
         assert!(ledc.line(Tick(480), APB));
     }
+
+    /// Dropping a running timer's resolution so `2^DUTY_RES <= duty` holds the channel steady high
+    /// from the switch on while keeping `DUTY_R` unchanged; raising resolution back above `duty`
+    /// resumes PWM at that same raw duty (TRM v1.8, 35.3.2.3 and 35.3.3).
+    #[test]
+    fn a_running_timer_resolution_drop_below_duty_holds_high_and_resumes_when_raised() {
+        let mut ledc = Ledc::new();
+        // Divider 256, 4 bits -> period 96 ticks. Duty 8/16 -> high 48 ticks [96, 144), low [144, 192).
+        timer(&mut ledc, Tick(0), 256, 4);
+        duty(&mut ledc, Tick(1), 8).unwrap();
+        assert_eq!(edges(&mut ledc, 150), [(96, true), (144, false)]);
+
+        // Drop resolution to 3 bits (8 steps, period 48 ticks) via PARA_UP at tick 150.
+        // At overflow 192, raw duty 8 >= 2^3 -> signal rises and holds steady high, DUTY_R stays 8.
+        ledc.write(Tick(150), TIMER_BASE, 256 << 4 | 3 | TIMER_STROBE, APB)
+            .unwrap();
+        assert_eq!(edges(&mut ledc, 500), [(192, true)]);
+        assert_eq!(ledc.next(APB), None, "steady high has no PWM edge");
+        assert_eq!(ledc.read(Tick(500), 0x10, APB), Some(8 << 4));
+
+        // Raise resolution back to 4 bits via PARA_UP at tick 500 -> next 48-tick overflow of the
+        // 3-bit timer is 192 + 7 * 48 = 528. From 528 on, duty 8/16 resumes: fall at 576, rise 624.
+        ledc.write(Tick(500), TIMER_BASE, 256 << 4 | 4 | TIMER_STROBE, APB)
+            .unwrap();
+        assert_eq!(edges(&mut ledc, 650), [(576, false), (624, true)]);
+    }
 }
