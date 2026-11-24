@@ -21,6 +21,7 @@ import { SceneView } from "./scene-view";
 import { useStageTheme } from "./stage-theme";
 import { applySerial, EMPTY_SERIAL, serialShown, type SerialView } from "./serial";
 import { commandLine, errorText, type SessionSource } from "./session";
+import { speedText } from "./speed";
 import {
   type Control,
   formatValue,
@@ -366,17 +367,20 @@ function SliderPanel({
 /** The session's state and time, a button that plays or pauses it, and the fault below once
  * the session faulted. It reads frames itself, so a frame redraws only this bar. */
 function Controls({ source, send }: { source: SessionSource; send: (command: Command) => void }) {
-  const [now, setNow] = useState<{ state: FrameState; t_ps: number; fault?: string } | null>(null);
+  const [now, setNow] = useState<{ state: FrameState; t_ps: number; ratio?: number; fault?: string } | null>(null);
   useEffect(
     () =>
       source.subscribe((message) => {
-        if (message.type === "frame") setNow({ state: message.state, t_ps: message.t_ps, fault: message.fault });
+        if (message.type === "frame") {
+          setNow({ state: message.state, t_ps: message.t_ps, ratio: message.ratio, fault: message.fault });
+        }
       }),
     [source]
   );
   if (now === null) return null;
   const playing = now.state === "playing";
   const ended = now.state === "stopped" || now.state === "faulted";
+  const speed = speedText(now.state, now.ratio);
   return (
     <>
       <div
@@ -396,6 +400,11 @@ function Controls({ source, send }: { source: SessionSource; send: (command: Com
       >
         <span data-testid="state">{now.state}</span>
         <span data-testid="time">t = {seconds(now.t_ps)}</span>
+        {speed === null ? null : (
+          <span data-testid="speed" style={{ color: "var(--stage-label-muted, #c9ced6)" }}>
+            {speed}
+          </span>
+        )}
         <button
           data-testid="play"
           disabled={ended}

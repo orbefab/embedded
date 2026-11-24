@@ -444,26 +444,78 @@ fn a_unique_id_segment_prints_that_part_and_several_list_like_an_unknown_id() {
     );
 
     let (code, stdout, stderr) = orbe(&["part", "switch"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.starts_with("tactile-switch-6mm  "), "{stdout}");
+
+    let (code, stdout, stderr) = orbe(&["part", "capacitor"]);
     assert_eq!(code, 1);
     assert!(stdout.is_empty(), "{stdout}");
-    assert!(stderr.starts_with("error[unknown_part]: no Block or part named `switch`\n"));
-    for name in [
-        "tactile-switch-6mm",
-        "tactile-switch-smd",
-        "tactile-switch-ts42",
-    ] {
+    assert!(stderr.starts_with("error[unknown_part]: no Block or part named `capacitor`\n"));
+    for name in ["capacitor-ceramic-disc", "capacitor-electrolytic-radial"] {
         assert!(stderr.contains(&format!("`{name}`")), "{stderr}");
     }
+    for hidden in [
+        "capacitor-0603",
+        "capacitor-electrolytic-smd",
+        "capacitor-tantalum-3216",
+    ] {
+        assert!(!stderr.contains(hidden), "{stderr}");
+    }
 
-    let (code, stdout, stderr) = orbe(&["part", "switch", "--json"]);
+    let (code, stdout, stderr) = orbe(&["part", "capacitor", "--json"]);
     assert_eq!(code, 1, "{stderr}");
     assert!(stderr.is_empty(), "{stderr}");
     let envelope: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(envelope["ok"], false);
     assert_eq!(envelope["error"]["code"], "unknown_part");
     let hint = envelope["error"]["hint"].as_str().unwrap();
-    assert!(hint.contains("tactile-switch-6mm"), "{hint}");
-    assert!(hint.contains("tactile-switch-smd"), "{hint}");
+    assert!(hint.contains("capacitor-ceramic-disc"), "{hint}");
+    assert!(hint.contains("capacitor-electrolytic-radial"), "{hint}");
+    assert!(!hint.contains("capacitor-0603"), "{hint}");
+}
+
+#[test]
+fn unknown_id_suggestions_skip_unlisted_parts() {
+    let dir = tempfile::tempdir().unwrap();
+    let run_add = |args: &[&str]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_orbe"));
+        registry_env::apply(&mut command);
+        let output = command.args(args).current_dir(dir.path()).output().unwrap();
+        (
+            output.status.code().unwrap(),
+            String::from_utf8(output.stdout).unwrap(),
+            String::from_utf8(output.stderr).unwrap(),
+        )
+    };
+
+    let (code, stdout, stderr) = run_add(&["add", "esp32"]);
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert_eq!(
+        stderr,
+        "error[unknown_part]: no Block or part named `esp32`\n  hint: did you mean `esp32s3-devkitc-1`?\n"
+    );
+
+    let (code, stdout, stderr) = run_add(&["add", "esp32", "--json"]);
+    assert_eq!(code, 1, "{stderr}");
+    let envelope: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(envelope["error"]["code"], "unknown_part");
+    assert_eq!(
+        envelope["error"]["hint"],
+        "did you mean `esp32s3-devkitc-1`?"
+    );
+
+    let (code, stdout, stderr) = orbe(&["part", "esp32"]);
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert_eq!(
+        stderr,
+        "error[unknown_part]: no Block or part named `esp32`\n  hint: did you mean `esp32s3-devkitc-1`?\n"
+    );
+
+    let (code, stdout, stderr) = orbe(&["part", "esp32s3-qfn56"]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.starts_with("esp32s3-qfn56  "), "{stdout}");
 }
 
 #[test]

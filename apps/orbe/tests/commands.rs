@@ -255,7 +255,7 @@ fn the_block_compile_commands_write_the_hex_the_scene_names() {
     assert!(dir.join("build/fade.ino.hex").is_file());
     let run = runtime.orbe(dir, &["test"]).ok();
     assert!(
-        run.stdout.contains("PASS tests/fade.test\n")
+        run.stdout.contains("PASS tests/fade.test (scene.jsonc)\n")
             && run.stdout.ends_with("1 passed, 0 failed\n"),
         "{}",
         run.stdout
