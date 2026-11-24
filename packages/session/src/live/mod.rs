@@ -1125,35 +1125,85 @@ impl Open {
         }
     }
 
-    /// A part's light state, its brightness, its colours, and its engine quantities. `None` when
-    /// it has none.
+    /// A part's light state, its brightness, its colours, its relay contact, and its engine
+    /// quantities. `None` when it has none.
     fn part(&self, path: &str) -> Option<Reading> {
         let part = &self.refs.parts[path];
-        let engine = one_engine(path, part, Code::NoReading).ok()?;
-        let color = rgb_reading(part).map(|_| self.colors(&engine));
+        let contact = self.contact_closed(path);
+        let engine = one_engine(path, part, Code::NoReading).ok();
+        let color = engine
+            .as_deref()
+            .and_then(|engine| rgb_reading(part).map(|_| self.colors(engine)));
         let probe = self.engine.probe();
-        let quantities: Vec<(String, Unit, f64)> = self
-            .reports
-            .get(&engine)
-            .map_or(&[][..], Vec::as_slice)
-            .iter()
-            .map(|&q| {
-                let value = probe.get(&quantity(&engine, q)).expect("a reported column");
-                (q.as_str().to_string(), unit_of(q), value.get())
+        let quantities: Vec<(String, Unit, f64)> = engine
+            .as_deref()
+            .map(|engine| {
+                self.reports
+                    .get(engine)
+                    .map_or(&[][..], Vec::as_slice)
+                    .iter()
+                    .map(|&q| {
+                        let value = probe.get(&quantity(engine, q)).expect("a reported column");
+                        (q.as_str().to_string(), unit_of(q), value.get())
+                    })
+                    .collect()
             })
-            .collect();
+            .unwrap_or_default();
         let glow = self
             .light
             .position(path)
             .map(|index| self.light.glow(index, &probe));
         let state = glow.map(|glow| glow.state);
         let brightness = glow.map(|glow| (glow.amperes, glow.over_ps));
-        (state.is_some() || color.is_some() || !quantities.is_empty()).then_some(Reading::Part {
-            state,
-            brightness,
-            color,
-            quantities,
-        })
+        (state.is_some() || contact.is_some() || color.is_some() || !quantities.is_empty())
+            .then_some(Reading::Part {
+                state,
+                brightness,
+                color,
+                contact,
+                quantities,
+            })
+    }
+
+    /// The part's relay contact, closed when its coil current is past pull-in. `None` when the
+    /// part states no contact reading.
+    pub(super) fn contact_closed(&self, path: &str) -> Option<bool> {
+        Some(self.level_before_now(self.contact_signal(path).ok()?) == Level::High)
+    }
+
+    /// The logic signal of the one relay under `path`.
+    pub(super) fn contact_signal(&self, path: &str) -> Result<usize, Error> {
+        let part = &self.refs.parts[path];
+        if !part
+            .readings
+            .values()
+            .any(|reading| reading.of == "contact")
+        {
+            return Err(Error::new(
+                Code::NoReading,
+                format!("`{path}` states no contact reading"),
+                format!("{path} has no readings entry of `contact`"),
+            ));
+        }
+        let Some(engine) = relay_engine(&self.refs, path) else {
+            return Err(Error::new(
+                Code::NoReading,
+                format!("`{path}` has no relay contact"),
+                format!("`{}` has no relay", part.ty),
+            ));
+        };
+        let want = format!("#{engine}.logic.contact");
+        self.engine
+            .signals()
+            .iter()
+            .position(|signal| signal.to_string() == want)
+            .ok_or_else(|| {
+                Error::new(
+                    Code::NoReading,
+                    format!("the engine reports no `{path}` contact"),
+                    format!("`{engine}` has no contact signal"),
+                )
+            })
     }
 
     fn snapshot(&self) -> Data {
@@ -1221,6 +1271,26 @@ fn pin_names(refs: &RefMap) -> BTreeMap<String, String> {
         }
     }
     names
+}
+
+/// The flat name of the one relay under `path`: its own engine part, or the only relay
+/// inside it.
+fn relay_engine(refs: &RefMap, path: &str) -> Option<String> {
+    let part = refs.parts.get(path)?;
+    if let Some(engine) = part.engine.iter().find(|engine| engine.kind == "relay") {
+        return Some(engine.name.clone());
+    }
+    let mut found = None;
+    for child in &part.children {
+        let Some(name) = relay_engine(refs, &format!("{path}.{child}")) else {
+            continue;
+        };
+        if found.is_some() {
+            return None;
+        }
+        found = Some(name);
+    }
+    found
 }
 
 /// Each chip logic signal by the net its pin sits on, and the pin each is named by: the one

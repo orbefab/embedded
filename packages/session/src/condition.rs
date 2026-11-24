@@ -30,6 +30,8 @@ pub enum State {
     Lit,
     Dim,
     Off,
+    Closed,
+    Open,
     High,
     Low,
 }
@@ -40,6 +42,8 @@ impl State {
             State::Lit => "lit",
             State::Dim => "dim",
             State::Off => "off",
+            State::Closed => "closed",
+            State::Open => "open",
             State::High => "high",
             State::Low => "low",
         }
@@ -51,14 +55,22 @@ impl State {
             State::Lit => Some(crate::reply::Light::Lit),
             State::Dim => Some(crate::reply::Light::Dim),
             State::Off => Some(crate::reply::Light::Off),
-            State::High | State::Low => None,
+            State::Closed | State::Open | State::High | State::Low => None,
         }
     }
 
     fn parse(word: &str) -> Option<State> {
-        [State::Lit, State::Dim, State::Off, State::High, State::Low]
-            .into_iter()
-            .find(|s| s.as_str() == word)
+        [
+            State::Lit,
+            State::Dim,
+            State::Off,
+            State::Closed,
+            State::Open,
+            State::High,
+            State::Low,
+        ]
+        .into_iter()
+        .find(|s| s.as_str() == word)
     }
 }
 
@@ -297,7 +309,7 @@ impl Condition {
             }
             [r, word] if r.starts_with('@') => {
                 let state = State::parse(word).ok_or_else(|| {
-                    format!("`{word}` is not a state; use lit, dim, off, high, low or a colour such as rgb(255,0,0)")
+                    format!("`{word}` is not a state; use lit, dim, off, closed, open, high, low or a colour such as rgb(255,0,0)")
                 })?;
                 Ok(Condition::State(Ref::parse(r)?, state))
             }

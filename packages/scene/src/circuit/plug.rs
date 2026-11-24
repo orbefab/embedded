@@ -21,6 +21,9 @@ const REACH_MM: f64 = 1.27;
 const FIT_MM: f64 = 1.0;
 /// A leg points down when its axis does, once placed.
 const DOWN: f64 = -0.5;
+/// A lead whose tip is this close to the seating plane, or above it, does not enter the
+/// board the part plugs into. One trimmed flush on a module stops on that module.
+const ABOVE_BOARD_MM: f64 = -0.01;
 
 /// How a drawn leg joins the hole it is drawn in.
 pub(super) enum Join {
@@ -698,8 +701,12 @@ impl Circuit<'_> {
                     continue;
                 };
                 let t = turn(&frame, tip);
+                let tip = [origin[0] + t[0], origin[1] + t[1], origin[2] + t[2]];
+                if tip[2] > ABOVE_BOARD_MM {
+                    continue;
+                }
                 legs.push(Leg {
-                    tip: [origin[0] + t[0], origin[1] + t[1], origin[2] + t[2]],
+                    tip,
                     pin_key: self.keys[&(at, pin.name.clone())],
                     lead,
                     leaf: format!("{}.{}", self.insts[at].dotted(), pin.name),

@@ -30,7 +30,7 @@ Right after `step --until @led1 lit` the pin is already high and `i` is about 12
 
 | Code | What it means, and what to do |
 | --- | --- |
-| `scene.led_no_resistor` | An LED joins two driven nets, such as a pin and GND, with no resistor in series. Put one in series, such as 220 ohm from a 5 V pin. Lint misses an LED wired straight to an output pin that also has a pull-up. |
+| `scene.led_no_resistor` | An LED joins two driven nets with no resistor in series. Put one in series, such as 220 ohm from a 5 V pin. A relay contact counts as a switch. Lint misses an LED on a pin that also has a pull-up. |
 | `scene.no_model` | A part has no engine model, no `not_simulated` reason and no `"joins_only": true`, so nothing runs for it. Use a part with a model. |
 | `scene.unconnected` | Nothing is wired to a part, or a part with at most 3 nets has a net with no wire. Wire it, or leave it open when the circuit means it. |
 | `net.floating` | A net has no DC path to ground. Fix it when a part reads that net. `orbe nets` marks `(floating)`. |
