@@ -271,8 +271,8 @@ export function blockKind(scene: string, id: string): BlockKind {
   if (/"type"\s*:\s*"neopixel-stick-8"/.test(code)) return "pixels";
   if (/"type"\s*:\s*"oled-ssd1306-128x64"/.test(code)) return "screen";
   if (/"type"\s*:\s*"hc595-dip16"/.test(code)) return "shift";
-  if (/"type"\s*:\s*"esp32s3-devkitc-1"/.test(code)) return "rgb";
   if (/"type"\s*:\s*"gy-bmp280"/.test(code)) return "serial";
+  if (/"type"\s*:\s*"esp32s3-devkitc-1"/.test(code)) return "rgb";
   if (/"world"\s*:\s*\{[^}]*"light"\s*:/.test(code)) return "light";
   if (/"btn1"\s*:/.test(code)) return "button";
   if (/"type"\s*:\s*"buzzer-12mm"/.test(code)) return "tone";

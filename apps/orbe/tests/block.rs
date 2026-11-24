@@ -16,6 +16,7 @@ use live::{common, orbe};
 
 const BLOCKS: [&str; 13] = [
     "devkitc-button-led",
+    "devkitc-gy-bmp280",
     "nano-7seg-count",
     "nano-button-led",
     "nano-buzzer",
@@ -23,7 +24,6 @@ const BLOCKS: [&str; 13] = [
     "nano-led-fade",
     "nano-light-comparator",
     "nano-neopixel-stick",
-    "nano-gy-bmp280",
     "nano-oled",
     "nano-relay-led",
     "nano-servo-sweep",
@@ -94,7 +94,7 @@ fn a_block_installs_into_an_empty_folder_and_passes_there() {
             "nano-7seg-count" => "display-7seg-cc",
             "nano-neopixel-stick" => "neopixel-stick-8",
             "nano-oled" => "oled-ssd1306-128x64",
-            "nano-gy-bmp280" => "gy-bmp280",
+            "devkitc-gy-bmp280" => "gy-bmp280",
             "devkitc-button-led" => "esp32s3-devkitc-1",
             "nano-buzzer" => "buzzer-12mm",
             "nano-servo-sweep" => "servo-sg90",

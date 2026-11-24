@@ -23,10 +23,10 @@ fn each_block_passes() {
         ids,
         [
             "devkitc-button-led",
+            "devkitc-gy-bmp280",
             "nano-7seg-count",
             "nano-button-led",
             "nano-buzzer",
-            "nano-gy-bmp280",
             "nano-led-fade",
             "nano-light-comparator",
             "nano-neopixel-stick",
@@ -1375,7 +1375,7 @@ expect no diagnostics
 
 fn bmp_scene(dir: &std::path::Path, extra_parts: &str, wires: &str) {
     fs::copy(
-        common::repo().join("blocks/nano-gy-bmp280/build/bmp280.ino.hex"),
+        common::repo().join("packages/engine/tests/firmware/sketch/bmp280.hex"),
         dir.join("build/bmp280.ino.hex"),
     )
     .unwrap();
@@ -1471,16 +1471,21 @@ fn an_unpowered_bmp280_holds_the_bus_and_the_sketch_never_reads() {
 #[test]
 fn set_pressure_back_before_time_moves_keeps_the_value_in_force() {
     let dir = project(
-        "open\nset pressure 30000\nset pressure 101325\nset temperature 0\nset temperature 25\n",
+        "open\nset pressure 30000\nset pressure 101325\nset temperature 0\nset temperature 25\nexpect no diagnostics\n",
     );
     fs::copy(
-        common::repo().join("blocks/nano-gy-bmp280/scene.jsonc"),
+        common::repo().join("blocks/devkitc-gy-bmp280/scene.jsonc"),
         dir.path().join("scene.jsonc"),
     )
     .unwrap();
     fs::copy(
-        common::repo().join("blocks/nano-gy-bmp280/build/bmp280.ino.hex"),
-        dir.path().join("build/bmp280.ino.hex"),
+        common::repo().join("blocks/devkitc-gy-bmp280/build/bmp280.ino.bin"),
+        dir.path().join("build/bmp280.ino.bin"),
+    )
+    .unwrap();
+    fs::copy(
+        common::repo().join("blocks/devkitc-gy-bmp280/build/bmp280.ino.partitions.bin"),
+        dir.path().join("build/bmp280.ino.partitions.bin"),
     )
     .unwrap();
     let run = orbe(dir.path(), &["test", "-v"]);
