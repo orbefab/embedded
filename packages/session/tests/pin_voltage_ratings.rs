@@ -410,3 +410,246 @@ fn lcd1602_and_sk68xx_on_3v3_driven_by_5v_warn_rating_voltage() {
         "{snap_text}\n{diagnostics:#?}"
     );
 }
+
+/// `rjmp .-2` — keeps every Nano pin as a floating input.
+const NANO_IDLE: &str = ":02000000FFCF30\n:00000001FF\n";
+
+#[test]
+fn a_bss138_level_shifter_between_esp32s3_and_5v_runs_both_ways_with_no_warning() {
+    let step5 = r#"{
+      "format": 1,
+      "pins": { "pos": [1], "neg": [2] },
+      "model": {
+        "kind": "voltage_source",
+        "voltage": {
+          "kind": "steps",
+          "initial": { "value": 0.0, "unit": "V", "source": "user" },
+          "events": [
+            { "t_ps": 1000000000, "level": { "value": 5.0, "unit": "V", "source": "user" } },
+            { "t_ps": 3000000000, "level": { "value": 0.0, "unit": "V", "source": "user" } }
+          ]
+        },
+        "pins": { "p": "pos", "n": "neg" }
+      }
+    }"#;
+    let scene = r#"{
+      "format": 1,
+      "parts": {
+        "s3": {
+          "type": "esp32s3-devkitc-1",
+          "app": "build/button.ino.bin",
+          "partitions": "build/button.ino.partitions.bin"
+        },
+        "nano": { "type": "nano-board", "firmware": "build/idle.hex" },
+        "shifter": { "type": "bss138-level-shifter" },
+        "drv5": { "type": "./step5.jsonc" },
+        "sw": { "type": "tactile-switch-6mm" }
+      },
+      "ground": "s3.GND",
+      "wires": [
+        ["s3.GND", "nano.GND"],
+        ["s3.GND", "shifter.GND"],
+        ["s3.GND", "drv5.neg"],
+        ["s3.GND", "sw.b"],
+        ["s3.3V3", "shifter.LV"],
+        ["nano.5V", "shifter.HV"],
+        ["drv5.pos", "shifter.HV1"],
+        ["shifter.LV1", "s3.GPIO5"],
+        ["s3.GPIO4", "shifter.LV2"],
+        ["s3.GPIO4", "sw.a"],
+        ["shifter.HV2", "nano.D3"]
+      ]
+    }"#;
+    let files = devkit_files(
+        scene,
+        vec![
+            (PathBuf::from("proj/step5.jsonc"), step5.as_bytes().to_vec()),
+            (
+                PathBuf::from("proj/build/idle.hex"),
+                NANO_IDLE.as_bytes().to_vec(),
+            ),
+        ],
+    );
+    let project = Path::new("proj");
+    let mut live = Live::new("s3-shifter", files);
+    run_cmd(&mut live, project, "open");
+
+    // Before the 5 V step: HV1 is 0 V so LV1 (s3.GPIO5) is low; LV2 (s3.GPIO4) is pulled up so
+    // HV2 (nano.D3) is high near the Nano's 5 V rail.
+    run_cmd(&mut live, project, "step 500us");
+    let (gpio5_lo, txt) = run_cmd(&mut live, project, "get @s3.GPIO5");
+    assert_eq!(gpio5_lo["data"]["value"]["level"], "low", "{txt}");
+    let (d3_hi, txt) = run_cmd(&mut live, project, "get @nano.D3");
+    assert_eq!(d3_hi["data"]["value"]["level"], "high", "{txt}");
+    let d3_hi_v = d3_hi["data"]["value"]["v"].as_f64().unwrap();
+    assert!((4.6..=5.0).contains(&d3_hi_v), "{txt}");
+
+    // Step past the 0 -> 5 V drain edge on HV1: LV1 (s3.GPIO5) rises to ~3.3 V with no warning.
+    run_cmd(&mut live, project, "step 1.5ms");
+    let (v3, txt) = run_cmd(&mut live, project, "get @s3.3V3");
+    let v3_val = v3["data"]["value"]["v"].as_f64().unwrap();
+    assert!((3.25..=3.35).contains(&v3_val), "{txt}");
+    let (gpio5_hi, txt) = run_cmd(&mut live, project, "get @s3.GPIO5");
+    assert_eq!(gpio5_hi["data"]["value"]["level"], "high", "{txt}");
+    let gpio5_hi_v = gpio5_hi["data"]["value"]["v"].as_f64().unwrap();
+    assert!((3.25..=3.35).contains(&gpio5_hi_v), "{txt}");
+
+    // Pull the S3 low side (LV2) low and step past the 5 -> 0 V fall on HV1: both sides follow low.
+    run_cmd(&mut live, project, "press @sw");
+    run_cmd(&mut live, project, "step 2ms");
+    let (gpio5_lo2, txt) = run_cmd(&mut live, project, "get @s3.GPIO5");
+    assert_eq!(gpio5_lo2["data"]["value"]["level"], "low", "{txt}");
+    let (d3_lo, txt) = run_cmd(&mut live, project, "get @nano.D3");
+    assert_eq!(d3_lo["data"]["value"]["level"], "low", "{txt}");
+    let d3_lo_v = d3_lo["data"]["value"]["v"].as_f64().unwrap();
+    assert!(d3_lo_v < 0.2, "{txt}");
+
+    // Release the S3 low side: HV2 returns high near 5 V.
+    run_cmd(&mut live, project, "release @sw");
+    run_cmd(&mut live, project, "step 1ms");
+    let (d3_hi2, txt) = run_cmd(&mut live, project, "get @nano.D3");
+    assert_eq!(d3_hi2["data"]["value"]["level"], "high", "{txt}");
+    let d3_hi2_v = d3_hi2["data"]["value"]["v"].as_f64().unwrap();
+    assert!((4.6..=5.0).contains(&d3_hi2_v), "{txt}");
+
+    let (diagnostics, snap_text) = diagnostics_of(&mut live, project);
+    assert!(diagnostics.is_empty(), "{snap_text}\n{diagnostics:#?}");
+}
+
+#[test]
+fn a_bss138_level_shifter_on_a_nano_3v3_rail_runs_with_no_warning() {
+    let v5 = r#"{
+      "format": 1,
+      "pins": { "pos": [1], "neg": [2] },
+      "model": {
+        "kind": "voltage_source",
+        "voltage": { "value": 5.0, "unit": "V", "source": "user" },
+        "pins": { "p": "pos", "n": "neg" }
+      }
+    }"#;
+    let step5 = r#"{
+      "format": 1,
+      "pins": { "pos": [1], "neg": [2] },
+      "model": {
+        "kind": "voltage_source",
+        "voltage": {
+          "kind": "steps",
+          "initial": { "value": 0.0, "unit": "V", "source": "user" },
+          "events": [
+            { "t_ps": 1000000000, "level": { "value": 5.0, "unit": "V", "source": "user" } }
+          ]
+        },
+        "pins": { "p": "pos", "n": "neg" }
+      }
+    }"#;
+    let scene = r#"{
+      "format": 1,
+      "parts": {
+        "nano": { "type": "nano-board", "firmware": "build/idle.hex" },
+        "shifter": { "type": "bss138-level-shifter" },
+        "v5": { "type": "./v5.jsonc" },
+        "drv": { "type": "./step5.jsonc" }
+      },
+      "ground": "nano.GND",
+      "wires": [
+        ["nano.GND", "shifter.GND"],
+        ["nano.GND", "v5.neg"],
+        ["nano.GND", "drv.neg"],
+        ["nano.3V3", "shifter.LV"],
+        ["v5.pos", "shifter.HV"],
+        ["drv.pos", "shifter.HV1"],
+        ["shifter.LV1", "nano.D2"]
+      ]
+    }"#;
+    let block = repo().join("blocks/nano-button-led");
+    let files = Files::memory(vec![
+        (
+            PathBuf::from("proj/block.jsonc"),
+            fs::read(block.join("block.jsonc")).unwrap(),
+        ),
+        (PathBuf::from("proj/scene.jsonc"), scene.as_bytes().to_vec()),
+        (PathBuf::from("proj/v5.jsonc"), v5.as_bytes().to_vec()),
+        (PathBuf::from("proj/step5.jsonc"), step5.as_bytes().to_vec()),
+        (
+            PathBuf::from("proj/build/idle.hex"),
+            NANO_IDLE.as_bytes().to_vec(),
+        ),
+    ])
+    .with_catalog(catalog());
+    let project = Path::new("proj");
+    let mut live = Live::new("nano-shifter", files);
+    run_cmd(&mut live, project, "open");
+    run_cmd(&mut live, project, "step 2ms");
+    let (diagnostics, snap_text) = diagnostics_of(&mut live, project);
+    assert!(diagnostics.is_empty(), "{snap_text}\n{diagnostics:#?}");
+    let (v3, txt) = run_cmd(&mut live, project, "get @nano.3V3");
+    let v3_val = v3["data"]["value"]["v"].as_f64().unwrap();
+    assert!((3.25..=3.35).contains(&v3_val), "{txt}");
+    let (d2, txt) = run_cmd(&mut live, project, "get @nano.D2");
+    assert_eq!(d2["data"]["value"]["level"], "high", "{txt}");
+}
+
+#[test]
+fn a_brief_5v_pulse_into_an_esp32s3_gpio_still_warns() {
+    let pulse5 = r#"{
+      "format": 1,
+      "pins": { "pos": [1], "neg": [2] },
+      "model": {
+        "kind": "voltage_source",
+        "voltage": {
+          "kind": "steps",
+          "initial": { "value": 0.0, "unit": "V", "source": "user" },
+          "events": [
+            { "t_ps": 1000000000, "level": { "value": 5.0, "unit": "V", "source": "user" } },
+            { "t_ps": 1000100000, "level": { "value": 0.0, "unit": "V", "source": "user" } }
+          ]
+        },
+        "pins": { "p": "pos", "n": "neg" }
+      }
+    }"#;
+    let scene = r#"{
+      "format": 1,
+      "parts": {
+        "s3": {
+          "type": "esp32s3-devkitc-1",
+          "app": "build/button.ino.bin",
+          "partitions": "build/button.ino.partitions.bin"
+        },
+        "pulse": { "type": "./pulse5.jsonc" }
+      },
+      "ground": "s3.GND",
+      "wires": [
+        ["s3.GND", "pulse.neg"],
+        ["pulse.pos", "s3.GPIO4"]
+      ]
+    }"#;
+    let files = devkit_files(
+        scene,
+        vec![(
+            PathBuf::from("proj/pulse5.jsonc"),
+            pulse5.as_bytes().to_vec(),
+        )],
+    );
+    let project = Path::new("proj");
+    let mut live = Live::new("s3-brief-5v", files);
+    run_cmd(&mut live, project, "open");
+    run_cmd(&mut live, project, "step 2ms");
+    let (diagnostics, snap_text) = diagnostics_of(&mut live, project);
+    let voltage: Vec<&Value> = diagnostics
+        .iter()
+        .filter(|d| d["code"] == "rating.voltage")
+        .collect();
+    assert_eq!(voltage.len(), 1, "{snap_text}\n{diagnostics:#?}");
+    let refs: Vec<&str> = voltage[0]["refs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert!(
+        refs.iter().any(|r| r.contains("GPIO4")),
+        "refs={refs:?} ({snap_text})"
+    );
+    let peak = voltage[0]["data"]["peak"].as_f64().unwrap();
+    assert!((4.95..=5.05).contains(&peak), "peak={peak} ({snap_text})");
+}
