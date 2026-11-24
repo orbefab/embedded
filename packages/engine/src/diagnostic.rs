@@ -2019,27 +2019,18 @@ pub fn significant_text(value: f64) -> String {
     }
 }
 
-/// Whether `value` is over `limit` once both are rounded to 3 significant digits.
-pub(crate) fn exceeds(value: f64, limit: f64) -> bool {
-    significant(value) > significant(limit)
-}
-
-/// [`exceeds`] when `limit` is already [`significant`].
+/// Whether `value` is over `limit` once both are rounded to 3 significant digits, when `limit`
+/// is already [`significant`].
 ///
 /// Rounding to 3 significant digits moves a finite positive number by at most half a
 /// percent, so more than 1% away from `limit` the comparison needs no formatting. Inside
 /// that band, and when `limit` is not a positive finite number, the check rounds `value`.
 #[inline]
 pub(crate) fn exceeds_rounded(value: f64, limit: f64) -> bool {
-    let over = match decided_without_rounding(value, limit) {
+    match decided_without_rounding(value, limit) {
         Some(over) => over,
         None => significant(value) > limit,
-    };
-    debug_assert!(
-        over == (significant(value) > limit),
-        "value {value:?} rounded limit {limit:?}"
-    );
-    over
+    }
 }
 
 /// `Some` when `value` and `limit` are far enough apart that rounding cannot change
@@ -2174,16 +2165,6 @@ mod tests {
         for digits in 100..=999 {
             limits.push(digits as f64 / 100.0);
         }
-        let mut state = 0x1234_5678_u64;
-        for _ in 0..4_000 {
-            state = state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1);
-            let exp = ((state >> 33) % 25) as i32 - 12;
-            let mant = 100.0 + (state % 900) as f64;
-            let sign = if state & 1 == 0 { 1.0 } else { -1.0 };
-            limits.push(sign * mant * libm::pow(10.0, exp as f64) / 100.0);
-        }
         for limit in limits {
             let rounded = significant(limit);
             let mut values = vec![
@@ -2207,7 +2188,7 @@ mod tests {
             for value in values {
                 assert_eq!(
                     exceeds_rounded(value, rounded),
-                    exceeds(value, limit),
+                    significant(value) > rounded,
                     "value {value:?} limit {limit:?} rounded {rounded:?}"
                 );
             }

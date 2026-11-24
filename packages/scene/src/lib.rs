@@ -36,8 +36,8 @@ use std::path::Path;
 pub use breadboard::{PlugPart, breadboard_line};
 pub use catalog::Version;
 pub use circuit::{
-    Amount, BoardFacts, BoardLed, EnginePart, FilePath, Gap, Instance, MapParam, MapPart, Netlist,
-    PartData, PinWhy, Placement, Reading, RefMap, Supply, View, Wire, board_facts, one_part,
+    Amount, EnginePart, FilePath, Instance, MapParam, MapPart, Netlist, PartData, PinWhy,
+    Placement, Reading, RefMap, View, Wire, one_part,
 };
 pub use diagnostic::{Code, Diagnostic, Lint};
 pub use files::Files;

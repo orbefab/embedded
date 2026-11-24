@@ -101,12 +101,9 @@ export interface IndexRow {
 /** A dependency's id, from `<id>@<version>`. */
 export const dependencyId = (dependency: string) => dependency.slice(0, dependency.lastIndexOf("@"));
 
-/** One item as its pages show it: its newest record, every version the registry serves, and
- * the items whose newest record names it. */
+/** One item as its pages show it: its newest record and whether search and the parts list offer it. */
 export interface Item<R extends ItemRecord> {
   readonly record: R;
-  readonly versions: readonly string[];
-  readonly usedBy: readonly string[];
   /** False when search and the parts list leave this part out. Absent means they offer it. */
   readonly listed?: boolean;
 }

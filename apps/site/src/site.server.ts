@@ -22,8 +22,6 @@ export interface BlockCard {
   readonly board: string;
   /** How many parts the scene places. The Block page's list is this long. */
   readonly parts: number;
-  /** The scene places a part with a press input, so the page shows the hold control. */
-  readonly button: boolean;
 }
 
 /** A part as the parts list shows it and the search reads it. */
@@ -68,7 +66,6 @@ const card = ({ record }: Item<BlockRecord>): BlockCard => {
     description: record.description,
     board: circuit.board.title,
     parts: circuit.placed.length,
-    button: circuit.hold !== null,
   };
 };
 
