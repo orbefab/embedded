@@ -238,13 +238,17 @@ fn an_input_above_the_common_mode_range_warns_and_the_stage_still_compares() {
 
     let (typical, _) = comparator(0.8, 4.2, 2.5);
     assert!(typical.is_empty(), "{typical:?}");
-    let (past_typical, _) = comparator(0.8, 4.201, 2.5);
+    let (rounded_typical, _) = comparator(0.8, 4.201, 2.5);
+    assert!(rounded_typical.is_empty(), "{rounded_typical:?}");
+    let (past_typical, _) = comparator(0.8, 4.21, 2.5);
     assert_eq!(warned_pins(&past_typical), ["#u1.pin.in_p"]);
 
     let (unrated, _) = comparator(0.0, 6.0, 2.5);
     assert!(unrated.is_empty(), "{unrated:?}");
     let (on_one_volt, _) = comparator(1.0, 4.0, 2.5);
     assert!(on_one_volt.is_empty(), "{on_one_volt:?}");
-    let (past_one_volt, _) = comparator(1.0, 4.001, 2.5);
+    let (rounded_one_volt, _) = comparator(1.0, 4.001, 2.5);
+    assert!(rounded_one_volt.is_empty(), "{rounded_one_volt:?}");
+    let (past_one_volt, _) = comparator(1.0, 4.01, 2.5);
     assert_eq!(warned_pins(&past_one_volt), ["#u1.pin.in_p"]);
 }

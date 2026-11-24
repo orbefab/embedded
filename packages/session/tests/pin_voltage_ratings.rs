@@ -137,7 +137,7 @@ fn a_nano_driving_an_esp32s3_gpio_at_5v_warns_and_the_s3_still_reads_high() {
         d["message"]
             .as_str()
             .unwrap()
-            .contains("outside its -0.3 V to 3.6"),
+            .contains("reaches 4.76 V over the chip's ground, outside its -0.3 V to 3.6 V rating"),
         "{snap_text}"
     );
     assert!(
@@ -323,6 +323,13 @@ fn an_oled_on_a_5v_i2c_bus_warns_and_keeps_drawing() {
     assert_eq!(
         screen_json["data"]["value"]["on"], true,
         "{screen_text} {screen_json}"
+    );
+    let (part_json, part_text) = run_cmd(&mut live, project, "get @oled");
+    assert_eq!(part_json["data"]["kind"], screen_json["data"]["kind"]);
+    assert_eq!(part_json["data"]["value"], screen_json["data"]["value"]);
+    assert_eq!(
+        part_text.strip_prefix("oled ").unwrap(),
+        screen_text.strip_prefix("oled.display.screen ").unwrap()
     );
 }
 

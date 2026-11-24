@@ -765,9 +765,9 @@ The message is:
 {ref} reaches {peak} V over the chip's ground, outside its {low} V to {high} V rating for {over_ps} ps
 ```
 
-A window with no floor reads `outside its {high} V ceiling`, and one with no ceiling `outside its {low} V floor`. ` for {over_ps} ps` is left out as for `rating.current`. A voltage window is checked on each accepted step: a pin past a rail conducts into its clamp at once.
+A window with no floor reads `outside its {high} V ceiling`, and one with no ceiling `outside its {low} V floor`. Each voltage in the message is rounded to 3 significant digits. ` for {over_ps} ps` is left out as for `rating.current`. A voltage window is checked on each accepted step: a pin past a rail conducts into its clamp at once. A pin is outside its window when its voltage, rounded to 3 significant digits, sits below the rounded floor or above the rounded ceiling. Equal is inside.
 
-`data` holds `high`, `low`, `over_ps`, `peak`, and `peak_ps`. Each voltage is over the chip's ground pin, `GND_8` on an `atmega328p`. `peak` is the pin's voltage where it was farthest outside the window, and `peak_ps` is when. `low` and `high` are the window at that time, and either is `null` when the part rates none. `over_ps` is `null` for an operating point, which has no duration, and counts the time outside the window as `rating.current` counts the time over.
+`data` holds `high`, `low`, `over_ps`, `peak`, and `peak_ps`, unrounded. Each voltage is over the chip's ground pin, `GND_8` on an `atmega328p`. `peak` is the pin's voltage where it was farthest outside the window, and `peak_ps` is when. `low` and `high` are the window at that time, and either is `null` when the part rates none. `over_ps` is `null` for an operating point, which has no duration, and counts the time outside the window as `rating.current` counts the time over.
 
 An `atmega328p` with a `ratings` object checks every pin but its two ground pins. The floor is `ratings.rail_margin` below ground. The ceiling is `ratings.rail_margin` above the chip's own `VCC`, so it follows the supply. `VCC`'s ceiling is `ratings.supply_voltage`, and `PC6`'s is `ratings.reset_voltage` while it is `RESET`. A pin exactly on the edge is inside. The model has no clamp diodes, so a pin outside the window draws no clamp current and its voltage is what the circuit drives. A real pin conducts into its clamp there, which is the damage the rating guards against.
 
@@ -780,7 +780,7 @@ A `linear_regulator`'s `ratings.input_voltage` is the ceiling on `#<part>.pin.in
 A Nano with a 9 V source through 1 kohm on A0 reads, at the operating point:
 
 ```text
-#nano__mcu.pin.PC0 reaches 8.997637213833697 V over the chip's ground, outside its -0.5 V to 5.5 V rating
+#nano__mcu.pin.PC0 reaches 9 V over the chip's ground, outside its -0.5 V to 5.5 V rating
 ```
 
 An `op_amp` uses the same code on `in_p` and `in_n` when `input_headroom` is positive. The ceiling is `V(vcc) - input_headroom` and there is no floor. The voltage is over the part's `gnd` pin, which the message calls the chip's ground. The differential stage does not change, so the output is still the comparison. An input exactly on the ceiling is inside. Zero rates no ceiling.

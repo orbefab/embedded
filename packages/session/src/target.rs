@@ -202,6 +202,30 @@ pub(crate) fn lcd_engine(map: &RefMap, path: &str) -> Result<String, Error> {
     }
 }
 
+/// The one screen engine part at `path` or among its descendants: a part whose readings name
+/// `"of": "screen"` and that maps to one engine part.
+pub(crate) fn screen_engine(map: &RefMap, path: &str) -> Option<String> {
+    fn collect(map: &RefMap, path: &str, out: &mut Vec<String>) {
+        let Some(part) = map.parts.get(path) else {
+            return;
+        };
+        if screen_reading(part).is_some()
+            && let [one] = part.engine.as_slice()
+        {
+            out.push(one.name.clone());
+        }
+        for child in &part.children {
+            collect(map, &format!("{path}.{child}"), out);
+        }
+    }
+    let mut found = Vec::new();
+    collect(map, path, &mut found);
+    match found.as_slice() {
+        [one] => Some(one.clone()),
+        _ => None,
+    }
+}
+
 fn collect_kind(map: &RefMap, path: &str, kind: &str, out: &mut Vec<String>) {
     let Some(part) = map.parts.get(path) else {
         return;

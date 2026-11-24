@@ -2182,7 +2182,10 @@ pub fn sustained_text(average: Average, reading: String) -> String {
 /// `value` to 3 significant digits. A rating message prints its values so, and a value is
 /// over its rating only when it is over after both are rounded.
 pub fn significant(value: f64) -> f64 {
-    if !value.is_finite() || value == 0.0 {
+    if value == 0.0 {
+        return 0.0;
+    }
+    if !value.is_finite() {
         return value;
     }
     format!("{value:.2e}").parse().unwrap_or(value)
@@ -2276,13 +2279,18 @@ fn outside_window(excursion: &VoltageExcursion, namer: &dyn Fn(&Ref) -> String) 
         );
     }
     let window = match (low, high) {
-        (Some(low), Some(high)) => format!("its {low} V to {high} V rating"),
-        (Some(low), None) => format!("its {low} V floor"),
-        (None, Some(high)) => format!("its {high} V ceiling"),
+        (Some(low), Some(high)) => format!(
+            "its {} V to {} V rating",
+            significant_text(*low),
+            significant_text(*high)
+        ),
+        (Some(low), None) => format!("its {} V floor", significant_text(*low)),
+        (None, Some(high)) => format!("its {} V ceiling", significant_text(*high)),
         (None, None) => unreachable!("a window rates a floor or a ceiling"),
     };
     format!(
-        "{pin} reaches {peak} V over the chip's ground, outside {window}{}",
+        "{pin} reaches {} V over the chip's ground, outside {window}{}",
+        significant_text(*peak),
         for_time(*over_ps)
     )
 }
@@ -2383,6 +2391,43 @@ mod tests {
             assert_eq!(ProtocolRule::named(&rule_text(&rule)), Some(rule));
         }
         assert_eq!(ProtocolRule::named("glitch"), None);
+    }
+
+    #[test]
+    fn rating_voltage_message_rounds_values_and_keeps_data_unrounded() {
+        let diag = Diagnostic::RatingVoltage(VoltageExcursion {
+            pin: "#s3__mod__u1.pin.GPIO4".parse().unwrap(),
+            low: Some(-0.3),
+            high: Some(3.600019234965837),
+            peak: 4.76227892536249,
+            peak_at: Time::from_ps(1_000_000),
+            first: Time::from_ps(1_000_000),
+            over_ps: Some(4_562_490_689),
+            operating: false,
+        });
+        let value = serde_json::to_value(&diag).unwrap();
+        assert_eq!(
+            value["message"],
+            "#s3__mod__u1.pin.GPIO4 reaches 4.76 V over the chip's ground, outside its -0.3 V to 3.6 V rating for 4562490689 ps"
+        );
+        assert_eq!(value["data"]["peak"], 4.76227892536249);
+        assert_eq!(value["data"]["high"], 3.600019234965837);
+        assert_eq!(value["data"]["low"], -0.3);
+
+        let zero_floor = Diagnostic::RatingVoltage(VoltageExcursion {
+            pin: "#c1.pin.a".parse().unwrap(),
+            low: Some(-0.0),
+            high: None,
+            peak: -0.0012345,
+            peak_at: Time::ZERO,
+            first: Time::ZERO,
+            over_ps: None,
+            operating: false,
+        });
+        assert_eq!(
+            zero_floor.message(),
+            "#c1.pin.a reaches -0.00123 V over the chip's ground, outside its 0 V floor"
+        );
     }
 
     #[test]

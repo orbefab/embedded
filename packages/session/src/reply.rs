@@ -1092,7 +1092,7 @@ impl Reading {
                 contact: *contact,
                 quantities: quantities
                     .iter()
-                    .filter(|(n, ..)| n == "i")
+                    .filter(|(n, u, _)| n == "i" || matches!(u, Unit::Degree | Unit::Hertz))
                     .cloned()
                     .collect(),
             }
