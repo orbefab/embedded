@@ -195,9 +195,6 @@ pub enum ProtocolRule {
     /// A read that came sooner than the sensor answers one: inside its warm-up after power-on,
     /// or before its minimum interval after the last read it answered.
     Interval,
-    /// A high a `Pulses` record carried, which a chain with `DOUT` would pass on. The record
-    /// lands at its end, after that high, so `DOUT` does not drive it.
-    DoutRecord,
     /// The supply is up, and under 4.5 V. The shaft still moves, slower than at 4.8 V.
     Supply,
     /// The moving draw pulled an SG90's supply under 3.0 V. The shaft holds.
@@ -209,13 +206,12 @@ pub enum ProtocolRule {
 }
 
 impl ProtocolRule {
-    pub(crate) const ALL: [ProtocolRule; 10] = [
+    pub(crate) const ALL: [ProtocolRule; 9] = [
         ProtocolRule::Command,
         ProtocolRule::PixelFormat,
         ProtocolRule::SdaWhileSclHigh,
         ProtocolRule::Bit,
         ProtocolRule::Interval,
-        ProtocolRule::DoutRecord,
         ProtocolRule::Supply,
         ProtocolRule::SupplySag,
         ProtocolRule::Scroll,
@@ -235,7 +231,6 @@ impl ProtocolRule {
             "sda_while_scl_high" => Some(ProtocolRule::SdaWhileSclHigh),
             "bit" => Some(ProtocolRule::Bit),
             "interval" => Some(ProtocolRule::Interval),
-            "dout_record" => Some(ProtocolRule::DoutRecord),
             "supply" => Some(ProtocolRule::Supply),
             "supply_sag" => Some(ProtocolRule::SupplySag),
             "scroll" => Some(ProtocolRule::Scroll),
@@ -1284,18 +1279,6 @@ impl Diagnostic {
                 format!(
                     "{part} did not answer a read that broke rule {} at {} ps, the first time",
                     rule_text(&ProtocolRule::Interval),
-                    at.as_ps()
-                )
-            }
-            Diagnostic::ChipProtocol {
-                part,
-                at,
-                rule: ProtocolRule::DoutRecord,
-            } => {
-                let part = namer(part);
-                format!(
-                    "{part} did not pass a high from a record on to DOUT, breaking rule {} at {} ps, the first time",
-                    rule_text(&ProtocolRule::DoutRecord),
                     at.as_ps()
                 )
             }

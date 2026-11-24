@@ -326,7 +326,8 @@ pub enum Ack {
 /// [`world`](Cx::world) reads a quantity the device declares. [`broke`](Cx::broke) names a rule
 /// and the time. The first call wins. [`show`](Cx::show) says what an LED chain shows changed.
 /// [`drew`](Cx::drew) is a pixel write a screen closed. [`pulses`](Cx::pulses) queues a train
-/// on an open-drain line. [`replayed`](Cx::replayed) says the call replays a record.
+/// on an open-drain line. [`replayed`](Cx::replayed) says the call replays a record, and
+/// [`pass`](Cx::pass) hands a replayed edge on to the device's output.
 #[derive(Clone, Debug, Default)]
 pub struct Cx {
     world: Readings,
@@ -335,6 +336,7 @@ pub struct Cx {
     drawn: Option<Drawn>,
     queued: Option<(Time, Pulses)>,
     replay: bool,
+    passed: Option<(Time, bool)>,
 }
 
 impl Cx {
@@ -407,6 +409,17 @@ impl Cx {
         self.queued = Some((start, train));
     }
 
+    /// The device's output goes to `level` at `at`, an edge a replayed level makes there. `at`
+    /// may be before the call's time, since a record lands at its end. The host sends the edges
+    /// one record passed as a `Pulses` record of the device's own, on its output's net, so a
+    /// part on that net takes them as it takes the first. Only a call that
+    /// [`replayed`](Self::replayed) passes an edge, and a call passes at most one.
+    pub fn pass(&mut self, at: Time, level: bool) {
+        assert!(self.replay, "only a replayed level passes an edge");
+        assert!(self.passed.is_none(), "a call passes at most one edge");
+        self.passed = Some((at, level));
+    }
+
     /// The first rule named in this call, and its time.
     pub fn broken(&self) -> Option<(&'static str, Time)> {
         self.broken
@@ -425,6 +438,11 @@ impl Cx {
     /// The train this call queued, and its start.
     pub fn queued(&self) -> Option<&(Time, Pulses)> {
         self.queued.as_ref()
+    }
+
+    /// The edge this call passed, and its time.
+    pub fn passed(&self) -> Option<(Time, bool)> {
+        self.passed
     }
 }
 

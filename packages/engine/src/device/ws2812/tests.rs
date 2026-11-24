@@ -57,14 +57,15 @@ impl Core {
 
     /// A chain that drives `DOUT` `delay` picoseconds after `DIN`, or has none at 0.
     fn with_dout(count: u16, delay: u64) -> Core {
-        let mut hosted = super::core(count, delay, None);
+        let dout = (delay > 0).then_some(NetId::GROUND);
+        let mut hosted = super::core(count, delay, dout, None);
         hosted.keep_shown();
         Core { hosted }
     }
 
     /// A chain of `count` that draws [`draw`] and has no `DOUT`.
     fn drawing(count: u16) -> Core {
-        let mut hosted = super::core(count, 0, Some(&draw()));
+        let mut hosted = super::core(count, 0, None, Some(&draw()));
         hosted.keep_shown();
         Core { hosted }
     }
@@ -561,7 +562,7 @@ fn a_chain_that_writes_no_rows_keeps_its_last_latch_alone() {
         .collect();
     let pulses = trains.concat();
     let session = Core {
-        hosted: super::core(1, 0, None),
+        hosted: super::core(1, 0, None, None),
     };
     let (session, _) = by_pin_into(session, &pulses);
     let (run, _) = by_pin_into(Core::new(1), &pulses);
@@ -612,22 +613,69 @@ fn four_chained_leds_each_take_their_own_24_bits() {
     assert_eq!(pulses, vec![(false, 1)], "the last LED passes nothing on");
 }
 
+/// The record a core sent, as `(start, idle, pulses)`, from the stop at its end.
+fn sent(core: &mut Core, end: u64) -> (u64, bool, Vec<(bool, u64)>) {
+    assert_eq!(
+        core.run_until(Time::from_ps(end)),
+        Some(Stop {
+            at: Time::from_ps(end),
+            sample: false,
+            record: true,
+        })
+    );
+    let mut records = Vec::new();
+    core.hosted
+        .drain_records(Time::from_ps(end), &mut |record| records.push(record));
+    let [record] = &records[..] else {
+        panic!("one record, not {records:?}");
+    };
+    assert_eq!(record.end.as_ps(), end);
+    let RecordKind::Pulses { pulses, .. } = &record.kind else {
+        panic!("a relay sends pulses");
+    };
+    (record.start.as_ps(), pulses.idle, pulses.pulses.to_vec())
+}
+
 #[test]
-fn a_record_past_the_chain_warns_dout_record_and_drives_nothing() {
+fn a_record_past_the_chain_goes_on_as_a_record_and_drives_nothing() {
     let pulses = train(&[0x12, 0x34, 0x56, 0xA5, 0x5A, 0xC3], ZERO, ONE);
     let mut core = Core::with_dout(1, DELAY);
     core.input(Time::ZERO, &[false]);
     let last = end(START, &pulses);
     settle(&mut core, last);
     core.land(Time::from_ps(START), false, &pulses, Time::from_ps(last));
-    assert_eq!(core.run_until(Time::from_ps(last + 2 * RES)), None);
-    assert_eq!(core.observed().pixels, vec![[0x12, 0x34, 0x56]]);
+    assert_eq!(core.hosted.drive(), &[Drive::Low]);
+
+    // The 25th high's rise, 500 ns on, to the 48th high's fall, 500 ns on, then low to 1 ps past
+    // the record's end.
     let first_past: u64 = START + pulses[..48].iter().map(|&(_, ps)| ps).sum::<u64>();
+    let last_fall = last - pulses.last().unwrap().1;
+    let mut want = pulses[48..95].to_vec();
+    want.push((false, last + 1 - (last_fall + DELAY)));
     assert_eq!(
-        core.broke(),
-        Some((ProtocolRule::DoutRecord, Time::from_ps(first_past)))
+        sent(&mut core, last + 1),
+        (first_past + DELAY, false, want.clone())
     );
     assert_eq!(core.hosted.drive(), &[Drive::Low]);
+    assert_eq!(core.broke(), None);
+
+    settle(&mut core, last + 2 * RES);
+    assert_eq!(core.observed().pixels, vec![[0x12, 0x34, 0x56]]);
+
+    let mut next = Core::with_dout(1, DELAY);
+    next.input(Time::ZERO, &[false]);
+    settle(&mut next, last + 1);
+    next.land(
+        Time::from_ps(first_past + DELAY),
+        false,
+        &want,
+        Time::from_ps(last + 1),
+    );
+    while let Some(stop) = next.run_until(Time::from_ps(last + 2 * RES)) {
+        assert!(!stop.record, "the second LED holds every bit it took");
+    }
+    assert_eq!(next.observed().pixels, vec![[0xA5, 0x5A, 0xC3]]);
+    assert_eq!(next.broke(), None);
 }
 
 #[test]

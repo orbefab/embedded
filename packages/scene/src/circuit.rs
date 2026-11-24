@@ -19,6 +19,7 @@ use crate::units::Unit;
 
 mod board;
 mod engine;
+mod footprint;
 mod lint;
 mod map;
 mod plug;
