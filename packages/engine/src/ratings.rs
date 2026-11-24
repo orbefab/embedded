@@ -626,11 +626,11 @@ impl Ratings {
     }
 
     /// Over means a magnitude above the limit, a sustained rating's filter reading above it, or
-    /// a voltage outside its window. A magnitude
-    /// is over when it is over after both are rounded to 3 significant digits. The first time
-    /// over stays; the peak rises. A sample that was over adds the time until this one to
-    /// `over_ps`. `cores` are the active chips' cores whose drive was in force for `row`. An
-    /// operating point, [`Timing::Point`], has no duration, so its DC value fills each filter.
+    /// a voltage outside its window. Each side is compared after both are rounded to 3 significant
+    /// digits. The first time over stays; the peak rises. A sample that was over adds the time
+    /// until this one to `over_ps`. `cores` are the active chips' cores whose drive was in force
+    /// for `row`. An operating point, [`Timing::Point`], has no duration, so its DC value fills
+    /// each filter.
     pub(crate) fn sample(&mut self, at: Time, row: &[Finite], cores: &[active::Core]) {
         for gauge in &mut self.chips {
             gauge.read(row, &cores[gauge.active]);
@@ -700,13 +700,19 @@ impl Ratings {
                 Ceiling::OverSupply(margin) => row[window.vcc].get() - ground + margin,
                 Ceiling::Fixed(volts) => volts,
             });
-            let past = low
-                .map_or(f64::NEG_INFINITY, |low| low - v)
-                .max(high.map_or(f64::NEG_INFINITY, |high| v - high));
-            window.over = past > 0.0;
+            let below = low.is_some_and(|low| v < low && exceeds_rounded(-v, -significant(low)));
+            let above = high.is_some_and(|high| v > high && exceeds_rounded(v, significant(high)));
+            window.over = below || above;
             if !window.over {
                 continue;
             }
+            let past = low
+                .filter(|_| below)
+                .map_or(f64::NEG_INFINITY, |low| low - v)
+                .max(
+                    high.filter(|_| above)
+                        .map_or(f64::NEG_INFINITY, |high| v - high),
+                );
             let reading = VoltageExcursion {
                 pin: window.pin.clone(),
                 low,
@@ -2004,6 +2010,74 @@ mod tests {
                 .iter()
                 .any(|d| matches!(d, Diagnostic::RatingPower(_))),
             "a held overload warns on the filter: {found:?}"
+        );
+    }
+
+    #[test]
+    fn voltage_window_compares_after_rounding_to_three_significant_digits() {
+        let netlist = crate::netlist::parse(
+            br#"{
+          "version": 1,
+          "seed": 0,
+          "analysis": { "op": {} },
+          "ground": "gnd",
+          "nets": ["gnd", "vin", "vout"],
+          "parts": [{
+            "name": "u1",
+            "kind": "linear_regulator",
+            "pins": { "in": "vin", "out": "vout", "gnd": "gnd" },
+            "output_voltage": { "value": 3.3, "unit": "V" },
+            "output_resistance": { "value": 0.1, "unit": "ohm" },
+            "dropout_voltage": { "value": 0.2, "unit": "V" },
+            "dropout_resistance": { "value": 1.0, "unit": "ohm" },
+            "current_limit": { "value": 1.0, "unit": "A" },
+            "quiescent_current": { "value": 1e-4, "unit": "A" },
+            "ground_current_ratio": { "value": 0.0, "unit": "1" },
+            "line_regulation": { "value": 0.0, "unit": "1" },
+            "ratings": {
+              "current": null,
+              "power": null,
+              "input_voltage": { "value": 3.600019, "unit": "V" }
+            }
+          }]
+        }"#,
+        )
+        .unwrap();
+        let columns = Columns::new(&netlist);
+        let row_vin = |volts: f64| {
+            let mut row = vec![Finite::new(0.0).unwrap(); columns.refs().len()];
+            row[columns.index(&"#net.vin".parse().unwrap()).unwrap()] = Finite::new(volts).unwrap();
+            row
+        };
+
+        // 3.604 V rounds to 3.6 V, same as the 3.600019 V ceiling: stays quiet.
+        // -0.3004 V rounds to -0.3 V, same as the -0.3 V floor: stays quiet.
+        let mut quiet = Ratings::new(&netlist, &[], &columns, Timing::Point);
+        quiet.sample(Time::ZERO, &row_vin(3.604), &[]);
+        quiet.sample(Time::ZERO, &row_vin(-0.3004), &[]);
+        assert!(quiet.findings().is_empty(), "{:?}", quiet.findings());
+
+        // 3.606 V rounds to 3.61 V > 3.6 V: warns, with unrounded data and rounded message.
+        let mut over = Ratings::new(&netlist, &[], &columns, Timing::Point);
+        over.sample(Time::ZERO, &row_vin(3.606), &[]);
+        let found = over.findings();
+        assert_eq!(found.len(), 1, "{found:?}");
+        let json = serde_json::to_value(&found[0]).unwrap();
+        assert_eq!(
+            json["message"],
+            "#u1.pin.in reaches 3.61 V over the chip's ground, outside its -0.3 V to 3.6 V rating"
+        );
+        assert_eq!(json["data"]["peak"], 3.606);
+        assert_eq!(json["data"]["high"], 3.600019);
+
+        // -0.301 V rounds to -0.301 V < -0.3 V: warns below floor.
+        let mut under = Ratings::new(&netlist, &[], &columns, Timing::Point);
+        under.sample(Time::ZERO, &row_vin(-0.301), &[]);
+        let found = under.findings();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(
+            serde_json::to_value(&found[0]).unwrap()["message"],
+            "#u1.pin.in reaches -0.301 V over the chip's ground, outside its -0.3 V to 3.6 V rating"
         );
     }
 }

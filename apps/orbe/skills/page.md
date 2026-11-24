@@ -20,7 +20,7 @@ When you can see the page, check that no wire runs through a part and that parts
 
 ## A servo
 
-`get @servo.angle` reads the shaft in degrees, and the page turns the horn to it. A pulse past the mechanical stops clamps, and when the pulses stop the horn stays where it is.
+`get @servo` and `get @servo.angle` read the shaft in degrees, and the page turns the horn to it. A pulse past the mechanical stops clamps, and when the pulses stop the horn stays where it is.
 
 ## A knob
 

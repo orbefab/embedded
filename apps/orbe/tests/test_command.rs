@@ -1606,6 +1606,7 @@ open
 step 1200ms
 get @lcd.text
 get @lcd.backlight
+get @lcd
 expect @lcd.backlight lit
 expect @lcd.text line 0 \"Hello\"
 expect @lcd.text line 1 \"orbe 16x2 LCD\"
@@ -1629,4 +1630,62 @@ expect no diagnostics
     assert_eq!(json[2]["data"]["value"]["lines"][1], "orbe 16x2 LCD   ");
     assert_eq!(json[3]["data"]["kind"], "backlight");
     assert_eq!(json[3]["data"]["value"]["state"], "lit");
+    assert_eq!(json[4]["data"]["ref"], "@lcd");
+    assert_eq!(json[4]["data"]["kind"], json[2]["data"]["kind"]);
+    assert_eq!(json[4]["data"]["value"], json[2]["data"]["value"]);
+}
+
+#[test]
+fn get_on_servo_and_oled_reads_their_part_readings() {
+    // SG90 servo: `get @servo` reports its angle in text and JSON, matching `@servo.angle`.
+    let servo_dir = tempfile::tempdir().unwrap();
+    common::copy_dir(
+        &common::repo().join("blocks/nano-servo-sweep"),
+        servo_dir.path(),
+    );
+    fs::remove_file(servo_dir.path().join("block.jsonc")).unwrap();
+    std::os::unix::fs::symlink(common::repo().join("parts"), servo_dir.path().join("parts"))
+        .unwrap();
+    fs::write(
+        servo_dir.path().join("tests/sweep.test"),
+        "open\nstep 250ms\nget @servo\nget @servo.angle\nsnapshot\nexpect no diagnostics\n",
+    )
+    .unwrap();
+    let run = orbe(servo_dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.stdout.contains("servo angle="), "{}", run.stdout);
+    let json = replies_in(&servo_dir);
+    assert_eq!(json[2]["data"]["ref"], "@servo");
+    assert_eq!(json[2]["data"]["kind"], "part");
+    assert_eq!(json[2]["data"]["value"]["angle"], json[3]["data"]["value"]);
+    assert_eq!(
+        json[4]["data"]["parts"][2]["value"]["angle"],
+        json[3]["data"]["value"]
+    );
+
+    // SSD1306 OLED module: `get @oled` matches `get @oled.display.screen` in text and JSON.
+    let oled_dir = tempfile::tempdir().unwrap();
+    common::copy_dir(&common::repo().join("blocks/nano-oled"), oled_dir.path());
+    fs::remove_file(oled_dir.path().join("block.jsonc")).unwrap();
+    std::os::unix::fs::symlink(common::repo().join("parts"), oled_dir.path().join("parts"))
+        .unwrap();
+    fs::write(
+        oled_dir.path().join("tests/hello.test"),
+        "open\nstep 200ms\nget @oled\nget @oled.display.screen\nget @oled.display\nexpect no diagnostics\n",
+    )
+    .unwrap();
+    let run = orbe(oled_dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("oled ssd1306 128x64 on,"),
+        "{}",
+        run.stdout
+    );
+    let json = replies_in(&oled_dir);
+    assert_eq!(json[2]["data"]["ref"], "@oled");
+    assert_eq!(json[2]["data"]["kind"], "screen");
+    assert_eq!(json[2]["data"]["value"], json[3]["data"]["value"]);
+    assert_eq!(json[4]["data"]["ref"], "@oled.display");
+    assert_eq!(json[4]["data"]["kind"], "screen");
+    assert_eq!(json[4]["data"]["value"], json[3]["data"]["value"]);
 }
