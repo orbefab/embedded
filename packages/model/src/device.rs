@@ -35,6 +35,15 @@ pub trait Device: State {
     /// Volt. Below this supply the host stamps every output off. [`Device::drive`] still
     /// reports the logical level. `None` drives at any supply.
     const MIN_SUPPLY_V: Option<f64> = None;
+    /// Volt. Below this supply the host stamps every output off. Defaults to
+    /// [`MIN_SUPPLY_V`](Self::MIN_SUPPLY_V), so a device whose floor comes from its part params
+    /// can override it.
+    fn min_supply_v(&self) -> Option<f64> {
+        Self::MIN_SUPPLY_V
+    }
+    /// The host reads this device's samples at every accepted step, so a supply it follows
+    /// is the voltage of that step and not a clock of its own.
+    const TRACKS_SUPPLY: bool = false;
     /// Parses the part's logic params. Electrical params never reach the device.
     fn new(params: &Params<'_>) -> Result<Self, Error>;
     /// The first time in `(reached, limit]` where the drives may change or a sample is due.
@@ -56,6 +65,12 @@ pub trait Device: State {
     /// after a call that ran [`Cx::show`], and at the end of a run.
     fn view(&self) -> View<'_> {
         View::Nothing
+    }
+    /// The shaft angle in millidegrees at `at`, for a device that shows one. `None` when it
+    /// shows nothing of the kind. A read can fall between stops, so this is the angle at the
+    /// read and not the angle at the last stop.
+    fn angle_at(&self, _at: Time) -> Option<i32> {
+        None
     }
 }
 
@@ -115,6 +130,8 @@ pub enum Shows {
         height: u16,
         format: &'static str,
     },
+    /// A shaft angle. [`View::Degrees`] is that angle in millidegrees.
+    Angle,
 }
 
 /// What a device shows now.
@@ -128,6 +145,8 @@ pub enum View<'a> {
         frame: &'a [u8],
         panel: Panel,
     },
+    /// The shaft angle in millidegrees. 0 is one end of the travel and 180_000 the other.
+    Degrees(i32),
 }
 
 /// A screen controller's state besides its frame memory.
@@ -313,7 +332,8 @@ pub enum Ack {
 /// [`world`](Cx::world) reads a quantity the device declares. [`broke`](Cx::broke) names a rule
 /// and the time. The first call wins. [`show`](Cx::show) says what an LED chain shows changed.
 /// [`drew`](Cx::drew) is a pixel write a screen closed. [`pulses`](Cx::pulses) queues a train
-/// on an open-drain line. [`replayed`](Cx::replayed) says the call replays a record.
+/// on an open-drain line. [`replayed`](Cx::replayed) says the call replays a record, and
+/// [`pass`](Cx::pass) hands a replayed edge on to the device's output.
 #[derive(Clone, Debug, Default)]
 pub struct Cx {
     world: Readings,
@@ -322,6 +342,7 @@ pub struct Cx {
     drawn: Option<Drawn>,
     queued: Option<(Time, Pulses)>,
     replay: bool,
+    passed: Option<(Time, bool)>,
 }
 
 impl Cx {
@@ -394,6 +415,17 @@ impl Cx {
         self.queued = Some((start, train));
     }
 
+    /// The device's output goes to `level` at `at`, an edge a replayed level makes there. `at`
+    /// may be before the call's time, since a record lands at its end. The host sends the edges
+    /// one record passed as a `Pulses` record of the device's own, on its output's net, so a
+    /// part on that net takes them as it takes the first. Only a call that
+    /// [`replayed`](Self::replayed) passes an edge, and a call passes at most one.
+    pub fn pass(&mut self, at: Time, level: bool) {
+        assert!(self.replay, "only a replayed level passes an edge");
+        assert!(self.passed.is_none(), "a call passes at most one edge");
+        self.passed = Some((at, level));
+    }
+
     /// The first rule named in this call, and its time.
     pub fn broken(&self) -> Option<(&'static str, Time)> {
         self.broken
@@ -412,6 +444,11 @@ impl Cx {
     /// The train this call queued, and its start.
     pub fn queued(&self) -> Option<&(Time, Pulses)> {
         self.queued.as_ref()
+    }
+
+    /// The edge this call passed, and its time.
+    pub fn passed(&self) -> Option<(Time, bool)> {
+        self.passed
     }
 }
 

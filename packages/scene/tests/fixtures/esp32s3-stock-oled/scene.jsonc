@@ -1,0 +1,20 @@
+// The OLED module on Wire's default pins, SDA on GPIO8 and SCL on GPIO9, fed from 3V3.
+// The app is the stock sketch packages/engine/tests/firmware/esp32s3/arduino/stock/oled.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    },
+    "oled": { "type": "oled-ssd1306-128x64" }
+  },
+  "wires": [
+    ["board.3V3", "oled.VCC"],
+    ["board.GND", "oled.GND"],
+    ["board.GPIO8", "oled.SDA"],
+    ["board.GPIO9", "oled.SCL"]
+  ],
+  "ground": "board.GND"
+}

@@ -10,7 +10,7 @@ use crate::netlist::NetId;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::link::{LinkRow, Record, RecordKind, SpiNets};
+use crate::link::{LinkRow, Record, RecordKind, SpiNets, SpiPinNames};
 use crate::name::Name;
 
 use super::{Chip, Output, SpiTarget, Stage, Takes};
@@ -264,6 +264,7 @@ impl Core {
             seq: self.sent,
             start: at,
             end: at,
+            peripheral: "script",
             pin: "CS",
             kind,
         });
@@ -370,6 +371,7 @@ fn spi(bus: SpiTarget, tag: u8) -> RecordKind {
             sclk: Some(bus.sclk),
             data: [None; 4],
         },
+        pins: SpiPinNames::default(),
     }
 }
 

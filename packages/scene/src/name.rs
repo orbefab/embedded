@@ -6,7 +6,8 @@ const RESERVED: &[&str] = &[
 ];
 
 /// A pin name or label may start with a digit, such as `5V`, because a ref segment is not an
-/// engine name. Every other name starts with a letter.
+/// engine name. A pin may also be `+` or `-`, as a buzzer's sheet marks its pins. Every other
+/// name starts with a letter.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NameKind {
     Name,
@@ -18,6 +19,9 @@ pub(crate) fn problem(name: &str, kind: NameKind) -> Option<String> {
     let Some(first) = name.chars().next() else {
         return Some("is empty".into());
     };
+    if kind == NameKind::Pin && matches!(name, "+" | "-") {
+        return None;
+    }
     if kind == NameKind::Name && !first.is_ascii_alphabetic() {
         return Some("does not start with a letter".into());
     }

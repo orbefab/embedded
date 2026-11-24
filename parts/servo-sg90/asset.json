@@ -1,0 +1,44 @@
+{
+  "part": "servo-sg90",
+  "source": {
+    "script": "model.py",
+    "sha256": "fea7ae68e67ab3752a2cb16f3bb3529a53c7be3d4d40db22856160d201663f5d",
+    "bytes": 2545
+  },
+  "files": {
+    "servo-sg90.glb": {
+      "sha256": "512d5a8624e777c7131b1976966ae79692ffb9ca147a315757aea9719f69449b",
+      "bytes": 14476
+    },
+    "servo-sg90.anchors.json": {
+      "sha256": "89dbcc0a7a5a6b71bfe0bd3a90171561cc42c60a9289103aec6c2205343ba52b",
+      "bytes": 402
+    }
+  },
+  "box": {
+    "min": [-16.000001, -6.1, -6.5],
+    "max": [16.000001, 13.5, 27.6]
+  },
+  "kept_nodes": ["horn", "lead-1", "lead-2", "lead-3"],
+  "draw_calls": 6,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 3,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "tabs",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": ["horn"]
+    },
+    "merge": {
+      "primitives_in": 7,
+      "primitives_out": 6
+    }
+  }
+}

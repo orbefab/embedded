@@ -89,6 +89,10 @@ fn stop_cmd() -> u32 {
     cmd(2, 0, false, false, false)
 }
 
+fn end_cmd() -> u32 {
+    cmd(4, 0, false, false, false)
+}
+
 fn poke(chip: &mut Esp32s3, offset: u32, value: u32) {
     let soc = &mut chip.soc;
     soc.i2c
@@ -415,7 +419,8 @@ fn assert_low_and_high(edges: &[(u64, u8, bool)]) {
 
 fn refused(halt: Option<Halt>) -> (&'static str, &'static str) {
     match halt {
-        Some(Halt::Fault(_, Fault::Refused(Refused::Register(block, setting), _))) => {
+        Some(Halt::Fault(_, Fault::Refused(Refused::Register(block, setting), _)))
+        | Some(Halt::Fault(_, Fault::Refused(Refused::Unsimulated(block, setting), _))) => {
             (block, setting)
         }
         other => panic!("expected a refusal, got {other:?}"),
@@ -1118,7 +1123,10 @@ fn each_refusal_names_its_setting() {
         let mut program = Program::new(&[I2C1, 0]);
         program.l32r(2, 0).l32r(3, 1).rri8(6, 3, 2, 0).raw(&LOOP);
         let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD]);
-        assert_eq!(run_refusal(&mut chip), ("I2C1", "port"));
+        assert_eq!(
+            run_refusal(&mut chip),
+            ("I2C1", "the second I2C port, Wire1")
+        );
     }
 
     plain(
@@ -1162,9 +1170,10 @@ fn each_refusal_names_its_setting() {
     plain(1 << 6, SCL_SP_CONF as u8, "power_down", ready);
     plain(1, INT_ENA as u8, "int_ena", ready);
 
-    plain(GO, CTR as u8, "end_command", |chip| {
+    // An END starts no list on an idle bus. It only ends one, or resumes one an END holds.
+    plain(GO, CTR as u8, "opcode", |chip| {
         ready(chip);
-        poke(chip, COMD0, 4 << 11);
+        poke(chip, COMD0, end_cmd());
     });
     plain(GO, CTR as u8, "opcode", |chip| {
         ready(chip);
@@ -1186,12 +1195,6 @@ fn each_refusal_names_its_setting() {
             poke(chip, DATA, 0);
         }
     });
-
-    {
-        let mut program = Program::new(&[I2C0]);
-        program.l32r(2, 0).rri8(2, 3, 2, DATA as u8).raw(&LOOP);
-        case(program, "rx_underflow", ready);
-    }
 
     plain(MODE | CONF_UPGATE, CTR as u8, "busy_write", |chip| {
         ready(chip);
@@ -1267,9 +1270,535 @@ fn each_refusal_names_its_setting() {
         poke(&mut chip, DATA, 0x51);
         poke(&mut chip, COMD0, rstart());
         poke(&mut chip, COMD0 + 4, write_cmd(1));
-        poke(&mut chip, COMD0 + 8, read_cmd(33, true));
+        poke(&mut chip, COMD0 + 8, read_cmd(33, false));
         poke(&mut chip, COMD0 + 12, stop_cmd());
         let halt = play(&mut chip, c(200_000).0, c(200_000).0, |rises| rises == 9);
         assert_eq!(refused(halt.err()), ("I2C0", "rx_overflow"));
+    }
+}
+
+/// Whether a target that acknowledges every byte holds SDA after `rises` SCL releases.
+fn ack_every_byte(rises: u32) -> bool {
+    rises > 0 && rises.is_multiple_of(9)
+}
+
+/// The byte a reading target sends as its `k`th.
+fn sent(k: u32) -> u8 {
+    (k as u8).wrapping_mul(37) ^ 0x5a
+}
+
+/// A target that acknowledges the address `0x51`, then sends `sent(0)`, `sent(1)` and on, one
+/// per nine SCL releases, and leaves each ACK to the master.
+fn reading_target(rises: u32) -> bool {
+    if rises == 9 {
+        return true;
+    }
+    match rises.checked_sub(10) {
+        Some(n) if n % 9 < 8 => sent(n / 9) & (1 << (7 - n % 9)) == 0,
+        _ => false,
+    }
+}
+
+/// A program that starts the list the chip holds, waits for `END_DETECT`, clears it, loads
+/// `I2C_DATA_REG` `takes` times, stores `stores` in order, and spins.
+fn end_program(takes: usize, stores: &[(u32, u32)]) -> Program {
+    let mut literals = vec![I2C0, GO];
+    literals.extend(stores.iter().flat_map(|&(addr, value)| [addr, value]));
+    let mut program = Program::new(&literals);
+    program.l32r(2, 0).l32r(3, 1).rri8(6, 3, 2, CTR as u8);
+    wait_bit(&mut program, INT_RAW, 3, true);
+    for _ in 0..takes {
+        program.rri8(2, 4, 2, DATA as u8);
+    }
+    for k in 0..stores.len() {
+        program
+            .l32r(5, 2 + 2 * k)
+            .l32r(6, 3 + 2 * k)
+            .rri8(6, 6, 5, 0);
+    }
+    program.raw(&LOOP);
+    program
+}
+
+/// The SCL fall that ends the first part of `edges`, which an END holds, and the resumed
+/// list's reference fall, `LOW` before its first SCL release, both in cycles from the first SDA
+/// fall. SCL makes no edge between them.
+fn held_gap(edges: &[(u64, u8, bool)], first: &[(u64, u8, bool)]) -> (u64, u64) {
+    let held = first.last().unwrap().0;
+    let rise = scl_edges(edges)
+        .into_iter()
+        .find(|&(t, level)| t > held && level)
+        .map(|(t, _)| t)
+        .expect("SCL rises after the END");
+    assert_eq!(rise % cycles(1), 0, "{rise}");
+    (held / cycles(1), rise / cycles(1) - LOW)
+}
+
+/// IDF's write of 41 bytes, the address and 40 more, as the ESP32-S3 TRM's 27.5.4 lays it out:
+/// RSTART, WRITE 32 and END, then after `END_DETECT` WRITE 9 and STOP. The END holds SCL low and
+/// the bus busy, and the second part clocks on from its `TRANS_START` with no new start.
+#[test]
+fn a_write_past_the_fifo_runs_on_across_an_end() {
+    let bytes: Vec<u8> = (0..41u8)
+        .map(|k| if k == 0 { 0x50 } else { k ^ 0x3c })
+        .collect();
+    let mut stores = vec![(I2C0 + INT_CLR, 1 << 3)];
+    stores.extend(bytes[32..].iter().map(|&b| (I2C0 + DATA, u32::from(b))));
+    stores.extend([
+        (I2C0 + COMD0, write_cmd(9)),
+        (I2C0 + COMD0 + 4, stop_cmd()),
+        (I2C0 + CTR, MODE | TRANS_START),
+    ]);
+    let mut chip = end_program(0, &stores).chip_on(&[SCL_PAD, SDA_PAD]);
+    arm(&mut chip);
+    for &b in &bytes[..32] {
+        poke(&mut chip, DATA, u32::from(b));
+    }
+    for (k, command) in [rstart(), write_cmd(32), end_cmd()].into_iter().enumerate() {
+        poke(&mut chip, COMD0 + 4 * k as u32, command);
+    }
+    poke(&mut chip, INT_ENA, 1 << 3 | TRANS_COMPLETE | NACK);
+    let edges = play(&mut chip, c(60_000).0, c(60_000).0, ack_every_byte).unwrap();
+    let edges = deltas(&edges);
+
+    let (mut wire, fall) = Wire::start(ack_every_byte);
+    let fall = bytes[..32].iter().fold(fall, |fall, &b| wire.byte(fall, b));
+    let first = wire.edges.clone();
+    assert_eq!(&edges[..first.len()], first.as_slice());
+    assert_eq!(first.last().unwrap(), &(cycles(fall), SCL_PAD, false));
+    let (held, resumed) = held_gap(&edges, &first);
+    assert!(resumed > held, "held {held}, resumed {resumed}");
+    let fall = bytes[32..]
+        .iter()
+        .fold(resumed, |fall, &b| wire.byte(fall, b));
+    assert_eq!(edges, wire.stop(fall));
+    assert_eq!(
+        word(&mut chip, INT_RAW) & (TRANS_COMPLETE | NACK),
+        TRANS_COMPLETE
+    );
+    assert_eq!(word(&mut chip, SR) & BUS_BUSY, 0);
+    assert!(word(&mut chip, COMD0 + 4) & CMD_DONE != 0);
+}
+
+/// IDF's read of 40 bytes from address `0x51`: RSTART, WRITE 1, READ 32 and END. The program
+/// takes the 32 bytes from the RX FIFO, then runs READ 7, READ 1 with its NACK, and STOP. The
+/// last eight bytes wait in the FIFO.
+#[test]
+fn a_read_past_the_fifo_runs_on_across_an_end() {
+    let stores = [
+        (I2C0 + INT_CLR, 1 << 3),
+        (I2C0 + COMD0, read_cmd(7, false)),
+        (I2C0 + COMD0 + 4, read_cmd(1, true)),
+        (I2C0 + COMD0 + 8, stop_cmd()),
+        (I2C0 + CTR, MODE | TRANS_START),
+    ];
+    let mut chip = end_program(32, &stores).chip_on(&[SCL_PAD, SDA_PAD]);
+    arm(&mut chip);
+    poke(&mut chip, DATA, 0x51);
+    let commands = [rstart(), write_cmd(1), read_cmd(32, false), end_cmd()];
+    for (k, command) in commands.into_iter().enumerate() {
+        poke(&mut chip, COMD0 + 4 * k as u32, command);
+    }
+    let edges = play(&mut chip, c(60_000).0, c(60_000).0, reading_target).unwrap();
+    let edges = deltas(&edges);
+
+    let (mut wire, fall) = Wire::start(reading_target);
+    let mut fall = wire.byte(fall, 0x51);
+    let read = |wire: &mut Wire, fall: u64, nack: bool| {
+        let fall = (0..8).fold(fall, |fall, _| wire.clock(fall, true));
+        wire.clock(fall, nack)
+    };
+    for _ in 0..32 {
+        fall = read(&mut wire, fall, false);
+    }
+    let first = wire.edges.clone();
+    assert_eq!(&edges[..first.len()], first.as_slice());
+    let (held, resumed) = held_gap(&edges, &first);
+    assert_eq!(held, fall);
+    assert!(resumed > held, "held {held}, resumed {resumed}");
+    let mut fall = resumed;
+    for k in 0..8 {
+        fall = read(&mut wire, fall, k == 7);
+    }
+    assert_eq!(edges, wire.stop(fall));
+    for k in 32..40 {
+        assert_eq!(word(&mut chip, DATA), u32::from(sent(k)), "byte {k}");
+        chip.soc.i2c.take();
+    }
+    assert_eq!(word(&mut chip, SR) >> 8 & 0x3f, 0, "the FIFO is empty");
+    assert_eq!(word(&mut chip, INT_RAW) & TRANS_COMPLETE, TRANS_COMPLETE);
+    assert_eq!(word(&mut chip, SR) & BUS_BUSY, 0);
+}
+
+/// A read whose 32nd byte fills the RX FIFO, with `RX_FULL_ACK_LEVEL` at its power-on NACK and
+/// the command's ACK, is refused: the model does not say which level the master sends.
+#[test]
+fn a_full_rx_fifo_ack_against_the_full_level_is_refused() {
+    let mut program = Program::new(&[I2C0, GO | 1 << 3]);
+    program
+        .l32r(2, 0)
+        .l32r(3, 1)
+        .rri8(6, 3, 2, CTR as u8)
+        .raw(&LOOP);
+    let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD]);
+    arm(&mut chip);
+    poke(&mut chip, DATA, 0x51);
+    let commands = [rstart(), write_cmd(1), read_cmd(32, false), end_cmd()];
+    for (k, command) in commands.into_iter().enumerate() {
+        poke(&mut chip, COMD0 + 4 * k as u32, command);
+    }
+    let halt = play(&mut chip, c(60_000).0, c(60_000).0, |n| n == 9).unwrap_err();
+    assert_eq!(refused(Some(halt)), ("I2C0", "rx_full_ack_level"));
+}
+
+/// Reading `I2C_DATA_REG` with an empty RX FIFO returns 0 and sets `I2C_RXFIFO_UDF_INT_RAW`
+/// (TRM v1.8, 27.6 and Register 27.22), leaving the RX FIFO count at 0.
+#[test]
+fn an_empty_rx_fifo_read_returns_zero_and_sets_rxfifo_udf_int_raw() {
+    let mut program = Program::new(&[I2C0]);
+    program.l32r(2, 0).rri8(2, 3, 2, DATA as u8).raw(&LOOP);
+    let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD]);
+    arm(&mut chip);
+    assert!(chip.run_until(c(100)).is_none());
+    assert_eq!(word(&mut chip, INT_RAW) & (1 << 12), 1 << 12);
+    assert_eq!(word(&mut chip, SR) >> 8 & 0x3f, 0);
+}
+
+/// During a NACK's automatic stop (TRM v1.8, 27.4.9), IDF's `s_i2c_send_commands` wakes on
+/// `I2C_NACK_INT` and writes `COMD0 = STOP` followed by two `i2c_hal_master_trans_start` calls
+/// (`CONF_UPGATE`, `TRANS_START`). The in-progress stop finishes without `busy_write`, clears
+/// `BUS_BUSY`, and raises no `TRANS_COMPLETE`.
+#[test]
+fn a_nack_stop_accepts_idfs_stop_command_and_double_trans_start() {
+    let stores = [
+        (I2C0 + COMD0, stop_cmd()),
+        (I2C0 + CTR, MODE | CONF_UPGATE),
+        (I2C0 + CTR, MODE | TRANS_START),
+        (I2C0 + CTR, MODE | CONF_UPGATE),
+        (I2C0 + CTR, MODE | TRANS_START),
+    ];
+    let mut literals = vec![I2C0, GO];
+    literals.extend(stores.iter().flat_map(|&(addr, value)| [addr, value]));
+    let mut program = Program::new(&literals);
+    program.l32r(2, 0).l32r(3, 1).rri8(6, 3, 2, CTR as u8);
+    wait_bit(&mut program, INT_RAW, 10, true);
+    for k in 0..stores.len() {
+        program
+            .l32r(5, 2 + 2 * k)
+            .l32r(6, 3 + 2 * k)
+            .rri8(6, 6, 5, 0);
+    }
+    program.raw(&LOOP);
+    let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD]);
+    arm(&mut chip);
+    for k in 0..32u32 {
+        poke(&mut chip, DATA, if k == 0 { 0x78 } else { k });
+    }
+    for (k, command) in [rstart(), write_cmd(32), end_cmd()].into_iter().enumerate() {
+        poke(&mut chip, COMD0 + 4 * k as u32, command);
+    }
+    let edges = play(&mut chip, c(8000).0, c(8000).0, |_| false).unwrap();
+    assert_eq!(deltas(&edges), nack_edges(0x78));
+    assert_eq!(word(&mut chip, INT_RAW) & (NACK | TRANS_COMPLETE), NACK);
+    assert_eq!(word(&mut chip, SR) & BUS_BUSY, 0);
+}
+
+/// When a NACK's automatic stop finishes before IDF writes `COMD0 = STOP` and calls
+/// `i2c_hal_master_trans_start` twice, the first `TRANS_START` runs the STOP on the idle bus and
+/// the second `CONF_UPGATE` + `TRANS_START` while STOP is running is ignored without `busy_write`.
+#[test]
+fn a_standalone_stop_ignores_a_second_trans_start_while_stopping() {
+    let stores = [
+        (I2C0 + COMD0, stop_cmd()),
+        (I2C0 + CTR, MODE | CONF_UPGATE),
+        (I2C0 + CTR, MODE | TRANS_START),
+        (I2C0 + CTR, MODE | CONF_UPGATE),
+        (I2C0 + CTR, MODE | TRANS_START),
+    ];
+    let mut literals = vec![I2C0, GO];
+    literals.extend(stores.iter().flat_map(|&(addr, value)| [addr, value]));
+    let mut program = Program::new(&literals);
+    program.l32r(2, 0).l32r(3, 1).rri8(6, 3, 2, CTR as u8);
+    wait_bit(&mut program, INT_RAW, 10, true);
+    wait_bit(&mut program, SR, 4, false);
+    for k in 0..stores.len() {
+        program
+            .l32r(5, 2 + 2 * k)
+            .l32r(6, 3 + 2 * k)
+            .rri8(6, 6, 5, 0);
+    }
+    program.raw(&LOOP);
+    let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD]);
+    arm(&mut chip);
+    poke(&mut chip, DATA, 0x78);
+    poke(&mut chip, COMD0, rstart());
+    poke(&mut chip, COMD0 + 4, write_cmd(1));
+    poke(&mut chip, COMD0 + 8, stop_cmd());
+    let edges = play(&mut chip, c(8000).0, c(8000).0, |_| false).unwrap();
+    assert_eq!(deltas(&edges), nack_edges(0x78));
+    assert_eq!(
+        word(&mut chip, INT_RAW) & (NACK | TRANS_COMPLETE),
+        NACK | TRANS_COMPLETE
+    );
+    assert_eq!(word(&mut chip, SR) & BUS_BUSY, 0);
+    assert!(word(&mut chip, COMD0) & CMD_DONE != 0);
+}
+
+/// A NACK on a data byte aborts the rest of the write command and sends a STOP: both inside a
+/// single command list and in the second segment after an END command.
+#[test]
+fn a_data_byte_nack_stops_the_write_and_sends_no_later_bytes() {
+    // Short write: 0x78 (ACK), 0x11 (ACK), 0x22 (NACK), 0x33 (never sent).
+    let mut chip = go(CTR as u8).chip_on(&[SCL_PAD, SDA_PAD]);
+    arm(&mut chip);
+    for byte in [0x78u32, 0x11, 0x22, 0x33] {
+        poke(&mut chip, DATA, byte);
+    }
+    poke(&mut chip, COMD0, rstart());
+    poke(&mut chip, COMD0 + 4, write_cmd(4));
+    poke(&mut chip, COMD0 + 8, stop_cmd());
+    let ack_first_two = |rises: u32| rises == 9 || rises == 18;
+    let edges = play(&mut chip, c(12_000).0, c(12_000).0, ack_first_two).unwrap();
+    let (mut wire, fall) = Wire::start(ack_first_two);
+    let fall = wire.byte(fall, 0x78);
+    let fall = wire.byte(fall, 0x11);
+    let fall = wire.byte(fall, 0x22);
+    assert_eq!(deltas(&edges), wire.stop(fall));
+    assert_eq!(word(&mut chip, INT_RAW) & (NACK | TRANS_COMPLETE), NACK);
+    assert_eq!(word(&mut chip, SR) & BUS_BUSY, 0);
+    // 0x33 remains unread in the TX FIFO.
+    assert_eq!(word(&mut chip, SR) >> 18 & 0x3f, 1);
+
+    // Multi-part write across END: 32 bytes ACKed, END, then byte 32 ACKed and byte 33 NACKed.
+    let bytes: Vec<u8> = (0..36u8).map(|k| if k == 0 { 0x78 } else { k }).collect();
+    let mut stores = vec![(I2C0 + INT_CLR, 1 << 3)];
+    stores.extend(bytes[32..].iter().map(|&b| (I2C0 + DATA, u32::from(b))));
+    stores.extend([
+        (I2C0 + COMD0, write_cmd(4)),
+        (I2C0 + COMD0 + 4, stop_cmd()),
+        (I2C0 + CTR, MODE | TRANS_START),
+    ]);
+    let mut chip = end_program(0, &stores).chip_on(&[SCL_PAD, SDA_PAD]);
+    arm(&mut chip);
+    for &b in &bytes[..32] {
+        poke(&mut chip, DATA, u32::from(b));
+    }
+    for (k, command) in [rstart(), write_cmd(32), end_cmd()].into_iter().enumerate() {
+        poke(&mut chip, COMD0 + 4 * k as u32, command);
+    }
+    // ACK all 32 bytes of segment 1 plus byte 0 of segment 2 (33 * 9 = 297), NACK byte 1 (306).
+    let ack_33 = |rises: u32| rises > 0 && rises.is_multiple_of(9) && rises <= 33 * 9;
+    let edges = play(&mut chip, c(60_000).0, c(60_000).0, ack_33).unwrap();
+    let edges = deltas(&edges);
+    let (mut wire, fall) = Wire::start(ack_33);
+    let _fall = bytes[..32].iter().fold(fall, |fall, &b| wire.byte(fall, b));
+    let first = wire.edges.clone();
+    let (_, resumed) = held_gap(&edges, &first);
+    let fall = wire.byte(resumed, bytes[32]);
+    let fall = wire.byte(fall, bytes[33]);
+    assert_eq!(edges, wire.stop(fall));
+    assert_eq!(word(&mut chip, INT_RAW) & (NACK | TRANS_COMPLETE), NACK);
+    assert_eq!(word(&mut chip, SR) & BUS_BUSY, 0);
+    assert_eq!(word(&mut chip, SR) >> 18 & 0x3f, 2);
+}
+
+/// `ack_check_en` and `ack_exp` follow TRM v1.8 27.4.9: with `ack_check_en` clear a NACK does
+/// not stop the write, and with `ack_exp` set a NACK matches while an ACK triggers `I2C_NACK_INT`.
+#[test]
+fn ack_check_en_and_ack_exp_follow_trm_write_rules() {
+    // ack_check_en = 0: NACK on byte 0 still sends byte 1 and completes with TRANS_COMPLETE.
+    let mut chip = go(CTR as u8).chip_on(&[SCL_PAD, SDA_PAD]);
+    arm(&mut chip);
+    poke(&mut chip, DATA, 0x78);
+    poke(&mut chip, DATA, 0x42);
+    poke(&mut chip, COMD0, rstart());
+    poke(&mut chip, COMD0 + 4, cmd(1, 2, false, false, false));
+    poke(&mut chip, COMD0 + 8, stop_cmd());
+    let edges = play(&mut chip, c(8000).0, c(8000).0, |_| false).unwrap();
+    let (mut wire, fall) = Wire::start(|_| false);
+    let fall = wire.byte(fall, 0x78);
+    let fall = wire.byte(fall, 0x42);
+    assert_eq!(deltas(&edges), wire.stop(fall));
+    assert_eq!(
+        word(&mut chip, INT_RAW) & (NACK | TRANS_COMPLETE),
+        TRANS_COMPLETE
+    );
+
+    // ack_check_en = 1, ack_exp = 1: NACK matches, ACK triggers NACK interrupt.
+    let mut chip = go(CTR as u8).chip_on(&[SCL_PAD, SDA_PAD]);
+    arm(&mut chip);
+    poke(&mut chip, DATA, 0x78);
+    poke(&mut chip, COMD0, rstart());
+    poke(&mut chip, COMD0 + 4, cmd(1, 1, true, true, false));
+    poke(&mut chip, COMD0 + 8, stop_cmd());
+    play(&mut chip, c(4000).0, c(4000).0, |_| false).unwrap();
+    assert_eq!(
+        word(&mut chip, INT_RAW) & (NACK | TRANS_COMPLETE),
+        TRANS_COMPLETE
+    );
+
+    let mut chip = go(CTR as u8).chip_on(&[SCL_PAD, SDA_PAD]);
+    arm(&mut chip);
+    poke(&mut chip, DATA, 0x78);
+    poke(&mut chip, COMD0, rstart());
+    poke(&mut chip, COMD0 + 4, cmd(1, 1, true, true, false));
+    poke(&mut chip, COMD0 + 8, stop_cmd());
+    play(&mut chip, c(4000).0, c(4000).0, |rises| rises == 9).unwrap();
+    assert_eq!(word(&mut chip, INT_RAW) & (NACK | TRANS_COMPLETE), NACK);
+}
+
+/// A `TRANS_START` or `CONF_UPGATE` during the `STOP` of an acknowledged transfer, during a
+/// standalone `STOP` that did not follow a NACK, or during a NACK's automatic stop before
+/// `COMD0 = STOP` is written must still be refused as `busy_write`.
+#[test]
+fn a_strobe_during_an_acked_stop_or_non_nack_stop_is_refused_as_busy_write() {
+    for nops in [960, 1000, 1040, 1080] {
+        for strobe in [
+            MODE | TRANS_START,
+            MODE | CONF_UPGATE,
+            MODE | CONF_UPGATE | TRANS_START,
+        ] {
+            let mut program = Program::new(&[I2C0, GO, strobe]);
+            program.l32r(2, 0).l32r(3, 1).rri8(6, 3, 2, CTR as u8);
+            for _ in 0..nops {
+                program.raw(&NOP);
+            }
+            program.l32r(3, 2).rri8(6, 3, 2, CTR as u8).raw(&LOOP);
+            let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD]);
+            one_byte(&mut chip);
+            let halt = play(&mut chip, c(4000).0, c(4000).0, |rises| rises == 9);
+            assert_eq!(
+                refused(halt.err()),
+                ("I2C0", "busy_write"),
+                "nops={nops}, strobe={strobe:#x}"
+            );
+        }
+    }
+
+    // Direct store at the acknowledged STOP's SCL rise (10th SCL release).
+    for strobe in [
+        MODE | TRANS_START,
+        MODE | CONF_UPGATE,
+        MODE | CONF_UPGATE | TRANS_START,
+    ] {
+        let mut chip = go(CTR as u8).chip_on(&[SCL_PAD, SDA_PAD]);
+        one_byte(&mut chip);
+        let mut wire = [true, true];
+        let mut rises = 0u32;
+        let stop_rise = loop {
+            match chip.run_until(c(4000)) {
+                Some(Halt::Moved(at)) => {
+                    let drives = [chip.drive(SCL_PAD), chip.drive(SDA_PAD)];
+                    if !matches!(drives[0], PadDrive::Low) && !wire[0] {
+                        rises += 1;
+                    }
+                    let hold_sda = rises == 9;
+                    let mut changed = Vec::new();
+                    for (k, pad) in [SCL_PAD, SDA_PAD].into_iter().enumerate() {
+                        let level = !(k == 1 && hold_sda) && !matches!(drives[k], PadDrive::Low);
+                        if level != wire[k] {
+                            wire[k] = level;
+                            changed.push((pad, level));
+                        }
+                    }
+                    chip.input(at, changed);
+                    if rises == 10 {
+                        break at;
+                    }
+                }
+                other => panic!("before stop rise: {other:?}"),
+            }
+        };
+        let soc = &mut chip.soc;
+        assert_eq!(
+            soc.i2c.write(stop_rise, CTR, strobe, &mut soc.gpio),
+            Err("busy_write"),
+            "direct store at stop SCL rise, strobe={strobe:#x}"
+        );
+    }
+
+    // A standalone STOP on an idle bus with no preceding NACK still refuses a second start.
+    for strobe in [
+        MODE | TRANS_START,
+        MODE | CONF_UPGATE,
+        MODE | CONF_UPGATE | TRANS_START,
+    ] {
+        let mut program = Program::new(&[I2C0, GO, strobe]);
+        program
+            .l32r(2, 0)
+            .l32r(3, 1)
+            .rri8(6, 3, 2, CTR as u8)
+            .l32r(3, 2)
+            .rri8(6, 3, 2, CTR as u8)
+            .raw(&LOOP);
+        let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD]);
+        arm(&mut chip);
+        poke(&mut chip, COMD0, stop_cmd());
+        let halt = play(&mut chip, c(2000).0, c(2000).0, |_| false);
+        assert_eq!(
+            refused(halt.err()),
+            ("I2C0", "busy_write"),
+            "non-NACK standalone stop, strobe={strobe:#x}"
+        );
+    }
+
+    // A NACK followed by an ordinary acknowledged transfer (no recovery STOP) must still refuse
+    // a strobe during the acknowledged transfer's STOP.
+    {
+        let mut program = Program::new(&[
+            I2C0,
+            GO,
+            I2C0 + INT_CLR,
+            NACK,
+            I2C0 + DATA,
+            0xa5,
+            I2C0 + COMD0,
+            rstart(),
+            I2C0 + COMD0 + 4,
+            write_cmd(1),
+            I2C0 + COMD0 + 8,
+            stop_cmd(),
+            MODE | TRANS_START,
+        ]);
+        program.l32r(2, 0).l32r(3, 1).rri8(6, 3, 2, CTR as u8);
+        wait_bit(&mut program, INT_RAW, 10, true);
+        wait_bit(&mut program, SR, 4, false);
+        for k in 0..5 {
+            program
+                .l32r(5, 2 + 2 * k)
+                .l32r(6, 3 + 2 * k)
+                .rri8(6, 6, 5, 0);
+        }
+        program.l32r(3, 1).rri8(6, 3, 2, CTR as u8);
+        for _ in 0..1000 {
+            program.raw(&NOP);
+        }
+        program.l32r(3, 12).rri8(6, 3, 2, CTR as u8).raw(&LOOP);
+        let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD]);
+        one_byte(&mut chip);
+        // First transfer (rises 1..=10) NACKs; second transfer (rises 11..=20) ACKs on rise 19.
+        let halt = play(&mut chip, c(8000).0, c(8000).0, |rises| rises == 19);
+        assert_eq!(
+            refused(halt.err()),
+            ("I2C0", "busy_write"),
+            "acked transfer after a NACK"
+        );
+    }
+
+    // During a NACK's automatic stop, a TRANS_START before COMD0 = STOP is written is still
+    // refused as busy_write.
+    {
+        let mut program = Program::new(&[I2C0, GO, MODE | TRANS_START]);
+        program.l32r(2, 0).l32r(3, 1).rri8(6, 3, 2, CTR as u8);
+        wait_bit(&mut program, INT_RAW, 10, true);
+        program.l32r(3, 2).rri8(6, 3, 2, CTR as u8).raw(&LOOP);
+        let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD]);
+        one_byte(&mut chip);
+        let halt = play(&mut chip, c(4000).0, c(4000).0, |_| false);
+        assert_eq!(
+            refused(halt.err()),
+            ("I2C0", "busy_write"),
+            "TRANS_START during NACK stop without COMD0 = STOP"
+        );
     }
 }

@@ -29,16 +29,18 @@ pub(crate) trait Hosted: Send + fmt::Debug {
     /// One call per landing. The port walks each record on the concrete device, and drives
     /// each byte the device answers into `answers`.
     fn take(&mut self, world: &World, at: Time, records: &[LinkRow], answers: &mut Answers);
-    /// The part of one record sent by `at`, where the run ends inside it.
-    fn cut(&mut self, world: &World, at: Time, record: &Record);
+    /// The part of one record sent by `at`, where the run ends inside it, and the part of the
+    /// record its port relays on from it that is sent by `at`.
+    fn cut(&mut self, world: &World, at: Time, record: &Record) -> Option<Record>;
     /// The world quantities the device reads.
     fn reads(&self) -> &'static [Quantity];
     /// The records its port sent that it still holds, in the order it sent them.
     fn records(&self) -> &[Record];
     /// Hands over and drops each record it holds that ended at or before `through`.
     fn drain_records(&mut self, through: Time, sent: &mut dyn FnMut(Record));
-    /// The record its port started by `at` and has not ended, when its stops up to `at` are done.
-    fn in_flight(&self, at: Time) -> Option<Record>;
+    /// The records its port started by `at` and has not ended, when its stops up to `at` are
+    /// done.
+    fn in_flight(&self, at: Time) -> Vec<Record>;
     /// Hands over and drops each pixel write it closed, with its time, in the order it closed
     /// them.
     fn drain_rows(&mut self, sent: &mut dyn FnMut(Time, Drawn));
@@ -46,10 +48,19 @@ pub(crate) trait Hosted: Send + fmt::Debug {
     fn shows(&self) -> Shows;
     /// What the device shows now.
     fn view(&self) -> View<'_>;
+    /// [`orbe_model::Device::TRACKS_SUPPLY`].
+    fn tracks_supply(&self) -> bool {
+        false
+    }
+    /// [`orbe_model::Device::angle_at`].
+    fn angle_at(&self, _at: Time) -> Option<i32> {
+        None
+    }
     /// Each time what an LED chain shows changed, in time order. A core keeps every one only
     /// once [`keep_shown`](Self::keep_shown) asked it to, and otherwise the last alone.
     fn shown(&self) -> Vec<Shown>;
-    /// When what an LED chain shows last changed. `None` before the first change.
+    /// When what an LED chain shows last latched. `None` before the first latch or after power
+    /// loss cleared it.
     fn latched(&self) -> Option<Time>;
     /// Keeps every change of what an LED chain shows, for a run that writes them.
     fn keep_shown(&mut self);
@@ -95,10 +106,6 @@ impl History {
         self.0 = Some(Arc::new(Link { shown, before }));
     }
 
-    fn last(&self) -> Option<&Shown> {
-        self.0.as_deref().map(|link| &link.shown)
-    }
-
     /// Oldest first.
     fn to_vec(&self) -> Vec<Shown> {
         let mut all = Vec::new();
@@ -141,6 +148,9 @@ pub(crate) struct Hosting<D> {
     broke: [Option<Time>; ProtocolRule::ALL.len()],
     /// Shared with every copy, so a copy copies a pointer.
     shown: History,
+    /// When the LED chain last latched since power-on or the last power loss. Kept separate from
+    /// `shown` so `leds.csv` still holds earlier latches from a recorded run.
+    latched: Option<Time>,
     /// Whether `shown` keeps every change, or the last alone. A run that writes `leds.csv`
     /// keeps them all. A session that writes nothing needs only the last, and keeping every
     /// one would grow without bound in a long session.
@@ -151,6 +161,9 @@ pub(crate) struct Hosting<D> {
     /// The train a call queued that its port has not taken. The port takes it in the same
     /// call on the core, so a copy holds none.
     queued: Option<(Time, Pulses)>,
+    /// The edge a replayed call passed that its port has not taken. The port takes it after
+    /// that call, so a copy holds none.
+    passed: Option<(Time, bool)>,
 }
 
 impl<D: Device> Clone for Hosting<D> {
@@ -159,9 +172,11 @@ impl<D: Device> Clone for Hosting<D> {
             device: self.device.clone(),
             broke: self.broke,
             shown: self.shown.clone(),
+            latched: self.latched,
             keep: self.keep,
             drawn: self.drawn.clone(),
             queued: self.queued.clone(),
+            passed: self.passed,
         }
     }
 
@@ -173,9 +188,11 @@ impl<D: Device> Clone for Hosting<D> {
         if !self.shown.same(&source.shown) {
             self.shown = source.shown.clone();
         }
+        self.latched = source.latched;
         self.keep = source.keep;
         self.drawn.clone_from(&source.drawn);
         self.queued.clone_from(&source.queued);
+        self.passed = source.passed;
     }
 }
 
@@ -185,9 +202,11 @@ impl<D: Device> Hosting<D> {
             device,
             broke: [None; ProtocolRule::ALL.len()],
             shown: History::default(),
+            latched: None,
             keep: false,
             drawn: Vec::new(),
             queued: None,
+            passed: None,
         }
     }
 
@@ -244,9 +263,24 @@ impl<D: Device> Hosting<D> {
         self.queued.take()
     }
 
+    /// The edge a replayed call passed, which only its port takes.
+    pub(crate) fn take_passed(&mut self) -> Option<(Time, bool)> {
+        self.passed.take()
+    }
+
+    /// Clears the current latch timestamp on power loss without dropping `shown` history.
+    pub(crate) fn clear_latched(&mut self) {
+        self.latched = None;
+    }
+
     #[inline]
     fn read(&mut self, at: Time, cx: Cx) {
-        if cx.broken().is_some() || cx.shown() || cx.drawn().is_some() || cx.queued().is_some() {
+        if cx.broken().is_some()
+            || cx.shown()
+            || cx.drawn().is_some()
+            || cx.queued().is_some()
+            || cx.passed().is_some()
+        {
             self.keep(at, cx);
         }
     }
@@ -272,6 +306,7 @@ impl<D: Device> Hosting<D> {
                 bytes: Arc::from(bytes),
             };
             self.shown.push(shown, self.keep);
+            self.latched = Some(at);
         }
         if let Some(drawn) = cx.drawn() {
             assert!(
@@ -287,6 +322,13 @@ impl<D: Device> Hosting<D> {
                 "the port takes each train before the next call"
             );
             self.queued = Some((*start, train.clone()));
+        }
+        if let Some(edge) = cx.passed() {
+            assert!(
+                self.passed.is_none(),
+                "the port takes each passed edge before the next call"
+            );
+            self.passed = Some(edge);
         }
     }
 }
@@ -321,17 +363,26 @@ pub(crate) trait Port<D>: Clone + Send + 'static {
         _answers: &mut Answers,
     ) {
     }
-    /// The part of `record` sent by `at`. A port with no record pin does nothing.
-    fn cut_record(&mut self, _dev: &mut Hosting<D>, _world: &World, _at: Time, _record: &Record) {}
+    /// The part of `record` sent by `at`, and the part sent by `at` of the record it relays on
+    /// from it. A port with no record pin does nothing.
+    fn cut_record(
+        &mut self,
+        _dev: &mut Hosting<D>,
+        _world: &World,
+        _at: Time,
+        _record: &Record,
+    ) -> Option<Record> {
+        None
+    }
     /// The records it sent that it still holds. A port that sends none holds none.
     fn records(&self) -> &[Record] {
         &[]
     }
     /// Hands over and drops each record it holds that ended at or before `through`.
     fn drain_records(&mut self, _through: Time, _sent: &mut dyn FnMut(Record)) {}
-    /// The record it started by `at` and has not ended.
-    fn in_flight(&self, _at: Time) -> Option<Record> {
-        None
+    /// The records it started by `at` and has not ended.
+    fn in_flight(&self, _at: Time) -> Vec<Record> {
+        Vec::new()
     }
     /// The first record it dropped because a lane sat on another net than its pin.
     fn miswired(&self) -> Option<(Time, u16)> {
@@ -390,9 +441,17 @@ impl<D, A: Port<D>, B: Port<D>> Port<D> for (A, B) {
         self.1.take_records(dev, world, at, records, answers);
     }
 
-    fn cut_record(&mut self, dev: &mut Hosting<D>, world: &World, at: Time, record: &Record) {
-        self.0.cut_record(dev, world, at, record);
-        self.1.cut_record(dev, world, at, record);
+    fn cut_record(
+        &mut self,
+        dev: &mut Hosting<D>,
+        world: &World,
+        at: Time,
+        record: &Record,
+    ) -> Option<Record> {
+        let a = self.0.cut_record(dev, world, at, record);
+        let b = self.1.cut_record(dev, world, at, record);
+        debug_assert!(a.is_none() || b.is_none(), "one bus of a device sends");
+        a.or(b)
     }
 
     fn records(&self) -> &[Record] {
@@ -404,7 +463,7 @@ impl<D, A: Port<D>, B: Port<D>> Port<D> for (A, B) {
         self.0.drain_records(through, sent);
     }
 
-    fn in_flight(&self, at: Time) -> Option<Record> {
+    fn in_flight(&self, at: Time) -> Vec<Record> {
         self.0.in_flight(at)
     }
 
@@ -498,6 +557,10 @@ impl<D: Device, P: Port<D>> Native<D, P> {
             self.dev.queued.is_none(),
             "only a pulse target on an open-drain line queues a train"
         );
+        assert!(
+            self.dev.passed.is_none(),
+            "only a pulse target's port takes a passed edge"
+        );
     }
 
     /// What the port has due at `at`, and whether a record it sent ends there. A call it makes
@@ -539,7 +602,7 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
     }
 
     fn min_supply_v(&self) -> Option<f64> {
-        D::MIN_SUPPLY_V
+        self.dev.device.min_supply_v()
     }
 
     fn draw(&self) -> Draw {
@@ -584,11 +647,12 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
         self.follow_draw(at);
     }
 
-    fn cut(&mut self, world: &World, at: Time, record: &Record) {
-        self.port.cut_record(&mut self.dev, world, at, record);
+    fn cut(&mut self, world: &World, at: Time, record: &Record) -> Option<Record> {
+        let relayed = self.port.cut_record(&mut self.dev, world, at, record);
         self.claim(at);
         assert!(self.held(), "a record never changes the drives");
         self.follow_draw(at);
+        relayed
     }
 
     fn reads(&self) -> &'static [Quantity] {
@@ -603,7 +667,7 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
         self.port.drain_records(through, sent);
     }
 
-    fn in_flight(&self, at: Time) -> Option<Record> {
+    fn in_flight(&self, at: Time) -> Vec<Record> {
         self.port.in_flight(at)
     }
 
@@ -621,12 +685,20 @@ impl<D: Device, P: Port<D>> Hosted for Native<D, P> {
         self.dev.device.view()
     }
 
+    fn tracks_supply(&self) -> bool {
+        D::TRACKS_SUPPLY
+    }
+
+    fn angle_at(&self, at: Time) -> Option<i32> {
+        self.dev.device.angle_at(at)
+    }
+
     fn shown(&self) -> Vec<Shown> {
         self.dev.shown.to_vec()
     }
 
     fn latched(&self) -> Option<Time> {
-        self.dev.shown.last().map(|shown| shown.at)
+        self.dev.latched
     }
 
     fn keep_shown(&mut self) {

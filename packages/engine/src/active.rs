@@ -4,7 +4,7 @@
 //! its supply. `docs/engine/engine.md`, Active chips, holds the loop's protocol.
 
 use orbe_mcu::{Frame, Phase};
-use orbe_model::{Draw, Drawn, Drive, Event, Quantity, Shows, Stop, Time};
+use orbe_model::{Draw, Drawn, Drive, Event, Quantity, Shows, Stop, Time, View};
 
 use crate::netlist::{NetId, PartId};
 
@@ -13,6 +13,7 @@ pub(crate) mod i2c;
 pub(crate) mod native;
 pub(crate) mod pulse;
 pub(crate) mod replay;
+mod route;
 #[cfg(test)]
 pub(crate) mod script;
 pub(crate) mod spi;
@@ -20,7 +21,7 @@ pub(crate) mod spi;
 pub(crate) mod spi_pins;
 
 use crate::device::{
-    bmp280, cst816, dht22, hc595, pulses_replay, spi_replay, ssd1306, st77916, ws2812,
+    bmp280, cst816, dht22, hc595, pulses_replay, sg90, spi_replay, ssd1306, st77916, ws2812,
 };
 use crate::mcu::{self, Mcu, atmega328p, esp32s3};
 use native::Hosted;
@@ -107,7 +108,8 @@ pub(crate) struct Chip {
     pub(crate) usarts: &'static [&'static str],
     /// Whether its core has a TWI master, whose phases go to `i2c.csv`.
     pub(crate) twi: bool,
-    /// Whether its core sends records, which go to `link.csv`.
+    /// Whether its core sends records, which go to `link.csv`. A chip that also takes `Pulses`
+    /// records relays them: it sends on only what it took.
     pub(crate) sends: bool,
     /// Its own draw from its supply, one conductance while it runs and another while a reset
     /// holds it. `None` on a chip that draws nothing but what its outputs pass.
@@ -127,6 +129,9 @@ pub(crate) struct Chip {
 pub(crate) struct SpiTarget {
     pub(crate) cs: NetId,
     pub(crate) sclk: NetId,
+    /// Package pin indices of `CS`, `SCLK`, and `D0` to `D3` on a netlist part. `None` on a
+    /// test-only chip with no netlist part.
+    pub(crate) pins: Option<[usize; 6]>,
 }
 
 /// The record pins of a chip: its SPI target's, and the pin that takes `Duty` records. A chip
@@ -136,6 +141,8 @@ pub(crate) struct Takes {
     pub(crate) spi: Option<SpiTarget>,
     pub(crate) duty: Option<NetId>,
     pub(crate) pulses: Option<NetId>,
+    /// Package pin index of the `Pulses` input on a netlist part (`DIN`, `SIGNAL`).
+    pub(crate) pulses_pin: Option<usize>,
 }
 
 impl Takes {
@@ -228,6 +235,26 @@ impl Core {
     pub(crate) fn min_supply_v(&self) -> Option<f64> {
         match *self {
             Core::Device(ref core) => core.min_supply_v(),
+            Core::Mcu(_) => None,
+            #[cfg(test)]
+            Core::Script(_) => None,
+        }
+    }
+
+    /// Whether the host samples it at every accepted step.
+    pub(crate) fn tracks_supply(&self) -> bool {
+        match self {
+            Core::Device(core) => core.tracks_supply(),
+            Core::Mcu(_) => false,
+            #[cfg(test)]
+            Core::Script(_) => false,
+        }
+    }
+
+    /// The shaft angle in millidegrees at `at`, when the device shows one.
+    pub(crate) fn angle_at(&self, at: Time) -> Option<i32> {
+        match self {
+            Core::Device(core) => core.angle_at(at),
             Core::Mcu(_) => None,
             #[cfg(test)]
             Core::Script(_) => None,
@@ -372,13 +399,14 @@ impl Core {
         }
     }
 
-    /// The part of one `Pulses` record sent by `at`, where the run ends inside it.
-    fn cut(&mut self, world: &World, at: Time, record: &Record) {
+    /// The part of one `Pulses` record sent by `at`, where the run ends inside it, and the
+    /// part sent by `at` of the record it relays on from it.
+    fn cut(&mut self, world: &World, at: Time, record: &Record) -> Option<Record> {
         match self {
             Core::Device(core) => core.cut(world, at, record),
-            Core::Mcu(_) => {}
+            Core::Mcu(_) => None,
             #[cfg(test)]
-            Core::Script(_) => {}
+            Core::Script(_) => None,
         }
     }
 
@@ -396,6 +424,16 @@ impl Core {
             Core::Mcu(_) => Shows::Nothing,
             #[cfg(test)]
             Core::Script(_) => Shows::Nothing,
+        }
+    }
+
+    /// What the device shows now. A chip shows nothing.
+    fn view(&self) -> View<'_> {
+        match self {
+            Core::Device(core) => core.view(),
+            Core::Mcu(_) => View::Nothing,
+            #[cfg(test)]
+            Core::Script(_) => View::Nothing,
         }
     }
 
@@ -433,6 +471,7 @@ pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
         Active::Hc595(dev) => hc595::chip(part, dev),
         Active::Esp32s3(mcu) => esp32s3::chip(part, mcu),
         Active::Ws2812(chain) => ws2812::chip(part, chain),
+        Active::Sg90(dev) => sg90::chip(part, dev),
     }
 }
 
@@ -513,10 +552,19 @@ pub(crate) struct Actives {
     /// The name of each part whose core sends records, in part order. A `LinkRow`'s `sender`
     /// indexes this.
     senders: Vec<Name>,
+    /// Whether a chip sends records of its own, not only relays the `Pulses` records it takes.
+    /// A relay sends nothing unless such a chip sent first.
+    links: bool,
     /// The name of each display part, in part order. A `Rectangle`'s `part` indexes this.
     displays: Vec<Name>,
     /// The name of each LED chain, in part order. A latch's `part` indexes this.
     leds: Vec<Name>,
+    /// The name of each shaft, in part order.
+    horns: Vec<Name>,
+    /// Precomputed net incidence and targets for checking `Pulses` and `Spi` records at landing.
+    routing: route::Routing,
+    /// The first record-routing fault reached, which ends the run at its landing.
+    routing_fault: Option<(Time, Diagnostic)>,
 }
 
 struct Ahead {
@@ -754,8 +802,10 @@ impl Actives {
         let mut usarts = Vec::new();
         let mut twis = Vec::new();
         let mut senders = Vec::new();
+        let mut links = false;
         let mut displays = Vec::new();
         let mut leds = Vec::new();
+        let mut horns = Vec::new();
         let committed: Vec<Core> = circuit
             .actives
             .iter()
@@ -797,10 +847,12 @@ impl Actives {
                 }
                 if chip.sends {
                     senders.push(name(circuit, chip));
+                    links |= chip.takes.pulses.is_none();
                 }
                 match core.shows() {
                     Shows::Screen { .. } => displays.push(name(circuit, chip)),
                     Shows::Leds { .. } => leds.push(name(circuit, chip)),
+                    Shows::Angle => horns.push(name(circuit, chip)),
                     Shows::Nothing => {}
                 }
                 Ahead {
@@ -810,6 +862,7 @@ impl Actives {
                 }
             })
             .collect();
+        let routing = route::Routing::new(circuit, !senders.is_empty());
         Actives {
             committed,
             ahead,
@@ -817,8 +870,12 @@ impl Actives {
             usarts,
             twis,
             senders,
+            links,
             displays,
             leds,
+            horns,
+            routing,
+            routing_fault: None,
         }
     }
 
@@ -843,6 +900,11 @@ impl Actives {
         &self.senders
     }
 
+    /// Whether a chip sends records of its own, so the run can send any.
+    pub(crate) fn links(&self) -> bool {
+        self.links
+    }
+
     pub(crate) fn cores(&self) -> &[Core] {
         &self.committed
     }
@@ -863,6 +925,26 @@ impl Actives {
 
     pub(crate) fn led_names(&self) -> &[Name] {
         &self.leds
+    }
+
+    /// The shaft angle of horn `name`, in degrees, at `at`.
+    pub(crate) fn horn_degrees(&self, name: &Name, at: Time) -> Option<f64> {
+        let k = self.horns.iter().position(|horn| horn == name)?;
+        self.committed
+            .iter()
+            .filter_map(|core| {
+                if !matches!(core.shows(), Shows::Angle) {
+                    return None;
+                }
+                let mdeg = core.angle_at(at).unwrap_or_else(|| {
+                    let View::Degrees(mdeg) = core.view() else {
+                        panic!("a shaft shows its angle in millidegrees");
+                    };
+                    mdeg
+                });
+                Some(mdeg as f64 / 1_000.0)
+            })
+            .nth(k)
     }
 
     /// Has every LED chain keep each latch, for a run that writes `leds.csv`. A session that
@@ -932,10 +1014,11 @@ impl Actives {
         found
     }
 
-    /// The first fault a committed core reached, which ends the run there, by time and then
-    /// part order.
+    /// The first fault a committed core or a record landing reached, which ends the run there, by
+    /// time and then part order.
     pub(crate) fn fault(&self, circuit: &Circuit) -> Option<Diagnostic> {
-        self.committed
+        let core = self
+            .committed
             .iter()
             .zip(&circuit.actives)
             .filter_map(|(core, chip)| {
@@ -949,8 +1032,12 @@ impl Actives {
                     mcu::fault(Ref::Part(name(circuit, chip)), at, fault, symbol),
                 ))
             })
-            .min_by_key(|&(at, _)| at)
-            .map(|(_, fault)| fault)
+            .min_by_key(|&(at, _)| at);
+        match (core, self.routing_fault.clone()) {
+            (Some((a, fa)), Some((b, fb))) => Some(if a <= b { fa } else { fb }),
+            (Some((_, f)), None) | (None, Some((_, f))) => Some(f),
+            (None, None) => None,
+        }
     }
 
     /// Each core's record cursor: every record it sent that ended by then is staged.
@@ -1023,7 +1110,10 @@ impl Actives {
         keep: bool,
     ) -> (bool, u64) {
         let world = circuit.netlist.world();
-        let (mut incoming, mut answers) = self.incoming(circuit, at);
+        let (mut incoming, mut answers, routing_fault) = self.incoming(circuit, at);
+        if let Some(fault) = routing_fault {
+            self.routing_fault.get_or_insert((at, fault));
+        }
         let mut changed = false;
         let mut stops = 0u64;
         for (k, (committed, ahead)) in self.committed.iter_mut().zip(&mut self.ahead).enumerate() {
@@ -1036,11 +1126,13 @@ impl Actives {
             };
             let records = incoming.get_mut(k).map(std::mem::take).unwrap_or_default();
             let event = Self::due_event(circuit, k, at);
+            let tracks = committed.tracks_supply();
             if stop.is_none()
                 && !flipped
                 && records.is_empty()
                 && event.is_none()
                 && !keep
+                && !tracks
                 && !world.changes_at(committed.reads(), at)
             {
                 continue;
@@ -1058,7 +1150,7 @@ impl Actives {
                 || pulled_down != committed.pulled_down()
                 || ahead.core.held() != committed.held()
                 || draw != committed.draw();
-            if stop.is_some_and(|stop| stop.sample) {
+            if stop.is_some_and(|stop| stop.sample) || tracks {
                 let volts: Vec<f64> = circuit.actives[k]
                     .samples
                     .iter()
@@ -1107,14 +1199,16 @@ impl Actives {
     }
 
     /// The run ends at `at`, where every stop up to `at` has landed. Each pulse target takes the
-    /// part sent by then of each `Pulses` record still in flight on its line.
+    /// part sent by then of each `Pulses` record still in flight on its line. A target that
+    /// relays what it takes hands the part it relayed by then on to the next, until a part
+    /// relays nothing sent by `at`.
     pub(crate) fn cut(&mut self, circuit: &Circuit, at: Time) {
-        let flying: Vec<Record> = self
+        let mut flying: Vec<Record> = self
             .committed
             .iter()
             .zip(&self.ahead)
             .flat_map(|(core, ahead)| match core {
-                Core::Device(dev) => dev.in_flight(at).into_iter().collect(),
+                Core::Device(dev) => dev.in_flight(at),
                 Core::Mcu(chip) => match &ahead.core {
                     Core::Mcu(copy) => chip.in_flight(copy, at),
                     _ => unreachable!("a copy is of its core's kind"),
@@ -1124,12 +1218,16 @@ impl Actives {
             })
             .filter(|record| matches!(record.kind, RecordKind::Pulses { .. }))
             .collect();
-        for (core, chip) in self.committed.iter_mut().zip(&circuit.actives) {
-            if chip.takes.pulses.is_some() {
-                for record in flying.iter().filter(|record| chip.takes.record(record)) {
-                    core.cut(circuit.netlist.world(), at, record);
+        while !flying.is_empty() {
+            let mut relayed = Vec::new();
+            for (core, chip) in self.committed.iter_mut().zip(&circuit.actives) {
+                if chip.takes.pulses.is_some() {
+                    for record in flying.iter().filter(|record| chip.takes.record(record)) {
+                        relayed.extend(core.cut(circuit.netlist.world(), at, record));
+                    }
                 }
             }
+            flying = relayed;
         }
     }
 
@@ -1142,13 +1240,18 @@ impl Actives {
 
     /// The records that end at `at`, read from each sender stopped there and listed for each
     /// chip that takes them, ordered by end, then by sender name, then by sequence, and an open
-    /// answer for each SPI record that reads. Reads only: no rewind, no commit, no cursor and no
-    /// reach moves.
-    fn incoming(&self, circuit: &Circuit, at: Time) -> (Vec<Vec<LinkRow>>, Answers) {
+    /// answer for each SPI record that reads, plus the first routing fault if any record cannot
+    /// reach its net faithfully. Reads only: no rewind, no commit, no cursor and no reach moves.
+    fn incoming(
+        &self,
+        circuit: &Circuit,
+        at: Time,
+    ) -> (Vec<Vec<LinkRow>>, Answers, Option<Diagnostic>) {
         let mut answers = Answers::default();
         if self.senders.is_empty() {
-            return (Vec::new(), answers);
+            return (Vec::new(), answers, None);
         }
+        let mut routing_fault: Option<((&Name, u64), Diagnostic)> = None;
         let mut incoming = vec![Vec::new(); self.ahead.len()];
         for (slot, ahead) in self.ahead.iter().enumerate() {
             let Reach::Stopped(stop) = ahead.reach else {
@@ -1162,11 +1265,23 @@ impl Actives {
                 continue;
             }
             let after = ahead.delivered.records;
+            let sender_part = circuit.actives[slot].part;
+            let sender_name = &self.senders[usize::from(ahead.delivered.sender)];
             for record in ahead.core.records() {
                 debug_assert!(
                     record.end > after && record.end == at,
                     "a held record ends at its sender's stop"
                 );
+                if let Some(fault) = self
+                    .routing
+                    .check(&circuit.netlist, sender_part, record, at)
+                {
+                    let key = (sender_name, record.seq);
+                    if routing_fault.as_ref().is_none_or(|(best, _)| key < *best) {
+                        routing_fault = Some((key, fault));
+                    }
+                    continue;
+                }
                 if let RecordKind::Spi { spi, .. } = &record.kind
                     && spi.reads() > 0
                 {
@@ -1182,10 +1297,13 @@ impl Actives {
                 }
             }
         }
+        if let Some((_, fault)) = routing_fault {
+            return (Vec::new(), Answers::default(), Some(fault));
+        }
         for list in &mut incoming {
             list.sort_by(|a, b| self.record_key(a).cmp(&self.record_key(b)));
         }
-        (incoming, answers)
+        (incoming, answers, None)
     }
 
     fn record_key<'a>(&'a self, row: &LinkRow) -> (Time, &'a Name, u64) {

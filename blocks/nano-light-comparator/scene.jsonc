@@ -36,7 +36,7 @@
     ["bb.a14", "bb.X13", { "color": "#161616" }], // GND to the - rail beside a
     ["bb.X61", "bb.Z61", { "color": "#161616" }], // the same rail beside j
     ["bb.a21", "bb.W21", { "color": "#d12b2b" }], // ldr.a to 5V
-    ["bb.a22", "bb.a29"], // ldr.b and rbot.a to IN1-
+    ["bb.d22", "bb.a29"], // ldr.b and rbot.a to IN1-
     ["bb.a42", "bb.X42", { "color": "#161616" }], // trim.b to GND
     ["bb.a41", "bb.a30"], // trim.wiper to IN1+
     ["bb.c32", "bb.c30"], // rhys.b to IN1+, beside the resistor

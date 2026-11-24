@@ -250,13 +250,7 @@ impl Kind for Capacitor {
     /// Its only capacitor is branch 0.
     #[inline]
     fn stamp(&self, stamp: &mut Stamp<'_>) {
-        // `capacitors_open` is the DC point a rating window starts from. The run's own
-        // t = 0 solve holds `initial`.
-        let initial = if stamp.conditions.capacitors_open {
-            None
-        } else {
-            self.initial.as_ref().map(|initial| initial.si.get())
-        };
+        let initial = self.initial.as_ref().map(|initial| initial.si.get());
         if let Some(esr) = &self.series_resistance {
             stamp.conductance(self.pins[0], stamp.internal(0), 1.0 / esr.si.get());
         }

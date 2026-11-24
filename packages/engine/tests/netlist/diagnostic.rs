@@ -1,8 +1,8 @@
 use orbe_model::Time;
 
 use orbe_engine::diagnostic::{
-    AnalysisRule, Diagnostic, Excursion, ProtocolRule, ScheduleRule, Severity, Solve, ValueRule,
-    WaveformRule,
+    AnalysisRule, Diagnostic, Excursion, LinkKind, ProtocolRule, ScheduleRule, Severity, Solve,
+    ValueRule, WaveformRule,
 };
 use orbe_engine::name::{Name, NameError, Ref};
 use orbe_engine::netlist::{Average, Basis};
@@ -154,6 +154,13 @@ fn samples() -> Vec<Diagnostic> {
             at: Time::from_ps(6_000),
             sender: name("rp1"),
         },
+        Diagnostic::ChipLinkUnsupported {
+            pin: Ref::Pin(name("u1"), name("GPIO4")),
+            other: Ref::Pin(name("r1"), name("a")),
+            at: Time::from_ps(7_000),
+            peripheral: "RMT",
+            kind: LinkKind::Pulses,
+        },
     ]
 }
 
@@ -191,7 +198,7 @@ fn codes_are_unique_and_match_the_grammar() {
         assert!(is_code(code), "{code}");
         assert!(seen.insert(code), "duplicate code {code}");
     }
-    assert_eq!(seen.len(), 25);
+    assert_eq!(seen.len(), 26);
 }
 
 /// `docs/engine/diagnostics.md` gives each code its own `## <code>` heading.
@@ -239,6 +246,7 @@ fn severity_refs_and_time_follow_the_variant() {
             "netlist.waveform",
             "chip.protocol",
             "chip.link_miswired",
+            "chip.link_unsupported",
         ]
     );
     for diagnostic in &found {
@@ -258,6 +266,8 @@ fn severity_refs_and_time_follow_the_variant() {
             assert_eq!(diagnostic.at(), Some(Time::from_ps(4_000)));
         } else if code == "chip.link_miswired" {
             assert_eq!(diagnostic.at(), Some(Time::from_ps(6_000)));
+        } else if code == "chip.link_unsupported" {
+            assert_eq!(diagnostic.at(), Some(Time::from_ps(7_000)));
         } else {
             assert_eq!(diagnostic.at(), None);
         }
@@ -379,6 +389,11 @@ fn severity_refs_and_time_follow_the_variant() {
     assert_eq!(
         miswired,
         r##"{"code":"chip.link_miswired","severity":"warning","refs":["#lcd1"],"t_ps":6000,"message":"#lcd1 dropped an SPI transaction from #rp1 whose data lanes are not on its own data pins at 6000 ps, the first time","data":{"sender":"rp1"}}"##
+    );
+    let unsupported = serde_json::to_string(by_code(&found, "chip.link_unsupported")).unwrap();
+    assert_eq!(
+        unsupported,
+        r##"{"code":"chip.link_unsupported","severity":"error","refs":["#u1.pin.GPIO4","#r1.pin.a"],"t_ps":7000,"message":"#u1.pin.GPIO4 sent a pulse record from RMT at 7000 ps, but its net reaches #r1.pin.a, which does not take pulse records there; the model sends RMT output as records rather than pin edges, so the data line must be wired straight to the pixel's data input","data":{"kind":"pulses","peripheral":"RMT"}}"##
     );
     let waveform = serde_json::to_string(by_code(&found, "netlist.waveform")).unwrap();
     assert!(
@@ -543,6 +558,20 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
     let (message, data) = chip_json(Diagnostic::ChipFlashCommand {
         part: part("u1"),
         at,
+        command: Some(0x02),
+        reason: FlashRefusal::Write,
+        pc: 0x4200_0010,
+        app: true,
+        symbol: None,
+    });
+    assert_eq!(
+        message,
+        "#u1 wrote the flash with command 0x02 at 0x42000010 on the APP CPU, which the model does not simulate; Wi-Fi, Bluetooth and saved settings (Preferences, EEPROM, NVS) write the flash, at 5 ps"
+    );
+    assert_eq!(data["reason"], "write");
+    let (message, data) = chip_json(Diagnostic::ChipFlashCommand {
+        part: part("u1"),
+        at,
         command: None,
         reason: FlashRefusal::StartBits,
         pc: 0x10,
@@ -641,12 +670,39 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
         data,
         serde_json::json!({ "core": "app", "pc": 0x10, "symbol": null })
     );
+    let (message, data) = chip_json(setting(
+        Setting::Unsimulated("the pulse counter that encoder libraries use"),
+        "PCNT",
+    ));
+    assert_eq!(
+        message,
+        "#u1 used PCNT, the pulse counter that encoder libraries use, at 0x00000010, which the model does not simulate, at 5 ps"
+    );
+    assert_eq!(
+        (&data["peripheral"], &data["setting"]),
+        (
+            &serde_json::json!("PCNT"),
+            &serde_json::json!("unsimulated")
+        )
+    );
     let (message, data) = chip_json(setting(Setting::Sleep, "RTC_CNTL"));
     assert_eq!(
         message,
         "#u1 put the chip to sleep at 0x00000010, which the model does not run, at 5 ps"
     );
     assert_eq!(data["peripheral"], "RTC_CNTL");
+    let (message, data) = chip_json(setting(Setting::Register("pin_hold"), "RTC_CNTL"));
+    assert_eq!(
+        message,
+        "#u1 enabled pin hold (gpio_hold_en) at 0x00000010, which the model does not run, at 5 ps"
+    );
+    assert_eq!(
+        (&data["peripheral"], &data["setting"]),
+        (
+            &serde_json::json!("RTC_CNTL"),
+            &serde_json::json!("pin_hold")
+        )
+    );
 
     let restart = |reason| Diagnostic::ChipFaultRestart {
         part: part("u1"),

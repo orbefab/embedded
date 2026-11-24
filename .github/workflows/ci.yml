@@ -2,15 +2,17 @@
 # scripts/check.sh says what each command runs.
 # Lint (`check.sh lint`), the Rust tests (`check.sh rust`), the viewer checks
 # and the site suite on wrangler run in parallel on every pull request and on
-# every push to main. The viewer fixture is two shards of one Playwright run.
+# every push to main. The viewer fixture is two shards of one Playwright run;
+# `scripts/check-viewer.sh` runs in shard 1/2 only.
 # Each shard plays the page with no session, which runs a Block, so those jobs
 # install Rust and wasm-bindgen. The page build itself does not. The site is
 # built once, and that build is shared, including the wrangler deploy pointer.
-# The wrangler suite is three shards that download it and put the pointer back
-# before wrangler starts. The source config names assets and no directory, so
-# wrangler does not start without that pointer. The vite preview suite downloads
-# the build too, then builds the
-# install-line site, and the Firefox and WebKit smoke downloads it. Those two
+# Every job that downloads the site puts that pointer back before `wrangler` or
+# `vite preview` starts; neither server starts without it. The wrangler suite is
+# three shards that download it and run the full site suite. The vite preview
+# job downloads the build too, builds the install-line site for `install.spec.ts`,
+# and runs the `@vite-smoke` subset of `site.spec.ts` on `vite preview`. The
+# Firefox and WebKit smoke also downloads the build. Those two
 # jobs run on main and nightly. ci-ok requires every job. A job this run did
 # not ask for is skipped, and any other result fails ci-ok. The engine checks
 # (`check.sh engine-chips`, `engine-circuits` and `engine-wasm`) run in parallel
@@ -143,10 +145,12 @@ jobs:
           wasm-bindgen: true
           cache-save: ${{ env.CACHE_SAVE }}
 
+      - name: Viewer typecheck and unit tests
+        if: matrix.shard == '1/2'
+        run: scripts/check-viewer.sh
+
       - name: Viewer fixture
-        run: |
-          scripts/check-viewer.sh
-          scripts/check-viewer-e2e.sh --shard "${{ matrix.shard }}"
+        run: scripts/check-viewer-e2e.sh --shard "${{ matrix.shard }}"
 
   viewer-blocks:
     name: block, headed, world

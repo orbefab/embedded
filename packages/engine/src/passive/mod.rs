@@ -10,6 +10,6 @@ pub use capacitor::Capacitor;
 pub use current_source::CurrentSource;
 pub use inductor::Inductor;
 pub use potentiometer::{PositionRule, Potentiometer, position_rule};
-pub use resistor::Resistor;
+pub use resistor::{DRIVE_REST_PS, Resistor};
 pub use switch::Switch;
 pub use voltage_source::VoltageSource;

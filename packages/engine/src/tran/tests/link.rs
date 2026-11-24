@@ -45,6 +45,7 @@ fn bus(netlist: &Netlist) -> SpiTarget {
     SpiTarget {
         cs: net(netlist, "cs"),
         sclk: net(netlist, "sclk"),
+        pins: None,
     }
 }
 
@@ -297,7 +298,7 @@ fn bytes_that_end_together_come_by_part_name_then_in_the_order_sent() {
 fn a_replay_part_reaches_a_receiver_on_its_nets() {
     let replay = r#"{ "name": "rp1", "kind": "spi_replay",
           "pins": { "VCC": "vcc", "GND": "gnd", "CS": "cs", "SCLK": "sclk",
-                    "D0": "o1", "D1": "o2", "D2": "x", "D3": "x" },
+                    "D0": "o1", "D1": "o2", "D2": "d2", "D3": "d3" },
           "clock_hz": { "value": 10000000, "unit": "Hz" },
           "output": {
             "high_drop": { "value": 0.0, "unit": "V" },
@@ -311,7 +312,7 @@ fn a_replay_part_reaches_a_receiver_on_its_nets() {
           ] }"#;
     let netlist = circuit(
         STOP,
-        &["o1", "o2", "o3", "x", "cs", "sclk"],
+        &["o1", "o2", "o3", "d2", "d3", "x", "cs", "sclk"],
         &[
             replay.to_string(),
             resistor("r3", "o3", "gnd", 1000.0),

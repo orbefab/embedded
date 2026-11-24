@@ -142,7 +142,7 @@ impl Leds<'_> {
     }
 
     /// When its colours last latched, which is when [`chain`](Self::chain) took them. `None`
-    /// before its first latch, while every LED shows the black of power-on.
+    /// before its first latch, or after power loss cleared them, while every LED shows black.
     pub fn latched(&self) -> Option<Time> {
         self.chain.latched()
     }
@@ -742,6 +742,13 @@ impl Session {
 
     /// The LED chain `part` as it stands after the last accepted step, which is its colours at
     /// `now`. `None` when `part` is no chain.
+    /// The shaft angle of `part`, in degrees, at [`now`](Self::now). `None` when `part` is
+    /// not a servo. The shaft keeps moving between stops, so the angle is where it is at the
+    /// read and not where it was at the last stop.
+    pub fn angle(&self, part: &Name) -> Option<f64> {
+        self.actives.horn_degrees(part, self.now())
+    }
+
     pub fn leds(&self, part: &Name) -> Option<Leds<'_>> {
         let k = self
             .actives
@@ -792,7 +799,8 @@ impl Session {
 
     /// The observations and trace of a recorded session advanced to its end, and its warnings,
     /// ratings and fault in `diagnostics`. The trace holds the serial log when a chip has a USART,
-    /// the TWI phases when a chip has a TWI, and the records when a chip can send them.
+    /// the TWI phases when a chip has a TWI, and the records when a chip can send records of its
+    /// own.
     pub(crate) fn outcome(self, diagnostics: &mut Vec<Diagnostic>) -> Outcome {
         let (State::Ended { at, row, end }, Some(record)) = (self.state, self.record) else {
             unreachable!("a recorded run finishes once it has ended");
@@ -811,8 +819,8 @@ impl Session {
         if !twis.is_empty() {
             trace.attach_i2c(I2c::new(twis.to_vec(), self.i2c));
         }
-        let senders = self.actives.senders();
-        if !senders.is_empty() {
+        if self.actives.links() {
+            let senders = self.actives.senders();
             trace.attach_link(Link::new(senders.to_vec(), self.link));
         }
         let names = self.actives.displays();

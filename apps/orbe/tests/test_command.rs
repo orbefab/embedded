@@ -25,11 +25,14 @@ fn each_block_passes() {
             "devkitc-button-led",
             "nano-7seg-count",
             "nano-button-led",
+            "nano-buzzer",
             "nano-gy-bmp280",
             "nano-led-fade",
             "nano-light-comparator",
             "nano-neopixel-stick",
             "nano-oled",
+            "nano-relay-led",
+            "nano-servo-sweep",
             "nano-shift-leds",
             "uno-button-led",
         ]
@@ -67,7 +70,7 @@ fn board_alone(board: &str, wires: &str, test: &str) -> tempfile::TempDir {
 )]
 fn an_uno_simulates_about_as_fast_as_a_nano() {
     let fastest = |board: &str| {
-        let dir = board_alone(board, "", "open\nstep 50ms\n");
+        let dir = board_alone(board, "", "open\nstep 50ms\nexpect @b.5V high\n");
         (0..3)
             .map(|_| {
                 let started = std::time::Instant::now();
@@ -127,7 +130,7 @@ fn a_reversed_adapter_on_nano_vin_warns_unless_a_series_diode_holds_it() {
             "",
             r#"["jack.center", "nano.GND"], ["jack.sleeve", "nano.VIN"]"#,
         ),
-        "open\nstep 20ms\nsnapshot\nget @nano.VIN\n",
+        "open\nstep 20ms\nsnapshot\nget @nano.VIN\nexpect @nano.VIN < 0V\n",
     );
     assert_eq!(bare.code, 0, "{}{}", bare.stdout, bare.stderr);
     assert!(bare.stdout.contains("nano.VIN -9"), "{}", bare.stdout);
@@ -207,7 +210,10 @@ fn the_nano_3v3_pin_follows_the_ch340g_and_warns_past_its_rating() {
     let v = labeled(&light.stdout, "nano.3V3");
     assert!((v - 3.3).abs() < 0.05, "3V3 {v}\n{}", light.stdout);
 
-    let heavy = run_scene("10", "open\nstep 10ms\nget @nano.3V3\n");
+    let heavy = run_scene(
+        "10",
+        "open\nstep 10ms\nget @nano.3V3\nexpect @nano.3V3 < 5V\n",
+    );
     assert_eq!(heavy.code, 0, "{}{}", heavy.stdout, heavy.stderr);
     assert!(
         heavy.stdout.contains("warning[rating.current]"),
@@ -220,7 +226,7 @@ fn the_nano_3v3_pin_follows_the_ch340g_and_warns_past_its_rating() {
         heavy.stdout
     );
 
-    let dead = project("open\nstep 10ms\nget @nano.3V3\n");
+    let dead = project("open\nstep 10ms\nget @nano.3V3\nexpect @nano.3V3 < 1V\n");
     fs::write(dead.path().join("scene.jsonc"), scene("3300")).unwrap();
     let usb = dead
         .path()
@@ -279,7 +285,7 @@ fn a_tantalum_on_nano_vin_stays_quiet_near_zero_and_warns_when_reversed() {
         )
     };
     let run_scene = |text: &str| {
-        let dir = project("open\nstep 20ms\nget @nano.VIN\nget @c1.v\n");
+        let dir = project("open\nstep 20ms\nget @nano.VIN\nget @c1.v\nexpect @nano.5V high\n");
         fs::write(dir.path().join("scene.jsonc"), text).unwrap();
         orbe(dir.path(), &["test", "-v"])
     };
@@ -417,8 +423,9 @@ fn an_overload_that_starts_mid_run_is_over_now_before_its_window_warns() {
 
 #[test]
 fn the_first_target_reads_the_engine_values_while_pressed() {
-    let dir =
-        project("open\nstep 50ms\npress @btn1\nstep 50ms\nget @nano.D13\nget @led1\nget @led1.i\n");
+    let dir = project(
+        "open\nstep 50ms\npress @btn1\nstep 50ms\nget @nano.D13\nget @led1\nget @led1.i\nexpect @led1 lit\n",
+    );
     let run = orbe(dir.path(), &["test", "-v"]);
     assert_eq!(run.code, 0, "{}", run.stdout);
     assert!(
@@ -613,7 +620,7 @@ fn each_command_replies_in_text() {
     assert_eq!(block(11)[..2], ["13> close", "  closed at t=154ms"]);
     assert_eq!(
         run.stdout.lines().rev().take(2).collect::<Vec<_>>(),
-        ["1 passed, 0 failed", "PASS tests/a.test"]
+        ["1 passed, 0 failed", "PASS tests/a.test (scene.jsonc)"]
     );
 }
 
@@ -743,7 +750,10 @@ fn a_failing_test_reports_its_line_with_expected_and_actual() {
     let run = orbe(dir.path(), &["test"]);
     assert_eq!(run.code, 1);
     let lines: Vec<&str> = run.stdout.lines().collect();
-    assert_eq!(lines[0], "FAIL tests/a.test:3: expect @led1 lit");
+    assert_eq!(
+        lines[0],
+        "FAIL tests/a.test:3 (scene.jsonc): expect @led1 lit"
+    );
     assert_eq!(
         lines[1],
         "  error[expect_failed]: expected @led1 lit at t=10ms"
@@ -959,8 +969,9 @@ fn test_paths_name_files_or_project_folders() {
     let run = orbe(dir.path(), &["test"]);
     assert_eq!(run.code, 1);
     assert!(
-        run.stdout
-            .starts_with("PASS tests/a.test\nFAIL tests/b.test:2: expect @led1 lit\n"),
+        run.stdout.starts_with(
+            "PASS tests/a.test (scene.jsonc)\nFAIL tests/b.test:2 (scene.jsonc): expect @led1 lit\n"
+        ),
         "{}",
         run.stdout
     );
@@ -969,7 +980,7 @@ fn test_paths_name_files_or_project_folders() {
     let run = orbe(dir.path(), &["test", "tests/a.test"]);
     assert_eq!(
         (run.code, run.stdout.as_str()),
-        (0, "PASS tests/a.test\n1 passed, 0 failed\n")
+        (0, "PASS tests/a.test (scene.jsonc)\n1 passed, 0 failed\n")
     );
 
     let run = orbe(dir.path(), &["test", "nowhere"]);
@@ -1063,7 +1074,7 @@ expect @ldr.v > 4.7V    # the dark: 1 Mohm, 4.715 V
 
     fs::write(
         dir.path().join("tests/light.test"),
-        "open\nstep 1ms\nset light 80\n",
+        "open\nstep 1ms\nset light 80\nexpect @ldr.v > 0V\n",
     )
     .unwrap();
     let json = live::replies_in(&dir);
@@ -1089,7 +1100,7 @@ expect @ldr.v > 4.7V    # the dark: 1 Mohm, 4.715 V
 
     fs::write(
         dir.path().join("tests/light.test"),
-        "open\nstep 25ms\nset light 50\n",
+        "open\nstep 25ms\nset light 50\nexpect @ldr.v > 0V\n",
     )
     .unwrap();
     let json = live::replies_in(&dir);
@@ -1138,6 +1149,7 @@ get light
 step 21ms
 get light
 get @world.light
+expect @ldr.v > 0V
 ",
     )
     .unwrap();

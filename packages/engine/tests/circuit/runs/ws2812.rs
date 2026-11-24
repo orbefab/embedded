@@ -510,11 +510,21 @@ fn a_held_fall_starts_the_reset_count() {
 /// the next part's `DIN`. The last part has no `DOUT`. Gives each part's pixels by name, `led0`
 /// first, and the run's `diagnostics.json`.
 fn chained(name: &str, counts: &[u16]) -> (Vec<serde_json::Value>, serde_json::Value) {
+    chained_with(name, counts, |_| {})
+}
+
+/// [`chained`], with `edit` made to the netlist first.
+fn chained_with(
+    name: &str,
+    counts: &[u16],
+    edit: impl FnOnce(&mut serde_json::Value),
+) -> (Vec<serde_json::Value>, serde_json::Value) {
     let path = repo(&format!(
         "packages/engine/tests/circuits/{name}/netlist.json"
     ));
     let mut netlist: serde_json::Value =
         serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    edit(&mut netlist);
     let parts = netlist["parts"].as_array_mut().unwrap();
     let k = parts
         .iter()
@@ -583,30 +593,76 @@ fn a_ring_cut_in_three_by_dout_shows_the_whole_ring_s_colours() {
 
 #[ignore = "full tier"]
 #[test]
-fn a_record_does_not_go_on_through_dout_and_says_so_once() {
+fn a_record_goes_on_through_dout_to_the_next_chain() {
     let (pixels, diagnostics) = chained("ws2812-replay", &[1, 12]);
-    assert_eq!(pixels[0], serde_json::json!(palette()[..1]));
-    assert_eq!(pixels[1], serde_json::json!(vec![[0, 0, 0]; 12]));
-    let rules: Vec<_> = diagnostics
-        .as_array()
-        .unwrap()
+    let palette = palette();
+    assert_eq!(pixels[0], serde_json::json!(palette[..1]));
+    assert_eq!(pixels[1], serde_json::json!(palette[1..]));
+    assert_eq!(diagnostics, serde_json::json!([]));
+}
+
+#[ignore = "full tier"]
+#[test]
+fn thirteen_parts_chained_on_a_record_each_show_their_own_colour() {
+    let (pixels, diagnostics) = chained("ws2812-replay", &[1; 13]);
+    let palette = palette();
+    for (k, pixels) in pixels.iter().enumerate() {
+        assert_eq!(pixels, &serde_json::json!([palette[k]]), "led{k}");
+    }
+    assert_eq!(diagnostics, serde_json::json!([]));
+}
+
+/// A high of 450 ns in the second part's bits is in neither window. The first part warns at its
+/// fall, as it does for a bad high on the pin, and the second part warns at the fall on its own
+/// `DIN`, 500 ns later. Both warn the same whether the run ends after the record or inside it,
+/// after that fall.
+#[ignore = "full tier"]
+#[test]
+fn a_bad_high_past_the_first_part_warns_on_the_part_it_reached() {
+    const START: u64 = 1_000_000_000;
+    const DELAY: u64 = 500_000;
+    let mut pulses = train(&[0x12, 0x34, 0x56, 0xA5, 0x5A, 0xC3]);
+    pulses[50].1 = 450_000;
+    let fall = START + pulses[..51].iter().map(|&(_, ps)| ps).sum::<u64>() + DELAY;
+    let frame: Vec<_> = pulses
         .iter()
-        .map(|d| {
-            (
-                d["code"].clone(),
-                d["data"]["rule"].clone(),
-                d["message"].clone(),
-            )
-        })
+        .map(|&(level, ps)| serde_json::json!({ "level": level, "ps": ps }))
         .collect();
-    assert_eq!(
-        rules,
-        vec![(
-            "chip.protocol".into(),
-            "dout_record".into(),
-            "#led0 did not pass a high from a record on to DOUT, breaking rule dout_record at 1030000000 ps, the first time".into()
-        )]
-    );
+    for stop in [2_000_000_000u64, fall + 1_000_000] {
+        let (_, diagnostics) = chained_with("ws2812-replay", &[1, 1], |netlist| {
+            netlist["analysis"]["transient"]["stop_ps"] = stop.into();
+            let parts = netlist["parts"].as_array_mut().unwrap();
+            let replay = parts
+                .iter_mut()
+                .find(|part| part["kind"] == "pulses_replay")
+                .unwrap();
+            replay["events"] = serde_json::json!([{ "t_ps": START, "pulses": frame }]);
+        });
+        let rules: Vec<_> = diagnostics
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| {
+                (
+                    d["code"].clone(),
+                    d["data"]["rule"].clone(),
+                    d["message"].clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rules,
+            [("led0", fall - DELAY), ("led1", fall)]
+                .map(|(part, at)| (
+                    "chip.protocol".into(),
+                    "bit".into(),
+                    format!("#{part} dropped a bit that broke rule bit at {at} ps, the first time")
+                        .into()
+                ))
+                .to_vec(),
+            "stop {stop}"
+        );
+    }
 }
 
 /// `packages/engine/tests/circuits/ws2812-replay` cut to 16 LEDs that draw 12 mA a channel and
@@ -695,4 +751,177 @@ fn a_chain_behind_100_ohm_or_1_kohm_settles_above_ground_where_the_resistor_feed
             "{ohms} ohm: vled {settled} V against {expected} V"
         );
     }
+}
+
+/// Two chained `ws2812` parts with `min_supply = 3.0 V` driven by `pulses_replay`:
+/// 1) held at 0 V: neither latches and both stay off;
+/// 2) stepped from 0 V to 5 V between two frames: first ignored, second lights both;
+/// 3) dropped from 5 V to 0 V after latching: both clear to off and `DOUT` releases.
+#[test]
+fn a_chain_with_min_supply_ignores_data_unpowered_releases_dout_and_recovers() {
+    let frame1: Vec<_> = train(&[0x11, 0x22, 0x33, 0x44, 0x55, 0x66])
+        .into_iter()
+        .map(|(level, ps)| serde_json::json!({ "level": level, "ps": ps }))
+        .collect();
+    let frame2: Vec<_> = train(&[0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC])
+        .into_iter()
+        .map(|(level, ps)| serde_json::json!({ "level": level, "ps": ps }))
+        .collect();
+
+    // 1) Supply at 0 V while DIN is driven from 5 V: nothing latches.
+    let (pixels, diagnostics) = chained_with("ws2812-replay", &[1, 1], |netlist| {
+        netlist["analysis"]["transient"]["stop_ps"] = 3_000_000_000u64.into();
+        netlist["nets"].as_array_mut().unwrap().push("vled".into());
+        let parts = netlist["parts"].as_array_mut().unwrap();
+        for part in parts.iter_mut() {
+            if part["kind"] == "ws2812" {
+                part["pins"]["VCC"] = "vled".into();
+                part["min_supply"] = serde_json::json!({ "value": 3.0, "unit": "V" });
+            } else if part["kind"] == "pulses_replay" {
+                part["events"] =
+                    serde_json::json!([{ "t_ps": 1_000_000_000u64, "pulses": frame1 }]);
+            }
+        }
+        parts.push(serde_json::json!({
+            "name": "vled_src",
+            "kind": "voltage_source",
+            "pins": { "p": "vled", "n": "gnd" },
+            "voltage": { "value": 0.0, "unit": "V" }
+        }));
+    });
+    assert_eq!(
+        pixels,
+        vec![
+            serde_json::json!([[0, 0, 0]]),
+            serde_json::json!([[0, 0, 0]])
+        ]
+    );
+    assert_eq!(diagnostics, serde_json::json!([]));
+
+    // 2) Supply steps from 0 V to 5 V at 2 ms, between frame1 (1 ms) and frame2 (3 ms).
+    let (pixels, diagnostics) = chained_with("ws2812-replay", &[1, 1], |netlist| {
+        netlist["analysis"]["transient"]["stop_ps"] = 5_000_000_000u64.into();
+        netlist["nets"].as_array_mut().unwrap().push("vled".into());
+        let parts = netlist["parts"].as_array_mut().unwrap();
+        for part in parts.iter_mut() {
+            if part["kind"] == "ws2812" {
+                part["pins"]["VCC"] = "vled".into();
+                part["min_supply"] = serde_json::json!({ "value": 3.0, "unit": "V" });
+            } else if part["kind"] == "pulses_replay" {
+                part["events"] = serde_json::json!([
+                    { "t_ps": 1_000_000_000u64, "pulses": frame1 },
+                    { "t_ps": 3_000_000_000u64, "pulses": frame2 }
+                ]);
+            }
+        }
+        parts.push(serde_json::json!({
+            "name": "vled_src",
+            "kind": "voltage_source",
+            "pins": { "p": "vled", "n": "gnd" },
+            "voltage": {
+                "kind": "step",
+                "initial": { "value": 0.0, "unit": "V" },
+                "final": { "value": 5.0, "unit": "V" },
+                "at_ps": 2_000_000_000u64
+            }
+        }));
+    });
+    assert_eq!(
+        pixels,
+        vec![
+            serde_json::json!([[0x77, 0x88, 0x99]]),
+            serde_json::json!([[0xAA, 0xBB, 0xCC]]),
+        ]
+    );
+    assert_eq!(diagnostics, serde_json::json!([]));
+
+    // 3) Supply drops from 5 V to 0 V at 2.5 ms after frame1 latched: pixels clear and DOUT releases.
+    let path = repo("packages/engine/tests/circuits/ws2812-replay/netlist.json");
+    let mut netlist: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    netlist["analysis"]["transient"]["stop_ps"] = 3_500_000_000u64.into();
+    netlist["nets"]
+        .as_array_mut()
+        .unwrap()
+        .extend(["vled".into(), "dout0".into()]);
+    let parts = netlist["parts"].as_array_mut().unwrap();
+    for part in parts.iter_mut() {
+        if part["kind"] == "ws2812" {
+            part["leds"] = 1.into();
+            part["pins"]["VCC"] = "vled".into();
+            part["min_supply"] = serde_json::json!({ "value": 3.0, "unit": "V" });
+            part["pins"]["DOUT"] = "dout0".into();
+            part["dout"] = serde_json::json!({
+                "output": {
+                    "high_drop": { "value": 0.0, "unit": "V" },
+                    "high_resistance": { "value": 50.0, "unit": "ohm" },
+                    "low_drop": { "value": 0.0, "unit": "V" },
+                    "low_resistance": { "value": 50.0, "unit": "ohm" }
+                },
+                "delay": { "value": 500000, "unit": "ps" }
+            });
+        } else if part["kind"] == "pulses_replay" {
+            part["events"] = serde_json::json!([{ "t_ps": 1_000_000_000u64, "pulses": frame1 }]);
+        }
+    }
+    parts.extend([
+        serde_json::json!({
+            "name": "vled_src",
+            "kind": "voltage_source",
+            "pins": { "p": "vled", "n": "gnd" },
+            "voltage": {
+                "kind": "step",
+                "initial": { "value": 5.0, "unit": "V" },
+                "final": { "value": 0.0, "unit": "V" },
+                "at_ps": 2_500_000_000u64
+            }
+        }),
+        serde_json::json!({
+            "name": "r_hi",
+            "kind": "resistor",
+            "pins": { "a": "v5", "b": "dout0" },
+            "resistance": { "value": 100000.0, "unit": "ohm" },
+            "ratings": { "power": null }
+        }),
+        serde_json::json!({
+            "name": "r_lo",
+            "kind": "resistor",
+            "pins": { "a": "dout0", "b": "gnd" },
+            "resistance": { "value": 100000.0, "unit": "ohm" },
+            "ratings": { "power": null }
+        }),
+    ]);
+    let mut session =
+        orbe_engine::Session::open(netlist::parse(&serde_json::to_vec(&netlist).unwrap()).unwrap())
+            .unwrap();
+    let ring = orbe_engine::name::Name::new("ring").unwrap();
+    let dout0: orbe_engine::name::Ref = "#net.dout0".parse().unwrap();
+    session.advance_to(orbe_model::Time::from_ps(2_000_000_000));
+    // Powered and latched: pixel shows frame1 and DOUT drives low (~0 V).
+    assert_eq!(
+        session.leds(&ring).unwrap().chain().pixels,
+        vec![[0x11, 0x22, 0x33]]
+    );
+    assert!(
+        session.leds(&ring).unwrap().latched().is_some(),
+        "powered pixel should report a latch time"
+    );
+    assert!(
+        session.probe().get(&dout0).unwrap().get() < 0.05,
+        "powered DOUT should drive low"
+    );
+    session.advance_to(orbe_model::Time::from_ps(3_500_000_000));
+    // Unpowered: pixel clears to off, latch time clears, and DOUT releases so the external
+    // 100k/100k divider sits at 2.5 V.
+    assert_eq!(session.leds(&ring).unwrap().chain().pixels, vec![[0, 0, 0]]);
+    assert_eq!(
+        session.leds(&ring).unwrap().latched(),
+        None,
+        "unpowered pixel must clear its previous latch time"
+    );
+    let released = session.probe().get(&dout0).unwrap().get();
+    assert!(
+        (released - 2.5).abs() < 0.05,
+        "unpowered DOUT should release, got {released} V"
+    );
 }

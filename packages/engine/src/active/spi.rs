@@ -82,7 +82,7 @@ impl<D: SpiTarget> Port<D> for Engine {
         answers: &mut Answers,
     ) {
         for row in records {
-            let RecordKind::Spi { spi, nets } = &row.record.kind else {
+            let RecordKind::Spi { spi, nets, .. } = &row.record.kind else {
                 continue;
             };
             if self.reset {

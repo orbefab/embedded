@@ -8,7 +8,7 @@
 //! starts at 16, a core timer, as the hardware resets it. The status registers show each
 //! source's level, the same in both halves. The sources modeled here are the GPIO interrupt,
 //! SPI2's, I2C0's, RMT's, each timer group's watchdog and its two general timers, the three
-//! SYSTIMER alarms and the four `FROM_CPU` registers. The general-timer levels, the USB
+//! SYSTIMER alarms and the four `FROM_CPU` registers. The general-timer levels, LEDC, the USB
 //! Serial/JTAG source and UART0, UART1 and UART2 are added by the caller. Every other source
 //! stays low. IDF v5.5.5,
 //! `components/soc/esp32s3/include/soc/interrupts.h`,

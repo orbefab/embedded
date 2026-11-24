@@ -21,6 +21,9 @@ const REACH_MM: f64 = 1.27;
 const FIT_MM: f64 = 1.0;
 /// A leg points down when its axis does, once placed.
 const DOWN: f64 = -0.5;
+/// A lead whose tip is this close to the seating plane, or above it, does not enter the
+/// board the part plugs into. One trimmed flush on a module stops on that module.
+const ABOVE_BOARD_MM: f64 = -0.01;
 
 /// How a drawn leg joins the hole it is drawn in.
 pub(super) enum Join {
@@ -54,12 +57,12 @@ pub(super) struct Contact {
     pub(super) strip: Option<usize>,
 }
 
-struct Hole {
-    name: String,
-    key: usize,
-    at: [f64; 3],
+pub(super) struct Hole {
+    pub(super) name: String,
+    pub(super) key: usize,
+    pub(super) at: [f64; 3],
     /// The strip the hole sits in, by its index in the board's `holes.strips`.
-    strip: Option<usize>,
+    pub(super) strip: Option<usize>,
 }
 
 struct Leg {
@@ -348,7 +351,7 @@ impl Circuit<'_> {
         }
     }
 
-    fn tree(&self, trees: &mut BTreeMap<FileId, Value>, file: FileId) -> Value {
+    pub(super) fn tree(&self, trees: &mut BTreeMap<FileId, Value>, file: FileId) -> Value {
         trees
             .entry(file)
             .or_insert_with(|| {
@@ -622,7 +625,7 @@ impl Circuit<'_> {
     }
 
     /// Each hole of a board: its pin, and its mouth in the board's frame.
-    fn holes(&self, board: usize, part: &Part) -> Vec<Hole> {
+    pub(super) fn holes(&self, board: usize, part: &Part) -> Vec<Hole> {
         let at: BTreeMap<u64, [f64; 3]> = self
             .anchors_of(part)
             .iter()
@@ -698,8 +701,12 @@ impl Circuit<'_> {
                     continue;
                 };
                 let t = turn(&frame, tip);
+                let tip = [origin[0] + t[0], origin[1] + t[1], origin[2] + t[2]];
+                if tip[2] > ABOVE_BOARD_MM {
+                    continue;
+                }
                 legs.push(Leg {
-                    tip: [origin[0] + t[0], origin[1] + t[1], origin[2] + t[2]],
+                    tip,
                     pin_key: self.keys[&(at, pin.name.clone())],
                     lead,
                     leaf: format!("{}.{}", self.insts[at].dotted(), pin.name),
@@ -731,7 +738,7 @@ impl Circuit<'_> {
     }
 
     /// Holes a plugged leg or a scene wire already names.
-    fn held_holes(&self) -> BTreeSet<usize> {
+    pub(super) fn held_holes(&self) -> BTreeSet<usize> {
         let mut held = BTreeSet::new();
         for seated in self.seated.values() {
             for contact in &seated.contacts {

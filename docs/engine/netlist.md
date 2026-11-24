@@ -157,7 +157,7 @@ Two nets, or two parts, with the same name are `netlist.duplicate`. The ref is `
 
 `resistance.value` is in `ohm`, greater than 0, and its reciprocal must be finite. `resistance` may instead be a world-driven field, as [World-driven fields](#world-driven-fields) says, which keeps the same rule at both ends of its quantity's range. Zero or a negative value is `netlist.value` with rule `positive`. A positive value whose reciprocal overflows is `netlist.value` with rule `finite_reciprocal`. A different unit is `netlist.unit`. A number outside the f64 range is `netlist.syntax`.
 
-`ratings` holds `power`. See [Ratings](#ratings).
+`ratings` holds `power`, and may hold `voltage`. See [Ratings](#ratings).
 
 ### Potentiometer
 
@@ -1177,7 +1177,7 @@ An `ssd1306` has no `ratings` object and no `i`, `v`, or `p`. Its logic signals 
 
 T1H is the Worldsemi WS2812E-1313 datasheet's, V1.1, page 3: a high of 580 ns to 1 µs is a 1. T0H, a 0, is 220 ns to 400 ns, that page's 380 ns extended to the SK68xx T0H maximum. Each end is included. A low up to 280 µs ends the bit, however short or long. The same page gives T0L and T1L as 580 ns to 1 µs and a bit of at least 1.25 µs, and the WS2812E 5050 datasheet, V1.0, page 3, gives T1L as 220 ns to 420 ns. The chain checks no low against either, so a train timed to either sheet decodes, the 300 ns high and 900 ns low of an RMT 0 and its 900 ns high and 300 ns low 1 among them, and Arduino `rgbLedWrite`'s 400 ns high and 800 ns low 0 and its 800 ns high and 400 ns low 1. RES is a low longer than 280 µs, and it latches. The table gives ">280µs", so a low of exactly 280 µs is no reset and the chain latches at the fall plus 280 µs plus 1 ps. A high outside both windows drops that bit, and the first drop is `chip.protocol` rule `bit`.
 
-With `dout`, once every LED holds its 24 bits, each high on `DIN` goes on to `DOUT` `dout.delay` later, its rise and its fall alike, until the chain latches. `DOUT` is low before that and after the latch. It drives high through `dout.output.high_drop` under `VCC` behind `dout.output.high_resistance`, and low through `dout.output.low_drop` over `GND` behind `dout.output.low_resistance`, as an NE555's OUT does. The SK6812MINI-HS datasheet, Rev. 04, section 11, gives the delay from `DIN` to `DOUT` as at most 500 ns, rise and fall alike, and gives no output widths, so `DOUT` passes each high as long as it came. A second chain whose `DIN` is that net takes those bits as it would from a chip, so parts chained one after the other each take their own 24 bits. A high that a `Pulses` record carried has already ended when the record lands, so it does not go on to `DOUT`. The first is `chip.protocol` rule `dout_record`, and `DOUT` stays low. At most 8 `DOUT` edges are due at once. The datasheet's times queue 2, and a line that changes faster drops the newest high whole.
+With `dout`, once every LED holds its 24 bits, each high on `DIN` goes on to `DOUT` `dout.delay` later, its rise and its fall alike, until the chain latches. `DOUT` is low before that and after the latch. It drives high through `dout.output.high_drop` under `VCC` behind `dout.output.high_resistance`, and low through `dout.output.low_drop` over `GND` behind `dout.output.low_resistance`, as an NE555's OUT does. The SK6812MINI-HS datasheet, Rev. 04, section 11, gives the delay from `DIN` to `DOUT` as at most 500 ns, rise and fall alike, and gives no output widths, so `DOUT` passes each high as long as it came. A second chain whose `DIN` is that net takes those bits as it would from a chip, so parts chained one after the other each take their own 24 bits. A high that a `Pulses` record carried has already ended when the record lands, so it goes on as a `Pulses` record on `DOUT`'s net, with the same delay, and `DOUT` stays low. The next chain takes that record as it takes one from a chip, as [engine.md](engine.md#pulse-targets) says, so parts chained after an ESP32-S3's RMT each take their own 24 bits too. At most 8 `DOUT` edges are due at once. The datasheet's times queue 2, and a line that changes faster drops the newest high whole.
 
 The same sheet, page 2, gives `VIH` as at least 0.7 VDD and `VIL` as at most 0.7 V, both at VDD 5 V. `VIL` is a voltage there, not a fraction of the supply. The example's `input_threshold.low` is that 0.7 V over 5 V, 0.14 of the supply, so it holds at 5 V.
 
@@ -1204,13 +1204,14 @@ The same sheet, page 2, gives `VIH` as at least 0.7 VDD and `VIL` as at most 0.7
 | --- | --- | --- |
 | `leds` | count | an integer from 1 to 1024. 0 to 65535 outside that is rule `leds`, and any other number is `netlist.syntax`. Absent means 13 |
 | `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+| `min_supply` | `V` | greater than 0, else rule `positive`. Absent runs at any supply |
 | `dout.output.high_drop`, `dout.output.low_drop` | `V` | at least 0, else rule `non_negative` |
 | `dout.output.high_resistance`, `dout.output.low_resistance` | `ohm` | the resistor's |
 | `dout.delay` | `ps` | an integer from 1 to 1000000. 0 is rule `positive`, and above 1000000, T1H's longest high, is rule `delay` |
 | `draw.channel_current`, `draw.idle_current` | `A` | at least 0, else rule `non_negative` |
 | `draw.holds_above` | `V` | greater than 0, else rule `positive` |
 
-`dout` may be absent, and the chain then has no `DOUT`. `dout` without a `DOUT` pin, or a `DOUT` pin without `dout`, is `netlist.pins`. A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
+`dout` may be absent, and the chain then has no `DOUT`. `dout` without a `DOUT` pin, or a `DOUT` pin without `dout`, is `netlist.pins`. A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`. `min_supply` is optional; when given, below that `V(VCC) - V(GND)` the chain ignores `DIN`, clears to off (leaving only the faded idle draw, 0 A at 0 V) and releases `DOUT`, and picks up again from the next full frame once the supply returns.
 
 A `ws2812` has no `ratings` object and no `i`, `v`, or `p`. Its logic signal is `DIN`. It joins `DOUT` to `VCC` and to `GND` through the stage its drive stamps, and no other pins, so `VCC`, `GND` and `DIN` each need another DC path.
 
@@ -1299,6 +1300,16 @@ A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.u
 A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`. The `ratings` object is required. A missing key is `netlist.syntax`.
 
 An `hc595` has no `i`, `v`, or `p`. Its logic signals are `SER`, `SRCLK`, `RCLK`, `SRCLR` and `OE`. It joins each output to `VCC` and to `GND` through the stage its drive stamps, so those nets are not floating while the output is off. `VCC` draws only what the outputs source, so it needs another DC path, and so does `GND`.
+
+### SG90
+
+`kind` is `sg90`, an SG90 micro servo. It is an active chip with no clock of its own. Pins are `VCC`, `GND` and `SIGNAL`. Every pin is required. `SIGNAL` is a high-impedance input read through `input_threshold`, fractions of the supply. A high pulse's width commands the shaft: 0.5 ms is 0°, 2.4 ms is 180°, and a width outside that clamps at the nearer stop. That travel is the measured one. DroneBot Workshop set an SG90's ends at 500 µs and 2400 µs, and Nick Gammon quoted a 500 µs to 2400 µs spec and measured 0.5 ms to 2.5 ms for 180°. The Luxorparts sheet says 1 ms is 0° (minimum position), 1.5 ms is 90° and 2 ms is 180° (maximum position). The shaft follows the measured travel, so those three widths sit inside it. The speed is 0.12 s per 60° at 4.8 V, Tower Pro's figure, which Luxorparts states at 4.8 V too, and 0.10 s per 60° at 6 V, Luxorparts' figure. Between 4.8 V and 6 V the speed is the straight line through those two. Below 4.8 V, down to 3.0 V, it is the 4.8 V figure times the supply over 4.8 V. Below 4.5 V, the low end of the range the Nano's 5 V pin can read, the first such sample is `chip.protocol` rule `supply`. At 6 V and above it holds the 6 V speed. Below 3.0 V the shaft does not follow and the draw is none. When the moving draw itself pulls the supply under 3.0 V, the shaft holds and the part raises `chip.protocol` rule `supply_sag`, whose message says the supply sags under the servo's moving draw. The draw is then the 5 mA hold, as soon as the rail recovers, so the current and the rail do not stay at the collapsed reading for a solver step. A real SG90 browns out and jitters there, because the controller resets. The model holds the shaft instead of buzzing. A supply that is itself under 3.0 V draws none and does not raise `supply_sag`. The AA51880 sheet gives no operating supply range. Its 2.3 V is VREG minimum, the regulator output at Vcc 4.8 V. 3.0 V is the bottom of the 3.0 V to 7.2 V operating range 4tronix lists, the lowest such minimum among the cited sheets. A supply that returns above 3.0 V follows the next pulse. The supply is read at every accepted step. The angle a read reports is the shaft's place at that read. It holds the angle when it arrives, and a low of 22 ms, past one 20 ms frame, leaves the shaft where it was. The draw is 5 mA while it holds and 140 mA while it moves, from `VCC` to `GND`, held at 4.8 V. It shows the shaft angle in millidegrees. It has no `ratings` object and no `i`, `v` or `p`. Its logic signal is `SIGNAL`. It joins `VCC` to `GND` through the draw.
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+
+A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
 
 ### Pulses replay
 
@@ -1437,11 +1448,11 @@ A blob the document names that no folder has, a name whose every file hashes to 
 
 ## Ratings
 
-A rating bounds the stress on a part. Every key of a kind's `ratings` object is required. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `voltage_source` and `capacitor`, where it is optional.
+A rating bounds the stress on a part. Every key of a kind's `ratings` object is required, except a resistor's `voltage`, which may be left out. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `voltage_source` and `capacitor`, where it is optional.
 
 | Kind | Keys | Checked quantity |
 | --- | --- | --- |
-| `resistor` | `power` | `#<part>.p` |
+| `resistor` | `power`, optional `voltage` | `#<part>.p`, and the peak of a sounding drive on `#<part>.v` |
 | `diode`, `led`, `zener` | `current`, `power` | `#<part>.i`, `#<part>.p` |
 | `linear_regulator` | `current`, `power` | `#<part>.iout`, `#<part>.p` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
@@ -1450,7 +1461,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `capacitor` | `reverse_voltage`, optional | pin `a` over pin `b` |
 | `atmega328p` | `pin_current`, `supply_current`, `rail_margin`, `reset_voltage`, `supply_voltage` | each port pin's current, the current through `VCC` and `GND_8`, and each pin's voltage over `GND_8`, each named `#<part>.pin.<pin>` |
 | `hc595` | `pin_current`, `supply_current`, `input_margin`, `output_margin` | each of `QA`–`QH` and `QHp`, the current through `VCC` and `GND`, and each input and output voltage over `GND`, each named `#<part>.pin.<pin>` |
-| `current_source`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `ssd1306`, `pulses_replay`, `ws2812`, `dht22` | none | |
+| `current_source`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `ssd1306`, `pulses_replay`, `ws2812`, `dht22`, `sg90` | none | |
 
 A `current`, `power`, `pin_current` or `supply_current` value object may also carry `basis`, the datasheet's basis for the figure. `"peak"` bounds each sample. `{ "sustained": { "average": "rms" | "mean", "tau": { "value": <s>, "unit": "s" } } }` bounds a first-order filter of the samples with time constant `tau`: of their squares for `rms`, read back as the root, and of their magnitudes for `mean`. A sustained basis may also carry `peak`, the sheet's peak or surge limit in the rating's unit, such as a diode's IFSM beside its average forward current. Each sample is checked against it as a peak rating. A `tau` or `peak` of 0 or below is `netlist.value` with rule `positive` on `ratings.<key>.basis.sustained.tau` or `.peak`, and a wrong unit is `netlist.unit` on that field. A rating with no `basis` takes its kind's: a `power` is a 10.2 ms `mean`, a `voltage_source`'s `current` and an `atmega328p`'s or an `hc595`'s `pin_current` and `supply_current` are a 10.2 ms `rms`, and every other `current` is a `peak`.
 
@@ -1462,6 +1473,12 @@ A `current`, `power`, `pin_current` or `supply_current` value object may also ca
 
 ```json
 "ratings": { "power": { "value": 0.25, "unit": "W" } }
+```
+
+A resistor may also carry `voltage`, with `min` and `max` in `V`. Both are value objects and both are required when `voltage` is present. `min` must be below `max`. A missing `voltage` leaves the drive unrated. The window is the peak of a drive that leaves a level under 0.2 V and comes back, which is the peak a square wave puts across the part. A peak outside the window warns `rating.voltage`. A part that stays quiet, including DC, does not. The part still conducts. Compared like every other rating, at 3 significant digits.
+
+```json
+"voltage": { "min": { "value": 3.0, "unit": "V" }, "max": { "value": 5.0, "unit": "V" } }
 ```
 
 The run compares the magnitude of each rated quantity with its rating, and each rated pin's voltage with its window. A peak rating is compared with each sample. A sustained rating is compared through its filter, which steps exactly over each held sample, `y = x + (y - x) e^(-dt / tau)`. A pulse much shorter than `tau` counts by its share of it, a PWM load by its period's average once the filter settles, and a load held over the rating crosses after `tau ln(x / (x - rating))` for `mean`. Each filter starts at 0 and takes the first step after t = 0, and the operating point at t = 0 is no sample. A value and its rating are compared rounded to 3 significant digits. Going over is a warning, `rating.current`, `rating.power` or `rating.voltage`, in [diagnostics.md](diagnostics.md). A sustained rating with no `peak` whose latest value is over it before its filter crosses is listed as [over now](diagnostics.md#over-now).

@@ -18,7 +18,7 @@
   },
   "nets": { "GND": "nano.GND" },
   "wires": [
-    ["bb.j7", "bb.f16"], // D6 to r1.a
+    ["bb.j7", "bb.i16"], // D6 to r1.a
     ["bb.f20", "bb.b20"], // r1.b to stick.DIN
     ["bb.a12", "bb.b19"], // 5V to stick.5V
     ["bb.a14", "bb.b18"], // GND to stick.GND

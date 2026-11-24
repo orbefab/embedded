@@ -35,7 +35,7 @@ use crate::reply::{
     Snapshot, State, Stepped,
 };
 use crate::target::{
-    Ref, Target, live_params, names, one_engine, reports_hint, resolve, rgb_reading,
+    Ref, Target, hz_reading, live_params, names, one_engine, reports_hint, resolve, rgb_reading,
 };
 
 mod bound;
@@ -43,6 +43,7 @@ mod frame;
 mod light;
 mod serial;
 mod step;
+mod tone;
 
 pub use light::BRIGHTNESS_WINDOW;
 
@@ -104,6 +105,8 @@ struct Open {
     param_sets: BTreeMap<String, Time>,
     /// Each LED's forward-current integral, sampled as time advances, for its brightness.
     light: light::Log,
+    /// The drive frequency of each part whose reading is `"of": "hz"`.
+    tone: tone::Log,
     /// The files the scene came from, for a file a condition names, such as `shows`'s rows.
     files: Files,
 }
@@ -520,6 +523,8 @@ impl Open {
         let contacts = frame::contacts(json);
         let mut light = light::Log::build(&refs, &reports);
         light.note(&engine.probe());
+        let mut tone = tone::Log::build(&refs, &reports, &signals);
+        tone.note(&engine.probe(), engine.now().as_ps());
         let mut open = Open {
             engine,
             refs,
@@ -541,6 +546,7 @@ impl Open {
             world_sets: BTreeMap::new(),
             param_sets: BTreeMap::new(),
             light,
+            tone,
             files,
         };
         open.channels = open.bind_channels();
@@ -948,6 +954,34 @@ impl Open {
                 format!("{path}.{reading}"),
                 Reading::Color(self.colors(&engine)),
             ),
+            Target::Hertz { path } => {
+                let index = self.tone.position(&path).ok_or_else(|| {
+                    Error::new(
+                        Code::NoReading,
+                        format!("`{path}` has no frequency reading"),
+                        "the part file's reading `of` `hz` needs a voltage the engine reports",
+                    )
+                })?;
+                let hz = self.tone.hz(index, self.engine.now().as_ps());
+                (
+                    format!("{path}.{}", self.tone.reading(index)),
+                    Reading::Quantity {
+                        unit: Unit::Hertz,
+                        value: hz,
+                    },
+                )
+            }
+            Target::Angle {
+                path,
+                reading,
+                engine,
+            } => (
+                format!("{path}.{reading}"),
+                Reading::Quantity {
+                    unit: Unit::Degree,
+                    value: self.angle_of(&engine),
+                },
+            ),
             Target::Screen {
                 path,
                 reading,
@@ -1065,6 +1099,13 @@ impl Open {
         )
     }
 
+    /// The shaft angle of engine part `engine`, in degrees.
+    fn angle_of(&self, engine: &str) -> f64 {
+        self.engine
+            .angle(&engine_name(engine))
+            .expect("a part with a reading of angle is a servo")
+    }
+
     /// The colours engine part `engine`, an LED chain, last latched, red then green then blue.
     fn colors(&self, engine: &str) -> Colors {
         let leds = self
@@ -1107,35 +1148,91 @@ impl Open {
         }
     }
 
-    /// A part's light state, its brightness, its colours, and its engine quantities. `None` when
-    /// it has none.
+    /// A part's light state, its brightness, its colours, its relay contact, and its engine
+    /// quantities. `None` when it has none.
     fn part(&self, path: &str) -> Option<Reading> {
         let part = &self.refs.parts[path];
-        let engine = one_engine(path, part, Code::NoReading).ok()?;
-        let color = rgb_reading(part).map(|_| self.colors(&engine));
+        let contact = self.contact_closed(path);
+        let engine = one_engine(path, part, Code::NoReading).ok();
+        let color = engine
+            .as_deref()
+            .and_then(|engine| rgb_reading(part).map(|_| self.colors(engine)));
         let probe = self.engine.probe();
-        let quantities: Vec<(String, Unit, f64)> = self
-            .reports
-            .get(&engine)
-            .map_or(&[][..], Vec::as_slice)
-            .iter()
-            .map(|&q| {
-                let value = probe.get(&quantity(&engine, q)).expect("a reported column");
-                (q.as_str().to_string(), unit_of(q), value.get())
+        let mut quantities: Vec<(String, Unit, f64)> = engine
+            .as_deref()
+            .map(|engine| {
+                self.reports
+                    .get(engine)
+                    .map_or(&[][..], Vec::as_slice)
+                    .iter()
+                    .map(|&q| {
+                        let value = probe.get(&quantity(engine, q)).expect("a reported column");
+                        (q.as_str().to_string(), unit_of(q), value.get())
+                    })
+                    .collect()
             })
-            .collect();
+            .unwrap_or_default();
+        if let Some(name) = hz_reading(part)
+            && let Some(index) = self.tone.position(path)
+        {
+            let hz = self.tone.hz(index, self.engine.now().as_ps());
+            quantities.push((name.to_string(), Unit::Hertz, hz));
+        }
         let glow = self
             .light
             .position(path)
             .map(|index| self.light.glow(index, &probe));
         let state = glow.map(|glow| glow.state);
         let brightness = glow.map(|glow| (glow.amperes, glow.over_ps));
-        (state.is_some() || color.is_some() || !quantities.is_empty()).then_some(Reading::Part {
-            state,
-            brightness,
-            color,
-            quantities,
-        })
+        (state.is_some() || contact.is_some() || color.is_some() || !quantities.is_empty())
+            .then_some(Reading::Part {
+                state,
+                brightness,
+                color,
+                contact,
+                quantities,
+            })
+    }
+
+    /// The part's relay contact, closed when its coil current is past pull-in. `None` when the
+    /// part states no contact reading.
+    pub(super) fn contact_closed(&self, path: &str) -> Option<bool> {
+        Some(self.level_before_now(self.contact_signal(path).ok()?) == Level::High)
+    }
+
+    /// The logic signal of the one relay under `path`.
+    pub(super) fn contact_signal(&self, path: &str) -> Result<usize, Error> {
+        let part = &self.refs.parts[path];
+        if !part
+            .readings
+            .values()
+            .any(|reading| reading.of == "contact")
+        {
+            return Err(Error::new(
+                Code::NoReading,
+                format!("`{path}` states no contact reading"),
+                format!("{path} has no readings entry of `contact`"),
+            ));
+        }
+        let Some(engine) = relay_engine(&self.refs, path) else {
+            return Err(Error::new(
+                Code::NoReading,
+                format!("`{path}` has no relay contact"),
+                format!("`{}` has no relay", part.ty),
+            ));
+        };
+        let want = format!("#{engine}.logic.contact");
+        self.engine
+            .signals()
+            .iter()
+            .position(|signal| signal.to_string() == want)
+            .ok_or_else(|| {
+                Error::new(
+                    Code::NoReading,
+                    format!("the engine reports no `{path}` contact"),
+                    format!("`{engine}` has no contact signal"),
+                )
+            })
     }
 
     fn snapshot(&self) -> Data {
@@ -1203,6 +1300,26 @@ fn pin_names(refs: &RefMap) -> BTreeMap<String, String> {
         }
     }
     names
+}
+
+/// The flat name of the one relay under `path`: its own engine part, or the only relay
+/// inside it.
+fn relay_engine(refs: &RefMap, path: &str) -> Option<String> {
+    let part = refs.parts.get(path)?;
+    if let Some(engine) = part.engine.iter().find(|engine| engine.kind == "relay") {
+        return Some(engine.name.clone());
+    }
+    let mut found = None;
+    for child in &part.children {
+        let Some(name) = relay_engine(refs, &format!("{path}.{child}")) else {
+            continue;
+        };
+        if found.is_some() {
+            return None;
+        }
+        found = Some(name);
+    }
+    found
 }
 
 /// Each chip logic signal by the net its pin sits on, and the pin each is named by: the one

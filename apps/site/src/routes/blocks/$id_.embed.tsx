@@ -24,9 +24,11 @@ function EmbedPage() {
   return (
     <div className="h-dvh min-w-0 bg-[var(--stage,#17191c)]" data-testid="block-embed">
       <BlockPlayer
-        blocks={[{ name: block.name, title: block.title, summary: block.description, hold: block.hold }]}
         fill
+        hold={block.hold}
+        name={block.name}
         registry={at.registry}
+        summary={block.description}
         wasm={at.wasm}
       />
     </div>
