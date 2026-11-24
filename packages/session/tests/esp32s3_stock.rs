@@ -1500,3 +1500,126 @@ fn gpio20_is_pulled_up_by_usb_phy_on_both_cores_and_drives_external_load() {
         run(&mut live, dir.path(), "expect no diagnostics");
     }
 }
+
+/// Copies a Block from `blocks/<name>` beside the catalog parts in a temporary repo layout so
+/// scene tests can edit `scene.jsonc` without touching the repo.
+fn block_project(name: &str) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = repo();
+    let block_dir = dir.path().join("blocks").join(name);
+    copy_dir(&root.join("blocks").join(name), &block_dir);
+    let catalog = root.join("parts");
+    let mut ids: Vec<String> = fs::read_dir(&catalog)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .filter(|id| catalog.join(id).join("part.jsonc").is_file())
+        .collect();
+    ids.sort();
+    for id in &ids {
+        let dest = dir.path().join("parts").join(id);
+        copy_dir(&catalog.join(id), &dest);
+        layout::nest_uses(&catalog, &dest, &mut Vec::new());
+    }
+    (dir, block_dir)
+}
+
+/// Removing the 3V3-to-VCC wire from `blocks/devkitc-gy-bmp280` leaves the module's pull-ups
+/// dragging SCL/SDA toward the dead rail. I2C0 raises `TIME_OUT` after `2^I2C_TIME_OUT_VALUE`
+/// cycles, Wire returns an error, `bmp.begin()` fails, and the stock Adafruit_BMP280 sketch prints
+/// its own missing-sensor message instead of faulting the simulator.
+#[test]
+fn an_unpowered_gy_bmp280_on_devkitc_times_out_and_prints_its_error() {
+    let (_dir, block_dir) = block_project("devkitc-gy-bmp280");
+    let scene_path = block_dir.join("scene.jsonc");
+    let scene = fs::read_to_string(&scene_path)
+        .unwrap()
+        .lines()
+        .filter(|line| !line.contains("3V3 to VCC"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fs::write(&scene_path, scene).unwrap();
+
+    let mut live = Live::new("t", Files::disk());
+    run(&mut live, &block_dir, "open");
+    run(
+        &mut live,
+        &block_dir,
+        r#"step --until serial contains "SensorID was:" --timeout 200ms"#,
+    );
+    run(&mut live, &block_dir, "step 20ms");
+    run(
+        &mut live,
+        &block_dir,
+        r#"expect serial contains "BMP280 test""#,
+    );
+    run(
+        &mut live,
+        &block_dir,
+        r#"expect serial contains "Could not find a valid BMP280 sensor, check wiring or try a different address!""#,
+    );
+    run(
+        &mut live,
+        &block_dir,
+        r#"expect serial contains "SensorID was: 0x0""#,
+    );
+    let snap = live
+        .run(&Command::parse("snapshot", &block_dir).unwrap().unwrap())
+        .text();
+    let errors: Vec<_> = snap
+        .lines()
+        .filter(|line| line.starts_with("error["))
+        .collect();
+    assert!(errors.is_empty(), "unexpected error diagnostics:\n{snap}");
+}
+
+/// A part holding SCL low longer than the configured I2C timeout (a closed switch from SCL to GND
+/// beside a powered GY-BMP280) triggers `TIME_OUT`, fails `bmp.begin()` cleanly with the sketch's
+/// error text, and leaves SCL idle high once released with no diagnostics.
+#[test]
+fn a_part_holding_scl_low_past_timeout_fails_bmp280_begin_without_faulting() {
+    let (_dir, block_dir) = block_project("devkitc-gy-bmp280");
+    let scene_path = block_dir.join("scene.jsonc");
+    let scene = fs::read_to_string(&scene_path)
+        .unwrap()
+        .replace(
+            r#""mod": { "type": "gy-bmp280" },"#,
+            r#""mod": { "type": "gy-bmp280" },
+    "sw": { "type": "tactile-switch-6mm" },"#,
+        )
+        .replace(
+            r#"["bb.j11", "bb.j28"], // GPIO8 (SDA) to SDA"#,
+            r#"["bb.j11", "bb.j28"], // GPIO8 (SDA) to SDA
+    ["bb.f27", "sw.a"],
+    ["sw.b", "bb.f1"],"#,
+        );
+    fs::write(&scene_path, scene).unwrap();
+
+    let mut live = Live::new("t", Files::disk());
+    run(&mut live, &block_dir, "open");
+    run(&mut live, &block_dir, "press @sw");
+    run(&mut live, &block_dir, "step 50ms");
+    run(&mut live, &block_dir, "release @sw");
+    run(
+        &mut live,
+        &block_dir,
+        r#"step --until serial contains "SensorID was:" --timeout 200ms"#,
+    );
+    run(&mut live, &block_dir, "step 20ms");
+    run(
+        &mut live,
+        &block_dir,
+        r#"expect serial contains "BMP280 test""#,
+    );
+    run(
+        &mut live,
+        &block_dir,
+        r#"expect serial contains "Could not find a valid BMP280 sensor, check wiring or try a different address!""#,
+    );
+    run(
+        &mut live,
+        &block_dir,
+        r#"expect serial contains "SensorID was: 0x0""#,
+    );
+    run(&mut live, &block_dir, "expect @board.GPIO9 high");
+    run(&mut live, &block_dir, "expect no diagnostics");
+}

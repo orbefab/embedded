@@ -15,11 +15,13 @@
 //! SCL falls and releases SCL at `low`. The master then reads SCL through the input matrix: a pad
 //! with no net reads its own output at once, and a netted pad reads high at the first input that
 //! brings it high, `h`, so a target that holds SCL stretches the bit. The sample comes at
-//! `h + sda_sample`, and SCL falls at `max(release + wait_high, h) + high`. A wait for SCL high
-//! that reaches `2^I2C_TIME_OUT_VALUE` cycles of this clock ends the run. The register header says
-//! APB cycles, and IDF's `i2c_ll_calculate_timeout_us_to_reg_val` counts the I2C clock, so the
-//! clock is inferred from the driver. A read command sends its `ack_val` as the ACK of every
-//! byte, as IDF's `I2C_MASTER_NACK`, "nack for each byte read", says.
+//! `h + sda_sample`, and SCL falls at `max(release + wait_high, h) + high`. With `I2C_TIME_OUT_EN`
+//! set, a wait for SCL high that reaches `2^I2C_TIME_OUT_VALUE` cycles of this clock sets
+//! `I2C_TIME_OUT_INT_RAW`, releases SDA, clears `I2C_BUS_BUSY` and ends the transfer with no
+//! `I2C_TRANS_COMPLETE_INT_RAW` (TRM v1.8, 27.4.8, 27.6 and Register 27.12, which states
+//! `I2C_SCLK` cycles). With `I2C_TIME_OUT_EN` clear, the wait does not time out. A read command
+//! sends its `ack_val` as the ACK of every byte, as IDF's `I2C_MASTER_NACK`, "nack for each byte
+//! read", says.
 //!
 //! An event that moves a netted pad's drive waits in `moved` for the chip's `Moved` halt, and no
 //! later event runs before it, so each one reads the inputs of every edge before it. A write's
@@ -133,9 +135,10 @@ const TX_FIFO_RST: u32 = 1 << 13;
 
 /// The interrupts IDF's master driver enables, `I2C_LL_MASTER_EVENT_INTR`: `END_DETECT`,
 /// `ARBITRATION_LOST`, `TRANS_COMPLETE`, `TIME_OUT` and `NACK`.
-const MASTER_EVENTS: u32 = END_DETECT | 1 << 5 | TRANS_COMPLETE | 1 << 8 | NACK;
+const MASTER_EVENTS: u32 = END_DETECT | 1 << 5 | TRANS_COMPLETE | TIME_OUT | NACK;
 const END_DETECT: u32 = 1 << 3;
 const TRANS_COMPLETE: u32 = 1 << 7;
+const TIME_OUT: u32 = 1 << 8;
 const NACK: u32 = 1 << 10;
 const RXFIFO_UDF: u32 = 1 << 12;
 
@@ -225,7 +228,7 @@ impl Timing {
 
     /// The tick `cycles` cycles after `at`.
     fn after(&self, at: Tick, cycles: u64) -> Tick {
-        Tick(at.0 + cycles * self.cycle)
+        Tick(at.0.saturating_add(cycles.saturating_mul(self.cycle)))
     }
 }
 
@@ -886,7 +889,16 @@ impl I2c {
                     run.deadline = timing.timeout.map(|cycles| timing.after(at, cycles));
                 }
             }
-            Phase::Rising => return Err("timeout"),
+            Phase::Rising => {
+                self.int_raw |= TIME_OUT;
+                self.busy = false;
+                self.held = false;
+                self.after_nack = false;
+                if !self.sda_out {
+                    self.drive(at, SDA, true, gpio);
+                }
+                return Ok(());
+            }
             Phase::High { sampled: false } => {
                 let sda = gpio.input(SDA) == Some(true);
                 match (run.slot, run.op) {
