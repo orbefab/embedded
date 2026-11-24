@@ -537,10 +537,10 @@ fn a_watchdog_during_a_pulses_record_keeps_the_leds_a_stop_keeps() {
 
 #[test]
 fn an_unmodeled_register_is_reported_once_with_its_pc_and_symbol() {
-    // l32r a2 <- PCNT; l32i a3, a2, 0 twice; then idle.
+    // l32r a2 <- RTC_IO_TOUCH_PAD1_REG; l32i a3, a2, 0 twice; then idle.
     let mut code = vec![0x21, 0xff, 0xff, 0x32, 0x22, 0x00, 0x32, 0x22, 0x00];
     code.extend(IDLE);
-    let doc = run_program(&[0x6001_7000], &code, 10_000_000_000);
+    let doc = run_program(&[0x6000_8488], &code, 10_000_000_000);
     let found = diagnostics(&doc);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0]["code"], "chip.unmodeled_register");
@@ -548,10 +548,10 @@ fn an_unmodeled_register_is_reported_once_with_its_pc_and_symbol() {
     assert_eq!(
         found[0]["data"],
         serde_json::json!({
-            "address": 0x6001_7000u32,
+            "address": 0x6000_8488u32,
             "kept": false,
             "pc": IRAM + 4 + 3,
-            "register": "PCNT+0x0",
+            "register": "RTCIO+0x88",
             "symbol": "main+0x3",
             "write": false,
         })
@@ -562,13 +562,13 @@ fn an_unmodeled_register_is_reported_once_with_its_pc_and_symbol() {
 
 #[test]
 fn a_session_lists_an_unmodeled_register_only_once_its_access_is_accepted() {
-    // l32r a2 <- 100000; addi a2, a2, -1 and bnez back to it until a2 is 0; l32r a3 <- PCNT;
-    // l32i a4, a3, 0; then idle.
+    // l32r a2 <- 100000; addi a2, a2, -1 and bnez back to it until a2 is 0;
+    // l32r a3 <- RTC_IO_TOUCH_PAD1_REG; l32i a4, a3, 0; then idle.
     let mut code = vec![
         0x21, 0xfe, 0xff, 0x22, 0xc2, 0xff, 0x56, 0x92, 0xff, 0x31, 0xfc, 0xff, 0x42, 0x23, 0x00,
     ];
     code.extend(IDLE);
-    let bytes = program(&[100_000, 0x6001_7000], &code);
+    let bytes = program(&[100_000, 0x6000_8488], &code);
     let json = serde_json::to_vec(&netlist_for(&bytes, 100_000_000_000)).unwrap();
     let mut blobs = Blobs::new();
     blobs.add(bytes.into());
@@ -644,7 +644,8 @@ fn an_efuse_program_command_ends_the_run() {
     assert_eq!(found[0]["t_ps"], 125_000);
 }
 
-/// The flash has no erase, so a sector erase through SPI1 ends the run with its command byte.
+/// The flash has no erase, so a sector erase through SPI1 ends the run as a write, with its
+/// command byte.
 #[test]
 fn a_flash_erase_ends_the_run() {
     // l32r a2 <- SPI_MEM_CMD_REG of SPI1; l32r a3 <- SPI_MEM_FLASH_SE; s32i a3, a2, 0; then idle.
@@ -660,9 +661,17 @@ fn a_flash_erase_ends_the_run() {
         serde_json::json!({
             "command": 0x20,
             "pc": IRAM + 8 + 6,
-            "reason": "unsupported",
+            "reason": "write",
             "symbol": "main+0x6"
         })
+    );
+    let message = found[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("wrote the flash with command 0x20 at ")
+            && message.contains(
+                "which the model does not simulate; Wi-Fi, Bluetooth and saved settings (Preferences, EEPROM, NVS) write the flash"
+            ),
+        "{message}"
     );
 }
 
@@ -721,13 +730,13 @@ fn a_reset_with_no_reason_the_model_can_read_fails_the_run() {
 fn a_switch_to_the_pll_speeds_up_the_core() {
     // l32r a2 <- SYSTEM_CPU_PER_CONF_REG; l32r a3 <- 240 MHz from the 480 MHz PLL; s32i a3, a2, 0;
     // l32r a2 <- SYSTEM_SYSCLK_CONF_REG; l32r a3 <- the PLL; s32i a3, a2, 0;
-    // l32r a2 <- PCNT; l32i a3, a2, 0; then idle.
+    // l32r a2 <- RTC_IO_TOUCH_PAD1_REG; l32i a3, a2, 0; then idle.
     let mut code = vec![
         0x21, 0xfb, 0xff, 0x31, 0xfb, 0xff, 0x32, 0x62, 0x00, 0x21, 0xfa, 0xff, 0x31, 0xfb, 0xff,
         0x32, 0x62, 0x00, 0x21, 0xfa, 0xff, 0x32, 0x22, 0x00,
     ];
     code.extend(IDLE);
-    let literals = [0x600c_0010, 0x6, 0x600c_0060, 1 << 10, 0x6001_7000];
+    let literals = [0x600c_0010, 0x6, 0x600c_0060, 1 << 10, 0x6000_8488];
     let doc = run_program(&literals, &code, 10_000_000_000);
     let found = diagnostics(&doc);
     assert_eq!(found.len(), 1, "{found:?}");

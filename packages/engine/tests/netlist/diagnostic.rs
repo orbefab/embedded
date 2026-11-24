@@ -543,6 +543,20 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
     let (message, data) = chip_json(Diagnostic::ChipFlashCommand {
         part: part("u1"),
         at,
+        command: Some(0x02),
+        reason: FlashRefusal::Write,
+        pc: 0x4200_0010,
+        app: true,
+        symbol: None,
+    });
+    assert_eq!(
+        message,
+        "#u1 wrote the flash with command 0x02 at 0x42000010 on the APP CPU, which the model does not simulate; Wi-Fi, Bluetooth and saved settings (Preferences, EEPROM, NVS) write the flash, at 5 ps"
+    );
+    assert_eq!(data["reason"], "write");
+    let (message, data) = chip_json(Diagnostic::ChipFlashCommand {
+        part: part("u1"),
+        at,
         command: None,
         reason: FlashRefusal::StartBits,
         pc: 0x10,
@@ -640,6 +654,21 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
     assert_eq!(
         data,
         serde_json::json!({ "core": "app", "pc": 0x10, "symbol": null })
+    );
+    let (message, data) = chip_json(setting(
+        Setting::Unsimulated("the pulse counter that encoder libraries use"),
+        "PCNT",
+    ));
+    assert_eq!(
+        message,
+        "#u1 used PCNT, the pulse counter that encoder libraries use, at 0x00000010, which the model does not simulate, at 5 ps"
+    );
+    assert_eq!(
+        (&data["peripheral"], &data["setting"]),
+        (
+            &serde_json::json!("PCNT"),
+            &serde_json::json!("unsimulated")
+        )
     );
     let (message, data) = chip_json(setting(Setting::Sleep, "RTC_CNTL"));
     assert_eq!(

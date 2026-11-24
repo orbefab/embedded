@@ -19,6 +19,7 @@ use super::CoreId;
 
 use super::analog::Analog;
 use super::app::{self, AppControl, Hold, Steer};
+use super::blocks;
 use super::calibration::{self, Calibration};
 use super::clock::{CpuClock, Source, Tick};
 use super::code::Code;
@@ -69,9 +70,7 @@ pub(crate) const SPI2: u32 = 0x6002_4000;
 const LEDC: u32 = 0x6001_9000;
 pub(crate) const RMT: u32 = 0x6001_6000;
 const I2C0: u32 = 0x6001_3000;
-const I2C1: u32 = 0x6002_7000;
 pub(crate) const USB_SERIAL_JTAG: u32 = 0x6003_8000;
-const USB_WRAP: u32 = 0x6003_9000;
 const SHA: u32 = 0x6003_b000;
 const APB_SARADC: u32 = 0x6004_0000;
 pub(crate) const GDMA: u32 = 0x6003_f000;
@@ -1212,6 +1211,16 @@ impl Soc {
         self.systimer.set_reset(now, self.gates.systimer_reset());
     }
 
+    /// An access to a register no model keeps, at `addr`. In a block the model does not
+    /// simulate it ends the run, naming the block. In one it runs it goes through [`Self::touch`].
+    fn unkept(&mut self, now: Tick, addr: u32, write: bool) -> Result<(), Exit> {
+        if let Some((block, what)) = blocks::unsimulated(addr) {
+            self.ending = Some(Ending::Refused(Refused::Unsimulated(block, what)));
+            return Err(Exit::Stop);
+        }
+        self.touch(now, addr, write, false)
+    }
+
     /// Lets an access to an unmodeled register through, or stops the core at the first one.
     /// `kept` marks a write the register keeps while its effect does not run.
     ///
@@ -1521,7 +1530,7 @@ impl Soc {
         match kept {
             Some(value) => Ok((value >> shift) & mask),
             None if quiet(word, false, 0) => Ok(0),
-            None => self.touch(now, word, false, false).map(|()| 0),
+            None => self.unkept(now, word, false).map(|()| 0),
         }
     }
 
@@ -1584,14 +1593,6 @@ impl Soc {
             self.ending = Some(Ending::Refused(Refused::Register("RMT", "fifo")));
             return Err(Exit::Stop);
         }
-        if word & !(BLOCK - 1) == I2C1 {
-            self.ending = Some(Ending::Refused(Refused::Register("I2C1", "port")));
-            return Err(Exit::Stop);
-        }
-        if word & !(BLOCK - 1) == USB_WRAP {
-            self.ending = Some(Ending::Refused(Refused::Register("USB_WRAP", "otg")));
-            return Err(Exit::Stop);
-        }
         let clock = word == SYSTEM + SYSCLK_CONF || word == SYSTEM + CPU_PER_CONF;
         // The other core's refetched access on a tie can have stamped the cycle after `start`,
         // and a switch at `start` would hold the reported tick until the new clock caught up.
@@ -1629,7 +1630,7 @@ impl Soc {
             if quiet(word, true, value) {
                 return Ok(());
             }
-            return self.touch(now, word, true, false);
+            return self.unkept(now, word, true);
         }
         let base = word & !(BLOCK - 1);
         let pads = matches!(base, GPIO | IO_MUX | SPI2 | RMT)

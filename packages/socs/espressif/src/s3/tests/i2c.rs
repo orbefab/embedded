@@ -415,7 +415,8 @@ fn assert_low_and_high(edges: &[(u64, u8, bool)]) {
 
 fn refused(halt: Option<Halt>) -> (&'static str, &'static str) {
     match halt {
-        Some(Halt::Fault(_, Fault::Refused(Refused::Register(block, setting), _))) => {
+        Some(Halt::Fault(_, Fault::Refused(Refused::Register(block, setting), _)))
+        | Some(Halt::Fault(_, Fault::Refused(Refused::Unsimulated(block, setting), _))) => {
             (block, setting)
         }
         other => panic!("expected a refusal, got {other:?}"),
@@ -1118,7 +1119,10 @@ fn each_refusal_names_its_setting() {
         let mut program = Program::new(&[I2C1, 0]);
         program.l32r(2, 0).l32r(3, 1).rri8(6, 3, 2, 0).raw(&LOOP);
         let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD]);
-        assert_eq!(run_refusal(&mut chip), ("I2C1", "port"));
+        assert_eq!(
+            run_refusal(&mut chip),
+            ("I2C1", "the second I2C port, Wire1")
+        );
     }
 
     plain(

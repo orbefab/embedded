@@ -440,6 +440,7 @@ impl Mcu for Bridge {
                     Refused::Register(peripheral, setting) => {
                         (peripheral, mcu::Setting::Register(setting))
                     }
+                    Refused::Unsimulated(block, what) => (block, mcu::Setting::Unsimulated(what)),
                     Refused::Sleep => ("RTC_CNTL", mcu::Setting::Sleep),
                 };
                 mcu::Fault::UnsupportedSetting {
@@ -462,6 +463,7 @@ impl Mcu for Bridge {
                 use mcu::FlashRefusal as To;
                 let (command, reason) = match refusal {
                     FlashRefusal::Command(command) => (Some(command), To::Unsupported),
+                    FlashRefusal::Write(command) => (Some(command), To::Write),
                     FlashRefusal::StatusWrite(command) => (Some(command), To::StatusWrite),
                     FlashRefusal::NoCommandPhase => (None, To::NoCommandPhase),
                     FlashRefusal::StartBits => (None, To::StartBits),

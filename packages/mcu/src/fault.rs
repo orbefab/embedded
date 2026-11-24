@@ -99,6 +99,9 @@ pub enum Setting {
     Interrupt,
     /// A register setting, by name, that the model does not run.
     Register(&'static str),
+    /// A register of a peripheral the model does not simulate at all. The words say what the
+    /// peripheral is, as a maker knows it, such as `the pulse counter`.
+    Unsimulated(&'static str),
     /// Sleep.
     Sleep,
 }
@@ -109,6 +112,7 @@ impl Setting {
             Setting::Transfer(name) => name,
             Setting::Register(name) => name,
             Setting::Interrupt => "interrupt",
+            Setting::Unsimulated(_) => "unsimulated",
             Setting::Sleep => "sleep",
         }
     }
@@ -117,8 +121,10 @@ impl Setting {
 /// Why a chip's flash command ends the run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FlashRefusal {
-    /// A program, an erase, or a command the model does not know.
+    /// A command the model does not know.
     Unsupported,
+    /// A page program or an erase, which the model does not simulate.
+    Write,
     /// A write of the flash's status registers, which can lock them for good.
     StatusWrite,
     /// A user command with no command phase.
@@ -141,6 +147,7 @@ impl FlashRefusal {
     pub fn name(self) -> &'static str {
         match self {
             FlashRefusal::Unsupported => "unsupported",
+            FlashRefusal::Write => "write",
             FlashRefusal::StatusWrite => "status_write",
             FlashRefusal::NoCommandPhase => "no_command_phase",
             FlashRefusal::StartBits => "start_bits",
