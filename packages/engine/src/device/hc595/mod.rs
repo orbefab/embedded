@@ -139,15 +139,17 @@ pub(crate) fn chip(part: PartId, dev: &Hc595) -> Chip {
         terms: vec![(Node::from(pins[VCC]), 1.0), (Node::from(pins[GND]), -1.0)],
         offset: model::MIN_VCC_V.next_down(),
     }));
+    let mut signals: Vec<(&'static str, usize)> = watched
+        .into_iter()
+        .enumerate()
+        .map(|(index, pin)| (Hc595::PINS[pin], index))
+        .collect();
+    signals.sort_unstable();
     Chip {
         part: Some(part),
         outputs,
         watches,
-        signals: watched
-            .into_iter()
-            .enumerate()
-            .map(|(index, pin)| (Hc595::PINS[pin], index))
-            .collect(),
+        signals,
         samples: Vec::new(),
         usarts: &[],
         twi: false,

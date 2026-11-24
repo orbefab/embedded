@@ -114,6 +114,13 @@ impl Blobs {
     pub fn is_empty(&self) -> bool {
         self.by_name.is_empty()
     }
+
+    /// Each blob under the hash it was filed by.
+    pub fn iter(&self) -> impl Iterator<Item = (Sha256, &[u8])> + '_ {
+        self.by_name
+            .iter()
+            .map(|(&name, bytes)| (name, bytes.as_ref()))
+    }
 }
 
 /// What a blob is to the part that names it. `manifest.json` lists each blob with its role.
