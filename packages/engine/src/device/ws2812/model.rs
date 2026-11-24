@@ -10,8 +10,10 @@
 //!
 //! Once every LED holds its 24 bits, each high on `DIN` goes on to `DOUT` `delay` later, its
 //! rise and its fall alike, until the chain latches. `DOUT` is low otherwise. A high a record
-//! carried has already ended when the record lands, so it goes no further, and the first is
-//! rule `dout_record`.
+//! carried has already ended when the record lands, so the device passes its rise and its fall,
+//! each `delay` later, and the host sends them on `DOUT`'s net as a record of its own. The next
+//! chain takes that record as this one took the first, so a chain of parts each keeps its own
+//! bits whether they came edge by edge or in a record.
 
 use orbe_model::{
     Cx, Device, Draw, Drive, Drives, Error, Idle, Params, PulseTarget, Shows, State, Stop, Time,
@@ -232,21 +234,24 @@ impl<const N: usize> PulseTarget for Ws2812<N> {
                 self.shift(bit);
             }
             if self.delay > 0 && self.index >= self.count {
+                let rise = at.as_ps().saturating_add(self.delay);
                 if cx.replayed() {
-                    cx.broke("dout_record", at);
+                    cx.pass(Time::from_ps(rise), true);
+                    self.passing = true;
                 } else {
-                    self.passing = self.queue_rise(at.as_ps().saturating_add(self.delay));
+                    self.passing = self.queue_rise(rise);
                 }
             }
             return;
         }
         if self.passing {
             self.passing = false;
-            let fall = at
-                .as_ps()
-                .saturating_add(self.delay)
-                .max(self.reached.as_ps() + 1);
-            self.queue_fall(fall);
+            let fall = at.as_ps().saturating_add(self.delay);
+            if cx.replayed() {
+                cx.pass(Time::from_ps(fall), false);
+            } else {
+                self.queue_fall(fall.max(self.reached.as_ps() + 1));
+            }
         }
         self.open = if T0H.contains(&width) {
             Some(false)
