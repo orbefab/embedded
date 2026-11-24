@@ -1002,3 +1002,135 @@ fn a_console_send_at_t_0_out_of_order_or_empty_is_a_schedule_error() {
         assert_eq!(found[0]["data"]["rule"], rule);
     }
 }
+
+/// Replaces the blink LED load on `gpio21` with one pull-down resistor of `ohms` to `gnd`.
+fn netlist_with_gpio21_resistor(bytes: &[u8], stop_ps: u64, ohms: f64) -> serde_json::Value {
+    let mut netlist = netlist_for(bytes, stop_ps);
+    netlist["nets"] = serde_json::json!(["gnd", "gpio21", "vcc"]);
+    netlist["parts"].as_array_mut().unwrap().truncate(2);
+    netlist["parts"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "name": "r1",
+            "kind": "resistor",
+            "pins": { "a": "gpio21", "b": "gnd" },
+            "resistance": { "value": ohms, "unit": "ohm" },
+            "ratings": { "power": { "value": 0.25, "unit": "W" } }
+        }));
+    netlist
+}
+
+/// Writing `RUE` or `RDE` to an RTCIO pad register warns `chip.unmodeled_register` instead of
+/// silently dropping the write, while clearing the pad register to 0 and setting `FUN_WPU` in
+/// `IO_MUX` pulls the pin high with no diagnostic.
+#[test]
+fn an_rtcio_pad_pull_write_warns_while_io_mux_pull_drives_the_pin() {
+    for bit in [1 << 27, 1 << 28] {
+        let (literals, code) = stores(&[(0x6000_84d8, bit)]);
+        let bytes = program(&literals, &code);
+        let netlist = netlist_with_gpio21_resistor(&bytes, 10_000_000_000, 200_000.0);
+        let dir = Scratch::new();
+        let blobs = dir.join("blobs");
+        fs::create_dir_all(&blobs).unwrap();
+        fs::write(blobs.join(Sha256::of(&bytes).to_string()), &bytes).unwrap();
+        let (code, doc) = run(&dir, &netlist, &[]);
+        assert_eq!((code, doc["status"].as_str()), (0, Some("ok")), "{doc}");
+        let found = diagnostics(&doc);
+        assert_eq!(found.len(), 1, "bit {bit:#x}: {found:?}");
+        assert_eq!(found[0]["code"], "chip.unmodeled_register");
+        assert_eq!(found[0]["severity"], "warning");
+        assert_eq!(found[0]["data"]["register"], "RTCIO+0xd8");
+        assert_eq!(found[0]["data"]["write"], true);
+        let vcd = fs::read_to_string(dir.join("out/traces/logic.vcd")).unwrap();
+        assert_eq!(
+            gpio21_edges(&vcd),
+            [],
+            "bit {bit:#x} does not pull digital pad"
+        );
+    }
+
+    // Clearing the RTCIO pad register to 0 (as `rtc_gpio_deinit` does) and enabling `FUN_WPU`
+    // in `IO_MUX_GPIO21_REG` pulls GPIO21 high with no diagnostic.
+    let (literals, code) = stores(&[(0x6000_84d8, 0), (0x6000_9058, 1 << 12 | 1 << 9 | 1 << 8)]);
+    let bytes = program(&literals, &code);
+    let netlist = netlist_with_gpio21_resistor(&bytes, 10_000_000_000, 200_000.0);
+    let dir = Scratch::new();
+    let blobs = dir.join("blobs");
+    fs::create_dir_all(&blobs).unwrap();
+    fs::write(blobs.join(Sha256::of(&bytes).to_string()), &bytes).unwrap();
+    let (code, doc) = run(&dir, &netlist, &[]);
+    assert_eq!((code, doc["status"].as_str()), (0, Some("ok")), "{doc}");
+    assert!(diagnostics(&doc).is_empty(), "{doc}");
+    let vcd = fs::read_to_string(dir.join("out/traces/logic.vcd")).unwrap();
+    let edges = gpio21_edges(&vcd);
+    assert_eq!(edges.len(), 1, "{vcd}");
+    assert_eq!(edges[0].1, '1', "IO_MUX pull-up brings GPIO21 high");
+}
+
+/// Driving GPIO21 high, setting its hold bit in `RTC_CNTL_PAD_HOLD_REG`, and then attempting to
+/// drive it low stops the run at the hold store with `chip.unsupported_setting` naming pin hold
+/// (`gpio_hold_en`), before the later low write can move the pin.
+#[test]
+fn setting_a_pin_hold_bit_ends_the_run_before_a_later_write_moves_the_pin() {
+    let (literals, code) = stores(&[
+        (0x6000_9058, 1 << 12),
+        (0x6000_4008, 1 << 21),
+        (0x6000_4024, 1 << 21),
+        (0x6000_80d8, 1 << 21),
+        (0x6000_400c, 1 << 21),
+    ]);
+    let bytes = program(&literals, &code);
+    let netlist = netlist_with_gpio21_resistor(&bytes, 10_000_000_000, 10_000.0);
+    let dir = Scratch::new();
+    let blobs = dir.join("blobs");
+    fs::create_dir_all(&blobs).unwrap();
+    fs::write(blobs.join(Sha256::of(&bytes).to_string()), &bytes).unwrap();
+    let (code, doc) = run(&dir, &netlist, &[]);
+    assert_eq!((code, doc["status"].as_str()), (1, Some("failed")), "{doc}");
+    let found = diagnostics(&doc);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0]["code"], "chip.unsupported_setting");
+    assert_eq!(found[0]["severity"], "error");
+    assert_eq!(found[0]["data"]["peripheral"], "RTC_CNTL");
+    assert_eq!(found[0]["data"]["setting"], "pin_hold");
+    let message = found[0]["message"].as_str().unwrap();
+    assert!(
+        message.contains("pin hold (gpio_hold_en)"),
+        "unexpected message: {message}"
+    );
+    let vcd = fs::read_to_string(dir.join("out/traces/logic.vcd")).unwrap();
+    let edges = gpio21_edges(&vcd);
+    assert_eq!(
+        edges.len(),
+        1,
+        "GPIO21 rose high and never dropped low: {vcd}"
+    );
+    assert_eq!(edges[0].1, '1');
+
+    // Deep-sleep autohold and force-hold bits in `RTC_CNTL_DIG_ISO_REG`, `RTC_CNTL_DIG_PAD_HOLD_REG`,
+    // and `RTC_CNTL_PWC_REG` also stop the run with the same pin hold error.
+    for (addr, value) in [
+        (0x6000_8094, 1 << 11),
+        (0x6000_8094, 1 << 15),
+        (0x6000_80dc, 1 << 5),
+        (0x6000_8088, 1 << 21),
+    ] {
+        let (literals, code) = stores(&[(addr, value)]);
+        let doc = run_program(&literals, &code, 10_000_000_000);
+        assert_eq!(doc["status"], "failed", "{addr:#x} = {value:#x}: {doc}");
+        let found = diagnostics(&doc);
+        assert_eq!(found.len(), 1, "{addr:#x} = {value:#x}: {found:?}");
+        assert_eq!(found[0]["code"], "chip.unsupported_setting");
+        assert_eq!(found[0]["data"]["peripheral"], "RTC_CNTL");
+        assert_eq!(found[0]["data"]["setting"], "pin_hold");
+        assert!(
+            found[0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("pin hold (gpio_hold_en)"),
+            "{addr:#x}: {}",
+            found[0]["message"]
+        );
+    }
+}
