@@ -66,7 +66,7 @@ pub(crate) const TIMG0: u32 = 0x6001_f000;
 pub(crate) const TIMG1: u32 = 0x6002_0000;
 pub(crate) const SYSTIMER: u32 = 0x6002_3000;
 pub(crate) const SPI2: u32 = 0x6002_4000;
-const LEDC: u32 = 0x6001_9000;
+pub(crate) const LEDC: u32 = 0x6001_9000;
 pub(crate) const RMT: u32 = 0x6001_6000;
 const I2C0: u32 = 0x6001_3000;
 const I2C1: u32 = 0x6002_7000;
@@ -326,7 +326,7 @@ fn effect(addr: u32) -> Option<Effect> {
         (SPI2, 0x34) => Effect::Refuse(!spi2::TRANS_DONE, interrupt("SPI2")),
         (USB_SERIAL_JTAG, 0x10) => Effect::Refuse(!usb::ENA_ALLOWED, interrupt("USB_SERIAL_JTAG")),
         (SHA, sha::INT_ENA) => Effect::Refuse(1, interrupt("SHA")),
-        (LEDC, ledc::INT_ENA) => Effect::Refuse(u32::MAX, interrupt("LEDC")),
+        (LEDC, ledc::INT_ENA) => Effect::Refuse(!ledc::INT_ENA_ALLOWED, interrupt("LEDC")),
         (RMT, 0x78) => Effect::Refuse(!(1 | 1 << 8 | 1 << 12), interrupt("RMT")),
         (uart::UART0, 0x0c) => Effect::Refuse(!uart::ENA_ALLOWED, interrupt("UART0")),
         (uart::UART1, 0x0c) => Effect::Refuse(!uart::ENA_ALLOWED, interrupt("UART1")),
@@ -490,7 +490,10 @@ impl Soc {
     /// edge to drive its signal. A reset then would leave a pad's last `Duty` record stale, or
     /// let the edge drive its signal after the reset.
     fn ledc_runs(&self) -> bool {
-        self.ledc.pending() || !self.edges.is_empty() || !self.ledc_pads().is_empty()
+        self.ledc.pending()
+            || self.ledc.fading()
+            || !self.edges.is_empty()
+            || !self.ledc_pads().is_empty()
     }
 
     /// Each netted pad that drives an LEDC channel's signal from the matrix, lowest first, with
@@ -1172,6 +1175,9 @@ impl Soc {
         if self.usb.poll(now) {
             sources |= 1 << usb::SOURCE;
         }
+        if self.ledc.line(now, apb) {
+            sources |= 1 << ledc::SOURCE;
+        }
         for index in 0..3 {
             if self.uart.line(index) {
                 sources |= 1 << uart::SOURCES[index];
@@ -1821,6 +1827,7 @@ impl Soc {
             Peripheral::Usb => self.usb.next_event(now),
             Peripheral::Rmt => self.rmt.next_event(),
             Peripheral::Uart => self.uart.next_event(now),
+            Peripheral::Ledc => self.ledc.next_int_event(now, self.clock.source.apb()),
         }
     }
 }

@@ -63,4 +63,10 @@ rmtstrip     packages/scene/tests/fixtures/esp32s3-stock-rmtstrip
 wire         packages/scene/tests/fixtures/esp32s3-stock-wire
              app 300256 005108713604bb60ed3d3d4099dbf7ebd049f7921e5c20610e418baed80bfb7e
 wirelong     packages/scene/tests/fixtures/esp32s3-stock-wirelong
-             app 300528 8092db5aae86b0199bc7a67a1a89dfb1c734d47856693db5a084bec3406925d0
+             app 300528 8092db5aae86b0199bc7a67a1a89dfb1c734d47856693db5a084bec3406925d
+tone         packages/scene/tests/fixtures/esp32s3-stock-tone
+             app 282240 0dae8c2b3ce0f0ecbf55d41b8bd57f435840e314b30dec5c4524137ab688fb13
+ledcdetach   packages/scene/tests/fixtures/esp32s3-stock-ledcdetach
+             app 309488 981aa0265571dd5cd40926d6626ec9660e977a4c5013275f74109ef3330a9024
+ledcfade     packages/scene/tests/fixtures/esp32s3-stock-ledcfade
+             app 285264 a24e84feda184f578693234ea90c6f5ca60bbb2a34ae95e7c9f8571f6d64aacc0
