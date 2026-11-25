@@ -39,6 +39,9 @@ if [[ ! -f .scratch/wasm/registry/index.json ]]; then
   echo "check-engines: no registry at .scratch/wasm/registry/index.json. Run \`cargo build -p orbe --locked\`, then \`orbe registry build . .scratch/wasm/registry\`." >&2
   exit 2
 fi
+# shellcheck source=scripts/check-lock.sh
+source scripts/check-lock.sh
+check_lock "scripts/check-engines.sh" "scripts/check-engines.sh"
 scripts/site-deploy-pointer.sh check-engines
 free_port() {
   node -e 'const s = require("node:net").createServer().listen(0, "127.0.0.1", () => { process.stdout.write(String(s.address().port) + "\n"); s.close(); })'
@@ -49,5 +52,5 @@ export ORBE_VIEWER_PORT=$viewer_port
 export ORBE_SITE_PORT=$site_port
 export ORBE_E2E=engines
 started=$(date +%s)
-pnpm exec playwright test
+pnpm exec playwright test 9>&-
 echo "check-engines: firefox and webkit smoke finished in $(($(date +%s) - started)) s"

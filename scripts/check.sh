@@ -29,8 +29,8 @@
 # also need `sudo pnpm exec playwright install-deps firefox webkit`.
 # `full` and `engine-circuits` also need ngspice-42. `full` and `engine-wasm` need rustup with
 # the wasm32-wasip1 target and that wasm-bindgen CLI.
-# Outside CI, `scripts/check-lock.sh` takes the shared per-user check lock across worktrees
-# and defaults `CARGO_BUILD_JOBS` to 2 and `NEXTEST_TEST_THREADS` to 4.
+# Outside CI, `scripts/check-lock.sh` takes the shared per-user check lock across worktrees,
+# so cargo and nextest use every core. Set `CARGO_BUILD_JOBS` or `NEXTEST_TEST_THREADS` to use fewer.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

@@ -28,6 +28,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 scripts/need-node-deps.sh scripts/check-headed.sh
+# shellcheck source=scripts/check-lock.sh
+source scripts/check-lock.sh
+check_lock "scripts/check-headed.sh" "scripts/check-headed.sh $*"
 pnpm --filter @orbe/viewer-page build >/dev/null
 cargo build -p orbe --locked
 target=$(cargo metadata --format-version 1 --no-deps |
@@ -39,8 +42,8 @@ if [[ ! -e $orbe ]]; then
 fi
 export ORBE=$orbe
 export ORBE_E2E=headed
-pnpm exec playwright test
+pnpm exec playwright test 9>&-
 export ORBE_E2E=world
-pnpm exec playwright test
+pnpm exec playwright test 9>&-
 export ORBE_E2E=knob
-pnpm exec playwright test
+pnpm exec playwright test 9>&-

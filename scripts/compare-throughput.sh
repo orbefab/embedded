@@ -88,6 +88,9 @@ for bin in "$bin_a" "$bin_b"; do
   fi
 done
 
+# shellcheck source=scripts/check-lock.sh
+source scripts/check-lock.sh
+check_lock "scripts/compare-throughput.sh" "scripts/compare-throughput.sh"
 load=$(awk '{print $1}' /proc/loadavg)
 if awk -v load="$load" 'BEGIN { exit (load > 2) ? 0 : 1 }'; then
   echo "scripts/compare-throughput.sh: 1-minute load is ${load}, above 2. Retry when the machine is quiet." >&2
