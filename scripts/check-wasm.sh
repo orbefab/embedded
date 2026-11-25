@@ -246,6 +246,9 @@ scratch=$(cd "$scratch" && pwd)
 rm -rf "$scratch/pkg" "$scratch/again" "$scratch/target" "$scratch/registry"
 
 cd "$repo"
+# shellcheck source=scripts/check-lock.sh
+source scripts/check-lock.sh
+check_lock "scripts/check-wasm.sh" "scripts/check-wasm.sh $*"
 # shellcheck source=scripts/wasm.sh
 source "$repo/scripts/wasm.sh"
 home_case=$scratch/home-needle

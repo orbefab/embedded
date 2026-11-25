@@ -42,6 +42,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 scripts/need-node-deps.sh scripts/check-viewer-e2e.sh
+# shellcheck source=scripts/check-lock.sh
+source scripts/check-lock.sh
+check_lock "scripts/check-viewer-e2e.sh" "scripts/check-viewer-e2e.sh $*"
 pnpm --filter @orbe/viewer-page build >/dev/null
 scripts/wasm.sh .scratch/wasm/pkg
 cargo build -p orbe --locked
@@ -51,7 +54,7 @@ rm -rf .scratch/wasm/registry
 "$target/debug/orbe" registry build . .scratch/wasm/registry >/dev/null
 export ORBE_E2E=viewer
 if [[ -n $shard ]]; then
-  pnpm exec playwright test --shard="$shard"
+  pnpm exec playwright test --shard="$shard" 9>&-
 else
-  pnpm exec playwright test
+  pnpm exec playwright test 9>&-
 fi

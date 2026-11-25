@@ -28,6 +28,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 scripts/need-node-deps.sh scripts/check-block.sh
+# shellcheck source=scripts/check-lock.sh
+source scripts/check-lock.sh
+check_lock "scripts/check-block.sh" "scripts/check-block.sh $*"
 pnpm --filter @orbe/viewer-page build >/dev/null
 scripts/wasm.sh .scratch/wasm/pkg
 cargo build -p orbe --locked
@@ -36,4 +39,4 @@ target=$(cargo metadata --format-version 1 --no-deps |
 rm -rf .scratch/wasm/registry
 "$target/debug/orbe" registry build . .scratch/wasm/registry >/dev/null
 export ORBE_E2E=block
-pnpm exec playwright test
+pnpm exec playwright test 9>&-

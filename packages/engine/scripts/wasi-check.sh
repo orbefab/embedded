@@ -37,6 +37,9 @@ scratch=$(cd "$scratch" && pwd)
 rm -rf "$scratch/native" "$scratch/wasi"
 
 cd "$repo"
+# shellcheck source=scripts/check-lock.sh
+source scripts/check-lock.sh
+check_lock "packages/engine/scripts/wasi-check.sh" "packages/engine/scripts/wasi-check.sh"
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
 cargo build -p orbe-engine --features runner --bin orbe-run --release --locked
 cargo build -p orbe-engine --features runner --bin orbe-run --release --locked --target wasm32-wasip1

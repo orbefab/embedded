@@ -89,6 +89,9 @@ if [[ $saw_renders -eq 1 ]]; then
   export ORBE_RENDERS=$renders
 fi
 scripts/need-node-deps.sh scripts/check-site.sh
+# shellcheck source=scripts/check-lock.sh
+source scripts/check-lock.sh
+check_lock "scripts/check-site.sh" "scripts/check-site.sh $*"
 fail() {
   echo "check-site: $1" >&2
   exit 1
@@ -130,7 +133,7 @@ if [[ $servers != wrangler ]]; then
   export ORBE_SITE_INSTALL_E2E=1
   export ORBE_SITE_SERVERS=vite
   echo "check-site: install-on browser checks"
-  with_fresh_ports ORBE_SITE_VITE_PORT -- pnpm exec playwright test apps/site/e2e/install.spec.ts
+  with_fresh_ports ORBE_SITE_VITE_PORT -- pnpm exec playwright test apps/site/e2e/install.spec.ts 9>&-
   unset ORBE_SITE_INSTALL_E2E ORBE_SITE_SERVERS
   restore_deploy
 fi
@@ -191,7 +194,7 @@ if [[ $servers != both ]]; then
   export ORBE_SITE_SERVERS=$servers
 fi
 if [[ -n $shard ]]; then
-  with_fresh_ports ORBE_SITE_VITE_PORT ORBE_SITE_WRANGLER_PORT -- pnpm exec playwright test --shard="$shard"
+  with_fresh_ports ORBE_SITE_VITE_PORT ORBE_SITE_WRANGLER_PORT -- pnpm exec playwright test --shard="$shard" 9>&-
 else
-  with_fresh_ports ORBE_SITE_VITE_PORT ORBE_SITE_WRANGLER_PORT -- pnpm exec playwright test
+  with_fresh_ports ORBE_SITE_VITE_PORT ORBE_SITE_WRANGLER_PORT -- pnpm exec playwright test 9>&-
 fi

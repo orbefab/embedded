@@ -280,6 +280,9 @@ if [[ -n $source_commit && ! $source_commit =~ ^[0-9a-f]{40}(-dirty)?$ ]]; then
 fi
 
 cd "$repo"
+# shellcheck source=scripts/check-lock.sh
+source scripts/check-lock.sh
+check_lock "scripts/wasm.sh" "scripts/wasm.sh $*"
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
 
 if ! rustup target list --installed | grep -qx wasm32-unknown-unknown; then
