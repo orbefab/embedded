@@ -4,11 +4,15 @@ Servo servo;
 
 void setup() {
   servo.attach(9);
-  servo.write(0);
-  delay(400);
-  servo.write(180);
-  delay(500);
-  servo.write(0);
 }
 
-void loop() {}
+void loop() {
+  for (int angle = 0; angle <= 180; angle += 1) {
+    servo.write(angle);
+    delay(15);
+  }
+  for (int angle = 180; angle >= 0; angle -= 1) {
+    servo.write(angle);
+    delay(15);
+  }
+}

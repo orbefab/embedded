@@ -4,16 +4,21 @@
 // 1 µs dead band. Luxorparts gives that speed and 0.10 s per 60° at 6 V. SunFounder's SF0180
 // specification gives the currents. The control board is an AA51880, which states no
 // operating supply range. 4tronix lists 3.0 V to 7.2 V, the lowest such minimum cited.
+// The shape follows Tower Pro's SG90 drawing: a 22.2 x 11.8 mm case, ears 32.2 mm end to end
+// with their underside 16 mm up, and 31 mm to the top of the horn. The lead ends in a 3-pin
+// female connector, so the servo stands beside the breadboard and jumpers reach its pins.
 {
   "format": 6,
   "part": "servo-sg90",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "title": "SG90 micro servo",
-  "summary": "9 g hobby servo with signal, 5 V and ground. A 0.5 ms high holds the shaft at 0° and a 2.4 ms high at 180°, and a pulse past those stops clamps. The Luxorparts sheet says 1 ms is 0°, 1.5 ms is 90° and 2 ms is 180°. The shaft follows the measured 0.5 ms to 2.4 ms travel instead. Speed is 0.12 s per 60° at 4.8 V and 0.10 s per 60° at 6 V, and it scales between those. Below 4.8 V it moves slower, and below 4.5 V it warns. Below 3.0 V it does nothing, and a supply that returns above 3.0 V follows the next pulse. When the moving draw pulls the supply under 3.0 V, the shaft holds and the part warns that the supply sags under the moving draw. It draws 5 mA while it holds and 140 mA while it moves. A 3.3 V signal counts as a high. `angle` is the shaft in degrees at the moment it is read, and the page turns the horn.",
+  "summary": "9 g hobby servo with signal, 5 V and ground. A 0.5 ms high holds the shaft at 0° and a 2.4 ms high at 180°, and a pulse past those stops clamps. The Luxorparts sheet says 1 ms is 0°, 1.5 ms is 90° and 2 ms is 180°. The shaft follows the measured 0.5 ms to 2.4 ms travel instead. Speed is 0.12 s per 60° at 4.8 V and 0.10 s per 60° at 6 V, and it scales between those. Below 4.8 V it moves slower, and below 4.5 V it warns. Below 3.0 V it does nothing, and a supply that returns above 3.0 V follows the next pulse. When the moving draw pulls the supply under 3.0 V, the shaft holds and the part warns that the supply sags under the moving draw. It draws 5 mA while it holds and 140 mA while it moves. A 3.3 V signal counts as a high. `angle` is the shaft in degrees at the moment it is read, and the page turns the horn. The lead (brown GND, red VCC, orange SIGNAL) ends in a 3-pin female connector: place the servo beside the breadboard with `at` and run a jumper from each hole to its pin.",
   "tags": ["servo", "sg90", "motor", "pwm", "hobby", "starter"],
   "license": "MIT OR Apache-2.0",
   "docs": {
     "Tower Pro SG90 Analog": "https://towerpro.com.tw/product/sg90-analog/",
+    "Tower Pro SG90 datasheet, with the drawing": "https://tams.informatik.uni-hamburg.de/lehre/2023ss/vorlesung/es/doc/sg90.pdf",
+    "Components101, SG90 pinout and drawing": "https://components101.com/motors/servo-motor-basics-pinout-datasheet",
     "Luxorparts SG90 datasheet, Kjell 87897": "https://www.kjell.com/globalassets/mediaassets/701916_87897_datasheet_en.pdf",
     "SunFounder SF0180 electrical specification": "https://www.sunfounder.com/products/sf0180-servo-motor",
     "SunFounder SG90, operating angle": "https://www.sunfounder.com/products/sg90-micro-digital-servo",

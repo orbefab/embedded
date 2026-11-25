@@ -1,18 +1,19 @@
-# write(0), wait 400 ms, write(180), wait 500 ms, write(0). The first pulse is at
-# about 53 ms. write(0) is 544 us, just inside the 500 us stop, so the shaft sits
-# a few degrees off that end. By 250 ms it is there and the 5 V diode is at idle.
-# By 550 ms it is slewing toward 180°. A run shows the 5 V pin at 4.757 V while
-# the shaft holds and 4.703 V while it moves, and the slew at 490 deg/s, behind
-# the 500 deg/s figure at 4.8 V. By 800 ms it is there.
+# The loop writes 0° to 180° and back, 1° every 15 ms, and starts over. The shaft starts at
+# its 90° centre, is near the 0° end by 200 ms, then follows the writes at about 68 deg/s.
+# write(0) is 544 us, just inside the 500 us stop, so the low end is a few degrees off 0°.
+# A run shows 67.7° at 1 s, 178.0° at 2.7 s, 98.0° at 4 s, 6.2° at 5.5 s and 103.7° at 7 s.
 open
-step 250ms
-expect @servo.angle > 3deg
-expect @servo.angle < 6deg
-expect @nano.diode.i < 40mA
-step 300ms
-expect @servo.angle > 55deg
+step 1000ms
+expect @servo.angle > 60deg
 expect @servo.angle < 75deg
-expect @nano.diode.i > 100mA
-step 250ms
-expect @servo.angle > 179deg
+step 1700ms
+expect @servo.angle > 170deg
+step 1300ms
+expect @servo.angle > 90deg
+expect @servo.angle < 105deg
+step 1500ms
+expect @servo.angle < 15deg
+step 1500ms
+expect @servo.angle > 95deg
+expect @servo.angle < 112deg
 expect no diagnostics
