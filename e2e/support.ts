@@ -243,6 +243,7 @@ export type BlockKind = "button" | "digit" | "fade" | "lcd" | "light" | "pixels"
 export interface RepoBlock {
   id: string;
   kind: BlockKind;
+  version?: string;
 }
 
 /** Blocks under `blocks/`. A scene this cannot classify fails the check. */
@@ -252,7 +253,11 @@ export function repoBlocks(): RepoBlock[] {
     .filter((id) => existsSync(join(root, id, "block.jsonc")))
     .sort();
   if (ids.length === 0) throw new Error("blocks/ has no Block");
-  return ids.map((id) => ({ id, kind: blockKind(readFileSync(join(root, id, "scene.jsonc"), "utf8"), id) }));
+  return ids.map((id) => {
+    const card = readFileSync(join(root, id, "block.jsonc"), "utf8");
+    const version = card.match(/"version"\s*:\s*"([^"]+)"/)?.[1];
+    return { id, kind: blockKind(readFileSync(join(root, id, "scene.jsonc"), "utf8"), id), version };
+  });
 }
 
 export function blockKind(scene: string, id: string): BlockKind {
@@ -615,40 +620,43 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
     const firstSeen = new Set(first.map((colour) => `${colour.r.toFixed(3)},${colour.g.toFixed(3)},${colour.b.toFixed(3)}`));
     expect(firstSeen.size, `${block.id} colours`).toBeGreaterThan(1);
 
-    const secondHandle = await page.waitForFunction(
-      (prev) => {
-        const scene = window.orbeViewer.get().scene;
-        const pixels = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
-          const node = scene.getObjectByName(`@stick.px${n}`)?.getObjectByName("lens");
-          const material = node?.material ?? node?.children?.[0]?.material;
-          if (material === undefined) return null;
-          return { r: material.emissive.r, g: material.emissive.g, b: material.emissive.b, i: material.emissiveIntensity };
-        });
-        if (!pixels.every((pixel) => pixel !== null && pixel.i > 0.2)) return null;
-        const moved = pixels.some(
+    // Older tagged releases (before 0.2.0) latch a static rainbow once in setup().
+    if (block.version === undefined || compareVersions(block.version, "0.2.0") >= 0) {
+      const secondHandle = await page.waitForFunction(
+        (prev) => {
+          const scene = window.orbeViewer.get().scene;
+          const pixels = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
+            const node = scene.getObjectByName(`@stick.px${n}`)?.getObjectByName("lens");
+            const material = node?.material ?? node?.children?.[0]?.material;
+            if (material === undefined) return null;
+            return { r: material.emissive.r, g: material.emissive.g, b: material.emissive.b, i: material.emissiveIntensity };
+          });
+          if (!pixels.every((pixel) => pixel !== null && pixel.i > 0.2)) return null;
+          const moved = pixels.some(
+            (pixel, index) =>
+              Math.abs(pixel!.r - prev[index].r) > 0.05 ||
+              Math.abs(pixel!.g - prev[index].g) > 0.05 ||
+              Math.abs(pixel!.b - prev[index].b) > 0.05,
+          );
+          return moved ? pixels : null;
+        },
+        first,
+        { timeout: 30_000 },
+      );
+      const second = (await secondHandle.jsonValue()) as { r: number; g: number; b: number; i: number }[];
+      expect(second.every((colour) => colour.i > 0.2), `${block.id} glow after move`).toBe(true);
+      const secondSeen = new Set(second.map((colour) => `${colour.r.toFixed(3)},${colour.g.toFixed(3)},${colour.b.toFixed(3)}`));
+      expect(secondSeen.size, `${block.id} colours after move`).toBeGreaterThan(1);
+      expect(
+        second.some(
           (pixel, index) =>
-            Math.abs(pixel!.r - prev[index].r) > 0.05 ||
-            Math.abs(pixel!.g - prev[index].g) > 0.05 ||
-            Math.abs(pixel!.b - prev[index].b) > 0.05,
-        );
-        return moved ? pixels : null;
-      },
-      first,
-      { timeout: 30_000 },
-    );
-    const second = (await secondHandle.jsonValue()) as { r: number; g: number; b: number; i: number }[];
-    expect(second.every((colour) => colour.i > 0.2), `${block.id} glow after move`).toBe(true);
-    const secondSeen = new Set(second.map((colour) => `${colour.r.toFixed(3)},${colour.g.toFixed(3)},${colour.b.toFixed(3)}`));
-    expect(secondSeen.size, `${block.id} colours after move`).toBeGreaterThan(1);
-    expect(
-      second.some(
-        (pixel, index) =>
-          Math.abs(pixel.r - first[index].r) > 0.05 ||
-          Math.abs(pixel.g - first[index].g) > 0.05 ||
-          Math.abs(pixel.b - first[index].b) > 0.05,
-      ),
-      `${block.id} colours changed`,
-    ).toBe(true);
+            Math.abs(pixel.r - first[index].r) > 0.05 ||
+            Math.abs(pixel.g - first[index].g) > 0.05 ||
+            Math.abs(pixel.b - first[index].b) > 0.05,
+        ),
+        `${block.id} colours changed`,
+      ).toBe(true);
+    }
     expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(0.05);
     if (shotName !== null) {
       await page.locator("canvas").scrollIntoViewIfNeeded();
