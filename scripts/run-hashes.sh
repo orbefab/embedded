@@ -34,8 +34,7 @@
 # When RUNNER is unset, the script builds release orbe-run.
 #
 # The script needs bash, python3, sha256sum and cargo. It installs nothing.
-# Outside CI, scripts/check-lock.sh takes the shared per-user check lock and
-# defaults CARGO_BUILD_JOBS to 2 and NEXTEST_TEST_THREADS to 4.
+# Outside CI, scripts/check-lock.sh takes the shared per-user check lock.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export LC_ALL=C
@@ -163,7 +162,6 @@ fi
 # shellcheck source=scripts/check-lock.sh
 source scripts/check-lock.sh
 check_lock "scripts/run-hashes.sh" "$lock_label"
-export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/run-hashes.XXXXXX")
 lines=$(mktemp)

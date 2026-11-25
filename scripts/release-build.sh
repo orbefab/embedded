@@ -11,8 +11,7 @@
 # form sha256sum writes. The default output directory is .scratch/release.
 # Needs the repo's Node dependencies (pnpm install --frozen-lockfile), Node 24,
 # pnpm, cargo and rustc. A tag build refuses a tag that is not v<version>.
-# Outside CI, scripts/check-lock.sh takes the shared per-user check lock and
-# defaults CARGO_BUILD_JOBS to 2 and NEXTEST_TEST_THREADS to 4.
+# Outside CI, scripts/check-lock.sh takes the shared per-user check lock.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

@@ -11,8 +11,8 @@
 # PATH at that version. Otherwise it exits 2 and says to run scripts/install-wasm-bindgen.sh,
 # which puts it in WASM_TOOLS_DIR, which defaults to .scratch/wasm/tools in the repo.
 #
-# OUT_DIR defaults to .scratch/wasm/pkg in the repo. CARGO_TARGET_DIR is honored, and
-# CARGO_BUILD_JOBS defaults to 4.
+# OUT_DIR defaults to .scratch/wasm/pkg in the repo. CARGO_TARGET_DIR and CARGO_BUILD_JOBS
+# are honored.
 #
 # The orbe-wasm cargo build remaps the checkout, CARGO_HOME, the sysroot, and a target directory
 # that sits outside the checkout. The shortest prefix is first. The package is built reproducibly
@@ -283,7 +283,6 @@ cd "$repo"
 # shellcheck source=scripts/check-lock.sh
 source scripts/check-lock.sh
 check_lock "scripts/wasm.sh" "scripts/wasm.sh $*"
-export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
 
 if ! rustup target list --installed | grep -qx wasm32-unknown-unknown; then
   echo "orbe-wasm: rustup has no wasm32-unknown-unknown target. Add it with:" >&2

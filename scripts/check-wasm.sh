@@ -306,7 +306,6 @@ for line in \
   fi
 done
 
-export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
 cargo build -p orbe --locked
 target=$(cargo metadata --format-version 1 --no-deps |
   sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
