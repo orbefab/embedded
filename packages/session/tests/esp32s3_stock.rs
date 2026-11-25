@@ -1587,10 +1587,10 @@ fn a_part_holding_scl_low_past_timeout_fails_bmp280_begin_without_faulting() {
     "sw": { "type": "tactile-switch-6mm" },"#,
         )
         .replace(
-            r#"["bb.j11", "bb.j28"], // GPIO8 (SDA) to SDA"#,
-            r#"["bb.j11", "bb.j28"], // GPIO8 (SDA) to SDA
-    ["bb.f27", "sw.a"],
-    ["sw.b", "bb.f1"],"#,
+            r#"["bb.j11", "bb.j27"], // GPIO8 (SDA) to SDA"#,
+            r#"["bb.j11", "bb.j27"], // GPIO8 (SDA) to SDA
+    ["bb.i28", "sw.a"],
+    ["sw.b", "bb.i1"],"#,
         );
     fs::write(&scene_path, scene).unwrap();
 

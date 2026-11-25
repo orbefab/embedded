@@ -1,5 +1,8 @@
 // Bosch BMP280, BST-BMP280-DS001-26. The LGA-8 pin order is the sheet's Table 29.
-// The engine kind reads the scene's temperature and pressure and answers on I2C.
+// Package outline from Figure 18 (section 7.1): 2.50 x 2.00 x 0.95 mm metal-lid LGA,
+// 0.13 mm substrate, 2.25 x 1.75 mm lid brim, 1.55 x 1.05 mm lid top, 0.30 mm vent hole
+// 0.825 mm from the -X and +Y edges, and eight 0.35 x 0.35 mm pads on 0.65 mm pitch and
+// 1.45 mm rows. The engine kind reads the scene's temperature and pressure and answers on I2C.
 {
   "format": 6,
   "part": "bmp280",
