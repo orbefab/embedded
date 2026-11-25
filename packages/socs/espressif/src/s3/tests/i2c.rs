@@ -42,6 +42,7 @@ const SCLK_ACTIVE: u32 = 1 << 21;
 /// Both filters on at 7 cycles.
 const FILTER: u32 = 7 | 7 << 4 | 1 << 8 | 1 << 9;
 const TRANS_COMPLETE: u32 = 1 << 7;
+const TIME_OUT: u32 = 1 << 8;
 const NACK: u32 = 1 << 10;
 const BUS_BUSY: u32 = 1 << 4;
 const CMD_DONE: u32 = 1 << 31;
@@ -501,16 +502,22 @@ fn the_masters_own_release_starts_the_high_side_at_its_landing() {
             other => panic!("before the release: {other:?}"),
         }
     };
-    let halt = chip.run_until(Tick(release.0 + cycles(1 << 10) + cycles(LOW)));
+    let deadline = Tick(release.0 + cycles(1 << 10));
     assert_eq!(
-        refused(halt),
-        ("I2C0", "timeout"),
-        "withheld input at {release:?}"
+        chip.run_until(Tick(deadline.0 - 1)),
+        None,
+        "no timeout before the deadline"
     );
-    match halt {
-        Some(Halt::Fault(at, _)) => assert_eq!(at.0, release.0 + cycles(1 << 10)),
-        other => panic!("{other:?}"),
-    }
+    assert_eq!(word(&mut chip, INT_RAW) & TIME_OUT, 0);
+    assert_eq!(word(&mut chip, SR) & BUS_BUSY, BUS_BUSY);
+    assert_eq!(
+        chip.run_until(Tick(deadline.0 + cycles(LOW))),
+        None,
+        "withheld input at {release:?} ends cleanly on TIME_OUT"
+    );
+    assert_eq!(word(&mut chip, INT_RAW) & TIME_OUT, TIME_OUT);
+    assert_eq!(word(&mut chip, INT_RAW) & TRANS_COMPLETE, 0);
+    assert_eq!(word(&mut chip, SR) & BUS_BUSY, 0);
 }
 
 #[test]
@@ -637,40 +644,61 @@ fn a_held_scl_stretches_the_high_side_from_its_release() {
     assert_eq!(fall, h.0 + cycles(HIGH));
 }
 
+/// Holding SCL low past `2^I2C_TIME_OUT_VALUE` I2C_SCLK cycles raises `TIME_OUT`, clears
+/// `BUS_BUSY`, releases SDA (when the master drove a 0 bit) and ends the transfer without
+/// `TRANS_COMPLETE` (TRM v1.8, 27.4.8, 27.6 and Register 27.12).
 #[test]
-fn a_stretch_past_the_deadline_is_refused_as_timeout() {
+fn a_stretch_past_the_deadline_raises_time_out_releases_sda_and_clears_busy() {
     let mut chip = go(CTR as u8).chip_on(&[SCL_PAD, SDA_PAD]);
-    one_byte(&mut chip);
+    arm(&mut chip);
+    // MSB is 0, so SDA is driven low when SCL releases on bit 7.
+    poke(&mut chip, DATA, 0x00);
+    poke(&mut chip, COMD0, rstart());
+    poke(&mut chip, COMD0 + 4, write_cmd(1));
+    poke(&mut chip, COMD0 + 8, stop_cmd());
     let mut fell = false;
     let release = loop {
         match chip.run_until(c(4000)) {
             Some(Halt::Moved(at)) => {
+                let sda = !matches!(chip.drive(SDA_PAD), PadDrive::Low);
                 if matches!(chip.drive(SCL_PAD), PadDrive::Low) {
                     fell = true;
-                    chip.input(at, [(SCL_PAD, false)]);
+                    chip.input(at, [(SCL_PAD, false), (SDA_PAD, sda)]);
                 } else if fell {
+                    chip.input(at, [(SDA_PAD, sda)]);
                     break at;
+                } else {
+                    chip.input(at, [(SDA_PAD, sda)]);
                 }
             }
             other => panic!("{other:?}"),
         }
     };
+    assert!(matches!(chip.drive(SDA_PAD), PadDrive::Low));
+    let deadline = Tick(release.0 + cycles(1 << 10));
     chip.input(Tick(release.0 + cycles(10)), [(SCL_PAD, false)]);
-    let halt = chip.run_until(Tick(release.0 + cycles(1 << 10) + c(1).0));
-    assert_eq!(refused(halt), ("I2C0", "timeout"));
-    match halt {
-        Some(Halt::Fault(at, _)) => assert_eq!(at.0, release.0 + cycles(1 << 10)),
-        other => panic!("{other:?}"),
-    }
+    assert_eq!(chip.run_until(Tick(deadline.0 - 1)), None);
+    assert_eq!(word(&mut chip, INT_RAW) & TIME_OUT, 0);
+    assert_eq!(word(&mut chip, SR) & BUS_BUSY, BUS_BUSY);
+    assert_eq!(
+        chip.run_until(Tick(deadline.0 + c(1).0)),
+        Some(Halt::Moved(deadline)),
+        "timeout releases SDA at the deadline"
+    );
+    assert!(!matches!(chip.drive(SDA_PAD), PadDrive::Low));
+    assert_eq!(word(&mut chip, INT_RAW) & TIME_OUT, TIME_OUT);
+    assert_eq!(word(&mut chip, INT_RAW) & TRANS_COMPLETE, 0);
+    assert_eq!(word(&mut chip, SR) & BUS_BUSY, 0);
+    assert_eq!(word(&mut chip, COMD0 + 4) & CMD_DONE, 0);
 }
 
-/// A deadline that a load of `I2C_INT_RAW_REG` runs past ends the run as `timeout` at the
-/// deadline, as one the chip settles on its own does.
+/// A status load of `I2C_INT_RAW_REG` that meets the deadline settles `TIME_OUT` cleanly and
+/// leaves the bus idle.
 #[test]
-fn a_timeout_met_by_a_status_load_ends_the_run() {
+fn a_timeout_met_by_a_status_load_sets_time_out_and_ends_the_run() {
     let mut program = Program::new(&[I2C0, GO]);
     program.l32r(2, 0).l32r(3, 1).rri8(6, 3, 2, CTR as u8);
-    wait_bit(&mut program, INT_RAW, 7, true);
+    wait_bit(&mut program, INT_RAW, 8, true);
     program.raw(&LOOP);
     let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD]);
     one_byte(&mut chip);
@@ -689,12 +717,185 @@ fn a_timeout_met_by_a_status_load_ends_the_run() {
         }
     };
     chip.input(Tick(release.0 + cycles(10)), [(SCL_PAD, false)]);
-    let halt = chip.run_until(Tick(release.0 + cycles(1 << 11)));
-    assert_eq!(refused(halt), ("I2C0", "timeout"));
-    match halt {
-        Some(Halt::Fault(at, _)) => assert_eq!(at.0, release.0 + cycles(1 << 10)),
-        other => panic!("{other:?}"),
+    assert_eq!(chip.run_until(Tick(release.0 + cycles(1 << 11))), None);
+    assert_eq!(word(&mut chip, INT_RAW) & TIME_OUT, TIME_OUT);
+    assert_eq!(word(&mut chip, INT_RAW) & TRANS_COMPLETE, 0);
+    assert_eq!(word(&mut chip, SR) & BUS_BUSY, 0);
+}
+
+/// Writing `I2C_TO_REG` takes effect at `CONF_UPGATE` (TRM Table 27.4-1 and Register 27.12), and
+/// clearing `I2C_TIME_OUT_EN` disables the SCL timeout so a long stretch still finishes once SCL
+/// rises.
+#[test]
+fn timeout_register_value_and_enable_take_effect_at_conf_upgate() {
+    let run_until_timeout = |to_val: u32, upgate: bool| {
+        let mut program = Program::new(&[I2C0, MODE | TRANS_START]);
+        program
+            .l32r(2, 0)
+            .l32r(3, 1)
+            .rri8(6, 3, 2, CTR as u8)
+            .raw(&LOOP);
+        let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD]);
+        one_byte(&mut chip);
+        poke(&mut chip, TO, to_val);
+        if upgate {
+            poke(&mut chip, CTR, MODE | CONF_UPGATE);
+        }
+        let mut fell = false;
+        let release = loop {
+            match chip.run_until(c(4000)) {
+                Some(Halt::Moved(at)) => {
+                    if matches!(chip.drive(SCL_PAD), PadDrive::Low) {
+                        fell = true;
+                        chip.input(at, [(SCL_PAD, false)]);
+                    } else if fell {
+                        break at;
+                    }
+                }
+                other => panic!("{other:?}"),
+            }
+        };
+        (chip, release)
+    };
+
+    // Changing TO from 2^10 to 2^8 without CONF_UPGATE keeps 2^10.
+    let (mut chip, release) = run_until_timeout(8 | 1 << 5, false);
+    assert_eq!(
+        chip.run_until(Tick(release.0 + cycles(1 << 8) + c(1).0)),
+        None
+    );
+    assert_eq!(word(&mut chip, INT_RAW) & TIME_OUT, 0);
+    assert_eq!(word(&mut chip, SR) & BUS_BUSY, BUS_BUSY);
+    assert_eq!(
+        chip.run_until(Tick(release.0 + cycles(1 << 10) + c(1).0)),
+        None
+    );
+    assert_eq!(word(&mut chip, INT_RAW) & TIME_OUT, TIME_OUT);
+
+    // With CONF_UPGATE, 2^8 fires right at release + 2^8 cycles.
+    let (mut chip, release) = run_until_timeout(8 | 1 << 5, true);
+    let d8 = Tick(release.0 + cycles(1 << 8));
+    assert_eq!(chip.run_until(Tick(d8.0 - 1)), None);
+    assert_eq!(word(&mut chip, INT_RAW) & TIME_OUT, 0);
+    assert_eq!(chip.run_until(Tick(d8.0 + c(1).0)), None);
+    assert_eq!(word(&mut chip, INT_RAW) & TIME_OUT, TIME_OUT);
+    assert_eq!(word(&mut chip, SR) & BUS_BUSY, 0);
+
+    // Clearing TIME_OUT_EN disables the timeout: stretching past 2^10 cycles stays busy until
+    // SCL rises, then completes normally.
+    let (mut chip, release) = run_until_timeout(8, true);
+    let past = Tick(release.0 + cycles(1 << 11));
+    assert_eq!(chip.run_until(past), None);
+    assert_eq!(word(&mut chip, INT_RAW) & TIME_OUT, 0);
+    assert_eq!(word(&mut chip, SR) & BUS_BUSY, BUS_BUSY);
+    chip.input(past, [(SCL_PAD, true)]);
+    play(&mut chip, past.0 + c(4000).0, c(4000).0, |n| n == 8).unwrap();
+    assert_eq!(
+        word(&mut chip, INT_RAW) & (TIME_OUT | TRANS_COMPLETE),
+        TRANS_COMPLETE
+    );
+    assert_eq!(word(&mut chip, SR) & BUS_BUSY, 0);
+}
+
+/// `TIME_OUT` raises source 42 and wakes a parked (`WAITI`) core at the deadline tick.
+#[test]
+fn time_out_wakes_a_parked_core_at_its_deadline() {
+    let mut chip = interrupt_chip(&WAITI);
+    poke(&mut chip, INT_ENA, TIME_OUT);
+    let mut fell = false;
+    let release = loop {
+        match chip.run_until(c(4000)) {
+            Some(Halt::Moved(at)) => {
+                if matches!(chip.drive(SCL_PAD), PadDrive::Low) {
+                    fell = true;
+                    chip.input(at, [(SCL_PAD, false)]);
+                } else if fell {
+                    break at;
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+    };
+    let deadline = Tick(release.0 + cycles(1 << 10));
+    let mut drives = Vec::new();
+    while drives.len() < 2 {
+        match chip.run_until(Tick(deadline.0 + c(1000).0)) {
+            Some(halt @ Halt::Change { .. }) => drives.push((halt, chip.drive(21))),
+            other => panic!("expected handler GPIO21 change: {other:?}"),
+        }
     }
+    let woke = chip
+        .soc
+        .clock
+        .tick(chip.soc.clock.cycle_after(Tick(deadline.0 + 1)));
+    assert_eq!(
+        drives,
+        [
+            (image_at(Tick(woke.0 + 6 * c(1).0)), PadDrive::Low),
+            (image_at(Tick(woke.0 + 7 * c(1).0)), PadDrive::High),
+        ]
+    );
+    assert_eq!(word(&mut chip, INT_RAW) & TIME_OUT, TIME_OUT);
+    assert_eq!(word(&mut chip, SR) & BUS_BUSY, 0);
+}
+
+/// After a `TIME_OUT`, IDF's peripheral reset (`s_i2c_hw_fsm_reset(..., false)` via
+/// `SYSTEM_PERIP_RST_EN0`) and re-initialization runs the next transfer once SCL is released.
+#[test]
+fn a_timeout_then_idfs_peripheral_reset_and_setup_runs_the_next_transfer() {
+    let stores = reset_and_rerun();
+    let mut literals = vec![I2C0, GO];
+    literals.extend(stores.iter().flat_map(|&(addr, value)| [addr, value]));
+    let mut program = Program::new(&literals);
+    for _ in 0..8 {
+        program.raw(&NOP);
+    }
+    program.l32r(2, 0).l32r(3, 1).rri8(6, 3, 2, CTR as u8);
+    wait_bit(&mut program, INT_RAW, 8, true);
+    for k in 0..stores.len() {
+        program
+            .l32r(5, 2 + 2 * k)
+            .l32r(6, 3 + 2 * k)
+            .rri8(6, 6, 5, 0);
+    }
+    program.raw(&LOOP);
+    let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD]);
+    arm(&mut chip);
+    poke(&mut chip, FILTER_CFG, FILTER);
+    poke(&mut chip, DATA, 0xa0);
+    poke(&mut chip, COMD0, rstart());
+    poke(&mut chip, COMD0 + 4, write_cmd(1));
+    poke(&mut chip, COMD0 + 8, stop_cmd());
+    // Hold SCL low on the first release so the first transfer times out.
+    let mut fell = false;
+    let release = loop {
+        match chip.run_until(c(4000)) {
+            Some(Halt::Moved(at)) => {
+                if matches!(chip.drive(SCL_PAD), PadDrive::Low) {
+                    fell = true;
+                    chip.input(at, [(SCL_PAD, false)]);
+                } else if fell {
+                    break at;
+                }
+            }
+            other => panic!("{other:?}"),
+        }
+    };
+    let deadline = Tick(release.0 + cycles(1 << 10));
+    assert_eq!(chip.run_until(Tick(deadline.0 + c(1).0)), None);
+    assert_eq!(word(&mut chip, INT_RAW) & TIME_OUT, TIME_OUT);
+    assert_eq!(word(&mut chip, SR) & BUS_BUSY, 0);
+    // Release SCL and let the reset + write_read rerun complete.
+    chip.input(Tick(deadline.0 + c(20).0), [(SCL_PAD, true)]);
+    let through = deadline.0 + c(20_000).0;
+    let edges = play(&mut chip, through, through, read_target).unwrap();
+    assert_eq!(deltas(&edges), write_read_edges());
+    assert_eq!(
+        word(&mut chip, INT_RAW) & (TRANS_COMPLETE | NACK | TIME_OUT),
+        TRANS_COMPLETE
+    );
+    assert_eq!(word(&mut chip, DATA), 0xa5);
+    assert_eq!(word(&mut chip, SR) & BUS_BUSY, 0);
 }
 
 #[test]
