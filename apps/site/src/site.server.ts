@@ -6,6 +6,7 @@ import { at } from "./paths";
 import { readmeParagraphs } from "./readme";
 import { type BlockRecord, dependencyId, type Item, type PartRecord } from "./records";
 import type { Searchable } from "./search";
+import { type PartSection, sectionOfPart } from "./sections";
 import { STARTER } from "./starter";
 
 /** A link to an item's page, with its title. */
@@ -27,6 +28,7 @@ export interface BlockCard {
 /** A part as the parts list shows it and the search reads it. */
 export interface Listed extends Searchable {
   readonly href: string;
+  readonly section: PartSection;
   /** "in N Blocks", "on the …", or empty when neither applies. */
   readonly use: string;
 }
@@ -80,7 +82,6 @@ export const home = () => {
   if (scene === undefined) throw new Error(`${STARTER} has no scene.jsonc`);
   return {
     blocks: blockCards(),
-    boards: data.parts.filter((item) => item.record.categories?.includes("board")).map(({ record }) => ({ title: record.title, href: at.part(record.name) })),
     parts: data.parts.filter((item) => item.listed !== false).length,
     scene,
   };
@@ -100,6 +101,7 @@ export const parts = (): Listed[] =>
         description: record.description,
         categories: record.categories,
         href: at.part(record.name),
+        section: sectionOfPart(record.name),
         use: whereLine(use),
       };
     });
