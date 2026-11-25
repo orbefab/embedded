@@ -245,6 +245,26 @@ export type BlockKind = "button" | "digit" | "fade" | "lcd" | "light" | "pixels"
 export interface RepoBlock {
   id: string;
   kind: BlockKind;
+  /** The sketch's loop() does something, so what the Block drives keeps changing. */
+  loops?: boolean;
+}
+
+/** Whether a sketch's loop() has a statement in it. `void loop() {}` holds what setup() left. */
+export function sketchLoops(sketch: string): boolean {
+  const code = sketch.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  const body = /void\s+loop\s*\(\s*\)\s*\{([\s\S]*)$/.exec(code)?.[1] ?? "";
+  return !/^\s*\}/.test(body);
+}
+
+/** The text of the Block's one sketch under firmware/, or null when it has none. */
+function repoSketch(id: string): string | null {
+  const firmware = join(REPO, "blocks", id, "firmware");
+  if (!existsSync(firmware)) return null;
+  for (const name of readdirSync(firmware)) {
+    const ino = join(firmware, name, `${name}.ino`);
+    if (existsSync(ino)) return readFileSync(ino, "utf8");
+  }
+  return null;
 }
 
 /** Blocks under `blocks/`. A scene this cannot classify fails the check. */
@@ -254,7 +274,14 @@ export function repoBlocks(): RepoBlock[] {
     .filter((id) => existsSync(join(root, id, "block.jsonc")))
     .sort();
   if (ids.length === 0) throw new Error("blocks/ has no Block");
-  return ids.map((id) => ({ id, kind: blockKind(readFileSync(join(root, id, "scene.jsonc"), "utf8"), id) }));
+  return ids.map((id) => {
+    const sketch = repoSketch(id);
+    return {
+      id,
+      kind: blockKind(readFileSync(join(root, id, "scene.jsonc"), "utf8"), id),
+      loops: sketch === null ? undefined : sketchLoops(sketch),
+    };
+  });
 }
 
 export function blockKind(scene: string, id: string): BlockKind {
@@ -490,6 +517,44 @@ async function showDigit(page: Page, block: RepoBlock, shotName: string | null):
   }
 }
 
+/** A one-time sweep, 0° to 180° and back to 0°, is over by this simulated time. */
+const SWEEP_DONE_S = 1.5;
+/** write(0) is a 544 us pulse, which holds the shaft at 4.17°, 85.83° from the 90° centre. */
+const SWEEP_END_TURN = 85.83;
+
+/** The horn's turn from its rest, in degrees, or null before the viewer builds it. */
+function hornTurn(page: Page): Promise<number | null> {
+  return page.evaluate(() => {
+    const q = window.orbeViewer.get().scene.getObjectByName("@servo")?.getObjectByName("horn")?.quaternion;
+    return q === undefined ? null : (2 * Math.acos(Math.min(1, Math.abs(q.w))) * 180) / Math.PI;
+  });
+}
+
+/**
+ * A servo Block whose loop() is empty, such as the released nano-servo-sweep 0.3.0, moves the
+ * horn once and then holds it. A page can draw its first frame after that, so the check is
+ * where the horn ends, not that it moves.
+ */
+async function showServoHeld(page: Page, block: RepoBlock): Promise<void> {
+  await waitSimulatedPast(page, SWEEP_DONE_S);
+  // A frame reaches the horn when the next one draws, which software WebGL can hold back.
+  await page
+    .waitForFunction(
+      (want) => {
+        const q = window.orbeViewer.get().scene.getObjectByName("@servo")?.getObjectByName("horn")?.quaternion;
+        if (q === undefined) return false;
+        const turn = (2 * Math.acos(Math.min(1, Math.abs(q.w))) * 180) / Math.PI;
+        return Math.abs(turn - want) < 1;
+      },
+      SWEEP_END_TURN,
+      { timeout: 30_000 },
+    )
+    .catch(() => undefined);
+  const turn = await hornTurn(page);
+  expect(turn, `${block.id} horn turn from centre, degrees`).not.toBeNull();
+  expect(Math.abs((turn ?? 0) - SWEEP_END_TURN), `${block.id} horn at ${turn}°, not ${SWEEP_END_TURN}° from centre`).toBeLessThan(1);
+}
+
 /** A one-time sweep would be over and holding by this simulated time. */
 const SWEEP_LATE_S = 2;
 /** nano-servo-sweep moves the shaft about 68° per simulated second, back and forth without end. */
@@ -502,6 +567,10 @@ const SWEEP_WATCH_S = 1.5;
  * it at the 90° centre until a frame says otherwise, so its turn from rest is 90° minus the angle.
  */
 async function showServo(page: Page, block: RepoBlock, start: number): Promise<void> {
+  if (block.loops === false) {
+    await showServoHeld(page, block);
+    return;
+  }
   const from = Math.max(start, SWEEP_LATE_S);
   await waitSimulatedPast(page, from);
   await page.evaluate(() => {
