@@ -263,9 +263,9 @@ fn the_srd_outline_matches_the_drilling_drawing() {
     }
 }
 
-/// The screw terminal, the relay, the diode and the small parts each keep their own space.
-/// The relay, the header and the diode send leads through the board. A through-hole lead,
-/// other than the header's breadboard pins, ends inside the board or just under it.
+/// The screw terminal, the header, the relay, the diode and the small parts each keep their
+/// own space. The relay, the header and the diode send leads through the board, and a
+/// through-hole lead ends inside the board or just under it. The header's pins point up.
 #[test]
 fn the_module_bodies_do_not_share_space() {
     let repo = common::repo();
@@ -276,22 +276,13 @@ fn the_module_bodies_do_not_share_space() {
         .collect::<Vec<_>>()
         .join("\n");
     let part: serde_json::Value = serde_json::from_str(&text).unwrap();
-    let mut boxes: Vec<(&str, Aabb)> = vec![
-        (
-            "terminal",
-            Aabb {
-                min: [-1.0, 7.5, 4.14],
-                max: [15.0, 15.5, 12.14],
-            },
-        ),
-        (
-            "pcb",
-            Aabb {
-                min: [-17.0, -11.5, 2.54],
-                max: [17.0, 15.5, 4.14],
-            },
-        ),
-    ];
+    let mut boxes: Vec<(&str, Aabb)> = vec![(
+        "pcb",
+        Aabb {
+            min: [-17.0, -11.5, 2.54],
+            max: [17.0, 15.5, 4.14],
+        },
+    )];
     let layout = part["layout"].as_object().unwrap();
     for (name, place) in layout {
         let kind = part["parts"][name]["type"].as_str().unwrap();
@@ -332,8 +323,8 @@ fn the_module_bodies_do_not_share_space() {
         }
     }
     let board = owned.iter().find(|(name, _)| name == "pcb").unwrap().1;
-    // A trimmed lead may stand this far proud of the underside. The header is the
-    // breadboard pins, so its tips end below the module on purpose.
+    // A trimmed lead may stand this far proud of the underside. The header's anchors are
+    // its pins' tips above the board, where the jumpers go on.
     let just_under = 0.5;
     for (name, place) in layout {
         if name == "hdr" {

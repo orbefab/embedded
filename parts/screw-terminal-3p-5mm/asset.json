@@ -1,0 +1,44 @@
+{
+  "part": "screw-terminal-3p-5mm",
+  "source": {
+    "script": "model.py",
+    "sha256": "80d7a073c39fb2731953bb79d9f022b7fb709ce5412be3920238fc8ee3323974",
+    "bytes": 2932
+  },
+  "files": {
+    "screw-terminal-3p-5mm.glb": {
+      "sha256": "98228f2a4e99bddf135ff94c3c00311d26f288c55feec63233b85406929d5e77",
+      "bytes": 39252
+    },
+    "screw-terminal-3p-5mm.anchors.json": {
+      "sha256": "c381d91769bbb8f7279eb8e84921af7aa9318baa2443d361c277999001194ac7",
+      "bytes": 417
+    }
+  },
+  "box": {
+    "min": [-7.5, -3.8, 0],
+    "max": [7.5, 3.8, 10]
+  },
+  "kept_nodes": ["clamp-1", "clamp-2", "clamp-3"],
+  "draw_calls": 5,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 3,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 7,
+      "primitives_out": 5
+    }
+  }
+}
