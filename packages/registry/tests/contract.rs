@@ -313,6 +313,7 @@ const HIDDEN: &[&str] = &[
     "resistor-0603",
     "resistor-array-4x0603",
     "resonator-cstce",
+    "screw-terminal-3p-5mm",
     "sgm2212-sot223",
     "sk68xxmini-hs",
     "tactile-switch-ntc013",
