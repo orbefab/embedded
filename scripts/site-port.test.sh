@@ -17,7 +17,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-node -e 'const s = require("node:net").createServer().listen(0, "127.0.0.1", () => { process.stdout.write(String(s.address().port)); setInterval(() => {}, 1e6); })' >"$work/port" &
+# 9>&- keeps the check lock (scripts/check-lock.sh) off this long-lived helper, so a killed run
+# cannot leave the helper holding it.
+node -e 'const s = require("node:net").createServer().listen(0, "127.0.0.1", () => { process.stdout.write(String(s.address().port)); setInterval(() => {}, 1e6); })' >"$work/port" 9>&- &
 holder=$!
 for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
   [[ -s $work/port ]] && break
