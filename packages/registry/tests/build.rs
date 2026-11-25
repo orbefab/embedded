@@ -663,8 +663,6 @@ fn every_item_is_a_part_or_a_block_of_the_repo() {
 /// the longest description holds 30 words and 200 characters.
 #[test]
 fn a_listed_parts_description_is_one_or_two_short_sentences() {
-    // These two still carry the longer form.
-    const LONGER: [&str; 2] = ["relay-module-1ch", "servo-sg90"];
     let registry = build(&repo()).unwrap();
     let index: Value = serde_json::from_slice(&registry.output["index.json"]).unwrap();
     let mut over = Vec::new();
@@ -675,14 +673,13 @@ fn a_listed_parts_description_is_one_or_two_short_sentences() {
         let name = row["name"].as_str().unwrap();
         let text = row["description"].as_str().unwrap_or_default();
         let (words, chars) = (text.split_whitespace().count(), text.chars().count());
-        let long = words > 30 || chars > 200;
-        if long != LONGER.contains(&name) {
+        if words > 30 || chars > 200 {
             over.push(format!("{name}: {words} words, {chars} characters"));
         }
     }
     assert!(
         over.is_empty(),
-        "a listed part's description holds at most 30 words and 200 characters, and LONGER names exactly the parts over that:\n{}",
+        "every listed part's description holds at most 30 words and 200 characters:\n{}",
         over.join("\n")
     );
 }

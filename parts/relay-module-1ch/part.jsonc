@@ -19,7 +19,7 @@
   "part": "relay-module-1ch",
   "version": "0.2.0",
   "title": "Relay module, 1 channel, 5 V",
-  "summary": "Keyes KY-019 style board: a Songle SRD-05VDC-SL-C, an S8050, a 1N4007 and an indicator LED. IN high closes COM to NO. The coil draws about 70 mA from VCC. IN draws the base current, a few mA. The LED lights while IN is high and VCC is up. With VCC off, the coil and the LED stay off. `closed` and `open` read the contact. The header, from lead 1, is IN, VCC, GND, and its pins point up. The screw terminal on the opposite edge is NC, COM, NO. Place the module beside the breadboard with `at` and run a jumper from each hole to its pin.",
+  "summary": "Keyes KY-019 style active-high 5 V relay module with a Songle SRD-05VDC-SL-C, S8050, 1N4007 and indicator LED. Its SPDT contacts are rated 7 A at 28 V DC.",
   "tags": ["relay", "module", "songle", "5v", "ky-019"],
   "license": "MIT OR Apache-2.0",
   "docs": {

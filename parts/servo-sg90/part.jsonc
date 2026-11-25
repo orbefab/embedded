@@ -12,7 +12,7 @@
   "part": "servo-sg90",
   "version": "0.4.0",
   "title": "SG90 micro servo",
-  "summary": "9 g hobby servo with signal, 5 V and ground. A 0.5 ms high holds the shaft at 0° and a 2.4 ms high at 180°, and a pulse past those stops clamps. The Luxorparts sheet says 1 ms is 0°, 1.5 ms is 90° and 2 ms is 180°. The shaft follows the measured 0.5 ms to 2.4 ms travel instead. Speed is 0.12 s per 60° at 4.8 V and 0.10 s per 60° at 6 V, and it scales between those. Below 4.8 V it moves slower, and below 4.5 V it warns. Below 3.0 V it does nothing, and a supply that returns above 3.0 V follows the next pulse. When the moving draw pulls the supply under 3.0 V, the shaft holds and the part warns that the supply sags under the moving draw. It draws 5 mA while it holds and 140 mA while it moves. A 3.3 V signal counts as a high. `angle` is the shaft in degrees at the moment it is read, and the page turns the horn. The lead (brown GND, red VCC, orange SIGNAL) ends in a 3-pin female connector: place the servo beside the breadboard with `at` and run a jumper from each hole to its pin.",
+  "summary": "Tower Pro SG90, a 9 g 180° micro servo, 0.12 s per 60° at 4.8 V. Its 3-pin female lead is brown GND, red VCC, orange SIGNAL.",
   "tags": ["servo", "sg90", "motor", "pwm", "hobby", "starter"],
   "license": "MIT OR Apache-2.0",
   "docs": {
