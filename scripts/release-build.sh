@@ -11,6 +11,8 @@
 # form sha256sum writes. The default output directory is .scratch/release.
 # Needs the repo's Node dependencies (pnpm install --frozen-lockfile), Node 24,
 # pnpm, cargo and rustc. A tag build refuses a tag that is not v<version>.
+# Outside CI, scripts/check-lock.sh takes the shared per-user check lock and
+# defaults CARGO_BUILD_JOBS to 2 and NEXTEST_TEST_THREADS to 4.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -84,6 +86,10 @@ host=$(rustc -vV | sed -n 's/^host: //p')
 if [[ $host != "$target" ]]; then
   fail "this machine's rustc host is ${host:-unknown}. Pass that target. This script builds for the machine it runs on."
 fi
+
+# shellcheck source=scripts/check-lock.sh
+source scripts/check-lock.sh
+check_lock "scripts/release-build.sh" "scripts/release-build.sh $target"
 
 scripts/need-node-deps.sh scripts/release-build.sh
 pnpm --filter @orbe/viewer-page build
