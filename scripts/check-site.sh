@@ -167,8 +167,11 @@ for (const row of index.items.filter((row) => row.type === "block")) {
   }
 }' "$dist/r" "https://orbefab.com/embedded/sources/$archive"
 echo "check-site: the build serves sources/$archive, the runtime source each Block NOTICE names"
-# Each listed part's card picture must be drawn from the model the registry records.
-node apps/site/scripts/pictures.ts check || fail "a part's picture is missing or stale, as the lines above say"
+# Each listed part's card picture must be drawn from the model the registry records. The
+# registry it reads is the one scripts/site.sh just built, so a --no-build shard skips it.
+if [[ $no_build -eq 0 ]]; then
+  node apps/site/scripts/pictures.ts check || fail "a part's picture is missing or stale, as the lines above say"
+fi
 [[ -f apps/site/dist/wrangler-deploy.json ]] ||
   fail "the build has no wrangler deploy pointer at apps/site/dist/wrangler-deploy.json"
 
