@@ -1163,14 +1163,21 @@ fn file_sha(registry: &Path, id: &str, path: &str) -> String {
 fn cloned_registry() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let dest = tmp.path().join("reg");
-    let status = Command::new("cp")
-        .args(["-a", "--link"])
-        .arg(registry_env::dir())
-        .arg(&dest)
-        .status()
-        .unwrap();
-    assert!(status.success());
+    link_tree(registry_env::dir(), &dest);
     (tmp, dest)
+}
+
+fn link_tree(from: &Path, to: &Path) {
+    fs::create_dir(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            link_tree(&entry.path(), &target);
+        } else {
+            fs::hard_link(entry.path(), target).unwrap();
+        }
+    }
 }
 
 fn led_version_used_by_nano(reg: &Path) -> String {
