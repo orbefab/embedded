@@ -8,12 +8,23 @@ function PartGrid({ parts }: { parts: readonly Listed[] }) {
     <ul className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
       {parts.map((part) => (
         <li data-part={part.name} key={part.name}>
-          <a
-            className="flex h-full min-w-0 flex-col gap-1 border border-border p-4 transition-colors hover:border-brand max-sm:flex-row max-sm:items-center max-sm:justify-between max-sm:gap-3"
-            href={part.href}
-          >
-            <span className="min-w-0 font-medium">{part.title}</span>
-            {part.use === "" ? null : <span className="font-mono text-foreground text-xs sm:mt-auto">{part.use}</span>}
+          <a className="flex h-full min-w-0 flex-col border border-border transition-colors hover:border-brand" href={part.href}>
+            {part.picture === null ? null : (
+              <img
+                alt=""
+                className="block aspect-[4/3] w-full object-contain px-4 pt-4 max-sm:aspect-auto max-sm:h-40"
+                data-testid="part-picture"
+                decoding="async"
+                height={360}
+                loading="lazy"
+                src={part.picture}
+                width={480}
+              />
+            )}
+            <span className="flex min-w-0 flex-1 flex-col gap-1 p-4 max-sm:flex-row max-sm:items-center max-sm:justify-between max-sm:gap-3">
+              <span className="min-w-0 font-medium">{part.title}</span>
+              {part.use === "" ? null : <span className="font-mono text-foreground text-xs sm:mt-auto">{part.use}</span>}
+            </span>
           </a>
         </li>
       ))}

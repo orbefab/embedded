@@ -3,7 +3,7 @@
   "private": true,
   "license": "MIT OR Apache-2.0",
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./build": "./src/build.ts", "./refs": "./src/refs.ts", "./registry": "./src/registry.ts" },
+  "exports": { ".": "./src/index.ts", "./build": "./src/build.ts", "./camera-frame": "./src/camera-frame.ts", "./refs": "./src/refs.ts", "./registry": "./src/registry.ts", "./stage": "./src/stage.tsx" },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run"

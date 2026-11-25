@@ -31,6 +31,8 @@ export interface Listed extends Searchable {
   readonly section: PartSection;
   /** "in N Blocks", "on the …", or empty when neither applies. */
   readonly use: string;
+  /** The part's picture, drawn ahead of time from its 3D model, or null when it has none. */
+  readonly picture: string | null;
 }
 
 let catalogUse: ReturnType<typeof readCatalogUse> | undefined;
@@ -87,6 +89,8 @@ export const home = () => {
   };
 };
 
+const pictures = new Set(data.pictures);
+
 export const parts = (): Listed[] =>
   [...data.parts]
     .filter((item) => item.listed !== false)
@@ -103,6 +107,7 @@ export const parts = (): Listed[] =>
         href: at.part(record.name),
         section: sectionOfPart(record.name),
         use: whereLine(use),
+        picture: pictures.has(record.name) ? at.partPicture(record.name) : null,
       };
     });
 
