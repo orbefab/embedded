@@ -594,19 +594,61 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
     return;
   }
   if (block.kind === "pixels") {
-    await waitSimulatedPast(page, Math.max(0.05, start));
-    const colours = await page.evaluate(() => {
-      const scene = window.orbeViewer.get().scene;
-      return [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
-        const node = scene.getObjectByName(`@stick.px${n}`)?.getObjectByName("lens");
-        const material = node?.material ?? node?.children?.[0]?.material;
-        if (material === undefined) return null;
-        return { r: material.emissive.r, g: material.emissive.g, b: material.emissive.b, i: material.emissiveIntensity };
-      });
-    });
-    expect(colours.every((colour) => colour !== null && colour.i > 0.2), `${block.id} glow`).toBe(true);
-    const seen = new Set(colours.map((colour) => `${colour!.r.toFixed(3)},${colour!.g.toFixed(3)},${colour!.b.toFixed(3)}`));
-    expect(seen.size, `${block.id} colours`).toBeGreaterThan(1);
+    const firstHandle = await page.waitForFunction(
+      () => {
+        const scene = window.orbeViewer.get().scene;
+        const pixels = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
+          const node = scene.getObjectByName(`@stick.px${n}`)?.getObjectByName("lens");
+          const material = node?.material ?? node?.children?.[0]?.material;
+          if (material === undefined) return null;
+          return { r: material.emissive.r, g: material.emissive.g, b: material.emissive.b, i: material.emissiveIntensity };
+        });
+        if (!pixels.every((pixel) => pixel !== null && pixel.i > 0.2)) return null;
+        const seen = new Set(pixels.map((pixel) => `${pixel!.r.toFixed(3)},${pixel!.g.toFixed(3)},${pixel!.b.toFixed(3)}`));
+        return seen.size > 1 ? pixels : null;
+      },
+      null,
+      { timeout: 30_000 },
+    );
+    const first = (await firstHandle.jsonValue()) as { r: number; g: number; b: number; i: number }[];
+    expect(first.every((colour) => colour.i > 0.2), `${block.id} glow`).toBe(true);
+    const firstSeen = new Set(first.map((colour) => `${colour.r.toFixed(3)},${colour.g.toFixed(3)},${colour.b.toFixed(3)}`));
+    expect(firstSeen.size, `${block.id} colours`).toBeGreaterThan(1);
+
+    const secondHandle = await page.waitForFunction(
+      (prev) => {
+        const scene = window.orbeViewer.get().scene;
+        const pixels = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
+          const node = scene.getObjectByName(`@stick.px${n}`)?.getObjectByName("lens");
+          const material = node?.material ?? node?.children?.[0]?.material;
+          if (material === undefined) return null;
+          return { r: material.emissive.r, g: material.emissive.g, b: material.emissive.b, i: material.emissiveIntensity };
+        });
+        if (!pixels.every((pixel) => pixel !== null && pixel.i > 0.2)) return null;
+        const moved = pixels.some(
+          (pixel, index) =>
+            Math.abs(pixel!.r - prev[index].r) > 0.05 ||
+            Math.abs(pixel!.g - prev[index].g) > 0.05 ||
+            Math.abs(pixel!.b - prev[index].b) > 0.05,
+        );
+        return moved ? pixels : null;
+      },
+      first,
+      { timeout: 30_000 },
+    );
+    const second = (await secondHandle.jsonValue()) as { r: number; g: number; b: number; i: number }[];
+    expect(second.every((colour) => colour.i > 0.2), `${block.id} glow after move`).toBe(true);
+    const secondSeen = new Set(second.map((colour) => `${colour.r.toFixed(3)},${colour.g.toFixed(3)},${colour.b.toFixed(3)}`));
+    expect(secondSeen.size, `${block.id} colours after move`).toBeGreaterThan(1);
+    expect(
+      second.some(
+        (pixel, index) =>
+          Math.abs(pixel.r - first[index].r) > 0.05 ||
+          Math.abs(pixel.g - first[index].g) > 0.05 ||
+          Math.abs(pixel.b - first[index].b) > 0.05,
+      ),
+      `${block.id} colours changed`,
+    ).toBe(true);
     expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(0.05);
     if (shotName !== null) {
       await page.locator("canvas").scrollIntoViewIfNeeded();

@@ -4,12 +4,15 @@
 #define NUMPIXELS 8
 
 Adafruit_NeoPixel strip(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
+uint16_t firstHue = 0;
 
 void setup() {
   strip.begin();
-  strip.rainbow();
-  strip.show();
 }
 
 void loop() {
+  strip.rainbow(firstHue);
+  strip.show();
+  firstHue += 8192;
+  delay(800);
 }
