@@ -3,7 +3,7 @@
   "part": "lm7805-to220",
   "version": "0.2.1",
   "title": "LM7805 5 V regulator, TO-220",
-  "summary": "Fixed 5 V linear regulator in TO-220 for loads up to 1 A. The metal tab is ground.",
+  "summary": "Fixed 5 V linear regulator in TO-220 for loads up to 1.5 A. The metal tab is ground.",
   "tags": ["regulator", "linear", "power", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "docs": {

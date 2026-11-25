@@ -3,7 +3,7 @@
 // the p4 table, and the p3 absolute maximum ratings.
 {
   "format": 5, "part": "xc6206-sot23", "version": "0.1.1", "title": "XC6206 3.3 V regulator, SOT-23", "license": "MIT OR Apache-2.0",
-  "summary": "Torex XC6206P332MR, a fixed 3.3 V low-dropout regulator in SOT-23, marked 662K, for loads up to 200 mA from up to 6 V in.",
+  "summary": "Torex XC6206P332MR, a fixed 3.3 V low-dropout regulator in SOT-23 for loads up to 200 mA from up to 6 V in.",
   "tags": ["regulator", "ldo", "sot-23", "power", "662k"],
   "docs": { "Torex XC6206 ETR0305_004b": "https://media.githubusercontent.com/media/eiten/EWS/main/doc/datasheets/XC6206P332MR-G.pdf" },
   "real": { "maker": "Torex", "number": "XC6206P332MR", "datasheet": "Torex XC6206 ETR0305_004b" },

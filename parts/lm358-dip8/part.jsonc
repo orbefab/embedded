@@ -49,5 +49,6 @@
   },
   "not_simulated": [
     { "what": "common-mode failure", "why": "The input stage keeps comparing above input_headroom, and the run warns rating.voltage. TI SLOS068AB section 7.3.3, page 26, says the output phase is correct while at least one input stays in the common-mode range, from device ground to VS - 1.5 V at 25 C, and undefined when both inputs are outside it. An input more than 0.3 V below V- is not checked." },
+    { "what": "noise", "why": "A comparator with no hysteresis chatters on a slow input on the bench, and positive feedback fixes it. The engine has no noise, so a run does not show that chatter." },
   ],
 }
