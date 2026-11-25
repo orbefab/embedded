@@ -289,8 +289,11 @@ fn search_prints_title_matches_before_the_rest() {
     assert!(!names.contains(&"led-0805"), "{stdout}");
     assert!(!names.contains(&"sk68xxmini-hs"), "{stdout}");
     let led = names.iter().position(|name| *name == "led-5mm").unwrap();
-    let nano = names.iter().position(|name| *name == "nano-board").unwrap();
-    assert!(led < nano);
+    let board = names
+        .iter()
+        .position(|name| *name == "esp32s3-devkitc-1")
+        .unwrap();
+    assert!(led < board);
 
     let (code, stdout, stderr) = orbe(&["search", "blue", "led"]);
     assert_eq!(code, 0, "{stderr}");

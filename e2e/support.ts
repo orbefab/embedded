@@ -144,6 +144,8 @@ declare global {
     };
     orbeGlowSpan?: { min: number; max: number };
     orbeGlowTimer?: number;
+    orbeTurnSpan?: { min: number; max: number };
+    orbeTurnTimer?: number;
     lastPointer?: number;
   }
 }
@@ -244,6 +246,26 @@ export interface RepoBlock {
   id: string;
   kind: BlockKind;
   version?: string;
+  /** The sketch's loop() does something, so what the Block drives keeps changing. */
+  loops?: boolean;
+}
+
+/** Whether a sketch's loop() has a statement in it. `void loop() {}` holds what setup() left. */
+export function sketchLoops(sketch: string): boolean {
+  const code = sketch.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  const body = /void\s+loop\s*\(\s*\)\s*\{([\s\S]*)$/.exec(code)?.[1] ?? "";
+  return !/^\s*\}/.test(body);
+}
+
+/** The text of the Block's one sketch under firmware/, or null when it has none. */
+function repoSketch(id: string): string | null {
+  const firmware = join(REPO, "blocks", id, "firmware");
+  if (!existsSync(firmware)) return null;
+  for (const name of readdirSync(firmware)) {
+    const ino = join(firmware, name, `${name}.ino`);
+    if (existsSync(ino)) return readFileSync(ino, "utf8");
+  }
+  return null;
 }
 
 /** Blocks under `blocks/`. A scene this cannot classify fails the check. */
@@ -256,7 +278,13 @@ export function repoBlocks(): RepoBlock[] {
   return ids.map((id) => {
     const card = readFileSync(join(root, id, "block.jsonc"), "utf8");
     const version = card.match(/"version"\s*:\s*"([^"]+)"/)?.[1];
-    return { id, kind: blockKind(readFileSync(join(root, id, "scene.jsonc"), "utf8"), id), version };
+    const sketch = repoSketch(id);
+    return {
+      id,
+      kind: blockKind(readFileSync(join(root, id, "scene.jsonc"), "utf8"), id),
+      version,
+      loops: sketch === null ? undefined : sketchLoops(sketch),
+    };
   });
 }
 
@@ -536,18 +564,25 @@ async function showDigit(page: Page, block: RepoBlock, shotName: string | null):
   }
 }
 
-/** The sweep is over by this simulated time: the shaft holds at its 0° end from about 1.3 s. */
+/** A one-time sweep, 0° to 180° and back to 0°, is over by this simulated time. */
 const SWEEP_DONE_S = 1.5;
 /** write(0) is a 544 us pulse, which holds the shaft at 4.17°, 85.83° from the 90° centre. */
 const SWEEP_END_TURN = 85.83;
 
+/** The horn's turn from its rest, in degrees, or null before the viewer builds it. */
+function hornTurn(page: Page): Promise<number | null> {
+  return page.evaluate(() => {
+    const q = window.orbeViewer.get().scene.getObjectByName("@servo")?.getObjectByName("horn")?.quaternion;
+    return q === undefined ? null : (2 * Math.acos(Math.min(1, Math.abs(q.w))) * 180) / Math.PI;
+  });
+}
+
 /**
- * nano-servo-sweep moves the horn once, 0° to 180° and back to 0°, and then holds it. A page
- * can draw its first frame after that, so the check is where the horn ends, not that it moves
- * between two reads. servo-sg90's horn node has no rotation of its own, and the viewer draws it
- * at the 90° centre until a frame says otherwise, so its turn from rest is 90° minus the angle.
+ * A servo Block whose loop() is empty, such as the released nano-servo-sweep 0.3.0, moves the
+ * horn once and then holds it. A page can draw its first frame after that, so the check is
+ * where the horn ends, not that it moves.
  */
-async function showServo(page: Page, block: RepoBlock): Promise<void> {
+async function showServoHeld(page: Page, block: RepoBlock): Promise<void> {
   await waitSimulatedPast(page, SWEEP_DONE_S);
   // A frame reaches the horn when the next one draws, which software WebGL can hold back.
   await page
@@ -562,12 +597,51 @@ async function showServo(page: Page, block: RepoBlock): Promise<void> {
       { timeout: 30_000 },
     )
     .catch(() => undefined);
-  const turn = await page.evaluate(() => {
-    const q = window.orbeViewer.get().scene.getObjectByName("@servo")?.getObjectByName("horn")?.quaternion;
-    return q === undefined ? null : (2 * Math.acos(Math.min(1, Math.abs(q.w))) * 180) / Math.PI;
-  });
+  const turn = await hornTurn(page);
   expect(turn, `${block.id} horn turn from centre, degrees`).not.toBeNull();
   expect(Math.abs((turn ?? 0) - SWEEP_END_TURN), `${block.id} horn at ${turn}°, not ${SWEEP_END_TURN}° from centre`).toBeLessThan(1);
+}
+
+/** A one-time sweep would be over and holding by this simulated time. */
+const SWEEP_LATE_S = 2;
+/** nano-servo-sweep moves the shaft about 68° per simulated second, back and forth without end. */
+const SWEEP_WATCH_S = 1.5;
+
+/**
+ * nano-servo-sweep sweeps the horn from one end to the other and back, forever. From 2 s of
+ * simulated time on, the horn's turn from its rest is sampled while the page plays, and it must
+ * span tens of degrees. servo-sg90's horn node has no rotation of its own, and the viewer draws
+ * it at the 90° centre until a frame says otherwise, so its turn from rest is 90° minus the angle.
+ */
+async function showServo(page: Page, block: RepoBlock, start: number): Promise<void> {
+  if (block.loops === false) {
+    await showServoHeld(page, block);
+    return;
+  }
+  const from = Math.max(start, SWEEP_LATE_S);
+  await waitSimulatedPast(page, from);
+  await page.evaluate(() => {
+    window.orbeTurnSpan = undefined;
+    const sample = () => {
+      const q = window.orbeViewer.get().scene.getObjectByName("@servo")?.getObjectByName("horn")?.quaternion;
+      if (q === undefined) return;
+      const turn = (2 * Math.acos(Math.min(1, Math.abs(q.w))) * 180) / Math.PI;
+      const span = window.orbeTurnSpan ?? { min: turn, max: turn };
+      span.min = Math.min(span.min, turn);
+      span.max = Math.max(span.max, turn);
+      window.orbeTurnSpan = span;
+    };
+    sample();
+    window.orbeTurnTimer = window.setInterval(sample, 50);
+  });
+  try {
+    await waitSimulatedPast(page, from + SWEEP_WATCH_S);
+  } finally {
+    await page.evaluate(() => window.clearInterval(window.orbeTurnTimer));
+  }
+  const span = await page.evaluate(() => window.orbeTurnSpan ?? null);
+  expect(span, `${block.id} horn`).not.toBeNull();
+  expect((span?.max ?? 0) - (span?.min ?? 0), `${block.id} horn turned ${span?.min}° to ${span?.max}° from centre`).toBeGreaterThan(20);
 }
 
 /** Play, require simulated time to move, and check the behaviour the scene declares. */
@@ -630,7 +704,7 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
     return;
   }
   if (block.kind === "servo") {
-    await showServo(page, block);
+    await showServo(page, block, start);
     if (shotName !== null) {
       await page.locator("canvas").scrollIntoViewIfNeeded();
       await shot(page, shotName);
@@ -642,19 +716,64 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
     return;
   }
   if (block.kind === "pixels") {
-    await waitSimulatedPast(page, Math.max(0.05, start));
-    const colours = await page.evaluate(() => {
-      const scene = window.orbeViewer.get().scene;
-      return [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
-        const node = scene.getObjectByName(`@stick.px${n}`)?.getObjectByName("lens");
-        const material = node?.material ?? node?.children?.[0]?.material;
-        if (material === undefined) return null;
-        return { r: material.emissive.r, g: material.emissive.g, b: material.emissive.b, i: material.emissiveIntensity };
-      });
-    });
-    expect(colours.every((colour) => colour !== null && colour.i > 0.2), `${block.id} glow`).toBe(true);
-    const seen = new Set(colours.map((colour) => `${colour!.r.toFixed(3)},${colour!.g.toFixed(3)},${colour!.b.toFixed(3)}`));
-    expect(seen.size, `${block.id} colours`).toBeGreaterThan(1);
+    const firstHandle = await page.waitForFunction(
+      () => {
+        const scene = window.orbeViewer.get().scene;
+        const pixels = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
+          const node = scene.getObjectByName(`@stick.px${n}`)?.getObjectByName("lens");
+          const material = node?.material ?? node?.children?.[0]?.material;
+          if (material === undefined) return null;
+          return { r: material.emissive.r, g: material.emissive.g, b: material.emissive.b, i: material.emissiveIntensity };
+        });
+        if (!pixels.every((pixel) => pixel !== null && pixel.i > 0.2)) return null;
+        const seen = new Set(pixels.map((pixel) => `${pixel!.r.toFixed(3)},${pixel!.g.toFixed(3)},${pixel!.b.toFixed(3)}`));
+        return seen.size > 1 ? pixels : null;
+      },
+      null,
+      { timeout: 30_000 },
+    );
+    const first = (await firstHandle.jsonValue()) as { r: number; g: number; b: number; i: number }[];
+    expect(first.every((colour) => colour.i > 0.2), `${block.id} glow`).toBe(true);
+    const firstSeen = new Set(first.map((colour) => `${colour.r.toFixed(3)},${colour.g.toFixed(3)},${colour.b.toFixed(3)}`));
+    expect(firstSeen.size, `${block.id} colours`).toBeGreaterThan(1);
+
+    // Older tagged releases (before 0.2.0) latch a static rainbow once in setup().
+    if (block.version === undefined || compareVersions(block.version, "0.2.0") >= 0) {
+      const secondHandle = await page.waitForFunction(
+        (prev) => {
+          const scene = window.orbeViewer.get().scene;
+          const pixels = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
+            const node = scene.getObjectByName(`@stick.px${n}`)?.getObjectByName("lens");
+            const material = node?.material ?? node?.children?.[0]?.material;
+            if (material === undefined) return null;
+            return { r: material.emissive.r, g: material.emissive.g, b: material.emissive.b, i: material.emissiveIntensity };
+          });
+          if (!pixels.every((pixel) => pixel !== null && pixel.i > 0.2)) return null;
+          const moved = pixels.some(
+            (pixel, index) =>
+              Math.abs(pixel!.r - prev[index].r) > 0.05 ||
+              Math.abs(pixel!.g - prev[index].g) > 0.05 ||
+              Math.abs(pixel!.b - prev[index].b) > 0.05,
+          );
+          return moved ? pixels : null;
+        },
+        first,
+        { timeout: 30_000 },
+      );
+      const second = (await secondHandle.jsonValue()) as { r: number; g: number; b: number; i: number }[];
+      expect(second.every((colour) => colour.i > 0.2), `${block.id} glow after move`).toBe(true);
+      const secondSeen = new Set(second.map((colour) => `${colour.r.toFixed(3)},${colour.g.toFixed(3)},${colour.b.toFixed(3)}`));
+      expect(secondSeen.size, `${block.id} colours after move`).toBeGreaterThan(1);
+      expect(
+        second.some(
+          (pixel, index) =>
+            Math.abs(pixel.r - first[index].r) > 0.05 ||
+            Math.abs(pixel.g - first[index].g) > 0.05 ||
+            Math.abs(pixel.b - first[index].b) > 0.05,
+        ),
+        `${block.id} colours changed`,
+      ).toBe(true);
+    }
     expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(0.05);
     if (shotName !== null) {
       await page.locator("canvas").scrollIntoViewIfNeeded();

@@ -2,9 +2,9 @@
 {
   "format": 5,
   "part": "led-3mm-blue",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "3 mm LED, blue",
-  "summary": "Round 3 mm (T-1) through-hole LED, blue and water clear, two leads on 2.54 mm. The longer lead is the anode, and the flat on the rim marks the cathode. It warns above 30 mA and 120 mW.",
+  "summary": "Round 3 mm (T-1) through-hole LED, blue and water clear, two leads on 2.54 mm. The longer lead is the anode, and the flat on the rim marks the cathode.",
   "tags": ["led", "light", "indicator", "through-hole", "blue"],
   "license": "MIT OR Apache-2.0",
   "docs": {

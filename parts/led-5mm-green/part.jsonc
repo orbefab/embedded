@@ -2,9 +2,9 @@
 {
   "format": 5,
   "part": "led-5mm-green",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "5 mm LED, green",
-  "summary": "Round 5 mm through-hole LED, green and diffused, two leads on 2.54 mm. The longer lead is the anode. It warns above 25 mA and 62.5 mW. The page's glow is the mean current since the last frame, so a PWM-dimmed LED glows at its average.",
+  "summary": "Round 5 mm through-hole LED, green and diffused, two leads on 2.54 mm. The longer lead is the anode.",
   "tags": ["led", "light", "indicator", "through-hole", "green"],
   "license": "MIT OR Apache-2.0",
   "docs": {

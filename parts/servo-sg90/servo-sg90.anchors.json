@@ -2,8 +2,8 @@
   "part": "servo-sg90",
   "units": "mm",
   "anchors": [
-    {"lead": 1, "node": "lead-1", "also": [], "at": [-2.54, 6.1, -6.5], "axis": [0.0, 0.0, -1.0], "kind": "leg"},
-    {"lead": 2, "node": "lead-2", "also": [], "at": [0.0, 6.1, -6.5], "axis": [0.0, 0.0, -1.0], "kind": "leg"},
-    {"lead": 3, "node": "lead-3", "also": [], "at": [2.54, 6.1, -6.5], "axis": [0.0, 0.0, -1.0], "kind": "leg"}
+    {"lead": 1, "node": null, "also": [], "at": [-37.9, -2.54, 1.4], "axis": [-1.0, 0.0, 0.0], "kind": "socket"},
+    {"lead": 2, "node": null, "also": [], "at": [-37.9, 0.0, 1.4], "axis": [-1.0, 0.0, 0.0], "kind": "socket"},
+    {"lead": 3, "node": null, "also": [], "at": [-37.9, 2.54, 1.4], "axis": [-1.0, 0.0, 0.0], "kind": "socket"}
   ]
 }

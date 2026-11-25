@@ -178,8 +178,8 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
         .skip(title_hits.len())
         .map(|card| card.name.as_str())
         .collect();
-    assert!(rest.contains(&"nano-board"));
-    assert!(rest.contains(&"uno-board"));
+    assert!(rest.contains(&"display-7seg-ca"));
+    assert!(rest.contains(&"esp32s3-devkitc-1"));
     assert!(rest.windows(2).all(|pair| pair[0] < pair[1]));
 
     assert_eq!(search(&parts_dir(), "led-5mm")[0].name, "led-5mm");
@@ -495,7 +495,7 @@ fn lcd1602_i2c_card_describes_its_pins_params_parts_and_readings() {
         lcd.description
             .as_deref()
             .unwrap_or("")
-            .contains("@<lcd>.text")
+            .contains("PCF8574 I2C backpack")
     );
     assert!(!lcd.not_simulated.is_empty());
     assert_eq!(lcd.license, "MIT OR Apache-2.0");

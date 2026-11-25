@@ -13,13 +13,13 @@ wrote parts/resistor-axial 0.2.1
 
 The copy is the project's. Edit it. `orbe check`, `orbe open` and `orbe test` read `parts/<id>/` as it is and never use the network. For a part of your own, put it in a folder and name that folder as `"type": "./my-resistor"`.
 
-`orbe add` copies `part.jsonc`, the `.glb` and the anchors when the part has them. It does not copy `model.py` or `asset.json`. They build the shape.
+`orbe add` copies `part.jsonc`, the `.glb` and the anchors when the part has them. It does not copy `model.py` or `asset.json`.
 
-A folder already at `parts/<id>/` is `part_exists` and nothing is written. The message names the copy's version, as `parts/led-5mm is already led-5mm 0.3.0`. A part nested inside a board does not block adding that part on its own. Adding the board again after you remove `parts/<board>/` works while that part stays at the top of `parts/`.
+A folder already at `parts/<id>/` is `part_exists` and nothing is written. The message names the copy's version, as `parts/led-5mm is already led-5mm 0.3.1`. A part nested inside a board does not block adding that part on its own. Adding the board again after you remove `parts/<board>/` works while that part stays at the top of `parts/`.
 
 `@<registry>/<id>` is a usage error. This orbe reads the `@orbefab` registry only.
 
-Addressable LEDs: `neopixel-stick-8`. Eight from three pins: `hc595-dip16`, Block `nano-shift-leds`.
+Addressable LEDs: `neopixel-stick-8`. Eight from three pins: `hc595-dip16` (tie SRCLR high, OE low), Block `nano-shift-leds`.
 
 5 V to 3.3 V logic: `bss138-level-shifter`.
 

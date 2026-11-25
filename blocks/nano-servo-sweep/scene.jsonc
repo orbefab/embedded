@@ -1,24 +1,26 @@
-// An SG90 on a Nano. D9 is the signal. The servo's three leads sit in columns 22 to 24
-// on the f-j side: GND, VCC, SIGNAL. D9 is column 4 on that side.
+// An SG90 on a Nano. D9 is the signal. The servo stands beside the breadboard, past the
+// Y and Z rails, and its connector faces the board. Three jumpers run from the connector:
+// SIGNAL to j4, the column of D9, VCC to the + rail at Y5 and GND to the - rail at Z7.
+// The rails on that side take 5V and GND from the Nano's side at column 20.
 {
   "format": 1,
   "parts": {
     "bb": { "type": "breadboard-400" },
     "nano": { "type": "nano-board", "firmware": "build/sweep.ino.hex" },
-    "servo": { "type": "servo-sg90" }
+    "servo": { "type": "servo-sg90" },
   },
   "layout": {
     "bb": { "at": [0, 0, 0] },
     "nano": { "on": { "D13": "bb.d1" } },
-    "servo": { "on": { "GND": "bb.f22" } }
+    "servo": { "at": [-26.67, 86, 0], "rotate": [0, 0, 90] },
   },
   "wires": [
     ["bb.a12", "bb.W11", { "color": "#d12b2b" }],
     ["bb.a14", "bb.X14", { "color": "#161616" }],
     ["bb.W20", "bb.Y20", { "color": "#d12b2b" }],
     ["bb.X20", "bb.Z20", { "color": "#161616" }],
-    ["bb.j22", "bb.Z22", { "color": "#161616" }],
-    ["bb.j23", "bb.Y23", { "color": "#d12b2b" }],
-    ["bb.j4", "bb.j24"]
-  ]
+    ["bb.Z7", "servo.GND", { "color": "#161616" }],
+    ["bb.Y5", "servo.VCC", { "color": "#d12b2b" }],
+    ["bb.j4", "servo.SIGNAL", { "color": "#f28c1c" }],
+  ],
 }
