@@ -6,7 +6,7 @@
     "atmega328p",
     "usb"
   ],
-  "description": "ATmega328P board, 18 x 43.2 mm, 30 pins on two rows 15.24 mm apart. D13 drives the L LED. Powered from USB. 3V3 holds about 3.3 V from the CH340G while 5V is up.",
+  "description": "Nano-compatible board: an ATmega328P at 16 MHz and a CH340G USB-serial chip on 18 x 43.2 mm, with 30 pins on two rows that plug into a breadboard.",
   "docs": [
     {
       "name": "Arduino Nano A000005 datasheet",
@@ -245,10 +245,10 @@
   },
   "title": "Nano (CH340 clone)",
   "uses": {
-    "ams1117-sot223": "0.2.1",
-    "atmega328p-tqfp32": "0.2.1",
+    "ams1117-sot223": "0.2.2",
+    "atmega328p-tqfp32": "0.2.2",
     "capacitor-0603": "0.2.0",
-    "capacitor-tantalum-3216": "0.2.1",
+    "capacitor-tantalum-3216": "0.2.2",
     "ch340g": "0.2.1",
     "crystal-3215": "0.2.0",
     "diode-sod123": "0.2.1",
@@ -260,5 +260,5 @@
     "tactile-switch-smd": "0.2.0",
     "usb-mini-b": "0.2.1"
   },
-  "version": "0.2.2"
+  "version": "0.2.3"
 }

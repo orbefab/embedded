@@ -30,7 +30,7 @@ test("the start page shows each command and the Block's scene", async ({ browser
   expect(body).toContain("The scene file describes the circuit:");
   expect(body).toContain("Runs the firmware and the Block's tests.");
   expect(body).toContain("Opens the circuit in 3D, runs time, then closes the session.");
-  expect(body).toContain("Boards:");
+  expect(body).not.toContain("Boards:");
   expect(body).not.toContain("Boards today:");
   expect(body).not.toContain("parts.lock");
   expect(body).not.toContain("releases page");

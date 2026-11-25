@@ -2,21 +2,21 @@
   "part": "relay-module-1ch",
   "source": {
     "script": "model.py",
-    "sha256": "ab2b305f3c284b806f2dbe0a6c721c10de63019fd957e57c1305484832a80124",
-    "bytes": 1590
+    "sha256": "29b0ea07ddedc33518153e25ab634ac451e2e510e36568df5f9b3b2a703ac9d2",
+    "bytes": 1771
   },
   "files": {
     "relay-module-1ch.glb": {
-      "sha256": "9952d794c2b0d9bb91d4d437efb6390ef461bc7d05a52987375ece239e987c08",
-      "bytes": 2868
+      "sha256": "ad169b60cec1663907d3c36073a44803b6b24db71f5ca14da3398f79d72b90b8",
+      "bytes": 22208
     }
   },
   "box": {
     "min": [-17.000001, -11.5, 2.54],
-    "max": [17.000001, 15.5, 12.14]
+    "max": [17.000001, 15.5, 4.14]
   },
   "kept_nodes": [],
-  "draw_calls": 2,
+  "draw_calls": 1,
   "checks": {
     "frame": {
       "root_rotation": [-0.707107, 0, 0, 0.707107]
@@ -33,14 +33,14 @@
       "nodes": []
     },
     "merge": {
-      "primitives_in": 2,
-      "primitives_out": 2
+      "primitives_in": 1,
+      "primitives_out": 1
     },
     "composition": {
-      "children": 7,
+      "children": 8,
       "lowest_node": "pcb",
       "z_mm": 2.54,
-      "draw_calls": 29
+      "draw_calls": 33
     }
   }
 }

@@ -654,7 +654,7 @@ fn add_refuses_a_folder_that_is_not_a_project() {
 
     let (output, stdout, stderr) = orbe_in(lonely.path(), &["add", "led-5mm"]);
     assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
-    assert!(stdout.contains("wrote parts/led-5mm 0.3.0\n"), "{stdout}");
+    assert!(stdout.contains("wrote parts/led-5mm 0.3.1\n"), "{stdout}");
     assert!(lonely.path().join("parts/led-5mm/part.jsonc").is_file());
     assert!(!lonely.path().join("scene.jsonc").exists());
 
@@ -849,6 +849,6 @@ fn a_user_folder_at_the_old_add_trash_is_left_in_place() {
     .unwrap();
     let (output, stdout, stderr) = orbe_in(project.path(), &["add", "led-5mm"]);
     assert_eq!(output.status.code(), Some(0), "{stdout}{stderr}");
-    assert_eq!(stdout, "wrote parts/led-5mm 0.3.0\n");
+    assert_eq!(stdout, "wrote parts/led-5mm 0.3.1\n");
     assert_eq!(fs::read(&note).unwrap(), b"KEEP-ME\n");
 }

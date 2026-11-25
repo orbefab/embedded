@@ -1,9 +1,9 @@
 {
   "format": 5,
   "part": "resistor-sqp15",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "Power resistor, 15 W cement",
-  "summary": "15 W cement wirewound resistor (Yageo SQP15A) for a load such as an LED strip, a lamp or a heater. Set its resistance. The series is sold in E24 and E96 from 0.1 Ω to 680 Ω. The leads seat 20 holes apart. The body runs hot, so keep it off the breadboard plastic: set it beside the board and jumper to the leads.",
+  "summary": "15 W cement wirewound power resistor, Yageo SQP15A, for a load such as an LED strip, a lamp or a heater. Set its resistance.",
   "tags": ["resistor", "power resistor", "load", "strip", "lamp", "heater", "wirewound", "cement", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "docs": { "Yageo SQP/NSP": "https://www.mouser.com/datasheet/3/508/1/YAGEO_SQP_NSP_DATASHEET.pdf" },

@@ -21,6 +21,7 @@ import {
   type RepoBlock,
   shot,
   showBlock,
+  sketchLoops,
   test,
   waitBlockReady,
   waitGlow,
@@ -28,6 +29,7 @@ import {
 } from "../../../e2e/support";
 
 import { blockLicenseSummary } from "../src/format";
+import { PART_SECTIONS } from "../src/sections";
 
 const INSTALL = /orbe add|cargo install|orbefab\.com\/orbe\/install\.sh/;
 const VIEW = { width: 1280, height: 900 };
@@ -158,7 +160,9 @@ function releasedBlocks(): RepoBlock[] {
     const scene = record.files.find((file) => file.path === "scene.jsonc");
     if (scene === undefined) throw new Error(`${id} has no scene.jsonc in the registry`);
     const text = readFileSync(join(registryDir(), "files", scene.sha256), "utf8");
-    return { id, kind: blockKind(text, id), version: record.version };
+    const sketch = record.files.find((file) => /^firmware\/[^/]+\/[^/]+\.ino$/.test(file.path));
+    const loops = sketch === undefined ? undefined : sketchLoops(readFileSync(join(registryDir(), "files", sketch.sha256), "utf8"));
+    return { id, kind: blockKind(text, id), version: record.version, loops };
   });
 }
 
@@ -483,7 +487,7 @@ test.describe("landing", () => {
     expect(body).toContain("Use the AI agent you already have, on your own subscription.");
     expect(body).toContain("Every step is a command an agent can run, and orbe skills get core tells it how.");
     expect(body).toContain("In a terminal for the agent, or live in 3D for you, on every Block page.");
-    expect(body).toContain("Boards:");
+    expect(body).not.toContain("Boards:");
     expect(body).not.toContain("Boards today:");
   });
 
@@ -565,6 +569,8 @@ test.describe("parts search", () => {
     };
     const catalog = newestPerName(index.items).filter((row) => row.type === "part" && row.listed !== false).length;
     expect(await page.locator("[data-part]").count()).toBe(catalog);
+    const headings = await page.locator("section[data-section] h2").allInnerTexts();
+    expect(headings.map((text) => text.toLowerCase())).toEqual(PART_SECTIONS.map((section) => section.toLowerCase()));
   });
 
   test("a card says where the part is used", async () => {

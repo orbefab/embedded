@@ -1,12 +1,11 @@
 import type { ReactNode } from "react";
-import type { BlockCard, Linked } from "../data";
+import type { BlockCard } from "../data";
 import { at } from "../paths";
 import { STARTER } from "../starter";
 import { CliComing, Install } from "./layout";
 
 export interface Home {
   readonly blocks: readonly BlockCard[];
-  readonly boards: readonly Linked[];
   readonly parts: number;
   /** The starter Block's scene.jsonc, the file the third step shows. */
   readonly scene: string;
@@ -53,24 +52,6 @@ function SceneFile({ text }: { text: string }) {
         })}
       </pre>
     </div>
-  );
-}
-
-function Boards({ boards }: { boards: readonly Linked[] }) {
-  const sorted = [...boards].sort((a, b) => a.title.localeCompare(b.title));
-  return (
-    <p className="mt-8 text-muted-foreground">
-      Boards:{" "}
-      {sorted.map((board, index) => (
-        <span key={board.href}>
-          {index === 0 ? "" : index === sorted.length - 1 ? " and " : ", "}
-          <a className="underline underline-offset-[3px] hover:text-brand" href={board.href}>
-            {board.title}
-          </a>
-        </span>
-      ))}
-      .
-    </p>
   );
 }
 
@@ -186,7 +167,6 @@ export function HomePage({ home }: { home: Home }) {
           <span className="mt-2 block text-muted-foreground text-sm">{home.parts} parts in the catalog, from boards to resistors.</span>
         </a>
       </div>
-      <Boards boards={home.boards} />
     </>
   );
 }

@@ -9,9 +9,9 @@
 {
   "format": 6,
   "part": "oled-ssd1306-128x64",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "OLED display module, 0.96 inch 128 x 64, SSD1306, I2C",
-  "summary": "A 0.96 inch 128 x 64 white OLED on a 27.3 x 27.8 mm board, with a 4-pin header, GND, VCC, SCL, SDA, on 2.54 mm that plugs into a breadboard. The SSD1306 answers at I2C address 0x3C. A 3.3 V regulator feeds the panel, so VCC takes 3.3 V to 5 V, and the board pulls SCL and SDA up to 3.3 V through 4.7 kohm. The panel draws about 1 uA with the display off, and with it on from 11.7 mA with no pixel lit to 23.3 mA with all of them. Read the screen as `@<module>.display.screen`: `get` prints its lit pixels as text art. Adafruit SSD1306 and U8g2 drive it.",
+  "summary": "0.96 inch 128 x 64 white OLED module with an SSD1306 on I2C at address 0x3C, for 3.3 V or 5 V. Adafruit SSD1306 and U8g2 drive it.",
   "tags": ["oled", "display", "screen", "ssd1306", "128x64", "i2c", "0.96"],
   "license": "MIT OR Apache-2.0",
   "docs": {
@@ -27,7 +27,7 @@
   },
   "uses": {
     "capacitor-0603": "0.2.0", "pin-header-1x4": "0.1.0", "resistor-0603": "0.2.0",
-    "ssd1306-oled-128x64": "0.1.0", "xc6206-sot23": "0.1.0",
+    "ssd1306-oled-128x64": "0.1.1", "xc6206-sot23": "0.1.1",
   },
   "parts": {
     "j": { "type": "pin-header-1x4" },

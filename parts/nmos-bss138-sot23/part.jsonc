@@ -1,10 +1,10 @@
 {
   "format": 5,
   "part": "nmos-bss138-sot23",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "BSS138 N-channel MOSFET, SOT-23",
   "license": "MIT OR Apache-2.0",
-  "summary": "onsemi BSS138 N-channel MOSFET in SOT-23. 50 V, 0.22 A, gate to ±20 V. Lead 1 is the gate, lead 2 the source and lead 3 the drain. A 3.3 V gate is above the 1.3 V typical threshold, so the channel is on. The dot marks lead 1.",
+  "summary": "onsemi BSS138 N-channel logic-level MOSFET in SOT-23, for 50 V and 0.22 A. The dot marks lead 1.",
   "tags": ["transistor", "mosfet", "nmos", "sot-23"],
   "docs": {
     "onsemi BSS138/D, Rev. 7, April 2024": "https://www.onsemi.com/download/data-sheet/pdf/bss138-d.pdf",

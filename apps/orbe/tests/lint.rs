@@ -1225,18 +1225,13 @@ fn a_relay_contact_into_an_led_warns_without_a_series_resistor() {
     let dropped = scene
         .lines()
         .filter(|line| !line.contains("\"r1\":"))
-        .map(|line| {
-            line.replace(
-                "[\"relay.NO\", \"r1.a\"],",
-                "[\"relay.NO\", \"led1.anode\"],",
-            )
-        })
-        .filter(|line| !line.contains("r1.b"))
+        // NO's jumper moves from r1's strip to the LED anode's.
+        .map(|line| line.replace("[\"relay.NO\", \"bb.j17\"],", "[\"relay.NO\", \"bb.j21\"],"))
         .collect::<Vec<_>>()
         .join("\n")
         .replace("build/relay.ino.hex", "build/button.ino.hex");
     assert!(
-        !dropped.contains("r1") && dropped.contains("[\"relay.NO\", \"led1.anode\"]"),
+        !dropped.contains("r1") && dropped.contains("[\"relay.NO\", \"bb.j21\"]"),
         "{dropped}"
     );
     let dir = project(&dropped);

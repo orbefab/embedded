@@ -2,9 +2,9 @@
 {
   "format": 5,
   "part": "led-5mm",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "title": "5 mm LED, red",
-  "summary": "Round 5 mm through-hole LED, red and diffused, two leads on 2.54 mm. The longer lead is the anode. It warns above 30 mA and 75 mW. The page's glow is the mean current since the last frame, so a PWM-dimmed LED glows at its average.",
+  "summary": "Round 5 mm through-hole LED, red and diffused, two leads on 2.54 mm. The longer lead is the anode.",
   "tags": ["led", "light", "indicator", "through-hole", "red"],
   "license": "MIT OR Apache-2.0",
   "docs": {

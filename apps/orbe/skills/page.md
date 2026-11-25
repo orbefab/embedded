@@ -20,11 +20,11 @@ When you can see the page, check that no wire runs through a part and that parts
 
 ## A servo
 
-`get @servo` and `get @servo.angle` read the shaft in degrees, and the page turns the horn to it. A pulse past the mechanical stops clamps, and when the pulses stop the horn stays where it is.
+`get @servo` and `get @servo.angle` read the shaft in degrees, and the page turns the horn to it. On `servo-sg90`, 0.5 ms is 0° and 2.4 ms is 180°, a 3.3 V signal counts as high, a pulse past those stops clamps, and when the pulses stop the horn stays where it is.
 
 ## A knob
 
-`set` turns a knob while the session runs. It changes only a param `orbe part` says `set` changes, inside its range. The next `step` solves with it, so the wiper's voltage and the sketch's `analogRead` move. `orbe get @pot1.position` reads it.
+`set` turns a knob while the session runs. It changes only a param `orbe part` says `set` changes, inside its range. The next `step` solves with it, so the wiper's voltage and the sketch's `analogRead` move. `orbe get @pot1.position` reads it. `position` is the share of the track from `a` to the wiper, and clockwise moves the wiper toward `b`.
 
 This wiper feeds A0, and D13 lights over half scale.
 
