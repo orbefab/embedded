@@ -7,9 +7,9 @@
 {
   "format": 6,
   "part": "neopixel-stick-8",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "title": "NeoPixel stick, 8 RGB LED",
-  "summary": "Eight addressable RGB LEDs on a 50.8 x 10.2 mm board, chained DOUT to DIN, with a 3-pin header (GND, 5V, DIN) on 2.54 mm that plugs into a breadboard. Each LED is modelled by the SK6812MINI-HS: 1 mA idle plus 12 mA per channel at 255 from 5V, so eight at full white draw 296 mA. Adafruit gives about 18 mA per channel for the stick's own LEDs, so a real stick can draw more. The last LED's DOUT stays on the board.",
+  "summary": "Eight addressable RGB LEDs in a row on a 50.8 x 10.2 mm board, chained on one data line, with a 3-pin header (GND, 5V, DIN) for a breadboard.",
   "tags": ["led", "rgb", "neopixel", "ws2812", "strip", "addressable"],
   "license": "MIT OR Apache-2.0",
   "docs": {
@@ -25,7 +25,7 @@
   "buy": [
     { "seller": "Adafruit", "url": "https://www.adafruit.com/product/1426", "checked": "2026-11-22" },
   ],
-  "uses": { "pin-header-1x3": "0.1.0", "sk68xxmini-hs": "0.2.1" },
+  "uses": { "pin-header-1x3": "0.1.0", "sk68xxmini-hs": "0.2.2" },
   "parts": {
     "j": { "type": "pin-header-1x3" },
     "px1": { "type": "sk68xxmini-hs" },

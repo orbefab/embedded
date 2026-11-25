@@ -6,9 +6,9 @@
 {
   "format": 6,
   "part": "bmp280",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "BMP280 temperature and pressure sensor",
-  "summary": "Bosch BMP280 in an 8-pad LGA, 2.0 x 2.5 mm. It reads the scene's temperature and pressure over I2C. SDO low is address 0x76 and SDO high is 0x77. CSB must stay high; low is SPI, which is not modelled. The chip id is 0x58. A compensated read matches the world within 1 °C and 1 hPa.",
+  "summary": "Bosch BMP280 barometric pressure and temperature sensor in an 8-pad 2.0 x 2.5 mm LGA. It talks I2C: SDO low is 0x76, SDO high is 0x77.",
   "tags": ["bmp280", "temperature", "pressure", "sensor", "i2c", "lga"],
   "license": "MIT OR Apache-2.0",
   "docs": {

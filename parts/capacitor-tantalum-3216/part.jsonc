@@ -1,6 +1,6 @@
 {
-  "format": 4, "part": "capacitor-tantalum-3216", "version": "0.2.1", "title": "Capacitor, 3216 tantalum", "license": "MIT OR Apache-2.0",
-  "summary": "Polarized 3216 (3.2 x 1.6 mm) tantalum chip. Lead 1 is the anode, marked by the stripe. Set its capacitance. A reverse voltage past 2.4 V warns.",
+  "format": 4, "part": "capacitor-tantalum-3216", "version": "0.2.2", "title": "Capacitor, 3216 tantalum", "license": "MIT OR Apache-2.0",
+  "summary": "Polarized 3216 (3.2 x 1.6 mm) tantalum chip capacitor, with a stripe marking the anode. Set its capacitance.",
   "tags": ["capacitor", "tantalum", "polarized", "smd"],
   "docs": { "KEMET T491, case A": null },
   "real": { "generic": true, "maker": null, "number": null, "datasheet": "KEMET T491, case A" },

@@ -2,7 +2,7 @@
 {
   "format": 1,
   "block": "nano-servo-sweep",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "title": "SG90 servo sweep on a Nano",
   "summary": "An SG90 on D9 of an Arduino Nano sweeps from 0° to 180° and back with the Servo library.",
   "board": "nano-board",

@@ -385,7 +385,7 @@ fn a_part_install_follows_an_at_redirect_and_writes_the_copy() {
     env.push(("XDG_CACHE_HOME", cache_home.as_str()));
     let (code, stdout, stderr) = run_env(dir.path(), &["add", "led-5mm"], &server.template(), &env);
     assert_eq!(code, 0, "{stdout}{stderr}");
-    assert_eq!(stdout, "wrote parts/led-5mm 0.3.0\n");
+    assert_eq!(stdout, "wrote parts/led-5mm 0.3.1\n");
     assert!(dir.path().join("parts/led-5mm/part.jsonc").is_file());
     assert_eq!(
         server.redirect_count(),

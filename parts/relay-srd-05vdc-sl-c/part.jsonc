@@ -4,9 +4,9 @@
 {
   "format": 5,
   "part": "relay-srd-05vdc-sl-c",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "Relay, Songle SRD-05VDC-SL-C",
-  "summary": "5 V SPDT relay, coil about 70 ohm. The contact closes when the coil rises through 3.75 V and opens when it falls through 0.5 V, so a sagging coil drops it and a voltage between the two leaves it where it was. The coil current is `i`. `closed` and `open` read the contact. Form C contacts are rated 7 A at 28 V DC.",
+  "summary": "Songle SRD-05VDC-SL-C, a 5 V SPDT relay with a 70 ohm coil. Its form C contacts are rated 7 A at 28 V DC.",
   "tags": ["relay", "songle", "coil", "spdt", "5v"],
   "license": "MIT OR Apache-2.0",
   "docs": {
