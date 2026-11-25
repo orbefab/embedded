@@ -488,6 +488,40 @@ async function showDigit(page: Page, block: RepoBlock, shotName: string | null):
   }
 }
 
+/** The sweep is over by this simulated time: the shaft holds at its 0° end from about 1.3 s. */
+const SWEEP_DONE_S = 1.5;
+/** write(0) is a 544 us pulse, which holds the shaft at 4.17°, 85.83° from the 90° centre. */
+const SWEEP_END_TURN = 85.83;
+
+/**
+ * nano-servo-sweep moves the horn once, 0° to 180° and back to 0°, and then holds it. A page
+ * can draw its first frame after that, so the check is where the horn ends, not that it moves
+ * between two reads. servo-sg90's horn node has no rotation of its own, and the viewer draws it
+ * at the 90° centre until a frame says otherwise, so its turn from rest is 90° minus the angle.
+ */
+async function showServo(page: Page, block: RepoBlock): Promise<void> {
+  await waitSimulatedPast(page, SWEEP_DONE_S);
+  // A frame reaches the horn when the next one draws, which software WebGL can hold back.
+  await page
+    .waitForFunction(
+      (want) => {
+        const q = window.orbeViewer.get().scene.getObjectByName("@servo")?.getObjectByName("horn")?.quaternion;
+        if (q === undefined) return false;
+        const turn = (2 * Math.acos(Math.min(1, Math.abs(q.w))) * 180) / Math.PI;
+        return Math.abs(turn - want) < 1;
+      },
+      SWEEP_END_TURN,
+      { timeout: 30_000 },
+    )
+    .catch(() => undefined);
+  const turn = await page.evaluate(() => {
+    const q = window.orbeViewer.get().scene.getObjectByName("@servo")?.getObjectByName("horn")?.quaternion;
+    return q === undefined ? null : (2 * Math.acos(Math.min(1, Math.abs(q.w))) * 180) / Math.PI;
+  });
+  expect(turn, `${block.id} horn turn from centre, degrees`).not.toBeNull();
+  expect(Math.abs((turn ?? 0) - SWEEP_END_TURN), `${block.id} horn at ${turn}°, not ${SWEEP_END_TURN}° from centre`).toBeLessThan(1);
+}
+
 /** Play, require simulated time to move, and check the behaviour the scene declares. */
 export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, shotName: string | null): Promise<void> {
   await page.locator("canvas").scrollIntoViewIfNeeded();
@@ -548,18 +582,7 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
     return;
   }
   if (block.kind === "servo") {
-    const horn = () =>
-      page.evaluate(() => {
-        const node = window.orbeViewer.get().scene.getObjectByName("@servo")?.getObjectByName("horn");
-        const q = node?.quaternion;
-        return q === undefined ? null : [q.x, q.y, q.z, q.w];
-      });
-    const before = await horn();
-    await waitSimulatedPast(page, Math.max(0.4, start + 0.3));
-    const after = await horn();
-    expect(before, `${block.id} horn`).not.toBeNull();
-    expect(after, `${block.id} horn`).not.toEqual(before);
-    expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(0.3);
+    await showServo(page, block);
     if (shotName !== null) {
       await page.locator("canvas").scrollIntoViewIfNeeded();
       await shot(page, shotName);
