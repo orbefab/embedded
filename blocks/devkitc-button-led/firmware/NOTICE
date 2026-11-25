@@ -28,8 +28,10 @@ under that same notice, with the line Copyright (c) 2015-2019 Cadence Design Sys
 TLSF heap allocator is under the BSD-3-Clause License, reproduced with its notice in
 LICENSE-tlsf, and the undefined behaviour sanitizer hooks under the BSD-2-Clause terms
 reproduced with their notice in LICENSE-ubsan. The image also holds routines of the toolchain's
-C library, newlib, under the notices of LICENSE-newlib, and of the compiler's support library,
-under the GCC Runtime Library Exception. The image also links Mbed TLS's platform_util.c from
+C library, newlib, under the notices of LICENSE-newlib, and of GCC's runtime libraries
+(`libgcc` and `libstdc++`), under GPL-3.0-or-later with the GCC Runtime Library Exception 3.1,
+whose text is in LICENSE-gcc-exception. That exception lets the compiled runtime ship inside
+the program under the program's own terms. The image also links Mbed TLS's platform_util.c from
 libmbedcrypto.a (mbedtls_platform_zeroize), Copyright The Mbed TLS Contributors, which ESP-IDF
 carries under Apache-2.0 OR GPL-2.0-or-later, used here under the Apache License 2.0.
 
@@ -44,4 +46,5 @@ under LGPL-2.1-or-later.
 `firmware/LICENSE-apache` is under Apache-2.0. `firmware/LICENSE-freertos` is under MIT.
 `firmware/LICENSE-tlsf` is under BSD-3-Clause. `firmware/LICENSE-newlib` holds newlib's notices.
 `firmware/LICENSE-ubsan` is under BSD-2-Clause. `firmware/LICENSE-xtensa` is under the notice
-in that file. In `block.jsonc`, `LicenseRef-newlib` names `firmware/LICENSE-newlib`.
+in that file. `firmware/LICENSE-gcc-exception` holds the GCC Runtime Library Exception 3.1 (GPL-3.0-or-later
+WITH GCC-exception-3.1). In `block.jsonc`, `LicenseRef-newlib` names `firmware/LICENSE-newlib`.

@@ -91,6 +91,11 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
         );
         assert!(!spdx_parses("MIT OR"), "{id}");
         assert!(!spdx_parses("(MIT OR Apache-2.0"), "{id}");
+        assert!(!spdx_parses("GPL-3.0-or-later WITH"), "{id}");
+        assert!(
+            !spdx_parses("(MIT OR Apache-2.0) WITH GCC-exception-3.1"),
+            "{id}"
+        );
         let terms = spdx_and_terms(expr);
         assert_eq!(
             terms.first().copied(),
@@ -310,6 +315,7 @@ fn license_file_spdx(name: &str) -> Option<&'static str> {
         | "LICENSE-liquidcrystal-i2c"
         | "LICENSE-xtensa" => Some("MIT"),
         "LICENSE-newlib" => Some("LicenseRef-newlib"),
+        "LICENSE-gcc-exception" => Some("GPL-3.0-or-later WITH GCC-exception-3.1"),
         _ => None,
     }
 }
@@ -386,20 +392,17 @@ fn spdx_parses(text: &str) -> bool {
                 self.text = &self.text[1..];
                 return self.or() && self.op(")");
             }
-            self.ident()
-        }
-        fn with(&mut self) -> bool {
-            if !self.primary() {
+            if !self.ident() {
                 return false;
             }
             if self.op("WITH") { self.ident() } else { true }
         }
         fn and(&mut self) -> bool {
-            if !self.with() {
+            if !self.primary() {
                 return false;
             }
             while self.op("AND") {
-                if !self.with() {
+                if !self.primary() {
                     return false;
                 }
             }

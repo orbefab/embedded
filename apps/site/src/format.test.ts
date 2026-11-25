@@ -48,8 +48,13 @@ describe("blockLicenseSummary", () => {
     );
     expect(
       blockLicenseSummary(
-        "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND Apache-2.0 AND MIT AND BSD-3-Clause AND BSD-2-Clause AND LicenseRef-newlib",
+        "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND GPL-3.0-or-later WITH GCC-exception-3.1",
       ),
-    ).toBe("MIT OR Apache-2.0, plus 6 third-party licenses");
+    ).toBe("MIT OR Apache-2.0, plus 3 third-party licenses");
+    expect(
+      blockLicenseSummary(
+        "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND Apache-2.0 AND MIT AND BSD-3-Clause AND BSD-2-Clause AND LicenseRef-newlib AND GPL-3.0-or-later WITH GCC-exception-3.1",
+      ),
+    ).toBe("MIT OR Apache-2.0, plus 7 third-party licenses");
   });
 });

@@ -7,5 +7,5 @@
   "summary": "A button on D2 lights a red LED on D13 of an Arduino Uno, and the board's own L LED with it.",
   "board": "uno-board",
   "tags": ["button", "led", "digital input", "uno"],
-  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause",
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND GPL-3.0-or-later WITH GCC-exception-3.1",
 }
