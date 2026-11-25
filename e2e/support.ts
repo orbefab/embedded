@@ -387,20 +387,42 @@ async function showScreen(page: Page, ref: string, shotName: string | null): Pro
   }
 }
 
-/** Eight LEDs on a 74HC595. QA is led1, the least significant bit of 0x55. */
+/** Eight LEDs on a 74HC595. The sketch walks one lit LED from QA (led1) to QH (led8) and back. */
 async function showShift(page: Page, id: string, shotName: string | null): Promise<void> {
-  await waitSimulatedPast(page, 0.2);
-  const glows = await page.evaluate(() =>
-    [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
-      const body = window.orbeViewer.get().scene.getObjectByName(`@led${n}`)?.getObjectByName("body");
-      const material = body?.material;
-      return typeof material?.emissiveIntensity === "number" ? material.emissiveIntensity : -1;
-    }),
+  const firstHandle = await page.waitForFunction(
+    () => {
+      const glows = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
+        const body = window.orbeViewer.get().scene.getObjectByName(`@led${n}`)?.getObjectByName("body");
+        const material = body?.material;
+        return typeof material?.emissiveIntensity === "number" ? material.emissiveIntensity : -1;
+      });
+      return glows.some((glow) => glow > 0.15) && glows.some((glow) => glow < 0.05) ? glows : null;
+    },
+    null,
+    { timeout: 30_000 },
   );
-  glows.forEach((glow, index) => {
-    if (index % 2 === 0) expect(glow, `${id} led${index + 1}`).toBeGreaterThan(0.15);
-    else expect(glow, `${id} led${index + 1}`).toBeLessThan(0.05);
-  });
+  const first = (await firstHandle.jsonValue()) as number[];
+  expect(first.some((glow) => glow > 0.15), `${id} first frame has a lit LED`).toBe(true);
+  expect(first.some((glow) => glow < 0.05), `${id} first frame has a dark LED`).toBe(true);
+
+  const secondHandle = await page.waitForFunction(
+    (prev) => {
+      const glows = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
+        const body = window.orbeViewer.get().scene.getObjectByName(`@led${n}`)?.getObjectByName("body");
+        const material = body?.material;
+        return typeof material?.emissiveIntensity === "number" ? material.emissiveIntensity : -1;
+      });
+      const turnedOff = glows.some((glow, index) => prev[index] > 0.15 && glow < 0.05);
+      const turnedOn = glows.some((glow, index) => prev[index] < 0.05 && glow > 0.15);
+      return turnedOff && turnedOn ? glows : null;
+    },
+    first,
+    { timeout: 30_000 },
+  );
+  const second = (await secondHandle.jsonValue()) as number[];
+  expect(second.some((glow, index) => first[index] > 0.15 && glow < 0.05), `${id} a lit LED turned off`).toBe(true);
+  expect(second.some((glow, index) => first[index] < 0.05 && glow > 0.15), `${id} a dark LED turned on`).toBe(true);
+
   if (shotName !== null) {
     await page.locator("canvas").scrollIntoViewIfNeeded();
     await shot(page, shotName);
