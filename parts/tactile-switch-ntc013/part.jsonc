@@ -1,9 +1,9 @@
 {
   "format": 1,
   "part": "tactile-switch-ntc013",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "Tactile switch, NTC013, 4.2 x 3.2",
-  "summary": "N&H Technology NTC013 SMT tact switch, 4.2 x 3.2 x 2.5 mm. The ESP32-S3-DevKitC-1 schematic orders NTC013-AT1J-A160T. The series drawing writes the orderable as NTC013-AA1J-A___T, and 160 gf is the 100,000-cycle row. Pins 1 and 2 are one contact, pins 3 and 4 the other.",
+  "summary": "N&H Technology NTC013 SMT tact switch, 4.2 x 3.2 x 2.5 mm, with a 160 gf press.",
   "tags": ["switch", "button", "tactile", "smt"],
   "license": "MIT OR Apache-2.0",
   "docs": { "N&H Technology NTC013 series, drawing 20170417": "https://www.nh-technology.de/T-Mec/PDF/Series_TC/NTC013.pdf" },

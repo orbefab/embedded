@@ -1,6 +1,8 @@
 // A Nano toggles a 5 V relay module once a second. COM and NO switch an LED from the 5 V rail.
-// The Nano straddles the center channel over columns 1 to 15. The module's header sits on the
-// f to j side at columns 23 to 25, clear of the Nano, and the LED sits on the a to e side.
+// The Nano straddles the centre channel over columns 1 to 15. The module lies beside the
+// breadboard past the Y and Z rails, its header on the edge nearest the board, and jumpers run
+// from the holes to the header and the screw terminal: D2 to IN, the rails to VCC and GND,
+// the + rail to COM, and NO to the resistor. The LED's cathode goes to the - rail.
 {
   "format": 1,
   "parts": {
@@ -8,23 +10,25 @@
     "nano": { "type": "nano-board", "firmware": "build/relay.ino.hex" },
     "relay": { "type": "relay-module-1ch" },
     "r1": { "type": "resistor-axial", "resistance": "220" },
-    "led1": { "type": "led-5mm" }
+    "led1": { "type": "led-5mm" },
   },
   "layout": {
     "bb": { "at": [0, 0, 0] },
     "nano": { "on": { "D13": "bb.d1" } },
-    "relay": { "on": { "IN": "bb.f23" } },
-    "r1": { "on": { "a": "bb.d25" } },
-    "led1": { "on": { "anode": "bb.c29" } }
+    "relay": { "at": [-6, 46, 0] },
+    "r1": { "on": { "a": "bb.g17" } }, // b lands in g21
+    "led1": { "on": { "anode": "bb.h21" } }, // cathode lands in h22
   },
-  "nets": { "GND": "nano.GND" },
   "wires": [
-    ["nano.D2", "relay.IN"],
-    ["nano.5V", "relay.VCC"],
-    ["nano.GND", "relay.GND"],
-    ["nano.5V", "relay.COM"],
-    ["relay.NO", "r1.a"],
-    ["r1.b", "led1.anode"],
-    ["led1.cathode", "nano.GND"]
-  ]
+    ["bb.a12", "bb.W11", { "color": "#d12b2b" }], // 5V to the + rail
+    ["bb.a14", "bb.X14", { "color": "#161616" }], // GND to the - rail
+    ["bb.W20", "bb.Y20", { "color": "#d12b2b" }],
+    ["bb.X20", "bb.Z20", { "color": "#161616" }],
+    ["bb.j11", "relay.IN"], // D2
+    ["bb.Y13", "relay.VCC", { "color": "#d12b2b" }],
+    ["bb.Z14", "relay.GND", { "color": "#161616" }],
+    ["bb.Y16", "relay.COM", { "color": "#d12b2b" }],
+    ["relay.NO", "bb.j17"],
+    ["bb.j22", "bb.Z22", { "color": "#161616" }],
+  ],
 }

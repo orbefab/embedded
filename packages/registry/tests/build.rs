@@ -121,7 +121,7 @@ fn every_url_holds_the_bytes_its_hash_names() {
             "{url}: the folder hash is over the files it lists"
         );
     }
-    let block = record(&registry.output, "nano-button-led@0.3.1");
+    let block = record(&registry.output, "nano-button-led@0.3.2");
     assert_eq!(
         block["license"],
         "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND GPL-3.0-or-later WITH GCC-exception-3.1"
@@ -147,7 +147,7 @@ fn the_repo_names_the_official_registry() {
 #[test]
 fn a_block_depends_on_every_part_it_runs_at_the_versions_in_the_same_build() {
     let registry = build(&repo()).unwrap();
-    let block = record(&registry.output, "nano-button-led@0.3.1");
+    let block = record(&registry.output, "nano-button-led@0.3.2");
     let deps: Vec<&str> = block["registryDependencies"]
         .as_array()
         .unwrap()
@@ -155,19 +155,19 @@ fn a_block_depends_on_every_part_it_runs_at_the_versions_in_the_same_build() {
         .map(|dep| dep.as_str().unwrap())
         .collect();
     for direct in [
-        "nano-board@0.2.2",
+        "nano-board@0.2.3",
         "tactile-switch-6mm@0.2.0",
         "resistor-axial@0.2.1",
-        "led-5mm@0.3.0",
+        "led-5mm@0.3.1",
     ] {
         assert!(deps.contains(&direct), "{direct} in {deps:?}");
     }
-    let board = record(&registry.output, "nano-board@0.2.2");
+    let board = record(&registry.output, "nano-board@0.2.3");
     for through_the_board in board["registryDependencies"].as_array().unwrap() {
         assert!(deps.contains(&through_the_board.as_str().unwrap()));
     }
     assert_eq!(block["board"], "nano-board");
-    assert_eq!(block["version"], "0.3.1");
+    assert_eq!(block["version"], "0.3.2");
 }
 
 #[test]
@@ -656,4 +656,30 @@ fn every_item_is_a_part_or_a_block_of_the_repo() {
         }
     }
     assert_eq!((p, b), (parts, blocks));
+}
+
+/// A listed part's description is a catalog line: what the part is and the numbers that
+/// define it. Ratings, what is not simulated and how to wire it have their own places, so
+/// the longest description holds 30 words and 200 characters.
+#[test]
+fn a_listed_parts_description_is_one_or_two_short_sentences() {
+    let registry = build(&repo()).unwrap();
+    let index: Value = serde_json::from_slice(&registry.output["index.json"]).unwrap();
+    let mut over = Vec::new();
+    for row in index["items"].as_array().unwrap() {
+        if row["type"] != "part" || row["listed"] == false {
+            continue;
+        }
+        let name = row["name"].as_str().unwrap();
+        let text = row["description"].as_str().unwrap_or_default();
+        let (words, chars) = (text.split_whitespace().count(), text.chars().count());
+        if words > 30 || chars > 200 {
+            over.push(format!("{name}: {words} words, {chars} characters"));
+        }
+    }
+    assert!(
+        over.is_empty(),
+        "every listed part's description holds at most 30 words and 200 characters:\n{}",
+        over.join("\n")
+    );
 }
