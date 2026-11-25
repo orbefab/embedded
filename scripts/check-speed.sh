@@ -31,6 +31,9 @@ if [[ ${1:-} == --profile ]]; then
   profile=(--profile "$2")
   shift 2
 fi
+# shellcheck source=scripts/check-lock.sh
+source scripts/check-lock.sh
+check_lock "scripts/check-speed.sh" "scripts/check-speed.sh $*"
 case $# in
   2)
     pkg=$1
@@ -53,4 +56,4 @@ case $# in
     exit 2
     ;;
 esac
-node packages/wasm/tests/speed.mjs "$pkg" "$registry" "${profile[@]}"
+node packages/wasm/tests/speed.mjs "$pkg" "$registry" "${profile[@]}" 9>&-

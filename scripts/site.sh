@@ -25,6 +25,9 @@ if [[ $# -gt 0 ]]; then
 fi
 
 scripts/need-node-deps.sh scripts/site.sh
+# shellcheck source=scripts/check-lock.sh
+source scripts/check-lock.sh
+check_lock "scripts/site.sh" "scripts/site.sh"
 scratch=$PWD/.scratch/site
 
 pin() { sed -n "s/^$1=//p" packages/engine/scripts/sketches.sh; }
