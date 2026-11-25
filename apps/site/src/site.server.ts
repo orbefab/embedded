@@ -23,6 +23,8 @@ export interface BlockCard {
   readonly board: string;
   /** How many parts the scene places. The Block page's list is this long. */
   readonly parts: number;
+  /** The Block's picture, drawn ahead of time from its scene as it runs, or null when it has none. */
+  readonly picture: string | null;
 }
 
 /** A part as the parts list shows it and the search reads it. */
@@ -62,6 +64,8 @@ function linked(names: readonly string[]): Record<string, Linked> {
   return Object.fromEntries(names.map((name) => [name, entry(name)]));
 }
 
+const blockPictures = new Set(data.pictures.blocks);
+
 const card = ({ record }: Item<BlockRecord>): BlockCard => {
   const circuit = circuitOf(record.name);
   return {
@@ -70,6 +74,7 @@ const card = ({ record }: Item<BlockRecord>): BlockCard => {
     description: record.description,
     board: circuit.board.title,
     parts: circuit.placed.length,
+    picture: blockPictures.has(record.name) ? at.blockPicture(record.name) : null,
   };
 };
 
@@ -89,7 +94,7 @@ export const home = () => {
   };
 };
 
-const pictures = new Set(data.pictures);
+const pictures = new Set(data.pictures.parts);
 
 export const parts = (): Listed[] =>
   [...data.parts]

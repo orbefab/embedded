@@ -10,7 +10,7 @@ import type { Plugin } from "vite";
 import { BASE } from "../src/paths.ts";
 import type { SiteData } from "../src/records.ts";
 import { blockScenes, type Catalog, partViews, readCatalog, siteData } from "./catalog.ts";
-import { listedParts, pictureFile } from "./pictures.ts";
+import { blockPicture, listedBlocks, listedParts, pictureFile } from "./pictures.ts";
 
 const REPO = resolve(import.meta.dirname, "../../..");
 const INPUT = join(REPO, ".scratch/site");
@@ -97,10 +97,17 @@ async function assemble(install: boolean): Promise<SiteData> {
     writeFileSync(join(PUBLIC, "parts", id, "view.json"), view.scene);
     if (view.shown !== undefined) shown[id] = view.shown;
   }
-  // A listed part's picture, drawn ahead of time by scripts/pictures.ts. A part with none shows
-  // its card without one, and check-site.sh fails until it has one.
-  const pictures = listedParts(catalog).filter((id) => existsSync(pictureFile(id)));
-  for (const id of pictures) cpSync(pictureFile(id), join(PUBLIC, "parts", id, "picture.webp"));
+  // A listed part's or a Block's picture, drawn ahead of time by scripts/pictures.ts. One with
+  // none shows its card without one, and check-site.sh fails until it has one.
+  const pictures = {
+    parts: listedParts(catalog).filter((id) => existsSync(pictureFile(id))),
+    blocks: listedBlocks(catalog).filter((id) => existsSync(pictureFile(blockPicture(id)))),
+  };
+  for (const id of pictures.parts) cpSync(pictureFile(id), join(PUBLIC, "parts", id, "picture.webp"));
+  for (const id of pictures.blocks) {
+    mkdirSync(join(PUBLIC, "blocks", id), { recursive: true });
+    cpSync(pictureFile(blockPicture(id)), join(PUBLIC, "blocks", id, "picture.webp"));
+  }
   if (install) cpSync(join(REPO, "scripts/install.sh"), join(PUBLIC, "install.sh"));
   writeFileSync(join(PUBLIC, "_headers"), HEADERS);
   writeFileSync(join(PUBLIC, "sitemap.xml"), sitemapXml(catalog));

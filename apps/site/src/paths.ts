@@ -17,6 +17,7 @@ export const at = {
   blocks: `${BASE}blocks/`,
   block: (id: string) => `${BASE}blocks/${id}/`,
   blockEmbed: (id: string) => `${BASE}blocks/${id}/embed/`,
+  blockPicture: (id: string) => `${BASE}blocks/${id}/picture.webp`,
   registry: `${BASE}r/`,
   index: `${BASE}r/index.json`,
   file: (sha256: string) => `${BASE}r/files/${sha256}`,

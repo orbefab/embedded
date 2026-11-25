@@ -14,11 +14,25 @@ export function BlockCards({ blocks }: { blocks: readonly BlockCard[] }) {
   return (
     <ul className="grid gap-4 sm:grid-cols-2">
       {blocks.map((block) => (
-        <li key={block.name}>
-          <a className="block h-full border border-border p-5 transition-colors hover:border-brand" href={at.block(block.name)}>
-            <span className="font-medium">{block.title}</span>
-            {block.description === undefined ? null : <span className="mt-2 block text-muted-foreground text-sm">{block.description}</span>}
-            <span className="mt-4 block font-mono text-muted-foreground text-xs" data-scene-parts={block.parts}>{`${block.board}, ${block.parts} parts`}</span>
+        <li data-block={block.name} key={block.name}>
+          <a className="flex h-full min-w-0 flex-col border border-border transition-colors hover:border-brand" href={at.block(block.name)}>
+            {block.picture === null ? null : (
+              <img
+                alt=""
+                className="block aspect-[4/3] w-full object-contain px-5 pt-5 max-sm:aspect-auto max-sm:h-48"
+                data-testid="block-picture"
+                decoding="async"
+                height={360}
+                loading="lazy"
+                src={block.picture}
+                width={480}
+              />
+            )}
+            <span className="block p-5">
+              <span className="font-medium">{block.title}</span>
+              {block.description === undefined ? null : <span className="mt-2 block text-muted-foreground text-sm">{block.description}</span>}
+              <span className="mt-4 block font-mono text-muted-foreground text-xs" data-scene-parts={block.parts}>{`${block.board}, ${block.parts} parts`}</span>
+            </span>
           </a>
         </li>
       ))}
