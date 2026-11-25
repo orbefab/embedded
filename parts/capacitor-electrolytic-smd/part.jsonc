@@ -1,6 +1,6 @@
 {
-  "format": 5, "part": "capacitor-electrolytic-smd", "version": "0.2.1", "title": "Capacitor, SMD aluminum electrolytic, case D", "license": "MIT OR Apache-2.0",
-  "summary": "Panasonic EEE-1EA470WP, 47 µF 25 V, SMD aluminum electrolytic, case D. Lead 1 is positive. The dark mark on the can is the negative end, lead 2. A reverse voltage past 1 V warns.",
+  "format": 5, "part": "capacitor-electrolytic-smd", "version": "0.2.2", "title": "Capacitor, SMD aluminum electrolytic, case D", "license": "MIT OR Apache-2.0",
+  "summary": "Panasonic EEE-1EA470WP, a 47 µF 25 V SMD aluminum electrolytic capacitor, case D. The dark mark on the can is the negative end.",
   "tags": ["capacitor", "electrolytic", "polarized", "smd"],
   "docs": {
     "Panasonic EEE-1EA470WP": null,

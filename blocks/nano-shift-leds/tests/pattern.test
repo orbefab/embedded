@@ -1,13 +1,40 @@
-# shiftOut of 0x55, most significant bit first, leaves the least significant
-# bit in QA. led1 is QA. The other odd LEDs are on and the even ones are off.
+# Walk one lit LED from QA (led1) to QH (led8) and back, 100 ms a step.
 open
 step 50ms
 expect @led1 lit
 expect @led2 off
+expect @led3 off
+expect @led4 off
+expect @led5 off
+expect @led6 off
+expect @led7 off
+expect @led8 off
+step 100ms
+expect @led1 off
+expect @led2 lit
+expect @led3 off
+step 100ms
+expect @led2 off
 expect @led3 lit
+step 100ms
+expect @led3 off
+expect @led4 lit
+step 100ms
 expect @led4 off
 expect @led5 lit
+step 100ms
+expect @led5 off
+expect @led6 lit
+step 100ms
 expect @led6 off
 expect @led7 lit
+step 100ms
+expect @led7 off
+expect @led8 lit
+step 100ms
 expect @led8 off
+expect @led7 lit
+step 600ms
+expect @led1 lit
+expect @led2 off
 expect no diagnostics

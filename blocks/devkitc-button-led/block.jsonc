@@ -2,7 +2,7 @@
 {
   "format": 1,
   "block": "devkitc-button-led",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "Button and RGB LED on a DevKitC-1",
   "summary": "A button on GPIO4 cycles the ESP32-S3-DevKitC-1's RGB LED, and each colour is printed on Serial.",
   "board": "esp32s3-devkitc-1",

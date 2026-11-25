@@ -1,9 +1,9 @@
 {
   "format": 4,
   "part": "trimmer-3362p",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "title": "Trimmer potentiometer, 1/4 inch square (3362P)",
-  "summary": "Single-turn cermet trimmer you set once with a screwdriver, such as a comparator's threshold. Its three pins sit in a triangle on the breadboard grid. Seen from the top with the printed face toward you, `a` is the left pin, `b` the right and `wiper` the one behind them. Turning clockwise moves the wiper from `a` toward `b`, and `set` turns it while a session runs. Set its resistance, the value printed on top (103 is 10k). `position` is the wiper's place along the track, the share of `resistance` between `a` and `wiper`, above 0 and below 1.",
+  "summary": "Single-turn cermet trimmer potentiometer with three pins in a triangle, set once with a screwdriver. Set its resistance, the value printed on top (103 is 10k).",
   "tags": ["potentiometer", "trimmer", "trimpot", "variable resistor", "voltage divider", "threshold", "analog", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "docs": { "Bourns 3362": "https://www.bourns.com/docs/Product-Datasheets/3362.pdf" },

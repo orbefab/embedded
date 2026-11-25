@@ -119,6 +119,7 @@ interface RecordFile {
 }
 
 interface ServedRecord {
+  version: string;
   title: string;
   license: string;
   files: RecordFile[];
@@ -154,12 +155,13 @@ async function blocksPlacing(part: string): Promise<string[]> {
 /** Blocks the registry serves, classified from the scene it serves. */
 function releasedBlocks(): RepoBlock[] {
   return blockIds().map((id) => {
-    const scene = servedRecord(id).files.find((file) => file.path === "scene.jsonc");
+    const record = servedRecord(id);
+    const scene = record.files.find((file) => file.path === "scene.jsonc");
     if (scene === undefined) throw new Error(`${id} has no scene.jsonc in the registry`);
     const text = readFileSync(join(registryDir(), "files", scene.sha256), "utf8");
-    const sketch = servedRecord(id).files.find((file) => /^firmware\/[^/]+\/[^/]+\.ino$/.test(file.path));
+    const sketch = record.files.find((file) => /^firmware\/[^/]+\/[^/]+\.ino$/.test(file.path));
     const loops = sketch === undefined ? undefined : sketchLoops(readFileSync(join(registryDir(), "files", sketch.sha256), "utf8"));
-    return { id, kind: blockKind(text, id), loops };
+    return { id, kind: blockKind(text, id), version: record.version, loops };
   });
 }
 

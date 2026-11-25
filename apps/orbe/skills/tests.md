@@ -18,7 +18,7 @@ A test is `tests/<name>.test`. Each line is a live command without `orbe`. `#` s
 - `@oled.display.screen lit` or `off`, whether a screen lights any pixel. For a 128 x 64 I2C OLED, use the part `oled-ssd1306-128x64`, as the Block `nano-oled` does. `@oled.display.screen shows tests/hello.screen` compares each row with that file, from the scene's folder. `orbe get @oled` and `orbe get @oled.display.screen` print the rows to save, `#` lit and `.` dark.
 - `@lcd.text` on a 16 x 2 I2C LCD (`lcd1602-i2c`, Block `nano-lcd1602-i2c`): `orbe get @lcd` and `orbe get @lcd.text` print the two visible 16-character lines (blank when the display or backlight is off; custom CGRAM characters read as `□`). Expect `@lcd.text contains "Hello"`, `@lcd.text line 0 "Hello"`, `@lcd.text line 1 "World"`, `@lcd.text blank`, or `@lcd.backlight lit` / `off`.
 - `@led1.i > 5mA`, `@nano.D2 < 1V`, `@bz.hz > 400Hz`, `@servo.angle > 60deg`, with `<`, `<=`, `>` or `>=`. `@bz.hz` is 0 when the buzzer is quiet. In a shell, `orbe expect @led1.i '>' 5mA`. A test line accepts a quoted comparison the same way a shell does, as `'>'` or `"<="`. `orbe get @servo` and `orbe get @servo.angle` read a servo's angle in `deg`.
-- `serial contains "text"`, all the serial text since `open`. `snapshot` shows the last 10 lines, joined with `\n`.
+- `serial contains "text"`, all the serial text since `open`. A BMP280 reads within 1 °C and 1 hPa of the world. `snapshot` shows the last 10 lines, joined with `\n`.
 - `no diagnostics`, or `diagnostics contains "text"`. A chip warning can show up to one engine step (`sim.max_step`, 10 ms by default) late, so step that far past its cause first.
 
 A failure prints the line, what was expected and what it saw, then `0 passed, 1 failed`.
