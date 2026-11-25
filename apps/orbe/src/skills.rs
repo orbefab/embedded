@@ -324,6 +324,7 @@ mod tests {
             Live::Value,
             Live::PastStop,
             Live::NoChange,
+            Live::StepTimeout,
             Live::Cancelled,
             Live::SessionCrashed,
             Live::VersionMismatch,

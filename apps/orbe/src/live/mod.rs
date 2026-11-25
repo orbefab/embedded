@@ -32,12 +32,15 @@ use place::{Name, Place};
 
 /// One request: what it asks, and the client's working folder. `open` reads its scene from
 /// that folder and `snapshot` shows the scene's path from it, so paths read as they would in
-/// `orbe test`. `stop` is `ORBE_TEST_STOP` from the shell that ran `open`.
+/// `orbe test`. `stop` is `ORBE_TEST_STOP` from the shell that ran `open`, and `step_budget`
+/// is `ORBE_TEST_STEP_BUDGET` from the shell that ran `step` (both debug-only test seams).
 #[derive(Debug, Serialize, Deserialize)]
 struct Request {
     cwd: String,
     ask: Ask,
     stop: Option<String>,
+    #[serde(default)]
+    step_budget: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -787,10 +790,17 @@ impl Client {
             .flatten();
         #[cfg(not(debug_assertions))]
         let stop: Option<String> = None;
+        #[cfg(debug_assertions)]
+        let step_budget = matches!(ask, Ask::Run(Ok(Command::Step(_))))
+            .then(|| std::env::var("ORBE_TEST_STEP_BUDGET").ok())
+            .flatten();
+        #[cfg(not(debug_assertions))]
+        let step_budget: Option<String> = None;
         let request = Request {
             cwd: self.cwd.clone(),
             ask,
             stop,
+            step_budget,
         };
         let deadline = reply_deadline(&request.ask);
         let mut wire = serde_json::to_string(&request).map_err(|error| {
@@ -826,6 +836,11 @@ impl Client {
             match error.code {
                 Code::NoSession => return Err(self.no_session()),
                 Code::Ended => error.hint = self.open_hint("to start again"),
+                Code::StepTimeout if self.flagged => {
+                    if let Some((before, after)) = error.hint.rsplit_once("` to ") {
+                        error.hint = format!("{before}{}` to {after}", self.session_flag());
+                    }
+                }
                 Code::Cancelled if error.message.starts_with("the session was closed at ") => {
                     error.hint = self.open_hint("to start it again");
                 }
@@ -1132,7 +1147,8 @@ enum ReadEnd {
 }
 
 /// Reads one reply line. Each wait is a second. A dead session process ends the wait. `step`
-/// may run for its duration plus slack; `play` has no such bound, and a dead process still ends it.
+/// may run up to its wall-time budget plus slack; `play` has no such bound, and a dead process
+/// still ends it.
 #[expect(
     clippy::disallowed_methods,
     reason = "a read ends when its deadline passes"
@@ -1172,22 +1188,11 @@ fn read_reply(
 fn reply_deadline(ask: &Ask) -> Duration {
     let slack = Duration::from_secs(30);
     match ask {
-        Ask::Run(Ok(Command::Step(step))) => wall_of(step_bound(step)) + slack,
+        Ask::Run(Ok(Command::Step(_))) => daemon::STEP_BUDGET + slack,
         Ask::Run(Ok(Command::Play)) => Duration::from_secs(24 * 60 * 60),
         Ask::Run(Err(_)) => Duration::from_secs(1),
         _ => Duration::from_secs(30),
     }
-}
-
-fn step_bound(step: &orbe_session::Step) -> orbe_session::Duration {
-    match step {
-        orbe_session::Step::For(duration) => *duration,
-        orbe_session::Step::Until { timeout, .. } => *timeout,
-    }
-}
-
-fn wall_of(duration: orbe_session::Duration) -> Duration {
-    Duration::from_nanos(duration.as_ps() / 1000)
 }
 
 fn read_stderr(stderr: &mut Option<ChildStderr>) -> String {
