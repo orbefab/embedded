@@ -59,13 +59,14 @@ export function siteData(
   site: Site,
   shown: Readonly<Record<string, string>>,
   scenes: Readonly<Record<string, readonly ScenePart[]>>,
+  pictures: readonly string[] = [],
 ): SiteData {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const texts: Record<string, string> = {};
   for (const { record } of catalog.blocks) {
     for (const file of record.files) if (isText(file.path)) texts[file.sha256] = decoder.decode(catalog.bytes(file.sha256));
   }
-  return { site, parts: catalog.parts, blocks: catalog.blocks, texts, scenes, shown };
+  return { site, parts: catalog.parts, blocks: catalog.blocks, texts, scenes, shown, pictures };
 }
 
 /** Reads one Block's placed parts. `files` is `[path, bytes]`: the Block's own files, and every

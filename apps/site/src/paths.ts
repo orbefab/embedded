@@ -13,6 +13,7 @@ export const at = {
   parts: `${BASE}parts/`,
   part: (id: string) => `${BASE}parts/${id}/`,
   partView: (id: string) => `${BASE}parts/${id}/view.json`,
+  partPicture: (id: string) => `${BASE}parts/${id}/picture.webp`,
   blocks: `${BASE}blocks/`,
   block: (id: string) => `${BASE}blocks/${id}/`,
   blockEmbed: (id: string) => `${BASE}blocks/${id}/embed/`,

@@ -573,6 +573,22 @@ test.describe("parts search", () => {
     expect(headings.map((text) => text.toLowerCase())).toEqual(PART_SECTIONS.map((section) => section.toLowerCase()));
   });
 
+  test("every card shows its part's picture, and the pictures below the fold load lazily", async () => {
+    const pictures = page.locator("[data-part] [data-testid=part-picture]");
+    expect(await pictures.count()).toBe(await page.locator("[data-part]").count());
+    const sources = await pictures.evaluateAll((nodes) =>
+      nodes.map((node) => ({ part: node.closest("[data-part]")?.getAttribute("data-part"), src: node.getAttribute("src"), loading: node.getAttribute("loading") })),
+    );
+    for (const { part, src, loading } of sources) {
+      expect(src).toBe(`/orbe/parts/${part}/picture.webp`);
+      expect(loading).toBe("lazy");
+    }
+    const first = sources[0]?.src ?? "";
+    const response = await page.request.get(new URL(first, page.url()).href);
+    expect(response.status()).toBe(200);
+    expect(response.headers()["content-type"]).toContain("image/webp");
+  });
+
   test("a card says where the part is used", async () => {
     const line = (id: string) => page.locator(`[data-part="${id}"]`).innerText();
     expect(await page.locator("main")).toContainText("Real parts with their pins, ratings and 3D models.");

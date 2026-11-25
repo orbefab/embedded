@@ -16,6 +16,7 @@
   "include": [
     "src",
     "build",
+    "scripts",
     "vite.config.ts"
   ]
 }
