@@ -162,7 +162,7 @@ if [[ $time_flag -eq 1 ]]; then
 fi
 # shellcheck source=scripts/check-lock.sh
 source scripts/check-lock.sh
-check_lock_exec "scripts/run-hashes.sh" "$lock_label" -- "$@"
+check_lock "scripts/run-hashes.sh" "$lock_label"
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
 
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/run-hashes.XXXXXX")

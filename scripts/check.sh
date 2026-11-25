@@ -216,7 +216,7 @@ esac
 
 # shellcheck source=scripts/check-lock.sh
 source scripts/check-lock.sh
-check_lock_exec "scripts/check.sh" "scripts/check.sh $1" -- "$@"
+check_lock "scripts/check.sh" "scripts/check.sh $1"
 
 case "$1" in
   lint) lint ;;

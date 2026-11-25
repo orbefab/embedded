@@ -32,7 +32,6 @@ fail() {
   exit 1
 }
 
-orig_args=("$@")
 target=
 out=
 while [[ $# -gt 0 ]]; do
@@ -90,7 +89,7 @@ fi
 
 # shellcheck source=scripts/check-lock.sh
 source scripts/check-lock.sh
-check_lock_exec "scripts/release-build.sh" "scripts/release-build.sh $target" -- "${orig_args[@]}"
+check_lock "scripts/release-build.sh" "scripts/release-build.sh $target"
 
 scripts/need-node-deps.sh scripts/release-build.sh
 pnpm --filter @orbe/viewer-page build
