@@ -353,10 +353,10 @@ fn accepted_steps(rel: &str) -> u64 {
     stats.landings
 }
 
-/// Measured 2723 accepted steps. The bound is 10 percent above that count, in integer math.
+/// Measured 2756 accepted steps. The bound is 10 percent above that count, in integer math.
 #[test]
 fn relay_flyback_stays_near_its_step_count() {
-    let measured = 2_723;
+    let measured = 2_756;
     let steps = accepted_steps("tests/circuits/relay-flyback/netlist.json");
     eprintln!("relay-flyback steps {steps}");
     assert!(
@@ -395,10 +395,10 @@ fn fb_null_window(bytes: &[u8]) -> (u64, f64) {
     (steps, reversal)
 }
 
-/// Measured 20236 accepted steps. The bound is 10 percent above that count, in integer math.
+/// Measured 20376 accepted steps. The bound is 10 percent above that count, in integer math.
 #[test]
 fn the_bare_inductor_stays_near_its_step_count() {
-    let measured = 20_236;
+    let measured = 20_376;
     let steps = accepted_steps("tests/circuit/controls/bare-inductor.json");
     eprintln!("bare-inductor steps {steps}");
     assert!(
@@ -408,11 +408,11 @@ fn the_bare_inductor_stays_near_its_step_count() {
     );
 }
 
-/// Measured 2738 accepted steps. From 30.01 ms to 41 ms the node no longer reverses by
-/// more than 1e-10 V. That window takes 187 steps, and the bound is 1000.
+/// Measured 2744 accepted steps. From 30.01 ms to 41 ms the node no longer reverses by
+/// more than 1e-10 V. That window takes 171 steps, and the bound is 1000.
 #[test]
 fn fb_null_20000_stops_zigzagging_on_net_b() {
-    let measured = 2_738;
+    let measured = 2_744;
     let bytes = std::fs::read(
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/circuit/controls/fb-null-20000.json"),
@@ -430,11 +430,11 @@ fn fb_null_20000_stops_zigzagging_on_net_b() {
     assert!(reversal < 1e-10, "reversal {reversal:e} V");
 }
 
-/// Measured 20228 accepted steps. The bound is 10 percent above that count, in integer math.
+/// Measured 20378 accepted steps. The bound is 10 percent above that count, in integer math.
 /// The fixture can carry a power warning, so the run check is the absence of an error.
 #[test]
 fn the_bare_relay_stays_near_its_step_count() {
-    let measured = 20_228;
+    let measured = 20_378;
     let steps = accepted_steps("tests/circuit/fixtures/p-relay-npn-bare/netlist.json");
     eprintln!("p-relay-npn-bare steps {steps}");
     assert!(

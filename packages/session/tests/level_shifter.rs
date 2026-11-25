@@ -98,10 +98,10 @@ fn begin_through_a_level_shifter_turns_the_display_on() {
 }
 
 /// The Block's whole picture through the shifter, with no diagnostic. Every I2C edge through
-/// the shifter's 10 kohm and the BSS138 capacitances takes some 600 steps, so the frame's
-/// 1024 bytes take about half an hour in a debug build.
+/// the shifter's 10 kohm and the BSS138 capacitances takes some 395 steps, so the frame's
+/// 1024 bytes take about five minutes.
 #[test]
-#[ignore = "about half an hour: run it with --run-ignored only"]
+#[ignore = "about five minutes: run it with --run-ignored only"]
 fn the_block_picture_draws_on_the_module_behind_a_level_shifter() {
     let (passed, lines) = play(
         "open\nstep 200ms\nexpect @oled.display.screen shows tests/hello.screen\n\

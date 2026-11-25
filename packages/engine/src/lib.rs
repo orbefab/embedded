@@ -59,15 +59,16 @@ pub use session::{
 };
 pub use topology::floating_nets;
 
-/// Accepted steps after t = 0, and chip stops on those steps.
+/// Accepted steps after t = 0, chip stops on those steps, and tries rejected for their error.
 ///
 /// t = 0 is the operating point and is not a landing. A stop is counted on the accepted
-/// step that reaches it. Two chips stopped on one landing count as two stops. Neither number
-/// is written into the run folder.
+/// step that reaches it. Two chips stopped on one landing count as two stops. A try whose
+/// Newton solve stalled is not a rejection. No number is written into the run folder.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RunStats {
     pub landings: u64,
     pub stops: u64,
+    pub rejections: u64,
 }
 
 /// What `orbe-run run` makes of netlist.json bytes: the results and the folder they render to.

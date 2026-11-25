@@ -15,6 +15,9 @@ use orbe_engine::name::Ref;
 use orbe_engine::timestamp::Timestamp;
 use sha2::{Digest, Sha256};
 
+/// A fixture that has this file holds only its node voltages to the bound. Its text says why.
+const NODES_ONLY_FILE: &str = "nodes-only";
+
 /// What `packages/engine/scripts/ngspice_refs.py` writes into `ngspice.json`.
 const NGSPICE: &str = "ngspice-42";
 const OPTIONS: &str = "temp=25 tnom=25 reltol=1e-9 abstol=1e-15 vntol=1e-12 gmin=1e-12";
@@ -167,7 +170,22 @@ fn every_example_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
 /// so its drain current is the drain-source gmin. `pmos-off` is that circuit with the supplies
 /// negated, so the drain current is the negated gmin. `npn-slow-edge` drives the junction
 /// capacitors through 1 Mohm, and `nmos-pulse` does the same for the gate capacitances, slow
-/// next to the deck's ramp. `nmos-regions` biases the drain through reverse, linear and saturation.
+/// next to the deck's ramp. `nmos-gate-1ff`, `nmos-gate-10ff` and `nmos-gate-100ff` give the
+/// MOSFET 1, 10 and 100 fF on each pair of pins, drive its gate through 1 Gohm, 1 Gohm and
+/// 10 Mohm, and load its drain with 100 ohm. `npn-base-1ff` and `npn-base-10ff` give each
+/// junction 1 and 10 fF and drive the base through 10 and 1 Gohm. `ne555-gate-1ff` drives the
+/// 1 fF gate from an NE555's output through 2 Gohm. Each gate or base is the only store on its
+/// node, so its error is what the gate, the drain and the collector read. Each time constant
+/// is microseconds, so neither the deck's 1 ns ramp nor the NE555's edge times move a row past
+/// the bound. `nmos-gate-1ff-1mv5` and `nmos-gate-10ff-1mv5` hold the 1 fF and 10 fF gates at
+/// 0 V, then drive them 1.5 mV through 1 Gohm, `nmos-gate-100pf-1mv5` drives 100 pF the same
+/// 1.5 mV through 100 kohm, and `nmos-gate-1ff-5v-1mv5` drives the 1 fF gate from 5 V to
+/// 5.0015 V. Each grid is at most a fortieth of its time constant, so ngspice's points follow
+/// the swing. `nmos-ring-100pf` is a three-stage ring of that MOSFET with 100 pF on each pin
+/// pair and 100 kohm pull-ups, kicked by 5 V for 2 us through 1 Mohm and run 300 us. It times
+/// itself, so each edge's error carries into every later one. It has a `nodes-only` file, which
+/// says why only its node voltages are held to the bound. `nmos-regions` biases the drain
+/// through reverse, linear and saturation.
 /// `pmos-regions` is that circuit with the supplies negated. `nmos-follower` holds the source off ground. `zener-forward`, `zener-reverse`,
 /// `zener-breakdown` and `zener-overload` hold the fitted zener forward, below the knee,
 /// at its test current, and past both ratings. `regulator-off-cap` holds the input at 0 V
@@ -205,10 +223,21 @@ fn every_fixture_matches_its_ngspice_reference_within_a_tenth_of_a_percent() {
             "i2c-stretch",
             "led-off",
             "led-reverse",
+            "ne555-gate-1ff",
             "nmos-follower",
+            "nmos-gate-100ff",
+            "nmos-gate-100pf-1mv5",
+            "nmos-gate-10ff",
+            "nmos-gate-10ff-1mv5",
+            "nmos-gate-1ff",
+            "nmos-gate-1ff-1mv5",
+            "nmos-gate-1ff-5v-1mv5",
             "nmos-off",
             "nmos-pulse",
             "nmos-regions",
+            "nmos-ring-100pf",
+            "npn-base-10ff",
+            "npn-base-1ff",
             "npn-held-off",
             "npn-nf-nr",
             "npn-off",
@@ -305,7 +334,13 @@ fn matches_its_reference(example: &Path) {
     );
     match (reference.get("op"), reference.get("tran")) {
         (Some(op), None) => check_op(&label.to_string(), op, &done),
-        (None, Some(tran)) => check_tran(&label.to_string(), tran, &input, &done),
+        (None, Some(tran)) => check_tran(
+            &label.to_string(),
+            tran,
+            &input,
+            &done,
+            example.join(NODES_ONLY_FILE).is_file(),
+        ),
         _ => panic!("{label}: ngspice.json needs exactly one of op and tran"),
     }
 }
@@ -342,7 +377,13 @@ fn check_op(label: &str, reference: &serde_json::Value, done: &Completed) {
 /// The script's bounce expansion must equal the engine's, its latch edges must pair with the
 /// engine's, and each waveform must be within 1e-3 of its span at every engine row away from
 /// every edge and jump.
-fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &Completed) {
+fn check_tran(
+    label: &str,
+    reference: &serde_json::Value,
+    input: &[u8],
+    done: &Completed,
+    nodes_only: bool,
+) {
     let found: Vec<(String, String)> = done
         .results
         .diagnostics()
@@ -423,6 +464,7 @@ fn check_tran(label: &str, reference: &serde_json::Value, input: &[u8], done: &C
     let values = reference["values"].as_object().unwrap();
     let mut compared = SpanCheck {
         failed: false,
+        nodes_only,
         report: Vec::new(),
         checked: BTreeSet::new(),
         engine_t: &engine_t,
@@ -633,6 +675,8 @@ fn mean_period(edges: &[(u64, String)]) -> f64 {
 
 struct SpanCheck<'a> {
     failed: bool,
+    /// Only `#net.*` columns are held to the bound. Every column is still compared and reported.
+    nodes_only: bool,
     report: Vec<String>,
     checked: BTreeSet<String>,
     engine_t: &'a [f64],
@@ -673,7 +717,9 @@ impl SpanCheck<'_> {
             .filter(|&&t| t >= start)
             .map(|&t| (interpolate(engine_t, got, t) - interpolate(reference_t, wanted, t)).abs())
             .fold(0.0, f64::max);
-        self.failed |= error > 1e-3 * span + floor(key);
+        if !self.nodes_only || key.starts_with("#net.") {
+            self.failed |= error > 1e-3 * span + floor(key);
+        }
         self.report.push(format!("{key} error {error} span {span}"));
         self.checked.insert(key.to_string());
     }
@@ -973,6 +1019,7 @@ fn a_held_capacitor_drops_only_the_t_0_sample_of_its_current_and_power() {
     let grid = grid(&engine_t, &[]);
     let mut compared = SpanCheck {
         failed: false,
+        nodes_only: false,
         report: Vec::new(),
         checked: BTreeSet::new(),
         engine_t: &engine_t,
@@ -1005,6 +1052,7 @@ fn a_stored_span_sets_the_bound_in_place_of_the_rows() {
     let spans = serde_json::json!({ "#r1.i": 1.0 });
     let mut compared = SpanCheck {
         failed: false,
+        nodes_only: false,
         report: Vec::new(),
         checked: BTreeSet::new(),
         engine_t: &t,
@@ -1019,6 +1067,33 @@ fn a_stored_span_sets_the_bound_in_place_of_the_rows() {
     compared.spans = spans.as_object();
     compared.record("#r1.i", &engine, &reference);
     assert!(!compared.failed, "{:?}", compared.report);
+}
+
+/// A `nodes-only` fixture fails on a node voltage past the bound, and still reports a current
+/// past it without failing.
+#[test]
+fn a_nodes_only_fixture_holds_its_node_voltages_to_the_bound() {
+    let t = [0.0, 1e3, 2e3];
+    let reference = [0.0, 1.0, 2.0];
+    let off = [0.0, 1.01, 2.0];
+    let mut compared = SpanCheck {
+        failed: false,
+        nodes_only: true,
+        report: Vec::new(),
+        checked: BTreeSet::new(),
+        engine_t: &t,
+        reference_t: &t,
+        grid: &t,
+        held: BTreeSet::new(),
+        spans: None,
+    };
+    compared.record("#m1.id", &off, &reference);
+    assert!(!compared.failed, "{:?}", compared.report);
+    assert_eq!(compared.report.len(), 1);
+    compared.record("#net.n1", &reference, &reference);
+    assert!(!compared.failed, "{:?}", compared.report);
+    compared.record("#net.n1", &off, &reference);
+    assert!(compared.failed, "{:?}", compared.report);
 }
 
 #[test]
