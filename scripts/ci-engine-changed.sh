@@ -1,21 +1,41 @@
 #!/usr/bin/env bash
 # Prints whether a diff should run the engine CI jobs.
-# Usage: scripts/ci-engine-changed.sh <base> <head>
-# Prints `run=true` or `run=false`. The diff is the changes <head> made since
-# the merge base of the two commits. The jobs run unless every changed file is
+# Usage:
+#   scripts/ci-engine-changed.sh <base> <head>
+#   scripts/ci-engine-changed.sh --worktree <base>
+# Prints `run=true` or `run=false`. With two commits, the diff is the changes
+# <head> made since the merge base of the two commits. With --worktree, it
+# compares committed, staged, unstaged and untracked files against the merge
+# base of <base> and HEAD. The jobs run unless every changed file is
 # markdown, under apps/site/, under docs/, or under .github/ except
 # .github/workflows/ci.yml and .github/actions/. packages/ and the rest of what
-# the engine, the wasm build or the viewer build reads are not in that list. An unknown argument, or
-# a commit git cannot resolve, exits 2.
+# the engine, the wasm build or the viewer build reads are not in that list. An
+# unknown argument, or a commit git cannot resolve, exits 2.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [[ $# -ne 2 || -z ${1:-} || -z ${2:-} ]]; then
-  echo "usage: scripts/ci-engine-changed.sh <base> <head>" >&2
-  exit 2
-fi
-if ! git rev-parse --verify --quiet "$1^{commit}" >/dev/null || ! git rev-parse --verify --quiet "$2^{commit}" >/dev/null; then
-  echo "ci-engine-changed: cannot resolve $1 or $2" >&2
+if [[ $# -eq 2 && $1 == --worktree && -n ${2:-} ]]; then
+  if ! base=$(git merge-base "$2" HEAD 2>/dev/null); then
+    echo "ci-engine-changed: cannot resolve merge base of $2 and HEAD" >&2
+    exit 2
+  fi
+  changed_paths() {
+    git diff --name-only --no-renames "$base"
+    git diff --cached --name-only --no-renames "$base"
+    git ls-files --others --exclude-standard
+  }
+elif [[ $# -eq 2 && -n ${1:-} && -n ${2:-} && $1 != -* ]]; then
+  if ! git rev-parse --verify --quiet "$1^{commit}" >/dev/null || ! git rev-parse --verify --quiet "$2^{commit}" >/dev/null; then
+    echo "ci-engine-changed: cannot resolve $1 or $2" >&2
+    exit 2
+  fi
+  base=$1
+  head=$2
+  changed_paths() {
+    git diff --name-only --no-renames "$base...$head"
+  }
+else
+  echo "usage: scripts/ci-engine-changed.sh <base> <head> | --worktree <base>" >&2
   exit 2
 fi
 
@@ -43,5 +63,5 @@ while IFS= read -r path; do
     run=true
     break
   fi
-done < <(git diff --name-only --no-renames "$1...$2")
+done < <(changed_paths)
 echo "run=$run"
