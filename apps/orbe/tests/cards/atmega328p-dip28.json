@@ -4,7 +4,7 @@
     "avr",
     "dip"
   ],
-  "description": "ATmega328P-PU in a 300 mil PDIP-28. The notch is at one end and marks the lead-1 corner. The part needs firmware.",
+  "description": "ATmega328P-PU in a 300 mil PDIP-28: an 8-bit AVR microcontroller with 32 KB of flash. The notch marks the lead-1 end.",
   "docs": [
     {
       "name": "DS40002061B",
@@ -318,5 +318,5 @@
   },
   "title": "ATmega328P, PDIP-28",
   "uses": {},
-  "version": "0.2.1"
+  "version": "0.2.2"
 }

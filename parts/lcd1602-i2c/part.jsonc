@@ -6,9 +6,9 @@
 {
   "format": 6,
   "part": "lcd1602-i2c",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "LCD display module, 16 x 2 blue, HD44780 + PCF8574 I2C",
-  "summary": "A blue 16 x 2 character LCD with an FC-113 style PCF8574 I2C backpack and a right-angle 4-pin header (GND, VCC, SDA, SCL on 2.54 mm, parallel to the board for jumper wires). Place it beside the breadboard with `at` and wire jumpers directly to its pins. Wire VCC to 5 V and GND to ground; the backpack includes 4.7 kohm pull-ups on SDA and SCL to VCC, a 10 kohm contrast trimmer, a backlight jumper (`backlight_jumper`, default \"on\"), and address jumpers (`address`, default \"0x27\", selectable \"0x20\" to \"0x27\"). Draws about 1.5 mA for logic plus 20 mA with the backlight on. Read the two visible 16-character lines with `@<lcd>.text` (blank when the display or backlight is off, matching the blue transmissive glass; custom CGRAM characters draw on the glass and read as `□`) and the backlight with `@<lcd>.backlight`. Standard LiquidCrystal_I2C sketches drive it.",
+  "summary": "Blue 16 x 2 character LCD module with a PCF8574 I2C backpack at address 0x27 and a 4-pin right-angle header. LiquidCrystal_I2C drives it.",
   "tags": ["lcd", "1602", "16x2", "hd44780", "pcf8574", "display", "screen", "i2c", "backpack"],
   "license": "MIT OR Apache-2.0",
   "docs": {
@@ -23,10 +23,10 @@
     "datasheet": "Hitachi HD44780U (ADE-207-272)",
   },
   "uses": {
-    "hd44780-1602-i2c": "0.1.0",
+    "hd44780-1602-i2c": "0.1.1",
     "pin-header-1x4": "0.1.0",
     "resistor-0603": "0.2.0",
-    "trimmer-3362p": "0.2.1",
+    "trimmer-3362p": "0.2.2",
   },
   "params": {
     "address": { "default": "0x27" },

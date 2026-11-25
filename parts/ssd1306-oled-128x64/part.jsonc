@@ -4,8 +4,8 @@
 // they join VSS on 8. 19 and 20 are D1 and D2, which I2C joins as SDA. The model is the engine's
 // ssd1306 on I2C.
 {
-  "format": 6, "part": "ssd1306-oled-128x64", "version": "0.1.0", "title": "OLED panel, 0.96 inch 128 x 64, SSD1306", "license": "MIT OR Apache-2.0",
-  "summary": "A 0.96 inch 128 x 64 white OLED panel with an SSD1306 controller on the glass and a 30-pin FPC, wired for I2C. The SSD1306 answers at 0x3C with SA0 low. Its reading `screen` is what the glass shows: `get` prints the lit pixels as text art. The active area is 21.74 x 10.86 mm. On a breadboard, use the module oled-ssd1306-128x64.",
+  "format": 6, "part": "ssd1306-oled-128x64", "version": "0.1.1", "title": "OLED panel, 0.96 inch 128 x 64, SSD1306", "license": "MIT OR Apache-2.0",
+  "summary": "0.96 inch 128 x 64 white OLED panel with an SSD1306 controller on the glass and a 30-pin FPC, wired for I2C at address 0x3C.",
   "tags": ["oled", "display", "screen", "ssd1306", "128x64", "i2c"],
   "docs": {
     "Solomon Systech SSD1306 Rev 1.1": "https://cdn-shop.adafruit.com/datasheets/SSD1306.pdf",

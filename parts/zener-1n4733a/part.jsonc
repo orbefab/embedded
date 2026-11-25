@@ -1,9 +1,9 @@
 {
   "format": 5,
   "part": "zener-1n4733a",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "title": "Zener diode, 1N4733A, 5.1 V",
-  "summary": "5.1 V zener in DO-41, 1 W while a lead 9.5 mm (3/8 inch) from the case is at 50 C or below, with its leads bent to 10.16 mm (0.4 inch) for a breadboard. The band marks the cathode.",
+  "summary": "5.1 V, 1 W zener diode in DO-41, with its leads bent to 10.16 mm (0.4 inch) for a breadboard. The band marks the cathode.",
   "tags": ["diode", "zener", "5.1v", "clamp", "shunt", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "docs": {

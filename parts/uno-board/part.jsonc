@@ -14,9 +14,9 @@
 {
   "format": 5,
   "part": "uno-board",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "title": "Uno R3 compatible board",
-  "summary": "ATmega328P in a DIP-28 socket with a CH340G USB-serial chip, 68.6 x 53.3 mm, with female headers in the Uno R3 positions. Simulated: the 328P and its firmware, RESET with its button and the CH340G's DTR auto-reset, the serial line from the CH340G, 5V from USB, 3V3 from its regulator, and the L and ON LEDs. Not simulated: VIN, the barrel jack and the 5 V regulator, USB data, the clocks' crystals, and the TX and RX LEDs. D13 feeds the L LED through 1k, so D13 as an input with its pull-up reads low. Guessed: the Q1 gate pair at 10k, the DTR capacitor at 100n, the 22p loads on the 16 MHz crystal, and placeholders for the USB series resistors, the DTR pulldown, the resistor across the CH340G crystal and the capacitor from RESET to ground.",
+  "summary": "Uno R3 compatible board: an ATmega328P in a DIP-28 socket at 16 MHz and a CH340G USB-serial chip on 68.6 x 53.3 mm, with female headers in the Uno positions.",
   "tags": ["board", "microcontroller", "avr", "atmega328p", "usb", "ch340g"],
   "license": "MIT OR Apache-2.0",
   "docs": {
@@ -32,11 +32,11 @@
   // dimensions, is the representative for the circuit and the interface.
   "real": { "generic": true, "maker": "RobotDyn", "number": "UNO R3 CH340G", "datasheet": "RobotDyn UNO R3 CH340G schematic" },
   "uses": {
-    "ams1117-sot223": "0.2.1", "atmega328p-dip28": "0.2.1", "barrel-jack-dc21": "0.2.1", "capacitor-0603": "0.2.0",
-    "capacitor-electrolytic-smd": "0.2.1", "ch340g": "0.2.1", "crystal-hc49us": "0.2.0", "diode-cd1206": "0.2.1",
-    "diode-m7-sma": "0.2.1", "dip-socket-28": "0.2.0", "led-0805": "0.2.1", "lp2985-sot23-5": "0.2.1",
+    "ams1117-sot223": "0.2.2", "atmega328p-dip28": "0.2.2", "barrel-jack-dc21": "0.2.2", "capacitor-0603": "0.2.0",
+    "capacitor-electrolytic-smd": "0.2.2", "ch340g": "0.2.1", "crystal-hc49us": "0.2.0", "diode-cd1206": "0.2.1",
+    "diode-m7-sma": "0.2.1", "dip-socket-28": "0.2.0", "led-0805": "0.2.1", "lp2985-sot23-5": "0.2.2",
     "pin-header-2x3": "0.2.0", "pmos-fdn340p-sot23": "0.2.1", "ptc-fuse-1812": "0.2.0", "resistor-0603": "0.2.0",
-    "socket-strip-1x10": "0.2.0", "socket-strip-1x6": "0.2.0", "socket-strip-1x8": "0.2.0",
+    "socket-strip-1x10": "0.2.0", "socket-strip-1x6": "0.2.0", "socket-strip-1x8": "0.2.1",
     "tactile-switch-ts42": "0.2.0", "usb-b-socket": "0.2.1",
   },
   "params": {

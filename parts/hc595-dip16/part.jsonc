@@ -3,9 +3,9 @@
 {
   "format": 5,
   "part": "hc595-dip16",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "74HC595 8-bit shift register (DIP-16)",
-  "summary": "Serial-in, parallel-out shift register in a 300 mil DIP-16. SER shifts in on the rising edge of SRCLK, RCLK's rising edge copies that register to QA–QH, SRCLR low clears the shift register, and OE high makes QA–QH high impedance. QHp follows the shift register's last bit and stays driven, so it cascades into the next 595's SER. Each output is push-pull. An output past 35 mA, or VCC or GND past 70 mA, warns, which eight LEDs on small resistors will do. A pin more than 0.5 V past GND or VCC warns, and the part still shifts. Below 2 V the outputs release. Arduino shiftOut drives SER, SRCLK and RCLK. Tie SRCLR high and OE low.",
+  "summary": "8-bit serial-in, parallel-out shift register in a DIP-16. Three pins from a microcontroller drive eight outputs, and it chains to more registers.",
   "tags": ["74hc595", "shift-register", "output", "through-hole", "dip"],
   "license": "MIT OR Apache-2.0",
   "docs": {

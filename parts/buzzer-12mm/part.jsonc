@@ -3,9 +3,9 @@
 {
   "format": 6,
   "part": "buzzer-12mm",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "12 mm magnetic buzzer",
-  "summary": "Externally driven 12 mm magnetic transducer, Same Sky CEM-1203(42). The coil is 42 ohm and the pins, marked + and -, are 6.5 mm apart. `hz` is the note a listener hears, from the drive's full cycles: only notes played, each by the end of its first full cycle, and 0 from 17 ms after the drive stops. The sheet's operating voltage is 3 V to 5 V peak. A drive outside that still sounds, quieter, and the run warns. A Nano pin wired straight across the coil draws more than the pin's 40 mA, so the run warns. Drive it from 5 V through a transistor.",
+  "summary": "Externally driven 12 mm magnetic buzzer, Same Sky CEM-1203(42), with a 42 ohm coil for 3 V to 5 V. It sounds the note of the wave that drives it.",
   "tags": ["buzzer", "sound", "transducer", "passive", "through-hole", "tone"],
   "license": "MIT OR Apache-2.0",
   "docs": {

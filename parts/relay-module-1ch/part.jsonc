@@ -33,8 +33,8 @@
     "datasheet": "Keyes KY-019 5V relay module"
   },
   "uses": {
-    "relay-srd-05vdc-sl-c": "0.1.0",
-    "npn-l8050-sot23": "0.2.1",
+    "relay-srd-05vdc-sl-c": "0.1.1",
+    "npn-l8050-sot23": "0.2.2",
     "resistor-0603": "0.2.0",
     "diode-do41-flush": "0.1.0",
     "led-0805": "0.2.1",
