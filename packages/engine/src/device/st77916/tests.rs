@@ -107,6 +107,7 @@ fn spi(phases: &[(u8, u32)], data: &[u8], data_lanes: Lanes, cs: Cs) -> LinkRow 
             seq: 0,
             start: Time::ZERO,
             end: Time::ZERO,
+            peripheral: "SPI2",
             pin: "CS",
             kind: RecordKind::Spi {
                 spi: Spi {
@@ -129,6 +130,7 @@ fn spi(phases: &[(u8, u32)], data: &[u8], data_lanes: Lanes, cs: Cs) -> LinkRow 
                     sclk: Some(NetId::GROUND),
                     data: lanes().map(Some),
                 },
+                pins: crate::link::SpiPinNames::default(),
             },
         },
     }

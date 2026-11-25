@@ -17,10 +17,18 @@ pub enum Condition {
     /// `@oled.display.screen shows tests/hello.screen`: the screen shows the rows the file
     /// holds, by its path from the scene's folder.
     Shows(Ref, String),
+    /// `@lcd.text contains "Hello"`: the visible LCD text contains `Needle`.
+    TextContains(Ref, Needle),
+    /// `@lcd.text line 0 "Hello"`: visible LCD line `0` or `1` matches (trailing spaces trimmed).
+    TextLine(Ref, u8, String),
+    /// `@lcd.text blank`: every visible LCD line is blank.
+    TextBlank(Ref),
     /// `@disp.digit 8`, or `@disp.digit blank` when no segment a–g is lit.
     Digit(Ref, String),
     /// `serial contains "pressed"`.
     SerialContains(Needle),
+    /// `diagnostics contains "config_in_normal"`.
+    DiagnosticContains(Needle),
     /// `no diagnostics`.
     NoDiagnostics,
 }
@@ -30,6 +38,8 @@ pub enum State {
     Lit,
     Dim,
     Off,
+    Closed,
+    Open,
     High,
     Low,
 }
@@ -40,6 +50,8 @@ impl State {
             State::Lit => "lit",
             State::Dim => "dim",
             State::Off => "off",
+            State::Closed => "closed",
+            State::Open => "open",
             State::High => "high",
             State::Low => "low",
         }
@@ -51,14 +63,22 @@ impl State {
             State::Lit => Some(crate::reply::Light::Lit),
             State::Dim => Some(crate::reply::Light::Dim),
             State::Off => Some(crate::reply::Light::Off),
-            State::High | State::Low => None,
+            State::Closed | State::Open | State::High | State::Low => None,
         }
     }
 
     fn parse(word: &str) -> Option<State> {
-        [State::Lit, State::Dim, State::Off, State::High, State::Low]
-            .into_iter()
-            .find(|s| s.as_str() == word)
+        [
+            State::Lit,
+            State::Dim,
+            State::Off,
+            State::Closed,
+            State::Open,
+            State::High,
+            State::Low,
+        ]
+        .into_iter()
+        .find(|s| s.as_str() == word)
     }
 }
 
@@ -101,6 +121,7 @@ pub enum Unit {
     Ampere,
     Volt,
     Watt,
+    Hertz,
     /// A shaft angle, as `90deg`.
     Degree,
 }
@@ -111,14 +132,21 @@ impl Unit {
             Unit::Ampere => "A",
             Unit::Volt => "V",
             Unit::Watt => "W",
+            Unit::Hertz => "Hz",
             Unit::Degree => "deg",
         }
     }
 
     pub fn parse(text: &str) -> Option<Unit> {
-        [Unit::Ampere, Unit::Volt, Unit::Watt, Unit::Degree]
-            .into_iter()
-            .find(|u| u.as_str() == text)
+        [
+            Unit::Ampere,
+            Unit::Volt,
+            Unit::Watt,
+            Unit::Hertz,
+            Unit::Degree,
+        ]
+        .into_iter()
+        .find(|u| u.as_str() == text)
     }
 }
 
@@ -279,6 +307,9 @@ impl Condition {
         let words: Vec<&str> = words.iter().map(String::as_str).collect();
         match words.as_slice() {
             ["no", "diagnostics"] => Ok(Condition::NoDiagnostics),
+            ["diagnostics", "contains", text] => {
+                Ok(Condition::DiagnosticContains(Needle::parse(text)?))
+            }
             ["serial", "contains", text] => Ok(Condition::SerialContains(Needle::parse(text)?)),
             [r, first, ..] if r.starts_with('@') && first.starts_with("rgb(") => {
                 let colour = words[1..].concat();
@@ -286,6 +317,26 @@ impl Condition {
             }
             [r, "shows", file] if r.starts_with('@') => {
                 Ok(Condition::Shows(Ref::parse(r)?, file.to_string()))
+            }
+            [r, "contains", text] if r.starts_with('@') => Ok(Condition::TextContains(
+                Ref::parse(r)?,
+                Needle::parse(text)?,
+            )),
+            [r, "line", index, text] if r.starts_with('@') => {
+                let row: u8 = index
+                    .parse()
+                    .map_err(|_| format!("`{index}` is not a line index; use 0 or 1"))?;
+                if row > 1 {
+                    return Err(format!("`{index}` is not a line index; use 0 or 1"));
+                }
+                Ok(Condition::TextLine(
+                    Ref::parse(r)?,
+                    row,
+                    (*text).to_string(),
+                ))
+            }
+            [r, "blank"] if r.starts_with('@') && !r.ends_with(".digit") => {
+                Ok(Condition::TextBlank(Ref::parse(r)?))
             }
             [r, word] if r.starts_with('@') && r.ends_with(".digit") => {
                 if !digit_word(word) {
@@ -297,7 +348,7 @@ impl Condition {
             }
             [r, word] if r.starts_with('@') => {
                 let state = State::parse(word).ok_or_else(|| {
-                    format!("`{word}` is not a state; use lit, dim, off, high, low or a colour such as rgb(255,0,0)")
+                    format!("`{word}` is not a state; use lit, dim, off, closed, open, high, low or a colour such as rgb(255,0,0)")
                 })?;
                 Ok(Condition::State(Ref::parse(r)?, state))
             }
@@ -331,8 +382,14 @@ impl fmt::Display for Condition {
             }
             Condition::Color(r, rgb) => write!(f, "{r} {rgb}"),
             Condition::Shows(r, file) => write!(f, "{r} shows {file}"),
+            Condition::TextContains(r, text) => write!(f, "{r} contains {:?}", text.as_str()),
+            Condition::TextLine(r, row, text) => write!(f, "{r} line {row} {text:?}"),
+            Condition::TextBlank(r) => write!(f, "{r} blank"),
             Condition::Digit(r, digit) => write!(f, "{r} {digit}"),
             Condition::SerialContains(text) => write!(f, "serial contains {:?}", text.as_str()),
+            Condition::DiagnosticContains(text) => {
+                write!(f, "diagnostics contains {:?}", text.as_str())
+            }
             Condition::NoDiagnostics => f.write_str("no diagnostics"),
         }
     }

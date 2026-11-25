@@ -1,0 +1,21 @@
+// Pull-ups only on Wire's default pins, SDA on GPIO8 and SCL on GPIO9, with no I2C device.
+// The app is the stock sketch packages/engine/tests/firmware/esp32s3/arduino/stock/wirenack.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    },
+    "r_sda": { "type": "resistor-axial", "resistance": "4.7k" },
+    "r_scl": { "type": "resistor-axial", "resistance": "4.7k" }
+  },
+  "wires": [
+    ["board.3V3", "r_sda.a"],
+    ["r_sda.b", "board.GPIO8"],
+    ["board.3V3", "r_scl.a"],
+    ["r_scl.b", "board.GPIO9"]
+  ],
+  "ground": "board.GND"
+}

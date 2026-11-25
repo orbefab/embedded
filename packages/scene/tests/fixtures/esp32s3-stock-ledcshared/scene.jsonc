@@ -1,0 +1,25 @@
+// GPIO4 and GPIO5 share one LEDC timer at 1000 Hz, then ledcChangeFrequency moves both to 2000 Hz.
+// The app is the stock sketch packages/engine/tests/firmware/esp32s3/arduino/stock/ledcshared.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+    "led1": { "type": "led-5mm" },
+    "r2": { "type": "resistor-axial", "resistance": "220" },
+    "led2": { "type": "led-5mm" }
+  },
+  "wires": [
+    ["board.GPIO4", "r1.a"],
+    ["r1.b", "led1.anode"],
+    ["led1.cathode", "board.GND"],
+    ["board.GPIO5", "r2.a"],
+    ["r2.b", "led2.anode"],
+    ["led2.cathode", "board.GND"]
+  ],
+  "ground": "board.GND"
+}

@@ -479,8 +479,11 @@ fn a_part_this_orbe_reads_is_installed() {
 
 #[test]
 fn a_format_5_part_named_for_a_newer_orbe_is_not_written() {
+    let (major, rest) = env!("CARGO_PKG_VERSION").split_once('.').unwrap();
+    let (minor, patch) = rest.split_once('.').unwrap();
+    let newer = format!("{major}.{minor}.{}", patch.parse::<u64>().unwrap() + 1);
     let (dir, _) = led_index(|row| {
-        row["orbe"] = json!("0.2.2");
+        row["orbe"] = json!(newer);
     });
     let project = tempfile::tempdir().unwrap();
     let (code, stdout, stderr) = run(
@@ -1160,14 +1163,21 @@ fn file_sha(registry: &Path, id: &str, path: &str) -> String {
 fn cloned_registry() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
     let dest = tmp.path().join("reg");
-    let status = Command::new("cp")
-        .args(["-a", "--link"])
-        .arg(registry_env::dir())
-        .arg(&dest)
-        .status()
-        .unwrap();
-    assert!(status.success());
+    link_tree(registry_env::dir(), &dest);
     (tmp, dest)
+}
+
+fn link_tree(from: &Path, to: &Path) {
+    fs::create_dir(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            link_tree(&entry.path(), &target);
+        } else {
+            fs::hard_link(entry.path(), target).unwrap();
+        }
+    }
 }
 
 fn led_version_used_by_nano(reg: &Path) -> String {

@@ -24,14 +24,16 @@ is in LICENSE-gfx. Its source is the archive at
 https://github.com/adafruit/Adafruit-GFX-Library/archive/refs/tags/1.13.0.tar.gz
 with SHA-256 8ab038fb445d99f320feb9d463c7afe4cd91475fd8ea9c4047be444aacbb3b29.
 
-Adafruit_GFX.h includes the headers of Adafruit BusIO 1.17.4, under the MIT license, whose
-notice is in LICENSE-busio. The image holds none of its code. Its source is the archive at
+Adafruit_GFX.h includes the headers of Adafruit BusIO 1.17.4 (MIT) during compilation, and the
+image holds none of its code. Its source is the archive at
 https://github.com/adafruit/Adafruit_BusIO/archive/refs/tags/1.17.4.tar.gz
 with SHA-256 59efa3acd5466e381c1b0313d5f0e824832db1bb24e4e328667e12b7d235d56d.
 
 The image also holds the start-up code of the toolchain's C library, version 2.0.0, under that
 library's modified BSD license, whose notice is in LICENSE-libc as the license requires, and
-routines of the compiler's support library, under the GCC Runtime Library Exception.
+routines of GCC's runtime library (`libgcc`), under GPL-3.0-or-later with the GCC Runtime
+Library Exception 3.1, whose text is in LICENSE-gcc-exception. That exception lets the compiled
+runtime ship inside the program under the program's own terms.
 
 These files and their licences:
 
@@ -43,5 +45,6 @@ LGPL-2.1-or-later, BSD-3-Clause and BSD-2-Clause.
 `firmware/LICENSE-runtime` is under LGPL-2.1-or-later.
 `firmware/LICENSE-ssd1306` is under BSD-3-Clause.
 `firmware/LICENSE-gfx` is under BSD-2-Clause.
-`firmware/LICENSE-busio` is under MIT.
 `firmware/LICENSE-libc` is under BSD-3-Clause.
+`firmware/LICENSE-gcc-exception` holds the GCC Runtime Library Exception 3.1
+(GPL-3.0-or-later WITH GCC-exception-3.1).

@@ -1,0 +1,14 @@
+# The Nano holds the module on for one second, then off for one second.
+open
+step 200ms
+expect @relay closed
+expect @led1 lit
+expect @relay.led lit
+step 1000ms
+expect @relay open
+expect @led1 off
+expect @relay.led off
+step 1000ms
+expect @relay closed
+expect @led1 lit
+expect no diagnostics

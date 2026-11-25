@@ -17,7 +17,7 @@ use orbe_mcu::{Frame, Mcu as _, Note, Phase, Sent, SentKind};
 use orbe_model::{Drive, Readings, Stop, Time};
 
 use crate::active::{Chip, Output, Stage, Takes};
-use crate::link::{Record, RecordKind, SpiNets};
+use crate::link::{Record, RecordKind, SpiNets, SpiPinNames};
 use crate::mna::Node;
 use crate::netlist::{NetId, PartId, Threshold};
 use crate::output_stage::OutputStage;
@@ -33,6 +33,8 @@ pub(crate) struct Host<M> {
     pub(crate) mcu: M,
     /// Shared with every copy, so a copy copies a pointer.
     nets: Arc<[NetId]>,
+    /// The pin name of each output, in the same order as `nets`.
+    pins: Arc<[&'static str]>,
     /// In the order it sent them.
     records: Vec<Record>,
     /// How many records it has made.
@@ -44,6 +46,7 @@ impl<M: Clone> Clone for Host<M> {
         Host {
             mcu: self.mcu.clone(),
             nets: Arc::clone(&self.nets),
+            pins: Arc::clone(&self.pins),
             records: self.records.clone(),
             made: self.made,
         }
@@ -53,6 +56,9 @@ impl<M: Clone> Clone for Host<M> {
         self.mcu.clone_from(&source.mcu);
         if !Arc::ptr_eq(&self.nets, &source.nets) {
             self.nets = Arc::clone(&source.nets);
+        }
+        if !Arc::ptr_eq(&self.pins, &source.pins) {
+            self.pins = Arc::clone(&source.pins);
         }
         self.records.clone_from(&source.records);
         self.made = source.made;
@@ -68,11 +74,12 @@ impl<M: orbe_mcu::Mcu> Host<M> {
             let Host {
                 mcu,
                 nets,
+                pins,
                 records,
                 made,
             } = self;
             mcu.take_sent(|sent| {
-                records.push(record(nets, sent, *made));
+                records.push(record(nets, pins, sent, *made));
                 *made += 1;
             });
         }
@@ -98,18 +105,20 @@ impl<M: orbe_mcu::Mcu> Host<M> {
         self.mcu
             .in_flight(&ahead.mcu, at)
             .into_iter()
-            .map(|sent| record(&self.nets, sent, 0))
+            .map(|sent| record(&self.nets, &self.pins, sent, 0))
             .collect()
     }
 }
 
 /// `sent` as the `seq`th record of its chip, on the nets of the outputs it went out on.
-fn record(nets: &[NetId], sent: Sent, seq: u64) -> Record {
+fn record(nets: &[NetId], output_pins: &[&'static str], sent: Sent, seq: u64) -> Record {
     let net = |output: Option<usize>| output.map(|k| nets[k]);
+    let pin = |output: Option<usize>| output.map(|k| output_pins[k]);
     Record {
         seq,
         start: sent.start,
         end: sent.end,
+        peripheral: sent.peripheral,
         pin: sent.pin,
         kind: match sent.kind {
             SentKind::Spi { spi, pins } => RecordKind::Spi {
@@ -118,6 +127,11 @@ fn record(nets: &[NetId], sent: Sent, seq: u64) -> Record {
                     cs: net(pins.cs),
                     sclk: net(pins.sclk),
                     data: pins.data.map(net),
+                },
+                pins: SpiPinNames {
+                    cs: pin(pins.cs),
+                    sclk: pin(pins.sclk),
+                    data: pins.data.map(pin),
                 },
             },
             SentKind::Pulses { pulses, output } => RecordKind::Pulses {
@@ -147,6 +161,8 @@ pub(crate) struct Pad<'a> {
     pub(crate) net: NetId,
     /// Ohm.
     pub(crate) pull_up: f64,
+    /// Ohm. Alternate strong pull-up when the core asserts `strong_pull_up`, `None` when none.
+    pub(crate) strong_pull_up: Option<f64>,
     /// Ohm. `None` on a pad that never pulls down.
     pub(crate) pull_down: Option<f64>,
     /// The fractions of its supply it reads a level at.
@@ -174,6 +190,7 @@ impl Pads<'_> {
                 high,
                 low,
                 pull_up: Some(pad.pull_up),
+                strong_pull_up: pad.strong_pull_up,
                 pull_down: pad.pull_down,
                 leakage: Some(self.leakage),
             })
@@ -204,6 +221,7 @@ impl Pads<'_> {
 pub(crate) fn chip<M: orbe_mcu::Mcu>(
     part: PartId,
     outputs: Vec<Output>,
+    output_pins: Vec<&'static str>,
     watches: Vec<Watch>,
     signals: Vec<(&'static str, usize)>,
     samples: Vec<Signal>,
@@ -212,10 +230,12 @@ pub(crate) fn chip<M: orbe_mcu::Mcu>(
 where
     Mcu: From<Host<M>>,
 {
+    debug_assert_eq!(outputs.len(), output_pins.len());
     let nets = outputs.iter().map(|output| output.pin).collect();
     let host = Host {
         mcu,
         nets,
+        pins: output_pins.into(),
         records: Vec::new(),
         made: 0,
     };
@@ -310,6 +330,11 @@ impl Mcu {
     #[inline]
     pub(crate) fn pulled_down(&self) -> &[bool] {
         each!(self, host => host.mcu.pulled_down())
+    }
+
+    #[inline]
+    pub(crate) fn strong_pull_up(&self) -> &[bool] {
+        each!(self, host => host.mcu.strong_pull_up())
     }
 
     #[inline]

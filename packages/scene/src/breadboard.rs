@@ -82,7 +82,9 @@ pub fn breadboard_line(id: &str, load: &dyn Fn(&str) -> Option<PlugPart>) -> Opt
                 for choice in &choices {
                     match seat(&legs, choice.leg, hole, degrees, &board) {
                         Some(Seat::Placed(landed)) => {
-                            return Some(sentence(board_id, choice, &legs, &landed, &board));
+                            return Some(sentence(
+                                board_id, choice, degrees, &legs, &landed, &board,
+                            ));
                         }
                         Some(Seat::Short) => short = true,
                         None => {}
@@ -102,12 +104,18 @@ pub fn breadboard_line(id: &str, load: &dyn Fn(&str) -> Option<PlugPart>) -> Opt
 fn sentence(
     board_id: &str,
     choice: &Choice,
+    degrees: f64,
     legs: &[Leg],
     landed: &[usize],
     board: &Board,
 ) -> String {
     let hole = &board.holes[landed[choice.leg]].name;
-    let example = format!("\"on\": {{ \"{}\": \"bb.{hole}\" }}", choice.pin);
+    let rotate = if degrees == 0.0 {
+        String::new()
+    } else {
+        format!(", \"rotate\": [0, 0, {degrees}]")
+    };
+    let example = format!("\"on\": {{ \"{}\": \"bb.{hole}\" }}{rotate}", choice.pin);
     let wide = if board_id == "breadboard-830" {
         ", only a breadboard-830 is wide enough"
     } else {

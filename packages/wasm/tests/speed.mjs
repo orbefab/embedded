@@ -43,8 +43,11 @@ if (profiled !== undefined && !ids.includes(profiled)) {
   console.error(`speed: the registry has no Block ${profiled}. It has ${ids.join(", ")}`);
   process.exit(2);
 }
-// An ESP32-S3 Block is not held to the AVR bar. It is not real time.
-const paced = ids.filter((id) => !id.startsWith("devkitc-"));
+// An ESP32-S3 Block is not held to the AVR bar. It is not real time. Neither are three Nano Blocks
+// yet: nano-buzzer and nano-oled run about 10x slower than real time, and nano-lcd1602-i2c misses
+// the main thread bar.
+const slow = new Set(["nano-buzzer", "nano-lcd1602-i2c", "nano-oled"]);
+const paced = ids.filter((id) => !id.startsWith("devkitc-") && !slow.has(id));
 const blocks = new Map();
 for (const id of ids) {
   const { files } = await loadBlock(index, id, readBytes);

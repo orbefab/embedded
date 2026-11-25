@@ -101,6 +101,7 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
                 super::Pad {
                     net: mcu.pins[k],
                     pull_up: pull_up.si.get(),
+                    strong_pull_up: None,
                     pull_down: None,
                     threshold,
                 }
@@ -140,7 +141,16 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
         })
         .collect();
 
-    let mut chip = super::chip(part, outputs, watches, signals, samples, bridge);
+    let output_pins = PORT_PINS.iter().map(|&k| Atmega328p::PINS[k]).collect();
+    let mut chip = super::chip(
+        part,
+        outputs,
+        output_pins,
+        watches,
+        signals,
+        samples,
+        bridge,
+    );
     let conductance = |current: Option<&Value>| current.map(|c| c.si.get() / ACTIVE_AT);
     let running = conductance(mcu.active_current.as_ref());
     let held = conductance(mcu.reset_current.as_ref()).or(running);

@@ -2140,7 +2140,7 @@ fn a_scene_named_like_a_flag_opens_as_dot_slash_or_after_dashes() {
         runtime.orbe(root, &["close"]).ok();
         fs::write(
             root.join("tests/a.test"),
-            format!("open {}\n", scene.join(" ")),
+            format!("open {}\nexpect @led1 off\n", scene.join(" ")),
         )
         .unwrap();
         runtime.orbe(root, &["test"]).ok();
@@ -2172,4 +2172,186 @@ fn check_on_a_missing_scene_uses_the_same_hint_as_open() {
     assert_eq!(check_error["code"], "io_error");
     assert_eq!(check_error["message"], "no scene file at missing.jsonc");
     assert_eq!(check_error["hint"], "write the scene, or name its path");
+}
+
+#[test]
+fn a_step_over_the_wall_time_budget_stops_cleanly_and_continues() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    let session = ["--session", "slow"];
+    runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+
+    let asked_ps = 1_000_000_000_000u64; // 1s
+    let run = Run::new(
+        runtime
+            .command(
+                dir.path(),
+                &[&["step", "1s", "--json"][..], &session].concat(),
+            )
+            .env("ORBE_TEST_STEP_BUDGET", "15ms")
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let envelope = run.json();
+    assert_eq!(envelope["ok"], false, "{envelope}");
+    assert_eq!(envelope["state"], "paused", "{envelope}");
+    assert_eq!(envelope["error"]["code"], "step_timeout", "{envelope}");
+    let reached = envelope["t_ps"].as_u64().unwrap();
+    assert!(reached > 0 && reached < asked_ps, "{envelope}");
+
+    let reached_text = orbe_session::Duration::from_ps(reached).to_string();
+    let rest_text = orbe_session::Duration::from_ps(asked_ps - reached).to_string();
+    let message = envelope["error"]["message"].as_str().unwrap();
+    let hint = envelope["error"]["hint"].as_str().unwrap();
+    assert!(message.contains(&format!("t={reached_text}")), "{message}");
+    assert!(message.contains("1s"), "{message}");
+    assert!(message.contains("real time"), "{message}");
+    assert!(
+        hint.contains(&format!("`orbe step {rest_text} --session slow`")),
+        "{hint}"
+    );
+
+    // The session stays open and paused at `reached`, so reads and the follow-up step work.
+    let get = runtime
+        .orbe(
+            dir.path(),
+            &[&["get", "@nano.D13", "--json"][..], &session].concat(),
+        )
+        .ok()
+        .json();
+    assert_eq!(get["t_ps"].as_u64(), Some(reached));
+    let snap = runtime
+        .orbe(
+            dir.path(),
+            &[&["snapshot", "--json"][..], &session].concat(),
+        )
+        .ok()
+        .json();
+    assert_eq!(snap["t_ps"].as_u64(), Some(reached));
+    assert_eq!(snap["state"], "paused");
+
+    let finish = runtime
+        .orbe(
+            dir.path(),
+            &[&["step", rest_text.as_str(), "--json"][..], &session].concat(),
+        )
+        .ok()
+        .json();
+    assert_eq!(finish["data"]["from_ps"].as_u64(), Some(reached));
+    assert_eq!(finish["t_ps"].as_u64(), Some(asked_ps));
+
+    // A second timed-out step from t > 0 reports text output cleanly too.
+    let again = Run::new(
+        runtime
+            .command(dir.path(), &[&["step", "1s"][..], &session].concat())
+            .env("ORBE_TEST_STEP_BUDGET", "15ms")
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(again.code, 1, "{}{}", again.stdout, again.stderr);
+    assert!(
+        again
+            .stdout
+            .contains("error[step_timeout]: step stopped at t="),
+        "{}",
+        again.stdout
+    );
+    assert!(again.stdout.contains("of the 1s asked"), "{}", again.stdout);
+    assert!(
+        again.stdout.contains("hint: the session is paused at t="),
+        "{}",
+        again.stdout
+    );
+
+    runtime
+        .orbe(dir.path(), &[&["close"][..], &session].concat())
+        .ok();
+}
+
+#[test]
+fn a_step_until_over_the_wall_time_budget_reports_unmet_and_continues() {
+    let dir = project("open\n");
+    let runtime = Runtime::new();
+    let session = ["--session", "slow-until"];
+    runtime
+        .orbe(dir.path(), &[&["open"][..], &session].concat())
+        .ok();
+
+    let timeout_ps = 10_000_000_000_000u64; // 10s
+    let run = Run::new(
+        runtime
+            .command(
+                dir.path(),
+                &[
+                    &[
+                        "step",
+                        "--until",
+                        "@led1",
+                        "lit",
+                        "--timeout",
+                        "10s",
+                        "--json",
+                    ][..],
+                    &session,
+                ]
+                .concat(),
+            )
+            .env("ORBE_TEST_STEP_BUDGET", "15ms")
+            .output()
+            .unwrap(),
+    );
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    let envelope = run.json();
+    assert_eq!(envelope["ok"], false, "{envelope}");
+    assert_eq!(envelope["state"], "paused", "{envelope}");
+    assert_eq!(envelope["error"]["code"], "step_timeout", "{envelope}");
+    let reached = envelope["t_ps"].as_u64().unwrap();
+    assert!(reached > 0 && reached < timeout_ps, "{envelope}");
+
+    let reached_text = orbe_session::Duration::from_ps(reached).to_string();
+    let rest_text = orbe_session::Duration::from_ps(timeout_ps - reached).to_string();
+    let message = envelope["error"]["message"].as_str().unwrap();
+    let hint = envelope["error"]["hint"].as_str().unwrap();
+    assert!(message.contains(&format!("t={reached_text}")), "{message}");
+    assert!(message.contains("10s"), "{message}");
+    assert!(hint.contains("not met yet"), "{hint}");
+    assert!(
+        hint.contains(&format!(
+            "`orbe step --until @led1 lit --timeout {rest_text} --session slow-until`"
+        )),
+        "{hint}"
+    );
+
+    // Pressing the button and continuing with the suggested rest meets the condition.
+    runtime
+        .orbe(dir.path(), &[&["press", "@btn1"][..], &session].concat())
+        .ok();
+    let met = runtime
+        .orbe(
+            dir.path(),
+            &[
+                &[
+                    "step",
+                    "--until",
+                    "@led1",
+                    "lit",
+                    "--timeout",
+                    rest_text.as_str(),
+                    "--json",
+                ][..],
+                &session,
+            ]
+            .concat(),
+        )
+        .ok()
+        .json();
+    assert_eq!(met["ok"], true, "{met}");
+    assert!(met["t_ps"].as_u64().unwrap() > reached, "{met}");
+
+    runtime
+        .orbe(dir.path(), &[&["close"][..], &session].concat())
+        .ok();
 }

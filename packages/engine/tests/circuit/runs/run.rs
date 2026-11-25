@@ -253,17 +253,13 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
         } else if name == "esp32s3-dualcore" {
             // Start-up's radio, debug-trace and reset writes are quiet.
             assert!(found.is_empty(), "{name}: {}", doc["diagnostics"]);
-        } else if name == "esp32s3-echo" {
-            // The read of USB_SERIAL_JTAG+0x18, which the model does not keep.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 1];
-            assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
+        } else if name == "esp32s3-echo" || name == "esp32s3-uart" {
+            // The driver's USB_SERIAL_JTAG_CONF0_REG access is modeled.
+            assert!(found.is_empty(), "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 0);
         } else if name == "esp32s3-encoder" {
-            // Reads of RTCIO+0x88 and RTCIO+0x8c, the pads `gpio_config` reads for GPIO1 and
-            // GPIO2. A stock sketch does not read those pads, so they stay listed.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 2];
-            assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
-            assert_kept_resets(&name, &doc, 0);
+            // GPIO1 and GPIO2 pad reads and start-up's radio and reset writes are quiet.
+            assert!(found.is_empty(), "{name}: {}", doc["diagnostics"]);
             // The ISR prints one `edge` line for each of the 7 closings, so it fails when the
             // seam hands the chip no pad.
             let serial = fs::read_to_string(out.join("traces/serial.csv")).unwrap();
@@ -283,41 +279,19 @@ fn each_transient_example_writes_a_trace_whose_row_0_is_the_operating_point() {
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 2);
         } else if name == "esp32s3-screen" {
-            // The read of RTCIO+0xc8, GPIO17's pad. A stock sketch does not read it.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 1];
-            assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
-            assert_kept_resets(&name, &doc, 0);
+            // GPIO17's pad read and start-up's radio and reset writes are quiet.
+            assert!(found.is_empty(), "{name}: {}", doc["diagnostics"]);
         } else if name == "esp32s3-touch" {
-            // Reads of RTCIO+0xa4 and RTCIO+0xa0, and the write of `I2C_CTR_REG` that changes
-            // bits the model keeps and does not run.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 3];
-            assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
-            let kept: Vec<_> = doc["diagnostics"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter(|d| d["data"]["kept"] == true)
-                .collect();
-            assert_eq!(kept.len(), 1, "{name}: {}", doc["diagnostics"]);
-            assert_eq!(
-                kept.iter()
-                    .filter(|d| d["data"]["register"] == "I2C0+0x4")
-                    .count(),
-                1,
-                "{name}: {}",
-                doc["diagnostics"]
-            );
-        } else if name == "esp32s3-timers" {
-            // The read of USB_SERIAL_JTAG+0x18. UART0's early log is modeled, and the general
-            // timers, the RNG and the SAR ADC are modeled, so arming T0, reading `WDEV_RND_REG`
-            // and the SENS start-up add no warning.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 1];
+            // GPIO7 and GPIO8 pad reads are quiet, and IDF's write of `I2C_CTR_REG` clears
+            // `RX_FULL_ACK_LEVEL`, which the model runs.
+            let want: Vec<(String, String)> = Vec::new();
             assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 0);
-        } else if name == "esp32s3-uart" {
-            // The read of USB_SERIAL_JTAG+0x18, which the model does not keep.
-            let want = vec![("chip.unmodeled_register".to_string(), "#u1".to_string()); 1];
-            assert_eq!(found, want, "{name}: {}", doc["diagnostics"]);
+        } else if name == "esp32s3-timers" {
+            // USB_SERIAL_JTAG_CONF0_REG, UART0's early log, the general timers, the RNG and the
+            // SAR ADC are modeled, so arming T0, reading `WDEV_RND_REG` and the SENS start-up add
+            // no warning.
+            assert!(found.is_empty(), "{name}: {}", doc["diagnostics"]);
             assert_kept_resets(&name, &doc, 0);
         } else if name == "esp32s3-ring" || name == "esp32s3-pulls" {
             // Start-up's radio and reset writes are quiet.

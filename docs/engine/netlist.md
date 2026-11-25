@@ -90,6 +90,7 @@ The world is the room the circuit sits in. Its quantities are a closed table, ex
 | `temperature` | `degC` | -40 to 125 | 25 |
 | `humidity` | `%RH` | 0 to 100 | 50 |
 | `light` | `lx` | 0 to 100000 | 300 |
+| `pressure` | `Pa` | 30000 to 110000 | 101325 |
 
 `world` maps each quantity the netlist declares to a value object or a `steps` waveform in the quantity's unit, as a potentiometer's `position` is. A value holds at every time. A `steps` waveform holds `initial`, then each event's `level` from its `t_ps` on. A quantity the netlist leaves out has no value, no part may read it, and the run writes no column for it. `{}` declares none, as a missing `world` does.
 
@@ -136,7 +137,7 @@ A curve reads the quantity's value `w`. `x`, `x0` and `x1` are in the quantity's
 | `beta` | `y * exp(beta * (1 / (w + 273.15) - 1 / (x + 273.15)))` | `x`, `y`, `beta` in `K` | an NTC thermistor's B equation, on `temperature` only |
 | `linear` | the line through `(x0, y0)` and `(x1, y1)` | `x0`, `y0`, `x1`, `y1` | a sensor with a linear output, such as an LM35's 10 mV per degC |
 
-Each curve is monotonic in `w` over the range of a quantity it may read, so its values over that range lie between its values at the range's two ends. A `beta` or `linear` curve is monotonic for every `w` it may read. A `power` curve is monotonic only where `w / x` is not negative, so it reads only a quantity whose range does not go below 0, `light` or `humidity`. At `w` 0 a negative exponent makes `y * (w / x)^exponent` infinite, and the curve is `max` there, the dark resistance of a light-dependent resistor. Any other value above `max` is `max` too. A value that is not a number is never capped. Parse checks the field's own rule at both ends, so every value a schedule or a session can set keeps it. An end that breaks it is `netlist.value` on field `<field>.curve at <end> <unit>`, such as `resistance.curve at 0.0 lx`, with the field's rule, or rule `finite` when the curve is not finite there, such as a `power` curve with `y` 0 and a negative exponent at 0 lx. A `power` curve on `temperature` is `netlist.world` with rule `non_negative` on field `<field>.curve.kind`. A quantity the netlist does not declare is `netlist.world` with rule `undeclared` on field `<field>.quantity`, and a name the table lacks is rule `unknown` there. A `beta` curve on another quantity is `netlist.world` with rule `temperature` on field `<field>.curve.kind`. A `power` curve's `x` at or below 0 is `netlist.value` with rule `positive`. A `linear` curve whose `x1` equals its `x0` is `netlist.value` with rule `distinct`. A unit that is not the one the table above names is `netlist.unit` on field `<field>.curve.<name>`. An unknown `kind`, a missing field and an unknown field are `netlist.syntax`.
+Each curve is monotonic in `w` over the range of a quantity it may read, so its values over that range lie between its values at the range's two ends. A `beta` or `linear` curve is monotonic for every `w` it may read. A `power` curve is monotonic only where `w / x` is not negative, so it reads only a quantity whose range does not go below 0, `light`, `humidity` or `pressure`. At `w` 0 a negative exponent makes `y * (w / x)^exponent` infinite, and the curve is `max` there, the dark resistance of a light-dependent resistor. Any other value above `max` is `max` too. A value that is not a number is never capped. Parse checks the field's own rule at both ends, so every value a schedule or a session can set keeps it. An end that breaks it is `netlist.value` on field `<field>.curve at <end> <unit>`, such as `resistance.curve at 0.0 lx`, with the field's rule, or rule `finite` when the curve is not finite there, such as a `power` curve with `y` 0 and a negative exponent at 0 lx. A `power` curve on `temperature` is `netlist.world` with rule `non_negative` on field `<field>.curve.kind`. A quantity the netlist does not declare is `netlist.world` with rule `undeclared` on field `<field>.quantity`, and a name the table lacks is rule `unknown` there. A `beta` curve on another quantity is `netlist.world` with rule `temperature` on field `<field>.curve.kind`. A `power` curve's `x` at or below 0 is `netlist.value` with rule `positive`. A `linear` curve whose `x1` equals its `x0` is `netlist.value` with rule `distinct`. A unit that is not the one the table above names is `netlist.unit` on field `<field>.curve.<name>`. An unknown `kind`, a missing field and an unknown field are `netlist.syntax`.
 
 ## Names
 
@@ -156,7 +157,7 @@ Two nets, or two parts, with the same name are `netlist.duplicate`. The ref is `
 
 `resistance.value` is in `ohm`, greater than 0, and its reciprocal must be finite. `resistance` may instead be a world-driven field, as [World-driven fields](#world-driven-fields) says, which keeps the same rule at both ends of its quantity's range. Zero or a negative value is `netlist.value` with rule `positive`. A positive value whose reciprocal overflows is `netlist.value` with rule `finite_reciprocal`. A different unit is `netlist.unit`. A number outside the f64 range is `netlist.syntax`.
 
-`ratings` holds `power`. See [Ratings](#ratings).
+`ratings` holds `power`, and may hold `voltage`. See [Ratings](#ratings).
 
 ### Potentiometer
 
@@ -489,7 +490,7 @@ The stamp reads the last solution, because the row is the law linearised at that
 
 `ratings` holds `current` and `power`, and may hold `input_voltage`, in `V`. `current` bounds `|iout|`. `input_voltage` is the most `V(in) - V(gnd)` may be. Past it, pin `in` warns [`rating.voltage`](diagnostics.md#ratingvoltage). It must be greater than 0, else `netlist.value` with rule `positive` on `ratings.input_voltage`. An absent key or `null` rates no ceiling. The catalog's regulators carry their sheets' absolute maxima: LM7805 35 V, AMS1117 15 V, SGM2212 22 V and LP2985 16 V.
 
-The law is the DC table. It has no internal pole and no output inductance. It has no enable pin. Pin `in` warns [`rating.voltage`](diagnostics.md#ratingvoltage) below -0.3 V over `gnd`. LP2985, TI SLVS522, states that floor. The AMS1117 sheet this repo cites states a 15 V maximum and no negative floor, and the SGM2212 sheet states 22 V and no negative floor, so -0.3 V is the model's floor for every `linear_regulator`, the margin a chip pin uses below its ground. A pin exactly on -0.3 V is inside. It has no diode from `out` to `in`. A circuit that needs that diode adds a `diode` part. The current limit is flat. There is no thermal shutdown, and a `power` rating warns instead. `ig` follows `h` while `vi` is positive and the reverse term while `vi` is negative, and it does not add a further rise in dropout. There is no minimum load. Ripple from the input reaches the output through the static `k`.
+The law is the DC table. It has no internal pole and no output inductance. It has no enable pin. Pin `in` warns [`rating.voltage`](diagnostics.md#ratingvoltage) below -0.3 V over `gnd`. LP2985, TI SLVS522, states that floor. The AMS1117 sheet this repo cites states a 15 V maximum and no negative floor, and the SGM2212 sheet states 22 V and no negative floor, so -0.3 V is the model's floor for every `linear_regulator`, the margin a chip pin uses below its ground. A pin exactly on -0.3 V is inside. Pin `out` warns [`regulator.current_limit`](diagnostics.md#regulatorcurrent_limit) when a load holds the pass current at `current_limit` and pulls the output below its regulation target, outside brief power-on capacitor charging. It has no diode from `out` to `in`. A circuit that needs that diode adds a `diode` part. The current limit is flat. There is no thermal shutdown, and a `power` rating warns instead. `ig` follows `h` while `vi` is positive and the reverse term while `vi` is negative, and it does not add a further rise in dropout. There is no minimum load. Ripple from the input reaches the output through the static `k`.
 
 `packages/engine/scripts/fit_regulator.py` fits the LM1117-3.3 row of TI LM1117, SNOS412Q. `output_voltage` is 3.3 V, the p5 typical at 10 mA and VIN 5 V. `line_regulation` is `0.001 / 10.25` = 9.75609756097561e-05, the p5 typical of 1 mV from 4.75 V to 15 V at 0 mA. `output_resistance` is `0.001 / 0.8` = 0.00125 ohm, the p5 typical of 1 mV from 0 to 800 mA at VIN 4.75 V. `dropout_resistance` is `0.1 / 0.7` = 0.14285714285714288 ohm and `dropout_voltage` is 1.0857142857142859 V, the line through the p6 typicals of 1.10 V at 100 mA and 1.20 V at 800 mA. `current_limit` is 1.2 A, the p6 typical at a 5 V differential. `quiescent_current` is 0.005 A, the p6 LM1117-3.3 typical. The maximum on that row is 10 mA, at VIN of at most 15 V, and the model uses the typical. `ground_current_ratio` is 0. The p6 table gives no load term, and the model holds the ground current at 5 mA wherever `h` is 1. `ratings.current` is 0.8 A, the p1 output current, which is also the top of the p5 load-regulation range from 0 to 800 mA. `ratings.power` is `(125 - 25) / 61.6` = 1.6233766233766234 W. Section 7.3's recommended junction limit is 125 C and section 7.4's SOT-223 RθJA is 61.6 C/W. The ambient in that figure is 25 C. Section 7.1's absolute junction limit is 150 C, which would be 2.029220779220779 W. The rating uses 125 C.
 
@@ -1148,7 +1149,7 @@ The model is the controller's I2C command set and its 1024-byte GDDRAM, page `p`
 - `D5h`, `D9h` and `DBh`, the clock, the precharge and the VCOMH level, are stored and change nothing. `registers` in the panel state is how many of the three took a write. `E3h` is a no-op, and so is `2Eh`, deactivate scroll.
 - The scroll commands, `26h`, `27h`, `29h`, `2Ah`, `2Fh` and `A3h`, take their parameters and change nothing, rule `scroll`. A read transfer is answered with 0xFF bytes, rule `read`, since the model has no status byte. Addressing mode 3, a multiplex ratio below 15 and every command the datasheet does not list change nothing, rule `command`.
 - `RES` low resets every register, drops a waiting command and an open run with no row, and keeps the GDDRAM, as the datasheet says. The reset values are display off, contrast 0x7F, page mode, column window 0 to 127, page window 0 to 7, multiplex ratio 63, COM pins 0x12 and the charge pump off, 0x10. The GDDRAM is all zero bytes at power-on.
-- The controller answers the bus while `V(VDD) - V(VSS)` is at least 1.65 V, Table 12-1's logic minimum, that end included. Below it the bus sees no ACK and the glass is dark. Falling below it loses the GDDRAM. Rising back to it resets the controller: the registers take the values above and the GDDRAM stays empty, which is what the static RAM holds with its supply gone. There is no upper bound. Table 12-1's recommended maximum is 3.3 V and Table 11-1's absolute maximum is 4.0 V. The module's regulator, from 5 V, sits a few millivolts over the first, and the controller runs there, as those modules do. Over 4.0 V the controller keeps answering and drawing, the way a real part mostly does past its ratings. The part carries no `VDD` rating, so a supply over 4.0 V does not warn yet. The panel's `VCC` is 7 V to 15 V in Table 12-1. The charge pump makes it, section 8.10, and the glass stays dark unless the pump is on, so a controller below the minimum lights nothing. `packages/engine/tests/circuit/runs/ssd1306.rs` runs `packages/engine/tests/firmware/sketch/ssd1306_power.hex` across that minimum. The module's VCC source is 0 V until 40 ms, the controller does not acknowledge, and the frame stays empty. After VCC steps to 5 V the regulator is over the minimum, the address is acknowledged and `begin` prints `BEGIN 1`. The same file runs `blocks/nano-oled/build/hello.ino.hex` with `VDD` on 5 V: every address is acknowledged and the frame is drawn.
+- The controller answers the bus while `V(VDD) - V(VSS)` is at least 1.65 V, Table 12-1's logic minimum, that end included. Below it the bus sees no ACK and the glass is dark. Falling below it loses the GDDRAM. Rising back to it resets the controller: the registers take the values above and the GDDRAM stays empty, which is what the static RAM holds with its supply gone. There is no upper bound. Table 12-1's recommended maximum is 3.3 V and Table 11-1's absolute maximum is 4.0 V. The module's regulator, from 5 V, sits a few millivolts over the first, and the controller runs there, as those modules do. Over 4.0 V the controller keeps answering and drawing, the way a real part mostly does past its ratings. With `ratings`, `VDD` over `supply_voltage` or below `-rail_margin`, and `SCL`, `SDA` or `RES` outside `-rail_margin` to `VDD + rail_margin`, warn `rating.voltage`. The panel's `VCC` is 7 V to 15 V in Table 12-1. The charge pump makes it, section 8.10, and the glass stays dark unless the pump is on, so a controller below the minimum lights nothing. `packages/engine/tests/circuit/runs/ssd1306.rs` runs `packages/engine/tests/firmware/sketch/ssd1306_power.hex` across that minimum. The module's VCC source is 0 V until 40 ms, the controller does not acknowledge, and the frame stays empty. After VCC steps to 5 V the regulator is over the minimum, the address is acknowledged and `begin` prints `BEGIN 1`. The same file runs `blocks/nano-oled/build/hello.ino.hex` with `VDD` on 5 V: every address is acknowledged and the frame is drawn.
 - The controller waits for nothing. The 100 ms a real panel needs after the charge pump turns on is not kept.
 
 A command that breaks a rule is the warning `chip.protocol`, once per rule at its first time. [diagnostics.md](diagnostics.md) has it.
@@ -1161,12 +1162,39 @@ A command that breaks a rule is the warning `chip.protocol`, once per rule at it
 | `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
 | `draw.sleep_current`, `draw.logic_current`, `draw.half_lit_current`, `draw.all_lit_current` | `A` | at least 0, else rule `non_negative` |
 | `draw.holds_above` | `V` | greater than 0, else rule `positive` |
+| `ratings.rail_margin`, `ratings.supply_voltage` | `V` | optional `ratings` object; each greater than 0 or `null` |
 
 A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
 
 `draw` is optional, and all five of its keys are required when it is there. With it, the panel draws a current from `VDD` into `VSS`, its logic and its charge pump together, since the modules tie `VBAT` to `VDD`. With the display off, `RES` low, or `VDD` under the logic minimum it is `sleep_current`. With the display on it is `logic_current`, and while the charge pump is on, `8Dh` bit 2, it adds the pump's current for the pixels the glass lights: the line through `half_lit_current` at half of them and `all_lit_current` at all of them, at no less than 0. The panel part's line gives 11.5 mA with none lit, where the sheet gives no figure. The lit pixels are the ones [run-folder.md](run-folder.md#what-the-glass-shows) draws with the display on, counted at each STOP and at each power or `RES` change, so a frame changes the draw a transfer at a time. The draw holds while `V(VDD) - V(VSS)` is at least `holds_above`, fades below it as a `ws2812`'s does, and takes effect 1 ps after the call that changed it. Without `draw` the panel draws nothing. `runs::ssd1306::opening_the_vcc_wire_under_a_lit_panel_drops_its_rail_and_darkens_the_glass` opens a switch in the module's VCC wire at 200 ms under the Block's frame. The regulator held 3.3 V, and the lit panel drains C6, C7 and C8 under 1.65 V within a millisecond, so the GDDRAM is lost and the glass stays dark. The Nano's 35.7 kohm pull-ups then charge the 3.3 V rail through the module's 4.7 kohm with the controller asleep, at about 15 uA a line, so it acknowledges its address again with an empty, dark glass.
 
-An `ssd1306` has no `ratings` object and no `i`, `v`, or `p`. Its logic signals are `SCL`, `SDA` and `RES`. It joins `SDA` to `VSS` through the stage its drive stamps. `SCL` and `RES` draw no current, so each needs another DC path, and so does `VDD`, whose draw is a current.
+An `ssd1306` has no `i`, `v`, or `p`. Its `ratings` object is optional, with `rail_margin` and `supply_voltage`. Its logic signals are `SCL`, `SDA` and `RES`. It joins `SDA` to `VSS` through the stage its drive stamps. `SCL` and `RES` draw no current, so each needs another DC path, and so does `VDD`, whose draw is a current.
+
+### HD44780 I2C
+
+`kind` is `hd44780_i2c`, a 16 by 2 character LCD (Hitachi HD44780U, ADE-207-272) driven through a PCF8574 I2C backpack. It is an active chip with no clock of its own, and an I2C target at `address`, 0x20 to 0x27 (default 0x27). Pins are `VCC`, `GND`, `SCL` and `SDA`, each required. `SDA` is open drain into `GND`, `low_drop` over `GND` behind `low_resistance`. `SCL` is an input, held by neither.
+
+The PCF8574 is an 8-bit quasi-bidirectional port: I2C writes set the port latch, and I2C reads return the port pins (`P0 = RS`, `P1 = RW`, `P2 = E`, `P3 = backlight`, `P4..P7 = D4..D7`). On each falling edge of `E`, the HD44780U executes the 4-bit write (when `RW = 0`) or completes the nibble read (when `RW = 1`):
+
+- Power-on state (ADE-207-272 p. 23, Figs. 23–24 pp. 45–46): 8-bit interface, 1-line, 5x8 font, display off, cursor off, blink off, increment mode, no shift, DDRAM filled with `0x20`, CGRAM zeroed. The power-on reset wait lasts 15 ms after `VCC` reaches 4.5 V, or 40 ms after `VCC` reaches 2.7 V when `VCC` stays below 4.5 V; any command or data write arriving earlier warns `chip.protocol` rule `init_wait` and is dropped as busy.
+- 8-bit-to-4-bit init sequence (ADE-207-272 Fig. 24): function-set nibbles `0x3` keep 8-bit mode; `0x2` switches to 4-bit mode, after which two nibbles (high then low) assemble each command or data byte. Any other command sent in 8-bit mode, or a 4-bit function set with `DL = 1`, stops loudly with rule `bus_width`. Selecting the 5x10 font (`F = 1`) stops loudly with rule `font`.
+- Supported commands: clear display (`0x01`, 1.52 ms busy), return home (`0x02`, 1.52 ms busy), entry mode set (`0x04..0x07`, 37 us), display on/off/cursor/blink (`0x08..0x0F`, 37 us), cursor/display shift (`0x10..0x1F`, 37 us), function set (`0x20..0x3F`, 37 us), set CGRAM address (`0x40..0x7F`, 37 us), set DDRAM address (`0x80..0xFF`, 37 us), and data writes to DDRAM (row 0 at `0x00..0x27`, row 1 at `0x40..0x67`) and CGRAM (64 bytes, 8 custom 5x8 characters). Commands and data writes arriving while busy are dropped as on the chip.
+- Reads with `RW = 1` and `E` high return the busy flag and 7-bit address counter (`RS = 0`) or DDRAM/CGRAM data (`RS = 1`) high nibble first, then low nibble, advancing the address counter on the low nibble.
+- While `V(VCC) - V(GND)` is below 2.7 V, the PCF8574 does not acknowledge, the glass is dark, and power loss clears DDRAM, CGRAM and registers.
+- `backlight_jumper` (optional boolean, default `true`) models the physical 2-pin jumper on the backpack; when `false`, the backlight stays off regardless of `P3`. `draw` (optional) draws `logic_current` plus `backlight_current` (when the backlight is lit) from `VCC` to `GND`, held above `holds_above`.
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `address` | | 0x20 to 0x27, else rule `unsupported` |
+| `backlight_jumper` | | optional boolean, default `true` |
+| `low_resistance` | `ohm` | the resistor's |
+| `low_drop` | `V` | at least 0, else rule `non_negative` |
+| `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+| `draw.logic_current`, `draw.backlight_current` | `A` | at least 0, else rule `non_negative` |
+| `draw.holds_above` | `V` | greater than 0, else rule `positive` |
+| `ratings.rail_margin`, `ratings.supply_voltage` | `V` | optional `ratings` object; each greater than 0 or `null` |
+
+An `hd44780_i2c` has no `i`, `v`, or `p`. Its `ratings` object is optional, with `rail_margin` and `supply_voltage`. Its logic signals are `SCL` and `SDA`.
 
 ### WS2812
 
@@ -1176,7 +1204,7 @@ An `ssd1306` has no `ratings` object and no `i`, `v`, or `p`. Its logic signals 
 
 T1H is the Worldsemi WS2812E-1313 datasheet's, V1.1, page 3: a high of 580 ns to 1 µs is a 1. T0H, a 0, is 220 ns to 400 ns, that page's 380 ns extended to the SK68xx T0H maximum. Each end is included. A low up to 280 µs ends the bit, however short or long. The same page gives T0L and T1L as 580 ns to 1 µs and a bit of at least 1.25 µs, and the WS2812E 5050 datasheet, V1.0, page 3, gives T1L as 220 ns to 420 ns. The chain checks no low against either, so a train timed to either sheet decodes, the 300 ns high and 900 ns low of an RMT 0 and its 900 ns high and 300 ns low 1 among them, and Arduino `rgbLedWrite`'s 400 ns high and 800 ns low 0 and its 800 ns high and 400 ns low 1. RES is a low longer than 280 µs, and it latches. The table gives ">280µs", so a low of exactly 280 µs is no reset and the chain latches at the fall plus 280 µs plus 1 ps. A high outside both windows drops that bit, and the first drop is `chip.protocol` rule `bit`.
 
-With `dout`, once every LED holds its 24 bits, each high on `DIN` goes on to `DOUT` `dout.delay` later, its rise and its fall alike, until the chain latches. `DOUT` is low before that and after the latch. It drives high through `dout.output.high_drop` under `VCC` behind `dout.output.high_resistance`, and low through `dout.output.low_drop` over `GND` behind `dout.output.low_resistance`, as an NE555's OUT does. The SK6812MINI-HS datasheet, Rev. 04, section 11, gives the delay from `DIN` to `DOUT` as at most 500 ns, rise and fall alike, and gives no output widths, so `DOUT` passes each high as long as it came. A second chain whose `DIN` is that net takes those bits as it would from a chip, so parts chained one after the other each take their own 24 bits. A high that a `Pulses` record carried has already ended when the record lands, so it does not go on to `DOUT`. The first is `chip.protocol` rule `dout_record`, and `DOUT` stays low. At most 8 `DOUT` edges are due at once. The datasheet's times queue 2, and a line that changes faster drops the newest high whole.
+With `dout`, once every LED holds its 24 bits, each high on `DIN` goes on to `DOUT` `dout.delay` later, its rise and its fall alike, until the chain latches. `DOUT` is low before that and after the latch. It drives high through `dout.output.high_drop` under `VCC` behind `dout.output.high_resistance`, and low through `dout.output.low_drop` over `GND` behind `dout.output.low_resistance`, as an NE555's OUT does. The SK6812MINI-HS datasheet, Rev. 04, section 11, gives the delay from `DIN` to `DOUT` as at most 500 ns, rise and fall alike, and gives no output widths, so `DOUT` passes each high as long as it came. A second chain whose `DIN` is that net takes those bits as it would from a chip, so parts chained one after the other each take their own 24 bits. A high that a `Pulses` record carried has already ended when the record lands, so it goes on as a `Pulses` record on `DOUT`'s net, with the same delay, and `DOUT` stays low. The next chain takes that record as it takes one from a chip, as [engine.md](engine.md#pulse-targets) says, so parts chained after an ESP32-S3's RMT each take their own 24 bits too. At most 8 `DOUT` edges are due at once. The datasheet's times queue 2, and a line that changes faster drops the newest high whole.
 
 The same sheet, page 2, gives `VIH` as at least 0.7 VDD and `VIL` as at most 0.7 V, both at VDD 5 V. `VIL` is a voltage there, not a fraction of the supply. The example's `input_threshold.low` is that 0.7 V over 5 V, 0.14 of the supply, so it holds at 5 V.
 
@@ -1203,15 +1231,17 @@ The same sheet, page 2, gives `VIH` as at least 0.7 VDD and `VIL` as at most 0.7
 | --- | --- | --- |
 | `leds` | count | an integer from 1 to 1024. 0 to 65535 outside that is rule `leds`, and any other number is `netlist.syntax`. Absent means 13 |
 | `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+| `min_supply` | `V` | greater than 0, else rule `positive`. Absent runs at any supply |
 | `dout.output.high_drop`, `dout.output.low_drop` | `V` | at least 0, else rule `non_negative` |
 | `dout.output.high_resistance`, `dout.output.low_resistance` | `ohm` | the resistor's |
 | `dout.delay` | `ps` | an integer from 1 to 1000000. 0 is rule `positive`, and above 1000000, T1H's longest high, is rule `delay` |
 | `draw.channel_current`, `draw.idle_current` | `A` | at least 0, else rule `non_negative` |
 | `draw.holds_above` | `V` | greater than 0, else rule `positive` |
+| `ratings.rail_margin`, `ratings.supply_voltage` | `V` | optional `ratings` object; each greater than 0 or `null` |
 
-`dout` may be absent, and the chain then has no `DOUT`. `dout` without a `DOUT` pin, or a `DOUT` pin without `dout`, is `netlist.pins`. A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
+`dout` may be absent, and the chain then has no `DOUT`. `dout` without a `DOUT` pin, or a `DOUT` pin without `dout`, is `netlist.pins`. A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`. `min_supply` is optional; when given, below that `V(VCC) - V(GND)` the chain ignores `DIN`, clears to off (leaving only the faded idle draw, 0 A at 0 V) and releases `DOUT`, and picks up again from the next full frame once the supply returns.
 
-A `ws2812` has no `ratings` object and no `i`, `v`, or `p`. Its logic signal is `DIN`. It joins `DOUT` to `VCC` and to `GND` through the stage its drive stamps, and no other pins, so `VCC`, `GND` and `DIN` each need another DC path.
+A `ws2812` has no `i`, `v`, or `p`. Its `ratings` object is optional, with `rail_margin` on `DIN` and `supply_voltage` on `VCC`. Its logic signal is `DIN`. It joins `DOUT` to `VCC` and to `GND` through the stage its drive stamps, and no other pins, so `VCC`, `GND` and `DIN` each need another DC path.
 
 `draw` is optional, and all three of its keys are required when it is there. With it, the chain draws a current from `VCC` into `GND`: each LED's `idle_current` at every colour, black included, plus `channel_current` times each latched channel over 255. The pixel's PWM is far faster than any rating's time constant, so the draw is that average. It holds while `V(VCC) - V(GND)` is at least `holds_above`. Below that it fades as `3 x^2 - 2 x^3` of it, with `x` the supply over `holds_above`, to none at 0 V, so a chain behind a resistor settles where the resistor feeds it and never pulls `VCC` below `GND`. The current and its slope are stamped at each Newton iterate. A latch takes effect 1 ps after it, at a stop that takes a restart. Without `draw` the chain draws nothing.
 
@@ -1260,6 +1290,24 @@ A read sends the last measurement, and the end of each reply starts the next one
 A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
 
 A `dht22` has no `ratings` object and no `i`, `v`, or `p`. Its logic signal is `DATA`. It joins `DATA` to `GND` through the stage its drive stamps. `VCC` draws no current, so it needs another DC path.
+
+### BMP280
+
+`kind` is `bmp280`, a Bosch BMP280 temperature and pressure sensor, BST-BMP280-DS001-26. It is an active chip with no clock of its own and an I2C target. Pins are `VDD`, `VDDIO`, `GND`, `CSB`, `SDI`, `SCK` and `SDO`. Every pin is required. `SDI` is open drain into `GND` behind `low_resistance`. `SCK`, `CSB` and `SDO` are inputs. The part reads those four through `input_threshold`, fractions of `VDDIO`. It does not hold `SCK`. `SDO` low selects address 0x76 and `SDO` high selects 0x77. `CSB` low is SPI mode: the part does not answer on I2C, and the first time is `chip.protocol` rule `spi`. A `1` written to `spi3w_en` is rule `spi3w`. 3-wire SPI and every SPI transfer are not modelled.
+
+It reads the netlist's `temperature` and `pressure`, which the netlist's `world` must declare. Register `0xD0` reads `0x58`. The trimming words at `0x88` to `0x9F` are the compensation example's, and a measurement stores the raw sample that §3.11.3's integer formulas compensate back to the world. Temperature is clamped to -40 to 85 °C and pressure to 30000 to 110000 Pa. The typical measurement time is Table 13, `1.5 ms + 2.0 ms * osr_t + 2.0 ms * osr_p`. Normal mode then waits the `t_sb` of Table 11. Forced mode measures once and returns to sleep. A mode write during a conversion waits until it ends, and a second write before then is ignored. A write to `config` (0xF5) in normal mode is ignored (§4.3.5); the first write that would change `config` is `chip.protocol` rule `config_in_normal`, while a write that leaves `config` unchanged is silent. Write sleep mode to `ctrl_meas` (0xF4) before `config`; writes in sleep or forced mode are silent and take effect. Writing `filter` clears the IIR, and the next sample passes through (§3.3.3). Writing `0xB6` to `0xE0` is the power-on reset. The NVM copy that sets `im_update` takes no time, so that bit stays 0.
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `low_resistance` | `ohm` | the resistor's |
+| `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
+| `ratings.supply_voltage`, `ratings.pin_margin` | `V` | greater than 0, else rule `positive` |
+
+A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
+
+`ratings.supply_voltage` is the ceiling on `VDD` and `VDDIO` over `GND`. `ratings.pin_margin` is how far any pin but `GND` may sit below `GND`, and how far `CSB`, `SDI`, `SCK` and `SDO` may sit above `VDDIO`. A pin exactly on the edge is inside. Table 3 gives 4.25 V and 0.3 V. Past either, the pin warns [`rating.voltage`](diagnostics.md#ratingvoltage).
+
+`VDD` draws the Table 2 typical into `GND`: 0.1 µA asleep, 0.2 µA in the standby of normal mode, 325 µA while temperature is measured and 720 µA while pressure is measured. The part runs while `VDD` is at or above 1.71 V and `VDDIO` at or above 1.2 V, the Table 2 minimums. Below either it is off: it draws nothing, leaves `SDI` released, and starts from reset when the supply comes back. Above the 3.6 V operating maximum, and with `CSB`, `SDI`, `SCK` or `SDO` past `VDDIO` + 0.3 V, it keeps answering, as a real part mostly does, and the ratings warn. A `bmp280` has no `i`, `v`, or `p`. Its logic signals are `SCK`, `SDI`, `CSB` and `SDO`. It joins `SDI` to `GND` through the stage its drive stamps. `VDDIO` draws no current of its own, so it needs another DC path. The draw on `VDD` is a current, so a net reached only through it still floats.
 
 ### 74HC595
 
@@ -1379,6 +1427,7 @@ A `pulses_replay` has no `ratings` object and no `i`, `v`, or `p`. It has no log
 | `leakage_resistance` | `ohm` | the resistor's |
 | `input_threshold.low`, `input_threshold.high` | `1` | inside (0, 1), else rule `fraction` |
 | `efuse` | a name | optional, `synthetic` when absent, one of the sets in `packages/socs/espressif/src/s3/efuse.txt`, else `netlist.syntax` |
+| `ratings.rail_margin`, `ratings.supply_voltage` | `V` | optional `ratings` object; each greater than 0 or `null` |
 
 A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`. `pull_down_resistance` may be absent. A store that sets `FUN_WPD` on a pad with a net, while the part names none, ends the run with `chip.unsupported_setting`, `IO_MUX` `pull_down`, and writes nothing. A pad with no net is never stamped, so that store is kept. A netlist that never turns a netted pad's pull-down on keeps the meaning it had before the field, and the version stays 0.
 
@@ -1416,7 +1465,7 @@ The example's values are Table 5-4 of the ESP32-S3 Series Datasheet v2.2, at 3.3
 | `leakage_resistance` | 66 Mohm | `IIH` and `IIL` at most 50 nA, so 3.3 V over 50 nA. |
 | `input_threshold` | 0.25 and 0.75 | `VIL` at most 0.25 VDD and `VIH` at least 0.75 VDD. |
 
-Each GPIO with a net is a DC path to `VCC` and to `GND` in every drive state, through its leakage. An `esp32s3` has no `ratings` object and no `i`, `v`, or `p`. Its logic signals are its GPIOs with nets, each the level that pin reads, such as `#u1.logic.GPIO21`. Its console writes `traces/serial.csv` as usart `USB_SERIAL_JTAG`, and each UART byte as `UART0`, `UART1` or `UART2`. Its SPI2 sends each transfer as a `Spi` record with the nets of the GPIOs the matrix routed its CS, SCLK and data lines to, as [esp32s3.md](esp32s3.md#behind-the-seam) says, so an `st77916` on those nets takes it. `traces/link.csv` holds the records, and the file is written for every `esp32s3`, as the header alone when SPI2 sent none.
+Each GPIO with a net is a DC path to `VCC` and to `GND` in every drive state, through its leakage. An `esp32s3` has no `i`, `v`, or `p`. Its `ratings` object is optional, with `rail_margin` and `supply_voltage`. Its logic signals are its GPIOs with nets, each the level that pin reads, such as `#u1.logic.GPIO21`. Its console writes `traces/serial.csv` as usart `USB_SERIAL_JTAG`, and each UART byte as `UART0`, `UART1` or `UART2`. Its SPI2 sends each transfer as a `Spi` record with the nets of the GPIOs the matrix routed its CS, SCLK and data lines to, as [esp32s3.md](esp32s3.md#behind-the-seam) says, so an `st77916` on those nets takes it. `traces/link.csv` holds the records, and the file is written for every `esp32s3`, as the header alone when SPI2 sent none.
 
 ### Blobs
 
@@ -1428,11 +1477,11 @@ A blob the document names that no folder has, a name whose every file hashes to 
 
 ## Ratings
 
-A rating bounds the stress on a part. Every key of a kind's `ratings` object is required. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `voltage_source` and `capacitor`, where it is optional.
+A rating bounds the stress on a part. Every key of a kind's `ratings` object is required, except a resistor's `voltage`, which may be left out. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `esp32s3`, `ssd1306`, `hd44780_i2c`, `ws2812`, `voltage_source` and `capacitor`, where it is optional.
 
 | Kind | Keys | Checked quantity |
 | --- | --- | --- |
-| `resistor` | `power` | `#<part>.p` |
+| `resistor` | `power`, optional `voltage` | `#<part>.p`, and the peak of a sounding drive on `#<part>.v` |
 | `diode`, `led`, `zener` | `current`, `power` | `#<part>.i`, `#<part>.p` |
 | `linear_regulator` | `current`, `power` | `#<part>.iout`, `#<part>.p` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
@@ -1440,8 +1489,12 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `voltage_source` | `current` | `#<part>.i` |
 | `capacitor` | `reverse_voltage`, optional | pin `a` over pin `b` |
 | `atmega328p` | `pin_current`, `supply_current`, `rail_margin`, `reset_voltage`, `supply_voltage` | each port pin's current, the current through `VCC` and `GND_8`, and each pin's voltage over `GND_8`, each named `#<part>.pin.<pin>` |
+| `esp32s3` | `rail_margin`, `supply_voltage` | `VCC` and each wired GPIO's voltage over `GND`, each named `#<part>.pin.<pin>` |
+| `ssd1306` | `rail_margin`, `supply_voltage` | `VDD`, `SCL`, `SDA` and `RES` voltage over `VSS`, each named `#<part>.pin.<pin>` |
+| `hd44780_i2c` | `rail_margin`, `supply_voltage` | `VCC`, `SCL` and `SDA` voltage over `GND`, each named `#<part>.pin.<pin>` |
+| `ws2812` | `rail_margin`, `supply_voltage` | `VCC` and `DIN` voltage over `GND`, each named `#<part>.pin.<pin>` |
 | `hc595` | `pin_current`, `supply_current`, `input_margin`, `output_margin` | each of `QA`–`QH` and `QHp`, the current through `VCC` and `GND`, and each input and output voltage over `GND`, each named `#<part>.pin.<pin>` |
-| `current_source`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `ssd1306`, `pulses_replay`, `ws2812`, `dht22`, `sg90` | none | |
+| `current_source`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `dht22`, `sg90` | none | |
 
 A `current`, `power`, `pin_current` or `supply_current` value object may also carry `basis`, the datasheet's basis for the figure. `"peak"` bounds each sample. `{ "sustained": { "average": "rms" | "mean", "tau": { "value": <s>, "unit": "s" } } }` bounds a first-order filter of the samples with time constant `tau`: of their squares for `rms`, read back as the root, and of their magnitudes for `mean`. A sustained basis may also carry `peak`, the sheet's peak or surge limit in the rating's unit, such as a diode's IFSM beside its average forward current. Each sample is checked against it as a peak rating. A `tau` or `peak` of 0 or below is `netlist.value` with rule `positive` on `ratings.<key>.basis.sustained.tau` or `.peak`, and a wrong unit is `netlist.unit` on that field. A rating with no `basis` takes its kind's: a `power` is a 10.2 ms `mean`, a `voltage_source`'s `current` and an `atmega328p`'s or an `hc595`'s `pin_current` and `supply_current` are a 10.2 ms `rms`, and every other `current` is a `peak`.
 
@@ -1453,6 +1506,12 @@ A `current`, `power`, `pin_current` or `supply_current` value object may also ca
 
 ```json
 "ratings": { "power": { "value": 0.25, "unit": "W" } }
+```
+
+A resistor may also carry `voltage`, with `min` and `max` in `V`. Both are value objects and both are required when `voltage` is present. `min` must be below `max`. A missing `voltage` leaves the drive unrated. The window is the peak of a drive that leaves a level under 0.2 V and comes back, which is the peak a square wave puts across the part. A peak outside the window warns `rating.voltage`. A part that stays quiet, including DC, does not. The part still conducts. Compared like every other rating, at 3 significant digits.
+
+```json
+"voltage": { "min": { "value": 3.0, "unit": "V" }, "max": { "value": 5.0, "unit": "V" } }
 ```
 
 The run compares the magnitude of each rated quantity with its rating, and each rated pin's voltage with its window. A peak rating is compared with each sample. A sustained rating is compared through its filter, which steps exactly over each held sample, `y = x + (y - x) e^(-dt / tau)`. A pulse much shorter than `tau` counts by its share of it, a PWM load by its period's average once the filter settles, and a load held over the rating crosses after `tau ln(x / (x - rating))` for `mean`. Each filter starts at 0 and takes the first step after t = 0, and the operating point at t = 0 is no sample. A value and its rating are compared rounded to 3 significant digits. Going over is a warning, `rating.current`, `rating.power` or `rating.voltage`, in [diagnostics.md](diagnostics.md). A sustained rating with no `peak` whose latest value is over it before its filter crosses is listed as [over now](diagnostics.md#over-now).
@@ -1488,7 +1547,7 @@ A ref names one net, part, pin, quantity, or logic signal.
 ```text
 ref      = "#" ( "net." name | "world." world | name [ "." ( quantity | "pin." name | "logic." name ) ] )
 quantity = "ib" | "ic" | "id" | "iin" | "iout" | "i" | "v" | "p"
-world    = "temperature" | "humidity" | "light"
+world    = "temperature" | "humidity" | "light" | "pressure"
 ```
 
 `#<part>.usart.<name>`, such as `#u1.usart.USART0`, is reserved and is not a ref.

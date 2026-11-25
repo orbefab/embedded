@@ -19,9 +19,11 @@
 //! the board does. A load or store anywhere else outside the peripherals raises
 //! `LoadStoreError`. A fetch from anywhere else ends the run.
 //!
-//! A peripheral register the model does not keep reads 0 and drops writes. [`Esp32s3::unmodeled`]
-//! lists each one the firmware touched, with the first access's cycle and PC. That access stops
-//! the core once, so the timeline can read the PC, and then runs again. A byte or halfword
+//! A peripheral register the model does not keep, in a block it runs, reads 0 and drops writes.
+//! [`Esp32s3::unmodeled`] lists each one the firmware touched, with the first access's cycle and
+//! PC. That access stops the core once, so the timeline can read the PC, and then runs again. An
+//! access to such a register in a block the model does not simulate ends the run, naming the
+//! block, as `blocks` says. A byte or halfword
 //! access to a kept register reads or merges into its word.
 
 mod analog;
@@ -164,6 +166,9 @@ pub enum Refused {
     Interrupt(&'static str),
     /// A setting of this peripheral, by name, that the model does not run.
     Register(&'static str, &'static str),
+    /// An access to a register of this block, which the model does not simulate, and the
+    /// words that say what the block is.
+    Unsimulated(&'static str, &'static str),
     /// `RTC_CNTL_SLEEP_EN`.
     Sleep,
 }
@@ -403,7 +408,13 @@ impl Esp32s3 {
             }
             let watchdog = self.soc.watchdogs.deadline();
             let due = watchdog.map(|expiry| self.soc.clock.round_up(expiry.at));
-            let ledc = self.soc.ledc.next(self.soc.clock.source.apb());
+            let ledc = [
+                self.soc.ledc.next(self.soc.clock.source.apb()),
+                self.soc.ledc.first_output(),
+            ]
+            .into_iter()
+            .flatten()
+            .min();
             let i2c = self.soc.i2c.next_event();
             let rmt = self.soc.rmt.upcoming().map(|at| Tick(at.0 + 1));
             let uart = self
@@ -1514,7 +1525,7 @@ mod tests {
             (gdma + 0x10, 1, Refused::Interrupt("GDMA")),
             (out + 0x10, 1, Refused::Interrupt("GDMA")),
             (0x6003_b028, 1, Refused::Interrupt("SHA")),
-            (0x6001_90c8, 1 << 3, Refused::Interrupt("LEDC")),
+            (0x6001_90c8, 1 << 12, Refused::Interrupt("LEDC")),
             (gdma, 1 << 4, Refused::Register("GDMA", "memory_copy")),
             (out, 1 << 2, Refused::Register("GDMA", "write_back")),
             (gdma + 0x20, 1 << 23, Refused::Register("GDMA", "restart")),
@@ -1546,10 +1557,11 @@ mod tests {
         assert_eq!(chip.run_until(c(1000)), None, "timer 1's interrupt");
     }
 
-    /// `JTAG_IN_FLUSH` and SOF are not among the USB Serial/JTAG enables the model runs.
+    /// `JTAG_IN_FLUSH`, SOF, error bits and zero-payload bits are not among the USB Serial/JTAG
+    /// enables the model runs.
     #[test]
     fn enabling_sof_or_jtag_in_flush_ends_the_run() {
-        for bit in [1 << 0, 1 << 1] {
+        for bit in [1 << 0, 1 << 1, 1 << 4, 1 << 10] {
             let program = store_after_two_loads(USB_SERIAL_JTAG + 0x10, bit, 0);
             assert_eq!(
                 program.chip().run_until(c(1000)),
@@ -1565,29 +1577,234 @@ mod tests {
         }
     }
 
-    /// `SERIAL_OUT_RECV_PKT`, `SERIAL_IN_EMPTY` and `USB_BUS_RESET` may be enabled together.
+    /// `SERIAL_OUT_RECV_PKT`, `SERIAL_IN_EMPTY`, `IN_TOKEN_REC_IN_EP1` and `USB_BUS_RESET` may
+    /// be enabled together.
     #[test]
-    fn serial_out_recv_pkt_serial_in_empty_and_bus_reset_may_be_enabled() {
-        let value = (1 << 2) | (1 << 3) | (1 << 9);
+    fn serial_out_recv_pkt_serial_in_empty_token_and_bus_reset_may_be_enabled() {
+        let value = (1 << 2) | (1 << 3) | (1 << 8) | (1 << 9);
         let mut chip = store_after_two_loads(USB_SERIAL_JTAG + 0x10, value, 0).chip();
         assert_eq!(chip.run_until(c(1000)), None);
     }
 
+    /// `USB_SERIAL_JTAG_CONF0_REG` keeps `HWCDC::begin()` and GPIO19/20 pull-up setup with no
+    /// unmodeled-register warning, and refuses unmodeled fields.
     #[test]
-    fn a_store_to_usb_wrap_ends_the_run() {
-        for address in [0x6003_9000, 0x6003_9004] {
-            let program = store_after_two_loads(address, 1, 0);
+    fn usb_conf0_keeps_allowed_writes_and_refuses_unmodeled_fields() {
+        let conf0 = USB_SERIAL_JTAG + 0x18;
+        let program = stores(&[
+            (conf0, 0x4200),
+            (conf0, 0x0200),
+            (conf0, 0x0300),
+            (conf0, 0x0100),
+            (conf0, 0x4200),
+        ]);
+        let mut chip = program.chip();
+        assert_eq!(chip.run_until(c(1000)), None);
+        assert_eq!(chip.unmodeled().count(), 0);
+
+        for (bit, setting) in [
+            (1 << 0, "phy_sel"),
+            (1 << 1, "exchg_pins"),
+            (1 << 2, "exchg_pins"),
+            (1 << 7, "vref"),
+            (1 << 10, "pad_pull"),
+            (1 << 11, "pad_pull"),
+            (1 << 12, "pad_pull"),
+            (1 << 13, "pullup_value"),
+            (1 << 15, "phy_tx_edge"),
+            (1 << 16, "jtag_bridge"),
+        ] {
+            let program = store_after_two_loads(conf0, 0x4200 | bit, 0);
             assert_eq!(
                 program.chip().run_until(c(1000)),
                 Some(Halt::Fault(
                     c(2),
                     Fault::Refused(
-                        Refused::Register("USB_WRAP", "otg"),
+                        Refused::Register("USB_SERIAL_JTAG", setting),
+                        pro(program.entry() + 6)
+                    )
+                )),
+                "{bit:#x}"
+            );
+        }
+    }
+
+    /// While `USB_PAD_ENABLE` is set, GPIO19 and GPIO20 do not drive from the GPIO matrix and
+    /// GPIO20 carries the USB PHY's D+ pull-up (`UsbPullUp`) while `DP_PULLUP` is active;
+    /// clearing `USB_PAD_ENABLE` releases both pads to GPIO, and setting it again restores USB.
+    #[test]
+    fn usb_pad_enable_gates_gpio19_and_gpio20_output() {
+        let mask = (1u32 << 19) | (1u32 << 20);
+        let conf0 = USB_SERIAL_JTAG + 0x18;
+        let program = stores(&[
+            (GPIO + 0x08, mask),
+            (GPIO + 0x24, mask),
+            (conf0, 0x4100), // USB_PAD_ENABLE=1, PAD_PULL_OVERRIDE=1, DP_PULLUP=0
+            (conf0, 0x0200), // USB_PAD_ENABLE=0: GPIO matrix takes both pads
+            (conf0, 0x4200), // USB_PAD_ENABLE=1, DP_PULLUP=1: USB PHY reclaims both pads
+        ]);
+        let mut chip = program.chip_on(&[19, 20]);
+        assert_eq!(chip.drive(19), PadDrive::Off);
+        assert_eq!(chip.drive(20), PadDrive::UsbPullUp);
+        // Overriding DP_PULLUP off drops GPIO20's USB pull-up while still blocking GPIO output.
+        assert_eq!(chip.run_until(c(1000)), Some(image_at(c(8))));
+        assert_eq!(chip.drive(19), PadDrive::Off);
+        assert_eq!(chip.drive(20), PadDrive::Off);
+        // Clearing USB_PAD_ENABLE lets the GPIO matrix drive both pads high.
+        assert_eq!(chip.run_until(c(1000)), Some(image_at(c(11))));
+        assert_eq!(chip.drive(19), PadDrive::High);
+        assert_eq!(chip.drive(20), PadDrive::High);
+        // Setting USB_PAD_ENABLE and DP_PULLUP returns GPIO19 to Off and GPIO20 to UsbPullUp.
+        assert_eq!(chip.run_until(c(1000)), Some(image_at(c(14))));
+        assert_eq!(chip.drive(19), PadDrive::Off);
+        assert_eq!(chip.drive(20), PadDrive::UsbPullUp);
+        assert_eq!(chip.run_until(c(1000)), None);
+    }
+
+    /// Enabling `SERIAL_IN_EMPTY` after committing a packet wakes a core in `WAITI` when the
+    /// Full-Speed host finishes reading the packet (`IN_PACKET_TICKS` = 30,000 ticks = 2,500
+    /// crystal cycles).
+    #[test]
+    fn serial_in_empty_wakes_waiti_after_full_speed_host_read() {
+        let mut program = Program::new(&[
+            0x600c_2000 + 4 * 96,   // INTERRUPT_CORE0_USB_INTR_MAP_REG
+            USB_SERIAL_JTAG,        // EP1
+            USB_SERIAL_JTAG + 0x04, // EP1_CONF
+            USB_SERIAL_JTAG + 0x10, // INT_ENA
+            USB_SERIAL_JTAG + 0x14, // INT_CLR
+            1 << 3,                 // SERIAL_IN_EMPTY
+            0xfff,
+        ]);
+        program
+            .l32r(2, 0)
+            .movi(3, 1)
+            .rri8(6, 3, 2, 0) // map source 96 -> CPU int 1
+            .l32r(2, 4)
+            .l32r(3, 6)
+            .rri8(6, 3, 2, 0) // INT_CLR = 0xfff
+            .l32r(2, 1)
+            .movi(3, b'Z')
+            .rri8(6, 3, 2, 0) // EP1 = 'Z'
+            .l32r(2, 2)
+            .movi(3, 1)
+            .rri8(6, 3, 2, 0) // WR_DONE (cycle 11)
+            .l32r(2, 3)
+            .l32r(3, 5)
+            .rri8(6, 3, 2, 0) // INT_ENA = SERIAL_IN_EMPTY
+            .movi(7, 2)
+            .wsr(7, INTENABLE)
+            .movi(7, 0)
+            .wsr(7, PS)
+            .raw(&WAITI)
+            .raw(&LOOP);
+        let mut chip = program.chip();
+        // Before 11 + 2,500 = 2,511 cycles, the host has not finished reading the packet yet.
+        assert_eq!(chip.run_until(c(2_500)), None);
+        assert_eq!(chip.take_sent(c(2_500)), None);
+        // Once the host reads the packet, SERIAL_IN_EMPTY wakes WAITI and jumps to vector 0x4000_0300.
+        assert_eq!(
+            chip.run_until(c(3_000)),
+            Some(Halt::Fault(
+                c(2_515),
+                Fault::UnmappedFetch(pro(0x4000_0300))
+            ))
+        );
+        assert_eq!(chip.take_sent(c(3_000)), Some((c(2_511), b'Z')));
+    }
+
+    /// Enabling `IN_TOKEN_REC_IN_EP1` wakes a core in `WAITI` at the 1 ms USB frame boundary
+    /// (480,000 ticks = 40,000 cycles at 40 MHz).
+    #[test]
+    fn in_token_rec_in_ep1_wakes_waiti_at_the_1_ms_frame() {
+        let mut program = Program::new(&[
+            0x600c_2000 + 4 * 96, // INTERRUPT_CORE0_USB_INTR_MAP_REG
+            USB_SERIAL_JTAG + 0x10,
+            USB_SERIAL_JTAG + 0x14,
+            1 << 8,
+            0xfff,
+        ]);
+        program
+            .l32r(2, 0)
+            .movi(3, 1)
+            .rri8(6, 3, 2, 0) // map source 96 -> CPU int 1 (level 1)
+            .l32r(2, 2)
+            .l32r(3, 4)
+            .rri8(6, 3, 2, 0) // INT_CLR = 0xfff
+            .l32r(2, 1)
+            .l32r(3, 3)
+            .rri8(6, 3, 2, 0) // INT_ENA = TOKEN_IN_EP1
+            .movi(7, 2)
+            .wsr(7, INTENABLE)
+            .movi(7, 0)
+            .wsr(7, PS)
+            .raw(&WAITI)
+            .raw(&LOOP);
+        let mut chip = program.chip();
+        assert_eq!(chip.run_until(c(39_999)), None);
+        assert_eq!(
+            chip.run_until(c(50_000)),
+            Some(Halt::Fault(
+                c(40_004),
+                Fault::UnmappedFetch(pro(0x4000_0300))
+            ))
+        );
+    }
+
+    /// A store to a block the model does not simulate ends the run at the store, naming the
+    /// block and what it is.
+    #[test]
+    fn a_store_to_a_block_the_model_does_not_simulate_ends_the_run() {
+        let otg = "the USB OTG port that TinyUSB, USB MSC and USB HID use";
+        let refused = [
+            (0x6003_9000, "USB_WRAP", otg),
+            (0x6003_9004, "USB_WRAP", otg),
+            (
+                0x6001_704c,
+                "PCNT",
+                "the pulse counter that encoder libraries use",
+            ),
+            (0x6003_1204, "RADIO", "the Wi-Fi and Bluetooth radio"),
+            (0x6002_7000, "I2C1", "the second I2C port, Wire1"),
+            (
+                0x6000_8850,
+                "SENS",
+                "the temperature sensor that temperatureRead uses",
+            ),
+            (
+                0x6000_8854,
+                "SENS",
+                "the temperature sensor that temperatureRead uses",
+            ),
+        ];
+        for (address, block, what) in refused {
+            let program = store_after_two_loads(address, 1, 0);
+            assert_eq!(
+                program.chip().run_until(c(1000)),
+                Some(Halt::Fault(
+                    c(2),
+                    Fault::Refused(Refused::Unsimulated(block, what), pro(program.entry() + 6))
+                )),
+                "{address:#x}"
+            );
+        }
+        for address in [0x6000_8904, 0x6000_8908] {
+            let program = store_after_two_loads(address, 1 << 29, 0);
+            let mut chip = program.chip();
+            assert_eq!(
+                chip.run_until(c(1000)),
+                Some(Halt::Fault(
+                    c(2),
+                    Fault::Refused(
+                        Refused::Unsimulated(
+                            "SENS",
+                            "the temperature sensor that temperatureRead uses"
+                        ),
                         pro(program.entry() + 6)
                     )
                 )),
                 "{address:#x}"
             );
+            assert_eq!(chip.unmodeled().count(), 0, "{address:#x}");
         }
     }
 
@@ -1606,15 +1823,32 @@ mod tests {
         assert!(Soc::load_moves_lines(USB_SERIAL_JTAG + 0x08));
     }
 
+    /// A load from a block the model does not simulate ends the run at the load, where one
+    /// from a block it runs is listed and reads 0.
     #[test]
-    fn a_load_of_usb_wrap_is_unmodeled() {
+    fn a_load_of_a_block_the_model_does_not_simulate_ends_the_run() {
         let mut program = Program::new(&[0x6003_9000]);
+        program.l32r(2, 0);
+        let load = program.pc();
+        program.rri8(2, 3, 2, 0).raw(&LOOP);
+        let otg = "the USB OTG port that TinyUSB, USB MSC and USB HID use";
+        let mut chip = program.chip();
+        assert_eq!(
+            chip.run_until(c(1000)),
+            Some(Halt::Fault(
+                c(1),
+                Fault::Refused(Refused::Unsimulated("USB_WRAP", otg), pro(load))
+            ))
+        );
+        assert_eq!(chip.unmodeled().count(), 0);
+
+        let mut program = Program::new(&[0x6000_8400]);
         program.l32r(2, 0).rri8(2, 3, 2, 0).raw(&LOOP);
         let mut chip = program.chip();
         assert_eq!(chip.run_until(c(1000)), None);
         let touched: Vec<(u32, Touch)> = chip.unmodeled().collect();
         assert_eq!(touched.len(), 1);
-        assert_eq!(touched[0].0, 0x6003_9000);
+        assert_eq!(touched[0].0, 0x6000_8400);
         assert!(!touched[0].1.write);
     }
 
@@ -1844,10 +2078,10 @@ mod tests {
     fn the_console_sends_at_wr_done_and_an_unmodeled_read_is_listed_with_its_pc() {
         let program = blink();
         let mut chip = program.chip();
-        halts(&mut chip, 1000, 1000);
-        let (first, h) = chip.take_sent(c(1000)).expect("h");
+        halts(&mut chip, 3000, 3000);
+        let (first, h) = chip.take_sent(c(3000)).expect("h");
         assert_eq!(h, b'h');
-        assert_eq!(chip.take_sent(c(1000)), Some((first, b'i')));
+        assert_eq!(chip.take_sent(c(3000)), Some((first, b'i')));
         assert_eq!(chip.take_sent(Tick(u64::MAX)), None);
         let touched: Vec<(u32, Touch)> = chip.unmodeled().collect();
         assert_eq!(touched.len(), 1);
@@ -1891,9 +2125,9 @@ mod tests {
         let image = chip.run_until(c(1000));
         assert_eq!(chip.drive(21), PadDrive::Low);
 
-        let mut probe = store_after_two_loads(0x6001_7000, 0, 0).chip();
+        let mut probe = store_after_two_loads(0x6000_8400, 0, 0).chip();
         assert_eq!(probe.run_until(c(1000)), None);
-        let (_, touch) = probe.unmodeled().next().expect("the store touched PCNT");
+        let (_, touch) = probe.unmodeled().next().expect("the store touched RTCIO");
         assert_eq!(image, Some(image_at(touch.at)));
     }
 
@@ -2943,6 +3177,156 @@ mod tests {
         );
     }
 
+    /// Resetting a paused timer while a routed channel is low drives the pad high at the `RST`
+    /// store (`Timer0_cnt == Hpoint == 0`, TRM 35.3.3), and releasing `RST` restarts the cycle
+    /// from that store, matching across any `run_until` split.
+    #[test]
+    fn an_led_timer_reset_drives_the_pad_high_and_restarts_its_pwm() {
+        let mut on = ledc_on(3);
+        let conf = 2 | 256 << 4;
+        on[5].1 = conf | 1 << 25;
+        // Period = 4 crystal cycles, duty 1 -> high [29, 30), low [30, 33).
+        // Store 9 at cycle 29: already in high; wait until cycle 32 (low half) via one dummy store,
+        // pause at cycle 32 (low), assert RST at cycle 35 (drives high!), release RST at cycle 38
+        // (restarts: fall at 39, rise at 42, fall at 43).
+        let pairs = [
+            on,
+            duty(1).to_vec(),
+            vec![
+                (RAM[1].start + 0x100, 0),
+                (LEDC + 0xa0, conf | 1 << 22),
+                (LEDC + 0xa0, conf | 1 << 22 | 1 << 23),
+                (LEDC + 0xa0, conf),
+            ],
+        ];
+        let program = stores(&pairs.concat());
+        let expected = [
+            (image_at(c(5)), PadDrive::Low),
+            (record_at(c(29)), PadDrive::Low),
+            (Halt::Moved(c(29)), PadDrive::High),
+            (Halt::Moved(c(30)), PadDrive::Low),
+            (Halt::Moved(c(35)), PadDrive::High),
+            (Halt::Moved(c(39)), PadDrive::Low),
+            (Halt::Moved(c(42)), PadDrive::High),
+            (Halt::Moved(c(43)), PadDrive::Low),
+        ];
+        for step in [1, 1000] {
+            let mut chip = program.chip();
+            assert_eq!(halts(&mut chip, 44, step), expected, "step {step}");
+        }
+    }
+
+    /// LEDC's `DUTY_CHNG_END_LSCH0` and `LSTIMER0_OVF` interrupts raise source 35 and wake a
+    /// core in `WAITI` at the exact cycle, across any split of `run_until` limits.
+    #[test]
+    fn an_ledc_fade_end_or_timer_overflow_interrupt_wakes_waiti() {
+        // 2-bit timer on XTAL (period = 4 crystal cycles).
+        // Fade ch0 from duty 1 by +1 every 1 cycle for 2 steps (1 -> 2 -> 3).
+        let fade_prog = {
+            let mut program = Program::new(&[
+                SYSTEM + 0x18,
+                0xf9c1_e06f | 1 << 11,
+                LEDC,
+                2 | 256 << 4 | 1 << 25,
+                1 << 31 | 1 << 30 | 2 << 20 | 1 << 10 | 1,
+                1 << 2 | 1 << 4,
+            ]);
+            program
+                .l32r(2, 0)
+                .l32r(3, 1)
+                .rri8(6, 3, 2, 0)
+                .l32r(2, 2)
+                .movi(3, 3)
+                .rri8(6, 3, 2, 0xd0)
+                .l32r(3, 3)
+                .rri8(6, 3, 2, 0xa0)
+                .movi(3, 1 << 4)
+                .rri8(6, 3, 2, 0xc8)
+                .rri8(6, 3, 2, 0x08)
+                .l32r(3, 4)
+                .rri8(6, 3, 2, 0x0c)
+                .l32r(3, 5)
+                .rri8(6, 3, 2, 0x00)
+                .movi(7, 2)
+                .wsr(7, INTENABLE)
+                .movi(7, 0)
+                .wsr(7, PS)
+                .raw(&WAITI)
+                .raw(&LOOP);
+            program
+        };
+        let make = || {
+            let mut chip = fade_prog.chip();
+            chip.soc.restore(0x600c_2000 + 4 * 35, 1);
+            chip
+        };
+        let whole = halts(&mut make(), 200, 200);
+        for step in [1, 7, 200] {
+            let mut chip = make();
+            assert_eq!(halts(&mut chip, 200, step), whole, "steps of {step}");
+            assert_eq!(
+                chip.soc.bus().load(Cycle(0), LEDC + 0x10, Width::Word),
+                Ok(3 << 4),
+                "final duty in DUTY_R"
+            );
+            assert_eq!(
+                chip.soc.bus().load(Cycle(0), LEDC + 0xc4, Width::Word),
+                Ok(1 << 4),
+                "DUTY_CHNG_END_LSCH0 in INT_ST"
+            );
+        }
+        assert!(
+            matches!(
+                whole[..],
+                [(Halt::Fault(_, Fault::UnmappedFetch(pc)), _)] if pc == pro(0x4000_0300)
+            ),
+            "{whole:?}"
+        );
+
+        // Timer 0 overflow interrupt (bit 0) wakes WAITI at the first overflow.
+        let ovf_prog = {
+            let mut program = Program::new(&[
+                SYSTEM + 0x18,
+                0xf9c1_e06f | 1 << 11,
+                LEDC,
+                2 | 256 << 4 | 1 << 25,
+            ]);
+            program
+                .l32r(2, 0)
+                .l32r(3, 1)
+                .rri8(6, 3, 2, 0)
+                .l32r(2, 2)
+                .movi(3, 3)
+                .rri8(6, 3, 2, 0xd0)
+                .movi(3, 1)
+                .rri8(6, 3, 2, 0xc8)
+                .l32r(3, 3)
+                .rri8(6, 3, 2, 0xa0)
+                .movi(7, 2)
+                .wsr(7, INTENABLE)
+                .movi(7, 0)
+                .wsr(7, PS)
+                .raw(&WAITI)
+                .raw(&LOOP);
+            program
+        };
+        let mut chip = ovf_prog.chip();
+        chip.soc.restore(0x600c_2000 + 4 * 35, 1);
+        let seen = halts(&mut chip, 200, 1);
+        assert!(
+            matches!(
+                seen[..],
+                [(Halt::Fault(_, Fault::UnmappedFetch(pc)), _)] if pc == pro(0x4000_0300)
+            ),
+            "{seen:?}"
+        );
+        assert_eq!(
+            chip.soc.bus().load(Cycle(0), LEDC + 0xc4, Width::Word),
+            Ok(1),
+            "LSTIMER0_OVF in INT_ST"
+        );
+    }
+
     const EN: u32 = 1 << 31;
 
     /// Timer group 0's watchdog, stopped and then started at cycle 11: stage 0 interrupts at
@@ -3242,8 +3626,9 @@ mod tests {
         );
     }
 
-    /// Boot clears the radio force-up bits and reads an RTC pad to leave it digital. The
-    /// register beside the baseband word, and a store that sets the pad's `MUX_SEL`, are listed.
+    /// Boot clears the radio force-up bits and reads an RTC pad to leave it digital. A store
+    /// that sets the pad's `MUX_SEL` is listed, and the register beside the baseband word ends
+    /// the run, since the model does not simulate the radio.
     #[test]
     fn a_radio_force_up_and_a_digital_pad_read_are_quiet() {
         let mut program = Program::new(&[0x6001_d054, 0x6001_d050, 0x6000_8494, 1 << 19]);
@@ -3253,19 +3638,125 @@ mod tests {
             .l32r(2, 0)
             .movi(3, 0)
             .rri8(6, 3, 2, 0)
-            .l32r(2, 1)
-            .rri8(2, 3, 2, 0)
             .l32r(2, 2)
             .l32r(3, 3)
             .rri8(6, 3, 2, 0)
-            .raw(&LOOP);
+            .l32r(2, 1);
+        let load = program.pc();
+        program.rri8(2, 3, 2, 0).raw(&LOOP);
         let mut chip = program.chip();
-        assert_eq!(chip.run_until(c(200)), None);
+        let halt = chip.run_until(c(200));
         let names: Vec<String> = chip
             .unmodeled()
             .map(|(addr, _)| Touch::register(addr))
             .collect();
-        assert_eq!(names, ["RTCIO+0x94", "BB+0x50"]);
+        assert_eq!(names, ["RTCIO+0x94"]);
+        let radio = Refused::Unsimulated("BB", "the Wi-Fi and Bluetooth radio");
+        assert!(
+            matches!(halt, Some(Halt::Fault(_, Fault::Refused(refused, pc))) if refused == radio && pc == pro(load)),
+            "{halt:?}"
+        );
+    }
+
+    /// All 22 RTC pad registers (GPIO0 to GPIO21, `RTCIO+0x84..=0xd8`) are quiet on reads and on
+    /// stores of 0. Any non-zero store (`MUX_SEL`, `RUE`, `RDE`, `DRV`, `FUN_IE`, `SLP_*`, touch
+    /// bits) on a pad register, or touching any other RTCIO register, is still listed.
+    #[test]
+    fn every_rtc_pad_read_and_digital_write_is_quiet_and_other_rtcio_registers_warn() {
+        let mut chip = Program::new(&[]).raw(&LOOP).chip();
+        for pad in 0..22u32 {
+            let addr = 0x6000_8484 + 4 * pad;
+            assert_eq!(chip.soc.bus().load(Cycle(0), addr, Width::Word), Ok(0));
+            assert_eq!(chip.soc.bus().store(Cycle(1), addr, Width::Word, 0), Ok(()));
+        }
+        assert_eq!(chip.unmodeled().count(), 0, "all 22 pads stay quiet");
+
+        for (addr, write, value, expected) in [
+            (0x6000_8484, true, 1 << 19, "RTCIO+0x84"),
+            (0x6000_8488, true, 1 << 19, "RTCIO+0x88"),
+            (0x6000_84c0, true, 1 << 19, "RTCIO+0xc0"),
+            (0x6000_84c8, true, 1 << 19, "RTCIO+0xc8"),
+            (0x6000_84d8, true, 1 << 19, "RTCIO+0xd8"),
+            (0x6000_84b0, true, 1 << 27, "RTCIO+0xb0"),
+            (0x6000_84b0, true, 1 << 28, "RTCIO+0xb0"),
+            (0x6000_84b0, true, 2 << 29, "RTCIO+0xb0"),
+            (0x6000_84b0, true, 1 << 13, "RTCIO+0xb0"),
+            (0x6000_84b0, true, 1 << 16, "RTCIO+0xb0"),
+            (0x6000_84b0, true, 1 << 20, "RTCIO+0xb0"),
+            (0x6000_8400, false, 0, "RTCIO+0x0"),
+            (0x6000_8428, false, 0, "RTCIO+0x28"),
+            (0x6000_8480, false, 0, "RTCIO+0x80"),
+            (0x6000_84dc, false, 0, "RTCIO+0xdc"),
+        ] {
+            let mut program = Program::new(&[addr, value]);
+            if write {
+                program.l32r(2, 0).l32r(3, 1).rri8(6, 3, 2, 0);
+            } else {
+                program.l32r(2, 0).rri8(2, 3, 2, 0);
+            }
+            program.raw(&LOOP);
+            let mut chip = program.chip();
+            assert_eq!(chip.run_until(c(100)), None);
+            let names: Vec<String> = chip
+                .unmodeled()
+                .map(|(at, _)| Touch::register(at))
+                .collect();
+            assert_eq!(
+                names,
+                [expected],
+                "{addr:#x} write={write} value={value:#x}"
+            );
+        }
+    }
+
+    /// Setting any pad hold bit in `RTC_CNTL_PAD_HOLD_REG`, `RTC_CNTL_DIG_PAD_HOLD_REG`,
+    /// `RTC_CNTL_PWC_REG` (`PAD_FORCE_HOLD`) or `RTC_CNTL_DIG_ISO_REG` (`DG_PAD_FORCE_HOLD` or
+    /// `DG_PAD_AUTOHOLD_EN`) ends the run with `RTC_CNTL` `pin_hold` and writes nothing.
+    /// Writing those registers with no hold bit set stays quiet.
+    #[test]
+    fn setting_a_pin_hold_bit_ends_the_run_and_clearing_it_stays_quiet() {
+        let refused = Refused::Register("RTC_CNTL", "pin_hold");
+        for (addr, value) in [
+            (RTC_CNTL + 0xd8, 1 << 0),
+            (RTC_CNTL + 0xd8, 1 << 11),
+            (RTC_CNTL + 0xd8, 1 << 21),
+            (RTC_CNTL + 0xdc, 1 << 5),
+            (RTC_CNTL + 0xdc, 1 << 27),
+            (RTC_CNTL + 0x88, 1 << 21),
+            (RTC_CNTL + 0x94, 1 << 11),
+            (RTC_CNTL + 0x94, 1 << 15),
+        ] {
+            let program = store_after_two_loads(addr, value, 0);
+            let mut chip = program.chip();
+            chip.soc.restore(addr, 0);
+            assert_eq!(
+                chip.run_until(c(1000)),
+                Some(Halt::Fault(
+                    c(2),
+                    Fault::Refused(refused, pro(program.entry() + 6))
+                )),
+                "{addr:#x} = {value:#x}"
+            );
+            assert_eq!(word(&mut chip, addr), 0, "{addr:#x} writes nothing");
+        }
+
+        for (addr, initial, value) in [
+            (RTC_CNTL + 0xd8, 0, 0),
+            (RTC_CNTL + 0xdc, 0, 0),
+            (RTC_CNTL + 0x88, 0, 1 << 5 | 1 << 8 | 1 << 11),
+            (
+                RTC_CNTL + 0x94,
+                0x1000_0080,
+                0x1000_0080 | 1 << 14 | 1 << 10,
+            ),
+        ] {
+            let program = store_after_two_loads(addr, value, 0);
+            let mut chip = program.chip();
+            chip.soc.restore(addr, initial);
+            assert_eq!(chip.run_until(c(1000)), None, "{addr:#x} = {value:#x}");
+            assert_eq!(chip.unmodeled().count(), 0, "{addr:#x} stays quiet");
+            assert_eq!(word(&mut chip, addr), value);
+        }
     }
 
     fn word(chip: &mut Esp32s3, addr: u32) -> u32 {

@@ -2,6 +2,7 @@
 // part's scene with orbe-wasm's `partScene`. Runs in Node, at build time only.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { compareVersions } from "@orbe/viewer/registry";
 import { at } from "../src/paths.ts";
 import { si } from "../src/format.ts";
 import {
@@ -24,12 +25,6 @@ export interface Catalog {
   readonly bytes: (sha256: string) => Uint8Array;
 }
 
-const compareVersions = (a: string, b: string) => {
-  const [x, y] = [a.split(".").map(Number), b.split(".").map(Number)];
-  for (let i = 0; i < 3; i += 1) if (x[i] !== y[i]) return (x[i] ?? 0) - (y[i] ?? 0);
-  return 0;
-};
-
 /** The catalog in a registry folder `orbe registry build` wrote. */
 export function readCatalog(dir: string): Catalog {
   const read = (path: string) => JSON.parse(readFileSync(join(dir, path), "utf8")) as unknown;
@@ -42,26 +37,14 @@ export function readCatalog(dir: string): Catalog {
     const last = sorted[sorted.length - 1] as IndexRow;
     return {
       record: read(last.url) as ItemRecord,
-      versions: sorted.map((row) => row.version),
       listed: last.listed !== false,
     };
   });
-  const usedBy = (name: string) =>
-    newest
-      .filter(({ record }) => record.registryDependencies.some((dependency) => dependencyId(dependency) === name))
-      .map(({ record }) => record.name)
-      .sort();
-  const item = <R extends ItemRecord>(record: R, versions: readonly string[], listed: boolean): Item<R> => ({
-    record,
-    versions,
-    usedBy: usedBy(record.name),
-    listed,
-  });
   const parts: Item<PartRecord>[] = [];
   const blocks: Item<BlockRecord>[] = [];
-  for (const { record, versions, listed } of newest) {
-    if (record.type === "part") parts.push(item(record, versions, listed));
-    else blocks.push(item(record, versions, listed));
+  for (const { record, listed } of newest) {
+    if (record.type === "part") parts.push({ record, listed });
+    else blocks.push({ record, listed });
   }
   return { name: index.name, parts, blocks, bytes: (sha256) => readFileSync(join(dir, "files", sha256)) };
 }

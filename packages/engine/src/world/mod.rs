@@ -18,7 +18,7 @@ pub use orbe_model::{Quantity, Row};
 /// and no part reads it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct World {
-    declared: [Option<Schedule<Value>>; 3],
+    declared: [Option<Schedule<Value>>; Quantity::ALL.len()],
 }
 
 impl World {

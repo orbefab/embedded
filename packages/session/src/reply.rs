@@ -163,6 +163,8 @@ pub enum Code {
     Value,
     PastStop,
     NoChange,
+    /// A step that reached its wall-time budget.
+    StepTimeout,
     /// A step its caller stopped between two slices.
     Cancelled,
     /// The session's process ended without closing.
@@ -214,6 +216,7 @@ impl Code {
             Code::Value => "value",
             Code::PastStop => "past_stop",
             Code::NoChange => "no_change",
+            Code::StepTimeout => "step_timeout",
             Code::Cancelled => "cancelled",
             Code::SessionCrashed => "session_crashed",
             Code::VersionMismatch => "version_mismatch",
@@ -410,6 +413,10 @@ pub enum Reading {
     Color(Colors),
     /// What a screen part's glass shows now.
     Screen(Screen),
+    /// The two visible 16-character lines on a character LCD's glass.
+    Text(LcdText),
+    /// Whether a character LCD's backlight is lit.
+    Backlight(bool),
     /// A live param's value, in the param's unit as the part file writes it, such as `1`.
     Param {
         unit: String,
@@ -418,18 +425,21 @@ pub enum Reading {
     /// What a 7-segment part shows: `0` to `9`, `blank`, or `segments a,b`.
     Shown(String),
     /// A part: its light state and brightness when it states them, its colours when it latches
-    /// them, and each engine quantity.
+    /// them, its relay contact when it states one, and each engine quantity.
     Part {
         state: Option<Light>,
         brightness: Option<(f64, u64)>,
         color: Option<Colors>,
+        /// `Some` when the part's contact reading is closed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        contact: Option<bool>,
         quantities: Vec<(String, Unit, f64)>,
     },
 }
 
 /// What an addressable LED part last latched: one `[red, green, blue]` per LED, LED 0 first, and
-/// when. `latched_ps` is `None` before the first latch, while every LED shows the black of
-/// power-on.
+/// when. `latched_ps` is `None` before the first latch or after power loss, while every LED shows
+/// black.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Colors {
     pub leds: Vec<[u8; 3]>,
@@ -526,6 +536,38 @@ impl Screen {
             text.push_str(row);
         }
         text
+    }
+}
+
+/// The two visible 16-character lines on a character LCD's glass, after display shift.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LcdText {
+    pub lines: [String; 2],
+    pub on: bool,
+    pub backlight: bool,
+}
+
+impl LcdText {
+    fn json(&self) -> Value {
+        json!({
+            "lines": self.lines,
+            "on": self.on,
+            "backlight": self.backlight,
+        })
+    }
+
+    pub fn text(&self) -> String {
+        format!("{}\n{}", self.lines[0], self.lines[1])
+    }
+
+    pub fn brief(&self) -> String {
+        let a = self.lines[0].trim_end();
+        let b = self.lines[1].trim_end();
+        if a.is_empty() && b.is_empty() {
+            "blank".to_string()
+        } else {
+            format!("{a:?} / {b:?}")
+        }
     }
 }
 
@@ -875,7 +917,34 @@ fn shown_message(code: &str, json: &Value) -> String {
     if code == "rating.voltage" {
         return with_over(message, json);
     }
+    if code == "regulator.current_limit"
+        && let Some(text) = regulator_limit_message(message, json)
+    {
+        return text;
+    }
     message.to_string()
+}
+
+fn regulator_limit_message(message: &str, json: &Value) -> Option<String> {
+    let data = &json["data"];
+    let limit = data["limit"].as_f64()?;
+    let target = data["target"].as_f64()?;
+    let current = data["current"].as_f64()?;
+    let voltage = data["voltage"].as_f64()?;
+    let duration = data["over_ps"]
+        .as_u64()
+        .filter(|over| *over > 0)
+        .map(|over| format!(" for {}", Duration::from_ps(over)))
+        .unwrap_or_default();
+    let end = message.find(" regulator output ")?;
+    let head = &message[..end];
+    Some(format!(
+        "{head} regulator output can give {} at {} V; the circuit asks for more, so it is giving {} and has dropped as low as {} V{duration}",
+        rated_current(limit),
+        significant_text(target),
+        rated_current(current),
+        significant_text(voltage),
+    ))
 }
 
 fn with_over(message: &str, json: &Value) -> String {
@@ -948,16 +1017,24 @@ impl Reading {
             Reading::Brightness { value, over_ps } => json!({ "a": value, "over_ps": over_ps }),
             Reading::Color(colors) => colors.json(),
             Reading::Screen(screen) => screen.json(),
+            Reading::Text(lcd) => lcd.json(),
+            Reading::Backlight(on) => json!({ "state": if *on { "lit" } else { "off" }, "on": on }),
             Reading::Shown(text) => json!({ "shown": text }),
             Reading::Param { value, .. } => json!(value),
             Reading::Part {
                 state,
                 brightness,
                 color,
+                contact,
                 quantities,
             } => {
                 let mut map = serde_json::Map::new();
-                if let Some(state) = state {
+                if let Some(closed) = contact {
+                    map.insert(
+                        "state".into(),
+                        json!(if *closed { "closed" } else { "open" }),
+                    );
+                } else if let Some(state) = state {
                     map.insert("state".into(), json!(state.as_str()));
                 }
                 if let Some((value, over_ps)) = brightness {
@@ -982,6 +1059,8 @@ impl Reading {
             Reading::Brightness { .. } => "brightness",
             Reading::Color(_) => "color",
             Reading::Screen(_) => "screen",
+            Reading::Text(_) => "text",
+            Reading::Backlight(_) => "backlight",
             Reading::Shown(_) => "shown",
             Reading::Param { .. } => "param",
             Reading::Part { .. } => "part",
@@ -996,6 +1075,8 @@ impl Reading {
             } => level.as_str().to_string(),
             Reading::Pin { level: None, v } => format!("{}V", number(*v)),
             Reading::Screen(screen) => screen.brief(),
+            Reading::Text(lcd) => lcd.brief(),
+            Reading::Backlight(on) => if *on { "lit" } else { "off" }.to_string(),
             Reading::Quantity { .. }
             | Reading::Brightness { .. }
             | Reading::Color(_)
@@ -1005,14 +1086,16 @@ impl Reading {
                 state,
                 brightness,
                 color,
+                contact,
                 quantities,
             } => Reading::Part {
                 state: *state,
                 brightness: *brightness,
                 color: color.clone(),
+                contact: *contact,
                 quantities: quantities
                     .iter()
-                    .filter(|(n, ..)| n == "i")
+                    .filter(|(n, u, _)| n == "i" || matches!(u, Unit::Degree | Unit::Hertz))
                     .cloned()
                     .collect(),
             }
@@ -1035,18 +1118,25 @@ impl Reading {
             }
             Reading::Color(colors) => colors.text(),
             Reading::Screen(screen) => screen.text(),
+            Reading::Text(lcd) => lcd.text(),
+            Reading::Backlight(on) => if *on { "lit" } else { "off" }.to_string(),
             Reading::Shown(text) => text.clone(),
             Reading::Param { unit, value } => with_unit(*value, unit),
             Reading::Part {
                 state,
                 brightness,
                 color,
+                contact,
                 quantities,
             } => {
-                let mut words: Vec<String> = state
-                    .map(|state| state.as_str().to_string())
-                    .into_iter()
-                    .collect();
+                let mut words: Vec<String> = match contact {
+                    Some(true) => vec!["closed".to_string()],
+                    Some(false) => vec!["open".to_string()],
+                    None => state
+                        .map(|state| state.as_str().to_string())
+                        .into_iter()
+                        .collect(),
+                };
                 words.extend(
                     quantities
                         .iter()

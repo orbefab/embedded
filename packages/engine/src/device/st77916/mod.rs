@@ -60,6 +60,7 @@ pub(crate) fn chip(part: PartId, panel: &St77916) -> Chip {
         high: stage(&panel.output.high_drop, &panel.output.high_resistance),
         low: stage(&panel.output.low_drop, &panel.output.low_resistance),
         pull_up: None,
+        strong_pull_up: None,
         pull_down: None,
         leakage: None,
     };
@@ -91,9 +92,11 @@ pub(crate) fn chip(part: PartId, panel: &St77916) -> Chip {
             spi: Some(SpiTarget {
                 cs: pins[CS],
                 sclk: pins[SCLK],
+                pins: Some([CS, SCLK, D0, D0 + 1, D0 + 2, D0 + 3]),
             }),
             duty: Some(pins[BLK]),
             pulses: None,
+            pulses_pin: None,
         },
         core: Core::Device(Box::new(Native::new(
             model::St77916::new(&Fields::NONE).expect("an st77916 takes no params"),

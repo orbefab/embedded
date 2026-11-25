@@ -43,6 +43,8 @@ const BUS: Bus = Bus {
     scl: model::WATCH_SCL,
     sda: model::WATCH_SDA,
     reset: Some(model::WATCH_RST),
+    address_high: None,
+    power: &[],
 };
 
 /// The largest `x` or `y` of a touch.
@@ -77,6 +79,7 @@ pub(crate) fn chip(part: PartId, dev: &Cst816) -> Chip {
         high: low,
         low,
         pull_up: None,
+        strong_pull_up: None,
         pull_down: None,
         leakage: None,
     };

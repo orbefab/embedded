@@ -1,7 +1,6 @@
-//! Each Block, read into a set of files in memory, reads, lints and runs a window of each of its
-//! tests as it does from disk, and so does each Block installed into a project. The window is
-//! the same short run for every Block, so these comparisons do not take as long as the slowest
-//! Block's whole test. Each Block's whole test runs on its own elsewhere. Paths in memory start from the
+//! Each Block, read into a set of files in memory, reads and lints as it does from disk, and
+//! so does each Block installed into a project. One Block also plays a 20 ms window of its tests
+//! both ways. Each Block's whole test runs on its own elsewhere. Paths in memory start from the
 //! repo, so a disk path shows the same once the repo's folder is taken off it. A Block is a
 //! folder under `blocks/` that holds `block.jsonc`.
 
@@ -151,7 +150,7 @@ fn window(text: &str) -> String {
         .lines()
         .take_while(|line| line.split_whitespace().next() != Some("step"))
         .collect();
-    out.extend([WINDOW, "snapshot"]);
+    out.extend([WINDOW, "snapshot", "expect no diagnostics"]);
     out.join("\n") + "\n"
 }
 
@@ -198,10 +197,15 @@ fn test_files(block: &str) -> Vec<PathBuf> {
     paths
 }
 
-/// The read, the lint and the windows played.
-fn outcome(files: &Files, base: &Path, block: &str) -> Vec<String> {
+/// The Block whose 20 ms window runs in the disk-versus-memory comparisons.
+const PLAY_BLOCK: &str = "nano-button-led";
+
+/// The read, the lint, and optionally the windows played.
+fn outcome(files: &Files, base: &Path, block: &str, play: bool) -> Vec<String> {
     let mut out = reading(files, base, block);
-    out.extend(played(files, base, block));
+    if play {
+        out.extend(played(files, base, block));
+    }
     out
 }
 
@@ -222,21 +226,21 @@ fn same_lines(block: &str, disk: Vec<String>, memory: Vec<String>) -> Vec<String
     disk
 }
 
-fn same_both_ways(base: &Path, block: &str) -> Vec<String> {
+fn same_both_ways(base: &Path, block: &str, play: bool) -> Vec<String> {
     let folder = base.join("blocks").join(block);
     if folder.join(orbe_scene::BLOCK).is_file() {
         // A Block reads the `parts/` beside `blocks/`. Memory holds those files at the same
         // absolute paths disk reads, so the two readings name the same files.
         return same_lines(
             block,
-            outcome(&Files::disk(), base, block),
-            outcome(&memory_with_parts(base, block), base, block),
+            outcome(&Files::disk(), base, block, play),
+            outcome(&memory_with_parts(base, block), base, block, play),
         );
     }
     same_lines(
         block,
-        shown(base, outcome(&Files::disk(), base, block)),
-        outcome(&memory(base, block), Path::new(""), block),
+        shown(base, outcome(&Files::disk(), base, block, play)),
+        outcome(&memory(base, block), Path::new(""), block, play),
     )
 }
 
@@ -266,11 +270,14 @@ fn walk_abs(path: &Path, out: &mut Vec<(PathBuf, Vec<u8>)>) {
     }
 }
 
-/// The read starts with `{` and the lint with `Ok(`. The first window played passed. A Block
-/// with no test file has nothing to play, and the assertion names that lack.
-fn reads_and_passes(found: &[String], block: &str) {
+/// The read starts with `{` and the lint with `Ok(`. When `play` is set, the first window played
+/// passed. A Block with no test file has nothing to play, and the assertion names that lack.
+fn reads_and_passes(found: &[String], block: &str, play: bool) {
     assert!(found[0].starts_with('{'), "{block} reads: {}", found[0]);
     assert!(found[1].starts_with("Ok("), "{block} lints: {}", found[1]);
+    if !play {
+        return;
+    }
     if test_files(block).is_empty() {
         assert!(
             found.get(2).is_none(),
@@ -311,7 +318,8 @@ fn each_folder_with_block_jsonc_is_a_block() {
 fn each_block_reads_and_runs_the_same_from_memory() {
     for block in blocks() {
         let block = block.as_str();
-        reads_and_passes(&same_both_ways(&repo(), block), block);
+        let play = block == PLAY_BLOCK;
+        reads_and_passes(&same_both_ways(&repo(), block, play), block, play);
     }
 }
 
@@ -332,11 +340,13 @@ fn given_catalog(skip: &str) -> Vec<(String, Vec<u8>)> {
 /// catalog records those files at `parts/<id>/` inside the Block, so that hash is set aside.
 #[test]
 fn each_block_reads_and_runs_the_same_from_a_given_catalog() {
+    let catalog = given_catalog("");
     for block in blocks() {
         let block = block.as_str();
-        let disk = shown(&repo(), outcome(&Files::disk(), &repo(), block));
-        let given = memory(&repo(), block).with_catalog(given_catalog(""));
-        let from_catalog = outcome(&given, Path::new(""), block);
+        let play = block == PLAY_BLOCK;
+        let disk = shown(&repo(), outcome(&Files::disk(), &repo(), block, play));
+        let given = memory(&repo(), block).with_catalog(catalog.clone());
+        let from_catalog = outcome(&given, Path::new(""), block, play);
         assert_eq!(
             scrub_scene_hash(&from_catalog),
             scrub_scene_hash(&disk),
@@ -385,9 +395,10 @@ fn each_installed_block_reads_and_runs_the_same_from_memory() {
     let base = tmp.path().canonicalize().unwrap();
     for block in blocks() {
         let block = block.as_str();
+        let play = block == PLAY_BLOCK;
         install(&base, block);
-        let found = same_both_ways(&base, block);
-        reads_and_passes(&found, block);
+        let found = same_both_ways(&base, block, play);
+        reads_and_passes(&found, block, play);
         let ours = shown(&repo(), reading(&Files::disk(), &repo(), block));
         let netlist = |found: &[String]| found[0].rsplit_once('\n').unwrap().0.to_string();
         assert_eq!(
@@ -516,7 +527,7 @@ fn a_broken_install_finds_the_same_from_memory() {
         let block = block.as_str();
         let dir = install(&base, block);
         let broken = break_install(&dir);
-        let found = same_both_ways(&base, block);
+        let found = same_both_ways(&base, block, true);
         for (code, present, lack) in broken {
             finds(block, &found[0], code, present, lack);
         }

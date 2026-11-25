@@ -324,6 +324,7 @@ mod tests {
             Live::Value,
             Live::PastStop,
             Live::NoChange,
+            Live::StepTimeout,
             Live::Cancelled,
             Live::SessionCrashed,
             Live::VersionMismatch,
@@ -407,7 +408,7 @@ mod tests {
             })
             .collect();
         let names: Vec<&str> = rows.iter().map(|r| r[0].trim_matches('`')).collect();
-        assert_eq!(names, ["temperature", "humidity", "light"]);
+        assert_eq!(names, ["temperature", "humidity", "light", "pressure"]);
         let set = orbe_session::spec("set").unwrap();
         let parse = |words: &[&str]| {
             let words: Vec<String> = words.iter().map(|w| w.to_string()).collect();
@@ -430,7 +431,7 @@ mod tests {
         let error = parse(&["lite", "50"]).unwrap_err();
         assert!(
             error.starts_with(
-                "`lite` is not a world quantity; the quantities are temperature, humidity, light"
+                "`lite` is not a world quantity; the quantities are temperature, humidity, light, pressure"
             ),
             "{error}"
         );
@@ -456,7 +457,9 @@ mod tests {
             | Lint::NoModel
             | Lint::Floating
             | Lint::LedNoResistor
-            | Lint::Shorted => Code::Lint(lint).as_str(),
+            | Lint::Shorted
+            | Lint::CoveredHole
+            | Lint::Overlap => Code::Lint(lint).as_str(),
         };
         let rules: std::collections::BTreeSet<&str> = [
             Lint::Unplaced,
@@ -465,6 +468,8 @@ mod tests {
             Lint::Floating,
             Lint::LedNoResistor,
             Lint::Shorted,
+            Lint::CoveredHole,
+            Lint::Overlap,
         ]
         .map(code)
         .into();

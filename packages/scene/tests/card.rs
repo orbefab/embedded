@@ -1,5 +1,7 @@
 //! A card for every catalog part, and how search ranks them.
 
+mod common;
+
 use std::fs;
 use std::path::PathBuf;
 
@@ -393,21 +395,7 @@ fn search_finds_a_block_by_a_word_of_its_id() {
         .into_iter()
         .map(|card| card.name)
         .collect();
-    assert_eq!(
-        names,
-        [
-            "devkitc-button-led",
-            "nano-7seg-count",
-            "nano-button-led",
-            "nano-led-fade",
-            "nano-light-comparator",
-            "nano-neopixel-stick",
-            "nano-oled",
-            "nano-servo-sweep",
-            "nano-shift-leds",
-            "uno-button-led",
-        ]
-    );
+    assert_eq!(names, common::block_ids());
 }
 
 #[test]
@@ -485,4 +473,34 @@ fn the_esp32s3_rom_is_apache_and_the_part_names_it() {
     assert_eq!(licence("LICENSE-ubsan"), Some("BSD-2-Clause"));
     assert_eq!(licence("LICENSE-xtensa"), Some("LicenseRef-Cadence-Xtensa"));
     assert_eq!(licence("LICENSE-newlib"), Some("LicenseRef-newlib"));
+}
+
+#[test]
+fn lcd1602_i2c_card_describes_its_pins_params_parts_and_readings() {
+    let lcd = card(&parts_dir(), "lcd1602-i2c").unwrap();
+    let pin_names: Vec<&str> = lcd.pins.iter().map(|pin| pin.name.as_str()).collect();
+    assert_eq!(pin_names, ["GND", "VCC", "SDA", "SCL"]);
+    let param_names: Vec<&str> = lcd.params.iter().map(|param| param.name.as_str()).collect();
+    assert!(param_names.contains(&"address"), "{param_names:?}");
+    assert!(param_names.contains(&"backlight_jumper"), "{param_names:?}");
+    for child in [
+        "hd44780-1602-i2c",
+        "pin-header-1x4",
+        "resistor-0603",
+        "trimmer-3362p",
+    ] {
+        assert!(lcd.uses.contains_key(child), "missing child {child}");
+    }
+    assert!(
+        lcd.description
+            .as_deref()
+            .unwrap_or("")
+            .contains("@<lcd>.text")
+    );
+    assert!(!lcd.not_simulated.is_empty());
+    assert_eq!(lcd.license, "MIT OR Apache-2.0");
+
+    let leaf = card(&parts_dir(), "hd44780-1602-i2c").unwrap();
+    assert!(leaf.used_by.contains(&"lcd1602-i2c".to_string()));
+    assert_eq!(leaf.license, "MIT OR Apache-2.0");
 }

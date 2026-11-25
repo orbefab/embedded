@@ -25,8 +25,10 @@ const SCENE_KEYS: &[&str] = &[
 /// a number param, `"by"` on a joint, and a capacitor's `ratings` and `series_resistance`.
 /// Format 5 is format 4 plus a rating's `basis`, a capacitor's `series_resistance` as
 /// `tan_delta` at a `frequency`, a regulator's `ratings.input_voltage`, an op-amp's `ratings`, a
-/// BJT's `forward_knee_current`, and a `ws2812`'s `draw`. Format 6 is format 5 plus a reading
-/// `"of": "angle"` on an `sg90`, and a reading `"of": "screen"` and `view.screen`.
+/// BJT's `forward_knee_current`, and a `ws2812`'s `draw`. Format 6 is format 5 plus a
+/// resistor's `ratings.voltage`, the operating window of a sounding drive, a reading
+/// `"of": "angle"` on an `sg90`, a reading `"of": "screen"` and `view.screen`, and pin voltage
+/// `ratings` on `esp32s3`, `ssd1306`, `hd44780_i2c` and `ws2812`.
 pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5, 6];
 /// Scene `format` values this binary reads.
 pub const SCENE_FORMATS: &[u32] = &[1];
@@ -41,12 +43,17 @@ const FIELD_FORMAT: u32 = 4;
 /// The oldest part format that carries the keys orbe 0.2.0 and 0.2.1 refuse, so those binaries
 /// ask for a newer orbe.
 const BASIS_FORMAT: u32 = 5;
+/// The oldest part format whose resistor may rate an operating `voltage`. An older orbe
+/// refuses that key, so the part says format 6 and that orbe asks for a newer one.
+const VOLTAGE_FORMAT: u32 = 6;
 /// The oldest part format whose readings take `"of": "angle"`.
 const ANGLE_FORMAT: u32 = 6;
 /// The oldest part format whose readings take `"of": "screen"` and whose view takes `screen`.
 const SCREEN_FORMAT: u32 = 6;
 /// The engine kinds that show a screen, which a reading `"of": "screen"` reads.
-const SCREEN_KINDS: [&str; 1] = ["ssd1306"];
+const SCREEN_KINDS: [&str; 2] = ["ssd1306", "hd44780_i2c"];
+/// The engine kinds whose glass carries readable character lines and a backlight.
+const TEXT_KINDS: [&str; 1] = ["hd44780_i2c"];
 const WIRE_KINDS: &[&str] = &["jumper", "trace", "contact"];
 /// A live session's stop, investigation 1's 2-hour cap.
 pub const STOP_PS: u64 = 7_200 * 1_000_000_000_000;
@@ -546,6 +553,7 @@ pub(crate) fn decode_part(
                 check_rgb(value, format, out);
                 check_angle(value, format, out);
                 check_screen(value, format, out);
+                check_text_and_backlight(value, format, out);
             }
             "not_simulated" => part.not_simulated = decode_not_simulated(value, out),
             "buy" => crate::buy::check(value, out),
@@ -572,6 +580,12 @@ pub(crate) fn decode_part(
         check_rgb_kind(readings, part.model.as_ref(), out);
         check_angle_kind(readings, part.model.as_ref(), out);
         check_screen_kind(readings, part.model.as_ref(), out);
+        check_text_and_backlight_kind(
+            readings,
+            part.model.as_ref(),
+            !part.comp.parts.is_empty(),
+            out,
+        );
     }
     if let Some(params) = root.get("params") {
         part.params = decode_params(params, &part, format, out);
@@ -1724,6 +1738,70 @@ fn check_screen_kind(readings: &Node, model: Option<&Node>, out: &mut Findings) 
     }
 }
 
+/// A reading `"of": "text"` or `"of": "backlight"` is a part format 6 reading.
+fn check_text_and_backlight(readings: &Node, format: u32, out: &mut Findings) {
+    if format >= SCREEN_FORMAT {
+        return;
+    }
+    for prop in readings.props().unwrap_or_default() {
+        let Some(of) = prop.value.get("of") else {
+            continue;
+        };
+        let Some(kind) = of.str().filter(|s| matches!(*s, "text" | "backlight")) else {
+            continue;
+        };
+        out.push(
+            Code::Syntax,
+            of.span,
+            format!(
+                "reading `{}` takes \"of\": \"{kind}\" only in part format {SCREEN_FORMAT}; this file is format {format}",
+                prop.key
+            ),
+            format!("set \"format\": {SCREEN_FORMAT} in this part file"),
+        );
+    }
+}
+
+/// `"of": "text"` and `"of": "backlight"` read a character LCD controller, either directly on
+/// its leaf part or on a module assembled from one.
+fn check_text_and_backlight_kind(
+    readings: &Node,
+    model: Option<&Node>,
+    has_parts: bool,
+    out: &mut Findings,
+) {
+    let kind = model.and_then(|m| m.get("kind")).and_then(Node::str);
+    if has_parts || kind.is_some_and(|k| TEXT_KINDS.contains(&k)) {
+        return;
+    }
+    for prop in readings.props().unwrap_or_default() {
+        let Some(of) = prop.value.get("of") else {
+            continue;
+        };
+        let Some(reading_kind) = of.str().filter(|s| matches!(*s, "text" | "backlight")) else {
+            continue;
+        };
+        out.push(
+            Code::Syntax,
+            of.span,
+            format!(
+                "reading `{}` takes \"of\": \"{reading_kind}\" only on a character LCD part or module",
+                prop.key
+            ),
+            format!(
+                "read `{reading_kind}` only from a part whose \"model\" has \"kind\": {}, or a module holding one",
+                and_list(
+                    &TEXT_KINDS
+                        .map(|k| format!("\"{k}\""))
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>()
+                )
+            ),
+        );
+    }
+}
+
 fn decode_names(node: &Node, what: &str, out: &mut Findings) {
     for prop in node.props().unwrap_or_default() {
         name_ok(&prop.key, prop.key_span, NameKind::Name, what, out);
@@ -2580,7 +2658,7 @@ fn gate(out: &mut Findings, kind: &str, key: &str, span: Span, needs: u32, forma
 /// below on their kinds. A dotted key is a field of an object.
 fn basis_gate(node: &Node, kind: &str, format: u32, out: &mut Findings) {
     let gated: &[&str] = match kind {
-        "ws2812" => &["draw"],
+        "ws2812" => &["draw", "min_supply"],
         "linear_regulator" => &["ratings.input_voltage"],
         "op_amp" => &["ratings"],
         "npn" | "pnp" => &["forward_knee_current"],
@@ -2697,6 +2775,34 @@ fn decode_body(
     }
     if format < BASIS_FORMAT {
         basis_gate(node, kind, format, out);
+    }
+    if format < VOLTAGE_FORMAT {
+        if kind == "resistor"
+            && let Some(prop) = node
+                .get("ratings")
+                .and_then(Node::props)
+                .unwrap_or_default()
+                .iter()
+                .find(|prop| prop.key == "voltage" && !prop.value.is_null())
+        {
+            gate(
+                out,
+                kind,
+                "ratings.voltage",
+                prop.key_span,
+                VOLTAGE_FORMAT,
+                format,
+            );
+        }
+        if matches!(kind, "esp32s3" | "ssd1306" | "hd44780_i2c" | "ws2812")
+            && let Some(prop) = node
+                .props()
+                .unwrap_or_default()
+                .iter()
+                .find(|prop| prop.key == "ratings")
+        {
+            gate(out, kind, "ratings", prop.key_span, VOLTAGE_FORMAT, format);
+        }
     }
     let before_dout = kind == "ws2812" && format < DOUT_FORMAT;
     let engine_pins = if before_dout {

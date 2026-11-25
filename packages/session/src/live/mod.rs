@@ -31,11 +31,12 @@ use crate::command::{Command, ParamSet, Step, WorldSet};
 use crate::condition::Unit;
 use crate::duration::Duration;
 use crate::reply::{
-    Code, Colors, Data, Diagnostic, Error, Finding, Got, Level, PartState, Reading, Reply, Screen,
-    Snapshot, State, Stepped,
+    Code, Colors, Data, Diagnostic, Error, Finding, Got, LcdText, Level, PartState, Reading, Reply,
+    Screen, Snapshot, State, Stepped,
 };
 use crate::target::{
-    Ref, Target, live_params, names, one_engine, reports_hint, resolve, rgb_reading,
+    Ref, Target, angle_reading, digit_reading, hz_reading, lcd_engine, live_params, names,
+    one_engine, reports_hint, resolve, rgb_reading, screen_engine, text_reading,
 };
 
 mod bound;
@@ -43,6 +44,7 @@ mod frame;
 mod light;
 mod serial;
 mod step;
+mod tone;
 
 pub use light::BRIGHTNESS_WINDOW;
 
@@ -104,6 +106,8 @@ struct Open {
     param_sets: BTreeMap<String, Time>,
     /// Each LED's forward-current integral, sampled as time advances, for its brightness.
     light: light::Log,
+    /// The drive frequency of each part whose reading is `"of": "hz"`.
+    tone: tone::Log,
     /// The files the scene came from, for a file a condition names, such as `shows`'s rows.
     files: Files,
 }
@@ -520,6 +524,8 @@ impl Open {
         let contacts = frame::contacts(json);
         let mut light = light::Log::build(&refs, &reports);
         light.note(&engine.probe());
+        let mut tone = tone::Log::build(&refs, &reports, &signals);
+        tone.note(&engine.probe(), engine.now().as_ps());
         let mut open = Open {
             engine,
             refs,
@@ -541,6 +547,7 @@ impl Open {
             world_sets: BTreeMap::new(),
             param_sets: BTreeMap::new(),
             light,
+            tone,
             files,
         };
         open.channels = open.bind_channels();
@@ -948,6 +955,23 @@ impl Open {
                 format!("{path}.{reading}"),
                 Reading::Color(self.colors(&engine)),
             ),
+            Target::Hertz { path } => {
+                let index = self.tone.position(&path).ok_or_else(|| {
+                    Error::new(
+                        Code::NoReading,
+                        format!("`{path}` has no frequency reading"),
+                        "the part file's reading `of` `hz` needs a voltage the engine reports",
+                    )
+                })?;
+                let hz = self.tone.hz(index, self.engine.now().as_ps());
+                (
+                    format!("{path}.{}", self.tone.reading(index)),
+                    Reading::Quantity {
+                        unit: Unit::Hertz,
+                        value: hz,
+                    },
+                )
+            }
             Target::Angle {
                 path,
                 reading,
@@ -966,6 +990,22 @@ impl Open {
             } => (
                 format!("{path}.{reading}"),
                 Reading::Screen(self.screen(&engine)),
+            ),
+            Target::Text {
+                path,
+                reading,
+                engine,
+            } => (
+                format!("{path}.{reading}"),
+                Reading::Text(self.lcd_text(&engine)),
+            ),
+            Target::Backlight {
+                path,
+                reading,
+                engine,
+            } => (
+                format!("{path}.{reading}"),
+                Reading::Backlight(self.lcd_backlight(&engine)),
             ),
             Target::Digit { path } => (
                 format!("{path}.digit"),
@@ -1125,35 +1165,135 @@ impl Open {
         }
     }
 
-    /// A part's light state, its brightness, its colours, and its engine quantities. `None` when
-    /// it has none.
+    /// The visible 16×2 character lines of an `hd44780_i2c` engine part.
+    pub(super) fn lcd_text(&self, engine: &str) -> LcdText {
+        let display = self
+            .engine
+            .display(&engine_name(engine))
+            .expect("a part with a reading of text is a character LCD");
+        let panel = display.panel();
+        let frame = display.image();
+        let lines = orbe_engine::device::hd44780_i2c::visible_lines(&panel, &frame);
+        let backlight = orbe_engine::device::hd44780_i2c::backlight_on(&panel);
+        let on = orbe_engine::device::hd44780_i2c::text_visible(&panel);
+        LcdText {
+            lines,
+            on,
+            backlight,
+        }
+    }
+
+    /// Whether an `hd44780_i2c` engine part's backlight is lit.
+    pub(super) fn lcd_backlight(&self, engine: &str) -> bool {
+        let display = self
+            .engine
+            .display(&engine_name(engine))
+            .expect("a part with a reading of backlight is a character LCD");
+        orbe_engine::device::hd44780_i2c::backlight_on(&display.panel())
+    }
+
+    /// A part's own reading: its 7-segment digit, character LCD text, screen glass, or its light
+    /// state, brightness, colours, relay contact, frequency, shaft angle and engine quantities.
+    /// `None` when it has none.
     fn part(&self, path: &str) -> Option<Reading> {
         let part = &self.refs.parts[path];
-        let engine = one_engine(path, part, Code::NoReading).ok()?;
-        let color = rgb_reading(part).map(|_| self.colors(&engine));
+        if digit_reading(part) {
+            return self.shown_digit(path).ok().map(Reading::Shown);
+        }
+        if text_reading(part).is_some() {
+            return lcd_engine(&self.refs, path)
+                .ok()
+                .map(|engine| Reading::Text(self.lcd_text(&engine)));
+        }
+        if let Some(engine) = screen_engine(&self.refs, path) {
+            return Some(Reading::Screen(self.screen(&engine)));
+        }
+        let contact = self.contact_closed(path);
+        let engine = one_engine(path, part, Code::NoReading).ok();
+        let color = engine
+            .as_deref()
+            .and_then(|engine| rgb_reading(part).map(|_| self.colors(engine)));
         let probe = self.engine.probe();
-        let quantities: Vec<(String, Unit, f64)> = self
-            .reports
-            .get(&engine)
-            .map_or(&[][..], Vec::as_slice)
-            .iter()
-            .map(|&q| {
-                let value = probe.get(&quantity(&engine, q)).expect("a reported column");
-                (q.as_str().to_string(), unit_of(q), value.get())
+        let mut quantities: Vec<(String, Unit, f64)> = engine
+            .as_deref()
+            .map(|engine| {
+                self.reports
+                    .get(engine)
+                    .map_or(&[][..], Vec::as_slice)
+                    .iter()
+                    .map(|&q| {
+                        let value = probe.get(&quantity(engine, q)).expect("a reported column");
+                        (q.as_str().to_string(), unit_of(q), value.get())
+                    })
+                    .collect()
             })
-            .collect();
+            .unwrap_or_default();
+        if let Some(name) = hz_reading(part)
+            && let Some(index) = self.tone.position(path)
+        {
+            let hz = self.tone.hz(index, self.engine.now().as_ps());
+            quantities.push((name.to_string(), Unit::Hertz, hz));
+        }
+        if let Some(engine) = engine.as_deref()
+            && let Some(name) = angle_reading(part)
+        {
+            quantities.push((name.to_string(), Unit::Degree, self.angle_of(engine)));
+        }
         let glow = self
             .light
             .position(path)
             .map(|index| self.light.glow(index, &probe));
         let state = glow.map(|glow| glow.state);
         let brightness = glow.map(|glow| (glow.amperes, glow.over_ps));
-        (state.is_some() || color.is_some() || !quantities.is_empty()).then_some(Reading::Part {
-            state,
-            brightness,
-            color,
-            quantities,
-        })
+        (state.is_some() || contact.is_some() || color.is_some() || !quantities.is_empty())
+            .then_some(Reading::Part {
+                state,
+                brightness,
+                color,
+                contact,
+                quantities,
+            })
+    }
+
+    /// The part's relay contact, closed when its coil current is past pull-in. `None` when the
+    /// part states no contact reading.
+    pub(super) fn contact_closed(&self, path: &str) -> Option<bool> {
+        Some(self.level_before_now(self.contact_signal(path).ok()?) == Level::High)
+    }
+
+    /// The logic signal of the one relay under `path`.
+    pub(super) fn contact_signal(&self, path: &str) -> Result<usize, Error> {
+        let part = &self.refs.parts[path];
+        if !part
+            .readings
+            .values()
+            .any(|reading| reading.of == "contact")
+        {
+            return Err(Error::new(
+                Code::NoReading,
+                format!("`{path}` states no contact reading"),
+                format!("{path} has no readings entry of `contact`"),
+            ));
+        }
+        let Some(engine) = relay_engine(&self.refs, path) else {
+            return Err(Error::new(
+                Code::NoReading,
+                format!("`{path}` has no relay contact"),
+                format!("`{}` has no relay", part.ty),
+            ));
+        };
+        let want = format!("#{engine}.logic.contact");
+        self.engine
+            .signals()
+            .iter()
+            .position(|signal| signal.to_string() == want)
+            .ok_or_else(|| {
+                Error::new(
+                    Code::NoReading,
+                    format!("the engine reports no `{path}` contact"),
+                    format!("`{engine}` has no contact signal"),
+                )
+            })
     }
 
     fn snapshot(&self) -> Data {
@@ -1221,6 +1361,26 @@ fn pin_names(refs: &RefMap) -> BTreeMap<String, String> {
         }
     }
     names
+}
+
+/// The flat name of the one relay under `path`: its own engine part, or the only relay
+/// inside it.
+fn relay_engine(refs: &RefMap, path: &str) -> Option<String> {
+    let part = refs.parts.get(path)?;
+    if let Some(engine) = part.engine.iter().find(|engine| engine.kind == "relay") {
+        return Some(engine.name.clone());
+    }
+    let mut found = None;
+    for child in &part.children {
+        let Some(name) = relay_engine(refs, &format!("{path}.{child}")) else {
+            continue;
+        };
+        if found.is_some() {
+            return None;
+        }
+        found = Some(name);
+    }
+    found
 }
 
 /// Each chip logic signal by the net its pin sits on, and the pin each is named by: the one

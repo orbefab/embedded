@@ -19,12 +19,13 @@ use crate::units::Unit;
 
 mod board;
 mod engine;
+mod footprint;
 mod lint;
 mod map;
 mod plug;
 mod view;
 
-pub use board::{BoardFacts, BoardLed, Gap, Supply, board_facts, one_part};
+pub use board::one_part;
 pub use map::{Amount, EnginePart, MapParam, MapPart, Reading, RefMap};
 pub use view::{Instance, PartData, PinWhy, Placement, View, Wire};
 
@@ -1188,11 +1189,14 @@ impl<'p> Circuit<'p> {
     }
 
     fn flat_pin(&self, key: usize) -> String {
-        format!(
-            "{}__{}",
-            self.insts[self.pins[key].inst].flat(),
-            self.pins[key].name
-        )
+        // The engine name is a letter then letters, digits and `_`. A sheet pin `+` or `-`
+        // stays that in the scene and becomes `plus` or `minus` on the net.
+        let pin = match self.pins[key].name.as_str() {
+            "+" => "plus",
+            "-" => "minus",
+            name => name,
+        };
+        format!("{}__{pin}", self.insts[self.pins[key].inst].flat())
     }
 
     fn kept(&self, key: usize) -> bool {

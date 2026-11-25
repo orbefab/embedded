@@ -7,5 +7,5 @@
   "summary": "An Arduino Nano counts 0 to 9 on a common-cathode 7-segment display. Each segment has its own 330 ohm resistor.",
   "board": "nano-board",
   "tags": ["display", "7-segment", "counter", "nano"],
-  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND GPL-3.0-or-later WITH GCC-exception-3.1",
 }

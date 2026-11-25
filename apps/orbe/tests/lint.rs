@@ -119,18 +119,7 @@ fn lint_warns_on_the_nano_block_exits_zero_and_writes_nothing() {
 #[test]
 fn lint_on_the_uno_block_warns_only_as_the_nano_block_does() {
     let repo = common::repo();
-    for block in [
-        "devkitc-button-led",
-        "nano-7seg-count",
-        "nano-button-led",
-        "nano-led-fade",
-        "nano-light-comparator",
-        "nano-neopixel-stick",
-        "nano-oled",
-        "nano-servo-sweep",
-        "nano-shift-leds",
-        "uno-button-led",
-    ] {
+    for block in common::block_ids() {
         let run = orbe(&repo, &["lint", &format!("blocks/{block}/scene.jsonc")]);
         assert_eq!(run.code, 0, "{block}: {}{}", run.stdout, run.stderr);
         assert!(
@@ -875,10 +864,10 @@ fn each_rule_warns_where_the_scene_goes_wrong() {
   ],
   "layout": {
     "nano": { "at": [0, 0, 0], "rotate": [0, 0, 270] },
-    "led1": { "at": [0, 0, 0], "rotate": [-180, 0, 540] },
-    "hdr": { "at": [0, 0, 0] },
-    "r9": { "at": [0, 0, 0], "rotate": [0, 0, 90] },
-    "r8": { "at": [0, 0, 0] },
+    "led1": { "at": [40, 0, 0], "rotate": [-180, 0, 540] },
+    "hdr": { "at": [80, 0, 0] },
+    "r9": { "at": [120, 0, 0], "rotate": [0, 0, 90] },
+    "r8": { "at": [160, 0, 0] },
   },
 }
 "#;
@@ -1161,6 +1150,249 @@ fn a_resistor_beside_an_led_limits_nothing_and_one_in_series_on_either_side_does
     );
 }
 
+/// The module's indicator: 1 kohm from VCC to the LED, and a diode from VCC to the LED's
+/// cathode beside the coil. The resistor is in series. The same LED with no resistor warns.
+#[test]
+fn a_diode_back_to_the_supply_does_not_hide_a_resistor_in_series_with_the_led() {
+    let scene = r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "series": { "type": "led-5mm" },
+    "rled": { "type": "resistor-axial", "resistance": "1k" },
+    "d1": { "type": "diode-1n4007" },
+    "k1": { "type": "relay-srd-05vdc-sl-c" },
+    "q1": { "type": "npn-2n2222-to92" },
+    "rb1": { "type": "resistor-axial", "resistance": "1k" },
+    "bare": { "type": "led-5mm" },
+    "d2": { "type": "diode-1n4007" },
+    "k2": { "type": "relay-srd-05vdc-sl-c" },
+    "q2": { "type": "npn-2n2222-to92" },
+    "rb2": { "type": "resistor-axial", "resistance": "1k" },
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["nano.5V", "rled.a"],
+    ["rled.b", "series.anode"],
+    ["series.cathode", "q1.collector"],
+    ["d1.cathode", "nano.5V"],
+    ["d1.anode", "q1.collector"],
+    ["k1.coil_a", "nano.5V"],
+    ["k1.coil_b", "q1.collector"],
+    ["q1.emitter", "nano.GND"],
+    ["nano.D13", "rb1.a"],
+    ["rb1.b", "q1.base"],
+    ["nano.5V", "bare.anode"],
+    ["bare.cathode", "q2.collector"],
+    ["d2.cathode", "nano.5V"],
+    ["d2.anode", "q2.collector"],
+    ["k2.coil_a", "nano.5V"],
+    ["k2.coil_b", "q2.collector"],
+    ["q2.emitter", "nano.GND"],
+    ["nano.D12", "rb2.a"],
+    ["rb2.b", "q2.base"],
+  ],
+}
+"#;
+    let dir = project(scene);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        lines_warned(&run, "scene.led_no_resistor"),
+        [line_of(scene, "\"bare\":")],
+        "{}",
+        run.stdout
+    );
+}
+
+/// The contact conducts like a switch. The shipped Block keeps 220 ohm in series and stays
+/// quiet. That Block with the resistor removed, and a bare SRD from 5 V on COM into an LED
+/// through NO or through NC, warn.
+#[test]
+fn a_relay_contact_into_an_led_warns_without_a_series_resistor() {
+    let repo = common::repo();
+    let shipped = orbe(&repo, &["lint", "blocks/nano-relay-led/scene.jsonc"]);
+    assert_eq!(shipped.code, 0, "{}{}", shipped.stdout, shipped.stderr);
+    assert!(
+        shipped
+            .stdout
+            .ends_with("blocks/nano-relay-led/scene.jsonc: no warnings\n"),
+        "{}",
+        shipped.stdout
+    );
+
+    let scene = fs::read_to_string(repo.join("blocks/nano-relay-led/scene.jsonc")).unwrap();
+    let dropped = scene
+        .lines()
+        .filter(|line| !line.contains("\"r1\":"))
+        .map(|line| {
+            line.replace(
+                "[\"relay.NO\", \"r1.a\"],",
+                "[\"relay.NO\", \"led1.anode\"],",
+            )
+        })
+        .filter(|line| !line.contains("r1.b"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace("build/relay.ino.hex", "build/button.ino.hex");
+    assert!(
+        !dropped.contains("r1") && dropped.contains("[\"relay.NO\", \"led1.anode\"]"),
+        "{dropped}"
+    );
+    let dir = project(&dropped);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        lines_warned(&run, "scene.led_no_resistor"),
+        [line_of(&dropped, "\"led1\":")],
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains(
+            "nothing limits the current through `led1`: it joins `GND` and `nano__5V` with no resistor in series"
+        ),
+        "{}",
+        run.stdout
+    );
+
+    for (supply, load) in [("COM", "NO"), ("COM", "NC"), ("NO", "COM")] {
+        let bare = format!(
+            r#"{{
+  "format": 1,
+  "parts": {{
+    "nano": {{ "type": "nano-board", "firmware": "build/button.ino.hex" }},
+    "k": {{ "type": "relay-srd-05vdc-sl-c" }},
+    "led1": {{ "type": "led-5mm" }}
+  }},
+  "nets": {{ "GND": "nano.GND" }},
+  "wires": [
+    ["nano.5V", "k.{supply}"],
+    ["k.{load}", "led1.anode"],
+    ["led1.cathode", "nano.GND"],
+    ["nano.5V", "k.coil_a"],
+    ["k.coil_b", "nano.GND"]
+  ],
+  "layout": {{
+    "nano": {{ "at": [0, 0, 0] }},
+    "k": {{ "at": [40, 0, 0] }},
+    "led1": {{ "at": [80, 0, 0] }}
+  }}
+}}
+"#
+        );
+        let dir = project(&bare);
+        let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+        assert_eq!(
+            run.code, 0,
+            "{supply}->{load}: {}{}",
+            run.stdout, run.stderr
+        );
+        assert_eq!(
+            lines_warned(&run, "scene.led_no_resistor"),
+            [line_of(&bare, "\"led1\":")],
+            "{supply}->{load}: {}",
+            run.stdout
+        );
+        assert!(
+            run.stdout.contains(
+                "nothing limits the current through `led1`: it joins `GND` and `nano__5V` with no resistor in series"
+            ),
+            "{supply}->{load}: {}",
+            run.stdout
+        );
+    }
+}
+
+/// 5 V on NO, the LED on NC, COM left open. The coil is tied so its nets are not the
+/// question. The two throws never conduct through COM, so the LED is not across the
+/// supply and lint stays quiet.
+#[test]
+fn an_led_on_the_other_relay_contact_from_the_supply_stays_quiet() {
+    let scene = r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "k": { "type": "relay-srd-05vdc-sl-c" },
+    "led1": { "type": "led-5mm" }
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["nano.5V", "k.NO"],
+    ["k.NC", "led1.anode"],
+    ["led1.cathode", "nano.GND"],
+    ["nano.5V", "k.coil_a"],
+    ["k.coil_b", "nano.GND"]
+  ],
+  "layout": {
+    "nano": { "at": [0, 0, 0] },
+    "k": { "at": [40, 0, 0] },
+    "led1": { "at": [80, 0, 0] }
+  }
+}
+"#;
+    let dir = project(scene);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.ends_with("scene.jsonc: no warnings\n"),
+        "{}",
+        run.stdout
+    );
+}
+
+/// Twenty-four relays with their contacts tied to limited LEDs lint in polynomial time,
+/// finishing well under a second even in a debug build.
+#[test]
+#[expect(clippy::disallowed_methods, reason = "the clock is the measurement")]
+fn lint_stays_fast_with_twenty_four_relays() {
+    let mut parts = vec![
+        r#"    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" }"#.to_string(),
+    ];
+    let mut wires = Vec::new();
+    let mut layout = vec![r#"    "nano": { "at": [0, 0, 0] }"#.to_string()];
+    for i in 0..24 {
+        let x = 40 * (i + 1);
+        parts.push(format!(
+            r#"    "k{i}": {{ "type": "relay-srd-05vdc-sl-c" }}"#
+        ));
+        parts.push(format!(
+            r#"    "r{i}": {{ "type": "resistor-axial", "resistance": "220" }}"#
+        ));
+        parts.push(format!(r#"    "led{i}": {{ "type": "led-5mm" }}"#));
+        wires.push(format!(r#"    ["nano.5V", "k{i}.coil_a"]"#));
+        wires.push(format!(r#"    ["k{i}.coil_b", "nano.GND"]"#));
+        wires.push(format!(r#"    ["nano.5V", "k{i}.COM"]"#));
+        wires.push(format!(r#"    ["k{i}.NO", "r{i}.a"]"#));
+        wires.push(format!(r#"    ["k{i}.NC", "r{i}.a"]"#));
+        wires.push(format!(r#"    ["r{i}.b", "led{i}.anode"]"#));
+        wires.push(format!(r#"    ["led{i}.cathode", "nano.GND"]"#));
+        layout.push(format!(r#"    "k{i}": {{ "at": [{x}, 0, 0] }}"#));
+        layout.push(format!(r#"    "r{i}": {{ "at": [{x}, 30, 0] }}"#));
+        layout.push(format!(r#"    "led{i}": {{ "at": [{x}, 60, 0] }}"#));
+    }
+    let scene = format!(
+        "{{\n  \"format\": 1,\n  \"parts\": {{\n{}\n  }},\n  \"nets\": {{ \"GND\": \"nano.GND\" }},\n  \"wires\": [\n{}\n  ],\n  \"layout\": {{\n{}\n  }}\n}}\n",
+        parts.join(",\n"),
+        wires.join(",\n"),
+        layout.join(",\n"),
+    );
+    let dir = project(&scene);
+    let start = std::time::Instant::now();
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    let elapsed = start.elapsed();
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.ends_with("scene.jsonc: no warnings\n"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "24 relays took {elapsed:?}"
+    );
+}
+
 /// A 2N2222 with its leads formed to 2.54 mm sits one leg in each strip. Turned along a column,
 /// the three legs share a strip and short. The Nano drives the base, and 220 ohm limits the LED.
 #[test]
@@ -1189,7 +1421,7 @@ fn a_2n2222_formed_to_the_breadboard_pitch_seats_one_leg_per_strip() {
   "wires": [
     ["bb.c1", "bb.b26"],
     ["bb.a17", "bb.b21"],
-    ["bb.a23", "bb.X23"],
+    ["bb.b23", "bb.X23"],
     ["bb.a14", "bb.X14"],
   ],
 }}
@@ -1233,7 +1465,11 @@ fn two_pins_of_a_part_in_one_breadboard_strip_warn_shorted() {
         let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
         assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
         let codes: Vec<String> = warned(&run.stdout).into_iter().map(|(_, c)| c).collect();
-        let want: &[&str] = if shorted { &["scene.shorted"] } else { &[] };
+        let want: &[&str] = if shorted {
+            &["scene.shorted", "scene.covered_hole", "scene.covered_hole"]
+        } else {
+            &[]
+        };
         assert_eq!(codes, want, "rotate {rotate}: {}", run.stdout);
         if shorted {
             assert!(
@@ -1249,4 +1485,306 @@ fn two_pins_of_a_part_in_one_breadboard_strip_warn_shorted() {
             );
         }
     }
+}
+
+/// A DHT22 seated at `bb.c20` covers `bb.b21` with its body, so a jumper `["bb.j9", "bb.b21"]`
+/// cannot reach that hole on a real breadboard. Moving the jumper to the clear hole `bb.e21`
+/// silences the warning. A seated part's lead under the DHT22's body warns too.
+#[test]
+fn a_wire_or_lead_in_a_covered_breadboard_hole_warns() {
+    let scene_with = |wire_end: &str, extra_part: &str, extra_layout: &str| {
+        format!(
+            r##"{{
+  "format": 1,
+  "parts": {{
+    "bb": {{ "type": "breadboard-830" }},
+    "nano": {{ "type": "nano-board", "firmware": "build/button.ino.hex" }},
+    "dht": {{ "type": "dht22" }},
+    "rpull": {{ "type": "resistor-axial", "resistance": "5.1k" }}{extra_part}
+  }},
+  "layout": {{
+    "bb": {{ "at": [0, 0, 0] }},
+    "nano": {{ "on": {{ "D13": "bb.d1" }} }},
+    "dht": {{ "on": {{ "VDD": "bb.c20" }} }},
+    "rpull": {{ "on": {{ "a": "bb.a21" }}, "rotate": [0, 0, -90] }}{extra_layout}
+  }},
+  "nets": {{ "GND": "nano.GND" }},
+  "wires": [
+    ["bb.a12", "bb.W11", {{ "color": "#d12b2b" }}],
+    ["bb.a14", "bb.X13", {{ "color": "#161616" }}],
+    ["bb.a20", "bb.W19", {{ "color": "#d12b2b" }}],
+    ["bb.j9", "{wire_end}"],
+    ["bb.a23", "bb.X23", {{ "color": "#161616" }}]
+  ]
+}}
+"##
+        )
+    };
+
+    let covered = scene_with("bb.b21", "", "");
+    let dir = project(&covered);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        lines_warned(&run, "scene.covered_hole"),
+        [line_of(&covered, "bb.b21")],
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains(
+            "warning[scene.covered_hole]: wire end `bb.b21` sits under `dht`'s body, so a jumper cannot reach that hole"
+        ),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains(
+            "hint: move the wire end from `bb.b21` to a clear hole in the same strip: bb.e21"
+        ),
+        "{}",
+        run.stdout
+    );
+
+    let clear = scene_with("bb.e21", "", "");
+    let dir = project(&clear);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.ends_with("scene.jsonc: no warnings\n"),
+        "{}",
+        run.stdout
+    );
+
+    // A seated part whose lead sits in a hole covered by the DHT22's body warns too.
+    let under_lead = scene_with(
+        "bb.e21",
+        r#",
+    "r2": { "type": "resistor-axial", "resistance": "10k" }"#,
+        r#",
+    "r2": { "on": { "a": "bb.d23" } }"#,
+    );
+    let dir = project(&under_lead);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        lines_warned(&run, "scene.covered_hole"),
+        [line_of(&under_lead, "\"r2\": { \"type\"")],
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains(
+            "warning[scene.covered_hole]: `r2.a` sits in `bb.d23`, which `dht`'s body covers"
+        ),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .contains("hint: move `r2` or `dht` so `dht` does not cover `bb.d23`"),
+        "{}",
+        run.stdout
+    );
+}
+
+/// A DevKitC-1 placed with `at: [-80, 0, 0]` sits half inside an 830-tie breadboard at the
+/// origin, and two parts placed with overlapping `at` positions collide too. Moving them clear
+/// removes the warning.
+#[test]
+fn overlapping_placed_parts_warn_until_moved_apart() {
+    let dir = project("");
+    fs::copy(
+        common::repo().join("blocks/devkitc-button-led/build/button.ino.bin"),
+        dir.path().join("build/button.ino.bin"),
+    )
+    .unwrap();
+    fs::copy(
+        common::repo().join("blocks/devkitc-button-led/build/button.ino.partitions.bin"),
+        dir.path().join("build/button.ino.partitions.bin"),
+    )
+    .unwrap();
+
+    let devkit = |board_x: i32| {
+        format!(
+            r#"{{
+  "format": 1,
+  "parts": {{
+    "bb": {{ "type": "breadboard-830" }},
+    "board": {{
+      "type": "esp32s3-devkitc-1",
+      "app": "build/button.ino.bin",
+      "partitions": "build/button.ino.partitions.bin"
+    }},
+    "btn1": {{ "type": "tactile-switch-6mm" }}
+  }},
+  "layout": {{
+    "bb": {{ "at": [0, 0, 0] }},
+    "board": {{ "at": [{board_x}, 0, 0] }},
+    "btn1": {{ "on": {{ "a": "bb.f20" }}, "rotate": [0, 0, 90] }}
+  }},
+  "ground": "board.GND",
+  "wires": [
+    ["board.GPIO4", "bb.j20"],
+    ["board.GND", "bb.j18"]
+  ]
+}}
+"#
+        )
+    };
+
+    let bad = devkit(-80);
+    fs::write(dir.path().join("scene.jsonc"), &bad).unwrap();
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        lines_warned(&run, "scene.overlap"),
+        [line_of(&bad, "\"board\": {")],
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .contains("warning[scene.overlap]: `bb` and `board` overlap in space"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains(
+            "hint: move `bb` or `board` in \"layout\" by at least 15.3 mm along X so their bodies do not overlap"
+        ),
+        "{}",
+        run.stdout
+    );
+
+    fs::write(dir.path().join("scene.jsonc"), devkit(-100)).unwrap();
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.ends_with("scene.jsonc: no warnings\n"),
+        "{}",
+        run.stdout
+    );
+
+    // Two parts placed with `at` overlapping each other warn; touching edges within tolerance do not.
+    let two_at = |x2: f64| {
+        format!(
+            r#"{{
+  "format": 1,
+  "parts": {{
+    "nano": {{ "type": "nano-board", "firmware": "build/button.ino.hex" }},
+    "btn1": {{ "type": "tactile-switch-6mm" }},
+    "btn2": {{ "type": "tactile-switch-6mm" }}
+  }},
+  "layout": {{
+    "nano": {{ "at": [0, 0, 0] }},
+    "btn1": {{ "at": [40, 0, 0] }},
+    "btn2": {{ "at": [{x2}, 0, 0] }}
+  }},
+  "nets": {{ "GND": "nano.GND" }},
+  "wires": [
+    ["nano.D2", "btn1.a"],
+    ["btn1.b", "nano.GND"],
+    ["nano.D3", "btn2.a"],
+    ["btn2.b", "nano.GND"]
+  ]
+}}
+"#
+        )
+    };
+
+    let colliding = two_at(43.0);
+    fs::write(dir.path().join("scene.jsonc"), &colliding).unwrap();
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert_eq!(
+        lines_warned(&run, "scene.overlap"),
+        [line_of(&colliding, "\"btn2\": { \"type\"")],
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .contains("warning[scene.overlap]: `btn1` and `btn2` overlap in space"),
+        "{}",
+        run.stdout
+    );
+
+    // Touching edges (6 mm wide switches 6 mm apart) stay clean.
+    fs::write(dir.path().join("scene.jsonc"), two_at(46.0)).unwrap();
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.ends_with("scene.jsonc: no warnings\n"),
+        "{}",
+        run.stdout
+    );
+}
+
+/// Tight valid placements stay clean: an LED next to its resistor, adjacent-row resistors, an IC
+/// straddling the channel, a module seated on headers, a rotated breadboard, and the good
+/// breadboard fixture.
+#[test]
+fn tight_valid_placements_and_good_fixtures_stay_clean() {
+    let tight = r#"{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-830" },
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "u1": { "type": "hc595-dip16" },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+    "r2": { "type": "resistor-axial", "resistance": "220" },
+    "led1": { "type": "led-5mm" },
+    "oled": { "type": "oled-ssd1306-128x64" }
+  },
+  "layout": {
+    "bb": { "at": [10, 20, 0], "rotate": [0, 0, 90] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "u1": { "on": { "QB": "bb.e18" } },
+    "r1": { "on": { "a": "bb.a30" } },
+    "r2": { "on": { "a": "bb.b30" } },
+    "led1": { "on": { "anode": "bb.c34" } },
+    "oled": { "on": { "GND": "bb.a40" } }
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["bb.a12", "bb.W11"],
+    ["bb.a14", "bb.X13"],
+    ["bb.X15", "bb.Z15"],
+    ["bb.i18", "bb.W19"],
+    ["bb.a25", "bb.X25"],
+    ["bb.i24", "bb.W23"],
+    ["bb.i21", "bb.X21"],
+    ["bb.i2", "bb.i20"],
+    ["bb.i1", "bb.i23"],
+    ["bb.i5", "bb.i22"],
+    ["bb.c1", "bb.d30"],
+    ["bb.d35", "bb.X35"],
+    ["bb.b14", "bb.b40"],
+    ["bb.b12", "bb.b41"],
+    ["bb.b9", "bb.b42"],
+    ["bb.b8", "bb.b43"]
+  ]
+}
+"#;
+    let dir = project(tight);
+    let run = orbe(dir.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.ends_with("scene.jsonc: no warnings\n"),
+        "{}",
+        run.stdout
+    );
+
+    // Every good fixture that lays out parts on a breadboard stays clean.
+    let fixture = common::overlaid(
+        &common::repo().join("packages/scene/tests/good/ldr_and_trimmer_on_a_breadboard"),
+    );
+    let run = orbe(fixture.path(), &["lint", "scene.jsonc"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        !run.stdout.contains("scene.covered_hole") && !run.stdout.contains("scene.overlap"),
+        "{}",
+        run.stdout
+    );
 }

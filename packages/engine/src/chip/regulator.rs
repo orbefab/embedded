@@ -40,6 +40,40 @@ const BLOCK_A: f64 = 1e-12;
 /// pin uses below its ground. LP2985 SLVS522 states -0.3 V. The AMS1117 sheet this repo cites
 /// states 15 V and no negative floor, and the SGM2212 sheet states 22 V and no negative floor.
 pub(crate) const INPUT_FLOOR_V: f64 = 0.3;
+/// Fraction of `output_voltage` dropped by the current-limit term before the regulator is treated
+/// as actively clamped (0.5%, i.e. 16.5 mV on 3.3 V or 25 mV on 5 V), and also the drop below
+/// the pre-overload baseline that confirms a pull-down rather than a charging rail. At 99.5% of
+/// `current_limit` the softplus term is 0.07% of `output_voltage` and an ideal 100% nominal load
+/// is 0.35%; at 0.5% the pass current is 99.7% of `current_limit`, catching 105% overloads even
+/// on regulators whose own `output_resistance` already takes 3.5% of `output_voltage` (LP2985,
+/// XC6206).
+pub(crate) const LIMIT_SAG_FRACTION: f64 = 0.005;
+/// Below this fraction of `output_voltage` the regulator is clear of the current-limit knee, so
+/// its unclamped output voltage updates the pre-overload baseline.
+pub(crate) const LIMIT_KNEE_FRACTION: f64 = 0.001;
+/// Minimum picoseconds a pulled-down clamp must persist before warning, and the minimum
+/// continuous clamped hold for an output voltage to count as the lowest held voltage (1 us). Real
+/// linear regulators' error-amplifier and current-limit loops and required output bypass
+/// capacitors respond on microsecond-to-hundreds-of-microsecond timescales (TI SLVS522S LP2985
+/// load transient curves at 20 us/div with 1 A/us steps and >= 2.2 uF Cout; AMS1117 20 us/div with
+/// 22 uF Cout; SGM2212 200 us/div with >= 1 uF Cout; Torex XC6206 1 ms/div with 1 uF CL;
+/// TI SNOSBT0L LM7805 0.1 uF output bypass; CH340G 0.1 uF V3 bypass), so picosecond to
+/// tens-of-nanosecond capacitive switching spikes do not trip or set the reported voltage, while
+/// microsecond brownouts (such as the 1.7 us Nano 3V3 NeoPixel reset) and PWM overloads warn.
+pub(crate) const LIMIT_HOLD_PS: u64 = 1_000_000;
+/// Minimum fractional rate (per second) at which a charging clamped output starting below target
+/// must close its remaining current-limit gap `drop = vo_min - vo` (0.5/s, a 2 s RC time
+/// constant). Any capacitive load in parallel with a resistor at or under the limit closes `drop`
+/// at least as fast as `1 / (R * C)` all the way into regulation (1.93/s even for 4700 uF at 100%
+/// load on the 30 mA CH340G), while a rail stalled below target slows exponentially and must
+/// warn within at most `ln(1 / LIMIT_SAG_FRACTION) / MIN_CHARGE_RATE` (~10.6 s), and in practice
+/// within a few `R * C` time constants or [`STALL_PS`] with no capacitor.
+pub(crate) const MIN_CHARGE_RATE: f64 = 0.5;
+/// Minimum picoseconds over which a charging clamped rail is checked before declaring it stalled
+/// (500 us). At `MIN_CHARGE_RATE` and the smallest clamped `drop` (`LIMIT_SAG_FRACTION * vout`),
+/// the required rise is `1.25e-6 * vout`, above Newton's `RELTOL * vo`, while an immediate
+/// no-capacitor overload still warns well inside a 1 ms run.
+pub(crate) const STALL_PS: u64 = 500_000_000;
 
 pub(crate) struct Law {
     vo: f64,
@@ -122,6 +156,28 @@ pub(crate) fn evaluate(reg: &LinearRegulator, i: f64, vi: f64) -> Law {
         dig_di: ratio * h,
         dig_dvi: (iq + ratio * i) * hp / vdo + iq / vdo * hoff - iq * vi / (vdo * vdo) * hpoff,
     }
+}
+
+/// `(vo_min, limit_drop)` at pass current `i` and input voltage `vi`: the output voltage the
+/// regulating and dropout lines alone ask for, and the drop subtracted by the current-limit clamp.
+pub(crate) fn limit_drop(reg: &LinearRegulator, i: f64, vi: f64) -> (f64, f64) {
+    let vout = reg.output_voltage.si.get();
+    let k = reg.line_regulation.si.get();
+    let ro = reg.output_resistance.si.get();
+    let vdo = reg.dropout_voltage.si.get();
+    let rdo = reg.dropout_resistance.si.get();
+    let ilim = reg.current_limit.si.get();
+    let d = LIMIT_FRACTION * ilim;
+    let rlim = LIMIT_HEADROOM * vout / ilim;
+
+    let vset = vout + k * (vi - vout);
+    let a = vset - ro * i;
+    let raw = vi - vdo - rdo * i;
+    let floor = -FLOOR_OHM * i;
+    let b = floor + KNEE_V * softplus((raw - floor) / KNEE_V);
+    let vo_min = a - KNEE_V * softplus((a - b) / KNEE_V);
+    let drop = rlim * d * softplus((i - ilim) / d);
+    (vo_min, drop)
 }
 
 #[cfg(test)]
@@ -824,6 +880,108 @@ mod tests {
             "{}",
             diagnostics_of(&protected)
         );
+    }
+
+    #[test]
+    fn current_limit_warns_only_when_clamped_and_not_in_dropout_or_under_limit() {
+        let just_under = netlist(
+            r#""gnd", "vin", "vout""#,
+            &[
+                &source("v1", "vin", 5.0),
+                // 3.3 V / 1.18 A = 2.797 ohm: under the 1.2 A current limit.
+                &resistor("rl", "vout", "gnd", 2.8),
+                &regulator("vin", "vout", "gnd", 0.0),
+            ],
+        );
+        assert!(
+            !diagnostics_of(&just_under).contains("regulator.current_limit"),
+            "{}",
+            diagnostics_of(&just_under)
+        );
+
+        let dropout = netlist(
+            r#""gnd", "vin", "vout""#,
+            &[
+                &source("v1", "vin", 3.5),
+                &resistor("rl", "vout", "gnd", 33.0),
+                &regulator("vin", "vout", "gnd", 0.0),
+            ],
+        );
+        assert!(
+            !diagnostics_of(&dropout).contains("regulator.current_limit"),
+            "{}",
+            diagnostics_of(&dropout)
+        );
+
+        let shorted = netlist(
+            r#""gnd", "vin", "vout""#,
+            &[
+                &source("v1", "vin", 5.0),
+                &resistor("rl", "vout", "gnd", 0.5),
+                &regulator("vin", "vout", "gnd", 0.0),
+            ],
+        );
+        let text = diagnostics_of(&shorted);
+        assert!(text.contains("regulator.current_limit"), "{text}");
+        assert!(text.contains("#u1.pin.out"), "{text}");
+        assert!(text.contains("can give 1.2 A at 3.3 V"), "{text}");
+    }
+
+    #[test]
+    fn brief_power_on_capacitor_charge_stays_quiet_while_sustained_overload_warns_once() {
+        let step_source = r#"{
+          "name": "v1",
+          "kind": "voltage_source",
+          "pins": { "p": "vin", "n": "gnd" },
+          "voltage": {
+            "kind": "step",
+            "initial": { "value": 0.0, "unit": "V" },
+            "at_ps": 1000,
+            "final": { "value": 5.0, "unit": "V" }
+          }
+        }"#;
+        let tran = |parts: &[&str]| {
+            format!(
+                r#"{{
+                  "version": 1,
+                  "seed": 0,
+                  "analysis": {{ "transient": {{ "stop_ps": 5000000000, "max_step_ps": 100000000, "grid_ps": 100000000 }} }},
+                  "ground": "gnd",
+                  "nets": ["gnd", "vin", "vout"],
+                  "parts": [{}]
+                }}"#,
+                parts.join(",")
+            )
+        };
+        // 10 uF charges monotonically to 3.3 V at 1.2 A in ~27.5 us and must stay quiet.
+        let inrush = tran(&[
+            step_source,
+            &capacitor("c1", "vout", "gnd"),
+            &resistor("rl", "vout", "gnd", 330.0),
+            &regulator("vin", "vout", "gnd", 0.0),
+        ]);
+        let results = crate::simulate(&netlist::parse(inrush.as_bytes()).unwrap());
+        let limits: Vec<_> = results
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code() == "regulator.current_limit")
+            .collect();
+        assert!(limits.is_empty(), "{limits:?}");
+
+        // With a 0.5 ohm short on the output, the rail stalls near 0.6 V and emits one warning.
+        let shorted = tran(&[
+            step_source,
+            &capacitor("c1", "vout", "gnd"),
+            &resistor("rl", "vout", "gnd", 0.5),
+            &regulator("vin", "vout", "gnd", 0.0),
+        ]);
+        let results = crate::simulate(&netlist::parse(shorted.as_bytes()).unwrap());
+        let limits: Vec<_> = results
+            .diagnostics()
+            .iter()
+            .filter(|d| d.code() == "regulator.current_limit")
+            .collect();
+        assert_eq!(limits.len(), 1, "{limits:?}");
     }
 }
 

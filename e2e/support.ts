@@ -3,8 +3,9 @@ import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test as base, expect, chromium, firefox, webkit, type Page } from "@playwright/test";
+import { compareVersions } from "../packages/viewer/src/registry";
 
-export { expect };
+export { compareVersions, expect };
 // Playwright compiles this file as CommonJS, because the root package has no "type": "module".
 export const REPO = resolve(__dirname, "..");
 export const HEADED_SESSION = join(REPO, ".scratch/headed/session.json");
@@ -19,12 +20,6 @@ export function registryDir(): string {
   }
   return join(REPO, ".scratch/site/registry");
 }
-
-const compareVersions = (a: string, b: string) => {
-  const [x, y] = [a.split(".").map(Number), b.split(".").map(Number)];
-  for (let i = 0; i < 3; i += 1) if (x[i] !== y[i]) return (x[i] ?? 0) - (y[i] ?? 0);
-  return 0;
-};
 
 /** Part or Block ids the registry serves, one per name. An id that is only in the repo is absent. */
 export function registryIds(type: "part" | "block"): string[] {
@@ -243,11 +238,12 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "button" | "digit" | "fade" | "light" | "pixels" | "screen" | "shift" | "rgb" | "servo";
+export type BlockKind = "button" | "digit" | "fade" | "lcd" | "light" | "pixels" | "relay" | "rgb" | "screen" | "serial" | "servo" | "shift" | "tone";
 
 export interface RepoBlock {
   id: string;
   kind: BlockKind;
+  version?: string;
 }
 
 /** Blocks under `blocks/`. A scene this cannot classify fails the check. */
@@ -257,7 +253,11 @@ export function repoBlocks(): RepoBlock[] {
     .filter((id) => existsSync(join(root, id, "block.jsonc")))
     .sort();
   if (ids.length === 0) throw new Error("blocks/ has no Block");
-  return ids.map((id) => ({ id, kind: blockKind(readFileSync(join(root, id, "scene.jsonc"), "utf8"), id) }));
+  return ids.map((id) => {
+    const card = readFileSync(join(root, id, "block.jsonc"), "utf8");
+    const version = card.match(/"version"\s*:\s*"([^"]+)"/)?.[1];
+    return { id, kind: blockKind(readFileSync(join(root, id, "scene.jsonc"), "utf8"), id), version };
+  });
 }
 
 export function blockKind(scene: string, id: string): BlockKind {
@@ -265,17 +265,52 @@ export function blockKind(scene: string, id: string): BlockKind {
     .split("\n")
     .map((line) => line.replace(/\/\/.*$/, ""))
     .join("\n");
+  if (/"type"\s*:\s*"relay-module-1ch"/.test(code)) return "relay";
   if (/"type"\s*:\s*"display-7seg-cc"/.test(code) || /"type"\s*:\s*"display-7seg-ca"/.test(code)) return "digit";
   if (/"type"\s*:\s*"servo-sg90"/.test(code)) return "servo";
   if (/"type"\s*:\s*"neopixel-stick-8"/.test(code)) return "pixels";
   if (/"type"\s*:\s*"oled-ssd1306-128x64"/.test(code)) return "screen";
+  if (/"type"\s*:\s*"lcd1602-i2c"/.test(code)) return "lcd";
   if (/"type"\s*:\s*"hc595-dip16"/.test(code)) return "shift";
+  if (/"type"\s*:\s*"gy-bmp280"/.test(code)) return "serial";
   if (/"type"\s*:\s*"esp32s3-devkitc-1"/.test(code)) return "rgb";
   if (/"world"\s*:\s*\{[^}]*"light"\s*:/.test(code)) return "light";
   if (/"btn1"\s*:/.test(code)) return "button";
+  if (/"type"\s*:\s*"buzzer-12mm"/.test(code)) return "tone";
   if (/"led1"\s*:/.test(code)) return "fade";
   throw new Error(
-    `${id} names no button, no fading LED, no light, no pixel stick, no screen, no 7-segment display, no 74HC595, no DevKitC-1 and no servo`,
+    `${id} names no button, no fading LED, no light, no pixel stick, no screen, no LCD, no 7-segment display, no relay module, no 74HC595, no buzzer, no DevKitC-1, no servo and no serial sensor`,
+  );
+}
+
+const READY_NODES: Record<BlockKind, readonly (readonly [string, string?])[]> = {
+  button: [["@led1", "body"], ["@btn1", "stem"]],
+  digit: [["@disp", "seg-a"]],
+  fade: [["@led1", "body"]],
+  lcd: [["@lcd.display", "glass"]],
+  light: [["@led1", "body"]],
+  pixels: [["@stick.px1", "lens"]],
+  relay: [["@relay.led", "body"], ["@led1", "body"]],
+  rgb: [["@board.led", "lens"], ["@btn1", "stem"]],
+  screen: [["@oled.display", "glass"]],
+  serial: [["@board.led", "lens"]],
+  servo: [["@servo", "horn"]],
+  shift: [["@led1", "body"]],
+  tone: [["@bz1"]],
+};
+
+/** Waits until the viewer has built the 3D nodes this Block kind drives. */
+export function waitBlockReady(page: Page, kind: BlockKind, timeout = 120_000): Promise<unknown> {
+  return page.waitForFunction(
+    (checks) => {
+      const scene = window.orbeViewer?.get().scene;
+      return checks.every(([ref, node]) => {
+        const group = scene?.getObjectByName(ref);
+        return (node === undefined ? group : group?.getObjectByName(node)) !== undefined;
+      });
+    },
+    READY_NODES[kind],
+    { timeout },
   );
 }
 
@@ -286,7 +321,7 @@ export async function simulatedSeconds(page: Page): Promise<number> {
   return time;
 }
 
-export function waitSimulatedPast(page: Page, seconds: number): Promise<unknown> {
+export function waitSimulatedPast(page: Page, seconds: number, timeout = 30_000): Promise<unknown> {
   return page.waitForFunction(
     (seconds) => {
       const text = document.querySelector('[data-testid="time"]')?.textContent ?? "";
@@ -294,8 +329,20 @@ export function waitSimulatedPast(page: Page, seconds: number): Promise<unknown>
       return Number.isFinite(time) && time > seconds;
     },
     seconds,
-    { timeout: 30_000 },
+    { timeout },
   );
+}
+
+const SERIAL = '[data-testid="serial"]';
+
+/** The readings a Serial block prints. That text is what the page shows for it. */
+export async function showSerial(page: Page, block: RepoBlock): Promise<void> {
+  const start = await simulatedSeconds(page);
+  await waitSimulatedPast(page, Math.max(0.05, start));
+  const strip = page.locator(SERIAL);
+  await expect(strip, `${block.id} temperature`).toContainText(/Temperature = \d+\.\d+/, { timeout: 30_000 });
+  await expect(strip, `${block.id} pressure`).toContainText(/Pressure = \d+\.\d+ Pa/, { timeout: 30_000 });
+  expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(0.05);
 }
 
 const LIGHT = '[data-testid="world-light"]';
@@ -324,19 +371,19 @@ const FADE_CYCLE_S = 3.1;
 // the first lit pixels the session sends.
 const SCREEN_WAIT_MS = 150_000;
 
-/** Waits until the page draws a frame the OLED holds: the `glass` node of `@oled.display`
+/** Waits until the page draws a frame the screen holds: the `glass` node of `ref`
  * shows, as its emissive map, at least one white pixel. */
-async function showScreen(page: Page, shotName: string | null): Promise<void> {
+async function showScreen(page: Page, ref: string, shotName: string | null): Promise<void> {
   await page.waitForFunction(
-    () => {
-      const glass = window.orbeViewer.get().scene.getObjectByName("@oled.display")?.getObjectByName("glass");
+    (name) => {
+      const glass = window.orbeViewer.get().scene.getObjectByName(name)?.getObjectByName("glass");
       const material = glass?.material ?? glass?.children?.[0]?.material;
       const data = material?.emissiveMap?.image?.data;
       if (data === undefined) return false;
       for (let k = 0; k < data.length; k += 4) if (data[k] === 255) return true;
       return false;
     },
-    undefined,
+    ref,
     { timeout: SCREEN_WAIT_MS },
   );
   if (shotName !== null) {
@@ -345,20 +392,63 @@ async function showScreen(page: Page, shotName: string | null): Promise<void> {
   }
 }
 
-/** Eight LEDs on a 74HC595. QA is led1, the least significant bit of 0x55. */
-async function showShift(page: Page, id: string, shotName: string | null): Promise<void> {
-  await waitSimulatedPast(page, 0.2);
-  const glows = await page.evaluate(() =>
-    [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
-      const body = window.orbeViewer.get().scene.getObjectByName(`@led${n}`)?.getObjectByName("body");
-      const material = body?.material;
-      return typeof material?.emissiveIntensity === "number" ? material.emissiveIntensity : -1;
-    }),
+/** Eight LEDs on a 74HC595. From 0.2.0 the sketch walks one lit LED from QA (led1) to QH (led8) and back. */
+async function showShift(page: Page, block: RepoBlock, shotName: string | null): Promise<void> {
+  // Older tagged releases (before 0.2.0) latch static 0x55 once in setup().
+  if (block.version !== undefined && compareVersions(block.version, "0.2.0") < 0) {
+    await waitSimulatedPast(page, 0.2);
+    const glows = await page.evaluate(() =>
+      [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
+        const body = window.orbeViewer.get().scene.getObjectByName(`@led${n}`)?.getObjectByName("body");
+        const material = body?.material;
+        return typeof material?.emissiveIntensity === "number" ? material.emissiveIntensity : -1;
+      }),
+    );
+    glows.forEach((glow, index) => {
+      if (index % 2 === 0) expect(glow, `${block.id} led${index + 1}`).toBeGreaterThan(0.15);
+      else expect(glow, `${block.id} led${index + 1}`).toBeLessThan(0.05);
+    });
+    if (shotName !== null) {
+      await page.locator("canvas").scrollIntoViewIfNeeded();
+      await shot(page, shotName);
+    }
+    return;
+  }
+
+  const firstHandle = await page.waitForFunction(
+    () => {
+      const glows = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
+        const body = window.orbeViewer.get().scene.getObjectByName(`@led${n}`)?.getObjectByName("body");
+        const material = body?.material;
+        return typeof material?.emissiveIntensity === "number" ? material.emissiveIntensity : -1;
+      });
+      return glows.some((glow) => glow > 0.15) && glows.some((glow) => glow < 0.05) ? glows : null;
+    },
+    null,
+    { timeout: 30_000 },
   );
-  glows.forEach((glow, index) => {
-    if (index % 2 === 0) expect(glow, `${id} led${index + 1}`).toBeGreaterThan(0.15);
-    else expect(glow, `${id} led${index + 1}`).toBeLessThan(0.05);
-  });
+  const first = (await firstHandle.jsonValue()) as number[];
+  expect(first.some((glow) => glow > 0.15), `${block.id} first frame has a lit LED`).toBe(true);
+  expect(first.some((glow) => glow < 0.05), `${block.id} first frame has a dark LED`).toBe(true);
+
+  const secondHandle = await page.waitForFunction(
+    (prev) => {
+      const glows = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
+        const body = window.orbeViewer.get().scene.getObjectByName(`@led${n}`)?.getObjectByName("body");
+        const material = body?.material;
+        return typeof material?.emissiveIntensity === "number" ? material.emissiveIntensity : -1;
+      });
+      const turnedOff = glows.some((glow, index) => prev[index] > 0.15 && glow < 0.05);
+      const turnedOn = glows.some((glow, index) => prev[index] < 0.05 && glow > 0.15);
+      return turnedOff && turnedOn ? glows : null;
+    },
+    first,
+    { timeout: 30_000 },
+  );
+  const second = (await secondHandle.jsonValue()) as number[];
+  expect(second.some((glow, index) => first[index] > 0.15 && glow < 0.05), `${block.id} a lit LED turned off`).toBe(true);
+  expect(second.some((glow, index) => first[index] < 0.05 && glow > 0.15), `${block.id} a dark LED turned on`).toBe(true);
+
   if (shotName !== null) {
     await page.locator("canvas").scrollIntoViewIfNeeded();
     await shot(page, shotName);
@@ -402,6 +492,31 @@ async function showRgb(page: Page, block: RepoBlock, canvas: boolean, shotName: 
   await page.mouse.up();
 }
 
+function relayLit(page: Page, ref: string, above: boolean, full: boolean): Promise<unknown> {
+  return page.waitForFunction(
+    ({ above, ref, full }) => {
+      const glow = window.orbeViewer.get().scene.getObjectByName(ref)?.getObjectByName("body")?.material?.emissiveIntensity ?? 0;
+      const on = full ? 0.5 : 0.15;
+      return above ? glow > on : glow < 0.05;
+    },
+    { above, ref, full },
+    { timeout: 120_000 },
+  );
+}
+
+/** The Nano toggles the module once a second. The indicator and the load LED follow. */
+async function showRelay(page: Page, shotName: string | null): Promise<void> {
+  const indicator = "@relay.led";
+  await relayLit(page, indicator, true, false);
+  await relayLit(page, "@led1", true, true);
+  await relayLit(page, indicator, false, false);
+  await relayLit(page, "@led1", false, true);
+  if (shotName !== null) {
+    await page.locator("canvas").scrollIntoViewIfNeeded();
+    await shot(page, shotName);
+  }
+}
+
 /** The 7-segment Block: after a short count, at least one segment is lit. */
 async function showDigit(page: Page, block: RepoBlock, shotName: string | null): Promise<void> {
   await waitSimulatedPast(page, 0.3);
@@ -421,6 +536,40 @@ async function showDigit(page: Page, block: RepoBlock, shotName: string | null):
   }
 }
 
+/** The sweep is over by this simulated time: the shaft holds at its 0° end from about 1.3 s. */
+const SWEEP_DONE_S = 1.5;
+/** write(0) is a 544 us pulse, which holds the shaft at 4.17°, 85.83° from the 90° centre. */
+const SWEEP_END_TURN = 85.83;
+
+/**
+ * nano-servo-sweep moves the horn once, 0° to 180° and back to 0°, and then holds it. A page
+ * can draw its first frame after that, so the check is where the horn ends, not that it moves
+ * between two reads. servo-sg90's horn node has no rotation of its own, and the viewer draws it
+ * at the 90° centre until a frame says otherwise, so its turn from rest is 90° minus the angle.
+ */
+async function showServo(page: Page, block: RepoBlock): Promise<void> {
+  await waitSimulatedPast(page, SWEEP_DONE_S);
+  // A frame reaches the horn when the next one draws, which software WebGL can hold back.
+  await page
+    .waitForFunction(
+      (want) => {
+        const q = window.orbeViewer.get().scene.getObjectByName("@servo")?.getObjectByName("horn")?.quaternion;
+        if (q === undefined) return false;
+        const turn = (2 * Math.acos(Math.min(1, Math.abs(q.w))) * 180) / Math.PI;
+        return Math.abs(turn - want) < 1;
+      },
+      SWEEP_END_TURN,
+      { timeout: 30_000 },
+    )
+    .catch(() => undefined);
+  const turn = await page.evaluate(() => {
+    const q = window.orbeViewer.get().scene.getObjectByName("@servo")?.getObjectByName("horn")?.quaternion;
+    return q === undefined ? null : (2 * Math.acos(Math.min(1, Math.abs(q.w))) * 180) / Math.PI;
+  });
+  expect(turn, `${block.id} horn turn from centre, degrees`).not.toBeNull();
+  expect(Math.abs((turn ?? 0) - SWEEP_END_TURN), `${block.id} horn at ${turn}°, not ${SWEEP_END_TURN}° from centre`).toBeLessThan(1);
+}
+
 /** Play, require simulated time to move, and check the behaviour the scene declares. */
 export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, shotName: string | null): Promise<void> {
   await page.locator("canvas").scrollIntoViewIfNeeded();
@@ -430,6 +579,10 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
   }
   // The site is already playing when its page opens, so measure from here, not from t = 0.
   const start = await simulatedSeconds(page);
+  if (block.kind === "relay") {
+    await showRelay(page, shotName);
+    return;
+  }
   if (block.kind === "fade") {
     await page.evaluate(() => {
       window.orbeGlowSpan = undefined;
@@ -459,26 +612,25 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
     return;
   }
   if (block.kind === "shift") {
-    await showShift(page, block.id, shotName);
+    await showShift(page, block, shotName);
     return;
   }
   if (block.kind === "rgb") {
     await showRgb(page, block, canvas, shotName);
     return;
   }
+  if (block.kind === "tone") {
+    // A transistor switching the coil takes a few hundred steps on each edge.
+    await waitSimulatedPast(page, Math.max(1, start), 60_000);
+    expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(Math.max(1, start));
+    if (shotName !== null) {
+      await page.locator("canvas").scrollIntoViewIfNeeded();
+      await shot(page, shotName);
+    }
+    return;
+  }
   if (block.kind === "servo") {
-    const horn = () =>
-      page.evaluate(() => {
-        const node = window.orbeViewer.get().scene.getObjectByName("@servo")?.getObjectByName("horn");
-        const q = node?.quaternion;
-        return q === undefined ? null : [q.x, q.y, q.z, q.w];
-      });
-    const before = await horn();
-    await waitSimulatedPast(page, Math.max(0.4, start + 0.3));
-    const after = await horn();
-    expect(before, `${block.id} horn`).not.toBeNull();
-    expect(after, `${block.id} horn`).not.toEqual(before);
-    expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(0.3);
+    await showServo(page, block);
     if (shotName !== null) {
       await page.locator("canvas").scrollIntoViewIfNeeded();
       await shot(page, shotName);
@@ -510,8 +662,20 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
     }
     return;
   }
+  if (block.kind === "serial") {
+    await showSerial(page, block);
+    if (shotName !== null) {
+      await page.locator("canvas").scrollIntoViewIfNeeded();
+      await shot(page, shotName);
+    }
+    return;
+  }
   if (block.kind === "screen") {
-    await showScreen(page, shotName);
+    await showScreen(page, "@oled.display", shotName);
+    return;
+  }
+  if (block.kind === "lcd") {
+    await showScreen(page, "@lcd.display", shotName);
     return;
   }
   await waitSimulatedPast(page, Math.max(1, start));

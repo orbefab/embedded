@@ -130,6 +130,7 @@ pub fn glass(panel: &Panel, frame: &[u8]) -> Vec<u8> {
     match panel.kind {
         "st77916" => crate::device::st77916::glass(panel.flags, frame),
         "ssd1306" => crate::device::ssd1306::glass(panel, frame),
+        "hd44780_i2c" => crate::device::hd44780_i2c::glass(panel, frame),
         kind => panic!("a {kind} has no glass"),
     }
 }

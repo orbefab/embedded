@@ -209,3 +209,17 @@ pub fn cases(kind: &str) -> Vec<PathBuf> {
     cases.sort();
     cases
 }
+
+/// Every Block folder under `blocks/`, sorted by folder name. A file beside them, such as
+/// `README.md`, is not one.
+pub fn block_ids() -> Vec<String> {
+    let mut ids: Vec<String> = fs::read_dir(repo().join("blocks"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_dir())
+        .map(|path| path.file_name().unwrap().to_str().unwrap().to_string())
+        .collect();
+    ids.sort();
+    assert!(!ids.is_empty(), "blocks/ has no Block");
+    ids
+}

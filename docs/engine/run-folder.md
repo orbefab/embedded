@@ -1,6 +1,6 @@
 # Run folder
 
-`orbe-run run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so do an ATmega328P and an ESP32-S3. It adds `traces/serial.csv` when a chip has a USART, as an ATmega328P does, or a console, as an ESP32-S3 does, `traces/i2c.csv` when a chip has a TWI, as an ATmega328P does, `traces/link.csv` when a chip can send records, as an SPI replay and an ESP32-S3 do, `traces/display.csv`, one `traces/display-<part>.<format>` and one `traces/display-<part>.png` for each display part, an `st77916` or an `ssd1306`, and `traces/leds.csv` when a `ws2812` is in the netlist.
+`orbe-run run <netlist.json> --out <dir>` writes four files. A rejected netlist writes the same four files. A transient run adds `traces/`, and `traces/logic.vcd` when a chip in the netlist has logic signals. An NE555 has them, and so do an ATmega328P and an ESP32-S3. It adds `traces/serial.csv` when a chip has a USART, as an ATmega328P does, or a console, as an ESP32-S3 does, `traces/i2c.csv` when a chip has a TWI, as an ATmega328P does, `traces/link.csv` when a chip can send records of its own, as an SPI replay and an ESP32-S3 do, `traces/display.csv`, one `traces/display-<part>.<format>` and one `traces/display-<part>.png` for each display part, an `st77916` or an `ssd1306`, and `traces/leds.csv` when a `ws2812` is in the netlist.
 
 ```text
 <dir>/
@@ -31,7 +31,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 {
   "run_format": 0,
   "netlist_format": 0,
-  "engine_version": "0.2.1",
+  "engine_version": "0.3.0",
   "input": {
     "file": "netlist.json",
     "sha256": "<lowercase hex sha256 of the input bytes>",
@@ -42,7 +42,7 @@ Each JSON file is pretty JSON with a two-space indent and a trailing newline. `m
 }
 ```
 
-`run_format` versions this folder, and `engine_version` is the workspace package version, the release that wrote the folder. The current values are 0 and `0.2.1`. [Run format](#run-format) says which changes move `run_format`.
+`run_format` versions this folder, and `engine_version` is the workspace package version, the release that wrote the folder. The current values are 0 and `0.3.0`. [Run format](#run-format) says which changes move `run_format`.
 
 `netlist_format` is the input's `version`, when it reads as an unsigned integer. That holds when the engine rejected the input, so `version: 2` records 2. It is `null` when no such integer could be read.
 
@@ -411,7 +411,7 @@ t_ps,part,phase,address,read,byte,ack
 
 `packages/engine/scripts/i2c_decode.py` decodes the bus from `logic.vcd` apart from the engine and checks it against this file, as [reference.md](reference.md#i2c) says.
 
-A netlist with a chip that can send records adds `link.csv`. An SPI replay, a pulse replay and an ESP32-S3 can. The file holds every record a chip sent, one row per record, as ASCII with `\n` line ends. `index.json` has no key for it, because its header names its columns. `packages/engine/tests/circuits/spi-replay` replays a display panel's start-up, and its file is:
+A netlist with a chip that can send records of its own adds `link.csv`. An SPI replay, a pulse replay and an ESP32-S3 can. A `ws2812` with `DOUT` relays the `Pulses` records it takes, and its rows, with `DOUT` as the pin, join the file when it is written. The file holds every record a chip sent, one row per record, as ASCII with `\n` line ends. `index.json` has no key for it, because its header names its columns. `packages/engine/tests/circuits/spi-replay` replays a display panel's start-up, and its file is:
 
 ```text
 t_ps,start_ps,part,pin,kind,cs,phases,bytes,hash,lanes
@@ -519,6 +519,8 @@ For an `ssd1306` the pixels are 64 rows of 128, each opaque white when lit and o
 - A pixel is lit when its GDDRAM bit is set, or for every pixel when `entire_on` is 1, and `inverted` flips that.
 
 Contrast dims nothing on the glass. `contrast` stays a setting, and a viewer may apply it. The panel's colour is not drawn.
+
+For an `hd44780_i2c` the pixels are 68 rows of 320, drawing a blue negative transmissive 16x2 character glass. Its frame memory file `display-<part>.hd44780` is 144 bytes: 80 bytes of DDRAM (row 0 at `0x00..0x27`, row 1 at `0x40..0x67` stored at bytes `40..79`) followed by 64 bytes of CGRAM (8 custom 5x8 characters). Settings are `backlight`, `cursor`, `blink`, `two_line`, `shift`, `ac`, `in_cgram` and `powered`. When `powered` and `backlight` are on, the glass is blue backlit and each visible character in `display_on` mode is drawn in white using the Hitachi A00 ROM 5x8 font (with `0x00..0x07` and `0x08..0x0F` read from CGRAM), plus the underline cursor and blink block when enabled. When `backlight` or `powered` is off, the glass is dark.
 
 ## Determinism
 

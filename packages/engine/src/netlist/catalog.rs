@@ -96,8 +96,11 @@ pub enum Conduction {
     Switches(usize, usize),
     /// Its resistance limits the current. A resistor or a potentiometer.
     Limits,
-    /// None of these. A current source, a capacitor, an inductor, a relay or a chip.
+    /// None of these. A current source, a capacitor, an inductor, an op-amp or a chip.
     Other,
+    /// Each pair joins the way a switch joins its two pins. A relay's `com` to `no` and
+    /// `com` to `nc`. The coil is not one of them.
+    Contacts(&'static [(usize, usize)]),
 }
 
 /// How many of a row's pins are required: `required <n>` on a chip row names the first `n`,
@@ -393,7 +396,8 @@ pub fn live_field(kind: &str) -> Option<&'static str> {
 fn chip_pin_names(chip: &Chip) -> &[&'static str] {
     use crate::chip::Ne555;
     use crate::device::{
-        Cst816, Dht22, Hc595, PulsesReplay, Sg90, SpiReplay, Ssd1306, St77916, Ws2812,
+        Bmp280, Cst816, Dht22, Hc595, Hd44780I2c, PulsesReplay, Sg90, SpiReplay, Ssd1306, St77916,
+        Ws2812,
     };
 
     match chip {
@@ -402,8 +406,10 @@ fn chip_pin_names(chip: &Chip) -> &[&'static str] {
         Chip::SpiReplay(_) => &SpiReplay::PINS,
         Chip::St77916(_) => &St77916::PINS,
         Chip::Ssd1306(_) => &Ssd1306::PINS,
+        Chip::Hd44780I2c(_) => &Hd44780I2c::PINS,
         Chip::Cst816(_) => &Cst816::PINS,
         Chip::Dht22(_) => &Dht22::PINS,
+        Chip::Bmp280(_) => &Bmp280::PINS,
         Chip::Hc595(_) => &Hc595::PINS,
         Chip::Esp32s3(mcu) => &mcu.names,
         Chip::Ws2812(part) => &Ws2812::PINS[..part.pins.len()],
@@ -419,8 +425,10 @@ fn chip_pins(chip: &Chip) -> &[NetId] {
         Chip::SpiReplay(part) => &part.pins,
         Chip::St77916(part) => &part.pins,
         Chip::Ssd1306(part) => &part.pins,
+        Chip::Hd44780I2c(part) => &part.pins,
         Chip::Cst816(part) => &part.pins,
         Chip::Dht22(part) => &part.pins,
+        Chip::Bmp280(part) => &part.pins,
         Chip::Hc595(part) => &part.pins,
         Chip::Ws2812(part) => &part.pins,
         Chip::PulsesReplay(part) => &part.pins,
@@ -514,12 +522,18 @@ define_kinds! {
         Ssd1306, "ssd1306",
             crate::device::ssd1306::WireSsd1306, crate::device::ssd1306::resolve_ssd1306,
             &crate::device::Ssd1306::PINS;
+        Hd44780I2c, "hd44780_i2c",
+            crate::device::hd44780_i2c::WireHd44780I2c, crate::device::hd44780_i2c::resolve_hd44780_i2c,
+            &crate::device::Hd44780I2c::PINS;
         Cst816, "cst816",
             crate::device::cst816::WireCst816, crate::device::cst816::resolve_cst816,
             &crate::device::Cst816::PINS;
         Dht22, "dht22",
             crate::device::dht22::WireDht22, crate::device::dht22::resolve_dht22,
             &crate::device::Dht22::PINS;
+        Bmp280, "bmp280",
+            crate::device::bmp280::WireBmp280, crate::device::bmp280::resolve_bmp280,
+            &crate::device::Bmp280::PINS;
         Esp32s3 required crate::mcu::Esp32s3::REQUIRED, "esp32s3",
             crate::mcu::esp32s3::WireEsp32s3, crate::mcu::esp32s3::resolve_esp32s3,
             &crate::mcu::Esp32s3::PINS;

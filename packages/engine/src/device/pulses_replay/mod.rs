@@ -47,6 +47,7 @@ pub(crate) fn chip(part: PartId, replay: &PulsesReplay) -> Chip {
         high: stage(&replay.output.high_drop, &replay.output.high_resistance),
         low: stage(&replay.output.low_drop, &replay.output.low_resistance),
         pull_up: None,
+        strong_pull_up: None,
         pull_down: None,
         leakage: None,
     };
@@ -56,6 +57,7 @@ pub(crate) fn chip(part: PartId, replay: &PulsesReplay) -> Chip {
             seq,
             start: event.at,
             end: event.end,
+            peripheral: "pulses_replay",
             pin: PulsesReplay::PINS[OUT],
             kind: RecordKind::Pulses {
                 pulses: Pulses {

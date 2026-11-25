@@ -7,7 +7,8 @@
 # it runs the build as it deploys, whose own files must show no install line.
 # The footer links the repo either way. The build must serve the AVR runtime source every
 # Block's NOTICE names.
-# Playwright then drives that build in headless Chromium twice: on `vite preview`, and on
+# Playwright then drives that build in headless Chromium: a short `@vite-smoke` subset on
+# `vite preview` (home, one part page, one Block page) and the full site suite on
 # `wrangler dev --local`.
 #
 # The flag gates the site's own text and links: the pages, the build's scripts and styles, the
@@ -16,13 +17,14 @@
 #
 # Needs what scripts/site.sh needs, and a Chromium found as check-viewer-e2e.sh finds it. It
 # installs nothing. `--renders <dir>` saves screenshots there.
-# `--servers vite` or `--servers wrangler` drives the suite on that one host. `wrangler` skips
-# the install-line build, which Playwright drives on `vite preview`. `--shard N/M` passes that
+# `--servers vite` runs the install-line checks (`install.spec.ts`) and the `@vite-smoke` subset
+# on `vite preview`. `--servers wrangler` skips the install-line build and drives the full suite
+# on `wrangler dev --local`. `--shard N/M` passes that
 # shard to the suite. `--no-build` uses the site already at apps/site/dist and does not run the
 # deploy build. The install-line build still runs unless `--servers wrangler`. The build
-# carries dist/wrangler-deploy.json, the pointer wrangler follows. Before wrangler starts,
-# the check copies it to apps/site/.wrangler/deploy/config.json. The source wrangler.jsonc
-# names assets and no directory, so wrangler does not start without that pointer. Set ORBE to
+# carries dist/wrangler-deploy.json, the pointer `vite preview` and wrangler follow. Before
+# either server starts, `scripts/site-deploy-pointer.sh` puts it back at
+# apps/site/.wrangler/deploy/config.json and checks its built config. Set ORBE to
 # the orbe binary when this machine has not built it. `--no-playwright` stops after the file checks.
 # The arguments can be in any order. With none of `--servers` or `--shard`, the check runs both
 # hosts, as `scripts/check.sh web` does. An unknown argument is an error.
@@ -172,25 +174,7 @@ if [[ $no_playwright -eq 1 ]]; then
   exit 0
 fi
 
-# wrangler dev in apps/site follows this pointer to the built config. The source
-# wrangler.jsonc has an assets binding and no directory.
-if [[ $servers != vite ]]; then
-  mkdir -p apps/site/.wrangler/deploy
-  cp apps/site/dist/wrangler-deploy.json apps/site/.wrangler/deploy/config.json
-  # shellcheck disable=SC2016 # javascript
-  node -e '
-const fs = require("node:fs");
-const path = require("node:path");
-const pointer = "apps/site/.wrangler/deploy/config.json";
-const cfg = JSON.parse(fs.readFileSync(pointer, "utf8"));
-const configPath = path.resolve(path.dirname(pointer), cfg.configPath);
-const built = JSON.parse(fs.readFileSync(configPath, "utf8"));
-if (typeof built.assets?.directory !== "string" || built.assets.directory === "") {
-  console.error(`check-site: ${configPath} has no assets directory`);
-  process.exit(1);
-}
-'
-fi
+scripts/site-deploy-pointer.sh check-site
 
 if [[ $no_build -eq 0 || -z ${ORBE:-} ]]; then
   target=$(cargo metadata --format-version 1 --no-deps |

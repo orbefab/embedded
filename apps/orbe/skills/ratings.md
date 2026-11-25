@@ -26,17 +26,19 @@ Right after `step --until @led1 lit` the pin is already high and `i` is about 12
 
 ## Warnings
 
-`orbe lint` prints `warning[<code>]` and a `hint:`. Warnings never fail it. `orbe open` shows none of these except `net.floating`.
+`orbe lint` prints `warning[<code>]` and a `hint:`. Warnings never fail it. `orbe open` shows only `net.floating`.
 
 | Code | What it means, and what to do |
 | --- | --- |
-| `scene.led_no_resistor` | An LED joins two driven nets, such as a pin and GND, with no resistor in series. Put one in series, such as 220 ohm from a 5 V pin. Lint misses an LED wired straight to an output pin that also has a pull-up. |
-| `scene.no_model` | A part has no engine model, no `not_simulated` reason and no `"joins_only": true`, so nothing runs for it. Use a part with a model. |
-| `scene.unconnected` | Nothing is wired to a part, or a part with at most 3 nets has a net with no wire. Wire it, or leave it open when the circuit means it. |
-| `net.floating` | A net has no DC path to ground. Fix it when a part reads that net. `orbe nets` marks `(floating)`. |
-| `scene.unplaced` | Parts have no `layout`, so the 3D page puts them in a row. It names the leg an `at` draws in a hole that joins nothing there. Seat it with `on`, or a contact wire when `on` would claim a held hole. A non-zero `rotate` stays. |
-| `scene.shorted` | Two pins of one part sit in one breadboard strip, such as a resistor turned along a column. Turn the part a quarter turn, as the hint shows. |
+| `scene.led_no_resistor` | An LED joins two driven nets with no series resistor. Put one in series (e.g. 220 ohm from 5 V). A relay contact counts as a switch; a pin with a pull-up is missed. |
+| `scene.no_model` | No engine model, `not_simulated` reason or `"joins_only": true`. Use a part with a model. |
+| `scene.unconnected` | Nothing is wired to a part, or a part with at most 3 nets has an open net. Wire it or leave it open if meant. |
+| `net.floating` | No DC path to ground. Fix it when a part reads that net. `orbe nets` marks `(floating)`. |
+| `scene.unplaced` | Missing `layout` (drawn in a row), or `at` puts a leg in a hole without joining it. Seat with `on`, or a contact wire when a hole is held; non-zero `rotate` stays. |
+| `scene.shorted` | Two pins of one part share a breadboard strip. Turn the part a quarter turn. |
+| `scene.covered_hole` | A wire end or seated lead sits in a hole another part's body covers. Move the wire to a clear hole in that strip, or move a part. |
+| `scene.overlap` | Two placed parts overlap in space. Move one in `layout` so their bodies clear. |
 
-A `warning[rating.current]`, `warning[rating.power]` or `warning[rating.voltage]` during `step` or `open` means a part or a chip pin went past its datasheet rating. Fix the circuit. `chip.floating_input` names an input nothing drives. Load `orbe skills get arduino`.
+`warning[rating.current]`, `rating.power` or `rating.voltage` means a part or pin passed its datasheet rating; `regulator.current_limit` means a load asked a linear regulator past its limit so its output sagged. Fix the circuit. `chip.floating_input` names an undriven input (see `arduino`).
 
-An aluminum electrolytic warns `rating.voltage` past 1 V reverse. A tantalum warns `rating.voltage` past 2.4 V reverse, its sheet's short-term figure. A regulator input warns below -0.3 V and above its maximum, 35 V on an LM7805. An op-amp supply warns above its maximum. Reversed 9 V on Nano VIN warns `#nano__regulator.pin.in (nano.VIN)`. A series 1N4007 holds it near 0 V; 9 V forwards makes 5 V. Rail tantalums stay out, and output-to-input current stays blocked, so USB-only VIN stays near 0.
+Reverse voltage warns past 1 V on aluminum electrolytics and 2.4 V on tantalums. Regulator inputs warn below -0.3 V or past their max (35 V on LM7805); op-amp supplies warn past their max. Reversed 9 V on Nano VIN warns `#nano__regulator.pin.in (nano.VIN)`. A series 1N4007 holds it near 0 V; 9 V forwards makes 5 V. Rail tantalums stay out and back-feed is blocked, so USB-only VIN stays near 0.

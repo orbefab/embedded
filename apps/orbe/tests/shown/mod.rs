@@ -59,6 +59,7 @@ pub fn shell(runtime: &Runtime, dir: &Path, line: &str) -> Run {
         .env("XDG_RUNTIME_DIR", runtime.dir.path())
         .env_remove("ORBE_SESSION")
         .env_remove("ORBE_TEST_IDLE_TIMEOUT")
+        .env_remove("ORBE_TEST_STEP_BUDGET")
         .env_remove("ORBE_TEST_STOP")
         .env("ORBE_REGISTRY", super::harness::registry_template())
         .output()

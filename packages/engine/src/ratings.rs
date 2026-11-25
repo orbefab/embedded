@@ -6,11 +6,15 @@ use orbe_model::{Drive, Time};
 use crate::active::{self, Output, Stage};
 use crate::netlist::{Average, Basis, Model, NetId, Netlist, Rating, RatingKind};
 
+use crate::chip::regulator::{
+    LIMIT_HOLD_PS, LIMIT_KNEE_FRACTION, LIMIT_SAG_FRACTION, MIN_CHARGE_RATE, STALL_PS, limit_drop,
+};
 use crate::diagnostic::{
-    Diagnostic, Excursion, VoltageExcursion, exceeds, exceeds_rounded, significant,
+    CurrentLimitExcursion, Diagnostic, Excursion, VoltageExcursion, exceeds_rounded, significant,
 };
 use crate::finite::Finite;
-use crate::name::{Name, Ref};
+use crate::name::{Name, Quantity, Ref};
+use crate::passive::DRIVE_REST_PS;
 
 use crate::observe::Columns;
 
@@ -50,6 +54,9 @@ pub(crate) struct Ratings {
     timing: Timing,
     watches: Vec<Watch>,
     windows: Vec<Window>,
+    limits: Vec<RegulatorLimit>,
+    /// A resistor's operating voltage, checked on the peak of a drive that leaves zero.
+    drives: Vec<CoilDrive>,
     chips: Vec<Gauge>,
     last: Option<Time>,
     /// The last sample was a step that restarted, so the next sample holds back to it.
@@ -129,9 +136,6 @@ struct Watch {
     last: f64,
     /// The first of the samples that have each been over, through the last one.
     since: Option<Time>,
-    /// A diode or a zener. Its power rating is never over now. An LED is not, so `#led1.p`
-    /// stays over now in the no-resistor example.
-    surge: bool,
 }
 
 /// A sustained rating's readings of the same samples.
@@ -140,7 +144,8 @@ struct Heat {
     /// The rating's thermal filter. It warns when it crosses.
     filter: Filter,
     /// Over [`RECENT_PS`]. With the last sample over, it says the rating is over now. `None`
-    /// when the rating has a peak limit, which bounds a pulse in its place.
+    /// when the rating has a peak limit, which bounds a pulse in its place, or on a diode or
+    /// zener power rating.
     recent: Option<Recent>,
 }
 
@@ -211,6 +216,35 @@ struct Gauge {
     currents: Vec<f64>,
 }
 
+/// Below this absolute voltage the coil is between pulses. A peak that then sits outside
+/// `[min, max]` is a drive outside its operating voltage.
+const DRIVE_QUIET_V: f64 = 0.2;
+
+/// The peak voltage of a sounding drive across a resistor that rates an operating window.
+#[derive(Clone)]
+struct CoilDrive {
+    quantity: Ref,
+    column: usize,
+    min: f64,
+    max: f64,
+    /// `max` rounded as [`significant`] rounds it, for [`exceeds_rounded`].
+    max_rounded: f64,
+    /// Highest `|v|` since the coil was last near zero.
+    peak: f64,
+    /// The sample before this pulse left zero. `None` while the coil is quiet.
+    pulse_from: Option<Time>,
+    /// The last sample the coil was driven.
+    loud_at: Option<Time>,
+    /// The last judged pulse sat outside the window and the drive has not rested since.
+    over: bool,
+    /// How far `over_ps` has counted. A quiet gap shorter than a rest counts once the next
+    /// pulse arrives, so a tone counts both its half-cycles and its rest counts nothing.
+    counted_to: Time,
+    /// How far past the window the excursion's peak was.
+    worst: f64,
+    excursion: Option<VoltageExcursion>,
+}
+
 /// An output's stage and the columns of its nets.
 #[derive(Clone)]
 struct Pin {
@@ -220,6 +254,7 @@ struct Pin {
     high: Stage,
     low: Stage,
     pull_up: Option<f64>,
+    strong_pull_up: Option<f64>,
     pull_down: Option<f64>,
     leakage: Option<f64>,
 }
@@ -238,11 +273,98 @@ struct Window {
     excursion: Option<VoltageExcursion>,
 }
 
+#[derive(Clone)]
+struct RegulatorLimit {
+    pin: Ref,
+    pin_in: usize,
+    pin_out: usize,
+    pin_gnd: usize,
+    iout: usize,
+    reg: crate::chip::LinearRegulator,
+    /// `V(out) - V(gnd)` on the last sample clear of the current-limit knee.
+    baseline_vo: Option<f64>,
+    /// Start of the current continuous clamped spell.
+    clamped_since: Option<Time>,
+    /// Previous sample in the current continuous clamped spell.
+    last_clamped: Option<ClampedSample>,
+    /// Monotone decreasing queue of `(span_end, peak_sample)` over the last [`LIMIT_HOLD_PS`],
+    /// where `peak_sample` is the higher-voltage endpoint of each clamped step. Once the spell
+    /// reaches [`LIMIT_HOLD_PS`], the front is the lowest voltage bound that held across it.
+    hold: VecDeque<(Time, ClampedSample)>,
+    /// A clamped rail starting below target (such as capacitor charging) that stays quiet while
+    /// its output keeps rising toward target.
+    pending: Option<PendingLimit>,
+    excursion: Option<CurrentLimitExcursion>,
+}
+
+#[derive(Clone, Copy)]
+struct ClampedSample {
+    at: Time,
+    vo: f64,
+    current: f64,
+}
+
+#[derive(Clone)]
+struct PendingLimit {
+    first: Time,
+    over_ps: Option<u64>,
+    pulled_since: Option<Time>,
+    progress_vo: f64,
+    progress_at: Time,
+}
+
 /// The basis a sustained rating with no basis of its own takes.
 const fn sustained(average: Average) -> Basis {
     Basis::Sustained {
         tau_ps: DEFAULT_TAU_PS,
         average,
+    }
+}
+
+/// Records `drive.peak` when it sits outside the operating window. A peak inside clears
+/// `over` and leaves an earlier finding in place. A drive that turns `over` counts from the
+/// start of this pulse.
+fn judge_drive(drive: &mut CoilDrive, at: Time, over_ps: Option<u64>) {
+    let peak = drive.peak;
+    // Each side is compared as the message prints it, to 3 significant digits.
+    let below = exceeds_rounded(drive.min, significant(peak));
+    let above = exceeds_rounded(peak, significant(drive.max));
+    if !below && !above {
+        drive.over = false;
+        return;
+    }
+    if !drive.over {
+        drive.over = true;
+        drive.counted_to = drive.pulse_from.unwrap_or(at);
+    }
+    let past = if below {
+        drive.min - peak
+    } else {
+        peak - drive.max
+    };
+    let reading = VoltageExcursion {
+        pin: drive.quantity.clone(),
+        low: Some(drive.min),
+        high: Some(drive.max),
+        peak,
+        peak_at: at,
+        first: at,
+        over_ps,
+        operating: true,
+    };
+    match &mut drive.excursion {
+        None => {
+            drive.worst = past;
+            drive.excursion = Some(reading);
+        }
+        Some(excursion) if past > drive.worst => {
+            drive.worst = past;
+            excursion.low = reading.low;
+            excursion.high = reading.high;
+            excursion.peak = peak;
+            excursion.peak_at = at;
+        }
+        Some(_) => {}
     }
 }
 
@@ -254,6 +376,7 @@ impl Ratings {
         timing: Timing,
     ) -> Ratings {
         let mut watches = Vec::new();
+        let mut drives = Vec::new();
         for (_, part) in netlist.parts() {
             // A supply source's current rating is the most it delivers steadily. Every power
             // rating, on every kind, is the heat the part sheds.
@@ -269,6 +392,8 @@ impl Ratings {
                     RatingKind::Current if supply => sustained(Average::Rms),
                     RatingKind::Current => Basis::Peak,
                 };
+                // A diode or zener power rating is never over now; an LED's stays over now.
+                let early = !(kind == RatingKind::Power && surge);
                 watch(
                     &mut watches,
                     kind,
@@ -276,7 +401,7 @@ impl Ratings {
                     Read::Column(column),
                     rating,
                     default,
-                    surge,
+                    early,
                 );
             }
         }
@@ -291,38 +416,52 @@ impl Ratings {
             let Some(rated) = crate::chip::pin_ratings(model) else {
                 continue;
             };
-            debug_assert_eq!(rated.outputs.len(), chip.outputs.len());
             let pin =
                 |name: &str| Ref::Pin(part.name.clone(), Name::new(name).expect("a pin name"));
             let net = |id: NetId| columns.net(id);
-            let gauge = chips.len();
-            let default = sustained(Average::Rms);
-            if let Some(rating) = &rated.pin_current {
-                for (k, &name) in rated.outputs.iter().enumerate() {
-                    watch(
-                        &mut watches,
-                        RatingKind::Current,
-                        pin(name),
-                        Read::Gauge { gauge, k },
-                        rating,
-                        default,
-                        false,
-                    );
+            if rated.pin_current.is_some() || rated.supply_current.is_some() {
+                debug_assert_eq!(rated.outputs.len(), chip.outputs.len());
+                let gauge = chips.len();
+                let default = sustained(Average::Rms);
+                if let Some(rating) = &rated.pin_current {
+                    for (k, &name) in rated.outputs.iter().enumerate() {
+                        watch(
+                            &mut watches,
+                            RatingKind::Current,
+                            pin(name),
+                            Read::Gauge { gauge, k },
+                            rating,
+                            default,
+                            true,
+                        );
+                    }
                 }
-            }
-            let outputs = chip.outputs.len();
-            if let Some(rating) = &rated.supply_current {
-                for (k, name) in [(outputs, rated.vcc.0), (outputs + 1, rated.gnd.0)] {
-                    watch(
-                        &mut watches,
-                        RatingKind::Current,
-                        pin(name),
-                        Read::Gauge { gauge, k },
-                        rating,
-                        default,
-                        false,
-                    );
+                let outputs = chip.outputs.len();
+                if let Some(rating) = &rated.supply_current {
+                    for (k, name) in [(outputs, rated.vcc.0), (outputs + 1, rated.gnd.0)] {
+                        watch(
+                            &mut watches,
+                            RatingKind::Current,
+                            pin(name),
+                            Read::Gauge { gauge, k },
+                            rating,
+                            default,
+                            true,
+                        );
+                    }
                 }
+                chips.push(Gauge {
+                    active,
+                    outputs: chip
+                        .outputs
+                        .iter()
+                        .map(|output| Pin::new(output, columns))
+                        .collect(),
+                    supply: chip
+                        .supply
+                        .map(|supply| (columns.net(supply.vcc), columns.net(supply.gnd), supply)),
+                    currents: vec![0.0; outputs + 2],
+                });
             }
             for window in &rated.windows {
                 windows.push(Window {
@@ -337,18 +476,6 @@ impl Ratings {
                     excursion: None,
                 });
             }
-            chips.push(Gauge {
-                active,
-                outputs: chip
-                    .outputs
-                    .iter()
-                    .map(|output| Pin::new(output, columns))
-                    .collect(),
-                supply: chip
-                    .supply
-                    .map(|supply| (columns.net(supply.vcc), columns.net(supply.gnd), supply)),
-                currents: vec![0.0; outputs + 2],
-            });
         }
         // An input above `vcc - input_headroom` is the same window as a chip pin above its
         // ceiling, and an input below `gnd` past `input_below_gnd` as a pin below its floor.
@@ -429,10 +556,62 @@ impl Ratings {
                 excursion: None,
             });
         }
+        let mut limits = Vec::new();
+        for (_, part) in netlist.parts() {
+            let Model::LinearRegulator(reg) = &part.model else {
+                continue;
+            };
+            let iout_ref = Ref::Quantity(part.name.clone(), Quantity::Iout);
+            let iout = columns
+                .index(&iout_ref)
+                .expect("every linear regulator has an iout column");
+            limits.push(RegulatorLimit {
+                pin: Ref::Pin(part.name.clone(), Name::new("out").expect("a pin name")),
+                pin_in: columns.net(reg.pins[0]),
+                pin_out: columns.net(reg.pins[1]),
+                pin_gnd: columns.net(reg.pins[2]),
+                iout,
+                reg: reg.clone(),
+                baseline_vo: None,
+                clamped_since: None,
+                last_clamped: None,
+                hold: VecDeque::new(),
+                pending: None,
+                excursion: None,
+            });
+        }
+        for (_, part) in netlist.parts() {
+            let Model::Resistor(resistor) = &part.model else {
+                continue;
+            };
+            let Some((min, max)) = resistor.operating else {
+                continue;
+            };
+            let quantity = Ref::Quantity(part.name.clone(), Quantity::V);
+            let column = columns
+                .index(&quantity)
+                .expect("a resistor's voltage is a column");
+            drives.push(CoilDrive {
+                quantity,
+                column,
+                min,
+                max,
+                max_rounded: significant(max),
+                peak: 0.0,
+                pulse_from: None,
+                loud_at: None,
+                over: false,
+                counted_to: Time::ZERO,
+                worst: 0.0,
+                excursion: None,
+            });
+        }
         Ratings {
             timing,
             watches,
             windows,
+            limits,
+            drives,
             chips,
             last: None,
             restarted: false,
@@ -447,11 +626,11 @@ impl Ratings {
     }
 
     /// Over means a magnitude above the limit, a sustained rating's filter reading above it, or
-    /// a voltage outside its window. A magnitude
-    /// is over when it is over after both are rounded to 3 significant digits. The first time
-    /// over stays; the peak rises. A sample that was over adds the time until this one to
-    /// `over_ps`. `cores` are the active chips' cores whose drive was in force for `row`. An
-    /// operating point, [`Timing::Point`], has no duration, so its DC value fills each filter.
+    /// a voltage outside its window. Each side is compared after both are rounded to 3 significant
+    /// digits. The first time over stays; the peak rises. A sample that was over adds the time
+    /// until this one to `over_ps`. `cores` are the active chips' cores whose drive was in force
+    /// for `row`. An operating point, [`Timing::Point`], has no duration, so its DC value fills
+    /// each filter.
     pub(crate) fn sample(&mut self, at: Time, row: &[Finite], cores: &[active::Core]) {
         for gauge in &mut self.chips {
             gauge.read(row, &cores[gauge.active]);
@@ -521,13 +700,19 @@ impl Ratings {
                 Ceiling::OverSupply(margin) => row[window.vcc].get() - ground + margin,
                 Ceiling::Fixed(volts) => volts,
             });
-            let past = low
-                .map_or(f64::NEG_INFINITY, |low| low - v)
-                .max(high.map_or(f64::NEG_INFINITY, |high| v - high));
-            window.over = past > 0.0;
+            let below = low.is_some_and(|low| v < low && exceeds_rounded(-v, -significant(low)));
+            let above = high.is_some_and(|high| v > high && exceeds_rounded(v, significant(high)));
+            window.over = below || above;
             if !window.over {
                 continue;
             }
+            let past = low
+                .filter(|_| below)
+                .map_or(f64::NEG_INFINITY, |low| low - v)
+                .max(
+                    high.filter(|_| above)
+                        .map_or(f64::NEG_INFINITY, |high| v - high),
+                );
             let reading = VoltageExcursion {
                 pin: window.pin.clone(),
                 low,
@@ -536,6 +721,7 @@ impl Ratings {
                 peak_at: at,
                 first: at,
                 over_ps: self.timing.over_ps(),
+                operating: false,
             };
             match &mut window.excursion {
                 None => {
@@ -552,11 +738,170 @@ impl Ratings {
                 Some(_) => {}
             }
         }
+        for limit in &mut self.limits {
+            if limit.clamped_since.is_some()
+                && let Some(last) = self.last
+            {
+                let dt = at.as_ps() - last.as_ps();
+                if let Some(excursion) = &mut limit.excursion {
+                    if let Some(over_ps) = &mut excursion.over_ps {
+                        *over_ps += dt;
+                    }
+                } else if let Some(pending) = &mut limit.pending
+                    && let Some(over_ps) = &mut pending.over_ps
+                {
+                    *over_ps += dt;
+                }
+            }
+            let ground = row[limit.pin_gnd].get();
+            let vi = row[limit.pin_in].get() - ground;
+            let vo = row[limit.pin_out].get() - ground;
+            let i = -row[limit.iout].get();
+            let vout = limit.reg.output_voltage.si.get();
+            let (vo_min, drop) = limit_drop(&limit.reg, i, vi);
+            let sag = LIMIT_SAG_FRACTION * vout;
+            let clamped = vo_min > 0.0 && drop >= sag;
+            if !clamped {
+                limit.clamped_since = None;
+                limit.last_clamped = None;
+                limit.hold.clear();
+                limit.pending = None;
+                if drop < LIMIT_KNEE_FRACTION * vout {
+                    limit.baseline_vo = Some(vo);
+                }
+                continue;
+            }
+            let sample = ClampedSample { at, vo, current: i };
+            let since = *limit.clamped_since.get_or_insert(at);
+            if let Some(prev) = limit.last_clamped.replace(sample) {
+                let high = if sample.vo >= prev.vo { sample } else { prev };
+                while limit
+                    .hold
+                    .back()
+                    .is_some_and(|(_, back)| back.vo <= high.vo)
+                {
+                    limit.hold.pop_back();
+                }
+                limit.hold.push_back((at, high));
+                let cutoff = at.as_ps().saturating_sub(LIMIT_HOLD_PS);
+                while limit
+                    .hold
+                    .front()
+                    .is_some_and(|(to, _)| to.as_ps() <= cutoff)
+                {
+                    limit.hold.pop_front();
+                }
+            }
+            let held = (at.as_ps() - since.as_ps() >= LIMIT_HOLD_PS)
+                .then(|| limit.hold.front().map(|(_, s)| *s))
+                .flatten();
+            if let Some(excursion) = &mut limit.excursion {
+                if let Some(peak) = held
+                    && peak.vo < excursion.voltage
+                {
+                    excursion.voltage = peak.vo;
+                    excursion.current = peak.current;
+                    excursion.peak_at = peak.at;
+                }
+                continue;
+            }
+            let pulled = limit.baseline_vo.is_some_and(|before| before - vo >= sag);
+            let warn = if self.timing == Timing::Point {
+                true
+            } else if let Some(pending) = &mut limit.pending {
+                if pulled {
+                    let since = *pending.pulled_since.get_or_insert(at);
+                    at.as_ps() - since.as_ps() >= LIMIT_HOLD_PS
+                } else {
+                    pending.pulled_since = None;
+                    let dt_ps = at.as_ps() - pending.progress_at.as_ps();
+                    if dt_ps >= STALL_PS {
+                        if vo - pending.progress_vo
+                            >= MIN_CHARGE_RATE * drop * (dt_ps as f64 * 1e-12)
+                        {
+                            pending.progress_vo = vo;
+                            pending.progress_at = at;
+                            false
+                        } else {
+                            true
+                        }
+                    } else {
+                        false
+                    }
+                }
+            } else {
+                limit.pending = Some(PendingLimit {
+                    first: at,
+                    over_ps: self.timing.over_ps(),
+                    pulled_since: pulled.then_some(at),
+                    progress_vo: vo,
+                    progress_at: at,
+                });
+                false
+            };
+            if warn {
+                let (first, over_ps) = match limit.pending.take() {
+                    Some(pending) => (pending.first, pending.over_ps),
+                    None => (at, self.timing.over_ps()),
+                };
+                let peak = held.unwrap_or(sample);
+                limit.excursion = Some(CurrentLimitExcursion {
+                    pin: limit.pin.clone(),
+                    limit: limit.reg.current_limit.si.get(),
+                    target: vout,
+                    voltage: peak.vo,
+                    current: peak.current,
+                    peak_at: peak.at,
+                    first,
+                    over_ps,
+                });
+            }
+        }
+        for drive in &mut self.drives {
+            let volts = row[drive.column].get().abs();
+            let loud = volts >= DRIVE_QUIET_V;
+            let ended = !loud && drive.peak >= DRIVE_QUIET_V;
+            if loud {
+                drive.pulse_from.get_or_insert(self.last.unwrap_or(at));
+                drive.loud_at = Some(at);
+                if volts > drive.peak {
+                    drive.peak = volts;
+                    if exceeds_rounded(volts, drive.max_rounded) {
+                        judge_drive(drive, at, self.timing.over_ps());
+                    }
+                }
+            } else if ended {
+                judge_drive(drive, at, self.timing.over_ps());
+            }
+            // A pulse that ends counts to its last loud sample. The quiet sample after it can
+            // come a whole step later.
+            let through = if loud { Some(at) } else { drive.loud_at };
+            if drive.over
+                && (loud || ended)
+                && let Some(through) = through
+            {
+                if let Some(over_ps) = drive.excursion.as_mut().and_then(|e| e.over_ps.as_mut()) {
+                    *over_ps += through.as_ps().saturating_sub(drive.counted_to.as_ps());
+                }
+                drive.counted_to = drive.counted_to.max(through);
+            }
+            if !loud {
+                drive.peak = 0.0;
+                drive.pulse_from = None;
+                let rested = drive
+                    .loud_at
+                    .is_none_or(|loud_at| at.as_ps() - loud_at.as_ps() > DRIVE_REST_PS);
+                if rested {
+                    drive.over = false;
+                }
+            }
+        }
         self.last = Some(at);
         self.restarted = false;
     }
 
-    /// One `rating.*` diagnostic per quantity that went over, through the last sample.
+    /// One `rating.*` diagnostic per quantity that went over, plus one `regulator.current_limit`
+    /// per regulator held at its current limit, through the last sample.
     pub(crate) fn findings(&self) -> Vec<Diagnostic> {
         let currents = self.watches.iter().filter_map(|watch| {
             let excursion = watch.excursion.clone()?;
@@ -569,7 +914,19 @@ impl Ratings {
             .windows
             .iter()
             .filter_map(|window| Some(Diagnostic::RatingVoltage(window.excursion.clone()?)));
-        currents.chain(voltages).collect()
+        let limits = self
+            .limits
+            .iter()
+            .filter_map(|limit| Some(Diagnostic::RegulatorCurrentLimit(limit.excursion.clone()?)));
+        let drives = self
+            .drives
+            .iter()
+            .filter_map(|drive| Some(Diagnostic::RatingVoltage(drive.excursion.clone()?)));
+        currents
+            .chain(voltages)
+            .chain(limits)
+            .chain(drives)
+            .collect()
     }
 
     /// Each sustained rating with no peak limit over now, through the last sample: that sample
@@ -580,14 +937,13 @@ impl Ratings {
     /// once past the surge, and the power filter warns when the heat crosses.
     fn over_now(&self) -> impl Iterator<Item = Diagnostic> + '_ {
         self.watches.iter().filter_map(|watch| {
-            if watch.kind == RatingKind::Power && watch.surge {
-                return None;
-            }
             let heat = watch.heat.as_ref()?;
             let recent = heat.recent.as_ref()?;
             let since = watch.since?;
             let at = self.last?;
-            if watch.excursion.is_some() || !exceeds(recent.since_origin(), watch.limit) {
+            if watch.excursion.is_some()
+                || !exceeds_rounded(recent.since_origin(), watch.limit_rounded)
+            {
                 return None;
             }
             let held = heat.filter.held_ps(watch.limit)?;
@@ -646,7 +1002,7 @@ fn watch(
     read: Read,
     rating: &Rating,
     default: Basis,
-    surge: bool,
+    early: bool,
 ) {
     let peak = rating.peak.map(Finite::get);
     let basis = rating.basis.unwrap_or(default);
@@ -656,19 +1012,10 @@ fn watch(
         read,
         rating.si.get(),
         basis,
-        peak.is_none(),
-        surge,
+        early && peak.is_none(),
     ));
     if let Some(peak) = peak {
-        watches.push(Watch::new(
-            kind,
-            quantity,
-            read,
-            peak,
-            Basis::Peak,
-            false,
-            surge,
-        ));
+        watches.push(Watch::new(kind, quantity, read, peak, Basis::Peak, false));
     }
 }
 
@@ -681,7 +1028,6 @@ impl Watch {
         limit: f64,
         basis: Basis,
         early: bool,
-        surge: bool,
     ) -> Watch {
         Watch {
             kind,
@@ -701,7 +1047,6 @@ impl Watch {
             excursion: None,
             last: 0.0,
             since: None,
-            surge,
         }
     }
 
@@ -840,6 +1185,7 @@ impl Pin {
             high: output.high,
             low: output.low,
             pull_up: output.pull_up,
+            strong_pull_up: output.strong_pull_up,
             pull_down: output.pull_down,
             leakage: output.leakage,
         }
@@ -875,8 +1221,13 @@ impl Gauge {
                 Drive::High => from_vcc += (vcc - pin.high.drop - vp) / pin.high.resistance,
                 Drive::Low => into_gnd += (vp - gnd - pin.low.drop) / pin.low.resistance,
                 Drive::PullUp => {
-                    from_vcc +=
-                        (vcc - vp) / pin.pull_up.expect("a pull-up drive on a pin that has one");
+                    let ohm = if core.pulls_up_strong(n) {
+                        pin.strong_pull_up
+                            .expect("a strong pull-up drive on a pin that has one")
+                    } else {
+                        pin.pull_up.expect("a pull-up drive on a pin that has one")
+                    };
+                    from_vcc += (vcc - vp) / ohm;
                 }
                 Drive::Off => {}
             }
@@ -1017,7 +1368,6 @@ mod tests {
             ratings.watches[0].limit,
             sustained(average),
             true,
-            false,
         );
         (ratings, columns)
     }
@@ -1660,6 +2010,74 @@ mod tests {
                 .iter()
                 .any(|d| matches!(d, Diagnostic::RatingPower(_))),
             "a held overload warns on the filter: {found:?}"
+        );
+    }
+
+    #[test]
+    fn voltage_window_compares_after_rounding_to_three_significant_digits() {
+        let netlist = crate::netlist::parse(
+            br#"{
+          "version": 1,
+          "seed": 0,
+          "analysis": { "op": {} },
+          "ground": "gnd",
+          "nets": ["gnd", "vin", "vout"],
+          "parts": [{
+            "name": "u1",
+            "kind": "linear_regulator",
+            "pins": { "in": "vin", "out": "vout", "gnd": "gnd" },
+            "output_voltage": { "value": 3.3, "unit": "V" },
+            "output_resistance": { "value": 0.1, "unit": "ohm" },
+            "dropout_voltage": { "value": 0.2, "unit": "V" },
+            "dropout_resistance": { "value": 1.0, "unit": "ohm" },
+            "current_limit": { "value": 1.0, "unit": "A" },
+            "quiescent_current": { "value": 1e-4, "unit": "A" },
+            "ground_current_ratio": { "value": 0.0, "unit": "1" },
+            "line_regulation": { "value": 0.0, "unit": "1" },
+            "ratings": {
+              "current": null,
+              "power": null,
+              "input_voltage": { "value": 3.600019, "unit": "V" }
+            }
+          }]
+        }"#,
+        )
+        .unwrap();
+        let columns = Columns::new(&netlist);
+        let row_vin = |volts: f64| {
+            let mut row = vec![Finite::new(0.0).unwrap(); columns.refs().len()];
+            row[columns.index(&"#net.vin".parse().unwrap()).unwrap()] = Finite::new(volts).unwrap();
+            row
+        };
+
+        // 3.604 V rounds to 3.6 V, same as the 3.600019 V ceiling: stays quiet.
+        // -0.3004 V rounds to -0.3 V, same as the -0.3 V floor: stays quiet.
+        let mut quiet = Ratings::new(&netlist, &[], &columns, Timing::Point);
+        quiet.sample(Time::ZERO, &row_vin(3.604), &[]);
+        quiet.sample(Time::ZERO, &row_vin(-0.3004), &[]);
+        assert!(quiet.findings().is_empty(), "{:?}", quiet.findings());
+
+        // 3.606 V rounds to 3.61 V > 3.6 V: warns, with unrounded data and rounded message.
+        let mut over = Ratings::new(&netlist, &[], &columns, Timing::Point);
+        over.sample(Time::ZERO, &row_vin(3.606), &[]);
+        let found = over.findings();
+        assert_eq!(found.len(), 1, "{found:?}");
+        let json = serde_json::to_value(&found[0]).unwrap();
+        assert_eq!(
+            json["message"],
+            "#u1.pin.in reaches 3.61 V over the chip's ground, outside its -0.3 V to 3.6 V rating"
+        );
+        assert_eq!(json["data"]["peak"], 3.606);
+        assert_eq!(json["data"]["high"], 3.600019);
+
+        // -0.301 V rounds to -0.301 V < -0.3 V: warns below floor.
+        let mut under = Ratings::new(&netlist, &[], &columns, Timing::Point);
+        under.sample(Time::ZERO, &row_vin(-0.301), &[]);
+        let found = under.findings();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(
+            serde_json::to_value(&found[0]).unwrap()["message"],
+            "#u1.pin.in reaches -0.301 V over the chip's ground, outside its -0.3 V to 3.6 V rating"
         );
     }
 }

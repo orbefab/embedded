@@ -277,7 +277,7 @@ fn a_required_blob_param_is_read_at_its_example() {
 #[test]
 fn the_catalog_esp32s3_parts_build_with_the_rom_and_the_app_examples() {
     let registry = build(&repo()).unwrap();
-    let chip = record(&registry.output, "esp32s3-qfn56@0.2.0");
+    let chip = record(&registry.output, "esp32s3-qfn56@0.2.1");
     let paths: Vec<&str> = chip["files"]
         .as_array()
         .unwrap()
@@ -294,7 +294,7 @@ fn the_catalog_esp32s3_parts_build_with_the_rom_and_the_app_examples() {
     assert!(paths.contains(&"hello_world.bin"), "{paths:?}");
     assert!(paths.contains(&"partition-table.bin"), "{paths:?}");
     for (id, version) in [
-        ("esp32s3-wroom-1-n16r8", "0.2.0"),
+        ("esp32s3-wroom-1-n16r8", "0.2.1"),
         ("esp32s3-devkitc-1", "0.2.1"),
     ] {
         let item = record(&registry.output, &format!("{id}@{version}"));

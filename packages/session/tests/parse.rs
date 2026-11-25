@@ -99,6 +99,15 @@ fn each_condition_form_parses() {
         Condition::parse(&words("no diagnostics")).unwrap(),
         Condition::NoDiagnostics
     );
+    assert_eq!(
+        Condition::parse(&[
+            "diagnostics".into(),
+            "contains".into(),
+            "config_in_normal".into()
+        ])
+        .unwrap(),
+        Condition::DiagnosticContains(Needle::parse("config_in_normal").unwrap())
+    );
 }
 
 #[test]
@@ -133,7 +142,10 @@ fn a_colour_is_rgb_with_or_without_spaces_and_prints_without() {
 #[test]
 fn a_bad_condition_says_what_to_write() {
     for (text, says) in [
-        ("@led1 bright", "use lit, dim, off, high, low or a colour"),
+        (
+            "@led1 bright",
+            "use lit, dim, off, closed, open, high, low or a colour",
+        ),
         ("@led1 rgb(256,0,0)", "red, green and blue from 0 to 255"),
         ("@led1 rgb(1,2)", "red, green and blue from 0 to 255"),
         ("@led1 #ff0000", "not a state"),
@@ -265,7 +277,7 @@ fn a_bad_line_names_the_command_and_its_usage() {
         ),
         (
             "set lite 50",
-            "`lite` is not a world quantity; the quantities are temperature, humidity, light",
+            "`lite` is not a world quantity; the quantities are temperature, humidity, light, pressure",
         ),
         (
             "set light 200000",

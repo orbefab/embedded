@@ -12,29 +12,7 @@ use live::{common, failed, orbe, project, replies, replies_in};
 /// Every Block's tests pass where it sits in the repo, reading the `parts/` beside `blocks/`.
 #[test]
 fn each_block_passes() {
-    let mut ids: Vec<String> = fs::read_dir(common::repo().join("blocks"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .filter(|path| path.is_dir())
-        .map(|path| path.file_name().unwrap().to_str().unwrap().to_string())
-        .collect();
-    ids.sort();
-    assert_eq!(
-        ids,
-        [
-            "devkitc-button-led",
-            "nano-7seg-count",
-            "nano-button-led",
-            "nano-led-fade",
-            "nano-light-comparator",
-            "nano-neopixel-stick",
-            "nano-oled",
-            "nano-servo-sweep",
-            "nano-shift-leds",
-            "uno-button-led",
-        ]
-    );
-    for id in &ids {
+    for id in common::block_ids() {
         let run = orbe(&common::repo(), &["test", &format!("blocks/{id}")]);
         assert!(
             run.stdout.ends_with("1 passed, 0 failed\n"),
@@ -67,7 +45,7 @@ fn board_alone(board: &str, wires: &str, test: &str) -> tempfile::TempDir {
 )]
 fn an_uno_simulates_about_as_fast_as_a_nano() {
     let fastest = |board: &str| {
-        let dir = board_alone(board, "", "open\nstep 50ms\n");
+        let dir = board_alone(board, "", "open\nstep 50ms\nexpect @b.5V high\n");
         (0..3)
             .map(|_| {
                 let started = std::time::Instant::now();
@@ -127,7 +105,7 @@ fn a_reversed_adapter_on_nano_vin_warns_unless_a_series_diode_holds_it() {
             "",
             r#"["jack.center", "nano.GND"], ["jack.sleeve", "nano.VIN"]"#,
         ),
-        "open\nstep 20ms\nsnapshot\nget @nano.VIN\n",
+        "open\nstep 20ms\nsnapshot\nget @nano.VIN\nexpect @nano.VIN < 0V\n",
     );
     assert_eq!(bare.code, 0, "{}{}", bare.stdout, bare.stderr);
     assert!(bare.stdout.contains("nano.VIN -9"), "{}", bare.stdout);
@@ -207,10 +185,36 @@ fn the_nano_3v3_pin_follows_the_ch340g_and_warns_past_its_rating() {
     let v = labeled(&light.stdout, "nano.3V3");
     assert!((v - 3.3).abs() < 0.05, "3V3 {v}\n{}", light.stdout);
 
-    let heavy = run_scene("10", "open\nstep 10ms\nget @nano.3V3\n");
+    // 115 ohm draws ~28.5 mA, just under the CH340G's 30 mA limit: no warning.
+    let just_under = run_scene(
+        "115",
+        "open\nstep 10ms\nget @nano.3V3\nexpect no diagnostics\n",
+    );
+    assert_eq!(
+        just_under.code, 0,
+        "{}{}",
+        just_under.stdout, just_under.stderr
+    );
+    let v = labeled(&just_under.stdout, "nano.3V3");
+    assert!((v - 3.27).abs() < 0.05, "3V3 {v}\n{}", just_under.stdout);
+
+    let heavy = run_scene(
+        "10",
+        "open\nstep 10ms\nget @nano.3V3\nexpect @nano.3V3 < 5V\n",
+    );
     assert_eq!(heavy.code, 0, "{}{}", heavy.stdout, heavy.stderr);
     assert!(
         heavy.stdout.contains("warning[rating.current]"),
+        "{}",
+        heavy.stdout
+    );
+    assert!(
+        heavy.stdout.contains("warning[regulator.current_limit]"),
+        "{}",
+        heavy.stdout
+    );
+    assert!(
+        heavy.stdout.contains("nano.3V3") && heavy.stdout.contains("30 mA"),
         "{}",
         heavy.stdout
     );
@@ -220,7 +224,62 @@ fn the_nano_3v3_pin_follows_the_ch340g_and_warns_past_its_rating() {
         heavy.stdout
     );
 
-    let dead = project("open\nstep 10ms\nget @nano.3V3\n");
+    // Power-on charging of the Nano's 3V3 decoupling cap (c_usb_a = 100 nF) from 0 V takes ~11 us
+    // at 30 mA and must not raise regulator.current_limit.
+    let power_on = project("open\nstep 10ms\nget @nano.3V3\nsnapshot\nexpect @nano.3V3 > 3.2V\n");
+    fs::write(power_on.path().join("scene.jsonc"), scene("3300")).unwrap();
+    let nano_part = power_on.path().join("parts/nano-board/part.jsonc");
+    let nano_text = fs::read_to_string(&nano_part).unwrap();
+    let needle = r#""c_usb_a": { "type": "capacitor-0603","#;
+    assert!(nano_text.contains(needle), "{nano_text}");
+    fs::write(
+        &nano_part,
+        nano_text.replace(
+            needle,
+            r#""c_usb_a": { "type": "capacitor-0603", "initial": "0","#,
+        ),
+    )
+    .unwrap();
+    let startup = orbe(power_on.path(), &["test", "-v"]);
+    assert_eq!(startup.code, 0, "{}{}", startup.stdout, startup.stderr);
+    assert!(
+        !startup.stdout.contains("regulator.current_limit"),
+        "{}",
+        startup.stdout
+    );
+
+    // Charging a 10 uF bypass capacitor on the Nano's 5V rail from 0 V through the onboard
+    // AMS1117 (powered from VIN = 9 V) takes ~17 us and stays free of regulator.current_limit.
+    let vin_startup = project("open\nstep 10ms\nget @nano.5V\nsnapshot\nexpect @nano.5V high\n");
+    fs::write(
+        vin_startup.path().join("scene.jsonc"),
+        r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "build/button.ino.hex" },
+    "jack": { "type": "barrel-jack-dc21", "voltage": 9 },
+    "c_bypass": { "type": "capacitor-tantalum-3216", "capacitance": "10u", "initial": "0" }
+  },
+  "wires": [
+    ["jack.center", "nano.VIN"], ["jack.sleeve", "nano.GND"],
+    ["c_bypass.pos", "nano.5V"], ["c_bypass.neg", "nano.GND"]
+  ]
+}"#,
+    )
+    .unwrap();
+    let vin_power_on = orbe(vin_startup.path(), &["test", "-v"]);
+    assert_eq!(
+        vin_power_on.code, 0,
+        "{}{}",
+        vin_power_on.stdout, vin_power_on.stderr
+    );
+    assert!(
+        !vin_power_on.stdout.contains("regulator.current_limit"),
+        "{}",
+        vin_power_on.stdout
+    );
+
+    let dead = project("open\nstep 10ms\nget @nano.3V3\nexpect @nano.3V3 < 1V\n");
     fs::write(dead.path().join("scene.jsonc"), scene("3300")).unwrap();
     let usb = dead
         .path()
@@ -279,7 +338,7 @@ fn a_tantalum_on_nano_vin_stays_quiet_near_zero_and_warns_when_reversed() {
         )
     };
     let run_scene = |text: &str| {
-        let dir = project("open\nstep 20ms\nget @nano.VIN\nget @c1.v\n");
+        let dir = project("open\nstep 20ms\nget @nano.VIN\nget @c1.v\nexpect @nano.5V high\n");
         fs::write(dir.path().join("scene.jsonc"), text).unwrap();
         orbe(dir.path(), &["test", "-v"])
     };
@@ -417,8 +476,9 @@ fn an_overload_that_starts_mid_run_is_over_now_before_its_window_warns() {
 
 #[test]
 fn the_first_target_reads_the_engine_values_while_pressed() {
-    let dir =
-        project("open\nstep 50ms\npress @btn1\nstep 50ms\nget @nano.D13\nget @led1\nget @led1.i\n");
+    let dir = project(
+        "open\nstep 50ms\npress @btn1\nstep 50ms\nget @nano.D13\nget @led1\nget @led1.i\nexpect @led1 lit\n",
+    );
     let run = orbe(dir.path(), &["test", "-v"]);
     assert_eq!(run.code, 0, "{}", run.stdout);
     assert!(
@@ -613,7 +673,7 @@ fn each_command_replies_in_text() {
     assert_eq!(block(11)[..2], ["13> close", "  closed at t=154ms"]);
     assert_eq!(
         run.stdout.lines().rev().take(2).collect::<Vec<_>>(),
-        ["1 passed, 0 failed", "PASS tests/a.test"]
+        ["1 passed, 0 failed", "PASS tests/a.test (scene.jsonc)"]
     );
 }
 
@@ -743,7 +803,10 @@ fn a_failing_test_reports_its_line_with_expected_and_actual() {
     let run = orbe(dir.path(), &["test"]);
     assert_eq!(run.code, 1);
     let lines: Vec<&str> = run.stdout.lines().collect();
-    assert_eq!(lines[0], "FAIL tests/a.test:3: expect @led1 lit");
+    assert_eq!(
+        lines[0],
+        "FAIL tests/a.test:3 (scene.jsonc): expect @led1 lit"
+    );
     assert_eq!(
         lines[1],
         "  error[expect_failed]: expected @led1 lit at t=10ms"
@@ -959,8 +1022,9 @@ fn test_paths_name_files_or_project_folders() {
     let run = orbe(dir.path(), &["test"]);
     assert_eq!(run.code, 1);
     assert!(
-        run.stdout
-            .starts_with("PASS tests/a.test\nFAIL tests/b.test:2: expect @led1 lit\n"),
+        run.stdout.starts_with(
+            "PASS tests/a.test (scene.jsonc)\nFAIL tests/b.test:2 (scene.jsonc): expect @led1 lit\n"
+        ),
         "{}",
         run.stdout
     );
@@ -969,7 +1033,7 @@ fn test_paths_name_files_or_project_folders() {
     let run = orbe(dir.path(), &["test", "tests/a.test"]);
     assert_eq!(
         (run.code, run.stdout.as_str()),
-        (0, "PASS tests/a.test\n1 passed, 0 failed\n")
+        (0, "PASS tests/a.test (scene.jsonc)\n1 passed, 0 failed\n")
     );
 
     let run = orbe(dir.path(), &["test", "nowhere"]);
@@ -1063,7 +1127,7 @@ expect @ldr.v > 4.7V    # the dark: 1 Mohm, 4.715 V
 
     fs::write(
         dir.path().join("tests/light.test"),
-        "open\nstep 1ms\nset light 80\n",
+        "open\nstep 1ms\nset light 80\nexpect @ldr.v > 0V\n",
     )
     .unwrap();
     let json = live::replies_in(&dir);
@@ -1089,7 +1153,7 @@ expect @ldr.v > 4.7V    # the dark: 1 Mohm, 4.715 V
 
     fs::write(
         dir.path().join("tests/light.test"),
-        "open\nstep 25ms\nset light 50\n",
+        "open\nstep 25ms\nset light 50\nexpect @ldr.v > 0V\n",
     )
     .unwrap();
     let json = live::replies_in(&dir);
@@ -1138,6 +1202,7 @@ get light
 step 21ms
 get light
 get @world.light
+expect @ldr.v > 0V
 ",
     )
     .unwrap();
@@ -1361,12 +1426,153 @@ expect no diagnostics
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
 }
 
+fn bmp_scene(dir: &std::path::Path, extra_parts: &str, wires: &str) {
+    fs::copy(
+        common::repo().join("packages/engine/tests/firmware/sketch/bmp280.hex"),
+        dir.join("build/bmp280.ino.hex"),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("scene.jsonc"),
+        format!(
+            r#"{{
+  "format": 1,
+  "parts": {{
+    "nano": {{ "type": "nano-board", "firmware": "build/bmp280.ino.hex" }},
+    {extra_parts}
+    "mod": {{ "type": "gy-bmp280" }}
+  }},
+  "wires": [{wires}]
+}}"#
+        ),
+    )
+    .unwrap();
+}
+
+/// A transcript that reads one temperature and one pressure, expects the stock sketch's
+/// `config_in_normal` warning, then prints what else warned.
+const BMP_READS: &str = "open\nstep 1ms\nset temperature 20\nset pressure 101325\n\
+step --until serial contains \" Pa\" --timeout 2s\n\
+expect serial contains \"Temperature = 20.00\"\n\
+expect serial contains \"Pressure = 101325.02\"\n\
+expect diagnostics contains \"warning[chip.protocol]\"\n\
+expect diagnostics contains \"config_in_normal\"\nsnapshot\n";
+
+/// Powering the 3.3 V module from the Nano's 5V pin is past Table 3. The sensor still reads,
+/// and the run warns on VDD past 4.25 V.
+#[test]
+fn a_bmp280_on_5v_still_reads_and_warns_it_is_past_the_sheet() {
+    let dir = project(BMP_READS);
+    bmp_scene(
+        dir.path(),
+        "",
+        r#"["nano.5V", "mod.VCC"], ["nano.GND", "mod.GND"], ["nano.A4", "mod.SDA"], ["nano.A5", "mod.SCL"]"#,
+    );
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            .contains("warning[rating.voltage] #mod__u.pin.VDD")
+            && run.stdout.contains("4.25 V rating"),
+        "{}",
+        run.stdout
+    );
+}
+
+/// The module on the Nano's 3V3 with SDA and SCL straight to A4 and A5, no level shifter.
+/// The Nano's 5 V pull-ups lift both lines past VDDIO + 0.3 V. The sensor still reads, and the
+/// run warns on both pins.
+#[test]
+fn a_bmp280_on_the_nano_s_5_v_i2c_lines_reads_and_warns_on_sda_and_scl() {
+    let dir = project(BMP_READS);
+    bmp_scene(
+        dir.path(),
+        "",
+        r#"["nano.3V3", "mod.VCC"], ["nano.GND", "mod.GND"], ["nano.A4", "mod.SDA"], ["nano.A5", "mod.SCL"]"#,
+    );
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    for pin in ["SDI (mod.SDA)", "SCK (mod.SCL)"] {
+        assert!(
+            run.stdout.contains(&format!(
+                "warning[rating.voltage] #mod__u.pin.{pin} reaches"
+            )),
+            "{pin}: {}",
+            run.stdout
+        );
+    }
+    assert!(!run.stdout.contains("pin.VDD"), "{}", run.stdout);
+}
+
+/// An open VCC leaves the BMP280 off. The module's pull-ups then tie SDA and SCL to its dead
+/// rail: once the Nano pulls SDA low, SCL sits near 1.7 V, under the Nano's input high, and
+/// Wire waits on it. The sketch prints its banner and never a reading.
+#[test]
+fn an_unpowered_bmp280_holds_the_bus_and_the_sketch_never_reads() {
+    let dir = project(
+        "open\nstep 500ms\nexpect serial contains \"BMP280 test\"\nexpect @mod.VCC < 1.71V\nexpect @mod.SCL < 2V\nsnapshot\n",
+    );
+    bmp_scene(
+        dir.path(),
+        "",
+        r#"["nano.GND", "mod.GND"], ["nano.A4", "mod.SDA"], ["nano.A5", "mod.SCL"]"#,
+    );
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!run.stdout.contains("Temperature ="), "{}", run.stdout);
+    assert!(!run.stdout.contains("config_in_normal"), "{}", run.stdout);
+}
+
+/// `set pressure 30000` then `set pressure 101325` before time moves drops the pending step.
+/// The same for temperature. The value a read sees never changed.
+#[test]
+fn set_pressure_back_before_time_moves_keeps_the_value_in_force() {
+    let dir = project(
+        "open\nset pressure 30000\nset pressure 101325\nset temperature 0\nset temperature 25\nexpect no diagnostics\n",
+    );
+    fs::copy(
+        common::repo().join("blocks/devkitc-gy-bmp280/scene.jsonc"),
+        dir.path().join("scene.jsonc"),
+    )
+    .unwrap();
+    fs::copy(
+        common::repo().join("blocks/devkitc-gy-bmp280/build/bmp280.ino.bin"),
+        dir.path().join("build/bmp280.ino.bin"),
+    )
+    .unwrap();
+    fs::copy(
+        common::repo().join("blocks/devkitc-gy-bmp280/build/bmp280.ino.partitions.bin"),
+        dir.path().join("build/bmp280.ino.partitions.bin"),
+    )
+    .unwrap();
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("set pressure to 30000 Pa at t=1ps"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .contains("pressure is already 101325 Pa; dropped 1 later scheduled step of pressure"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains(
+            "temperature is already 25 degC; dropped 1 later scheduled step of temperature"
+        ),
+        "{}",
+        run.stdout
+    );
+}
+
 #[test]
 fn a_set_the_table_refuses_is_a_usage_error() {
     for (line, message) in [
         (
             "set lite 50",
-            "`lite` is not a world quantity; the quantities are temperature, humidity, light; usage: set <quantity> <value> | set <ref> <value>",
+            "`lite` is not a world quantity; the quantities are temperature, humidity, light, pressure; usage: set <quantity> <value> | set <ref> <value>",
         ),
         (
             "set light 200000",
@@ -1385,4 +1591,101 @@ fn a_set_the_table_refuses_is_a_usage_error() {
         assert_eq!(error["code"], "usage", "{line}");
         assert_eq!(error["message"], message, "{line}");
     }
+}
+
+#[test]
+fn nano_lcd1602_i2c_reads_and_checks_text_and_backlight() {
+    let dir = tempfile::tempdir().unwrap();
+    common::copy_dir(&common::repo().join("blocks/nano-lcd1602-i2c"), dir.path());
+    fs::remove_file(dir.path().join("block.jsonc")).unwrap();
+    std::os::unix::fs::symlink(common::repo().join("parts"), dir.path().join("parts")).unwrap();
+    fs::write(
+        dir.path().join("tests/hello.test"),
+        "\
+open
+step 1200ms
+get @lcd.text
+get @lcd.backlight
+get @lcd
+expect @lcd.backlight lit
+expect @lcd.text line 0 \"Hello\"
+expect @lcd.text line 1 \"orbe 16x2 LCD\"
+expect @lcd.text contains \"orbe\"
+expect no diagnostics
+",
+    )
+    .unwrap();
+
+    let run = orbe(dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.stdout.contains("Hello"), "{}", run.stdout);
+    assert!(run.stdout.contains("orbe 16x2 LCD"), "{}", run.stdout);
+    assert!(run.stdout.contains("lcd.backlight lit"), "{}", run.stdout);
+
+    let json = replies_in(&dir);
+    assert_eq!(json[2]["data"]["kind"], "text");
+    assert_eq!(json[2]["data"]["value"]["on"], true);
+    assert_eq!(json[2]["data"]["value"]["backlight"], true);
+    assert_eq!(json[2]["data"]["value"]["lines"][0], "Hello           ");
+    assert_eq!(json[2]["data"]["value"]["lines"][1], "orbe 16x2 LCD   ");
+    assert_eq!(json[3]["data"]["kind"], "backlight");
+    assert_eq!(json[3]["data"]["value"]["state"], "lit");
+    assert_eq!(json[4]["data"]["ref"], "@lcd");
+    assert_eq!(json[4]["data"]["kind"], json[2]["data"]["kind"]);
+    assert_eq!(json[4]["data"]["value"], json[2]["data"]["value"]);
+}
+
+#[test]
+fn get_on_servo_and_oled_reads_their_part_readings() {
+    // SG90 servo: `get @servo` reports its angle in text and JSON, matching `@servo.angle`.
+    let servo_dir = tempfile::tempdir().unwrap();
+    common::copy_dir(
+        &common::repo().join("blocks/nano-servo-sweep"),
+        servo_dir.path(),
+    );
+    fs::remove_file(servo_dir.path().join("block.jsonc")).unwrap();
+    std::os::unix::fs::symlink(common::repo().join("parts"), servo_dir.path().join("parts"))
+        .unwrap();
+    fs::write(
+        servo_dir.path().join("tests/sweep.test"),
+        "open\nstep 250ms\nget @servo\nget @servo.angle\nsnapshot\nexpect no diagnostics\n",
+    )
+    .unwrap();
+    let run = orbe(servo_dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(run.stdout.contains("servo angle="), "{}", run.stdout);
+    let json = replies_in(&servo_dir);
+    assert_eq!(json[2]["data"]["ref"], "@servo");
+    assert_eq!(json[2]["data"]["kind"], "part");
+    assert_eq!(json[2]["data"]["value"]["angle"], json[3]["data"]["value"]);
+    assert_eq!(
+        json[4]["data"]["parts"][2]["value"]["angle"],
+        json[3]["data"]["value"]
+    );
+
+    // SSD1306 OLED module: `get @oled` matches `get @oled.display.screen` in text and JSON.
+    let oled_dir = tempfile::tempdir().unwrap();
+    common::copy_dir(&common::repo().join("blocks/nano-oled"), oled_dir.path());
+    fs::remove_file(oled_dir.path().join("block.jsonc")).unwrap();
+    std::os::unix::fs::symlink(common::repo().join("parts"), oled_dir.path().join("parts"))
+        .unwrap();
+    fs::write(
+        oled_dir.path().join("tests/hello.test"),
+        "open\nstep 200ms\nget @oled\nget @oled.display.screen\nget @oled.display\nexpect no diagnostics\n",
+    )
+    .unwrap();
+    let run = orbe(oled_dir.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout.contains("oled ssd1306 128x64 on,"),
+        "{}",
+        run.stdout
+    );
+    let json = replies_in(&oled_dir);
+    assert_eq!(json[2]["data"]["ref"], "@oled");
+    assert_eq!(json[2]["data"]["kind"], "screen");
+    assert_eq!(json[2]["data"]["value"], json[3]["data"]["value"]);
+    assert_eq!(json[4]["data"]["ref"], "@oled.display");
+    assert_eq!(json[4]["data"]["kind"], "screen");
+    assert_eq!(json[4]["data"]["value"], json[3]["data"]["value"]);
 }

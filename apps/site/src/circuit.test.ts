@@ -25,8 +25,6 @@ function partItem(name: string, record: Partial<PartRecord> = {}): Item<PartReco
       ...record,
       name,
     },
-    versions: ["0.1.0"],
-    usedBy: [],
   };
 }
 
@@ -49,8 +47,6 @@ function blockItem(name: string, board: string, extra: readonly FileEntry[] = []
         files: [sceneFile, ...extra],
         hash: "h",
       },
-      versions: ["0.1.0"],
-      usedBy: [],
     },
   };
 }
@@ -111,8 +107,6 @@ describe("readCatalogUse", () => {
         files: [],
         hash: "h",
       },
-      versions: ["0.1.0"],
-      usedBy: [],
     };
     expect(() => readCatalogUse([item], [], {}, {})).toThrow("blink scene.jsonc is missing");
   });

@@ -19,14 +19,14 @@
   "layout": {
     "bb": { "at": [0, 0, 0] },
     "nano": { "on": { "D13": "bb.d1" } },
-    "disp": { "on": { "e": "bb.e20" } },
+    "disp": { "on": { "e": "bb.d20" } },
     "ra": { "on": { "a": "bb.j23" } }, // b in j27, segment a
-    "rb": { "on": { "a": "bb.j24" } }, // b in j28, segment b
+    "rb": { "on": { "a": "bb.i24" } }, // b in i28, segment b
     "rc": { "on": { "a": "bb.a23" } }, // b in a27, segment c
-    "rd": { "on": { "a": "bb.a21" }, "rotate": [0, 0, 180] }, // b in a17, segment d
+    "rd": { "on": { "a": "bb.b21" }, "rotate": [0, 0, 180] }, // b in b17, segment d
     "re": { "on": { "a": "bb.a20" }, "rotate": [0, 0, 180] }, // b in a16, segment e
     "rf": { "on": { "a": "bb.j21" }, "rotate": [0, 0, 180] }, // b in j17, segment f
-    "rg": { "on": { "a": "bb.j20" }, "rotate": [0, 0, 180] }, // b in j16, segment g
+    "rg": { "on": { "a": "bb.i20" }, "rotate": [0, 0, 180] }, // b in i16, segment g
   },
   "nets": { "GND": "nano.GND" },
   "wires": [
@@ -35,9 +35,9 @@
     ["bb.f27", "bb.j11"], // a to D2
     ["bb.f28", "bb.j10"], // b to D3
     ["bb.b27", "bb.j9"], // c to D4
-    ["bb.b17", "bb.j8"], // d to D5
-    ["bb.b16", "bb.j7"], // e to D6
+    ["bb.c17", "bb.j8"], // d to D5
+    ["bb.c16", "bb.j7"], // e to D6
     ["bb.f17", "bb.j6"], // f to D7
-    ["bb.f16", "bb.j5"], // g to D8
+    ["bb.j16", "bb.j5"], // g to D8
   ],
 }

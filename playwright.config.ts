@@ -1,5 +1,6 @@
-// ORBE_E2E picks the suite. Site runs the same checks on vite preview and on
-// wrangler dev --local, unless ORBE_SITE_SERVERS names one of them.
+// ORBE_E2E picks the suite. Site runs the `@vite-smoke` subset on vite preview (or
+// install.spec.ts when ORBE_SITE_INSTALL_E2E=1) and the full suite on wrangler dev --local,
+// unless ORBE_SITE_SERVERS names one of them.
 // A failed check keeps its trace in test-results/.
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
@@ -137,7 +138,13 @@ function siteSuite(): PlaywrightTestConfig {
   };
   const webServer = [...(wantVite ? [viteServer] : []), ...(wantWrangler ? [wranglerServer] : [])];
   const projects = [];
-  if (wantVite) projects.push({ name: "vite preview", use: { baseURL: SITE_VITE } });
+  if (wantVite) {
+    projects.push({
+      name: "vite preview",
+      ...(process.env.ORBE_SITE_INSTALL_E2E === "1" ? {} : { grep: /@vite-smoke/ }),
+      use: { baseURL: SITE_VITE },
+    });
+  }
   if (wantWrangler) {
     projects.push({
       name: "wrangler dev --local",

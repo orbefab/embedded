@@ -16,7 +16,9 @@ modifications.
 
 The image also holds the start-up code of the toolchain's C library, version 2.0.0, under that
 library's modified BSD license, whose notice is in LICENSE-libc as the license requires, and
-routines of the compiler's support library, under the GCC Runtime Library Exception.
+routines of GCC's runtime library (`libgcc`), under GPL-3.0-or-later with the GCC Runtime
+Library Exception 3.1, whose text is in LICENSE-gcc-exception. That exception lets the compiled
+runtime ship inside the program under the program's own terms.
 
 These files and their licences:
 
@@ -25,3 +27,5 @@ These files and their licences:
 
 `build/button.ino.hex` and `firmware/LICENSE-runtime` are under LGPL-2.1-or-later.
 `firmware/LICENSE-libc` is under BSD-3-Clause.
+`firmware/LICENSE-gcc-exception` holds the GCC Runtime Library Exception 3.1
+(GPL-3.0-or-later WITH GCC-exception-3.1).

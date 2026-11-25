@@ -1,0 +1,52 @@
+// Dividers feed GPIO1, GPIO2 and GPIO14; load resistors sit on GPIO7, GPIO8, GPIO10, GPIO15,
+// GPIO17 and GPIO21; SPI starts on its default pins. The app is the stock sketch
+// packages/engine/tests/firmware/esp32s3/arduino/stock/rtcio.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    },
+    "r1hi": { "type": "resistor-axial", "resistance": "10k" },
+    "r1lo": { "type": "resistor-axial", "resistance": "10k" },
+    "r2hi": { "type": "resistor-axial", "resistance": "20k" },
+    "r2lo": { "type": "resistor-axial", "resistance": "10k" },
+    "r14hi": { "type": "resistor-axial", "resistance": "10k" },
+    "r14lo": { "type": "resistor-axial", "resistance": "20k" },
+    "r7": { "type": "resistor-axial", "resistance": "10k" },
+    "r8": { "type": "resistor-axial", "resistance": "10k" },
+    "r10": { "type": "resistor-axial", "resistance": "10k" },
+    "r15": { "type": "resistor-axial", "resistance": "10k" },
+    "r17": { "type": "resistor-axial", "resistance": "10k" },
+    "r21": { "type": "resistor-axial", "resistance": "10k" }
+  },
+  "wires": [
+    ["board.3V3", "r1hi.a"],
+    ["r1hi.b", "board.GPIO1"],
+    ["board.GPIO1", "r1lo.a"],
+    ["r1lo.b", "board.GND"],
+    ["board.3V3", "r2hi.a"],
+    ["r2hi.b", "board.GPIO2"],
+    ["board.GPIO2", "r2lo.a"],
+    ["r2lo.b", "board.GND"],
+    ["board.3V3", "r14hi.a"],
+    ["r14hi.b", "board.GPIO14"],
+    ["board.GPIO14", "r14lo.a"],
+    ["r14lo.b", "board.GND"],
+    ["board.GPIO7", "r7.a"],
+    ["r7.b", "board.GND"],
+    ["board.GPIO8", "r8.a"],
+    ["r8.b", "board.GND"],
+    ["board.GPIO10", "r10.a"],
+    ["r10.b", "board.GND"],
+    ["board.GPIO15", "r15.a"],
+    ["r15.b", "board.GND"],
+    ["board.GPIO17", "r17.a"],
+    ["r17.b", "board.GND"],
+    ["board.GPIO21", "r21.a"],
+    ["r21.b", "board.GND"]
+  ],
+  "ground": "board.GND"
+}

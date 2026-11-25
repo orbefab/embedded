@@ -195,9 +195,13 @@ pub enum ProtocolRule {
     /// A read that came sooner than the sensor answers one: inside its warm-up after power-on,
     /// or before its minimum interval after the last read it answered.
     Interval,
-    /// A high a `Pulses` record carried, which a chain with `DOUT` would pass on. The record
-    /// lands at its end, after that high, so `DOUT` does not drive it.
-    DoutRecord,
+    /// `CSB` was low, so the part is in SPI mode and does not answer on I2C.
+    Spi,
+    /// `spi3w_en` was set. 3-wire SPI is not modelled.
+    Spi3w,
+    /// A `config` (0xF5) write arrived in normal mode and would have changed `config`, so it was
+    /// ignored (BST-BMP280-DS001 §4.3.5).
+    ConfigInNormal,
     /// The supply is up, and under 4.5 V. The shaft still moves, slower than at 4.8 V.
     Supply,
     /// The moving draw pulled an SG90's supply under 3.0 V. The shaft holds.
@@ -206,20 +210,32 @@ pub enum ProtocolRule {
     Scroll,
     /// A read transfer from a target that answers none.
     Read,
+    /// An HD44780 operation attempted in 8-bit bus mode over a 4-bit PCF8574 backpack.
+    BusWidth,
+    /// A 5×10 font selection on a 5×8 character LCD.
+    Font,
+    /// An HD44780 command or data write arrived before its power-on reset wait elapsed (15 ms
+    /// after VCC reaches 4.5 V, or 40 ms after 2.7 V).
+    InitWait,
 }
 
 impl ProtocolRule {
-    pub(crate) const ALL: [ProtocolRule; 10] = [
+    pub(crate) const ALL: [ProtocolRule; 15] = [
         ProtocolRule::Command,
         ProtocolRule::PixelFormat,
         ProtocolRule::SdaWhileSclHigh,
         ProtocolRule::Bit,
         ProtocolRule::Interval,
-        ProtocolRule::DoutRecord,
+        ProtocolRule::Spi,
+        ProtocolRule::Spi3w,
+        ProtocolRule::ConfigInNormal,
         ProtocolRule::Supply,
         ProtocolRule::SupplySag,
         ProtocolRule::Scroll,
         ProtocolRule::Read,
+        ProtocolRule::BusWidth,
+        ProtocolRule::Font,
+        ProtocolRule::InitWait,
     ];
 
     /// Its place in [`ALL`](Self::ALL).
@@ -235,11 +251,16 @@ impl ProtocolRule {
             "sda_while_scl_high" => Some(ProtocolRule::SdaWhileSclHigh),
             "bit" => Some(ProtocolRule::Bit),
             "interval" => Some(ProtocolRule::Interval),
-            "dout_record" => Some(ProtocolRule::DoutRecord),
+            "spi" => Some(ProtocolRule::Spi),
+            "spi3w" => Some(ProtocolRule::Spi3w),
+            "config_in_normal" => Some(ProtocolRule::ConfigInNormal),
             "supply" => Some(ProtocolRule::Supply),
             "supply_sag" => Some(ProtocolRule::SupplySag),
             "scroll" => Some(ProtocolRule::Scroll),
             "read" => Some(ProtocolRule::Read),
+            "bus_width" => Some(ProtocolRule::BusWidth),
+            "font" => Some(ProtocolRule::Font),
+            "init_wait" => Some(ProtocolRule::InitWait),
             _ => None,
         }
     }
@@ -381,6 +402,15 @@ pub enum Diagnostic {
     /// A chip whose CS and SCLK sit on `sender`'s nets dropped an SPI transaction whose data
     /// lanes are not on its own data pins, first at `at`.
     ChipLinkMiswired { part: Ref, at: Time, sender: Name },
+    /// A chip's `peripheral` sent a `kind` record on `pin`, whose net also reaches `other`,
+    /// which does not take that record kind on that pin. It ends the run.
+    ChipLinkUnsupported {
+        pin: Ref,
+        other: Ref,
+        at: Time,
+        peripheral: &'static str,
+        kind: LinkKind,
+    },
     /// `pin` floats at `at`: it is an input with its pull-up off, no DC path joins `net` to a
     /// supply or to ground but the chip's own leakage, and its firmware has taken in its level
     /// since it last became such an input, alone or with the rest of its port. Once per pin.
@@ -549,6 +579,16 @@ pub enum Diagnostic {
     RatingPower(Excursion),
     /// A chip pin's voltage left its rated window.
     RatingVoltage(VoltageExcursion),
+    /// A linear regulator was held at its current limit and its output sagged.
+    RegulatorCurrentLimit(CurrentLimitExcursion),
+}
+
+/// Which record kind [`Diagnostic::ChipLinkUnsupported`] could not route faithfully.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkKind {
+    Spi,
+    Pulses,
 }
 
 /// The solve that did not converge.
@@ -605,6 +645,31 @@ pub struct VoltageExcursion {
     pub first: Time,
     /// Total time outside the window. `None` for an operating point, which has no duration.
     pub over_ps: Option<u64>,
+    /// The peak is the drive across the part, and `low`/`high` are its operating window.
+    /// A chip pin's window leaves this false.
+    pub operating: bool,
+}
+
+/// One linear regulator held at its current limit with its output pulled below regulation,
+/// merged over the whole run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CurrentLimitExcursion {
+    /// `#<part>.pin.out`.
+    pub pin: Ref,
+    /// `current_limit`, in A.
+    pub limit: f64,
+    /// Nominal `output_voltage`, in V.
+    pub target: f64,
+    /// Lowest output voltage over `gnd` held for at least `LIMIT_HOLD_PS` while clamped, in V.
+    pub voltage: f64,
+    /// Pass current delivered at `peak_at`, in A.
+    pub current: f64,
+    /// When the lowest held output voltage occurred.
+    pub peak_at: Time,
+    /// First sample held at the current limit.
+    pub first: Time,
+    /// Total time held at the current limit. `None` for an operating point, which has no duration.
+    pub over_ps: Option<u64>,
 }
 
 impl Diagnostic {
@@ -637,6 +702,7 @@ impl Diagnostic {
             Diagnostic::ChipUnsettled { .. } => "chip.unsettled",
             Diagnostic::ChipProtocol { .. } => "chip.protocol",
             Diagnostic::ChipLinkMiswired { .. } => "chip.link_miswired",
+            Diagnostic::ChipLinkUnsupported { .. } => "chip.link_unsupported",
             Diagnostic::ChipFloatingInput { .. } => "chip.floating_input",
             Diagnostic::ChipUnsupportedInstruction { .. } => "chip.unsupported_instruction",
             Diagnostic::ChipUnmappedFetch { .. } => "chip.unmapped_fetch",
@@ -655,6 +721,7 @@ impl Diagnostic {
             Diagnostic::RatingCurrent(_) => "rating.current",
             Diagnostic::RatingPower(_) => "rating.power",
             Diagnostic::RatingVoltage(_) => "rating.voltage",
+            Diagnostic::RegulatorCurrentLimit(_) => "regulator.current_limit",
         }
     }
 
@@ -669,7 +736,8 @@ impl Diagnostic {
             | Diagnostic::TraceRowInterpolated { .. }
             | Diagnostic::RatingCurrent(_)
             | Diagnostic::RatingPower(_)
-            | Diagnostic::RatingVoltage(_) => Severity::Warning,
+            | Diagnostic::RatingVoltage(_)
+            | Diagnostic::RegulatorCurrentLimit(_) => Severity::Warning,
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
             | Diagnostic::NetlistName { .. }
@@ -694,6 +762,7 @@ impl Diagnostic {
             | Diagnostic::SolverStepWork { .. }
             | Diagnostic::SolverConvergence { .. }
             | Diagnostic::ChipUnsettled { .. }
+            | Diagnostic::ChipLinkUnsupported { .. }
             | Diagnostic::ChipUnsupportedInstruction { .. }
             | Diagnostic::ChipUnmappedFetch { .. }
             | Diagnostic::ChipHalted { .. }
@@ -719,6 +788,7 @@ impl Diagnostic {
             | Diagnostic::ChipUnsettled { at, .. }
             | Diagnostic::ChipProtocol { at, .. }
             | Diagnostic::ChipLinkMiswired { at, .. }
+            | Diagnostic::ChipLinkUnsupported { at, .. }
             | Diagnostic::ChipFloatingInput { at, .. }
             | Diagnostic::ChipUnsupportedInstruction { at, .. }
             | Diagnostic::ChipUnmappedFetch { at, .. }
@@ -738,6 +808,7 @@ impl Diagnostic {
                 Some(excursion.first)
             }
             Diagnostic::RatingVoltage(excursion) => Some(excursion.first),
+            Diagnostic::RegulatorCurrentLimit(excursion) => Some(excursion.first),
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
             | Diagnostic::NetlistName { .. }
@@ -779,6 +850,7 @@ impl Diagnostic {
             Diagnostic::NetlistWorld { part, .. } => part.iter().cloned().collect(),
             Diagnostic::NetFloating { net } => vec![net.clone()],
             Diagnostic::ChipFloatingInput { pin, net, .. } => vec![pin.clone(), net.clone()],
+            Diagnostic::ChipLinkUnsupported { pin, other, .. } => vec![pin.clone(), other.clone()],
             Diagnostic::NetShort { part, net } => vec![part.clone(), net.clone()],
             Diagnostic::SolverSingular { unknown, .. }
             | Diagnostic::SolverNonFinite { unknown, .. }
@@ -807,6 +879,7 @@ impl Diagnostic {
                 vec![excursion.quantity.clone()]
             }
             Diagnostic::RatingVoltage(excursion) => vec![excursion.pin.clone()],
+            Diagnostic::RegulatorCurrentLimit(excursion) => vec![excursion.pin.clone()],
         }
     }
 
@@ -1290,12 +1363,36 @@ impl Diagnostic {
             Diagnostic::ChipProtocol {
                 part,
                 at,
-                rule: ProtocolRule::DoutRecord,
+                rule: ProtocolRule::Spi,
             } => {
                 let part = namer(part);
                 format!(
-                    "{part} did not pass a high from a record on to DOUT, breaking rule {} at {} ps, the first time",
-                    rule_text(&ProtocolRule::DoutRecord),
+                    "{part} did not answer on I2C because CSB was low, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::Spi),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::Spi3w,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} was set to 3-wire SPI, which is not modelled, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::Spi3w),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::ConfigInNormal,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} ignored a write to config (0xF5) in normal mode (BST-BMP280-DS001 §4.3.5; write sleep mode to ctrl_meas 0xF4 before config), breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::ConfigInNormal),
                     at.as_ps()
                 )
             }
@@ -1347,6 +1444,42 @@ impl Diagnostic {
                     at.as_ps()
                 )
             }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::BusWidth,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} dropped an 8-bit bus operation on a 4-bit backpack, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::BusWidth),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::Font,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} does not run the 5x10 font, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::Font),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::InitWait,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} dropped a write before the HD44780U power-on reset wait elapsed (15 ms after VCC reaches 4.5 V, or 40 ms after 2.7 V), breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::InitWait),
+                    at.as_ps()
+                )
+            }
             Diagnostic::ChipProtocol { part, at, rule } => {
                 let part = namer(part);
                 format!(
@@ -1370,6 +1503,26 @@ impl Diagnostic {
                     sender.as_str(),
                     at.as_ps()
                 )
+            }
+            Diagnostic::ChipLinkUnsupported {
+                pin,
+                other,
+                at,
+                peripheral,
+                kind,
+            } => {
+                let pin = namer(pin);
+                let other = namer(other);
+                match kind {
+                    LinkKind::Spi => format!(
+                        "{pin} sent an SPI record from {peripheral} at {} ps, but its net reaches {other}, which does not take SPI records there; the model sends {peripheral} output as records rather than pin edges and runs hardware SPI only into parts that take SPI directly, so use shiftOut or bit-banged SPI instead",
+                        at.as_ps()
+                    ),
+                    LinkKind::Pulses => format!(
+                        "{pin} sent a pulse record from {peripheral} at {} ps, but its net reaches {other}, which does not take pulse records there; the model sends {peripheral} output as records rather than pin edges, so the data line must be wired straight to the pixel's data input",
+                        at.as_ps()
+                    ),
+                }
             }
             Diagnostic::ChipUnsupportedInstruction {
                 part,
@@ -1443,15 +1596,20 @@ impl Diagnostic {
                     ("CPU", Setting::Sleep) => {
                         "put the chip to sleep in a reserved sleep mode".to_string()
                     }
+                    ("RTC_CNTL", Setting::Register("pin_hold")) => {
+                        "enabled pin hold (gpio_hold_en)".to_string()
+                    }
                     (_, Setting::Transfer(setting)) => {
                         format!("started a {peripheral} transfer with setting {setting}")
                     }
                     (_, Setting::Interrupt) => format!("enabled a {peripheral} interrupt"),
                     (_, Setting::Register(setting)) => format!("set {peripheral} {setting}"),
+                    (_, Setting::Unsimulated(what)) => format!("used {peripheral}, {what},"),
                     (_, Setting::Sleep) => "put the chip to sleep".to_string(),
                 };
                 let why = match (*peripheral, *setting) {
                     (_, Setting::Interrupt) => "which the model never raises",
+                    (_, Setting::Unsimulated(_)) => "which the model does not simulate",
                     ("AC", Setting::Register("aco_read")) => {
                         "which the model works out from the logic level on each input pin, not its voltage"
                     }
@@ -1513,6 +1671,10 @@ impl Diagnostic {
                     FlashRefusal::Unsupported => (
                         format!("sent the flash {command}"),
                         "which the model does not run",
+                    ),
+                    FlashRefusal::Write => (
+                        format!("wrote the flash with {command}"),
+                        "which the model does not simulate; Wi-Fi, Bluetooth and saved settings (Preferences, EEPROM, NVS) write the flash",
                     ),
                     FlashRefusal::StatusWrite => (
                         format!("sent the flash the status write {command}"),
@@ -1675,6 +1837,7 @@ impl Diagnostic {
             Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A", namer),
             Diagnostic::RatingPower(excursion) => over_rating(excursion, "W", namer),
             Diagnostic::RatingVoltage(excursion) => outside_window(excursion, namer),
+            Diagnostic::RegulatorCurrentLimit(excursion) => regulator_limit(excursion, namer),
         }
     }
 
@@ -1817,6 +1980,11 @@ impl Diagnostic {
             Diagnostic::ChipLinkMiswired { sender, .. } => {
                 serde_json::json!({ "sender": sender.as_str() })
             }
+            Diagnostic::ChipLinkUnsupported {
+                peripheral, kind, ..
+            } => {
+                serde_json::json!({ "kind": kind, "peripheral": peripheral })
+            }
             Diagnostic::ChipUnsupportedInstruction {
                 op,
                 reason,
@@ -1927,6 +2095,16 @@ impl Diagnostic {
                     "peak_ps": excursion.peak_at,
                 })
             }
+            Diagnostic::RegulatorCurrentLimit(excursion) => {
+                serde_json::json!({
+                    "current": excursion.current,
+                    "limit": excursion.limit,
+                    "over_ps": excursion.over_ps,
+                    "peak_ps": excursion.peak_at,
+                    "target": excursion.target,
+                    "voltage": excursion.voltage,
+                })
+            }
         }
     }
 }
@@ -2004,7 +2182,10 @@ pub fn sustained_text(average: Average, reading: String) -> String {
 /// `value` to 3 significant digits. A rating message prints its values so, and a value is
 /// over its rating only when it is over after both are rounded.
 pub fn significant(value: f64) -> f64 {
-    if !value.is_finite() || value == 0.0 {
+    if value == 0.0 {
+        return 0.0;
+    }
+    if !value.is_finite() {
         return value;
     }
     format!("{value:.2e}").parse().unwrap_or(value)
@@ -2019,27 +2200,18 @@ pub fn significant_text(value: f64) -> String {
     }
 }
 
-/// Whether `value` is over `limit` once both are rounded to 3 significant digits.
-pub(crate) fn exceeds(value: f64, limit: f64) -> bool {
-    significant(value) > significant(limit)
-}
-
-/// [`exceeds`] when `limit` is already [`significant`].
+/// Whether `value` is over `limit` once both are rounded to 3 significant digits, when `limit`
+/// is already [`significant`].
 ///
 /// Rounding to 3 significant digits moves a finite positive number by at most half a
 /// percent, so more than 1% away from `limit` the comparison needs no formatting. Inside
 /// that band, and when `limit` is not a positive finite number, the check rounds `value`.
 #[inline]
 pub(crate) fn exceeds_rounded(value: f64, limit: f64) -> bool {
-    let over = match decided_without_rounding(value, limit) {
+    match decided_without_rounding(value, limit) {
         Some(over) => over,
         None => significant(value) > limit,
-    };
-    debug_assert!(
-        over == (significant(value) > limit),
-        "value {value:?} rounded limit {limit:?}"
-    );
-    over
+    }
 }
 
 /// `Some` when `value` and `limit` are far enough apart that rounding cannot change
@@ -2091,18 +2263,56 @@ fn outside_window(excursion: &VoltageExcursion, namer: &dyn Fn(&Ref) -> String) 
         high,
         peak,
         over_ps,
+        operating,
         ..
     } = excursion;
     let pin = namer(pin);
+    if *operating {
+        let low = low.unwrap_or(0.0);
+        let high = high.unwrap_or(0.0);
+        return format!(
+            "{pin} peaks at {} V, outside its {} V to {} V operating voltage{}",
+            significant_text(*peak),
+            significant_text(low),
+            significant_text(high),
+            for_time(*over_ps)
+        );
+    }
     let window = match (low, high) {
-        (Some(low), Some(high)) => format!("its {low} V to {high} V rating"),
-        (Some(low), None) => format!("its {low} V floor"),
-        (None, Some(high)) => format!("its {high} V ceiling"),
+        (Some(low), Some(high)) => format!(
+            "its {} V to {} V rating",
+            significant_text(*low),
+            significant_text(*high)
+        ),
+        (Some(low), None) => format!("its {} V floor", significant_text(*low)),
+        (None, Some(high)) => format!("its {} V ceiling", significant_text(*high)),
         (None, None) => unreachable!("a window rates a floor or a ceiling"),
     };
     format!(
-        "{pin} reaches {peak} V over the chip's ground, outside {window}{}",
+        "{pin} reaches {} V over the chip's ground, outside {window}{}",
+        significant_text(*peak),
         for_time(*over_ps)
+    )
+}
+
+fn regulator_limit(excursion: &CurrentLimitExcursion, namer: &dyn Fn(&Ref) -> String) -> String {
+    let CurrentLimitExcursion {
+        pin,
+        limit,
+        target,
+        voltage,
+        current,
+        over_ps,
+        ..
+    } = excursion;
+    let pin = namer(pin);
+    format!(
+        "{pin} regulator output can give {} A at {} V; the circuit asks for more, so it is giving {} A and has dropped as low as {} V{}",
+        significant_text(*limit),
+        significant_text(*target),
+        significant_text(*current),
+        significant_text(*voltage),
+        for_time(*over_ps),
     )
 }
 
@@ -2144,11 +2354,80 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_rounded_limit_compares_what_the_message_prints_on_a_three_digit_tie() {
+        // Each value sits on a tie at the third digit, where binary rounding decides it.
+        let ties = [
+            (0.1255, 0.125),
+            (0.02005, 0.02),
+            (1.005, 1.0),
+            (2.675, 2.67),
+        ];
+        for (value, limit) in ties {
+            for (value, limit) in [(value, limit), (limit, value), (-value, -limit)] {
+                assert_eq!(
+                    exceeds_rounded(value, significant(limit)),
+                    significant(value) > significant(limit),
+                    "{value} {limit}"
+                );
+            }
+        }
+        assert!(exceeds_rounded(0.1255, 0.125), "0.1255 prints as 0.126");
+        assert!(!exceeds_rounded(0.02005, 0.02), "0.02005 prints as 0.02");
+        let mut value = 1e-6;
+        while value < 1e4 {
+            let tie = significant(value) + 5e-3 * libm::pow(10.0, libm::floor(libm::log10(value)));
+            assert_eq!(
+                exceeds_rounded(tie, significant(value)),
+                significant(tie) > significant(value),
+                "{tie} {value}"
+            );
+            value *= 1.07;
+        }
+    }
+
+    #[test]
     fn a_device_names_each_protocol_rule_as_diagnostics_json_does() {
         for rule in ProtocolRule::ALL {
             assert_eq!(ProtocolRule::named(&rule_text(&rule)), Some(rule));
         }
         assert_eq!(ProtocolRule::named("glitch"), None);
+    }
+
+    #[test]
+    fn rating_voltage_message_rounds_values_and_keeps_data_unrounded() {
+        let diag = Diagnostic::RatingVoltage(VoltageExcursion {
+            pin: "#s3__mod__u1.pin.GPIO4".parse().unwrap(),
+            low: Some(-0.3),
+            high: Some(3.600019234965837),
+            peak: 4.76227892536249,
+            peak_at: Time::from_ps(1_000_000),
+            first: Time::from_ps(1_000_000),
+            over_ps: Some(4_562_490_689),
+            operating: false,
+        });
+        let value = serde_json::to_value(&diag).unwrap();
+        assert_eq!(
+            value["message"],
+            "#s3__mod__u1.pin.GPIO4 reaches 4.76 V over the chip's ground, outside its -0.3 V to 3.6 V rating for 4562490689 ps"
+        );
+        assert_eq!(value["data"]["peak"], 4.76227892536249);
+        assert_eq!(value["data"]["high"], 3.600019234965837);
+        assert_eq!(value["data"]["low"], -0.3);
+
+        let zero_floor = Diagnostic::RatingVoltage(VoltageExcursion {
+            pin: "#c1.pin.a".parse().unwrap(),
+            low: Some(-0.0),
+            high: None,
+            peak: -0.0012345,
+            peak_at: Time::ZERO,
+            first: Time::ZERO,
+            over_ps: None,
+            operating: false,
+        });
+        assert_eq!(
+            zero_floor.message(),
+            "#c1.pin.a reaches -0.00123 V over the chip's ground, outside its 0 V floor"
+        );
     }
 
     #[test]
@@ -2174,16 +2453,6 @@ mod tests {
         for digits in 100..=999 {
             limits.push(digits as f64 / 100.0);
         }
-        let mut state = 0x1234_5678_u64;
-        for _ in 0..4_000 {
-            state = state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1);
-            let exp = ((state >> 33) % 25) as i32 - 12;
-            let mant = 100.0 + (state % 900) as f64;
-            let sign = if state & 1 == 0 { 1.0 } else { -1.0 };
-            limits.push(sign * mant * libm::pow(10.0, exp as f64) / 100.0);
-        }
         for limit in limits {
             let rounded = significant(limit);
             let mut values = vec![
@@ -2207,7 +2476,7 @@ mod tests {
             for value in values {
                 assert_eq!(
                     exceeds_rounded(value, rounded),
-                    exceeds(value, limit),
+                    significant(value) > rounded,
                     "value {value:?} limit {limit:?} rounded {rounded:?}"
                 );
             }

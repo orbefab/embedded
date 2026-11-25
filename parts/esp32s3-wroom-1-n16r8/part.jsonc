@@ -2,6 +2,12 @@
 // ESP32-S3-WROOM-1 & WROOM-1U Datasheet v1.8. Leads 1, 40 and 41 are GND
 // (pin 41 is the EPAD). 3V3 joins the chip's VCC, the power inputs of
 // Table 2-11, and not VDD_SPI. EN joins CHIP_PU.
+// Figure 8-1 (page 39, rev V1.4) puts C6 (10 uF), C7 (1 uF), C8 (0.1 uF),
+// C3 (1 uF), C2 (10 nF), C10 (0.1 uF) and C15 (0.1 uF) on VDD33 to GND,
+// and C9 (0.1 uF) on VDD3P3 (pins 2 and 3) to GND past L1 (2.0 nH). Since
+// u1.VCC merges all power inputs of Table 2-11 and L1 is omitted, all
+// eight rail capacitors sit between 3V3 and GND. C13 (0.1 uF) and C14
+// (1 uF) sit on VDD_SPI, which the chip model does not simulate.
 // Table 1-1: this ordering is 16 MB quad SPI flash and 8 MB octal SPI PSRAM.
 // Note 4: the PSRAM is in the chip package. The features list names a 40 MHz
 // crystal. Figure 8-1 labels Y1 40 MHz, ±10 ppm, and does not name its package,
@@ -10,9 +16,9 @@
 // GPIO34 are not castellations. IO35 to IO37 are pins 28 to 30, and note b says
 // they are connected to the octal PSRAM and are not available.
 {
-  "format": 1,
+  "format": 6,
   "part": "esp32s3-wroom-1-n16r8",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "ESP32-S3-WROOM-1-N16R8",
   "summary": "ESP32-S3 module, 18 x 25.5 mm, 16 MB flash and 8 MB octal PSRAM. GPIO26 to GPIO32 and GPIO33 to GPIO34 are not brought out. IO35 to IO37 are castellated and note b says they are not available.",
   "tags": ["microcontroller", "esp32-s3", "module"],
@@ -22,17 +28,41 @@
     "ESP32-S3 Series Datasheet v2.2": "https://www.espressif.com/sites/default/files/documentation/esp32-s3_datasheet_en.pdf"
   },
   "real": { "maker": "Espressif", "number": "ESP32-S3-WROOM-1-N16R8", "datasheet": "ESP32-S3-WROOM-1 & WROOM-1U Datasheet v1.8" },
-  "uses": { "esp32s3-qfn56": "0.2.0" },
+  "uses": { "capacitor-0603": "0.2.0", "esp32s3-qfn56": "0.2.1" },
   "params": {
     "app": {},
     "partitions": {}
   },
   "parts": {
-    "u1": { "type": "esp32s3-qfn56", "app": { "param": "app" }, "partitions": { "param": "partitions" } }
+    "u1": { "type": "esp32s3-qfn56", "app": { "param": "app" }, "partitions": { "param": "partitions" } },
+    "c2": { "type": "capacitor-0603", "capacitance": { "value": 1e-8, "unit": "F", "source": { "datasheet": { "doc": "ESP32-S3-WROOM-1 & WROOM-1U Datasheet v1.8", "at": "Figure 8-1, C2, 10nF, VDDA (VDD33) to GND", "basis": "nominal" } } } },
+    "c3": { "type": "capacitor-0603", "capacitance": { "value": 1e-6, "unit": "F", "source": { "datasheet": { "doc": "ESP32-S3-WROOM-1 & WROOM-1U Datasheet v1.8", "at": "Figure 8-1, C3, 1uF, VDDA (VDD33) to GND", "basis": "nominal" } } } },
+    "c6": { "type": "capacitor-0603", "capacitance": { "value": 1e-5, "unit": "F", "source": { "datasheet": { "doc": "ESP32-S3-WROOM-1 & WROOM-1U Datasheet v1.8", "at": "Figure 8-1, C6, 10uF, VDD33 to GND", "basis": "nominal" } } } },
+    "c7": { "type": "capacitor-0603", "capacitance": { "value": 1e-6, "unit": "F", "source": { "datasheet": { "doc": "ESP32-S3-WROOM-1 & WROOM-1U Datasheet v1.8", "at": "Figure 8-1, C7, 1uF, VDD33 to GND", "basis": "nominal" } } } },
+    "c8": { "type": "capacitor-0603", "capacitance": { "value": 1e-7, "unit": "F", "source": { "datasheet": { "doc": "ESP32-S3-WROOM-1 & WROOM-1U Datasheet v1.8", "at": "Figure 8-1, C8, 0.1uF, VDD33 to GND", "basis": "nominal" } } } },
+    "c9": { "type": "capacitor-0603", "capacitance": { "value": 1e-7, "unit": "F", "source": { "datasheet": { "doc": "ESP32-S3-WROOM-1 & WROOM-1U Datasheet v1.8", "at": "Figure 8-1, C9, 0.1uF, VDD3P3 to GND", "basis": "nominal" } } } },
+    "c10": { "type": "capacitor-0603", "capacitance": { "value": 1e-7, "unit": "F", "source": { "datasheet": { "doc": "ESP32-S3-WROOM-1 & WROOM-1U Datasheet v1.8", "at": "Figure 8-1, C10, 0.1uF, VDD3P3_CPU (VDD33) to GND", "basis": "nominal" } } } },
+    "c15": { "type": "capacitor-0603", "capacitance": { "value": 1e-7, "unit": "F", "source": { "datasheet": { "doc": "ESP32-S3-WROOM-1 & WROOM-1U Datasheet v1.8", "at": "Figure 8-1, C15, 0.1uF, VDD3P3_RTC (VDD33) to GND", "basis": "nominal" } } } }
   },
   "wires": [
     ["GND", "u1.GND", { "kind": "trace" }],
     ["3V3", "u1.VCC", { "kind": "trace" }],
+    ["3V3", "c2.a", { "kind": "trace" }],
+    ["GND", "c2.b", { "kind": "trace" }],
+    ["3V3", "c3.a", { "kind": "trace" }],
+    ["GND", "c3.b", { "kind": "trace" }],
+    ["3V3", "c6.a", { "kind": "trace" }],
+    ["GND", "c6.b", { "kind": "trace" }],
+    ["3V3", "c7.a", { "kind": "trace" }],
+    ["GND", "c7.b", { "kind": "trace" }],
+    ["3V3", "c8.a", { "kind": "trace" }],
+    ["GND", "c8.b", { "kind": "trace" }],
+    ["3V3", "c9.a", { "kind": "trace" }],
+    ["GND", "c9.b", { "kind": "trace" }],
+    ["3V3", "c10.a", { "kind": "trace" }],
+    ["GND", "c10.b", { "kind": "trace" }],
+    ["3V3", "c15.a", { "kind": "trace" }],
+    ["GND", "c15.b", { "kind": "trace" }],
     ["EN", "u1.CHIP_PU", { "kind": "trace" }],
     ["IO0", "u1.GPIO0", { "kind": "trace" }],
     ["IO1", "u1.GPIO1", { "kind": "trace" }],
@@ -71,10 +101,19 @@
     ["RXD0", "u1.GPIO44", { "kind": "trace" }],
     ["TXD0", "u1.GPIO43", { "kind": "trace" }]
   ],
-  // The datasheet does not locate the chip inside the shield. The QFN sits
-  // on the module's 0.8 mm PCB (Figure 10-1), at the origin, under the shield.
+  // The datasheet does not locate the chip or passives inside the shield.
+  // The QFN and the eight 3V3 rail capacitors sit on the module's 0.8 mm
+  // PCB (Figure 10-1), under the shield (x in [-7.9, 7.9], y in [-11.7, 5.9]).
   "layout": {
-    "u1": { "at": [0, 0, 0.8] }
+    "u1": { "at": [0, 0, 0.8] },
+    "c2": { "at": [-4.5, -6.0, 0.8] },
+    "c3": { "at": [-1.5, -6.0, 0.8] },
+    "c6": { "at": [1.5, -6.0, 0.8] },
+    "c7": { "at": [4.5, -6.0, 0.8] },
+    "c8": { "at": [-4.5, -8.0, 0.8] },
+    "c9": { "at": [-1.5, -8.0, 0.8] },
+    "c10": { "at": [1.5, -8.0, 0.8] },
+    "c15": { "at": [4.5, -8.0, 0.8] }
   },
   "pins": {
     "GND": [1, 40, 41],
@@ -93,6 +132,6 @@
     { "what": "EN", "pins": ["EN"], "why": "EN is the chip's CHIP_PU, Table 2-1 pin 4 of the ESP32-S3 Series Datasheet v2.2. The esp32s3 kind has no reset pin, so this pin does not reset the model." },
     { "what": "IO35, IO36 and IO37", "pins": ["IO35", "IO36", "IO37"], "why": "Table 3-1 note b: on a module with octal SPI PSRAM, pins IO35, IO36 and IO37 are connected to that PSRAM and are not available for other uses. The kind has no pad for GPIO33 to GPIO37." },
     { "what": "GPIOs the module does not bring out", "why": "Table 3-1 does not bring out GPIO26 to GPIO32, which Figure 8-1 ties to the quad flash, or GPIO33 and GPIO34, which are not castellations. The kind models the 16 MB flash and the in-package PSRAM, so those chip pins have no net." },
-    { "what": "crystal, flash and PSRAM", "why": "The features list includes a 40 MHz crystal oscillator. Figure 8-1 labels Y1 40 MHz, ±10 ppm, and says C1 and C4 vary with the crystal. It does not name the crystal package, so none is placed. The kind's clock is that 40 MHz. Table 1-1 gives this ordering 16 MB quad flash and 8 MB octal PSRAM, and note 4 says the PSRAM is in the chip package." }
+    { "what": "crystal, flash, PSRAM and RF passives", "why": "The features list includes a 40 MHz crystal oscillator. Figure 8-1 labels Y1 40 MHz, ±10 ppm, and says C1 and C4 vary with the crystal. It does not name the crystal package, so none is placed. The kind's clock is that 40 MHz. Table 1-1 gives this ordering 16 MB quad flash and 8 MB octal PSRAM, and note 4 says the PSRAM is in the chip package. C13 (0.1 uF) and C14 (1 uF) on VDD_SPI, the RF matching network (L2, L3, C5, C11, C12), L1 (2.0 nH) in the VDD3P3 feed, R3 (499 ohm), R4 and D1 are not placed; C9 sits directly on 3V3." }
   ]
 }

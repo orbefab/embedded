@@ -4,8 +4,11 @@
 # `lint` runs shellcheck on every tracked shell script, ruff on every tracked
 # Python file, `scripts/core-deps.sh`, rustfmt, clippy, and clippy on orbe-model, orbe-scene,
 # orbe-session and orbe-wasm for wasm32.
-# `fast` runs `lint`, then `rust`. `rust` is the Rust tests through cargo-nextest, except the
-# engine tests marked `full tier`. `orbe-avr` and `orbe-microchip` are in that workspace run.
+# `fast` runs `lint`, then `rust`, except when `scripts/ci-engine-changed.sh --worktree origin/main`
+# says no engine paths changed (including uncommitted and untracked edits), in which case it skips
+# Rust lint and tests and runs shellcheck and ruff only. `ORBE_CHECK_ALL=1` forces everything.
+# `rust` is the Rust tests through cargo-nextest, except the engine tests marked `full tier`.
+# `orbe-avr` and `orbe-microchip` are in that workspace run.
 # `full` runs the microchip tests once, in their `port-skip-check` build, instead of in the
 # workspace run.
 # `viewer` runs `check-viewer.sh`, `check-viewer-e2e.sh`, `check-block.sh` and `check-headed.sh`.
@@ -26,6 +29,8 @@
 # also need `sudo pnpm exec playwright install-deps firefox webkit`.
 # `full` and `engine-circuits` also need ngspice-42. `full` and `engine-wasm` need rustup with
 # the wasm32-wasip1 target and that wasm-bindgen CLI.
+# Outside CI, `scripts/check-lock.sh` takes the shared per-user check lock across worktrees
+# and defaults `CARGO_BUILD_JOBS` to 2 and `NEXTEST_TEST_THREADS` to 4.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -92,10 +97,30 @@ rust() {
   rust_tests --workspace "$@"
 }
 
-fast() {
+engine_changed() {
+  local out
+  if [[ -n ${ORBE_CHECK_ALL:-} && ${ORBE_CHECK_ALL} != 0 ]]; then
+    return 0
+  fi
+  if ! out=$(scripts/ci-engine-changed.sh --worktree origin/main 2>/dev/null); then
+    return 0
+  fi
+  [[ $out != "run=false" ]]
+}
+
+fast_all() {
   need_nextest
   lint
   rust "$@"
+}
+
+fast() {
+  if ! engine_changed; then
+    echo "scripts/check.sh: fast skipped Rust lint and tests (no engine paths changed since origin/main; set ORBE_CHECK_ALL=1 to run all)"
+    lint_tracked
+    return 0
+  fi
+  fast_all
 }
 
 engine_microchip() {
@@ -155,7 +180,7 @@ engine_python() {
 
 full() {
   # The microchip tests run once, with the port skip check built in.
-  fast --exclude orbe-microchip
+  fast_all --exclude orbe-microchip
   engine_microchip
   engine_ignored
   engine_poll
@@ -184,6 +209,15 @@ web() {
 }
 
 [[ $# -eq 1 ]] || usage
+case "$1" in
+  lint | fast | rust | full | web | viewer | engine-chips | engine-circuits | engine-wasm) ;;
+  *) usage ;;
+esac
+
+# shellcheck source=scripts/check-lock.sh
+source scripts/check-lock.sh
+check_lock "scripts/check.sh" "scripts/check.sh $1"
+
 case "$1" in
   lint) lint ;;
   fast) fast ;;

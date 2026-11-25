@@ -12,7 +12,7 @@ use crate::active::native::Native;
 use crate::active::replay::Replay;
 use crate::active::{Chip, Core, Output, Stage, Takes};
 use crate::diagnostic::{Diagnostic, ScheduleRule};
-use crate::link::{Record, RecordKind, SpiNets};
+use crate::link::{Record, RecordKind, SpiNets, SpiPinNames};
 use crate::name::Ref;
 use crate::netlist::IntValue;
 use crate::netlist::NetId;
@@ -68,6 +68,7 @@ pub(crate) fn chip(part: PartId, replay: &SpiReplay) -> Chip {
             high,
             low,
             pull_up: None,
+            strong_pull_up: None,
             pull_down: None,
             leakage: None,
         })
@@ -77,6 +78,11 @@ pub(crate) fn chip(part: PartId, replay: &SpiReplay) -> Chip {
         sclk: Some(pins[SCLK]),
         data: [D0, D0 + 1, D0 + 2, D0 + 3].map(|k| Some(pins[k])),
     };
+    let pin_names = SpiPinNames {
+        cs: Some(SpiReplay::PINS[CS]),
+        sclk: Some(SpiReplay::PINS[SCLK]),
+        data: [D0, D0 + 1, D0 + 2, D0 + 3].map(|k| Some(SpiReplay::PINS[k])),
+    };
     let clock_hz = u32::try_from(replay.clock_hz.value).expect("parse keeps the clock in u32");
     let records: Arc<[Record]> = (0u64..)
         .zip(&replay.events)
@@ -84,6 +90,7 @@ pub(crate) fn chip(part: PartId, replay: &SpiReplay) -> Chip {
             seq,
             start: event.at,
             end: event.end,
+            peripheral: "spi_replay",
             pin: SpiReplay::PINS[CS],
             kind: RecordKind::Spi {
                 spi: Spi {
@@ -95,6 +102,7 @@ pub(crate) fn chip(part: PartId, replay: &SpiReplay) -> Chip {
                     miso: Miso::None,
                 },
                 nets,
+                pins: pin_names,
             },
         })
         .collect();

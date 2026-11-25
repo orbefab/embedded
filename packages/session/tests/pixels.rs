@@ -162,3 +162,234 @@ fn a_colour_is_no_state_and_a_part_without_one_says_so() {
     let reply = run(&mut live, "expect @led1.color > 2mA");
     assert_eq!(reply.error.unwrap().code, Code::NoReading);
 }
+
+fn stick_scene(supply_wire: Option<&str>) -> String {
+    let power = supply_wire
+        .map(|net| format!(", [\"{net}\", \"stick.5V\"]"))
+        .unwrap_or_default();
+    format!(
+        r#"{{
+  "format": 1,
+  "parts": {{
+    "nano": {{ "type": "nano-board", "firmware": "firmware/rainbow.hex" }},
+    "r1": {{ "type": "resistor-axial", "resistance": "470" }},
+    "stick": {{ "type": "neopixel-stick-8" }},
+  }},
+  "wires": [
+    ["nano.D6", "r1.a"], ["r1.b", "stick.DIN"],
+    ["nano.GND", "stick.GND"]{power}
+  ],
+}}"#
+    )
+}
+
+fn open_stick(supply_wire: Option<&str>) -> Live {
+    let hex =
+        std::fs::read(repo().join("blocks/nano-neopixel-stick/build/rainbow.ino.hex")).unwrap();
+    let block = std::fs::read(repo().join("blocks/nano-neopixel-stick/block.jsonc")).unwrap();
+    let files = Files::memory([
+        ("block.jsonc".to_string(), block),
+        ("firmware/rainbow.hex".to_string(), hex),
+        (
+            "scene.jsonc".to_string(),
+            stick_scene(supply_wire).into_bytes(),
+        ),
+    ])
+    .with_catalog(catalog());
+    let mut live = Live::new("t", files);
+    let open = live.run(&Command::Open(PathBuf::from("scene.jsonc")));
+    assert!(open.ok(), "{}", open.text());
+    live
+}
+
+#[test]
+fn an_unpowered_or_floating_stick_latches_nothing_and_stays_off() {
+    for (label, supply) in [("0 V", Some("nano.GND")), ("floating", None)] {
+        let mut live = open_stick(supply);
+        let stepped = run(&mut live, "step 20ms");
+        assert!(stepped.ok(), "{label}: {}", stepped.text());
+        for n in 1..=8 {
+            let reply = run(&mut live, &format!("get @stick.px{n}.color"));
+            assert_eq!(
+                reply.text(),
+                format!("stick.px{n}.color rgb(0,0,0) not latched yet"),
+                "{label} px{n}"
+            );
+        }
+    }
+
+    // A supply well below what the pixel needs (2 V) must also latch nothing on a 5 V Nano.
+    let low_supply_scene = r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "firmware/rainbow.hex" },
+    "r_top": { "type": "resistor-axial", "resistance": "1.5k" },
+    "r_bot": { "type": "resistor-axial", "resistance": "1k" },
+    "r1": { "type": "resistor-axial", "resistance": "470" },
+    "stick": { "type": "neopixel-stick-8" },
+  },
+  "wires": [
+    ["nano.5V", "r_top.a"], ["r_top.b", "r_bot.a"], ["r_bot.b", "nano.GND"],
+    ["r_top.b", "stick.5V"], ["nano.GND", "stick.GND"],
+    ["nano.D6", "r1.a"], ["r1.b", "stick.DIN"],
+  ],
+}"#;
+    let hex =
+        std::fs::read(repo().join("blocks/nano-neopixel-stick/build/rainbow.ino.hex")).unwrap();
+    let block = std::fs::read(repo().join("blocks/nano-neopixel-stick/block.jsonc")).unwrap();
+    let files = Files::memory([
+        ("block.jsonc".to_string(), block),
+        ("firmware/rainbow.hex".to_string(), hex),
+        (
+            "scene.jsonc".to_string(),
+            low_supply_scene.as_bytes().to_vec(),
+        ),
+    ])
+    .with_catalog(catalog());
+    let mut low = Live::new("t", files);
+    assert!(low.run(&Command::Open(PathBuf::from("scene.jsonc"))).ok());
+    assert!(run(&mut low, "step 20ms").ok());
+    for n in 1..=8 {
+        let reply = run(&mut low, &format!("get @stick.px{n}.color"));
+        assert_eq!(
+            reply.text(),
+            format!("stick.px{n}.color rgb(0,0,0) not latched yet"),
+            "low supply px{n}"
+        );
+    }
+
+    let mut powered = open_stick(Some("nano.5V"));
+    assert!(run(&mut powered, "step 20ms").ok());
+    let reply = run(&mut powered, "expect @stick.px1 rgb(255,0,0)");
+    assert!(reply.ok(), "powered px1: {}", reply.text());
+    let reply = run(&mut powered, "expect @stick.px8 rgb(255,0,120)");
+    assert!(reply.ok(), "powered px8: {}", reply.text());
+}
+
+#[test]
+fn power_loss_clears_latch_time_until_a_new_frame_latches() {
+    let scene = r#"{
+  "format": 1,
+  "parts": {
+    "nano": { "type": "nano-board", "firmware": "firmware/rainbow.hex" },
+    "sw": { "type": "tactile-switch-6mm" },
+    "r1": { "type": "resistor-axial", "resistance": "470" },
+    "stick": { "type": "neopixel-stick-8" },
+  },
+  "wires": [
+    ["nano.D6", "r1.a"], ["r1.b", "stick.DIN"],
+    ["nano.5V", "sw.a"], ["sw.b", "stick.5V"],
+    ["nano.GND", "stick.GND"],
+  ],
+}"#;
+    let hex =
+        std::fs::read(repo().join("blocks/nano-neopixel-stick/build/rainbow.ino.hex")).unwrap();
+    let block = std::fs::read(repo().join("blocks/nano-neopixel-stick/block.jsonc")).unwrap();
+    let files = Files::memory([
+        ("block.jsonc".to_string(), block),
+        ("firmware/rainbow.hex".to_string(), hex),
+        ("scene.jsonc".to_string(), scene.as_bytes().to_vec()),
+    ])
+    .with_catalog(catalog());
+    let mut live = Live::new("t", files);
+    let open = live.run(&Command::Open(PathBuf::from("scene.jsonc")));
+    assert!(open.ok(), "{}", open.text());
+
+    assert!(run(&mut live, "press @sw").ok());
+    assert!(run(&mut live, "step 20ms").ok());
+    let powered = run(&mut live, "get @stick.px1.color");
+    assert!(
+        powered
+            .text()
+            .starts_with("stick.px1.color rgb(255,0,0) latched at "),
+        "{}",
+        powered.text()
+    );
+    let first_latched = powered.json()["data"]["value"]["latched_ps"]
+        .as_u64()
+        .unwrap();
+
+    // Open the supply switch: the rail drops and the pixel must read as never latched since then.
+    assert!(run(&mut live, "release @sw").ok());
+    assert!(run(&mut live, "step 5ms").ok());
+    let dropped = run(&mut live, "get @stick.px1.color");
+    assert_eq!(dropped.text(), "stick.px1.color rgb(0,0,0) not latched yet");
+    assert_eq!(dropped.json()["data"]["value"]["latched_ps"], json!(null));
+
+    // Close the switch again without a new frame: still not latched yet.
+    assert!(run(&mut live, "press @sw").ok());
+    assert!(run(&mut live, "step 5ms").ok());
+    let repowered = run(&mut live, "get @stick.px1.color");
+    assert_eq!(
+        repowered.text(),
+        "stick.px1.color rgb(0,0,0) not latched yet"
+    );
+    assert_eq!(repowered.json()["data"]["value"]["latched_ps"], json!(null));
+
+    // Reset the Nano so the sketch sends a fresh frame after power returned (past the 65 ms SUT).
+    assert!(run(&mut live, "press @nano.sw_reset").ok());
+    assert!(run(&mut live, "step 1ms").ok());
+    assert!(run(&mut live, "release @nano.sw_reset").ok());
+    assert!(run(&mut live, "step 80ms").ok());
+    let recovered = run(&mut live, "get @stick.px1.color");
+    assert!(
+        recovered
+            .text()
+            .starts_with("stick.px1.color rgb(255,0,0) latched at "),
+        "{}",
+        recovered.text()
+    );
+    let second_latched = recovered.json()["data"]["value"]["latched_ps"]
+        .as_u64()
+        .unwrap();
+    assert!(
+        second_latched > first_latched,
+        "second latch {second_latched} should be after first {first_latched}"
+    );
+}
+
+#[test]
+fn rainbow_on_nano_3v3_sags_resets_pixels_and_warns_regulator_current_limit() {
+    let mut live = open_stick(Some("nano.3V3"));
+    let stepped = run(&mut live, "step 20ms");
+    assert!(stepped.ok(), "{}", stepped.text());
+
+    for n in 1..=8 {
+        let reply = run(&mut live, &format!("get @stick.px{n}.color"));
+        assert_eq!(
+            reply.text(),
+            format!("stick.px{n}.color rgb(0,0,0) not latched yet"),
+            "px{n}"
+        );
+    }
+
+    let snapshot = run(&mut live, "snapshot");
+    let snapshot_text = snapshot.text();
+    assert!(
+        snapshot_text.contains("warning[regulator.current_limit]"),
+        "{snapshot_text}"
+    );
+    assert!(
+        snapshot_text.contains("#nano__usb_serial__rail.pin.out (nano.3V3)"),
+        "{snapshot_text}"
+    );
+    assert!(
+        snapshot_text.contains("can give 30 mA at 3.3 V"),
+        "{snapshot_text}"
+    );
+    assert!(
+        snapshot_text.contains("has dropped as low as 3.13 V"),
+        "{snapshot_text}"
+    );
+
+    let json = snapshot.json();
+    let limits: Vec<_> = json["data"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["code"] == "regulator.current_limit")
+        .collect();
+    assert_eq!(limits.len(), 1, "{limits:?}");
+    let no_diag = run(&mut live, "expect no diagnostics");
+    assert_eq!(no_diag.error.as_ref().unwrap().code, Code::ExpectFailed);
+}

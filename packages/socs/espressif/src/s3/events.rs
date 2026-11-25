@@ -9,8 +9,9 @@
 //! checks at each poll.
 
 use super::clock::Tick;
-use super::soc::{RMT, SPI2, SYSTIMER, TIMG0, TIMG1, USB_SERIAL_JTAG};
+use super::soc::{LEDC, RMT, SPI2, SYSTIMER, TIMG0, TIMG1, USB_SERIAL_JTAG};
 use super::uart::Uarts;
+use super::usb;
 
 /// The peripherals a poll asks, each a slot of [`Events`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,16 +23,18 @@ pub(crate) enum Peripheral {
     Usb,
     Rmt,
     Uart,
+    Ledc,
 }
 
 impl Peripheral {
-    pub(crate) const ALL: [Peripheral; 6] = [
+    pub(crate) const ALL: [Peripheral; 7] = [
         Peripheral::Systimer,
         Peripheral::Timers,
         Peripheral::Spi2,
         Peripheral::Usb,
         Peripheral::Rmt,
         Peripheral::Uart,
+        Peripheral::Ledc,
     ];
 
     const fn bit(self) -> u8 {
@@ -75,9 +78,13 @@ impl Events {
         let moved = match addr & !0xfff {
             SYSTIMER => Peripheral::Systimer.bit(),
             TIMG0 | TIMG1 => Peripheral::Timers.bit(),
+            USB_SERIAL_JTAG if addr & !3 == USB_SERIAL_JTAG + usb::CONF0 => {
+                Peripheral::Usb.bit() | Peripheral::Uart.bit()
+            }
             USB_SERIAL_JTAG => Peripheral::Usb.bit(),
             RMT => Peripheral::Rmt.bit() | Peripheral::Uart.bit(),
             SPI2 => Peripheral::Spi2.bit() | Peripheral::Uart.bit(),
+            LEDC => Peripheral::Ledc.bit(),
             base if Uarts::index(base).is_some() => Peripheral::Uart.bit(),
             _ => EVERY,
         };
@@ -118,27 +125,30 @@ mod tests {
         };
         keep_all(&mut events);
         events.touch(SYSTIMER + 0x64);
-        assert_eq!(left(&events), [false, true, true, true, true, true]);
+        assert_eq!(left(&events), [false, true, true, true, true, true, true]);
         keep_all(&mut events);
         events.touch(TIMG1 + 0x10);
-        assert_eq!(left(&events), [true, false, true, true, true, true]);
+        assert_eq!(left(&events), [true, false, true, true, true, true, true]);
         keep_all(&mut events);
         events.touch(USB_SERIAL_JTAG);
-        assert_eq!(left(&events), [true, true, true, false, true, true]);
+        assert_eq!(left(&events), [true, true, true, false, true, true, true]);
         keep_all(&mut events);
         events.touch(RMT + 0x20);
-        assert_eq!(left(&events), [true, true, true, true, false, false]);
+        assert_eq!(left(&events), [true, true, true, true, false, false, true]);
         keep_all(&mut events);
         events.touch(SPI2);
-        assert_eq!(left(&events), [true, true, false, true, true, false]);
+        assert_eq!(left(&events), [true, true, false, true, true, false, true]);
         keep_all(&mut events);
         events.touch(crate::s3::uart::BASES[2] + 0x1c);
-        assert_eq!(left(&events), [true, true, true, true, true, false]);
+        assert_eq!(left(&events), [true, true, true, true, true, false, true]);
+        keep_all(&mut events);
+        events.touch(LEDC + 0xcc);
+        assert_eq!(left(&events), [true, true, true, true, true, true, false]);
         keep_all(&mut events);
         events.touch(GPIO + 4);
-        assert_eq!(left(&events), [false; 6]);
+        assert_eq!(left(&events), [false; 7]);
         keep_all(&mut events);
         events.forget();
-        assert_eq!(left(&events), [false; 6]);
+        assert_eq!(left(&events), [false; 7]);
     }
 }

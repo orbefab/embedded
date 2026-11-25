@@ -2,9 +2,11 @@
 //! written against `orbe-model` and `std` alone, and `mod.rs` holds its netlist struct, its JSON
 //! wire type and its [`Row`], which `Model::device` maps its parts to.
 
+pub(crate) mod bmp280;
 pub(crate) mod cst816;
 pub(crate) mod dht22;
 pub(crate) mod hc595;
+pub mod hd44780_i2c;
 pub(crate) mod pulses_replay;
 pub(crate) mod sg90;
 pub(crate) mod spi_replay;
@@ -12,9 +14,11 @@ pub mod ssd1306;
 pub mod st77916;
 pub(crate) mod ws2812;
 
+pub use bmp280::Bmp280;
 pub use cst816::Cst816;
 pub use dht22::Dht22;
 pub use hc595::Hc595;
+pub use hd44780_i2c::Hd44780I2c;
 pub use pulses_replay::{PulseTrain, PulsesReplay};
 pub use sg90::Sg90;
 pub use spi_replay::{SpiEvent, SpiReplay};
@@ -32,6 +36,7 @@ use crate::netlist::{Event, MIN_GAP_PS};
 /// declares each one for every such part. None for a kind that is no device, or reads none.
 pub fn reads(kind: &str) -> &'static [Quantity] {
     match kind {
+        "bmp280" => bmp280::model::Bmp280::WORLD,
         "dht22" => dht22::model::Dht22::WORLD,
         _ => &[],
     }

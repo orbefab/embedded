@@ -18,8 +18,9 @@ use crate::netlist::Value;
 use crate::netlist::elf::{self, Elf};
 use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
-use crate::netlist::json::{PinMap, WireValue, resolve_some_pins, resolve_value};
+use crate::netlist::json::{PinMap, WireValue, resolve_limit, resolve_some_pins, resolve_value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
+use crate::ratings::{Ceiling, PinRatings, PinWindow};
 use crate::watch::Signal;
 use orbe_espressif::s3::{self, Bridge};
 
@@ -41,6 +42,12 @@ pub(crate) fn dc_paths(mcu: &Esp32s3) -> &'static [(usize, usize)] {
     &DC_PATHS[..2 * (mcu.pins.len() - 2)]
 }
 
+/// USB Serial/JTAG internal PHY Full-Speed D+ pull-up on GPIO20 at `PULLUP_VALUE = 0` (reset):
+/// typical 2.4 kohm per ESP-IDF v5.5.5 `soc/esp32s3/register/soc/usb_wrap_struct.h` and
+/// `hal/esp32s3/include/hal/usb_serial_jtag_ll.h` (the internal FSLS PHY shared by USB
+/// Serial/JTAG and USB OTG).
+const USB_DP_PULL_UP_OHM: f64 = 2_400.0;
+
 pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
     let (vcc, gnd) = (mcu.pins[0], mcu.pins[1]);
     let gpios: Vec<u8> = mcu.gpios().collect();
@@ -52,9 +59,11 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
         leakage: mcu.leakage_resistance.si.get(),
         pads: pins
             .iter()
-            .map(|&net| super::Pad {
+            .zip(&gpios)
+            .map(|(&net, &gpio)| super::Pad {
                 net,
                 pull_up: mcu.pull_up_resistance.si.get(),
+                strong_pull_up: (gpio == 20).then_some(USB_DP_PULL_UP_OHM),
                 pull_down: mcu
                     .pull_down_resistance
                     .as_ref()
@@ -107,7 +116,53 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
     chip.use_efuse(mcu.efuse);
     let console = mcu.console.iter().map(|send| (send.at, send.to.as_slice()));
     let bridge = Bridge::new(chip, gpios, console);
-    super::chip(part, outputs, watches, signals, samples, bridge)
+    let output_pins = mcu.names[2..].to_vec();
+    super::chip(
+        part,
+        outputs,
+        output_pins,
+        watches,
+        signals,
+        samples,
+        bridge,
+    )
+}
+
+/// The part's voltage ratings on `VCC` and each wired GPIO, `None` when it has no `ratings`
+/// object. Every window is over `GND`: `VCC` takes `-rail_margin` to `supply_voltage`, and each
+/// wired GPIO takes `-rail_margin` to `VCC + rail_margin`.
+pub(crate) fn pin_ratings(mcu: &Esp32s3) -> Option<PinRatings> {
+    let ratings = mcu.ratings.as_ref()?;
+    let si = |value: &Option<Value>| value.as_ref().map(|value| value.si.get());
+    let margin = si(&ratings.rail_margin);
+    let supply = si(&ratings.supply_voltage);
+    let mut windows = Vec::new();
+    if margin.is_some() || supply.is_some() {
+        windows.push(PinWindow {
+            pin: Esp32s3::PINS[0],
+            net: mcu.pins[0],
+            below: margin,
+            above: supply.map(Ceiling::Fixed),
+        });
+    }
+    if let Some(margin) = margin {
+        for (&pin, &net) in mcu.names[2..].iter().zip(&mcu.pins[2..]) {
+            windows.push(PinWindow {
+                pin,
+                net,
+                below: Some(margin),
+                above: Some(Ceiling::OverSupply(margin)),
+            });
+        }
+    }
+    Some(PinRatings {
+        outputs: Vec::new(),
+        pin_current: None,
+        supply_current: None,
+        vcc: (Esp32s3::PINS[0], mcu.pins[0]),
+        gnd: (Esp32s3::PINS[1], mcu.pins[1]),
+        windows,
+    })
 }
 
 /// An ESP32-S3 running `firmware`: a bare-metal program whose core starts at its entry at
@@ -143,6 +198,19 @@ pub struct Esp32s3 {
     /// The chip's eFuses, by the name of a set the chip crate holds.
     pub efuse: s3::EfuseSet,
     pub console: Vec<Event<Vec<u8>>>,
+    /// The pin voltage ratings the run checks. `None` when the part has no `ratings` object,
+    /// which leaves the chip unrated.
+    pub ratings: Option<Esp32s3Ratings>,
+}
+
+/// An ESP32-S3's voltage ratings. Each is `None` when the part leaves it unrated.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Esp32s3Ratings {
+    /// Volt. How far `VCC` and each wired GPIO may sit below `GND`, and each wired GPIO above
+    /// `VCC`.
+    pub rail_margin: Option<Value>,
+    /// Volt. The most `VCC` may sit above `GND`.
+    pub supply_voltage: Option<Value>,
 }
 
 /// What an `esp32s3` runs.
@@ -218,6 +286,19 @@ pub(crate) struct WireEsp32s3 {
     efuse: s3::EfuseSet,
     #[serde(default)]
     console: Vec<WireSend>,
+    /// Optional, so a netlist written before the chip had ratings keeps its meaning.
+    #[serde(default)]
+    ratings: Option<WireRatings>,
+}
+
+/// Every key is required, and `null` leaves that rating out.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireRatings {
+    #[serde(deserialize_with = "Option::deserialize")]
+    rail_margin: Option<WireValue>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    supply_voltage: Option<WireValue>,
 }
 
 fn default_efuse() -> s3::EfuseSet {
@@ -329,6 +410,10 @@ pub(crate) fn resolve_esp32s3(ctx: ParseCtx<'_>, wire: WireEsp32s3) -> Option<Es
         out,
     );
     let console = resolve_console(part_ref, wire.console, out);
+    let ratings = match wire.ratings {
+        None => Some(None),
+        Some(wire) => resolve_ratings(part_ref, wire, out).map(Some),
+    };
     let (pins, names) = pins?;
     Some(Esp32s3 {
         pins,
@@ -341,6 +426,26 @@ pub(crate) fn resolve_esp32s3(ctx: ParseCtx<'_>, wire: WireEsp32s3) -> Option<Es
         input_threshold: input_threshold?,
         efuse: wire.efuse,
         console: console?,
+        ratings: ratings?,
+    })
+}
+
+fn resolve_ratings(
+    part: &Ref,
+    wire: WireRatings,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Esp32s3Ratings> {
+    let rail_margin = resolve_limit(part, "ratings.rail_margin", "V", wire.rail_margin, out);
+    let supply_voltage = resolve_limit(
+        part,
+        "ratings.supply_voltage",
+        "V",
+        wire.supply_voltage,
+        out,
+    );
+    Some(Esp32s3Ratings {
+        rail_margin: rail_margin?,
+        supply_voltage: supply_voltage?,
     })
 }
 

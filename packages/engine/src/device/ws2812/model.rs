@@ -10,13 +10,19 @@
 //!
 //! Once every LED holds its 24 bits, each high on `DIN` goes on to `DOUT` `delay` later, its
 //! rise and its fall alike, until the chain latches. `DOUT` is low otherwise. A high a record
-//! carried has already ended when the record lands, so it goes no further, and the first is
-//! rule `dout_record`.
+//! carried has already ended when the record lands, so the device passes its rise and its fall,
+//! each `delay` later, and the host sends them on `DOUT`'s net as a record of its own. The next
+//! chain takes that record as this one took the first, so a chain of parts each keeps its own
+//! bits whether they came edge by edge or in a record.
 
 use orbe_model::{
-    Cx, Device, Draw, Drive, Drives, Error, Idle, Params, PulseTarget, Shows, State, Stop, Time,
-    View,
+    Cx, Device, Draw, Drive, Drives, Error, Idle, Levels, Params, PulseTarget, Shows, State, Stop,
+    Time, View,
 };
+
+/// Watch order: `DIN`, then the supply comparator when the part sets `min_supply`.
+pub const WATCH_DIN: usize = 0;
+pub const WATCH_SUPPLY: usize = 1;
 
 /// The most LEDs one part holds.
 pub const LED_MAX: u16 = 1024;
@@ -71,11 +77,34 @@ pub struct Ws2812<const N: usize> {
     idle: f64,
     /// The supply at and above which the draw holds, volt.
     holds_above_v: f64,
+    /// Minimum supply in volts, or `None` when the part sets none.
+    min_supply_v: Option<f64>,
+    /// Whether the supply is at or above `min_supply_v`. Always true when `min_supply_v` is `None`.
+    powered: bool,
 }
 
 impl<const N: usize> State for Ws2812<N> {}
 
 impl<const N: usize> Ws2812<N> {
+    /// Clears latched colours, partial bits and queued `DOUT` edges on power loss. Leaves
+    /// `self.out` alone so `drive()` stays unchanged during `input()`; if `DOUT` was high,
+    /// queues a fall 1 ps later so it starts low once power returns.
+    fn power_off(&mut self, at: Time) {
+        self.index = 0;
+        self.acc = 0;
+        self.got = 0;
+        self.open = None;
+        self.pending = [[0; 3]; N];
+        self.leds = [[0; 3]; N];
+        self.passing = false;
+        self.first = 0;
+        self.queued = 0;
+        self.lit = 0;
+        if self.delay > 0 && self.out {
+            self.queue(at.as_ps().saturating_add(1), false);
+        }
+    }
+
     fn shift(&mut self, one: bool) {
         if self.index >= self.count {
             return;
@@ -161,6 +190,11 @@ impl<const N: usize> Device for Ws2812<N> {
             millivolts @ 1.. => millivolts as f64 * 1e-3,
             _ => return Err(Error("holds_above_mv is more than 0")),
         };
+        let min_supply_v = match params.int("min_supply_uv") {
+            None => None,
+            Some(microvolts @ 1..) => Some(microvolts as f64 * 1e-6),
+            Some(_) => return Err(Error("min_supply_uv is more than 0")),
+        };
         Ok(Ws2812 {
             count,
             index: 0,
@@ -180,7 +214,13 @@ impl<const N: usize> Device for Ws2812<N> {
             channel,
             idle,
             holds_above_v,
+            min_supply_v,
+            powered: true,
         })
+    }
+
+    fn min_supply_v(&self) -> Option<f64> {
+        self.min_supply_v
     }
 
     /// Stops at each `DOUT` edge.
@@ -207,7 +247,23 @@ impl<const N: usize> Device for Ws2812<N> {
         Drives::new([if self.out { Drive::High } else { Drive::Low }])
     }
 
-    /// Each LED's idle current, and each channel's current at its latched value.
+    fn input(&mut self, _cx: &mut Cx, at: Time, levels: Levels) {
+        if self.min_supply_v.is_none() {
+            return;
+        }
+        let powered = levels.high(WATCH_SUPPLY);
+        if powered == self.powered {
+            return;
+        }
+        self.powered = powered;
+        if !powered {
+            self.power_off(at);
+        }
+    }
+
+    /// Each LED's idle current, and each channel's current at its latched value. While unpowered
+    /// every LED is off (`lit == 0`), so only the faded idle curve stays, keeping a rail behind an
+    /// open switch from bouncing back above `min_supply_v`.
     fn draw(&self) -> Draw {
         Draw {
             amps: f64::from(self.count) * self.idle + self.channel * f64::from(self.lit) / 255.0,
@@ -227,26 +283,32 @@ impl<const N: usize> PulseTarget for Ws2812<N> {
     };
 
     fn pulse(&mut self, cx: &mut Cx, at: Time, level: bool, width: u64) {
+        if !self.powered {
+            return;
+        }
         if !level {
             if let Some(bit) = self.open.take() {
                 self.shift(bit);
             }
             if self.delay > 0 && self.index >= self.count {
+                let rise = at.as_ps().saturating_add(self.delay);
                 if cx.replayed() {
-                    cx.broke("dout_record", at);
+                    cx.pass(Time::from_ps(rise), true);
+                    self.passing = true;
                 } else {
-                    self.passing = self.queue_rise(at.as_ps().saturating_add(self.delay));
+                    self.passing = self.queue_rise(rise);
                 }
             }
             return;
         }
         if self.passing {
             self.passing = false;
-            let fall = at
-                .as_ps()
-                .saturating_add(self.delay)
-                .max(self.reached.as_ps() + 1);
-            self.queue_fall(fall);
+            let fall = at.as_ps().saturating_add(self.delay);
+            if cx.replayed() {
+                cx.pass(Time::from_ps(fall), false);
+            } else {
+                self.queue_fall(fall.max(self.reached.as_ps() + 1));
+            }
         }
         self.open = if T0H.contains(&width) {
             Some(false)
@@ -259,6 +321,9 @@ impl<const N: usize> PulseTarget for Ws2812<N> {
     }
 
     fn idle(&mut self, cx: &mut Cx, _at: Time, _level: bool) {
+        if !self.powered {
+            return;
+        }
         if let Some(bit) = self.open.take() {
             self.shift(bit);
         }

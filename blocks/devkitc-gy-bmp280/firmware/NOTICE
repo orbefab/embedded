@@ -1,0 +1,66 @@
+`build/bmp280.ino.bin` and `build/bmp280.ino.partitions.bin` are built from
+`firmware/bmp280/bmp280.ino` with Arduino CLI 1.5.1 and esp32:esp32 3.3.12, fqbn
+`esp32:esp32:esp32s3`. That is the ESP32S3 Dev Module defaults: USB CDC on boot disabled, PSRAM
+disabled, 4MB flash, the default partition table, QIO 80MHz, and the sketch on core 1. The
+sketch is copied into an empty temporary directory with the three Adafruit libraries unpacked
+into `$work/libs`, and compiled from there, with `SOURCE_DATE_EPOCH=1767225600` and
+`-ffile-prefix-map=$work=/src -ffile-prefix-map=$build=/build -ffile-prefix-map=$HOME/.arduino15=/arduino15 -ffile-prefix-map=$work/libs=/arduino`
+on the C, C++ and assembler flags. `$work` is that directory, `$sketch` is `$work/bmp280`,
+`$build` is the build directory and `$out` is the output directory. The command, run with `$work`
+as the working directory, is `SOURCE_DATE_EPOCH=1767225600 arduino-cli compile --clean --fqbn esp32:esp32:esp32s3 --jobs 2 --libraries "$work/libs" --build-path "$build" --output-dir "$out" --build-property "compiler.c.extra_flags=$map" --build-property "compiler.cpp.extra_flags=$map" --build-property "compiler.S.extra_flags=$map" "$sketch"`.
+Two such builds in different directories are the same bytes. The app is 335424 bytes,
+1b71d6ae6a807814761b9dcbdefc5c8eaf08738c2f68ab6137c9940a56fbe6dc. The ELF is 7287168 bytes,
+667d27564be4364018bebd6282b405b27450b65d6d5ed3dd1cb71735f95b16b. The partition table is 3072
+bytes, 148b959cbff1c38aa8e1d5c0ba9d612c54997b945e56a63f41223eef650653a1. The chip starts where
+the bootloader leaves the app, so the image needs neither the bootloader nor the merged binary.
+
+The sketch links the Arduino-ESP32 core. The core is free software under the GNU Lesser General
+Public License, version 2.1 or any later version, whose text is in LICENSE-runtime. Its package
+is the one Arduino publishes as esp32:esp32 3.3.12. The sketch is under MIT or Apache-2.0, and
+those terms permit modifying the image and reverse engineering it to debug such modifications.
+
+The image also links Adafruit BMP280 3.0.0, which is free software under the MIT license. Its
+text is in LICENSE-bmp280. Its source is the archive at
+https://github.com/adafruit/Adafruit_BMP280_Library/archive/refs/tags/3.0.0.tar.gz
+with SHA-256 54018faa0cb89ef25b54c79b1ab274e4010e9b2e41632446c72ac6ceed8f1241.
+
+The image also links Adafruit BusIO 1.17.4, which is free software under the MIT license. Its
+text is in LICENSE-busio. Its source is the archive at
+https://github.com/adafruit/Adafruit_BusIO/archive/refs/tags/1.17.4.tar.gz
+with SHA-256 59efa3acd5466e381c1b0313d5f0e824832db1bb24e4e328667e12b7d235d56d.
+
+The image also links Adafruit Unified Sensor 1.1.15, which is free software under the Apache
+License 2.0. Its text is in LICENSE-sensor. Its source is the archive at
+https://github.com/adafruit/Adafruit_Sensor/archive/refs/tags/1.1.15.tar.gz
+with SHA-256 1763c21c969a74d69e4d29082c7458a2d474d51e5ad0e2c4803dda8e1c372d9a.
+
+The image also links ESP-IDF's components, the ones that core builds with. They are under the
+Apache License 2.0, whose text is in LICENSE-apache, apart from the files whose headers name
+other terms. Among those, the FreeRTOS kernel is under the MIT License, reproduced with its
+notice in LICENSE-freertos, and the Xtensa core HAL under the notice reproduced in
+LICENSE-xtensa. The FreeRTOS Xtensa port and the Xtensa interrupt, context and vector files are
+under that same notice, with the line Copyright (c) 2015-2019 Cadence Design Systems, Inc. The
+TLSF heap allocator is under the BSD-3-Clause License, reproduced with its notice in
+LICENSE-tlsf, and the undefined behaviour sanitizer hooks under the BSD-2-Clause terms
+reproduced with their notice in LICENSE-ubsan. The image also holds routines of the toolchain's
+C library, newlib, under the notices of LICENSE-newlib, and of GCC's runtime libraries
+(`libgcc` and `libstdc++`), under GPL-3.0-or-later with the GCC Runtime Library Exception 3.1,
+whose text is in LICENSE-gcc-exception. That exception lets the compiled runtime ship inside
+the program under the program's own terms. The image also links Mbed TLS's platform_util.c from
+libmbedcrypto.a (mbedtls_platform_zeroize), Copyright The Mbed TLS Contributors, which ESP-IDF
+carries under Apache-2.0 OR GPL-2.0-or-later, used here under the Apache License 2.0.
+
+These files and their licences:
+
+`block.jsonc`, `README.md`, `scene.jsonc`, `firmware/NOTICE`, `firmware/bmp280/bmp280.ino` and
+`tests/bmp280.test` are under MIT OR Apache-2.0.
+
+`build/bmp280.ino.bin`, `build/bmp280.ino.partitions.bin` and `firmware/LICENSE-runtime` are
+under LGPL-2.1-or-later.
+
+`firmware/LICENSE-apache` and `firmware/LICENSE-sensor` are under Apache-2.0.
+`firmware/LICENSE-bmp280`, `firmware/LICENSE-busio` and `firmware/LICENSE-freertos` are under
+MIT. `firmware/LICENSE-tlsf` is under BSD-3-Clause. `firmware/LICENSE-newlib` holds newlib's
+notices. `firmware/LICENSE-ubsan` is under BSD-2-Clause. `firmware/LICENSE-xtensa` is under the
+notice in that file. `firmware/LICENSE-gcc-exception` holds the GCC Runtime Library Exception 3.1 (GPL-3.0-or-later
+WITH GCC-exception-3.1). In `block.jsonc`, `LicenseRef-newlib` names `firmware/LICENSE-newlib`.

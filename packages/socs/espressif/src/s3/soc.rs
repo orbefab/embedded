@@ -19,6 +19,7 @@ use super::CoreId;
 
 use super::analog::Analog;
 use super::app::{self, AppControl, Hold, Steer};
+use super::blocks;
 use super::calibration::{self, Calibration};
 use super::clock::{CpuClock, Source, Tick};
 use super::code::Code;
@@ -66,12 +67,10 @@ pub(crate) const TIMG0: u32 = 0x6001_f000;
 pub(crate) const TIMG1: u32 = 0x6002_0000;
 pub(crate) const SYSTIMER: u32 = 0x6002_3000;
 pub(crate) const SPI2: u32 = 0x6002_4000;
-const LEDC: u32 = 0x6001_9000;
+pub(crate) const LEDC: u32 = 0x6001_9000;
 pub(crate) const RMT: u32 = 0x6001_6000;
 const I2C0: u32 = 0x6001_3000;
-const I2C1: u32 = 0x6002_7000;
 pub(crate) const USB_SERIAL_JTAG: u32 = 0x6003_8000;
-const USB_WRAP: u32 = 0x6003_9000;
 const SHA: u32 = 0x6003_b000;
 const APB_SARADC: u32 = 0x6004_0000;
 pub(crate) const GDMA: u32 = 0x6003_f000;
@@ -283,12 +282,11 @@ fn quiet(word: u32, write: bool, value: u32) -> bool {
         0x6000_50f0 => true,
         // `call_start_cpu1` enables the APP CPU's debug trace. The trace moves no pin, clock or reading.
         0x600c_e0d8 | 0x600c_e0dc => true,
-        // `gpio_config` clears `MUX_SEL`, leaving digital GPIO, which the model drives. Setting it is still listed.
-        0x6000_8484 | 0x6000_8494 | 0x6000_8498 | 0x6000_849c
-            if !write || value & (1 << 19) == 0 =>
-        {
-            true
-        }
+        // `gpio_config` calls `rtc_gpio_deinit`, which clears `MUX_SEL` on RTC pads GPIO0 to
+        // GPIO21 (`RTC_IO_TOUCH_PAD0_REG` through `RTC_IO_RTC_PAD21_REG`, `RTCIO+0x84..=0xd8`),
+        // reading 0 and writing 0 back. Any non-zero store (`MUX_SEL`, `RUE`, `RDE`, `DRV`,
+        // `FUN_IE`, `SLP_*`, touch bits) is still listed so nothing is silently dropped.
+        0x6000_8484..=0x6000_84d8 if !write || value == 0 => true,
         _ => false,
     }
 }
@@ -307,26 +305,42 @@ enum Effect {
     Gates,
 }
 
-/// The effect of a write of the register at `addr`, when it has one the model does not run.
-fn effect(addr: u32) -> Option<Effect> {
+/// The effect of a write of `value` to the register at `addr`, when it has one the model does not
+/// run.
+fn effect(addr: u32, value: u32) -> Option<Effect> {
     let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
     let interrupt = |peripheral| Ending::Refused(Refused::Interrupt(peripheral));
     let dma = |setting| Ending::Refused(Refused::Register("GDMA", setting));
+    let pin_hold = Ending::Refused(Refused::Register("RTC_CNTL", "pin_hold"));
     let pads = Ending::FlashCommand(FlashRefusal::Pads);
     Some(match (base, offset) {
         (RTC_CNTL, 0x18) => Effect::Refuse(1 << 31, Ending::Refused(Refused::Sleep)),
         (RTC_CNTL, 0x74) => Effect::Report(u32::MAX),
+        // `RTC_CNTL_PAD_FORCE_HOLD` (bit 21), `RTC_CNTL_DG_PAD_FORCE_HOLD` (bit 15) and
+        // `RTC_CNTL_DG_PAD_AUTOHOLD_EN` (bit 11), `RTC_CNTL_PAD_HOLD_REG` (bits 0..=21), and
+        // `RTC_CNTL_DIG_PAD_HOLD_REG` (bits 0..=31).
+        (RTC_CNTL, 0x88) => Effect::Refuse(1 << 21, pin_hold),
+        (RTC_CNTL, 0x94) => Effect::Refuse(1 << 15 | 1 << 11, pin_hold),
+        (RTC_CNTL, 0xd8) => Effect::Refuse(0x3f_ffff, pin_hold),
+        (RTC_CNTL, 0xdc) => Effect::Refuse(u32::MAX, pin_hold),
         (RTC_CNTL, sar::INT_ENA) => Effect::Refuse(sar::INT_BITS, interrupt("SENS")),
         (RTC_CNTL, _)
             if offset == sar::SENS + sar::CLK_GATE || offset == sar::SENS + sar::RESET_CONF =>
         {
-            Effect::Report(!sar::SARADC_BIT)
+            if value & sar::TSENS_BIT != 0 {
+                Effect::Refuse(
+                    sar::TSENS_BIT,
+                    Ending::Refused(Refused::Unsimulated("SENS", blocks::TSENS)),
+                )
+            } else {
+                Effect::Report(!sar::SARADC_BIT)
+            }
         }
         (RTC_CNTL, _) if offset == sar::SENS + 0x40 => Effect::Report(sar::SLAVE_ADDRS),
         (SPI2, 0x34) => Effect::Refuse(!spi2::TRANS_DONE, interrupt("SPI2")),
         (USB_SERIAL_JTAG, 0x10) => Effect::Refuse(!usb::ENA_ALLOWED, interrupt("USB_SERIAL_JTAG")),
         (SHA, sha::INT_ENA) => Effect::Refuse(1, interrupt("SHA")),
-        (LEDC, ledc::INT_ENA) => Effect::Refuse(u32::MAX, interrupt("LEDC")),
+        (LEDC, ledc::INT_ENA) => Effect::Refuse(!ledc::INT_ENA_ALLOWED, interrupt("LEDC")),
         (RMT, 0x78) => Effect::Refuse(!(1 | 1 << 8 | 1 << 12), interrupt("RMT")),
         (uart::UART0, 0x0c) => Effect::Refuse(!uart::ENA_ALLOWED, interrupt("UART0")),
         (uart::UART1, 0x0c) => Effect::Refuse(!uart::ENA_ALLOWED, interrupt("UART1")),
@@ -476,21 +490,24 @@ impl Soc {
     /// on every netted pad that carries its channel, and every PWM edge then pass.
     pub(crate) fn settle_ledc(&mut self, through: Tick) {
         self.ledc.settle(through, self.clock.source.apb());
-        for effect in self.ledc.take_done() {
+        for effect in self.ledc.take_done_through(through) {
             for (pad, channel, inverted) in self.ledc_pads() {
                 if channel == effect.channel {
                     self.duties.push(duty(effect, pad, inverted));
                 }
             }
         }
-        self.edges.extend(self.ledc.take_edges());
+        self.edges.extend(self.ledc.take_edges_through(through));
     }
 
     /// Whether a netted pad carries an LEDC channel, or an update has yet to take effect or an
     /// edge to drive its signal. A reset then would leave a pad's last `Duty` record stale, or
     /// let the edge drive its signal after the reset.
     fn ledc_runs(&self) -> bool {
-        self.ledc.pending() || !self.edges.is_empty() || !self.ledc_pads().is_empty()
+        self.ledc.pending()
+            || self.ledc.fading()
+            || !self.edges.is_empty()
+            || !self.ledc_pads().is_empty()
     }
 
     /// Each netted pad that drives an LEDC channel's signal from the matrix, lowest first, with
@@ -934,7 +951,22 @@ impl Soc {
                     })
             }
             SYSTIMER => self.systimer.write(now, offset, value),
-            USB_SERIAL_JTAG => self.usb.write(now, offset, value),
+            USB_SERIAL_JTAG => match self.usb.write(now, offset, value) {
+                Ok(done) => {
+                    if offset == usb::CONF0 {
+                        self.gpio
+                            .set_usb_pads(self.usb.pad_enabled(), self.usb.dp_pullup_on());
+                    }
+                    done
+                }
+                Err(setting) => {
+                    self.ending = Some(Ending::Refused(Refused::Register(
+                        "USB_SERIAL_JTAG",
+                        setting,
+                    )));
+                    true
+                }
+            },
             ANALOG => self.analog.write(offset, value),
             GDMA => self.gdma.write(offset, value).unwrap_or_else(|setting| {
                 self.ending = Some(Ending::Refused(Refused::Register("GDMA", setting)));
@@ -1172,6 +1204,9 @@ impl Soc {
         if self.usb.poll(now) {
             sources |= 1 << usb::SOURCE;
         }
+        if self.ledc.line(now, apb) {
+            sources |= 1 << ledc::SOURCE;
+        }
         for index in 0..3 {
             if self.uart.line(index) {
                 sources |= 1 << uart::SOURCES[index];
@@ -1210,6 +1245,16 @@ impl Soc {
         self.watchdogs
             .apply_system_wdg(now, self.gates.system_wdg_reset());
         self.systimer.set_reset(now, self.gates.systimer_reset());
+    }
+
+    /// An access to a register no model keeps, at `addr`. In a block the model does not
+    /// simulate it ends the run, naming the block. In one it runs it goes through [`Self::touch`].
+    fn unkept(&mut self, now: Tick, addr: u32, write: bool) -> Result<(), Exit> {
+        if let Some((block, what)) = blocks::unsimulated(addr) {
+            self.ending = Some(Ending::Refused(Refused::Unsimulated(block, what)));
+            return Err(Exit::Stop);
+        }
+        self.touch(now, addr, write, false)
     }
 
     /// Lets an access to an unmodeled register through, or stops the core at the first one.
@@ -1512,16 +1557,13 @@ impl Soc {
         if word == USB_SERIAL_JTAG {
             self.usb.take_received(now);
         }
-        if word == I2C0 + i2c::DATA
-            && let Err(setting) = self.i2c.take()
-        {
-            self.ending = Some(Ending::Refused(Refused::Register("I2C0", setting)));
-            return Err(Exit::Stop);
+        if word == I2C0 + i2c::DATA {
+            self.i2c.take();
         }
         match kept {
             Some(value) => Ok((value >> shift) & mask),
             None if quiet(word, false, 0) => Ok(0),
-            None => self.touch(now, word, false, false).map(|()| 0),
+            None => self.unkept(now, word, false).map(|()| 0),
         }
     }
 
@@ -1584,14 +1626,6 @@ impl Soc {
             self.ending = Some(Ending::Refused(Refused::Register("RMT", "fifo")));
             return Err(Exit::Stop);
         }
-        if word & !(BLOCK - 1) == I2C1 {
-            self.ending = Some(Ending::Refused(Refused::Register("I2C1", "port")));
-            return Err(Exit::Stop);
-        }
-        if word & !(BLOCK - 1) == USB_WRAP {
-            self.ending = Some(Ending::Refused(Refused::Register("USB_WRAP", "otg")));
-            return Err(Exit::Stop);
-        }
         let clock = word == SYSTEM + SYSCLK_CONF || word == SYSTEM + CPU_PER_CONF;
         // The other core's refetched access on a tie can have stamped the cycle after `start`,
         // and a switch at `start` would hold the reported tick until the new clock caught up.
@@ -1608,7 +1642,7 @@ impl Soc {
         }
         let kept = self.read_kept(now, word);
         let value = (kept.unwrap_or(0) & !(mask << shift)) | ((value & mask) << shift);
-        let change = match effect(word) {
+        let change = match effect(word, value) {
             Some(Effect::Refuse(bits, ending)) if value & bits != 0 => {
                 self.ending = Some(ending);
                 return Err(Exit::Stop);
@@ -1629,12 +1663,13 @@ impl Soc {
             if quiet(word, true, value) {
                 return Ok(());
             }
-            return self.touch(now, word, true, false);
+            return self.unkept(now, word, true);
         }
         let base = word & !(BLOCK - 1);
         let pads = matches!(base, GPIO | IO_MUX | SPI2 | RMT)
             || uart::Uarts::index(base).is_some()
-            || (base == SYSTEM && gates::OFFSETS.contains(&(word - SYSTEM)));
+            || (base == SYSTEM && gates::OFFSETS.contains(&(word - SYSTEM)))
+            || word == USB_SERIAL_JTAG + usb::CONF0;
         if !pads {
             // A store to USB Serial/JTAG moves no watchdog, LEDC or I2C event.
             let usb = base == USB_SERIAL_JTAG;
@@ -1677,7 +1712,8 @@ impl Soc {
                 }
                 self.rearmed |= after.deadline != before.deadline
                     || after.ledc != before.ledc
-                    || after.i2c != before.i2c;
+                    || after.i2c != before.i2c
+                    || self.ledc.has_output();
             }
             self.rearmed |= self.usb.next_event(now) != usb_due;
             return Ok(());
@@ -1689,6 +1725,7 @@ impl Soc {
         let compared = !uart || cfg!(debug_assertions);
         let rmt_due = compared.then(|| self.rmt.next_event());
         let uart_due = self.uart.next_event(now);
+        let usb_due = (base == USB_SERIAL_JTAG).then(|| self.usb.next_event(now));
         let before = self.image();
         let carried = compared.then(|| self.ledc_pads());
         self.write_kept(now, word, value);
@@ -1709,6 +1746,11 @@ impl Soc {
             self.rearmed |= after != due;
         }
         if self.uart.next_event(now) != uart_due {
+            self.rearmed = true;
+        }
+        if let Some(due) = usb_due
+            && self.usb.next_event(now) != due
+        {
             self.rearmed = true;
         }
         if uart {
@@ -1821,6 +1863,7 @@ impl Soc {
             Peripheral::Usb => self.usb.next_event(now),
             Peripheral::Rmt => self.rmt.next_event(),
             Peripheral::Uart => self.uart.next_event(now),
+            Peripheral::Ledc => self.ledc.next_int_event(now, self.clock.source.apb()),
         }
     }
 }

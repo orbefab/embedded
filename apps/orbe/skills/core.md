@@ -97,7 +97,7 @@ t=104ms (from 100ms), @led1 lit by 104ms
 $ orbe close
 closed at t=104ms
 $ orbe test
-PASS tests/button.test
+PASS tests/button.test (scene.jsonc)
 1 passed, 0 failed
 ```
 
@@ -134,7 +134,7 @@ An error prints `error[<code>]: <message>` and usually a `hint:`. Do what the hi
 | `orbe skills get breadboards` | Seating a part, a hole, or a breadboard error |
 | `orbe skills get parts` | The copy in `parts/`, a version, a Block, `buy`, an addressable LED, or a 5 V board wired to a 3.3 V module |
 | `orbe skills get sessions-and-time` | When a step or a set lands, a session name, bounce, or the 2-hour stop |
-| `orbe skills get tests` | A test file beyond the example above, or a screen |
+| `orbe skills get tests` | A test file beyond the example above, a screen, or a buzzer's pitch |
 | `orbe skills get ratings` | A warning names a rating, or an LED is lit, dim or off |
 | `orbe skills get errors` | An error code not in the table above |
 | `orbe skills get page` | The 3D page, a knob, or a servo horn |

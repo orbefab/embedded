@@ -337,20 +337,27 @@ mod tests {
             .unwrap_or_else(|_| panic!("{id}: {value} is not three numbers"))
     }
 
-    /// The asset step's record holds for every part with a body model: the hashes and sizes
-    /// match the files, the anchors cover exactly the leads in `pins` and sit inside the box,
-    /// and the GLB's named nodes are exactly the nodes the merge keeps: those `view` and `joints`
-    /// name, and the `node` and `also` of each leg or socket anchor, each once.
+    /// Every catalog part has a body model built from `model.py`, and the asset step's record
+    /// holds for it: the hashes and sizes match the files, the anchors cover exactly the leads in
+    /// `pins` and sit inside the box, and the GLB's named nodes are exactly the nodes the merge
+    /// keeps: those `view` and `joints` name, and the `node` and `also` of each leg or socket
+    /// anchor, each once.
     #[test]
     fn every_body_model_matches_its_asset_record() {
         for id in part_ids() {
             let id = id.as_str();
             let files = load_folder(id);
             let glb = format!("{id}.glb");
+            let script_path = parts_root().join(id).join("model.py");
+            assert!(
+                script_path.is_file(),
+                "{id} is missing model.py. Add parts/{id}/model.py and run scripts/model.sh {id}"
+            );
+            assert!(
+                files.contains_key(&glb),
+                "{id} is missing {glb}. Run scripts/model.sh {id}"
+            );
             let asset_path = parts_root().join(id).join("asset.json");
-            if !files.contains_key(&glb) && !asset_path.is_file() {
-                continue;
-            }
             let asset_bytes = fs::read(&asset_path)
                 .unwrap_or_else(|error| panic!("{id} is missing asset.json: {error}"));
             let asset: Value = serde_json::from_slice(&asset_bytes)
@@ -376,16 +383,13 @@ mod tests {
                     "{id}: sha256 of {name}"
                 );
             }
-            let script_path = parts_root().join(id).join("model.py");
-            if script_path.is_file() {
-                let script = fs::read(&script_path).unwrap();
-                let recorded = asset["source"]["sha256"].as_str().unwrap_or("");
-                assert_eq!(
-                    recorded,
-                    hex(&Sha256::digest(script)),
-                    "{id}: model.py does not match asset.json. Run scripts/model.sh {id}"
-                );
-            }
+            let script = fs::read(&script_path).unwrap();
+            let recorded = asset["source"]["sha256"].as_str().unwrap_or("");
+            assert_eq!(
+                recorded,
+                hex(&Sha256::digest(script)),
+                "{id}: model.py does not match asset.json. Run scripts/model.sh {id}"
+            );
 
             let part = jsonc(id, &files, "part.jsonc").unwrap().to_value();
             let anchors: Vec<Value> = match files.get(&anchors_name) {
