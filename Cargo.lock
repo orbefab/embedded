@@ -742,7 +742,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "orbe"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "clap",
  "ctrlc",
@@ -763,18 +763,18 @@ dependencies = [
 
 [[package]]
 name = "orbe-avr"
-version = "0.2.1"
+version = "0.3.0"
 
 [[package]]
 name = "orbe-device-check"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "orbe-model",
 ]
 
 [[package]]
 name = "orbe-engine"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "clap",
  "jsonc-parser",
@@ -794,7 +794,7 @@ dependencies = [
 
 [[package]]
 name = "orbe-espressif"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "object",
  "orbe-mcu",
@@ -805,14 +805,14 @@ dependencies = [
 
 [[package]]
 name = "orbe-mcu"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "orbe-model",
 ]
 
 [[package]]
 name = "orbe-microchip"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "orbe-avr",
  "orbe-mcu",
@@ -821,7 +821,7 @@ dependencies = [
 
 [[package]]
 name = "orbe-model"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "serde",
  "sha2",
@@ -829,7 +829,7 @@ dependencies = [
 
 [[package]]
 name = "orbe-registry"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "jsonc-parser",
  "jsonschema",
@@ -843,7 +843,7 @@ dependencies = [
 
 [[package]]
 name = "orbe-scene"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "jsonc-parser",
  "libm",
@@ -861,14 +861,14 @@ dependencies = [
 
 [[package]]
 name = "orbe-scratch"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "tempfile",
 ]
 
 [[package]]
 name = "orbe-session"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "orbe-engine",
  "orbe-model",
@@ -881,7 +881,7 @@ dependencies = [
 
 [[package]]
 name = "orbe-wasm"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "orbe-scene",
  "orbe-session",
@@ -891,7 +891,7 @@ dependencies = [
 
 [[package]]
 name = "orbe-xtensa"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "object",
  "sha2",

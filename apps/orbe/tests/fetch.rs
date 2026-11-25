@@ -479,8 +479,11 @@ fn a_part_this_orbe_reads_is_installed() {
 
 #[test]
 fn a_format_5_part_named_for_a_newer_orbe_is_not_written() {
+    let (major, rest) = env!("CARGO_PKG_VERSION").split_once('.').unwrap();
+    let (minor, patch) = rest.split_once('.').unwrap();
+    let newer = format!("{major}.{minor}.{}", patch.parse::<u64>().unwrap() + 1);
     let (dir, _) = led_index(|row| {
-        row["orbe"] = json!("0.2.2");
+        row["orbe"] = json!(newer);
     });
     let project = tempfile::tempdir().unwrap();
     let (code, stdout, stderr) = run(
