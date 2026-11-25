@@ -4,8 +4,8 @@
 // input_headroom is the VCM maximum, (V+) - 1.5 V at 25 °C. The bias current still turns off
 // at a fixed 0.8 V below vcc. The stage keeps comparing above the headroom, and the run warns.
 {
-  "format": 5, "part": "lm358-dip8", "version": "0.2.1", "title": "LM358 dual op-amp, DIP-8", "license": "MIT OR Apache-2.0",
-  "summary": "TI LM358P dual op-amp in PDIP-8. The notch marks lead 1. Two amplifiers share the supply pins. A comparator with no hysteresis chatters on a slow input in real life (orbe has no noise, so it won't show it), and positive feedback fixes it.",
+  "format": 5, "part": "lm358-dip8", "version": "0.2.2", "title": "LM358 dual op-amp, DIP-8", "license": "MIT OR Apache-2.0",
+  "summary": "TI LM358P dual op-amp in PDIP-8, with two amplifiers sharing one supply. The notch marks lead 1.",
   "tags": ["op-amp", "amplifier", "through-hole"],
   "docs": { "TI SLOS068AB": "https://www.ti.com/lit/ds/symlink/lm358.pdf" },
   "real": { "maker": "Texas Instruments", "number": "LM358P", "datasheet": "TI SLOS068AB" },

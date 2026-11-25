@@ -2,9 +2,9 @@
 {
   "format": 5,
   "part": "display-7seg-ca",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "0.56 in 7-segment display, common anode",
-  "summary": "One digit, 0.56 inch, common anode, 10 pins on 2.54 mm. TOPLITE A-5161BS, the 5161BS kind: the same pins as the common-cathode part, with pins 3 and 8 the common anode and the segment pins the cathodes. Each segment warns above 30 mA and 80 mW. Drive a segment low through its own resistor. The page lights each segment by its current, and digit reads 0 to 9 when the lit segments are that digit.",
+  "summary": "One-digit 0.56 inch seven-segment LED display with a decimal point, common anode, 10 pins on 2.54 mm: the TOPLITE A-5161BS.",
   "tags": ["display", "7-segment", "5161bs", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "docs": {

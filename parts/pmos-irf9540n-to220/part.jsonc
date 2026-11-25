@@ -1,9 +1,9 @@
 {
   "format": 5,
   "part": "pmos-irf9540n-to220",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "P-channel MOSFET, IRF9540N (TO-220)",
-  "summary": "100 V, 23 A P-channel MOSFET in TO-220. With the marked face toward you and the leads down, the legs are gate, drain, source from left to right, and the metal tab is the drain too. It is not a logic-level part: the on-resistance row is at a -10 V gate. Pull the gate down to about 0 V, against a source near 10 V, to turn it on, and tie the gate up to the source to turn it off.",
+  "summary": "100 V, 23 A P-channel power MOSFET in TO-220. It is not logic-level: it turns fully on with the gate 10 V below the source.",
   "tags": ["transistor", "mosfet", "pmos", "switch", "power", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "docs": {

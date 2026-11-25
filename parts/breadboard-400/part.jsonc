@@ -2,9 +2,9 @@
 {
   "format": 1,
   "part": "breadboard-400",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "Breadboard, 400 points",
-  "summary": "Half-size solderless breadboard: 30 columns of two 5-hole strips across a center channel, rows a to j, and four 25-hole power rails, W and Y for +, X and Z for -, each hole numbered by its column.",
+  "summary": "Half-size solderless breadboard: 30 columns of two 5-hole strips across a center channel, and four 25-hole power rails.",
   "tags": ["breadboard", "prototyping", "solderless"],
   "license": "MIT OR Apache-2.0",
   "docs": { "BusBoard BB400 datasheet, Rev 7": "https://www.busboard.com/documents/datasheets/BPS-DAT-(BB400)-Datasheet.pdf" },

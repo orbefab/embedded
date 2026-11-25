@@ -1,9 +1,9 @@
 {
   "format": 5,
   "part": "sgm2212-sot223",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "title": "SGM2212 3.3 V regulator, SOT-223",
-  "summary": "SG Micro SGM2212-3.3XKC3G/TR, a fixed 3.3 V 800 mA LDO in SOT-223-3. Pin 1 is GND, pin 2 and the tab are VOUT, and pin 3 is VIN. Dropout on the sheet is the input-to-output gap when the output has fallen to 95 percent of nominal.",
+  "summary": "SG Micro SGM2212-3.3, a fixed 3.3 V low-dropout regulator in SOT-223-3 for loads up to 800 mA.",
   "tags": ["regulator", "ldo", "sot-223", "power"],
   "license": "MIT OR Apache-2.0",
   "docs": { "SG Micro SGM2212, JULY 2023": "https://www.sg-micro.com/product/SGM2212" },

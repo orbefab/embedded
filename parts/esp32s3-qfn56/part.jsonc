@@ -13,9 +13,9 @@
 {
   "format": 6,
   "part": "esp32s3-qfn56",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "title": "ESP32-S3, QFN-56",
-  "summary": "ESP32-S3 in a 7 x 7 mm QFN-56. GPIO names match the esp32s3 kind. The mask ROM is the default of rom.",
+  "summary": "Espressif ESP32-S3, a dual-core Xtensa LX7 microcontroller with Wi-Fi and Bluetooth LE, in a 7 x 7 mm QFN-56.",
   "tags": ["microcontroller", "esp32-s3", "qfn"],
   "license": "(MIT OR Apache-2.0) AND Apache-2.0 AND MIT AND BSD-3-Clause AND BSD-2-Clause AND LicenseRef-Cadence-Xtensa AND LicenseRef-newlib AND LicenseRef-GCC-Runtime-Library-Exception",
   "docs": {

@@ -1,9 +1,9 @@
 {
   "format": 5,
   "part": "lm7805-to220",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "LM7805 5 V regulator, TO-220",
-  "summary": "Fixed 5 V regulator in TO-220. With the marked face toward you and the leads down, the legs are input, ground, output, and the metal tab is ground too. Nine volts in makes 5 V. At 25 C, from 5 mA to 1 A, the sheet's window is 4.8 V to 5.2 V.",
+  "summary": "Fixed 5 V linear regulator in TO-220 for loads up to 1 A. The metal tab is ground.",
   "tags": ["regulator", "linear", "power", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "docs": {

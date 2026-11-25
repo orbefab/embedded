@@ -1,9 +1,9 @@
 {
   "format": 6,
   "part": "sk68xxmini-hs",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "title": "SK68XXMINI-HS addressable RGB LED",
-  "summary": "One addressable RGB LED in a 3.7 x 3.5 x 1.95 mm package. Pin 1 is GND, pin 2 DIN, pin 3 VDD and pin 4 DOUT. It keeps the first 24 bits it reads and passes the rest to the next LED on DOUT, so a chain on one pin shows one colour per LED. Its reading `color` is the last colour it latched. Each channel draws 12 mA at 255 and the LED draws 1 mA idle, both from VDD. The sheet's supply is 3.7 V to 5.5 V. A 0-bit high runs from 220 ns to 400 ns, this sheet's T0H maximum, and a 1-bit high from 580 ns to 1 us. Adafruit NeoPixel (16 MHz AVR) and Arduino rgbLedWrite both drive this part within those windows.",
+  "summary": "SK68XXMINI-HS addressable RGB LED in a 3.7 x 3.5 mm package. It takes a 24-bit colour on DIN and passes the rest of the chain on to DOUT.",
   "tags": ["led", "rgb", "addressable", "ws2812"],
   "license": "MIT OR Apache-2.0",
   "docs": { "SPC / SK68XX MINI-HS Rev. 04": null },

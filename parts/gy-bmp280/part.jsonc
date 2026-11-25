@@ -13,9 +13,9 @@
 {
   "format": 1,
   "part": "gy-bmp280",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "GY-BMP280-3.3 pressure module",
-  "summary": "BMP280 breakout, 6 pins on 2.54 mm: VCC, GND, SCL, SDA, CSB, SDO. Three 10 kΩ resistors pull SCL, SDA and CSB up to VCC, and one 10 kΩ pulls SDO down, so I2C address 0x76 is the default and CSB stays high. Two 100 nF capacitors sit on VDD and VDDIO. There is no regulator and no level shifter. Power it from 3.3 V: wire it straight to a 3.3 V board such as an ESP32-S3 DevKitC-1, or put a level shifter on SDA and SCL from a 5 V board. It reads the scene's temperature and pressure.",
+  "summary": "BMP280 pressure and temperature breakout for 3.3 V, with I2C pull-ups and a 6-pin header on 2.54 mm. It answers at I2C address 0x76.",
   "tags": ["bmp280", "gy-bmp280", "temperature", "pressure", "sensor", "i2c", "breakout"],
   "license": "MIT OR Apache-2.0",
   "docs": {
@@ -30,7 +30,7 @@
     "datasheet": "BST-BMP280-DS001-26"
   },
   "uses": {
-    "bmp280": "0.1.0",
+    "bmp280": "0.1.1",
     "pin-header-1x6": "0.1.0",
     "resistor-0603": "0.2.0",
     "capacitor-0603": "0.2.0"
