@@ -163,6 +163,8 @@ pub enum Code {
     Value,
     PastStop,
     NoChange,
+    /// A step that reached its wall-time budget.
+    StepTimeout,
     /// A step its caller stopped between two slices.
     Cancelled,
     /// The session's process ended without closing.
@@ -214,6 +216,7 @@ impl Code {
             Code::Value => "value",
             Code::PastStop => "past_stop",
             Code::NoChange => "no_change",
+            Code::StepTimeout => "step_timeout",
             Code::Cancelled => "cancelled",
             Code::SessionCrashed => "session_crashed",
             Code::VersionMismatch => "version_mismatch",

@@ -10,6 +10,7 @@ Load this when a step or a set lands at the wrong time, a session's name or stop
 - `step --until` reads the condition now. If it already holds, it takes no time. A pin condition stops 1 ps after the edge. `@led1.i` shows the current there. The light state follows the 20 ms average. Other conditions are read every 1 ms, so the reply says `by 104ms`.
 - Serial can arrive up to one engine step (`sim.max_step`, 10 ms by default) after the chip sends it. Step past a print before you expect it.
 - A session stops at 2 hours. Reads still work. `press`, `release`, `set`, `step` and `play` fail with `ended`. `step <duration>` past the stop fails with `past_stop`, and the hint names the time left. `step --until` stops there and fails with `ended`. An input that would land past the stop fails with `past_stop`. The hint says to run `orbe open`.
+- A `step` that runs for 30 s of wall time stops paused where it got with `step_timeout`, prints the speed relative to real time, and hints the `orbe step` command for the rest.
 
 ## Sessions
 

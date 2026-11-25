@@ -24,7 +24,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use orbe_session::viewer::{self as messages, Feed, TICK};
-use orbe_session::{Code, Command, Data, Error, Files, Live, Pace, Reply, Sample};
+use orbe_session::{Code, Command, Data, Error, Files, Live, Pace, Reply, Sample, Step};
 use orbe_session::{EXIT_IO as IO, EXIT_LOST as LOST};
 use serde_json::Value;
 
@@ -50,6 +50,10 @@ const WRITE: Duration = Duration::from_secs(5);
 
 /// How long the ending process waits for its viewers to take their close.
 const FAREWELL: Duration = Duration::from_secs(1);
+
+/// Wall-time budget for one `step`, well under the 2-minute command limit agent harnesses
+/// commonly use, so a slow scene pauses and reports cleanly instead of timing out the caller.
+pub(super) const STEP_BUDGET: Duration = Duration::from_secs(30);
 
 /// A request, or why it did not read as one, with the connection its reply goes back on.
 pub(super) struct Job {
@@ -145,6 +149,142 @@ fn say_session_closed(reply: &mut Reply) {
     error.hint = "run `open` to start it again".into();
 }
 
+/// A step that hit its wall-time budget stops paused where it got, reports the reached time,
+/// the asked time and the speed relative to real time, and hints the command for the rest.
+fn say_step_timeout(
+    reply: &mut Reply,
+    step: &Step,
+    from_ps: u64,
+    end_ps: u64,
+    budget: Duration,
+    elapsed: Duration,
+) {
+    let Some(error) = &mut reply.error else {
+        return;
+    };
+    if error.code != Code::Cancelled {
+        return;
+    }
+    let reached_ps = reply.t_ps;
+    let advanced_ps = reached_ps.saturating_sub(from_ps);
+    let remaining_ps = end_ps.saturating_sub(reached_ps);
+    let reached = orbe_session::Duration::from_ps(reached_ps);
+    let remaining = orbe_session::Duration::from_ps(remaining_ps);
+    let budget_ps = u64::try_from(budget.as_nanos())
+        .unwrap_or(u64::MAX)
+        .saturating_mul(1000);
+    let budget_shown = orbe_session::Duration::from_ps(budget_ps);
+    let pace = format_pace(elapsed, advanced_ps);
+    let pace_note = if pace.is_empty() {
+        String::new()
+    } else {
+        format!(" ({pace})")
+    };
+    error.code = Code::StepTimeout;
+    match step {
+        Step::For(asked) => {
+            let asked_part = if from_ps == 0 {
+                format!("asked for {asked}")
+            } else {
+                format!(
+                    "{} of the {asked} asked",
+                    orbe_session::Duration::from_ps(advanced_ps)
+                )
+            };
+            error.message = format!(
+                "step stopped at t={reached} ({asked_part}) after the {budget_shown} wall-time limit{pace_note}"
+            );
+            error.hint = format!(
+                "the session is paused at t={reached}; run `orbe step {remaining}` to step the rest"
+            );
+        }
+        Step::Until { condition, timeout } => {
+            let asked_part = if from_ps == 0 {
+                format!("timeout {timeout}")
+            } else {
+                format!(
+                    "{} of the {timeout} timeout",
+                    orbe_session::Duration::from_ps(advanced_ps)
+                )
+            };
+            let cond = shell_condition(&condition.to_string());
+            error.message = format!(
+                "step --until stopped at t={reached} ({asked_part}) after the {budget_shown} wall-time limit{pace_note}"
+            );
+            error.hint = format!(
+                "the condition was not met yet and the session is paused at t={reached}; run `orbe step --until {cond} --timeout {remaining}` to keep waiting"
+            );
+        }
+    }
+}
+
+/// How fast the scene simulated over one step relative to real time.
+fn format_pace(elapsed: Duration, sim_ps: u64) -> String {
+    let wall_secs = elapsed.as_secs_f64();
+    let sim_secs = sim_ps as f64 / 1e12;
+    if sim_secs <= 0.0 || wall_secs <= 0.0 {
+        return String::new();
+    }
+    if wall_secs >= sim_secs {
+        format!(
+            "{}x slower than real time",
+            format_factor(wall_secs / sim_secs)
+        )
+    } else {
+        let faster = sim_secs / wall_secs;
+        if (faster * 10.0).round() <= 10.0 {
+            "at 1x real time".into()
+        } else {
+            format!("{}x faster than real time", format_factor(faster))
+        }
+    }
+}
+
+/// Rounds a speed ratio to a whole number (at 10x and up, or exact whole numbers) or one decimal.
+fn format_factor(ratio: f64) -> String {
+    let tenths = (ratio * 10.0).round() as u64;
+    if tenths >= 100 {
+        format!("{}", ratio.round() as u64)
+    } else if tenths.is_multiple_of(10) {
+        format!("{}", tenths / 10)
+    } else {
+        format!("{}.{}", tenths / 10, tenths % 10)
+    }
+}
+
+/// Quotes a condition for a shell when it holds characters a shell interprets, such as `>`, `(`
+/// or `"`. Plain conditions such as `@led1 lit` stay unquoted.
+fn shell_condition(text: &str) -> String {
+    let needs_quotes = text.bytes().any(|b| {
+        matches!(
+            b,
+            b'"' | b'\''
+                | b'<'
+                | b'>'
+                | b'('
+                | b')'
+                | b';'
+                | b'&'
+                | b'|'
+                | b'$'
+                | b'`'
+                | b'\\'
+                | b'*'
+                | b'?'
+                | b'['
+                | b']'
+                | b'#'
+                | b'~'
+                | b'!'
+        )
+    });
+    if !needs_quotes {
+        text.to_string()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
+}
+
 impl Held {
     fn run(&mut self, job: &Job) -> Reply {
         if matches!(
@@ -163,7 +303,7 @@ impl Held {
                 "the session did not change",
             ));
         }
-        let (cwd, command, stop) = match &job.request {
+        let (cwd, command, stop, step_budget) = match &job.request {
             Ok(Request {
                 ask: Ask::Show { page },
                 ..
@@ -172,7 +312,13 @@ impl Held {
                 cwd,
                 ask: Ask::Run(Ok(command)),
                 stop,
-            }) => (Path::new(cwd), command, stop.as_deref()),
+                step_budget,
+            }) => (
+                Path::new(cwd),
+                command,
+                stop.as_deref(),
+                step_budget.as_deref(),
+            ),
             Ok(Request {
                 ask: Ask::Run(Err(error)),
                 ..
@@ -195,6 +341,9 @@ impl Held {
         let closing = Arc::clone(&self.closing);
         let watchers = &mut self.watchers;
         let mut closed = false;
+        let started = matches!(command, Command::Step(_)).then(wall);
+        let budget = test_step_budget(step_budget);
+        let mut timed_out: Option<(u64, u64, Duration)> = None;
         let mut reply = self.live.run_with(command, &mut |progress| {
             if watchers.due() {
                 watchers.frame(progress.sample(), progress.serial(), None);
@@ -205,12 +354,23 @@ impl Held {
                 ControlFlow::Break(())
             } else if job.hung_up.load(Ordering::Relaxed) {
                 ControlFlow::Break(())
+            } else if let Some(started) = started {
+                let elapsed = wall().duration_since(started);
+                if elapsed >= budget {
+                    timed_out = Some((progress.from_ps, progress.end_ps, elapsed));
+                    ControlFlow::Break(())
+                } else {
+                    ControlFlow::Continue(())
+                }
             } else {
                 ControlFlow::Continue(())
             }
         });
         if closed {
             say_session_closed(&mut reply);
+        } else if let (Command::Step(step), Some((from_ps, end_ps, elapsed))) = (command, timed_out)
+        {
+            say_step_timeout(&mut reply, step, from_ps, end_ps, budget, elapsed);
         }
         match (command, &mut reply.data) {
             (Command::Open(scene), Data::Opened { .. }) => {
@@ -695,6 +855,22 @@ fn test_duration(name: &str) -> Option<Duration> {
         .map(|duration| Duration::from_nanos(duration.as_ps() / 1000))
 }
 
+/// `ORBE_TEST_STEP_BUDGET` from the shell that ran `step`, a test seam for a wall-time budget
+/// shorter than [`STEP_BUDGET`]. A release build ignores it.
+fn test_step_budget(text: Option<&str>) -> Duration {
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = text;
+        STEP_BUDGET
+    }
+    #[cfg(debug_assertions)]
+    {
+        text.and_then(|value| orbe_session::Duration::parse(value).ok())
+            .map(|duration| Duration::from_nanos(duration.as_ps() / 1000))
+            .unwrap_or(STEP_BUDGET)
+    }
+}
+
 /// `ORBE_TEST_STOP` from the shell that ran `open`, a test seam for a stop shorter than 2 hours.
 /// A release build ignores it.
 fn test_stop(text: Option<&str>) -> Result<Option<(orbe_session::Duration, String)>, Error> {
@@ -854,4 +1030,56 @@ fn connection(stream: UnixStream, jobs: &Sender<Event>, closing: &AtomicBool) {
 #[expect(clippy::disallowed_methods, reason = "`play` runs on the wall clock")]
 pub(super) fn wall() -> Instant {
     Instant::now()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pace_rounds_to_whole_or_one_decimal() {
+        assert_eq!(
+            format_pace(Duration::from_secs(30), 937_500_000_000),
+            "32x slower than real time"
+        );
+        assert_eq!(
+            format_pace(Duration::from_secs(30), 1_157_000_000_000),
+            "26x slower than real time"
+        );
+        assert_eq!(
+            format_pace(Duration::from_secs(30), 20_000_000_000_000),
+            "1.5x slower than real time"
+        );
+        assert_eq!(
+            format_pace(Duration::from_secs(30), 15_000_000_000_000),
+            "2x slower than real time"
+        );
+        assert_eq!(
+            format_pace(Duration::from_secs(30), 3_010_000_000_000),
+            "10x slower than real time"
+        );
+        assert_eq!(
+            format_pace(Duration::from_secs(30), 60_000_000_000_000),
+            "2x faster than real time"
+        );
+    }
+
+    #[test]
+    fn shell_condition_quotes_only_when_needed() {
+        assert_eq!(shell_condition("@led1 lit"), "@led1 lit");
+        assert_eq!(shell_condition("no diagnostics"), "no diagnostics");
+        assert_eq!(shell_condition("@led1.i > 5mA"), "'@led1.i > 5mA'");
+        assert_eq!(
+            shell_condition("serial contains \"ready\""),
+            "'serial contains \"ready\"'"
+        );
+    }
+
+    #[test]
+    fn client_deadline_exceeds_step_budget() {
+        let step = Ask::Run(Ok(Command::Step(Step::For(
+            orbe_session::Duration::from_ms(1),
+        ))));
+        assert!(super::super::reply_deadline(&step) > STEP_BUDGET);
+    }
 }
