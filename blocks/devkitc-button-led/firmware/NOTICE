@@ -44,4 +44,4 @@ under LGPL-2.1-or-later.
 `firmware/LICENSE-apache` is under Apache-2.0. `firmware/LICENSE-freertos` is under MIT.
 `firmware/LICENSE-tlsf` is under BSD-3-Clause. `firmware/LICENSE-newlib` holds newlib's notices.
 `firmware/LICENSE-ubsan` is under BSD-2-Clause. `firmware/LICENSE-xtensa` is under the notice
-in that file.
+in that file. In `block.jsonc`, `LicenseRef-newlib` names `firmware/LICENSE-newlib`.

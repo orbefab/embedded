@@ -7,5 +7,5 @@
   "summary": "An Arduino Nano drives eight LEDs through one 74HC595. The sketch calls shiftOut, so no library is needed.",
   "board": "nano-board",
   "tags": ["led", "74hc595", "shift register", "nano"],
-  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause",
 }

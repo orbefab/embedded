@@ -7,5 +7,5 @@
   "summary": "An ESP32-S3-DevKitC-1 reads a GY-BMP280-3.3 over I2C at 3.3 V on Wire's default pins, GPIO8 (SDA) and GPIO9 (SCL). The sketch prints temperature and pressure on Serial.",
   "board": "esp32s3-devkitc-1",
   "tags": ["bmp280", "temperature", "pressure", "i2c", "esp32-s3"],
-  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND Apache-2.0 AND MIT AND BSD-3-Clause AND BSD-2-Clause AND LicenseRef-newlib",
 }

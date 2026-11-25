@@ -59,3 +59,45 @@ export function size(bytes: number): string {
   if (bytes < 1_000_000) return `${(bytes / 1000).toFixed(1)} kB`;
   return `${(bytes / 1_000_000).toFixed(2)} MB`;
 }
+
+function unwrapParens(term: string): string {
+  if (!term.startsWith("(") || !term.endsWith(")")) return term;
+  let depth = 0;
+  for (let i = 0; i < term.length; i += 1) {
+    if (term[i] === "(") depth += 1;
+    else if (term[i] === ")") {
+      depth -= 1;
+      if (depth === 0 && i < term.length - 1) return term;
+    }
+  }
+  return depth === 0 ? term.slice(1, -1).trim() : term;
+}
+
+/** Splits an SPDX expression on top-level `AND` operators, keeping parenthesized groups intact. */
+function spdxAndTerms(expression: string): string[] {
+  const terms: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < expression.length; i += 1) {
+    const ch = expression[i];
+    if (ch === "(") depth += 1;
+    else if (ch === ")") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && expression.startsWith(" AND ", i)) {
+      terms.push(expression.slice(start, i).trim());
+      i += 4;
+      start = i + 1;
+    }
+  }
+  terms.push(expression.slice(start).trim());
+  return terms.filter((term) => term !== "");
+}
+
+/** Closed-box license line for a Block: the sketch's license, plus how many third-party licenses
+ * the prebuilt program includes. */
+export function blockLicenseSummary(expression: string): string {
+  const terms = spdxAndTerms(expression);
+  if (terms.length <= 1) return expression;
+  const sketch = unwrapParens(terms[0] ?? expression);
+  const extra = terms.length - 1;
+  return `${sketch}, plus ${extra} third-party ${extra === 1 ? "license" : "licenses"}`;
+}
