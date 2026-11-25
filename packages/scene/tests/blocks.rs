@@ -3,7 +3,7 @@
 
 mod common;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -84,23 +84,56 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
         for key in ["title", "summary", "license"] {
             assert!(non_empty_text(&block[key]), "{id}: {key}");
         }
-        let license = match id {
-            "nano-neopixel-stick" => {
-                "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND LGPL-3.0-or-later"
-            }
-            "nano-oled" => {
-                "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND BSD-2-Clause"
-            }
-            "nano-lcd1602-i2c" => "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND MIT",
-            _ => "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
-        };
-        assert_eq!(
-            block["license"], license,
-            "{id}: license is the SPDX expression for the sketch and what its image links"
+        let expr = block["license"].as_str().unwrap();
+        assert!(
+            spdx_parses(expr),
+            "{id}: `{expr}` is not a valid SPDX expression"
         );
-        assert!(spdx_parses(block["license"].as_str().unwrap()), "{id}");
         assert!(!spdx_parses("MIT OR"), "{id}");
         assert!(!spdx_parses("(MIT OR Apache-2.0"), "{id}");
+        assert!(!spdx_parses("GPL-3.0-or-later WITH"), "{id}");
+        assert!(
+            !spdx_parses("(MIT OR Apache-2.0) WITH GCC-exception-3.1"),
+            "{id}"
+        );
+        let terms = spdx_and_terms(expr);
+        assert_eq!(
+            terms.first().copied(),
+            Some(SKETCH_LICENSE),
+            "{id}: license `{expr}` must start with the sketch's licence `{SKETCH_LICENSE}`"
+        );
+        let mut actual = BTreeSet::new();
+        for &term in &terms[1..] {
+            assert!(
+                actual.insert(term),
+                "{id}: license `{expr}` repeats `{term}`"
+            );
+        }
+        let mut expected = BTreeSet::new();
+        for entry in fs::read_dir(dir.join("firmware")).unwrap() {
+            let name = entry.unwrap().file_name().into_string().unwrap();
+            if name.starts_with("LICENSE-") {
+                let spdx = license_file_spdx(&name).unwrap_or_else(|| {
+                    panic!("{id}: firmware/{name} has no SPDX mapping in license_file_spdx")
+                });
+                expected.insert(spdx);
+            }
+        }
+        let missing: Vec<&str> = expected.difference(&actual).copied().collect();
+        let extra: Vec<&str> = actual.difference(&expected).copied().collect();
+        assert!(
+            missing.is_empty() && extra.is_empty(),
+            "{id}: block.jsonc license `{expr}` disagrees with firmware/LICENSE-* files (missing: {missing:?}, extra: {extra:?})"
+        );
+        let notice = fs::read_to_string(dir.join("firmware/NOTICE")).unwrap();
+        for term in &actual {
+            if term.starts_with("LicenseRef-") {
+                assert!(
+                    notice.contains(term),
+                    "{id}: firmware/NOTICE does not map `{term}` to its license file"
+                );
+            }
+        }
         let tags = block["tags"].as_array().unwrap();
         assert!(
             !tags.is_empty() && tags.iter().all(non_empty_text),
@@ -126,7 +159,6 @@ fn each_block_names_itself_and_reads_with_the_catalog_alone() {
         assert_eq!(boards.len(), 1, "{id}: the scene holds one `{board}`");
 
         let written = read_jsonc(&scene);
-        let notice = fs::read_to_string(dir.join("firmware/NOTICE")).unwrap();
         for (name, part) in written["parts"].as_object().unwrap() {
             if let Some(firmware) = part.get("firmware") {
                 let firmware = firmware.as_str().unwrap();
@@ -267,6 +299,52 @@ fn each_block_notice_names_the_runtime_sketches_sh_pins_and_where_the_site_serve
     }
 }
 
+const SKETCH_LICENSE: &str = "(MIT OR Apache-2.0)";
+
+/// One source of truth from each `firmware/LICENSE-*` file name to its SPDX identifier.
+fn license_file_spdx(name: &str) -> Option<&'static str> {
+    match name {
+        "LICENSE-runtime" | "LICENSE-servo" => Some("LGPL-2.1-or-later"),
+        "LICENSE-neopixel" => Some("LGPL-3.0-or-later"),
+        "LICENSE-libc" | "LICENSE-tlsf" | "LICENSE-ssd1306" => Some("BSD-3-Clause"),
+        "LICENSE-ubsan" | "LICENSE-gfx" => Some("BSD-2-Clause"),
+        "LICENSE-apache" | "LICENSE-sensor" => Some("Apache-2.0"),
+        "LICENSE-freertos"
+        | "LICENSE-bmp280"
+        | "LICENSE-busio"
+        | "LICENSE-liquidcrystal-i2c"
+        | "LICENSE-xtensa" => Some("MIT"),
+        "LICENSE-newlib" => Some("LicenseRef-newlib"),
+        "LICENSE-gcc-exception" => Some("GPL-3.0-or-later WITH GCC-exception-3.1"),
+        _ => None,
+    }
+}
+
+/// Top-level `AND` terms of an SPDX expression, keeping parenthesized sub-expressions intact.
+fn spdx_and_terms(text: &str) -> Vec<&str> {
+    let bytes = text.as_bytes();
+    let mut terms = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            b' ' if depth == 0 && text[i..].starts_with(" AND ") => {
+                terms.push(text[start..i].trim());
+                i += " AND ".len();
+                start = i;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    terms.push(text[start..].trim());
+    terms
+}
+
 /// SPDX license expression, enough to accept a Block's `license` and reject a broken one.
 /// `AND` binds tighter than `OR`.
 fn spdx_parses(text: &str) -> bool {
@@ -314,20 +392,17 @@ fn spdx_parses(text: &str) -> bool {
                 self.text = &self.text[1..];
                 return self.or() && self.op(")");
             }
-            self.ident()
-        }
-        fn with(&mut self) -> bool {
-            if !self.primary() {
+            if !self.ident() {
                 return false;
             }
             if self.op("WITH") { self.ident() } else { true }
         }
         fn and(&mut self) -> bool {
-            if !self.with() {
+            if !self.primary() {
                 return false;
             }
             while self.op("AND") {
-                if !self.with() {
+                if !self.primary() {
                     return false;
                 }
             }

@@ -7,5 +7,5 @@
   "summary": "An SG90 on D9 of an Arduino Nano sweeps from 0° to 180° and back with the Servo library.",
   "board": "nano-board",
   "tags": ["servo", "sg90", "sweep", "nano"],
-  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND GPL-3.0-or-later WITH GCC-exception-3.1"
 }

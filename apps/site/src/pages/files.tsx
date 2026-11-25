@@ -33,15 +33,25 @@ export function Files({ files, expression }: { files: readonly FileEntry[]; expr
   );
 }
 
-/** The closed license box. The summary always shows the SPDX expression. */
-export function LicenseBox({ expression, children }: { expression: string; children: ReactNode }) {
+/** The closed license box. Parts show the SPDX expression in the summary. Blocks pass a shorter
+ * summary and show the full SPDX expression once opened. */
+export function LicenseBox({ expression, summary, children }: { expression: string; summary?: string; children: ReactNode }) {
+  const heading = summary ?? expression;
+  const showFull = heading !== expression;
   return (
     <details className="mt-14 border border-border" data-testid="license-files" id="files">
       <summary className="flex cursor-pointer flex-wrap items-baseline justify-between gap-x-4 gap-y-1 px-4 py-3">
         <span className="font-mono text-muted-foreground text-xs uppercase tracking-[0.16em]">License and files</span>
-        <span className="min-w-0 break-words font-mono text-xs">{expression}</span>
+        <span className="min-w-0 break-words font-mono text-xs">{heading}</span>
       </summary>
-      <div className="grid min-w-0 gap-4 px-4 pb-4">{children}</div>
+      <div className="grid min-w-0 gap-4 px-4 pb-4">
+        {showFull ? (
+          <p className="min-w-0 break-words font-mono text-muted-foreground text-xs" data-testid="license-expression">
+            {expression}
+          </p>
+        ) : null}
+        {children}
+      </div>
     </details>
   );
 }

@@ -27,6 +27,8 @@ import {
   waitState,
 } from "../../../e2e/support";
 
+import { blockLicenseSummary } from "../src/format";
+
 const INSTALL = /orbe add|cargo install|orbefab\.com\/orbe\/install\.sh/;
 const VIEW = { width: 1280, height: 900 };
 const QUERIES = ["led", "5 mm", "kingbright", "board", "resistor 0603", "smd", "avr usb", "nano-board", "Push", "MICROCHIP"];
@@ -117,6 +119,7 @@ interface RecordFile {
 
 interface ServedRecord {
   title: string;
+  license: string;
   files: RecordFile[];
 }
 
@@ -626,6 +629,7 @@ test.describe("led-5mm", () => {
   test("the license box names the shared licence and lists no per-file column", async () => {
     const box = page.locator('[data-testid="license-files"]');
     await expect(box.locator("summary")).toContainText("MIT OR Apache-2.0");
+    await expect(box.getByTestId("license-expression")).toHaveCount(0);
     await expect(box.locator("th", { hasText: "License" })).toHaveCount(0);
     await expect(box).not.toContainText("Registry record");
   });
@@ -929,12 +933,20 @@ test.describe("nano-button-led", () => {
     ).toBe(true);
   });
 
-  test("the Block's files share the box's licence", async () => {
+  test("the Block's license box summarizes third-party licenses closed and shows the full expression when opened", async () => {
+    const expression = servedRecord("nano-button-led").license;
+    const summary = blockLicenseSummary(expression);
     const box = page.locator('[data-testid="license-files"]');
-    await expect(box.locator("summary")).toContainText("(MIT OR Apache-2.0) AND LGPL-2.1-or-later");
+    await expect(box).not.toHaveJSProperty("open", true);
+    await expect(box.locator("summary")).toContainText(summary);
+    await expect(box.locator("summary")).not.toContainText("LGPL-2.1-or-later");
+    await box.locator("summary").click();
+    await expect(box).toHaveJSProperty("open", true);
+    await expect(box.getByTestId("license-expression")).toHaveText(expression);
     await expect(box.locator("th", { hasText: "License" })).toHaveCount(0);
     const names = await box.locator("a[download]").allTextContents();
     expect(names.includes("firmware/NOTICE") && !names.includes("REUSE.toml"), JSON.stringify(names)).toBe(true);
+    await box.locator("summary").click();
   });
 
   test("Space on the hold control presses the button, and the window losing focus releases it", { tag: "@vite-smoke" }, async () => {
@@ -1087,6 +1099,8 @@ test("a long hash and the code view stay inside a phone width", async ({ browser
   await page.locator('[data-testid="license-files"] summary').click();
   expect(await fits(), "led-5mm").toBe(true);
   await page.goto(`${host.base}/orbe/blocks/nano-button-led/`);
+  await page.locator('[data-testid="license-files"] summary').click();
+  expect(await fits(), "nano-button-led files").toBe(true);
   await page.locator('[data-testid="view-code"]').click();
   expect(await fits(), "nano-button-led code").toBe(true);
   await context.close();
@@ -1119,6 +1133,12 @@ test("each Block lists its scene files and its values", async ({ browser, host }
     expect(body, id).toContain("Sketch, scene and tests.");
     const header = page.locator('[data-testid="code-file"][data-path="scene.jsonc"] .border-b');
     await expect(header, id).not.toContainText("MIT");
+    await expect(page.locator('[data-testid="license-files"] summary'), id).toContainText(
+      blockLicenseSummary(servedRecord(id).license),
+    );
+    await expect(page.locator('[data-testid="license-files"] [data-testid="license-expression"]'), id).toHaveText(
+      servedRecord(id).license,
+    );
   }
   await context.close();
 });

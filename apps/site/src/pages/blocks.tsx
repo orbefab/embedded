@@ -3,6 +3,7 @@ import { BlockPlayer } from "../components/block-player";
 import { BlockStage } from "../components/block-stage";
 import type { BlockCircuit } from "../circuit";
 import type { BlockCard, Linked } from "../data";
+import { blockLicenseSummary } from "../format";
 import { at } from "../paths";
 import type { ReadmeRun } from "../readme";
 import { type BlockRecord, type FileEntry, type Item } from "../records";
@@ -168,7 +169,7 @@ export function BlockPage({ block }: { block: BlockView }) {
         <SceneParts circuit={circuit} links={links} />
       </Section>
 
-      <LicenseBox expression={record.license}>
+      <LicenseBox expression={record.license} summary={blockLicenseSummary(record.license)}>
         <Files expression={record.license} files={record.files} />
       </LicenseBox>
     </article>

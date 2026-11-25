@@ -124,7 +124,7 @@ fn every_url_holds_the_bytes_its_hash_names() {
     let block = record(&registry.output, "nano-button-led@0.3.1");
     assert_eq!(
         block["license"],
-        "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
+        "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND GPL-3.0-or-later WITH GCC-exception-3.1"
     );
     let mut paths = Vec::new();
     for file in block["files"].as_array().unwrap() {

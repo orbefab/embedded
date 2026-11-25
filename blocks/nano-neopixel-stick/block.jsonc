@@ -7,5 +7,5 @@
   "summary": "An Arduino Nano drives an 8-pixel NeoPixel stick through a 470 ohm resistor on DIN. The sketch lights a rainbow.",
   "board": "nano-board",
   "tags": ["led", "rgb", "neopixel", "ws2812", "nano"],
-  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND LGPL-3.0-or-later",
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND LGPL-3.0-or-later AND GPL-3.0-or-later WITH GCC-exception-3.1",
 }

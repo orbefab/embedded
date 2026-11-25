@@ -7,5 +7,5 @@
   "summary": "A button on GPIO4 cycles the ESP32-S3-DevKitC-1's RGB LED, and each colour is printed on Serial.",
   "board": "esp32s3-devkitc-1",
   "tags": ["button", "led", "rgb", "esp32-s3"],
-  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later",
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND Apache-2.0 AND MIT AND BSD-3-Clause AND BSD-2-Clause AND LicenseRef-newlib AND GPL-3.0-or-later WITH GCC-exception-3.1",
 }

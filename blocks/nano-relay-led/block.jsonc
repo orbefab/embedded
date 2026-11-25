@@ -7,5 +7,5 @@
   "summary": "A Nano turns a 5 V relay module on and off once a second, and the relay's COM and NO pins switch an LED.",
   "board": "nano-board",
   "tags": ["relay", "led", "nano"],
-  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later"
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND GPL-3.0-or-later WITH GCC-exception-3.1"
 }
