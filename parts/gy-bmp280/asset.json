@@ -1,0 +1,46 @@
+{
+  "part": "gy-bmp280",
+  "source": {
+    "script": "model.py",
+    "sha256": "4bb27916636c3872d40e8686c05f6fa8babbde760e070abb35d8ab363e2f80ef",
+    "bytes": 2315
+  },
+  "files": {
+    "gy-bmp280.glb": {
+      "sha256": "0fdb6a3682c435c2e24696ada7cc68ff974e9b0d4b8b4b85ce526e872c796ef9",
+      "bytes": 33096
+    }
+  },
+  "box": {
+    "min": [-7.5, -5.75, 2.54],
+    "max": [7.5, 5.75, 4.18]
+  },
+  "kept_nodes": [],
+  "draw_calls": 2,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 0,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "pcb",
+      "z_mm": 2.54
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 2,
+      "primitives_out": 2
+    },
+    "composition": {
+      "children": 8,
+      "lowest_node": "pcb",
+      "z_mm": 2.54,
+      "draw_calls": 30
+    }
+  }
+}

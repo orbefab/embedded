@@ -1,0 +1,44 @@
+{
+  "part": "bmp280",
+  "source": {
+    "script": "model.py",
+    "sha256": "e129b35088ebe15af8bdabb84142493ef3455370f8eef65866e350482b78941b",
+    "bytes": 3854
+  },
+  "files": {
+    "bmp280.glb": {
+      "sha256": "e40044b56cc65735dc8e81545535b1d9031e4697381e914d499af2e52d7452f3",
+      "bytes": 21888
+    },
+    "bmp280.anchors.json": {
+      "sha256": "8dbf2eeead4b0c4741b85c1d0f769cd2daead522569e0819a8836c025d496f2d",
+      "bytes": 987
+    }
+  },
+  "box": {
+    "min": [-1.25, -1, 0],
+    "max": [1.25, 1, 0.95]
+  },
+  "kept_nodes": [],
+  "draw_calls": 4,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 8,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0.03
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 11,
+      "primitives_out": 4
+    }
+  }
+}

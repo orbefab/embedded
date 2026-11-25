@@ -1,8 +1,9 @@
 // An ESP32-S3-DevKitC-1 reads a GY-BMP280-3.3 on a half-size breadboard. Both run at 3.3 V, so
 // VCC goes to 3V3, GND to GND, and SDA and SCL go straight to Wire's default pins on this board:
 // GPIO8 (SDA) and GPIO9 (SCL). The DevKitC-1 spans columns 1 to 22 with J1 in row h (GND in h1,
-// GPIO9 in h8, GPIO8 in h11, 3V3 in h21 and h22). The module plugs into h25 to h30 (VCC, GND,
-// SCL, SDA, CSB, SDO). The module pulls SDO to ground, so the I2C address is 0x76.
+// GPIO9 in h8, GPIO8 in h11, 3V3 in h21 and h22). The module sits rotated 180 degrees in h25 to
+// h30 (SDO, CSB, SDA, SCL, GND, VCC) so its board extends toward the centre channel and leaves
+// row j open for the jumper wires. The module pulls SDO to ground, so the I2C address is 0x76.
 {
   "format": 1,
   "parts": {
@@ -17,13 +18,13 @@
   "layout": {
     "bb": { "at": [0, 0, 0] },
     "board": { "on": { "GPIO8": "bb.h11" }, "rotate": [0, 0, 270] },
-    "mod": { "on": { "VCC": "bb.h25" } },
+    "mod": { "on": { "VCC": "bb.h30" }, "rotate": [0, 0, 180] },
   },
   "nets": { "GND": "board.GND" },
   "wires": [
-    ["bb.j22", "bb.j25", { "color": "#d12b2b" }], // 3V3 to VCC
-    ["bb.j1", "bb.j26", { "color": "#161616" }], // GND to GND
-    ["bb.j8", "bb.j27"], // GPIO9 (SCL) to SCL
-    ["bb.j11", "bb.j28"], // GPIO8 (SDA) to SDA
+    ["bb.j22", "bb.j30", { "color": "#d12b2b" }], // 3V3 to VCC
+    ["bb.j1", "bb.j29", { "color": "#161616" }], // GND to GND
+    ["bb.j8", "bb.j28"], // GPIO9 (SCL) to SCL
+    ["bb.j11", "bb.j27"], // GPIO8 (SDA) to SDA
   ],
 }
