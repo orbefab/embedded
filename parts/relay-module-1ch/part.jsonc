@@ -9,12 +9,17 @@
 // The LED and the other 1 kohm sit from VCC to the collector, so the LED lights
 // while IN is high and VCC is up. A drawing that puts 1 Mohm in the base and swaps
 // the transistor cannot drive this coil, and this model does not follow it.
+//
+// The header stands on one edge of the board with its pins pointing up, for female
+// jumpers. The screw terminal is on the opposite edge, COM in the middle, with its wire
+// entries facing out. The board does not plug into a breadboard. It lies beside one,
+// wired with jumpers.
 {
   "format": 5,
   "part": "relay-module-1ch",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "title": "Relay module, 1 channel, 5 V",
-  "summary": "Keyes KY-019 style board: a Songle SRD-05VDC-SL-C, an S8050, a 1N4007 and an indicator LED. IN high closes COM to NO. The coil draws about 70 mA from VCC. IN draws the base current, a few mA. The LED lights while IN is high and VCC is up. With VCC off, the coil and the LED stay off. `closed` and `open` read the contact. The header, from lead 1, is IN, VCC, GND.",
+  "summary": "Keyes KY-019 style board: a Songle SRD-05VDC-SL-C, an S8050, a 1N4007 and an indicator LED. IN high closes COM to NO. The coil draws about 70 mA from VCC. IN draws the base current, a few mA. The LED lights while IN is high and VCC is up. With VCC off, the coil and the LED stay off. `closed` and `open` read the contact. The header, from lead 1, is IN, VCC, GND, and its pins point up. The screw terminal on the opposite edge is NC, COM, NO. Place the module beside the breadboard with `at` and run a jumper from each hole to its pin.",
   "tags": ["relay", "module", "songle", "5v", "ky-019"],
   "license": "MIT OR Apache-2.0",
   "docs": {
@@ -33,10 +38,12 @@
     "resistor-0603": "0.2.0",
     "diode-do41-flush": "0.1.0",
     "led-0805": "0.2.1",
-    "pin-header-1x3": "0.1.0"
+    "pin-header-1x3": "0.1.0",
+    "screw-terminal-3p-5mm": "0.1.0"
   },
   "parts": {
     "hdr": { "type": "pin-header-1x3" },
+    "t": { "type": "screw-terminal-3p-5mm" },
     "k": { "type": "relay-srd-05vdc-sl-c" },
     "q": { "type": "npn-l8050-sot23" },
     "rb": {
@@ -80,13 +87,17 @@
     ["d.anode", "q.collector", { "kind": "trace" }],
     ["rled.a", "hdr.2", { "kind": "trace" }],
     ["rled.b", "led.anode", { "kind": "trace" }],
-    ["led.cathode", "q.collector", { "kind": "trace" }]
+    ["led.cathode", "q.collector", { "kind": "trace" }],
+    ["k.NC", "t.1", { "kind": "trace" }],
+    ["k.COM", "t.2", { "kind": "trace" }],
+    ["k.NO", "t.3", { "kind": "trace" }]
   ],
-  // The relay sits under the screw terminal. The diode lies on the board in the
-  // free margin, its leads through the board and trimmed at the underside, with
-  // the transistor, the resistors and the LED.
+  // The header stands on the -Y edge, its pins up and its tails through the board. The
+  // terminal stands on the +Y edge beside the relay, its front at the edge. The diode lies on the board in the free margin, its leads through the board and
+  // trimmed at the underside, with the transistor, the resistors and the LED.
   "layout": {
-    "hdr": { "at": [0, -11.5, 0] },
+    "hdr": { "at": [0, -10, 6.68], "rotate": [180, 0, 0] },
+    "t": { "at": [5, 11.7, 4.14] },
     "k": { "at": [7, -0.8, 4.14] },
     "q": { "at": [-10, -2.6, 4.14] },
     "rb": { "at": [-10, -5.4, 4.14] },
@@ -98,9 +109,9 @@
     "IN": "hdr.1",
     "VCC": "hdr.2",
     "GND": "hdr.3",
-    "COM": "k.COM",
-    "NO": "k.NO",
-    "NC": "k.NC"
+    "COM": "t.2",
+    "NO": "t.3",
+    "NC": "t.1"
   },
   "readings": {
     "closed": { "of": "contact" }
@@ -108,7 +119,7 @@
   "not_simulated": [
     {
       "what": "the silkscreen and the screw heads",
-      "why": "The drawing is the 34 x 27 mm outline, the header, the relay and the indicator. The screw terminals are the COM, NO and NC pins."
+      "why": "The drawing is the 34 x 27 mm outline with its four holes, the header, the terminal, the relay and the parts that drive it. The screws do not turn."
     },
     {
       "what": "a coil below its supply",

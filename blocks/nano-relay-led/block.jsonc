@@ -2,7 +2,7 @@
 {
   "format": 1,
   "block": "nano-relay-led",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "title": "Relay and LED on a Nano",
   "summary": "A Nano turns a 5 V relay module on and off once a second, and the relay's COM and NO pins switch an LED.",
   "board": "nano-board",
