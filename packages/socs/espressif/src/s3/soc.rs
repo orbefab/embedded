@@ -357,6 +357,19 @@ fn effect(addr: u32) -> Option<Effect> {
         },
         (SPI0, 0x0) => Effect::Refuse(spi1::STARTS, Ending::FlashCommand(FlashRefusal::Spi0)),
         (SPI0, 0x18..=0x20) => Effect::Report(u32::MAX),
+        (SPI1, spi1::INT_ENA) => Effect::Refuse(u32::MAX, interrupt("SPI1")),
+        (SPI1, spi1::WAITI_CTRL) => Effect::Refuse(
+            spi1::WAITI_EN,
+            Ending::Refused(Refused::Register("SPI1", "auto_wait_idle")),
+        ),
+        (SPI1, spi1::SUS_CMD) => Effect::Refuse(
+            spi1::SUS_CMD_UNRUN,
+            Ending::Refused(Refused::Register("SPI1", "suspend")),
+        ),
+        (SPI1, spi1::SUS_CTRL) => Effect::Refuse(
+            spi1::FLASH_PES_EN,
+            Ending::Refused(Refused::Register("SPI1", "auto_suspend")),
+        ),
         (SYSTEM, _) if gates::OFFSETS.contains(&offset) => Effect::Gates,
         // The flash's pads, GPIO26 to GPIO32, keep IO_MUX function 0, SPI0's and SPI1's, their
         // GPIO output enables clear, and their matrix outputs at the reset value.
@@ -567,9 +580,9 @@ impl Soc {
         self.code.moved();
     }
 
-    /// The whole flash, on a chip that has it.
-    pub(crate) fn flash_bytes(&self) -> Option<&[u8]> {
-        self.flash.as_ref().map(Flash::bytes)
+    /// Reads `len` bytes from flash offset `start`, on a chip that has flash.
+    pub(crate) fn read_flash(&self, start: usize, len: usize) -> Option<Vec<u8>> {
+        self.flash.as_ref()?.read(start, len)
     }
 
     /// Maps `size` bytes of flash from `offset` at bus address `vaddr`, as the bootloader maps
@@ -781,7 +794,7 @@ impl Soc {
             }
             SPI1 => {
                 self.spi1
-                    .write(offset, value, &[])
+                    .write(now, offset, value, None)
                     .expect("a register, not a command");
             }
             INTERRUPT_CORE0 if self.matrix.write(offset, value) => {}
@@ -1202,15 +1215,18 @@ impl Soc {
                 self.ending = Some(Ending::EfuseProgram);
                 true
             }),
-            SPI1 => {
-                let flash = self.flash.as_ref().map_or(&[][..], |flash| flash.bytes());
-                self.spi1
-                    .write(offset, value, flash)
-                    .unwrap_or_else(|refusal| {
-                        self.ending = Some(Ending::FlashCommand(refusal));
-                        true
-                    })
-            }
+            SPI1 => match self.spi1.write(now, offset, value, self.flash.as_mut()) {
+                Ok(outcome) => {
+                    if outcome.mutated {
+                        self.code.moved();
+                    }
+                    outcome.handled
+                }
+                Err(refusal) => {
+                    self.ending = Some(Ending::FlashCommand(refusal));
+                    true
+                }
+            },
             SPI2 => {
                 let cpu = self.clock.source.cpu();
                 let (gdma, sram, gates) = (&mut self.gdma, &self.sram, &self.gates);
@@ -1588,13 +1604,20 @@ impl Soc {
             || self.started
     }
 
-    fn fetch(&mut self, addr: u32) -> Result<u32, Exit> {
+    fn fetch(&mut self, cycle: Cycle, addr: u32) -> Result<u32, Exit> {
         if self.fetch_held() {
             return Err(Exit::Stop);
         }
         if let Some(offset) = Self::sram_offset(addr, true) {
             self.code.fetched_sram(offset);
             return Ok(self.sram.read(offset, Width::Word));
+        }
+        if flash::IROM.contains(&addr) && self.spi1.has_busy() {
+            let now = self.clock.tick(cycle).max(self.latest);
+            if self.spi1.is_busy(now) {
+                self.ending = Some(Ending::FlashCommand(FlashRefusal::Busy(None)));
+                return Err(Exit::Stop);
+            }
         }
         let word = if flash::IROM.contains(&addr) || rom::ROM.contains(&addr) {
             self.memory_word(addr)
@@ -1613,6 +1636,13 @@ impl Soc {
     fn load(&mut self, cycle: Cycle, addr: u32, width: Width) -> Result<u32, Exit> {
         if let Some(offset) = Self::data_offset(addr, width)? {
             return Ok(self.sram.read(offset, width));
+        }
+        if (flash::IROM.contains(&addr) || flash::DROM.contains(&addr)) && self.spi1.has_busy() {
+            let now = self.clock.tick(cycle).max(self.latest);
+            if self.spi1.is_busy(now) {
+                self.ending = Some(Ending::FlashCommand(FlashRefusal::Busy(None)));
+                return Err(Exit::Stop);
+            }
         }
         let (word, shift, mask) = word_of(addr, width);
         if let Some(value) = self.memory_word(word) {
@@ -2001,8 +2031,8 @@ impl Bus for CoreBus<'_> {
         Soc::on_instruction_bus(addr)
     }
 
-    fn fetch(&mut self, _now: Cycle, addr: u32) -> Result<u32, Exit> {
-        self.soc.fetch(addr)
+    fn fetch(&mut self, now: Cycle, addr: u32) -> Result<u32, Exit> {
+        self.soc.fetch(now, addr)
     }
 
     fn load(&mut self, now: Cycle, addr: u32, width: Width) -> Result<u32, Exit> {

@@ -488,6 +488,7 @@ The message is `{part} started a {peripheral} transfer with setting {setting} at
 
 `data` holds `peripheral`, `pc`, `setting` and `symbol`. `pc` is the address of the store, and `symbol` is written as `chip.unsupported_instruction` writes it. For a transfer, `peripheral` is `SPI2`, and `setting` is the first of these the registers held when the store wrote `SPI_USR`: `slave`, `dma`, `dma_link`, `dma_descriptor`, `dma_length`, `lsb_first`, `qpi`, `octal`, `dtr`, `dummy`, `read`, `high_part`, `three_line`, `full_duplex`, `clock_mode`, `cs_disabled`, `data_length`, `clock_off` or `unsynced`. `setting` is `interrupt` when the store set an interrupt enable bit of a source the model never raises, with `peripheral` `SPI2`, `GDMA`, `TIMG0`, `TIMG1`, `USB_SERIAL_JTAG`, `SHA`, `LEDC`, `PCNT`, `RMT`, `UART0`, `UART1` or `UART2`, or with `peripheral` `SENS` when the store set `RTC_CNTL_SARADC1_INT_ENA`, `RTC_CNTL_TSENS_INT_ENA` or `RTC_CNTL_SARADC2_INT_ENA`, bits 11, 12 and 14 of `RTC_CNTL_INT_ENA_RTC_REG`. It is `sleep`, with `peripheral` `RTC_CNTL`, when the store set `RTC_CNTL_SLEEP_EN`. These register settings end the run too:
 
+- `auto_wait_idle`, `auto_suspend`, `suspend` and `interrupt`, with `peripheral` `SPI1`: the store set `SPI_MEM_WAITI_EN` in `SPI_MEM_FLASH_WAITI_CTRL_REG`, `SPI_MEM_FLASH_PES_EN` in `SPI_MEM_FLASH_SUS_CTRL_REG`, a suspend or resume bit in `SPI_MEM_FLASH_SUS_CMD_REG`, or any bit in `SPI_MEM_INT_ENA_REG`.
 - `memory_copy`, `write_back` and `restart`, with `peripheral` `GDMA`: the store set `GDMA_MEM_TRANS_EN`, `GDMA_OUT_AUTO_WRBACK`, `GDMA_INLINK_RESTART` or `GDMA_OUTLINK_RESTART`.
 - `link_peripheral`, with `peripheral` `GDMA`: the store started an OUT link whose `GDMA_PERI_OUT_SEL` names neither SPI2 nor the SHA accelerator, or an IN link at a descriptor in SRAM whose `GDMA_PERI_IN_SEL` is not SPI2.
 - `peri_sel_while_started`, with `peripheral` `GDMA`: the store changed a channel's `GDMA_PERI_OUT_SEL` or `GDMA_PERI_IN_SEL` while its link was started.
@@ -584,17 +585,19 @@ The message is `{part} {what} at {pc}, {why}, at {t_ps} ps`, with ` in {symbol}`
 `data` holds `command`, `pc`, `reason` and `symbol`. `command` is the command byte SPI1 sent, or `null` when no one byte went. `pc` and `symbol` are as `chip.unsupported_instruction` writes them. The store writes no status bit and no flash byte. `reason` is one of these.
 
 - `unsupported`: a command the model does not know. The message reads `sent the flash command 0xb9`, `which the model does not run`.
-- `write`: a page program, `0x02` or `0x32`, or an erase, `0x20`, `0x52`, `0xd8`, `0x60` or `0xc7`, fixed or user. The message reads `wrote the flash with command 0x02`, `which the model does not simulate; Wi-Fi, Bluetooth and saved settings (Preferences, EEPROM, NVS) write the flash`.
 - `status_write`: the fixed `WRSR`, or a user `0x01`, `0x31` or `0x11`, with or without `WREN`. A status write can set the flash's protect and one-time lock bits. The message reads `sent the flash the status write command 0x01`, `which could lock the flash`.
 - `no_command_phase`: a user command with no command phase, or a write that sets only `SPI_MEM_FLASH_PE`. `command` is `null`.
 - `start_bits`: one write of `SPI_MEM_CMD_REG` that starts more than one command, such as `WREN` with a sector erase. None of them runs. `command` is `null`.
-- `past_end`: a read whose bytes reach past the flash's end. A chip with no flash refuses every read. The message reads `sent the flash the read command 0x03`, `which reaches past the flash's end`.
-- `address_bits`: a command whose address phase is longer than 32 bits.
+- `past_end`: a read, page program or erase that reaches past the flash's end. A chip with no flash refuses every read, program and erase. The message reads `sent the flash command 0x03`, `which reaches past the flash's end`.
+- `address_bits`: a command whose address phase is longer than 32 bits, or does not match what the command requires.
+- `busy`: an SPI1 command other than a status read, or a cache fetch or load through the MMU (`command` is `null`), while a program or erase is still in progress (`WIP` set).
+- `length`: a command with an invalid phase or byte count, such as a page program with zero bytes or more than 64 bytes in one SPI1 transaction.
+- `mode`: an SPI1 command started in octal, DDR, or an unsupported write-width mode.
 - `spi0`: a write of SPI0's `SPI_MEM_CMD_REG` that starts a command. `command` is `null`.
 - `pads`: a write that would take one of the flash's pads, GPIO26 to GPIO32, from SPI0 and SPI1. It gives the pad an IO_MUX function other than 0, sets its `GPIO_ENABLE` bit, or moves its `GPIO_FUNCn_OUT_SEL_CFG_REG` from its reset value, as [esp32s3.md](esp32s3.md#what-it-models) says. `command` is `null`. The message reads `took a flash pad from SPI0 and SPI1`, `which could send the flash any command`.
 - `cs`: a user command while `SPI_MEM_MISC_REG` has `CS0_DIS` set or `CS1_DIS` clear. The register resets to `0x2`, so CS0 is on and CS1 is off. The fixed commands do not look at it. The message reads `sent the flash command 0x03 with CS0 disabled or CS1 enabled`, `which the model does not run`.
 
-The flash reads, and reports its ID and status, as [esp32s3.md](esp32s3.md#what-it-models) says.
+The flash reads, programs, erases, and reports its ID and status, as [esp32s3.md](esp32s3.md#what-it-models) says.
 
 ## chip.unsupported_clock
 

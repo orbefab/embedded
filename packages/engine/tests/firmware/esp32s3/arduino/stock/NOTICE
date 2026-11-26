@@ -106,3 +106,11 @@ pcnt         packages/scene/tests/fixtures/esp32s3-stock-pcnt
              app 281312 a294171210d2b526004254c5a34a73e0b75657e4a0565079a18f948ee14ba527
 temp         packages/scene/tests/fixtures/esp32s3-stock-temp
              app 280224 1ce8588fa075f51e0c3a6eff43372ae816bb4260d286ea71b74c3e551e559f27
+preferences  packages/scene/tests/fixtures/esp32s3-stock-preferences
+             app 287920 04772dfdaffea2cc5cd39c39ea1730e3bb765954583da60fb7814bc326b02131
+eeprom       packages/scene/tests/fixtures/esp32s3-stock-eeprom
+             app 281856 bd0185fb8bc7c45700c5011eabea93c92e5f5bdf30a88f25804e45a1f128ea50
+nvs          packages/scene/tests/fixtures/esp32s3-stock-nvs
+             app 281968 0c281737ebe1021e700cd7fea8d2eba2a712ae3de8c0f6eb8b7b4556a548f3ff
+littlefs     packages/scene/tests/fixtures/esp32s3-stock-littlefs
+             app 313056 4caefbada2c663cd3b045225b9386ee6b42394c6512fd1ca2c143d59569f7e83

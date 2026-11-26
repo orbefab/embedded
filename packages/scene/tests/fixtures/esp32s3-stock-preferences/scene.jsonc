@@ -1,0 +1,19 @@
+// Preferences counter and typed keys, with a button on GPIO5 that increments and saves the
+// counter again. The app is the stock sketch
+// packages/engine/tests/firmware/esp32s3/arduino/stock/preferences.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    },
+    "btn1": { "type": "tactile-switch-6mm" }
+  },
+  "wires": [
+    ["board.GPIO5", "btn1.a"],
+    ["btn1.b", "board.GND"]
+  ],
+  "ground": "board.GND"
+}

@@ -1,0 +1,13 @@
+// nvs_flash_init, nvs_flash_erase, and key readback. The app is the stock sketch
+// packages/engine/tests/firmware/esp32s3/arduino/stock/nvs.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    }
+  },
+  "ground": "board.GND"
+}
