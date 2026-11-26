@@ -1,0 +1,19 @@
+# Stock mbedTLS SHA-1/256/384/512 (block and DMA), AES-128/256 (ECB, CBC, CTR, GCM) and
+# RSA-2048 verify pass against official test vectors with no diagnostics.
+open
+step --until serial contains "all crypto ok" --timeout 500ms
+expect serial contains "sha1 ok"
+expect serial contains "sha256 ok"
+expect serial contains "sha384 ok"
+expect serial contains "sha512 ok"
+expect serial contains "sha512_dma ok"
+expect serial contains "aes128_ecb ok"
+expect serial contains "aes256_ecb ok"
+expect serial contains "aes128_cbc ok"
+expect serial contains "aes256_cbc ok"
+expect serial contains "aes256_cbc_irq ok"
+expect serial contains "aes128_ctr ok"
+expect serial contains "aes256_ctr ok"
+expect serial contains "aes128_gcm ok"
+expect serial contains "rsa2048_pk ok"
+expect no diagnostics

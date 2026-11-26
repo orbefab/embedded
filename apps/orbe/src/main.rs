@@ -116,6 +116,9 @@ enum Command {
         /// Print every command with its reply.
         #[arg(short, long)]
         verbose: bool,
+        /// Wall-time limit for each `step` line, such as `300s`. 120s by default.
+        #[arg(long, value_name = "DURATION")]
+        step_timeout: Option<String>,
         /// Print one JSON envelope instead of text.
         #[arg(long)]
         json: bool,
@@ -314,8 +317,9 @@ fn main() -> ExitCode {
             Command::Test {
                 paths,
                 verbose,
+                step_timeout,
                 json,
-            } => run_tests(&paths, verbose, json),
+            } => run_tests(&paths, verbose, step_timeout.as_deref(), json),
             Command::Skills { command } => print_skill(command),
             Command::Registry {
                 command: RegistryCommand::Build { src, out, json },
@@ -332,11 +336,12 @@ fn main() -> ExitCode {
 }
 
 /// The flags that take the next word as their value, so that word is never the command name.
-const VALUED: [&str; 4] = ["--session", "-C", "--timeout", "--until"];
+const VALUED: [&str; 5] = ["--session", "-C", "--timeout", "--until", "--step-timeout"];
 
 /// A flag before the command name, as in `orbe --json open`, moves next to that name.
 /// Only a word that starts with `-` is skipped on the way to the command, plus the word
-/// after `--session`, `-C`, `--timeout` or `--until`. Any other word stays where it was,
+/// after `--session`, `-C`, `--timeout`, `--until` or `--step-timeout`. Any other word stays
+/// where it was,
 /// and clap reports it. A repeat of a flag a clap command takes once is left out.
 /// The flags land before a `--` on a clap command, and at the end of a live command, where
 /// `step` reads `--timeout` last. `--help` and `--version`, and their short forms, stay in front.
@@ -571,7 +576,67 @@ fn test_files(paths: &[PathBuf]) -> Result<Vec<(PathBuf, PathBuf)>, (u8, String,
     Ok(files)
 }
 
-fn run_tests(paths: &[PathBuf], verbose: bool, json: bool) -> ExitCode {
+/// Wall time after which a running `orbe test` step prints one progress line to stderr.
+const STEP_PROGRESS_AFTER: std::time::Duration = std::time::Duration::from_secs(3);
+
+fn step_progress_after() -> std::time::Duration {
+    #[cfg(debug_assertions)]
+    {
+        std::env::var("ORBE_TEST_STEP_PROGRESS")
+            .ok()
+            .and_then(|value| orbe_session::Duration::parse(&value).ok())
+            .map(|duration| std::time::Duration::from_nanos(duration.as_ps() / 1000))
+            .filter(|duration| !duration.is_zero())
+            .unwrap_or(STEP_PROGRESS_AFTER)
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        STEP_PROGRESS_AFTER
+    }
+}
+
+fn resolve_step_budget(flag: Option<&str>) -> Result<std::time::Duration, (String, String)> {
+    if let Some(text) = flag {
+        let parsed = orbe_session::Duration::parse(text).map_err(|reason| {
+            (
+                format!("`--step-timeout {text}` is not a duration: {reason}"),
+                "write a duration such as `--step-timeout 300s`".to_string(),
+            )
+        })?;
+        let nanos = parsed.as_ps() / 1000;
+        if nanos == 0 {
+            return Err((
+                "`--step-timeout` must be greater than 0".to_string(),
+                "write a duration such as `--step-timeout 300s`".to_string(),
+            ));
+        }
+        return Ok(std::time::Duration::from_nanos(nanos));
+    }
+    #[cfg(debug_assertions)]
+    let env = std::env::var("ORBE_TEST_STEP_BUDGET").ok();
+    #[cfg(not(debug_assertions))]
+    let env: Option<String> = None;
+    Ok(orbe_session::test_step_budget(
+        env.as_deref(),
+        orbe_session::TEST_STEP_BUDGET,
+    ))
+}
+
+fn run_tests(paths: &[PathBuf], verbose: bool, step_timeout: Option<&str>, json: bool) -> ExitCode {
+    let step_budget = match resolve_step_budget(step_timeout) {
+        Ok(budget) => budget,
+        Err((message, hint)) => {
+            if json {
+                print_json(&json!({
+                    "ok": false,
+                    "error": { "code": "usage", "message": message, "hint": hint }
+                }));
+            } else {
+                eprintln!("error[usage]: {message}\n  hint: {hint}");
+            }
+            return ExitCode::from(USAGE);
+        }
+    };
     let files = match test_files(paths) {
         Ok(files) => files,
         Err((code, message, hint)) => {
@@ -587,13 +652,37 @@ fn run_tests(paths: &[PathBuf], verbose: bool, json: bool) -> ExitCode {
             return ExitCode::from(code);
         }
     };
+    let progress_after = step_progress_after();
     let mut reports = Vec::new();
     for (file, root) in &files {
         let text = match Files::disk().read_to_string(file) {
             Ok(text) => text,
             Err(error) => return io_exit(&format!("{}: {error}", file.display()), json),
         };
-        let report = test::run(Files::disk(), file, &text, root);
+        let mut reported_progress = false;
+        let report = test::run_with(
+            Files::disk(),
+            file,
+            &text,
+            root,
+            step_budget,
+            &mut |update| {
+                if !json
+                    && !reported_progress
+                    && update.elapsed >= progress_after
+                    && update.elapsed < step_budget
+                    && update.t_ps < update.end_ps
+                {
+                    reported_progress = true;
+                    eprintln!(
+                        "{}:{}: still running at t={}",
+                        file.display(),
+                        update.line,
+                        orbe_session::Duration::from_ps(update.t_ps),
+                    );
+                }
+            },
+        );
         if !json {
             print_report(&report, verbose);
         }

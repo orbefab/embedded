@@ -72,6 +72,7 @@ Load `orbe skills get boards` for `esp32s3-devkitc-1` pinouts, pin functions, su
 - The model runs the pins, the one-shot ADC, the internal temperature sensor, PCNT, LEDC, RMT channel 0, SPI2 and I2C0 as masters, UART0 to UART2, the timers and both cores.
 - `driver/pulse_cnt.h` and `ESP32Encoder` run on all four PCNT units (two channels each) from real pin edges through the GPIO matrix, including quadrature counting, the APB glitch filter, limits, thresholds and interrupts.
 - `temperatureRead()` reads the scene's ambient `world.temperature` (25 degC by default; chip self-heating is not simulated) within the configured TRM range (-40 to 125 degC).
+- Hardware SHA (SHA-1/224/256/384/512 and SHA-512/t), AES-128/256 (ECB, CBC, OFB, CTR, CFB and mbedTLS AES-GCM) and RSA big-number math (up to 4096-bit) run through mbedTLS and GDMA.
 - `ledcAttach`, `ledcDetach`, `ledcWrite`, `ledcFade`, `ledcFadeWithInterrupt`, `analogWrite`, `tone` and `noTone` drive the pin's PWM edges. `analogWrite` is 1 kHz at 8 bits, and `ledcAttach(pin, 50, 14)` is a 50 Hz servo signal. `step --until @board.GPIO18 high` lands on an edge. Each edge costs a circuit solve, so a kHz PWM runs several times slower than real time.
 - `SPI` runs on SPI2. `SPI.transfer` returns what an SPI part answers, and `0xFF` when none does.
 - `Adafruit_NeoPixel` and `rmtWrite` send each frame over RMT, and every pixel of a chained stick or strip takes its colour. Wire DIN straight to the pin: the frame does not cross a series resistor.
