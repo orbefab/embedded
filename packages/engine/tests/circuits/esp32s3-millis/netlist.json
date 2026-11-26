@@ -1,0 +1,143 @@
+{
+  "version": 1,
+  "seed": 0,
+  "analysis": {
+    "transient": {
+      "stop_ps": 2000000000000,
+      "max_step_ps": 10000000000,
+      "grid_ps": 1000000000
+    }
+  },
+  "ground": "gnd",
+  "nets": [
+    "gnd",
+    "gpio4",
+    "vcc",
+    "vled"
+  ],
+  "parts": [
+    {
+      "name": "v1",
+      "kind": "voltage_source",
+      "pins": {
+        "p": "vcc",
+        "n": "gnd"
+      },
+      "voltage": {
+        "value": 3.3,
+        "unit": "V"
+      }
+    },
+    {
+      "name": "u1",
+      "kind": "esp32s3",
+      "pins": {
+        "VCC": "vcc",
+        "GND": "gnd",
+        "GPIO4": "gpio4"
+      },
+      "rom": {
+        "sha256": "c0ce0f338d1de1bdc6efbef1591779a2a42c1ab7d759d3c6ae8ae63a7dd34cfd",
+        "bytes": 949552
+      },
+      "firmware": {
+        "flash": [
+          {
+            "offset": 32768,
+            "sha256": "148b959cbff1c38aa8e1d5c0ba9d612c54997b945e56a63f41223eef650653a1",
+            "bytes": 3072
+          },
+          {
+            "offset": 65536,
+            "sha256": "0839ea763763fd0db076b44ac52850edae372c178527f45ea955089ff8bbdca9",
+            "bytes": 288592
+          }
+        ]
+      },
+      "output": {
+        "high_drop": {
+          "value": 0.0,
+          "unit": "V"
+        },
+        "high_resistance": {
+          "value": 16.5,
+          "unit": "ohm"
+        },
+        "low_drop": {
+          "value": 0.0,
+          "unit": "V"
+        },
+        "low_resistance": {
+          "value": 17.68,
+          "unit": "ohm"
+        }
+      },
+      "pull_up_resistance": {
+        "value": 45000.0,
+        "unit": "ohm"
+      },
+      "leakage_resistance": {
+        "value": 66000000.0,
+        "unit": "ohm"
+      },
+      "input_threshold": {
+        "low": {
+          "value": 0.25,
+          "unit": "1"
+        },
+        "high": {
+          "value": 0.75,
+          "unit": "1"
+        }
+      }
+    },
+    {
+      "name": "r1",
+      "kind": "resistor",
+      "pins": {
+        "a": "gpio4",
+        "b": "vled"
+      },
+      "resistance": {
+        "value": 330.0,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "power": {
+          "value": 0.25,
+          "unit": "W"
+        }
+      }
+    },
+    {
+      "name": "led1",
+      "kind": "led",
+      "pins": {
+        "anode": "vled",
+        "cathode": "gnd"
+      },
+      "saturation_current": {
+        "value": 6.711e-10,
+        "unit": "A"
+      },
+      "emission_coefficient": {
+        "value": 4.427,
+        "unit": "1"
+      },
+      "series_resistance": {
+        "value": 2.115,
+        "unit": "ohm"
+      },
+      "ratings": {
+        "current": {
+          "value": 0.03,
+          "unit": "A"
+        },
+        "power": {
+          "value": 0.075,
+          "unit": "W"
+        }
+      }
+    }
+  ]
+}

@@ -139,6 +139,24 @@ engine_poll() {
   rust_tests -p orbe-engine --test circuit -E 'test(/^runs::/)' --features orbe-espressif/poll-skip-check
 }
 
+engine_pass() {
+  cargo clippy -p orbe-xtensa -p orbe-espressif -p orbe-engine --all-targets --locked \
+    --features orbe-xtensa/pass-skip-check,orbe-espressif/pass-skip-check -- -D warnings
+  rust_tests -p orbe-xtensa -p orbe-espressif \
+    --features orbe-xtensa/pass-skip-check,orbe-espressif/pass-skip-check
+  rust_tests -p orbe-engine --test circuit -E 'test(/^runs::/)' --features orbe-espressif/pass-skip-check
+  # Every ESP32-S3 example through that build, which panics where a skipped pass differs.
+  local cache netlist run
+  cache=$(packages/engine/scripts/blobs.sh)
+  run="${CARGO_TARGET_DIR:-target}/pass-skip-check-run"
+  for netlist in packages/engine/tests/circuits/esp32s3-*/netlist.json; do
+    rm -rf "$run"
+    cargo run -q --release -p orbe-engine --features runner,orbe-espressif/pass-skip-check --bin orbe-run --locked -- \
+      run "$netlist" --out "$run" --blobs "$cache" >/dev/null
+  done
+  rm -rf "$run"
+}
+
 engine_wasm() {
   packages/engine/scripts/wasi-check.sh
   scripts/check-wasm.sh "$@"
@@ -164,7 +182,7 @@ engine_python() {
   run_check st77916-replay render_st77916.py packages/engine/tests/circuits/st77916-replay/events.json
   run_check esp32s3-blink esp32s3_blink.py
   run_check esp32s3-pattern render_st77916.py --pattern packages/engine/tests/firmware/esp32s3/pattern.json
-  for name in hello screen encoder touch dualcore echo ring uart pulls adc timers; do
+  for name in hello screen encoder touch dualcore echo ring uart pulls adc timers millis; do
     run_check "esp32s3-$name" "esp32s3_$name.py"
   done
   knob_dir=$(mktemp -d "${TMPDIR:-/tmp}/knob-script.XXXXXX")
@@ -184,6 +202,7 @@ full() {
   engine_microchip
   engine_ignored
   engine_poll
+  engine_pass
   engine_python
   local wasm=.scratch/wasm/full
   (
@@ -230,6 +249,7 @@ case "$1" in
     packages/engine/scripts/blobs.sh >/dev/null
     engine_microchip
     engine_poll
+    engine_pass
     ;;
   engine-circuits)
     need_nextest

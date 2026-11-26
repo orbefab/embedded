@@ -114,3 +114,5 @@ nvs          packages/scene/tests/fixtures/esp32s3-stock-nvs
              app 281968 0c281737ebe1021e700cd7fea8d2eba2a712ae3de8c0f6eb8b7b4556a548f3ff
 littlefs     packages/scene/tests/fixtures/esp32s3-stock-littlefs
              app 313056 4caefbada2c663cd3b045225b9386ee6b42394c6512fd1ca2c143d59569f7e83
+millis       packages/engine/tests/circuits/esp32s3-millis/blobs
+             app 288592 0839ea763763fd0db076b44ac52850edae372c178527f45ea955089ff8bbdca9
