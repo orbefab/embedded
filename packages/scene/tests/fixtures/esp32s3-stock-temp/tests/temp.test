@@ -1,0 +1,11 @@
+# Stock temperatureRead() reads the scene's ambient temperature and tracks set temperature
+# across IDF's DAC range switches.
+open
+step --until serial contains "temp 25.0" --timeout 300ms
+set temperature 42
+step --until serial contains "temp 42.0" --timeout 200ms
+set temperature 95
+step --until serial contains "temp 95.0" --timeout 200ms
+set temperature -25
+step --until serial contains "temp -25.0" --timeout 200ms
+expect no diagnostics

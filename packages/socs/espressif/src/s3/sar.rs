@@ -34,9 +34,9 @@ pub(crate) const SENS: u32 = 0x800;
 pub(crate) const ARB_CTRL: u32 = 0x38;
 /// `RTC_CNTL_RTC_CLK_CONF_REG`, in RTC_CNTL.
 pub(crate) const CLK_CONF: u32 = 0x74;
-/// `RTC_CNTL_INT_ENA_RTC_REG`'s `SARADC1_INT_ENA` and `SARADC2_INT_ENA`.
+/// `RTC_CNTL_INT_ENA_RTC_REG`'s `SARADC1_INT_ENA`, `TSENS_INT_ENA` and `SARADC2_INT_ENA`.
 pub(crate) const INT_ENA: u32 = 0x40;
-pub(crate) const INT_BITS: u32 = 1 << 11 | 1 << 14;
+pub(crate) const INT_BITS: u32 = 1 << 11 | 1 << 12 | 1 << 14;
 
 /// SENS's registers the model keeps, as offsets in SENS, with their reset values from
 /// `soc/esp32s3/register/soc/sens_reg.h`.
@@ -226,6 +226,14 @@ impl Sar {
 
     pub(crate) fn write_arb_ctrl(&mut self, value: u32) {
         self.arb_ctrl = value;
+    }
+
+    pub(crate) fn tsens_clocked(&self) -> bool {
+        self.word(CLK_GATE) & TSENS_BIT != 0
+    }
+
+    pub(crate) fn tsens_reset(&self) -> bool {
+        self.word(RESET_CONF) & TSENS_BIT != 0
     }
 
     /// Writes SENS's register at `offset` at `now`. `Ok(Some(pad))` when the write starts a

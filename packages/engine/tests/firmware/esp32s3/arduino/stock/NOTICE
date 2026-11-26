@@ -102,3 +102,7 @@ cdc          packages/scene/tests/fixtures/esp32s3-stock-cdc
 cdc4         packages/scene/tests/fixtures/esp32s3-stock-cdc4
              source cdc, fqbn esp32:esp32:esp32s3:CDCOnBoot=cdc (esp32:esp32 4.0.0)
              app 299744 9ae9eacd8e309cbe3d974255f794a6d26977c175390be6028b2584c5e0df8645
+pcnt         packages/scene/tests/fixtures/esp32s3-stock-pcnt
+             app 281312 a294171210d2b526004254c5a34a73e0b75657e4a0565079a18f948ee14ba527
+temp         packages/scene/tests/fixtures/esp32s3-stock-temp
+             app 280224 1ce8588fa075f51e0c3a6eff43372ae816bb4260d286ea71b74c3e551e559f27
