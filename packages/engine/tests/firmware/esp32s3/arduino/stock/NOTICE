@@ -24,6 +24,8 @@ license, whose notice is in oled/LICENSE-busio. The app holds none of its code. 
 the archives https://github.com/adafruit/Adafruit_SSD1306/archive/refs/tags/2.5.17.tar.gz,
 https://github.com/adafruit/Adafruit-GFX-Library/archive/refs/tags/1.13.0.tar.gz and
 https://github.com/adafruit/Adafruit_BusIO/archive/refs/tags/1.17.0.tar.gz.
+The wire1 sketch uses Adafruit SSD1306 2.5.17, Adafruit GFX Library 2.0.0 and Adafruit BusIO
+1.17.4 under those same licenses.
 
 The compile rewrites source paths with -ffile-prefix-map, the same way
 packages/engine/scripts/esp32s3-arduino.sh does, so the committed app does not record the build
@@ -116,3 +118,7 @@ littlefs     packages/scene/tests/fixtures/esp32s3-stock-littlefs
              app 313056 4caefbada2c663cd3b045225b9386ee6b42394c6512fd1ca2c143d59569f7e83
 crypto       packages/scene/tests/fixtures/esp32s3-stock-crypto
              app 348032 c9a6baf6b2b6f595be5dfb7392f47ce48ad33d9ef45ec0efcd8be61dbce66010
+wire1        packages/scene/tests/fixtures/esp32s3-stock-wire1
+             app 338480 0431bf3adb8761ff30b28887e4e4b7e3ce74a6b137b84c41909fa62bc28c8e7b
+hspi         packages/scene/tests/fixtures/esp32s3-stock-hspi
+             app 283120 0c098c9779dbabd8af6484d2a46ea39e5556cf2626b18078d2f77ec0a3303d64

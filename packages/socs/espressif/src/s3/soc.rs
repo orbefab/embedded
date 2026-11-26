@@ -31,7 +31,7 @@ use super::flash::{self, Flash};
 use super::gates::{self, Block, Gates};
 use super::gdma::{self, Gdma};
 use super::gpio::{self, Gpio, PADS, PadDrive};
-use super::i2c::{self, I2c};
+use super::i2c::{self, I2C0, I2C1, I2c};
 use super::ledc::{self, Ledc};
 use super::matrix::{self, Matrix};
 use super::pcnt::{self, Pcnt};
@@ -42,7 +42,7 @@ use super::rsa::{self, Rsa};
 use super::sar::{self, Sar};
 use super::sha::{self, Sha};
 use super::spi1::{self, FlashRefusal, Spi1};
-use super::spi2::{self, Setting, Spi2};
+use super::spi2::{self, SPI2 as SPI2_BASE, SPI3 as SPI3_BASE, Setting, Spi};
 use super::timers::{Expiry, Register, Systimer, Watchdogs};
 use super::tsens::{self, Tsens};
 use super::uart::{self, Uarts};
@@ -70,11 +70,11 @@ const ANALOG: u32 = 0x6000_e000;
 pub(crate) const TIMG0: u32 = 0x6001_f000;
 pub(crate) const TIMG1: u32 = 0x6002_0000;
 pub(crate) const SYSTIMER: u32 = 0x6002_3000;
-pub(crate) const SPI2: u32 = 0x6002_4000;
+pub(crate) const SPI2: u32 = SPI2_BASE;
+pub(crate) const SPI3: u32 = SPI3_BASE;
 pub(crate) const LEDC: u32 = 0x6001_9000;
 pub(crate) const PCNT: u32 = 0x6001_7000;
 pub(crate) const RMT: u32 = 0x6001_6000;
-const I2C0: u32 = 0x6001_3000;
 pub(crate) const USB_SERIAL_JTAG: u32 = 0x6003_8000;
 pub(crate) const AES: u32 = 0x6003_a000;
 const SHA: u32 = 0x6003_b000;
@@ -116,7 +116,7 @@ pub(crate) struct Soc {
     pub(crate) watchdogs: Watchdogs,
     rng: Rng,
     pub(crate) usb: UsbSerialJtag,
-    pub(crate) spi2: Spi2,
+    pub(crate) spi: [Spi; 2],
     gdma: Gdma,
     pub(crate) aes: Aes,
     sha: Sha,
@@ -125,7 +125,7 @@ pub(crate) struct Soc {
     rsa_pd_ctrl: u32,
     pub(crate) ledc: Ledc,
     pub(crate) pcnt: Pcnt,
-    pub(crate) i2c: I2c,
+    pub(crate) i2c: [I2c; 2],
     pub(crate) rmt: Rmt,
     pub(crate) uart: Uarts,
     /// The changes of the LEDC channels' signals that the chip has not taken, in time order.
@@ -154,9 +154,9 @@ pub(crate) struct Soc {
     /// The register, word and touch of the change the last stop reported, which is listed when
     /// the core runs the store again and it lands.
     pub(crate) pending: Option<(u32, u32, Touch)>,
-    /// The SRAM offsets of the descriptors and buffers the last SPI2 transfer read through GDMA,
-    /// which a store may not reach while it runs.
-    in_flight: Vec<Range<u32>>,
+    /// The SRAM offsets of the descriptors and buffers the last SPI2 or SPI3 transfer read
+    /// through GDMA, which a store may not reach while it runs.
+    in_flight: [Vec<Range<u32>>; 2],
     /// A store changed a netted pad's drive at this tick, so the next fetch stops the core.
     pub(crate) changed: Option<Tick>,
     /// A store started an ADC conversion that samples its pad at this tick, so the next fetch
@@ -176,12 +176,12 @@ pub(crate) struct Soc {
     pub(crate) change_stop: bool,
     /// The core fetched outside its memories.
     pub(crate) unmapped_fetch: bool,
-    /// A store started an SPI2 transfer or an RMT transmission, so the next fetch stops the core
-    /// and the run reads its end.
+    /// A store started an SPI2/SPI3 transfer or an RMT transmission, so the next fetch stops the
+    /// core and the run reads its end.
     pub(crate) started: bool,
-    /// A store by this core started an I2C transfer, so the run takes that core's PC as the
-    /// transfer's.
-    pub(crate) i2c_started: Option<CoreId>,
+    /// A store by this core started an I2C0 or I2C1 transfer, so the run takes that core's PC as
+    /// the transfer's.
+    pub(crate) i2c_started: [Option<CoreId>; 2],
     /// A store by this core started an RMT transmission. The run takes that core's PC, which a
     /// transmission that never ends names.
     pub(crate) rmt_started: Option<CoreId>,
@@ -237,8 +237,8 @@ impl<'a> CoreBus<'a> {
 /// Why a store ended the run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Ending {
-    /// It started an SPI2 transfer with a setting the model does not run.
-    Setting(Setting),
+    /// It started an SPI2 or SPI3 transfer with a setting the model does not run.
+    Setting(&'static str, Setting),
     /// It started an eFuse program command.
     EfuseProgram,
     /// It sent the flash a command the model refuses.
@@ -347,6 +347,7 @@ fn effect(addr: u32) -> Option<Effect> {
         }
         (RTC_CNTL, _) if offset == sar::SENS + 0x40 => Effect::Report(sar::SLAVE_ADDRS),
         (SPI2, 0x34) => Effect::Refuse(!spi2::TRANS_DONE, interrupt("SPI2")),
+        (SPI3, 0x34) => Effect::Refuse(!spi2::TRANS_DONE, interrupt("SPI3")),
         (USB_SERIAL_JTAG, 0x10) => Effect::Refuse(!usb::ENA_ALLOWED, interrupt("USB_SERIAL_JTAG")),
         (AES, aes::INT_ENA) => Effect::Refuse(!aes::INT_ENA_ALLOWED, interrupt("AES")),
         (SHA, sha::INT_ENA) => Effect::Refuse(!sha::INT_ENA_ALLOWED, interrupt("SHA")),
@@ -389,21 +390,21 @@ fn effect(addr: u32) -> Option<Effect> {
         (GPIO, 0x2c | 0x30) => Effect::Refuse(1, pads),
         (GPIO, 0x5bc..=0x5d4) => Effect::Pin(0xfff, 0x100, pads),
         (GPIO, 0x74..=0x134) => Effect::Report(gpio::PIN_UNRUN),
-        (I2C0, 0x04) => Effect::Report(i2c::CTR_UNRUN),
-        (I2C0, 0x10 | 0x78 | 0x7c | 0x84) => Effect::Report(u32::MAX),
-        (I2C0, 0x18) => Effect::Report(i2c::FIFO_CONF_UNRUN),
+        (I2C0 | I2C1, 0x04) => Effect::Report(i2c::CTR_UNRUN),
+        (I2C0 | I2C1, 0x10 | 0x78 | 0x7c | 0x84) => Effect::Report(u32::MAX),
+        (I2C0 | I2C1, 0x18) => Effect::Report(i2c::FIFO_CONF_UNRUN),
         _ => return None,
     })
 }
 
-/// The watchdog deadline, the next LEDC event, the I2C controller's, whether I2C runs, and
-/// any active AES DMA deadline.
+/// The watchdog deadline, the next LEDC event and the I2C controllers', whether each I2C runs,
+/// and any active AES DMA deadline.
 #[derive(Debug, PartialEq, Eq)]
 struct Armed {
     deadline: Option<Expiry>,
     ledc: Option<Tick>,
-    i2c_runs: bool,
-    i2c: Option<Tick>,
+    i2c_runs: [bool; 2],
+    i2c: [Option<Tick>; 2],
     aes: Option<Tick>,
 }
 
@@ -425,7 +426,7 @@ impl Soc {
             watchdogs,
             rng: Rng::new(clock.source.apb()),
             usb: UsbSerialJtag::default(),
-            spi2: Spi2::new(),
+            spi: [Spi::new(0), Spi::new(1)],
             gdma: Gdma::new(),
             aes: Aes::new(),
             sha: Sha::new(),
@@ -433,7 +434,7 @@ impl Soc {
             rsa_pd_ctrl: 1,
             ledc: Ledc::new(),
             pcnt: Pcnt::new(),
-            i2c: I2c::new(),
+            i2c: [I2c::new(0), I2c::new(1)],
             rmt: Rmt::new(),
             uart: Uarts::new(),
             edges: Vec::new(),
@@ -451,7 +452,7 @@ impl Soc {
             unmodeled: BTreeMap::new(),
             changes: Vec::new(),
             pending: None,
-            in_flight: Vec::new(),
+            in_flight: [Vec::new(), Vec::new()],
             changed: None,
             sampled: None,
             rearmed: false,
@@ -460,7 +461,7 @@ impl Soc {
             change_stop: false,
             unmapped_fetch: false,
             started: false,
-            i2c_started: None,
+            i2c_started: [None; 2],
             rmt_started: None,
             rmt_pending: false,
             uart_started: None,
@@ -471,11 +472,13 @@ impl Soc {
         };
         soc.plain.insert(RTC_CNTL + OPTIONS0, 0);
         soc.plain.insert(RTC_CNTL + app::SW_CPU_STALL, 0);
-        for (signal, level) in soc.spi2.idle() {
-            soc.gpio.set_signal(signal, level);
+        for port in 0..2 {
+            for (signal, level) in soc.spi[port].idle() {
+                soc.gpio.set_signal(signal, level);
+            }
+            soc.idle_i2c(port);
         }
         soc.idle_ledc();
-        soc.idle_i2c();
         soc.idle_rmt();
         for &signal in &uart::SIGNAL {
             soc.gpio.set_signal(signal, true);
@@ -502,15 +505,36 @@ impl Soc {
             .collect()
     }
 
-    /// Puts I2C0's outputs at their idle level, released.
-    fn idle_i2c(&mut self) {
-        self.gpio.set_signal(i2c::SCL, true);
-        self.gpio.set_signal(i2c::SDA, true);
+    /// Puts `port`'s I2C outputs at their idle level, released.
+    fn idle_i2c(&mut self, port: usize) {
+        let (scl, sda) = i2c::SIGNALS[port];
+        self.gpio.set_signal(scl, true);
+        self.gpio.set_signal(sda, true);
     }
 
-    /// Runs every I2C event due at or before `through`, until one waits for its drive to land.
+    /// Runs every I2C event due at or before `through` across both ports in tick order, stopping
+    /// once any port waits for a drive move at an earlier tick to land.
     pub(crate) fn settle_i2c(&mut self, through: Tick) {
-        self.i2c.settle(through, &mut self.gpio);
+        loop {
+            let moved = self
+                .i2c
+                .iter()
+                .filter_map(|bus| bus.moved().map(|(at, ..)| at))
+                .min();
+            let bound = moved.map_or(through, |at| through.min(at));
+            let next = self
+                .i2c
+                .iter()
+                .enumerate()
+                .filter(|(_, bus)| bus.moved().is_none())
+                .filter_map(|(port, bus)| bus.next_event().map(|at| (at, port)))
+                .filter(|&(at, _)| at <= bound)
+                .min();
+            let Some((at, port)) = next else {
+                break;
+            };
+            self.i2c[port].settle(at, &mut self.gpio);
+        }
     }
 
     /// Puts each LEDC channel's signal at its power-on level, low.
@@ -732,16 +756,21 @@ impl Soc {
     }
 
     /// Whether a `width` store at SRAM offset `offset` reaches a descriptor or a buffer that a
-    /// running SPI2 transfer sends from.
+    /// running SPI2 or SPI3 transfer sends from.
     fn in_flight(&mut self, now: Tick, offset: u32, width: Width) -> bool {
-        if !self.spi2.busy(now) {
-            self.in_flight.clear();
-            return false;
-        }
         let end = offset + width.bytes();
-        self.in_flight
-            .iter()
-            .any(|range| offset < range.end && range.start < end)
+        let mut hit = false;
+        for port in 0..2 {
+            if !self.spi[port].busy(now) {
+                self.in_flight[port].clear();
+            } else if self.in_flight[port]
+                .iter()
+                .any(|range| offset < range.end && range.start < end)
+            {
+                hit = true;
+            }
+        }
+        hit
     }
 
     /// SRAM, RTC memory, the ROMs and the flash windows do not move an interrupt line. A store
@@ -972,7 +1001,10 @@ impl Soc {
             TIMG1 => self.watchdogs.read_timg(now, 1, offset),
             SYSTIMER => self.systimer.read(now, offset),
             USB_SERIAL_JTAG => self.usb.read(now, offset),
-            SPI2 => self.spi2.read(now, offset),
+            base if spi2::index(base).is_some() => {
+                let port = spi2::index(base).expect("an spi host");
+                self.spi[port].read(now, offset)
+            }
             GDMA => {
                 self.settle_aes(now);
                 self.gdma.read(offset)
@@ -986,7 +1018,10 @@ impl Soc {
             LEDC => self.ledc.read(now, offset, self.clock.source.apb()),
             PCNT => self.pcnt.read(now, offset),
             RMT => self.rmt.read(now, offset),
-            I2C0 => self.i2c.read(now, offset, &mut self.gpio),
+            base if i2c::index(base).is_some() => {
+                let port = i2c::index(base).expect("an i2c port");
+                self.i2c[port].read(now, offset, &mut self.gpio)
+            }
             base if uart::Uarts::index(base).is_some() => {
                 let index = uart::Uarts::index(base).expect("a uart");
                 let apb = self.clock.source.apb();
@@ -1204,22 +1239,35 @@ impl Soc {
                 self.pcnt.settle(now);
                 self.settle_aes(now);
                 self.rsa.settle(now);
-                let i2c = self.i2c.runs();
+                let i2c0 = self.i2c[0].runs();
+                let i2c1 = self.i2c[1].runs();
                 let rmt_sends = self.rmt.sending(now);
-                let sending = self.spi2.busy(now);
-                let dma = sending && !self.in_flight.is_empty();
+                let sending0 = self.spi[0].busy(now);
+                let sending1 = self.spi[1].busy(now);
+                let dma = (sending0 && !self.in_flight[0].is_empty())
+                    || (sending1 && !self.in_flight[1].is_empty());
                 let aes_busy = self.aes.busy(now);
                 let aes_dma = self.aes.dma_busy(now);
                 let rsa_busy = self.rsa.busy(now);
                 let refused = [
                     (
-                        sending && held.contains(&Block::Spi2),
+                        sending0 && held.contains(&Block::Spi2),
                         "SPI2",
                         "reset_while_sending",
                     ),
                     (
-                        sending && !gates.clocked(Block::Spi2),
+                        sending0 && !gates.clocked(Block::Spi2),
                         "SPI2",
+                        "clock_off_while_sending",
+                    ),
+                    (
+                        sending1 && held.contains(&Block::Spi3),
+                        "SPI3",
+                        "reset_while_sending",
+                    ),
+                    (
+                        sending1 && !gates.clocked(Block::Spi3),
+                        "SPI3",
                         "clock_off_while_sending",
                     ),
                     (
@@ -1265,13 +1313,23 @@ impl Soc {
                         "reset_while_running",
                     ),
                     (
-                        i2c && held.contains(&Block::I2c0),
+                        i2c0 && held.contains(&Block::I2c0),
                         "I2C0",
                         "reset_while_sending",
                     ),
                     (
-                        i2c && !gates.clocked(Block::I2c0),
+                        i2c0 && !gates.clocked(Block::I2c0),
                         "I2C0",
+                        "reset_while_sending",
+                    ),
+                    (
+                        i2c1 && held.contains(&Block::I2c1),
+                        "I2C1",
+                        "reset_while_sending",
+                    ),
+                    (
+                        i2c1 && !gates.clocked(Block::I2c1),
+                        "I2C1",
                         "reset_while_sending",
                     ),
                     (
@@ -1326,13 +1384,16 @@ impl Soc {
                         true
                     })
             }
-            I2C0 => self
-                .i2c
-                .write(now, offset, value, &mut self.gpio)
-                .unwrap_or_else(|setting| {
-                    self.ending = Some(Ending::Refused(Refused::Register("I2C0", setting)));
-                    true
-                }),
+            base if i2c::index(base).is_some() => {
+                let port = i2c::index(base).expect("an i2c port");
+                self.i2c[port]
+                    .write(now, offset, value, &mut self.gpio)
+                    .unwrap_or_else(|setting| {
+                        let refused = Refused::Register(i2c::NAMES[port], setting);
+                        self.ending = Some(Ending::Refused(refused));
+                        true
+                    })
+            }
             base if uart::Uarts::index(base).is_some() => {
                 let index = uart::Uarts::index(base).expect("a uart");
                 let apb = self.clock.source.apb();
@@ -1381,21 +1442,23 @@ impl Soc {
                     true
                 }
             },
-            SPI2 => {
+            base if spi2::index(base).is_some() => {
+                let port = spi2::index(base).expect("an spi host");
                 let cpu = self.clock.source.cpu();
                 let (gdma, sram, gates) = (&mut self.gdma, &self.sram, &self.gates);
                 let mut read = Vec::new();
-                let dma = |bytes| Self::feed(gdma, sram, gates, gdma::SPI2, bytes, &mut read);
-                match self.spi2.write(now, cpu, offset, value, &self.gpio, dma) {
+                let peripheral = spi2::DMA_PERIPHERALS[port];
+                let dma = |bytes| Self::feed(gdma, sram, gates, peripheral, bytes, &mut read);
+                match self.spi[port].write(now, cpu, offset, value, &self.gpio, dma) {
                     Ok(started) => {
                         self.started |= started;
                         if started {
-                            self.in_flight = read;
+                            self.in_flight[port] = read;
                         }
                     }
-                    Err(setting) => self.ending = Some(Ending::Setting(setting)),
+                    Err(setting) => self.ending = Some(Ending::Setting(spi2::NAMES[port], setting)),
                 }
-                for (signal, level) in self.spi2.idle() {
+                for (signal, level) in self.spi[port].idle() {
                     self.gpio.set_signal(signal, level);
                 }
                 true
@@ -1440,7 +1503,7 @@ impl Soc {
     /// The interrupt sources' levels at `now`.
     fn sources(&mut self, now: Tick) -> u128 {
         self.systimer.settle(now);
-        let spi2 = self.spi2.line(now);
+        let spi = [self.spi[0].line(now), self.spi[1].line(now)];
         let gpio = self.gpio.pending() != 0;
         let lines = self.watchdogs.lines();
         let timers = self.watchdogs.timer_lines(now);
@@ -1452,10 +1515,10 @@ impl Soc {
         self.rsa.settle(now);
         let mut sources = self.matrix.sources(
             self.systimer.lines(),
-            spi2,
+            spi,
             lines,
             gpio,
-            self.i2c.line(),
+            [self.i2c[0].line(), self.i2c[1].line()],
             rmt,
         ) | Matrix::timer_levels(timers)
             | self.gdma.interrupt_sources();
@@ -1583,12 +1646,8 @@ impl Soc {
     /// sent stay to be taken, and its pads go to its idle levels.
     fn reset(&mut self, block: Block) {
         match block {
-            Block::Spi2 => {
-                self.spi2.reset();
-                for (signal, level) in self.spi2.idle() {
-                    self.gpio.set_signal(signal, level);
-                }
-            }
+            Block::Spi2 => self.reset_spi(0),
+            Block::Spi3 => self.reset_spi(1),
             Block::Ledc => {
                 self.ledc = Ledc::new();
                 self.idle_ledc();
@@ -1597,10 +1656,8 @@ impl Soc {
             Block::Sha => self.sha = Sha::new(),
             Block::Aes => self.aes = Aes::new(),
             Block::Rsa => self.rsa = Rsa::new(),
-            Block::I2c0 => {
-                self.i2c = I2c::new();
-                self.idle_i2c();
-            }
+            Block::I2c0 => self.reset_i2c(0),
+            Block::I2c1 => self.reset_i2c(1),
             Block::Rmt => {
                 self.rmt = Rmt::new();
                 self.idle_rmt();
@@ -1610,6 +1667,18 @@ impl Soc {
             Block::Uart1 => self.reset_uart(1),
             Block::Uart2 => self.reset_uart(2),
         }
+    }
+
+    fn reset_spi(&mut self, port: usize) {
+        self.spi[port].reset();
+        for (signal, level) in self.spi[port].idle() {
+            self.gpio.set_signal(signal, level);
+        }
+    }
+
+    fn reset_i2c(&mut self, port: usize) {
+        self.i2c[port] = I2c::new(port);
+        self.idle_i2c(port);
     }
 
     fn reset_uart(&mut self, index: usize) {
@@ -1645,12 +1714,14 @@ impl Soc {
     fn gated(&self, addr: u32) -> Option<Refused> {
         let block = match addr & !(BLOCK - 1) {
             SPI2 => Block::Spi2,
+            SPI3 => Block::Spi3,
             LEDC => Block::Ledc,
             GDMA => Block::Gdma,
             SHA => Block::Sha,
             AES => Block::Aes,
             RSA => Block::Rsa,
             I2C0 => Block::I2c0,
+            I2C1 => Block::I2c1,
             RMT => Block::Rmt,
             PCNT => Block::Pcnt,
             _ => return None,
@@ -1860,8 +1931,10 @@ impl Soc {
         if word == USB_SERIAL_JTAG {
             self.usb.take_received(now);
         }
-        if word == I2C0 + i2c::DATA {
-            self.i2c.take();
+        if let Some(port) = i2c::index(word & !(BLOCK - 1))
+            && word & (BLOCK - 1) == i2c::DATA
+        {
+            self.i2c[port].take();
         }
         match kept {
             Some(value) => Ok((value >> shift) & mask),
@@ -1879,7 +1952,7 @@ impl Soc {
         value: u32,
     ) -> Result<(), Exit> {
         if let Some(offset) = Self::data_offset(addr, width)? {
-            if !self.in_flight.is_empty() {
+            if !self.in_flight[0].is_empty() || !self.in_flight[1].is_empty() {
                 let now = self.stamp(cycle);
                 if self.in_flight(now, offset, width) {
                     let refused = Refused::Register("GDMA", "buffer_write");
@@ -1970,7 +2043,7 @@ impl Soc {
             return self.unkept(now, word, true);
         }
         let base = word & !(BLOCK - 1);
-        let pads = matches!(base, GPIO | IO_MUX | SPI2 | RMT)
+        let pads = matches!(base, GPIO | IO_MUX | SPI2 | SPI3 | RMT)
             || uart::Uarts::index(base).is_some()
             || (base == SYSTEM && gates::OFFSETS.contains(&(word - SYSTEM)))
             || word == USB_SERIAL_JTAG + usb::CONF0;
@@ -2017,8 +2090,10 @@ impl Soc {
                     !systimer || after == before,
                     "a SYSTIMER store moved {after:?}"
                 );
-                if !before.i2c_runs && after.i2c_runs {
-                    self.i2c_started = Some(step.core);
+                for port in 0..2 {
+                    if !before.i2c_runs[port] && after.i2c_runs[port] {
+                        self.i2c_started[port] = Some(step.core);
+                    }
                 }
                 self.rearmed |= after.deadline != before.deadline
                     || after.ledc != before.ledc
@@ -2095,8 +2170,8 @@ impl Soc {
         Armed {
             deadline: self.watchdogs.deadline(),
             ledc: self.ledc.next(self.clock.source.apb()),
-            i2c_runs: self.i2c.runs(),
-            i2c: self.i2c.next_event(),
+            i2c_runs: [self.i2c[0].runs(), self.i2c[1].runs()],
+            i2c: [self.i2c[0].next_event(), self.i2c[1].next_event()],
             aes: self.aes.next_event(),
         }
     }
@@ -2177,7 +2252,10 @@ impl Soc {
         match peripheral {
             Peripheral::Systimer => self.systimer.next_event(now),
             Peripheral::Timers => self.watchdogs.next_alarm(now),
-            Peripheral::Spi2 => self.spi2.next_event(),
+            Peripheral::Spi => [self.spi[0].next_event(), self.spi[1].next_event()]
+                .into_iter()
+                .flatten()
+                .min(),
             Peripheral::Usb => self.usb.next_event(now),
             Peripheral::Rmt => self.rmt.next_event(),
             Peripheral::Uart => self.uart.next_event(now),

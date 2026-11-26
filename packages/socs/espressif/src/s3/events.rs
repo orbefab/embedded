@@ -9,7 +9,7 @@
 //! checks at each poll.
 
 use super::clock::Tick;
-use super::soc::{AES, LEDC, PCNT, RMT, RSA, SPI2, SYSTIMER, TIMG0, TIMG1, USB_SERIAL_JTAG};
+use super::soc::{AES, LEDC, PCNT, RMT, RSA, SPI2, SPI3, SYSTIMER, TIMG0, TIMG1, USB_SERIAL_JTAG};
 use super::uart::Uarts;
 use super::usb;
 
@@ -19,7 +19,8 @@ pub(crate) enum Peripheral {
     Systimer,
     /// The general timers of both timer groups.
     Timers,
-    Spi2,
+    /// SPI2 and SPI3.
+    Spi,
     Usb,
     Rmt,
     Uart,
@@ -33,7 +34,7 @@ impl Peripheral {
     pub(crate) const ALL: [Peripheral; 10] = [
         Peripheral::Systimer,
         Peripheral::Timers,
-        Peripheral::Spi2,
+        Peripheral::Spi,
         Peripheral::Usb,
         Peripheral::Rmt,
         Peripheral::Uart,
@@ -89,7 +90,7 @@ impl Events {
             }
             USB_SERIAL_JTAG => Peripheral::Usb.bit(),
             RMT => Peripheral::Rmt.bit() | Peripheral::Uart.bit() | Peripheral::Pcnt.bit(),
-            SPI2 => Peripheral::Spi2.bit() | Peripheral::Uart.bit() | Peripheral::Pcnt.bit(),
+            SPI2 | SPI3 => Peripheral::Spi.bit() | Peripheral::Uart.bit() | Peripheral::Pcnt.bit(),
             LEDC => Peripheral::Ledc.bit(),
             PCNT => Peripheral::Pcnt.bit(),
             AES => Peripheral::Aes.bit(),
@@ -160,6 +161,14 @@ mod tests {
         );
         keep_all(&mut events);
         events.touch(SPI2);
+        assert_eq!(
+            left(&events),
+            [
+                true, true, false, true, true, false, true, false, true, true
+            ]
+        );
+        keep_all(&mut events);
+        events.touch(SPI3);
         assert_eq!(
             left(&events),
             [
