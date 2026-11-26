@@ -1,7 +1,7 @@
 //! SYSTEM's peripheral clock gates and resets: `SYSTEM_PERIP_CLK_EN0_REG`,
 //! `SYSTEM_PERIP_CLK_EN1_REG`, `SYSTEM_PERIP_RST_EN0_REG` and `SYSTEM_PERIP_RST_EN1_REG`.
 //!
-//! SPI2, LEDC, I2C0, GDMA, the SHA accelerator, RMT and the three UARTs run their gates. Each runs while its clock bit is set
+//! SPI2, LEDC, I2C0, GDMA, the SHA accelerator, RMT, PCNT and the three UARTs run their gates. Each runs while its clock bit is set
 //! and its reset bits are clear. A write that leaves one of its reset bits set puts it back to
 //! its power-on state, and it stays there until they clear. The SHA accelerator is held by the
 //! digital signature and HMAC reset bits too, as IDF's `sha_ll_reset_register` says.
@@ -39,19 +39,21 @@ pub(crate) enum Block {
     Sha,
     I2c0,
     Rmt,
+    Pcnt,
     Uart0,
     Uart1,
     Uart2,
 }
 
 impl Block {
-    pub(crate) const ALL: [Block; 9] = [
+    pub(crate) const ALL: [Block; 10] = [
         Block::Spi2,
         Block::Ledc,
         Block::Gdma,
         Block::Sha,
         Block::I2c0,
         Block::Rmt,
+        Block::Pcnt,
         Block::Uart0,
         Block::Uart1,
         Block::Uart2,
@@ -65,6 +67,7 @@ impl Block {
             Block::Sha => "SHA",
             Block::I2c0 => "I2C0",
             Block::Rmt => "RMT",
+            Block::Pcnt => "PCNT",
             Block::Uart0 => "UART0",
             Block::Uart1 => "UART1",
             Block::Uart2 => "UART2",
@@ -80,6 +83,7 @@ impl Block {
             Block::Sha => (1, 1 << 2, 1 << 2 | 1 << 4 | 1 << 5),
             Block::I2c0 => (0, 1 << 7, 1 << 7),
             Block::Rmt => (0, 1 << 9, 1 << 9),
+            Block::Pcnt => (0, 1 << 10, 1 << 10),
             Block::Uart0 => (0, 1 << 2, 1 << 2),
             Block::Uart1 => (0, 1 << 5, 1 << 5),
             Block::Uart2 => (1, 1 << 9, 1 << 9),

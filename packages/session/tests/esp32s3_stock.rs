@@ -1623,3 +1623,110 @@ fn a_part_holding_scl_low_past_timeout_fails_bmp280_begin_without_faulting() {
     run(&mut live, &block_dir, "expect @board.GPIO9 high");
     run(&mut live, &block_dir, "expect no diagnostics");
 }
+
+#[test]
+fn a_stock_pcnt_sketch_counts_quadrature_filters_bounce_and_fires_limit_interrupts() {
+    let (dir, mut live) = open("esp32s3-stock-pcnt");
+    let path = dir.path();
+    run(
+        &mut live,
+        path,
+        r#"step --until serial contains "ready" --timeout 300ms"#,
+    );
+    // Forward quadrature cycle (+4).
+    for line in [
+        "press @enc_a",
+        "step 2ms",
+        "press @enc_b",
+        "step 2ms",
+        "release @enc_a",
+        "step 2ms",
+        "release @enc_b",
+        "step 5ms",
+        r#"expect serial contains "count 4""#,
+    ] {
+        run(&mut live, path, line);
+    }
+    // 2 us bounce is shorter than the 5 us glitch filter and must not advance the count.
+    for line in ["press @enc_a", "step 2us", "release @enc_a", "step 5ms"] {
+        run(&mut live, path, line);
+    }
+    let snap = live
+        .run(&Command::parse("snapshot", path).unwrap().unwrap())
+        .text();
+    assert!(
+        !snap.contains("count 5"),
+        "short bounce was counted:\n{snap}"
+    );
+    // Second forward cycle hits high_limit (+8), resets to 0 and fires the watchpoint callback.
+    for line in [
+        "press @enc_a",
+        "step 2ms",
+        "press @enc_b",
+        "step 2ms",
+        "release @enc_a",
+        "step 2ms",
+        "release @enc_b",
+        "step 5ms",
+        r#"expect serial contains "limit 8""#,
+    ] {
+        run(&mut live, path, line);
+    }
+    // Reverse quadrature cycle (-4) and second reverse cycle to low_limit (-8).
+    for line in [
+        "press @enc_b",
+        "step 2ms",
+        "press @enc_a",
+        "step 2ms",
+        "release @enc_b",
+        "step 2ms",
+        "release @enc_a",
+        "step 5ms",
+        r#"expect serial contains "count -4""#,
+        "press @enc_b",
+        "step 2ms",
+        "press @enc_a",
+        "step 2ms",
+        "release @enc_b",
+        "step 2ms",
+        "release @enc_a",
+        "step 5ms",
+        r#"expect serial contains "limit -8""#,
+        "expect no diagnostics",
+    ] {
+        run(&mut live, path, line);
+    }
+}
+
+#[test]
+fn a_stock_temp_sketch_reads_ambient_and_default_temperature_across_ranges() {
+    play(
+        "esp32s3-stock-temp",
+        &[
+            r#"step --until serial contains "temp 25.0" --timeout 300ms"#,
+            "set temperature 42",
+            r#"step --until serial contains "temp 42.0" --timeout 200ms"#,
+            "set temperature 95",
+            r#"step --until serial contains "temp 95.0" --timeout 200ms"#,
+            "set temperature -25",
+            r#"step --until serial contains "temp -25.0" --timeout 200ms"#,
+            "expect no diagnostics",
+        ],
+    );
+
+    // Without a world block in scene.jsonc, ambient temperature defaults to 25 degC.
+    let dir = project("esp32s3-stock-temp");
+    let scene_path = dir.path().join("scene.jsonc");
+    let no_world = fs::read_to_string(&scene_path)
+        .unwrap()
+        .replace(",\n  \"world\": { \"temperature\": 25 }", "");
+    fs::write(&scene_path, no_world).unwrap();
+    let mut live = Live::new("t", Files::disk());
+    run(&mut live, dir.path(), "open");
+    run(
+        &mut live,
+        dir.path(),
+        r#"step --until serial contains "temp 25.0" --timeout 300ms"#,
+    );
+    run(&mut live, dir.path(), "expect no diagnostics");
+}

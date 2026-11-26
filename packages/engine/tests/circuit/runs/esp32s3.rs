@@ -866,47 +866,25 @@ fn a_pull_down_on_a_part_that_names_none_ends_the_run() {
     );
 }
 
-/// Enabling the temperature sensor clock in `SENS_SAR_PERI_CLK_GATE_CONF_REG` or reading
-/// `SENS_SAR_TSENS_CTRL_REG` ends the run at that first access, naming the temperature sensor
-/// with no prior warning.
+/// Reading an unmodeled SENS touch register ends the run at that first access, naming the touch
+/// sensor with no prior warning.
 #[test]
-fn a_temperature_sensor_access_ends_the_run_naming_the_temperature_sensor() {
-    let (literals, code) = stores(&[(0x6000_8904, 1 << 29)]);
-    let doc = run_program(&literals, &code, 10_000_000_000);
+fn a_touch_sensor_access_ends_the_run_naming_the_touch_sensor() {
+    // l32r a2 <- SENS_SAR_TOUCH_CONF_REG; l32i a3, a2, 0; then idle.
+    let mut read_code = vec![0x21, 0xff, 0xff, 0x32, 0x22, 0x00];
+    read_code.extend(IDLE);
+    let doc = run_program(&[0x6000_885c], &read_code, 10_000_000_000);
     assert_eq!(doc["status"], "failed", "{doc}");
     let found = diagnostics(&doc);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0]["code"], "chip.unsupported_setting");
     assert_eq!(found[0]["severity"], "error");
-    assert_eq!(
-        found[0]["data"],
-        serde_json::json!({
-            "peripheral": "SENS",
-            "pc": IRAM + 8 + 6,
-            "setting": "unsimulated",
-            "symbol": "main+0x6",
-        })
-    );
-    let message = found[0]["message"].as_str().unwrap();
-    assert!(
-        message.contains("used SENS, the temperature sensor that temperatureRead uses, at ")
-            && message.contains("which the model does not simulate"),
-        "{message}"
-    );
-
-    // l32r a2 <- SENS_SAR_TSENS_CTRL_REG; l32i a3, a2, 0; then idle.
-    let mut read_code = vec![0x21, 0xff, 0xff, 0x32, 0x22, 0x00];
-    read_code.extend(IDLE);
-    let doc = run_program(&[0x6000_8850], &read_code, 10_000_000_000);
-    assert_eq!(doc["status"], "failed", "{doc}");
-    let found = diagnostics(&doc);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert_eq!(found[0]["code"], "chip.unsupported_setting");
     assert_eq!(found[0]["data"]["peripheral"], "SENS");
     assert_eq!(found[0]["data"]["setting"], "unsimulated");
     let message = found[0]["message"].as_str().unwrap();
     assert!(
-        message.contains("used SENS, the temperature sensor that temperatureRead uses, at "),
+        message.contains("used SENS, the touch sensor that touchRead uses, at ")
+            && message.contains("which the model does not simulate"),
         "{message}"
     );
 }
