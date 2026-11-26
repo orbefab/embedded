@@ -291,10 +291,16 @@ fn a_grid_never_changes_the_run() {
             let run = format!("{name} on a {grid} ps grid");
             assert_rows_read_the_steps(&run, results.trace().unwrap(), steps.trace().unwrap());
         }
+        // Rows no step lands on are probed on a copy of the solver, so only those counts follow the grid.
+        let solved = |stats: &orbe_engine::RunStats| orbe_engine::RunStats {
+            row_probes: 0,
+            row_iterations: 0,
+            ..stats.clone()
+        };
         let (_, (first, first_stats)) = &runs[0];
         for (grid, (results, stats)) in &runs[1..] {
             let run = format!("{name} on a {grid} ps grid");
-            assert_eq!(stats, first_stats, "{run}");
+            assert_eq!(solved(stats), solved(first_stats), "{run}");
             assert_eq!(results.diagnostics(), first.diagnostics(), "{run}");
             assert_eq!(
                 serde_json::to_value(results.observations()).unwrap(),
