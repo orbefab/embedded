@@ -685,7 +685,7 @@ The message is one of:
 {ref} is {sample} A now, over its {limit} A rating; it warns if held about {held_ps} ps
 ```
 
-The first is a peak rating's, or a sustained rating's `peak` limit. The second and third are a [sustained rating](#sustained-ratings)'s, RMS or mean as its basis says. The fourth is a sustained rating [over now](#over-now). Each value in a message is rounded to 3 significant digits, `tau` too, and `held_ps` to 2. ` while it is {sample} A` is left out when it prints the same as the reading, as at an operating point. ` for {over_ps} ps` is left out for an operating point, and while `over_ps` is 0, as on the step where the quantity first goes over. A session's `diagnostics()` writes each message as it stands through the last accepted step, so a warning seen early reads a shorter time, or none, than the run folder's.
+The first is a peak rating's, or a sustained rating's `peak` limit. The second and third are a [sustained rating](#sustained-ratings)'s, RMS or mean as its basis says. The fourth is a sustained rating [over now](#over-now). When the rating sets `"characterized": true`, the phrase reads `beyond the {limit} A load its sheet characterizes` instead of `over its {limit} A rating`, and `data` includes `"characterized": true`. Each value in a message is rounded to 3 significant digits, `tau` too, and `held_ps` to 2. ` while it is {sample} A` is left out when it prints the same as the reading, as at an operating point. ` for {over_ps} ps` is left out for an operating point, and while `over_ps` is 0, as on the step where the quantity first goes over. A session's `diagnostics()` writes each message as it stands through the last accepted step, so a warning seen early reads a shorter time, or none, than the run folder's.
 
 `data` holds `average`, `held_ps`, `limit`, `now`, `over_ps`, `peak`, `peak_ps`, `sample` and `tau_ps`, unrounded. `limit` is the rating. `peak` is the largest magnitude of the quantity, or the largest reading of a sustained rating's filter. `peak_ps` is when it peaked. `sample` is the quantity's own magnitude at `peak_ps`, which is `peak` for a peak rating. `over_ps` is `null` for an operating point, which has no duration. `average` is `"rms"` or `"mean"` and `tau_ps` the time constant for a sustained rating, and both are `null` for a peak rating. `now` is `false` and `held_ps` is `null`, except for a rating over now.
 
@@ -796,13 +796,15 @@ An LM358 comparator on a 5 V supply, `input_headroom` 1.5 V, with `in_p` at 4 V 
 #u1.pin.in_p reaches 4 V over the chip's ground, outside its 3.5 V ceiling
 ```
 
-A resistor with `ratings.voltage` uses the same code on `#<part>.v`. The window is that operating voltage. The message names the peak of a drive that leaves a level under 0.2 V, not a pin over the chip's ground:
+A resistor with `ratings.voltage` as `{ "min", "max" }` uses the same code on `#<part>.v`. The window is that operating voltage. The message names the peak of a drive that leaves a level under 0.2 V, not a pin over the chip's ground:
 
 ```text
 #bz.v peaks at 0.692 V, outside its 3 V to 5 V operating voltage
 ```
 
 A peak inside the window is quiet. A part that never leaves the low level, including DC, is quiet. The part still conducts. The time counts from the start of the first pulse outside the window to the end of the last, with each gap under 17 ms between them, and stops once the part rests longer than that. A pulse ends at its last sample at or above 0.2 V, so a long solver step into the rest after it adds nothing.
+
+A resistor with a single-value `ratings.voltage` checks `#<part>.v` against `-limit` to `+limit` on every accepted step, and reads `#<part>.v reaches {peak} V, outside its {low} V to {high} V rating`.
 
 A capacitor with `ratings.reverse_voltage` uses the same code on pin `a`. The floor is that rating below pin `b`, and there is no ceiling. The message calls pin `b` the chip's ground. A capacitor with no `ratings` object, or with `reverse_voltage` null, is not checked. A forward voltage is not checked. A voltage exactly on the floor is inside. A reverse rating of 0 warns on any reverse voltage, and 0 V is inside.
 

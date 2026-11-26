@@ -1,7 +1,7 @@
 // Internal voltage source for battery-aa-4x (4 x Energizer E91 AA alkaline in series).
 // Unlisted helper part; battery-aa-4x wires this in series with its 0.9 ohm internal resistance.
 {
-  "format": 5,
+  "format": 7,
   "part": "battery-aa-4x-cell",
   "version": "0.1.0",
   "title": "4xAA alkaline cell stack (internal)",
@@ -9,7 +9,7 @@
   "tags": ["battery", "aa", "4xaa", "6v", "alkaline", "cell", "power"],
   "license": "MIT OR Apache-2.0",
   "docs": {
-    "Energizer E91 Product Datasheet": null,
+    "Energizer E91 Product Datasheet (Form No. E91EU0823)": null,
     "Energizer Battery Internal Resistance Technical Bulletin v1.1.0": "https://data.energizer.com/pdfs/batteryir.pdf",
     "Energizer Alkaline Manganese Dioxide Handbook and Application Manual": "https://data.energizer.com/pdfs/alkaline_appman.pdf",
   },
@@ -17,7 +17,7 @@
     "generic": true,
     "maker": "Energizer",
     "number": "E91",
-    "datasheet": "Energizer E91 Product Datasheet",
+    "datasheet": "Energizer E91 Product Datasheet (Form No. E91EU0823)",
   },
   "pins": { "pos": [1], "neg": [2] },
   "model": {
@@ -33,25 +33,37 @@
     },
     "ratings": {
       "current": {
-        "value": 1.0,
+        "value": 0.5,
         "unit": "A",
+        "characterized": true,
         "basis": {
           "sustained": {
             "average": "rms",
             "tau": {
-              "value": 0.0102,
+              "value": 2.12,
               "unit": "s",
               "source": {
                 "closed_form": {
-                  "note": "Alkaline sheets state no pulse rating; the 10.2 ms RMS window lets brief bypass-capacitor inrush pass while warning on sustained overloads and shorts.",
+                  "note": "One 0.25 s pulse of Energizer E91 p1's High Rate Toy 1 ohm/cell load (1.5 A at 1.5 V nominal) reaches the 500 mA continuous characterized load on an RMS filter from cold with tau = -0.25 / ln(1 - (0.5 / 1.5)^2) = 2.12 s. A 4 ohm pack load (1.22 A through 0.9 ohm IR) stays under 500 mA RMS for 0.25 s, while held loads past 500 mA warn.",
+                },
+              },
+            },
+            "peak": {
+              "value": 1.5,
+              "unit": "A",
+              "source": {
+                "closed_form": {
+                  "note": "Energizer E91 Form E91EU0823 p1 High Rate Toy test: 1 / 3 ohm 0.25/19.75 s pulse at 1.5 V nominal is 1.5 A per cell (1.22 A closed-circuit through 0.225 ohm fresh IR). Direct shorts (~6.7 A) warn immediately.",
                 },
               },
             },
           },
         },
         "source": {
-          "closed_form": {
-            "note": "Primary AA alkaline datasheets (Energizer E91) state no hard absolute-maximum current; Energizer characterizes continuous drain up to 500 mA and high-drain pulse tests near 1 A, above which a 4xAA pack sags over 0.9 V and heats.",
+          "datasheet": {
+            "doc": "Energizer E91 Product Datasheet (Form No. E91EU0823)",
+            "at": "p1 Milliamp-Hours Capacity, continuous discharge to 0.8 V at 21 C: highest plotted continuous bar is 500 mA (no absolute maximum current is stated)",
+            "basis": "max",
           },
         },
       },

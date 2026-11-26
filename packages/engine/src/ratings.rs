@@ -150,6 +150,7 @@ struct Watch {
     /// [`significant`] of `limit`, compared on each sample so the limit is not formatted again.
     limit_rounded: f64,
     basis: Basis,
+    characterized: bool,
     /// `Some` for a sustained rating.
     heat: Option<Heat>,
     /// Whether the last reading was over.
@@ -607,6 +608,21 @@ impl Ratings {
             let Model::Resistor(resistor) = &part.model else {
                 continue;
             };
+            if let Some(max) = &resistor.max_voltage {
+                let limit = max.si.get();
+                let ground = columns.net(resistor.pins[1]);
+                windows.push(Window {
+                    pin: Ref::Quantity(part.name.clone(), Quantity::V),
+                    column: columns.net(resistor.pins[0]),
+                    vcc: ground,
+                    gnd: ground,
+                    below: Some(limit),
+                    above: Some(Ceiling::Fixed(limit)),
+                    worst: 0.0,
+                    over: false,
+                    excursion: None,
+                });
+            }
             let Some((min, max)) = resistor.operating else {
                 continue;
             };
@@ -703,6 +719,7 @@ impl Ratings {
                         basis: watch.basis,
                         sample,
                         held_ps: None,
+                        characterized: watch.characterized,
                     });
                 }
                 Some(excursion) if reading > excursion.peak => {
@@ -930,8 +947,8 @@ impl Ratings {
         let currents = self.watches.iter().filter_map(|watch| {
             let excursion = watch.excursion.clone()?;
             Some(match watch.kind {
-                RatingKind::Current => Diagnostic::RatingCurrent(excursion),
-                RatingKind::Power => Diagnostic::RatingPower(excursion),
+                RatingKind::Current => Diagnostic::RatingCurrent(Box::new(excursion)),
+                RatingKind::Power => Diagnostic::RatingPower(Box::new(excursion)),
             })
         });
         let voltages = self
@@ -981,10 +998,11 @@ impl Ratings {
                 basis: watch.basis,
                 sample: watch.last,
                 held_ps: NonZeroU64::new(held.max(1)),
+                characterized: watch.characterized,
             };
             Some(match watch.kind {
-                RatingKind::Current => Diagnostic::RatingCurrent(excursion),
-                RatingKind::Power => Diagnostic::RatingPower(excursion),
+                RatingKind::Current => Diagnostic::RatingCurrent(Box::new(excursion)),
+                RatingKind::Power => Diagnostic::RatingPower(Box::new(excursion)),
             })
         })
     }
@@ -1100,9 +1118,18 @@ fn watch(
         rating.si.get(),
         basis,
         early && peak.is_none(),
+        rating.characterized,
     ));
     if let Some(peak) = peak {
-        watches.push(Watch::new(kind, quantity, read, peak, Basis::Peak, false));
+        watches.push(Watch::new(
+            kind,
+            quantity,
+            read,
+            peak,
+            Basis::Peak,
+            false,
+            rating.characterized,
+        ));
     }
 }
 
@@ -1115,6 +1142,7 @@ impl Watch {
         limit: f64,
         basis: Basis,
         early: bool,
+        characterized: bool,
     ) -> Watch {
         Watch {
             kind,
@@ -1123,6 +1151,7 @@ impl Watch {
             limit,
             limit_rounded: significant(limit),
             basis,
+            characterized,
             heat: match basis {
                 Basis::Peak => None,
                 Basis::Sustained { tau_ps, average } => Some(Heat {
@@ -1480,7 +1509,7 @@ mod tests {
         let found = ratings.findings();
         assert_eq!(
             found,
-            [Diagnostic::RatingCurrent(Excursion {
+            [Diagnostic::RatingCurrent(Box::new(Excursion {
                 quantity: "#d1.i".parse().unwrap(),
                 limit: 0.03,
                 peak: 0.05,
@@ -1490,7 +1519,8 @@ mod tests {
                 basis: Basis::Peak,
                 sample: 0.05,
                 held_ps: None,
-            })]
+                characterized: false,
+            }))]
         );
     }
 
@@ -1523,6 +1553,7 @@ mod tests {
             ratings.watches[0].limit,
             sustained(average),
             true,
+            false,
         );
         (ratings, columns)
     }
@@ -1869,7 +1900,7 @@ mod tests {
             .over_now()
             .map(|diagnostic| match diagnostic {
                 Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
-                    excursion
+                    *excursion
                 }
                 other => panic!("not a rating: {other:?}"),
             })

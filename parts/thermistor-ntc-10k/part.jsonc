@@ -1,12 +1,12 @@
 // Vishay BCcomponents NTCLE100E3103JB0 (10 kohm at 25 C, B25/85 = 3977 K).
-// Resistance follows the engine's two-parameter beta curve from R25 and B25/85
-// on page 2 of Vishay Document Number 29049.
+// Resistance follows Vishay's extended Steinhart-Hart polynomial from Doc. No. 29049 p4
+// (row 9, Mat A, Bn = 3977 K), matching the p10 R/T table within 0.04 % from -40 to 125 C.
 {
-  "format": 5,
+  "format": 7,
   "part": "thermistor-ntc-10k",
   "version": "0.1.0",
   "title": "NTC thermistor, 10 kΩ (NTCLE100E3103JB0)",
-  "summary": "10 kΩ at 25 °C radial NTC thermistor (B25/85 = 3977 K). Its resistance falls as temperature rises, for analog temperature sensing from -40 to 125 °C.",
+  "summary": "10 kΩ at 25 °C radial NTC thermistor (B25/85 3977 K). Follows Vishay's R/T curve from -40 to 125 °C, rated 5 mW (15 s) and 50 V DC.",
   "tags": ["thermistor", "ntc", "10k", "b3977", "temperature", "thermometer", "sensor", "analog", "resistor", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "docs": {
@@ -25,18 +25,7 @@
       "kind": "world",
       "quantity": "temperature",
       "curve": {
-        "kind": "beta",
-        "x": {
-          "value": 25.0,
-          "unit": "degC",
-          "source": {
-            "datasheet": {
-              "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
-              "at": "p2 Electrical Data and Ordering Information, R25 reference temperature 25 C",
-              "basis": "nominal",
-            },
-          },
-        },
+        "kind": "steinhart_hart",
         "y": {
           "value": 10000.0,
           "unit": "ohm",
@@ -48,13 +37,46 @@
             },
           },
         },
-        "beta": {
-          "value": 3977.0,
+        "a": {
+          "value": -14.6337,
+          "unit": "1",
+          "source": {
+            "datasheet": {
+              "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+              "at": "p4 Parameter for Determining Nominal Resistance Values, row 9 (Mat A, Bn = 3977 K), A = -14.6337",
+              "basis": "nominal",
+            },
+          },
+        },
+        "b": {
+          "value": 4791.842,
           "unit": "K",
           "source": {
             "datasheet": {
               "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
-              "at": "p2 Electrical Data and Ordering Information, NTCLE100E3103JB0 row, B25/85 = 3977 K (+/- 0.75 %)",
+              "at": "p4 Parameter for Determining Nominal Resistance Values, row 9 (Mat A, Bn = 3977 K), B = 4791.842 K",
+              "basis": "nominal",
+            },
+          },
+        },
+        "c": {
+          "value": -115334.0,
+          "unit": "K^2",
+          "source": {
+            "datasheet": {
+              "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+              "at": "p4 Parameter for Determining Nominal Resistance Values, row 9 (Mat A, Bn = 3977 K), C = -115334 K^2",
+              "basis": "nominal",
+            },
+          },
+        },
+        "d": {
+          "value": -3730535.0,
+          "unit": "K^3",
+          "source": {
+            "datasheet": {
+              "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+              "at": "p4 Parameter for Determining Nominal Resistance Values, row 9 (Mat A, Bn = 3977 K), D = -3.730535E+06 K^3",
               "basis": "nominal",
             },
           },
@@ -63,17 +85,19 @@
     },
     "ratings": {
       "power": {
-        "value": 0.5,
+        "value": 0.005,
         "unit": "W",
         "basis": {
           "sustained": {
             "average": "mean",
             "tau": {
-              "value": 0.0102,
+              "value": 15.0,
               "unit": "s",
               "source": {
-                "closed_form": {
-                  "note": "The sheet gives a 15 s thermal time constant in air rather than a pulse rating to fit, so this uses the 10.2 ms default, five periods of a 490 Hz PWM.",
+                "datasheet": {
+                  "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+                  "at": "p1 Quick Reference Data, Thermal time constant tau = 15 s (for information only)",
+                  "basis": "typical",
                 },
               },
             },
@@ -82,8 +106,19 @@
         "source": {
           "datasheet": {
             "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
-            "at": "p1 Quick Reference Data, Maximum power dissipation at 55 C: 500 mW",
-            "basis": "absolute_max",
+            "at": "p1 Operating temperature range at zero power dissipation (-40 to +125 C continuously) and p2 Power Derating Note: zero power is max 1 % of max power (1 % of 500 mW = 5 mW); p2 derating curve reaches 0 % at -40 C and 85 C",
+            "basis": "max",
+          },
+        },
+      },
+      "voltage": {
+        "value": 50.0,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+            "at": "p2 Power Derating Note: Voltage on the NTC should always be below 50 VDC",
+            "basis": "max",
           },
         },
       },
@@ -92,23 +127,19 @@
   "not_simulated": [
     {
       "what": "self-heating",
-      "why": "Resistance follows world temperature only. The sheet's 7 mW/K dissipation factor is not modelled, though the 500 mW power rating warns.",
+      "why": "Resistance follows world temperature only. The sheet's 7 mW/K dissipation factor is not modelled, though the 5 mW zero-power rating warns before self-heating exceeds about 0.7 K.",
     },
     {
       "what": "response time",
-      "why": "Resistance follows temperature steps immediately. The sheet gives about 1.2 s in oil and a 15 s thermal time constant in air.",
-    },
-    {
-      "what": "Steinhart-Hart curvature",
-      "why": "The engine uses the two-parameter B25/85 equation rather than the sheet's four-term polynomial, which differs slightly far from 25 to 85 C.",
+      "why": "Resistance follows temperature steps immediately. The sheet gives about 1.2 s response time in oil and a 15 s thermal time constant (for information only).",
     },
     {
       "what": "tolerance",
-      "why": "Every part uses the nominal 10 kohm and 3977 K. The JB0 ordering code allows +/- 5 % on R25 and +/- 0.75 % on B25/85.",
+      "why": "Every part uses the nominal R/T curve. The JB0 ordering code allows +/- 5 % on R25 and +/- 0.75 % on B25/85.",
     },
     {
-      "what": "power derating and voltage",
-      "why": "The 500 mW rating holds across all temperatures rather than derating above 55 C, and the p2 50 VDC note is not checked.",
+      "what": "power derating curve",
+      "why": "The engine checks one power limit across all temperatures, so power is rated at the sheet's 5 mW continuous zero-power limit across -40 to 125 C. Between 0 and 55 C the p2 power-derating curve allows up to 500 mW (derating linearly to 0 % at -40 C and 85 C), so non-zero-power loads above 5 mW in that band still warn.",
     },
   ],
 }

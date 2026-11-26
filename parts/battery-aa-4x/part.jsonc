@@ -1,18 +1,19 @@
 // 4xAA 6 V alkaline battery pack (four Energizer E91 / IEC LR6 cells in series in a 4-cell holder).
 // Thevenin model: 6.0 V open-circuit EMF (4 * 1.5 V) in series with 0.9 ohm fresh internal
-// resistance (4 * 0.225 ohm, midpoint of Energizer E91's 150 to 300 mohm per fresh cell;
-// Energizer's Battery Internal Resistance Technical Bulletin fig. 1 measures 0.214 ohm on a
-// fresh AA cell). Sustained current rating 1.0 A warns on heavy loads and shorts.
+// resistance (4 * 0.225 ohm, midpoint of Energizer E91's 150 to 300 mohm fresh DC effective
+// resistance; Energizer's Battery Internal Resistance Technical Bulletin v1.1.0 p1 measures
+// 0.214 ohm on a fresh AA cell). Current warns past the 500 mA continuous load and 1.5 A
+// 0.25 s toy pulse characterized on Energizer E91.
 {
   "format": 5,
   "part": "battery-aa-4x",
   "version": "0.1.0",
   "title": "4xAA 6 V alkaline battery pack (Energizer E91)",
-  "summary": "Four AA alkaline cells (LR6) in series in a flat holder with a 2-pin lead. Models 6.0 V EMF, 0.9 Ω internal resistance and a 1.0 A rating.",
-  "tags": ["battery", "aa", "4xaa", "6v", "pack", "holder", "power", "supply", "cell", "alkaline"],
+  "summary": "Four AA alkaline cells (LR6) in series in a flat holder with 2-pin lead. Models 6.0 V EMF, 0.9 Ω fresh DC internal resistance and 500 mA characterized load.",
+  "tags": ["battery", "aa", "double a", "4xaa", "6v", "6 volt", "pack", "holder", "power", "supply", "cell", "alkaline"],
   "license": "MIT OR Apache-2.0",
   "docs": {
-    "Energizer E91 Product Datasheet": null,
+    "Energizer E91 Product Datasheet (Form No. E91EU0823)": null,
     "Energizer Battery Internal Resistance Technical Bulletin v1.1.0": "https://data.energizer.com/pdfs/batteryir.pdf",
     "Energizer Alkaline Manganese Dioxide Handbook and Application Manual": "https://data.energizer.com/pdfs/alkaline_appman.pdf",
   },
@@ -20,7 +21,7 @@
     "generic": true,
     "maker": "Energizer",
     "number": "4xE91",
-    "datasheet": "Energizer E91 Product Datasheet",
+    "datasheet": "Energizer E91 Product Datasheet (Form No. E91EU0823)",
   },
   "uses": {
     "battery-aa-4x-cell": "0.1.0",
@@ -35,7 +36,7 @@
         "unit": "ohm",
         "source": {
           "closed_form": {
-            "note": "Four fresh Energizer E91 AA alkaline cells in series: 4 * 0.225 ohm = 0.9 ohm, taking the midpoint of Energizer's 150 to 300 mohm fresh cylindrical alkaline resistance range (Energizer Battery Internal Resistance Technical Bulletin v1.1.0 p1 gives 0.214 ohm in its AA dual-pulse example).",
+            "note": "Four fresh Energizer E91 AA alkaline cells in series: 4 * 0.225 ohm = 0.9 ohm, taking the midpoint of Energizer E91 p1's 150 to 300 mohm fresh DC effective resistance range (Energizer Battery Internal Resistance Technical Bulletin v1.1.0 p1 gives 0.214 ohm in its 5 mA / 505 mA 100 ms dual-pulse AA example).",
           },
         },
       },
@@ -55,7 +56,7 @@
   "not_simulated": [
     {
       "what": "capacity and depletion",
-      "why": "The EMF stays at 6.0 V and the internal resistance stays at 0.9 ohm. Real Energizer E91 cells hold roughly 2500 to 2850 mAh at light drain, and voltage falls while internal resistance rises as the pack discharges.",
+      "why": "The EMF stays at 6.0 V and the internal resistance stays at 0.9 ohm. Energizer E91 plots continuous discharge bars to 0.8 V/cell at 25, 100, 250 and 500 mA (with no data table), and voltage falls while internal resistance rises as the pack discharges.",
     },
     {
       "what": "temperature and holder spring contact resistance",
@@ -63,7 +64,7 @@
     },
     {
       "what": "self-heating and venting",
-      "why": "A heavy overload or direct short (~6.7 A) warns rating.current and keeps running instead of heating or venting the cells.",
+      "why": "Energizer E91 states no absolute maximum current; loads past its 500 mA continuous bar or 1.5 A toy pulse and direct shorts (~6.7 A) warn rating.current as beyond the sheet's characterized loads and keep running instead of heating or venting the cells.",
     },
   ],
 }

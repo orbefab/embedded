@@ -1,6 +1,6 @@
 use crate::diagnostic::ValueRule;
-use crate::netlist::Rating;
 use crate::netlist::json::{WireRating, WireValue, resolve_value};
+use crate::netlist::{Rating, Value};
 use orbe_model::Time;
 use serde::Deserialize;
 
@@ -29,6 +29,9 @@ pub struct Resistor {
     /// Operating voltage of a sounding drive, `(min, max)` in volt. `None` when the part
     /// does not rate one. A quiet part is not checked.
     pub operating: Option<(f64, f64)>,
+    /// Maximum DC voltage across `a` and `b`, in volt. `|V(a) - V(b)|` above this warns
+    /// `rating.voltage` on every sample. `None` when not rated.
+    pub max_voltage: Option<Value>,
 }
 
 impl Resistor {
@@ -42,9 +45,17 @@ impl Resistor {
 pub(crate) struct WireResistorRatings {
     #[serde(deserialize_with = "Option::deserialize")]
     power: Option<WireRating>,
-    /// Absent on a resistor that rates only power. Present, both ends are required.
+    /// Absent on a resistor that rates only power. Either an operating window `{ min, max }`
+    /// or a single maximum voltage `{ value, unit }`.
     #[serde(default)]
-    voltage: Option<WireOperatingVoltage>,
+    voltage: Option<WireResistorVoltage>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub(crate) enum WireResistorVoltage {
+    Operating(WireOperatingVoltage),
+    Max(WireValue),
 }
 
 #[derive(Deserialize)]
@@ -87,43 +98,55 @@ pub(crate) fn resolve_resistor(ctx: ParseCtx<'_>, wire: WireResistor) -> Option<
     };
     let resistance = resolve_param(part_ref, rule, world, resistance, out);
     let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
-    let operating = resolve_operating(part_ref, ratings.voltage, out);
-    match (pins, resistance, max_power, operating) {
-        (Some(pins), Some(resistance), Some(max_power), Some(operating)) => Some(Resistor {
-            pins,
-            resistance,
-            max_power,
-            operating,
-        }),
+    let voltage = resolve_voltage(part_ref, ratings.voltage, out);
+    match (pins, resistance, max_power, voltage) {
+        (Some(pins), Some(resistance), Some(max_power), Some((operating, max_voltage))) => {
+            Some(Resistor {
+                pins,
+                resistance,
+                max_power,
+                operating,
+                max_voltage,
+            })
+        }
         _ => None,
     }
 }
 
-/// `Some(None)` when the part rates no operating voltage. `None` when `min` or `max` is invalid.
-fn resolve_operating(
+type ResolvedVoltage = (Option<(f64, f64)>, Option<Value>);
+
+/// `Some((None, None))` when the part rates no voltage. `None` when the rating is invalid.
+fn resolve_voltage(
     part: &crate::name::Ref,
-    voltage: Option<WireOperatingVoltage>,
+    voltage: Option<WireResistorVoltage>,
     out: &mut Vec<crate::diagnostic::Diagnostic>,
-) -> Option<Option<(f64, f64)>> {
-    let Some(WireOperatingVoltage { min, max }) = voltage else {
-        return Some(None);
+) -> Option<ResolvedVoltage> {
+    let Some(voltage) = voltage else {
+        return Some((None, None));
     };
-    let min = resolve_value(part, "ratings.voltage.min", "V", true, min, out);
-    let max = resolve_value(part, "ratings.voltage.max", "V", true, max, out);
-    match (min, max) {
-        (Some(min), Some(max)) if min.si.get() < max.si.get() => {
-            Some(Some((min.si.get(), max.si.get())))
+    match voltage {
+        WireResistorVoltage::Operating(WireOperatingVoltage { min, max }) => {
+            let min = resolve_value(part, "ratings.voltage.min", "V", true, min, out);
+            let max = resolve_value(part, "ratings.voltage.max", "V", true, max, out);
+            match (min, max) {
+                (Some(min), Some(max)) if min.si.get() < max.si.get() => {
+                    Some((Some((min.si.get(), max.si.get())), None))
+                }
+                (Some(min), Some(_)) => {
+                    out.push(crate::diagnostic::Diagnostic::NetlistValue {
+                        part: part.clone(),
+                        field: "ratings.voltage.min".into(),
+                        value: min.si.get(),
+                        rule: ValueRule::AboveHigh,
+                    });
+                    None
+                }
+                _ => None,
+            }
         }
-        (Some(min), Some(_)) => {
-            out.push(crate::diagnostic::Diagnostic::NetlistValue {
-                part: part.clone(),
-                field: "ratings.voltage.min".into(),
-                value: min.si.get(),
-                rule: ValueRule::AboveHigh,
-            });
-            None
+        WireResistorVoltage::Max(max) => {
+            resolve_value(part, "ratings.voltage", "V", true, max, out).map(|max| (None, Some(max)))
         }
-        _ => None,
     }
 }
 
@@ -276,6 +299,43 @@ mod operating_voltage {
         assert!(
             (900_000_000..=950_000_000).contains(&over_ps[0]),
             "{over_ps:?}"
+        );
+    }
+
+    #[test]
+    fn a_max_voltage_warns_past_either_polarity_and_stays_quiet_at_the_limit() {
+        let dc = |volts: f64| {
+            format!(
+                r#"{{
+                  "version": 1,
+                  "seed": 0,
+                  "analysis": {{ "op": {{}} }},
+                  "ground": "gnd",
+                  "nets": ["gnd", "n"],
+                  "parts": [
+                    {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "n", "n": "gnd" }},
+                      "voltage": {{ "value": {volts}, "unit": "V" }} }},
+                    {{ "name": "r1", "kind": "resistor", "pins": {{ "a": "n", "b": "gnd" }},
+                      "resistance": {{ "value": 10000.0, "unit": "ohm" }},
+                      "ratings": {{ "power": null, "voltage": {{ "value": 50.0, "unit": "V" }} }} }}
+                  ]
+                }}"#
+            )
+        };
+        assert!(!warnings(&dc(50.0)).contains("rating.voltage"));
+        assert!(!warnings(&dc(-50.0)).contains("rating.voltage"));
+        let high = warnings(&dc(60.0));
+        assert!(high.contains("rating.voltage"), "{high}");
+        assert!(
+            high.contains("#r1.v reaches 60 V, outside its -50 V to 50 V rating"),
+            "{high}"
+        );
+        assert!(!high.contains("chip's ground"), "{high}");
+        let low = warnings(&dc(-60.0));
+        assert!(low.contains("rating.voltage"), "{low}");
+        assert!(
+            low.contains("#r1.v reaches -60 V, outside its -50 V to 50 V rating"),
+            "{low}"
         );
     }
 }

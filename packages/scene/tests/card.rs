@@ -511,28 +511,31 @@ fn starter_kit_thermistor_and_batteries_show_ratings_and_match_search() {
     assert!(
         ntc.ratings
             .iter()
-            .any(|rating| rating.name == "power" && rating.value == Some(0.5))
+            .any(|rating| rating.name == "power" && rating.value == Some(0.005))
+    );
+    assert!(
+        ntc.ratings
+            .iter()
+            .any(|rating| rating.name == "voltage" && rating.value == Some(50.0))
     );
     let bat9 = card(&parts_dir(), "battery-9v").unwrap();
-    assert!(
-        bat9.ratings
-            .iter()
-            .any(|rating| rating.name == "current" && rating.value == Some(0.5))
-    );
+    assert!(bat9.ratings.iter().any(|rating| {
+        rating.name == "current" && rating.value == Some(0.05) && rating.characterized
+    }));
     let bataa = card(&parts_dir(), "battery-aa-4x").unwrap();
-    assert!(
-        bataa
-            .ratings
-            .iter()
-            .any(|rating| rating.name == "current" && rating.value == Some(1.0))
-    );
+    assert!(bataa.ratings.iter().any(|rating| {
+        rating.name == "current" && rating.value == Some(0.5) && rating.characterized
+    }));
     for (query, want) in [
         ("thermistor", "thermistor-ntc-10k"),
         ("NTC", "thermistor-ntc-10k"),
         ("9V", "battery-9v"),
+        ("9 volt", "battery-9v"),
         ("battery", "battery-9v"),
         ("battery", "battery-aa-4x"),
         ("AA", "battery-aa-4x"),
+        ("6 volt", "battery-aa-4x"),
+        ("double a", "battery-aa-4x"),
     ] {
         let hits = search(&parts_dir(), query);
         assert!(

@@ -1,7 +1,9 @@
-# Idle: battery-9v (9.0 V EMF, 1.7 ohm R_int) feeds the Nano (~26 mA) and LM7805 + green LED
-# (~18 mA), ~45 mA total, sagging ~0.08 V to ~8.92 V.
-# With btn1 held, the 25 ohm load draws ~331 mA (~375 mA total, under the 500 mA rating),
-# sagging the battery rail to ~8.36 V (0.56 V extra drop) while LM7805 holds 5.00 V.
+# Idle: battery-9v (9.0 V EMF, 1.7 ohm 1 kHz impedance) feeds the Nano (~26 mA) and LM7805 +
+# green LED through 470 ohm (~17 mA), ~43 mA total (within Energizer 522's 50 mA characterized
+# continuous load), sagging ~0.07 V to ~8.93 V with no warnings.
+# With btn1 held, the 25 ohm load draws ~334 mA (~376 mA total), sagging the battery rail to
+# ~8.36 V (0.57 V extra drop) while LM7805 holds 5.00 V and battery-9v warns that the load is
+# beyond the 50 mA continuous load Energizer 522 characterizes.
 open
 step 100ms
 expect @led1 lit
@@ -11,6 +13,7 @@ expect @reg.OUT > 4.95V
 expect @reg.OUT < 5.05V
 expect @nano.5V > 4.95V
 expect serial contains "bat=8.9"
+expect no diagnostics
 press @btn1
 step 100ms
 expect @bat.pos > 8.28V
@@ -22,4 +25,5 @@ expect serial contains "bat=8.3"
 release @btn1
 step 100ms
 expect @bat.pos > 8.85V
-expect no diagnostics
+expect diagnostics contains "warning[rating.current]"
+expect diagnostics contains "beyond the 50 mA load its sheet characterizes"

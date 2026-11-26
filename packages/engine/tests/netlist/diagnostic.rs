@@ -90,7 +90,7 @@ fn samples() -> Vec<Diagnostic> {
             source_scale: 0.75,
             solve: Solve::Ladder,
         },
-        Diagnostic::RatingCurrent(Excursion {
+        Diagnostic::RatingCurrent(Box::new(Excursion {
             quantity: "#led1.i".parse().unwrap(),
             limit: 0.03,
             peak: 0.5,
@@ -100,8 +100,9 @@ fn samples() -> Vec<Diagnostic> {
             basis: Basis::Peak,
             sample: 0.5,
             held_ps: None,
-        }),
-        Diagnostic::RatingPower(Excursion {
+            characterized: false,
+        })),
+        Diagnostic::RatingPower(Box::new(Excursion {
             quantity: "#r1.p".parse().unwrap(),
             limit: 0.25,
             peak: 3.0,
@@ -114,7 +115,8 @@ fn samples() -> Vec<Diagnostic> {
             },
             sample: 3.25,
             held_ps: None,
-        }),
+            characterized: false,
+        })),
         Diagnostic::NetlistSchedule {
             part: part("sw1"),
             field: "events",
@@ -434,7 +436,7 @@ fn severity_refs_and_time_follow_the_variant() {
 /// sample would hold before the filter crosses, to 2. Its `t_ps` is when the samples went over.
 #[test]
 fn a_rating_over_now_names_its_sample_and_how_long_it_would_hold() {
-    let now = Diagnostic::RatingPower(Excursion {
+    let now = Diagnostic::RatingPower(Box::new(Excursion {
         quantity: "#r1.p".parse().unwrap(),
         limit: 0.25,
         peak: 0.19393,
@@ -447,7 +449,8 @@ fn a_rating_over_now_names_its_sample_and_how_long_it_would_hold() {
         },
         sample: 0.9894505454260112,
         held_ps: std::num::NonZeroU64::new(578_337_123),
-    });
+        characterized: false,
+    }));
     assert!(now.over_now());
     assert_eq!(
         serde_json::to_string(&now).unwrap(),

@@ -1,7 +1,7 @@
 // Internal voltage source for battery-9v (Energizer 522 / ANSI 1604A 9 V alkaline).
-// Unlisted helper part; battery-9v wires this in series with its 1.7 ohm internal resistance.
+// Unlisted helper part; battery-9v wires this in series with its 1.7 ohm series resistance.
 {
-  "format": 5,
+  "format": 7,
   "part": "battery-9v-cell",
   "version": "0.1.0",
   "title": "9 V alkaline cell stack (internal)",
@@ -27,32 +27,37 @@
       "source": {
         "datasheet": {
           "doc": "Energizer 522 Product Datasheet (Form No. 522GL1019)",
-          "at": "Specifications, Nominal Voltage: 9.0 volts (six Zn/MnO2 alkaline cells in series)",
+          "at": "p1 Specifications, Nominal Voltage: 9.0 volts (six Zn/MnO2 alkaline cells in series)",
           "basis": "nominal",
         },
       },
     },
     "ratings": {
       "current": {
-        "value": 0.5,
+        "value": 0.05,
         "unit": "A",
+        "characterized": true,
         "basis": {
           "sustained": {
             "average": "rms",
             "tau": {
-              "value": 0.0102,
+              "value": 1.0,
               "unit": "s",
               "source": {
-                "closed_form": {
-                  "note": "Alkaline sheets state no pulse rating; the 10.2 ms RMS window lets brief bypass-capacitor inrush pass while warning on sustained overloads and shorts.",
+                "datasheet": {
+                  "doc": "Energizer 522 Product Datasheet (Form No. 522GL1019)",
+                  "at": "p1 Industry Standard Tests, Accelerated Smoke Detector: 10K/620 ohm 1 sec/hr pulse (shortest published pulse on the sheet)",
+                  "basis": "nominal",
                 },
               },
             },
           },
         },
         "source": {
-          "closed_form": {
-            "note": "Primary 9 V alkaline datasheets (Energizer 522, Duracell MN1604) state no hard absolute-maximum current; Energizer 522 plots capacity at 10 to 50 mA and Duracell MN1604 plots constant-current curves up to 500 mA, beyond which a 9 V PP3 sags heavily and heats.",
+          "datasheet": {
+            "doc": "Energizer 522 Product Datasheet (Form No. 522GL1019)",
+            "at": "p1 Milliamp-Hours Capacity, continuous discharge to 4.8 V at 21 C: highest plotted continuous load is 50 mA (no absolute maximum current is stated)",
+            "basis": "max",
           },
         },
       },

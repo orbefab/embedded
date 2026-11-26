@@ -98,7 +98,12 @@ pub fn text(card: &Card, breadboard: Option<&str>) -> String {
             _ => "unrated".to_string(),
         };
         let basis = rating.basis.as_ref().map(basis_text).unwrap_or_default();
-        lines.push(format!("  {}  {shown}{basis}", rating.name));
+        let note = if rating.characterized {
+            " (characterized load)"
+        } else {
+            ""
+        };
+        lines.push(format!("  {}  {shown}{basis}{note}", rating.name));
     }
     lines.push(String::new());
     lines.push("not simulated".into());

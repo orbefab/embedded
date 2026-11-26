@@ -303,7 +303,7 @@ fn rated_power(session: &Session) -> crate::diagnostic::Excursion {
         .diagnostics()
         .into_iter()
         .find_map(|diagnostic| match diagnostic {
-            Diagnostic::RatingPower(excursion) => Some(excursion),
+            Diagnostic::RatingPower(excursion) => Some(*excursion),
             _ => None,
         })
         .expect("rating.power")

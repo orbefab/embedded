@@ -198,6 +198,10 @@ pub struct Rating {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "Value"))]
     pub basis: Option<Value>,
+    /// True when the sheet states no absolute maximum and this value is the largest load the
+    /// sheet characterizes.
+    #[serde(default, skip_serializing_if = "skip_false")]
+    pub characterized: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1079,6 +1083,7 @@ fn rating_value(name: String, node: &Node) -> Option<Rating> {
             unit: None,
             source: None,
             basis: None,
+            characterized: false,
         });
     }
     let value_node = node.get("value")?;
@@ -1091,12 +1096,17 @@ fn rating_value(name: String, node: &Node) -> Option<Rating> {
     if value.is_some() && unit.is_none() {
         return None;
     }
+    let characterized = node
+        .get("characterized")
+        .and_then(|n| n.to_value().as_bool())
+        .unwrap_or(false);
     Some(Rating {
         name,
         value,
         unit,
         source: node.get("source").map(Node::to_value),
         basis: node.get("basis").map(Node::to_value),
+        characterized,
     })
 }
 

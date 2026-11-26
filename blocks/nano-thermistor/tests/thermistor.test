@@ -1,6 +1,7 @@
 # At 25 C the NTC is 10 kohm, matching r1, so A0 sits at half of the Nano's 5V pin (~2.38 V on USB)
-# and the LED stays off. At 40 C the NTC drops to 5.279 kohm (B25/85 = 3977 K), pulling A0 to
-# 65.45 % of 5V (~3.11 V) and lighting the LED. At 10 C it rises to 20.229 kohm (~1.57 V), off again.
+# and the LED stays off. At 40 C the NTC drops to 5.330 kohm (Vishay NTCLE100E3103JB0 p10 table),
+# pulling A0 to 65.23 % of 5V (~3.10 V) and lighting the LED; the sketch's B = 3977 K conversion
+# prints 39.7 C. At 10 C it rises to 19.872 kohm (~1.60 V, sketch prints 10.4 C), off again.
 open
 step 100ms
 expect @nano.A0 > 2.25V
@@ -13,12 +14,12 @@ step 50ms
 expect @nano.A0 > 3.00V
 expect @nano.A0 < 3.25V
 expect @led1 lit
-expect serial contains "temp=40.0 C"
+expect serial contains "temp=39.7 C"
 set temperature 10
 step --until @led1 off --timeout 150ms
 step 50ms
 expect @nano.A0 > 1.45V
 expect @nano.A0 < 1.70V
 expect @led1 off
-expect serial contains "temp=10.0 C"
+expect serial contains "temp=10.4 C"
 expect no diagnostics

@@ -14,7 +14,7 @@
   "layout": {
     "bb": { "at": [0, 0, 0] },
     "nano": { "on": { "D13": "bb.d1" } },
-    "bat": { "at": [94, 20, 0] }, // connector faces -X, aligned with the Y/Z rails
+    "bat": { "at": [109, 22.86, 0] }, // connector faces -X, aligned with Y29/Z29 with room for the jumper plugs
     "servo": { "at": [-26.67, 86, 0], "rotate": [0, 0, 90] }, // connector faces -Y toward the breadboard
     "r_top": { "on": { "a": "bb.c17" } }, // b lands in c21
     "r_bot": { "on": { "a": "bb.b21" } }, // b lands in b25
