@@ -579,6 +579,8 @@ pub enum Diagnostic {
     RatingPower(Excursion),
     /// A chip pin's voltage left its rated window.
     RatingVoltage(VoltageExcursion),
+    /// A chip's supply pin dropped between unpowered and its datasheet minimum.
+    RatingSupplyLow(SupplyExcursion),
     /// A linear regulator was held at its current limit and its output sagged.
     RegulatorCurrentLimit(CurrentLimitExcursion),
 }
@@ -648,6 +650,23 @@ pub struct VoltageExcursion {
     /// The peak is the drive across the part, and `low`/`high` are its operating window.
     /// A chip pin's window leaves this false.
     pub operating: bool,
+}
+
+/// One chip supply pin between unpowered and its datasheet minimum, merged over the whole run.
+/// Volts are over the chip's ground pin.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SupplyExcursion {
+    /// `#<part>.pin.<pin>`.
+    pub pin: Ref,
+    /// The datasheet minimum supply voltage, in V.
+    pub min: f64,
+    /// The lowest supply voltage seen while above the unpowered floor, in V.
+    pub lowest: f64,
+    pub peak_at: Time,
+    /// First sample below the minimum.
+    pub first: Time,
+    /// Total time below the minimum. `None` for an operating point, which has no duration.
+    pub over_ps: Option<u64>,
 }
 
 /// One linear regulator held at its current limit with its output pulled below regulation,
@@ -721,6 +740,7 @@ impl Diagnostic {
             Diagnostic::RatingCurrent(_) => "rating.current",
             Diagnostic::RatingPower(_) => "rating.power",
             Diagnostic::RatingVoltage(_) => "rating.voltage",
+            Diagnostic::RatingSupplyLow(_) => "rating.supply_low",
             Diagnostic::RegulatorCurrentLimit(_) => "regulator.current_limit",
         }
     }
@@ -737,6 +757,7 @@ impl Diagnostic {
             | Diagnostic::RatingCurrent(_)
             | Diagnostic::RatingPower(_)
             | Diagnostic::RatingVoltage(_)
+            | Diagnostic::RatingSupplyLow(_)
             | Diagnostic::RegulatorCurrentLimit(_) => Severity::Warning,
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
@@ -808,6 +829,7 @@ impl Diagnostic {
                 Some(excursion.first)
             }
             Diagnostic::RatingVoltage(excursion) => Some(excursion.first),
+            Diagnostic::RatingSupplyLow(excursion) => Some(excursion.first),
             Diagnostic::RegulatorCurrentLimit(excursion) => Some(excursion.first),
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
@@ -879,6 +901,7 @@ impl Diagnostic {
                 vec![excursion.quantity.clone()]
             }
             Diagnostic::RatingVoltage(excursion) => vec![excursion.pin.clone()],
+            Diagnostic::RatingSupplyLow(excursion) => vec![excursion.pin.clone()],
             Diagnostic::RegulatorCurrentLimit(excursion) => vec![excursion.pin.clone()],
         }
     }
@@ -1837,6 +1860,7 @@ impl Diagnostic {
             Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A", namer),
             Diagnostic::RatingPower(excursion) => over_rating(excursion, "W", namer),
             Diagnostic::RatingVoltage(excursion) => outside_window(excursion, namer),
+            Diagnostic::RatingSupplyLow(excursion) => supply_low(excursion, namer),
             Diagnostic::RegulatorCurrentLimit(excursion) => regulator_limit(excursion, namer),
         }
     }
@@ -2095,6 +2119,14 @@ impl Diagnostic {
                     "peak_ps": excursion.peak_at,
                 })
             }
+            Diagnostic::RatingSupplyLow(excursion) => {
+                serde_json::json!({
+                    "limit": excursion.min,
+                    "over_ps": excursion.over_ps,
+                    "peak_ps": excursion.peak_at,
+                    "voltage": excursion.lowest,
+                })
+            }
             Diagnostic::RegulatorCurrentLimit(excursion) => {
                 serde_json::json!({
                     "current": excursion.current,
@@ -2291,6 +2323,23 @@ fn outside_window(excursion: &VoltageExcursion, namer: &dyn Fn(&Ref) -> String) 
     format!(
         "{pin} reaches {} V over the chip's ground, outside {window}{}",
         significant_text(*peak),
+        for_time(*over_ps)
+    )
+}
+
+fn supply_low(excursion: &SupplyExcursion, namer: &dyn Fn(&Ref) -> String) -> String {
+    let SupplyExcursion {
+        pin,
+        min,
+        lowest,
+        over_ps,
+        ..
+    } = excursion;
+    let pin = namer(pin);
+    format!(
+        "{pin} supply drops to {} V over the chip's ground, below its {} V minimum{}",
+        significant_text(*lowest),
+        significant_text(*min),
         for_time(*over_ps)
     )
 }

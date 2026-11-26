@@ -155,14 +155,14 @@ fn a_block_depends_on_every_part_it_runs_at_the_versions_in_the_same_build() {
         .map(|dep| dep.as_str().unwrap())
         .collect();
     for direct in [
-        "nano-board@0.2.3",
+        "nano-board@0.2.4",
         "tactile-switch-6mm@0.2.0",
         "resistor-axial@0.2.1",
         "led-5mm@0.3.1",
     ] {
         assert!(deps.contains(&direct), "{direct} in {deps:?}");
     }
-    let board = record(&registry.output, "nano-board@0.2.3");
+    let board = record(&registry.output, "nano-board@0.2.4");
     for through_the_board in board["registryDependencies"].as_array().unwrap() {
         assert!(deps.contains(&through_the_board.as_str().unwrap()));
     }

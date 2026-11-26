@@ -23,7 +23,7 @@ use crate::netlist::json::{
     resolve_some_pins, resolve_value,
 };
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
-use crate::ratings::{Ceiling, PinRatings, PinWindow};
+use crate::ratings::{Ceiling, PinRatings, PinWindow, SupplyMin};
 use crate::watch::{Signal, Watch};
 use orbe_microchip::{
     Bridge, FuseBytes, HexRule, PACKAGE, PORT_PINS, Pad, Port, parse_hex, port_index,
@@ -191,6 +191,15 @@ pub(crate) fn pin_ratings(mcu: &Atmega328p) -> Option<PinRatings> {
             })
         })
         .collect();
+    let supply_mins = si(&ratings.supply_min)
+        .map(|min| SupplyMin {
+            pin: Atmega328p::PINS[VCC],
+            net: mcu.pins[VCC],
+            gnd: mcu.pins[GND_8],
+            min,
+        })
+        .into_iter()
+        .collect();
     Some(PinRatings {
         outputs: PORT_PINS.iter().map(|&k| Atmega328p::PINS[k]).collect(),
         pin_current: ratings.pin_current.clone(),
@@ -198,6 +207,7 @@ pub(crate) fn pin_ratings(mcu: &Atmega328p) -> Option<PinRatings> {
         vcc: (Atmega328p::PINS[VCC], mcu.pins[VCC]),
         gnd: (Atmega328p::PINS[GND_8], mcu.pins[GND_8]),
         windows,
+        supply_mins,
     })
 }
 
@@ -261,6 +271,8 @@ pub struct Atmega328pRatings {
     pub reset_voltage: Option<Value>,
     /// Volt. The most `VCC` may sit above `GND_8`.
     pub supply_voltage: Option<Value>,
+    /// Volt. The least operating `VCC` may sit above `GND_8`.
+    pub supply_min: Option<Value>,
 }
 
 impl Atmega328p {
@@ -366,6 +378,8 @@ struct WireRatings {
     reset_voltage: Option<WireValue>,
     #[serde(deserialize_with = "Option::deserialize")]
     supply_voltage: Option<WireValue>,
+    #[serde(default)]
+    supply_min: Option<WireValue>,
 }
 
 #[derive(Deserialize)]
@@ -482,12 +496,14 @@ fn resolve_ratings(
         wire.supply_voltage,
         out,
     );
+    let supply_min = resolve_limit(part, "ratings.supply_min", "V", wire.supply_min, out);
     Some(Atmega328pRatings {
         pin_current: pin_current?,
         supply_current: supply_current?,
         rail_margin: rail_margin?,
         reset_voltage: reset_voltage?,
         supply_voltage: supply_voltage?,
+        supply_min: supply_min?,
     })
 }
 

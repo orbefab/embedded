@@ -4,9 +4,9 @@
 // 1602A panel (at z = 10.5 mm), with its 4-pin right-angle header (GND, VCC, SDA, SCL on 2.54 mm)
 // pointing sideways along -X parallel to the PCB for female jumper wires.
 {
-  "format": 6,
+  "format": 7,
   "part": "lcd1602-i2c",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "title": "LCD display module, 16 x 2 blue, HD44780 + PCF8574 I2C",
   "summary": "Blue 16 x 2 character LCD module with a PCF8574 I2C backpack at address 0x27 and a 4-pin right-angle header. LiquidCrystal_I2C drives it.",
   "tags": ["lcd", "1602", "16x2", "hd44780", "pcf8574", "display", "screen", "i2c", "backpack"],
@@ -23,7 +23,7 @@
     "datasheet": "Hitachi HD44780U (ADE-207-272)",
   },
   "uses": {
-    "hd44780-1602-i2c": "0.1.1",
+    "hd44780-1602-i2c": "0.1.2",
     "pin-header-1x4": "0.1.0",
     "resistor-0603": "0.2.0",
     "trimmer-3362p": "0.2.2",

@@ -5,7 +5,7 @@ use std::fs;
 
 use crate::runs::common::repo;
 use orbe_engine::Session;
-use orbe_engine::diagnostic::{Diagnostic, Excursion, VoltageExcursion};
+use orbe_engine::diagnostic::{Diagnostic, Excursion, SupplyExcursion, VoltageExcursion};
 use orbe_engine::netlist::{self, Average, Basis};
 use orbe_engine::timestamp::Timestamp;
 use orbe_model::Time;
@@ -107,10 +107,26 @@ fn windows(found: &[Diagnostic]) -> Vec<&VoltageExcursion> {
         .collect()
 }
 
+fn supplies(found: &[Diagnostic]) -> Vec<&SupplyExcursion> {
+    found
+        .iter()
+        .filter_map(|d| match d {
+            Diagnostic::RatingSupplyLow(excursion) => Some(excursion),
+            _ => None,
+        })
+        .collect()
+}
+
 fn refs(found: &[Diagnostic]) -> Vec<String> {
     found
         .iter()
-        .map(|d| format!("{} {}", d.code(), d.refs()[0]))
+        .map(|d| {
+            let refs = d.refs();
+            let first = refs
+                .first()
+                .unwrap_or_else(|| panic!("diagnostic without ref: {d:?}"));
+            format!("{} {first}", d.code())
+        })
         .collect()
 }
 
@@ -513,6 +529,217 @@ fn ssd1306_hd44780_and_ws2812_pin_and_supply_voltage_windows_warn() {
             "rating.voltage #oled.pin.SCL",
             "rating.voltage #oled.pin.SDA",
             "rating.voltage #px.pin.DIN",
+        ]
+    );
+}
+
+#[test]
+fn supply_min_warns_between_unpowered_floor_and_minimum_and_stays_silent_off_or_in_range() {
+    let at = |volts: f64| {
+        let mut netlist = rated();
+        netlist["analysis"] = serde_json::json!({ "op": {} });
+        chip(&mut netlist)["ratings"]["supply_min"] = serde_json::json!({
+            "value": 1.8, "unit": "V"
+        });
+        part(&mut netlist, "v1")["voltage"]["value"] = volts.into();
+        run(&netlist)
+    };
+
+    // Unpowered at 0 V or at the 0.1 V floor stays silent.
+    assert_eq!(at(0.0), []);
+    assert_eq!(at(0.1), []);
+
+    // Strictly above the floor and below 1.8 V warns once with the lowest voltage and minimum.
+    let found = at(1.2);
+    assert_eq!(refs(&found), ["rating.supply_low #u1.pin.VCC"]);
+    let [low] = supplies(&found)[..] else {
+        unreachable!()
+    };
+    assert_eq!(low.min, 1.8);
+    assert!((low.lowest - 1.2).abs() < 1e-9, "{}", low.lowest);
+    assert_eq!(
+        (low.first, low.peak_at, low.over_ps),
+        (Time::ZERO, Time::ZERO, None)
+    );
+    let message = serde_json::to_value(&found[0]).unwrap()["message"].clone();
+    assert_eq!(
+        message,
+        "#u1.pin.VCC supply drops to 1.2 V over the chip's ground, below its 1.8 V minimum"
+    );
+
+    // Just above the 0.1 V floor also warns.
+    let barely = at(0.15);
+    assert_eq!(refs(&barely), ["rating.supply_low #u1.pin.VCC"]);
+
+    // At or above the minimum stays silent.
+    assert_eq!(at(1.8), []);
+    assert_eq!(at(3.3), []);
+}
+
+/// Multiple transient brown-outs merge into one warning per supply pin, reporting the lowest
+/// voltage seen across all dips and the total time spent below minimum.
+#[test]
+fn repeated_supply_dips_merge_into_one_warning_at_the_lowest_voltage() {
+    let netlist = serde_json::json!({
+        "version": 1,
+        "seed": 0,
+        "analysis": {
+            "transient": {
+                "stop_ps": 10_000_000_000u64,
+                "max_step_ps": 500_000_000u64,
+                "grid_ps": 500_000_000u64
+            }
+        },
+        "world": {
+            "temperature": { "value": 25.0, "unit": "degC" },
+            "humidity": { "value": 50.0, "unit": "%RH" }
+        },
+        "ground": "gnd",
+        "nets": ["gnd", "vcc", "data"],
+        "parts": [
+            {
+                "name": "v1",
+                "kind": "voltage_source",
+                "pins": { "p": "vcc", "n": "gnd" },
+                "voltage": {
+                    "kind": "steps",
+                    "initial": { "value": 5.0, "unit": "V" },
+                    "events": [
+                        { "t_ps": 1_000_000_000u64, "level": { "value": 2.5, "unit": "V" } },
+                        { "t_ps": 3_000_000_000u64, "level": { "value": 5.0, "unit": "V" } },
+                        { "t_ps": 5_000_000_000u64, "level": { "value": 1.6, "unit": "V" } },
+                        { "t_ps": 7_000_000_000u64, "level": { "value": 5.0, "unit": "V" } }
+                    ]
+                }
+            },
+            resistor("rp", "vcc", "data", 10_000.0),
+            {
+                "name": "dht",
+                "kind": "dht22",
+                "pins": { "VCC": "vcc", "GND": "gnd", "DATA": "data" },
+                "low_resistance": { "value": 100.0, "unit": "ohm" },
+                "input_threshold": {
+                    "low": { "value": 0.3, "unit": "1" },
+                    "high": { "value": 0.7, "unit": "1" }
+                },
+                "ratings": { "supply_min": { "value": 3.3, "unit": "V" } }
+            }
+        ]
+    });
+    let found = run(&netlist);
+    assert_eq!(refs(&found), ["rating.supply_low #dht.pin.VCC"]);
+    let [low] = supplies(&found)[..] else {
+        unreachable!()
+    };
+    assert_eq!(low.min, 3.3);
+    assert!((low.lowest - 1.6).abs() < 1e-6, "{}", low.lowest);
+    assert!(low.first.as_ps() >= 1_000_000_000 && low.first.as_ps() <= 2_000_000_000);
+    assert!(low.peak_at.as_ps() >= 5_000_000_000 && low.peak_at.as_ps() <= 7_000_000_000);
+    assert!(low.over_ps.unwrap() >= 3_000_000_000, "{:?}", low.over_ps);
+}
+
+/// Passive chips (`ne555`), op-amps (`op_amp`), and dual-supply devices (`bmp280` VDD + VDDIO)
+/// all use the same shared `rating.supply_low` rule.
+#[test]
+fn supply_min_covers_passive_chips_op_amps_and_dual_supply_devices() {
+    let netlist = serde_json::json!({
+        "version": 1,
+        "seed": 0,
+        "analysis": { "op": {} },
+        "world": {
+            "temperature": { "value": 25.0, "unit": "degC" },
+            "pressure": { "value": 101325.0, "unit": "Pa" }
+        },
+        "ground": "gnd",
+        "nets": [
+            "gnd", "v2", "v1", "v15",
+            "t_tr", "t_out", "t_rst", "t_cv", "t_th", "t_dis",
+            "op_in", "op_out",
+            "sck", "sdi", "csb", "sdo"
+        ],
+        "parts": [
+            source("v2", "v2", "gnd", 2.0),
+            source("v1", "v1", "gnd", 1.0),
+            source("v15", "v15", "gnd", 1.5),
+            resistor("rt1", "v2", "t_rst", 10_000.0),
+            resistor("rt2", "v2", "t_tr", 10_000.0),
+            resistor("rt3", "gnd", "t_th", 10_000.0),
+            resistor("rt4", "gnd", "t_cv", 10_000.0),
+            resistor("rt5", "v2", "t_dis", 10_000.0),
+            resistor("rt6", "gnd", "t_out", 10_000.0),
+            resistor("ro1", "gnd", "op_in", 10_000.0),
+            resistor("rb1", "v1", "sck", 10_000.0),
+            resistor("rb2", "v1", "sdi", 10_000.0),
+            resistor("rb3", "v1", "csb", 10_000.0),
+            resistor("rb4", "gnd", "sdo", 10_000.0),
+            {
+                "name": "timer",
+                "kind": "ne555",
+                "pins": {
+                    "gnd": "gnd", "trig": "t_tr", "out": "t_out", "reset": "t_rst",
+                    "cont": "t_cv", "thres": "t_th", "disch": "t_dis", "vcc": "v2"
+                },
+                "ladder_resistance": { "value": 5000.0, "unit": "ohm" },
+                "reset_threshold": { "value": 0.7, "unit": "V" },
+                "discharge": {
+                    "on_resistance": { "value": 10.0, "unit": "ohm" },
+                    "off_resistance": { "value": 1.0e8, "unit": "ohm" }
+                },
+                "supply_resistance": { "value": 1666.0, "unit": "ohm" },
+                "output": {
+                    "high_drop": { "value": 1.7, "unit": "V" },
+                    "high_resistance": { "value": 10.0, "unit": "ohm" },
+                    "low_drop": { "value": 0.1, "unit": "V" },
+                    "low_resistance": { "value": 10.0, "unit": "ohm" }
+                },
+                "ratings": { "supply_min": { "value": 4.5, "unit": "V" } }
+            },
+            {
+                "name": "amp",
+                "kind": "op_amp",
+                "pins": { "in_p": "op_in", "in_n": "op_out", "out": "op_out", "vcc": "v2", "gnd": "gnd" },
+                "gain_bandwidth": { "value": 700_000.0, "unit": "Hz" },
+                "slew_rate": { "value": 300_000.0, "unit": "V/s" },
+                "open_loop_gain": { "value": 100_000.0, "unit": "1" },
+                "input_bias_current": { "value": 20.0e-9, "unit": "A" },
+                "swing_high": { "value": 1.5, "unit": "V" },
+                "swing_low": { "value": 0.005, "unit": "V" },
+                "output_resistance": { "value": 50.0, "unit": "ohm" },
+                "short_circuit_current": { "value": 0.04, "unit": "A" },
+                "supply_current": { "value": 0.0005, "unit": "A" },
+                "input_headroom": { "value": 0.0, "unit": "V" },
+                "ratings": { "supply_min": { "value": 3.0, "unit": "V" } }
+            },
+            {
+                "name": "bmp",
+                "kind": "bmp280",
+                "pins": {
+                    "VDD": "v15", "VDDIO": "v1", "GND": "gnd",
+                    "SCK": "sck", "SDI": "sdi", "CSB": "csb", "SDO": "sdo"
+                },
+                "low_resistance": { "value": 100.0, "unit": "ohm" },
+                "input_threshold": {
+                    "low": { "value": 0.3, "unit": "1" },
+                    "high": { "value": 0.7, "unit": "1" }
+                },
+                "ratings": {
+                    "pin_margin": { "value": 0.3, "unit": "V" },
+                    "supply_voltage": { "value": 4.25, "unit": "V" },
+                    "supply_min": { "value": 1.71, "unit": "V" },
+                    "io_supply_min": { "value": 1.2, "unit": "V" }
+                }
+            }
+        ]
+    });
+    let mut found = refs(&run(&netlist));
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            "rating.supply_low #amp.pin.vcc",
+            "rating.supply_low #bmp.pin.VDD",
+            "rating.supply_low #bmp.pin.VDDIO",
+            "rating.supply_low #timer.pin.vcc",
         ]
     );
 }

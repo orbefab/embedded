@@ -245,12 +245,11 @@ pub(crate) fn pin_ratings(chip: &Chip) -> Option<crate::ratings::PinRatings> {
         Chip::Ssd1306(dev) => crate::device::ssd1306::pin_ratings(dev),
         Chip::Hd44780I2c(dev) => crate::device::hd44780_i2c::pin_ratings(dev),
         Chip::Ws2812(chain) => crate::device::ws2812::pin_ratings(chain),
-        Chip::Ne555(_)
-        | Chip::SpiReplay(_)
-        | Chip::St77916(_)
-        | Chip::Cst816(_)
-        | Chip::Dht22(_)
-        | Chip::PulsesReplay(_)
-        | Chip::Sg90(_) => None,
+        Chip::Dht22(dev) => crate::device::dht22::pin_ratings(dev),
+        Chip::Sg90(dev) => crate::device::sg90::pin_ratings(dev),
+        Chip::Cst816(dev) => crate::device::cst816::pin_ratings(dev),
+        Chip::St77916(panel) => crate::device::st77916::pin_ratings(panel),
+        Chip::Ne555(chip) => ne555::pin_ratings(chip),
+        Chip::SpiReplay(_) | Chip::PulsesReplay(_) => None,
     }
 }

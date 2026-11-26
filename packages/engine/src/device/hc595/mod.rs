@@ -23,7 +23,7 @@ use crate::netlist::json::{
 };
 use crate::netlist::{NetId, PartId, Rating, Threshold, Value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage_at};
-use crate::ratings::{Ceiling, PinRatings, PinWindow};
+use crate::ratings::{Ceiling, PinRatings, PinWindow, SupplyMin};
 use crate::watch::{Signal, Watch};
 use crate::world::World;
 
@@ -189,6 +189,18 @@ pub(crate) fn pin_ratings(part: &Hc595) -> Option<PinRatings> {
         part.ratings.input_margin.as_ref(),
     );
     add(&OUTPUT_PINS, part.ratings.output_margin.as_ref());
+    let supply_mins = part
+        .ratings
+        .supply_min
+        .as_ref()
+        .map(|min| SupplyMin {
+            pin: Hc595::PINS[VCC],
+            net: part.pins[VCC],
+            gnd: part.pins[GND],
+            min: min.si.get(),
+        })
+        .into_iter()
+        .collect();
     Some(PinRatings {
         outputs: OUTPUT_PINS.iter().map(|&pin| Hc595::PINS[pin]).collect(),
         pin_current: part.ratings.pin_current.clone(),
@@ -196,6 +208,7 @@ pub(crate) fn pin_ratings(part: &Hc595) -> Option<PinRatings> {
         vcc: (Hc595::PINS[VCC], part.pins[VCC]),
         gnd: (Hc595::PINS[GND], part.pins[GND]),
         windows,
+        supply_mins,
     })
 }
 
@@ -225,6 +238,8 @@ pub struct Hc595Ratings {
     pub input_margin: Option<Value>,
     /// Volt. How far `QA`–`QH` and `QHp` may sit below `GND` and above `VCC`.
     pub output_margin: Option<Value>,
+    /// Volt. The least operating `VCC` may sit above `GND`.
+    pub supply_min: Option<Value>,
 }
 
 impl Hc595 {
@@ -257,6 +272,8 @@ struct WireRatings {
     input_margin: Option<WireValue>,
     #[serde(deserialize_with = "Option::deserialize")]
     output_margin: Option<WireValue>,
+    #[serde(default)]
+    supply_min: Option<WireValue>,
 }
 
 pub(crate) fn resolve_hc595(ctx: ParseCtx<'_>, wire: WireHc595) -> Option<Hc595> {
@@ -301,10 +318,12 @@ fn resolve_ratings(
     );
     let input_margin = resolve_limit(part, "ratings.input_margin", "V", wire.input_margin, out);
     let output_margin = resolve_limit(part, "ratings.output_margin", "V", wire.output_margin, out);
+    let supply_min = resolve_limit(part, "ratings.supply_min", "V", wire.supply_min, out);
     Some(Hc595Ratings {
         pin_current: pin_current?,
         supply_current: supply_current?,
         input_margin: input_margin?,
         output_margin: output_margin?,
+        supply_min: supply_min?,
     })
 }

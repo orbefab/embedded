@@ -19,7 +19,7 @@ use crate::netlist::json::{
 };
 use crate::netlist::{IntValue, NetId, PartId, Threshold, Value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage_at};
-use crate::ratings::{Ceiling, PinRatings, PinWindow};
+use crate::ratings::{Ceiling, PinRatings, PinWindow, SupplyMin};
 use crate::watch::{Signal, Watch};
 
 pub(crate) mod model;
@@ -204,6 +204,15 @@ pub(crate) fn pin_ratings(chain: &Ws2812) -> Option<PinRatings> {
             above: Some(Ceiling::OverSupply(margin)),
         });
     }
+    let supply_mins = si(&ratings.supply_min)
+        .map(|min| SupplyMin {
+            pin: Ws2812::PINS[VCC],
+            net: chain.pins[VCC],
+            gnd: chain.pins[GND],
+            min,
+        })
+        .into_iter()
+        .collect();
     Some(PinRatings {
         outputs: Vec::new(),
         pin_current: None,
@@ -211,6 +220,7 @@ pub(crate) fn pin_ratings(chain: &Ws2812) -> Option<PinRatings> {
         vcc: (Ws2812::PINS[VCC], chain.pins[VCC]),
         gnd: (Ws2812::PINS[GND], chain.pins[GND]),
         windows,
+        supply_mins,
     })
 }
 
@@ -242,6 +252,8 @@ pub struct Ws2812Ratings {
     pub rail_margin: Option<Value>,
     /// Volt. The most `VCC` may sit above `GND`.
     pub supply_voltage: Option<Value>,
+    /// Volt. The least operating `VCC` may sit above `GND`.
+    pub supply_min: Option<Value>,
 }
 
 /// Each LED's draw from `VCC` into `GND`: `idle_current` at every colour, black included, and
@@ -307,6 +319,8 @@ struct WireRatings {
     rail_margin: Option<WireValue>,
     #[serde(deserialize_with = "Option::deserialize")]
     supply_voltage: Option<WireValue>,
+    #[serde(default)]
+    supply_min: Option<WireValue>,
 }
 
 #[derive(Deserialize)]
@@ -441,8 +455,10 @@ fn resolve_ratings(
         wire.supply_voltage,
         out,
     );
+    let supply_min = resolve_limit(part, "ratings.supply_min", "V", wire.supply_min, out);
     Some(Ws2812Ratings {
         rail_margin: rail_margin?,
         supply_voltage: supply_voltage?,
+        supply_min: supply_min?,
     })
 }

@@ -17,8 +17,9 @@ use crate::netlist::Threshold;
 use crate::netlist::Value;
 use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
-use crate::netlist::json::{PinMap, resolve_pins};
+use crate::netlist::json::{PinMap, WireValue, resolve_limit, resolve_pins};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
+use crate::ratings::{PinRatings, SupplyMin};
 use crate::watch::{Signal, Watch};
 
 mod glass;
@@ -114,6 +115,25 @@ fn port(pins: &[NetId; 11]) -> Port {
     (spi::Engine::new(bus), duty::Pin)
 }
 
+/// The part's minimum operating supply voltage on `VCC` over `GND`, `None` when unrated.
+pub(crate) fn pin_ratings(panel: &St77916) -> Option<PinRatings> {
+    let min = panel.ratings.as_ref()?.supply_min.as_ref()?.si.get();
+    Some(PinRatings {
+        outputs: Vec::new(),
+        pin_current: None,
+        supply_current: None,
+        vcc: (St77916::PINS[VCC], panel.pins[VCC]),
+        gnd: (St77916::PINS[GND], panel.pins[GND]),
+        windows: Vec::new(),
+        supply_mins: vec![SupplyMin {
+            pin: St77916::PINS[VCC],
+            net: panel.pins[VCC],
+            gnd: panel.pins[GND],
+            min,
+        }],
+    })
+}
+
 /// A 360 by 360 QSPI panel controller, an active chip with no clock of its own. It takes the
 /// `Spi` records on its `CS` and `SCLK` nets and the `Duty` records on `BLK`. It reads `RST`
 /// through `input_threshold`, fractions of its supply, and drives `TE` low through `output`
@@ -123,6 +143,14 @@ pub struct St77916 {
     pub pins: [NetId; 11],
     pub output: OutputStage,
     pub input_threshold: Threshold,
+    pub ratings: Option<St77916Ratings>,
+}
+
+/// An ST77916's ratings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct St77916Ratings {
+    /// Volt. The least operating `VCC` may sit above `GND`.
+    pub supply_min: Option<Value>,
 }
 
 impl St77916 {
@@ -138,6 +166,15 @@ pub(crate) struct WireSt77916 {
     pins: PinMap,
     output: WireOutputStage,
     input_threshold: WireThreshold,
+    #[serde(default)]
+    ratings: Option<WireRatings>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireRatings {
+    #[serde(default)]
+    supply_min: Option<WireValue>,
 }
 
 pub(crate) fn resolve_st77916(ctx: ParseCtx<'_>, wire: WireSt77916) -> Option<St77916> {
@@ -156,9 +193,15 @@ pub(crate) fn resolve_st77916(ctx: ParseCtx<'_>, wire: WireSt77916) -> Option<St
         wire.input_threshold,
         out,
     );
+    let ratings = match wire.ratings {
+        None => Some(None),
+        Some(wire) => resolve_limit(part_ref, "ratings.supply_min", "V", wire.supply_min, out)
+            .map(|supply_min| Some(St77916Ratings { supply_min })),
+    };
     Some(St77916 {
         pins: pins?,
         output: output?,
         input_threshold: input_threshold?,
+        ratings: ratings?,
     })
 }

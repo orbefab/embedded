@@ -1,7 +1,7 @@
 {
-  "format": 6,
+  "format": 7,
   "part": "sk68xxmini-hs",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "title": "SK68XXMINI-HS addressable RGB LED",
   "summary": "SK68XXMINI-HS addressable RGB LED in a 3.7 x 3.5 mm package. It takes a 24-bit colour on DIN and passes the rest of the chain on to DOUT.",
   "tags": ["led", "rgb", "addressable", "ws2812"],
@@ -120,6 +120,15 @@
             "doc": "SPC / SK68XX MINI-HS Rev. 04",
             "at": "Section 8, Absolute Maximum Ratings: Power supply voltage VDD, +3.5 V to +5.5 V",
             "basis": "absolute_max"
+          }
+        }
+      },
+      "supply_min": {
+        "value": 3.0,
+        "unit": "V",
+        "source": {
+          "closed_form": {
+            "note": "Matches min_supply (3.0 V). SPC / SK68XX MINI-HS Rev. 04 section 8 lists VDD +3.7 V to +5.5 V, while ESP32-S3-DevKitC-1 ties this LED to its 3.3 V regulator (SGM2212-3.3, 3.267 V minimum), so 3.0 V keeps the board LED quiet at 3.3 V while warning on a sagging or brown-out supply."
           }
         }
       }

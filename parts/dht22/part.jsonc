@@ -3,9 +3,9 @@
 // pull-up is a second model, a resistor from VDD to DATA. The output and input levels are table
 // 4 of Aosong's AM2302 product manual v1.1, at VDD 5 V.
 {
-  "format": 1,
+  "format": 7,
   "part": "dht22",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "title": "DHT22 (AM2302) temperature and humidity sensor",
   "summary": "Digital temperature and humidity sensor that reports -40 to 80 °C and relative humidity, each to 0.1, over one data line, at most once every 2 s.",
   "tags": ["dht22", "am2302", "temperature", "humidity", "sensor", "one-wire", "digital", "through-hole"],
@@ -27,6 +27,9 @@
       "input_threshold": {
         "low": { "value": 0.3, "unit": "1", "source": { "datasheet": { "doc": "Aosong AM2302 product manual v1.1", "at": "table 4, low input voltage, falling, at most 30 % of VDD", "basis": "max" } } },
         "high": { "value": 0.7, "unit": "1", "source": { "datasheet": { "doc": "Aosong AM2302 product manual v1.1", "at": "table 4, high input voltage, rising, at least 70 % of VDD", "basis": "min" } } },
+      },
+      "ratings": {
+        "supply_min": { "value": 3.3, "unit": "V", "source": { "datasheet": { "doc": "Aosong AM2302 product manual v1.1", "at": "operating supply voltage VDD 3.3 V to 5.5 V", "basis": "min" } } },
       },
       "pins": { "VCC": "VDD", "DATA": "DATA", "GND": "GND" },
     },

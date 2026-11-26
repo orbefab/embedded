@@ -20,7 +20,7 @@ use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
 use crate::netlist::json::{PinMap, WireValue, resolve_limit, resolve_some_pins, resolve_value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
-use crate::ratings::{Ceiling, PinRatings, PinWindow};
+use crate::ratings::{Ceiling, PinRatings, PinWindow, SupplyMin};
 use crate::watch::Signal;
 use orbe_espressif::s3::{self, Bridge};
 
@@ -155,6 +155,15 @@ pub(crate) fn pin_ratings(mcu: &Esp32s3) -> Option<PinRatings> {
             });
         }
     }
+    let supply_mins = si(&ratings.supply_min)
+        .map(|min| SupplyMin {
+            pin: Esp32s3::PINS[0],
+            net: mcu.pins[0],
+            gnd: mcu.pins[1],
+            min,
+        })
+        .into_iter()
+        .collect();
     Some(PinRatings {
         outputs: Vec::new(),
         pin_current: None,
@@ -162,6 +171,7 @@ pub(crate) fn pin_ratings(mcu: &Esp32s3) -> Option<PinRatings> {
         vcc: (Esp32s3::PINS[0], mcu.pins[0]),
         gnd: (Esp32s3::PINS[1], mcu.pins[1]),
         windows,
+        supply_mins,
     })
 }
 
@@ -211,6 +221,8 @@ pub struct Esp32s3Ratings {
     pub rail_margin: Option<Value>,
     /// Volt. The most `VCC` may sit above `GND`.
     pub supply_voltage: Option<Value>,
+    /// Volt. The least operating `VCC` may sit above `GND`.
+    pub supply_min: Option<Value>,
 }
 
 /// What an `esp32s3` runs.
@@ -299,6 +311,8 @@ struct WireRatings {
     rail_margin: Option<WireValue>,
     #[serde(deserialize_with = "Option::deserialize")]
     supply_voltage: Option<WireValue>,
+    #[serde(default)]
+    supply_min: Option<WireValue>,
 }
 
 fn default_efuse() -> s3::EfuseSet {
@@ -443,9 +457,11 @@ fn resolve_ratings(
         wire.supply_voltage,
         out,
     );
+    let supply_min = resolve_limit(part, "ratings.supply_min", "V", wire.supply_min, out);
     Some(Esp32s3Ratings {
         rail_margin: rail_margin?,
         supply_voltage: supply_voltage?,
+        supply_min: supply_min?,
     })
 }
 

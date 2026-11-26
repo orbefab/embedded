@@ -26,10 +26,12 @@ const SCENE_KEYS: &[&str] = &[
 /// Format 5 is format 4 plus a rating's `basis`, a capacitor's `series_resistance` as
 /// `tan_delta` at a `frequency`, a regulator's `ratings.input_voltage`, an op-amp's `ratings`, a
 /// BJT's `forward_knee_current`, and a `ws2812`'s `draw`. Format 6 is format 5 plus a
-/// resistor's `ratings.voltage`, the operating window of a sounding drive, a reading
-/// `"of": "angle"` on an `sg90`, a reading `"of": "screen"` and `view.screen`, and pin voltage
-/// `ratings` on `esp32s3`, `ssd1306`, `hd44780_i2c` and `ws2812`.
-pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5, 6];
+/// Format 6 is format 5 plus a resistor's `ratings.voltage`, the operating window of a sounding
+/// drive, a reading `"of": "angle"` on an `sg90`, a reading `"of": "screen"` and `view.screen`,
+/// and pin voltage `ratings` on `esp32s3`, `ssd1306`, `hd44780_i2c` and `ws2812`. Format 7 is
+/// format 6 plus `ratings.supply_min` (and `bmp280`'s `ratings.io_supply_min`) and `ratings` on
+/// `dht22`, `sg90`, `ne555`, `cst816` and `st77916`.
+pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5, 6, 7];
 /// Scene `format` values this binary reads.
 pub const SCENE_FORMATS: &[u32] = &[1];
 /// The oldest part format whose file params take `"as": "blob"`.
@@ -50,6 +52,9 @@ const VOLTAGE_FORMAT: u32 = 6;
 const ANGLE_FORMAT: u32 = 6;
 /// The oldest part format whose readings take `"of": "screen"` and whose view takes `screen`.
 const SCREEN_FORMAT: u32 = 6;
+/// The oldest part format that carries `ratings.supply_min` (and `bmp280`'s `io_supply_min`),
+/// and `ratings` on `dht22`, `sg90`, `ne555`, `cst816` and `st77916`.
+const SUPPLY_MIN_FORMAT: u32 = 7;
 /// The engine kinds that show a screen, which a reading `"of": "screen"` reads.
 const SCREEN_KINDS: [&str; 2] = ["ssd1306", "hd44780_i2c"];
 /// The engine kinds whose glass carries readable character lines and a backlight.
@@ -2802,6 +2807,52 @@ fn decode_body(
                 .find(|prop| prop.key == "ratings")
         {
             gate(out, kind, "ratings", prop.key_span, VOLTAGE_FORMAT, format);
+        }
+    }
+    if format < SUPPLY_MIN_FORMAT {
+        if matches!(kind, "dht22" | "sg90" | "ne555" | "cst816" | "st77916")
+            && let Some(prop) = node
+                .props()
+                .unwrap_or_default()
+                .iter()
+                .find(|prop| prop.key == "ratings")
+        {
+            gate(
+                out,
+                kind,
+                "ratings",
+                prop.key_span,
+                SUPPLY_MIN_FORMAT,
+                format,
+            );
+        }
+        if matches!(
+            kind,
+            "atmega328p"
+                | "esp32s3"
+                | "bmp280"
+                | "ssd1306"
+                | "hd44780_i2c"
+                | "hc595"
+                | "ws2812"
+                | "op_amp"
+        ) && let Some(ratings) = node.get("ratings").and_then(Node::props)
+        {
+            for key in ["supply_min", "io_supply_min"] {
+                if key == "io_supply_min" && kind != "bmp280" {
+                    continue;
+                }
+                if let Some(prop) = ratings.iter().find(|prop| prop.key == key) {
+                    gate(
+                        out,
+                        kind,
+                        &format!("ratings.{key}"),
+                        prop.key_span,
+                        SUPPLY_MIN_FORMAT,
+                        format,
+                    );
+                }
+            }
         }
     }
     let before_dout = kind == "ws2812" && format < DOUT_FORMAT;

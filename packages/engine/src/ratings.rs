@@ -10,7 +10,8 @@ use crate::chip::regulator::{
     LIMIT_HOLD_PS, LIMIT_KNEE_FRACTION, LIMIT_SAG_FRACTION, MIN_CHARGE_RATE, STALL_PS, limit_drop,
 };
 use crate::diagnostic::{
-    CurrentLimitExcursion, Diagnostic, Excursion, VoltageExcursion, exceeds_rounded, significant,
+    CurrentLimitExcursion, Diagnostic, Excursion, SupplyExcursion, VoltageExcursion,
+    exceeds_rounded, significant,
 };
 use crate::finite::Finite;
 use crate::name::{Name, Quantity, Ref};
@@ -54,6 +55,7 @@ pub(crate) struct Ratings {
     timing: Timing,
     watches: Vec<Watch>,
     windows: Vec<Window>,
+    supplies: Vec<SupplyWatch>,
     limits: Vec<RegulatorLimit>,
     /// A resistor's operating voltage, checked on the peak of a drive that leaves zero.
     drives: Vec<CoilDrive>,
@@ -107,6 +109,20 @@ pub(crate) enum Timing {
     Run,
 }
 
+/// A supply pin at or below this voltage over ground is treated as unpowered (switched off or
+/// disconnected) and stays silent. Anything strictly above it and below `min` is a brown-out
+/// and warns `rating.supply_low`.
+pub(crate) const SUPPLY_UNPOWERED_V: f64 = 0.1;
+
+/// A chip's minimum operating supply voltage on one supply pin over its ground.
+pub(crate) struct SupplyMin {
+    pub(crate) pin: &'static str,
+    pub(crate) net: NetId,
+    pub(crate) gnd: NetId,
+    /// Volt, greater than 0.
+    pub(crate) min: f64,
+}
+
 /// A chip's ratings on its package pins, which its adapter builds from its part.
 pub(crate) struct PinRatings {
     /// Each output's package pin, in the order of the chip's outputs.
@@ -122,6 +138,7 @@ pub(crate) struct PinRatings {
     /// The ground pin and its net. Every window is over it.
     pub(crate) gnd: (&'static str, NetId),
     pub(crate) windows: Vec<PinWindow>,
+    pub(crate) supply_mins: Vec<SupplyMin>,
 }
 
 /// The voltage a pin may take over the chip's ground.
@@ -294,6 +311,17 @@ struct Window {
     worst: f64,
     over: bool,
     excursion: Option<VoltageExcursion>,
+}
+
+#[derive(Clone)]
+struct SupplyWatch {
+    pin: Ref,
+    column: usize,
+    gnd: usize,
+    min: f64,
+    min_rounded: f64,
+    over: bool,
+    excursion: Option<SupplyExcursion>,
 }
 
 #[derive(Clone)]
@@ -629,10 +657,50 @@ impl Ratings {
                 excursion: None,
             });
         }
+        let mut supplies = Vec::new();
+        for (_, part) in netlist.parts() {
+            let pin =
+                |name: &str| Ref::Pin(part.name.clone(), Name::new(name).expect("a pin name"));
+            match &part.model {
+                Model::Chip(model) => {
+                    let Some(rated) = crate::chip::pin_ratings(model) else {
+                        continue;
+                    };
+                    for min in rated.supply_mins {
+                        supplies.push(SupplyWatch {
+                            pin: pin(min.pin),
+                            column: columns.net(min.net),
+                            gnd: columns.net(min.gnd),
+                            min: min.min,
+                            min_rounded: significant(min.min),
+                            over: false,
+                            excursion: None,
+                        });
+                    }
+                }
+                Model::OpAmp(op) => {
+                    if let Some(min) = &op.min_supply {
+                        let (_, vcc, gnd) = op.common_mode();
+                        let min = min.si.get();
+                        supplies.push(SupplyWatch {
+                            pin: pin("vcc"),
+                            column: columns.net(vcc),
+                            gnd: columns.net(gnd),
+                            min,
+                            min_rounded: significant(min),
+                            over: false,
+                            excursion: None,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
         Ratings {
             timing,
             watches,
             windows,
+            supplies,
             limits,
             drives,
             chips,
@@ -757,6 +825,35 @@ impl Ratings {
                     excursion.low = reading.low;
                     excursion.high = reading.high;
                     excursion.peak = v;
+                    excursion.peak_at = at;
+                }
+                Some(_) => {}
+            }
+        }
+        for supply in &mut self.supplies {
+            elapsed(
+                supply.over,
+                supply.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
+                self.last,
+            );
+            let SupplyReading { v, low } = supply.read(row);
+            supply.over = low;
+            if !low {
+                continue;
+            }
+            match &mut supply.excursion {
+                None => {
+                    supply.excursion = Some(SupplyExcursion {
+                        pin: supply.pin.clone(),
+                        min: supply.min,
+                        lowest: v,
+                        peak_at: at,
+                        first: at,
+                        over_ps: self.timing.over_ps(),
+                    });
+                }
+                Some(excursion) if v < excursion.lowest => {
+                    excursion.lowest = v;
                     excursion.peak_at = at;
                 }
                 Some(_) => {}
@@ -938,6 +1035,10 @@ impl Ratings {
             .windows
             .iter()
             .filter_map(|window| Some(Diagnostic::RatingVoltage(window.excursion.clone()?)));
+        let supplies = self
+            .supplies
+            .iter()
+            .filter_map(|supply| Some(Diagnostic::RatingSupplyLow(supply.excursion.clone()?)));
         let limits = self
             .limits
             .iter()
@@ -948,6 +1049,7 @@ impl Ratings {
             .filter_map(|drive| Some(Diagnostic::RatingVoltage(drive.excursion.clone()?)));
         currents
             .chain(voltages)
+            .chain(supplies)
             .chain(limits)
             .chain(drives)
             .collect()
@@ -1024,6 +1126,7 @@ impl Ratings {
     fn quiet_after(&self, at: Time, row: &[Finite], cores: &[active::Core]) -> bool {
         if self.watches.iter().any(|w| w.excursion.is_some())
             || self.windows.iter().any(|w| w.excursion.is_some())
+            || self.supplies.iter().any(|s| s.excursion.is_some())
             || self.limits.iter().any(|l| l.excursion.is_some())
             || self.drives.iter().any(|d| d.excursion.is_some())
         {
@@ -1056,6 +1159,7 @@ impl Ratings {
             let reading = window.read(row);
             !reading.below && !reading.above
         });
+        let supplies = self.supplies.iter().all(|supply| !supply.read(row).low);
         let limits = self.limits.iter().all(|limit| !limit.read(row).clamped);
         let drives = self.drives.iter().all(|drive| {
             let volts = row[drive.column].get().abs();
@@ -1067,7 +1171,7 @@ impl Ratings {
             };
             !judged
         });
-        watches && windows && limits && drives
+        watches && windows && supplies && limits && drives
     }
 }
 
@@ -1313,6 +1417,21 @@ impl Window {
             below,
             above,
         }
+    }
+}
+
+struct SupplyReading {
+    v: f64,
+    low: bool,
+}
+
+impl SupplyWatch {
+    fn read(&self, row: &[Finite]) -> SupplyReading {
+        let v = row[self.column].get() - row[self.gnd].get();
+        let low = v > SUPPLY_UNPOWERED_V
+            && v < self.min
+            && (v < self.min * 0.99 || significant(v) < self.min_rounded);
+        SupplyReading { v, low }
     }
 }
 

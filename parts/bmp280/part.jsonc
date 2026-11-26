@@ -4,9 +4,9 @@
 // 0.825 mm from the -X and +Y edges, and eight 0.35 x 0.35 mm pads on 0.65 mm pitch and
 // 1.45 mm rows. The engine kind reads the scene's temperature and pressure and answers on I2C.
 {
-  "format": 6,
+  "format": 7,
   "part": "bmp280",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "title": "BMP280 temperature and pressure sensor",
   "summary": "Bosch BMP280 barometric pressure and temperature sensor in an 8-pad 2.0 x 2.5 mm LGA. It talks I2C: SDO low is 0x76, SDO high is 0x77.",
   "tags": ["bmp280", "temperature", "pressure", "sensor", "i2c", "lga"],
@@ -93,6 +93,28 @@
             "doc": "BST-BMP280-DS001-26",
             "at": "Table 3, voltage at any supply pin and at any interface pin, -0.3 V to VDDIO + 0.3 V",
             "basis": "absolute_max"
+          }
+        }
+      },
+      "supply_min": {
+        "value": 1.71,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "BST-BMP280-DS001-26",
+            "at": "Table 2, supply voltage internal domains VDD, 1.71 V to 3.6 V",
+            "basis": "min"
+          }
+        }
+      },
+      "io_supply_min": {
+        "value": 1.2,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "BST-BMP280-DS001-26",
+            "at": "Table 2, supply voltage I/O domain VDDIO, 1.2 V to 3.6 V",
+            "basis": "min"
           }
         }
       }
