@@ -2205,6 +2205,115 @@ fn devkitc_exact_brownout_and_monotonic_fall_do_not_false_restart() {
     );
 }
 
+/// Stepping an ideal `3V3` rail on the DevKitC-1 from 0 V to exactly 3.0 V (which is both the
+/// ESP32-S3's Table 5-2 minimum and the onboard SK68XXMINI-HS RGB LED's 3.0 V `min_supply`)
+/// completes promptly, boots into `"ready"`, keeps ticking, and raises no `chip.power_on_restart`.
+#[test]
+fn devkitc_cold_start_step_to_exact_3v_boots_and_ticks() {
+    let dir = project("esp32s3-stock-serial");
+    // Hold the DevKitC-1 USB VBUS at 0 V so the ideal `v3` source alone drives 3V3.
+    let usb_path = dir
+        .path()
+        .join("parts/esp32s3-devkitc-1/parts/usb-micro-b/part.jsonc");
+    let usb_text = fs::read_to_string(&usb_path).unwrap();
+    let needle = r#""voltage": { "value": 5.0, "unit": "V", "source": { "datasheet": { "doc": "USB 2.0 specification", "at": "VBUS nominal 5.0 V, the center of the high-power range 4.75 V to 5.25 V", "basis": "nominal" } } }"#;
+    assert!(
+        usb_text.contains(needle),
+        "unexpected usb-micro-b voltage field:\n{usb_text}"
+    );
+    fs::write(
+        &usb_path,
+        usb_text.replace(
+            needle,
+            r#""voltage": { "value": 0.0, "unit": "V", "source": { "closed_form": { "note": "test" } } }"#,
+        ),
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("v3")).unwrap();
+    fs::write(
+        dir.path().join("v3/part.jsonc"),
+        r#"{
+  "format": 1,
+  "part": "v3",
+  "license": "MIT OR Apache-2.0",
+  "title": "v3",
+  "pins": { "plus": [1], "minus": [2] },
+  "model": {
+    "kind": "voltage_source",
+    "voltage": {
+      "kind": "steps",
+      "initial": { "value": 0.0, "unit": "V", "source": { "closed_form": { "note": "test" } } },
+      "events": [
+        { "t_ps": 80000000000, "level": { "value": 3.0, "unit": "V", "source": { "closed_form": { "note": "test" } } } }
+      ]
+    },
+    "pins": { "p": "plus", "n": "minus" }
+  }
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("scene.jsonc"),
+        r#"{
+  "format": 1,
+  "parts": {
+    "board": { "type": "esp32s3-devkitc-1", "app": "app.bin", "partitions": "partitions.bin" },
+    "v3": { "type": "./v3" }
+  },
+  "wires": [
+    ["v3.plus", "board.3V3"],
+    ["v3.minus", "board.GND"]
+  ],
+  "ground": "board.GND"
+}
+"#,
+    )
+    .unwrap();
+
+    let mut live = Live::new("t", Files::disk());
+    run(&mut live, dir.path(), "open");
+    run(&mut live, dir.path(), "step 80ms");
+    let Data::Snapshot(before) = run(&mut live, dir.path(), "snapshot") else {
+        panic!("expected snapshot");
+    };
+    assert!(
+        before.serial.is_empty(),
+        "chip must stay silent while 3V3 is 0 V: {:?}",
+        before.serial
+    );
+
+    // Cross the 80 ms 0 V -> 3.0 V edge and step 1 ms past it; must complete without chattering.
+    run(&mut live, dir.path(), "step 1000ps");
+    run(&mut live, dir.path(), "step 1ms");
+    run(
+        &mut live,
+        dir.path(),
+        r#"step --until serial contains "ready" --timeout 150ms"#,
+    );
+    run(&mut live, dir.path(), "step 250ms");
+    let Data::Snapshot(after) = run(&mut live, dir.path(), "snapshot") else {
+        panic!("expected snapshot");
+    };
+    assert!(
+        after.serial.contains("ready"),
+        "expected ready banner, got: {:?}",
+        after.serial
+    );
+    assert!(
+        after.serial.matches("tick").count() >= 2,
+        "expected chip to keep ticking after ready, got: {:?}",
+        after.serial
+    );
+    let snap_text = live
+        .run(&Command::parse("snapshot", dir.path()).unwrap().unwrap())
+        .text();
+    assert!(
+        !snap_text.contains("chip.power_on_restart"),
+        "cold start to 3.0 V must not raise chip.power_on_restart:\n{snap_text}"
+    );
+}
+
 #[test]
 fn a_stock_crypto_sketch_verifies_sha_aes_and_rsa_vectors() {
     play(
