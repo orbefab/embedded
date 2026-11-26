@@ -245,27 +245,6 @@ export type BlockKind = "button" | "digit" | "fade" | "lcd" | "light" | "pixels"
 export interface RepoBlock {
   id: string;
   kind: BlockKind;
-  version?: string;
-  /** The sketch's loop() does something, so what the Block drives keeps changing. */
-  loops?: boolean;
-}
-
-/** Whether a sketch's loop() has a statement in it. `void loop() {}` holds what setup() left. */
-export function sketchLoops(sketch: string): boolean {
-  const code = sketch.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-  const body = /void\s+loop\s*\(\s*\)\s*\{([\s\S]*)$/.exec(code)?.[1] ?? "";
-  return !/^\s*\}/.test(body);
-}
-
-/** The text of the Block's one sketch under firmware/, or null when it has none. */
-function repoSketch(id: string): string | null {
-  const firmware = join(REPO, "blocks", id, "firmware");
-  if (!existsSync(firmware)) return null;
-  for (const name of readdirSync(firmware)) {
-    const ino = join(firmware, name, `${name}.ino`);
-    if (existsSync(ino)) return readFileSync(ino, "utf8");
-  }
-  return null;
 }
 
 /** Blocks under `blocks/`. A scene this cannot classify fails the check. */
@@ -275,17 +254,10 @@ export function repoBlocks(): RepoBlock[] {
     .filter((id) => existsSync(join(root, id, "block.jsonc")))
     .sort();
   if (ids.length === 0) throw new Error("blocks/ has no Block");
-  return ids.map((id) => {
-    const card = readFileSync(join(root, id, "block.jsonc"), "utf8");
-    const version = card.match(/"version"\s*:\s*"([^"]+)"/)?.[1];
-    const sketch = repoSketch(id);
-    return {
-      id,
-      kind: blockKind(readFileSync(join(root, id, "scene.jsonc"), "utf8"), id),
-      version,
-      loops: sketch === null ? undefined : sketchLoops(sketch),
-    };
-  });
+  return ids.map((id) => ({
+    id,
+    kind: blockKind(readFileSync(join(root, id, "scene.jsonc"), "utf8"), id),
+  }));
 }
 
 export function blockKind(scene: string, id: string): BlockKind {
@@ -420,29 +392,8 @@ async function showScreen(page: Page, ref: string, shotName: string | null): Pro
   }
 }
 
-/** Eight LEDs on a 74HC595. From 0.2.0 the sketch walks one lit LED from QA (led1) to QH (led8) and back. */
+/** Eight LEDs on a 74HC595. The sketch walks one lit LED from QA (led1) to QH (led8) and back. */
 async function showShift(page: Page, block: RepoBlock, shotName: string | null): Promise<void> {
-  // Older tagged releases (before 0.2.0) latch static 0x55 once in setup().
-  if (block.version !== undefined && compareVersions(block.version, "0.2.0") < 0) {
-    await waitSimulatedPast(page, 0.2);
-    const glows = await page.evaluate(() =>
-      [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
-        const body = window.orbeViewer.get().scene.getObjectByName(`@led${n}`)?.getObjectByName("body");
-        const material = body?.material;
-        return typeof material?.emissiveIntensity === "number" ? material.emissiveIntensity : -1;
-      }),
-    );
-    glows.forEach((glow, index) => {
-      if (index % 2 === 0) expect(glow, `${block.id} led${index + 1}`).toBeGreaterThan(0.15);
-      else expect(glow, `${block.id} led${index + 1}`).toBeLessThan(0.05);
-    });
-    if (shotName !== null) {
-      await page.locator("canvas").scrollIntoViewIfNeeded();
-      await shot(page, shotName);
-    }
-    return;
-  }
-
   const firstHandle = await page.waitForFunction(
     () => {
       const glows = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
@@ -564,44 +515,6 @@ async function showDigit(page: Page, block: RepoBlock, shotName: string | null):
   }
 }
 
-/** A one-time sweep, 0° to 180° and back to 0°, is over by this simulated time. */
-const SWEEP_DONE_S = 1.5;
-/** write(0) is a 544 us pulse, which holds the shaft at 4.17°, 85.83° from the 90° centre. */
-const SWEEP_END_TURN = 85.83;
-
-/** The horn's turn from its rest, in degrees, or null before the viewer builds it. */
-function hornTurn(page: Page): Promise<number | null> {
-  return page.evaluate(() => {
-    const q = window.orbeViewer.get().scene.getObjectByName("@servo")?.getObjectByName("horn")?.quaternion;
-    return q === undefined ? null : (2 * Math.acos(Math.min(1, Math.abs(q.w))) * 180) / Math.PI;
-  });
-}
-
-/**
- * A servo Block whose loop() is empty, such as the released nano-servo-sweep 0.3.0, moves the
- * horn once and then holds it. A page can draw its first frame after that, so the check is
- * where the horn ends, not that it moves.
- */
-async function showServoHeld(page: Page, block: RepoBlock): Promise<void> {
-  await waitSimulatedPast(page, SWEEP_DONE_S);
-  // A frame reaches the horn when the next one draws, which software WebGL can hold back.
-  await page
-    .waitForFunction(
-      (want) => {
-        const q = window.orbeViewer.get().scene.getObjectByName("@servo")?.getObjectByName("horn")?.quaternion;
-        if (q === undefined) return false;
-        const turn = (2 * Math.acos(Math.min(1, Math.abs(q.w))) * 180) / Math.PI;
-        return Math.abs(turn - want) < 1;
-      },
-      SWEEP_END_TURN,
-      { timeout: 30_000 },
-    )
-    .catch(() => undefined);
-  const turn = await hornTurn(page);
-  expect(turn, `${block.id} horn turn from centre, degrees`).not.toBeNull();
-  expect(Math.abs((turn ?? 0) - SWEEP_END_TURN), `${block.id} horn at ${turn}°, not ${SWEEP_END_TURN}° from centre`).toBeLessThan(1);
-}
-
 /** A one-time sweep would be over and holding by this simulated time. */
 const SWEEP_LATE_S = 2;
 /** nano-servo-sweep moves the shaft about 68° per simulated second, back and forth without end. */
@@ -614,10 +527,6 @@ const SWEEP_WATCH_S = 1.5;
  * it at the 90° centre until a frame says otherwise, so its turn from rest is 90° minus the angle.
  */
 async function showServo(page: Page, block: RepoBlock, start: number): Promise<void> {
-  if (block.loops === false) {
-    await showServoHeld(page, block);
-    return;
-  }
   const from = Math.max(start, SWEEP_LATE_S);
   await waitSimulatedPast(page, from);
   await page.evaluate(() => {
@@ -737,43 +646,40 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
     const firstSeen = new Set(first.map((colour) => `${colour.r.toFixed(3)},${colour.g.toFixed(3)},${colour.b.toFixed(3)}`));
     expect(firstSeen.size, `${block.id} colours`).toBeGreaterThan(1);
 
-    // Older tagged releases (before 0.2.0) latch a static rainbow once in setup().
-    if (block.version === undefined || compareVersions(block.version, "0.2.0") >= 0) {
-      const secondHandle = await page.waitForFunction(
-        (prev) => {
-          const scene = window.orbeViewer.get().scene;
-          const pixels = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
-            const node = scene.getObjectByName(`@stick.px${n}`)?.getObjectByName("lens");
-            const material = node?.material ?? node?.children?.[0]?.material;
-            if (material === undefined) return null;
-            return { r: material.emissive.r, g: material.emissive.g, b: material.emissive.b, i: material.emissiveIntensity };
-          });
-          if (!pixels.every((pixel) => pixel !== null && pixel.i > 0.2)) return null;
-          const moved = pixels.some(
-            (pixel, index) =>
-              Math.abs(pixel!.r - prev[index].r) > 0.05 ||
-              Math.abs(pixel!.g - prev[index].g) > 0.05 ||
-              Math.abs(pixel!.b - prev[index].b) > 0.05,
-          );
-          return moved ? pixels : null;
-        },
-        first,
-        { timeout: 30_000 },
-      );
-      const second = (await secondHandle.jsonValue()) as { r: number; g: number; b: number; i: number }[];
-      expect(second.every((colour) => colour.i > 0.2), `${block.id} glow after move`).toBe(true);
-      const secondSeen = new Set(second.map((colour) => `${colour.r.toFixed(3)},${colour.g.toFixed(3)},${colour.b.toFixed(3)}`));
-      expect(secondSeen.size, `${block.id} colours after move`).toBeGreaterThan(1);
-      expect(
-        second.some(
+    const secondHandle = await page.waitForFunction(
+      (prev) => {
+        const scene = window.orbeViewer.get().scene;
+        const pixels = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
+          const node = scene.getObjectByName(`@stick.px${n}`)?.getObjectByName("lens");
+          const material = node?.material ?? node?.children?.[0]?.material;
+          if (material === undefined) return null;
+          return { r: material.emissive.r, g: material.emissive.g, b: material.emissive.b, i: material.emissiveIntensity };
+        });
+        if (!pixels.every((pixel) => pixel !== null && pixel.i > 0.2)) return null;
+        const moved = pixels.some(
           (pixel, index) =>
-            Math.abs(pixel.r - first[index].r) > 0.05 ||
-            Math.abs(pixel.g - first[index].g) > 0.05 ||
-            Math.abs(pixel.b - first[index].b) > 0.05,
-        ),
-        `${block.id} colours changed`,
-      ).toBe(true);
-    }
+            Math.abs(pixel!.r - prev[index].r) > 0.05 ||
+            Math.abs(pixel!.g - prev[index].g) > 0.05 ||
+            Math.abs(pixel!.b - prev[index].b) > 0.05,
+        );
+        return moved ? pixels : null;
+      },
+      first,
+      { timeout: 30_000 },
+    );
+    const second = (await secondHandle.jsonValue()) as { r: number; g: number; b: number; i: number }[];
+    expect(second.every((colour) => colour.i > 0.2), `${block.id} glow after move`).toBe(true);
+    const secondSeen = new Set(second.map((colour) => `${colour.r.toFixed(3)},${colour.g.toFixed(3)},${colour.b.toFixed(3)}`));
+    expect(secondSeen.size, `${block.id} colours after move`).toBeGreaterThan(1);
+    expect(
+      second.some(
+        (pixel, index) =>
+          Math.abs(pixel.r - first[index].r) > 0.05 ||
+          Math.abs(pixel.g - first[index].g) > 0.05 ||
+          Math.abs(pixel.b - first[index].b) > 0.05,
+      ),
+      `${block.id} colours changed`,
+    ).toBe(true);
     expect(await simulatedSeconds(page), `${block.id} time`).toBeGreaterThan(0.05);
     if (shotName !== null) {
       await page.locator("canvas").scrollIntoViewIfNeeded();

@@ -21,7 +21,6 @@ import {
   type RepoBlock,
   shot,
   showBlock,
-  sketchLoops,
   test,
   waitBlockReady,
   waitGlow,
@@ -120,7 +119,6 @@ interface RecordFile {
 }
 
 interface ServedRecord {
-  version: string;
   title: string;
   license: string;
   files: RecordFile[];
@@ -160,9 +158,7 @@ function releasedBlocks(): RepoBlock[] {
     const scene = record.files.find((file) => file.path === "scene.jsonc");
     if (scene === undefined) throw new Error(`${id} has no scene.jsonc in the registry`);
     const text = readFileSync(join(registryDir(), "files", scene.sha256), "utf8");
-    const sketch = record.files.find((file) => /^firmware\/[^/]+\/[^/]+\.ino$/.test(file.path));
-    const loops = sketch === undefined ? undefined : sketchLoops(readFileSync(join(registryDir(), "files", sketch.sha256), "utf8"));
-    return { id, kind: blockKind(text, id), version: record.version, loops };
+    return { id, kind: blockKind(text, id) };
   });
 }
 
