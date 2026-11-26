@@ -8,7 +8,7 @@ use crate::name::Ref;
 use crate::chip;
 use crate::element;
 use crate::element::Device;
-use crate::newton::{Conditions, Iterate};
+use crate::newton::{ABSTOL, Conditions, Iterate, VNTOL};
 use crate::sparse::{self, Factors, Failure, Pattern, Scratch, Shape};
 
 pub(crate) const GMIN: f64 = 1e-12;
@@ -48,6 +48,9 @@ pub(crate) struct Layout {
     gmin_rows: Vec<usize>,
     /// The branch rows that carry a capacitor's current, ascending.
     charge_rows: Vec<usize>,
+    /// Each row's floor in Newton's check of how far it moved: `VNTOL` on a node row,
+    /// `ABSTOL` on a branch row, and `None` on a capacitor's current, which is not checked.
+    floors: Vec<Option<f64>>,
     size: usize,
     junctions: usize,
     /// The passive chips, ascending. A chip's index here is its slot in `Conditions::chips`.
@@ -112,16 +115,27 @@ fn assemble(netlist: &Netlist, chips: Vec<PartId>) -> Layout {
             fluxes,
         });
     }
-    Layout {
+    let mut layout = Layout {
         net_rows,
         part_rows,
         node_rows,
         gmin_rows,
         charge_rows,
+        floors: Vec::new(),
         size: row,
         junctions: junction,
         chips,
-    }
+    };
+    layout.floors = (0..layout.size)
+        .map(
+            |row| match (layout.is_charge_row(row), layout.is_node_row(row)) {
+                (true, _) => None,
+                (false, true) => Some(VNTOL),
+                (false, false) => Some(ABSTOL),
+            },
+        )
+        .collect();
+    layout
 }
 
 impl Layout {
@@ -161,8 +175,13 @@ impl Layout {
         self.part_rows[part.index()].junctions.clone()
     }
 
-    pub(crate) fn is_charge_row(&self, row: usize) -> bool {
+    fn is_charge_row(&self, row: usize) -> bool {
         self.charge_rows.binary_search(&row).is_ok()
+    }
+
+    /// Each row's floor in Newton's check of how far it moved, `None` on a capacitor's current.
+    pub(crate) fn floors(&self) -> &[Option<f64>] {
+        &self.floors
     }
 
     /// Net and internal rows hold volts. Branch rows hold amperes.
@@ -343,6 +362,7 @@ impl System {
             system: std::mem::replace(self, System::on(Arc::new(Pattern::empty(0)))),
             nodes: vec![false; n].into(),
             lus: Vec::new(),
+            late: Vec::new(),
             scratch: Scratch::default(),
             memo: Memo::default(),
             work: 0,
@@ -358,12 +378,33 @@ impl System {
 /// whose held capacitors make other unknowns late.
 const KEEP: usize = 2;
 
-/// The factors of a system a solver factored, and the pattern they are for.
+/// How many pivot choices a factorization keeps for its column order. A circuit whose pivot
+/// in some column goes back and forth between two rows, as two equal capacitors' rows can,
+/// refactors on the choice it had before instead of factoring again.
+const VARIANTS: usize = 4;
+
+/// The factorizations of systems on one pattern and column order, which differ in their
+/// pivots, the newest first.
 #[derive(Clone)]
 struct Lu {
     pattern: Arc<Pattern>,
+    variants: Vec<Variant>,
+}
+
+/// The factors of a system a solver factored.
+#[derive(Clone)]
+struct Variant {
     shape: Arc<Shape>,
     factors: Factors,
+    /// The values `factors` were made from, or `None` after a refactorization that stopped
+    /// part way. A system with the same bits refactors to the same factors.
+    values: Option<Vec<f64>>,
+}
+
+impl Lu {
+    fn late(&self) -> &[bool] {
+        self.variants[0].shape.late()
+    }
 }
 
 /// A circuit's system, and what one solve keeps for the next: the pattern its stamps have
@@ -376,6 +417,8 @@ pub(crate) struct Solver {
     nodes: Arc<[bool]>,
     /// The latest factorizations, the newest first, each for its own late unknowns.
     lus: Vec<Lu>,
+    /// The late unknowns of the system being solved.
+    late: Vec<bool>,
     scratch: Scratch,
     memo: Memo,
     /// The multiply-adds of every factorization and solve so far.
@@ -411,6 +454,7 @@ impl Solver {
                 .map(|row| layout.is_node_row(row))
                 .collect(),
             lus: Vec::new(),
+            late: Vec::new(),
             scratch: Scratch::default(),
             memo: Memo::default(),
             work: 0,
@@ -424,6 +468,7 @@ impl Solver {
             system: System::on(Arc::clone(&self.system.pattern)),
             nodes: Arc::clone(&self.nodes),
             lus: self.lus.clone(),
+            late: Vec::new(),
             scratch: Scratch::default(),
             memo: Memo::default(),
             work: 0,
@@ -455,78 +500,164 @@ impl Solver {
         #[cfg(test)]
         SOLVES.with(|solves| solves.set(solves.get() + 1));
         let system = &self.system;
-        let late = system.pattern.late(&system.values, &self.nodes);
+        system
+            .pattern
+            .late_into(&system.values, &self.nodes, &mut self.late);
+        let late = self.late.as_slice();
         let kept = self
             .lus
             .iter()
-            .position(|lu| Arc::ptr_eq(&lu.pattern, &system.pattern) && lu.shape.late() == late);
-        let refactored = match kept {
+            .position(|lu| Arc::ptr_eq(&lu.pattern, &system.pattern) && lu.late() == late);
+        let k = match kept {
             Some(k) => {
                 let lu = &mut self.lus[k];
-                sparse::refactor(
-                    &lu.shape,
-                    &system.pattern,
-                    &system.values,
-                    &mut lu.factors,
-                    &mut self.scratch,
-                    &mut self.work,
-                )
-            }
-            None => Err(sparse::Refused::Pivot),
-        };
-        let k = match (refactored, kept) {
-            (Ok(()), Some(k)) => {
-                self.solves.refactored += 1;
+                let newest = &mut lu.variants[0];
+                let refactored = if newest
+                    .values
+                    .as_deref()
+                    .is_some_and(|values| same_bits(values, &system.values))
+                {
+                    // Refactoring would make the factors it holds, and count their work.
+                    self.work += newest.shape.work();
+                    Ok(())
+                } else {
+                    let mut values = newest.values.take().unwrap_or_default();
+                    let refactored = sparse::refactor(
+                        &newest.shape,
+                        &system.pattern,
+                        &system.values,
+                        &mut newest.factors,
+                        &mut self.scratch,
+                        &mut self.work,
+                    );
+                    if refactored.is_ok() {
+                        values.clear();
+                        values.extend_from_slice(&system.values);
+                        newest.values = Some(values);
+                    }
+                    refactored
+                };
+                match refactored {
+                    Ok(()) => self.solves.refactored += 1,
+                    Err(sparse::Refused::NonFinite { col }) => {
+                        self.solves.refactored += 1;
+                        return Err(Failure::NonFinite { col });
+                    }
+                    Err(sparse::Refused::Pivot { step }) => {
+                        self.solves.repivoted += 1;
+                        repivot(lu, step, &system.values, &mut self.scratch, &mut self.work)?;
+                    }
+                }
                 k
             }
-            (Err(sparse::Refused::NonFinite { col }), _) => {
-                self.solves.refactored += 1;
-                return Err(Failure::NonFinite { col });
-            }
-            (_, kept) => {
-                match kept {
-                    Some(_) => self.solves.repivoted += 1,
-                    None => self.solves.reordered += 1,
-                }
-                let order = match kept {
-                    Some(k) => self.lus[k].shape.order(),
-                    None => system.pattern.order(late),
-                };
+            None => {
+                self.solves.reordered += 1;
                 let (shape, factors) = sparse::factor(
                     &system.pattern,
                     &system.values,
-                    order,
+                    system.pattern.order(late.to_vec()),
                     &mut self.scratch,
                     &mut self.work,
                 )?;
-                let lu = Lu {
-                    pattern: Arc::clone(&system.pattern),
-                    shape: Arc::new(shape),
-                    factors,
-                };
-                match kept {
-                    Some(k) => {
-                        self.lus[k] = lu;
-                        k
-                    }
-                    None => {
-                        self.lus.truncate(KEEP - 1);
-                        self.lus.insert(0, lu);
-                        0
-                    }
-                }
+                self.lus.truncate(KEEP - 1);
+                self.lus.insert(
+                    0,
+                    Lu {
+                        pattern: Arc::clone(&system.pattern),
+                        variants: vec![Variant {
+                            shape: Arc::new(shape),
+                            factors,
+                            values: Some(system.values.clone()),
+                        }],
+                    },
+                );
+                0
             }
         };
-        let lu = &self.lus[k];
-        let x = Solution::from(
-            lu.factors
-                .solve(&lu.shape, &self.system.b, &mut self.work)?,
-        );
+        let newest = &self.lus[k].variants[0];
+        let x = Solution::from(newest.factors.solve_in(
+            &newest.shape,
+            &self.system.b,
+            &mut self.scratch,
+            &mut self.work,
+        )?);
         if remember {
             self.memo.keep(&self.system, &x);
         }
         Ok(x)
     }
+}
+
+/// Makes `values`' factorization on `lu`'s column order the newest of its variants, after its
+/// newest refused to refactor at `step` with the factors of the steps before it made. Each
+/// other variant whose pivots agree up to `step` and differ there refactors from `step` on
+/// those factors. When one passes, its factors are the bits a factorization with pivoting
+/// gives, as `sparse::refactor`'s are. When none does, the factorization resumes from the
+/// step the last one was refused at. `work` counts what factoring `values` afresh would.
+fn repivot(
+    lu: &mut Lu,
+    step: usize,
+    values: &[f64],
+    scratch: &mut Scratch,
+    work: &mut u64,
+) -> Result<(), Failure> {
+    let pattern = Arc::clone(&lu.pattern);
+    // The variant whose factors hold the steps before `step`.
+    let (mut made, mut step) = (0, step);
+    for other in 1..lu.variants.len() {
+        let (first, rest) = lu.variants.split_at_mut(other);
+        let (from, variant) = (&first[made], &mut rest[0]);
+        if !(variant.shape.agrees(&from.shape, step)
+            && variant.shape.pivot(step) != from.shape.pivot(step))
+        {
+            continue;
+        }
+        variant
+            .factors
+            .copy_steps(&from.factors, &variant.shape, step);
+        variant.values = None;
+        let mut attempt = 0;
+        match sparse::refactor_from(
+            &variant.shape,
+            &pattern,
+            values,
+            &mut variant.factors,
+            step,
+            scratch,
+            &mut attempt,
+        ) {
+            Ok(()) => {
+                *work += variant.shape.work();
+                variant.values = Some(values.to_vec());
+                let variant = lu.variants.remove(other);
+                lu.variants.insert(0, variant);
+                return Ok(());
+            }
+            Err(sparse::Refused::Pivot { step: refused }) => (made, step) = (other, refused),
+            // A factorization with pivoting from `step` meets the same value.
+            Err(sparse::Refused::NonFinite { .. }) => break,
+        }
+    }
+    let from = &lu.variants[made];
+    let (shape, factors) = sparse::resume(
+        &from.shape,
+        &from.factors,
+        step,
+        &pattern,
+        values,
+        scratch,
+        work,
+    )?;
+    lu.variants.truncate(VARIANTS - 1);
+    lu.variants.insert(
+        0,
+        Variant {
+            shape: Arc::new(shape),
+            factors,
+            values: Some(values.to_vec()),
+        },
+    );
+    Ok(())
 }
 
 /// How many systems a `Memo` keeps.
@@ -808,6 +939,7 @@ mod tests {
             system: System::on(Arc::new(Pattern::empty(n))),
             nodes: vec![false; n].into(),
             lus: Vec::new(),
+            late: Vec::new(),
             scratch: Scratch::default(),
             memo: Memo::default(),
             work: 0,
@@ -904,6 +1036,82 @@ mod tests {
         let mut fresh = solver(3);
         through(&mut fresh, 3, 4.0, 1.0, 5.0);
         assert_eq!(through(&mut fresh, 3, 4.0, 1.0, 2.0).0, wide);
+    }
+
+    /// `[[corner, 1], [1, 4]]` with `[1, 2]` on the right. A corner of 4 pivots on the
+    /// diagonal and one of 1e-6 on the other row.
+    fn cornered(solver: &mut Solver, corner: f64) {
+        let system = &mut solver.system;
+        system.values.fill(0.0);
+        system.off.clear();
+        system.b = vec![1.0, 2.0];
+        for (row, col, value) in [(0, 0, corner), (0, 1, 1.0), (1, 0, 1.0), (1, 1, 4.0)] {
+            system.add(row, col, value);
+        }
+    }
+
+    /// A system whose pivot goes back and forth between two rows solves to the bits of a solver
+    /// that factors it alone, and counts the work of factoring it again each time a kept pivot
+    /// is refused.
+    #[test]
+    fn a_pivot_that_goes_back_and_forth_solves_to_the_bits_of_a_fresh_factorization() {
+        // Both unknowns are node voltages, so neither is late and one order serves both.
+        let node = |mut solver: Solver| {
+            solver.nodes = vec![true; 2].into();
+            solver
+        };
+        let mut solver = node(solver(2));
+        let corners = [4.0, 1e-6, 4.0, 1e-6, 1e-6, 4.0, 4.0, 1e-6];
+        // What refactoring on the last factors, and factoring with pivoting when a pivot is
+        // refused, would count.
+        let (mut work, mut last): (u64, Option<(Arc<Pattern>, Shape, Factors)>) = (0, None);
+        let mut scratch = Scratch::default();
+        for (k, &corner) in corners.iter().enumerate() {
+            cornered(&mut solver, corner);
+            let x = solver.solve(false).unwrap();
+            let mut fresh = node(self::solver(2));
+            cornered(&mut fresh, corner);
+            assert_eq!(bits(&x), bits(&fresh.solve(false).unwrap()), "solve {k}");
+
+            let system = &solver.system;
+            let refused = match &mut last {
+                Some((pattern, shape, factors)) if Arc::ptr_eq(pattern, &system.pattern) => {
+                    let refactored = sparse::refactor(
+                        shape,
+                        pattern,
+                        &system.values,
+                        factors,
+                        &mut scratch,
+                        &mut work,
+                    );
+                    refactored.is_err()
+                }
+                _ => true,
+            };
+            if refused {
+                let order = match &last {
+                    Some((pattern, shape, _)) if Arc::ptr_eq(pattern, &system.pattern) => {
+                        shape.order()
+                    }
+                    _ => system
+                        .pattern
+                        .order(system.pattern.late(&system.values, &solver.nodes)),
+                };
+                let (shape, factors) = sparse::factor(
+                    &system.pattern,
+                    &system.values,
+                    order,
+                    &mut scratch,
+                    &mut work,
+                )
+                .unwrap();
+                last = Some((Arc::clone(&system.pattern), shape, factors));
+            }
+            let (_, shape, factors) = last.as_ref().unwrap();
+            factors.solve(shape, &system.b, &mut work).unwrap();
+        }
+        assert_eq!(solver.work, work);
+        assert_eq!(solver.solves.repivoted, 5);
     }
 
     #[test]

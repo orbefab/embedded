@@ -399,6 +399,8 @@ pub(crate) fn newton(
     let layout = &circuit.layout;
     let mut iterate = start;
     let mut offender = None;
+    // The junction voltages of the iterate before last, whose space the next ones reuse.
+    let mut spare = Vec::new();
     for iteration in 1..=budget {
         let system = solver.reset(layout, conditions.gmin);
         stamp(circuit, system, conditions, &iterate);
@@ -411,7 +413,9 @@ pub(crate) fn newton(
                 crate::sparse::Failure::NonFinite { col } => Failure::NonFinite { row: col },
             })?;
 
-        let mut junctions = vec![0.0; layout.junctions()];
+        let mut junctions: Vec<f64> = std::mem::take(&mut spare);
+        junctions.clear();
+        junctions.resize(layout.junctions(), 0.0);
         let mut worst_junction: Option<(f64, PartId)> = None;
         for (id, part) in circuit.netlist.parts() {
             let slots = layout.junction_slots(id);
@@ -442,6 +446,7 @@ pub(crate) fn newton(
                 junctions,
             },
         );
+        spare = before.junctions;
         offender = Some(match worst_junction {
             Some((_, part)) => Offender::Junction(part),
             None if row_ratio <= 1.0 => {
@@ -505,14 +510,10 @@ fn stamp_parts(circuit: &Circuit, system: &mut System, conditions: &Conditions, 
 /// for 10 uF at 1 ps, far below one ulp of a volt.
 fn worst_row(layout: &Layout, old: &[f64], new: &Solution) -> (usize, f64) {
     let mut worst = (0, 0.0);
-    for (row, (&before, &after)) in old.iter().zip(new.components()).enumerate() {
-        if layout.is_charge_row(row) {
+    let rows = old.iter().zip(new.components()).zip(layout.floors());
+    for (row, ((&before, &after), &floor)) in rows.enumerate() {
+        let Some(floor) = floor else {
             continue;
-        }
-        let floor = if layout.is_node_row(row) {
-            VNTOL
-        } else {
-            ABSTOL
         };
         let tolerance = RELTOL * before.abs().max(after.abs()) + floor;
         let ratio = (after - before).abs() / tolerance;
