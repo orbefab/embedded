@@ -150,6 +150,7 @@ export interface SiteData {
   readonly scenes: Readonly<Record<string, readonly ScenePart[]>>;
   /** A sentence such as "Shown at 220 Ω." for a part page whose view draws a supplied value. */
   readonly shown: Readonly<Record<string, string>>;
-  /** Each listed part id that has a picture at /orbe/parts/<id>/picture.webp. */
-  readonly pictures: readonly string[];
+  /** Each listed part id that has a picture at /orbe/parts/<id>/picture.webp, and each Block id
+   * that has one at /orbe/blocks/<id>/picture.webp. */
+  readonly pictures: { readonly parts: readonly string[]; readonly blocks: readonly string[] };
 }

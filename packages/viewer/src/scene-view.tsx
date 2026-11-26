@@ -3,15 +3,14 @@ import { type ThreeEvent, useFrame, useLoader, useThree } from "@react-three/fib
 import { EffectComposer, Outline } from "@react-three/postprocessing";
 import { BlendFunction, SelectiveBloomEffect } from "postprocessing";
 import { type RefObject, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { BackSide, Box3, type Group, Mesh, MeshStandardMaterial, type Object3D, Quaternion } from "three";
+import { BackSide, Box3, type Group, Mesh, MeshStandardMaterial, type Object3D } from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { type BuiltScene, buildScene, fromGltf, type Tag, tagOf } from "./build";
 import type { CameraMode } from "./camera-frame";
 import { CameraRig } from "./camera-rig";
-import { glowIntensity, litColour, pixelGlow, shownCurrent } from "./glow";
 import type { Hovered, HoverStore } from "./hover";
 import type { Command, FrameMessage, Ref, SceneMessage, ScreenImage, Vec3 } from "./protocol";
-import { showScreen } from "./screen";
+import { poseFrame } from "./pose";
 import { holeAt, instanceAt, refOf, stripText } from "./refs";
 import { applyRoom, roomTexture, StageFloor, StageLights, StageRoom } from "./stage";
 import type { StageTheme } from "./stage-theme";
@@ -24,9 +23,6 @@ const HOVER = "#e85d04";
 /** The render layer bloom reads. The hover outline toggles its own layer, 10, on the hovered
  * meshes, so bloom must not share it. */
 const BLOOM_LAYER = 11;
-
-/** Scratch for a turn joint's pose, so a frame allocates nothing. */
-const turned = new Quaternion();
 
 /** Each mesh the scene glows, with its glow material. */
 function glowMeshes(built: BuiltScene): { mesh: Mesh; material: MeshStandardMaterial }[] {
@@ -233,17 +229,7 @@ export function SceneView({
 
   const glowing = useMemo(() => glowMeshes(built), [built]);
   useFrame(() => {
-    const live = frame.current;
-    const peaks = ledPeak.current;
-    for (const glow of built.glows) {
-      const { by } = glow;
-      const intensity =
-        by.kind === "current"
-          ? glowIntensity(shownCurrent(live?.led_a[by.channel] ?? 0, peaks[by.channel] ?? 0), by.full)
-          : pixelGlow(live?.pixel_rgb[by.channel] ?? [], glow.material.emissive);
-      glow.material.emissiveIntensity = intensity;
-      litColour(glow.base, intensity, glow.material.color);
-    }
+    poseFrame(built, frame.current, ledPeak.current, screens.current);
     // A glow mesh is on the bloom layer only from intensity 1 up, its full current or a
     // channel at 255, where its own luminance reaches the bloom threshold. Below that, a
     // highlight on it or on the lens over it would bloom from some angles, and the LED would
@@ -251,22 +237,6 @@ export function SceneView({
     for (const { mesh, material } of glowing) {
       if (material.emissiveIntensity >= 1) mesh.layers.enable(BLOOM_LAYER);
       else mesh.layers.disable(BLOOM_LAYER);
-    }
-    const count = Math.max(peaks.length, live?.led_a.length ?? 0);
-    for (let channel = 0; channel < count; channel += 1) peaks[channel] = live?.led_a[channel] ?? 0;
-    peaks.length = count;
-    for (const screen of built.screens) {
-      const image = screens.current[screen.channel];
-      if (image !== undefined && image !== screen.shown) showScreen(screen, image);
-    }
-    for (const slide of built.slides) {
-      slide.node.position.copy(slide.rest);
-      if (live?.switches[slide.channel] === 1) slide.node.position.add(slide.delta);
-    }
-    for (const turn of built.turns) {
-      const value = turn.horn ? (live?.horn_deg?.[turn.channel] ?? turn.value) : (live?.params?.[turn.channel] ?? turn.value);
-      turned.setFromAxisAngle(turn.axis, turn.angle(value));
-      turn.node.quaternion.copy(turned).multiply(turn.rest);
     }
   });
 

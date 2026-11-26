@@ -59,7 +59,7 @@ export function siteData(
   site: Site,
   shown: Readonly<Record<string, string>>,
   scenes: Readonly<Record<string, readonly ScenePart[]>>,
-  pictures: readonly string[] = [],
+  pictures: SiteData["pictures"] = { parts: [], blocks: [] },
 ): SiteData {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const texts: Record<string, string> = {};

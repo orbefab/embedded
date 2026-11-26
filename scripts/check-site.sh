@@ -6,7 +6,8 @@
 # drives that build once, on `vite preview`, for the checks that need the install line. Then
 # it runs the build as it deploys, whose own files must show no install line.
 # The footer links the repo either way. The build must serve the AVR runtime source every
-# Block's NOTICE names, and every listed part must have a current picture in apps/site/pictures.
+# Block's NOTICE names, and every listed part and every Block must have a current picture in
+# apps/site/pictures.
 # Playwright then drives that build in headless Chromium: a short `@vite-smoke` subset on
 # `vite preview` (home, one part page, one Block page) and the full site suite on
 # `wrangler dev --local`.
@@ -170,10 +171,10 @@ for (const row of index.items.filter((row) => row.type === "block")) {
   }
 }' "$dist/r" "https://orbefab.com/embedded/sources/$archive"
 echo "check-site: the build serves sources/$archive, the runtime source each Block NOTICE names"
-# Each listed part's card picture must be drawn from the model the registry records. The
+# Each listed part's and Block's card picture must be drawn from what the registry records. The
 # registry it reads is the one scripts/site.sh just built, so a --no-build shard skips it.
 if [[ $no_build -eq 0 ]]; then
-  node apps/site/scripts/pictures.ts check || fail "a part's picture is missing or stale, as the lines above say"
+  node apps/site/scripts/pictures.ts check || fail "a card's picture is missing or stale, as the lines above say"
 fi
 [[ -f apps/site/dist/wrangler-deploy.json ]] ||
   fail "the build has no wrangler deploy pointer at apps/site/dist/wrangler-deploy.json"

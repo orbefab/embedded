@@ -1103,6 +1103,25 @@ test("the Blocks page counts the parts each scene places", async ({ browser, hos
   await context.close();
 });
 
+test("every card on the Blocks page shows its Block's picture, and the pictures below the fold load lazily", async ({ browser, host }) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(`${host.base}/orbe/blocks/`);
+  const pictures = page.locator("[data-block] [data-testid=block-picture]");
+  expect(await pictures.count()).toBe(await page.locator("[data-block]").count());
+  const sources = await pictures.evaluateAll((nodes) =>
+    nodes.map((node) => ({ block: node.closest("[data-block]")?.getAttribute("data-block"), src: node.getAttribute("src"), loading: node.getAttribute("loading") })),
+  );
+  for (const { block, src, loading } of sources) {
+    expect(src).toBe(`/orbe/blocks/${block}/picture.webp`);
+    expect(loading).toBe("lazy");
+  }
+  const response = await page.request.get(new URL(sources[0]?.src ?? "", page.url()).href);
+  expect(response.status()).toBe(200);
+  expect(response.headers()["content-type"]).toContain("image/webp");
+  await context.close();
+});
+
 test("a part that only sits inside a board names that board", async ({ browser, host }) => {
   const context = await browser.newContext();
   const page = await context.newPage();
