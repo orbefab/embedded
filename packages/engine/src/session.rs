@@ -473,7 +473,7 @@ impl Session {
             })
         };
         let circuit = Circuit::with_actives(netlist, actives).map_err(fail)?;
-        let stores = Stores::new(&circuit.netlist, &circuit.layout);
+        let stores = Stores::new(&circuit.netlist, &circuit.layout, &circuit.actives);
         let start = Iterate::initial(&circuit);
         let mut solver = Solver::new(&circuit.layout);
         let start = op::settle(

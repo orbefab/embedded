@@ -12,8 +12,9 @@
 
 use orbe_model::Time;
 
-use crate::netlist::{Model, Netlist};
+use crate::netlist::{Model, NetId, Netlist};
 
+use crate::active;
 use crate::element;
 use crate::mna::{Layout, Node, Solution};
 use crate::newton::{ABSTOL, Integration, RELTOL, VNTOL};
@@ -22,6 +23,26 @@ use crate::newton::{ABSTOL, Integration, RELTOL, VNTOL};
 /// has one sign on every step, so the errors of the few hundred steps of a swing add up. At this
 /// share a 10 ns RC edge stays within 1e-5 of its swing.
 const SHARE: f64 = 1e-7;
+
+/// The share of its current's range a supply capacitor's current may be off by on one step. A
+/// capacitor across a supply holds a level its supply sets, and the ripple a chip's load puts on
+/// it is what a user reads of it: its current. A voltage error `e` over a step `h` moves that
+/// current by `C e / h`, so while its supply holds it the capacitor may be off by this share of
+/// its current's range times `h / C`, when that is more than its own tolerance. At 1 nV an end,
+/// the 1 uF on an SSD1306 module's 5 V input took steps of nanoseconds after every I2C edge and
+/// set 95% of a 2 s run's steps. At this share the module's currents stay within 0.81 of the
+/// bound, and the run takes 37% fewer steps. At 1e-4 they left the bound by 1.21 times. A share
+/// of the voltage's level instead, even 1e-9, left a 10 uF rail capacitor's current at a row by
+/// 3.8 times the bound.
+const SUPPLY_SHARE: f64 = 7e-5;
+
+/// The share of its level a supply capacitor's voltage stays within, over its range since t = 0,
+/// while its supply holds it. Past it the supply has let go, its voltage is what a user reads,
+/// and the capacitor keeps its own tolerance. The SSD1306 module's rails move 0.26% of their
+/// level when its panel turns on from 5 V, and its 3.3 V rail 1.01% from 3.3 V, its regulator
+/// in dropout. A Nano's 30 mA 3V3 rail that a NeoPixel stick pulls into its current limit sags
+/// 5.2%, and then reports its lowest point to within 0.2 uV of 1 nV an end.
+const HELD: f64 = 2e-2;
 
 /// The charge a device's capacitance may be off by on one step, as SPICE's `chgtol`, up to
 /// [`DEVICE_SHARE`] of its range. A junction or a gate of a few picofarads that swings is then
@@ -71,6 +92,10 @@ struct Store {
     charge: f64,
     /// The index of the part the store is in, in netlist order.
     part: usize,
+    /// A capacitor part across a supply: across the supply pins of an active chip or the pins
+    /// it drives its outputs from, or across a linear regulator's input or output and its
+    /// ground. While its supply holds it, its current is held to [`SUPPLY_SHARE`] of its range.
+    supply: bool,
 }
 
 impl Store {
@@ -155,6 +180,26 @@ impl Store {
         SHARE * (hi - lo) + self.floor(hi - lo, answers)
     }
 
+    /// What a supply capacitor's state may be off by on a step of `h` seconds that ends at
+    /// `x`, from its state's range and its current's range, each widened to the step's end. 0 on
+    /// any other store, and on one whose range is more than `HELD` of its level.
+    fn supply_tolerance(
+        &self,
+        (lo, hi): (f64, f64),
+        (flo, fhi): (f64, f64),
+        x: &Solution,
+        h: f64,
+    ) -> f64 {
+        let held = hi - lo <= HELD * lo.abs().max(hi.abs());
+        match self.supply && held {
+            true => {
+                let flow = self.flow(x);
+                SUPPLY_SHARE * (fhi.max(flow) - flo.min(flow)) * h / self.size
+            }
+            false => 0.0,
+        }
+    }
+
     /// Whether the slope at `held` left the one at `step` by more than Newton's tolerance on
     /// the flow.
     fn slope_moved(&self, step: &Solution, held: &Solution) -> bool {
@@ -169,7 +214,8 @@ pub(crate) struct Stores {
 }
 
 impl Stores {
-    pub(crate) fn new(netlist: &Netlist, layout: &Layout) -> Stores {
+    pub(crate) fn new(netlist: &Netlist, layout: &Layout, actives: &[active::Chip]) -> Stores {
+        let supplies = supplies(netlist, actives);
         let mut stores = Vec::new();
         for (id, part) in netlist.parts() {
             for cap in element::Device::charges(&part.model) {
@@ -183,6 +229,12 @@ impl Stores {
                         _ => CHGTOL,
                     },
                     part: id.index(),
+                    supply: match &part.model {
+                        Model::Capacitor(capacitor) => supplies
+                            .iter()
+                            .any(|&(a, b)| capacitor.pins == [a, b] || capacitor.pins == [b, a]),
+                        _ => false,
+                    },
                 });
             }
         }
@@ -195,6 +247,7 @@ impl Stores {
                     inductor: true,
                     charge: 0.0,
                     part: id.index(),
+                    supply: false,
                 });
             }
         }
@@ -236,6 +289,25 @@ impl Stores {
             .fold(f64::INFINITY, f64::min);
         (seconds * 1e12) as u64
     }
+}
+
+/// The pairs of nets a supply capacitor sits across: each active chip's supply and ground, the
+/// supply and ground it drives its outputs and its draw from, and each linear regulator's input
+/// and output with its ground.
+fn supplies(netlist: &Netlist, actives: &[active::Chip]) -> Vec<(NetId, NetId)> {
+    let mut pairs = Vec::new();
+    for chip in actives {
+        pairs.extend(chip.outputs.iter().map(|output| (output.vcc, output.gnd)));
+        pairs.extend(chip.supply.map(|supply| (supply.vcc, supply.gnd)));
+        pairs.extend(chip.draw);
+    }
+    for (_, part) in netlist.parts() {
+        if let Model::LinearRegulator(regulator) = &part.model {
+            let [input, output, ground] = regulator.pins;
+            pairs.extend([(input, ground), (output, ground)]);
+        }
+    }
+    pairs
 }
 
 /// The accepted points before the latest one that the next step reads, since its segment
@@ -316,12 +388,13 @@ impl Past {
     }
 }
 
-/// Each store's lowest and highest state since t = 0, in `Stores` order, and the time in ps
-/// before which a step that starts is held to its charge floor. The tolerance is a share of
-/// that range, so it does not depend on the level the store sits at.
+/// Each store's lowest and highest state since t = 0, in `Stores` order, its lowest and highest
+/// flow, and the time in ps before which a step that starts is held to its charge floor. The
+/// tolerance is a share of that range, so it does not depend on the level the store sits at.
 #[derive(Clone, Debug)]
 pub(crate) struct Ranges {
     spans: Vec<(f64, f64)>,
+    flows: Vec<(f64, f64)>,
     until: Vec<u64>,
 }
 
@@ -332,6 +405,11 @@ impl Ranges {
                 .stores
                 .iter()
                 .map(|store| (store.state(x), store.state(x)))
+                .collect(),
+            flows: stores
+                .stores
+                .iter()
+                .map(|store| (store.flow(x), store.flow(x)))
                 .collect(),
             until: vec![0; stores.stores.len()],
         }
@@ -347,6 +425,15 @@ impl Ranges {
                 .map(|(store, &(lo, hi))| {
                     let state = store.state(x);
                     (lo.min(state), hi.max(state))
+                })
+                .collect(),
+            flows: stores
+                .stores
+                .iter()
+                .zip(&self.flows)
+                .map(|(store, &(lo, hi))| {
+                    let flow = store.flow(x);
+                    (lo.min(flow), hi.max(flow))
                 })
                 .collect(),
             until: self.until.clone(),
@@ -366,6 +453,7 @@ impl Ranges {
         let end = at.as_ps().saturating_add(ANSWER_PS);
         Ranges {
             spans: self.spans.clone(),
+            flows: self.flows.clone(),
             until: stores
                 .stores
                 .iter()
@@ -396,7 +484,8 @@ pub(crate) struct Error {
 /// last Newton iteration moved each unknown. Each store's state is held to
 /// `SHARE` of its range, the step's end included, plus its floor, so a store whose range is
 /// still 0 is held to a few nanovolts. A device capacitance that answers a chip's or a core's
-/// edge at `at` may use its charge floor. On a nonlinear circuit the step is also allowed how
+/// edge at `at` may use its charge floor, and a supply capacitor the share of its current's
+/// range that the step's length allows. On a nonlinear circuit the step is also allowed how
 /// far the solve's last iteration moved it: Newton stops within its own tolerance of the level,
 /// and an error under that is the solve's, not the step's.
 ///
@@ -419,10 +508,10 @@ pub(crate) fn error(
     let since = |then: Time| seconds(at.as_ps() - then.as_ps());
     let mut ratio = 0.0f64;
     let mut worst = None;
-    for (k, (store, (&(lo, hi), &until))) in stores
+    for (k, (store, ((&(lo, hi), &flows), &until))) in stores
         .stores
         .iter()
-        .zip(ranges.spans.iter().zip(&ranges.until))
+        .zip(ranges.spans.iter().zip(&ranges.flows).zip(&ranges.until))
         .enumerate()
     {
         let x0 = store.state(last);
@@ -455,7 +544,10 @@ pub(crate) fn error(
             }
         };
         let answers = at.as_ps() < until;
-        let tolerance = store.tolerance((lo.min(x), hi.max(x)), answers) + store.moved(moved);
+        let tolerance = store
+            .tolerance((lo.min(x), hi.max(x)), answers)
+            .max(store.supply_tolerance((lo.min(x), hi.max(x)), flows, next, h))
+            + store.moved(moved);
         let over = error.abs() / tolerance;
         if over > ratio {
             worst = Some(k);
@@ -481,7 +573,12 @@ mod tests {
         /// Spans with no store answering an edge.
         fn of(spans: Vec<(f64, f64)>) -> Ranges {
             let until = vec![0; spans.len()];
-            Ranges { spans, until }
+            let flows = vec![(0.0, 0.0); spans.len()];
+            Ranges {
+                spans,
+                flows,
+                until,
+            }
         }
     }
 
@@ -495,6 +592,7 @@ mod tests {
                 inductor: false,
                 charge: CHGTOL,
                 part: 0,
+                supply: false,
             }],
         }
     }
@@ -606,6 +704,45 @@ mod tests {
         assert_eq!(ratio([0.0, 1.0]), ratio([0.0, 0.0]));
     }
 
+    /// A supply capacitor whose state stays within `HELD` of its level may be off by
+    /// `SUPPLY_SHARE` of its current's range, the step's end included, times the step over its
+    /// capacitance. Any other store, and one that sagged, is allowed nothing more.
+    #[test]
+    fn a_supply_capacitor_is_held_to_a_share_of_its_current_s_range() {
+        let cap = |supply: bool| Store {
+            ends: [Node::Row(0), Node::Ground],
+            branch: 1,
+            size: 1e-6,
+            inductor: false,
+            charge: 0.0,
+            part: 0,
+            supply,
+        };
+        let near = |got: f64, want: f64| (got - want).abs() <= 1e-9 * want;
+        // 1 uF at 5 V that has carried 0 to 0.4 mA, over a 100 ns step: 7e-5 * 4e-4 * 1e-7 / 1e-6.
+        let inside = Solution::from(vec![5.0, 2e-4]);
+        let got = cap(true).supply_tolerance((5.0, 5.0), (0.0, 4e-4), &inside, 1e-7);
+        assert!(near(got, 2.8e-9), "{got}");
+        // Twice the step, twice the tolerance.
+        let got = cap(true).supply_tolerance((5.0, 5.0), (0.0, 4e-4), &inside, 2e-7);
+        assert!(near(got, 5.6e-9), "{got}");
+        // 0.6 mA at the step's end widens the range to 0.6 mA.
+        let outside = Solution::from(vec![5.0, 6e-4]);
+        let got = cap(true).supply_tolerance((5.0, 5.0), (0.0, 4e-4), &outside, 1e-7);
+        assert!(near(got, 4.2e-9), "{got}");
+        assert_eq!(
+            cap(false).supply_tolerance((5.0, 5.0), (0.0, 4e-4), &inside, 1e-7),
+            0.0
+        );
+        // 2% of 5 V is held, and a sag past it is not.
+        let got = cap(true).supply_tolerance((4.9, 5.0), (0.0, 4e-4), &inside, 1e-7);
+        assert!(near(got, 2.8e-9), "{got}");
+        assert_eq!(
+            cap(true).supply_tolerance((4.8, 5.0), (0.0, 4e-4), &inside, 1e-7),
+            0.0
+        );
+    }
+
     /// A device's capacitance is held to its charge, 2e-16 C, up to 3e-6 of its range. One that
     /// has not moved, a capacitor part and a large capacitance keep Newton's 1 nV an end.
     #[test]
@@ -617,6 +754,7 @@ mod tests {
             inductor: false,
             charge,
             part: 0,
+            supply: false,
         };
         let near = |got: f64, want: f64| (got - want).abs() <= 1e-9 * want;
         // 1 pF that has not moved, or has rippled 0.1 mV: 3e-6 of it is under 1 nV an end.
@@ -648,6 +786,7 @@ mod tests {
             inductor: false,
             charge,
             part: 0,
+            supply: false,
         };
         let stores = Stores {
             stores: vec![cap(1, CHGTOL), cap(2, CHGTOL), cap(3, 0.0)],
