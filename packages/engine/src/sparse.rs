@@ -15,6 +15,13 @@ pub(crate) const MAX_UNKNOWNS: usize = 4096;
 /// and each multiplier stays under 1 / `THRESHOLD`.
 const THRESHOLD: f64 = 1e-3;
 
+/// The most unknowns a pattern keeps a dense slot table for, 4 MiB of slots. A larger
+/// pattern finds each slot by a binary search of its column.
+const DENSE_UNKNOWNS: usize = 1024;
+
+/// A dense table's mark for a row and column with no entry.
+const NO_SLOT: u32 = u32::MAX;
+
 /// Where a system has entries: for each column, its rows, ascending.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Pattern {
@@ -22,9 +29,32 @@ pub(crate) struct Pattern {
     /// Column `j`'s rows are `rows[start[j]..start[j + 1]]`.
     start: Vec<usize>,
     rows: Vec<usize>,
+    /// For at most `DENSE_UNKNOWNS` unknowns, the slot of row `i` in column `j` at `j * n + i`,
+    /// or `NO_SLOT`. Made from `start` and `rows`, so it finds the slot the search would.
+    dense: Option<Box<[u32]>>,
 }
 
 impl Pattern {
+    /// The pattern with `n` unknowns and these columns, with its dense table.
+    fn new(n: usize, start: Vec<usize>, rows: Vec<usize>) -> Pattern {
+        let dense = (n <= DENSE_UNKNOWNS).then(|| {
+            let mut table = vec![NO_SLOT; n * n].into_boxed_slice();
+            for col in 0..n {
+                for slot in start[col]..start[col + 1] {
+                    table[col * n + rows[slot]] =
+                        u32::try_from(slot).expect("a dense pattern has under 2^32 entries");
+                }
+            }
+            table
+        });
+        Pattern {
+            n,
+            start,
+            rows,
+            dense,
+        }
+    }
+
     /// Whether each row has one entry.
     fn single_rows(&self) -> Vec<bool> {
         let mut entries = vec![0usize; self.n];
@@ -36,11 +66,7 @@ impl Pattern {
 
     /// `n` unknowns and no entry.
     pub(crate) fn empty(n: usize) -> Pattern {
-        Pattern {
-            n,
-            start: vec![0; n + 1],
-            rows: Vec::new(),
-        }
+        Pattern::new(n, vec![0; n + 1], Vec::new())
     }
 
     pub(crate) fn n(&self) -> usize {
@@ -53,7 +79,17 @@ impl Pattern {
     }
 
     /// The index of the entry at `row` and `col` in a value list on this pattern.
+    #[inline]
     pub(crate) fn slot(&self, row: usize, col: usize) -> Option<usize> {
+        if let Some(table) = &self.dense {
+            let slot = table[col * self.n + row];
+            return (slot != NO_SLOT).then_some(slot as usize);
+        }
+        self.search(row, col)
+    }
+
+    /// `slot`, by a binary search of the column.
+    fn search(&self, row: usize, col: usize) -> Option<usize> {
         let (from, to) = (self.start[col], self.start[col + 1]);
         self.rows[from..to]
             .binary_search(&row)
@@ -76,11 +112,7 @@ impl Pattern {
             rows.extend(column);
             start.push(rows.len());
         }
-        Pattern {
-            n: self.n,
-            start,
-            rows,
-        }
+        Pattern::new(self.n, start, rows)
     }
 
     /// The slots of column `col`'s entries.
@@ -910,6 +942,27 @@ mod tests {
         .unwrap();
         let step = shape.order.iter().position(|&col| col == branch).unwrap();
         assert_eq!(shape.pivot[step], light, "{shape:?}");
+    }
+
+    #[test]
+    fn the_dense_table_finds_the_slot_the_search_finds() {
+        let mut rng = Lcg(11);
+        for n in [1, 7, 40, DENSE_UNKNOWNS, DENSE_UNKNOWNS + 1] {
+            let entries: Vec<(usize, usize)> = (0..4 * n)
+                .map(|_| ((rng.next() as usize) % n, (rng.next() as usize) % n))
+                .collect();
+            let pattern = Pattern::empty(n).with(entries);
+            assert_eq!(pattern.dense.is_some(), n <= DENSE_UNKNOWNS);
+            for _ in 0..20_000 {
+                let (row, col) = ((rng.next() as usize) % n, (rng.next() as usize) % n);
+                assert_eq!(pattern.slot(row, col), pattern.search(row, col));
+            }
+            for col in 0..n {
+                for slot in pattern.column_slots(col) {
+                    assert_eq!(pattern.slot(pattern.row(slot), col), Some(slot));
+                }
+            }
+        }
     }
 
     #[test]
