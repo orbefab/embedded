@@ -258,6 +258,13 @@ impl orbe_avr::Bus for Bus {
             && !self.notices_wait()
     }
 
+    /// The stepped store sets `SREG` and then takes no interrupt while none is pending, and a
+    /// free run ends before the next event, so none becomes pending inside it.
+    #[inline(always)]
+    fn store_writes_sreg(&self, addr: u16) -> bool {
+        addr == SREG && self.pending_irq() == 0
+    }
+
     /// `SBI` writes a one into one bit. `CBI` writes a zero.
     ///
     /// Bits in the strobe mask are not copied from the current value, so a

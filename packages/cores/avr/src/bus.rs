@@ -65,6 +65,15 @@ pub trait Bus {
     /// runs inside a free run and writes nothing.
     fn store_idle(&self, core: &Core, addr: u16, value: u8) -> bool;
 
+    /// A store at `addr` writes only the core's `SREG`, and no interrupt waits to be taken, so
+    /// setting `I` takes none. An `OUT` there runs inside a free run and writes `SREG` itself.
+    /// Arduino's `millis()` restores `SREG` that way after reading its count under `CLI`.
+    #[inline(always)]
+    fn store_writes_sreg(&self, addr: u16) -> bool {
+        let _ = addr;
+        false
+    }
+
     /// Sets or clears bit `bit` at `addr`. The chip applies write-one-to-clear where a register
     /// has it. `SBI` and `CBI` are the callers.
     fn write_bit(&mut self, core: &mut Core, addr: u16, bit: u8, set: bool);

@@ -569,3 +569,41 @@ fn a_poll_of_a_pin_no_group_watches_follows_a_host_drive_as_stepped() {
         "PC7",
     );
 }
+
+/// Arduino's `millis()` reads the count its overflow handler keeps under `CLI` and restores
+/// `SREG` with `OUT`, which sets `I` again. The poll here does that and loops while the count
+/// has not moved. `TOV0` sets at every offset of a pass, and the handler's entry must land where
+/// stepping takes it.
+#[test]
+fn a_millis_poll_that_restores_sreg_enters_the_overflow_as_stepped() {
+    const SREG: u16 = 0x3F;
+    const CLI: u16 = 0x94F8;
+    for preset in 0..=255u16 {
+        let mut main = vec![ldi(16, preset), out(16, TCNT0), ldi(16, 1)];
+        main.extend(sts(16, TIMSK0));
+        main.extend([SEI, out(16, TCCR0B)]);
+        let poll = MAIN + main.len();
+        main.extend([in_io(18, SREG), CLI]);
+        main.extend(lds(16, FLAG));
+        main.extend([out(18, SREG), rr(0x1400, 16, 20)]);
+        let branch = MAIN + main.len();
+        main.push(brbs(1, (poll as i32 - branch as i32 - 1) as u16));
+        main.extend([rr(0x2C00, 20, 16), inc(21)]);
+        main.push(rjmp(MAIN + main.len(), poll));
+        let mut isr = lds(17, FLAG).to_vec();
+        isr.push(inc(17));
+        isr.extend(sts(17, FLAG));
+        isr.push(RETI);
+        let words = image(&main, &[TIMER0_OVF], &isr);
+        let label = format!("TCNT0 from {preset}");
+        matches_stepping(&words, &[97, 300, 777, 1501, 3000], &label);
+        let mut cpu = Cpu::new();
+        cpu.load_words(&words);
+        step_until(&mut cpu, 3000);
+        assert!(
+            cpu.reg(21) >= 8,
+            "{label}: the poll saw {} counts",
+            cpu.reg(21)
+        );
+    }
+}

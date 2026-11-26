@@ -84,6 +84,10 @@ impl Core {
                 self.skip_if(set, next, skip);
             }
             Op::Out { r, addr } if bus.store_idle(self, addr, self.at(r)) => self.finish(next, 1),
+            Op::Out { r, addr } if bus.store_writes_sreg(addr) => {
+                self.sreg = self.at(r);
+                self.finish(next, 1);
+            }
             Op::Sts { r, addr } if bus.store_idle(self, addr, self.at(r)) => {
                 self.finish(pc.wrapping_add(2), 2);
             }
