@@ -40,8 +40,10 @@
 //! step's start and compares the cycle with the run's limit, the next timer match and the cycle
 //! the lines can next move at. The run ends at an op that writes one of those, at a trap, at an
 //! access that can move the lines, at a PC it does not keep, or at that horizon, and the next
-//! step makes every check. Every op, interrupt, exception and timer match lands on the
-//! instruction and cycle that a full step before each op gives.
+//! step makes every check. The commonest ops of a run, when their window, coprocessor, loop-end
+//! and spin checks find nothing, run in line, and every other op runs the full way. Every op,
+//! interrupt, exception and timer match lands on the instruction and cycle that a full step
+//! before each op gives.
 //!
 //! Both chips select the hardware alignment option, so an unaligned load or store in data RAM
 //! completes at its own address. Where [`Bus::instruction_bus`] says an address is on the

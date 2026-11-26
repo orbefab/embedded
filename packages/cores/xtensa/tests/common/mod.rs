@@ -83,6 +83,7 @@ pub fn run_in_pieces<C: Config, B: Bus>(
 /// moves the lines, which is true of a bus whose lines move only with time, so the core's
 /// straight runs go on past its loads and stores. A plain bus keeps no version, so the core
 /// makes a full step before every op on it.
+#[derive(Clone)]
 pub struct Straight<B> {
     pub bus: B,
     version: Option<u64>,

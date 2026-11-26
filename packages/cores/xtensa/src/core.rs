@@ -11,6 +11,7 @@ use crate::special::{Access, CCOMPARE, EPC, EPS, Sr};
 
 mod decodes;
 mod options;
+mod simple;
 
 use decodes::{Decodes, Kept, Stores};
 
@@ -546,9 +547,14 @@ impl<C: Config> Core<C> {
                 self.cycle.0 += 1;
             }
             self.refetch = false;
-            match self.run(bus, kept) {
-                Ok(_) if !kept.rechecks => {}
-                Ok(_) => break,
+            let ran = if self.clear(kept) {
+                self.run_clear(bus, kept)
+            } else {
+                self.run(bus, kept).map(drop)
+            };
+            match ran {
+                Ok(()) if !kept.rechecks => {}
+                Ok(()) => break,
                 Err(trap) => {
                     done = self.trap(trap);
                     break;
