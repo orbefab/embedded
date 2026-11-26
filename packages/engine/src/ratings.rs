@@ -719,15 +719,13 @@ impl Ratings {
                 window.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
                 self.last,
             );
-            let ground = row[window.gnd].get();
-            let v = row[window.column].get() - ground;
-            let low = window.below.map(|margin| -margin);
-            let high = window.above.map(|ceiling| match ceiling {
-                Ceiling::OverSupply(margin) => row[window.vcc].get() - ground + margin,
-                Ceiling::Fixed(volts) => volts,
-            });
-            let below = low.is_some_and(|low| v < low && exceeds_rounded(-v, -significant(low)));
-            let above = high.is_some_and(|high| v > high && exceeds_rounded(v, significant(high)));
+            let WindowReading {
+                v,
+                low,
+                high,
+                below,
+                above,
+            } = window.read(row);
             window.over = below || above;
             if !window.over {
                 continue;
@@ -779,14 +777,14 @@ impl Ratings {
                     *over_ps += dt;
                 }
             }
-            let ground = row[limit.pin_gnd].get();
-            let vi = row[limit.pin_in].get() - ground;
-            let vo = row[limit.pin_out].get() - ground;
-            let i = -row[limit.iout].get();
-            let vout = limit.reg.output_voltage.si.get();
-            let (vo_min, drop) = limit_drop(&limit.reg, i, vi);
-            let sag = LIMIT_SAG_FRACTION * vout;
-            let clamped = vo_min > 0.0 && drop >= sag;
+            let Clamp {
+                vo,
+                current: i,
+                vout,
+                drop,
+                sag,
+                clamped,
+            } = limit.read(row);
             if !clamped {
                 limit.clamped_since = None;
                 limit.last_clamped = None;
@@ -994,11 +992,19 @@ impl Ratings {
     /// [`Self::findings`] and each rating [`Self::over_now`], through `probe` when it is after
     /// the last sample: the time, the row there, and the cores whose drive the row was solved
     /// with. A probe is not kept, so the next accepted step samples as though it had not run.
+    /// When [`Self::quiet_after`] says nothing is over before or after the probe, no copy is
+    /// sampled.
     pub(crate) fn now(&self, probe: Option<(Time, &[Finite], &[active::Core])>) -> Vec<Diagnostic> {
         let mut probed = None;
+        let mut quiet = false;
         if let Some((at, row, cores)) = probe
             && self.last.is_none_or(|last| at > last)
         {
+            quiet = self.quiet_after(at, row, cores);
+            // A debug build samples the copy anyway, to check that it finds nothing.
+            if quiet && !cfg!(debug_assertions) {
+                return Vec::new();
+            }
             let mut ratings = self.clone();
             ratings.sample(at, row, cores);
             probed = Some(ratings);
@@ -1006,7 +1012,62 @@ impl Ratings {
         let ratings = probed.as_ref().unwrap_or(self);
         let mut found = ratings.findings();
         found.extend(ratings.over_now());
+        debug_assert!(!quiet || found.is_empty(), "a quiet probe found {found:?}");
         found
+    }
+
+    /// Nothing is over now, and a sample of `row` at `at` would leave nothing over: no watch,
+    /// window, regulator or drive has an excursion, none would start one, and no sustained
+    /// rating would be over now. `false` when a sample might change that, such as a clamped
+    /// regulator or a drive pulse that ends. It reads what [`Self::sample`] reads the same way,
+    /// and changes nothing.
+    fn quiet_after(&self, at: Time, row: &[Finite], cores: &[active::Core]) -> bool {
+        if self.watches.iter().any(|w| w.excursion.is_some())
+            || self.windows.iter().any(|w| w.excursion.is_some())
+            || self.limits.iter().any(|l| l.excursion.is_some())
+            || self.drives.iter().any(|d| d.excursion.is_some())
+        {
+            return false;
+        }
+        let mut chips = self.chips.clone();
+        for gauge in &mut chips {
+            gauge.read(row, &cores[gauge.active]);
+        }
+        let back = self.restarted.then_some(self.last).flatten();
+        let mut decays = Decays::default();
+        let watches = self.watches.iter().all(|watch| {
+            let sample = magnitude(watch, &chips, row);
+            let reading = match (&watch.heat, self.timing) {
+                (Some(heat), Timing::Run) => {
+                    heat.filter
+                        .clone()
+                        .take_in(at, sample, back.is_some(), &mut decays)
+                }
+                _ => sample,
+            };
+            let over_now = watch
+                .heat
+                .as_ref()
+                .is_some_and(|heat| heat.recent.is_some())
+                && exceeds_rounded(sample, watch.limit_rounded);
+            !exceeds_rounded(reading, watch.limit_rounded) && !over_now
+        });
+        let windows = self.windows.iter().all(|window| {
+            let reading = window.read(row);
+            !reading.below && !reading.above
+        });
+        let limits = self.limits.iter().all(|limit| !limit.read(row).clamped);
+        let drives = self.drives.iter().all(|drive| {
+            let volts = row[drive.column].get().abs();
+            let loud = volts >= DRIVE_QUIET_V;
+            let judged = if loud {
+                volts > drive.peak && exceeds_rounded(volts, drive.max_rounded)
+            } else {
+                drive.peak >= DRIVE_QUIET_V
+            };
+            !judged
+        });
+        watches && windows && limits && drives
     }
 }
 
@@ -1220,6 +1281,68 @@ impl Pin {
             strong_pull_up: output.strong_pull_up,
             pull_down: output.pull_down,
             leakage: output.leakage,
+        }
+    }
+}
+
+/// A pin's voltage over its chip's ground in one row, the window there, and which side of it
+/// the voltage is past, each compared after rounding to 3 significant digits.
+struct WindowReading {
+    v: f64,
+    low: Option<f64>,
+    high: Option<f64>,
+    below: bool,
+    above: bool,
+}
+
+impl Window {
+    fn read(&self, row: &[Finite]) -> WindowReading {
+        let ground = row[self.gnd].get();
+        let v = row[self.column].get() - ground;
+        let low = self.below.map(|margin| -margin);
+        let high = self.above.map(|ceiling| match ceiling {
+            Ceiling::OverSupply(margin) => row[self.vcc].get() - ground + margin,
+            Ceiling::Fixed(volts) => volts,
+        });
+        let below = low.is_some_and(|low| v < low && exceeds_rounded(-v, -significant(low)));
+        let above = high.is_some_and(|high| v > high && exceeds_rounded(v, significant(high)));
+        WindowReading {
+            v,
+            low,
+            high,
+            below,
+            above,
+        }
+    }
+}
+
+/// A regulator's output over its ground and its load current in one row, its target, how far
+/// the output sits under what the input allows, and whether that holds it at its current limit.
+struct Clamp {
+    vo: f64,
+    current: f64,
+    vout: f64,
+    drop: f64,
+    sag: f64,
+    clamped: bool,
+}
+
+impl RegulatorLimit {
+    fn read(&self, row: &[Finite]) -> Clamp {
+        let ground = row[self.pin_gnd].get();
+        let vi = row[self.pin_in].get() - ground;
+        let vo = row[self.pin_out].get() - ground;
+        let current = -row[self.iout].get();
+        let vout = self.reg.output_voltage.si.get();
+        let (vo_min, drop) = limit_drop(&self.reg, current, vi);
+        let sag = LIMIT_SAG_FRACTION * vout;
+        Clamp {
+            vo,
+            current,
+            vout,
+            drop,
+            sag,
+            clamped: vo_min > 0.0 && drop >= sag,
         }
     }
 }
