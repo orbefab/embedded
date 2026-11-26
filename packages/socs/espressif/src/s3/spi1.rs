@@ -8,24 +8,28 @@
 //! `SPI_MEM_W0_REG` (or `SPI_MEM_W8_REG` when `SPI_MEM_USR_MISO_HIGHPART` is set) on. A user
 //! command while `SPI_MEM_MISC_REG` has `CS0_DIS` set or `CS1_DIS` clear is refused. That register
 //! resets to `0x2`, CS0 on and CS1 off, and the fixed commands do not look at it. Dummy cycles
-//! have no effect.
+//! count toward `0xab`'s 3-byte dummy phase and have no effect on other commands.
 //!
-//! The chip is the board's 16 MB Boya BY25Q128ES, JEDEC ID `68 40 18`, its quad enable bit set.
-//! It reads, reports its ID and three status registers, and runs page program (`0x02`, `0x32`,
-//! fixed `FLASH_PP`), 4 KB sector erase (`0x20`, fixed `FLASH_SE`), 32 KB block erase (`0x52`),
-//! 64 KB block erase (`0xd8`, fixed `FLASH_BE`) and chip erase (`0x60`, `0xc7`, fixed `FLASH_CE`).
-//! Program and erase require `WREN` (`WEL` set) first: without `WEL`, the command is ignored and
-//! `WIP` stays clear; with `WEL`, the write or erase runs and `WIP` stays set for the BY25Q128ES
-//! datasheet's typical time (0.7 ms page program, 70 ms sector erase, 0.25 s 32 KB block erase,
-//! 0.4 s 64 KB block erase, 100 s chip erase), clearing both `WIP` and `WEL` when done. Page
-//! program only clears bits (1 to 0) and wraps inside its 256-byte page; erase sets bytes to
-//! `0xFF`. While `WIP` is set, only status reads (`0x05`, `0x35`, `0x15`, fixed `FLASH_RDSR`) are
-//! allowed; every other flash command or cache access ends the run.
+//! The chip is the board's 16 MB Boya BY25Q128ES, JEDEC ID `68 40 18`, Device ID `17`, its quad
+//! enable bit set. It reads, reports its JEDEC ID (`0x9f`, fixed `FLASH_RDID`), Device ID /
+//! release from power-down (`0xab`, fixed `FLASH_RES`, BY25Q128ES Rev. 2.8 §7.3.7 and Table 8)
+//! and three status registers, and runs page program (`0x02`, `0x32`, fixed `FLASH_PP`), 4 KB
+//! sector erase (`0x20`, fixed `FLASH_SE`), 32 KB block erase (`0x52`), 64 KB block erase
+//! (`0xd8`, fixed `FLASH_BE`) and chip erase (`0x60`, `0xc7`, fixed `FLASH_CE`). Program and
+//! erase require `WREN` (`WEL` set) first: without `WEL`, the command is ignored and `WIP` stays
+//! clear; with `WEL`, the write or erase runs and `WIP` stays set for the BY25Q128ES Rev. 2.8
+//! §8.7 (`T = -40 C to 85 C`, `VCC = 2.7 to 3.6 V`) typical time (0.55 ms page program, 40 ms
+//! sector erase, 0.12 s 32 KB block erase, 0.25 s 64 KB block erase, 60 s chip erase), clearing
+//! both `WIP` and `WEL` when done. Page program only clears bits (1 to 0) and wraps inside its
+//! 256-byte page; erase sets bytes to `0xFF`. While `WIP` is set, only status reads (`0x05`,
+//! `0x35`, `0x15`, fixed `FLASH_RDSR`) are allowed; every other flash command or cache access
+//! ends the run.
 //!
 //! A status write can lock the flash for good, so it is refused before any status bit changes,
-//! with or without `WREN`. Any read, program or erase past the flash's end, any unsupported
-//! command, mode or phase length, and SPI1 auto-wait-idle, suspend or interrupt enables end the
-//! run.
+//! with or without `WREN`. Any read, program or erase past the flash's end, any unimplemented
+//! command (including deep power-down `0xb9`, software reset `0x66`/`0x99`, and suspend/resume
+//! `0x75`/`0x7a`), mode or phase length, and SPI1 auto-wait-idle, suspend or interrupt enables
+//! end the run.
 //!
 //! IDF v5.5.5, `components/soc/esp32s3/register/soc/spi_mem_reg.h`,
 //! `components/hal/esp32s3/include/hal/spimem_flash_ll.h`,
@@ -85,6 +89,7 @@ const COMMANDS: u32 = 0xfffc_0000;
 
 const USR_COMMAND: u32 = 1 << 31;
 const USR_ADDR: u32 = 1 << 30;
+const USR_DUMMY: u32 = 1 << 29;
 const USR_MISO: u32 = 1 << 28;
 const USR_MOSI: u32 = 1 << 27;
 const MOSI_HIGHPART: u32 = 1 << 25;
@@ -94,6 +99,9 @@ const FWRITE_DIO: u32 = 1 << 14;
 const FWRITE_QUAD: u32 = 1 << 13;
 const FWRITE_DUAL: u32 = 1 << 12;
 const FWRITE_UNSUPPORTED: u32 = FWRITE_QIO | FWRITE_DIO | FWRITE_DUAL;
+/// `SPI_MEM_RESANDRES` (bit 15 of `SPI_MEM_CTRL_REG`, default 1): `FLASH_RES` reads Device ID
+/// into `SPI_MEM_RD_STATUS_REG`.
+const CTRL_RESANDRES: u32 = 1 << 15;
 /// Octal phase bits in `SPI_MEM_CTRL_REG`: `FCMD_OCT`, `FADDR_OCT`, `FDIN_OCT`, `FDOUT_OCT`.
 const CTRL_OCT: u32 = (1 << 9) | (1 << 6) | (1 << 5) | (1 << 4);
 /// `SPI_MEM_FMEM_DDR_EN` (bit 0 of `SPI_MEM_DDR_REG`).
@@ -103,9 +111,14 @@ const CS0_DIS: u32 = 1;
 /// `SPI_MEM_MISC_REG` bit 1. Clear selects the second chip, which this flash is not.
 const CS1_DIS: u32 = 1 << 1;
 
+/// BY25Q128ES datasheet (`BYTe/QA-DT-007 Rev. 2.8`), Table 8 (p. 20).
 const JEDEC_ID: [u8; 3] = [0x68, 0x40, 0x18];
 /// What `RDID` reads with no flash on the bus, whose MISO line idles high.
 const NO_FLASH_ID: [u8; 3] = [0xff; 3];
+/// BY25Q128ES datasheet (`BYTe/QA-DT-007 Rev. 2.8`), Table 8 (p. 20): Device ID for `ABH`.
+const DEVICE_ID: u8 = 0x17;
+/// What `ABH` / `FLASH_RES` reads with no flash on the bus, whose MISO line idles high.
+const NO_FLASH_DEVICE_ID: u8 = 0xff;
 /// Status Register 1 bit 0: Write In Progress (BUSY).
 const WIP: u8 = 1 << 0;
 /// Status Register 1 bit 1: Write Enable Latch.
@@ -115,13 +128,14 @@ const QE: u8 = 1 << 1;
 
 /// Ticks per microsecond on the chip's 480 MHz tick timeline.
 const TICKS_PER_US: u64 = 480;
-/// BY25Q128ES datasheet typical program and erase times, in 480 MHz ticks:
-/// tPP = 0.7 ms, tSE = 70 ms, tBE1 (32 KB) = 0.25 s, tBE2 (64 KB) = 0.4 s, tCE = 100 s.
-pub(crate) const T_PP: u64 = 700 * TICKS_PER_US;
-pub(crate) const T_SE: u64 = 70_000 * TICKS_PER_US;
-pub(crate) const T_BE_32K: u64 = 250_000 * TICKS_PER_US;
-pub(crate) const T_BE_64K: u64 = 400_000 * TICKS_PER_US;
-pub(crate) const T_CE: u64 = 100_000_000 * TICKS_PER_US;
+/// BY25Q128ES datasheet (`BYTe/QA-DT-007 Rev. 2.8`), Section 8.7 AC Electrical Characteristics
+/// (`T = -40 C to 85 C`, `VCC = 2.7 to 3.6 V`, p. 72) typical program and erase times, in 480 MHz
+/// ticks: `tPP` = 0.55 ms, `tSE` = 40 ms, `tBE` (32 KB / 64 KB) = 0.12 s / 0.25 s, `tCE` = 60 s.
+pub(crate) const T_PP: u64 = 550 * TICKS_PER_US;
+pub(crate) const T_SE: u64 = 40_000 * TICKS_PER_US;
+pub(crate) const T_BE_32K: u64 = 120_000 * TICKS_PER_US;
+pub(crate) const T_BE_64K: u64 = 250_000 * TICKS_PER_US;
+pub(crate) const T_CE: u64 = 60_000_000 * TICKS_PER_US;
 
 /// Result of one SPI1 register write.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,6 +190,7 @@ pub(crate) struct Spi1 {
 impl Default for Spi1 {
     fn default() -> Spi1 {
         let mut regs = vec![0; (SIZE / 4) as usize];
+        regs[(CTRL / 4) as usize] = CTRL_RESANDRES;
         regs[(MISC / 4) as usize] = CS1_DIS;
         Spi1 {
             regs,
@@ -341,9 +356,18 @@ impl Spi1 {
                 self.check_oct_ddr(0xc7)?;
                 self.erase_chip(now, 0xc7, flash)
             }
+            FLASH_RES => {
+                if self.is_busy(now) {
+                    return Err(FlashRefusal::Busy(Some(0xab)));
+                }
+                self.check_oct_ddr(0xab)?;
+                if self.reg(CTRL) & CTRL_RESANDRES != 0 {
+                    self.regs[(RD_STATUS / 4) as usize] = u32::from(device_id(flash.as_deref()));
+                }
+                Ok(false)
+            }
             FLASH_READ => Err(FlashRefusal::Command(0x03)),
             FLASH_DP => Err(FlashRefusal::Command(0xb9)),
-            FLASH_RES => Err(FlashRefusal::Command(0xab)),
             FLASH_HPM => Err(FlashRefusal::Command(0xa3)),
             _ => Err(FlashRefusal::StartBits),
         }
@@ -385,12 +409,18 @@ impl Spi1 {
         } else {
             &[]
         };
+        let dummy_cycles = if user & USR_DUMMY != 0 {
+            (self.reg(USER1) & 0x3f) + 1
+        } else {
+            0
+        };
         let miso_len = if user & USR_MISO != 0 {
             ((self.reg(MISO_DLEN) & 0x3ff) as usize + 1).div_ceil(8)
         } else {
             0
         };
-        let (miso, mutated) = self.transact(now, command, user, addr, mosi, miso_len, flash)?;
+        let (miso, mutated) =
+            self.transact(now, command, user, addr, dummy_cycles, mosi, miso_len, flash)?;
         if !miso.is_empty() {
             let start = if user & MISO_HIGHPART != 0 { 32 } else { 0 };
             let end = (start + miso.len()).min(buffer.len());
@@ -412,6 +442,7 @@ impl Spi1 {
         command: u8,
         user: u32,
         addr: Option<(u32, u32)>,
+        dummy_cycles: u32,
         mosi: &[u8],
         miso_len: usize,
         flash: Option<&mut Flash>,
@@ -504,11 +535,27 @@ impl Spi1 {
                 let mutated = self.erase_chip(now, command, flash)?;
                 Ok((Vec::new(), mutated))
             }
-            0x99 => {
-                self.status[0] &= !WEL;
-                Ok((repeat(0), false))
+            // Release from Deep Power-Down / Read Device ID (BY25Q128ES Rev. 2.8 §7.3.7 & Table 8):
+            // either command alone (release only, Figure 29) or command + 3 dummy bytes followed
+            // by continuous Device ID (0x17) bytes on SO (Figure 30).
+            0xab => {
+                if user & (FWRITE_UNSUPPORTED | FWRITE_QUAD) != 0 {
+                    return Err(FlashRefusal::Mode(0xab));
+                }
+                let dummy_bits =
+                    addr.map_or(0, |(bits, _)| bits) + dummy_cycles + (mosi.len() as u32) * 8;
+                if miso_len == 0 {
+                    if dummy_bits != 0 {
+                        return Err(FlashRefusal::Length(0xab));
+                    }
+                    Ok((Vec::new(), false))
+                } else {
+                    if dummy_bits != 24 {
+                        return Err(FlashRefusal::Length(0xab));
+                    }
+                    Ok((repeat(device_id(flash.as_deref())), false))
+                }
             }
-            0xab | 0xb9 | 0x66 | 0x7a | 0x75 | 0xff => Ok((repeat(0), false)),
             other => Err(FlashRefusal::Command(other)),
         }
     }
@@ -588,6 +635,14 @@ fn jedec_id(flash: Option<&Flash>) -> [u8; 3] {
         NO_FLASH_ID
     } else {
         JEDEC_ID
+    }
+}
+
+fn device_id(flash: Option<&Flash>) -> u8 {
+    if flash.is_none_or(Flash::is_empty) {
+        NO_FLASH_DEVICE_ID
+    } else {
+        DEVICE_ID
     }
 }
 
@@ -1092,5 +1147,130 @@ mod tests {
             Some(0),
             "a fixed command ignores the select"
         );
+    }
+
+    #[test]
+    fn abh_returns_device_id_17_after_three_dummy_bytes_and_refuses_bad_phases() {
+        let mut f = flash(vec![0xff; flash::SECTOR]);
+        let mut s = spi1();
+
+        // 3 dummy bytes via MOSI + 1 read byte (the raw SPI1 sketch form).
+        s.write(Tick(0), W0, 0, Some(&mut f)).unwrap();
+        s.write(Tick(0), MOSI_DLEN, 23, Some(&mut f)).unwrap();
+        s.write(Tick(0), MISO_DLEN, 7, Some(&mut f)).unwrap();
+        s.write(
+            Tick(0),
+            USER,
+            USR_COMMAND | USR_MOSI | USR_MISO,
+            Some(&mut f),
+        )
+        .unwrap();
+        s.write(Tick(0), USER2, 7 << 28 | 0xab, Some(&mut f))
+            .unwrap();
+        s.write(Tick(0), CMD, USR, Some(&mut f)).unwrap();
+        assert_eq!(s.read(W0).unwrap() & 0xff, 0x17);
+
+        // 3 dummy bytes via 24-bit ADDR + continuous multi-byte MISO read.
+        let mut s = spi1();
+        assert_eq!(
+            send(&mut s, Some(&mut f), 0xab, Some(0), 3),
+            Ok(vec![0x17, 0x17, 0x17])
+        );
+
+        // 3 dummy bytes via 24 dummy cycles + 2 read bytes.
+        let mut s = spi1();
+        s.write(Tick(0), USER1, 23, Some(&mut f)).unwrap();
+        s.write(Tick(0), MISO_DLEN, 15, Some(&mut f)).unwrap();
+        s.write(
+            Tick(0),
+            USER,
+            USR_COMMAND | USR_DUMMY | USR_MISO,
+            Some(&mut f),
+        )
+        .unwrap();
+        s.write(Tick(0), USER2, 7 << 28 | 0xab, Some(&mut f))
+            .unwrap();
+        s.write(Tick(0), CMD, USR, Some(&mut f)).unwrap();
+        assert_eq!(s.read(W0).unwrap() & 0xffff, 0x1717);
+
+        // Release-only form (Figure 29): command only, no dummy, no MISO.
+        let mut s = spi1();
+        assert_eq!(send(&mut s, Some(&mut f), 0xab, None, 0), Ok(vec![]));
+
+        // With no flash attached, MISO idles high (0xff).
+        let mut s = spi1();
+        assert_eq!(send(&mut s, None, 0xab, Some(0), 1), Ok(vec![0xff]));
+
+        // Fixed FLASH_RES stores 0x17 (or 0xff with no flash) in RD_STATUS when RESANDRES is set.
+        let mut s = spi1();
+        s.write(Tick(0), CMD, FLASH_RES, Some(&mut f)).unwrap();
+        assert_eq!(s.read(RD_STATUS), Some(0x17));
+        s.write(Tick(0), CMD, FLASH_RES, None).unwrap();
+        assert_eq!(s.read(RD_STATUS), Some(0xff));
+        // With RESANDRES clear, RD_STATUS stays unchanged.
+        s.write(Tick(0), CTRL, 0, Some(&mut f)).unwrap();
+        s.write(Tick(0), RD_STATUS, 0xaa, Some(&mut f)).unwrap();
+        s.write(Tick(0), CMD, FLASH_RES, Some(&mut f)).unwrap();
+        assert_eq!(s.read(RD_STATUS), Some(0xaa));
+
+        // Bad phase lengths fail loudly: 0 dummy bytes with MISO, 16 dummy bits with MISO, or
+        // 24 dummy bits with no MISO.
+        let mut s = spi1();
+        assert_eq!(
+            send(&mut s, Some(&mut f), 0xab, None, 1),
+            Err(FlashRefusal::Length(0xab))
+        );
+        s.write(Tick(0), USER1, 15 << 26, Some(&mut f)).unwrap();
+        assert_eq!(
+            send(&mut s, Some(&mut f), 0xab, Some(0), 1),
+            Err(FlashRefusal::Length(0xab))
+        );
+        s.write(Tick(0), USER1, 23 << 26, Some(&mut f)).unwrap();
+        assert_eq!(
+            send(&mut s, Some(&mut f), 0xab, Some(0), 0),
+            Err(FlashRefusal::Length(0xab))
+        );
+
+        // ABH while WIP is set fails loudly with Busy.
+        let mut s = spi1();
+        s.write(Tick(0), CMD, FLASH_WREN, Some(&mut f)).unwrap();
+        program_user(&mut s, Tick(0), &mut f, 0x02, 0, &[0x55]).unwrap();
+        assert_eq!(
+            send_at(&mut s, Tick(1), Some(&mut f), 0xab, Some(0), 1),
+            Err(FlashRefusal::Busy(Some(0xab)))
+        );
+        assert_eq!(
+            s.write(Tick(1), CMD, FLASH_RES, Some(&mut f)),
+            Err(FlashRefusal::Busy(Some(0xab)))
+        );
+    }
+
+    #[test]
+    fn unimplemented_commands_fail_loudly_instead_of_returning_zeros() {
+        let mut f = flash(vec![0xff; flash::SECTOR]);
+        for cmd in [0xb9u8, 0x66, 0x99, 0x75, 0x7a, 0xff, 0x90, 0x4b, 0x5a, 0xa3] {
+            let mut s = spi1();
+            assert_eq!(
+                send(&mut s, Some(&mut f), cmd, None, 1),
+                Err(FlashRefusal::Command(cmd)),
+                "user command {cmd:#04x} must fail loudly"
+            );
+        }
+        for (bit, cmd) in [(FLASH_READ, 0x03), (FLASH_DP, 0xb9), (FLASH_HPM, 0xa3)] {
+            assert_eq!(
+                spi1().write(Tick(0), CMD, bit, Some(&mut f)),
+                Err(FlashRefusal::Command(cmd)),
+                "fixed command {cmd:#04x} must fail loudly"
+            );
+        }
+    }
+
+    #[test]
+    fn busy_times_match_by25q128es_rev2_8_minus40_to_85c_typicals() {
+        assert_eq!(T_PP, 550 * 480);
+        assert_eq!(T_SE, 40_000 * 480);
+        assert_eq!(T_BE_32K, 120_000 * 480);
+        assert_eq!(T_BE_64K, 250_000 * 480);
+        assert_eq!(T_CE, 60_000_000 * 480);
     }
 }

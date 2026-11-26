@@ -190,8 +190,8 @@ fn a_flash_rewrite_under_a_run_op_runs_the_new_op() {
     flash.write_mmu(0, 0);
     let mut chip = program.chip_on(&[]);
     chip.soc.attach_flash(flash);
-    // 40 MHz crystal: 70 ms sector erase + 0.7 ms page program = 2.83M cycles.
-    assert_eq!(a5_after(&mut chip, 3_200_000), 2);
+    // 40 MHz crystal: 40 ms sector erase + 0.55 ms page program = 1.622M cycles.
+    assert_eq!(a5_after(&mut chip, 1_800_000), 2);
     assert_eq!(chip.cores.core(CoreId::Pro).pc(), program.pc() - 3);
 
     // Calling IROM immediately after starting a flash erase (without waiting for WIP=0) fails loudly.
