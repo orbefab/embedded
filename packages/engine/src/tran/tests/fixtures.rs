@@ -225,3 +225,30 @@ pub(super) fn open(netlist: &Netlist, chips: Vec<active::Chip>, budget: Budget) 
     )
     .unwrap()
 }
+
+/// Each landing has one cause, each stall that ended no run was retried, and the iterations by
+/// purpose and by kind of solve each add up to the run solver's.
+pub(super) fn assert_counts_add_up(stats: &RunStats) {
+    let set = stats.set_by_plan
+        + stats.set_by_max_step
+        + stats.set_by_breakpoint
+        + stats.set_by_chip
+        + stats.set_by_watch;
+    assert_eq!(set, stats.landings, "{stats:?}");
+    assert!(stats.euler_retries <= stats.stalls, "{stats:?}");
+    let by_purpose = stats.start_iterations
+        + stats.landing_iterations
+        + stats.rejected_iterations
+        + stats.failed_iterations
+        + stats.locate_iterations
+        + stats.restart_iterations;
+    assert_eq!(by_purpose, stats.iterations, "{stats:?}");
+    let by_kind = stats.memo_hits + stats.refactors + stats.repivots + stats.reorders;
+    assert_eq!(by_kind, stats.iterations, "{stats:?}");
+    assert!(stats.landing_iterations >= stats.landings, "{stats:?}");
+    assert!(stats.row_iterations >= stats.row_probes, "{stats:?}");
+    let pacing: u64 = stats.pacing.iter().map(|(_, count)| count).sum();
+    assert!(pacing <= stats.landings, "{stats:?}");
+    let rejecting: u64 = stats.rejecting.iter().map(|(_, count)| count).sum();
+    assert!(rejecting <= stats.rejections, "{stats:?}");
+}

@@ -139,7 +139,14 @@ fn a_row_that_fails_twice_is_the_line_between_its_steps() {
     let (gridded, lines) = with_row_budget(&netlist, committed.grid, 1);
     let (gridless, none) = with_row_budget(&netlist, committed.stop.as_ps(), 1);
     assert_eq!(none, []);
-    assert_eq!(gridded.stats, gridless.stats);
+    // The rows only add probes, on copies of the run's solver.
+    let steps = |stats: &RunStats| RunStats {
+        row_probes: 0,
+        row_iterations: 0,
+        ..stats.clone()
+    };
+    assert_eq!(steps(&gridded.stats), steps(&gridless.stats));
+    assert!(gridded.stats.row_probes > 0 && gridless.stats.row_probes == 0);
     assert_eq!(
         serde_json::to_value(&gridded.observations).unwrap(),
         serde_json::to_value(&gridless.observations).unwrap()

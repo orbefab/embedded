@@ -346,6 +346,7 @@ impl System {
             scratch: Scratch::default(),
             memo: Memo::default(),
             work: 0,
+            solves: Solves::default(),
         };
         let solved = solver.solve(false);
         *self = solver.system;
@@ -379,6 +380,27 @@ pub(crate) struct Solver {
     memo: Memo,
     /// The multiply-adds of every factorization and solve so far.
     pub(crate) work: u64,
+    /// How each system so far was solved.
+    pub(crate) solves: Solves,
+}
+
+/// How a solver's systems were solved. Each is one Newton iteration.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Solves {
+    /// The memo held the system and its solution.
+    pub(crate) memo: u64,
+    /// Refactored on the pivots of kept factors.
+    pub(crate) refactored: u64,
+    /// Factored again with pivoting on a kept column order, because a kept pivot no longer passed.
+    pub(crate) repivoted: u64,
+    /// Factored on a fresh column order: a new pattern or new late unknowns.
+    pub(crate) reordered: u64,
+}
+
+impl Solves {
+    pub(crate) fn total(&self) -> u64 {
+        self.memo + self.refactored + self.repivoted + self.reordered
+    }
 }
 
 impl Solver {
@@ -392,10 +414,11 @@ impl Solver {
             scratch: Scratch::default(),
             memo: Memo::default(),
             work: 0,
+            solves: Solves::default(),
         }
     }
 
-    /// This solver's pattern and factors, with an empty memo and no work counted.
+    /// This solver's pattern and factors, with an empty memo and no work or solves counted.
     pub(crate) fn scratch(&self) -> Solver {
         Solver {
             system: System::on(Arc::clone(&self.system.pattern)),
@@ -404,6 +427,7 @@ impl Solver {
             scratch: Scratch::default(),
             memo: Memo::default(),
             work: 0,
+            solves: Solves::default(),
         }
     }
 
@@ -425,6 +449,7 @@ impl Solver {
             return Err(Failure::NonFinite { col: row });
         }
         if remember && let Some(x) = self.memo.find(&self.system) {
+            self.solves.memo += 1;
             return Ok(x);
         }
         #[cfg(test)]
@@ -450,11 +475,19 @@ impl Solver {
             None => Err(sparse::Refused::Pivot),
         };
         let k = match (refactored, kept) {
-            (Ok(()), Some(k)) => k,
+            (Ok(()), Some(k)) => {
+                self.solves.refactored += 1;
+                k
+            }
             (Err(sparse::Refused::NonFinite { col }), _) => {
+                self.solves.refactored += 1;
                 return Err(Failure::NonFinite { col });
             }
             (_, kept) => {
+                match kept {
+                    Some(_) => self.solves.repivoted += 1,
+                    None => self.solves.reordered += 1,
+                }
                 let order = match kept {
                     Some(k) => self.lus[k].shape.order(),
                     None => system.pattern.order(late),
@@ -778,6 +811,7 @@ mod tests {
             scratch: Scratch::default(),
             memo: Memo::default(),
             work: 0,
+            solves: Solves::default(),
         }
     }
 

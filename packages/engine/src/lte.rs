@@ -69,6 +69,8 @@ struct Store {
     /// capacitor part's voltage and current are what a user reads, and at a charge floor a 1 pF
     /// RC edge's current leaves its closed form by more than 1e-4 of its swing.
     charge: f64,
+    /// The index of the part the store is in, in netlist order.
+    part: usize,
 }
 
 impl Store {
@@ -180,6 +182,7 @@ impl Stores {
                         Model::Capacitor(_) => 0.0,
                         _ => CHGTOL,
                     },
+                    part: id.index(),
                 });
             }
         }
@@ -191,10 +194,20 @@ impl Stores {
                     size: coil.henry,
                     inductor: true,
                     charge: 0.0,
+                    part: id.index(),
                 });
             }
         }
         Stores { stores }
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.stores.len()
+    }
+
+    /// The index of the part store `k` is in, in netlist order.
+    pub(crate) fn part(&self, k: usize) -> usize {
+        self.stores[k].part
     }
 
     /// Whether a restart solve `held` left every store's slope where the step `step` put it,
@@ -373,6 +386,8 @@ impl Ranges {
 pub(crate) struct Error {
     /// The worst store's error over its tolerance. At most 1 accepts.
     pub(crate) ratio: f64,
+    /// The worst store, the first of any tie. `None` when every error is 0.
+    pub(crate) worst: Option<usize>,
     /// The order of the step's formula, which sets how the next step grows or shrinks.
     pub(crate) order: u32,
 }
@@ -403,10 +418,12 @@ pub(crate) fn error(
     let h = seconds(h_ps);
     let since = |then: Time| seconds(at.as_ps() - then.as_ps());
     let mut ratio = 0.0f64;
-    for (store, (&(lo, hi), &until)) in stores
+    let mut worst = None;
+    for (k, (store, (&(lo, hi), &until))) in stores
         .stores
         .iter()
         .zip(ranges.spans.iter().zip(&ranges.until))
+        .enumerate()
     {
         let x0 = store.state(last);
         let x = store.state(next);
@@ -439,10 +456,15 @@ pub(crate) fn error(
         };
         let answers = at.as_ps() < until;
         let tolerance = store.tolerance((lo.min(x), hi.max(x)), answers) + store.moved(moved);
-        ratio = ratio.max(error.abs() / tolerance);
+        let over = error.abs() / tolerance;
+        if over > ratio {
+            worst = Some(k);
+        }
+        ratio = ratio.max(over);
     }
     Error {
         ratio,
+        worst,
         order: past.order(),
     }
 }
@@ -472,6 +494,7 @@ mod tests {
                 size: 1.0,
                 inductor: false,
                 charge: CHGTOL,
+                part: 0,
             }],
         }
     }
@@ -593,6 +616,7 @@ mod tests {
             size: farad,
             inductor: false,
             charge,
+            part: 0,
         };
         let near = |got: f64, want: f64| (got - want).abs() <= 1e-9 * want;
         // 1 pF that has not moved, or has rippled 0.1 mV: 3e-6 of it is under 1 nV an end.
@@ -623,6 +647,7 @@ mod tests {
             size: 1e-12,
             inductor: false,
             charge,
+            part: 0,
         };
         let stores = Stores {
             stores: vec![cap(1, CHGTOL), cap(2, CHGTOL), cap(3, 0.0)],
