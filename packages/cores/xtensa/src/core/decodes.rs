@@ -40,10 +40,15 @@ pub(super) struct Kept {
     /// waits, whether `ICOUNT` counts, or when a timer next matches. So a straight run ends
     /// after it.
     pub(super) rechecks: bool,
+    /// A branch a spin can end with: one that compares and goes back a few bytes.
+    pub(super) back: bool,
+    /// The ops before this `back` branch were found to make no spin at the slot's code
+    /// version.
+    pub(super) spinless: bool,
 }
 
 impl Kept {
-    fn new<C: Config>(insn: Insn) -> Kept {
+    fn new<C: Config>(insn: Insn, pc: u32) -> Kept {
         let op = insn.op;
         let stores = match op {
             Op::S8I | Op::S16I | Op::S32I | Op::S32I_N | Op::S32NB | Op::S32E | Op::S32RI => {
@@ -58,6 +63,8 @@ impl Kept {
             stores,
             divides: matches!(op, Op::QUOU | Op::QUOS | Op::REMU | Op::REMS),
             rechecks: rechecks(op),
+            back: super::spin::closes(&insn, pc),
+            spinless: false,
             insn,
         }
     }
@@ -120,6 +127,8 @@ const EMPTY: Slot = Slot {
         stores: Stores::Never,
         divides: false,
         rechecks: true,
+        back: false,
+        spinless: false,
     },
 };
 
@@ -141,6 +150,12 @@ impl Taken {
     #[inline]
     pub(super) fn find(&self, pc: u32, version: u64) -> Option<usize> {
         find(&self.0, pc, version)
+    }
+
+    /// Records that the ops before the `back` branch in `slot` make no spin at the slot's code
+    /// version.
+    pub(super) fn set_spinless(&mut self, slot: usize) {
+        self.0[slot].kept.spinless = true;
     }
 }
 
@@ -201,7 +216,12 @@ impl Decodes {
         let at = index(pc);
         let slot = &mut slots[at];
         if slot.pc == pc && slot.raw == raw && slot.kept.insn.len == len {
-            slot.stamp = stamp(version);
+            let stamp = stamp(version);
+            if slot.stamp != stamp {
+                // The ops around a branch may have changed with the version.
+                slot.kept.spinless = false;
+                slot.stamp = stamp;
+            }
             return Some(at);
         }
         let insn = decode()?;
@@ -209,7 +229,7 @@ impl Decodes {
             pc,
             raw,
             stamp: stamp(version),
-            kept: Kept::new::<C>(insn),
+            kept: Kept::new::<C>(insn, pc),
         };
         Some(at)
     }
