@@ -1,13 +1,25 @@
 //! `orbe test`: each test file is a transcript of live commands, run in a fresh session and
 //! stopped at its first failed line.
 
+use std::ops::ControlFlow;
 use std::path::{Component, Path, PathBuf};
+use std::time::Duration;
 
 use orbe_scene::Files;
 
 use crate::command::Command;
-use crate::live::Live;
+use crate::live::{Live, STEP_BUDGET, StepTimeoutHint};
 use crate::reply::{Code, Data, Error, Reply};
+
+/// Progress of a running `step` line inside a test file.
+#[derive(Clone, Copy, Debug)]
+pub struct StepUpdate<'a> {
+    pub line: usize,
+    pub text: &'a str,
+    pub t_ps: u64,
+    pub end_ps: u64,
+    pub elapsed: Duration,
+}
 
 #[derive(Clone, Debug)]
 pub struct Line {
@@ -51,14 +63,30 @@ impl Report {
     }
 }
 
-/// Runs a test file's text on a scene in `files`. Paths in it start from `root`, the project
-/// folder above `tests/`.
+/// Runs a test file's text on a scene in `files` with the default [`STEP_BUDGET`] wall-time
+/// limit per `step`. Paths in it start from `root`, the project folder above `tests/`.
 pub fn run(files: Files, file: &Path, text: &str, root: &Path) -> Report {
+    run_with(files, file, text, root, STEP_BUDGET, &mut |_| {})
+}
+
+/// Runs a test file's text on a scene in `files`, holding each `step` to `step_budget` of wall
+/// time and calling `on_step` after each slice of a `step`. Paths in it start from `root`, the
+/// project folder above `tests/`.
+pub fn run_with(
+    files: Files,
+    file: &Path,
+    text: &str,
+    root: &Path,
+    step_budget: Duration,
+    on_step: &mut dyn FnMut(StepUpdate<'_>),
+) -> Report {
     let mut live = Live::new(file.display().to_string(), files);
     let mut scenes = Vec::new();
     let mut lines = Vec::new();
     let mut checked = false;
     for (index, line) in text.lines().enumerate() {
+        let line_number = index + 1;
+        let line_text = line.trim();
         let reply = match Command::parse(line, root) {
             Ok(None) => continue,
             Ok(Some(Command::Play | Command::Pause)) => live.refuse(Error::new(
@@ -70,7 +98,21 @@ pub fn run(files: Files, file: &Path, text: &str, root: &Path) -> Report {
                 if matches!(command, Command::Expect(_)) {
                     checked = true;
                 }
-                live.run(&command)
+                live.run_with_budget(
+                    &command,
+                    step_budget,
+                    StepTimeoutHint::Test,
+                    &mut |progress, elapsed| {
+                        on_step(StepUpdate {
+                            line: line_number,
+                            text: line_text,
+                            t_ps: progress.t_ps(),
+                            end_ps: progress.end_ps,
+                            elapsed,
+                        });
+                        ControlFlow::Continue(())
+                    },
+                )
             }
             Err(reason) => live.refuse(Error::new(Code::Usage, reason, "")),
         };
@@ -80,8 +122,8 @@ pub fn run(files: Files, file: &Path, text: &str, root: &Path) -> Report {
         }
         let ok = reply.ok();
         lines.push(Line {
-            number: index + 1,
-            text: line.trim().to_string(),
+            number: line_number,
+            text: line_text.to_string(),
             reply,
         });
         if !ok {

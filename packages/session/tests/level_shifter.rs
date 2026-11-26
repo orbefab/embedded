@@ -65,12 +65,20 @@ fn files() -> Files {
 }
 
 /// Each line of `text` played on the scene, as text, and whether every line passed.
+/// The BSS138 level shifter runs near the 30 s default under parallel CI load, so this gives
+/// it headroom.
 fn play(text: &str) -> (bool, Vec<String>) {
-    let report = test::run(
+    play_with_budget(text, std::time::Duration::from_secs(120))
+}
+
+fn play_with_budget(text: &str, budget: std::time::Duration) -> (bool, Vec<String>) {
+    let report = test::run_with(
         files(),
         Path::new("shifter/tests/shifter.test"),
         text,
         Path::new("shifter"),
+        budget,
+        &mut |_| {},
     );
     let lines = report
         .lines
@@ -103,9 +111,10 @@ fn begin_through_a_level_shifter_turns_the_display_on() {
 #[test]
 #[ignore = "about five minutes: run it with --run-ignored only"]
 fn the_block_picture_draws_on_the_module_behind_a_level_shifter() {
-    let (passed, lines) = play(
+    let (passed, lines) = play_with_budget(
         "open\nstep 200ms\nexpect @oled.display.screen shows tests/hello.screen\n\
          expect no diagnostics\n",
+        std::time::Duration::from_secs(20 * 60),
     );
     assert!(passed, "{lines:#?}");
 }
