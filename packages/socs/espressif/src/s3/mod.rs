@@ -86,6 +86,24 @@ pub use spi1::FlashRefusal;
 pub use spi2::{Pads, Phase, Setting, Transfer};
 pub use timers::{Reset, Watchdog};
 
+/// Supply voltage at or below which the ESP32-S3 drops into brown-out reset (volts).
+///
+/// ESP32-S3 Series Datasheet v2.2 Section 2.5.3 lists the brown-out detector as a chip reset
+/// source without a numeric trip table or hysteresis figure, and ESP32-S3 Technical Reference
+/// Manual v1.8 likewise publishes no numeric brown-out hysteresis. ESP-IDF v5.5.5
+/// (`CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7`, the default brown-out detector level) places the
+/// ESP32-S3 brown-out threshold at 2.44 V.
+pub const MIN_SUPPLY_V: f64 = 2.44;
+
+/// Minimum recommended operating supply voltage `VDD` (volts).
+///
+/// ESP32-S3 Series Datasheet v2.2 Section 5.2, Table 5-2 (Recommended Operating Conditions)
+/// specifies `VDDA`, `VDD3P3`, `VDD3P3_RTC` and `VDD3P3_CPU` from 3.0 V (min) to 3.6 V (max),
+/// 3.3 V typical. Because neither the datasheet nor TRM v1.8 gives a numeric brown-out release
+/// hysteresis, the supply watch requires `V(VCC) - V(GND)` to reach 3.0 V to power on or to
+/// count as returned after a brown-out.
+pub const OPERATING_SUPPLY_MIN_V: f64 = 3.0;
+
 /// A window onto SRAM: its bus addresses, and where in SRAM it starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Window {
@@ -145,6 +163,8 @@ pub enum Fault {
     Clock(Pc),
     /// The store at this PC reset the chip for this cause.
     FaultRestart(ResetCause, Pc),
+    /// Supply returned after power loss; power-on restart is not simulated yet.
+    PowerOnRestart,
     /// The store at this PC set something the model does not run.
     Refused(Refused, Pc),
     /// The load at `pc` read `address` in a cache window, where the MMU maps no flash.

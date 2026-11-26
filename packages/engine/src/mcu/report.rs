@@ -114,6 +114,7 @@ pub(crate) fn fault(
             app: app(pc),
             symbol: symbol(pc.pc),
         },
+        Fault::PowerOnRestart => Diagnostic::ChipPowerOnRestart { part, at },
         Fault::UnmappedLoad { address, pc } => Diagnostic::ChipUnmappedLoad {
             part,
             at,

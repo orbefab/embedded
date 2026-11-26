@@ -496,9 +496,16 @@ pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
     }
 }
 
+/// Margin inside a device's minimum supply so an exact `min_supply_v` rail does not release
+/// outputs on 1-ULP solver rounding.
+const SUPPLY_BOUND_INSIDE_V: f64 = 1e-6;
+
 /// Whether `vcc` over `gnd` is below the supply at which `core` still drives.
 pub(crate) fn supply_released(core: &Core, vcc: f64, gnd: f64) -> bool {
-    core.min_supply_v().is_some_and(|min| vcc - gnd < min)
+    core.min_supply_v().is_some_and(|min| {
+        let margin = SUPPLY_BOUND_INSIDE_V.min(0.25 * min);
+        vcc - gnd < min - margin
+    })
 }
 
 /// The drops are sources, so they scale. A device's draw is linearised at `x`, the iterate:

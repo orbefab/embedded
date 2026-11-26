@@ -45,6 +45,8 @@ pub enum Fault {
     UnsupportedClock(Pc),
     /// The store at `pc` reset the chip after the firmware recorded `reason`.
     FaultRestart { reason: ResetReason, pc: Pc },
+    /// Supply returned after power loss; power-on restart is not simulated yet.
+    PowerOnRestart,
     /// The load at `pc` read `address` in a cache window where no flash is mapped.
     UnmappedLoad { address: u32, pc: Pc },
 }

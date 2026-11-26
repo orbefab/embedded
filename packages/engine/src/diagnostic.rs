@@ -521,6 +521,9 @@ pub enum Diagnostic {
         app: bool,
         symbol: Option<String>,
     },
+    /// A chip's supply returned after power loss, and power-on restart is not simulated yet. It
+    /// ends the run.
+    ChipPowerOnRestart { part: Ref, at: Time },
     /// A chip's core loaded from `address` from `pc`, in a cache window where the MMU maps no
     /// flash. It ends the run.
     ChipUnmappedLoad {
@@ -714,6 +717,7 @@ impl Diagnostic {
             Diagnostic::ChipUnsupportedClock { .. } => "chip.unsupported_clock",
             Diagnostic::ChipRestart { .. } => "chip.restart",
             Diagnostic::ChipFaultRestart { .. } => "chip.fault_restart",
+            Diagnostic::ChipPowerOnRestart { .. } => "chip.power_on_restart",
             Diagnostic::ChipUnmappedLoad { .. } => "chip.unmapped_load",
             Diagnostic::ChipUnmodeledRegister { .. } => "chip.unmodeled_register",
             Diagnostic::TraceTooLarge { .. } => "trace.too_large",
@@ -772,6 +776,7 @@ impl Diagnostic {
             | Diagnostic::ChipFlashCommand { .. }
             | Diagnostic::ChipUnsupportedClock { .. }
             | Diagnostic::ChipFaultRestart { .. }
+            | Diagnostic::ChipPowerOnRestart { .. }
             | Diagnostic::ChipUnmappedLoad { .. }
             | Diagnostic::TraceTooLarge { .. } => Severity::Error,
         }
@@ -800,6 +805,7 @@ impl Diagnostic {
             | Diagnostic::ChipUnsupportedClock { at, .. }
             | Diagnostic::ChipRestart { at, .. }
             | Diagnostic::ChipFaultRestart { at, .. }
+            | Diagnostic::ChipPowerOnRestart { at, .. }
             | Diagnostic::ChipUnmappedLoad { at, .. }
             | Diagnostic::ChipUnmodeledRegister { at, .. }
             | Diagnostic::TraceRowInterpolated { at, .. } => Some(*at),
@@ -868,6 +874,7 @@ impl Diagnostic {
             | Diagnostic::ChipUnsupportedClock { part, .. }
             | Diagnostic::ChipRestart { part, .. }
             | Diagnostic::ChipFaultRestart { part, .. }
+            | Diagnostic::ChipPowerOnRestart { part, .. }
             | Diagnostic::ChipUnmappedLoad { part, .. }
             | Diagnostic::ChipUnmodeledRegister { part, .. } => vec![part.clone()],
             Diagnostic::SolverTooLarge { .. }
@@ -1786,6 +1793,13 @@ impl Diagnostic {
                     at.as_ps()
                 )
             }
+            Diagnostic::ChipPowerOnRestart { part, at } => {
+                let part = namer(part);
+                format!(
+                    "{part} supply returned at {} ps; power-on restart of the ESP32-S3 is not simulated yet",
+                    at.as_ps()
+                )
+            }
             Diagnostic::ChipUnmappedLoad {
                 part,
                 at,
@@ -1908,7 +1922,8 @@ impl Diagnostic {
             Diagnostic::NetlistDuplicate { .. }
             | Diagnostic::NetFloating { .. }
             | Diagnostic::NetShort { .. }
-            | Diagnostic::ChipFloatingInput { .. } => {
+            | Diagnostic::ChipFloatingInput { .. }
+            | Diagnostic::ChipPowerOnRestart { .. } => {
                 serde_json::json!({})
             }
             Diagnostic::NetlistUnknownNet { net, .. } => serde_json::json!({ "net": net }),
