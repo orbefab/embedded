@@ -419,8 +419,16 @@ impl Spi1 {
         } else {
             0
         };
-        let (miso, mutated) =
-            self.transact(now, command, user, addr, dummy_cycles, mosi, miso_len, flash)?;
+        let (miso, mutated) = self.transact(
+            now,
+            command,
+            user,
+            addr,
+            dummy_cycles,
+            mosi,
+            miso_len,
+            flash,
+        )?;
         if !miso.is_empty() {
             let start = if user & MISO_HIGHPART != 0 { 32 } else { 0 };
             let end = (start + miso.len()).min(buffer.len());
