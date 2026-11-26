@@ -61,6 +61,29 @@ pub(crate) struct Ratings {
     last: Option<Time>,
     /// The last sample was a step that restarted, so the next sample holds back to it.
     restarted: bool,
+    /// The filters' decays over the span to the sample being taken.
+    decays: Decays,
+}
+
+/// Each filter's decay over a span, `exp(-span / tau)`, worked out once per span and time
+/// constant. Sustained ratings mostly share `DEFAULT_TAU_PS`, and every filter takes each
+/// sample over the same span, so one sample's filters share a few.
+#[derive(Clone, Default)]
+struct Decays {
+    /// The span in ps, the time constant's bits, and the decay.
+    known: Vec<(i64, u64, f64)>,
+}
+
+impl Decays {
+    fn get(&mut self, span: i64, tau_ps: f64) -> f64 {
+        let tau = tau_ps.to_bits();
+        if let Some(&(_, _, decay)) = self.known.iter().find(|k| (k.0, k.1) == (span, tau)) {
+            return decay;
+        }
+        let decay = libm::exp(-(span as f64) / tau_ps);
+        self.known.push((span, tau, decay));
+        decay
+    }
 }
 
 /// The time constant of a sustained rating whose netlist names no basis, 10.2 ms: five periods
@@ -615,6 +638,7 @@ impl Ratings {
             chips,
             last: None,
             restarted: false,
+            decays: Decays::default(),
         }
     }
 
@@ -641,6 +665,7 @@ impl Ratings {
             }
         };
         let back = self.restarted.then_some(self.last).flatten();
+        self.decays.known.clear();
         for watch in &mut self.watches {
             elapsed(
                 watch.over,
@@ -653,7 +678,8 @@ impl Ratings {
                     if let Some(recent) = &mut heat.recent {
                         recent.take(at, sample, back.is_some());
                     }
-                    heat.filter.take(at, sample, back.is_some())
+                    heat.filter
+                        .take_in(at, sample, back.is_some(), &mut self.decays)
                 }
                 _ => sample,
             };
@@ -1084,14 +1110,20 @@ impl Filter {
 
     /// Takes `magnitude` at `at`, and returns the reading there. The sample held since the
     /// last one fills the time up to `at`, or with `back` this one does.
+    #[cfg(test)]
     fn take(&mut self, at: Time, magnitude: f64, back: bool) -> f64 {
+        self.take_in(at, magnitude, back, &mut Decays::default())
+    }
+
+    /// `take`, with the decay from `decays`.
+    fn take_in(&mut self, at: Time, magnitude: f64, back: bool, decays: &mut Decays) -> f64 {
         let at = ps(at);
         let sample = stored(self.average, magnitude);
         if let Some((last, held)) = self.held
             && at > last
         {
             let x = if back { sample } else { held };
-            let decay = libm::exp(-((at - last) as f64) / self.tau_ps);
+            let decay = decays.get(at - last, self.tau_ps);
             self.level = x + (self.level - x) * decay;
         }
         self.held = Some((at, sample));
@@ -1385,6 +1417,19 @@ mod tests {
 
     /// The filter holds 0 before its first sample, as a cold part does, and a held sample
     /// moves it by `1 - exp(-t / tau)` of the way.
+    #[test]
+    fn a_shared_decay_is_the_one_each_filter_would_work_out() {
+        let mut decays = Decays::default();
+        let taus = [DEFAULT_TAU_PS as f64, 1e6, DEFAULT_TAU_PS as f64];
+        for span in [1, 1_000, 1_000, 7_777_777, 1] {
+            for tau in taus {
+                let own = libm::exp(-(span as f64) / tau);
+                assert_eq!(decays.get(span, tau).to_bits(), own.to_bits());
+            }
+        }
+        assert_eq!(decays.known.len(), 6);
+    }
+
     #[test]
     fn a_filter_starts_cold() {
         let mut filter = Filter::new(Average::Rms, DEFAULT_TAU_PS);
