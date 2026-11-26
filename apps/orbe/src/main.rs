@@ -116,7 +116,7 @@ enum Command {
         /// Print every command with its reply.
         #[arg(short, long)]
         verbose: bool,
-        /// Wall-time limit for each `step` line, such as `120s`. 30s by default.
+        /// Wall-time limit for each `step` line, such as `300s`. 120s by default.
         #[arg(long, value_name = "DURATION")]
         step_timeout: Option<String>,
         /// Print one JSON envelope instead of text.
@@ -600,14 +600,14 @@ fn resolve_step_budget(flag: Option<&str>) -> Result<std::time::Duration, (Strin
         let parsed = orbe_session::Duration::parse(text).map_err(|reason| {
             (
                 format!("`--step-timeout {text}` is not a duration: {reason}"),
-                "write a duration such as `--step-timeout 120s`".to_string(),
+                "write a duration such as `--step-timeout 300s`".to_string(),
             )
         })?;
         let nanos = parsed.as_ps() / 1000;
         if nanos == 0 {
             return Err((
                 "`--step-timeout` must be greater than 0".to_string(),
-                "write a duration such as `--step-timeout 120s`".to_string(),
+                "write a duration such as `--step-timeout 300s`".to_string(),
             ));
         }
         return Ok(std::time::Duration::from_nanos(nanos));
@@ -616,7 +616,10 @@ fn resolve_step_budget(flag: Option<&str>) -> Result<std::time::Duration, (Strin
     let env = std::env::var("ORBE_TEST_STEP_BUDGET").ok();
     #[cfg(not(debug_assertions))]
     let env: Option<String> = None;
-    Ok(orbe_session::test_step_budget(env.as_deref()))
+    Ok(orbe_session::test_step_budget(
+        env.as_deref(),
+        orbe_session::TEST_STEP_BUDGET,
+    ))
 }
 
 fn run_tests(paths: &[PathBuf], verbose: bool, step_timeout: Option<&str>, json: bool) -> ExitCode {

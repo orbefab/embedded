@@ -12,9 +12,14 @@ use crate::duration::Duration as SimDuration;
 use crate::live::{Live, Progress};
 use crate::reply::{Code, Reply};
 
-/// Wall-time budget for one `step`, well under the 2-minute command limit agent harnesses
-/// commonly use, so a slow scene stops and reports cleanly instead of hanging the caller.
+/// Wall-time budget for one `step` in a live session, well under the 2-minute command limit
+/// agent harnesses commonly use, so a slow scene stops paused and reports cleanly instead of
+/// hanging the caller.
 pub const STEP_BUDGET: Duration = Duration::from_secs(30);
+
+/// Default wall-time budget for one `step` line in `orbe test`. A test `step` fails on timeout
+/// instead of pausing to continue, so it gets more headroom than [`STEP_BUDGET`].
+pub const TEST_STEP_BUDGET: Duration = Duration::from_secs(120);
 
 /// Where a `step` runs, which decides the hint `step_timeout` gives.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,20 +64,20 @@ impl Live {
     }
 }
 
-/// Parses a debug-only `ORBE_TEST_STEP_BUDGET` override, falling back to [`STEP_BUDGET`].
+/// Parses a debug-only `ORBE_TEST_STEP_BUDGET` override, falling back to `default`.
 /// A release build ignores it.
-pub fn test_step_budget(text: Option<&str>) -> Duration {
+pub fn test_step_budget(text: Option<&str>, default: Duration) -> Duration {
     #[cfg(not(debug_assertions))]
     {
         let _ = text;
-        STEP_BUDGET
+        default
     }
     #[cfg(debug_assertions)]
     {
         text.and_then(|value| SimDuration::parse(value).ok())
             .map(|duration| Duration::from_nanos(duration.as_ps() / 1000))
             .filter(|duration| !duration.is_zero())
-            .unwrap_or(STEP_BUDGET)
+            .unwrap_or(default)
     }
 }
 
@@ -275,6 +280,12 @@ mod tests {
     }
 
     #[test]
+    fn default_budgets_are_30s_for_sessions_and_120s_for_tests() {
+        assert_eq!(STEP_BUDGET, Duration::from_secs(30));
+        assert_eq!(TEST_STEP_BUDGET, Duration::from_secs(120));
+    }
+
+    #[test]
     fn test_timeout_hint_names_step_timeout_flag() {
         let mut reply = Reply {
             session: "tests/slow.test".into(),
@@ -290,15 +301,15 @@ mod tests {
             &step,
             0,
             3_000_000_000_000,
-            STEP_BUDGET,
-            STEP_BUDGET,
+            TEST_STEP_BUDGET,
+            TEST_STEP_BUDGET,
             StepTimeoutHint::Test,
         );
         let error = reply.error.unwrap();
         assert_eq!(error.code, Code::StepTimeout);
         assert_eq!(
             error.message,
-            "step stopped at t=25ms (asked for 3s) after the 30s wall-time limit (1200x slower than real time)"
+            "step stopped at t=25ms (asked for 3s) after the 120s wall-time limit (4800x slower than real time)"
         );
         assert!(error.hint.contains("--step-timeout"), "{}", error.hint);
     }

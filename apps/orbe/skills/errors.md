@@ -25,7 +25,7 @@ With `--json` a command prints one object, `{"ok": true, "data": {...}}` or `{"o
 | `expect_failed`, `until_timeout` | The condition did not hold. Compare `actual`, then fix the circuit or the firmware, or step longer. |
 | `ended` | The session reached its 2-hour stop. Reads still work. Run `orbe open` to start again. |
 | `past_stop` | A `step` would end past the stop, or an input would land past it. Do what the hint says. |
-| `step_timeout` | A `step` hit the 30 s wall-time limit on a slow scene. In a session, it stays paused at the reached time; run the `orbe step` in the hint to continue. In `orbe test`, that test fails and the rest still run; raise the limit with `--step-timeout`. |
+| `step_timeout` | A `step` hit the wall-time limit (30 s in a session, 120 s in `orbe test`) on a slow scene. In a session, it stays paused at the reached time; run the `orbe step` in the hint to continue. In `orbe test`, that test fails and the rest still run; raise the limit with `--step-timeout`. |
 | `cancelled` | Ctrl-C stopped a `step`. The session stays. Step again. `orbe close` during a `step` ends the session. The message says it was closed, and the hint says how to open it. |
 | `faulted` | The engine stopped the session. The message names why. Fix it and run `orbe open`. |
 

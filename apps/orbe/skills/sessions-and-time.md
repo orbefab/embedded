@@ -11,7 +11,7 @@ Load this when a step or a set lands at the wrong time, a session's name or stop
 - Serial can arrive up to one engine step (`sim.max_step`, 10 ms by default) after the chip sends it. Step past a print before you expect it.
 - A DHT22 sends what it measured at the read before, so after `set temperature 30` the second read shows it. A read sooner than 2 s after the last, or after power-on, gets no answer and warns `chip.protocol`.
 - A session stops at 2 hours. Reads still work. `press`, `release`, `set`, `step` and `play` fail with `ended`. `step <duration>` past the stop fails with `past_stop`, and the hint names the time left. `step --until` stops there and fails with `ended`. An input that would land past the stop fails with `past_stop`. The hint says to run `orbe open`.
-- A `step` that runs for 30 s of wall time stops paused where it got with `step_timeout`, prints the speed relative to real time, and hints the `orbe step` command for the rest. In `orbe test`, the same limit fails that test without stopping the rest, and `--step-timeout <duration>` sets another limit.
+- A `step` that runs for 30 s of wall time stops paused where it got with `step_timeout`, prints the speed relative to real time, and hints the `orbe step` command for the rest. In `orbe test`, the limit is 120 s and fails that test without stopping the rest; `--step-timeout <duration>` sets another limit.
 
 ## Sessions
 

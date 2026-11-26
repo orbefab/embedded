@@ -8,7 +8,7 @@ use std::time::Duration;
 use orbe_scene::Files;
 
 use crate::command::Command;
-use crate::live::{Live, STEP_BUDGET, StepTimeoutHint};
+use crate::live::{Live, StepTimeoutHint, TEST_STEP_BUDGET};
 use crate::reply::{Code, Data, Error, Reply};
 
 /// Progress of a running `step` line inside a test file.
@@ -63,10 +63,10 @@ impl Report {
     }
 }
 
-/// Runs a test file's text on a scene in `files` with the default [`STEP_BUDGET`] wall-time
+/// Runs a test file's text on a scene in `files` with the default [`TEST_STEP_BUDGET`] wall-time
 /// limit per `step`. Paths in it start from `root`, the project folder above `tests/`.
 pub fn run(files: Files, file: &Path, text: &str, root: &Path) -> Report {
-    run_with(files, file, text, root, STEP_BUDGET, &mut |_| {})
+    run_with(files, file, text, root, TEST_STEP_BUDGET, &mut |_| {})
 }
 
 /// Runs a test file's text on a scene in `files`, holding each `step` to `step_budget` of wall

@@ -603,10 +603,11 @@ fn step_timeout_flag_raises_limit_and_handles_until_and_usage() {
     );
     assert!(until.stdout.contains("--step-timeout"), "{}", until.stdout);
 
-    // Help documents `--step-timeout`.
+    // Help documents `--step-timeout` and the 120s default.
     let help = orbe(dir.path(), &["test", "--help"]);
     assert_eq!(help.code, 0, "{}{}", help.stdout, help.stderr);
     assert!(help.stdout.contains("--step-timeout"), "{}", help.stdout);
+    assert!(help.stdout.contains("120s"), "{}", help.stdout);
 
     // Invalid `--step-timeout` is a usage error (exit 2) in text and JSON.
     for bad in ["0s", "nope"] {

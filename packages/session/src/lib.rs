@@ -28,7 +28,7 @@ pub use condition::{Amount, Condition, Needle, Op, Rgb, State as Want, Unit};
 pub use duration::Duration;
 pub use live::{
     BRIGHTNESS_WINDOW, CHANGES, Channels, FrameState, Glass, Live, Pace, Progress, SERIAL_LINES,
-    STEP_BUDGET, Sample, StepTimeoutHint, test_step_budget,
+    STEP_BUDGET, Sample, StepTimeoutHint, TEST_STEP_BUDGET, test_step_budget,
 };
 pub use orbe_scene::Files;
 pub use reply::{

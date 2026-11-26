@@ -25,7 +25,8 @@ use std::time::{Duration, Instant};
 
 use orbe_session::viewer::{self as messages, Feed, TICK};
 use orbe_session::{
-    Code, Command, Data, Error, Files, Live, Pace, Reply, Sample, StepTimeoutHint, test_step_budget,
+    Code, Command, Data, Error, Files, Live, Pace, Reply, STEP_BUDGET, Sample, StepTimeoutHint,
+    test_step_budget,
 };
 use orbe_session::{EXIT_IO as IO, EXIT_LOST as LOST};
 use serde_json::Value;
@@ -203,7 +204,7 @@ impl Held {
         let closing = Arc::clone(&self.closing);
         let watchers = &mut self.watchers;
         let mut closed = false;
-        let budget = test_step_budget(step_budget);
+        let budget = test_step_budget(step_budget, STEP_BUDGET);
         let mut reply = self.live.run_with_budget(
             command,
             budget,
@@ -873,7 +874,7 @@ pub(super) fn wall() -> Instant {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orbe_session::{STEP_BUDGET, Step};
+    use orbe_session::Step;
 
     #[test]
     fn client_deadline_exceeds_step_budget() {

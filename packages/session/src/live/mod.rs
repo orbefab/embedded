@@ -47,7 +47,7 @@ mod serial;
 mod step;
 mod tone;
 
-pub use budget::{STEP_BUDGET, StepTimeoutHint, test_step_budget};
+pub use budget::{STEP_BUDGET, StepTimeoutHint, TEST_STEP_BUDGET, test_step_budget};
 pub use light::BRIGHTNESS_WINDOW;
 
 #[cfg(test)]
