@@ -68,24 +68,9 @@ arduino-cli compile --fqbn arduino:avr:nano --output-dir build firmware/fade
 
 A Block's tests check what it shipped. Update them when the timing or the pins change.
 
-### `nano-board`
+## Boards
 
-- `nano-board`, Nano (CH340 clone), runs the ATmega328P-AU at 16 MHz.
-- These pins work: `D0` to `D13`, `RESET`, `GND`, `AREF`, `A0` to `A7`, `5V`, `3V3`, and `VIN`.
-- `3V3` is the CH340G's V3 pin (3.3 V with 5 V, off without). Past 30 mA it sags and warns `regulator.current_limit`.
-- `VIN` feeds `regulator`, an AMS1117-5.0. About 6.1 V or more on VIN holds 5V at 5.0 V. With VIN open the board runs from USB and 5V stays that rail. On USB only, VIN reads 0 V and supplies nothing. A real board shows about 4 V there, through the regulator's internal diode.
-- `D13` drives `led_l` through `r_l`, 1 kohm.
-
-### `uno-board`
-
-- `uno-board`, Uno R3 compatible board, runs the ATmega328P-PU at 16 MHz.
-- These pins work: `D0` to `D13`, `GND`, `AREF`, `SDA`, `SCL`, `IOREF`, `RESET`, `3V3`, `5V`, and `A0` to `A5`.
-- `SDA` and `A4` are one net.
-- `SCL` and `A5` are one net.
-- `IOREF` and `5V` are one net.
-- `3V3` comes from `reg_3v3`, a 3.3 V regulator.
-- `VIN` is not simulated. The barrel jack feeds it. The board runs from USB. A wire to it is a `not_simulated` error.
-- `D13` drives `led_l` through `r_l`, 1 kohm.
+Load `orbe skills get boards` for `nano-board` and `uno-board` pinouts, on-board parts, pin functions, supply limits, and unsimulated pins.
 
 ## The chip
 
