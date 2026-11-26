@@ -13,7 +13,7 @@ use std::iter;
 use std::ops::Range;
 use std::sync::Arc;
 
-use orbe_xtensa::{Bus, Cause, Cycle, Exit, PagedRam, Width};
+use orbe_xtensa::{Bus, Cause, Cycle, Exit, PagedRam, PassAccess, Swept, Width};
 
 use super::CoreId;
 
@@ -41,7 +41,7 @@ use super::sar::{self, Sar};
 use super::sha::{self, Sha};
 use super::spi1::{self, FlashRefusal, Spi1};
 use super::spi2::{self, Setting, Spi2};
-use super::timers::{Expiry, Register, Systimer, Watchdogs};
+use super::timers::{self, Expiry, Register, Seen, Systimer, Watchdogs};
 use super::tsens::{self, Tsens};
 use super::uart::{self, Uarts};
 use super::usb::{self, UsbSerialJtag};
@@ -599,6 +599,12 @@ impl Soc {
         self.load(cycle, addr, Width::Word)
     }
 
+    /// A DMA transfer reads `offsets` of SRAM, as a test sets it.
+    #[cfg(test)]
+    pub(crate) fn hold_in_flight(&mut self, offsets: Range<u32>) {
+        self.in_flight.push(offsets);
+    }
+
     /// The PRO CPU's bus for one access outside a run, as a test makes it.
     #[cfg(test)]
     pub(crate) fn bus(&mut self) -> CoreBus<'_> {
@@ -739,6 +745,127 @@ impl Soc {
     pub(crate) fn quiet_store(&self, addr: u32) -> bool {
         let word = addr & !3;
         (word == SYSTIMER + 0x04 || word == SYSTIMER + 0x08) && !self.ledc.has_output()
+    }
+
+    /// See [`Bus::sweep`]. A pass may load SRAM, RTC memory, the ROMs and the flash windows,
+    /// which hold still while no store, no DMA and no other core reaches them, and may latch a
+    /// SYSTIMER unit and load its `OP` and value registers. It may store nothing else. A latch
+    /// fires no alarm, since none is due before the next event the core last read, and moves
+    /// nothing but the unit's value registers and `VALUE_VALID`, so the last pass's latches
+    /// leave what every pass's do. The other core's accesses all lie at or before `start`, so
+    /// each access stamps its own tick.
+    pub(crate) fn sweep(
+        &self,
+        accesses: &[PassAccess],
+        start: Cycle,
+        period: u64,
+        passes: u64,
+        out: &mut [Swept],
+    ) -> bool {
+        if passes == 0
+            || out.len() != accesses.len()
+            || !self.in_flight.is_empty()
+            || self.steer.is_some()
+            || self.fetch_held()
+            || self.ending.is_some()
+            || self.ledc.has_output()
+            || self.latest > self.clock.tick(start)
+        {
+            return false;
+        }
+        let last = start.0 + (passes - 1) * period;
+        let ticks = |first: u64, last: u64, offset: u64| {
+            (
+                self.clock.tick(Cycle(first + offset)),
+                self.clock.tick(Cycle(last + offset)),
+            )
+        };
+        let latch_unit = |a: &PassAccess| {
+            let word = a.addr & !3;
+            (word == SYSTIMER + 0x04)
+                .then_some(0)
+                .or((word == SYSTIMER + 0x08).then_some(1))
+        };
+        // The offset of each unit's last latch in a pass, which a load before the pass's first
+        // latch reads from the second pass on.
+        let mut final_latch: [Option<u64>; 2] = [None; 2];
+        for a in accesses {
+            if let Some(value) = a.store {
+                let Some(unit) = latch_unit(a) else {
+                    return false;
+                };
+                if a.width != Width::Word || !timers::latches(value) {
+                    return false;
+                }
+                final_latch[unit] = Some(a.offset);
+            }
+        }
+        let mut seen = final_latch.map(|offset| match offset {
+            Some(offset) if passes > 1 => {
+                let (first, last) = ticks(start.0, last - period, offset);
+                Seen::Either(first, last)
+            }
+            _ => Seen::Held,
+        });
+        // A load of a SYSTIMER word reads what an earlier load of it read since the unit's last
+        // latch in the pass: the word, the unit's latches so far and that load's index.
+        let mut loaded: Vec<(u32, u32, u16)> = Vec::new();
+        let mut latches = [0u32; 2];
+        for (i, a) in accesses.iter().enumerate() {
+            let word = a.addr & !3;
+            if a.store.is_some() {
+                let unit = latch_unit(a).expect("a latch");
+                let (first, last) = ticks(start.0, last, a.offset);
+                seen[unit] = Seen::Latched(first, last);
+                latches[unit] += 1;
+                continue;
+            }
+            let flash = flash::IROM.contains(&a.addr) || flash::DROM.contains(&a.addr);
+            if flash
+                && self
+                    .spi1
+                    .is_busy(self.clock.tick(Cycle(start.0 + a.offset)))
+            {
+                return false;
+            }
+            let (lo, hi, same_as) = match Self::data_offset(a.addr, a.width) {
+                Err(_) => return false,
+                Ok(Some(offset)) => {
+                    let v = self.sram.read(offset, a.width);
+                    (v, v, None)
+                }
+                Ok(None) => {
+                    if let Some(v) = self.memory_word(word) {
+                        let (_, shift, mask) = word_of(a.addr, a.width);
+                        let v = (v >> shift) & mask;
+                        (v, v, None)
+                    } else if word & !(BLOCK - 1) == SYSTIMER && a.width == Width::Word {
+                        let Some((lo, hi)) = self.systimer.swept(word - SYSTIMER, seen) else {
+                            return false;
+                        };
+                        let unit = match word - SYSTIMER {
+                            0x04 | 0x40 | 0x44 => 0,
+                            _ => 1,
+                        };
+                        let same = loaded
+                            .iter()
+                            .find(|&&(w, n, _)| w == word && n == latches[unit])
+                            .map(|&(.., j)| j);
+                        if same.is_none() {
+                            let Ok(i) = u16::try_from(i) else {
+                                return false;
+                            };
+                            loaded.push((word, latches[unit], i));
+                        }
+                        (lo, hi, same)
+                    } else {
+                        return false;
+                    }
+                }
+            };
+            out[i] = Swept { lo, hi, same_as };
+        }
+        true
     }
 
     pub(crate) fn sram_offset(addr: u32, fetch: bool) -> Option<u32> {
@@ -2090,5 +2217,16 @@ impl Bus for CoreBus<'_> {
 
     fn fetch_held(&self) -> bool {
         self.soc.fetch_held()
+    }
+
+    fn sweep(
+        &self,
+        accesses: &[PassAccess],
+        start: Cycle,
+        period: u64,
+        passes: u64,
+        out: &mut [Swept],
+    ) -> bool {
+        self.soc.sweep(accesses, start, period, passes, out)
     }
 }

@@ -72,7 +72,7 @@ mod fpu;
 mod paged;
 mod special;
 
-pub use bus::{Bus, Cause, Cycle, Exit, Reset, Width};
+pub use bus::{Bus, Cause, Cycle, Exit, PassAccess, Reset, Swept, Width};
 pub use config::{Config, Esp32, Esp32s3, Interrupts};
 pub use core::{CoprocessorDisabled, Core, Missing, Stop, Unimplemented};
 pub use decode::{Decoded, Insn, Op};

@@ -11,10 +11,11 @@ use crate::special::{Access, CCOMPARE, EPC, EPS, Sr};
 
 mod decodes;
 mod options;
+mod pass;
 mod simple;
 mod spin;
 
-use decodes::{Decodes, Kept, Stores};
+use decodes::{Decodes, Kept, Look, Stores};
 
 const PS_INTLEVEL: u32 = 0xf;
 const PS_EXCM: u32 = 1 << 4;
@@ -213,6 +214,8 @@ pub struct Core<C: Config> {
     watching: bool,
     /// Instructions already decoded, by PC and the bytes the fetch read.
     decodes: Decodes,
+    /// When the core looks again at the passes of each loop that did not skip.
+    waits: pass::Waits,
     chip: PhantomData<C>,
 }
 
@@ -252,6 +255,7 @@ impl<C: Config> Core<C> {
             watches: [Watch::default(); 2],
             watching: false,
             decodes: Decodes::default(),
+            waits: pass::Waits::default(),
             chip: PhantomData,
         };
         core.sr[Sr::Ps as usize] = RESET_PS;
@@ -528,7 +532,8 @@ impl<C: Config> Core<C> {
     /// rechecks, after a trap, once the lines can move, at a PC the table does not keep at the
     /// current version, or at the horizon. A taken branch changes nothing a step checks, so the
     /// run goes on at its target. After a branch back it may skip the passes of a spin on
-    /// `CCOUNT`, as `spin` says.
+    /// `CCOUNT`, as `spin` says, and after another jump or branch back the passes of a loop that
+    /// only its loads move, as `pass` says.
     fn straight<B: Bus>(&mut self, bus: &mut B, limit: Cycle) -> Result<(), Stop> {
         if bus.code_version().is_none() {
             return Ok(());
@@ -556,9 +561,14 @@ impl<C: Config> Core<C> {
             };
             match ran {
                 Ok(()) if !kept.rechecks => {
-                    // A branch back that went back may close a spin on `CCOUNT`.
-                    if kept.back && self.refetch {
-                        self.skip_spin(bus, &mut table, slot, horizon.min(self.lines_until));
+                    // A jump or branch back that went back may close a spin on `CCOUNT` or the
+                    // pass of a loop.
+                    if kept.pass == Look::Yes
+                        && self.refetch
+                        && let Err(end) = self.after_back(bus, &mut table, slot, horizon)
+                    {
+                        done = end;
+                        break;
                     }
                 }
                 Ok(()) => break,

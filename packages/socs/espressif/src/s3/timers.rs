@@ -69,6 +69,24 @@ const PERIOD: u32 = (1 << 26) - 1;
 const PERIOD_MODE: u32 = 1 << 30;
 const UNIT_SEL: u32 = 1 << 31;
 
+/// Which latch a load of a SYSTIMER unit's `OP` or value registers reads in each pass of a
+/// sweep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Seen {
+    /// The one the unit holds now, in every pass.
+    Held,
+    /// One the pass itself made, from tick `.0` in the first pass to tick `.1` in the last.
+    Latched(Tick, Tick),
+    /// The one the unit holds now in the first pass, and in each later pass the one the pass
+    /// before made, from tick `.0` to tick `.1`.
+    Either(Tick, Tick),
+}
+
+/// Whether `value`, stored to a unit's `OP` word, latches the unit's count.
+pub(crate) fn latches(value: u32) -> bool {
+    value & UPDATE != 0
+}
+
 /// The SYSTIMER count at `tick`, from power-on.
 fn counts(tick: Tick) -> u64 {
     tick.0 / SYSTIMER_TICKS
@@ -196,6 +214,57 @@ impl Systimer {
     /// Bit `k` is alarm `k`'s interrupt line.
     pub(crate) fn lines(&self) -> u32 {
         self.int_raw & self.int_ena
+    }
+
+    /// The values a word load at `offset` returns in the passes of a sweep, when each unit's
+    /// value registers hold what `seen` says in each pass. `None` for a register this does not
+    /// answer, while `SYSTEM_SYSTIMER_RST` holds the timer, or when the count could turn over.
+    pub(crate) fn swept(&self, offset: u32, seen: [Seen; 2]) -> Option<(u32, u32)> {
+        if self.held {
+            return None;
+        }
+        let latched = |unit: usize| {
+            let held = self.units[unit].latched;
+            match seen[unit] {
+                Seen::Held => Some((held, held)),
+                Seen::Latched(first, last) | Seen::Either(first, last) => {
+                    let (v0, v1) = (self.value(unit, first), self.value(unit, last));
+                    if v1 < v0 {
+                        return None;
+                    }
+                    Some(match seen[unit] {
+                        Seen::Either(..) => (v0.min(held), v1.max(held)),
+                        _ => (v0, v1),
+                    })
+                }
+            }
+        };
+        match offset {
+            0x04 | 0x08 => {
+                let unit = (offset / 4 - 1) as usize;
+                let valid = match seen[unit] {
+                    Seen::Latched(..) => true,
+                    // A pass that has not latched yet reads what the unit holds or, after the
+                    // first pass, what the pass before latched.
+                    Seen::Either(..) if !self.units[unit].valid => return None,
+                    Seen::Held | Seen::Either(..) => self.units[unit].valid,
+                };
+                let v = if valid { VALUE_VALID } else { 0 };
+                Some((v, v))
+            }
+            0x40 | 0x48 | 0x44 | 0x4c => {
+                let (lo, hi) = latched(pair(offset & !4, 0x40, 8))?;
+                Some(if offset & 4 == 0 {
+                    ((lo >> 32) as u32, (hi >> 32) as u32)
+                } else if lo >> 32 == hi >> 32 {
+                    // Between two counts with the same high word the low word keeps order.
+                    (lo as u32, hi as u32)
+                } else {
+                    (0, u32::MAX)
+                })
+            }
+            _ => None,
+        }
     }
 
     pub(crate) fn read(&mut self, now: Tick, offset: u32) -> Option<u32> {

@@ -45,6 +45,22 @@ pub(super) struct Kept {
     /// The ops before this `back` branch were found to make no spin at the slot's code
     /// version.
     pub(super) spinless: bool,
+    /// Whether a straight run looks for a spin or a pass to skip after this op goes back. The
+    /// straight run tests only this after each op.
+    pub(super) pass: Look,
+}
+
+/// Whether an op can close a spin or a loop's pass that the core may skip, as [`super::spin`]
+/// and [`super::pass`] say.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Look {
+    /// It does not jump or branch back.
+    No,
+    /// It jumps or branches back, and the core looks for a spin or a pass when it does.
+    Yes,
+    /// It jumps or branches back, but it closes no spin and its loop's pass was found not to
+    /// skip at the slot's code version.
+    Never,
 }
 
 impl Kept {
@@ -65,6 +81,11 @@ impl Kept {
             rechecks: rechecks(op),
             back: super::spin::closes(&insn, pc),
             spinless: false,
+            pass: if super::pass::loops(&insn, pc) {
+                Look::Yes
+            } else {
+                Look::No
+            },
             insn,
         }
     }
@@ -129,8 +150,11 @@ const EMPTY: Slot = Slot {
         rechecks: true,
         back: false,
         spinless: false,
+        pass: Look::No,
     },
 };
+
+const _: () = assert!(size_of::<Slot>() == 64);
 
 /// The slots, allocated at the first fetch. Two tables always compare equal, since a table
 /// changes no result.
@@ -156,6 +180,12 @@ impl Taken {
     /// version.
     pub(super) fn set_spinless(&mut self, slot: usize) {
         self.0[slot].kept.spinless = true;
+    }
+
+    /// Records that the loop the op in `slot` closes makes no pass to skip at the slot's code
+    /// version.
+    pub(super) fn set_passless(&mut self, slot: usize) {
+        self.0[slot].kept.pass = Look::Never;
     }
 }
 
@@ -220,6 +250,9 @@ impl Decodes {
             if slot.stamp != stamp {
                 // The ops around a branch may have changed with the version.
                 slot.kept.spinless = false;
+                if slot.kept.pass == Look::Never {
+                    slot.kept.pass = Look::Yes;
+                }
                 slot.stamp = stamp;
             }
             return Some(at);

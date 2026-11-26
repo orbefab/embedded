@@ -13,6 +13,10 @@ autotests = false
 # That read is the one a normal build makes when it does poll, so the check settles and
 # stamps on that path. It does not run the stamp a skipped poll uses.
 poll-skip-check = []
+# Runs each pass of a loop that a straight run would skip, and panics unless every pass takes
+# the recorded path in the recorded cycles with each load in the range the bus gave, and the
+# core then matches the skip but for registers the next pass writes before it reads them.
+pass-skip-check = []
 
 [dev-dependencies]
 sha2.workspace = true

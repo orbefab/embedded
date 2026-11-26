@@ -9,6 +9,7 @@ mod loops;
 mod ops;
 mod options;
 mod paged;
+mod pass;
 mod s3;
 mod spin;
 mod straight;

@@ -75,6 +75,26 @@ pub enum Exit {
     Fault(Cause),
 }
 
+/// One data access of a loop's pass: its address, its width, the value a store writes or `None`
+/// for a load, and the cycle it is made at, counted from the start of the pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PassAccess {
+    pub addr: u32,
+    pub width: Width,
+    pub store: Option<u32>,
+    pub offset: u64,
+}
+
+/// The values a load of a pass can return over the passes [`Bus::sweep`] asks about: each lies
+/// in `lo..=hi`, and when `same_as` names an earlier load of the same pass, each pass's value
+/// is the one that load returned in that pass.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Swept {
+    pub lo: u32,
+    pub hi: u32,
+    pub same_as: Option<u16>,
+}
+
 /// One implementation per SoC. `Core::run_until` is generic over it, so no `dyn Bus` sits on the
 /// instruction path.
 pub trait Bus {
@@ -158,6 +178,26 @@ pub trait Bus {
     /// access that [`Bus::access_moves_lines`] or [`Bus::load_moves_lines`] names, or between
     /// runs. The default is never.
     fn fetch_held(&self) -> bool {
+        false
+    }
+
+    /// Whether `passes` passes of a loop, which start at `start`, `start + period` and so on,
+    /// can each make `accesses` in order at their offsets, such that no access moves a line,
+    /// changes [`Bus::next_event`] or turns on [`Bus::yields`] or [`Bus::fetch_held`], and what
+    /// the accesses leave behind after the last pass is what the last pass's accesses alone
+    /// leave, so the core may make only those. When it answers `true`, it has written to
+    /// `out[i]` the values load `i` can return in any of the passes. The core asks only for
+    /// passes inside a straight run, whose every access starts before the next event the core
+    /// last read and the run's limit, with no other access to the bus between them. The
+    /// default refuses.
+    fn sweep(
+        &self,
+        _accesses: &[PassAccess],
+        _start: Cycle,
+        _period: u64,
+        _passes: u64,
+        _out: &mut [Swept],
+    ) -> bool {
         false
     }
 }

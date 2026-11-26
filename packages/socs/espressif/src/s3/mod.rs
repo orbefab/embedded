@@ -1107,6 +1107,7 @@ mod tests {
     mod pads;
     mod pcnt;
     mod rmt;
+    mod sweep;
     mod tsens;
 
     #[test]

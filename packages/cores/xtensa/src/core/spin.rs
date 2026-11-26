@@ -212,10 +212,8 @@ impl<C: Config> Core<C> {
     /// At the head of a loop that the branch in slot `branch` just went back to, inside a
     /// straight run, skips the passes that branch back again and start each op before `bound`.
     /// A pass costs a cycle for each op and the branch's redirect, plus the refetch of its first
-    /// op when that op runs into the next word. Out of line and cold, so the straight run that
-    /// calls it after each branch back stays as it was.
-    #[cold]
-    #[inline(never)]
+    /// op when that op runs into the next word. The straight run reaches it through
+    /// `after_back`, out of line.
     pub(super) fn skip_spin<B: Bus>(
         &mut self,
         bus: &mut B,
@@ -224,7 +222,7 @@ impl<C: Config> Core<C> {
         bound: Cycle,
     ) {
         // Skipping is worth the look only with room for several passes before the horizon.
-        if table.kept(branch).spinless || bound.0.saturating_sub(self.cycle.0) < ROOM {
+        if bound.0.saturating_sub(self.cycle.0) < ROOM {
             return;
         }
         let Some(version) = bus.code_version() else {

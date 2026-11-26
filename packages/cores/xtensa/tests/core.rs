@@ -238,8 +238,8 @@ fn a_yielding_bus_stops_the_core_before_its_next_step() {
 /// `Core` is copied at every landing, so its size is pinned.
 #[test]
 fn core_size_is_pinned() {
-    assert_eq!(size_of::<Core<Esp32>>(), 944);
-    assert_eq!(size_of::<Core<Esp32s3>>(), 944);
+    assert_eq!(size_of::<Core<Esp32>>(), 952);
+    assert_eq!(size_of::<Core<Esp32s3>>(), 952);
 }
 
 /// `DBREAKAn` and `DBREAKCn` read back through `wsr` and `rsr`.
