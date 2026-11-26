@@ -53,6 +53,7 @@ fn solve(
         &mut Solver::new(&circuit.layout),
         Conditions::NOMINAL,
         start,
+        None,
         circuit.power_on(),
         &cores,
         None,
@@ -73,6 +74,8 @@ pub(crate) struct Settled {
     pub(crate) iterate: Iterate,
     pub(crate) chips: Vec<chip::State>,
     pub(crate) levels: Levels,
+    /// Whether the first solve converged from the guess.
+    pub(crate) guessed: bool,
 }
 
 /// The ladder at `base` with `chips` in force, from `start`, with `budget` per rung. Under
@@ -81,12 +84,17 @@ pub(crate) struct Settled {
 /// while any state changed it solves again. `prior` is the levels just before, `None` at
 /// t = 0. Levels are read only on the solve that converged at `base`, never on a fallback
 /// rung. Without a chip it is one climb.
+///
+/// A `guess` starts the first solve instead of `start`, Newton alone with
+/// [`GUESS_BUDGET`](crate::session::predict::GUESS_BUDGET). When that does not converge the
+/// first solve is the climb from `start`, as without a guess.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn settle(
     circuit: &Circuit,
     solver: &mut Solver,
     base: Conditions<'_>,
     start: Iterate,
+    guess: Option<Iterate>,
     chips: Vec<chip::State>,
     cores: &[active::Core],
     prior: Option<&Levels>,
@@ -94,6 +102,8 @@ pub(crate) fn settle(
 ) -> Result<Settled, Diagnostic> {
     let mut chips = chips;
     let mut start = start;
+    let mut guess = guess;
+    let mut guessed = false;
     let mut prior = prior.cloned();
     let mut changed = Vec::new();
     for _ in 0..SETTLE_ROUNDS {
@@ -102,7 +112,17 @@ pub(crate) fn settle(
             cores,
             ..base
         };
-        let iterate = climb(circuit, solver, conditions, start, |_| budget)?;
+        let budget_from_guess = crate::session::predict::GUESS_BUDGET.min(budget);
+        let iterate = match guess
+            .take()
+            .map(|guess| newton(circuit, solver, &conditions, guess, budget_from_guess))
+        {
+            Some(Ok(converged)) => {
+                guessed = true;
+                converged.iterate
+            }
+            Some(Err(_)) | None => climb(circuit, solver, conditions, start, |_| budget)?,
+        };
         let levels = circuit.watches.levels(&iterate.solution, prior.as_ref());
         let next = circuit.react(&chips, prior.as_ref().unwrap_or(&levels), &levels);
         if next == chips {
@@ -110,6 +130,7 @@ pub(crate) fn settle(
                 iterate,
                 chips,
                 levels,
+                guessed,
             });
         }
         changed = circuit

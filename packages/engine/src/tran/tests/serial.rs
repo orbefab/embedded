@@ -81,6 +81,7 @@ fn settled(circuit: &Circuit) -> op::Settled {
         &mut crate::mna::Solver::new(&circuit.layout),
         Conditions::NOMINAL,
         Iterate::initial(circuit),
+        None,
         circuit.power_on(),
         &Actives::power_on(circuit),
         None,
