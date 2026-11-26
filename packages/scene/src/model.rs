@@ -229,6 +229,14 @@ pub(crate) struct Holes {
     pub(crate) strips: Vec<Vec<String>>,
 }
 
+/// A warning accepted by design on one pin of a composite part's child.
+#[derive(Clone, Debug)]
+pub(crate) struct AcceptedWarning {
+    pub(crate) code: String,
+    pub(crate) pin: Ref,
+    pub(crate) span: Span,
+}
+
 pub(crate) struct Part {
     pub(crate) file: FileId,
     /// The id, or the path a scene names it by, for messages.
@@ -240,6 +248,8 @@ pub(crate) struct Part {
     pub(crate) params: Vec<ParamDecl>,
     /// Each `not_simulated` entry's reason with the pins it lists.
     pub(crate) not_simulated: Vec<(String, Vec<String>)>,
+    /// Warnings accepted by design on one pin of a child part.
+    pub(crate) accepted_warnings: Vec<AcceptedWarning>,
     pub(crate) joins_only: bool,
     /// Pins the design leaves open. `net.floating` leaves a net of one out while nothing
     /// outside this part reaches it.
@@ -526,6 +536,7 @@ pub(crate) fn decode_part(
         bodies: Vec::new(),
         params: Vec::new(),
         not_simulated: Vec::new(),
+        accepted_warnings: Vec::new(),
         joins_only: false,
         open: Vec::new(),
         holes: None,
@@ -561,6 +572,19 @@ pub(crate) fn decode_part(
                 check_text_and_backlight(value, format, out);
             }
             "not_simulated" => part.not_simulated = decode_not_simulated(value, out),
+            "accepted_warnings" => {
+                if format < SUPPLY_MIN_FORMAT {
+                    out.push(
+                        Code::Syntax,
+                        prop.key_span,
+                        format!(
+                            "`accepted_warnings` needs part format {SUPPLY_MIN_FORMAT}; this file is format {format}"
+                        ),
+                        format!("set \"format\": {SUPPLY_MIN_FORMAT} in this part file"),
+                    );
+                }
+                part.accepted_warnings = decode_accepted_warnings(value, out);
+            }
             "buy" => crate::buy::check(value, out),
             "joins_only" => part.joins_only = matches!(value.json, Json::Bool(true)),
             "open" => {
@@ -622,6 +646,17 @@ pub(crate) fn decode_part(
                 );
             }
         }
+    }
+    if let Some(node) = root.get("accepted_warnings")
+        && part.comp.parts.is_empty()
+        && !part.accepted_warnings.is_empty()
+    {
+        out.push(
+            Code::Syntax,
+            node.span,
+            "`accepted_warnings` is only for a composite part with `parts`",
+            "remove `accepted_warnings` from a leaf part".into(),
+        );
     }
     if let Some(node) = root.get("open") {
         for name in &part.open {
@@ -1836,6 +1871,91 @@ fn decode_not_simulated(node: &Node, out: &mut Findings) -> Vec<(String, Vec<Str
                 .map(str::to_string)
                 .collect(),
         ));
+    }
+    entries
+}
+
+/// Warnings accepted by design on child pins of a composite part. No wildcards.
+fn decode_accepted_warnings(node: &Node, out: &mut Findings) -> Vec<AcceptedWarning> {
+    let Some(items) = node.items() else {
+        return Vec::new();
+    };
+    if items.is_empty() {
+        out.push(
+            Code::Syntax,
+            node.span,
+            "`accepted_warnings` is empty",
+            "leave `accepted_warnings` out, or name a warning this board accepts".into(),
+        );
+        return Vec::new();
+    }
+    let mut entries = Vec::new();
+    for item in items {
+        let Some(_) = item.props() else { continue };
+        for req in ["code", "pin", "why"] {
+            if item.get(req).is_none() {
+                out.push(
+                    Code::Syntax,
+                    item.span,
+                    format!("an accepted_warnings entry has no `{req}`"),
+                    "each entry needs `code`, `pin` and `why`".into(),
+                );
+            }
+        }
+        let (Some(code_node), Some(pin_node), Some(why_node)) =
+            (item.get("code"), item.get("pin"), item.get("why"))
+        else {
+            continue;
+        };
+        let (Some(code), Some(pin_str), Some(why)) =
+            (code_node.str(), pin_node.str(), why_node.str())
+        else {
+            continue;
+        };
+        if code.is_empty() || code.contains('*') {
+            out.push(
+                Code::Syntax,
+                code_node.span,
+                format!("`{code}` is not a single warning code"),
+                "name one exact warning code, such as \"rating.supply_low\"".into(),
+            );
+            continue;
+        }
+        if why.trim().is_empty() {
+            out.push(
+                Code::Syntax,
+                why_node.span,
+                "`why` is empty",
+                "state the board-design reason for accepting this warning".into(),
+            );
+            continue;
+        }
+        if pin_str.contains('*') {
+            out.push(
+                Code::Syntax,
+                pin_node.span,
+                format!("`{pin_str}` uses a wildcard; name one child pin"),
+                "name one child pin, such as \"led.VDD\"".into(),
+            );
+            continue;
+        }
+        let Some(pin) = decode_ref(pin_node, out) else {
+            continue;
+        };
+        if pin.segs.len() < 2 {
+            out.push(
+                Code::Syntax,
+                pin_node.span,
+                format!("`{pin_str}` does not name a child part's pin"),
+                "write `<child>.<pin>`, such as \"led.VDD\"".into(),
+            );
+            continue;
+        }
+        entries.push(AcceptedWarning {
+            code: code.to_string(),
+            pin,
+            span: pin_node.span,
+        });
     }
     entries
 }

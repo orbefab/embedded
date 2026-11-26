@@ -164,6 +164,7 @@ fn samples() -> Vec<Diagnostic> {
         Diagnostic::RatingSupplyLow(SupplyExcursion {
             pin: Ref::Pin(name("u1"), name("VDD")),
             min: 1.71,
+            clock_hz: None,
             lowest: 1.542,
             peak_at: Time::from_ps(9_500),
             first: Time::from_ps(8_500),

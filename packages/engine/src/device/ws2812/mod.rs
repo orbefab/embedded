@@ -210,6 +210,7 @@ pub(crate) fn pin_ratings(chain: &Ws2812) -> Option<PinRatings> {
             net: chain.pins[VCC],
             gnd: chain.pins[GND],
             min,
+            clock_hz: None,
         })
         .into_iter()
         .collect();

@@ -194,6 +194,7 @@ pub(crate) fn pin_ratings(chip: &Ne555) -> Option<PinRatings> {
             net: chip.pins[Ne555::VCC],
             gnd: chip.pins[Ne555::GND],
             min,
+            clock_hz: None,
         }],
     })
 }

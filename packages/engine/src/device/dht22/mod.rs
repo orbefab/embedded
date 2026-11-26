@@ -98,6 +98,7 @@ pub(crate) fn pin_ratings(dev: &Dht22) -> Option<PinRatings> {
             net: dev.pins[VCC],
             gnd: dev.pins[GND],
             min,
+            clock_hz: None,
         }],
     })
 }

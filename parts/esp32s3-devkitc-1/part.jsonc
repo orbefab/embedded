@@ -262,6 +262,13 @@
     "GPIO38": "j3.10", "GPIO37": "j3.11", "GPIO36": "j3.12", "GPIO35": "j3.13", "GPIO0": "j3.14",
     "GPIO45": "j3.15", "GPIO48": "j3.16", "GPIO47": "j3.17", "GPIO21": "j3.18", "GPIO20": "j3.19", "GPIO19": "j3.20"
   },
+  "accepted_warnings": [
+    {
+      "code": "rating.supply_low",
+      "pin": "led.VDD",
+      "why": "The ESP32-S3-DevKitC-1 schematic (SCH_ESP32-S3-DevKitC-1_V1.1_20221130) powers the onboard SK68XXMINI-HS RGB LED from the 3.3 V SGM2212 regulator, below the LED datasheet's 3.7 V VDD minimum."
+    }
+  ],
   "not_simulated": [
     { "what": "RST", "pins": ["RST"], "why": "J1 pin 3 is EN, the chip's CHIP_PU. The esp32s3 kind has no reset pin. The sheet's truth table for DTR and RTS still wires Q1 and Q2, and the model does not reset when EN moves." },
     { "what": "GPIO35, GPIO36 and GPIO37", "pins": ["GPIO35", "GPIO36", "GPIO37"], "why": "The user guide says that on an octal-SPI WROOM module these three pins are used inside the module and are not available. J3 still brings them out, as the header table lists them." },

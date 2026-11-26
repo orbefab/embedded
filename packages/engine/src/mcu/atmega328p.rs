@@ -72,15 +72,25 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
     let (vcc, gnd) = (node(Pad::Vcc), node(Pad::Gnd));
     let clock_hz = u32::try_from(mcu.clock_hz.value).expect("parse keeps the clock in u32");
     let fuses = mcu.fuses;
-    let bridge = Bridge::new(
-        clock_hz,
-        FuseBytes {
-            low: fuses.low(),
-            high: fuses.high(),
-            extended: fuses.extended(),
-        },
-        mcu.firmware.flash(),
-    );
+    let conductance = |current: Option<&Value>| current.map(|c| c.si.get() / ACTIVE_AT);
+    let running = conductance(mcu.active_current.as_ref());
+    let held = conductance(mcu.reset_current.as_ref()).or(running);
+    let supply = held.map(|held| Supply {
+        vcc: mcu.pins[VCC],
+        gnd: mcu.pins[GND_8],
+        conductance: running.unwrap_or(0.0),
+        held,
+    });
+    let fuse_bytes = FuseBytes {
+        low: fuses.low(),
+        high: fuses.high(),
+        extended: fuses.extended(),
+    };
+    let bridge = if supply.is_some_and(|s| s.conductance != s.held) {
+        Bridge::power_on(clock_hz, fuse_bytes, mcu.firmware.flash())
+    } else {
+        Bridge::new(clock_hz, fuse_bytes, mcu.firmware.flash())
+    };
 
     // `RSTDISBL` unprogrammed: `PC6` is `RESET`, with its own pull-up and thresholds.
     let reset = fuses.has_reset().then(|| port_index(RESET));
@@ -151,16 +161,22 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
         samples,
         bridge,
     );
-    let conductance = |current: Option<&Value>| current.map(|c| c.si.get() / ACTIVE_AT);
-    let running = conductance(mcu.active_current.as_ref());
-    let held = conductance(mcu.reset_current.as_ref()).or(running);
-    chip.supply = held.map(|held| Supply {
-        vcc: mcu.pins[VCC],
-        gnd: mcu.pins[GND_8],
-        conductance: running.unwrap_or(0.0),
-        held,
-    });
+    chip.supply = supply;
     chip
+}
+
+/// Minimum operating VCC for `clock_hz` per DS40002061B Figure 29-1 (Safe Operating Area):
+/// 1.8 V up to 4 MHz, 2.7 V at 10 MHz, 4.5 V at 20 MHz, linear in between.
+pub(crate) fn soa_min_voltage(clock_hz: u32) -> f64 {
+    if clock_hz <= 4_000_000 {
+        1.8
+    } else if clock_hz <= 10_000_000 {
+        (1800.0 + f64::from(clock_hz - 4_000_000) * 900.0 / 6_000_000.0) / 1000.0
+    } else if clock_hz <= 20_000_000 {
+        (2700.0 + f64::from(clock_hz - 10_000_000) * 1800.0 / 10_000_000.0) / 1000.0
+    } else {
+        4.5
+    }
 }
 
 /// The part's ratings on its pins, `None` when it has no `ratings` object. Each port pin is an
@@ -191,12 +207,14 @@ pub(crate) fn pin_ratings(mcu: &Atmega328p) -> Option<PinRatings> {
             })
         })
         .collect();
+    let clock_hz = u32::try_from(mcu.clock_hz.value).expect("parse keeps the clock in u32");
     let supply_mins = si(&ratings.supply_min)
-        .map(|min| SupplyMin {
+        .map(|base| SupplyMin {
             pin: Atmega328p::PINS[VCC],
             net: mcu.pins[VCC],
             gnd: mcu.pins[GND_8],
-            min,
+            min: base.max(soa_min_voltage(clock_hz)),
+            clock_hz: Some(clock_hz),
         })
         .into_iter()
         .collect();

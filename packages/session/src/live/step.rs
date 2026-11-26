@@ -240,7 +240,7 @@ impl Open {
                 since: None,
             })
             .collect();
-        let mut known: BTreeSet<Key> = self.findings(&probe).iter().map(key).collect();
+        let mut known: BTreeSet<Key> = self.step_findings(&probe).iter().map(key).collect();
         drop(probe);
         let mut changes = Vec::new();
         let mut more = 0;
@@ -309,7 +309,7 @@ impl Open {
                     track.since = None;
                 }
             }
-            for d in self.findings(&probe) {
+            for d in self.step_findings(&probe) {
                 if d.at().is_some() && known.insert(key(&d)) {
                     found.push(Change::Diagnostic {
                         by_ps: d.at().map_or(now, Time::as_ps),

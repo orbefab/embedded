@@ -161,6 +161,7 @@ pub(crate) fn pin_ratings(mcu: &Esp32s3) -> Option<PinRatings> {
             net: mcu.pins[0],
             gnd: mcu.pins[1],
             min,
+            clock_hz: None,
         })
         .into_iter()
         .collect();

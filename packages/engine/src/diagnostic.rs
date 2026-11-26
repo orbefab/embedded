@@ -660,6 +660,8 @@ pub struct SupplyExcursion {
     pub pin: Ref,
     /// The datasheet minimum supply voltage, in V.
     pub min: f64,
+    /// Clock frequency in Hz when the minimum depends on the chip's clock (such as an ATmega328P).
+    pub clock_hz: Option<u32>,
     /// The lowest supply voltage seen while above the unpowered floor, in V.
     pub lowest: f64,
     pub peak_at: Time,
@@ -2120,12 +2122,16 @@ impl Diagnostic {
                 })
             }
             Diagnostic::RatingSupplyLow(excursion) => {
-                serde_json::json!({
+                let mut data = serde_json::json!({
                     "limit": excursion.min,
                     "over_ps": excursion.over_ps,
                     "peak_ps": excursion.peak_at,
                     "voltage": excursion.lowest,
-                })
+                });
+                if let Some(hz) = excursion.clock_hz {
+                    data["clock_hz"] = serde_json::json!(hz);
+                }
+                data
             }
             Diagnostic::RegulatorCurrentLimit(excursion) => {
                 serde_json::json!({
@@ -2327,17 +2333,32 @@ fn outside_window(excursion: &VoltageExcursion, namer: &dyn Fn(&Ref) -> String) 
     )
 }
 
+fn frequency_text(hz: u32) -> String {
+    let hz = f64::from(hz);
+    if hz >= 1e6 {
+        format!("{} MHz", significant_text(hz / 1e6))
+    } else if hz >= 1e3 {
+        format!("{} kHz", significant_text(hz / 1e3))
+    } else {
+        format!("{} Hz", significant_text(hz))
+    }
+}
+
 fn supply_low(excursion: &SupplyExcursion, namer: &dyn Fn(&Ref) -> String) -> String {
     let SupplyExcursion {
         pin,
         min,
+        clock_hz,
         lowest,
         over_ps,
         ..
     } = excursion;
     let pin = namer(pin);
+    let at_clock = clock_hz
+        .map(|hz| format!(" at {}", frequency_text(hz)))
+        .unwrap_or_default();
     format!(
-        "{pin} supply drops to {} V over the chip's ground, below its {} V minimum{}",
+        "{pin} supply drops to {} V over the chip's ground, below its {} V minimum{at_clock}{}",
         significant_text(*lowest),
         significant_text(*min),
         for_time(*over_ps)

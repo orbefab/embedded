@@ -224,6 +224,15 @@ const NOT_SIMULATED: Shape = Shape::Obj(
     ],
 );
 
+const ACCEPTED_WARNING: Shape = Shape::Obj(
+    "an accepted_warnings entry",
+    &[
+        ("code", Shape::Str),
+        ("pin", Shape::Str),
+        ("why", Shape::Str),
+    ],
+);
+
 const BUY: Shape = Shape::Obj(
     "a buy entry",
     &[
@@ -271,6 +280,7 @@ pub(crate) const PART: &[(&str, Shape)] = &[
     ("facts", Shape::Map(&VALUE)),
     ("view", VIEW),
     ("not_simulated", Shape::List(&NOT_SIMULATED)),
+    ("accepted_warnings", Shape::List(&ACCEPTED_WARNING)),
     ("buy", Shape::List(&BUY)),
     ("joins_only", Shape::Bool),
     ("open", Shape::List(&Shape::Str)),

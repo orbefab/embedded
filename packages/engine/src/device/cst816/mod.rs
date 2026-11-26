@@ -138,6 +138,7 @@ pub(crate) fn pin_ratings(dev: &Cst816) -> Option<PinRatings> {
             net: dev.pins[VCC],
             gnd: dev.pins[GND],
             min,
+            clock_hz: None,
         }],
     })
 }

@@ -162,6 +162,7 @@ fn the_catalog_parts_in_format_5_and_6_have_no_findings() {
         "diode-sod123",
         "lm7805-to220",
         "sk68xxmini-hs",
+        "esp32s3-devkitc-1",
         "npn-2n2222-to92",
         "esp32s3-qfn56",
         "ssd1306-oled-128x64",
@@ -171,4 +172,76 @@ fn the_catalog_parts_in_format_5_and_6_have_no_findings() {
             fs::read_to_string(common::repo().join(format!("parts/{id}/part.jsonc"))).unwrap();
         assert_eq!(findings(&text), [], "{id}");
     }
+}
+
+#[test]
+fn accepted_warnings_checks_format_7_and_rejects_wildcards_and_leaf_parts() {
+    // Composite catalog part in format 6 is told to set format 7 for accepted_warnings.
+    let found = findings(&in_format("esp32s3-devkitc-1", 7, 6));
+    let finding = found
+        .iter()
+        .find(|d| d.message.contains("`accepted_warnings`"))
+        .unwrap_or_else(|| panic!("expected accepted_warnings format error: {found:#?}"));
+    assert_eq!(finding.code, Code::Syntax);
+    assert_eq!(finding.hint, "set \"format\": 7 in this part file");
+
+    // Wildcard in code or pin is rejected.
+    let composite = |code: &str, pin: &str| {
+        format!(
+            r#"{{
+  "format": 7,
+  "part": "board",
+  "version": "0.1.0",
+  "title": "Board",
+  "summary": "Composite test part.",
+  "tags": ["test"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {{}},
+  "real": {{ "generic": true, "maker": null, "number": null, "datasheet": "test" }},
+  "pins": {{ "VCC": [1], "GND": [2] }},
+  "accepted_warnings": [
+    {{ "code": "{code}", "pin": "{pin}", "why": "By board design." }}
+  ],
+  "parts": {{ "r1": {{ "type": "resistor-axial", "resistance": "1k" }} }},
+  "wires": [["VCC", "r1.a"], ["GND", "r1.b"]]
+}}"#
+        )
+    };
+    let wild_code = findings(&composite("rating.*", "r1.a"));
+    assert!(
+        wild_code
+            .iter()
+            .any(|d| d.message.contains("not a single warning code")),
+        "{wild_code:#?}"
+    );
+    let wild_pin = findings(&composite("rating.supply_low", "r1.*"));
+    assert!(
+        wild_pin.iter().any(|d| d.message.contains("wildcard")),
+        "{wild_pin:#?}"
+    );
+
+    // Leaf part cannot declare accepted_warnings.
+    let leaf = r#"{
+  "format": 7,
+  "part": "leaf",
+  "version": "0.1.0",
+  "title": "Leaf",
+  "summary": "Leaf test part.",
+  "tags": ["test"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {},
+  "real": { "generic": true, "maker": null, "number": null, "datasheet": "test" },
+  "pins": { "a": [1], "b": [2] },
+  "accepted_warnings": [
+    { "code": "rating.supply_low", "pin": "u.VCC", "why": "Not allowed on a leaf." }
+  ],
+  "model": { "kind": "resistor", "resistance": { "value": 1000, "unit": "ohm", "source": "user" } }
+}"#;
+    let leaf_found = findings(leaf);
+    assert!(
+        leaf_found
+            .iter()
+            .any(|d| d.message.contains("composite part")),
+        "{leaf_found:#?}"
+    );
 }

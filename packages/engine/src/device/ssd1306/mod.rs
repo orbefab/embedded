@@ -170,6 +170,7 @@ pub(crate) fn pin_ratings(dev: &Ssd1306) -> Option<PinRatings> {
             net: dev.pins[VDD],
             gnd: dev.pins[VSS],
             min,
+            clock_hz: None,
         })
         .into_iter()
         .collect();

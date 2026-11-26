@@ -1197,7 +1197,10 @@ impl Actives {
             changed |= image != committed.drive()
                 || pulled_down != committed.pulled_down()
                 || strong_pull_up != committed.strong_pull_up()
-                || ahead.core.held() != committed.held()
+                || (circuit.actives[k]
+                    .supply
+                    .is_some_and(|s| s.conductance != s.held)
+                    && ahead.core.held() != committed.held())
                 || draw != committed.draw();
             if stop.is_some_and(|stop| stop.sample) || tracks {
                 let volts: Vec<f64> = circuit.actives[k]

@@ -198,6 +198,7 @@ pub(crate) fn pin_ratings(part: &Hc595) -> Option<PinRatings> {
             net: part.pins[VCC],
             gnd: part.pins[GND],
             min: min.si.get(),
+            clock_hz: None,
         })
         .into_iter()
         .collect();

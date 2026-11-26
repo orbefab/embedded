@@ -173,6 +173,7 @@ pub(crate) fn pin_ratings(dev: &Hd44780I2c) -> Option<PinRatings> {
             net: dev.pins[VCC],
             gnd: dev.pins[GND],
             min,
+            clock_hz: None,
         })
         .into_iter()
         .collect();

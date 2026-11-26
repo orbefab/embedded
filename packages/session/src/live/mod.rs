@@ -286,7 +286,7 @@ impl Live {
             parts: open.refs.top.clone(),
             engine_parts: netlist.parts,
             nets: netlist.nets.len(),
-            diagnostics: open.diagnostics(&open.engine.probe()),
+            diagnostics: open.opened_diagnostics(&open.engine.probe()),
         };
         self.open = Some(open);
         Ok(data)
@@ -626,10 +626,28 @@ impl Open {
     /// has not yet found on an accepted step. A rating over now is the probe's, not the last
     /// accepted step's.
     fn findings(&self, probe: &Probe) -> Vec<EngineDiagnostic> {
-        let mut found = self.engine.diagnostics();
+        self.findings_with(probe, true)
+    }
+
+    /// Like [`Self::findings`], leaving out an unclosed supply power-up or power-down episode.
+    fn step_findings(&self, probe: &Probe) -> Vec<EngineDiagnostic> {
+        self.findings_with(probe, false)
+    }
+
+    fn findings_with(&self, probe: &Probe, include_open_supply: bool) -> Vec<EngineDiagnostic> {
+        let mut found = if include_open_supply {
+            self.engine.diagnostics()
+        } else {
+            self.engine.settled_diagnostics()
+        };
         found.retain(|diagnostic| !diagnostic.over_now());
         let known: BTreeSet<Key> = found.iter().map(key).collect();
-        for over in self.engine.over_ratings(probe) {
+        let over = if include_open_supply {
+            self.engine.over_ratings(probe)
+        } else {
+            self.engine.settled_over_ratings(probe)
+        };
+        for over in over {
             if !known.contains(&key(&over)) {
                 found.push(over);
             }
@@ -639,7 +657,14 @@ impl Open {
             EngineDiagnostic::NetFloating {
                 net: EngineRef::Net(name),
             } => !self.refs.quiet_floating.contains(name.as_str()),
-            _ => true,
+            other => {
+                let refs = other.refs();
+                !(refs.len() == 1
+                    && self
+                        .refs
+                        .quiet_warnings
+                        .contains(&(other.code().to_string(), refs[0].to_string())))
+            }
         });
         orbe_engine::run_folder::sort_diagnostics(&mut found);
         found
@@ -647,6 +672,13 @@ impl Open {
 
     fn diagnostics(&self, probe: &Probe) -> Vec<Diagnostic> {
         self.findings(probe)
+            .iter()
+            .map(|d| self.diagnostic(d))
+            .collect()
+    }
+
+    fn opened_diagnostics(&self, probe: &Probe) -> Vec<Diagnostic> {
+        self.step_findings(probe)
             .iter()
             .map(|d| self.diagnostic(d))
             .collect()

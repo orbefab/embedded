@@ -507,8 +507,11 @@ impl Session {
             actives.keep_shown();
         }
         // The t = 0 row is no rating sample. A capacitor held at `initial` draws what its hold
-        // takes there, which no part carries. The first accepted step is the first sample.
-        let ratings = Ratings::new(&circuit.netlist, &circuit.actives, &columns, Timing::Run);
+        // takes there, which no part carries. The first accepted step is the first sample. Supply
+        // watches still note whether t = 0 sits cleanly off or in range so a fast power-up or
+        // power-down from t = 0 is recognized as a power cycle.
+        let mut ratings = Ratings::new(&circuit.netlist, &circuit.actives, &columns, Timing::Run);
+        ratings.seed_supplies(&row);
         let inputs = Inputs::new(&circuit.netlist, &circuit.actives);
         let record = rows
             .map(|rows| Record::start(transient, &columns, rows, &row, &signals, &logic))
@@ -629,8 +632,18 @@ impl Session {
     /// `trace.row_interpolated` is absent. It names a grid row, and only a recorded trace
     /// has those rows.
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
+        self.diagnostics_with(true)
+    }
+
+    /// Like [`Self::diagnostics`], leaving out a supply pin whose current visit below its minimum
+    /// started from off or from in range and has not yet closed.
+    pub fn settled_diagnostics(&self) -> Vec<Diagnostic> {
+        self.diagnostics_with(false)
+    }
+
+    fn diagnostics_with(&self, include_open_supply: bool) -> Vec<Diagnostic> {
         let mut found = self.warnings.clone();
-        found.extend(self.ratings.now(None));
+        found.extend(self.ratings.now_with(None, include_open_supply));
         found.extend_from_slice(self.inputs.findings());
         found.extend(self.actives.warnings(&self.circuit, self.accepted()));
         crate::run_folder::sort_diagnostics(&mut found);
@@ -644,15 +657,25 @@ impl Session {
     /// sample, so the warnings are those of the step after it, the first sample. A session
     /// that faulted there has none.
     pub fn over_ratings(&self, probe: &Probe<'_>) -> Vec<Diagnostic> {
+        self.over_ratings_with(probe, true)
+    }
+
+    /// Like [`Self::over_ratings`], leaving out an unclosed supply power-up or power-down.
+    pub fn settled_over_ratings(&self, probe: &Probe<'_>) -> Vec<Diagnostic> {
+        self.over_ratings_with(probe, false)
+    }
+
+    fn over_ratings_with(&self, probe: &Probe<'_>, include_open_supply: bool) -> Vec<Diagnostic> {
         let cores = self.actives.cores();
         match &self.state {
-            State::Running { accepted, .. } if probe.at() > accepted.at => {
-                self.ratings.now(Some((probe.at(), probe.values(), cores)))
-            }
-            State::Running { accepted, next, .. } if accepted.at == Time::ZERO => {
-                self.ratings.now(Some((next.at, &next.row, cores)))
-            }
-            _ => self.ratings.now(None),
+            State::Running { accepted, .. } if probe.at() > accepted.at => self.ratings.now_with(
+                Some((probe.at(), probe.values(), cores)),
+                include_open_supply,
+            ),
+            State::Running { accepted, next, .. } if accepted.at == Time::ZERO => self
+                .ratings
+                .now_with(Some((next.at, &next.row, cores)), include_open_supply),
+            _ => self.ratings.now_with(None, include_open_supply),
         }
     }
 

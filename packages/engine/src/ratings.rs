@@ -121,6 +121,8 @@ pub(crate) struct SupplyMin {
     pub(crate) gnd: NetId,
     /// Volt, greater than 0.
     pub(crate) min: f64,
+    /// Clock frequency in Hz when `min` depends on the chip's clock.
+    pub(crate) clock_hz: Option<u32>,
 }
 
 /// A chip's ratings on its package pins, which its adapter builds from its part.
@@ -313,6 +315,35 @@ struct Window {
     excursion: Option<VoltageExcursion>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SupplyBand {
+    /// At or below `SUPPLY_UNPOWERED_V` (0.1 V): switched off or disconnected.
+    Off,
+    /// Strictly above `SUPPLY_UNPOWERED_V` and below the rounded minimum.
+    Low,
+    /// At or above the rounded minimum.
+    On,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SupplyEntry {
+    /// Already in the low band on the first sample of the run (or operating point).
+    Start,
+    /// Entered the low band from `Off`.
+    Off,
+    /// Entered the low band from `On`.
+    On,
+}
+
+#[derive(Clone)]
+struct SupplyEpisode {
+    entry: SupplyEntry,
+    first: Time,
+    lowest: f64,
+    peak_at: Time,
+    over_ps: Option<u64>,
+}
+
 #[derive(Clone)]
 struct SupplyWatch {
     pin: Ref,
@@ -320,7 +351,9 @@ struct SupplyWatch {
     gnd: usize,
     min: f64,
     min_rounded: f64,
-    over: bool,
+    clock_hz: Option<u32>,
+    last_band: Option<SupplyBand>,
+    episode: Option<SupplyEpisode>,
     excursion: Option<SupplyExcursion>,
 }
 
@@ -673,7 +706,9 @@ impl Ratings {
                             gnd: columns.net(min.gnd),
                             min: min.min,
                             min_rounded: significant(min.min),
-                            over: false,
+                            clock_hz: min.clock_hz,
+                            last_band: None,
+                            episode: None,
                             excursion: None,
                         });
                     }
@@ -688,7 +723,9 @@ impl Ratings {
                             gnd: columns.net(gnd),
                             min,
                             min_rounded: significant(min),
-                            over: false,
+                            clock_hz: None,
+                            last_band: None,
+                            episode: None,
                             excursion: None,
                         });
                     }
@@ -707,6 +744,18 @@ impl Ratings {
             last: None,
             restarted: false,
             decays: Decays::default(),
+        }
+    }
+
+    /// Seeds each supply watch's initial band from the t = 0 operating point when the rail starts
+    /// cleanly off (<= 0.1 V) or in range (>= min), without recording a sample. A rail already in
+    /// the low band at t = 0 leaves `last_band` unset so the first accepted sample warns as `Start`.
+    pub(crate) fn seed_supplies(&mut self, row: &[Finite]) {
+        for supply in &mut self.supplies {
+            let (_, band) = supply.read(row);
+            if matches!(band, SupplyBand::Off | SupplyBand::On) {
+                supply.last_band = Some(band);
+            }
         }
     }
 
@@ -831,33 +880,48 @@ impl Ratings {
             }
         }
         for supply in &mut self.supplies {
-            elapsed(
-                supply.over,
-                supply.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
-                self.last,
-            );
-            let SupplyReading { v, low } = supply.read(row);
-            supply.over = low;
-            if !low {
-                continue;
+            if let Some(ep) = &mut supply.episode
+                && let (Some(last), Some(over_ps)) = (self.last, &mut ep.over_ps)
+            {
+                *over_ps += at.as_ps() - last.as_ps();
             }
-            match &mut supply.excursion {
-                None => {
-                    supply.excursion = Some(SupplyExcursion {
-                        pin: supply.pin.clone(),
-                        min: supply.min,
-                        lowest: v,
-                        peak_at: at,
-                        first: at,
-                        over_ps: self.timing.over_ps(),
-                    });
+            let (v, band) = supply.read(row);
+            match band {
+                SupplyBand::Low => {
+                    if let Some(ep) = &mut supply.episode {
+                        if v < ep.lowest {
+                            ep.lowest = v;
+                            ep.peak_at = at;
+                        }
+                    } else {
+                        let entry = match supply.last_band {
+                            None => SupplyEntry::Start,
+                            Some(SupplyBand::Off) => SupplyEntry::Off,
+                            Some(SupplyBand::On) => SupplyEntry::On,
+                            Some(SupplyBand::Low) => unreachable!("episode is open while Low"),
+                        };
+                        supply.episode = Some(SupplyEpisode {
+                            entry,
+                            first: at,
+                            lowest: v,
+                            peak_at: at,
+                            over_ps: self.timing.over_ps(),
+                        });
+                    }
                 }
-                Some(excursion) if v < excursion.lowest => {
-                    excursion.lowest = v;
-                    excursion.peak_at = at;
+                SupplyBand::On | SupplyBand::Off => {
+                    if let Some(ep) = supply.episode.take() {
+                        let power_cycle = matches!(
+                            (ep.entry, band),
+                            (SupplyEntry::Off, SupplyBand::On) | (SupplyEntry::On, SupplyBand::Off)
+                        );
+                        if !power_cycle {
+                            supply.merge(ep);
+                        }
+                    }
                 }
-                Some(_) => {}
             }
+            supply.last_band = Some(band);
         }
         for limit in &mut self.limits {
             if limit.clamped_since.is_some()
@@ -1024,6 +1088,10 @@ impl Ratings {
     /// One `rating.*` diagnostic per quantity that went over, plus one `regulator.current_limit`
     /// per regulator held at its current limit, through the last sample.
     pub(crate) fn findings(&self) -> Vec<Diagnostic> {
+        self.findings_with(true)
+    }
+
+    fn findings_with(&self, include_open_supply: bool) -> Vec<Diagnostic> {
         let currents = self.watches.iter().filter_map(|watch| {
             let excursion = watch.excursion.clone()?;
             Some(match watch.kind {
@@ -1035,10 +1103,11 @@ impl Ratings {
             .windows
             .iter()
             .filter_map(|window| Some(Diagnostic::RatingVoltage(window.excursion.clone()?)));
-        let supplies = self
-            .supplies
-            .iter()
-            .filter_map(|supply| Some(Diagnostic::RatingSupplyLow(supply.excursion.clone()?)));
+        let supplies = self.supplies.iter().filter_map(|supply| {
+            Some(Diagnostic::RatingSupplyLow(
+                supply.finding(include_open_supply)?,
+            ))
+        });
         let limits = self
             .limits
             .iter()
@@ -1097,6 +1166,14 @@ impl Ratings {
     /// When [`Self::quiet_after`] says nothing is over before or after the probe, no copy is
     /// sampled.
     pub(crate) fn now(&self, probe: Option<(Time, &[Finite], &[active::Core])>) -> Vec<Diagnostic> {
+        self.now_with(probe, true)
+    }
+
+    pub(crate) fn now_with(
+        &self,
+        probe: Option<(Time, &[Finite], &[active::Core])>,
+        include_open_supply: bool,
+    ) -> Vec<Diagnostic> {
         let mut probed = None;
         let mut quiet = false;
         if let Some((at, row, cores)) = probe
@@ -1112,7 +1189,7 @@ impl Ratings {
             probed = Some(ratings);
         }
         let ratings = probed.as_ref().unwrap_or(self);
-        let mut found = ratings.findings();
+        let mut found = ratings.findings_with(include_open_supply);
         found.extend(ratings.over_now());
         debug_assert!(!quiet || found.is_empty(), "a quiet probe found {found:?}");
         found
@@ -1126,7 +1203,10 @@ impl Ratings {
     fn quiet_after(&self, at: Time, row: &[Finite], cores: &[active::Core]) -> bool {
         if self.watches.iter().any(|w| w.excursion.is_some())
             || self.windows.iter().any(|w| w.excursion.is_some())
-            || self.supplies.iter().any(|s| s.excursion.is_some())
+            || self
+                .supplies
+                .iter()
+                .any(|s| s.excursion.is_some() || s.episode.is_some())
             || self.limits.iter().any(|l| l.excursion.is_some())
             || self.drives.iter().any(|d| d.excursion.is_some())
         {
@@ -1159,7 +1239,10 @@ impl Ratings {
             let reading = window.read(row);
             !reading.below && !reading.above
         });
-        let supplies = self.supplies.iter().all(|supply| !supply.read(row).low);
+        let supplies = self
+            .supplies
+            .iter()
+            .all(|supply| supply.read(row).1 != SupplyBand::Low);
         let limits = self.limits.iter().all(|limit| !limit.read(row).clamped);
         let drives = self.drives.iter().all(|drive| {
             let volts = row[drive.column].get().abs();
@@ -1420,18 +1503,67 @@ impl Window {
     }
 }
 
-struct SupplyReading {
-    v: f64,
-    low: bool,
-}
-
 impl SupplyWatch {
-    fn read(&self, row: &[Finite]) -> SupplyReading {
+    fn read(&self, row: &[Finite]) -> (f64, SupplyBand) {
         let v = row[self.column].get() - row[self.gnd].get();
-        let low = v > SUPPLY_UNPOWERED_V
-            && v < self.min
-            && (v < self.min * 0.99 || significant(v) < self.min_rounded);
-        SupplyReading { v, low }
+        let band = if v <= SUPPLY_UNPOWERED_V {
+            SupplyBand::Off
+        } else if v < self.min && (v < self.min * 0.99 || significant(v) < self.min_rounded) {
+            SupplyBand::Low
+        } else {
+            SupplyBand::On
+        };
+        (v, band)
+    }
+
+    fn excursion_from(&self, ep: SupplyEpisode) -> SupplyExcursion {
+        SupplyExcursion {
+            pin: self.pin.clone(),
+            min: self.min,
+            clock_hz: self.clock_hz,
+            lowest: ep.lowest,
+            peak_at: ep.peak_at,
+            first: ep.first,
+            over_ps: ep.over_ps,
+        }
+    }
+
+    fn merge(&mut self, ep: SupplyEpisode) {
+        match &mut self.excursion {
+            None => self.excursion = Some(self.excursion_from(ep)),
+            Some(existing) => {
+                if ep.lowest < existing.lowest {
+                    existing.lowest = ep.lowest;
+                    existing.peak_at = ep.peak_at;
+                }
+                if let (Some(total), Some(add)) = (&mut existing.over_ps, ep.over_ps) {
+                    *total += add;
+                }
+            }
+        }
+    }
+
+    fn finding(&self, include_open: bool) -> Option<SupplyExcursion> {
+        let open = self
+            .episode
+            .as_ref()
+            .filter(|ep| include_open || ep.entry == SupplyEntry::Start);
+        match (&self.excursion, open) {
+            (None, None) => None,
+            (Some(ex), None) => Some(ex.clone()),
+            (None, Some(ep)) => Some(self.excursion_from(ep.clone())),
+            (Some(ex), Some(ep)) => {
+                let mut merged = ex.clone();
+                if ep.lowest < merged.lowest {
+                    merged.lowest = ep.lowest;
+                    merged.peak_at = ep.peak_at;
+                }
+                if let (Some(total), Some(add)) = (&mut merged.over_ps, ep.over_ps) {
+                    *total += add;
+                }
+                Some(merged)
+            }
+        }
     }
 }
 

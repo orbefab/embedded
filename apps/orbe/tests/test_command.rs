@@ -1063,10 +1063,12 @@ fn the_breadboard_ldr_follows_its_sheet_and_the_trimmer_divides() {
         dir.path().join("tests/light.test"),
         "\
 open
-expect @trim.wiper > 2.3797V   # 4.761 V / 2: 2.3807 V
-expect @trim.wiper < 2.3817V
+expect @trim.wiper > 2.3853V   # t=0 reset draw, 4.773 V / 2: 2.3863 V
+expect @trim.wiper < 2.3873V
 set light 10
 step 1ms
+expect @trim.wiper > 2.3797V   # running draw, 4.761 V / 2: 2.3807 V
+expect @trim.wiper < 2.3817V
 expect @ldr.a > 2.8560V   # 15 kohm: 2.8570 V
 expect @ldr.a < 2.8580V
 set light 100

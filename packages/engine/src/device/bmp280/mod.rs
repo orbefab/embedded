@@ -181,6 +181,7 @@ pub(crate) fn pin_ratings(dev: &Bmp280) -> Option<PinRatings> {
             net: dev.pins[VDD],
             gnd: dev.pins[GND],
             min: min.si.get(),
+            clock_hz: None,
         });
     }
     if let Some(min) = &dev.ratings.io_supply_min {
@@ -189,6 +190,7 @@ pub(crate) fn pin_ratings(dev: &Bmp280) -> Option<PinRatings> {
             net: dev.pins[VDDIO],
             gnd: dev.pins[GND],
             min: min.si.get(),
+            clock_hz: None,
         });
     }
     Some(PinRatings {

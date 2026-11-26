@@ -130,6 +130,7 @@ pub(crate) fn pin_ratings(panel: &St77916) -> Option<PinRatings> {
             net: panel.pins[VCC],
             gnd: panel.pins[GND],
             min,
+            clock_hz: None,
         }],
     })
 }

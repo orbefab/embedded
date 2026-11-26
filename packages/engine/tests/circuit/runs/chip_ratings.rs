@@ -535,9 +535,10 @@ fn ssd1306_hd44780_and_ws2812_pin_and_supply_voltage_windows_warn() {
 
 #[test]
 fn supply_min_warns_between_unpowered_floor_and_minimum_and_stays_silent_off_or_in_range() {
-    let at = |volts: f64| {
+    let at_clock = |clock_hz: u32, volts: f64| {
         let mut netlist = rated();
         netlist["analysis"] = serde_json::json!({ "op": {} });
+        chip(&mut netlist)["clock_hz"] = serde_json::json!({ "value": clock_hz, "unit": "Hz" });
         chip(&mut netlist)["ratings"]["supply_min"] = serde_json::json!({
             "value": 1.8, "unit": "V"
         });
@@ -546,34 +547,59 @@ fn supply_min_warns_between_unpowered_floor_and_minimum_and_stays_silent_off_or_
     };
 
     // Unpowered at 0 V or at the 0.1 V floor stays silent.
-    assert_eq!(at(0.0), []);
-    assert_eq!(at(0.1), []);
+    assert_eq!(at_clock(16_000_000, 0.0), []);
+    assert_eq!(at_clock(16_000_000, 0.1), []);
 
-    // Strictly above the floor and below 1.8 V warns once with the lowest voltage and minimum.
-    let found = at(1.2);
+    // At 16 MHz the ATmega328P safe operating area requires 3.78 V (DS40002061B Figure 29-1).
+    let found = at_clock(16_000_000, 3.3);
     assert_eq!(refs(&found), ["rating.supply_low #u1.pin.VCC"]);
     let [low] = supplies(&found)[..] else {
         unreachable!()
     };
-    assert_eq!(low.min, 1.8);
-    assert!((low.lowest - 1.2).abs() < 1e-9, "{}", low.lowest);
+    assert_eq!(low.min, 3.78);
+    assert_eq!(low.clock_hz, Some(16_000_000));
+    assert!((low.lowest - 3.3).abs() < 1e-9, "{}", low.lowest);
     assert_eq!(
         (low.first, low.peak_at, low.over_ps),
         (Time::ZERO, Time::ZERO, None)
     );
-    let message = serde_json::to_value(&found[0]).unwrap()["message"].clone();
+    let json = serde_json::to_value(&found[0]).unwrap();
     assert_eq!(
-        message,
-        "#u1.pin.VCC supply drops to 1.2 V over the chip's ground, below its 1.8 V minimum"
+        json["message"],
+        "#u1.pin.VCC supply drops to 3.3 V over the chip's ground, below its 3.78 V minimum at 16 MHz"
     );
+    assert_eq!(json["data"]["clock_hz"], 16_000_000);
 
     // Just above the 0.1 V floor also warns.
-    let barely = at(0.15);
+    let barely = at_clock(16_000_000, 0.15);
     assert_eq!(refs(&barely), ["rating.supply_low #u1.pin.VCC"]);
 
-    // At or above the minimum stays silent.
-    assert_eq!(at(1.8), []);
-    assert_eq!(at(3.3), []);
+    // At or above the 16 MHz minimum stays silent.
+    assert_eq!(at_clock(16_000_000, 3.78), []);
+    assert_eq!(at_clock(16_000_000, 5.0), []);
+
+    // Safe operating area curve across frequencies: <=4 MHz -> 1.8 V, 8 MHz -> 2.4 V,
+    // 10 MHz -> 2.7 V, 20 MHz -> 4.5 V.
+    for (hz, min, label) in [
+        (4_000_000, 1.8, "4 MHz"),
+        (8_000_000, 2.4, "8 MHz"),
+        (10_000_000, 2.7, "10 MHz"),
+        (20_000_000, 4.5, "20 MHz"),
+    ] {
+        assert_eq!(at_clock(hz, min), [], "{label} at {min} V");
+        let under = at_clock(hz, min - 0.1);
+        assert_eq!(refs(&under), ["rating.supply_low #u1.pin.VCC"], "{label}");
+        let [low] = supplies(&under)[..] else {
+            unreachable!()
+        };
+        assert!((low.min - min).abs() < 1e-9, "{label}: {}", low.min);
+        assert_eq!(low.clock_hz, Some(hz));
+        let msg = serde_json::to_value(&under[0]).unwrap()["message"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(msg.ends_with(&format!("minimum at {label}")), "{msg}");
+    }
 }
 
 /// Multiple transient brown-outs merge into one warning per supply pin, reporting the lowest
@@ -742,4 +768,107 @@ fn supply_min_covers_passive_chips_op_amps_and_dual_supply_devices() {
             "rating.supply_low #timer.pin.vcc",
         ]
     );
+}
+
+#[test]
+fn supply_power_cycles_stay_silent_while_sags_incomplete_turn_on_and_open_ends_warn() {
+    let dht_steps = |stop_ps: u64, initial: f64, events: &[(u64, f64)]| {
+        let events: Vec<_> = events
+            .iter()
+            .map(|&(t_ps, level)| {
+                serde_json::json!({ "t_ps": t_ps, "level": { "value": level, "unit": "V" } })
+            })
+            .collect();
+        serde_json::json!({
+            "version": 1,
+            "seed": 0,
+            "analysis": {
+                "transient": {
+                    "stop_ps": stop_ps,
+                    "max_step_ps": 500_000_000u64,
+                    "grid_ps": 500_000_000u64
+                }
+            },
+            "world": {
+                "temperature": { "value": 25.0, "unit": "degC" },
+                "humidity": { "value": 50.0, "unit": "%RH" }
+            },
+            "ground": "gnd",
+            "nets": ["gnd", "vcc", "data"],
+            "parts": [
+                {
+                    "name": "v1",
+                    "kind": "voltage_source",
+                    "pins": { "p": "vcc", "n": "gnd" },
+                    "voltage": {
+                        "kind": "steps",
+                        "initial": { "value": initial, "unit": "V" },
+                        "events": events
+                    }
+                },
+                resistor("rp", "vcc", "data", 10_000.0),
+                {
+                    "name": "dht",
+                    "kind": "dht22",
+                    "pins": { "VCC": "vcc", "GND": "gnd", "DATA": "data" },
+                    "low_resistance": { "value": 100.0, "unit": "ohm" },
+                    "input_threshold": {
+                        "low": { "value": 0.3, "unit": "1" },
+                        "high": { "value": 0.7, "unit": "1" }
+                    },
+                    "ratings": { "supply_min": { "value": 3.3, "unit": "V" } }
+                }
+            ]
+        })
+    };
+    const MS: u64 = 1_000_000_000;
+
+    // Clean power-up (Off -> Low -> On) stays silent.
+    let ramp_up = dht_steps(10 * MS, 0.0, &[(2 * MS, 1.0), (4 * MS, 2.5), (6 * MS, 5.0)]);
+    assert_eq!(run(&ramp_up), []);
+
+    // Clean power-down (On -> Low -> Off) stays silent.
+    let ramp_down = dht_steps(10 * MS, 5.0, &[(2 * MS, 2.5), (4 * MS, 1.0), (6 * MS, 0.0)]);
+    assert_eq!(run(&ramp_down), []);
+
+    // Power-up followed by a sag warns only with the sag's voltage and time, not the turn-on.
+    let up_then_sag = dht_steps(
+        14 * MS,
+        0.0,
+        &[(2 * MS, 0.5), (4 * MS, 5.0), (8 * MS, 2.4), (10 * MS, 5.0)],
+    );
+    let found = run(&up_then_sag);
+    assert_eq!(refs(&found), ["rating.supply_low #dht.pin.VCC"]);
+    let [low] = supplies(&found)[..] else {
+        unreachable!()
+    };
+    assert!((low.lowest - 2.4).abs() < 1e-6, "{}", low.lowest);
+    assert!(low.first.as_ps() >= 8 * MS, "{:?}", low.first);
+
+    // Incomplete turn-on (Off -> Low -> Off without reaching min) warns.
+    let incomplete = dht_steps(10 * MS, 0.0, &[(2 * MS, 2.0), (6 * MS, 0.0)]);
+    let found = run(&incomplete);
+    assert_eq!(refs(&found), ["rating.supply_low #dht.pin.VCC"]);
+    let [low] = supplies(&found)[..] else {
+        unreachable!()
+    };
+    assert!((low.lowest - 2.0).abs() < 1e-6, "{}", low.lowest);
+
+    // Starting in the low band warns even if the rail later climbs into range or falls to 0 V.
+    let start_to_on = dht_steps(6 * MS, 2.2, &[(2 * MS, 5.0)]);
+    assert_eq!(refs(&run(&start_to_on)), ["rating.supply_low #dht.pin.VCC"]);
+    let start_to_off = dht_steps(6 * MS, 2.2, &[(2 * MS, 0.0)]);
+    assert_eq!(
+        refs(&run(&start_to_off)),
+        ["rating.supply_low #dht.pin.VCC"]
+    );
+
+    // Ending in the low band warns at run end (from Off or from On).
+    let end_from_off = dht_steps(6 * MS, 0.0, &[(2 * MS, 2.2)]);
+    assert_eq!(
+        refs(&run(&end_from_off)),
+        ["rating.supply_low #dht.pin.VCC"]
+    );
+    let end_from_on = dht_steps(6 * MS, 5.0, &[(2 * MS, 2.2)]);
+    assert_eq!(refs(&run(&end_from_on)), ["rating.supply_low #dht.pin.VCC"]);
 }
