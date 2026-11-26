@@ -26,6 +26,7 @@
 //! block, as `blocks` says. A byte or halfword
 //! access to a kept register reads or merges into its word.
 
+mod aes;
 mod analog;
 mod app;
 mod blocks;
@@ -51,6 +52,7 @@ mod pcnt;
 mod rmt;
 mod rng;
 mod rom;
+mod rsa;
 mod sar;
 mod sha;
 mod soc;
@@ -398,6 +400,7 @@ impl Esp32s3 {
     /// or before it. `None` when the chip reached the limit, or ended before.
     pub fn run_until(&mut self, limit: Tick) -> Option<Halt> {
         loop {
+            self.soc.settle_aes(self.now());
             self.settle_ledc();
             self.settle_i2c(limit);
             self.settle_rmt();
@@ -442,6 +445,7 @@ impl Esp32s3 {
                 rmt,
                 uart,
                 train,
+                self.soc.aes.next_event(),
             ]
             .into_iter()
             .flatten()
@@ -1102,6 +1106,7 @@ mod tests {
 
     mod adc;
     mod code;
+    mod crypto;
     mod dual;
     mod i2c;
     mod pads;
@@ -1535,9 +1540,11 @@ mod tests {
                 1 << 0,
                 Refused::Interrupt("USB_SERIAL_JTAG"),
             ),
-            (gdma + 0x10, 1, Refused::Interrupt("GDMA")),
-            (out + 0x10, 1, Refused::Interrupt("GDMA")),
-            (0x6003_b028, 1, Refused::Interrupt("SHA")),
+            (gdma + 0x10, 1 << 3, Refused::Interrupt("GDMA")),
+            (out + 0x10, 1 << 2, Refused::Interrupt("GDMA")),
+            (0x6003_b028, 1 << 1, Refused::Interrupt("SHA")),
+            (0x6003_a0b0, 1 << 1, Refused::Interrupt("AES")),
+            (0x6003_c82c, 1 << 1, Refused::Interrupt("RSA")),
             (0x6001_90c8, 1 << 12, Refused::Interrupt("LEDC")),
             (gdma, 1 << 4, Refused::Register("GDMA", "memory_copy")),
             (out, 1 << 2, Refused::Register("GDMA", "write_back")),
@@ -1551,7 +1558,8 @@ mod tests {
             let mut chip = program.chip();
             chip.soc
                 .restore(SYSTEM + 0x18, 1 << 6 | 1 << 11 | 1 << 2 | 1 << 5);
-            chip.soc.restore(SYSTEM + 0x1c, 1 << 6 | 1 << 2 | 1 << 9);
+            chip.soc
+                .restore(SYSTEM + 0x1c, 1 << 1 | 1 << 2 | 1 << 3 | 1 << 6 | 1 << 9);
             chip.soc.restore(SYSTEM + 0x24, 0);
             assert_eq!(
                 chip.run_until(c(1000)),
