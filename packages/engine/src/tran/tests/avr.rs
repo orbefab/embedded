@@ -13,6 +13,7 @@ use orbe_microchip::{Bridge, FuseBytes, PACKAGE, Pad, Port, port_index};
 use super::active::{
     NS, US, after, at, capacitor, circuit, resistor, restarted, run_active, scripted, volts,
 };
+use super::fixtures::assert_counts_add_up;
 use crate::active::{self};
 use crate::diagnostic::Diagnostic;
 use crate::logic::Level;
@@ -335,6 +336,12 @@ fn toggle_stops_follow_the_firmware_when_a_watch_is_located() {
         "the crossing's step starts {start_to_stop} ps before {next_stop}, past the {predecessor_step} ps predecessor"
     );
     assert!(stats.landings > stats.stops);
+    assert_counts_add_up(&stats);
+    assert!(stats.set_by_chip > 0, "{stats:?}");
+    assert!(stats.set_by_watch > 0, "{stats:?}");
+    assert!(stats.set_by_breakpoint > 0, "{stats:?}");
+    assert!(stats.restarts > 0, "{stats:?}");
+    assert!(stats.locate_iterations > 0, "{stats:?}");
 }
 
 #[test]

@@ -59,16 +59,74 @@ pub use session::{
 };
 pub use topology::floating_nets;
 
-/// Accepted steps after t = 0, chip stops on those steps, and tries rejected for their error.
+/// What a run's steps and solves cost, counted exactly. No number is written into the run
+/// folder, and counting changes no result.
 ///
-/// t = 0 is the operating point and is not a landing. A stop is counted on the accepted
-/// step that reaches it. Two chips stopped on one landing count as two stops. A try whose
-/// Newton solve stalled is not a rejection. No number is written into the run folder.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// t = 0 is the operating point and is not a landing. A stop is counted on the accepted step
+/// that reaches it, and two chips stopped on one landing count as two stops.
+///
+/// A try is one step attempt from the last accepted step. It is accepted as a landing, rejected
+/// for its local truncation error, or stalls in Newton and is tried again at half the step, or
+/// once at 1 ps with backward Euler. A stall is not a rejection.
+///
+/// A Newton iteration is one stamped system solved. `iterations` counts those on the run's
+/// solver, and is the sum of the `*_iterations` before `row_iterations` once a run reaches its
+/// stop. A row of the grid that no step lands on is solved on a copy of that solver and is
+/// counted apart, in `row_probes` and `row_iterations`. `iterations`, the kinds of solve and
+/// the two lists of parts are read from the run when it ends.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RunStats {
     pub landings: u64,
     pub stops: u64,
+    /// Tries rejected for their error.
     pub rejections: u64,
+    /// Tries whose Newton solve stalled, `euler_retries` among them.
+    pub stalls: u64,
+    /// Stalled 1 ps tries tried again with backward Euler.
+    pub euler_retries: u64,
+    /// Landings whose step the plan set: the error of the step before, a segment's first step
+    /// or a stall's half.
+    pub set_by_plan: u64,
+    /// Landings at the transient's `max_step`.
+    pub set_by_max_step: u64,
+    /// Landings cut to a breakpoint: a contact's or a source's edge, a potentiometer move, a
+    /// world change, 1 ns after any of those or t = 0, or `stop`.
+    pub set_by_breakpoint: u64,
+    /// Landings cut to an active chip's core's next stop.
+    pub set_by_chip: u64,
+    /// Landings a watch's threshold crossing cut short.
+    pub set_by_watch: u64,
+    /// Solves after a landing whose chips, sources or contacts changed.
+    pub restarts: u64,
+    pub iterations: u64,
+    /// The operating point at t = 0.
+    pub start_iterations: u64,
+    /// The tries that landed.
+    pub landing_iterations: u64,
+    /// The tries rejected for their error.
+    pub rejected_iterations: u64,
+    /// The tries whose solve failed: every stall, and a singular or overflowing try that ends
+    /// the run.
+    pub failed_iterations: u64,
+    /// Locating where a watch crossed its threshold inside a try.
+    pub locate_iterations: u64,
+    pub restart_iterations: u64,
+    /// Grid rows solved inside a step, and their iterations.
+    pub row_probes: u64,
+    pub row_iterations: u64,
+    /// How each of `iterations` solved its system: the memo of a linear circuit held it, it
+    /// was refactored on kept pivots, factored again with pivoting because a kept pivot failed,
+    /// or factored on a fresh column order.
+    pub memo_hits: u64,
+    pub refactors: u64,
+    pub repivots: u64,
+    pub reorders: u64,
+    /// The parts whose capacitance or inductance had the largest error on the most landings
+    /// whose error set the next step, most first, at most five, with those counts.
+    pub pacing: Vec<(String, u64)>,
+    /// The parts whose capacitance or inductance had the largest error on the most rejected
+    /// tries, most first, at most five, with those counts.
+    pub rejecting: Vec<(String, u64)>,
 }
 
 /// What `orbe-run run` makes of netlist.json bytes: the results and the folder they render to.
@@ -102,7 +160,7 @@ pub fn simulate(netlist: &Netlist) -> Results {
     simulate_stats(netlist).0
 }
 
-/// [`simulate`] plus the landing and stop counts. The `Results` are the same bytes.
+/// [`simulate`] plus what its steps and solves cost. The `Results` are the same bytes.
 pub fn simulate_stats(netlist: &Netlist) -> (Results, RunStats) {
     simulate_with(netlist, Rows::Grid)
 }

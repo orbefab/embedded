@@ -2,6 +2,7 @@ use orbe_model::Time;
 
 use crate::netlist::{Analysis, Netlist, Transient};
 
+use std::cell::Cell;
 use std::mem::size_of;
 
 use crate::blob::Blobs;
@@ -123,6 +124,56 @@ pub(crate) struct Landing {
     /// The 1 ps step converged only as backward Euler. The multistep formula stalled on it, so
     /// the segment starts again here.
     euler: bool,
+    /// What set the step.
+    limit: Limit,
+}
+
+/// What set a landing's step, for [`RunStats`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Limit {
+    Plan,
+    MaxStep,
+    Breakpoint,
+    Chip,
+    Watch,
+}
+
+/// Per store, in `Stores` order: on how many landings whose error set the next step, and on
+/// how many tries rejected for their error, it had the largest error.
+struct Leaders {
+    pacing: Vec<u64>,
+    rejecting: Vec<u64>,
+}
+
+impl Leaders {
+    fn new(stores: &Stores) -> Leaders {
+        Leaders {
+            pacing: vec![0; stores.len()],
+            rejecting: vec![0; stores.len()],
+        }
+    }
+
+    /// The five parts with the most counts in `by_store`, most first, then in netlist order.
+    fn top(by_store: &[u64], stores: &Stores, netlist: &Netlist) -> Vec<(String, u64)> {
+        let mut by_part = vec![0u64; netlist.parts().count()];
+        for (k, &count) in by_store.iter().enumerate() {
+            by_part[stores.part(k)] += count;
+        }
+        let mut top: Vec<(usize, u64)> = by_part
+            .into_iter()
+            .enumerate()
+            .filter(|&(_, count)| count > 0)
+            .collect();
+        top.sort_by_key(|&(part, count)| (std::cmp::Reverse(count), part));
+        top.truncate(5);
+        let names: Vec<String> = netlist
+            .parts()
+            .map(|(_, part)| part.name.as_str().to_string())
+            .collect();
+        top.into_iter()
+            .map(|(part, count)| (names[part].clone(), count))
+            .collect()
+    }
 }
 
 /// A display part's state, read from a session.
@@ -181,6 +232,7 @@ pub struct Session {
     /// The plan for the step after the last accepted one, before any reject or stall.
     pub(crate) plan: Plan,
     pub(crate) stats: RunStats,
+    leaders: Leaders,
     /// The run's steps, restarts and event probes solve on this. A row inside a span and
     /// `Session::probe` solve on a scratch copy, because both only read the session.
     solver: Solver,
@@ -471,6 +523,11 @@ impl Session {
             levels: start.levels,
             reach: Time::ZERO,
         };
+        let stats = RunStats {
+            start_iterations: solver.solves.total(),
+            ..RunStats::default()
+        };
+        let leaders = Leaders::new(&stores);
         let mut session = Session {
             circuit,
             columns,
@@ -480,7 +537,8 @@ impl Session {
             breakpoints,
             actives,
             plan: Plan::RESTART,
-            stats: RunStats::default(),
+            stats,
+            leaders,
             solver,
             signals,
             logic,
@@ -885,10 +943,21 @@ impl Session {
         if let End::Fault(fault) = end {
             diagnostics.push(fault);
         }
+        let solves = self.solver.solves;
+        let stats = RunStats {
+            iterations: solves.total(),
+            memo_hits: solves.memo,
+            refactors: solves.refactored,
+            repivots: solves.repivoted,
+            reorders: solves.reordered,
+            pacing: Leaders::top(&self.leaders.pacing, &self.stores, &self.circuit.netlist),
+            rejecting: Leaders::top(&self.leaders.rejecting, &self.stores, &self.circuit.netlist),
+            ..self.stats
+        };
         Outcome {
             observations,
             trace: Some(trace),
-            stats: self.stats,
+            stats,
         }
     }
 
@@ -943,18 +1012,28 @@ impl Session {
                     limit: self.budget.work,
                 });
             }
-            let h = plan.clip(
+            let clipped = plan.clip(
                 accepted.at,
                 self.breakpoints.next_after(&circuit.netlist, accepted.at),
             );
             let at = self.actives.horizon(
                 circuit.netlist.world(),
-                Time::from_ps(accepted.at.as_ps() + h),
+                Time::from_ps(accepted.at.as_ps() + clipped),
             );
             reach = reach.max(at);
             let h = at.as_ps() - accepted.at.as_ps();
+            let limit = if h < clipped {
+                Limit::Chip
+            } else if clipped < plan.h {
+                Limit::Breakpoint
+            } else if plan.h == self.transient.max_step {
+                Limit::MaxStep
+            } else {
+                Limit::Plan
+            };
             let cores = self.actives.cores();
-            match attempt(
+            let solves = self.solver.solves.total();
+            let tried = attempt(
                 circuit,
                 &mut self.solver,
                 accepted,
@@ -963,7 +1042,9 @@ impl Session {
                 &accepted.iterate,
                 euler,
                 self.budget.step,
-            ) {
+            );
+            let solved = self.solver.solves.total() - solves;
+            match tried {
                 Ok(converged) => {
                     let past = if euler { &Past::Start } else { &accepted.past };
                     let error = lte::error(
@@ -978,9 +1059,14 @@ impl Session {
                     // A step of 1 ps is accepted whatever its error.
                     if error.ratio > 1.0 && h > 1 {
                         self.stats.rejections += 1;
+                        self.stats.rejected_iterations += solved;
+                        if let Some(worst) = error.worst {
+                            self.leaders.rejecting[worst] += 1;
+                        }
                         plan = Plan::rejected(h, error.ratio, error.order);
                         continue;
                     }
+                    self.stats.landing_iterations += solved;
                     let levels = circuit
                         .watches
                         .levels(&converged.iterate.solution, Some(&accepted.levels));
@@ -988,7 +1074,8 @@ impl Session {
                     let (at, converged, levels) = if !cut {
                         (at, converged, levels)
                     } else {
-                        let (located, converged) = watch::locate(
+                        let solves = self.solver.solves.total();
+                        let located = watch::locate(
                             &circuit.watches,
                             &accepted.levels,
                             (accepted.at, &accepted.iterate.solution),
@@ -1005,8 +1092,9 @@ impl Session {
                                     self.budget.probe,
                                 )
                             },
-                        )
-                        .map_err(|(probe, failure)| {
+                        );
+                        self.stats.locate_iterations += self.solver.solves.total() - solves;
+                        let (located, converged) = located.map_err(|(probe, failure)| {
                             probe_failure(circuit, accepted.at, probe, failure)
                         })?;
                         let levels = circuit
@@ -1033,21 +1121,26 @@ impl Session {
                         plan,
                         reach,
                         euler,
+                        limit: if cut { Limit::Watch } else { limit },
                     });
                 }
                 Err(Failure::Singular { row }) => {
+                    self.stats.failed_iterations += solved;
                     return Err(Diagnostic::SolverSingular {
                         at,
                         unknown: circuit.layout.describe(&circuit.netlist, row),
                     });
                 }
                 Err(Failure::NonFinite { row }) => {
+                    self.stats.failed_iterations += solved;
                     return Err(Diagnostic::SolverNonFinite {
                         at,
                         unknown: circuit.layout.describe(&circuit.netlist, row),
                     });
                 }
                 Err(Failure::Stalled(stall)) => {
+                    self.stats.stalls += 1;
+                    self.stats.failed_iterations += solved;
                     iterations += stall.iterations;
                     if let Some(next) = Plan::halve(h) {
                         plan = next;
@@ -1058,6 +1151,7 @@ impl Session {
                     // button edge, and the session was ending with the LED stuck. One Euler
                     // step starts the segment again.
                     if !euler {
+                        self.stats.euler_retries += 1;
                         euler = true;
                         continue;
                     }
@@ -1087,10 +1181,16 @@ impl Session {
             budget: self.budget.row,
             from: &accepted,
             to: &landing,
+            probes: Cell::new(Probes::default()),
         };
-        if let Some(record) = &mut self.record
-            && let Err(fault) = record.landed(&span)
-        {
+        let landed = match &mut self.record {
+            Some(record) => record.landed(&span),
+            None => Ok(()),
+        };
+        let probes = span.probes.get();
+        self.stats.row_probes += probes.rows;
+        self.stats.row_iterations += probes.iterations;
+        if let Err(fault) = landed {
             return self.ended(accepted.at, accepted.row, End::Fault(fault));
         }
         // The landing was solved with the drive the cores hold until `land` below.
@@ -1112,6 +1212,13 @@ impl Session {
             (landing.at, &landing.row),
         );
         self.stats.landings += 1;
+        match landing.limit {
+            Limit::Plan => self.stats.set_by_plan += 1,
+            Limit::MaxStep => self.stats.set_by_max_step += 1,
+            Limit::Breakpoint => self.stats.set_by_breakpoint += 1,
+            Limit::Chip => self.stats.set_by_chip += 1,
+            Limit::Watch => self.stats.set_by_watch += 1,
+        }
         let Landing {
             h,
             at,
@@ -1123,6 +1230,7 @@ impl Session {
             plan,
             reach,
             euler,
+            limit: _,
         } = landing;
         let circuit = &self.circuit;
         let stores = &self.stores;
@@ -1151,7 +1259,13 @@ impl Session {
             false => plan,
         };
         let keep = |plan: Plan| landed.saturating_mul(2) >= plan.h;
+        // The landing's error sets the next step where `planned` is taken and not `plan`.
+        let paced = (h == plan.h && !cut && !euler)
+            .then_some(error.worst)
+            .flatten();
         let next = if restart {
+            self.stats.restarts += 1;
+            let solves = self.solver.solves.total();
             let held = restart_solve(
                 circuit,
                 &mut self.solver,
@@ -1172,6 +1286,7 @@ impl Session {
                 )?;
                 Ok((held, restart_row))
             });
+            self.stats.restart_iterations += self.solver.solves.total() - solves;
             let (held, restart_row) = match held {
                 Ok(held) => held,
                 Err(fault) => {
@@ -1197,7 +1312,12 @@ impl Session {
                 _ => ranges,
             };
             self.plan = match (smooth, scheduled) {
-                (true, _) => planned(),
+                (true, _) => {
+                    if let Some(worst) = paced {
+                        self.leaders.pacing[worst] += 1;
+                    }
+                    planned()
+                }
                 (false, true) => Plan::RESTART,
                 (false, false) => Plan::driven(
                     stores.restart_step(&held.iterate.solution, &ranges, at),
@@ -1227,6 +1347,9 @@ impl Session {
                 reach,
             }
         } else {
+            if let Some(worst) = paced {
+                self.leaders.pacing[worst] += 1;
+            }
             self.plan = if euler { Plan::RESTART } else { planned() };
             Accepted {
                 at,
@@ -1285,6 +1408,7 @@ impl Session {
             budget: self.budget.row,
             from,
             to,
+            probes: Cell::new(Probes::default()),
         }
     }
 }
@@ -1300,6 +1424,14 @@ pub(crate) struct Span<'s> {
     budget: u32,
     pub(crate) from: &'s Accepted,
     pub(crate) to: &'s Landing,
+    /// The rows probed and their solves so far.
+    probes: Cell<Probes>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Probes {
+    rows: u64,
+    iterations: u64,
 }
 
 pub(crate) enum Probed {
@@ -1312,6 +1444,11 @@ impl Span<'_> {
     /// The row at `at`, inside the span. Solved from `from`, retried from the landing's solve,
     /// and on the line between the span's ends when both fail. It is never accepted.
     pub(crate) fn probe(&self, at: Time) -> Probed {
+        let probes = self.probes.get();
+        self.probes.set(Probes {
+            rows: probes.rows + 1,
+            ..probes
+        });
         match self
             .solve(at, &self.from.iterate)
             .or_else(|_| self.solve(at, &self.to.converged.iterate))
@@ -1332,17 +1469,23 @@ impl Span<'_> {
             "a row at {at:?} is not inside the span"
         );
         let h = at.as_ps() - self.from.at.as_ps();
+        let mut solver = self.solver.scratch();
         let converged = attempt(
             self.circuit,
-            &mut self.solver.scratch(),
+            &mut solver,
             self.from,
             self.cores,
             h,
             start,
             false,
             self.budget,
-        )
-        .map_err(|failure| match failure {
+        );
+        let probes = self.probes.get();
+        self.probes.set(Probes {
+            iterations: probes.iterations + solver.solves.total(),
+            ..probes
+        });
+        let converged = converged.map_err(|failure| match failure {
             Failure::Singular { row } | Failure::NonFinite { row } => {
                 self.circuit.layout.describe(&self.circuit.netlist, row)
             }
