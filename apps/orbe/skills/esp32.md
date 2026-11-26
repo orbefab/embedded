@@ -63,10 +63,7 @@ expect @led1 off
 
 ## The board
 
-- `esp32s3-devkitc-1`, the DevKitC-1 v1.1 with an N16R8 module. `orbe part esp32s3-devkitc-1` lists its pins.
-- `TX` and `RX` are GPIO43 and GPIO44, wired to the USB-UART bridge.
-- GPIO38 drives the board's RGB LED, `@board.led`. `rgbLedWrite(38, 0, 40, 0)` latches `rgb(0,40,0)`. Its 0-bit high is 400 ns, the SK68xx sheet's maximum, and the chain takes it.
-- `RST` and GPIO35 to GPIO37 are not simulated. A wire to them is `not_simulated`.
+Load `orbe skills get boards` for `esp32s3-devkitc-1` pinouts, pin functions, supply limits, and unsimulated pins (`RST` and `GPIO35` to `GPIO37`). On this v1.1 board, `@board.led` is on `GPIO38`, not `LED_BUILTIN` (`48`): call `rgbLedWrite(38, 0, 40, 0)` (its 0-bit high is 400 ns, the SK68xx sheet's maximum, and the chain takes it).
 
 ## The chip
 
@@ -84,5 +81,5 @@ expect @led1 off
 - `orbe add devkitc-gy-bmp280` reads a `gy-bmp280` over I2C at 3.3 V on Wire's default pins (GPIO8 SDA, GPIO9 SCL) and prints temperature and pressure on `serial`.
 - Keep PSRAM off, the FQBN's default. With `PSRAM=opi` the run stops at boot with `error[chip.flash_command]`.
 - A peripheral the model does not run stops the run at its first access with `error[chip.unsupported_setting]` that names it, as in `used MCPWM0, the motor-control PWM that ESP32Servo drives servos with`: Wi-Fi and Bluetooth, MCPWM (ESP32Servo; drive a servo with `ledcAttach` instead), I2S, SPI3, `Wire1`, TWAI and USB OTG. `touchRead` returns before it reaches the touch sensor, so nothing flags it.
-- Writing the flash stops the run with `error[chip.flash_command]`, `wrote the flash`. Wi-Fi, Bluetooth, `Preferences`, `EEPROM` and NVS write it.
+- Flash writes work on the 16 MB SPI flash with typical program and erase times, so `Preferences`, `EEPROM`, `nvs_flash_init` and `LittleFS` save and read back data. Status register writes still stop the run with `error[chip.flash_command]`.
 - An unmodelled setting stops the run with `error[chip.unsupported_setting]` and names the peripheral and the setting.

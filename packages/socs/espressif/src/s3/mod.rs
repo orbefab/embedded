@@ -333,9 +333,9 @@ impl Esp32s3 {
             if segment.mapped() {
                 soc.map_flash(segment.addr, segment.offset, segment.len);
             } else {
-                let flash = soc.flash_bytes().expect("attached");
-                let at = segment.offset as usize;
-                let bytes = flash[at..at + segment.len as usize].to_vec();
+                let bytes = soc
+                    .read_flash(segment.offset as usize, segment.len as usize)
+                    .expect("segment inside attached flash");
                 soc.poke(segment.addr, &bytes);
             }
         }
@@ -2021,6 +2021,52 @@ mod tests {
                 Fault::FlashCommand(FlashRefusal::Spi0, pro(program.entry() + 6))
             ))
         );
+    }
+
+    /// Enabling SPI1 interrupts, auto-wait-idle, auto-suspend or manual suspend/resume ends the
+    /// run loudly with `chip.unsupported_setting`.
+    #[test]
+    fn unsupported_spi1_controls_end_the_run() {
+        const SPI1: u32 = 0x6000_2000;
+        let cases = [
+            (SPI1 + spi1::INT_ENA, 1, Refused::Interrupt("SPI1")),
+            (
+                SPI1 + spi1::WAITI_CTRL,
+                spi1::WAITI_EN,
+                Refused::Register("SPI1", "auto_wait_idle"),
+            ),
+            (
+                SPI1 + spi1::SUS_CTRL,
+                spi1::FLASH_PES_EN,
+                Refused::Register("SPI1", "auto_suspend"),
+            ),
+            (
+                SPI1 + spi1::SUS_CMD,
+                spi1::SUS_CMD_UNRUN,
+                Refused::Register("SPI1", "suspend"),
+            ),
+        ];
+        for (address, value, expected) in cases {
+            let program = store_after_two_loads(address, value, 0);
+            assert_eq!(
+                program.chip().run_until(c(1000)),
+                Some(Halt::Fault(
+                    c(2),
+                    Fault::Refused(expected, pro(program.entry() + 6))
+                )),
+                "{address:#x} = {value:#x}"
+            );
+        }
+        // Clearing WAITI_EN / FLASH_PES_EN / INT_ENA is allowed (as IDF does during init).
+        for address in [
+            SPI1 + spi1::INT_ENA,
+            SPI1 + spi1::WAITI_CTRL,
+            SPI1 + spi1::SUS_CTRL,
+            SPI1 + spi1::SUS_CMD,
+        ] {
+            let mut chip = store_after_two_loads(address, 0, 0).chip();
+            assert_eq!(chip.run_until(c(1000)), None, "clear {address:#x}");
+        }
     }
 
     /// A load from a cache window ends the run where the MMU maps no flash: on a chip with no

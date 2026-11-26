@@ -486,7 +486,6 @@ impl Mcu for Bridge {
                 use mcu::FlashRefusal as To;
                 let (command, reason) = match refusal {
                     FlashRefusal::Command(command) => (Some(command), To::Unsupported),
-                    FlashRefusal::Write(command) => (Some(command), To::Write),
                     FlashRefusal::StatusWrite(command) => (Some(command), To::StatusWrite),
                     FlashRefusal::NoCommandPhase => (None, To::NoCommandPhase),
                     FlashRefusal::StartBits => (None, To::StartBits),
@@ -495,6 +494,9 @@ impl Mcu for Bridge {
                     FlashRefusal::Spi0 => (None, To::Spi0),
                     FlashRefusal::Pads => (None, To::Pads),
                     FlashRefusal::Cs(command) => (Some(command), To::Cs),
+                    FlashRefusal::Busy(command) => (command, To::Busy),
+                    FlashRefusal::Length(command) => (Some(command), To::Length),
+                    FlashRefusal::Mode(command) => (Some(command), To::Mode),
                 };
                 mcu::Fault::FlashCommand {
                     command,

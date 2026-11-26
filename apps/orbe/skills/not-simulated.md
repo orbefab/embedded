@@ -1,9 +1,10 @@
 # orbe: not simulated
 
-Load this when a pin or a feature does nothing, or a wire is `error[not_simulated]`. `orbe part <id>` lists what that part leaves out. `orbe skills get arduino` lists what each board's chip does.
+Load this when a pin or a feature does nothing, or a wire is `error[not_simulated]`. `orbe part <id>` lists what that part leaves out. `orbe skills get boards` lists each board's unsimulated pins, and `orbe skills get arduino` and `orbe skills get esp32` list what each chip does.
 
 - The Nano's `3V3` holds about 3.3 V from the CH340G while the board has 5 V. `VIN` feeds the AMS1117-5.0, and a wire to `VIN` works.
 - The Uno's `VIN` pin and barrel jack are not simulated. The Uno's `3V3` works.
+- The ESP32-S3-DevKitC-1's `RST` and `GPIO35` to `GPIO37` are not simulated.
 - USB, and serial into the chip. The chip's serial out (TX, D1) is read as text.
 - The chip's clamp diodes. A pin pulled past VCC or GND draws no clamp current. `rating.voltage` names it. Load `orbe skills get ratings`.
 - A switch's force and travel, and part tolerances.
