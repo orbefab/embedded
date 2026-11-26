@@ -42,6 +42,9 @@ pub(crate) fn dc_paths(mcu: &Esp32s3) -> &'static [(usize, usize)] {
     &DC_PATHS[..2 * (mcu.pins.len() - 2)]
 }
 
+/// Margin inside the strict rising supply comparator so an exact 3.0 V supply reads high.
+const SUPPLY_BOUND_INSIDE_V: f64 = 1e-6;
+
 /// USB Serial/JTAG internal PHY Full-Speed D+ pull-up on GPIO20 at `PULLUP_VALUE = 0` (reset):
 /// typical 2.4 kohm per ESP-IDF v5.5.5 `soc/esp32s3/register/soc/usb_wrap_struct.h` and
 /// `hal/esp32s3/include/hal/usb_serial_jtag_ll.h` (the internal FSLS PHY shared by USB
@@ -73,12 +76,20 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
             .collect(),
     };
     let (outputs, mut watches) = pads.build();
-    // High while V(VCC) - V(GND) is at least the ESP32-S3 brown-out reset threshold.
-    // The comparator is strict, so `next_down` makes an exact 2.44 V supply read high.
-    watches.push(Watch::comparator(Signal {
+    // Supply watch with hysteresis:
+    // - `rise` turns high once V(VCC) - V(GND) enters the recommended operating range
+    //   (3.0 V min, ESP32-S3 Series Datasheet v2.2 Section 5.2, Table 5-2), offset 1 uV inside
+    //   the strict comparator so an exact 3.0 V supply reads high.
+    // - `fall` turns low at or below the brown-out threshold (2.44 V, ESP-IDF v5.5.5
+    //   `CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7`; ESP32-S3 Series Datasheet v2.2 Section 2.5.3).
+    let supply = |offset| Signal {
         terms: vec![(Node::from(vcc), 1.0), (Node::from(gnd), -1.0)],
-        offset: s3::MIN_SUPPLY_V.next_down(),
-    }));
+        offset,
+    };
+    watches.push(Watch {
+        rise: supply(s3::OPERATING_SUPPLY_MIN_V - SUPPLY_BOUND_INSIDE_V),
+        fall: supply(s3::MIN_SUPPLY_V),
+    });
     // V(pin) - V(GND) of each ADC pad, in the order the bridge reads them.
     let samples = pins
         .iter()

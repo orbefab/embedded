@@ -435,8 +435,9 @@ impl Mcu for Bridge {
         self.chip.sample_temperature(temp_c);
     }
 
-    /// Its GPIOs' levels, in watch order, followed by the optional supply watch (`VCC - GND` at
-    /// or above [`MIN_SUPPLY_V`](super::MIN_SUPPLY_V)).
+    /// Its GPIOs' levels, in watch order, followed by the optional supply watch (high once
+    /// `VCC - GND` reaches [`OPERATING_SUPPLY_MIN_V`](super::OPERATING_SUPPLY_MIN_V), low at or
+    /// below [`MIN_SUPPLY_V`](super::MIN_SUPPLY_V)).
     fn input(&mut self, at: Time, levels: &[bool]) {
         debug_assert!(
             levels.len() == self.gpios.len() || levels.len() == self.gpios.len() + 1,

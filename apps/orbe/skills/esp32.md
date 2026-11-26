@@ -85,4 +85,4 @@ expect @led1 off
 - A peripheral the model does not run stops the run at its first access with `error[chip.unsupported_setting]` that names it, as in `used MCPWM0, the motor-control PWM that ESP32Servo drives servos with`: Wi-Fi and Bluetooth, MCPWM (ESP32Servo; drive a servo with `ledcAttach` instead), I2S, SPI3, `Wire1`, TWAI and USB OTG. `touchRead` returns before it reaches the touch sensor, so nothing flags it.
 - Writing the flash stops the run with `error[chip.flash_command]`, `wrote the flash`. Wi-Fi, Bluetooth, `Preferences`, `EEPROM` and NVS write it.
 - An unmodelled setting stops the run with `error[chip.unsupported_setting]` and names the peripheral and the setting.
-- Dropping `3V3` below 2.44 V stops the chip and releases its pins; when power returns the run stops with `error[chip.power_on_restart]` because power-on restart is not simulated yet.
+- Dropping `3V3` to 2.44 V or below stops the chip and releases its pins; when it rises back to 3.0 V the run stops with `error[chip.power_on_restart]` because power-on restart is not simulated yet.

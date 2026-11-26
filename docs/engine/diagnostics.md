@@ -631,11 +631,11 @@ Two resets that are no fault on the board end the run here as `unreadable`: a ba
 
 ## chip.power_on_restart
 
-Severity `error`. Refs are the chip. `t_ps` is 1 ps after the supply crossed back above the chip's brown-out reset threshold. It ends the run.
+Severity `error`. Refs are the chip. `t_ps` is 1 ps after the supply returned to the chip's operating range following a brown-out. It ends the run.
 
 The message is `{part} supply returned at {t_ps} ps; power-on restart of the ESP32-S3 is not simulated yet`.
 
-`data` is `{}`. While an `esp32s3` part's `V(VCC) - V(GND)` is below 2.44 V (ESP-IDF v5.5.5 `CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7`, the default brown-out detector level; ESP32-S3 Series Datasheet v2.2 Table 5-2 and Section 2.5.3), the chip stops executing instructions, stops all peripherals and releases every GPIO pad to off (leaving only pad leakage). When `V(VCC) - V(GND)` rises back to 2.44 V or above after a power loss, the run stops here because booting again from power-on is not simulated yet. A chip that starts unpowered at t = 0 and powers on once does not raise this error.
+`data` is `{}`. When an `esp32s3` part's `V(VCC) - V(GND)` falls to or below 2.44 V (ESP-IDF v5.5.5 `CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7`, the default brown-out detector level; ESP32-S3 Series Datasheet v2.2 Section 2.5.3), the chip stops executing instructions, stops all peripherals and releases every GPIO pad to off (leaving only pad leakage). When `V(VCC) - V(GND)` rises back to 3.0 V (ESP32-S3 Series Datasheet v2.2 Section 5.2, Table 5-2 minimum recommended operating `VDD`) after a power loss, the run stops here because booting again from power-on is not simulated yet. A chip that starts unpowered at t = 0 and powers on once does not raise this error.
 
 ## chip.unmapped_load
 

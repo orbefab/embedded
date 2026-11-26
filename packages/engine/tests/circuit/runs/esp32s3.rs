@@ -1392,9 +1392,9 @@ fn gpio20_shows_usb_dp_pullup_until_firmware_takes_the_pin() {
     assert_eq!(edges[0].1, '0', "clearing DP_PULLUP releases pull-up");
 }
 
-/// Dropping `esp32s3` VCC below 2.44 V stops execution and releases GPIO21; returning VCC above
-/// 2.44 V stops the run with `chip.power_on_restart`. Starting at 0 V and powering on once runs
-/// cleanly without error.
+/// Dropping `esp32s3` VCC to or below 2.44 V stops execution and releases GPIO21; returning VCC to
+/// 3.0 V or above stops the run with `chip.power_on_restart`. Starting at 0 V and powering on once
+/// runs cleanly without error.
 #[test]
 fn supply_drop_stops_s3_and_power_return_fails_with_power_on_restart() {
     let dir = Scratch::new();
@@ -1519,4 +1519,56 @@ fn supply_drop_stops_s3_and_power_return_fails_with_power_on_restart() {
         edges[0].0 >= 150_000_000_000 && edges[0].0 < 151_000_000_000,
         "blink should start 100 ms after power-on at 50 ms: {edges:?}"
     );
+}
+
+/// Sitting at the 2.44 V brown-out level or rising partway (below the 3.0 V Table 5-2 operating
+/// minimum) keeps the ESP32-S3 stopped with no restart error; reaching 3.0 V raises
+/// `chip.power_on_restart`.
+#[test]
+fn supply_hysteresis_holds_reset_at_brownout_until_operating_range() {
+    let dir = Scratch::new();
+
+    // Drop to exact 2.44 V at 150 ms, step to 2.9 V at 250 ms (still below 3.0 V): stays stopped
+    // and silent through 350 ms with no power_on_restart error.
+    let mut held = example();
+    held["parts"][0]["voltage"] = serde_json::json!({
+        "kind": "steps",
+        "initial": { "value": 3.3, "unit": "V" },
+        "events": [
+            { "t_ps": 150_000_000_000u64, "level": { "value": 2.44, "unit": "V" } },
+            { "t_ps": 250_000_000_000u64, "level": { "value": 2.9, "unit": "V" } }
+        ]
+    });
+    held["analysis"]["transient"]["stop_ps"] = serde_json::json!(350_000_000_000u64);
+    let (code, doc) = run(&dir, &held, &[&example_blobs()]);
+    assert_eq!((code, doc["status"].as_str()), (0, Some("ok")), "{doc}");
+    let vcd = fs::read_to_string(dir.join("out/traces/logic.vcd")).unwrap();
+    let (_, edges) = vcd_signal(&vcd, "GPIO21");
+    assert_eq!(
+        edges.len(),
+        2,
+        "expected rise at 100 ms and fall at 150 ms brown-out only: {edges:?}"
+    );
+    assert_eq!(edges[0].1, '1');
+    assert_eq!(edges[1].1, '0');
+    assert!(edges[1].0 <= 150_000_000_002, "{edges:?}");
+
+    // Continuing up to 3.0 V at 350 ms faults with chip.power_on_restart at 350 ms + 1 ps.
+    let mut recovered = held;
+    recovered["parts"][0]["voltage"]["events"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "t_ps": 350_000_000_000u64,
+            "level": { "value": 3.0, "unit": "V" }
+        }));
+    recovered["analysis"]["transient"]["stop_ps"] = serde_json::json!(400_000_000_000u64);
+    let (code, doc) = run(&dir, &recovered, &[&example_blobs()]);
+    assert_eq!((code, doc["status"].as_str()), (1, Some("failed")), "{doc}");
+    let found = diagnostics(&doc);
+    let err = found
+        .iter()
+        .find(|d| d["code"] == "chip.power_on_restart")
+        .unwrap_or_else(|| panic!("expected chip.power_on_restart in {found:?}"));
+    assert_eq!(err["t_ps"], serde_json::json!(350_000_000_001u64));
 }
