@@ -1,8 +1,9 @@
 //! The registry a release serves: every part and Block from each release, oldest first.
 //! A record at `id@version` is the one from the oldest release that contains it. A later
 //! release does not replace those bytes. Each index row names the lowest orbe whose part
-//! formats include that record's format. A format no release reads names the next release,
-//! the patch after the newest one.
+//! formats include that record's format, and takes `listed` from the newest release that
+//! contains that name. A format no release reads names the next release, the patch after
+//! the newest one.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -44,6 +45,7 @@ pub fn publish(releases: &[Release]) -> Result<BTreeMap<String, Vec<u8>>, Error>
     let mut order: Vec<usize> = (0..releases.len()).collect();
     order.sort_by_key(|&index| Version::parse(&releases[index].version));
     let mut format_orbe: BTreeMap<u32, String> = BTreeMap::new();
+    let mut listed_by_name: BTreeMap<String, bool> = BTreeMap::new();
     for &index in &order {
         let release = &releases[index];
         for format in &release.formats {
@@ -51,9 +53,12 @@ pub fn publish(releases: &[Release]) -> Result<BTreeMap<String, Vec<u8>>, Error>
                 .entry(*format)
                 .or_insert_with(|| release.version.clone());
         }
+        for row in index_of(&release.registry)?.items {
+            listed_by_name.insert(row.name, row.listed);
+        }
     }
-    let newest_version = &releases[*order.last().expect("releases is not empty")].version;
-    let unread = next_patch(newest_version);
+    let newest = &releases[*order.last().expect("releases is not empty")];
+    let unread = next_patch(&newest.version);
 
     let mut output = BTreeMap::new();
     let mut rows = Vec::new();
@@ -89,7 +94,11 @@ pub fn publish(releases: &[Release]) -> Result<BTreeMap<String, Vec<u8>>, Error>
                         .entry(file.url.clone())
                         .or_insert_with(|| bytes.clone());
                 }
-                let mut row = item.row(&record, listed(&release.registry, &item.head().name));
+                let listed = listed_by_name
+                    .get(&item.head().name)
+                    .copied()
+                    .unwrap_or(true);
+                let mut row = item.row(&record, listed);
                 row.orbe = Some(orbe_for(
                     item,
                     &release.registry,
@@ -108,7 +117,6 @@ pub fn publish(releases: &[Release]) -> Result<BTreeMap<String, Vec<u8>>, Error>
             .cmp(&b.name)
             .then_with(|| Version::parse(&a.version).cmp(&Version::parse(&b.version)))
     });
-    let newest = &releases[*order.last().expect("releases is not empty")];
     copy_schema(&mut output, &newest.registry, ITEM_SCHEMA);
     copy_schema(&mut output, &newest.registry, INDEX_SCHEMA);
     let meta = index_of(&newest.registry)?;
@@ -138,19 +146,6 @@ fn index_of(registry: &Registry) -> Result<Index, Error> {
     };
     serde_json::from_slice(bytes)
         .map_err(|error| Error::Invalid(format!("a release index does not parse: {error}")))
-}
-
-fn listed(registry: &Registry, name: &str) -> bool {
-    index_of(registry)
-        .ok()
-        .and_then(|index| {
-            index
-                .items
-                .into_iter()
-                .find(|row| row.name == name)
-                .map(|row| row.listed)
-        })
-        .unwrap_or(true)
 }
 
 fn orbe_for(
