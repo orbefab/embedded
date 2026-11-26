@@ -578,16 +578,16 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
         part: part("u1"),
         at,
         command: Some(0x02),
-        reason: FlashRefusal::Write,
+        reason: FlashRefusal::Busy,
         pc: 0x4200_0010,
         app: true,
         symbol: None,
     });
     assert_eq!(
         message,
-        "#u1 wrote the flash with command 0x02 at 0x42000010 on the APP CPU, which the model does not simulate; Wi-Fi, Bluetooth and saved settings (Preferences, EEPROM, NVS) write the flash, at 5 ps"
+        "#u1 sent the flash command 0x02 while a program or erase was in progress at 0x42000010 on the APP CPU, which the flash does not allow, at 5 ps"
     );
-    assert_eq!(data["reason"], "write");
+    assert_eq!(data["reason"], "busy");
     let (message, data) = chip_json(Diagnostic::ChipFlashCommand {
         part: part("u1"),
         at,

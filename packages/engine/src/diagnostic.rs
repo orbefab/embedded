@@ -1679,10 +1679,6 @@ impl Diagnostic {
                         format!("sent the flash {command}"),
                         "which the model does not run",
                     ),
-                    FlashRefusal::Write => (
-                        format!("wrote the flash with {command}"),
-                        "which the model does not simulate; Wi-Fi, Bluetooth and saved settings (Preferences, EEPROM, NVS) write the flash",
-                    ),
                     FlashRefusal::StatusWrite => (
                         format!("sent the flash the status write {command}"),
                         "which could lock the flash",
@@ -1696,12 +1692,12 @@ impl Diagnostic {
                         "which the model does not run",
                     ),
                     FlashRefusal::PastEnd => (
-                        format!("sent the flash the read {command}"),
+                        format!("sent the flash {command}"),
                         "which reaches past the flash's end",
                     ),
                     FlashRefusal::AddressBits => (
                         format!("sent the flash {command}"),
-                        "whose address is longer than 32 bits",
+                        "whose address phase length the flash or SPI1 does not take",
                     ),
                     FlashRefusal::Spi0 => (
                         "started a command on SPI0".to_string(),
@@ -1714,6 +1710,25 @@ impl Diagnostic {
                     FlashRefusal::Cs => (
                         format!("sent the flash {command} with CS0 disabled or CS1 enabled"),
                         "which the model does not run",
+                    ),
+                    FlashRefusal::Busy => {
+                        let what = if command.starts_with("command ") {
+                            format!(
+                                "sent the flash {command} while a program or erase was in progress"
+                            )
+                        } else {
+                            "accessed the flash while a program or erase was in progress"
+                                .to_string()
+                        };
+                        (what, "which the flash does not allow")
+                    }
+                    FlashRefusal::Length => (
+                        format!("sent the flash {command} with an unsupported length or phase"),
+                        "which the flash or SPI1 does not allow",
+                    ),
+                    FlashRefusal::Mode => (
+                        format!("sent the flash {command} in an unsupported transfer mode"),
+                        "which the flash or model does not run",
                     ),
                 };
                 let part = namer(part);

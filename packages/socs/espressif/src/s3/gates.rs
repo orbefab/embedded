@@ -1,10 +1,12 @@
 //! SYSTEM's peripheral clock gates and resets: `SYSTEM_PERIP_CLK_EN0_REG`,
 //! `SYSTEM_PERIP_CLK_EN1_REG`, `SYSTEM_PERIP_RST_EN0_REG` and `SYSTEM_PERIP_RST_EN1_REG`.
 //!
-//! SPI2, LEDC, I2C0, GDMA, the SHA accelerator, RMT, PCNT and the three UARTs run their gates. Each runs while its clock bit is set
-//! and its reset bits are clear. A write that leaves one of its reset bits set puts it back to
-//! its power-on state, and it stays there until they clear. The SHA accelerator is held by the
-//! digital signature and HMAC reset bits too, as IDF's `sha_ll_reset_register` says.
+//! SPI2, LEDC, I2C0, GDMA, the AES, SHA and RSA accelerators, RMT, PCNT and the three UARTs run
+//! their gates. Each runs while its clock bit is set and its reset bits are clear. A write that
+//! leaves one of its reset bits set puts it back to its power-on state, and it stays there until
+//! they clear. The AES, SHA and RSA accelerators are held by the digital signature reset bit too
+//! (and SHA by the HMAC reset bit), as IDF's `aes_ll_reset_register`, `sha_ll_reset_register` and
+//! `mpi_ll_reset_register` say.
 //!
 //! The clock bits of TIMG0, TIMG1, SYSTIMER and `SYSTEM_WDG` stay reported. Their reset bits
 //! run. `SYSTIMER_RST` puts the system timer back to its power-on registers, count and alarms
@@ -36,7 +38,9 @@ pub(crate) enum Block {
     Spi2,
     Ledc,
     Gdma,
+    Aes,
     Sha,
+    Rsa,
     I2c0,
     Rmt,
     Pcnt,
@@ -46,11 +50,13 @@ pub(crate) enum Block {
 }
 
 impl Block {
-    pub(crate) const ALL: [Block; 10] = [
+    pub(crate) const ALL: [Block; 12] = [
         Block::Spi2,
         Block::Ledc,
         Block::Gdma,
+        Block::Aes,
         Block::Sha,
+        Block::Rsa,
         Block::I2c0,
         Block::Rmt,
         Block::Pcnt,
@@ -64,7 +70,9 @@ impl Block {
             Block::Spi2 => "SPI2",
             Block::Ledc => "LEDC",
             Block::Gdma => "GDMA",
+            Block::Aes => "AES",
             Block::Sha => "SHA",
+            Block::Rsa => "RSA",
             Block::I2c0 => "I2C0",
             Block::Rmt => "RMT",
             Block::Pcnt => "PCNT",
@@ -80,7 +88,9 @@ impl Block {
             Block::Spi2 => (0, 1 << 6, 1 << 6),
             Block::Ledc => (0, 1 << 11, 1 << 11),
             Block::Gdma => (1, 1 << 6, 1 << 6),
+            Block::Aes => (1, 1 << 1, 1 << 1 | 1 << 4),
             Block::Sha => (1, 1 << 2, 1 << 2 | 1 << 4 | 1 << 5),
+            Block::Rsa => (1, 1 << 3, 1 << 3 | 1 << 4),
             Block::I2c0 => (0, 1 << 7, 1 << 7),
             Block::Rmt => (0, 1 << 9, 1 << 9),
             Block::Pcnt => (0, 1 << 10, 1 << 10),
@@ -194,7 +204,10 @@ mod tests {
         assert!(!gates.clocked(Block::Ledc) && !gates.held(Block::Ledc));
         assert!(!gates.clocked(Block::I2c0) && !gates.held(Block::I2c0));
         let held: Vec<Block> = gates.write(0x20, 1 << 6).collect();
-        assert_eq!(held, [Block::Spi2, Block::Gdma, Block::Sha]);
+        assert_eq!(
+            held,
+            [Block::Spi2, Block::Gdma, Block::Aes, Block::Sha, Block::Rsa]
+        );
         assert!(gates.write(0x24, 1 << 4).any(|block| block == Block::Sha));
         assert!(!gates.write(0x24, 0).any(|block| block == Block::Sha));
         assert_eq!(gates.read(0x24), 0);

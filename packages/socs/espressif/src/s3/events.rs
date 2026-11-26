@@ -9,7 +9,7 @@
 //! checks at each poll.
 
 use super::clock::Tick;
-use super::soc::{LEDC, PCNT, RMT, SPI2, SYSTIMER, TIMG0, TIMG1, USB_SERIAL_JTAG};
+use super::soc::{AES, LEDC, PCNT, RMT, RSA, SPI2, SYSTIMER, TIMG0, TIMG1, USB_SERIAL_JTAG};
 use super::uart::Uarts;
 use super::usb;
 
@@ -25,10 +25,12 @@ pub(crate) enum Peripheral {
     Uart,
     Ledc,
     Pcnt,
+    Aes,
+    Rsa,
 }
 
 impl Peripheral {
-    pub(crate) const ALL: [Peripheral; 8] = [
+    pub(crate) const ALL: [Peripheral; 10] = [
         Peripheral::Systimer,
         Peripheral::Timers,
         Peripheral::Spi2,
@@ -37,6 +39,8 @@ impl Peripheral {
         Peripheral::Uart,
         Peripheral::Ledc,
         Peripheral::Pcnt,
+        Peripheral::Aes,
+        Peripheral::Rsa,
     ];
 
     const fn bit(self) -> u16 {
@@ -88,6 +92,8 @@ impl Events {
             SPI2 => Peripheral::Spi2.bit() | Peripheral::Uart.bit() | Peripheral::Pcnt.bit(),
             LEDC => Peripheral::Ledc.bit(),
             PCNT => Peripheral::Pcnt.bit(),
+            AES => Peripheral::Aes.bit(),
+            RSA => Peripheral::Rsa.bit(),
             base if Uarts::index(base).is_some() => Peripheral::Uart.bit() | Peripheral::Pcnt.bit(),
             _ => EVERY,
         };
@@ -130,55 +136,71 @@ mod tests {
         events.touch(SYSTIMER + 0x64);
         assert_eq!(
             left(&events),
-            [false, true, true, true, true, true, true, true]
+            [false, true, true, true, true, true, true, true, true, true]
         );
         keep_all(&mut events);
         events.touch(TIMG1 + 0x10);
         assert_eq!(
             left(&events),
-            [true, false, true, true, true, true, true, true]
+            [true, false, true, true, true, true, true, true, true, true]
         );
         keep_all(&mut events);
         events.touch(USB_SERIAL_JTAG);
         assert_eq!(
             left(&events),
-            [true, true, true, false, true, true, true, true]
+            [true, true, true, false, true, true, true, true, true, true]
         );
         keep_all(&mut events);
         events.touch(RMT + 0x20);
         assert_eq!(
             left(&events),
-            [true, true, true, true, false, false, true, false]
+            [
+                true, true, true, true, false, false, true, false, true, true
+            ]
         );
         keep_all(&mut events);
         events.touch(SPI2);
         assert_eq!(
             left(&events),
-            [true, true, false, true, true, false, true, false]
+            [
+                true, true, false, true, true, false, true, false, true, true
+            ]
         );
         keep_all(&mut events);
         events.touch(crate::s3::uart::BASES[2] + 0x1c);
         assert_eq!(
             left(&events),
-            [true, true, true, true, true, false, true, false]
+            [true, true, true, true, true, false, true, false, true, true]
         );
         keep_all(&mut events);
         events.touch(LEDC + 0xcc);
         assert_eq!(
             left(&events),
-            [true, true, true, true, true, true, false, true]
+            [true, true, true, true, true, true, false, true, true, true]
         );
         keep_all(&mut events);
         events.touch(PCNT + 0x30);
         assert_eq!(
             left(&events),
-            [true, true, true, true, true, true, true, false]
+            [true, true, true, true, true, true, true, false, true, true]
+        );
+        keep_all(&mut events);
+        events.touch(AES + 0x48);
+        assert_eq!(
+            left(&events),
+            [true, true, true, true, true, true, true, true, false, true]
+        );
+        keep_all(&mut events);
+        events.touch(RSA + 0x80c);
+        assert_eq!(
+            left(&events),
+            [true, true, true, true, true, true, true, true, true, false]
         );
         keep_all(&mut events);
         events.touch(GPIO + 4);
-        assert_eq!(left(&events), [false; 8]);
+        assert_eq!(left(&events), [false; 10]);
         keep_all(&mut events);
         events.forget();
-        assert_eq!(left(&events), [false; 8]);
+        assert_eq!(left(&events), [false; 10]);
     }
 }

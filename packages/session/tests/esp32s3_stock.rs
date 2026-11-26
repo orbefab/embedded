@@ -1624,6 +1624,122 @@ fn a_part_holding_scl_low_past_timeout_fails_bmp280_begin_without_faulting() {
     run(&mut live, &block_dir, "expect no diagnostics");
 }
 
+/// Stock `Preferences` counter and typed keys write to NVS flash, read back across close/reopen,
+/// and keep incrementing in flash across button presses.
+#[test]
+fn a_stock_preferences_sketch_writes_and_reads_keys_and_increments_on_press() {
+    play(
+        "esp32s3-stock-preferences",
+        &[
+            r#"step --until serial contains "prefs count=1 signed=-42 name=orbe raw=12345678 len=4" --timeout 1s"#,
+            "press @btn1",
+            r#"step --until serial contains "press count=2" --timeout 1s"#,
+            "release @btn1",
+            "step 30ms",
+            "press @btn1",
+            r#"step --until serial contains "press count=3" --timeout 1s"#,
+            "release @btn1",
+            "expect no diagnostics",
+        ],
+    );
+}
+
+/// Stock `EEPROM.begin/write/commit/read` persists bytes across `end()`/`begin()` and overwrites.
+#[test]
+fn a_stock_eeprom_sketch_commits_reads_and_overwrites_bytes() {
+    play(
+        "esp32s3-stock-eeprom",
+        &[
+            r#"step --until serial contains "eeprom ok=111 commit=11 first=a5,5a,11,22 second=3c,5a,11,22" --timeout 1s"#,
+            "expect no diagnostics",
+        ],
+    );
+}
+
+/// Stock `nvs_flash_init` and `nvs_flash_erase` initialize NVS, erase all NVS sectors, confirm
+/// erased keys are gone, and read back newly written values with no error.
+#[test]
+fn a_stock_nvs_sketch_initializes_erases_and_reads_back_keys() {
+    play(
+        "esp32s3-stock-nvs",
+        &[
+            r#"step --until serial contains "nvs ok=1 count=99 tag=after" --timeout 2s"#,
+            "expect no diagnostics",
+        ],
+    );
+}
+
+/// Stock `LittleFS` formats blank flash, writes and appends a file, unmounts, remounts without
+/// reformatting, and reads back the saved bytes.
+#[test]
+fn a_stock_littlefs_sketch_formats_writes_appends_remounts_and_reads_back() {
+    play(
+        "esp32s3-stock-littlefs",
+        &[
+            r#"step --until serial contains "littlefs mount=11 wrote=11 text=hello flash" --timeout 2s"#,
+            "expect no diagnostics",
+        ],
+    );
+}
+
+/// Written flash survives the board's supply dropping to 0 V and returning inside a session.
+/// Note that the `esp32s3` MCU model does not power-cycle or reboot on a supply drop (nor does
+/// `CHIP_PU`/`RST` reset it); this verifies the flash contents remain intact across a supply dip
+/// and subsequent button-driven read-modify-write.
+#[test]
+fn written_flash_survives_a_supply_cycle_in_a_session() {
+    let dir = project("esp32s3-stock-preferences");
+    let netlist = orbe_scene::read(&Files::disk(), &dir.path().join("scene.jsonc")).unwrap();
+    let mut doc: serde_json::Value = serde_json::from_str(&netlist.json).unwrap();
+    let parts = doc["parts"].as_array_mut().unwrap();
+    let usb = parts
+        .iter_mut()
+        .find(|p| p["name"] == "board__j2__host")
+        .expect("devkitc has board__j2__host voltage source");
+    usb["voltage"] = serde_json::json!({
+        "kind": "steps",
+        "initial": { "value": 5.0, "unit": "V" },
+        "events": [
+            { "t_ps": 60_000_000_000u64, "level": { "value": 0.0, "unit": "V" } },
+            { "t_ps": 80_000_000_000u64, "level": { "value": 5.0, "unit": "V" } }
+        ]
+    });
+    let btn = parts
+        .iter_mut()
+        .find(|p| {
+            p["kind"] == "switch" && p["name"].as_str().is_some_and(|s| s.starts_with("btn1"))
+        })
+        .expect("scene has btn1 switch");
+    btn["events"] = serde_json::json!([
+        { "t_ps": 110_000_000_000u64, "state": "closed" },
+        { "t_ps": 140_000_000_000u64, "state": "open" }
+    ]);
+    let json = serde_json::to_vec(&doc).unwrap();
+    let mut session = orbe_engine::Session::open_json(&json, &netlist.blobs).unwrap();
+    assert_eq!(
+        session.advance_to(orbe_model::Time::from_ps(180_000_000_000)),
+        orbe_engine::Status::Running
+    );
+    let bytes: Vec<u8> = session
+        .serial_since(orbe_engine::SerialCursor::default())
+        .map(|(slice, _)| slice.iter().map(|b| b.byte).collect())
+        .unwrap_or_default();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(
+        text.contains("prefs count=1 signed=-42 name=orbe raw=12345678 len=4"),
+        "missing initial prefs write before supply cycle: {text:?}"
+    );
+    assert!(
+        text.contains("press count=2"),
+        "missing incremented count after supply cycle: {text:?}"
+    );
+    assert!(
+        session.fault().is_none(),
+        "unexpected fault: {:?}",
+        session.fault()
+    );
+}
+
 #[test]
 fn a_stock_pcnt_sketch_counts_quadrature_filters_bounce_and_fires_limit_interrupts() {
     let (dir, mut live) = open("esp32s3-stock-pcnt");
@@ -2086,5 +2202,30 @@ fn devkitc_exact_brownout_and_monotonic_fall_do_not_false_restart() {
         !reply.ok() && reply.text().contains("chip.power_on_restart"),
         "re-applying 5 V after brown-out must fault with chip.power_on_restart, got:\n{}",
         reply.text()
+    );
+}
+
+#[test]
+fn a_stock_crypto_sketch_verifies_sha_aes_and_rsa_vectors() {
+    play(
+        "esp32s3-stock-crypto",
+        &[
+            r#"step --until serial contains "all crypto ok" --timeout 500ms"#,
+            r#"expect serial contains "sha1 ok""#,
+            r#"expect serial contains "sha256 ok""#,
+            r#"expect serial contains "sha384 ok""#,
+            r#"expect serial contains "sha512 ok""#,
+            r#"expect serial contains "sha512_dma ok""#,
+            r#"expect serial contains "aes128_ecb ok""#,
+            r#"expect serial contains "aes256_ecb ok""#,
+            r#"expect serial contains "aes128_cbc ok""#,
+            r#"expect serial contains "aes256_cbc ok""#,
+            r#"expect serial contains "aes256_cbc_irq ok""#,
+            r#"expect serial contains "aes128_ctr ok""#,
+            r#"expect serial contains "aes256_ctr ok""#,
+            r#"expect serial contains "aes128_gcm ok""#,
+            r#"expect serial contains "rsa2048_pk ok""#,
+            "expect no diagnostics",
+        ],
     );
 }

@@ -26,6 +26,7 @@
 //! block, as `blocks` says. A byte or halfword
 //! access to a kept register reads or merges into its word.
 
+mod aes;
 mod analog;
 mod app;
 mod blocks;
@@ -51,6 +52,7 @@ mod pcnt;
 mod rmt;
 mod rng;
 mod rom;
+mod rsa;
 mod sar;
 mod sha;
 mod soc;
@@ -351,9 +353,9 @@ impl Esp32s3 {
             if segment.mapped() {
                 soc.map_flash(segment.addr, segment.offset, segment.len);
             } else {
-                let flash = soc.flash_bytes().expect("attached");
-                let at = segment.offset as usize;
-                let bytes = flash[at..at + segment.len as usize].to_vec();
+                let bytes = soc
+                    .read_flash(segment.offset as usize, segment.len as usize)
+                    .expect("segment inside attached flash");
                 soc.poke(segment.addr, &bytes);
             }
         }
@@ -418,6 +420,7 @@ impl Esp32s3 {
     /// or before it. `None` when the chip reached the limit, or ended before.
     pub fn run_until(&mut self, limit: Tick) -> Option<Halt> {
         loop {
+            self.soc.settle_aes(self.now());
             self.settle_ledc();
             self.settle_i2c(limit);
             self.settle_rmt();
@@ -462,6 +465,7 @@ impl Esp32s3 {
                 rmt,
                 uart,
                 train,
+                self.soc.aes.next_event(),
             ]
             .into_iter()
             .flatten()
@@ -1122,6 +1126,7 @@ mod tests {
 
     mod adc;
     mod code;
+    mod crypto;
     mod dual;
     mod i2c;
     mod pads;
@@ -1555,9 +1560,11 @@ mod tests {
                 1 << 0,
                 Refused::Interrupt("USB_SERIAL_JTAG"),
             ),
-            (gdma + 0x10, 1, Refused::Interrupt("GDMA")),
-            (out + 0x10, 1, Refused::Interrupt("GDMA")),
-            (0x6003_b028, 1, Refused::Interrupt("SHA")),
+            (gdma + 0x10, 1 << 3, Refused::Interrupt("GDMA")),
+            (out + 0x10, 1 << 2, Refused::Interrupt("GDMA")),
+            (0x6003_b028, 1 << 1, Refused::Interrupt("SHA")),
+            (0x6003_a0b0, 1 << 1, Refused::Interrupt("AES")),
+            (0x6003_c82c, 1 << 1, Refused::Interrupt("RSA")),
             (0x6001_90c8, 1 << 12, Refused::Interrupt("LEDC")),
             (gdma, 1 << 4, Refused::Register("GDMA", "memory_copy")),
             (out, 1 << 2, Refused::Register("GDMA", "write_back")),
@@ -1571,7 +1578,8 @@ mod tests {
             let mut chip = program.chip();
             chip.soc
                 .restore(SYSTEM + 0x18, 1 << 6 | 1 << 11 | 1 << 2 | 1 << 5);
-            chip.soc.restore(SYSTEM + 0x1c, 1 << 6 | 1 << 2 | 1 << 9);
+            chip.soc
+                .restore(SYSTEM + 0x1c, 1 << 1 | 1 << 2 | 1 << 3 | 1 << 6 | 1 << 9);
             chip.soc.restore(SYSTEM + 0x24, 0);
             assert_eq!(
                 chip.run_until(c(1000)),
@@ -2033,6 +2041,52 @@ mod tests {
                 Fault::FlashCommand(FlashRefusal::Spi0, pro(program.entry() + 6))
             ))
         );
+    }
+
+    /// Enabling SPI1 interrupts, auto-wait-idle, auto-suspend or manual suspend/resume ends the
+    /// run loudly with `chip.unsupported_setting`.
+    #[test]
+    fn unsupported_spi1_controls_end_the_run() {
+        const SPI1: u32 = 0x6000_2000;
+        let cases = [
+            (SPI1 + spi1::INT_ENA, 1, Refused::Interrupt("SPI1")),
+            (
+                SPI1 + spi1::WAITI_CTRL,
+                spi1::WAITI_EN,
+                Refused::Register("SPI1", "auto_wait_idle"),
+            ),
+            (
+                SPI1 + spi1::SUS_CTRL,
+                spi1::FLASH_PES_EN,
+                Refused::Register("SPI1", "auto_suspend"),
+            ),
+            (
+                SPI1 + spi1::SUS_CMD,
+                spi1::SUS_CMD_UNRUN,
+                Refused::Register("SPI1", "suspend"),
+            ),
+        ];
+        for (address, value, expected) in cases {
+            let program = store_after_two_loads(address, value, 0);
+            assert_eq!(
+                program.chip().run_until(c(1000)),
+                Some(Halt::Fault(
+                    c(2),
+                    Fault::Refused(expected, pro(program.entry() + 6))
+                )),
+                "{address:#x} = {value:#x}"
+            );
+        }
+        // Clearing WAITI_EN / FLASH_PES_EN / INT_ENA is allowed (as IDF does during init).
+        for address in [
+            SPI1 + spi1::INT_ENA,
+            SPI1 + spi1::WAITI_CTRL,
+            SPI1 + spi1::SUS_CTRL,
+            SPI1 + spi1::SUS_CMD,
+        ] {
+            let mut chip = store_after_two_loads(address, 0, 0).chip();
+            assert_eq!(chip.run_until(c(1000)), None, "clear {address:#x}");
+        }
     }
 
     /// A load from a cache window ends the run where the MMU maps no flash: on a chip with no
