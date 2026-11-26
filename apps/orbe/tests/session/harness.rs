@@ -61,6 +61,7 @@ impl Runtime {
             .env_remove("ORBE_SESSION")
             .env_remove("ORBE_TEST_IDLE_TIMEOUT")
             .env_remove("ORBE_TEST_STEP_BUDGET")
+            .env_remove("ORBE_TEST_STEP_PROGRESS")
             .env_remove("ORBE_TEST_STOP");
         crate::registry_env::apply_if(&mut command, args);
         command
