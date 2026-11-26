@@ -510,11 +510,18 @@ impl Port {
 
     /// Advances frames, samples and the timeout through `now`. Pin edges are applied by the
     /// caller first, which is what [`Self::note`] saw.
+    /// A port with no frame in flight and nothing queued, as most are at most polls, tests that
+    /// here and calls nothing.
+    #[inline]
     fn settle(&mut self, now: Tick, apb: u64) {
-        self.finish_tx(now, apb);
-        self.sample(now, apb);
+        if self.tx.is_some() {
+            self.finish_tx(now, apb);
+        }
+        if self.rx.is_some() {
+            self.sample(now, apb);
+        }
         self.fire_tout(now);
-        if self.tx.is_none() && now >= self.idle_until {
+        if self.tx.is_none() && now >= self.idle_until && !self.tx_fifo.is_empty() {
             self.start_tx(now, apb, false);
             self.finish_tx(now, apb);
         }
