@@ -72,14 +72,14 @@ expect @led1 off
 
 - `setup()` starts about 9 ms after t = 0. `millis()`, `delay()` and the timers use simulated time.
 - `Serial` reaches `serial`, on UART0 by default or over USB Serial/JTAG with `CDCOnBoot=cdc` in the FQBN (arduino-esp32 3.3.x and 4.0.x). USB Serial/JTAG claims GPIO19 and GPIO20 and pulls GPIO20 up through its D+ pull-up until `pinMode` or `gpio_config` clears `USB_PAD_ENABLE`, which also detaches the USB console.
-- The model runs the pins, the one-shot ADC, LEDC, RMT channel 0, SPI2 and I2C0 as masters, UART0 to UART2, the timers and both cores.
+- The model runs the pins, the one-shot ADC, LEDC, RMT channel 0, SPI2, SPI3, I2C0 and I2C1 as masters, UART0 to UART2, the timers and both cores.
 - `ledcAttach`, `ledcDetach`, `ledcWrite`, `ledcFade`, `ledcFadeWithInterrupt`, `analogWrite`, `tone` and `noTone` drive the pin's PWM edges. `analogWrite` is 1 kHz at 8 bits, and `ledcAttach(pin, 50, 14)` is a 50 Hz servo signal. `step --until @board.GPIO18 high` lands on an edge. Each edge costs a circuit solve, so a kHz PWM runs several times slower than real time.
-- `SPI` runs on SPI2. `SPI.transfer` returns what an SPI part answers, and `0xFF` when none does.
+- `SPI` runs on SPI2 and `SPIClass(HSPI)` runs on SPI3. `transfer` returns what an SPI part answers, and `0xFF` when none does. `Wire` runs on I2C0 and `Wire1` runs on I2C1.
 - `Adafruit_NeoPixel` and `rmtWrite` send each frame over RMT, and every pixel of a chained stick or strip takes its colour. Wire DIN straight to the pin: the frame does not cross a series resistor.
 - A stock sketch's boot clears the radio's force-up bits and turns on the APP CPU's debug trace, and `gpio_config` on an RTC pad reads the pad word and leaves it on digital GPIO. It also resets the system timer, the timer groups and the RTC watchdog, and the model runs those. Those accesses are quiet, so `expect no diagnostics` passes. Another register the model does not keep, in a peripheral it runs, is `warning[chip.unmodeled_register]`.
 - `orbe add devkitc-button-led` is the DevKitC-1. A button on GPIO4 cycles `@board.led`, and each colour is printed on `serial`.
 - `orbe add devkitc-gy-bmp280` reads a `gy-bmp280` over I2C at 3.3 V on Wire's default pins (GPIO8 SDA, GPIO9 SCL) and prints temperature and pressure on `serial`.
 - Keep PSRAM off, the FQBN's default. With `PSRAM=opi` the run stops at boot with `error[chip.flash_command]`.
-- A peripheral the model does not run stops the run at its first access with `error[chip.unsupported_setting]` that names it, as in `used PCNT, the pulse counter that encoder libraries use`: Wi-Fi and Bluetooth, the temperature sensor (`temperatureRead`), the pulse counter, MCPWM (ESP32Servo; drive a servo with `ledcAttach` instead), I2S, SPI3, `Wire1`, TWAI and USB OTG. `touchRead` returns before it reaches the touch sensor, so nothing flags it.
+- A peripheral the model does not run stops the run at its first access with `error[chip.unsupported_setting]` that names it, as in `used PCNT, the pulse counter that encoder libraries use`: Wi-Fi and Bluetooth, the temperature sensor (`temperatureRead`), the pulse counter, MCPWM (ESP32Servo; drive a servo with `ledcAttach` instead), I2S, TWAI and USB OTG. `touchRead` returns before it reaches the touch sensor, so nothing flags it.
 - Writing the flash stops the run with `error[chip.flash_command]`, `wrote the flash`. Wi-Fi, Bluetooth, `Preferences`, `EEPROM` and NVS write it.
 - An unmodelled setting stops the run with `error[chip.unsupported_setting]` and names the peripheral and the setting.

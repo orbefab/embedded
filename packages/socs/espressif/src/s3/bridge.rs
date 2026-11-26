@@ -229,22 +229,22 @@ impl Bridge {
         }
     }
 
-    /// `transfer` as its `Spi` record, named by the pin of its CS pad, or `SPI2` when no pin of
-    /// the part carries CS. A signal whose pad has no net is on no output.
+    /// `transfer` as its `Spi` record, named by the pin of its CS pad, or its host (`SPI2` or
+    /// `SPI3`) when no pin of the part carries CS. A signal whose pad has no net is on no output.
     fn spi(&self, transfer: Transfer) -> Sent {
         let lanes = |count: u8| match count {
             1 => Lanes::One,
             2 => Lanes::Two,
             4 => Lanes::Four,
-            _ => unreachable!("SPI2 sends on 1, 2 or 4 lanes"),
+            _ => unreachable!("SPI2 and SPI3 send on 1, 2 or 4 lanes"),
         };
         let output = |pad: Option<u8>| pad.and_then(|pad| self.output(pad));
         let pads = transfer.pads;
         Sent {
             start: time(transfer.start),
             end: time(transfer.end),
-            peripheral: "SPI2",
-            pin: pads.cs.and_then(pin).unwrap_or("SPI2"),
+            peripheral: transfer.peripheral,
+            pin: pads.cs.and_then(pin).unwrap_or(transfer.peripheral),
             kind: SentKind::Spi {
                 spi: Spi {
                     phases: transfer
@@ -447,8 +447,8 @@ impl Mcu for Bridge {
             }
             Fault::UnmappedFetch(p) => mcu::Fault::UnmappedFetch(pc(p)),
             Fault::Halted(p) => mcu::Fault::Halted(pc(p)),
-            Fault::Setting(setting, p) => mcu::Fault::UnsupportedSetting {
-                peripheral: "SPI2",
+            Fault::Setting(peripheral, setting, p) => mcu::Fault::UnsupportedSetting {
+                peripheral,
                 setting: mcu::Setting::Transfer(setting.name()),
                 pc: pc(p),
             },

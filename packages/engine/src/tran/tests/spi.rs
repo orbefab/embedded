@@ -23,15 +23,16 @@ const SPI_READ: &str = include_str!("../../../tests/firmware/spi_read.hex");
 
 /// What the target answers to 0x9F, as a flash chip answers its JEDEC ID command.
 const ID: [u8; 3] = [0xEF, 0x40, 0x18];
+const ID2: [u8; 3] = [0xC8, 0x60, 0x17];
 
 #[derive(Clone, Copy, Debug)]
-struct JedecId;
+struct JedecId([u8; 3]);
 
 impl State for JedecId {}
 
 impl Device for JedecId {
     fn new(_params: &Params<'_>) -> Result<JedecId, Error> {
-        Ok(JedecId)
+        Ok(JedecId(ID))
     }
 
     fn run_until(&mut self, _cx: &mut Cx, _limit: Time) -> Option<Stop> {
@@ -60,7 +61,7 @@ impl SpiTarget for JedecId {
             [] => (u32::from(*data.first()?), index.checked_sub(1)?),
         };
         if command == 0x9F {
-            ID.get(after).copied()
+            self.0.get(after).copied()
         } else {
             None
         }
@@ -103,7 +104,7 @@ fn target(netlist: &Netlist, mode: Mode) -> active::Chip {
         supply: None,
         takes: Takes::default(),
         core: Core::Device(Box::new(Native::new(
-            JedecId,
+            JedecId(ID),
             Pins::new(
                 Lines {
                     cs: 0,
@@ -210,6 +211,7 @@ const IRAM: u32 = 0x4037_0000;
 const GPIO: u32 = 0x6000_4000;
 const IO_MUX: u32 = 0x6000_9000;
 const SPI2: u32 = 0x6002_4000;
+const SPI3: u32 = 0x6002_5000;
 
 /// Xtensa code after literal words, each op as `Program` in `orbe-espressif`'s tests encodes it.
 pub(super) struct Program {
@@ -392,9 +394,21 @@ fn esp32s3(elf: Vec<u8>) -> Netlist {
 
 /// The target on the S3's SPI2 records, with D0 on MOSI and D1 on MISO.
 fn record_target(netlist: &Netlist) -> active::Chip {
+    record_target_on(netlist, ID, "cs", "sclk", "mosi", "miso")
+}
+
+/// A `JedecId` target answering `id` on the named SPI nets.
+fn record_target_on(
+    netlist: &Netlist,
+    id: [u8; 3],
+    cs: &str,
+    sclk: &str,
+    mosi: &str,
+    miso: &str,
+) -> active::Chip {
     let gnd = net(netlist, "gnd");
     let bus = Bus {
-        data: [net(netlist, "mosi"), net(netlist, "miso"), gnd, gnd],
+        data: [net(netlist, mosi), net(netlist, miso), gnd, gnd],
         reset: None,
     };
     active::Chip {
@@ -410,14 +424,262 @@ fn record_target(netlist: &Netlist) -> active::Chip {
         supply: None,
         takes: Takes {
             spi: Some(Target {
-                cs: net(netlist, "cs"),
-                sclk: net(netlist, "sclk"),
+                cs: net(netlist, cs),
+                sclk: net(netlist, sclk),
                 pins: None,
             }),
             ..Takes::default()
         },
-        core: Core::Device(Box::new(Native::new(JedecId, spi::Engine::new(bus), 0))),
+        core: Core::Device(Box::new(Native::new(JedecId(id), spi::Engine::new(bus), 0))),
     }
+}
+
+/// Routes CS to GPIO10, MOSI to GPIO11, SCLK to GPIO12 and MISO to GPIO13 on SPI3 (signals
+/// 71, 68, 66, 67), and runs one 0x9F + 3-byte read into `SPI3_W0`. Raises GPIO21 when it matches
+/// `ID2`.
+pub(super) fn jedec_id_spi3_program() -> Program {
+    let mut program = Program {
+        literals: vec![
+            IO_MUX,
+            1 << 12,
+            1 << 12 | 1 << 9,
+            GPIO + 0x500,
+            GPIO,
+            1 << 7 | 13,
+            SPI3,
+            1 << 31 | 1 << 28,
+            7 << 28 | 0x9F,
+            8 * 3 - 1,
+            0x3,
+            1 << 23,
+            1 << 24,
+            u32::from_le_bytes([ID2[0], ID2[1], ID2[2], 0]),
+            1 << 21,
+        ],
+        code: Vec::new(),
+    };
+    program
+        .l32r(2, 0)
+        .l32r(3, 1)
+        .s32i(3, 2, 0x04 + 4 * 10)
+        .s32i(3, 2, 0x04 + 4 * 11)
+        .s32i(3, 2, 0x04 + 4 * 12)
+        .l32r(3, 2)
+        .s32i(3, 2, 0x04 + 4 * 13);
+    // SPI3_CS0 (71), SPI3_D (68), SPI3_CLK (66) out, SPI3_Q (67) in from GPIO13.
+    program
+        .l32r(2, 3)
+        .movi(3, 71)
+        .s32i(3, 2, 0x54 + 4 * 10)
+        .movi(3, 68)
+        .s32i(3, 2, 0x54 + 4 * 11)
+        .movi(3, 66)
+        .s32i(3, 2, 0x54 + 4 * 12)
+        .l32r(2, 4)
+        .l32r(3, 5)
+        .s32i(3, 2, 0x154 + 4 * 67);
+    program
+        .l32r(2, 6)
+        .l32r(3, 7)
+        .s32i(3, 2, 0x10)
+        .l32r(3, 8)
+        .s32i(3, 2, 0x18)
+        .l32r(3, 9)
+        .s32i(3, 2, 0x1c)
+        .l32r(3, 10)
+        .s32i(3, 2, 0xe8)
+        .l32r(3, 11)
+        .s32i(3, 2, 0x00)
+        .l32r(4, 12)
+        .s32i(4, 2, 0x00);
+    let poll = program.pc();
+    program.l32i(3, 2, 0x00).and(5, 3, 4).bnez(5, poll);
+    program
+        .l32i(3, 2, 0x98)
+        .l32r(6, 13)
+        .bne_over(3, 6, 12)
+        .l32r(2, 4)
+        .l32r(3, 14)
+        .s32i(3, 2, 0x24)
+        .s32i(3, 2, 0x08);
+    program.code.extend([0x06, 0xff, 0xff]);
+    program
+}
+
+/// Starts a 0x9F + 3-byte read on SPI2 (GPIO10-13) and on SPI3 (GPIO4-7) back to back so both
+/// transfers end on the exact same tick (SPI2 gets 1 extra CS hold clock to match the 1-cycle
+/// start offset between the two stores), then raises GPIO21 only when SPI2 reads `ID` and SPI3
+/// reads `ID2`.
+fn dual_jedec_id_program() -> Program {
+    let mut program = Program {
+        literals: vec![
+            IO_MUX,
+            1 << 12,
+            1 << 12 | 1 << 9,
+            GPIO + 0x500,
+            GPIO,
+            1 << 7 | 13,
+            1 << 7 | 5,
+            SPI2,
+            SPI3,
+            1 << 31 | 1 << 28 | 1 << 7, // SPI2: USR_COMMAND | USR_MISO | CS_HOLD (1 extra clock)
+            1 << 31 | 1 << 28,          // SPI3: USR_COMMAND | USR_MISO
+            7 << 28 | 0x9F,
+            8 * 3 - 1,
+            0x3,
+            1 << 23,
+            1 << 24,
+            u32::from_le_bytes([ID[0], ID[1], ID[2], 0]),
+            u32::from_le_bytes([ID2[0], ID2[1], ID2[2], 0]),
+            1 << 21,
+        ],
+        code: Vec::new(),
+    };
+    // IO_MUX for GPIO10-13 and GPIO4-7 (GPIO13 and GPIO5 with FUN_IE).
+    program
+        .l32r(2, 0)
+        .l32r(3, 1)
+        .s32i(3, 2, 0x04 + 4 * 10)
+        .s32i(3, 2, 0x04 + 4 * 11)
+        .s32i(3, 2, 0x04 + 4 * 12)
+        .s32i(3, 2, 0x04 + 4 * 4)
+        .s32i(3, 2, 0x04 + 4 * 6)
+        .s32i(3, 2, 0x04 + 4 * 7)
+        .l32r(3, 2)
+        .s32i(3, 2, 0x04 + 4 * 13)
+        .s32i(3, 2, 0x04 + 4 * 5);
+    // SPI2 outputs on GPIO10/11/12, SPI3 outputs on GPIO7/6/4 (CS/MOSI/CLK).
+    program
+        .l32r(2, 3)
+        .movi(3, 110)
+        .s32i(3, 2, 0x54 + 4 * 10)
+        .movi(3, 103)
+        .s32i(3, 2, 0x54 + 4 * 11)
+        .movi(3, 101)
+        .s32i(3, 2, 0x54 + 4 * 12)
+        .movi(3, 71)
+        .s32i(3, 2, 0x54 + 4 * 7)
+        .movi(3, 68)
+        .s32i(3, 2, 0x54 + 4 * 6)
+        .movi(3, 66)
+        .s32i(3, 2, 0x54 + 4 * 4);
+    // FSPIQ (102) from GPIO13, SPI3_Q (67) from GPIO5.
+    program
+        .l32r(2, 4)
+        .l32r(3, 5)
+        .s32i(3, 2, 0x154 + 4 * 102)
+        .l32r(3, 6)
+        .s32i(3, 2, 0x154 + 4 * 67);
+    // Configure SPI2 (a2) and SPI3 (a8).
+    program
+        .l32r(2, 7)
+        .l32r(8, 8)
+        .l32r(3, 9)
+        .s32i(3, 2, 0x10)
+        .l32r(3, 10)
+        .s32i(3, 8, 0x10)
+        .l32r(3, 11)
+        .s32i(3, 2, 0x18)
+        .s32i(3, 8, 0x18)
+        .l32r(3, 12)
+        .s32i(3, 2, 0x1c)
+        .s32i(3, 8, 0x1c)
+        .l32r(3, 13)
+        .s32i(3, 2, 0xe8)
+        .s32i(3, 8, 0xe8)
+        .l32r(3, 14)
+        .s32i(3, 2, 0x00)
+        .s32i(3, 8, 0x00)
+        // Start SPI2 on cycle t and SPI3 on cycle t + 1; SPI2 runs 33 clocks, SPI3 runs 32 clocks,
+        // so both finish on tick t + 33.
+        .l32r(4, 15)
+        .s32i(4, 2, 0x00)
+        .s32i(4, 8, 0x00);
+    let poll2 = program.pc();
+    program.l32i(3, 2, 0x00).and(5, 3, 4).bnez(5, poll2);
+    let poll3 = program.pc();
+    program.l32i(3, 8, 0x00).and(5, 3, 4).bnez(5, poll3);
+    // Verify SPI2_W0 == ID and SPI3_W0 == ID2, then raise GPIO21.
+    program
+        .l32i(3, 2, 0x98)
+        .l32r(6, 16)
+        .bne_over(3, 6, 21)
+        .l32i(3, 8, 0x98)
+        .l32r(6, 17)
+        .bne_over(3, 6, 12)
+        .l32r(2, 4)
+        .l32r(3, 18)
+        .s32i(3, 2, 0x24)
+        .s32i(3, 2, 0x08);
+    program.code.extend([0x06, 0xff, 0xff]);
+    program
+}
+
+#[test]
+fn the_s3_reads_the_bytes_the_target_answers_into_spi3_w0() {
+    let netlist = esp32s3(jedec_id_spi3_program().elf());
+    let target = record_target_on(&netlist, ID2, "cs", "sclk", "mosi", "miso");
+    let (trace, diagnostics) = run_active(&netlist, vec![target]);
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity() != Severity::Error),
+        "{diagnostics:?}"
+    );
+    let ok = volts(&trace, "ok");
+    assert!(at(&ok, 20 * US) > 3.0, "GPIO21 is high: {:?}", ok.last());
+}
+
+#[test]
+fn the_s3_routes_simultaneous_spi2_and_spi3_reads_to_their_own_targets() {
+    let elf = dual_jedec_id_program().elf();
+    let mut blobs = Blobs::new();
+    let bytes = elf.len();
+    let sha256 = blobs.add(Arc::from(elf));
+    let ohm = |value: f64| format!(r#"{{ "value": {value:?}, "unit": "ohm" }}"#);
+    let json = format!(
+        r#"{{
+          "version": 1,
+          "seed": 0,
+          "analysis": {{ "transient": {{ "stop_ps": {stop}, "max_step_ps": {US}, "grid_ps": {US} }} }},
+          "ground": "gnd",
+          "nets": ["gnd", "vdd", "cs2", "mosi2", "sclk2", "miso2", "cs3", "mosi3", "sclk3", "miso3", "ok"],
+          "parts": [
+            {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "vdd", "n": "gnd" }},
+              "voltage": {{ "value": 3.3, "unit": "V" }} }},
+            {{ "name": "u1", "kind": "esp32s3",
+              "pins": {{ "VCC": "vdd", "GND": "gnd",
+                        "GPIO10": "cs2", "GPIO11": "mosi2", "GPIO12": "sclk2", "GPIO13": "miso2",
+                        "GPIO7": "cs3", "GPIO6": "mosi3", "GPIO4": "sclk3", "GPIO5": "miso3",
+                        "GPIO21": "ok" }},
+              "firmware": {{ "elf": {{ "sha256": "{sha256}", "bytes": {bytes} }} }},
+              "output": {{ "high_drop": {{ "value": 0.0, "unit": "V" }}, "high_resistance": {r},
+                          "low_drop": {{ "value": 0.0, "unit": "V" }}, "low_resistance": {r} }},
+              "pull_up_resistance": {pull},
+              "leakage_resistance": {leak},
+              "input_threshold": {{ "low": {{ "value": 0.25, "unit": "1" }},
+                                   "high": {{ "value": 0.75, "unit": "1" }} }} }}
+          ]
+        }}"#,
+        stop = 20 * US,
+        r = ohm(17.0),
+        pull = ohm(45e3),
+        leak = ohm(66e6),
+    );
+    let netlist = crate::netlist::parse_with(json.as_bytes(), &blobs).unwrap();
+    let targets = vec![
+        record_target_on(&netlist, ID, "cs2", "sclk2", "mosi2", "miso2"),
+        record_target_on(&netlist, ID2, "cs3", "sclk3", "mosi3", "miso3"),
+    ];
+    let (trace, diagnostics) = run_active(&netlist, targets);
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.severity() != Severity::Error),
+        "{diagnostics:?}"
+    );
+    let ok = volts(&trace, "ok");
+    assert!(at(&ok, 20 * US) > 3.0, "GPIO21 is high: {:?}", ok.last());
 }
 
 #[test]
@@ -433,6 +695,104 @@ fn the_s3_reads_the_bytes_the_target_answers_into_spi_w0() {
     );
     let ok = volts(&trace, "ok");
     assert!(at(&ok, 20 * US) > 3.0, "GPIO21 is high: {:?}", ok.last());
+}
+
+/// Stock Arduino-ESP32 sketch using `SPI` (FSPI / SPI2 on GPIO10-13) and `SPIClass hspi(HSPI)`
+/// (SPI3 on GPIO4-7) talks to two distinct SPI targets at once and prints both JEDEC IDs over
+/// UART0 with zero diagnostics.
+#[test]
+fn stock_arduino_hspi_reads_distinct_targets_on_spi2_and_spi3() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let rom = std::fs::read(root.join("parts/esp32s3-qfn56/esp32s3_rev0_rom.elf")).unwrap();
+    let fixture = root.join("packages/scene/tests/fixtures/esp32s3-stock-hspi");
+    let partitions = std::fs::read(fixture.join("partitions.bin")).unwrap();
+    let app = std::fs::read(fixture.join("app.bin")).unwrap();
+
+    let mut blobs = Blobs::new();
+    let rom_bytes = rom.len();
+    let rom_sha = blobs.add(Arc::from(rom));
+    let part_bytes = partitions.len();
+    let part_sha = blobs.add(Arc::from(partitions));
+    let app_bytes = app.len();
+    let app_sha = blobs.add(Arc::from(app));
+
+    let ohm = |value: f64| format!(r#"{{ "value": {value:?}, "unit": "ohm" }}"#);
+    let ms = 1_000_000_000u64;
+    let json = format!(
+        r#"{{
+          "version": 1,
+          "seed": 0,
+          "analysis": {{ "transient": {{ "stop_ps": {stop}, "max_step_ps": {ms}, "grid_ps": {ms} }} }},
+          "ground": "gnd",
+          "nets": ["gnd", "vdd", "cs2", "mosi2", "sclk2", "miso2", "cs3", "mosi3", "sclk3", "miso3"],
+          "parts": [
+            {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "vdd", "n": "gnd" }},
+              "voltage": {{ "value": 3.3, "unit": "V" }} }},
+            {{ "name": "u1", "kind": "esp32s3",
+              "pins": {{ "VCC": "vdd", "GND": "gnd",
+                        "GPIO10": "cs2", "GPIO11": "mosi2", "GPIO12": "sclk2", "GPIO13": "miso2",
+                        "GPIO7": "cs3", "GPIO6": "mosi3", "GPIO4": "sclk3", "GPIO5": "miso3" }},
+              "rom": {{ "sha256": "{rom_sha}", "bytes": {rom_bytes} }},
+              "firmware": {{
+                "flash": [
+                  {{ "offset": 32768, "sha256": "{part_sha}", "bytes": {part_bytes} }},
+                  {{ "offset": 65536, "sha256": "{app_sha}", "bytes": {app_bytes} }}
+                ]
+              }},
+              "output": {{ "high_drop": {{ "value": 0.0, "unit": "V" }}, "high_resistance": {r},
+                          "low_drop": {{ "value": 0.0, "unit": "V" }}, "low_resistance": {r} }},
+              "pull_up_resistance": {pull},
+              "leakage_resistance": {leak},
+              "input_threshold": {{ "low": {{ "value": 0.25, "unit": "1" }},
+                                   "high": {{ "value": 0.75, "unit": "1" }} }} }}
+          ]
+        }}"#,
+        stop = 50 * ms,
+        r = ohm(17.0),
+        pull = ohm(45e3),
+        leak = ohm(66e6),
+    );
+    let netlist = crate::netlist::parse_with(json.as_bytes(), &blobs).unwrap();
+    let targets = vec![
+        record_target_on(&netlist, ID, "cs2", "sclk2", "mosi2", "miso2"),
+        record_target_on(&netlist, ID2, "cs3", "sclk3", "mosi3", "miso3"),
+    ];
+    let (trace, diagnostics) = run_active(&netlist, targets);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+    let files = trace.files();
+    let serial_csv = files
+        .iter()
+        .find(|(name, _)| *name == "serial.csv")
+        .map(|(_, bytes)| String::from_utf8(bytes.clone()).unwrap())
+        .expect("serial.csv");
+    let mut text = String::new();
+    for line in serial_csv.lines().skip(1) {
+        let cols: Vec<&str> = line.split(',').collect();
+        if cols.get(2) == Some(&"UART0") {
+            let byte: u8 = cols[3].parse().unwrap();
+            text.push(byte as char);
+        }
+    }
+    assert!(
+        text.contains("fspi ef 40 18 hspi c8 60 17"),
+        "UART0 output:\n{text}"
+    );
+    assert!(text.contains("ready"), "UART0 output:\n{text}");
+
+    let link_csv = files
+        .iter()
+        .find(|(name, _)| *name == "link.csv")
+        .map(|(_, bytes)| String::from_utf8(bytes.clone()).unwrap())
+        .expect("link.csv");
+    assert!(
+        link_csv.contains(",GPIO10,spi,"),
+        "missing SPI2 row:\n{link_csv}"
+    );
+    assert!(
+        link_csv.contains(",GPIO7,spi,"),
+        "missing SPI3 row:\n{link_csv}"
+    );
 }
 
 /// With no target on its bus the read finds MISO undriven, `SPI_W0` is not `ID`, and GPIO21

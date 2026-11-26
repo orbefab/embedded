@@ -9,7 +9,7 @@
 //! checks at each poll.
 
 use super::clock::Tick;
-use super::soc::{LEDC, RMT, SPI2, SYSTIMER, TIMG0, TIMG1, USB_SERIAL_JTAG};
+use super::soc::{LEDC, RMT, SPI2, SPI3, SYSTIMER, TIMG0, TIMG1, USB_SERIAL_JTAG};
 use super::uart::Uarts;
 use super::usb;
 
@@ -19,7 +19,8 @@ pub(crate) enum Peripheral {
     Systimer,
     /// The general timers of both timer groups.
     Timers,
-    Spi2,
+    /// SPI2 and SPI3.
+    Spi,
     Usb,
     Rmt,
     Uart,
@@ -30,7 +31,7 @@ impl Peripheral {
     pub(crate) const ALL: [Peripheral; 7] = [
         Peripheral::Systimer,
         Peripheral::Timers,
-        Peripheral::Spi2,
+        Peripheral::Spi,
         Peripheral::Usb,
         Peripheral::Rmt,
         Peripheral::Uart,
@@ -83,7 +84,7 @@ impl Events {
             }
             USB_SERIAL_JTAG => Peripheral::Usb.bit(),
             RMT => Peripheral::Rmt.bit() | Peripheral::Uart.bit(),
-            SPI2 => Peripheral::Spi2.bit() | Peripheral::Uart.bit(),
+            SPI2 | SPI3 => Peripheral::Spi.bit() | Peripheral::Uart.bit(),
             LEDC => Peripheral::Ledc.bit(),
             base if Uarts::index(base).is_some() => Peripheral::Uart.bit(),
             _ => EVERY,
@@ -137,6 +138,9 @@ mod tests {
         assert_eq!(left(&events), [true, true, true, true, false, false, true]);
         keep_all(&mut events);
         events.touch(SPI2);
+        assert_eq!(left(&events), [true, true, false, true, true, false, true]);
+        keep_all(&mut events);
+        events.touch(SPI3);
         assert_eq!(left(&events), [true, true, false, true, true, false, true]);
         keep_all(&mut events);
         events.touch(crate::s3::uart::BASES[2] + 0x1c);
