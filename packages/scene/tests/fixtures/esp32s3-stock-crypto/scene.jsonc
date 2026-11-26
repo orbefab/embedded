@@ -1,0 +1,15 @@
+// Runs mbedTLS SHA-1/256/384/512, AES-128/256 (ECB, CBC, CTR, GCM) and RSA-2048 verify
+// on the ESP32-S3 hardware accelerators.
+// The app is the stock sketch packages/engine/tests/firmware/esp32s3/arduino/stock/crypto.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    }
+  },
+  "wires": [],
+  "ground": "board.GND"
+}

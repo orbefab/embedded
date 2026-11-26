@@ -1730,3 +1730,28 @@ fn a_stock_temp_sketch_reads_ambient_and_default_temperature_across_ranges() {
     );
     run(&mut live, dir.path(), "expect no diagnostics");
 }
+
+#[test]
+fn a_stock_crypto_sketch_verifies_sha_aes_and_rsa_vectors() {
+    play(
+        "esp32s3-stock-crypto",
+        &[
+            r#"step --until serial contains "all crypto ok" --timeout 500ms"#,
+            r#"expect serial contains "sha1 ok""#,
+            r#"expect serial contains "sha256 ok""#,
+            r#"expect serial contains "sha384 ok""#,
+            r#"expect serial contains "sha512 ok""#,
+            r#"expect serial contains "sha512_dma ok""#,
+            r#"expect serial contains "aes128_ecb ok""#,
+            r#"expect serial contains "aes256_ecb ok""#,
+            r#"expect serial contains "aes128_cbc ok""#,
+            r#"expect serial contains "aes256_cbc ok""#,
+            r#"expect serial contains "aes256_cbc_irq ok""#,
+            r#"expect serial contains "aes128_ctr ok""#,
+            r#"expect serial contains "aes256_ctr ok""#,
+            r#"expect serial contains "aes128_gcm ok""#,
+            r#"expect serial contains "rsa2048_pk ok""#,
+            "expect no diagnostics",
+        ],
+    );
+}
