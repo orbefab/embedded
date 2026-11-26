@@ -34,6 +34,7 @@ use crate::tran::{Breakpoints, Outcome, Record, Rows};
 use crate::watch::{self, Levels};
 
 mod input;
+pub(crate) mod predict;
 
 pub use input::{
     Applied, DeviceEvent, Input, Rejected, Serial, Setting, WorldApplied, WorldChange,
@@ -275,6 +276,8 @@ pub struct Session {
     /// The digital inputs a firmware read with nothing driving them, checked on each accepted
     /// step.
     inputs: Inputs,
+    /// The start of each restart's solve, learned from the restarts before it.
+    pub(crate) predictor: predict::Predictor,
     pub(crate) state: State,
 }
 
@@ -481,6 +484,7 @@ impl Session {
             &mut solver,
             Conditions::NOMINAL,
             start,
+            None,
             circuit.power_on(),
             &Actives::power_on(&circuit),
             None,
@@ -528,6 +532,7 @@ impl Session {
             ..RunStats::default()
         };
         let leaders = Leaders::new(&stores);
+        let predictor = predict::Predictor::new(actives.cores());
         let mut session = Session {
             circuit,
             columns,
@@ -554,6 +559,7 @@ impl Session {
             warnings,
             ratings,
             inputs,
+            predictor,
             state: State::TAKEN,
         };
         session.state = session.solved(accepted);
@@ -1266,11 +1272,23 @@ impl Session {
         let next = if restart {
             self.stats.restarts += 1;
             let solves = self.solver.solves.total();
+            // A scheduled edge's source or contact moves by its own amount, which no image
+            // change keys, so it starts from the landing.
+            self.predictor
+                .change(&accepted.chips, &chips, self.actives.cores());
+            let guess = match scheduled {
+                false => self.predictor.guess(&circuit.layout, &converged.iterate),
+                true => None,
+            };
+            self.stats.guesses += u64::from(guess.is_some());
+            let learn = !scheduled;
+            let restarted_chips = learn.then(|| chips.clone());
             let held = restart_solve(
                 circuit,
                 &mut self.solver,
                 at,
                 &converged.iterate,
+                guess,
                 chips,
                 self.actives.cores(),
                 &levels,
@@ -1287,12 +1305,19 @@ impl Session {
                 Ok((held, restart_row))
             });
             self.stats.restart_iterations += self.solver.solves.total() - solves;
+            self.predictor.restarted();
             let (held, restart_row) = match held {
                 Ok(held) => held,
                 Err(fault) => {
                     return self.ended(at, row, End::Fault(fault));
                 }
             };
+            self.stats.guessed += u64::from(held.guessed);
+            // A restart whose chips settled elsewhere teaches nothing about the chips it
+            // started with.
+            if restarted_chips.is_some_and(|chips| chips == held.chips) {
+                self.predictor.learn(&converged.iterate, &held.iterate);
+            }
             self.ratings.restarted();
             self.actives.input(circuit, at, &levels, &held.levels);
             // A restart that moved no store's slope keeps the segment and its step. A segment a
@@ -1639,14 +1664,15 @@ pub(crate) fn attempt(
 
 /// The solve after a switch edge, a source jump or a chip drive change at `at`: every capacitor
 /// held at its voltage in `step`, the new contacts, sources and `chips` in force, settled on the operating point
-/// ladder with `budget` per rung. `levels` were read on `step`. It is history for the next
-/// step, not a row.
+/// ladder with `budget` per rung, or from `guess` when that converges. `levels` were read on
+/// `step`. It is history for the next step, not a row.
 #[allow(clippy::too_many_arguments)]
 fn restart_solve(
     circuit: &Circuit,
     solver: &mut Solver,
     at: Time,
     step: &Iterate,
+    guess: Option<Iterate>,
     chips: Vec<chip::State>,
     cores: &[active::Core],
     levels: &Levels,
@@ -1664,6 +1690,7 @@ fn restart_solve(
         solver,
         conditions,
         step.clone(),
+        guess,
         chips,
         cores,
         Some(levels),

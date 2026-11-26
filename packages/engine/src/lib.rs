@@ -111,6 +111,10 @@ pub struct RunStats {
     /// Locating where a watch crossed its threshold inside a try.
     pub locate_iterations: u64,
     pub restart_iterations: u64,
+    /// Restarts that started from the change the same image change made before, and those
+    /// that converged from there.
+    pub guesses: u64,
+    pub guessed: u64,
     /// Grid rows solved inside a step, and their iterations.
     pub row_probes: u64,
     pub row_iterations: u64,
