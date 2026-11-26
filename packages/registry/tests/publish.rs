@@ -123,3 +123,90 @@ fn a_release_with_no_tag_is_refused() {
     let error = publish(&[]).unwrap_err().to_string();
     assert!(error.contains("v0.2.0"), "{error}");
 }
+
+#[test]
+fn a_later_release_unlisting_a_part_unlists_its_older_rows() {
+    let first = tempfile::tempdir().unwrap();
+    put(
+        first.path(),
+        "registry.jsonc",
+        r#"{ "format": 1, "name": "@acme" }"#,
+    );
+    let part = |name: &str, version: &str| {
+        common::LAMP
+            .replace("\"part\": \"lamp\"", &format!("\"part\": \"{name}\""))
+            .replace(
+                "\"version\": \"1.2.0\"",
+                &format!("\"version\": \"{version}\""),
+            )
+    };
+    put(
+        first.path(),
+        "parts/lamp/part.jsonc",
+        &part("lamp", "1.0.0"),
+    );
+    put(
+        first.path(),
+        "parts/chip/part.jsonc",
+        &part("chip", "1.0.0"),
+    );
+    put(
+        first.path(),
+        "parts/diode/part.jsonc",
+        &part("diode", "1.0.0"),
+    );
+
+    let second = tempfile::tempdir().unwrap();
+    put(
+        second.path(),
+        "registry.jsonc",
+        r#"{ "format": 1, "name": "@acme", "unlisted": ["chip", "diode"] }"#,
+    );
+    put(
+        second.path(),
+        "parts/lamp/part.jsonc",
+        &part("lamp", "1.0.0"),
+    );
+    // chip keeps its 1.0.0 record from the older release.
+    put(
+        second.path(),
+        "parts/chip/part.jsonc",
+        &part("chip", "1.0.0"),
+    );
+    // diode ships a newer version alongside its older 1.0.0 row.
+    put(
+        second.path(),
+        "parts/diode/part.jsonc",
+        &part("diode", "1.1.0"),
+    );
+
+    let older = build(first.path()).unwrap();
+    let newer = build(second.path()).unwrap();
+    let kept_chip = older.output["chip@1.0.0.json"].clone();
+    let merged = publish(&[
+        Release {
+            version: "0.2.0".into(),
+            formats: vec![1, 2, 3],
+            registry: older,
+        },
+        Release {
+            version: "0.2.1".into(),
+            formats: vec![1, 2, 3],
+            registry: newer,
+        },
+    ])
+    .unwrap();
+
+    assert_eq!(merged["chip@1.0.0.json"], kept_chip);
+    let index: serde_json::Value = serde_json::from_slice(&merged["index.json"]).unwrap();
+    let rows = index["items"].as_array().unwrap();
+    let row = |name: &str, version: &str| {
+        rows.iter()
+            .find(|row| row["name"] == name && row["version"] == version)
+            .unwrap()
+    };
+    assert!(row("lamp", "1.0.0").get("listed").is_none());
+    assert_eq!(row("chip", "1.0.0")["listed"], serde_json::json!(false));
+    assert_eq!(row("diode", "1.0.0")["listed"], serde_json::json!(false));
+    assert_eq!(row("diode", "1.1.0")["listed"], serde_json::json!(false));
+}
