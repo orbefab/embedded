@@ -6,7 +6,7 @@
   "part": "thermistor-ntc-10k",
   "version": "0.1.0",
   "title": "NTC thermistor, 10 kΩ (NTCLE100E3103JB0)",
-  "summary": "10 kΩ at 25 °C radial NTC thermistor (B25/85 3977 K). Follows Vishay's R/T curve from -40 to 125 °C, rated 5 mW (15 s) and 50 V DC.",
+  "summary": "10 kΩ NTC thermistor (25 °C, B25/85 3977 K, 50 V DC). Above 5 mW, unmodelled 7 mW/K self-heating moves the real reading off the R/T table.",
   "tags": ["thermistor", "ntc", "10k", "b3977", "temperature", "thermometer", "sensor", "analog", "resistor", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "docs": {
@@ -87,6 +87,7 @@
       "power": {
         "value": 0.005,
         "unit": "W",
+        "characterized": true,
         "basis": {
           "sustained": {
             "average": "mean",
@@ -106,7 +107,7 @@
         "source": {
           "datasheet": {
             "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
-            "at": "p1 Operating temperature range at zero power dissipation (-40 to +125 C continuously) and p2 Power Derating Note: zero power is max 1 % of max power (1 % of 500 mW = 5 mW); p2 derating curve reaches 0 % at -40 C and 85 C",
+            "at": "p1 Operating temperature range at zero power dissipation (-40 to +125 C continuously), p1 Max. power dissipation at 55 C = 500 mW, and p2 Power Derating Note: zero power is considered as measuring power max. 1 % of max. power (5 mW); above 5 mW, unmodelled 7 mW/K self-heating moves the real reading off the R/T table",
             "basis": "max",
           },
         },
@@ -127,7 +128,7 @@
   "not_simulated": [
     {
       "what": "self-heating",
-      "why": "Resistance follows world temperature only. The sheet's 7 mW/K dissipation factor is not modelled, though the 5 mW zero-power rating warns before self-heating exceeds about 0.7 K.",
+      "why": "Resistance follows world temperature only. The sheet's 7 mW/K dissipation factor is not modelled; above the 5 mW zero-power condition (max 1 % of the 500 mW max at 55 C), self-heating moves the real reading off the R/T table, so rating.power warns past 5 mW as beyond the load the sheet characterizes.",
     },
     {
       "what": "response time",
@@ -139,7 +140,7 @@
     },
     {
       "what": "power derating curve",
-      "why": "The engine checks one power limit across all temperatures, so power is rated at the sheet's 5 mW continuous zero-power limit across -40 to 125 C. Between 0 and 55 C the p2 power-derating curve allows up to 500 mW (derating linearly to 0 % at -40 C and 85 C), so non-zero-power loads above 5 mW in that band still warn.",
+      "why": "The 5 mW threshold is the sheet's zero-power condition for the -40 to 125 C R/T table, not a damage limit. Vishay 29049 p1 gives 500 mW maximum power at 55 C (p2 derates from 100 % across 0 to 55 C to 0 % at -40 C and 85 C), so loads above 5 mW keep running and warn that unmodelled self-heating moves the real reading off the table.",
     },
   ],
 }

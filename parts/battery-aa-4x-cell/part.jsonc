@@ -1,5 +1,7 @@
 // Internal voltage source for battery-aa-4x (4 x Energizer E91 AA alkaline in series).
 // Unlisted helper part; battery-aa-4x wires this in series with its 0.9 ohm internal resistance.
+// Current warns past 500 mA (highest continuous load plotted on E91) with a 0.25 s RMS time
+// constant from E91 p1's High Rate Toy 0.25 s pulse.
 {
   "format": 7,
   "part": "battery-aa-4x-cell",
@@ -40,20 +42,13 @@
           "sustained": {
             "average": "rms",
             "tau": {
-              "value": 2.12,
+              "value": 0.25,
               "unit": "s",
               "source": {
-                "closed_form": {
-                  "note": "One 0.25 s pulse of Energizer E91 p1's High Rate Toy 1 ohm/cell load (1.5 A at 1.5 V nominal) reaches the 500 mA continuous characterized load on an RMS filter from cold with tau = -0.25 / ln(1 - (0.5 / 1.5)^2) = 2.12 s. A 4 ohm pack load (1.22 A through 0.9 ohm IR) stays under 500 mA RMS for 0.25 s, while held loads past 500 mA warn.",
-                },
-              },
-            },
-            "peak": {
-              "value": 1.5,
-              "unit": "A",
-              "source": {
-                "closed_form": {
-                  "note": "Energizer E91 Form E91EU0823 p1 High Rate Toy test: 1 / 3 ohm 0.25/19.75 s pulse at 1.5 V nominal is 1.5 A per cell (1.22 A closed-circuit through 0.225 ohm fresh IR). Direct shorts (~6.7 A) warn immediately.",
+                "datasheet": {
+                  "doc": "Energizer E91 Product Datasheet (Form No. E91EU0823)",
+                  "at": "p1 Industry Standard Tests, High Rate Toy: 1 / 3 ohm .25/19.75s (0.25 s pulse duration, shortest published pulse on the sheet)",
+                  "basis": "nominal",
                 },
               },
             },

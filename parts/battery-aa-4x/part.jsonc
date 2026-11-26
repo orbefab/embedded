@@ -2,8 +2,8 @@
 // Thevenin model: 6.0 V open-circuit EMF (4 * 1.5 V) in series with 0.9 ohm fresh internal
 // resistance (4 * 0.225 ohm, midpoint of Energizer E91's 150 to 300 mohm fresh DC effective
 // resistance; Energizer's Battery Internal Resistance Technical Bulletin v1.1.0 p1 measures
-// 0.214 ohm on a fresh AA cell). Current warns past the 500 mA continuous load and 1.5 A
-// 0.25 s toy pulse characterized on Energizer E91.
+// 0.214 ohm on a fresh AA cell). Current warns past 500 mA, the highest continuous load
+// plotted on Energizer E91 (0.25 s time constant from its 0.25 s High Rate Toy pulse).
 {
   "format": 5,
   "part": "battery-aa-4x",
@@ -64,7 +64,7 @@
     },
     {
       "what": "self-heating and venting",
-      "why": "Energizer E91 states no absolute maximum current; loads past its 500 mA continuous bar or 1.5 A toy pulse and direct shorts (~6.7 A) warn rating.current as beyond the sheet's characterized loads and keep running instead of heating or venting the cells.",
+      "why": "Energizer E91 states no absolute maximum current; loads past its 500 mA continuous bar and direct shorts (~6.7 A) warn rating.current as beyond the sheet's characterized loads and keep running instead of heating or venting the cells.",
     },
   ],
 }

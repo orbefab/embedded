@@ -120,7 +120,11 @@ fn format_7_keys_before_format_7_are_told_to_set_format_7() {
         (
             "thermistor-ntc-10k",
             "resistor",
-            &["resistance.curve.steinhart_hart", "ratings.voltage"][..],
+            &[
+                "resistance.curve.steinhart_hart",
+                "ratings.power.characterized",
+                "ratings.voltage",
+            ][..],
         ),
         (
             "battery-9v-cell",

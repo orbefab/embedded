@@ -508,23 +508,31 @@ fn lcd1602_i2c_card_describes_its_pins_params_parts_and_readings() {
 #[test]
 fn starter_kit_thermistor_and_batteries_show_ratings_and_match_search() {
     let ntc = card(&parts_dir(), "thermistor-ntc-10k").unwrap();
-    assert!(
-        ntc.ratings
-            .iter()
-            .any(|rating| rating.name == "power" && rating.value == Some(0.005))
-    );
-    assert!(
-        ntc.ratings
-            .iter()
-            .any(|rating| rating.name == "voltage" && rating.value == Some(50.0))
-    );
+    assert!(ntc.ratings.iter().any(|rating| {
+        rating.name == "power" && rating.value == Some(0.005) && rating.characterized
+    }));
+    assert!(ntc.ratings.iter().any(|rating| {
+        rating.name == "voltage" && rating.value == Some(50.0) && !rating.characterized
+    }));
     let bat9 = card(&parts_dir(), "battery-9v").unwrap();
     assert!(bat9.ratings.iter().any(|rating| {
         rating.name == "current" && rating.value == Some(0.05) && rating.characterized
     }));
     let bataa = card(&parts_dir(), "battery-aa-4x").unwrap();
     assert!(bataa.ratings.iter().any(|rating| {
-        rating.name == "current" && rating.value == Some(0.5) && rating.characterized
+        let sustained = rating
+            .basis
+            .as_ref()
+            .and_then(|basis| basis.get("sustained"));
+        rating.name == "current"
+            && rating.value == Some(0.5)
+            && rating.characterized
+            && sustained
+                .and_then(|s| s.get("tau"))
+                .and_then(|tau| tau.get("value"))
+                .and_then(|v| v.as_f64())
+                == Some(0.25)
+            && sustained.and_then(|s| s.get("peak")).is_none()
     }));
     for (query, want) in [
         ("thermistor", "thermistor-ntc-10k"),
