@@ -82,11 +82,12 @@ impl Source {
 }
 
 /// The map from core cycles to ticks: from cycle `since` on, each cycle is `per_cycle` ticks
-/// after tick `at`.
+/// after tick `at`. `per_cycle` is `source.cpu()`, kept so the map does not divide.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CpuClock {
     since: Cycle,
     at: Tick,
+    per_cycle: u64,
     pub(crate) source: Source,
 }
 
@@ -95,6 +96,7 @@ impl CpuClock {
         CpuClock {
             since: Cycle(0),
             at: Tick(0),
+            per_cycle: source.cpu(),
             source,
         }
     }
@@ -111,13 +113,20 @@ impl CpuClock {
             "cycle {cycle:?} before the clock's change at {:?}",
             self.since
         );
-        Tick(self.at.0 + cycle.0.saturating_sub(self.since.0) * self.source.cpu())
+        Tick(self.at.0 + cycle.0.saturating_sub(self.since.0) * self.per_cycle)
     }
 
-    /// The first core cycle at or after `tick`, which may lie before the last change.
+    /// The first core cycle at or after `tick`, which may lie before the last change. The PLL's
+    /// three rates divide by a constant, which needs no division instruction.
     pub(crate) fn cycle_after(&self, tick: Tick) -> Cycle {
         let ahead = tick.0.saturating_sub(self.at.0);
-        Cycle(self.since.0 + ahead.div_ceil(self.source.cpu()))
+        let cycles = match self.per_cycle {
+            2 => ahead.div_ceil(2),
+            3 => ahead.div_ceil(3),
+            6 => ahead.div_ceil(6),
+            per_cycle => ahead.div_ceil(per_cycle),
+        };
+        Cycle(self.since.0 + cycles)
     }
 
     /// `tick` rounded up to a cycle boundary of this clock.
@@ -129,6 +138,7 @@ impl CpuClock {
     pub(crate) fn switch(&mut self, now: Cycle, source: Source) {
         self.at = self.tick(now);
         self.since = now;
+        self.per_cycle = source.cpu();
         self.source = source;
     }
 }

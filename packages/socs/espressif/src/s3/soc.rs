@@ -101,6 +101,9 @@ pub(crate) struct Soc {
     events: Events,
     /// Registers kept as plain words, by address.
     plain: BTreeMap<u32, u32>,
+    /// The plain words `RTC_CNTL_OPTIONS0_REG` and `RTC_CNTL_SW_CPU_STALL_REG`, which the
+    /// scheduler reads before each slice.
+    stall: (u32, u32),
     pub(crate) gpio: Gpio,
     pub(crate) systimer: Systimer,
     pub(crate) watchdogs: Watchdogs,
@@ -391,6 +394,7 @@ impl Soc {
             code: Code::default(),
             events: Events::default(),
             plain: BTreeMap::new(),
+            stall: (0, 0),
             gpio: Gpio::new(netted),
             systimer: Systimer::new(),
             watchdogs,
@@ -597,8 +601,21 @@ impl Soc {
     /// `RTC_CNTL_OPTIONS0_REG` and `RTC_CNTL_SW_CPU_STALL_REG`, which hold both cores' RTC
     /// stall fields.
     fn stall_words(&self) -> (u32, u32) {
-        let word = |offset| self.plain.get(&(RTC_CNTL + offset)).copied().unwrap_or(0);
-        (word(OPTIONS0), word(app::SW_CPU_STALL))
+        #[cfg(debug_assertions)]
+        {
+            let word = |offset| self.plain.get(&(RTC_CNTL + offset)).copied().unwrap_or(0);
+            assert_eq!(self.stall, (word(OPTIONS0), word(app::SW_CPU_STALL)));
+        }
+        self.stall
+    }
+
+    /// Keeps `stall` equal to the plain word at `addr` the caller just wrote with `value`.
+    fn wrote_plain(&mut self, addr: u32, value: u32) {
+        if addr == RTC_CNTL + OPTIONS0 {
+            self.stall.0 = value;
+        } else if addr == RTC_CNTL + app::SW_CPU_STALL {
+            self.stall.1 = value;
+        }
     }
 
     /// What holds the APP CPU now.
@@ -763,6 +780,7 @@ impl Soc {
             }
             _ => {
                 self.plain.insert(addr, value);
+                self.wrote_plain(addr, value);
             }
         }
     }
@@ -1176,11 +1194,18 @@ impl Soc {
             self.plain.insert(addr, value);
             return true;
         }
-        done || self
+        if done {
+            return true;
+        }
+        let kept = self
             .plain
             .get_mut(&addr)
             .map(|word| *word = value)
-            .is_some()
+            .is_some();
+        if kept {
+            self.wrote_plain(addr, value);
+        }
+        kept
     }
 
     /// The interrupt sources' levels at `now`.
