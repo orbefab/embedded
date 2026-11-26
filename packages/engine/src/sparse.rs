@@ -32,6 +32,8 @@ pub(crate) struct Pattern {
     /// For at most `DENSE_UNKNOWNS` unknowns, the slot of row `i` in column `j` at `j * n + i`,
     /// or `NO_SLOT`. Made from `start` and `rows`, so it finds the slot the search would.
     dense: Option<Box<[u32]>>,
+    /// The slot of each column's diagonal, which `late` reads on every solve.
+    diagonals: Vec<Option<usize>>,
 }
 
 impl Pattern {
@@ -47,12 +49,15 @@ impl Pattern {
             }
             table
         });
-        Pattern {
+        let mut pattern = Pattern {
             n,
             start,
             rows,
             dense,
-        }
+            diagonals: Vec::new(),
+        };
+        pattern.diagonals = (0..n).map(|col| pattern.slot(col, col)).collect();
+        pattern
     }
 
     /// Whether each row has one entry.
@@ -207,19 +212,26 @@ impl Pattern {
     /// current, behind `HOLD / C` ohm. Two held in parallel split their current by those tiny
     /// resistances, which only the difference of their rows carries, so the voltage they share
     /// is eliminated after the others, on one of their rows.
+    #[cfg(test)]
     pub(crate) fn late(&self, values: &[f64], node: &[bool]) -> Vec<bool> {
-        (0..self.n)
-            .map(|col| {
-                !node[col]
-                    && self.slot(col, col).is_some_and(|diagonal| {
-                        let largest = self
-                            .column_slots(col)
-                            .map(|slot| values[slot].abs())
-                            .fold(0.0, f64::max);
-                        values[diagonal].abs() < THRESHOLD * largest
-                    })
-            })
-            .collect()
+        let mut late = Vec::new();
+        self.late_into(values, node, &mut late);
+        late
+    }
+
+    /// `late`, written into `late`.
+    pub(crate) fn late_into(&self, values: &[f64], node: &[bool], late: &mut Vec<bool>) {
+        late.clear();
+        late.extend((0..self.n).map(|col| {
+            !node[col]
+                && self.diagonals[col].is_some_and(|diagonal| {
+                    let largest = values[self.column_slots(col)]
+                        .iter()
+                        .map(|value| value.abs())
+                        .fold(0.0, f64::max);
+                    values[diagonal].abs() < THRESHOLD * largest
+                })
+        }));
     }
 }
 
@@ -268,15 +280,40 @@ pub(crate) struct Shape {
     single: Vec<bool>,
     /// Whether each row is a late unknown's.
     late: Vec<bool>,
+    /// The multiply-adds of a refactorization on it.
+    work: u64,
 }
 
 impl Shape {
+    /// Whether its first `steps` steps pivot on the rows `other`'s do. Each step's entries
+    /// follow from the pivots before it, so the two then share those steps' shape.
+    pub(crate) fn agrees(&self, other: &Shape, steps: usize) -> bool {
+        self.order == other.order && self.pivot[..steps] == other.pivot[..steps]
+    }
+
+    /// The row step `step` pivots on.
+    pub(crate) fn pivot(&self, step: usize) -> usize {
+        self.pivot[step]
+    }
+
+    /// How many rows L's column `step` has, the multiply-adds of eliminating on it.
+    fn l_len(&self, step: usize) -> u64 {
+        (self.l_start[step + 1] - self.l_start[step]) as u64
+    }
+
+    /// The multiply-adds of a refactorization on it, which are those of the factorization
+    /// that made it.
+    pub(crate) fn work(&self) -> u64 {
+        self.work
+    }
+
     /// Whether each unknown is late in its order.
     pub(crate) fn late(&self) -> &[bool] {
         &self.late
     }
 
     /// The column order it eliminates in.
+    #[cfg(test)]
     pub(crate) fn order(&self) -> Order {
         Order {
             columns: self.order.clone(),
@@ -306,6 +343,11 @@ pub(crate) struct Scratch {
     /// Each row's sum of magnitudes in the system being factored, which [`choose`] weighs a
     /// candidate against.
     scale: Vec<f64>,
+    /// The rows a column of a refactorization may pivot on.
+    candidates: Vec<usize>,
+    /// A solve's right-hand side as elimination leaves it, and its unknowns by step.
+    rest: Vec<f64>,
+    steps: Vec<f64>,
 }
 
 impl Scratch {
@@ -356,11 +398,7 @@ pub(crate) fn factor(
     work: &mut u64,
 ) -> Result<(Shape, Factors), Failure> {
     let n = pattern.n;
-    scratch.fit(n);
-    scratch.scale(pattern, values);
-    scratch.seen.fill(0);
-    let mut pivoted = vec![usize::MAX; n];
-    let mut shape = Shape {
+    let shape = Shape {
         pivot: Vec::with_capacity(n),
         l_start: vec![0],
         l_rows: Vec::new(),
@@ -369,16 +407,81 @@ pub(crate) fn factor(
         order: order.columns,
         single: pattern.single_rows(),
         late: order.late,
+        work: 0,
     };
-    let mut factors = Factors {
+    let factors = Factors {
         l: Vec::new(),
         u: Vec::new(),
         diagonal: Vec::with_capacity(n),
     };
+    factor_on(pattern, values, shape, factors, scratch, work)
+}
+
+/// [`factor`] from its step `steps`, given its first `steps` steps: those of `shape` and
+/// `factors`, a refactorization of `values` that chose each of their pivots again and was
+/// refused at step `steps`. A factorization of `values` on `shape`'s order makes those steps to
+/// the same bits, since each step reads only the pivots and factors of the steps before it.
+/// `work` counts their multiply-adds too, as the factorization would.
+pub(crate) fn resume(
+    shape: &Shape,
+    factors: &Factors,
+    steps: usize,
+    pattern: &Pattern,
+    values: &[f64],
+    scratch: &mut Scratch,
+    work: &mut u64,
+) -> Result<(Shape, Factors), Failure> {
+    let (l_end, u_end) = (shape.l_start[steps], shape.u_start[steps]);
+    let mut pivot = Vec::with_capacity(pattern.n);
+    pivot.extend_from_slice(&shape.pivot[..steps]);
+    let mut diagonal = Vec::with_capacity(pattern.n);
+    diagonal.extend_from_slice(&factors.diagonal[..steps]);
+    let begun = Shape {
+        order: shape.order.clone(),
+        pivot,
+        l_start: shape.l_start[..=steps].to_vec(),
+        l_rows: shape.l_rows[..l_end].to_vec(),
+        u_start: shape.u_start[..=steps].to_vec(),
+        u_steps: shape.u_steps[..u_end].to_vec(),
+        single: shape.single.clone(),
+        late: shape.late.clone(),
+        work: 0,
+    };
+    *work += begun
+        .u_steps
+        .iter()
+        .map(|&step| begun.l_len(step))
+        .sum::<u64>();
+    let factors = Factors {
+        l: factors.l[..l_end].to_vec(),
+        u: factors.u[..u_end].to_vec(),
+        diagonal,
+    };
+    factor_on(pattern, values, begun, factors, scratch, work)
+}
+
+/// [`factor`]'s steps from the first that `shape` has not made.
+fn factor_on(
+    pattern: &Pattern,
+    values: &[f64],
+    mut shape: Shape,
+    mut factors: Factors,
+    scratch: &mut Scratch,
+    work: &mut u64,
+) -> Result<(Shape, Factors), Failure> {
+    let n = pattern.n;
+    scratch.fit(n);
+    scratch.scale(pattern, values);
+    scratch.seen.fill(0);
+    let mut pivoted = vec![usize::MAX; n];
+    let from = shape.pivot.len();
+    for (step, &row) in shape.pivot.iter().enumerate() {
+        pivoted[row] = step;
+    }
     let mut stack: Vec<(usize, usize)> = Vec::new();
     let mut finished: Vec<usize> = Vec::new();
     let mut candidates: Vec<usize> = Vec::new();
-    for k in 0..n {
+    for k in from..n {
         let col = shape.order[k];
         let entries = pattern.start[col]..pattern.start[col + 1];
         // Which rows column `col` reaches through the columns of L already made: the pivoted
@@ -448,6 +551,7 @@ pub(crate) fn factor(
         let touched = finished.iter().map(|&step| shape.pivot[step]);
         scratch.clear(touched.chain(candidates.iter().copied()));
     }
+    shape.work = shape.u_steps.iter().map(|&step| shape.l_len(step)).sum();
     Ok((shape, factors))
 }
 
@@ -523,9 +627,11 @@ fn eliminate(
 /// Why a refactorization stopped.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum Refused {
-    /// A fresh factorization would pivot on another row in some column, or on none. It may
-    /// still succeed.
-    Pivot,
+    /// A fresh factorization would pivot on another row at step `step`, or on none. It may
+    /// still succeed, and [`resume`] makes it from that step.
+    Pivot {
+        step: usize,
+    },
     NonFinite {
         col: usize,
     },
@@ -543,11 +649,24 @@ pub(crate) fn refactor(
     scratch: &mut Scratch,
     work: &mut u64,
 ) -> Result<(), Refused> {
+    refactor_from(shape, pattern, values, factors, 0, scratch, work)
+}
+
+/// [`refactor`] from step `from`, with the factors of the steps before it already in `factors`.
+pub(crate) fn refactor_from(
+    shape: &Shape,
+    pattern: &Pattern,
+    values: &[f64],
+    factors: &mut Factors,
+    from: usize,
+    scratch: &mut Scratch,
+    work: &mut u64,
+) -> Result<(), Refused> {
     let n = pattern.n;
     scratch.fit(n);
     scratch.scale(pattern, values);
-    let mut candidates = Vec::new();
-    for k in 0..n {
+    let mut candidates = std::mem::take(&mut scratch.candidates);
+    for k in from..n {
         let col = shape.order[k];
         let entries = pattern.start[col]..pattern.start[col + 1];
         for (&row, &value) in pattern.rows[entries.clone()].iter().zip(&values[entries]) {
@@ -576,7 +695,7 @@ pub(crate) fn refactor(
                 }
                 Ok(())
             }
-            Ok(_) | Err(Failure::Singular { .. }) => Err(Refused::Pivot),
+            Ok(_) | Err(Failure::Singular { .. }) => Err(Refused::Pivot { step: k }),
             Err(Failure::NonFinite { col }) => Err(Refused::NonFinite { col }),
         };
         let touched = shape.u_steps[ups].iter().map(|&step| shape.pivot[step]);
@@ -585,23 +704,52 @@ pub(crate) fn refactor(
                 .chain(std::iter::once(pivot))
                 .chain(shape.l_rows[lows].iter().copied()),
         );
-        result?;
+        if let Err(refused) = result {
+            scratch.candidates = candidates;
+            return Err(refused);
+        }
     }
+    scratch.candidates = candidates;
     Ok(())
 }
 
 impl Factors {
+    /// Copies the factors of the first `steps` steps from `other`, on a shape that agrees with
+    /// `shape` on those steps.
+    pub(crate) fn copy_steps(&mut self, other: &Factors, shape: &Shape, steps: usize) {
+        let (l_end, u_end) = (shape.l_start[steps], shape.u_start[steps]);
+        self.l[..l_end].copy_from_slice(&other.l[..l_end]);
+        self.u[..u_end].copy_from_slice(&other.u[..u_end]);
+        self.diagonal[..steps].copy_from_slice(&other.diagonal[..steps]);
+    }
+
     /// The solution of the factored system with right-hand side `b`, in the system's own
     /// unknowns. `work` counts the multiply-adds.
+    #[cfg(test)]
     pub(crate) fn solve(
         &self,
         shape: &Shape,
         b: &[f64],
         work: &mut u64,
     ) -> Result<Vec<f64>, Failure> {
+        self.solve_in(shape, b, &mut Scratch::default(), work)
+    }
+
+    /// `solve`, with its work space in `scratch`.
+    pub(crate) fn solve_in(
+        &self,
+        shape: &Shape,
+        b: &[f64],
+        scratch: &mut Scratch,
+        work: &mut u64,
+    ) -> Result<Vec<f64>, Failure> {
         let n = b.len();
-        let mut rest = b.to_vec();
-        let mut y = vec![0.0; n];
+        let rest = &mut scratch.rest;
+        rest.clear();
+        rest.extend_from_slice(b);
+        let y = &mut scratch.steps;
+        y.clear();
+        y.resize(n, 0.0);
         for k in 0..n {
             let value = rest[shape.pivot[k]];
             y[k] = value;
@@ -814,6 +962,96 @@ mod tests {
         }
     }
 
+    /// Each value scaled by a random power of ten, so some kept pivots no longer pass.
+    fn rescaled(rng: &mut Lcg, values: &[f64]) -> Vec<f64> {
+        values
+            .iter()
+            .map(|v| v * libm::pow(10.0, (rng.next() % 9) as f64 - 4.0))
+            .collect()
+    }
+
+    #[test]
+    fn a_resumed_factorization_repeats_the_bits_of_a_fresh_one() {
+        let mut rng = Lcg(23);
+        let mut resumed = 0;
+        for _ in 0..2_000 {
+            let (n, entries) = circuit(&mut rng);
+            let (pattern, values) = sparse(n, &entries);
+            let b: Vec<f64> = (0..n).map(|_| rng.unit()).collect();
+            let (mut scratch, mut work) = (Scratch::default(), 0);
+            let order = pattern.order(pattern.late(&values, &vec![false; n]));
+            let Ok((shape, factors)) = factor(&pattern, &values, order, &mut scratch, &mut work)
+            else {
+                continue;
+            };
+            let other = rescaled(&mut rng, &values);
+            let mut again = factors.clone();
+            let step = match refactor(
+                &shape,
+                &pattern,
+                &other,
+                &mut again,
+                &mut scratch,
+                &mut work,
+            ) {
+                Err(Refused::Pivot { step }) => step,
+                _ => continue,
+            };
+            let (mut fresh_work, mut resumed_work) = (0, 0);
+            let fresh = factor(
+                &pattern,
+                &other,
+                shape.order(),
+                &mut scratch,
+                &mut fresh_work,
+            );
+            let refused_at = {
+                let mut probe = factors.clone();
+                let mut before = 0;
+                let _ = refactor(
+                    &shape,
+                    &pattern,
+                    &other,
+                    &mut probe,
+                    &mut scratch,
+                    &mut before,
+                );
+                before
+            };
+            resumed_work += refused_at;
+            let again = resume(
+                &shape,
+                &again,
+                step,
+                &pattern,
+                &other,
+                &mut scratch,
+                &mut resumed_work,
+            );
+            assert!(scratch.x.iter().all(|&v| v == 0.0));
+            match (fresh, again) {
+                (Ok((fresh_shape, fresh)), Ok((again_shape, again))) => {
+                    resumed += 1;
+                    assert_eq!(fresh_shape.pivot, again_shape.pivot);
+                    assert_eq!(fresh_shape.l_rows, again_shape.l_rows);
+                    assert_eq!(fresh_shape.u_steps, again_shape.u_steps);
+                    let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+                    assert_eq!(bits(&fresh.l), bits(&again.l));
+                    assert_eq!(bits(&fresh.u), bits(&again.u));
+                    assert_eq!(bits(&fresh.diagonal), bits(&again.diagonal));
+                    let x = fresh.solve(&fresh_shape, &b, &mut work);
+                    let y = again.solve(&again_shape, &b, &mut work);
+                    assert_eq!(x.map(|x| bits(&x)), y.map(|y| bits(&y)));
+                }
+                (fresh, again) => assert_eq!(fresh.err(), again.err()),
+            }
+            // The refused refactorization's work and the rest of the factorization add up to
+            // the work of that refactorization and a fresh factorization.
+            assert_eq!(resumed_work, refused_at + fresh_work);
+        }
+        assert!(resumed > 50, "{resumed}");
+    }
+
     #[test]
     fn a_kept_pivot_that_shrinks_under_the_threshold_is_refused() {
         // [[4, 1], [1, 4]] pivots on its diagonal. With a 1e-6 corner the kept pivot is under
@@ -840,7 +1078,7 @@ mod tests {
                 &mut scratch,
                 &mut work
             ),
-            Err(Refused::Pivot)
+            Err(Refused::Pivot { step: 0 })
         );
         // A factorization that pivots again takes the other row.
         let (shape, factors) = factor(
