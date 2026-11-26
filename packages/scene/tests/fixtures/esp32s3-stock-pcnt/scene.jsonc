@@ -1,0 +1,28 @@
+// Two switches with 10k pull-ups feed GPIO4 (A) and GPIO5 (B) as a quadrature
+// encoder for PCNT unit 0. The app is the stock sketch
+// packages/engine/tests/firmware/esp32s3/arduino/stock/pcnt.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    },
+    "ra": { "type": "resistor-axial", "resistance": "10k" },
+    "rb": { "type": "resistor-axial", "resistance": "10k" },
+    "enc_a": { "type": "tactile-switch-6mm" },
+    "enc_b": { "type": "tactile-switch-6mm" }
+  },
+  "wires": [
+    ["board.3V3", "ra.a"],
+    ["ra.b", "board.GPIO4"],
+    ["board.GPIO4", "enc_a.a"],
+    ["enc_a.b", "board.GND"],
+    ["board.3V3", "rb.a"],
+    ["rb.b", "board.GPIO5"],
+    ["board.GPIO5", "enc_b.a"],
+    ["enc_b.b", "board.GND"]
+  ],
+  "ground": "board.GND"
+}

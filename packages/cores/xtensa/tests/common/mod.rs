@@ -94,6 +94,8 @@ pub struct Straight<B> {
     /// How many times the core asked whether to yield, which it does before each full step and
     /// never inside a straight run.
     pub steps: Cell<u64>,
+    /// How many times the core marked a step's start without reading the lines.
+    pub begins: u64,
 }
 
 impl<B: Bus> Straight<B> {
@@ -105,6 +107,7 @@ impl<B: Bus> Straight<B> {
             still: false,
             trace: 0,
             steps: Cell::new(0),
+            begins: 0,
         }
     }
 
@@ -171,6 +174,7 @@ impl<B: Bus> Bus for Straight<B> {
     }
 
     fn begin_step(&mut self, now: Cycle) {
+        self.begins += 1;
         self.bus.begin_step(now);
     }
 

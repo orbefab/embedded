@@ -15,7 +15,7 @@
 //! firmware flushed it.
 
 use orbe_mcu::{self as mcu, Frame, Mcu, Note, Phase, Sent, SentKind, SpiPins};
-use orbe_model::{Cs, Drive, Lanes, Pulses, Readings, Spi, SpiPhase, Stop, Time};
+use orbe_model::{Cs, Drive, Lanes, Pulses, Quantity, Readings, Spi, SpiPhase, Stop, Time};
 use orbe_xtensa::Missing;
 
 use super::CoreId;
@@ -298,6 +298,7 @@ impl Bridge {
 impl Mcu for Bridge {
     const USARTS: &'static [&'static str] = &["USB_SERIAL_JTAG", "UART0", "UART1", "UART2"];
     const SENDS: bool = true;
+    const WORLD: &'static [Quantity] = &[Quantity::Temperature];
 
     #[inline]
     fn run_until(&mut self, limit: Time) -> Option<Stop> {
@@ -356,13 +357,17 @@ impl Mcu for Bridge {
         &self.strong_pull_up
     }
 
-    /// Its ADC pads' voltages, in `sampled` order.
-    fn sample(&mut self, _at: Time, volts: &[f64], _world: &Readings) {
+    /// Its ADC pads' voltages, in `sampled` order, and the scene's ambient temperature.
+    fn sample(&mut self, _at: Time, volts: &[f64], world: &Readings) {
         let sampled = &self.sampled;
         self.chip.sample(|gpio| {
             let k = sampled.iter().position(|&pad| pad == gpio);
             volts[k.expect("a conversion's pad has a net")]
         });
+        let temp_c = world
+            .get(Quantity::Temperature)
+            .unwrap_or(Quantity::Temperature.row().default);
+        self.chip.sample_temperature(temp_c);
     }
 
     /// Its GPIOs' levels, in watch order.

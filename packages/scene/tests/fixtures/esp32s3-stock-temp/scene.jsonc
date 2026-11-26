@@ -1,0 +1,15 @@
+// Calls stock Arduino temperatureRead() against the scene's ambient temperature.
+// The app is the stock sketch packages/engine/tests/firmware/esp32s3/arduino/stock/temp.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    }
+  },
+  "wires": [],
+  "ground": "board.GND",
+  "world": { "temperature": 25 }
+}

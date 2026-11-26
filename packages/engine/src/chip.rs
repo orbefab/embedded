@@ -46,6 +46,16 @@ pub(crate) enum State {
     Relay(relay::State),
 }
 
+impl State {
+    /// A number that tells this state from every other.
+    pub(crate) fn code(self) -> u64 {
+        match self {
+            State::Ne555(state) => u64::from(state.latch == Level::High),
+            State::Relay(state) => 2 + u64::from(state.contact == crate::netlist::Contact::Closed),
+        }
+    }
+}
+
 pub(crate) enum Kind<'n> {
     Passive(Passive<'n>),
     Active(Active<'n>),

@@ -47,6 +47,7 @@ mod i2c;
 mod image;
 mod ledc;
 mod matrix;
+mod pcnt;
 mod rmt;
 mod rng;
 mod rom;
@@ -56,6 +57,7 @@ mod soc;
 mod spi1;
 mod spi2;
 mod timers;
+mod tsens;
 mod uart;
 mod usb;
 
@@ -356,6 +358,11 @@ impl Esp32s3 {
         self.soc.sample(volts);
     }
 
+    /// Gives a pending temperature-sensor conversion the scene's ambient temperature in degC.
+    pub fn sample_temperature(&mut self, temp_c: f64) {
+        self.soc.sample_temperature(temp_c);
+    }
+
     fn with(core: Core<orbe_xtensa::Esp32s3>, soc: Soc) -> Esp32s3 {
         Esp32s3 {
             cores: Cores::new(core),
@@ -567,6 +574,7 @@ impl Esp32s3 {
                 self.moves.insert(at, (edge.at, signal, edge.level));
             } else if queued.is_none() {
                 self.soc.gpio.set_signal(signal, edge.level);
+                self.soc.note_pcnt_pins(edge.at);
             }
         }
     }
@@ -653,6 +661,7 @@ impl Esp32s3 {
                     break;
                 }
                 self.soc.gpio.set_signal(signal, edge.level);
+                self.soc.note_pcnt_pins(edge.at);
                 self.soc
                     .uart
                     .after_edge(usize::from(edge.port), edge.at, &self.soc.gpio, apb);
@@ -774,6 +783,7 @@ impl Esp32s3 {
                 if let Some((signal, level)) = self.soc.i2c.land(at) {
                     self.soc.gpio.set_signal(signal, level);
                 }
+                self.soc.note_pcnt_pins(at);
                 self.shown = self.soc.image();
             }
             Halt::Fault(..) => {
@@ -852,6 +862,7 @@ impl Esp32s3 {
         self.soc.i2c.input(at, &self.soc.gpio);
         let apb = self.soc.clock.source.apb();
         self.soc.uart.note_pins(at, &self.soc.gpio, apb);
+        self.soc.note_pcnt_pins(at);
     }
 
     /// The next console byte whose packet went at or before `through`, with that tick.
@@ -1094,7 +1105,9 @@ mod tests {
     mod dual;
     mod i2c;
     mod pads;
+    mod pcnt;
     mod rmt;
+    mod tsens;
 
     #[test]
     fn a_drive_change_halts_at_its_store_however_the_run_splits() {
@@ -1758,23 +1771,9 @@ mod tests {
         let refused = [
             (0x6003_9000, "USB_WRAP", otg),
             (0x6003_9004, "USB_WRAP", otg),
-            (
-                0x6001_704c,
-                "PCNT",
-                "the pulse counter that encoder libraries use",
-            ),
             (0x6003_1204, "RADIO", "the Wi-Fi and Bluetooth radio"),
             (0x6002_7000, "I2C1", "the second I2C port, Wire1"),
-            (
-                0x6000_8850,
-                "SENS",
-                "the temperature sensor that temperatureRead uses",
-            ),
-            (
-                0x6000_8854,
-                "SENS",
-                "the temperature sensor that temperatureRead uses",
-            ),
+            (0x6000_885c, "SENS", "the touch sensor that touchRead uses"),
         ];
         for (address, block, what) in refused {
             let program = store_after_two_loads(address, 1, 0);
@@ -1786,25 +1785,6 @@ mod tests {
                 )),
                 "{address:#x}"
             );
-        }
-        for address in [0x6000_8904, 0x6000_8908] {
-            let program = store_after_two_loads(address, 1 << 29, 0);
-            let mut chip = program.chip();
-            assert_eq!(
-                chip.run_until(c(1000)),
-                Some(Halt::Fault(
-                    c(2),
-                    Fault::Refused(
-                        Refused::Unsimulated(
-                            "SENS",
-                            "the temperature sensor that temperatureRead uses"
-                        ),
-                        pro(program.entry() + 6)
-                    )
-                )),
-                "{address:#x}"
-            );
-            assert_eq!(chip.unmodeled().count(), 0, "{address:#x}");
         }
     }
 
