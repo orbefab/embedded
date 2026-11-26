@@ -204,7 +204,7 @@ pub(crate) struct Step {
     /// The release store itself sees `None`. A later store sees the cycle.
     pub(crate) app_released: Option<Cycle>,
     /// Whether the other core is halted or parked, so a store outside SRAM and RTC memory wakes
-    /// it.
+    /// it unless [`Soc::quiet_store`] says otherwise.
     pub(crate) other_sleeps: bool,
 }
 
@@ -730,6 +730,15 @@ impl Soc {
             && word != USB_SERIAL_JTAG + usb::EP1_CONF
             && word & !(BLOCK - 1) != SYSTIMER
             && Self::access_moves_lines(addr)
+    }
+
+    /// A store to a SYSTIMER unit's `OP` word latches the count into its value registers and
+    /// sets `VALUE_VALID`. It moves no line, no alarm and no event of the other core, so it
+    /// neither ends a straight run nor wakes a sleeping core. While LEDC has output waiting, a
+    /// SYSTIMER store rearms the run, so then it is not quiet.
+    pub(crate) fn quiet_store(&self, addr: u32) -> bool {
+        let word = addr & !3;
+        (word == SYSTIMER + 0x04 || word == SYSTIMER + 0x08) && !self.ledc.has_output()
     }
 
     pub(crate) fn sram_offset(addr: u32, fetch: bool) -> Option<u32> {
@@ -1727,9 +1736,10 @@ impl Soc {
         if !PERIPHERALS.contains(&addr) {
             return Err(Exit::Fault(Cause::LoadStoreError));
         }
+        let quiet = self.quiet_store(addr);
         self.events.touch(addr);
         self.store_register(step, cycle, addr, width, value)?;
-        if step.other_sleeps {
+        if step.other_sleeps && !quiet {
             self.steer(Steer::Wake(step.start));
         }
         Ok(())
@@ -2058,7 +2068,7 @@ impl Bus for CoreBus<'_> {
     }
 
     fn access_moves_lines(&self, addr: u32) -> bool {
-        Soc::access_moves_lines(addr)
+        Soc::access_moves_lines(addr) && !self.soc.quiet_store(addr)
     }
 
     fn load_moves_lines(&self, addr: u32) -> bool {
