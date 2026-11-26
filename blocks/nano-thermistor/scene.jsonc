@@ -1,0 +1,35 @@
+// A 10 kohm NTC thermistor and a 10 kohm resistor form a ratiometric divider into A0 on a Nano.
+// The Nano straddles columns 1 to 15 (A0 is a4, D9 is j4, 5V is a12, GND is a14).
+// The thermistor sits between 5V and column 18, above a 10 kohm resistor to ground, so A0 rises
+// as temperature rises. D9 drives a red alarm LED through 220 ohm when temperature >= 30 C.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "build/thermistor.ino.hex" },
+    "ntc": { "type": "thermistor-ntc-10k" },
+    "r1": { "type": "resistor-axial", "resistance": "10k" },
+    "r2": { "type": "resistor-axial", "resistance": "220" },
+    "led1": { "type": "led-5mm" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "ntc": { "on": { "a": "bb.c17" } }, // b lands in c18
+    "r1": { "on": { "a": "bb.b18" } }, // b lands in b22
+    "r2": { "on": { "a": "bb.g18" } }, // b lands in g22
+    "led1": { "on": { "anode": "bb.h22" } }, // cathode lands in h23
+  },
+  "nets": { "GND": "nano.GND" },
+  "world": { "temperature": 25 },
+  "wires": [
+    ["bb.a12", "bb.W11", { "color": "#d12b2b" }], // 5V to the + rail
+    ["bb.a14", "bb.X14", { "color": "#161616" }], // GND to the - rail
+    ["bb.X29", "bb.Z29", { "color": "#161616" }], // bridge the - rails at the far end
+    ["bb.a17", "bb.W17", { "color": "#d12b2b" }], // ntc.a to 5V
+    ["bb.a22", "bb.X22", { "color": "#161616" }], // r1.b to GND
+    ["bb.a18", "bb.a4", { "color": "#2e8b57" }], // divider midpoint to A0 along row a
+    ["bb.j4", "bb.j18", { "color": "#e07b24" }], // D9 to r2.a along row j
+    ["bb.j23", "bb.Z23", { "color": "#161616" }], // led1.cathode to GND
+  ],
+}

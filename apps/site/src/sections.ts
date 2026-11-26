@@ -36,6 +36,7 @@ export const PART_SECTION_BY_ID: Readonly<Record<string, PartSection>> = {
   dht22: "Sensors",
   "gy-bmp280": "Sensors",
   "ldr-5mm": "Sensors",
+  "thermistor-ntc-10k": "Sensors",
 
   // Motors, relays and sound
   "buzzer-12mm": "Motors, relays and sound",
@@ -98,6 +99,8 @@ export const PART_SECTION_BY_ID: Readonly<Record<string, PartSection>> = {
 
   // Connectors and sockets
   "barrel-jack-dc21": "Connectors and sockets",
+  "battery-9v": "Connectors and sockets",
+  "battery-aa-4x": "Connectors and sockets",
   "dip-socket-28": "Connectors and sockets",
   "pin-header-1x15": "Connectors and sockets",
   "pin-header-1x22": "Connectors and sockets",

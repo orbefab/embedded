@@ -1,0 +1,114 @@
+// Vishay BCcomponents NTCLE100E3103JB0 (10 kohm at 25 C, B25/85 = 3977 K).
+// Resistance follows the engine's two-parameter beta curve from R25 and B25/85
+// on page 2 of Vishay Document Number 29049.
+{
+  "format": 5,
+  "part": "thermistor-ntc-10k",
+  "version": "0.1.0",
+  "title": "NTC thermistor, 10 kΩ (NTCLE100E3103JB0)",
+  "summary": "10 kΩ at 25 °C radial NTC thermistor (B25/85 = 3977 K). Its resistance falls as temperature rises, for analog temperature sensing from -40 to 125 °C.",
+  "tags": ["thermistor", "ntc", "10k", "b3977", "temperature", "thermometer", "sensor", "analog", "resistor", "through-hole"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)": "https://www.vishay.com/docs/29049/ntcle100.pdf",
+  },
+  "real": {
+    "generic": true,
+    "maker": "Vishay",
+    "number": "NTCLE100E3103JB0",
+    "datasheet": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+  },
+  "pins": { "a": [1], "b": [2] },
+  "model": {
+    "kind": "resistor",
+    "resistance": {
+      "kind": "world",
+      "quantity": "temperature",
+      "curve": {
+        "kind": "beta",
+        "x": {
+          "value": 25.0,
+          "unit": "degC",
+          "source": {
+            "datasheet": {
+              "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+              "at": "p2 Electrical Data and Ordering Information, R25 reference temperature 25 C",
+              "basis": "nominal",
+            },
+          },
+        },
+        "y": {
+          "value": 10000.0,
+          "unit": "ohm",
+          "source": {
+            "datasheet": {
+              "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+              "at": "p2 Electrical Data and Ordering Information, NTCLE100E3103JB0 row, R25 = 10 000 ohm (+/- 5 %)",
+              "basis": "nominal",
+            },
+          },
+        },
+        "beta": {
+          "value": 3977.0,
+          "unit": "K",
+          "source": {
+            "datasheet": {
+              "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+              "at": "p2 Electrical Data and Ordering Information, NTCLE100E3103JB0 row, B25/85 = 3977 K (+/- 0.75 %)",
+              "basis": "nominal",
+            },
+          },
+        },
+      },
+    },
+    "ratings": {
+      "power": {
+        "value": 0.5,
+        "unit": "W",
+        "basis": {
+          "sustained": {
+            "average": "mean",
+            "tau": {
+              "value": 0.0102,
+              "unit": "s",
+              "source": {
+                "closed_form": {
+                  "note": "The sheet gives a 15 s thermal time constant in air rather than a pulse rating to fit, so this uses the 10.2 ms default, five periods of a 490 Hz PWM.",
+                },
+              },
+            },
+          },
+        },
+        "source": {
+          "datasheet": {
+            "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+            "at": "p1 Quick Reference Data, Maximum power dissipation at 55 C: 500 mW",
+            "basis": "absolute_max",
+          },
+        },
+      },
+    },
+  },
+  "not_simulated": [
+    {
+      "what": "self-heating",
+      "why": "Resistance follows world temperature only. The sheet's 7 mW/K dissipation factor is not modelled, though the 500 mW power rating warns.",
+    },
+    {
+      "what": "response time",
+      "why": "Resistance follows temperature steps immediately. The sheet gives about 1.2 s in oil and a 15 s thermal time constant in air.",
+    },
+    {
+      "what": "Steinhart-Hart curvature",
+      "why": "The engine uses the two-parameter B25/85 equation rather than the sheet's four-term polynomial, which differs slightly far from 25 to 85 C.",
+    },
+    {
+      "what": "tolerance",
+      "why": "Every part uses the nominal 10 kohm and 3977 K. The JB0 ordering code allows +/- 5 % on R25 and +/- 0.75 % on B25/85.",
+    },
+    {
+      "what": "power derating and voltage",
+      "why": "The 500 mW rating holds across all temperatures rather than derating above 55 C, and the p2 50 VDC note is not checked.",
+    },
+  ],
+}

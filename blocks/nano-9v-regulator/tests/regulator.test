@@ -1,0 +1,25 @@
+# Idle: battery-9v (9.0 V EMF, 1.7 ohm R_int) feeds the Nano (~26 mA) and LM7805 + green LED
+# (~18 mA), ~45 mA total, sagging ~0.08 V to ~8.92 V.
+# With btn1 held, the 25 ohm load draws ~331 mA (~375 mA total, under the 500 mA rating),
+# sagging the battery rail to ~8.36 V (0.56 V extra drop) while LM7805 holds 5.00 V.
+open
+step 100ms
+expect @led1 lit
+expect @bat.pos > 8.85V
+expect @bat.pos < 8.98V
+expect @reg.OUT > 4.95V
+expect @reg.OUT < 5.05V
+expect @nano.5V > 4.95V
+expect serial contains "bat=8.9"
+press @btn1
+step 100ms
+expect @bat.pos > 8.28V
+expect @bat.pos < 8.44V
+expect @reg.OUT > 4.95V
+expect @reg.OUT < 5.05V
+expect @led1 lit
+expect serial contains "bat=8.3"
+release @btn1
+step 100ms
+expect @bat.pos > 8.85V
+expect no diagnostics

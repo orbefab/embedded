@@ -1,0 +1,44 @@
+{
+  "part": "battery-9v-cell",
+  "source": {
+    "script": "model.py",
+    "sha256": "699717ddbd3058ab60e0ce7612f30e544e98303fd1ddf4ba75ebabf293121cb4",
+    "bytes": 776
+  },
+  "files": {
+    "battery-9v-cell.glb": {
+      "sha256": "7cc58ff79b5af71d021da88d2c628ca4bc15e93bca02cfd9921cb8dfcbb76530",
+      "bytes": 3884
+    },
+    "battery-9v-cell.anchors.json": {
+      "sha256": "1b9fd612ca888f8d5fba70a0e25ea3e7afdda8312e96e26f50a63de6379d9022",
+      "bytes": 293
+    }
+  },
+  "box": {
+    "min": [-2, -1, 0],
+    "max": [2, 1, 2.03]
+  },
+  "kept_nodes": [],
+  "draw_calls": 2,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 3,
+      "primitives_out": 2
+    }
+  }
+}

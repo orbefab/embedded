@@ -1,0 +1,62 @@
+// Internal voltage source for battery-9v (Energizer 522 / ANSI 1604A 9 V alkaline).
+// Unlisted helper part; battery-9v wires this in series with its 1.7 ohm internal resistance.
+{
+  "format": 5,
+  "part": "battery-9v-cell",
+  "version": "0.1.0",
+  "title": "9 V alkaline cell stack (internal)",
+  "summary": "Unlisted 9.0 V open-circuit voltage source inside battery-9v, representing six alkaline cells in series.",
+  "tags": ["battery", "9v", "alkaline", "cell", "power"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Energizer 522 Product Datasheet (Form No. 522GL1019)": "https://data.energizer.com/pdfs/522.pdf",
+    "Duracell MN1604 9V Alkaline Datasheet": null,
+  },
+  "real": {
+    "generic": true,
+    "maker": "Energizer",
+    "number": "522",
+    "datasheet": "Energizer 522 Product Datasheet (Form No. 522GL1019)",
+  },
+  "pins": { "pos": [1], "neg": [2] },
+  "model": {
+    "kind": "voltage_source",
+    "voltage": {
+      "value": 9.0,
+      "unit": "V",
+      "source": {
+        "datasheet": {
+          "doc": "Energizer 522 Product Datasheet (Form No. 522GL1019)",
+          "at": "Specifications, Nominal Voltage: 9.0 volts (six Zn/MnO2 alkaline cells in series)",
+          "basis": "nominal",
+        },
+      },
+    },
+    "ratings": {
+      "current": {
+        "value": 0.5,
+        "unit": "A",
+        "basis": {
+          "sustained": {
+            "average": "rms",
+            "tau": {
+              "value": 0.0102,
+              "unit": "s",
+              "source": {
+                "closed_form": {
+                  "note": "Alkaline sheets state no pulse rating; the 10.2 ms RMS window lets brief bypass-capacitor inrush pass while warning on sustained overloads and shorts.",
+                },
+              },
+            },
+          },
+        },
+        "source": {
+          "closed_form": {
+            "note": "Primary 9 V alkaline datasheets (Energizer 522, Duracell MN1604) state no hard absolute-maximum current; Energizer 522 plots capacity at 10 to 50 mA and Duracell MN1604 plots constant-current curves up to 500 mA, beyond which a 9 V PP3 sags heavily and heats.",
+          },
+        },
+      },
+    },
+    "pins": { "p": "pos", "n": "neg" },
+  },
+}

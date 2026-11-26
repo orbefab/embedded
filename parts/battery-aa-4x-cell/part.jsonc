@@ -1,0 +1,61 @@
+// Internal voltage source for battery-aa-4x (4 x Energizer E91 AA alkaline in series).
+// Unlisted helper part; battery-aa-4x wires this in series with its 0.9 ohm internal resistance.
+{
+  "format": 5,
+  "part": "battery-aa-4x-cell",
+  "version": "0.1.0",
+  "title": "4xAA alkaline cell stack (internal)",
+  "summary": "Unlisted 6.0 V open-circuit voltage source inside battery-aa-4x, representing four AA alkaline cells in series.",
+  "tags": ["battery", "aa", "4xaa", "6v", "alkaline", "cell", "power"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Energizer E91 Product Datasheet": null,
+    "Energizer Battery Internal Resistance Technical Bulletin v1.1.0": "https://data.energizer.com/pdfs/batteryir.pdf",
+    "Energizer Alkaline Manganese Dioxide Handbook and Application Manual": "https://data.energizer.com/pdfs/alkaline_appman.pdf",
+  },
+  "real": {
+    "generic": true,
+    "maker": "Energizer",
+    "number": "E91",
+    "datasheet": "Energizer E91 Product Datasheet",
+  },
+  "pins": { "pos": [1], "neg": [2] },
+  "model": {
+    "kind": "voltage_source",
+    "voltage": {
+      "value": 6.0,
+      "unit": "V",
+      "source": {
+        "closed_form": {
+          "note": "Four Energizer E91 AA alkaline cells (ANSI 15A / IEC LR6, 1.5 V nominal each) in series: 4 * 1.5 V = 6.0 V.",
+        },
+      },
+    },
+    "ratings": {
+      "current": {
+        "value": 1.0,
+        "unit": "A",
+        "basis": {
+          "sustained": {
+            "average": "rms",
+            "tau": {
+              "value": 0.0102,
+              "unit": "s",
+              "source": {
+                "closed_form": {
+                  "note": "Alkaline sheets state no pulse rating; the 10.2 ms RMS window lets brief bypass-capacitor inrush pass while warning on sustained overloads and shorts.",
+                },
+              },
+            },
+          },
+        },
+        "source": {
+          "closed_form": {
+            "note": "Primary AA alkaline datasheets (Energizer E91) state no hard absolute-maximum current; Energizer characterizes continuous drain up to 500 mA and high-drain pulse tests near 1 A, above which a 4xAA pack sags over 0.9 V and heats.",
+          },
+        },
+      },
+    },
+    "pins": { "p": "pos", "n": "neg" },
+  },
+}

@@ -1,0 +1,69 @@
+// 4xAA 6 V alkaline battery pack (four Energizer E91 / IEC LR6 cells in series in a 4-cell holder).
+// Thevenin model: 6.0 V open-circuit EMF (4 * 1.5 V) in series with 0.9 ohm fresh internal
+// resistance (4 * 0.225 ohm, midpoint of Energizer E91's 150 to 300 mohm per fresh cell;
+// Energizer's Battery Internal Resistance Technical Bulletin fig. 1 measures 0.214 ohm on a
+// fresh AA cell). Sustained current rating 1.0 A warns on heavy loads and shorts.
+{
+  "format": 5,
+  "part": "battery-aa-4x",
+  "version": "0.1.0",
+  "title": "4xAA 6 V alkaline battery pack (Energizer E91)",
+  "summary": "Four AA alkaline cells (LR6) in series in a flat holder with a 2-pin lead. Models 6.0 V EMF, 0.9 Ω internal resistance and a 1.0 A rating.",
+  "tags": ["battery", "aa", "4xaa", "6v", "pack", "holder", "power", "supply", "cell", "alkaline"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Energizer E91 Product Datasheet": null,
+    "Energizer Battery Internal Resistance Technical Bulletin v1.1.0": "https://data.energizer.com/pdfs/batteryir.pdf",
+    "Energizer Alkaline Manganese Dioxide Handbook and Application Manual": "https://data.energizer.com/pdfs/alkaline_appman.pdf",
+  },
+  "real": {
+    "generic": true,
+    "maker": "Energizer",
+    "number": "4xE91",
+    "datasheet": "Energizer E91 Product Datasheet",
+  },
+  "uses": {
+    "battery-aa-4x-cell": "0.1.0",
+    "resistor-0603": "0.2.0",
+  },
+  "parts": {
+    "cell": { "type": "battery-aa-4x-cell" },
+    "r_int": {
+      "type": "resistor-0603",
+      "resistance": {
+        "value": 0.9,
+        "unit": "ohm",
+        "source": {
+          "closed_form": {
+            "note": "Four fresh Energizer E91 AA alkaline cells in series: 4 * 0.225 ohm = 0.9 ohm, taking the midpoint of Energizer's 150 to 300 mohm fresh cylindrical alkaline resistance range (Energizer Battery Internal Resistance Technical Bulletin v1.1.0 p1 gives 0.214 ohm in its AA dual-pulse example).",
+          },
+        },
+      },
+    },
+  },
+  "wires": [
+    ["pos", "r_int.a", { "kind": "trace" }],
+    ["r_int.b", "cell.pos", { "kind": "trace" }],
+    ["neg", "cell.neg", { "kind": "trace" }],
+  ],
+  // Internal parts sit completely inside the opaque AA cells inside the holder.
+  "layout": {
+    "cell": { "at": [0, -7.5, 6.0] },
+    "r_int": { "at": [8.0, -7.5, 6.0] },
+  },
+  "pins": { "pos": [1], "neg": [2] },
+  "not_simulated": [
+    {
+      "what": "capacity and depletion",
+      "why": "The EMF stays at 6.0 V and the internal resistance stays at 0.9 ohm. Real Energizer E91 cells hold roughly 2500 to 2850 mAh at light drain, and voltage falls while internal resistance rises as the pack discharges.",
+    },
+    {
+      "what": "temperature and holder spring contact resistance",
+      "why": "Internal resistance is a fixed 0.9 ohm at 21 C, with no cold-temperature rise and no extra spring-contact resistance.",
+    },
+    {
+      "what": "self-heating and venting",
+      "why": "A heavy overload or direct short (~6.7 A) warns rating.current and keeps running instead of heating or venting the cells.",
+    },
+  ],
+}

@@ -1,0 +1,36 @@
+// A 4xAA 6 V alkaline battery pack powers an SG90 micro servo on the Y rail, sharing only GND
+// with a Nano on USB. D9 drives the servo signal, and a 10k/10k divider monitors the 6 V pack
+// into A0. The Nano's 5V pin stays unconnected to the 6 V battery rail.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "build/pack.ino.hex" },
+    "bat": { "type": "battery-aa-4x" },
+    "servo": { "type": "servo-sg90" },
+    "r_top": { "type": "resistor-axial", "resistance": "10k" },
+    "r_bot": { "type": "resistor-axial", "resistance": "10k" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "bat": { "at": [94, 20, 0] }, // connector faces -X, aligned with the Y/Z rails
+    "servo": { "at": [-26.67, 86, 0], "rotate": [0, 0, 90] }, // connector faces -Y toward the breadboard
+    "r_top": { "on": { "a": "bb.c17" } }, // b lands in c21
+    "r_bot": { "on": { "a": "bb.b21" } }, // b lands in b25
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["bb.a14", "bb.X14", { "color": "#161616" }], // Nano GND to - rail
+    ["bb.X28", "bb.Z28", { "color": "#161616" }], // bridge - rails at far end
+    ["bat.pos", "bb.Y29", { "color": "#d12b2b" }], // 6 V pack + to Y rail
+    ["bat.neg", "bb.Z29", { "color": "#161616" }], // 6 V pack - to Z rail
+    ["bb.Y27", "bb.W27", { "color": "#d12b2b" }], // 6 V rail across to W rail
+    ["bb.a17", "bb.W17", { "color": "#d12b2b" }], // r_top.a to 6 V rail
+    ["bb.a25", "bb.X25", { "color": "#161616" }], // r_bot.b to GND rail
+    ["bb.a21", "bb.a4", { "color": "#2e8b57" }], // divider midpoint to A0 along row a
+    ["bb.Z7", "servo.GND", { "color": "#161616" }], // servo GND to - rail
+    ["bb.Y5", "servo.VCC", { "color": "#d12b2b" }], // servo VCC to 6 V rail
+    ["bb.j4", "servo.SIGNAL", { "color": "#f28c1c" }], // Nano D9 to servo signal
+  ],
+}

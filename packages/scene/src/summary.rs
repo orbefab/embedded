@@ -771,7 +771,7 @@ fn build<'a>(
             .iter()
             .filter_map(|prop| param(tree, &prop.key, tree_of))
             .collect(),
-        ratings: ratings(tree),
+        ratings: ratings(tree, tree_of),
         not_simulated: gaps(tree),
         docs: docs(tree),
         files: card_files(id, &license, files)?,
@@ -1021,7 +1021,33 @@ fn literal_or_none(node: &Node) -> Option<Literal> {
     node.str().map(|text| Literal::Name(text.to_string()))
 }
 
-fn ratings(tree: &Node) -> Vec<Rating> {
+fn ratings<'a>(tree: &'a Node, tree_of: &dyn Fn(&str) -> Option<&'a Node>) -> Vec<Rating> {
+    let own = own_ratings(tree);
+    if !own.is_empty() || tree.get("model").is_some() {
+        return own;
+    }
+    let Some(parts) = tree.get("parts").and_then(Node::props) else {
+        return Vec::new();
+    };
+    let mut found: Option<Vec<Rating>> = None;
+    for inst in parts {
+        let Some(ty) = inst.value.get("type").and_then(Node::str) else {
+            continue;
+        };
+        let Some(child) = tree_of(ty) else { continue };
+        let child_ratings = ratings(child, tree_of);
+        if !child_ratings.iter().any(|r| r.value.is_some()) {
+            continue;
+        }
+        if found.is_some() {
+            return Vec::new();
+        }
+        found = Some(child_ratings);
+    }
+    found.unwrap_or_default()
+}
+
+fn own_ratings(tree: &Node) -> Vec<Rating> {
     tree.get("model")
         .and_then(|model| model.get("ratings"))
         .and_then(Node::props)

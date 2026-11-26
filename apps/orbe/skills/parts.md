@@ -19,9 +19,9 @@ A folder already at `parts/<id>/` is `part_exists` and nothing is written. The m
 
 `@<registry>/<id>` is a usage error. This orbe reads the `@orbefab` registry only.
 
-Addressable LEDs: `neopixel-stick-8`. Eight from three pins: `hc595-dip16` (tie SRCLR high, OE low), Block `nano-shift-leds`.
+Addressable LEDs: `neopixel-stick-8`. Eight from three pins: `hc595-dip16` (tie SRCLR high, OE low), Block `nano-shift-leds`. 5 V to 3.3 V logic: `bss138-level-shifter`.
 
-5 V to 3.3 V logic: `bss138-level-shifter`.
+NTC thermistor: `thermistor-ntc-10k` (10 kΩ at 25 °C, B = 3977 K), Block `nano-thermistor`. Batteries: `battery-9v` (9 V, 1.7 Ω, 500 mA), Block `nano-9v-regulator`; `battery-aa-4x` (6 V, 0.9 Ω, 1 A), Block `nano-aa-pack`.
 
 ## Blocks
 
@@ -33,11 +33,11 @@ Addressable LEDs: `neopixel-stick-8`. Eight from three pins: `hc595-dip16` (tie 
 
 `orbe search <words>` lists parts whose id, title, maker, number, summary or tags hold every word, then Blocks whose id, title, description or categories do. An exact id comes first, then a part whose every word is a whole word of its id, title or tags, then the rest. Ids break ties. `orbe search <words> --json` puts parts in `data.parts` and Blocks in `data.blocks`. With no words, `orbe search` lists every listed part by its first category, then the Blocks. A part the registry's `unlisted` names is left out of search and of the site's list. `orbe part <id>` and `orbe add <id>` still read it. A part file's `listed` field does not decide that.
 
-`orbe part <id>` prints the title, maker, number, license, folder hash, pins, params, ratings, what is not simulated, datasheets, where to buy it, files, the parts it is built from, and how it plugs into a breadboard. A required param prints an example. `orbe part <id> --json` prints the card. A name that is a whole word of exactly one id prints that part or Block, so `orbe part 1n4007` prints `diode-1n4007`. When several ids share the word, it is `unknown_part` and the hint lists them. `orbe part <block>` prints the Block and the command that installs it.
+`orbe part <id>` prints title, maker, number, license, hash, pins, params, ratings, not simulated, datasheets, buy links, files, uses, and breadboard seating (`--json` prints the card). A unique id word matches that part or Block (`orbe part 1n4007` prints `diode-1n4007`); several return `unknown_part` listing them. `orbe part <block>` prints the Block and its install command.
 
 ## The `buy` field
 
-`buy` is optional. Leave it out when there is no link. An empty list is an error. Each entry has `seller`, `url` and `checked`. `checked` is the day the link was checked, as `YYYY-MM-DD`. A buy link is an https URL: lowercase `https://`, no userinfo (`@` before the host), no whitespace, no query and no fragment. An entry has no price. A repeated entry is an error. A buy link sells the part at its examples.
+`buy` is optional; omit when there is no link (an empty list is an error). Each entry has `seller`, `url` (lowercase `https://`, no userinfo, whitespace, query or fragment) and `checked` (`YYYY-MM-DD`), with no price and no repeats.
 
 ## Errors
 

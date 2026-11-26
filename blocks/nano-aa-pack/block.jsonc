@@ -1,0 +1,11 @@
+// A Block: a small circuit that works. `orbe add nano-aa-pack` installs it into a project.
+{
+  "format": 1,
+  "block": "nano-aa-pack",
+  "version": "0.1.0",
+  "title": "4xAA 6 V battery pack and SG90 servo on a Nano",
+  "summary": "A 4xAA 6 V alkaline pack powers an SG90 micro servo separately from the Nano's USB 5 V rail. The Nano sweeps the servo on D9 and reads the 6 V pack voltage through a divider on A0, showing ~0.13 V sag while the servo moves.",
+  "board": "nano-board",
+  "tags": ["battery", "aa", "4xaa", "6v", "servo", "sg90", "power", "sag", "nano"],
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND GPL-3.0-or-later WITH GCC-exception-3.1",
+}
