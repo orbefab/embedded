@@ -228,9 +228,9 @@ impl Open {
             Step::Until { timeout, .. } => from.saturating_add(timeout.as_ps()).min(self.stop_ps),
         };
         self.playing = false;
-        self.light.note(&self.engine.probe());
-        self.note_tone();
         let probe = self.engine.probe();
+        self.light.note(&probe);
+        self.tone.note(&probe, from);
         let mut held: Vec<Held> = self
             .light
             .glows(&probe)
@@ -275,9 +275,9 @@ impl Open {
                 met = edge.map(Met::Edge).or_else(|| self.met_in(bound, &slice));
             }
             let mut found = slice.changes;
-            self.light.note(&self.engine.probe());
-            self.note_tone();
             let probe = self.engine.probe();
+            self.light.note(&probe);
+            self.tone.note(&probe, now);
             let glows = self.light.glows(&probe);
             let met_light = until.as_ref().and_then(|(_, _, bound)| match bound {
                 Bound::Light { index, want, .. } => met.is_some().then_some((*index, *want)),
