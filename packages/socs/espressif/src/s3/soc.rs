@@ -17,6 +17,7 @@ use orbe_xtensa::{Bus, Cause, Cycle, Exit, PagedRam, Width};
 
 use super::CoreId;
 
+use super::aes::{self, Aes};
 use super::analog::Analog;
 use super::app::{self, AppControl, Hold, Steer};
 use super::blocks;
@@ -33,14 +34,17 @@ use super::gpio::{self, Gpio, PADS, PadDrive};
 use super::i2c::{self, I2C0, I2C1, I2c};
 use super::ledc::{self, Ledc};
 use super::matrix::{self, Matrix};
+use super::pcnt::{self, Pcnt};
 use super::rmt::{self, Rmt};
 use super::rng::{self, Rng};
 use super::rom;
+use super::rsa::{self, Rsa};
 use super::sar::{self, Sar};
 use super::sha::{self, Sha};
 use super::spi1::{self, FlashRefusal, Spi1};
 use super::spi2::{self, SPI2 as SPI2_BASE, SPI3 as SPI3_BASE, Setting, Spi};
 use super::timers::{Expiry, Register, Systimer, Watchdogs};
+use super::tsens::{self, Tsens};
 use super::uart::{self, Uarts};
 use super::usb::{self, UsbSerialJtag};
 use super::{Duty, Pc, RAM, Refused, ResetCause, Touch};
@@ -69,9 +73,12 @@ pub(crate) const SYSTIMER: u32 = 0x6002_3000;
 pub(crate) const SPI2: u32 = SPI2_BASE;
 pub(crate) const SPI3: u32 = SPI3_BASE;
 pub(crate) const LEDC: u32 = 0x6001_9000;
+pub(crate) const PCNT: u32 = 0x6001_7000;
 pub(crate) const RMT: u32 = 0x6001_6000;
 pub(crate) const USB_SERIAL_JTAG: u32 = 0x6003_8000;
+pub(crate) const AES: u32 = 0x6003_a000;
 const SHA: u32 = 0x6003_b000;
+pub(crate) const RSA: u32 = 0x6003_c000;
 const APB_SARADC: u32 = 0x6004_0000;
 pub(crate) const GDMA: u32 = 0x6003_f000;
 pub(crate) const SYSTEM: u32 = 0x600c_0000;
@@ -111,8 +118,13 @@ pub(crate) struct Soc {
     pub(crate) usb: UsbSerialJtag,
     pub(crate) spi: [Spi; 2],
     gdma: Gdma,
+    pub(crate) aes: Aes,
     sha: Sha,
+    rsa: Rsa,
+    /// `SYSTEM_RSA_PD_CTRL_REG` (`0x600c_0040`), resets with `SYSTEM_RSA_MEM_PD` set.
+    rsa_pd_ctrl: u32,
     pub(crate) ledc: Ledc,
+    pub(crate) pcnt: Pcnt,
     pub(crate) i2c: [I2c; 2],
     pub(crate) rmt: Rmt,
     pub(crate) uart: Uarts,
@@ -125,6 +137,8 @@ pub(crate) struct Soc {
     efuse: Efuse,
     /// The SAR ADCs' RTC controllers in SENS, and APB_SARADC's arbiter register.
     sar: Sar,
+    /// The internal temperature sensor in SENS.
+    tsens: Tsens,
     spi1: Spi1,
     matrix: Matrix,
     /// Each timer group's RTC clock calibration.
@@ -198,7 +212,7 @@ pub(crate) struct Step {
     /// The release store itself sees `None`. A later store sees the cycle.
     pub(crate) app_released: Option<Cycle>,
     /// Whether the other core is halted or parked, so a store outside SRAM and RTC memory wakes
-    /// it.
+    /// it unless [`Soc::quiet_store`] says otherwise.
     pub(crate) other_sleeps: bool,
 }
 
@@ -308,9 +322,8 @@ enum Effect {
     Gates,
 }
 
-/// The effect of a write of `value` to the register at `addr`, when it has one the model does not
-/// run.
-fn effect(addr: u32, value: u32) -> Option<Effect> {
+/// The effect of a write to the register at `addr`, when it has one the model does not run.
+fn effect(addr: u32) -> Option<Effect> {
     let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
     let interrupt = |peripheral| Ending::Refused(Refused::Interrupt(peripheral));
     let dma = |setting| Ending::Refused(Refused::Register("GDMA", setting));
@@ -318,7 +331,7 @@ fn effect(addr: u32, value: u32) -> Option<Effect> {
     let pads = Ending::FlashCommand(FlashRefusal::Pads);
     Some(match (base, offset) {
         (RTC_CNTL, 0x18) => Effect::Refuse(1 << 31, Ending::Refused(Refused::Sleep)),
-        (RTC_CNTL, 0x74) => Effect::Report(u32::MAX),
+        (RTC_CNTL, 0x74) => Effect::Report(!tsens::CLK_CONF_RUN),
         // `RTC_CNTL_PAD_FORCE_HOLD` (bit 21), `RTC_CNTL_DG_PAD_FORCE_HOLD` (bit 15) and
         // `RTC_CNTL_DG_PAD_AUTOHOLD_EN` (bit 11), `RTC_CNTL_PAD_HOLD_REG` (bits 0..=21), and
         // `RTC_CNTL_DIG_PAD_HOLD_REG` (bits 0..=31).
@@ -330,27 +343,24 @@ fn effect(addr: u32, value: u32) -> Option<Effect> {
         (RTC_CNTL, _)
             if offset == sar::SENS + sar::CLK_GATE || offset == sar::SENS + sar::RESET_CONF =>
         {
-            if value & sar::TSENS_BIT != 0 {
-                Effect::Refuse(
-                    sar::TSENS_BIT,
-                    Ending::Refused(Refused::Unsimulated("SENS", blocks::TSENS)),
-                )
-            } else {
-                Effect::Report(!sar::SARADC_BIT)
-            }
+            Effect::Report(!(sar::SARADC_BIT | sar::TSENS_BIT))
         }
         (RTC_CNTL, _) if offset == sar::SENS + 0x40 => Effect::Report(sar::SLAVE_ADDRS),
         (SPI2, 0x34) => Effect::Refuse(!spi2::TRANS_DONE, interrupt("SPI2")),
         (SPI3, 0x34) => Effect::Refuse(!spi2::TRANS_DONE, interrupt("SPI3")),
         (USB_SERIAL_JTAG, 0x10) => Effect::Refuse(!usb::ENA_ALLOWED, interrupt("USB_SERIAL_JTAG")),
-        (SHA, sha::INT_ENA) => Effect::Refuse(1, interrupt("SHA")),
+        (AES, aes::INT_ENA) => Effect::Refuse(!aes::INT_ENA_ALLOWED, interrupt("AES")),
+        (SHA, sha::INT_ENA) => Effect::Refuse(!sha::INT_ENA_ALLOWED, interrupt("SHA")),
+        (RSA, rsa::INT_ENA) => Effect::Refuse(!rsa::INT_ENA_ALLOWED, interrupt("RSA")),
         (LEDC, ledc::INT_ENA) => Effect::Refuse(!ledc::INT_ENA_ALLOWED, interrupt("LEDC")),
+        (PCNT, pcnt::INT_ENA) => Effect::Refuse(!pcnt::INT_ENA_ALLOWED, interrupt("PCNT")),
         (RMT, 0x78) => Effect::Refuse(!(1 | 1 << 8 | 1 << 12), interrupt("RMT")),
         (uart::UART0, 0x0c) => Effect::Refuse(!uart::ENA_ALLOWED, interrupt("UART0")),
         (uart::UART1, 0x0c) => Effect::Refuse(!uart::ENA_ALLOWED, interrupt("UART1")),
         (uart::UART2, 0x0c) => Effect::Refuse(!uart::ENA_ALLOWED, interrupt("UART2")),
         (GDMA, _) if offset < 5 * 0xc0 => match offset % 0xc0 {
-            0x10 | 0x70 => Effect::Refuse(u32::MAX, interrupt("GDMA")),
+            0x10 => Effect::Refuse(!gdma::IN_INT_ENA_ALLOWED, interrupt("GDMA")),
+            0x70 => Effect::Refuse(!gdma::OUT_INT_ENA_ALLOWED, interrupt("GDMA")),
             0x00 => Effect::Refuse(gdma::MEM_TRANS_EN, dma("memory_copy")),
             0x60 => Effect::Refuse(gdma::AUTO_WRBACK, dma("write_back")),
             0x20 => Effect::Refuse(gdma::INLINK_RESTART, dma("restart")),
@@ -359,6 +369,19 @@ fn effect(addr: u32, value: u32) -> Option<Effect> {
         },
         (SPI0, 0x0) => Effect::Refuse(spi1::STARTS, Ending::FlashCommand(FlashRefusal::Spi0)),
         (SPI0, 0x18..=0x20) => Effect::Report(u32::MAX),
+        (SPI1, spi1::INT_ENA) => Effect::Refuse(u32::MAX, interrupt("SPI1")),
+        (SPI1, spi1::WAITI_CTRL) => Effect::Refuse(
+            spi1::WAITI_EN,
+            Ending::Refused(Refused::Register("SPI1", "auto_wait_idle")),
+        ),
+        (SPI1, spi1::SUS_CMD) => Effect::Refuse(
+            spi1::SUS_CMD_UNRUN,
+            Ending::Refused(Refused::Register("SPI1", "suspend")),
+        ),
+        (SPI1, spi1::SUS_CTRL) => Effect::Refuse(
+            spi1::FLASH_PES_EN,
+            Ending::Refused(Refused::Register("SPI1", "auto_suspend")),
+        ),
         (SYSTEM, _) if gates::OFFSETS.contains(&offset) => Effect::Gates,
         // The flash's pads, GPIO26 to GPIO32, keep IO_MUX function 0, SPI0's and SPI1's, their
         // GPIO output enables clear, and their matrix outputs at the reset value.
@@ -374,13 +397,15 @@ fn effect(addr: u32, value: u32) -> Option<Effect> {
     })
 }
 
-/// The watchdog deadline, the next LEDC event and the I2C controllers', and whether each I2C runs.
+/// The watchdog deadline, the next LEDC event and the I2C controllers', whether each I2C runs,
+/// and any active AES DMA deadline.
 #[derive(Debug, PartialEq, Eq)]
 struct Armed {
     deadline: Option<Expiry>,
     ledc: Option<Tick>,
     i2c_runs: [bool; 2],
     i2c: [Option<Tick>; 2],
+    aes: Option<Tick>,
 }
 
 impl Soc {
@@ -403,8 +428,12 @@ impl Soc {
             usb: UsbSerialJtag::default(),
             spi: [Spi::new(0), Spi::new(1)],
             gdma: Gdma::new(),
+            aes: Aes::new(),
             sha: Sha::new(),
+            rsa: Rsa::new(),
+            rsa_pd_ctrl: 1,
             ledc: Ledc::new(),
+            pcnt: Pcnt::new(),
             i2c: [I2c::new(0), I2c::new(1)],
             rmt: Rmt::new(),
             uart: Uarts::new(),
@@ -414,6 +443,7 @@ impl Soc {
             analog: Analog::default(),
             efuse: Efuse::default(),
             sar: Sar::new(),
+            tsens: Tsens::new(),
             spi1: Spi1::default(),
             matrix: Matrix::default(),
             calibration: Default::default(),
@@ -568,6 +598,45 @@ impl Soc {
         self.sar.sample(volts);
     }
 
+    /// Gives a pending temperature-sensor conversion the scene's ambient temperature in degC.
+    pub(crate) fn sample_temperature(&mut self, temp_c: f64) {
+        self.tsens.sample(temp_c);
+    }
+
+    /// Commits any completed AES operation at `now`, writing DMA output buffers and IN descriptor
+    /// writebacks into SRAM and latching the GDMA completion interrupts.
+    pub(crate) fn settle_aes(&mut self, now: Tick) {
+        let Some(done) = self.aes.settle(now) else {
+            return;
+        };
+        let mut pos = 0;
+        for &(buf_addr, len) in &done.receive.buffers {
+            let offset = Self::sram_offset(buf_addr, false).expect("validated SRAM buffer");
+            self.sram.write_bytes(offset, &done.output[pos..pos + len]);
+            pos += len;
+        }
+        for &(desc_addr, new_head) in &done.receive.writebacks {
+            let offset = Self::sram_offset(desc_addr, false).expect("validated SRAM descriptor");
+            self.sram.write(offset, Width::Word, new_head);
+        }
+        self.code.moved();
+        self.gdma.finish_receive(&done.receive);
+        self.gdma.finish_send(done.out_channel);
+    }
+
+    /// Synchronizes RSA clock, reset and memory power-down state at `now`.
+    fn sync_rsa_power(&mut self, now: Tick) {
+        let active = self.gates.clocked(Block::Rsa)
+            && !self.gates.held(Block::Rsa)
+            && rsa::powered(self.rsa_pd_ctrl);
+        self.rsa.sync_power(now, self.clock.source.apb(), active);
+    }
+
+    /// Updates PCNT's input synchronizers and glitch filters from the current GPIO matrix levels.
+    pub(crate) fn note_pcnt_pins(&mut self, at: Tick) {
+        self.pcnt.note_pins(at, &self.gpio, self.clock.source.apb());
+    }
+
     /// Adds the ROM and the flash, as a chip booted from flash has them.
     pub(crate) fn attach_rom(&mut self, rom: Arc<[u8]>) {
         self.rom = Some(rom);
@@ -580,9 +649,9 @@ impl Soc {
         self.code.moved();
     }
 
-    /// The whole flash, on a chip that has it.
-    pub(crate) fn flash_bytes(&self) -> Option<&[u8]> {
-        self.flash.as_ref().map(Flash::bytes)
+    /// Reads `len` bytes from flash offset `start`, on a chip that has flash.
+    pub(crate) fn read_flash(&self, start: usize, len: usize) -> Option<Vec<u8>> {
+        self.flash.as_ref()?.read(start, len)
     }
 
     /// Maps `size` bytes of flash from `offset` at bus address `vaddr`, as the bootloader maps
@@ -737,6 +806,15 @@ impl Soc {
             && Self::access_moves_lines(addr)
     }
 
+    /// A store to a SYSTIMER unit's `OP` word latches the count into its value registers and
+    /// sets `VALUE_VALID`. It moves no line, no alarm and no event of the other core, so it
+    /// neither ends a straight run nor wakes a sleeping core. While LEDC has output waiting, a
+    /// SYSTIMER store rearms the run, so then it is not quiet.
+    pub(crate) fn quiet_store(&self, addr: u32) -> bool {
+        let word = addr & !3;
+        (word == SYSTIMER + 0x04 || word == SYSTIMER + 0x08) && !self.ledc.has_output()
+    }
+
     pub(crate) fn sram_offset(addr: u32, fetch: bool) -> Option<u32> {
         RAM.iter()
             .filter(|w| w.code || !fetch)
@@ -799,7 +877,7 @@ impl Soc {
             }
             SPI1 => {
                 self.spi1
-                    .write(offset, value, &[])
+                    .write(now, offset, value, None)
                     .expect("a register, not a command");
             }
             INTERRUPT_CORE0 if self.matrix.write(offset, value) => {}
@@ -808,10 +886,16 @@ impl Soc {
             }
             SYSTEM if offset == app::CONTROL_0 => self.app.control = value,
             SYSTEM if offset == app::CONTROL_1 => self.app.boot = value,
+            SYSTEM if offset == rsa::PD_CTRL => {
+                self.rsa_pd_ctrl = value & 0x7;
+                self.sync_rsa_power(now);
+            }
             SYSTEM if gates::OFFSETS.contains(&offset) => {
                 self.gates.write(offset, value).for_each(drop);
                 self.sync_timg(now);
                 self.sync_uart_gates();
+                self.sync_pcnt_gates(now);
+                self.sync_rsa_power(now);
             }
             _ => {
                 self.plain.insert(addr, value);
@@ -904,6 +988,9 @@ impl Soc {
         let value = match base {
             GPIO => self.gpio.read(offset),
             IO_MUX => self.gpio.read_io_mux(offset),
+            RTC_CNTL if offset == sar::SENS + tsens::CTRL || offset == sar::SENS + tsens::CTRL2 => {
+                self.tsens.read(offset - sar::SENS)
+            }
             RTC_CNTL if offset >= sar::SENS => self.sar.read(now, offset - sar::SENS),
             RTC_CNTL => self.watchdogs.read_rtc(offset),
             APB_SARADC if offset == sar::ARB_CTRL => Some(self.sar.arb_ctrl()),
@@ -918,9 +1005,18 @@ impl Soc {
                 let port = spi2::index(base).expect("an spi host");
                 self.spi[port].read(now, offset)
             }
-            GDMA => self.gdma.read(offset),
+            GDMA => {
+                self.settle_aes(now);
+                self.gdma.read(offset)
+            }
             SHA => self.sha.read(offset),
+            AES => {
+                self.settle_aes(now);
+                self.aes.read(offset)
+            }
+            RSA => self.rsa.read(now, offset),
             LEDC => self.ledc.read(now, offset, self.clock.source.apb()),
+            PCNT => self.pcnt.read(now, offset),
             RMT => self.rmt.read(now, offset),
             base if i2c::index(base).is_some() => {
                 let port = i2c::index(base).expect("an i2c port");
@@ -932,6 +1028,7 @@ impl Soc {
                 self.uart.read(index, now, offset, &self.gpio, apb)
             }
             SYSTEM if gates::OFFSETS.contains(&offset) => Some(self.gates.read(offset)),
+            SYSTEM if offset == rsa::PD_CTRL => Some(self.rsa_pd_ctrl),
             ANALOG => self.analog.read(offset),
             EFUSE => self.efuse.read(offset),
             SPI1 => self.spi1.read(offset),
@@ -964,6 +1061,23 @@ impl Soc {
                     self.ending = Some(Ending::Refused(Refused::Register("IO_MUX", setting)));
                     true
                 }),
+            RTC_CNTL if offset == sar::SENS + tsens::CTRL || offset == sar::SENS + tsens::CTRL2 => {
+                let context = tsens::Context {
+                    efuse: &self.efuse.set,
+                    analog: &self.analog,
+                    clocked: self.sar.tsens_clocked(),
+                    reset: self.sar.tsens_reset(),
+                    clk_conf: self.plain.get(&(RTC_CNTL + sar::CLK_CONF)).copied(),
+                };
+                match self.tsens.write(offset - sar::SENS, value, &context) {
+                    Ok(true) => self.sampled = Some(now),
+                    Ok(false) => {}
+                    Err(setting) => {
+                        self.ending = Some(Ending::Refused(Refused::Register("SENS", setting)));
+                    }
+                }
+                true
+            }
             RTC_CNTL if offset >= sar::SENS => {
                 let context = sar::Context {
                     efuse: &self.efuse.set,
@@ -971,10 +1085,14 @@ impl Soc {
                     clk_conf: self.plain.get(&(RTC_CNTL + sar::CLK_CONF)).copied(),
                     netted: &self.netted,
                 };
-                match self.sar.write(now, offset - sar::SENS, value, &context) {
+                let sens_offset = offset - sar::SENS;
+                match self.sar.write(now, sens_offset, value, &context) {
                     Ok(started) => {
                         if started.is_some() {
                             self.sampled = Some(now);
+                        }
+                        if sens_offset == sar::RESET_CONF && value & sar::TSENS_BIT != 0 {
+                            self.tsens.reset();
                         }
                         true
                     }
@@ -1027,10 +1145,13 @@ impl Soc {
                 }
             },
             ANALOG => self.analog.write(offset, value),
-            GDMA => self.gdma.write(offset, value).unwrap_or_else(|setting| {
-                self.ending = Some(Ending::Refused(Refused::Register("GDMA", setting)));
-                true
-            }),
+            GDMA => {
+                self.settle_aes(now);
+                self.gdma.write(offset, value).unwrap_or_else(|setting| {
+                    self.ending = Some(Ending::Refused(Refused::Register("GDMA", setting)));
+                    true
+                })
+            }
             SHA => {
                 let (gdma, sram, gates) = (&mut self.gdma, &self.sram, &self.gates);
                 let mut read = Vec::new();
@@ -1039,6 +1160,50 @@ impl Soc {
                     .write(offset, value, dma)
                     .unwrap_or_else(|setting| {
                         self.ending = Some(Ending::Refused(Refused::Register("SHA", setting)));
+                        true
+                    })
+            }
+            AES => {
+                self.settle_aes(now);
+                let apb = self.clock.source.apb();
+                let (gdma, sram, gates) = (&mut self.gdma, &self.sram, &self.gates);
+                let start_dma =
+                    |bytes: usize| -> Result<(usize, Vec<u8>, gdma::ReceivePlan), &'static str> {
+                        if !gates.clocked(Block::Gdma) || gates.held(Block::Gdma) {
+                            return Err("dma_link");
+                        }
+                        let read_byte = |addr: u32| {
+                            let offset = Self::sram_offset(addr, false).expect("in the DMA window");
+                            sram.read(offset, Width::Byte) as u8
+                        };
+                        let map_err = |setting: Setting| match setting {
+                            Setting::DmaLink => "dma_link",
+                            Setting::DmaDescriptor => "dma_descriptor",
+                            Setting::DmaLength => "dma_length",
+                            _ => "dma",
+                        };
+                        // Validate IN channel first so a bad IN list does not consume the OUT list.
+                        let plan = gdma
+                            .prepare_receive(aes::PERIPHERAL, bytes, read_byte)
+                            .map_err(map_err)?;
+                        let (out_ch, input) = gdma
+                            .read_out_list(aes::PERIPHERAL, bytes, read_byte)
+                            .map_err(map_err)?;
+                        Ok((out_ch, input, plan))
+                    };
+                self.aes
+                    .write(now, apb, offset, value, start_dma)
+                    .unwrap_or_else(|setting| {
+                        self.ending = Some(Ending::Refused(Refused::Register("AES", setting)));
+                        true
+                    })
+            }
+            RSA => {
+                let apb = self.clock.source.apb();
+                self.rsa
+                    .write(now, apb, offset, value)
+                    .unwrap_or_else(|setting| {
+                        self.ending = Some(Ending::Refused(Refused::Register("RSA", setting)));
                         true
                     })
             }
@@ -1054,10 +1219,26 @@ impl Soc {
                 self.app.boot = value;
                 true
             }
+            SYSTEM if offset == rsa::PD_CTRL => {
+                self.rsa.settle(now);
+                if self.rsa.busy(now) && !rsa::powered(value) {
+                    self.ending = Some(Ending::Refused(Refused::Register(
+                        "RSA",
+                        "power_down_while_running",
+                    )));
+                    return true;
+                }
+                self.rsa_pd_ctrl = value & 0x7;
+                self.sync_rsa_power(now);
+                true
+            }
             SYSTEM if gates::OFFSETS.contains(&offset) => {
                 let mut gates = self.gates.clone();
                 let held: Vec<Block> = gates.write(offset, value).collect();
                 self.settle_i2c(now);
+                self.pcnt.settle(now);
+                self.settle_aes(now);
+                self.rsa.settle(now);
                 let i2c0 = self.i2c[0].runs();
                 let i2c1 = self.i2c[1].runs();
                 let rmt_sends = self.rmt.sending(now);
@@ -1065,6 +1246,9 @@ impl Soc {
                 let sending1 = self.spi[1].busy(now);
                 let dma = (sending0 && !self.in_flight[0].is_empty())
                     || (sending1 && !self.in_flight[1].is_empty());
+                let aes_busy = self.aes.busy(now);
+                let aes_dma = self.aes.dma_busy(now);
+                let rsa_busy = self.rsa.busy(now);
                 let refused = [
                     (
                         sending0 && held.contains(&Block::Spi2),
@@ -1087,14 +1271,34 @@ impl Soc {
                         "clock_off_while_sending",
                     ),
                     (
-                        dma && held.contains(&Block::Gdma),
+                        (dma || aes_dma) && held.contains(&Block::Gdma),
                         "GDMA",
                         "reset_while_sending",
                     ),
                     (
-                        dma && !gates.clocked(Block::Gdma),
+                        (dma || aes_dma) && !gates.clocked(Block::Gdma),
                         "GDMA",
                         "clock_off_while_sending",
+                    ),
+                    (
+                        aes_busy && held.contains(&Block::Aes),
+                        "AES",
+                        "reset_while_running",
+                    ),
+                    (
+                        aes_busy && !gates.clocked(Block::Aes),
+                        "AES",
+                        "clock_off_while_running",
+                    ),
+                    (
+                        rsa_busy && held.contains(&Block::Rsa),
+                        "RSA",
+                        "reset_while_running",
+                    ),
+                    (
+                        rsa_busy && !gates.clocked(Block::Rsa),
+                        "RSA",
+                        "clock_off_while_running",
                     ),
                     (
                         self.ledc.counts() && !gates.clocked(Block::Ledc),
@@ -1138,6 +1342,11 @@ impl Soc {
                         "RMT",
                         "clock_off_while_sending",
                     ),
+                    (
+                        self.pcnt.has_pending() && !gates.clocked(Block::Pcnt),
+                        "PCNT",
+                        "clock_off_while_running",
+                    ),
                 ]
                 .into_iter()
                 .find(|&(refused, ..)| refused);
@@ -1153,6 +1362,8 @@ impl Soc {
                 // A gated UART keeps its registers. A frame that was shifting stops, and a later
                 // FIFO write completes without leaving the port.
                 self.sync_uart_gates();
+                self.sync_pcnt_gates(now);
+                self.sync_rsa_power(now);
                 true
             }
             LEDC => {
@@ -1161,6 +1372,15 @@ impl Soc {
                     .write(now, offset, value, apb)
                     .unwrap_or_else(|setting| {
                         self.ending = Some(Ending::Refused(Refused::Register("LEDC", setting)));
+                        true
+                    })
+            }
+            PCNT => {
+                let apb = self.clock.source.apb();
+                self.pcnt
+                    .write(now, offset, value, apb)
+                    .unwrap_or_else(|setting| {
+                        self.ending = Some(Ending::Refused(Refused::Register("PCNT", setting)));
                         true
                     })
             }
@@ -1210,15 +1430,18 @@ impl Soc {
                 self.ending = Some(Ending::EfuseProgram);
                 true
             }),
-            SPI1 => {
-                let flash = self.flash.as_ref().map_or(&[][..], |flash| flash.bytes());
-                self.spi1
-                    .write(offset, value, flash)
-                    .unwrap_or_else(|refusal| {
-                        self.ending = Some(Ending::FlashCommand(refusal));
-                        true
-                    })
-            }
+            SPI1 => match self.spi1.write(now, offset, value, self.flash.as_mut()) {
+                Ok(outcome) => {
+                    if outcome.mutated {
+                        self.code.moved();
+                    }
+                    outcome.handled
+                }
+                Err(refusal) => {
+                    self.ending = Some(Ending::FlashCommand(refusal));
+                    true
+                }
+            },
             base if spi2::index(base).is_some() => {
                 let port = spi2::index(base).expect("an spi host");
                 let cpu = self.clock.source.cpu();
@@ -1287,6 +1510,9 @@ impl Soc {
         let rmt = self.rmt.line(now);
         let apb = self.clock.source.apb();
         self.uart.settle(now, &self.gpio, apb);
+        self.pcnt.settle(now);
+        self.settle_aes(now);
+        self.rsa.settle(now);
         let mut sources = self.matrix.sources(
             self.systimer.lines(),
             spi,
@@ -1294,12 +1520,25 @@ impl Soc {
             gpio,
             [self.i2c[0].line(), self.i2c[1].line()],
             rmt,
-        ) | Matrix::timer_levels(timers);
+        ) | Matrix::timer_levels(timers)
+            | self.gdma.interrupt_sources();
         if self.usb.poll(now) {
             sources |= 1 << usb::SOURCE;
         }
         if self.ledc.line(now, apb) {
             sources |= 1 << ledc::SOURCE;
+        }
+        if self.pcnt.line() {
+            sources |= 1 << pcnt::SOURCE;
+        }
+        if self.rsa.line() {
+            sources |= 1 << rsa::SOURCE;
+        }
+        if self.aes.line() {
+            sources |= 1 << aes::SOURCE;
+        }
+        if self.sha.line() {
+            sources |= 1 << sha::SOURCE;
         }
         for index in 0..3 {
             if self.uart.line(index) {
@@ -1415,12 +1654,15 @@ impl Soc {
             }
             Block::Gdma => self.gdma = Gdma::new(),
             Block::Sha => self.sha = Sha::new(),
+            Block::Aes => self.aes = Aes::new(),
+            Block::Rsa => self.rsa = Rsa::new(),
             Block::I2c0 => self.reset_i2c(0),
             Block::I2c1 => self.reset_i2c(1),
             Block::Rmt => {
                 self.rmt = Rmt::new();
                 self.idle_rmt();
             }
+            Block::Pcnt => self.pcnt = Pcnt::new(),
             Block::Uart0 => self.reset_uart(0),
             Block::Uart1 => self.reset_uart(1),
             Block::Uart2 => self.reset_uart(2),
@@ -1461,6 +1703,11 @@ impl Soc {
         }
     }
 
+    fn sync_pcnt_gates(&mut self, now: Tick) {
+        let clocked = self.gates.clocked(Block::Pcnt) && !self.gates.held(Block::Pcnt);
+        self.pcnt.set_clocked(now, clocked, &self.gpio);
+    }
+
     /// The block whose registers hold `addr` and why an access to them ends the run: its
     /// clock is off, or a reset bit holds it. A UART is not one of these: with its clock off
     /// or its reset held, a load or store still completes and the shifter stays idle.
@@ -1471,9 +1718,12 @@ impl Soc {
             LEDC => Block::Ledc,
             GDMA => Block::Gdma,
             SHA => Block::Sha,
+            AES => Block::Aes,
+            RSA => Block::Rsa,
             I2C0 => Block::I2c0,
             I2C1 => Block::I2c1,
             RMT => Block::Rmt,
+            PCNT => Block::Pcnt,
             _ => return None,
         };
         let why = if !self.gates.clocked(block) {
@@ -1520,6 +1770,8 @@ impl Soc {
         if source.apb() == self.clock.source.apb() {
             return Ok(());
         }
+        self.settle_aes(now);
+        self.rsa.settle(now);
         let uart = (0..3).find(|&index| self.uart.shifting(index) && self.uart.uses_apb(index));
         let setting = if self.rmt.sending(now) {
             ("RMT", "clock_change_while_sending")
@@ -1527,6 +1779,12 @@ impl Soc {
             ("LEDC", "clock_change_while_running")
         } else if let Some(index) = uart {
             (uart::NAMES[index], "clock_change_while_sending")
+        } else if self.pcnt.has_pending() {
+            ("PCNT", "clock_change_while_running")
+        } else if self.aes.busy(now) {
+            ("AES", "clock_change_while_running")
+        } else if self.rsa.busy(now) {
+            ("RSA", "clock_change_while_running")
         } else {
             return Ok(());
         };
@@ -1593,13 +1851,20 @@ impl Soc {
             || self.started
     }
 
-    fn fetch(&mut self, addr: u32) -> Result<u32, Exit> {
+    fn fetch(&mut self, cycle: Cycle, addr: u32) -> Result<u32, Exit> {
         if self.fetch_held() {
             return Err(Exit::Stop);
         }
         if let Some(offset) = Self::sram_offset(addr, true) {
             self.code.fetched_sram(offset);
             return Ok(self.sram.read(offset, Width::Word));
+        }
+        if flash::IROM.contains(&addr) && self.spi1.has_busy() {
+            let now = self.clock.tick(cycle).max(self.latest);
+            if self.spi1.is_busy(now) {
+                self.ending = Some(Ending::FlashCommand(FlashRefusal::Busy(None)));
+                return Err(Exit::Stop);
+            }
         }
         let word = if flash::IROM.contains(&addr) || rom::ROM.contains(&addr) {
             self.memory_word(addr)
@@ -1618,6 +1883,13 @@ impl Soc {
     fn load(&mut self, cycle: Cycle, addr: u32, width: Width) -> Result<u32, Exit> {
         if let Some(offset) = Self::data_offset(addr, width)? {
             return Ok(self.sram.read(offset, width));
+        }
+        if (flash::IROM.contains(&addr) || flash::DROM.contains(&addr)) && self.spi1.has_busy() {
+            let now = self.clock.tick(cycle).max(self.latest);
+            if self.spi1.is_busy(now) {
+                self.ending = Some(Ending::FlashCommand(FlashRefusal::Busy(None)));
+                return Err(Exit::Stop);
+            }
         }
         let (word, shift, mask) = word_of(addr, width);
         if let Some(value) = self.memory_word(word) {
@@ -1704,9 +1976,10 @@ impl Soc {
         if !PERIPHERALS.contains(&addr) {
             return Err(Exit::Fault(Cause::LoadStoreError));
         }
+        let quiet = self.quiet_store(addr);
         self.events.touch(addr);
         self.store_register(step, cycle, addr, width, value)?;
-        if step.other_sleeps {
+        if step.other_sleeps && !quiet {
             self.steer(Steer::Wake(step.start));
         }
         Ok(())
@@ -1746,7 +2019,7 @@ impl Soc {
         }
         let kept = self.read_kept(now, word);
         let value = (kept.unwrap_or(0) & !(mask << shift)) | ((value & mask) << shift);
-        let change = match effect(word, value) {
+        let change = match effect(word) {
             Some(Effect::Refuse(bits, ending)) if value & bits != 0 => {
                 self.ending = Some(ending);
                 return Err(Exit::Stop);
@@ -1825,6 +2098,7 @@ impl Soc {
                 self.rearmed |= after.deadline != before.deadline
                     || after.ledc != before.ledc
                     || after.i2c != before.i2c
+                    || after.aes != before.aes
                     || self.ledc.has_output();
             } else if systimer {
                 self.rearmed |= self.ledc.has_output();
@@ -1850,6 +2124,7 @@ impl Soc {
         if self.ending.is_some() {
             return Err(Exit::Stop);
         }
+        self.note_pcnt_pins(now);
         self.changes.extend(change.map(|touch| (word, touch)));
         if self.image() != before {
             self.changed = Some(now);
@@ -1897,6 +2172,7 @@ impl Soc {
             ledc: self.ledc.next(self.clock.source.apb()),
             i2c_runs: [self.i2c[0].runs(), self.i2c[1].runs()],
             i2c: [self.i2c[0].next_event(), self.i2c[1].next_event()],
+            aes: self.aes.next_event(),
         }
     }
 
@@ -1948,6 +2224,9 @@ impl Soc {
         self.rmt.settle(now);
         let apb = self.clock.source.apb();
         self.uart.settle(now, &self.gpio, apb);
+        self.pcnt.settle(now);
+        self.settle_aes(now);
+        self.rsa.settle(now);
         let mut next: Option<Tick> = None;
         for peripheral in Peripheral::ALL {
             let at = self.events.kept(peripheral, now).unwrap_or_else(|| {
@@ -1981,6 +2260,9 @@ impl Soc {
             Peripheral::Rmt => self.rmt.next_event(),
             Peripheral::Uart => self.uart.next_event(now),
             Peripheral::Ledc => self.ledc.next_int_event(now, self.clock.source.apb()),
+            Peripheral::Pcnt => self.pcnt.next_event(now),
+            Peripheral::Aes => self.aes.next_event(),
+            Peripheral::Rsa => self.rsa.next_event(),
         }
     }
 }
@@ -2010,8 +2292,8 @@ impl Bus for CoreBus<'_> {
         Soc::on_instruction_bus(addr)
     }
 
-    fn fetch(&mut self, _now: Cycle, addr: u32) -> Result<u32, Exit> {
-        self.soc.fetch(addr)
+    fn fetch(&mut self, now: Cycle, addr: u32) -> Result<u32, Exit> {
+        self.soc.fetch(now, addr)
     }
 
     fn load(&mut self, now: Cycle, addr: u32, width: Width) -> Result<u32, Exit> {
@@ -2037,7 +2319,7 @@ impl Bus for CoreBus<'_> {
     }
 
     fn access_moves_lines(&self, addr: u32) -> bool {
-        Soc::access_moves_lines(addr)
+        Soc::access_moves_lines(addr) && !self.soc.quiet_store(addr)
     }
 
     fn load_moves_lines(&self, addr: u32) -> bool {

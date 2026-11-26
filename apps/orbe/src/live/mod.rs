@@ -1188,7 +1188,7 @@ fn read_reply(
 fn reply_deadline(ask: &Ask) -> Duration {
     let slack = Duration::from_secs(30);
     match ask {
-        Ask::Run(Ok(Command::Step(_))) => daemon::STEP_BUDGET + slack,
+        Ask::Run(Ok(Command::Step(_))) => orbe_session::STEP_BUDGET + slack,
         Ask::Run(Ok(Command::Play)) => Duration::from_secs(24 * 60 * 60),
         Ask::Run(Err(_)) => Duration::from_secs(1),
         _ => Duration::from_secs(30),

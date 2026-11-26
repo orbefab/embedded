@@ -1,0 +1,8 @@
+{
+  "part": "battery-aa-4x",
+  "units": "mm",
+  "anchors": [
+    {"lead": 1, "node": null, "also": [], "at": [-49.0, -1.27, 1.4], "axis": [-1.0, 0.0, 0.0], "kind": "socket"},
+    {"lead": 2, "node": null, "also": [], "at": [-49.0, 1.27, 1.4], "axis": [-1.0, 0.0, 0.0], "kind": "socket"}
+  ]
+}

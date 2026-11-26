@@ -1,0 +1,44 @@
+{
+  "part": "thermistor-ntc-10k",
+  "source": {
+    "script": "model.py",
+    "sha256": "966f08c72f04108236af81b6a412b2fd1779f87ac98e56ca6da065d0d89e621a",
+    "bytes": 2799
+  },
+  "files": {
+    "thermistor-ntc-10k.glb": {
+      "sha256": "d45283405d984a722aa0fa3e961c19ca8171f9c2cf088a857bf8960caabfac15",
+      "bytes": 64964
+    },
+    "thermistor-ntc-10k.anchors.json": {
+      "sha256": "36c3e6ea944589d7a85cca2205cfdd984840af0901d1bffa9a45222d46962dbb",
+      "bytes": 300
+    }
+  },
+  "box": {
+    "min": [-1.92, -1.46, -24],
+    "max": [1.92, 1.46, 5.6]
+  },
+  "kept_nodes": ["lead-1", "lead-2"],
+  "draw_calls": 4,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0.003529
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0.2
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 4,
+      "primitives_out": 4
+    }
+  }
+}

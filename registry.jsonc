@@ -10,6 +10,8 @@
     "ams1117-sot223",
     "atmega16u2-qfn32",
     "atmega328p-tqfp32",
+    "battery-9v-cell",
+    "battery-aa-4x-cell",
     "capacitor-0603",
     "capacitor-electrolytic-smd",
     "capacitor-tantalum-3216",

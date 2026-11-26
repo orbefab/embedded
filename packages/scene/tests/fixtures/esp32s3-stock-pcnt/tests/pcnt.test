@@ -1,0 +1,57 @@
+# Quadrature rotary encoder on PCNT unit 0: count up, filter short bounce, hit high limit
+# interrupt, then count down and hit low limit interrupt.
+open
+step --until serial contains "ready" --timeout 300ms
+
+# One forward quadrature cycle (+4 counts).
+press @enc_a
+step 2ms
+press @enc_b
+step 2ms
+release @enc_a
+step 2ms
+release @enc_b
+step 5ms
+expect serial contains "count 4"
+
+# Short contact bounce (2 us < 5 us glitch filter) must be ignored.
+press @enc_a
+step 2us
+release @enc_a
+step 5ms
+expect serial contains "count 4"
+
+# Second forward quadrature cycle reaches high_limit (+8), resets to 0 and fires the ISR.
+press @enc_a
+step 2ms
+press @enc_b
+step 2ms
+release @enc_a
+step 2ms
+release @enc_b
+step 5ms
+expect serial contains "limit 8"
+
+# One reverse quadrature cycle (-4 counts).
+press @enc_b
+step 2ms
+press @enc_a
+step 2ms
+release @enc_b
+step 2ms
+release @enc_a
+step 5ms
+expect serial contains "count -4"
+
+# Second reverse quadrature cycle reaches low_limit (-8), resets to 0 and fires the ISR.
+press @enc_b
+step 2ms
+press @enc_a
+step 2ms
+release @enc_b
+step 2ms
+release @enc_a
+step 5ms
+expect serial contains "limit -8"
+
+expect no diagnostics

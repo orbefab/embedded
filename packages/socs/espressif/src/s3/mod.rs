@@ -26,6 +26,7 @@
 //! block, as `blocks` says. A byte or halfword
 //! access to a kept register reads or merges into its word.
 
+mod aes;
 mod analog;
 mod app;
 mod blocks;
@@ -47,15 +48,18 @@ mod i2c;
 mod image;
 mod ledc;
 mod matrix;
+mod pcnt;
 mod rmt;
 mod rng;
 mod rom;
+mod rsa;
 mod sar;
 mod sha;
 mod soc;
 mod spi1;
 mod spi2;
 mod timers;
+mod tsens;
 mod uart;
 mod usb;
 
@@ -82,6 +86,24 @@ pub use rmt::{Flight, Train};
 pub use spi1::FlashRefusal;
 pub use spi2::{Pads, Phase, Setting, Transfer};
 pub use timers::{Reset, Watchdog};
+
+/// Supply voltage at or below which the ESP32-S3 drops into brown-out reset (volts).
+///
+/// ESP32-S3 Series Datasheet v2.2 Section 2.5.3 lists the brown-out detector as a chip reset
+/// source without a numeric trip table or hysteresis figure, and ESP32-S3 Technical Reference
+/// Manual v1.8 likewise publishes no numeric brown-out hysteresis. ESP-IDF v5.5.5
+/// (`CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7`, the default brown-out detector level) places the
+/// ESP32-S3 brown-out threshold at 2.44 V.
+pub const MIN_SUPPLY_V: f64 = 2.44;
+
+/// Minimum recommended operating supply voltage `VDD` (volts).
+///
+/// ESP32-S3 Series Datasheet v2.2 Section 5.2, Table 5-2 (Recommended Operating Conditions)
+/// specifies `VDDA`, `VDD3P3`, `VDD3P3_RTC` and `VDD3P3_CPU` from 3.0 V (min) to 3.6 V (max),
+/// 3.3 V typical. Because neither the datasheet nor TRM v1.8 gives a numeric brown-out release
+/// hysteresis, the supply watch requires `V(VCC) - V(GND)` to reach 3.0 V to power on or to
+/// count as returned after a brown-out.
+pub const OPERATING_SUPPLY_MIN_V: f64 = 3.0;
 
 /// A window onto SRAM: its bus addresses, and where in SRAM it starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,6 +165,8 @@ pub enum Fault {
     Clock(Pc),
     /// The store at this PC reset the chip for this cause.
     FaultRestart(ResetCause, Pc),
+    /// Supply returned after power loss; power-on restart is not simulated yet.
+    PowerOnRestart,
     /// The store at this PC set something the model does not run.
     Refused(Refused, Pc),
     /// The load at `pc` read `address` in a cache window, where the MMU maps no flash.
@@ -334,9 +358,9 @@ impl Esp32s3 {
             if segment.mapped() {
                 soc.map_flash(segment.addr, segment.offset, segment.len);
             } else {
-                let flash = soc.flash_bytes().expect("attached");
-                let at = segment.offset as usize;
-                let bytes = flash[at..at + segment.len as usize].to_vec();
+                let bytes = soc
+                    .read_flash(segment.offset as usize, segment.len as usize)
+                    .expect("segment inside attached flash");
                 soc.poke(segment.addr, &bytes);
             }
         }
@@ -359,6 +383,11 @@ impl Esp32s3 {
     /// voltage: `volts` of a GPIO that [`adc_pad`] names, against `GND`.
     pub fn sample(&mut self, volts: impl Fn(u8) -> f64) {
         self.soc.sample(volts);
+    }
+
+    /// Gives a pending temperature-sensor conversion the scene's ambient temperature in degC.
+    pub fn sample_temperature(&mut self, temp_c: f64) {
+        self.soc.sample_temperature(temp_c);
     }
 
     fn with(core: Core<orbe_xtensa::Esp32s3>, soc: Soc) -> Esp32s3 {
@@ -397,6 +426,7 @@ impl Esp32s3 {
     /// or before it. `None` when the chip reached the limit, or ended before.
     pub fn run_until(&mut self, limit: Tick) -> Option<Halt> {
         loop {
+            self.soc.settle_aes(self.now());
             self.settle_ledc();
             self.settle_i2c(limit);
             self.settle_rmt();
@@ -444,6 +474,7 @@ impl Esp32s3 {
                 rmt,
                 uart,
                 train,
+                self.soc.aes.next_event(),
             ]
             .into_iter()
             .flatten()
@@ -580,6 +611,7 @@ impl Esp32s3 {
                 self.moves.insert(at, (edge.at, signal, edge.level));
             } else if queued.is_none() {
                 self.soc.gpio.set_signal(signal, edge.level);
+                self.soc.note_pcnt_pins(edge.at);
             }
         }
     }
@@ -668,6 +700,7 @@ impl Esp32s3 {
                     break;
                 }
                 self.soc.gpio.set_signal(signal, edge.level);
+                self.soc.note_pcnt_pins(edge.at);
                 self.soc
                     .uart
                     .after_edge(usize::from(edge.port), edge.at, &self.soc.gpio, apb);
@@ -796,6 +829,7 @@ impl Esp32s3 {
                         self.soc.gpio.set_signal(signal, level);
                     }
                 }
+                self.soc.note_pcnt_pins(at);
                 self.shown = self.soc.image();
             }
             Halt::Fault(..) => {
@@ -883,6 +917,7 @@ impl Esp32s3 {
         }
         let apb = self.soc.clock.source.apb();
         self.soc.uart.note_pins(at, &self.soc.gpio, apb);
+        self.soc.note_pcnt_pins(at);
     }
 
     /// The next console byte whose packet went at or before `through`, with that tick.
@@ -1122,10 +1157,13 @@ mod tests {
 
     mod adc;
     mod code;
+    mod crypto;
     mod dual;
     mod i2c;
     mod pads;
+    mod pcnt;
     mod rmt;
+    mod tsens;
 
     #[test]
     fn a_drive_change_halts_at_its_store_however_the_run_splits() {
@@ -1554,9 +1592,11 @@ mod tests {
                 1 << 0,
                 Refused::Interrupt("USB_SERIAL_JTAG"),
             ),
-            (gdma + 0x10, 1, Refused::Interrupt("GDMA")),
-            (out + 0x10, 1, Refused::Interrupt("GDMA")),
-            (0x6003_b028, 1, Refused::Interrupt("SHA")),
+            (gdma + 0x10, 1 << 3, Refused::Interrupt("GDMA")),
+            (out + 0x10, 1 << 2, Refused::Interrupt("GDMA")),
+            (0x6003_b028, 1 << 1, Refused::Interrupt("SHA")),
+            (0x6003_a0b0, 1 << 1, Refused::Interrupt("AES")),
+            (0x6003_c82c, 1 << 1, Refused::Interrupt("RSA")),
             (0x6001_90c8, 1 << 12, Refused::Interrupt("LEDC")),
             (gdma, 1 << 4, Refused::Register("GDMA", "memory_copy")),
             (out, 1 << 2, Refused::Register("GDMA", "write_back")),
@@ -1570,7 +1610,8 @@ mod tests {
             let mut chip = program.chip();
             chip.soc
                 .restore(SYSTEM + 0x18, 1 << 6 | 1 << 16 | 1 << 11 | 1 << 2 | 1 << 5);
-            chip.soc.restore(SYSTEM + 0x1c, 1 << 6 | 1 << 2 | 1 << 9);
+            chip.soc
+                .restore(SYSTEM + 0x1c, 1 << 1 | 1 << 2 | 1 << 3 | 1 << 6 | 1 << 9);
             chip.soc.restore(SYSTEM + 0x24, 0);
             assert_eq!(
                 chip.run_until(c(1000)),
@@ -1790,22 +1831,8 @@ mod tests {
         let refused = [
             (0x6003_9000, "USB_WRAP", otg),
             (0x6003_9004, "USB_WRAP", otg),
-            (
-                0x6001_704c,
-                "PCNT",
-                "the pulse counter that encoder libraries use",
-            ),
             (0x6003_1204, "RADIO", "the Wi-Fi and Bluetooth radio"),
-            (
-                0x6000_8850,
-                "SENS",
-                "the temperature sensor that temperatureRead uses",
-            ),
-            (
-                0x6000_8854,
-                "SENS",
-                "the temperature sensor that temperatureRead uses",
-            ),
+            (0x6000_885c, "SENS", "the touch sensor that touchRead uses"),
         ];
         for (address, block, what) in refused {
             let program = store_after_two_loads(address, 1, 0);
@@ -1817,25 +1844,6 @@ mod tests {
                 )),
                 "{address:#x}"
             );
-        }
-        for address in [0x6000_8904, 0x6000_8908] {
-            let program = store_after_two_loads(address, 1 << 29, 0);
-            let mut chip = program.chip();
-            assert_eq!(
-                chip.run_until(c(1000)),
-                Some(Halt::Fault(
-                    c(2),
-                    Fault::Refused(
-                        Refused::Unsimulated(
-                            "SENS",
-                            "the temperature sensor that temperatureRead uses"
-                        ),
-                        pro(program.entry() + 6)
-                    )
-                )),
-                "{address:#x}"
-            );
-            assert_eq!(chip.unmodeled().count(), 0, "{address:#x}");
         }
     }
 
@@ -1852,6 +1860,137 @@ mod tests {
         assert!(Soc::load_moves_lines(USB_SERIAL_JTAG));
         assert!(Soc::access_moves_lines(USB_SERIAL_JTAG + 0x04));
         assert!(Soc::load_moves_lines(USB_SERIAL_JTAG + 0x08));
+    }
+
+    /// A store to `SYSTIMER_UNIT0_OP_REG` or `SYSTIMER_UNIT1_OP_REG` keeps a straight run going
+    /// while LEDC has no output waiting, and ends it once LEDC has output waiting. Stores to
+    /// other SYSTIMER registers still move the lines.
+    #[test]
+    fn a_systimer_op_store_keeps_a_straight_run_unless_ledc_has_output() {
+        struct Counting<'a> {
+            inner: soc::CoreBus<'a>,
+            polls: usize,
+        }
+
+        impl Bus for Counting<'_> {
+            fn instruction_bus(&self, addr: u32) -> bool {
+                self.inner.instruction_bus(addr)
+            }
+            fn fetch(&mut self, now: Cycle, addr: u32) -> Result<u32, Exit> {
+                self.inner.fetch(now, addr)
+            }
+            fn load(&mut self, now: Cycle, addr: u32, width: Width) -> Result<u32, Exit> {
+                self.inner.load(now, addr, width)
+            }
+            fn store(
+                &mut self,
+                now: Cycle,
+                addr: u32,
+                width: Width,
+                value: u32,
+            ) -> Result<(), Exit> {
+                self.inner.store(now, addr, width, value)
+            }
+            fn interrupts(&mut self, now: Cycle) -> u32 {
+                self.polls += 1;
+                self.inner.interrupts(now)
+            }
+            fn begin_step(&mut self, now: Cycle) {
+                self.inner.begin_step(now);
+            }
+            fn access_moves_lines(&self, addr: u32) -> bool {
+                self.inner.access_moves_lines(addr)
+            }
+            fn load_moves_lines(&self, addr: u32) -> bool {
+                self.inner.load_moves_lines(addr)
+            }
+            fn next_event(&mut self, now: Cycle) -> Option<Cycle> {
+                self.inner.next_event(now)
+            }
+            fn yields(&self) -> bool {
+                self.inner.yields()
+            }
+            fn code_version(&self) -> Option<u64> {
+                self.inner.code_version()
+            }
+            fn fetch_held(&self) -> bool {
+                self.inner.fetch_held()
+            }
+        }
+
+        let mut program = Program::new(&[SYSTIMER, 1 << 30]);
+        program.l32r(2, 0).l32r(3, 1).movi(5, 40);
+        let top = program.pc();
+        program
+            .s32i(3, 2, 0x04)
+            .s32i(3, 2, 0x08)
+            .rri8(2, 4, 2, 0x44)
+            .addi(5, 5, -1)
+            .bnez(5, top)
+            .raw(&LOOP);
+
+        let mut chip = program.chip();
+        {
+            let bus = chip.soc.bus();
+            assert!(!bus.access_moves_lines(SYSTIMER + 0x04));
+            assert!(!bus.access_moves_lines(SYSTIMER + 0x08));
+            for offset in [0x00, 0x20, 0x34, 0x50, 0x64, 0x6c] {
+                assert!(bus.access_moves_lines(SYSTIMER + offset), "{offset:#x}");
+            }
+        }
+        let mut core = chip.cores.core(CoreId::Pro).clone();
+        let mut bus = Counting {
+            inner: chip.soc.bus(),
+            polls: 0,
+        };
+        let stop = core.run_until(&mut bus, Cycle(500));
+        assert_eq!(stop, orbe_xtensa::Stop::Spin);
+        assert!(core.a(4) > 0, "snapshot latched a nonzero count");
+        #[cfg(not(feature = "poll-skip-check"))]
+        assert!(
+            bus.polls < 15,
+            "80 OP stores stayed in one straight run (polls = {})",
+            bus.polls
+        );
+
+        // Once LEDC has output waiting, a SYSTIMER OP store rearms the run and ends the straight
+        // run so the LEDC record and drive move are delivered on time.
+        let mut ledc_prog = Program::new(&[SYSTIMER, 1 << 30]);
+        ledc_prog.l32r(2, 0).l32r(3, 1).movi(5, 20);
+        let top = ledc_prog.pc();
+        ledc_prog
+            .s32i(3, 2, 0x04)
+            .s32i(3, 2, 0x08)
+            .addi(5, 5, -1)
+            .bnez(5, top)
+            .raw(&LOOP);
+        let setup = [ledc_on(3), duty(2).to_vec()].concat();
+        let mut chip = ledc_prog.chip();
+        for &(addr, value) in &setup {
+            chip.soc
+                .bus()
+                .store(Cycle(0), addr, Width::Word, value)
+                .unwrap();
+        }
+        chip.soc.rearmed = false;
+        chip.soc.changed = None;
+        chip.soc.ledc.settle(c(10), chip.soc.clock.source.apb());
+        assert!(chip.soc.ledc.has_output());
+        {
+            let bus = chip.soc.bus();
+            assert!(bus.access_moves_lines(SYSTIMER + 0x04));
+            assert!(bus.access_moves_lines(SYSTIMER + 0x08));
+        }
+        let mut core = chip.cores.core(CoreId::Pro).clone();
+        let mut bus = Counting {
+            inner: chip.soc.bus(),
+            polls: 0,
+        };
+        assert_eq!(core.run_until(&mut bus, Cycle(100)), orbe_xtensa::Stop::Bus);
+        assert!(
+            bus.inner.soc.rearmed,
+            "OP store rearmed while LEDC output waited"
+        );
     }
 
     /// A load from a block the model does not simulate ends the run at the load, where one
@@ -2064,6 +2203,52 @@ mod tests {
                 Fault::FlashCommand(FlashRefusal::Spi0, pro(program.entry() + 6))
             ))
         );
+    }
+
+    /// Enabling SPI1 interrupts, auto-wait-idle, auto-suspend or manual suspend/resume ends the
+    /// run loudly with `chip.unsupported_setting`.
+    #[test]
+    fn unsupported_spi1_controls_end_the_run() {
+        const SPI1: u32 = 0x6000_2000;
+        let cases = [
+            (SPI1 + spi1::INT_ENA, 1, Refused::Interrupt("SPI1")),
+            (
+                SPI1 + spi1::WAITI_CTRL,
+                spi1::WAITI_EN,
+                Refused::Register("SPI1", "auto_wait_idle"),
+            ),
+            (
+                SPI1 + spi1::SUS_CTRL,
+                spi1::FLASH_PES_EN,
+                Refused::Register("SPI1", "auto_suspend"),
+            ),
+            (
+                SPI1 + spi1::SUS_CMD,
+                spi1::SUS_CMD_UNRUN,
+                Refused::Register("SPI1", "suspend"),
+            ),
+        ];
+        for (address, value, expected) in cases {
+            let program = store_after_two_loads(address, value, 0);
+            assert_eq!(
+                program.chip().run_until(c(1000)),
+                Some(Halt::Fault(
+                    c(2),
+                    Fault::Refused(expected, pro(program.entry() + 6))
+                )),
+                "{address:#x} = {value:#x}"
+            );
+        }
+        // Clearing WAITI_EN / FLASH_PES_EN / INT_ENA is allowed (as IDF does during init).
+        for address in [
+            SPI1 + spi1::INT_ENA,
+            SPI1 + spi1::WAITI_CTRL,
+            SPI1 + spi1::SUS_CTRL,
+            SPI1 + spi1::SUS_CMD,
+        ] {
+            let mut chip = store_after_two_loads(address, 0, 0).chip();
+            assert_eq!(chip.run_until(c(1000)), None, "clear {address:#x}");
+        }
     }
 
     /// A load from a cache window ends the run where the MMU maps no flash: on a chip with no

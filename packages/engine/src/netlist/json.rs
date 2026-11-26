@@ -97,6 +97,8 @@ pub(crate) struct WireRating {
     unit: String,
     #[serde(default)]
     basis: Option<WireBasis>,
+    #[serde(default)]
+    characterized: bool,
 }
 
 /// `"peak"`, or `{ "sustained": { "average": "rms" | "mean", "tau": <seconds> } }`, which may
@@ -682,7 +684,13 @@ pub(crate) fn resolve_rating(
     rating: Option<WireRating>,
     out: &mut Vec<Diagnostic>,
 ) -> Option<Option<Rating>> {
-    let Some(WireRating { value, unit, basis }) = rating else {
+    let Some(WireRating {
+        value,
+        unit,
+        basis,
+        characterized,
+    }) = rating
+    else {
         return Some(None);
     };
     let limit = resolve_value(part, field, expected, true, WireValue { value, unit }, out);
@@ -715,6 +723,7 @@ pub(crate) fn resolve_rating(
         si: limit?.si,
         basis: basis?,
         peak: peak?,
+        characterized,
     }))
 }
 

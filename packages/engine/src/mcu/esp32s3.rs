@@ -21,7 +21,7 @@ use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
 use crate::netlist::json::{PinMap, WireValue, resolve_limit, resolve_some_pins, resolve_value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
 use crate::ratings::{Ceiling, PinRatings, PinWindow};
-use crate::watch::Signal;
+use crate::watch::{Signal, Watch};
 use orbe_espressif::s3::{self, Bridge};
 
 /// The pin pairs the chip joins at DC, for `net.floating`, by pin index: each GPIO to `VCC`
@@ -41,6 +41,9 @@ const _: () = assert!(Esp32s3::PINS.len() == 2 + DC_PATHS.len() / 2);
 pub(crate) fn dc_paths(mcu: &Esp32s3) -> &'static [(usize, usize)] {
     &DC_PATHS[..2 * (mcu.pins.len() - 2)]
 }
+
+/// Margin inside the strict rising supply comparator so an exact 3.0 V supply reads high.
+const SUPPLY_BOUND_INSIDE_V: f64 = 1e-6;
 
 /// USB Serial/JTAG internal PHY Full-Speed D+ pull-up on GPIO20 at `PULLUP_VALUE = 0` (reset):
 /// typical 2.4 kohm per ESP-IDF v5.5.5 `soc/esp32s3/register/soc/usb_wrap_struct.h` and
@@ -72,7 +75,21 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
             })
             .collect(),
     };
-    let (outputs, watches) = pads.build();
+    let (outputs, mut watches) = pads.build();
+    // Supply watch with hysteresis:
+    // - `rise` turns high once V(VCC) - V(GND) enters the recommended operating range
+    //   (3.0 V min, ESP32-S3 Series Datasheet v2.2 Section 5.2, Table 5-2), offset 1 uV inside
+    //   the strict comparator so an exact 3.0 V supply reads high.
+    // - `fall` turns low at or below the brown-out threshold (2.44 V, ESP-IDF v5.5.5
+    //   `CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7`; ESP32-S3 Series Datasheet v2.2 Section 2.5.3).
+    let supply = |offset| Signal {
+        terms: vec![(Node::from(vcc), 1.0), (Node::from(gnd), -1.0)],
+        offset,
+    };
+    watches.push(Watch {
+        rise: supply(s3::OPERATING_SUPPLY_MIN_V - SUPPLY_BOUND_INSIDE_V),
+        fall: supply(s3::MIN_SUPPLY_V),
+    });
     // V(pin) - V(GND) of each ADC pad, in the order the bridge reads them.
     let samples = pins
         .iter()

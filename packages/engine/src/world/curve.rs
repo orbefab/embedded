@@ -86,6 +86,15 @@ pub enum Curve {
     /// `y * exp(beta * (1 / T - 1 / T0))`, with `T` and `T0` the kelvin of `w` and `x` in degC.
     /// An NTC thermistor's B equation. `beta` is in kelvin.
     Beta { x: Value, y: Value, beta: Value },
+    /// `y * exp(a + b / T + c / T^2 + d / T^3)`, with `T` the kelvin of `w` in degC.
+    /// An NTC thermistor's extended Steinhart-Hart polynomial (such as Vishay NTCLE100E3).
+    SteinhartHart {
+        y: Value,
+        a: Value,
+        b: Value,
+        c: Value,
+        d: Value,
+    },
     /// The line through `(x0, y0)` and `(x1, y1)`. A sensor with a linear output, such as an
     /// LM35's 10 mV per degC.
     Linear {
@@ -115,6 +124,11 @@ impl Curve {
                 let inverse = 1.0 / (w + ZERO_C) - 1.0 / (x.si.get() + ZERO_C);
                 y.si.get() * libm::exp(beta.si.get() * inverse)
             }
+            Curve::SteinhartHart { y, a, b, c, d } => {
+                let u = 1.0 / (w + ZERO_C);
+                let exponent = a.si.get() + u * (b.si.get() + u * (c.si.get() + u * d.si.get()));
+                y.si.get() * libm::exp(exponent)
+            }
             Curve::Linear { x0, y0, x1, y1 } => {
                 let (x0, y0) = (x0.si.get(), y0.si.get());
                 let slope = (y1.si.get() - y0) / (x1.si.get() - x0);
@@ -123,10 +137,40 @@ impl Curve {
         }
     }
 
+    /// World values at which to check the field's value rule: the two ends of `[min, max]`, plus
+    /// any interior stationary point of a polynomial curve.
+    pub(crate) fn check_points(&self, min: f64, max: f64) -> Vec<f64> {
+        let mut points = vec![min, max];
+        if let Curve::SteinhartHart { b, c, d, .. } = self {
+            let (b, c, d) = (b.si.get(), c.si.get(), d.si.get());
+            let (u_lo, u_hi) = (1.0 / (max + ZERO_C), 1.0 / (min + ZERO_C));
+            let mut push_u = |u: f64| {
+                if u > u_lo && u < u_hi {
+                    points.push(1.0 / u - ZERO_C);
+                }
+            };
+            if d == 0.0 {
+                if c != 0.0 {
+                    push_u(-b / (2.0 * c));
+                }
+            } else {
+                // Derivative of a + b*u + c*u^2 + d*u^3 is 3*d*u^2 + 2*c*u + b.
+                let disc = c * c - 3.0 * b * d;
+                if disc >= 0.0 {
+                    let root = disc.sqrt();
+                    push_u((-c - root) / (3.0 * d));
+                    push_u((-c + root) / (3.0 * d));
+                }
+            }
+        }
+        points
+    }
+
     pub fn kind(&self) -> &'static str {
         match self {
             Curve::Power { .. } => "power",
             Curve::Beta { .. } => "beta",
+            Curve::SteinhartHart { .. } => "steinhart_hart",
             Curve::Linear { .. } => "linear",
         }
     }

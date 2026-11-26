@@ -1,0 +1,8 @@
+{
+  "part": "battery-9v",
+  "units": "mm",
+  "anchors": [
+    {"lead": 1, "node": null, "also": [], "at": [-47.8, -1.27, 1.4], "axis": [-1.0, 0.0, 0.0], "kind": "socket"},
+    {"lead": 2, "node": null, "also": [], "at": [-47.8, 1.27, 1.4], "axis": [-1.0, 0.0, 0.0], "kind": "socket"}
+  ]
+}

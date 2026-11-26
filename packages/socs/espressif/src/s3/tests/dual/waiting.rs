@@ -675,3 +675,82 @@ fn a_gpio_interrupt_on_the_app_cpu_runs_its_own_map() {
         );
     }
 }
+
+/// While the PRO CPU waits in `WAITI` for a SYSTIMER alarm, the APP CPU runs a loop that stores
+/// `UPDATE` to `UNIT0_OP` and `UNIT1_OP` and reads the latched count, then writes it to `DATA`
+/// and raises GPIO4. The sleeping PRO CPU stays asleep across every snapshot store (within a
+/// tight slice budget), and the outputs, alarm tick and latched count equal those of a run split
+/// every cycle where the PRO CPU wakes at every step.
+#[test]
+fn a_systimer_snapshot_store_keeps_a_sleeping_core_asleep() {
+    let mut app = Program::at(APP, &[SYSTIMER, 1 << 30, DATA, GPIO, GPIO4]);
+    app.l32r(2, 0).l32r(3, 1).movi(5, 60);
+    let top = app.pc();
+    app.s32i(3, 2, 0x04)
+        .s32i(3, 2, 0x08)
+        .l32i(6, 2, 0x44)
+        .addi(5, 5, -1)
+        .bnez(5, top)
+        .l32r(7, 2)
+        .s32i(6, 7, 0)
+        .l32r(8, 3)
+        .l32r(9, 4)
+        .s32i(9, 8, 0x24)
+        .s32i(9, 8, 0x08)
+        .raw(&LOOP);
+    let pro = pro_waits(&app);
+    let handler = pads_high(PRO_VECTORS + 0x300, GPIO21);
+    let make = || {
+        let mut chip = chip(&pro, &boot_rom(), &[&app, &handler]);
+        arm_alarm(&mut chip, CoreId::Pro, 400, 0);
+        chip
+    };
+    let seen = however_split(make, 1500);
+    assert_eq!(pad(&seen, 0).len(), 2, "APP CPU raised GPIO4");
+    assert_eq!(pad(&seen, 1).len(), 2, "PRO CPU alarm raised GPIO21");
+    assert!(
+        pad(&seen, 0)[1].0 < pad(&seen, 1)[1].0,
+        "APP loop finished before the alarm fired"
+    );
+
+    let mut whole = make();
+    whole.cores.slices_left = 30;
+    while whole.run_until(c(1500)).is_some() {}
+    let latched_whole = whole.soc.bus().load(Cycle(0), DATA, Width::Word).unwrap();
+    assert!(latched_whole > 0);
+
+    let mut stepped = make();
+    for limit in 1..=1500 {
+        while stepped.run_until(c(limit)).is_some() {}
+    }
+    let latched_stepped = stepped.soc.bus().load(Cycle(0), DATA, Width::Word).unwrap();
+    assert_eq!(latched_whole, latched_stepped);
+}
+
+/// A store to a SYSTIMER alarm register still wakes a sleeping core: the PRO CPU waits in
+/// `WAITI` for alarm 0 armed a second away, and the APP CPU pulls alarm 0 forward by storing a
+/// near target and loading it. The PRO CPU wakes and raises GPIO21 at the new alarm's cycle
+/// however the run splits.
+#[test]
+fn a_systimer_alarm_store_wakes_a_sleeping_core() {
+    let mut app = Program::at(APP, &[SYSTIMER, 100]);
+    app.l32r(2, 0)
+        .delay(5, 30)
+        .l32r(3, 1)
+        .s32i(3, 2, 0x20)
+        .movi(3, 1)
+        .s32i(3, 2, 0x50)
+        .raw(&LOOP);
+    let pro = pro_waits(&app);
+    let handler = pads_high(PRO_VECTORS + 0x300, GPIO21);
+    let make = || {
+        let mut chip = chip(&pro, &boot_rom(), &[&app, &handler]);
+        arm_alarm(&mut chip, CoreId::Pro, SECOND, 0);
+        chip
+    };
+    let seen = however_split(make, 600);
+    assert_eq!(
+        pad(&seen, 1),
+        [(c(256), PadDrive::Low), (c(257), PadDrive::High)]
+    );
+}

@@ -587,6 +587,9 @@ pub struct Rating {
     /// The most any one sample may take, in the same unit, when the datasheet gives a peak or
     /// surge limit beside a sustained one. Only a sustained basis carries it.
     pub peak: Option<Finite>,
+    /// True when the sheet states no absolute maximum and this limit is the largest load the
+    /// sheet characterizes (such as a primary alkaline cell's plotted test drains).
+    pub characterized: bool,
 }
 
 /// How a datasheet means a rating.

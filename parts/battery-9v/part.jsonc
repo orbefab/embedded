@@ -1,0 +1,76 @@
+// 9 V PP3 (ANSI 1604A / IEC 6LR61 / 6LF22) alkaline battery with snap clip and 2-pin lead.
+// Thevenin model: 9.0 V open-circuit EMF (Energizer 522) in series with 1.7 ohm fresh internal
+// resistance (Duracell MN1604 1700 mohm impedance at 1 kHz and 21 C; Energizer 522 publishes
+// no IR and Energizer's IR bulletin notes DC effective resistance is higher). Current warns
+// past 50 mA, the highest continuous load plotted on Energizer 522 (1 s time constant from
+// its 1 s smoke-detector pulse).
+{
+  "format": 5,
+  "part": "battery-9v",
+  "version": "0.1.0",
+  "title": "9 V alkaline battery, PP3 (Energizer 522)",
+  "summary": "9 V PP3 alkaline battery (ANSI 1604A / 6LR61) with snap clip and 2-pin lead. Models 9.0 V EMF, 1.7 Ω 1 kHz impedance and 50 mA characterized load.",
+  "tags": ["battery", "9v", "9 volt", "pp3", "6lr61", "power", "supply", "cell", "alkaline"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Energizer 522 Product Datasheet (Form No. 522GL1019)": "https://data.energizer.com/pdfs/522.pdf",
+    "Energizer Battery Internal Resistance Technical Bulletin v1.1.0": "https://data.energizer.com/pdfs/batteryir.pdf",
+    "Duracell MN1604 9V Alkaline Datasheet": null,
+  },
+  "real": {
+    "generic": true,
+    "maker": "Energizer",
+    "number": "522",
+    "datasheet": "Energizer 522 Product Datasheet (Form No. 522GL1019)",
+  },
+  "uses": {
+    "battery-9v-cell": "0.1.0",
+    "resistor-0603": "0.2.0",
+  },
+  "parts": {
+    "cell": { "type": "battery-9v-cell" },
+    "r_int": {
+      "type": "resistor-0603",
+      "resistance": {
+        "value": 1.7,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "Duracell MN1604 9V Alkaline Datasheet",
+            "at": "p1 Specifications, Impedance: 1,700 m-ohm @ 1kHz (same ANSI 1604A / 6LR61 class as Energizer 522, which publishes no IR; Energizer IR Bulletin v1.1.0 p1 notes 1 kHz impedance is lower than DC effective resistance)",
+            "basis": "nominal",
+          },
+        },
+      },
+    },
+  },
+  "wires": [
+    ["pos", "r_int.a", { "kind": "trace" }],
+    ["r_int.b", "cell.pos", { "kind": "trace" }],
+    ["neg", "cell.neg", { "kind": "trace" }],
+  ],
+  // Internal parts sit completely inside the opaque 46.4 x 26.5 x 17.5 mm battery body.
+  "layout": {
+    "cell": { "at": [0, 0, 6.0] },
+    "r_int": { "at": [8.0, 0, 6.0] },
+  },
+  "pins": { "pos": [1], "neg": [2] },
+  "not_simulated": [
+    {
+      "what": "DC internal resistance",
+      "why": "1.7 ohm is Duracell MN1604's 1 kHz AC impedance (Energizer 522 publishes no internal resistance and Energizer's IR bulletin gives DC values only for cylindrical cells). Per Energizer's IR bulletin v1.1.0 p1, total DC effective resistance is higher than 1 kHz impedance due to ionic polarization.",
+    },
+    {
+      "what": "capacity and depletion",
+      "why": "The EMF stays at 9.0 V and the series resistance stays at 1.7 ohm. Energizer 522 plots continuous discharge bars to 4.8 V at 10, 25 and 50 mA (with no data table), and a real cell's voltage falls while its internal resistance rises as it discharges.",
+    },
+    {
+      "what": "temperature and polarization",
+      "why": "Series resistance is fixed at 1.7 ohm, with no cold-temperature rise and no slow electrochemical voltage recovery after a load pulse.",
+    },
+    {
+      "what": "self-heating and venting",
+      "why": "Neither cited sheet states an absolute maximum current; loads past 50 mA and direct shorts (~5.3 A) warn rating.current as beyond the sheet's characterized loads and keep running instead of heating, venting or collapsing the cell.",
+    },
+  ],
+}

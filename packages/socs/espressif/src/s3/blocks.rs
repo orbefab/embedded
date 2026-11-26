@@ -5,9 +5,8 @@
 //! `I2C_MST_ANA_CONF0_REG`'s block, and `USB_OTG` is TinyUSB's `DWC2_FS_REG_BASE`. `RADIO` is the
 //! space between UART2 and USB Serial/JTAG, where Wi-Fi and Bluetooth keep the registers IDF
 //! does not document, such as `WDEV_RND_REG`. `RESERVED` fills each gap the headers leave, so
-//! every address in peripheral space has a row. SENS's temperature-sensor registers,
-//! `SENS_SAR_TSENS_CTRL_REG` and `SENS_SAR_TSENS_CTRL2_REG`, and its touch registers,
-//! `SENS_SAR_TOUCH_CONF_REG` to `SENS_SAR_TOUCH_APPR_STATUS_REG`, are rows of their own, named
+//! every address in peripheral space has a row. SENS's touch registers,
+//! `SENS_SAR_TOUCH_CONF_REG` to `SENS_SAR_TOUCH_APPR_STATUS_REG`, are a row of their own, named
 //! SENS.
 //!
 //! A register that a model keeps, or that [`quiet`](super::soc) names, works whatever its row
@@ -34,7 +33,6 @@ const I2S: Sim = Not("an I2S audio port");
 const MCPWM: Sim = Not("the motor-control PWM that ESP32Servo drives servos with");
 const OTG: Sim = Not("the USB OTG port that TinyUSB, USB MSC and USB HID use");
 const CACHE_TAGS: Sim = Not("the cache tag memory");
-pub(crate) const TSENS: &str = "the temperature sensor that temperatureRead uses";
 
 const BLOCKS: &[(u32, &str, Sim)] = &[
     (0x6000_0000, "UART0", Runs),
@@ -53,8 +51,6 @@ const BLOCKS: &[(u32, &str, Sim)] = &[
     (0x6000_8000, "RTC_CNTL", Runs),
     (0x6000_8400, "RTCIO", Runs),
     (0x6000_8800, "SENS", Runs),
-    (0x6000_8850, "SENS", Not(TSENS)),
-    (0x6000_8858, "SENS", Runs),
     (
         0x6000_885c,
         "SENS",
@@ -80,11 +76,7 @@ const BLOCKS: &[(u32, &str, Sim)] = &[
     (0x6001_4000, "UHCI0", UHCI),
     (0x6001_5000, "SLCHOST", SDIO),
     (0x6001_6000, "RMT", Runs),
-    (
-        0x6001_7000,
-        "PCNT",
-        Not("the pulse counter that encoder libraries use"),
-    ),
+    (0x6001_7000, "PCNT", Runs),
     (0x6001_8000, "SLC", SDIO),
     (0x6001_9000, "LEDC", Runs),
     (0x6001_a000, "RESERVED", RESERVED),
@@ -122,9 +114,9 @@ const BLOCKS: &[(u32, &str, Sim)] = &[
     (0x6002_f000, "RADIO", RADIO),
     (0x6003_8000, "USB_SERIAL_JTAG", Runs),
     (0x6003_9000, "USB_WRAP", OTG),
-    (0x6003_a000, "AES", Not("the AES accelerator")),
+    (0x6003_a000, "AES", Runs),
     (0x6003_b000, "SHA", Runs),
-    (0x6003_c000, "RSA", Not("the RSA accelerator")),
+    (0x6003_c000, "RSA", Runs),
     (
         0x6003_d000,
         "DIGITAL_SIGNATURE",
@@ -222,6 +214,7 @@ mod tests {
             "UART1",
             "I2C0",
             "RMT",
+            "PCNT",
             "LEDC",
             "TIMG0",
             "TIMG1",
@@ -232,7 +225,9 @@ mod tests {
             "I2C1",
             "UART2",
             "USB_SERIAL_JTAG",
+            "AES",
             "SHA",
+            "RSA",
             "GDMA",
             "APB_SARADC",
             "SYSTEM",
@@ -257,11 +252,6 @@ mod tests {
         }
         let refused = [
             (
-                0x6001_7030,
-                "PCNT",
-                "the pulse counter that encoder libraries use",
-            ),
-            (
                 0x6001_e10c,
                 "MCPWM0",
                 "the motor-control PWM that ESP32Servo drives servos with",
@@ -270,8 +260,6 @@ mod tests {
             (0x6002_b000, "TWAI", "the CAN bus controller"),
             (0x6003_1204, "RADIO", "the Wi-Fi and Bluetooth radio"),
             (0x6001_1000, "BT", "the Bluetooth radio"),
-            (0x6000_8850, "SENS", TSENS),
-            (0x6000_8854, "SENS", TSENS),
             (0x6000_889c, "SENS", "the touch sensor that touchRead uses"),
             (0x6000_885c, "SENS", "the touch sensor that touchRead uses"),
             (0x6000_88e0, "SENS", "the touch sensor that touchRead uses"),
@@ -296,10 +284,13 @@ mod tests {
         }
         for addr in [
             0x6000_884c,
+            0x6000_8850,
+            0x6000_8854,
             0x6000_8858,
             0x6000_88e4,
             0x6000_8488,
             0x6000_e040,
+            0x6001_7030,
             0x600d_0000,
         ] {
             assert_eq!(unsimulated(addr), None, "{addr:#x}");

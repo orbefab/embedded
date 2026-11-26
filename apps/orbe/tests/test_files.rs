@@ -450,3 +450,214 @@ fn orbe_test_names_the_scene_each_test_opened() {
     assert_eq!(tests[2]["scene"], "alt.jsonc");
     assert_eq!(tests[2]["ok"], false);
 }
+
+/// Copies `blocks/nano-oled` (which runs much slower than real time during its I2C transfer
+/// after t=122ms) into a temporary project with its `tests/` replaced by `tests`.
+fn slow_oled_project(tests: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    live::common::copy_dir(&live::common::repo().join("blocks/nano-oled"), dir.path());
+    fs::remove_file(dir.path().join("block.jsonc")).unwrap();
+    std::os::unix::fs::symlink(live::common::repo().join("parts"), dir.path().join("parts"))
+        .unwrap();
+    fs::remove_dir_all(dir.path().join("tests")).unwrap();
+    fs::create_dir(dir.path().join("tests")).unwrap();
+    for (name, body) in tests {
+        fs::write(dir.path().join("tests").join(name), body).unwrap();
+    }
+    dir
+}
+
+fn orbe_with_env(dir: &std::path::Path, args: &[&str], envs: &[(&str, &str)]) -> live::Run {
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_orbe"));
+    registry_env::apply(&mut command);
+    command
+        .args(args)
+        .current_dir(dir)
+        .env_remove("ORBE_TEST_STEP_BUDGET")
+        .env_remove("ORBE_TEST_STEP_PROGRESS");
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let output = command.output().unwrap();
+    live::Run {
+        code: output.status.code().unwrap(),
+        stdout: String::from_utf8(output.stdout).unwrap(),
+        stderr: String::from_utf8(output.stderr).unwrap(),
+    }
+}
+
+#[test]
+fn a_slow_test_step_hits_step_timeout_and_the_remaining_tests_still_run() {
+    let dir = slow_oled_project(&[
+        (
+            "a_slow.test",
+            "open\nstep 122ms\nstep 3000ms\nexpect no diagnostics\n",
+        ),
+        ("b_after.test", "open\nstep 10ms\nexpect no diagnostics\n"),
+    ]);
+
+    // Default limit path (shortened via the debug-only seam so the test runs quickly).
+    let run = orbe_with_env(dir.path(), &["test"], &[("ORBE_TEST_STEP_BUDGET", "200ms")]);
+    assert_eq!(run.code, 1, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            .contains("FAIL tests/a_slow.test:3 (scene.jsonc): step 3000ms\n"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout
+            .contains("error[step_timeout]: step stopped at t="),
+        "{}",
+        run.stdout
+    );
+    assert!(run.stdout.contains("of the 3s asked"), "{}", run.stdout);
+    assert!(
+        run.stdout.contains("after the 200ms wall-time limit"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.contains("slower than real time"),
+        "{}",
+        run.stdout
+    );
+    assert!(run.stdout.contains("--step-timeout"), "{}", run.stdout);
+    assert!(
+        run.stdout
+            .contains("PASS tests/b_after.test (scene.jsonc)\n"),
+        "{}",
+        run.stdout
+    );
+    assert!(
+        run.stdout.ends_with("1 passed, 1 failed\n"),
+        "{}",
+        run.stdout
+    );
+
+    // Same failure with explicit `--step-timeout` and `--json`.
+    let json_run = orbe(dir.path(), &["test", "--step-timeout", "200ms", "--json"]);
+    assert_eq!(json_run.code, 1, "{}{}", json_run.stdout, json_run.stderr);
+    assert!(json_run.stderr.is_empty(), "{}", json_run.stderr);
+    let envelope = json_run.json();
+    assert_eq!(envelope["ok"], false, "{envelope}");
+    assert_eq!(envelope["data"]["passed"], 1, "{envelope}");
+    assert_eq!(envelope["data"]["failed"], 1, "{envelope}");
+    let tests = envelope["data"]["tests"].as_array().unwrap();
+    assert_eq!(tests[0]["file"], "tests/a_slow.test");
+    assert_eq!(tests[0]["ok"], false);
+    assert_eq!(tests[0]["line"], 3);
+    assert_eq!(tests[0]["error"]["code"], "step_timeout");
+    let msg = tests[0]["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("slower than real time"), "{msg}");
+    assert!(msg.contains("of the 3s asked"), "{msg}");
+    assert_eq!(tests[1]["file"], "tests/b_after.test");
+    assert_eq!(tests[1]["ok"], true);
+}
+
+#[test]
+fn step_timeout_flag_raises_limit_and_handles_until_and_usage() {
+    let dir = slow_oled_project(&[(
+        "a.test",
+        "open\nstep 122ms\nstep 2ms\nexpect no diagnostics\n",
+    )]);
+
+    // Too short: fails with step_timeout.
+    let short = orbe(dir.path(), &["test", "--step-timeout", "1ms"]);
+    assert_eq!(short.code, 1, "{}{}", short.stdout, short.stderr);
+    assert!(
+        short.stdout.contains("error[step_timeout]:"),
+        "{}",
+        short.stdout
+    );
+
+    // Longer limit: passes (both after and before the subcommand).
+    let long = orbe(dir.path(), &["test", "--step-timeout", "30s"]);
+    assert_eq!(long.code, 0, "{}{}", long.stdout, long.stderr);
+    let before = orbe(dir.path(), &["--step-timeout", "30s", "test"]);
+    assert_eq!(before.code, 0, "{}{}", before.stdout, before.stderr);
+
+    // `step --until` hitting the wall-time limit fails with `step_timeout`.
+    let until_dir = slow_oled_project(&[(
+        "until.test",
+        "open\nstep 122ms\nstep --until @oled.display.screen lit --timeout 10s\nexpect no diagnostics\n",
+    )]);
+    let until = orbe(until_dir.path(), &["test", "--step-timeout", "200ms"]);
+    assert_eq!(until.code, 1, "{}{}", until.stdout, until.stderr);
+    assert!(
+        until
+            .stdout
+            .contains("error[step_timeout]: step --until stopped at t="),
+        "{}",
+        until.stdout
+    );
+    assert!(
+        until.stdout.contains("of the 10s timeout"),
+        "{}",
+        until.stdout
+    );
+    assert!(
+        until.stdout.contains("expected: @oled.display.screen lit"),
+        "{}",
+        until.stdout
+    );
+    assert!(until.stdout.contains("--step-timeout"), "{}", until.stdout);
+
+    // Help documents `--step-timeout` and the 120s default.
+    let help = orbe(dir.path(), &["test", "--help"]);
+    assert_eq!(help.code, 0, "{}{}", help.stdout, help.stderr);
+    assert!(help.stdout.contains("--step-timeout"), "{}", help.stdout);
+    assert!(help.stdout.contains("120s"), "{}", help.stdout);
+
+    // Invalid `--step-timeout` is a usage error (exit 2) in text and JSON.
+    for bad in ["0s", "nope"] {
+        let text = orbe(dir.path(), &["test", "--step-timeout", bad]);
+        assert_eq!(text.code, 2, "{bad}: {}{}", text.stdout, text.stderr);
+        assert!(
+            text.stderr.contains("error[usage]:"),
+            "{bad}: {}",
+            text.stderr
+        );
+
+        let json = orbe(dir.path(), &["test", "--step-timeout", bad, "--json"]);
+        assert_eq!(json.code, 2, "{bad}: {}{}", json.stdout, json.stderr);
+        assert!(json.stderr.is_empty(), "{bad}: {}", json.stderr);
+        assert_eq!(json.json()["error"]["code"], "usage");
+    }
+}
+
+#[test]
+fn a_long_test_prints_one_progress_line_to_stderr_unless_json() {
+    let dir = slow_oled_project(&[(
+        "a.test",
+        "open\nstep 122ms\nstep 2ms\nstep 2ms\nexpect no diagnostics\n",
+    )]);
+
+    let run = orbe_with_env(
+        dir.path(),
+        &["test", "--step-timeout", "30s"],
+        &[("ORBE_TEST_STEP_PROGRESS", "50ms")],
+    );
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    let lines: Vec<&str> = run.stderr.lines().collect();
+    assert_eq!(lines.len(), 1, "expected one progress line: {:?}", lines);
+    let after_t = lines[0]
+        .strip_prefix("tests/a.test:")
+        .and_then(|rest| rest.split_once(": still running at t="))
+        .map(|(_, reached)| reached)
+        .unwrap_or_else(|| panic!("unexpected progress line: {}", lines[0]));
+    assert!(
+        orbe_session::Duration::parse(after_t).is_ok_and(|reached| reached.as_ps() > 0),
+        "{}",
+        lines[0]
+    );
+
+    let json = orbe_with_env(
+        dir.path(),
+        &["test", "--step-timeout", "30s", "--json"],
+        &[("ORBE_TEST_STEP_PROGRESS", "50ms")],
+    );
+    assert_eq!(json.code, 0, "{}{}", json.stdout, json.stderr);
+    assert!(json.stderr.is_empty(), "{}", json.stderr);
+    assert_eq!(json.json()["ok"], true);
+}

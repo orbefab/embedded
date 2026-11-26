@@ -1,0 +1,146 @@
+// Vishay BCcomponents NTCLE100E3103JB0 (10 kohm at 25 C, B25/85 = 3977 K).
+// Resistance follows Vishay's extended Steinhart-Hart polynomial from Doc. No. 29049 p4
+// (row 9, Mat A, Bn = 3977 K), matching the p10 R/T table within 0.04 % from -40 to 125 C.
+{
+  "format": 7,
+  "part": "thermistor-ntc-10k",
+  "version": "0.1.0",
+  "title": "NTC thermistor, 10 kΩ (NTCLE100E3103JB0)",
+  "summary": "10 kΩ NTC thermistor (25 °C, B25/85 3977 K, 50 V DC). Above 5 mW, unmodelled 7 mW/K self-heating moves the real reading off the R/T table.",
+  "tags": ["thermistor", "ntc", "10k", "b3977", "temperature", "thermometer", "sensor", "analog", "resistor", "through-hole"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)": "https://www.vishay.com/docs/29049/ntcle100.pdf",
+  },
+  "real": {
+    "generic": true,
+    "maker": "Vishay",
+    "number": "NTCLE100E3103JB0",
+    "datasheet": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+  },
+  "pins": { "a": [1], "b": [2] },
+  "model": {
+    "kind": "resistor",
+    "resistance": {
+      "kind": "world",
+      "quantity": "temperature",
+      "curve": {
+        "kind": "steinhart_hart",
+        "y": {
+          "value": 10000.0,
+          "unit": "ohm",
+          "source": {
+            "datasheet": {
+              "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+              "at": "p2 Electrical Data and Ordering Information, NTCLE100E3103JB0 row, R25 = 10 000 ohm (+/- 5 %)",
+              "basis": "nominal",
+            },
+          },
+        },
+        "a": {
+          "value": -14.6337,
+          "unit": "1",
+          "source": {
+            "datasheet": {
+              "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+              "at": "p4 Parameter for Determining Nominal Resistance Values, row 9 (Mat A, Bn = 3977 K), A = -14.6337",
+              "basis": "nominal",
+            },
+          },
+        },
+        "b": {
+          "value": 4791.842,
+          "unit": "K",
+          "source": {
+            "datasheet": {
+              "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+              "at": "p4 Parameter for Determining Nominal Resistance Values, row 9 (Mat A, Bn = 3977 K), B = 4791.842 K",
+              "basis": "nominal",
+            },
+          },
+        },
+        "c": {
+          "value": -115334.0,
+          "unit": "K^2",
+          "source": {
+            "datasheet": {
+              "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+              "at": "p4 Parameter for Determining Nominal Resistance Values, row 9 (Mat A, Bn = 3977 K), C = -115334 K^2",
+              "basis": "nominal",
+            },
+          },
+        },
+        "d": {
+          "value": -3730535.0,
+          "unit": "K^3",
+          "source": {
+            "datasheet": {
+              "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+              "at": "p4 Parameter for Determining Nominal Resistance Values, row 9 (Mat A, Bn = 3977 K), D = -3.730535E+06 K^3",
+              "basis": "nominal",
+            },
+          },
+        },
+      },
+    },
+    "ratings": {
+      "power": {
+        "value": 0.005,
+        "unit": "W",
+        "characterized": true,
+        "basis": {
+          "sustained": {
+            "average": "mean",
+            "tau": {
+              "value": 15.0,
+              "unit": "s",
+              "source": {
+                "datasheet": {
+                  "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+                  "at": "p1 Quick Reference Data, Thermal time constant tau = 15 s (for information only)",
+                  "basis": "typical",
+                },
+              },
+            },
+          },
+        },
+        "source": {
+          "datasheet": {
+            "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+            "at": "p1 Operating temperature range at zero power dissipation (-40 to +125 C continuously), p1 Max. power dissipation at 55 C = 500 mW, and p2 Power Derating Note: zero power is considered as measuring power max. 1 % of max. power (5 mW); above 5 mW, unmodelled 7 mW/K self-heating moves the real reading off the R/T table",
+            "basis": "max",
+          },
+        },
+      },
+      "voltage": {
+        "value": 50.0,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "Vishay NTCLE100E3 Datasheet (Doc. No. 29049)",
+            "at": "p2 Power Derating Note: Voltage on the NTC should always be below 50 VDC",
+            "basis": "max",
+          },
+        },
+      },
+    },
+  },
+  "not_simulated": [
+    {
+      "what": "self-heating",
+      "why": "Resistance follows world temperature only. The sheet's 7 mW/K dissipation factor is not modelled; above the 5 mW zero-power condition (max 1 % of the 500 mW max at 55 C), self-heating moves the real reading off the R/T table, so rating.power warns past 5 mW as beyond the load the sheet characterizes.",
+    },
+    {
+      "what": "response time",
+      "why": "Resistance follows temperature steps immediately. The sheet gives about 1.2 s response time in oil and a 15 s thermal time constant (for information only).",
+    },
+    {
+      "what": "tolerance",
+      "why": "Every part uses the nominal R/T curve. The JB0 ordering code allows +/- 5 % on R25 and +/- 0.75 % on B25/85.",
+    },
+    {
+      "what": "power derating curve",
+      "why": "The 5 mW threshold is the sheet's zero-power condition for the -40 to 125 C R/T table, not a damage limit. Vishay 29049 p1 gives 500 mW maximum power at 55 C (p2 derates from 100 % across 0 to 55 C to 0 % at -40 C and 85 C), so loads above 5 mW keep running and warn that unmodelled self-heating moves the real reading off the table.",
+    },
+  ],
+}

@@ -134,6 +134,60 @@ fn the_three_curves_give_their_closed_forms() {
     };
     assert_eq!(ldr.at(50.0), 2000.0);
     assert_eq!(ldr.at(0.0), 1e6, "the dark reads max");
+
+    // Vishay NTCLE100E3103JB0 (Doc 29049 p4 row 9, Mat A, B25/85 = 3977 K) vs p10 R/T table.
+    let ntc = Curve::SteinhartHart {
+        y: si(10_000.0),
+        a: si(-14.6337),
+        b: si(4791.842),
+        c: si(-115_334.0),
+        d: si(-3_730_535.0),
+    };
+    for (temp_c, table_ohm) in [
+        (-40.0, 332_094.0),
+        (-20.0, 96_358.0),
+        (-10.0, 55_046.0),
+        (0.0, 32_554.0),
+        (25.0, 10_000.0),
+        (85.0, 1_070.0),
+        (125.0, 338.7),
+    ] {
+        let got = ntc.at(temp_c);
+        let rel = (got - table_ohm).abs() / table_ohm;
+        assert!(rel < 0.001, "at {temp_c} C: got {got}, table {table_ohm}");
+    }
+}
+
+#[test]
+fn a_steinhart_hart_curve_parses_and_rejects_non_temperature() {
+    let sh = format!(
+        r#"{{ "kind": "steinhart_hart", "y": {}, "a": {}, "b": {}, "c": {}, "d": {} }}"#,
+        value(10_000.0, "ohm"),
+        value(-14.6337, "1"),
+        value(4791.842, "K"),
+        value(-115_334.0, "K^2"),
+        value(-3_730_535.0, "K^3")
+    );
+    let json = document(
+        &format!(r#"{{ "temperature": {} }}"#, value(-40.0, "degC")),
+        &resistor(&driven("temperature", &sh)),
+    );
+    let netlist = netlist::parse(json.as_bytes()).unwrap();
+    let (_, part) = netlist.parts().next().unwrap();
+    let Model::Resistor(r) = &part.model else {
+        panic!("a resistor");
+    };
+    let Param::World(field) = &r.resistance else {
+        panic!("a world-driven resistance");
+    };
+    assert_eq!(field.curve.kind(), "steinhart_hart");
+    assert!((field.values().initial().get() - 332_094.0).abs() < 10.0);
+
+    let wrong_qty = document(
+        &format!(r#"{{ "light": {} }}"#, value(300.0, "lx")),
+        &resistor(&driven("light", &sh)),
+    );
+    assert_eq!(one(&wrong_qty).0, "netlist.world");
 }
 
 fn si(value: f64) -> orbe_engine::netlist::Value {

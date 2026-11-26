@@ -59,6 +59,7 @@ A `Fault` ends the run. A `Note` is a warning, and the run goes on. Each is a co
 | `FlashCommand` | `chip.flash_command` |
 | `UnsupportedClock` | `chip.unsupported_clock` |
 | `FaultRestart` | `chip.fault_restart` |
+| `PowerOnRestart` | `chip.power_on_restart` |
 | `UnmappedLoad` | `chip.unmapped_load` |
 
 | `Note` | Diagnostic |

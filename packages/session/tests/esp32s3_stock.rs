@@ -1624,6 +1624,721 @@ fn a_part_holding_scl_low_past_timeout_fails_bmp280_begin_without_faulting() {
     run(&mut live, &block_dir, "expect no diagnostics");
 }
 
+/// Stock `Preferences` counter and typed keys write to NVS flash, read back across close/reopen,
+/// and keep incrementing in flash across button presses.
+#[test]
+fn a_stock_preferences_sketch_writes_and_reads_keys_and_increments_on_press() {
+    play(
+        "esp32s3-stock-preferences",
+        &[
+            r#"step --until serial contains "prefs count=1 signed=-42 name=orbe raw=12345678 len=4" --timeout 1s"#,
+            "press @btn1",
+            r#"step --until serial contains "press count=2" --timeout 1s"#,
+            "release @btn1",
+            "step 30ms",
+            "press @btn1",
+            r#"step --until serial contains "press count=3" --timeout 1s"#,
+            "release @btn1",
+            "expect no diagnostics",
+        ],
+    );
+}
+
+/// Stock `EEPROM.begin/write/commit/read` persists bytes across `end()`/`begin()` and overwrites.
+#[test]
+fn a_stock_eeprom_sketch_commits_reads_and_overwrites_bytes() {
+    play(
+        "esp32s3-stock-eeprom",
+        &[
+            r#"step --until serial contains "eeprom ok=111 commit=11 first=a5,5a,11,22 second=3c,5a,11,22" --timeout 1s"#,
+            "expect no diagnostics",
+        ],
+    );
+}
+
+/// Stock `nvs_flash_init` and `nvs_flash_erase` initialize NVS, erase all NVS sectors, confirm
+/// erased keys are gone, and read back newly written values with no error.
+#[test]
+fn a_stock_nvs_sketch_initializes_erases_and_reads_back_keys() {
+    play(
+        "esp32s3-stock-nvs",
+        &[
+            r#"step --until serial contains "nvs ok=1 count=99 tag=after" --timeout 2s"#,
+            "expect no diagnostics",
+        ],
+    );
+}
+
+/// Stock `LittleFS` formats blank flash, writes and appends a file, unmounts, remounts without
+/// reformatting, and reads back the saved bytes.
+#[test]
+fn a_stock_littlefs_sketch_formats_writes_appends_remounts_and_reads_back() {
+    play(
+        "esp32s3-stock-littlefs",
+        &[
+            r#"step --until serial contains "littlefs mount=11 wrote=11 text=hello flash" --timeout 2s"#,
+            "expect no diagnostics",
+        ],
+    );
+}
+
+/// Written flash survives the board's supply dropping to 0 V and returning inside a session.
+/// Note that the `esp32s3` MCU model does not power-cycle or reboot on a supply drop (nor does
+/// `CHIP_PU`/`RST` reset it); this verifies the flash contents remain intact across a supply dip
+/// and subsequent button-driven read-modify-write.
+#[test]
+fn written_flash_survives_a_supply_cycle_in_a_session() {
+    let dir = project("esp32s3-stock-preferences");
+    let netlist = orbe_scene::read(&Files::disk(), &dir.path().join("scene.jsonc")).unwrap();
+    let mut doc: serde_json::Value = serde_json::from_str(&netlist.json).unwrap();
+    let parts = doc["parts"].as_array_mut().unwrap();
+    let usb = parts
+        .iter_mut()
+        .find(|p| p["name"] == "board__j2__host")
+        .expect("devkitc has board__j2__host voltage source");
+    usb["voltage"] = serde_json::json!({
+        "kind": "steps",
+        "initial": { "value": 5.0, "unit": "V" },
+        "events": [
+            { "t_ps": 60_000_000_000u64, "level": { "value": 0.0, "unit": "V" } },
+            { "t_ps": 80_000_000_000u64, "level": { "value": 5.0, "unit": "V" } }
+        ]
+    });
+    let btn = parts
+        .iter_mut()
+        .find(|p| {
+            p["kind"] == "switch" && p["name"].as_str().is_some_and(|s| s.starts_with("btn1"))
+        })
+        .expect("scene has btn1 switch");
+    btn["events"] = serde_json::json!([
+        { "t_ps": 110_000_000_000u64, "state": "closed" },
+        { "t_ps": 140_000_000_000u64, "state": "open" }
+    ]);
+    let json = serde_json::to_vec(&doc).unwrap();
+    let mut session = orbe_engine::Session::open_json(&json, &netlist.blobs).unwrap();
+    assert_eq!(
+        session.advance_to(orbe_model::Time::from_ps(180_000_000_000)),
+        orbe_engine::Status::Running
+    );
+    let bytes: Vec<u8> = session
+        .serial_since(orbe_engine::SerialCursor::default())
+        .map(|(slice, _)| slice.iter().map(|b| b.byte).collect())
+        .unwrap_or_default();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(
+        text.contains("prefs count=1 signed=-42 name=orbe raw=12345678 len=4"),
+        "missing initial prefs write before supply cycle: {text:?}"
+    );
+    assert!(
+        text.contains("press count=2"),
+        "missing incremented count after supply cycle: {text:?}"
+    );
+    assert!(
+        session.fault().is_none(),
+        "unexpected fault: {:?}",
+        session.fault()
+    );
+}
+
+#[test]
+fn a_stock_pcnt_sketch_counts_quadrature_filters_bounce_and_fires_limit_interrupts() {
+    let (dir, mut live) = open("esp32s3-stock-pcnt");
+    let path = dir.path();
+    run(
+        &mut live,
+        path,
+        r#"step --until serial contains "ready" --timeout 300ms"#,
+    );
+    // Forward quadrature cycle (+4).
+    for line in [
+        "press @enc_a",
+        "step 2ms",
+        "press @enc_b",
+        "step 2ms",
+        "release @enc_a",
+        "step 2ms",
+        "release @enc_b",
+        "step 5ms",
+        r#"expect serial contains "count 4""#,
+    ] {
+        run(&mut live, path, line);
+    }
+    // 2 us bounce is shorter than the 5 us glitch filter and must not advance the count.
+    for line in ["press @enc_a", "step 2us", "release @enc_a", "step 5ms"] {
+        run(&mut live, path, line);
+    }
+    let snap = live
+        .run(&Command::parse("snapshot", path).unwrap().unwrap())
+        .text();
+    assert!(
+        !snap.contains("count 5"),
+        "short bounce was counted:\n{snap}"
+    );
+    // Second forward cycle hits high_limit (+8), resets to 0 and fires the watchpoint callback.
+    for line in [
+        "press @enc_a",
+        "step 2ms",
+        "press @enc_b",
+        "step 2ms",
+        "release @enc_a",
+        "step 2ms",
+        "release @enc_b",
+        "step 5ms",
+        r#"expect serial contains "limit 8""#,
+    ] {
+        run(&mut live, path, line);
+    }
+    // Reverse quadrature cycle (-4) and second reverse cycle to low_limit (-8).
+    for line in [
+        "press @enc_b",
+        "step 2ms",
+        "press @enc_a",
+        "step 2ms",
+        "release @enc_b",
+        "step 2ms",
+        "release @enc_a",
+        "step 5ms",
+        r#"expect serial contains "count -4""#,
+        "press @enc_b",
+        "step 2ms",
+        "press @enc_a",
+        "step 2ms",
+        "release @enc_b",
+        "step 2ms",
+        "release @enc_a",
+        "step 5ms",
+        r#"expect serial contains "limit -8""#,
+        "expect no diagnostics",
+    ] {
+        run(&mut live, path, line);
+    }
+}
+
+#[test]
+fn a_stock_temp_sketch_reads_ambient_and_default_temperature_across_ranges() {
+    play(
+        "esp32s3-stock-temp",
+        &[
+            r#"step --until serial contains "temp 25.0" --timeout 300ms"#,
+            "set temperature 42",
+            r#"step --until serial contains "temp 42.0" --timeout 200ms"#,
+            "set temperature 95",
+            r#"step --until serial contains "temp 95.0" --timeout 200ms"#,
+            "set temperature -25",
+            r#"step --until serial contains "temp -25.0" --timeout 200ms"#,
+            "expect no diagnostics",
+        ],
+    );
+
+    // Without a world block in scene.jsonc, ambient temperature defaults to 25 degC.
+    let dir = project("esp32s3-stock-temp");
+    let scene_path = dir.path().join("scene.jsonc");
+    let no_world = fs::read_to_string(&scene_path)
+        .unwrap()
+        .replace(",\n  \"world\": { \"temperature\": 25 }", "");
+    fs::write(&scene_path, no_world).unwrap();
+    let mut live = Live::new("t", Files::disk());
+    run(&mut live, dir.path(), "open");
+    run(
+        &mut live,
+        dir.path(),
+        r#"step --until serial contains "temp 25.0" --timeout 300ms"#,
+    );
+    run(&mut live, dir.path(), "expect no diagnostics");
+}
+
+/// Replaces the DevKitC-1's USB host 5 V source in a temporary test project with a step waveform
+/// that drops 5 V to 0 V at `drop_ps` and restores it to 5 V at `restore_ps`.
+fn schedule_devkit_usb_brownout(project_dir: &Path, drop_ps: u64, restore_ps: u64) {
+    let usb_path = project_dir.join("parts/esp32s3-devkitc-1/parts/usb-micro-b/part.jsonc");
+    let text = fs::read_to_string(&usb_path).unwrap();
+    let needle = r#""voltage": { "value": 5.0, "unit": "V", "source": { "datasheet": { "doc": "USB 2.0 specification", "at": "VBUS nominal 5.0 V, the center of the high-power range 4.75 V to 5.25 V", "basis": "nominal" } } }"#;
+    assert!(
+        text.contains(needle),
+        "unexpected usb-micro-b voltage field:\n{text}"
+    );
+    let replacement = format!(
+        r#""voltage": {{ "kind": "steps", "initial": {{ "value": 5.0, "unit": "V", "source": {{ "closed_form": {{ "note": "test" }} }} }}, "events": [{{ "t_ps": {drop_ps}, "level": {{ "value": 0.0, "unit": "V", "source": {{ "closed_form": {{ "note": "test" }} }} }} }}, {{ "t_ps": {restore_ps}, "level": {{ "value": 5.0, "unit": "V", "source": {{ "closed_form": {{ "note": "test" }} }} }} }}] }}"#
+    );
+    fs::write(&usb_path, text.replace(needle, &replacement)).unwrap();
+}
+
+/// Dropping the DevKitC-1's 5 V rail to 0 V mid-run discharges 3V3 below 2.44 V: the LED turns
+/// off and stays off across blink periods, driven/pulled GPIO pins release to unpowered, serial
+/// stops, and restoring 5 V stops the run with `chip.power_on_restart`.
+#[test]
+fn devkitc_supply_drop_stops_led_serial_and_pins_and_return_faults() {
+    // Part 1: stock blink sketch with external 100 kohm pull-downs on TX (UART0 TXD driven high)
+    // and GPIO20 (USB D+ 2.4 kohm pull-up) so we can verify pins release to unpowered.
+    let blink_dir = project("esp32s3-stock-blink");
+    let blink_scene = blink_dir.path().join("scene.jsonc");
+    let text = fs::read_to_string(&blink_scene).unwrap();
+    let text = text
+        .replace(
+            r#""led1": { "type": "led-5mm" }"#,
+            r#""led1": { "type": "led-5mm" },
+    "r_tx": { "type": "resistor-axial", "resistance": "100k" },
+    "r_dp": { "type": "resistor-axial", "resistance": "100k" }"#,
+        )
+        .replace(
+            r#"["led1.cathode", "board.GND"]"#,
+            r#"["led1.cathode", "board.GND"],
+    ["board.TX", "r_tx.a"],
+    ["r_tx.b", "board.GND"],
+    ["board.GPIO20", "r_dp.a"],
+    ["r_dp.b", "board.GND"]"#,
+        );
+    fs::write(&blink_scene, text).unwrap();
+    // Drop 5 V at 300 ms, restore at 1000 ms.
+    schedule_devkit_usb_brownout(blink_dir.path(), 300_000_000_000, 1_000_000_000_000);
+
+    let mut live = Live::new("t", Files::disk());
+    run(&mut live, blink_dir.path(), "open");
+    run(&mut live, blink_dir.path(), "step 250ms");
+    run(&mut live, blink_dir.path(), "expect @led1 lit");
+    run(
+        &mut live,
+        blink_dir.path(),
+        r#"expect serial contains "ready""#,
+    );
+    run(&mut live, blink_dir.path(), "expect @board.GPIO4 high");
+    run(&mut live, blink_dir.path(), "expect @board.TX high");
+    run(&mut live, blink_dir.path(), "expect @board.GPIO20 high");
+
+    // Step past the 300 ms drop: 3V3 discharges below 2.44 V within ~5 ms through the lit LED.
+    // Every pin releases to Drive::Off (pad leakage only: TX and GPIO20 drop near 0 V into their
+    // 100k pull-downs, and GPIO4 drops to diode-leakage voltage with sub-microamp LED current).
+    run(&mut live, blink_dir.path(), "step 100ms");
+    run(&mut live, blink_dir.path(), "expect @board.3V3 < 2.4V");
+    run(&mut live, blink_dir.path(), "expect @led1 off");
+    run(&mut live, blink_dir.path(), "expect @led1.i < 1uA");
+    run(&mut live, blink_dir.path(), "expect @board.GPIO4 low");
+    run(&mut live, blink_dir.path(), "expect @board.GPIO4 < 0.5V");
+    run(&mut live, blink_dir.path(), "expect @board.TX low");
+    run(&mut live, blink_dir.path(), "expect @board.TX < 0.05V");
+    run(&mut live, blink_dir.path(), "expect @board.GPIO20 low");
+    run(&mut live, blink_dir.path(), "expect @board.GPIO20 < 0.05V");
+
+    // Step 600 ms while still unpowered (past a full 500 ms blink toggle): stays off and silent.
+    run(&mut live, blink_dir.path(), "step 600ms");
+    run(&mut live, blink_dir.path(), "expect @led1 off");
+    run(&mut live, blink_dir.path(), "expect @led1.i < 1uA");
+    run(&mut live, blink_dir.path(), "expect @board.GPIO4 low");
+    run(&mut live, blink_dir.path(), "expect @board.GPIO4 < 0.5V");
+    run(&mut live, blink_dir.path(), "expect @board.TX low");
+    run(&mut live, blink_dir.path(), "expect @board.TX < 0.05V");
+    run(&mut live, blink_dir.path(), "expect @board.GPIO20 low");
+    run(&mut live, blink_dir.path(), "expect @board.GPIO20 < 0.05V");
+
+    // Step past 1000 ms where 5 V returns: run must fault with chip.power_on_restart.
+    let step = Command::parse("step 100ms", blink_dir.path())
+        .unwrap()
+        .unwrap();
+    let reply = live.run(&step);
+    assert!(
+        !reply.ok(),
+        "restoring 5 V after power loss must stop with chip.power_on_restart: {}",
+        reply.text()
+    );
+    assert!(
+        reply.text().contains("chip.power_on_restart"),
+        "expected chip.power_on_restart, got:\n{}",
+        reply.text()
+    );
+    let snap = live
+        .run(
+            &Command::parse("snapshot", blink_dir.path())
+                .unwrap()
+                .unwrap(),
+        )
+        .text();
+    assert!(
+        snap.contains("error[chip.power_on_restart]")
+            && snap.contains("power-on restart of the ESP32-S3 is not simulated yet"),
+        "snapshot missing power-on restart error:\n{snap}"
+    );
+
+    // Part 2: stock serial counter sketch (prints "tick" every 100 ms).
+    let serial_dir = project("esp32s3-stock-serial");
+    // Drop 5 V at 350 ms, restore at 950 ms.
+    schedule_devkit_usb_brownout(serial_dir.path(), 350_000_000_000, 950_000_000_000);
+    let mut live = Live::new("t", Files::disk());
+    run(&mut live, serial_dir.path(), "open");
+    run(&mut live, serial_dir.path(), "step 300ms");
+    run(
+        &mut live,
+        serial_dir.path(),
+        r#"expect serial contains "ready""#,
+    );
+    run(
+        &mut live,
+        serial_dir.path(),
+        r#"expect serial contains "tick""#,
+    );
+
+    // Step to 480 ms (130 ms after 5 V drops; 3V3 decays below 2.44 V via the onboard RGB LED idle
+    // draw within ~45 ms).
+    run(&mut live, serial_dir.path(), "step 180ms");
+    run(&mut live, serial_dir.path(), "expect @board.3V3 < 2.4V");
+    let Data::Snapshot(before) = run(&mut live, serial_dir.path(), "snapshot") else {
+        panic!("expected snapshot");
+    };
+    let ticks_before = before.serial.matches("tick").count();
+    assert!(ticks_before >= 2, "serial so far: {:?}", before.serial);
+
+    // Step another 400 ms (4 full tick periods) while unpowered: zero new serial output.
+    run(&mut live, serial_dir.path(), "step 400ms");
+    let Data::Snapshot(after) = run(&mut live, serial_dir.path(), "snapshot") else {
+        panic!("expected snapshot");
+    };
+    assert_eq!(
+        after.serial, before.serial,
+        "serial must stop while unpowered"
+    );
+
+    // Step past 950 ms where 5 V returns: faults with chip.power_on_restart.
+    let step = Command::parse("step 100ms", serial_dir.path())
+        .unwrap()
+        .unwrap();
+    let reply = live.run(&step);
+    assert!(
+        !reply.ok() && reply.text().contains("chip.power_on_restart"),
+        "expected chip.power_on_restart on power return, got:\n{}",
+        reply.text()
+    );
+}
+
+/// Removes the built-in USB host 5 V source from a temporary DevKitC-1 test project so an external
+/// source can drive `board.5V` or `board.3V3` directly.
+fn detach_devkit_usb_host(project_dir: &Path) {
+    let usb_path = project_dir.join("parts/esp32s3-devkitc-1/parts/usb-micro-b/part.jsonc");
+    fs::write(
+        &usb_path,
+        r#"{
+  "format": 5, "part": "usb-micro-b", "version": "0.2.1", "title": "USB micro-B socket", "license": "MIT OR Apache-2.0",
+  "summary": "Unpowered USB micro-B receptacle for external supply tests.",
+  "tags": ["usb", "connector", "socket", "surface-mount"],
+  "docs": { "USB 2.0 specification": null },
+  "real": { "generic": true, "maker": null, "number": null, "datasheet": "USB 2.0 specification" },
+  "pins": { "VBUS": [1], "DM": [2], "DP": [3], "ID": [4], "GND": [5, 6, 7, 8, 9] },
+  "joins_only": true
+}
+"#,
+    )
+    .unwrap();
+}
+
+/// Stepping `3V3` to the exact 2.44 V brown-out level and holding it there stops the ESP32-S3
+/// without raising `chip.power_on_restart`; opening an external 5 V feed lets `3V3` discharge
+/// monotonically through 2.44 V toward 0 V without a spurious restart; re-applying 5 V after the
+/// brown-out raises `chip.power_on_restart` as `3V3` rises back into the 3.0 V operating range.
+#[test]
+fn devkitc_exact_brownout_and_monotonic_fall_do_not_false_restart() {
+    // Part 1: 3V3 steps from 3.3 V to exact 2.44 V at 200 ms and stays there through 600 ms.
+    let sag_dir = project("esp32s3-stock-blink");
+    detach_devkit_usb_host(sag_dir.path());
+    fs::create_dir_all(sag_dir.path().join("v3")).unwrap();
+    fs::write(
+        sag_dir.path().join("v3/part.jsonc"),
+        r#"{
+  "format": 1,
+  "part": "v3",
+  "license": "MIT OR Apache-2.0",
+  "title": "v3",
+  "pins": { "plus": [1], "minus": [2] },
+  "model": {
+    "kind": "voltage_source",
+    "voltage": {
+      "kind": "steps",
+      "initial": { "value": 3.3, "unit": "V", "source": { "closed_form": { "note": "test" } } },
+      "events": [
+        { "t_ps": 200000000000, "level": { "value": 2.44, "unit": "V", "source": { "closed_form": { "note": "test" } } } }
+      ]
+    },
+    "pins": { "p": "plus", "n": "minus" }
+  }
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        sag_dir.path().join("scene.jsonc"),
+        r#"{
+  "format": 1,
+  "parts": {
+    "board": { "type": "esp32s3-devkitc-1", "app": "app.bin", "partitions": "partitions.bin" },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+    "led1": { "type": "led-5mm" },
+    "v3": { "type": "./v3" },
+    "r5": { "type": "resistor-axial", "resistance": "1M" }
+  },
+  "wires": [
+    ["board.GPIO4", "r1.a"],
+    ["r1.b", "led1.anode"],
+    ["led1.cathode", "board.GND"],
+    ["v3.plus", "board.3V3"],
+    ["v3.minus", "board.GND"],
+    ["board.5V", "r5.a"],
+    ["r5.b", "board.GND"]
+  ],
+  "ground": "board.GND"
+}
+"#,
+    )
+    .unwrap();
+
+    let mut live = Live::new("t", Files::disk());
+    run(&mut live, sag_dir.path(), "open");
+    run(&mut live, sag_dir.path(), "step 200ms");
+    run(
+        &mut live,
+        sag_dir.path(),
+        r#"expect serial contains "ready""#,
+    );
+    let Data::Snapshot(at_drop) = run(&mut live, sag_dir.path(), "snapshot") else {
+        panic!("expected snapshot");
+    };
+    run(&mut live, sag_dir.path(), "step 5ns");
+    run(&mut live, sag_dir.path(), "step 400ms");
+    run(&mut live, sag_dir.path(), "expect @led1 off");
+    run(&mut live, sag_dir.path(), "expect @board.GPIO4 low");
+    let Data::Snapshot(after_sag) = run(&mut live, sag_dir.path(), "snapshot") else {
+        panic!("expected snapshot");
+    };
+    assert_eq!(
+        after_sag.serial, at_drop.serial,
+        "chip must stay silent while held at 2.44 V"
+    );
+    let sag_snap_text = live
+        .run(&Command::parse("snapshot", sag_dir.path()).unwrap().unwrap())
+        .text();
+    assert!(
+        !sag_snap_text.contains("chip.power_on_restart"),
+        "holding 3V3 at 2.44 V must not raise chip.power_on_restart:\n{sag_snap_text}"
+    );
+
+    // Part 2: external 5 V feed switched onto board.5V, opened to let 3V3 fall monotonically
+    // through 2.44 V to near 0 V, then closed again to confirm restart fault on power return.
+    let ext_dir = project("esp32s3-stock-blink");
+    detach_devkit_usb_host(ext_dir.path());
+    fs::create_dir_all(ext_dir.path().join("vext")).unwrap();
+    fs::write(
+        ext_dir.path().join("vext/part.jsonc"),
+        r#"{
+  "format": 1,
+  "part": "vext",
+  "license": "MIT OR Apache-2.0",
+  "title": "vext",
+  "pins": { "plus": [1], "minus": [2] },
+  "model": {
+    "kind": "voltage_source",
+    "voltage": { "value": 5.0, "unit": "V", "source": { "closed_form": { "note": "test" } } },
+    "pins": { "p": "plus", "n": "minus" }
+  }
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        ext_dir.path().join("scene.jsonc"),
+        r#"{
+  "format": 1,
+  "parts": {
+    "board": { "type": "esp32s3-devkitc-1", "app": "app.bin", "partitions": "partitions.bin" },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+    "led1": { "type": "led-5mm" },
+    "vext": { "type": "./vext" },
+    "sw": { "type": "tactile-switch-6mm" }
+  },
+  "wires": [
+    ["board.GPIO4", "r1.a"],
+    ["r1.b", "led1.anode"],
+    ["led1.cathode", "board.GND"],
+    ["vext.plus", "sw.a"],
+    ["sw.b", "board.5V"],
+    ["vext.minus", "board.GND"]
+  ],
+  "ground": "board.GND"
+}
+"#,
+    )
+    .unwrap();
+
+    let mut live = Live::new("t", Files::disk());
+    run(&mut live, ext_dir.path(), "open");
+    run(&mut live, ext_dir.path(), "step 30ms");
+    run(&mut live, ext_dir.path(), "expect @board.5V < 0.01V");
+    run(&mut live, ext_dir.path(), "expect @board.3V3 < 1.2V");
+    run(&mut live, ext_dir.path(), "expect @led1 off");
+
+    // Power on once: boots cleanly with no error.
+    run(&mut live, ext_dir.path(), "press @sw");
+    run(
+        &mut live,
+        ext_dir.path(),
+        r#"step --until serial contains "ready" --timeout 80ms"#,
+    );
+    run(&mut live, ext_dir.path(), "step 20ms");
+    run(&mut live, ext_dir.path(), "expect @board.3V3 > 3.2V");
+    run(&mut live, ext_dir.path(), "expect @board.GPIO4 high");
+    run(&mut live, ext_dir.path(), "expect @led1 lit");
+
+    // Open the 5 V feed: 3V3 falls monotonically past 2.44 V to its unpowered floor with no
+    // restart error.
+    run(&mut live, ext_dir.path(), "release @sw");
+    run(&mut live, ext_dir.path(), "step 500ms");
+    run(&mut live, ext_dir.path(), "expect @board.5V < 0.01V");
+    run(&mut live, ext_dir.path(), "expect @board.3V3 < 1.2V");
+    run(&mut live, ext_dir.path(), "expect @led1 off");
+    run(&mut live, ext_dir.path(), "expect @board.GPIO4 low");
+
+    // Re-close the 5 V feed: 3V3 rises back to 3.3 V and raises chip.power_on_restart on the way up.
+    run(&mut live, ext_dir.path(), "press @sw");
+    let step = Command::parse("step 20ms", ext_dir.path())
+        .unwrap()
+        .unwrap();
+    let reply = live.run(&step);
+    assert!(
+        !reply.ok() && reply.text().contains("chip.power_on_restart"),
+        "re-applying 5 V after brown-out must fault with chip.power_on_restart, got:\n{}",
+        reply.text()
+    );
+}
+
+/// Stepping an ideal `3V3` rail on the DevKitC-1 from 0 V to exactly 3.0 V (which is both the
+/// ESP32-S3's Table 5-2 minimum and the onboard SK68XXMINI-HS RGB LED's 3.0 V `min_supply`)
+/// completes promptly, boots into `"ready"`, keeps ticking, and raises no `chip.power_on_restart`.
+#[test]
+fn devkitc_cold_start_step_to_exact_3v_boots_and_ticks() {
+    let dir = project("esp32s3-stock-serial");
+    // Hold the DevKitC-1 USB VBUS at 0 V so the ideal `v3` source alone drives 3V3.
+    let usb_path = dir
+        .path()
+        .join("parts/esp32s3-devkitc-1/parts/usb-micro-b/part.jsonc");
+    let usb_text = fs::read_to_string(&usb_path).unwrap();
+    let needle = r#""voltage": { "value": 5.0, "unit": "V", "source": { "datasheet": { "doc": "USB 2.0 specification", "at": "VBUS nominal 5.0 V, the center of the high-power range 4.75 V to 5.25 V", "basis": "nominal" } } }"#;
+    assert!(
+        usb_text.contains(needle),
+        "unexpected usb-micro-b voltage field:\n{usb_text}"
+    );
+    fs::write(
+        &usb_path,
+        usb_text.replace(
+            needle,
+            r#""voltage": { "value": 0.0, "unit": "V", "source": { "closed_form": { "note": "test" } } }"#,
+        ),
+    )
+    .unwrap();
+    fs::create_dir_all(dir.path().join("v3")).unwrap();
+    fs::write(
+        dir.path().join("v3/part.jsonc"),
+        r#"{
+  "format": 1,
+  "part": "v3",
+  "license": "MIT OR Apache-2.0",
+  "title": "v3",
+  "pins": { "plus": [1], "minus": [2] },
+  "model": {
+    "kind": "voltage_source",
+    "voltage": {
+      "kind": "steps",
+      "initial": { "value": 0.0, "unit": "V", "source": { "closed_form": { "note": "test" } } },
+      "events": [
+        { "t_ps": 80000000000, "level": { "value": 3.0, "unit": "V", "source": { "closed_form": { "note": "test" } } } }
+      ]
+    },
+    "pins": { "p": "plus", "n": "minus" }
+  }
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("scene.jsonc"),
+        r#"{
+  "format": 1,
+  "parts": {
+    "board": { "type": "esp32s3-devkitc-1", "app": "app.bin", "partitions": "partitions.bin" },
+    "v3": { "type": "./v3" }
+  },
+  "wires": [
+    ["v3.plus", "board.3V3"],
+    ["v3.minus", "board.GND"]
+  ],
+  "ground": "board.GND"
+}
+"#,
+    )
+    .unwrap();
+
+    let mut live = Live::new("t", Files::disk());
+    run(&mut live, dir.path(), "open");
+    run(&mut live, dir.path(), "step 80ms");
+    let Data::Snapshot(before) = run(&mut live, dir.path(), "snapshot") else {
+        panic!("expected snapshot");
+    };
+    assert!(
+        before.serial.is_empty(),
+        "chip must stay silent while 3V3 is 0 V: {:?}",
+        before.serial
+    );
+
+    // Cross the 80 ms 0 V -> 3.0 V edge and step 1 ms past it; must complete without chattering.
+    run(&mut live, dir.path(), "step 1000ps");
+    run(&mut live, dir.path(), "step 1ms");
+    run(
+        &mut live,
+        dir.path(),
+        r#"step --until serial contains "ready" --timeout 150ms"#,
+    );
+    run(&mut live, dir.path(), "step 250ms");
+    let Data::Snapshot(after) = run(&mut live, dir.path(), "snapshot") else {
+        panic!("expected snapshot");
+    };
+    assert!(
+        after.serial.contains("ready"),
+        "expected ready banner, got: {:?}",
+        after.serial
+    );
+    assert!(
+        after.serial.matches("tick").count() >= 2,
+        "expected chip to keep ticking after ready, got: {:?}",
+        after.serial
+    );
+    let snap_text = live
+        .run(&Command::parse("snapshot", dir.path()).unwrap().unwrap())
+        .text();
+    assert!(
+        !snap_text.contains("chip.power_on_restart"),
+        "cold start to 3.0 V must not raise chip.power_on_restart:\n{snap_text}"
+    );
+}
+
+#[test]
+fn a_stock_crypto_sketch_verifies_sha_aes_and_rsa_vectors() {
+    play(
+        "esp32s3-stock-crypto",
+        &[
+            r#"step --until serial contains "all crypto ok" --timeout 500ms"#,
+            r#"expect serial contains "sha1 ok""#,
+            r#"expect serial contains "sha256 ok""#,
+            r#"expect serial contains "sha384 ok""#,
+            r#"expect serial contains "sha512 ok""#,
+            r#"expect serial contains "sha512_dma ok""#,
+            r#"expect serial contains "aes128_ecb ok""#,
+            r#"expect serial contains "aes256_ecb ok""#,
+            r#"expect serial contains "aes128_cbc ok""#,
+            r#"expect serial contains "aes256_cbc ok""#,
+            r#"expect serial contains "aes256_cbc_irq ok""#,
+            r#"expect serial contains "aes128_ctr ok""#,
+            r#"expect serial contains "aes256_ctr ok""#,
+            r#"expect serial contains "aes128_gcm ok""#,
+            r#"expect serial contains "rsa2048_pk ok""#,
+            "expect no diagnostics",
+        ],
+    );
+}
+
 /// Stock Arduino sketch using `Wire` (I2C0 on GPIO8/9) to read a `gy-bmp280` and `Wire1` (I2C1
 /// on GPIO17/18) to drive an `oled-ssd1306-128x64` with `Adafruit_SSD1306`, displaying the BMP280
 /// chip ID on the OLED with no diagnostics.

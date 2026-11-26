@@ -6,6 +6,8 @@ A test is `tests/<name>.test`. Each line is a live command without `orbe`. `#` s
 
 `orbe test` runs every `tests/*.test`, each in a fresh session, and stops a file at its first failed line. `orbe test <file or folder>…` runs only those. `orbe test -v` prints each command and its reply. The file's session ends with `orbe test`. A session from `orbe open` keeps running, untouched. `orbe test` takes no `--session` and ignores `ORBE_SESSION`.
 
+Each `step` has a 120 s wall-time limit (`step_timeout`); pass `orbe test --step-timeout <duration>` for another.
+
 `--json`, `--session`, `--help` or `-h` on a line is `usage`, except as the text after `serial contains`. Live, `--help` anywhere prints help, so `orbe expect serial contains --help` prints help, while the same test line looks for that text. A test file refuses `play` and `pause` with `usage`.
 
 `expect` and `step --until` take the same conditions. Quote `<`, `>` and a colour in a shell.
