@@ -25,15 +25,11 @@ use crate::newton::Side;
 use crate::semiconductor::junction::{Shockley, mismatch, pnjlim};
 
 fn forward(zener: &Zener) -> Shockley {
-    Shockley::new(
-        zener.emission_coefficient.si.get(),
-        zener.saturation_current.si.get(),
-    )
+    zener.laws[0]
 }
 
 fn breakdown(zener: &Zener) -> Shockley {
-    let derived = &zener.breakdown;
-    Shockley::from_parts(derived.saturation_current, derived.nvt, derived.vcrit)
+    zener.laws[1]
 }
 
 /// Limits each solved junction voltage against its own prior and its own `vcrit`.
@@ -265,6 +261,9 @@ pub struct Zener {
     pub max_current: Option<Rating>,
     /// Watt, greater than 0. `None` is an explicit `"power": null`.
     pub max_power: Option<Rating>,
+    /// The forward junction's law, from `saturation_current` and `emission_coefficient`, then
+    /// the breakdown junction's, from `breakdown`.
+    laws: [Shockley; 2],
 }
 
 /// `Isb`, `nbvt` and `vcrit` of a zener's breakdown junction.
@@ -425,18 +424,25 @@ pub(crate) fn resolve_zener(ctx: ParseCtx<'_>, wire: WireZener) -> Option<Zener>
     if rejected {
         return None;
     }
+    let (pins, is, n, rs, vz, izt, zzt, rb, breakdown) =
+        (pins?, is?, n?, rs?, vz?, izt?, zzt?, rb?, breakdown?);
+    let laws = [
+        Shockley::new(n.si.get(), is.si.get()),
+        Shockley::from_parts(breakdown.saturation_current, breakdown.nvt, breakdown.vcrit),
+    ];
     Some(Zener {
-        pins: pins?,
-        saturation_current: is?,
-        emission_coefficient: n?,
-        series_resistance: rs?,
-        zener_voltage: vz?,
-        zener_current: izt?,
-        zener_impedance: zzt?,
-        breakdown_resistance: rb?,
-        breakdown: breakdown?,
+        pins,
+        saturation_current: is,
+        emission_coefficient: n,
+        series_resistance: rs,
+        zener_voltage: vz,
+        zener_current: izt,
+        zener_impedance: zzt,
+        breakdown_resistance: rb,
+        breakdown,
         max_current: max_current?,
         max_power: max_power?,
+        laws,
     })
 }
 

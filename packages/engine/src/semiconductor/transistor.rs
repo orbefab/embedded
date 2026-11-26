@@ -57,6 +57,7 @@ const E: usize = 2;
 const BE: usize = 0;
 const BC: usize = 1;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Params {
     be: Shockley,
     bc: Shockley,
@@ -84,18 +85,29 @@ struct Point {
 }
 
 impl Params {
+    /// The ones `bjt` made when it was parsed.
     fn new(bjt: &Bjt) -> Params {
-        let is = bjt.saturation_current.si.get();
+        bjt.params
+    }
+
+    /// From the model card's `IS`, `NF`, `NR`, `BF`, `BR`, `VAF` and `IKF`.
+    fn of(
+        is: &Value,
+        nf: &Value,
+        nr: &Value,
+        bf: &Value,
+        br: &Value,
+        vaf: &Value,
+        ikf: Option<&Value>,
+    ) -> Params {
+        let is = is.si.get();
         Params {
-            be: Shockley::new(bjt.forward_emission.si.get(), is),
-            bc: Shockley::new(bjt.reverse_emission.si.get(), is),
-            bf: bjt.forward_beta.si.get(),
-            br: bjt.reverse_beta.si.get(),
-            vaf: bjt.early_voltage.si.get(),
-            inv_ikf: bjt
-                .forward_knee_current
-                .as_ref()
-                .map_or(0.0, |ikf| 1.0 / ikf.si.get()),
+            be: Shockley::new(nf.si.get(), is),
+            bc: Shockley::new(nr.si.get(), is),
+            bf: bf.si.get(),
+            br: br.si.get(),
+            vaf: vaf.si.get(),
+            inv_ikf: ikf.map_or(0.0, |ikf| 1.0 / ikf.si.get()),
         }
     }
 
@@ -1275,6 +1287,8 @@ pub struct Bjt {
     pub max_current: Option<Rating>,
     /// Watt, greater than 0. `None` is an explicit `"power": null`.
     pub max_power: Option<Rating>,
+    /// The junction laws and gains, made from the fields above.
+    params: Params,
 }
 
 impl Bjt {
@@ -1454,22 +1468,26 @@ fn resolve_bjt(ctx: ParseCtx<'_>, wire: WireBjt) -> Option<Bjt> {
     if !junctions {
         return None;
     }
+    let (pins, is, bf, br, nf, nr, vaf) = (pins?, is?, bf?, br?, nf?, nr?, vaf?);
+    let (rb, rc, re, cje, cjc, ikf) = (rb?, rc?, re?, cje?, cjc?, ikf?);
+    let params = Params::of(&is, &nf, &nr, &bf, &br, &vaf, ikf.as_ref());
     Some(Bjt {
-        pins: pins?,
-        saturation_current: is?,
-        forward_beta: bf?,
-        reverse_beta: br?,
-        forward_emission: nf?,
-        reverse_emission: nr?,
-        early_voltage: vaf?,
-        base_resistance: rb?,
-        collector_resistance: rc?,
-        emitter_resistance: re?,
-        base_emitter_capacitance: cje?,
-        base_collector_capacitance: cjc?,
-        forward_knee_current: ikf?,
+        pins,
+        saturation_current: is,
+        forward_beta: bf,
+        reverse_beta: br,
+        forward_emission: nf,
+        reverse_emission: nr,
+        early_voltage: vaf,
+        base_resistance: rb,
+        collector_resistance: rc,
+        emitter_resistance: re,
+        base_emitter_capacitance: cje,
+        base_collector_capacitance: cjc,
+        forward_knee_current: ikf,
         max_current: max_current?,
         max_power: max_power?,
+        params,
     })
 }
 

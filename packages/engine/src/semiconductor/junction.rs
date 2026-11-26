@@ -26,39 +26,39 @@ const ARG_MAX: f64 = 700.0;
 /// A conductance no operating point reaches. The cap keeps `Is*exp(arg)/nvt` under this.
 const G_CAP: f64 = 1e100;
 
-/// One junction's current law. A diode has one, and a transistor one per junction.
-#[derive(Clone, Copy, Debug)]
+/// One junction's current law. A diode has one, and a transistor one per junction. A part
+/// makes its laws once, when it is parsed.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Shockley {
     is: f64,
     pub(crate) nvt: f64,
     pub(crate) vcrit: f64,
+    /// Largest `exp` argument whose current and slope stay finite and under `G_CAP`.
+    cap: f64,
 }
 
 impl Shockley {
     pub(crate) fn new(emission: f64, is: f64) -> Shockley {
         let scale = junction_scale(emission, is).expect("parse accepts only a finite junction");
-        Shockley {
-            is,
-            nvt: scale.nvt,
-            vcrit: scale.vcrit,
-        }
+        Shockley::from_parts(is, scale.nvt, scale.vcrit)
     }
 
     /// A junction whose saturation current, `n*VT` and `vcrit` are already known.
     pub(crate) fn from_parts(is: f64, nvt: f64, vcrit: f64) -> Shockley {
-        Shockley { is, nvt, vcrit }
-    }
-
-    /// Largest `exp` argument whose current and slope stay finite and under `G_CAP`.
-    fn arg_cap(&self) -> f64 {
         // In log space, so a tiny `Is` cannot overflow the quotient.
-        ARG_MAX.min(libm::log(G_CAP) + libm::log(self.nvt) - libm::log(self.is))
+        let cap = ARG_MAX.min(libm::log(G_CAP) + libm::log(nvt) - libm::log(is));
+        Shockley {
+            is,
+            nvt,
+            vcrit,
+            cap,
+        }
     }
 
     /// `Is * (exp(vj / nvt) - 1)`. Current, slope, whether the argument was clamped, and the
     /// voltage that was evaluated.
     fn exponential(&self, vj: f64) -> (f64, f64, bool, f64) {
-        let cap = self.arg_cap();
+        let cap = self.cap;
         let arg = vj / self.nvt;
         let limited = arg > cap;
         let used = if limited { cap } else { arg };
@@ -86,10 +86,7 @@ impl Shockley {
 }
 
 fn shockley(junction: &Junction) -> Shockley {
-    Shockley::new(
-        junction.emission_coefficient.si.get(),
-        junction.saturation_current.si.get(),
-    )
+    junction.law
 }
 
 /// Limits the solved junction voltage against `prior` and checks the
@@ -207,11 +204,7 @@ mod tests {
 
     #[test]
     fn the_reverse_law_meets_the_exponential_at_three_nvt() {
-        let params = Shockley {
-            is: 6.711e-10,
-            nvt: 0.114,
-            vcrit: 2.0,
-        };
+        let params = Shockley::from_parts(6.711e-10, 0.114, 2.0);
         let edge = -3.0 * params.nvt;
         let (above, above_slope, _, _) = params.evaluate(edge);
         let (below, below_slope, _, _) = params.evaluate(edge * (1.0 + 1e-12));
@@ -227,12 +220,8 @@ mod tests {
 
     #[test]
     fn the_cap_holds_the_slope_bound_for_a_tiny_saturation_current() {
-        let params = Shockley {
-            is: 1e-308,
-            nvt: 1e-300,
-            vcrit: 1e-299,
-        };
-        let cap = params.arg_cap();
+        let params = Shockley::from_parts(1e-308, 1e-300, 1e-299);
+        let cap = params.cap;
         assert!(
             (cap - 108.0 * std::f64::consts::LN_10).abs() < 1e-9,
             "{cap}"
@@ -243,12 +232,8 @@ mod tests {
 
     #[test]
     fn evaluate_caps_only_past_the_overflow_bound_and_the_iteration_is_limited() {
-        let params = Shockley {
-            is: 1e-14,
-            nvt: 0.026,
-            vcrit: 0.7,
-        };
-        let cap = params.arg_cap();
+        let params = Shockley::from_parts(1e-14, 0.026, 0.7);
+        let cap = params.cap;
         assert!(cap > 200.0, "{cap}");
         let (below, _, open, voltage) = params.evaluate(params.nvt * 100.0);
         assert!(!open);
@@ -393,6 +378,8 @@ pub struct Junction {
     pub max_current: Option<Rating>,
     /// Watt, greater than 0. `None` is an explicit `"power": null`.
     pub max_power: Option<Rating>,
+    /// The junction's law, made from `saturation_current` and `emission_coefficient`.
+    law: Shockley,
 }
 
 impl Junction {
@@ -513,13 +500,16 @@ pub(crate) fn resolve_junction(ctx: ParseCtx<'_>, wire: WireJunction) -> Option<
         });
         return None;
     }
+    let (pins, is, n) = (pins?, is?, n?);
+    let law = Shockley::new(n.si.get(), is.si.get());
     Some(Junction {
-        pins: pins?,
-        saturation_current: is?,
-        emission_coefficient: n?,
+        pins,
+        saturation_current: is,
+        emission_coefficient: n,
         series_resistance: rs?,
         max_current: max_current?,
         max_power: max_power?,
+        law,
     })
 }
 
