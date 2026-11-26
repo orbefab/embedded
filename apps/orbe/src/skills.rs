@@ -23,6 +23,11 @@ pub const SKILLS: &[Skill] = &[
         text: include_str!("../skills/esp32.md"),
     },
     Skill {
+        name: "boards",
+        about: "Load for exact board pinouts, pin functions, supply limits, and breadboard holes.",
+        text: include_str!("../skills/boards.md"),
+    },
+    Skill {
         name: "parts",
         about: "Load when keeping a part copy, a version, a Block, a buy link, or an addressable LED.",
         text: include_str!("../skills/parts.md"),
@@ -34,7 +39,7 @@ pub const SKILLS: &[Skill] = &[
     },
     Skill {
         name: "breadboards",
-        about: "Load when seating a part on a breadboard, or a hole or a strip is wrong.",
+        about: "Load when laying out a scene, seating a part on a breadboard, or a hole or a strip is wrong.",
         text: include_str!("../skills/breadboards.md"),
     },
     Skill {
@@ -487,15 +492,14 @@ mod tests {
         );
     }
 
-    /// Each board pin the reader leaves unsimulated, with the reason it gives, is in that
-    /// board's own list. The chip's catalog number and the L LED are too.
+    /// Each board pin the reader leaves unsimulated is named in that board's section of the
+    /// boards skill, along with its chip or module catalog number and on-board LEDs.
     #[test]
-    fn the_arduino_skill_names_every_pin_a_board_leaves_unsimulated() {
-        let skill = find("arduino").unwrap();
+    fn the_boards_skill_names_every_pin_a_board_leaves_unsimulated() {
+        let skill = find("boards").unwrap();
         let text = skill.text().unwrap();
-        let ids = ["nano-board".to_string(), "uno-board".to_string()];
-        assert!(ids.len() >= 2, "{ids:?}");
-        for id in &ids {
+        let avr_ids = ["nano-board", "uno-board"];
+        for id in avr_ids {
             let block = section(&text, id);
             let bullets = bullet_list(block);
             assert!(
@@ -541,6 +545,49 @@ mod tests {
             let number = orbe_scene::card(&parts, chip).unwrap().real.number.unwrap();
             assert!(block.contains(&number), "{id} omits {number}");
         }
+
+        let id = "esp32s3-devkitc-1";
+        let block = section(&text, id);
+        let bullets = bullet_list(block);
+        assert!(
+            bullets.iter().any(|line| line.contains("These pins work")),
+            "{id} omits working pin list"
+        );
+        assert!(
+            block.contains("`GPIO38`") && block.contains("`LED_BUILTIN`"),
+            "{id} must state the GPIO38 versus LED_BUILTIN difference"
+        );
+        let view = drawn(id);
+        let pins: Vec<_> = view
+            .not_simulated
+            .iter()
+            .filter(|pin| pin.r#ref.chars().filter(|c| *c == '.').count() == 1)
+            .collect();
+        assert!(!pins.is_empty(), "{id} reports no unsimulated pin");
+        let missing: Vec<String> = pins
+            .iter()
+            .filter(|pin| {
+                let name = pin.r#ref.rsplit('.').next().unwrap();
+                !bullets.iter().any(|line| {
+                    line.contains("Not simulated") && line.contains(&format!("`{name}`"))
+                })
+            })
+            .map(|pin| pin.r#ref.clone())
+            .collect();
+        assert!(missing.is_empty(), "{id} omits {missing:#?}");
+        let parts = repo_parts();
+        let board = orbe_scene::card(&parts, id).unwrap();
+        let module = board
+            .uses
+            .keys()
+            .find(|used| used.starts_with("esp32s3-wroom"))
+            .unwrap();
+        let number = orbe_scene::card(&parts, module)
+            .unwrap()
+            .real
+            .number
+            .unwrap();
+        assert!(block.contains(&number), "{id} omits {number}");
     }
 
     fn repo_parts() -> std::path::PathBuf {
