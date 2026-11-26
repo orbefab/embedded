@@ -644,10 +644,10 @@ fn an_efuse_program_command_ends_the_run() {
     assert_eq!(found[0]["t_ps"], 125_000);
 }
 
-/// The flash has no erase, so a sector erase through SPI1 ends the run as a write, with its
-/// command byte.
+/// A bare-metal chip has no flash, so a sector erase through SPI1 reaches past the flash's end
+/// and ends the run with its command byte.
 #[test]
-fn a_flash_erase_ends_the_run() {
+fn a_flash_erase_with_no_flash_ends_the_run() {
     // l32r a2 <- SPI_MEM_CMD_REG of SPI1; l32r a3 <- SPI_MEM_FLASH_SE; s32i a3, a2, 0; then idle.
     let mut code = vec![0x21, 0xfe, 0xff, 0x31, 0xfe, 0xff, 0x32, 0x62, 0x00];
     code.extend(IDLE);
@@ -661,16 +661,14 @@ fn a_flash_erase_ends_the_run() {
         serde_json::json!({
             "command": 0x20,
             "pc": IRAM + 8 + 6,
-            "reason": "write",
+            "reason": "past_end",
             "symbol": "main+0x6"
         })
     );
     let message = found[0]["message"].as_str().unwrap();
     assert!(
-        message.contains("wrote the flash with command 0x20 at ")
-            && message.contains(
-                "which the model does not simulate; Wi-Fi, Bluetooth and saved settings (Preferences, EEPROM, NVS) write the flash"
-            ),
+        message.contains("sent the flash command 0x20 at ")
+            && message.contains("which reaches past the flash's end"),
         "{message}"
     );
 }

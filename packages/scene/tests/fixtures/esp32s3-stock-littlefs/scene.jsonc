@@ -1,0 +1,13 @@
+// LittleFS format, write, append, unmount, remount, and readback. The app is the stock sketch
+// packages/engine/tests/firmware/esp32s3/arduino/stock/littlefs.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    }
+  },
+  "ground": "board.GND"
+}

@@ -128,6 +128,132 @@ fn a_remap_of_the_flash_under_a_run_op_runs_the_new_page() {
     assert_eq!(chip.cores.core(CoreId::Pro).pc(), program.pc() - 3);
 }
 
+/// Rewriting a mapped flash page through SPI1 invalidates the cores' decode tables so a second
+/// call into the same IROM address runs the newly programmed instruction, and accessing IROM
+/// while WIP is still set fails loudly with `FlashRefusal::Busy(None)`.
+#[test]
+fn a_flash_rewrite_under_a_run_op_runs_the_new_op() {
+    const SPI1: u32 = 0x6000_2000;
+    const WREN: u32 = 1 << 30;
+    const SE: u32 = 1 << 24;
+    const PP: u32 = 1 << 25;
+    const RDSR: u32 = 1 << 27;
+    let callx0_a4 = [0xc0, 0x04, 0x00];
+    // Calls IROM (`movi.n a5, 1; ret.n`), erases sector 0 via SPI1, polls RDSR until WIP clears,
+    // programs `movi.n a5, 2; ret.n` at offset 0 via SPI1, polls RDSR until WIP clears, and
+    // calls IROM again.
+    let new_word = u32::from_le_bytes([0x0c, 0x25, 0x0d, 0xf0]);
+    let mut program = Program::new(&[SPI1, IROM, WREN, SE, PP, RDSR, new_word, 4 << 24]);
+    program
+        .l32r(2, 0) // a2 = SPI1
+        .l32r(4, 1) // a4 = IROM
+        .raw(&callx0_a4) // first call: a5 = 1
+        .l32r(3, 2) // WREN
+        .s32i(3, 2, 0)
+        .movi(3, 0)
+        .s32i(3, 2, 0x04) // ADDR = 0
+        .l32r(3, 3) // FLASH_SE
+        .s32i(3, 2, 0);
+    // Poll RDSR until WIP (bit 0) clears.
+    let poll_se = program.pc();
+    program
+        .l32r(3, 5) // FLASH_RDSR
+        .s32i(3, 2, 0)
+        .rri8(2, 6, 2, 0x2c) // l32i a6, a2, RD_STATUS (0x2c)
+        .movi(7, 1)
+        .raw(&[0x60, 0x76, 0x10]) // and a7, a6, a7
+        .bnez(7, poll_se);
+    // Program new_word (4 bytes) at address 0.
+    program
+        .l32r(3, 2) // WREN
+        .s32i(3, 2, 0)
+        .l32r(3, 6) // new_word
+        .s32i(3, 2, 0x58) // W0
+        .l32r(3, 7) // ADDR = (4 << 24) | 0
+        .s32i(3, 2, 0x04)
+        .l32r(3, 4) // FLASH_PP
+        .s32i(3, 2, 0);
+    let poll_pp = program.pc();
+    program
+        .l32r(3, 5) // FLASH_RDSR
+        .s32i(3, 2, 0)
+        .rri8(2, 6, 2, 0x2c)
+        .movi(7, 1)
+        .raw(&[0x60, 0x76, 0x10]) // and a7, a6, a7
+        .bnez(7, poll_pp)
+        .raw(&callx0_a4) // second call: must fetch and run `movi.n a5, 2; ret.n`
+        .raw(&LOOP);
+
+    let mut bytes = vec![0xffu8; 0x1_0000];
+    bytes[..4].copy_from_slice(&[0x0c, 0x15, 0x0d, 0xf0]);
+    let mut flash = Flash::new(bytes.into());
+    flash.write_mmu(0, 0);
+    let mut chip = program.chip_on(&[]);
+    chip.soc.attach_flash(flash);
+    // 40 MHz crystal: 70 ms sector erase + 0.7 ms page program = 2.83M cycles.
+    assert_eq!(a5_after(&mut chip, 3_200_000), 2);
+    assert_eq!(chip.cores.core(CoreId::Pro).pc(), program.pc() - 3);
+
+    // Calling IROM immediately after starting a flash erase (without waiting for WIP=0) fails loudly.
+    let mut busy_prog = Program::new(&[SPI1, IROM, WREN, SE]);
+    busy_prog
+        .l32r(2, 0)
+        .l32r(4, 1)
+        .l32r(3, 2)
+        .s32i(3, 2, 0)
+        .movi(3, 0)
+        .s32i(3, 2, 0x04)
+        .l32r(3, 3)
+        .s32i(3, 2, 0)
+        .raw(&callx0_a4)
+        .raw(&LOOP);
+    let mut flash2 = Flash::new(vec![0xffu8; 0x1_0000].into());
+    flash2.write_mmu(0, 0);
+    let mut chip2 = busy_prog.chip_on(&[]);
+    chip2.soc.attach_flash(flash2);
+    let halt = chip2.run_until(c(500));
+    assert!(
+        matches!(
+            halt,
+            Some(Halt::Fault(
+                _,
+                Fault::FlashCommand(FlashRefusal::Busy(None), _)
+            ))
+        ),
+        "expected Busy fault on IROM fetch during erase, got {halt:?}"
+    );
+
+    // Loading from DROM while WIP is set also fails loudly with FlashRefusal::Busy(None).
+    const DROM: u32 = 0x3c00_0000;
+    let mut busy_load = Program::new(&[SPI1, DROM, WREN, SE]);
+    busy_load
+        .l32r(2, 0)
+        .l32r(4, 1)
+        .l32r(3, 2)
+        .s32i(3, 2, 0)
+        .movi(3, 0)
+        .s32i(3, 2, 0x04)
+        .l32r(3, 3)
+        .s32i(3, 2, 0)
+        .rri8(2, 5, 4, 0) // l32i a5, a4, 0
+        .raw(&LOOP);
+    let mut flash3 = Flash::new(vec![0xffu8; 0x1_0000].into());
+    flash3.write_mmu(0, 0);
+    let mut chip3 = busy_load.chip_on(&[]);
+    chip3.soc.attach_flash(flash3);
+    let halt = chip3.run_until(c(500));
+    assert!(
+        matches!(
+            halt,
+            Some(Halt::Fault(
+                _,
+                Fault::FlashCommand(FlashRefusal::Busy(None), _)
+            ))
+        ),
+        "expected Busy fault on DROM load during erase, got {halt:?}"
+    );
+}
+
 /// The PRO CPU starts the APP CPU and spins on two `nop.n` until `a7` is set. The APP CPU waits,
 /// then stores `movi.n a7, 7; nop.n` over them through the data bus. The PRO CPU runs it on its
 /// next pass and leaves the loop.

@@ -123,17 +123,15 @@ impl Setting {
 pub enum FlashRefusal {
     /// A command the model does not know.
     Unsupported,
-    /// A page program or an erase, which the model does not simulate.
-    Write,
     /// A write of the flash's status registers, which can lock them for good.
     StatusWrite,
     /// A user command with no command phase.
     NoCommandPhase,
     /// One `SPI_MEM_CMD_REG` write that starts more than one command.
     StartBits,
-    /// A read that reaches past the flash's end.
+    /// A read, program or erase that reaches past the flash's end.
     PastEnd,
-    /// An address phase longer than 32 bits.
+    /// An address phase whose length the command does not take.
     AddressBits,
     /// A command started on SPI0, the controller the cache reads the flash through.
     Spi0,
@@ -141,13 +139,19 @@ pub enum FlashRefusal {
     Pads,
     /// A user command while `CS0_DIS` is set or `CS1_DIS` is clear.
     Cs,
+    /// A command or cache access while a program or erase is in progress (`WIP` set).
+    Busy,
+    /// A program or erase with a data or address phase length SPI1 or the flash does not take.
+    Length,
+    /// A command started in a transfer mode (octal, DDR, or an unsupported write width) the flash
+    /// or model does not run.
+    Mode,
 }
 
 impl FlashRefusal {
     pub fn name(self) -> &'static str {
         match self {
             FlashRefusal::Unsupported => "unsupported",
-            FlashRefusal::Write => "write",
             FlashRefusal::StatusWrite => "status_write",
             FlashRefusal::NoCommandPhase => "no_command_phase",
             FlashRefusal::StartBits => "start_bits",
@@ -156,6 +160,9 @@ impl FlashRefusal {
             FlashRefusal::Spi0 => "spi0",
             FlashRefusal::Pads => "pads",
             FlashRefusal::Cs => "cs",
+            FlashRefusal::Busy => "busy",
+            FlashRefusal::Length => "length",
+            FlashRefusal::Mode => "mode",
         }
     }
 }
