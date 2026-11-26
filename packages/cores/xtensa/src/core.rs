@@ -12,6 +12,7 @@ use crate::special::{Access, CCOMPARE, EPC, EPS, Sr};
 mod decodes;
 mod options;
 mod simple;
+mod spin;
 
 use decodes::{Decodes, Kept, Stores};
 
@@ -526,13 +527,14 @@ impl<C: Config> Core<C> {
     /// So the run marks each op's start and checks the cycle. It ends after an op that
     /// rechecks, after a trap, once the lines can move, at a PC the table does not keep at the
     /// current version, or at the horizon. A taken branch changes nothing a step checks, so the
-    /// run goes on at its target.
+    /// run goes on at its target. After a branch back it may skip the passes of a spin on
+    /// `CCOUNT`, as `spin` says.
     fn straight<B: Bus>(&mut self, bus: &mut B, limit: Cycle) -> Result<(), Stop> {
         if bus.code_version().is_none() {
             return Ok(());
         }
         let horizon = limit.min(self.timer_next);
-        let table = self.decodes.take();
+        let mut table = self.decodes.take();
         let mut done = Ok(());
         while self.cycle < horizon && self.cycle < self.lines_until {
             let Some(slot) = bus
@@ -553,7 +555,12 @@ impl<C: Config> Core<C> {
                 self.run(bus, kept).map(drop)
             };
             match ran {
-                Ok(()) if !kept.rechecks => {}
+                Ok(()) if !kept.rechecks => {
+                    // A branch back that went back may close a spin on `CCOUNT`.
+                    if kept.back && self.refetch {
+                        self.skip_spin(bus, &mut table, slot, horizon.min(self.lines_until));
+                    }
+                }
                 Ok(()) => break,
                 Err(trap) => {
                     done = self.trap(trap);
@@ -563,6 +570,21 @@ impl<C: Config> Core<C> {
         }
         self.decodes.put(table);
         done
+    }
+
+    /// One op of a straight run after its step, as [`Self::straight`] runs it, for a check
+    /// build that runs the passes of a spin it would skip.
+    #[cfg(feature = "poll-skip-check")]
+    fn straight_op<B: Bus>(&mut self, bus: &mut B, kept: &Kept) -> Result<(), Trap> {
+        if self.refetch && (self.pc & 3) + u32::from(kept.insn.len) > 4 {
+            self.cycle.0 += 1;
+        }
+        self.refetch = false;
+        if self.clear(kept) {
+            self.run_clear(bus, kept)
+        } else {
+            self.run(bus, kept).map(drop)
+        }
     }
 
     /// The step before an op of a straight run, which only marks its start. A check build polls
