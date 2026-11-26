@@ -15,6 +15,7 @@ import { loadBlock } from "../../viewer/src/registry.ts";
 const RUNS = 5;
 const WARM_MS = 200;
 const SIM_MS = 2000;
+const FIRST_PICTURE_BUDGET_MS = 5000;
 const PROFILE_TOP = 15;
 const PROFILE_INTERVAL_US = 100;
 
@@ -43,11 +44,20 @@ if (profiled !== undefined && !ids.includes(profiled)) {
   console.error(`speed: the registry has no Block ${profiled}. It has ${ids.join(", ")}`);
   process.exit(2);
 }
-// An ESP32-S3 Block is not held to the AVR bar. It is not real time. Neither are three Nano Blocks
-// yet: nano-buzzer and nano-oled run about 10x slower than real time, and nano-lcd1602-i2c misses
-// the main thread bar.
-const slow = new Set(["nano-buzzer", "nano-lcd1602-i2c", "nano-oled"]);
-const paced = ids.filter((id) => !id.startsWith("devkitc-") && !slow.has(id));
+// An ESP32-S3 Block (`devkitc-*`) is not held to the AVR bar, because it is not real time.
+// AVR Blocks listed here are exempt from one or both bars until speed work fixes them:
+// - `rate`: skipped from play-rate runs (Worker 1x and main thread 4x).
+// - `firstPicture`: exempt from the Worker first-picture budget (5 s).
+const EXEMPT = {
+  "nano-buzzer": {
+    rate: "runs about 10x slower than real time",
+  },
+  "nano-oled": {
+    rate: "I2C startup runs over 10x slower than real time during warm-up",
+    firstPicture: "takes about 12 s in the Worker to draw its first frame over I2C",
+  },
+};
+const paced = ids.filter((id) => !id.startsWith("devkitc-") && EXEMPT[id]?.rate === undefined);
 const blocks = new Map();
 for (const id of ids) {
   const { files } = await loadBlock(index, id, readBytes);
@@ -117,6 +127,9 @@ async function measure(block, mode, profile = false) {
     if (Math.abs(out.simMs - SIM_MS) > 16 || out.ticks !== expected) {
       throw new Error(`${block} ran ${out.simMs} simulated ms in ${out.ticks} ticks, expected ${SIM_MS} in ${expected}`);
     }
+    if (mode.where === "worker" && typeof out.firstPictureMs !== "number") {
+      throw new Error(`${block} reported no first-picture time`);
+    }
     return out;
   } finally {
     await page.close();
@@ -148,13 +161,17 @@ if (profiled !== undefined) {
 
 const aside = ids.filter((id) => !paced.includes(id));
 if (aside.length > 0) console.log(`speed: not held to the bar: ${aside.join(", ")}`);
+const firstPictureExempt = ids.filter((id) => EXEMPT[id]?.firstPicture !== undefined);
+if (firstPictureExempt.length > 0) {
+  console.log(`speed: exempt from first-picture budget: ${firstPictureExempt.map((id) => `${id} (${EXEMPT[id].firstPicture})`).join(", ")}`);
+}
 console.log(`speed: Chromium ${browser.version()}, ${paced.length} Blocks, ${RUNS} runs each, ${SIM_MS} simulated ms after ${WARM_MS} ms. Load ${load()}`);
 const rows = [];
 for (let run = 0; run < RUNS; run += 1) {
   for (const block of paced) {
     for (const [mode, how] of Object.entries(MODES)) {
-      const { wallMs, simMs } = await measure(block, how);
-      rows.push({ block, mode, run, msPerSimS: (wallMs / simMs) * 1000 });
+      const { wallMs, simMs, firstPictureMs } = await measure(block, how);
+      rows.push({ block, mode, run, msPerSimS: (wallMs / simMs) * 1000, firstPictureMs });
     }
   }
 }
@@ -162,22 +179,44 @@ console.log(`speed: load after ${load()}`);
 await browser.close();
 server.close();
 
-/** Wall ms per simulated s of each (Block, mode), and its real-time factor at the median. */
+/** Wall ms per simulated s of each (Block, mode), its real-time factor at the median, and for
+ * Worker runs the wall ms from start to first picture. */
 const cells = paced.flatMap((block) =>
   Object.entries(MODES).map(([mode, how]) => {
-    const ms = rows.filter((r) => r.block === block && r.mode === mode).map((r) => r.msPerSimS).sort((a, b) => a - b);
+    const matching = rows.filter((r) => r.block === block && r.mode === mode);
+    const ms = matching.map((r) => r.msPerSimS).sort((a, b) => a - b);
     const median = ms[Math.floor(ms.length / 2)];
-    return { block, how, median, min: ms[0], max: ms[ms.length - 1], x: 1000 / median };
+    let firstPicture = null;
+    if (how.where === "worker") {
+      const fp = matching.map((r) => r.firstPictureMs).sort((a, b) => a - b);
+      firstPicture = { median: fp[Math.floor(fp.length / 2)], min: fp[0], max: fp[fp.length - 1] };
+    }
+    return { block, how, median, min: ms[0], max: ms[ms.length - 1], x: 1000 / median, firstPicture };
   }),
 );
 const width = Math.max(...paced.map((id) => id.length));
 const labelWidth = Math.max(...Object.values(MODES).map((how) => how.label.length));
-let failed = 0;
+let failedRate = 0;
+let failedFirstPicture = 0;
 for (const c of cells) {
-  const pass = c.x >= c.how.bar;
-  if (!pass) failed += 1;
+  const ratePass = c.x >= c.how.bar;
+  if (!ratePass) failedRate += 1;
+  let fpPass = true;
+  let fpText = "";
+  if (c.firstPicture !== null) {
+    const exempt = EXEMPT[c.block]?.firstPicture !== undefined;
+    fpPass = exempt || c.firstPicture.median <= FIRST_PICTURE_BUDGET_MS;
+    if (!fpPass) failedFirstPicture += 1;
+    const fpRange = `${c.firstPicture.median.toFixed(0)} ms (${c.firstPicture.min.toFixed(0)} to ${c.firstPicture.max.toFixed(0)})`;
+    const fpStatus = exempt ? "exempt" : `budget ${FIRST_PICTURE_BUDGET_MS} ms${fpPass ? "" : " FAIL"}`;
+    fpText = `; first picture ${fpRange}, ${fpStatus}`;
+  }
+  const pass = ratePass && fpPass;
   const ms = `${c.median.toFixed(1)} ms per simulated s (${c.min.toFixed(1)} to ${c.max.toFixed(1)})`;
-  console.log(`${pass ? "ok  " : "FAIL"} ${c.block.padEnd(width)}  ${c.how.label.padEnd(labelWidth)}  ${ms}, ${c.x.toFixed(2)}x real time, bar ${c.how.bar}x`);
+  console.log(`${pass ? "ok  " : "FAIL"} ${c.block.padEnd(width)}  ${c.how.label.padEnd(labelWidth)}  ${ms}, ${c.x.toFixed(2)}x real time, bar ${c.how.bar}x${fpText}`);
 }
-console.log(failed === 0 ? "speed: every Block keeps up" : `speed: ${failed} of ${cells.length} medians miss their bar`);
-process.exit(failed === 0 ? 0 : 1);
+const failures = [];
+if (failedRate > 0) failures.push(`${failedRate} of ${cells.length} medians miss their bar`);
+if (failedFirstPicture > 0) failures.push(`${failedFirstPicture} of ${paced.length} first-picture medians exceed ${FIRST_PICTURE_BUDGET_MS} ms`);
+console.log(failures.length === 0 ? "speed: every Block keeps up" : `speed: ${failures.join("; ")}`);
+process.exit(failures.length === 0 ? 0 : 1);

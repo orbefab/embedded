@@ -126,6 +126,8 @@ Each run is one row: the Block, the mode, the run number, and wall milliseconds 
 
 Chrome's CPU throttle reaches only a page, not a Worker, so the throttled mode imports the same `worker.js` on the main thread. There, `self` is replaced with an object that hands the page each message `worker.js` posts.
 
+In the dedicated Worker, each run also times the wall clock from starting the Worker to the first picture: for a Block with a screen, the first playing `frame` whose glass has a lit pixel, and for a Block with no screen, the first playing `frame`. A Block whose median exceeds 5 s fails separately from the play-rate bar unless `speed.mjs` exempts it with a reason.
+
 Every Block runs 5 times in each mode, interleaved: run 1 of every Block and mode, then run 2, and so on. An id that starts with `devkitc-` is named and not timed. It is not held to the bar, because an ESP32-S3 Block is not real time. The report prints the median, min and max of each Block and mode, and the real-time factor at the median, 1000 divided by the median. A median under its bar prints a `FAIL` line that names the Block, the mode and the factor, and the check exits 1. The whole check takes about a minute and a half.
 
 On the build machine, 12 threads at a load average under 2, the medians of three whole checks moved by at most 4%, and the runs inside one check by at most 9% from their median. A 1 s span gave the same medians within 1.5%, with wider spreads.
