@@ -18,7 +18,7 @@ mod spin;
 use std::sync::Arc;
 
 use crate::bus::Bus;
-use decode::{Countdown, Op};
+use decode::{Countdown, IdleLoop, Op};
 use execute::SteadyRun;
 use spin::Spin;
 
@@ -388,8 +388,9 @@ impl Core {
     /// Runs `op`, which [`Op::is_free`], in a run that ends at cycle `bound`. When a
     /// [`Countdown`]'s `BRNE` branches back to the head before `bound`, it jumps all but the last
     /// of the passes that end before `bound` and leave the counter above zero, and the last one
-    /// runs. With fewer than two passes before `bound` it refuses before it reads the counter. The
-    /// jump sits in this op's arm so that no other op pays for it.
+    /// runs. With fewer than two passes before `bound` it refuses before it reads the counter. An
+    /// [`IdleLoop`]'s branch back with two passes of room does the same through
+    /// [`Self::skip_idle_passes`]. Each jump sits in its op's arm so that no other op pays for it.
     #[inline(always)]
     fn execute_in_run(&mut self, pc: u16, op: Op, bound: u64) {
         match op {
@@ -403,8 +404,37 @@ impl Core {
                     self.jump_passes(countdown, (bound - 1 - self.cycles) / pass);
                 }
             }
+            Op::IdleLoop(idle) => {
+                self.execute_free(pc, op);
+                if self.pc == idle.head(pc)
+                    && self.cycles < bound
+                    && bound - 1 - self.cycles >= 2 * u64::from(idle.pass)
+                {
+                    self.skip_idle_passes(pc, idle, bound);
+                }
+            }
             _ => self.execute_free(pc, op),
         }
+    }
+
+    /// [`Self::execute_in_run`] at the head of `idle`, whose branch is at `at`, with room for two
+    /// passes before `bound`. One pass runs. The body writes no register, so when that pass
+    /// branches back and leaves `SREG` as it found it, every later pass reads the same values,
+    /// writes the same flags and branches back too. The passes that end before `bound` are then
+    /// skipped by their cycles, and the run goes on from the head as stepping would reach it.
+    #[inline(never)]
+    fn skip_idle_passes(&mut self, at: u16, idle: IdleLoop, bound: u64) {
+        let head = idle.head(at);
+        let sreg = self.sreg;
+        for pc in head..=at {
+            self.execute_free(pc, self.op(pc));
+        }
+        if self.pc != head || self.sreg != sreg {
+            return;
+        }
+        let pass = u64::from(idle.pass);
+        let passes = (bound - 1 - self.cycles) / pass;
+        self.cycles = self.cycles.wrapping_add(passes * pass);
     }
 
     /// [`Self::execute_in_run`] at the head of `countdown`, with `room` passes before the bound.

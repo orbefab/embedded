@@ -7,6 +7,7 @@ mod cycles;
 mod free_runs;
 mod gaps;
 mod gpio_in;
+mod idle_loops;
 mod instructions;
 mod mspim;
 mod oc_pin;

@@ -88,6 +88,7 @@ pub(super) enum Op {
     Break,
     Unknown(u16),
     Countdown(Countdown),
+    IdleLoop(IdleLoop),
     SpinCall { to: u16, spin: u16 },
 }
 
@@ -110,6 +111,14 @@ pub(super) fn table(flash: &[u16], pc_mask: u16) -> Vec<Op> {
             && let Some(countdown) = Countdown::parse(&ops[usize::from(to)..at])
         {
             ops[at] = Op::Countdown(countdown);
+        }
+    }
+    for at in 0..ops.len() {
+        if let Op::Brbs { to, .. } | Op::Brbc { to, .. } = ops[at]
+            && usize::from(to) <= at
+            && let Some(idle) = IdleLoop::parse(ops[at], &ops[usize::from(to)..at])
+        {
+            ops[at] = Op::IdleLoop(idle);
         }
     }
     ops
@@ -158,6 +167,52 @@ impl Countdown {
     }
 
     /// The loop's first op, with the `BRNE` at `at`.
+    pub(super) fn head(self, at: u16) -> u16 {
+        at - u16::from(self.back)
+    }
+}
+
+/// A loop whose body writes no register, closed by a `BRBS` or `BRBC` `back` words after its
+/// first op. The body is `NOP`s, compares, `AND` and `OR` of a register with itself, and `SBIW`
+/// and `ADIW` of 0, with no branch or skip, so a pass changes only `SREG` and the cycle count.
+/// Arduino's `main` with an empty `loop()` is one: `SBIW r28, 0` and a `BREQ` back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct IdleLoop {
+    pub(super) back: u8,
+    /// Cycles of a pass that branches back.
+    pub(super) pass: u8,
+    /// The `SREG` bit the branch tests, and the value that branches back.
+    pub(super) s: u8,
+    pub(super) set: bool,
+}
+
+impl IdleLoop {
+    /// `body` is the loop's ops before `branch`.
+    fn parse(branch: Op, body: &[Op]) -> Option<Self> {
+        let (s, set) = match branch {
+            Op::Brbs { s, .. } => (s, true),
+            Op::Brbc { s, .. } => (s, false),
+            _ => return None,
+        };
+        // A backward branch reaches at most 64 words, and a body op takes at most 2 cycles.
+        let mut pass = 2u8;
+        for op in body {
+            pass += match *op {
+                Op::Nop | Op::Cp(..) | Op::Cpc(..) | Op::Cpi(..) => 1,
+                Op::And(d, r) | Op::Or(d, r) if d == r => 1,
+                Op::Sbiw(_, 0) | Op::Adiw(_, 0) => 2,
+                _ => return None,
+            };
+        }
+        Some(Self {
+            back: body.len() as u8,
+            pass,
+            s,
+            set,
+        })
+    }
+
+    /// The loop's first op, with the branch at `at`.
     pub(super) fn head(self, at: u16) -> u16 {
         at - u16::from(self.back)
     }
@@ -220,6 +275,7 @@ macro_rules! free_op {
             | Op::Brbs { .. }
             | Op::Brbc { .. }
             | Op::Countdown(_)
+            | Op::IdleLoop(_)
             | Op::Jmp(_)
             | Op::Ijmp
             | Op::Bst { .. }

@@ -443,6 +443,7 @@ fn reaches_bus(op: Op) -> bool {
             | Op::Brbs { .. }
             | Op::Brbc { .. }
             | Op::Countdown(_)
+            | Op::IdleLoop(_)
             | Op::Jmp(_)
             | Op::Ijmp
             | Op::Bst { .. }
