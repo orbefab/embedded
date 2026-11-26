@@ -695,11 +695,17 @@ impl Soc {
 
     /// A load of a UART's `STATUS` or of USB Serial/JTAG's `EP1_CONF` settles its peripheral
     /// to the load's tick, as a poll does, and changes nothing else, so it moves no line. A
-    /// firmware that prints reads one of them before each byte it sends.
+    /// firmware that prints reads one of them before each byte it sends. A load of any SYSTIMER
+    /// register only fires the alarms due by its tick, and none is due before the next event
+    /// the last poll found, so it moves no line either. `esp_timer_get_time`, under Arduino's
+    /// `millis()` and `micros()`, reads `UNIT0_OP` and the value registers on every call.
     pub(crate) fn load_moves_lines(addr: u32) -> bool {
         let word = addr & !3;
         let status = uart::BASES.iter().any(|&base| word == base + uart::STATUS);
-        !status && word != USB_SERIAL_JTAG + usb::EP1_CONF && Self::access_moves_lines(addr)
+        !status
+            && word != USB_SERIAL_JTAG + usb::EP1_CONF
+            && word & !(BLOCK - 1) != SYSTIMER
+            && Self::access_moves_lines(addr)
     }
 
     pub(crate) fn sram_offset(addr: u32, fetch: bool) -> Option<u32> {
@@ -1696,9 +1702,11 @@ impl Soc {
             || (base == SYSTEM && gates::OFFSETS.contains(&(word - SYSTEM)))
             || word == USB_SERIAL_JTAG + usb::CONF0;
         if !pads {
-            // A store to USB Serial/JTAG moves no watchdog, LEDC or I2C event.
+            // A store to USB Serial/JTAG or to SYSTIMER moves no watchdog, LEDC or I2C event.
+            // `esp_timer_get_time` stores to SYSTIMER on every call.
             let usb = base == USB_SERIAL_JTAG;
-            let armed = (!usb || cfg!(debug_assertions)).then(|| self.armed());
+            let systimer = base == SYSTIMER;
+            let armed = (!(usb || systimer) || cfg!(debug_assertions)).then(|| self.armed());
             let app = [
                 SYSTEM + app::CONTROL_0,
                 RTC_CNTL + OPTIONS0,
@@ -1732,6 +1740,10 @@ impl Soc {
                     !usb || after == before,
                     "a USB Serial/JTAG store moved {after:?}"
                 );
+                debug_assert!(
+                    !systimer || after == before,
+                    "a SYSTIMER store moved {after:?}"
+                );
                 if !before.i2c_runs && after.i2c_runs {
                     self.i2c_started = Some(step.core);
                 }
@@ -1739,6 +1751,8 @@ impl Soc {
                     || after.ledc != before.ledc
                     || after.i2c != before.i2c
                     || self.ledc.has_output();
+            } else if systimer {
+                self.rearmed |= self.ledc.has_output();
             }
             self.rearmed |= self.usb.next_event(now) != usb_due;
             return Ok(());

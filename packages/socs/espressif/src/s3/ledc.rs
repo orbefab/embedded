@@ -511,7 +511,8 @@ impl Ledc {
 
     /// Source 35's level at `now`: high while `LEDC_INT_ST_REG` is nonzero.
     pub(crate) fn line(&self, now: Tick, apb: u64) -> bool {
-        (self.raw_at(now, apb) & self.int_ena()) != 0
+        let ena = self.int_ena();
+        ena != 0 && (self.raw_at(now, apb) & ena) != 0
     }
 
     /// The earliest tick after `now` at which source 35 can rise. `None` while the line is
