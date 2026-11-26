@@ -114,6 +114,11 @@ pub(crate) enum Timing {
 /// and warns `rating.supply_low`.
 pub(crate) const SUPPLY_UNPOWERED_V: f64 = 0.1;
 
+/// Minimum picoseconds a low supply voltage must hold continuously to set `rating.supply_low`'s
+/// reported voltage (1 us), matching [`LIMIT_HOLD_PS`]. Nanosecond single-clock or switching dips
+/// inside a longer low-supply episode do not replace the voltage the rail held.
+pub(crate) const SUPPLY_HOLD_PS: u64 = 1_000_000;
+
 /// A chip's minimum operating supply voltage on one supply pin over its ground.
 pub(crate) struct SupplyMin {
     pub(crate) pin: &'static str,
@@ -335,12 +340,25 @@ enum SupplyEntry {
     On,
 }
 
+#[derive(Clone, Copy)]
+struct SupplySample {
+    at: Time,
+    v: f64,
+}
+
 #[derive(Clone)]
 struct SupplyEpisode {
     entry: SupplyEntry,
     first: Time,
-    lowest: f64,
-    peak_at: Time,
+    /// Previous sample in this continuous low-band episode.
+    last: SupplySample,
+    /// Monotone decreasing queue of `(span_end, peak_sample)` over the last [`SUPPLY_HOLD_PS`],
+    /// where `peak_sample` is the higher-voltage endpoint of each step (or the new sample alone
+    /// after a restart). Once the episode reaches [`SUPPLY_HOLD_PS`], the front is the lowest
+    /// voltage bound that held across that window.
+    hold: VecDeque<(Time, SupplySample)>,
+    /// Lowest voltage bound held continuously for at least [`SUPPLY_HOLD_PS`] in this episode.
+    held: Option<SupplySample>,
     over_ps: Option<u64>,
 }
 
@@ -355,6 +373,9 @@ struct SupplyWatch {
     last_band: Option<SupplyBand>,
     episode: Option<SupplyEpisode>,
     excursion: Option<SupplyExcursion>,
+    /// Whether `excursion`'s reported voltage came from a continuous hold of at least
+    /// [`SUPPLY_HOLD_PS`] rather than a shorter episode.
+    excursion_held: bool,
 }
 
 #[derive(Clone)]
@@ -710,6 +731,7 @@ impl Ratings {
                             last_band: None,
                             episode: None,
                             excursion: None,
+                            excursion_held: false,
                         });
                     }
                 }
@@ -727,6 +749,7 @@ impl Ratings {
                             last_band: None,
                             episode: None,
                             excursion: None,
+                            excursion_held: false,
                         });
                     }
                 }
@@ -889,10 +912,7 @@ impl Ratings {
             match band {
                 SupplyBand::Low => {
                     if let Some(ep) = &mut supply.episode {
-                        if v < ep.lowest {
-                            ep.lowest = v;
-                            ep.peak_at = at;
-                        }
+                        ep.push(at, v, self.restarted);
                     } else {
                         let entry = match supply.last_band {
                             None => SupplyEntry::Start,
@@ -903,8 +923,9 @@ impl Ratings {
                         supply.episode = Some(SupplyEpisode {
                             entry,
                             first: at,
-                            lowest: v,
-                            peak_at: at,
+                            last: SupplySample { at, v },
+                            hold: VecDeque::new(),
+                            held: None,
                             over_ps: self.timing.over_ps(),
                         });
                     }
@@ -1503,6 +1524,55 @@ impl Window {
     }
 }
 
+impl SupplyEpisode {
+    fn push(&mut self, at: Time, v: f64, restarted: bool) {
+        let sample = SupplySample { at, v };
+        let prev = self.last;
+        self.last = sample;
+        let high = if restarted || sample.v >= prev.v {
+            sample
+        } else {
+            prev
+        };
+        while self.hold.back().is_some_and(|(_, back)| back.v <= high.v) {
+            self.hold.pop_back();
+        }
+        self.hold.push_back((at, high));
+        let cutoff = at.as_ps().saturating_sub(SUPPLY_HOLD_PS);
+        while self
+            .hold
+            .front()
+            .is_some_and(|(to, _)| to.as_ps() <= cutoff)
+        {
+            self.hold.pop_front();
+        }
+        if at.as_ps() - self.first.as_ps() >= SUPPLY_HOLD_PS
+            && let Some(&(_, bound)) = self.hold.front()
+            && self.held.is_none_or(|held| bound.v < held.v)
+        {
+            self.held = Some(bound);
+        }
+    }
+
+    fn reading(&self) -> (SupplySample, bool) {
+        match self.held {
+            Some(held) => (held, true),
+            None => (self.hold.front().map_or(self.last, |&(_, s)| s), false),
+        }
+    }
+}
+
+/// Whether a merged `rating.supply_low` voltage should replace the existing one: any reading held
+/// for at least [`SUPPLY_HOLD_PS`] beats an unheld shorter-episode reading, and ties take the
+/// lower voltage.
+fn replaces_supply_voltage((cur_v, cur_held): (f64, bool), (new_v, new_held): (f64, bool)) -> bool {
+    match (cur_held, new_held) {
+        (false, true) => true,
+        (true, false) => false,
+        _ => new_v < cur_v,
+    }
+}
+
 impl SupplyWatch {
     fn read(&self, row: &[Finite]) -> (f64, SupplyBand) {
         let v = row[self.column].get() - row[self.gnd].get();
@@ -1516,25 +1586,38 @@ impl SupplyWatch {
         (v, band)
     }
 
-    fn excursion_from(&self, ep: SupplyEpisode) -> SupplyExcursion {
-        SupplyExcursion {
-            pin: self.pin.clone(),
-            min: self.min,
-            clock_hz: self.clock_hz,
-            lowest: ep.lowest,
-            peak_at: ep.peak_at,
-            first: ep.first,
-            over_ps: ep.over_ps,
-        }
+    fn excursion_from(&self, ep: &SupplyEpisode) -> (SupplyExcursion, bool) {
+        let (reading, held) = ep.reading();
+        (
+            SupplyExcursion {
+                pin: self.pin.clone(),
+                min: self.min,
+                clock_hz: self.clock_hz,
+                voltage: reading.v,
+                peak_at: reading.at,
+                first: ep.first,
+                over_ps: ep.over_ps,
+            },
+            held,
+        )
     }
 
     fn merge(&mut self, ep: SupplyEpisode) {
+        let (reading, held) = ep.reading();
         match &mut self.excursion {
-            None => self.excursion = Some(self.excursion_from(ep)),
+            None => {
+                let (excursion, held) = self.excursion_from(&ep);
+                self.excursion = Some(excursion);
+                self.excursion_held = held;
+            }
             Some(existing) => {
-                if ep.lowest < existing.lowest {
-                    existing.lowest = ep.lowest;
-                    existing.peak_at = ep.peak_at;
+                if replaces_supply_voltage(
+                    (existing.voltage, self.excursion_held),
+                    (reading.v, held),
+                ) {
+                    existing.voltage = reading.v;
+                    existing.peak_at = reading.at;
+                    self.excursion_held = held;
                 }
                 if let (Some(total), Some(add)) = (&mut existing.over_ps, ep.over_ps) {
                     *total += add;
@@ -1551,12 +1634,14 @@ impl SupplyWatch {
         match (&self.excursion, open) {
             (None, None) => None,
             (Some(ex), None) => Some(ex.clone()),
-            (None, Some(ep)) => Some(self.excursion_from(ep.clone())),
+            (None, Some(ep)) => Some(self.excursion_from(ep).0),
             (Some(ex), Some(ep)) => {
                 let mut merged = ex.clone();
-                if ep.lowest < merged.lowest {
-                    merged.lowest = ep.lowest;
-                    merged.peak_at = ep.peak_at;
+                let (reading, held) = ep.reading();
+                if replaces_supply_voltage((merged.voltage, self.excursion_held), (reading.v, held))
+                {
+                    merged.voltage = reading.v;
+                    merged.peak_at = reading.at;
                 }
                 if let (Some(total), Some(add)) = (&mut merged.over_ps, ep.over_ps) {
                     *total += add;

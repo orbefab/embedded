@@ -165,7 +165,7 @@ fn samples() -> Vec<Diagnostic> {
             pin: Ref::Pin(name("u1"), name("VDD")),
             min: 1.71,
             clock_hz: None,
-            lowest: 1.542,
+            voltage: 1.542,
             peak_at: Time::from_ps(9_500),
             first: Time::from_ps(8_500),
             over_ps: Some(2_000),

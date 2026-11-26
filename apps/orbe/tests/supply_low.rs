@@ -644,8 +644,9 @@ fn atmega328p_minimum_follows_clock_frequency_and_stock_boards_stay_silent() {
     }
 }
 
-/// An ATmega328P fed through 1 kohm from 5 V comes up in reset at t=0 (~3.57 V from its 2 mA
-/// reset current, not 1.52 V from its 11.4 mA active current).
+/// An ATmega328P fed through 1 kohm from 5 V sits at ~3.57 V (its 2 mA reset-current divider)
+/// throughout the run, with brief 62.5 ns active-current dips to ~1.52 V whenever it leaves reset.
+/// Both `open` and `snapshot` after stepping report the held ~3.57 V level, not the nanosecond dip.
 #[test]
 fn atmega328p_operating_point_uses_reset_current() {
     let dir = setup_project(
@@ -664,13 +665,65 @@ fn atmega328p_operating_point_uses_reset_current() {
             ],
             "ground": "u.GND"
         }),
-        "open\nget @u.VCC\nexpect @u.VCC > 3.5V\nexpect @u.VCC < 3.65V\nstep 1us\nget @u.VCC\nexpect @u.VCC > 3.5V\nstep 2ms\nexpect @u.VCC > 3.5V\nexpect diagnostics contains \"rating.supply_low\"\n",
+        "open\nget @u.VCC\nexpect @u.VCC > 3.5V\nexpect @u.VCC < 3.65V\nstep 1us\nget @u.VCC\nexpect @u.VCC > 3.5V\nsnapshot\nstep 200ms\nget @u.VCC\nexpect @u.VCC > 3.5V\nsnapshot\nexpect diagnostics contains \"drops to 3.57 V\"\n",
         true,
     );
     let run = orbe(dir.path(), &["test", "-v"]);
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     let v0 = pin_volts(&run.stdout, "u.VCC");
     assert!((v0 - 3.566).abs() < 0.05, "t=0 u.VCC={v0}\n{}", run.stdout);
+    let supply_warnings: Vec<_> = run
+        .stdout
+        .lines()
+        .filter(|line| line.trim_start().starts_with("warning[rating.supply_low]"))
+        .collect();
+    assert_eq!(
+        supply_warnings.len(),
+        3,
+        "expected open + 1us snapshot + 200ms snapshot warnings:\n{}",
+        run.stdout
+    );
+    for line in &supply_warnings {
+        assert!(
+            line.contains("drops to 3.57 V")
+                && line.contains("below its 3.78 V minimum at 16 MHz")
+                && !line.contains("1.52 V"),
+            "unexpected warning line: {line}\n{}",
+            run.stdout
+        );
+    }
+
+    // Verify JSON output agrees between `open` and `snapshot` too.
+    let json_run = orbe(dir.path(), &["test", "-v", "--json"]);
+    assert_eq!(json_run.code, 0, "{}{}", json_run.stdout, json_run.stderr);
+    let doc: Value = serde_json::from_str(&json_run.stdout).unwrap();
+    let replies = doc["data"]["tests"][0]["replies"].as_array().unwrap();
+    let open_v = replies[0]["reply"]["data"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["code"] == "rating.supply_low")
+        .unwrap()["data"]["voltage"]
+        .as_f64()
+        .unwrap();
+    let snap_v = replies
+        .iter()
+        .rev()
+        .find(|r| r["command"] == "snapshot")
+        .unwrap()["reply"]["data"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["code"] == "rating.supply_low")
+        .unwrap()["data"]["voltage"]
+        .as_f64()
+        .unwrap();
+    assert!((open_v - 3.566).abs() < 0.05, "open_v={open_v}");
+    assert!((snap_v - 3.566).abs() < 0.05, "snap_v={snap_v}");
+    assert!(
+        (open_v - snap_v).abs() < 1e-3,
+        "open_v={open_v} vs snap_v={snap_v}"
+    );
 }
 
 /// SK6812 warns below its 3.7 V datasheet minimum when wired alone or externally on the DevKitC-1's

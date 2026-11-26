@@ -558,7 +558,7 @@ fn supply_min_warns_between_unpowered_floor_and_minimum_and_stays_silent_off_or_
     };
     assert_eq!(low.min, 3.78);
     assert_eq!(low.clock_hz, Some(16_000_000));
-    assert!((low.lowest - 3.3).abs() < 1e-9, "{}", low.lowest);
+    assert!((low.voltage - 3.3).abs() < 1e-9, "{}", low.voltage);
     assert_eq!(
         (low.first, low.peak_at, low.over_ps),
         (Time::ZERO, Time::ZERO, None)
@@ -658,7 +658,7 @@ fn repeated_supply_dips_merge_into_one_warning_at_the_lowest_voltage() {
         unreachable!()
     };
     assert_eq!(low.min, 3.3);
-    assert!((low.lowest - 1.6).abs() < 1e-6, "{}", low.lowest);
+    assert!((low.voltage - 1.6).abs() < 1e-6, "{}", low.voltage);
     assert!(low.first.as_ps() >= 1_000_000_000 && low.first.as_ps() <= 2_000_000_000);
     assert!(low.peak_at.as_ps() >= 5_000_000_000 && low.peak_at.as_ps() <= 7_000_000_000);
     assert!(low.over_ps.unwrap() >= 3_000_000_000, "{:?}", low.over_ps);
@@ -842,7 +842,7 @@ fn supply_power_cycles_stay_silent_while_sags_incomplete_turn_on_and_open_ends_w
     let [low] = supplies(&found)[..] else {
         unreachable!()
     };
-    assert!((low.lowest - 2.4).abs() < 1e-6, "{}", low.lowest);
+    assert!((low.voltage - 2.4).abs() < 1e-6, "{}", low.voltage);
     assert!(low.first.as_ps() >= 8 * MS, "{:?}", low.first);
 
     // Incomplete turn-on (Off -> Low -> Off without reaching min) warns.
@@ -852,7 +852,7 @@ fn supply_power_cycles_stay_silent_while_sags_incomplete_turn_on_and_open_ends_w
     let [low] = supplies(&found)[..] else {
         unreachable!()
     };
-    assert!((low.lowest - 2.0).abs() < 1e-6, "{}", low.lowest);
+    assert!((low.voltage - 2.0).abs() < 1e-6, "{}", low.voltage);
 
     // Starting in the low band warns even if the rail later climbs into range or falls to 0 V.
     let start_to_on = dht_steps(6 * MS, 2.2, &[(2 * MS, 5.0)]);
@@ -871,4 +871,39 @@ fn supply_power_cycles_stay_silent_while_sags_incomplete_turn_on_and_open_ends_w
     );
     let end_from_on = dht_steps(6 * MS, 5.0, &[(2 * MS, 2.2)]);
     assert_eq!(refs(&run(&end_from_on)), ["rating.supply_low #dht.pin.VCC"]);
+
+    // A nanosecond dip inside a longer low-supply episode does not replace the held voltage,
+    // while a microsecond-scale dip does.
+    const NS: u64 = 1_000;
+    const US: u64 = 1_000_000;
+    let brief_dip = dht_steps(4 * MS, 3.0, &[(MS, 1.5), (MS + 100 * NS, 3.0)]);
+    let found = run(&brief_dip);
+    let [low] = supplies(&found)[..] else {
+        panic!("expected one supply_low: {found:?}");
+    };
+    assert!((low.voltage - 3.0).abs() < 1e-6, "{}", low.voltage);
+
+    let held_dip = dht_steps(4 * MS, 3.0, &[(MS, 1.5), (MS + 2 * US, 3.0)]);
+    let found = run(&held_dip);
+    let [low] = supplies(&found)[..] else {
+        panic!("expected one supply_low: {found:?}");
+    };
+    assert!((low.voltage - 1.5).abs() < 1e-6, "{}", low.voltage);
+
+    // A sub-microsecond episode followed by a held episode reports the held voltage.
+    let short_then_held = dht_steps(
+        6 * MS,
+        5.0,
+        &[
+            (MS, 1.5),
+            (MS + 100 * NS, 5.0),
+            (2 * MS, 2.8),
+            (4 * MS, 5.0),
+        ],
+    );
+    let found = run(&short_then_held);
+    let [low] = supplies(&found)[..] else {
+        panic!("expected one supply_low: {found:?}");
+    };
+    assert!((low.voltage - 2.8).abs() < 1e-6, "{}", low.voltage);
 }
