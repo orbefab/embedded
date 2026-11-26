@@ -3,6 +3,7 @@ mod core;
 mod decode;
 mod decodes;
 mod horizon;
+mod inline;
 mod interrupts;
 mod loops;
 mod ops;
