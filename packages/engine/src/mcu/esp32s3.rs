@@ -21,7 +21,7 @@ use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
 use crate::netlist::json::{PinMap, WireValue, resolve_limit, resolve_some_pins, resolve_value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
 use crate::ratings::{Ceiling, PinRatings, PinWindow};
-use crate::watch::Signal;
+use crate::watch::{Signal, Watch};
 use orbe_espressif::s3::{self, Bridge};
 
 /// The pin pairs the chip joins at DC, for `net.floating`, by pin index: each GPIO to `VCC`
@@ -72,7 +72,13 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
             })
             .collect(),
     };
-    let (outputs, watches) = pads.build();
+    let (outputs, mut watches) = pads.build();
+    // High while V(VCC) - V(GND) is at least the ESP32-S3 brown-out reset threshold.
+    // The comparator is strict, so `next_down` makes an exact 2.44 V supply read high.
+    watches.push(Watch::comparator(Signal {
+        terms: vec![(Node::from(vcc), 1.0), (Node::from(gnd), -1.0)],
+        offset: s3::MIN_SUPPLY_V.next_down(),
+    }));
     // V(pin) - V(GND) of each ADC pad, in the order the bridge reads them.
     let samples = pins
         .iter()

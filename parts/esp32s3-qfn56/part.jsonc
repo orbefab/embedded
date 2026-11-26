@@ -73,6 +73,7 @@
     { "what": "CHIP_PU", "pins": ["CHIP_PU"], "why": "Table 2-1 pin 4 is the chip enable. Table 5-4 gives VIH_nRST and VIL_nRST. The kind has no reset pin, so this pin does not reset the model." },
     { "what": "VDD_SPI", "pins": ["VDD_SPI"], "why": "Table 2-11: pin 29 is an input or an output for the in-package and off-package flash and PSRAM. The kind has one supply, VCC, and does not model that regulator." },
     { "what": "GPIO33 to GPIO37", "pins": ["GPIO33", "GPIO34", "GPIO35", "GPIO36", "GPIO37"], "why": "The kind gives GPIO33 to GPIO37 to the in-package PSRAM and has no pad for them." },
-    { "what": "XTAL_P and XTAL_N", "pins": ["XTAL_P", "XTAL_N"], "why": "Table 2-1 pins 54 and 53 are the crystal. The kind's clock is a fixed 40 MHz, so these pins are not the clock." }
+    { "what": "XTAL_P and XTAL_N", "pins": ["XTAL_P", "XTAL_N"], "why": "Table 2-1 pins 54 and 53 are the crystal. The kind's clock is a fixed 40 MHz, so these pins are not the clock." },
+    { "what": "power-on restart", "why": "While VCC is below 2.44 V (ESP-IDF v5.5.5 CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7; ESP32-S3 Series Datasheet v2.2 Table 5-2 and Section 2.5.3), the chip stops running and releases every GPIO. When VCC rises back above 2.44 V after power loss, the run stops with `chip.power_on_restart` because booting again from power-on is not simulated yet." }
   ]
 }

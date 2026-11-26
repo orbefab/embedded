@@ -84,6 +84,14 @@ pub use spi1::FlashRefusal;
 pub use spi2::{Pads, Phase, Setting, Transfer};
 pub use timers::{Reset, Watchdog};
 
+/// Supply voltage below which the ESP32-S3 is held in reset (volts).
+///
+/// ESP32-S3 Series Datasheet v2.2 Table 5-2 gives the recommended operating supply range
+/// (3.0 V to 3.6 V) and Section 2.5.3 lists the brown-out detector as a chip reset source
+/// without a numeric trip table. ESP-IDF v5.5.5 (`CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7`, the
+/// default brown-out detector level) places the ESP32-S3 brown-out threshold at 2.44 V.
+pub const MIN_SUPPLY_V: f64 = 2.44;
+
 /// A window onto SRAM: its bus addresses, and where in SRAM it starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Window {
@@ -143,6 +151,8 @@ pub enum Fault {
     Clock(Pc),
     /// The store at this PC reset the chip for this cause.
     FaultRestart(ResetCause, Pc),
+    /// Supply returned after power loss; power-on restart is not simulated yet.
+    PowerOnRestart,
     /// The store at this PC set something the model does not run.
     Refused(Refused, Pc),
     /// The load at `pc` read `address` in a cache window, where the MMU maps no flash.

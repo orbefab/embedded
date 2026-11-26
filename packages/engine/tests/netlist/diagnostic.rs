@@ -747,6 +747,16 @@ fn an_esp32s3_refusal_names_its_reason_in_its_message_and_data() {
     );
     assert_eq!(data["reason"], "unreadable");
 
+    let (message, data) = chip_json(Diagnostic::ChipPowerOnRestart {
+        part: part("u1"),
+        at,
+    });
+    assert_eq!(
+        message,
+        "#u1 supply returned at 5 ps; power-on restart of the ESP32-S3 is not simulated yet"
+    );
+    assert_eq!(data, serde_json::json!({}));
+
     let (message, data) = chip_json(Diagnostic::ChipUnmappedLoad {
         part: part("u1"),
         at,
