@@ -1811,6 +1811,137 @@ mod tests {
         assert!(Soc::load_moves_lines(USB_SERIAL_JTAG + 0x08));
     }
 
+    /// A store to `SYSTIMER_UNIT0_OP_REG` or `SYSTIMER_UNIT1_OP_REG` keeps a straight run going
+    /// while LEDC has no output waiting, and ends it once LEDC has output waiting. Stores to
+    /// other SYSTIMER registers still move the lines.
+    #[test]
+    fn a_systimer_op_store_keeps_a_straight_run_unless_ledc_has_output() {
+        struct Counting<'a> {
+            inner: soc::CoreBus<'a>,
+            polls: usize,
+        }
+
+        impl Bus for Counting<'_> {
+            fn instruction_bus(&self, addr: u32) -> bool {
+                self.inner.instruction_bus(addr)
+            }
+            fn fetch(&mut self, now: Cycle, addr: u32) -> Result<u32, Exit> {
+                self.inner.fetch(now, addr)
+            }
+            fn load(&mut self, now: Cycle, addr: u32, width: Width) -> Result<u32, Exit> {
+                self.inner.load(now, addr, width)
+            }
+            fn store(
+                &mut self,
+                now: Cycle,
+                addr: u32,
+                width: Width,
+                value: u32,
+            ) -> Result<(), Exit> {
+                self.inner.store(now, addr, width, value)
+            }
+            fn interrupts(&mut self, now: Cycle) -> u32 {
+                self.polls += 1;
+                self.inner.interrupts(now)
+            }
+            fn begin_step(&mut self, now: Cycle) {
+                self.inner.begin_step(now);
+            }
+            fn access_moves_lines(&self, addr: u32) -> bool {
+                self.inner.access_moves_lines(addr)
+            }
+            fn load_moves_lines(&self, addr: u32) -> bool {
+                self.inner.load_moves_lines(addr)
+            }
+            fn next_event(&mut self, now: Cycle) -> Option<Cycle> {
+                self.inner.next_event(now)
+            }
+            fn yields(&self) -> bool {
+                self.inner.yields()
+            }
+            fn code_version(&self) -> Option<u64> {
+                self.inner.code_version()
+            }
+            fn fetch_held(&self) -> bool {
+                self.inner.fetch_held()
+            }
+        }
+
+        let mut program = Program::new(&[SYSTIMER, 1 << 30]);
+        program.l32r(2, 0).l32r(3, 1).movi(5, 40);
+        let top = program.pc();
+        program
+            .s32i(3, 2, 0x04)
+            .s32i(3, 2, 0x08)
+            .rri8(2, 4, 2, 0x44)
+            .addi(5, 5, -1)
+            .bnez(5, top)
+            .raw(&LOOP);
+
+        let mut chip = program.chip();
+        {
+            let bus = chip.soc.bus();
+            assert!(!bus.access_moves_lines(SYSTIMER + 0x04));
+            assert!(!bus.access_moves_lines(SYSTIMER + 0x08));
+            for offset in [0x00, 0x20, 0x34, 0x50, 0x64, 0x6c] {
+                assert!(bus.access_moves_lines(SYSTIMER + offset), "{offset:#x}");
+            }
+        }
+        let mut core = chip.cores.core(CoreId::Pro).clone();
+        let mut bus = Counting {
+            inner: chip.soc.bus(),
+            polls: 0,
+        };
+        let stop = core.run_until(&mut bus, Cycle(500));
+        assert_eq!(stop, orbe_xtensa::Stop::Spin);
+        assert!(core.a(4) > 0, "snapshot latched a nonzero count");
+        #[cfg(not(feature = "poll-skip-check"))]
+        assert!(
+            bus.polls < 15,
+            "80 OP stores stayed in one straight run (polls = {})",
+            bus.polls
+        );
+
+        // Once LEDC has output waiting, a SYSTIMER OP store rearms the run and ends the straight
+        // run so the LEDC record and drive move are delivered on time.
+        let mut ledc_prog = Program::new(&[SYSTIMER, 1 << 30]);
+        ledc_prog.l32r(2, 0).l32r(3, 1).movi(5, 20);
+        let top = ledc_prog.pc();
+        ledc_prog
+            .s32i(3, 2, 0x04)
+            .s32i(3, 2, 0x08)
+            .addi(5, 5, -1)
+            .bnez(5, top)
+            .raw(&LOOP);
+        let setup = [ledc_on(3), duty(2).to_vec()].concat();
+        let mut chip = ledc_prog.chip();
+        for &(addr, value) in &setup {
+            chip.soc
+                .bus()
+                .store(Cycle(0), addr, Width::Word, value)
+                .unwrap();
+        }
+        chip.soc.rearmed = false;
+        chip.soc.changed = None;
+        chip.soc.ledc.settle(c(10), chip.soc.clock.source.apb());
+        assert!(chip.soc.ledc.has_output());
+        {
+            let bus = chip.soc.bus();
+            assert!(bus.access_moves_lines(SYSTIMER + 0x04));
+            assert!(bus.access_moves_lines(SYSTIMER + 0x08));
+        }
+        let mut core = chip.cores.core(CoreId::Pro).clone();
+        let mut bus = Counting {
+            inner: chip.soc.bus(),
+            polls: 0,
+        };
+        assert_eq!(core.run_until(&mut bus, Cycle(100)), orbe_xtensa::Stop::Bus);
+        assert!(
+            bus.inner.soc.rearmed,
+            "OP store rearmed while LEDC output waited"
+        );
+    }
+
     /// A load from a block the model does not simulate ends the run at the load, where one
     /// from a block it runs is listed and reads 0.
     #[test]
