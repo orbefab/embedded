@@ -22,7 +22,7 @@ orbe test
 ```
 
 1. Start from a Block only when one is close to the circuit and the user did not ask to build it from parts. `orbe add <block>` in an empty folder writes a scene, firmware and a test that already work. Check and test, then change it. Tell the user which Block you started from and what you changed.
-2. Otherwise find each part with `orbe search <words>`, read it with `orbe part <id>`, and download it with `orbe add <id>…`. A load such as an LED strip or a heater is `resistor-sqp15`. A separate supply is `barrel-jack-dc21` with its `voltage`.
+2. Otherwise find each part with `orbe search <words>`, read it with `orbe part <id>`, and add it with `orbe add <id>…`. Loads: `resistor-sqp15`. Supplies: `barrel-jack-dc21`, `battery-9v`, `battery-aa-4x`.
 3. Write `scene.jsonc` with a `layout`. Load `orbe skills get breadboards` for layout and seating, and `orbe skills get boards` for board pinouts.
 4. Run `orbe check scene.jsonc` and `orbe lint scene.jsonc` after every edit. With no path, both read `scene.jsonc`. Do what each hint says. A `part_missing` hint is the `orbe add` to run. `orbe nets` lists each net and its pins, and marks `(floating)` on a net with no DC path to ground.
 5. Build the firmware and name the file in the scene. For a Nano or an Uno, load `orbe skills get arduino` first.

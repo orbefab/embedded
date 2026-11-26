@@ -1,0 +1,44 @@
+{
+  "part": "battery-aa-4x-cell",
+  "source": {
+    "script": "model.py",
+    "sha256": "58955319c6e7c6609a0c3bea40155873b537b918100c9bc361489140439e1930",
+    "bytes": 797
+  },
+  "files": {
+    "battery-aa-4x-cell.glb": {
+      "sha256": "7cc58ff79b5af71d021da88d2c628ca4bc15e93bca02cfd9921cb8dfcbb76530",
+      "bytes": 3884
+    },
+    "battery-aa-4x-cell.anchors.json": {
+      "sha256": "909ceb29c949a8480eba596ca0542d816b613791051a352623ba781b96c21917",
+      "bytes": 296
+    }
+  },
+  "box": {
+    "min": [-2, -1, 0],
+    "max": [2, 1, 2.03]
+  },
+  "kept_nodes": [],
+  "draw_calls": 2,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 3,
+      "primitives_out": 2
+    }
+  }
+}

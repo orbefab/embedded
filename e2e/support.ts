@@ -240,7 +240,7 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "button" | "digit" | "fade" | "lcd" | "light" | "pixels" | "relay" | "rgb" | "screen" | "serial" | "servo" | "shift" | "tone";
+export type BlockKind = "battery" | "button" | "digit" | "fade" | "lcd" | "light" | "pixels" | "relay" | "rgb" | "screen" | "serial" | "servo" | "shift" | "temperature" | "tone";
 
 export interface RepoBlock {
   id: string;
@@ -268,6 +268,8 @@ export function blockKind(scene: string, id: string): BlockKind {
   if (/"type"\s*:\s*"relay-module-1ch"/.test(code)) return "relay";
   if (/"type"\s*:\s*"display-7seg-cc"/.test(code) || /"type"\s*:\s*"display-7seg-ca"/.test(code)) return "digit";
   if (/"type"\s*:\s*"servo-sg90"/.test(code)) return "servo";
+  if (/"type"\s*:\s*"battery-9v"/.test(code)) return "battery";
+  if (/"type"\s*:\s*"thermistor-ntc-10k"/.test(code)) return "temperature";
   if (/"type"\s*:\s*"neopixel-stick-8"/.test(code)) return "pixels";
   if (/"type"\s*:\s*"oled-ssd1306-128x64"/.test(code)) return "screen";
   if (/"type"\s*:\s*"lcd1602-i2c"/.test(code)) return "lcd";
@@ -284,6 +286,7 @@ export function blockKind(scene: string, id: string): BlockKind {
 }
 
 const READY_NODES: Record<BlockKind, readonly (readonly [string, string?])[]> = {
+  battery: [["@led1", "body"], ["@btn1", "stem"]],
   button: [["@led1", "body"], ["@btn1", "stem"]],
   digit: [["@disp", "seg-a"]],
   fade: [["@led1", "body"]],
@@ -296,6 +299,7 @@ const READY_NODES: Record<BlockKind, readonly (readonly [string, string?])[]> = 
   serial: [["@board.led", "lens"]],
   servo: [["@servo", "horn"]],
   shift: [["@led1", "body"]],
+  temperature: [["@led1", "body"]],
   tone: [["@bz1"]],
 };
 
@@ -614,6 +618,32 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
   }
   if (block.kind === "servo") {
     await showServo(page, block, start);
+    if (shotName !== null) {
+      await page.locator("canvas").scrollIntoViewIfNeeded();
+      await shot(page, shotName);
+    }
+    return;
+  }
+  if (block.kind === "battery") {
+    await waitGlow(page, true);
+    const strip = page.locator(SERIAL);
+    await expect(strip, `${block.id} idle voltage`).toContainText(/bat=8\.9/, { timeout: 30_000 });
+    const stem = await pointOn(page, "@btn1", "stem", canvas);
+    await page.mouse.move(stem.x, stem.y);
+    await page.mouse.down();
+    await expect(strip, `${block.id} sag voltage`).toContainText(/bat=8\.3/, { timeout: 30_000 });
+    expect(await ledGlow(page)).toBeGreaterThan(0.5);
+    if (shotName !== null) {
+      await page.locator("canvas").scrollIntoViewIfNeeded();
+      await shot(page, shotName);
+    }
+    await page.mouse.up();
+    return;
+  }
+  if (block.kind === "temperature") {
+    const strip = page.locator(SERIAL);
+    await expect(strip, `${block.id} ambient temp`).toContainText(/temp=25\.0 C/, { timeout: 30_000 });
+    await waitGlow(page, false);
     if (shotName !== null) {
       await page.locator("canvas").scrollIntoViewIfNeeded();
       await shot(page, shotName);

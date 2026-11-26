@@ -1,0 +1,20 @@
+# Holding at 90 deg (5 mA servo hold + 0.3 mA divider), battery-aa-4x (6.0 V EMF, 0.9 ohm R_int)
+# sits at 5.995 V. Once the sketch commands 0 deg and the servo moves (140 mA), the 6 V rail sags
+# by 0.126 V to 5.874 V, then recovers to 5.995 V at the stop, and sweeps to 180 deg.
+open
+step 50ms
+expect @bat.pos > 5.98V
+expect @bat.pos < 6.00V
+step 100ms
+expect @bat.pos > 5.84V
+expect @bat.pos < 5.90V
+step 300ms
+expect @servo.angle < 15deg
+expect @bat.pos > 5.98V
+step 200ms
+expect @bat.pos > 5.84V
+expect @bat.pos < 5.90V
+step 400ms
+expect @servo.angle > 165deg
+expect serial contains "pack="
+expect no diagnostics

@@ -91,7 +91,7 @@ fn currents(found: &[Diagnostic]) -> Vec<&Excursion> {
     found
         .iter()
         .filter_map(|d| match d {
-            Diagnostic::RatingCurrent(excursion) => Some(excursion),
+            Diagnostic::RatingCurrent(excursion) => Some(excursion.as_ref()),
             _ => None,
         })
         .collect()

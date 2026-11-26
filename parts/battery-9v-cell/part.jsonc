@@ -1,0 +1,67 @@
+// Internal voltage source for battery-9v (Energizer 522 / ANSI 1604A 9 V alkaline).
+// Unlisted helper part; battery-9v wires this in series with its 1.7 ohm series resistance.
+{
+  "format": 7,
+  "part": "battery-9v-cell",
+  "version": "0.1.0",
+  "title": "9 V alkaline cell stack (internal)",
+  "summary": "Unlisted 9.0 V open-circuit voltage source inside battery-9v, representing six alkaline cells in series.",
+  "tags": ["battery", "9v", "alkaline", "cell", "power"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Energizer 522 Product Datasheet (Form No. 522GL1019)": "https://data.energizer.com/pdfs/522.pdf",
+    "Duracell MN1604 9V Alkaline Datasheet": null,
+  },
+  "real": {
+    "generic": true,
+    "maker": "Energizer",
+    "number": "522",
+    "datasheet": "Energizer 522 Product Datasheet (Form No. 522GL1019)",
+  },
+  "pins": { "pos": [1], "neg": [2] },
+  "model": {
+    "kind": "voltage_source",
+    "voltage": {
+      "value": 9.0,
+      "unit": "V",
+      "source": {
+        "datasheet": {
+          "doc": "Energizer 522 Product Datasheet (Form No. 522GL1019)",
+          "at": "p1 Specifications, Nominal Voltage: 9.0 volts (six Zn/MnO2 alkaline cells in series)",
+          "basis": "nominal",
+        },
+      },
+    },
+    "ratings": {
+      "current": {
+        "value": 0.05,
+        "unit": "A",
+        "characterized": true,
+        "basis": {
+          "sustained": {
+            "average": "rms",
+            "tau": {
+              "value": 1.0,
+              "unit": "s",
+              "source": {
+                "datasheet": {
+                  "doc": "Energizer 522 Product Datasheet (Form No. 522GL1019)",
+                  "at": "p1 Industry Standard Tests, Accelerated Smoke Detector: 10K/620 ohm 1 sec/hr pulse (shortest published pulse on the sheet)",
+                  "basis": "nominal",
+                },
+              },
+            },
+          },
+        },
+        "source": {
+          "datasheet": {
+            "doc": "Energizer 522 Product Datasheet (Form No. 522GL1019)",
+            "at": "p1 Milliamp-Hours Capacity, continuous discharge to 4.8 V at 21 C: highest plotted continuous load is 50 mA (no absolute maximum current is stated)",
+            "basis": "max",
+          },
+        },
+      },
+    },
+    "pins": { "p": "pos", "n": "neg" },
+  },
+}

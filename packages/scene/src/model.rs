@@ -28,8 +28,10 @@ const SCENE_KEYS: &[&str] = &[
 /// BJT's `forward_knee_current`, and a `ws2812`'s `draw`. Format 6 is format 5 plus a
 /// resistor's `ratings.voltage`, the operating window of a sounding drive, a reading
 /// `"of": "angle"` on an `sg90`, a reading `"of": "screen"` and `view.screen`, and pin voltage
-/// `ratings` on `esp32s3`, `ssd1306`, `hd44780_i2c` and `ws2812`.
-pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5, 6];
+/// `ratings` on `esp32s3`, `ssd1306`, `hd44780_i2c` and `ws2812`. Format 7 is format 6 plus
+/// `steinhart_hart` world curves, a resistor's single-value maximum `ratings.voltage`, and
+/// `characterized` on a rating.
+pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5, 6, 7];
 /// Scene `format` values this binary reads.
 pub const SCENE_FORMATS: &[u32] = &[1];
 /// The oldest part format whose file params take `"as": "blob"`.
@@ -46,6 +48,9 @@ const BASIS_FORMAT: u32 = 5;
 /// The oldest part format whose resistor may rate an operating `voltage`. An older orbe
 /// refuses that key, so the part says format 6 and that orbe asks for a newer one.
 const VOLTAGE_FORMAT: u32 = 6;
+/// The oldest part format that carries `steinhart_hart` world curves, single-value resistor
+/// maximum `ratings.voltage`, and `characterized` ratings (refused by orbe 0.3.1).
+const CURVE_FORMAT: u32 = 7;
 /// The oldest part format whose readings take `"of": "angle"`.
 const ANGLE_FORMAT: u32 = 6;
 /// The oldest part format whose readings take `"of": "screen"` and whose view takes `screen`.
@@ -2783,7 +2788,11 @@ fn decode_body(
                 .and_then(Node::props)
                 .unwrap_or_default()
                 .iter()
-                .find(|prop| prop.key == "voltage" && !prop.value.is_null())
+                .find(|prop| {
+                    prop.key == "voltage"
+                        && !prop.value.is_null()
+                        && prop.value.get("value").is_none()
+                })
         {
             gate(
                 out,
@@ -2802,6 +2811,58 @@ fn decode_body(
                 .find(|prop| prop.key == "ratings")
         {
             gate(out, kind, "ratings", prop.key_span, VOLTAGE_FORMAT, format);
+        }
+    }
+    if format < CURVE_FORMAT {
+        if kind == "resistor"
+            && let Some(prop) = node
+                .get("ratings")
+                .and_then(Node::props)
+                .unwrap_or_default()
+                .iter()
+                .find(|prop| prop.key == "voltage" && prop.value.get("value").is_some())
+        {
+            gate(
+                out,
+                kind,
+                "ratings.voltage",
+                prop.key_span,
+                CURVE_FORMAT,
+                format,
+            );
+        }
+        if kind == "resistor"
+            && let Some(curve) = node.get("resistance").and_then(|r| r.get("curve"))
+            && let Some(prop) = curve
+                .props()
+                .unwrap_or_default()
+                .iter()
+                .find(|prop| prop.key == "kind" && prop.value.str() == Some("steinhart_hart"))
+        {
+            gate(
+                out,
+                kind,
+                "resistance.curve.steinhart_hart",
+                prop.value.span,
+                CURVE_FORMAT,
+                format,
+            );
+        }
+        let ratings = node
+            .get("ratings")
+            .and_then(Node::props)
+            .unwrap_or_default();
+        for rating in ratings {
+            if let Some(prop) = rating
+                .value
+                .props()
+                .unwrap_or_default()
+                .iter()
+                .find(|prop| prop.key == "characterized")
+            {
+                let key = format!("ratings.{}.characterized", rating.key);
+                gate(out, kind, &key, prop.key_span, CURVE_FORMAT, format);
+            }
         }
     }
     let before_dout = kind == "ws2812" && format < DOUT_FORMAT;

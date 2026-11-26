@@ -1,0 +1,48 @@
+// A 9 V PP3 battery beside a breadboard feeds an LM7805 5 V regulator, a green LED,
+// the Nano's VIN pin, and a 10k/10k divider into A0. Pressing btn1 switches a 25 ohm
+// cement load resistor across the 9 V rail, demonstrating the battery's 1.7 ohm sag.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "build/regulator.ino.hex" },
+    "bat": { "type": "battery-9v" },
+    "reg": { "type": "lm7805-to220" },
+    "r_led": { "type": "resistor-axial", "resistance": "470" },
+    "led1": { "type": "led-5mm-green" },
+    "r_top": { "type": "resistor-axial", "resistance": "10k" },
+    "r_bot": { "type": "resistor-axial", "resistance": "10k" },
+    "btn1": { "type": "tactile-switch-6mm" },
+    "r_load": { "type": "resistor-sqp15", "resistance": "25" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "bat": { "at": [108, -22.86, 0] }, // connector faces -X, aligned with W29/X29 with room for the jumper plugs
+    "r_load": { "at": [-3, 42, 0] }, // cement power resistor beside +Y; leads at x = -29 and +23, clear of its box at both ends
+    "reg": { "on": { "IN": "bb.g18" } }, // IN g18, GND g19, OUT g20
+    "r_led": { "on": { "a": "bb.h20" } }, // b lands in h24
+    "led1": { "on": { "anode": "bb.g24" } }, // cathode lands in g25
+    "r_top": { "on": { "a": "bb.c16" } }, // b lands in c20
+    "r_bot": { "on": { "a": "bb.b20" } }, // b lands in b24
+    "btn1": { "on": { "a": "bb.f29" }, "rotate": [0, 0, 90] }, // a in f29/e29, b in f27/e27
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["bb.a14", "bb.X14", { "color": "#161616" }], // Nano GND to - rail
+    ["bb.X15", "bb.Z15", { "color": "#161616" }], // bridge - rails
+    ["bb.a15", "bb.W15", { "color": "#d12b2b" }], // Nano VIN to +9V rail
+    ["bb.W17", "bb.Y17", { "color": "#d12b2b" }], // bridge +9V rails
+    ["bat.pos", "bb.W29", { "color": "#d12b2b" }], // battery + to +9V rail
+    ["bat.neg", "bb.X29", { "color": "#161616" }], // battery - to GND rail
+    ["bb.a16", "bb.W16", { "color": "#d12b2b" }], // r_top.a to +9V rail
+    ["bb.a24", "bb.X23", { "color": "#161616" }], // r_bot.b to GND rail
+    ["bb.a20", "bb.a4", { "color": "#2e8b57" }], // divider midpoint to A0 along row a
+    ["bb.j18", "bb.Y16", { "color": "#d12b2b" }], // reg.IN to +9V rail
+    ["bb.j19", "bb.Z19", { "color": "#161616" }], // reg.GND to GND rail
+    ["bb.j25", "bb.Z25", { "color": "#161616" }], // led1.cathode to GND rail
+    ["bb.a29", "bb.W28", { "color": "#d12b2b" }], // btn1.a to +9V rail
+    ["bb.j27", "r_load.b", { "color": "#e07b24" }], // btn1.b clear of r_load's +X end
+    ["r_load.a", "bb.Z2", { "color": "#161616" }], // left end of load resistor clear of r_load's -X end to GND
+  ],
+}

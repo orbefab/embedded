@@ -64,6 +64,7 @@ export interface Rating {
   readonly value: number | null;
   readonly unit?: string;
   readonly source?: Source;
+  readonly characterized?: boolean;
 }
 
 export interface PartRecord extends Common {

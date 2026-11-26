@@ -1,0 +1,11 @@
+// A Block: a small circuit that works. `orbe add nano-thermistor` installs it into a project.
+{
+  "format": 1,
+  "block": "nano-thermistor",
+  "version": "0.1.0",
+  "title": "Thermistor thermometer on a Nano",
+  "summary": "Move the temperature slider. A 10 kΩ NTC thermistor and a 10 kΩ resistor divide 5 V into A0; the Nano computes °C from the B equation, prints it over Serial and lights the LED at 30 °C.",
+  "board": "nano-board",
+  "tags": ["thermistor", "ntc", "temperature", "thermometer", "sensor", "analog", "nano"],
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND GPL-3.0-or-later WITH GCC-exception-3.1",
+}

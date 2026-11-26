@@ -577,9 +577,9 @@ pub enum Diagnostic {
         solve: Solve,
     },
     /// A rated current went over its limit.
-    RatingCurrent(Excursion),
+    RatingCurrent(Box<Excursion>),
     /// A rated power went over its limit.
-    RatingPower(Excursion),
+    RatingPower(Box<Excursion>),
     /// A chip pin's voltage left its rated window.
     RatingVoltage(VoltageExcursion),
     /// A linear regulator was held at its current limit and its output sagged.
@@ -629,6 +629,9 @@ pub struct Excursion {
     /// over the rating, and the filter, `peak`, is still under it. The value is how long that
     /// sample would hold before the filter crosses. `None` for a filter that has crossed.
     pub held_ps: Option<NonZeroU64>,
+    /// True when the sheet states no absolute maximum and `limit` is the largest load the sheet
+    /// characterizes (such as a primary alkaline battery's plotted test drains).
+    pub characterized: bool,
 }
 
 /// One chip pin outside its rated voltage window, merged over the whole run. Volts are over
@@ -892,31 +895,23 @@ impl Diagnostic {
 
     /// Whether this is a sustained rating over now, whose filter has not crossed.
     pub fn over_now(&self) -> bool {
-        matches!(
-            self,
-            Diagnostic::RatingCurrent(Excursion {
-                held_ps: Some(_),
-                ..
-            }) | Diagnostic::RatingPower(Excursion {
-                held_ps: Some(_),
-                ..
-            })
-        )
+        match self {
+            Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
+                excursion.held_ps.is_some()
+            }
+            _ => false,
+        }
     }
 
     /// Whether this is a peak rating's warning. A sustained rating with a peak limit warns on
     /// the same quantity under both bases.
     pub fn peak(&self) -> bool {
-        matches!(
-            self,
-            Diagnostic::RatingCurrent(Excursion {
-                basis: Basis::Peak,
-                ..
-            }) | Diagnostic::RatingPower(Excursion {
-                basis: Basis::Peak,
-                ..
-            })
-        )
+        match self {
+            Diagnostic::RatingCurrent(excursion) | Diagnostic::RatingPower(excursion) => {
+                excursion.basis == Basis::Peak
+            }
+            _ => false,
+        }
     }
 
     /// `(time, code, refs)`. `Results` sorts by this and then by JSON bytes.
@@ -2104,7 +2099,7 @@ impl Diagnostic {
                     Basis::Peak => (None, None),
                     Basis::Sustained { tau_ps, average } => (Some(tau_ps), Some(average.as_str())),
                 };
-                serde_json::json!({
+                let mut data = serde_json::json!({
                     "average": average,
                     "held_ps": excursion.held_ps,
                     "limit": excursion.limit,
@@ -2114,7 +2109,13 @@ impl Diagnostic {
                     "peak_ps": excursion.peak_at,
                     "sample": excursion.sample,
                     "tau_ps": tau_ps,
-                })
+                });
+                if excursion.characterized
+                    && let Some(map) = data.as_object_mut()
+                {
+                    map.insert("characterized".into(), serde_json::json!(true));
+                }
+                data
             }
             Diagnostic::RatingVoltage(excursion) => {
                 serde_json::json!({
@@ -2179,16 +2180,21 @@ fn over_rating(excursion: &Excursion, unit: &str, namer: &dyn Fn(&Ref) -> String
         basis,
         sample,
         held_ps,
+        characterized,
         ..
     } = excursion;
     let quantity = namer(quantity);
     let value = |v: f64| format!("{} {unit}", significant_text(v));
-    let rating = format!("over its {} rating{}", value(*limit), for_time(*over_ps));
+    let bound = if *characterized {
+        format!("beyond the {} load its sheet characterizes", value(*limit))
+    } else {
+        format!("over its {} rating", value(*limit))
+    };
+    let rating = format!("{bound}{}", for_time(*over_ps));
     match (basis, held_ps) {
         (_, Some(held)) => format!(
-            "{quantity} is {} now, over its {} rating; it warns if held about {} ps",
+            "{quantity} is {} now, {bound}; it warns if held about {} ps",
             value(*sample),
-            value(*limit),
             significant_ps(held.get())
         ),
         (Basis::Sustained { tau_ps, average }, None) => format!(
@@ -2318,8 +2324,13 @@ fn outside_window(excursion: &VoltageExcursion, namer: &dyn Fn(&Ref) -> String) 
         (None, Some(high)) => format!("its {} V ceiling", significant_text(*high)),
         (None, None) => unreachable!("a window rates a floor or a ceiling"),
     };
+    let over_ground = if matches!(excursion.pin, Ref::Quantity(..)) {
+        ""
+    } else {
+        " over the chip's ground"
+    };
     format!(
-        "{pin} reaches {} V over the chip's ground, outside {window}{}",
+        "{pin} reaches {} V{over_ground}, outside {window}{}",
         significant_text(*peak),
         for_time(*over_ps)
     )

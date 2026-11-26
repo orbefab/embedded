@@ -10,7 +10,7 @@ Place every part in `layout` so `orbe lint` reports no `scene.unplaced`, `scene.
 - Place each part near the pins it uses, working outward, with space between parts so bodies and holes stay clear.
 - Put power and ground on the rails (`W`/`Y` +, `X`/`Z` -, red `#d12b2b` and black `#161616`), bridging sides when needed.
 - Keep wires short and off part bodies; do not fan jumpers across the board.
-- Place off-board modules (LCD, relay, servo, Uno) beside the board with `at` and `rotate` so their headers face it.
+- Place off-board modules (LCD, relay, servo, battery, Uno) beside the board with `at` and `rotate` so their headers or leads face it.
 - Copy Block layouts: `nano-relay-led` (Nano at columns 1 to 15, rails bridged, relay beside the board facing it), `uno-button-led` (Uno beside a breadboard), and `devkitc-gy-bmp280` (DevKitC-1 and sensor on a breadboard).
 
 ## Holes and seating

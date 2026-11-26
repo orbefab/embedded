@@ -65,6 +65,13 @@ enum WireCurve {
         y: WireValue,
         beta: WireValue,
     },
+    SteinhartHart {
+        y: WireValue,
+        a: WireValue,
+        b: WireValue,
+        c: WireValue,
+        d: WireValue,
+    },
     Linear {
         x0: WireValue,
         y0: WireValue,
@@ -222,7 +229,7 @@ pub(crate) fn resolve_param(
     let curve = curve?;
     let row = quantity.row();
     let mut ok = true;
-    for end in [row.min, row.max] {
+    for end in curve.check_points(row.min, row.max) {
         let value = curve.at(end);
         let rule = if value.is_finite() {
             broken(value)
@@ -322,6 +329,29 @@ fn resolve_curve(
                 x: x?,
                 y: y?,
                 beta: beta?,
+            })
+        }
+        WireCurve::SteinhartHart { y, a, b, c, d } => {
+            let y = value("y", unit, y);
+            let a = value("a", FRACTION_UNIT, a);
+            let b = value("b", "K", b);
+            let c = value("c", "K^2", c);
+            let d = value("d", "K^3", d);
+            if quantity != Quantity::Temperature {
+                out.push(Diagnostic::NetlistWorld {
+                    part: Some(part.clone()),
+                    field: at("kind"),
+                    name: quantity.name().to_string(),
+                    rule: WorldRule::Temperature,
+                });
+                return None;
+            }
+            Some(Curve::SteinhartHart {
+                y: y?,
+                a: a?,
+                b: b?,
+                c: c?,
+                d: d?,
             })
         }
         WireCurve::Linear { x0, y0, x1, y1 } => {
