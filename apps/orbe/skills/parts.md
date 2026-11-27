@@ -15,7 +15,7 @@ The copy is the project's. Edit it. `orbe check`, `orbe open` and `orbe test` re
 
 `orbe add` copies `part.jsonc`, the `.glb` and the anchors when the part has them. It does not copy `model.py` or `asset.json`.
 
-A folder already at `parts/<id>/` is `part_exists` and nothing is written. The message names the copy's version, as `parts/led-5mm is already led-5mm 0.3.1`. A part nested inside a board does not block adding that part on its own. Adding the board again after you remove `parts/<board>/` works while that part stays at the top of `parts/`.
+A folder already at `parts/<id>/` is `part_exists` and nothing is written. The message names the copy's version, as `parts/led-5mm is already led-5mm 0.3.2`. A part nested inside a board does not block adding that part on its own. Adding the board again after you remove `parts/<board>/` works while that part stays at the top of `parts/`.
 
 `@<registry>/<id>` is a usage error. This orbe reads the `@orbefab` registry only.
 
