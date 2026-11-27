@@ -2,7 +2,7 @@
 {
   "format": 7,
   "part": "led-5mm-blue",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "title": "5 mm LED, blue",
   "summary": "Round 5 mm through-hole LED, blue and water clear, two leads on 2.54 mm. The longer lead is the anode.",
   "tags": ["led", "light", "indicator", "through-hole", "blue"],

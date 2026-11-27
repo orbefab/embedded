@@ -1,0 +1,44 @@
+{
+  "part": "tmp36",
+  "source": {
+    "script": "model.py",
+    "sha256": "8e8795b384274858ae750e5d30ff6bfe765849f4a61f3afbf70b4f2a884e8c0b",
+    "bytes": 1965
+  },
+  "files": {
+    "tmp36.glb": {
+      "sha256": "17b991709f2b51f3eca1b0fd9432cd4ab96b7f539f549d6c6b9a61b6c556e644",
+      "bytes": 79628
+    },
+    "tmp36.anchors.json": {
+      "sha256": "ed3bcae3613aaf697c30ff6ae4d1a426d3a24db88c468f0d9aa4c18bcbdcf327",
+      "bytes": 403
+    }
+  },
+  "box": {
+    "min": [-2.77, -1.33, -12.7],
+    "max": [2.77, 2.29, 7.12]
+  },
+  "kept_nodes": ["lead-1", "lead-2", "lead-3"],
+  "draw_calls": 5,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 3,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 2.54
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 6,
+      "primitives_out": 5
+    }
+  }
+}

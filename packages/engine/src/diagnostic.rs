@@ -2496,15 +2496,22 @@ fn outside_window(excursion: &VoltageExcursion, namer: &dyn Fn(&Ref) -> String) 
     } = excursion;
     let pin = namer(pin);
     if *operating {
-        let low = low.unwrap_or(0.0);
-        let high = high.unwrap_or(0.0);
-        return format!(
-            "{pin} peaks at {} V, outside its {} V to {} V operating voltage{}",
-            significant_text(*peak),
-            significant_text(low),
-            significant_text(high),
-            for_time(*over_ps)
-        );
+        return match (low, high) {
+            (Some(low), Some(high)) => format!(
+                "{pin} peaks at {} V, outside its {} V to {} V operating voltage{}",
+                significant_text(*peak),
+                significant_text(*low),
+                significant_text(*high),
+                for_time(*over_ps)
+            ),
+            (None, Some(high)) => format!(
+                "{pin} reaches {} V over the chip's ground, above its {} V maximum operating supply{}",
+                significant_text(*peak),
+                significant_text(*high),
+                for_time(*over_ps)
+            ),
+            (_, None) => unreachable!("an operating voltage below a floor is rating.supply_low"),
+        };
     }
     let window = match (low, high) {
         (Some(low), Some(high)) => format!(

@@ -2,15 +2,25 @@
 # Builds the registry the site serves from release tags v0.2.0 and later.
 # An older tag's record at id@version stays. The newest tag supplies the index
 # name and the schemas. Each index row names the lowest orbe whose part formats
-# include that record's format. A format no tag reads names the patch after
-# the newest tag.
+# include that record's format and the formats of every part it depends on,
+# all the way down. A format no tag reads names the patch after the newest tag.
 #
-# usage: scripts/registry.sh <orbe> <out>
+# The working tree is built too, as the next release, the patch after the newest
+# tag. A part or Block it changes at a version a tag published fails the run,
+# since the site keeps serving the tag's bytes at that version. --with-tree also
+# merges the working tree into <out>, as the next release would serve it.
+#
+# usage: scripts/registry.sh [--with-tree] <orbe> <out>
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+with_tree=()
+if [[ ${1:-} == --with-tree ]]; then
+  with_tree=(--with-tree)
+  shift
+fi
 if [[ $# -ne 2 ]]; then
-  echo "usage: scripts/registry.sh <orbe> <out>" >&2
+  echo "usage: scripts/registry.sh [--with-tree] <orbe> <out>" >&2
   exit 2
 fi
 orbe=$1
@@ -46,25 +56,38 @@ trap 'rm -rf "$work"' EXIT
 manifest=$work/manifest.json
 printf '[\n' > "$manifest"
 comma=""
+
+# formats <src> <name>: PART_FORMATS from that source, as a JSON list body.
+formats() {
+  local found
+  found=$(sed -n 's/^pub const PART_FORMATS: &\[u32\] = &\[\([^]]*\)\];/\1/p' "$1/packages/scene/src/model.rs")
+  if [[ -z $found ]]; then
+    echo "scripts/registry.sh: $2 has no PART_FORMATS in packages/scene/src/model.rs" >&2
+    exit 1
+  fi
+  printf '%s' "$found" | tr -d ' '
+}
+
 for tag in "${tags[@]}"; do
   version=${tag#v}
   src=$work/src-$version
   built=$work/reg-$version
   mkdir -p "$src"
   git archive "$tag" | tar -x -C "$src"
-  formats=$(sed -n 's/^pub const PART_FORMATS: &\[u32\] = &\[\([^]]*\)\];/\1/p' "$src/packages/scene/src/model.rs")
-  if [[ -z $formats ]]; then
-    echo "scripts/registry.sh: $tag has no PART_FORMATS in packages/scene/src/model.rs" >&2
-    exit 1
-  fi
-  json_formats=$(printf '%s' "$formats" | tr -d ' ')
+  json_formats=$(formats "$src" "$tag")
   "$orbe" registry build "$src" "$built"
   printf '%s{"version":"%s","formats":[%s],"dir":"%s"}' "$comma" "$version" "$json_formats" "$built" >> "$manifest"
   comma=$',\n'
 done
+
+newest=${tags[-1]#v}
+next="${newest%.*}.$(( ${newest##*.} + 1 ))"
+tree_formats=$(formats . "the working tree")
+"$orbe" registry build . "$work/reg-tree"
+printf '%s{"version":"%s","formats":[%s],"dir":"%s","tree":true}' "$comma" "$next" "$tree_formats" "$work/reg-tree" >> "$manifest"
 printf '\n]\n' >> "$manifest"
 
 cargo build -p orbe-registry --bin publish --locked
 target=$(cargo metadata --format-version 1 --no-deps |
   sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
-"$target/debug/publish" "$manifest" "$out"
+"$target/debug/publish" "${with_tree[@]}" "$manifest" "$out"

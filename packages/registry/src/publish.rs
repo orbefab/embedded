@@ -1,9 +1,10 @@
 //! The registry a release serves: every part and Block from each release, oldest first.
 //! A record at `id@version` is the one from the oldest release that contains it. A later
-//! release does not replace those bytes. Each index row names the lowest orbe whose part
-//! formats include that record's format, and takes `listed` from the newest release that
-//! contains that name. A format no release reads names the next release, the patch after
-//! the newest one.
+//! release does not replace those bytes. Each index row names the lowest orbe that reads the
+//! record and every record it depends on, all the way down, and takes `listed` from the
+//! newest release that contains that name. A part's own is the lowest orbe whose part formats
+//! include its format. A format no release reads names the next release, the patch after the
+//! newest one.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -11,7 +12,7 @@ use std::path::Path;
 
 use orbe_scene::{Missing, Version};
 
-use crate::item::{Index, Item, Kind, Row};
+use crate::item::{Index, Item, Kind};
 use crate::{
     BlockGaps, Error, Gaps, INDEX, INDEX_SCHEMA, ITEM_SCHEMA, Notice, Registry, Report, json,
     validate_index,
@@ -62,6 +63,8 @@ pub fn publish(releases: &[Release]) -> Result<BTreeMap<String, Vec<u8>>, Error>
 
     let mut output = BTreeMap::new();
     let mut rows = Vec::new();
+    let mut owns = Vec::new();
+    let mut deps = Vec::new();
     let mut seen = BTreeSet::new();
     for &index in &order {
         let release = &releases[index];
@@ -98,19 +101,52 @@ pub fn publish(releases: &[Release]) -> Result<BTreeMap<String, Vec<u8>>, Error>
                     .get(&item.head().name)
                     .copied()
                     .unwrap_or(true);
-                let mut row = item.row(&record, listed);
-                row.orbe = Some(orbe_for(
+                rows.push(item.row(&record, listed));
+                owns.push(own_orbe(
                     item,
                     &release.registry,
                     &release.version,
                     &unread,
                     &format_orbe,
-                    &rows,
                 ));
+                deps.push(
+                    item.head()
+                        .registry_dependencies
+                        .iter()
+                        .filter(|dep| dep.registry.is_none())
+                        .map(|dep| (dep.id.clone(), dep.version.to_string()))
+                        .collect::<Vec<_>>(),
+                );
                 output.insert(record_name, record);
-                rows.push(row);
             }
         }
+    }
+    let at: BTreeMap<(String, String), usize> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| ((row.name.clone(), row.version.clone()), i))
+        .collect();
+    for (i, row) in rows.iter_mut().enumerate() {
+        let mut stack = vec![i];
+        let mut reached = BTreeSet::from([i]);
+        let mut best = owns[i].own;
+        while let Some(next) = stack.pop() {
+            for dep in &deps[next] {
+                let Some(&child) = at.get(dep) else {
+                    continue;
+                };
+                if !reached.insert(child) {
+                    continue;
+                }
+                if let Some(version) = owns[child].own
+                    && best.is_none_or(|have| version > have)
+                {
+                    best = Some(version);
+                }
+                stack.push(child);
+            }
+        }
+        row.orbe = Some(best.unwrap_or(owns[i].fallback).to_string());
     }
     rows.sort_by(|a, b| {
         a.name
@@ -132,6 +168,53 @@ pub fn publish(releases: &[Release]) -> Result<BTreeMap<String, Vec<u8>>, Error>
     Ok(output)
 }
 
+/// One line for each item in `tree` that a release already published at the same version with
+/// other files or other dependencies. The site keeps serving the bytes of the oldest release
+/// that holds a version, so a changed item reaches nobody until its version is raised.
+pub fn unbumped(releases: &[Release], tree: &Registry) -> Vec<String> {
+    let mut order: Vec<&Release> = releases.iter().collect();
+    order.sort_by_key(|release| Version::parse(&release.version));
+    let mut served: BTreeMap<(String, String), (&str, &Item)> = BTreeMap::new();
+    for release in order {
+        for item in &release.registry.items {
+            let key = (item.head().name.clone(), item.head().version.clone());
+            served
+                .entry(key)
+                .or_insert((release.version.as_str(), item));
+        }
+    }
+    let mut lines = Vec::new();
+    for item in &tree.items {
+        let head = item.head();
+        let Some((tag, published)) = served.get(&(head.name.clone(), head.version.clone())) else {
+            continue;
+        };
+        let was = published.head();
+        let mut changed = Vec::new();
+        if was.hash != head.hash {
+            changed.push("files");
+        }
+        if was.registry_dependencies != head.registry_dependencies {
+            changed.push("dependencies");
+        }
+        if changed.is_empty() {
+            continue;
+        }
+        let (folder, file) = match item.kind() {
+            Kind::Part => ("parts", "part.jsonc"),
+            Kind::Block => ("blocks", "block.jsonc"),
+        };
+        lines.push(format!(
+            "`{}` {} has other {} than v{tag} published at that version, and the site keeps serving v{tag}'s. raise the version in {folder}/{}/{file}",
+            head.name,
+            head.version,
+            changed.join(" and "),
+            head.name,
+        ));
+    }
+    lines
+}
+
 fn copy_schema(output: &mut BTreeMap<String, Vec<u8>>, registry: &Registry, name: &str) {
     if let Some(bytes) = registry.output.get(name) {
         output.insert(name.to_string(), bytes.clone());
@@ -148,47 +231,40 @@ fn index_of(registry: &Registry) -> Result<Index, Error> {
         .map_err(|error| Error::Invalid(format!("a release index does not parse: {error}")))
 }
 
-fn orbe_for(
+/// The orbe an item needs by itself. A part needs the lowest orbe that reads its format. A
+/// Block needs only what its parts need, and falls back to the release that published it when
+/// it depends on no part in this registry. A part with no readable format needs the release
+/// that published it.
+struct Own {
+    own: Option<Version>,
+    fallback: Version,
+}
+
+fn own_orbe(
     item: &Item,
     registry: &Registry,
     publishing: &str,
     unread: &str,
     format_orbe: &BTreeMap<u32, String>,
-    rows: &[Row],
-) -> String {
-    if item.kind() == Kind::Part {
-        return match part_format(registry, item) {
-            Some(format) => format_orbe
-                .get(&format)
-                .cloned()
-                .unwrap_or_else(|| unread.to_string()),
-            None => publishing.to_string(),
+) -> Own {
+    let fallback = Version::parse(publishing).expect("publish checked each release version");
+    if item.kind() == Kind::Block {
+        return Own {
+            own: None,
+            fallback,
         };
     }
-    let mut best = None;
-    for dep in &item.head().registry_dependencies {
-        if dep.registry.is_some() {
-            continue;
+    let own = match part_format(registry, item) {
+        Some(format) => {
+            let text = format_orbe.get(&format).map_or(unread, String::as_str);
+            Version::parse(text).unwrap_or(fallback)
         }
-        let version = dep.version.to_string();
-        let Some(row) = rows
-            .iter()
-            .find(|row| row.name == dep.id && row.version == version)
-        else {
-            continue;
-        };
-        let Some(text) = &row.orbe else {
-            continue;
-        };
-        let Some(parsed) = Version::parse(text) else {
-            continue;
-        };
-        if best.is_none_or(|have: Version| parsed > have) {
-            best = Some(parsed);
-        }
+        None => fallback,
+    };
+    Own {
+        own: Some(own),
+        fallback,
     }
-    best.map(|version| version.to_string())
-        .unwrap_or_else(|| publishing.to_string())
 }
 
 /// The patch after `version`. A format no release reads names this, so the newest

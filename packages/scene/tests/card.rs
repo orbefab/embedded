@@ -132,7 +132,7 @@ fn a_passive_a_chip_and_a_board_keep_only_what_their_files_say() {
     assert!(board.categories.is_some());
     assert_eq!(
         board.uses.get("led-0603").map(String::as_str),
-        Some("0.2.1")
+        Some("0.2.2")
     );
     assert!(board.used_by.is_empty());
     let docs = board.docs.unwrap();
@@ -674,6 +674,43 @@ fn starter_kit_rgb_ring_and_joystick_show_ratings_and_match_search() {
         assert!(
             hits.iter().any(|card| card.name == want),
             "query `{query}` missed `{want}`"
+        );
+    }
+}
+
+#[test]
+fn tmp36_shows_ratings_pins_and_matches_search() {
+    let tmp = card(&parts_dir(), "tmp36").unwrap();
+    let pin_names: Vec<&str> = tmp.pins.iter().map(|pin| pin.name.as_str()).collect();
+    assert_eq!(pin_names, ["VS", "VOUT", "GND"]);
+    assert_eq!(tmp.real.maker.as_deref(), Some("Analog Devices"));
+    assert_eq!(tmp.real.number.as_deref(), Some("TMP36GT9Z"));
+    for (name, value) in [
+        ("supply_min", 2.7),
+        ("supply_max", 5.5),
+        ("supply_voltage", 7.0),
+    ] {
+        assert!(
+            tmp.ratings
+                .iter()
+                .any(|r| r.name == name && r.value == Some(value) && !r.characterized),
+            "tmp36: missing rating {name}={value} in {:?}",
+            tmp.ratings
+        );
+    }
+    for query in [
+        "tmp36",
+        "temperature",
+        "thermometer",
+        "sensor",
+        "analog",
+        "to-92",
+        "through-hole",
+    ] {
+        let hits = search(&parts_dir(), query);
+        assert!(
+            hits.iter().any(|card| card.name == "tmp36"),
+            "query `{query}` missed `tmp36`"
         );
     }
 }

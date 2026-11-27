@@ -17,7 +17,7 @@
 {
   "format": 5,
   "part": "relay-module-1ch",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "Relay module, 1 channel, 5 V",
   "summary": "Keyes KY-019 style active-high 5 V relay module with a Songle SRD-05VDC-SL-C, S8050, 1N4007 and indicator LED. Its SPDT contacts are rated 7 A at 28 V DC.",
   "tags": ["relay", "module", "songle", "5v", "ky-019"],
@@ -37,7 +37,7 @@
     "npn-l8050-sot23": "0.2.2",
     "resistor-0603": "0.2.0",
     "diode-do41-flush": "0.1.0",
-    "led-0805": "0.2.1",
+    "led-0805": "0.2.2",
     "pin-header-1x3": "0.1.0",
     "screw-terminal-3p-5mm": "0.1.0"
   },

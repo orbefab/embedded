@@ -1,0 +1,15 @@
+# Analog Devices TMP36 (Rev. H Table 1): 750 mV at 25 C, 10 mV/C scale factor (900 mV at 40 C).
+# On USB the Nano's AVCC sits near 4.76 V (10-bit ADC step ~4.65 mV, ~0.46 C/LSB); the sketch's
+# printed readings (24.8 C at 25 C, 39.7 C at 40 C) land within one ADC step and the sheet's
+# +/- 1 C typ (+/- 2 C over range) accuracy.
+open
+step 100ms
+expect @nano.A0 > 0.74V
+expect @nano.A0 < 0.76V
+expect serial contains "voltage=0.75 V, temp=24.8 C"
+set temperature 40
+step 50ms
+expect @nano.A0 > 0.89V
+expect @nano.A0 < 0.91V
+expect serial contains "voltage=0.90 V, temp=39.7 C"
+expect no diagnostics

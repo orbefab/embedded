@@ -61,6 +61,8 @@ pub(crate) struct Ratings {
     limits: Vec<RegulatorLimit>,
     /// A resistor's operating voltage, checked on the peak of a drive that leaves zero.
     drives: Vec<CoilDrive>,
+    /// A powered analog part's maximum operating supply voltage.
+    supply_ceilings: Vec<SupplyCeiling>,
     chips: Vec<Gauge>,
     /// Each part's operating temperature, read against the world's schedule rather than a row.
     temperatures: Vec<temperature::TemperatureWatch>,
@@ -315,6 +317,21 @@ struct Pin {
     strong_pull_up: Option<f64>,
     pull_down: Option<f64>,
     leakage: Option<f64>,
+}
+
+#[derive(Clone)]
+struct SupplyCeiling {
+    pin: Ref,
+    vs: usize,
+    gnd: usize,
+    max: f64,
+    max_rounded: f64,
+    /// Absolute maximum supply ceiling, rounded. When `v` exceeds it, the abs-max `Window` warns
+    /// instead so a steady over-voltage does not emit two `rating.voltage` warnings.
+    abs_max_rounded: Option<f64>,
+    worst: f64,
+    over: bool,
+    excursion: Option<VoltageExcursion>,
 }
 
 #[derive(Clone)]
@@ -824,6 +841,7 @@ impl Ratings {
             }
         }
         let mut supplies = Vec::new();
+        let mut supply_ceilings = Vec::new();
         for (_, part) in netlist.parts() {
             let pin =
                 |name: &str| Ref::Pin(part.name.clone(), Name::new(name).expect("a pin name"));
@@ -869,6 +887,57 @@ impl Ratings {
                         });
                     }
                 }
+                Model::AnalogTempSensor(sensor) => {
+                    let vs = columns.net(sensor.pins[0]);
+                    let gnd = columns.net(sensor.pins[2]);
+                    if let Some(min) = &sensor.supply_min {
+                        let min = min.si.get();
+                        supplies.push(SupplyWatch {
+                            pin: pin("vs"),
+                            column: vs,
+                            gnd,
+                            min,
+                            min_rounded: significant(min),
+                            clock_hz: None,
+                            last_band: None,
+                            episode: None,
+                            excursion: None,
+                            excursion_held: false,
+                            began: 0,
+                            closed: 0,
+                        });
+                    }
+                    if let Some(max) = &sensor.max_supply {
+                        windows.push(Window {
+                            pin: pin("vs"),
+                            column: vs,
+                            vcc: gnd,
+                            gnd,
+                            below: None,
+                            above: Some(Ceiling::Fixed(max.si.get())),
+                            worst: 0.0,
+                            over: false,
+                            excursion: None,
+                        });
+                    }
+                    if let Some(max) = &sensor.supply_max {
+                        let max = max.si.get();
+                        supply_ceilings.push(SupplyCeiling {
+                            pin: pin("vs"),
+                            vs,
+                            gnd,
+                            max,
+                            max_rounded: significant(max),
+                            abs_max_rounded: sensor
+                                .max_supply
+                                .as_ref()
+                                .map(|abs| significant(abs.si.get())),
+                            worst: 0.0,
+                            over: false,
+                            excursion: None,
+                        });
+                    }
+                }
                 _ => {}
             }
         }
@@ -879,6 +948,7 @@ impl Ratings {
             supplies,
             limits,
             drives,
+            supply_ceilings,
             chips,
             temperatures: temperature::watches(netlist, columns),
             last: None,
@@ -1226,6 +1296,44 @@ impl Ratings {
                 }
             }
         }
+        for ceiling in &mut self.supply_ceilings {
+            elapsed(
+                ceiling.over,
+                ceiling.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
+                self.last,
+            );
+            let v = row[ceiling.vs].get() - row[ceiling.gnd].get();
+            let over_operating = exceeds_rounded(v, ceiling.max_rounded);
+            let over_abs = ceiling
+                .abs_max_rounded
+                .is_some_and(|abs| exceeds_rounded(v, abs));
+            ceiling.over = over_operating && !over_abs;
+            if !ceiling.over {
+                continue;
+            }
+            let past = v - ceiling.max;
+            match &mut ceiling.excursion {
+                None => {
+                    ceiling.worst = past;
+                    ceiling.excursion = Some(VoltageExcursion {
+                        pin: ceiling.pin.clone(),
+                        low: None,
+                        high: Some(ceiling.max),
+                        peak: v,
+                        peak_at: at,
+                        first: at,
+                        over_ps: self.timing.over_ps(),
+                        operating: true,
+                    });
+                }
+                Some(excursion) if past > ceiling.worst => {
+                    ceiling.worst = past;
+                    excursion.peak = v;
+                    excursion.peak_at = at;
+                }
+                Some(_) => {}
+            }
+        }
         self.last = Some(at);
         self.restarted = false;
     }
@@ -1256,11 +1364,16 @@ impl Ratings {
             .drives
             .iter()
             .filter_map(|drive| Some(Diagnostic::RatingVoltage(drive.excursion.clone()?)));
+        let ceilings = self
+            .supply_ceilings
+            .iter()
+            .filter_map(|ceiling| Some(Diagnostic::RatingVoltage(ceiling.excursion.clone()?)));
         currents
             .chain(voltages)
             .chain(supplies)
             .chain(limits)
             .chain(drives)
+            .chain(ceilings)
             .collect()
     }
 
@@ -1367,6 +1480,7 @@ impl Ratings {
                 .any(|s| s.excursion.is_some() || s.episode.is_some())
             || self.limits.iter().any(|l| l.excursion.is_some())
             || self.drives.iter().any(|d| d.excursion.is_some())
+            || self.supply_ceilings.iter().any(|c| c.excursion.is_some())
         {
             return false;
         }
@@ -1412,7 +1526,15 @@ impl Ratings {
             };
             !judged
         });
-        watches && windows && supplies && limits && drives
+        let ceilings = self.supply_ceilings.iter().all(|ceiling| {
+            let v = row[ceiling.vs].get() - row[ceiling.gnd].get();
+            let over_operating = exceeds_rounded(v, ceiling.max_rounded);
+            let over_abs = ceiling
+                .abs_max_rounded
+                .is_some_and(|abs| exceeds_rounded(v, abs));
+            !(over_operating && !over_abs)
+        });
+        watches && windows && supplies && limits && drives && ceilings
     }
 }
 

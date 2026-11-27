@@ -1,0 +1,11 @@
+// A Block: a small circuit that works. `orbe add nano-tmp36` installs it into a project.
+{
+  "format": 1,
+  "block": "nano-tmp36",
+  "version": "0.1.0",
+  "title": "TMP36 thermometer on a Nano",
+  "summary": "Move the temperature slider. A TMP36 analog temperature sensor drives A0 with 750 mV at 25 °C and 10 mV/°C; the Nano converts it to voltage and °C and prints both over Serial.",
+  "board": "nano-board",
+  "tags": ["tmp36", "temperature", "thermometer", "sensor", "analog", "nano"],
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND GPL-3.0-or-later WITH GCC-exception-3.1",
+}

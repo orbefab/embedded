@@ -51,7 +51,8 @@ const SUPPLY_BOUND_INSIDE_V: f64 = 1e-6;
 /// Serial/JTAG and USB OTG).
 const USB_DP_PULL_UP_OHM: f64 = 2_400.0;
 
-pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
+/// The chip `mcu` describes. With `radio` it keeps its Wi-Fi radio's registers.
+pub(crate) fn chip(part: PartId, mcu: &Esp32s3, radio: bool) -> Chip {
     let (vcc, gnd) = (mcu.pins[0], mcu.pins[1]);
     let gpios: Vec<u8> = mcu.gpios().collect();
     let pins = &mcu.pins[2..];
@@ -131,6 +132,9 @@ pub(crate) fn chip(part: PartId, mcu: &Esp32s3) -> Chip {
         chip.omit_pull_down();
     }
     chip.use_efuse(mcu.efuse);
+    if radio {
+        chip.use_radio();
+    }
     let console = mcu.console.iter().map(|send| (send.at, send.to.as_slice()));
     let bridge = Bridge::new(chip, gpios, console);
     let output_pins = mcu.names[2..].to_vec();

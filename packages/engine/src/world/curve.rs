@@ -33,10 +33,11 @@ impl Param {
         }
     }
 
-    pub(crate) fn driven_mut(&mut self) -> Option<&mut Driven> {
-        match self {
-            Param::Fixed(_) => None,
-            Param::World(driven) => Some(driven),
+    pub(crate) fn follow_world(&mut self, quantity: Quantity, schedule: &Schedule<Value>) {
+        if let Param::World(driven) = self
+            && driven.quantity == quantity
+        {
+            driven.follow(schedule);
         }
     }
 }
@@ -103,6 +104,13 @@ pub enum Curve {
         x1: Value,
         y1: Value,
     },
+    /// `below` for `w <= x` and `above` for `w > x`. A datasheet parameter tabulated over two
+    /// contiguous ranges, such as the TMP36's load regulation below and above 105 degC.
+    Step {
+        x: Value,
+        below: Value,
+        above: Value,
+    },
 }
 
 impl Curve {
@@ -133,6 +141,13 @@ impl Curve {
                 let (x0, y0) = (x0.si.get(), y0.si.get());
                 let slope = (y1.si.get() - y0) / (x1.si.get() - x0);
                 y0 + slope * (w - x0)
+            }
+            Curve::Step { x, below, above } => {
+                if w > x.si.get() {
+                    above.si.get()
+                } else {
+                    below.si.get()
+                }
             }
         }
     }
@@ -172,6 +187,7 @@ impl Curve {
             Curve::Beta { .. } => "beta",
             Curve::SteinhartHart { .. } => "steinhart_hart",
             Curve::Linear { .. } => "linear",
+            Curve::Step { .. } => "step",
         }
     }
 }

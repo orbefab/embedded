@@ -190,6 +190,44 @@ fn a_steinhart_hart_curve_parses_and_rejects_non_temperature() {
     assert_eq!(one(&wrong_qty).0, "netlist.world");
 }
 
+#[test]
+fn a_step_curve_switches_above_x_and_rejects_out_of_range_x() {
+    let step_curve = format!(
+        r#"{{ "kind": "step", "x": {}, "below": {}, "above": {} }}"#,
+        value(105.0, "degC"),
+        value(60.0, "ohm"),
+        value(250.0, "ohm")
+    );
+    let json = document(
+        &format!(r#"{{ "temperature": {} }}"#, value(105.0, "degC")),
+        &resistor(&driven("temperature", &step_curve)),
+    );
+    let netlist = netlist::parse(json.as_bytes()).unwrap();
+    let (_, part) = netlist.parts().next().unwrap();
+    let Model::Resistor(r) = &part.model else {
+        panic!("a resistor");
+    };
+    let Param::World(field) = &r.resistance else {
+        panic!("a world-driven resistance");
+    };
+    assert_eq!(field.curve.kind(), "step");
+    assert_eq!(field.curve.at(105.0), 60.0);
+    assert_eq!(field.curve.at(105.1), 250.0);
+    assert_eq!(field.values().initial().get(), 60.0);
+
+    let out_of_range = format!(
+        r#"{{ "kind": "step", "x": {}, "below": {}, "above": {} }}"#,
+        value(200.0, "degC"),
+        value(60.0, "ohm"),
+        value(250.0, "ohm")
+    );
+    let bad = document(
+        &format!(r#"{{ "temperature": {} }}"#, value(25.0, "degC")),
+        &resistor(&driven("temperature", &out_of_range)),
+    );
+    assert_eq!(one(&bad).0, "netlist.value");
+}
+
 fn si(value: f64) -> orbe_engine::netlist::Value {
     orbe_engine::netlist::Value {
         si: orbe_engine::finite::Finite::new(value).unwrap(),

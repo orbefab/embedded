@@ -1,5 +1,6 @@
 mod common;
 
+mod analog_temp_sensor;
 mod atmega328p;
 mod cst816;
 mod diagnostic;

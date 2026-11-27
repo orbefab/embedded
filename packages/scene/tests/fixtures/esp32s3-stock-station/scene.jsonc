@@ -1,0 +1,14 @@
+// Starts Wi-Fi as a station, scans, joins a WPA2 access point and sets the clock over SNTP.
+// The app is the stock sketch packages/engine/tests/firmware/esp32s3/arduino/stock/station.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    }
+  },
+  "wires": [],
+  "ground": "board.GND"
+}

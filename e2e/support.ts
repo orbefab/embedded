@@ -239,7 +239,7 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "battery" | "button" | "digit" | "fade" | "joystick" | "keypad" | "lcd" | "light" | "matrix" | "pixels" | "relay" | "rgb" | "rgbled" | "ring" | "screen" | "serial" | "servo" | "shift" | "temperature" | "tone";
+export type BlockKind = "battery" | "button" | "digit" | "fade" | "joystick" | "keypad" | "lcd" | "light" | "matrix" | "pixels" | "relay" | "rgb" | "rgbled" | "ring" | "screen" | "serial" | "servo" | "shift" | "temperature" | "tmp36" | "tone";
 
 export interface RepoBlock {
   id: string;
@@ -269,6 +269,7 @@ export function blockKind(scene: string, id: string): BlockKind {
   if (/"type"\s*:\s*"servo-sg90"/.test(code)) return "servo";
   if (/"type"\s*:\s*"battery-9v"/.test(code)) return "battery";
   if (/"type"\s*:\s*"thermistor-ntc-10k"/.test(code)) return "temperature";
+  if (/"type"\s*:\s*"tmp36"/.test(code)) return "tmp36";
   if (/"type"\s*:\s*"neopixel-ring-16"/.test(code)) return "ring";
   if (/"type"\s*:\s*"neopixel-stick-8"/.test(code)) return "pixels";
   if (/"type"\s*:\s*"joystick-ky023"/.test(code)) return "joystick";
@@ -309,6 +310,7 @@ const READY_NODES: Record<BlockKind, readonly (readonly [string, string?])[]> = 
   servo: [["@servo", "horn"]],
   shift: [["@led1", "body"]],
   temperature: [["@led1", "body"]],
+  tmp36: [["@tmp"]],
   tone: [["@bz1"]],
 };
 
@@ -690,6 +692,15 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
     const strip = page.locator(SERIAL);
     await expect(strip, `${block.id} ambient temp`).toContainText(/temp=25\.0 C/, { timeout: 30_000 });
     await waitGlow(page, false);
+    if (shotName !== null) {
+      await page.locator("canvas").scrollIntoViewIfNeeded();
+      await shot(page, shotName);
+    }
+    return;
+  }
+  if (block.kind === "tmp36") {
+    const strip = page.locator(SERIAL);
+    await expect(strip, `${block.id} ambient temp`).toContainText(/voltage=0\.7[45] V, temp=2[45]\.\d C/, { timeout: 30_000 });
     if (shotName !== null) {
       await page.locator("canvas").scrollIntoViewIfNeeded();
       await shot(page, shotName);

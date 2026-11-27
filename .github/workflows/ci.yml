@@ -20,7 +20,10 @@
 # prints run=true. The released-client job
 # downloads the newest published Linux binary and requires that it read every
 # part and Block, or refuse the item because the format is newer than that
-# binary reads. The cargo cache keeps
+# binary reads, and that it run `orbe add` for every composite part and Block
+# against the registry the release tags and this tree publish, installing a
+# version it reads or asking for a newer orbe. The site build fails when the
+# tree changes a part or Block at a version a tag published. The cargo cache keeps
 # dependencies only. Caching the workspace crates still rebuilt them after
 # checkout, so those artifacts are left out. scripts/check-speed.sh stays
 # a local check.
@@ -398,10 +401,17 @@ jobs:
   client:
     name: released client
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup
+        uses: ./.github/actions/setup
+        with:
+          rust: true
+          cargo-cache-key: web
+          cache-save: false
 
       - name: The published orbe reads every part and Block, or asks for a newer orbe
         env:

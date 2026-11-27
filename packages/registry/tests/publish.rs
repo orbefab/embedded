@@ -3,7 +3,7 @@
 mod common;
 
 use common::{put, record};
-use orbe_registry::{Release, build, publish};
+use orbe_registry::{Release, build, publish, unbumped};
 
 const GLOW: &str = r#"{
   "format": 4,
@@ -209,4 +209,108 @@ fn a_later_release_unlisting_a_part_unlists_its_older_rows() {
     assert_eq!(row("chip", "1.0.0")["listed"], serde_json::json!(false));
     assert_eq!(row("diode", "1.0.0")["listed"], serde_json::json!(false));
     assert_eq!(row("diode", "1.1.0")["listed"], serde_json::json!(false));
+}
+
+#[test]
+fn a_part_needs_the_orbe_every_part_inside_it_needs() {
+    let first = tempfile::tempdir().unwrap();
+    put(first.path(), "registry.jsonc", common::MANIFEST);
+    put(first.path(), "parts/lamp/part.jsonc", common::LAMP);
+    let second = tempfile::tempdir().unwrap();
+    put(second.path(), "registry.jsonc", common::MANIFEST);
+    put(second.path(), "parts/glow/part.jsonc", GLOW);
+    // Both sort before glow, so the release lists each before the part it is built from.
+    put(
+        second.path(),
+        "parts/a-pair/part.jsonc",
+        r#"{ "format": 1, "part": "a-pair", "version": "0.1.0", "title": "A pair", "license": "MIT", "uses": { "glow": "1.0.0" }, "parts": { "g": { "type": "glow" } } }"#,
+    );
+    put(
+        second.path(),
+        "parts/a-box/part.jsonc",
+        r#"{ "format": 1, "part": "a-box", "version": "0.1.0", "title": "A box", "license": "MIT", "uses": { "a-pair": "0.1.0" }, "parts": { "inner": { "type": "a-pair" } } }"#,
+    );
+    let merged = publish(&[
+        Release {
+            version: "0.2.0".into(),
+            formats: vec![1, 2, 3],
+            registry: build(first.path()).unwrap(),
+        },
+        Release {
+            version: "0.2.1".into(),
+            formats: vec![1, 2, 3, 4],
+            registry: build(second.path()).unwrap(),
+        },
+    ])
+    .unwrap();
+    let index: serde_json::Value = serde_json::from_slice(&merged["index.json"]).unwrap();
+    let orbe = |name: &str| {
+        index["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["name"] == name)
+            .unwrap()["orbe"]
+            .clone()
+    };
+    assert_eq!(orbe("lamp"), "0.2.0");
+    assert_eq!(orbe("glow"), "0.2.1");
+    assert_eq!(orbe("a-pair"), "0.2.1");
+    assert_eq!(orbe("a-box"), "0.2.1");
+}
+
+#[test]
+fn a_changed_item_at_a_published_version_is_named() {
+    let published = common::third_party();
+    let release = Release {
+        version: "0.2.0".into(),
+        formats: vec![1, 2, 3],
+        registry: build(published.path()).unwrap(),
+    };
+
+    let same = common::third_party();
+    assert!(unbumped(std::slice::from_ref(&release), &build(same.path()).unwrap()).is_empty());
+
+    let edited = common::third_party();
+    put(
+        edited.path(),
+        "parts/lamp/part.jsonc",
+        &common::LAMP.replace("\"title\": \"Lamp\"", "\"title\": \"Brighter lamp\""),
+    );
+    let lines = unbumped(
+        std::slice::from_ref(&release),
+        &build(edited.path()).unwrap(),
+    );
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].starts_with("`lamp` 1.2.0 has other files than v0.2.0"),
+        "{lines:?}"
+    );
+    assert!(
+        lines[0].contains("raise the version in parts/lamp/part.jsonc"),
+        "{lines:?}"
+    );
+
+    // A raised part version changes the Block's parts, so the Block needs a new version too.
+    let raised = common::third_party();
+    put(
+        raised.path(),
+        "parts/lamp/part.jsonc",
+        &common::LAMP
+            .replace("\"version\": \"1.2.0\"", "\"version\": \"1.3.0\"")
+            .replace("\"title\": \"Lamp\"", "\"title\": \"Brighter lamp\""),
+    );
+    let lines = unbumped(
+        std::slice::from_ref(&release),
+        &build(raised.path()).unwrap(),
+    );
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(
+        lines[0].starts_with("`lamp-demo` 0.1.0 has other dependencies than v0.2.0"),
+        "{lines:?}"
+    );
+    assert!(
+        lines[0].contains("blocks/lamp-demo/block.jsonc"),
+        "{lines:?}"
+    );
 }

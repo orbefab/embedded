@@ -500,7 +500,8 @@ impl Core {
         }
     }
 
-    /// Whether it is a station on the air. No chip kind has a radio yet.
+    /// Whether it is a station on the air. No chip is one yet: an ESP32-S3 built with its radio
+    /// keeps the radio's registers but puts nothing on the air.
     pub(crate) fn radio(&self) -> bool {
         match self {
             Core::Net(_) => true,
@@ -562,7 +563,9 @@ impl Core {
     }
 }
 
-pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
+/// The chip of `kind`. With `radio`, the netlist has a network, and a kind with a radio is built
+/// with it.
+pub(crate) fn chip(part: PartId, kind: Active<'_>, radio: bool) -> Chip {
     match kind {
         Active::Atmega328p(mcu) => atmega328p::chip(part, mcu),
         Active::SpiReplay(replay) => spi_replay::chip(part, replay),
@@ -576,7 +579,7 @@ pub(crate) fn chip(part: PartId, kind: Active<'_>) -> Chip {
         Active::Bmp280(dev) => bmp280::chip(part, dev),
         Active::Hc595(dev) => hc595::chip(part, dev),
         Active::Max7219(dev) => max7219::chip(part, dev),
-        Active::Esp32s3(mcu) => esp32s3::chip(part, mcu),
+        Active::Esp32s3(mcu) => esp32s3::chip(part, mcu, radio),
         Active::Ws2812(chain) => ws2812::chip(part, chain),
         Active::Sg90(dev) => sg90::chip(part, dev),
     }

@@ -81,7 +81,8 @@ A command does what it names and nothing in the background. Where `orbe` could g
 
 ## Registry versions (Nov 22 2026)
 - The site publishes the registry built from each tag `v0.2.0` and later. The oldest tag keeps a record at `<id>@<version>`. A later tag does not replace those bytes, and a version that was never in a tag is not published. The working tree is not what the site serves.
-- Each index row names `orbe`, the oldest tag whose part formats include that part's format. A format no tag reads names the next release, the patch after the newest tag, and not 0.2.1. A Block's is the newest such value among the parts in the same registry that it depends on, or the tag that published the Block. `orbe add` installs the newest version this binary can read. When a newer version exists it says so and names the install command. When every version needs a newer orbe, it writes nothing.
+- Each index row names `orbe`, the oldest tag whose part formats include that part's format and the formats of every part it is built from, all the way down. A format no tag reads names the next release, the patch after the newest tag, and not 0.2.1. A Block's is the newest such value among the parts in the same registry that it depends on, or the tag that published the Block. A part's `format` stays the format of its own file, so the publish step works out what a part needs and nobody raises a parent's format by hand.
+- A part or Block a tag published does not change at that version. `scripts/registry.sh` builds the working tree beside the tags and fails while one does, including a Block whose parts moved to new versions. `orbe add` installs the newest version this binary can read. When a newer version exists it says so and names the install command. When every version needs a newer orbe, it writes nothing.
 - There is no `released.lock`. The tags are what was served.
 
 ## Scenes (Nov 4 2026)

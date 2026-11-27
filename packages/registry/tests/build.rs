@@ -158,7 +158,7 @@ fn a_block_depends_on_every_part_it_runs_at_the_versions_in_the_same_build() {
         "nano-board@0.2.4",
         "tactile-switch-6mm@0.2.1",
         "resistor-axial@0.2.1",
-        "led-5mm@0.3.1",
+        "led-5mm@0.3.2",
     ] {
         assert!(deps.contains(&direct), "{direct} in {deps:?}");
     }

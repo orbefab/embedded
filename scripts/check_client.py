@@ -4,6 +4,11 @@
 A part is checked in a small scene that sets its required params. A Block is
 `orbe check` of its scene. A clean read passes. A refusal passes only when
 every diagnostic says the format is newer than that binary reads.
+
+With --released-registry, the published orbe runs `orbe add` for every part
+built from other parts and every Block, against the registry the next release
+would serve. It installs a version whose parts it all reads, or says that item
+needs a newer orbe before it fetches anything.
 """
 
 import hashlib
@@ -294,9 +299,89 @@ def released_add(orbe: Path) -> int:
         return 0
 
 
+def version_of(text: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in text.split("."))
+
+
+def released_registry(orbe: Path, registry: Path) -> int:
+    """`orbe add` of each composite part and Block installs what this orbe reads, or nothing."""
+    shown = subprocess.run([str(orbe), "--version"], text=True, capture_output=True, check=False)
+    this = version_of(shown.stdout.split()[-1])
+    index = json.loads((registry / "index.json").read_text())
+    rows = index["items"]
+    newest: dict[str, dict] = {}
+    for row in rows:
+        have = newest.get(row["name"])
+        if have is None or version_of(row["version"]) > version_of(have["version"]):
+            newest[row["name"]] = row
+
+    def deps(row: dict) -> list[str]:
+        record = json.loads((registry / row["url"]).read_text())
+        return record.get("registryDependencies") or []
+
+    items = [name for name, row in sorted(newest.items()) if row["type"] == "block" or deps(row)]
+    # A composite part whose newest version this orbe cannot read only because of a part inside
+    # it is the case this check is for. Without one the check would prove nothing.
+    by_parts = [
+        name
+        for name in items
+        if newest[name]["type"] == "part"
+        and version_of(newest[name]["orbe"]) > this
+        and any(
+            version_of(newest[dep.rsplit("@", 1)[0]]["orbe"]) > this
+            for dep in deps(newest[name])
+            if dep.rsplit("@", 1)[0] in newest
+        )
+    ]
+    if not by_parts:
+        print(
+            "no composite part needs a newer orbe for a part inside it, so --released-registry checks nothing",
+            file=sys.stderr,
+        )
+        return 1
+
+    env = os.environ.copy()
+    env["ORBE_REGISTRY"] = f"file://{registry.resolve()}/{{name}}.json"
+    failed = 0
+    installed = 0
+    refused = 0
+    with tempfile.TemporaryDirectory(prefix="orbe-released-") as raw:
+        for name in items:
+            project = Path(raw) / name
+            project.mkdir()
+            added = subprocess.run(
+                [str(orbe), "add", name],
+                cwd=project,
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            told = added.stdout + added.stderr
+            if added.returncode == 0 and NEWER not in told:
+                installed += 1
+                continue
+            if added.returncode != 0 and f"`{name}` " in told and "needs a newer orbe. nothing was written" in told:
+                refused += 1
+                continue
+            print(f"{name}: orbe add did not install a version it reads", file=sys.stderr)
+            print(f"  {told.strip()}", file=sys.stderr)
+            failed += 1
+    if failed:
+        print(f"{failed} items the published orbe picked and then could not read", file=sys.stderr)
+        return 1
+    print(
+        f"{installed} composite parts and Blocks installed and {refused} asked for a newer orbe, "
+        f"including {', '.join(by_parts)}"
+    )
+    return 0
+
+
 def main() -> int:
     if len(sys.argv) == 3 and sys.argv[1] == "--released-add":
         return released_add(Path(sys.argv[2]).resolve())
+    if len(sys.argv) == 4 and sys.argv[1] == "--released-registry":
+        return released_registry(Path(sys.argv[2]).resolve(), Path(sys.argv[3]))
     if len(sys.argv) != 2:
         print("usage: scripts/check_client.py <orbe>", file=sys.stderr)
         return 2
