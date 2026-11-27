@@ -396,8 +396,8 @@ pub fn live_field(kind: &str) -> Option<&'static str> {
 fn chip_pin_names(chip: &Chip) -> &[&'static str] {
     use crate::chip::Ne555;
     use crate::device::{
-        Bmp280, Cst816, Dht22, Hc595, Hd44780I2c, PulsesReplay, Sg90, SpiReplay, Ssd1306, St77916,
-        Ws2812,
+        Bmp280, Cst816, Dht22, Hc595, Hd44780, Hd44780I2c, Max7219, PulsesReplay, Sg90, SpiReplay,
+        Ssd1306, St77916, Ws2812,
     };
 
     match chip {
@@ -407,10 +407,12 @@ fn chip_pin_names(chip: &Chip) -> &[&'static str] {
         Chip::St77916(_) => &St77916::PINS,
         Chip::Ssd1306(_) => &Ssd1306::PINS,
         Chip::Hd44780I2c(_) => &Hd44780I2c::PINS,
+        Chip::Hd44780(_) => &Hd44780::PINS,
         Chip::Cst816(_) => &Cst816::PINS,
         Chip::Dht22(_) => &Dht22::PINS,
         Chip::Bmp280(_) => &Bmp280::PINS,
         Chip::Hc595(_) => &Hc595::PINS,
+        Chip::Max7219(_) => &Max7219::PINS,
         Chip::Esp32s3(mcu) => &mcu.names,
         Chip::Ws2812(part) => &Ws2812::PINS[..part.pins.len()],
         Chip::PulsesReplay(_) => &PulsesReplay::PINS,
@@ -426,10 +428,12 @@ fn chip_pins(chip: &Chip) -> &[NetId] {
         Chip::St77916(part) => &part.pins,
         Chip::Ssd1306(part) => &part.pins,
         Chip::Hd44780I2c(part) => &part.pins,
+        Chip::Hd44780(part) => &part.pins,
         Chip::Cst816(part) => &part.pins,
         Chip::Dht22(part) => &part.pins,
         Chip::Bmp280(part) => &part.pins,
         Chip::Hc595(part) => &part.pins,
+        Chip::Max7219(part) => &part.pins,
         Chip::Ws2812(part) => &part.pins,
         Chip::PulsesReplay(part) => &part.pins,
         Chip::Esp32s3(part) => &part.pins,
@@ -525,6 +529,9 @@ define_kinds! {
         Hd44780I2c, "hd44780_i2c",
             crate::device::hd44780_i2c::WireHd44780I2c, crate::device::hd44780_i2c::resolve_hd44780_i2c,
             &crate::device::Hd44780I2c::PINS;
+        Hd44780, "hd44780",
+            crate::device::hd44780::WireHd44780, crate::device::hd44780::resolve_hd44780,
+            &crate::device::Hd44780::PINS;
         Cst816, "cst816",
             crate::device::cst816::WireCst816, crate::device::cst816::resolve_cst816,
             &crate::device::Cst816::PINS;
@@ -547,6 +554,9 @@ define_kinds! {
         Hc595, "hc595",
             crate::device::hc595::WireHc595, crate::device::hc595::resolve_hc595,
             &crate::device::Hc595::PINS;
+        Max7219, "max7219",
+            crate::device::max7219::WireMax7219, crate::device::max7219::resolve_max7219,
+            &crate::device::Max7219::PINS;
         Sg90, "sg90",
             crate::device::sg90::WireSg90, crate::device::sg90::resolve_sg90,
             &crate::device::Sg90::PINS;

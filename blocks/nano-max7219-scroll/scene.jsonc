@@ -1,0 +1,26 @@
+// A Nano scrolls text across a 4-in-1 (32 x 8) FC-16 MAX7219 LED matrix module over hardware SPI.
+// The Nano straddles the breadboard over columns 1 to 15: D13 (SCK) is at column 1,
+// 5V at column 12, GND at column 14 on the a-e side; D11 (MOSI/DIN) is at column 2 and
+// D10 (CS) at column 3 on the f-j side. The 4-in-1 module sits to the left so
+// its 5-pin IN header faces the breadboard directly.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "build/scroll.ino.hex" },
+    "matrix": { "type": "max7219-matrix-4in1" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "matrix": { "at": [-120, 0, 0] },
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["bb.a12", "matrix.VCC", { "color": "#d12b2b" }], // 5V to VCC
+    ["bb.a14", "matrix.GND", { "color": "#161616" }], // GND to GND
+    ["bb.j2", "matrix.DIN", { "color": "#e67e22" }], // D11 (MOSI) to DIN
+    ["bb.j3", "matrix.CS", { "color": "#f1c40f" }], // D10 (CS) to CS
+    ["bb.a1", "matrix.CLK", { "color": "#2980b9" }], // D13 (SCK) to CLK
+  ],
+}

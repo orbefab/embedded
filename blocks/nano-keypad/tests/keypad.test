@@ -1,0 +1,22 @@
+# The Nano scans the 4x4 membrane keypad with the stock Keypad library and prints pressed keys
+# over Serial while lighting LED L.
+open
+step --until serial contains "ready" --timeout 100ms
+expect @nano.led_l off
+press @pad.k1
+step --until serial contains "key=1" --timeout 100ms
+step 25ms
+expect @nano.led_l lit
+release @pad.k1
+step 40ms
+expect @nano.led_l off
+press @pad.k5
+step --until serial contains "key=5" --timeout 100ms
+release @pad.k5
+step 40ms
+press @pad.khash
+step --until serial contains "key=#" --timeout 100ms
+release @pad.khash
+step 40ms
+expect @nano.led_l off
+expect no diagnostics

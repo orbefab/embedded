@@ -182,7 +182,11 @@ fn format_7_keys_before_format_7_are_told_to_set_format_7() {
                 "ratings.reverse_voltage",
             ][..],
         ),
+        ("led-5mm", "led", &["ratings.reverse_voltage"][..]),
+        ("led-3mm", "led", &["ratings.reverse_voltage"][..]),
+        ("led-0603", "led", &["ratings.reverse_voltage"][..]),
         ("joystick-ky023-pot", "potentiometer", &["ratings"][..]),
+        ("keypad-4x4-key", "switch", &["ratings"][..]),
     ] {
         let found = findings(&in_format(id, 7, 6));
         let mut found: Vec<(Code, String, String)> = found
@@ -223,7 +227,20 @@ fn the_catalog_parts_in_format_5_and_6_have_no_findings() {
         "battery-aa-4x-cell",
         "led-5mm-rgb-cc",
         "led-5mm-rgb-ca",
+        "led-0603",
+        "led-0805",
+        "led-3mm",
+        "led-3mm-blue",
+        "led-3mm-green",
+        "led-3mm-white",
+        "led-3mm-yellow",
+        "led-5mm",
+        "led-5mm-blue",
+        "led-5mm-green",
+        "led-5mm-white",
+        "led-5mm-yellow",
         "joystick-ky023-pot",
+        "keypad-4x4-key",
     ] {
         let text =
             fs::read_to_string(common::repo().join(format!("parts/{id}/part.jsonc"))).unwrap();

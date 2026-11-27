@@ -19,6 +19,7 @@ mod i2c;
 mod knob;
 mod link;
 mod lm358;
+mod max7219;
 mod ne555;
 mod ngspice;
 mod op_amp;

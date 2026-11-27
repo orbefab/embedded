@@ -833,6 +833,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "orbe-net"
+version = "0.3.1"
+dependencies = [
+ "orbe-crypto",
+ "orbe-model",
+ "orbe-net",
+]
+
+[[package]]
 name = "orbe-registry"
 version = "0.3.1"
 dependencies = [

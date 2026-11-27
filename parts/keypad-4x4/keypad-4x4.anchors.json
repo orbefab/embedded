@@ -1,0 +1,14 @@
+{
+  "part": "keypad-4x4",
+  "units": "mm",
+  "anchors": [
+    {"lead": 1, "node": "pin-1", "also": ["housing-1"], "at": [-8.89, -60.54, 1.27], "axis": [0.0, -1.0, 0.0], "kind": "leg"},
+    {"lead": 2, "node": "pin-2", "also": ["housing-2"], "at": [-6.35, -60.54, 1.27], "axis": [0.0, -1.0, 0.0], "kind": "leg"},
+    {"lead": 3, "node": "pin-3", "also": ["housing-3"], "at": [-3.81, -60.54, 1.27], "axis": [0.0, -1.0, 0.0], "kind": "leg"},
+    {"lead": 4, "node": "pin-4", "also": ["housing-4"], "at": [-1.27, -60.54, 1.27], "axis": [0.0, -1.0, 0.0], "kind": "leg"},
+    {"lead": 5, "node": "pin-5", "also": ["housing-5"], "at": [1.27, -60.54, 1.27], "axis": [0.0, -1.0, 0.0], "kind": "leg"},
+    {"lead": 6, "node": "pin-6", "also": ["housing-6"], "at": [3.81, -60.54, 1.27], "axis": [0.0, -1.0, 0.0], "kind": "leg"},
+    {"lead": 7, "node": "pin-7", "also": ["housing-7"], "at": [6.35, -60.54, 1.27], "axis": [0.0, -1.0, 0.0], "kind": "leg"},
+    {"lead": 8, "node": "pin-8", "also": ["housing-8"], "at": [8.89, -60.54, 1.27], "axis": [0.0, -1.0, 0.0], "kind": "leg"}
+  ]
+}

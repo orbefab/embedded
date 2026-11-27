@@ -1,0 +1,44 @@
+{
+  "part": "max7219-8x8",
+  "source": {
+    "script": "model.py",
+    "sha256": "7dcb1c52544bdecae10b58d57bc01ee9b9272dfeadc4d383ad194009c239419f",
+    "bytes": 2569
+  },
+  "files": {
+    "max7219-8x8.glb": {
+      "sha256": "f18fa3740025a75f62736e38ac112e2ab345ca54a886d06c63dd675a64cc9767",
+      "bytes": 336776
+    },
+    "max7219-8x8.anchors.json": {
+      "sha256": "2aa17d53d7d150dac8cc27fa76ff252bc8ead12bd8516a62ba6aebc702aad294",
+      "bytes": 850
+    }
+  },
+  "box": {
+    "min": [-16.000001, -16.000001, 0],
+    "max": [16.000001, 16.000001, 8]
+  },
+  "kept_nodes": ["glass"],
+  "draw_calls": 4,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 7,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "housing",
+      "z_mm": 0.03
+    },
+    "names": {
+      "nodes": ["glass"]
+    },
+    "merge": {
+      "primitives_in": 10,
+      "primitives_out": 4
+    }
+  }
+}

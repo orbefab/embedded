@@ -1,0 +1,46 @@
+{
+  "part": "max7219-matrix-4in1",
+  "source": {
+    "script": "model.py",
+    "sha256": "be42c22d5967b844dd284f78ea045dbea0b59f3d35c0d2507e0024ebac8eebac",
+    "bytes": 1372
+  },
+  "files": {
+    "max7219-matrix-4in1.glb": {
+      "sha256": "e5573034c9fd959f46aa57746511d22e8070e12efd23308569cfad348d34e1bd",
+      "bytes": 22204
+    }
+  },
+  "box": {
+    "min": [-68.999998, -16.000001, 2.54],
+    "max": [68.999998, 16.000001, 4.14]
+  },
+  "kept_nodes": [],
+  "draw_calls": 1,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 0,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "pcb",
+      "z_mm": 2.54
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 1,
+      "primitives_out": 1
+    },
+    "composition": {
+      "children": 18,
+      "lowest_node": "c_bulk0/(unnamed)",
+      "z_mm": 0.905,
+      "draw_calls": 65
+    }
+  }
+}

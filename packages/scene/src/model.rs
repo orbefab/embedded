@@ -28,11 +28,12 @@ const SCENE_KEYS: &[&str] = &[
 /// BJT's `forward_knee_current`, and a `ws2812`'s `draw`. Format 6 is format 5 plus a
 /// resistor's `ratings.voltage`, the operating window of a sounding drive, a reading
 /// `"of": "angle"` on an `sg90`, a reading `"of": "screen"` and `view.screen`, and pin voltage
-/// `ratings` on `esp32s3`, `ssd1306`, `hd44780_i2c` and `ws2812`. Format 7 is format 6 plus
+/// `ratings` on `esp32s3`, `ssd1306`, `hd44780_i2c`, `hd44780` and `ws2812`. Format 7 is format 6 plus
 /// `steinhart_hart` world curves, a resistor's single-value maximum `ratings.voltage`,
 /// `characterized` on a rating, `ratings.reverse_voltage` on `diode` and `led`, `ratings` on
-/// `potentiometer`, `dht22`, `sg90`, `ne555`, `cst816` and `st77916`, `ratings.supply_min` (and
-/// `bmp280`'s `ratings.io_supply_min`), and a composite part's `accepted_warnings`.
+/// `potentiometer`, `switch`, `dht22`, `sg90`, `ne555`, `cst816` and `st77916`,
+/// `ratings.supply_min` (and `bmp280`'s `ratings.io_supply_min`), and a composite part's
+/// `accepted_warnings`.
 pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5, 6, 7];
 /// Scene `format` values this binary reads.
 pub const SCENE_FORMATS: &[u32] = &[1];
@@ -52,7 +53,7 @@ const BASIS_FORMAT: u32 = 5;
 const VOLTAGE_FORMAT: u32 = 6;
 /// The oldest part format that carries `steinhart_hart` world curves, single-value resistor
 /// maximum `ratings.voltage`, `characterized` ratings, `diode`/`led` `ratings.reverse_voltage`,
-/// `ratings` on `potentiometer`, `dht22`, `sg90`, `ne555`, `cst816` and `st77916`,
+/// `ratings` on `potentiometer`, `switch`, `dht22`, `sg90`, `ne555`, `cst816` and `st77916`,
 /// `ratings.supply_min` (and `bmp280`'s `io_supply_min`), and `accepted_warnings` (refused by
 /// orbe 0.3.1).
 const RATINGS_FORMAT: u32 = 7;
@@ -61,9 +62,9 @@ const ANGLE_FORMAT: u32 = 6;
 /// The oldest part format whose readings take `"of": "screen"` and whose view takes `screen`.
 const SCREEN_FORMAT: u32 = 6;
 /// The engine kinds that show a screen, which a reading `"of": "screen"` reads.
-const SCREEN_KINDS: [&str; 2] = ["ssd1306", "hd44780_i2c"];
+const SCREEN_KINDS: [&str; 4] = ["ssd1306", "hd44780_i2c", "hd44780", "max7219"];
 /// The engine kinds whose glass carries readable character lines and a backlight.
-const TEXT_KINDS: [&str; 1] = ["hd44780_i2c"];
+const TEXT_KINDS: [&str; 2] = ["hd44780_i2c", "hd44780"];
 const WIRE_KINDS: &[&str] = &["jumper", "trace", "contact"];
 /// A live session's stop, investigation 1's 2-hour cap.
 pub const STOP_PS: u64 = 7_200 * 1_000_000_000_000;
@@ -2928,12 +2929,14 @@ fn decode_body(
                 format,
             );
         }
-        if matches!(kind, "esp32s3" | "ssd1306" | "hd44780_i2c" | "ws2812")
-            && let Some(prop) = node
-                .props()
-                .unwrap_or_default()
-                .iter()
-                .find(|prop| prop.key == "ratings")
+        if matches!(
+            kind,
+            "esp32s3" | "ssd1306" | "hd44780_i2c" | "hd44780" | "ws2812"
+        ) && let Some(prop) = node
+            .props()
+            .unwrap_or_default()
+            .iter()
+            .find(|prop| prop.key == "ratings")
         {
             gate(out, kind, "ratings", prop.key_span, VOLTAGE_FORMAT, format);
         }
@@ -2992,7 +2995,7 @@ fn decode_body(
         }
         if matches!(
             kind,
-            "potentiometer" | "dht22" | "sg90" | "ne555" | "cst816" | "st77916"
+            "potentiometer" | "switch" | "dht22" | "sg90" | "ne555" | "cst816" | "st77916"
         ) && let Some(prop) = node
             .props()
             .unwrap_or_default()
@@ -3011,6 +3014,7 @@ fn decode_body(
                 | "hc595"
                 | "ws2812"
                 | "op_amp"
+                | "max7219"
         ) && let Some(ratings) = node.get("ratings").and_then(Node::props)
         {
             for key in ["supply_min", "io_supply_min"] {

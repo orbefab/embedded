@@ -10,6 +10,7 @@ members = [
   "packages/engine/device-check",
   "packages/model",
   "packages/mcu",
+  "packages/net",
   "packages/crypto",
   "packages/scratch",
   "packages/cores/*",

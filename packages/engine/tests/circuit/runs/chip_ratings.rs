@@ -771,6 +771,64 @@ fn supply_min_covers_passive_chips_op_amps_and_dual_supply_devices() {
 }
 
 #[test]
+fn a_max7219_under_its_4_v_minimum_warns_and_at_5_v_stays_silent() {
+    let at = |volts: f64| {
+        let netlist = serde_json::json!({
+            "version": 1,
+            "seed": 0,
+            "analysis": { "op": {} },
+            "world": {
+                "temperature": { "value": 25.0, "unit": "degC" },
+                "pressure": { "value": 101325.0, "unit": "Pa" }
+            },
+            "ground": "gnd",
+            "nets": ["gnd", "vcc", "din", "clk", "load", "dout", "iset"],
+            "parts": [
+                source("v", "vcc", "gnd", volts),
+                resistor("r_din", "gnd", "din", 10_000.0),
+                resistor("r_clk", "gnd", "clk", 10_000.0),
+                resistor("r_load", "gnd", "load", 10_000.0),
+                resistor("r_dout", "gnd", "dout", 10_000.0),
+                resistor("r_set", "vcc", "iset", 10_000.0),
+                {
+                    "name": "drv",
+                    "kind": "max7219",
+                    "pins": {
+                        "VCC": "vcc", "GND": "gnd", "DIN": "din", "CLK": "clk",
+                        "LOAD": "load", "DOUT": "dout", "ISET": "iset"
+                    },
+                    "input_threshold": {
+                        "low": { "value": 0.8, "unit": "V" },
+                        "high": { "value": 3.5, "unit": "V" }
+                    },
+                    "dout": {
+                        "high_drop": { "value": 0.0, "unit": "V" },
+                        "high_resistance": { "value": 1000.0, "unit": "ohm" },
+                        "low_drop": { "value": 0.0, "unit": "V" },
+                        "low_resistance": { "value": 250.0, "unit": "ohm" }
+                    },
+                    "led_forward_voltage": { "value": 1.85, "unit": "V" },
+                    "ratings": {
+                        "rail_margin": { "value": 0.3, "unit": "V" },
+                        "supply_voltage": { "value": 6.0, "unit": "V" },
+                        "input_voltage": { "value": 6.0, "unit": "V" },
+                        "supply_current": null,
+                        "supply_min": { "value": 4.0, "unit": "V" }
+                    }
+                }
+            ]
+        });
+        run(&netlist)
+    };
+    let low = at(3.3);
+    assert_eq!(refs(&low), ["rating.supply_low #drv.pin.VCC"]);
+    let excursion = supplies(&low)[0];
+    assert_eq!(excursion.min, 4.0);
+    assert!((excursion.voltage - 3.3).abs() < 1e-6, "{excursion:?}");
+    assert_eq!(refs(&at(5.0)), Vec::<String>::new());
+}
+
+#[test]
 fn supply_power_cycles_stay_silent_while_sags_incomplete_turn_on_and_open_ends_warn() {
     let dht_steps = |stop_ps: u64, initial: f64, events: &[(u64, f64)]| {
         let events: Vec<_> = events

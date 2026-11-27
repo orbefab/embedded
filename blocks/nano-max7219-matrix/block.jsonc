@@ -1,0 +1,11 @@
+// A Block: a small circuit that works. `orbe add nano-max7219-matrix` installs it into a project.
+{
+  "format": 1,
+  "block": "nano-max7219-matrix",
+  "version": "0.1.0",
+  "title": "Smiley on a MAX7219 8 x 8 LED matrix",
+  "summary": "An Arduino Nano drives a single MAX7219 8 x 8 LED dot matrix module with LedControl, drawing an 8 x 8 smiley face at intensity 8.",
+  "board": "nano-board",
+  "tags": ["max7219", "led", "matrix", "dot", "8x8", "fc-16", "display", "ledcontrol", "nano"],
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND MIT AND BSD-3-Clause AND GPL-3.0-or-later WITH GCC-exception-3.1",
+}

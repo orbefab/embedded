@@ -1,0 +1,46 @@
+`build/scroll.ino.hex` is built from `firmware/scroll/scroll.ino` for the ATmega328P at 16 MHz.
+It links the standard AVR runtime, version 1.8.6. The runtime is free software under the GNU
+Lesser General Public License, version 2.1 or any later version, whose text is in
+LICENSE-runtime. Its source is the archive at
+
+https://orbefab.com/embedded/sources/avr-1.8.6.tar.bz2
+
+with SHA-256 ff1d17274b5a952f172074bd36c3924336baefded0232e10982f8999c2f7c3b6, served with this
+image. It is the archive Arduino publishes at
+https://downloads.arduino.cc/cores/staging/avr-1.8.6.tar.bz2. The image was
+built with avr-gcc 7.3.0-atmel3.6.1-arduino7 by packages/engine/scripts/sketches.sh in
+https://github.com/orbefab/embedded, which pins every archive and relinks the sketch, the
+libraries and the runtime, so the image can be rebuilt against a modified runtime. The sketch is
+under MIT or Apache-2.0, and those terms permit modifying the image and reverse engineering it to
+debug such modifications.
+
+The image also links MD_MAX72XX 3.5.1, under the GNU Lesser General Public License, version 2.1
+or any later version (LGPL-2.1-or-later), whose text is in LICENSE-md-max72xx. Its source is the
+archive at
+https://github.com/MajicDesigns/MD_MAX72XX/archive/refs/tags/v3.5.1.tar.gz
+with SHA-256 27d2cb684d842cb358487fc4f0843c00fd7cacf7709a527fb76953c6f8204cab.
+
+It also links MD_Parola 3.7.7, under the GNU Lesser General Public License, version 2.1 or any
+later version (LGPL-2.1-or-later), whose text is in LICENSE-md-parola. Its source is the archive at
+https://github.com/MajicDesigns/MD_Parola/archive/refs/tags/v3.7.7.tar.gz
+with SHA-256 ba18aed1123b44fbc60995056a5d9bec9bc864df9c4298f8eb0f741aa4f3808a.
+
+The image also holds the start-up code of the toolchain's C library, version 2.0.0, under that
+library's modified BSD license, whose notice is in LICENSE-libc as the license requires, and
+routines of GCC's runtime library (`libgcc`), under GPL-3.0-or-later with the GCC Runtime
+Library Exception 3.1, whose text is in LICENSE-gcc-exception. That exception lets the compiled
+runtime ship inside the program under the program's own terms.
+
+These files and their licences:
+
+`block.jsonc`, `README.md`, `scene.jsonc`, `firmware/NOTICE`, `firmware/scroll/scroll.ino`,
+`tests/scroll.test`, `tests/scroll_1.screen` and `tests/scroll_2.screen` are under MIT OR Apache-2.0.
+
+`build/scroll.ino.hex` links the runtime, MD_MAX72XX and MD_Parola, so it is under
+LGPL-2.1-or-later.
+`firmware/LICENSE-runtime` is under LGPL-2.1-or-later.
+`firmware/LICENSE-md-max72xx` is under LGPL-2.1-or-later.
+`firmware/LICENSE-md-parola` is under LGPL-2.1-or-later.
+`firmware/LICENSE-libc` is under BSD-3-Clause.
+`firmware/LICENSE-gcc-exception` holds the GCC Runtime Library Exception 3.1
+(GPL-3.0-or-later WITH GCC-exception-3.1).

@@ -512,7 +512,7 @@ impl Session {
         // power-down from t = 0 is recognized as a power cycle.
         let mut ratings = Ratings::new(&circuit.netlist, &circuit.actives, &columns, Timing::Run);
         ratings.seed_supplies(&row);
-        let inputs = Inputs::new(&circuit.netlist, &circuit.actives);
+        let inputs = Inputs::new(&circuit.netlist, &circuit.actives, &columns);
         let record = rows
             .map(|rows| Record::start(transient, &columns, rows, &row, &signals, &logic))
             .transpose()
@@ -1231,6 +1231,7 @@ impl Session {
             .sample(landing.at, &landing.row, self.actives.cores());
         self.inputs.sample(
             landing.at,
+            &landing.row,
             &self.circuit.netlist,
             &self.circuit.actives,
             self.actives.cores(),

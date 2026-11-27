@@ -1,10 +1,10 @@
 {
   "format": 4,
   "part": "potentiometer-wh148",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "title": "Potentiometer, 16 mm rotary (WH148)",
   "summary": "Linear rotary potentiometer with a knob and three pins on 5 mm. Set its resistance, the value printed on the can (B10K is 10k).",
-  "tags": ["potentiometer", "knob", "variable resistor", "voltage divider", "input", "analog", "through-hole"],
+  "tags": ["potentiometer", "pot", "knob", "dial", "rotary", "variable resistor", "voltage divider", "input", "analog", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "docs": { "WH148 rotary potentiometer": null },
   "real": { "generic": true, "maker": null, "number": "WH148", "datasheet": "WH148 rotary potentiometer" },

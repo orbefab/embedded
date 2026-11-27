@@ -1,7 +1,7 @@
 // Worldsemi WS2812B-V5 (V1.0, 2019-02-19) addressable 5050 RGB LED, one pixel.
 // Unlisted SMD leaf part used by neopixel-ring-16.
 {
-  "format": 6,
+  "format": 7,
   "part": "ws2812b-5050",
   "version": "0.1.0",
   "title": "WS2812B-V5 addressable RGB LED, 5050",
@@ -130,6 +130,17 @@
             "doc": "Worldsemi WS2812B-V5 Datasheet, V1.0",
             "at": "p2 Absolute Maximum Ratings, Power supply voltage VDD: +3.7 to +5.3 V",
             "basis": "absolute_max",
+          },
+        },
+      },
+      "supply_min": {
+        "value": 3.7,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "Worldsemi WS2812B-V5 Datasheet, V1.0",
+            "at": "p2 Absolute Maximum Ratings, Power supply voltage VDD: +3.7 to +5.3 V, the lower end of the supply range",
+            "basis": "min",
           },
         },
       },

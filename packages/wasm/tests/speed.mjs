@@ -52,6 +52,9 @@ const EXEMPT = {
   "nano-buzzer": {
     rate: "runs about 10x slower than real time",
   },
+  "nano-lcd1602": {
+    rate: "the stock HelloWorld rewrites the LCD with no delay, tens of thousands of pin edges a second, and runs about 1.1x real time",
+  },
   "nano-oled": {
     rate: "I2C startup runs over 10x slower than real time during warm-up",
     firstPicture: "takes about 12 s in the Worker to draw its first frame over I2C",

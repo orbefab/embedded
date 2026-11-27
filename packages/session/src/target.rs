@@ -86,6 +86,8 @@ pub enum Target {
     },
     /// The average forward current of a part that states `lit` and `dim`.
     Brightness { path: String },
+    /// The average lit-dot current of a MAX7219 matrix part (single or chained).
+    MatrixBrightness { path: String },
     /// The colours an addressable LED part last latched, by its reading `"of": "rgb"`.
     Color {
         path: String,
@@ -183,9 +185,11 @@ pub(crate) fn backlight_reading(part: &MapPart) -> Option<&str> {
         .map(|(name, _)| name.as_str())
 }
 
-/// The one character-LCD engine part (`hd44780_i2c`) at `path` or among its descendants.
+/// The one character-LCD engine part (`hd44780` or `hd44780_i2c`) at `path` or among its
+/// descendants.
 pub(crate) fn lcd_engine(map: &RefMap, path: &str) -> Result<String, Error> {
     let mut found = Vec::new();
+    collect_kind(map, path, "hd44780", &mut found);
     collect_kind(map, path, "hd44780_i2c", &mut found);
     match found.as_slice() {
         [one] => Ok(one.clone()),
@@ -202,17 +206,16 @@ pub(crate) fn lcd_engine(map: &RefMap, path: &str) -> Result<String, Error> {
     }
 }
 
-/// The one screen engine part at `path` or among its descendants: a part whose readings name
-/// `"of": "screen"` and that maps to one engine part.
-pub(crate) fn screen_engine(map: &RefMap, path: &str) -> Option<String> {
-    fn collect(map: &RefMap, path: &str, out: &mut Vec<String>) {
+/// Every screen engine part at `path` or among its descendants, as `(descendant_path, engine_name)`.
+pub(crate) fn screen_engines(map: &RefMap, path: &str) -> Vec<(String, String)> {
+    fn collect(map: &RefMap, path: &str, out: &mut Vec<(String, String)>) {
         let Some(part) = map.parts.get(path) else {
             return;
         };
         if screen_reading(part).is_some()
             && let [one] = part.engine.as_slice()
         {
-            out.push(one.name.clone());
+            out.push((path.to_string(), one.name.clone()));
         }
         for child in &part.children {
             collect(map, &format!("{path}.{child}"), out);
@@ -220,10 +223,14 @@ pub(crate) fn screen_engine(map: &RefMap, path: &str) -> Option<String> {
     }
     let mut found = Vec::new();
     collect(map, path, &mut found);
-    match found.as_slice() {
-        [one] => Some(one.clone()),
-        _ => None,
-    }
+    found
+}
+
+/// Whether `path` or its descendants include at least one `max7219` engine part.
+pub(crate) fn has_max7219(map: &RefMap, path: &str) -> bool {
+    let mut found = Vec::new();
+    collect_kind(map, path, "max7219", &mut found);
+    !found.is_empty()
 }
 
 fn collect_kind(map: &RefMap, path: &str, kind: &str, out: &mut Vec<String>) {
@@ -283,6 +290,9 @@ pub fn resolve(
         }
         if last && seg == "brightness" && part.readings.contains_key("lit") {
             return Ok(Target::Brightness { path });
+        }
+        if last && seg == "brightness" && has_max7219(map, &path) {
+            return Ok(Target::MatrixBrightness { path });
         }
         if last && seg == "digit" && digit_reading(part) {
             return Ok(Target::Digit { path });

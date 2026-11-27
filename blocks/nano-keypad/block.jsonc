@@ -1,0 +1,11 @@
+// A Block: a small circuit that works. `orbe add nano-keypad` installs it into a project.
+{
+  "format": 1,
+  "block": "nano-keypad",
+  "version": "0.1.0",
+  "title": "4x4 membrane keypad on a Nano",
+  "summary": "Click any key on the 4x4 membrane keypad or press `@pad.k1`, `@pad.k5`, `@pad.khash`. The Nano scans R1..R4 (pins 1..4) on D11..D8 and C1..C4 (pins 5..8) on D5..D2 with the stock Keypad library, prints pressed keys over Serial, and lights LED L while a key is held.",
+  "board": "nano-board",
+  "tags": ["keypad", "matrix", "4x4", "membrane", "keyboard", "input", "serial", "nano"],
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND GPL-3.0-only AND BSD-3-Clause AND GPL-3.0-or-later WITH GCC-exception-3.1",
+}

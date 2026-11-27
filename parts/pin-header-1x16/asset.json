@@ -1,0 +1,44 @@
+{
+  "part": "pin-header-1x16",
+  "source": {
+    "script": "model.py",
+    "sha256": "0348b59c7d2f2912919b33cfb2d33798b6037d4d82302a3ee62274e7ae20a387",
+    "bytes": 703
+  },
+  "files": {
+    "pin-header-1x16.glb": {
+      "sha256": "fc78ddcc74f6fd0510b6cea1be843e06727cdb9b9009cc72c92d6fdec09f5f03",
+      "bytes": 4876
+    },
+    "pin-header-1x16.anchors.json": {
+      "sha256": "d8feb72f05579e732963bf3539f8a22adb0279a14d05a8e4a969d2e4bbbc7c43",
+      "bytes": 2073
+    }
+  },
+  "box": {
+    "min": [-20.32, -1.27, -8],
+    "max": [20.32, 1.27, 5.54]
+  },
+  "kept_nodes": ["housing-1", "housing-10", "housing-11", "housing-12", "housing-13", "housing-14", "housing-15", "housing-16", "housing-2", "housing-3", "housing-4", "housing-5", "housing-6", "housing-7", "housing-8", "housing-9", "pin-1", "pin-10", "pin-11", "pin-12", "pin-13", "pin-14", "pin-15", "pin-16", "pin-2", "pin-3", "pin-4", "pin-5", "pin-6", "pin-7", "pin-8", "pin-9"],
+  "draw_calls": 32,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 16,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": null,
+      "z_mm": null
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 32,
+      "primitives_out": 32
+    }
+  }
+}

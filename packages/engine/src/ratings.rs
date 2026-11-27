@@ -263,6 +263,8 @@ struct Gauge {
     outputs: Vec<Pin>,
     /// The columns of its supply and ground nets and its own draw.
     supply: Option<(usize, usize, active::Supply)>,
+    /// The columns of its supply and ground nets for a device's `Draw`.
+    draw: Option<(usize, usize)>,
     /// Each output's current out of its pin, then the current into the supply pin, then the
     /// current out of the ground pin. Set by the last sample.
     currents: Vec<f64>,
@@ -601,6 +603,9 @@ impl Ratings {
                     supply: chip
                         .supply
                         .map(|supply| (columns.net(supply.vcc), columns.net(supply.gnd), supply)),
+                    draw: chip
+                        .draw
+                        .map(|(vcc, gnd)| (columns.net(vcc), columns.net(gnd))),
                     currents: vec![0.0; outputs + 2],
                 });
             }
@@ -746,6 +751,23 @@ impl Ratings {
                         windows.push(Window {
                             pin: Ref::Quantity(part.name.clone(), Quantity::V),
                             column: columns.net(pot.pins[2]),
+                            vcc: ground,
+                            gnd: ground,
+                            below: Some(limit),
+                            above: Some(Ceiling::Fixed(limit)),
+                            worst: 0.0,
+                            over: false,
+                            excursion: None,
+                        });
+                    }
+                }
+                Model::Switch(switch) => {
+                    if let Some(max) = &switch.max_voltage {
+                        let limit = max.si.get();
+                        let ground = columns.net(switch.pins[1]);
+                        windows.push(Window {
+                            pin: Ref::Quantity(part.name.clone(), Quantity::V),
+                            column: columns.net(switch.pins[0]),
                             vcc: ground,
                             gnd: ground,
                             below: Some(limit),
@@ -1953,6 +1975,11 @@ impl Gauge {
             let own = (row[vcc].get() - row[gnd].get()) * own.conductance(core);
             supply += own;
             ground += own;
+        }
+        if let Some((vcc, gnd)) = self.draw {
+            let (amps, _) = core.draw().at(row[vcc].get() - row[gnd].get());
+            supply += amps;
+            ground += amps;
         }
         let outputs = self.outputs.len();
         self.currents[outputs] = supply;

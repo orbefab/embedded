@@ -1,0 +1,155 @@
+// A 16x2 character LCD panel (1602A class) on the HD44780U's own parallel bus: RS, R/W, E and
+// DB0 to DB7, 4-bit or 8-bit, per Hitachi ADE-207-272. The pins are the module's 16, in the
+// order of Vishay LCD-016N002B p. 2. A and K are the backlight's, which the module wires to its
+// own LED part; the model only watches them, to know whether the backlight is lit.
+{
+  "format": 7,
+  "part": "hd44780-1602",
+  "version": "0.1.0",
+  "title": "Character LCD panel, 16 x 2, HD44780, parallel",
+  "summary": "Blue 16 x 2 character LCD with an HD44780U controller on its own 4-bit or 8-bit parallel bus: the panel inside the lcd1602 module.",
+  "tags": ["lcd", "1602", "16x2", "hd44780", "parallel", "display", "screen"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Hitachi HD44780U (ADE-207-272)": "https://www.sparkfun.com/datasheets/LCD/HD44780.pdf",
+    "Vishay LCD-016N002B, Document Number 37295": "https://www.vishay.com/docs/37295/lcd016n002b.pdf",
+  },
+  "real": {
+    "generic": true,
+    "maker": "Hitachi",
+    "number": "HD44780U",
+    "datasheet": "Hitachi HD44780U (ADE-207-272)",
+  },
+  "pins": {
+    "VSS": [1], "VDD": [2], "V0": [3], "RS": [4], "RW": [5], "E": [6],
+    "D0": [7], "D1": [8], "D2": [9], "D3": [10], "D4": [11], "D5": [12], "D6": [13], "D7": [14],
+    "A": [15], "K": [16],
+  },
+  "model": {
+    "kind": "hd44780",
+    "output": {
+      "high_drop": {
+        "value": 0.0,
+        "unit": "V",
+        "source": { "closed_form": { "note": "a linear stage from VDD, its drop folded into its resistance" } },
+      },
+      "high_resistance": {
+        "value": 10243.902439024392,
+        "unit": "ohm",
+        "source": { "datasheet": { "doc": "Hitachi HD44780U (ADE-207-272)", "at": "p. 51, DC Characteristics at VCC = 4.5 to 5.5 V, VOH1 (DB0 to DB7) 2.4 V minimum at -IOH 0.205 mA; (4.5 V - 2.4 V) / 0.205 mA at the table's 4.5 V floor", "basis": "min" } },
+      },
+      "low_drop": {
+        "value": 0.0,
+        "unit": "V",
+        "source": { "closed_form": { "note": "a linear stage into VSS, its drop folded into its resistance" } },
+      },
+      "low_resistance": {
+        "value": 333.3333333333333,
+        "unit": "ohm",
+        "source": { "datasheet": { "doc": "Hitachi HD44780U (ADE-207-272)", "at": "p. 51, DC Characteristics at VCC = 4.5 to 5.5 V, VOL1 (DB0 to DB7) 0.4 V maximum at IOL 1.2 mA, so 0.4 V / 1.2 mA", "basis": "max" } },
+      },
+    },
+    "pull_up": {
+      "value": 40000,
+      "unit": "ohm",
+      "source": { "datasheet": { "doc": "Hitachi HD44780U (ADE-207-272)", "at": "p. 51, DC Characteristics, pull-up MOS current on DB0 to DB7, RS and R/W, 125 uA typical at VCC = 5 V, so 5 V / 125 uA", "basis": "typical" } },
+    },
+    "input_threshold": {
+      "low": {
+        "value": 0.12,
+        "unit": "1",
+        "source": { "datasheet": { "doc": "Hitachi HD44780U (ADE-207-272)", "at": "p. 51, DC Characteristics at VCC = 4.5 to 5.5 V, VIL1 0.6 V maximum, as a fraction of a 5 V VCC", "basis": "max" } },
+      },
+      "high": {
+        "value": 0.44,
+        "unit": "1",
+        "source": { "datasheet": { "doc": "Hitachi HD44780U (ADE-207-272)", "at": "p. 51, DC Characteristics at VCC = 4.5 to 5.5 V, VIH1 2.2 V minimum, as a fraction of a 5 V VCC", "basis": "min" } },
+      },
+    },
+    "lcd_voltage": {
+      "value": 3.0,
+      "unit": "V",
+      "source": { "datasheet": { "doc": "Hitachi HD44780U (ADE-207-272)", "at": "p. 51, DC Characteristics, LCD voltage VLCD1 = VCC - V5 at 1/5 bias, 3.0 V minimum. V0 is the module's end of the V1 to V5 ladder (p. 37, Figure 21), so VDD - V0 under 3.0 V leaves the glass without characters. Vishay LCD-016N002B p. 1 recommends VDD to V0 3.8 V typical at 25 C.", "basis": "min" } },
+    },
+    "backlight_voltage": {
+      "value": 3.510092158853156,
+      "unit": "V",
+      "source": { "closed_form": { "note": "A to K across the lcd1602-backlight fit at 2 mA, the current that part reads lit" } },
+    },
+    "operating_voltage": {
+      "value": 4.7,
+      "unit": "V",
+      "source": { "datasheet": { "doc": "Vishay LCD-016N002B, Document Number 37295", "at": "p. 1, Electrical Characteristics, Input Voltage VDD at VDD = + 5 V, 4.7 V minimum (5.0 V typical, 5.3 V maximum), the lowest supply the module is specified to run at", "basis": "min" } },
+    },
+    "draw": {
+      "logic_current": {
+        "value": 0.00035,
+        "unit": "A",
+        "source": { "datasheet": { "doc": "Hitachi HD44780U (ADE-207-272)", "at": "p. 51, DC Characteristics, power supply current ICC 350 uA typical at VCC = 5 V, fosc = 270 kHz", "basis": "typical" } },
+      },
+      "holds_above": {
+        "value": 2.7,
+        "unit": "V",
+        "source": { "datasheet": { "doc": "Hitachi HD44780U (ADE-207-272)", "at": "p. 48, DC Characteristics, the lowest VCC the tables cover, 2.7 V", "basis": "min" } },
+      },
+    },
+    "ratings": {
+      "rail_margin": {
+        "value": 0.3,
+        "unit": "V",
+        "source": { "datasheet": { "doc": "Hitachi HD44780U (ADE-207-272)", "at": "p. 47, Absolute Maximum Ratings: input voltage Vt -0.3 V to VCC + 0.3 V, and VCC - GND -0.3 V minimum", "basis": "absolute_max" } },
+      },
+      "supply_voltage": {
+        "value": 7.0,
+        "unit": "V",
+        "source": { "datasheet": { "doc": "Hitachi HD44780U (ADE-207-272)", "at": "p. 47, Absolute Maximum Ratings: power supply voltage VCC - GND +7.0 V maximum (Vishay LCD-016N002B p. 1 also rates VDD to VSS 7.0 V)", "basis": "absolute_max" } },
+      },
+    },
+    "pins": {
+      "VSS": "VSS", "VDD": "VDD", "V0": "V0", "RS": "RS", "RW": "RW", "E": "E",
+      "D0": "D0", "D1": "D1", "D2": "D2", "D3": "D3", "D4": "D4", "D5": "D5", "D6": "D6", "D7": "D7",
+      "A": "A", "K": "K",
+    },
+  },
+  "readings": {
+    "screen": { "of": "screen" },
+    "text": { "of": "text" },
+    "backlight": { "of": "backlight" },
+  },
+  "view": {
+    "screen": [{ "node": "glass", "by": "screen" }],
+  },
+  "not_simulated": [
+    {
+      "what": "contrast between crisp and gone",
+      "pins": ["V0"],
+      "why": "The glass draws text at full contrast while VDD - V0 is at least 3.0 V (VLCD1, p. 51) and none below it, where the display on warns chip.protocol rule contrast. A real glass fades between the two, and darkens its unlit dots as V0 nears VSS.",
+    },
+    {
+      "what": "blue transmissive visibility",
+      "pins": ["A", "K"],
+      "why": "On a blue negative transmissive 1602 LCD, characters are only visible when both the display and the backlight are on. `text` returns two 16-space blank lines while A - K is under the backlight's lit voltage.",
+    },
+    {
+      "what": "enable rise and fall time",
+      "pins": ["E"],
+      "why": "The sheet's tEr and tEf, 20 ns maximum at 4.5 to 5.5 V (p. 52), are not checked. Cycle time, pulse width, set-up and hold are, from p. 52 at 4.5 V and above and p. 49 below.",
+    },
+    {
+      "what": "input levels below 4.5 V",
+      "why": "The inputs switch at 0.6 V and 2.2 V of a 5 V supply, as fractions of VDD. At 2.7 to 4.5 V the sheet's VIH1 is 0.7 VCC and VIL1 0.55 V (p. 48).",
+    },
+    {
+      "what": "a busy flag held through a read",
+      "why": "A read drives the busy flag and address as they stand tDDR after E rises, and holds them until E falls. The real busy flag can clear while E stays high.",
+    },
+    {
+      "what": "oscillator tolerance",
+      "why": "The controller runs at its typical 270 kHz. The sheet gives 190 to 350 kHz with Rf = 91 kohm at 5 V (p. 52), and the busy times and the blink scale with it. The blinking character switches every 379.3 ms, the sheet's 409.6 ms at 250 kHz (p. 26) at 270 kHz, on multiples of that from power-on.",
+    },
+    {
+      "what": "5x10 font",
+      "why": "A Function Set that selects one line of the 5x10 font (N = 0, F = 1) warns chip.protocol rule font. With two lines F is don't care (Table 8, p. 29). The glass always draws the 5x8 font, as a 16 x 2 glass has 8 rows to a character.",
+    },
+  ],
+}

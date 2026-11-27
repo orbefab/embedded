@@ -10,7 +10,7 @@
   "version": "0.1.3",
   "title": "NeoPixel stick, 8 RGB LED",
   "summary": "Eight addressable RGB LEDs in a row on a 50.8 x 10.2 mm board, chained on one data line, with a 3-pin header (GND, 5V, DIN) for a breadboard.",
-  "tags": ["led", "rgb", "neopixel", "ws2812", "strip", "addressable"],
+  "tags": ["led", "rgb", "neopixel", "ws2812", "ws2812b", "sk6812", "strip", "addressable", "pixel", "rgb-led"],
   "license": "MIT OR Apache-2.0",
   "docs": {
     "Adafruit NeoPixel Stick, product 1426": "https://www.adafruit.com/product/1426",

@@ -145,7 +145,6 @@ declare global {
     orbeGlowSpan?: { min: number; max: number };
     orbeGlowTimer?: number;
     orbeTurnSpan?: { min: number; max: number };
-    orbeTurnTimer?: number;
     lastPointer?: number;
   }
 }
@@ -240,7 +239,7 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "battery" | "button" | "digit" | "fade" | "joystick" | "lcd" | "light" | "pixels" | "relay" | "rgb" | "rgbled" | "ring" | "screen" | "serial" | "servo" | "shift" | "temperature" | "tone";
+export type BlockKind = "battery" | "button" | "digit" | "fade" | "joystick" | "keypad" | "lcd" | "light" | "matrix" | "pixels" | "relay" | "rgb" | "rgbled" | "ring" | "screen" | "serial" | "servo" | "shift" | "temperature" | "tone";
 
 export interface RepoBlock {
   id: string;
@@ -273,9 +272,11 @@ export function blockKind(scene: string, id: string): BlockKind {
   if (/"type"\s*:\s*"neopixel-ring-16"/.test(code)) return "ring";
   if (/"type"\s*:\s*"neopixel-stick-8"/.test(code)) return "pixels";
   if (/"type"\s*:\s*"joystick-ky023"/.test(code)) return "joystick";
+  if (/"type"\s*:\s*"keypad-4x4"/.test(code)) return "keypad";
   if (/"type"\s*:\s*"led-5mm-rgb-cc"/.test(code) || /"type"\s*:\s*"led-5mm-rgb-ca"/.test(code)) return "rgbled";
   if (/"type"\s*:\s*"oled-ssd1306-128x64"/.test(code)) return "screen";
-  if (/"type"\s*:\s*"lcd1602-i2c"/.test(code)) return "lcd";
+  if (/"type"\s*:\s*"lcd1602(-i2c)?"/.test(code)) return "lcd";
+  if (/"type"\s*:\s*"max7219-matrix-8x8"/.test(code) || /"type"\s*:\s*"max7219-matrix-4in1"/.test(code)) return "matrix";
   if (/"type"\s*:\s*"hc595-dip16"/.test(code)) return "shift";
   if (/"type"\s*:\s*"gy-bmp280"/.test(code)) return "serial";
   if (/"type"\s*:\s*"esp32s3-devkitc-1"/.test(code)) return "rgb";
@@ -284,7 +285,7 @@ export function blockKind(scene: string, id: string): BlockKind {
   if (/"type"\s*:\s*"buzzer-12mm"/.test(code)) return "tone";
   if (/"led1"\s*:/.test(code)) return "fade";
   throw new Error(
-    `${id} names no button, no fading LED, no light, no pixel stick, no screen, no LCD, no 7-segment display, no relay module, no 74HC595, no buzzer, no DevKitC-1, no servo and no serial sensor`,
+    `${id} names no button, no fading LED, no light, no pixel stick, no screen, no LCD, no LED matrix, no 7-segment display, no relay module, no 74HC595, no buzzer, no DevKitC-1, no servo and no serial sensor`,
   );
 }
 
@@ -294,8 +295,10 @@ const READY_NODES: Record<BlockKind, readonly (readonly [string, string?])[]> = 
   digit: [["@disp", "seg-a"]],
   fade: [["@led1", "body"]],
   joystick: [["@joy.sw", "plunger"], ["@joy.x", "rotor"]],
+  keypad: [["@pad.k1", "cap"], ["@pad.k5", "cap"], ["@pad.khash", "cap"]],
   lcd: [["@lcd.display", "glass"]],
   light: [["@led1", "body"]],
+  matrix: [["@matrix", "glass"]],
   pixels: [["@stick.px1", "lens"]],
   relay: [["@relay.led", "body"], ["@led1", "body"]],
   rgb: [["@board.led", "lens"], ["@btn1", "stem"]],
@@ -392,6 +395,36 @@ async function showScreen(page: Page, ref: string, shotName: string | null): Pro
       if (data === undefined) return false;
       for (let k = 0; k < data.length; k += 4) if (data[k] === 255) return true;
       return false;
+    },
+    ref,
+    { timeout: SCREEN_WAIT_MS },
+  );
+  if (shotName !== null) {
+    await page.locator("canvas").scrollIntoViewIfNeeded();
+    await shot(page, shotName);
+  }
+}
+
+/** Waits until at least one `glass` node under `ref` shows a lit red LED dot (R >= 128). */
+async function showMatrix(page: Page, ref: string, shotName: string | null): Promise<void> {
+  await page.waitForFunction(
+    (name) => {
+      const root = window.orbeViewer.get().scene.getObjectByName(name);
+      if (root === undefined) return false;
+      let lit = false;
+      root.traverse((node) => {
+        if (lit || node.name !== "glass") return;
+        const material = node.material ?? node.children?.[0]?.material;
+        const data = material?.emissiveMap?.image?.data;
+        if (data === undefined) return;
+        for (let k = 0; k < data.length; k += 4) {
+          if (data[k] >= 128) {
+            lit = true;
+            return;
+          }
+        }
+      });
+      return lit;
     },
     ref,
     { timeout: SCREEN_WAIT_MS },
@@ -527,40 +560,47 @@ async function showDigit(page: Page, block: RepoBlock, shotName: string | null):
 
 /** A one-time sweep would be over and holding by this simulated time. */
 const SWEEP_LATE_S = 2;
-/** nano-servo-sweep moves the shaft about 68° per simulated second, back and forth without end. */
-const SWEEP_WATCH_S = 1.5;
+/** Degrees the horn must span past SWEEP_LATE_S to prove it is still turning. */
+const SWEEP_SPAN_DEG = 20;
 
 /**
- * nano-servo-sweep sweeps the horn from one end to the other and back, forever. From 2 s of
- * simulated time on, the horn's turn from its rest is sampled while the page plays, and it must
- * span tens of degrees. servo-sg90's horn node has no rotation of its own, and the viewer draws
- * it at the 90° centre until a frame says otherwise, so its turn from rest is 90° minus the angle.
+ * Servo Blocks keep turning the horn past 2 s of simulated time, whether slowly like
+ * nano-servo-sweep (~68°/s) or between stops like nano-aa-pack (0° and 180°). Wait until
+ * simulated time is past 2 s and at least one frame has posed the horn there, then sample
+ * the signed turn around its -Z joint axis on every animation frame until the span exceeds
+ * 20°. Measuring the signed angle keeps opposite stops (such as -85.7° and +90°) 175.7° apart
+ * instead of folding them onto 85.7° and 90°, and waiting on rendered frames avoids missing
+ * motion when SwiftShader draws only a few frames per simulated second.
  */
 async function showServo(page: Page, block: RepoBlock, start: number): Promise<void> {
   const from = Math.max(start, SWEEP_LATE_S);
   await waitSimulatedPast(page, from);
   await page.evaluate(() => {
     window.orbeTurnSpan = undefined;
-    const sample = () => {
-      const q = window.orbeViewer.get().scene.getObjectByName("@servo")?.getObjectByName("horn")?.quaternion;
-      if (q === undefined) return;
-      const turn = (2 * Math.acos(Math.min(1, Math.abs(q.w))) * 180) / Math.PI;
-      const span = window.orbeTurnSpan ?? { min: turn, max: turn };
-      span.min = Math.min(span.min, turn);
-      span.max = Math.max(span.max, turn);
-      window.orbeTurnSpan = span;
-    };
-    sample();
-    window.orbeTurnTimer = window.setInterval(sample, 50);
+    return new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())));
   });
   try {
-    await waitSimulatedPast(page, from + SWEEP_WATCH_S);
-  } finally {
-    await page.evaluate(() => window.clearInterval(window.orbeTurnTimer));
+    await page.waitForFunction(
+      (need) => {
+        const q = window.orbeViewer.get().scene.getObjectByName("@servo")?.getObjectByName("horn")?.quaternion;
+        if (q === undefined) return false;
+        const sign = q.w < 0 ? -1 : 1;
+        const turn = (2 * Math.atan2(-q.z * sign, q.w * sign) * 180) / Math.PI;
+        const span = window.orbeTurnSpan ?? { min: turn, max: turn };
+        span.min = Math.min(span.min, turn);
+        span.max = Math.max(span.max, turn);
+        window.orbeTurnSpan = span;
+        return span.max - span.min > need;
+      },
+      SWEEP_SPAN_DEG,
+      { timeout: 30_000 },
+    );
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("Timeout")) throw error;
   }
   const span = await page.evaluate(() => window.orbeTurnSpan ?? null);
   expect(span, `${block.id} horn`).not.toBeNull();
-  expect((span?.max ?? 0) - (span?.min ?? 0), `${block.id} horn turned ${span?.min}° to ${span?.max}° from centre`).toBeGreaterThan(20);
+  expect((span?.max ?? 0) - (span?.min ?? 0), `${block.id} horn turned ${span?.min}° to ${span?.max}° from centre`).toBeGreaterThan(SWEEP_SPAN_DEG);
 }
 
 /** Play, require simulated time to move, and check the behaviour the scene declares. */
@@ -698,6 +738,30 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
     await expect(strip, `${block.id} released`).toContainText(/x=921 y=51[12] btn=0\s*$/, { timeout: 30_000 });
     return;
   }
+  if (block.kind === "keypad") {
+    const strip = page.locator(SERIAL);
+    await expect(strip, `${block.id} ready`).toContainText(/ready/, { timeout: 30_000 });
+    const k1 = await pointOn(page, "@pad.k1", "cap", canvas);
+    await page.mouse.move(k1.x, k1.y);
+    await page.mouse.down();
+    await expect(strip, `${block.id} k1`).toContainText(/key=1/, { timeout: 30_000 });
+    await page.mouse.up();
+    const k5 = await pointOn(page, "@pad.k5", "cap", canvas);
+    await page.mouse.move(k5.x, k5.y);
+    await page.mouse.down();
+    await expect(strip, `${block.id} k5`).toContainText(/key=5/, { timeout: 30_000 });
+    if (shotName !== null) {
+      await page.locator("canvas").scrollIntoViewIfNeeded();
+      await shot(page, shotName);
+    }
+    await page.mouse.up();
+    const khash = await pointOn(page, "@pad.khash", "cap", canvas);
+    await page.mouse.move(khash.x, khash.y);
+    await page.mouse.down();
+    await expect(strip, `${block.id} khash`).toContainText(/key=#/, { timeout: 30_000 });
+    await page.mouse.up();
+    return;
+  }
   if (block.kind === "pixels" || block.kind === "ring") {
     const prefix = block.kind === "ring" ? "@ring" : "@stick";
     const count = block.kind === "ring" ? 16 : 8;
@@ -778,6 +842,10 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
   }
   if (block.kind === "lcd") {
     await showScreen(page, "@lcd.display", shotName);
+    return;
+  }
+  if (block.kind === "matrix") {
+    await showMatrix(page, "@matrix", shotName);
     return;
   }
   await waitSimulatedPast(page, Math.max(1, start));
