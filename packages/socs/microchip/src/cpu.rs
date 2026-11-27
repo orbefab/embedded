@@ -504,7 +504,11 @@ impl Cpu {
         while self.cycles() < limit && !self.core.is_stopped() && !self.gaps_due() {
             if self.core.can_fetch() {
                 if !self.run_free(limit, until_news, div, &mut probe) {
-                    self.step_probed(limit, &mut probe);
+                    if probe.resting() {
+                        self.step();
+                    } else {
+                        self.step_probed(limit, &mut probe);
+                    }
                 }
             } else if self.core.is_held() {
                 self.advance_held(limit);

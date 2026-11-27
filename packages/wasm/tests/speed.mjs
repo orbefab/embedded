@@ -55,9 +55,6 @@ const EXEMPT = {
   "nano-lcd1602": {
     rate: "the stock HelloWorld rewrites the LCD with no delay, tens of thousands of pin edges a second, and runs about 1.1x real time",
   },
-  "nano-keypad": {
-    rate: "the sketch polls getKey() in a loop with no delay; about 4.8x real time in the Worker but 1.18x on the main thread at 4x throttle",
-  },
   "nano-max7219-scroll": {
     rate: "MD_Parola scrolling over hardware SPI runs about 36 simulated ms per wall second natively, about 28x slower than real time",
   },
