@@ -112,16 +112,21 @@ struct Open {
     files: Files,
 }
 
-/// A rating over now and the same rating's window warning are two keys, so a step lists the
-/// window warning when it crosses after the rating was listed over now. A peak limit's warning
-/// on the same quantity is a third.
+/// A rating over now (or an unclosed `rating.supply_low` episode with no settled excursion yet)
+/// and the same rating's settled warning are two keys, so a step lists the settled warning when
+/// it crosses or closes after the open/over-now warning was listed. A peak limit's warning on the
+/// same quantity is a third.
 type Key = (&'static str, Vec<String>, bool, bool);
 
 fn key(d: &EngineDiagnostic) -> Key {
+    key_with_open(d, d.over_now())
+}
+
+fn key_with_open(d: &EngineDiagnostic, open: bool) -> Key {
     (
         d.code(),
         d.refs().iter().map(ToString::to_string).collect(),
-        d.over_now(),
+        open,
         d.peak(),
     )
 }
@@ -677,11 +682,39 @@ impl Open {
         found
     }
 
+    /// Each `rating.supply_low` whose only episode is still open through `probe` (absent from
+    /// [`Self::step_findings`]).
+    pub(super) fn open_supply_findings(&self, probe: &Probe) -> Vec<EngineDiagnostic> {
+        let settled: BTreeSet<Key> = self.step_findings(probe).iter().map(key).collect();
+        self.findings(probe)
+            .into_iter()
+            .filter(|d| {
+                matches!(d, EngineDiagnostic::RatingSupplyLow(_)) && !settled.contains(&key(d))
+            })
+            .collect()
+    }
+
+    /// Keys of all findings through `probe`, with open-only `rating.supply_low` episodes keyed as
+    /// `open = true` (the same two-phase key convention as `rating.power`'s `over_now`).
+    pub(super) fn finding_keys(&self, probe: &Probe) -> BTreeSet<Key> {
+        let mut keys: BTreeSet<Key> = self.step_findings(probe).iter().map(key).collect();
+        for d in self.findings(probe) {
+            let k = key(&d);
+            if matches!(d, EngineDiagnostic::RatingSupplyLow(_)) && !keys.contains(&k) {
+                keys.insert(key_with_open(&d, true));
+            } else {
+                keys.insert(k);
+            }
+        }
+        keys
+    }
+
     /// Updates each `rating.supply_low` entry in `changes` to its value through `probe` so a
-    /// `step` or `pause` line matches the `snapshot` at the same time.
+    /// `step` or `pause` line matches the `snapshot` at the same time, drops any entry whose open
+    /// episode closed cleanly as a power cycle before `probe`, and deduplicates per pin.
     pub(super) fn refresh_supply_low_changes(
         &self,
-        changes: &mut [crate::reply::Change],
+        changes: &mut Vec<crate::reply::Change>,
         probe: &Probe,
     ) {
         if !changes.iter().any(|change| {
@@ -694,28 +727,39 @@ impl Open {
             return;
         }
         let latest = self.findings(probe);
-        for change in changes {
-            let crate::reply::Change::Diagnostic { diagnostic, .. } = change else {
-                continue;
+        let mut seen: BTreeSet<Vec<String>> = BTreeSet::new();
+        changes.retain_mut(|change| {
+            let crate::reply::Change::Diagnostic { by_ps, diagnostic } = change else {
+                return true;
             };
             if diagnostic.code != "rating.supply_low" {
-                continue;
+                return true;
             }
+            let refs: Vec<String> = diagnostic.json["refs"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToString::to_string)
+                .collect();
             let Some(fresh) = latest.iter().find(|d| {
                 d.code() == "rating.supply_low"
                     && d.refs()
                         .iter()
                         .map(ToString::to_string)
-                        .eq(diagnostic.json["refs"]
-                            .as_array()
-                            .into_iter()
-                            .flatten()
-                            .filter_map(serde_json::Value::as_str))
+                        .eq(refs.iter().cloned())
             }) else {
-                continue;
+                return false;
             };
+            if !seen.insert(refs) {
+                return false;
+            }
+            if let Some(at) = fresh.at() {
+                *by_ps = at.as_ps();
+            }
             *diagnostic = self.diagnostic(fresh);
-        }
+            true
+        });
     }
 
     fn diagnostics(&self, probe: &Probe) -> Vec<Diagnostic> {

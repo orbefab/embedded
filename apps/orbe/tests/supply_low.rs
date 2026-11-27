@@ -153,11 +153,17 @@ fn pin_volts(stdout: &str, label: &str) -> f64 {
 /// decay) cross the low band cleanly and stay silent.
 #[test]
 fn normal_power_up_and_power_down_circuits_stay_silent() {
-    // 1. RC ramps on DHT22 (soft 100 ohm, fast 10 ohm, fast with 100 us max_step)
-    for (tag, resistance, max_step) in [
-        ("soft", "100", None),
-        ("fast", "10", None),
-        ("fast-fine", "10", Some("100us")),
+    // 1. RC ramps on DHT22 (soft 100 ohm, fast 10 ohm, fast with 100 us max_step).
+    //    Steps that span the whole ramp stay silent on stdout as well as in final diagnostics.
+    for (tag, resistance, max_step, steps) in [
+        ("soft", "100", None, "step 5ms\nstep 82ms\n"),
+        ("fast", "10", None, "step 5ms\nstep 2ms\nstep 80ms\n"),
+        (
+            "fast-fine",
+            "10",
+            Some("100us"),
+            "step 5ms\nstep 2ms\nstep 80ms\n",
+        ),
     ] {
         let dir = setup_project(json!({}), "", false);
         let src = write_wave_part(
@@ -192,7 +198,7 @@ fn normal_power_up_and_power_down_circuits_stay_silent() {
         .unwrap();
         fs::write(
             dir.path().join("tests/run.test"),
-            "open\nstep 5ms\nstep 2ms\nstep 80ms\nexpect @u.VDD > 4.9V\nexpect no diagnostics\n",
+            format!("open\n{steps}expect @u.VDD > 4.9V\nexpect no diagnostics\n"),
         )
         .unwrap();
         let run = orbe(dir.path(), &["test", "-v"]);
@@ -236,7 +242,7 @@ fn normal_power_up_and_power_down_circuits_stay_silent() {
         .unwrap();
         fs::write(
             dir.path().join("tests/run.test"),
-            "open\nstep 5ms\nstep 2ms\nstep 80ms\nexpect @u.display.VDD > 3.2V\nexpect no diagnostics\n",
+            "open\nstep 5ms\nstep 82ms\nexpect @u.display.VDD > 3.2V\nexpect no diagnostics\n",
         )
         .unwrap();
         let run = orbe(dir.path(), &["test", "-v"]);
@@ -248,14 +254,15 @@ fn normal_power_up_and_power_down_circuits_stay_silent() {
         );
     }
 
-    // 3. Staircase up and staircase down on DHT22, with a step stopping mid-staircase.
-    for (tag, initial, events) in [
+    // 3. Staircase up and staircase down on DHT22.
+    for (tag, initial, events, test) in [
         (
             "stair-up",
             0.0,
             (1..=10)
                 .map(|i| json!({ "t_ps": ps(2 * i, 0), "level": volts(0.5 * i as f64) }))
                 .collect::<Vec<_>>(),
+            "open\nstep 24ms\nget @u.VDD\nexpect no diagnostics\n",
         ),
         (
             "stair-down",
@@ -263,6 +270,7 @@ fn normal_power_up_and_power_down_circuits_stay_silent() {
             (1..=10)
                 .map(|i| json!({ "t_ps": ps(2 * i, 0), "level": volts(5.0 - 0.5 * i as f64) }))
                 .collect::<Vec<_>>(),
+            "open\nstep 4ms\nget @u.VDD\nstep 20ms\nget @u.VDD\nexpect no diagnostics\n",
         ),
     ] {
         let dir = setup_project(json!({}), "", false);
@@ -282,11 +290,7 @@ fn normal_power_up_and_power_down_circuits_stay_silent() {
             serde_json::to_string_pretty(&scene).unwrap(),
         )
         .unwrap();
-        fs::write(
-            dir.path().join("tests/run.test"),
-            "open\nstep 4ms\nget @u.VDD\nstep 20ms\nget @u.VDD\nexpect no diagnostics\n",
-        )
-        .unwrap();
+        fs::write(dir.path().join("tests/run.test"), test).unwrap();
         let run = orbe(dir.path(), &["test", "-v"]);
         assert_eq!(run.code, 0, "{tag}: {}{}", run.stdout, run.stderr);
         assert!(
@@ -335,9 +339,9 @@ fn normal_power_up_and_power_down_circuits_stay_silent() {
         )
         .unwrap();
         let test = if scheduled {
-            "open\nstep 5ms\nstep 10ms\nstep 40ms\nexpect @u.VDD < 0.1V\nexpect no diagnostics\n"
+            "open\nstep 5ms\nstep 50ms\nexpect @u.VDD < 0.1V\nexpect no diagnostics\n"
         } else {
-            "open\nstep 5ms\nrelease @sw\nstep 10ms\nstep 40ms\nexpect @u.VDD < 0.1V\nexpect no diagnostics\n"
+            "open\nstep 5ms\nrelease @sw\nstep 50ms\nexpect @u.VDD < 0.1V\nexpect no diagnostics\n"
         };
         fs::write(dir.path().join("tests/run.test"), test).unwrap();
         let run = orbe(dir.path(), &["test", "-v"]);
@@ -430,7 +434,7 @@ fn normal_power_up_and_power_down_circuits_stay_silent() {
         .unwrap();
         fs::write(
             dir.path().join("tests/run.test"),
-            "open\nstep 5ms\nstep 50ms\nstep 350ms\nexpect @u.VDD < 0.1V\nexpect no diagnostics\n",
+            "open\nstep 5ms\nstep 400ms\nexpect @u.VDD < 0.1V\nexpect no diagnostics\n",
         )
         .unwrap();
         let run = orbe(dir.path(), &["test", "-v"]);
@@ -1049,4 +1053,351 @@ fn supply_low_tracks_most_recent_held_level_exact_duration_and_step_snapshot_par
         assert_eq!(snaps[1]["data"]["over_ps"].as_u64(), Some(ps(4, 0)));
         assert_eq!(snaps[2]["data"]["over_ps"].as_u64(), Some(ps(10, 0)));
     }
+}
+
+/// Pins open-episode `rating.supply_low` reporting on `step` and `pause` following the same
+/// two-phase key convention as `rating.power`'s `over_now`:
+/// - `stair`: `step 7ms` prints `3 V` for `2ms` matching the snapshot; intermediate open steps at
+///   12 ms and 17 ms do not repeat; `step 22ms` after recovery prints the settled `2 V` for `15ms`
+///   matching the snapshot; a later step does not repeat.
+/// - `mid-sag`: `step 5ms` prints `2 V` for `3ms` matching the snapshot; `step 10ms` prints the
+///   settled `2 V` for `6ms` matching the snapshot.
+/// - `dc-2v`: `open` prints `2 V` (`over_ps: 0`); `step 4ms` and `step 6ms` do not repeat while
+///   snapshots report `4ms` and `10ms`.
+/// - Mid-ramp stop then clean power-up: stopping mid-ramp prints `rating.supply_low` matching the
+///   snapshot, and finishing the ramp leaves `no diagnostics`.
+/// - Live `play`/`pause`: pausing mid-sag prints the open warning matching the snapshot; pausing
+///   after recovery prints one deduplicated settled warning matching the snapshot; pausing after a
+///   clean power-up spanning multiple ticks prints no `rating.supply_low`.
+#[test]
+fn open_supply_low_episodes_report_on_step_and_pause() {
+    use orbe_scene::Files;
+    use orbe_session::{Command, Live};
+
+    let supply_in_changes = |reply: &Value| -> Vec<Value> {
+        reply["data"]["changes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|c| c["kind"] == "diagnostic" && c["diagnostic"]["code"] == "rating.supply_low")
+            .map(|c| c["diagnostic"].clone())
+            .collect()
+    };
+    let supply_in_diags = |reply: &Value| -> Vec<Value> {
+        reply["data"]["diagnostics"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|d| d["code"] == "rating.supply_low")
+            .cloned()
+            .collect()
+    };
+
+    // 1. Staircase: open step at 7 ms warns matching snapshot, intermediate open steps stay quiet,
+    //    recovery step at 22 ms warns settled matching snapshot, later step stays quiet.
+    {
+        let dir = setup_project(json!({}), "", false);
+        let src = write_wave_part(
+            dir.path(),
+            "stair",
+            json!({
+                "kind": "steps",
+                "initial": volts(5.0),
+                "events": [
+                    { "t_ps": ps(5, 0), "level": volts(3.0) },
+                    { "t_ps": ps(10, 0), "level": volts(2.5) },
+                    { "t_ps": ps(15, 0), "level": volts(2.0) },
+                    { "t_ps": ps(20, 0), "level": volts(5.0) }
+                ]
+            }),
+        );
+        let scene = json!({
+            "format": 1,
+            "parts": { "psu": { "type": src }, "u": { "type": "dht22" } },
+            "wires": [["psu.pos", "u.VDD"], ["psu.neg", "u.GND"]],
+            "ground": "u.GND"
+        });
+        fs::write(
+            dir.path().join("scene.jsonc"),
+            serde_json::to_string_pretty(&scene).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("tests/run.test"),
+            "open\nstep 7ms\nsnapshot\nstep 5ms\nsnapshot\nstep 5ms\nsnapshot\nstep 5ms\nsnapshot\nstep 5ms\nsnapshot\nexpect diagnostics contains \"drops to 2 V\"\n",
+        )
+        .unwrap();
+        let run = orbe(dir.path(), &["test", "-v", "--json"]);
+        assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+        let doc: Value = serde_json::from_str(&run.stdout).unwrap();
+        let replies = doc["data"]["tests"][0]["replies"].as_array().unwrap();
+        let steps: Vec<_> = replies
+            .iter()
+            .filter(|r| r["command"].as_str().unwrap().starts_with("step "))
+            .map(|r| supply_in_changes(&r["reply"]))
+            .collect();
+        let snaps: Vec<_> = replies
+            .iter()
+            .filter(|r| r["command"] == "snapshot")
+            .map(|r| supply_in_diags(&r["reply"]))
+            .collect();
+        assert_eq!(steps.len(), 5);
+        assert_eq!(steps[0], snaps[0], "7 ms open step should match snapshot");
+        assert!(
+            steps[1].is_empty(),
+            "12 ms still-open step should not repeat: {:?}",
+            steps[1]
+        );
+        assert!(
+            steps[2].is_empty(),
+            "17 ms still-open step should not repeat: {:?}",
+            steps[2]
+        );
+        assert_eq!(
+            steps[3], snaps[3],
+            "22 ms recovery step should match snapshot"
+        );
+        assert!(
+            steps[4].is_empty(),
+            "27 ms post-recovery step should not repeat: {:?}",
+            steps[4]
+        );
+    }
+
+    // 2. Mid-sag: open step at 5 ms and closed step at 10 ms both match their snapshots.
+    {
+        let dir = setup_project(json!({}), "", false);
+        let src = write_wave_part(
+            dir.path(),
+            "mid-sag",
+            json!({
+                "kind": "steps",
+                "initial": volts(5.0),
+                "events": [
+                    { "t_ps": ps(2, 0), "level": volts(2.0) },
+                    { "t_ps": ps(8, 0), "level": volts(5.0) }
+                ]
+            }),
+        );
+        let scene = json!({
+            "format": 1,
+            "parts": { "psu": { "type": src }, "u": { "type": "dht22" } },
+            "wires": [["psu.pos", "u.VDD"], ["psu.neg", "u.GND"]],
+            "ground": "u.GND"
+        });
+        fs::write(
+            dir.path().join("scene.jsonc"),
+            serde_json::to_string_pretty(&scene).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("tests/run.test"),
+            "open\nstep 5ms\nsnapshot\nstep 5ms\nsnapshot\nexpect diagnostics contains \"for 6ms\"\n",
+        )
+        .unwrap();
+        let run = orbe(dir.path(), &["test", "-v", "--json"]);
+        assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+        let doc: Value = serde_json::from_str(&run.stdout).unwrap();
+        let replies = doc["data"]["tests"][0]["replies"].as_array().unwrap();
+        let steps: Vec<_> = replies
+            .iter()
+            .filter(|r| r["command"].as_str().unwrap().starts_with("step "))
+            .map(|r| supply_in_changes(&r["reply"]))
+            .collect();
+        let snaps: Vec<_> = replies
+            .iter()
+            .filter(|r| r["command"] == "snapshot")
+            .map(|r| supply_in_diags(&r["reply"]))
+            .collect();
+        assert_eq!(
+            steps[0], snaps[0],
+            "5 ms mid-sag step should match snapshot"
+        );
+        assert_eq!(steps[0][0]["data"]["over_ps"].as_u64(), Some(ps(3, 0)));
+        assert_eq!(
+            steps[1], snaps[1],
+            "10 ms recovery step should match snapshot"
+        );
+        assert_eq!(steps[1][0]["data"]["over_ps"].as_u64(), Some(ps(6, 0)));
+    }
+
+    // 3. Flat 2.0 V rail (`dc-2v`): `open` reports it once; later steps stay quiet while
+    //    snapshots track exact elapsed duration.
+    {
+        let dir = setup_project(json!({}), "", false);
+        let src = write_wave_part(dir.path(), "dc2", volts(2.0));
+        let scene = json!({
+            "format": 1,
+            "parts": { "psu": { "type": src }, "u": { "type": "dht22" } },
+            "wires": [["psu.pos", "u.VDD"], ["psu.neg", "u.GND"]],
+            "ground": "u.GND"
+        });
+        fs::write(
+            dir.path().join("scene.jsonc"),
+            serde_json::to_string_pretty(&scene).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("tests/run.test"),
+            "open\nstep 4ms\nsnapshot\nstep 6ms\nsnapshot\nexpect diagnostics contains \"for 10ms\"\n",
+        )
+        .unwrap();
+        let run = orbe(dir.path(), &["test", "-v", "--json"]);
+        assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+        let doc: Value = serde_json::from_str(&run.stdout).unwrap();
+        let replies = doc["data"]["tests"][0]["replies"].as_array().unwrap();
+        assert_eq!(supply_in_diags(&replies[0]["reply"]).len(), 1);
+        let steps: Vec<_> = replies
+            .iter()
+            .filter(|r| r["command"].as_str().unwrap().starts_with("step "))
+            .map(|r| supply_in_changes(&r["reply"]))
+            .collect();
+        assert!(
+            steps[0].is_empty(),
+            "dc-2v step 4ms should not repeat open warning"
+        );
+        assert!(
+            steps[1].is_empty(),
+            "dc-2v step 6ms should not repeat open warning"
+        );
+    }
+
+    // 4. Stopping mid-ramp reports the open episode on that step (matching snapshot), then
+    //    finishing the clean power-up leaves `no diagnostics`.
+    {
+        let dir = setup_project(json!({}), "", false);
+        let src = write_wave_part(
+            dir.path(),
+            "step-0-to-5",
+            json!({ "kind": "step", "initial": volts(0.0), "final": volts(5.0), "at_ps": ps(5, 0) }),
+        );
+        let scene = json!({
+            "format": 1,
+            "parts": {
+                "psu": { "type": src },
+                "rs": { "type": "resistor-axial", "resistance": "100" },
+                "c": { "type": "capacitor-electrolytic-radial", "capacitance": "100u", "initial": "0V" },
+                "u": { "type": "dht22" }
+            },
+            "wires": [
+                ["psu.neg", "c.neg"],
+                ["psu.pos", "rs.a"],
+                ["rs.b", "c.pos"],
+                ["c.pos", "u.VDD"],
+                ["c.neg", "u.GND"]
+            ],
+            "ground": "u.GND"
+        });
+        fs::write(
+            dir.path().join("scene.jsonc"),
+            serde_json::to_string_pretty(&scene).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("tests/run.test"),
+            "open\nstep 5ms\nstep 2ms\nsnapshot\nstep 80ms\nexpect @u.VDD > 4.9V\nexpect no diagnostics\n",
+        )
+        .unwrap();
+        let run = orbe(dir.path(), &["test", "-v", "--json"]);
+        assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+        let doc: Value = serde_json::from_str(&run.stdout).unwrap();
+        let replies = doc["data"]["tests"][0]["replies"].as_array().unwrap();
+        let mid_step = supply_in_changes(&replies[2]["reply"]);
+        let mid_snap = supply_in_diags(&replies[3]["reply"]);
+        assert_eq!(mid_step.len(), 1);
+        assert_eq!(
+            mid_step, mid_snap,
+            "mid-ramp step should match snapshot at 7 ms"
+        );
+    }
+
+    // 5. Live `play`/`pause`: pausing mid-sag, pausing after multi-tick recovery, and pausing
+    //    after a multi-tick clean power-up.
+    let run_play_pause =
+        |name: &str, voltage: Value, ticks_ms: &[u64]| -> (Vec<Value>, Vec<Value>) {
+            let dir = setup_project(json!({}), "", false);
+            let src = write_wave_part(dir.path(), name, voltage);
+            let scene = json!({
+                "format": 1,
+                "parts": { "psu": { "type": src }, "u": { "type": "dht22" } },
+                "wires": [["psu.pos", "u.VDD"], ["psu.neg", "u.GND"]],
+                "ground": "u.GND"
+            });
+            fs::write(
+                dir.path().join("scene.jsonc"),
+                serde_json::to_string_pretty(&scene).unwrap(),
+            )
+            .unwrap();
+            let mut live = Live::new(name, Files::disk());
+            assert!(
+                live.run(&Command::Open(dir.path().join("scene.jsonc")))
+                    .ok()
+            );
+            assert!(live.run(&Command::Play).ok());
+            for &ms in ticks_ms {
+                assert!(live.tick(std::time::Duration::from_millis(ms)).is_some());
+            }
+            let pause_json = live.run(&Command::Pause).json();
+            let snap_json = live.run(&Command::Snapshot).json();
+            (supply_in_changes(&pause_json), supply_in_diags(&snap_json))
+        };
+
+    // Pause mid-sag (1 ms -> 2 V, still 2 V at 16 ms across two 8 ms ticks).
+    let (pause_mid, snap_mid) = run_play_pause(
+        "play-mid",
+        json!({
+            "kind": "steps",
+            "initial": volts(5.0),
+            "events": [
+                { "t_ps": ps(1, 0), "level": volts(2.0) },
+                { "t_ps": ps(80, 0), "level": volts(5.0) }
+            ]
+        }),
+        &[8, 8],
+    );
+    assert_eq!(pause_mid.len(), 1);
+    assert_eq!(pause_mid, snap_mid, "pause mid-sag should match snapshot");
+    assert_eq!(pause_mid[0]["data"]["over_ps"].as_u64(), Some(ps(15, 0)));
+
+    // Pause after recovery spanning multiple ticks: one deduplicated entry matching snapshot.
+    let (pause_stair, snap_stair) = run_play_pause(
+        "play-stair",
+        json!({
+            "kind": "steps",
+            "initial": volts(5.0),
+            "events": [
+                { "t_ps": ps(5, 0), "level": volts(3.0) },
+                { "t_ps": ps(10, 0), "level": volts(2.5) },
+                { "t_ps": ps(15, 0), "level": volts(2.0) },
+                { "t_ps": ps(20, 0), "level": volts(5.0) }
+            ]
+        }),
+        &[8, 8, 8, 8],
+    );
+    assert_eq!(pause_stair.len(), 1);
+    assert_eq!(
+        pause_stair, snap_stair,
+        "pause after recovery should match snapshot"
+    );
+    assert_eq!(pause_stair[0]["data"]["over_ps"].as_u64(), Some(ps(15, 0)));
+
+    // Clean power-up spanning two ticks (tick 1 stops mid-staircase, tick 2 finishes at 5 V):
+    // pause drops the transient open-episode warning and matches the clean snapshot.
+    let (pause_up, snap_up) = run_play_pause(
+        "play-power-up",
+        json!({
+            "kind": "steps",
+            "initial": volts(0.0),
+            "events": [
+                { "t_ps": ps(2, 0), "level": volts(1.5) },
+                { "t_ps": ps(10, 0), "level": volts(5.0) }
+            ]
+        }),
+        &[5, 10],
+    );
+    assert!(
+        pause_up.is_empty(),
+        "clean power-up during play should stay quiet on pause: {pause_up:?}"
+    );
+    assert!(snap_up.is_empty());
 }

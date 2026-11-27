@@ -10,7 +10,7 @@ use orbe_engine::{EdgeCursor, Status};
 use super::bound::Bound;
 use super::light::LIGHT_HOLD;
 use super::serial::Arrived;
-use super::{Key, Open, Outcome, fail, failed, key, level, t};
+use super::{Key, Open, Outcome, fail, failed, key, key_with_open, level, t};
 use crate::command::Step;
 use crate::duration::Duration;
 use crate::reply::{Change, Check, Code, Data, Error, Got, LedRead, Level, Light, Met, Stepped};
@@ -170,15 +170,24 @@ impl Open {
         during: &mut dyn FnMut(&Progress) -> ControlFlow<()>,
     ) -> Outcome {
         let outcome = self.step(step, during);
-        let Some(mut held) = self.unlisted.take() else {
+        let Some(held) = self.unlisted.take() else {
             return outcome;
         };
         let probe = self.engine.probe();
-        self.refresh_supply_low_changes(&mut held.changes, &probe);
         match outcome {
-            Ok(data) => Ok(held_then(held, data)),
+            Ok(data) => {
+                let mut combined = held_then(held, data);
+                if let Data::Stepped(stepped) = &mut combined {
+                    self.refresh_supply_low_changes(&mut stepped.changes, &probe);
+                }
+                Ok(combined)
+            }
             Err(mut failed) => {
-                failed.data = held_then(held, failed.data);
+                let mut combined = held_then(held, failed.data);
+                if let Data::Stepped(stepped) = &mut combined {
+                    self.refresh_supply_low_changes(&mut stepped.changes, &probe);
+                }
+                failed.data = combined;
                 Err(failed)
             }
         }
@@ -242,7 +251,11 @@ impl Open {
                 since: None,
             })
             .collect();
-        let mut known: BTreeSet<Key> = self.step_findings(&probe).iter().map(key).collect();
+        let mut known: BTreeSet<Key> = if from == 0 {
+            self.step_findings(&probe).iter().map(key).collect()
+        } else {
+            self.finding_keys(&probe)
+        };
         drop(probe);
         let mut changes = Vec::new();
         let mut more = 0;
@@ -348,6 +361,22 @@ impl Open {
         });
         let glows = {
             let probe = self.engine.probe();
+            if now > from {
+                let mut open_supply = Vec::new();
+                for d in self.open_supply_findings(&probe) {
+                    if d.at().is_some()
+                        && !known.contains(&key(&d))
+                        && known.insert(key_with_open(&d, true))
+                    {
+                        open_supply.push(Change::Diagnostic {
+                            by_ps: d.at().map_or(now, Time::as_ps),
+                            diagnostic: self.diagnostic(&d),
+                        });
+                    }
+                }
+                open_supply.sort_by_key(Change::ps);
+                list(open_supply);
+            }
             self.refresh_supply_low_changes(&mut changes, &probe);
             self.light.glows(&probe)
         };
@@ -418,6 +447,24 @@ impl Open {
             self.unlisted = Some(stepped);
             return;
         };
+        // Avoid spending a slot in `held.changes` on a second `rating.supply_low` for the same pin
+        // when an episode opens on one tick and closes on a later tick during the same `play`.
+        stepped.changes.retain(|change| {
+            let Change::Diagnostic { diagnostic, .. } = change else {
+                return true;
+            };
+            if diagnostic.code != "rating.supply_low" {
+                return true;
+            }
+            !held.changes.iter().any(|existing| {
+                matches!(
+                    existing,
+                    Change::Diagnostic { diagnostic: prev, .. }
+                        if prev.code == "rating.supply_low"
+                            && prev.json["refs"] == diagnostic.json["refs"]
+                )
+            })
+        });
         let room = CHANGES.saturating_sub(held.changes.len());
         if stepped.changes.len() > room {
             held.more += stepped.changes.len() - room;
