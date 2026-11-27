@@ -413,7 +413,7 @@ fn each_reset_sets_its_mcusr_flag_and_keeps_the_others() {
 #[test]
 fn startup_timeout_follows_the_crystal_fuses() {
     // Table 9-4, CKSEL0 = 1, SUT = 11: the 16K CK start-up, and 14 CK + 65 ms more from
-    // reset (§9.2.1). 65 ms at 16 MHz is 1_040_000. Power-down wake is the 16K CK alone.
+    // reset (§9.2.2). 65 ms at 16 MHz is 1_040_000. Power-down wake is the 16K CK alone.
     let mut cpu = fresh();
     let delay = crystal_reset_delay();
     assert_eq!(delay, 16_384 + 14 + 1_040_000);

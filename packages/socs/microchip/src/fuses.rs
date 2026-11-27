@@ -161,7 +161,7 @@ pub fn clkps_reserved(clkps: u8) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DelayKind {
     /// The start from reset: the start-up time and the additional delay from reset of
-    /// Table 9-4 and the matching tables. §9.2.1: "The start-up sequence for the clock
+    /// Table 9-4 and the matching tables. §9.2.2: "The start-up sequence for the clock
     /// includes both the time-out delay and the start-up time when the device starts up from
     /// reset."
     Reset,

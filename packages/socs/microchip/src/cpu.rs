@@ -184,7 +184,7 @@ impl Cpu {
 
     /// Supply rises at cycle 0, as a part does when its board is plugged in. The power-on reset
     /// holds the core through the start from reset the fuses select, the start-up time and the
-    /// additional delay of Table 9-4 or 9-6 (§9.2.1, §11.3), and the bootloader runs after it
+    /// additional delay of Table 9-4 or 9-6 (§9.2.2, §11.3), and the bootloader runs after it
     /// while `BOOTRST` is programmed. Only then is the first instruction of the image fetched.
     /// A brown-out or a low `RESET` from the host holds it further, as in a run.
     pub fn power_on(&mut self) {
