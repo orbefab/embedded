@@ -1428,6 +1428,14 @@ impl Actives {
             }
             assert_eq!(ahead.core.drive(), image, "a frame never changes an image");
         }
+        #[cfg(test)]
+        if let Some(lose) = air.lose_ack {
+            for ((_, frame), ack) in frames.iter().zip(&mut acks) {
+                if lose(frame) {
+                    *ack = Ack::None;
+                }
+            }
+        }
         for ((sender, _), ack) in frames.iter().zip(acks) {
             let core = &mut self.ahead[*sender].core;
             core.drop_aired();
@@ -1438,6 +1446,14 @@ impl Actives {
             air.log.extend(frames);
         }
         true
+    }
+
+    /// Loses the ACK of each frame `lose` picks, from the next landing on.
+    #[cfg(test)]
+    pub(crate) fn lose_acks(&mut self, lose: fn(&AirFrame) -> bool) {
+        if let Some(air) = &mut self.air {
+            air.lose_ack = Some(lose);
+        }
     }
 
     /// Each frame a landing handed on, with its sender's slot.

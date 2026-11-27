@@ -530,9 +530,12 @@ impl Esp32s3 {
                 .get(self.reported_trains)
                 .map(|train| Tick(train.end.0 + 1));
             let frame = self.soc.radio().and_then(wifi::Radio::end);
+            let tbtt = (self.soc.radio().and_then(wifi::Radio::tbtt))
+                .map(|at| self.soc.clock.round_up(at));
             let until = [
                 Some(Tick(limit.0 + 1)),
                 due,
+                tbtt,
                 spi,
                 frame,
                 ledc.map(|at| Tick(at.0 + 1)),
@@ -600,6 +603,15 @@ impl Esp32s3 {
                 pc: core.pc(),
             };
             let now = self.soc.clock.tick(core.cycle());
+            // The power interrupt the driver armed for the station's TBTT is not modelled, so
+            // the run ends where it would first rise.
+            if let Some(at) = tbtt
+                && self.now() >= at
+            {
+                let refused = Refused::Register("RADIO", "tbtt");
+                self.fault = Some((at, Fault::Refused(refused, pc)));
+                continue;
+            }
             match stop {
                 Stop::Limit | Stop::Yield => {}
                 Stop::Bus => {

@@ -1,6 +1,7 @@
 //! Whole-chip tests for a chip built with its Wi-Fi radio: the radio's words are kept and read
 //! back, a chip without it refuses them as before, the PHY's write of `SENS_IOMUX_CLK_EN` is not
-//! listed, and a frame the MAC sends ends in a record halt.
+//! listed, a frame the MAC sends ends in a record halt, and the run ends where an armed TBTT
+//! would raise the power interrupt.
 
 use super::*;
 
@@ -168,4 +169,62 @@ fn a_frame_ends_in_a_record_halt_however_the_run_splits() {
     for step in [1, 7, 333, 1_000] {
         assert_eq!(run(step), seen, "step {step}");
     }
+}
+
+/// The station's TBTT and its timing, and the power interrupt's enable word.
+const TBTT: u32 = 0x6003_5020;
+const TBTT_TIMING: u32 = 0x6003_5030;
+const PWR_ENABLE: u32 = 0x6003_5110;
+
+/// Sets a TBTT at TSF 0 every TU, 10 us ahead, then arms its interrupt, and clears it again when
+/// `disarm`.
+fn arm_tbtt(disarm: bool) -> Esp32s3 {
+    let words = [
+        TBTT_TIMING,
+        10 << 16 | 1,
+        TBTT,
+        0,
+        PWR_ENABLE,
+        1 << 4,
+        PWR_ENABLE,
+        0,
+    ];
+    let mut program = Program::new(&words);
+    let stores = if disarm { 4 } else { 3 };
+    for k in 0..stores {
+        program.l32r(2, 2 * k).l32r(3, 2 * k + 1).rri8(6, 3, 2, 0);
+    }
+    program.raw(&LOOP);
+    let mut chip = program.chip();
+    chip.use_radio();
+    chip
+}
+
+/// The TBTTs fall at the TSF's whole TUs, so the first one the arming lets through is at
+/// 1024 us, and its interrupt would come 10 us before. The run ends there by name, however it
+/// splits. Disarmed, it runs on.
+#[test]
+fn the_run_ends_where_an_armed_tbtt_would_raise_the_power_interrupt() {
+    let run = |step: u64| {
+        let mut chip = arm_tbtt(false);
+        let mut limit = 0;
+        loop {
+            limit += step;
+            if let Some(halt) = chip.run_until(c(limit)) {
+                return halt;
+            }
+        }
+    };
+    let halt = run(100_000);
+    let Halt::Fault(at, Fault::Refused(refused, _)) = halt else {
+        panic!("{halt:?}");
+    };
+    assert_eq!(at, c(1014 * 40));
+    assert_eq!(refused, Refused::Register("RADIO", "tbtt"));
+    for step in [1_000, 7_777, 40_559, 40_560] {
+        assert_eq!(run(step), halt, "step {step}");
+    }
+
+    let mut chip = arm_tbtt(true);
+    assert_eq!(chip.run_until(c(100_000)), None);
 }

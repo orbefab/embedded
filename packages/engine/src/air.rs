@@ -104,6 +104,10 @@ pub(crate) struct Air {
     /// again after a rewind logs its frames again.
     #[cfg(test)]
     pub(crate) log: Vec<(usize, AirFrame)>,
+    /// The frames whose sender hears no ACK, though a station took them, as if the ACK were
+    /// lost on the air. It reads only the frame, so a landing run again loses the same ones.
+    #[cfg(test)]
+    pub(crate) lose_ack: Option<fn(&AirFrame) -> bool>,
 }
 
 impl Air {
@@ -121,6 +125,8 @@ impl Air {
             stations,
             #[cfg(test)]
             log: Vec::new(),
+            #[cfg(test)]
+            lose_ack: None,
         })
     }
 
