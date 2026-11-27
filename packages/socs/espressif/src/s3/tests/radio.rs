@@ -1,8 +1,8 @@
 //! Whole-chip tests for a chip built with its Wi-Fi radio: the radio's words are kept and read
 //! back, a chip without it refuses them as before, the PHY's write of `SENS_IOMUX_CLK_EN` is not
 //! listed, a frame the MAC sends ends in a record halt, and the run ends where an armed TBTT
-//! would raise the power interrupt, or not at all once a store disarms it, however the run is
-//! split.
+//! would raise the power interrupt, even at the store that armed it, or not at all once a
+//! store disarms it, however the run is split.
 
 use super::*;
 
@@ -257,12 +257,19 @@ fn tbtt_runs() -> [TbttRun; 3] {
 const TBTT_LIMIT: u64 = 80_000;
 
 /// Every halt of a run to `TBTT_LIMIT` cycles, stepped through each limit of `splits` first.
+/// Each halt comes from the first call whose limit reaches it.
 fn halts(mut chip: Esp32s3, splits: &[u64]) -> Vec<Halt> {
     let mut seen = Vec::new();
+    let mut served = None;
     for &limit in splits.iter().chain([&TBTT_LIMIT]) {
         while let Some(halt) = chip.run_until(c(limit)) {
+            assert!(
+                served.is_none_or(|served| halt.at() > c(served)),
+                "{halt:?} after a call to {served:?} returned"
+            );
             seen.push(halt);
         }
+        served = Some(limit);
     }
     assert_eq!(chip.unmodeled().count(), 0);
     seen
@@ -369,6 +376,25 @@ fn every_split_of_a_tbtt_run_ends_as_the_straight_run_does() {
                 }
             }
         }
+    }
+}
+
+/// With no ahead time, a TBTT every TU from TSF 0 armed at TSF 0 falls due at the arming store
+/// itself. The call whose limit reaches the store ends the run there, at every split around it.
+#[test]
+fn a_tbtt_due_at_its_arming_store_ends_the_call_that_ran_it() {
+    let chip = || armed_then(1, None);
+    let arming = tbtt_moves(chip(), 100)[0];
+    let straight = halts(chip(), &[]);
+    let [Halt::Fault(at, Fault::Refused(refused, _))] = straight[..] else {
+        panic!("{straight:?}");
+    };
+    assert_eq!(
+        (at, refused),
+        (c(arming), Refused::Register("RADIO", "tbtt"))
+    );
+    for split in 1..arming + 12 {
+        assert_eq!(halts(chip(), &[split]), straight, "split at {split}");
     }
 }
 
