@@ -27,6 +27,15 @@ https://github.com/adafruit/Adafruit_BusIO/archive/refs/tags/1.17.0.tar.gz.
 The wire1 sketch uses Adafruit SSD1306 2.5.17, Adafruit GFX Library 2.0.0 and Adafruit BusIO
 1.17.4 under those same licenses.
 
+The station app also links ESP-IDF's Wi-Fi, PHY and coexistence libraries (esp_wifi/lib,
+esp_phy/lib and esp_coex/lib in ESP-IDF v5.5.5), which Espressif ships as object code under the
+Apache License 2.0, and more of Mbed TLS, under the terms above. It links lwIP, Copyright (c)
+2001, 2002 Swedish Institute of Computer Science, under the BSD 3-clause license whose notice is
+in station/LICENSE-lwip; wpa_supplicant, Copyright (c) 2002-2022 Jouni Malinen and contributors,
+under the BSD license whose notice is in station/LICENSE-wpa_supplicant; and cJSON, Copyright
+(c) 2009-2017 Dave Gamble and cJSON contributors, under the MIT license whose notice is in
+station/LICENSE-cjson.
+
 The compile rewrites source paths with -ffile-prefix-map, the same way
 packages/engine/scripts/esp32s3-arduino.sh does, so the committed app does not record the build
 directory, and maps the sketchbook's libraries folder to /arduino. A sketch built without that
@@ -122,3 +131,5 @@ wire1        packages/scene/tests/fixtures/esp32s3-stock-wire1
              app 338480 0431bf3adb8761ff30b28887e4e4b7e3ce74a6b137b84c41909fa62bc28c8e7b
 hspi         packages/scene/tests/fixtures/esp32s3-stock-hspi
              app 283120 0c098c9779dbabd8af6484d2a46ea39e5556cf2626b18078d2f77ec0a3303d64
+station      packages/scene/tests/fixtures/esp32s3-stock-station
+             app 864208 5815147ec6c9b2149bee334dc23a0aba857aa1361cb9fb578e2afc0c7f4097d0

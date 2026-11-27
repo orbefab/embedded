@@ -47,6 +47,7 @@ use super::timers::{Expiry, Register, Systimer, Watchdogs};
 use super::tsens::{self, Tsens};
 use super::uart::{self, Uarts};
 use super::usb::{self, UsbSerialJtag};
+use super::wifi::Radio;
 use super::{Duty, Pc, RAM, Refused, ResetCause, Touch};
 
 pub(crate) const SRAM: usize = 512 * 1024;
@@ -139,6 +140,8 @@ pub(crate) struct Soc {
     sar: Sar,
     /// The internal temperature sensor in SENS.
     tsens: Tsens,
+    /// The Wi-Fi radio's registers, on a chip built with its radio.
+    radio: Option<Box<Radio>>,
     spi1: Spi1,
     matrix: Matrix,
     /// Each timer group's RTC clock calibration.
@@ -444,6 +447,7 @@ impl Soc {
             efuse: Efuse::default(),
             sar: Sar::new(),
             tsens: Tsens::new(),
+            radio: None,
             spi1: Spi1::default(),
             matrix: Matrix::default(),
             calibration: Default::default(),
@@ -591,6 +595,22 @@ impl Soc {
     /// Puts `set` in the eFuse controller's read registers, where IDF reads its calibration.
     pub(crate) fn use_efuse(&mut self, set: EfuseSet) {
         self.efuse.set = set;
+    }
+
+    pub(crate) fn use_radio(&mut self) {
+        self.radio = Some(Box::new(Radio::new()));
+    }
+
+    /// Whether a store of `value` over `kept` at `word`, on a chip built with its radio, only sets
+    /// `SENS_IOMUX_CLK_EN` among the gate bits the model does not run. The PHY sets it when it
+    /// reads the temperature sensor. The model runs RTC IO as if that clock were on, so setting it
+    /// is not listed. Clearing it still is.
+    fn radio_clocks_rtc_io(&self, word: u32, kept: Option<u32>, value: u32) -> bool {
+        let unrun = !(sar::SARADC_BIT | sar::TSENS_BIT);
+        self.radio.is_some()
+            && word == RTC_CNTL + sar::SENS + sar::CLK_GATE
+            && kept.is_some_and(|kept| (kept ^ value) & unrun == sar::IOMUX_CLK_EN)
+            && value & sar::IOMUX_CLK_EN != 0
     }
 
     /// Gives each ADC conversion that waits for its sample the code at its pad's `volts`.
@@ -984,6 +1004,9 @@ impl Soc {
             // that left it set.
             return Some(self.rng.read(now));
         }
+        if let Some(word) = self.radio.as_ref().and_then(|radio| radio.read(addr)) {
+            return Some(word);
+        }
         let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
         let value = match base {
             GPIO => self.gpio.read(offset),
@@ -1048,6 +1071,11 @@ impl Soc {
     }
 
     fn write_kept(&mut self, now: Tick, addr: u32, value: u32) -> bool {
+        if let Some(radio) = &mut self.radio
+            && radio.write(addr, value)
+        {
+            return true;
+        }
         let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
         let done = match base {
             GPIO => self.gpio.write(offset, value).unwrap_or_else(|setting| {
@@ -2028,7 +2056,10 @@ impl Soc {
                 self.ending = Some(ending);
                 return Err(Exit::Stop);
             }
-            Some(Effect::Report(bits)) if kept.map(|kept| kept & bits) != Some(value & bits) => {
+            Some(Effect::Report(bits))
+                if kept.map(|kept| kept & bits) != Some(value & bits)
+                    && !self.radio_clocks_rtc_io(word, kept, value) =>
+            {
                 self.report(now, word, value)?
             }
             Some(Effect::Gates) if self.gates.reports(word - SYSTEM, value) => {

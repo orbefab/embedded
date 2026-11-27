@@ -62,6 +62,7 @@ mod timers;
 mod tsens;
 mod uart;
 mod usb;
+mod wifi;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -377,6 +378,13 @@ impl Esp32s3 {
     /// The chip has the eFuses `set` gives, in place of the default set.
     pub fn use_efuse(&mut self, set: EfuseSet) {
         self.soc.use_efuse(set);
+    }
+
+    /// The chip has its Wi-Fi radio. It keeps the radio's registers that `esp_wifi_init` and
+    /// `esp_wifi_start` use, which `docs/engine/esp32s3.md` lists by block. A chip without it
+    /// refuses them, as before.
+    pub fn use_radio(&mut self) {
+        self.soc.use_radio();
     }
 
     /// Gives each ADC conversion the chip reported a `sample` halt for the code at its pad's
@@ -1162,6 +1170,7 @@ mod tests {
     mod i2c;
     mod pads;
     mod pcnt;
+    mod radio;
     mod rmt;
     mod tsens;
 

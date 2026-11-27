@@ -145,7 +145,7 @@ Each curve is monotonic in `w` over the range of a quantity it may read, except 
 
 ## Network
 
-`network` is one access point on the air and the subnet behind it, which `orbe-net` runs. No scene writes it yet, so only a netlist given to `orbe-run` has one. A netlist without it builds no air, and its runs are the runs it had before the air existed.
+`network` is one access point on the air and the subnet behind it, which `orbe-net` runs. No scene writes it yet, so only a netlist given to `orbe-run` has one. A netlist without it builds no air, and its runs are the runs it had before the air existed. An `esp32s3` in a netlist with it is built with its radio, as [esp32s3.md](esp32s3.md#the-wi-fi-radio) says.
 
 ```json
 "network": {

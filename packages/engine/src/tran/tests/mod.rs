@@ -11,6 +11,7 @@ mod limits;
 mod link;
 mod predict;
 mod pulse;
+mod radio;
 mod replay;
 mod route;
 mod serial;
