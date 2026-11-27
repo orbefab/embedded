@@ -22,7 +22,7 @@ use orbe_engine::name::{Name, Quantity, Ref as EngineRef};
 
 use orbe_engine::finite::Finite;
 use orbe_engine::{
-    EdgeCursor, Input, Probe, Refused, Rejected, Session, Setting, Status, WorldChange,
+    EdgeCursor, Input, Probe, Refused, Rejected, Session, Setting, Status, SupplyMark, WorldChange,
 };
 use orbe_model::Time;
 use orbe_scene::{Files, MapParam, RefMap, View};
@@ -80,6 +80,10 @@ struct Open {
     /// What `play`'s ticks ran, from where that stretch started. The CLI's next `pause` or
     /// `step` lists it and clears it. A page's `pause` leaves it.
     unlisted: Option<Stepped>,
+    /// Each supply pin's low episodes as `open`, a CLI `step` or a `pause` last listed them.
+    /// `rating.supply_low` merges a pin's episodes, so its key cannot tell a new one from one
+    /// already listed. See [`Self::list_supply`].
+    listed_supply: Vec<SupplyMark>,
     scene: String,
     stop_ps: u64,
     max_step_ps: u64,
@@ -112,21 +116,16 @@ struct Open {
     files: Files,
 }
 
-/// A rating over now (or an unclosed `rating.supply_low` episode with no settled excursion yet)
-/// and the same rating's settled warning are two keys, so a step lists the settled warning when
-/// it crosses or closes after the open/over-now warning was listed. A peak limit's warning on the
-/// same quantity is a third.
+/// A rating over now and the same rating's window warning are two keys, so a step lists the
+/// window warning when it crosses after the rating was listed over now. A peak limit's warning
+/// on the same quantity is a third.
 type Key = (&'static str, Vec<String>, bool, bool);
 
 fn key(d: &EngineDiagnostic) -> Key {
-    key_with_open(d, d.over_now())
-}
-
-fn key_with_open(d: &EngineDiagnostic, open: bool) -> Key {
     (
         d.code(),
         d.refs().iter().map(ToString::to_string).collect(),
-        open,
+        d.over_now(),
         d.peak(),
     )
 }
@@ -291,7 +290,7 @@ impl Live {
             parts: open.refs.top.clone(),
             engine_parts: netlist.parts,
             nets: netlist.nets.len(),
-            diagnostics: open.opened_diagnostics(&open.engine.probe()),
+            diagnostics: open.diagnostics(&open.engine.probe()),
         };
         self.open = Some(open);
         Ok(data)
@@ -539,6 +538,7 @@ impl Open {
             contacts,
             playing: false,
             unlisted: None,
+            listed_supply: Vec::new(),
             scene,
             stop_ps: transient.stop_ps,
             max_step_ps: transient.max_step_ps,
@@ -556,6 +556,7 @@ impl Open {
             files,
         };
         open.channels = open.bind_channels();
+        open.listed_supply = open.engine.supply_marks(&open.engine.probe());
         Ok(open)
     }
 
@@ -616,9 +617,8 @@ impl Open {
     fn pause(&mut self) -> Outcome {
         self.playing = false;
         let mut played = self.unlisted.take();
-        if let Some(stepped) = &mut played {
-            let probe = self.engine.probe();
-            self.refresh_supply_low_changes(&mut stepped.changes, &probe);
+        if let Some(held) = &mut played {
+            self.list_supply(held);
         }
         Ok(Data::Paced {
             playing: false,
@@ -636,30 +636,13 @@ impl Open {
     /// has not yet found on an accepted step. A rating over now is the probe's, not the last
     /// accepted step's.
     fn findings(&self, probe: &Probe) -> Vec<EngineDiagnostic> {
-        self.findings_with(probe, true)
-    }
-
-    /// Like [`Self::findings`], leaving out an unclosed supply power-up or power-down episode.
-    fn step_findings(&self, probe: &Probe) -> Vec<EngineDiagnostic> {
-        self.findings_with(probe, false)
-    }
-
-    fn findings_with(&self, probe: &Probe, include_open_supply: bool) -> Vec<EngineDiagnostic> {
-        let mut found = if include_open_supply {
-            self.engine.diagnostics()
-        } else {
-            self.engine.settled_diagnostics()
-        };
+        let mut found = self.engine.diagnostics();
+        // The probe's `rating.supply_low` comes with the ratings over now.
         found.retain(|diagnostic| {
             !diagnostic.over_now() && !matches!(diagnostic, EngineDiagnostic::RatingSupplyLow(_))
         });
         let known: BTreeSet<Key> = found.iter().map(key).collect();
-        let over = if include_open_supply {
-            self.engine.over_ratings(probe)
-        } else {
-            self.engine.settled_over_ratings(probe)
-        };
-        for over in over {
+        for over in self.engine.over_ratings(probe) {
             if !known.contains(&key(&over)) {
                 found.push(over);
             }
@@ -682,95 +665,8 @@ impl Open {
         found
     }
 
-    /// Each `rating.supply_low` whose only episode is still open through `probe` (absent from
-    /// [`Self::step_findings`]).
-    pub(super) fn open_supply_findings(&self, probe: &Probe) -> Vec<EngineDiagnostic> {
-        let settled: BTreeSet<Key> = self.step_findings(probe).iter().map(key).collect();
-        self.findings(probe)
-            .into_iter()
-            .filter(|d| {
-                matches!(d, EngineDiagnostic::RatingSupplyLow(_)) && !settled.contains(&key(d))
-            })
-            .collect()
-    }
-
-    /// Keys of all findings through `probe`, with open-only `rating.supply_low` episodes keyed as
-    /// `open = true` (the same two-phase key convention as `rating.power`'s `over_now`).
-    pub(super) fn finding_keys(&self, probe: &Probe) -> BTreeSet<Key> {
-        let mut keys: BTreeSet<Key> = self.step_findings(probe).iter().map(key).collect();
-        for d in self.findings(probe) {
-            let k = key(&d);
-            if matches!(d, EngineDiagnostic::RatingSupplyLow(_)) && !keys.contains(&k) {
-                keys.insert(key_with_open(&d, true));
-            } else {
-                keys.insert(k);
-            }
-        }
-        keys
-    }
-
-    /// Updates each `rating.supply_low` entry in `changes` to its value through `probe` so a
-    /// `step` or `pause` line matches the `snapshot` at the same time, drops any entry whose open
-    /// episode closed cleanly as a power cycle before `probe`, and deduplicates per pin.
-    pub(super) fn refresh_supply_low_changes(
-        &self,
-        changes: &mut Vec<crate::reply::Change>,
-        probe: &Probe,
-    ) {
-        if !changes.iter().any(|change| {
-            matches!(
-                change,
-                crate::reply::Change::Diagnostic { diagnostic, .. }
-                    if diagnostic.code == "rating.supply_low"
-            )
-        }) {
-            return;
-        }
-        let latest = self.findings(probe);
-        let mut seen: BTreeSet<Vec<String>> = BTreeSet::new();
-        changes.retain_mut(|change| {
-            let crate::reply::Change::Diagnostic { by_ps, diagnostic } = change else {
-                return true;
-            };
-            if diagnostic.code != "rating.supply_low" {
-                return true;
-            }
-            let refs: Vec<String> = diagnostic.json["refs"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(serde_json::Value::as_str)
-                .map(ToString::to_string)
-                .collect();
-            let Some(fresh) = latest.iter().find(|d| {
-                d.code() == "rating.supply_low"
-                    && d.refs()
-                        .iter()
-                        .map(ToString::to_string)
-                        .eq(refs.iter().cloned())
-            }) else {
-                return false;
-            };
-            if !seen.insert(refs) {
-                return false;
-            }
-            if let Some(at) = fresh.at() {
-                *by_ps = at.as_ps();
-            }
-            *diagnostic = self.diagnostic(fresh);
-            true
-        });
-    }
-
     fn diagnostics(&self, probe: &Probe) -> Vec<Diagnostic> {
         self.findings(probe)
-            .iter()
-            .map(|d| self.diagnostic(d))
-            .collect()
-    }
-
-    fn opened_diagnostics(&self, probe: &Probe) -> Vec<Diagnostic> {
-        self.step_findings(probe)
             .iter()
             .map(|d| self.diagnostic(d))
             .collect()

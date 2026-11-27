@@ -1401,3 +1401,207 @@ fn open_supply_low_episodes_report_on_step_and_pause() {
     );
     assert!(snap_up.is_empty());
 }
+
+fn supply_found(reply: &Value, field: &str) -> Vec<Value> {
+    reply["data"][field]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|c| {
+            if field == "changes" {
+                &c["diagnostic"]
+            } else {
+                c
+            }
+        })
+        .filter(|d| d["code"] == "rating.supply_low")
+        .cloned()
+        .collect()
+}
+
+fn over_ps(found: &[Value]) -> Vec<u64> {
+    found
+        .iter()
+        .map(|d| d["data"]["over_ps"].as_u64().unwrap())
+        .collect()
+}
+
+/// A DHT22 rail that starts at `initial` V and moves to each `(ms, V)`.
+fn rail(initial: f64, events: &[(u64, f64)]) -> Value {
+    let events: Vec<Value> = events
+        .iter()
+        .map(|&(ms, v)| json!({ "t_ps": ps(ms, 0), "level": volts(v) }))
+        .collect();
+    json!({ "kind": "steps", "initial": volts(initial), "events": events })
+}
+
+/// 2 V from 2 to 5 ms and from 10 to 13 ms, 5 V otherwise.
+fn two_dips() -> Value {
+    rail(5.0, &[(2, 2.0), (5, 5.0), (10, 2.0), (13, 5.0)])
+}
+
+/// What one `step` or `pause` listed, beside the snapshot taken right after it.
+struct Listed {
+    lines: Vec<Value>,
+    snap: Vec<Value>,
+}
+
+/// Opens a DHT22 on `voltage` and runs each line through a live session, where `tick <ms>` is
+/// one play tick. Returns what `open` listed and one [`Listed`] per `step` or `pause`.
+fn episodes(name: &str, voltage: Value, lines: &[&str]) -> (Vec<Value>, Vec<Listed>) {
+    use orbe_scene::Files;
+    use orbe_session::{Command, Live};
+
+    let dir = setup_project(json!({}), "", false);
+    let src = write_wave_part(dir.path(), name, voltage);
+    let scene = json!({
+        "format": 1,
+        "parts": { "psu": { "type": src }, "u": { "type": "dht22" } },
+        "wires": [["psu.pos", "u.VDD"], ["psu.neg", "u.GND"]],
+        "ground": "u.GND"
+    });
+    fs::write(
+        dir.path().join("scene.jsonc"),
+        serde_json::to_string_pretty(&scene).unwrap(),
+    )
+    .unwrap();
+    let mut live = Live::new(name, Files::disk());
+    let opened = live.run(&Command::Open(dir.path().join("scene.jsonc")));
+    assert!(opened.ok());
+    let opened = supply_found(&opened.json(), "diagnostics");
+    let mut listed = Vec::new();
+    for line in lines {
+        if let Some(ms) = line.strip_prefix("tick ") {
+            let ms = ms.parse().unwrap();
+            assert!(live.tick(std::time::Duration::from_millis(ms)).is_some());
+            continue;
+        }
+        let command = Command::parse(line, dir.path()).unwrap().unwrap();
+        let reply = live.run(&command).json();
+        // A pause lists what play held as a step lists its own changes.
+        if !matches!(command, Command::Pause | Command::Step(_)) {
+            continue;
+        }
+        listed.push(Listed {
+            lines: supply_found(&reply, "changes"),
+            snap: supply_found(&live.run(&Command::Snapshot).json(), "diagnostics"),
+        });
+    }
+    (opened, listed)
+}
+
+/// Each listing's `over_ps`, after checking that what it listed is the snapshot beside it.
+fn listed_over(listed: &[Listed]) -> Vec<Vec<u64>> {
+    listed
+        .iter()
+        .enumerate()
+        .map(|(i, l)| {
+            if !l.lines.is_empty() {
+                assert_eq!(l.lines, l.snap, "listing {i} should be its snapshot");
+            }
+            over_ps(&l.lines)
+        })
+        .collect()
+}
+
+/// A second episode on a pin lists where a step lands inside it and where it closes, as the
+/// first does.
+#[test]
+fn a_later_supply_low_episode_lists_on_open_and_close() {
+    let (opened, listed) = episodes(
+        "two-split",
+        two_dips(),
+        &["step 8ms", "step 4ms", "step 8ms"],
+    );
+    assert!(opened.is_empty());
+    assert_eq!(
+        listed_over(&listed),
+        [vec![ps(3, 0)], vec![ps(5, 0)], vec![ps(6, 0)]]
+    );
+
+    // 1 ms steps list where a step first ends inside each episode and where it closes, and
+    // stay quiet while one stays open.
+    let (_, listed) = episodes("two-1ms", two_dips(), &["step 1ms"; 20]);
+    let printed: Vec<usize> = (0..listed.len())
+        .filter(|&i| !listed[i].lines.is_empty())
+        .collect();
+    assert_eq!(
+        printed,
+        [2, 5, 10, 13],
+        "steps ending at 3, 6, 11 and 14 ms"
+    );
+    listed_over(&listed);
+
+    // A step that closes the first episode and ends inside the second lists the pin once.
+    let (_, listed) = episodes(
+        "two-across",
+        two_dips(),
+        &["step 3ms", "step 8ms", "step 4ms"],
+    );
+    assert_eq!(
+        listed_over(&listed),
+        [vec![ps(1, 0)], vec![ps(4, 0)], vec![ps(6, 0)]]
+    );
+}
+
+/// A step that holds whole episodes lists the pin once, with the final numbers.
+#[test]
+fn a_step_over_whole_supply_low_episodes_lists_once() {
+    let (_, listed) = episodes("two-one", two_dips(), &["step 20ms", "step 5ms"]);
+    assert_eq!(listed_over(&listed), [vec![ps(6, 0)], vec![]]);
+}
+
+/// A rail already low at `open` lists there, stays quiet while it stays low, lists its final
+/// numbers where it recovers, and a later dip is a new episode.
+#[test]
+fn a_supply_low_at_open_lists_where_it_recovers() {
+    let (opened, listed) = episodes(
+        "start-low",
+        rail(2.0, &[(6, 5.0), (10, 2.0), (12, 5.0)]),
+        &["step 4ms", "step 4ms", "step 3ms", "step 3ms", "step 2ms"],
+    );
+    assert_eq!(over_ps(&opened), [0]);
+    assert_eq!(over_ps(&listed[0].snap), [ps(4, 0)]);
+    assert_eq!(
+        listed_over(&listed),
+        [
+            vec![],
+            vec![ps(6, 0)],
+            vec![ps(7, 0)],
+            vec![ps(8, 0)],
+            vec![]
+        ]
+    );
+}
+
+/// A pause lists what the play stretch opened or closed, once per pin, and the step after
+/// lists the close of the episode the pause landed inside.
+#[test]
+fn a_pause_lists_supply_low_episodes_play_crossed() {
+    let (_, listed) = episodes(
+        "two-play",
+        two_dips(),
+        &["play", "tick 4", "tick 4", "tick 3", "pause", "step 9ms"],
+    );
+    assert_eq!(listed_over(&listed), [vec![ps(4, 0)], vec![ps(6, 0)]]);
+}
+
+/// A clean power-up or power-down never lists, in one step, across steps, or across a pause.
+#[test]
+fn clean_power_cycles_never_list_supply_low() {
+    for (name, wave) in [
+        ("up", rail(0.0, &[(4, 2.0), (8, 5.0)])),
+        ("down", rail(5.0, &[(4, 2.0), (8, 0.0)])),
+    ] {
+        for lines in [
+            &["step 9ms", "step 5ms"][..],
+            &["play", "tick 3", "tick 3", "tick 3", "pause", "step 5ms"],
+        ] {
+            let (opened, listed) = episodes(name, wave.clone(), lines);
+            assert!(opened.is_empty());
+            for l in listed {
+                assert!(l.lines.is_empty() && l.snap.is_empty(), "{name} {lines:?}");
+            }
+        }
+    }
+}

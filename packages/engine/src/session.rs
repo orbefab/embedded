@@ -28,7 +28,7 @@ use crate::mna::Solver;
 use crate::newton::{Circuit, Conditions, Converged, Failure, History, Iterate, Side, newton};
 use crate::observe::{self, Columns};
 use crate::op;
-use crate::ratings::{Ratings, Timing};
+use crate::ratings::{Ratings, Sample, SupplyMark, Timing};
 use crate::step::Plan;
 use crate::tran::{Breakpoints, Outcome, Record, Rows};
 use crate::watch::{self, Levels};
@@ -632,18 +632,8 @@ impl Session {
     /// `trace.row_interpolated` is absent. It names a grid row, and only a recorded trace
     /// has those rows.
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
-        self.diagnostics_with(true)
-    }
-
-    /// Like [`Self::diagnostics`], leaving out a supply pin whose current visit below its minimum
-    /// started from off or from in range and has not yet closed.
-    pub fn settled_diagnostics(&self) -> Vec<Diagnostic> {
-        self.diagnostics_with(false)
-    }
-
-    fn diagnostics_with(&self, include_open_supply: bool) -> Vec<Diagnostic> {
         let mut found = self.warnings.clone();
-        found.extend(self.ratings.now_with(None, include_open_supply));
+        found.extend(self.ratings.now(None));
         found.extend_from_slice(self.inputs.findings());
         found.extend(self.actives.warnings(&self.circuit, self.accepted()));
         crate::run_folder::sort_diagnostics(&mut found);
@@ -657,35 +647,39 @@ impl Session {
     /// sample, so the warnings are those of the step after it, the first sample. A session
     /// that faulted there has none.
     pub fn over_ratings(&self, probe: &Probe<'_>) -> Vec<Diagnostic> {
-        self.over_ratings_with(probe, true)
+        let (point, first) = self.rating_probe(probe);
+        let mut found = self.ratings.now(point);
+        if first {
+            for diagnostic in &mut found {
+                if let Diagnostic::RatingSupplyLow(excursion) = diagnostic
+                    && let Some(over_ps) = &mut excursion.over_ps
+                {
+                    *over_ps = 0;
+                }
+            }
+        }
+        found
     }
 
-    /// Like [`Self::over_ratings`], leaving out an unclosed supply power-up or power-down.
-    pub fn settled_over_ratings(&self, probe: &Probe<'_>) -> Vec<Diagnostic> {
-        self.over_ratings_with(probe, false)
+    /// Each chip supply pin's visits below its minimum through `probe`, read as
+    /// [`Self::over_ratings`] reads it. A session that lists `rating.supply_low` compares two of
+    /// these to tell an episode it has not listed from one it has.
+    pub fn supply_marks(&self, probe: &Probe<'_>) -> Vec<SupplyMark> {
+        self.ratings.supply_marks(self.rating_probe(probe).0)
     }
 
-    fn over_ratings_with(&self, probe: &Probe<'_>, include_open_supply: bool) -> Vec<Diagnostic> {
+    /// Where [`Self::over_ratings`] samples `probe`: its own row after the last accepted step, or
+    /// the first step's row at t = 0, which is then `true`.
+    fn rating_probe<'a>(&'a self, probe: &'a Probe<'_>) -> (Option<Sample<'a>>, bool) {
         let cores = self.actives.cores();
         match &self.state {
-            State::Running { accepted, .. } if probe.at() > accepted.at => self.ratings.now_with(
-                Some((probe.at(), probe.values(), cores)),
-                include_open_supply,
-            ),
-            State::Running { accepted, next, .. } if accepted.at == Time::ZERO => {
-                let mut found = self
-                    .ratings
-                    .now_with(Some((next.at, &next.row, cores)), include_open_supply);
-                for diagnostic in &mut found {
-                    if let Diagnostic::RatingSupplyLow(excursion) = diagnostic
-                        && let Some(over_ps) = &mut excursion.over_ps
-                    {
-                        *over_ps = 0;
-                    }
-                }
-                found
+            State::Running { accepted, .. } if probe.at() > accepted.at => {
+                (Some((probe.at(), probe.values(), cores)), false)
             }
-            _ => self.ratings.now_with(None, include_open_supply),
+            State::Running { accepted, next, .. } if accepted.at == Time::ZERO => {
+                (Some((next.at, &next.row, cores)), true)
+            }
+            _ => (None, false),
         }
     }
 

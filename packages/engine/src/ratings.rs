@@ -119,6 +119,10 @@ pub(crate) const SUPPLY_UNPOWERED_V: f64 = 0.1;
 /// inside a longer low-supply episode do not replace the voltage the rail held.
 pub(crate) const SUPPLY_HOLD_PS: u64 = 1_000_000;
 
+/// A probe to sample: its time, the row there, and the cores whose drive the row was solved
+/// with.
+pub(crate) type Sample<'a> = (Time, &'a [Finite], &'a [active::Core]);
+
 /// A chip's minimum operating supply voltage on one supply pin over its ground.
 pub(crate) struct SupplyMin {
     pub(crate) pin: &'static str,
@@ -388,6 +392,25 @@ struct SupplyWatch {
     /// Whether `excursion`'s reported voltage came from a continuous hold of at least
     /// [`SUPPLY_HOLD_PS`] rather than a shorter episode.
     excursion_held: bool,
+    /// Episodes begun, power cycles included.
+    began: u32,
+    /// Episodes closed into `excursion`, which leaves out power cycles.
+    closed: u32,
+}
+
+/// One chip supply pin's visits below its minimum through a probe, which tell a step which
+/// episode it has not yet listed. The pin's [`SupplyExcursion`] merges every episode, so its
+/// numbers do not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SupplyMark {
+    /// `#<part>.pin.<pin>`.
+    pub pin: Ref,
+    /// Episodes begun, power cycles included. The open one, if any, is the last.
+    pub began: u32,
+    /// Episodes closed with a warning. A power cycle closes without one.
+    pub closed: u32,
+    /// Whether the last episode is still open.
+    pub open: bool,
 }
 
 #[derive(Clone)]
@@ -744,6 +767,8 @@ impl Ratings {
                             episode: None,
                             excursion: None,
                             excursion_held: false,
+                            began: 0,
+                            closed: 0,
                         });
                     }
                 }
@@ -762,6 +787,8 @@ impl Ratings {
                             episode: None,
                             excursion: None,
                             excursion_held: false,
+                            began: 0,
+                            closed: 0,
                         });
                     }
                 }
@@ -939,6 +966,7 @@ impl Ratings {
                         };
                         supply.episode =
                             Some(SupplyEpisode::start(entry, start, at, v, self.timing));
+                        supply.began += 1;
                     }
                 }
                 SupplyBand::On | SupplyBand::Off => {
@@ -954,6 +982,7 @@ impl Ratings {
                         );
                         if !power_cycle {
                             supply.merge(ep);
+                            supply.closed += 1;
                         }
                     }
                 }
@@ -1125,10 +1154,6 @@ impl Ratings {
     /// One `rating.*` diagnostic per quantity that went over, plus one `regulator.current_limit`
     /// per regulator held at its current limit, through the last sample.
     pub(crate) fn findings(&self) -> Vec<Diagnostic> {
-        self.findings_with(true)
-    }
-
-    fn findings_with(&self, include_open_supply: bool) -> Vec<Diagnostic> {
         let currents = self.watches.iter().filter_map(|watch| {
             let excursion = watch.excursion.clone()?;
             Some(match watch.kind {
@@ -1140,11 +1165,10 @@ impl Ratings {
             .windows
             .iter()
             .filter_map(|window| Some(Diagnostic::RatingVoltage(window.excursion.clone()?)));
-        let supplies = self.supplies.iter().filter_map(|supply| {
-            Some(Diagnostic::RatingSupplyLow(
-                supply.finding(include_open_supply)?,
-            ))
-        });
+        let supplies = self
+            .supplies
+            .iter()
+            .filter_map(|supply| Some(Diagnostic::RatingSupplyLow(supply.finding()?)));
         let limits = self
             .limits
             .iter()
@@ -1202,15 +1226,7 @@ impl Ratings {
     /// with. A probe is not kept, so the next accepted step samples as though it had not run.
     /// When [`Self::quiet_after`] says nothing is over before or after the probe, no copy is
     /// sampled.
-    pub(crate) fn now(&self, probe: Option<(Time, &[Finite], &[active::Core])>) -> Vec<Diagnostic> {
-        self.now_with(probe, true)
-    }
-
-    pub(crate) fn now_with(
-        &self,
-        probe: Option<(Time, &[Finite], &[active::Core])>,
-        include_open_supply: bool,
-    ) -> Vec<Diagnostic> {
+    pub(crate) fn now(&self, probe: Option<Sample>) -> Vec<Diagnostic> {
         let mut probed = None;
         let mut quiet = false;
         if let Some((at, row, cores)) = probe
@@ -1226,10 +1242,35 @@ impl Ratings {
             probed = Some(ratings);
         }
         let ratings = probed.as_ref().unwrap_or(self);
-        let mut found = ratings.findings_with(include_open_supply);
+        let mut found = ratings.findings();
         found.extend(ratings.over_now());
         debug_assert!(!quiet || found.is_empty(), "a quiet probe found {found:?}");
         found
+    }
+
+    /// Each supply pin's [`SupplyMark`], through `probe` as [`Self::now`] reads it. A quiet
+    /// probe would begin no episode, so it is not sampled.
+    pub(crate) fn supply_marks(&self, probe: Option<Sample>) -> Vec<SupplyMark> {
+        let probed = probe
+            .filter(|&(at, row, cores)| {
+                self.last.is_none_or(|last| at > last) && !self.quiet_after(at, row, cores)
+            })
+            .map(|(at, row, cores)| {
+                let mut ratings = self.clone();
+                ratings.sample(at, row, cores);
+                ratings
+            });
+        let ratings = probed.as_ref().unwrap_or(self);
+        ratings
+            .supplies
+            .iter()
+            .map(|supply| SupplyMark {
+                pin: supply.pin.clone(),
+                began: supply.began,
+                closed: supply.closed,
+                open: supply.episode.is_some(),
+            })
+            .collect()
     }
 
     /// Nothing is over now, and a sample of `row` at `at` would leave nothing over: no watch,
@@ -1743,12 +1784,8 @@ impl SupplyWatch {
         }
     }
 
-    fn finding(&self, include_open: bool) -> Option<SupplyExcursion> {
-        let open = self
-            .episode
-            .as_ref()
-            .filter(|ep| include_open || ep.entry == SupplyEntry::Start);
-        match (&self.excursion, open) {
+    fn finding(&self) -> Option<SupplyExcursion> {
+        match (&self.excursion, &self.episode) {
             (None, None) => None,
             (Some(ex), None) => Some(ex.clone()),
             (None, Some(ep)) => Some(self.excursion_from(ep).0),
