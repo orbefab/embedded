@@ -1,10 +1,10 @@
 {
   "format": 1,
   "part": "tactile-switch-6mm",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "Push button, 6 mm",
   "summary": "Momentary 6 x 6 mm tact switch with four legs. Legs 1-2 are joined, legs 3-4 are joined, and pressing joins the two pairs.",
-  "tags": ["button", "switch", "input", "momentary", "through-hole"],
+  "tags": ["button", "switch", "input", "momentary", "through-hole", "pushbutton", "tact", "tactile"],
   "license": "MIT OR Apache-2.0",
   "docs": { "Omron B3F": "https://omronfs.omron.com/en_US/ecb/products/pdf/en-b3f.pdf" },
   "real": { "maker": "Omron", "number": "B3F-1000", "datasheet": "Omron B3F" },

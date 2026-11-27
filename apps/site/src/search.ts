@@ -17,17 +17,64 @@ const wordsOf = (text: string) =>
     .filter((word) => word !== "")
     .map((word) => word.toLowerCase());
 
+const compact = (text: string) => text.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const hyphenTokens = (text: string) =>
+  text
+    .split(/[^A-Za-z0-9_-]/)
+    .filter((tok) => tok.includes("-") || tok.includes("_"))
+    .map(compact)
+    .filter((tok) => tok !== "");
+
+const pairsOf = (words: readonly string[]) => words.slice(0, -1).map((word, index) => `${word}${words[index + 1] ?? ""}`);
+
 /** 0 for an exact id, 1 when every word is a whole word of the id, the title or a tag, 2 for
  * the rest, or undefined when a word is in none of the fields. */
 function rank(part: Searchable, words: readonly string[], joined: string): number | undefined {
-  const haystack = [part.name, part.title, part.maker ?? "", part.number ?? "", part.description ?? "", ...(part.categories ?? [])]
-    .join("\n")
-    .toLowerCase();
-  if (!words.every((word) => haystack.includes(word))) return undefined;
+  const categories = part.categories ?? [];
+  const fields = [part.name, part.title, part.maker ?? "", part.number ?? "", part.description ?? "", ...categories];
+  const haystack = fields.join("\n").toLowerCase();
+  const titleWords = wordsOf(part.title);
+  const nameWords = wordsOf(part.name);
+  const normTokens = [
+    ...fields.flatMap(hyphenTokens),
+    compact(part.name),
+    compact(part.maker ?? ""),
+    compact(part.number ?? ""),
+    ...categories.map(compact),
+    ...categories.flatMap(wordsOf),
+    ...nameWords,
+    ...titleWords,
+    ...pairsOf(titleWords),
+    ...pairsOf(nameWords),
+  ];
+  const matches = words.every((word) => {
+    if (haystack.includes(word)) return true;
+    const c = compact(word);
+    return c !== "" && normTokens.some((tok) => tok.startsWith(c));
+  });
+  if (!matches) return undefined;
   const id = part.name.toLowerCase();
-  if (id === joined || words.includes(id)) return 0;
-  const whole = [part.name, part.title, ...(part.categories ?? [])].flatMap(wordsOf);
-  return words.every((word) => whole.includes(word)) ? 1 : 2;
+  const cid = compact(part.name);
+  const cjoined = compact(joined);
+  if (id === joined || words.includes(id) || (cjoined !== "" && cid === cjoined) || words.some((word) => { const c = compact(word); return c !== "" && c === cid; })) {
+    return 0;
+  }
+  const whole = [
+    ...nameWords,
+    ...titleWords,
+    ...categories.flatMap(wordsOf),
+    ...categories.map(compact),
+    ...pairsOf(titleWords),
+    ...pairsOf(nameWords),
+  ];
+  return words.every((word) => {
+    if (whole.includes(word)) return true;
+    const c = compact(word);
+    return c !== "" && whole.includes(c);
+  })
+    ? 1
+    : 2;
 }
 
 /** The parts whose id, title, maker, number, summary or tags hold every word of `query`, best

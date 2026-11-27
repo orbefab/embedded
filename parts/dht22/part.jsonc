@@ -5,10 +5,10 @@
 {
   "format": 1,
   "part": "dht22",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "title": "DHT22 (AM2302) temperature and humidity sensor",
   "summary": "Digital temperature and humidity sensor that reports -40 to 80 °C and relative humidity, each to 0.1, over one data line, at most once every 2 s.",
-  "tags": ["dht22", "am2302", "temperature", "humidity", "sensor", "one-wire", "digital", "through-hole"],
+  "tags": ["dht22", "am2302", "temperature", "thermometer", "humidity", "hygrometer", "sensor", "one-wire", "single-wire", "digital", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "docs": {
     "Aosong AM2302 product manual v1.1": null,

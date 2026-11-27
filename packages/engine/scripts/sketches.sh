@@ -44,6 +44,8 @@ busio_url=https://github.com/adafruit/Adafruit_BusIO/archive/refs/tags/1.17.4.ta
 busio_sha256=59efa3acd5466e381c1b0313d5f0e824832db1bb24e4e328667e12b7d235d56d
 lcd_i2c_url=https://github.com/markub3327/LiquidCrystal_I2C/archive/refs/tags/2.0.0.tar.gz
 lcd_i2c_sha256=627b804fae7b078796817b24f8ac83adc19ddaaeb2c6aaa8e1b3937befe08649
+keypad_url=https://github.com/Chris--A/Keypad/archive/refs/tags/3.1.1.tar.gz
+keypad_sha256=07f89b5802e02d2b91554f0d2e7cf51016be1833315d066d1d87e179ecfa90d5
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
   echo "usage: $0 TOOLS_DIR [DOWNLOAD_DIR]" >&2
@@ -88,6 +90,7 @@ unpack adafruit-ssd1306-2.5.17 "$ssd1306_url" "$ssd1306_sha256"
 unpack adafruit-gfx-1.13.0 "$gfx_url" "$gfx_sha256"
 unpack adafruit-busio-1.17.4 "$busio_url" "$busio_sha256"
 unpack liquidcrystal-i2c-2.0.0 "$lcd_i2c_url" "$lcd_i2c_sha256"
+unpack arduino-keypad-3.1.1 "$keypad_url" "$keypad_sha256"
 
 bin=$tools/avr-gcc-7.3.0/avr/bin
 runtime=$tools/avr-runtime-1.8.6/avr-1.8.6
@@ -100,6 +103,7 @@ gfx=$tools/adafruit-gfx-1.13.0/Adafruit-GFX-Library-1.13.0
 busio=$tools/adafruit-busio-1.17.4/Adafruit_BusIO-1.17.4
 spi=$runtime/libraries/SPI/src
 lcd_i2c=$tools/liquidcrystal-i2c-2.0.0/LiquidCrystal_I2C-2.0.0
+keypad=$tools/arduino-keypad-3.1.1/Keypad-3.1.1/src
 core=$runtime/cores/arduino
 target=(-mmcu=atmega328p -DF_CPU=16000000L -I"$core" -I"$runtime/variants/standard")
 c_flags=(-c -g -Os -w -std=gnu11 -ffunction-sections -fdata-sections -flto -fno-fat-lto-objects)
@@ -232,6 +236,15 @@ for dir in "$repo"/packages/engine/tests/firmware/sketch/*/ "$repo"/blocks/*/fir
       "$lcd_i2c/LiquidCrystal_I2C.cpp" -o "$work/$name-lcd-i2c.o"
     library+=("${lcd[@]}")
     archives=("$work/$name-lcd-i2c.o" "${archives[@]}")
+  fi
+  if grep -q '^#include <Keypad.h>' "$dir/$name.ino"; then
+    kp=(-DARDUINO=10806 -I"$keypad")
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${kp[@]}" \
+      "$keypad/Key.cpp" -o "$work/$name-key.o"
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${kp[@]}" \
+      "$keypad/Keypad.cpp" -o "$work/$name-keypad.o"
+    library+=("${kp[@]}")
+    archives+=("$work/$name-key.o" "$work/$name-keypad.o")
   fi
   "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${library[@]}" -x c++ -include Arduino.h \
     "$dir/$name.ino" -o "$work/$name.o"

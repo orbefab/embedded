@@ -5,10 +5,10 @@
 {
   "format": 5,
   "part": "ldr-5mm",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "title": "Photoresistor, 5 mm CdS (GL5528)",
   "summary": "5 mm cadmium-sulphide light-dependent resistor. Its resistance falls as light rises, from 1 MΩ in the dark to 10 to 20 kΩ at 10 lx.",
-  "tags": ["ldr", "photoresistor", "light sensor", "light", "sensor", "voltage divider", "analog", "through-hole"],
+  "tags": ["ldr", "photoresistor", "photocell", "cds", "light sensor", "light", "brightness", "sensor", "voltage divider", "analog", "through-hole"],
   "license": "MIT OR Apache-2.0",
   "docs": { "Senba GL55 Series CdS Photoresistor Manual": null },
   "real": { "generic": true, "maker": "Senba", "number": "GL5528", "datasheet": "Senba GL55 Series CdS Photoresistor Manual" },

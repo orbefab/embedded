@@ -1,10 +1,10 @@
 {
   "format": 1,
   "part": "barrel-jack-dc21",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "title": "DC barrel jack, 2.1 mm",
   "summary": "2.1 mm DC barrel jack with a center pin, a sleeve and a sleeve switch. It supplies the voltage you set between the center pin and the sleeve.",
-  "tags": ["connector", "power", "through-hole", "supply", "adapter", "12v"],
+  "tags": ["connector", "power", "dc-jack", "power-supply", "psu", "through-hole", "supply", "adapter", "12v"],
   "license": "MIT OR Apache-2.0",
   "docs": { "2.1 mm DC barrel jack": null },
   "real": { "generic": true, "maker": null, "number": null, "datasheet": "2.1 mm DC barrel jack" },

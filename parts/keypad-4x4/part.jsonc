@@ -1,0 +1,108 @@
+// 4x4 matrix membrane keypad (Parallax #27899 / Adafruit 3844).
+// 16 momentary membrane switches wired in a 4x4 row/column matrix (R1..R4, C1..C4)
+// brought out left-to-right on a 1x8 2.54 mm header. No series diodes: holding three
+// keys at three corners of a rectangle ghosts the fourth corner, as on a real matrix.
+// Press keys from the CLI as `@<id>.k1` .. `@<id>.k9`, `@<id>.k0`, `@<id>.ka` .. `@<id>.kd`,
+// `@<id>.kstar` and `@<id>.khash`, or click any key cap in the 3D viewer.
+{
+  "format": 4,
+  "part": "keypad-4x4",
+  "version": "0.1.0",
+  "title": "4x4 membrane matrix keypad",
+  "summary": "16-key 4x4 membrane keypad (0-9, A-D, *, #) on a 1x8 header (R1..R4, C1..C4). Press keys as @<id>.k1..k9, k0, ka..kd, kstar, khash or click in 3D.",
+  "tags": ["keypad", "matrix", "4x4", "keyboard", "membrane", "buttons", "button", "switch", "switches", "input"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Parallax 4x4 Matrix Membrane Keypad (#27899), v1.2": "https://cdn.sparkfun.com/assets/f/f/a/5/0/DS-16038.pdf",
+    "Adafruit 4x4 Matrix Keypad, product 3844": "https://www.adafruit.com/product/3844",
+  },
+  "real": {
+    "generic": true,
+    "maker": "Parallax",
+    "number": "27899",
+    "datasheet": "Parallax 4x4 Matrix Membrane Keypad (#27899), v1.2",
+  },
+  "buy": [
+    { "seller": "Adafruit", "url": "https://www.adafruit.com/product/3844", "checked": "2026-11-26" },
+  ],
+  "uses": {
+    "keypad-4x4-key": "0.1.0",
+  },
+  "params": {
+    "bounce": { "default": null },
+    "max_bounces": { "default": 2 },
+  },
+  "parts": {
+    "k1": { "type": "keypad-4x4-key", "color": "blue", "bounce": { "param": "bounce" }, "max_bounces": { "param": "max_bounces" } },
+    "k2": { "type": "keypad-4x4-key", "color": "blue", "bounce": { "param": "bounce" }, "max_bounces": { "param": "max_bounces" } },
+    "k3": { "type": "keypad-4x4-key", "color": "blue", "bounce": { "param": "bounce" }, "max_bounces": { "param": "max_bounces" } },
+    "ka": { "type": "keypad-4x4-key", "color": "red", "bounce": { "param": "bounce" }, "max_bounces": { "param": "max_bounces" } },
+    "k4": { "type": "keypad-4x4-key", "color": "blue", "bounce": { "param": "bounce" }, "max_bounces": { "param": "max_bounces" } },
+    "k5": { "type": "keypad-4x4-key", "color": "blue", "bounce": { "param": "bounce" }, "max_bounces": { "param": "max_bounces" } },
+    "k6": { "type": "keypad-4x4-key", "color": "blue", "bounce": { "param": "bounce" }, "max_bounces": { "param": "max_bounces" } },
+    "kb": { "type": "keypad-4x4-key", "color": "red", "bounce": { "param": "bounce" }, "max_bounces": { "param": "max_bounces" } },
+    "k7": { "type": "keypad-4x4-key", "color": "blue", "bounce": { "param": "bounce" }, "max_bounces": { "param": "max_bounces" } },
+    "k8": { "type": "keypad-4x4-key", "color": "blue", "bounce": { "param": "bounce" }, "max_bounces": { "param": "max_bounces" } },
+    "k9": { "type": "keypad-4x4-key", "color": "blue", "bounce": { "param": "bounce" }, "max_bounces": { "param": "max_bounces" } },
+    "kc": { "type": "keypad-4x4-key", "color": "red", "bounce": { "param": "bounce" }, "max_bounces": { "param": "max_bounces" } },
+    "kstar": { "type": "keypad-4x4-key", "color": "red", "bounce": { "param": "bounce" }, "max_bounces": { "param": "max_bounces" } },
+    "k0": { "type": "keypad-4x4-key", "color": "blue", "bounce": { "param": "bounce" }, "max_bounces": { "param": "max_bounces" } },
+    "khash": { "type": "keypad-4x4-key", "color": "red", "bounce": { "param": "bounce" }, "max_bounces": { "param": "max_bounces" } },
+    "kd": { "type": "keypad-4x4-key", "color": "red", "bounce": { "param": "bounce" }, "max_bounces": { "param": "max_bounces" } },
+  },
+  "wires": [
+    ["R1", "k1.a", { "kind": "trace" }], ["C1", "k1.b", { "kind": "trace" }],
+    ["R1", "k2.a", { "kind": "trace" }], ["C2", "k2.b", { "kind": "trace" }],
+    ["R1", "k3.a", { "kind": "trace" }], ["C3", "k3.b", { "kind": "trace" }],
+    ["R1", "ka.a", { "kind": "trace" }], ["C4", "ka.b", { "kind": "trace" }],
+    ["R2", "k4.a", { "kind": "trace" }], ["C1", "k4.b", { "kind": "trace" }],
+    ["R2", "k5.a", { "kind": "trace" }], ["C2", "k5.b", { "kind": "trace" }],
+    ["R2", "k6.a", { "kind": "trace" }], ["C3", "k6.b", { "kind": "trace" }],
+    ["R2", "kb.a", { "kind": "trace" }], ["C4", "kb.b", { "kind": "trace" }],
+    ["R3", "k7.a", { "kind": "trace" }], ["C1", "k7.b", { "kind": "trace" }],
+    ["R3", "k8.a", { "kind": "trace" }], ["C2", "k8.b", { "kind": "trace" }],
+    ["R3", "k9.a", { "kind": "trace" }], ["C3", "k9.b", { "kind": "trace" }],
+    ["R3", "kc.a", { "kind": "trace" }], ["C4", "kc.b", { "kind": "trace" }],
+    ["R4", "kstar.a", { "kind": "trace" }], ["C1", "kstar.b", { "kind": "trace" }],
+    ["R4", "k0.a", { "kind": "trace" }], ["C2", "k0.b", { "kind": "trace" }],
+    ["R4", "khash.a", { "kind": "trace" }], ["C3", "khash.b", { "kind": "trace" }],
+    ["R4", "kd.a", { "kind": "trace" }], ["C4", "kd.b", { "kind": "trace" }],
+  ],
+  "layout": {
+    "k1": { "at": [-23.25, 22.65, 1.0] },
+    "k2": { "at": [-7.75, 22.65, 1.0] },
+    "k3": { "at": [7.75, 22.65, 1.0] },
+    "ka": { "at": [23.25, 22.65, 1.0] },
+    "k4": { "at": [-23.25, 6.15, 1.0] },
+    "k5": { "at": [-7.75, 6.15, 1.0] },
+    "k6": { "at": [7.75, 6.15, 1.0] },
+    "kb": { "at": [23.25, 6.15, 1.0] },
+    "k7": { "at": [-23.25, -10.35, 1.0] },
+    "k8": { "at": [-7.75, -10.35, 1.0] },
+    "k9": { "at": [7.75, -10.35, 1.0] },
+    "kc": { "at": [23.25, -10.35, 1.0] },
+    "kstar": { "at": [-23.25, -26.85, 1.0] },
+    "k0": { "at": [-7.75, -26.85, 1.0] },
+    "khash": { "at": [7.75, -26.85, 1.0] },
+    "kd": { "at": [23.25, -26.85, 1.0] },
+  },
+  "pins": { "R1": [1], "R2": [2], "R3": [3], "R4": [4], "C1": [5], "C2": [6], "C3": [7], "C4": [8] },
+  "not_simulated": [
+    {
+      "what": "operating force and tactile snap",
+      "why": "Adafruit 3844 specifies 160 to 180 g actuation force; a press is a contact change and force is not modelled.",
+    },
+    {
+      "what": "contact bounce by default",
+      "why": "Membrane contacts typically bounce up to 5 ms; `bounce` is unset by default and can be set (for example `\"bounce\": \"5ms\"`) to simulate contact chatter.",
+    },
+    {
+      "what": "contact resistance variation",
+      "why": "Every closed key uses the 100 ohm maximum from Adafruit 3844 rather than varying with finger pressure or membrane trace length.",
+    },
+    {
+      "what": "ribbon cable length",
+      "why": "Parallax #27899 specifies an 88 mm flexible ribbon cable; the 3D model draws a shorter rigid tail ending in a 1x8 2.54 mm header so it sits cleanly beside a breadboard.",
+    },
+  ],
+}

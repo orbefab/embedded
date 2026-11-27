@@ -391,7 +391,7 @@ Bounce is a fixed, integer-only expansion. Event `k` of switch `name` draws from
 
 The contact on the interval that ends at time `t` is the state after every edge strictly before `t`. A trace row at the time of an edge therefore holds the old contact. An edge at `stop_ps` leaves the last row on the old contact. `observations.json` lists every edge at its picosecond.
 
-A switch has no `ratings` field. A switch is a DC path in either state, because its off resistance is finite.
+`ratings` is optional. When present it holds `current`, a positive rating in `A` or `null` (checked against `#<part>.i`), and `voltage`, a positive value object in `V` or `null`, which bounds `|V(a) - V(b)|` on every sample and warns `rating.voltage` past it. A switch is a DC path in either state, because its off resistance is finite.
 
 A detent knob whose two lines each pull low on their own is two switches. On a round display board's knob, each detent pulled exactly one of its two lines low and then released it, and the two lines were never low at the same time. So that knob is not a quadrature encoder. Over two captures sampled about every 100 us, line A was low for 51.2 ms to 130.4 ms over 13 detents and line B for 29.4 ms to 331.7 ms over 18, and the idle time from one release to the next press was 41.7 ms to 9185.6 ms, each to 0.1 ms. Those times are board observations, and they follow how fast a hand turned the knob. Model each line as a `switch` from its pin to `gnd`, beside a 10 kohm pull-up from the pin to the supply. The 10 kohm is read from the board's schematic, R52 and R53, not measured. A detent is one switch's `closed` event and its `open` event the low time later, with `bounce` `null`. The board did not show which line turns clockwise, so the lines are A and B. Swapping them is swapping the two switches' pins. In a session a detent is two contact inputs on one switch, closed at its time and open at its time plus the low time. An input may ask for a time after now, so both can go in before the detent starts. `packages/engine/tests/circuits/atmega-board-knob` is this model.
 
@@ -1478,12 +1478,13 @@ A blob the document names that no folder has, a name whose every file hashes to 
 
 ## Ratings
 
-A rating bounds the stress on a part. Every key of a kind's `ratings` object is required, except a resistor's `voltage` and a diode or LED's `reverse_voltage`, which may be left out. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `esp32s3`, `ssd1306`, `hd44780_i2c`, `ws2812`, `voltage_source`, `capacitor` and `potentiometer`, where it is optional.
+A rating bounds the stress on a part. Every key of a kind's `ratings` object is required, except a resistor's `voltage` and a diode or LED's `reverse_voltage`, which may be left out. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `esp32s3`, `ssd1306`, `hd44780_i2c`, `ws2812`, `voltage_source`, `capacitor`, `potentiometer` and `switch`, where it is optional.
 
 | Kind | Keys | Checked quantity |
 | --- | --- | --- |
 | `resistor` | `power`, optional `voltage` | `#<part>.p`, and `#<part>.v` (a max voltage limit or the peak of a sounding drive) |
 | `potentiometer` | `voltage`, optional | `#<part>.v` (`V(b) - V(a)` across the track) |
+| `switch` | `current`, `voltage`, optional | `#<part>.i`, and `#<part>.v` (`V(a) - V(b)` across the contact) |
 | `diode`, `led` | `current`, `power`, optional `reverse_voltage` | `#<part>.i`, `#<part>.p`, and `#<part>.v` (reverse floor) |
 | `zener` | `current`, `power` | `#<part>.i`, `#<part>.p` |
 | `linear_regulator` | `current`, `power` | `#<part>.iout`, `#<part>.p` |
@@ -1497,7 +1498,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `hd44780_i2c` | `rail_margin`, `supply_voltage` | `VCC`, `SCL` and `SDA` voltage over `GND`, each named `#<part>.pin.<pin>` |
 | `ws2812` | `rail_margin`, `supply_voltage` | `VCC` and `DIN` voltage over `GND`, each named `#<part>.pin.<pin>` |
 | `hc595` | `pin_current`, `supply_current`, `input_margin`, `output_margin` | each of `QA`–`QH` and `QHp`, the current through `VCC` and `GND`, and each input and output voltage over `GND`, each named `#<part>.pin.<pin>` |
-| `current_source`, `inductor`, `relay`, `switch`, `ne555`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `dht22`, `sg90` | none | |
+| `current_source`, `inductor`, `relay`, `ne555`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `dht22`, `sg90` | none | |
 
 A `current`, `power`, `pin_current` or `supply_current` value object may also carry `basis`, the datasheet's basis for the figure, and `"characterized": true` when the figure is the largest load its datasheet characterizes rather than an absolute maximum. `"peak"` bounds each sample. `{ "sustained": { "average": "rms" | "mean", "tau": { "value": <s>, "unit": "s" } } }` bounds a first-order filter of the samples with time constant `tau`: of their squares for `rms`, read back as the root, and of their magnitudes for `mean`. A sustained basis may also carry `peak`, the sheet's peak or surge limit in the rating's unit, such as a diode's IFSM beside its average forward current. Each sample is checked against it as a peak rating. A `tau` or `peak` of 0 or below is `netlist.value` with rule `positive` on `ratings.<key>.basis.sustained.tau` or `.peak`, and a wrong unit is `netlist.unit` on that field. A rating with no `basis` takes its kind's: a `power` is a 10.2 ms `mean`, a `voltage_source`'s `current` and an `atmega328p`'s or an `hc595`'s `pin_current` and `supply_current` are a 10.2 ms `rms`, and every other `current` is a `peak`.
 

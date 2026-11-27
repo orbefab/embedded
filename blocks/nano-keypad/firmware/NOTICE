@@ -1,0 +1,41 @@
+`build/keypad.ino.hex` is built from `firmware/keypad/keypad.ino` for the ATmega328P at 16 MHz.
+It links the standard AVR runtime, version 1.8.6. The runtime is free software under the GNU
+Lesser General Public License, version 2.1 or any later version, whose text is in
+LICENSE-runtime. Its source is the archive at
+
+https://orbefab.com/embedded/sources/avr-1.8.6.tar.bz2
+
+with SHA-256 ff1d17274b5a952f172074bd36c3924336baefded0232e10982f8999c2f7c3b6, served with this
+image. It is the archive Arduino publishes at
+https://downloads.arduino.cc/cores/staging/avr-1.8.6.tar.bz2. The image was
+built with avr-gcc 7.3.0-atmel3.6.1-arduino7 by packages/engine/scripts/sketches.sh in
+https://github.com/orbefab/embedded, which pins both archives and relinks the sketch and the
+runtime, so the image can be rebuilt against a modified runtime. The sketch is under MIT or
+Apache-2.0, and those terms permit modifying the image and reverse engineering it to debug such
+modifications.
+
+The image also links the Arduino Keypad library 3.1.1 (Mark Stanley and Alexander Brevig,
+maintained at Chris--A/Keypad), whose source files carry LGPL-2.1 headers and whose repository
+carries the GNU General Public License, version 3 (GPL-3.0-only), whose text is in
+LICENSE-keypad. Its source is the archive at
+https://github.com/Chris--A/Keypad/archive/refs/tags/3.1.1.tar.gz
+with SHA-256 07f89b5802e02d2b91554f0d2e7cf51016be1833315d066d1d87e179ecfa90d5. sketches.sh
+pins that archive and relinks it with the sketch.
+
+The image also holds the start-up code of the toolchain's C library, version 2.0.0, under that
+library's modified BSD license, whose notice is in LICENSE-libc as the license requires, and
+routines of GCC's runtime library (`libgcc`), under GPL-3.0-or-later with the GCC Runtime
+Library Exception 3.1, whose text is in LICENSE-gcc-exception. That exception lets the compiled
+runtime ship inside the program under the program's own terms.
+
+These files and their licences:
+
+`block.jsonc`, `README.md`, `scene.jsonc`, `firmware/NOTICE`, `firmware/keypad/keypad.ino` and
+`tests/keypad.test` are under MIT OR Apache-2.0.
+
+`build/keypad.ino.hex` links the runtime and Keypad, so it is under LGPL-2.1-or-later and GPL-3.0-only.
+`firmware/LICENSE-runtime` is under LGPL-2.1-or-later.
+`firmware/LICENSE-keypad` is under GPL-3.0-only.
+`firmware/LICENSE-libc` is under BSD-3-Clause.
+`firmware/LICENSE-gcc-exception` holds the GCC Runtime Library Exception 3.1
+(GPL-3.0-or-later WITH GCC-exception-3.1).

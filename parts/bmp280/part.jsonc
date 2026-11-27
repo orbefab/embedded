@@ -6,10 +6,10 @@
 {
   "format": 6,
   "part": "bmp280",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "title": "BMP280 temperature and pressure sensor",
   "summary": "Bosch BMP280 barometric pressure and temperature sensor in an 8-pad 2.0 x 2.5 mm LGA. It talks I2C: SDO low is 0x76, SDO high is 0x77.",
-  "tags": ["bmp280", "temperature", "pressure", "sensor", "i2c", "lga"],
+  "tags": ["bmp280", "temperature", "thermometer", "pressure", "barometer", "altimeter", "sensor", "i2c", "lga"],
   "license": "MIT OR Apache-2.0",
   "docs": {
     "BST-BMP280-DS001-26": "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmp280-ds001.pdf"

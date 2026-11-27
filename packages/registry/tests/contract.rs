@@ -305,6 +305,7 @@ const HIDDEN: &[&str] = &[
     "inductor-0805",
     "joystick-ky023-pot",
     "joystick-ky023-switch",
+    "keypad-4x4-key",
     "led-0603",
     "led-0805",
     "lesd5d5-sod523",

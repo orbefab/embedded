@@ -306,6 +306,7 @@ fn license_file_spdx(name: &str) -> Option<&'static str> {
     match name {
         "LICENSE-runtime" | "LICENSE-servo" => Some("LGPL-2.1-or-later"),
         "LICENSE-neopixel" => Some("LGPL-3.0-or-later"),
+        "LICENSE-keypad" => Some("GPL-3.0-only"),
         "LICENSE-libc" | "LICENSE-tlsf" | "LICENSE-ssd1306" => Some("BSD-3-Clause"),
         "LICENSE-ubsan" | "LICENSE-gfx" => Some("BSD-2-Clause"),
         "LICENSE-apache" | "LICENSE-sensor" => Some("Apache-2.0"),

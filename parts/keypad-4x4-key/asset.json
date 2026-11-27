@@ -1,0 +1,44 @@
+{
+  "part": "keypad-4x4-key",
+  "source": {
+    "script": "model.py",
+    "sha256": "9f36155b529019396d50982b38855eb7b15862d3ddb96899bd04aecda1258a0a",
+    "bytes": 1593
+  },
+  "files": {
+    "keypad-4x4-key.glb": {
+      "sha256": "03376319412a8c684f0b92446d18860391a15edf4786b1d7b53be0d27d54bd65",
+      "bytes": 31780
+    },
+    "keypad-4x4-key.anchors.json": {
+      "sha256": "1850d985d83ea48e586bbdeadbb4eed02852d3f90dc2b35f03d6ee3b36d55791",
+      "bytes": 290
+    }
+  },
+  "box": {
+    "min": [-6.1, -4.4, 0],
+    "max": [6.1, 4.4, 0.85]
+  },
+  "kept_nodes": ["cap"],
+  "draw_calls": 2,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "cap",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": ["cap"]
+    },
+    "merge": {
+      "primitives_in": 3,
+      "primitives_out": 2
+    }
+  }
+}
