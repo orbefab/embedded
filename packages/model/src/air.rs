@@ -151,6 +151,46 @@ impl Rate {
     }
 }
 
+/// aSIFSTime in the 2.4 GHz band, 10 us in picoseconds: clause 15 (DSSS), clause 17 for an
+/// OFDM PHY in this band through clause 18 (ERP) and clause 19 (HT).
+pub const SIFS_PS: u64 = 10_000_000;
+
+/// An ACK frame's PSDU: Frame Control, Duration, RA and the FCS (9.3.1.3).
+const ACK_LEN: usize = 14;
+
+impl Rate {
+    /// The rate of the ACK that answers a frame at this rate (10.6.6.5): the highest basic rate
+    /// at or below it in its own modulation. The basic rates are every DSSS and CCK rate, so a
+    /// DSSS or CCK frame's ACK goes at the frame's own rate and preamble. No OFDM rate is basic,
+    /// so an OFDM or HT frame's ACK takes the highest mandatory OFDM rate, 6, 12 or 24 Mb/s, at
+    /// or below the frame's rate, or below its non-HT reference rate for HT.
+    pub const fn ack(self) -> Rate {
+        let mbps = match self {
+            Rate::Dsss1 | Rate::Dsss2(_) | Rate::Cck5_5(_) | Rate::Cck11(_) => return self,
+            Rate::Ofdm(Ofdm::M6 | Ofdm::M9) => 6,
+            Rate::Ofdm(Ofdm::M12 | Ofdm::M18) => 12,
+            Rate::Ofdm(_) => 24,
+            // MCS 0 is 6.5 Mb/s, 1 is 13, 2 is 19.5, and 3 and up are 26 or more.
+            Rate::Ht(mcs) => match mcs.index() {
+                0 => 6,
+                1 | 2 => 12,
+                _ => 24,
+            },
+        };
+        Rate::Ofdm(match mbps {
+            6 => Ofdm::M6,
+            12 => Ofdm::M12,
+            _ => Ofdm::M24,
+        })
+    }
+
+    /// The picoseconds from the end of a frame at this rate to the end of its ACK: SIFS and the
+    /// ACK.
+    pub const fn acked_after(self) -> u64 {
+        SIFS_PS + self.ack().airtime(ACK_LEN)
+    }
+}
+
 const fn preamble_us(preamble: Preamble) -> u64 {
     match preamble {
         Preamble::Long => 144 + 48,
@@ -254,5 +294,17 @@ mod tests {
         assert_eq!(us(mcs7, 1536), 228 + 6);
         assert_eq!(us(mcs7, 76), 48 + 6);
         assert_eq!(us(mcs7, 14), 40 + 6);
+    }
+
+    #[test]
+    fn an_ack_goes_at_a_basic_or_mandatory_rate_at_or_below_the_frame() {
+        let short = Rate::Cck11(Preamble::Short);
+        assert_eq!(short.ack(), short);
+        assert_eq!(Rate::Ofdm(Ofdm::M9).ack(), Rate::Ofdm(Ofdm::M6));
+        assert_eq!(Rate::Ofdm(Ofdm::M18).ack(), Rate::Ofdm(Ofdm::M12));
+        assert_eq!(Rate::Ofdm(Ofdm::M54).ack(), Rate::Ofdm(Ofdm::M24));
+        assert_eq!(Rate::Ht(Mcs::new(0).unwrap()).ack(), Rate::Ofdm(Ofdm::M6));
+        assert_eq!(Rate::Ht(Mcs::new(2).unwrap()).ack(), Rate::Ofdm(Ofdm::M12));
+        assert_eq!(Rate::Ht(Mcs::new(7).unwrap()).ack(), Rate::Ofdm(Ofdm::M24));
     }
 }

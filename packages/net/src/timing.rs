@@ -8,7 +8,7 @@ pub(crate) const US: u64 = 1_000_000;
 const MS: u64 = 1000 * US;
 
 /// aSIFSTime of the ERP PHY, 10 us (clause 18).
-pub(crate) const SIFS: u64 = 10 * US;
+pub(crate) const SIFS: u64 = orbe_model::air::SIFS_PS;
 /// aSlotTime of the ERP PHY with short slots, 9 us (clause 18), which the access point's
 /// Capability Information advertises.
 const SLOT: u64 = 9 * US;
@@ -78,37 +78,9 @@ pub(crate) fn data_rate(rates: impl Iterator<Item = u8>) -> Rate {
     }
 }
 
-/// An ACK frame's PSDU: Frame Control, Duration, RA and the FCS (9.3.1.3).
-const ACK_LEN: usize = 14;
-
-/// The rate of the ACK that answers a frame at `rate` (10.6.6.5): the highest basic rate at or
-/// below it in its own modulation. The basic rates are every DSSS and CCK rate, so a DSSS or
-/// CCK frame's ACK goes at the frame's own rate and preamble. No OFDM rate is basic, so an
-/// OFDM or HT frame's ACK takes the highest mandatory OFDM rate, 6, 12 or 24 Mb/s, at or below
-/// the frame's rate, or below its non-HT reference rate for HT.
-fn ack_rate(rate: Rate) -> Rate {
-    let mbps = match rate {
-        Rate::Dsss1 | Rate::Dsss2(_) | Rate::Cck5_5(_) | Rate::Cck11(_) => return rate,
-        Rate::Ofdm(Ofdm::M6 | Ofdm::M9) => 6,
-        Rate::Ofdm(Ofdm::M12 | Ofdm::M18) => 12,
-        Rate::Ofdm(_) => 24,
-        // MCS 0 is 6.5 Mb/s, 1 is 13, 2 is 19.5, and 3 and up are 26 or more.
-        Rate::Ht(mcs) => match mcs.index() {
-            0 => 6,
-            1 | 2 => 12,
-            _ => 24,
-        },
-    };
-    Rate::Ofdm(match mbps {
-        6 => Ofdm::M6,
-        12 => Ofdm::M12,
-        _ => Ofdm::M24,
-    })
-}
-
 /// The picoseconds from the end of a frame at `rate` to the end of its ACK: SIFS and the ACK.
 pub(crate) fn acked_after(rate: Rate) -> u64 {
-    SIFS + ack_rate(rate).airtime(ACK_LEN)
+    rate.acked_after()
 }
 
 /// The Duration field of an individually addressed frame the access point sends at `rate`:
@@ -120,7 +92,6 @@ pub(crate) fn duration_us(rate: Rate) -> u16 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orbe_model::air::Mcs;
 
     // Wireshark's wpa-Induction.pcap: every individually addressed Management frame the access
     // point sends at 1 Mb/s has Duration 0x013a, 314 us: SIFS and a 304 us ACK.
@@ -158,26 +129,5 @@ mod tests {
         // common, so a station that names only those gets the basic rate.
         assert_eq!(data_rate([127, 6].into_iter()), BASIC);
         assert_eq!(data_rate(std::iter::empty()), BASIC);
-    }
-
-    #[test]
-    fn an_ack_goes_at_a_basic_or_mandatory_rate_at_or_below_the_frame() {
-        let short = Rate::Cck11(Preamble::Short);
-        assert_eq!(ack_rate(short), short);
-        assert_eq!(ack_rate(Rate::Ofdm(Ofdm::M9)), Rate::Ofdm(Ofdm::M6));
-        assert_eq!(ack_rate(Rate::Ofdm(Ofdm::M18)), Rate::Ofdm(Ofdm::M12));
-        assert_eq!(ack_rate(Rate::Ofdm(Ofdm::M54)), Rate::Ofdm(Ofdm::M24));
-        assert_eq!(
-            ack_rate(Rate::Ht(Mcs::new(0).unwrap())),
-            Rate::Ofdm(Ofdm::M6)
-        );
-        assert_eq!(
-            ack_rate(Rate::Ht(Mcs::new(2).unwrap())),
-            Rate::Ofdm(Ofdm::M12)
-        );
-        assert_eq!(
-            ack_rate(Rate::Ht(Mcs::new(7).unwrap())),
-            Rate::Ofdm(Ofdm::M24)
-        );
     }
 }

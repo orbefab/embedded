@@ -47,7 +47,7 @@ use super::timers::{Expiry, Register, Systimer, Watchdogs};
 use super::tsens::{self, Tsens};
 use super::uart::{self, Uarts};
 use super::usb::{self, UsbSerialJtag};
-use super::wifi::Radio;
+use super::wifi::{self, Radio, Store};
 use super::{Duty, Pc, RAM, Refused, ResetCause, Touch};
 
 pub(crate) const SRAM: usize = 512 * 1024;
@@ -179,8 +179,8 @@ pub(crate) struct Soc {
     pub(crate) change_stop: bool,
     /// The core fetched outside its memories.
     pub(crate) unmapped_fetch: bool,
-    /// A store started an SPI2/SPI3 transfer or an RMT transmission, so the next fetch stops the
-    /// core and the run reads its end.
+    /// A store started an SPI2/SPI3 transfer, an RMT transmission or a Wi-Fi frame, so the next
+    /// fetch stops the core and the run reads its end.
     pub(crate) started: bool,
     /// A store by this core started an I2C0 or I2C1 transfer, so the run takes that core's PC as
     /// the transfer's.
@@ -601,6 +601,15 @@ impl Soc {
         self.radio = Some(Box::new(Radio::new()));
     }
 
+    /// The Wi-Fi radio, on a chip built with it.
+    pub(crate) fn radio(&self) -> Option<&Radio> {
+        self.radio.as_deref()
+    }
+
+    pub(crate) fn radio_mut(&mut self) -> Option<&mut Radio> {
+        self.radio.as_deref_mut()
+    }
+
     /// Whether a store of `value` over `kept` at `word`, on a chip built with its radio, only sets
     /// `SENS_IOMUX_CLK_EN` among the gate bits the model does not run. The PHY sets it when it
     /// reads the temperature sensor. The model runs RTC IO as if that clock were on, so setting it
@@ -1004,7 +1013,7 @@ impl Soc {
             // that left it set.
             return Some(self.rng.read(now));
         }
-        if let Some(word) = self.radio.as_ref().and_then(|radio| radio.read(addr)) {
+        if let Some(word) = self.radio.as_mut().and_then(|radio| radio.read(now, addr)) {
             return Some(word);
         }
         let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
@@ -1071,10 +1080,21 @@ impl Soc {
     }
 
     fn write_kept(&mut self, now: Tick, addr: u32, value: u32) -> bool {
-        if let Some(radio) = &mut self.radio
-            && radio.write(addr, value)
-        {
-            return true;
+        if let Some(radio) = &mut self.radio {
+            let sram = &self.sram;
+            let byte = |at| Self::sram_offset(at, false).map(|k| sram.read(k, Width::Byte) as u8);
+            match radio.write(now, addr, value, byte) {
+                Store::Unkept => {}
+                Store::Kept => return true,
+                Store::Sent => {
+                    self.started = true;
+                    return true;
+                }
+                Store::Refused(setting) => {
+                    self.ending = Some(Ending::Refused(Refused::Register("RADIO", setting)));
+                    return true;
+                }
+            }
         }
         let (base, offset) = (addr & !(BLOCK - 1), addr & (BLOCK - 1));
         let done = match base {
@@ -1572,6 +1592,9 @@ impl Soc {
             if self.uart.line(index) {
                 sources |= 1 << uart::SOURCES[index];
             }
+        }
+        if self.radio.as_mut().is_some_and(|radio| radio.line(now)) {
+            sources |= 1 << wifi::SOURCE;
         }
         sources
     }
@@ -2294,6 +2317,7 @@ impl Soc {
             Peripheral::Pcnt => self.pcnt.next_event(now),
             Peripheral::Aes => self.aes.next_event(),
             Peripheral::Rsa => self.rsa.next_event(),
+            Peripheral::Radio => self.radio.as_mut().and_then(|radio| radio.next_event(now)),
         }
     }
 }

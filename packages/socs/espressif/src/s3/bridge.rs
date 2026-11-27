@@ -2,8 +2,9 @@
 //! watch around [`Esp32s3`], its console is the `USB_SERIAL_JTAG` USART and each UART byte is
 //! `UART0`, `UART1` or `UART2`, each SPI2 transfer is a
 //! `Spi` record, each LEDC update is a `Duty` record on each of its wired pads, each RMT
-//! transmission is a `Pulses` record on each of its wired pads, and its 480 MHz tick converts
-//! between picoseconds and its timeline.
+//! transmission is a `Pulses` record on each of its wired pads, each Wi-Fi frame of a chip built
+//! with its radio goes on the air, and its 480 MHz tick converts between picoseconds and its
+//! timeline.
 //!
 //! An LEDC update that moves its pad's drive moves it 1 ps after its record's end, a stop of its
 //! own, so the record and the drive change never land together.
@@ -15,6 +16,7 @@
 //! firmware flushed it.
 
 use orbe_mcu::{self as mcu, Frame, Mcu, Note, Phase, Sent, SentKind, SpiPins};
+use orbe_model::air::{Ack, AirFrame, Channel, Signal};
 use orbe_model::{Cs, Drive, Lanes, Pulses, Quantity, Readings, Spi, SpiPhase, Stop, Time};
 use orbe_xtensa::Missing;
 
@@ -550,6 +552,40 @@ impl Mcu for Bridge {
     /// SPI2's read, into `SPI_W0` on.
     fn answered(&mut self, _at: Time, miso: &[u8]) {
         self.chip.answered(miso);
+    }
+
+    /// A chip built with its Wi-Fi radio is a station on the air.
+    fn radio(&self) -> bool {
+        self.chip.has_radio()
+    }
+
+    /// The channel its RF PLL last started on, while it has power.
+    fn tuned(&self) -> Option<Channel> {
+        if !matches!(self.power, Power::Init | Power::On { .. }) {
+            return None;
+        }
+        self.chip.tuned().and_then(Channel::new)
+    }
+
+    fn take_aired(&mut self, mut aired: impl FnMut(AirFrame)) {
+        if let Some(frame) = self.chip.take_aired() {
+            aired(AirFrame {
+                start: self.tick_time(frame.start),
+                end: self.tick_time(frame.end),
+                channel: Channel::new(frame.channel).expect("a tuned channel"),
+                rate: frame.rate,
+                mpdu: frame.mpdu,
+            });
+        }
+    }
+
+    /// The radio receives nothing yet: it neither hears a frame nor acknowledges one.
+    fn hear(&mut self, _at: Time, _frame: &AirFrame, _signal: Signal) -> Ack {
+        Ack::None
+    }
+
+    fn acked(&mut self, _at: Time, ack: Ack) {
+        self.chip.acked(ack);
     }
 
     fn in_flight(&self, ahead: &Self, at: Time) -> Vec<Sent> {
