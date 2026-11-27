@@ -20,9 +20,10 @@ use crate::active::{Chip, Core, Output, Stage, Takes};
 use crate::diagnostic::{Diagnostic, WorldRule};
 use crate::mna::Node;
 use crate::netlist::json::ParseCtx;
+use crate::netlist::json::temperature::{WireTemperatureRange, resolve_temperature_range};
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
 use crate::netlist::json::{PinMap, WireValue, resolve_limit, resolve_pins, resolve_value};
-use crate::netlist::{NetId, PartId, Threshold, Value};
+use crate::netlist::{NetId, PartId, TemperatureRange, Threshold, Value};
 use crate::ratings::{PinRatings, SupplyMin};
 use crate::watch::{Signal, Watch};
 
@@ -113,7 +114,7 @@ pub struct Dht22 {
     /// Ohm.
     pub low_resistance: Value,
     pub input_threshold: Threshold,
-    /// Optional supply rating. `None` leaves the sensor unrated.
+    /// Optional supply and temperature ratings. `None` leaves the sensor unrated.
     pub ratings: Option<Dht22Ratings>,
 }
 
@@ -122,10 +123,17 @@ pub struct Dht22 {
 pub struct Dht22Ratings {
     /// Volt. The least operating `VCC` may sit above `GND`.
     pub supply_min: Option<Value>,
+    /// The operating temperature range the world's temperature is checked against.
+    pub temperature: Option<TemperatureRange>,
 }
 
 impl Dht22 {
     pub const PINS: [&'static str; 3] = ["VCC", "DATA", "GND"];
+
+    /// The operating temperature range, `None` when unrated.
+    pub(crate) fn temperature(&self) -> Option<&TemperatureRange> {
+        self.ratings.as_ref()?.temperature.as_ref()
+    }
 }
 
 #[derive(Deserialize)]
@@ -144,6 +152,8 @@ pub(crate) struct WireDht22 {
 struct WireRatings {
     #[serde(default)]
     supply_min: Option<WireValue>,
+    #[serde(default)]
+    temperature: Option<WireTemperatureRange>,
 }
 
 pub(crate) fn resolve_dht22(ctx: ParseCtx<'_>, wire: WireDht22) -> Option<Dht22> {
@@ -172,8 +182,15 @@ pub(crate) fn resolve_dht22(ctx: ParseCtx<'_>, wire: WireDht22) -> Option<Dht22>
     );
     let ratings = match wire.ratings {
         None => Some(None),
-        Some(wire) => resolve_limit(part_ref, "ratings.supply_min", "V", wire.supply_min, out)
-            .map(|supply_min| Some(Dht22Ratings { supply_min })),
+        Some(wire) => {
+            let supply_min =
+                resolve_limit(part_ref, "ratings.supply_min", "V", wire.supply_min, out);
+            let temperature = resolve_temperature_range(part_ref, wire.temperature, out);
+            Some(Some(Dht22Ratings {
+                supply_min: supply_min?,
+                temperature: temperature?,
+            }))
+        }
     };
     let mut declared = true;
     for &quantity in model::Dht22::WORLD {

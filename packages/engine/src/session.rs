@@ -629,15 +629,20 @@ impl Session {
     /// `rating.current` or `rating.power` follows for each rated quantity that has gone
     /// over, and one for each sustained rating over now at the last accepted step, so a run
     /// that stops before a held overload crosses its filter still names it. Its `t_ps` is the
-    /// first accepted step over. `peak` and `peak_ps` run through the
-    /// last accepted step. `over_ps` runs through that step, not to `now`. A step that is over
-    /// adds its time when the next step is accepted, so a quantity first over on the last
-    /// accepted step reads 0. The fault that ends a run is [`Self::fault`].
+    /// first accepted step over. One `rating.temperature` follows for each part whose operating
+    /// temperature the world's schedule has left by the last accepted step. `peak` and `peak_ps`
+    /// run through the last accepted step. `over_ps` runs through that step, not to `now`. A
+    /// step that is over adds its time when the next step is accepted, so a quantity first over
+    /// on the last accepted step reads 0. The fault that ends a run is [`Self::fault`].
     /// `trace.row_interpolated` is absent. It names a grid row, and only a recorded trace
     /// has those rows.
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         let mut found = self.warnings.clone();
         found.extend(self.ratings.now(None));
+        found.extend(
+            self.ratings
+                .temperatures(self.circuit.netlist.world(), self.accepted()),
+        );
         found.extend_from_slice(self.inputs.findings());
         found.extend(self.actives.warnings(&self.circuit, self.accepted()));
         crate::run_folder::sort_diagnostics(&mut found);
@@ -910,6 +915,7 @@ impl Session {
         };
         diagnostics.extend(self.warnings);
         diagnostics.extend(self.ratings.now(None));
+        diagnostics.extend(self.ratings.temperatures(self.circuit.netlist.world(), at));
         diagnostics.extend_from_slice(self.inputs.findings());
         diagnostics.extend(self.actives.warnings(&self.circuit, at));
         let (mut observations, mut trace) =

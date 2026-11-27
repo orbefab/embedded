@@ -245,6 +245,28 @@ pub(crate) fn dc_paths(chip: &Chip) -> &'static [(usize, usize)] {
     }
 }
 
+/// The chip's operating temperature range, `None` when its part rates none.
+pub(crate) fn temperature_range(chip: &Chip) -> Option<&crate::netlist::TemperatureRange> {
+    match chip {
+        Chip::Dht22(dev) => dev.temperature(),
+        Chip::Bmp280(dev) => dev.ratings.temperature.as_ref(),
+        Chip::Atmega328p(_)
+        | Chip::Esp32s3(_)
+        | Chip::Hc595(_)
+        | Chip::Max7219(_)
+        | Chip::Ssd1306(_)
+        | Chip::Hd44780I2c(_)
+        | Chip::Hd44780(_)
+        | Chip::Ws2812(_)
+        | Chip::Sg90(_)
+        | Chip::Cst816(_)
+        | Chip::St77916(_)
+        | Chip::Ne555(_)
+        | Chip::SpiReplay(_)
+        | Chip::PulsesReplay(_) => None,
+    }
+}
+
 /// The ratings a chip puts on its package pins, or `None` for a chip whose part rates none.
 pub(crate) fn pin_ratings(chip: &Chip) -> Option<crate::ratings::PinRatings> {
     match chip {

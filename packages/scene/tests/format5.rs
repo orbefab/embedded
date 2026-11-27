@@ -131,6 +131,7 @@ fn supply_min_ratings_before_format_7_are_told_to_set_format_7() {
         ("esp32s3-qfn56", "esp32s3", "ratings.supply_min"),
         ("bmp280", "bmp280", "ratings.supply_min"),
         ("bmp280", "bmp280", "ratings.io_supply_min"),
+        ("bmp280", "bmp280", "ratings.temperature"),
         ("ssd1306-oled-128x64", "ssd1306", "ratings.supply_min"),
         ("hd44780-1602-i2c", "hd44780_i2c", "ratings.supply_min"),
         ("hc595-dip16", "hc595", "ratings.supply_min"),

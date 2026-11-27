@@ -19,6 +19,8 @@ use crate::passive::DRIVE_REST_PS;
 
 use crate::observe::Columns;
 
+mod temperature;
+
 /// Every rated quantity of a netlist, checked against each accepted row.
 ///
 /// It reads the observed row, so a part's rating is checked against the number the run
@@ -60,6 +62,8 @@ pub(crate) struct Ratings {
     /// A resistor's operating voltage, checked on the peak of a drive that leaves zero.
     drives: Vec<CoilDrive>,
     chips: Vec<Gauge>,
+    /// Each part's operating temperature, read against the world's schedule rather than a row.
+    temperatures: Vec<temperature::TemperatureWatch>,
     last: Option<Time>,
     /// The last sample was a step that restarted, so the next sample holds back to it.
     restarted: bool,
@@ -876,6 +880,7 @@ impl Ratings {
             limits,
             drives,
             chips,
+            temperatures: temperature::watches(netlist),
             last: None,
             restarted: false,
             decays: Decays::default(),
