@@ -26,6 +26,7 @@
 //! block, as `blocks` says. A byte or halfword
 //! access to a kept register reads or merges into its word.
 
+mod aes;
 mod analog;
 mod app;
 mod blocks;
@@ -47,18 +48,22 @@ mod i2c;
 mod image;
 mod ledc;
 mod matrix;
+mod pcnt;
 mod rmt;
 mod rng;
 mod rom;
+mod rsa;
 mod sar;
 mod sha;
 mod soc;
 mod spi1;
 mod spi2;
 mod timers;
+mod tsens;
 mod uart;
 mod usb;
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use orbe_xtensa::{Core, Stop, Unimplemented};
@@ -81,6 +86,24 @@ pub use rmt::{Flight, Train};
 pub use spi1::FlashRefusal;
 pub use spi2::{Pads, Phase, Setting, Transfer};
 pub use timers::{Reset, Watchdog};
+
+/// Supply voltage at or below which the ESP32-S3 drops into brown-out reset (volts).
+///
+/// ESP32-S3 Series Datasheet v2.2 Section 2.5.3 lists the brown-out detector as a chip reset
+/// source without a numeric trip table or hysteresis figure, and ESP32-S3 Technical Reference
+/// Manual v1.8 likewise publishes no numeric brown-out hysteresis. ESP-IDF v5.5.5
+/// (`CONFIG_ESP_BROWNOUT_DET_LVL_SEL_7`, the default brown-out detector level) places the
+/// ESP32-S3 brown-out threshold at 2.44 V.
+pub const MIN_SUPPLY_V: f64 = 2.44;
+
+/// Minimum recommended operating supply voltage `VDD` (volts).
+///
+/// ESP32-S3 Series Datasheet v2.2 Section 5.2, Table 5-2 (Recommended Operating Conditions)
+/// specifies `VDDA`, `VDD3P3`, `VDD3P3_RTC` and `VDD3P3_CPU` from 3.0 V (min) to 3.6 V (max),
+/// 3.3 V typical. Because neither the datasheet nor TRM v1.8 gives a numeric brown-out release
+/// hysteresis, the supply watch requires `V(VCC) - V(GND)` to reach 3.0 V to power on or to
+/// count as returned after a brown-out.
+pub const OPERATING_SUPPLY_MIN_V: f64 = 3.0;
 
 /// A window onto SRAM: its bus addresses, and where in SRAM it starts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,8 +153,9 @@ pub enum Fault {
         stage: u8,
         reset: Reset,
     },
-    /// The store at this PC started an SPI2 transfer with a setting the model does not run.
-    Setting(Setting, Pc),
+    /// The store at this PC started an SPI2 or SPI3 transfer with a setting the model does not
+    /// run.
+    Setting(&'static str, Setting, Pc),
     /// The store at this PC started an eFuse program command, which would burn eFuses.
     EfuseProgram(Pc),
     /// The store at this PC sent the flash a command the model refuses.
@@ -141,6 +165,8 @@ pub enum Fault {
     Clock(Pc),
     /// The store at this PC reset the chip for this cause.
     FaultRestart(ResetCause, Pc),
+    /// Supply returned after power loss; power-on restart is not simulated yet.
+    PowerOnRestart,
     /// The store at this PC set something the model does not run.
     Refused(Refused, Pc),
     /// The load at `pc` read `address` in a cache window, where the MMU maps no flash.
@@ -257,8 +283,11 @@ pub struct Esp32s3 {
     changed: Option<Tick>,
     /// The tick an ADC conversion samples its pad at, not reported yet.
     sampled: Option<Tick>,
-    /// How many of SPI2's transfers have had their end reported and wait to be taken.
-    reported: usize,
+    /// How many of SPI2's and SPI3's transfers have had their end reported and wait to be taken.
+    reported: [usize; 2],
+    /// Port index (0 for SPI2, 1 for SPI3) of each reported reading transfer whose MISO answer
+    /// has not landed yet, in the order [`Esp32s3::take_transfers`] yields them.
+    awaiting_miso: VecDeque<u8>,
     /// The `Duty` records, from the first not taken.
     duties: Vec<Duty>,
     /// How many of `duties` have been reported and wait to be taken.
@@ -275,9 +304,9 @@ pub struct Esp32s3 {
     ended: bool,
     /// The tick and PC of the store that reset the chip, which holds it in reset from then on.
     restarted: Option<(Tick, Pc)>,
-    /// The PC after the store that started the last I2C transfer, which a setting the transfer
-    /// meets later names.
-    i2c_pc: Pc,
+    /// The PC after the store that started the last I2C0 or I2C1 transfer, which a setting the
+    /// transfer meets later names.
+    i2c_pc: [Pc; 2],
     /// The PC after the store that started the last RMT transmission, which a transmission
     /// that never ends names.
     rmt_pc: Pc,
@@ -329,9 +358,9 @@ impl Esp32s3 {
             if segment.mapped() {
                 soc.map_flash(segment.addr, segment.offset, segment.len);
             } else {
-                let flash = soc.flash_bytes().expect("attached");
-                let at = segment.offset as usize;
-                let bytes = flash[at..at + segment.len as usize].to_vec();
+                let bytes = soc
+                    .read_flash(segment.offset as usize, segment.len as usize)
+                    .expect("segment inside attached flash");
                 soc.poke(segment.addr, &bytes);
             }
         }
@@ -356,6 +385,11 @@ impl Esp32s3 {
         self.soc.sample(volts);
     }
 
+    /// Gives a pending temperature-sensor conversion the scene's ambient temperature in degC.
+    pub fn sample_temperature(&mut self, temp_c: f64) {
+        self.soc.sample_temperature(temp_c);
+    }
+
     fn with(core: Core<orbe_xtensa::Esp32s3>, soc: Soc) -> Esp32s3 {
         Esp32s3 {
             cores: Cores::new(core),
@@ -363,7 +397,8 @@ impl Esp32s3 {
             soc,
             changed: None,
             sampled: None,
-            reported: 0,
+            reported: [0; 2],
+            awaiting_miso: VecDeque::new(),
             duties: Vec::new(),
             reported_duties: 0,
             trains: Vec::new(),
@@ -372,10 +407,10 @@ impl Esp32s3 {
             fault: None,
             ended: false,
             restarted: None,
-            i2c_pc: Pc {
+            i2c_pc: [Pc {
                 core: CoreId::Pro,
                 pc: 0,
-            },
+            }; 2],
             rmt_pc: Pc {
                 core: CoreId::Pro,
                 pc: 0,
@@ -391,6 +426,7 @@ impl Esp32s3 {
     /// or before it. `None` when the chip reached the limit, or ended before.
     pub fn run_until(&mut self, limit: Tick) -> Option<Halt> {
         loop {
+            self.soc.settle_aes(self.now());
             self.settle_ledc();
             self.settle_i2c(limit);
             self.settle_rmt();
@@ -415,7 +451,10 @@ impl Esp32s3 {
             .into_iter()
             .flatten()
             .min();
-            let i2c = self.soc.i2c.next_event();
+            let i2c = self.soc.i2c.iter().filter_map(i2c::I2c::next_event).min();
+            let spi = (0..2)
+                .filter_map(|port| self.soc.spi[port].end(self.reported[port]))
+                .min();
             let rmt = self.soc.rmt.upcoming().map(|at| Tick(at.0 + 1));
             let uart = self
                 .soc
@@ -429,12 +468,13 @@ impl Esp32s3 {
             let until = [
                 Some(Tick(limit.0 + 1)),
                 due,
-                self.soc.spi2.end(self.reported),
+                spi,
                 ledc.map(|at| Tick(at.0 + 1)),
                 i2c.map(|at| Tick(at.0 + 1)),
                 rmt,
                 uart,
                 train,
+                self.soc.aes.next_event(),
             ]
             .into_iter()
             .flatten()
@@ -453,11 +493,13 @@ impl Esp32s3 {
             self.soc.rearmed = false;
             self.soc.reclocked = false;
             self.soc.started = false;
-            if let Some(core) = self.soc.i2c_started.take() {
-                self.i2c_pc = Pc {
-                    core,
-                    pc: self.cores.core(core).pc(),
-                };
+            for port in 0..2 {
+                if let Some(core) = self.soc.i2c_started[port].take() {
+                    self.i2c_pc[port] = Pc {
+                        core,
+                        pc: self.cores.core(core).pc(),
+                    };
+                }
             }
             if let Some(core) = self.soc.rmt_started.take() {
                 self.rmt_pc = Pc {
@@ -501,7 +543,9 @@ impl Esp32s3 {
                         self.soc.pending.as_mut().expect("reported").2.pc = pc;
                     } else if let Some(ending) = self.soc.ending.take() {
                         let fault = match ending {
-                            Ending::Setting(setting) => Fault::Setting(setting, pc),
+                            Ending::Setting(peripheral, setting) => {
+                                Fault::Setting(peripheral, setting, pc)
+                            }
                             Ending::EfuseProgram => Fault::EfuseProgram(pc),
                             Ending::FlashCommand(refusal) => Fault::FlashCommand(refusal, pc),
                             Ending::Restart(None) => {
@@ -567,6 +611,7 @@ impl Esp32s3 {
                 self.moves.insert(at, (edge.at, signal, edge.level));
             } else if queued.is_none() {
                 self.soc.gpio.set_signal(signal, edge.level);
+                self.soc.note_pcnt_pins(edge.at);
             }
         }
     }
@@ -576,7 +621,7 @@ impl Esp32s3 {
     /// earlier landing. A setting a transfer meets ends the run, naming the PC after the store
     /// that started it.
     fn settle_i2c(&mut self, limit: Tick) {
-        if self.soc.i2c.idle() {
+        if self.soc.i2c.iter().all(i2c::I2c::idle) {
             return;
         }
         let Some(through) = self.now().0.checked_sub(1) else {
@@ -591,11 +636,13 @@ impl Esp32s3 {
             .flatten()
             .min();
         self.soc.settle_i2c(Tick(through.expect("a bound")));
-        if let Some((at, setting)) = self.soc.i2c.take_refused()
-            && self.fault.is_none_or(|(fault, _)| at < fault)
-        {
-            let refused = Refused::Register("I2C0", setting);
-            self.fault = Some((at, Fault::Refused(refused, self.i2c_pc)));
+        for port in 0..2 {
+            if let Some((at, setting)) = self.soc.i2c[port].take_refused()
+                && self.fault.is_none_or(|(fault, _)| at < fault)
+            {
+                let refused = Refused::Register(i2c::NAMES[port], setting);
+                self.fault = Some((at, Fault::Refused(refused, self.i2c_pc[port])));
+            }
         }
     }
 
@@ -653,6 +700,7 @@ impl Esp32s3 {
                     break;
                 }
                 self.soc.gpio.set_signal(signal, edge.level);
+                self.soc.note_pcnt_pins(edge.at);
                 self.soc
                     .uart
                     .after_edge(usize::from(edge.port), edge.at, &self.soc.gpio, apb);
@@ -698,11 +746,10 @@ impl Esp32s3 {
         if self.ended {
             return None;
         }
-        let transfer = self
-            .soc
-            .spi2
-            .end(self.reported)
-            .filter(|&end| end <= self.now());
+        let transfer = (0..2)
+            .filter_map(|port| self.soc.spi[port].end(self.reported[port]))
+            .filter(|&end| end <= self.now())
+            .min();
         let duty = self.duties.get(self.reported_duties).map(|duty| duty.at);
         let train = self
             .trains
@@ -725,7 +772,8 @@ impl Esp32s3 {
         });
         let moved = [
             self.moves.first().map(|&(at, ..)| at),
-            self.soc.i2c.moved().map(|(at, ..)| at),
+            self.soc.i2c[0].moved().map(|(at, ..)| at),
+            self.soc.i2c[1].moved().map(|(at, ..)| at),
         ]
         .into_iter()
         .flatten()
@@ -757,8 +805,13 @@ impl Esp32s3 {
                     self.sampled = None;
                 }
                 if record {
-                    if self.soc.spi2.end(self.reported) == Some(at) {
-                        self.reported += 1;
+                    for port in 0..2 {
+                        while self.soc.spi[port].end(self.reported[port]) == Some(at) {
+                            if self.soc.spi[port].reads(self.reported[port]) {
+                                self.awaiting_miso.push_back(port as u8);
+                            }
+                            self.reported[port] += 1;
+                        }
                     }
                     let unreported = &self.duties[self.reported_duties..];
                     self.reported_duties += unreported.iter().take_while(|d| d.at == at).count();
@@ -771,9 +824,12 @@ impl Esp32s3 {
                     self.soc.gpio.set_signal(signal, level);
                     self.moves.remove(0);
                 }
-                if let Some((signal, level)) = self.soc.i2c.land(at) {
-                    self.soc.gpio.set_signal(signal, level);
+                for bus in &mut self.soc.i2c {
+                    if let Some((signal, level)) = bus.land(at) {
+                        self.soc.gpio.set_signal(signal, level);
+                    }
                 }
+                self.soc.note_pcnt_pins(at);
                 self.shown = self.soc.image();
             }
             Halt::Fault(..) => {
@@ -783,15 +839,22 @@ impl Esp32s3 {
         }
     }
 
-    /// Puts the bytes SPI2's last transfer read on MISO into `SPI_W0` on.
+    /// Puts the bytes an SPI transfer read on MISO into its host's `SPI_W0` on, in the order
+    /// [`Self::take_transfers`] yielded the reading transfers at this stop.
     pub fn answered(&mut self, miso: &[u8]) {
-        self.soc.spi2.answered(miso);
+        let port = self
+            .awaiting_miso
+            .pop_front()
+            .expect("a reading SPI transfer awaits MISO");
+        self.soc.spi[usize::from(port)].answered(miso);
     }
 
-    /// The SPI2 transfers whose ends were reported, in the order they started.
+    /// The SPI2 and SPI3 transfers whose ends were reported, SPI2 first then SPI3, each in the
+    /// order they started.
     pub fn take_transfers(&mut self) -> impl Iterator<Item = Transfer> + '_ {
-        let n = std::mem::take(&mut self.reported);
-        self.soc.spi2.take(n)
+        let [n0, n1] = std::mem::take(&mut self.reported);
+        let [spi2, spi3] = &mut self.soc.spi;
+        spi2.take(n0).chain(spi3.take(n1))
     }
 
     /// The `Duty` records whose ends were reported, in time order.
@@ -849,9 +912,12 @@ impl Esp32s3 {
         for (gpio, level) in pads {
             self.soc.gpio.set_pad(gpio, level);
         }
-        self.soc.i2c.input(at, &self.soc.gpio);
+        for bus in &mut self.soc.i2c {
+            bus.input(at, &self.soc.gpio);
+        }
         let apb = self.soc.clock.source.apb();
         self.soc.uart.note_pins(at, &self.soc.gpio, apb);
+        self.soc.note_pcnt_pins(at);
     }
 
     /// The next console byte whose packet went at or before `through`, with that tick.
@@ -910,7 +976,7 @@ mod tests {
 
     use super::rng;
     use super::soc::{
-        EFUSE, Ending, GDMA, GPIO, IO_MUX, RTC_CNTL, SPI2, SYSTEM, SYSTIMER, TIMG0, TIMG1,
+        EFUSE, Ending, GDMA, GPIO, IO_MUX, RTC_CNTL, SPI2, SPI3, SYSTEM, SYSTIMER, TIMG0, TIMG1,
         USB_SERIAL_JTAG,
     };
     use super::*;
@@ -1091,10 +1157,13 @@ mod tests {
 
     mod adc;
     mod code;
+    mod crypto;
     mod dual;
     mod i2c;
     mod pads;
+    mod pcnt;
     mod rmt;
+    mod tsens;
 
     #[test]
     fn a_drive_change_halts_at_its_store_however_the_run_splits() {
@@ -1517,14 +1586,17 @@ mod tests {
         let out = gdma + 4 * 0xc0 + 0x60;
         let refused = [
             (SPI2 + 0x34, 1 << 10, Refused::Interrupt("SPI2")),
+            (SPI3 + 0x34, 1 << 10, Refused::Interrupt("SPI3")),
             (
                 USB_SERIAL_JTAG + 0x10,
                 1 << 0,
                 Refused::Interrupt("USB_SERIAL_JTAG"),
             ),
-            (gdma + 0x10, 1, Refused::Interrupt("GDMA")),
-            (out + 0x10, 1, Refused::Interrupt("GDMA")),
-            (0x6003_b028, 1, Refused::Interrupt("SHA")),
+            (gdma + 0x10, 1 << 3, Refused::Interrupt("GDMA")),
+            (out + 0x10, 1 << 2, Refused::Interrupt("GDMA")),
+            (0x6003_b028, 1 << 1, Refused::Interrupt("SHA")),
+            (0x6003_a0b0, 1 << 1, Refused::Interrupt("AES")),
+            (0x6003_c82c, 1 << 1, Refused::Interrupt("RSA")),
             (0x6001_90c8, 1 << 12, Refused::Interrupt("LEDC")),
             (gdma, 1 << 4, Refused::Register("GDMA", "memory_copy")),
             (out, 1 << 2, Refused::Register("GDMA", "write_back")),
@@ -1537,8 +1609,9 @@ mod tests {
             let program = store_after_two_loads(address, value, 0);
             let mut chip = program.chip();
             chip.soc
-                .restore(SYSTEM + 0x18, 1 << 6 | 1 << 11 | 1 << 2 | 1 << 5);
-            chip.soc.restore(SYSTEM + 0x1c, 1 << 6 | 1 << 2 | 1 << 9);
+                .restore(SYSTEM + 0x18, 1 << 6 | 1 << 16 | 1 << 11 | 1 << 2 | 1 << 5);
+            chip.soc
+                .restore(SYSTEM + 0x1c, 1 << 1 | 1 << 2 | 1 << 3 | 1 << 6 | 1 << 9);
             chip.soc.restore(SYSTEM + 0x24, 0);
             assert_eq!(
                 chip.run_until(c(1000)),
@@ -1758,23 +1831,8 @@ mod tests {
         let refused = [
             (0x6003_9000, "USB_WRAP", otg),
             (0x6003_9004, "USB_WRAP", otg),
-            (
-                0x6001_704c,
-                "PCNT",
-                "the pulse counter that encoder libraries use",
-            ),
             (0x6003_1204, "RADIO", "the Wi-Fi and Bluetooth radio"),
-            (0x6002_7000, "I2C1", "the second I2C port, Wire1"),
-            (
-                0x6000_8850,
-                "SENS",
-                "the temperature sensor that temperatureRead uses",
-            ),
-            (
-                0x6000_8854,
-                "SENS",
-                "the temperature sensor that temperatureRead uses",
-            ),
+            (0x6000_885c, "SENS", "the touch sensor that touchRead uses"),
         ];
         for (address, block, what) in refused {
             let program = store_after_two_loads(address, 1, 0);
@@ -1786,25 +1844,6 @@ mod tests {
                 )),
                 "{address:#x}"
             );
-        }
-        for address in [0x6000_8904, 0x6000_8908] {
-            let program = store_after_two_loads(address, 1 << 29, 0);
-            let mut chip = program.chip();
-            assert_eq!(
-                chip.run_until(c(1000)),
-                Some(Halt::Fault(
-                    c(2),
-                    Fault::Refused(
-                        Refused::Unsimulated(
-                            "SENS",
-                            "the temperature sensor that temperatureRead uses"
-                        ),
-                        pro(program.entry() + 6)
-                    )
-                )),
-                "{address:#x}"
-            );
-            assert_eq!(chip.unmodeled().count(), 0, "{address:#x}");
         }
     }
 
@@ -1821,6 +1860,137 @@ mod tests {
         assert!(Soc::load_moves_lines(USB_SERIAL_JTAG));
         assert!(Soc::access_moves_lines(USB_SERIAL_JTAG + 0x04));
         assert!(Soc::load_moves_lines(USB_SERIAL_JTAG + 0x08));
+    }
+
+    /// A store to `SYSTIMER_UNIT0_OP_REG` or `SYSTIMER_UNIT1_OP_REG` keeps a straight run going
+    /// while LEDC has no output waiting, and ends it once LEDC has output waiting. Stores to
+    /// other SYSTIMER registers still move the lines.
+    #[test]
+    fn a_systimer_op_store_keeps_a_straight_run_unless_ledc_has_output() {
+        struct Counting<'a> {
+            inner: soc::CoreBus<'a>,
+            polls: usize,
+        }
+
+        impl Bus for Counting<'_> {
+            fn instruction_bus(&self, addr: u32) -> bool {
+                self.inner.instruction_bus(addr)
+            }
+            fn fetch(&mut self, now: Cycle, addr: u32) -> Result<u32, Exit> {
+                self.inner.fetch(now, addr)
+            }
+            fn load(&mut self, now: Cycle, addr: u32, width: Width) -> Result<u32, Exit> {
+                self.inner.load(now, addr, width)
+            }
+            fn store(
+                &mut self,
+                now: Cycle,
+                addr: u32,
+                width: Width,
+                value: u32,
+            ) -> Result<(), Exit> {
+                self.inner.store(now, addr, width, value)
+            }
+            fn interrupts(&mut self, now: Cycle) -> u32 {
+                self.polls += 1;
+                self.inner.interrupts(now)
+            }
+            fn begin_step(&mut self, now: Cycle) {
+                self.inner.begin_step(now);
+            }
+            fn access_moves_lines(&self, addr: u32) -> bool {
+                self.inner.access_moves_lines(addr)
+            }
+            fn load_moves_lines(&self, addr: u32) -> bool {
+                self.inner.load_moves_lines(addr)
+            }
+            fn next_event(&mut self, now: Cycle) -> Option<Cycle> {
+                self.inner.next_event(now)
+            }
+            fn yields(&self) -> bool {
+                self.inner.yields()
+            }
+            fn code_version(&self) -> Option<u64> {
+                self.inner.code_version()
+            }
+            fn fetch_held(&self) -> bool {
+                self.inner.fetch_held()
+            }
+        }
+
+        let mut program = Program::new(&[SYSTIMER, 1 << 30]);
+        program.l32r(2, 0).l32r(3, 1).movi(5, 40);
+        let top = program.pc();
+        program
+            .s32i(3, 2, 0x04)
+            .s32i(3, 2, 0x08)
+            .rri8(2, 4, 2, 0x44)
+            .addi(5, 5, -1)
+            .bnez(5, top)
+            .raw(&LOOP);
+
+        let mut chip = program.chip();
+        {
+            let bus = chip.soc.bus();
+            assert!(!bus.access_moves_lines(SYSTIMER + 0x04));
+            assert!(!bus.access_moves_lines(SYSTIMER + 0x08));
+            for offset in [0x00, 0x20, 0x34, 0x50, 0x64, 0x6c] {
+                assert!(bus.access_moves_lines(SYSTIMER + offset), "{offset:#x}");
+            }
+        }
+        let mut core = chip.cores.core(CoreId::Pro).clone();
+        let mut bus = Counting {
+            inner: chip.soc.bus(),
+            polls: 0,
+        };
+        let stop = core.run_until(&mut bus, Cycle(500));
+        assert_eq!(stop, orbe_xtensa::Stop::Spin);
+        assert!(core.a(4) > 0, "snapshot latched a nonzero count");
+        #[cfg(not(feature = "poll-skip-check"))]
+        assert!(
+            bus.polls < 15,
+            "80 OP stores stayed in one straight run (polls = {})",
+            bus.polls
+        );
+
+        // Once LEDC has output waiting, a SYSTIMER OP store rearms the run and ends the straight
+        // run so the LEDC record and drive move are delivered on time.
+        let mut ledc_prog = Program::new(&[SYSTIMER, 1 << 30]);
+        ledc_prog.l32r(2, 0).l32r(3, 1).movi(5, 20);
+        let top = ledc_prog.pc();
+        ledc_prog
+            .s32i(3, 2, 0x04)
+            .s32i(3, 2, 0x08)
+            .addi(5, 5, -1)
+            .bnez(5, top)
+            .raw(&LOOP);
+        let setup = [ledc_on(3), duty(2).to_vec()].concat();
+        let mut chip = ledc_prog.chip();
+        for &(addr, value) in &setup {
+            chip.soc
+                .bus()
+                .store(Cycle(0), addr, Width::Word, value)
+                .unwrap();
+        }
+        chip.soc.rearmed = false;
+        chip.soc.changed = None;
+        chip.soc.ledc.settle(c(10), chip.soc.clock.source.apb());
+        assert!(chip.soc.ledc.has_output());
+        {
+            let bus = chip.soc.bus();
+            assert!(bus.access_moves_lines(SYSTIMER + 0x04));
+            assert!(bus.access_moves_lines(SYSTIMER + 0x08));
+        }
+        let mut core = chip.cores.core(CoreId::Pro).clone();
+        let mut bus = Counting {
+            inner: chip.soc.bus(),
+            polls: 0,
+        };
+        assert_eq!(core.run_until(&mut bus, Cycle(100)), orbe_xtensa::Stop::Bus);
+        assert!(
+            bus.inner.soc.rearmed,
+            "OP store rearmed while LEDC output waited"
+        );
     }
 
     /// A load from a block the model does not simulate ends the run at the load, where one
@@ -2033,6 +2203,52 @@ mod tests {
                 Fault::FlashCommand(FlashRefusal::Spi0, pro(program.entry() + 6))
             ))
         );
+    }
+
+    /// Enabling SPI1 interrupts, auto-wait-idle, auto-suspend or manual suspend/resume ends the
+    /// run loudly with `chip.unsupported_setting`.
+    #[test]
+    fn unsupported_spi1_controls_end_the_run() {
+        const SPI1: u32 = 0x6000_2000;
+        let cases = [
+            (SPI1 + spi1::INT_ENA, 1, Refused::Interrupt("SPI1")),
+            (
+                SPI1 + spi1::WAITI_CTRL,
+                spi1::WAITI_EN,
+                Refused::Register("SPI1", "auto_wait_idle"),
+            ),
+            (
+                SPI1 + spi1::SUS_CTRL,
+                spi1::FLASH_PES_EN,
+                Refused::Register("SPI1", "auto_suspend"),
+            ),
+            (
+                SPI1 + spi1::SUS_CMD,
+                spi1::SUS_CMD_UNRUN,
+                Refused::Register("SPI1", "suspend"),
+            ),
+        ];
+        for (address, value, expected) in cases {
+            let program = store_after_two_loads(address, value, 0);
+            assert_eq!(
+                program.chip().run_until(c(1000)),
+                Some(Halt::Fault(
+                    c(2),
+                    Fault::Refused(expected, pro(program.entry() + 6))
+                )),
+                "{address:#x} = {value:#x}"
+            );
+        }
+        // Clearing WAITI_EN / FLASH_PES_EN / INT_ENA is allowed (as IDF does during init).
+        for address in [
+            SPI1 + spi1::INT_ENA,
+            SPI1 + spi1::WAITI_CTRL,
+            SPI1 + spi1::SUS_CTRL,
+            SPI1 + spi1::SUS_CMD,
+        ] {
+            let mut chip = store_after_two_loads(address, 0, 0).chip();
+            assert_eq!(chip.run_until(c(1000)), None, "clear {address:#x}");
+        }
     }
 
     /// A load from a cache window ends the run where the MMU maps no flash: on a chip with no
@@ -2298,7 +2514,7 @@ mod tests {
         };
         assert_eq!(
             fault,
-            Fault::Setting(Setting::Dummy, pro(program.entry() + 14 * 3))
+            Fault::Setting("SPI2", Setting::Dummy, pro(program.entry() + 14 * 3))
         );
         assert_eq!(chip.run_until(c(2000)), None, "ended");
         assert_eq!(chip.take_transfers().count(), 0);
@@ -2389,7 +2605,7 @@ mod tests {
             chip.soc.bus().store(Cycle(10), SPI2, Width::Word, 1 << 24),
             Ok(())
         );
-        assert!(chip.soc.spi2.busy(c(73)) && !chip.soc.spi2.busy(c(74)));
+        assert!(chip.soc.spi[0].busy(c(73)) && !chip.soc.spi[0].busy(c(74)));
         chip
     }
 
@@ -2546,7 +2762,10 @@ mod tests {
             chip.soc.bus().store(Cycle(11), SPI2, Width::Word, 1 << 24),
             Err(Exit::Stop)
         );
-        assert_eq!(chip.soc.ending, Some(Ending::Setting(Setting::DmaLink)));
+        assert_eq!(
+            chip.soc.ending,
+            Some(Ending::Setting("SPI2", Setting::DmaLink))
+        );
     }
 
     /// A store that starts a GDMA link the model does not feed ends the run before it lands.
@@ -2609,7 +2828,7 @@ mod tests {
         let program = transfer(1 << 31, Some((SPI2 + 0x34, spi2::TRANS_DONE)));
         let mut chip = program.chip_on(&[]);
         assert_eq!(chip.run_until(c(18)), None);
-        let end = chip.soc.spi2.end(0).expect("a transfer runs");
+        let end = chip.soc.spi[0].end(0).expect("a transfer runs");
         assert!(c(18) < end);
         assert_eq!(
             chip.soc.bus().next_event(Cycle(18)),
@@ -3858,5 +4077,311 @@ mod tests {
         assert_eq!(chip.run_until(c(2000)), None, "the RTC watchdog was reset");
         assert_eq!(word(&mut chip, RTC_CNTL + 0x98), 0x0001_3214);
         assert_eq!(chip.unmodeled().count(), 0);
+    }
+
+    /// Routes GPIO4 to SPI3's CS0 (signal 71), turns SPI3's clock on, then syncs and starts a
+    /// transfer of an 8-bit command with `user`, and then stores `then`'s value to its address.
+    fn spi3_transfer(user: u32, then: Option<(u32, u32)>) -> Program {
+        let (address, value) = then.unwrap_or_default();
+        let mut program = Program::new(&[
+            IO_MUX,
+            1 << 12,
+            GPIO + 0x500,
+            71,
+            SPI3,
+            user,
+            1 << 24,
+            0x3,
+            1 << 23,
+            address,
+            value,
+        ]);
+        program
+            .l32r(2, 0)
+            .l32r(3, 1)
+            .rri8(6, 3, 2, 0x14) // IO_MUX GPIO4
+            .l32r(2, 2)
+            .l32r(3, 3)
+            .rri8(6, 3, 2, 0x64) // GPIO_FUNC4_OUT_SEL_CFG = 71 (SPI3_CS0_OUT_IDX)
+            .l32r(2, 4)
+            .l32r(3, 5)
+            .rri8(6, 3, 2, 0x10)
+            .l32r(3, 7)
+            .rri8(6, 3, 2, 0xe8)
+            .l32r(3, 8)
+            .rri8(6, 3, 2, 0x00)
+            .l32r(3, 6)
+            .rri8(6, 3, 2, 0x00);
+        if then.is_some() {
+            program.l32r(2, 9).l32r(3, 10).rri8(6, 3, 2, 0x00);
+        }
+        program.raw(&LOOP);
+        program
+    }
+
+    /// SPI3 transfers behave identically to SPI2: split-invariant end halts, CS0 signal 71 idling
+    /// high, `peripheral == "SPI3"`, setting refusals naming SPI3, source 22 waking `WAITI`, and
+    /// clock/reset gates on SYSTEM word 0 bit 16.
+    #[test]
+    fn spi3_transfers_gates_settings_and_interrupt_match_spi2() {
+        let program = spi3_transfer(1 << 31, None);
+        let run = |step: u64| {
+            let mut chip = program.chip_on(&[4]);
+            let mut seen = Vec::new();
+            let mut limit = 0;
+            while limit < 1000 {
+                limit = (limit + step).min(1000);
+                while let Some(halt) = chip.run_until(c(limit)) {
+                    seen.push((
+                        halt,
+                        chip.drive(4),
+                        chip.take_transfers().collect::<Vec<_>>(),
+                        chip.tick(),
+                    ));
+                }
+            }
+            seen
+        };
+        let seen = run(1000);
+        let [
+            (routed, drive, ref none, _),
+            (
+                Halt::Change {
+                    at,
+                    image: false,
+                    record: true,
+                    sample: false,
+                },
+                _,
+                ref sent,
+                _,
+            ),
+        ] = seen[..]
+        else {
+            panic!("a CS route, then a transfer: {seen:?}");
+        };
+        assert!(matches!(
+            routed,
+            Halt::Change {
+                image: true,
+                record: false,
+                ..
+            }
+        ));
+        assert_eq!(drive, PadDrive::High, "SPI3 CS0 idles high once routed");
+        assert!(none.is_empty());
+        let [ref xfer] = sent[..] else {
+            panic!("one transfer: {sent:?}");
+        };
+        assert_eq!(xfer.peripheral, "SPI3");
+        assert_eq!(xfer.end, at);
+        assert_eq!(xfer.end.0 - xfer.start.0, 8 * XTAL);
+        assert_eq!(xfer.pads.cs, Some(4));
+        for step in [1, 2, 3, 7] {
+            assert_eq!(run(step), seen, "limits {step} apart");
+        }
+
+        // Unsupported setting names SPI3.
+        let bad = spi3_transfer(1 << 31 | 1 << 29, None);
+        let mut chip = bad.chip_on(&[]);
+        assert_eq!(
+            chip.run_until(c(1000)),
+            Some(Halt::Fault(
+                c(14),
+                Fault::Setting("SPI3", Setting::Dummy, pro(bad.entry() + 14 * 3))
+            ))
+        );
+
+        // Reset bit 16 restores SPI3_USER1 without touching SPI2, and held/clock-off accesses refuse.
+        let user1 = SPI3 + 0x14;
+        let reset_prog = stores(&[
+            (SPI2 + 0x14, 0x5678),
+            (user1, 0x1234),
+            (SYSTEM + 0x20, 1 << 16),
+            (SYSTEM + 0x20, 0),
+        ]);
+        let mut chip = reset_prog.chip();
+        assert_eq!(chip.run_until(c(1000)), None);
+        assert_eq!(word(&mut chip, user1), 0xb841_0007);
+        assert_eq!(word(&mut chip, SPI2 + 0x14), 0x5678);
+
+        let held = stores(&[(SYSTEM + 0x20, 1 << 16), (user1, 0)]);
+        assert_eq!(
+            held.chip().run_until(c(1000)),
+            Some(Halt::Fault(
+                c(5),
+                Fault::Refused(
+                    Refused::Register("SPI3", "held_in_reset"),
+                    store_pc(&held, 1)
+                )
+            ))
+        );
+        let clock_off = stores(&[(SYSTEM + 0x18, 0xf9c1_e06f & !(1 << 16)), (user1, 0)]);
+        assert_eq!(
+            clock_off.chip().run_until(c(1000)),
+            Some(Halt::Fault(
+                c(5),
+                Fault::Refused(
+                    Refused::Register("SPI3", "clock_off"),
+                    store_pc(&clock_off, 1)
+                )
+            ))
+        );
+
+        // Reset or clock off while sending refuses naming SPI3.
+        let rst_sending = spi3_transfer(1 << 31, Some((SYSTEM + 0x20, 1 << 16)));
+        assert_eq!(
+            rst_sending.chip_on(&[]).run_until(c(1000)),
+            Some(Halt::Fault(
+                c(17),
+                Fault::Refused(
+                    Refused::Register("SPI3", "reset_while_sending"),
+                    pro(rst_sending.entry() + 17 * 3)
+                )
+            ))
+        );
+        let clk_sending = spi3_transfer(1 << 31, Some((SYSTEM + 0x18, 0xf9c1_e06f & !(1 << 16))));
+        assert_eq!(
+            clk_sending.chip_on(&[]).run_until(c(1000)),
+            Some(Halt::Fault(
+                c(17),
+                Fault::Refused(
+                    Refused::Register("SPI3", "clock_off_while_sending"),
+                    pro(clk_sending.entry() + 17 * 3)
+                )
+            ))
+        );
+
+        // SPI3 TRANS_DONE raises interrupt source 22 and wakes WAITI.
+        let mut wake = Program::new(&[
+            0x600c_2000 + 4 * 22,
+            SPI3,
+            1 << 31,
+            0x3,
+            1 << 23,
+            1 << 24,
+            spi2::TRANS_DONE,
+        ]);
+        wake.l32r(2, 0)
+            .movi(3, 1)
+            .rri8(6, 3, 2, 0) // map source 22 -> CPU int 1
+            .l32r(2, 1)
+            .l32r(3, 2)
+            .rri8(6, 3, 2, 0x10)
+            .l32r(3, 3)
+            .rri8(6, 3, 2, 0xe8)
+            .l32r(3, 6)
+            .rri8(6, 3, 2, 0x34) // INT_ENA = TRANS_DONE
+            .l32r(3, 4)
+            .rri8(6, 3, 2, 0x00) // UPDATE
+            .l32r(3, 5)
+            .rri8(6, 3, 2, 0x00) // USR
+            .movi(7, 2)
+            .wsr(7, INTENABLE)
+            .movi(7, 0)
+            .wsr(7, PS)
+            .raw(&WAITI)
+            .raw(&LOOP);
+        let mut chip = wake.chip_on(&[]);
+        let mut woke = None;
+        while let Some(halt) = chip.run_until(c(200)) {
+            if let Halt::Fault(_, fault) = halt {
+                woke = Some(fault);
+                break;
+            }
+        }
+        assert_eq!(woke, Some(Fault::UnmappedFetch(pro(0x4000_0300))));
+    }
+
+    /// SPI3 sends from GDMA OUT with `peri_sel = 1`, enforces GDMA buffer and gate protection,
+    /// and can run concurrently with an SPI2 GDMA transfer on another channel.
+    #[test]
+    fn spi3_gdma_transfer_and_concurrent_spi2_spi3_dma_transfers() {
+        const DESC2: u32 = 0x3fce_0100;
+        const BUF2: u32 = 0x3fca_0100;
+        let mut program = Program::new(&[]);
+        program.raw(&LOOP);
+        let mut chip = program.chip_on(&[]);
+        let soc = &mut chip.soc;
+        soc.poke(BUFFER, &[1, 2, 3, 4, 5, 6, 7, 8]);
+        soc.poke(BUF2, &[0xa1, 0xa2, 0xa3, 0xa4]);
+        let d0: Vec<u8> = [1 << 31 | 1 << 30 | 8 << 12 | 8, BUFFER, 0]
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect();
+        let d1: Vec<u8> = [1 << 31 | 1 << 30 | 4 << 12 | 4, BUF2, 0]
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect();
+        soc.poke(DESCRIPTOR, &d0);
+        soc.poke(DESC2, &d1);
+        for (cycle, address, value) in [
+            (1, SYSTEM + 0x1c, 0x640),
+            (2, SYSTEM + 0x24, 0x1be),
+            // GDMA channel 0 -> SPI2 (peri_sel = 0)
+            (3, GDMA + 0xa8, 0),
+            (4, GDMA + 0x80, DESCRIPTOR & 0xf_ffff | 1 << 21),
+            // GDMA channel 1 -> SPI3 (peri_sel = 1)
+            (5, GDMA + 0xc0 + 0xa8, 1),
+            (6, GDMA + 0xc0 + 0x80, DESC2 & 0xf_ffff | 1 << 21),
+            // SPI2: 8 bytes (64 cycles at crystal)
+            (7, SPI2 + 0x10, 1 << 27),
+            (8, SPI2 + 0x1c, 63),
+            (9, SPI2 + 0x30, 1 << 28),
+            (10, SPI2 + 0xe8, 0x3),
+            (11, SPI2, 1 << 23),
+            // SPI3: 4 bytes (32 cycles at crystal)
+            (12, SPI3 + 0x10, 1 << 27),
+            (13, SPI3 + 0x1c, 31),
+            (14, SPI3 + 0x30, 1 << 28),
+            (15, SPI3 + 0xe8, 0x3),
+            (16, SPI3, 1 << 23),
+            // Start both at cycle 17 and 18.
+            (17, SPI2, 1 << 24),
+            (18, SPI3, 1 << 24),
+        ] {
+            assert_eq!(
+                soc.bus().store(Cycle(cycle), address, Width::Word, value),
+                Ok(()),
+                "step {cycle} {address:#x}"
+            );
+        }
+        assert!(soc.spi[0].busy(c(80)) && !soc.spi[0].busy(c(81)));
+        assert!(soc.spi[1].busy(c(49)) && !soc.spi[1].busy(c(50)));
+
+        // Writing SPI3's buffer while SPI3 is sending faults; after cycle 50 it lands while SPI2
+        // still protects its own buffer.
+        assert_eq!(
+            soc.bus().store(Cycle(20), BUF2, Width::Byte, 0),
+            Err(Exit::Stop)
+        );
+        assert_eq!(
+            soc.ending.take(),
+            Some(Ending::Refused(Refused::Register("GDMA", "buffer_write")))
+        );
+        assert_eq!(soc.bus().store(Cycle(50), BUF2, Width::Byte, 0), Ok(()));
+        assert_eq!(
+            soc.bus().store(Cycle(51), BUFFER, Width::Byte, 0),
+            Err(Exit::Stop)
+        );
+        assert_eq!(
+            soc.ending.take(),
+            Some(Ending::Refused(Refused::Register("GDMA", "buffer_write")))
+        );
+
+        // Drain both transfers through Esp32s3::run_until.
+        let mut got = Vec::new();
+        while let Some(halt) = chip.run_until(c(200)) {
+            assert!(
+                matches!(halt, Halt::Change { record: true, .. }),
+                "{halt:?}"
+            );
+            got.extend(chip.take_transfers());
+        }
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].peripheral, "SPI3");
+        assert_eq!(got[0].data, [0xa1, 0xa2, 0xa3, 0xa4]);
+        assert_eq!(got[1].peripheral, "SPI2");
+        assert_eq!(got[1].data, [1, 2, 3, 4, 5, 6, 7, 8]);
     }
 }

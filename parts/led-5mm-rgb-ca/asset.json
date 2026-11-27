@@ -1,0 +1,44 @@
+{
+  "part": "led-5mm-rgb-ca",
+  "source": {
+    "script": "model.py",
+    "sha256": "79f298303c1daced706dee790894353058643ebab54a5aef18a6f69bf57350d8",
+    "bytes": 3113
+  },
+  "files": {
+    "led-5mm-rgb-ca.glb": {
+      "sha256": "b20695355bd39d6aa9a095b14802eba20291806279444581c20d8524aa8b4255",
+      "bytes": 39700
+    },
+    "led-5mm-rgb-ca.anchors.json": {
+      "sha256": "e2c1de2b027eb360091c4f80cc6d1e158ede8b34fb1acaa3cdfbf8165415b5bc",
+      "bytes": 522
+    }
+  },
+  "box": {
+    "min": [-4.06, -2.949311, -10.5],
+    "max": [4.06, 2.949311, 12.1]
+  },
+  "kept_nodes": ["die-blue", "die-green", "die-red", "lead-1", "lead-2", "lead-3", "lead-4"],
+  "draw_calls": 9,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 4,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 3.5
+    },
+    "names": {
+      "nodes": ["die-blue", "die-green", "die-red"]
+    },
+    "merge": {
+      "primitives_in": 9,
+      "primitives_out": 9
+    }
+  }
+}

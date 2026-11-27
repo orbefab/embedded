@@ -1,0 +1,32 @@
+// A Nano mixes colours on a 5 mm common-cathode RGB LED by PWM on D9 (R), D10 (G) and D11 (B).
+// The Nano straddles columns 1 to 15 (D11 is j2, D10 is j3, D9 is j4, GND is a14).
+// The RGB LED sits in row c (R in c24, COM in c25, B in c26, G in c27), and the three
+// current-limiting resistors bridge the centre channel into the same columns.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "build/rgb.ino.hex" },
+    "r_red": { "type": "resistor-axial", "resistance": "220" },
+    "r_blue": { "type": "resistor-axial", "resistance": "150" },
+    "r_green": { "type": "resistor-axial", "resistance": "150" },
+    "rgb": { "type": "led-5mm-rgb-cc" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "r_red": { "on": { "a": "bb.f24" }, "rotate": [0, 0, -90] }, // b lands in d24 (R)
+    "r_blue": { "on": { "a": "bb.f26" }, "rotate": [0, 0, -90] }, // b lands in d26 (B)
+    "r_green": { "on": { "a": "bb.f27" }, "rotate": [0, 0, -90] }, // b lands in d27 (G)
+    "rgb": { "on": { "R": "bb.c24" } }, // COM in c25, B in c26, G in c27
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["bb.a14", "bb.X14", { "color": "#161616" }], // GND to the - rail
+    ["bb.a25", "bb.X25", { "color": "#161616" }], // rgb.COM to GND
+    ["bb.i4", "bb.i24", { "color": "#d12b2b" }], // D9 to r_red.a
+    ["bb.j3", "bb.j27", { "color": "#2e8b57" }], // D10 to r_green.a
+    ["bb.i2", "bb.i17", { "color": "#2563eb" }], // D11 to column 17
+    ["bb.g17", "bb.g26", { "color": "#2563eb" }], // column 17 to r_blue.a along row g
+  ],
+}

@@ -2,4 +2,5 @@
 
 #![forbid(unsafe_code)]
 
+mod crypto;
 pub mod s3;

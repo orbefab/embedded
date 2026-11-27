@@ -13,7 +13,8 @@ use live::{common, failed, orbe, project, replies, replies_in};
 #[test]
 fn each_block_passes() {
     for id in common::block_ids() {
-        let run = orbe(&common::repo(), &["test", &format!("blocks/{id}")]);
+        let block = format!("blocks/{id}");
+        let run = orbe(&common::repo(), &["test", &block]);
         assert!(
             run.stdout.ends_with("1 passed, 0 failed\n"),
             "{id}: {}{}",
@@ -1761,7 +1762,14 @@ fn get_on_servo_and_oled_reads_their_part_readings() {
         "{}",
         run.stdout
     );
-    let json = replies_in(&oled_dir);
+    let json_run = orbe(oled_dir.path(), &["test", "--json", "-v"]);
+    assert_eq!(json_run.code, 0, "{}{}", json_run.stdout, json_run.stderr);
+    let json: Vec<serde_json::Value> = json_run.json()["data"]["tests"][0]["replies"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["reply"].clone())
+        .collect();
     assert_eq!(json[2]["data"]["ref"], "@oled");
     assert_eq!(json[2]["data"]["kind"], "screen");
     assert_eq!(json[2]["data"]["value"], json[3]["data"]["value"]);

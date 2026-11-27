@@ -1,0 +1,68 @@
+// Internal voltage source for battery-aa-4x (4 x Energizer E91 AA alkaline in series).
+// Unlisted helper part; battery-aa-4x wires this in series with its 0.9 ohm internal resistance.
+// Current warns past 500 mA (highest continuous load plotted on E91) with a 0.25 s RMS time
+// constant from E91 p1's High Rate Toy 0.25 s pulse.
+{
+  "format": 7,
+  "part": "battery-aa-4x-cell",
+  "version": "0.1.0",
+  "title": "4xAA alkaline cell stack (internal)",
+  "summary": "Unlisted 6.0 V open-circuit voltage source inside battery-aa-4x, representing four AA alkaline cells in series.",
+  "tags": ["battery", "aa", "4xaa", "6v", "alkaline", "cell", "power"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Energizer E91 Product Datasheet (Form No. E91EU0823)": null,
+    "Energizer Battery Internal Resistance Technical Bulletin v1.1.0": "https://data.energizer.com/pdfs/batteryir.pdf",
+    "Energizer Alkaline Manganese Dioxide Handbook and Application Manual": "https://data.energizer.com/pdfs/alkaline_appman.pdf",
+  },
+  "real": {
+    "generic": true,
+    "maker": "Energizer",
+    "number": "E91",
+    "datasheet": "Energizer E91 Product Datasheet (Form No. E91EU0823)",
+  },
+  "pins": { "pos": [1], "neg": [2] },
+  "model": {
+    "kind": "voltage_source",
+    "voltage": {
+      "value": 6.0,
+      "unit": "V",
+      "source": {
+        "closed_form": {
+          "note": "Four Energizer E91 AA alkaline cells (ANSI 15A / IEC LR6, 1.5 V nominal each) in series: 4 * 1.5 V = 6.0 V.",
+        },
+      },
+    },
+    "ratings": {
+      "current": {
+        "value": 0.5,
+        "unit": "A",
+        "characterized": true,
+        "basis": {
+          "sustained": {
+            "average": "rms",
+            "tau": {
+              "value": 0.25,
+              "unit": "s",
+              "source": {
+                "datasheet": {
+                  "doc": "Energizer E91 Product Datasheet (Form No. E91EU0823)",
+                  "at": "p1 Industry Standard Tests, High Rate Toy: 1 / 3 ohm .25/19.75s (0.25 s pulse duration, shortest published pulse on the sheet)",
+                  "basis": "nominal",
+                },
+              },
+            },
+          },
+        },
+        "source": {
+          "datasheet": {
+            "doc": "Energizer E91 Product Datasheet (Form No. E91EU0823)",
+            "at": "p1 Milliamp-Hours Capacity, continuous discharge to 0.8 V at 21 C: highest plotted continuous bar is 500 mA (no absolute maximum current is stated)",
+            "basis": "max",
+          },
+        },
+      },
+    },
+    "pins": { "p": "pos", "n": "neg" },
+  },
+}

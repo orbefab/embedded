@@ -15,7 +15,7 @@
 //! firmware flushed it.
 
 use orbe_mcu::{self as mcu, Frame, Mcu, Note, Phase, Sent, SentKind, SpiPins};
-use orbe_model::{Cs, Drive, Lanes, Pulses, Readings, Spi, SpiPhase, Stop, Time};
+use orbe_model::{Cs, Drive, Lanes, Pulses, Quantity, Readings, Spi, SpiPhase, Stop, Time};
 use orbe_xtensa::Missing;
 
 use super::CoreId;
@@ -58,15 +58,33 @@ pub struct Bridge {
     held: Option<(Time, Held)>,
     /// The latest time this copy has given the host.
     served: Option<Time>,
+    /// Supply state driven by the host's supply watch.
+    power: Power,
+}
+
+/// Supply state of the chip, driven by the host's supply watch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Power {
+    /// Before the first `input` at t = 0, or in a test with no supply watch.
+    Init,
+    /// Started unpowered at t = 0 and has never been powered yet.
+    Waiting,
+    /// Powered and running, with chip tick 0 anchored at `origin`.
+    On { origin: Time },
+    /// Was powered and lost supply at `lost_at`. Does nothing while unpowered.
+    Lost { origin: Time, lost_at: Time },
+    /// Supply returned after `Lost`; a `PowerOnRestart` fault is pending or reported.
+    Restarted { origin: Time, lost_at: Time },
 }
 
 /// What a held stop does.
 #[derive(Clone, Copy, Debug)]
 enum Held {
-    /// The drives the chip moved land, 1 ps after its `Moved` halt.
+    /// The drives the chip moved land, 1 ps after its `Moved` halt or at initial power-on.
     Moved,
-    /// A fault the chip reported at or before a time this copy had already given the host ends
-    /// the run, 1 ps after that time.
+    /// All pads release to off (no drive, no pulls) 1 ps after supply loss.
+    PowerDown,
+    /// A fault ends the run at this stop.
     Fault(Fault),
 }
 
@@ -133,17 +151,56 @@ impl Bridge {
             fault: None,
             held: None,
             served: None,
+            power: Power::Init,
         };
         bridge.refresh();
         bridge
     }
 
-    /// The held stop, once `limit` reaches it. A fault ends the run there, and moved drives
-    /// land there.
+    fn origin(&self) -> Time {
+        match self.power {
+            Power::On { origin } | Power::Lost { origin, .. } | Power::Restarted { origin, .. } => {
+                origin
+            }
+            Power::Init | Power::Waiting => Time::ZERO,
+        }
+    }
+
+    fn to_tick(&self, at: Time) -> Tick {
+        tick(Time::from_ps(
+            at.as_ps().saturating_sub(self.origin().as_ps()),
+        ))
+    }
+
+    fn tick_time(&self, t: Tick) -> Time {
+        Time::from_ps(self.origin().as_ps().saturating_add(time(t).as_ps()))
+    }
+
+    fn any_driven(&self) -> bool {
+        self.image.iter().any(|&d| d != Drive::Off)
+            || self.pulled_down.iter().any(|&p| p)
+            || self.strong_pull_up.iter().any(|&s| s)
+    }
+
+    fn has_power_on_drive(&self) -> bool {
+        self.gpios
+            .iter()
+            .any(|&gpio| self.chip.drive(gpio) != PadDrive::Off)
+    }
+
+    fn clear_drives(&mut self) {
+        self.image.fill(Drive::Off);
+        self.pulled_down.fill(false);
+        self.strong_pull_up.fill(false);
+    }
+
+    /// The held stop, once `limit` reaches it. A fault ends the run there, moved drives land
+    /// there, and a power-down releases every pad there.
     fn take_held(&mut self, limit: Time) -> Option<Stop> {
         let (at, held) = self.held.take_if(|&mut (at, _)| at <= limit)?;
         match held {
             Held::Moved => self.refresh(),
+            Held::PowerDown => self.clear_drives(),
             Held::Fault(fault) => self.fault = Some((at, fault)),
         }
         self.served = Some(at);
@@ -162,8 +219,8 @@ impl Bridge {
     /// `train` as its `Pulses` record, named by its pad's pin.
     fn pulses(&self, train: Train) -> Sent {
         Sent {
-            start: time(train.start),
-            end: time(train.end),
+            start: self.tick_time(train.start),
+            end: self.tick_time(train.end),
             peripheral: "RMT",
             pin: pin(train.pad).expect("a pad with a net has a pin"),
             kind: SentKind::Pulses {
@@ -179,13 +236,13 @@ impl Bridge {
     /// The copy stands at `at`, and no live or unreported transmission covers `at`. A copy
     /// that ran past `at` is not the state at the cut.
     fn no_train_through(&self, at: Time) -> bool {
-        self.served == Some(at) && !self.chip.transmission_open(tick(at))
+        self.served == Some(at) && !self.chip.transmission_open(self.to_tick(at))
     }
 
     /// The part of a transmission still running at `at`, one record per wired pad. Each record
     /// ends one picosecond after `at`, so a chain cut at `at` takes the pairs read by then.
     fn flying(&self, at: Time) -> Vec<Sent> {
-        let Some(flight) = self.chip.in_flight(tick(at)) else {
+        let Some(flight) = self.chip.in_flight(self.to_tick(at)) else {
             return Vec::new();
         };
         let end = Time::from_ps(at.as_ps().saturating_add(1));
@@ -195,7 +252,7 @@ impl Bridge {
             .filter_map(|pad| {
                 let output = self.output(pad)?;
                 Some(Sent {
-                    start: time(flight.start),
+                    start: self.tick_time(flight.start),
                     end,
                     peripheral: "RMT",
                     pin: pin(pad)?,
@@ -213,9 +270,10 @@ impl Bridge {
 
     /// `duty` as its `Duty` record, named by its pad's pin.
     fn duty(&self, duty: Duty) -> Sent {
+        let at = self.tick_time(duty.at);
         Sent {
-            start: time(duty.at),
-            end: time(duty.at),
+            start: at,
+            end: at,
             peripheral: "LEDC",
             pin: pin(duty.pad).expect("a pad with a net has a pin"),
             kind: SentKind::Duty {
@@ -229,22 +287,22 @@ impl Bridge {
         }
     }
 
-    /// `transfer` as its `Spi` record, named by the pin of its CS pad, or `SPI2` when no pin of
-    /// the part carries CS. A signal whose pad has no net is on no output.
+    /// `transfer` as its `Spi` record, named by the pin of its CS pad, or its host (`SPI2` or
+    /// `SPI3`) when no pin of the part carries CS. A signal whose pad has no net is on no output.
     fn spi(&self, transfer: Transfer) -> Sent {
         let lanes = |count: u8| match count {
             1 => Lanes::One,
             2 => Lanes::Two,
             4 => Lanes::Four,
-            _ => unreachable!("SPI2 sends on 1, 2 or 4 lanes"),
+            _ => unreachable!("SPI2 and SPI3 send on 1, 2 or 4 lanes"),
         };
         let output = |pad: Option<u8>| pad.and_then(|pad| self.output(pad));
         let pads = transfer.pads;
         Sent {
-            start: time(transfer.start),
-            end: time(transfer.end),
-            peripheral: "SPI2",
-            pin: pads.cs.and_then(pin).unwrap_or("SPI2"),
+            start: self.tick_time(transfer.start),
+            end: self.tick_time(transfer.end),
+            peripheral: transfer.peripheral,
+            pin: pads.cs.and_then(pin).unwrap_or(transfer.peripheral),
             kind: SentKind::Spi {
                 spi: Spi {
                     phases: transfer
@@ -298,17 +356,25 @@ impl Bridge {
 impl Mcu for Bridge {
     const USARTS: &'static [&'static str] = &["USB_SERIAL_JTAG", "UART0", "UART1", "UART2"];
     const SENDS: bool = true;
+    const WORLD: &'static [Quantity] = &[Quantity::Temperature];
 
     #[inline]
     fn run_until(&mut self, limit: Time) -> Option<Stop> {
         if self.held.is_some() {
             return self.take_held(limit);
         }
-        let Some(halt) = self.chip.run_until(tick(limit)) else {
+        match self.power {
+            Power::Waiting | Power::Lost { .. } | Power::Restarted { .. } => {
+                self.served = Some(limit);
+                return None;
+            }
+            Power::Init | Power::On { .. } => {}
+        }
+        let Some(halt) = self.chip.run_until(self.to_tick(limit)) else {
             self.served = Some(limit);
             return None;
         };
-        let at = time(halt.at());
+        let at = self.tick_time(halt.at());
         let (at, record, sample) = match halt {
             Halt::Change {
                 image,
@@ -356,30 +422,98 @@ impl Mcu for Bridge {
         &self.strong_pull_up
     }
 
-    /// Its ADC pads' voltages, in `sampled` order.
-    fn sample(&mut self, _at: Time, volts: &[f64], _world: &Readings) {
+    /// Its ADC pads' voltages, in `sampled` order, and the scene's ambient temperature.
+    fn sample(&mut self, _at: Time, volts: &[f64], world: &Readings) {
         let sampled = &self.sampled;
         self.chip.sample(|gpio| {
             let k = sampled.iter().position(|&pad| pad == gpio);
             volts[k.expect("a conversion's pad has a net")]
         });
+        let temp_c = world
+            .get(Quantity::Temperature)
+            .unwrap_or(Quantity::Temperature.row().default);
+        self.chip.sample_temperature(temp_c);
     }
 
-    /// Its GPIOs' levels, in watch order.
+    /// Its GPIOs' levels, in watch order, followed by the optional supply watch (high once
+    /// `VCC - GND` reaches [`OPERATING_SUPPLY_MIN_V`](super::OPERATING_SUPPLY_MIN_V), low at or
+    /// below [`MIN_SUPPLY_V`](super::MIN_SUPPLY_V)).
     fn input(&mut self, at: Time, levels: &[bool]) {
-        let changed = levels
-            .iter()
-            .enumerate()
-            .filter(|&(k, level)| self.levels.get(k) != Some(level))
-            .map(|(k, &level)| (self.gpios[k], level));
-        self.chip.input(tick(at), changed);
+        debug_assert!(
+            levels.len() == self.gpios.len() || levels.len() == self.gpios.len() + 1,
+            "expected one watch per GPIO plus optional supply watch"
+        );
+        let powered = levels.get(self.gpios.len()).copied().unwrap_or(true);
+        let gpio_levels = &levels[..self.gpios.len()];
+        match (self.power, powered) {
+            (Power::Init, true) => {
+                self.power = Power::On { origin: Time::ZERO };
+                let changed = gpio_levels
+                    .iter()
+                    .enumerate()
+                    .filter(|&(k, level)| self.levels.get(k) != Some(level))
+                    .map(|(k, &level)| (self.gpios[k], level));
+                self.chip.input(tick(at), changed);
+            }
+            (Power::Init, false) => {
+                self.power = Power::Waiting;
+                self.held = self
+                    .any_driven()
+                    .then_some((Time::from_ps(at.as_ps() + 1), Held::PowerDown));
+            }
+            (Power::Waiting, false) => {}
+            (Power::Waiting, true) => {
+                self.power = Power::On { origin: at };
+                let all = gpio_levels
+                    .iter()
+                    .enumerate()
+                    .map(|(k, &level)| (self.gpios[k], level));
+                self.chip.input(Tick(0), all);
+                self.held = self
+                    .has_power_on_drive()
+                    .then_some((Time::from_ps(at.as_ps() + 1), Held::Moved));
+            }
+            (Power::On { .. }, true) => {
+                let changed = gpio_levels
+                    .iter()
+                    .enumerate()
+                    .filter(|&(k, level)| self.levels.get(k) != Some(level))
+                    .map(|(k, &level)| (self.gpios[k], level));
+                self.chip.input(self.to_tick(at), changed);
+            }
+            (Power::On { origin }, false) => {
+                self.power = Power::Lost {
+                    origin,
+                    lost_at: at,
+                };
+                self.held = self
+                    .any_driven()
+                    .then_some((Time::from_ps(at.as_ps() + 1), Held::PowerDown));
+            }
+            (Power::Lost { .. }, false) => {}
+            (Power::Lost { origin, lost_at }, true) => {
+                self.power = Power::Restarted { origin, lost_at };
+                self.held = Some((
+                    Time::from_ps(at.as_ps() + 1),
+                    Held::Fault(Fault::PowerOnRestart),
+                ));
+            }
+            (Power::Restarted { .. }, _) => {}
+        }
         self.levels = levels.to_vec();
     }
 
     /// Takes the console bytes whose packet went on a tick at or before `through`'s last.
     fn deliver(&mut self, through: Time, mut sent: impl FnMut(Frame), _saw: impl FnMut(Phase)) {
-        while let Some((at, byte)) = self.chip.take_sent(tick(through)) {
-            let at = time(at);
+        let through = match self.power {
+            Power::Init | Power::Waiting => return,
+            Power::On { .. } => self.to_tick(through),
+            Power::Lost { lost_at, .. } | Power::Restarted { lost_at, .. } => {
+                self.to_tick(through.min(lost_at))
+            }
+        };
+        while let Some((at, byte)) = self.chip.take_sent(through) {
+            let at = self.tick_time(at);
             sent(Frame {
                 usart: 0,
                 byte,
@@ -387,13 +521,12 @@ impl Mcu for Bridge {
                 end: at,
             });
         }
-        let through = tick(through);
         while let Some(byte) = self.chip.take_uart(through) {
             sent(Frame {
                 usart: byte.port + 1,
                 byte: byte.byte,
-                start: time(byte.start),
-                end: time(byte.end),
+                start: self.tick_time(byte.start),
+                end: self.tick_time(byte.end),
             });
         }
     }
@@ -420,7 +553,10 @@ impl Mcu for Bridge {
     }
 
     fn in_flight(&self, ahead: &Self, at: Time) -> Vec<Sent> {
-        if ahead.no_train_through(at) {
+        if !matches!(self.power, Power::Init | Power::On { .. })
+            || !matches!(ahead.power, Power::Init | Power::On { .. })
+            || ahead.no_train_through(at)
+        {
             return Vec::new();
         }
         self.flying(at)
@@ -447,8 +583,8 @@ impl Mcu for Bridge {
             }
             Fault::UnmappedFetch(p) => mcu::Fault::UnmappedFetch(pc(p)),
             Fault::Halted(p) => mcu::Fault::Halted(pc(p)),
-            Fault::Setting(setting, p) => mcu::Fault::UnsupportedSetting {
-                peripheral: "SPI2",
+            Fault::Setting(peripheral, setting, p) => mcu::Fault::UnsupportedSetting {
+                peripheral,
                 setting: mcu::Setting::Transfer(setting.name()),
                 pc: pc(p),
             },
@@ -481,7 +617,6 @@ impl Mcu for Bridge {
                 use mcu::FlashRefusal as To;
                 let (command, reason) = match refusal {
                     FlashRefusal::Command(command) => (Some(command), To::Unsupported),
-                    FlashRefusal::Write(command) => (Some(command), To::Write),
                     FlashRefusal::StatusWrite(command) => (Some(command), To::StatusWrite),
                     FlashRefusal::NoCommandPhase => (None, To::NoCommandPhase),
                     FlashRefusal::StartBits => (None, To::StartBits),
@@ -490,6 +625,9 @@ impl Mcu for Bridge {
                     FlashRefusal::Spi0 => (None, To::Spi0),
                     FlashRefusal::Pads => (None, To::Pads),
                     FlashRefusal::Cs(command) => (Some(command), To::Cs),
+                    FlashRefusal::Busy(command) => (command, To::Busy),
+                    FlashRefusal::Length(command) => (Some(command), To::Length),
+                    FlashRefusal::Mode(command) => (Some(command), To::Mode),
                 };
                 mcu::Fault::FlashCommand {
                     command,
@@ -508,6 +646,7 @@ impl Mcu for Bridge {
                 },
                 pc: pc(p),
             },
+            Fault::PowerOnRestart => mcu::Fault::PowerOnRestart,
             Fault::UnmappedLoad { address, pc: p } => {
                 mcu::Fault::UnmappedLoad { address, pc: pc(p) }
             }
@@ -519,10 +658,15 @@ impl Mcu for Bridge {
     /// Each unmodeled register first touched at or before `through`, then the restart, when
     /// the firmware reset the chip by then.
     fn notes(&self, through: Time) -> Vec<(Time, Note)> {
+        let bound = match self.power {
+            Power::Init | Power::Waiting => return Vec::new(),
+            Power::On { .. } => through,
+            Power::Lost { lost_at, .. } | Power::Restarted { lost_at, .. } => through.min(lost_at),
+        };
         let unmodeled = self
             .chip
             .unmodeled()
-            .filter(|(_, touch)| time(touch.at) <= through)
+            .filter(|(_, touch)| self.tick_time(touch.at) <= bound)
             .map(|(address, touch)| {
                 let note = Note::UnmodeledRegister {
                     address,
@@ -531,13 +675,13 @@ impl Mcu for Bridge {
                     write: touch.write,
                     kept: touch.kept,
                 };
-                (time(touch.at), note)
+                (self.tick_time(touch.at), note)
             });
         let restart = self
             .chip
             .restart()
-            .filter(|&(at, _)| time(at) <= through)
-            .map(|(at, at_pc)| (time(at), Note::Restart(pc(at_pc))));
+            .filter(|&(at, _)| self.tick_time(at) <= bound)
+            .map(|(at, at_pc)| (self.tick_time(at), Note::Restart(pc(at_pc))));
         unmodeled.chain(restart).collect()
     }
 }
@@ -855,5 +999,103 @@ mod tests {
                 (true, 200_000),
             ]
         );
+    }
+
+    /// A chip that drives GPIO0 high, loses supply, and then has supply return:
+    /// while unpowered it releases GPIO0 to Off and stops running; when supply returns it faults
+    /// with `PowerOnRestart` 1 ps later.
+    #[test]
+    fn supply_loss_releases_drives_and_return_faults_power_on_restart() {
+        const GPIO: u32 = 0x6000_4000;
+        const IO_MUX: u32 = 0x6000_9000;
+        // Route GPIO0 as output and drive it high, then spin.
+        let stores = [(IO_MUX + 4, 1 << 12), (GPIO + 0x20, 1), (GPIO + 0x04, 1)];
+        let mut core = bridge(&[0], &stores);
+        // Powered at t = 0 (GPIO0 low, supply high).
+        core.input(Time::ZERO, &[false, true]);
+        let mut drove_high = false;
+        while let Some(stop) = core.run_until(Time::from_ps(5_000_000)) {
+            if core.drive()[0] == Drive::High {
+                drove_high = true;
+                break;
+            }
+            assert!(stop.at < Time::from_ps(5_000_000));
+        }
+        assert!(drove_high, "GPIO0 should drive high while powered");
+        assert_eq!(core.run_until(Time::from_ps(5_000_000)), None);
+
+        // Drop supply at 5 us: `input` must not change drive immediately.
+        let drop_at = Time::from_ps(5_000_000);
+        core.input(drop_at, &[true, false]);
+        assert_eq!(core.drive()[0], Drive::High, "input leaves drive unchanged");
+        // 1 ps later, the chip stops and releases GPIO0 to Off.
+        let release = core
+            .run_until(Time::from_ps(10_000_000))
+            .expect("release stop");
+        assert_eq!(release.at, Time::from_ps(drop_at.as_ps() + 1));
+        assert_eq!(core.drive()[0], Drive::Off);
+        assert!(!core.pulled_down()[0]);
+        assert!(!core.strong_pull_up()[0]);
+        assert!(core.fault().is_none());
+        // Runs nothing while unpowered.
+        assert_eq!(core.run_until(Time::from_ps(50_000_000)), None);
+        assert!(core.fault().is_none());
+
+        // Supply returns at 50 us: `input` leaves fault clear until the stop 1 ps later.
+        let return_at = Time::from_ps(50_000_000);
+        core.input(return_at, &[false, true]);
+        assert!(core.fault().is_none());
+        let restart = core
+            .run_until(Time::from_ps(60_000_000))
+            .expect("power-on restart fault stop");
+        assert_eq!(restart.at, Time::from_ps(return_at.as_ps() + 1));
+        assert_eq!(
+            core.fault(),
+            Some((
+                Time::from_ps(return_at.as_ps() + 1),
+                mcu::Fault::PowerOnRestart
+            ))
+        );
+    }
+
+    /// A chip that starts unpowered at t = 0 and powers on once runs normally without faulting,
+    /// and faults only if it loses power again and power returns a second time.
+    #[test]
+    fn starting_unpowered_then_powering_once_runs_normally() {
+        const GPIO: u32 = 0x6000_4000;
+        const IO_MUX: u32 = 0x6000_9000;
+        let stores = [(IO_MUX + 4, 1 << 12), (GPIO + 0x20, 1), (GPIO + 0x04, 1)];
+        // Include GPIO20 so power-on USB D+ pull-up is tested too.
+        let mut core = bridge(&[0, 20], &stores);
+        assert_eq!(core.drive()[1], Drive::PullUp);
+        assert!(core.strong_pull_up()[1]);
+
+        // Unpowered at t = 0: releases USB pull-up 1 ps later and runs nothing.
+        core.input(Time::ZERO, &[false, false, false]);
+        let release = core.run_until(Time::from_ps(10_000_000)).expect("release");
+        assert_eq!(release.at, Time::from_ps(1));
+        assert_eq!(core.drive(), &[Drive::Off, Drive::Off]);
+        assert_eq!(core.strong_pull_up(), &[false, false]);
+        assert_eq!(core.run_until(Time::from_ps(10_000_000)), None);
+        assert!(core.fault().is_none());
+
+        // First power-on at 10 us: restores power-on drive and executes stores cleanly.
+        let on_at = Time::from_ps(10_000_000);
+        core.input(on_at, &[false, false, true]);
+        let restore = core.run_until(Time::from_ps(20_000_000)).expect("restore");
+        assert_eq!(restore.at, Time::from_ps(on_at.as_ps() + 1));
+        assert_eq!(core.drive()[1], Drive::PullUp);
+        assert!(core.strong_pull_up()[1]);
+
+        let mut drove_high = false;
+        while let Some(stop) = core.run_until(Time::from_ps(20_000_000)) {
+            if core.drive()[0] == Drive::High {
+                drove_high = true;
+                assert!(stop.at > on_at);
+                break;
+            }
+        }
+        assert!(drove_high, "chip should run after first power-on");
+        assert!(core.fault().is_none());
     }
 }

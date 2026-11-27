@@ -1,6 +1,6 @@
 # Microcontrollers
 
-`orbe-mcu`, in `packages/mcu`, is the contract a microcontroller's chip crate implements so the engine can run it. It is unstable: the crate is 0.x, and any release may change the trait or a type. It depends on `orbe-model` alone, for `Time`, `Drive`, `Stop` and the records.
+`orbe-mcu`, in `packages/mcu`, is the contract a microcontroller's chip crate implements so the engine can run it. It is unstable: the crate is 0.x, and any release may change the trait or a type. It depends on `orbe-model` alone, for `Time`, `Drive`, `Stop`, the records and the air.
 
 A microcontroller is a chip crate in `packages/socs`, such as `orbe-microchip` for the ATmega328P and `orbe-espressif` for the ESP32-S3. The chip crate holds the chip and its `bridge` module, which implements `Mcu` beside the registers it reads. A chip crate never depends on `orbe-engine`. `scripts/check.sh fast` runs `scripts/core-deps.sh`, which fails when a crate in `packages/socs` depends on `packages/engine`, or when `orbe-mcu` depends on anything but `orbe-model`.
 
@@ -26,6 +26,10 @@ A chip is its state. `Mcu` needs `Clone`, and a copy is a checkpoint. The engine
 | `take_sent(sent)` | Hands over each record it sent at the stop `run_until` last returned with `record` set. |
 | `answered(at, miso)` | The bytes the targets answered on MISO to the one record of the stop at `at` that reads, `0xFF` where none answered. It comes before the chip runs past `at`. Does nothing by default. |
 | `in_flight(ahead, at)` | The records it started by `at` and has not ended, where the run ends at `at`. `ahead` is its copy run on from there. Empty by default. |
+| `tuned()` | The channel its radio listens on now, or `None` while its RF is off. `None` by default. |
+| `take_aired(aired)` | Hands over the frame it put on the air that ended at the stop `run_until` last returned with `record` set, if one did. A radio sends one frame at a time. Sends none by default. |
+| `hear(at, frame, signal)` | Another station's frame on its channel, which ended at `at`, heard at `signal`. Returns whether it acknowledges it. What it causes comes at least 1 ps later, at a stop. `Ack::None` by default. |
+| `acked(at, ack)` | Whether any station acknowledged the frame it put on the air that ended at `at`. It comes before the chip runs past `at`. Does nothing by default. |
 | `fault()` | The fault that ended its run, and its time. `None` by default. |
 | `notes(through)` | What it noted at or before `through`, each at its time. Empty by default. |
 | `read(output)` | When its firmware first read that output's pin as a digital input since the pin's drive last turned off, as far as it has run. A read while the drive is not off does not count. Once the drive is no longer off, it is still the read of the stretch that just ended. `None` by default, so the engine checks no input of a chip that keeps it. [diagnostics.md](diagnostics.md#chipfloating_input) says what the engine does with it. |
@@ -44,6 +48,10 @@ The engine compares `pulled_down()` wherever it compares the drives: a change at
 
 A chip says which of its outputs a record went out on, as an index in its drives. A `Sent` is a record and those outputs: an SPI transaction with the outputs of its CS, SCLK and data pins, or a pulse train or a duty with its one output. The engine names each output's net, numbers the chip's records in the order it sent them, and holds them until a commit stages them, as [engine.md](engine.md#records) says.
 
+## The air
+
+A chip with a radio is a station. It puts frames on the air with `take_aired`, listens on the channel `tuned()` names, hears other stations' frames with `hear`, and learns with `acked` whether its own were acknowledged. The types are `orbe_model::air`'s, as [model.md](model.md#the-air) says. Every chip keeps the defaults, which have no radio, and nothing calls them yet.
+
 ## Faults and notes
 
 A `Fault` ends the run. A `Note` is a warning, and the run goes on. Each is a code and its fields. The engine turns each into its diagnostic, field for field, and names each PC by the symbol the part's firmware gives it. `Pc` names its CPU by index, 0 for the first. On the ESP32-S3, 1 is the APP CPU, and the diagnostic's `app` field is set for it.
@@ -59,6 +67,7 @@ A `Fault` ends the run. A `Note` is a warning, and the run goes on. Each is a co
 | `FlashCommand` | `chip.flash_command` |
 | `UnsupportedClock` | `chip.unsupported_clock` |
 | `FaultRestart` | `chip.fault_restart` |
+| `PowerOnRestart` | `chip.power_on_restart` |
 | `UnmappedLoad` | `chip.unmapped_load` |
 
 | `Note` | Diagnostic |

@@ -2,9 +2,9 @@
 # Checks that every AVR Block of this repo's registry plays live in a browser. An id that
 # starts with devkitc- is not timed and is not held to the bar. It runs
 # packages/wasm/tests/speed.mjs, which plays each Block in orbe-wasm's worker.js in headless
-# Chromium, 5 times interleaved, and fails when a median misses its bar: 1.5x real time in a
-# dedicated Worker, and 1.0x on the page's main thread under Chrome's 4x CPU throttle.
-# docs/wasm.md#speed says how it measures.
+# Chromium, 5 times interleaved, and fails when a median misses its bar: 1.5x real time and a
+# 5 s first-picture budget in a dedicated Worker, and 1.25x on the page's main thread under
+# Chrome's 4x CPU throttle. docs/wasm.md#speed says how it measures.
 #
 # Usage: scripts/check-speed.sh [--profile BLOCK] [PKG_DIR REGISTRY_DIR]
 #

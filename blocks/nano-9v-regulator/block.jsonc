@@ -1,0 +1,11 @@
+// A Block: a small circuit that works. `orbe add nano-9v-regulator` installs it into a project.
+{
+  "format": 1,
+  "block": "nano-9v-regulator",
+  "version": "0.1.0",
+  "title": "9 V battery and LM7805 regulator on a Nano",
+  "summary": "A 9 V PP3 battery feeds an LM7805 5 V regulator, a green LED, and a Nano on VIN. Hold the button to connect a 25 Ω load and watch the 9 V rail sag by ~0.56 V across its 1.7 Ω internal resistance while the 5 V rails stay steady.",
+  "board": "nano-board",
+  "tags": ["battery", "9v", "regulator", "lm7805", "power", "sag", "nano"],
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND GPL-3.0-or-later WITH GCC-exception-3.1",
+}

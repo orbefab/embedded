@@ -1,0 +1,29 @@
+// A Nano drives a 16-pixel WS2812B NeoPixel ring through a 470 ohm resistor on DIN.
+// The Nano straddles columns 1 to 15 (D6 is j7, 5V is a12, GND is j12).
+// The ring sits beside the right end of the breadboard with its right-angle header facing
+// the board, so GND, 5V and DIN jumper cleanly from Z29, Y29 and f29 with no crossings.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "build/ring.ino.hex" },
+    "r1": { "type": "resistor-axial", "resistance": "470" },
+    "ring": { "type": "neopixel-ring-16" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "r1": { "on": { "a": "bb.f25" } }, // b lands in f29
+    "ring": { "at": [92, 0, 0] }, // header faces -X with clearance for jumper boots past the breadboard edge
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["bb.a12", "bb.W11", { "color": "#d12b2b" }], // 5V to the W + rail
+    ["bb.W28", "bb.Y28", { "color": "#d12b2b" }], // bridge + rail to the Y side
+    ["bb.j12", "bb.Z13", { "color": "#161616" }], // GND to the Z - rail
+    ["bb.j7", "bb.j25", { "color": "#2563eb" }], // D6 to r1.a along row j
+    ["bb.Z29", "ring.GND", { "color": "#161616" }],
+    ["bb.Y29", "ring.5V", { "color": "#d12b2b" }],
+    ["bb.g29", "ring.DIN", { "color": "#2563eb" }],
+  ],
+}

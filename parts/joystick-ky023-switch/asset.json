@@ -1,0 +1,44 @@
+{
+  "part": "joystick-ky023-switch",
+  "source": {
+    "script": "model.py",
+    "sha256": "70197cfc977994b9c79885261dbc0888547866041b97d5e7b985094992c06806",
+    "bytes": 2561
+  },
+  "files": {
+    "joystick-ky023-switch.glb": {
+      "sha256": "fae870b917a0a3bd17f1ada0bb7f1ac7d29098e9e78fef040a7c381404afbc23",
+      "bytes": 78896
+    },
+    "joystick-ky023-switch.anchors.json": {
+      "sha256": "ab13551e620298b0b29fa25d2eafe931f73cb0485b86cd3db83da473e670e47f",
+      "bytes": 299
+    }
+  },
+  "box": {
+    "min": [-12, -11.966445, 0],
+    "max": [12, 11.966445, 24.55]
+  },
+  "kept_nodes": ["plunger"],
+  "draw_calls": 3,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "cap",
+      "z_mm": 5
+    },
+    "names": {
+      "nodes": ["plunger"]
+    },
+    "merge": {
+      "primitives_in": 4,
+      "primitives_out": 3
+    }
+  }
+}

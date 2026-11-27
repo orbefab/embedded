@@ -1,0 +1,50 @@
+{
+  "part": "battery-9v",
+  "source": {
+    "script": "model.py",
+    "sha256": "5dff0b3bb0ccc67d7365fc6f4911a754e35b0b071a2f2664efdb2951b5a0bd1c",
+    "bytes": 4936
+  },
+  "files": {
+    "battery-9v.glb": {
+      "sha256": "b892b9e3b639b1f33de0a4486b9c95b423038d030ddc32aaabfb0dd4a029a77f",
+      "bytes": 169512
+    },
+    "battery-9v.anchors.json": {
+      "sha256": "0e752caecbecc8003c506aec2fe772a90b3d9f736525960f69a25d4f6aae1fed",
+      "bytes": 290
+    }
+  },
+  "box": {
+    "min": [-47.800001, -13.25, 0],
+    "max": [23.25, 13.25, 17.52]
+  },
+  "kept_nodes": [],
+  "draw_calls": 8,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "gold-band",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 10,
+      "primitives_out": 8
+    },
+    "composition": {
+      "children": 2,
+      "lowest_node": "gold-band",
+      "z_mm": 0,
+      "draw_calls": 12
+    }
+  }
+}

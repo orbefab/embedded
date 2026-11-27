@@ -22,8 +22,8 @@ orbe test
 ```
 
 1. Start from a Block only when one is close to the circuit and the user did not ask to build it from parts. `orbe add <block>` in an empty folder writes a scene, firmware and a test that already work. Check and test, then change it. Tell the user which Block you started from and what you changed.
-2. Otherwise find each part with `orbe search <words>`, read it with `orbe part <id>`, and download it with `orbe add <id>…`. A load such as an LED strip or a heater is `resistor-sqp15`. A separate supply is `barrel-jack-dc21` with its `voltage`.
-3. Write `scene.jsonc`. To seat a part on a breadboard, load `orbe skills get breadboards` first.
+2. Otherwise find each part with `orbe search <words>`, read it with `orbe part <id>`, and add it with `orbe add <id>…`. Loads: `resistor-sqp15`. Supplies: `barrel-jack-dc21`, `battery-9v`, `battery-aa-4x`.
+3. Write `scene.jsonc` with a `layout`. Load `orbe skills get breadboards` for layout and seating, and `orbe skills get boards` for board pinouts.
 4. Run `orbe check scene.jsonc` and `orbe lint scene.jsonc` after every edit. With no path, both read `scene.jsonc`. Do what each hint says. A `part_missing` hint is the `orbe add` to run. `orbe nets` lists each net and its pins, and marks `(floating)` on a net with no DC path to ground.
 5. Build the firmware and name the file in the scene. For a Nano or an Uno, load `orbe skills get arduino` first.
 6. `orbe open` starts a session at t = 0, paused. Drive it with `step`, `press`, `release`, `set`, `get`, `expect` and `snapshot`. After a firmware fix, rebuild and `orbe open` again. Save what works as `tests/<name>.test` and run `orbe test`.
@@ -101,7 +101,7 @@ PASS tests/button.test (scene.jsonc)
 1 passed, 0 failed
 ```
 
-The lint warning is `scene.unplaced`: there is no `layout`, so the 3D page puts the parts in a row. This example is not a 3D scene.
+The lint warning is `scene.unplaced` because this minimal example omits `layout`. Give real scenes a `layout`; load `orbe skills get breadboards`.
 
 A ref starts with `@`. `@led1` is a part, and `get` prints `lit`, `dim` or `off`, plus `i`, `v` and `p`. `@nano.D13` is a pin, and `get` prints `high` or `low` only when a chip pin is on that net, plus the voltage. `@led1.i` is one quantity. `@nano.mcu.PB5` names a part inside a part; on the Nano and the Uno the chip is `mcu`. Quote `<` and `>` in a shell, as `orbe expect @led1.i '>' 5mA`. Time moves only in `step`, or while `play` runs. A read shows the circuit just before anything at that time, so step after an input before you read its effect. `step --until` waits 10s unless you pass `--timeout`.
 
@@ -120,7 +120,7 @@ An error prints `error[<code>]: <message>` and usually a `hint:`. Do what the hi
 | `warning[rating.current]`, `warning[rating.power]` or `warning[rating.voltage]` | A part or a pin went past its rating. Load `orbe skills get ratings`. |
 | `warning[chip.floating_input]` | An input nothing drives. Add a pull-down, or use `INPUT_PULLUP` to GND. Load `orbe skills get arduino`. |
 | `error[scene.layout]` | A bad seating. Load `orbe skills get breadboards`. |
-| `warning[scene.unplaced]` | The 3D page has no place for a part. Fine unless someone is watching. Load `orbe skills get breadboards` to seat it. |
+| `warning[scene.unplaced]` | A part has no `layout`, or a leg sits in a hole it does not join. Place every part cleanly; load `orbe skills get breadboards`. |
 
 ## Load more when you need it
 
@@ -130,8 +130,9 @@ An error prints `error[<code>]: <message>` and usually a `hint:`. Do what the hi
 | --- | --- |
 | `orbe skills get arduino` | Building Nano or Uno firmware, or a chip warning |
 | `orbe skills get esp32` | Building ESP32-S3 firmware for an `esp32s3-devkitc-1` |
+| `orbe skills get boards` | Board pinouts, pin functions, supplies, and breadboard holes |
+| `orbe skills get breadboards` | Scene layout, seating, holes, or breadboard errors |
 | `orbe skills get scenes` | A scene key, a part name, a param or `world` |
-| `orbe skills get breadboards` | Seating a part, a hole, or a breadboard error |
 | `orbe skills get parts` | The copy in `parts/`, a version, a Block, `buy`, an addressable LED, or a 5 V board wired to a 3.3 V module |
 | `orbe skills get sessions-and-time` | When a step or a set lands, a session name, bounce, or the 2-hour stop |
 | `orbe skills get tests` | A test file beyond the example above, a screen, or a buzzer's pitch |

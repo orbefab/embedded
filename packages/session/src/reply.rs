@@ -977,7 +977,13 @@ fn rating_message(code: &str, message: &str, json: &Value) -> Option<String> {
         .filter(|over| *over > 0)
         .map(|over| format!(" for {}", Duration::from_ps(over)))
         .unwrap_or_default();
-    let rating = format!("over its {} rating{duration}", value(limit));
+    let characterized = data["characterized"].as_bool().unwrap_or(false);
+    let bound = if characterized {
+        format!("beyond the {} load its sheet characterizes", value(limit))
+    } else {
+        format!("over its {} rating", value(limit))
+    };
+    let rating = format!("{bound}{duration}");
     let head = [" is ", " averages ", " carries ", " peaks at "]
         .iter()
         .filter_map(|verb| message.find(verb))
@@ -985,9 +991,8 @@ fn rating_message(code: &str, message: &str, json: &Value) -> Option<String> {
         .map(|end| &message[..end])?;
     if let Some(held) = data["held_ps"].as_u64() {
         return Some(format!(
-            "{head} is {} now, over its {} rating; it warns if held about {}",
+            "{head} is {} now, {bound}; it warns if held about {}",
             value(sample),
-            value(limit),
             Duration::from_ps(significant_ps(held))
         ));
     }

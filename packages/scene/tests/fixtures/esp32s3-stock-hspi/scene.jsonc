@@ -1,0 +1,13 @@
+// SPI (FSPI / SPI2) on GPIO10-13 and SPIClass(HSPI) (SPI3) on GPIO4-7.
+// The app is the stock sketch packages/engine/tests/firmware/esp32s3/arduino/stock/hspi.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    }
+  },
+  "ground": "board.GND"
+}

@@ -644,10 +644,10 @@ fn an_efuse_program_command_ends_the_run() {
     assert_eq!(found[0]["t_ps"], 125_000);
 }
 
-/// The flash has no erase, so a sector erase through SPI1 ends the run as a write, with its
-/// command byte.
+/// A bare-metal chip has no flash, so a sector erase through SPI1 reaches past the flash's end
+/// and ends the run with its command byte.
 #[test]
-fn a_flash_erase_ends_the_run() {
+fn a_flash_erase_with_no_flash_ends_the_run() {
     // l32r a2 <- SPI_MEM_CMD_REG of SPI1; l32r a3 <- SPI_MEM_FLASH_SE; s32i a3, a2, 0; then idle.
     let mut code = vec![0x21, 0xfe, 0xff, 0x31, 0xfe, 0xff, 0x32, 0x62, 0x00];
     code.extend(IDLE);
@@ -661,16 +661,14 @@ fn a_flash_erase_ends_the_run() {
         serde_json::json!({
             "command": 0x20,
             "pc": IRAM + 8 + 6,
-            "reason": "write",
+            "reason": "past_end",
             "symbol": "main+0x6"
         })
     );
     let message = found[0]["message"].as_str().unwrap();
     assert!(
-        message.contains("wrote the flash with command 0x20 at ")
-            && message.contains(
-                "which the model does not simulate; Wi-Fi, Bluetooth and saved settings (Preferences, EEPROM, NVS) write the flash"
-            ),
+        message.contains("sent the flash command 0x20 at ")
+            && message.contains("which reaches past the flash's end"),
         "{message}"
     );
 }
@@ -866,47 +864,25 @@ fn a_pull_down_on_a_part_that_names_none_ends_the_run() {
     );
 }
 
-/// Enabling the temperature sensor clock in `SENS_SAR_PERI_CLK_GATE_CONF_REG` or reading
-/// `SENS_SAR_TSENS_CTRL_REG` ends the run at that first access, naming the temperature sensor
-/// with no prior warning.
+/// Reading an unmodeled SENS touch register ends the run at that first access, naming the touch
+/// sensor with no prior warning.
 #[test]
-fn a_temperature_sensor_access_ends_the_run_naming_the_temperature_sensor() {
-    let (literals, code) = stores(&[(0x6000_8904, 1 << 29)]);
-    let doc = run_program(&literals, &code, 10_000_000_000);
+fn a_touch_sensor_access_ends_the_run_naming_the_touch_sensor() {
+    // l32r a2 <- SENS_SAR_TOUCH_CONF_REG; l32i a3, a2, 0; then idle.
+    let mut read_code = vec![0x21, 0xff, 0xff, 0x32, 0x22, 0x00];
+    read_code.extend(IDLE);
+    let doc = run_program(&[0x6000_885c], &read_code, 10_000_000_000);
     assert_eq!(doc["status"], "failed", "{doc}");
     let found = diagnostics(&doc);
     assert_eq!(found.len(), 1, "{found:?}");
     assert_eq!(found[0]["code"], "chip.unsupported_setting");
     assert_eq!(found[0]["severity"], "error");
-    assert_eq!(
-        found[0]["data"],
-        serde_json::json!({
-            "peripheral": "SENS",
-            "pc": IRAM + 8 + 6,
-            "setting": "unsimulated",
-            "symbol": "main+0x6",
-        })
-    );
-    let message = found[0]["message"].as_str().unwrap();
-    assert!(
-        message.contains("used SENS, the temperature sensor that temperatureRead uses, at ")
-            && message.contains("which the model does not simulate"),
-        "{message}"
-    );
-
-    // l32r a2 <- SENS_SAR_TSENS_CTRL_REG; l32i a3, a2, 0; then idle.
-    let mut read_code = vec![0x21, 0xff, 0xff, 0x32, 0x22, 0x00];
-    read_code.extend(IDLE);
-    let doc = run_program(&[0x6000_8850], &read_code, 10_000_000_000);
-    assert_eq!(doc["status"], "failed", "{doc}");
-    let found = diagnostics(&doc);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert_eq!(found[0]["code"], "chip.unsupported_setting");
     assert_eq!(found[0]["data"]["peripheral"], "SENS");
     assert_eq!(found[0]["data"]["setting"], "unsimulated");
     let message = found[0]["message"].as_str().unwrap();
     assert!(
-        message.contains("used SENS, the temperature sensor that temperatureRead uses, at "),
+        message.contains("used SENS, the touch sensor that touchRead uses, at ")
+            && message.contains("which the model does not simulate"),
         "{message}"
     );
 }
@@ -1412,4 +1388,185 @@ fn gpio20_shows_usb_dp_pullup_until_firmware_takes_the_pin() {
     assert_eq!(init, '1');
     assert_eq!(edges.len(), 1, "{edges:?}");
     assert_eq!(edges[0].1, '0', "clearing DP_PULLUP releases pull-up");
+}
+
+/// Dropping `esp32s3` VCC to or below 2.44 V stops execution and releases GPIO21; returning VCC to
+/// 3.0 V or above stops the run with `chip.power_on_restart`. Starting at 0 V and powering on once
+/// runs cleanly without error.
+#[test]
+fn supply_drop_stops_s3_and_power_return_fails_with_power_on_restart() {
+    let dir = Scratch::new();
+    // Case 1: brown-out to 2.0 V (below 2.44 V, nonzero rail so Drive::Off is distinct from
+    // Drive::High) at 150 ms, restored to 3.3 V at 350 ms.
+    let mut brownout = example();
+    brownout["parts"][0]["voltage"] = serde_json::json!({
+        "kind": "steps",
+        "initial": { "value": 3.3, "unit": "V" },
+        "events": [
+            { "t_ps": 150_000_000_000u64, "level": { "value": 2.0, "unit": "V" } },
+            { "t_ps": 350_000_000_000u64, "level": { "value": 3.3, "unit": "V" } }
+        ]
+    });
+    brownout["analysis"]["transient"]["stop_ps"] = serde_json::json!(400_000_000_000u64);
+    let (code, doc) = run(&dir, &brownout, &[&example_blobs()]);
+    assert_eq!((code, doc["status"].as_str()), (1, Some("failed")), "{doc}");
+    let found = diagnostics(&doc);
+    let err = found
+        .iter()
+        .find(|d| d["code"] == "chip.power_on_restart")
+        .unwrap_or_else(|| panic!("expected chip.power_on_restart in {found:?}"));
+    assert_eq!(err["severity"], "error");
+    assert_eq!(err["refs"], serde_json::json!(["#u1"]));
+    assert_eq!(err["t_ps"], serde_json::json!(350_000_000_001u64));
+    assert_eq!(err["data"], serde_json::json!({}));
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("power-on restart of the ESP32-S3 is not simulated yet"),
+        "{err}"
+    );
+    // GPIO21 rose once at 100 ms, then released to Drive::Off at 150 ms (dropping below VIL of
+    // the 2.0 V rail) and never toggled again at 200 ms or 300 ms.
+    let vcd = fs::read_to_string(dir.join("out/traces/logic.vcd")).unwrap();
+    let (_, edges) = vcd_signal(&vcd, "GPIO21");
+    assert_eq!(
+        edges.len(),
+        2,
+        "expected rise at 100 ms and fall at brown-out only: {edges:?}"
+    );
+    assert_eq!(edges[0].1, '1');
+    assert_eq!(edges[1].1, '0');
+    assert!(edges[1].0 <= 150_000_000_002, "{edges:?}");
+
+    // Case 2: complete drop to 0 V at 150 ms, restored to 3.3 V at 350 ms. Check analog voltages
+    // via Session so we confirm GPIO21 drops to 0 V while unpowered and power return stops the run.
+    let mut drop_zero = example();
+    drop_zero["parts"][0]["voltage"] = serde_json::json!({
+        "kind": "steps",
+        "initial": { "value": 3.3, "unit": "V" },
+        "events": [
+            { "t_ps": 150_000_000_000u64, "level": { "value": 0.0, "unit": "V" } },
+            { "t_ps": 350_000_000_000u64, "level": { "value": 3.3, "unit": "V" } }
+        ]
+    });
+    let json = serde_json::to_vec(&drop_zero).unwrap();
+    let sha = drop_zero["parts"][1]["firmware"]["elf"]["sha256"]
+        .as_str()
+        .unwrap();
+    let mut blobs = Blobs::new();
+    blobs.add(fs::read(example_blobs().join(sha)).unwrap().into());
+    let mut session = Session::open_json(&json, &blobs).unwrap();
+    let gpio21: orbe_engine::name::Ref = "#net.gpio21".parse().unwrap();
+    session.advance_to(Time::from_ps(120_000_000_000));
+    assert!(
+        session.diagnostics().is_empty(),
+        "{:?}",
+        session.diagnostics()
+    );
+    let v_lit = session.probe().get(&gpio21).unwrap().get();
+    assert!(v_lit > 2.5, "GPIO21 should drive high at 120 ms: {v_lit} V");
+    session.advance_to(Time::from_ps(160_000_000_000));
+    assert!(
+        session.diagnostics().is_empty(),
+        "{:?}",
+        session.diagnostics()
+    );
+    let v_off = session.probe().get(&gpio21).unwrap().get();
+    assert!(
+        v_off.abs() < 1e-3,
+        "GPIO21 should sit at 0 V at 160 ms: {v_off} V"
+    );
+    session.advance_to(Time::from_ps(300_000_000_000));
+    assert!(
+        session.diagnostics().is_empty(),
+        "{:?}",
+        session.diagnostics()
+    );
+    let v_still_off = session.probe().get(&gpio21).unwrap().get();
+    assert!(
+        v_still_off.abs() < 1e-3,
+        "GPIO21 should stay at 0 V at 300 ms: {v_still_off} V"
+    );
+    assert_eq!(
+        session.advance_to(Time::from_ps(400_000_000_000)),
+        orbe_engine::Status::Faulted
+    );
+    let err = session
+        .fault()
+        .expect("expected chip.power_on_restart fault");
+    assert_eq!(err.code(), "chip.power_on_restart", "{err:?}");
+
+    // Case 3: starting at 0 V and powering on once at 50 ms runs cleanly with no error.
+    let mut delayed = example();
+    delayed["parts"][0]["voltage"] = serde_json::json!({
+        "kind": "steps",
+        "initial": { "value": 0.0, "unit": "V" },
+        "events": [
+            { "t_ps": 50_000_000_000u64, "level": { "value": 3.3, "unit": "V" } }
+        ]
+    });
+    delayed["analysis"]["transient"]["stop_ps"] = serde_json::json!(200_000_000_000u64);
+    let (code, doc) = run(&dir, &delayed, &[&example_blobs()]);
+    assert_eq!((code, doc["status"].as_str()), (0, Some("ok")), "{doc}");
+    let vcd = fs::read_to_string(dir.join("out/traces/logic.vcd")).unwrap();
+    let (_, edges) = vcd_signal(&vcd, "GPIO21");
+    assert_eq!(edges.len(), 1, "one rising edge at 50 + 100 ms: {edges:?}");
+    assert_eq!(edges[0].1, '1');
+    assert!(
+        edges[0].0 >= 150_000_000_000 && edges[0].0 < 151_000_000_000,
+        "blink should start 100 ms after power-on at 50 ms: {edges:?}"
+    );
+}
+
+/// Sitting at the 2.44 V brown-out level or rising partway (below the 3.0 V Table 5-2 operating
+/// minimum) keeps the ESP32-S3 stopped with no restart error; reaching 3.0 V raises
+/// `chip.power_on_restart`.
+#[test]
+fn supply_hysteresis_holds_reset_at_brownout_until_operating_range() {
+    let dir = Scratch::new();
+
+    // Drop to exact 2.44 V at 150 ms, step to 2.9 V at 250 ms (still below 3.0 V): stays stopped
+    // and silent through 350 ms with no power_on_restart error.
+    let mut held = example();
+    held["parts"][0]["voltage"] = serde_json::json!({
+        "kind": "steps",
+        "initial": { "value": 3.3, "unit": "V" },
+        "events": [
+            { "t_ps": 150_000_000_000u64, "level": { "value": 2.44, "unit": "V" } },
+            { "t_ps": 250_000_000_000u64, "level": { "value": 2.9, "unit": "V" } }
+        ]
+    });
+    held["analysis"]["transient"]["stop_ps"] = serde_json::json!(350_000_000_000u64);
+    let (code, doc) = run(&dir, &held, &[&example_blobs()]);
+    assert_eq!((code, doc["status"].as_str()), (0, Some("ok")), "{doc}");
+    let vcd = fs::read_to_string(dir.join("out/traces/logic.vcd")).unwrap();
+    let (_, edges) = vcd_signal(&vcd, "GPIO21");
+    assert_eq!(
+        edges.len(),
+        2,
+        "expected rise at 100 ms and fall at 150 ms brown-out only: {edges:?}"
+    );
+    assert_eq!(edges[0].1, '1');
+    assert_eq!(edges[1].1, '0');
+    assert!(edges[1].0 <= 150_000_000_002, "{edges:?}");
+
+    // Continuing up to 3.0 V at 350 ms faults with chip.power_on_restart at 350 ms + 1 ps.
+    let mut recovered = held;
+    recovered["parts"][0]["voltage"]["events"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "t_ps": 350_000_000_000u64,
+            "level": { "value": 3.0, "unit": "V" }
+        }));
+    recovered["analysis"]["transient"]["stop_ps"] = serde_json::json!(400_000_000_000u64);
+    let (code, doc) = run(&dir, &recovered, &[&example_blobs()]);
+    assert_eq!((code, doc["status"].as_str()), (1, Some("failed")), "{doc}");
+    let found = diagnostics(&doc);
+    let err = found
+        .iter()
+        .find(|d| d["code"] == "chip.power_on_restart")
+        .unwrap_or_else(|| panic!("expected chip.power_on_restart in {found:?}"));
+    assert_eq!(err["t_ps"], serde_json::json!(350_000_000_001u64));
 }

@@ -135,9 +135,10 @@ A curve reads the quantity's value `w`. `x`, `x0` and `x1` are in the quantity's
 | --- | --- | --- | --- |
 | `power` | `y * (w / x)^exponent`, at most `max` | `x`, `y`, `exponent` in `1`, `max` | a light-dependent resistor, whose dark resistance is `max` |
 | `beta` | `y * exp(beta * (1 / (w + 273.15) - 1 / (x + 273.15)))` | `x`, `y`, `beta` in `K` | an NTC thermistor's B equation, on `temperature` only |
+| `steinhart_hart` | `y * exp(a + b / T + c / T^2 + d / T^3)` with `T = w + 273.15` | `y`, `a` in `1`, `b` in `K`, `c` in `K^2`, `d` in `K^3` | an NTC thermistor's extended Steinhart-Hart curve, on `temperature` only |
 | `linear` | the line through `(x0, y0)` and `(x1, y1)` | `x0`, `y0`, `x1`, `y1` | a sensor with a linear output, such as an LM35's 10 mV per degC |
 
-Each curve is monotonic in `w` over the range of a quantity it may read, so its values over that range lie between its values at the range's two ends. A `beta` or `linear` curve is monotonic for every `w` it may read. A `power` curve is monotonic only where `w / x` is not negative, so it reads only a quantity whose range does not go below 0, `light`, `humidity` or `pressure`. At `w` 0 a negative exponent makes `y * (w / x)^exponent` infinite, and the curve is `max` there, the dark resistance of a light-dependent resistor. Any other value above `max` is `max` too. A value that is not a number is never capped. Parse checks the field's own rule at both ends, so every value a schedule or a session can set keeps it. An end that breaks it is `netlist.value` on field `<field>.curve at <end> <unit>`, such as `resistance.curve at 0.0 lx`, with the field's rule, or rule `finite` when the curve is not finite there, such as a `power` curve with `y` 0 and a negative exponent at 0 lx. A `power` curve on `temperature` is `netlist.world` with rule `non_negative` on field `<field>.curve.kind`. A quantity the netlist does not declare is `netlist.world` with rule `undeclared` on field `<field>.quantity`, and a name the table lacks is rule `unknown` there. A `beta` curve on another quantity is `netlist.world` with rule `temperature` on field `<field>.curve.kind`. A `power` curve's `x` at or below 0 is `netlist.value` with rule `positive`. A `linear` curve whose `x1` equals its `x0` is `netlist.value` with rule `distinct`. A unit that is not the one the table above names is `netlist.unit` on field `<field>.curve.<name>`. An unknown `kind`, a missing field and an unknown field are `netlist.syntax`.
+Each curve is monotonic in `w` over the range of a quantity it may read, except `steinhart_hart`, which may have interior extrema. A `beta` or `linear` curve is monotonic for every `w` it may read. A `power` curve is monotonic only where `w / x` is not negative, so it reads only a quantity whose range does not go below 0, `light`, `humidity` or `pressure`. At `w` 0 a negative exponent makes `y * (w / x)^exponent` infinite, and the curve is `max` there, the dark resistance of a light-dependent resistor. Any other value above `max` is `max` too. A value that is not a number is never capped. Parse checks the field's own rule at both ends of the quantity's range (and at any interior stationary point of a `steinhart_hart` curve), so every value a schedule or a session can set keeps it. An end that breaks it is `netlist.value` on field `<field>.curve at <end> <unit>`, such as `resistance.curve at 0.0 lx`, with the field's rule, or rule `finite` when the curve is not finite there, such as a `power` curve with `y` 0 and a negative exponent at 0 lx. A `power` curve on `temperature` is `netlist.world` with rule `non_negative` on field `<field>.curve.kind`. A quantity the netlist does not declare is `netlist.world` with rule `undeclared` on field `<field>.quantity`, and a name the table lacks is rule `unknown` there. A `beta` or `steinhart_hart` curve on another quantity is `netlist.world` with rule `temperature` on field `<field>.curve.kind`. A `power` curve's `x` at or below 0 is `netlist.value` with rule `positive`. A `linear` curve whose `x1` equals its `x0` is `netlist.value` with rule `distinct`. A unit that is not the one the table above names is `netlist.unit` on field `<field>.curve.<name>`. An unknown `kind`, a missing field and an unknown field are `netlist.syntax`.
 
 ## Names
 
@@ -169,7 +170,7 @@ A `steps` position follows the `steps` schedule rules on field `position.events`
 
 Each leg must be positive, and its reciprocal must be finite, the same check as `resistance`. A leg that breaks it is `netlist.value` on field `resistance`, and `value` is that leg.
 
-A potentiometer has no `ratings` field. It has no `i`, `v`, or `p`. Both legs are DC paths.
+`ratings` is optional. When present it holds `voltage`, a positive value object in `V` or `null`, which bounds `|V(b) - V(a)|` on every sample and warns `rating.voltage` past it. It has no `i`, `v`, or `p`. Both legs are DC paths.
 
 ### Voltage source
 
@@ -410,7 +411,7 @@ Each value must be greater than 0, and its reciprocal must be finite. Those are 
 
 The device is at 25 C, 298.15 K. `k` and `q` are the exact SI values. There is no temperature field and no temperature scaling. A value fitted at another temperature does not describe the part here.
 
-`ratings` holds `current` and `power`.
+`ratings` holds `current` and `power`, plus an optional `reverse_voltage` in `V`: how far `V(anode) - V(cathode)` may sit below 0 before `#<part>.v` warns [`rating.voltage`](diagnostics.md#ratingvoltage). Omitting `reverse_voltage` or setting it to `null` leaves reverse voltage unrated.
 
 `packages/engine/tests/circuits/led-5v` and `packages/engine/tests/circuits/led-9v` use a Kingbright WP7113ID, a red 5 mm LED. Its `Is`, `N`, and `Rs` solve the equation exactly through three points read off the datasheet's forward current figure at 25 C: (1.70 V, 2 mA), (1.90 V, 10 mA), and (2.00 V, 20 mA). The fit gives `Is` = 6.711e-10 A, `N` = 4.427, and `Rs` = 2.115 ohm. Each value's `at` names the figure, the points, and the temperature, so the fit can be redone from the citation.
 
@@ -1477,12 +1478,14 @@ A blob the document names that no folder has, a name whose every file hashes to 
 
 ## Ratings
 
-A rating bounds the stress on a part. Every key of a kind's `ratings` object is required, except a resistor's `voltage`, an op-amp's keys, and `supply_min` (`io_supply_min` on `bmp280`), which may be left out. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `esp32s3`, `ssd1306`, `hd44780_i2c`, `ws2812`, `op_amp`, `dht22`, `sg90`, `ne555`, `cst816`, `st77916`, `voltage_source` and `capacitor`, where it is optional.
+A rating bounds the stress on a part. Every key of a kind's `ratings` object is required, except a resistor's `voltage`, a diode or LED's `reverse_voltage`, an op-amp's keys, and `supply_min` (`io_supply_min` on `bmp280`), which may be left out. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `esp32s3`, `ssd1306`, `hd44780_i2c`, `ws2812`, `op_amp`, `dht22`, `sg90`, `ne555`, `cst816`, `st77916`, `voltage_source`, `capacitor` and `potentiometer`, where it is optional.
 
 | Kind | Keys | Checked quantity |
 | --- | --- | --- |
-| `resistor` | `power`, optional `voltage` | `#<part>.p`, and the peak of a sounding drive on `#<part>.v` |
-| `diode`, `led`, `zener` | `current`, `power` | `#<part>.i`, `#<part>.p` |
+| `resistor` | `power`, optional `voltage` | `#<part>.p`, and `#<part>.v` (a max voltage limit or the peak of a sounding drive) |
+| `potentiometer` | `voltage`, optional | `#<part>.v` (`V(b) - V(a)` across the track) |
+| `diode`, `led` | `current`, `power`, optional `reverse_voltage` | `#<part>.i`, `#<part>.p`, and `#<part>.v` (reverse floor) |
+| `zener` | `current`, `power` | `#<part>.i`, `#<part>.p` |
 | `linear_regulator` | `current`, `power`, optional `input_voltage` | `#<part>.iout`, `#<part>.p`, and `in` over `gnd` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
 | `nmos`, `pmos` | `current`, `power` | `#<part>.id`, `#<part>.p` |
@@ -1498,9 +1501,9 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `hc595` | `pin_current`, `supply_current`, `input_margin`, `output_margin`, optional `supply_min` | each of `QA`–`QH` and `QHp`, the current through `VCC` and `GND`, and each input and output voltage over `GND`, each named `#<part>.pin.<pin>` |
 | `dht22`, `sg90`, `cst816`, `st77916` | optional `supply_min` | `VCC` over `GND`, named `#<part>.pin.VCC` |
 | `ne555` | optional `supply_min` | `vcc` over `gnd`, named `#<part>.pin.vcc` |
-| `current_source`, `inductor`, `relay`, `switch`, `potentiometer`, `spi_replay`, `pulses_replay` | none | |
+| `current_source`, `inductor`, `relay`, `switch`, `spi_replay`, `pulses_replay` | none | |
 
-A `current`, `power`, `pin_current` or `supply_current` value object may also carry `basis`, the datasheet's basis for the figure. `"peak"` bounds each sample. `{ "sustained": { "average": "rms" | "mean", "tau": { "value": <s>, "unit": "s" } } }` bounds a first-order filter of the samples with time constant `tau`: of their squares for `rms`, read back as the root, and of their magnitudes for `mean`. A sustained basis may also carry `peak`, the sheet's peak or surge limit in the rating's unit, such as a diode's IFSM beside its average forward current. Each sample is checked against it as a peak rating. A `tau` or `peak` of 0 or below is `netlist.value` with rule `positive` on `ratings.<key>.basis.sustained.tau` or `.peak`, and a wrong unit is `netlist.unit` on that field. A rating with no `basis` takes its kind's: a `power` is a 10.2 ms `mean`, a `voltage_source`'s `current` and an `atmega328p`'s or an `hc595`'s `pin_current` and `supply_current` are a 10.2 ms `rms`, and every other `current` is a `peak`.
+A `current`, `power`, `pin_current` or `supply_current` value object may also carry `basis`, the datasheet's basis for the figure, and `"characterized": true` when the figure is the largest load its datasheet characterizes rather than an absolute maximum. `"peak"` bounds each sample. `{ "sustained": { "average": "rms" | "mean", "tau": { "value": <s>, "unit": "s" } } }` bounds a first-order filter of the samples with time constant `tau`: of their squares for `rms`, read back as the root, and of their magnitudes for `mean`. A sustained basis may also carry `peak`, the sheet's peak or surge limit in the rating's unit, such as a diode's IFSM beside its average forward current. Each sample is checked against it as a peak rating. A `tau` or `peak` of 0 or below is `netlist.value` with rule `positive` on `ratings.<key>.basis.sustained.tau` or `.peak`, and a wrong unit is `netlist.unit` on that field. A rating with no `basis` takes its kind's: a `power` is a 10.2 ms `mean`, a `voltage_source`'s `current` and an `atmega328p`'s or an `hc595`'s `pin_current` and `supply_current` are a 10.2 ms `rms`, and every other `current` is a `peak`.
 
 ```json
 "current": { "value": 0.5, "unit": "A", "basis": { "sustained": { "average": "mean", "tau": { "value": 0.055, "unit": "s" }, "peak": { "value": 5.5, "unit": "A" } } } }
@@ -1512,7 +1515,7 @@ A `current`, `power`, `pin_current` or `supply_current` value object may also ca
 "ratings": { "power": { "value": 0.25, "unit": "W" } }
 ```
 
-A resistor may also carry `voltage`, with `min` and `max` in `V`. Both are value objects and both are required when `voltage` is present. `min` must be below `max`. A missing `voltage` leaves the drive unrated. The window is the peak of a drive that leaves a level under 0.2 V and comes back, which is the peak a square wave puts across the part. A peak outside the window warns `rating.voltage`. A part that stays quiet, including DC, does not. The part still conducts. Compared like every other rating, at 3 significant digits.
+A resistor may also carry `voltage`, either as a single positive value object in `V` or as `{ "min", "max" }` in `V`. A single value bounds `|#<part>.v|` continuously in either polarity (floor `-limit`, ceiling `+limit`) on every accepted step; past it warns `rating.voltage`. With `min` and `max`, both are value objects and both are required, with `min` below `max`. A missing `voltage` leaves the voltage unrated. The `min`/`max` window is the peak of a drive that leaves a level under 0.2 V and comes back, which is the peak a square wave puts across the part. A peak outside the window warns `rating.voltage`. A part that stays quiet, including DC, does not. The part still conducts. Compared like every other rating, at 3 significant digits.
 
 ```json
 "voltage": { "min": { "value": 3.0, "unit": "V" }, "max": { "value": 5.0, "unit": "V" } }

@@ -288,6 +288,8 @@ const HIDDEN: &[&str] = &[
     "ams1117-sot223",
     "atmega16u2-qfn32",
     "atmega328p-tqfp32",
+    "battery-9v-cell",
+    "battery-aa-4x-cell",
     "capacitor-0603",
     "capacitor-electrolytic-smd",
     "capacitor-tantalum-3216",
@@ -301,6 +303,8 @@ const HIDDEN: &[&str] = &[
     "esp32s3-qfn56",
     "esp32s3-wroom-1-n16r8",
     "inductor-0805",
+    "joystick-ky023-pot",
+    "joystick-ky023-switch",
     "led-0603",
     "led-0805",
     "lesd5d5-sod523",
@@ -321,6 +325,7 @@ const HIDDEN: &[&str] = &[
     "tactile-switch-ts42",
     "usb-micro-b",
     "usb-mini-b",
+    "ws2812b-5050",
 ];
 
 fn unlisted_in_manifest() -> BTreeSet<String> {

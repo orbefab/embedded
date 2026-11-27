@@ -26,11 +26,13 @@ const SCENE_KEYS: &[&str] = &[
 /// Format 5 is format 4 plus a rating's `basis`, a capacitor's `series_resistance` as
 /// `tan_delta` at a `frequency`, a regulator's `ratings.input_voltage`, an op-amp's `ratings`, a
 /// BJT's `forward_knee_current`, and a `ws2812`'s `draw`. Format 6 is format 5 plus a
-/// Format 6 is format 5 plus a resistor's `ratings.voltage`, the operating window of a sounding
-/// drive, a reading `"of": "angle"` on an `sg90`, a reading `"of": "screen"` and `view.screen`,
-/// and pin voltage `ratings` on `esp32s3`, `ssd1306`, `hd44780_i2c` and `ws2812`. Format 7 is
-/// format 6 plus `ratings.supply_min` (and `bmp280`'s `ratings.io_supply_min`) and `ratings` on
-/// `dht22`, `sg90`, `ne555`, `cst816` and `st77916`.
+/// resistor's `ratings.voltage`, the operating window of a sounding drive, a reading
+/// `"of": "angle"` on an `sg90`, a reading `"of": "screen"` and `view.screen`, and pin voltage
+/// `ratings` on `esp32s3`, `ssd1306`, `hd44780_i2c` and `ws2812`. Format 7 is format 6 plus
+/// `steinhart_hart` world curves, a resistor's single-value maximum `ratings.voltage`,
+/// `characterized` on a rating, `ratings.reverse_voltage` on `diode` and `led`, `ratings` on
+/// `potentiometer`, `dht22`, `sg90`, `ne555`, `cst816` and `st77916`, `ratings.supply_min` (and
+/// `bmp280`'s `ratings.io_supply_min`), and a composite part's `accepted_warnings`.
 pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5, 6, 7];
 /// Scene `format` values this binary reads.
 pub const SCENE_FORMATS: &[u32] = &[1];
@@ -48,13 +50,16 @@ const BASIS_FORMAT: u32 = 5;
 /// The oldest part format whose resistor may rate an operating `voltage`. An older orbe
 /// refuses that key, so the part says format 6 and that orbe asks for a newer one.
 const VOLTAGE_FORMAT: u32 = 6;
+/// The oldest part format that carries `steinhart_hart` world curves, single-value resistor
+/// maximum `ratings.voltage`, `characterized` ratings, `diode`/`led` `ratings.reverse_voltage`,
+/// `ratings` on `potentiometer`, `dht22`, `sg90`, `ne555`, `cst816` and `st77916`,
+/// `ratings.supply_min` (and `bmp280`'s `io_supply_min`), and `accepted_warnings` (refused by
+/// orbe 0.3.1).
+const RATINGS_FORMAT: u32 = 7;
 /// The oldest part format whose readings take `"of": "angle"`.
 const ANGLE_FORMAT: u32 = 6;
 /// The oldest part format whose readings take `"of": "screen"` and whose view takes `screen`.
 const SCREEN_FORMAT: u32 = 6;
-/// The oldest part format that carries `ratings.supply_min` (and `bmp280`'s `io_supply_min`),
-/// and `ratings` on `dht22`, `sg90`, `ne555`, `cst816` and `st77916`.
-const SUPPLY_MIN_FORMAT: u32 = 7;
 /// The engine kinds that show a screen, which a reading `"of": "screen"` reads.
 const SCREEN_KINDS: [&str; 2] = ["ssd1306", "hd44780_i2c"];
 /// The engine kinds whose glass carries readable character lines and a backlight.
@@ -573,14 +578,14 @@ pub(crate) fn decode_part(
             }
             "not_simulated" => part.not_simulated = decode_not_simulated(value, out),
             "accepted_warnings" => {
-                if format < SUPPLY_MIN_FORMAT {
+                if format < RATINGS_FORMAT {
                     out.push(
                         Code::Syntax,
                         prop.key_span,
                         format!(
-                            "`accepted_warnings` needs part format {SUPPLY_MIN_FORMAT}; this file is format {format}"
+                            "`accepted_warnings` needs part format {RATINGS_FORMAT}; this file is format {format}"
                         ),
-                        format!("set \"format\": {SUPPLY_MIN_FORMAT} in this part file"),
+                        format!("set \"format\": {RATINGS_FORMAT} in this part file"),
                     );
                 }
                 part.accepted_warnings = decode_accepted_warnings(value, out);
@@ -2908,7 +2913,11 @@ fn decode_body(
                 .and_then(Node::props)
                 .unwrap_or_default()
                 .iter()
-                .find(|prop| prop.key == "voltage" && !prop.value.is_null())
+                .find(|prop| {
+                    prop.key == "voltage"
+                        && !prop.value.is_null()
+                        && prop.value.get("value").is_none()
+                })
         {
             gate(
                 out,
@@ -2929,22 +2938,68 @@ fn decode_body(
             gate(out, kind, "ratings", prop.key_span, VOLTAGE_FORMAT, format);
         }
     }
-    if format < SUPPLY_MIN_FORMAT {
-        if matches!(kind, "dht22" | "sg90" | "ne555" | "cst816" | "st77916")
+    if format < RATINGS_FORMAT {
+        if kind == "resistor"
             && let Some(prop) = node
-                .props()
+                .get("ratings")
+                .and_then(Node::props)
                 .unwrap_or_default()
                 .iter()
-                .find(|prop| prop.key == "ratings")
+                .find(|prop| prop.key == "voltage" && prop.value.get("value").is_some())
         {
             gate(
                 out,
                 kind,
-                "ratings",
+                "ratings.voltage",
                 prop.key_span,
-                SUPPLY_MIN_FORMAT,
+                RATINGS_FORMAT,
                 format,
             );
+        }
+        if kind == "resistor"
+            && let Some(curve) = node.get("resistance").and_then(|r| r.get("curve"))
+            && let Some(prop) = curve
+                .props()
+                .unwrap_or_default()
+                .iter()
+                .find(|prop| prop.key == "kind" && prop.value.str() == Some("steinhart_hart"))
+        {
+            gate(
+                out,
+                kind,
+                "resistance.curve.steinhart_hart",
+                prop.value.span,
+                RATINGS_FORMAT,
+                format,
+            );
+        }
+        if matches!(kind, "diode" | "led")
+            && let Some(prop) = node
+                .get("ratings")
+                .and_then(Node::props)
+                .unwrap_or_default()
+                .iter()
+                .find(|prop| prop.key == "reverse_voltage")
+        {
+            gate(
+                out,
+                kind,
+                "ratings.reverse_voltage",
+                prop.key_span,
+                RATINGS_FORMAT,
+                format,
+            );
+        }
+        if matches!(
+            kind,
+            "potentiometer" | "dht22" | "sg90" | "ne555" | "cst816" | "st77916"
+        ) && let Some(prop) = node
+            .props()
+            .unwrap_or_default()
+            .iter()
+            .find(|prop| prop.key == "ratings")
+        {
+            gate(out, kind, "ratings", prop.key_span, RATINGS_FORMAT, format);
         }
         if matches!(
             kind,
@@ -2968,10 +3023,26 @@ fn decode_body(
                         kind,
                         &format!("ratings.{key}"),
                         prop.key_span,
-                        SUPPLY_MIN_FORMAT,
+                        RATINGS_FORMAT,
                         format,
                     );
                 }
+            }
+        }
+        let ratings = node
+            .get("ratings")
+            .and_then(Node::props)
+            .unwrap_or_default();
+        for rating in ratings {
+            if let Some(prop) = rating
+                .value
+                .props()
+                .unwrap_or_default()
+                .iter()
+                .find(|prop| prop.key == "characterized")
+            {
+                let key = format!("ratings.{}.characterized", rating.key);
+                gate(out, kind, &key, prop.key_span, RATINGS_FORMAT, format);
             }
         }
     }

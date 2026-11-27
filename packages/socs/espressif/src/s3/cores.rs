@@ -21,9 +21,9 @@
 //!
 //! A core in `WAITI` parks until its wake, the first cycle at which a poll can latch what no
 //! access changed. Each slice of the other core then runs up to that wake, not one step. A store
-//! to a peripheral register, a steer of the APP CPU, and each return from a run put a parked
-//! core where it would stand had it polled after each step of the other, so it runs every poll
-//! that can see a change at the cycle it would have run it. So no core is parked between runs,
+//! to a peripheral register other than a quiet SYSTIMER snapshot, a steer of the APP CPU, and
+//! each return from a run put a parked core where it would stand had it polled after each step
+//! of the other, so it runs every poll that can see a change at the cycle it would have run it. So no core is parked between runs,
 //! and an input from the seam never meets one. A core in `WAITI` polls on the first cycle after
 //! the input's tick, where a core that polled at each run's limit would read it. A change that
 //! keeps a core parked across runs must rouse it at an input, with a test that pins its cycle.

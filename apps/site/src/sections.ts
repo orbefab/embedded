@@ -36,6 +36,7 @@ export const PART_SECTION_BY_ID: Readonly<Record<string, PartSection>> = {
   dht22: "Sensors",
   "gy-bmp280": "Sensors",
   "ldr-5mm": "Sensors",
+  "thermistor-ntc-10k": "Sensors",
 
   // Motors, relays and sound
   "buzzer-12mm": "Motors, relays and sound",
@@ -52,8 +53,11 @@ export const PART_SECTION_BY_ID: Readonly<Record<string, PartSection>> = {
   "led-5mm": "LEDs and lights",
   "led-5mm-blue": "LEDs and lights",
   "led-5mm-green": "LEDs and lights",
+  "led-5mm-rgb-ca": "LEDs and lights",
+  "led-5mm-rgb-cc": "LEDs and lights",
   "led-5mm-white": "LEDs and lights",
   "led-5mm-yellow": "LEDs and lights",
+  "neopixel-ring-16": "LEDs and lights",
   "neopixel-stick-8": "LEDs and lights",
 
   // Resistors, capacitors, passives and knobs
@@ -91,6 +95,7 @@ export const PART_SECTION_BY_ID: Readonly<Record<string, PartSection>> = {
   // Breadboards and switches
   "breadboard-400": "Breadboards and switches",
   "breadboard-830": "Breadboards and switches",
+  "joystick-ky023": "Breadboards and switches",
   "tactile-switch-6mm": "Breadboards and switches",
   "tactile-switch-ntc013": "Breadboards and switches",
   "tactile-switch-smd": "Breadboards and switches",
@@ -98,6 +103,8 @@ export const PART_SECTION_BY_ID: Readonly<Record<string, PartSection>> = {
 
   // Connectors and sockets
   "barrel-jack-dc21": "Connectors and sockets",
+  "battery-9v": "Connectors and sockets",
+  "battery-aa-4x": "Connectors and sockets",
   "dip-socket-28": "Connectors and sockets",
   "pin-header-1x15": "Connectors and sockets",
   "pin-header-1x22": "Connectors and sockets",

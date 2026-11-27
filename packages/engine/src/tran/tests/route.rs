@@ -13,7 +13,7 @@ use crate::session::{BUDGET, Session, Status};
 
 use super::active::{US, capacitor, circuit, resistor};
 use super::fixtures::open;
-use super::spi::jedec_id_program;
+use super::spi::{jedec_id_program, jedec_id_spi3_program};
 
 const STOP: u64 = 30 * US;
 
@@ -174,7 +174,26 @@ fn s3_spi_netlist(
     gpio13: &str,
     extra_parts: &[String],
 ) -> Netlist {
-    let elf = jedec_id_program().elf();
+    s3_spi_netlist_with(
+        jedec_id_program().elf(),
+        extra_nets,
+        gpio10,
+        gpio11,
+        gpio12,
+        gpio13,
+        extra_parts,
+    )
+}
+
+fn s3_spi_netlist_with(
+    elf: Vec<u8>,
+    extra_nets: &[&str],
+    gpio10: &str,
+    gpio11: &str,
+    gpio12: &str,
+    gpio13: &str,
+    extra_parts: &[String],
+) -> Netlist {
     let mut blobs = Blobs::new();
     let bytes = elf.len();
     let sha256 = blobs.add(Arc::from(elf));
@@ -338,4 +357,50 @@ fn s3_spi2_miso_through_a_series_resistor_faults_on_read() {
     assert_eq!(other.to_string(), "#rmiso.pin.a");
     assert_eq!(*peripheral, "SPI2");
     assert_eq!(*kind, LinkKind::Spi);
+}
+
+#[test]
+fn s3_spi3_routing_faults_name_spi3_and_direct_st77916_succeeds() {
+    let loopback = s3_spi_netlist_with(
+        jedec_id_spi3_program().elf(),
+        &[],
+        "cs",
+        "mosi",
+        "sclk",
+        "mosi",
+        &[],
+    );
+    let session = run_session(&loopback);
+    assert_eq!(session.status(), Status::Faulted);
+    assert!(matches!(
+        session.fault(),
+        Some(Diagnostic::ChipLinkUnsupported {
+            peripheral: "SPI3",
+            kind: LinkKind::Spi,
+            ..
+        })
+    ));
+
+    let panel = format!(
+        r#"{{ "name": "lcd1", "kind": "st77916",
+          "pins": {{ "VCC": "vdd", "GND": "gnd", "CS": "cs", "SCLK": "sclk",
+                    "D0": "mosi", "D1": "miso", "D2": "d2", "D3": "d3",
+                    "RST": "vdd", "TE": "te", "BLK": "gnd" }},
+          "output": {STAGE}, "input_threshold": {THRESHOLD} }}"#
+    );
+    let pull = r#"{ "name": "rcs", "kind": "resistor", "pins": { "a": "cs", "b": "vdd" },
+        "resistance": { "value": 10000.0, "unit": "ohm" }, "ratings": { "power": null } }"#
+        .to_string();
+    let direct = s3_spi_netlist_with(
+        jedec_id_spi3_program().elf(),
+        &["d2", "d3", "te"],
+        "cs",
+        "mosi",
+        "sclk",
+        "miso",
+        &[panel, pull],
+    );
+    let session = run_session(&direct);
+    assert_eq!(session.status(), Status::Stopped);
+    assert_eq!(session.fault(), None);
 }

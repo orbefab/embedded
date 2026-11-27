@@ -10,6 +10,7 @@ mod ops;
 mod options;
 mod paged;
 mod s3;
+mod spin;
 mod straight;
 
 /// With `autotests = false`, cargo skips a test file that is not declared above.

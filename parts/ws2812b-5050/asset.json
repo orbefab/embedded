@@ -1,0 +1,44 @@
+{
+  "part": "ws2812b-5050",
+  "source": {
+    "script": "model.py",
+    "sha256": "c2271ceb230ca7311999c46c9b4d9e600a49bee9cd6eab41e3ef7200299bdb38",
+    "bytes": 2226
+  },
+  "files": {
+    "ws2812b-5050.glb": {
+      "sha256": "3ccdc6c9b2b98a541c73705d0f81fd42443e461e1f0946cef2ade34f8f3997c5",
+      "bytes": 16476
+    },
+    "ws2812b-5050.anchors.json": {
+      "sha256": "41609c70effca8652827e2a775879ec6d7fe579b84be229e02f865f4adb067cc",
+      "bytes": 521
+    }
+  },
+  "box": {
+    "min": [-2.7, -2.5, 0],
+    "max": [2.7, 2.5, 1.57]
+  },
+  "kept_nodes": ["lens"],
+  "draw_calls": 3,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 4,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0.15
+    },
+    "names": {
+      "nodes": ["lens"]
+    },
+    "merge": {
+      "primitives_in": 6,
+      "primitives_out": 3
+    }
+  }
+}

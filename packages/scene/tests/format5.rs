@@ -157,6 +157,57 @@ fn supply_min_ratings_before_format_7_are_told_to_set_format_7() {
 }
 
 #[test]
+fn format_7_keys_before_format_7_are_told_to_set_format_7() {
+    for (id, kind, keys) in [
+        (
+            "thermistor-ntc-10k",
+            "resistor",
+            &[
+                "resistance.curve.steinhart_hart",
+                "ratings.power.characterized",
+                "ratings.voltage",
+            ][..],
+        ),
+        (
+            "battery-9v-cell",
+            "voltage_source",
+            &["ratings.current.characterized"][..],
+        ),
+        (
+            "led-5mm-rgb-cc",
+            "led",
+            &[
+                "ratings.reverse_voltage",
+                "ratings.reverse_voltage",
+                "ratings.reverse_voltage",
+            ][..],
+        ),
+        ("joystick-ky023-pot", "potentiometer", &["ratings"][..]),
+    ] {
+        let found = findings(&in_format(id, 7, 6));
+        let mut found: Vec<(Code, String, String)> = found
+            .into_iter()
+            .map(|d| (d.code, d.message, d.hint))
+            .collect();
+        let mut expected: Vec<(Code, String, String)> = keys
+            .iter()
+            .map(|key| {
+                (
+                    Code::Syntax,
+                    format!(
+                        "the engine's `{kind}` takes `{key}` only in part format 7; this file is format 6"
+                    ),
+                    "set \"format\": 7 in this part file".to_string(),
+                )
+            })
+            .collect();
+        found.sort();
+        expected.sort();
+        assert_eq!(found, expected, "{id}");
+    }
+}
+
+#[test]
 fn the_catalog_parts_in_format_5_and_6_have_no_findings() {
     for id in [
         "diode-sod123",
@@ -167,6 +218,12 @@ fn the_catalog_parts_in_format_5_and_6_have_no_findings() {
         "esp32s3-qfn56",
         "ssd1306-oled-128x64",
         "hd44780-1602-i2c",
+        "thermistor-ntc-10k",
+        "battery-9v-cell",
+        "battery-aa-4x-cell",
+        "led-5mm-rgb-cc",
+        "led-5mm-rgb-ca",
+        "joystick-ky023-pot",
     ] {
         let text =
             fs::read_to_string(common::repo().join(format!("parts/{id}/part.jsonc"))).unwrap();

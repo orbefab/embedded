@@ -1,8 +1,21 @@
 # orbe: breadboards
 
-Load this when seating a part, naming a hole, or fixing a breadboard error. `orbe part breadboard-400` prints every hole. `breadboard-400` has 30 columns and `breadboard-830` has 63.
+Load this for scene layout, seating a part, naming a hole, or breadboard errors. Load `orbe skills get boards` for exact 400 and 830 hole and rail numbers, or run `orbe part breadboard-400`.
 
-A hole is a pin, as `bb.c12`. Rows `a` to `e` sit on one side of the centre channel and `f` to `j` on the other. The five holes of a column on one side are one strip, so one net. Beside row `a`, rail `W` is + and `X` is -. Beside row `j`, `Y` is + and `Z` is -. A rail hole takes the column beside it, as `bb.X20`. Rail holes come in groups of five with a gap at every sixth column, so some numbers have no hole, such as `W6` on the 400.
+## Layout
+
+Place every part in `layout` so `orbe lint` reports no `scene.unplaced`, `scene.overlap` or `scene.covered_hole`:
+
+- Board at one edge: seat a Nano across columns 1 to 15 (`"D13": "bb.d1"`), a DevKitC-1 at one end, or an Uno beside the breadboard (`"at": [-90, 0, 0]`).
+- Place each part near the pins it uses, working outward, with space between parts so bodies and holes stay clear.
+- Put power and ground on the rails (`W`/`Y` +, `X`/`Z` -, red `#d12b2b` and black `#161616`), bridging sides when needed.
+- Keep wires short and off part bodies; do not fan jumpers across the board.
+- Place off-board modules (LCD, relay, servo, battery, Uno) beside the board with `at` and `rotate` so their headers or leads face it.
+- Copy Block layouts: `nano-relay-led` (Nano at columns 1 to 15, rails bridged, relay beside the board facing it), `uno-button-led` (Uno beside a breadboard), and `devkitc-gy-bmp280` (DevKitC-1 and sensor on a breadboard).
+
+## Holes and seating
+
+A hole is a pin, as `bb.c12`. Rows `a` to `e` sit on one side of the centre channel and `f` to `j` on the other; five holes in one column on one side are one strip. Beside `a`, `W` is + and `X` is -; beside `j`, `Y` is + and `Z` is -. Rail holes sit in groups of five with gaps (`W6` does not exist on the 400; the 830 runs `3` to `61`).
 
 Give the board an `at`, `[x, y, z]` in mm, and a `rotate` in degrees. Seat each part that has leads with `on`: name one pin and the hole its lead goes into. orbe seats the other leads from the part's shape, including leads off the 2.54 mm grid. `"ldr": { "on": { "a": "bb.c21" } }` puts the LDR's lead `b` in `c22`. `"rotate": [0, 0, 90]` turns the part a quarter turn first. Wire the rest with jumpers between holes. A jumper colour is `"color": "#d12b2b"`. A part with no leads for the board, such as `lcd1602-i2c`, `servo-sg90` or `relay-module-1ch`, or one that runs hot, such as `resistor-sqp15`, sits beside it with `at`. Jumper a hole to each of its pins.
 

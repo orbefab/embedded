@@ -98,6 +98,17 @@ A device on two buses takes a pair of engines. The ST77916 takes the SPI engine 
 
 A replay is a part that plays recorded transactions onto its pins: `spi_replay` sends `Spi` records, and `pulses_replay` sends `Pulses` records. The records are the part's netlist data, so the engine's replay engine holds them, shared by every copy, and sends each at its end, at a stop with `record` set. The device is the pins. It drives them at their idle levels for the whole run: `CS` high and `SCLK` and `D0` to `D3` low, or `OUT` at the part's `idle`.
 
+## The air
+
+`orbe_model::air` holds what radio stations trade on the air. A station is a chip whose radio implements the air calls in [mcu.md](mcu.md#the-air). Nothing calls them yet.
+
+- `Channel` is a 2.4 GHz channel, 1 to 14, 20 MHz wide.
+- `Rate` is the rate a frame goes at: 1 Mb/s DSSS, 2 Mb/s DSSS and 5.5 or 11 Mb/s CCK each with a long or short `Preamble`, ERP-OFDM 6 to 54 Mb/s, or HT-mixed MCS 0 to 7 at 20 MHz with the 800 ns guard interval.
+- `Rate::airtime(len)` is the picoseconds a frame whose PSDU is `len` octets, its MPDU and the 4-octet FCS, takes on the air. It is TXTIME from the PLCP formulas of IEEE 802.11-2020 clauses 15 to 19, with the 6 us signal extension of the 2.4 GHz band after an OFDM or HT frame.
+- `AirFrame` is one frame: its `start` at the first preamble symbol, its `end` where its airtime ends, its channel, its rate, and its MPDU, header and body as a sniffer sees them, ciphertext included, without the FCS. Copies and receivers share the bytes.
+- `Signal` is the RSSI and the noise floor a receiver hears a frame at, in dBm.
+- `Ack` is whether a frame was acknowledged. The acknowledgement is an answer at the frame's landing, not a frame on the air.
+
 ## Events
 
 A device's row declares each event it takes: its name, the netlist field that schedules it, and its fields, each an integer with a span or a bool. A part's netlist schedules events on that field, and a session applies one as `Setting::Event`. The engine checks the fields and delivers the event to `event` at its time. A row whose events or fields repeat a name does not compile.
