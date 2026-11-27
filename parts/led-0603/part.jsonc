@@ -1,7 +1,7 @@
 // Every color uses the red WP7113ID fit, the engine's values from
 // packages/engine/tests/circuits/led-5v/netlist.json, as the engine's board example does for its L and ON LEDs.
 {
-  "format": 7, "part": "led-0603", "version": "0.2.1", "title": "LED, 0603 chip", "license": "MIT OR Apache-2.0",
+  "format": 7, "part": "led-0603", "version": "0.2.2", "title": "LED, 0603 chip", "license": "MIT OR Apache-2.0",
   "summary": "0603 chip LED, 1.6 x 0.8 mm. Lead 1 is the anode and lead 2 the cathode. Pick its color.",
   "tags": ["led", "light", "indicator", "smd"],
   "docs": {

@@ -2,7 +2,7 @@
 {
   "format": 7,
   "part": "led-3mm",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "title": "3 mm LED, red",
   "summary": "Round 3 mm (T-1) through-hole LED, red and diffused, two leads on 2.54 mm. The longer lead is the anode, and the flat on the rim marks the cathode.",
   "tags": ["led", "light", "indicator", "through-hole", "red"],

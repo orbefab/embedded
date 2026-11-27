@@ -121,7 +121,7 @@ fn every_url_holds_the_bytes_its_hash_names() {
             "{url}: the folder hash is over the files it lists"
         );
     }
-    let block = record(&registry.output, "nano-button-led@0.3.2");
+    let block = record(&registry.output, "nano-button-led@0.3.3");
     assert_eq!(
         block["license"],
         "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND GPL-3.0-or-later WITH GCC-exception-3.1"
@@ -147,7 +147,7 @@ fn the_repo_names_the_official_registry() {
 #[test]
 fn a_block_depends_on_every_part_it_runs_at_the_versions_in_the_same_build() {
     let registry = build(&repo()).unwrap();
-    let block = record(&registry.output, "nano-button-led@0.3.2");
+    let block = record(&registry.output, "nano-button-led@0.3.3");
     let deps: Vec<&str> = block["registryDependencies"]
         .as_array()
         .unwrap()
@@ -158,7 +158,7 @@ fn a_block_depends_on_every_part_it_runs_at_the_versions_in_the_same_build() {
         "nano-board@0.2.4",
         "tactile-switch-6mm@0.2.1",
         "resistor-axial@0.2.1",
-        "led-5mm@0.3.1",
+        "led-5mm@0.3.2",
     ] {
         assert!(deps.contains(&direct), "{direct} in {deps:?}");
     }
@@ -167,7 +167,7 @@ fn a_block_depends_on_every_part_it_runs_at_the_versions_in_the_same_build() {
         assert!(deps.contains(&through_the_board.as_str().unwrap()));
     }
     assert_eq!(block["board"], "nano-board");
-    assert_eq!(block["version"], "0.3.2");
+    assert_eq!(block["version"], "0.3.3");
 }
 
 #[test]

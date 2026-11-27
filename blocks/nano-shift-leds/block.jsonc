@@ -2,7 +2,7 @@
 {
   "format": 1,
   "block": "nano-shift-leds",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "title": "Eight LEDs on a 74HC595",
   "summary": "An Arduino Nano walks a lit LED back and forth across eight LEDs through one 74HC595. The sketch calls shiftOut, so no library is needed.",
   "board": "nano-board",

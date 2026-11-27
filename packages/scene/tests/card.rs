@@ -132,7 +132,7 @@ fn a_passive_a_chip_and_a_board_keep_only_what_their_files_say() {
     assert!(board.categories.is_some());
     assert_eq!(
         board.uses.get("led-0603").map(String::as_str),
-        Some("0.2.1")
+        Some("0.2.2")
     );
     assert!(board.used_by.is_empty());
     let docs = board.docs.unwrap();

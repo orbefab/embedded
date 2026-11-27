@@ -2,6 +2,11 @@
 # The newest published orbe reads every part and Block in this tree, or refuses
 # the item because its format is newer than that binary reads. Any other
 # refusal fails. A key that release refuses has to raise the part format.
+# Then that release runs `orbe add` for every composite part and Block against
+# the registry scripts/registry.sh --with-tree writes from the release tags and
+# this tree, and has to install a version whose parts it all reads, or say the
+# item needs a newer orbe. Last, orbe 0.2.0 installs a part it reads from a
+# registry that also lists one it cannot.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -21,6 +26,12 @@ if [[ ! -x "$work/orbe" ]]; then
   exit 1
 fi
 python3 scripts/check_client.py "$work/orbe"
+
+cargo build -p orbe --locked
+target=$(cargo metadata --format-version 1 --no-deps |
+  sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')
+scripts/registry.sh --with-tree "$target/debug/orbe" "$work/registry"
+python3 scripts/check_client.py --released-registry "$work/orbe" "$work/registry"
 
 # orbe 0.2.0 installs a part it can read from a registry that also lists one it cannot.
 old=$work/v0.2.0

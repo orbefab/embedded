@@ -2,7 +2,7 @@
 {
   "format": 1,
   "block": "nano-oled",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "title": "Hello on a 0.96 inch OLED",
   "summary": "An Arduino Nano drives a 128 x 64 SSD1306 OLED module over I2C with Adafruit SSD1306 and Adafruit GFX. The sketch draws a frame, the word Hello and a filled circle.",
   "board": "nano-board",
