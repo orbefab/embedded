@@ -302,7 +302,16 @@ fn search_prints_title_matches_before_the_rest() {
         .filter(|line| !line.is_empty())
         .map(|line| line.split_whitespace().next().unwrap())
         .collect();
-    assert_eq!(blue, ["led-3mm-blue", "led-5mm-blue"]);
+    assert_eq!(
+        blue,
+        [
+            "led-3mm-blue",
+            "led-5mm-blue",
+            "led-5mm-rgb-ca",
+            "led-5mm-rgb-cc",
+            "nano-rgb-led",
+        ]
+    );
 
     let (code, stdout, _) = orbe(&["search", "led-5mm", "--json"]);
     assert_eq!(code, 0);

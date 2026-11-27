@@ -1,0 +1,42 @@
+// Unlisted 10 kohm linear axis potentiometer inside joystick-ky023.
+{
+  "format": 4,
+  "part": "joystick-ky023-pot",
+  "version": "0.1.0",
+  "title": "KY-023 axis potentiometer, 10 kohm (internal)",
+  "summary": "Unlisted 10 kohm linear potentiometer forming one axis of a KY-023 thumb joystick module.",
+  "tags": ["potentiometer", "joystick", "analog", "internal"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Joy-IT COM-KY023JM Joystick Module Datasheet": "https://www.joy-it.net/files/files/Produkte/COM-KY023JM/COM-KY023JM-Datasheet20201026.pdf",
+  },
+  "real": {
+    "generic": true,
+    "maker": null,
+    "number": "B103",
+    "datasheet": "Joy-IT COM-KY023JM Joystick Module Datasheet",
+  },
+  "pins": { "a": [1], "wiper": [2], "b": [3] },
+  "params": {
+    "position": { "unit": "1", "default": 0.5, "min_exclusive": 0, "max_exclusive": 1, "sets": "/position", "live": true },
+  },
+  "model": {
+    "kind": "potentiometer",
+    "resistance": {
+      "value": 10000,
+      "unit": "ohm",
+      "source": {
+        "closed_form": {
+          "note": "Standard 10 kohm (B103) linear potentiometer used on KY-023 dual-axis thumbstick modules; Joy-IT COM-KY023JM datasheet specifies ratiometric analog output from 0 V to VCC without printing the track ohms.",
+        },
+      },
+    },
+  },
+  "joints": {
+    "rotor": { "node": "rotor", "turn": [0, 1, 0], "range": { "value": 60, "unit": "deg" }, "by": "position" },
+  },
+  "not_simulated": [
+    { "what": "power rating", "why": "The engine's potentiometer has no rating, so it never warns." },
+    { "what": "spring return to center", "why": "The axis holds the last position set via `set` or the viewer slider instead of springing back to 0.5." },
+  ],
+}

@@ -1,0 +1,50 @@
+{
+  "part": "joystick-ky023",
+  "source": {
+    "script": "model.py",
+    "sha256": "cdf14ff898ca8995d66f38c40a33a77bae89ac628170b9ccebe13d79558be0bf",
+    "bytes": 3521
+  },
+  "files": {
+    "joystick-ky023.glb": {
+      "sha256": "78198f314f834f2639da738102a6e2de84446885c84b01825e2f51eaa5641d2f",
+      "bytes": 72628
+    },
+    "joystick-ky023.anchors.json": {
+      "sha256": "7f793c90eef6c821ecb8538648f255dfa42d38bf4a47d35b3def1a2e2bd97800",
+      "bytes": 693
+    }
+  },
+  "box": {
+    "min": [-22.500001, -13, 0],
+    "max": [17.000001, 13, 13.1]
+  },
+  "kept_nodes": ["housing-1", "housing-2", "housing-3", "housing-4", "housing-5", "pin-1", "pin-2", "pin-3", "pin-4", "pin-5"],
+  "draw_calls": 13,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 5,
+      "largest_miss_mm": 0.000001
+    },
+    "seating": {
+      "lowest_node": "pcb",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 13,
+      "primitives_out": 13
+    },
+    "composition": {
+      "children": 3,
+      "lowest_node": "pcb",
+      "z_mm": 0,
+      "draw_calls": 24
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "part": "neopixel-ring-16",
+  "source": {
+    "script": "model.py",
+    "sha256": "dcce12759e94fff73bc412f82c89bc8811cfff7bac3a7b7720eb20c5591bb14f",
+    "bytes": 2788
+  },
+  "files": {
+    "neopixel-ring-16.glb": {
+      "sha256": "26037b7754816ec0c089ba7991a92a775bf879f2e0a00440e2dd05eaf40789b9",
+      "bytes": 17448
+    },
+    "neopixel-ring-16.anchors.json": {
+      "sha256": "b6f42b2e261c67a10e1fa5126d0f5162034e68c31a938af924d71010f03aaeb3",
+      "bytes": 571
+    }
+  },
+  "box": {
+    "min": [-32.000002, -22.218945, 0],
+    "max": [22.164688, 22.218945, 4.14]
+  },
+  "kept_nodes": ["housing-1", "housing-2", "housing-3", "housing-4", "pin-1", "pin-2", "pin-3", "pin-4"],
+  "draw_calls": 9,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 4,
+      "largest_miss_mm": 0.000002
+    },
+    "seating": {
+      "lowest_node": "pcb",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 9,
+      "primitives_out": 9
+    },
+    "composition": {
+      "children": 16,
+      "lowest_node": "pcb",
+      "z_mm": 0,
+      "draw_calls": 57
+    }
+  }
+}

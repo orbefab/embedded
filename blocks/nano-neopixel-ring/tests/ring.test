@@ -1,0 +1,15 @@
+# ring.rainbow(firstHue) cycles a rainbow around the 16-pixel ring, shifting one pixel
+# (hue +4096) every 300 ms.
+open
+step 20ms
+expect @ring.px1 rgb(255,0,0)
+expect @ring.px5 rgb(42,255,0)
+expect @ring.px9 rgb(0,255,255)
+expect @ring.px13 rgb(42,0,255)
+expect @ring.px16 rgb(255,0,20)
+step 300ms
+expect @ring.px1 rgb(255,20,0)
+expect @ring.px16 rgb(255,0,0)
+step 300ms
+expect @ring.px15 rgb(255,0,0)
+expect no diagnostics

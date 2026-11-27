@@ -1,0 +1,66 @@
+// KY-023 2-axis analog thumb joystick module with push button (Joy-IT COM-KY023JM).
+// Two 10 kohm linear potentiometers (x, y) share VCC and GND and drive VRX and VRY;
+// pressing the thumbstick cap (sw) shorts SW to GND (use INPUT_PULLUP on the MCU pin).
+// Drive axes live as `@<id>.x.position` and `@<id>.y.position`, and press `@<id>.sw`.
+{
+  "format": 4,
+  "part": "joystick-ky023",
+  "version": "0.1.0",
+  "title": "Thumb joystick module, 2-axis with button (KY-023)",
+  "summary": "KY-023 2-axis thumb joystick with two 10 kohm pots (VRX, VRY) and push button (SW to GND). Drive @<id>.x.position, @<id>.y.position, @<id>.sw.",
+  "tags": ["joystick", "thumbstick", "thumb-joystick", "ky-023", "ky023", "analog", "potentiometer", "button", "switch", "2-axis", "input", "module"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Joy-IT COM-KY023JM Joystick Module Datasheet": "https://www.joy-it.net/files/files/Produkte/COM-KY023JM/COM-KY023JM-Datasheet20201026.pdf",
+    "Joy-IT COM-KY023JM Manual": "https://www.joy-it.net/files/files/Produkte/COM-KY023JM/COM-KY023JM_Manual_2024-05-07.pdf",
+  },
+  "real": {
+    "generic": true,
+    "maker": "Joy-IT",
+    "number": "COM-KY023JM",
+    "datasheet": "Joy-IT COM-KY023JM Joystick Module Datasheet",
+  },
+  "uses": {
+    "joystick-ky023-pot": "0.1.0",
+    "joystick-ky023-switch": "0.1.0",
+  },
+  "params": {
+    "x": { "default": 0.5 },
+    "y": { "default": 0.5 },
+  },
+  "parts": {
+    "x": { "type": "joystick-ky023-pot", "position": { "param": "x" } },
+    "y": { "type": "joystick-ky023-pot", "position": { "param": "y" } },
+    "sw": { "type": "joystick-ky023-switch" },
+  },
+  "wires": [
+    ["GND", "x.a", { "kind": "trace" }],
+    ["VCC", "x.b", { "kind": "trace" }],
+    ["VRX", "x.wiper", { "kind": "trace" }],
+    ["GND", "y.a", { "kind": "trace" }],
+    ["VCC", "y.b", { "kind": "trace" }],
+    ["VRY", "y.wiper", { "kind": "trace" }],
+    ["SW", "sw.a", { "kind": "trace" }],
+    ["GND", "sw.b", { "kind": "trace" }],
+  ],
+  "layout": {
+    "x": { "at": [3.0, 9.4, 1.6] },
+    "y": { "at": [12.4, 0.0, 1.6], "rotate": [0, 0, -90] },
+    "sw": { "at": [3.0, 0.0, 1.6] },
+  },
+  "pins": { "GND": [1], "VCC": [2], "VRX": [3], "VRY": [4], "SW": [5] },
+  "not_simulated": [
+    {
+      "what": "operating voltage and power ratings",
+      "why": "Joy-IT COM-KY023JM p1 specifies 3.3 V to 5 V operating voltage. The engine's potentiometer and switch have no electrical ratings, so over-voltage or over-power on VCC or SW does not warn.",
+    },
+    {
+      "what": "spring return and stick tilt",
+      "why": "Both axes hold the position set via `@<id>.x.position` and `@<id>.y.position` (or the viewer sliders) and turn the side potentiometer rotors; the thumbstick cap itself slides down when pressed (`@<id>.sw`) rather than tilting in 2D.",
+    },
+    {
+      "what": "deadband and wiper end resistance",
+      "why": "Each 10 kohm potentiometer track is exact linear from 0 to 1, whereas a physical thumbstick has mechanical deadband near center and small end resistance near the stops.",
+    },
+  ],
+}

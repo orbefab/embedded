@@ -14,7 +14,7 @@ The board's ATmega328P uses the datasheet's absolute maximum ratings, a pin's cu
 
 A load switched on over a sustained rating with no peak is listed at once as over now, as in `#r1.p is 0.989 W now, over its 0.25 W rating; it warns if held about 2ms`. It is over now while the last 2 ms averages over, so a PWM whose average is under stays quiet. A diode or zener is never over now on power: the current peak warns at once past the surge, and the power filter warns when heat crosses. An LED still is. `expect no diagnostics` fails then. In `--json`, an over-now warning has `data.now` true. The pin's output stage is linear, 25 ohm from its rail. Keep a pin at 20 mA or less when a level matters, and drive a larger load through a transistor.
 
-The board's USB supply is rated 500 mA. A load over that on 5V, such as 2.5 ohm from 5V to GND (about 1.8 A), warns `rating.current` on the supply, `#nano__usb__host.i (nano.usb)`, and about 18 ms later on the Schottky behind 5V, `#nano__diode.i (nano.diode)`, rated 0.5 A average. A neopixel-stick-8 at full white draws 296 mA and stays under it. A wire from the Nano's 5V straight to GND is a short. `orbe check` and `orbe open` refuse it with `net.short` and name the wire.
+The board's USB supply is rated 500 mA. A load over that on 5V (e.g. 2.5 Ω, ~1.8 A) warns `rating.current` on `#nano__usb__host.i (nano.usb)`, and ~18 ms later on the 0.5 A Schottky `#nano__diode.i (nano.diode)`. `neopixel-stick-8` at full white draws 296 mA (quiet); `neopixel-ring-16` draws 586 mA and warns unless powered from an external 5 V supply. A wire from 5V to GND is a short (`net.short`).
 
 ## LED brightness
 
