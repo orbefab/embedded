@@ -355,7 +355,8 @@ impl Network {
         if beacon == Some(start) {
             let mpdu = self.beacon(start);
             let interval = timing::BEACON_INTERVAL;
-            self.state.tbtt = Time::from_ps((start.as_ps() / interval + 1) * interval);
+            self.state.tbtt =
+                Time::from_ps((start.as_ps() / interval + 1).saturating_mul(interval));
             self.air(start, mpdu, None);
             return true;
         }
