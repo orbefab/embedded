@@ -14,7 +14,9 @@ use crate::netlist::broken_fraction;
 use crate::netlist::broken_positive;
 use crate::netlist::json::ParseCtx;
 use crate::netlist::json::waveform::{WirePosition, WireSteps};
-use crate::netlist::json::{FRACTION_UNIT, PinMap, WireValue, resolve_pins, resolve_value};
+use crate::netlist::json::{
+    FRACTION_UNIT, PinMap, WireValue, resolve_limit, resolve_pins, resolve_value,
+};
 use crate::netlist::{Conduction, Kind, LevelField};
 use crate::newton::Side;
 
@@ -27,6 +29,9 @@ pub struct Potentiometer {
     pub resistance: Value,
     /// Fraction of `resistance` from `a` to the wiper, in `(0, 1)`.
     pub position: Schedule<Value>,
+    /// Maximum DC voltage across `a` and `b`, in volt. `|V(b) - V(a)|` above this warns
+    /// `rating.voltage` on every sample. `None` when not rated.
+    pub max_voltage: Option<Value>,
 }
 
 impl Potentiometer {
@@ -82,11 +87,21 @@ pub fn position_rule(position: f64, resistance: f64) -> PositionRule {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct WirePotentiometerRatings {
+    #[serde(deserialize_with = "Option::deserialize")]
+    voltage: Option<WireValue>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct WirePotentiometer {
     pub(crate) name: String,
     pins: PinMap,
     resistance: WireValue,
     position: WirePosition,
+    /// Absent on a potentiometer that rates no voltage.
+    #[serde(default)]
+    ratings: Option<WirePotentiometerRatings>,
 }
 
 pub(crate) fn resolve_potentiometer(
@@ -104,16 +119,22 @@ pub(crate) fn resolve_potentiometer(
         pins,
         resistance,
         position,
+        ratings,
         ..
     } = wire;
     let pins = resolve_pins(name, Potentiometer::PINS, &pins.0, nets, out);
     let resistance = resolve_value(part_ref, "resistance", "ohm", true, resistance, out);
     let position = resolve_position(part_ref, resistance.as_ref(), position, out);
-    match (pins, resistance, position) {
-        (Some(pins), Some(resistance), Some(position)) => Some(Potentiometer {
+    let max_voltage = match ratings {
+        None => Some(None),
+        Some(ratings) => resolve_limit(part_ref, "ratings.voltage", "V", ratings.voltage, out),
+    };
+    match (pins, resistance, position, max_voltage) {
+        (Some(pins), Some(resistance), Some(position), Some(max_voltage)) => Some(Potentiometer {
             pins,
             resistance,
             position,
+            max_voltage,
         }),
         _ => None,
     }
@@ -269,5 +290,62 @@ impl Kind for Potentiometer {
     }
     fn level_mut(&mut self) -> Option<&mut Schedule<Value>> {
         Some(&mut self.position)
+    }
+}
+
+#[cfg(test)]
+mod max_voltage {
+    fn circuit(volts: f64, ratings: &str) -> String {
+        format!(
+            r#"{{
+              "version": 1,
+              "seed": 0,
+              "analysis": {{ "op": {{}} }},
+              "ground": "gnd",
+              "nets": ["gnd", "vcc", "w"],
+              "parts": [
+                {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "vcc", "n": "gnd" }},
+                  "voltage": {{ "value": {volts}, "unit": "V" }} }},
+                {{ "name": "rv1", "kind": "potentiometer",
+                  "pins": {{ "a": "gnd", "wiper": "w", "b": "vcc" }},
+                  "resistance": {{ "value": 10000.0, "unit": "ohm" }},
+                  "position": {{ "value": 0.5, "unit": "1" }}{ratings} }}
+              ]
+            }}"#
+        )
+    }
+
+    fn warnings(json: &str) -> String {
+        crate::simulate(&crate::netlist::parse(json.as_bytes()).unwrap())
+            .diagnostics()
+            .iter()
+            .map(|d| serde_json::to_string(d).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_max_voltage_warns_past_either_polarity_and_stays_quiet_at_the_limit() {
+        let rated = r#", "ratings": { "voltage": { "value": 5.0, "unit": "V" } }"#;
+        assert!(!warnings(&circuit(5.0, rated)).contains("rating.voltage"));
+        assert!(!warnings(&circuit(-5.0, rated)).contains("rating.voltage"));
+        assert!(!warnings(&circuit(9.0, "")).contains("rating.voltage"));
+        assert!(
+            !warnings(&circuit(9.0, r#", "ratings": { "voltage": null }"#))
+                .contains("rating.voltage")
+        );
+        let high = warnings(&circuit(9.0, rated));
+        assert!(high.contains("rating.voltage"), "{high}");
+        assert!(
+            high.contains("#rv1.v reaches 9 V, outside its -5 V to 5 V rating"),
+            "{high}"
+        );
+        assert!(!high.contains("chip's ground"), "{high}");
+        let low = warnings(&circuit(-9.0, rated));
+        assert!(low.contains("rating.voltage"), "{low}");
+        assert!(
+            low.contains("#rv1.v reaches -9 V, outside its -5 V to 5 V rating"),
+            "{low}"
+        );
     }
 }

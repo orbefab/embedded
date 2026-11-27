@@ -170,7 +170,7 @@ A `steps` position follows the `steps` schedule rules on field `position.events`
 
 Each leg must be positive, and its reciprocal must be finite, the same check as `resistance`. A leg that breaks it is `netlist.value` on field `resistance`, and `value` is that leg.
 
-A potentiometer has no `ratings` field. It has no `i`, `v`, or `p`. Both legs are DC paths.
+`ratings` is optional. When present it holds `voltage`, a positive value object in `V` or `null`, which bounds `|V(b) - V(a)|` on every sample and warns `rating.voltage` past it. It has no `i`, `v`, or `p`. Both legs are DC paths.
 
 ### Voltage source
 
@@ -411,7 +411,7 @@ Each value must be greater than 0, and its reciprocal must be finite. Those are 
 
 The device is at 25 C, 298.15 K. `k` and `q` are the exact SI values. There is no temperature field and no temperature scaling. A value fitted at another temperature does not describe the part here.
 
-`ratings` holds `current` and `power`.
+`ratings` holds `current` and `power`, plus an optional `reverse_voltage` in `V`: how far `V(anode) - V(cathode)` may sit below 0 before `#<part>.v` warns [`rating.voltage`](diagnostics.md#ratingvoltage). Omitting `reverse_voltage` or setting it to `null` leaves reverse voltage unrated.
 
 `packages/engine/tests/circuits/led-5v` and `packages/engine/tests/circuits/led-9v` use a Kingbright WP7113ID, a red 5 mm LED. Its `Is`, `N`, and `Rs` solve the equation exactly through three points read off the datasheet's forward current figure at 25 C: (1.70 V, 2 mA), (1.90 V, 10 mA), and (2.00 V, 20 mA). The fit gives `Is` = 6.711e-10 A, `N` = 4.427, and `Rs` = 2.115 ohm. Each value's `at` names the figure, the points, and the temperature, so the fit can be redone from the citation.
 
@@ -1478,12 +1478,14 @@ A blob the document names that no folder has, a name whose every file hashes to 
 
 ## Ratings
 
-A rating bounds the stress on a part. Every key of a kind's `ratings` object is required, except a resistor's `voltage`, which may be left out. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `esp32s3`, `ssd1306`, `hd44780_i2c`, `ws2812`, `voltage_source` and `capacitor`, where it is optional.
+A rating bounds the stress on a part. Every key of a kind's `ratings` object is required, except a resistor's `voltage` and a diode or LED's `reverse_voltage`, which may be left out. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `esp32s3`, `ssd1306`, `hd44780_i2c`, `ws2812`, `voltage_source`, `capacitor` and `potentiometer`, where it is optional.
 
 | Kind | Keys | Checked quantity |
 | --- | --- | --- |
 | `resistor` | `power`, optional `voltage` | `#<part>.p`, and `#<part>.v` (a max voltage limit or the peak of a sounding drive) |
-| `diode`, `led`, `zener` | `current`, `power` | `#<part>.i`, `#<part>.p` |
+| `potentiometer` | `voltage`, optional | `#<part>.v` (`V(b) - V(a)` across the track) |
+| `diode`, `led` | `current`, `power`, optional `reverse_voltage` | `#<part>.i`, `#<part>.p`, and `#<part>.v` (reverse floor) |
+| `zener` | `current`, `power` | `#<part>.i`, `#<part>.p` |
 | `linear_regulator` | `current`, `power` | `#<part>.iout`, `#<part>.p` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
 | `nmos`, `pmos` | `current`, `power` | `#<part>.id`, `#<part>.p` |
@@ -1495,7 +1497,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `hd44780_i2c` | `rail_margin`, `supply_voltage` | `VCC`, `SCL` and `SDA` voltage over `GND`, each named `#<part>.pin.<pin>` |
 | `ws2812` | `rail_margin`, `supply_voltage` | `VCC` and `DIN` voltage over `GND`, each named `#<part>.pin.<pin>` |
 | `hc595` | `pin_current`, `supply_current`, `input_margin`, `output_margin` | each of `QA`–`QH` and `QHp`, the current through `VCC` and `GND`, and each input and output voltage over `GND`, each named `#<part>.pin.<pin>` |
-| `current_source`, `inductor`, `relay`, `switch`, `ne555`, `potentiometer`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `dht22`, `sg90` | none | |
+| `current_source`, `inductor`, `relay`, `switch`, `ne555`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `dht22`, `sg90` | none | |
 
 A `current`, `power`, `pin_current` or `supply_current` value object may also carry `basis`, the datasheet's basis for the figure, and `"characterized": true` when the figure is the largest load its datasheet characterizes rather than an absolute maximum. `"peak"` bounds each sample. `{ "sustained": { "average": "rms" | "mean", "tau": { "value": <s>, "unit": "s" } } }` bounds a first-order filter of the samples with time constant `tau`: of their squares for `rms`, read back as the root, and of their magnitudes for `mean`. A sustained basis may also carry `peak`, the sheet's peak or surge limit in the rating's unit, such as a diode's IFSM beside its average forward current. Each sample is checked against it as a peak rating. A `tau` or `peak` of 0 or below is `netlist.value` with rule `positive` on `ratings.<key>.basis.sustained.tau` or `.peak`, and a wrong unit is `netlist.unit` on that field. A rating with no `basis` takes its kind's: a `power` is a 10.2 ms `mean`, a `voltage_source`'s `current` and an `atmega328p`'s or an `hc595`'s `pin_current` and `supply_current` are a 10.2 ms `rms`, and every other `current` is a `peak`.
 

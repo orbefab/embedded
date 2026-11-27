@@ -29,8 +29,9 @@ const SCENE_KEYS: &[&str] = &[
 /// resistor's `ratings.voltage`, the operating window of a sounding drive, a reading
 /// `"of": "angle"` on an `sg90`, a reading `"of": "screen"` and `view.screen`, and pin voltage
 /// `ratings` on `esp32s3`, `ssd1306`, `hd44780_i2c` and `ws2812`. Format 7 is format 6 plus
-/// `steinhart_hart` world curves, a resistor's single-value maximum `ratings.voltage`, and
-/// `characterized` on a rating.
+/// `steinhart_hart` world curves, a resistor's single-value maximum `ratings.voltage`,
+/// `characterized` on a rating, `ratings.reverse_voltage` on `diode` and `led`, and `ratings` on
+/// `potentiometer`.
 pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5, 6, 7];
 /// Scene `format` values this binary reads.
 pub const SCENE_FORMATS: &[u32] = &[1];
@@ -49,7 +50,8 @@ const BASIS_FORMAT: u32 = 5;
 /// refuses that key, so the part says format 6 and that orbe asks for a newer one.
 const VOLTAGE_FORMAT: u32 = 6;
 /// The oldest part format that carries `steinhart_hart` world curves, single-value resistor
-/// maximum `ratings.voltage`, and `characterized` ratings (refused by orbe 0.3.1).
+/// maximum `ratings.voltage`, `characterized` ratings, `diode`/`led` `ratings.reverse_voltage`,
+/// and `potentiometer` `ratings` (refused by orbe 0.3.1).
 const CURVE_FORMAT: u32 = 7;
 /// The oldest part format whose readings take `"of": "angle"`.
 const ANGLE_FORMAT: u32 = 6;
@@ -2847,6 +2849,32 @@ fn decode_body(
                 CURVE_FORMAT,
                 format,
             );
+        }
+        if matches!(kind, "diode" | "led")
+            && let Some(prop) = node
+                .get("ratings")
+                .and_then(Node::props)
+                .unwrap_or_default()
+                .iter()
+                .find(|prop| prop.key == "reverse_voltage")
+        {
+            gate(
+                out,
+                kind,
+                "ratings.reverse_voltage",
+                prop.key_span,
+                CURVE_FORMAT,
+                format,
+            );
+        }
+        if kind == "potentiometer"
+            && let Some(prop) = node
+                .props()
+                .unwrap_or_default()
+                .iter()
+                .find(|prop| prop.key == "ratings")
+        {
+            gate(out, kind, "ratings", prop.key_span, CURVE_FORMAT, format);
         }
         let ratings = node
             .get("ratings")

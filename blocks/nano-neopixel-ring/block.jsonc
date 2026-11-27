@@ -1,0 +1,11 @@
+// A Block: a small circuit that works. `orbe add nano-neopixel-ring` installs it into a project.
+{
+  "format": 1,
+  "block": "nano-neopixel-ring",
+  "version": "0.1.0",
+  "title": "Rainbow on a 16-pixel NeoPixel ring",
+  "summary": "An Arduino Nano drives a 16-pixel WS2812B NeoPixel ring through a 470 ohm resistor on DIN. The sketch cycles a rainbow around the ring.",
+  "board": "nano-board",
+  "tags": ["led", "rgb", "neopixel", "ws2812", "ws2812b", "ring", "nano"],
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND LGPL-3.0-or-later AND GPL-3.0-or-later WITH GCC-exception-3.1",
+}

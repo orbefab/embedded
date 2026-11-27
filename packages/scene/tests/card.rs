@@ -167,10 +167,14 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
             "led-5mm",
             "led-5mm-blue",
             "led-5mm-green",
+            "led-5mm-rgb-ca",
+            "led-5mm-rgb-cc",
             "led-5mm-white",
             "led-5mm-yellow",
+            "neopixel-ring-16",
             "neopixel-stick-8",
             "sk68xxmini-hs",
+            "ws2812b-5050",
         ]
     );
     let rest: Vec<&str> = led
@@ -200,8 +204,10 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
     let switches = search(&parts_dir(), "switch");
     let names: Vec<&str> = switches.iter().map(|card| card.name.as_str()).collect();
     assert_eq!(
-        &names[..9],
+        &names[..11],
         [
+            "joystick-ky023",
+            "joystick-ky023-switch",
             "nmos-irf520-to220",
             "npn-2n2222-to92",
             "npn-l8050-sot23",
@@ -217,7 +223,7 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
         .iter()
         .position(|name| *name == "diode-cd1206")
         .unwrap();
-    assert!(diode > 8, "{names:?}");
+    assert!(diode > 10, "{names:?}");
 
     let boards = search(&parts_dir(), "board");
     let names: Vec<&str> = boards.iter().map(|card| card.name.as_str()).collect();
@@ -367,6 +373,7 @@ fn one_id_segment_names_that_part_and_several_stay_a_list() {
     assert_eq!(
         ids_with_segment("switch", &parts_dir(), &blocks_dir()),
         owned(&[
+            "joystick-ky023-switch",
             "tactile-switch-6mm",
             "tactile-switch-ntc013",
             "tactile-switch-smd",
@@ -544,6 +551,79 @@ fn starter_kit_thermistor_and_batteries_show_ratings_and_match_search() {
         ("AA", "battery-aa-4x"),
         ("6 volt", "battery-aa-4x"),
         ("double a", "battery-aa-4x"),
+    ] {
+        let hits = search(&parts_dir(), query);
+        assert!(
+            hits.iter().any(|card| card.name == want),
+            "query `{query}` missed `{want}`"
+        );
+    }
+}
+
+#[test]
+fn starter_kit_rgb_ring_and_joystick_show_ratings_and_match_search() {
+    for id in ["led-5mm-rgb-cc", "led-5mm-rgb-ca"] {
+        let rgb = card(&parts_dir(), id).unwrap();
+        let pin_names: Vec<&str> = rgb.pins.iter().map(|pin| pin.name.as_str()).collect();
+        assert_eq!(pin_names, ["R", "COM", "B", "G"], "{id}");
+        for (name, value) in [
+            ("red.current", 0.03),
+            ("red.power", 0.075),
+            ("red.reverse_voltage", 5.0),
+            ("green.current", 0.025),
+            ("green.power", 0.1025),
+            ("green.reverse_voltage", 5.0),
+            ("blue.current", 0.03),
+            ("blue.power", 0.12),
+            ("blue.reverse_voltage", 5.0),
+        ] {
+            assert!(
+                rgb.ratings
+                    .iter()
+                    .any(|r| r.name == name && r.value == Some(value) && !r.characterized),
+                "{id}: missing rating {name}={value} in {:?}",
+                rgb.ratings
+            );
+        }
+    }
+
+    let ring = card(&parts_dir(), "neopixel-ring-16").unwrap();
+    assert!(
+        ring.ratings
+            .iter()
+            .any(|r| r.name == "supply_voltage" && r.value == Some(5.3))
+    );
+    assert!(
+        ring.ratings
+            .iter()
+            .any(|r| r.name == "rail_margin" && r.value == Some(0.3))
+    );
+    assert!(ring.uses.contains_key("ws2812b-5050"));
+
+    let joy = card(&parts_dir(), "joystick-ky023").unwrap();
+    let pin_names: Vec<&str> = joy.pins.iter().map(|pin| pin.name.as_str()).collect();
+    assert_eq!(pin_names, ["GND", "VCC", "VRX", "VRY", "SW"]);
+    assert!(joy.uses.contains_key("joystick-ky023-pot"));
+    assert!(joy.uses.contains_key("joystick-ky023-switch"));
+    assert!(joy.params.iter().any(|p| p.name == "x" && p.live));
+    assert!(joy.params.iter().any(|p| p.name == "y" && p.live));
+    assert!(
+        joy.ratings
+            .iter()
+            .any(|r| r.name == "voltage" && r.value == Some(5.0) && !r.characterized),
+        "joystick-ky023 ratings: {:?}",
+        joy.ratings
+    );
+
+    for (query, want) in [
+        ("rgb led", "led-5mm-rgb-cc"),
+        ("rgb led", "led-5mm-rgb-ca"),
+        ("common anode", "led-5mm-rgb-ca"),
+        ("common cathode", "led-5mm-rgb-cc"),
+        ("neopixel ring", "neopixel-ring-16"),
+        ("ws2812 ring", "neopixel-ring-16"),
+        ("joystick", "joystick-ky023"),
+        ("thumbstick", "joystick-ky023"),
     ] {
         let hits = search(&parts_dir(), query);
         assert!(

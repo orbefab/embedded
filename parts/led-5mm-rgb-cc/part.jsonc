@@ -1,0 +1,426 @@
+// Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A, Date 11/01/2024.
+// 5 mm white-diffused common-cathode RGB LED. Pin order from the flat edge (p1):
+// 1 = Red anode (R), 2 = Common cathode (COM, longest), 3 = Blue anode (B), 4 = Green anode (G).
+// Read each colour die in a session as @<id>.red, @<id>.green and @<id>.blue.
+{
+  "format": 7,
+  "part": "led-5mm-rgb-cc",
+  "version": "0.1.0",
+  "title": "5 mm RGB LED, common cathode",
+  "summary": "5 mm 4-pin white diffused common-cathode RGB LED on 2.54 mm pitch (R, COM, B, G from flat). Read colours as @<id>.red, @<id>.green, @<id>.blue.",
+  "tags": ["led", "rgb", "rgb-led", "4-pin", "color", "colour", "tri-color", "common-cathode", "common cathode", "pwm", "light", "indicator", "through-hole"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A": "https://www.kingbrightusa.com/images/catalog/SPEC/WP154A4SUREQBFZGW.pdf",
+  },
+  "real": {
+    "generic": true,
+    "maker": "Kingbright",
+    "number": "WP154A4SUREQBFZGW",
+    "datasheet": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+  },
+  "buy": [
+    { "seller": "DigiKey", "url": "https://www.digikey.com/en/products/detail/kingbright/WP154A4SUREQBFZGW/3084118", "checked": "2026-11-26" },
+  ],
+  "pins": { "R": [1], "COM": [2], "B": [3], "G": [4] },
+  "model": {
+    "red": {
+      "kind": "led",
+      "saturation_current": {
+        "value": 5.262e-20,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+            "at": "p3 HYPER RED, Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.762 V, 2 mA), (1.849 V, 10 mA), (1.897 V, 20 mA) at kT/q for 298.15 K (p2 table typ VF = 1.9 V at 20 mA)",
+            "basis": "typical",
+          },
+        },
+      },
+      "emission_coefficient": {
+        "value": 1.793,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+            "at": "p3 HYPER RED, Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.762 V, 2 mA), (1.849 V, 10 mA), (1.897 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical",
+          },
+        },
+      },
+      "series_resistance": {
+        "value": 1.607,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+            "at": "p3 HYPER RED, Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (1.762 V, 2 mA), (1.849 V, 10 mA), (1.897 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical",
+          },
+        },
+      },
+      "ratings": {
+        "current": {
+          "value": 0.03,
+          "unit": "A",
+          "basis": {
+            "sustained": {
+              "average": "mean",
+              "tau": {
+                "value": 0.002,
+                "unit": "s",
+                "source": {
+                  "closed_form": {
+                    "note": "p2 Note 1 rates 200 mA peak at 1/10 duty and 0.1 ms pulse width (1 ms period). On a 1 ms mean that pulse settles at 30.1 mA; on a 2 ms mean (two periods) it settles at 200 mA x (1 - e^-0.05) / (1 - e^-0.5) = 24.8 mA, under the 30 mA DC rating.",
+                  },
+                },
+              },
+              "peak": {
+                "value": 0.2,
+                "unit": "A",
+                "source": {
+                  "datasheet": {
+                    "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+                    "at": "p2 ABSOLUTE MAXIMUM RATINGS at Ta = 25 C, Peak Forward Current IFP, Hyper Red = 200 mA (Note 1: 1/10 Duty Cycle, 0.1 ms Pulse Width)",
+                    "basis": "absolute_max",
+                  },
+                },
+              },
+            },
+          },
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+              "at": "p2 ABSOLUTE MAXIMUM RATINGS at Ta = 25 C, DC Forward Current IF, Hyper Red = 30 mA",
+              "basis": "absolute_max",
+            },
+          },
+        },
+        "power": {
+          "value": 0.075,
+          "unit": "W",
+          "basis": {
+            "sustained": {
+              "average": "mean",
+              "tau": {
+                "value": 0.0102,
+                "unit": "s",
+                "source": {
+                  "closed_form": {
+                    "note": "The sheet gives no pulse rating for power, so this is the 10.2 ms default, five periods of a 490 Hz PWM.",
+                  },
+                },
+              },
+            },
+          },
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+              "at": "p2 ABSOLUTE MAXIMUM RATINGS at Ta = 25 C, Power Dissipation PD, Hyper Red = 75 mW",
+              "basis": "absolute_max",
+            },
+          },
+        },
+        "reverse_voltage": {
+          "value": 5.0,
+          "unit": "V",
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+              "at": "p2 ABSOLUTE MAXIMUM RATINGS at Ta = 25 C, Reverse Voltage VR, Hyper Red = 5 V",
+              "basis": "absolute_max",
+            },
+          },
+        },
+      },
+      "pins": { "anode": "R", "cathode": "COM" },
+    },
+    "green": {
+      "kind": "led",
+      "saturation_current": {
+        "value": 1.611e-14,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+            "at": "p3 GREEN, Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (2.660 V, 2 mA), (3.004 V, 10 mA), (3.299 V, 20 mA) at kT/q for 298.15 K (p2 table typ VF = 3.3 V at 20 mA)",
+            "basis": "typical",
+          },
+        },
+      },
+      "emission_coefficient": {
+        "value": 3.985,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+            "at": "p3 GREEN, Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (2.660 V, 2 mA), (3.004 V, 10 mA), (3.299 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical",
+          },
+        },
+      },
+      "series_resistance": {
+        "value": 22.4,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+            "at": "p3 GREEN, Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (2.660 V, 2 mA), (3.004 V, 10 mA), (3.299 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical",
+          },
+        },
+      },
+      "ratings": {
+        "current": {
+          "value": 0.025,
+          "unit": "A",
+          "basis": {
+            "sustained": {
+              "average": "mean",
+              "tau": {
+                "value": 0.001,
+                "unit": "s",
+                "source": {
+                  "closed_form": {
+                    "note": "p2 Note 1 rates 150 mA peak at 1/10 duty and 0.1 ms pulse width (1 ms period). On a 1 ms mean that pulse settles at 150 mA x (1 - e^-0.1) / (1 - e^-1) = 22.6 mA, under the 25 mA DC rating.",
+                  },
+                },
+              },
+              "peak": {
+                "value": 0.15,
+                "unit": "A",
+                "source": {
+                  "datasheet": {
+                    "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+                    "at": "p2 ABSOLUTE MAXIMUM RATINGS at Ta = 25 C, Peak Forward Current IFP, Green = 150 mA (Note 1: 1/10 Duty Cycle, 0.1 ms Pulse Width)",
+                    "basis": "absolute_max",
+                  },
+                },
+              },
+            },
+          },
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+              "at": "p2 ABSOLUTE MAXIMUM RATINGS at Ta = 25 C, DC Forward Current IF, Green = 25 mA",
+              "basis": "absolute_max",
+            },
+          },
+        },
+        "power": {
+          "value": 0.1025,
+          "unit": "W",
+          "basis": {
+            "sustained": {
+              "average": "mean",
+              "tau": {
+                "value": 0.0102,
+                "unit": "s",
+                "source": {
+                  "closed_form": {
+                    "note": "The sheet gives no pulse rating for power, so this is the 10.2 ms default, five periods of a 490 Hz PWM.",
+                  },
+                },
+              },
+            },
+          },
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+              "at": "p2 ABSOLUTE MAXIMUM RATINGS at Ta = 25 C, Power Dissipation PD, Green = 102.5 mW",
+              "basis": "absolute_max",
+            },
+          },
+        },
+        "reverse_voltage": {
+          "value": 5.0,
+          "unit": "V",
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+              "at": "p2 ABSOLUTE MAXIMUM RATINGS at Ta = 25 C, Reverse Voltage VR, Green = 5 V",
+              "basis": "absolute_max",
+            },
+          },
+        },
+      },
+      "pins": { "anode": "G", "cathode": "COM" },
+    },
+    "blue": {
+      "kind": "led",
+      "saturation_current": {
+        "value": 1.943e-15,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+            "at": "p3 BLUE, Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (2.658 V, 2 mA), (2.996 V, 10 mA), (3.294 V, 20 mA) at kT/q for 298.15 K (p2 table typ VF = 3.3 V at 20 mA)",
+            "basis": "typical",
+          },
+        },
+      },
+      "emission_coefficient": {
+        "value": 3.675,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+            "at": "p3 BLUE, Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (2.658 V, 2 mA), (2.996 V, 10 mA), (3.294 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical",
+          },
+        },
+      },
+      "series_resistance": {
+        "value": 23.26,
+        "unit": "ohm",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+            "at": "p3 BLUE, Fig. Forward Current vs. Forward Voltage, Ta = 25 C; fit through (2.658 V, 2 mA), (2.996 V, 10 mA), (3.294 V, 20 mA) at kT/q for 298.15 K",
+            "basis": "typical",
+          },
+        },
+      },
+      "ratings": {
+        "current": {
+          "value": 0.03,
+          "unit": "A",
+          "basis": {
+            "sustained": {
+              "average": "mean",
+              "tau": {
+                "value": 0.001,
+                "unit": "s",
+                "source": {
+                  "closed_form": {
+                    "note": "p2 Note 1 rates 150 mA peak at 1/10 duty and 0.1 ms pulse width (1 ms period). On a 1 ms mean that pulse settles at 150 mA x (1 - e^-0.1) / (1 - e^-1) = 22.6 mA, under the 30 mA DC rating.",
+                  },
+                },
+              },
+              "peak": {
+                "value": 0.15,
+                "unit": "A",
+                "source": {
+                  "datasheet": {
+                    "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+                    "at": "p2 ABSOLUTE MAXIMUM RATINGS at Ta = 25 C, Peak Forward Current IFP, Blue = 150 mA (Note 1: 1/10 Duty Cycle, 0.1 ms Pulse Width)",
+                    "basis": "absolute_max",
+                  },
+                },
+              },
+            },
+          },
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+              "at": "p2 ABSOLUTE MAXIMUM RATINGS at Ta = 25 C, DC Forward Current IF, Blue = 30 mA",
+              "basis": "absolute_max",
+            },
+          },
+        },
+        "power": {
+          "value": 0.12,
+          "unit": "W",
+          "basis": {
+            "sustained": {
+              "average": "mean",
+              "tau": {
+                "value": 0.0102,
+                "unit": "s",
+                "source": {
+                  "closed_form": {
+                    "note": "The sheet gives no pulse rating for power, so this is the 10.2 ms default, five periods of a 490 Hz PWM.",
+                  },
+                },
+              },
+            },
+          },
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+              "at": "p2 ABSOLUTE MAXIMUM RATINGS at Ta = 25 C, Power Dissipation PD, Blue = 120 mW",
+              "basis": "absolute_max",
+            },
+          },
+        },
+        "reverse_voltage": {
+          "value": 5.0,
+          "unit": "V",
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+              "at": "p2 ABSOLUTE MAXIMUM RATINGS at Ta = 25 C, Reverse Voltage VR, Blue = 5 V",
+              "basis": "absolute_max",
+            },
+          },
+        },
+      },
+      "pins": { "anode": "B", "cathode": "COM" },
+    },
+  },
+  "readings": {
+    "lit": {
+      "of": "i",
+      "above": {
+        "value": 0.002,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+            "at": "p3, lowest point of the forward fits (2 mA); Fig. Luminous Intensity vs. Forward Current rises linearly from 0 mA for all three dies",
+            "basis": "typical",
+          },
+        },
+      },
+    },
+    "dim": {
+      "of": "i",
+      "above": {
+        "value": 0.0005,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+            "at": "p2 ELECTRICAL / OPTICAL CHARACTERISTICS, Reverse Current (VR = 5 V): 10 uA max Red, 50 uA max Blue and Green; floor is ten times the 50 uA maximum leakage",
+            "basis": "max",
+          },
+        },
+      },
+    },
+    "brightness": {
+      "of": "i",
+      "full": {
+        "value": 0.02,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+            "at": "p1 SELECTION GUIDE, Iv is rated at IF = 20 mA for Hyper Red, Blue and Green",
+            "basis": "nominal",
+          },
+        },
+      },
+    },
+  },
+  "view": {
+    "glow": [
+      { "node": "die-red", "by": "red" },
+      { "node": "die-green", "by": "green" },
+      { "node": "die-blue", "by": "blue" },
+    ],
+  },
+  "not_simulated": [
+    {
+      "what": "light",
+      "why": "The engine reports each die's current, not luminous intensity (p1 lists 1300 mcd Red, 2000 mcd Green and 500 mcd Blue at 20 mA). The drawing lights three colour emitters inside a translucent white dome, each scaling to full glow at 20 mA.",
+    },
+    {
+      "what": "temperature and shared package heating",
+      "why": "Each die is fitted at Ta = 25 C and rated independently from p2; total package heating when all three dies run together and current derating above 25 C are not modelled.",
+    },
+    {
+      "what": "reverse breakdown",
+      "why": "The engine's LED does not conduct in reverse breakdown; `rating.voltage` warns when reverse voltage passes the p2 VR = 5 V absolute maximum on any die.",
+    },
+  ],
+}
