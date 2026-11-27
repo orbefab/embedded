@@ -32,8 +32,8 @@ const SCENE_KEYS: &[&str] = &[
 /// `steinhart_hart` world curves, a resistor's single-value maximum `ratings.voltage`,
 /// `characterized` on a rating, `ratings.reverse_voltage` on `diode` and `led`, `ratings` on
 /// `potentiometer`, `switch`, `dht22`, `sg90`, `ne555`, `cst816` and `st77916`,
-/// `ratings.supply_min` (and `bmp280`'s `ratings.io_supply_min` and `ratings.temperature`), and
-/// a composite part's `accepted_warnings`.
+/// `ratings.supply_min` (and `bmp280`'s `ratings.io_supply_min` and `ratings.temperature`), a
+/// composite part's `accepted_warnings`, and `start` and `bootloader` on `atmega328p`.
 pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5, 6, 7];
 /// Scene `format` values this binary reads.
 pub const SCENE_FORMATS: &[u32] = &[1];
@@ -54,8 +54,8 @@ const VOLTAGE_FORMAT: u32 = 6;
 /// The oldest part format that carries `steinhart_hart` world curves, single-value resistor
 /// maximum `ratings.voltage`, `characterized` ratings, `diode`/`led` `ratings.reverse_voltage`,
 /// `ratings` on `potentiometer`, `switch`, `dht22`, `sg90`, `ne555`, `cst816` and `st77916`,
-/// `ratings.supply_min` (and `bmp280`'s `io_supply_min` and `temperature`), and
-/// `accepted_warnings` (refused by orbe 0.3.1).
+/// `ratings.supply_min` (and `bmp280`'s `io_supply_min` and `temperature`), `accepted_warnings`,
+/// and `atmega328p` `start` and `bootloader` (refused by orbe 0.3.1).
 const RATINGS_FORMAT: u32 = 7;
 /// The oldest part format whose readings take `"of": "angle"`.
 const ANGLE_FORMAT: u32 = 6;
@@ -3030,6 +3030,13 @@ fn decode_body(
                         RATINGS_FORMAT,
                         format,
                     );
+                }
+            }
+        }
+        if kind == "atmega328p" {
+            for prop in node.props().unwrap_or_default() {
+                if matches!(prop.key.as_str(), "start" | "bootloader") {
+                    gate(out, kind, &prop.key, prop.key_span, RATINGS_FORMAT, format);
                 }
             }
         }

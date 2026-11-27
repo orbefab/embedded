@@ -102,15 +102,15 @@ fn each_pad_is_the_pin_its_name_says() {
 }
 
 /// `RESET` holds the chip from power-on, then rises to about 2.45 V at 1 us: above its own
-/// 2.2 V, under an I/O pin's 2.6 V. With `SUT` 01 the reset delay is 14 cycles, and `toggle.S`
-/// then pulls PB5 low against 10 kohm to VCC.
+/// 2.2 V, under an I/O pin's 2.6 V. With `SUT` 01 the start from reset is 16K CK and 14 CK,
+/// 1.02 ms (Table 9-4), and `toggle.S` then pulls PB5 low against 10 kohm to VCC.
 #[test]
 fn reset_releases_at_its_own_threshold() {
     let step = r#"{ "name": "vr", "kind": "voltage_source", "pins": { "p": "src", "n": "gnd" },
           "voltage": { "kind": "step", "initial": { "value": 0.0, "unit": "V" },
                        "final": { "value": 2.4, "unit": "V" }, "at_ps": 1000000 } }"#;
     let netlist = board(
-        3 * US,
+        1_100 * US,
         &["src"],
         &[
             step.to_string(),
@@ -139,9 +139,10 @@ fn reset_releases_at_its_own_threshold() {
     assert_eq!(edges(&trace, "PC6"), [(US, true)]);
 }
 
-/// A chip held in reset draws `reset_current`, and from the stop where `RESET` lets go,
-/// `active_current`. `RESET` rises to 5 V at 2 us, and with `SUT` 01 the reset delay is 14
-/// cycles. The chip runs from 5 V through 1 ohm, so that resistor's volts are its amperes.
+/// A chip held in reset draws `reset_current`, and from the stop where the reset lets go,
+/// `active_current`. It starts at power-on, so it is held from t = 0. `RESET` rises to 5 V at
+/// 2 us, and with `CKSEL0` 1 and `SUT` 01 the reset delay after it is 16K CK + 14 CK (Table
+/// 9-4). The chip runs from 5 V through 1 ohm, so that resistor's volts are its amperes.
 #[test]
 fn a_chip_held_in_reset_draws_its_reset_current() {
     let step = r#"{ "name": "vr", "kind": "voltage_source", "pins": { "p": "src", "n": "gnd" },
@@ -156,8 +157,10 @@ fn a_chip_held_in_reset_draws_its_reset_current() {
     .unwrap();
     mcu["active_current"] = serde_json::json!({ "value": 0.0114, "unit": "A" });
     mcu["reset_current"] = serde_json::json!({ "value": 0.002, "unit": "A" });
+    mcu["start"] = "power_on".into();
+    let release = 2 * US + (16_384 + 14) * 62_500;
     let netlist = board(
-        4 * US,
+        release + 10 * US,
         &["src", "chip"],
         &[
             step.to_string(),
@@ -176,8 +179,7 @@ fn a_chip_held_in_reset_draws_its_reset_current() {
     assert!(at_zero > 0.0019 && at_zero < 0.0023, "{at_zero} A at t = 0");
     let held = drawn(at(&chip, 2 * US));
     assert!(held > 0.0019 && held < 0.0023, "{held} A while held");
-    // Internal reset stays held through the 14-cycle start-up time-out (DS40002061B §11.1).
-    let release = 2 * US + 14 * 62_500;
+    // Internal reset stays held through the start-up time-out (DS40002061B §11.1).
     let before = drawn(at(&chip, release));
     assert!(
         before > 0.0019 && before < 0.0021,

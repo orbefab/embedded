@@ -3,7 +3,8 @@
 # dividers scale with the pin, so where the LED switches does not move.
 # At 300 lx the LDR node is 2.52 V and the threshold is 1.54 V, so the LED is off.
 open
-step 50ms
+# The sketch starts 66 ms after power-on, when the start from reset the fuses set is over.
+step 116ms
 expect @led1 off
 expect @nano.D2 low
 expect @nano.D2 < 0.2V

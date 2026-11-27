@@ -35,7 +35,7 @@
     "j1": { "type": "pin-header-1x15" }, // right row, Nano leads 1 to 15
     "j2": { "type": "pin-header-1x15" }, // left row, Nano leads 16 to 30
     "icsp": { "type": "pin-header-2x3" },
-    "mcu": { "type": "atmega328p-tqfp32", "firmware": { "param": "firmware" } }, // the Nano's firmware reaches the 328P
+    "mcu": { "type": "atmega328p-tqfp32", "firmware": { "param": "firmware" }, "bootloader": "nano" }, // the Nano's firmware reaches the 328P
     "usb_serial": { "type": "ch340g" },
     "regulator": { "type": "ams1117-sot223" },
     "sw_reset": { "type": "tactile-switch-smd" },

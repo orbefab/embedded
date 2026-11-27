@@ -119,7 +119,9 @@ fn scl_period_ps(trace: &Trace) -> u64 {
     periods[periods.len() / 2]
 }
 
-/// The Nano reading the `cst816` through the module for 40 ms, rows every 1 ms.
+/// The Nano reading the `cst816` through the module for 40 ms from the sketch's start, rows every
+/// 1 ms. The Nano starts the sketch 66 ms after power-on, so the run and the touches are 66 ms
+/// later.
 fn touch_scene() -> serde_json::Value {
     let mut json = expand(
         r#"{
@@ -148,7 +150,7 @@ fn touch_scene() -> serde_json::Value {
   }
 }"#,
     );
-    json["analysis"]["transient"]["stop_ps"] = serde_json::json!(40_000_000_000u64);
+    json["analysis"]["transient"]["stop_ps"] = serde_json::json!(106_000_000_000u64);
     json["analysis"]["transient"]["grid_ps"] = serde_json::json!(1_000_000_000u64);
     json["analysis"]["transient"]["max_step_ps"] = serde_json::json!(1_000_000_000u64);
     json["parts"]
@@ -172,8 +174,8 @@ fn touch_scene() -> serde_json::Value {
                 "high": { "value": 0.7, "unit": "1" }
             },
             "touches": [
-                { "t_ps": 1_000_000_000u64, "x": 291, "y": 69, "down": true },
-                { "t_ps": 8_000_000_000u64, "x": 16, "y": 32, "down": true }
+                { "t_ps": 67_000_000_000u64, "x": 291, "y": 69, "down": true },
+                { "t_ps": 74_000_000_000u64, "x": 16, "y": 32, "down": true }
             ]
         }));
     json

@@ -1,6 +1,7 @@
 # The display holds each digit for 200 ms, starting at 0.
 open
-step 50ms
+# The sketch starts 66 ms after power-on, when the start from reset the fuses set is over.
+step 116ms
 expect @disp.digit 0
 step 200ms
 expect @disp.digit 1

@@ -197,7 +197,7 @@ fn a_test_file_turns_the_knob() {
 #[test]
 fn a_page_sees_the_knob_and_turns_it_like_set() {
     let mut live = opened();
-    ok(&mut live, "step 50ms");
+    ok(&mut live, "step 116ms");
     let scene = live.scene().unwrap();
     assert_eq!(
         scene["params"],

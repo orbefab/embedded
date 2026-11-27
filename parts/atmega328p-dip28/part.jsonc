@@ -13,11 +13,31 @@
     "PD5": [11], "PD6": [12], "PD7": [13], "PB0": [14], "PB1": [15], "PB2": [16], "PB3": [17], "PB4": [18], "PB5": [19], "AVCC": [20],
     "AREF": [21], "PC0": [23], "PC1": [24], "PC2": [25], "PC3": [26], "PC4": [27], "PC5": [28],
   },
-  "params": { "firmware": { "file": "hex", "as": "text", "required": true, "example": "example.hex", "sets": "/firmware" } },
+  "params": {
+    "firmware": { "file": "hex", "as": "text", "required": true, "example": "example.hex", "sets": "/firmware" },
+    // What the boot section holds, with the high fuse Arduino's boards.txt (avr 1.8.6) burns beside
+    // it: `uno` is `uno.bootloader.high_fuses=0xDE` and `nano` is
+    // `nano.menu.cpu.atmega328.bootloader.high_fuses=0xDA`, each with
+    // `optiboot/optiboot_atmega328.hex`. Both program BOOTRST, so the reset vector is the boot
+    // section (Table 27-13). `none` leaves BOOTRST unprogrammed, as a chip programmed over ICSP.
+    "bootloader": {
+      "default": "none",
+      "choices": {
+        "none": { "sets": { "/fuses/high": 223 } },
+        "uno": { "sets": { "/fuses/high": 222, "/bootloader": "optiboot" } },
+        "nano": { "sets": { "/fuses/high": 218, "/bootloader": "optiboot" } },
+      },
+    },
+  },
   "model": {
     "kind": "atmega328p",
     "clock_hz": { "value": 16000000, "unit": "Hz", "source": { "datasheet": { "doc": "avr-1.8.6 boards.txt", "at": "f_cpu 16000000, the resonator CSTCE16M0V53-R0 frequency the runtime programs", "basis": "nominal" } } },
+    // Low 0xFF and extended 0xFD are what boards.txt burns on the Uno and the Nano: the low-power
+    // crystal with SUT 11, whose start from reset is 16K CK + 14 CK + 65 ms (Table 9-4), and
+    // brown-out at 2.7 V.
     "fuses": { "low": 255, "high": 223, "extended": 253 },
+    // The supply rises at 0 ps, so the start from reset and the bootloader run before the sketch.
+    "start": "power_on",
     "output": {
       "high_drop": { "value": 0.0, "unit": "V", "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-355", "basis": "typical" } } },
       "high_resistance": { "value": 25.0, "unit": "ohm", "source": { "datasheet": { "doc": "DS40002061B", "at": "Figure 31-355", "basis": "typical" } } },

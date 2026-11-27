@@ -26,8 +26,9 @@ const VT: f64 = 1.380649e-23 * 298.15 / 1.602176634e-19;
 const GMIN: f64 = 1e-12;
 /// Larger measured gap at `grid_ps` of 1e9 is 69612 ps. This is that gap plus 130 ns.
 const RELEASE_WINDOW_PS: u64 = 200_000;
-/// External-reset extra cycles, from the crystal row of the fuse tables.
-const RESET_CYCLES: u64 = 14;
+/// External-reset cycles besides the 65 ms, from the crystal row of the fuse tables: the 16K CK
+/// start-up and the 14 CK of the additional delay (Table 9-4).
+const RESET_CYCLES: u64 = 16_384 + 14;
 /// Recorded from the engine. First PB5 rise of `packages/engine/tests/firmware/sketch/blink.hex`, in cycles. Not derived.
 const SKETCH_CYCLES: u64 = 233;
 /// Recorded from the engine at these switch times. Cycles from this example's switch close to the PB5 rise. Not derived.
@@ -853,4 +854,306 @@ fn v3v3_stays_between_the_setpoints_the_run_visits() {
             time.as_ps()
         );
     }
+}
+
+/// The fragment's chip as Arduino's `boards.txt` burns a Uno's: high fuse `0xDE` and Optiboot,
+/// powered up at 0 ps.
+fn powered_with_optiboot() -> serde_json::Value {
+    let mut netlist = fragment();
+    let mcu = part_mut(&mut netlist, "mcu");
+    mcu["fuses"]["high"] = serde_json::json!(0xDE);
+    mcu["bootloader"] = serde_json::json!("optiboot");
+    mcu["start"] = serde_json::json!("power_on");
+    netlist
+}
+
+/// The power-on start from reset, 16K CK, 14 CK and 65 ms (Table 9-4), then Optiboot's 26
+/// cycles to the sketch, move the sketch's first PB5 rise by that much.
+#[test]
+fn a_powered_sketch_starts_after_the_start_from_reset_and_optiboot() {
+    let mut netlist = powered_with_optiboot();
+    netlist["analysis"]["transient"]["stop_ps"] = serde_json::Value::from(200_000_000_000_u64);
+    netlist["analysis"]["transient"]["grid_ps"] = serde_json::Value::from(1_000_000_000_u64);
+    let cycle = cycle_ps(&netlist);
+    let done = run(&netlist);
+    assert_quiet(&done);
+    let pb5 = logic(&done.folder, "#mcu.logic.PB5");
+    let start = 65_000_000_000 + (RESET_CYCLES + 26 + SKETCH_CYCLES) * cycle;
+    assert_eq!(pb5.first().copied(), Some((start, true)));
+}
+
+/// A press of the reset button sets `EXTRF`, and Optiboot waits for an upload. With nothing on
+/// RXD it toggles PB5 six times, 976 counts of `clkI/O` / 1024 apart, and its 1 s watchdog then
+/// resets the chip, 128K watchdog cycles after the last `WDR`. That reset goes straight to the
+/// sketch. The cycles are `optiboot_atmega328.hex`'s on the chip model.
+#[test]
+fn the_reset_button_under_optiboot_flashes_pb5_then_its_watchdog_starts_the_sketch() {
+    let mut netlist = powered_with_optiboot();
+    part_mut(&mut netlist, "sw_reset")["events"] = serde_json::json!([
+        { "t_ps": 500_000_000_000_u64, "state": "closed" },
+        { "t_ps": 600_000_000_000_u64, "state": "open" }
+    ]);
+    netlist["analysis"]["transient"]["stop_ps"] = serde_json::Value::from(2_300_000_000_000_u64);
+    netlist["analysis"]["transient"]["grid_ps"] = serde_json::Value::from(1_000_000_000_u64);
+    let cycle = cycle_ps(&netlist);
+    let done = run(&netlist);
+    assert_quiet(&done);
+    let release = logic(&done.folder, "#mcu.logic.PC6")
+        .into_iter()
+        .find(|(at, high)| *high && *at >= 600_000_000_000)
+        .unwrap()
+        .0;
+    assert_pb5_after(&done.folder, release, &optiboot_wait(release, cycle), cycle);
+}
+
+/// The cycles of Optiboot's wait after a reset from the pin, from `optiboot_atmega328.hex` on
+/// the chip model: PB5's six toggles, each 976 counts of `clkI/O` / 1024 apart, and then the
+/// watchdog reset 128K watchdog cycles after the last `WDR`, which goes straight to the sketch.
+/// `release` is the picosecond `RESET` rose.
+fn optiboot_wait(release: u64, cycle: u64) -> Vec<(u64, bool)> {
+    let start = 65_000_000_000 + RESET_CYCLES * cycle;
+    let flash = |k: u64| release + start + (999_428 + 999_424 * k) * cycle;
+    let watchdog = flash(5) + 16_384_001 * cycle;
+    let mut want: Vec<(u64, bool)> = (0..6).map(|k| (flash(k), k % 2 == 0)).collect();
+    want.push((watchdog + start + (26 + SKETCH_CYCLES) * cycle, true));
+    want
+}
+
+/// PB5's changes after `after` are `want`, each within one cycle.
+fn assert_pb5_after(folder: &RunFolder, after: u64, want: &[(u64, bool)], cycle: u64) {
+    let got: Vec<(u64, bool)> = logic(folder, "#mcu.logic.PB5")
+        .into_iter()
+        .filter(|(at, _)| *at > after)
+        .take(want.len())
+        .collect();
+    assert_eq!(got.len(), want.len(), "PB5 {got:?}, want {want:?}");
+    for ((at, high), (want_at, want_high)) in got.iter().zip(want) {
+        assert_eq!(high, want_high, "PB5 {got:?}, want {want:?}");
+        assert!(
+            at.abs_diff(*want_at) <= cycle,
+            "PB5 at {at} ps, want {want_at} ps, one cycle is {cycle} ps; PB5 {got:?}"
+        );
+    }
+}
+
+/// A reset without `EXTRF` that releases at `release` runs the 16K CK, 14 CK and 65 ms of
+/// Table 9-4, then Optiboot's 26 cycles straight to the sketch, whose first PB5 rise follows.
+fn sketch_start(release: u64, cycle: u64) -> u64 {
+    release + 65_000_000_000 + (RESET_CYCLES + 26 + SKETCH_CYCLES) * cycle
+}
+
+/// The fragment's chip alone, fused and loaded as a Uno's and started at power-on, on a supply
+/// `supply` gives `vcc`. `RESET` is open, so only its own pull-up holds it, as on a bare chip.
+/// A 10 kohm pull-down on PB5 keeps it low while the pin is off. `extended` is the extended
+/// fuse byte.
+fn bare_uno_chip(supply: serde_json::Value, extended: u8, stop_ps: u64) -> serde_json::Value {
+    let board = powered_with_optiboot();
+    let mut mcu = part(&board, "mcu").clone();
+    mcu["pins"]["VCC"] = serde_json::json!("vcc");
+    mcu["pins"]["AVCC"] = serde_json::json!("vcc");
+    mcu["fuses"]["extended"] = serde_json::json!(extended);
+    let mut parts: Vec<serde_json::Value> = ["res_xtal1", "res_xtal2", "c_aref"]
+        .into_iter()
+        .map(|name| part(&board, name).clone())
+        .collect();
+    parts.push(mcu);
+    parts.push(serde_json::json!({
+        "name": "supply",
+        "kind": "voltage_source",
+        "pins": { "p": "vcc_in", "n": "gnd" },
+        "voltage": supply,
+    }));
+    parts.push(serde_json::json!({
+        "name": "r_pb5",
+        "kind": "resistor",
+        "pins": { "a": "d13", "b": "gnd" },
+        "resistance": { "value": 10_000.0, "unit": "ohm" },
+        "ratings": { "power": null },
+    }));
+    let mut nets = vec!["gnd".to_string()];
+    for part in &parts {
+        for net in part["pins"].as_object().unwrap().values() {
+            let net = net.as_str().unwrap().to_string();
+            if !nets.contains(&net) {
+                nets.push(net);
+            }
+        }
+    }
+    serde_json::json!({
+        "version": 1,
+        "seed": 0,
+        "analysis": { "transient": {
+            "stop_ps": stop_ps,
+            "max_step_ps": 1_000_000_000_u64,
+            "grid_ps": 1_000_000_000_u64,
+        } },
+        "ground": "gnd",
+        "nets": nets,
+        "parts": parts,
+    })
+}
+
+/// `vcc_in` straight onto `vcc` through a 1 mohm link.
+fn stiff(mut netlist: serde_json::Value) -> serde_json::Value {
+    link_vcc(&mut netlist, 0.001, None);
+    netlist
+}
+
+/// `vcc_in` onto `vcc` through `ohms`, with `farads` from `vcc` to ground, at 0 V at 0 ps.
+fn link_vcc(netlist: &mut serde_json::Value, ohms: f64, farads: Option<f64>) {
+    let parts = netlist["parts"].as_array_mut().unwrap();
+    parts.push(serde_json::json!({
+        "name": "r_supply",
+        "kind": "resistor",
+        "pins": { "a": "vcc_in", "b": "vcc" },
+        "resistance": { "value": ohms, "unit": "ohm" },
+        "ratings": { "power": null },
+    }));
+    if let Some(farads) = farads {
+        parts.push(serde_json::json!({
+            "name": "c_supply",
+            "kind": "capacitor",
+            "pins": { "a": "vcc", "b": "gnd" },
+            "capacitance": { "value": farads, "unit": "F" },
+            "initial": { "value": 0.0, "unit": "V" },
+        }));
+    }
+}
+
+/// A steps source from `initial` volts, then each `(t_ps, volts)`.
+fn steps(initial: f64, events: &[(u64, f64)]) -> serde_json::Value {
+    let events: Vec<serde_json::Value> = events
+        .iter()
+        .map(|&(t_ps, volts)| {
+            serde_json::json!({ "t_ps": t_ps, "level": { "value": volts, "unit": "V" } })
+        })
+        .collect();
+    serde_json::json!({
+        "kind": "steps",
+        "initial": { "value": initial, "unit": "V" },
+        "events": events,
+    })
+}
+
+/// 0 V at 0 ps, then up 0.25 V every 5 ms to 5 V at 100 ms.
+fn staircase() -> serde_json::Value {
+    let events: Vec<(u64, f64)> = (1..=20_u64)
+        .map(|k| (k * 5_000_000_000, 0.25 * k as f64))
+        .collect();
+    steps(0.0, &events)
+}
+
+/// The first picosecond `#mcu.logic.VCC`, the brown-out watch, reads above `VBOT+`.
+fn vbot_rise(folder: &RunFolder) -> u64 {
+    logic(folder, "#mcu.logic.VCC")
+        .into_iter()
+        .find(|(_, high)| *high)
+        .expect("VCC rose through VBOT+")
+        .0
+}
+
+/// From 0 V, `RESET` reads low only because `VCC` is 0 V: its pull-up has no supply to pull to.
+/// Below `VPOT` the power-on reset is active and clears `EXTRF` (DS40002061B §11.3 and §11.9.1),
+/// and once `VCC` is up the pull-up holds `RESET` high, so no external reset happens. The
+/// brown-out reset, at `BODLEVEL` 101, holds the chip until `VBOT+`, 2.725 V. The 55 ms step
+/// to 2.75 V crosses it, and the sketch starts the start from reset and Optiboot's 26 cycles
+/// after it, with no wait for an upload.
+#[test]
+fn a_bare_chip_on_a_staircase_from_0_v_goes_straight_to_its_sketch() {
+    let netlist = stiff(bare_uno_chip(staircase(), 0xFD, 300_000_000_000));
+    let cycle = cycle_ps(&netlist);
+    let done = run(&netlist);
+    let rise = vbot_rise(&done.folder);
+    assert_eq!(rise, 55_000_000_000, "the step to 2.75 V crosses VBOT+");
+    assert_pb5_after(&done.folder, 0, &[(sketch_start(rise, cycle), true)], cycle);
+}
+
+/// With brown-out detection off (`BODLEVEL` 111), only the power-on reset holds the chip on the
+/// way up. It ends at `VPOT` rising, typically 1.4 V (Table 29-11), which the 30 ms step to
+/// 1.5 V crosses.
+#[test]
+fn a_bare_chip_without_brown_out_starts_from_where_vcc_crosses_vpot() {
+    let netlist = stiff(bare_uno_chip(staircase(), 0xFF, 300_000_000_000));
+    let cycle = cycle_ps(&netlist);
+    let done = run(&netlist);
+    assert_pb5_after(
+        &done.folder,
+        0,
+        &[(sketch_start(30_000_000_000, cycle), true)],
+        cycle,
+    );
+}
+
+/// A supply that charges 10 uF through 1 kohm from a 5 V step at 2 ns rises over tens of
+/// milliseconds. `RESET`'s pull-up follows `VCC` all the way, so the chip starts as from any
+/// power-on: the sketch follows the start from reset from the moment `VCC` crosses `VBOT+`.
+#[test]
+fn a_bare_chip_on_a_slow_ramp_goes_straight_to_its_sketch() {
+    let mut netlist = bare_uno_chip(steps(0.0, &[(2_000, 5.0)]), 0xFD, 300_000_000_000);
+    link_vcc(&mut netlist, 1_000.0, Some(10e-6));
+    let cycle = cycle_ps(&netlist);
+    let done = run(&netlist);
+    let rise = vbot_rise(&done.folder);
+    assert!(
+        (5_000_000_000..10_000_000_000).contains(&rise),
+        "VBOT+ at {rise} ps, about 6.4 ms into the ramp"
+    );
+    assert_pb5_after(&done.folder, 0, &[(sketch_start(rise, cycle), true)], cycle);
+}
+
+/// Pressing `RESET` with the chip powered is an external reset: `EXTRF` is set, and Optiboot
+/// waits for an upload, flashing PB5, until its watchdog starts the sketch.
+#[test]
+fn a_reset_press_on_a_powered_bare_chip_still_makes_optiboot_wait() {
+    let mut netlist = stiff(bare_uno_chip(staircase(), 0xFD, 2_000_000_000_000));
+    let board = powered_with_optiboot();
+    let mut switch = part(&board, "sw_reset").clone();
+    switch["events"] = serde_json::json!([
+        { "t_ps": 300_000_000_000_u64, "state": "closed" },
+        { "t_ps": 310_000_000_000_u64, "state": "open" }
+    ]);
+    netlist["parts"].as_array_mut().unwrap().push(switch);
+    let cycle = cycle_ps(&netlist);
+    let done = run(&netlist);
+    let pc6 = logic(&done.folder, "#mcu.logic.PC6");
+    assert!(
+        pc6.contains(&(300_000_000_000, false)),
+        "the press pulls RESET low: {pc6:?}"
+    );
+    let release = pc6
+        .iter()
+        .find(|(at, high)| *high && *at >= 310_000_000_000)
+        .unwrap()
+        .0;
+    assert_pb5_after(&done.folder, release, &optiboot_wait(release, cycle), cycle);
+}
+
+/// A dip to 2.0 V, under `VBOT-` and over `VPOT`, is a brown-out reset: `BORF`, not `EXTRF`,
+/// since `RESET`'s pull-up follows `VCC` down and back. Optiboot goes straight to the sketch.
+#[test]
+fn a_brown_out_recovery_goes_straight_to_the_sketch() {
+    let supply = steps(5.0, &[(300_000_000_000, 2.0), (400_000_000_000, 5.0)]);
+    let netlist = stiff(bare_uno_chip(supply, 0xFD, 600_000_000_000));
+    let cycle = cycle_ps(&netlist);
+    let done = run(&netlist);
+    let vcc = logic(&done.folder, "#mcu.logic.VCC");
+    assert_eq!(
+        vcc,
+        [(300_000_000_000, false), (400_000_000_000, true)],
+        "VCC through VBOT- and back"
+    );
+    let at = 400_000_000_000;
+    assert_pb5_after(&done.folder, at, &[(sketch_start(at, cycle), true)], cycle);
+}
+
+/// A dip to 0 V is a power-on reset: `RESET` reads low only while `VCC` is gone, and the
+/// power-on reset clears `EXTRF`. The chip starts again as from power-on.
+#[test]
+fn a_supply_that_drops_to_0_v_and_returns_starts_as_from_power_on() {
+    let supply = steps(5.0, &[(300_000_000_000, 0.0), (400_000_000_000, 5.0)]);
+    let netlist = stiff(bare_uno_chip(supply, 0xFD, 600_000_000_000));
+    let cycle = cycle_ps(&netlist);
+    let done = run(&netlist);
+    let at = 400_000_000_000;
+    assert_pb5_after(&done.folder, at, &[(sketch_start(at, cycle), true)], cycle);
 }

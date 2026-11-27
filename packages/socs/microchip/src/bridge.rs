@@ -6,7 +6,7 @@
 use orbe_mcu::{Fault, Frame, I2cPhase, Mcu, Note, Pc, Phase, Setting, Unsupported};
 use orbe_model::{Drive, Quantity, Readings, Stop, Time};
 
-use crate::{Channel, Cpu, FuseBytes, I2cNote, PinDrive, Port, Refused, Timeline};
+use crate::{Bootloader, Channel, Cpu, FuseBytes, I2cNote, PinDrive, Port, Refused, Timeline};
 
 /// What a pin of the kind is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,30 +122,17 @@ clone_fields!(Bridge {
 });
 
 impl Bridge {
-    /// The chip at power-on on a `clock_hz` crystal, with `fuses` programmed and `flash` from
-    /// address 0.
-    pub fn new(clock_hz: u32, fuses: FuseBytes, flash: &[u8]) -> Bridge {
-        Self::build(clock_hz, fuses, flash, false)
-    }
-
-    /// Like [`Self::new`], starting held in power-on reset so the operating point at t = 0 sees
-    /// the chip's reset current before cycle 1 releases it.
-    pub fn power_on(clock_hz: u32, fuses: FuseBytes, flash: &[u8]) -> Bridge {
-        Self::build(clock_hz, fuses, flash, true)
-    }
-
-    fn build(clock_hz: u32, fuses: FuseBytes, flash: &[u8], held_at_power_on: bool) -> Bridge {
+    /// The chip on a `clock_hz` crystal, with `fuses` programmed, `bootloader` in its boot section
+    /// and `flash` from address 0, at its first instruction at 0 ps. [`Bridge::power_on`] starts
+    /// it at power-on instead.
+    pub fn new(clock_hz: u32, fuses: FuseBytes, bootloader: Bootloader, flash: &[u8]) -> Bridge {
         let mut cpu = Cpu::new();
         cpu.set_clock_hz(clock_hz);
         cpu.set_fuses(fuses.low, fuses.high, fuses.extended);
+        cpu.set_bootloader(bootloader);
         cpu.load_flash(flash);
-        let timeline = if held_at_power_on {
-            Timeline::power_on(cpu)
-        } else {
-            Timeline::new(cpu)
-        };
         let mut bridge = Bridge {
-            timeline,
+            timeline: Timeline::new(cpu),
             clock_hz: u64::from(clock_hz),
             image: [Drive::Off; PORT_PINS.len()],
             levels: Vec::new(),
@@ -154,6 +141,15 @@ impl Bridge {
         };
         bridge.refresh();
         bridge
+    }
+
+    /// Supply rises at 0 ps: the chip is held in reset from there, so the operating point at
+    /// t = 0 sees its reset current, and the first instruction runs after the start from reset
+    /// the fuses select and the bootloader's way to the sketch, as [`Cpu::power_on`] says.
+    /// Called before the first run.
+    pub fn power_on(&mut self) {
+        self.timeline.power_on();
+        self.refresh();
     }
 
     pub fn cpu(&self) -> &Cpu {
@@ -209,22 +205,26 @@ impl Mcu for Bridge {
         &self.image
     }
 
-    /// Held while `RESET` is low or `VCC` is under the brown-out window, from the cycle the
-    /// timeline stops at for it.
+    /// Held while `VCC` is under `VPOT` or the brown-out window or `RESET` is low, from the
+    /// cycle the timeline stops at for it.
     fn held(&self) -> bool {
         self.timeline.held()
     }
 
     /// The port pins' levels in [`PORT_PINS`] order, then `VCC` above the brown-out window
-    /// when the fuses enable it.
+    /// when the fuses enable it, then `VCC` above `VPOT`. Each comes after the pins, so a
+    /// `RESET` that reads low because `VCC` fell to 0 V is already low when the power-on reset
+    /// clears its flag.
     fn input(&mut self, _at: Time, levels: &[bool]) {
+        let brown_out = self.cpu().brown_out_window().is_some();
         for (k, &level) in levels.iter().enumerate() {
             if self.levels.get(k) == Some(&level) {
                 continue;
             }
             match DIE.get(k) {
                 Some(&pin) => self.timeline.set_pad(pin, level),
-                None => self.timeline.set_brown_out(!level),
+                None if brown_out && k == DIE.len() => self.timeline.set_brown_out(!level),
+                None => self.timeline.set_power_on_reset(!level),
             }
         }
         self.levels = levels.to_vec();
@@ -317,6 +317,9 @@ impl Mcu for Bridge {
             } => setting(peripheral, Setting::Register(name)),
             Refused::Interrupt { peripheral } => setting(peripheral, Setting::Interrupt),
             Refused::Sleep => setting("CPU", Setting::Sleep),
+            Refused::Unsimulated { peripheral, what } => {
+                setting(peripheral, Setting::Unsimulated(what))
+            }
         };
         Some((at, fault))
     }

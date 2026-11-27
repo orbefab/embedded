@@ -97,15 +97,15 @@ fn report_lines(report: test::Report) -> (bool, Vec<String>) {
     (report.passed(), lines)
 }
 
-/// Adafruit SSD1306's `begin` through the shifter, from 122 ms, where the sketch's delay ends,
-/// to the display on by 125 ms, with no diagnostic. Before the CH340G's V3 capacitor the gates'
-/// rail was the V3 regulator alone, and an SCL fall at 122.23 ms pulled every FET node with it,
+/// Adafruit SSD1306's `begin` through the shifter, from 188 ms, where the sketch's delay ends,
+/// to the display on by 191 ms, with no diagnostic. Before the CH340G's V3 capacitor the gates'
+/// rail was the V3 regulator alone, and an SCL fall early in `begin` pulled every FET node with it,
 /// A4 to -1.95 V. Before the solver weighed each pivot against its row, the CH340G's idle DTR
 /// current, about 5 pA beside the module's 1 uF on 5V, kept Newton from converging there.
 #[test]
 fn begin_through_a_level_shifter_turns_the_display_on() {
     let (passed, lines) =
-        play("open\nstep 125ms\nget @oled.display.screen\nexpect no diagnostics\n");
+        play("open\nstep 191ms\nget @oled.display.screen\nexpect no diagnostics\n");
     assert!(passed, "{lines:#?}");
     let screen = lines.iter().find(|line| line.starts_with("get ")).unwrap();
     assert!(screen.contains(r#""on":true"#), "{screen}");
@@ -118,7 +118,7 @@ fn begin_through_a_level_shifter_turns_the_display_on() {
 #[ignore = "about five minutes: run it with --run-ignored only"]
 fn the_block_picture_draws_on_the_module_behind_a_level_shifter() {
     let (passed, lines) = play_with_budget(
-        "open\nstep 200ms\nexpect @oled.display.screen shows tests/hello.screen\n\
+        "open\nstep 266ms\nexpect @oled.display.screen shows tests/hello.screen\n\
          expect no diagnostics\n",
         std::time::Duration::from_secs(20 * 60),
     );

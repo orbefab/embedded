@@ -7,8 +7,12 @@
 
 use orbe_avr::{Activity, Core, SpmNote};
 
+use crate::boot::{
+    Access, Bootloader, GETCH_WORD, OPTIBOOT_MCUSR_AT, OPTIBOOT_TO_APP, OPTIBOOT_WDCE_AT,
+    OPTIBOOT_WDT_OFF_AT, WAIT_FIRST, Wait,
+};
 use crate::bus::Bus;
-use crate::chip::{FLASH_WORDS, IRQ_CYCLES, RAMEND, USART0, VECTORS};
+use crate::chip::{FLASH_WORDS, IRQ_CYCLES, RAMEND, SPH, SPL, USART0, VECTORS};
 use crate::fuses::FuseBytes;
 use crate::irq;
 use crate::periph::system::{BORF, EXTRF, PORF, WDRF};
@@ -50,6 +54,10 @@ impl Default for SerialFrame {
 
 /// Oscillator assumed until [`Cpu::set_clock_hz`]. Baud in hertz uses it.
 pub const DEFAULT_CLOCK_HZ: u32 = 16_000_000;
+
+/// `VPOT` falling and rising, in millivolts: Table 29-11's typical power-on reset thresholds,
+/// 1.3 V and 1.4 V (page 314).
+const POWER_ON_WINDOW_MV: (u16, u16) = (1_300, 1_400);
 
 /// Host byte stream. A new host stream is a variant here, not a method on [`Cpu`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +119,26 @@ pub struct Cpu {
     /// The host's own reading of `VCC` against the brown-out window, from
     /// [`Self::set_brown_out`]: `true` below it. `None` reads `vcc_mv`.
     bod_low: Option<bool>,
+    /// The power-on reset holds the chip: `VCC` fell through `VPOT` and has not risen through
+    /// it since (§11.3).
+    por_held: bool,
+    /// The host's own reading of `VCC` against `VPOT`, from [`Self::set_power_on_reset`]:
+    /// `true` below it. `None` reads `vcc_mv`.
+    por_low: Option<bool>,
+    /// What the boot section holds. It runs from the reset vector while `BOOTRST` is
+    /// programmed.
+    bootloader: Bootloader,
+    /// The start-up that runs is the bootloader's, not a wake.
+    booting: Option<Boot>,
+}
+
+/// What the bootloader does while the core waits on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Boot {
+    /// Its way straight to the sketch, which ends with the first fetch.
+    ToApp,
+    /// Its wait for an upload, at the access that comes next.
+    Wait(Wait),
 }
 
 clone_fields!(Cpu {
@@ -121,7 +149,11 @@ clone_fields!(Cpu {
     vcc_mv,
     reset_held,
     bod_held,
-    bod_low
+    bod_low,
+    por_held,
+    por_low,
+    bootloader,
+    booting
 });
 
 /// Why [`Cpu::reset_as`] ran.
@@ -157,7 +189,26 @@ impl Cpu {
             reset_held: false,
             bod_held: false,
             bod_low: None,
+            por_held: false,
+            por_low: None,
+            bootloader: Bootloader::None,
+            booting: None,
         }
+    }
+
+    /// Supply rises at cycle 0, as a part does when its board is plugged in. The power-on reset
+    /// holds the core through the start from reset the fuses select, the start-up time and the
+    /// additional delay of Table 9-4 or 9-6 (§9.2.2, §11.3), and the bootloader runs after it
+    /// while `BOOTRST` is programmed. Only then is the first instruction of the image fetched.
+    /// A brown-out or a low `RESET` from the host holds it further, as in a run.
+    pub fn power_on(&mut self) {
+        assert_eq!(self.cycles(), 0, "power-on is the start of a run");
+        self.begin_reset_delay();
+    }
+
+    /// What the boot section holds. See [`crate::Bootloader`].
+    pub fn set_bootloader(&mut self, bootloader: Bootloader) {
+        self.bootloader = bootloader;
     }
 
     /// Power-on reset that restarts the host timeline.
@@ -182,11 +233,17 @@ impl Cpu {
 
     /// Hold the chip in reset. Ports return to their reset state immediately
     /// (§11.1). [`Self::release_reset`] starts the time-out.
+    /// While the power-on reset holds the chip, a low `RESET` is no reset of its own: the power-on
+    /// reset clears `EXTRF` for as long as it lasts (§11.9.1), and `RESET` low then holds the chip
+    /// past it, as an external reset, once `VCC` rises through `VPOT` (Figure 11-3).
     pub fn pull_reset(&mut self) {
         if self.reset_held {
             return;
         }
         self.reset_held = true;
+        if self.por_held {
+            return;
+        }
         self.perform_reset(ResetKind::External, ResetWhen::Hold);
     }
 
@@ -197,7 +254,7 @@ impl Cpu {
             return;
         }
         self.reset_held = false;
-        if !self.bod_held {
+        if !self.bod_held && !self.por_held {
             self.begin_reset_delay();
         }
     }
@@ -225,8 +282,8 @@ impl Cpu {
         self.bus.fuses().bytes
     }
 
-    /// Word address `BOOTRST` selects. The model still fetches the image from 0:
-    /// no boot loader is present.
+    /// Word address `BOOTRST` selects. The model fetches the image from 0, after the
+    /// bootloader's way there when one is set.
     pub fn boot_word(&self) -> u16 {
         let fuses = self.bus.fuses();
         if fuses.bootrst { fuses.boot_word } else { 0 }
@@ -235,9 +292,12 @@ impl Cpu {
     /// Supply voltage. The default is 5.0 V. Below the fuse `BODLEVEL` the
     /// chip holds in reset (§11.5). Thresholds use Table 29-12's typical
     /// `VBOT` and Table 29-11's 50 mV hysteresis.
+    /// Below `VPOT` the power-on reset holds it, as [`Self::set_power_on_reset`] says.
     pub fn set_vcc(&mut self, volts: f32) {
         self.vcc_mv = (f64::from(volts) * 1000.0).round() as i32;
+        self.por_low = None;
         self.bod_low = None;
+        self.consider_por();
         self.consider_bod();
     }
 
@@ -609,9 +669,119 @@ impl Cpu {
             self.bus.release_epoch(self.cycles());
             self.core.set_activity(Activity::Fetch);
             self.bus.arm_watchdog();
+            self.start_bootloader();
             return;
         }
-        self.complete_wake();
+        match self.booting {
+            Some(Boot::ToApp) => self.finish_bootloader(),
+            Some(Boot::Wait(wait)) => self.wait_for_upload(wait),
+            None => self.complete_wake(),
+        }
+    }
+
+    /// The reset has released, and the reset vector is the boot section's. The bootloader runs
+    /// with the clocks running, so the prescaler and the watchdog count from the release. See
+    /// [`crate::boot`].
+    fn start_bootloader(&mut self) {
+        let boot_word = self.boot_word();
+        if boot_word == 0 {
+            return;
+        }
+        let Some(cycles) = self.bootloader.to_app(boot_word) else {
+            return;
+        };
+        let until = if self.bus.mcusr() & EXTRF != 0 {
+            // `optiboot.c` `main`: with `EXTRF` set it waits for an upload.
+            self.booting = Some(Boot::Wait(Wait::START));
+            let erased = cycles - OPTIBOOT_TO_APP;
+            self.cycles() + erased + WAIT_FIRST
+        } else {
+            self.booting = Some(Boot::ToApp);
+            self.cycles().saturating_add(cycles)
+        };
+        self.core.set_activity(Activity::Startup {
+            until,
+            from_reset: false,
+        });
+    }
+
+    /// What Optiboot leaves for the sketch. Its stores, each on its own cycle counted back from
+    /// the sketch's first fetch: `MCUSR = 0`, then `WDTCSR = WDCE | WDE` and `WDTCSR = 0`, which
+    /// turns the watchdog off now that `WDRF` is clear, unless `WDTON` holds it on (Table 11-1).
+    /// Its registers: `r1`, `r24`, `r30` and `r31` are 0, `r25` is `0x18`, and `SREG` has `Z`
+    /// from the last `EOR`. Its stack: the
+    /// `rcall appStart` never returns, so `SP` stays two below `RAMEND` over that return address,
+    /// `0x3F05`, and the return address of `rcall watchdogConfig`, `0x3FF7`, sits below it.
+    fn finish_bootloader(&mut self) {
+        self.booting = None;
+        let start = self.cycles() - OPTIBOOT_TO_APP;
+        const { assert!(OPTIBOOT_MCUSR_AT < OPTIBOOT_WDCE_AT) };
+        self.bus.set_mcusr(0);
+        self.bus
+            .write_wdtcsr(0x18, start + OPTIBOOT_WDCE_AT, start + OPTIBOOT_WDT_OFF_AT);
+        for (reg, value) in [(1, 0), (24, 0), (25, 0x18), (30, 0), (31, 0)] {
+            self.core.set_reg(reg, value);
+        }
+        // `eor r31, r31` last sets `Z` and clears `S`, `V` and `N` (DS40002198B, `EOR`).
+        self.core.set_sreg(self.core.sreg() & !0x1E | 0x02);
+        for (k, byte) in [0x3F, 0xF7, 0x3F, 0x05].into_iter().enumerate() {
+            self.poke(RAMEND - 3 + k as u16, byte);
+        }
+        let sp = RAMEND - 2;
+        self.poke(SPL, sp as u8);
+        self.poke(SPH, (sp >> 8) as u8);
+        self.core.set_activity(Activity::Fetch);
+    }
+
+    /// Makes `wait`'s access on this cycle, the cycle its instruction starts, with the bus
+    /// calls `Core::step` makes for it, retires that instruction as [`Self::retire`] does, and
+    /// waits for the next. The 1 s watchdog ends the wait with a reset, unless a byte reaches
+    /// `getch` first.
+    fn wait_for_upload(&mut self, wait: Wait) {
+        use orbe_avr::Bus as _;
+        let start = self.cycles();
+        let access = wait.access();
+        let set = match access {
+            Access::Store {
+                addr,
+                value,
+                cycles,
+            } => {
+                self.bus.store(&mut self.core, addr, value, cycles);
+                false
+            }
+            Access::SetBit { addr, bit } => {
+                self.bus.write_bit(&mut self.core, addr, bit, true);
+                false
+            }
+            Access::Wdr => {
+                self.bus.watchdog_reset_timer();
+                false
+            }
+            Access::SkipIfSet { addr, bit } => self.bus.peek(&self.core, addr) & (1 << bit) != 0,
+            Access::Load { addr, bit } => self.bus.load(&self.core, addr) & (1 << bit) != 0,
+        };
+        let stall = u64::from(self.bus.take_stall());
+        let spent = access.cycles(set) + stall;
+        self.core.advance_cycles(spent);
+        self.bus.tick(spent);
+        if self.bus.take_wdt_reset() {
+            self.perform_reset(ResetKind::Watchdog, ResetWhen::Delay);
+            return;
+        }
+        let (next, cycles) = wait.next(set).unwrap_or_else(|| {
+            let what = Refused::Unsimulated {
+                peripheral: "Optiboot",
+                what: "the upload a byte on RXD starts after a reset from the RESET pin",
+            };
+            self.bus.refuse(what, self.cycles(), GETCH_WORD);
+            (wait, 5)
+        });
+        self.booting = Some(Boot::Wait(next));
+        self.core.set_activity(Activity::Startup {
+            until: start + cycles + stall,
+            from_reset: false,
+        });
     }
 
     fn complete_wake(&mut self) {
@@ -661,10 +831,12 @@ impl Cpu {
         let bod_low = self.bod_low;
         let reset_held = self.reset_held;
         let bod_held = self.bod_held;
+        let (por_held, por_low) = (self.por_held, self.por_low);
         let wdrs = self.core.wdr_executions();
         let epochs = self.bus.epochs();
         let program = self.core.program();
         let clock = self.clock_hz;
+        let bootloader = self.bootloader;
         let host = self.host_serial;
         let asks = self.bus.asks_for_samples();
         let pins = self.bus.pin_levels();
@@ -674,11 +846,14 @@ impl Cpu {
         let i2c = self.bus.take_i2c_across_reset();
         *self = Self::new();
         self.clock_hz = clock;
+        self.bootloader = bootloader;
         self.bus.set_osc_hz(clock);
         self.vcc_mv = vcc;
         self.bod_low = bod_low;
         self.reset_held = reset_held;
         self.bod_held = bod_held;
+        self.por_held = por_held;
+        self.por_low = por_low;
         self.host_serial = host;
         if asks {
             self.bus.ask_for_samples();
@@ -732,7 +907,61 @@ impl Cpu {
         }
     }
 
+    /// The power-on reset is active whenever `VCC` is below `VPOT`, and holds the chip from
+    /// there without delay (§11.3). It sets `PORF` and clears the other flags (§11.9.1), so a
+    /// `RESET` that read low only because the chip had no supply, or a brown-out on the way
+    /// down, leaves no flag.
+    fn consider_por(&mut self) {
+        let below = self.por_low.or_else(|| {
+            let (low, high) = POWER_ON_WINDOW_MV;
+            match self.vcc_mv {
+                mv if mv < i32::from(low) => Some(true),
+                mv if mv > i32::from(high) => Some(false),
+                _ => None,
+            }
+        });
+        match (self.por_held, below) {
+            (false, Some(true)) => {
+                self.por_held = true;
+                self.perform_reset(ResetKind::PowerOn, ResetWhen::Hold);
+                self.bod_held = false;
+            }
+            (true, Some(false)) => {
+                self.por_held = false;
+                self.leave_power_on_reset();
+            }
+            _ => {}
+        }
+    }
+
+    /// `VCC` rose through `VPOT`. A reset source still active here is a reset of its own and
+    /// sets its flag (§11.2, §11.9.1): `RESET` below its threshold holds the chip as an
+    /// external reset (Figure 11-3), and `VCC` short of `VBOT+` with brown-out on holds it as a
+    /// brown-out reset, which ends only at `VBOT+` (§11.5). With neither, the delay counter
+    /// starts here (§11.3, Figure 11-2).
+    fn leave_power_on_reset(&mut self) {
+        let mut flags = self.bus.mcusr();
+        if self.reset_held {
+            flags |= EXTRF;
+        }
+        let brown_out = self
+            .bus
+            .bod_window()
+            .is_some_and(|window| self.below_bod(window) != Some(false));
+        if brown_out {
+            self.bod_held = true;
+            flags |= BORF;
+        }
+        self.bus.set_mcusr(flags);
+        if !self.reset_held && !brown_out {
+            self.begin_reset_delay();
+        }
+    }
+
     fn consider_bod(&mut self) {
+        if self.por_held {
+            return;
+        }
         if self.core.is_sleeping() && self.bus.bod_off_in_sleep() {
             return;
         }

@@ -9,7 +9,8 @@
 //! table. `cpu` is the core a host steps. `fuses` holds the three fuse bytes
 //! and the start-up, `CLKPR`, watchdog, and brown-out values read out of them.
 //! `MCUCR.IVSEL` does not move the vectors. `hex` reads Intel HEX into flash
-//! bytes. `timeline` runs the core on a host's clock, in oscillator
+//! bytes. `boot` is the bootloader a board burns, as the cycles and registers of its way to
+//! the sketch. `timeline` runs the core on a host's clock, in oscillator
 //! cycles, and stops it at each change of a pin's drive. `gaps` holds what the
 //! firmware reached that the model does not run, which stops the timeline or is
 //! noted. `bridge` is the chip on the `orbe-mcu` contract: its package pins, the
@@ -35,6 +36,7 @@ macro_rules! clone_fields {
 }
 
 mod analog;
+mod boot;
 mod bridge;
 mod bus;
 mod chip;
@@ -48,6 +50,7 @@ mod periph;
 mod regs;
 mod timeline;
 
+pub use boot::Bootloader;
 pub use bridge::{Bridge, PACKAGE, PORT_PINS, Pad, port_index};
 pub use cpu::{Channel, Cpu, Parity, ResetKind, SerialFrame, SpiClock, SupplyChannel};
 pub use fuses::FuseBytes;

@@ -88,8 +88,8 @@ fn passes(dir: &TempDir) {
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
 }
 
-/// The counter turns 1 into 2 at 400.08 ms. The next millisecond reads 2, and no reading
-/// shows segments of both.
+/// The counter turns 1 into 2 at 466.15 ms, 400.08 ms after the sketch starts 66.07 ms after
+/// power-on. The next millisecond reads 2, and no reading shows segments of both.
 #[test]
 fn a_new_digit_reads_within_a_millisecond_and_never_mixes_with_the_old_one() {
     let dir = display(
@@ -99,12 +99,12 @@ fn a_new_digit_reads_within_a_millisecond_and_never_mixes_with_the_old_one() {
         "330",
         Some("nano.GND"),
         "",
-        &every_millisecond(395, 25),
+        &every_millisecond(461, 25),
     );
     let read = readings(&dir);
     assert_eq!(read.len(), 25);
     for (ms, digit) in &read {
-        let want = if *ms <= 400 { "1" } else { "2" };
+        let want = if *ms <= 466 { "1" } else { "2" };
         assert_eq!(digit, want, "at {ms} ms: {read:?}");
     }
 }
@@ -131,8 +131,8 @@ fn a_pwm_dimmed_digit_reads_steadily() {
     passes(&dir);
 }
 
-/// Segment g through 4.7k carries about 0.68 mA while the counter shows 8. It glows dim and
-/// still makes the 8.
+/// Segment g through 4.7k carries about 0.68 mA while the counter shows 8, from 1.6 s after the
+/// sketch starts. It glows dim and still makes the 8.
 #[test]
 fn a_dim_segment_counts_toward_the_digit() {
     let dir = display(
@@ -142,14 +142,14 @@ fn a_dim_segment_counts_toward_the_digit() {
         "4.7k",
         Some("nano.GND"),
         "",
-        "open\nstep 1650ms\nexpect @disp.seg_g dim\nexpect @disp.digit 8\n",
+        "open\nstep 1716ms\nexpect @disp.seg_g dim\nexpect @disp.digit 8\n",
     );
     passes(&dir);
 }
 
 /// The cathode is low for 2.5 ms of each 10 ms frame, so the display is dark three quarters
-/// of the time, and the digit changes every 200 ms. Every millisecond reads a digit, never
-/// blank or a mix, and the digits only count up.
+/// of the time, and the digit changes every 200 ms. Every millisecond from 30 ms after the sketch
+/// starts reads a digit, never blank or a mix, and the digits only count up.
 #[test]
 fn a_digit_multiplexed_at_100_hz_reads_steadily_through_each_change() {
     let dir = display(
@@ -159,7 +159,7 @@ fn a_digit_multiplexed_at_100_hz_reads_steadily_through_each_change() {
         "330",
         Some("nano.D10"),
         "",
-        &every_millisecond(30, 600),
+        &every_millisecond(96, 600),
     );
     let read = readings(&dir);
     assert_eq!(read.len(), 600);
@@ -181,7 +181,7 @@ fn a_digit_multiplexed_at_100_hz_reads_steadily_through_each_change() {
 /// 5V and D11 on GND, so the sketch drives each segment low to light it.
 #[test]
 fn every_digit_reads_on_both_displays_with_the_decimal_point_off_and_on() {
-    let mut test = String::from("open\nstep 50ms\n");
+    let mut test = String::from("open\nstep 116ms\n");
     for n in 0..10 {
         test.push_str(&format!(
             "expect @disp.digit {n}\nexpect @disp.seg_dp off\nstep 100ms\n\

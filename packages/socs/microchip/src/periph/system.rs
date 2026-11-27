@@ -271,6 +271,21 @@ impl System {
         self.schedule(now);
     }
 
+    /// Two stores to `WDTCSR`, retiring at `first_at` and `second_at`, as a timed sequence
+    /// written by a bootloader the model does not run.
+    pub(crate) fn store_wdtcsr_pair(
+        &mut self,
+        first: u8,
+        first_at: u64,
+        second: u8,
+        second_at: u64,
+    ) {
+        self.write_wdt(first, first_at);
+        self.commit_windows(first_at);
+        self.write_wdt(second, second_at);
+        self.commit_windows(second_at);
+    }
+
     pub(crate) fn wdr(&mut self, _now: u64) {
         if self.running() {
             self.rearm = true;

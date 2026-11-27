@@ -60,23 +60,12 @@ impl Timeline {
     /// A programmed, powered core at oscillator cycle 0. Its ADC asks [`Timeline::sample`] for
     /// every sample-and-hold, and it watches for what the model does not run
     /// ([`Cpu::watch_gaps`]).
-    pub fn new(cpu: Cpu) -> Timeline {
-        let held = cpu.in_reset();
-        Self::with_held(cpu, held)
-    }
-
-    /// Like [`Self::new`], starting held in power-on reset so a circuit's operating point at
-    /// t = 0 sees the chip's reset current. The first input at t = 0 keeps the hold if `RESET`
-    /// is low or `VCC` is below brown-out, or schedules release on cycle 1.
-    pub fn power_on(cpu: Cpu) -> Timeline {
-        Self::with_held(cpu, true)
-    }
-
-    fn with_held(mut cpu: Cpu, held: bool) -> Timeline {
+    pub fn new(mut cpu: Cpu) -> Timeline {
         cpu.ask_for_samples();
         cpu.watch_gaps();
         let levels = cpu.pin_levels();
         let drives = std::array::from_fn(|pin| levels.drive(pin as u32).unwrap_or(PinDrive::Off));
+        let held = cpu.in_reset();
         Timeline {
             cpu,
             reached: 0,
@@ -117,6 +106,11 @@ impl Timeline {
                     if at <= self.done() {
                         return Some(self.halt(at));
                     }
+                    // The core runs no further than the halt it owes. A held core would
+                    // otherwise coast to `limit`, and a release at the halt would start the
+                    // time-out from there.
+                    self.advance(at);
+                    continue;
                 }
                 _ if self.cpu.is_stopped()
                     || self.refusal.is_some()
@@ -132,12 +126,23 @@ impl Timeline {
         }
     }
 
+    /// See [`Cpu::power_on`]. Called before the first run. The chip is held from cycle 0, so a
+    /// circuit's operating point at t = 0 sees its reset current, and the hold ends where the
+    /// start from reset does.
+    pub fn power_on(&mut self) {
+        assert_eq!(self.reached, 0, "power-on is the start of a run");
+        self.cpu.power_on();
+        self.held = self.cpu.in_reset();
+        self.collect(1);
+    }
+
     /// Each pin's drive, by pin id, at the cycle it reached.
     pub fn drives(&self) -> &[PinDrive; PIN_COUNT] {
         &self.drives
     }
 
-    /// Whether a reset, from `RESET` or brown-out, holds the chip at the cycle it reached.
+    /// Whether a reset, from power-on, `RESET` or brown-out, holds the chip at the cycle it
+    /// reached.
     pub fn held(&self) -> bool {
         self.held
     }
@@ -174,6 +179,12 @@ impl Timeline {
     /// `VCC` below the brown-out window, from where it reached on. See [`Cpu::set_brown_out`].
     pub fn set_brown_out(&mut self, low: bool) {
         self.cpu.set_brown_out(low);
+        self.collect_input();
+    }
+
+    /// `VCC` below `VPOT`, from where it reached on. See [`Cpu::set_power_on_reset`].
+    pub fn set_power_on_reset(&mut self, low: bool) {
+        self.cpu.set_power_on_reset(low);
         self.collect_input();
     }
 

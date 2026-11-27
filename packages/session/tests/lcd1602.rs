@@ -192,12 +192,9 @@ fn eight_bit_constructor_prints_hello_world() {
     ok(&mut live, "expect @lcd.text line 1 \"1\"");
     ok(&mut live, "step 1000ms");
     ok(&mut live, "expect @lcd.text line 1 \"2\"");
-    // The constructor's own begin lands inside the reset busy time and then the reset wait, as
-    // in the 4-bit Block.
-    assert_eq!(
-        rules(&mut live),
-        ["chip.protocol init_busy", "chip.protocol init_wait"]
-    );
+    // The Nano starts the sketch about 66 ms after power-on, after the LCD's 15 ms wait, so the
+    // constructor's own begin breaks no rule, as in the 4-bit Block.
+    assert_eq!(rules(&mut live), [] as [&str; 0]);
 }
 
 #[test]
@@ -212,14 +209,7 @@ fn an_open_v0_leaves_the_glass_blank_and_warns_contrast() {
     ok(&mut live, "expect @lcd.backlight lit");
     ok(&mut live, "expect @lcd.text line 0 \"\"");
     ok(&mut live, "expect @lcd.text line 1 \"\"");
-    assert_eq!(
-        rules(&mut live),
-        [
-            "chip.protocol init_busy",
-            "chip.protocol init_wait",
-            "chip.protocol contrast"
-        ]
-    );
+    assert_eq!(rules(&mut live), ["chip.protocol contrast"]);
 }
 
 /// The glass's pixel origin of the character cell at `row` and `col`, and its dot pitch: 2 by 2
@@ -343,10 +333,19 @@ fn a_supply_under_the_module_minimum_still_runs_and_warns_low_supply() {
 
 #[test]
 fn the_init_warnings_say_which_writes_ran_and_which_were_dropped() {
-    let mut live = open(HELLO, &BUS4, true);
-    ok(&mut live, "step 1500ms");
-    // The constructor's begin starts about 1 ms after power-on: its first writes land inside the
-    // 10 ms reset busy time and are dropped, and the ones after 10 ms run before the 15 ms wait.
+    // VDD comes up through a button pressed at 60 ms, about 6 ms before the Nano starts the
+    // sketch. The constructor's first writes land inside the LCD's 10 ms reset busy time and are
+    // dropped, and the ones after 10 ms run before its 15 ms wait is over.
+    let supply = [
+        ["lcd.VSS", "nano.GND"],
+        ["sw.a", "nano.5V"],
+        ["sw.b", "lcd.VDD"],
+    ];
+    let extra = json!({ "sw": { "type": "tactile-switch-6mm" } });
+    let mut live = open_with(HELLO, &BUS4, true, &supply, extra);
+    ok(&mut live, "step 60ms");
+    ok(&mut live, "press @sw");
+    ok(&mut live, "step 1440ms");
     let messages = messages(&mut live);
     let busy = messages
         .iter()

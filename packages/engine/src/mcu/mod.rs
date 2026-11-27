@@ -24,7 +24,7 @@ use crate::netlist::{NetId, PartId, Threshold};
 use crate::output_stage::OutputStage;
 use crate::watch::{Signal, Watch};
 
-pub use atmega328p::{Atmega328p, Atmega328pRatings, Firmware, Fuses};
+pub use atmega328p::{Atmega328p, Atmega328pRatings, Bootloader, Firmware, Fuses, Start};
 pub use esp32s3::{Esp32s3, Esp32s3Firmware};
 pub(crate) use report::{fault, note, symbolize};
 

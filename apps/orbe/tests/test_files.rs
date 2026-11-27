@@ -452,7 +452,7 @@ fn orbe_test_names_the_scene_each_test_opened() {
 }
 
 /// Copies `blocks/nano-oled` (which runs much slower than real time during its I2C transfer
-/// after t=122ms) into a temporary project with its `tests/` replaced by `tests`.
+/// after t=188ms, 122 ms after its sketch starts) into a temporary project with its `tests/` replaced by `tests`.
 fn slow_oled_project(tests: &[(&str, &str)]) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     live::common::copy_dir(&live::common::repo().join("blocks/nano-oled"), dir.path());
@@ -491,7 +491,7 @@ fn a_slow_test_step_hits_step_timeout_and_the_remaining_tests_still_run() {
     let dir = slow_oled_project(&[
         (
             "a_slow.test",
-            "open\nstep 122ms\nstep 3000ms\nexpect no diagnostics\n",
+            "open\nstep 188ms\nstep 3000ms\nexpect no diagnostics\n",
         ),
         ("b_after.test", "open\nstep 10ms\nexpect no diagnostics\n"),
     ]);
@@ -559,7 +559,7 @@ fn a_slow_test_step_hits_step_timeout_and_the_remaining_tests_still_run() {
 fn step_timeout_flag_raises_limit_and_handles_until_and_usage() {
     let dir = slow_oled_project(&[(
         "a.test",
-        "open\nstep 122ms\nstep 2ms\nexpect no diagnostics\n",
+        "open\nstep 188ms\nstep 2ms\nexpect no diagnostics\n",
     )]);
 
     // Too short: fails with step_timeout.
@@ -580,7 +580,7 @@ fn step_timeout_flag_raises_limit_and_handles_until_and_usage() {
     // `step --until` hitting the wall-time limit fails with `step_timeout`.
     let until_dir = slow_oled_project(&[(
         "until.test",
-        "open\nstep 122ms\nstep --until @oled.display.screen lit --timeout 10s\nexpect no diagnostics\n",
+        "open\nstep 188ms\nstep --until @oled.display.screen lit --timeout 10s\nexpect no diagnostics\n",
     )]);
     let until = orbe(until_dir.path(), &["test", "--step-timeout", "200ms"]);
     assert_eq!(until.code, 1, "{}{}", until.stdout, until.stderr);
@@ -630,7 +630,7 @@ fn step_timeout_flag_raises_limit_and_handles_until_and_usage() {
 fn a_long_test_prints_one_progress_line_to_stderr_unless_json() {
     let dir = slow_oled_project(&[(
         "a.test",
-        "open\nstep 122ms\nstep 2ms\nstep 2ms\nexpect no diagnostics\n",
+        "open\nstep 188ms\nstep 2ms\nstep 2ms\nexpect no diagnostics\n",
     )]);
 
     let run = orbe_with_env(

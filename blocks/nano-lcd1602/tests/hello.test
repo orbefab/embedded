@@ -6,11 +6,6 @@ expect @lcd.text line 0 "hello, world!"
 expect @lcd.text line 1 "1"
 step 1000ms
 expect @lcd.text line 1 "2"
-# The LiquidCrystal constructor runs a begin of its own about 1 ms after power-on. Its first
-# writes land inside the HD44780U's 10 ms reset busy time, and the controller drops them. The
-# writes after 10 ms land before the 15 ms reset wait ends, and the controller runs them early.
-# The begin in setup() starts the controller again, so the glass is right. The simulated Nano
-# runs its sketch from power-on, without the 65 ms start-up its fuses give a real one, so on the
-# bench these writes land after the wait.
-expect diagnostics contains "breaking rule init_busy"
-expect diagnostics contains "breaking rule init_wait"
+# The Nano starts the sketch about 66 ms after power-on, the start its fuses set, so the
+# LiquidCrystal constructor's first writes land after the LCD's 15 ms power-on wait.
+expect no diagnostics

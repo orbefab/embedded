@@ -1,6 +1,6 @@
 //! What [`crate::Timeline`] needs of the core beyond a test host: running to the next thing the
 //! host must act on, the `CLKPR` epoch, samples the host answers, pads driven from a cycle the
-//! core has already passed, and the host's side of the brown-out window.
+//! core has already passed, and the host's side of the brown-out and power-on windows.
 
 use super::Cpu;
 use crate::Level;
@@ -82,6 +82,24 @@ impl Cpu {
     /// `VBOT-` and `VBOT+` in millivolts, from the fuses. `None` with brown-out detection off.
     pub fn brown_out_window(&self) -> Option<(u16, u16)> {
         self.bus.bod_window()
+    }
+
+    /// `VCC` against `VPOT`, from a host that watches the rail at [`Self::power_on_window`]
+    /// itself: `true` once it fell through `VPOT` falling, `false` once it rose through `VPOT`
+    /// rising. It holds until the next call here or to [`Self::set_vcc`].
+    ///
+    /// Below `VPOT` the power-on reset holds the chip, sets `PORF` and clears `EXTRF`, `BORF`
+    /// and `WDRF`, whatever `RESET` and brown-out read meanwhile (§11.3, §11.9.1). On the way
+    /// up, `RESET` still low or `VCC` still short of `VBOT+` holds the chip past it and sets
+    /// `EXTRF` or `BORF`. Otherwise the start from reset runs from the rise.
+    pub fn set_power_on_reset(&mut self, low: bool) {
+        self.por_low = Some(low);
+        self.consider_por();
+    }
+
+    /// `VPOT` falling and rising in millivolts, Table 29-11's typical 1.3 V and 1.4 V.
+    pub fn power_on_window(&self) -> (u16, u16) {
+        super::POWER_ON_WINDOW_MV
     }
 }
 

@@ -1,4 +1,4 @@
-//! The first-target netlist runs in the engine with the button pressed from 50 ms to 150 ms,
+//! The first-target netlist runs in the engine with the button pressed from 116 ms to 216 ms,
 //! and lights the LED to the values measured with the Nano's 5V pin one USB diode drop under 5 V.
 
 use orbe_model::Time;
@@ -35,7 +35,8 @@ fn pressing_the_button_lights_led1() {
     let project = common::project("nano-button");
     let netlist = orbe_scene::read(&Files::disk(), &project.path().join("scene.jsonc")).unwrap();
     let mut session = Session::open_json(netlist.json.as_bytes(), &Blobs::new()).unwrap();
-    for (at, contact) in [(50, Contact::Closed), (150, Contact::Open)] {
+    // The Nano starts the sketch 66 ms after power-on, so each moment is 66 ms past it.
+    for (at, contact) in [(116, Contact::Closed), (216, Contact::Open)] {
         let input = Input {
             part: Name::new("btn1").unwrap(),
             at: ms(at),
@@ -44,15 +45,15 @@ fn pressing_the_button_lights_led1() {
         session.apply(&input).unwrap();
     }
 
-    assert_eq!(session.advance_to(ms(40)), Status::Running);
+    assert_eq!(session.advance_to(ms(106)), Status::Running);
     let (d13_open, led1_open) = (read(&session, "#net.nano__D13"), read(&session, "#led1.i"));
-    assert_eq!(session.advance_to(ms(100)), Status::Running);
+    assert_eq!(session.advance_to(ms(166)), Status::Running);
     let (d13, led1, d2) = (
         read(&session, "#net.nano__D13"),
         read(&session, "#led1.i"),
         read(&session, "#net.nano__D2"),
     );
-    assert_eq!(session.advance_to(ms(200)), Status::Running);
+    assert_eq!(session.advance_to(ms(266)), Status::Running);
     let (d13_released, led1_released) =
         (read(&session, "#net.nano__D13"), read(&session, "#led1.i"));
     let diagnostics: Vec<String> = session
@@ -61,9 +62,9 @@ fn pressing_the_button_lights_led1() {
         .map(|d| serde_json::to_string(d).unwrap())
         .collect();
 
-    println!("40 ms: D13 {d13_open} V, led1 {led1_open} A");
-    println!("100 ms: D13 {d13} V, D2 {d2} V, led1 {led1} A");
-    println!("200 ms: D13 {d13_released} V, led1 {led1_released} A");
+    println!("106 ms: D13 {d13_open} V, led1 {led1_open} A");
+    println!("166 ms: D13 {d13} V, D2 {d2} V, led1 {led1} A");
+    println!("266 ms: D13 {d13_released} V, led1 {led1_released} A");
     println!("diagnostics: {diagnostics:#?}");
 
     assert!(

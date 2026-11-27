@@ -54,6 +54,21 @@
       "file": "hex",
       "name": "firmware",
       "required": true
+    },
+    {
+      "choices": [
+        {
+          "name": "none"
+        },
+        {
+          "name": "uno"
+        },
+        {
+          "name": "nano"
+        }
+      ],
+      "default": "none",
+      "name": "bootloader"
     }
   ],
   "pins": [

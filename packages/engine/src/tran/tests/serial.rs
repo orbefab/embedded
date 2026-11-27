@@ -610,7 +610,7 @@ fn the_batch_writes_the_log_of_a_session_advanced_to_stop() {
 }
 
 /// Two ATmega328Ps print ADC0 at 16 MHz and at 3.2 MHz, whose frames are five times as long.
-/// `swrw` holds `w` in reset until 24,979,375,000 ps, which a search chose so that a byte of
+/// `swrw` holds `w` in reset until 19,859,375,000 ps, which a search chose so that a byte of
 /// each ends at 96,454,062,500 ps. `w`'s started first, and part order puts `u`'s first.
 #[test]
 fn a_tie_goes_in_part_order_whichever_byte_started_first() {
@@ -619,7 +619,7 @@ fn a_tie_goes_in_part_order_whichever_byte_started_first() {
         "name": "swrw", "kind": "switch", "pins": { "a": "w_pc6", "b": "gnd" },
         "on_resistance": { "value": 1.0, "unit": "ohm" },
         "off_resistance": { "value": 1e9, "unit": "ohm" },
-        "initial": "closed", "events": [{ "t_ps": 24_979_375_000u64, "state": "open" }],
+        "initial": "closed", "events": [{ "t_ps": 19_859_375_000u64, "state": "open" }],
         "bounce": null
     });
     let extra = vec![resistor("rrw", "vcc", "w_pc6", 10e3), release.to_string()];

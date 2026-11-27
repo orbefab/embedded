@@ -81,7 +81,7 @@ fn each_led_in_the_chain_reads_its_own_latched_colour() {
     let mut live = opened();
     let before = run(&mut live, "get @led1.color");
     assert_eq!(before.text(), "led1.color rgb(0,0,0) not latched yet");
-    assert!(run(&mut live, "step 5ms").ok());
+    assert!(run(&mut live, "step 71ms").ok());
     for k in 0..4u8 {
         let reply = run(&mut live, &format!("get @led{}", k + 1));
         let Data::Got(got) = &reply.data else {
@@ -109,7 +109,7 @@ fn each_led_in_the_chain_reads_its_own_latched_colour() {
 #[test]
 fn expect_checks_an_led_s_colour_by_its_part_or_its_reading() {
     let mut live = opened();
-    assert!(run(&mut live, "step 5ms").ok());
+    assert!(run(&mut live, "step 71ms").ok());
     for line in [
         "expect @led1 rgb(16,0,32)",
         "expect @led2.color rgb(17,1,33)",
@@ -137,7 +137,7 @@ fn expect_checks_an_led_s_colour_by_its_part_or_its_reading() {
 #[test]
 fn the_snapshot_shows_each_led_s_colour() {
     let mut live = opened();
-    assert!(run(&mut live, "step 5ms").ok());
+    assert!(run(&mut live, "step 71ms").ok());
     let snapshot = run(&mut live, "snapshot").text();
     for k in 0..4u8 {
         let [r, g, b] = colour(k);
@@ -206,7 +206,7 @@ fn open_stick(supply_wire: Option<&str>) -> Live {
 fn an_unpowered_or_floating_stick_latches_nothing_and_stays_off() {
     for (label, supply) in [("0 V", Some("nano.GND")), ("floating", None)] {
         let mut live = open_stick(supply);
-        let stepped = run(&mut live, "step 20ms");
+        let stepped = run(&mut live, "step 86ms");
         assert!(stepped.ok(), "{label}: {}", stepped.text());
         for n in 1..=8 {
             let reply = run(&mut live, &format!("get @stick.px{n}.color"));
@@ -248,7 +248,7 @@ fn an_unpowered_or_floating_stick_latches_nothing_and_stays_off() {
     .with_catalog(catalog());
     let mut low = Live::new("t", files);
     assert!(low.run(&Command::Open(PathBuf::from("scene.jsonc"))).ok());
-    assert!(run(&mut low, "step 20ms").ok());
+    assert!(run(&mut low, "step 86ms").ok());
     for n in 1..=8 {
         let reply = run(&mut low, &format!("get @stick.px{n}.color"));
         assert_eq!(
@@ -259,7 +259,7 @@ fn an_unpowered_or_floating_stick_latches_nothing_and_stays_off() {
     }
 
     let mut powered = open_stick(Some("nano.5V"));
-    assert!(run(&mut powered, "step 20ms").ok());
+    assert!(run(&mut powered, "step 86ms").ok());
     let reply = run(&mut powered, "expect @stick.px1 rgb(255,0,0)");
     assert!(reply.ok(), "powered px1: {}", reply.text());
     let reply = run(&mut powered, "expect @stick.px8 rgb(255,0,120)");
@@ -296,7 +296,7 @@ fn power_loss_clears_latch_time_until_a_new_frame_latches() {
     assert!(open.ok(), "{}", open.text());
 
     assert!(run(&mut live, "press @sw").ok());
-    assert!(run(&mut live, "step 20ms").ok());
+    assert!(run(&mut live, "step 86ms").ok());
     let powered = run(&mut live, "get @stick.px1.color");
     assert!(
         powered
@@ -326,11 +326,13 @@ fn power_loss_clears_latch_time_until_a_new_frame_latches() {
     );
     assert_eq!(repowered.json()["data"]["value"]["latched_ps"], json!(null));
 
-    // Reset the Nano so the sketch sends a fresh frame after power returned (past the 65 ms SUT).
+    // Reset the Nano so the sketch sends a fresh frame after power returned. After a reset from
+    // the pin Optiboot flashes L and waits for its 1 s watchdog, so the sketch starts again
+    // about 1.5 s after the release.
     assert!(run(&mut live, "press @nano.sw_reset").ok());
     assert!(run(&mut live, "step 1ms").ok());
     assert!(run(&mut live, "release @nano.sw_reset").ok());
-    assert!(run(&mut live, "step 80ms").ok());
+    assert!(run(&mut live, "step 1600ms").ok());
     let recovered = run(&mut live, "get @stick.px1.color");
     assert!(
         recovered
@@ -351,7 +353,7 @@ fn power_loss_clears_latch_time_until_a_new_frame_latches() {
 #[test]
 fn rainbow_on_nano_3v3_sags_resets_pixels_and_warns_regulator_current_limit() {
     let mut live = open_stick(Some("nano.3V3"));
-    let stepped = run(&mut live, "step 20ms");
+    let stepped = run(&mut live, "step 86ms");
     assert!(stepped.ok(), "{}", stepped.text());
 
     for n in 1..=8 {

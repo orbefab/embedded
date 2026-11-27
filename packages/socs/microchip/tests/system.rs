@@ -412,11 +412,11 @@ fn each_reset_sets_its_mcusr_flag_and_keeps_the_others() {
 
 #[test]
 fn startup_timeout_follows_the_crystal_fuses() {
-    // Table 9-4, CKSEL0 = 1, SUT = 11: 14 CK + 65 ms from reset.
-    // 65 ms at 16 MHz is 1_040_000. Power-down wake is 16K CK, not that delay.
+    // Table 9-4, CKSEL0 = 1, SUT = 11: the 16K CK start-up, and 14 CK + 65 ms more from
+    // reset (§9.2.2). 65 ms at 16 MHz is 1_040_000. Power-down wake is the 16K CK alone.
     let mut cpu = fresh();
     let delay = crystal_reset_delay();
-    assert_eq!(delay, 14 + 1_040_000);
+    assert_eq!(delay, 16_384 + 14 + 1_040_000);
     orbe_microchip::test_hooks::reset_cpu(&mut cpu, orbe_microchip::ResetKind::External);
     let at = cpu.cycles();
     cpu.load_words(&[0x0000]);
@@ -1067,7 +1067,7 @@ fn usart_after_reset_counts_phase_from_the_release() {
     // after the start bit. Phase 0 is the release cycle R, so the first
     // txclk is R+16 and the stop bit ends at R+176. The same program from
     // cycle 0 ends at 176.
-    const DELAY: u64 = 14 + 1_040_000;
+    const DELAY: u64 = 16_384 + 14 + 1_040_000;
     let program = tx_program();
     let mut cold = fresh();
     cold.load_words(&program);
@@ -1153,11 +1153,11 @@ fn watchdog_inside_a_multicycle_instruction_resets_at_retire() {
         "the reset vector is not fetched during the time-out"
     );
     cpu.run_until(start + 4 + crystal_reset_delay() - 1);
-    assert_eq!(cpu.pc(), 0, "still in the 14 CK + 65 ms time-out");
+    assert_eq!(cpu.pc(), 0, "still in the 16K CK + 14 CK + 65 ms time-out");
 }
 
 fn crystal_reset_delay() -> u64 {
-    14 + 1_040_000
+    16_384 + 14 + 1_040_000
 }
 
 /// Sleep in `smcr`. `plant` runs before `SLEEP`. Returns after the step that

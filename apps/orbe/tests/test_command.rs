@@ -430,7 +430,8 @@ fn rating_changes(step: &serde_json::Value) -> Vec<(String, String, u64, serde_j
         .collect()
 }
 
-/// Pressed at 50 ms, the resistor is over its rating now. Its mean with a 10.2 ms time
+/// Pressed at 100 ms, once the Nano's 66 ms start from reset is over and it draws its running
+/// current, the resistor is over its rating now. Its mean with a 10.2 ms time
 /// constant rounds above 0.25 W only after `tau * ln(0.989 / (0.989 - 0.2505))`, 2.98 ms, so
 /// the step to 2 ms lists it over now and `expect no diagnostics` fails. The next step lists
 /// the filter's warning beside the sample.
@@ -438,17 +439,17 @@ fn rating_changes(step: &serde_json::Value) -> Vec<(String, String, u64, serde_j
 fn an_overload_that_starts_mid_run_is_over_now_before_its_window_warns() {
     const MS: u64 = 1_000_000_000;
     let failing =
-        pressed_overload("open\nstep 50ms\npress @btn1\nstep 2ms\nexpect no diagnostics\n");
+        pressed_overload("open\nstep 100ms\npress @btn1\nstep 2ms\nexpect no diagnostics\n");
     let run = orbe(failing.path(), &["test", "--json"]);
     let entry = run.json()["data"]["tests"][0].clone();
     assert_eq!(entry["error"]["code"], "expect_failed", "{}", run.stdout);
     assert_eq!(run.code, 1);
 
     let replies = replies_in(&pressed_overload(
-        "open\nstep 50ms\nexpect no diagnostics\npress @btn1\nstep 2ms\nstep 5ms\n",
+        "open\nstep 100ms\nexpect no diagnostics\npress @btn1\nstep 2ms\nstep 5ms\n",
     ));
     let pressed = replies[3]["data"]["landed_ps"].as_u64().unwrap();
-    assert!((50 * MS..50 * MS + 1_000).contains(&pressed), "{pressed}");
+    assert!((100 * MS..100 * MS + 1_000).contains(&pressed), "{pressed}");
     let [(code, part, t_ps, now)] = rating_changes(&replies[4]).try_into().unwrap();
     assert_eq!((code.as_str(), part.as_str()), ("rating.power", "#r1.p"));
     assert_eq!(t_ps, pressed);
@@ -1066,10 +1067,11 @@ fn the_breadboard_ldr_follows_its_sheet_and_the_trimmer_divides() {
 open
 expect @trim.wiper > 2.3853V   # t=0 reset draw, 4.773 V / 2: 2.3863 V
 expect @trim.wiper < 2.3873V
+step 70ms
+expect @trim.wiper > 2.3797V   # past the 66 ms start from reset, running draw, 4.761 V / 2: 2.3807 V
+expect @trim.wiper < 2.3817V
 set light 10
 step 1ms
-expect @trim.wiper > 2.3797V   # running draw, 4.761 V / 2: 2.3807 V
-expect @trim.wiper < 2.3817V
 expect @ldr.a > 2.8560V   # 15 kohm: 2.8570 V
 expect @ldr.a < 2.8580V
 set light 100
@@ -1335,13 +1337,13 @@ expect @ldr.v < 0.050V
 }
 
 /// A Nano's A6 and A7 are the TQFP's ADC6 and ADC7. Dividers from 5V put 2/3 of it on A6 and
-/// 1/3 on A7, and the sketch prints both codes every 10 ms.
+/// 1/3 on A7, and the sketch prints both codes every 10 ms from 66 ms after power-on.
 #[test]
 fn a_nano_reads_the_voltage_on_a6_and_a7() {
     let dir = project(
         "\
 open
-step 50ms
+step 116ms
 expect serial contains \"A6=682 A7=341\"
 expect no diagnostics
 ",

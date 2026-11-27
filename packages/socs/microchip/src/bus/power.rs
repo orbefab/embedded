@@ -258,6 +258,14 @@ impl Bus {
         self.note_schedule();
     }
 
+    /// `WDTCSR = first`, retiring at CPU cycle `first_at`, then `WDTCSR = 0` at `second_at`.
+    pub(crate) fn write_wdtcsr(&mut self, first: u8, first_at: u64, second_at: u64) {
+        if let Some(sys) = self.system_mut() {
+            sys.store_wdtcsr_pair(first, first_at, 0, second_at);
+        }
+        self.note_schedule();
+    }
+
     /// §11.1. Prescaler, baud generator, and ADC prescaler read phase 0 here.
     pub(crate) fn release_epoch(&mut self, cycle: u64) {
         for dev in &mut self.devices {

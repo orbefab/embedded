@@ -1,5 +1,6 @@
 # The sketch draws a frame, "Hello" and a filled circle, and the glass shows them.
 open
-step 200ms
+# The sketch starts 66 ms after power-on, when the start from reset the fuses set is over.
+step 266ms
 expect @oled.display.screen shows tests/hello.screen
 expect no diagnostics

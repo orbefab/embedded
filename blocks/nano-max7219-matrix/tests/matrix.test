@@ -1,7 +1,8 @@
 # LedControl wakes the MAX7219 from shutdown, sets intensity 8, and draws the smiley.
 open
 expect @matrix off
-step 50ms
+# The sketch starts 66 ms after power-on, when the start from reset the fuses set is over.
+step 116ms
 expect @matrix lit
 expect @matrix shows tests/matrix.screen
 expect @matrix.brightness > 2mA

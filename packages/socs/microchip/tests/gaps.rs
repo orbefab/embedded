@@ -6,7 +6,7 @@ use crate::common::{imm, in_io, ldi, out, spin, sts};
 
 use orbe_mcu::{Fault, Mcu, Note, Unsupported};
 use orbe_microchip::{
-    Bridge, Cpu, FuseBytes, Noted, PinDrive, Refusal, Refused, Timeline, Unmodeled,
+    Bootloader, Bridge, Cpu, FuseBytes, Noted, PinDrive, Refusal, Refused, Timeline, Unmodeled,
 };
 use orbe_model::Time;
 
@@ -357,14 +357,17 @@ fn the_bridge_reports_the_refusal_as_its_fault_and_notes_as_unmodeled_registers(
         high: 0xDE,
         extended: 0xFD,
     };
-    let mut bridge = Bridge::new(16_000_000, fuses, &flash);
-    let limit = Time::from_ps(1_000_000);
+    let mut bridge = Bridge::new(16_000_000, fuses, Bootloader::None, &flash);
+    bridge.power_on();
+    let limit = Time::from_ps(100_000_000_000);
     let mut stops = vec![];
     while let Some(stop) = bridge.run_until(limit) {
         stops.push(stop.at);
     }
-    // OSCCAL's store is at cycle 1; the unknown word at cycle 3, word 3, byte 6.
-    let at = Time::from_ps(3 * 62_500);
+    // The power-on start from reset, Table 9-4 with `CKSEL0` 1 and `SUT` 11: 16K CK, 14 CK and
+    // 65 ms. Then OSCCAL's store is at cycle 1; the unknown word at cycle 3, word 3, byte 6.
+    let start = 16_384 + 14 + 1_040_000;
+    let at = Time::from_ps((start + 3) * 62_500);
     assert_eq!(stops.last(), Some(&at));
     let (fault_at, fault) = bridge.fault().unwrap();
     assert_eq!(fault_at, at);
@@ -393,7 +396,18 @@ fn the_bridge_reports_the_refusal_as_its_fault_and_notes_as_unmodeled_registers(
     };
     assert_eq!(
         (*note_at, *address, register.as_str(), pc.pc, *write, *kept),
-        (Time::from_ps(62_500), 0x66, "OSCCAL", 2, true, true)
+        (
+            Time::from_ps((start + 1) * 62_500),
+            0x66,
+            "OSCCAL",
+            2,
+            true,
+            true
+        )
     );
-    assert!(bridge.notes(Time::from_ps(62_499)).is_empty());
+    assert!(
+        bridge
+            .notes(Time::from_ps((start + 1) * 62_500 - 1))
+            .is_empty()
+    );
 }

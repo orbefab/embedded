@@ -422,7 +422,7 @@ fn neopixel_ring_16_full_white_current_matches_ws2812b_sheet_and_unpowered_does_
             WS2812_WHITE_16_HEX.as_bytes().to_vec(),
         )],
     );
-    run(&mut live, "step 20ms");
+    run(&mut live, "step 86ms");
     for n in 1..=16 {
         run(&mut live, &format!("expect @ring.px{n} rgb(255,255,255)"));
     }

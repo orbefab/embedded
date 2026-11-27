@@ -4,7 +4,7 @@ The sketch is the `HelloWorld` example of the Arduino `LiquidCrystal` library, u
 
 `orbe get @lcd.text` prints the two visible 16-character lines, `orbe get @lcd.display.screen` draws the glass with a `#` for each lit dot, and `orbe get @lcd.backlight` reads the backlight. Turn the trimmer up toward 5V with `orbe set @trim.position 0.9` and the glass goes blank, and a `chip.protocol` warning names the contrast. The 3D page draws the backlit glass with the HD44780 A00 5x8 ROM font.
 
-The run warns `chip.protocol` twice, rules `init_busy` and `init_wait`. The `LiquidCrystal` constructor runs a `begin` of its own about 1 ms after power-on. Its first writes land inside the HD44780U's 10 ms reset busy time, so the controller drops them. The writes after 10 ms land before the 15 ms reset wait ends, so the controller runs them early. The `begin` in `setup()` starts it again. A real Nano starts its sketch about 65 ms after power-on, the start-up its fuses set, and the simulated one starts at once, so on the bench those writes land after the wait.
+The run is quiet. The `LiquidCrystal` constructor runs a `begin` of its own as soon as the sketch starts, and the `begin` in `setup()` starts the controller again. The Nano starts the sketch about 66 ms after power-on: its fuses hold the chip in reset for 16K CK, 14 CK and 65 ms, and Optiboot then goes straight to the sketch. By then the HD44780U's 15 ms power-on wait is over, as on the bench.
 
 Rebuild `firmware/hello/hello.ino` with LiquidCrystal 1.0.7, the library the image was built with. `firmware/NOTICE` names that archive.
 

@@ -101,7 +101,7 @@
     "led_rx": { "type": "led-0805", "color": "green", "not_simulated": "It follows the CH340G's TXD, and the run does not watch it." },
     "r_rx": { "type": "resistor-0603", "resistance": "1k", "not_simulated": "It feeds the RX LED, which is not simulated." },
     "mcu_socket": { "type": "dip-socket-28" },
-    "mcu": { "type": "atmega328p-dip28", "firmware": { "param": "firmware" } }, // U4, the board's firmware reaches the 328P
+    "mcu": { "type": "atmega328p-dip28", "firmware": { "param": "firmware" }, "bootloader": "uno" }, // U4, the board's firmware reaches the 328P
     // 16 MHz: the can by the 328P in the clone's top photo is marked 16.000.
     "crystal": {
       "type": "crystal-hc49us",

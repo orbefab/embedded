@@ -72,25 +72,22 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
     let (vcc, gnd) = (node(Pad::Vcc), node(Pad::Gnd));
     let clock_hz = u32::try_from(mcu.clock_hz.value).expect("parse keeps the clock in u32");
     let fuses = mcu.fuses;
-    let conductance = |current: Option<&Value>| current.map(|c| c.si.get() / ACTIVE_AT);
-    let running = conductance(mcu.active_current.as_ref());
-    let held = conductance(mcu.reset_current.as_ref()).or(running);
-    let supply = held.map(|held| Supply {
-        vcc: mcu.pins[VCC],
-        gnd: mcu.pins[GND_8],
-        conductance: running.unwrap_or(0.0),
-        held,
-    });
-    let fuse_bytes = FuseBytes {
-        low: fuses.low(),
-        high: fuses.high(),
-        extended: fuses.extended(),
-    };
-    let bridge = if supply.is_some_and(|s| s.conductance != s.held) {
-        Bridge::power_on(clock_hz, fuse_bytes, mcu.firmware.flash())
-    } else {
-        Bridge::new(clock_hz, fuse_bytes, mcu.firmware.flash())
-    };
+    let mut bridge = Bridge::new(
+        clock_hz,
+        FuseBytes {
+            low: fuses.low(),
+            high: fuses.high(),
+            extended: fuses.extended(),
+        },
+        match mcu.bootloader {
+            Some(Bootloader::Optiboot) => orbe_microchip::Bootloader::Optiboot,
+            None => orbe_microchip::Bootloader::None,
+        },
+        mcu.firmware.flash(),
+    );
+    if mcu.start == Start::PowerOn {
+        bridge.power_on();
+    }
 
     // `RSTDISBL` unprogrammed: `PC6` is `RESET`, with its own pull-up and thresholds.
     let reset = fuses.has_reset().then(|| port_index(RESET));
@@ -124,17 +121,24 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
         .enumerate()
         .map(|(n, &k)| (Atmega328p::PINS[k], n))
         .collect();
+    let supply = |millivolts: u16| Signal {
+        terms: vec![(vcc, 1.0), (gnd, -1.0)],
+        offset: f64::from(millivolts) / 1000.0,
+    };
     if let Some((below, above)) = bridge.cpu().brown_out_window() {
         signals.push((Atmega328p::PINS[VCC], watches.len()));
-        let supply = |millivolts: u16| Signal {
-            terms: vec![(vcc, 1.0), (gnd, -1.0)],
-            offset: f64::from(millivolts) / 1000.0,
-        };
         watches.push(Watch {
             rise: supply(above),
             fall: supply(below),
         });
     }
+    // The power-on reset's comparator, `VCC` against `VPOT` (Table 29-11). It has no signal:
+    // below it the chip is held whatever its pins read, which `#net.vcc` shows.
+    let (below, above) = bridge.cpu().power_on_window();
+    watches.push(Watch {
+        rise: supply(above),
+        fall: supply(below),
+    });
     signals.sort_unstable();
 
     // ADC0 to ADC5 are `PC0` to `PC5`. A part without `ADC6` or `ADC7`, as the DIP is, reads
@@ -161,7 +165,15 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
         samples,
         bridge,
     );
-    chip.supply = supply;
+    let conductance = |current: Option<&Value>| current.map(|c| c.si.get() / ACTIVE_AT);
+    let running = conductance(mcu.active_current.as_ref());
+    let held = conductance(mcu.reset_current.as_ref()).or(running);
+    chip.supply = held.map(|held| Supply {
+        vcc: mcu.pins[VCC],
+        gnd: mcu.pins[GND_8],
+        conductance: running.unwrap_or(0.0),
+        held,
+    });
     chip
 }
 
@@ -249,6 +261,12 @@ pub struct Atmega328p {
     /// Hertz, greater than 0, at most `u32::MAX`.
     pub clock_hz: IntValue,
     pub fuses: Fuses,
+    /// What the boot section holds, which runs from the reset vector while `BOOTRST` is
+    /// programmed. `None` leaves the boot section erased, and parse then refuses a programmed
+    /// `BOOTRST`.
+    pub bootloader: Option<Bootloader>,
+    /// Where the run finds the chip at 0 ps.
+    pub start: Start,
     pub output: OutputStage,
     /// Ohm. Every I/O pin's pull-up.
     pub pull_up_resistance: Value,
@@ -327,10 +345,33 @@ impl Firmware {
     }
 }
 
+/// Where the run finds the chip at 0 ps.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Start {
+    /// At its first instruction, as if its supply had come up and the start from reset had
+    /// ended before the run.
+    #[default]
+    FirstInstruction,
+    /// At power-on: its supply rises at 0 ps, and the start from reset the fuses select, then
+    /// the bootloader, run before the first instruction.
+    PowerOn,
+}
+
+/// A bootloader a board burns into the boot section. The chip runs what it does on the way to
+/// the sketch, not its code.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Bootloader {
+    /// Optiboot, `optiboot_atmega328.hex` of Arduino's avr core, at byte `0x7E00`.
+    Optiboot,
+}
+
 /// The three fuse bytes as programmed, DS40002061B Tables 28-6, 28-8 and 28-9, where a
 /// programmed bit is 0. Only parse builds one, so `CKSEL` selects a crystal or ceramic
-/// resonator (Table 9-1, `0110` to `1111`), `CKOUT`, `DWEN` and `BOOTRST` are unprogrammed,
-/// and `BODLEVEL` is a level of Table 29-12 or disabled.
+/// resonator (Table 9-1, `0110` to `1111`), `CKOUT` and `DWEN` are unprogrammed, `BOOTRST` is
+/// unprogrammed unless the part names a bootloader, and `BODLEVEL` is a level of Table 29-12 or
+/// disabled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Fuses {
     low: u8,
@@ -365,6 +406,12 @@ pub(crate) struct WireAtmega328p {
     firmware: String,
     clock_hz: WireInt<u32>,
     fuses: WireFuses,
+    /// Optional, so a netlist written before the chip ran a bootloader keeps its meaning.
+    #[serde(default)]
+    bootloader: Option<Bootloader>,
+    /// Optional, so a netlist written before the chip ran its power-on start keeps its meaning.
+    #[serde(default)]
+    start: Start,
     output: WireOutputStage,
     pull_up_resistance: WireValue,
     reset_pull_up_resistance: WireValue,
@@ -440,7 +487,7 @@ pub(crate) fn resolve_atmega328p(ctx: ParseCtx<'_>, wire: WireAtmega328p) -> Opt
         }
     };
     let clock_hz = resolve_int(part_ref, "clock_hz", "Hz", wire.clock_hz, out);
-    let fuses = resolve_fuses(part_ref, &wire.fuses, out);
+    let fuses = resolve_fuses(part_ref, &wire.fuses, wire.bootloader.is_some(), out);
     let output = resolve_output_stage(part_ref, wire.output, out);
     let pull_up = ohm("pull_up_resistance", wire.pull_up_resistance, out);
     let reset_pull_up = ohm(
@@ -480,6 +527,8 @@ pub(crate) fn resolve_atmega328p(ctx: ParseCtx<'_>, wire: WireAtmega328p) -> Opt
         firmware: firmware?,
         clock_hz: clock_hz?,
         fuses: fuses?,
+        bootloader: wire.bootloader,
+        start: wire.start,
         output: output?,
         pull_up_resistance: pull_up?,
         reset_pull_up_resistance: reset_pull_up?,
@@ -553,15 +602,26 @@ fn one_ground(
 
 /// Each byte the model would not run is `unsupported`: a `CKSEL` outside the crystal and
 /// ceramic resonator rows of Table 9-1 or a programmed `CKOUT` (Table 28-9), a programmed
-/// `DWEN` or `BOOTRST` (Table 28-8), or a reserved `BODLEVEL` (Table 29-12).
-fn resolve_fuses(part: &Ref, wire: &WireFuses, out: &mut Vec<Diagnostic>) -> Option<Fuses> {
+/// `DWEN`, or a programmed `BOOTRST` with no `bootloader` to run from the boot section
+/// (Table 28-8), or a reserved `BODLEVEL` (Table 29-12).
+fn resolve_fuses(
+    part: &Ref,
+    wire: &WireFuses,
+    bootloader: bool,
+    out: &mut Vec<Diagnostic>,
+) -> Option<Fuses> {
+    let bootrst = if bootloader { 0x00 } else { 0x01 };
     let checks = [
         (
             "fuses.low",
             wire.low,
             matches!(wire.low & 0x0F, 0b0110..=0b1111) && wire.low & 0x40 != 0,
         ),
-        ("fuses.high", wire.high, wire.high & 0x41 == 0x41),
+        (
+            "fuses.high",
+            wire.high,
+            wire.high & 0x40 != 0 && wire.high & bootrst == bootrst,
+        ),
         (
             "fuses.extended",
             wire.extended,
