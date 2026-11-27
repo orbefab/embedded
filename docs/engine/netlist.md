@@ -59,6 +59,8 @@ Values are SI numbers. `unit` must already be the field's unit. Integer values a
 
 `world` is optional. It holds the world quantities the netlist declares, as [World](#world) says.
 
+`network` is optional. It sets the access point and the subnet radio chips reach, as [Network](#network) says.
+
 The engine stores ground first and sorts the other nets by name. It sorts parts by name. Reordering `nets` or `parts` in the JSON does not change observations or diagnostics.
 
 ## Transient analysis
@@ -139,6 +141,22 @@ A curve reads the quantity's value `w`. `x`, `x0` and `x1` are in the quantity's
 | `linear` | the line through `(x0, y0)` and `(x1, y1)` | `x0`, `y0`, `x1`, `y1` | a sensor with a linear output, such as an LM35's 10 mV per degC |
 
 Each curve is monotonic in `w` over the range of a quantity it may read, except `steinhart_hart`, which may have interior extrema. A `beta` or `linear` curve is monotonic for every `w` it may read. A `power` curve is monotonic only where `w / x` is not negative, so it reads only a quantity whose range does not go below 0, `light`, `humidity` or `pressure`. At `w` 0 a negative exponent makes `y * (w / x)^exponent` infinite, and the curve is `max` there, the dark resistance of a light-dependent resistor. Any other value above `max` is `max` too. A value that is not a number is never capped. Parse checks the field's own rule at both ends of the quantity's range (and at any interior stationary point of a `steinhart_hart` curve), so every value a schedule or a session can set keeps it. An end that breaks it is `netlist.value` on field `<field>.curve at <end> <unit>`, such as `resistance.curve at 0.0 lx`, with the field's rule, or rule `finite` when the curve is not finite there, such as a `power` curve with `y` 0 and a negative exponent at 0 lx. A `power` curve on `temperature` is `netlist.world` with rule `non_negative` on field `<field>.curve.kind`. A quantity the netlist does not declare is `netlist.world` with rule `undeclared` on field `<field>.quantity`, and a name the table lacks is rule `unknown` there. A `beta` or `steinhart_hart` curve on another quantity is `netlist.world` with rule `temperature` on field `<field>.curve.kind`. A `power` curve's `x` at or below 0 is `netlist.value` with rule `positive`. A `linear` curve whose `x1` equals its `x0` is `netlist.value` with rule `distinct`. A unit that is not the one the table above names is `netlist.unit` on field `<field>.curve.<name>`. An unknown `kind`, a missing field and an unknown field are `netlist.syntax`.
+
+## Network
+
+`network` is one access point on the air and the subnet behind it, which `orbe-net` runs. No scene writes it yet, so only a netlist given to `orbe-run` has one. A netlist without it builds no air, and its runs are the runs it had before the air existed.
+
+```json
+"network": {
+  "ssid": "orbe-lab",
+  "bssid": "02:6f:72:62:65:01",
+  "channel": 6,
+  "passphrase": "breadboard",
+  "epoch_s": 1773480360
+}
+```
+
+`ssid` is 1 to 32 bytes. `bssid` is six hex octets joined by `:`, an individual address. `channel` is a 2.4 GHz channel, 1 to 14. With `passphrase`, 8 to 63 characters from space to `~`, the access point asks for WPA2-PSK with CCMP-128. Without it the network is open. `epoch_s` is the seconds from 1970-01-01T00:00:00Z that the network's clock reads at t = 0, at most 253383854055, and 1767225600, 2026-01-01T00:00:00Z, without it. The subnet is `192.168.1.0/24`, with the router at `.1` and leases from `.100`. A field out of its range, a missing field and an unknown field are `netlist.syntax` at `network`.
 
 ## Names
 

@@ -268,6 +268,9 @@ pub struct Session {
     /// then by part name, then in the order each part closed them. Only a recorded session
     /// keeps them, for `display.csv`.
     display: Vec<Rectangle>,
+    /// What the network did at or before the last accepted step, in the order it did it. Only a
+    /// recorded session keeps them.
+    network: Vec<orbe_net::Row>,
     pub(crate) record: Option<Record>,
     /// `net.floating` warnings. `start` fills this from the netlist.
     pub(crate) warnings: Vec<Diagnostic>,
@@ -558,6 +561,7 @@ impl Session {
             i2c: Vec::new(),
             link: Vec::new(),
             display: Vec::new(),
+            network: Vec::new(),
             record,
             warnings,
             ratings,
@@ -717,14 +721,22 @@ impl Session {
         self.serial.extend(self.actives.deliver(accepted));
         let records = self.actives.records();
         let rows = self.actives.rows();
+        let network = self.actives.net_rows();
         if self.record.is_some() {
             self.i2c.extend(self.actives.phases());
             self.link.extend(records);
             self.display.extend(rows);
+            self.network.extend(network);
         } else {
             self.actives.phases().for_each(drop);
         }
         self.status()
+    }
+
+    /// What the network did at or before the last accepted step, in the order it did it, on a
+    /// recorded session whose netlist has a `network`. Empty otherwise.
+    pub fn network_rows(&self) -> &[orbe_net::Row] {
+        &self.network
     }
 
     /// Every analog column at `now`. On an accepted step it is that step's row. Between steps it

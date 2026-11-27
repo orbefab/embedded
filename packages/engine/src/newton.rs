@@ -46,8 +46,8 @@ impl Circuit {
         Circuit::with_actives(netlist, Vec::new())
     }
 
-    /// The netlist's active chips, then `extra`. Only a test passes `extra`, a script chip with
-    /// no netlist kind.
+    /// The netlist's active chips, then `extra`, then the network when the netlist has one. Only
+    /// a test passes `extra`, a script chip with no netlist kind.
     pub(crate) fn with_actives(
         netlist: Netlist,
         extra: Vec<active::Chip>,
@@ -64,6 +64,7 @@ impl Circuit {
             }
         }
         actives.extend(extra);
+        actives.extend(netlist.network().map(crate::air::chip));
         let layout = Layout::new(&netlist, passives);
         if layout.size() > crate::sparse::MAX_UNKNOWNS {
             return Err(Diagnostic::SolverTooLarge {

@@ -1,8 +1,11 @@
 //! A test-only active chip: a script of drives and samples on one output pin, `out`, and one
 //! input pin, `in`. A drive at 0 is its power-on drive. A script can also send records and
-//! console bytes, take records, and log what it took.
+//! console bytes, take records, and log what it took, and play a Wi-Fi station on the air.
+
+pub(crate) mod station;
 
 use orbe_mcu::Frame;
+use orbe_model::air::{Ack, AirFrame, Channel};
 use orbe_model::{Cs, Drive, Duty, Lanes, Miso, Spi, Stop, Time};
 
 use crate::netlist::NetId;
@@ -92,6 +95,8 @@ pub(crate) struct Core {
     /// The console bytes it sent that it still holds, each with its time.
     bytes: Vec<(Time, u8)>,
     taken: Vec<Taken>,
+    /// The station it plays on the air, when it has a radio.
+    radio: Option<Box<station::Station>>,
 }
 
 pub(crate) fn chip(
@@ -157,6 +162,12 @@ pub(crate) fn sends(chip: &mut Chip) -> Sends {
     script(chip).sends.clone()
 }
 
+/// `chip` playing `station` on the air.
+pub(crate) fn radio(mut chip: Chip, station: station::Station) -> Chip {
+    script(&mut chip).radio = Some(Box::new(station));
+    chip
+}
+
 /// `chip` taking each `Spi` record sent on `bus`.
 pub(crate) fn receiver(mut chip: Chip, bus: SpiTarget) -> Chip {
     chip.takes.spi = Some(bus);
@@ -191,6 +202,7 @@ impl Core {
             records: Vec::new(),
             bytes: Vec::new(),
             taken: Vec::new(),
+            radio: None,
         };
         while let Some(&(Time::ZERO, op)) = core.script.get(core.cursor) {
             let Op::Drive(drive) = op else {
@@ -206,9 +218,11 @@ impl Core {
         assert!(limit >= self.now, "a core runs only past where it reached");
         let scripted = self.script.get(self.cursor).map(|&(at, _)| at);
         let pending = self.pending.iter().map(|&(at, _)| at).min();
+        let aired = self.radio.as_ref().and_then(|radio| radio.next());
         let Some(at) = scripted
             .into_iter()
             .chain(pending)
+            .chain(aired)
             .min()
             .filter(|&at| at <= limit)
         else {
@@ -252,6 +266,10 @@ impl Core {
         }
         while let Some(k) = self.pending.iter().position(|&(when, _)| when == at) {
             self.drive = [self.pending.remove(k).1];
+        }
+        if aired == Some(at) {
+            self.radio.as_mut().expect("a radio").air(at);
+            record = true;
         }
         Some(Stop {
             at,
@@ -311,6 +329,41 @@ impl Core {
             };
             self.taken.push((at, spi.data.to_vec(), row.record.seq));
         }
+    }
+
+    pub(crate) fn radio(&self) -> bool {
+        self.radio.is_some()
+    }
+
+    /// Its station, when it has a radio.
+    pub(crate) fn station(&self) -> Option<&station::Station> {
+        self.radio.as_deref()
+    }
+
+    fn station_mut(&mut self) -> &mut station::Station {
+        self.radio.as_mut().expect("a station")
+    }
+
+    pub(crate) fn tuned(&self) -> Option<Channel> {
+        self.station().and_then(station::Station::tuned)
+    }
+
+    pub(crate) fn aired(&self) -> Option<&AirFrame> {
+        self.station().and_then(station::Station::aired)
+    }
+
+    pub(crate) fn drop_aired(&mut self) {
+        self.station_mut().drop_aired();
+    }
+
+    pub(crate) fn hear(&mut self, at: Time, frame: &AirFrame) -> Ack {
+        assert_eq!(at, self.now, "a frame lands where the core is");
+        self.station_mut().hear(at, frame)
+    }
+
+    pub(crate) fn acked(&mut self, at: Time, ack: Ack) {
+        assert_eq!(at, self.now, "an answer lands where the core is");
+        self.station_mut().acked(at, ack);
     }
 
     /// Each record it took, in the order it took them.

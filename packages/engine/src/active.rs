@@ -4,6 +4,7 @@
 //! its supply. `docs/engine/engine.md`, Active chips, holds the loop's protocol.
 
 use orbe_mcu::{Frame, Phase};
+use orbe_model::air::{Ack, AirFrame, Channel, Signal as Heard};
 use orbe_model::{Draw, Drawn, Drive, Event, Quantity, Shows, Stop, Time, View};
 
 use crate::netlist::{NetId, PartId};
@@ -36,6 +37,7 @@ use crate::name::{Name, Ref};
 
 use crate::serial::SerialByte;
 
+use crate::air::{self, Air, Net};
 use crate::chip::Active;
 use crate::mna::{Solution, System};
 use crate::newton::Circuit;
@@ -98,7 +100,7 @@ impl Supply {
 /// An active chip as the circuit sees it. Read-only for the whole analysis.
 #[derive(Clone, Debug)]
 pub(crate) struct Chip {
-    /// `None` only on a test's script chip, which no netlist part builds.
+    /// `None` only on the network and on a test's script chip, which no netlist part builds.
     pub(crate) part: Option<PartId>,
     /// In the order of its core's image.
     pub(crate) outputs: Vec<Output>,
@@ -182,13 +184,17 @@ impl Takes {
 /// - `input`, `take`, `deliver`, `drain_records` and `drain_rows` read nothing but the core and
 ///   their arguments, so they take two equal cores to two equal cores. A clone shares only what
 ///   no call writes: the AVR core's flash and decoded ops behind an `Arc`, a replay's records,
-///   and a script core's script.
+///   a script core's script, and the network's scene data.
+/// - A station holds the frame it put on the air from the stop where it ended until the landing
+///   there hands it on. What `hear` and `acked` cause comes at least 1 ps later.
 #[derive(Debug)]
 pub(crate) enum Core {
     /// A device on the `orbe-model` contract.
     Device(Box<dyn Hosted>),
     /// A microcontroller on the `orbe-mcu` contract.
     Mcu(Mcu),
+    /// The netlist's network, a station on the air with no part.
+    Net(Box<Net>),
     #[cfg(test)]
     Script(Box<script::Core>),
 }
@@ -198,6 +204,7 @@ impl Clone for Core {
         match self {
             Core::Device(core) => Core::Device(core.boxed()),
             Core::Mcu(mcu) => Core::Mcu(mcu.clone()),
+            Core::Net(net) => Core::Net(net.clone()),
             #[cfg(test)]
             Core::Script(core) => Core::Script(core.clone()),
         }
@@ -211,6 +218,7 @@ impl Clone for Core {
         match (self, source) {
             (Core::Device(core), Core::Device(source)) => core.copy_from(&**source),
             (Core::Mcu(mcu), Core::Mcu(source)) => mcu.clone_from(source),
+            (Core::Net(net), Core::Net(source)) => net.clone_from(source),
             (core, source) => *core = source.clone(),
         }
     }
@@ -221,6 +229,7 @@ impl Core {
         match *self {
             Core::Device(ref mut core) => core.run_until(world, limit),
             Core::Mcu(ref mut mcu) => mcu.run_until(limit),
+            Core::Net(ref mut net) => net.run_until(limit),
             #[cfg(test)]
             Core::Script(ref mut core) => core.run_until(limit),
         }
@@ -230,6 +239,7 @@ impl Core {
         match *self {
             Core::Device(ref core) => core.drive(),
             Core::Mcu(ref mcu) => mcu.drive(),
+            Core::Net(_) => &[],
             #[cfg(test)]
             Core::Script(ref core) => core.drive(),
         }
@@ -239,7 +249,7 @@ impl Core {
     pub(crate) fn min_supply_v(&self) -> Option<f64> {
         match *self {
             Core::Device(ref core) => core.min_supply_v(),
-            Core::Mcu(_) => None,
+            Core::Mcu(_) | Core::Net(_) => None,
             #[cfg(test)]
             Core::Script(_) => None,
         }
@@ -249,7 +259,7 @@ impl Core {
     pub(crate) fn tracks_supply(&self) -> bool {
         match self {
             Core::Device(core) => core.tracks_supply(),
-            Core::Mcu(_) => false,
+            Core::Mcu(_) | Core::Net(_) => false,
             #[cfg(test)]
             Core::Script(_) => false,
         }
@@ -259,7 +269,7 @@ impl Core {
     pub(crate) fn angle_at(&self, at: Time) -> Option<i32> {
         match self {
             Core::Device(core) => core.angle_at(at),
-            Core::Mcu(_) => None,
+            Core::Mcu(_) | Core::Net(_) => None,
             #[cfg(test)]
             Core::Script(_) => None,
         }
@@ -269,7 +279,7 @@ impl Core {
     pub(crate) fn draw(&self) -> Draw {
         match *self {
             Core::Device(ref core) => core.draw(),
-            Core::Mcu(_) => Draw::NONE,
+            Core::Mcu(_) | Core::Net(_) => Draw::NONE,
             #[cfg(test)]
             Core::Script(_) => Draw::NONE,
         }
@@ -280,7 +290,7 @@ impl Core {
     pub(crate) fn pulled_down(&self) -> &[bool] {
         match *self {
             Core::Mcu(ref mcu) => mcu.pulled_down(),
-            Core::Device(_) => &[],
+            Core::Device(_) | Core::Net(_) => &[],
             #[cfg(test)]
             Core::Script(ref core) => core.pulled_down(),
         }
@@ -297,7 +307,7 @@ impl Core {
     pub(crate) fn strong_pull_up(&self) -> &[bool] {
         match *self {
             Core::Mcu(ref mcu) => mcu.strong_pull_up(),
-            Core::Device(_) => &[],
+            Core::Device(_) | Core::Net(_) => &[],
             #[cfg(test)]
             Core::Script(_) => &[],
         }
@@ -313,7 +323,7 @@ impl Core {
     pub(crate) fn held(&self) -> bool {
         match *self {
             Core::Mcu(ref mcu) => mcu.held(),
-            Core::Device(_) => false,
+            Core::Device(_) | Core::Net(_) => false,
             #[cfg(test)]
             Core::Script(_) => false,
         }
@@ -324,7 +334,7 @@ impl Core {
     fn read(&self, output: usize) -> Option<Time> {
         match *self {
             Core::Mcu(ref mcu) => mcu.read(output),
-            Core::Device(_) => None,
+            Core::Device(_) | Core::Net(_) => None,
             #[cfg(test)]
             Core::Script(_) => None,
         }
@@ -335,6 +345,7 @@ impl Core {
         match *self {
             Core::Device(ref mut core) => core.sample(world, at, volts),
             Core::Mcu(ref mut mcu) => mcu.sample(world, at, volts),
+            Core::Net(_) => unreachable!("the network samples nothing"),
             #[cfg(test)]
             Core::Script(ref mut core) => core.sample(at, volts),
         }
@@ -345,6 +356,7 @@ impl Core {
         match *self {
             Core::Device(ref mut core) => core.input(world, at, levels),
             Core::Mcu(ref mut mcu) => mcu.input(at, levels),
+            Core::Net(_) => debug_assert!(levels.is_empty(), "the network watches nothing"),
             #[cfg(test)]
             Core::Script(ref mut core) => core.input(at, levels),
         }
@@ -352,10 +364,18 @@ impl Core {
 
     /// Takes each byte a USART sent whose stop bit ended at or before `through`, in the order
     /// they ended on each USART, and each TWI phase that ended by then, in the order they
-    /// ended. Drops every SPI byte, which no output reads.
-    fn deliver(&mut self, through: Time, sent: impl FnMut(Frame), saw: impl FnMut(Phase)) {
+    /// ended. Drops every SPI byte, which no output reads. The network instead hands over and
+    /// drops each row it made by then, in the order it made them.
+    fn deliver(
+        &mut self,
+        through: Time,
+        sent: impl FnMut(Frame),
+        saw: impl FnMut(Phase),
+        made: impl FnMut(orbe_net::Row),
+    ) {
         match *self {
             Core::Mcu(ref mut mcu) => mcu.deliver(through, sent, saw),
+            Core::Net(ref mut net) => net.drain_rows(through, made),
             Core::Device(_) => {}
             #[cfg(test)]
             Core::Script(ref mut core) => core.deliver(through, sent),
@@ -367,6 +387,7 @@ impl Core {
         match *self {
             Core::Device(ref core) => core.records(),
             Core::Mcu(ref mcu) => mcu.records(),
+            Core::Net(_) => &[],
             #[cfg(test)]
             Core::Script(ref core) => core.records(),
         }
@@ -378,6 +399,7 @@ impl Core {
         match *self {
             Core::Device(ref mut core) => core.drain_records(through, &mut sent),
             Core::Mcu(ref mut mcu) => mcu.drain_records(through, sent),
+            Core::Net(_) => {}
             #[cfg(test)]
             Core::Script(ref mut core) => core.drain_records(through, sent),
         }
@@ -388,7 +410,7 @@ impl Core {
     fn take(&mut self, world: &World, at: Time, records: &[LinkRow], answers: &mut Answers) {
         match *self {
             Core::Device(ref mut core) => core.take(world, at, records, answers),
-            Core::Mcu(_) => {
+            Core::Mcu(_) | Core::Net(_) => {
                 unreachable!(
                     "a chip with no record pins took {} records at {at:?}",
                     records.len()
@@ -404,6 +426,7 @@ impl Core {
         match *self {
             Core::Mcu(ref mut mcu) => mcu.answered(at, miso),
             Core::Device(_) => unreachable!("a device sends no record that reads"),
+            Core::Net(_) => unreachable!("the network sends no record"),
             #[cfg(test)]
             Core::Script(_) => unreachable!("a script sends no record that reads"),
         }
@@ -413,7 +436,7 @@ impl Core {
     fn drain_rows(&mut self, mut sent: impl FnMut(Time, Drawn)) {
         match *self {
             Core::Device(ref mut core) => core.drain_rows(&mut sent),
-            Core::Mcu(_) => {}
+            Core::Mcu(_) | Core::Net(_) => {}
             #[cfg(test)]
             Core::Script(_) => {}
         }
@@ -424,7 +447,7 @@ impl Core {
     fn cut(&mut self, world: &World, at: Time, record: &Record) -> Option<Record> {
         match self {
             Core::Device(core) => core.cut(world, at, record),
-            Core::Mcu(_) => None,
+            Core::Mcu(_) | Core::Net(_) => None,
             #[cfg(test)]
             Core::Script(_) => None,
         }
@@ -441,7 +464,7 @@ impl Core {
     fn shows(&self) -> Shows {
         match self {
             Core::Device(core) => core.shows(),
-            Core::Mcu(_) => Shows::Nothing,
+            Core::Mcu(_) | Core::Net(_) => Shows::Nothing,
             #[cfg(test)]
             Core::Script(_) => Shows::Nothing,
         }
@@ -451,7 +474,7 @@ impl Core {
     fn view(&self) -> View<'_> {
         match self {
             Core::Device(core) => core.view(),
-            Core::Mcu(_) => View::Nothing,
+            Core::Mcu(_) | Core::Net(_) => View::Nothing,
             #[cfg(test)]
             Core::Script(_) => View::Nothing,
         }
@@ -461,7 +484,7 @@ impl Core {
     fn reads(&self) -> &'static [Quantity] {
         match self {
             Core::Device(core) => core.reads(),
-            Core::Mcu(_) => &[],
+            Core::Mcu(_) | Core::Net(_) => &[],
             #[cfg(test)]
             Core::Script(_) => &[],
         }
@@ -471,9 +494,70 @@ impl Core {
     fn event(&mut self, world: &World, at: Time, event: Event<'_>) {
         match self {
             Core::Device(core) => core.event(world, at, event),
-            Core::Mcu(_) => unreachable!("only a device takes an event"),
+            Core::Mcu(_) | Core::Net(_) => unreachable!("only a device takes an event"),
             #[cfg(test)]
             Core::Script(_) => unreachable!("only a device takes an event"),
+        }
+    }
+
+    /// Whether it is a station on the air. No chip kind has a radio yet.
+    pub(crate) fn radio(&self) -> bool {
+        match self {
+            Core::Net(_) => true,
+            Core::Device(_) | Core::Mcu(_) => false,
+            #[cfg(test)]
+            Core::Script(core) => core.radio(),
+        }
+    }
+
+    /// The channel a station listens on at its time, or `None` while its RF is off.
+    fn tuned(&self) -> Option<Channel> {
+        match self {
+            Core::Net(net) => net.tuned(),
+            Core::Device(_) | Core::Mcu(_) => unreachable!("only a station listens"),
+            #[cfg(test)]
+            Core::Script(core) => core.tuned(),
+        }
+    }
+
+    /// The frame a station put on the air that ended at its stop, until the landing there.
+    fn aired(&self) -> Option<&AirFrame> {
+        match self {
+            Core::Net(net) => net.aired(),
+            Core::Device(_) | Core::Mcu(_) => unreachable!("only a station airs"),
+            #[cfg(test)]
+            Core::Script(core) => core.aired(),
+        }
+    }
+
+    /// Drops the frame its landing handed on.
+    fn drop_aired(&mut self) {
+        match self {
+            Core::Net(net) => net.drop_aired(),
+            Core::Device(_) | Core::Mcu(_) => unreachable!("only a station airs"),
+            #[cfg(test)]
+            Core::Script(core) => core.drop_aired(),
+        }
+    }
+
+    /// Another station's frame on its channel, which ended at `at`, and whether it acknowledges
+    /// it.
+    fn hear(&mut self, at: Time, frame: &AirFrame, signal: Heard) -> Ack {
+        match self {
+            Core::Net(net) => net.hear(at, frame, signal),
+            Core::Device(_) | Core::Mcu(_) => unreachable!("only a station hears"),
+            #[cfg(test)]
+            Core::Script(core) => core.hear(at, frame),
+        }
+    }
+
+    /// Whether any station acknowledged its frame that ended at `at`.
+    fn acked(&mut self, at: Time, ack: Ack) {
+        match self {
+            Core::Net(net) => net.acked(at, ack),
+            Core::Device(_) | Core::Mcu(_) => unreachable!("only a station airs"),
+            #[cfg(test)]
+            Core::Script(core) => core.acked(at, ack),
         }
     }
 }
@@ -601,6 +685,8 @@ pub(crate) struct Actives {
     routing: route::Routing,
     /// The first record-routing fault reached, which ends the run at its landing.
     routing_fault: Option<(Time, Diagnostic)>,
+    /// The stations on the air, or `None` when no core is one.
+    air: Option<Air>,
 }
 
 struct Ahead {
@@ -628,6 +714,8 @@ struct Staging {
     phases: Vec<StagedPhase>,
     records: Vec<LinkRow>,
     rows: Vec<Rectangle>,
+    /// The network's rows, in the order it made them.
+    net: Vec<orbe_net::Row>,
 }
 
 /// Every byte of one chip whose stop bit ended at or before `through` was staged, once, and
@@ -664,6 +752,11 @@ struct Staging {
 ///
 /// A display row is made at or before the landing that commits it, and that commit stages it
 /// with its own time. So the committed core holds no row.
+///
+/// The network makes its rows as it runs, and is delivered as a USART is: a row is staged only
+/// when its time is in `(through, to]`. Its run makes the same rows again after a rewind, and
+/// one at or before `through` was staged from the copy that made it first. A row made at a
+/// landing has the landing's time, which is past every delivery.
 struct Delivered {
     through: Time,
     /// The index in `Actives::usarts` of the chip's first USART.
@@ -685,7 +778,9 @@ impl Delivered {
         let (through, usart, twi) = (self.through, self.usart, self.twi);
         let staged_phases = &mut self.phases;
         let staged_bytes = &mut self.bytes;
-        let Staging { bytes, phases, .. } = staged;
+        let Staging {
+            bytes, phases, net, ..
+        } = staged;
         core.deliver(
             to,
             |frame| {
@@ -713,6 +808,11 @@ impl Delivered {
                             phase: phase.phase,
                         },
                     });
+                }
+            },
+            |row| {
+                if row.at > through {
+                    net.push(row);
                 }
             },
         );
@@ -919,6 +1019,7 @@ impl Actives {
             })
             .collect();
         let routing = route::Routing::new(circuit, !senders.is_empty());
+        let air = Air::new(&committed);
         Actives {
             committed,
             ahead,
@@ -932,6 +1033,7 @@ impl Actives {
             horns,
             routing,
             routing_fault: None,
+            air,
         }
     }
 
@@ -1062,7 +1164,7 @@ impl Actives {
                         });
                     }
                 }
-                Core::Mcu(_) => {}
+                Core::Mcu(_) | Core::Net(_) => {}
                 #[cfg(test)]
                 Core::Script(_) => {}
             }
@@ -1170,9 +1272,11 @@ impl Actives {
         if let Some(fault) = routing_fault {
             self.routing_fault.get_or_insert((at, fault));
         }
+        let on_air = self.air.is_some() && self.air(world, at);
         let mut changed = false;
         let mut stops = 0u64;
         for (k, (committed, ahead)) in self.committed.iter_mut().zip(&mut self.ahead).enumerate() {
+            let heard = on_air && self.air.as_ref().is_some_and(|air| air.is_station(k));
             let watched = circuit.active_watches(k);
             let levels = after.of(watched.clone());
             let flipped = before.of(watched) != levels;
@@ -1187,6 +1291,7 @@ impl Actives {
                 && !flipped
                 && records.is_empty()
                 && event.is_none()
+                && !heard
                 && !keep
                 && !tracks
                 && !world.changes_at(committed.reads(), at)
@@ -1268,6 +1373,60 @@ impl Actives {
         (changed, stops)
     }
 
+    /// The air's part of a landing at `at`, before the second pass. Each frame a station's copy
+    /// stopped on there goes to every other station tuned to its channel, in station order,
+    /// frames in station order too. Each station's copy is put at `at` first, and each sender's
+    /// copy takes the OR of the answers before it runs on. Returns whether a frame landed, so
+    /// the second pass keeps every station at `at`. Never inlined, so a landing with no air
+    /// runs the code it ran before the air.
+    #[inline(never)]
+    fn air(&mut self, world: &World, at: Time) -> bool {
+        let Some(air) = &self.air else {
+            return false;
+        };
+        let frames: Vec<(usize, AirFrame)> = (air.stations().iter())
+            .filter_map(|&slot| {
+                let ahead = &self.ahead[slot];
+                match ahead.reach {
+                    Reach::Stopped(stop) if stop.at == at && stop.record => {
+                        ahead.core.aired().map(|frame| (slot, frame.clone()))
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+        if frames.is_empty() {
+            return false;
+        }
+        let mut acks = vec![Ack::None; frames.len()];
+        for &slot in air.stations() {
+            let ahead = &mut self.ahead[slot];
+            // A copy stopped at `at` is there, and keeps its stop for the second pass.
+            if !matches!(ahead.reach, Reach::Stopped(stop) if stop.at == at) {
+                ahead.rewind(world, &self.committed[slot], at);
+            }
+            let Some(channel) = ahead.core.tuned() else {
+                continue;
+            };
+            let image = ahead.core.drive().to_vec();
+            for ((sender, frame), ack) in frames.iter().zip(&mut acks) {
+                if *sender != slot
+                    && frame.channel == channel
+                    && ahead.core.hear(at, frame, air::SIGNAL) == Ack::Acked
+                {
+                    *ack = Ack::Acked;
+                }
+            }
+            assert_eq!(ahead.core.drive(), image, "a frame never changes an image");
+        }
+        for ((sender, _), ack) in frames.iter().zip(acks) {
+            let core = &mut self.ahead[*sender].core;
+            core.drop_aired();
+            core.acked(at, ack);
+        }
+        true
+    }
+
     /// The run ends at `at`, where every stop up to `at` has landed. Each pulse target takes the
     /// part sent by then of each `Pulses` record still in flight on its line. A target that
     /// relays what it takes hands the part it relayed by then on to the next, until a part
@@ -1283,6 +1442,7 @@ impl Actives {
                     Core::Mcu(copy) => chip.in_flight(copy, at),
                     _ => unreachable!("a copy is of its core's kind"),
                 },
+                Core::Net(_) => Vec::new(),
                 #[cfg(test)]
                 Core::Script(_) => Vec::new(),
             })
@@ -1331,6 +1491,15 @@ impl Actives {
                 debug_assert!(
                     stop.at != at || ahead.core.records().is_empty(),
                     "a core stopped without the record flag holds no records"
+                );
+                continue;
+            }
+            // `record` is set on a frame's stop too. Only a sender has a slot in `senders`, and
+            // only a sender holds records.
+            if !circuit.actives[slot].sends {
+                debug_assert!(
+                    ahead.core.records().is_empty(),
+                    "a core that sends no records holds none"
                 );
                 continue;
             }
@@ -1439,6 +1608,11 @@ impl Actives {
         records
     }
 
+    /// Every network row staged since the last call, in the order the network made them.
+    pub(crate) fn net_rows(&mut self) -> Vec<orbe_net::Row> {
+        std::mem::take(&mut self.staged.net)
+    }
+
     /// Every display row staged since the last call, ordered by time, then by part name, then
     /// in the order its part made them.
     pub(crate) fn rows(&mut self) -> Vec<Rectangle> {
@@ -1467,6 +1641,6 @@ fn name(circuit: &Circuit, chip: &Chip) -> Name {
         (Some(part), _) => circuit.netlist.part(part).name.clone(),
         #[cfg(test)]
         (None, Core::Script(core)) => core.name(),
-        (None, _) => unreachable!("only a test's script chip is no part"),
+        (None, _) => unreachable!("only a test's script chip and the network are no part"),
     }
 }

@@ -96,15 +96,15 @@ impl Levels {
 }
 
 /// Where a run stopped before its limit: at `at` its drives may change, it samples, or a record
-/// it sent ends.
+/// or an air frame it sent ends.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Stop {
     pub at: Time,
     /// Whether it samples at `at`. It reads every one of its samples on the step's solution
     /// there, before any change at `at`.
     pub sample: bool,
-    /// Whether a record it sent ends at `at`. The drives do not change at that stop for the
-    /// record's sake.
+    /// Whether a record or an air frame it sent ends at `at`. The drives do not change at that
+    /// stop for its sake.
     pub record: bool,
 }
 

@@ -3,6 +3,7 @@
 pub mod bounce;
 pub mod elf;
 pub(crate) mod json;
+mod network;
 pub(crate) mod waveform;
 
 mod catalog;
@@ -67,6 +68,8 @@ pub struct Netlist {
     nets: Vec<Name>,
     parts: Vec<Part>,
     world: World,
+    /// The access point and subnet the air reaches, when the netlist has one.
+    network: Option<orbe_net::Config>,
 }
 
 impl Netlist {
@@ -86,6 +89,12 @@ impl Netlist {
     /// The world quantities the netlist declares, each with its schedule.
     pub fn world(&self) -> &World {
         &self.world
+    }
+
+    /// The access point and subnet the netlist's `network` sets, which every radio's frames
+    /// reach. `None` builds no air.
+    pub(crate) fn network(&self) -> Option<&orbe_net::Config> {
+        self.network.as_ref()
     }
 
     /// Appends a change of declared quantity `quantity` to `level` at `at`, a time
