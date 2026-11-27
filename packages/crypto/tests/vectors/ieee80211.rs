@@ -4,6 +4,7 @@
 
 use orbe_crypto::aes::AesKey;
 use orbe_crypto::ccm::{open, seal};
+use orbe_crypto::hmac::hmac_sha1;
 use orbe_crypto::pbkdf2::pbkdf2_sha1;
 use orbe_crypto::prf::prf;
 
@@ -41,6 +42,34 @@ fn prf_matches_annex_j_3() {
         prf(key, b"prefix", data, &mut short);
         assert_eq!(short, out[..48], "test case {} cut to 384 bits", i + 1);
     }
+}
+
+#[test]
+fn prf_handles_255_block_boundary() {
+    let key = &[0x0b; 20];
+    let label = b"prefix";
+    let data = b"Hi There";
+    let mut reference = Vec::with_capacity(255 * 20);
+    for i in 0u8..=254 {
+        let mut msg = Vec::with_capacity(label.len() + 1 + data.len() + 1);
+        msg.extend_from_slice(label);
+        msg.push(0);
+        msg.extend_from_slice(data);
+        msg.push(i);
+        reference.extend_from_slice(&hmac_sha1(key, &msg));
+    }
+    for len in [5080, 5081, 5100] {
+        let mut out = vec![0; len];
+        prf(key, label, data, &mut out);
+        assert_eq!(out, reference[..len], "len {len}");
+    }
+}
+
+#[test]
+#[should_panic(expected = "the PRF counter is one byte")]
+fn prf_panics_above_255_blocks() {
+    let mut out = vec![0; 5101];
+    prf(&[0x0b; 20], b"prefix", b"Hi There", &mut out);
 }
 
 /// J.4: the PSK is PBKDF2-HMAC-SHA1 of the passphrase over the SSID, 4096 iterations, 256 bits.

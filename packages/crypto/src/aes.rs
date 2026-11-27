@@ -136,11 +136,15 @@ impl AesKey {
         s
     }
 
-    /// Transforms a whole number of 16-byte blocks in `mode`, updating `iv` in place.
+    /// Transforms `input` in `mode`, updating `iv` in place.
     ///
     /// `encrypt` selects encryption vs decryption for ECB, CBC, CFB8 and CFB128; OFB and CTR
-    /// always apply the forward cipher regardless of `encrypt`. `input` is a whole number of
-    /// blocks: a debug build panics on a partial block.
+    /// always apply the forward cipher regardless of `encrypt`.
+    ///
+    /// # Panics
+    ///
+    /// When `input` is not a whole number of 16-byte blocks in any mode other than
+    /// [`BlockMode::Cfb8`].
     pub fn transform(
         &self,
         mode: BlockMode,
@@ -148,12 +152,19 @@ impl AesKey {
         iv: &mut [u8; 16],
         input: &[u8],
     ) -> Vec<u8> {
-        let (blocks, remainder) = input.as_chunks::<16>();
-        debug_assert!(remainder.is_empty());
         let mut out = Vec::with_capacity(input.len());
+        let whole_blocks = || {
+            let (blocks, remainder) = input.as_chunks::<16>();
+            assert!(
+                remainder.is_empty(),
+                "AES {mode:?} expects whole 16-byte blocks, got {} bytes",
+                input.len()
+            );
+            blocks
+        };
         match mode {
             BlockMode::Ecb => {
-                for block in blocks {
+                for block in whole_blocks() {
                     let result = if encrypt {
                         self.encrypt_block(block)
                     } else {
@@ -163,7 +174,7 @@ impl AesKey {
                 }
             }
             BlockMode::Cbc => {
-                for block in blocks {
+                for block in whole_blocks() {
                     if encrypt {
                         let xored = xor_block(block, iv);
                         let cipher = self.encrypt_block(&xored);
@@ -177,14 +188,14 @@ impl AesKey {
                 }
             }
             BlockMode::Ofb => {
-                for block in blocks {
+                for block in whole_blocks() {
                     let stream = self.encrypt_block(iv);
                     *iv = stream;
                     out.extend_from_slice(&xor_block(block, &stream));
                 }
             }
             BlockMode::Ctr { inc128 } => {
-                for block in blocks {
+                for block in whole_blocks() {
                     let stream = self.encrypt_block(iv);
                     out.extend_from_slice(&xor_block(block, &stream));
                     increment_counter(iv, inc128);
@@ -200,7 +211,7 @@ impl AesKey {
                 }
             }
             BlockMode::Cfb128 => {
-                for block in blocks {
+                for block in whole_blocks() {
                     let stream = self.encrypt_block(iv);
                     let produced = xor_block(block, &stream);
                     *iv = if encrypt { produced } else { *block };

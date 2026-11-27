@@ -12,7 +12,8 @@ use crate::hmac::HmacSha1;
 pub fn prf(key: &[u8], label: &[u8], data: &[u8], out: &mut [u8]) {
     assert!(out.len() <= 255 * 20, "the PRF counter is one byte");
     let keyed = HmacSha1::new(key);
-    for (i, chunk) in (0u8..).zip(out.chunks_mut(20)) {
+    for (i, chunk) in out.chunks_mut(20).enumerate() {
+        let i = u8::try_from(i).expect("the PRF counter is one byte");
         let mut mac = keyed.clone();
         mac.update(label);
         mac.update(&[0]);

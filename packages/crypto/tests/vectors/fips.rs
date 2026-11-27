@@ -188,6 +188,42 @@ fn sp_800_38a_block_modes() {
     assert_eq!(iv128, decode16("00000000000000000000000100000000"));
 }
 
+#[test]
+fn transform_panics_on_partial_block_in_every_block_mode() {
+    let key = AesKey::new(&decode("2b7e151628aed2a6abf7158809cf4f3c")).unwrap();
+    let iv0 = decode16("000102030405060708090a0b0c0d0e0f");
+    let input = [0x42u8; 17];
+    let block_modes = [
+        BlockMode::Ecb,
+        BlockMode::Cbc,
+        BlockMode::Ofb,
+        BlockMode::Ctr { inc128: false },
+        BlockMode::Ctr { inc128: true },
+        BlockMode::Cfb128,
+    ];
+    for mode in block_modes {
+        for encrypt in [true, false] {
+            let mut iv = iv0;
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                key.transform(mode, encrypt, &mut iv, &input)
+            }));
+            assert!(
+                result.is_err(),
+                "{mode:?} (encrypt={encrypt}) must reject a 17-byte input"
+            );
+        }
+    }
+
+    // CFB8 operates one byte at a time and keeps all 17 bytes.
+    let mut enc_iv = iv0;
+    let cipher = key.transform(BlockMode::Cfb8, true, &mut enc_iv, &input);
+    assert_eq!(cipher.len(), input.len());
+    let mut dec_iv = iv0;
+    let plain = key.transform(BlockMode::Cfb8, false, &mut dec_iv, &cipher);
+    assert_eq!(plain, input);
+    assert_eq!(dec_iv, enc_iv);
+}
+
 /// FIPS 180-4 / NIST CAVP SHA-1 examples: the empty message, "abc" and the two-block message.
 #[test]
 fn sha1_matches_fips_180_4_vectors() {
