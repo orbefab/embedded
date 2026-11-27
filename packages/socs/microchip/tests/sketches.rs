@@ -288,6 +288,11 @@ fn serial_counter_prints_each_count_at_115200_baud() {
 /// overflow ISR can stretch, but a wrong `OCR2A` or prescaler would move every toggle a Timer2
 /// tick further off the grid. `tone()` keeps `TCNT2` as it is, so the next call's first toggle
 /// is within one period of the call.
+///
+/// `init()` starts Timer2 with `TCNT2` and `OCR2A` both 0, and no write blocks that match
+/// (§15.5.2), so `OCF2A` rises as `TCNT2` leaves 0 on its first clock (Figure 15-10). `tone()`
+/// does not clear it, so the first toggle is the ISR that `OCIE2A` lets in at once, under one
+/// half period before the grid of the other 439.
 #[test]
 fn tone_plays_440_toggles_of_440_hz_once_a_second() {
     const HALF: u64 = 142 * 128;
@@ -301,12 +306,18 @@ fn tone_plays_440_toggles_of_440_hz_once_a_second() {
         .take_while(|&(cycle, _)| cycle < 600 * MS)
         .collect();
     assert_eq!(burst.len(), 440);
-    let first = burst[0].0;
+    let call = burst[0].0;
+    let grid = burst[1].0;
+    assert!(grid - call < HALF, "the pending flag toggles at the call");
     for (k, &(cycle, high)) in (0..).zip(&burst) {
         assert_eq!(high, k % 2 == 0);
-        let late = cycle.abs_diff(first + k * HALF);
+        if k == 0 {
+            continue;
+        }
+        let late = cycle.abs_diff(grid + (k - 1) * HALF);
         assert!(late < LATENCY, "toggle {k} is {late} cycles off the grid");
     }
+    let first = call;
     assert!(edges.len() > 441, "no second tone in {} edges", edges.len());
     let next = edges[441].0;
     assert!(

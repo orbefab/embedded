@@ -8,13 +8,13 @@
 //! In a dual-slope mode, a count above `TOP` keeps its direction. It wraps
 //! at the register width (`0xFF` or `0xFFFF` becomes 0) and only then uses
 //! the triangle inside `0..=TOP`. That wrap is not BOTTOM: §15.7.4 and
-//! §16.9.4 set `TOV` on the down-count arrival at 0, and neither section
-//! names a flag for the width wrap. §15.8 draws the `MAX`→0 overflow for
+//! §16.9.4 set `TOV` at BOTTOM, after the count comes down to 0, and neither
+//! section names a flag for the width wrap. §15.8 draws the `MAX`→0 overflow for
 //! every mode except phase correct. The `OCnx` register changes on a compare
 //! match, at BOTTOM in the fast-PWM tables, at TOP and at BOTTOM in the
 //! phase-correct tables, and on `FOCnx` in a non-PWM mode. A missed up-count
-//! takes the up-count result on the clock that arrives at TOP (Figure 15-7,
-//! §15.7.4).
+//! takes the up-count result on the clock that leaves TOP (Figure 15-7,
+//! §15.7.4, Figure 16-12).
 //! The pin is not recomputed from `TCNT < OCR`.
 //!
 //! A 16-bit timer is the same row as an 8-bit one. `ICP1` and the external
@@ -163,8 +163,6 @@ pub(crate) struct Timer {
     block: bool,
     /// Clocks inside the instruction that wrote `TCNT` do not count (§15.4).
     hold_write: bool,
-    /// `OCFnx` bits to raise on the next timer clock (§15.5).
-    ocf_due: u8,
     /// Internal `OCnx` register, one bit per compare unit.
     oc: u8,
     /// Compare units currently overriding the pin.
@@ -213,7 +211,6 @@ clone_fields!(Timer {
     select,
     block,
     hold_write,
-    ocf_due,
     oc,
     linked,
     anchor,
@@ -273,7 +270,6 @@ impl Timer {
             select: None,
             block: false,
             hold_write: false,
-            ocf_due: 0,
             oc: 0,
             linked: 0,
             anchor: 0,
@@ -707,72 +703,69 @@ impl Timer {
 
     /// One timer clock at `cycle`.
     ///
-    /// A match updates the pin on this clock. `OCFnx` waits until the next one
-    /// (§15.5, §16.7, §18.5). When `ICR1` is TOP, `ICF1` is raised on the clock
-    /// that clears TOP, together with `TOV` in fast PWM (§16.9.3, Figure 16-7).
+    /// Each event acts on the clock that leaves the count it names, with the
+    /// count, compare values and direction from before that clock (model
+    /// parameter 4). A compare match is the clock that leaves `OCR`: it raises
+    /// `OCFnx` and writes `OCnx` together (Figure 15-10, Figure 15-6). TOP is the
+    /// clock that leaves TOP and BOTTOM the clock that leaves 0, so the buffer
+    /// copy, `TOV` and the `ICF1` of `ICR1` as TOP land with it (Figure 16-12).
     fn on_tick(&mut self, mux: &mut PinMux, ctx: &mut Ctx<'_>, cycle: u64) {
         let wave = self.wave();
         if wave.reserved {
             return;
         }
-        let due = self.ocf_due;
-        self.ocf_due = 0;
-        self.raise_flags(due);
-
         let top = self.top_value(wave);
         let prev = self.tcnt;
         let max = self.max();
+        let dual = matches!(wave.kind, Kind::Phase | Kind::PhaseFreq);
         let (new, up) = predict_step(wave.kind, self.up, top, max, prev);
-        let arrived_top = new == top && prev != top;
-        let arrived_bottom = new == 0 && prev != 0;
-        let cleared = matches!(wave.kind, Kind::Ctc | Kind::Fast) && prev == top;
-        let wrapped_max = prev == max && new == 0;
+        let left_top = prev == top && wave.kind != Kind::Normal;
+        // A dual-slope count turns up at 0. The width wrap lands on 0 still
+        // counting up and is not BOTTOM.
+        let left_bottom = dual && prev == 0 && !self.up;
 
-        // Phase-and-frequency BOTTOM is the down-count arrival. The width
-        // wrap also lands on 0, while the direction is still up, and does
-        // not update the compare buffer.
-        if wave.update == Update::Bottom
-            && (cleared || (wave.kind == Kind::PhaseFreq && arrived_bottom && !up))
-        {
-            self.ocr = self.buf;
+        let blocked = self.block;
+        self.block = false;
+        let mut matched = 0u8;
+        if !blocked {
+            for unit in 0..COMPARES {
+                if prev == self.ocr[unit] {
+                    matched |= 1 << unit;
+                }
+            }
         }
-        if wave.update == Update::Top && arrived_top {
+
+        let copy = match wave.update {
+            Update::Immediate => false,
+            Update::Top => left_top,
+            Update::Bottom => (left_top && !dual) || (wave.kind == Kind::PhaseFreq && left_bottom),
+        };
+        if copy {
             self.ocr = self.buf;
         }
 
         self.tcnt = new;
         self.up = up;
 
-        let fast_clear = matches!(wave.kind, Kind::Fast) && cleared;
-        // `!up` keeps the width wrap (still counting up) from raising `TOV`.
-        let phase_bottom =
-            matches!(wave.kind, Kind::Phase | Kind::PhaseFreq) && arrived_bottom && !up;
-        if wave.tov_on_max && wrapped_max || !wave.tov_on_max && (fast_clear || phase_bottom) {
+        let tov = if wave.tov_on_max {
+            prev == max && new == 0
+        } else if dual {
+            left_bottom
+        } else {
+            left_top
+        };
+        if tov {
             self.raise_flags(TOV);
         }
-
-        if self.is16() && matches!(wave.top, TopSrc::Icr) {
-            let at_top_flag = match wave.kind {
-                Kind::Ctc | Kind::Fast => cleared,
-                Kind::Phase | Kind::PhaseFreq => arrived_top,
-                Kind::Normal => false,
-            };
-            if at_top_flag {
-                self.raise_flags(ICF);
-            }
+        if self.is16() && matches!(wave.top, TopSrc::Icr) && left_top {
+            self.raise_flags(ICF);
         }
+        self.raise_flags(matched << 1);
 
-        let blocked = self.block;
-        self.block = false;
         let pwm = matches!(wave.kind, Kind::Fast | Kind::Phase | Kind::PhaseFreq);
-        if !blocked {
-            for unit in 0..COMPARES {
-                if new == self.ocr[unit] {
-                    self.ocf_due |= 2 << unit;
-                    if !pwm || self.com(unit) == 1 {
-                        self.match_edge(unit, wave);
-                    }
-                }
+        for unit in 0..COMPARES {
+            if matched & (1 << unit) != 0 && (!pwm || self.com(unit) == 1) {
+                self.match_edge(unit, wave);
             }
         }
 
@@ -780,7 +773,12 @@ impl Timer {
         // that is still linked has to publish the release on this clock.
         if self.output_live() {
             if pwm {
-                self.apply_pwm(wave.kind, top, prev, new, up, blocked);
+                let edge = Edge {
+                    left_top,
+                    left_bottom,
+                    up,
+                };
+                self.apply_pwm(wave.kind, top, matched, edge);
             }
             self.publish(mux, ctx, Some(cycle), cycle);
         }
@@ -961,7 +959,7 @@ impl Timer {
         if self.stepped {
             return 1;
         }
-        if self.block || self.ocf_due != 0 || self.pin_changes_on_next_clock() {
+        if self.block || self.pin_changes_on_next_clock() {
             return 1;
         }
         let wave = self.wave();
@@ -977,12 +975,9 @@ impl Timer {
     /// A poke of `COM` does not publish. The link bit then disagrees with
     /// the register: the next clock connects the pin or releases it.
     ///
-    /// Compare matches, BOTTOM, TOP, and the fast-PWM spike are stops in
+    /// Compare matches, BOTTOM, TOP, and `MAX` are stops in
     /// [`clocks_until_up`] and [`clocks_until_phase`]. `block` returns one
-    /// clock before this function runs. The spike clear while `TCNT` is
-    /// already 0 is a distance of 1 in [`clocks_until_up`], including a
-    /// start at 0 with no compare flag pending. `ocf_due` forces that same
-    /// clock only after a match at 0.
+    /// clock before this function runs.
     fn pin_changes_on_next_clock(&self) -> bool {
         if !self.output_live() {
             return false;
@@ -1018,61 +1013,40 @@ impl Timer {
         false
     }
 
+    /// Clocks to the next one that leaves an `OCR`, TOP, or 0. The count
+    /// reaches the nearest of them ahead in its direction, then leaves it on
+    /// the clock after.
     fn clocks_until_phase(&self, top: u16) -> u64 {
-        if top == 0 {
-            return 1;
-        }
+        let tcnt = self.tcnt;
         // Above TOP, `step` keeps the direction. A compare, TOP, BOTTOM, or
         // pin update in that span is one clock away, not a triangle modulus.
-        if self.tcnt > top {
+        if top == 0 || tcnt > top || tcnt == top || tcnt == 0 {
             return 1;
         }
-        let tcnt = self.tcnt;
-        let mut best = u64::MAX;
-        let mut put = |dist: u16| {
-            if dist > 0 {
-                best = best.min(u64::from(dist));
-            }
-        };
+        let mut reach = if self.up { top - tcnt } else { tcnt };
         for unit in 0..COMPARES {
             let ocr = self.ocr[unit];
-            if self.up {
-                if tcnt < top && ocr > tcnt && ocr <= top {
-                    put(ocr - tcnt);
-                } else if tcnt >= top && ocr < top {
-                    put(top - ocr);
-                }
-            } else if tcnt == 0 {
-                if ocr >= 1 {
-                    put(ocr);
-                }
-            } else if ocr < tcnt {
-                put(tcnt - ocr);
+            if ocr == tcnt {
+                return 1;
+            }
+            if self.up && ocr > tcnt && ocr < top {
+                reach = reach.min(ocr - tcnt);
+            } else if !self.up && ocr < tcnt {
+                reach = reach.min(tcnt - ocr);
             }
         }
-        if self.up {
-            if tcnt < top {
-                put(top - tcnt);
-            } else {
-                put(top);
-            }
-        } else if tcnt == 0 {
-            put(top);
-        } else {
-            put(tcnt);
-        }
-        if best == u64::MAX { 1 } else { best }
+        u64::from(reach) + 1
     }
 
+    /// Clocks to the next one that leaves an `OCR`, TOP, or `MAX`. The count
+    /// reaches the nearest of them, then leaves it on the clock after.
     fn clocks_until_up(&self, top: u16) -> u64 {
         let tcnt = self.tcnt;
         let max = self.max();
-        if (matches!(self.wave().kind, Kind::Ctc | Kind::Fast) && top == 0 && tcnt == 0)
-            || tcnt == top
-            || tcnt == max
-        {
+        if tcnt == top || tcnt == max {
             return 1;
         }
+        // The clock that leaves TOP, or `MAX` above TOP, lands on 0.
         let wrap = if tcnt < top {
             u64::from(top - tcnt) + 1
         } else {
@@ -1081,34 +1055,20 @@ impl Timer {
         let mut best = wrap;
         for unit in 0..COMPARES {
             let ocr = self.ocr[unit];
-            // OCR = 0 clears on the clock that leaves 0 (§15.7.3). One step
-            // away when the count is already 0, even if the flag is not due.
-            let dist = if ocr == 0 && tcnt == 0 {
-                Some(1)
-            } else if tcnt < top {
-                if ocr > tcnt && ocr <= top {
-                    Some(u64::from(ocr - tcnt))
-                } else if ocr == 0 {
-                    Some(wrap)
-                } else if ocr <= tcnt {
-                    Some(wrap + u64::from(ocr))
-                } else {
-                    None
-                }
-            } else if ocr > tcnt && ocr <= max {
+            let reach = if ocr == tcnt {
+                Some(0)
+            } else if ocr > tcnt && (tcnt > top || ocr <= top) {
                 Some(u64::from(ocr - tcnt))
-            } else if ocr == 0 {
-                Some(wrap)
             } else if ocr <= top {
                 Some(wrap + u64::from(ocr))
             } else {
                 None
             };
-            if let Some(dist) = dist {
-                best = best.min(dist);
+            if let Some(reach) = reach {
+                best = best.min(reach + 1);
             }
         }
-        best.max(1)
+        best
     }
 
     fn project(&self, clocks: u64) -> (u16, bool) {
@@ -1130,18 +1090,11 @@ impl Timer {
         }
     }
 
-    fn apply_pwm(&mut self, kind: Kind, top: u16, prev: u16, new: u16, up: bool, blocked: bool) {
+    fn apply_pwm(&mut self, kind: Kind, top: u16, matched: u8, edge: Edge) {
         for unit in 0..COMPARES {
-            let Some(level) = pwm_oc_level(
-                kind,
-                top,
-                self.ocr[unit],
-                self.com(unit),
-                prev,
-                new,
-                up,
-                blocked,
-            ) else {
+            let hit = matched & (1 << unit) != 0;
+            let Some(level) = pwm_oc_level(kind, top, self.ocr[unit], self.com(unit), hit, edge)
+            else {
                 continue;
             };
             self.set_oc(unit, level);
@@ -1426,60 +1379,51 @@ fn phase_step(up: bool, top: u16, max: u16, prev: u16) -> (u16, bool) {
     (prev.wrapping_sub(1), false)
 }
 
+/// What one timer clock was, for the PWM waveform.
+#[derive(Debug, Clone, Copy)]
+struct Edge {
+    /// The clock left TOP: fast PWM clears to BOTTOM, dual slope turns down.
+    left_top: bool,
+    /// A dual-slope count left 0 and turned up.
+    left_bottom: bool,
+    /// The direction after the clock.
+    up: bool,
+}
+
 /// `Some(level)` when this clock writes the `OCnx` register. `COM` 0 and 1 do
 /// nothing here; toggle is [`Timer::match_edge`]. `COM` 2 is non-inverting
-/// and `COM` 3 is the inverted table row (§15.6.1, §16.8.1, §18.6.1).
-#[allow(clippy::too_many_arguments)]
-fn pwm_oc_level(
-    kind: Kind,
-    top: u16,
-    ocr: u16,
-    com: u8,
-    prev: u16,
-    new: u16,
-    up: bool,
-    blocked: bool,
-) -> Option<bool> {
+/// and `COM` 3 is the inverted table row (§15.6.1, §16.8.1, §18.6.1). `hit`
+/// is a compare match on this clock, the clock that leaves `OCR`, and `ocr`
+/// is the value after any buffer copy on it.
+fn pwm_oc_level(kind: Kind, top: u16, ocr: u16, com: u8, hit: bool, edge: Edge) -> Option<bool> {
     if com < 2 {
         return None;
     }
     let level = |high: bool| if com == 2 { high } else { !high };
     match kind {
         Kind::Fast => {
-            // Set at BOTTOM, including OCR = TOP (match ignored). OCR = BOTTOM
-            // is the one-clock spike (§15.7.3, §16.9.3, §18.7.3).
-            if prev == top && new == 0 {
-                return Some(level(true));
+            // Set at BOTTOM. With OCR = TOP the match on that clock is
+            // ignored (Table 15-3 note 1), so the pin holds (§15.7.3).
+            if edge.left_top {
+                Some(level(true))
+            } else if hit {
+                Some(level(false))
+            } else {
+                None
             }
-            if ocr == 0 && prev == 0 && new == 1 {
-                return Some(level(false));
-            }
-            if !blocked && new == ocr && ocr != 0 && ocr != top {
-                return Some(level(false));
-            }
-            None
         }
         Kind::Phase | Kind::PhaseFreq => {
-            // OCR = BOTTOM stays low, on the down-count arrival at 0.
-            // OCR = TOP stays high, on the arrival at TOP (§15.7.4, §18.7.4).
-            if ocr == 0 && new == 0 && prev != 0 && !up {
-                return Some(level(false));
+            // At TOP the pin takes the up-count result for the OCR now in
+            // force, low below TOP and high at TOP: Figure 15-7's period 2,
+            // and the set at TOP of Table 15-4 note 1 (§15.7.4, §16.9.4,
+            // §18.7.4).
+            if edge.left_top {
+                return (ocr <= top).then(|| level(ocr == top));
             }
-            if ocr == top && new == top && prev != top {
-                return Some(level(true));
-            }
-            // Figure 15-7: a missed up-count, or OCR leaving MAX, takes the
-            // up-count result on the clock that arrives at TOP. §16.9.4
-            // starts the period there. OCR < TOP, so this is not the
-            // constant-high case above.
-            if up && new == top && prev != top && ocr < top {
-                return Some(level(false));
-            }
-            if ocr == 0 || ocr == top {
-                return None;
-            }
-            if !blocked && new == ocr {
-                return Some(level(!up));
+            // OCR = BOTTOM holds the pin low, including an OCR the copy at
+            // BOTTOM has just set to 0 (§16.9.5).
+            if hit || (edge.left_bottom && ocr == 0) {
+                return Some(level(!edge.up));
             }
             None
         }

@@ -67,10 +67,14 @@ fn tick_cycle(tick: u64) -> u64 {
     DIV * tick
 }
 
-/// TOP arrivals before `limit_cycles`. The first is timer clock 255.
+/// The clocks that leave TOP before `limit_cycles`, where the buffer copies and
+/// the pin takes the up-count result (Figure 16-12, docs/engine/avr.md parameter 4).
+/// The first is timer clock 256, which takes TCNT1 from 255 to 254. Each match
+/// acts as TCNT1 leaves OCR1A, `TOP - OCR1A` clocks after it on the way down and
+/// `TOP + OCR1A` on the way up.
 fn tops(limit_cycles: u64) -> Vec<u64> {
     (0..)
-        .map(|n| tick_cycle(TOP + n * PERIOD))
+        .map(|n| tick_cycle(TOP + 1 + n * PERIOD))
         .take_while(|&cycle| cycle < limit_cycles)
         .collect()
 }

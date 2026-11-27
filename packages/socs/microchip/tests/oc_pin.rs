@@ -6,9 +6,14 @@
 //!
 //! `ICR1` is `0x9F`. Mode 12 clears on the next timer clock, clock 160. The
 //! prescaler runs from reset, and the `TCCR1B` store retires before cycle 64,
-//! so that clock is cycle `160 × 64 = 10240`. The model's `PINx` synchronizer
-//! (§14.2.4) adds 2. Idle wake entry is 8 cycles (§7.7), the vector `JMP` is
-//! 3, and `SBI` is 2: `10240 + 2 + 8 + 3 + 2 = 10255`.
+//! so timer clock `n` is cycle `n × 64`. `OCR1B` is 0, so `OC1B` toggles and
+//! `OCF1B` rises together as `TCNT1` leaves 0 (Figure 16-10): on clock 1,
+//! cycle 64, and on clock 161 after the clear, cycle 10304. `OCF1B` wakes the
+//! idle core there. Idle wake entry is 8 cycles (§7.7) and the `TIMER1_COMPB`
+//! vector is a 4-cycle `RETI`, after which the core runs one main instruction,
+//! the 1-cycle `LDI`. `PCIF0`, raised at 10306 through the model's `PINx`
+//! synchronizer (§14.2.4), is served next: entry 4, the vector `JMP` 3, and
+//! `SBI` 2, so `10304 + 8 + 4 + 1 + 4 + 3 + 2 = 10326`.
 
 use orbe_microchip::{Cpu, Level, parse_hex};
 
@@ -24,13 +29,13 @@ fn edges(hex: &str, until: u64) -> Vec<(u32, Level, u64)> {
 }
 
 /// `EEARL` does not touch a pin. The compare fire still has to hand `OC1B`
-/// to pin change in that period. The handler's `SBI` retires at 10255.
+/// to pin change in that period. The handler's `SBI` retires at 10326.
 #[test]
 fn eear_store_lets_pcint_see_oc1b() {
     let got = edges(include_str!("fixtures/oc1b_pcint_eear.hex"), 12_000);
     assert!(
-        got.contains(&(5, Level::High, 10_255)),
-        "PCINT0 should toggle L at 10255, got {got:?}"
+        got.contains(&(5, Level::Low, 10_326)),
+        "PCINT0 should toggle L at 10326, got {got:?}"
     );
 }
 
@@ -42,7 +47,7 @@ fn compare_notice_still_dispatches_the_oc_pin() {
     let got = edges(include_str!("fixtures/oc1b_pcint_gpior.hex"), 12_000);
     let led: Vec<_> = got.iter().filter(|edge| edge.0 == 5).copied().collect();
     assert!(
-        led.contains(&(5, Level::High, 10_255)),
+        led.contains(&(5, Level::Low, 10_326)),
         "PCINT0 should toggle L one entry after the OC edge, got {got:?}"
     );
 }

@@ -870,7 +870,7 @@ fn stopped(words: &[u16], until: u64, pads: &[u32]) -> Timeline {
 
 /// States a host stops in for a few cycles at most: inside the `BODSE`, `BODS` and `EEMPE`
 /// windows, asleep in power-down, timer 0 counting down past a compare in phase-correct PWM, a
-/// compare blocked by a `TCNT0` write, a compare flag waiting for the next timer clock, `OC0A`
+/// compare blocked by a `TCNT0` write, a count sitting on its compare value a clock before the match, `OC0A`
 /// toggled by a compare, and the `ICP1` noise canceler before and after its four samples.
 fn corners() -> Vec<Timeline> {
     const MCUCR: u16 = 0x35;
