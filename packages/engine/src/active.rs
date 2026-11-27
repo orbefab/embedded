@@ -364,11 +364,19 @@ impl Core {
 
     /// Takes each byte a USART sent whose stop bit ended at or before `through`, in the order
     /// they ended on each USART, and each TWI phase that ended by then, in the order they
-    /// ended. Drops every SPI byte, which no output reads.
-    fn deliver(&mut self, through: Time, sent: impl FnMut(Frame), saw: impl FnMut(Phase)) {
+    /// ended. Drops every SPI byte, which no output reads. The network instead hands over and
+    /// drops each row it made by then, in the order it made them.
+    fn deliver(
+        &mut self,
+        through: Time,
+        sent: impl FnMut(Frame),
+        saw: impl FnMut(Phase),
+        made: impl FnMut(orbe_net::Row),
+    ) {
         match *self {
             Core::Mcu(ref mut mcu) => mcu.deliver(through, sent, saw),
-            Core::Device(_) | Core::Net(_) => {}
+            Core::Net(ref mut net) => net.drain_rows(through, made),
+            Core::Device(_) => {}
             #[cfg(test)]
             Core::Script(ref mut core) => core.deliver(through, sent),
         }
@@ -550,14 +558,6 @@ impl Core {
             Core::Device(_) | Core::Mcu(_) => unreachable!("only a station airs"),
             #[cfg(test)]
             Core::Script(core) => core.acked(at, ack),
-        }
-    }
-
-    /// Hands over and drops each network row it made at or before `through`. Only the network
-    /// makes rows so.
-    fn drain_net_rows(&mut self, through: Time, made: impl FnMut(orbe_net::Row)) {
-        if let Core::Net(net) = self {
-            net.drain_rows(through, made);
         }
     }
 }
@@ -780,11 +780,6 @@ impl Delivered {
         let Staging {
             bytes, phases, net, ..
         } = staged;
-        core.drain_net_rows(to, |row| {
-            if row.at > through {
-                net.push(row);
-            }
-        });
         core.deliver(
             to,
             |frame| {
@@ -812,6 +807,11 @@ impl Delivered {
                             phase: phase.phase,
                         },
                     });
+                }
+            },
+            |row| {
+                if row.at > through {
+                    net.push(row);
                 }
             },
         );
@@ -1271,7 +1271,7 @@ impl Actives {
         if let Some(fault) = routing_fault {
             self.routing_fault.get_or_insert((at, fault));
         }
-        let on_air = self.air(world, at);
+        let on_air = self.air.is_some() && self.air(world, at);
         let mut changed = false;
         let mut stops = 0u64;
         for (k, (committed, ahead)) in self.committed.iter_mut().zip(&mut self.ahead).enumerate() {
@@ -1373,7 +1373,9 @@ impl Actives {
     /// stopped on there goes to every other station tuned to its channel, in station order,
     /// frames in station order too. Each station's copy is put at `at` first, and each sender's
     /// copy takes the OR of the answers before it runs on. Returns whether a frame landed, so
-    /// the second pass keeps every station at `at`.
+    /// the second pass keeps every station at `at`. Never inlined, so a landing with no air
+    /// runs the code it ran before the air.
+    #[inline(never)]
     fn air(&mut self, world: &World, at: Time) -> bool {
         let Some(air) = &self.air else {
             return false;
