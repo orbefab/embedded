@@ -3,15 +3,15 @@
 
 mod common;
 
-use common::{Air, Rng, Seen, ms, network, session};
+use common::{Air, Rng, Seen, keyed_network, ms, session};
 use orbe_model::Time;
-use orbe_net::{Network, Security};
+use orbe_net::Network;
 
 /// The session run in one go, with no limit but the script's own times.
 fn whole() -> (Air, Network) {
     let (script, until) = session();
     let mut air = Air::new(script);
-    let mut net = network(Security::Wpa2Psk);
+    let mut net = keyed_network();
     air.run_through(&mut net, until);
     (air, net)
 }
@@ -30,11 +30,12 @@ fn random_limit(rng: &mut Rng, from: Time, to: Time) -> Option<Time> {
 
 #[test]
 fn the_session_reaches_every_part_of_the_access_point() {
-    let (air, _) = whole();
+    let (air, mut net) = whole();
     let rows = air.rows_seen().join("\n");
     for event in [
         "auth",
         "assoc",
+        "handshake",
         "addba_declined",
         "doze",
         "wake",
@@ -49,6 +50,10 @@ fn the_session_reaches_every_part_of_the_access_point() {
         );
     }
     assert!(air.aired().len() > 10);
+    // The station's Data frame, once: the second is a replay.
+    let mut delivered = 0;
+    net.take_delivered(|_, _| delivered += 1);
+    assert_eq!(delivered, 1);
 }
 
 #[test]
@@ -57,7 +62,7 @@ fn a_run_split_at_random_limits_is_the_same_run() {
     for seed in 1..=64u64 {
         let (script, until) = session();
         let mut air = Air::new(script);
-        let mut net = network(Security::Wpa2Psk);
+        let mut net = keyed_network();
         let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
         air.run(&mut net, until, &mut |from, to| {
             random_limit(&mut rng, from, to)
@@ -93,7 +98,7 @@ fn a_copy_taken_mid_exchange_runs_on_as_the_network_would() {
     let (script, until) = session();
     for cut in cuts(&want) {
         let mut air = Air::new(script.clone());
-        let mut net = network(Security::Wpa2Psk);
+        let mut net = keyed_network();
         air.run_through(&mut net, cut);
 
         // A copy, run on in place of the network.

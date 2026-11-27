@@ -50,6 +50,10 @@ pub enum Event {
         reason: u16,
         by: By,
     },
+    /// A station finished the 4-way handshake and holds its keys.
+    Handshake {
+        sta: Mac,
+    },
     /// It declined a station's ADDBA Request for traffic identifier `tid`.
     AddbaDeclined {
         sta: Mac,
@@ -117,6 +121,7 @@ impl Row {
             Event::AddbaDeclined { sta, tid } => {
                 write!(out, "\"addba_declined\",\"sta\":\"{sta}\",\"tid\":{tid}")
             }
+            Event::Handshake { sta } => write!(out, "\"handshake\",\"sta\":\"{sta}\""),
             Event::Doze { sta } => write!(out, "\"doze\",\"sta\":\"{sta}\""),
             Event::Wake { sta } => write!(out, "\"wake\",\"sta\":\"{sta}\""),
             Event::Lost { sta } => write!(out, "\"lost\",\"sta\":\"{sta}\""),
@@ -189,6 +194,7 @@ mod tests {
             r#"{"t_ps":12,"event":"addba_declined","sta":"00:0d:93:82:36:3a","tid":6}"#
         );
         for (event, name) in [
+            (Event::Handshake { sta: STA }, "handshake"),
             (Event::Doze { sta: STA }, "doze"),
             (Event::Wake { sta: STA }, "wake"),
             (Event::Lost { sta: STA }, "lost"),

@@ -29,7 +29,7 @@ fn status(mpdu: &[u8]) -> u16 {
 // first bit is on the air, after the 192 us PLCP and 24 octets of header at 1 Mb/s.
 #[test]
 fn it_beacons_every_100_tu() {
-    let air = run(Script::default(), ms(350.0), Security::Wpa2Psk);
+    let air = run(Script::default(), ms(350.0), common::WPA2);
     let beacons = air.aired();
     assert_eq!(beacons.len(), 4);
     for (k, beacon) in beacons.iter().enumerate() {
@@ -51,7 +51,7 @@ fn it_answers_after_the_ack_and_difs() {
     let air = run(
         Script::default().send(ms(20.0), hex(common::capture::AUTH_78)),
         ms(30.0),
-        Security::Wpa2Psk,
+        common::WPA2,
     );
     assert_eq!(air.seen[1], common::Seen::Heard(ms(20.0), Ack::Acked));
     let answer = air.sent()[0];
@@ -71,7 +71,7 @@ fn stations_take_the_lowest_free_aid() {
         .send(ms(12.0), by(OTHER, common::assoc_ccmp()))
         .send(ms(13.0), common::assoc_ccmp())
         .send(ms(14.0), common::assoc_ccmp());
-    let air = run(script, ms(20.0), Security::Wpa2Psk);
+    let air = run(script, ms(20.0), common::WPA2);
     let assoc = |at, sta: Mac, aid| {
         row(
             at,
@@ -105,7 +105,7 @@ fn what_it_refuses() {
         .send(ms(14.0), common::assoc(b"Other", Some(&common::RSN_PSK)))
         // No RSNE under WPA2-PSK: 40.
         .send(ms(15.0), common::assoc(common::SSID, None));
-    let air = run(script, ms(20.0), Security::Wpa2Psk);
+    let air = run(script, ms(20.0), common::WPA2);
     let sent = air.sent();
     assert_eq!(status(&sent[0].mpdu), 13);
     assert_eq!(sent[0].mpdu[26..28], 2u16.to_le_bytes());
@@ -137,7 +137,7 @@ fn a_full_access_point_refuses_another_station() {
         let sta = Mac([0x02, 0, 0, 0, 1, k as u8]);
         script = script.send(ms(10.0 + k as f64), by(sta, common::auth(0, 1)));
     }
-    let air = run(script, ms(30.0), Security::Wpa2Psk);
+    let air = run(script, ms(30.0), common::WPA2);
     let statuses: Vec<u16> = air.sent().iter().map(|f| status(&f.mpdu)).collect();
     let mut wanted = vec![0; orbe_net::MAX_STATIONS];
     wanted.push(17);
@@ -152,7 +152,7 @@ fn addba_is_declined() {
         .send(ms(10.0), common::auth(0, 1))
         .send(ms(11.0), common::assoc_ccmp())
         .send(ms(12.0), common::addba(7, 5, false));
-    let air = run(script, ms(20.0), Security::Wpa2Psk);
+    let air = run(script, ms(20.0), Security::Open);
     let response = &air.sent()[2].mpdu;
     let mut wanted = hex("d0003a01");
     wanted.extend(STA.0);
@@ -179,7 +179,7 @@ fn class_3_frames_from_a_station_not_associated_are_refused() {
         .send(ms(11.0), common::auth(0, 1))
         .send(ms(12.0), common::null(false))
         .send(ms(13.0), common::ps_poll(1));
-    let air = run(script, ms(20.0), Security::Wpa2Psk);
+    let air = run(script, ms(20.0), common::WPA2);
     let sent = air.sent();
     let kinds: Vec<(u8, Vec<u8>)> = sent
         .iter()
@@ -222,7 +222,7 @@ fn it_holds_frames_for_a_station_in_power_save() {
         .doze(ms(108.0), ms(204.0))
         .send(ms(205.0), common::null(false))
         .send(ms(210.0), common::ps_poll(1));
-    let air = run(script, ms(220.0), Security::Wpa2Psk);
+    let air = run(script, ms(220.0), Security::Open);
     let beacons: Vec<_> = air
         .aired()
         .into_iter()
@@ -263,7 +263,7 @@ fn a_frame_with_no_ack_is_lost() {
     let script = Script::default()
         .send(ms(10.0), common::auth(0, 1))
         .doze(ms(10.1), ms(20.0));
-    let air = run(script, ms(20.0), Security::Wpa2Psk);
+    let air = run(script, ms(20.0), common::WPA2);
     let answer = air.sent()[0];
     assert_eq!(
         air.seen.last(),
@@ -280,7 +280,7 @@ fn a_frame_with_no_ack_is_lost() {
 fn the_access_point_goes_down_and_comes_up() {
     let (script, until) = common::session();
     let mut air = Air::new(script);
-    let mut net = network(Security::Wpa2Psk);
+    let mut net = network(common::WPA2);
     air.run_through(&mut net, ms(350.0));
     assert_eq!(net.tuned(), None);
     air.run_through(&mut net, until);
@@ -332,7 +332,7 @@ fn it_acknowledges_only_frames_to_it() {
         .send(ms(10.0), elsewhere)
         .send(ms(11.0), rts)
         .send(ms(12.0), hex(common::capture::PROBE_58));
-    let air = run(script, ms(20.0), Security::Wpa2Psk);
+    let air = run(script, ms(20.0), common::WPA2);
     let heard: Vec<_> = (air.seen.iter())
         .filter_map(|s| match s {
             common::Seen::Heard(_, ack) => Some(*ack),
