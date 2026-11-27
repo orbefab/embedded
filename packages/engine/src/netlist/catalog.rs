@@ -12,7 +12,7 @@ use crate::element::{Device, Observed, OwnedCapacitor, OwnedInductor, Update};
 use crate::mna::{Probe, Stamp, Unknowns};
 use crate::name::Quantity;
 use crate::newton::Side;
-use crate::world::Driven;
+use crate::world::Quantity as WorldQuantity;
 
 /// What an analog kind answers. One impl per kind, in the kind's own file.
 ///
@@ -41,6 +41,18 @@ pub(crate) trait Kind {
     fn initial(&self, out: &mut [f64]);
     /// After a solve, limits its junctions from `prior` into `next` and checks their currents.
     fn update(&self, probe: &Probe<'_>, prior: &[f64], next: &mut [f64]) -> Update;
+    /// [`update`](Self::update) with the solve's time and side, for a kind whose nonlinear law
+    /// reads a time-varying parameter.
+    fn update_at(
+        &self,
+        probe: &Probe<'_>,
+        _at: Time,
+        _side: Side,
+        prior: &[f64],
+        next: &mut [f64],
+    ) -> Update {
+        self.update(probe, prior, next)
+    }
     /// The pin pairs it joins at DC. A chain of them is a DC path for `net.floating`.
     fn dc_paths(&self) -> &'static [(usize, usize)];
     /// The quantities a run observes on it, in `Quantity` order. [`TWO_PIN`] for a two-pin
@@ -76,10 +88,8 @@ pub(crate) trait Kind {
     fn serial_mut(&mut self) -> Option<&mut Serial> {
         None
     }
-    /// Its field a world quantity drives, for following that quantity's schedule.
-    fn driven_mut(&mut self) -> Option<&mut Driven> {
-        None
-    }
+    /// Updates every world-driven field on this part that reads `quantity`.
+    fn follow_world(&mut self, _quantity: WorldQuantity, _schedule: &Schedule<Value>) {}
 }
 
 /// How a part carries a steady current between its pins. `orbe check` reads it to find an LED
@@ -278,10 +288,14 @@ macro_rules! define_kinds {
                 }
             }
 
-            pub(super) fn driven_mut(&mut self) -> Option<&mut Driven> {
+            pub(super) fn follow_world(
+                &mut self,
+                quantity: WorldQuantity,
+                schedule: &Schedule<Value>,
+            ) {
                 match self {
-                    $(Model::$variant(part) => <$ty as Kind>::driven_mut(part),)*
-                    Model::Chip(_) => None,
+                    $(Model::$variant(part) => <$ty as Kind>::follow_world(part, quantity, schedule),)*
+                    Model::Chip(_) => {}
                 }
             }
 
@@ -304,11 +318,13 @@ macro_rules! define_kinds {
             pub(crate) fn update(
                 &self,
                 probe: &Probe<'_>,
+                at: Time,
+                side: Side,
                 prior: &[f64],
                 next: &mut [f64],
             ) -> Update {
                 match self {
-                    $(Model::$variant(part) => <$ty as Kind>::update(part, probe, prior, next),)*
+                    $(Model::$variant(part) => <$ty as Kind>::update_at(part, probe, at, side, prior, next),)*
                     Model::Chip(_) => Update::default(),
                 }
             }
@@ -509,6 +525,11 @@ define_kinds! {
         OpAmp(crate::chip::OpAmp), "op_amp",
             crate::chip::op_amp::WireOpAmp, crate::chip::op_amp::resolve_op_amp,
             &crate::chip::OpAmp::PINS;
+        #[doc = "A three-pin analog temperature sensor. See [`AnalogTempSensor`](crate::chip::AnalogTempSensor)."]
+        AnalogTempSensor(crate::chip::AnalogTempSensor), "analog_temp_sensor",
+            crate::chip::analog_temp_sensor::WireAnalogTempSensor,
+            crate::chip::analog_temp_sensor::resolve_analog_temp_sensor,
+            &crate::chip::AnalogTempSensor::PINS;
     }
     chip {
         Ne555, "ne555",

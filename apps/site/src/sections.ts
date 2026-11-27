@@ -41,6 +41,7 @@ export const PART_SECTION_BY_ID: Readonly<Record<string, PartSection>> = {
   "gy-bmp280": "Sensors",
   "ldr-5mm": "Sensors",
   "thermistor-ntc-10k": "Sensors",
+  tmp36: "Sensors",
 
   // Motors, relays and sound
   "buzzer-12mm": "Motors, relays and sound",

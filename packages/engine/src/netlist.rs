@@ -119,11 +119,7 @@ impl Netlist {
             .schedule(quantity)
             .expect("a revised quantity is declared");
         for part in &mut self.parts {
-            if let Some(driven) = part.model.driven_mut()
-                && driven.quantity == quantity
-            {
-                driven.follow(schedule);
-            }
+            part.model.follow_world(quantity, schedule);
         }
     }
 

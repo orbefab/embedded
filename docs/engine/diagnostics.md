@@ -829,6 +829,7 @@ A capacitor with `ratings.reverse_voltage` uses the same code on pin `a`. The fl
 
 A `linear_regulator` uses the same code on pin `in`. The floor is -0.3 V over pin `gnd`, and there is no ceiling. The message calls `gnd` the chip's ground. A voltage exactly on -0.3 V is inside. The model has no diode from `out` to `in`, so a reversed input stays at the voltage the circuit drives and the warning is what names it.
 
+An `analog_temp_sensor` checks `vs` over `gnd` using the same code. When `ratings.supply_max` is set, a supply above it (up to `ratings.supply_voltage`, when set) emits `#<part>.pin.vs reaches {peak} V over the chip's ground, above its {high} V maximum operating supply`. When `ratings.supply_voltage` is set, exceeding it emits `#<part>.pin.vs reaches {peak} V over the chip's ground, outside its {high} V ceiling`. A supply below `ratings.supply_min` is [`rating.supply_low`](#ratingsupply_low).
 ## rating.supply_low
 
 Severity `warning`. Refs is the chip's supply pin, `#<part>.pin.<pin>`. `t_ps` is the first time the supply pin sat between the unpowered floor and its datasheet minimum, 0 for the operating point.

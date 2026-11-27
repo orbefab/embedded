@@ -427,6 +427,8 @@ pub(crate) fn newton(
             };
             let update = part.model.update(
                 &probe,
+                conditions.at,
+                conditions.side(),
                 &iterate.junctions[slots.clone()],
                 &mut junctions[slots],
             );

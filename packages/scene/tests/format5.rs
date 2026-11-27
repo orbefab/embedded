@@ -241,6 +241,7 @@ fn the_catalog_parts_in_format_5_and_6_have_no_findings() {
         "led-5mm-white",
         "led-5mm-yellow",
         "joystick-ky023-pot",
+        "tmp36",
         "keypad-4x4-key",
     ] {
         let text =

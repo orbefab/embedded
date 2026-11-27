@@ -21,11 +21,13 @@ use crate::netlist::{NetId, PartId};
 use crate::netlist::Chip;
 use crate::netlist::Model;
 
+pub(crate) mod analog_temp_sensor;
 pub(crate) mod ne555;
 pub(crate) mod op_amp;
 pub(crate) mod regulator;
 pub(crate) mod relay;
 
+pub use analog_temp_sensor::AnalogTempSensor;
 pub use ne555::{Discharge, Ne555};
 pub use op_amp::OpAmp;
 pub use regulator::LinearRegulator;

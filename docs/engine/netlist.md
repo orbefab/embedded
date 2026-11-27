@@ -115,7 +115,7 @@ A part whose device reads the world, such as a [`dht22`](#dht22), reads each qua
 
 ### World-driven fields
 
-A part field that the world drives holds `{"kind": "world", "quantity": ..., "curve": ...}` in place of its value object. The field then has a value on each interval of the quantity's schedule: the curve at the quantity's value there. Its changes are the quantity's changes. A resistor's `resistance` is the one such field so far.
+A part field that the world drives holds `{"kind": "world", "quantity": ..., "curve": ...}` in place of its value object. The field then has a value on each interval of the quantity's schedule: the curve at the quantity's value there. Its changes are the quantity's changes. A resistor's `resistance` and an `analog_temp_sensor`'s `output_voltage` and `output_resistance` are such fields.
 
 ```json
 "resistance": {
@@ -131,7 +131,7 @@ A part field that the world drives holds `{"kind": "world", "quantity": ..., "cu
 }
 ```
 
-A curve reads the quantity's value `w`. `x`, `x0` and `x1` are in the quantity's unit, and `y`, `y0`, `y1` and `max` in the field's.
+A curve reads the quantity's value `w`. `x`, `x0` and `x1` are in the quantity's unit, and `y`, `y0`, `y1`, `max`, `below` and `above` in the field's.
 
 | `kind` | Value | Fields | For |
 | --- | --- | --- | --- |
@@ -139,8 +139,9 @@ A curve reads the quantity's value `w`. `x`, `x0` and `x1` are in the quantity's
 | `beta` | `y * exp(beta * (1 / (w + 273.15) - 1 / (x + 273.15)))` | `x`, `y`, `beta` in `K` | an NTC thermistor's B equation, on `temperature` only |
 | `steinhart_hart` | `y * exp(a + b / T + c / T^2 + d / T^3)` with `T = w + 273.15` | `y`, `a` in `1`, `b` in `K`, `c` in `K^2`, `d` in `K^3` | an NTC thermistor's extended Steinhart-Hart curve, on `temperature` only |
 | `linear` | the line through `(x0, y0)` and `(x1, y1)` | `x0`, `y0`, `x1`, `y1` | a sensor with a linear output, such as an LM35's 10 mV per degC |
+| `step` | `below` for `w <= x`, `above` for `w > x` | `x`, `below`, `above` | a parameter tabulated over two contiguous ranges, such as the TMP36's load regulation below and above 105 degC |
 
-Each curve is monotonic in `w` over the range of a quantity it may read, except `steinhart_hart`, which may have interior extrema. A `beta` or `linear` curve is monotonic for every `w` it may read. A `power` curve is monotonic only where `w / x` is not negative, so it reads only a quantity whose range does not go below 0, `light`, `humidity` or `pressure`. At `w` 0 a negative exponent makes `y * (w / x)^exponent` infinite, and the curve is `max` there, the dark resistance of a light-dependent resistor. Any other value above `max` is `max` too. A value that is not a number is never capped. Parse checks the field's own rule at both ends of the quantity's range (and at any interior stationary point of a `steinhart_hart` curve), so every value a schedule or a session can set keeps it. An end that breaks it is `netlist.value` on field `<field>.curve at <end> <unit>`, such as `resistance.curve at 0.0 lx`, with the field's rule, or rule `finite` when the curve is not finite there, such as a `power` curve with `y` 0 and a negative exponent at 0 lx. A `power` curve on `temperature` is `netlist.world` with rule `non_negative` on field `<field>.curve.kind`. A quantity the netlist does not declare is `netlist.world` with rule `undeclared` on field `<field>.quantity`, and a name the table lacks is rule `unknown` there. A `beta` or `steinhart_hart` curve on another quantity is `netlist.world` with rule `temperature` on field `<field>.curve.kind`. A `power` curve's `x` at or below 0 is `netlist.value` with rule `positive`. A `linear` curve whose `x1` equals its `x0` is `netlist.value` with rule `distinct`. A unit that is not the one the table above names is `netlist.unit` on field `<field>.curve.<name>`. An unknown `kind`, a missing field and an unknown field are `netlist.syntax`.
+Each curve is monotonic in `w` over the range of a quantity it may read, except `steinhart_hart`, which may have interior extrema. A `beta`, `linear` or `step` curve is monotonic for every `w` it may read. A `power` curve is monotonic only where `w / x` is not negative, so it reads only a quantity whose range does not go below 0, `light`, `humidity` or `pressure`. At `w` 0 a negative exponent makes `y * (w / x)^exponent` infinite, and the curve is `max` there, the dark resistance of a light-dependent resistor. Any other value above `max` is `max` too. A value that is not a number is never capped. Parse checks the field's own rule at both ends of the quantity's range (and at any interior stationary point of a `steinhart_hart` curve), so every value a schedule or a session can set keeps it. An end that breaks it is `netlist.value` on field `<field>.curve at <end> <unit>`, such as `resistance.curve at 0.0 lx`, with the field's rule, or rule `finite` when the curve is not finite there, such as a `power` curve with `y` 0 and a negative exponent at 0 lx. A `power` curve on `temperature` is `netlist.world` with rule `non_negative` on field `<field>.curve.kind`. A quantity the netlist does not declare is `netlist.world` with rule `undeclared` on field `<field>.quantity`, and a name the table lacks is rule `unknown` there. A `beta` or `steinhart_hart` curve on another quantity is `netlist.world` with rule `temperature` on field `<field>.curve.kind`. A `power` curve's `x` at or below 0 is `netlist.value` with rule `positive`. A `step` curve's `x` outside its quantity's range is `netlist.value` with rule `range`. A `linear` curve whose `x1` equals its `x0` is `netlist.value` with rule `distinct`. A unit that is not the one the table above names is `netlist.unit` on field `<field>.curve.<name>`. An unknown `kind`, a missing field and an unknown field are `netlist.syntax`.
 
 ## Network
 
@@ -528,6 +529,20 @@ The board fragment uses a second fit of the same law, the legacy standard-grade 
 At 0.001 A and 4.3 V the law gives 3.299898785234899 V, inside 3.2504999999999997 V to 3.3494999999999995 V. Unloaded line regulation from 4.3 V to 16.0 V is 0.002702604015081711 V, against 0.0027026999999999997 V. Load regulation from 0.001 A to 0.15 A at 4.3 V is 0.0495000000000001 V. Dropout by note 1 on page 7 is 0.007000000000000117 V at 0.001 A and 0.28000000000000025 V at 0.15 A. The points the line does not use are 0.004474638054340119 V at 0 A against 0.001 V, 0.023489932885906395 V at 0.01 A against 0.04 V, and 0.09677852348993321 V at 0.05 A against 0.12 V. A short at 5 V draws 0.3533758822109669 A. The page 7 legacy short typical is 0.4 A, and the law's headroom cannot match it. Ground current at 5 V is 6.5e-05 A at 0 A and 0.00085 A at 0.15 A. It is 7.023333333333332e-05 A at 0.001 A against 7.5e-05 A, 0.00011733333333333333 A at 0.01 A against 0.00012 A, and 0.00032666666666666673 A at 0.05 A against 0.00035 A. An open output at 5 V sits at 3.3004289040043036 V. An open output at 0 V sits at 0.0006984790072844244 V.
 
 The law cannot match the page 7 legacy ripple rejection of 45 dB at 1000 Hz, the output noise of 30 uVrms, or the shutdown ground current of 0.01 uA. The ON/OFF high typical is 1.4 V. The board ties that pin to the input, and the model has no enable. The legacy minimum output capacitor is 2.2 uF. The schematic's C3 is 1 uF. The law has no stability condition. Section 7.1.4 on page 21 allows the output 0.3 V above the input. Reverse current in the body diode is not limited, and the law blocks it. The ground-current ramp reaches its full value at `dropout_voltage`, 0.0051677852348993285 V. The legacy chip is specified from 2.2 V. The new chip's UVLO, 2.2 V typical and 2.4 V maximum rising, is not modelled, and the legacy column has none.
+
+### Analog temperature sensor
+
+`kind` is `analog_temp_sensor`. Pins are `vs`, `vout` and `gnd`.
+
+Its open-circuit output voltage follows `output_voltage` (a fixed value in `V` or a world-driven curve such as `linear` over `temperature`), smoothly clamped between `0` and `V(vs) - V(gnd)` and gated by a smooth supply ramp from the `0.1 V` unpowered floor to `0.3 V`, in series with `output_resistance` (a fixed value in `ohm` or a world-driven curve such as `step` over `temperature`). While powered it draws `quiescent_current` from `vs` to `gnd`, plus any current sourced out of `vout`; current sunk into `vout` returns to `gnd`. When unpowered (`V(vs) - V(gnd) <= 0.1 V`), the output sits at `0 V` over `gnd` and the supply draws nothing. `vs` and `vout` each have a DC path to `gnd`. Its observed quantities are `iin` (entering `vs`), `iout` (entering `vout`), and `p`.
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `output_voltage` | `V` | value or world curve, finite over range |
+| `output_resistance` | `ohm` | value or world curve, positive with finite reciprocal over range |
+| `quiescent_current` | `A` | non-negative |
+
+`ratings` is optional. When present it may hold `supply_min` and `supply_max`, the operating supply range as positive values in `V` with `supply_min < supply_max`, and `supply_voltage`, a positive value in `V` (absolute maximum `V(vs) - V(gnd)` ceiling). A powered supply below `supply_min` keeps working (clamped to `vs`) and warns [`rating.supply_low`](diagnostics.md#ratingsupply_low), with the same unpowered floor and power-cycle rules as every chip's minimum. A supply above `supply_max` keeps working and warns [`rating.voltage`](diagnostics.md#ratingvoltage). Exceeding `supply_voltage` keeps working and warns [`rating.voltage`](diagnostics.md#ratingvoltage) past the ceiling.
 
 ### Op-amp
 
@@ -1522,7 +1537,7 @@ A blob the document names that no folder has, a name whose every file hashes to 
 
 ## Ratings
 
-A rating bounds the stress on a part. Every key of a kind's `ratings` object is required, except a resistor's `voltage`, a diode or LED's `reverse_voltage`, an op-amp's keys, `supply_min` (`io_supply_min` on `bmp280`), and `temperature` on `dht22` and `bmp280`, which may be left out. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `esp32s3`, `ssd1306`, `hd44780`, `hd44780_i2c`, `ws2812`, `max7219`, `op_amp`, `dht22`, `sg90`, `ne555`, `cst816`, `st77916`, `voltage_source`, `capacitor`, `potentiometer` and `switch`, where it is optional.
+A rating bounds the stress on a part. Every key of a kind's `ratings` object is required, except a resistor's `voltage`, a diode or LED's `reverse_voltage`, an op-amp's and an analog temperature sensor's keys, `supply_min` (`io_supply_min` on `bmp280`), and `temperature` on `dht22` and `bmp280`, which may be left out. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `esp32s3`, `ssd1306`, `hd44780`, `hd44780_i2c`, `ws2812`, `max7219`, `op_amp`, `dht22`, `sg90`, `ne555`, `cst816`, `st77916`, `voltage_source`, `capacitor`, `potentiometer` and `switch`, where it is optional.
 
 | Kind | Keys | Checked quantity |
 | --- | --- | --- |
@@ -1537,6 +1552,7 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `voltage_source` | `current` | `#<part>.i` |
 | `capacitor` | `reverse_voltage`, optional | pin `a` over pin `b` |
 | `op_amp` | optional `supply_voltage`, `supply_min`, `input_below_gnd` | `vcc` over `gnd` and `in_p`/`in_n` below `gnd` |
+| `analog_temp_sensor` | optional `supply_min`, `supply_max`, `supply_voltage` | `vs` over `gnd`, named `#<part>.pin.vs` |
 | `atmega328p` | `pin_current`, `supply_current`, `rail_margin`, `reset_voltage`, `supply_voltage`, optional `supply_min` | each port pin's current, the current through `VCC` and `GND_8`, and each pin's voltage over `GND_8`, each named `#<part>.pin.<pin>` |
 | `esp32s3` | `rail_margin`, `supply_voltage`, optional `supply_min` | `VCC` and each wired GPIO's voltage over `GND`, each named `#<part>.pin.<pin>` |
 | `bmp280` | `supply_voltage`, `pin_margin`, optional `supply_min`, `io_supply_min`, `temperature` | `VDD`, `VDDIO`, `CSB`, `SDI`, `SCK` and `SDO` voltage over `GND`, each named `#<part>.pin.<pin>`, and the world's temperature, named `#<part>` |

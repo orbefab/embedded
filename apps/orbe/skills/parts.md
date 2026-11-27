@@ -21,11 +21,11 @@ A folder already at `parts/<id>/` is `part_exists` and nothing is written. The m
 
 Addressable LEDs: `neopixel-stick-8`, `neopixel-ring-16` (`nano-neopixel-ring`). 4-pin RGB LEDs: `led-5mm-rgb-cc` (`nano-rgb-led`), `led-5mm-rgb-ca` (`@<id>.red`/`.green`/`.blue`). Shift register: `hc595-dip16` (SRCLR high, OE low; `nano-shift-leds`). Level shifter: `bss138-level-shifter`.
 
-Thermistor: `thermistor-ntc-10k` (`nano-thermistor`). Batteries: `battery-9v` (`nano-9v-regulator`), `battery-aa-4x` (`nano-aa-pack`). 2-axis joystick: `joystick-ky023` (`@<id>.x.position`, `@<id>.y.position`, `@<id>.sw`; `nano-joystick`). MAX7219: `max7219-matrix-8x8` (`nano-max7219-matrix`), `max7219-matrix-4in1` (`nano-max7219-scroll`); use software SPI on ESP32-S3. 4x4 keypad: `keypad-4x4` (`@<id>.k1`..`k9`, `k0`, `ka`..`kd`, `kstar`, `khash`; `nano-keypad`). 16x2 LCD: `lcd1602` (`nano-lcd1602`).
+Temperature sensors: `tmp36` (`nano-tmp36`), `thermistor-ntc-10k` (`nano-thermistor`). Batteries: `battery-9v` (`nano-9v-regulator`), `battery-aa-4x` (`nano-aa-pack`). 2-axis joystick: `joystick-ky023` (`@<id>.x.position`, `@<id>.y.position`, `@<id>.sw`; `nano-joystick`). MAX7219: `max7219-matrix-8x8` (`nano-max7219-matrix`), `max7219-matrix-4in1` (`nano-max7219-scroll`); use software SPI on ESP32-S3. 4x4 keypad: `keypad-4x4` (`@<id>.k1`..`k9`, `k0`, `ka`..`kd`, `kstar`, `khash`; `nano-keypad`). 16x2 LCD: `lcd1602` (`nano-lcd1602`).
 
 ## Blocks
 
-`orbe add <block>` installs a Block: downloads its scene parts into `parts/` (nesting dependencies), then writes `scene.jsonc`, `firmware/`, `tests/` and `README.md` (not `block.jsonc`). Existing part folders fail with `part_exists`; another `scene.jsonc` fails with `scene_exists`; a differing file fails with `file_exists`. Each refusal writes nothing. Matching files stay when the part folders are absent.
+`orbe add <block>` installs a Block: downloads its scene parts into `parts/` (nesting dependencies), then writes `scene.jsonc`, `firmware/`, `tests/` and `README.md` (not `block.jsonc`). Existing part folders fail with `part_exists`; another `scene.jsonc` fails with `scene_exists`; a differing file fails with `file_exists`. Each refusal writes nothing.
 
 ## Finding a part
 
