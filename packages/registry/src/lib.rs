@@ -22,7 +22,7 @@ use sha2::{Digest, Sha256};
 pub use item::{
     BlockItem, Dependency, File, Format, Head, Index, Item, Kind, PartItem, Row, file_url,
 };
-pub use publish::{Release, publish, read_built};
+pub use publish::{Release, publish, read_built, unbumped};
 
 /// The contract's version, which every index and record carries.
 pub const FORMAT: u32 = 1;
