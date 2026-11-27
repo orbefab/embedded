@@ -531,8 +531,7 @@ impl Esp32s3 {
                 .get(self.reported_trains)
                 .map(|train| Tick(train.end.0 + 1));
             let frame = self.soc.radio().and_then(wifi::Radio::end);
-            let tbtt = (self.soc.radio().and_then(wifi::Radio::tbtt))
-                .map(|at| self.soc.clock.round_up(at));
+            let tbtt = self.soc.tbtt().map(|at| self.soc.clock.round_up(at));
             let until = [
                 Some(Tick(limit.0 + 1)),
                 due,
@@ -605,8 +604,12 @@ impl Esp32s3 {
             };
             let now = self.soc.clock.tick(core.cycle());
             // The power interrupt the driver armed for the station's TBTT is not modelled, so
-            // the run ends where it would first rise.
-            if let Some(at) = tbtt
+            // the run ends where it would first rise. A store that moved, disarmed or armed it
+            // stopped the core, as one that moves a watchdog does, so the deadline that holds
+            // now is the one to meet: the slice's own, or one the store set, which falls no
+            // earlier than the store. One already due ends the run here, before the limit check
+            // could let a call that ran the store return without it.
+            if let Some(at) = self.soc.tbtt().map(|at| self.soc.clock.round_up(at))
                 && self.now() >= at
             {
                 let refused = Refused::Register("RADIO", "tbtt");
