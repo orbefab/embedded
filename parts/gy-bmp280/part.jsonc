@@ -11,7 +11,7 @@
 // value Bosch recommends for C1 and C2; the module diagram shows two capacitors and does not
 // print the value.
 {
-  "format": 1,
+  "format": 7,
   "part": "gy-bmp280",
   "version": "0.1.2",
   "title": "GY-BMP280-3.3 pressure module",

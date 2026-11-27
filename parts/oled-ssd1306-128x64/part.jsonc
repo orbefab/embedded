@@ -7,9 +7,9 @@
 // 3.3 V, R3 4.7 kohm and C3 10 uF on RES#, R6 4.7 kohm from SA0 to ground. The back-side
 // placement is this model's own: the drawing gives no positions for those parts.
 {
-  "format": 6,
+  "format": 7,
   "part": "oled-ssd1306-128x64",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "title": "OLED display module, 0.96 inch 128 x 64, SSD1306, I2C",
   "summary": "0.96 inch 128 x 64 white OLED module with an SSD1306 on I2C at address 0x3C, for 3.3 V or 5 V. Adafruit SSD1306 and U8g2 drive it.",
   "tags": ["oled", "display", "screen", "ssd1306", "128x64", "i2c", "0.96"],
@@ -27,7 +27,7 @@
   },
   "uses": {
     "capacitor-0603": "0.2.0", "pin-header-1x4": "0.1.0", "resistor-0603": "0.2.0",
-    "ssd1306-oled-128x64": "0.1.1", "xc6206-sot23": "0.1.1",
+    "ssd1306-oled-128x64": "0.1.2", "xc6206-sot23": "0.1.1",
   },
   "parts": {
     "j": { "type": "pin-header-1x4" },

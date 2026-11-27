@@ -249,6 +249,12 @@ impl Cpu {
         self.core.is_held()
     }
 
+    /// Whether internal reset holds the chip: either `RESET` low or brown-out holds it, or the
+    /// post-reset start-up time-out is still running (DS40002061B §11.1).
+    pub fn in_reset(&self) -> bool {
+        self.counters_held()
+    }
+
     /// EEPROM image.
     pub fn eeprom(&self) -> Vec<u8> {
         self.bus.eeprom_bytes()
@@ -493,6 +499,7 @@ impl Cpu {
 
     fn run(&mut self, limit: u64, until_news: bool) {
         let div = self.clock_div();
+        let in_reset = self.counters_held();
         while self.cycles() < limit && !self.core.is_stopped() && !self.gaps_due() {
             if self.core.can_fetch() {
                 if !self.run_free(limit, until_news, div) {
@@ -508,7 +515,7 @@ impl Cpu {
                     break;
                 }
             }
-            if until_news && self.has_news(div) {
+            if until_news && (self.has_news(div) || self.counters_held() != in_reset) {
                 break;
             }
         }

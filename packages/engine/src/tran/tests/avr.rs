@@ -170,12 +170,14 @@ fn a_chip_held_in_reset_draws_its_reset_current() {
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let chip = volts(&trace, "chip");
     let drawn = |volts: f64| 5.0 - volts;
-    // `RESET` is low at power-on, so the hold starts at the first stop, one cycle in. Held, the
-    // chip also feeds its `RESET` pull-up, about 0.1 mA into the low pin.
-    let held = drawn(after(&chip, 62_500));
+    // The chip comes up in reset at t = 0, and `RESET` stays low until 2 us. Held, the chip also
+    // feeds its `RESET` pull-up, about 0.1 mA into the low pin.
+    let at_zero = drawn(at(&chip, 0));
+    assert!(at_zero > 0.0019 && at_zero < 0.0023, "{at_zero} A at t = 0");
+    let held = drawn(at(&chip, 2 * US));
     assert!(held > 0.0019 && held < 0.0023, "{held} A while held");
-    // The hold ends one cycle after `RESET` rises. That stop's row is the last held one.
-    let release = 2 * US + 62_500;
+    // Internal reset stays held through the 14-cycle start-up time-out (DS40002061B §11.1).
+    let release = 2 * US + 14 * 62_500;
     let before = drawn(at(&chip, release));
     assert!(
         before > 0.0019 && before < 0.0021,

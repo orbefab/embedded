@@ -15,7 +15,7 @@ A diagnostic is one JSON object. The fields are written in this order.
 
 The run sorts diagnostics by `t_ps`, then `code`, then `refs`, then the JSON bytes of the whole object. A `null` time sorts before a number, so every input finding precedes a solver finding.
 
-A session's `diagnostics()` returns the warnings found so far, and once the session ends they are that list's. While it runs, a `Pulses` record still in flight is not yet counted, as [engine.md](engine.md#sessions) says. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `rating.voltage`, `regulator.current_limit`, `chip.protocol`, `chip.link_miswired`, `chip.floating_input`, `chip.unmodeled_register` and `chip.restart`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
+A session's `diagnostics()` returns the warnings found so far, and once the session ends they are that list's. While it runs, a `Pulses` record still in flight is not yet counted, as [engine.md](engine.md#sessions) says. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `rating.voltage`, `rating.supply_low`, `regulator.current_limit`, `chip.protocol`, `chip.link_miswired`, `chip.floating_input`, `chip.unmodeled_register` and `chip.restart`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
 
 A run whose diagnostics are all warnings still writes the operating point. A run with an error writes the observations it reached, as [run-folder.md](run-folder.md#observationsjson) says. That is `{}` when nothing solved, as at t = 0. A transient keeps its grid rows before the error, and its last accepted step is the last row. Its observations end there. A warning found before that error is kept, including a rating sampled on any accepted step before it.
 
@@ -828,6 +828,22 @@ A resistor with a single-value `ratings.voltage` checks `#<part>.v` against `-li
 A capacitor with `ratings.reverse_voltage` uses the same code on pin `a`. The floor is that rating below pin `b`, and there is no ceiling. The message calls pin `b` the chip's ground. A capacitor with no `ratings` object, or with `reverse_voltage` null, is not checked. A forward voltage is not checked. A voltage exactly on the floor is inside. A reverse rating of 0 warns on any reverse voltage, and 0 V is inside.
 
 A `linear_regulator` uses the same code on pin `in`. The floor is -0.3 V over pin `gnd`, and there is no ceiling. The message calls `gnd` the chip's ground. A voltage exactly on -0.3 V is inside. The model has no diode from `out` to `in`, so a reversed input stays at the voltage the circuit drives and the warning is what names it.
+
+## rating.supply_low
+
+Severity `warning`. Refs is the chip's supply pin, `#<part>.pin.<pin>`. `t_ps` is the first time the supply pin sat between the unpowered floor and its datasheet minimum, 0 for the operating point.
+
+The message is:
+
+```text
+{ref} supply drops to {voltage} V over the chip's ground, below its {limit} V minimum for {over_ps} ps
+```
+
+When the minimum depends on the chip's clock frequency (such as an `atmega328p` per DS40002061B Figure 29-1), the message adds ` at {freq}` after `minimum`, for example `below its 3.78 V minimum at 16 MHz`. Each voltage in the message is rounded to 3 significant digits. ` for {over_ps} ps` is left out for an operating point, and while `over_ps` is 0. All warning episodes for one supply pin merge into one warning per run, naming the level the rail held continuously for at least 1 us most recently while above the unpowered floor and below the minimum (or the episode's upper bound when no warning episode lasted 1 us, or the operating-point voltage).
+
+`data` holds `limit`, `over_ps`, `peak_ps`, and `voltage`, unrounded, plus `clock_hz` when the minimum depends on the clock frequency. `limit` is the part's declared `ratings.supply_min` (or `ratings.io_supply_min` on `bmp280`'s `VDDIO`, or the safe-operating-area minimum at `clock_hz` on `atmega328p`). `voltage` is `V(pin) - V(ground)` at `peak_ps`, the supply voltage the rail held continuously for at least 1 us most recently while strictly above the unpowered floor and below the minimum (for an operating point or when no warning episode lasted 1 us, the operating-point sample or the episode's upper bound), so nanosecond single-clock dips inside a longer low-supply episode do not replace the voltage the rail held. `over_ps` is `null` for an operating point, and sums the time spent below the minimum across warning episodes in the run.
+
+A supply voltage at or below 0.1 V over the chip's ground is treated as unpowered (switched off or disconnected) and stays silent, and a supply at or above the minimum (once both voltages are rounded to 3 significant digits) stays silent. A clean passage through the band from off to in range or from in range to off is a normal power cycle and stays silent; a sag that leaves and returns above the minimum, a visit that enters from off and falls back to off without reaching the minimum, or a rail in the band when the run starts or ends warns `rating.supply_low` while the part keeps running as its model already behaves.
 
 ## regulator.current_limit
 

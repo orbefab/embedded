@@ -128,11 +128,15 @@ fn part_values() -> Values {
             .unwrap_or_else(|| panic!("{} model is not an object", path.display()))
             .remove("pins");
     }
-    a["ratings"]
+    let ratings = a["ratings"]
         .as_object_mut()
-        .unwrap_or_else(|| panic!("{} model.a has no ratings", path.display()))
+        .unwrap_or_else(|| panic!("{} model.a has no ratings", path.display()));
+    ratings
         .remove("supply_voltage")
         .unwrap_or_else(|| panic!("{} model.a rates no supply", path.display()));
+    ratings
+        .remove("supply_min")
+        .unwrap_or_else(|| panic!("{} model.a rates no supply_min", path.display()));
     assert_eq!(
         a,
         b,

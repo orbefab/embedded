@@ -22,7 +22,7 @@ use orbe_engine::name::{Name, Quantity, Ref as EngineRef};
 
 use orbe_engine::finite::Finite;
 use orbe_engine::{
-    EdgeCursor, Input, Probe, Refused, Rejected, Session, Setting, Status, WorldChange,
+    EdgeCursor, Input, Probe, Refused, Rejected, Session, Setting, Status, SupplyMark, WorldChange,
 };
 use orbe_model::Time;
 use orbe_scene::{Files, MapParam, RefMap, View};
@@ -82,6 +82,10 @@ struct Open {
     /// What `play`'s ticks ran, from where that stretch started. The CLI's next `pause` or
     /// `step` lists it and clears it. A page's `pause` leaves it.
     unlisted: Option<Stepped>,
+    /// Each supply pin's low episodes as `open`, a CLI `step` or a `pause` last listed them.
+    /// `rating.supply_low` merges a pin's episodes, so its key cannot tell a new one from one
+    /// already listed. See [`Self::list_supply`].
+    listed_supply: Vec<SupplyMark>,
     scene: String,
     stop_ps: u64,
     max_step_ps: u64,
@@ -536,6 +540,7 @@ impl Open {
             contacts,
             playing: false,
             unlisted: None,
+            listed_supply: Vec::new(),
             scene,
             stop_ps: transient.stop_ps,
             max_step_ps: transient.max_step_ps,
@@ -553,6 +558,7 @@ impl Open {
             files,
         };
         open.channels = open.bind_channels();
+        open.listed_supply = open.engine.supply_marks(&open.engine.probe());
         Ok(open)
     }
 
@@ -612,9 +618,13 @@ impl Open {
     /// `from_ps` on that list is where the held stretch started.
     fn pause(&mut self) -> Outcome {
         self.playing = false;
+        let mut played = self.unlisted.take();
+        if let Some(held) = &mut played {
+            self.list_supply(held);
+        }
         Ok(Data::Paced {
             playing: false,
-            played: self.unlisted.take(),
+            played,
         })
     }
 
@@ -629,7 +639,10 @@ impl Open {
     /// accepted step's.
     fn findings(&self, probe: &Probe) -> Vec<EngineDiagnostic> {
         let mut found = self.engine.diagnostics();
-        found.retain(|diagnostic| !diagnostic.over_now());
+        // The probe's `rating.supply_low` comes with the ratings over now.
+        found.retain(|diagnostic| {
+            !diagnostic.over_now() && !matches!(diagnostic, EngineDiagnostic::RatingSupplyLow(_))
+        });
         let known: BTreeSet<Key> = found.iter().map(key).collect();
         for over in self.engine.over_ratings(probe) {
             if !known.contains(&key(&over)) {
@@ -641,7 +654,14 @@ impl Open {
             EngineDiagnostic::NetFloating {
                 net: EngineRef::Net(name),
             } => !self.refs.quiet_floating.contains(name.as_str()),
-            _ => true,
+            other => {
+                let refs = other.refs();
+                !(refs.len() == 1
+                    && self
+                        .refs
+                        .quiet_warnings
+                        .contains(&(other.code().to_string(), refs[0].to_string())))
+            }
         });
         orbe_engine::run_folder::sort_diagnostics(&mut found);
         found

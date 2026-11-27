@@ -125,12 +125,27 @@ impl Bridge {
     /// The chip at power-on on a `clock_hz` crystal, with `fuses` programmed and `flash` from
     /// address 0.
     pub fn new(clock_hz: u32, fuses: FuseBytes, flash: &[u8]) -> Bridge {
+        Self::build(clock_hz, fuses, flash, false)
+    }
+
+    /// Like [`Self::new`], starting held in power-on reset so the operating point at t = 0 sees
+    /// the chip's reset current before cycle 1 releases it.
+    pub fn power_on(clock_hz: u32, fuses: FuseBytes, flash: &[u8]) -> Bridge {
+        Self::build(clock_hz, fuses, flash, true)
+    }
+
+    fn build(clock_hz: u32, fuses: FuseBytes, flash: &[u8], held_at_power_on: bool) -> Bridge {
         let mut cpu = Cpu::new();
         cpu.set_clock_hz(clock_hz);
         cpu.set_fuses(fuses.low, fuses.high, fuses.extended);
         cpu.load_flash(flash);
+        let timeline = if held_at_power_on {
+            Timeline::power_on(cpu)
+        } else {
+            Timeline::new(cpu)
+        };
         let mut bridge = Bridge {
-            timeline: Timeline::new(cpu),
+            timeline,
             clock_hz: u64::from(clock_hz),
             image: [Drive::Off; PORT_PINS.len()],
             levels: Vec::new(),

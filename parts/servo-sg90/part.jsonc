@@ -8,9 +8,9 @@
 // with their underside 16 mm up, and 31 mm to the top of the horn. The lead ends in a 3-pin
 // female connector, so the servo stands beside the breadboard and jumpers reach its pins.
 {
-  "format": 6,
+  "format": 7,
   "part": "servo-sg90",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "title": "SG90 micro servo",
   "summary": "Tower Pro SG90, a 9 g 180° micro servo, 0.12 s per 60° at 4.8 V. Its 3-pin female lead is brown GND, red VCC, orange SIGNAL.",
   "tags": ["servo", "sg90", "motor", "pwm", "hobby", "starter"],
@@ -35,6 +35,9 @@
     "input_threshold": {
       "low": { "value": 0.3, "unit": "1", "source": { "closed_form": { "note": "The AA51880 sheet lists no VIN threshold. 0.3 of the supply is the low, under the high." } } },
       "high": { "value": 0.5, "unit": "1", "source": { "closed_form": { "note": "The AA51880 sheet lists no VIN threshold. ESP32 boards drive the signal from a 3.3 V GPIO while the motor runs from 5 V, as in the Last Minute Engineers and DroneBot Workshop ESP32 servo pages. 0.5 of the supply is 3.0 V at the 6 V sheet maximum and 2.5 V at 5 V, so a 3.3 V high clears it." } } }
+    },
+    "ratings": {
+      "supply_min": { "value": 3.0, "unit": "V", "source": { "datasheet": { "doc": "4tronix SG90, operating voltage", "at": "Operating voltage 3.0 V to 7.2 V, the lowest minimum among the cited sheets (Tower Pro and AA51880 state no operating supply minimum)", "basis": "min" } } }
     },
     "pins": { "VCC": "VCC", "GND": "GND", "SIGNAL": "SIGNAL" }
   },

@@ -2,7 +2,7 @@
 // packages/engine/tests/circuits/atmega-board-button/netlist.json, part `mcu`. The ratings
 // cite DS40002061B §29.1 directly, and `active_current` and `reset_current` cite its pages.
 {
-  "format": 5, "part": "atmega328p-tqfp32", "version": "0.2.2", "title": "ATmega328P, TQFP-32", "license": "MIT OR Apache-2.0",
+  "format": 7, "part": "atmega328p-tqfp32", "version": "0.2.3", "title": "ATmega328P, TQFP-32", "license": "MIT OR Apache-2.0",
   "summary": "ATmega328P-AU in a 7 x 7 mm TQFP-32: an 8-bit AVR microcontroller with 32 KB of flash. The dot marks the lead-1 corner.",
   "tags": ["microcontroller", "avr", "tqfp"],
   "docs": {
@@ -47,6 +47,7 @@
       "rail_margin": { "value": 0.5, "unit": "V", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: Voltage on any Pin except RESET with respect to Ground, -0.5 V to VCC + 0.5 V", "basis": "absolute_max" } } },
       "reset_voltage": { "value": 13.0, "unit": "V", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: Voltage on RESET with respect to Ground, -0.5 V to +13.0 V", "basis": "absolute_max" } } },
       "supply_voltage": { "value": 6.0, "unit": "V", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.1 Absolute Maximum Ratings, page 308: Maximum Operating Voltage, 6.0 V", "basis": "absolute_max" } } },
+      "supply_min": { "value": 1.8, "unit": "V", "source": { "datasheet": { "doc": "DS40002061B", "at": "§29.2 DC Characteristics, page 308: VCC operating voltage 1.8 V to 5.5 V", "basis": "min" } } },
     },
   },
   "not_simulated": [

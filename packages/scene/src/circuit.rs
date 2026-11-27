@@ -1515,12 +1515,14 @@ impl<'p> Circuit<'p> {
                 break text;
             }
         };
+        let quiet_warnings = self.quiet_warnings();
         if !self.out.is_empty() || ground.is_none() {
             return None;
         }
         let view = self.view(Some(&text));
         let mut refs = self.map(nets);
         refs.quiet_floating = self.quiet_floating(nets);
+        refs.quiet_warnings = quiet_warnings;
         Some(Netlist {
             json: text,
             parts: parts.len() - left_out.len(),

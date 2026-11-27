@@ -1064,10 +1064,12 @@ fn the_breadboard_ldr_follows_its_sheet_and_the_trimmer_divides() {
         dir.path().join("tests/light.test"),
         "\
 open
-expect @trim.wiper > 2.3797V   # 4.761 V / 2: 2.3807 V
-expect @trim.wiper < 2.3817V
+expect @trim.wiper > 2.3853V   # t=0 reset draw, 4.773 V / 2: 2.3863 V
+expect @trim.wiper < 2.3873V
 set light 10
 step 1ms
+expect @trim.wiper > 2.3797V   # running draw, 4.761 V / 2: 2.3807 V
+expect @trim.wiper < 2.3817V
 expect @ldr.a > 2.8560V   # 15 kohm: 2.8570 V
 expect @ldr.a < 2.8580V
 set light 100
@@ -1522,6 +1524,84 @@ fn an_unpowered_bmp280_holds_the_bus_and_the_sketch_never_reads() {
     assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
     assert!(!run.stdout.contains("Temperature ="), "{}", run.stdout);
     assert!(!run.stdout.contains("config_in_normal"), "{}", run.stdout);
+}
+
+/// A GY-BMP280 sharing I2C with a powered SSD1306 OLED module whose own VCC is left unwired
+/// gets back-powered through the OLED's 4.7 kohm pull-ups and its own 10 kohm pull-ups. The
+/// floating VCC rises above 1.71 V while idle, then sags under 1.71 V during I2C traffic and
+/// conversions, emitting `rating.supply_low`. Wiring `mod.VCC` to `board.3V3` keeps it silent.
+#[test]
+fn a_bmp280_back_powered_through_oled_pullups_warns_supply_low_and_powered_stays_silent() {
+    let setup = |powered: bool, transcript: &str| {
+        let dir = project(transcript);
+        fs::copy(
+            common::repo().join("blocks/devkitc-gy-bmp280/build/bmp280.ino.bin"),
+            dir.path().join("build/bmp280.ino.bin"),
+        )
+        .unwrap();
+        fs::copy(
+            common::repo().join("blocks/devkitc-gy-bmp280/build/bmp280.ino.partitions.bin"),
+            dir.path().join("build/bmp280.ino.partitions.bin"),
+        )
+        .unwrap();
+        let mod_vcc = if powered {
+            r#"["board.3V3", "mod.VCC"],"#
+        } else {
+            ""
+        };
+        fs::write(
+            dir.path().join("scene.jsonc"),
+            format!(
+                r#"{{
+  "format": 1,
+  "parts": {{
+    "board": {{
+      "type": "esp32s3-devkitc-1",
+      "app": "build/bmp280.ino.bin",
+      "partitions": "build/bmp280.ino.partitions.bin",
+    }},
+    "oled": {{ "type": "oled-ssd1306-128x64" }},
+    "mod": {{ "type": "gy-bmp280" }},
+  }},
+  "nets": {{ "GND": "board.GND" }},
+  "wires": [
+    ["board.3V3", "oled.VCC"],
+    ["board.GND", "oled.GND"],
+    ["board.GPIO9", "oled.SCL"],
+    ["board.GPIO8", "oled.SDA"],
+    {mod_vcc}
+    ["board.GND", "mod.GND"],
+    ["board.GPIO9", "mod.SCL"],
+    ["board.GPIO8", "mod.SDA"],
+  ],
+}}"#
+            ),
+        )
+        .unwrap();
+        dir
+    };
+
+    let back_powered = setup(
+        false,
+        "open\nstep 1500ms\nexpect diagnostics contains \"rating.supply_low\"\nsnapshot\n",
+    );
+    let run = orbe(back_powered.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(
+        run.stdout
+            .contains("warning[rating.supply_low] #mod__u.pin.VDD (mod.VCC)")
+            && run.stdout.contains("below its 1.71 V minimum"),
+        "{}",
+        run.stdout
+    );
+
+    let powered = setup(
+        true,
+        "open\nstep --until serial contains \" Pa\" --timeout 3s\nexpect serial contains \"Temperature = 25.00\"\nsnapshot\n",
+    );
+    let run = orbe(powered.path(), &["test", "-v"]);
+    assert_eq!(run.code, 0, "{}{}", run.stdout, run.stderr);
+    assert!(!run.stdout.contains("rating.supply_low"), "{}", run.stdout);
 }
 
 /// `set pressure 30000` then `set pressure 101325` before time moves drops the pending step.

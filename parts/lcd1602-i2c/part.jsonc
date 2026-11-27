@@ -4,7 +4,7 @@
 // 1602A panel (at z = 10.5 mm), with its 4-pin right-angle header (GND, VCC, SDA, SCL on 2.54 mm)
 // pointing sideways along -X parallel to the PCB for female jumper wires.
 {
-  "format": 6,
+  "format": 7,
   "part": "lcd1602-i2c",
   "version": "0.1.2",
   "title": "LCD display module, 16 x 2 blue, HD44780 + PCF8574 I2C",

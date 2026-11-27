@@ -2,7 +2,7 @@
 // backpack. The model runs the PCF8574 8-bit port (P0 RS, P1 RW, P2 E, P3 backlight, P4..P7 D4..D7)
 // driving the HD44780U in 4-bit mode per Hitachi ADE-207-272.
 {
-  "format": 6,
+  "format": 7,
   "part": "hd44780-1602-i2c",
   "version": "0.1.2",
   "title": "Character LCD panel, 16 x 2, HD44780 + PCF8574 I2C",
@@ -102,6 +102,11 @@
         "value": 7.0,
         "unit": "V",
         "source": { "datasheet": { "doc": "NXP PCF8574", "at": "Rev. 5, Table 7 Limiting values, p. 15: VDD supply voltage -0.5 V to +7 V (Hitachi HD44780U ADE-207-272 p. 47 also rates VCC-GND max +7.0 V)", "basis": "absolute_max" } },
+      },
+      "supply_min": {
+        "value": 2.7,
+        "unit": "V",
+        "source": { "datasheet": { "doc": "Hitachi HD44780U (ADE-207-272)", "at": "DC Characteristics, operating voltage VDD 2.7 V minimum (higher than NXP PCF8574 Rev. 5 Table 8 minimum of 2.5 V on shared VCC)", "basis": "min" } },
       },
     },
     "pins": { "VCC": "VCC", "GND": "GND", "SCL": "SCL", "SDA": "SDA" },

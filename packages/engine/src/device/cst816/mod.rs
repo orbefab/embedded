@@ -24,7 +24,8 @@ use crate::netlist::Threshold;
 use crate::netlist::Value;
 use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
-use crate::netlist::json::{PinMap, WireValue, resolve_pins, resolve_value};
+use crate::netlist::json::{PinMap, WireValue, resolve_limit, resolve_pins, resolve_value};
+use crate::ratings::{PinRatings, SupplyMin};
 use crate::watch::{Signal, Watch};
 
 const VCC: usize = 0;
@@ -122,6 +123,26 @@ pub(crate) fn chip(part: PartId, dev: &Cst816) -> Chip {
     }
 }
 
+/// The part's minimum operating supply voltage on `VCC` over `GND`, `None` when unrated.
+pub(crate) fn pin_ratings(dev: &Cst816) -> Option<PinRatings> {
+    let min = dev.ratings.as_ref()?.supply_min.as_ref()?.si.get();
+    Some(PinRatings {
+        outputs: Vec::new(),
+        pin_current: None,
+        supply_current: None,
+        vcc: (Cst816::PINS[VCC], dev.pins[VCC]),
+        gnd: (Cst816::PINS[GND], dev.pins[GND]),
+        windows: Vec::new(),
+        supply_mins: vec![SupplyMin {
+            pin: Cst816::PINS[VCC],
+            net: dev.pins[VCC],
+            gnd: dev.pins[GND],
+            min,
+            clock_hz: None,
+        }],
+    })
+}
+
 /// A CST816 touch controller, an active chip with no clock of its own. It is an I2C target at
 /// address 0x15. `SDA` and `INT` are open drain into `GND` through `low_resistance` above
 /// `low_drop`. `SCL` is an input, and the part does not hold it. `RST` low clears it. It reads
@@ -139,6 +160,14 @@ pub struct Cst816 {
     pub low_resistance: Value,
     pub input_threshold: Threshold,
     pub events: Events,
+    pub ratings: Option<Cst816Ratings>,
+}
+
+/// A CST816's ratings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cst816Ratings {
+    /// Volt. The least operating `VCC` may sit above `GND`.
+    pub supply_min: Option<Value>,
 }
 
 impl Cst816 {
@@ -155,6 +184,15 @@ pub(crate) struct WireCst816 {
     input_threshold: WireThreshold,
     #[serde(default)]
     touches: Vec<WireTouch>,
+    #[serde(default)]
+    ratings: Option<WireRatings>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireRatings {
+    #[serde(default)]
+    supply_min: Option<WireValue>,
 }
 
 #[derive(Deserialize)]
@@ -203,12 +241,18 @@ pub(crate) fn resolve_cst816(ctx: ParseCtx<'_>, wire: WireCst816) -> Option<Cst8
         })
         .collect();
     let events = resolve_events(part_ref, &TOUCH, touches, out);
+    let ratings = match wire.ratings {
+        None => Some(None),
+        Some(wire) => resolve_limit(part_ref, "ratings.supply_min", "V", wire.supply_min, out)
+            .map(|supply_min| Some(Cst816Ratings { supply_min })),
+    };
     Some(Cst816 {
         pins: pins?,
         low_drop: low_drop?,
         low_resistance: low_resistance?,
         input_threshold: input_threshold?,
         events: events?,
+        ratings: ratings?,
     })
 }
 

@@ -52,6 +52,7 @@ use crate::timestamp::Timestamp;
 
 use crate::tran::Rows;
 
+pub use crate::ratings::SupplyMark;
 pub use crate::serial::SerialByte;
 pub use session::{
     Applied, DeviceEvent, Display, EdgeCursor, Input, Leds, Probe, Refused, Rejected, Serial,

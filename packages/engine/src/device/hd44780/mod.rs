@@ -199,6 +199,9 @@ pub(crate) fn pin_ratings(dev: &Hd44780) -> Option<PinRatings> {
         vcc: (Hd44780::PINS[VDD], dev.pins[VDD]),
         gnd: (Hd44780::PINS[VSS], dev.pins[VSS]),
         windows,
+        // `operating_voltage` already warns `low_supply` on a bus cycle under the module's
+        // minimum, so the part carries no `supply_min`.
+        supply_mins: Vec::new(),
     })
 }
 

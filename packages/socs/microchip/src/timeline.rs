@@ -60,12 +60,23 @@ impl Timeline {
     /// A programmed, powered core at oscillator cycle 0. Its ADC asks [`Timeline::sample`] for
     /// every sample-and-hold, and it watches for what the model does not run
     /// ([`Cpu::watch_gaps`]).
-    pub fn new(mut cpu: Cpu) -> Timeline {
+    pub fn new(cpu: Cpu) -> Timeline {
+        let held = cpu.in_reset();
+        Self::with_held(cpu, held)
+    }
+
+    /// Like [`Self::new`], starting held in power-on reset so a circuit's operating point at
+    /// t = 0 sees the chip's reset current. The first input at t = 0 keeps the hold if `RESET`
+    /// is low or `VCC` is below brown-out, or schedules release on cycle 1.
+    pub fn power_on(cpu: Cpu) -> Timeline {
+        Self::with_held(cpu, true)
+    }
+
+    fn with_held(mut cpu: Cpu, held: bool) -> Timeline {
         cpu.ask_for_samples();
         cpu.watch_gaps();
         let levels = cpu.pin_levels();
         let drives = std::array::from_fn(|pin| levels.drive(pin as u32).unwrap_or(PinDrive::Off));
-        let held = cpu.is_held_in_reset();
         Timeline {
             cpu,
             reached: 0,
@@ -260,7 +271,7 @@ impl Timeline {
         }
         // A reset holds the chip from where the core sits, past the cycle the host reached. A
         // change back on the cycle of the last one cancels it.
-        let held = self.cpu.is_held_in_reset();
+        let held = self.cpu.in_reset();
         let last = self.holds.last().map_or(self.held, |&(_, held)| held);
         if held != last {
             let at = self

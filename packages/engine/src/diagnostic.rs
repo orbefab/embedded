@@ -621,6 +621,8 @@ pub enum Diagnostic {
     RatingPower(Box<Excursion>),
     /// A chip pin's voltage left its rated window.
     RatingVoltage(VoltageExcursion),
+    /// A chip's supply pin dropped between unpowered and its datasheet minimum.
+    RatingSupplyLow(SupplyExcursion),
     /// A linear regulator was held at its current limit and its output sagged.
     RegulatorCurrentLimit(CurrentLimitExcursion),
 }
@@ -695,6 +697,28 @@ pub struct VoltageExcursion {
     pub operating: bool,
 }
 
+/// One chip supply pin between unpowered and its datasheet minimum, merged over the whole run.
+/// Volts are over the chip's ground pin.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SupplyExcursion {
+    /// `#<part>.pin.<pin>`.
+    pub pin: Ref,
+    /// The datasheet minimum supply voltage, in V.
+    pub min: f64,
+    /// Clock frequency in Hz when the minimum depends on the chip's clock (such as an ATmega328P).
+    pub clock_hz: Option<u32>,
+    /// Supply voltage held continuously for at least `SUPPLY_HOLD_PS` most recently while above
+    /// the unpowered floor and below the minimum (or the episode's upper bound when no warning
+    /// episode lasted `SUPPLY_HOLD_PS`, or the operating-point sample), in V.
+    pub voltage: f64,
+    /// When the reported supply voltage occurred.
+    pub peak_at: Time,
+    /// First sample below the minimum.
+    pub first: Time,
+    /// Total time below the minimum. `None` for an operating point, which has no duration.
+    pub over_ps: Option<u64>,
+}
+
 /// One linear regulator held at its current limit with its output pulled below regulation,
 /// merged over the whole run.
 #[derive(Clone, Debug, PartialEq)]
@@ -767,6 +791,7 @@ impl Diagnostic {
             Diagnostic::RatingCurrent(_) => "rating.current",
             Diagnostic::RatingPower(_) => "rating.power",
             Diagnostic::RatingVoltage(_) => "rating.voltage",
+            Diagnostic::RatingSupplyLow(_) => "rating.supply_low",
             Diagnostic::RegulatorCurrentLimit(_) => "regulator.current_limit",
         }
     }
@@ -783,6 +808,7 @@ impl Diagnostic {
             | Diagnostic::RatingCurrent(_)
             | Diagnostic::RatingPower(_)
             | Diagnostic::RatingVoltage(_)
+            | Diagnostic::RatingSupplyLow(_)
             | Diagnostic::RegulatorCurrentLimit(_) => Severity::Warning,
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
@@ -856,6 +882,7 @@ impl Diagnostic {
                 Some(excursion.first)
             }
             Diagnostic::RatingVoltage(excursion) => Some(excursion.first),
+            Diagnostic::RatingSupplyLow(excursion) => Some(excursion.first),
             Diagnostic::RegulatorCurrentLimit(excursion) => Some(excursion.first),
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
@@ -928,6 +955,7 @@ impl Diagnostic {
                 vec![excursion.quantity.clone()]
             }
             Diagnostic::RatingVoltage(excursion) => vec![excursion.pin.clone()],
+            Diagnostic::RatingSupplyLow(excursion) => vec![excursion.pin.clone()],
             Diagnostic::RegulatorCurrentLimit(excursion) => vec![excursion.pin.clone()],
         }
     }
@@ -1978,6 +2006,7 @@ impl Diagnostic {
             Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A", namer),
             Diagnostic::RatingPower(excursion) => over_rating(excursion, "W", namer),
             Diagnostic::RatingVoltage(excursion) => outside_window(excursion, namer),
+            Diagnostic::RatingSupplyLow(excursion) => supply_low(excursion, namer),
             Diagnostic::RegulatorCurrentLimit(excursion) => regulator_limit(excursion, namer),
         }
     }
@@ -2243,6 +2272,18 @@ impl Diagnostic {
                     "peak_ps": excursion.peak_at,
                 })
             }
+            Diagnostic::RatingSupplyLow(excursion) => {
+                let mut data = serde_json::json!({
+                    "limit": excursion.min,
+                    "over_ps": excursion.over_ps,
+                    "peak_ps": excursion.peak_at,
+                    "voltage": excursion.voltage,
+                });
+                if let Some(hz) = excursion.clock_hz {
+                    data["clock_hz"] = serde_json::json!(hz);
+                }
+                data
+            }
             Diagnostic::RegulatorCurrentLimit(excursion) => {
                 serde_json::json!({
                     "current": excursion.current,
@@ -2449,6 +2490,38 @@ fn outside_window(excursion: &VoltageExcursion, namer: &dyn Fn(&Ref) -> String) 
     format!(
         "{pin} reaches {} V{over_ground}, outside {window}{}",
         significant_text(*peak),
+        for_time(*over_ps)
+    )
+}
+
+fn frequency_text(hz: u32) -> String {
+    let hz = f64::from(hz);
+    if hz >= 1e6 {
+        format!("{} MHz", significant_text(hz / 1e6))
+    } else if hz >= 1e3 {
+        format!("{} kHz", significant_text(hz / 1e3))
+    } else {
+        format!("{} Hz", significant_text(hz))
+    }
+}
+
+fn supply_low(excursion: &SupplyExcursion, namer: &dyn Fn(&Ref) -> String) -> String {
+    let SupplyExcursion {
+        pin,
+        min,
+        clock_hz,
+        voltage,
+        over_ps,
+        ..
+    } = excursion;
+    let pin = namer(pin);
+    let at_clock = clock_hz
+        .map(|hz| format!(" at {}", frequency_text(hz)))
+        .unwrap_or_default();
+    format!(
+        "{pin} supply drops to {} V over the chip's ground, below its {} V minimum{at_clock}{}",
+        significant_text(*voltage),
+        significant_text(*min),
         for_time(*over_ps)
     )
 }
