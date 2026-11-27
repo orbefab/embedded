@@ -6,11 +6,12 @@
 //! The network takes the capture's ANonce as its key counter, and its RSNE and GTK, which are
 //! for a TKIP group key, from the capture. The station's frames go in through `hear` as the
 //! capture has them. Messages 1 and 3 are then the capture's, octet for octet, but for their
-//! Duration and Sequence Control, since this access point sends at 1 Mb/s where that one sent at
-//! 54, and for the PMKID in message 1, which in the capture is not the one IEEE 802.11-2020
-//! 12.7.1.3 derives. The network's sending message 3 is the check of message 2's MIC, its Handshake row the
-//! check of message 4's, and every Data frame the station protected comes out with its MIC
-//! good.
+//! Duration and Sequence Control, and for the PMKID in message 1, which in the capture is not
+//! the one IEEE 802.11-2020 12.7.1.3 derives. The Duration differs because this access point
+//! sends EAPOL-Key frames at 1 Mb/s, its lowest basic rate, as Linux mac80211 does, where the
+//! capture's 2005 Linksys sent them at 54. The network's sending message 3 is the check of
+//! message 2's MIC, its Handshake row the check of message 4's, and every Data frame the
+//! station protected comes out with its MIC good.
 
 mod common;
 
@@ -19,6 +20,7 @@ use std::path::PathBuf;
 use common::{Air, BSSID, STA, Script, ms};
 use orbe_crypto::aes::AesKey;
 use orbe_model::Sha256;
+use orbe_model::air::{AirFrame, Rate};
 use orbe_net::{Config, Network};
 
 /// The capture's SHA-256, its name in the blob cache.
@@ -151,11 +153,22 @@ fn the_handshake_and_data_of_wpa_induction_replay() {
     let mut net = Network::new(config);
     air.run_through(&mut net, ms(10.0 * (from_station.len() + 1) as f64));
 
-    let ours: Vec<&[u8]> = (air.sent().into_iter())
+    let ours: Vec<&AirFrame> = (air.sent().into_iter())
         .filter(|f| eapol(&f.mpdu).is_some())
-        .map(|f| &f.mpdu[..])
         .collect();
     assert_eq!(ours.len(), 2, "messages 1 and 3, each once");
+    // Ours go at 1 Mb/s, the lowest basic rate, as Linux mac80211 sends EAPOL-Key frames, with
+    // Duration 314 for SIFS and the 1 Mb/s ACK. The capture's went at 54 Mb/s with Duration 44.
+    for f in &ours {
+        assert_eq!(
+            (f.rate, &f.mpdu[2..4]),
+            (Rate::Dsss1, &314u16.to_le_bytes()[..])
+        );
+    }
+    for theirs in [theirs_1, theirs_3] {
+        assert_eq!(theirs[2..4], 44u16.to_le_bytes());
+    }
+    let ours: Vec<&[u8]> = ours.iter().map(|f| &f.mpdu[..]).collect();
     // Message 1's last 16 octets are the PMKID of its PMKID KDE. Ours is the PMKID of
     // 12.7.1.3, HMAC-SHA1-128(PMK, "PMK Name" || AA || SPA). The capture's is not, so it is not
     // compared.
@@ -172,6 +185,7 @@ fn the_handshake_and_data_of_wpa_induction_replay() {
     ours_1[at..].copy_from_slice(&theirs_1[at..]);
     for (ours, theirs) in [(&ours_1[..], theirs_1), (ours[1], theirs_3)] {
         assert_eq!(ours.len(), theirs.len());
+        // All but the Duration and the Sequence Control.
         assert_eq!(ours[..2], theirs[..2]);
         assert_eq!(ours[4..22], theirs[4..22]);
         assert_eq!(ours[24..], theirs[24..]);

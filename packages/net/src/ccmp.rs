@@ -44,10 +44,6 @@ pub(crate) fn open(tk: &[u8; 16], key_id: u8, mpdu: &[u8], body: usize) -> Optio
 
 /// `header`, the Data frame's MAC header with Protected set, then the CCMP header of `pn` and
 /// key `key_id`, and `plaintext` sealed under `tk`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the subnet's frames to a station use it")
-)]
 pub(crate) fn seal(tk: &[u8; 16], key_id: u8, pn: u64, header: &[u8], plaintext: &[u8]) -> Vec<u8> {
     let (aad, nonce, _) = aad_and_nonce(header, pn);
     let key = AesKey::new(tk).expect("a 128-bit TK");

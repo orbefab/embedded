@@ -109,27 +109,40 @@ fn mac(bytes: &[u8], at: usize) -> Option<Mac> {
     Some(Mac(bytes.get(at..at + 6)?.try_into().ok()?))
 }
 
-/// A frame the access point sends: Frame Control, Duration, then `addr1`, the BSSID twice, and
-/// a Sequence Control of 0 that [`set_sequence`] fills when it goes on the air. This is the
-/// management header of 9.3.3.1, and the header of a Data frame from the DS of 9.3.2.1, where
-/// the BSSID is also the source.
-pub(crate) fn header(
-    kind: u8,
-    subtype: u8,
-    flags: u8,
-    duration_us: u16,
-    addr1: Mac,
-    bssid: Mac,
-) -> Vec<u8> {
+/// A frame the access point sends: Frame Control, then a Duration and a Sequence Control of 0
+/// that [`set_duration`] and [`set_sequence`] fill when it goes on the air, around `addr1` and
+/// the BSSID twice. This is the management header of 9.3.3.1, and the header of a Data frame
+/// from the DS of 9.3.2.1, where the BSSID is also the source.
+pub(crate) fn header(kind: u8, subtype: u8, flags: u8, addr1: Mac, bssid: Mac) -> Vec<u8> {
     let mut f = Vec::with_capacity(64);
     f.push((subtype << 4) | (kind << 2));
     f.push(flags);
-    f.extend(duration_us.to_le_bytes());
+    f.extend([0, 0]);
     f.extend(addr1.0);
     f.extend(bssid.0);
     f.extend(bssid.0);
     f.extend([0, 0]);
     f
+}
+
+/// Sets the Duration field, in microseconds (9.2.4.2).
+pub(crate) fn set_duration(mpdu: &mut [u8], us: u16) {
+    mpdu[2..4].copy_from_slice(&us.to_le_bytes());
+}
+
+/// Whether `mpdu` is a Data frame with a body (9.3.2.1), which carries an MSDU.
+pub(crate) fn has_msdu(mpdu: &[u8]) -> bool {
+    let kind = (mpdu[0] >> 2) & 3;
+    let subtype = mpdu[0] >> 4;
+    kind == DATA && subtype & NO_DATA == 0
+}
+
+/// Whether `mpdu`, a Data frame the access point sends, carries an EAPOL frame: its MSDU
+/// starts with LLC/SNAP and the EAPOL EtherType.
+pub(crate) fn carries_eapol(mpdu: &[u8]) -> bool {
+    has_msdu(mpdu)
+        && mpdu.get(24..30) == Some(&crate::rsn::LLC_SNAP[..])
+        && mpdu.get(30..32) == Some(&crate::rsn::EAPOL[..])
 }
 
 /// Sets the sequence number, 12 bits with fragment 0 (9.2.4.4).

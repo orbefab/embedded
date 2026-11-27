@@ -94,6 +94,14 @@ pub(crate) fn find(body: &[u8], id: u8) -> Option<&[u8]> {
         .map(|(_, contents)| contents)
 }
 
+/// The rates of the Supported Rates and Extended Supported Rates elements in `body`, in 500
+/// kb/s with the basic bit masked off. A BSS membership selector reads as a value no rate has.
+pub(crate) fn rates(body: &[u8]) -> impl Iterator<Item = u8> + '_ {
+    elements(body)
+        .filter(|&(id, _)| id == SUPPORTED_RATES || id == EXTENDED_RATES)
+        .flat_map(|(_, rates)| rates.iter().map(|rate| rate & 0x7f))
+}
+
 /// Whether a station's RSNE asks for what the access point offers: its `group` cipher, CCMP-128
 /// as a pairwise cipher, and the PSK AKM, without requiring PMF, which the access point does not
 /// do (12.6.3). A field the RSNE leaves off takes its default, CCMP-128 for the ciphers and IEEE
@@ -205,6 +213,14 @@ mod tests {
             Err(ROBUST_MANAGEMENT_POLICY_VIOLATION)
         );
         assert_eq!(check_rsne(&RSN_PSK[..19], &CCMP), Err(INVALID_ELEMENT));
+    }
+
+    // Wireshark's wpa-Induction.pcap, frame 82: the station's rates, split over both
+    // elements around its RSNE.
+    #[test]
+    fn rates_come_from_both_rate_elements() {
+        let body = [1, 2, 0x82, 0x6c, 48, 2, 1, 0, 50, 2, 0x0c, 0xff];
+        assert_eq!(rates(&body).collect::<Vec<_>>(), [2, 108, 12, 127]);
     }
 
     #[test]
