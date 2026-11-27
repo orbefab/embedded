@@ -5,7 +5,7 @@
 //! mask is set. While the core is sleeping, [`Cpu::run_until`] jumps to the
 //! next event. A budget is a cycle: there is no instruction-count run.
 
-use orbe_avr::{Activity, Core, SpmNote};
+use orbe_avr::{Activity, Core, PassProbe, SpmNote};
 
 use crate::bus::Bus;
 use crate::chip::{FLASH_WORDS, IRQ_CYCLES, RAMEND, USART0, VECTORS};
@@ -500,15 +500,17 @@ impl Cpu {
     fn run(&mut self, limit: u64, until_news: bool) {
         let div = self.clock_div();
         let in_reset = self.counters_held();
+        let mut probe = PassProbe::new();
         while self.cycles() < limit && !self.core.is_stopped() && !self.gaps_due() {
             if self.core.can_fetch() {
-                if !self.run_free(limit, until_news, div) {
-                    self.step();
+                if !self.run_free(limit, until_news, div, &mut probe) {
+                    self.step_probed(limit, &mut probe);
                 }
             } else if self.core.is_held() {
                 self.advance_held(limit);
                 break;
             } else {
+                probe.spoil();
                 let before = self.cycles();
                 self.coast(limit);
                 if !self.core.can_fetch() && self.cycles() == before {
@@ -797,11 +799,49 @@ impl Cpu {
         self.gaps_due();
     }
 
+    /// [`Self::step`] inside a run, with `probe` watching the op. At the boundary before it, a
+    /// pass the probe found repeats is skipped up to `limit` or the next event, as a free run
+    /// skips one.
+    #[inline(always)]
+    fn step_probed(&mut self, limit: u64, probe: &mut PassProbe) {
+        if self.core.is_stopped() || self.gaps_due() {
+            return;
+        }
+        if self.bus.pending_irq() != 0 {
+            // An entry pushes through the bus the probe does not watch.
+            probe.spoil();
+            if self.take_boundary_interrupt() {
+                return;
+            }
+        }
+        // An `ACSR` read waits on a deadline that moves with the cycle.
+        if !self.bus.quiet() || self.bus.gaps().acsr_read.is_some() {
+            probe.spoil();
+        }
+        let room = self.bus.next_event().saturating_sub(self.bus.cycle());
+        let bound = limit.min(self.core.cycles().saturating_add(room));
+        let skipped = probe.visit(&mut self.core, &self.bus, bound);
+        if skipped != 0 {
+            self.bus.pass(skipped);
+        }
+        let before = self.core.cycles();
+        self.core.step(&mut probe.bus(&mut self.bus));
+        // An op that reaches the bound fires an event, and one that leaves an interrupt pending
+        // may enter it on retiring.
+        if self.core.cycles() >= bound || self.bus.pending_irq() != 0 {
+            probe.spoil();
+        }
+        let spent = self.core.cycles().wrapping_sub(before);
+        self.retire(spent);
+        self.gaps_due();
+    }
+
     /// Runs free ops, steady loads and idle stores from here while the bus is quiet and no
     /// interrupt can be taken. Returns `true` when it retired an op that reached `limit` or the
-    /// next event, and `false` before any other op, which the caller steps.
+    /// next event, and `false` before any other op, which the caller steps. `probe` sees the
+    /// projected loads, which a later pass can read otherwise.
     #[inline(always)]
-    fn run_free(&mut self, limit: u64, until_news: bool, div: u32) -> bool {
+    fn run_free(&mut self, limit: u64, until_news: bool, div: u32, probe: &mut PassProbe) -> bool {
         let irq_open = self.bus.pending_irq() != 0 && self.core.interrupts_enabled();
         if irq_open || !self.bus.quiet() || (until_news && self.has_news(div)) {
             return false;
@@ -809,9 +849,10 @@ impl Cpu {
         let start = self.core.cycles();
         let room = self.bus.next_event().saturating_sub(self.bus.cycle());
         let bound = limit.min(start.saturating_add(room));
-        let last = self.core.run_free(&self.bus, bound);
+        let bus = probe.bus(&mut self.bus);
+        let last = self.core.run_free(&bus, bound);
         if last.is_none() {
-            self.core.skip_spin_at(&self.bus, bound);
+            self.core.skip_spin_at(&bus, bound);
         }
         let passed = self.core.cycles().wrapping_sub(start);
         match last {
@@ -820,6 +861,7 @@ impl Cpu {
                 false
             }
             Some(spent) => {
+                probe.spoil();
                 self.bus.pass(passed.wrapping_sub(spent));
                 self.retire(spent);
                 true

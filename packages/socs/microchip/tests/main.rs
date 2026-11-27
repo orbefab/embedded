@@ -12,6 +12,7 @@ mod instructions;
 mod mspim;
 mod oc_pin;
 mod portb;
+mod probed_passes;
 mod sent;
 mod sketches;
 mod spi;
