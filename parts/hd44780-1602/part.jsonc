@@ -3,7 +3,7 @@
 // order of Vishay LCD-016N002B p. 2. A and K are the backlight's, which the module wires to its
 // own LED part; the model only watches them, to know whether the backlight is lit.
 {
-  "format": 6,
+  "format": 7,
   "part": "hd44780-1602",
   "version": "0.1.0",
   "title": "Character LCD panel, 16 x 2, HD44780, parallel",
