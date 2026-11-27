@@ -1488,6 +1488,15 @@ impl Actives {
                 );
                 continue;
             }
+            // `record` is set on a frame's stop too. Only a sender has a slot in `senders`, and
+            // only a sender holds records.
+            if !circuit.actives[slot].sends {
+                debug_assert!(
+                    ahead.core.records().is_empty(),
+                    "a core that sends no records holds none"
+                );
+                continue;
+            }
             let after = ahead.delivered.records;
             let sender_part = circuit.actives[slot].part;
             let sender_name = &self.senders[usize::from(ahead.delivered.sender)];

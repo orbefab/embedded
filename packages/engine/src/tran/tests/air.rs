@@ -269,3 +269,189 @@ fn a_network_field_out_of_range_is_a_syntax_error() {
         );
     }
 }
+
+/// The circuits whose chips send records, each with the stop its run takes here: past many
+/// beacons, which the network sends every 102.4 ms.
+const SENDERS: [(&str, u64); 3] = [
+    ("esp32s3-blink", 900 * MS),
+    ("ws2812-replay", 1000 * MS),
+    ("spi-replay", 1000 * MS),
+];
+
+/// `packages/engine/tests/circuits/<name>` run to `stop_ps` at steps of 10 ms at most, with the
+/// network when `network`, its blobs from the folder beside it. With `station`, it also has the
+/// nets a script station and its driver use, each held to `gnd` by 1 kohm.
+fn example(name: &str, stop_ps: u64, network: bool, station: bool) -> (Vec<u8>, Netlist) {
+    let folder = format!("{}/tests/circuits/{name}", env!("CARGO_MANIFEST_DIR"));
+    let mut json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(format!("{folder}/netlist.json")).unwrap()).unwrap();
+    let transient = &mut json["analysis"]["transient"];
+    transient["stop_ps"] = stop_ps.into();
+    for key in ["max_step_ps", "grid_ps"] {
+        transient[key] = transient[key].as_u64().unwrap().max(10 * MS).into();
+    }
+    if network {
+        json["network"] = serde_json::json!({ "ssid": SSID, "bssid": "02:6f:72:62:65:01", "channel": 6,
+                                 "passphrase": PASSPHRASE, "epoch_s": EPOCH_S });
+    }
+    if station {
+        for net in ["vcc", "o1", "o2", "x"] {
+            let nets = json["nets"].as_array_mut().unwrap();
+            if nets.iter().any(|n| n == net) {
+                continue;
+            }
+            nets.push(net.into());
+            json["parts"].as_array_mut().unwrap().push(serde_json::json!({
+                "name": format!("rsta_{net}"), "kind": "resistor", "pins": { "a": net, "b": "gnd" },
+                "resistance": { "value": 1000.0, "unit": "ohm" }, "ratings": { "power": null }
+            }));
+        }
+    }
+    let mut blobs = crate::blob::Blobs::new();
+    if let Ok(files) = std::fs::read_dir(format!("{folder}/blobs")) {
+        for file in files {
+            blobs.add(std::fs::read(file.unwrap().path()).unwrap().into());
+        }
+    }
+    let input = serde_json::to_vec(&json).unwrap();
+    let netlist = crate::netlist::parse_with(&input, &blobs).unwrap();
+    (input, netlist)
+}
+
+/// The run folder of `session` at its end, rendered from `input` at timestamp 0.
+fn folder(input: &[u8], netlist: &Netlist, session: Session) -> Vec<(String, Vec<u8>)> {
+    let results = super::session::finish(session);
+    let folder = crate::run_folder::render(
+        input,
+        Some(netlist),
+        &results,
+        crate::timestamp::Timestamp::from_unix_seconds(0),
+    );
+    (folder.files())
+        .map(|(name, bytes)| (name.to_string(), bytes.to_vec()))
+        .collect()
+}
+
+/// The slot of the first script station.
+fn station_slot(session: &Session) -> usize {
+    (session.actives.cores().iter())
+        .position(|core| matches!(core, Core::Script(core) if core.station().is_some()))
+        .expect("a station")
+}
+
+/// A network beside chips that send records, which stop at the beacons' landings with `record`
+/// set and no records of their own, runs every one to its stop. Its run folder is the same in
+/// one call and in seeded chunks. It is the folder the circuit writes without the network,
+/// but for the analog traces: a beacon's landing is a step, so they differ by rounding.
+#[test]
+fn a_network_beside_a_sender_leaves_its_run_as_it_was() {
+    let values = |bytes: &[u8]| -> Vec<f64> {
+        (bytes.chunks(8))
+            .map(|chunk| f64::from_le_bytes(chunk.try_into().unwrap()))
+            .collect()
+    };
+    for (name, stop) in SENDERS {
+        let (input, plain) = example(name, stop, false, false);
+        let (_, aired) = example(name, stop, true, false);
+        let run = |seed: u64| {
+            let mut rng = Rng(seed);
+            let mut session = open(&aired, Vec::new(), BUDGET);
+            while let State::Running { now, next, .. } = &session.state {
+                let (now, landing) = (now.as_ps(), next.at.as_ps());
+                let to = match (seed, rng.below(5)) {
+                    (0, _) => stop,
+                    (_, 0) => landing,
+                    (_, 1) => landing - 1,
+                    (_, 2) => landing + 1,
+                    (_, 3) => now + 1 + rng.below(1_000_000),
+                    _ => now + 1 + rng.below(stop / 20),
+                };
+                session.advance_to(Time::from_ps(to));
+            }
+            assert!(
+                matches!(session.state, State::Ended { at, .. } if at == Time::from_ps(stop)),
+                "{name}, seed {seed}: the run did not reach its stop"
+            );
+            folder(&input, &aired, session)
+        };
+        let want = run(0);
+        for seed in [3, 99] {
+            assert!(run(seed) == want, "{name}, seed {seed}");
+        }
+
+        let mut session = open(&plain, Vec::new(), BUDGET);
+        session.advance_to(Time::from_ps(stop));
+        let without = folder(&input, &plain, session);
+        let files = |folder: &[(String, Vec<u8>)]| -> Vec<String> {
+            folder.iter().map(|(file, _)| file.clone()).collect()
+        };
+        assert_eq!(files(&want), files(&without), "{name}");
+        for ((file, got), (_, want)) in want.iter().zip(&without) {
+            if !file.ends_with(".f64") {
+                assert!(got == want, "{name}: the air changed {file}");
+                continue;
+            }
+            let (got, want) = (values(got), values(want));
+            assert_eq!(got.len(), want.len(), "{name}: {file}");
+            for (got, want) in got.iter().zip(&want) {
+                assert!(
+                    (got - want).abs() <= 1e-12 * want.abs().max(1e-9),
+                    "{name}: {file} has {got} for {want}"
+                );
+            }
+        }
+    }
+}
+
+/// A station joins the network beside chips that send records. A driver flips `x`, which the
+/// station watches, every 157 us, so it runs again from its commits over and over. The run in
+/// one call, in seeded chunks and kept at every landing leaves the same station log, network
+/// rows and run folder.
+#[test]
+fn a_station_joins_beside_a_sender_in_any_chunks_and_rewinds() {
+    for (name, stop) in SENDERS {
+        let (input, netlist) = example(name, stop, true, true);
+        let flips: Vec<(u64, Op)> = (1..stop / 157_000_000)
+            .zip([Drive::High, Drive::Low].iter().cycle())
+            .map(|(k, &drive)| (k * 157_000_000, Op::Drive(drive)))
+            .collect();
+        let chips = || {
+            let driver = scripted(&netlist, "x", "o2", &flips, None);
+            vec![station(&netlist, "o1", 1, 1), driver]
+        };
+        let outcome = |session: Session| {
+            let slot = station_slot(&session);
+            let got = (log(&session, slot), rows(&session));
+            (got, folder(&input, &netlist, session))
+        };
+        let mut whole = open(&netlist, chips(), BUDGET);
+        whole.advance_to(Time::from_ps(stop));
+        assert!(matches!(whole.state, State::Ended { .. }), "{name}");
+        check_joined(&log(&whole, station_slot(&whole)), [192, 168, 1, 100]);
+        let want = outcome(whole);
+
+        for seed in [1, 7, 42] {
+            let mut rng = Rng(seed);
+            let mut session = open(&netlist, chips(), BUDGET);
+            while let State::Running { now, next, .. } = &session.state {
+                let (now, landing) = (now.as_ps(), next.at.as_ps());
+                let to = match rng.below(5) {
+                    0 => landing,
+                    1 => landing - 1,
+                    2 => landing + 1,
+                    3 => now + 1 + rng.below(1_000_000),
+                    _ => now + 1 + rng.below(stop / 20),
+                };
+                session.advance_to(Time::from_ps(to));
+            }
+            assert!(outcome(session) == want, "{name}, seed {seed}");
+        }
+
+        let mut session = open(&netlist, chips(), BUDGET);
+        while let State::Running { next, .. } = &session.state {
+            let landing = next.at;
+            session.advance_to(landing);
+        }
+        assert!(outcome(session) == want, "{name}, kept at every landing");
+    }
+}
