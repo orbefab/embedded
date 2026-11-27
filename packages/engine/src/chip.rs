@@ -16,7 +16,7 @@ use crate::device::{
     Ssd1306, St77916, Ws2812,
 };
 use crate::mcu::{Atmega328p, Esp32s3};
-use crate::netlist::PartId;
+use crate::netlist::{NetId, PartId};
 
 use crate::netlist::Chip;
 use crate::netlist::Model;
@@ -245,11 +245,14 @@ pub(crate) fn dc_paths(chip: &Chip) -> &'static [(usize, usize)] {
     }
 }
 
-/// The chip's operating temperature range, `None` when its part rates none.
-pub(crate) fn temperature_range(chip: &Chip) -> Option<&crate::netlist::TemperatureRange> {
+/// The chip's operating temperature range and the supply pins that power it, each with its
+/// ground. `None` when its part rates no temperature.
+pub(crate) fn temperature_rating(
+    chip: &Chip,
+) -> Option<(&crate::netlist::TemperatureRange, Vec<(NetId, NetId)>)> {
     match chip {
-        Chip::Dht22(dev) => dev.temperature(),
-        Chip::Bmp280(dev) => dev.ratings.temperature.as_ref(),
+        Chip::Dht22(dev) => Some((dev.temperature()?, dev.supplies())),
+        Chip::Bmp280(dev) => Some((dev.ratings.temperature.as_ref()?, dev.supplies())),
         Chip::Atmega328p(_)
         | Chip::Esp32s3(_)
         | Chip::Hc595(_)

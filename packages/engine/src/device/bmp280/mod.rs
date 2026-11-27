@@ -141,6 +141,16 @@ pub struct Bmp280 {
     pub ratings: Bmp280Ratings,
 }
 
+impl Bmp280 {
+    /// The supply pins that power the part, `VDD` and `VDDIO`, each with its ground.
+    pub(crate) fn supplies(&self) -> Vec<(NetId, NetId)> {
+        vec![
+            (self.pins[VDD], self.pins[GND]),
+            (self.pins[VDDIO], self.pins[GND]),
+        ]
+    }
+}
+
 /// Table 3 and Table 2. `supply_voltage` is the ceiling on `VDD` and `VDDIO` over `GND`.
 /// `pin_margin` is how far a pin may sit below `GND`, and an interface pin above `VDDIO`.
 /// `supply_min` and `io_supply_min` are the Table 2 minimums on `VDD` and `VDDIO`.

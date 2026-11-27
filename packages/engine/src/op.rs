@@ -36,8 +36,9 @@ pub(crate) fn run(netlist: &Netlist, diagnostics: &mut Vec<Diagnostic>) -> Optio
     };
     let mut ratings = Ratings::new(netlist, &circuit.actives, &columns, Timing::Point);
     ratings.sample(Time::ZERO, &row, &cores);
+    ratings.seed_temperatures(&row, netlist.world());
     diagnostics.extend(ratings.findings());
-    diagnostics.extend(ratings.temperatures(netlist.world(), Time::ZERO));
+    diagnostics.extend(ratings.temperatures(netlist.world(), None));
     Some(observe::op_point(&columns, &row))
 }
 

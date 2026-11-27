@@ -542,11 +542,9 @@ pub enum Chip {
     Sg90(Box<Sg90>),
 }
 
-/// Where an input reads high and low, as fractions of `V(VCC) - V(GND_8)` over `GND_8`. A low
-/// input reads high above `high`, and a high one reads low at or below `low`. Each is in
-/// `(0, 1)`, and `low` is at most `high`.
 /// A part's operating temperature range, from its sheet, in degC. `min` is below `max`. The
-/// world's temperature outside it warns `rating.temperature`, and the part keeps running.
+/// world's temperature outside it, while the part is powered, warns `rating.temperature`, and
+/// the part keeps running.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TemperatureRange {
     /// Unit `degC`.
@@ -555,6 +553,9 @@ pub struct TemperatureRange {
     pub max: Value,
 }
 
+/// Where an input reads high and low, as fractions of `V(VCC) - V(GND_8)` over `GND_8`. A low
+/// input reads high above `high`, and a high one reads low at or below `low`. Each is in
+/// `(0, 1)`, and `low` is at most `high`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Threshold {
     /// Unit `1`.

@@ -880,7 +880,7 @@ impl Ratings {
             limits,
             drives,
             chips,
-            temperatures: temperature::watches(netlist),
+            temperatures: temperature::watches(netlist, columns),
             last: None,
             restarted: false,
             decays: Decays::default(),

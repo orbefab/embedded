@@ -134,6 +134,11 @@ impl Dht22 {
     pub(crate) fn temperature(&self) -> Option<&TemperatureRange> {
         self.ratings.as_ref()?.temperature.as_ref()
     }
+
+    /// The supply pin that powers the part, with its ground.
+    pub(crate) fn supplies(&self) -> Vec<(NetId, NetId)> {
+        vec![(self.pins[VCC], self.pins[GND])]
+    }
 }
 
 #[derive(Deserialize)]
