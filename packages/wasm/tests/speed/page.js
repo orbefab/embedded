@@ -13,16 +13,17 @@ const RUN_LIMIT_MS = 120_000;
 
 const fromBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 
-/** Whether any screen glass in `screens` has an opaque pixel at full scale on any channel.
- * Dark glass and an empty backlit LCD stay below 255 on every channel; lit OLED, LCD and
- * RGB565 pixels hit 255. */
+/** Whether any screen glass in `screens` has an opaque lit pixel: full scale on any channel, or
+ * red at 128 or more. Dark glass and an empty backlit LCD stay below 255 on every channel and
+ * below 128 in red. Lit OLED, LCD and RGB565 pixels hit 255; a lit MAX7219 dot below full
+ * intensity is red from 130 up. */
 function screenDrawn(screens) {
   if (!Array.isArray(screens)) return false;
   for (const screen of screens) {
     if (screen === null) continue;
     const rgba = fromBase64(screen.rgba);
     for (let k = 0; k < rgba.length; k += 4) {
-      if (rgba[k + 3] === 255 && (rgba[k] === 255 || rgba[k + 1] === 255 || rgba[k + 2] === 255)) {
+      if (rgba[k + 3] === 255 && (rgba[k] >= 128 || rgba[k + 1] === 255 || rgba[k + 2] === 255)) {
         return true;
       }
     }
