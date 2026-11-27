@@ -1,5 +1,5 @@
 //! The Wi-Fi radio's registers, which a chip built with a radio keeps, and the MAC's transmit
-//! path.
+//! and receive paths.
 //!
 //! IDF documents none of them. The model keeps the words a stock Arduino-ESP32 3.3.12 station
 //! sketch touches through `esp_wifi_init`, `esp_wifi_start`, a scan and a join: the PHY's in
@@ -27,8 +27,14 @@
 //! - A group-addressed frame is done at its end, and an individually addressed one SIFS and an ACK
 //!   after it, acknowledged or not.
 //!
-//! The radio hears nothing: no frame it receives reaches the driver, and no MAC timer counts. Any
-//! other access in these blocks is refused or listed as on a chip with no radio.
+//! The MAC receives a frame that one of its two address filter slots takes into the next
+//! descriptor of its receive list, as `rx_ctrl`, the MPDU and the FCS, raises [`EVENT_RX`] and
+//! acknowledges a frame to the station, as [`Radio::hear`] says. The TSF counts microseconds from
+//! the chip's start. The meanings come from the driver's `wDev_ProcessRxSucData`,
+//! `wdevProcessRxSucDataAll`, `wDev_AppendRxBlocks`, `hal_mac_set_addr`, `hal_mac_set_bssid` and
+//! `hal_get_tsf_time`, and from esp32-open-mac's work on the ESP32's MAC, and each is a guess.
+//!
+//! Any other access in these blocks is refused or listed as on a chip with no radio.
 
 use std::sync::Arc;
 
@@ -37,7 +43,7 @@ use orbe_model::air::{Ack, Mcs, Ofdm, Preamble, Rate};
 use super::clock::{TICK_HZ, Tick};
 
 /// The words kept, sorted.
-const WORDS: [u32; 269] = [
+const WORDS: [u32; 280] = [
     // FE2
     0x6000_50f0,
     // FE
@@ -221,6 +227,13 @@ const WORDS: [u32; 269] = [
     0x6003_3080,
     0x6003_3084,
     0x6003_3088,
+    0x6003_308c,
+    0x6003_3090,
+    // `wdev_record_rx_linked_list` copies this word and the next, and `0x6003_3318` and
+    // `0x6003_3320`, into the driver's debug record, which only `wdev_dump_rx_linked_list`
+    // prints. Each reads 0 before a write, a guess.
+    0x6003_3094,
+    0x6003_3098,
     0x6003_309c,
     0x6003_30d8,
     0x6003_30dc,
@@ -254,6 +267,8 @@ const WORDS: [u32; 269] = [
     0x6003_32a8,
     0x6003_32ac,
     0x6003_32b8,
+    0x6003_3318,
+    0x6003_3320,
     0x6003_3400,
     0x6003_3404,
     0x6003_3408,
@@ -303,6 +318,11 @@ const WORDS: [u32; 269] = [
     0x6003_4318,
     0x6003_4320,
     0x6003_5000,
+    0x6003_500c,
+    0x6003_5010,
+    0x6003_5014,
+    0x6003_5018,
+    0x6003_501c,
     0x6003_5024,
     0x6003_5028,
     0x6003_502c,
@@ -383,6 +403,68 @@ const FREQ: u32 = 0x6000_e0c4;
 const FREQ_HALF_MHZ: u32 = 0xff;
 const FREQ_START: u32 = 1 << 8;
 
+/// The receive list. A store of an `lldesc_t`'s address to [`RX_BASE`] makes it the next one
+/// the MAC fills, as `mac_rxbuf_init` and `hal_mac_rx_set_base` do. [`RX_NEXT`] reads the next
+/// one's address bits 0 to 19, 0 once the list has run out, and [`RX_LAST`] those of the last
+/// one filled, which `hal_mac_rx_get_last_dscr` puts above the SRAM bits of `0x6003_3c64`. A
+/// store that sets bit 0 of [`RX_RELOAD`], as `hal_mac_rx_set_dscr_reload` does after
+/// `wDev_AppendRxBlocks` has linked more onto the last one, makes the MAC read the last one's
+/// next link again when the list has run out. The bit reads 0 once that is done, at once.
+/// esp32-open-mac names the same four words at the ESP32's MAC base (`main/hardware.c`,
+/// `WIFI_MAC_BITMASK_084`, `WIFI_BASE_RX_DSCR`, `WIFI_NEXT_RX_DSCR`, `WIFI_LAST_RX_DSCR`, commit
+/// 20ce43d). That the S3 keeps them at the same offsets, the bits 0 to 19 and the reload's timing
+/// are guesses from the driver's code.
+const RX_RELOAD: u32 = 0x6003_3084;
+const RX_RELOAD_START: u32 = 1 << 0;
+const RX_BASE: u32 = 0x6003_3088;
+const RX_NEXT: u32 = 0x6003_308c;
+const RX_LAST: u32 = 0x6003_3090;
+const RX_ADDRESS: u32 = 0xf_ffff;
+/// The event `wDev_ProcessFiq` answers with `lmacProcessRxSucData`, one of the two it tests with
+/// `0x401 << 14`. Bit 24 is also the receive bit esp32-open-mac tests on the ESP32
+/// (`cause & 0x1000024`). That the S3's MAC sets bit 24 for a frame received, and not bit 14, is
+/// a guess.
+const EVENT_RX: u32 = 1 << 24;
+
+/// The two address filter slots, `n` 0 and 1, as `hal_mac_set_addr`, `hal_mac_set_bssid` and
+/// `hal_mac_rx_set_policy` write them: the receiver address at [`RA`] `+ 8 n`, its mask at
+/// [`RA_MASK`] `+ 8 n` with the enable bit 16 in the second word, and the BSSID and its mask the
+/// same way at [`BSSID`] and [`BSSID_MASK`]. Slot 0 is the station's interface and slot 1 the
+/// access point's, as `wDev_ProcessRxSucData` reads the match bits. esp32-open-mac's
+/// `esp32-wifi.yaml` and its write-up "RX filter" (2024-09-26) name the same words on the ESP32.
+const RA: u32 = 0x6003_3040;
+const RA_MASK: u32 = 0x6003_3060;
+const BSSID: u32 = 0x6003_3000;
+const BSSID_MASK: u32 = 0x6003_3020;
+const SLOT_ENABLE: u32 = 1 << 16;
+/// The slots `rx_ctrl` word 0 says a frame matched, bit 28 for slot 0, as `wDev_ProcessRxSucData`
+/// tests them; esp32-open-mac's `filter_match`.
+const FILTER_MATCH_SHIFT: u32 = 28;
+
+/// The `rx_ctrl` header before each frame the MAC receives, `wifi_pkt_rx_ctrl_t` of IDF v5.5.5,
+/// `components/esp_wifi/include/local/esp_wifi_types_native.h`, for the S3: 12 words. The MPDU
+/// follows it, then its FCS, as `wDev_ProcessRxSucData` reads the frame at 48 bytes in.
+const RX_CTRL: usize = 48;
+
+/// The TSF timers' control word. A store that sets one of bits 0 to 3 copies timer `n`'s count
+/// into [`TSF_LOW`] and [`TSF_HIGH`], as `hal_get_tsf_time` and `tsf_hal_get_counter_value` set
+/// bit `n`, read the two and clear it. Bits 4 and 5, which `hal_mac_tsf_reset` sets after it
+/// writes 0 to `0x6003_5010` and `0x6003_5014`, load a timer, and the model refuses them by name,
+/// `tsf_load`. The model keeps the two words it loads from as last written.
+const TSF_CONTROL: u32 = 0x6003_500c;
+const TSF_LATCH: u32 = 0xf;
+const TSF_LOAD: u32 = 0x30;
+const TSF_LOW: u32 = 0x6003_5018;
+const TSF_HIGH: u32 = 0x6003_501c;
+
+/// The TSF at `now` in microseconds, as IEEE 802.11-2020 counts it (11.1.3.1). Every timer counts
+/// it from the chip's start, until a load, which the model refuses: the origin, and that the four
+/// timers agree, are guesses. `rx_ctrl`'s `timestamp`, which IDF gives in microseconds, is its
+/// low 32 bits.
+fn tsf(now: Tick) -> u64 {
+    now.0 / (TICK_HZ / 1_000_000)
+}
+
 /// When the frame starts after the store that starts its queue: DIFS, aSIFSTime (10 us) and two
 /// of the long aSlotTime (20 us) of the DSSS and ERP PHYs (IEEE 802.11-2020, 10.3.2.3, 15.4.4
 /// and 18.5.4). The MAC draws no backoff and senses no carrier, a guess.
@@ -406,6 +488,38 @@ pub(crate) struct Radio {
     done: u32,
     /// Each queue's [`TX_STATUS`] word.
     status: [u32; QUEUES as usize],
+    /// The address of the next receive descriptor, 0 once the list has run out.
+    rx_next: u32,
+    /// The address of the last receive descriptor filled, 0 before the first.
+    rx_last: u32,
+    /// When [`EVENT_RX`] rises for the frames received and not yet raised.
+    rx_at: Option<Tick>,
+    /// The TSF the last latch copied, which [`TSF_LOW`] and [`TSF_HIGH`] read.
+    tsf_latched: u64,
+}
+
+/// A frame the radio hears on the channel it is tuned to.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Heard<'a> {
+    /// Without the FCS.
+    pub(crate) mpdu: &'a [u8],
+    pub(crate) rate: Rate,
+    pub(crate) rssi_dbm: i8,
+    pub(crate) noise_dbm: i8,
+}
+
+/// What the radio did with a frame it heard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Received {
+    /// No filter slot took it, or no descriptor was free for it.
+    Missed,
+    /// It wrote `bytes` at each address into SRAM, and acknowledges the frame when `ack`.
+    Kept {
+        writes: Vec<(u32, Vec<u8>)>,
+        ack: bool,
+    },
+    /// It took the frame, which the model can't put in the list, by name.
+    Refused(&'static str),
 }
 
 /// A frame the MAC sent, from its first preamble symbol to the end of its airtime.
@@ -454,6 +568,10 @@ impl Radio {
             events: 0,
             done: 0,
             status: [0; QUEUES as usize],
+            rx_next: 0,
+            rx_last: 0,
+            rx_at: None,
+            tsf_latched: 0,
         }
     }
 
@@ -491,6 +609,11 @@ impl Radio {
             EVENTS => self.events,
             TX_DONE => self.done,
             TX_DONE_CLEAR => 0,
+            RX_RELOAD => word & !RX_RELOAD_START,
+            RX_NEXT => self.rx_next & RX_ADDRESS,
+            RX_LAST => self.rx_last & RX_ADDRESS,
+            TSF_LOW => self.tsf_latched as u32,
+            TSF_HIGH => (self.tsf_latched >> 32) as u32,
             _ => word | status | done,
         })
     }
@@ -514,6 +637,12 @@ impl Radio {
             EVENTS_CLEAR => self.events &= !value,
             TX_DONE_CLEAR => self.done &= !value,
             FREQ if starts(FREQ_START) => self.channel = channel(value & FREQ_HALF_MHZ),
+            RX_BASE => self.rx_next = value,
+            RX_RELOAD if value & RX_RELOAD_START != 0 && self.rx_next == 0 && self.rx_last != 0 => {
+                self.rx_next = read_word(self.rx_last + 8, &byte).unwrap_or(0);
+            }
+            TSF_CONTROL if value & !kept & TSF_LOAD != 0 => return Store::Refused("tsf_load"),
+            TSF_CONTROL if value & !kept & TSF_LATCH != 0 => self.tsf_latched = tsf(now),
             _ => {}
         }
         match Self::queue(addr, PLCP0, 8) {
@@ -601,8 +730,170 @@ impl Radio {
         self.channel
     }
 
-    /// Finishes the frame that is done by `now`.
+    /// Hears `frame`, which ended at `now` on the channel the radio is tuned to. When a filter
+    /// slot takes it and the next receive descriptor is free, the MAC writes its `rx_ctrl`, the
+    /// MPDU and the FCS into that descriptor's buffer, hands the descriptor back and raises
+    /// [`EVENT_RX`] on the next tick. It acknowledges a frame to one station that a slot's
+    /// receiver address took, as esp32-open-mac's write-up says the RA filter does, and only when
+    /// the frame found a descriptor (its `wifi_hardware_task`: "acking will only happen if the
+    /// hardware puts the packet in an RX buffer"). `byte` reads SRAM on the data bus.
+    pub(crate) fn hear(
+        &mut self,
+        now: Tick,
+        frame: Heard<'_>,
+        byte: impl Fn(u32) -> Option<u8>,
+    ) -> Received {
+        self.settle(now);
+        let (slots, ack) = self.filter(frame.mpdu);
+        if slots == 0 {
+            return Received::Missed;
+        }
+        // A descriptor is free while the CPU has handed it to the MAC: bit 31 of its first word,
+        // which `wDev_AppendRxBlocks` sets and the MAC clears, a guess.
+        let descriptor = self.rx_next;
+        let Some(head) = (descriptor != 0)
+            .then(|| read_word(descriptor, &byte))
+            .flatten()
+            .filter(|head| head & OWNER != 0)
+        else {
+            return if descriptor == 0 || read_word(descriptor, &byte).is_some() {
+                Received::Missed
+            } else {
+                Received::Refused("rx_descriptor")
+            };
+        };
+        let (Some(buffer), Some(next)) = (
+            read_word(descriptor + 4, &byte),
+            read_word(descriptor + 8, &byte),
+        ) else {
+            return Received::Refused("rx_descriptor");
+        };
+        let psdu = frame.mpdu.len() + FCS;
+        let length = RX_CTRL + psdu;
+        // The frame fits one descriptor's buffer: `size`, bits 0 to 11. A frame across several
+        // descriptors is not modelled.
+        if length > (head & 0xfff) as usize {
+            return Received::Refused("rx_length");
+        }
+        let Some(code) = rx_rate(frame.rate) else {
+            return Received::Refused("rx_rate");
+        };
+        let mut bytes = Vec::with_capacity(length);
+        for word in self.rx_ctrl(now, frame, code, slots, psdu) {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        bytes.extend_from_slice(frame.mpdu);
+        bytes.extend_from_slice(&fcs(frame.mpdu).to_le_bytes());
+        // `length`, bits 12 to 23, holds what the MAC wrote, the EOF bit 30 marks the descriptor
+        // done, as `wdevProcessRxSucDataAll` tests it, and the owner bit 31 goes back to the CPU.
+        let head = (head & !(OWNER | 0xfff << 12)) | (length as u32) << 12 | EOF;
+        self.rx_last = descriptor;
+        self.rx_next = next;
+        self.rx_at.get_or_insert(Tick(now.0 + 1));
+        Received::Kept {
+            writes: vec![(buffer, bytes), (descriptor, head.to_le_bytes().to_vec())],
+            ack,
+        }
+    }
+
+    /// The slots that take a frame whose MPDU is `mpdu`, as bits, and whether the MAC
+    /// acknowledges it. A slot's receiver address takes a frame whose Address 1 matches it under
+    /// its mask. Its BSSID takes one whose Address 1 is the BSSID or broadcast and whose BSSID is
+    /// the BSSID or broadcast (esp32-open-mac, "RX filter"). The BSSID is Address 3 of a frame
+    /// with neither DS bit, Address 2 of one from the DS and Address 1 of one to it (IEEE
+    /// 802.11-2020, 9.3.2.1). The MAC acknowledges a frame to one station that a slot's
+    /// receiver address took (10.3.2.11). Which bits of `0x6003_30d8` let other frames through,
+    /// and the case esp32-open-mac names for a frame from the DS when both filters run, are not
+    /// modelled: a guess that the stock station needs neither.
+    fn filter(&self, mpdu: &[u8]) -> (u32, bool) {
+        // Frame Control, Duration and Address 1 (9.3.1).
+        let Some(ra) = mpdu.get(4..10) else {
+            return (0, false);
+        };
+        let address = |at: usize| mpdu.get(at..at + 6);
+        let ds = mpdu[1] & 3;
+        let bssid = match (mpdu[0] >> 2) & 3 {
+            // A Management frame's (9.3.3.1) and a Data frame's.
+            0 => address(16),
+            2 => match ds {
+                0 => address(16),
+                1 => Some(ra),
+                2 => address(10),
+                _ => None,
+            },
+            _ => None,
+        };
+        let broadcast = [0xff; 6];
+        let mut slots = 0;
+        let mut ack = false;
+        for slot in 0..2 {
+            let ra_slot = self.mac(RA + 8 * slot, RA_MASK + 8 * slot);
+            let bssid_slot = self.mac(BSSID + 8 * slot, BSSID_MASK + 8 * slot);
+            let to_ra = ra_slot.is_some_and(|(mac, mask)| masked(ra, &mac, &mask));
+            let in_bss = bssid_slot.is_some_and(|(mac, mask)| {
+                (ra == broadcast || masked(ra, &mac, &mask))
+                    && bssid.is_some_and(|b| b == broadcast || masked(b, &mac, &mask))
+            });
+            if to_ra || in_bss {
+                slots |= 1 << slot;
+            }
+            ack |= to_ra && ra[0] & 1 == 0;
+        }
+        (slots, ack)
+    }
+
+    /// The address and mask of the filter whose words start at `at` and `mask`, while its enable
+    /// bit is set.
+    fn mac(&self, at: u32, mask: u32) -> Option<([u8; 6], [u8; 6])> {
+        let high = self.word(mask + 4);
+        if high & SLOT_ENABLE == 0 {
+            return None;
+        }
+        let six = |low: u32, high: u32| {
+            let mut bytes = [0; 6];
+            bytes[..4].copy_from_slice(&low.to_le_bytes());
+            bytes[4..].copy_from_slice(&(high as u16).to_le_bytes());
+            bytes
+        };
+        Some((
+            six(self.word(at), self.word(at + 4)),
+            six(self.word(mask), high),
+        ))
+    }
+
+    /// The `rx_ctrl` words before a frame received at `now` whose PSDU, with the FCS, is `psdu`
+    /// bytes. The MAC fills, as `wDev_ProcessRxSucData` and IDF's field names read them: the
+    /// RSSI, the rate and the signal mode in word 0 with the slots that took it in bits 28 and
+    /// 29; the MCS of an HT frame in word 1; the time in microseconds in word 3; the noise floor
+    /// in word 5; the length with the FCS in word 11, with `rx_state` 0. The driver writes the
+    /// channel into word 2 itself. Every other bit is 0. Which words the MAC fills, and the time's
+    /// origin, which is the chip's start, are guesses.
+    fn rx_ctrl(
+        &self,
+        now: Tick,
+        frame: Heard<'_>,
+        code: RxRate,
+        slots: u32,
+        psdu: usize,
+    ) -> [u32; 12] {
+        let mut words = [0; 12];
+        words[0] = u32::from(frame.rssi_dbm as u8)
+            | code.rate << 8
+            | code.sig_mode << 14
+            | slots << FILTER_MATCH_SHIFT;
+        words[1] = code.mcs;
+        words[3] = tsf(now) as u32;
+        words[5] = u32::from(frame.noise_dbm as u8);
+        words[11] = psdu as u32;
+        words
+    }
+
+    /// Finishes the frame that is done by `now`, and raises the receive event that is due.
     fn settle(&mut self, now: Tick) {
+        if self.rx_at.is_some_and(|at| at <= now) {
+            self.rx_at = None;
+            self.events |= EVENT_RX;
+        }
         let Some(pending) = self.pending.filter(|pending| pending.at <= now) else {
             return;
         };
@@ -625,8 +916,69 @@ impl Radio {
     /// The first tick after `now` at which the MAC interrupt can rise.
     pub(crate) fn next_event(&mut self, now: Tick) -> Option<Tick> {
         self.settle(now);
-        self.pending.map(|pending| pending.at)
+        [self.pending.map(|pending| pending.at), self.rx_at]
+            .into_iter()
+            .flatten()
+            .min()
     }
+}
+
+/// An `lldesc_t`'s owner bit, set while the MAC may fill it, and its EOF bit.
+const OWNER: u32 = 1 << 31;
+const EOF: u32 = 1 << 30;
+
+/// The word at `at` in SRAM, little-endian.
+fn read_word(at: u32, byte: impl Fn(u32) -> Option<u8>) -> Option<u32> {
+    let bytes = [byte(at)?, byte(at + 1)?, byte(at + 2)?, byte(at + 3)?];
+    Some(u32::from_le_bytes(bytes))
+}
+
+/// Whether `a` and `b` agree on every bit `mask` sets.
+fn masked(a: &[u8], b: &[u8; 6], mask: &[u8; 6]) -> bool {
+    a.iter()
+        .zip(b)
+        .zip(mask)
+        .all(|((a, b), m)| (a ^ b) & m == 0)
+}
+
+/// The FCS: the CRC-32 of IEEE 802.11-2020, 9.2.4.8, sent low byte first.
+fn fcs(mpdu: &[u8]) -> u32 {
+    let mut crc = !0u32;
+    for &byte in mpdu {
+        crc ^= u32::from(byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb8_8320 & (crc & 1).wrapping_neg());
+        }
+    }
+    !crc
+}
+
+/// How `rx_ctrl` names a frame's rate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RxRate {
+    /// The `wifi_phy_rate_t` of a non-HT frame, 0 for an HT one.
+    rate: u32,
+    /// 0 for non-HT, 1 for HT.
+    sig_mode: u32,
+    mcs: u32,
+}
+
+/// The `rx_ctrl` rate fields of a frame at `rate`: the code [`rate`] reads from a PLCP1 word, a
+/// guess that the MAC writes the same codes. `None` for a rate [`rate`] does not run.
+fn rx_rate(rate: Rate) -> Option<RxRate> {
+    if let Rate::Ht(mcs) = rate {
+        return Some(RxRate {
+            rate: 0,
+            sig_mode: 1,
+            mcs: u32::from(mcs.index()),
+        });
+    }
+    let code = (0..0x10).find(|&code| self::rate(code) == Some(rate))?;
+    Some(RxRate {
+        rate: code,
+        sig_mode: 0,
+        mcs: 0,
+    })
 }
 
 /// The FCS after the MPDU.
@@ -639,10 +991,7 @@ const DESCRIPTORS: usize = 64;
 /// descriptor's. IDF v5.5.5, `components/esp_rom/include/esp_rom_lldesc.h`. `None` when a word or
 /// a byte lies outside SRAM, or the chain does not end.
 fn gather(first: u32, byte: impl Fn(u32) -> Option<u8>) -> Option<Vec<u8>> {
-    let word = |at: u32| -> Option<u32> {
-        let bytes = [byte(at)?, byte(at + 1)?, byte(at + 2)?, byte(at + 3)?];
-        Some(u32::from_le_bytes(bytes))
-    };
+    let word = |at: u32| read_word(at, &byte);
     let mut bytes = Vec::new();
     let mut at = first;
     for _ in 0..DESCRIPTORS {
@@ -651,7 +1000,7 @@ fn gather(first: u32, byte: impl Fn(u32) -> Option<u8>) -> Option<Vec<u8>> {
         for k in 0..length {
             bytes.push(byte(buffer + k)?);
         }
-        if head & 1 << 30 != 0 {
+        if head & EOF != 0 {
             return Some(bytes);
         }
         at = next;
@@ -795,6 +1144,27 @@ mod tests {
         }
         for addr in [TX_DONE, TX_DONE_CLEAR, FREQ] {
             assert!(Radio::slot(addr).is_some(), "{addr:#x}");
+        }
+        for addr in [
+            RX_RELOAD,
+            RX_BASE,
+            RX_NEXT,
+            RX_LAST,
+            TSF_CONTROL,
+            TSF_LOW,
+            TSF_HIGH,
+        ] {
+            assert!(Radio::slot(addr).is_some(), "{addr:#x}");
+        }
+        for slot in 0..2 {
+            for addr in [RA, RA_MASK, BSSID, BSSID_MASK] {
+                for word in [addr + 8 * slot, addr + 8 * slot + 4] {
+                    // Slot 1's BSSID, which the stock station never sets, reads 0.
+                    if slot == 0 || addr == RA || addr == RA_MASK {
+                        assert!(Radio::slot(word).is_some(), "{word:#x}");
+                    }
+                }
+            }
         }
     }
 
@@ -957,5 +1327,255 @@ mod tests {
         assert_eq!(refused(&mut radio, 49), Store::Sent);
         assert!(write(&mut radio, PLCP0, 0));
         assert_eq!(refused(&mut radio, 49), Store::Refused("tx_busy"));
+    }
+
+    /// SRAM as a map of the bytes written, for the receive path.
+    #[derive(Default)]
+    struct Ram(std::collections::BTreeMap<u32, u8>);
+
+    impl Ram {
+        fn poke(&mut self, at: u32, bytes: &[u8]) {
+            for (k, &byte) in bytes.iter().enumerate() {
+                self.0.insert(at + k as u32, byte);
+            }
+        }
+
+        fn word(&self, at: u32) -> u32 {
+            read_word(at, |at| self.0.get(&at).copied()).unwrap()
+        }
+
+        fn bytes(&self, at: u32, len: usize) -> Vec<u8> {
+            (0..len as u32).map(|k| self.0[&(at + k)]).collect()
+        }
+
+        /// One free descriptor at `at` with a buffer of `size` bytes at `buffer`, linked to
+        /// `next`, as `wDev_AppendRxBlocks` leaves it: the owner bit, `length` = `size`.
+        fn descriptor(&mut self, at: u32, buffer: u32, size: u32, next: u32) {
+            let head = OWNER | size << 12 | size;
+            for (k, word) in [head, buffer, next].into_iter().enumerate() {
+                self.poke(at + 4 * k as u32, &word.to_le_bytes());
+            }
+            self.poke(buffer, &vec![0; size as usize]);
+        }
+
+        fn apply(&mut self, received: Received) -> bool {
+            let Received::Kept { writes, ack } = received else {
+                panic!("{received:?}");
+            };
+            for (at, bytes) in writes {
+                self.poke(at, &bytes);
+            }
+            ack
+        }
+    }
+
+    /// The station's MAC, the access point's, and two descriptors in a list.
+    const STA: [u8; 6] = [0x02, 0, 0, 0, 0, 0x01];
+    const AP: [u8; 6] = [0x02, 0x6f, 0x72, 0x62, 0x65, 0x01];
+    const RX0: u32 = 0x3fca_ffb0;
+    const RX1: u32 = 0x3fca_ffbc;
+    const BUF0: u32 = 0x3fcb_0000;
+    const BUF1: u32 = 0x3fcb_1000;
+    const SIZE: u32 = 1600;
+
+    /// A Management frame of `subtype` from the access point to `ra`, with the access point as
+    /// BSSID and a short body.
+    fn management(subtype: u8, ra: [u8; 6]) -> Vec<u8> {
+        let mut mpdu = vec![subtype << 4, 0, 0, 0];
+        mpdu.extend(ra);
+        mpdu.extend(AP);
+        mpdu.extend(AP);
+        mpdu.extend([0x10, 0x00, 0, 1, 2, 3]);
+        mpdu
+    }
+
+    fn heard(mpdu: &[u8]) -> Heard<'_> {
+        Heard {
+            mpdu,
+            rate: Rate::Dsss1,
+            rssi_dbm: -50,
+            noise_dbm: -95,
+        }
+    }
+
+    /// Writes `mac` and an all-ones mask, enabled, into the filter at `at` and `mask`, as
+    /// `hal_mac_set_addr` and `hal_mac_set_bssid` do.
+    fn filter(radio: &mut Radio, at: u32, mask: u32, mac: [u8; 6]) {
+        assert!(write(
+            radio,
+            at,
+            u32::from_le_bytes(mac[..4].try_into().unwrap())
+        ));
+        assert!(write(
+            radio,
+            at + 4,
+            u32::from(u16::from_le_bytes([mac[4], mac[5]]))
+        ));
+        assert!(write(radio, mask, !0));
+        assert!(write(radio, mask + 4, SLOT_ENABLE | 0xffff));
+    }
+
+    /// A radio scanning as the stock station does: slot 0's receiver address and BSSID are both
+    /// the station's own MAC, and the list holds two free descriptors.
+    fn listening(ram: &mut Ram) -> Radio {
+        let mut radio = Radio::new();
+        assert!(write(&mut radio, EVENTS_ENABLE, 0x19a8_79e0));
+        filter(&mut radio, RA, RA_MASK, STA);
+        filter(&mut radio, BSSID, BSSID_MASK, STA);
+        ram.descriptor(RX0, BUF0, SIZE, RX1);
+        ram.descriptor(RX1, BUF1, SIZE, 0);
+        assert!(write(&mut radio, RX_BASE, RX0));
+        radio
+    }
+
+    #[test]
+    fn the_fcs_is_the_crc_32_of_the_mpdu() {
+        // The CRC-32 check value (ITU-T V.42, IEEE 802.3), on "123456789".
+        assert_eq!(fcs(b"123456789"), 0xcbf4_3926);
+    }
+
+    /// A Probe Response to the station lands in the first descriptor as `rx_ctrl`, the MPDU and
+    /// the FCS. The descriptor is done and the CPU's, the list moves on, the MAC acknowledges the
+    /// frame, and the receive event rises a tick later.
+    #[test]
+    fn a_frame_to_the_station_lands_in_the_next_descriptor() {
+        let mut ram = Ram::default();
+        let mut radio = listening(&mut ram);
+        let mpdu = management(5, STA);
+        let now = Tick(480_000 * 579);
+        let ack = ram.apply(radio.hear(now, heard(&mpdu), |at| ram.0.get(&at).copied()));
+        assert!(ack);
+
+        let length = RX_CTRL as u32 + mpdu.len() as u32 + 4;
+        assert_eq!(ram.word(RX0), EOF | length << 12 | SIZE);
+        let words: Vec<u32> = (0..12).map(|k| ram.word(BUF0 + 4 * k)).collect();
+        // RSSI -50, rate 0 (1 Mb/s), non-HT, slot 0 matched.
+        assert_eq!(words[0], 0x1000_00ce);
+        assert_eq!(words[3], 579_000, "the time in microseconds");
+        assert_eq!(words[5], 0xa1, "a noise floor of -95 dBm");
+        assert_eq!(words[11], mpdu.len() as u32 + 4);
+        for k in [1, 2, 4, 6, 7, 8, 9, 10] {
+            assert_eq!(words[k], 0, "word {k}");
+        }
+        let at = BUF0 + RX_CTRL as u32;
+        assert_eq!(ram.bytes(at, mpdu.len()), mpdu);
+        let fcs = u32::from_le_bytes(ram.bytes(at + mpdu.len() as u32, 4).try_into().unwrap());
+        assert_eq!(fcs, super::fcs(&mpdu));
+
+        assert_eq!(radio.read(now, RX_LAST), Some(RX0 & RX_ADDRESS));
+        assert_eq!(radio.read(now, RX_NEXT), Some(RX1 & RX_ADDRESS));
+        assert_eq!(radio.read(now, EVENTS), Some(0));
+        assert!(!radio.line(now));
+        let next = Tick(now.0 + 1);
+        assert_eq!(radio.next_event(now), Some(next));
+        assert!(radio.line(next));
+        assert_eq!(radio.read(next, EVENTS), Some(EVENT_RX));
+        radio.write(next, EVENTS_CLEAR, EVENT_RX, |_| None);
+        assert!(!radio.line(next));
+    }
+
+    /// A Beacon is to everyone, and its BSSID is the access point's, not the station's own MAC
+    /// that the scan sets as slot 0's BSSID, so no slot takes it. Once slot 0's BSSID is the
+    /// access point's, it does, unacknowledged.
+    #[test]
+    fn a_beacon_lands_only_once_a_slot_has_its_bssid() {
+        let mut ram = Ram::default();
+        let mut radio = listening(&mut ram);
+        let beacon = management(8, [0xff; 6]);
+        let now = Tick(1_000);
+        let byte = |ram: &Ram| {
+            let map = ram.0.clone();
+            move |at| map.get(&at).copied()
+        };
+        assert_eq!(
+            radio.hear(now, heard(&beacon), byte(&ram)),
+            Received::Missed
+        );
+        filter(&mut radio, BSSID, BSSID_MASK, AP);
+        assert!(!ram.apply(radio.hear(now, heard(&beacon), byte(&ram))));
+        assert_eq!(ram.word(BUF0) >> FILTER_MATCH_SHIFT, 1);
+        // A frame to another station is taken by no slot.
+        let other = management(5, [0x02, 0, 0, 0, 0, 0x02]);
+        let mut radio = listening(&mut ram);
+        assert_eq!(radio.hear(now, heard(&other), byte(&ram)), Received::Missed);
+        // Nor is one to the station while slot 0 is off.
+        let mut radio = listening(&mut ram);
+        assert!(write(&mut radio, RA_MASK + 4, 0xffff));
+        assert!(write(&mut radio, BSSID_MASK + 4, 0xffff));
+        let probe = management(5, STA);
+        assert_eq!(radio.hear(now, heard(&probe), byte(&ram)), Received::Missed);
+    }
+
+    /// The list runs out after its last descriptor, and a frame then is lost, unacknowledged.
+    /// Once `wDev_AppendRxBlocks` links a descriptor onto the last one and sets the reload bit,
+    /// the MAC fills it.
+    #[test]
+    fn the_list_runs_out_until_a_reload() {
+        let mut ram = Ram::default();
+        let mut radio = listening(&mut ram);
+        let probe = management(5, STA);
+        let now = Tick(1_000);
+        for _ in 0..2 {
+            let map = ram.0.clone();
+            ram.apply(radio.hear(now, heard(&probe), |at| map.get(&at).copied()));
+        }
+        assert_eq!(radio.read(now, RX_NEXT), Some(0));
+        assert_eq!(radio.read(now, RX_LAST), Some(RX1 & RX_ADDRESS));
+        let map = ram.0.clone();
+        assert_eq!(
+            radio.hear(now, heard(&probe), |at| map.get(&at).copied()),
+            Received::Missed
+        );
+
+        // The driver hands RX0 back and links it after RX1.
+        ram.descriptor(RX0, BUF0, SIZE, 0);
+        ram.poke(RX1 + 8, &RX0.to_le_bytes());
+        let map = ram.0.clone();
+        let reload = radio.write(now, RX_RELOAD, 0x8000_0001, |at| map.get(&at).copied());
+        assert_eq!(reload, Store::Kept);
+        assert_eq!(
+            radio.read(now, RX_RELOAD),
+            Some(0x8000_0000),
+            "reloaded at once"
+        );
+        assert_eq!(radio.read(now, RX_NEXT), Some(RX0 & RX_ADDRESS));
+        let map = ram.0.clone();
+        assert!(ram.apply(radio.hear(now, heard(&probe), |at| map.get(&at).copied())));
+    }
+
+    #[test]
+    fn a_frame_the_model_cannot_receive_is_refused_by_name() {
+        let mut ram = Ram::default();
+        let mut radio = listening(&mut ram);
+        ram.descriptor(RX0, BUF0, 64, RX1);
+        let probe = management(5, STA);
+        let map = ram.0.clone();
+        let byte = |at| map.get(&at).copied();
+        assert_eq!(
+            radio.hear(Tick(0), heard(&probe), byte),
+            Received::Refused("rx_length")
+        );
+        let mut radio = listening(&mut ram);
+        assert!(write(&mut radio, RX_BASE, 0x3fc0_0000));
+        assert_eq!(
+            radio.hear(Tick(0), heard(&probe), |_| None),
+            Received::Refused("rx_descriptor")
+        );
+    }
+
+    /// A latch bit copies the TSF, in microseconds, into the two words, and a load is refused.
+    #[test]
+    fn a_latch_reads_the_tsf_and_a_load_is_refused() {
+        let mut radio = Radio::new();
+        let now = Tick(480 * ((5 << 32) + 7));
+        // `hal_get_tsf_time(0)`: set bit 0, read the two words, clear bit 0.
+        assert_eq!(radio.write(now, TSF_CONTROL, 1, |_| None), Store::Kept);
+        assert_eq!(radio.read(Tick(now.0 + 480), TSF_LOW), Some(7));
+        assert_eq!(radio.read(now, TSF_HIGH), Some(5));
+        assert_eq!(radio.write(now, TSF_CONTROL, 0, |_| None), Store::Kept);
+        assert_eq!(
+            radio.write(now, TSF_CONTROL, 1 << 5, |_| None),
+            Store::Refused("tsf_load")
+        );
     }
 }

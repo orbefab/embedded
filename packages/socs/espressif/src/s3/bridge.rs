@@ -579,9 +579,21 @@ impl Mcu for Bridge {
         }
     }
 
-    /// The radio receives nothing yet: it neither hears a frame nor acknowledges one.
-    fn hear(&mut self, _at: Time, _frame: &AirFrame, _signal: Signal) -> Ack {
-        Ack::None
+    /// The MAC takes a frame its filters pass into its receive list, and acknowledges one to
+    /// the station.
+    fn hear(&mut self, at: Time, frame: &AirFrame, signal: Signal) -> Ack {
+        if !matches!(self.power, Power::Init | Power::On { .. }) {
+            return Ack::None;
+        }
+        let at = self.to_tick(at);
+        let acked = self.chip.hear(
+            at,
+            &frame.mpdu,
+            frame.rate,
+            signal.rssi_dbm,
+            signal.noise_dbm,
+        );
+        if acked { Ack::Acked } else { Ack::None }
     }
 
     fn acked(&mut self, _at: Time, ack: Ack) {
