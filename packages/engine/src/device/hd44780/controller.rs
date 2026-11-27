@@ -1,32 +1,28 @@
-//! An HD44780U 16×2 character LCD behind a PCF8574 I2C backpack.
+//! The Hitachi HD44780U controller (ADE-207-272), shared by the parallel `hd44780` and the
+//! PCF8574 `hd44780_i2c`. Each front end turns its pins into `E` edges with the levels of
+//! `RS`, `R/W` and `DB0..DB7`, and the controller does the rest.
 //!
-//! The PCF8574 is an 8-bit quasi-bidirectional I/O expander on I2C: each write sets the output
-//! latch `P0..P7`, and each read returns the pin levels (`latch & driven` on `D4..D7` while the
-//! HD44780 drives the bus). The common backpack wires `P0 = RS`, `P1 = RW`, `P2 = E`,
-//! `P3 = backlight`, and `P4..P7 = D4..D7`.
-//!
-//! The HD44780U follows Hitachi ADE-207-272:
 //! - Power-on reset (p. 23, Figs. 23–24 pp. 45–46): 8-bit bus (`DL = 1`), 1-line (`N = 0`), 5×8
 //!   font (`F = 0`), display off (`D = 0`, `C = 0`, `B = 0`), entry increment (`I/D = 1`, `S = 0`),
 //!   DDRAM filled with `0x20`, address counter 0, display shift 0. Wait more than 15 ms after `VCC`
 //!   rises to 4.5 V, or more than 40 ms after `VCC` rises to 2.7 V, before the first Function Set;
-//!   writes arriving earlier warn `init_wait` and are dropped as busy.
+//!   writes arriving earlier warn `init_wait`. The internal reset holds the busy flag for 10 ms
+//!   after `VCC` rises to 4.5 V (p. 23), and writes inside it are dropped. Below 4.5 V the sheet
+//!   gives no busy time, so the 40 ms wait is the busy time too.
 //! - 8-bit to 4-bit initialization (Figure 24, p. 46): Function Set with `DL = 1` (`0x30`) keeps
 //!   8-bit mode and resets nibble sync; Function Set with `DL = 0` (`0x20`) enters 4-bit mode.
 //! - Commands and data writes latch on `E`'s falling edge (`RW = 0`). Writes received while busy
 //!   (`BF = 1`) are dropped as on the chip. Clear Display (`0x01`) and Return Home (`0x02`) hold
 //!   busy for 1.52 ms; other instructions and RAM writes hold busy for 37 µs (Table 6, p. 24).
-//! - Reads (`RW = 1`) drive `D4..D7` while `E` is high: `RS = 0` returns busy flag and address
+//! - Reads (`RW = 1`) drive the bus while `E` is high: `RS = 0` returns busy flag and address
 //!   counter even while busy; `RS = 1` returns the byte at the current DDRAM or CGRAM address and
-//!   advances the address counter on the second `E` falling edge.
-//! - Any non-Function-Set operation attempted while in 8-bit mode (where `D0..D3` are not wired on
-//!   a PCF8574 backpack) warns `bus_width` and is dropped. Requesting the 5×10 font (`F = 1`)
-//!   warns `font` and keeps 5×8.
+//!   advances the address counter when the read ends, on the second `E` falling edge in 4-bit
+//!   mode and on the first in 8-bit mode.
+//! - With `DB0..DB3` not wired, as on a PCF8574 backpack, any operation in 8-bit mode other than
+//!   Function Set warns `bus_width` and is dropped. Requesting one line of the 5×10 font (`N = 0`,
+//!   `F = 1`) warns `font` and keeps 5×8. With two lines `F` is don't care (Table 8, p. 29).
 
-use orbe_model::{
-    Ack, Cx, Device, Dir, Draw, Drawn, Drives, Error, I2cTarget, Levels, Panel, Params, Settings,
-    Sha256, Shows, State, Stop, Time, View,
-};
+use orbe_model::{Cx, Drawn, Sha256, Time};
 
 /// Rendered glass dimensions in pixels (320 × 68, aspect ratio 4.71 matching 64.5 × 13.8 mm).
 pub const WIDTH: u16 = 320;
@@ -37,25 +33,12 @@ pub const DDRAM_BYTES: usize = 80;
 pub const CGRAM_BYTES: usize = 64;
 pub const FRAME_BYTES: usize = DDRAM_BYTES + CGRAM_BYTES;
 
-/// Watch order: SCL, SDA, 2.7 V operating supply comparator, and 4.5 V fast-init comparator.
-pub const WATCH_SCL: usize = 0;
-pub const WATCH_SDA: usize = 1;
-pub const WATCH_VDD: usize = 2;
-pub const WATCH_VDD_4V5: usize = 3;
-
-/// It drives no output of its own; the I2C engine drives `SDA`.
-pub const OUTPUTS: usize = 0;
-
-/// PCF8574 backpack pin bits.
-pub const PIN_RS: u8 = 0x01;
-pub const PIN_RW: u8 = 0x02;
-pub const PIN_E: u8 = 0x04;
-pub const PIN_BL: u8 = 0x08;
-
 /// HD44780U power-on reset waits (Hitachi ADE-207-272 Figs. 23–24, pp. 45–46) and instruction
 /// execution times at f_osc = 270 kHz (Table 6, p. 24).
 pub const POWER_ON_WAIT_4V5_PS: u64 = 15_000_000_000; // 15 ms after VCC rises to 4.5 V
 pub const POWER_ON_WAIT_2V7_PS: u64 = 40_000_000_000; // 40 ms after VCC rises to 2.7 V
+/// The internal reset's busy time, 10 ms after VCC rises to 4.5 V (p. 23).
+pub const POWER_ON_BUSY_4V5_PS: u64 = 10_000_000_000;
 pub const CLEAR_BUSY_PS: u64 = 1_520_000_000; // 1.52 ms Clear Display / Return Home
 pub const EXEC_BUSY_PS: u64 = 37_000_000; // 37 us other instructions and RAM access
 
@@ -65,33 +48,14 @@ const FONT: &str = "font";
 const COMMAND: &str = "command";
 const INIT_WAIT: &str = "init_wait";
 
-/// Panel settings, in [`Hd44780I2c::settings`] order.
-pub const SETTINGS: [&str; 8] = [
-    "backlight",
-    "cursor",
-    "blink",
-    "two_line",
-    "shift",
-    "ac",
-    "in_cgram",
-    "powered",
-];
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Supply {
-    logic: f64,
-    backlight: f64,
-    holds_above_v: f64,
-}
-
-/// Active 4-bit read transaction across two `E` pulses.
+/// An active read across one `E` pulse in 8-bit mode, or two in 4-bit mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ReadCycle {
     /// True for data read (`RS = 1`), false for busy flag + address (`RS = 0`).
     data: bool,
-    /// Latched byte for the two nibbles (for busy+AC, bit 7 is refreshed live on read).
+    /// Latched byte (for busy+AC, bit 7 is refreshed live on read).
     byte: u8,
-    /// False while outputting the high nibble, true for the low nibble.
+    /// In 4-bit mode, false while outputting the high nibble, true for the low nibble.
     low_nibble: bool,
 }
 
@@ -101,20 +65,21 @@ struct Run {
     hash: Sha256,
 }
 
+/// An HD44780U: its RAM, its instruction state, its busy flag and its power-on wait.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Hd44780I2c {
+pub struct Controller {
     /// `0..80` is DDRAM (line 0 at `0..40`, line 1 at `40..80`), `80..144` is CGRAM.
     ram: [u8; FRAME_BYTES],
+    /// Whether `DB0..DB3` reach the bus. A PCF8574 backpack wires only `DB4..DB7`.
+    low_lines: bool,
     powered: bool,
     /// Whether `VCC` has reached 4.5 V during the current power cycle.
     reached_4v5: bool,
     /// Power-on reset wait completes at this time (15 ms after 4.5 V or 40 ms after 2.7 V).
     init_ready_at: Time,
-    /// Whether the backpack's backlight jumper is fitted.
-    backlight_jumper: bool,
-    /// PCF8574 8-bit port latch (`0xFF` on power-on).
-    port: u8,
-    /// HD44780 bus interface: false = 8-bit (power-on), true = 4-bit.
+    /// The internal reset's busy flag clears at this time (10 ms after 4.5 V, or the 40 ms wait).
+    reset_busy_until: Time,
+    /// Bus interface: false = 8-bit (power-on), true = 4-bit.
     four_bit: bool,
     /// `N`: false = 1-line, true = 2-line.
     two_line: bool,
@@ -138,163 +103,25 @@ pub struct Hd44780I2c {
     in_cgram: bool,
     /// First nibble captured in 4-bit write mode: `(rs, high_nibble_in_top_4_bits)`.
     high_nibble: Option<(bool, u8)>,
-    /// Active 4-bit read cycle across two `E` pulses.
     read_cycle: Option<ReadCycle>,
     /// Internal operation finishes at this time; before it, `BF = 1`.
     busy_until: Time,
-    /// Open run of RAM writes to report on STOP.
+    /// Open run of RAM writes, reported when the front end closes it.
     run: Option<Run>,
-    supply: Supply,
 }
 
-impl State for Hd44780I2c {}
-
-impl Device for Hd44780I2c {
-    const SHOWS: Shows = Shows::Screen {
-        kind: "hd44780_i2c",
-        width: WIDTH,
-        height: HEIGHT,
-        format: "hd44780",
-    };
-
-    fn new(params: &Params<'_>) -> Result<Hd44780I2c, Error> {
-        let amps = |field| match params.int(field).unwrap_or(0) {
-            nanoamps @ 0.. => Ok(nanoamps as f64 * 1e-9),
-            _ => Err(Error("a draw is 0 or more nanoamperes")),
-        };
-        let holds_above_v = match params.int("holds_above_mv").unwrap_or(1_000) {
-            millivolts @ 1.. => millivolts as f64 * 1e-3,
-            _ => return Err(Error("holds_above_mv is more than 0")),
-        };
-        let backlight_jumper = params.bool("backlight_jumper").unwrap_or(true);
-        let supply = Supply {
-            logic: amps("logic_na")?,
-            backlight: amps("backlight_na")?,
-            holds_above_v,
-        };
-        Ok(Hd44780I2c::reset_state(backlight_jumper, supply))
-    }
-
-    fn run_until(&mut self, _cx: &mut Cx, _limit: Time) -> Option<Stop> {
-        None
-    }
-
-    fn drive(&self) -> Drives {
-        Drives::OFF
-    }
-
-    fn input(&mut self, _cx: &mut Cx, at: Time, levels: Levels) {
-        let powered = levels.high(WATCH_VDD);
-        let fast = powered && levels.high(WATCH_VDD_4V5);
-        if powered != self.powered {
-            *self = Hd44780I2c::reset_state(self.backlight_jumper, self.supply);
-            self.powered = powered;
-            if powered {
-                self.reached_4v5 = fast;
-                let wait = if fast {
-                    POWER_ON_WAIT_4V5_PS
-                } else {
-                    POWER_ON_WAIT_2V7_PS
-                };
-                self.init_ready_at = Time::from_ps(at.as_ps().saturating_add(wait));
-            }
-        } else if powered && fast && !self.reached_4v5 {
-            self.reached_4v5 = true;
-            let fast_ready = Time::from_ps(at.as_ps().saturating_add(POWER_ON_WAIT_4V5_PS));
-            if fast_ready < self.init_ready_at {
-                self.init_ready_at = fast_ready;
-            }
-        }
-    }
-
-    fn draw(&self) -> Draw {
-        let amps = if !self.powered {
-            0.0
-        } else if self.backlight_on() {
-            self.supply.logic + self.supply.backlight
-        } else {
-            self.supply.logic
-        };
-        Draw {
-            amps,
-            holds_above_v: self.supply.holds_above_v,
-        }
-    }
-
-    fn view(&self) -> View<'_> {
-        View::Screen {
-            frame: &self.ram,
-            panel: Panel {
-                on: self.powered && self.display_on,
-                inverted: false,
-                reset: !self.powered,
-                asleep: !self.powered || !self.display_on,
-                settings: self.settings(),
-                registers: 0,
-                backlight: None,
-            },
-        }
-    }
-}
-
-impl I2cTarget for Hd44780I2c {
-    fn awake(&self) -> bool {
-        self.powered
-    }
-
-    fn start(&mut self, cx: &mut Cx, _at: Time, _dir: Dir) {
-        if !self.powered {
-            return;
-        }
-        self.close_run(cx);
-    }
-
-    fn write(&mut self, cx: &mut Cx, at: Time, byte: u8) -> Ack {
-        if !self.powered {
-            return Ack::No;
-        }
-        let prev = self.port;
-        self.port = byte;
-        let prev_e = prev & PIN_E != 0;
-        let e = byte & PIN_E != 0;
-        if !prev_e && e && (byte & PIN_RW != 0) {
-            self.on_read_rise(cx, at, byte);
-        } else if prev_e && !e {
-            self.on_e_fall(cx, at, prev);
-        }
-        Ack::Yes
-    }
-
-    fn read(&mut self, _cx: &mut Cx, at: Time) -> u8 {
-        if !self.powered {
-            return 0xff;
-        }
-        if (self.port & PIN_RW != 0) && (self.port & PIN_E != 0) {
-            let nibble = self.read_nibble(at);
-            // PCF8574 quasi-bidirectional pins: a pin latched low stays low; a pin latched high
-            // reads the external level driven by the HD44780 on D4..D7.
-            (self.port & 0x0f) | (self.port & 0xf0 & (nibble << 4))
-        } else {
-            self.port
-        }
-    }
-
-    fn stop(&mut self, cx: &mut Cx, _at: Time) {
-        self.close_run(cx);
-    }
-}
-
-impl Hd44780I2c {
-    fn reset_state(backlight_jumper: bool, supply: Supply) -> Hd44780I2c {
+impl Controller {
+    /// The controller at power-on reset, unpowered.
+    pub fn new(low_lines: bool) -> Controller {
         let mut ram = [0u8; FRAME_BYTES];
         ram[..DDRAM_BYTES].fill(0x20);
-        Hd44780I2c {
+        Controller {
             ram,
+            low_lines,
             powered: false,
             reached_4v5: false,
             init_ready_at: Time::ZERO,
-            backlight_jumper,
-            port: 0xff,
+            reset_busy_until: Time::ZERO,
             four_bit: false,
             two_line: false,
             display_on: false,
@@ -310,31 +137,80 @@ impl Hd44780I2c {
             read_cycle: None,
             busy_until: Time::ZERO,
             run: None,
-            supply,
         }
     }
 
-    pub fn backlight_on(&self) -> bool {
-        self.powered && self.backlight_jumper && (self.port & PIN_BL != 0)
+    /// The supply at `at`: `powered` once `VCC` is at 2.7 V, `fast` once it is at 4.5 V. A change
+    /// of `powered` resets the controller and returns true.
+    pub fn supply(&mut self, at: Time, powered: bool, fast: bool) -> bool {
+        let fast = powered && fast;
+        if powered != self.powered {
+            *self = Controller::new(self.low_lines);
+            self.powered = powered;
+            if powered {
+                self.reached_4v5 = fast;
+                let wait = if fast {
+                    POWER_ON_WAIT_4V5_PS
+                } else {
+                    POWER_ON_WAIT_2V7_PS
+                };
+                self.init_ready_at = Time::from_ps(at.as_ps().saturating_add(wait));
+                let busy = if fast { POWER_ON_BUSY_4V5_PS } else { wait };
+                self.reset_busy_until = Time::from_ps(at.as_ps().saturating_add(busy));
+            }
+            return true;
+        }
+        if powered && fast && !self.reached_4v5 {
+            self.reached_4v5 = true;
+            let fast_ready = Time::from_ps(at.as_ps().saturating_add(POWER_ON_WAIT_4V5_PS));
+            if fast_ready < self.init_ready_at {
+                self.init_ready_at = fast_ready;
+            }
+            let fast_busy = Time::from_ps(at.as_ps().saturating_add(POWER_ON_BUSY_4V5_PS));
+            if fast_busy < self.reset_busy_until {
+                self.reset_busy_until = fast_busy;
+            }
+        }
+        false
     }
 
-    fn settings(&self) -> Settings {
-        Settings::new(
-            &SETTINGS,
-            [
-                u32::from(self.backlight_on()),
-                u32::from(self.cursor_on),
-                u32::from(self.blink_on),
-                u32::from(self.two_line),
-                u32::from(self.shift),
-                u32::from(self.current_ac()),
-                u32::from(self.in_cgram),
-                u32::from(self.powered),
-            ],
-        )
+    pub fn powered(&self) -> bool {
+        self.powered
     }
 
-    fn current_ac(&self) -> u8 {
+    pub fn ram(&self) -> &[u8; FRAME_BYTES] {
+        &self.ram
+    }
+
+    pub fn four_bit(&self) -> bool {
+        self.four_bit
+    }
+
+    pub fn two_line(&self) -> bool {
+        self.two_line
+    }
+
+    pub fn display_on(&self) -> bool {
+        self.display_on
+    }
+
+    pub fn cursor_on(&self) -> bool {
+        self.cursor_on
+    }
+
+    pub fn blink_on(&self) -> bool {
+        self.blink_on
+    }
+
+    pub fn shift(&self) -> u8 {
+        self.shift
+    }
+
+    pub fn in_cgram(&self) -> bool {
+        self.in_cgram
+    }
+
+    pub fn current_ac(&self) -> u8 {
         if self.in_cgram {
             self.cgram_addr & 0x3f
         } else {
@@ -342,32 +218,38 @@ impl Hd44780I2c {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn ddram_addr(&self) -> u8 {
+        self.ddram_addr
+    }
+
     fn in_power_on_wait(&self, at: Time) -> bool {
         at < self.init_ready_at
     }
 
     fn is_busy(&self, at: Time) -> bool {
-        self.in_power_on_wait(at) || at < self.busy_until
+        at < self.reset_busy_until || at < self.busy_until
     }
 
     fn set_busy(&mut self, at: Time, duration_ps: u64) {
         self.busy_until = Time::from_ps(at.as_ps().saturating_add(duration_ps));
     }
 
-    fn on_read_rise(&mut self, cx: &mut Cx, at: Time, port: u8) {
-        if !self.four_bit {
+    /// `E` rose at `at` with `R/W` high: a read starts, or its second nibble does.
+    pub fn read_rise(&mut self, cx: &mut Cx, at: Time, rs: bool) {
+        if !self.four_bit && !self.low_lines {
             cx.broke(BUS_WIDTH, at);
             self.read_cycle = None;
             return;
         }
-        let data = port & PIN_RS != 0;
-        if let Some(cycle) = self.read_cycle
+        if self.four_bit
+            && let Some(cycle) = self.read_cycle
             && cycle.low_nibble
-            && cycle.data == data
+            && cycle.data == rs
         {
             return;
         }
-        let byte = if data {
+        let byte = if rs {
             if self.is_busy(at) {
                 0x00
             } else {
@@ -377,37 +259,40 @@ impl Hd44780I2c {
             (u8::from(self.is_busy(at)) << 7) | (self.current_ac() & 0x7f)
         };
         self.read_cycle = Some(ReadCycle {
-            data,
+            data: rs,
             byte,
             low_nibble: false,
         });
     }
 
-    fn read_nibble(&self, at: Time) -> u8 {
+    /// What the controller puts on `DB7..DB0` during a read at `at`. In 4-bit mode the nibble is
+    /// on `DB7..DB4` and `DB3..DB0` read high. With no read under way every line reads high.
+    pub fn read_bus(&self, at: Time) -> u8 {
         let Some(cycle) = self.read_cycle else {
-            return 0x0f;
+            return 0xff;
         };
-        let byte = if !cycle.data {
-            (u8::from(self.is_busy(at)) << 7) | (cycle.byte & 0x7f)
-        } else {
+        let byte = if cycle.data {
             cycle.byte
-        };
-        if cycle.low_nibble {
-            byte & 0x0f
         } else {
-            (byte >> 4) & 0x0f
+            (u8::from(self.is_busy(at)) << 7) | (cycle.byte & 0x7f)
+        };
+        if !self.four_bit {
+            byte
+        } else if cycle.low_nibble {
+            (byte << 4) | 0x0f
+        } else {
+            byte | 0x0f
         }
     }
 
-    fn on_e_fall(&mut self, cx: &mut Cx, at: Time, prev: u8) {
-        let rs = prev & PIN_RS != 0;
-        let rw = prev & PIN_RW != 0;
+    /// `E` fell at `at`, with `RS`, `R/W` and `DB7..DB0` as they stood before it.
+    pub fn e_fall(&mut self, cx: &mut Cx, at: Time, rs: bool, rw: bool, bus: u8) {
         if rw {
-            // A real read in 8-bit mode already reported `bus_width` on `E` rising. Clearing the
-            // PCF8574's power-on 0xFF latch (`RW = 1`, `E = 1`) on the first I2C write has no
-            // active read cycle and is not a bus operation.
+            // A read in 8-bit mode on a backpack already reported `bus_width` on `E` rising.
+            // Clearing the PCF8574's power-on 0xFF latch (`RW = 1`, `E = 1`) on the first I2C
+            // write has no active read cycle and is not a bus operation.
             if let Some(mut cycle) = self.read_cycle {
-                if !cycle.low_nibble {
+                if self.four_bit && !cycle.low_nibble {
                     cycle.low_nibble = true;
                     self.read_cycle = Some(cycle);
                 } else {
@@ -426,19 +311,24 @@ impl Hd44780I2c {
 
         if self.in_power_on_wait(at) {
             cx.broke(INIT_WAIT, at);
-            return;
         }
 
         if self.is_busy(at) {
             return;
         }
 
-        let nibble = prev & 0xf0;
+        let nibble = bus & 0xf0;
         if !self.four_bit {
-            // In 8-bit power-on state, only D4..D7 are wired on the backpack. Function Set
-            // (0x20 to switch into 4-bit mode, 0x30 during the 3x init sequence) is valid; any
-            // other instruction or data write needs D0..D3 and stops loudly.
-            if !rs && (nibble & 0xe0 == 0x20) {
+            if self.low_lines {
+                if rs {
+                    self.write_data(at, bus);
+                } else {
+                    self.exec_command(cx, at, bus);
+                }
+            } else if !rs && (nibble & 0xe0 == 0x20) {
+                // With only DB4..DB7 wired, Function Set (0x20 to switch into 4-bit mode, 0x30
+                // during the 3x init sequence) is valid; any other instruction or data write
+                // needs DB0..DB3 and stops loudly.
                 self.exec_function_set(cx, at, nibble);
             } else {
                 cx.broke(BUS_WIDTH, at);
@@ -469,7 +359,8 @@ impl Hd44780I2c {
         let dl_8bit = byte & 0x10 != 0;
         let two_line = byte & 0x08 != 0;
         let font_5x10 = byte & 0x04 != 0;
-        if !dl_8bit && font_5x10 {
+        // Table 8 (p. 29): F is don't care with two lines, which are always 5x8.
+        if font_5x10 && !two_line {
             cx.broke(FONT, at);
         }
         self.four_bit = !dl_8bit;
@@ -629,7 +520,8 @@ impl Hd44780I2c {
         run.hash.update(&[byte]);
     }
 
-    fn close_run(&mut self, cx: &mut Cx) {
+    /// Reports the open run of RAM writes, if any, as one pixel write over the whole glass.
+    pub fn close_run(&mut self, cx: &mut Cx) {
         let Some(run) = self.run.take() else {
             return;
         };
@@ -643,25 +535,5 @@ impl Hd44780I2c {
             bytes: run.bytes,
             hash,
         });
-    }
-
-    #[cfg(test)]
-    pub(crate) fn ddram(&self) -> &[u8] {
-        &self.ram[..DDRAM_BYTES]
-    }
-
-    #[cfg(test)]
-    pub(crate) fn cgram(&self) -> &[u8] {
-        &self.ram[DDRAM_BYTES..]
-    }
-
-    #[cfg(test)]
-    pub(crate) fn is_four_bit(&self) -> bool {
-        self.four_bit
-    }
-
-    #[cfg(test)]
-    pub(crate) fn ddram_addr(&self) -> u8 {
-        self.ddram_addr
     }
 }

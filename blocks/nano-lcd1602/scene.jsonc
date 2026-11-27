@@ -1,0 +1,42 @@
+// The LiquidCrystal HelloWorld circuit: a Nano drives a blue 16x2 parallel LCD in 4-bit mode.
+// The Nano straddles the centre channel over columns 1 to 15. On the a to e side 5V is column 12
+// and GND column 14. On the f to j side D12 is column 1, D11 column 2 and D5 to D2 columns 8 to 11.
+// The LCD's 16-pin header sits in row a, VSS in column 32 to K in column 47, and its body hangs
+// off the board's a edge, over the rails there. A 10 kohm trimmer across the rails sets V0 near
+// 0.9 V, and 220 ohm feeds the backlight from 5V.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-830" },
+    "nano": { "type": "nano-board", "firmware": "build/hello.ino.hex" },
+    "lcd": { "type": "lcd1602" },
+    "trim": { "type": "trimmer-3362p", "resistance": "10k", "position": "0.1" },
+    "r1": { "type": "resistor-axial", "resistance": "220" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "lcd": { "on": { "VSS": "bb.a32" } }, // VDD a33, V0 a34, RS a35, RW a36, E a37, D0 to D7 a38 to a45, A a46, K a47
+    "trim": { "on": { "a": "bb.c22" } }, // wiper in d23, b in c24
+    "r1": { "on": { "a": "bb.e46" } }, // b in e50
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["bb.a12", "bb.W12", { "color": "#d12b2b" }], // 5V to the + rail
+    ["bb.a14", "bb.X13", { "color": "#161616" }], // GND to the - rail
+    ["bb.a22", "bb.X22", { "color": "#161616" }], // trim.a to GND
+    ["bb.a24", "bb.W24", { "color": "#d12b2b" }], // trim.b to 5V
+    ["bb.e23", "bb.e34", { "color": "#2e8b57" }], // the wiper to V0
+    ["bb.c32", "bb.X25", { "color": "#161616" }], // VSS to GND
+    ["bb.c33", "bb.W25", { "color": "#d12b2b" }], // VDD to 5V
+    ["bb.c36", "bb.X23", { "color": "#161616" }], // RW to GND, so the LCD only reads
+    ["bb.d35", "bb.j1", { "color": "#e07b24" }], // RS to D12
+    ["bb.d37", "bb.j2", { "color": "#e0c224" }], // E to D11
+    ["bb.d42", "bb.j8", { "color": "#2b6cd1" }], // D4 to D5
+    ["bb.d43", "bb.j9", { "color": "#2b6cd1" }], // D5 to D4
+    ["bb.d44", "bb.j10", { "color": "#2b6cd1" }], // D6 to D3
+    ["bb.d45", "bb.j11", { "color": "#2b6cd1" }], // D7 to D2
+    ["bb.c50", "bb.W61", { "color": "#d12b2b" }], // r1.b to 5V, so A takes 5V through 220 ohm
+    ["bb.c47", "bb.X61", { "color": "#161616" }], // K to GND
+  ],
+}

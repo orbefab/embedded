@@ -1,14 +1,11 @@
 //! The `hd44780_i2c` 16×2 character LCD with PCF8574 I2C backpack.
 //!
-//! [`model`] implements the PCF8574 8-bit quasi-bidirectional expander driving an HD44780U
-//! controller (Hitachi ADE-207-272). [`glass`] extracts the visible 16×2 text and draws the blue
-//! backlit glass with the A00 5×8 ROM font and CGRAM custom characters. This file holds the
+//! Its device is the PCF8574 front end in [`hd44780`](super::hd44780)'s
+//! [`backpack`](super::hd44780::model::backpack), driving the HD44780U controller the parallel
+//! `hd44780` kind runs too, and [`hd44780`](super::hd44780) draws its glass. This file holds the
 //! netlist struct, its JSON wire type, and its electrical interface (`SDA` open-drain, `SCL` input,
 //! `VCC`/`GND` supply watch and optional current draw).
 
-pub mod font;
-mod glass;
-pub(crate) mod model;
 #[cfg(test)]
 mod tests;
 
@@ -17,6 +14,7 @@ use serde::Deserialize;
 use orbe_model::{Device, Fields, Value as FieldValue};
 
 use super::Row;
+use super::hd44780::model::backpack as model;
 use crate::active::i2c::{Bus, Engine};
 use crate::active::native::Native;
 use crate::active::{Chip, Core, Output, Stage};
@@ -30,9 +28,6 @@ use crate::netlist::json::{
 use crate::netlist::{NetId, PartId, Threshold, Value};
 use crate::ratings::{Ceiling, PinRatings, PinWindow};
 use crate::watch::{Signal, Watch};
-
-pub use glass::{backlight_on, glass, text_visible, visible_lines};
-pub use model::{HEIGHT, WIDTH};
 
 const VCC: usize = 0;
 const GND: usize = 1;

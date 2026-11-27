@@ -1,0 +1,22 @@
+{
+  "part": "hd44780-1602",
+  "units": "mm",
+  "anchors": [
+    {"lead": 1, "node": "lead-1", "also": [], "at": [-32.0, 15.5, 0.0], "axis": [0.0, 0.0, -1.0], "kind": "pad"},
+    {"lead": 2, "node": "lead-2", "also": [], "at": [-29.46, 15.5, 0.0], "axis": [0.0, 0.0, -1.0], "kind": "pad"},
+    {"lead": 3, "node": "lead-3", "also": [], "at": [-26.92, 15.5, 0.0], "axis": [0.0, 0.0, -1.0], "kind": "pad"},
+    {"lead": 4, "node": "lead-4", "also": [], "at": [-24.38, 15.5, 0.0], "axis": [0.0, 0.0, -1.0], "kind": "pad"},
+    {"lead": 5, "node": "lead-5", "also": [], "at": [-21.84, 15.5, 0.0], "axis": [0.0, 0.0, -1.0], "kind": "pad"},
+    {"lead": 6, "node": "lead-6", "also": [], "at": [-19.3, 15.5, 0.0], "axis": [0.0, 0.0, -1.0], "kind": "pad"},
+    {"lead": 7, "node": "lead-7", "also": [], "at": [-16.76, 15.5, 0.0], "axis": [0.0, 0.0, -1.0], "kind": "pad"},
+    {"lead": 8, "node": "lead-8", "also": [], "at": [-14.22, 15.5, 0.0], "axis": [0.0, 0.0, -1.0], "kind": "pad"},
+    {"lead": 9, "node": "lead-9", "also": [], "at": [-11.68, 15.5, 0.0], "axis": [0.0, 0.0, -1.0], "kind": "pad"},
+    {"lead": 10, "node": "lead-10", "also": [], "at": [-9.14, 15.5, 0.0], "axis": [0.0, 0.0, -1.0], "kind": "pad"},
+    {"lead": 11, "node": "lead-11", "also": [], "at": [-6.6, 15.5, 0.0], "axis": [0.0, 0.0, -1.0], "kind": "pad"},
+    {"lead": 12, "node": "lead-12", "also": [], "at": [-4.06, 15.5, 0.0], "axis": [0.0, 0.0, -1.0], "kind": "pad"},
+    {"lead": 13, "node": "lead-13", "also": [], "at": [-1.52, 15.5, 0.0], "axis": [0.0, 0.0, -1.0], "kind": "pad"},
+    {"lead": 14, "node": "lead-14", "also": [], "at": [1.02, 15.5, 0.0], "axis": [0.0, 0.0, -1.0], "kind": "pad"},
+    {"lead": 15, "node": "lead-15", "also": [], "at": [3.56, 15.5, 0.0], "axis": [0.0, 0.0, -1.0], "kind": "pad"},
+    {"lead": 16, "node": "lead-16", "also": [], "at": [6.1, 15.5, 0.0], "axis": [0.0, 0.0, -1.0], "kind": "pad"}
+  ]
+}

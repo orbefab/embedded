@@ -28,7 +28,7 @@ const SCENE_KEYS: &[&str] = &[
 /// BJT's `forward_knee_current`, and a `ws2812`'s `draw`. Format 6 is format 5 plus a
 /// resistor's `ratings.voltage`, the operating window of a sounding drive, a reading
 /// `"of": "angle"` on an `sg90`, a reading `"of": "screen"` and `view.screen`, and pin voltage
-/// `ratings` on `esp32s3`, `ssd1306`, `hd44780_i2c` and `ws2812`. Format 7 is format 6 plus
+/// `ratings` on `esp32s3`, `ssd1306`, `hd44780_i2c`, `hd44780` and `ws2812`. Format 7 is format 6 plus
 /// `steinhart_hart` world curves, a resistor's single-value maximum `ratings.voltage`,
 /// `characterized` on a rating, `ratings.reverse_voltage` on `diode` and `led`, and `ratings` on
 /// `potentiometer` and `switch`.
@@ -58,9 +58,9 @@ const ANGLE_FORMAT: u32 = 6;
 /// The oldest part format whose readings take `"of": "screen"` and whose view takes `screen`.
 const SCREEN_FORMAT: u32 = 6;
 /// The engine kinds that show a screen, which a reading `"of": "screen"` reads.
-const SCREEN_KINDS: [&str; 3] = ["ssd1306", "hd44780_i2c", "max7219"];
+const SCREEN_KINDS: [&str; 4] = ["ssd1306", "hd44780_i2c", "hd44780", "max7219"];
 /// The engine kinds whose glass carries readable character lines and a backlight.
-const TEXT_KINDS: [&str; 1] = ["hd44780_i2c"];
+const TEXT_KINDS: [&str; 2] = ["hd44780_i2c", "hd44780"];
 const WIRE_KINDS: &[&str] = &["jumper", "trace", "contact"];
 /// A live session's stop, investigation 1's 2-hour cap.
 pub const STOP_PS: u64 = 7_200 * 1_000_000_000_000;
@@ -2805,12 +2805,14 @@ fn decode_body(
                 format,
             );
         }
-        if matches!(kind, "esp32s3" | "ssd1306" | "hd44780_i2c" | "ws2812")
-            && let Some(prop) = node
-                .props()
-                .unwrap_or_default()
-                .iter()
-                .find(|prop| prop.key == "ratings")
+        if matches!(
+            kind,
+            "esp32s3" | "ssd1306" | "hd44780_i2c" | "hd44780" | "ws2812"
+        ) && let Some(prop) = node
+            .props()
+            .unwrap_or_default()
+            .iter()
+            .find(|prop| prop.key == "ratings")
         {
             gate(out, kind, "ratings", prop.key_span, VOLTAGE_FORMAT, format);
         }

@@ -4,12 +4,13 @@
 //! On the common white-on-blue negative transmissive 1602 LCD, characters are only visible when
 //! both the display and the backlight are on. When unpowered, the display is off, or the
 //! backlight is off, [`visible_lines`] returns two 16-space blank lines and [`glass`] draws dark
-//! unlit glass.
+//! unlit glass. An `hd44780` also carries `contrast`, whether `VDD - V0` reaches the LCD
+//! voltage floor, and below it the backlit glass shows no characters either.
 
 use crate::display::Panel;
 
 use super::font::{char_for, glyph};
-use super::model::{DDRAM_BYTES, FRAME_BYTES, HEIGHT, WIDTH};
+use super::model::controller::{DDRAM_BYTES, FRAME_BYTES, HEIGHT, WIDTH};
 
 const COLS: usize = 16;
 const ROWS: usize = 2;
@@ -37,18 +38,26 @@ fn setting(panel: &Panel, name: &str) -> u8 {
     panel
         .settings
         .get(name)
-        .unwrap_or_else(|| panic!("an hd44780_i2c carries `{name}`")) as u8
+        .unwrap_or_else(|| panic!("an hd44780 carries `{name}`")) as u8
 }
 
-/// Whether the backlight is lit (powered, jumper fitted, and PCF8574 P3 high).
+/// Whether the backlight is lit: on an `hd44780_i2c`, powered, jumper fitted, and PCF8574 P3
+/// high, and on an `hd44780`, powered with the backlight's `A - K` at its lit voltage.
 pub fn backlight_on(panel: &Panel) -> bool {
     setting(panel, "powered") != 0 && setting(panel, "backlight") != 0
 }
 
-/// Whether characters are visible on the blue transmissive glass: powered, display on, and
-/// backlight on.
+/// Whether characters are visible on the blue transmissive glass: powered, display on,
+/// backlight on, and on an `hd44780` the contrast voltage in range.
 pub fn text_visible(panel: &Panel) -> bool {
-    panel.flags.display_on && !panel.flags.reset && !panel.flags.sleep && backlight_on(panel)
+    panel.flags.display_on
+        && !panel.flags.reset
+        && !panel.flags.sleep
+        && backlight_on(panel)
+        && panel
+            .settings
+            .get("contrast")
+            .is_none_or(|contrast| contrast != 0)
 }
 
 /// The two visible 16-character lines on the glass after display shift.
@@ -58,7 +67,7 @@ pub fn visible_lines(panel: &Panel, frame: &[u8]) -> [String; 2] {
     assert_eq!(
         frame.len(),
         FRAME_BYTES,
-        "an hd44780_i2c frame is 144 bytes (80 DDRAM + 64 CGRAM)"
+        "an hd44780 frame is 144 bytes (80 DDRAM + 64 CGRAM)"
     );
     if !text_visible(panel) {
         return [" ".repeat(COLS), " ".repeat(COLS)];
@@ -85,7 +94,7 @@ pub fn glass(panel: &Panel, frame: &[u8]) -> Vec<u8> {
     assert_eq!(
         frame.len(),
         FRAME_BYTES,
-        "an hd44780_i2c frame is 144 bytes (80 DDRAM + 64 CGRAM)"
+        "an hd44780 frame is 144 bytes (80 DDRAM + 64 CGRAM)"
     );
     let width = usize::from(WIDTH);
     let height = usize::from(HEIGHT);

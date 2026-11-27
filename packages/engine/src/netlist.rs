@@ -22,7 +22,7 @@ use crate::world::{Quantity, World};
 
 use crate::chip::Ne555;
 use crate::device::{
-    Bmp280, Cst816, Declared, Dht22, Events, Hd44780I2c, Max7219, PulsesReplay, Row, Sg90,
+    Bmp280, Cst816, Declared, Dht22, Events, Hd44780, Hd44780I2c, Max7219, PulsesReplay, Row, Sg90,
     SpiReplay, Ssd1306, St77916, Ws2812,
 };
 use crate::mcu::{Atmega328p, Esp32s3};
@@ -314,6 +314,7 @@ impl Model {
             Chip::Hd44780I2c(_) => {
                 Some((&crate::device::hd44780_i2c::ROW, &crate::device::NO_EVENTS))
             }
+            Chip::Hd44780(_) => Some((&crate::device::hd44780::ROW, &crate::device::NO_EVENTS)),
             Chip::SpiReplay(_) => {
                 Some((&crate::device::spi_replay::ROW, &crate::device::NO_EVENTS))
             }
@@ -520,6 +521,7 @@ pub enum Chip {
     St77916(Box<St77916>),
     Ssd1306(Box<Ssd1306>),
     Hd44780I2c(Box<Hd44780I2c>),
+    Hd44780(Box<Hd44780>),
     Cst816(Box<Cst816>),
     Dht22(Box<Dht22>),
     Bmp280(Box<Bmp280>),

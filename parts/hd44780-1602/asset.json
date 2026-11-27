@@ -1,0 +1,44 @@
+{
+  "part": "hd44780-1602",
+  "source": {
+    "script": "model.py",
+    "sha256": "6d5dfb47a64947f8b444e66764ed78e9c4ddee25d7300a7e796a256e6ecd9bc9",
+    "bytes": 2885
+  },
+  "files": {
+    "hd44780-1602.glb": {
+      "sha256": "ae6ef37a9024190871f39439b453c62cf669395a8811b1043bb3cf1775aebb75",
+      "bytes": 15084
+    },
+    "hd44780-1602.anchors.json": {
+      "sha256": "93f0369d3fccc8dfb2ad7872fb7f9c598e89f739ef369e3e2ee71a79dd6dc00c",
+      "bytes": 1905
+    }
+  },
+  "box": {
+    "min": [-35.050001, -12.9, 0],
+    "max": [36.150001, 16.35, 7]
+  },
+  "kept_nodes": ["glass"],
+  "draw_calls": 3,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 16,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "bezel",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": ["glass"]
+    },
+    "merge": {
+      "primitives_in": 18,
+      "primitives_out": 3
+    }
+  }
+}

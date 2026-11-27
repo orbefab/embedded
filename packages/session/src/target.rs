@@ -185,9 +185,11 @@ pub(crate) fn backlight_reading(part: &MapPart) -> Option<&str> {
         .map(|(name, _)| name.as_str())
 }
 
-/// The one character-LCD engine part (`hd44780_i2c`) at `path` or among its descendants.
+/// The one character-LCD engine part (`hd44780` or `hd44780_i2c`) at `path` or among its
+/// descendants.
 pub(crate) fn lcd_engine(map: &RefMap, path: &str) -> Result<String, Error> {
     let mut found = Vec::new();
+    collect_kind(map, path, "hd44780", &mut found);
     collect_kind(map, path, "hd44780_i2c", &mut found);
     match found.as_slice() {
         [one] => Ok(one.clone()),

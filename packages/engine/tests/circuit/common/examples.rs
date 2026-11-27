@@ -83,6 +83,7 @@ pub fn runs_a_core(netlist: &Netlist) -> bool {
             | Chip::St77916(_)
             | Chip::Ssd1306(_)
             | Chip::Hd44780I2c(_)
+            | Chip::Hd44780(_)
             | Chip::Cst816(_)
             | Chip::Esp32s3(_)
             | Chip::Ws2812(_)

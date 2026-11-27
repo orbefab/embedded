@@ -1293,7 +1293,7 @@ impl Open {
         if count == 0 { 0.0 } else { sum / count as f64 }
     }
 
-    /// The visible 16×2 character lines of an `hd44780_i2c` engine part.
+    /// The visible 16×2 character lines of an `hd44780` or `hd44780_i2c` engine part.
     pub(super) fn lcd_text(&self, engine: &str) -> LcdText {
         let display = self
             .engine
@@ -1301,9 +1301,9 @@ impl Open {
             .expect("a part with a reading of text is a character LCD");
         let panel = display.panel();
         let frame = display.image();
-        let lines = orbe_engine::device::hd44780_i2c::visible_lines(&panel, &frame);
-        let backlight = orbe_engine::device::hd44780_i2c::backlight_on(&panel);
-        let on = orbe_engine::device::hd44780_i2c::text_visible(&panel);
+        let lines = orbe_engine::device::hd44780::visible_lines(&panel, &frame);
+        let backlight = orbe_engine::device::hd44780::backlight_on(&panel);
+        let on = orbe_engine::device::hd44780::text_visible(&panel);
         LcdText {
             lines,
             on,
@@ -1311,13 +1311,13 @@ impl Open {
         }
     }
 
-    /// Whether an `hd44780_i2c` engine part's backlight is lit.
+    /// Whether an `hd44780` or `hd44780_i2c` engine part's backlight is lit.
     pub(super) fn lcd_backlight(&self, engine: &str) -> bool {
         let display = self
             .engine
             .display(&engine_name(engine))
             .expect("a part with a reading of backlight is a character LCD");
-        orbe_engine::device::hd44780_i2c::backlight_on(&display.panel())
+        orbe_engine::device::hd44780::backlight_on(&display.panel())
     }
 
     /// A part's own reading: its 7-segment digit, character LCD text, screen glass, or its light

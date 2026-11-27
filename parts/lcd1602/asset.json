@@ -1,0 +1,46 @@
+{
+  "part": "lcd1602",
+  "source": {
+    "script": "model.py",
+    "sha256": "c952f373fc7cc34625491675d003d92818887c1386c4402d9cf152adc1aec05c",
+    "bytes": 1772
+  },
+  "files": {
+    "lcd1602.glb": {
+      "sha256": "ca3165f82ba979de34b9fc851952997e4959214913a2dc0c7eb12890bd780f07",
+      "bytes": 104008
+    }
+  },
+  "box": {
+    "min": [-39.999999, -17.999999, 2.54],
+    "max": [39.999999, 17.999999, 4.14]
+  },
+  "kept_nodes": [],
+  "draw_calls": 1,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 0,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "pcb",
+      "z_mm": 2.54
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 1,
+      "primitives_out": 1
+    },
+    "composition": {
+      "children": 4,
+      "lowest_node": "bias/(unnamed)",
+      "z_mm": 2.06,
+      "draw_calls": 42
+    }
+  }
+}

@@ -14,7 +14,8 @@
 # Adafruit_SSD1306.h also links Adafruit SSD1306, Adafruit GFX and the runtime's SPI library,
 # and compiles against Adafruit BusIO's headers, which Adafruit_GFX.h includes. A sketch that
 # includes Adafruit_BMP280.h also links that library, Adafruit BusIO, Adafruit Unified Sensor
-# and the runtime's SPI library. A clock other than 16 MHz gets its own core and Wire archives.
+# and the runtime's SPI library. A sketch that includes LiquidCrystal.h or LiquidCrystal_I2C.h
+# also links that library, pinned below. A clock other than 16 MHz gets its own core and Wire archives.
 # A build of the engine reads only the committed hex.
 #
 # Usage: packages/engine/scripts/sketches.sh TOOLS_DIR [DOWNLOAD_DIR]
@@ -52,6 +53,8 @@ md_max72xx_url=https://github.com/MajicDesigns/MD_MAX72XX/archive/refs/tags/v3.5
 md_max72xx_sha256=27d2cb684d842cb358487fc4f0843c00fd7cacf7709a527fb76953c6f8204cab
 md_parola_url=https://github.com/MajicDesigns/MD_Parola/archive/refs/tags/v3.7.7.tar.gz
 md_parola_sha256=ba18aed1123b44fbc60995056a5d9bec9bc864df9c4298f8eb0f741aa4f3808a
+liquidcrystal_url=https://github.com/arduino-libraries/LiquidCrystal/archive/refs/tags/1.0.7.tar.gz
+liquidcrystal_sha256=3641e8f4175ee8c66bbbc7e93961cd8ef333b9cd3689aa83c2512a23ba68200c
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
   echo "usage: $0 TOOLS_DIR [DOWNLOAD_DIR]" >&2
@@ -100,6 +103,7 @@ unpack arduino-keypad-3.1.1 "$keypad_url" "$keypad_sha256"
 unpack ledcontrol-1.0.6 "$ledcontrol_url" "$ledcontrol_sha256"
 unpack md-max72xx-3.5.1 "$md_max72xx_url" "$md_max72xx_sha256"
 unpack md-parola-3.7.7 "$md_parola_url" "$md_parola_sha256"
+unpack arduino-liquidcrystal-1.0.7 "$liquidcrystal_url" "$liquidcrystal_sha256"
 
 bin=$tools/avr-gcc-7.3.0/avr/bin
 runtime=$tools/avr-runtime-1.8.6/avr-1.8.6
@@ -116,6 +120,7 @@ keypad=$tools/arduino-keypad-3.1.1/Keypad-3.1.1/src
 ledcontrol=$tools/ledcontrol-1.0.6/LedControl-1.0.6/src
 md_max72xx=$tools/md-max72xx-3.5.1/MD_MAX72XX-3.5.1/src
 md_parola=$tools/md-parola-3.7.7/MD_Parola-3.7.7/src
+liquidcrystal=$tools/arduino-liquidcrystal-1.0.7/LiquidCrystal-1.0.7/src
 core=$runtime/cores/arduino
 target=(-mmcu=atmega328p -DF_CPU=16000000L -I"$core" -I"$runtime/variants/standard")
 c_flags=(-c -g -Os -w -std=gnu11 -ffunction-sections -fdata-sections -flto -fno-fat-lto-objects)
@@ -285,6 +290,12 @@ for dir in "$repo"/packages/engine/tests/firmware/sketch/*/ "$repo"/blocks/*/fir
       archives+=("$obj")
     done
     library+=(-I"$md_parola")
+  fi
+  if grep -q '^#include <LiquidCrystal.h>' "$dir/$name.ino"; then
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" -I"$liquidcrystal" \
+      "$liquidcrystal/LiquidCrystal.cpp" -o "$work/$name-liquidcrystal.o"
+    library+=(-I"$liquidcrystal")
+    archives+=("$work/$name-liquidcrystal.o")
   fi
   "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${library[@]}" -x c++ -include Arduino.h \
     "$dir/$name.ino" -o "$work/$name.o"

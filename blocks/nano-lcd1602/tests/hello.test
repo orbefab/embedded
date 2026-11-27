@@ -1,0 +1,14 @@
+# The stock HelloWorld prints its greeting and counts seconds on the second line.
+open
+step 1500ms
+expect @lcd.backlight lit
+expect @lcd.text line 0 "hello, world!"
+expect @lcd.text line 1 "1"
+step 1000ms
+expect @lcd.text line 1 "2"
+# The LiquidCrystal constructor runs a begin of its own about 1 ms after power-on, inside the
+# HD44780U's 15 ms reset wait, and the controller drops those writes. The begin in setup()
+# starts the controller again, so the glass is right. The simulated Nano runs its sketch from
+# power-on, without the 65 ms start-up its fuses give a real one, so on the bench this write
+# lands after the wait.
+expect diagnostics contains "breaking rule init_wait"

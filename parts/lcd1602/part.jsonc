@@ -1,0 +1,103 @@
+// The common blue 16x2 parallel character LCD module (1602A) with a 16-pin male header, as
+// starter kits ship it. Seated frame: z = 0 is the header plastic's underside, so the board's
+// underside is at z = 2.54 and its top at z = 4.14. Board, holes and header positions are the
+// Vishay LCD-016N002B drawing (Document Number 37295, p. 2), centred on the origin with the
+// header along the top edge. The pins are the sheet's p. 2 order. The HD44780U runs on its own
+// bus, 4-bit or 8-bit, as LiquidCrystal drives it. A and K are the backlight LED alone: the
+// sheet's A pin takes 4.2 V for the LED with its on-board resistor at 0 ohm, so the circuit
+// brings its own series resistor. V0 is the far end of the controller's bias ladder, which
+// holds an open V0 at VDD, so the glass stays blank until V0 is brought down toward VSS.
+{
+  "format": 6,
+  "part": "lcd1602",
+  "version": "0.1.0",
+  "title": "LCD display module, 16 x 2 blue, HD44780, parallel",
+  "summary": "Blue 16 x 2 character LCD module with an HD44780U on a 4-bit or 8-bit parallel bus and a 16-pin header. LiquidCrystal drives it.",
+  "tags": ["lcd", "1602", "16x2", "hd44780", "parallel", "liquidcrystal", "display", "screen", "character-lcd"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Hitachi HD44780U (ADE-207-272)": "https://www.sparkfun.com/datasheets/LCD/HD44780.pdf",
+    "Vishay LCD-016N002B, Document Number 37295": "https://www.vishay.com/docs/37295/lcd016n002b.pdf",
+  },
+  "real": {
+    "generic": true,
+    "maker": "Vishay",
+    "number": "LCD-016N002B",
+    "datasheet": "Vishay LCD-016N002B, Document Number 37295",
+  },
+  "uses": {
+    "hd44780-1602": "0.1.0",
+    "lcd1602-backlight": "0.1.0",
+    "pin-header-1x16": "0.1.0",
+    "resistor-0603": "0.2.0",
+  },
+  "parts": {
+    "j": { "type": "pin-header-1x16" },
+    "display": { "type": "hd44780-1602" },
+    "led": { "type": "lcd1602-backlight" },
+    "bias": {
+      "type": "resistor-0603",
+      "resistance": {
+        "value": 10000,
+        "unit": "ohm",
+        "source": { "closed_form": { "note": "stands in for the bias ladder from VDD to V0, the five equal resistors of Hitachi HD44780U Figure 21 (p. 37), whose value neither sheet gives" } },
+      },
+    },
+  },
+  "wires": [
+    ["j.1", "display.VSS", { "kind": "trace" }],
+    ["j.2", "display.VDD", { "kind": "trace" }],
+    ["j.3", "display.V0", { "kind": "trace" }],
+    ["j.4", "display.RS", { "kind": "trace" }],
+    ["j.5", "display.RW", { "kind": "trace" }],
+    ["j.6", "display.E", { "kind": "trace" }],
+    ["j.7", "display.D0", { "kind": "trace" }],
+    ["j.8", "display.D1", { "kind": "trace" }],
+    ["j.9", "display.D2", { "kind": "trace" }],
+    ["j.10", "display.D3", { "kind": "trace" }],
+    ["j.11", "display.D4", { "kind": "trace" }],
+    ["j.12", "display.D5", { "kind": "trace" }],
+    ["j.13", "display.D6", { "kind": "trace" }],
+    ["j.14", "display.D7", { "kind": "trace" }],
+    ["j.15", "display.A", { "kind": "trace" }],
+    ["j.16", "display.K", { "kind": "trace" }],
+    ["j.15", "led.anode", { "kind": "trace" }],
+    ["j.16", "led.cathode", { "kind": "trace" }],
+    ["j.2", "bias.a", { "kind": "trace" }],
+    ["j.3", "bias.b", { "kind": "trace" }],
+  ],
+  "layout": {
+    "j": { "at": [-12.95, 15.5, 0] },
+    "display": { "at": [0, 0, 4.14] },
+    // Under the bezel, out of sight, where the module's backlight LEDs sit.
+    "led": { "at": [-33.5, -0.3, 4.14] },
+    // Underside: a half turn about X hangs it from the board's underside.
+    "bias": { "at": [-20.0, 6.0, 2.54], "rotate": [180, 0, 0] },
+  },
+  "pins": {
+    "VSS": "j.1", "VDD": "j.2", "V0": "j.3", "RS": "j.4", "RW": "j.5", "E": "j.6",
+    "D0": "j.7", "D1": "j.8", "D2": "j.9", "D3": "j.10", "D4": "j.11", "D5": "j.12", "D6": "j.13", "D7": "j.14",
+    "A": "j.15", "K": "j.16",
+  },
+  "readings": {
+    "text": { "of": "text" },
+    "backlight": { "of": "backlight" },
+  },
+  "not_simulated": [
+    {
+      "what": "the bias ladder's resistance",
+      "pins": ["V0"],
+      "why": "The controller makes its LCD levels on a ladder of five equal resistors from VDD to V0 (Hitachi Figure 21, p. 37), so an open V0 sits at VDD and the glass is blank. Neither sheet gives the ladder's value, so 10 kohm stands in for it, and a contrast pot's wiper on V0 reads a little higher than the pot alone would give.",
+    },
+    {
+      "what": "the module's supply range",
+      "pins": ["VDD"],
+      "why": "Vishay rates the module 4.7 V to 5.3 V (p. 1). The controller runs from 2.7 V and the glass needs VDD - V0 of at least 3.0 V, and a supply between 2.7 V and 4.7 V does not warn. Over 7.0 V warns rating.voltage.",
+    },
+    {
+      "what": "blue transmissive visibility",
+      "pins": ["A", "K"],
+      "why": "On a blue negative transmissive 1602 LCD, characters are only visible while the backlight is lit. `@<lcd>.text` is blank while the display is off, the backlight is dark, or VDD - V0 is under 3.0 V.",
+    },
+  ],
+}
