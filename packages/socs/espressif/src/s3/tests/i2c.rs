@@ -96,14 +96,14 @@ fn end_cmd() -> u32 {
 
 fn poke(chip: &mut Esp32s3, offset: u32, value: u32) {
     let soc = &mut chip.soc;
-    soc.i2c
+    soc.i2c[0]
         .write(Tick(0), offset, value, &mut soc.gpio)
         .unwrap();
 }
 
 fn word(chip: &mut Esp32s3, offset: u32) -> u32 {
     let soc = &mut chip.soc;
-    soc.i2c
+    soc.i2c[0]
         .read(Tick(0), offset, &mut soc.gpio)
         .expect("a kept register")
 }
@@ -1109,11 +1109,11 @@ fn a_refused_trans_start_writes_nothing() {
         one_byte(&mut chip);
         poke(&mut chip, SCL_LOW, 99);
         prepare(&mut chip);
-        let before = chip.soc.i2c.clone();
+        let before = chip.soc.i2c[0].clone();
         let soc = &mut chip.soc;
-        let refused = soc.i2c.write(Tick(0), CTR, value, &mut soc.gpio);
+        let refused = soc.i2c[0].write(Tick(0), CTR, value, &mut soc.gpio);
         assert_eq!(refused, Err(setting));
-        assert!(chip.soc.i2c == before, "{setting} wrote to I2C0");
+        assert!(chip.soc.i2c[0] == before, "{setting} wrote to I2C0");
     };
     refuse(GO | 1 << 9, "arbitration", |_| {});
     refuse(GO, "timing", |chip| poke(chip, SDA_HOLD, 200));
@@ -1324,10 +1324,7 @@ fn each_refusal_names_its_setting() {
         let mut program = Program::new(&[I2C1, 0]);
         program.l32r(2, 0).l32r(3, 1).rri8(6, 3, 2, 0).raw(&LOOP);
         let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD]);
-        assert_eq!(
-            run_refusal(&mut chip),
-            ("I2C1", "the second I2C port, Wire1")
-        );
+        assert_eq!(run_refusal(&mut chip), ("I2C1", "clock_off"));
     }
 
     plain(
@@ -1624,7 +1621,7 @@ fn a_read_past_the_fifo_runs_on_across_an_end() {
     assert_eq!(edges, wire.stop(fall));
     for k in 32..40 {
         assert_eq!(word(&mut chip, DATA), u32::from(sent(k)), "byte {k}");
-        chip.soc.i2c.take();
+        chip.soc.i2c[0].take();
     }
     assert_eq!(word(&mut chip, SR) >> 8 & 0x3f, 0, "the FIFO is empty");
     assert_eq!(word(&mut chip, INT_RAW) & TRANS_COMPLETE, TRANS_COMPLETE);
@@ -1912,7 +1909,7 @@ fn a_strobe_during_an_acked_stop_or_non_nack_stop_is_refused_as_busy_write() {
         };
         let soc = &mut chip.soc;
         assert_eq!(
-            soc.i2c.write(stop_rise, CTR, strobe, &mut soc.gpio),
+            soc.i2c[0].write(stop_rise, CTR, strobe, &mut soc.gpio),
             Err("busy_write"),
             "direct store at stop SCL rise, strobe={strobe:#x}"
         );
@@ -2001,5 +1998,332 @@ fn a_strobe_during_an_acked_stop_or_non_nack_stop_is_refused_as_busy_write() {
             ("I2C0", "busy_write"),
             "TRANS_START during NACK stop without COMD0 = STOP"
         );
+    }
+}
+
+const SCL1_PAD: u8 = 18;
+const SDA1_PAD: u8 = 17;
+const SIG1_SCL: u32 = 91;
+const SIG1_SDA: u32 = 92;
+
+fn poke_port(chip: &mut Esp32s3, port: usize, offset: u32, value: u32) {
+    let soc = &mut chip.soc;
+    soc.i2c[port]
+        .write(Tick(0), offset, value, &mut soc.gpio)
+        .unwrap();
+}
+
+fn word_port(chip: &mut Esp32s3, port: usize, offset: u32) -> u32 {
+    let soc = &mut chip.soc;
+    soc.i2c[port]
+        .read(Tick(0), offset, &mut soc.gpio)
+        .expect("a kept register")
+}
+
+fn arm_i2c1(chip: &mut Esp32s3) {
+    chip.soc
+        .restore(SYSTEM + 0x18, 0xf9c1_e06f | 1 << 7 | 1 << 18);
+    for (pad, signal) in [(SCL1_PAD, SIG1_SCL), (SDA1_PAD, SIG1_SDA)] {
+        chip.soc
+            .gpio
+            .write_io_mux(0x4 + 4 * u32::from(pad), GPIO_FUNC | FUN_IE | FUN_WPU)
+            .unwrap();
+        chip.soc
+            .gpio
+            .write(0x74 + 4 * u32::from(pad), PAD_DRIVER)
+            .unwrap();
+        chip.soc
+            .gpio
+            .write(0x554 + 4 * u32::from(pad), signal)
+            .unwrap();
+        chip.soc
+            .gpio
+            .write(0x154 + 4 * signal, SIG_IN_SEL | u32::from(pad))
+            .unwrap();
+    }
+    chip.input(Tick(0), [(SCL1_PAD, true), (SDA1_PAD, true)]);
+    for (offset, value) in [
+        (SCL_LOW, (LOW - 1) as u32),
+        (SDA_HOLD, (SDA_HOLD_LEN - 1) as u32),
+        (SDA_SAMPLE, (SDA_SAMPLE_LEN - 1) as u32),
+        (SCL_HIGH, (WAIT_HIGH << 9 | HIGH) as u32),
+        (SCL_START_HOLD, (SETUP - 1) as u32),
+        (SCL_RSTART_SETUP, (SETUP - 1) as u32),
+        (SCL_STOP_HOLD, (SETUP - 1) as u32),
+        (SCL_STOP_SETUP, (SETUP - 1) as u32),
+        (TO, 10 | 1 << 5),
+        (CLK_CONF, SCLK_ACTIVE),
+    ] {
+        poke_port(chip, 1, offset, value);
+    }
+    poke_port(chip, 1, CTR, MODE | CONF_UPGATE);
+}
+
+fn play_on(
+    chip: &mut Esp32s3,
+    scl_pad: u8,
+    sda_pad: u8,
+    through: u64,
+    step: u64,
+    mut hold_sda: impl FnMut(u32) -> bool,
+) -> Result<Vec<(u64, u8, bool)>, Halt> {
+    let mut wire = [true, true];
+    let mut rises = 0u32;
+    let mut edges = Vec::new();
+    let mut limit = 0u64;
+    while limit < through {
+        limit = (limit + step).min(through);
+        loop {
+            match chip.run_until(Tick(limit)) {
+                Some(Halt::Moved(at)) => {
+                    let drives = [chip.drive(scl_pad), chip.drive(sda_pad)];
+                    if !matches!(drives[0], PadDrive::Low) && !wire[0] {
+                        rises += 1;
+                    }
+                    let hold = [false, hold_sda(rises)];
+                    let mut changed = Vec::new();
+                    for (k, pad) in [scl_pad, sda_pad].into_iter().enumerate() {
+                        let level = !hold[k] && !matches!(drives[k], PadDrive::Low);
+                        if level != wire[k] {
+                            wire[k] = level;
+                            edges.push((at.0, pad, level));
+                            changed.push((pad, level));
+                        }
+                    }
+                    chip.input(at, changed);
+                }
+                Some(Halt::Change { .. }) => {}
+                Some(halt) => return Err(halt),
+                None => break,
+            }
+        }
+    }
+    Ok(edges)
+}
+
+/// I2C1 runs the same master state machine as I2C0 on signals 91 and 92, raises interrupt source
+/// 43, gates on SYSTEM word 0 bit 18, and names `I2C1` in every refusal.
+#[test]
+fn i2c1_runs_write_read_interrupt_and_refusals() {
+    let make = || {
+        let mut program = Program::new(&[I2C1, GO]);
+        program
+            .l32r(2, 0)
+            .l32r(3, 1)
+            .rri8(6, 3, 2, CTR as u8)
+            .raw(&LOOP);
+        let mut chip = program.chip_on(&[SCL1_PAD, SDA1_PAD]);
+        arm_i2c1(&mut chip);
+        poke_port(&mut chip, 1, DATA, 0x50);
+        poke_port(&mut chip, 1, DATA, 0x51);
+        poke_port(&mut chip, 1, INT_ENA, TRANS_COMPLETE | NACK);
+        let commands = [
+            rstart(),
+            write_cmd(1),
+            rstart(),
+            write_cmd(1),
+            read_cmd(1, true),
+            stop_cmd(),
+        ];
+        for (k, command) in commands.into_iter().enumerate() {
+            poke_port(&mut chip, 1, COMD0 + 4 * k as u32, command);
+        }
+        chip
+    };
+    let mut chip = make();
+    let whole = play_on(
+        &mut chip,
+        SCL1_PAD,
+        SDA1_PAD,
+        c(8000).0,
+        c(8000).0,
+        read_target,
+    )
+    .unwrap();
+    let mapped: Vec<(u64, u8, bool)> = deltas(&whole)
+        .into_iter()
+        .map(|(t, pad, level)| (t, if pad == SCL1_PAD { SCL_PAD } else { SDA_PAD }, level))
+        .collect();
+    assert_eq!(mapped, write_read_edges());
+    assert_eq!(word_port(&mut chip, 1, DATA), 0xa5);
+    assert_eq!(
+        word_port(&mut chip, 1, INT_RAW) & (TRANS_COMPLETE | NACK),
+        TRANS_COMPLETE
+    );
+    assert_eq!(word_port(&mut chip, 1, SR) & BUS_BUSY, 0);
+    // Interrupt source 43 is bit 11 of INTERRUPT_CORE0_INTR_STATUS_1_REG (0x600c_2190).
+    let status = chip
+        .soc
+        .bus()
+        .load(
+            orbe_xtensa::Cycle(0),
+            0x600c_2000 + 0x190,
+            orbe_xtensa::Width::Word,
+        )
+        .unwrap();
+    assert_eq!(status & (1 << 11), 1 << 11, "source 43");
+    assert_eq!(status & (1 << 10), 0, "source 42 stays clear");
+
+    for step in [1, 3, 7] {
+        let mut split = make();
+        assert_eq!(
+            play_on(&mut split, SCL1_PAD, SDA1_PAD, c(8000).0, step, read_target).unwrap(),
+            whole,
+            "steps of {step} ticks"
+        );
+    }
+
+    // Held in reset, clock off, and setting refusals name I2C1.
+    let mut held = Program::new(&[I2C1, 0]);
+    held.l32r(2, 0).l32r(3, 1).rri8(6, 3, 2, 0).raw(&LOOP);
+    let mut chip = held.chip_on(&[SCL1_PAD, SDA1_PAD]);
+    chip.soc.restore(SYSTEM + 0x18, 0xf9c1_e06f | 1 << 18);
+    chip.soc.restore(SYSTEM + 0x20, 1 << 18);
+    assert_eq!(run_refusal(&mut chip), ("I2C1", "held_in_reset"));
+
+    let mut slave = Program::new(&[
+        I2C1,
+        SDA_FORCE_OUT | SCL_FORCE_OUT | CONF_UPGATE | TRANS_START,
+    ]);
+    slave
+        .l32r(2, 0)
+        .l32r(3, 1)
+        .rri8(6, 3, 2, CTR as u8)
+        .raw(&LOOP);
+    let mut chip = slave.chip_on(&[SCL1_PAD, SDA1_PAD]);
+    arm_i2c1(&mut chip);
+    assert_eq!(run_refusal(&mut chip), ("I2C1", "slave_mode"));
+
+    let mut rst = Program::new(&[I2C1, GO, SYSTEM, 1 << 18]);
+    rst.l32r(2, 0)
+        .l32r(3, 1)
+        .rri8(6, 3, 2, CTR as u8)
+        .l32r(4, 2)
+        .l32r(5, 3)
+        .rri8(6, 5, 4, 0x20)
+        .raw(&LOOP);
+    let mut chip = rst.chip_on(&[SCL1_PAD, SDA1_PAD]);
+    arm_i2c1(&mut chip);
+    poke_port(&mut chip, 1, DATA, 0xa5);
+    poke_port(&mut chip, 1, COMD0, rstart());
+    poke_port(&mut chip, 1, COMD0 + 4, write_cmd(1));
+    poke_port(&mut chip, 1, COMD0 + 8, stop_cmd());
+    assert_eq!(run_refusal(&mut chip), ("I2C1", "reset_while_sending"));
+}
+
+/// I2C0 and I2C1 run concurrent transfers on separate pads with different timings and target
+/// responses, settling every edge in chronological order regardless of `run_until` splits.
+#[test]
+fn i2c0_and_i2c1_run_concurrently_on_separate_pads() {
+    let make = || {
+        let mut program = Program::new(&[I2C0, I2C1, GO]);
+        program
+            .l32r(2, 0)
+            .l32r(4, 1)
+            .l32r(3, 2)
+            .rri8(6, 3, 2, CTR as u8)
+            .rri8(6, 3, 4, CTR as u8)
+            .raw(&LOOP);
+        let mut chip = program.chip_on(&[SCL_PAD, SDA_PAD, SCL1_PAD, SDA1_PAD]);
+        arm(&mut chip);
+        arm_i2c1(&mut chip);
+        // Slightly slower SCL_LOW on I2C1 so the two buses interleave on different ticks.
+        poke_port(&mut chip, 1, SCL_LOW, (LOW + 12 - 1) as u32);
+        poke_port(&mut chip, 1, CTR, MODE | CONF_UPGATE);
+
+        // I2C0: write 0x50, rstart, write 0x51, read 0xA5, stop.
+        poke_port(&mut chip, 0, DATA, 0x50);
+        poke_port(&mut chip, 0, DATA, 0x51);
+        poke_port(&mut chip, 0, INT_ENA, TRANS_COMPLETE | NACK);
+        // I2C1: write 0x78, rstart, write 0x79, read 0x3C, stop.
+        poke_port(&mut chip, 1, DATA, 0x78);
+        poke_port(&mut chip, 1, DATA, 0x79);
+        poke_port(&mut chip, 1, INT_ENA, TRANS_COMPLETE | NACK);
+        let commands = [
+            rstart(),
+            write_cmd(1),
+            rstart(),
+            write_cmd(1),
+            read_cmd(1, true),
+            stop_cmd(),
+        ];
+        for (k, command) in commands.into_iter().enumerate() {
+            poke_port(&mut chip, 0, COMD0 + 4 * k as u32, command);
+            poke_port(&mut chip, 1, COMD0 + 4 * k as u32, command);
+        }
+        chip
+    };
+    let target1 = |rises: u32| {
+        if rises == 9 || rises == 19 {
+            return true;
+        }
+        if (20..=27).contains(&rises) {
+            let bit = rises - 20;
+            return 0x3cu8 & (1 << (7 - bit)) == 0;
+        }
+        false
+    };
+    let play_both = |chip: &mut Esp32s3, step: u64| {
+        let pads = [(SCL_PAD, SDA_PAD), (SCL1_PAD, SDA1_PAD)];
+        let mut wire = [[true, true]; 2];
+        let mut rises = [0u32; 2];
+        let mut edges = Vec::new();
+        let through = c(12_000).0;
+        let mut limit = 0u64;
+        while limit < through {
+            limit = (limit + step).min(through);
+            loop {
+                match chip.run_until(Tick(limit)) {
+                    Some(Halt::Moved(at)) => {
+                        let mut changed = Vec::new();
+                        for (bus, (scl, sda)) in pads.into_iter().enumerate() {
+                            let drives = [chip.drive(scl), chip.drive(sda)];
+                            if !matches!(drives[0], PadDrive::Low) && !wire[bus][0] {
+                                rises[bus] += 1;
+                            }
+                            let hold_sda = if bus == 0 {
+                                read_target(rises[0])
+                            } else {
+                                target1(rises[1])
+                            };
+                            for (k, pad) in [scl, sda].into_iter().enumerate() {
+                                let level =
+                                    !(k == 1 && hold_sda) && !matches!(drives[k], PadDrive::Low);
+                                if level != wire[bus][k] {
+                                    wire[bus][k] = level;
+                                    edges.push((at.0, pad, level));
+                                    changed.push((pad, level));
+                                }
+                            }
+                        }
+                        chip.input(at, changed);
+                    }
+                    Some(Halt::Change { .. }) => {}
+                    Some(other) => panic!("unexpected halt: {other:?}"),
+                    None => break,
+                }
+            }
+        }
+        edges
+    };
+
+    let mut whole_chip = make();
+    let whole = play_both(&mut whole_chip, c(12_000).0);
+    assert_eq!(word_port(&mut whole_chip, 0, DATA), 0xa5);
+    assert_eq!(word_port(&mut whole_chip, 1, DATA), 0x3c);
+    assert_eq!(
+        word_port(&mut whole_chip, 0, INT_RAW) & (TRANS_COMPLETE | NACK),
+        TRANS_COMPLETE
+    );
+    assert_eq!(
+        word_port(&mut whole_chip, 1, INT_RAW) & (TRANS_COMPLETE | NACK),
+        TRANS_COMPLETE
+    );
+    assert_eq!(word_port(&mut whole_chip, 0, SR) & BUS_BUSY, 0);
+    assert_eq!(word_port(&mut whole_chip, 1, SR) & BUS_BUSY, 0);
+
+    for step in [1, 3, 7] {
+        let mut split = make();
+        assert_eq!(play_both(&mut split, step), whole, "steps of {step} ticks");
     }
 }

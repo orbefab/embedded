@@ -1,0 +1,11 @@
+// A Block: a small circuit that works. `orbe add nano-joystick` installs it into a project.
+{
+  "format": 1,
+  "block": "nano-joystick",
+  "version": "0.1.0",
+  "title": "2-axis thumb joystick on a Nano",
+  "summary": "Move the X and Y sliders or click the thumbstick cap. The Nano reads VRX on A0, VRY on A1 and SW on D2 (INPUT_PULLUP), prints X, Y and the button over Serial, and lights LED L when pressed.",
+  "board": "nano-board",
+  "tags": ["joystick", "thumbstick", "ky-023", "analog", "button", "input", "nano"],
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND GPL-3.0-or-later WITH GCC-exception-3.1",
+}

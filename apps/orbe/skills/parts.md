@@ -19,19 +19,19 @@ A folder already at `parts/<id>/` is `part_exists` and nothing is written. The m
 
 `@<registry>/<id>` is a usage error. This orbe reads the `@orbefab` registry only.
 
-Addressable LEDs: `neopixel-stick-8`. Eight from three pins: `hc595-dip16` (tie SRCLR high, OE low), Block `nano-shift-leds`. Level shifter: `bss138-level-shifter`.
+Addressable LEDs: `neopixel-stick-8`, `neopixel-ring-16` (`nano-neopixel-ring`). 4-pin RGB LEDs: `led-5mm-rgb-cc` (`nano-rgb-led`), `led-5mm-rgb-ca` (`@<id>.red`/`.green`/`.blue`). Shift register: `hc595-dip16` (SRCLR high, OE low; `nano-shift-leds`). Level shifter: `bss138-level-shifter`.
 
-NTC: `thermistor-ntc-10k` (`nano-thermistor`). Batteries: `battery-9v` (`nano-9v-regulator`), `battery-aa-4x` (`nano-aa-pack`). MAX7219: `max7219-matrix-8x8` (`nano-max7219-matrix`), `max7219-matrix-4in1` (`nano-max7219-scroll`); use software SPI on ESP32-S3.
+Thermistor: `thermistor-ntc-10k` (`nano-thermistor`). Batteries: `battery-9v` (`nano-9v-regulator`), `battery-aa-4x` (`nano-aa-pack`). 2-axis joystick: `joystick-ky023` (`@<id>.x.position`, `@<id>.y.position`, `@<id>.sw`; `nano-joystick`). MAX7219: `max7219-matrix-8x8` (`nano-max7219-matrix`), `max7219-matrix-4in1` (`nano-max7219-scroll`); use software SPI on ESP32-S3.
 
 ## Blocks
 
-`orbe add <block>` installs a Block. It downloads the parts the scene names into `parts/`, nesting each part's own parts inside that folder, then writes `scene.jsonc`, `firmware/`, `tests/` and `README.md`. It does not write `block.jsonc`. A part folder the scene names that is already there is `part_exists`. The message names those folders, and the hint is the same `orbe add <block>`. Remove them and run it again. Another `scene.jsonc` is `scene_exists`. A file with other bytes is `file_exists`. Either refusal writes nothing. A file with the Block's bytes is kept when those part folders are not there yet.
+`orbe add <block>` installs a Block: downloads its scene parts into `parts/` (nesting dependencies), then writes `scene.jsonc`, `firmware/`, `tests/` and `README.md` (not `block.jsonc`). Existing part folders fail with `part_exists`; another `scene.jsonc` fails with `scene_exists`; a differing file fails with `file_exists`. Each refusal writes nothing. Matching files stay when the part folders are absent.
 
 ## Finding a part
 
-`orbe add`, `orbe search` and `orbe part` need curl. When the registry cannot be reached, each prints `registry` and names the URL.
+`orbe add`, `orbe search` and `orbe part` need curl; unreachable registries fail with `registry` and the URL.
 
-`orbe search <words>` lists parts whose id, title, maker, number, summary or tags hold every word, then Blocks whose id, title, description or categories do. An exact id comes first, then a part whose every word is a whole word of its id, title or tags, then the rest. Ids break ties. `orbe search <words> --json` puts parts in `data.parts` and Blocks in `data.blocks`. With no words, `orbe search` lists every listed part by its first category, then the Blocks. A part the registry's `unlisted` names is left out of search and of the site's list. `orbe part <id>` and `orbe add <id>` still read it. A part file's `listed` field does not decide that.
+`orbe search <words>` matches parts (id, title, maker, number, summary, tags) then Blocks (id, title, description, categories): exact id first, then whole-word id/title/tag hits, then the rest, ties by id (`--json` puts them in `data.parts` and `data.blocks`). With no words it lists every listed part by first category, then Blocks. Parts in the registry's `unlisted` are omitted from search and the site, though `orbe part` and `orbe add` still read them.
 
 `orbe part <id>` prints title, maker, number, license, hash, pins, params, ratings, not simulated, datasheets, buy links, files, uses, and breadboard seating (`--json` prints the card). A unique id word matches that part or Block (`orbe part 1n4007` prints `diode-1n4007`); several return `unknown_part` listing them. `orbe part <block>` prints the Block and its install command.
 

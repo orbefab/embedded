@@ -1,0 +1,44 @@
+{
+  "part": "joystick-ky023-pot",
+  "source": {
+    "script": "model.py",
+    "sha256": "c30efb20193c1e3b99029b356505b5e7d771659bcd22e63a1293d37f57a6bfa4",
+    "bytes": 1839
+  },
+  "files": {
+    "joystick-ky023-pot.glb": {
+      "sha256": "6dc26f48edefbc4f5060f123e349fabbfa16712ee4ef37e1840db901b8533854",
+      "bytes": 11424
+    },
+    "joystick-ky023-pot.anchors.json": {
+      "sha256": "0a292985c48ec14c534ae9b8deccdd42dc7dedfc8f5ed55ed879aa5a3eadc18b",
+      "bytes": 410
+    }
+  },
+  "box": {
+    "min": [-4.8, -1.4, -1.2],
+    "max": [4.8, 2.775, 10.6]
+  },
+  "kept_nodes": ["rotor"],
+  "draw_calls": 4,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 3,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "body",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": ["rotor"]
+    },
+    "merge": {
+      "primitives_in": 6,
+      "primitives_out": 4
+    }
+  }
+}

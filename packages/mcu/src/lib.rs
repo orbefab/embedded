@@ -8,6 +8,7 @@
 mod fault;
 mod sent;
 
+use orbe_model::air::{Ack, AirFrame, Channel, Signal};
 use orbe_model::{Drive, Quantity, Readings, Stop, Time};
 
 pub use fault::{Fault, FlashRefusal, Note, Pc, ResetReason, Setting, Unsupported};
@@ -24,10 +25,10 @@ pub use sent::{Sent, SentKind, SpiPins};
 ///   leave the state one call to `l2` does. All of a time's effects are one stop.
 /// - A clocked chip runs to cycle `floor(limit_ps * f / 1e12)` and puts a stop at cycle `c` at
 ///   `ceil(c * 1e12 / f)` ps, counting from its clock domain's last frequency change.
-/// - Only `run_until` changes the drives, the pull-downs and [`held`](Mcu::held). What `input`
-///   and `sample` cause comes at least 1 ps later, at a stop.
-/// - `input`, `deliver` and `take_sent` read nothing but the chip and their arguments, so they
-///   take two equal chips to two equal chips.
+/// - Only `run_until` changes the drives, the pull-downs and [`held`](Mcu::held). What `input`,
+///   `sample` and `hear` cause comes at least 1 ps later, at a stop.
+/// - `input`, `deliver`, `take_sent` and `take_aired` read nothing but the chip and their
+///   arguments, so they take two equal chips to two equal chips.
 pub trait Mcu: Clone + Send + std::fmt::Debug + 'static {
     /// The datasheet name of each USART it sends on. [`Frame::usart`] indexes this.
     const USARTS: &'static [&'static str];
@@ -87,6 +88,26 @@ pub trait Mcu: Clone + Send + std::fmt::Debug + 'static {
     fn in_flight(&self, _ahead: &Self, _at: Time) -> Vec<Sent> {
         Vec::new()
     }
+    /// The channel its radio listens on now, or `None` while its RF is off. A chip with no
+    /// radio keeps the default, which never listens.
+    fn tuned(&self) -> Option<Channel> {
+        None
+    }
+    /// Hands over the frame it put on the air that ended at the stop `run_until` last returned
+    /// with `record` set, if one did. A radio sends one frame at a time, so at most one ends at a
+    /// stop. A chip with no radio keeps the default, which sends none.
+    fn take_aired(&mut self, _aired: impl FnMut(AirFrame)) {}
+    /// Another station's frame on the channel it is [`tuned`](Self::tuned) to, which ended at
+    /// `at`, heard at `signal`. It returns whether it acknowledges it. What the frame causes
+    /// comes at least 1 ps later, at a stop. A chip with no radio keeps the default, which hears
+    /// nothing and acknowledges nothing.
+    fn hear(&mut self, _at: Time, _frame: &AirFrame, _signal: Signal) -> Ack {
+        Ack::None
+    }
+    /// Whether any station acknowledged the frame it put on the air that ended at `at`. The
+    /// engine hands this over at that stop before the chip runs on, as it does
+    /// [`answered`](Self::answered). A chip with no radio keeps the default, which does nothing.
+    fn acked(&mut self, _at: Time, _ack: Ack) {}
     /// The fault that ended its run, and its time. The engine stops the run at the first.
     fn fault(&self) -> Option<(Time, Fault)> {
         None

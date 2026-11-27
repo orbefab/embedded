@@ -1,0 +1,19 @@
+# The Nano reads VRX on A0, VRY on A1 and SW on D2 (INPUT_PULLUP), prints x, y and btn over
+# Serial and lights LED L while the thumbstick is pressed.
+open
+step 60ms
+expect serial contains "x=511 y=511 btn=0"
+expect @nano.led_l off
+set @joy.x.position 0.9
+set @joy.y.position 0.1
+step 60ms
+expect serial contains "x=921 y=102 btn=0"
+press @joy.sw
+step 60ms
+expect serial contains "x=921 y=102 btn=1"
+expect @nano.led_l lit
+release @joy.sw
+step 60ms
+expect serial contains "x=921 y=102 btn=0"
+expect @nano.led_l off
+expect no diagnostics

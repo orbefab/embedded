@@ -1,0 +1,166 @@
+// Worldsemi WS2812B-V5 (V1.0, 2019-02-19) addressable 5050 RGB LED, one pixel.
+// Unlisted SMD leaf part used by neopixel-ring-16.
+{
+  "format": 6,
+  "part": "ws2812b-5050",
+  "version": "0.1.0",
+  "title": "WS2812B-V5 addressable RGB LED, 5050",
+  "summary": "Worldsemi WS2812B-V5 addressable RGB LED in a 5.0 x 5.0 mm 5050 package. Draws 0.6 mA idle and 12 mA per channel (36.6 mA at full white), latches 24-bit GRB colour on DIN and passes the rest to DOUT.",
+  "tags": ["led", "rgb", "addressable", "ws2812", "ws2812b", "5050", "smd"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Worldsemi WS2812B-V5 Datasheet, V1.0": "https://www.peace-corp.co.jp/data/WS2812B-V5_V1.0_EN.pdf",
+  },
+  "real": {
+    "maker": "Worldsemi",
+    "number": "WS2812B-V5",
+    "datasheet": "Worldsemi WS2812B-V5 Datasheet, V1.0",
+  },
+  "pins": { "VDD": [1], "DOUT": [2], "VSS": [3], "DIN": [4] },
+  "model": {
+    "kind": "ws2812",
+    "leds": 1,
+    "pins": { "VCC": "VDD", "GND": "VSS", "DIN": "DIN", "DOUT": "DOUT" },
+    "input_threshold": {
+      "low": {
+        "value": 0.14,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "Worldsemi WS2812B-V5 Datasheet, V1.0",
+            "at": "p3 Electrical Characteristics (TA = 25 C, VDD = 5 V): VIL max = 0.7 V, which is 0.14 VDD at 5 V",
+            "basis": "max",
+          },
+        },
+      },
+      "high": {
+        "value": 0.54,
+        "unit": "1",
+        "source": {
+          "datasheet": {
+            "doc": "Worldsemi WS2812B-V5 Datasheet, V1.0",
+            "at": "p3 Electrical Characteristics (TA = 25 C, VDD = 5 V): VIH min = 2.7 V, which is 0.54 VDD at 5 V",
+            "basis": "min",
+          },
+        },
+      },
+    },
+    "draw": {
+      "channel_current": {
+        "value": 0.012,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "Worldsemi WS2812B-V5 Datasheet, V1.0",
+            "at": "p3 LED Characteristics, Condition (Working current): 12 mA for Red, Green and Blue",
+            "basis": "typical",
+          },
+        },
+      },
+      "idle_current": {
+        "value": 0.0006,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "Worldsemi WS2812B-V5 Datasheet, V1.0",
+            "at": "p3 LED Characteristics, Quiescent Current: 0.6 mA",
+            "basis": "typical",
+          },
+        },
+      },
+      "holds_above": {
+        "value": 3.7,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "Worldsemi WS2812B-V5 Datasheet, V1.0",
+            "at": "p2 Absolute Maximum Ratings, Power supply voltage VDD: +3.7 to +5.3 V",
+            "basis": "min",
+          },
+        },
+      },
+    },
+    "min_supply": {
+      "value": 3.7,
+      "unit": "V",
+      "source": {
+        "datasheet": {
+          "doc": "Worldsemi WS2812B-V5 Datasheet, V1.0",
+          "at": "p2 Absolute Maximum Ratings, Power supply voltage VDD: +3.7 to +5.3 V; below 3.7 V the pixel clears and ignores DIN",
+          "basis": "min",
+        },
+      },
+    },
+    "dout": {
+      "output": {
+        "high_drop": { "value": 0.0, "unit": "V", "source": { "closed_form": { "note": "The sheet gives no DOUT output voltage. DOUT drives the next pixel's DIN (II = +/-1 uA max on p3), so high sits at VDD." } } },
+        "high_resistance": { "value": 100.0, "unit": "ohm", "source": { "closed_form": { "note": "The sheet gives no DOUT drive strength; 100 ohm keeps a shorted DOUT near 50 mA at 5 V without changing logic levels into DIN." } } },
+        "low_drop": { "value": 0.0, "unit": "V", "source": { "closed_form": { "note": "The sheet gives no DOUT output voltage; low sits at VSS." } } },
+        "low_resistance": { "value": 100.0, "unit": "ohm", "source": { "closed_form": { "note": "The sheet gives no DOUT drive strength; 100 ohm keeps a shorted DOUT near 50 mA at 5 V." } } },
+      },
+      "delay": {
+        "value": 300000,
+        "unit": "ps",
+        "source": {
+          "datasheet": {
+            "doc": "Worldsemi WS2812B-V5 Datasheet, V1.0",
+            "at": "p3 Switching Characteristics (TA = 25 C, VDD = 5 V): Transmission delay time tPLZ (DIN to DOUT, CL = 15 pF, RL = 10 kohm) = 300 ns max",
+            "basis": "max",
+          },
+        },
+      },
+    },
+    "ratings": {
+      "rail_margin": {
+        "value": 0.3,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "Worldsemi WS2812B-V5 Datasheet, V1.0",
+            "at": "p3 Electrical Characteristics: VIL min = -0.3 V and VIH max = VDD + 0.7 V; rail_margin is symmetric so 0.3 V is the tighter bound",
+            "basis": "absolute_max",
+          },
+        },
+      },
+      "supply_voltage": {
+        "value": 5.3,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "Worldsemi WS2812B-V5 Datasheet, V1.0",
+            "at": "p2 Absolute Maximum Ratings, Power supply voltage VDD: +3.7 to +5.3 V",
+            "basis": "absolute_max",
+          },
+        },
+      },
+    },
+  },
+  "readings": {
+    "color": { "of": "rgb" },
+  },
+  "view": {
+    "glow": [{ "node": "lens", "by": "color" }],
+  },
+  "not_simulated": [
+    {
+      "what": "data output",
+      "why": "DOUT follows DIN 300 ns later once this LED holds its 24 bits, and stays low otherwise. Page 3 gives 300 ns as a maximum and no drive strength.",
+    },
+    {
+      "what": "light",
+      "why": "The reading `color` is the 8-bit red, green and blue latched by the pixel, not luminous intensity (p3 lists 310 mcd Red, 780 mcd Green and 215 mcd Blue at 12 mA).",
+    },
+    {
+      "what": "supply voltage",
+      "why": "Page 2 rates VDD from +3.7 V to +5.3 V. Below 3.7 V the pixel clears to off, ignores DIN and releases DOUT, leaving only the faded quiescent draw (0 A at 0 V).",
+    },
+    {
+      "what": "input thresholds at non-5 V supply",
+      "why": "Page 3 lists fixed thresholds VIH >= 2.7 V and VIL <= 0.7 V at VDD = 5 V. The engine scales input thresholds proportionally to VDD (0.54 VDD and 0.14 VDD), matching p3 exactly at 5 V.",
+    },
+    {
+      "what": "upper DIN margin",
+      "why": "Page 3 allows DIN up to VDD + 0.7 V and down to -0.3 V. Because the engine's rail_margin is symmetric, DIN warns past VDD + 0.3 V as well as below -0.3 V.",
+    },
+  ],
+}

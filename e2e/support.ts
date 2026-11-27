@@ -240,7 +240,7 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "battery" | "button" | "digit" | "fade" | "lcd" | "light" | "matrix" | "pixels" | "relay" | "rgb" | "screen" | "serial" | "servo" | "shift" | "temperature" | "tone";
+export type BlockKind = "battery" | "button" | "digit" | "fade" | "joystick" | "lcd" | "light" | "matrix" | "pixels" | "relay" | "rgb" | "rgbled" | "ring" | "screen" | "serial" | "servo" | "shift" | "temperature" | "tone";
 
 export interface RepoBlock {
   id: string;
@@ -270,7 +270,10 @@ export function blockKind(scene: string, id: string): BlockKind {
   if (/"type"\s*:\s*"servo-sg90"/.test(code)) return "servo";
   if (/"type"\s*:\s*"battery-9v"/.test(code)) return "battery";
   if (/"type"\s*:\s*"thermistor-ntc-10k"/.test(code)) return "temperature";
+  if (/"type"\s*:\s*"neopixel-ring-16"/.test(code)) return "ring";
   if (/"type"\s*:\s*"neopixel-stick-8"/.test(code)) return "pixels";
+  if (/"type"\s*:\s*"joystick-ky023"/.test(code)) return "joystick";
+  if (/"type"\s*:\s*"led-5mm-rgb-cc"/.test(code) || /"type"\s*:\s*"led-5mm-rgb-ca"/.test(code)) return "rgbled";
   if (/"type"\s*:\s*"oled-ssd1306-128x64"/.test(code)) return "screen";
   if (/"type"\s*:\s*"lcd1602-i2c"/.test(code)) return "lcd";
   if (/"type"\s*:\s*"max7219-matrix-8x8"/.test(code) || /"type"\s*:\s*"max7219-matrix-4in1"/.test(code)) return "matrix";
@@ -291,12 +294,15 @@ const READY_NODES: Record<BlockKind, readonly (readonly [string, string?])[]> = 
   button: [["@led1", "body"], ["@btn1", "stem"]],
   digit: [["@disp", "seg-a"]],
   fade: [["@led1", "body"]],
+  joystick: [["@joy.sw", "plunger"], ["@joy.x", "rotor"]],
   lcd: [["@lcd.display", "glass"]],
   light: [["@led1", "body"]],
   matrix: [["@matrix", "glass"]],
   pixels: [["@stick.px1", "lens"]],
   relay: [["@relay.led", "body"], ["@led1", "body"]],
   rgb: [["@board.led", "lens"], ["@btn1", "stem"]],
+  rgbled: [["@rgb", "die-red"], ["@rgb", "die-green"], ["@rgb", "die-blue"]],
+  ring: [["@ring.px1", "lens"], ["@ring.px16", "lens"]],
   screen: [["@oled.display", "glass"]],
   serial: [["@board.led", "lens"]],
   servo: [["@servo", "horn"]],
@@ -686,12 +692,53 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
     await showDigit(page, block, shotName);
     return;
   }
-  if (block.kind === "pixels") {
+  if (block.kind === "rgbled") {
+    const waitDie = (node: string, above: boolean) =>
+      page.waitForFunction(
+        ({ node, above }) => {
+          const glow = window.orbeViewer.get().scene.getObjectByName("@rgb")?.getObjectByName(node)?.material?.emissiveIntensity ?? 0;
+          return above ? glow > 0.2 : glow < 0.05;
+        },
+        { node, above },
+        { timeout: 30_000 },
+      );
+    await waitDie("die-red", true);
+    await waitDie("die-green", true);
+    if (shotName !== null) {
+      await page.locator("canvas").scrollIntoViewIfNeeded();
+      await shot(page, shotName);
+    }
+    return;
+  }
+  if (block.kind === "joystick") {
+    const strip = page.locator(SERIAL);
+    await expect(strip, `${block.id} center`).toContainText(/x=51[12] y=51[12] btn=0/, { timeout: 30_000 });
+    const xInput = page.locator('[data-testid="param-joy-x-position-value"]');
+    await xInput.scrollIntoViewIfNeeded();
+    await xInput.fill("0.9");
+    await xInput.press("Enter");
+    await expect(strip, `${block.id} moved x`).toContainText(/x=921 y=51[12] btn=0/, { timeout: 30_000 });
+    const cap = await pointOn(page, "@joy.sw", "plunger", canvas);
+    await page.mouse.move(cap.x, cap.y);
+    await page.mouse.down();
+    await expect(strip, `${block.id} pressed`).toContainText(/x=921 y=51[12] btn=1/, { timeout: 30_000 });
+    if (shotName !== null) {
+      await page.locator("canvas").scrollIntoViewIfNeeded();
+      await shot(page, shotName);
+    }
+    await page.mouse.up();
+    await expect(strip, `${block.id} released`).toContainText(/x=921 y=51[12] btn=0\s*$/, { timeout: 30_000 });
+    return;
+  }
+  if (block.kind === "pixels" || block.kind === "ring") {
+    const prefix = block.kind === "ring" ? "@ring" : "@stick";
+    const count = block.kind === "ring" ? 16 : 8;
+    const indices = Array.from({ length: count }, (_, idx) => idx + 1);
     const firstHandle = await page.waitForFunction(
-      () => {
+      ({ prefix, indices }) => {
         const scene = window.orbeViewer.get().scene;
-        const pixels = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
-          const node = scene.getObjectByName(`@stick.px${n}`)?.getObjectByName("lens");
+        const pixels = indices.map((n) => {
+          const node = scene.getObjectByName(`${prefix}.px${n}`)?.getObjectByName("lens");
           const material = node?.material ?? node?.children?.[0]?.material;
           if (material === undefined) return null;
           return { r: material.emissive.r, g: material.emissive.g, b: material.emissive.b, i: material.emissiveIntensity };
@@ -700,7 +747,7 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
         const seen = new Set(pixels.map((pixel) => `${pixel!.r.toFixed(3)},${pixel!.g.toFixed(3)},${pixel!.b.toFixed(3)}`));
         return seen.size > 1 ? pixels : null;
       },
-      null,
+      { prefix, indices },
       { timeout: 30_000 },
     );
     const first = (await firstHandle.jsonValue()) as { r: number; g: number; b: number; i: number }[];
@@ -709,10 +756,10 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
     expect(firstSeen.size, `${block.id} colours`).toBeGreaterThan(1);
 
     const secondHandle = await page.waitForFunction(
-      (prev) => {
+      ({ prefix, indices, prev }) => {
         const scene = window.orbeViewer.get().scene;
-        const pixels = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => {
-          const node = scene.getObjectByName(`@stick.px${n}`)?.getObjectByName("lens");
+        const pixels = indices.map((n) => {
+          const node = scene.getObjectByName(`${prefix}.px${n}`)?.getObjectByName("lens");
           const material = node?.material ?? node?.children?.[0]?.material;
           if (material === undefined) return null;
           return { r: material.emissive.r, g: material.emissive.g, b: material.emissive.b, i: material.emissiveIntensity };
@@ -726,7 +773,7 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
         );
         return moved ? pixels : null;
       },
-      first,
+      { prefix, indices, prev: first },
       { timeout: 30_000 },
     );
     const second = (await secondHandle.jsonValue()) as { r: number; g: number; b: number; i: number }[];

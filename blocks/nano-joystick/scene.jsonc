@@ -1,0 +1,32 @@
+// A Nano reads a KY-023 2-axis thumb joystick: VRX on A0, VRY on A1 and SW on D2 (INPUT_PULLUP).
+// The Nano straddles columns 1 to 15 (A0 is a4, A1 is a5, 5V is a12, GND is j12, D2 is j11).
+// The joystick sits beside the right end of the breadboard with its 5-pin header facing the
+// board so GND, VCC, VRX, VRY and SW jumper cleanly in vertical order with no crossings.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "build/joystick.ino.hex" },
+    "joy": { "type": "joystick-ky023" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "joy": { "at": [83, 0, 0] }, // 5-pin header faces -X with clearance for jumper boots past the breadboard edge
+  },
+  "nets": { "GND": "nano.GND" },
+  "wires": [
+    ["bb.a12", "bb.W11", { "color": "#d12b2b" }], // 5V to the W + rail
+    ["bb.W25", "bb.Y25", { "color": "#d12b2b" }], // bridge + rail to the Y side
+    ["bb.j12", "bb.Z13", { "color": "#161616" }], // GND to the Z - rail
+    ["bb.b4", "bb.b29", { "color": "#2e8b57" }], // A0 along row b to column 29
+    ["bb.a5", "bb.a28", { "color": "#e07b24" }], // A1 along row a to column 28
+    ["bb.j11", "bb.j27", { "color": "#2563eb" }], // D2 along row j to column 27
+    ["bb.f27", "bb.e27", { "color": "#2563eb" }], // bridge D2 across the centre channel
+    ["bb.Z29", "joy.GND", { "color": "#161616" }],
+    ["bb.Y29", "joy.VCC", { "color": "#d12b2b" }],
+    ["bb.e29", "joy.VRX", { "color": "#2e8b57" }],
+    ["bb.c28", "joy.VRY", { "color": "#e07b24" }],
+    ["bb.a27", "joy.SW", { "color": "#2563eb" }],
+  ],
+}

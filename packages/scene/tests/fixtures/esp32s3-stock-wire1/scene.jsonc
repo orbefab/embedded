@@ -1,0 +1,26 @@
+// GY-BMP280 on Wire (I2C0: SDA GPIO8, SCL GPIO9) and SSD1306 OLED on Wire1 (I2C1: SDA GPIO17,
+// SCL GPIO18), both fed from 3V3.
+// The app is the stock sketch packages/engine/tests/firmware/esp32s3/arduino/stock/wire1.
+{
+  "format": 1,
+  "parts": {
+    "board": {
+      "type": "esp32s3-devkitc-1",
+      "app": "app.bin",
+      "partitions": "partitions.bin"
+    },
+    "bmp": { "type": "gy-bmp280" },
+    "oled": { "type": "oled-ssd1306-128x64" }
+  },
+  "wires": [
+    ["board.3V3", "bmp.VCC"],
+    ["board.GND", "bmp.GND"],
+    ["board.GPIO8", "bmp.SDA"],
+    ["board.GPIO9", "bmp.SCL"],
+    ["board.3V3", "oled.VCC"],
+    ["board.GND", "oled.GND"],
+    ["board.GPIO17", "oled.SDA"],
+    ["board.GPIO18", "oled.SCL"]
+  ],
+  "ground": "board.GND"
+}

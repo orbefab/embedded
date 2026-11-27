@@ -1043,8 +1043,11 @@ fn ratings<'a>(tree: &'a Node, tree_of: &dyn Fn(&str) -> Option<&'a Node>) -> Ve
         if !child_ratings.iter().any(|r| r.value.is_some()) {
             continue;
         }
-        if found.is_some() {
-            return Vec::new();
+        if let Some(prev) = &found {
+            if prev != &child_ratings {
+                return Vec::new();
+            }
+            continue;
         }
         found = Some(child_ratings);
     }
@@ -1052,8 +1055,39 @@ fn ratings<'a>(tree: &'a Node, tree_of: &dyn Fn(&str) -> Option<&'a Node>) -> Ve
 }
 
 fn own_ratings(tree: &Node) -> Vec<Rating> {
-    tree.get("model")
-        .and_then(|model| model.get("ratings"))
+    let Some(model) = tree.get("model") else {
+        return Vec::new();
+    };
+    if model.get("kind").is_some() || model.get("ratings").is_some() {
+        return model_ratings(model);
+    }
+    let bodies: Vec<(&str, Vec<Rating>)> = model
+        .props()
+        .unwrap_or_default()
+        .iter()
+        .map(|prop| (prop.key.as_str(), model_ratings(&prop.value)))
+        .filter(|(_, list)| !list.is_empty())
+        .collect();
+    let Some((_, first)) = bodies.first() else {
+        return Vec::new();
+    };
+    if bodies.iter().all(|(_, list)| list == first) {
+        return first.clone();
+    }
+    bodies
+        .into_iter()
+        .flat_map(|(body, list)| {
+            list.into_iter().map(move |mut rating| {
+                rating.name = format!("{body}.{}", rating.name);
+                rating
+            })
+        })
+        .collect()
+}
+
+fn model_ratings(model: &Node) -> Vec<Rating> {
+    model
+        .get("ratings")
         .and_then(Node::props)
         .unwrap_or_default()
         .iter()

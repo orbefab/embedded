@@ -303,6 +303,8 @@ const HIDDEN: &[&str] = &[
     "esp32s3-qfn56",
     "esp32s3-wroom-1-n16r8",
     "inductor-0805",
+    "joystick-ky023-pot",
+    "joystick-ky023-switch",
     "led-0603",
     "led-0805",
     "lesd5d5-sod523",
@@ -324,6 +326,7 @@ const HIDDEN: &[&str] = &[
     "tactile-switch-ts42",
     "usb-micro-b",
     "usb-mini-b",
+    "ws2812b-5050",
 ];
 
 fn unlisted_in_manifest() -> BTreeSet<String> {

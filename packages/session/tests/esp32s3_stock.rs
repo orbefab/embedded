@@ -2338,3 +2338,74 @@ fn a_stock_crypto_sketch_verifies_sha_aes_and_rsa_vectors() {
         ],
     );
 }
+
+/// Stock Arduino sketch using `Wire` (I2C0 on GPIO8/9) to read a `gy-bmp280` and `Wire1` (I2C1
+/// on GPIO17/18) to drive an `oled-ssd1306-128x64` with `Adafruit_SSD1306`, displaying the BMP280
+/// chip ID on the OLED with no diagnostics.
+#[test]
+fn a_stock_wire_and_wire1_sketch_reads_bmp280_and_draws_on_oled() {
+    play(
+        "esp32s3-stock-wire1",
+        &[
+            r#"step --until serial contains "drawn" --timeout 1s"#,
+            r#"expect serial contains "bmp id 58 err 0 raw 411180 519616""#,
+            "expect @oled.display.screen shows oled.screen",
+            "expect no diagnostics",
+        ],
+    );
+}
+
+/// Stock Arduino sketch using `SPI` (FSPI / SPI2 on GPIO10-13) and `SPIClass hspi(HSPI)` (SPI3 on
+/// GPIO4-7) with hardware CS finishes both transfers and leaves both CS pins idle high with no
+/// diagnostics.
+#[test]
+fn a_stock_fspi_and_hspi_sketch_runs_both_buses_with_no_diagnostics() {
+    play(
+        "esp32s3-stock-hspi",
+        &[
+            r#"step --until serial contains "ready" --timeout 300ms"#,
+            r#"expect serial contains "fspi ff ff ff hspi ff ff ff""#,
+            "expect @board.GPIO10 high",
+            "expect @board.GPIO7 high",
+            "expect no diagnostics",
+        ],
+    );
+}
+
+/// Wiring `SPIClass(HSPI)` (SPI3) into an `hc595-dip16` faults with `chip.link_unsupported`
+/// naming `SPI3`, matching SPI2's refusal.
+#[test]
+fn a_stock_hspi_into_hc595_stops_with_link_unsupported() {
+    let scene = r#"{
+      "format": 1,
+      "parts": {
+        "board": { "type": "esp32s3-devkitc-1", "app": "app.bin", "partitions": "partitions.bin" },
+        "sr": { "type": "hc595-dip16" }
+      },
+      "wires": [
+        ["board.3V3", "sr.VCC"],
+        ["board.3V3", "sr.SRCLR"],
+        ["board.GND", "sr.GND"],
+        ["board.GND", "sr.OE"],
+        ["board.GPIO6", "sr.SER"],
+        ["board.GPIO4", "sr.SRCLK"],
+        ["board.GPIO7", "sr.RCLK"]
+      ],
+      "ground": "board.GND"
+    }"#;
+    let (step_text, snap_text) = expect_link_unsupported("esp32s3-stock-hspi", scene);
+    assert!(!snap_text.contains("ready"), "{snap_text}");
+    for text in [&step_text, &snap_text] {
+        assert!(text.contains("SPI3"), "{text}");
+        assert!(
+            text.contains("board.GPIO4")
+                || text.contains("board.GPIO6")
+                || text.contains("board.GPIO7"),
+            "{text}"
+        );
+        assert!(
+            text.contains("runs hardware SPI only into parts that take SPI directly"),
+            "{text}"
+        );
+    }
+}

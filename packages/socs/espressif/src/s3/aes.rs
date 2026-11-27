@@ -11,7 +11,7 @@
 //!
 //! Registers come from IDF's `soc/esp32s3/include/soc/hwcrypto_reg.h` and `hal/aes_ll.h`.
 
-use crate::crypto::aes::{AesKey, BlockMode};
+use orbe_crypto::aes::{AesKey, BlockMode};
 
 use super::clock::Tick;
 use super::gdma::ReceivePlan;

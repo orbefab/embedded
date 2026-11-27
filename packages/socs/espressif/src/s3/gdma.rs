@@ -1,13 +1,18 @@
 //! GDMA, the DMA controller of five channel pairs.
 //!
-//! OUT channels read their descriptor lists from data-bus SRAM for SPI2 (0), AES (6) and SHA (7).
-//! IN channels write peripheral output into data-bus SRAM for AES (6), updating each consumed
-//! descriptor in SRAM (`owner = 0`, `length`, `suc_eof`) and `GDMA_IN_SUC_EOF_DES_ADDR_CHn_REG`.
+//! OUT channels read their descriptor lists from data-bus SRAM for SPI2 (0), SPI3 (1), AES (6)
+//! and SHA (7). IN channels write peripheral output into data-bus SRAM for AES (6), updating each
+//! consumed descriptor in SRAM (`owner = 0`, `length`, `suc_eof`) and
+//! `GDMA_IN_SUC_EOF_DES_ADDR_CHn_REG`. An IN link may name a descriptor in SRAM for SPI2 or SPI3
+//! too, which refuse every transfer that would fill it.
 //!
 //! A descriptor is three words: `size` in bits 0 to 11, `length` in bits 12 to 23, `suc_eof` in
-//! bit 30 and `owner` in bit 31, then the buffer's address, then the next descriptor's.
+//! bit 30 and `owner` in bit 31, then the buffer's address, then the next descriptor's. An OUT
+//! channel sends `length` bytes of each buffer in turn, through the one with `suc_eof`.
 //! `GDMA_{IN,OUT}LINK_ADDR` holds the low 20 bits of the first descriptor's address in the
-//! data-bus SRAM window (`0x3fc8_8000..0x3fd0_0000`).
+//! data-bus SRAM window (`0x3fc8_8000..0x3fd0_0000`). The model reads the whole OUT list when the
+//! transfer starts, and the CPU cannot change a byte of it while SPI2 or SPI3 sends from it, as
+//! `Soc::in_flight` says.
 //!
 //! An IN link started at a non-SRAM address (such as address 0, which IDF's shared crypto DMA
 //! writes to the AES IN channel beside each SHA hash) parks without starting. Starting an OUT
@@ -85,8 +90,10 @@ pub(crate) const OUT_INT_ENA_ALLOWED: u32 = OUT_DONE | OUT_EOF | OUT_TOTAL_EOF;
 pub(crate) const IN_SOURCE0: u32 = 66;
 pub(crate) const OUT_SOURCE0: u32 = 71;
 
-/// `GDMA_PERI_{IN,OUT}_SEL`'s value for SPI2.
+/// `GDMA_PERI_{IN,OUT}_SEL`'s values for SPI2 and SPI3 (`SOC_GDMA_TRIG_PERIPH_SPI2`,
+/// `..._SPI3`).
 pub(crate) const SPI2: u32 = 0;
+pub(crate) const SPI3: u32 = 1;
 
 /// The data-bus SRAM window, where a descriptor and its buffer lie.
 pub(crate) const DMA_RAM: Range<u32> = 0x3fc8_8000..0x3fd0_0000;
@@ -221,10 +228,10 @@ impl Gdma {
         let peri_sel = self.regs[channel][((base + IN_PERI_SEL) / 4) as usize] & 0x3f;
         let listed = DMA_RAM.contains(&(LINK_BASE | value & OUTLINK_ADDR));
         let (start, fed, started): (u32, &[u32], bool) = if out {
-            let fed = &[SPI2, aes::PERIPHERAL, sha::PERIPHERAL];
+            let fed = &[SPI2, SPI3, aes::PERIPHERAL, sha::PERIPHERAL];
             (OUTLINK_START, fed, self.started[channel].is_some())
         } else {
-            let fed = &[SPI2, aes::PERIPHERAL];
+            let fed = &[SPI2, SPI3, aes::PERIPHERAL];
             (INLINK_START, fed, self.in_started[channel].is_some())
         };
         let refused = if at == base + IN_LINK
@@ -281,7 +288,8 @@ impl Gdma {
     }
 
     /// Reads `bytes` bytes from the unique OUT channel started for `peripheral` and immediately
-    /// latches its OUT completion interrupts. Used for synchronous OUT consumers (SPI2, SHA).
+    /// latches its OUT completion interrupts. Used for synchronous OUT consumers (SPI2, SPI3,
+    /// SHA).
     pub(crate) fn send(
         &mut self,
         peripheral: u32,
@@ -616,7 +624,7 @@ mod tests {
     #[test]
     fn a_link_the_model_does_not_feed_or_a_peri_sel_change_while_started_is_refused() {
         let mut gdma = Gdma::new();
-        for peripheral in [1, 3, 5, 0x3f] {
+        for peripheral in [2, 3, 5, 0x3f] {
             gdma.write(CH + OUT + IN_PERI_SEL, peripheral).unwrap();
             assert_eq!(
                 gdma.write(CH + OUT + IN_LINK, 0x1234 | OUTLINK_START),
@@ -649,17 +657,20 @@ mod tests {
             Err("peri_sel_while_started")
         );
         gdma.write(CH + IN_LINK, INLINK_STOP).unwrap();
-        assert_eq!(gdma.write(CH + IN_PERI_SEL, SPI2), Ok(true), "no list");
-        assert_eq!(gdma.write(CH + IN_LINK, list), Ok(true), "SPI2's");
-        assert_eq!(
-            gdma.write(CH + IN_PERI_SEL, 3),
-            Err("peri_sel_while_started")
-        );
-        for drop in [(IN_LINK, INLINK_STOP), (IN_CONF0, RST)] {
-            gdma.write(CH + drop.0, drop.1).unwrap();
-            assert_eq!(gdma.write(CH + IN_PERI_SEL, 3), Ok(true), "{drop:x?}");
-            gdma.write(CH + IN_PERI_SEL, SPI2).unwrap();
-            gdma.write(CH + IN_LINK, list).unwrap();
+        for spi in [SPI2, SPI3] {
+            assert_eq!(gdma.write(CH + IN_PERI_SEL, spi), Ok(true), "no list");
+            assert_eq!(gdma.write(CH + IN_LINK, list), Ok(true), "SPI {spi}");
+            assert_eq!(
+                gdma.write(CH + IN_PERI_SEL, 3),
+                Err("peri_sel_while_started")
+            );
+            for drop in [(IN_LINK, INLINK_STOP), (IN_CONF0, RST)] {
+                gdma.write(CH + drop.0, drop.1).unwrap();
+                assert_eq!(gdma.write(CH + IN_PERI_SEL, 3), Ok(true), "{drop:x?}");
+                gdma.write(CH + IN_PERI_SEL, spi).unwrap();
+                gdma.write(CH + IN_LINK, list).unwrap();
+            }
+            gdma.write(CH + IN_LINK, INLINK_STOP).unwrap();
         }
         start(&mut gdma, 0x3fce_0000, SPI2);
         assert_eq!(
@@ -667,6 +678,13 @@ mod tests {
             Err("peri_sel_while_started")
         );
         assert_eq!(gdma.write(CH + OUT + IN_PERI_SEL, SPI2), Ok(true));
+        gdma.write(CH + OUT + IN_LINK, OUTLINK_STOP).unwrap();
+        start(&mut gdma, 0x3fce_0000, SPI3);
+        assert_eq!(
+            gdma.read(CH + OUT + IN_LINK),
+            Some(0xe_0000),
+            "SPI3 running"
+        );
         gdma.write(CH + OUT + IN_LINK, OUTLINK_STOP).unwrap();
         start(&mut gdma, 0x3fce_0000, sha::PERIPHERAL);
         assert_eq!(gdma.read(CH + OUT + IN_LINK), Some(0xe_0000), "running");

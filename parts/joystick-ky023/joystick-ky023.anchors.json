@@ -1,0 +1,11 @@
+{
+  "part": "joystick-ky023",
+  "units": "mm",
+  "anchors": [
+    {"lead": 1, "node": "pin-1", "also": ["housing-1"], "at": [-22.5, 5.08, 2.87], "axis": [-1.0, 0.0, 0.0], "kind": "leg"},
+    {"lead": 2, "node": "pin-2", "also": ["housing-2"], "at": [-22.5, 2.54, 2.87], "axis": [-1.0, 0.0, 0.0], "kind": "leg"},
+    {"lead": 3, "node": "pin-3", "also": ["housing-3"], "at": [-22.5, 0.0, 2.87], "axis": [-1.0, 0.0, 0.0], "kind": "leg"},
+    {"lead": 4, "node": "pin-4", "also": ["housing-4"], "at": [-22.5, -2.54, 2.87], "axis": [-1.0, 0.0, 0.0], "kind": "leg"},
+    {"lead": 5, "node": "pin-5", "also": ["housing-5"], "at": [-22.5, -5.08, 2.87], "axis": [-1.0, 0.0, 0.0], "kind": "leg"}
+  ]
+}

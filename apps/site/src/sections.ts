@@ -55,8 +55,11 @@ export const PART_SECTION_BY_ID: Readonly<Record<string, PartSection>> = {
   "led-5mm": "LEDs and lights",
   "led-5mm-blue": "LEDs and lights",
   "led-5mm-green": "LEDs and lights",
+  "led-5mm-rgb-ca": "LEDs and lights",
+  "led-5mm-rgb-cc": "LEDs and lights",
   "led-5mm-white": "LEDs and lights",
   "led-5mm-yellow": "LEDs and lights",
+  "neopixel-ring-16": "LEDs and lights",
   "neopixel-stick-8": "LEDs and lights",
 
   // Resistors, capacitors, passives and knobs
@@ -94,6 +97,7 @@ export const PART_SECTION_BY_ID: Readonly<Record<string, PartSection>> = {
   // Breadboards and switches
   "breadboard-400": "Breadboards and switches",
   "breadboard-830": "Breadboards and switches",
+  "joystick-ky023": "Breadboards and switches",
   "tactile-switch-6mm": "Breadboards and switches",
   "tactile-switch-ntc013": "Breadboards and switches",
   "tactile-switch-smd": "Breadboards and switches",

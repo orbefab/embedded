@@ -1,5 +1,5 @@
-//! I2C0 as a bus master: its command list, both FIFOs, the master interrupts, and the SCL and
-//! SDA waveform at pin level, timed in cycles of its clock from its own registers.
+//! I2C0 and I2C1 as bus masters: each port's command list, both FIFOs, the master interrupts, and
+//! the SCL and SDA waveform at pin level, timed in cycles of its clock from its own registers.
 //!
 //! The clock is the 40 MHz crystal over `I2C_SCLK_DIV_NUM + 1`. `I2C_CONF_UPGATE` copies the
 //! timing registers into the timing a transfer runs with. Five lengths count their register plus
@@ -57,10 +57,19 @@
 use super::clock::{Tick, XTAL};
 use super::gpio::Gpio;
 
-/// `I2CEXT0_SCL_OUT_IDX` and `I2CEXT0_SCL_IN_IDX`, from `soc/esp32s3/include/soc/gpio_sig_map.h`.
-pub(crate) const SCL: u16 = 89;
-/// `I2CEXT0_SDA_OUT_IDX` and `I2CEXT0_SDA_IN_IDX`.
-pub(crate) const SDA: u16 = 90;
+/// Base addresses of I2C0 and I2C1 (`DR_REG_I2C_EXT_BASE`, `DR_REG_I2C1_EXT_BASE`).
+pub(crate) const I2C0: u32 = 0x6001_3000;
+pub(crate) const I2C1: u32 = 0x6002_7000;
+pub(crate) const BASES: [u32; 2] = [I2C0, I2C1];
+pub(crate) const NAMES: [&str; 2] = ["I2C0", "I2C1"];
+/// `(SCL, SDA)` GPIO matrix signals for I2C0 and I2C1 (`I2CEXTn_SCL_*_IDX`, `I2CEXTn_SDA_*_IDX`),
+/// from `soc/esp32s3/include/soc/gpio_sig_map.h`.
+pub(crate) const SIGNALS: [(u16, u16); 2] = [(89, 90), (91, 92)];
+
+/// Port index for the peripheral block base `base`, or `None` when `base` is not an I2C port.
+pub(crate) fn index(base: u32) -> Option<usize> {
+    BASES.iter().position(|&b| b == base)
+}
 
 const SCL_LOW_PERIOD: u32 = 0x00;
 const CTR: u32 = 0x04;
@@ -161,6 +170,9 @@ const FIFO: usize = 32;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct I2c {
+    /// This port's GPIO matrix signals `(SCL, SDA)`.
+    scl: u16,
+    sda: u16,
     /// The words as stored, the timing registers among them.
     regs: [u32; WORDS],
     /// The timing the bus runs with, as `CONF_UPGATE` last took it.
@@ -389,7 +401,8 @@ fn kind(offset: u32) -> Option<Kind> {
 }
 
 impl I2c {
-    pub(crate) fn new() -> I2c {
+    pub(crate) fn new(port: usize) -> I2c {
+        let (scl, sda) = SIGNALS[port];
         let mut regs = [0; WORDS];
         for (offset, value) in [
             (
@@ -410,6 +423,8 @@ impl I2c {
             regs[(offset / 4) as usize] = value;
         }
         I2c {
+            scl,
+            sda,
             timing: Timing::from_regs(&regs),
             regs,
             tx: Fifo::EMPTY,
@@ -523,7 +538,7 @@ impl I2c {
                 };
                 let start = !running && offset == CTR && value & TRANS_START != 0;
                 let op = start
-                    .then(|| Self::startable(&regs, timing, gpio, self.held))
+                    .then(|| Self::startable(&regs, timing, gpio, self.held, self.scl, self.sda))
                     .transpose()?;
                 self.regs = regs;
                 self.timing = timing;
@@ -558,9 +573,11 @@ impl I2c {
         timing: Timing,
         gpio: &Gpio,
         held: bool,
+        scl: u16,
+        sda: u16,
     ) -> Result<Op, &'static str> {
         let ctr = word(regs, CTR);
-        let pads = [SCL, SDA].map(|signal| {
+        let pads = [scl, sda].map(|signal| {
             let pad = gpio.routed(signal)?;
             let both = gpio.carries(usize::from(pad)) == Some((signal, false))
                 && gpio.reads(signal) == Some(pad);
@@ -644,8 +661,8 @@ impl I2c {
     /// SDA still low while SCL is high, it releases SDA after the setup.
     fn start_stop(&mut self, now: Tick, gpio: &Gpio, nack_stop: bool) {
         let timing = self.timing;
-        let scl_high = gpio.input(SCL) == Some(true);
-        let sda_high = gpio.input(SDA) == Some(true);
+        let scl_high = gpio.input(self.scl) == Some(true);
+        let sda_high = gpio.input(self.sda) == Some(true);
         self.busy = true;
         let mut run = Run {
             cmd: 0,
@@ -735,7 +752,7 @@ impl I2c {
         self.observe(at, gpio);
         if let Some(mut run) = self.run
             && run.phase == Phase::Rising
-            && gpio.input(SCL) == Some(true)
+            && gpio.input(self.scl) == Some(true)
         {
             self.high(&mut run, at);
             self.run = Some(run);
@@ -747,7 +764,7 @@ impl I2c {
     /// would drop, which the model refuses, since it does not run the filter.
     fn observe(&mut self, at: Tick, gpio: &Gpio) {
         let filter = self.reg(FILTER_CFG);
-        for (k, signal) in [SCL, SDA].into_iter().enumerate() {
+        for (k, signal) in [self.scl, self.sda].into_iter().enumerate() {
             let Some(level) = gpio.input(signal) else {
                 continue;
             };
@@ -767,7 +784,7 @@ impl I2c {
     /// Puts `level` on `signal` at `at`. A move of a netted pad's drive waits for its halt, and
     /// any other takes effect at once.
     fn drive(&mut self, at: Tick, signal: u16, level: bool, gpio: &mut Gpio) {
-        if signal == SDA {
+        if signal == self.sda {
             self.sda_out = level;
         }
         if gpio.moves(signal, level) {
@@ -850,12 +867,12 @@ impl I2c {
         match run.phase {
             Phase::Start(Edge::Sda) => {
                 self.busy = true;
-                self.drive(at, SDA, false, gpio);
+                self.drive(at, self.sda, false, gpio);
                 run.phase = Phase::Start(Edge::Scl);
                 run.next = Some(timing.after(at, timing.start_hold));
             }
             Phase::Start(Edge::Scl) => {
-                self.drive(at, SCL, false, gpio);
+                self.drive(at, self.scl, false, gpio);
                 self.next_command(&mut run, at)?;
             }
             Phase::Resume => self.begin(&mut run, at)?,
@@ -873,15 +890,15 @@ impl I2c {
                     _ => true,
                 };
                 if level != self.sda_out {
-                    self.drive(at, SDA, level, gpio);
+                    self.drive(at, self.sda, level, gpio);
                 }
                 run.phase = Phase::Low { sda_set: true };
                 run.next = Some(timing.after(at, timing.low - timing.sda_hold));
             }
             Phase::Low { sda_set: true } => {
-                self.drive(at, SCL, true, gpio);
+                self.drive(at, self.scl, true, gpio);
                 run.release = at;
-                if gpio.input(SCL) == Some(true) {
+                if gpio.input(self.scl) == Some(true) {
                     self.high(&mut run, at);
                 } else {
                     run.phase = Phase::Rising;
@@ -895,12 +912,12 @@ impl I2c {
                 self.held = false;
                 self.after_nack = false;
                 if !self.sda_out {
-                    self.drive(at, SDA, true, gpio);
+                    self.drive(at, self.sda, true, gpio);
                 }
                 return Ok(());
             }
             Phase::High { sampled: false } => {
-                let sda = gpio.input(SDA) == Some(true);
+                let sda = gpio.input(self.sda) == Some(true);
                 match (run.slot, run.op) {
                     (Slot::Bit, Op::Read { .. }) => {
                         run.byte = run.byte << 1 | u8::from(sda);
@@ -919,7 +936,7 @@ impl I2c {
                 run.next = Some(timing.after(waited, timing.high));
             }
             Phase::High { sampled: true } => {
-                self.drive(at, SCL, false, gpio);
+                self.drive(at, self.scl, false, gpio);
                 match run.slot {
                     Slot::Bit => {
                         run.bit += 1;
@@ -939,7 +956,7 @@ impl I2c {
                 }
             }
             Phase::Stop { released: false } => {
-                self.drive(at, SDA, true, gpio);
+                self.drive(at, self.sda, true, gpio);
                 run.phase = Phase::Stop { released: true };
                 run.next = Some(timing.after(at, timing.stop_hold));
             }

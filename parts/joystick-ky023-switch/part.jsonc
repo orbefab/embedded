@@ -1,0 +1,67 @@
+// Unlisted center-push tactile switch and thumbstick cap inside joystick-ky023.
+{
+  "format": 1,
+  "part": "joystick-ky023-switch",
+  "version": "0.1.0",
+  "title": "KY-023 push switch and thumbstick cap (internal)",
+  "summary": "Unlisted momentary center-push switch and thumbstick cap inside a KY-023 joystick module. Clicking the cap on the page or running `press` closes contacts a and b.",
+  "tags": ["switch", "button", "joystick", "internal"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Joy-IT COM-KY023JM Joystick Module Datasheet": "https://www.joy-it.net/files/files/Produkte/COM-KY023JM/COM-KY023JM-Datasheet20201026.pdf",
+  },
+  "real": {
+    "generic": true,
+    "maker": null,
+    "number": "KY-023",
+    "datasheet": "Joy-IT COM-KY023JM Joystick Module Datasheet",
+  },
+  "pins": { "a": [1], "b": [2] },
+  "params": {
+    "bounce": { "unit": "s", "default": null, "sets": "/bounce/window" },
+    "max_bounces": { "unit": "1", "default": 2, "sets": "/bounce/max_bounces" },
+  },
+  "model": {
+    "kind": "switch",
+    "on_resistance": {
+      "value": 0.1,
+      "unit": "ohm",
+      "source": {
+        "closed_form": {
+          "note": "Joy-IT COM-KY023JM publishes no contact resistance for the integrated tactile switch; 100 mohm closed matches a standard tactile switch contact.",
+        },
+      },
+    },
+    "off_resistance": {
+      "value": 1e8,
+      "unit": "ohm",
+      "source": {
+        "closed_form": {
+          "note": "Joy-IT COM-KY023JM publishes no insulation resistance for the integrated tactile switch; 100 Mohm open matches a standard tactile switch.",
+        },
+      },
+    },
+    "initial": "open",
+    "events": [],
+    "bounce": null,
+  },
+  "controls": { "press": { "input": "contact", "joint": "plunger" } },
+  "joints": {
+    "plunger": {
+      "node": "plunger",
+      "slide": [0, 0, -1],
+      "range": {
+        "value": 0.5,
+        "unit": "mm",
+        "source": {
+          "closed_form": {
+            "note": "Joy-IT COM-KY023JM publishes no button travel; 0.5 mm matches a typical PS2-style thumbstick click.",
+          },
+        },
+      },
+    },
+  },
+  "not_simulated": [
+    { "what": "operating force", "why": "A press is a contact change; actuation force is not modelled." },
+  ],
+}

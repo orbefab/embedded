@@ -1,0 +1,39 @@
+# RGB LED colour mixing: cycles red, orange (PWM mix), green, cyan, blue, magenta (PWM mix)
+# holding each for 400 ms.
+open
+step 50ms
+expect @rgb.red lit
+expect @rgb.green off
+expect @rgb.blue off
+# Orange: red full, green ~50% PWM duty (~5 mA)
+step 400ms
+expect @rgb.red lit
+expect @rgb.green lit
+expect @rgb.green.brightness > 4mA
+expect @rgb.green.brightness < 6mA
+expect @rgb.blue off
+# Green
+step 400ms
+expect @rgb.red off
+expect @rgb.green lit
+expect @rgb.green.brightness > 9mA
+expect @rgb.blue off
+# Cyan
+step 400ms
+expect @rgb.red off
+expect @rgb.green lit
+expect @rgb.blue lit
+# Blue
+step 400ms
+expect @rgb.red off
+expect @rgb.green off
+expect @rgb.blue lit
+expect @rgb.blue.brightness > 9mA
+# Magenta: red full, blue ~50% PWM duty (~5 mA)
+step 400ms
+expect @rgb.red lit
+expect @rgb.green off
+expect @rgb.blue lit
+expect @rgb.blue.brightness > 4mA
+expect @rgb.blue.brightness < 6mA
+expect no diagnostics

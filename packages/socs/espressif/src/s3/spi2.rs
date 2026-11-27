@@ -1,10 +1,10 @@
-//! SPI2, the general-purpose SPI host IDF calls GPSPI2, as a master: the firmware writes up to
-//! 64 bytes into `SPI_W0` to `SPI_W15`, or points a GDMA channel at them with `SPI_DMA_TX_ENA`
-//! set, and sets `SPI_USR`, and the host sends a command phase, an address phase and the data
-//! on one, two or four lanes. With `SPI_USR_MISO` it reads up to 64 bytes on MISO into
-//! `SPI_W0` on: in a read phase after the data, or with `SPI_DOUTDIN` one byte beside each byte
-//! it sends, on one lane. The read is `SPI_MS_DATA_BITLEN` long, as the data is. The target's
-//! bytes come at the transfer's end, before the firmware can read `SPI_USR` as 0.
+//! SPI2 and SPI3, the general-purpose SPI hosts IDF calls GPSPI2 and GPSPI3, as masters: the
+//! firmware writes up to 64 bytes into `SPI_W0` to `SPI_W15`, or points a GDMA channel at them
+//! with `SPI_DMA_TX_ENA` set, and sets `SPI_USR`, and the host sends a command phase, an address
+//! phase and the data on one, two or four lanes. With `SPI_USR_MISO` it reads up to 64 bytes on
+//! MISO into `SPI_W0` on: in a read phase after the data, or with `SPI_DOUTDIN` one byte beside
+//! each byte it sends, on one lane. The read is `SPI_MS_DATA_BITLEN` long, as the data is. The
+//! target's bytes come at the transfer's end, before the firmware can read `SPI_USR` as 0.
 //!
 //! Each transfer is one [`Transfer`], with the phases and the data as the registers set them when
 //! `SPI_USR` was written, and the pads the GPIO matrix routed its signals to then. It lasts its
@@ -106,19 +106,45 @@ const MST_CLK_SEL: u32 = 1 << 2;
 const MST_CLK_ACTIVE: u32 = 1 << 1;
 const CLK_EN: u32 = 1 << 0;
 
-/// `SPI_TRANS_DONE_INT_*`, the one interrupt SPI2 raises here.
+/// `SPI_TRANS_DONE_INT_*`, the one interrupt each host raises here.
 pub(crate) const TRANS_DONE: u32 = 1 << 12;
 
-/// The GPIO matrix's signals of SPI2, from IDF's `soc/esp32s3/include/soc/gpio_sig_map.h`.
-pub(crate) const FSPICLK: u16 = 101;
-pub(crate) const FSPIQ: u16 = 102;
-pub(crate) const FSPID: u16 = 103;
-pub(crate) const FSPIHD: u16 = 104;
-pub(crate) const FSPIWP: u16 = 105;
-pub(crate) const FSPICS0: u16 = 110;
+/// Base addresses of SPI2 and SPI3 (`DR_REG_SPI2_BASE`, `DR_REG_SPI3_BASE`).
+pub(crate) const SPI2: u32 = 0x6002_4000;
+pub(crate) const SPI3: u32 = 0x6002_5000;
+pub(crate) const BASES: [u32; 2] = [SPI2, SPI3];
+pub(crate) const NAMES: [&str; 2] = ["SPI2", "SPI3"];
+/// `GDMA_PERI_OUT_SEL` values for SPI2 and SPI3 (`SOC_GDMA_TRIG_PERIPH_SPI2`, `..._SPI3`).
+pub(crate) const DMA_PERIPHERALS: [u32; 2] = [super::gdma::SPI2, super::gdma::SPI3];
 
-/// The data lines D0 to D3 in quad mode, as signals.
-const LANES: [u16; 4] = [FSPID, FSPIQ, FSPIWP, FSPIHD];
+/// Port index for the peripheral block base `base`, or `None` when `base` is not an SPI host.
+pub(crate) fn index(base: u32) -> Option<usize> {
+    BASES.iter().position(|&b| b == base)
+}
+
+/// The GPIO matrix signals of one SPI host: CS0, CLK, and data lines D0 to D3 (MOSI, MISO, WP,
+/// HD), from IDF's `soc/esp32s3/include/soc/gpio_sig_map.h`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Signals {
+    cs0: u16,
+    clk: u16,
+    lanes: [u16; 4],
+}
+
+const SIGNALS: [Signals; 2] = [
+    // SPI2 (FSPI): FSPICS0, FSPICLK, FSPID, FSPIQ, FSPIWP, FSPIHD.
+    Signals {
+        cs0: 110,
+        clk: 101,
+        lanes: [103, 102, 105, 104],
+    },
+    // SPI3 (HSPI): SPI3_CS0, SPI3_CLK, SPI3_D, SPI3_Q, SPI3_WP, SPI3_HD.
+    Signals {
+        cs0: 71,
+        clk: 66,
+        lanes: [68, 67, 70, 69],
+    },
+];
 
 /// `PLL_F80M`, the clock `SPI_MST_CLK_SEL` 1 picks. 0 picks the crystal.
 const PLL_F80M: u64 = 80_000_000;
@@ -222,9 +248,11 @@ pub struct Pads {
     pub data: [Option<u8>; 4],
 }
 
-/// One SPI2 transfer as its registers set it.
+/// One SPI2 or SPI3 transfer as its registers set it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Transfer {
+    /// The host that sent it, `"SPI2"` or `"SPI3"`.
+    pub peripheral: &'static str,
     /// The tick `SPI_USR` was written.
     pub start: Tick,
     /// The tick its last clock ends, rounded up to a CPU cycle, from which `SPI_USR` reads 0.
@@ -243,7 +271,9 @@ pub struct Transfer {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Spi2 {
+pub(crate) struct Spi {
+    /// 0 for SPI2, 1 for SPI3.
+    port: usize,
     /// The registers from `SPI_CMD` to `SPI_DATE`, by offset over 4.
     regs: [u32; 61],
     /// The registers of [`SYNCED`] as the last `SPI_UPDATE` left them.
@@ -255,8 +285,8 @@ pub(crate) struct Spi2 {
     transfers: VecDeque<Transfer>,
 }
 
-impl Spi2 {
-    pub(crate) fn new() -> Spi2 {
+impl Spi {
+    pub(crate) fn new(port: usize) -> Spi {
         let mut regs = [0; 61];
         for (offset, value) in [
             (CTRL, WP_POL | HOLD_POL | D_POL | Q_POL),
@@ -272,7 +302,8 @@ impl Spi2 {
         }
         let mut synced = [0; 11];
         synced.copy_from_slice(&regs[SYNCED]);
-        Spi2 {
+        Spi {
+            port,
             regs,
             synced,
             done_at: None,
@@ -300,9 +331,9 @@ impl Spi2 {
     /// sent stay to be taken.
     pub(crate) fn reset(&mut self) {
         let transfers = std::mem::take(&mut self.transfers);
-        *self = Spi2 {
+        *self = Spi {
             transfers,
-            ..Spi2::new()
+            ..Spi::new(self.port)
         };
     }
 
@@ -523,7 +554,10 @@ impl Spi2 {
             XTAL_HZ
         };
         let ticks = clocks * divider * (TICK_HZ / source);
+        let signals = SIGNALS[self.port];
+        let q = signals.lanes[1];
         Ok(Transfer {
+            peripheral: NAMES[self.port],
             start: now,
             end: Tick(now.0 + ticks.div_ceil(cpu) * cpu),
             phases,
@@ -533,10 +567,10 @@ impl Spi2 {
             clock_hz: u32::try_from(source / divider).expect("an SPI clock below 4 GHz"),
             held: self.reg(MISC) & CS_KEEP_ACTIVE != 0,
             pads: Pads {
-                cs: gpio.routed(FSPICS0),
-                sclk: gpio.routed(FSPICLK),
-                data: LANES.map(|signal| match gpio.routed(signal) {
-                    None if signal == FSPIQ && miso != Miso::None => gpio.reads(FSPIQ),
+                cs: gpio.routed(signals.cs0),
+                sclk: gpio.routed(signals.clk),
+                data: signals.lanes.map(|signal| match gpio.routed(signal) {
+                    None if signal == q && miso != Miso::None => gpio.reads(q),
                     routed => routed,
                 }),
             },
@@ -547,13 +581,14 @@ impl Spi2 {
     /// idle, and each data line at its polarity bit.
     pub(crate) fn idle(&self) -> [(u16, bool); 6] {
         let (ctrl, misc) = (self.reg(CTRL), self.reg(MISC));
+        let signals = SIGNALS[self.port];
         [
-            (FSPICS0, misc & MASTER_CS0_POL == 0),
-            (FSPICLK, misc & CK_IDLE_EDGE != 0),
-            (FSPID, ctrl & D_POL != 0),
-            (FSPIQ, ctrl & Q_POL != 0),
-            (FSPIWP, ctrl & WP_POL != 0),
-            (FSPIHD, ctrl & HOLD_POL != 0),
+            (signals.cs0, misc & MASTER_CS0_POL == 0),
+            (signals.clk, misc & CK_IDLE_EDGE != 0),
+            (signals.lanes[0], ctrl & D_POL != 0),
+            (signals.lanes[1], ctrl & Q_POL != 0),
+            (signals.lanes[2], ctrl & WP_POL != 0),
+            (signals.lanes[3], ctrl & HOLD_POL != 0),
         ]
     }
 
@@ -573,6 +608,13 @@ impl Spi2 {
     /// The end of the `n`th transfer not yet taken, counting from 0.
     pub(crate) fn end(&self, n: usize) -> Option<Tick> {
         self.transfers.get(n).map(|transfer| transfer.end)
+    }
+
+    /// Whether the `n`th transfer not yet taken reads bytes on MISO.
+    pub(crate) fn reads(&self, n: usize) -> bool {
+        self.transfers
+            .get(n)
+            .is_some_and(|transfer| transfer.miso != Miso::None)
     }
 
     /// Puts the bytes a transfer read into `SPI_W0` on, the first in the low byte of `SPI_W0`.
@@ -606,8 +648,12 @@ mod tests {
         panic!("a transfer from the buffer reads no DMA")
     }
 
-    fn spi() -> (Spi2, Gpio) {
-        let (mut spi, gpio) = (Spi2::new(), Gpio::new(&[]));
+    fn spi() -> (Spi, Gpio) {
+        spi_port(0)
+    }
+
+    fn spi_port(port: usize) -> (Spi, Gpio) {
+        let (mut spi, gpio) = (Spi::new(port), Gpio::new(&[]));
         set(&mut spi, &gpio, &[(CLK_GATE, CLOCKED)]);
         (spi, gpio)
     }
@@ -626,7 +672,7 @@ mod tests {
     }
 
     /// Makes `writes`, then syncs them with `SPI_UPDATE`.
-    fn set(spi: &mut Spi2, gpio: &Gpio, writes: &[(u32, u32)]) {
+    fn set(spi: &mut Spi, gpio: &Gpio, writes: &[(u32, u32)]) {
         for &(offset, value) in writes.iter().chain(&[(CMD, UPDATE)]) {
             assert_eq!(
                 spi.write(c(0), XTAL, offset, value, gpio, no_dma),
@@ -637,7 +683,7 @@ mod tests {
 
     /// A command of 8 bits, a 24-bit address and `data` on `lanes`, with CS kept, at 10 MHz from
     /// the crystal.
-    fn command_and_data(spi: &mut Spi2, gpio: &Gpio, data: &[u8], quad: bool) {
+    fn command_and_data(spi: &mut Spi, gpio: &Gpio, data: &[u8], quad: bool) {
         let mut words = [0u32; 16];
         for (k, &byte) in data.iter().enumerate() {
             words[k / 4] |= u32::from(byte) << (8 * (k % 4));
@@ -693,30 +739,33 @@ mod tests {
     /// answered land in `SPI_W0` from its low byte. MISO is read on the pad `FSPIQ`'s input reads.
     #[test]
     fn a_read_phase_lasts_its_clocks_and_its_bytes_land_in_w0() {
-        let (mut spi, _) = spi();
-        let mut gpio = Gpio::new(&[13]);
-        gpio.write(0x154 + 4 * u32::from(FSPIQ), 1 << 7 | 13)
-            .unwrap();
-        set(
-            &mut spi,
-            &gpio,
-            &[
-                (CLOCK, 3 << 12 | 1 << 6 | 3),
-                (USER, USR_COMMAND | USR_MISO),
-                (USER2, 7 << 28 | 0x9f),
-                (MS_DLEN, 8 * 3 - 1),
-                (W0, 0xaaaa_aaaa),
-            ],
-        );
-        assert_eq!(spi.write(c(100), XTAL, CMD, USR, &gpio, no_dma), Ok(true));
-        let transfer = spi.transfers.back().unwrap().clone();
-        assert_eq!(transfer.miso, Miso::Read(3));
-        assert!(transfer.data.is_empty());
-        assert_eq!(transfer.pads.data[1], Some(13));
-        // 8 clocks for the command and 24 for the read, of 4 cycles each.
-        assert_eq!(transfer.end, c(100 + 32 * 4));
-        spi.answered(&[0xef, 0x40, 0x18]);
-        assert_eq!(spi.read(transfer.end, W0), Some(0xaa18_40ef));
+        for (port, name) in [(0, "SPI2"), (1, "SPI3")] {
+            let (mut spi, _) = spi_port(port);
+            let mut gpio = Gpio::new(&[13]);
+            let q = SIGNALS[port].lanes[1];
+            gpio.write(0x154 + 4 * u32::from(q), 1 << 7 | 13).unwrap();
+            set(
+                &mut spi,
+                &gpio,
+                &[
+                    (CLOCK, 3 << 12 | 1 << 6 | 3),
+                    (USER, USR_COMMAND | USR_MISO),
+                    (USER2, 7 << 28 | 0x9f),
+                    (MS_DLEN, 8 * 3 - 1),
+                    (W0, 0xaaaa_aaaa),
+                ],
+            );
+            assert_eq!(spi.write(c(100), XTAL, CMD, USR, &gpio, no_dma), Ok(true));
+            let transfer = spi.transfers.back().unwrap().clone();
+            assert_eq!(transfer.peripheral, name);
+            assert_eq!(transfer.miso, Miso::Read(3));
+            assert!(transfer.data.is_empty());
+            assert_eq!(transfer.pads.data[1], Some(13));
+            // 8 clocks for the command and 24 for the read, of 4 cycles each.
+            assert_eq!(transfer.end, c(100 + 32 * 4));
+            spi.answered(&[0xef, 0x40, 0x18]);
+            assert_eq!(spi.read(transfer.end, W0), Some(0xaa18_40ef));
+        }
     }
 
     /// With `SPI_DOUTDIN` the read is one byte beside each byte it sends, and adds no clocks.
@@ -741,7 +790,7 @@ mod tests {
         command_and_data(&mut spi, &gpio, &[1], false);
         spi.write(c(10), XTAL, CMD, USR, &gpio, no_dma).unwrap();
         let end = spi.end(0).unwrap();
-        let done = |spi: &mut Spi2, at| {
+        let done = |spi: &mut Spi, at| {
             (
                 spi.read(Tick(at), CMD).unwrap() & USR != 0,
                 spi.read(Tick(at), DMA_INT_RAW).unwrap() & TRANS_DONE != 0,
@@ -981,7 +1030,7 @@ mod tests {
         assert!(!spi.line(Tick(end.0 - 1)));
         assert!(spi.line(end));
         assert_eq!(spi.next_event(), None, "it rose");
-        let write = |spi: &mut Spi2, offset, value| {
+        let write = |spi: &mut Spi, offset, value| {
             spi.write(end, XTAL, offset, value, &gpio, no_dma).unwrap();
         };
         write(&mut spi, DMA_INT_CLR, TRANS_DONE);
@@ -1068,26 +1117,31 @@ mod tests {
 
     #[test]
     fn the_idle_levels_follow_the_polarity_and_idle_edge_bits() {
-        let (mut spi, gpio) = spi();
-        assert_eq!(
-            spi.idle(),
-            [
-                (FSPICS0, true),
-                (FSPICLK, false),
-                (FSPID, true),
-                (FSPIQ, true),
-                (FSPIWP, true),
-                (FSPIHD, true)
-            ]
-        );
-        set(
-            &mut spi,
-            &gpio,
-            &[(MISC, CK_IDLE_EDGE | MASTER_CS0_POL), (CTRL, Q_POL)],
-        );
-        assert_eq!(
-            spi.idle().map(|(_, level)| level),
-            [false, true, false, true, false, false]
-        );
+        for (port, expected) in [
+            (0, [110, 101, 103, 102, 105, 104]),
+            (1, [71, 66, 68, 67, 70, 69]),
+        ] {
+            let (mut spi, gpio) = spi_port(port);
+            assert_eq!(
+                spi.idle(),
+                [
+                    (expected[0], true),
+                    (expected[1], false),
+                    (expected[2], true),
+                    (expected[3], true),
+                    (expected[4], true),
+                    (expected[5], true),
+                ]
+            );
+            set(
+                &mut spi,
+                &gpio,
+                &[(MISC, CK_IDLE_EDGE | MASTER_CS0_POL), (CTRL, Q_POL)],
+            );
+            assert_eq!(
+                spi.idle().map(|(_, level)| level),
+                [false, true, false, true, false, false]
+            );
+        }
     }
 }
