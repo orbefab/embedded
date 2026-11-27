@@ -322,14 +322,14 @@ impl Hd44780I2c {
         Settings::new(
             &SETTINGS,
             [
-                u16::from(self.backlight_on()),
-                u16::from(self.cursor_on),
-                u16::from(self.blink_on),
-                u16::from(self.two_line),
-                u16::from(self.shift),
-                u16::from(self.current_ac()),
-                u16::from(self.in_cgram),
-                u16::from(self.powered),
+                u32::from(self.backlight_on()),
+                u32::from(self.cursor_on),
+                u32::from(self.blink_on),
+                u32::from(self.two_line),
+                u32::from(self.shift),
+                u32::from(self.current_ac()),
+                u32::from(self.in_cgram),
+                u32::from(self.powered),
             ],
         )
     }

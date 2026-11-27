@@ -28,6 +28,8 @@ export const PART_SECTION_BY_ID: Readonly<Record<string, PartSection>> = {
   "display-7seg-cc": "Displays",
   "hd44780-1602-i2c": "Displays",
   "lcd1602-i2c": "Displays",
+  "max7219-matrix-4in1": "Displays",
+  "max7219-matrix-8x8": "Displays",
   "oled-ssd1306-128x64": "Displays",
   "ssd1306-oled-128x64": "Displays",
 
@@ -110,6 +112,7 @@ export const PART_SECTION_BY_ID: Readonly<Record<string, PartSection>> = {
   "pin-header-1x22": "Connectors and sockets",
   "pin-header-1x3": "Connectors and sockets",
   "pin-header-1x4": "Connectors and sockets",
+  "pin-header-1x5": "Connectors and sockets",
   "pin-header-1x6": "Connectors and sockets",
   "pin-header-2x3": "Connectors and sockets",
   "socket-strip-1x10": "Connectors and sockets",

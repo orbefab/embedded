@@ -240,7 +240,7 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "battery" | "button" | "digit" | "fade" | "joystick" | "lcd" | "light" | "pixels" | "relay" | "rgb" | "rgbled" | "ring" | "screen" | "serial" | "servo" | "shift" | "temperature" | "tone";
+export type BlockKind = "battery" | "button" | "digit" | "fade" | "joystick" | "lcd" | "light" | "matrix" | "pixels" | "relay" | "rgb" | "rgbled" | "ring" | "screen" | "serial" | "servo" | "shift" | "temperature" | "tone";
 
 export interface RepoBlock {
   id: string;
@@ -276,6 +276,7 @@ export function blockKind(scene: string, id: string): BlockKind {
   if (/"type"\s*:\s*"led-5mm-rgb-cc"/.test(code) || /"type"\s*:\s*"led-5mm-rgb-ca"/.test(code)) return "rgbled";
   if (/"type"\s*:\s*"oled-ssd1306-128x64"/.test(code)) return "screen";
   if (/"type"\s*:\s*"lcd1602-i2c"/.test(code)) return "lcd";
+  if (/"type"\s*:\s*"max7219-matrix-8x8"/.test(code) || /"type"\s*:\s*"max7219-matrix-4in1"/.test(code)) return "matrix";
   if (/"type"\s*:\s*"hc595-dip16"/.test(code)) return "shift";
   if (/"type"\s*:\s*"gy-bmp280"/.test(code)) return "serial";
   if (/"type"\s*:\s*"esp32s3-devkitc-1"/.test(code)) return "rgb";
@@ -284,7 +285,7 @@ export function blockKind(scene: string, id: string): BlockKind {
   if (/"type"\s*:\s*"buzzer-12mm"/.test(code)) return "tone";
   if (/"led1"\s*:/.test(code)) return "fade";
   throw new Error(
-    `${id} names no button, no fading LED, no light, no pixel stick, no screen, no LCD, no 7-segment display, no relay module, no 74HC595, no buzzer, no DevKitC-1, no servo and no serial sensor`,
+    `${id} names no button, no fading LED, no light, no pixel stick, no screen, no LCD, no LED matrix, no 7-segment display, no relay module, no 74HC595, no buzzer, no DevKitC-1, no servo and no serial sensor`,
   );
 }
 
@@ -296,6 +297,7 @@ const READY_NODES: Record<BlockKind, readonly (readonly [string, string?])[]> = 
   joystick: [["@joy.sw", "plunger"], ["@joy.x", "rotor"]],
   lcd: [["@lcd.display", "glass"]],
   light: [["@led1", "body"]],
+  matrix: [["@matrix", "glass"]],
   pixels: [["@stick.px1", "lens"]],
   relay: [["@relay.led", "body"], ["@led1", "body"]],
   rgb: [["@board.led", "lens"], ["@btn1", "stem"]],
@@ -392,6 +394,36 @@ async function showScreen(page: Page, ref: string, shotName: string | null): Pro
       if (data === undefined) return false;
       for (let k = 0; k < data.length; k += 4) if (data[k] === 255) return true;
       return false;
+    },
+    ref,
+    { timeout: SCREEN_WAIT_MS },
+  );
+  if (shotName !== null) {
+    await page.locator("canvas").scrollIntoViewIfNeeded();
+    await shot(page, shotName);
+  }
+}
+
+/** Waits until at least one `glass` node under `ref` shows a lit red LED dot (R >= 128). */
+async function showMatrix(page: Page, ref: string, shotName: string | null): Promise<void> {
+  await page.waitForFunction(
+    (name) => {
+      const root = window.orbeViewer.get().scene.getObjectByName(name);
+      if (root === undefined) return false;
+      let lit = false;
+      root.traverse((node) => {
+        if (lit || node.name !== "glass") return;
+        const material = node.material ?? node.children?.[0]?.material;
+        const data = material?.emissiveMap?.image?.data;
+        if (data === undefined) return;
+        for (let k = 0; k < data.length; k += 4) {
+          if (data[k] >= 128) {
+            lit = true;
+            return;
+          }
+        }
+      });
+      return lit;
     },
     ref,
     { timeout: SCREEN_WAIT_MS },
@@ -778,6 +810,10 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
   }
   if (block.kind === "lcd") {
     await showScreen(page, "@lcd.display", shotName);
+    return;
+  }
+  if (block.kind === "matrix") {
+    await showMatrix(page, "@matrix", shotName);
     return;
   }
   await waitSimulatedPast(page, Math.max(1, start));

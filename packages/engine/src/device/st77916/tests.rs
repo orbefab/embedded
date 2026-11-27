@@ -235,7 +235,7 @@ fn a_command_word_sent_as_bytes_opens_the_command_the_next_bytes_continue() {
             spi(&[], &[0x11, 0x22], Lanes::Four, Cs::Released),
         ],
     );
-    assert_eq!(core.panel().settings.get("madctl").unwrap(), u16::from(MX));
+    assert_eq!(core.panel().settings.get("madctl").unwrap(), u32::from(MX));
     assert_eq!(pixel(&core.image(), 359, 0), &[0x11, 0x22]);
     assert_eq!(core.closed.len(), 1);
     assert_eq!(core.broke_rules().count(), 0);

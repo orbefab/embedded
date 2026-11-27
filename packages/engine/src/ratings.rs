@@ -235,6 +235,8 @@ struct Gauge {
     outputs: Vec<Pin>,
     /// The columns of its supply and ground nets and its own draw.
     supply: Option<(usize, usize, active::Supply)>,
+    /// The columns of its supply and ground nets for a device's `Draw`.
+    draw: Option<(usize, usize)>,
     /// Each output's current out of its pin, then the current into the supply pin, then the
     /// current out of the ground pin. Set by the last sample.
     currents: Vec<f64>,
@@ -484,6 +486,9 @@ impl Ratings {
                     supply: chip
                         .supply
                         .map(|supply| (columns.net(supply.vcc), columns.net(supply.gnd), supply)),
+                    draw: chip
+                        .draw
+                        .map(|(vcc, gnd)| (columns.net(vcc), columns.net(gnd))),
                     currents: vec![0.0; outputs + 2],
                 });
             }
@@ -1464,6 +1469,11 @@ impl Gauge {
             let own = (row[vcc].get() - row[gnd].get()) * own.conductance(core);
             supply += own;
             ground += own;
+        }
+        if let Some((vcc, gnd)) = self.draw {
+            let (amps, _) = core.draw().at(row[vcc].get() - row[gnd].get());
+            supply += amps;
+            ground += amps;
         }
         let outputs = self.outputs.len();
         self.currents[outputs] = supply;

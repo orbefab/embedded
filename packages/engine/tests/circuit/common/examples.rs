@@ -90,6 +90,7 @@ pub fn runs_a_core(netlist: &Netlist) -> bool {
             | Chip::Bmp280(_)
             | Chip::PulsesReplay(_)
             | Chip::Hc595(_)
+            | Chip::Max7219(_)
             | Chip::Sg90(_) => true,
         },
         _ => false,
