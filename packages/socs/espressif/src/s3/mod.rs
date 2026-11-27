@@ -404,6 +404,37 @@ impl Esp32s3 {
         self.soc.radio_mut().and_then(wifi::Radio::take_aired)
     }
 
+    /// The radio hears `mpdu`, a frame at `rate` that ended at `at` on the channel it is tuned
+    /// to, at `rssi_dbm` over a noise floor of `noise_dbm`. It returns whether the MAC
+    /// acknowledges it. A frame the model can't receive ends the run at `at`, by name.
+    pub(crate) fn hear(
+        &mut self,
+        at: Tick,
+        mpdu: &[u8],
+        rate: orbe_model::air::Rate,
+        rssi_dbm: i8,
+        noise_dbm: i8,
+    ) -> bool {
+        let frame = wifi::Heard {
+            mpdu,
+            rate,
+            rssi_dbm,
+            noise_dbm,
+        };
+        match self.soc.hear(at, frame) {
+            Ok(ack) => ack,
+            Err(setting) => {
+                let pc = Pc {
+                    core: CoreId::Pro,
+                    pc: self.cores.core(CoreId::Pro).pc(),
+                };
+                let refused = Refused::Register("RADIO", setting);
+                self.fault.get_or_insert((at, Fault::Refused(refused, pc)));
+                false
+            }
+        }
+    }
+
     /// Whether any station acknowledged the frame that ended at the last halt. The chip takes it
     /// there before it runs on.
     pub fn acked(&mut self, ack: orbe_model::air::Ack) {

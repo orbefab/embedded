@@ -1,13 +1,14 @@
 //! An ESP32-S3 in a netlist with a network is built with its radio. The stock Arduino station
 //! sketch then gets through `esp_wifi_init` and `esp_wifi_start`, which `WiFi.mode(WIFI_STA)`
-//! runs, with no diagnostic, and its scan puts a probe request on the air on each channel.
-//! Without the network the same app stops at the radio, as before.
+//! runs, with no diagnostic, and its scan puts a probe request on the air on each channel and
+//! finds the network on its own. Without the network the same app stops at the radio, as before.
 
 use std::sync::Arc;
 
 use orbe_mcu::Setting;
 use orbe_model::Time;
 use orbe_model::air::{AirFrame, Rate};
+use orbe_net::Event;
 
 use super::active::run_active;
 use super::fixtures::open;
@@ -15,7 +16,7 @@ use crate::active::Core;
 use crate::blob::Blobs;
 use crate::diagnostic::Diagnostic;
 use crate::netlist::Netlist;
-use crate::session::BUDGET;
+use crate::session::{BUDGET, SerialCursor};
 
 const MS: u64 = 1_000_000_000;
 
@@ -141,12 +142,15 @@ fn elements(mut body: &[u8]) -> Vec<(u8, &[u8])> {
 /// the network on channel 6 hears its own and answers it. Each probe is a wildcard Probe Request
 /// from the station's MAC to everyone, at 1 Mb/s, on the channel the chip tuned to and named in
 /// its DS Parameter Set. The default country, "01", has channels 1 to 11 (IDF v5.5.5,
-/// `esp_wifi.h`, `esp_wifi_set_country`), so the scan probes those, once each, 100 ms apart.
+/// `esp_wifi.h`, `esp_wifi_set_country`), so the scan probes those, once each. It moves on
+/// 100 ms after a probe, the sketch's minimum active time, from a channel where it hears no
+/// Probe Response, and 300 ms after it, the maximum `WiFi.scanNetworks()` passes, from channel 6,
+/// where it hears one (Arduino-ESP32 3.3.12, `WiFiScan.cpp`).
 #[test]
 fn the_stock_stations_scan_probes_each_channel_and_the_network_answers_on_its_own() {
-    let netlist = station(NETWORK, 1100);
+    let netlist = station(NETWORK, 1400);
     let mut session = open(&netlist, Vec::new(), BUDGET);
-    session.advance_to(Time::from_ps(1100 * MS));
+    session.advance_to(Time::from_ps(1400 * MS));
     assert!(
         session.diagnostics().is_empty(),
         "{:?}",
@@ -192,12 +196,11 @@ fn the_stock_stations_scan_probes_each_channel_and_the_network_answers_on_its_ow
         );
     }
     let starts: Vec<u64> = sent.iter().map(|frame| frame.start.as_ps() / MS).collect();
-    assert!(
-        starts
-            .windows(2)
-            .all(|pair| (100..=101).contains(&(pair[1] - pair[0]))),
-        "{starts:?}"
-    );
+    let gaps: Vec<u64> = starts.windows(2).map(|pair| pair[1] - pair[0]).collect();
+    for (k, gap) in gaps.iter().enumerate() {
+        let want = if k + 1 == 6 { 300 } else { 100 };
+        assert!((want..=want + 1).contains(gap), "{starts:?}");
+    }
 
     // The network heard only the probe on its own channel, and answered it with a Probe
     // Response DIFS after it ended.
@@ -208,4 +211,35 @@ fn the_stock_stations_scan_probes_each_channel_and_the_network_answers_on_its_ow
     assert_eq!(answer.channel.number(), 6);
     assert_eq!(answer.mpdu[..2], [0x50, 0x00]);
     assert!(answer.start > probe.end, "{answer:?} after {probe:?}");
+}
+
+/// The stock station's chip receives the network's Probe Response on channel 6 and acknowledges
+/// it, so `WiFi.scanNetworks()` finds the network there and the network logs no lost frame.
+/// `scan 1` comes at about 2.46 s.
+#[test]
+fn the_stock_stations_scan_finds_the_network_on_its_channel() {
+    let netlist = station(NETWORK, 2500);
+    let mut session = open(&netlist, Vec::new(), BUDGET);
+    session.advance_to(Time::from_ps(2500 * MS));
+    assert!(
+        session.diagnostics().is_empty(),
+        "{:?}",
+        session.diagnostics()
+    );
+    let uart0 = (session.usarts().iter())
+        .position(|(_, usart)| *usart == "UART0")
+        .expect("UART0");
+    let (bytes, _) = session.serial_since(SerialCursor::default()).unwrap();
+    let text: String = (bytes.iter())
+        .filter(|byte| usize::from(byte.usart) == uart0)
+        .map(|byte| char::from(byte.byte))
+        .collect();
+    assert!(
+        text.contains("mode 1\nscan 1\nap orbe ch 6\n"),
+        "UART0 output:\n{text}"
+    );
+    let lost: Vec<_> = (session.network_rows().iter())
+        .filter(|row| matches!(row.event, Event::Lost { .. }))
+        .collect();
+    assert!(lost.is_empty(), "{lost:?}");
 }

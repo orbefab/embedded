@@ -610,6 +610,30 @@ impl Soc {
         self.radio.as_deref_mut()
     }
 
+    /// The radio hears `frame`, which ended at `now`, and writes what it received into SRAM.
+    /// It returns whether the MAC acknowledges it, or the setting it refused.
+    pub(crate) fn hear(&mut self, now: Tick, frame: wifi::Heard<'_>) -> Result<bool, &'static str> {
+        let Some(radio) = self.radio.as_deref_mut() else {
+            return Ok(false);
+        };
+        let sram = &self.sram;
+        let byte = |at| Self::sram_offset(at, false).map(|k| sram.read(k, Width::Byte) as u8);
+        match radio.hear(now, frame, byte) {
+            wifi::Received::Missed => Ok(false),
+            wifi::Received::Refused(setting) => Err(setting),
+            wifi::Received::Kept { writes, ack } => {
+                for (at, bytes) in writes {
+                    for (k, byte) in bytes.iter().enumerate() {
+                        let offset = Self::sram_offset(at + k as u32, false).ok_or("rx_buffer")?;
+                        self.sram.write(offset, Width::Byte, u32::from(*byte));
+                        self.code.stored_sram(offset);
+                    }
+                }
+                Ok(ack)
+            }
+        }
+    }
+
     /// Whether a store of `value` over `kept` at `word`, on a chip built with its radio, only sets
     /// `SENS_IOMUX_CLK_EN` among the gate bits the model does not run. The PHY sets it when it
     /// reads the temperature sensor. The model runs RTC IO as if that clock were on, so setting it
