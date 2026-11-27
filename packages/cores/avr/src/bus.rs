@@ -74,6 +74,22 @@ pub trait Bus {
         false
     }
 
+    /// A store at `addr` writes only the byte a later load or [`Bus::peek`] of `addr` reads, and
+    /// no device sees it: SRAM. A pass a [`PassProbe`](crate::PassProbe) watches may write such a
+    /// byte when it puts it back.
+    #[inline(always)]
+    fn plain(&self, addr: u16) -> bool {
+        let _ = addr;
+        false
+    }
+
+    /// A store at `addr` writes only the core's stack pointer.
+    #[inline(always)]
+    fn store_writes_sp(&self, addr: u16) -> bool {
+        let _ = addr;
+        false
+    }
+
     /// Sets or clears bit `bit` at `addr`. The chip applies write-one-to-clear where a register
     /// has it. `SBI` and `CBI` are the callers.
     fn write_bit(&mut self, core: &mut Core, addr: u16, bit: u8, set: bool);

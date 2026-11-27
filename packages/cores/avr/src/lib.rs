@@ -9,4 +9,4 @@ mod bus;
 mod core;
 
 pub use bus::{Bus, IO_BASE};
-pub use core::{Activity, Core, Program, SpmNote};
+pub use core::{Activity, Core, PassProbe, Probed, Program, SpmNote};

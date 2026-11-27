@@ -265,6 +265,17 @@ impl orbe_avr::Bus for Bus {
         addr == SREG && self.pending_irq() == 0
     }
 
+    /// A store to SRAM reaches no device.
+    #[inline(always)]
+    fn plain(&self, addr: u16) -> bool {
+        (SRAM_BASE..=RAMEND).contains(&addr)
+    }
+
+    #[inline(always)]
+    fn store_writes_sp(&self, addr: u16) -> bool {
+        addr == SPL || addr == SPH
+    }
+
     /// `SBI` writes a one into one bit. `CBI` writes a zero.
     ///
     /// Bits in the strobe mask are not copied from the current value, so a

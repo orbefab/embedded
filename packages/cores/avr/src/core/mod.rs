@@ -13,6 +13,7 @@
 mod check;
 mod decode;
 mod execute;
+mod pass;
 mod spin;
 
 use std::sync::Arc;
@@ -20,6 +21,7 @@ use std::sync::Arc;
 use crate::bus::Bus;
 use decode::{Countdown, IdleLoop, Op};
 use execute::SteadyRun;
+pub use pass::{PassProbe, Probed};
 use spin::Spin;
 
 /// What the core does between instructions.
