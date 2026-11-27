@@ -1205,7 +1205,8 @@ fn rating_value(name: String, node: &Node) -> Option<Rating> {
 }
 
 fn gaps(tree: &Node) -> Vec<NotSimulated> {
-    tree.get("not_simulated")
+    let mut out: Vec<NotSimulated> = tree
+        .get("not_simulated")
         .and_then(Node::items)
         .unwrap_or_default()
         .iter()
@@ -1224,7 +1225,25 @@ fn gaps(tree: &Node) -> Vec<NotSimulated> {
                 pins: (!pins.is_empty()).then_some(pins),
             })
         })
-        .collect()
+        .collect();
+    for item in tree
+        .get("accepted_warnings")
+        .and_then(Node::items)
+        .unwrap_or_default()
+    {
+        if let (Some(code), Some(pin), Some(why)) = (
+            item.get("code").and_then(Node::str),
+            item.get("pin").and_then(Node::str),
+            item.get("why").and_then(Node::str),
+        ) {
+            out.push(NotSimulated {
+                what: format!("accepted {code} on {pin}"),
+                why: why.to_string(),
+                pins: None,
+            });
+        }
+    }
+    out
 }
 
 fn buy_links(tree: &Node) -> Option<Vec<Buy>> {

@@ -7,9 +7,11 @@ use crate::netlist::Value;
 use crate::netlist::json::ParseCtx;
 use crate::netlist::json::PinMap;
 use crate::netlist::json::WireValue;
+use crate::netlist::json::resolve_limit;
 use crate::netlist::json::resolve_pins;
 use crate::netlist::json::resolve_value;
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
+use crate::ratings::{PinRatings, SupplyMin};
 use serde::Deserialize;
 
 use crate::logic::Level;
@@ -177,6 +179,26 @@ mod tests {
     }
 }
 
+/// The part's minimum operating supply voltage on `vcc` over `gnd`, `None` when unrated.
+pub(crate) fn pin_ratings(chip: &Ne555) -> Option<PinRatings> {
+    let min = chip.ratings.as_ref()?.supply_min.as_ref()?.si.get();
+    Some(PinRatings {
+        outputs: Vec::new(),
+        pin_current: None,
+        supply_current: None,
+        vcc: (Ne555::PINS[Ne555::VCC], chip.pins[Ne555::VCC]),
+        gnd: (Ne555::PINS[Ne555::GND], chip.pins[Ne555::GND]),
+        windows: Vec::new(),
+        supply_mins: vec![SupplyMin {
+            pin: Ne555::PINS[Ne555::VCC],
+            net: chip.pins[Ne555::VCC],
+            gnd: chip.pins[Ne555::GND],
+            min,
+            clock_hz: None,
+        }],
+    })
+}
+
 /// An NE555 timer, behavioural. Pins in package order, TI SLFS022K's pin functions.
 ///
 /// Three equal resistors run VCC to CONT to a lower node to GND. THRES compares with CONT,
@@ -193,6 +215,14 @@ pub struct Ne555 {
     /// Ohm. VCC to GND, the supply current the ladder does not draw.
     pub supply_resistance: Value,
     pub output: OutputStage,
+    pub ratings: Option<Ne555Ratings>,
+}
+
+/// An NE555's ratings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Ne555Ratings {
+    /// Volt. The least operating `vcc` may sit above `gnd`.
+    pub supply_min: Option<Value>,
 }
 
 impl Ne555 {
@@ -228,6 +258,15 @@ pub(crate) struct WireNe555 {
     discharge: WireDischarge,
     supply_resistance: WireValue,
     output: WireOutputStage,
+    #[serde(default)]
+    ratings: Option<WireRatings>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireRatings {
+    #[serde(default)]
+    supply_min: Option<WireValue>,
 }
 
 #[derive(Deserialize)]
@@ -266,6 +305,11 @@ pub(crate) fn resolve_ne555(ctx: ParseCtx<'_>, wire: WireNe555) -> Option<Ne555>
     );
     let supply = ohm("supply_resistance", wire.supply_resistance, out);
     let output = resolve_output_stage(part_ref, wire.output, out);
+    let ratings = match wire.ratings {
+        None => Some(None),
+        Some(wire) => resolve_limit(part_ref, "ratings.supply_min", "V", wire.supply_min, out)
+            .map(|supply_min| Some(Ne555Ratings { supply_min })),
+    };
     Some(Ne555 {
         pins: pins?,
         ladder_resistance: ladder?,
@@ -276,5 +320,6 @@ pub(crate) fn resolve_ne555(ctx: ParseCtx<'_>, wire: WireNe555) -> Option<Ne555>
         },
         supply_resistance: supply?,
         output: output?,
+        ratings: ratings?,
     })
 }

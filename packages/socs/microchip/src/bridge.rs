@@ -143,9 +143,10 @@ impl Bridge {
         bridge
     }
 
-    /// Supply rises at 0 ps: the first instruction runs after the start from reset the fuses
-    /// select and the bootloader's way to the sketch, as [`Cpu::power_on`] says. Called before
-    /// the first run.
+    /// Supply rises at 0 ps: the chip is held in reset from there, so the operating point at
+    /// t = 0 sees its reset current, and the first instruction runs after the start from reset
+    /// the fuses select and the bootloader's way to the sketch, as [`Cpu::power_on`] says.
+    /// Called before the first run.
     pub fn power_on(&mut self) {
         self.timeline.power_on();
         self.refresh();

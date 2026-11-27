@@ -23,7 +23,7 @@ use crate::netlist::json::{
     resolve_some_pins, resolve_value,
 };
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage};
-use crate::ratings::{Ceiling, PinRatings, PinWindow};
+use crate::ratings::{Ceiling, PinRatings, PinWindow, SupplyMin};
 use crate::watch::{Signal, Watch};
 use orbe_microchip::{
     Bridge, FuseBytes, HexRule, PACKAGE, PORT_PINS, Pad, Port, parse_hex, port_index,
@@ -170,6 +170,20 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
     chip
 }
 
+/// Minimum operating VCC for `clock_hz` per DS40002061B Figure 29-1 (Safe Operating Area):
+/// 1.8 V up to 4 MHz, 2.7 V at 10 MHz, 4.5 V at 20 MHz, linear in between.
+pub(crate) fn soa_min_voltage(clock_hz: u32) -> f64 {
+    if clock_hz <= 4_000_000 {
+        1.8
+    } else if clock_hz <= 10_000_000 {
+        (1800.0 + f64::from(clock_hz - 4_000_000) * 900.0 / 6_000_000.0) / 1000.0
+    } else if clock_hz <= 20_000_000 {
+        (2700.0 + f64::from(clock_hz - 10_000_000) * 1800.0 / 10_000_000.0) / 1000.0
+    } else {
+        4.5
+    }
+}
+
 /// The part's ratings on its pins, `None` when it has no `ratings` object. Each port pin is an
 /// output, in `PORT_PINS` order. Every pin it has but the two ground pins has a window over
 /// `GND_8`: `rail_margin` below it, and `rail_margin` above `VCC`, but for `VCC`, whose
@@ -198,6 +212,17 @@ pub(crate) fn pin_ratings(mcu: &Atmega328p) -> Option<PinRatings> {
             })
         })
         .collect();
+    let clock_hz = u32::try_from(mcu.clock_hz.value).expect("parse keeps the clock in u32");
+    let supply_mins = si(&ratings.supply_min)
+        .map(|base| SupplyMin {
+            pin: Atmega328p::PINS[VCC],
+            net: mcu.pins[VCC],
+            gnd: mcu.pins[GND_8],
+            min: base.max(soa_min_voltage(clock_hz)),
+            clock_hz: Some(clock_hz),
+        })
+        .into_iter()
+        .collect();
     Some(PinRatings {
         outputs: PORT_PINS.iter().map(|&k| Atmega328p::PINS[k]).collect(),
         pin_current: ratings.pin_current.clone(),
@@ -205,6 +230,7 @@ pub(crate) fn pin_ratings(mcu: &Atmega328p) -> Option<PinRatings> {
         vcc: (Atmega328p::PINS[VCC], mcu.pins[VCC]),
         gnd: (Atmega328p::PINS[GND_8], mcu.pins[GND_8]),
         windows,
+        supply_mins,
     })
 }
 
@@ -274,6 +300,8 @@ pub struct Atmega328pRatings {
     pub reset_voltage: Option<Value>,
     /// Volt. The most `VCC` may sit above `GND_8`.
     pub supply_voltage: Option<Value>,
+    /// Volt. The least operating `VCC` may sit above `GND_8`.
+    pub supply_min: Option<Value>,
 }
 
 impl Atmega328p {
@@ -408,6 +436,8 @@ struct WireRatings {
     reset_voltage: Option<WireValue>,
     #[serde(deserialize_with = "Option::deserialize")]
     supply_voltage: Option<WireValue>,
+    #[serde(default)]
+    supply_min: Option<WireValue>,
 }
 
 #[derive(Deserialize)]
@@ -526,12 +556,14 @@ fn resolve_ratings(
         wire.supply_voltage,
         out,
     );
+    let supply_min = resolve_limit(part, "ratings.supply_min", "V", wire.supply_min, out);
     Some(Atmega328pRatings {
         pin_current: pin_current?,
         supply_current: supply_current?,
         rail_margin: rail_margin?,
         reset_voltage: reset_voltage?,
         supply_voltage: supply_voltage?,
+        supply_min: supply_min?,
     })
 }
 

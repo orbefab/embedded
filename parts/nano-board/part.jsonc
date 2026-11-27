@@ -3,7 +3,7 @@
 // Child values with a schematic source are the engine's board example values by role, from
 // packages/engine/tests/circuits/atmega-board-button/netlist.json.
 {
-  "format": 5,
+  "format": 7,
   "part": "nano-board",
   "version": "0.2.4",
   "title": "Nano (CH340 clone)",

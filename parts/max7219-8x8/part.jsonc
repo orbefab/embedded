@@ -55,9 +55,9 @@
       "holds_above": { "value": 4.0, "unit": "V", "source": { "datasheet": { "doc": "Maxim MAX7219/MAX7221 datasheet (19-4452; Rev 4; 7/03)", "at": "Electrical Characteristics, p. 2, Operating Supply Voltage V+ 4.0 V min", "basis": "min" } } },
     },
     "ratings": {
-      // Note: add `supply_min` 4.0 V (Electrical Characteristics, p. 2) once the low-supply warning lands.
       "rail_margin": { "value": 0.3, "unit": "V", "source": { "datasheet": { "doc": "Maxim MAX7219/MAX7221 datasheet (19-4452; Rev 4; 7/03)", "at": "Absolute Maximum Ratings, p. 2, Voltage with respect to GND: -0.3 V min on all pins, V+ + 0.3 V max on All Other Pins (DOUT, ISET)", "basis": "absolute_max" } } },
       "supply_voltage": { "value": 6.0, "unit": "V", "source": { "datasheet": { "doc": "Maxim MAX7219/MAX7221 datasheet (19-4452; Rev 4; 7/03)", "at": "Absolute Maximum Ratings, p. 2, V+ -0.3 V to 6 V", "basis": "absolute_max" } } },
+      "supply_min": { "value": 4.0, "unit": "V", "source": { "datasheet": { "doc": "Maxim MAX7219/MAX7221 datasheet (19-4452; Rev 4; 7/03)", "at": "Electrical Characteristics, p. 2, Operating Supply Voltage V+ 4.0 V min to 5.5 V max", "basis": "min" } } },
       "input_voltage": { "value": 6.0, "unit": "V", "source": { "datasheet": { "doc": "Maxim MAX7219/MAX7221 datasheet (19-4452; Rev 4; 7/03)", "at": "Absolute Maximum Ratings, p. 2, DIN, CLK, LOAD, CS -0.3 V to 6 V", "basis": "absolute_max" } } },
       "supply_current": {
         "value": 0.5,

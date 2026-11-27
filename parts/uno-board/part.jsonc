@@ -12,7 +12,7 @@
 // its notch toward the ICSP header are the DIP boards' place, as Joy-IT's ARD_R3DIP shows it; the
 // headers, holes and ICSP header are RobotDyn's dimension diagram.
 {
-  "format": 5,
+  "format": 7,
   "part": "uno-board",
   "version": "0.2.4",
   "title": "Uno R3 compatible board",

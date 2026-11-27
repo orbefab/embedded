@@ -101,6 +101,9 @@ pub struct OpAmp {
     /// Volt, greater than 0. `V(vcc) - V(gnd)` above this warns `rating.voltage`. `None` when
     /// the part rates none.
     pub max_supply: Option<Value>,
+    /// Volt, greater than 0. `V(vcc) - V(gnd)` below this (and above the unpowered floor) warns
+    /// `rating.supply_low`. `None` when the part rates none.
+    pub min_supply: Option<Value>,
     /// Volt, at least 0. An input more than this below `gnd` warns `rating.voltage`. `None`
     /// when the part rates none.
     pub input_below_gnd: Option<Value>,
@@ -146,6 +149,8 @@ struct WireOpAmpRatings {
     #[serde(default)]
     supply_voltage: Option<WireValue>,
     #[serde(default)]
+    supply_min: Option<WireValue>,
+    #[serde(default)]
     input_below_gnd: Option<WireValue>,
 }
 
@@ -180,14 +185,16 @@ pub(crate) fn resolve_op_amp(ctx: ParseCtx<'_>, wire: WireOpAmp) -> Option<OpAmp
     let swing_low = non_negative("swing_low", "V", wire.swing_low);
     let supply_current = non_negative("supply_current", "A", wire.supply_current);
     let input_headroom = non_negative("input_headroom", "V", wire.input_headroom);
-    let (supply_voltage, input_below_gnd) = wire
-        .ratings
-        .map_or((None, None), |r| (r.supply_voltage, r.input_below_gnd));
+    let (supply_voltage, supply_min, input_below_gnd) =
+        wire.ratings.map_or((None, None, None), |r| {
+            (r.supply_voltage, r.supply_min, r.input_below_gnd)
+        });
     let input_below_gnd = match input_below_gnd {
         None => Some(None),
         Some(value) => non_negative("ratings.input_below_gnd", "V", value).map(Some),
     };
     let max_supply = resolve_limit(part_ref, "ratings.supply_voltage", "V", supply_voltage, out);
+    let min_supply = resolve_limit(part_ref, "ratings.supply_min", "V", supply_min, out);
     Some(OpAmp {
         pins: pins?,
         gain_bandwidth: gain_bandwidth?,
@@ -201,6 +208,7 @@ pub(crate) fn resolve_op_amp(ctx: ParseCtx<'_>, wire: WireOpAmp) -> Option<OpAmp
         supply_current: supply_current?,
         input_headroom: input_headroom?,
         max_supply: max_supply?,
+        min_supply: min_supply?,
         input_below_gnd: input_below_gnd?,
     })
 }

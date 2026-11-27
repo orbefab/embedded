@@ -28,7 +28,7 @@ use crate::mna::Solver;
 use crate::newton::{Circuit, Conditions, Converged, Failure, History, Iterate, Side, newton};
 use crate::observe::{self, Columns};
 use crate::op;
-use crate::ratings::{Ratings, Timing};
+use crate::ratings::{Ratings, Sample, SupplyMark, Timing};
 use crate::step::Plan;
 use crate::tran::{Breakpoints, Outcome, Record, Rows};
 use crate::watch::{self, Levels};
@@ -268,6 +268,9 @@ pub struct Session {
     /// then by part name, then in the order each part closed them. Only a recorded session
     /// keeps them, for `display.csv`.
     display: Vec<Rectangle>,
+    /// What the network did at or before the last accepted step, in the order it did it. Only a
+    /// recorded session keeps them.
+    network: Vec<orbe_net::Row>,
     pub(crate) record: Option<Record>,
     /// `net.floating` warnings. `start` fills this from the netlist.
     pub(crate) warnings: Vec<Diagnostic>,
@@ -507,8 +510,11 @@ impl Session {
             actives.keep_shown();
         }
         // The t = 0 row is no rating sample. A capacitor held at `initial` draws what its hold
-        // takes there, which no part carries. The first accepted step is the first sample.
-        let ratings = Ratings::new(&circuit.netlist, &circuit.actives, &columns, Timing::Run);
+        // takes there, which no part carries. The first accepted step is the first sample. Supply
+        // watches still note whether t = 0 sits cleanly off or in range so a fast power-up or
+        // power-down from t = 0 is recognized as a power cycle.
+        let mut ratings = Ratings::new(&circuit.netlist, &circuit.actives, &columns, Timing::Run);
+        ratings.seed_supplies(&row);
         let inputs = Inputs::new(&circuit.netlist, &circuit.actives, &columns);
         let record = rows
             .map(|rows| Record::start(transient, &columns, rows, &row, &signals, &logic))
@@ -555,6 +561,7 @@ impl Session {
             i2c: Vec::new(),
             link: Vec::new(),
             display: Vec::new(),
+            network: Vec::new(),
             record,
             warnings,
             ratings,
@@ -644,15 +651,39 @@ impl Session {
     /// sample, so the warnings are those of the step after it, the first sample. A session
     /// that faulted there has none.
     pub fn over_ratings(&self, probe: &Probe<'_>) -> Vec<Diagnostic> {
+        let (point, first) = self.rating_probe(probe);
+        let mut found = self.ratings.now(point);
+        if first {
+            for diagnostic in &mut found {
+                if let Diagnostic::RatingSupplyLow(excursion) = diagnostic
+                    && let Some(over_ps) = &mut excursion.over_ps
+                {
+                    *over_ps = 0;
+                }
+            }
+        }
+        found
+    }
+
+    /// Each chip supply pin's visits below its minimum through `probe`, read as
+    /// [`Self::over_ratings`] reads it. A session that lists `rating.supply_low` compares two of
+    /// these to tell an episode it has not listed from one it has.
+    pub fn supply_marks(&self, probe: &Probe<'_>) -> Vec<SupplyMark> {
+        self.ratings.supply_marks(self.rating_probe(probe).0)
+    }
+
+    /// Where [`Self::over_ratings`] samples `probe`: its own row after the last accepted step, or
+    /// the first step's row at t = 0, which is then `true`.
+    fn rating_probe<'a>(&'a self, probe: &'a Probe<'_>) -> (Option<Sample<'a>>, bool) {
         let cores = self.actives.cores();
         match &self.state {
             State::Running { accepted, .. } if probe.at() > accepted.at => {
-                self.ratings.now(Some((probe.at(), probe.values(), cores)))
+                (Some((probe.at(), probe.values(), cores)), false)
             }
             State::Running { accepted, next, .. } if accepted.at == Time::ZERO => {
-                self.ratings.now(Some((next.at, &next.row, cores)))
+                (Some((next.at, &next.row, cores)), true)
             }
-            _ => self.ratings.now(None),
+            _ => (None, false),
         }
     }
 
@@ -690,14 +721,22 @@ impl Session {
         self.serial.extend(self.actives.deliver(accepted));
         let records = self.actives.records();
         let rows = self.actives.rows();
+        let network = self.actives.net_rows();
         if self.record.is_some() {
             self.i2c.extend(self.actives.phases());
             self.link.extend(records);
             self.display.extend(rows);
+            self.network.extend(network);
         } else {
             self.actives.phases().for_each(drop);
         }
         self.status()
+    }
+
+    /// What the network did at or before the last accepted step, in the order it did it, on a
+    /// recorded session whose netlist has a `network`. Empty otherwise.
+    pub fn network_rows(&self) -> &[orbe_net::Row] {
+        &self.network
     }
 
     /// Every analog column at `now`. On an accepted step it is that step's row. Between steps it

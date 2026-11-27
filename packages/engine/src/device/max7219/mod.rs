@@ -24,7 +24,7 @@ use crate::netlist::json::{
 };
 use crate::netlist::{NetId, PartId, Rating, Threshold, Value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage_at};
-use crate::ratings::{Ceiling, PinRatings, PinWindow};
+use crate::ratings::{Ceiling, PinRatings, PinWindow, SupplyMin};
 use crate::watch::{Signal, Watch};
 use crate::world::World;
 
@@ -204,6 +204,16 @@ pub(crate) fn pin_ratings(dev: &Max7219) -> Option<PinRatings> {
             });
         }
     }
+    let supply_mins = si(&ratings.supply_min)
+        .map(|min| SupplyMin {
+            pin: Max7219::PINS[VCC],
+            net: dev.pins[VCC],
+            gnd: dev.pins[GND],
+            min,
+            clock_hz: None,
+        })
+        .into_iter()
+        .collect();
     Some(PinRatings {
         outputs: vec![Max7219::PINS[DOUT], Max7219::PINS[ISET]],
         pin_current: None,
@@ -211,6 +221,7 @@ pub(crate) fn pin_ratings(dev: &Max7219) -> Option<PinRatings> {
         vcc: (Max7219::PINS[VCC], dev.pins[VCC]),
         gnd: (Max7219::PINS[GND], dev.pins[GND]),
         windows,
+        supply_mins,
     })
 }
 
@@ -252,6 +263,8 @@ pub struct Max7219Ratings {
     pub input_voltage: Option<Value>,
     /// Ampere, maximum `VCC`/`GND` current (`500 mA` `DIG0–DIG7` sink current).
     pub supply_current: Option<Rating>,
+    /// Volt, the least operating `VCC` over `GND` (`4.0 V`, p. 2 Electrical Characteristics).
+    pub supply_min: Option<Value>,
 }
 
 impl Max7219 {
@@ -298,6 +311,8 @@ struct WireRatings {
     input_voltage: Option<WireValue>,
     #[serde(deserialize_with = "Option::deserialize")]
     supply_current: Option<WireRating>,
+    #[serde(default)]
+    supply_min: Option<WireValue>,
 }
 
 pub(crate) fn resolve_max7219(ctx: ParseCtx<'_>, wire: WireMax7219) -> Option<Max7219> {
@@ -410,10 +425,12 @@ fn resolve_ratings(
         wire.supply_current,
         out,
     );
+    let supply_min = resolve_limit(part, "ratings.supply_min", "V", wire.supply_min, out);
     Some(Max7219Ratings {
         rail_margin: rail_margin?,
         supply_voltage: supply_voltage?,
         input_voltage: input_voltage?,
         supply_current: supply_current?,
+        supply_min: supply_min?,
     })
 }

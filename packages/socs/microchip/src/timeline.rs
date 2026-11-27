@@ -65,7 +65,7 @@ impl Timeline {
         cpu.watch_gaps();
         let levels = cpu.pin_levels();
         let drives = std::array::from_fn(|pin| levels.drive(pin as u32).unwrap_or(PinDrive::Off));
-        let held = cpu.is_held_in_reset();
+        let held = cpu.in_reset();
         Timeline {
             cpu,
             reached: 0,
@@ -126,10 +126,13 @@ impl Timeline {
         }
     }
 
-    /// See [`Cpu::power_on`]. Called before the first run.
+    /// See [`Cpu::power_on`]. Called before the first run. The chip is held from cycle 0, so a
+    /// circuit's operating point at t = 0 sees its reset current, and the hold ends where the
+    /// start from reset does.
     pub fn power_on(&mut self) {
         assert_eq!(self.reached, 0, "power-on is the start of a run");
         self.cpu.power_on();
+        self.held = self.cpu.in_reset();
         self.collect(1);
     }
 
@@ -272,7 +275,7 @@ impl Timeline {
         }
         // A reset holds the chip from where the core sits, past the cycle the host reached. A
         // change back on the cycle of the last one cancels it.
-        let held = self.cpu.is_held_in_reset();
+        let held = self.cpu.in_reset();
         let last = self.holds.last().map_or(self.held, |&(_, held)| held);
         if held != last {
             let at = self

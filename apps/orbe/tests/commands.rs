@@ -1072,7 +1072,7 @@ fn a_resistor_over_its_power_rating_warns() {
     let data = &power["data"];
     assert_eq!(data["now"], true, "{power}");
     assert!(
-        (data["sample"].as_f64().unwrap() - 2.158).abs() < 1e-3,
+        (data["sample"].as_f64().unwrap() - 2.159).abs() < 1e-3,
         "{power}"
     );
     let held = data["held_ps"].as_f64().unwrap();

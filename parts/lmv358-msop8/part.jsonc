@@ -3,7 +3,7 @@
 // through its VOH and VOL rows, as each field's source says. input_headroom is 5 V minus the
 // VICR typical upper end of 4.2 V. The stage keeps comparing above it, and the run warns.
 {
-  "format": 5, "part": "lmv358-msop8", "version": "0.2.1", "title": "LMV358 dual op-amp, MSOP-8", "license": "MIT OR Apache-2.0",
+  "format": 7, "part": "lmv358-msop8", "version": "0.2.2", "title": "LMV358 dual op-amp, MSOP-8", "license": "MIT OR Apache-2.0",
   "summary": "TI LMV358 dual op-amp in VSSOP-8 (MSOP-8). The dot marks lead 1.",
   "tags": ["op-amp", "amplifier", "smd"],
   "docs": { "TI SLOS263Y": "https://www.ti.com/lit/ds/symlink/lmv358.pdf" },
@@ -24,6 +24,7 @@
       "input_headroom": { "value": 0.8, "unit": "V", "source": { "closed_form": { "note": "p7 section 6.8 VICR at VCC 5 V, CMRR at least 50 dB, TA 25 C. The typical upper end is 4.2 V and the guaranteed upper end is 4 V. The field is 5 - 4.2" } } },
       "ratings": {
         "supply_voltage": { "value": 5.5, "unit": "V", "source": { "datasheet": { "doc": "TI SLOS263Y", "at": "p5 section 6.1 Absolute Maximum Ratings, supply voltage VCC, 5.5 V. Only this amplifier carries it, since both share the supply pins.", "basis": "absolute_max" } } },
+        "supply_min": { "value": 2.7, "unit": "V", "source": { "datasheet": { "doc": "TI SLOS263Y", "at": "p5 section 6.3 Recommended Operating Conditions, supply voltage VCC 2.7 V to 5.5 V. Only this amplifier carries it, since both share the supply pins.", "basis": "min" } } },
         "input_below_gnd": { "value": 0.2, "unit": "V", "source": { "datasheet": { "doc": "TI SLOS263Y", "at": "p5 section 6.1 Absolute Maximum Ratings, input voltage VI on either input, -0.2 V", "basis": "absolute_max" } } },
       },
       "pins": { "in_p": "IN1_P", "in_n": "IN1_N", "out": "OUT1", "vcc": "VCC", "gnd": "GND" },

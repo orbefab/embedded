@@ -4,7 +4,7 @@
 // input_headroom is the VCM maximum, (V+) - 1.5 V at 25 °C. The bias current still turns off
 // at a fixed 0.8 V below vcc. The stage keeps comparing above the headroom, and the run warns.
 {
-  "format": 5, "part": "lm358-dip8", "version": "0.2.3", "title": "LM358 dual op-amp, DIP-8", "license": "MIT OR Apache-2.0",
+  "format": 7, "part": "lm358-dip8", "version": "0.2.3", "title": "LM358 dual op-amp, DIP-8", "license": "MIT OR Apache-2.0",
   "summary": "TI LM358P dual op-amp in PDIP-8, with two amplifiers sharing one supply. The notch marks lead 1.",
   "tags": ["op-amp", "opamp", "amplifier", "comparator", "through-hole"],
   "docs": { "TI SLOS068AB": "https://www.ti.com/lit/ds/symlink/lm358.pdf" },
@@ -25,6 +25,7 @@
       "input_headroom": { "value": 1.5, "unit": "V", "source": { "datasheet": { "doc": "TI SLOS068AB", "at": "p10 section 5.7, VCM MAX (V+) - 1.5 V for the LM358 at 25 C, VS 5 V to 30 V. Over 0 C to 70 C the same row is (V+) - 2 V", "basis": "max" } } },
       "ratings": {
         "supply_voltage": { "value": 32, "unit": "V", "source": { "datasheet": { "doc": "TI SLOS068AB", "at": "p4 section 5.1 Absolute Maximum Ratings, supply voltage VS, 32 V for the LM358. Only this amplifier carries it, since both share the supply pins.", "basis": "absolute_max" } } },
+        "supply_min": { "value": 3.0, "unit": "V", "source": { "datasheet": { "doc": "TI SLOS068AB", "at": "p4 section 5.3 Recommended Operating Conditions, single-supply VS 3 V to 30 V for the LM358. Only this amplifier carries it, since both share the supply pins.", "basis": "min" } } },
         "input_below_gnd": { "value": 0.3, "unit": "V", "source": { "datasheet": { "doc": "TI SLOS068AB", "at": "p4 section 5.1 Absolute Maximum Ratings, input voltage VI on either input, -0.3 V", "basis": "absolute_max" } } },
       },
       "pins": { "in_p": "IN1_P", "in_n": "IN1_N", "out": "OUT1", "vcc": "VCC", "gnd": "GND" },

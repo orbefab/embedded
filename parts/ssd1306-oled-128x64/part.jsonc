@@ -4,7 +4,7 @@
 // they join VSS on 8. 19 and 20 are D1 and D2, which I2C joins as SDA. The model is the engine's
 // ssd1306 on I2C.
 {
-  "format": 6, "part": "ssd1306-oled-128x64", "version": "0.1.1", "title": "OLED panel, 0.96 inch 128 x 64, SSD1306", "license": "MIT OR Apache-2.0",
+  "format": 7, "part": "ssd1306-oled-128x64", "version": "0.1.2", "title": "OLED panel, 0.96 inch 128 x 64, SSD1306", "license": "MIT OR Apache-2.0",
   "summary": "0.96 inch 128 x 64 white OLED panel with an SSD1306 controller on the glass and a 30-pin FPC, wired for I2C at address 0x3C.",
   "tags": ["oled", "display", "screen", "ssd1306", "128x64", "i2c"],
   "docs": {
@@ -39,6 +39,7 @@
     "ratings": {
       "rail_margin": { "value": 0.3, "unit": "V", "source": { "datasheet": { "doc": "Solomon Systech SSD1306 Rev 1.1", "at": "Table 11-1, Maximum Ratings (Voltage Referenced to VSS), p. 47: Vin Input voltage VSS - 0.3 to VDD + 0.3 V, and VDD min -0.3 V", "basis": "absolute_max" } } },
       "supply_voltage": { "value": 4.0, "unit": "V", "source": { "datasheet": { "doc": "Solomon Systech SSD1306 Rev 1.1", "at": "Table 11-1, Maximum Ratings (Voltage Referenced to VSS), p. 47: VDD Supply Voltage -0.3 to +4 V (also Univision UG-2864HSWEG01 section 2, p. 7)", "basis": "absolute_max" } } },
+      "supply_min": { "value": 1.65, "unit": "V", "source": { "datasheet": { "doc": "Solomon Systech SSD1306 Rev 1.1", "at": "Table 12-1, DC Characteristics, p. 48: VDD Supply Voltage 1.65 V minimum (also Univision UG-2864HSWEG01 section 3.2)", "basis": "min" } } },
     },
     "pins": { "VDD": "VDD", "VSS": "VSS", "SCL": "SCL", "SDA": "SDA", "RES": "RES" },
   },

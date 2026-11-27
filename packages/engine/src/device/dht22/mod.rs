@@ -21,8 +21,9 @@ use crate::diagnostic::{Diagnostic, WorldRule};
 use crate::mna::Node;
 use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
-use crate::netlist::json::{PinMap, WireValue, resolve_pins, resolve_value};
+use crate::netlist::json::{PinMap, WireValue, resolve_limit, resolve_pins, resolve_value};
 use crate::netlist::{NetId, PartId, Threshold, Value};
+use crate::ratings::{PinRatings, SupplyMin};
 use crate::watch::{Signal, Watch};
 
 const VCC: usize = 0;
@@ -82,6 +83,26 @@ pub(crate) fn chip(part: PartId, dev: &Dht22) -> Chip {
     }
 }
 
+/// The part's minimum operating supply voltage on `VCC` over `GND`, `None` when unrated.
+pub(crate) fn pin_ratings(dev: &Dht22) -> Option<PinRatings> {
+    let min = dev.ratings.as_ref()?.supply_min.as_ref()?.si.get();
+    Some(PinRatings {
+        outputs: Vec::new(),
+        pin_current: None,
+        supply_current: None,
+        vcc: (Dht22::PINS[VCC], dev.pins[VCC]),
+        gnd: (Dht22::PINS[GND], dev.pins[GND]),
+        windows: Vec::new(),
+        supply_mins: vec![SupplyMin {
+            pin: Dht22::PINS[VCC],
+            net: dev.pins[VCC],
+            gnd: dev.pins[GND],
+            min,
+            clock_hz: None,
+        }],
+    })
+}
+
 /// A DHT22 (AM2302) temperature and humidity sensor, an active chip with no clock of its own.
 /// `DATA` is open drain into `GND` through `low_resistance`, and the part reads it through
 /// `input_threshold`, fractions of its supply. It reads the netlist's `temperature` and
@@ -92,6 +113,15 @@ pub struct Dht22 {
     /// Ohm.
     pub low_resistance: Value,
     pub input_threshold: Threshold,
+    /// Optional supply rating. `None` leaves the sensor unrated.
+    pub ratings: Option<Dht22Ratings>,
+}
+
+/// A DHT22's ratings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Dht22Ratings {
+    /// Volt. The least operating `VCC` may sit above `GND`.
+    pub supply_min: Option<Value>,
 }
 
 impl Dht22 {
@@ -105,6 +135,15 @@ pub(crate) struct WireDht22 {
     pins: PinMap,
     low_resistance: WireValue,
     input_threshold: WireThreshold,
+    #[serde(default)]
+    ratings: Option<WireRatings>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireRatings {
+    #[serde(default)]
+    supply_min: Option<WireValue>,
 }
 
 pub(crate) fn resolve_dht22(ctx: ParseCtx<'_>, wire: WireDht22) -> Option<Dht22> {
@@ -131,6 +170,11 @@ pub(crate) fn resolve_dht22(ctx: ParseCtx<'_>, wire: WireDht22) -> Option<Dht22>
         wire.input_threshold,
         out,
     );
+    let ratings = match wire.ratings {
+        None => Some(None),
+        Some(wire) => resolve_limit(part_ref, "ratings.supply_min", "V", wire.supply_min, out)
+            .map(|supply_min| Some(Dht22Ratings { supply_min })),
+    };
     let mut declared = true;
     for &quantity in model::Dht22::WORLD {
         if world.schedule(quantity).is_none() {
@@ -147,6 +191,7 @@ pub(crate) fn resolve_dht22(ctx: ParseCtx<'_>, wire: WireDht22) -> Option<Dht22>
         pins: pins?,
         low_resistance: low_resistance?,
         input_threshold: input_threshold?,
+        ratings: ratings?,
     };
     declared.then_some(dht22)
 }

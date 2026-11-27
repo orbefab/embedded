@@ -372,11 +372,14 @@ fn a_brown_out_holds_every_pin_off_until_vcc_returns() {
         "the host's window leaves the supply alone"
     );
     let released = timeline.run_until(4_000_000).unwrap();
-    assert_eq!(released.at, 2_000_001, "the hold ends one cycle on");
+    assert!(
+        released.at > 2_000_001,
+        "after the reset time-out: {released:?}"
+    );
     assert!(!timeline.held());
     assert_eq!(timeline.drives()[PB5 as usize], PinDrive::Off);
     let halt = timeline.run_until(4_000_000).unwrap();
-    assert!(halt.at > 2_000_001, "after the reset time-out: {halt:?}");
+    assert!(halt.at > released.at, "after the reset time-out: {halt:?}");
     assert_eq!(timeline.drives()[PB5 as usize], PinDrive::Low);
 }
 
@@ -392,10 +395,10 @@ fn reset_low_on_pc6_holds_the_chip_and_high_restarts_it() {
     assert!(timeline.held(), "held from the halt");
     assert_eq!(timeline.run_until(2_000_000), None);
     timeline.set_pad(PC6, true);
-    assert_eq!(
-        timeline.run_until(4_000_000).map(|halt| halt.at),
-        Some(2_000_001),
-        "the hold ends one cycle on"
+    let released = timeline.run_until(4_000_000).unwrap();
+    assert!(
+        released.at > 2_000_001,
+        "reset holds through the start-up time-out: {released:?}"
     );
     assert!(!timeline.held());
     assert!(timeline.run_until(4_000_000).is_some());
@@ -414,18 +417,27 @@ fn a_release_inside_the_run_that_found_the_hold_times_out_from_the_release() {
     assert_eq!(timeline.run_until(160_100).map(|halt| halt.at), Some(101));
     timeline.set_pad(PC6, true);
     assert_eq!(
-        timeline.run_until(160_100).map(|halt| halt.at),
-        Some(102),
-        "the hold ends one cycle on"
+        timeline.run_until(160_100),
+        None,
+        "reset holds through the start-up time-out"
     );
+    assert!(timeline.held());
+    // The time-out starts where the core sat at the release: the cycle the host reached, or
+    // the end of the instruction across it. It does not start at the step's limit.
+    let released = timeline.run_until(2_000_000).unwrap();
+    assert!(!timeline.held());
+    assert!(
+        (101 + RESET_DELAY..=104 + RESET_DELAY).contains(&released.at),
+        "released at {}, `RESET` rose at 101",
+        released.at
+    );
+    // `SBI DDRB,5` drives PB5 two cycles after the time-out.
     let first = timeline.run_until(2_000_000).unwrap();
     assert_eq!(timeline.drives()[PB5 as usize], PinDrive::Low);
-    // `SBI DDRB,5` drives PB5 two cycles after the time-out, which starts where the core sat
-    // at the release: the cycle the host reached, or the end of the instruction across it.
-    assert!(
-        (101 + RESET_DELAY + 2..=104 + RESET_DELAY + 2).contains(&first.at),
-        "PB5 at {}, the release at 101",
-        first.at
+    assert_eq!(
+        first.at,
+        released.at + 2,
+        "PB5 two cycles after the release"
     );
 }
 

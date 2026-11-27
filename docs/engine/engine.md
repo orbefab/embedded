@@ -118,6 +118,12 @@ A `Pulses` record runs its levels from its start. After the last level the line 
 
 The rows live on the core, shared between the kept core and its copy, so keeping a copy copies none of them. A recorded session writes them at the end, ordered by time, then by part name.
 
+## The air
+
+A netlist with `network` has an air, which the engine owns. Its stations are each active core with a radio, in part order, then the network, a core with no part, no pins and no drives. No chip kind has a radio yet. A station's frame ends at a stop of its core, with `record` set, so a step lands there. At that landing, before the second pass, every station's copy is put at the landing's time, each frame goes to every other station tuned to its channel there, in station order, and the sender's copy takes the OR of their answers, an `Ack`, before it runs on. Frames that end at one landing go in station order. Overlapping frames are both heard, since the air models no collisions, and every station hears every other at -50 dBm over a -95 dBm floor. No acknowledgement goes on the air. The second pass then keeps every station at the landing. A frame changes no image, so a frame alone lands without a restart.
+
+The network makes a row each time its access point or its router acts. A delivery stages its rows as it stages a USART's bytes, each once by its time, across rewinds. A recorded session keeps them in the order the network made them. No file holds them yet.
+
 ## Sessions
 
 A session is a transient run held between calls. It opens on a netlist whose analysis is `transient`, and solves the operating point at t = 0 and the step after it. It keeps no trace. An `op` analysis has no time to advance and opens no session. A circuit too large for the solver opens none, with `solver.too_large`. Neither does an operating point at t = 0 that fails to settle or gives a quantity that is not finite, and the diagnostic is the one a run reports. A grid with more rows than a trace holds still opens a session.

@@ -324,6 +324,18 @@
       },
       "unit": "V",
       "value": 6.0
+    },
+    {
+      "name": "supply_min",
+      "source": {
+        "datasheet": {
+          "at": "§29.2 DC Characteristics, page 308: VCC operating voltage 1.8 V to 5.5 V",
+          "basis": "min",
+          "doc": "DS40002061B"
+        }
+      },
+      "unit": "V",
+      "value": 1.8
     }
   ],
   "real": {

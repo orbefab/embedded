@@ -1,7 +1,7 @@
 {
-  "format": 6,
+  "format": 7,
   "part": "sk68xxmini-hs",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "title": "SK68XXMINI-HS addressable RGB LED",
   "summary": "SK68XXMINI-HS addressable RGB LED in a 3.7 x 3.5 mm package. It takes a 24-bit colour on DIN and passes the rest of the chain on to DOUT.",
   "tags": ["led", "rgb", "addressable", "ws2812"],
@@ -122,6 +122,17 @@
             "basis": "absolute_max"
           }
         }
+      },
+      "supply_min": {
+        "value": 3.7,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "SPC / SK68XX MINI-HS Rev. 04",
+            "at": "Section 8, Recommended Operating Conditions: Power supply voltage VDD, +3.7 V to +5.5 V",
+            "basis": "min"
+          }
+        }
       }
     }
   },
@@ -142,7 +153,7 @@
     },
     {
       "what": "supply voltage",
-      "why": "Section 8 lists VDD from +3.7 V to +5.5 V and states no under-voltage floor. Below 3.0 V the pixel ignores DIN, clears to off (leaving only the faded idle draw, 0 A at 0 V) and releases DOUT, and recovers from the next full frame once VDD returns. The ESP32-S3-DevKitC-1 ties this LED to 3.3 V, above 3.0 V and below 3.7 V; the kind does not warn there, and its draw fades below 3.7 V, to 97% at 3.3 V. Section 9 also names SK6805MINI-HS at 5 mA, and the draw is the 12 mA SK6812MINI-HS."
+      "why": "Section 8 lists VDD from +3.7 V to +5.5 V and states no under-voltage floor. Below 3.7 V the part warns `rating.supply_low` and its draw fades toward 0 A at 0 V (97% at 3.3 V). Below 3.0 V the pixel ignores DIN, clears to off (leaving only the faded idle draw) and releases DOUT, and recovers from the next full frame once VDD returns. Section 9 also names SK6805MINI-HS at 5 mA, and the draw is the 12 mA SK6812MINI-HS."
     },
     {
       "what": "bit times",

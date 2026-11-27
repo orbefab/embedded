@@ -59,6 +59,8 @@ Values are SI numbers. `unit` must already be the field's unit. Integer values a
 
 `world` is optional. It holds the world quantities the netlist declares, as [World](#world) says.
 
+`network` is optional. It sets the access point and the subnet radio chips reach, as [Network](#network) says.
+
 The engine stores ground first and sorts the other nets by name. It sorts parts by name. Reordering `nets` or `parts` in the JSON does not change observations or diagnostics.
 
 ## Transient analysis
@@ -139,6 +141,22 @@ A curve reads the quantity's value `w`. `x`, `x0` and `x1` are in the quantity's
 | `linear` | the line through `(x0, y0)` and `(x1, y1)` | `x0`, `y0`, `x1`, `y1` | a sensor with a linear output, such as an LM35's 10 mV per degC |
 
 Each curve is monotonic in `w` over the range of a quantity it may read, except `steinhart_hart`, which may have interior extrema. A `beta` or `linear` curve is monotonic for every `w` it may read. A `power` curve is monotonic only where `w / x` is not negative, so it reads only a quantity whose range does not go below 0, `light`, `humidity` or `pressure`. At `w` 0 a negative exponent makes `y * (w / x)^exponent` infinite, and the curve is `max` there, the dark resistance of a light-dependent resistor. Any other value above `max` is `max` too. A value that is not a number is never capped. Parse checks the field's own rule at both ends of the quantity's range (and at any interior stationary point of a `steinhart_hart` curve), so every value a schedule or a session can set keeps it. An end that breaks it is `netlist.value` on field `<field>.curve at <end> <unit>`, such as `resistance.curve at 0.0 lx`, with the field's rule, or rule `finite` when the curve is not finite there, such as a `power` curve with `y` 0 and a negative exponent at 0 lx. A `power` curve on `temperature` is `netlist.world` with rule `non_negative` on field `<field>.curve.kind`. A quantity the netlist does not declare is `netlist.world` with rule `undeclared` on field `<field>.quantity`, and a name the table lacks is rule `unknown` there. A `beta` or `steinhart_hart` curve on another quantity is `netlist.world` with rule `temperature` on field `<field>.curve.kind`. A `power` curve's `x` at or below 0 is `netlist.value` with rule `positive`. A `linear` curve whose `x1` equals its `x0` is `netlist.value` with rule `distinct`. A unit that is not the one the table above names is `netlist.unit` on field `<field>.curve.<name>`. An unknown `kind`, a missing field and an unknown field are `netlist.syntax`.
+
+## Network
+
+`network` is one access point on the air and the subnet behind it, which `orbe-net` runs. No scene writes it yet, so only a netlist given to `orbe-run` has one. A netlist without it builds no air, and its runs are the runs it had before the air existed.
+
+```json
+"network": {
+  "ssid": "orbe-lab",
+  "bssid": "02:6f:72:62:65:01",
+  "channel": 6,
+  "passphrase": "breadboard",
+  "epoch_s": 1773480360
+}
+```
+
+`ssid` is 1 to 32 bytes. `bssid` is six hex octets joined by `:`, an individual address. `channel` is a 2.4 GHz channel, 1 to 14. With `passphrase`, 8 to 63 characters from space to `~`, the access point asks for WPA2-PSK with CCMP-128. Without it the network is open. `epoch_s` is the seconds from 1970-01-01T00:00:00Z that the network's clock reads at t = 0, at most 253383854055, and 1767225600, 2026-01-01T00:00:00Z, without it. The subnet is `192.168.1.0/24`, with the router at `.1` and leases from `.100`. A field out of its range, a missing field and an unknown field are `netlist.syntax` at `network`.
 
 ## Names
 
@@ -912,7 +930,7 @@ A break is `netlist.value` with the dotted field, such as `input_threshold.high`
 
 `start` is where the run begins. `"first_instruction"` puts the first instruction at 0 ps, with the start from reset already over, so a netlist written before the field keeps its meaning. `"power_on"` starts the chip as the supply comes up at 0 ps: it holds in reset for the delay its fuses set, sets `PORF`, and fetches from the reset vector after it. The catalog's ATmega328P parts name `"power_on"`.
 
-The model is the core and its adapter in [avr.md](avr.md#behind-the-seam). Each port pin drives high through `output.high_resistance` from `VCC`, drives low through `output.low_resistance` into `GND_8`, pulls up through `pull_up_resistance` to `VCC`, or is off, as the firmware sets it. In each of those states it also leaks through `leakage_resistance` to `VCC` and through another to `GND_8`. It reads high above `input_threshold.high` times `V(VCC) - V(GND_8)` over `GND_8`, and low at or below `input_threshold.low` times it. `PC6` is `RESET` while `RSTDISBL` is unprogrammed. It then pulls up through `reset_pull_up_resistance`, leaks as an I/O pin does, and reads through `reset_threshold`, and a low level holds the chip in reset. The ADC samples `PC0` to `PC5`, `ADC6` and `ADC7` when the part wires them, `AVCC` and `AREF` against `GND_22`. With `active_current`, a conductance of `active_current / 5 V` joins `VCC` to `GND_8` while the core runs, so it draws `active_current` at a 5 V supply and scales with it, as the op-amp's `supply_current` does. With `reset_current`, the conductance is `reset_current / 5 V` instead while a reset, from `RESET` low or a brown-out, holds the chip. The catalog's ATmega328P takes 2.0 mA there, DS40002061B Figure 31-377 on the 5.0 V curve at 16 MHz, against its 11.4 mA running. Without `reset_current` the chip draws `active_current` in reset too, and without either the core draws nothing, so a netlist written before the fields keeps its meaning. The conductance joins no new DC path, since every port pin's leakage already joins `VCC` to `GND_8`.
+The model is the core and its adapter in [avr.md](avr.md#behind-the-seam). Each port pin drives high through `output.high_resistance` from `VCC`, drives low through `output.low_resistance` into `GND_8`, pulls up through `pull_up_resistance` to `VCC`, or is off, as the firmware sets it. In each of those states it also leaks through `leakage_resistance` to `VCC` and through another to `GND_8`. It reads high above `input_threshold.high` times `V(VCC) - V(GND_8)` over `GND_8`, and low at or below `input_threshold.low` times it. `PC6` is `RESET` while `RSTDISBL` is unprogrammed. It then pulls up through `reset_pull_up_resistance`, leaks as an I/O pin does, and reads through `reset_threshold`, and a low level holds the chip in reset. The ADC samples `PC0` to `PC5`, `ADC6` and `ADC7` when the part wires them, `AVCC` and `AREF` against `GND_22`. With `active_current`, a conductance of `active_current / 5 V` joins `VCC` to `GND_8` while the core runs, so it draws `active_current` at a 5 V supply and scales with it, as the op-amp's `supply_current` does. With `reset_current`, the conductance is `reset_current / 5 V` instead while a reset, from `RESET` low, a brown-out, or the post-reset start-up time-out, holds the chip. With `"start": "power_on"` that reset holds the chip from 0 ps, so the operating point draws it too, and the hold lasts until the start from reset ends. With `"first_instruction"` the chip runs from 0 ps, and the operating point draws `active_current`. The catalog's ATmega328P takes 2.0 mA there, DS40002061B Figure 31-377 on the 5.0 V curve at 16 MHz, against its 11.4 mA running. Without `reset_current` the chip draws `active_current` in reset too, and without either the core draws nothing, so a netlist written before the fields keeps its meaning. The conductance joins no new DC path, since every port pin's leakage already joins `VCC` to `GND_8`.
 
 The example's values but one are typical curves at VCC = 5 V, read by eye, not digitized. `leakage_resistance` is derived from a bound. All are the documented defaults to copy.
 
@@ -1508,7 +1526,7 @@ A blob the document names that no folder has, a name whose every file hashes to 
 
 ## Ratings
 
-A rating bounds the stress on a part. Every key of a kind's `ratings` object is required, except a resistor's `voltage` and a diode or LED's `reverse_voltage`, which may be left out. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `esp32s3`, `ssd1306`, `hd44780`, `hd44780_i2c`, `ws2812`, `voltage_source`, `capacitor`, `potentiometer` and `switch`, where it is optional.
+A rating bounds the stress on a part. Every key of a kind's `ratings` object is required, except a resistor's `voltage`, a diode or LED's `reverse_voltage`, an op-amp's keys, and `supply_min` (`io_supply_min` on `bmp280`), which may be left out. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `esp32s3`, `ssd1306`, `hd44780`, `hd44780_i2c`, `ws2812`, `max7219`, `op_amp`, `dht22`, `sg90`, `ne555`, `cst816`, `st77916`, `voltage_source`, `capacitor`, `potentiometer` and `switch`, where it is optional.
 
 | Kind | Keys | Checked quantity |
 | --- | --- | --- |
@@ -1517,19 +1535,24 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `switch` | `current`, `voltage`, optional | `#<part>.i`, and `#<part>.v` (`V(a) - V(b)` across the contact) |
 | `diode`, `led` | `current`, `power`, optional `reverse_voltage` | `#<part>.i`, `#<part>.p`, and `#<part>.v` (reverse floor) |
 | `zener` | `current`, `power` | `#<part>.i`, `#<part>.p` |
-| `linear_regulator` | `current`, `power` | `#<part>.iout`, `#<part>.p` |
+| `linear_regulator` | `current`, `power`, optional `input_voltage` | `#<part>.iout`, `#<part>.p`, and `in` over `gnd` |
 | `npn`, `pnp` | `current`, `power` | `#<part>.ic`, `#<part>.p` |
 | `nmos`, `pmos` | `current`, `power` | `#<part>.id`, `#<part>.p` |
 | `voltage_source` | `current` | `#<part>.i` |
 | `capacitor` | `reverse_voltage`, optional | pin `a` over pin `b` |
-| `atmega328p` | `pin_current`, `supply_current`, `rail_margin`, `reset_voltage`, `supply_voltage` | each port pin's current, the current through `VCC` and `GND_8`, and each pin's voltage over `GND_8`, each named `#<part>.pin.<pin>` |
-| `esp32s3` | `rail_margin`, `supply_voltage` | `VCC` and each wired GPIO's voltage over `GND`, each named `#<part>.pin.<pin>` |
-| `ssd1306` | `rail_margin`, `supply_voltage` | `VDD`, `SCL`, `SDA` and `RES` voltage over `VSS`, each named `#<part>.pin.<pin>` |
+| `op_amp` | optional `supply_voltage`, `supply_min`, `input_below_gnd` | `vcc` over `gnd` and `in_p`/`in_n` below `gnd` |
+| `atmega328p` | `pin_current`, `supply_current`, `rail_margin`, `reset_voltage`, `supply_voltage`, optional `supply_min` | each port pin's current, the current through `VCC` and `GND_8`, and each pin's voltage over `GND_8`, each named `#<part>.pin.<pin>` |
+| `esp32s3` | `rail_margin`, `supply_voltage`, optional `supply_min` | `VCC` and each wired GPIO's voltage over `GND`, each named `#<part>.pin.<pin>` |
+| `bmp280` | `supply_voltage`, `pin_margin`, optional `supply_min`, `io_supply_min` | `VDD`, `VDDIO`, `CSB`, `SDI`, `SCK` and `SDO` voltage over `GND`, each named `#<part>.pin.<pin>` |
+| `ssd1306` | `rail_margin`, `supply_voltage`, optional `supply_min` | `VDD`, `SCL`, `SDA` and `RES` voltage over `VSS`, each named `#<part>.pin.<pin>` |
 | `hd44780` | `rail_margin`, `supply_voltage` | `VDD`, `RS`, `RW`, `E` and `D0` to `D7` voltage over `VSS`, each named `#<part>.pin.<pin>` |
-| `hd44780_i2c` | `rail_margin`, `supply_voltage` | `VCC`, `SCL` and `SDA` voltage over `GND`, each named `#<part>.pin.<pin>` |
-| `ws2812` | `rail_margin`, `supply_voltage` | `VCC` and `DIN` voltage over `GND`, each named `#<part>.pin.<pin>` |
-| `hc595` | `pin_current`, `supply_current`, `input_margin`, `output_margin` | each of `QA`–`QH` and `QHp`, the current through `VCC` and `GND`, and each input and output voltage over `GND`, each named `#<part>.pin.<pin>` |
-| `current_source`, `inductor`, `relay`, `ne555`, `spi_replay`, `st77916`, `cst816`, `pulses_replay`, `dht22`, `sg90` | none | |
+| `hd44780_i2c` | `rail_margin`, `supply_voltage`, optional `supply_min` | `VCC`, `SCL` and `SDA` voltage over `GND`, each named `#<part>.pin.<pin>` |
+| `ws2812` | `rail_margin`, `supply_voltage`, optional `supply_min` | `VCC` and `DIN` voltage over `GND`, each named `#<part>.pin.<pin>` |
+| `hc595` | `pin_current`, `supply_current`, `input_margin`, `output_margin`, optional `supply_min` | each of `QA`–`QH` and `QHp`, the current through `VCC` and `GND`, and each input and output voltage over `GND`, each named `#<part>.pin.<pin>` |
+| `max7219` | `rail_margin`, `supply_voltage`, `input_voltage`, `supply_current`, optional `supply_min` | the current through `VCC` and `GND`, `VCC`, `DIN`, `CLK` and `LOAD` voltage over `GND`, and `DOUT` and `ISET` within `rail_margin` of the rails, each named `#<part>.pin.<pin>` |
+| `dht22`, `sg90`, `cst816`, `st77916` | optional `supply_min` | `VCC` over `GND`, named `#<part>.pin.VCC` |
+| `ne555` | optional `supply_min` | `vcc` over `gnd`, named `#<part>.pin.vcc` |
+| `current_source`, `inductor`, `relay`, `spi_replay`, `pulses_replay` | none | |
 
 A `current`, `power`, `pin_current` or `supply_current` value object may also carry `basis`, the datasheet's basis for the figure, and `"characterized": true` when the figure is the largest load its datasheet characterizes rather than an absolute maximum. `"peak"` bounds each sample. `{ "sustained": { "average": "rms" | "mean", "tau": { "value": <s>, "unit": "s" } } }` bounds a first-order filter of the samples with time constant `tau`: of their squares for `rms`, read back as the root, and of their magnitudes for `mean`. A sustained basis may also carry `peak`, the sheet's peak or surge limit in the rating's unit, such as a diode's IFSM beside its average forward current. Each sample is checked against it as a peak rating. A `tau` or `peak` of 0 or below is `netlist.value` with rule `positive` on `ratings.<key>.basis.sustained.tau` or `.peak`, and a wrong unit is `netlist.unit` on that field. A rating with no `basis` takes its kind's: a `power` is a 10.2 ms `mean`, a `voltage_source`'s `current` and an `atmega328p`'s or an `hc595`'s `pin_current` and `supply_current` are a 10.2 ms `rms`, and every other `current` is a `peak`.
 
@@ -1537,7 +1560,7 @@ A `current`, `power`, `pin_current` or `supply_current` value object may also ca
 "current": { "value": 0.5, "unit": "A", "basis": { "sustained": { "average": "mean", "tau": { "value": 0.055, "unit": "s" }, "peak": { "value": 5.5, "unit": "A" } } } }
 ```
 
-`current`, `pin_current` and `supply_current` are in `A`. `power` is in `W`. `rail_margin`, `reset_voltage`, `supply_voltage` and `reverse_voltage` are in `V`. A rating must be greater than 0, except a capacitor's `reverse_voltage`, which may be 0. A reverse rating of 0 warns on any reverse voltage, and a pin exactly at pin `b` is inside. A missing key, an unknown key, and a missing `ratings` object where it is required are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.<key>`, such as `ratings.current`. A value of 0 or below is `netlist.value` with the same field, except a `reverse_voltage` of 0. A negative `reverse_voltage` is `netlist.value` with rule `non_negative`.
+`current`, `pin_current` and `supply_current` are in `A`. `power` is in `W`. `rail_margin`, `reset_voltage`, `supply_voltage`, `supply_min`, `io_supply_min` and `reverse_voltage` are in `V`. A rating must be greater than 0, except a capacitor's `reverse_voltage`, which may be 0. A reverse rating of 0 warns on any reverse voltage, and a pin exactly at pin `b` is inside. A missing key, an unknown key, and a missing `ratings` object where it is required are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.<key>`, such as `ratings.current`. A value of 0 or below is `netlist.value` with the same field, except a `reverse_voltage` of 0. A negative `reverse_voltage` is `netlist.value` with rule `non_negative`.
 
 ```json
 "ratings": { "power": { "value": 0.25, "unit": "W" } }
@@ -1549,7 +1572,7 @@ A resistor may also carry `voltage`, either as a single positive value object in
 "voltage": { "min": { "value": 3.0, "unit": "V" }, "max": { "value": 5.0, "unit": "V" } }
 ```
 
-The run compares the magnitude of each rated quantity with its rating, and each rated pin's voltage with its window. A peak rating is compared with each sample. A sustained rating is compared through its filter, which steps exactly over each held sample, `y = x + (y - x) e^(-dt / tau)`. A pulse much shorter than `tau` counts by its share of it, a PWM load by its period's average once the filter settles, and a load held over the rating crosses after `tau ln(x / (x - rating))` for `mean`. Each filter starts at 0 and takes the first step after t = 0, and the operating point at t = 0 is no sample. A value and its rating are compared rounded to 3 significant digits. Going over is a warning, `rating.current`, `rating.power` or `rating.voltage`, in [diagnostics.md](diagnostics.md). A sustained rating with no `peak` whose latest value is over it before its filter crosses is listed as [over now](diagnostics.md#over-now).
+The run compares the magnitude of each rated quantity with its rating, each rated pin's voltage with its window, and each chip's supply pin with its `supply_min` (and `bmp280`'s `VDDIO` with `io_supply_min`). A supply at or below 0.1 V over ground is treated as unpowered and stays silent; strictly above 0.1 V and below the minimum warns `rating.supply_low`. A peak rating is compared with each sample. A sustained rating is compared through its filter, which steps exactly over each held sample, `y = x + (y - x) e^(-dt / tau)`. A pulse much shorter than `tau` counts by its share of it, a PWM load by its period's average once the filter settles, and a load held over the rating crosses after `tau ln(x / (x - rating))` for `mean`. Each filter starts at 0 and takes the first step after t = 0, and the operating point at t = 0 is no sample. A value and its rating are compared rounded to 3 significant digits. Going over is a warning, `rating.current`, `rating.power`, `rating.voltage` or `rating.supply_low`, in [diagnostics.md](diagnostics.md). A sustained rating with no `peak` whose latest value is over it before its filter crosses is listed as [over now](diagnostics.md#over-now).
 
 ## Sign rules
 

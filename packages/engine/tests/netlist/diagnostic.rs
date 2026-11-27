@@ -2,7 +2,7 @@ use orbe_model::Time;
 
 use orbe_engine::diagnostic::{
     AnalysisRule, CurrentLimitExcursion, Diagnostic, Excursion, LinkKind, ProtocolRule,
-    ScheduleRule, Severity, Solve, ValueRule, WaveformRule,
+    ScheduleRule, Severity, Solve, SupplyExcursion, ValueRule, WaveformRule,
 };
 use orbe_engine::name::{Name, NameError, Ref};
 use orbe_engine::netlist::{Average, Basis};
@@ -163,6 +163,15 @@ fn samples() -> Vec<Diagnostic> {
             peripheral: "RMT",
             kind: LinkKind::Pulses,
         },
+        Diagnostic::RatingSupplyLow(SupplyExcursion {
+            pin: Ref::Pin(name("u1"), name("VDD")),
+            min: 1.71,
+            clock_hz: None,
+            voltage: 1.542,
+            peak_at: Time::from_ps(9_500),
+            first: Time::from_ps(8_500),
+            over_ps: Some(2_000),
+        }),
         Diagnostic::RegulatorCurrentLimit(CurrentLimitExcursion {
             pin: Ref::Pin(name("u1"), name("out")),
             limit: 0.03,
@@ -210,7 +219,7 @@ fn codes_are_unique_and_match_the_grammar() {
         assert!(is_code(code), "{code}");
         assert!(seen.insert(code), "duplicate code {code}");
     }
-    assert_eq!(seen.len(), 27);
+    assert_eq!(seen.len(), 28);
 }
 
 /// `docs/engine/diagnostics.md` gives each code its own `## <code>` heading.
@@ -259,6 +268,7 @@ fn severity_refs_and_time_follow_the_variant() {
             "chip.protocol",
             "chip.link_miswired",
             "chip.link_unsupported",
+            "rating.supply_low",
             "regulator.current_limit",
         ]
     );
@@ -282,6 +292,8 @@ fn severity_refs_and_time_follow_the_variant() {
             assert_eq!(diagnostic.at(), Some(Time::from_ps(6_000)));
         } else if code == "chip.link_unsupported" {
             assert_eq!(diagnostic.at(), Some(Time::from_ps(7_000)));
+        } else if code == "rating.supply_low" {
+            assert_eq!(diagnostic.at(), Some(Time::from_ps(8_500)));
         } else if code == "regulator.current_limit" {
             assert_eq!(diagnostic.at(), Some(Time::from_ps(8_000)));
         } else {
@@ -424,6 +436,11 @@ fn severity_refs_and_time_follow_the_variant() {
             r##""refs":["#r1.p"],"t_ps":5,"message":"#r1.p averages 3 W with a 10.2 ms time constant while it is 3.25 W, over its 0.25 W rating for 4 ps","data":{"average":"mean","held_ps":null,"limit":0.25,"now":false,"over_ps":4,"peak":3.0,"peak_ps":7,"sample":3.25,"tau_ps":10200000000}"##
         ),
         "{power}"
+    );
+    let supply_low = serde_json::to_string(by_code(&found, "rating.supply_low")).unwrap();
+    assert_eq!(
+        supply_low,
+        r##"{"code":"rating.supply_low","severity":"warning","refs":["#u1.pin.VDD"],"t_ps":8500,"message":"#u1.pin.VDD supply drops to 1.54 V over the chip's ground, below its 1.71 V minimum for 2000 ps","data":{"limit":1.71,"over_ps":2000,"peak_ps":9500,"voltage":1.542}}"##
     );
     let reg_limit = serde_json::to_string(by_code(&found, "regulator.current_limit")).unwrap();
     assert_eq!(
