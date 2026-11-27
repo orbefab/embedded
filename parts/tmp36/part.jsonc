@@ -117,27 +117,25 @@
       },
     },
     "ratings": {
-      "operating_supply": {
-        "min": {
-          "value": 2.7,
-          "unit": "V",
-          "source": {
-            "datasheet": {
-              "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
-              "at": "Table 1, p3, Operating Supply Voltage Range = 2.7 V to 5.5 V",
-              "basis": "min",
-            },
+      "supply_min": {
+        "value": 2.7,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
+            "at": "Table 1, p3, Operating Supply Voltage Range = 2.7 V to 5.5 V",
+            "basis": "min",
           },
         },
-        "max": {
-          "value": 5.5,
-          "unit": "V",
-          "source": {
-            "datasheet": {
-              "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
-              "at": "Table 1, p3, Operating Supply Voltage Range = 2.7 V to 5.5 V",
-              "basis": "max",
-            },
+      },
+      "supply_max": {
+        "value": 5.5,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
+            "at": "Table 1, p3, Operating Supply Voltage Range = 2.7 V to 5.5 V",
+            "basis": "max",
           },
         },
       },

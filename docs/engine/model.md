@@ -29,7 +29,7 @@ Equal generations mean equal pages only between a state and a copy made before o
 
 - `Shows::Nothing`, the default.
 - `Shows::Leds { kind, order }`, an LED chain. Its view is three bytes per LED in `order`.
-- `Shows::Screen { kind, width, height, format }`, a screen. Its view is the frame memory, in `format`, and a `Panel`: whether the display is on, inverted, in reset or asleep, its controller's `Settings`, how many registers hold a write it stores and does not run, and the last duty its backlight pin took. `rgb565` is rows top to bottom, two bytes a pixel, as an ST77916 holds them. `mono-pages` is 8-row pages top to bottom, one byte a column of a page with bit 0 its top row, as an SSD1306 holds them. `hd44780` is 80 bytes of DDRAM followed by 64 bytes of CGRAM, as an `hd44780_i2c` holds them. `Settings` names each of a controller's own values that changes what the glass shows, such as an ST77916's MADCTL and COLMOD or an SSD1306's contrast and COM scan, at most 12, in an order the device fixes. A screen kind is one the engine draws, as [run-folder.md](run-folder.md#what-the-glass-shows) says.
+- `Shows::Screen { kind, width, height, format }`, a screen. Its view is the frame memory, in `format`, and a `Panel`: whether the display is on, inverted, in reset or asleep, its controller's `Settings`, how many registers hold a write it stores and does not run, and the last duty its backlight pin took. `rgb565` is rows top to bottom, two bytes a pixel, as an ST77916 holds them. `mono-pages` is 8-row pages top to bottom, one byte a column of a page with bit 0 its top row, as an SSD1306 holds them. `hd44780` is 80 bytes of DDRAM followed by 64 bytes of CGRAM, as an `hd44780` or `hd44780_i2c` holds them. `Settings` names each of a controller's own values that changes what the glass shows, such as an ST77916's MADCTL and COLMOD or an SSD1306's contrast and COM scan, at most 12, in an order the device fixes. A screen kind is one the engine draws, as [run-folder.md](run-folder.md#what-the-glass-shows) says.
 
 The engine lists a part in `observations.json` `leds` only when its device declares an LED chain, and in `displays` only when it declares a screen.
 
@@ -100,7 +100,7 @@ A replay is a part that plays recorded transactions onto its pins: `spi_replay` 
 
 ## The air
 
-`orbe_model::air` holds what radio stations trade on the air. A station is a chip whose radio implements the air calls in [mcu.md](mcu.md#the-air). Nothing calls them yet.
+`orbe_model::air` holds what radio stations trade on the air. A station is a chip whose radio implements the air calls in [mcu.md](mcu.md#the-air), or the netlist's network. The engine routes frames between them, as [engine.md](engine.md#the-air) says.
 
 - `Channel` is a 2.4 GHz channel, 1 to 14, 20 MHz wide.
 - `Rate` is the rate a frame goes at: 1 Mb/s DSSS, 2 Mb/s DSSS and 5.5 or 11 Mb/s CCK each with a long or short `Preamble`, ERP-OFDM 6 to 54 Mb/s, or HT-mixed MCS 0 to 7 at 20 MHz with the 800 ns guard interval.

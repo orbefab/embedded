@@ -1,12 +1,12 @@
 // TI SN74HC595, PDIP-16. QA is the first shift-register stage and QH the last.
 // QHp is the sheet's QH', the serial output that feeds the next register.
 {
-  "format": 5,
+  "format": 7,
   "part": "hc595-dip16",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "title": "74HC595 8-bit shift register (DIP-16)",
   "summary": "8-bit serial-in, parallel-out shift register in a DIP-16. Three pins from a microcontroller drive eight outputs, and it chains to more registers.",
-  "tags": ["74hc595", "shift-register", "output", "through-hole", "dip"],
+  "tags": ["74hc595", "595", "shift-register", "sipo", "latch", "serial", "output", "through-hole", "dip"],
   "license": "MIT OR Apache-2.0",
   "docs": {
     "TI SNx4HC595 datasheet, SCLS041J": "https://www.ti.com/lit/ds/symlink/sn74hc595.pdf"
@@ -38,7 +38,8 @@
       "pin_current": { "value": 0.035, "unit": "A", "basis": { "sustained": { "average": "rms", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } }, "source": { "datasheet": { "doc": "TI SNx4HC595 datasheet, SCLS041J", "at": "section 6.1 Absolute Maximum Ratings, continuous output current, ±35 mA", "basis": "absolute_max" } } },
       "supply_current": { "value": 0.07, "unit": "A", "basis": { "sustained": { "average": "rms", "tau": { "value": 0.0102, "unit": "s", "source": { "closed_form": { "note": "The sheet gives no pulse rating to fit, so this is the 10.2 ms default, five periods of a 490 Hz PWM." } } } } }, "source": { "datasheet": { "doc": "TI SNx4HC595 datasheet, SCLS041J", "at": "section 6.1 Absolute Maximum Ratings, continuous current through VCC or GND, ±70 mA", "basis": "absolute_max" } } },
       "input_margin": { "value": 0.5, "unit": "V", "source": { "datasheet": { "doc": "TI SNx4HC595 datasheet, SCLS041J", "at": "section 6.1, VI -0.5 V to VCC + 0.5 V, and IIK ±20 mA when VI is below GND or above VCC", "basis": "absolute_max" } } },
-      "output_margin": { "value": 0.5, "unit": "V", "source": { "datasheet": { "doc": "TI SNx4HC595 datasheet, SCLS041J", "at": "section 6.1, VO -0.5 V to VCC + 0.5 V, and IOK ±20 mA when VO is below GND or above VCC", "basis": "absolute_max" } } }
+      "output_margin": { "value": 0.5, "unit": "V", "source": { "datasheet": { "doc": "TI SNx4HC595 datasheet, SCLS041J", "at": "section 6.1, VO -0.5 V to VCC + 0.5 V, and IOK ±20 mA when VO is below GND or above VCC", "basis": "absolute_max" } } },
+      "supply_min": { "value": 2.0, "unit": "V", "source": { "datasheet": { "doc": "TI SNx4HC595 datasheet, SCLS041J", "at": "section 6.3 Recommended Operating Conditions, VCC 2.0 V to 6.0 V", "basis": "min" } } }
     },
     "pins": {
       "QB": "QB", "QC": "QC", "QD": "QD", "QE": "QE", "QF": "QF", "QG": "QG", "QH": "QH", "GND": "GND",

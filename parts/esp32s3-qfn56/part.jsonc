@@ -11,9 +11,9 @@
 // quotes their notices, and the LICENSE files beside them are those texts.
 // The part's other files stay MIT OR Apache-2.0.
 {
-  "format": 6,
+  "format": 7,
   "part": "esp32s3-qfn56",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "title": "ESP32-S3, QFN-56",
   "summary": "Espressif ESP32-S3, a dual-core Xtensa LX7 microcontroller with Wi-Fi and Bluetooth LE, in a 7 x 7 mm QFN-56.",
   "tags": ["microcontroller", "esp32-s3", "qfn"],
@@ -64,7 +64,8 @@
     },
     "ratings": {
       "rail_margin": { "value": 0.3, "unit": "V", "source": { "datasheet": { "doc": "ESP32-S3 Series Datasheet v2.2", "at": "Table 5-4, DC Characteristics (3.3 V, 25 C), p. 65: VIH max VDD + 0.3 V and VIL min -0.3 V (footnote 1: VDD is the power pin of a respective power domain, VDD3P3_RTC, VDD3P3_CPU or VDD_SPI, joined into VCC here); Table 5-1 also gives -0.3 V min on input power pins", "basis": "absolute_max" } } },
-      "supply_voltage": { "value": 3.6, "unit": "V", "source": { "datasheet": { "doc": "ESP32-S3 Series Datasheet v2.2", "at": "Table 5-1, Absolute Maximum Ratings, p. 64: Input power pins, Allowed input voltage, -0.3 V to 3.6 V", "basis": "absolute_max" } } }
+      "supply_voltage": { "value": 3.6, "unit": "V", "source": { "datasheet": { "doc": "ESP32-S3 Series Datasheet v2.2", "at": "Table 5-1, Absolute Maximum Ratings, p. 64: Input power pins, Allowed input voltage, -0.3 V to 3.6 V", "basis": "absolute_max" } } },
+      "supply_min": { "value": 3.0, "unit": "V", "source": { "datasheet": { "doc": "ESP32-S3 Series Datasheet v2.2", "at": "Table 5-2, Recommended Operating Conditions, p. 64: VDD3P3, VDD3P3_RTC, VDD3P3_CPU, VDDA minimum 3.0 V", "basis": "min" } } }
     }
   },
   "not_simulated": [

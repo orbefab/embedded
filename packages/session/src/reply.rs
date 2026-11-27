@@ -500,32 +500,54 @@ pub struct Screen {
     pub on: bool,
     pub lit: usize,
     pub rows: Vec<String>,
-    pub settings: Vec<(String, u16)>,
+    /// Per-dot average forward current in amperes (`height` rows × `width` columns), for LED
+    /// matrices (`max7219`). Absent on screens without per-dot current readings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brightness: Option<Vec<Vec<f64>>>,
+    pub settings: Vec<(String, u32)>,
 }
 
 impl Screen {
     fn json(&self) -> Value {
-        json!({
-            "kind": self.kind,
-            "width": self.width,
-            "height": self.height,
-            "on": self.on,
-            "lit": self.lit,
-            "rows": self.rows,
-            "settings": self.settings.iter().map(|(k, v)| (k.clone(), json!(v))).collect::<serde_json::Map<_, _>>(),
-        })
+        let mut map = serde_json::Map::new();
+        map.insert("kind".into(), json!(self.kind));
+        map.insert("width".into(), json!(self.width));
+        map.insert("height".into(), json!(self.height));
+        map.insert("on".into(), json!(self.on));
+        map.insert("lit".into(), json!(self.lit));
+        map.insert("rows".into(), json!(self.rows));
+        if let Some(brightness) = &self.brightness {
+            map.insert("brightness".into(), json!(brightness));
+        }
+        map.insert(
+            "settings".into(),
+            Value::Object(
+                self.settings
+                    .iter()
+                    .map(|(k, v)| (k.clone(), json!(v)))
+                    .collect(),
+            ),
+        );
+        Value::Object(map)
     }
 
     /// `ssd1306 128x64 on, 412 pixels lit`.
     pub fn brief(&self) -> String {
-        format!(
+        let mut out = format!(
             "{} {}x{} {}, {} pixels lit",
             self.kind,
             self.width,
             self.height,
             if self.on { "on" } else { "off" },
             self.lit
-        )
+        );
+        if let Some(brightness) = &self.brightness {
+            let max_a = brightness.iter().flatten().copied().fold(0.0_f64, f64::max);
+            if max_a > 0.0 {
+                let _ = write!(out, ", {}/dot", current(max_a));
+            }
+        }
+        out
     }
 
     /// The brief line, then each row.
@@ -914,7 +936,7 @@ fn shown_message(code: &str, json: &Value) -> String {
     {
         return text;
     }
-    if code == "rating.voltage" {
+    if matches!(code, "rating.voltage" | "rating.supply_low") {
         return with_over(message, json);
     }
     if code == "regulator.current_limit"

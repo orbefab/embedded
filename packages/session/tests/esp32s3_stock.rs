@@ -1436,7 +1436,18 @@ fn a_stock_cdc_sketch_reads_console_bytes_on_both_cores() {
             text.contains("got 103"),
             "{fixture}: missing echoed console byte in {text:?}"
         );
-        let diagnostics = session.diagnostics();
+        let diagnostics: Vec<_> = session
+            .diagnostics()
+            .into_iter()
+            .filter(|d| {
+                let refs = d.refs();
+                !(refs.len() == 1
+                    && netlist
+                        .refs
+                        .quiet_warnings
+                        .contains(&(d.code().to_string(), refs[0].to_string())))
+            })
+            .collect();
         assert!(
             diagnostics.is_empty(),
             "{fixture}: unexpected diagnostics: {diagnostics:?}"

@@ -1,0 +1,11 @@
+// A Block: a small circuit that works. `orbe add nano-max7219-scroll` installs it into a project.
+{
+  "format": 1,
+  "block": "nano-max7219-scroll",
+  "version": "0.1.0",
+  "title": "Scrolling text on a 4-in-1 MAX7219 LED matrix",
+  "summary": "An Arduino Nano scrolls \"ORBE\" across a 4-in-1 (32 x 8) FC-16 MAX7219 LED dot matrix module over hardware SPI using MD_Parola and MD_MAX72XX.",
+  "board": "nano-board",
+  "tags": ["max7219", "led", "matrix", "dot", "8x8", "32x8", "4-in-1", "fc-16", "parola", "scroll", "display", "spi", "nano"],
+  "license": "(MIT OR Apache-2.0) AND LGPL-2.1-or-later AND BSD-3-Clause AND GPL-3.0-or-later WITH GCC-exception-3.1",
+}

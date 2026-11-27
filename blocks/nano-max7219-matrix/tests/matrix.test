@@ -1,0 +1,9 @@
+# LedControl wakes the MAX7219 from shutdown, sets intensity 8, and draws the smiley.
+open
+expect @matrix off
+step 50ms
+expect @matrix lit
+expect @matrix shows tests/matrix.screen
+expect @matrix.brightness > 2mA
+expect @matrix.brightness < 4mA
+expect no diagnostics

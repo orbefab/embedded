@@ -172,7 +172,7 @@ pub struct Panel {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Settings {
     names: &'static [&'static str],
-    values: [u16; Settings::MAX],
+    values: [u32; Settings::MAX],
 }
 
 impl Settings {
@@ -183,7 +183,7 @@ impl Settings {
     /// [`MAX`](Self::MAX).
     pub const fn new<const N: usize>(
         names: &'static [&'static str; N],
-        values: [u16; N],
+        values: [u32; N],
     ) -> Settings {
         assert!(N <= Settings::MAX, "a panel carries at most 12 settings");
         let mut all = [0; Settings::MAX];
@@ -196,14 +196,14 @@ impl Settings {
     }
 
     /// The value of the setting `name`.
-    pub fn get(&self, name: &str) -> Option<u16> {
+    pub fn get(&self, name: &str) -> Option<u32> {
         self.iter()
             .find(|&(setting, _)| setting == name)
             .map(|(_, value)| value)
     }
 
     /// Each setting and its value, in declaration order.
-    pub fn iter(&self) -> impl Iterator<Item = (&'static str, u16)> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = (&'static str, u32)> + '_ {
         self.names.iter().copied().zip(self.values)
     }
 }

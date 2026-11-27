@@ -333,6 +333,26 @@ impl<D: Device> Hosting<D> {
     }
 }
 
+/// A port with no pins. The device reads its watches itself.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Quiet;
+
+impl<D: Device> Port<D> for Quiet {
+    const PINS: usize = 0;
+
+    fn drive(&self, _image: &mut [Drive]) {}
+
+    fn due_at(&self) -> Option<Time> {
+        None
+    }
+
+    fn take_due(&mut self, _dev: &mut Hosting<D>, _world: &World, _at: Time) -> bool {
+        false
+    }
+
+    fn input(&mut self, _dev: &mut Hosting<D>, _world: &World, _at: Time, _levels: &[bool]) {}
+}
+
 /// The host engine of the bus a device declares. It drives that bus's pins, ahead of the
 /// device's own outputs in the image, and turns the levels it watches into calls on the device.
 pub(crate) trait Port<D>: Clone + Send + 'static {

@@ -7,10 +7,11 @@
 //! sourced out of `vout`; current sunk into `vout` returns to `gnd`. When unpowered
 //! (`V(vs) - V(gnd) <= 0`), the output sits at `0 V` over `gnd` and the supply draws nothing.
 //!
-//! Operating outside `ratings.operating_supply` while powered (`V(vs) - V(gnd) >= UNPOWERED_V`)
-//! keeps working (with the output still clamped to `vs`) and warns `rating.voltage`. Supply
-//! voltages above `ratings.supply_voltage` warn `rating.voltage` past the absolute maximum
-//! ceiling.
+//! A powered supply below `ratings.supply_min` keeps working (with the output still clamped to
+//! `vs`) and warns `rating.supply_low`, as every chip's minimum does. A supply above
+//! `ratings.supply_max` (the top of the operating range) keeps working and warns
+//! `rating.voltage`, and one above `ratings.supply_voltage` warns `rating.voltage` past the
+//! absolute maximum ceiling.
 
 use orbe_model::Time;
 use serde::Deserialize;
@@ -35,9 +36,10 @@ pub struct AnalogTempSensor {
     pub output_voltage: Param,
     pub output_resistance: Param,
     pub quiescent_current: Value,
-    /// Operating supply range `(min, max)` in volts (`vs` over `gnd`). `None` rates no operating
-    /// supply window.
-    pub operating_supply: Option<(f64, f64)>,
+    /// Minimum operating supply (`vs` over `gnd`). `None` rates no minimum.
+    pub supply_min: Option<Value>,
+    /// Maximum operating supply (`vs` over `gnd`). `None` rates no operating ceiling.
+    pub supply_max: Option<Value>,
     /// Absolute maximum supply voltage (`vs` over `gnd`). `None` rates no ceiling.
     pub max_supply: Option<Value>,
 }
@@ -52,9 +54,6 @@ const V_ON: f64 = 0.2;
 const KNEE_V: f64 = 1e-3;
 /// Smooth sourcing/sinking split width on output current, in amperes.
 const SPLIT_A: f64 = 1e-6;
-/// Below this `V(vs) - V(gnd)` the sensor is treated as unpowered, so under-supply warnings stay
-/// quiet.
-pub(crate) const UNPOWERED_V: f64 = 0.1;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -72,16 +71,11 @@ pub(crate) struct WireAnalogTempSensor {
 #[serde(deny_unknown_fields)]
 struct WireAnalogTempSensorRatings {
     #[serde(default)]
-    operating_supply: Option<WireOperatingSupply>,
+    supply_min: Option<WireValue>,
+    #[serde(default)]
+    supply_max: Option<WireValue>,
     #[serde(default)]
     supply_voltage: Option<WireValue>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct WireOperatingSupply {
-    min: WireValue,
-    max: WireValue,
 }
 
 pub(crate) fn resolve_analog_temp_sensor(
@@ -124,8 +118,12 @@ pub(crate) fn resolve_analog_temp_sensor(
         wire.quiescent_current,
         ctx.out,
     );
-    let operating_supply =
-        resolve_operating_supply(ctx.part, wire.ratings.operating_supply, ctx.out);
+    let supply_range = resolve_supply_range(
+        ctx.part,
+        wire.ratings.supply_min,
+        wire.ratings.supply_max,
+        ctx.out,
+    );
     let max_supply = resolve_limit(
         ctx.part,
         "ratings.supply_voltage",
@@ -138,7 +136,8 @@ pub(crate) fn resolve_analog_temp_sensor(
         output_voltage: output_voltage?,
         output_resistance: output_resistance?,
         quiescent_current: quiescent_current?,
-        operating_supply: operating_supply?,
+        supply_min: supply_range.0?,
+        supply_max: supply_range.1?,
         max_supply: max_supply?,
     })
 }
@@ -164,29 +163,28 @@ fn resolve_non_negative(
     value
 }
 
-fn resolve_operating_supply(
+/// Resolves `ratings.supply_min` and `ratings.supply_max`, refusing a minimum at or above the
+/// maximum.
+fn resolve_supply_range(
     part: &crate::name::Ref,
-    wire: Option<WireOperatingSupply>,
+    min: Option<WireValue>,
+    max: Option<WireValue>,
     out: &mut Vec<Diagnostic>,
-) -> Option<Option<(f64, f64)>> {
-    let Some(WireOperatingSupply { min, max }) = wire else {
-        return Some(None);
-    };
-    let lo = resolve_value(part, "ratings.operating_supply.min", "V", true, min, out);
-    let hi = resolve_value(part, "ratings.operating_supply.max", "V", true, max, out);
-    match (lo, hi) {
-        (Some(lo), Some(hi)) if lo.si.get() < hi.si.get() => Some(Some((lo.si.get(), hi.si.get()))),
-        (Some(lo), Some(_)) => {
-            out.push(Diagnostic::NetlistValue {
-                part: part.clone(),
-                field: std::borrow::Cow::Borrowed("ratings.operating_supply.min"),
-                value: lo.si.get(),
-                rule: ValueRule::AboveHigh,
-            });
-            None
-        }
-        _ => None,
+) -> (Option<Option<Value>>, Option<Option<Value>>) {
+    let lo = resolve_limit(part, "ratings.supply_min", "V", min, out);
+    let hi = resolve_limit(part, "ratings.supply_max", "V", max, out);
+    if let (Some(Some(min)), Some(Some(max))) = (&lo, &hi)
+        && min.si.get() >= max.si.get()
+    {
+        out.push(Diagnostic::NetlistValue {
+            part: part.clone(),
+            field: std::borrow::Cow::Borrowed("ratings.supply_min"),
+            value: min.si.get(),
+            rule: ValueRule::AboveHigh,
+        });
+        return (None, hi);
     }
+    (lo, hi)
 }
 
 struct Law {
@@ -443,10 +441,8 @@ mod tests {
                   }},
                   "quiescent_current": {{ "value": 5e-5, "unit": "A" }},
                   "ratings": {{
-                    "operating_supply": {{
-                      "min": {{ "value": 2.7, "unit": "V" }},
-                      "max": {{ "value": 5.5, "unit": "V" }}
-                    }},
+                    "supply_min": {{ "value": 2.7, "unit": "V" }},
+                    "supply_max": {{ "value": 5.5, "unit": "V" }},
                     "supply_voltage": {{ "value": 7.0, "unit": "V" }}
                   }}
                 }}{load}
@@ -608,7 +604,7 @@ mod tests {
             );
         }
 
-        // Below 2.7 V: keeps working (clamped to VS when needed) and warns rating.voltage.
+        // Below 2.7 V: keeps working (clamped to VS when needed) and warns rating.supply_low.
         let low = netlist::parse(tmp36_netlist(1.0, 100.0, None).as_bytes()).unwrap();
         let results = crate::simulate(&low);
         let op = op_of(&results);
@@ -616,13 +612,13 @@ mod tests {
         // Target at 100 C is 1.50 V, clamped to VS = 1.0 V.
         assert!((vout - 1.0).abs() < 2e-3, "clamped vout={vout}");
         let codes: Vec<_> = results.diagnostics().iter().map(Diagnostic::code).collect();
-        assert_eq!(codes, vec!["rating.voltage"]);
+        assert_eq!(codes, vec!["rating.supply_low"]);
         let msg = serde_json::to_value(&results.diagnostics()[0]).unwrap();
         assert!(
             msg["message"]
                 .as_str()
                 .unwrap()
-                .contains("minimum operating supply"),
+                .contains("below its 2.7 V minimum"),
             "{msg}"
         );
 
@@ -711,10 +707,8 @@ mod tests {
               },
               "quiescent_current": { "value": 5e-5, "unit": "A" },
               "ratings": {
-                "operating_supply": {
-                  "min": { "value": 2.7, "unit": "V" },
-                  "max": { "value": 5.5, "unit": "V" }
-                },
+                "supply_min": { "value": 2.7, "unit": "V" },
+                "supply_max": { "value": 5.5, "unit": "V" },
                 "supply_voltage": { "value": 7.0, "unit": "V" }
               }
             }

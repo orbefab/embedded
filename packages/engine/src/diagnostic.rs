@@ -178,7 +178,8 @@ pub enum WaveformRule {
     Equal,
 }
 
-/// Which rule of its protocol a chip saw broken. The chip drops what broke it.
+/// Which rule of its protocol a chip saw broken. The chip drops what broke it, except an
+/// HD44780 bus timing or contrast rule: that cycle still runs, and the glass shows what it shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProtocolRule {
@@ -214,13 +215,35 @@ pub enum ProtocolRule {
     BusWidth,
     /// A 5×10 font selection on a 5×8 character LCD.
     Font,
-    /// An HD44780 command or data write arrived before its power-on reset wait elapsed (15 ms
-    /// after VCC reaches 4.5 V, or 40 ms after 2.7 V).
+    /// An HD44780 command or data write arrived after its internal reset's busy time and before
+    /// its power-on reset wait elapsed (15 ms after VCC reaches 4.5 V), and ran.
     InitWait,
+    /// A digital input sat between its guaranteed `VIL` and `VIH` thresholds longer than a normal
+    /// edge transition, where the datasheet does not guarantee the logic level.
+    InputLevel,
+    /// An HD44780 `E` rose sooner after the last rise than the enable cycle time, tcycE.
+    EnableCycle,
+    /// An HD44780 `E` pulse was shorter than the enable pulse width, PWEH.
+    EnableWidth,
+    /// An HD44780 `RS` or `R/W` changed less than tAS before `E` rose, or its data less than
+    /// tDSW before `E` fell.
+    Setup,
+    /// An HD44780 `RS` or `R/W` changed less than tAH after `E` fell or while `E` was high, or
+    /// its data less than tH after a write's fall.
+    Hold,
+    /// An HD44780 display was on with `VDD - V0` under the LCD voltage floor, so its glass
+    /// shows no characters.
+    Contrast,
+    /// An HD44780 command or data write arrived inside its internal reset's busy time (10 ms
+    /// after VCC reaches 4.5 V, or the 40 ms wait below it), and was dropped.
+    InitBusy,
+    /// An HD44780 module ran a bus cycle with its supply under the module's minimum operating
+    /// voltage.
+    LowSupply,
 }
 
 impl ProtocolRule {
-    pub(crate) const ALL: [ProtocolRule; 15] = [
+    pub(crate) const ALL: [ProtocolRule; 23] = [
         ProtocolRule::Command,
         ProtocolRule::PixelFormat,
         ProtocolRule::SdaWhileSclHigh,
@@ -236,6 +259,14 @@ impl ProtocolRule {
         ProtocolRule::BusWidth,
         ProtocolRule::Font,
         ProtocolRule::InitWait,
+        ProtocolRule::InputLevel,
+        ProtocolRule::EnableCycle,
+        ProtocolRule::EnableWidth,
+        ProtocolRule::Setup,
+        ProtocolRule::Hold,
+        ProtocolRule::Contrast,
+        ProtocolRule::InitBusy,
+        ProtocolRule::LowSupply,
     ];
 
     /// Its place in [`ALL`](Self::ALL).
@@ -261,6 +292,14 @@ impl ProtocolRule {
             "bus_width" => Some(ProtocolRule::BusWidth),
             "font" => Some(ProtocolRule::Font),
             "init_wait" => Some(ProtocolRule::InitWait),
+            "input_level" => Some(ProtocolRule::InputLevel),
+            "enable_cycle" => Some(ProtocolRule::EnableCycle),
+            "enable_width" => Some(ProtocolRule::EnableWidth),
+            "setup" => Some(ProtocolRule::Setup),
+            "hold" => Some(ProtocolRule::Hold),
+            "contrast" => Some(ProtocolRule::Contrast),
+            "init_busy" => Some(ProtocolRule::InitBusy),
+            "low_supply" => Some(ProtocolRule::LowSupply),
             _ => None,
         }
     }
@@ -582,6 +621,8 @@ pub enum Diagnostic {
     RatingPower(Box<Excursion>),
     /// A chip pin's voltage left its rated window.
     RatingVoltage(VoltageExcursion),
+    /// A chip's supply pin dropped between unpowered and its datasheet minimum.
+    RatingSupplyLow(SupplyExcursion),
     /// A linear regulator was held at its current limit and its output sagged.
     RegulatorCurrentLimit(CurrentLimitExcursion),
 }
@@ -656,6 +697,28 @@ pub struct VoltageExcursion {
     pub operating: bool,
 }
 
+/// One chip supply pin between unpowered and its datasheet minimum, merged over the whole run.
+/// Volts are over the chip's ground pin.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SupplyExcursion {
+    /// `#<part>.pin.<pin>`.
+    pub pin: Ref,
+    /// The datasheet minimum supply voltage, in V.
+    pub min: f64,
+    /// Clock frequency in Hz when the minimum depends on the chip's clock (such as an ATmega328P).
+    pub clock_hz: Option<u32>,
+    /// Supply voltage held continuously for at least `SUPPLY_HOLD_PS` most recently while above
+    /// the unpowered floor and below the minimum (or the episode's upper bound when no warning
+    /// episode lasted `SUPPLY_HOLD_PS`, or the operating-point sample), in V.
+    pub voltage: f64,
+    /// When the reported supply voltage occurred.
+    pub peak_at: Time,
+    /// First sample below the minimum.
+    pub first: Time,
+    /// Total time below the minimum. `None` for an operating point, which has no duration.
+    pub over_ps: Option<u64>,
+}
+
 /// One linear regulator held at its current limit with its output pulled below regulation,
 /// merged over the whole run.
 #[derive(Clone, Debug, PartialEq)]
@@ -728,6 +791,7 @@ impl Diagnostic {
             Diagnostic::RatingCurrent(_) => "rating.current",
             Diagnostic::RatingPower(_) => "rating.power",
             Diagnostic::RatingVoltage(_) => "rating.voltage",
+            Diagnostic::RatingSupplyLow(_) => "rating.supply_low",
             Diagnostic::RegulatorCurrentLimit(_) => "regulator.current_limit",
         }
     }
@@ -744,6 +808,7 @@ impl Diagnostic {
             | Diagnostic::RatingCurrent(_)
             | Diagnostic::RatingPower(_)
             | Diagnostic::RatingVoltage(_)
+            | Diagnostic::RatingSupplyLow(_)
             | Diagnostic::RegulatorCurrentLimit(_) => Severity::Warning,
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
@@ -817,6 +882,7 @@ impl Diagnostic {
                 Some(excursion.first)
             }
             Diagnostic::RatingVoltage(excursion) => Some(excursion.first),
+            Diagnostic::RatingSupplyLow(excursion) => Some(excursion.first),
             Diagnostic::RegulatorCurrentLimit(excursion) => Some(excursion.first),
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
@@ -889,6 +955,7 @@ impl Diagnostic {
                 vec![excursion.quantity.clone()]
             }
             Diagnostic::RatingVoltage(excursion) => vec![excursion.pin.clone()],
+            Diagnostic::RatingSupplyLow(excursion) => vec![excursion.pin.clone()],
             Diagnostic::RegulatorCurrentLimit(excursion) => vec![excursion.pin.clone()],
         }
     }
@@ -1477,8 +1544,86 @@ impl Diagnostic {
             } => {
                 let part = namer(part);
                 format!(
-                    "{part} dropped a write before the HD44780U power-on reset wait elapsed (15 ms after VCC reaches 4.5 V, or 40 ms after 2.7 V), breaking rule {} at {} ps, the first time",
+                    "{part} ran a write that came after the HD44780U internal reset's busy time but before its power-on reset wait elapsed (15 ms after VCC reaches 4.5 V), earlier than the sheet allows, breaking rule {} at {} ps, the first time",
                     rule_text(&ProtocolRule::InitWait),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::InitBusy,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} dropped a write that came inside the HD44780U internal reset's busy time (10 ms after VCC reaches 4.5 V, or the 40 ms wait after 2.7 V below it), breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::InitBusy),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::LowSupply,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} ran a bus cycle with its supply under the module's minimum operating voltage, outside its sheet, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::LowSupply),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::InputLevel,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} had a logic input held between VIL and VIH at {} ps, where the logic level is not guaranteed, breaking rule {}, the first time",
+                    at.as_ps(),
+                    rule_text(&ProtocolRule::InputLevel)
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule:
+                    rule @ (ProtocolRule::EnableCycle
+                    | ProtocolRule::EnableWidth
+                    | ProtocolRule::Setup
+                    | ProtocolRule::Hold),
+            } => {
+                let part = namer(part);
+                let what = match rule {
+                    ProtocolRule::EnableCycle => {
+                        "E rose sooner after its last rise than the HD44780U enable cycle time (tcycE)"
+                    }
+                    ProtocolRule::EnableWidth => {
+                        "an E pulse was shorter than the HD44780U enable pulse width (PWEH)"
+                    }
+                    ProtocolRule::Setup => {
+                        "RS, R/W or data changed inside the HD44780U set-up time before an E edge (tAS, tDSW)"
+                    }
+                    _ => {
+                        "RS, R/W or data changed inside the HD44780U hold time after E fell (tAH, tH)"
+                    }
+                };
+                format!(
+                    "{part} took a bus cycle where {what}, breaking rule {} at {} ps, the first time",
+                    rule_text(rule),
+                    at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::Contrast,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} has its display on with VDD - V0 under the HD44780U LCD voltage floor, so its glass shows no characters; wire V0 to a contrast pot's wiper turned toward VSS, breaking rule {} at {} ps, the first time",
+                    rule_text(&ProtocolRule::Contrast),
                     at.as_ps()
                 )
             }
@@ -1861,6 +2006,7 @@ impl Diagnostic {
             Diagnostic::RatingCurrent(excursion) => over_rating(excursion, "A", namer),
             Diagnostic::RatingPower(excursion) => over_rating(excursion, "W", namer),
             Diagnostic::RatingVoltage(excursion) => outside_window(excursion, namer),
+            Diagnostic::RatingSupplyLow(excursion) => supply_low(excursion, namer),
             Diagnostic::RegulatorCurrentLimit(excursion) => regulator_limit(excursion, namer),
         }
     }
@@ -2126,6 +2272,18 @@ impl Diagnostic {
                     "peak_ps": excursion.peak_at,
                 })
             }
+            Diagnostic::RatingSupplyLow(excursion) => {
+                let mut data = serde_json::json!({
+                    "limit": excursion.min,
+                    "over_ps": excursion.over_ps,
+                    "peak_ps": excursion.peak_at,
+                    "voltage": excursion.voltage,
+                });
+                if let Some(hz) = excursion.clock_hz {
+                    data["clock_hz"] = serde_json::json!(hz);
+                }
+                data
+            }
             Diagnostic::RegulatorCurrentLimit(excursion) => {
                 serde_json::json!({
                     "current": excursion.current,
@@ -2312,19 +2470,13 @@ fn outside_window(excursion: &VoltageExcursion, namer: &dyn Fn(&Ref) -> String) 
                 significant_text(*high),
                 for_time(*over_ps)
             ),
-            (Some(low), None) => format!(
-                "{pin} reaches {} V over the chip's ground, below its {} V minimum operating supply{}",
-                significant_text(*peak),
-                significant_text(*low),
-                for_time(*over_ps)
-            ),
             (None, Some(high)) => format!(
                 "{pin} reaches {} V over the chip's ground, above its {} V maximum operating supply{}",
                 significant_text(*peak),
                 significant_text(*high),
                 for_time(*over_ps)
             ),
-            (None, None) => unreachable!("an operating voltage rates a floor or a ceiling"),
+            (_, None) => unreachable!("an operating voltage below a floor is rating.supply_low"),
         };
     }
     let window = match (low, high) {
@@ -2345,6 +2497,38 @@ fn outside_window(excursion: &VoltageExcursion, namer: &dyn Fn(&Ref) -> String) 
     format!(
         "{pin} reaches {} V{over_ground}, outside {window}{}",
         significant_text(*peak),
+        for_time(*over_ps)
+    )
+}
+
+fn frequency_text(hz: u32) -> String {
+    let hz = f64::from(hz);
+    if hz >= 1e6 {
+        format!("{} MHz", significant_text(hz / 1e6))
+    } else if hz >= 1e3 {
+        format!("{} kHz", significant_text(hz / 1e3))
+    } else {
+        format!("{} Hz", significant_text(hz))
+    }
+}
+
+fn supply_low(excursion: &SupplyExcursion, namer: &dyn Fn(&Ref) -> String) -> String {
+    let SupplyExcursion {
+        pin,
+        min,
+        clock_hz,
+        voltage,
+        over_ps,
+        ..
+    } = excursion;
+    let pin = namer(pin);
+    let at_clock = clock_hz
+        .map(|hz| format!(" at {}", frequency_text(hz)))
+        .unwrap_or_default();
+    format!(
+        "{pin} supply drops to {} V over the chip's ground, below its {} V minimum{at_clock}{}",
+        significant_text(*voltage),
+        significant_text(*min),
         for_time(*over_ps)
     )
 }

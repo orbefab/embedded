@@ -28,7 +28,7 @@ use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
 use crate::netlist::json::{
     PinMap, WireValue, bounded, resolve_limit, resolve_pins, resolve_value,
 };
-use crate::ratings::{Ceiling, PinRatings, PinWindow};
+use crate::ratings::{Ceiling, PinRatings, PinWindow, SupplyMin};
 use crate::watch::{Signal, Watch};
 
 pub use glass::glass;
@@ -164,6 +164,16 @@ pub(crate) fn pin_ratings(dev: &Ssd1306) -> Option<PinRatings> {
             });
         }
     }
+    let supply_mins = si(&ratings.supply_min)
+        .map(|min| SupplyMin {
+            pin: Ssd1306::PINS[VDD],
+            net: dev.pins[VDD],
+            gnd: dev.pins[VSS],
+            min,
+            clock_hz: None,
+        })
+        .into_iter()
+        .collect();
     Some(PinRatings {
         outputs: Vec::new(),
         pin_current: None,
@@ -171,6 +181,7 @@ pub(crate) fn pin_ratings(dev: &Ssd1306) -> Option<PinRatings> {
         vcc: (Ssd1306::PINS[VDD], dev.pins[VDD]),
         gnd: (Ssd1306::PINS[VSS], dev.pins[VSS]),
         windows,
+        supply_mins,
     })
 }
 
@@ -204,6 +215,8 @@ pub struct Ssd1306Ratings {
     pub rail_margin: Option<Value>,
     /// Volt. The most `VDD` may sit above `VSS`.
     pub supply_voltage: Option<Value>,
+    /// Volt. The least operating `VDD` may sit above `VSS`.
+    pub supply_min: Option<Value>,
 }
 
 /// The panel's draw from `VDD` into `VSS`, its logic and its charge pump together, as the
@@ -251,6 +264,8 @@ struct WireRatings {
     rail_margin: Option<WireValue>,
     #[serde(deserialize_with = "Option::deserialize")]
     supply_voltage: Option<WireValue>,
+    #[serde(default)]
+    supply_min: Option<WireValue>,
 }
 
 #[derive(Deserialize)]
@@ -374,8 +389,10 @@ fn resolve_ratings(
         wire.supply_voltage,
         out,
     );
+    let supply_min = resolve_limit(part, "ratings.supply_min", "V", wire.supply_min, out);
     Some(Ssd1306Ratings {
         rail_margin: rail_margin?,
         supply_voltage: supply_voltage?,
+        supply_min: supply_min?,
     })
 }

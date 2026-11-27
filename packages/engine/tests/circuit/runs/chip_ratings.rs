@@ -5,7 +5,7 @@ use std::fs;
 
 use crate::runs::common::repo;
 use orbe_engine::Session;
-use orbe_engine::diagnostic::{Diagnostic, Excursion, VoltageExcursion};
+use orbe_engine::diagnostic::{Diagnostic, Excursion, SupplyExcursion, VoltageExcursion};
 use orbe_engine::netlist::{self, Average, Basis};
 use orbe_engine::timestamp::Timestamp;
 use orbe_model::Time;
@@ -107,10 +107,26 @@ fn windows(found: &[Diagnostic]) -> Vec<&VoltageExcursion> {
         .collect()
 }
 
+fn supplies(found: &[Diagnostic]) -> Vec<&SupplyExcursion> {
+    found
+        .iter()
+        .filter_map(|d| match d {
+            Diagnostic::RatingSupplyLow(excursion) => Some(excursion),
+            _ => None,
+        })
+        .collect()
+}
+
 fn refs(found: &[Diagnostic]) -> Vec<String> {
     found
         .iter()
-        .map(|d| format!("{} {}", d.code(), d.refs()[0]))
+        .map(|d| {
+            let refs = d.refs();
+            let first = refs
+                .first()
+                .unwrap_or_else(|| panic!("diagnostic without ref: {d:?}"));
+            format!("{} {first}", d.code())
+        })
         .collect()
 }
 
@@ -515,4 +531,473 @@ fn ssd1306_hd44780_and_ws2812_pin_and_supply_voltage_windows_warn() {
             "rating.voltage #px.pin.DIN",
         ]
     );
+}
+
+#[test]
+fn supply_min_warns_between_unpowered_floor_and_minimum_and_stays_silent_off_or_in_range() {
+    let at_clock = |clock_hz: u32, volts: f64| {
+        let mut netlist = rated();
+        netlist["analysis"] = serde_json::json!({ "op": {} });
+        chip(&mut netlist)["clock_hz"] = serde_json::json!({ "value": clock_hz, "unit": "Hz" });
+        chip(&mut netlist)["ratings"]["supply_min"] = serde_json::json!({
+            "value": 1.8, "unit": "V"
+        });
+        part(&mut netlist, "v1")["voltage"]["value"] = volts.into();
+        run(&netlist)
+    };
+
+    // Unpowered at 0 V or at the 0.1 V floor stays silent.
+    assert_eq!(at_clock(16_000_000, 0.0), []);
+    assert_eq!(at_clock(16_000_000, 0.1), []);
+
+    // At 16 MHz the ATmega328P safe operating area requires 3.78 V (DS40002061B Figure 29-1).
+    let found = at_clock(16_000_000, 3.3);
+    assert_eq!(refs(&found), ["rating.supply_low #u1.pin.VCC"]);
+    let [low] = supplies(&found)[..] else {
+        unreachable!()
+    };
+    assert_eq!(low.min, 3.78);
+    assert_eq!(low.clock_hz, Some(16_000_000));
+    assert!((low.voltage - 3.3).abs() < 1e-9, "{}", low.voltage);
+    assert_eq!(
+        (low.first, low.peak_at, low.over_ps),
+        (Time::ZERO, Time::ZERO, None)
+    );
+    let json = serde_json::to_value(&found[0]).unwrap();
+    assert_eq!(
+        json["message"],
+        "#u1.pin.VCC supply drops to 3.3 V over the chip's ground, below its 3.78 V minimum at 16 MHz"
+    );
+    assert_eq!(json["data"]["clock_hz"], 16_000_000);
+
+    // Just above the 0.1 V floor also warns.
+    let barely = at_clock(16_000_000, 0.15);
+    assert_eq!(refs(&barely), ["rating.supply_low #u1.pin.VCC"]);
+
+    // At or above the 16 MHz minimum stays silent.
+    assert_eq!(at_clock(16_000_000, 3.78), []);
+    assert_eq!(at_clock(16_000_000, 5.0), []);
+
+    // Safe operating area curve across frequencies: <=4 MHz -> 1.8 V, 8 MHz -> 2.4 V,
+    // 10 MHz -> 2.7 V, 20 MHz -> 4.5 V.
+    for (hz, min, label) in [
+        (4_000_000, 1.8, "4 MHz"),
+        (8_000_000, 2.4, "8 MHz"),
+        (10_000_000, 2.7, "10 MHz"),
+        (20_000_000, 4.5, "20 MHz"),
+    ] {
+        assert_eq!(at_clock(hz, min), [], "{label} at {min} V");
+        let under = at_clock(hz, min - 0.1);
+        assert_eq!(refs(&under), ["rating.supply_low #u1.pin.VCC"], "{label}");
+        let [low] = supplies(&under)[..] else {
+            unreachable!()
+        };
+        assert!((low.min - min).abs() < 1e-9, "{label}: {}", low.min);
+        assert_eq!(low.clock_hz, Some(hz));
+        let msg = serde_json::to_value(&under[0]).unwrap()["message"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(msg.ends_with(&format!("minimum at {label}")), "{msg}");
+    }
+}
+
+/// Multiple transient brown-outs merge into one warning per supply pin, reporting the lowest
+/// voltage seen across all dips and the total time spent below minimum.
+#[test]
+fn repeated_supply_dips_merge_into_one_warning_at_the_lowest_voltage() {
+    let netlist = serde_json::json!({
+        "version": 1,
+        "seed": 0,
+        "analysis": {
+            "transient": {
+                "stop_ps": 10_000_000_000u64,
+                "max_step_ps": 500_000_000u64,
+                "grid_ps": 500_000_000u64
+            }
+        },
+        "world": {
+            "temperature": { "value": 25.0, "unit": "degC" },
+            "humidity": { "value": 50.0, "unit": "%RH" }
+        },
+        "ground": "gnd",
+        "nets": ["gnd", "vcc", "data"],
+        "parts": [
+            {
+                "name": "v1",
+                "kind": "voltage_source",
+                "pins": { "p": "vcc", "n": "gnd" },
+                "voltage": {
+                    "kind": "steps",
+                    "initial": { "value": 5.0, "unit": "V" },
+                    "events": [
+                        { "t_ps": 1_000_000_000u64, "level": { "value": 2.5, "unit": "V" } },
+                        { "t_ps": 3_000_000_000u64, "level": { "value": 5.0, "unit": "V" } },
+                        { "t_ps": 5_000_000_000u64, "level": { "value": 1.6, "unit": "V" } },
+                        { "t_ps": 7_000_000_000u64, "level": { "value": 5.0, "unit": "V" } }
+                    ]
+                }
+            },
+            resistor("rp", "vcc", "data", 10_000.0),
+            {
+                "name": "dht",
+                "kind": "dht22",
+                "pins": { "VCC": "vcc", "GND": "gnd", "DATA": "data" },
+                "low_resistance": { "value": 100.0, "unit": "ohm" },
+                "input_threshold": {
+                    "low": { "value": 0.3, "unit": "1" },
+                    "high": { "value": 0.7, "unit": "1" }
+                },
+                "ratings": { "supply_min": { "value": 3.3, "unit": "V" } }
+            }
+        ]
+    });
+    let found = run(&netlist);
+    assert_eq!(refs(&found), ["rating.supply_low #dht.pin.VCC"]);
+    let [low] = supplies(&found)[..] else {
+        unreachable!()
+    };
+    assert_eq!(low.min, 3.3);
+    assert!((low.voltage - 1.6).abs() < 1e-6, "{}", low.voltage);
+    assert!(low.first.as_ps() >= 1_000_000_000 && low.first.as_ps() <= 2_000_000_000);
+    assert!(low.peak_at.as_ps() >= 5_000_000_000 && low.peak_at.as_ps() <= 7_000_000_000);
+    assert!(low.over_ps.unwrap() >= 3_000_000_000, "{:?}", low.over_ps);
+}
+
+/// Passive chips (`ne555`), op-amps (`op_amp`), and dual-supply devices (`bmp280` VDD + VDDIO)
+/// all use the same shared `rating.supply_low` rule.
+#[test]
+fn supply_min_covers_passive_chips_op_amps_and_dual_supply_devices() {
+    let netlist = serde_json::json!({
+        "version": 1,
+        "seed": 0,
+        "analysis": { "op": {} },
+        "world": {
+            "temperature": { "value": 25.0, "unit": "degC" },
+            "pressure": { "value": 101325.0, "unit": "Pa" }
+        },
+        "ground": "gnd",
+        "nets": [
+            "gnd", "v2", "v1", "v15",
+            "t_tr", "t_out", "t_rst", "t_cv", "t_th", "t_dis",
+            "op_in", "op_out",
+            "sck", "sdi", "csb", "sdo"
+        ],
+        "parts": [
+            source("v2", "v2", "gnd", 2.0),
+            source("v1", "v1", "gnd", 1.0),
+            source("v15", "v15", "gnd", 1.5),
+            resistor("rt1", "v2", "t_rst", 10_000.0),
+            resistor("rt2", "v2", "t_tr", 10_000.0),
+            resistor("rt3", "gnd", "t_th", 10_000.0),
+            resistor("rt4", "gnd", "t_cv", 10_000.0),
+            resistor("rt5", "v2", "t_dis", 10_000.0),
+            resistor("rt6", "gnd", "t_out", 10_000.0),
+            resistor("ro1", "gnd", "op_in", 10_000.0),
+            resistor("rb1", "v1", "sck", 10_000.0),
+            resistor("rb2", "v1", "sdi", 10_000.0),
+            resistor("rb3", "v1", "csb", 10_000.0),
+            resistor("rb4", "gnd", "sdo", 10_000.0),
+            {
+                "name": "timer",
+                "kind": "ne555",
+                "pins": {
+                    "gnd": "gnd", "trig": "t_tr", "out": "t_out", "reset": "t_rst",
+                    "cont": "t_cv", "thres": "t_th", "disch": "t_dis", "vcc": "v2"
+                },
+                "ladder_resistance": { "value": 5000.0, "unit": "ohm" },
+                "reset_threshold": { "value": 0.7, "unit": "V" },
+                "discharge": {
+                    "on_resistance": { "value": 10.0, "unit": "ohm" },
+                    "off_resistance": { "value": 1.0e8, "unit": "ohm" }
+                },
+                "supply_resistance": { "value": 1666.0, "unit": "ohm" },
+                "output": {
+                    "high_drop": { "value": 1.7, "unit": "V" },
+                    "high_resistance": { "value": 10.0, "unit": "ohm" },
+                    "low_drop": { "value": 0.1, "unit": "V" },
+                    "low_resistance": { "value": 10.0, "unit": "ohm" }
+                },
+                "ratings": { "supply_min": { "value": 4.5, "unit": "V" } }
+            },
+            {
+                "name": "amp",
+                "kind": "op_amp",
+                "pins": { "in_p": "op_in", "in_n": "op_out", "out": "op_out", "vcc": "v2", "gnd": "gnd" },
+                "gain_bandwidth": { "value": 700_000.0, "unit": "Hz" },
+                "slew_rate": { "value": 300_000.0, "unit": "V/s" },
+                "open_loop_gain": { "value": 100_000.0, "unit": "1" },
+                "input_bias_current": { "value": 20.0e-9, "unit": "A" },
+                "swing_high": { "value": 1.5, "unit": "V" },
+                "swing_low": { "value": 0.005, "unit": "V" },
+                "output_resistance": { "value": 50.0, "unit": "ohm" },
+                "short_circuit_current": { "value": 0.04, "unit": "A" },
+                "supply_current": { "value": 0.0005, "unit": "A" },
+                "input_headroom": { "value": 0.0, "unit": "V" },
+                "ratings": { "supply_min": { "value": 3.0, "unit": "V" } }
+            },
+            {
+                "name": "bmp",
+                "kind": "bmp280",
+                "pins": {
+                    "VDD": "v15", "VDDIO": "v1", "GND": "gnd",
+                    "SCK": "sck", "SDI": "sdi", "CSB": "csb", "SDO": "sdo"
+                },
+                "low_resistance": { "value": 100.0, "unit": "ohm" },
+                "input_threshold": {
+                    "low": { "value": 0.3, "unit": "1" },
+                    "high": { "value": 0.7, "unit": "1" }
+                },
+                "ratings": {
+                    "pin_margin": { "value": 0.3, "unit": "V" },
+                    "supply_voltage": { "value": 4.25, "unit": "V" },
+                    "supply_min": { "value": 1.71, "unit": "V" },
+                    "io_supply_min": { "value": 1.2, "unit": "V" }
+                }
+            }
+        ]
+    });
+    let mut found = refs(&run(&netlist));
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            "rating.supply_low #amp.pin.vcc",
+            "rating.supply_low #bmp.pin.VDD",
+            "rating.supply_low #bmp.pin.VDDIO",
+            "rating.supply_low #timer.pin.vcc",
+        ]
+    );
+}
+
+#[test]
+fn a_max7219_under_its_4_v_minimum_warns_and_at_5_v_stays_silent() {
+    let at = |volts: f64| {
+        let netlist = serde_json::json!({
+            "version": 1,
+            "seed": 0,
+            "analysis": { "op": {} },
+            "world": {
+                "temperature": { "value": 25.0, "unit": "degC" },
+                "pressure": { "value": 101325.0, "unit": "Pa" }
+            },
+            "ground": "gnd",
+            "nets": ["gnd", "vcc", "din", "clk", "load", "dout", "iset"],
+            "parts": [
+                source("v", "vcc", "gnd", volts),
+                resistor("r_din", "gnd", "din", 10_000.0),
+                resistor("r_clk", "gnd", "clk", 10_000.0),
+                resistor("r_load", "gnd", "load", 10_000.0),
+                resistor("r_dout", "gnd", "dout", 10_000.0),
+                resistor("r_set", "vcc", "iset", 10_000.0),
+                {
+                    "name": "drv",
+                    "kind": "max7219",
+                    "pins": {
+                        "VCC": "vcc", "GND": "gnd", "DIN": "din", "CLK": "clk",
+                        "LOAD": "load", "DOUT": "dout", "ISET": "iset"
+                    },
+                    "input_threshold": {
+                        "low": { "value": 0.8, "unit": "V" },
+                        "high": { "value": 3.5, "unit": "V" }
+                    },
+                    "dout": {
+                        "high_drop": { "value": 0.0, "unit": "V" },
+                        "high_resistance": { "value": 1000.0, "unit": "ohm" },
+                        "low_drop": { "value": 0.0, "unit": "V" },
+                        "low_resistance": { "value": 250.0, "unit": "ohm" }
+                    },
+                    "led_forward_voltage": { "value": 1.85, "unit": "V" },
+                    "ratings": {
+                        "rail_margin": { "value": 0.3, "unit": "V" },
+                        "supply_voltage": { "value": 6.0, "unit": "V" },
+                        "input_voltage": { "value": 6.0, "unit": "V" },
+                        "supply_current": null,
+                        "supply_min": { "value": 4.0, "unit": "V" }
+                    }
+                }
+            ]
+        });
+        run(&netlist)
+    };
+    let low = at(3.3);
+    assert_eq!(refs(&low), ["rating.supply_low #drv.pin.VCC"]);
+    let excursion = supplies(&low)[0];
+    assert_eq!(excursion.min, 4.0);
+    assert!((excursion.voltage - 3.3).abs() < 1e-6, "{excursion:?}");
+    assert_eq!(refs(&at(5.0)), Vec::<String>::new());
+}
+
+#[test]
+fn supply_power_cycles_stay_silent_while_sags_incomplete_turn_on_and_open_ends_warn() {
+    let dht_steps = |stop_ps: u64, initial: f64, events: &[(u64, f64)]| {
+        let events: Vec<_> = events
+            .iter()
+            .map(|&(t_ps, level)| {
+                serde_json::json!({ "t_ps": t_ps, "level": { "value": level, "unit": "V" } })
+            })
+            .collect();
+        serde_json::json!({
+            "version": 1,
+            "seed": 0,
+            "analysis": {
+                "transient": {
+                    "stop_ps": stop_ps,
+                    "max_step_ps": 500_000_000u64,
+                    "grid_ps": 500_000_000u64
+                }
+            },
+            "world": {
+                "temperature": { "value": 25.0, "unit": "degC" },
+                "humidity": { "value": 50.0, "unit": "%RH" }
+            },
+            "ground": "gnd",
+            "nets": ["gnd", "vcc", "data"],
+            "parts": [
+                {
+                    "name": "v1",
+                    "kind": "voltage_source",
+                    "pins": { "p": "vcc", "n": "gnd" },
+                    "voltage": {
+                        "kind": "steps",
+                        "initial": { "value": initial, "unit": "V" },
+                        "events": events
+                    }
+                },
+                resistor("rp", "vcc", "data", 10_000.0),
+                {
+                    "name": "dht",
+                    "kind": "dht22",
+                    "pins": { "VCC": "vcc", "GND": "gnd", "DATA": "data" },
+                    "low_resistance": { "value": 100.0, "unit": "ohm" },
+                    "input_threshold": {
+                        "low": { "value": 0.3, "unit": "1" },
+                        "high": { "value": 0.7, "unit": "1" }
+                    },
+                    "ratings": { "supply_min": { "value": 3.3, "unit": "V" } }
+                }
+            ]
+        })
+    };
+    const MS: u64 = 1_000_000_000;
+
+    // Clean power-up (Off -> Low -> On) stays silent.
+    let ramp_up = dht_steps(10 * MS, 0.0, &[(2 * MS, 1.0), (4 * MS, 2.5), (6 * MS, 5.0)]);
+    assert_eq!(run(&ramp_up), []);
+
+    // Clean power-down (On -> Low -> Off) stays silent.
+    let ramp_down = dht_steps(10 * MS, 5.0, &[(2 * MS, 2.5), (4 * MS, 1.0), (6 * MS, 0.0)]);
+    assert_eq!(run(&ramp_down), []);
+
+    // Power-up followed by a sag warns only with the sag's voltage and time, not the turn-on.
+    let up_then_sag = dht_steps(
+        14 * MS,
+        0.0,
+        &[(2 * MS, 0.5), (4 * MS, 5.0), (8 * MS, 2.4), (10 * MS, 5.0)],
+    );
+    let found = run(&up_then_sag);
+    assert_eq!(refs(&found), ["rating.supply_low #dht.pin.VCC"]);
+    let [low] = supplies(&found)[..] else {
+        unreachable!()
+    };
+    assert!((low.voltage - 2.4).abs() < 1e-6, "{}", low.voltage);
+    assert!(low.first.as_ps() >= 8 * MS, "{:?}", low.first);
+
+    // Incomplete turn-on (Off -> Low -> Off without reaching min) warns.
+    let incomplete = dht_steps(10 * MS, 0.0, &[(2 * MS, 2.0), (6 * MS, 0.0)]);
+    let found = run(&incomplete);
+    assert_eq!(refs(&found), ["rating.supply_low #dht.pin.VCC"]);
+    let [low] = supplies(&found)[..] else {
+        unreachable!()
+    };
+    assert!((low.voltage - 2.0).abs() < 1e-6, "{}", low.voltage);
+
+    // Starting in the low band warns even if the rail later climbs into range or falls to 0 V.
+    let start_to_on = dht_steps(6 * MS, 2.2, &[(2 * MS, 5.0)]);
+    assert_eq!(refs(&run(&start_to_on)), ["rating.supply_low #dht.pin.VCC"]);
+    let start_to_off = dht_steps(6 * MS, 2.2, &[(2 * MS, 0.0)]);
+    assert_eq!(
+        refs(&run(&start_to_off)),
+        ["rating.supply_low #dht.pin.VCC"]
+    );
+
+    // Ending in the low band warns at run end (from Off or from On).
+    let end_from_off = dht_steps(6 * MS, 0.0, &[(2 * MS, 2.2)]);
+    assert_eq!(
+        refs(&run(&end_from_off)),
+        ["rating.supply_low #dht.pin.VCC"]
+    );
+    let end_from_on = dht_steps(6 * MS, 5.0, &[(2 * MS, 2.2)]);
+    assert_eq!(refs(&run(&end_from_on)), ["rating.supply_low #dht.pin.VCC"]);
+
+    // A sub-microsecond dip (or upward glitch) inside a longer low-supply episode does not replace
+    // the held voltage, while a level held for at least 1 us does: after recovery it names the
+    // dip's depth, and on a later plateau it names that plateau.
+    const NS: u64 = 1_000;
+    const US: u64 = 1_000_000;
+    let brief_dip = dht_steps(4 * MS, 3.0, &[(MS, 1.5), (MS + 100 * NS, 5.0)]);
+    let found = run(&brief_dip);
+    let [low] = supplies(&found)[..] else {
+        panic!("expected one supply_low: {found:?}");
+    };
+    assert!((low.voltage - 3.0).abs() < 1e-6, "{}", low.voltage);
+    assert_eq!(low.over_ps, Some(MS + 100 * NS));
+
+    let brief_upward = dht_steps(4 * MS, 1.5, &[(MS, 3.0), (MS + 100 * NS, 5.0)]);
+    let found = run(&brief_upward);
+    let [low] = supplies(&found)[..] else {
+        panic!("expected one supply_low: {found:?}");
+    };
+    assert!((low.voltage - 1.5).abs() < 1e-6, "{}", low.voltage);
+
+    let held_dip_recover = dht_steps(4 * MS, 3.0, &[(MS, 1.5), (MS + 2 * US, 5.0)]);
+    let found = run(&held_dip_recover);
+    let [low] = supplies(&found)[..] else {
+        panic!("expected one supply_low: {found:?}");
+    };
+    assert!((low.voltage - 1.5).abs() < 1e-6, "{}", low.voltage);
+    assert_eq!(low.over_ps, Some(MS + 2 * US));
+
+    let held_dip_plateau = dht_steps(4 * MS, 3.0, &[(MS, 1.5), (MS + 2 * US, 3.0)]);
+    let found = run(&held_dip_plateau);
+    let [low] = supplies(&found)[..] else {
+        panic!("expected one supply_low: {found:?}");
+    };
+    assert!((low.voltage - 3.0).abs() < 1e-6, "{}", low.voltage);
+    assert_eq!(low.over_ps, Some(4 * MS));
+
+    // A held episode beats a sub-microsecond episode in either order, while over_ps sums both.
+    let short_then_held = dht_steps(
+        6 * MS,
+        5.0,
+        &[
+            (MS, 1.5),
+            (MS + 100 * NS, 5.0),
+            (2 * MS, 2.8),
+            (4 * MS, 5.0),
+        ],
+    );
+    let found = run(&short_then_held);
+    let [low] = supplies(&found)[..] else {
+        panic!("expected one supply_low: {found:?}");
+    };
+    assert!((low.voltage - 2.8).abs() < 1e-6, "{}", low.voltage);
+    assert_eq!(low.over_ps, Some(2 * MS + 100 * NS));
+
+    let held_then_short = dht_steps(
+        6 * MS,
+        5.0,
+        &[
+            (MS, 2.8),
+            (3 * MS, 5.0),
+            (4 * MS, 1.5),
+            (4 * MS + 100 * NS, 5.0),
+        ],
+    );
+    let found = run(&held_then_short);
+    let [low] = supplies(&found)[..] else {
+        panic!("expected one supply_low: {found:?}");
+    };
+    assert!((low.voltage - 2.8).abs() < 1e-6, "{}", low.voltage);
+    assert_eq!(low.over_ps, Some(2 * MS + 100 * NS));
 }

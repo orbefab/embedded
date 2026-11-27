@@ -14,10 +14,13 @@ use crate::netlist::Value;
 use crate::netlist::bounce;
 use crate::netlist::json::PinMap;
 use crate::netlist::json::WireInt;
+use crate::netlist::json::WireRating;
 use crate::netlist::json::WireValue;
 use crate::netlist::json::check_events;
 use crate::netlist::json::resolve_int;
+use crate::netlist::json::resolve_limit;
 use crate::netlist::json::resolve_pins;
+use crate::netlist::json::resolve_rating;
 use crate::netlist::json::resolve_value;
 use serde::Deserialize;
 
@@ -46,6 +49,11 @@ pub struct Switch {
     pub bounce: Option<Bounce>,
     /// `events` with their bounce expanded.
     pub schedule: Schedule<Contact>,
+    /// Ampere, greater than 0: contact current limit, bounding `i`. `None` when unrated.
+    pub max_current: Option<Rating>,
+    /// Maximum DC voltage across `a` and `b`, in volt. `|V(a) - V(b)|` above this warns
+    /// `rating.voltage` on every sample. `None` when unrated.
+    pub max_voltage: Option<Value>,
 }
 
 impl Switch {
@@ -68,6 +76,15 @@ impl Switch {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct WireSwitchRatings {
+    #[serde(deserialize_with = "Option::deserialize")]
+    current: Option<WireRating>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    voltage: Option<WireValue>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct WireSwitch {
     pub(crate) name: String,
     pins: PinMap,
@@ -77,6 +94,9 @@ pub(crate) struct WireSwitch {
     events: Vec<WireEvent>,
     #[serde(deserialize_with = "Option::deserialize")]
     bounce: Option<WireBounce>,
+    /// Absent on a switch that rates no current or voltage.
+    #[serde(default)]
+    ratings: Option<WireSwitchRatings>,
 }
 
 #[derive(Deserialize)]
@@ -144,6 +164,13 @@ pub(crate) fn resolve_switch(ctx: ParseCtx<'_>, wire: WireSwitch) -> Option<Swit
         |left, right| left == right,
         out,
     );
+    let (max_current, max_voltage) = match wire.ratings {
+        None => (Some(None), Some(None)),
+        Some(ratings) => (
+            resolve_rating(part_ref, "ratings.current", "A", ratings.current, out),
+            resolve_limit(part_ref, "ratings.voltage", "V", ratings.voltage, out),
+        ),
+    };
     let bounce = bounce?;
     if !events_ok {
         return None;
@@ -162,6 +189,8 @@ pub(crate) fn resolve_switch(ctx: ParseCtx<'_>, wire: WireSwitch) -> Option<Swit
             initial: wire.initial,
             events: edges,
         },
+        max_current: max_current?,
+        max_voltage: max_voltage?,
     })
 }
 
@@ -226,7 +255,12 @@ impl Kind for Switch {
         TWO_PIN
     }
     fn ratings(&self) -> (Option<(Quantity, &Rating)>, Option<&Rating>) {
-        (None, None)
+        (
+            self.max_current
+                .as_ref()
+                .map(|rating| (Quantity::I, rating)),
+            None,
+        )
     }
     fn observe(&self, probe: &Probe<'_>, at: Time, side: Side) -> Option<Observed> {
         let g = conductance(self, side.contact(&self.schedule, at));
@@ -238,5 +272,67 @@ impl Kind for Switch {
     }
     fn next_change_after(&self, at: Time) -> Option<Time> {
         self.schedule.next_change_after(at)
+    }
+}
+
+#[cfg(test)]
+mod ratings {
+    fn circuit(volts: f64, state: &str, ratings: &str) -> String {
+        format!(
+            r#"{{
+              "version": 1,
+              "seed": 0,
+              "analysis": {{ "op": {{}} }},
+              "ground": "gnd",
+              "nets": ["gnd", "n"],
+              "parts": [
+                {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "n", "n": "gnd" }},
+                  "voltage": {{ "value": {volts}, "unit": "V" }} }},
+                {{ "name": "sw1", "kind": "switch",
+                  "pins": {{ "a": "n", "b": "gnd" }},
+                  "on_resistance": {{ "value": 100.0, "unit": "ohm" }},
+                  "off_resistance": {{ "value": 100000000.0, "unit": "ohm" }},
+                  "initial": "{state}",
+                  "events": [],
+                  "bounce": null{ratings} }}
+              ]
+            }}"#
+        )
+    }
+
+    fn warnings(json: &str) -> String {
+        crate::simulate(&crate::netlist::parse(json.as_bytes()).unwrap())
+            .diagnostics()
+            .iter()
+            .map(|d| serde_json::to_string(d).unwrap())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn current_and_voltage_ratings_warn_past_the_limit_and_stay_quiet_inside() {
+        let rated = r#", "ratings": { "current": { "value": 0.03, "unit": "A" }, "voltage": { "value": 24.0, "unit": "V" } }"#;
+        let null_rated = r#", "ratings": { "current": null, "voltage": null }"#;
+        // 3 V across closed 100 ohm contact = 30 mA (at limit, quiet).
+        assert!(!warnings(&circuit(3.0, "closed", rated)).contains("rating."));
+        // 5 V across closed 100 ohm contact = 50 mA > 30 mA (warns rating.current).
+        let over_i = warnings(&circuit(5.0, "closed", rated));
+        assert!(over_i.contains("rating.current"), "{over_i}");
+        assert!(!over_i.contains("rating.voltage"), "{over_i}");
+        // 24 V across open contact (at limit, quiet).
+        assert!(!warnings(&circuit(24.0, "open", rated)).contains("rating."));
+        assert!(!warnings(&circuit(-24.0, "open", rated)).contains("rating."));
+        // 30 V or -30 V across open contact warns rating.voltage.
+        let over_v = warnings(&circuit(30.0, "open", rated));
+        assert!(over_v.contains("rating.voltage"), "{over_v}");
+        assert!(
+            over_v.contains("#sw1.v reaches 30 V, outside its -24 V to 24 V rating"),
+            "{over_v}"
+        );
+        let over_neg_v = warnings(&circuit(-30.0, "open", rated));
+        assert!(over_neg_v.contains("rating.voltage"), "{over_neg_v}");
+        // Unrated or explicit null stays quiet.
+        assert!(!warnings(&circuit(30.0, "closed", "")).contains("rating."));
+        assert!(!warnings(&circuit(30.0, "closed", null_rated)).contains("rating."));
     }
 }

@@ -51,6 +51,9 @@ struct WireNetlist {
     /// Optional: a netlist without it declares no world quantity.
     #[serde(default)]
     world: Option<crate::world::json::WireWorld>,
+    /// Optional: a netlist without it builds no air.
+    #[serde(default)]
+    network: Option<super::network::WireNetwork>,
 }
 
 #[derive(Deserialize)]
@@ -256,6 +259,7 @@ fn resolve(wire: WireNetlist, blobs: &Blobs) -> Result<Netlist, Vec<Diagnostic>>
         nets,
         parts,
         world,
+        network: wire.network.map(|network| network.0),
     })
 }
 

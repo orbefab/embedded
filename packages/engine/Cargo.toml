@@ -13,6 +13,7 @@ orbe-espressif.workspace = true
 orbe-mcu.workspace = true
 orbe-microchip.workspace = true
 orbe-model = { workspace = true, features = ["serde"] }
+orbe-net.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error.workspace = true
@@ -34,6 +35,7 @@ required-features = ["runner"]
 [dev-dependencies]
 orbe-engine = { path = ".", features = ["step-rows", "runner"] }
 orbe-scratch.workspace = true
+orbe-crypto.workspace = true
 jsonc-parser = { workspace = true, features = ["serde"] }
 
 [lints]

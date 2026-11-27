@@ -21,6 +21,9 @@ pub struct RefMap {
     /// reach the net. A scene wire, another part's pin, or a wire to a hole on the net still
     /// warns.
     pub quiet_floating: BTreeSet<String>,
+    /// `(code, engine_pin_ref)` pairs a composite part accepts by design through
+    /// `accepted_warnings`, such as `("rating.supply_low", "#board__led.pin.VCC")`.
+    pub quiet_warnings: BTreeSet<(String, String)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -174,6 +177,120 @@ impl Circuit<'_> {
             map.parts.insert(path, part);
         }
         map
+    }
+
+    /// Resolves every composite part's `accepted_warnings` entries to exact
+    /// `(code, "#<engine_part>.pin.<engine_pin>")` pairs. Invalid child parts or pins are
+    /// reported as findings so `orbe check` refuses them.
+    pub(super) fn quiet_warnings(&mut self) -> BTreeSet<(String, String)> {
+        let mut quiet = BTreeSet::new();
+        for inst in 1..self.insts.len() {
+            if self.insts[inst].dropped.is_some() {
+                continue;
+            }
+            let accepted = match self.part(inst) {
+                Some(part) if !part.accepted_warnings.is_empty() => part.accepted_warnings.clone(),
+                _ => continue,
+            };
+            for entry in accepted {
+                let mut cur = inst;
+                let mut ok = true;
+                for seg in &entry.pin.segs[..entry.pin.segs.len() - 1] {
+                    if let Some(&child) = self.insts[cur].children.get(seg) {
+                        cur = child;
+                    } else {
+                        self.out.push(
+                            crate::diagnostic::Code::UnknownRef,
+                            entry.span,
+                            format!(
+                                "`accepted_warnings` names `{}`, but `{}` has no child `{seg}`",
+                                entry.pin.text,
+                                self.insts[cur].dotted()
+                            ),
+                            "name a child part declared in `parts`".into(),
+                        );
+                        ok = false;
+                        break;
+                    }
+                }
+                if !ok || self.insts[cur].dropped.is_some() {
+                    continue;
+                }
+                let pin_name = entry.pin.segs.last().expect("at least 2 segments");
+                let mut engine_pins = Vec::new();
+                self.collect_engine_pins(
+                    cur,
+                    pin_name,
+                    entry.span,
+                    &entry.pin.text,
+                    &mut engine_pins,
+                );
+                for pin_ref in engine_pins {
+                    quiet.insert((entry.code.clone(), pin_ref));
+                }
+            }
+        }
+        quiet
+    }
+
+    fn collect_engine_pins(
+        &mut self,
+        inst: usize,
+        pin_name: &str,
+        span: crate::source::Span,
+        full_text: &str,
+        out: &mut Vec<String>,
+    ) {
+        let Some(file) = self.part(inst) else {
+            return;
+        };
+        let Some(pin) = file.pin(pin_name) else {
+            let pins = file.pin_list();
+            self.out.push(
+                crate::diagnostic::Code::UnknownPin,
+                span,
+                format!("`accepted_warnings` names `{full_text}`, which has no pin `{pin_name}`"),
+                format!("its pins: {pins}"),
+            );
+            return;
+        };
+        if !file.bodies.is_empty() {
+            let flat = self.insts[inst].flat();
+            for body in &file.bodies {
+                let part_name = match &body.name {
+                    Some(name) => format!("{flat}__{name}"),
+                    None => flat.clone(),
+                };
+                for (engine_pin, part_pin) in &body.pins {
+                    if part_pin == pin_name {
+                        out.push(format!("#{part_name}.pin.{engine_pin}"));
+                    }
+                }
+            }
+            return;
+        }
+        if let crate::model::PinDef::Label(refs) = &pin.def {
+            let refs = refs.clone();
+            for r in refs {
+                if r.segs.len() < 2 {
+                    continue;
+                }
+                let mut cur = inst;
+                let mut found = true;
+                for seg in &r.segs[..r.segs.len() - 1] {
+                    if let Some(&child) = self.insts[cur].children.get(seg) {
+                        cur = child;
+                    } else {
+                        found = false;
+                        break;
+                    }
+                }
+                if found && self.insts[cur].dropped.is_none() {
+                    let sub_pin = r.segs.last().expect("at least 2 segments");
+                    self.collect_engine_pins(cur, sub_pin, span, full_text, out);
+                }
+            }
+        }
     }
 
     fn pin_net(

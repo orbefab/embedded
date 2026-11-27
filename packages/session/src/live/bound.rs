@@ -31,6 +31,13 @@ pub(super) enum Bound {
         op: Op,
         value: f64,
     },
+    /// `@matrix.brightness > 2mA`, the average lit-dot current of a MAX7219 matrix.
+    MatrixBrightness {
+        label: String,
+        path: String,
+        op: Op,
+        value: f64,
+    },
     /// `@bz.hz > 400Hz`, the frequency across a part whose reading is `"of": "hz"`.
     Hertz {
         label: String,
@@ -66,13 +73,13 @@ pub(super) enum Bound {
     /// `@oled.display.screen lit` or `off`: whether any pixel of the glass is lit.
     ScreenLit {
         label: String,
-        engine: String,
+        engines: Vec<String>,
         want: bool,
     },
     /// `@oled.display.screen shows <file>`: each row of the glass, as the file writes it.
     Shows {
         label: String,
-        engine: String,
+        engines: Vec<String>,
         file: String,
         rows: Vec<String>,
     },
@@ -135,11 +142,11 @@ impl Open {
             },
             Condition::SerialContains(text) => Bound::SerialContains(text.as_str().to_string()),
             Condition::Shows(r, file) => {
-                let (label, engine) = self.screen_target(r)?;
+                let (label, engines) = self.screen_target(r)?;
                 let rows = self.picture(file)?;
                 Bound::Shows {
                     label,
-                    engine,
+                    engines,
                     file: file.clone(),
                     rows,
                 }
@@ -184,7 +191,7 @@ impl Open {
                         Want::Lit | Want::Off,
                     ) => Bound::ScreenLit {
                         label: format!("{path}.{reading}"),
-                        engine,
+                        engines: vec![engine],
                         want: *want == Want::Lit,
                     },
                     (
@@ -199,6 +206,18 @@ impl Open {
                         engine,
                         want: *want == Want::Lit,
                     },
+                    (Target::Part(path), want)
+                        if matches!(want, Want::Lit | Want::Off)
+                            && !self.refs.parts[&path].readings.contains_key("lit")
+                            && !self.ordered_screen_engines(&path).is_empty() =>
+                    {
+                        let engines = self.ordered_screen_engines(&path);
+                        Bound::ScreenLit {
+                            label: path,
+                            engines,
+                            want: *want == Want::Lit,
+                        }
+                    }
                     (Target::Part(path), want) if want.light().is_some() => {
                         let index = self.light.require(&self.refs, &path)?;
                         Bound::Light {
@@ -303,6 +322,25 @@ impl Open {
                         return Ok(Bound::Brightness {
                             label: format!("{path}.brightness"),
                             index,
+                            op: *op,
+                            value: amount.value,
+                        });
+                    }
+                    Target::MatrixBrightness { path } => {
+                        if amount.unit != Unit::Ampere {
+                            return Err(Error::new(
+                                Code::NoReading,
+                                format!(
+                                    "{r} is in {}, not {}",
+                                    Unit::Ampere.as_str(),
+                                    amount.unit.as_str()
+                                ),
+                                format!("write the value in {}", Unit::Ampere.as_str()),
+                            ));
+                        }
+                        return Ok(Bound::MatrixBrightness {
+                            label: format!("{path}.brightness"),
+                            path,
                             op: *op,
                             value: amount.value,
                         });
@@ -478,6 +516,18 @@ impl Open {
                     ),
                 )
             }
+            Bound::MatrixBrightness {
+                label,
+                path,
+                op,
+                value,
+            } => {
+                let seen = self.matrix_brightness(path);
+                (
+                    op.holds(seen, *value),
+                    format!("{label} = {}", current(seen)),
+                )
+            }
             Bound::Hertz {
                 label,
                 index,
@@ -547,10 +597,10 @@ impl Open {
             }
             Bound::ScreenLit {
                 label,
-                engine,
+                engines,
                 want,
             } => {
-                let screen = self.screen(engine);
+                let screen = self.screens(engines);
                 (
                     (screen.lit > 0) == *want,
                     format!("{label} {}", screen.brief()),
@@ -558,11 +608,11 @@ impl Open {
             }
             Bound::Shows {
                 label,
-                engine,
+                engines,
                 file,
                 rows,
             } => {
-                let screen = self.screen(engine);
+                let screen = self.screens(engines);
                 let differs = (0..rows.len().max(screen.rows.len()))
                     .find(|&k| rows.get(k) != screen.rows.get(k));
                 match differs {
@@ -696,21 +746,25 @@ impl Open {
 }
 
 impl Open {
-    /// The screen a `shows` condition reads, as its label and its engine part.
-    fn screen_target(&self, r: &crate::target::Ref) -> Result<(String, String), Error> {
+    /// The screen(s) a `shows` condition reads, as its label and its engine part(s).
+    fn screen_target(&self, r: &crate::target::Ref) -> Result<(String, Vec<String>), Error> {
         match self.resolve(r)? {
             Target::Screen {
                 path,
                 reading,
                 engine,
-            } => Ok((format!("{path}.{reading}"), engine)),
+            } => Ok((format!("{path}.{reading}"), vec![engine])),
             Target::Part(path) => {
-                let part = &self.refs.parts[&path];
-                let Some(reading) = screen_reading(part) else {
+                let engines = self.ordered_screen_engines(&path);
+                if engines.is_empty() {
                     return Err(no_screen(r));
+                }
+                let part = &self.refs.parts[&path];
+                let label = match screen_reading(part) {
+                    Some(reading) => format!("{path}.{reading}"),
+                    None => path,
                 };
-                let engine = one_engine(&path, part, Code::NoReading)?;
-                Ok((format!("{path}.{reading}"), engine))
+                Ok((label, engines))
             }
             _ => Err(no_screen(r)),
         }

@@ -1,0 +1,44 @@
+{
+  "part": "lcd1602-backlight",
+  "source": {
+    "script": "model.py",
+    "sha256": "be19c83bafa4566d532ddb975695b282c985b428a52e0ec39abfb928c6e4a4a7",
+    "bytes": 1157
+  },
+  "files": {
+    "lcd1602-backlight.glb": {
+      "sha256": "2aed8bd2c2c9478070eb4dabb254c710d9db4776bf952863ca79fd0640dda5bb",
+      "bytes": 10720
+    },
+    "lcd1602-backlight.anchors.json": {
+      "sha256": "442316b65809697fc32dcc4c6b645fe51090f50076080460522eef30a878f594",
+      "bytes": 295
+    }
+  },
+  "box": {
+    "min": [-0.8, -0.4, 0],
+    "max": [0.8, 0.4, 0.58]
+  },
+  "kept_nodes": [],
+  "draw_calls": 4,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 2,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "package",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 5,
+      "primitives_out": 4
+    }
+  }
+}

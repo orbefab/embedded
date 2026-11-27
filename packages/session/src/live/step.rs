@@ -5,7 +5,8 @@ use std::ops::ControlFlow;
 
 use orbe_model::Time;
 
-use orbe_engine::{EdgeCursor, Status};
+use orbe_engine::diagnostic::Diagnostic as EngineDiagnostic;
+use orbe_engine::{EdgeCursor, Status, SupplyMark};
 
 use super::bound::Bound;
 use super::light::LIGHT_HOLD;
@@ -169,17 +170,60 @@ impl Open {
         step: &Step,
         during: &mut dyn FnMut(&Progress) -> ControlFlow<()>,
     ) -> Outcome {
-        let outcome = self.step(step, during);
-        let Some(held) = self.unlisted.take() else {
-            return outcome;
-        };
-        match outcome {
-            Ok(data) => Ok(held_then(held, data)),
+        match self.step(step, during) {
+            Ok(data) => Ok(self.after_held(data)),
             Err(mut failed) => {
-                failed.data = held_then(held, failed.data);
+                failed.data = self.after_held(failed.data);
                 Err(failed)
             }
         }
+    }
+
+    /// What `play` held, then `data`, with the supply episodes the stretch opened or closed.
+    fn after_held(&mut self, data: Data) -> Data {
+        let mut data = match self.unlisted.take() {
+            Some(held) => held_then(held, data),
+            None => data,
+        };
+        if let Data::Stepped(stepped) = &mut data {
+            self.list_supply(stepped);
+        }
+        data
+    }
+
+    /// Lists, at the end of `data`'s changes, each `rating.supply_low` episode that opened or
+    /// closed since the last listing, as the snapshot shows it now. An episode lists once on the
+    /// first listing that ends inside it and once more on the one where it closes with a warning.
+    /// One that opens and closes between listings lists once. A power cycle that closes before
+    /// its first listing never lists, and the snapshot leaves it out too.
+    pub(super) fn list_supply(&mut self, stepped: &mut Stepped) {
+        let probe = self.engine.probe();
+        let marks = self.engine.supply_marks(&probe);
+        let fresh = |mark: &SupplyMark| {
+            let listed = self.listed_supply.iter().find(|m| m.pin == mark.pin);
+            let (began, closed) = listed.map_or((0, 0), |m| (m.began, m.closed));
+            mark.closed > closed || (mark.open && mark.began > began)
+        };
+        if marks.iter().any(fresh) {
+            let found = self.findings(&probe);
+            for mark in marks.iter().filter(|m| fresh(m)) {
+                let Some(d) = found.iter().find(
+                    |d| matches!(d, EngineDiagnostic::RatingSupplyLow(e) if e.pin == mark.pin),
+                ) else {
+                    continue;
+                };
+                if stepped.changes.len() < CHANGES {
+                    stepped.changes.push(Change::Diagnostic {
+                        by_ps: d.at().map_or(probe.at().as_ps(), Time::as_ps),
+                        diagnostic: self.diagnostic(d),
+                    });
+                } else {
+                    stepped.more += 1;
+                }
+            }
+        }
+        drop(probe);
+        self.listed_supply = marks;
     }
 
     /// Steps as `step` asks. A step that runs ends `play`, and one refused before it runs
@@ -310,6 +354,10 @@ impl Open {
                 }
             }
             for d in self.findings(&probe) {
+                // `list_supply` lists these once the step ends.
+                if matches!(d, EngineDiagnostic::RatingSupplyLow(_)) {
+                    continue;
+                }
                 if d.at().is_some() && known.insert(key(&d)) {
                     found.push(Change::Diagnostic {
                         by_ps: d.at().map_or(now, Time::as_ps),

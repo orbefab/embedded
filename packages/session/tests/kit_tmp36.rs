@@ -176,13 +176,14 @@ fn tmp36_supply_range_warns_operating_above_5v5_abs_max_above_7v_and_no_invented
     let (vout, _, diags) = run_bench(1.2, 100.0, None);
     assert!((vout - 1.2).abs() < 5e-3, "clamped vout={vout}");
     assert_eq!(diags.len(), 1, "expected 1 warning at 1.2 V, got {diags:?}");
-    assert_eq!(diags[0]["code"], "rating.voltage");
+    assert_eq!(diags[0]["code"], "rating.supply_low");
+    assert_eq!(diags[0]["refs"], json!(["#tmp.pin.vs"]));
     assert!(
         diags[0]["message"]
             .as_str()
             .unwrap_or("")
-            .contains("minimum operating supply"),
-        "expected minimum operating supply warning, got {diags:?}"
+            .contains("below its 2.7 V minimum"),
+        "expected the 2.7 V minimum supply warning, got {diags:?}"
     );
 
     // Above operating supply (5.6 V, 6.0 V, 7.0 V): keeps working and warns operating ceiling.

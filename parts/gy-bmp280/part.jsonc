@@ -11,12 +11,12 @@
 // value Bosch recommends for C1 and C2; the module diagram shows two capacitors and does not
 // print the value.
 {
-  "format": 1,
+  "format": 7,
   "part": "gy-bmp280",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "title": "GY-BMP280-3.3 pressure module",
   "summary": "BMP280 pressure and temperature breakout for 3.3 V, with I2C pull-ups and a 6-pin header on 2.54 mm. It answers at I2C address 0x76.",
-  "tags": ["bmp280", "gy-bmp280", "temperature", "pressure", "sensor", "i2c", "breakout"],
+  "tags": ["bmp280", "gy-bmp280", "temperature", "thermometer", "pressure", "barometer", "altimeter", "sensor", "i2c", "breakout"],
   "license": "MIT OR Apache-2.0",
   "docs": {
     "BST-BMP280-DS001-26": "https://www.bosch-sensortec.com/media/boschsensortec/downloads/datasheets/bst-bmp280-ds001.pdf",
@@ -30,7 +30,7 @@
     "datasheet": "BST-BMP280-DS001-26"
   },
   "uses": {
-    "bmp280": "0.1.1",
+    "bmp280": "0.1.2",
     "pin-header-1x6": "0.1.0",
     "resistor-0603": "0.2.0",
     "capacitor-0603": "0.2.0"

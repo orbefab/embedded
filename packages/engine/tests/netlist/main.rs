@@ -7,6 +7,7 @@ mod diagnostic;
 mod hc595;
 mod hd44780_i2c;
 mod inductor;
+mod max7219;
 mod ne555;
 mod op_amp;
 mod parse;

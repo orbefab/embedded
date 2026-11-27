@@ -1,14 +1,11 @@
 //! The `hd44780_i2c` 16×2 character LCD with PCF8574 I2C backpack.
 //!
-//! [`model`] implements the PCF8574 8-bit quasi-bidirectional expander driving an HD44780U
-//! controller (Hitachi ADE-207-272). [`glass`] extracts the visible 16×2 text and draws the blue
-//! backlit glass with the A00 5×8 ROM font and CGRAM custom characters. This file holds the
+//! Its device is the PCF8574 front end in [`hd44780`](super::hd44780)'s
+//! [`backpack`](super::hd44780::model::backpack), driving the HD44780U controller the parallel
+//! `hd44780` kind runs too, and [`hd44780`](super::hd44780) draws its glass. This file holds the
 //! netlist struct, its JSON wire type, and its electrical interface (`SDA` open-drain, `SCL` input,
 //! `VCC`/`GND` supply watch and optional current draw).
 
-pub mod font;
-mod glass;
-pub(crate) mod model;
 #[cfg(test)]
 mod tests;
 
@@ -17,6 +14,7 @@ use serde::Deserialize;
 use orbe_model::{Device, Fields, Value as FieldValue};
 
 use super::Row;
+use super::hd44780::model::backpack as model;
 use crate::active::i2c::{Bus, Engine};
 use crate::active::native::Native;
 use crate::active::{Chip, Core, Output, Stage};
@@ -28,11 +26,8 @@ use crate::netlist::json::{
     PinMap, WireValue, bounded, resolve_limit, resolve_pins, resolve_value,
 };
 use crate::netlist::{NetId, PartId, Threshold, Value};
-use crate::ratings::{Ceiling, PinRatings, PinWindow};
+use crate::ratings::{Ceiling, PinRatings, PinWindow, SupplyMin};
 use crate::watch::{Signal, Watch};
-
-pub use glass::{backlight_on, glass, text_visible, visible_lines};
-pub use model::{HEIGHT, WIDTH};
 
 const VCC: usize = 0;
 const GND: usize = 1;
@@ -167,6 +162,16 @@ pub(crate) fn pin_ratings(dev: &Hd44780I2c) -> Option<PinRatings> {
             });
         }
     }
+    let supply_mins = si(&ratings.supply_min)
+        .map(|min| SupplyMin {
+            pin: Hd44780I2c::PINS[VCC],
+            net: dev.pins[VCC],
+            gnd: dev.pins[GND],
+            min,
+            clock_hz: None,
+        })
+        .into_iter()
+        .collect();
     Some(PinRatings {
         outputs: Vec::new(),
         pin_current: None,
@@ -174,6 +179,7 @@ pub(crate) fn pin_ratings(dev: &Hd44780I2c) -> Option<PinRatings> {
         vcc: (Hd44780I2c::PINS[VCC], dev.pins[VCC]),
         gnd: (Hd44780I2c::PINS[GND], dev.pins[GND]),
         windows,
+        supply_mins,
     })
 }
 
@@ -197,6 +203,8 @@ pub struct Hd44780I2cRatings {
     pub rail_margin: Option<Value>,
     /// Volt. The most `VCC` may sit above `GND`.
     pub supply_voltage: Option<Value>,
+    /// Volt. The least operating `VCC` may sit above `GND`.
+    pub supply_min: Option<Value>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -239,6 +247,8 @@ struct WireRatings {
     rail_margin: Option<WireValue>,
     #[serde(deserialize_with = "Option::deserialize")]
     supply_voltage: Option<WireValue>,
+    #[serde(default)]
+    supply_min: Option<WireValue>,
 }
 
 #[derive(Deserialize)]
@@ -357,8 +367,10 @@ fn resolve_ratings(
         wire.supply_voltage,
         out,
     );
+    let supply_min = resolve_limit(part, "ratings.supply_min", "V", wire.supply_min, out);
     Some(Hd44780I2cRatings {
         rail_margin: rail_margin?,
         supply_voltage: supply_voltage?,
+        supply_min: supply_min?,
     })
 }

@@ -3,12 +3,12 @@
 // Child values with a schematic source are the engine's board example values by role, from
 // packages/engine/tests/circuits/atmega-board-button/netlist.json.
 {
-  "format": 5,
+  "format": 7,
   "part": "nano-board",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "title": "Nano (CH340 clone)",
   "summary": "Nano-compatible board: an ATmega328P at 16 MHz and a CH340G USB-serial chip on 18 x 43.2 mm, with 30 pins on two rows that plug into a breadboard.",
-  "tags": ["board", "microcontroller", "avr", "atmega328p", "usb"],
+  "tags": ["board", "microcontroller", "avr", "atmega328p", "usb", "arduino", "nano"],
   "license": "MIT OR Apache-2.0",
   "docs": {
     "Arduino Nano A000005 datasheet": "https://docs.arduino.cc/resources/datasheets/A000005-datasheet.pdf",
@@ -21,7 +21,7 @@
   // A clone has no maker's sheet. The official board is the representative for size and pinout.
   "real": { "generic": true, "maker": "Arduino", "number": "A000005", "datasheet": "Arduino Nano A000005 datasheet" },
   "uses": {
-    "ams1117-sot223": "0.2.2", "atmega328p-tqfp32": "0.2.2", "capacitor-0603": "0.2.0",
+    "ams1117-sot223": "0.2.2", "atmega328p-tqfp32": "0.2.3", "capacitor-0603": "0.2.0",
     "capacitor-tantalum-3216": "0.2.2", "ch340g": "0.2.1", "crystal-3215": "0.2.0",
     "diode-sod123": "0.2.1", "led-0603": "0.2.1", "pin-header-1x15": "0.2.0", "pin-header-2x3": "0.2.0",
     "resistor-0603": "0.2.0", "resonator-cstce": "0.2.0", "tactile-switch-smd": "0.2.0", "usb-mini-b": "0.2.1",

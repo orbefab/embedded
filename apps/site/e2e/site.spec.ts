@@ -32,7 +32,26 @@ import { PART_SECTIONS } from "../src/sections";
 
 const INSTALL = /orbe add|cargo install|orbefab\.com\/orbe\/install\.sh/;
 const VIEW = { width: 1280, height: 900 };
-const QUERIES = ["led", "5 mm", "kingbright", "board", "resistor 0603", "smd", "avr usb", "nano-board", "Push", "MICROCHIP"];
+const QUERIES = [
+  "led",
+  "5 mm",
+  "kingbright",
+  "board",
+  "resistor 0603",
+  "smd",
+  "avr usb",
+  "nano-board",
+  "Push",
+  "MICROCHIP",
+  "pushbutton",
+  "opamp",
+  "shiftregister",
+  "ws2812b",
+  "sk6812",
+  "keypad",
+  "dc-jack",
+  "ky023",
+];
 
 type Weight = { requests: number; bytes: number; gzip: number; wasm: boolean };
 

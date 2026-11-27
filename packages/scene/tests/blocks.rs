@@ -304,14 +304,20 @@ const SKETCH_LICENSE: &str = "(MIT OR Apache-2.0)";
 /// One source of truth from each `firmware/LICENSE-*` file name to its SPDX identifier.
 fn license_file_spdx(name: &str) -> Option<&'static str> {
     match name {
-        "LICENSE-runtime" | "LICENSE-servo" => Some("LGPL-2.1-or-later"),
+        "LICENSE-runtime"
+        | "LICENSE-servo"
+        | "LICENSE-liquidcrystal"
+        | "LICENSE-md-max72xx"
+        | "LICENSE-md-parola" => Some("LGPL-2.1-or-later"),
         "LICENSE-neopixel" => Some("LGPL-3.0-or-later"),
+        "LICENSE-keypad" => Some("GPL-3.0-only"),
         "LICENSE-libc" | "LICENSE-tlsf" | "LICENSE-ssd1306" => Some("BSD-3-Clause"),
         "LICENSE-ubsan" | "LICENSE-gfx" => Some("BSD-2-Clause"),
         "LICENSE-apache" | "LICENSE-sensor" => Some("Apache-2.0"),
         "LICENSE-freertos"
         | "LICENSE-bmp280"
         | "LICENSE-busio"
+        | "LICENSE-ledcontrol"
         | "LICENSE-liquidcrystal-i2c"
         | "LICENSE-xtensa" => Some("MIT"),
         "LICENSE-newlib" => Some("LicenseRef-newlib"),

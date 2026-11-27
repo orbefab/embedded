@@ -12,7 +12,7 @@ use serde::Deserialize;
 use orbe_model::Device;
 
 use super::Row;
-use crate::active::native::{Hosting, Native, Port};
+use crate::active::native::{Native, Quiet};
 use crate::active::{Chip, Core, Output, Stage};
 use crate::diagnostic::Diagnostic;
 use crate::mna::Node;
@@ -23,11 +23,8 @@ use crate::netlist::json::{
 };
 use crate::netlist::{NetId, PartId, Rating, Threshold, Value};
 use crate::output_stage::{OutputStage, WireOutputStage, resolve_output_stage_at};
-use crate::ratings::{Ceiling, PinRatings, PinWindow};
+use crate::ratings::{Ceiling, PinRatings, PinWindow, SupplyMin};
 use crate::watch::{Signal, Watch};
-use crate::world::World;
-
-use orbe_model::{Drive, Time};
 
 const QB: usize = 0;
 const QC: usize = 1;
@@ -77,26 +74,6 @@ const BOUND_INSIDE_V: f64 = 1e-6;
 
 /// No events. The pins are the inputs.
 pub(crate) const ROW: Row = Row::new(&[]);
-
-/// A port with no pins. The device reads its watches itself.
-#[derive(Clone, Copy, Debug)]
-struct Quiet;
-
-impl<D: Device> Port<D> for Quiet {
-    const PINS: usize = 0;
-
-    fn drive(&self, _image: &mut [Drive]) {}
-
-    fn due_at(&self) -> Option<Time> {
-        None
-    }
-
-    fn take_due(&mut self, _dev: &mut Hosting<D>, _world: &World, _at: Time) -> bool {
-        false
-    }
-
-    fn input(&mut self, _dev: &mut Hosting<D>, _world: &World, _at: Time, _levels: &[bool]) {}
-}
 
 pub(crate) fn chip(part: PartId, dev: &Hc595) -> Chip {
     let pins = dev.pins;
@@ -197,6 +174,19 @@ pub(crate) fn pin_ratings(part: &Hc595) -> Option<PinRatings> {
         part.ratings.input_margin.as_ref(),
     );
     add(&OUTPUT_PINS, part.ratings.output_margin.as_ref());
+    let supply_mins = part
+        .ratings
+        .supply_min
+        .as_ref()
+        .map(|min| SupplyMin {
+            pin: Hc595::PINS[VCC],
+            net: part.pins[VCC],
+            gnd: part.pins[GND],
+            min: min.si.get(),
+            clock_hz: None,
+        })
+        .into_iter()
+        .collect();
     Some(PinRatings {
         outputs: OUTPUT_PINS.iter().map(|&pin| Hc595::PINS[pin]).collect(),
         pin_current: part.ratings.pin_current.clone(),
@@ -204,6 +194,7 @@ pub(crate) fn pin_ratings(part: &Hc595) -> Option<PinRatings> {
         vcc: (Hc595::PINS[VCC], part.pins[VCC]),
         gnd: (Hc595::PINS[GND], part.pins[GND]),
         windows,
+        supply_mins,
     })
 }
 
@@ -233,6 +224,8 @@ pub struct Hc595Ratings {
     pub input_margin: Option<Value>,
     /// Volt. How far `QA`–`QH` and `QHp` may sit below `GND` and above `VCC`.
     pub output_margin: Option<Value>,
+    /// Volt. The least operating `VCC` may sit above `GND`.
+    pub supply_min: Option<Value>,
 }
 
 impl Hc595 {
@@ -265,6 +258,8 @@ struct WireRatings {
     input_margin: Option<WireValue>,
     #[serde(deserialize_with = "Option::deserialize")]
     output_margin: Option<WireValue>,
+    #[serde(default)]
+    supply_min: Option<WireValue>,
 }
 
 pub(crate) fn resolve_hc595(ctx: ParseCtx<'_>, wire: WireHc595) -> Option<Hc595> {
@@ -309,10 +304,12 @@ fn resolve_ratings(
     );
     let input_margin = resolve_limit(part, "ratings.input_margin", "V", wire.input_margin, out);
     let output_margin = resolve_limit(part, "ratings.output_margin", "V", wire.output_margin, out);
+    let supply_min = resolve_limit(part, "ratings.supply_min", "V", wire.supply_min, out);
     Some(Hc595Ratings {
         pin_current: pin_current?,
         supply_current: supply_current?,
         input_margin: input_margin?,
         output_margin: output_margin?,
+        supply_min: supply_min?,
     })
 }

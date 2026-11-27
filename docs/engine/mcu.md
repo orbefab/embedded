@@ -50,7 +50,7 @@ A chip says which of its outputs a record went out on, as an index in its drives
 
 ## The air
 
-A chip with a radio is a station. It puts frames on the air with `take_aired`, listens on the channel `tuned()` names, hears other stations' frames with `hear`, and learns with `acked` whether its own were acknowledged. The types are `orbe_model::air`'s, as [model.md](model.md#the-air) says. Every chip keeps the defaults, which have no radio, and nothing calls them yet.
+A chip with a radio is a station. It puts frames on the air with `take_aired`, listens on the channel `tuned()` names, hears other stations' frames with `hear`, and learns with `acked` whether its own were acknowledged. The types are `orbe_model::air`'s, as [model.md](model.md#the-air) says. Every chip keeps the defaults, which have no radio. The engine owns the air, as [engine.md](engine.md#the-air) says, and calls them only on a station, which no chip is yet.
 
 ## Faults and notes
 

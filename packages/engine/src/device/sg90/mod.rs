@@ -11,8 +11,9 @@ use crate::active::{Chip, Core, Takes};
 use crate::mna::Node;
 use crate::netlist::json::ParseCtx;
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
-use crate::netlist::json::{PinMap, resolve_pins};
-use crate::netlist::{NetId, PartId, Threshold};
+use crate::netlist::json::{PinMap, WireValue, resolve_limit, resolve_pins};
+use crate::netlist::{NetId, PartId, Threshold, Value};
+use crate::ratings::{PinRatings, SupplyMin};
 use crate::watch::{Signal, Watch};
 
 const VCC: usize = 0;
@@ -63,12 +64,40 @@ pub(crate) fn chip(part: PartId, dev: &Sg90) -> Chip {
     }
 }
 
+/// The part's minimum operating supply voltage on `VCC` over `GND`, `None` when unrated.
+pub(crate) fn pin_ratings(dev: &Sg90) -> Option<PinRatings> {
+    let min = dev.ratings.as_ref()?.supply_min.as_ref()?.si.get();
+    Some(PinRatings {
+        outputs: Vec::new(),
+        pin_current: None,
+        supply_current: None,
+        vcc: (Sg90::PINS[VCC], dev.pins[VCC]),
+        gnd: (Sg90::PINS[GND], dev.pins[GND]),
+        windows: Vec::new(),
+        supply_mins: vec![SupplyMin {
+            pin: Sg90::PINS[VCC],
+            net: dev.pins[VCC],
+            gnd: dev.pins[GND],
+            min,
+            clock_hz: None,
+        }],
+    })
+}
+
 /// An SG90 micro servo. `SIGNAL` is read through `input_threshold`, fractions of the supply.
 /// The shaft angle, the speed and the supply current are the device's.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Sg90 {
     pub pins: [NetId; 3],
     pub input_threshold: Threshold,
+    pub ratings: Option<Sg90Ratings>,
+}
+
+/// An SG90's ratings.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sg90Ratings {
+    /// Volt. The least operating `VCC` may sit above `GND`.
+    pub supply_min: Option<Value>,
 }
 
 impl Sg90 {
@@ -81,6 +110,15 @@ pub(crate) struct WireSg90 {
     pub(crate) name: String,
     pins: PinMap,
     input_threshold: WireThreshold,
+    #[serde(default)]
+    ratings: Option<WireRatings>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WireRatings {
+    #[serde(default)]
+    supply_min: Option<WireValue>,
 }
 
 pub(crate) fn resolve_sg90(ctx: ParseCtx<'_>, wire: WireSg90) -> Option<Sg90> {
@@ -91,8 +129,20 @@ pub(crate) fn resolve_sg90(ctx: ParseCtx<'_>, wire: WireSg90) -> Option<Sg90> {
         wire.input_threshold,
         ctx.out,
     );
+    let ratings = match wire.ratings {
+        None => Some(None),
+        Some(wire) => resolve_limit(
+            ctx.part,
+            "ratings.supply_min",
+            "V",
+            wire.supply_min,
+            ctx.out,
+        )
+        .map(|supply_min| Some(Sg90Ratings { supply_min })),
+    };
     Some(Sg90 {
         pins: pins?,
         input_threshold: input_threshold?,
+        ratings: ratings?,
     })
 }

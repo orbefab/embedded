@@ -1,0 +1,11 @@
+# MD_Parola scrolls "ORBE" across all four chained MAX7219 modules over hardware SPI.
+open
+expect @matrix off
+step 300ms
+expect @matrix lit
+expect @matrix shows tests/scroll_1.screen
+step 300ms
+expect @matrix shows tests/scroll_2.screen
+expect @matrix.brightness > 1mA
+expect @matrix.brightness < 3mA
+expect no diagnostics

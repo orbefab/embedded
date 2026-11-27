@@ -708,33 +708,71 @@ fn rank_fields(
     words: &[String],
     joined: &str,
 ) -> Option<u8> {
-    let mut fields = vec![name, title];
+    let cats = categories.unwrap_or(&[]);
+    let mut fields: Vec<&str> = Vec::with_capacity(2 + extras.len() + cats.len());
+    fields.push(name);
+    fields.push(title);
     fields.extend_from_slice(extras);
-    let mut haystack = fields.join("\n").to_lowercase();
-    if let Some(categories) = categories {
-        for category in categories {
-            haystack.push('\n');
-            haystack.push_str(&category.to_lowercase());
-        }
+    for category in cats {
+        fields.push(category);
     }
-    if !words.iter().all(|word| haystack.contains(word)) {
+    let haystack = fields.join("\n").to_lowercase();
+    let title_words = words_of(title);
+    let name_words = words_of(name);
+    let mut norm_tokens: Vec<String> = Vec::new();
+    for field in &fields {
+        norm_tokens.extend(hyphen_tokens(field));
+    }
+    norm_tokens.push(compact(name));
+    // extras is [maker, number, description] on parts or [description] on Blocks.
+    for extra in extras.iter().take(extras.len().saturating_sub(1)) {
+        norm_tokens.push(compact(extra));
+    }
+    for category in cats {
+        norm_tokens.push(compact(category));
+        norm_tokens.extend(words_of(category));
+    }
+    norm_tokens.extend(name_words.iter().cloned());
+    norm_tokens.extend(title_words.iter().cloned());
+    norm_tokens.extend(pairs_of(&title_words));
+    norm_tokens.extend(pairs_of(&name_words));
+    let matches = words.iter().all(|word| {
+        if haystack.contains(word) {
+            return true;
+        }
+        let c = compact(word);
+        !c.is_empty() && norm_tokens.iter().any(|tok| tok.starts_with(&c))
+    });
+    if !matches {
         return None;
     }
-    if name.eq_ignore_ascii_case(joined) || words.iter().any(|word| name.eq_ignore_ascii_case(word))
+    let cid = compact(name);
+    let cjoined = compact(joined);
+    if name.eq_ignore_ascii_case(joined)
+        || words.iter().any(|word| name.eq_ignore_ascii_case(word))
+        || (!cjoined.is_empty() && cid == cjoined)
+        || words.iter().any(|word| {
+            let c = compact(word);
+            !c.is_empty() && c == cid
+        })
     {
         return Some(0);
     }
-    let mut whole = words_of(name);
-    whole.extend(words_of(title));
-    if let Some(categories) = categories {
-        for category in categories {
-            whole.extend(words_of(category));
-        }
+    let mut whole = name_words.clone();
+    whole.extend(title_words.iter().cloned());
+    for category in cats {
+        whole.extend(words_of(category));
+        whole.push(compact(category));
     }
-    if words
-        .iter()
-        .all(|word| whole.iter().any(|have| have == word))
-    {
+    whole.extend(pairs_of(&title_words));
+    whole.extend(pairs_of(&name_words));
+    if words.iter().all(|word| {
+        if whole.iter().any(|have| have == word) {
+            return true;
+        }
+        let c = compact(word);
+        !c.is_empty() && whole.iter().any(|have| have == &c)
+    }) {
         return Some(1);
     }
     Some(2)
@@ -744,6 +782,28 @@ fn words_of(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|word| !word.is_empty())
         .map(|word| word.to_lowercase())
+        .collect()
+}
+
+fn compact(text: &str) -> String {
+    text.chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+fn hyphen_tokens(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+        .filter(|tok| tok.contains('-') || tok.contains('_'))
+        .map(compact)
+        .filter(|tok| !tok.is_empty())
+        .collect()
+}
+
+fn pairs_of(words: &[String]) -> Vec<String> {
+    words
+        .windows(2)
+        .map(|pair| format!("{}{}", pair[0], pair[1]))
         .collect()
 }
 
@@ -1145,7 +1205,8 @@ fn rating_value(name: String, node: &Node) -> Option<Rating> {
 }
 
 fn gaps(tree: &Node) -> Vec<NotSimulated> {
-    tree.get("not_simulated")
+    let mut out: Vec<NotSimulated> = tree
+        .get("not_simulated")
         .and_then(Node::items)
         .unwrap_or_default()
         .iter()
@@ -1164,7 +1225,25 @@ fn gaps(tree: &Node) -> Vec<NotSimulated> {
                 pins: (!pins.is_empty()).then_some(pins),
             })
         })
-        .collect()
+        .collect();
+    for item in tree
+        .get("accepted_warnings")
+        .and_then(Node::items)
+        .unwrap_or_default()
+    {
+        if let (Some(code), Some(pin), Some(why)) = (
+            item.get("code").and_then(Node::str),
+            item.get("pin").and_then(Node::str),
+            item.get("why").and_then(Node::str),
+        ) {
+            out.push(NotSimulated {
+                what: format!("accepted {code} on {pin}"),
+                why: why.to_string(),
+                pins: None,
+            });
+        }
+    }
+    out
 }
 
 fn buy_links(tree: &Node) -> Option<Vec<Buy>> {

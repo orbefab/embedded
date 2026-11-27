@@ -21,12 +21,12 @@
 // bridge model does not read RSTb or VBUS. The populated rail capacitors
 // on VCC_3V3 (C1, C2, C9, C10, C11) and VCC_5V (C3, C7, C8) are placed.
 {
-  "format": 6,
+  "format": 7,
   "part": "esp32s3-devkitc-1",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "title": "ESP32-S3-DevKitC-1 v1.1",
   "summary": "ESP32-S3-DevKitC-1 v1.1 with the N16R8 module. Two 1x22 headers, USB-UART on U0RXD, and the addressable RGB LED on GPIO38.",
-  "tags": ["microcontroller", "esp32-s3", "usb"],
+  "tags": ["microcontroller", "esp32-s3", "usb", "esp32", "esp32s3", "devkit", "board"],
   "license": "MIT OR Apache-2.0",
   "docs": {
     "SCH_ESP32-S3-DevKitC-1_V1.1_20221130": "https://dl.espressif.com/dl/schematics/SCH_ESP32-S3-DevKitC-1_V1.1_20221130.pdf",
@@ -35,9 +35,9 @@
   },
   "real": { "maker": "Espressif", "number": "ESP32-S3-DevKitC-1-N16R8", "datasheet": "ESP32-S3-DevKitC-1 v1.1 User Guide" },
   "uses": {
-    "capacitor-0603": "0.2.0", "cp2102n-qfn28": "0.2.1", "esp32s3-wroom-1-n16r8": "0.2.2",
+    "capacitor-0603": "0.2.0", "cp2102n-qfn28": "0.2.1", "esp32s3-wroom-1-n16r8": "0.2.3",
     "lesd5d5-sod523": "0.2.1", "npn-l8050-sot23": "0.2.2", "pin-header-1x22": "0.2.0",
-    "resistor-0603": "0.2.0", "sgm2212-sot223": "0.2.2", "sk68xxmini-hs": "0.2.2",
+    "resistor-0603": "0.2.0", "sgm2212-sot223": "0.2.2", "sk68xxmini-hs": "0.2.3",
     "tactile-switch-ntc013": "0.2.1", "usb-micro-b": "0.2.1"
   },
   "params": { "app": {}, "partitions": {} },
@@ -262,6 +262,13 @@
     "GPIO38": "j3.10", "GPIO37": "j3.11", "GPIO36": "j3.12", "GPIO35": "j3.13", "GPIO0": "j3.14",
     "GPIO45": "j3.15", "GPIO48": "j3.16", "GPIO47": "j3.17", "GPIO21": "j3.18", "GPIO20": "j3.19", "GPIO19": "j3.20"
   },
+  "accepted_warnings": [
+    {
+      "code": "rating.supply_low",
+      "pin": "led.VDD",
+      "why": "The ESP32-S3-DevKitC-1 schematic (SCH_ESP32-S3-DevKitC-1_V1.1_20221130) powers the onboard SK68XXMINI-HS RGB LED from the 3.3 V SGM2212 regulator, below the LED datasheet's 3.7 V VDD minimum."
+    }
+  ],
   "not_simulated": [
     { "what": "RST", "pins": ["RST"], "why": "J1 pin 3 is EN, the chip's CHIP_PU. The esp32s3 kind has no reset pin. The sheet's truth table for DTR and RTS still wires Q1 and Q2, and the model does not reset when EN moves." },
     { "what": "GPIO35, GPIO36 and GPIO37", "pins": ["GPIO35", "GPIO36", "GPIO37"], "why": "The user guide says that on an octal-SPI WROOM module these three pins are used inside the module and are not available. J3 still brings them out, as the header table lists them." },

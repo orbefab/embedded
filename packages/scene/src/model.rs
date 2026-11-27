@@ -28,10 +28,12 @@ const SCENE_KEYS: &[&str] = &[
 /// BJT's `forward_knee_current`, and a `ws2812`'s `draw`. Format 6 is format 5 plus a
 /// resistor's `ratings.voltage`, the operating window of a sounding drive, a reading
 /// `"of": "angle"` on an `sg90`, a reading `"of": "screen"` and `view.screen`, and pin voltage
-/// `ratings` on `esp32s3`, `ssd1306`, `hd44780_i2c` and `ws2812`. Format 7 is format 6 plus
+/// `ratings` on `esp32s3`, `ssd1306`, `hd44780_i2c`, `hd44780` and `ws2812`. Format 7 is format 6 plus
 /// `steinhart_hart` world curves, a resistor's single-value maximum `ratings.voltage`,
-/// `characterized` on a rating, `ratings.reverse_voltage` on `diode` and `led`, and `ratings` on
-/// `potentiometer`.
+/// `characterized` on a rating, `ratings.reverse_voltage` on `diode` and `led`, `ratings` on
+/// `potentiometer`, `switch`, `dht22`, `sg90`, `ne555`, `cst816` and `st77916`,
+/// `ratings.supply_min` (and `bmp280`'s `ratings.io_supply_min`), and a composite part's
+/// `accepted_warnings`.
 pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5, 6, 7];
 /// Scene `format` values this binary reads.
 pub const SCENE_FORMATS: &[u32] = &[1];
@@ -51,16 +53,18 @@ const BASIS_FORMAT: u32 = 5;
 const VOLTAGE_FORMAT: u32 = 6;
 /// The oldest part format that carries `steinhart_hart` world curves, single-value resistor
 /// maximum `ratings.voltage`, `characterized` ratings, `diode`/`led` `ratings.reverse_voltage`,
-/// and `potentiometer` `ratings` (refused by orbe 0.3.1).
-const CURVE_FORMAT: u32 = 7;
+/// `ratings` on `potentiometer`, `switch`, `dht22`, `sg90`, `ne555`, `cst816` and `st77916`,
+/// `ratings.supply_min` (and `bmp280`'s `io_supply_min`), and `accepted_warnings` (refused by
+/// orbe 0.3.1).
+const RATINGS_FORMAT: u32 = 7;
 /// The oldest part format whose readings take `"of": "angle"`.
 const ANGLE_FORMAT: u32 = 6;
 /// The oldest part format whose readings take `"of": "screen"` and whose view takes `screen`.
 const SCREEN_FORMAT: u32 = 6;
 /// The engine kinds that show a screen, which a reading `"of": "screen"` reads.
-const SCREEN_KINDS: [&str; 2] = ["ssd1306", "hd44780_i2c"];
+const SCREEN_KINDS: [&str; 4] = ["ssd1306", "hd44780_i2c", "hd44780", "max7219"];
 /// The engine kinds whose glass carries readable character lines and a backlight.
-const TEXT_KINDS: [&str; 1] = ["hd44780_i2c"];
+const TEXT_KINDS: [&str; 2] = ["hd44780_i2c", "hd44780"];
 const WIRE_KINDS: &[&str] = &["jumper", "trace", "contact"];
 /// A live session's stop, investigation 1's 2-hour cap.
 pub const STOP_PS: u64 = 7_200 * 1_000_000_000_000;
@@ -231,6 +235,14 @@ pub(crate) struct Holes {
     pub(crate) strips: Vec<Vec<String>>,
 }
 
+/// A warning accepted by design on one pin of a composite part's child.
+#[derive(Clone, Debug)]
+pub(crate) struct AcceptedWarning {
+    pub(crate) code: String,
+    pub(crate) pin: Ref,
+    pub(crate) span: Span,
+}
+
 pub(crate) struct Part {
     pub(crate) file: FileId,
     /// The id, or the path a scene names it by, for messages.
@@ -242,6 +254,8 @@ pub(crate) struct Part {
     pub(crate) params: Vec<ParamDecl>,
     /// Each `not_simulated` entry's reason with the pins it lists.
     pub(crate) not_simulated: Vec<(String, Vec<String>)>,
+    /// Warnings accepted by design on one pin of a child part.
+    pub(crate) accepted_warnings: Vec<AcceptedWarning>,
     pub(crate) joins_only: bool,
     /// Pins the design leaves open. `net.floating` leaves a net of one out while nothing
     /// outside this part reaches it.
@@ -528,6 +542,7 @@ pub(crate) fn decode_part(
         bodies: Vec::new(),
         params: Vec::new(),
         not_simulated: Vec::new(),
+        accepted_warnings: Vec::new(),
         joins_only: false,
         open: Vec::new(),
         holes: None,
@@ -563,6 +578,19 @@ pub(crate) fn decode_part(
                 check_text_and_backlight(value, format, out);
             }
             "not_simulated" => part.not_simulated = decode_not_simulated(value, out),
+            "accepted_warnings" => {
+                if format < RATINGS_FORMAT {
+                    out.push(
+                        Code::Syntax,
+                        prop.key_span,
+                        format!(
+                            "`accepted_warnings` needs part format {RATINGS_FORMAT}; this file is format {format}"
+                        ),
+                        format!("set \"format\": {RATINGS_FORMAT} in this part file"),
+                    );
+                }
+                part.accepted_warnings = decode_accepted_warnings(value, out);
+            }
             "buy" => crate::buy::check(value, out),
             "joins_only" => part.joins_only = matches!(value.json, Json::Bool(true)),
             "open" => {
@@ -624,6 +652,17 @@ pub(crate) fn decode_part(
                 );
             }
         }
+    }
+    if let Some(node) = root.get("accepted_warnings")
+        && part.comp.parts.is_empty()
+        && !part.accepted_warnings.is_empty()
+    {
+        out.push(
+            Code::Syntax,
+            node.span,
+            "`accepted_warnings` is only for a composite part with `parts`",
+            "remove `accepted_warnings` from a leaf part".into(),
+        );
     }
     if let Some(node) = root.get("open") {
         for name in &part.open {
@@ -1842,6 +1881,91 @@ fn decode_not_simulated(node: &Node, out: &mut Findings) -> Vec<(String, Vec<Str
     entries
 }
 
+/// Warnings accepted by design on child pins of a composite part. No wildcards.
+fn decode_accepted_warnings(node: &Node, out: &mut Findings) -> Vec<AcceptedWarning> {
+    let Some(items) = node.items() else {
+        return Vec::new();
+    };
+    if items.is_empty() {
+        out.push(
+            Code::Syntax,
+            node.span,
+            "`accepted_warnings` is empty",
+            "leave `accepted_warnings` out, or name a warning this board accepts".into(),
+        );
+        return Vec::new();
+    }
+    let mut entries = Vec::new();
+    for item in items {
+        let Some(_) = item.props() else { continue };
+        for req in ["code", "pin", "why"] {
+            if item.get(req).is_none() {
+                out.push(
+                    Code::Syntax,
+                    item.span,
+                    format!("an accepted_warnings entry has no `{req}`"),
+                    "each entry needs `code`, `pin` and `why`".into(),
+                );
+            }
+        }
+        let (Some(code_node), Some(pin_node), Some(why_node)) =
+            (item.get("code"), item.get("pin"), item.get("why"))
+        else {
+            continue;
+        };
+        let (Some(code), Some(pin_str), Some(why)) =
+            (code_node.str(), pin_node.str(), why_node.str())
+        else {
+            continue;
+        };
+        if code.is_empty() || code.contains('*') {
+            out.push(
+                Code::Syntax,
+                code_node.span,
+                format!("`{code}` is not a single warning code"),
+                "name one exact warning code, such as \"rating.supply_low\"".into(),
+            );
+            continue;
+        }
+        if why.trim().is_empty() {
+            out.push(
+                Code::Syntax,
+                why_node.span,
+                "`why` is empty",
+                "state the board-design reason for accepting this warning".into(),
+            );
+            continue;
+        }
+        if pin_str.contains('*') {
+            out.push(
+                Code::Syntax,
+                pin_node.span,
+                format!("`{pin_str}` uses a wildcard; name one child pin"),
+                "name one child pin, such as \"led.VDD\"".into(),
+            );
+            continue;
+        }
+        let Some(pin) = decode_ref(pin_node, out) else {
+            continue;
+        };
+        if pin.segs.len() < 2 {
+            out.push(
+                Code::Syntax,
+                pin_node.span,
+                format!("`{pin_str}` does not name a child part's pin"),
+                "write `<child>.<pin>`, such as \"led.VDD\"".into(),
+            );
+            continue;
+        }
+        entries.push(AcceptedWarning {
+            code: code.to_string(),
+            pin,
+            span: pin_node.span,
+        });
+    }
+    entries
+}
+
 /// The part's params. `shape` reports an unknown key or a value of the wrong type, so a field
 /// written with the wrong type is left out here without a second finding.
 fn decode_params(node: &Node, part: &Part, format: u32, out: &mut Findings) -> Vec<ParamDecl> {
@@ -2805,17 +2929,19 @@ fn decode_body(
                 format,
             );
         }
-        if matches!(kind, "esp32s3" | "ssd1306" | "hd44780_i2c" | "ws2812")
-            && let Some(prop) = node
-                .props()
-                .unwrap_or_default()
-                .iter()
-                .find(|prop| prop.key == "ratings")
+        if matches!(
+            kind,
+            "esp32s3" | "ssd1306" | "hd44780_i2c" | "hd44780" | "ws2812"
+        ) && let Some(prop) = node
+            .props()
+            .unwrap_or_default()
+            .iter()
+            .find(|prop| prop.key == "ratings")
         {
             gate(out, kind, "ratings", prop.key_span, VOLTAGE_FORMAT, format);
         }
     }
-    if format < CURVE_FORMAT {
+    if format < RATINGS_FORMAT {
         if kind == "resistor"
             && let Some(prop) = node
                 .get("ratings")
@@ -2829,7 +2955,7 @@ fn decode_body(
                 kind,
                 "ratings.voltage",
                 prop.key_span,
-                CURVE_FORMAT,
+                RATINGS_FORMAT,
                 format,
             );
         }
@@ -2845,7 +2971,7 @@ fn decode_body(
                 kind,
                 &format!("resistance.curve.{curve_kind}"),
                 prop.value.span,
-                CURVE_FORMAT,
+                RATINGS_FORMAT,
                 format,
             );
         }
@@ -2862,18 +2988,50 @@ fn decode_body(
                 kind,
                 "ratings.reverse_voltage",
                 prop.key_span,
-                CURVE_FORMAT,
+                RATINGS_FORMAT,
                 format,
             );
         }
-        if kind == "potentiometer"
-            && let Some(prop) = node
-                .props()
-                .unwrap_or_default()
-                .iter()
-                .find(|prop| prop.key == "ratings")
+        if matches!(
+            kind,
+            "potentiometer" | "switch" | "dht22" | "sg90" | "ne555" | "cst816" | "st77916"
+        ) && let Some(prop) = node
+            .props()
+            .unwrap_or_default()
+            .iter()
+            .find(|prop| prop.key == "ratings")
         {
-            gate(out, kind, "ratings", prop.key_span, CURVE_FORMAT, format);
+            gate(out, kind, "ratings", prop.key_span, RATINGS_FORMAT, format);
+        }
+        if matches!(
+            kind,
+            "atmega328p"
+                | "esp32s3"
+                | "bmp280"
+                | "ssd1306"
+                | "hd44780_i2c"
+                | "hc595"
+                | "ws2812"
+                | "op_amp"
+                | "max7219"
+                | "analog_temp_sensor"
+        ) && let Some(ratings) = node.get("ratings").and_then(Node::props)
+        {
+            for key in ["supply_min", "io_supply_min"] {
+                if key == "io_supply_min" && kind != "bmp280" {
+                    continue;
+                }
+                if let Some(prop) = ratings.iter().find(|prop| prop.key == key) {
+                    gate(
+                        out,
+                        kind,
+                        &format!("ratings.{key}"),
+                        prop.key_span,
+                        RATINGS_FORMAT,
+                        format,
+                    );
+                }
+            }
         }
         let ratings = node
             .get("ratings")
@@ -2888,7 +3046,7 @@ fn decode_body(
                 .find(|prop| prop.key == "characterized")
             {
                 let key = format!("ratings.{}.characterized", rating.key);
-                gate(out, kind, &key, prop.key_span, CURVE_FORMAT, format);
+                gate(out, kind, &key, prop.key_span, RATINGS_FORMAT, format);
             }
         }
     }

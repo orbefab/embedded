@@ -10,6 +10,7 @@ members = [
   "packages/engine/device-check",
   "packages/model",
   "packages/mcu",
+  "packages/net",
   "packages/crypto",
   "packages/scratch",
   "packages/cores/*",
@@ -31,6 +32,7 @@ orbe-engine = { path = "packages/engine" }
 orbe-model = { path = "packages/model" }
 orbe-mcu = { path = "packages/mcu" }
 orbe-crypto = { path = "packages/crypto" }
+orbe-net = { path = "packages/net" }
 orbe-xtensa = { path = "packages/cores/xtensa" }
 orbe-avr = { path = "packages/cores/avr" }
 orbe-microchip = { path = "packages/socs/microchip" }

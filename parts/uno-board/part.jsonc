@@ -12,12 +12,12 @@
 // its notch toward the ICSP header are the DIP boards' place, as Joy-IT's ARD_R3DIP shows it; the
 // headers, holes and ICSP header are RobotDyn's dimension diagram.
 {
-  "format": 5,
+  "format": 7,
   "part": "uno-board",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "title": "Uno R3 compatible board",
   "summary": "Uno R3 compatible board: an ATmega328P in a DIP-28 socket at 16 MHz and a CH340G USB-serial chip on 68.6 x 53.3 mm, with female headers in the Uno positions.",
-  "tags": ["board", "microcontroller", "avr", "atmega328p", "usb", "ch340g"],
+  "tags": ["board", "microcontroller", "avr", "atmega328p", "usb", "ch340g", "arduino", "uno", "r3"],
   "license": "MIT OR Apache-2.0",
   "docs": {
     "RobotDyn UNO R3 CH340G schematic": "https://robotdyn.com/pub/media/0G-00004029%3D%3DUNO-R3-CH340G/DOCS/Schematic%3D%3D0G-00004029%3D%3DUNO-R3-CH340G.pdf",
@@ -32,7 +32,7 @@
   // dimensions, is the representative for the circuit and the interface.
   "real": { "generic": true, "maker": "RobotDyn", "number": "UNO R3 CH340G", "datasheet": "RobotDyn UNO R3 CH340G schematic" },
   "uses": {
-    "ams1117-sot223": "0.2.2", "atmega328p-dip28": "0.2.2", "barrel-jack-dc21": "0.2.2", "capacitor-0603": "0.2.0",
+    "ams1117-sot223": "0.2.2", "atmega328p-dip28": "0.2.3", "barrel-jack-dc21": "0.2.3", "capacitor-0603": "0.2.0",
     "capacitor-electrolytic-smd": "0.2.2", "ch340g": "0.2.1", "crystal-hc49us": "0.2.0", "diode-cd1206": "0.2.1",
     "diode-m7-sma": "0.2.1", "dip-socket-28": "0.2.0", "led-0805": "0.2.1", "lp2985-sot23-5": "0.2.2",
     "pin-header-2x3": "0.2.0", "pmos-fdn340p-sot23": "0.2.1", "ptc-fuse-1812": "0.2.0", "resistor-0603": "0.2.0",

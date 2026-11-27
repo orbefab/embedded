@@ -267,7 +267,7 @@ impl Device for St77916 {
                 asleep: registers.sleep,
                 settings: Settings::new(
                     &SETTINGS,
-                    [registers.madctl, registers.colmod].map(u16::from),
+                    [registers.madctl, registers.colmod].map(u32::from),
                 ),
                 registers: stored as u16,
                 backlight,

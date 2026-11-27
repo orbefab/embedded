@@ -100,3 +100,67 @@ fn above_both_floors_and_below_two_milliamps_both_are_dim() {
     run(&mut live, dir.path(), "expect @red dim");
     run(&mut live, dir.path(), "expect @blue dim");
 }
+
+#[test]
+fn reversed_supply_past_vr_warns_on_3mm_and_5mm_leds_and_under_vr_stays_quiet() {
+    for (part, volts, expect_warn) in [
+        ("led-3mm", "6", true),
+        ("led-3mm", "4", false),
+        ("led-3mm", "5", false),
+        ("led-5mm", "6", true),
+        ("led-5mm", "4", false),
+        ("led-5mm", "5", false),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/light-divider");
+        for file in ["resistor.jsonc", "source.jsonc"] {
+            std::fs::copy(fixture.join(file), dir.path().join(file)).unwrap();
+        }
+        let parts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../parts");
+        std::os::unix::fs::symlink(parts, dir.path().join("parts")).unwrap();
+        let scene = json!({
+            "format": 1,
+            "parts": {
+                "v1": { "type": "./source.jsonc", "voltage": volts },
+                "r1": { "type": "./resistor.jsonc", "resistance": "1k" },
+                "d1": { "type": part },
+            },
+            "wires": [
+                ["v1.pos", "r1.a"],
+                ["r1.b", "d1.cathode"],
+                ["d1.anode", "v1.neg"],
+            ],
+            "ground": "v1.neg",
+        });
+        std::fs::write(dir.path().join("scene.jsonc"), scene.to_string()).unwrap();
+        let mut live = Live::new("t", Files::disk());
+        let opened = live.run(&Command::Open(dir.path().join("scene.jsonc")));
+        assert!(opened.ok(), "{part} at {volts} V: {}", opened.text());
+
+        run(&mut live, dir.path(), "step 10ms");
+        run(&mut live, dir.path(), "expect @d1 off");
+        let snap_cmd = Command::parse("snapshot", dir.path()).unwrap().unwrap();
+        let snap = live.run(&snap_cmd);
+        assert!(snap.ok(), "{part} at {volts} V: {}", snap.text());
+        let diags = snap.json()["data"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .clone();
+        if expect_warn {
+            assert!(
+                diags.iter().any(|d| d["code"] == "rating.voltage"
+                    && d["message"]
+                        .as_str()
+                        .unwrap_or("")
+                        .contains("#d1.v reaches -6 V, outside its -5 V floor")),
+                "{part} at {volts} V: expected rating.voltage, got {diags:?}"
+            );
+        } else {
+            run(&mut live, dir.path(), "expect no diagnostics");
+            assert!(
+                diags.is_empty(),
+                "{part} at {volts} V: expected quiet, got {diags:?}"
+            );
+        }
+    }
+}

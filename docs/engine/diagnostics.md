@@ -15,7 +15,7 @@ A diagnostic is one JSON object. The fields are written in this order.
 
 The run sorts diagnostics by `t_ps`, then `code`, then `refs`, then the JSON bytes of the whole object. A `null` time sorts before a number, so every input finding precedes a solver finding.
 
-A session's `diagnostics()` returns the warnings found so far, and once the session ends they are that list's. While it runs, a `Pulses` record still in flight is not yet counted, as [engine.md](engine.md#sessions) says. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `rating.voltage`, `regulator.current_limit`, `chip.protocol`, `chip.link_miswired`, `chip.floating_input`, `chip.unmodeled_register` and `chip.restart`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
+A session's `diagnostics()` returns the warnings found so far, and once the session ends they are that list's. While it runs, a `Pulses` record still in flight is not yet counted, as [engine.md](engine.md#sessions) says. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `rating.voltage`, `rating.supply_low`, `regulator.current_limit`, `chip.protocol`, `chip.link_miswired`, `chip.floating_input`, `chip.unmodeled_register` and `chip.restart`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
 
 A run whose diagnostics are all warnings still writes the operating point. A run with an error writes the observations it reached, as [run-folder.md](run-folder.md#observationsjson) says. That is `{}` when nothing solved, as at t = 0. A transient keeps its grid rows before the error, and its last accepted step is the last row. Its observations end there. A warning found before that error is kept, including a rating sampled on any accepted step before it.
 
@@ -426,8 +426,16 @@ The message for a dropped transfer is `{part} dropped a transfer that broke rule
 | `scroll` | An `ssd1306` took a scroll command, `26h`, `27h`, `29h`, `2Ah`, `2Fh` or `A3h`, which it does not run. Its message is `{part} did not run a scroll command, breaking rule scroll at {t_ps} ps, the first time`. |
 | `read` | A master read from an `ssd1306`, which has no status byte here. It answers 0xFF bytes. Its message is `{part} answered a read with 0xFF bytes, breaking rule read at {t_ps} ps, the first time`. |
 | `bus_width` | An `hd44780_i2c` received an 8-bit command or a function set selecting the 8-bit bus (`DL = 1`), which the PCF8574 backpack cannot drive. |
-| `font` | An `hd44780_i2c` received a function set selecting the 5x10 font (`F = 1`), which is not supported on a 16x2 glass. |
-| `init_wait` | An `hd44780_i2c` received a command or data write before its HD44780U power-on reset wait elapsed (15 ms after `VCC` reaches 4.5 V, or 40 ms after `VCC` reaches 2.7 V, ADE-207-272 Figs. 23–24). The write is dropped as busy, and its time is the first early `E` falling edge. |
+| `font` | An `hd44780_i2c` or `hd44780` received a function set selecting one line of the 5x10 font (`N = 0`, `F = 1`), which is not supported on a 16x2 glass. With two lines `F` is don't care. |
+| `enable_cycle` | An `hd44780` `E` rose sooner after its last rise than `tcycE`, 500 ns from 4.5 V and 1000 ns below (ADE-207-272 pp. 52, 49). The cycle still runs. |
+| `enable_width` | An `hd44780` `E` high was shorter than `PWEH`, 230 ns from 4.5 V and 450 ns below. The cycle still runs. |
+| `setup` | An `hd44780` `RS` or `RW` moved less than `tAS` before `E` rose, 40 ns or 60 ns, or a write's data less than `tDSW` before `E` fell, 80 ns or 195 ns. The cycle still runs. |
+| `hold` | An `hd44780` `RS` or `RW` moved less than `tAH` after `E` fell or while `E` was high, 10 ns or 20 ns, or a write's data less than `tH` after `E` fell, 10 ns. The cycle still runs. |
+| `contrast` | An `hd44780` had its display on with `VDD - V0` under its `lcd_voltage`, so its glass shows no characters. Its time is the first such moment. |
+| `init_busy` | An `hd44780_i2c` or `hd44780` received a command or data write inside its HD44780U internal reset's busy time, 10 ms after `VCC` reaches 4.5 V (ADE-207-272 p. 23), or the whole 40 ms wait after `VCC` reaches 2.7 V below it (Figs. 23–24). The controller drops the write, and the message says so. Its time is the first such `E` falling edge. |
+| `init_wait` | An `hd44780_i2c` or `hd44780` received a command or data write after its internal reset's busy time and before its power-on reset wait elapsed, 15 ms after `VCC` reaches 4.5 V (Figs. 23–24). The controller runs the write, and the message says it ran early. Its time is the first such `E` falling edge. |
+| `low_supply` | An `hd44780` started a bus cycle, an `E` rise, with `V(VDD) - V(VSS)` under its `operating_voltage`, the module's minimum operating supply, and at or above the controller's 2.7 V. The cycle still runs as the controller runs at that supply. Its time is the first such rise. |
+| `input_level` | A `max7219` driven logic input (`DIN`, `CLK`, or `LOAD`) stayed between its `VIL` (0.8 V) and `VIH` (3.5 V) thresholds longer than a normal edge transition (500 ns) while powered, where the datasheet does not guarantee the logic level (for example, 3.3 V logic driving a 5 V MAX7219 without a level shifter). Undriven high-Z pins during MCU boot are not flagged. |
 
 ## chip.link_miswired
 
@@ -821,7 +829,22 @@ A capacitor with `ratings.reverse_voltage` uses the same code on pin `a`. The fl
 
 A `linear_regulator` uses the same code on pin `in`. The floor is -0.3 V over pin `gnd`, and there is no ceiling. The message calls `gnd` the chip's ground. A voltage exactly on -0.3 V is inside. The model has no diode from `out` to `in`, so a reversed input stays at the voltage the circuit drives and the warning is what names it.
 
-An `analog_temp_sensor` checks `vs` over `gnd` using the same code. When `ratings.operating_supply` is set, operating while powered (`V(vs) - V(gnd) >= 0.1 V`) below `min` emits `#<part>.pin.vs reaches {peak} V over the chip's ground, below its {low} V minimum operating supply`, and above `max` (up to `ratings.supply_voltage`, when set) emits `#<part>.pin.vs reaches {peak} V over the chip's ground, above its {high} V maximum operating supply`. When `ratings.supply_voltage` is set, exceeding it emits `#<part>.pin.vs reaches {peak} V over the chip's ground, outside its {high} V ceiling`.
+An `analog_temp_sensor` checks `vs` over `gnd` using the same code. When `ratings.supply_max` is set, a supply above it (up to `ratings.supply_voltage`, when set) emits `#<part>.pin.vs reaches {peak} V over the chip's ground, above its {high} V maximum operating supply`. When `ratings.supply_voltage` is set, exceeding it emits `#<part>.pin.vs reaches {peak} V over the chip's ground, outside its {high} V ceiling`. A supply below `ratings.supply_min` is [`rating.supply_low`](#ratingsupply_low).
+## rating.supply_low
+
+Severity `warning`. Refs is the chip's supply pin, `#<part>.pin.<pin>`. `t_ps` is the first time the supply pin sat between the unpowered floor and its datasheet minimum, 0 for the operating point.
+
+The message is:
+
+```text
+{ref} supply drops to {voltage} V over the chip's ground, below its {limit} V minimum for {over_ps} ps
+```
+
+When the minimum depends on the chip's clock frequency (such as an `atmega328p` per DS40002061B Figure 29-1), the message adds ` at {freq}` after `minimum`, for example `below its 3.78 V minimum at 16 MHz`. Each voltage in the message is rounded to 3 significant digits. ` for {over_ps} ps` is left out for an operating point, and while `over_ps` is 0. All warning episodes for one supply pin merge into one warning per run, naming the level the rail held continuously for at least 1 us most recently while above the unpowered floor and below the minimum (or the episode's upper bound when no warning episode lasted 1 us, or the operating-point voltage).
+
+`data` holds `limit`, `over_ps`, `peak_ps`, and `voltage`, unrounded, plus `clock_hz` when the minimum depends on the clock frequency. `limit` is the part's declared `ratings.supply_min` (or `ratings.io_supply_min` on `bmp280`'s `VDDIO`, or the safe-operating-area minimum at `clock_hz` on `atmega328p`). `voltage` is `V(pin) - V(ground)` at `peak_ps`, the supply voltage the rail held continuously for at least 1 us most recently while strictly above the unpowered floor and below the minimum (for an operating point or when no warning episode lasted 1 us, the operating-point sample or the episode's upper bound), so nanosecond single-clock dips inside a longer low-supply episode do not replace the voltage the rail held. `over_ps` is `null` for an operating point, and sums the time spent below the minimum across warning episodes in the run.
+
+A supply voltage at or below 0.1 V over the chip's ground is treated as unpowered (switched off or disconnected) and stays silent, and a supply at or above the minimum (once both voltages are rounded to 3 significant digits) stays silent. A clean passage through the band from off to in range or from in range to off is a normal power cycle and stays silent; a sag that leaves and returns above the minimum, a visit that enters from off and falls back to off without reaching the minimum, or a rail in the band when the run starts or ends warns `rating.supply_low` while the part keeps running as its model already behaves.
 
 ## regulator.current_limit
 

@@ -52,10 +52,8 @@ const VALID_BODY: &str = r#"
   },
   "quiescent_current": { "value": 5e-5, "unit": "A" },
   "ratings": {
-    "operating_supply": {
-      "min": { "value": 2.7, "unit": "V" },
-      "max": { "value": 5.5, "unit": "V" }
-    },
+    "supply_min": { "value": 2.7, "unit": "V" },
+    "supply_max": { "value": 5.5, "unit": "V" },
     "supply_voltage": { "value": 7.0, "unit": "V" }
   }
 "#;
@@ -81,7 +79,8 @@ fn valid_analog_temp_sensor_parses_pins_quantities_and_ratings() {
     };
     assert!(matches!(driven.curve, Curve::Step { .. }));
     assert_eq!(sensor.quiescent_current.si.get(), 5e-5);
-    assert_eq!(sensor.operating_supply, Some((2.7, 5.5)));
+    assert_eq!(sensor.supply_min.as_ref().unwrap().si.get(), 2.7);
+    assert_eq!(sensor.supply_max.as_ref().unwrap().si.get(), 5.5);
     assert_eq!(sensor.max_supply.as_ref().unwrap().si.get(), 7.0);
 }
 
@@ -103,7 +102,8 @@ fn ratings_are_optional_and_fixed_output_voltage_and_resistance_work() {
         panic!("expected AnalogTempSensor");
     };
     assert_eq!(sensor.output_resistance.fixed().unwrap().si.get(), 60.0);
-    assert_eq!(sensor.operating_supply, None);
+    assert_eq!(sensor.supply_min, None);
+    assert_eq!(sensor.supply_max, None);
     assert_eq!(sensor.max_supply, None);
 }
 
@@ -114,10 +114,8 @@ fn bad_units_and_values_are_rejected() {
       "output_resistance": { "value": 60.0, "unit": "V" },
       "quiescent_current": { "value": -1e-5, "unit": "A" },
       "ratings": {
-        "operating_supply": {
-          "min": { "value": 0.0, "unit": "V" },
-          "max": { "value": 5.5, "unit": "V" }
-        },
+        "supply_min": { "value": 0.0, "unit": "V" },
+        "supply_max": { "value": 5.5, "unit": "V" },
         "supply_voltage": { "value": -7.0, "unit": "V" }
       }
     "#;
@@ -134,8 +132,14 @@ fn bad_units_and_values_are_rejected() {
     );
 
     let inverted_supply = VALID_BODY
-        .replace(r#""min": { "value": 2.7"#, r#""min": { "value": 6.0"#)
-        .replace(r#""max": { "value": 5.5"#, r#""max": { "value": 2.7"#);
+        .replace(
+            r#""supply_min": { "value": 2.7"#,
+            r#""supply_min": { "value": 6.0"#,
+        )
+        .replace(
+            r#""supply_max": { "value": 5.5"#,
+            r#""supply_max": { "value": 2.7"#,
+        );
     let found = parse(doc(&inverted_supply, WORLD_TEMP).as_bytes()).unwrap_err();
     assert!(found.iter().any(|d| matches!(
         d,
@@ -143,6 +147,6 @@ fn bad_units_and_values_are_rejected() {
             field,
             rule: ValueRule::AboveHigh,
             ..
-        } if field == "ratings.operating_supply.min"
+        } if field == "ratings.supply_min"
     )));
 }

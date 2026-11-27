@@ -22,7 +22,7 @@ use orbe_engine::name::{Name, Quantity, Ref as EngineRef};
 
 use orbe_engine::finite::Finite;
 use orbe_engine::{
-    EdgeCursor, Input, Probe, Refused, Rejected, Session, Setting, Status, WorldChange,
+    EdgeCursor, Input, Probe, Refused, Rejected, Session, Setting, Status, SupplyMark, WorldChange,
 };
 use orbe_model::Time;
 use orbe_scene::{Files, MapParam, RefMap, View};
@@ -36,7 +36,7 @@ use crate::reply::{
 };
 use crate::target::{
     Ref, Target, angle_reading, digit_reading, hz_reading, lcd_engine, live_params, names,
-    one_engine, reports_hint, resolve, rgb_reading, screen_engine, text_reading,
+    one_engine, reports_hint, resolve, rgb_reading, text_reading,
 };
 
 mod bound;
@@ -82,6 +82,10 @@ struct Open {
     /// What `play`'s ticks ran, from where that stretch started. The CLI's next `pause` or
     /// `step` lists it and clears it. A page's `pause` leaves it.
     unlisted: Option<Stepped>,
+    /// Each supply pin's low episodes as `open`, a CLI `step` or a `pause` last listed them.
+    /// `rating.supply_low` merges a pin's episodes, so its key cannot tell a new one from one
+    /// already listed. See [`Self::list_supply`].
+    listed_supply: Vec<SupplyMark>,
     scene: String,
     stop_ps: u64,
     max_step_ps: u64,
@@ -536,6 +540,7 @@ impl Open {
             contacts,
             playing: false,
             unlisted: None,
+            listed_supply: Vec::new(),
             scene,
             stop_ps: transient.stop_ps,
             max_step_ps: transient.max_step_ps,
@@ -553,6 +558,7 @@ impl Open {
             files,
         };
         open.channels = open.bind_channels();
+        open.listed_supply = open.engine.supply_marks(&open.engine.probe());
         Ok(open)
     }
 
@@ -612,9 +618,13 @@ impl Open {
     /// `from_ps` on that list is where the held stretch started.
     fn pause(&mut self) -> Outcome {
         self.playing = false;
+        let mut played = self.unlisted.take();
+        if let Some(held) = &mut played {
+            self.list_supply(held);
+        }
         Ok(Data::Paced {
             playing: false,
-            played: self.unlisted.take(),
+            played,
         })
     }
 
@@ -629,7 +639,10 @@ impl Open {
     /// accepted step's.
     fn findings(&self, probe: &Probe) -> Vec<EngineDiagnostic> {
         let mut found = self.engine.diagnostics();
-        found.retain(|diagnostic| !diagnostic.over_now());
+        // The probe's `rating.supply_low` comes with the ratings over now.
+        found.retain(|diagnostic| {
+            !diagnostic.over_now() && !matches!(diagnostic, EngineDiagnostic::RatingSupplyLow(_))
+        });
         let known: BTreeSet<Key> = found.iter().map(key).collect();
         for over in self.engine.over_ratings(probe) {
             if !known.contains(&key(&over)) {
@@ -641,7 +654,14 @@ impl Open {
             EngineDiagnostic::NetFloating {
                 net: EngineRef::Net(name),
             } => !self.refs.quiet_floating.contains(name.as_str()),
-            _ => true,
+            other => {
+                let refs = other.refs();
+                !(refs.len() == 1
+                    && self
+                        .refs
+                        .quiet_warnings
+                        .contains(&(other.code().to_string(), refs[0].to_string())))
+            }
         });
         orbe_engine::run_folder::sort_diagnostics(&mut found);
         found
@@ -949,6 +969,13 @@ impl Open {
                     },
                 )
             }
+            Target::MatrixBrightness { path } => (
+                format!("{path}.brightness"),
+                Reading::Quantity {
+                    unit: Unit::Ampere,
+                    value: self.matrix_brightness(&path),
+                },
+            ),
             Target::Color {
                 path,
                 reading,
@@ -1140,18 +1167,20 @@ impl Open {
     }
 
     /// What engine part `engine`, a screen, shows now.
-    fn screen(&self, engine: &str) -> Screen {
+    pub(super) fn screen(&self, engine: &str) -> Screen {
         let display = self
             .engine
             .display(&engine_name(engine))
             .expect("a part with a reading of screen is a display");
         let panel = display.panel();
         let pixels = display.pixels();
-        let lit = orbe_engine::display::lit_count(&pixels);
-        let rows = orbe_engine::display::art(panel.width, &pixels)
+        let lit = orbe_engine::display::lit_count(&panel, &pixels);
+        let rows = orbe_engine::display::art(&panel, &pixels)
             .lines()
             .map(str::to_string)
             .collect();
+        let brightness = (panel.kind == "max7219")
+            .then(|| orbe_engine::device::max7219::dot_brightness(&panel, &display.image()));
         Screen {
             kind: panel.kind.to_string(),
             width: panel.width,
@@ -1159,6 +1188,7 @@ impl Open {
             on: panel.flags.display_on && !panel.flags.sleep && !panel.flags.reset,
             lit,
             rows,
+            brightness,
             settings: panel
                 .settings
                 .iter()
@@ -1167,7 +1197,123 @@ impl Open {
         }
     }
 
-    /// The visible 16×2 character lines of an `hd44780_i2c` engine part.
+    /// Screen engine names at or under `path`, ordered left-to-right by local `x` placement
+    /// inside `path` so a chained module (such as a 4-in-1 MAX7219) stitches in visual order.
+    pub(super) fn ordered_screen_engines(&self, path: &str) -> Vec<String> {
+        let found = crate::target::screen_engines(&self.refs, path);
+        if found.len() <= 1 {
+            return found.into_iter().map(|(_, engine)| engine).collect();
+        }
+        let mut positioned: Vec<(f64, String, String)> = found
+            .into_iter()
+            .map(|(desc, engine)| {
+                let x = self.relative_x(path, &desc).unwrap_or(0.0);
+                (x, desc, engine)
+            })
+            .collect();
+        positioned.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        positioned
+            .into_iter()
+            .map(|(_, _, engine)| engine)
+            .collect()
+    }
+
+    /// Local X offset of descendant `desc` inside ancestor `root`, from `self.view.instances`.
+    fn relative_x(&self, root: &str, desc: &str) -> Option<f64> {
+        fn find<'a>(
+            instances: &'a [orbe_scene::Instance],
+            segs: &[&str],
+        ) -> Option<&'a orbe_scene::Instance> {
+            let (first, rest) = segs.split_first()?;
+            let inst = instances.iter().find(|inst| inst.name == *first)?;
+            if rest.is_empty() {
+                Some(inst)
+            } else {
+                find(&inst.children, rest)
+            }
+        }
+        let root_segs: Vec<&str> = root.split('.').collect();
+        let mut current = find(&self.view.instances, &root_segs)?;
+        let suffix = desc.strip_prefix(root)?.strip_prefix('.')?;
+        let mut x = 0.0;
+        for seg in suffix.split('.') {
+            current = current.children.iter().find(|inst| inst.name == seg)?;
+            if let Some(placement) = current.placement {
+                x += placement.at[0];
+            }
+        }
+        Some(x)
+    }
+
+    /// Reads one screen or stitches a horizontal row of same-height screens left-to-right.
+    pub(super) fn screens(&self, engines: &[String]) -> Screen {
+        if let [one] = engines {
+            return self.screen(one);
+        }
+        let tiles: Vec<Screen> = engines.iter().map(|engine| self.screen(engine)).collect();
+        let first = &tiles[0];
+        let height = first.height;
+        let width: u16 = tiles.iter().map(|tile| tile.width).sum();
+        let lit: usize = tiles.iter().map(|tile| tile.lit).sum();
+        let on = tiles.iter().any(|tile| tile.on);
+        let rows: Vec<String> = (0..usize::from(height))
+            .map(|r| {
+                tiles
+                    .iter()
+                    .map(|tile| tile.rows.get(r).map_or("", String::as_str))
+                    .collect::<String>()
+            })
+            .collect();
+        let brightness = tiles.iter().all(|tile| tile.brightness.is_some()).then(|| {
+            (0..usize::from(height))
+                .map(|r| {
+                    tiles
+                        .iter()
+                        .flat_map(|tile| {
+                            tile.brightness
+                                .as_ref()
+                                .and_then(|grid| grid.get(r))
+                                .into_iter()
+                                .flatten()
+                                .copied()
+                        })
+                        .collect()
+                })
+                .collect()
+        });
+        Screen {
+            kind: first.kind.clone(),
+            width,
+            height,
+            on,
+            lit,
+            rows,
+            brightness,
+            settings: first.settings.clone(),
+        }
+    }
+
+    /// Average forward current (amperes) of lit dots on a MAX7219 matrix, or `0.0` when dark.
+    pub(super) fn matrix_brightness(&self, path: &str) -> f64 {
+        let engines = self.ordered_screen_engines(path);
+        if engines.is_empty() {
+            return 0.0;
+        }
+        let screen = self.screens(&engines);
+        let Some(grid) = &screen.brightness else {
+            return 0.0;
+        };
+        let (mut sum, mut count) = (0.0, 0usize);
+        for &a in grid.iter().flatten() {
+            if a > 0.0 {
+                sum += a;
+                count += 1;
+            }
+        }
+        if count == 0 { 0.0 } else { sum / count as f64 }
+    }
+
+    /// The visible 16×2 character lines of an `hd44780` or `hd44780_i2c` engine part.
     pub(super) fn lcd_text(&self, engine: &str) -> LcdText {
         let display = self
             .engine
@@ -1175,9 +1321,9 @@ impl Open {
             .expect("a part with a reading of text is a character LCD");
         let panel = display.panel();
         let frame = display.image();
-        let lines = orbe_engine::device::hd44780_i2c::visible_lines(&panel, &frame);
-        let backlight = orbe_engine::device::hd44780_i2c::backlight_on(&panel);
-        let on = orbe_engine::device::hd44780_i2c::text_visible(&panel);
+        let lines = orbe_engine::device::hd44780::visible_lines(&panel, &frame);
+        let backlight = orbe_engine::device::hd44780::backlight_on(&panel);
+        let on = orbe_engine::device::hd44780::text_visible(&panel);
         LcdText {
             lines,
             on,
@@ -1185,13 +1331,13 @@ impl Open {
         }
     }
 
-    /// Whether an `hd44780_i2c` engine part's backlight is lit.
+    /// Whether an `hd44780` or `hd44780_i2c` engine part's backlight is lit.
     pub(super) fn lcd_backlight(&self, engine: &str) -> bool {
         let display = self
             .engine
             .display(&engine_name(engine))
             .expect("a part with a reading of backlight is a character LCD");
-        orbe_engine::device::hd44780_i2c::backlight_on(&display.panel())
+        orbe_engine::device::hd44780::backlight_on(&display.panel())
     }
 
     /// A part's own reading: its 7-segment digit, character LCD text, screen glass, or its light
@@ -1207,8 +1353,9 @@ impl Open {
                 .ok()
                 .map(|engine| Reading::Text(self.lcd_text(&engine)));
         }
-        if let Some(engine) = screen_engine(&self.refs, path) {
-            return Some(Reading::Screen(self.screen(&engine)));
+        let screens = self.ordered_screen_engines(path);
+        if !screens.is_empty() {
+            return Some(Reading::Screen(self.screens(&screens)));
         }
         let contact = self.contact_closed(path);
         let engine = one_engine(path, part, Code::NoReading).ok();
