@@ -291,7 +291,7 @@ fn a_null_rating_stays_on_the_card_and_a_number_default_keeps_its_unit() {
         .iter()
         .map(|rating| rating.name.as_str())
         .collect();
-    assert_eq!(names, ["current", "power"]);
+    assert_eq!(names, ["current", "power", "reverse_voltage"]);
     let led_current = led
         .ratings
         .iter()
@@ -302,8 +302,14 @@ fn a_null_rating_stays_on_the_card_and_a_number_default_keeps_its_unit() {
         .iter()
         .find(|rating| rating.name == "power")
         .unwrap();
+    let led_reverse = led
+        .ratings
+        .iter()
+        .find(|rating| rating.name == "reverse_voltage")
+        .unwrap();
     assert_eq!(led_current.value, Some(0.03));
     assert_eq!(led_power.value, Some(0.075));
+    assert_eq!(led_reverse.value, Some(5.0));
 
     let diode = card(&parts_dir(), "diode-1n4007").unwrap();
     let current = diode
