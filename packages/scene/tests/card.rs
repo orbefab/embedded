@@ -632,3 +632,40 @@ fn starter_kit_rgb_ring_and_joystick_show_ratings_and_match_search() {
         );
     }
 }
+
+#[test]
+fn tmp36_shows_ratings_pins_and_matches_search() {
+    let tmp = card(&parts_dir(), "tmp36").unwrap();
+    let pin_names: Vec<&str> = tmp.pins.iter().map(|pin| pin.name.as_str()).collect();
+    assert_eq!(pin_names, ["VS", "VOUT", "GND"]);
+    assert_eq!(tmp.real.maker.as_deref(), Some("Analog Devices"));
+    assert_eq!(tmp.real.number.as_deref(), Some("TMP36GT9Z"));
+    for (name, value) in [
+        ("supply_voltage", 7.0),
+        ("temperature.min", -40.0),
+        ("temperature.max", 125.0),
+    ] {
+        assert!(
+            tmp.ratings
+                .iter()
+                .any(|r| r.name == name && r.value == Some(value) && !r.characterized),
+            "tmp36: missing rating {name}={value} in {:?}",
+            tmp.ratings
+        );
+    }
+    for query in [
+        "tmp36",
+        "temperature",
+        "thermometer",
+        "sensor",
+        "analog",
+        "to-92",
+        "through-hole",
+    ] {
+        let hits = search(&parts_dir(), query);
+        assert!(
+            hits.iter().any(|card| card.name == "tmp36"),
+            "query `{query}` missed `tmp36`"
+        );
+    }
+}

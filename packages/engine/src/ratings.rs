@@ -10,7 +10,8 @@ use crate::chip::regulator::{
     LIMIT_HOLD_PS, LIMIT_KNEE_FRACTION, LIMIT_SAG_FRACTION, MIN_CHARGE_RATE, STALL_PS, limit_drop,
 };
 use crate::diagnostic::{
-    CurrentLimitExcursion, Diagnostic, Excursion, VoltageExcursion, exceeds_rounded, significant,
+    CurrentLimitExcursion, Diagnostic, Excursion, TemperatureExcursion, VoltageExcursion,
+    exceeds_rounded, significant,
 };
 use crate::finite::Finite;
 use crate::name::{Name, Quantity, Ref};
@@ -57,6 +58,10 @@ pub(crate) struct Ratings {
     limits: Vec<RegulatorLimit>,
     /// A resistor's operating voltage, checked on the peak of a drive that leaves zero.
     drives: Vec<CoilDrive>,
+    /// A powered analog part's minimum operating supply voltage.
+    supply_floors: Vec<SupplyFloor>,
+    /// A powered part's specified operating temperature range.
+    temperatures: Vec<TemperatureRange>,
     chips: Vec<Gauge>,
     last: Option<Time>,
     /// The last sample was a step that restarted, so the next sample holds back to it.
@@ -281,6 +286,34 @@ struct Pin {
     strong_pull_up: Option<f64>,
     pull_down: Option<f64>,
     leakage: Option<f64>,
+}
+
+#[derive(Clone)]
+struct SupplyFloor {
+    pin: Ref,
+    vs: usize,
+    gnd: usize,
+    min: f64,
+    unpowered_v: f64,
+    worst: f64,
+    over: bool,
+    excursion: Option<VoltageExcursion>,
+}
+
+#[derive(Clone)]
+struct TemperatureRange {
+    part: Ref,
+    temp: usize,
+    vs: usize,
+    gnd: usize,
+    unpowered_v: f64,
+    min: f64,
+    max: f64,
+    min_rounded: f64,
+    max_rounded: f64,
+    worst: f64,
+    over: bool,
+    excursion: Option<TemperatureExcursion>,
 }
 
 #[derive(Clone)]
@@ -680,12 +713,65 @@ impl Ratings {
                 _ => {}
             }
         }
+        let mut supply_floors = Vec::new();
+        let mut temperatures = Vec::new();
+        let temp_column = columns.index(&Ref::World(crate::world::Quantity::Temperature));
+        for (_, part) in netlist.parts() {
+            let Model::AnalogTempSensor(sensor) = &part.model else {
+                continue;
+            };
+            let vs = columns.net(sensor.pins[0]);
+            let gnd = columns.net(sensor.pins[2]);
+            let pin = Ref::Pin(part.name.clone(), Name::new("vs").expect("a pin name"));
+            windows.push(Window {
+                pin: pin.clone(),
+                column: vs,
+                vcc: gnd,
+                gnd,
+                below: Some(crate::chip::analog_temp_sensor::SUPPLY_FLOOR_V),
+                above: sensor
+                    .max_supply
+                    .as_ref()
+                    .map(|max| Ceiling::Fixed(max.si.get())),
+                worst: 0.0,
+                over: false,
+                excursion: None,
+            });
+            supply_floors.push(SupplyFloor {
+                pin,
+                vs,
+                gnd,
+                min: sensor.min_supply.si.get(),
+                unpowered_v: crate::chip::analog_temp_sensor::UNPOWERED_V,
+                worst: 0.0,
+                over: false,
+                excursion: None,
+            });
+            if let (Some((min, max)), Some(temp)) = (sensor.temperature, temp_column) {
+                temperatures.push(TemperatureRange {
+                    part: Ref::Part(part.name.clone()),
+                    temp,
+                    vs,
+                    gnd,
+                    unpowered_v: crate::chip::analog_temp_sensor::UNPOWERED_V,
+                    min,
+                    max,
+                    min_rounded: significant(min),
+                    max_rounded: significant(max),
+                    worst: 0.0,
+                    over: false,
+                    excursion: None,
+                });
+            }
+        }
         Ratings {
             timing,
             watches,
             windows,
             limits,
             drives,
+            supply_floors,
+            temperatures,
             chips,
             last: None,
             restarted: false,
@@ -972,6 +1058,82 @@ impl Ratings {
                 }
             }
         }
+        for floor in &mut self.supply_floors {
+            elapsed(
+                floor.over,
+                floor.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
+                self.last,
+            );
+            let v = row[floor.vs].get() - row[floor.gnd].get();
+            floor.over = v >= floor.unpowered_v && exceeds_rounded(floor.min, significant(v));
+            if !floor.over {
+                continue;
+            }
+            let past = floor.min - v;
+            match &mut floor.excursion {
+                None => {
+                    floor.worst = past;
+                    floor.excursion = Some(VoltageExcursion {
+                        pin: floor.pin.clone(),
+                        low: Some(floor.min),
+                        high: None,
+                        peak: v,
+                        peak_at: at,
+                        first: at,
+                        over_ps: self.timing.over_ps(),
+                        operating: true,
+                    });
+                }
+                Some(excursion) if past > floor.worst => {
+                    floor.worst = past;
+                    excursion.peak = v;
+                    excursion.peak_at = at;
+                }
+                Some(_) => {}
+            }
+        }
+        for range in &mut self.temperatures {
+            elapsed(
+                range.over,
+                range.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
+                self.last,
+            );
+            let vs = row[range.vs].get() - row[range.gnd].get();
+            let temp = row[range.temp].get();
+            let powered = vs >= range.unpowered_v;
+            let rounded = significant(temp);
+            let below = powered && rounded < range.min_rounded;
+            let above = powered && rounded > range.max_rounded;
+            range.over = below || above;
+            if !range.over {
+                continue;
+            }
+            let past = if below {
+                range.min - temp
+            } else {
+                temp - range.max
+            };
+            match &mut range.excursion {
+                None => {
+                    range.worst = past;
+                    range.excursion = Some(TemperatureExcursion {
+                        part: range.part.clone(),
+                        low: range.min,
+                        high: range.max,
+                        peak: temp,
+                        peak_at: at,
+                        first: at,
+                        over_ps: self.timing.over_ps(),
+                    });
+                }
+                Some(excursion) if past > range.worst => {
+                    range.worst = past;
+                    excursion.peak = temp;
+                    excursion.peak_at = at;
+                }
+                Some(_) => {}
+            }
+        }
         self.last = Some(at);
         self.restarted = false;
     }
@@ -998,10 +1160,20 @@ impl Ratings {
             .drives
             .iter()
             .filter_map(|drive| Some(Diagnostic::RatingVoltage(drive.excursion.clone()?)));
+        let floors = self
+            .supply_floors
+            .iter()
+            .filter_map(|floor| Some(Diagnostic::RatingVoltage(floor.excursion.clone()?)));
+        let temperatures = self
+            .temperatures
+            .iter()
+            .filter_map(|range| Some(Diagnostic::RatingTemperature(range.excursion.clone()?)));
         currents
             .chain(voltages)
             .chain(limits)
             .chain(drives)
+            .chain(floors)
+            .chain(temperatures)
             .collect()
     }
 
@@ -1079,6 +1251,8 @@ impl Ratings {
             || self.windows.iter().any(|w| w.excursion.is_some())
             || self.limits.iter().any(|l| l.excursion.is_some())
             || self.drives.iter().any(|d| d.excursion.is_some())
+            || self.supply_floors.iter().any(|f| f.excursion.is_some())
+            || self.temperatures.iter().any(|t| t.excursion.is_some())
         {
             return false;
         }
@@ -1120,7 +1294,19 @@ impl Ratings {
             };
             !judged
         });
-        watches && windows && limits && drives
+        let floors = self.supply_floors.iter().all(|floor| {
+            let v = row[floor.vs].get() - row[floor.gnd].get();
+            !(v >= floor.unpowered_v && exceeds_rounded(floor.min, significant(v)))
+        });
+        let temperatures = self.temperatures.iter().all(|range| {
+            let vs = row[range.vs].get() - row[range.gnd].get();
+            if vs < range.unpowered_v {
+                return true;
+            }
+            let rounded = significant(row[range.temp].get());
+            rounded >= range.min_rounded && rounded <= range.max_rounded
+        });
+        watches && windows && limits && drives && floors && temperatures
     }
 }
 

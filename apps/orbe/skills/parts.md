@@ -21,7 +21,7 @@ A folder already at `parts/<id>/` is `part_exists` and nothing is written. The m
 
 Addressable LEDs: `neopixel-stick-8`, `neopixel-ring-16` (`nano-neopixel-ring`). 4-pin RGB LEDs: `led-5mm-rgb-cc` (`nano-rgb-led`), `led-5mm-rgb-ca` (`@<id>.red`/`.green`/`.blue`). Shift register: `hc595-dip16` (SRCLR high, OE low; `nano-shift-leds`). Level shifter: `bss138-level-shifter`.
 
-Thermistor: `thermistor-ntc-10k` (`nano-thermistor`). Batteries: `battery-9v` (`nano-9v-regulator`), `battery-aa-4x` (`nano-aa-pack`). 2-axis joystick: `joystick-ky023` (`@<id>.x.position`, `@<id>.y.position`, `@<id>.sw`; `nano-joystick`).
+Temperature sensors: `tmp36` (`nano-tmp36`), `thermistor-ntc-10k` (`nano-thermistor`). Batteries: `battery-9v` (`nano-9v-regulator`), `battery-aa-4x` (`nano-aa-pack`). 2-axis joystick: `joystick-ky023` (`@<id>.x.position`, `@<id>.y.position`, `@<id>.sw`; `nano-joystick`).
 
 ## Blocks
 

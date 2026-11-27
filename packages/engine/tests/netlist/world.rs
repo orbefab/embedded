@@ -292,7 +292,7 @@ fn a_curve_that_breaks_its_field_at_an_end_of_the_range_is_netlist_value() {
         one(&json),
         (
             "netlist.value".into(),
-            "#r1 resistance.curve at 125.0 degC is -1250.0; it must be positive".into()
+            "#r1 resistance.curve at 150.0 degC is -3500.0; it must be positive".into()
         )
     );
     let beta = format!(

@@ -1,0 +1,155 @@
+// Analog Devices TMP36 analog temperature sensor in TO-92 (T-3).
+// Output is 750 mV at 25 C with a 10 mV/C scale factor (VOUT = 0.5 + 0.01 * T_C) over -40 to 125 C.
+{
+  "format": 7,
+  "part": "tmp36",
+  "version": "0.1.0",
+  "title": "Analog temperature sensor, TO-92 (TMP36)",
+  "summary": "Low-voltage analog temperature sensor (750 mV at 25 °C, 10 mV/°C, 2.7 V to 5.5 V supply, -40 °C to 125 °C, TO-92).",
+  "tags": ["tmp36", "temperature", "thermometer", "sensor", "analog", "to-92", "through-hole"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)": "https://www.analog.com/media/en/technical-documentation/data-sheets/tmp35_36_37.pdf",
+  },
+  "real": {
+    "maker": "Analog Devices",
+    "number": "TMP36GT9Z",
+    "datasheet": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
+  },
+  "pins": { "VS": [1], "VOUT": [2], "GND": [3] },
+  "model": {
+    "kind": "analog_temp_sensor",
+    "pins": { "vs": "VS", "vout": "VOUT", "gnd": "GND" },
+    "output_voltage": {
+      "kind": "world",
+      "quantity": "temperature",
+      "curve": {
+        "kind": "linear",
+        "x0": {
+          "value": 25.0,
+          "unit": "degC",
+          "source": {
+            "datasheet": {
+              "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
+              "at": "Table 1, p3, TMP36 Output Voltage reference temperature = 25 C",
+              "basis": "nominal",
+            },
+          },
+        },
+        "y0": {
+          "value": 0.75,
+          "unit": "V",
+          "source": {
+            "datasheet": {
+              "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
+              "at": "Table 1, p3, TMP36 Output Voltage at 25 C = 750 mV",
+              "basis": "typical",
+            },
+          },
+        },
+        "x1": {
+          "value": 125.0,
+          "unit": "degC",
+          "source": {
+            "datasheet": {
+              "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
+              "at": "Table 1, p3, TMP36 Specified Temperature Range upper end = +125 C",
+              "basis": "nominal",
+            },
+          },
+        },
+        "y1": {
+          "value": 1.75,
+          "unit": "V",
+          "source": {
+            "closed_form": {
+              "note": "Analog Devices TMP35/TMP36/TMP37 Rev. H Table 1, p3: 750 mV at 25 C + 10 mV/C * (125 - 25) C = 1.75 V",
+            },
+          },
+        },
+      },
+    },
+    "output_resistance": {
+      "value": 60.0,
+      "unit": "ohm",
+      "source": {
+        "closed_form": {
+          "note": "Analog Devices TMP35/TMP36/TMP37 Rev. H Table 1, p3: Load Regulation (0 to 50 uA, -40 to 105 C) 6 mC/uA typ * 10 mV/C = 60 ohm",
+        },
+      },
+    },
+    "quiescent_current": {
+      "value": 5e-5,
+      "unit": "A",
+      "source": {
+        "datasheet": {
+          "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
+          "at": "Table 1, p3, Supply Current (Unloaded) ISY (ON) < 50 uA",
+          "basis": "max",
+        },
+      },
+    },
+    "min_supply": {
+      "value": 2.7,
+      "unit": "V",
+      "source": {
+        "datasheet": {
+          "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
+          "at": "Table 1, p3, Operating Supply Voltage Range = 2.7 V to 5.5 V",
+          "basis": "min",
+        },
+      },
+    },
+    "ratings": {
+      "supply_voltage": {
+        "value": 7.0,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
+            "at": "Table 2, p4, Absolute Maximum Ratings, Supply Voltage = 7 V",
+            "basis": "absolute_max",
+          },
+        },
+      },
+      "temperature": {
+        "min": {
+          "value": -40.0,
+          "unit": "degC",
+          "source": {
+            "datasheet": {
+              "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
+              "at": "Table 1, p3, Specified Temperature Range = -40 C to +125 C",
+              "basis": "min",
+            },
+          },
+        },
+        "max": {
+          "value": 125.0,
+          "unit": "degC",
+          "source": {
+            "datasheet": {
+              "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
+              "at": "Table 1, p3, Specified Temperature Range = -40 C to +125 C",
+              "basis": "max",
+            },
+          },
+        },
+      },
+    },
+  },
+  "not_simulated": [
+    {
+      "what": "accuracy and nonlinearity",
+      "why": "Every part follows the nominal 750 mV at 25 C + 10 mV/C line. Analog Devices Rev. H Table 1 specifies +/- 1 C typ (+/- 2 C F-grade / +/- 3 C G-grade max) at 25 C, +/- 2 C typ (+/- 3 C F-grade / +/- 4 C G-grade max) over -40 to 125 C, and +/- 0.5 C typ nonlinearity.",
+    },
+    {
+      "what": "short-circuit current limit and capacitive load stability",
+      "why": "The output stage is modelled as a 60 ohm source clamped to [0, VS]. Table 1's 250 uA typical short-circuit current limit and capacitive-load ringing above 10 nF are not modelled.",
+    },
+    {
+      "what": "self-heating and thermal response time",
+      "why": "Output voltage follows world temperature immediately. Self-heating from the TO-92 162 C/W thermal resistance and the thermal settling time constant are not modelled.",
+    },
+  ],
+}

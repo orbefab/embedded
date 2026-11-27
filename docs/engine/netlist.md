@@ -87,7 +87,7 @@ The world is the room the circuit sits in. Its quantities are a closed table, ex
 
 | Quantity | Unit | Range | A scene's default |
 | --- | --- | --- | --- |
-| `temperature` | `degC` | -40 to 125 | 25 |
+| `temperature` | `degC` | -55 to 150 | 25 |
 | `humidity` | `%RH` | 0 to 100 | 50 |
 | `light` | `lx` | 0 to 100000 | 300 |
 | `pressure` | `Pa` | 30000 to 110000 | 101325 |
@@ -510,6 +510,21 @@ The board fragment uses a second fit of the same law, the legacy standard-grade 
 At 0.001 A and 4.3 V the law gives 3.299898785234899 V, inside 3.2504999999999997 V to 3.3494999999999995 V. Unloaded line regulation from 4.3 V to 16.0 V is 0.002702604015081711 V, against 0.0027026999999999997 V. Load regulation from 0.001 A to 0.15 A at 4.3 V is 0.0495000000000001 V. Dropout by note 1 on page 7 is 0.007000000000000117 V at 0.001 A and 0.28000000000000025 V at 0.15 A. The points the line does not use are 0.004474638054340119 V at 0 A against 0.001 V, 0.023489932885906395 V at 0.01 A against 0.04 V, and 0.09677852348993321 V at 0.05 A against 0.12 V. A short at 5 V draws 0.3533758822109669 A. The page 7 legacy short typical is 0.4 A, and the law's headroom cannot match it. Ground current at 5 V is 6.5e-05 A at 0 A and 0.00085 A at 0.15 A. It is 7.023333333333332e-05 A at 0.001 A against 7.5e-05 A, 0.00011733333333333333 A at 0.01 A against 0.00012 A, and 0.00032666666666666673 A at 0.05 A against 0.00035 A. An open output at 5 V sits at 3.3004289040043036 V. An open output at 0 V sits at 0.0006984790072844244 V.
 
 The law cannot match the page 7 legacy ripple rejection of 45 dB at 1000 Hz, the output noise of 30 uVrms, or the shutdown ground current of 0.01 uA. The ON/OFF high typical is 1.4 V. The board ties that pin to the input, and the model has no enable. The legacy minimum output capacitor is 2.2 uF. The schematic's C3 is 1 uF. The law has no stability condition. Section 7.1.4 on page 21 allows the output 0.3 V above the input. Reverse current in the body diode is not limited, and the law blocks it. The ground-current ramp reaches its full value at `dropout_voltage`, 0.0051677852348993285 V. The legacy chip is specified from 2.2 V. The new chip's UVLO, 2.2 V typical and 2.4 V maximum rising, is not modelled, and the legacy column has none.
+
+### Analog temperature sensor
+
+`kind` is `analog_temp_sensor`. Pins are `vs`, `vout` and `gnd`.
+
+Its open-circuit output voltage follows `output_voltage` (a fixed value in `V` or a world-driven curve such as `linear` over `temperature`), smoothly clamped between `0` and `V(vs) - V(gnd)` and gated by a smooth supply ramp over `0` to `0.2 V`, in series with `output_resistance`. While powered it draws `quiescent_current` from `vs` to `gnd`, plus any current sourced out of `vout`; current sunk into `vout` returns to `gnd`. When unpowered (`V(vs) - V(gnd) <= 0`), the output sits at `0 V` over `gnd` and the supply draws nothing. `vs` and `vout` each have a DC path to `gnd`. Its observed quantities are `iin` (entering `vs`), `iout` (entering `vout`), and `p`.
+
+| Field | Unit | Rule |
+| --- | --- | --- |
+| `output_voltage` | `V` | value or world curve, finite over range |
+| `output_resistance` | `ohm` | positive, finite reciprocal |
+| `quiescent_current` | `A` | non-negative |
+| `min_supply` | `V` | positive |
+
+`ratings` is optional. When present it may hold `supply_voltage`, a positive value in `V` (absolute maximum `V(vs) - V(gnd)`), and `temperature`, `{ "min", "max" }` in `degC` with `min <= max`. While powered (`V(vs) - V(gnd) >= 0.1 V`), operating below `min_supply` keeps working (clamped to `vs`) and warns [`rating.voltage`](diagnostics.md#ratingvoltage), and a world temperature outside `ratings.temperature` keeps working and warns [`rating.temperature`](diagnostics.md#ratingtemperature). `vs` below -0.3 V or above `ratings.supply_voltage` over `gnd` warns [`rating.voltage`](diagnostics.md#ratingvoltage).
 
 ### Op-amp
 

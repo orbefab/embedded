@@ -181,6 +181,7 @@ fn the_catalog_parts_in_format_5_and_6_have_no_findings() {
         "led-5mm-rgb-cc",
         "led-5mm-rgb-ca",
         "joystick-ky023-pot",
+        "tmp36",
     ] {
         let text =
             fs::read_to_string(common::repo().join(format!("parts/{id}/part.jsonc"))).unwrap();

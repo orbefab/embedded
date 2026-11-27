@@ -24,7 +24,7 @@ for (const block of repoBlocks()) {
 
     test("opens paused in the Worker, plays, and shows what it does", async () => {
       expect(await textOf(page, "time")).toBe("t = 0.000000 s");
-      expect(await page.locator('[data-testid="world"]').count()).toBe(block.kind === "light" || block.kind === "serial" || block.kind === "temperature" ? 1 : 0);
+      expect(await page.locator('[data-testid="world"]').count()).toBe(block.kind === "light" || block.kind === "serial" || block.kind === "temperature" || block.kind === "tmp36" ? 1 : 0);
       expect(await page.evaluate(() => !("orbeFixture" in window))).toBe(true);
       await shot(page, `${block.id}-opened`);
       await showBlock(page, block, false, null);

@@ -1,0 +1,26 @@
+// A TMP36 analog temperature sensor wired to 5V, A0 and GND on an Arduino Nano.
+// The Nano straddles columns 1 to 15 (A0 is a4, 5V is a12, GND is a14).
+// The TMP36 sits in columns 19 to 21 on row c with its flat face forward:
+// VS in c19, VOUT in c20, GND in c21.
+{
+  "format": 1,
+  "parts": {
+    "bb": { "type": "breadboard-400" },
+    "nano": { "type": "nano-board", "firmware": "build/tmp36.ino.hex" },
+    "tmp": { "type": "tmp36" },
+  },
+  "layout": {
+    "bb": { "at": [0, 0, 0] },
+    "nano": { "on": { "D13": "bb.d1" } },
+    "tmp": { "on": { "VS": "bb.c19" } }, // VOUT lands in c20, GND in c21
+  },
+  "nets": { "GND": "nano.GND" },
+  "world": { "temperature": 25 },
+  "wires": [
+    ["bb.a12", "bb.W11", { "color": "#d12b2b" }], // 5V to the + rail
+    ["bb.a14", "bb.X14", { "color": "#161616" }], // GND to the - rail
+    ["bb.a19", "bb.W19", { "color": "#d12b2b" }], // tmp.VS to 5V
+    ["bb.a21", "bb.X21", { "color": "#161616" }], // tmp.GND to GND
+    ["bb.b20", "bb.b4", { "color": "#2e8b57" }], // tmp.VOUT to A0 along row b
+  ],
+}

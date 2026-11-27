@@ -15,7 +15,7 @@ A scene is JSONC: JSON plus `//` comments and trailing commas.
 
 | Quantity | Unit | Range | Default |
 | --- | --- | --- | --- |
-| `temperature` | degC | -40 to 125 | 25 |
+| `temperature` | degC | -55 to 150 | 25 |
 | `humidity` | %RH | 0 to 100 | 50 |
 | `light` | lx | 0 to 100000 | 300 |
 | `pressure` | Pa | 30000 to 110000 | 101325 |
@@ -24,4 +24,4 @@ A part name starts with a letter and then takes letters, digits and `_`. It may 
 
 A param is a number with an optional prefix (`p`, `n`, `u`, `m`, `k`, `M`) and a unit, such as `"10k"`, `"100n"` or `"1ms"`, a choice by name, as `"color": "red"`, or a path from the scene's folder, such as the firmware. The part reads that file as text, or as bytes when the param says `"as": "blob"`. A 5 mm or 3 mm LED colour is its own part: `led-5mm` is red and `led-5mm-blue` is blue, and neither takes `color`. A 0603 or 0805 still takes `color`. A capacitor starts at the circuit's DC solution, which on a pin that is still an input is not 0 V. `"initial": "0"` starts it at 0 V.
 
-`orbe set light 50` or `orbe set temperature 40` changes a world quantity from then on (`thermistor-ntc-10k` follows `temperature`). `orbe get light` and `orbe get @world.light` read the value in force. Load `orbe skills get sessions-and-time` for when a `set` lands.
+`orbe set light 50` or `orbe set temperature 40` changes a world quantity from then on (`tmp36` and `thermistor-ntc-10k` follow `temperature`). `orbe get light` and `orbe get @world.light` read the value in force. Load `orbe skills get sessions-and-time` for when a `set` lands.
