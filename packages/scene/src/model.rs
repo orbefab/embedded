@@ -56,7 +56,7 @@ const ANGLE_FORMAT: u32 = 6;
 /// The oldest part format whose readings take `"of": "screen"` and whose view takes `screen`.
 const SCREEN_FORMAT: u32 = 6;
 /// The engine kinds that show a screen, which a reading `"of": "screen"` reads.
-const SCREEN_KINDS: [&str; 2] = ["ssd1306", "hd44780_i2c"];
+const SCREEN_KINDS: [&str; 3] = ["ssd1306", "hd44780_i2c", "max7219"];
 /// The engine kinds whose glass carries readable character lines and a backlight.
 const TEXT_KINDS: [&str; 1] = ["hd44780_i2c"];
 const WIRE_KINDS: &[&str] = &["jumper", "trace", "contact"];

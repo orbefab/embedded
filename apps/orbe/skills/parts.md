@@ -19,9 +19,9 @@ A folder already at `parts/<id>/` is `part_exists` and nothing is written. The m
 
 `@<registry>/<id>` is a usage error. This orbe reads the `@orbefab` registry only.
 
-Addressable LEDs: `neopixel-stick-8`. Eight from three pins: `hc595-dip16` (tie SRCLR high, OE low), Block `nano-shift-leds`. 5 V to 3.3 V logic: `bss138-level-shifter`.
+Addressable LEDs: `neopixel-stick-8`. Eight from three pins: `hc595-dip16` (tie SRCLR high, OE low), Block `nano-shift-leds`. Level shifter: `bss138-level-shifter`.
 
-NTC thermistor: `thermistor-ntc-10k` (10 kΩ at 25 °C), Block `nano-thermistor`. Batteries: `battery-9v` (9 V, 1.7 Ω, 50 mA), Block `nano-9v-regulator`; `battery-aa-4x` (6 V, 0.9 Ω, 500 mA), Block `nano-aa-pack`.
+NTC: `thermistor-ntc-10k` (`nano-thermistor`). Batteries: `battery-9v` (`nano-9v-regulator`), `battery-aa-4x` (`nano-aa-pack`). MAX7219 matrices: `max7219-matrix-8x8` (`nano-max7219-matrix`), `max7219-matrix-4in1` (`nano-max7219-scroll`).
 
 ## Blocks
 

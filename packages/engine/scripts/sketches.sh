@@ -44,6 +44,12 @@ busio_url=https://github.com/adafruit/Adafruit_BusIO/archive/refs/tags/1.17.4.ta
 busio_sha256=59efa3acd5466e381c1b0313d5f0e824832db1bb24e4e328667e12b7d235d56d
 lcd_i2c_url=https://github.com/markub3327/LiquidCrystal_I2C/archive/refs/tags/2.0.0.tar.gz
 lcd_i2c_sha256=627b804fae7b078796817b24f8ac83adc19ddaaeb2c6aaa8e1b3937befe08649
+ledcontrol_url=https://github.com/wayoda/LedControl/archive/refs/tags/1.0.6.tar.gz
+ledcontrol_sha256=50c8d1f5c96ee5c40e77cc5f62f46ac7560e64cfcf574faee33744bfb6e9f119
+md_max72xx_url=https://github.com/MajicDesigns/MD_MAX72XX/archive/refs/tags/v3.5.1.tar.gz
+md_max72xx_sha256=27d2cb684d842cb358487fc4f0843c00fd7cacf7709a527fb76953c6f8204cab
+md_parola_url=https://github.com/MajicDesigns/MD_Parola/archive/refs/tags/v3.7.7.tar.gz
+md_parola_sha256=ba18aed1123b44fbc60995056a5d9bec9bc864df9c4298f8eb0f741aa4f3808a
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
   echo "usage: $0 TOOLS_DIR [DOWNLOAD_DIR]" >&2
@@ -88,6 +94,9 @@ unpack adafruit-ssd1306-2.5.17 "$ssd1306_url" "$ssd1306_sha256"
 unpack adafruit-gfx-1.13.0 "$gfx_url" "$gfx_sha256"
 unpack adafruit-busio-1.17.4 "$busio_url" "$busio_sha256"
 unpack liquidcrystal-i2c-2.0.0 "$lcd_i2c_url" "$lcd_i2c_sha256"
+unpack ledcontrol-1.0.6 "$ledcontrol_url" "$ledcontrol_sha256"
+unpack md-max72xx-3.5.1 "$md_max72xx_url" "$md_max72xx_sha256"
+unpack md-parola-3.7.7 "$md_parola_url" "$md_parola_sha256"
 
 bin=$tools/avr-gcc-7.3.0/avr/bin
 runtime=$tools/avr-runtime-1.8.6/avr-1.8.6
@@ -100,6 +109,9 @@ gfx=$tools/adafruit-gfx-1.13.0/Adafruit-GFX-Library-1.13.0
 busio=$tools/adafruit-busio-1.17.4/Adafruit_BusIO-1.17.4
 spi=$runtime/libraries/SPI/src
 lcd_i2c=$tools/liquidcrystal-i2c-2.0.0/LiquidCrystal_I2C-2.0.0
+ledcontrol=$tools/ledcontrol-1.0.6/LedControl-1.0.6/src
+md_max72xx=$tools/md-max72xx-3.5.1/MD_MAX72XX-3.5.1/src
+md_parola=$tools/md-parola-3.7.7/MD_Parola-3.7.7/src
 core=$runtime/cores/arduino
 target=(-mmcu=atmega328p -DF_CPU=16000000L -I"$core" -I"$runtime/variants/standard")
 c_flags=(-c -g -Os -w -std=gnu11 -ffunction-sections -fdata-sections -flto -fno-fat-lto-objects)
@@ -232,6 +244,34 @@ for dir in "$repo"/packages/engine/tests/firmware/sketch/*/ "$repo"/blocks/*/fir
       "$lcd_i2c/LiquidCrystal_I2C.cpp" -o "$work/$name-lcd-i2c.o"
     library+=("${lcd[@]}")
     archives=("$work/$name-lcd-i2c.o" "${archives[@]}")
+  fi
+  if grep -q '^#include <LedControl.h>' "$dir/$name.ino"; then
+    lc=(-DARDUINO=10806 -I"$ledcontrol")
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${lc[@]}" \
+      "$ledcontrol/LedControl.cpp" -o "$work/$name-ledcontrol.o"
+    library+=("${lc[@]}")
+    archives+=("$work/$name-ledcontrol.o")
+  fi
+  if grep -q '^#include <MD_MAX72xx.h>' "$dir/$name.ino"; then
+    md_flags=(-DARDUINO=10806 -I"$md_max72xx" -I"$spi")
+    for src in "$md_max72xx"/*.cpp; do
+      obj=$work/$name-mdmax-$(basename "$src").o
+      "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${md_flags[@]}" "$src" -o "$obj"
+      archives+=("$obj")
+    done
+    "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" -I"$spi" "$spi/SPI.cpp" \
+      -o "$work/$name-spi.o"
+    archives+=("$work/$name-spi.o")
+    library+=("${md_flags[@]}")
+  fi
+  if grep -q '^#include <MD_Parola.h>' "$dir/$name.ino"; then
+    parola_flags=(-DARDUINO=10806 -I"$md_parola" -I"$md_max72xx" -I"$spi")
+    for src in "$md_parola"/*.cpp; do
+      obj=$work/$name-parola-$(basename "$src").o
+      "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${parola_flags[@]}" "$src" -o "$obj"
+      archives+=("$obj")
+    done
+    library+=(-I"$md_parola")
   fi
   "$bin/avr-g++" "${cpp_flags[@]}" "${sketch_target[@]}" "${library[@]}" -x c++ -include Arduino.h \
     "$dir/$name.ino" -o "$work/$name.o"

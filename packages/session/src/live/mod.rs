@@ -36,7 +36,7 @@ use crate::reply::{
 };
 use crate::target::{
     Ref, Target, angle_reading, digit_reading, hz_reading, lcd_engine, live_params, names,
-    one_engine, reports_hint, resolve, rgb_reading, screen_engine, text_reading,
+    one_engine, reports_hint, resolve, rgb_reading, text_reading,
 };
 
 mod bound;
@@ -949,6 +949,13 @@ impl Open {
                     },
                 )
             }
+            Target::MatrixBrightness { path } => (
+                format!("{path}.brightness"),
+                Reading::Quantity {
+                    unit: Unit::Ampere,
+                    value: self.matrix_brightness(&path),
+                },
+            ),
             Target::Color {
                 path,
                 reading,
@@ -1140,7 +1147,7 @@ impl Open {
     }
 
     /// What engine part `engine`, a screen, shows now.
-    fn screen(&self, engine: &str) -> Screen {
+    pub(super) fn screen(&self, engine: &str) -> Screen {
         let display = self
             .engine
             .display(&engine_name(engine))
@@ -1152,6 +1159,8 @@ impl Open {
             .lines()
             .map(str::to_string)
             .collect();
+        let brightness = (panel.kind == "max7219")
+            .then(|| orbe_engine::device::max7219::dot_brightness(&panel, &display.image()));
         Screen {
             kind: panel.kind.to_string(),
             width: panel.width,
@@ -1159,12 +1168,129 @@ impl Open {
             on: panel.flags.display_on && !panel.flags.sleep && !panel.flags.reset,
             lit,
             rows,
+            brightness,
             settings: panel
                 .settings
                 .iter()
                 .map(|(name, value)| (name.to_string(), value))
                 .collect(),
         }
+    }
+
+    /// Screen engine names at or under `path`, ordered left-to-right by local `x` placement
+    /// inside `path` so a chained module (such as a 4-in-1 MAX7219) stitches in visual order.
+    pub(super) fn ordered_screen_engines(&self, path: &str) -> Vec<String> {
+        let found = crate::target::screen_engines(&self.refs, path);
+        if found.len() <= 1 {
+            return found.into_iter().map(|(_, engine)| engine).collect();
+        }
+        let mut positioned: Vec<(f64, String, String)> = found
+            .into_iter()
+            .map(|(desc, engine)| {
+                let x = self.relative_x(path, &desc).unwrap_or(0.0);
+                (x, desc, engine)
+            })
+            .collect();
+        positioned.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        positioned
+            .into_iter()
+            .map(|(_, _, engine)| engine)
+            .collect()
+    }
+
+    /// Local X offset of descendant `desc` inside ancestor `root`, from `self.view.instances`.
+    fn relative_x(&self, root: &str, desc: &str) -> Option<f64> {
+        fn find<'a>(
+            instances: &'a [orbe_scene::Instance],
+            segs: &[&str],
+        ) -> Option<&'a orbe_scene::Instance> {
+            let (first, rest) = segs.split_first()?;
+            let inst = instances.iter().find(|inst| inst.name == *first)?;
+            if rest.is_empty() {
+                Some(inst)
+            } else {
+                find(&inst.children, rest)
+            }
+        }
+        let root_segs: Vec<&str> = root.split('.').collect();
+        let mut current = find(&self.view.instances, &root_segs)?;
+        let suffix = desc.strip_prefix(root)?.strip_prefix('.')?;
+        let mut x = 0.0;
+        for seg in suffix.split('.') {
+            current = current.children.iter().find(|inst| inst.name == seg)?;
+            if let Some(placement) = current.placement {
+                x += placement.at[0];
+            }
+        }
+        Some(x)
+    }
+
+    /// Reads one screen or stitches a horizontal row of same-height screens left-to-right.
+    pub(super) fn screens(&self, engines: &[String]) -> Screen {
+        if let [one] = engines {
+            return self.screen(one);
+        }
+        let tiles: Vec<Screen> = engines.iter().map(|engine| self.screen(engine)).collect();
+        let first = &tiles[0];
+        let height = first.height;
+        let width: u16 = tiles.iter().map(|tile| tile.width).sum();
+        let lit: usize = tiles.iter().map(|tile| tile.lit).sum();
+        let on = tiles.iter().any(|tile| tile.on);
+        let rows: Vec<String> = (0..usize::from(height))
+            .map(|r| {
+                tiles
+                    .iter()
+                    .map(|tile| tile.rows.get(r).map_or("", String::as_str))
+                    .collect::<String>()
+            })
+            .collect();
+        let brightness = tiles.iter().all(|tile| tile.brightness.is_some()).then(|| {
+            (0..usize::from(height))
+                .map(|r| {
+                    tiles
+                        .iter()
+                        .flat_map(|tile| {
+                            tile.brightness
+                                .as_ref()
+                                .and_then(|grid| grid.get(r))
+                                .into_iter()
+                                .flatten()
+                                .copied()
+                        })
+                        .collect()
+                })
+                .collect()
+        });
+        Screen {
+            kind: first.kind.clone(),
+            width,
+            height,
+            on,
+            lit,
+            rows,
+            brightness,
+            settings: first.settings.clone(),
+        }
+    }
+
+    /// Average forward current (amperes) of lit dots on a MAX7219 matrix, or `0.0` when dark.
+    pub(super) fn matrix_brightness(&self, path: &str) -> f64 {
+        let engines = self.ordered_screen_engines(path);
+        if engines.is_empty() {
+            return 0.0;
+        }
+        let screen = self.screens(&engines);
+        let Some(grid) = &screen.brightness else {
+            return 0.0;
+        };
+        let (mut sum, mut count) = (0.0, 0usize);
+        for &a in grid.iter().flatten() {
+            if a > 0.0 {
+                sum += a;
+                count += 1;
+            }
+        }
+        if count == 0 { 0.0 } else { sum / count as f64 }
     }
 
     /// The visible 16×2 character lines of an `hd44780_i2c` engine part.
@@ -1207,8 +1333,9 @@ impl Open {
                 .ok()
                 .map(|engine| Reading::Text(self.lcd_text(&engine)));
         }
-        if let Some(engine) = screen_engine(&self.refs, path) {
-            return Some(Reading::Screen(self.screen(&engine)));
+        let screens = self.ordered_screen_engines(path);
+        if !screens.is_empty() {
+            return Some(Reading::Screen(self.screens(&screens)));
         }
         let contact = self.contact_closed(path);
         let engine = one_engine(path, part, Code::NoReading).ok();

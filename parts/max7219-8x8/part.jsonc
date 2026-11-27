@@ -1,0 +1,90 @@
+// MAX7219 driver coupled to a 32 x 32 mm 8 x 8 Super Red common-cathode LED matrix
+// (Betlux BL-M12A881D-11 / 1088AS footprint). Unlisted leaf part used inside
+// `max7219-matrix-8x8` and `max7219-matrix-4in1`.
+//
+// Orientation matches FC-16 modules and Arduino LedControl / MD_MAX72XX (`FC16_HW`):
+// DIG0 is the top row (row 0), DIG7 is the bottom row (row 7), and columns left to right
+// are DP (bit 7), A (bit 6), B (bit 5), C (bit 4), D (bit 3), E (bit 2), F (bit 1), G (bit 0).
+{
+  "format": 7,
+  "part": "max7219-8x8",
+  "version": "0.1.0",
+  "title": "MAX7219 8 x 8 red LED matrix tile",
+  "summary": "MAX7219 serially interfaced LED display driver paired with a 32 x 32 mm 8 x 8 red dot matrix (1088AS / BL-M12A881D-11 footprint). Internal leaf part for MAX7219 matrix modules.",
+  "tags": ["max7219", "led", "matrix", "dot", "8x8", "display", "screen", "spi", "1088as"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Maxim MAX7219/MAX7221 datasheet (19-4452; Rev 4; 7/03)": "https://www.sparkfun.com/datasheets/Components/General/COM-09622-MAX7219-MAX7221.pdf",
+    "Betlux BL-M12A881 datasheet (Rev V.2)": "https://cdn-shop.adafruit.com/datasheets/BL-M12A881.PDF",
+  },
+  "real": {
+    "generic": true,
+    "maker": "Maxim",
+    "number": "MAX7219",
+    "datasheet": "Maxim MAX7219/MAX7221 datasheet (19-4452; Rev 4; 7/03)",
+  },
+  "pins": {
+    "VCC": [1],
+    "GND": [2],
+    "DIN": [3],
+    "CLK": [4],
+    "LOAD": [5],
+    "DOUT": [6],
+    "ISET": [7],
+  },
+  "model": {
+    "kind": "max7219",
+    "input_threshold": {
+      "low": { "value": 0.8, "unit": "V", "source": { "datasheet": { "doc": "Maxim MAX7219/MAX7221 datasheet (19-4452; Rev 4; 7/03)", "at": "Electrical Characteristics, p. 3, Logic Low Input Voltage VIL 0.8 V max", "basis": "max" } } },
+      "high": { "value": 3.5, "unit": "V", "source": { "datasheet": { "doc": "Maxim MAX7219/MAX7221 datasheet (19-4452; Rev 4; 7/03)", "at": "Electrical Characteristics, p. 3, Logic High Input Voltage VIH 3.5 V min", "basis": "min" } } },
+    },
+    "dout": {
+      "high_drop": { "value": 0.0, "unit": "V", "source": { "closed_form": { "note": "CMOS push-pull DOUT high stage modelled as resistance from V+" } } },
+      "high_resistance": { "value": 1000.0, "unit": "ohm", "source": { "closed_form": { "note": "Maxim MAX7219/MAX7221 p. 3: DOUT VOH = V+ - 1 V min at ISOURCE = -1 mA, so 1 V / 1 mA = 1 kohm" } } },
+      "low_drop": { "value": 0.0, "unit": "V", "source": { "closed_form": { "note": "CMOS push-pull DOUT low stage modelled as resistance to GND" } } },
+      "low_resistance": { "value": 250.0, "unit": "ohm", "source": { "closed_form": { "note": "Maxim MAX7219/MAX7221 p. 3: DOUT VOL = 0.4 V max at ISINK = 1.6 mA, so 0.4 V / 1.6 mA = 250 ohm" } } },
+    },
+    "led_forward_voltage": {
+      "value": 1.85,
+      "unit": "V",
+      "source": { "datasheet": { "doc": "Betlux BL-M12A881 datasheet (Rev V.2)", "at": "p. 1, BL-M12A881D-11 Super Red (660 nm) Forward Voltage VF 1.85 V typ at IF = 20 mA", "basis": "typical" } },
+    },
+    "draw": {
+      "shutdown_current": { "value": 0.00015, "unit": "A", "source": { "datasheet": { "doc": "Maxim MAX7219/MAX7221 datasheet (19-4452; Rev 4; 7/03)", "at": "Electrical Characteristics, p. 2, Shutdown Supply Current I+ 150 uA max", "basis": "max" } } },
+      "logic_current": { "value": 0.008, "unit": "A", "source": { "datasheet": { "doc": "Maxim MAX7219/MAX7221 datasheet (19-4452; Rev 4; 7/03)", "at": "Electrical Characteristics, p. 2, Operating Supply Current I+ (RSET = open circuit) 8 mA max", "basis": "max" } } },
+      "holds_above": { "value": 4.0, "unit": "V", "source": { "datasheet": { "doc": "Maxim MAX7219/MAX7221 datasheet (19-4452; Rev 4; 7/03)", "at": "Electrical Characteristics, p. 2, Operating Supply Voltage V+ 4.0 V min", "basis": "min" } } },
+    },
+    "ratings": {
+      "rail_margin": { "value": 0.3, "unit": "V", "source": { "datasheet": { "doc": "Maxim MAX7219/MAX7221 datasheet (19-4452; Rev 4; 7/03)", "at": "Absolute Maximum Ratings, p. 2, Voltage with respect to GND: -0.3 V min on all pins, V+ + 0.3 V max on All Other Pins (DOUT, ISET)", "basis": "absolute_max" } } },
+      "supply_voltage": { "value": 6.0, "unit": "V", "source": { "datasheet": { "doc": "Maxim MAX7219/MAX7221 datasheet (19-4452; Rev 4; 7/03)", "at": "Absolute Maximum Ratings, p. 2, V+ -0.3 V to 6 V", "basis": "absolute_max" } } },
+      "input_voltage": { "value": 6.0, "unit": "V", "source": { "datasheet": { "doc": "Maxim MAX7219/MAX7221 datasheet (19-4452; Rev 4; 7/03)", "at": "Absolute Maximum Ratings, p. 2, DIN, CLK, LOAD, CS -0.3 V to 6 V", "basis": "absolute_max" } } },
+      "supply_current": {
+        "value": 0.5,
+        "unit": "A",
+        "basis": "peak",
+        "source": { "datasheet": { "doc": "Maxim MAX7219/MAX7221 datasheet (19-4452; Rev 4; 7/03)", "at": "Absolute Maximum Ratings, p. 2, DIG0-DIG7 Sink Current 500 mA", "basis": "absolute_max" } },
+      },
+    },
+    "pins": { "VCC": "VCC", "GND": "GND", "DIN": "DIN", "CLK": "CLK", "LOAD": "LOAD", "DOUT": "DOUT", "ISET": "ISET" },
+  },
+  "readings": {
+    "screen": { "of": "screen" },
+  },
+  "view": {
+    "screen": [{ "node": "glass", "by": "screen" }],
+  },
+  "not_simulated": [
+    {
+      "what": "multiplex scan ripple and segment slew",
+      "why": "The MAX7219 scans active digits at 500 to 1300 Hz (800 Hz typ, p. 2). The model reports the time-averaged current per lit dot (ISEG * duty / scan_digits) and draws the matching steady supply current rather than switching at 800 Hz."
+    },
+    {
+      "what": "setup and hold timing violations",
+      "why": "Serial shifts sample DIN on every CLK rising edge and update DOUT 25 ns (tDO, p. 3) after CLK falling edge. Setup, hold and minimum pulse width checks (tDS, tDH, tCH, tCL) are not enforced."
+    },
+    {
+      "what": "undefined register addresses",
+      "why": "Writes to register addresses 0xD and 0xE warn chip.protocol rule command and are ignored."
+    },
+  ],
+}

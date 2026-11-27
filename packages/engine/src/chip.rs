@@ -12,8 +12,8 @@
 //! The relay answers `unknowns` and `dc_paths` as an element.
 
 use crate::device::{
-    Bmp280, Cst816, Dht22, Hc595, Hd44780I2c, PulsesReplay, Sg90, SpiReplay, Ssd1306, St77916,
-    Ws2812,
+    Bmp280, Cst816, Dht22, Hc595, Hd44780I2c, Max7219, PulsesReplay, Sg90, SpiReplay, Ssd1306,
+    St77916, Ws2812,
 };
 use crate::mcu::{Atmega328p, Esp32s3};
 use crate::netlist::PartId;
@@ -80,6 +80,7 @@ pub(crate) enum Active<'n> {
     Dht22(&'n Dht22),
     Bmp280(&'n Bmp280),
     Hc595(&'n Hc595),
+    Max7219(&'n Max7219),
     Esp32s3(&'n Esp32s3),
     Ws2812(&'n Ws2812),
     PulsesReplay(&'n PulsesReplay),
@@ -98,6 +99,7 @@ pub(crate) fn kind(chip: &Chip) -> Kind<'_> {
         Chip::Dht22(dev) => Kind::Active(Active::Dht22(dev)),
         Chip::Bmp280(dev) => Kind::Active(Active::Bmp280(dev)),
         Chip::Hc595(dev) => Kind::Active(Active::Hc595(dev)),
+        Chip::Max7219(dev) => Kind::Active(Active::Max7219(dev)),
         Chip::Esp32s3(mcu) => Kind::Active(Active::Esp32s3(mcu)),
         Chip::Ws2812(chain) => Kind::Active(Active::Ws2812(chain)),
         Chip::PulsesReplay(replay) => Kind::Active(Active::PulsesReplay(replay)),
@@ -134,6 +136,7 @@ pub(crate) fn unknowns(chip: &Chip) -> Unknowns {
         | Chip::Dht22(_)
         | Chip::Bmp280(_)
         | Chip::Hc595(_)
+        | Chip::Max7219(_)
         | Chip::Esp32s3(_)
         | Chip::Ws2812(_)
         | Chip::PulsesReplay(_)
@@ -155,6 +158,7 @@ pub(crate) fn reads_iterate(chip: &Chip) -> bool {
         | Chip::Dht22(_)
         | Chip::Bmp280(_)
         | Chip::Hc595(_)
+        | Chip::Max7219(_)
         | Chip::Esp32s3(_)
         | Chip::Ws2812(_)
         | Chip::PulsesReplay(_)
@@ -228,6 +232,7 @@ pub(crate) fn dc_paths(chip: &Chip) -> &'static [(usize, usize)] {
         Chip::Dht22(_) => &crate::device::dht22::DC_PATHS,
         Chip::Bmp280(_) => &crate::device::bmp280::DC_PATHS,
         Chip::Hc595(_) => &crate::device::hc595::DC_PATHS,
+        Chip::Max7219(_) => &crate::device::max7219::DC_PATHS,
         Chip::Esp32s3(mcu) => crate::mcu::esp32s3::dc_paths(mcu),
         Chip::Ws2812(chain) => crate::device::ws2812::dc_paths(chain),
         Chip::PulsesReplay(_) => &crate::device::pulses_replay::DC_PATHS,
@@ -242,6 +247,7 @@ pub(crate) fn pin_ratings(chip: &Chip) -> Option<crate::ratings::PinRatings> {
         Chip::Esp32s3(mcu) => crate::mcu::esp32s3::pin_ratings(mcu),
         Chip::Bmp280(dev) => crate::device::bmp280::pin_ratings(dev),
         Chip::Hc595(dev) => crate::device::hc595::pin_ratings(dev),
+        Chip::Max7219(dev) => crate::device::max7219::pin_ratings(dev),
         Chip::Ssd1306(dev) => crate::device::ssd1306::pin_ratings(dev),
         Chip::Hd44780I2c(dev) => crate::device::hd44780_i2c::pin_ratings(dev),
         Chip::Ws2812(chain) => crate::device::ws2812::pin_ratings(chain),
