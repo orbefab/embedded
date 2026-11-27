@@ -105,10 +105,10 @@ impl IsrLoop {
         self.isr_out(n, 3) - self.isr_out(n, 2)
     }
 
-    /// From OC0A's second toggle to the second ISR's. OC0A toggles one timer
-    /// clock before TOV, on the clock TCNT0 reaches OCR0A = 0xFF.
+    /// From OC0A's second toggle to the second ISR's. OC0A toggles with TOV,
+    /// on the clock TCNT0 leaves OCR0A = 0xFF.
     const fn lag(&self, n: u64) -> u64 {
-        self.isr_out(n, 2) - (self.tov(n, 2) - n)
+        self.isr_out(n, 2) - self.tov(n, 2)
     }
 }
 
@@ -128,7 +128,9 @@ const T1OVF: IsrLoop = IsrLoop {
 
 const T0_TOV_ISR: &str = "DS 15.7.1 / Fig. 15-8: TOV0 every 256 timer clocks; DS 7.7.1 and parameter 2: each ISR's entry follows the loop phase (IsrLoop)";
 const T1_TOV_ISR: &str = "DS 16.9.1 / Fig. 16-12: TOV1 every 65536 timer clocks; DS 7.7.1 and parameter 2: each ISR's entry follows the loop phase (IsrLoop)";
-const OC0A_TO_ISR: &str = "DS Table 15-2 and §15.5: OC0A toggles on the clock TCNT0 reaches OCR0A = 0xFF; Fig. 15-8: TOV0 sets one timer clock later, as 0xFF goes to 0; DS 7.7.1: entry 4 + JMP 3 + IN, LDI, EOR, OUT 4, with parameter 2 for the entry (IsrLoop)";
+const OC0A_TO_ISR: &str = "DS Table 15-2 and parameter 4: OC0A toggles with OCF0A, which Fig. 15-10 sets on the clock TCNT0 leaves OCR0A = 0xFF; Fig. 15-8: TOV0 sets on that same clock, as 0xFF goes to 0; DS 7.7.1: entry 4 + JMP 3 + IN, LDI, EOR, OUT 4, with parameter 2 for the entry (IsrLoop)";
+
+const FPWM_HIGH: &str = "Gammon's 16 MHz capture (gammon.com.au/timers): Timer0 mode 3 with OCR0A = 150 is high 151 clocks; DS Table 15-3: non-inverting OC0A sets at BOTTOM; Fig. 15-6: it clears with OCF0A, which Fig. 15-10 sets on the clock TCNT0 leaves OCR0A; so OC0A is high while TCNT0 is 0 to 99, 100 timer clocks";
 
 struct Run {
     edges: BTreeMap<u32, Vec<(u64, Level)>>,
@@ -213,7 +215,7 @@ fn every_row_is_exact() {
         }
     }
     println!("timing set: {rows} rows");
-    assert_eq!(rows, 107);
+    assert_eq!(rows, 109);
     assert!(misses.is_empty(), "{}", misses.join("\n"));
 }
 
@@ -277,11 +279,11 @@ const PROGRAMS: &[Program] = &[
     ),
     program!("t0ctc_1_p0", 2500;
         "T0 CTC /1 OCR0A=99: toggle period": Period(22, 1) => 100, "DS 15.7.2 fOC0 = fclk/(2N(1+OCR0A)); Fig. 15-11";
-        "T0 CTC /1: first toggle (CS write ends at 8)": Edge(22, 0) => 107, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 8, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /1 clock is cycle 9; §15.5 and Fig. 15-11: OC0A toggles on the clock TCNT0 reaches OCR0A = 99, 9 + 98 x 1";
+        "T0 CTC /1: first toggle (CS write ends at 8)": Edge(22, 0) => 108, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 8, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /1 clock is cycle 9; Fig. 15-5 and Fig. 15-11: OC0A toggles with OCF0A and the clear to BOTTOM, on the clock TCNT0 leaves OCR0A = 99, 9 + 99 x 1";
     ),
     program!("t0ctc_1_p3", 2500;
         "T0 CTC /1 OCR0A=99: toggle period": Period(22, 1) => 100, "DS 15.7.2 fOC0 = fclk/(2N(1+OCR0A)); Fig. 15-11";
-        "T0 CTC /1: first toggle (CS write ends at 11)": Edge(22, 0) => 110, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 11, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /1 clock is cycle 12; §15.5 and Fig. 15-11: OC0A toggles on the clock TCNT0 reaches OCR0A = 99, 12 + 98 x 1";
+        "T0 CTC /1: first toggle (CS write ends at 11)": Edge(22, 0) => 111, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 11, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /1 clock is cycle 12; Fig. 15-5 and Fig. 15-11: OC0A toggles with OCF0A and the clear to BOTTOM, on the clock TCNT0 leaves OCR0A = 99, 12 + 99 x 1";
     ),
     program!("t0ovf_1", 3280;
         "T0 normal /1: TOV ISR period": Period(5, 1) => T0OVF.period(1), T0_TOV_ISR;
@@ -291,7 +293,7 @@ const PROGRAMS: &[Program] = &[
         "T1 CTC /1 OCR1A=999: toggle period": Period(1, 1) => 1000, "DS 16.9.2 fOC1A = fclk/(2N(1+OCR1A)); Fig. 16-11";
     ),
     program!("t0fpwm_1", 3280;
-        "T0 fast PWM /1 OCR0A=99: high time": Pulse(22, 1) => 99, "DS Table 15-3: non-inverting OC0A sets at BOTTOM and clears on the compare match; §15.5: the pin acts on the clock TCNT0 reaches OCR0A and the flag one clock later, so OC0A is high while TCNT0 is 0 to 98, 99 timer clocks";
+        "T0 fast PWM /1 OCR0A=99: high time": Pulse(22, 1) => 100, FPWM_HIGH;
         "T0 fast PWM /1: period": Wave(22, 1) => 256, "DS 15.7.3 fOC0PWM = fclk/(N*256)";
     ),
     program!("t1ovf_1", 231_376;
@@ -299,11 +301,11 @@ const PROGRAMS: &[Program] = &[
     ),
     program!("t0ctc_8_p0", 6000;
         "T0 CTC /8 OCR0A=99: toggle period": Period(22, 1) => 800, "DS 15.7.2 fOC0 = fclk/(2N(1+OCR0A)); Fig. 15-11";
-        "T0 CTC /8: first toggle (CS write ends at 8)": Edge(22, 0) => 800, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 8, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /8 clock is cycle 16; §15.5 and Fig. 15-11: OC0A toggles on the clock TCNT0 reaches OCR0A = 99, 16 + 98 x 8";
+        "T0 CTC /8: first toggle (CS write ends at 8)": Edge(22, 0) => 808, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 8, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /8 clock is cycle 16; Fig. 15-5 and Fig. 15-11: OC0A toggles with OCF0A and the clear to BOTTOM, on the clock TCNT0 leaves OCR0A = 99, 16 + 99 x 8";
     ),
     program!("t0ctc_8_p3", 6000;
         "T0 CTC /8 OCR0A=99: toggle period": Period(22, 1) => 800, "DS 15.7.2 fOC0 = fclk/(2N(1+OCR0A)); Fig. 15-11";
-        "T0 CTC /8: first toggle (CS write ends at 11)": Edge(22, 0) => 800, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 11, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /8 clock is cycle 16; §15.5 and Fig. 15-11: OC0A toggles on the clock TCNT0 reaches OCR0A = 99, 16 + 98 x 8";
+        "T0 CTC /8: first toggle (CS write ends at 11)": Edge(22, 0) => 808, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 11, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /8 clock is cycle 16; Fig. 15-5 and Fig. 15-11: OC0A toggles with OCF0A and the clear to BOTTOM, on the clock TCNT0 leaves OCR0A = 99, 16 + 99 x 8";
     ),
     program!("t0ovf_8", 12_240;
         "T0 normal /8: TOV ISR period": Period(5, 1) => T0OVF.period(8), T0_TOV_ISR;
@@ -313,7 +315,7 @@ const PROGRAMS: &[Program] = &[
         "T1 CTC /8 OCR1A=999: toggle period": Period(1, 1) => 8000, "DS 16.9.2 fOC1A = fclk/(2N(1+OCR1A)); Fig. 16-11";
     ),
     program!("t0fpwm_8", 12_240;
-        "T0 fast PWM /8 OCR0A=99: high time": Pulse(22, 1) => 792, "DS Table 15-3: non-inverting OC0A sets at BOTTOM and clears on the compare match; §15.5: the pin acts on the clock TCNT0 reaches OCR0A and the flag one clock later, so OC0A is high while TCNT0 is 0 to 98, 99 timer clocks";
+        "T0 fast PWM /8 OCR0A=99: high time": Pulse(22, 1) => 800, FPWM_HIGH;
         "T0 fast PWM /8: period": Wave(22, 1) => 2048, "DS 15.7.3 fOC0PWM = fclk/(N*256)";
     ),
     program!("t1ovf_8", 1_837_008;
@@ -321,11 +323,11 @@ const PROGRAMS: &[Program] = &[
     ),
     program!("t0ctc_64_p0", 34_000;
         "T0 CTC /64 OCR0A=99: toggle period": Period(22, 1) => 6400, "DS 15.7.2 fOC0 = fclk/(2N(1+OCR0A)); Fig. 15-11";
-        "T0 CTC /64: first toggle (CS write ends at 8)": Edge(22, 0) => 6336, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 8, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /64 clock is cycle 64; §15.5 and Fig. 15-11: OC0A toggles on the clock TCNT0 reaches OCR0A = 99, 64 + 98 x 64";
+        "T0 CTC /64: first toggle (CS write ends at 8)": Edge(22, 0) => 6400, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 8, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /64 clock is cycle 64; Fig. 15-5 and Fig. 15-11: OC0A toggles with OCF0A and the clear to BOTTOM, on the clock TCNT0 leaves OCR0A = 99, 64 + 99 x 64";
     ),
     program!("t0ctc_64_p3", 34_000;
         "T0 CTC /64 OCR0A=99: toggle period": Period(22, 1) => 6400, "DS 15.7.2 fOC0 = fclk/(2N(1+OCR0A)); Fig. 15-11";
-        "T0 CTC /64: first toggle (CS write ends at 11)": Edge(22, 0) => 6336, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 11, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /64 clock is cycle 64; §15.5 and Fig. 15-11: OC0A toggles on the clock TCNT0 reaches OCR0A = 99, 64 + 98 x 64";
+        "T0 CTC /64: first toggle (CS write ends at 11)": Edge(22, 0) => 6400, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 11, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /64 clock is cycle 64; Fig. 15-5 and Fig. 15-11: OC0A toggles with OCF0A and the clear to BOTTOM, on the clock TCNT0 leaves OCR0A = 99, 64 + 99 x 64";
     ),
     program!("t0ovf_64", 83_920;
         "T0 normal /64: TOV ISR period": Period(5, 1) => T0OVF.period(64), T0_TOV_ISR;
@@ -335,7 +337,7 @@ const PROGRAMS: &[Program] = &[
         "T1 CTC /64 OCR1A=999: toggle period": Period(1, 1) => 64_000, "DS 16.9.2 fOC1A = fclk/(2N(1+OCR1A)); Fig. 16-11";
     ),
     program!("t0fpwm_64", 83_920;
-        "T0 fast PWM /64 OCR0A=99: high time": Pulse(22, 1) => 6336, "DS Table 15-3: non-inverting OC0A sets at BOTTOM and clears on the compare match; §15.5: the pin acts on the clock TCNT0 reaches OCR0A and the flag one clock later, so OC0A is high while TCNT0 is 0 to 98, 99 timer clocks";
+        "T0 fast PWM /64 OCR0A=99: high time": Pulse(22, 1) => 6400, FPWM_HIGH;
         "T0 fast PWM /64: period": Wave(22, 1) => 16_384, "DS 15.7.3 fOC0PWM = fclk/(N*256)";
     ),
     program!("t1ovf_64", 14_682_064;
@@ -343,11 +345,11 @@ const PROGRAMS: &[Program] = &[
     ),
     program!("t0ctc_256_p0", 130_000;
         "T0 CTC /256 OCR0A=99: toggle period": Period(22, 1) => 25_600, "DS 15.7.2 fOC0 = fclk/(2N(1+OCR0A)); Fig. 15-11";
-        "T0 CTC /256: first toggle (CS write ends at 8)": Edge(22, 0) => 25_344, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 8, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /256 clock is cycle 256; §15.5 and Fig. 15-11: OC0A toggles on the clock TCNT0 reaches OCR0A = 99, 256 + 98 x 256";
+        "T0 CTC /256: first toggle (CS write ends at 8)": Edge(22, 0) => 25_600, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 8, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /256 clock is cycle 256; Fig. 15-5 and Fig. 15-11: OC0A toggles with OCF0A and the clear to BOTTOM, on the clock TCNT0 leaves OCR0A = 99, 256 + 99 x 256";
     ),
     program!("t0ctc_256_p3", 130_000;
         "T0 CTC /256 OCR0A=99: toggle period": Period(22, 1) => 25_600, "DS 15.7.2 fOC0 = fclk/(2N(1+OCR0A)); Fig. 15-11";
-        "T0 CTC /256: first toggle (CS write ends at 11)": Edge(22, 0) => 25_344, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 11, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /256 clock is cycle 256; §15.5 and Fig. 15-11: OC0A toggles on the clock TCNT0 reaches OCR0A = 99, 256 + 98 x 256";
+        "T0 CTC /256: first toggle (CS write ends at 11)": Edge(22, 0) => 25_600, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 11, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /256 clock is cycle 256; Fig. 15-5 and Fig. 15-11: OC0A toggles with OCF0A and the clear to BOTTOM, on the clock TCNT0 leaves OCR0A = 99, 256 + 99 x 256";
     ),
     program!("t0ovf_256", 329_680;
         "T0 normal /256: TOV ISR period": Period(5, 1) => T0OVF.period(256), T0_TOV_ISR;
@@ -357,7 +359,7 @@ const PROGRAMS: &[Program] = &[
         "T1 CTC /256 OCR1A=999: toggle period": Period(1, 1) => 256_000, "DS 16.9.2 fOC1A = fclk/(2N(1+OCR1A)); Fig. 16-11";
     ),
     program!("t0fpwm_256", 329_680;
-        "T0 fast PWM /256 OCR0A=99: high time": Pulse(22, 1) => 25_344, "DS Table 15-3: non-inverting OC0A sets at BOTTOM and clears on the compare match; §15.5: the pin acts on the clock TCNT0 reaches OCR0A and the flag one clock later, so OC0A is high while TCNT0 is 0 to 98, 99 timer clocks";
+        "T0 fast PWM /256 OCR0A=99: high time": Pulse(22, 1) => 25_600, FPWM_HIGH;
         "T0 fast PWM /256: period": Wave(22, 1) => 65_536, "DS 15.7.3 fOC0PWM = fclk/(N*256)";
     ),
     program!("t1ovf_256", 58_722_256;
@@ -365,11 +367,11 @@ const PROGRAMS: &[Program] = &[
     ),
     program!("t0ctc_1024_p0", 514_000;
         "T0 CTC /1024 OCR0A=99: toggle period": Period(22, 1) => 102_400, "DS 15.7.2 fOC0 = fclk/(2N(1+OCR0A)); Fig. 15-11";
-        "T0 CTC /1024: first toggle (CS write ends at 8)": Edge(22, 0) => 101_376, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 8, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /1024 clock is cycle 1024; §15.5 and Fig. 15-11: OC0A toggles on the clock TCNT0 reaches OCR0A = 99, 1024 + 98 x 1024";
+        "T0 CTC /1024: first toggle (CS write ends at 8)": Edge(22, 0) => 102_400, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 8, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /1024 clock is cycle 1024; Fig. 15-5 and Fig. 15-11: OC0A toggles with OCF0A and the clear to BOTTOM, on the clock TCNT0 leaves OCR0A = 99, 1024 + 99 x 1024";
     ),
     program!("t0ctc_1024_p3", 514_000;
         "T0 CTC /1024 OCR0A=99: toggle period": Period(22, 1) => 102_400, "DS 15.7.2 fOC0 = fclk/(2N(1+OCR0A)); Fig. 15-11";
-        "T0 CTC /1024: first toggle (CS write ends at 11)": Edge(22, 0) => 101_376, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 11, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /1024 clock is cycle 1024; §15.5 and Fig. 15-11: OC0A toggles on the clock TCNT0 reaches OCR0A = 99, 1024 + 98 x 1024";
+        "T0 CTC /1024: first toggle (CS write ends at 11)": Edge(22, 0) => 102_400, "DS Fig. 14-4 and §15.8: the TCCR0B store lands on its ending edge 11, which still counts on the old select; §17.2, prescaler 0 at the first instruction: the first /1024 clock is cycle 1024; Fig. 15-5 and Fig. 15-11: OC0A toggles with OCF0A and the clear to BOTTOM, on the clock TCNT0 leaves OCR0A = 99, 1024 + 99 x 1024";
     ),
     program!("t0ovf_1024", 1_312_720;
         "T0 normal /1024: TOV ISR period": Period(5, 1) => T0OVF.period(1024), T0_TOV_ISR;
@@ -379,16 +381,20 @@ const PROGRAMS: &[Program] = &[
         "T1 CTC /1024 OCR1A=999: toggle period": Period(1, 1) => 1_024_000, "DS 16.9.2 fOC1A = fclk/(2N(1+OCR1A)); Fig. 16-11";
     ),
     program!("t0fpwm_1024", 1_312_720;
-        "T0 fast PWM /1024 OCR0A=99: high time": Pulse(22, 1) => 101_376, "DS Table 15-3: non-inverting OC0A sets at BOTTOM and clears on the compare match; §15.5: the pin acts on the clock TCNT0 reaches OCR0A and the flag one clock later, so OC0A is high while TCNT0 is 0 to 98, 99 timer clocks";
+        "T0 fast PWM /1024 OCR0A=99: high time": Pulse(22, 1) => 102_400, FPWM_HIGH;
         "T0 fast PWM /1024: period": Wave(22, 1) => 262_144, "DS 15.7.3 fOC0PWM = fclk/(N*256)";
     ),
     program!("t0fpwm_ocr0", 3280;
-        "T0 fast PWM /1 OCR0A=0: high time": Pulse(22, 1) => 1, "DS 15.7.3: OCR0A = BOTTOM is a narrow spike each MAX+1 timer clocks; parameter 4: one timer clock";
+        "T0 fast PWM /1 OCR0A=0: high time": Pulse(22, 1) => 1, "DS 15.7.3: OCR0A = BOTTOM is a narrow spike each MAX+1 timer clocks; Fig. 15-6 and Fig. 15-10: OC0A sets as TCNT0 goes TOP to 0 and clears as it leaves OCR0A = 0, one timer clock";
         "T0 fast PWM /1 OCR0A=0: period": Wave(22, 1) => 256, "DS 15.7.3 fOC0PWM = fclk/(N*256)";
     ),
     program!("t0fpwm_ocr1", 3280;
-        "T0 fast PWM /1 OCR0A=1: high time": Pulse(22, 1) => 1, "DS Table 15-3: non-inverting OC0A sets at BOTTOM and clears on the compare match; parameter 4: high while TCNT0 is 0, one timer clock, the same waveform as OCR0A = 0";
+        "T0 fast PWM /1 OCR0A=1: high time": Pulse(22, 1) => 2, FPWM_HIGH;
         "T0 fast PWM /1 OCR0A=1: period": Wave(22, 1) => 256, "DS 15.7.3 fOC0PWM = fclk/(N*256)";
+    ),
+    program!("t0fpwm_ocr254", 3280;
+        "T0 fast PWM /1 OCR0A=254: high time": Pulse(22, 1) => 255, FPWM_HIGH;
+        "T0 fast PWM /1 OCR0A=254: period": Wave(22, 1) => 256, "DS 15.7.3 fOC0PWM = fclk/(N*256)";
     ),
     program!("t0fpwm_ocr255", 3280;
         "T0 fast PWM /1 OCR0A=0xFF: first rise at BOTTOM": Edge(22, 0) => 264, "DS Table 15-3 note 1: with OCR0A = TOP the match is ignored and OC0A sets at BOTTOM; parameter 1: the TCCR0B store ends at edge 8 with the old select, so TCNT0 is 1 at edge 9 and 0 again at edge 264";

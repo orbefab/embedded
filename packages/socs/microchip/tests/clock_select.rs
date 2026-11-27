@@ -1,7 +1,8 @@
 //! Model parameter 1. A `TCCR0B` or `GTCCR` store takes effect on the edge
 //! that ends its instruction (Figure 14-4, §15.8). Every timer clock up to and
-//! including that edge runs with the old select: the count, `TOV0`, the
-//! delayed `OCF0A`, and the `OC0A` pin.
+//! including that edge runs with the old select: the count, `TOV0`, and a
+//! match's `OCF0A` and `OC0A` pin, which act together on the clock that leaves
+//! `OCR0A` (model parameter 4).
 //!
 //! An instruction that starts at cycle c and takes n cycles ends on edges
 //! c + 1 to c + n. A timer poked to /1 before cycle 0 counts on every edge.
@@ -83,52 +84,53 @@ fn tov_on_the_retiring_edge_of_sts() {
     assert_eq!(cpu.peek(TIFR0) & TOV0, TOV0);
 }
 
-/// Edge 1, the `NOP`, is the match 4 → 5 and toggles `OC0A`. The stop store
-/// ends at edge 2, the next timer clock, which raises `OCF0A` (§15.5).
+/// Edge 1, the `NOP`, counts 4 → 5. The stop store ends at edge 2, which
+/// leaves `OCR0A`, so it raises `OCF0A` and toggles `OC0A` (Figure 15-10).
 #[test]
-fn ocf_due_on_the_retiring_edge_of_out() {
+fn match_on_the_retiring_edge_of_out() {
     let mut cpu = running(4, &with_nops(&[0x0000, out(16, TCCR0B_IO)], 2));
     cpu.insns(4);
     assert_eq!(cpu.peek(TCNT0), 6);
     assert_eq!(cpu.peek(TIFR0) & OCF0A, OCF0A);
-    assert_eq!(oc0a_highs(&mut cpu), [1]);
+    assert_eq!(oc0a_highs(&mut cpu), [2]);
 }
 
-/// `STS` ends on the match 4 → 5 at edge 1 and the flag clock 5 → 6 at
-/// edge 2.
+/// `STS` ends on 4 → 5 at edge 1 and the match 5 → 6 at edge 2.
 #[test]
-fn ocf_due_on_the_retiring_edge_of_sts() {
+fn match_on_the_retiring_edge_of_sts() {
     let mut cpu = running(4, &with_nops(&sts(16, TCCR0B), 2));
     cpu.insns(3);
     assert_eq!(cpu.peek(TCNT0), 6);
     assert_eq!(cpu.peek(TIFR0) & OCF0A, OCF0A);
-    assert_eq!(oc0a_highs(&mut cpu), [1]);
+    assert_eq!(oc0a_highs(&mut cpu), [2]);
 }
 
-/// The match 4 → 5 is the stop store's retiring edge, so `OC0A` toggles on
-/// it. The flag waits for a timer clock the stopped timer never gives.
+/// The stop store's retiring edge counts 4 → 5. The match waits for the
+/// clock that leaves `OCR0A`, which the stopped timer never gives, so neither
+/// the flag nor the pin moves.
 #[test]
-fn oc0a_toggles_on_the_retiring_edge_of_out() {
+fn a_stop_on_the_arrival_at_ocr_of_out_leaves_the_match() {
     let mut cpu = running(4, &with_nops(&[out(16, TCCR0B_IO)], 2));
     cpu.insns(3);
     assert_eq!(cpu.peek(TCNT0), 5);
-    assert_eq!(oc0a_highs(&mut cpu), [1]);
+    assert_eq!(oc0a_highs(&mut cpu), [0u64; 0]);
     assert_eq!(cpu.peek(TIFR0) & OCF0A, 0);
 }
 
-/// `STS` ends on 3 → 4 at edge 1 and the match 4 → 5 at edge 2.
+/// `STS` ends on 3 → 4 at edge 1 and 4 → 5 at edge 2, the arrival at `OCR0A`.
 #[test]
-fn oc0a_toggles_on_the_retiring_edge_of_sts() {
+fn a_stop_on_the_arrival_at_ocr_of_sts_leaves_the_match() {
     let mut cpu = running(3, &with_nops(&sts(16, TCCR0B), 2));
     cpu.insns(3);
     assert_eq!(cpu.peek(TCNT0), 5);
-    assert_eq!(oc0a_highs(&mut cpu), [2]);
+    assert_eq!(oc0a_highs(&mut cpu), [0u64; 0]);
     assert_eq!(cpu.peek(TIFR0) & OCF0A, 0);
 }
 
 /// `OCR0A` = 2 with `OC0A` toggling. The store that starts /1 ends at edge 7,
-/// so edge 8 counts 0 → 1 and edge 9 is the match 1 → 2. The ninth word
-/// starts at cycle 8 and ends on the match edge. `r18` is /1 and `r19` is /8.
+/// so edge 8 counts 0 → 1, edge 9 counts 1 → 2, and edge 10 is the match
+/// 2 → 3. The ninth word starts at cycle 8, so a one-cycle word after a `NOP`
+/// ends on the match edge. `r18` is /1 and `r19` is /8.
 fn rewrite_on_the_match(tail: &[u16]) -> Cpu {
     let head = [
         ldi(16, 0x40),
@@ -149,51 +151,50 @@ fn rewrite_on_the_match(tail: &[u16]) -> Cpu {
     cpu
 }
 
-/// A `NOP` on the match edge. Edge 10 raises `OCF0A` (§15.5).
+/// A `NOP` on the match edge. Edge 10 raises `OCF0A` and toggles `OC0A`
+/// (Figure 15-10).
 #[test]
 fn nop_on_the_match_edge() {
-    let mut cpu = rewrite_on_the_match(&[0x0000]);
+    let mut cpu = rewrite_on_the_match(&[0x0000, 0x0000]);
     cpu.run_until(10);
     assert_eq!(cpu.peek(TCNT0), 3);
     assert_eq!(cpu.peek(TIFR0) & OCF0A, OCF0A);
-    assert_eq!(oc0a_highs(&mut cpu), [9]);
+    assert_eq!(oc0a_highs(&mut cpu), [10]);
 }
 
 /// Rewriting /1 on the match edge changes nothing: the match and its flag
 /// land as with the `NOP`.
 #[test]
 fn same_prescaler_rewrite_on_the_match_edge() {
-    let mut cpu = rewrite_on_the_match(&[out(18, TCCR0B_IO)]);
+    let mut cpu = rewrite_on_the_match(&[0x0000, out(18, TCCR0B_IO)]);
     cpu.run_until(10);
     assert_eq!(cpu.peek(TCNT0), 3);
     assert_eq!(cpu.peek(TIFR0) & OCF0A, OCF0A);
-    assert_eq!(oc0a_highs(&mut cpu), [9]);
+    assert_eq!(oc0a_highs(&mut cpu), [10]);
 }
 
-/// Switching to /8 on the match edge keeps the match at edge 9. The next
-/// timer clock is the divider's next /8 count, cycle 16 (§17.2), and the
-/// flag rises on it.
+/// Switching to /8 on the match edge keeps the match, flag and pin, at edge
+/// 10. The next timer clock is the divider's next /8 count, cycle 16 (§17.2).
 #[test]
 fn different_prescaler_rewrite_on_the_match_edge() {
-    let mut cpu = rewrite_on_the_match(&[out(19, TCCR0B_IO)]);
+    let mut cpu = rewrite_on_the_match(&[0x0000, out(19, TCCR0B_IO)]);
     cpu.run_until(15);
-    assert_eq!(cpu.peek(TCNT0), 2);
-    assert_eq!(cpu.peek(TIFR0) & OCF0A, 0);
-    assert_eq!(oc0a_highs(&mut cpu), [9]);
-    cpu.run_until(16);
     assert_eq!(cpu.peek(TCNT0), 3);
     assert_eq!(cpu.peek(TIFR0) & OCF0A, OCF0A);
+    assert_eq!(oc0a_highs(&mut cpu), [10]);
+    cpu.run_until(16);
+    assert_eq!(cpu.peek(TCNT0), 4);
 }
 
-/// `STS` of /1 starts at cycle 8 and ends on the match at edge 9 and the
-/// flag clock at edge 10.
+/// `STS` of /1 starts at cycle 8 and ends on edge 9, the arrival at `OCR0A`,
+/// and the match at edge 10.
 #[test]
-fn sts_rewrite_across_the_match_and_the_flag_clock() {
+fn sts_rewrite_across_the_arrival_and_the_match() {
     let mut cpu = rewrite_on_the_match(&sts(18, TCCR0B));
     cpu.run_until(10);
     assert_eq!(cpu.peek(TCNT0), 3);
     assert_eq!(cpu.peek(TIFR0) & OCF0A, OCF0A);
-    assert_eq!(oc0a_highs(&mut cpu), [9]);
+    assert_eq!(oc0a_highs(&mut cpu), [10]);
 }
 
 /// Timer0 at /8 from cycle 0. The `PSRSYNC` store starts at cycle 7 and ends
@@ -243,19 +244,20 @@ fn stop_then_restart_in_fast_pwm(tcnt: u8) -> Cpu {
 }
 
 /// BOTTOM at edge 3 sets `OC0A` and loads `OCR0A` = 20. TCNT0 reaches 20 at
-/// edge 27, 20 counts after the restart, and clears it (§15.7.3).
+/// edge 27, 20 counts after the restart, and the match clears it as TCNT0
+/// leaves 20, at edge 28 (§15.7.3, Figure 15-6).
 #[test]
 fn a_stop_on_bottom_copies_the_buffered_ocr() {
     let mut cpu = stop_then_restart_in_fast_pwm(0xFD);
-    assert_eq!(oc0a_edges(&mut cpu), [(Level::High, 3), (Level::Low, 27)]);
+    assert_eq!(oc0a_edges(&mut cpu), [(Level::High, 3), (Level::Low, 28)]);
 }
 
 /// The stop leaves TCNT0 at 0xFF with `OCR0A` = 10. BOTTOM at edge 8 sets
-/// `OC0A` and loads 30, and TCNT0 reaches 30 at edge 38.
+/// `OC0A` and loads 30, and TCNT0 reaches 30 at edge 38 and leaves it at 39.
 #[test]
 fn a_stop_before_bottom_leaves_the_buffer() {
     let mut cpu = stop_then_restart_in_fast_pwm(0xFC);
-    assert_eq!(oc0a_edges(&mut cpu), [(Level::High, 8), (Level::Low, 38)]);
+    assert_eq!(oc0a_edges(&mut cpu), [(Level::High, 8), (Level::Low, 39)]);
 }
 
 /// Timer1 in normal mode at /1 from 0xFFFE. The `STS` stop store ends on

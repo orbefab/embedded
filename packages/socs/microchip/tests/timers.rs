@@ -160,22 +160,27 @@ fn fast_pwm_tov_is_at_top_and_ocr_updates_at_bottom() {
     assert_eq!(buffered.peek(0x46), 0, "new TOP is 2, so the count cleared");
 }
 
-/// §15.7.4 / Table 15-8 mode 5. Phase-correct period is 2×TOP. TOV is at BOTTOM.
-/// OCR updates at TOP.
+/// §15.7.4 / Table 15-8 mode 5. Phase-correct period is 2×TOP. TOV is at BOTTOM,
+/// on the clock that leaves 0: Figure 16-12 with BOTTOM for TOP, as §16.10 says
+/// for the modes that set TOV at BOTTOM.
 #[test]
 fn phase_correct_tov_is_at_bottom_and_ocr_updates_at_top() {
     let mut cpu = Cpu::new();
     cpu.poke(0x47, 3);
     cpu.poke(0x44, 0x01);
     cpu.poke(0x45, 0x08 | 0x01);
-    run_nops(&mut cpu, 5);
-    assert_eq!(cpu.peek(0x46), 1, "counting down after TOP");
-    assert_eq!(flags(&cpu, 0x35) & 1, 0);
+    run_nops(&mut cpu, 6);
+    assert_eq!(cpu.peek(0x46), 0, "counting down after TOP");
+    assert_eq!(
+        flags(&cpu, 0x35) & 1,
+        0,
+        "arriving at BOTTOM does not set TOV"
+    );
     cpu.load_words(&nop_sled(1));
     cpu.insns(1);
-    assert_eq!(cpu.cycles(), 6);
-    assert_eq!(cpu.peek(0x46), 0);
-    assert_eq!(flags(&cpu, 0x35) & 1, 1, "TOV at BOTTOM");
+    assert_eq!(cpu.cycles(), 7);
+    assert_eq!(cpu.peek(0x46), 1);
+    assert_eq!(flags(&cpu, 0x35) & 1, 1, "TOV as TCNT leaves BOTTOM");
     assert_eq!(6, 2 * 3, "period is 2×TOP");
 }
 
@@ -190,7 +195,18 @@ fn phase_frequency_correct_updates_at_bottom() {
     cpu.poke(0x81, 0x10 | 0x01); // WGM13, CS=/1. Mode 8.
     run_nops(&mut cpu, 8);
     assert_eq!(cpu.peek(0x84), 0);
-    assert_eq!(flags(&cpu, 0x36) & 1, 1, "TOV1 at BOTTOM");
+    assert_eq!(
+        flags(&cpu, 0x36) & 1,
+        0,
+        "arriving at BOTTOM does not set TOV1"
+    );
+    run_nops(&mut cpu, 1);
+    assert_eq!(cpu.peek(0x84), 1);
+    assert_eq!(
+        flags(&cpu, 0x36) & 1,
+        1,
+        "TOV1 as TCNT1 leaves BOTTOM (Figure 16-12, §16.10)"
+    );
 }
 
 /// Table 15-8 mode 4 (WGM02 set, WGM1:0 clear) is reserved. The counter stays put.
@@ -237,25 +253,29 @@ fn compare_output_modes_drive_the_oc_pin() {
     toggle.poke(0x47, 1);
     toggle.poke(0x44, 0x40);
     toggle.poke(0x45, 0x01);
-    run_nops(&mut toggle, 1);
-    let high = toggle.take_pin().unwrap();
-    assert_eq!((high.pin, high.level, high.cycle), (22, Level::High, 1));
+    run_nops(&mut toggle, 2);
+    // TCNT0 is 1 at cycle 1, and the match acts as it leaves 1 (Figure 15-10).
+    let toggles: Vec<_> = std::iter::from_fn(|| toggle.take_pin())
+        .map(|report| (report.pin, report.level, report.cycle))
+        .collect();
+    assert_eq!(toggles, vec![(22, Level::Low, 1), (22, Level::High, 2)]);
 
     // Fast PWM non-inverting, OCR=2, TOP=255. The register stays 0 until
     // BOTTOM sets it (§15.7.3). The first clock only connects that 0.
-    // Cycle 256 is the wrap to 0. The match two clocks later clears it.
+    // Cycle 256 is the wrap to 0. TCNT0 is 2 at cycle 258, and the match
+    // clears the pin as it leaves 2 (Figure 15-6, Figure 15-10).
     let mut fast = Cpu::new();
     fast.poke(0x2A, 1 << 6);
     fast.poke(0x47, 2);
     fast.poke(0x44, 0x80 | 0x03);
     fast.poke(0x45, 0x01);
-    run_nops(&mut fast, 258);
+    run_nops(&mut fast, 259);
     let edges: Vec<_> = std::iter::from_fn(|| fast.take_pin())
         .map(|report| (report.level, report.cycle))
         .collect();
     assert_eq!(
         edges,
-        vec![(Level::Low, 1), (Level::High, 256), (Level::Low, 258)],
+        vec![(Level::Low, 1), (Level::High, 256), (Level::Low, 259)],
         "set at BOTTOM, cleared on compare match"
     );
 
@@ -317,9 +337,9 @@ fn compare_output_modes_drive_the_oc_pin() {
         .collect();
     assert_eq!(phase_edges[0].0, 21, "OC0B is PD5");
     // The register is 0 until the down-count match sets it (Table 15-7).
-    // TCNT is 1, 2, 3 at cycles 1–3. The up-count match at 2 clears 0.
-    // Cycle 4 is 2 counting down, which sets OC0B.
-    assert_eq!(rises[0], 4, "first rise is the down-count match");
+    // TCNT is 1, 2, 3 at cycles 1–3. The up-count match leaving 2 clears 0.
+    // TCNT is 2 counting down at cycle 4, and leaving it at 5 sets OC0B.
+    assert_eq!(rises[0], 5, "first rise is the down-count match");
     let pulse = rises[0];
     let end = falls.iter().copied().find(|cycle| *cycle > pulse).unwrap();
     assert_eq!(end - pulse, 2 * 2, "high time is 2×OCR");
@@ -437,9 +457,10 @@ fn force_output_compare_does_not_set_the_flag() {
     assert_eq!(flags(&pwm, 0x35) & 0x02, 0, "FOC is inactive in PWM");
 }
 
-/// §15.5.2. The timer clock after a TCNT write does not compare. The clock
-/// store ends at edge 4 under the old select, so edge 5, TCNT0 4 → 5, is the
-/// blocked match. Edge 6 is the clock its flag would rise on (§15.5).
+/// §15.5.2. The timer clock after a TCNT write does not compare, even when the
+/// timer is stopped at the write. `TCNT0 = OCR0A = 5`. The clock store ends at
+/// edge 4 under the old select, so edge 5, TCNT0 5 → 6, is the clock that
+/// leaves OCR0A, and it is blocked (§15.5.3).
 #[test]
 fn a_tcnt_write_blocks_the_next_compare() {
     let mut cpu = Cpu::new();
@@ -447,7 +468,7 @@ fn a_tcnt_write_blocks_the_next_compare() {
     cpu.poke(0x44, 0x40);
     cpu.poke(0x2A, 1 << 6);
     let program = [
-        imm(16, 4),
+        imm(16, 5),
         out(16, 0x26),
         imm(17, 0x01),
         out(17, 0x25),
@@ -456,7 +477,7 @@ fn a_tcnt_write_blocks_the_next_compare() {
     ];
     cpu.load_words(&program);
     cpu.insns(6);
-    assert_eq!(cpu.peek(0x46), 6);
+    assert_eq!(cpu.peek(0x46), 7);
     assert_eq!(flags(&cpu, 0x35) & 0x02, 0, "the match at OCR was blocked");
     assert!(
         std::iter::from_fn(|| cpu.take_pin()).all(|report| report.level != Level::High),
@@ -754,7 +775,8 @@ fn timer1_waveform_modes_follow_table_16_4() {
         if dual {
             let mut down = timer1(mode, src, top, 0);
             start(&mut down, top);
-            run_nops(&mut down, usize::from(top));
+            // TOV1 rises as TCNT1 leaves BOTTOM (Figure 16-12, §16.10).
+            run_nops(&mut down, usize::from(top) + 1);
             assert_eq!(down.peek(0x36) & 1, 1, "mode {mode} TOV1 at BOTTOM");
         }
         if tov == "MAX" && top != 0xFFFF {
@@ -766,7 +788,9 @@ fn timer1_waveform_modes_follow_table_16_4() {
 
         // Table 16-1 sets OC on a match. Table 16-2 note 1 and §16.9.3–§16.9.5
         // keep inverting PWM low while OCR1x = TOP, so a high pin means the
-        // write of 1 is the live compare.
+        // write of 1 is the live compare. A match acts as TCNT1 leaves OCR1B
+        // (Figure 16-10), and an update at TOP as it leaves TOP (Figure 16-12),
+        // so each read is one clock past the count it names.
         let mut pin = timer1(mode, src, top, 0x30);
         pin.poke(0x24, 1 << 2);
         pin.poke(0x8B, (top >> 8) as u8);
@@ -778,7 +802,7 @@ fn timer1_waveform_modes_follow_table_16_4() {
         pin.load_words(&store);
         pin.insns(4);
         start(&mut pin, 0);
-        run_nops(&mut pin, 1);
+        run_nops(&mut pin, 2);
         let high = pin.pin_levels().get(2) == Some(Level::High);
         assert_eq!(
             high,
@@ -799,7 +823,7 @@ fn timer1_waveform_modes_follow_table_16_4() {
         oc.poke(0x89, 0);
         oc.poke(0x88, 1);
         start(&mut oc, 0);
-        run_nops(&mut oc, 1);
+        run_nops(&mut oc, 2);
         let toggled = oc.pin_levels().get(1) == Some(Level::High);
         let want = update == "Immediate" || matches!(mode, 9 | 11 | 14 | 15);
         assert_eq!(toggled, want, "mode {mode} COM1A toggle");
@@ -908,10 +932,11 @@ fn tccr1a_reserved_bits_read_zero() {
     assert_eq!(cpu.peek(0x80) & 0x0C, 0);
 }
 
-/// §15.5. At prescaler /64 the pin toggles on the match and the flag, then the
-/// interrupt, lands on the next timer clock.
+/// §15.5. At prescaler /64, TCNT0 reaches OCR0A = 1 at cycle 64. The pin
+/// toggles and the flag rises together on the next timer clock, as TCNT0 leaves
+/// OCR0A (Figure 15-10), and the interrupt follows the flag.
 #[test]
-fn compare_flag_lands_one_prescaler_tick_after_the_pin() {
+fn compare_flag_and_pin_land_on_the_tick_that_leaves_ocr() {
     let mut cpu = Cpu::new();
     cpu.poke(0x2A, 1 << 6);
     cpu.poke(0x44, 0x40);
@@ -925,7 +950,11 @@ fn compare_flag_lands_one_prescaler_tick_after_the_pin() {
     assert_eq!(cpu.pc(), 64, "the match clock does not enter");
     assert_eq!(flags(&cpu, 0x35) & 0x02, 0);
     let edge = cpu.take_pin().unwrap();
-    assert_eq!((edge.pin, edge.level, edge.cycle), (22, Level::High, 64));
+    assert_eq!(
+        (edge.pin, edge.level, edge.cycle),
+        (22, Level::Low, 64),
+        "the first clock connects OC0A and the match has not acted"
+    );
     cpu.insns(63);
     assert_eq!(cpu.cycles(), 127);
     assert_eq!(flags(&cpu, 0x35) & 0x02, 0);
@@ -937,45 +966,70 @@ fn compare_flag_lands_one_prescaler_tick_after_the_pin() {
     );
     assert_eq!(cpu.pc(), 0x001C, "TIMER0_COMPA");
     assert_eq!(flags(&cpu, 0x35) & 0x02, 0, "entry clears OCF0A");
+    let edge = cpu.take_pin().unwrap();
+    assert_eq!((edge.pin, edge.level, edge.cycle), (22, Level::High, 128));
 }
 
 /// §15.4 and §15.5.2. `OUT TCNT0` at /1 holds the written value for that cycle.
-/// The next timer clock counts, and its compare match is blocked.
+/// The next timer clock counts, and its compare match is blocked. That clock
+/// leaves the written value, so a write equal to OCR0A misses the match
+/// (§15.5.3), and a write one below it does not.
 #[test]
 fn out_tcnt0_holds_the_written_value_and_blocks_the_next_match() {
-    let mut cpu = Cpu::new();
-    cpu.poke(0x2A, 1 << 6);
-    cpu.poke(0x44, 0x40);
-    cpu.poke(0x47, 5);
-    let program = [
-        imm(16, 1),
-        out(16, 0x25),
-        imm(17, 4),
-        out(17, 0x26),
-        0x0000,
-        0x0000,
-    ];
-    cpu.load_words(&program);
-    cpu.insns(4);
-    assert_eq!(cpu.peek(0x46), 4, "the OUT cycle does not increment TCNT");
-    cpu.insns(1);
-    assert_eq!(cpu.peek(0x46), 5, "the next clock counts");
-    assert_eq!(flags(&cpu, 0x35) & 0x02, 0, "that compare is blocked");
+    let run = |written: u16| {
+        let mut cpu = Cpu::new();
+        cpu.poke(0x2A, 1 << 6);
+        cpu.poke(0x44, 0x40);
+        cpu.poke(0x47, 5);
+        let program = [
+            imm(16, 1),
+            out(16, 0x25),
+            imm(17, written),
+            out(17, 0x26),
+            0x0000,
+            0x0000,
+        ];
+        cpu.load_words(&program);
+        cpu.insns(4);
+        assert_eq!(
+            cpu.peek(0x46),
+            written as u8,
+            "the OUT cycle does not increment TCNT"
+        );
+        cpu.insns(1);
+        assert_eq!(cpu.peek(0x46), written as u8 + 1, "the next clock counts");
+        cpu.insns(1);
+        cpu
+    };
+
+    let mut equal = run(5);
+    assert_eq!(equal.peek(0x46), 7);
+    assert_eq!(
+        flags(&equal, 0x35) & 0x02,
+        0,
+        "the match leaving the written 5 is blocked"
+    );
     assert!(
-        std::iter::from_fn(|| cpu.take_pin()).all(|report| report.level != Level::High),
+        std::iter::from_fn(|| equal.take_pin()).all(|report| report.level != Level::High),
         "the blocked match does not toggle OC0A"
     );
-    cpu.insns(1);
-    assert_eq!(cpu.peek(0x46), 6);
+
+    let mut below = run(4);
+    assert_eq!(below.peek(0x46), 6);
     assert_eq!(
-        flags(&cpu, 0x35) & 0x02,
-        0,
-        "a blocked match does not raise OCF on the clock after it"
+        flags(&below, 0x35) & 0x02,
+        0x02,
+        "the clock after the blocked one leaves 5 and matches"
+    );
+    assert!(
+        std::iter::from_fn(|| below.take_pin()).any(|report| report.level == Level::High),
+        "that match toggles OC0A"
     );
 }
 
 /// §16.5 and §16.7. A 2-cycle `STS` of `TCNT1` does not count on either cycle.
-/// The following timer clock is the blocked compare.
+/// The following timer clock leaves the written value, which equals `OCR1A`,
+/// and is the blocked compare.
 #[test]
 fn sts_tcnt1_holds_across_both_cycles_and_blocks_the_next_match() {
     let mut cpu = Cpu::new();
@@ -988,23 +1042,23 @@ fn sts_tcnt1_holds_across_both_cycles_and_blocks_the_next_match() {
     program.extend(sts(16, 0x81));
     program.push(imm(17, 0x00));
     program.extend(sts(17, 0x85));
-    program.push(imm(18, 0x10));
+    program.push(imm(18, 0x11));
     program.extend(sts(18, 0x84));
     program.push(0x0000);
     program.push(0x0000);
     cpu.load_words(&program);
     cpu.insns(6);
-    assert_eq!(cpu.peek(0x84), 0x10, "neither cycle of the STS counts");
+    assert_eq!(cpu.peek(0x84), 0x11, "neither cycle of the STS counts");
     assert_eq!(cpu.peek(0x85), 0x00);
     cpu.insns(1);
-    assert_eq!(cpu.peek(0x84), 0x11, "the next clock counts once");
+    assert_eq!(cpu.peek(0x84), 0x12, "the next clock counts once");
     assert_eq!(flags(&cpu, 0x36) & 0x02, 0);
     assert!(
         std::iter::from_fn(|| cpu.take_pin()).all(|report| report.level != Level::High),
         "the blocked match does not toggle OC1A"
     );
     cpu.insns(1);
-    assert_eq!(cpu.peek(0x84), 0x12);
+    assert_eq!(cpu.peek(0x84), 0x13);
     assert_eq!(flags(&cpu, 0x36) & 0x02, 0);
 }
 
@@ -1029,9 +1083,10 @@ fn compare_override_with_ddr_clear_emits_no_pin_report() {
 }
 
 /// §15.5.3. Fast PWM, non-inverting, OCR0A = 5. BOTTOM sets OC0A at cycle 256.
-/// `OUT TCNT0, 4` then makes the next count equal OCR. That clock is blocked,
-/// and the one after it is not a compare, so the pin stays high (§15.5.3: the
-/// missed match is lost). The clear is the next real match, at cycle 515.
+/// `OUT TCNT0, 5` holds 5 on its own edge, 258. The clock after it leaves 5
+/// and is blocked, so the pin stays high (§15.5.3: the missed match is lost).
+/// TCNT0 is 0 again at 509 and 5 at 514. The clear is the next real match, as
+/// TCNT0 leaves 5 at cycle 515.
 #[test]
 fn blocked_fast_pwm_match_does_not_move_the_pin() {
     let mut cpu = Cpu::new();
@@ -1040,7 +1095,7 @@ fn blocked_fast_pwm_match_does_not_move_the_pin() {
     cpu.poke(0x44, 0x80 | 0x03);
     cpu.poke(0x45, 0x01);
     let mut program = nop_sled(256);
-    program.push(imm(16, 4));
+    program.push(imm(16, 5));
     program.push(out(16, 0x26));
     program.extend(nop_sled(260));
     cpu.load_words(&program);
@@ -1056,10 +1111,11 @@ fn blocked_fast_pwm_match_does_not_move_the_pin() {
 }
 
 /// §15.7.4 / §15.5.3. Phase correct, non-inverting, OCR0A = 5, TOP = 255.
-/// The down-count match sets OC0A at cycle 505. `OUT TCNT0, 4` at cycle 512
-/// blocks the match at 514. Figure 15-7 puts the missed up-count clear at
-/// TOP, not on the following clock. After the `OUT`, 513 holds 4 and 514 is
-/// 5, so TCNT0 = cycle − 509. TOP 255 is cycle 764.
+/// TCNT0 is 5 counting down at cycle 505, and the match sets OC0A as it leaves
+/// 5, at 506. `OUT TCNT0, 5` at cycle 512 holds 5 on edge 513, and the clock at
+/// 514 that leaves it is blocked. Figure 15-7 puts the missed up-count clear at
+/// TOP, not on the following clock. TCNT0 = cycle − 508, so it is TOP 255 at
+/// 763 and leaves TOP at 764.
 #[test]
 fn blocked_phase_correct_match_does_not_move_the_pin() {
     let mut cpu = Cpu::new();
@@ -1068,7 +1124,7 @@ fn blocked_phase_correct_match_does_not_move_the_pin() {
     cpu.poke(0x44, 0x80 | 0x01);
     cpu.poke(0x45, 0x01);
     let mut program = nop_sled(511);
-    program.push(imm(16, 4));
+    program.push(imm(16, 5));
     program.push(out(16, 0x26));
     program.extend(nop_sled(260));
     cpu.load_words(&program);
@@ -1078,7 +1134,7 @@ fn blocked_phase_correct_match_does_not_move_the_pin() {
         .collect();
     assert_eq!(
         edges,
-        vec![(Level::Low, 1), (Level::High, 505), (Level::Low, 764)],
+        vec![(Level::Low, 1), (Level::High, 506), (Level::Low, 764)],
         "missed up-count clears at TOP"
     );
 }
@@ -1100,7 +1156,7 @@ fn phase_correct_keeps_counting_up_when_top_drops_below_tcnt() {
     cpu.poke(0x86, 10);
     cpu.run_until(0x2B);
     assert_eq!(cpu.peek(0x84), 0x2B);
-    assert_eq!(cpu.peek(0x36) & 0x2F, 0, "no TOP or BOTTOM flag yet");
+    assert_eq!(cpu.peek(0x36) & 0x21, 0, "no TOP or BOTTOM flag yet");
     cpu.run_until(0x2F);
     assert_eq!(cpu.peek(0x84), 0x2F);
 }
@@ -1119,7 +1175,7 @@ fn phase_and_frequency_correct_keeps_counting_up_when_top_drops_below_tcnt() {
     cpu.poke(0x86, 10);
     cpu.run_until(0x2B);
     assert_eq!(cpu.peek(0x84), 0x2B);
-    assert_eq!(cpu.peek(0x36) & 0x2F, 0, "no TOP or BOTTOM flag yet");
+    assert_eq!(cpu.peek(0x36) & 0x21, 0, "no TOP or BOTTOM flag yet");
     cpu.run_until(0x2F);
     assert_eq!(cpu.peek(0x84), 0x2F);
 }
@@ -1169,8 +1225,9 @@ fn rises_after(cpu: &mut Cpu, pin: u32, after: u64) -> Vec<u64> {
 /// (Figure 14-4, §15.8). The first timer clock is edge 6, so TCNT1 = cycle − 5
 /// on the climb. The clear store is cycle 205. Cycle 260 is TOP. Cycle 261 is
 /// 254 counting down, so cycle 465 is 50. The set store is that cycle. The
-/// next down-count match is BOTTOM at 515, up to TOP at 770, then 155 clocks
-/// down to 100 at 925.
+/// count is BOTTOM at 515, up to TOP at 770, then 155 clocks down to 100 at
+/// 925. The down-count match sets the pin as TCNT1 leaves 100, at 926
+/// (Figure 16-10).
 #[test]
 fn timer1_phase_correct_holds_oc1a_until_the_down_match() {
     let mut cpu = Cpu::new();
@@ -1190,11 +1247,11 @@ fn timer1_phase_correct_holds_oc1a_until_the_down_match() {
     assert_eq!(cpu.peek(0x84), 200, "clear COM1A1 at TCNT1 = 200");
     cpu.run_until(465);
     assert_eq!(cpu.peek(0x84), 50, "set COM1A1 at TCNT1 = 50");
-    cpu.run_until(926);
+    cpu.run_until(927);
     let rises = rises_after(&mut cpu, 1, 465);
     assert_eq!(
         rises.first().copied(),
-        Some(925),
+        Some(926),
         "OC1A stays low until the down-count match, got {rises:?}"
     );
 }
@@ -1279,9 +1336,11 @@ fn pin_edges(cpu: &mut Cpu) -> Vec<(Level, u64)> {
 /// up. The register stays 1, so OC1A is high from the re-enable until TOP.
 ///
 /// CS is poked at cycle 0, so the first clock is cycle 1 and TCNT1 follows
-/// the triangle. The down-count match is cycle 410. TOP of the next period
-/// is cycle 765. A poke does not publish: the disconnect is the next clock
-/// (461) and the reconnect is the next clock (661).
+/// the triangle. TCNT1 is 100 counting down at cycle 410, and the match acts
+/// as it leaves 100, at 411. TOP of the next period is cycle 765, and the pin
+/// takes the up-count result as TCNT1 leaves it, at 766 (Figure 16-12). A
+/// poke does not publish: the disconnect is the next clock (461) and the
+/// reconnect is the next clock (661).
 #[test]
 fn timer1_phase_correct_reenable_on_the_up_slope_holds_until_top() {
     let mut cpu = Cpu::new();
@@ -1302,10 +1361,10 @@ fn timer1_phase_correct_reenable_on_the_up_slope_holds_until_top() {
         pin_edges(&mut cpu),
         vec![
             (Level::Low, 1),
-            (Level::High, 410),
+            (Level::High, 411),
             (Level::Low, 461),
             (Level::High, 661),
-            (Level::Low, 765),
+            (Level::Low, 766),
         ]
     );
 }
@@ -1315,15 +1374,16 @@ fn timer1_phase_correct_reenable_on_the_up_slope_holds_until_top() {
 /// until the re-enable. The up-count match of 200 clears it.
 ///
 /// First clock is cycle 1. TCNT1 = cycle through TOP at 255, then
-/// TCNT1 = 510 − cycle while counting down. The down-count match of 100 is
-/// cycle 410. COM1A1 is cleared at 460 (TCNT1 = 50); the pin releases at
-/// 461. 550 `NOP`s, then `LDI`/`STS` of `OCR1AH` and `OCR1AL`. The low-byte
-/// store is cycle 554 and retires at 556, still counting up (TCNT1 = 46)
-/// and still with COM = 0, so the store is only the buffer. The next TOP is
-/// cycle 765 and copies 200. COM is still 0, so OC1A is unchanged. Counting
-/// down, TCNT1 = 220 at cycle 800. COM1A1 is set there and the pin shows the
-/// held 1 at 801. BOTTOM is cycle 1020. TCNT1 = 200 counting up at
-/// 1020 + 200 = 1220, which clears.
+/// TCNT1 = 510 − cycle while counting down. A match acts as TCNT1 leaves
+/// OCR1A, so the down-count match of 100 is cycle 411. COM1A1 is cleared at
+/// 460 (TCNT1 = 50); the pin releases at 461. 550 `NOP`s, then `LDI`/`STS`
+/// of `OCR1AH` and `OCR1AL`. The low-byte store is cycle 554 and retires at
+/// 556, still counting up (TCNT1 = 46) and still with COM = 0, so the store
+/// is only the buffer. TCNT1 leaves the next TOP at cycle 766, which copies
+/// 200 (Figure 16-12). COM is still 0, so OC1A is unchanged. Counting down,
+/// TCNT1 = 220 at cycle 800. COM1A1 is set there and the pin shows the held
+/// 1 at 801. BOTTOM is cycle 1020. TCNT1 = 200 counting up at
+/// 1020 + 200 = 1220, and the match clears as it leaves 200, at 1221.
 #[test]
 fn phase_correct_ocr_updates_at_top_while_com_is_clear() {
     let mut cpu = Cpu::new();
@@ -1345,15 +1405,15 @@ fn phase_correct_ocr_updates_at_top_while_com_is_clear() {
     cpu.run_until(800);
     assert_eq!(cpu.peek(0x84), 220, "set COM1A1 at TCNT1 = 220 down");
     cpu.poke(0x80, 0x80 | 0x01);
-    cpu.run_until(1221);
+    cpu.run_until(1222);
     assert_eq!(
         pin_edges(&mut cpu),
         vec![
             (Level::Low, 1),
-            (Level::High, 410),
+            (Level::High, 411),
             (Level::Low, 461),
             (Level::High, 801),
-            (Level::Low, 1220),
+            (Level::Low, 1221),
         ]
     );
 }
@@ -1362,12 +1422,13 @@ fn phase_correct_ocr_updates_at_top_while_com_is_clear() {
 /// next TOP. The up-count result at that TOP clears the pin. The down-count
 /// match then sets it.
 ///
-/// First clock is cycle 1. OCR1A is planted at 255, so the first TOP, cycle
-/// 255, holds OC1A high (Table 16-3, OCR = TOP). 294 nops, then `LDI`/`STS`
-/// of `OCR1AH` and `OCR1AL`. The low-byte store is cycle 298 and retires at
-/// 300, while counting down. That write is the buffer (§16.9.4). The next
-/// TOP is cycle 765: OCR1A becomes 100 and the up-count result clears OC1A.
-/// Counting down, TCNT1 = 100 at 765 + 155 = 920.
+/// First clock is cycle 1. OCR1A is planted at 255, so the first TOP, which
+/// TCNT1 leaves at cycle 256, sets OC1A high (Table 16-3, OCR = TOP). 294
+/// nops, then `LDI`/`STS` of `OCR1AH` and `OCR1AL`. The low-byte store is
+/// cycle 298 and retires at 300, while counting down. That write is the
+/// buffer (§16.9.4). TCNT1 leaves the next TOP at cycle 766: OCR1A becomes
+/// 100 and the up-count result clears OC1A (Figure 16-12). Counting down,
+/// TCNT1 = 100 at 765 + 155 = 920, and the match sets OC1A as it leaves 100.
 #[test]
 fn phase_correct_ocr_leaving_top_clears_at_top_and_sets_on_the_way_down() {
     let mut cpu = Cpu::new();
@@ -1383,21 +1444,22 @@ fn phase_correct_ocr_leaving_top_clears_at_top_and_sets_on_the_way_down() {
     program.extend(sts(16, 0x88));
     program.extend(nop_sled(700));
     cpu.load_words(&program);
-    cpu.run_until(921);
+    cpu.run_until(922);
     assert_eq!(
         pin_edges(&mut cpu),
         vec![
             (Level::Low, 1),
-            (Level::High, 255),
-            (Level::Low, 765),
-            (Level::High, 920),
+            (Level::High, 256),
+            (Level::Low, 766),
+            (Level::High, 921),
         ]
     );
 }
 
 /// Figure 15-7 / §16.9.4. The same program, with the buffer written 0.
 /// The low-byte `STS` retires at 300. OCR = BOTTOM is continuously low,
-/// so the pin goes low at the next TOP (765), not at the following BOTTOM.
+/// so the pin goes low as TCNT1 leaves the next TOP (766), not at the
+/// following BOTTOM.
 #[test]
 fn phase_correct_ocr_from_top_to_bottom_goes_low_at_top() {
     let mut cpu = Cpu::new();
@@ -1416,12 +1478,12 @@ fn phase_correct_ocr_from_top_to_bottom_goes_low_at_top() {
     cpu.run_until(1100);
     assert_eq!(
         pin_edges(&mut cpu),
-        vec![(Level::Low, 1), (Level::High, 255), (Level::Low, 765)]
+        vec![(Level::Low, 1), (Level::High, 256), (Level::Low, 766)]
     );
 }
 
 /// §15.7.4. Phase-correct OCR = TOP is constant high for COM = 2 and
-/// constant low for COM = 3. The first TOP is cycle 255.
+/// constant low for COM = 3. TCNT0 leaves the first TOP at cycle 256.
 #[test]
 fn phase_correct_ocr_top_is_constant_for_both_com_values() {
     let mut high = Cpu::new();
@@ -1433,7 +1495,7 @@ fn phase_correct_ocr_top_is_constant_for_both_com_values() {
     high.run_until(800);
     assert_eq!(
         pin_edges(&mut high),
-        vec![(Level::Low, 1), (Level::High, 255)]
+        vec![(Level::Low, 1), (Level::High, 256)]
     );
 
     let mut low = Cpu::new();
@@ -1449,10 +1511,11 @@ fn phase_correct_ocr_top_is_constant_for_both_com_values() {
     );
 }
 
-/// §16.9.4. OCR = BOTTOM in phase and frequency correct stays low on the
-/// down-count arrival at 0. ICR1 = 5, OCR1A = 3, COM1A1, /1. The down-count
-/// match sets OC1A at cycle 7. The poke at cycle 8 plants OCR1A = 0 in both
-/// the buffer and the active register. Cycle 10 is that arrival.
+/// §16.9.4. OCR = BOTTOM in phase and frequency correct goes low at BOTTOM.
+/// ICR1 = 5, OCR1A = 3, COM1A1, /1. TCNT1 is 3 counting down at cycle 7, and
+/// the match sets OC1A as it leaves 3, at 8. The poke at cycle 8 plants
+/// OCR1A = 0 in both the buffer and the active register. TCNT1 is 0 at 10
+/// and leaves it at 11.
 #[test]
 fn phase_freq_ocr_zero_goes_low_at_bottom() {
     let mut cpu = Cpu::new();
@@ -1470,7 +1533,7 @@ fn phase_freq_ocr_zero_goes_low_at_bottom() {
     cpu.run_until(16);
     assert_eq!(
         pin_edges(&mut cpu),
-        vec![(Level::Low, 1), (Level::High, 7), (Level::Low, 10)]
+        vec![(Level::Low, 1), (Level::High, 8), (Level::Low, 11)]
     );
 }
 
@@ -1478,9 +1541,9 @@ fn phase_freq_ocr_zero_goes_low_at_bottom() {
 /// BOTTOM. A width wrap above TOP (`0xFF` → 0) is not that clock.
 ///
 /// Mode 7, TOP = OCR0A = 10, OCR0B = 5. The first TOP→BOTTOM is cycle 11
-/// and the match clears at 16. `OUT TCNT0, 0xFE` at cycle 20: 21 holds
-/// 0xFE, 22 is 0xFF, 23 wraps to 0 and does not set. The next TOP→BOTTOM
-/// is cycle 34.
+/// and the match clears as TCNT0 leaves 5, at 17. `OUT TCNT0, 0xFE` at cycle
+/// 20: 21 holds 0xFE, 22 is 0xFF, 23 wraps to 0 and does not set. The next
+/// TOP→BOTTOM is cycle 34, and the match after it is 40.
 #[test]
 fn fast_pwm_width_wrap_does_not_set_the_pin() {
     let mut cpu = Cpu::new();
@@ -1500,9 +1563,9 @@ fn fast_pwm_width_wrap_does_not_set_the_pin() {
         vec![
             (Level::Low, 1),
             (Level::High, 11),
-            (Level::Low, 16),
+            (Level::Low, 17),
             (Level::High, 34),
-            (Level::Low, 39),
+            (Level::Low, 40),
         ]
     );
 }
