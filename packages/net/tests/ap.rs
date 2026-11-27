@@ -342,3 +342,23 @@ fn it_acknowledges_only_frames_to_it() {
     assert_eq!(heard, [Ack::None; 3]);
     assert_eq!(air.sent().len(), 1);
 }
+
+// The last beacon is the last one whose time fits in a Time: a run to the end of time stops.
+#[test]
+fn beacons_stop_at_the_end_of_time() {
+    let mut net = network(Security::Open);
+    net.set_up(Time::ZERO, false);
+    let near = Time::from_ps(u64::MAX - 300_000_000_000);
+    assert_eq!(net.run_until(near), None);
+    net.set_up(near, true);
+    let mut beacons = 0;
+    while let Some(stop) = net.run_until(Time::from_ps(u64::MAX)) {
+        net.take_aired(|f| {
+            assert_eq!(f.mpdu[0], 0x80);
+            assert!(f.start < f.end && f.end == stop.at);
+        });
+        beacons += 1;
+        assert!(beacons <= 3, "a beacon at {:?}", stop.at);
+    }
+    assert!(beacons >= 2);
+}

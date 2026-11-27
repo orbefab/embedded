@@ -70,16 +70,12 @@ fn check_exchange(air: &Air, keyed: bool) {
         assert_eq!(f.mpdu[2..4], 44u16.to_le_bytes());
     }
     let mut answers = answers.into_iter().map(|(_, msdu)| msdu);
-    // Management frames go at 1 Mb/s, the lowest basic rate, and EAPOL-Key frames at 54.
-    for f in air.sent() {
-        let (rate, duration) = if f.mpdu[0] == 0x08 {
-            (Rate::Ofdm(Ofdm::M54), 44u16)
-        } else {
-            (Rate::Dsss1, 314)
-        };
+    // Every other frame, management and EAPOL-Key alike, goes at 1 Mb/s, the lowest basic rate.
+    let data = data_sent(air);
+    for f in air.sent().into_iter().filter(|f| !data.contains(f)) {
         assert_eq!(
             (f.rate, &f.mpdu[2..4]),
-            (rate, &duration.to_le_bytes()[..]),
+            (Rate::Dsss1, &314u16.to_le_bytes()[..]),
             "{:02x?}",
             f.mpdu
         );
@@ -393,4 +389,144 @@ fn a_station_that_wakes_gets_its_held_frames_first() {
             b"\x00\x01\x00\x02two".to_vec()
         ]
     );
+}
+
+// Linux mac80211, the reference access point, sends a frame of the control port protocol, as
+// EAPOL is, at the lowest basic rate (net/mac80211/tx.c sets IEEE80211_TX_CTL_USE_MINRATE),
+// and the rest of its unicast data at the fastest rate both ends name.
+#[test]
+fn eapol_key_frames_go_at_the_lowest_basic_rate() {
+    let (script, until) = subnet_session();
+    let air = run(script, until, keyed_network());
+    let eapol: Vec<_> = (air.sent().into_iter())
+        .filter(|f| f.mpdu.get(24..32) == Some(&common::hex("aaaa03000000888e")))
+        .collect();
+    assert_eq!(eapol.len(), 2, "messages 1 and 3");
+    for f in eapol {
+        assert_eq!(
+            (f.rate, &f.mpdu[2..4]),
+            (Rate::Dsss1, &314u16.to_le_bytes()[..])
+        );
+    }
+    assert!(
+        data_sent(&air)
+            .iter()
+            .all(|f| f.rate == Rate::Ofdm(Ofdm::M54))
+    );
+}
+
+/// `f` with the Power Management bit set.
+fn dozing(mut f: Vec<u8>) -> Vec<u8> {
+    f[1] |= 0x10;
+    f
+}
+
+/// The echo data of each ping reply the network sent, in air order.
+fn echoes(air: &Air) -> Vec<Vec<u8>> {
+    (data_sent(air).into_iter())
+        .map(|f| {
+            let (protocol, _, echo) = lan::read_ipv4(&f.mpdu[24..]);
+            assert_eq!(protocol, 1);
+            echo[4..].to_vec()
+        })
+        .collect()
+}
+
+// Frames to one station go out in the order the router made them, even when one is held for
+// the dozing station and a later one is still in the access point's queue when it wakes.
+#[test]
+fn a_station_that_wakes_gets_its_frames_in_order() {
+    let script = Script::default()
+        .send(ms(10.0), common::auth(0, 1))
+        .send(ms(11.0), common::assoc(common::SSID, None))
+        .send(ms(20.0), common::null(true))
+        .send(
+            ms(30.0),
+            dozing(clear(STA, BSSID, &lan::ping(1, 0, b"zero"))),
+        )
+        .send(
+            ms(40.0),
+            dozing(clear(STA, BSSID, &lan::ping(1, 1, b"one"))),
+        )
+        .doze(ms(30.0), ms(40.1))
+        .send(ms(40.2), clear(STA, BSSID, &lan::ping(1, 2, b"two")));
+    let air = run(script, ms(50.0), network(Security::Open));
+    assert_eq!(
+        echoes(&air),
+        [
+            b"\x00\x01\x00\x00zero".to_vec(),
+            b"\x00\x01\x00\x01one".to_vec(),
+            b"\x00\x01\x00\x02two".to_vec(),
+        ]
+    );
+}
+
+/// The Association Request of [`common::assoc`] as a Reassociation Request from the same
+/// access point (9.3.3.7).
+fn reassoc() -> Vec<u8> {
+    let mut f = common::assoc(common::SSID, None);
+    f[0] = 0x20;
+    let elements = f.split_off(24 + 4);
+    f.extend(BSSID.0);
+    f.extend(elements);
+    f
+}
+
+// A frame held for a dozing station belongs to its association: a new (Re)Association drops
+// it, so the TIM no longer names the station and a PS-Poll gets a Null frame.
+#[test]
+fn a_new_association_drops_the_frames_held_for_the_old_one() {
+    for request in [common::assoc(common::SSID, None), reassoc()] {
+        let script = Script::default()
+            .send(ms(10.0), common::auth(0, 1))
+            .send(ms(11.0), common::assoc(common::SSID, None))
+            .send(ms(20.0), common::null(true))
+            .send(
+                ms(30.0),
+                dozing(clear(STA, BSSID, &lan::ping(1, 0, b"old"))),
+            )
+            .doze(ms(30.0), ms(39.5))
+            .send(ms(40.0), request)
+            .send(ms(105.0), common::ps_poll(1));
+        let air = run(script, ms(110.0), network(Security::Open));
+        assert!(
+            air.rows_seen()
+                .iter()
+                .filter(|r| r.contains(r#""assoc""#))
+                .count()
+                == 2,
+            "{:?}",
+            air.rows_seen()
+        );
+        assert!(echoes(&air).is_empty());
+        let beacon = (air.aired().into_iter())
+            .find(|f| f.mpdu[0] == 0x80 && f.start > ms(40.0))
+            .unwrap();
+        let tim = (common::elements(&beacon.mpdu).into_iter())
+            .find(|(id, _)| *id == 5)
+            .unwrap()
+            .1;
+        assert_eq!(tim, [0, 1, 0, 0]);
+        let last = *air.sent().last().unwrap();
+        assert_eq!(last.mpdu[..2], [0x48, 0x02]);
+    }
+}
+
+// A station that leaves takes nothing more: an answer still queued for it when it sends a
+// Deauthentication or Disassociation is dropped, as mac80211 flushes a removed station's
+// queues. On a WPA2 network the frame would not be sealed, on an open one it would still air.
+#[test]
+fn nothing_is_sent_to_a_station_that_left() {
+    for leave in [
+        common::deauth(3),
+        common::hex(common::capture::DISASSOC_1050),
+    ] {
+        let script = Script::default()
+            .send(ms(10.0), common::auth(0, 1))
+            .send(ms(11.0), common::assoc(common::SSID, None))
+            .send(ms(30.0), clear(STA, BSSID, &lan::ping(1, 0, b"gone")))
+            .send(ms(30.1), leave);
+        let air = run(script, ms(40.0), network(Security::Open));
+        assert!(echoes(&air).is_empty(), "{:?}", air.rows_seen());
+    }
 }

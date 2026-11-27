@@ -1,6 +1,7 @@
 //! When the access point may send: the interframe spaces, the acknowledgement it waits for, and
 //! the beacon interval.
 
+use orbe_model::Time;
 use orbe_model::air::{Ofdm, Preamble, Rate};
 
 pub(crate) const US: u64 = 1_000_000;
@@ -33,10 +34,18 @@ pub(crate) const EAPOL_SENDS: u8 = 4;
 
 /// The lowest basic rate, 1 Mb/s with the long preamble, which every station in the BSS takes.
 /// The access point sends at it what carries no MSDU to one station: Beacons, Probe Responses
-/// and every other Management frame, group frames and Null frames. The access point of
-/// Wireshark's `wpa-Induction.pcap` sends its Management and group Data frames at 1 Mb/s too,
-/// and its Data frames to the station, EAPOL-Key ones included, at 36 to 54 Mb/s.
+/// and every other Management frame, group frames and Null frames, and also EAPOL-Key frames,
+/// as Linux mac80211 sends a frame of the control port protocol at its lowest basic rate
+/// (`IEEE80211_TX_CTL_USE_MINRATE`). The access point of Wireshark's `wpa-Induction.pcap`, a
+/// 2005 Linksys, sent its EAPOL-Key frames at 54 Mb/s instead.
 pub(crate) const BASIC: Rate = Rate::Dsss1;
+
+/// The first target beacon transmission time after `at`, or `None` past the end of [`Time`].
+pub(crate) fn next_tbtt(at: Time) -> Option<Time> {
+    (at.as_ps() / BEACON_INTERVAL + 1)
+        .checked_mul(BEACON_INTERVAL)
+        .map(Time::from_ps)
+}
 
 /// The rate the access point sends a station its Data frames with a body at: the fastest of
 /// [`element::RATES`](crate::element::RATES) and

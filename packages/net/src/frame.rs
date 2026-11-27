@@ -137,6 +137,14 @@ pub(crate) fn has_msdu(mpdu: &[u8]) -> bool {
     kind == DATA && subtype & NO_DATA == 0
 }
 
+/// Whether `mpdu`, a Data frame the access point sends, carries an EAPOL frame: its MSDU
+/// starts with LLC/SNAP and the EAPOL EtherType.
+pub(crate) fn carries_eapol(mpdu: &[u8]) -> bool {
+    has_msdu(mpdu)
+        && mpdu.get(24..30) == Some(&crate::rsn::LLC_SNAP[..])
+        && mpdu.get(30..32) == Some(&crate::rsn::EAPOL[..])
+}
+
 /// Sets the sequence number, 12 bits with fragment 0 (9.2.4.4).
 pub(crate) fn set_sequence(mpdu: &mut [u8], sequence: u16) {
     mpdu[22..24].copy_from_slice(&((sequence & 0xfff) << 4).to_le_bytes());
