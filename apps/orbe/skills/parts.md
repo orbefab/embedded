@@ -21,7 +21,7 @@ A folder already at `parts/<id>/` is `part_exists` and nothing is written. The m
 
 Addressable LEDs: `neopixel-stick-8`. Eight from three pins: `hc595-dip16` (tie SRCLR high, OE low), Block `nano-shift-leds`. Level shifter: `bss138-level-shifter`.
 
-NTC: `thermistor-ntc-10k` (`nano-thermistor`). Batteries: `battery-9v` (`nano-9v-regulator`), `battery-aa-4x` (`nano-aa-pack`). MAX7219 matrices: `max7219-matrix-8x8` (`nano-max7219-matrix`), `max7219-matrix-4in1` (`nano-max7219-scroll`).
+NTC: `thermistor-ntc-10k` (`nano-thermistor`). Batteries: `battery-9v` (`nano-9v-regulator`), `battery-aa-4x` (`nano-aa-pack`). MAX7219: `max7219-matrix-8x8` (`nano-max7219-matrix`), `max7219-matrix-4in1` (`nano-max7219-scroll`); use software SPI on ESP32-S3.
 
 ## Blocks
 

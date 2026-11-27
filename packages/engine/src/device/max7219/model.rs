@@ -9,9 +9,11 @@
 //! shifts first and `LOAD` latches the new 16-bit word (p. 6).
 //!
 //! Power-up state (p. 7): all control registers reset to 0x00 (shutdown mode, display test off,
-//! decode mode off, scan limit 0, intensity 0), blanking the display. Below [`MIN_VCC_V`] (4.0 V,
-//! Electrical Characteristics p. 2) the host releases `DOUT` and `ISET`, the chip ignores edges,
-//! resets to power-up state, blanks the matrix and draws nothing.
+//! decode mode off, scan limit 0, intensity 0), blanking the display. Digit and Control Registers
+//! (p. 6): digit SRAM keeps its data while `V+` stays above about 2 V. Below [`RETENTION_VCC_V`]
+//! (2.0 V) the host releases `DOUT` and `ISET`, the chip ignores edges, resets to power-up state,
+//! blanks the matrix and draws nothing. Between 2.0 V and the 4.0 V operating minimum (Electrical
+//! Characteristics p. 2), the chip keeps its registers and keeps working.
 //!
 //! Peak segment current `ISEG` is set by the external resistor `RSET` between `V+` and `ISET`
 //! per Table 11 (p. 11) and `VLED`, scaled by `(V+ - V_ISET) / (5.0 - V_ISET)` when `V+` differs
@@ -46,8 +48,15 @@ pub const OUTPUT_ISET: usize = 1;
 pub const SAMPLE_VCC: usize = 0;
 pub const SAMPLE_ISET: usize = 1;
 
-/// Electrical Characteristics p. 2: Operating Supply Voltage `V+` minimum (4.0 V to 5.5 V).
-pub const MIN_VCC_V: f64 = 4.0;
+/// Digit and Control Registers p. 6: digit SRAM keeps its data while `V+` stays above about 2 V.
+/// Between 2.0 V and the 4.0 V operating minimum (Electrical Characteristics p. 2), the chip keeps
+/// its registers and keeps working.
+pub const RETENTION_VCC_V: f64 = 2.0;
+
+/// How long a logic input must sit between `VIL` and `VIH` while powered before warning
+/// `chip.protocol` rule `input_level`: 500 ns is well past normal CMOS and BSS138 level-shifter
+/// edge transitions while catching 3.3 V logic pulses and held indeterminate inputs.
+pub const INDETERMINATE_HOLD_PS: u64 = 500_000;
 
 /// Electrical Characteristics p. 3: Data-Out Propagation Delay `tDO`, 25 ns max (`CL = 50 pF`).
 pub const T_DO_PS: u64 = 25_000;
@@ -147,7 +156,7 @@ pub struct Max7219 {
     dout_due: Option<(Time, bool)>,
     /// Previous logic levels on `[DIN, CLK, LOAD]`, `None` while unpowered or before first input.
     prev: Option<[bool; LOGIC]>,
-    /// Whether `V(VCC) - V(GND) >= MIN_VCC_V`.
+    /// Whether `V(VCC) - V(GND) >= RETENTION_VCC_V`.
     powered: bool,
     /// Last sampled `V(VCC) - V(GND)` in volts.
     supply_v: f64,
@@ -168,7 +177,8 @@ pub struct Max7219 {
 impl State for Max7219 {}
 
 /// Peak segment current `ISEG` (amperes) at `V+ = 5.0 V` for external `rset_ohm` and `vled_v`,
-/// interpolating Table 11 (p. 11) linearly in `VLED` and log-log piecewise in `RSET`.
+/// interpolating Table 11 (p. 11) linearly in `VLED` and piecewise linearly in conductance
+/// (`1 / RSET`).
 pub fn table11_iseg(rset_ohm: f64, vled_v: f64) -> f64 {
     if !rset_ohm.is_finite() || rset_ohm <= 0.0 {
         return 0.0;
@@ -328,7 +338,7 @@ impl Max7219 {
 
     fn update_iset(&mut self, v_vcc: f64, v_iset: f64) {
         self.supply_v = v_vcc;
-        let next_a = if v_vcc < MIN_VCC_V - 1e-6 {
+        let next_a = if v_vcc < RETENTION_VCC_V - 1e-6 {
             0.0
         } else {
             let i_iset = (v_iset - ISET_DROP_V) / ISET_RESISTANCE_OHM;
@@ -371,7 +381,7 @@ impl Device for Max7219 {
         height: HEIGHT,
         format: "gray8",
     };
-    const MIN_SUPPLY_V: Option<f64> = Some(MIN_VCC_V);
+    const MIN_SUPPLY_V: Option<f64> = Some(RETENTION_VCC_V);
     const TRACKS_SUPPLY: bool = true;
 
     fn new(params: &Params<'_>) -> Result<Max7219, Error> {
@@ -502,7 +512,7 @@ impl Device for Max7219 {
         let v_vcc = volts.get(SAMPLE_VCC).copied().unwrap_or(0.0);
         let v_iset = volts.get(SAMPLE_ISET).copied().unwrap_or(0.0);
         let was_powered = self.powered;
-        self.powered = v_vcc >= MIN_VCC_V - 1e-6;
+        self.powered = v_vcc >= RETENTION_VCC_V - 1e-6;
         if !self.powered {
             if was_powered {
                 self.reset_registers();
@@ -516,8 +526,8 @@ impl Device for Max7219 {
     }
 
     fn view(&self) -> View<'_> {
-        let iseg_10ua = (self.i_seg_a * 1e5).round().clamp(0.0, f64::from(u16::MAX)) as u16;
-        let dot_ua = (self.dot_a * 1e6).round().clamp(0.0, f64::from(u16::MAX)) as u16;
+        let iseg_10ua = (self.i_seg_a * 1e5).round().clamp(0.0, f64::from(u32::MAX)) as u32;
+        let dot_ua = (self.dot_a * 1e6).round().clamp(0.0, f64::from(u32::MAX)) as u32;
         View::Screen {
             frame: &self.frame,
             panel: Panel {
@@ -528,10 +538,10 @@ impl Device for Max7219 {
                 settings: Settings::new(
                     &SETTINGS,
                     [
-                        u16::from(self.decode_mode),
-                        u16::from(self.intensity),
-                        u16::from(self.scan_limit),
-                        u16::from(self.display_test),
+                        u32::from(self.decode_mode),
+                        u32::from(self.intensity),
+                        u32::from(self.scan_limit),
+                        u32::from(self.display_test),
                         iseg_10ua,
                         dot_ua,
                     ],

@@ -217,10 +217,13 @@ pub enum ProtocolRule {
     /// An HD44780 command or data write arrived before its power-on reset wait elapsed (15 ms
     /// after VCC reaches 4.5 V, or 40 ms after 2.7 V).
     InitWait,
+    /// A digital input sat between its guaranteed `VIL` and `VIH` thresholds longer than a normal
+    /// edge transition, where the datasheet does not guarantee the logic level.
+    InputLevel,
 }
 
 impl ProtocolRule {
-    pub(crate) const ALL: [ProtocolRule; 15] = [
+    pub(crate) const ALL: [ProtocolRule; 16] = [
         ProtocolRule::Command,
         ProtocolRule::PixelFormat,
         ProtocolRule::SdaWhileSclHigh,
@@ -236,6 +239,7 @@ impl ProtocolRule {
         ProtocolRule::BusWidth,
         ProtocolRule::Font,
         ProtocolRule::InitWait,
+        ProtocolRule::InputLevel,
     ];
 
     /// Its place in [`ALL`](Self::ALL).
@@ -261,6 +265,7 @@ impl ProtocolRule {
             "bus_width" => Some(ProtocolRule::BusWidth),
             "font" => Some(ProtocolRule::Font),
             "init_wait" => Some(ProtocolRule::InitWait),
+            "input_level" => Some(ProtocolRule::InputLevel),
             _ => None,
         }
     }
@@ -1480,6 +1485,18 @@ impl Diagnostic {
                     "{part} dropped a write before the HD44780U power-on reset wait elapsed (15 ms after VCC reaches 4.5 V, or 40 ms after 2.7 V), breaking rule {} at {} ps, the first time",
                     rule_text(&ProtocolRule::InitWait),
                     at.as_ps()
+                )
+            }
+            Diagnostic::ChipProtocol {
+                part,
+                at,
+                rule: ProtocolRule::InputLevel,
+            } => {
+                let part = namer(part);
+                format!(
+                    "{part} had a logic input held between VIL and VIH at {} ps, where the logic level is not guaranteed, breaking rule {}, the first time",
+                    at.as_ps(),
+                    rule_text(&ProtocolRule::InputLevel)
                 )
             }
             Diagnostic::ChipProtocol { part, at, rule } => {

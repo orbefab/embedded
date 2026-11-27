@@ -504,7 +504,7 @@ pub struct Screen {
     /// matrices (`max7219`). Absent on screens without per-dot current readings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brightness: Option<Vec<Vec<f64>>>,
-    pub settings: Vec<(String, u16)>,
+    pub settings: Vec<(String, u32)>,
 }
 
 impl Screen {

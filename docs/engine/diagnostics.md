@@ -428,6 +428,7 @@ The message for a dropped transfer is `{part} dropped a transfer that broke rule
 | `bus_width` | An `hd44780_i2c` received an 8-bit command or a function set selecting the 8-bit bus (`DL = 1`), which the PCF8574 backpack cannot drive. |
 | `font` | An `hd44780_i2c` received a function set selecting the 5x10 font (`F = 1`), which is not supported on a 16x2 glass. |
 | `init_wait` | An `hd44780_i2c` received a command or data write before its HD44780U power-on reset wait elapsed (15 ms after `VCC` reaches 4.5 V, or 40 ms after `VCC` reaches 2.7 V, ADE-207-272 Figs. 23–24). The write is dropped as busy, and its time is the first early `E` falling edge. |
+| `input_level` | A `max7219` driven logic input (`DIN`, `CLK`, or `LOAD`) stayed between its `VIL` (0.8 V) and `VIH` (3.5 V) thresholds longer than a normal edge transition (500 ns) while powered, where the datasheet does not guarantee the logic level (for example, 3.3 V logic driving a 5 V MAX7219 without a level shifter). Undriven high-Z pins during MCU boot are not flagged. |
 
 ## chip.link_miswired
 

@@ -43,8 +43,8 @@ const ISET: usize = 6;
 pub(crate) const DC_PATHS: [(usize, usize); 4] =
     [(DOUT, VCC), (DOUT, GND), (ISET, GND), (VCC, GND)];
 
-/// Margin inside the 4.0 V minimum supply comparator so an exact 4.0 V rail reads high without
-/// chattering on 1-ULP solver rounding.
+/// Margin inside strict `> 0.0` comparators (the 2.0 V retention supply floor and `VIH` input
+/// threshold) so an exact boundary voltage reads high without chattering on 1-ULP solver rounding.
 const BOUND_INSIDE_V: f64 = 1e-6;
 
 /// No events. All inputs arrive on pins.
@@ -106,9 +106,13 @@ pub(crate) fn chip(part: PartId, dev: &Max7219) -> Chip {
         terms: vec![(Node::from(pins[pin]), 1.0), (Node::from(pins[GND]), -1.0)],
         offset: volts,
     };
+    let high = dev.input_threshold.high.si.get();
+    let low = dev.input_threshold.low.si.get();
+    let rise_v = high - BOUND_INSIDE_V.min(0.25 * high);
+    let fall_v = low.min(rise_v);
     let watch = |pin: usize| Watch {
-        rise: above_gnd(pin, dev.input_threshold.high.si.get()),
-        fall: above_gnd(pin, dev.input_threshold.low.si.get()),
+        rise: above_gnd(pin, rise_v),
+        fall: above_gnd(pin, fall_v),
     };
     let supply = |offset: f64| Signal {
         terms: vec![(Node::from(pins[VCC]), 1.0), (Node::from(pins[GND]), -1.0)],
@@ -117,8 +121,8 @@ pub(crate) fn chip(part: PartId, dev: &Max7219) -> Chip {
     let watched = [DIN, CLK, LOAD];
     let mut watches: Vec<Watch> = watched.into_iter().map(watch).collect();
     watches.push(Watch {
-        rise: supply(model::MIN_VCC_V - BOUND_INSIDE_V),
-        fall: supply(model::MIN_VCC_V - 2.0 * BOUND_INSIDE_V),
+        rise: supply(model::RETENTION_VCC_V - BOUND_INSIDE_V),
+        fall: supply(model::RETENTION_VCC_V - 2.0 * BOUND_INSIDE_V),
     });
     let mut signals: Vec<(&'static str, usize)> = watched
         .into_iter()

@@ -108,16 +108,33 @@ fn powers_up_in_shutdown_and_blanked() {
 }
 
 #[test]
-fn table11_matches_datasheet_points() {
-    // Table 11 (p. 11) exact points
-    assert!((table11_iseg(12_200.0, 1.5) - 0.040).abs() < 1e-6);
-    assert!((table11_iseg(11_800.0, 2.0) - 0.040).abs() < 1e-6);
-    assert!((table11_iseg(9_690.0, 3.5) - 0.040).abs() < 1e-6);
-    assert!((table11_iseg(28_000.0, 2.0) - 0.020).abs() < 1e-6);
-    assert!((table11_iseg(63_700.0, 2.0) - 0.010).abs() < 1e-6);
-    assert!((table11_iseg(51_200.0, 3.5) - 0.010).abs() < 1e-6);
-    // Larger RSET lowers current monotonically
+fn table11_matches_all_twenty_datasheet_points_and_interpolation() {
+    // Maxim MAX7219/MAX7221 Table 11 (p. 11): all 20 (RSET, VLED) -> ISEG points.
+    let vleds = [1.5, 2.0, 2.5, 3.0, 3.5];
+    let rows = [
+        (0.040, [12_200.0, 11_800.0, 11_000.0, 10_600.0, 9_690.0]),
+        (0.030, [17_800.0, 17_100.0, 15_800.0, 15_000.0, 14_000.0]),
+        (0.020, [29_800.0, 28_000.0, 25_900.0, 24_500.0, 22_600.0]),
+        (0.010, [66_700.0, 63_700.0, 59_300.0, 55_400.0, 51_200.0]),
+    ];
+    for (iseg, rsets) in rows {
+        for (vled, rset) in vleds.into_iter().zip(rsets) {
+            let got = table11_iseg(rset, vled);
+            assert!(
+                (got - iseg).abs() < 1e-6,
+                "VLED={vled} RSET={rset}: got {got}, expected {iseg}"
+            );
+        }
+    }
+    // 9.53 kohm at VLED = 3.5 V (~VOUT = V+ - 1 V) sits near the 40 mA typ electrical spec;
+    // at VLED = 1.85 V it extrapolates cleanly above 40 mA per Table 11's conductance slope.
+    assert!((table11_iseg(9_530.0, 3.5) - 0.04055).abs() < 1e-4);
+    assert!((table11_iseg(10_000.0, 3.5) - 0.03899).abs() < 1e-4);
+    assert!((table11_iseg(9_530.0, 1.85) - 0.04805).abs() < 1e-4);
+    assert!((table11_iseg(10_000.0, 1.85) - 0.04617).abs() < 1e-4);
+    // Larger RSET lowers current monotonically across the range.
     assert!(table11_iseg(20_000.0, 1.85) < table11_iseg(10_000.0, 1.85));
+    assert!(table11_iseg(100_000.0, 2.0) < table11_iseg(63_700.0, 2.0));
 }
 
 #[test]
@@ -228,9 +245,31 @@ fn open_iset_and_unpowered_blank_the_display() {
     assert_eq!(frame_of(&chip), [0; 64]);
     assert!((chip.draw().amps - 0.008).abs() < 1e-6);
 
-    // Unpowered (< 4.0 V): resets, blanks, draws nothing
-    chip.sample(&mut cx, at(t + US), &[3.3, 0.0]);
-    chip.input(&mut cx, at(t + US), levels(false, false, false, false));
+    // Dip to 3.3 V / 2.5 V / 2.0 V (above 2.0 V SRAM retention floor) keeps registers intact.
+    for vcc in [3.999, 3.3, 2.5, 2.0] {
+        chip.sample(&mut cx, at(t + US), &[vcc, v_iset_for(vcc, 10_000.0)]);
+        assert_eq!(chip.digits()[0], 0xFF, "vcc={vcc}");
+        assert!(frame_of(&chip)[0] > 0, "vcc={vcc}");
+    }
+
+    // Below 2.0 V retention floor: resets, blanks, draws nothing.
+    chip.sample(&mut cx, at(t + 2 * US), &[1.9, 0.0]);
+    chip.input(&mut cx, at(t + 2 * US), levels(false, false, false, false));
+    assert_eq!(chip.digits()[0], 0x00);
     assert_eq!(frame_of(&chip), [0; 64]);
     assert_eq!(chip.draw().amps, 0.0);
+}
+
+#[test]
+fn dot_ua_setting_does_not_clip_past_u16_max() {
+    let mut chip = make_chip(1_850);
+    power_on(&mut chip, 6.5, 1_000.0);
+    let mut t = 0;
+    shift_word(&mut chip, &mut t, 0x0F01, true); // display test: all 64 dots at 31/32
+    let View::Screen { panel, .. } = chip.view() else {
+        panic!("max7219 shows a screen");
+    };
+    let dot_ua = panel.settings.get("dot_ua").unwrap();
+    assert!(dot_ua > u32::from(u16::MAX), "dot_ua clipped: {dot_ua}");
+    assert!((f64::from(dot_ua) - 65_920.0).abs() < 200.0, "{dot_ua}");
 }

@@ -5,7 +5,7 @@
 use orbe_engine::Session;
 use orbe_engine::blob::Blobs;
 use orbe_engine::device::max7219::dot_brightness;
-use orbe_engine::diagnostic::Diagnostic;
+use orbe_engine::diagnostic::{Diagnostic, ProtocolRule};
 use orbe_engine::display::{art, lit_count};
 use orbe_engine::name::Name;
 use orbe_model::Time;
@@ -88,6 +88,8 @@ fn max7219(
 
 struct SpiWave {
     t: u64,
+    v_high: f64,
+    v_low: f64,
     din: Vec<(u64, f64)>,
     clk: Vec<(u64, f64)>,
     load: Vec<(u64, f64)>,
@@ -98,33 +100,39 @@ struct SpiWave {
 
 impl SpiWave {
     fn new() -> Self {
+        Self::with_levels(0.0, 5.0)
+    }
+
+    fn with_levels(v_low: f64, v_high: f64) -> Self {
         Self {
             t: 1_000_000, // 1 us
+            v_high,
+            v_low,
             din: Vec::new(),
             clk: Vec::new(),
             load: Vec::new(),
-            din_v: 0.0,
-            clk_v: 0.0,
-            load_v: 5.0,
+            din_v: v_low,
+            clk_v: v_low,
+            load_v: v_high,
         }
     }
 
     fn set_din(&mut self, v: f64) {
-        if (self.din_v - v).abs() > 0.1 {
+        if (self.din_v - v).abs() > 1e-6 {
             self.din.push((self.t, v));
             self.din_v = v;
         }
     }
 
     fn set_clk(&mut self, v: f64) {
-        if (self.clk_v - v).abs() > 0.1 {
+        if (self.clk_v - v).abs() > 1e-6 {
             self.clk.push((self.t, v));
             self.clk_v = v;
         }
     }
 
     fn set_load(&mut self, v: f64) {
-        if (self.load_v - v).abs() > 0.1 {
+        if (self.load_v - v).abs() > 1e-6 {
             self.load.push((self.t, v));
             self.load_v = v;
         }
@@ -133,23 +141,24 @@ impl SpiWave {
     /// Shifts one or more 16-bit words (chain order: farthest chip first) and optionally pulses LOAD.
     fn send(&mut self, words: &[u16], pulse_load: bool) {
         const STEP: u64 = 1_000_000; // 1 us per half-clock
+        let (lo, hi) = (self.v_low, self.v_high);
         if pulse_load {
-            self.set_load(0.0);
+            self.set_load(lo);
             self.t += STEP;
         }
         for &word in words {
             for bit in (0..16).rev() {
-                let v = if (word >> bit) & 1 != 0 { 5.0 } else { 0.0 };
+                let v = if (word >> bit) & 1 != 0 { hi } else { lo };
                 self.set_din(v);
                 self.t += STEP;
-                self.set_clk(5.0);
+                self.set_clk(hi);
                 self.t += STEP;
-                self.set_clk(0.0);
+                self.set_clk(lo);
                 self.t += STEP;
             }
         }
         if pulse_load {
-            self.set_load(5.0);
+            self.set_load(hi);
             self.t += STEP * 2;
         }
     }
@@ -391,10 +400,15 @@ fn outside_datasheet_supply_and_current_keep_working_and_warn() {
         ],
     });
     let s = run_session(doc);
-    // Keeps working: all 64 LEDs lit!
-    assert_eq!(
-        lit_count(&s.display(&Name::new("u1").unwrap()).unwrap().pixels()),
-        64
+    // Keeps working: all 64 LEDs lit, and dot current readback does not clip at 65.535 mA!
+    let disp = s.display(&Name::new("u1").unwrap()).unwrap();
+    let panel = disp.panel();
+    let frame = disp.image();
+    assert_eq!(lit_count(&disp.pixels()), 64);
+    let dot_a = dot_brightness(&panel, &frame)[0][0];
+    assert!(
+        dot_a > 0.0656 && (dot_a - 0.06592).abs() < 0.0005,
+        "expected unclipped ~65.9 mA/dot, got {dot_a}"
     );
     let has_v = s
         .diagnostics()
@@ -414,4 +428,130 @@ fn outside_datasheet_supply_and_current_keep_working_and_warn() {
         "expected supply current rating warning: {:?}",
         s.diagnostics()
     );
+}
+
+#[test]
+fn exact_vih_3v5_and_vil_0v8_work_while_3v3_logic_warns_input_level() {
+    let run_levels = |v_low: f64, v_high: f64| {
+        let mut wave = SpiWave::with_levels(v_low, v_high);
+        for word in [0x0C01, 0x0B07, 0x0A0F, 0x01FF] {
+            wave.send(&[word], true);
+        }
+        let stop = wave.t + 10_000_000;
+        let doc = serde_json::json!({
+            "version": 1,
+            "seed": 0,
+            "analysis": { "transient": { "stop_ps": stop, "max_step_ps": 10_000_000u64, "grid_ps": 10_000_000u64 } },
+            "ground": "gnd",
+            "nets": ["gnd", "vcc", "din", "clk", "load", "dout", "iset"],
+            "parts": [
+                source("v_vcc", "vcc", 5.0),
+                steps("v_din", "din", v_low, &wave.din),
+                steps("v_clk", "clk", v_low, &wave.clk),
+                steps("v_load", "load", v_high, &wave.load),
+                resistor("rset", "vcc", "iset", 10_000.0),
+                max7219("u1", "vcc", "din", "clk", "load", "dout", "iset"),
+            ],
+        });
+        let s = run_session(doc);
+        let lit = lit_count(&s.display(&Name::new("u1").unwrap()).unwrap().pixels());
+        (lit, s.diagnostics())
+    };
+
+    // Exact datasheet VIH = 3.50 V and VIL = 0.80 V work cleanly with no warnings.
+    let (lit_exact, diags_exact) = run_levels(0.80, 3.50);
+    assert_eq!(lit_exact, 8);
+    assert!(diags_exact.is_empty(), "{diags_exact:?}");
+
+    // 3.3 V logic (ESP32-S3 driving a 5 V MAX7219) sits in (0.8 V, 3.5 V), leaves matrix dark,
+    // and warns chip.protocol rule input_level.
+    let (lit_3v3, diags_3v3) = run_levels(0.0, 3.30);
+    assert_eq!(lit_3v3, 0);
+    assert!(
+        diags_3v3.iter().any(|d| matches!(
+            d,
+            Diagnostic::ChipProtocol {
+                rule: ProtocolRule::InputLevel,
+                ..
+            }
+        )),
+        "expected chip.protocol input_level warning at 3.3 V: {diags_3v3:?}"
+    );
+
+    // A normal RC edge (10 kohm + 20 pF, ~200 ns across 0.8 V..3.5 V, like a BSS138 level
+    // shifter) does not false-alarm on input_level.
+    let mut rc_wave = SpiWave::new();
+    for word in [0x0C01, 0x0B07, 0x0A0F, 0x01FF] {
+        rc_wave.send(&[word], true);
+    }
+    let rc_stop = rc_wave.t + 10_000_000;
+    let rc_doc = serde_json::json!({
+        "version": 1,
+        "seed": 0,
+        "analysis": { "transient": { "stop_ps": rc_stop, "max_step_ps": 10_000_000u64, "grid_ps": 10_000_000u64 } },
+        "ground": "gnd",
+        "nets": ["gnd", "vcc", "din_src", "din", "clk", "load", "dout", "iset"],
+        "parts": [
+            source("v_vcc", "vcc", 5.0),
+            steps("v_din", "din_src", 0.0, &rc_wave.din),
+            resistor("r_din", "din_src", "din", 10_000.0),
+            {
+                "name": "c_din",
+                "kind": "capacitor",
+                "pins": { "a": "din", "b": "gnd" },
+                "capacitance": val(20e-12, "F"),
+                "initial": null,
+            },
+            steps("v_clk", "clk", 0.0, &rc_wave.clk),
+            steps("v_load", "load", 5.0, &rc_wave.load),
+            resistor("rset", "vcc", "iset", 10_000.0),
+            max7219("u1", "vcc", "din", "clk", "load", "dout", "iset"),
+        ],
+    });
+    let s_rc = run_session(rc_doc);
+    assert_eq!(
+        lit_count(&s_rc.display(&Name::new("u1").unwrap()).unwrap().pixels()),
+        8
+    );
+    assert!(s_rc.diagnostics().is_empty(), "{:?}", s_rc.diagnostics());
+}
+
+#[test]
+fn supply_dip_retains_registers_down_to_2v_and_resets_below_2v() {
+    let run_dip = |dip_v: f64| {
+        let mut wave = SpiWave::new();
+        for word in [0x0C01, 0x0B07, 0x0A0F, 0x01FF] {
+            wave.send(&[word], true);
+        }
+        let dip_start = wave.t + 5_000_000;
+        let dip_end = dip_start + 10_000_000;
+        let stop = dip_end + 10_000_000;
+        let doc = serde_json::json!({
+            "version": 1,
+            "seed": 0,
+            "analysis": { "transient": { "stop_ps": stop, "max_step_ps": 1_000_000u64, "grid_ps": 5_000_000u64 } },
+            "ground": "gnd",
+            "nets": ["gnd", "vcc", "din", "clk", "load", "dout", "iset"],
+            "parts": [
+                steps("v_vcc", "vcc", 5.0, &[(dip_start, dip_v), (dip_end, 5.0)]),
+                steps("v_din", "din", 0.0, &wave.din),
+                steps("v_clk", "clk", 0.0, &wave.clk),
+                steps("v_load", "load", 5.0, &wave.load),
+                resistor("rset", "vcc", "iset", 10_000.0),
+                max7219("u1", "vcc", "din", "clk", "load", "dout", "iset"),
+            ],
+        });
+        let s = run_session(doc);
+        assert!(
+            s.diagnostics().is_empty(),
+            "dip={dip_v}V: {:?}",
+            s.diagnostics()
+        );
+        lit_count(&s.display(&Name::new("u1").unwrap()).unwrap().pixels())
+    };
+
+    for dip in [3.999, 3.3, 2.5, 2.0] {
+        assert_eq!(run_dip(dip), 8, "dip={dip}V should retain registers");
+    }
+    assert_eq!(run_dip(1.9), 0, "dip=1.9V below 2 V floor should reset");
 }

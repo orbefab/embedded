@@ -72,7 +72,7 @@ mod tests {
 
     use super::super::model::SETTINGS;
 
-    fn panel(on: bool, dot_ua: u16) -> Panel {
+    fn panel(on: bool, dot_ua: u32) -> Panel {
         Panel {
             kind: "max7219",
             width: WIDTH,

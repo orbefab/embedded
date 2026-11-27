@@ -81,7 +81,7 @@ mod tests {
     const W: usize = WIDTH as usize;
 
     /// The settings Adafruit SSD1306 and U8g2 leave a 128 by 64 panel in.
-    fn settings(change: &[(&str, u16)]) -> Settings {
+    fn settings(change: &[(&str, u32)]) -> Settings {
         let mut values = [0xcf, 0, 0, 0, 0, 63, 1, 1, 0x12, 0x14];
         for &(name, value) in change {
             let k = SETTINGS.iter().position(|&s| s == name).unwrap();
@@ -90,7 +90,7 @@ mod tests {
         Settings::new(&SETTINGS, values)
     }
 
-    fn panel(flags: Flags, change: &[(&str, u16)]) -> Panel {
+    fn panel(flags: Flags, change: &[(&str, u32)]) -> Panel {
         Panel {
             kind: "ssd1306",
             width: WIDTH,

@@ -1,13 +1,20 @@
 use orbe_model::{Drive, Time};
 
 use crate::active;
-use crate::diagnostic::Diagnostic;
+use crate::device::max7219;
+use crate::diagnostic::{Diagnostic, ProtocolRule};
+use crate::finite::Finite;
 use crate::name::{Name, Ref};
-use crate::netlist::{Contact, Model, NetId, Netlist, PartId};
+use crate::netlist::{Chip, Contact, Model, NetId, Netlist, PartId};
+use crate::observe::Columns;
 use crate::passive::Switch;
 use crate::topology::{find, unite};
 
-/// The digital inputs a firmware reads while nothing drives them.
+/// Margin inside `VIL`/`VIH` so exact boundary voltages count as valid low/high, not indeterminate.
+const BAND_MARGIN_V: f64 = 1e-6;
+
+/// The digital inputs a firmware reads while nothing drives them, and driven `max7219` logic
+/// inputs held in the indeterminate band between `VIL` and `VIH`.
 ///
 /// A chip's port pin leaks to its supply and its ground, so its net always has a DC path to
 /// ground and `net.floating` never names it. With that leakage left out, the level of an input
@@ -18,12 +25,28 @@ use crate::topology::{find, unite};
 #[derive(Clone)]
 pub(crate) struct Inputs {
     candidates: Vec<Candidate>,
+    /// `max7219` logic inputs monitored for driven voltages held in `(VIL, VIH)`.
+    bands: Vec<InputBand>,
     /// The static graph's union-find: every part's DC paths, but an active chip's, which its
     /// drives stand in for, a capacitor's, and a switch's, which its contact stands in for.
     joined: Vec<usize>,
     /// Each switch's part and nets.
     switches: Vec<(PartId, [NetId; 2])>,
     found: Vec<Diagnostic>,
+}
+
+/// A `max7219`'s `[DIN, CLK, LOAD]` inputs checked for driven voltages sitting between `VIL` and
+/// `VIH` longer than a normal edge transition while the chip is powered.
+#[derive(Clone)]
+struct InputBand {
+    part: Ref,
+    vcc: usize,
+    gnd: usize,
+    pins: [(NetId, usize); 3],
+    vil: f64,
+    vih: f64,
+    since: [Option<Time>; 3],
+    warned: bool,
 }
 
 /// An output of an active chip whose net holds another part's pin and reaches ground only
@@ -37,15 +60,32 @@ struct Candidate {
 }
 
 impl Inputs {
-    pub(crate) fn new(netlist: &Netlist, actives: &[active::Chip]) -> Inputs {
+    pub(crate) fn new(netlist: &Netlist, actives: &[active::Chip], columns: &Columns) -> Inputs {
         let mut joined: Vec<usize> = (0..netlist.nets().len()).collect();
         let mut switches = Vec::new();
+        let mut bands = Vec::new();
         let is_active = |id: PartId| actives.iter().any(|chip| chip.part == Some(id));
         for (id, part) in netlist.parts() {
             let pins = part.model.pins();
             match &part.model {
                 Model::Switch(Switch { pins, .. }) => switches.push((id, *pins)),
                 Model::Capacitor(_) => {}
+                Model::Chip(Chip::Max7219(dev)) => {
+                    bands.push(InputBand {
+                        part: Ref::Part(part.name.clone()),
+                        vcc: columns.net(dev.pins[0]),
+                        gnd: columns.net(dev.pins[1]),
+                        pins: [
+                            (dev.pins[2], columns.net(dev.pins[2])),
+                            (dev.pins[3], columns.net(dev.pins[3])),
+                            (dev.pins[4], columns.net(dev.pins[4])),
+                        ],
+                        vil: dev.input_threshold.low.si.get(),
+                        vih: dev.input_threshold.high.si.get(),
+                        since: [None; 3],
+                        warned: false,
+                    });
+                }
                 _ if is_active(id) => {}
                 model => {
                     for &(left, right) in model.dc_paths() {
@@ -88,10 +128,43 @@ impl Inputs {
         }
         Inputs {
             candidates,
+            bands,
             joined,
             switches,
             found: Vec::new(),
         }
+    }
+
+    fn build_joined(
+        &self,
+        at: Time,
+        netlist: &Netlist,
+        actives: &[active::Chip],
+        cores: &[active::Core],
+    ) -> Vec<usize> {
+        let mut joined = self.joined.clone();
+        for &(id, [a, b]) in &self.switches {
+            let Model::Switch(switch) = &netlist.part(id).model else {
+                unreachable!("a switch's part is a switch");
+            };
+            if *switch.schedule.before(at) == Contact::Closed {
+                unite(&mut joined, a.index(), b.index());
+            }
+        }
+        for (chip, core) in actives.iter().zip(cores) {
+            for (n, (out, &drive)) in chip.outputs.iter().zip(core.drive()).enumerate() {
+                if out.pull_down.is_some() && core.pulls_down(n) {
+                    unite(&mut joined, out.pin.index(), out.gnd.index());
+                }
+                let rail = match drive {
+                    Drive::High | Drive::PullUp => out.vcc,
+                    Drive::Low => out.gnd,
+                    Drive::Off => continue,
+                };
+                unite(&mut joined, out.pin.index(), rail.index());
+            }
+        }
+        joined
     }
 
     /// Checks the accepted step at `at`, solved with the drives `cores` hold. `read(k, output)`
@@ -102,9 +175,16 @@ impl Inputs {
     /// does not count. A candidate warns once, at the first step where its drive is off and it
     /// does not pull down, its firmware has read it in that stretch by then, and its net reaches
     /// ground through neither a closed switch nor another output's drive or pull-down.
+    ///
+    /// Also checks each powered `max7219`'s driven logic inputs (`DIN`, `CLK`, `LOAD`): if a
+    /// driven input stays strictly inside `(VIL, VIH)` for at least
+    /// [`max7219::model::INDETERMINATE_HOLD_PS`], warns `chip.protocol` rule `input_level` once.
+    /// High-Z undriven pins (such as MCU GPIOs during power-on boot before `setup()` sets
+    /// `pinMode(OUTPUT)`) have no DC path in `joined` and do not trigger this warning.
     pub(crate) fn sample(
         &mut self,
         at: Time,
+        row: &[Finite],
         netlist: &Netlist,
         actives: &[active::Chip],
         cores: &[active::Core],
@@ -126,31 +206,8 @@ impl Inputs {
                 k += 1;
                 continue;
             }
-            let joined = joined.get_or_insert_with(|| {
-                let mut joined = self.joined.clone();
-                for &(id, [a, b]) in &self.switches {
-                    let Model::Switch(switch) = &netlist.part(id).model else {
-                        unreachable!("a switch's part is a switch");
-                    };
-                    if *switch.schedule.before(at) == Contact::Closed {
-                        unite(&mut joined, a.index(), b.index());
-                    }
-                }
-                for (chip, core) in actives.iter().zip(cores) {
-                    for (n, (out, &drive)) in chip.outputs.iter().zip(core.drive()).enumerate() {
-                        if out.pull_down.is_some() && core.pulls_down(n) {
-                            unite(&mut joined, out.pin.index(), out.gnd.index());
-                        }
-                        let rail = match drive {
-                            Drive::High | Drive::PullUp => out.vcc,
-                            Drive::Low => out.gnd,
-                            Drive::Off => continue,
-                        };
-                        unite(&mut joined, out.pin.index(), rail.index());
-                    }
-                }
-                joined
-            });
+            let joined =
+                joined.get_or_insert_with(|| self.build_joined(at, netlist, actives, cores));
             let net = candidate.net.index();
             if find(joined, net) == find(joined, 0) {
                 k += 1;
@@ -163,9 +220,53 @@ impl Inputs {
                 at,
             });
         }
+        for idx in 0..self.bands.len() {
+            if self.bands[idx].warned {
+                continue;
+            }
+            let v_gnd = row[self.bands[idx].gnd].get();
+            let v_vcc = row[self.bands[idx].vcc].get() - v_gnd;
+            if v_vcc < max7219::model::RETENTION_VCC_V - BAND_MARGIN_V {
+                self.bands[idx].since = [None; 3];
+                continue;
+            }
+            let lo = self.bands[idx].vil + BAND_MARGIN_V;
+            let hi = self.bands[idx].vih - BAND_MARGIN_V;
+            if lo >= hi {
+                self.bands[idx].since = [None; 3];
+                continue;
+            }
+            for pin_idx in 0..3 {
+                let (net, col) = self.bands[idx].pins[pin_idx];
+                let v = row[col].get() - v_gnd;
+                if v > lo && v < hi {
+                    let joined = joined
+                        .get_or_insert_with(|| self.build_joined(at, netlist, actives, cores));
+                    if find(joined, net.index()) == find(joined, 0) {
+                        let since = *self.bands[idx].since[pin_idx].get_or_insert(at);
+                        if at.as_ps().saturating_sub(since.as_ps())
+                            >= max7219::model::INDETERMINATE_HOLD_PS
+                        {
+                            self.bands[idx].warned = true;
+                            self.found.push(Diagnostic::ChipProtocol {
+                                part: self.bands[idx].part.clone(),
+                                at,
+                                rule: ProtocolRule::InputLevel,
+                            });
+                            break;
+                        }
+                    } else {
+                        self.bands[idx].since[pin_idx] = None;
+                    }
+                } else {
+                    self.bands[idx].since[pin_idx] = None;
+                }
+            }
+        }
     }
 
-    /// One `chip.floating_input` per pin, through the last sample.
+    /// One `chip.floating_input` per floating pin and one `chip.protocol` (`input_level`) per
+    /// `max7219` with a driven indeterminate input, through the last sample.
     pub(crate) fn findings(&self) -> &[Diagnostic] {
         &self.found
     }
