@@ -15,7 +15,7 @@ A diagnostic is one JSON object. The fields are written in this order.
 
 The run sorts diagnostics by `t_ps`, then `code`, then `refs`, then the JSON bytes of the whole object. A `null` time sorts before a number, so every input finding precedes a solver finding.
 
-A session's `diagnostics()` returns the warnings found so far, and once the session ends they are that list's. While it runs, a `Pulses` record still in flight is not yet counted, as [engine.md](engine.md#sessions) says. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `rating.voltage`, `rating.supply_low`, `regulator.current_limit`, `chip.protocol`, `chip.link_miswired`, `chip.floating_input`, `chip.unmodeled_register` and `chip.restart`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
+A session's `diagnostics()` returns the warnings found so far, and once the session ends they are that list's. While it runs, a `Pulses` record still in flight is not yet counted, as [engine.md](engine.md#sessions) says. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `rating.voltage`, `rating.supply_low`, `rating.temperature`, `regulator.current_limit`, `chip.protocol`, `chip.link_miswired`, `chip.floating_input`, `chip.unmodeled_register` and `chip.restart`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
 
 A run whose diagnostics are all warnings still writes the operating point. A run with an error writes the observations it reached, as [run-folder.md](run-folder.md#observationsjson) says. That is `{}` when nothing solved, as at t = 0. A transient keeps its grid rows before the error, and its last accepted step is the last row. Its observations end there. A warning found before that error is kept, including a rating sampled on any accepted step before it.
 
@@ -704,7 +704,7 @@ The message is one of:
 {ref} is {sample} A now, over its {limit} A rating; it warns if held about {held_ps} ps
 ```
 
-The first is a peak rating's, or a sustained rating's `peak` limit. The second and third are a [sustained rating](#sustained-ratings)'s, RMS or mean as its basis says. The fourth is a sustained rating [over now](#over-now). When the rating sets `"characterized": true`, the phrase reads `beyond the {limit} A load its sheet characterizes` instead of `over its {limit} A rating`, and `data` includes `"characterized": true`. Each value in a message is rounded to 3 significant digits, `tau` too, and `held_ps` to 2. ` while it is {sample} A` is left out when it prints the same as the reading, as at an operating point. ` for {over_ps} ps` is left out for an operating point, and while `over_ps` is 0, as on the step where the quantity first goes over. A session's `diagnostics()` writes each message as it stands through the last accepted step, so a warning seen early reads a shorter time, or none, than the run folder's.
+The first is a peak rating's, or a sustained rating's `peak` limit. The second and third are a [sustained rating](#sustained-ratings)'s, RMS or mean as its basis says. The fourth is a sustained rating [over now](#over-now). When the rating sets `"characterized": true`, the phrase reads `beyond the {limit} A load its sheet characterizes` instead of `over its {limit} A rating`, and `data` includes `"characterized": true`. Each value in a message is rounded to 3 significant digits, `tau` too, and `held_ps` to 2. ` while it is {sample} A` is left out when it prints the same as the reading, as at an operating point. ` for {over_ps} ps` is left out for an operating point, and while `over_ps` is 0, as on the step where the quantity first goes over. A session's `diagnostics()` writes each message as it stands through the last accepted step, so a warning seen early reads a shorter time, or none, than the run folder's. `over_ratings` writes it through its probe, so a live session's `snapshot` reads the time up to `now`.
 
 `data` holds `average`, `held_ps`, `limit`, `now`, `over_ps`, `peak`, `peak_ps`, `sample` and `tau_ps`, unrounded. `limit` is the rating. `peak` is the largest magnitude of the quantity, or the largest reading of a sustained rating's filter. `peak_ps` is when it peaked. `sample` is the quantity's own magnitude at `peak_ps`, which is `peak` for a peak rating. `over_ps` is `null` for an operating point, which has no duration. `average` is `"rms"` or `"mean"` and `tau_ps` the time constant for a sustained rating, and both are `null` for a peak rating. `now` is `false` and `held_ps` is `null`, except for a rating over now.
 
@@ -844,6 +844,30 @@ When the minimum depends on the chip's clock frequency (such as an `atmega328p` 
 `data` holds `limit`, `over_ps`, `peak_ps`, and `voltage`, unrounded, plus `clock_hz` when the minimum depends on the clock frequency. `limit` is the part's declared `ratings.supply_min` (or `ratings.io_supply_min` on `bmp280`'s `VDDIO`, or the safe-operating-area minimum at `clock_hz` on `atmega328p`). `voltage` is `V(pin) - V(ground)` at `peak_ps`, the supply voltage the rail held continuously for at least 1 us most recently while strictly above the unpowered floor and below the minimum (for an operating point or when no warning episode lasted 1 us, the operating-point sample or the episode's upper bound), so nanosecond single-clock dips inside a longer low-supply episode do not replace the voltage the rail held. `over_ps` is `null` for an operating point, and sums the time spent below the minimum across warning episodes in the run.
 
 A supply voltage at or below 0.1 V over the chip's ground is treated as unpowered (switched off or disconnected) and stays silent, and a supply at or above the minimum (once both voltages are rounded to 3 significant digits) stays silent. A clean passage through the band from off to in range or from in range to off is a normal power cycle and stays silent; a sag that leaves and returns above the minimum, a visit that enters from off and falls back to off without reaching the minimum, or a rail in the band when the run starts or ends warns `rating.supply_low` while the part keeps running as its model already behaves.
+
+## rating.temperature
+
+Severity `warning`. Refs is the part, `#<part>`. `t_ps` is when the world's temperature first left the part's operating range, 0 when it starts outside it.
+
+The message is:
+
+```text
+{ref} sits at {peak} degC, outside its {low} degC to {high} degC operating temperature for {over_ps} ps
+```
+
+Each temperature in the message is rounded to 3 significant digits. ` for {over_ps} ps` is left out as for `rating.current`.
+
+`data` holds `high`, `low`, `over_ps`, `peak` and `peak_ps`, unrounded. `low` and `high` are the part's `ratings.temperature`. `peak` is the level farthest outside the range, and `peak_ps` when the world reached it. `over_ps` is `null` for an operating point and sums the time outside through the last accepted step, every visit merged into one warning per part. `over_ratings` sums it through its probe, so a live session's `snapshot` counts the time up to `now`.
+
+The world's temperature is a schedule of levels, so the check reads the schedule, not a row: the level at t = 0 holds from 0, each change holds from its time, and a change at or after the last accepted step is not reached. A level is outside when, rounded to 3 significant digits, it sits below the rounded `min` or above the rounded `max`. An end is inside. The part keeps running, and reads what its model reads there.
+
+An operating range applies to a part that is operating, so only the time the part is powered counts. A part is powered while each of its supply pins, a `dht22`'s `VCC` and a `bmp280`'s `VDD` and `VDDIO`, sits above 0.1 V over its `GND`, the floor `rating.supply_low` treats as off. Each accepted step's supply holds until the next step, and the operating point's from t = 0. After a restart at an edge the next step's holds back to the edge, as a filter's sample does. A part that is never powered never warns, whatever the world's temperature.
+
+A `dht22` and a `bmp280` carry the range, as [netlist.md](netlist.md#ratings) says. The catalog's DHT22 is -40 to 80 degC and its BMP280 -40 to 85 degC. Both minimums are the world's own floor, so only the maximum can be passed there. A DHT22 in a 110 degC world reads, after 2 s:
+
+```text
+#dht__sensor sits at 110 degC, outside its -40 degC to 80 degC operating temperature for 2000000000000 ps
+```
 
 ## regulator.current_limit
 

@@ -21,9 +21,10 @@ use crate::active::{Chip, Core, Output, Stage};
 use crate::diagnostic::{Diagnostic, WorldRule};
 use crate::mna::Node;
 use crate::netlist::json::ParseCtx;
+use crate::netlist::json::temperature::{WireTemperatureRange, resolve_temperature_range};
 use crate::netlist::json::threshold::{WireThreshold, resolve_threshold};
 use crate::netlist::json::{PinMap, WireValue, resolve_limit, resolve_pins, resolve_value};
-use crate::netlist::{NetId, PartId, Threshold, Value};
+use crate::netlist::{NetId, PartId, TemperatureRange, Threshold, Value};
 use crate::ratings::{Ceiling, PinRatings, PinWindow, SupplyMin};
 use crate::watch::{Signal, Watch};
 
@@ -140,6 +141,16 @@ pub struct Bmp280 {
     pub ratings: Bmp280Ratings,
 }
 
+impl Bmp280 {
+    /// The supply pins that power the part, `VDD` and `VDDIO`, each with its ground.
+    pub(crate) fn supplies(&self) -> Vec<(NetId, NetId)> {
+        vec![
+            (self.pins[VDD], self.pins[GND]),
+            (self.pins[VDDIO], self.pins[GND]),
+        ]
+    }
+}
+
 /// Table 3 and Table 2. `supply_voltage` is the ceiling on `VDD` and `VDDIO` over `GND`.
 /// `pin_margin` is how far a pin may sit below `GND`, and an interface pin above `VDDIO`.
 /// `supply_min` and `io_supply_min` are the Table 2 minimums on `VDD` and `VDDIO`.
@@ -153,6 +164,8 @@ pub struct Bmp280Ratings {
     pub supply_min: Option<Value>,
     /// Volt, greater than 0. Minimum operating `VDDIO` over `GND`.
     pub io_supply_min: Option<Value>,
+    /// Table 2's operational temperature range the world's temperature is checked against.
+    pub temperature: Option<TemperatureRange>,
 }
 
 /// The part's Table 3 windows and Table 2 supply minimums. `VDD` and `VDDIO` use
@@ -227,6 +240,8 @@ struct WireRatings {
     supply_min: Option<WireValue>,
     #[serde(default)]
     io_supply_min: Option<WireValue>,
+    #[serde(default)]
+    temperature: Option<WireTemperatureRange>,
 }
 
 pub(crate) fn resolve_bmp280(ctx: ParseCtx<'_>, wire: WireBmp280) -> Option<Bmp280> {
@@ -283,6 +298,7 @@ pub(crate) fn resolve_bmp280(ctx: ParseCtx<'_>, wire: WireBmp280) -> Option<Bmp2
         wire.ratings.io_supply_min,
         out,
     );
+    let temperature = resolve_temperature_range(part_ref, wire.ratings.temperature, out);
     let mut declared = true;
     for &quantity in model::Bmp280::WORLD {
         if world.schedule(quantity).is_none() {
@@ -304,6 +320,7 @@ pub(crate) fn resolve_bmp280(ctx: ParseCtx<'_>, wire: WireBmp280) -> Option<Bmp2
             pin_margin: pin_margin?,
             supply_min: supply_min?,
             io_supply_min: io_supply_min?,
+            temperature: temperature?,
         },
     };
     declared.then_some(bmp280)

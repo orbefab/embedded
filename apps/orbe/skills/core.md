@@ -117,7 +117,7 @@ An error prints `error[<code>]: <message>` and usually a `hint:`. Do what the hi
 | `error[expect_failed]` | Compare `actual`. Fix the circuit or the firmware. |
 | `error[until_timeout]` | The condition did not hold in time. Compare `actual`, or step longer. |
 | `error[no_session]` | Nothing is open under this name. Run the `orbe open` in the hint. |
-| `warning[rating.current]`, `warning[rating.power]` or `warning[rating.voltage]` | A part or a pin went past its rating. Load `orbe skills get ratings`. |
+| `warning[rating.current]`, `warning[rating.power]`, `warning[rating.voltage]` or `warning[rating.temperature]` | A part or a pin went past its rating. Load `orbe skills get ratings`. |
 | `warning[chip.floating_input]` | An input nothing drives. Add a pull-down, or use `INPUT_PULLUP` to GND. Load `orbe skills get arduino`. |
 | `error[scene.layout]` | A bad seating. Load `orbe skills get breadboards`. |
 | `warning[scene.unplaced]` | A part has no `layout`, or a leg sits in a hole it does not join. Place every part cleanly; load `orbe skills get breadboards`. |
