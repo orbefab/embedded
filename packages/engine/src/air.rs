@@ -100,6 +100,10 @@ pub(crate) fn chip(config: &orbe_net::Config) -> Chip {
 /// The stations, by slot: each core with a radio in slot order, then the network.
 pub(crate) struct Air {
     stations: Vec<usize>,
+    /// Each frame a landing handed on, with its sender's slot, in landing order. A landing run
+    /// again after a rewind logs its frames again.
+    #[cfg(test)]
+    pub(crate) log: Vec<(usize, AirFrame)>,
 }
 
 impl Air {
@@ -113,7 +117,11 @@ impl Air {
         let radios = slots().filter(|(_, core)| core.radio() && !net(core));
         let nets = slots().filter(|(_, core)| net(core));
         let stations = radios.chain(nets).map(|(slot, _)| slot).collect();
-        Some(Air { stations })
+        Some(Air {
+            stations,
+            #[cfg(test)]
+            log: Vec::new(),
+        })
     }
 
     /// The slot of each station, in station order.

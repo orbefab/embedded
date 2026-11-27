@@ -88,6 +88,11 @@ pub trait Mcu: Clone + Send + std::fmt::Debug + 'static {
     fn in_flight(&self, _ahead: &Self, _at: Time) -> Vec<Sent> {
         Vec::new()
     }
+    /// Whether it has a radio, which makes it a station on the air for its whole run. It does
+    /// not change while the chip runs. A chip with no radio keeps the default, which has none.
+    fn radio(&self) -> bool {
+        false
+    }
     /// The channel its radio listens on now, or `None` while its RF is off. A chip with no
     /// radio keeps the default, which never listens.
     fn tuned(&self) -> Option<Channel> {

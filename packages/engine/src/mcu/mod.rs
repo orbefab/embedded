@@ -14,6 +14,7 @@ mod report;
 use std::sync::Arc;
 
 use orbe_mcu::{Frame, Mcu as _, Note, Phase, Sent, SentKind};
+use orbe_model::air::{Ack, AirFrame, Channel, Signal as Heard};
 use orbe_model::{Drive, Readings, Stop, Time};
 
 use crate::active::{Chip, Output, Stage, Takes};
@@ -27,7 +28,8 @@ pub use atmega328p::{Atmega328p, Atmega328pRatings, Firmware, Fuses};
 pub use esp32s3::{Esp32s3, Esp32s3Firmware};
 pub(crate) use report::{fault, note, symbolize};
 
-/// A chip, and the net of each of its outputs and the records it sent that it still holds.
+/// A chip, and the net of each of its outputs, the records it sent that it still holds and the
+/// frame it put on the air that ended at its last stop.
 #[derive(Debug)]
 pub(crate) struct Host<M> {
     pub(crate) mcu: M,
@@ -39,6 +41,8 @@ pub(crate) struct Host<M> {
     records: Vec<Record>,
     /// How many records it has made.
     made: u64,
+    /// The frame that ended at its last stop, until the landing there hands it on.
+    aired: Option<AirFrame>,
 }
 
 impl<M: Clone> Clone for Host<M> {
@@ -49,6 +53,7 @@ impl<M: Clone> Clone for Host<M> {
             pins: Arc::clone(&self.pins),
             records: self.records.clone(),
             made: self.made,
+            aired: self.aired.clone(),
         }
     }
 
@@ -62,11 +67,13 @@ impl<M: Clone> Clone for Host<M> {
         }
         self.records.clone_from(&source.records);
         self.made = source.made;
+        self.aired.clone_from(&source.aired);
     }
 }
 
 impl<M: orbe_mcu::Mcu> Host<M> {
-    /// Takes what the chip sent at a stop with `record` set, as records on its outputs' nets.
+    /// Takes what the chip sent at a stop with `record` set, as records on its outputs' nets, and
+    /// the frame it put on the air that ended there.
     #[inline]
     fn run_until(&mut self, limit: Time) -> Option<Stop> {
         let stop = self.mcu.run_until(limit)?;
@@ -77,11 +84,17 @@ impl<M: orbe_mcu::Mcu> Host<M> {
                 pins,
                 records,
                 made,
+                ..
             } = self;
             mcu.take_sent(|sent| {
                 records.push(record(nets, pins, sent, *made));
                 *made += 1;
             });
+        }
+        if stop.record {
+            debug_assert!(self.aired.is_none(), "a landing hands on each frame");
+            let aired = &mut self.aired;
+            self.mcu.take_aired(|frame| *aired = Some(frame));
         }
         Some(stop)
     }
@@ -238,6 +251,7 @@ where
         pins: output_pins.into(),
         records: Vec::new(),
         made: 0,
+        aired: None,
     };
     Chip {
         part: Some(part),
@@ -383,5 +397,31 @@ impl Mcu {
 
     pub(crate) fn read(&self, output: usize) -> Option<Time> {
         each!(self, host => host.mcu.read(output))
+    }
+
+    /// Whether it has a radio, which makes it a station on the air.
+    pub(crate) fn radio(&self) -> bool {
+        each!(self, host => host.mcu.radio())
+    }
+
+    pub(crate) fn tuned(&self) -> Option<Channel> {
+        each!(self, host => host.mcu.tuned())
+    }
+
+    /// The frame it put on the air that ended at its stop, until the landing there.
+    pub(crate) fn aired(&self) -> Option<&AirFrame> {
+        each!(self, host => host.aired.as_ref())
+    }
+
+    pub(crate) fn drop_aired(&mut self) {
+        each!(self, host => host.aired = None)
+    }
+
+    pub(crate) fn hear(&mut self, at: Time, frame: &AirFrame, signal: Heard) -> Ack {
+        each!(self, host => host.mcu.hear(at, frame, signal))
+    }
+
+    pub(crate) fn acked(&mut self, at: Time, ack: Ack) {
+        each!(self, host => host.mcu.acked(at, ack))
     }
 }

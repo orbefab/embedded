@@ -28,10 +28,12 @@ pub(crate) enum Peripheral {
     Pcnt,
     Aes,
     Rsa,
+    /// The Wi-Fi MAC, on a chip built with its radio.
+    Radio,
 }
 
 impl Peripheral {
-    pub(crate) const ALL: [Peripheral; 10] = [
+    pub(crate) const ALL: [Peripheral; 11] = [
         Peripheral::Systimer,
         Peripheral::Timers,
         Peripheral::Spi,
@@ -42,6 +44,7 @@ impl Peripheral {
         Peripheral::Pcnt,
         Peripheral::Aes,
         Peripheral::Rsa,
+        Peripheral::Radio,
     ];
 
     const fn bit(self) -> u16 {
@@ -137,26 +140,32 @@ mod tests {
         events.touch(SYSTIMER + 0x64);
         assert_eq!(
             left(&events),
-            [false, true, true, true, true, true, true, true, true, true]
+            [
+                false, true, true, true, true, true, true, true, true, true, true
+            ]
         );
         keep_all(&mut events);
         events.touch(TIMG1 + 0x10);
         assert_eq!(
             left(&events),
-            [true, false, true, true, true, true, true, true, true, true]
+            [
+                true, false, true, true, true, true, true, true, true, true, true
+            ]
         );
         keep_all(&mut events);
         events.touch(USB_SERIAL_JTAG);
         assert_eq!(
             left(&events),
-            [true, true, true, false, true, true, true, true, true, true]
+            [
+                true, true, true, false, true, true, true, true, true, true, true
+            ]
         );
         keep_all(&mut events);
         events.touch(RMT + 0x20);
         assert_eq!(
             left(&events),
             [
-                true, true, true, true, false, false, true, false, true, true
+                true, true, true, true, false, false, true, false, true, true, true
             ]
         );
         keep_all(&mut events);
@@ -164,7 +173,7 @@ mod tests {
         assert_eq!(
             left(&events),
             [
-                true, true, false, true, true, false, true, false, true, true
+                true, true, false, true, true, false, true, false, true, true, true
             ]
         );
         keep_all(&mut events);
@@ -172,44 +181,58 @@ mod tests {
         assert_eq!(
             left(&events),
             [
-                true, true, false, true, true, false, true, false, true, true
+                true, true, false, true, true, false, true, false, true, true, true
             ]
         );
         keep_all(&mut events);
         events.touch(crate::s3::uart::BASES[2] + 0x1c);
         assert_eq!(
             left(&events),
-            [true, true, true, true, true, false, true, false, true, true]
+            [
+                true, true, true, true, true, false, true, false, true, true, true
+            ]
         );
         keep_all(&mut events);
         events.touch(LEDC + 0xcc);
         assert_eq!(
             left(&events),
-            [true, true, true, true, true, true, false, true, true, true]
+            [
+                true, true, true, true, true, true, false, true, true, true, true
+            ]
         );
         keep_all(&mut events);
         events.touch(PCNT + 0x30);
         assert_eq!(
             left(&events),
-            [true, true, true, true, true, true, true, false, true, true]
+            [
+                true, true, true, true, true, true, true, false, true, true, true
+            ]
         );
         keep_all(&mut events);
         events.touch(AES + 0x48);
         assert_eq!(
             left(&events),
-            [true, true, true, true, true, true, true, true, false, true]
+            [
+                true, true, true, true, true, true, true, true, false, true, true
+            ]
         );
         keep_all(&mut events);
         events.touch(RSA + 0x80c);
         assert_eq!(
             left(&events),
-            [true, true, true, true, true, true, true, true, true, false]
+            [
+                true, true, true, true, true, true, true, true, true, false, true
+            ]
         );
         keep_all(&mut events);
+        // The Wi-Fi MAC's block is not named, so an access there forgets every event.
+        events.touch(0x6003_3d08);
+        assert_eq!(left(&events), [false; 11]);
+        keep_all(&mut events);
         events.touch(GPIO + 4);
-        assert_eq!(left(&events), [false; 10]);
+        assert_eq!(left(&events), [false; 11]);
         keep_all(&mut events);
         events.forget();
-        assert_eq!(left(&events), [false; 10]);
+        assert_eq!(left(&events), [false; 11]);
     }
 }

@@ -205,9 +205,10 @@ pub enum Refused {
 pub enum Halt {
     /// At `at` a pad's drive changed, a record ended, an ADC conversion samples its pad, or
     /// several of these. A record is an SPI2 transfer, an LEDC update that took effect on a pad
-    /// with a net, or an RMT transmission. [`Esp32s3::drive`] gives the new drives,
-    /// [`Esp32s3::take_transfers`], [`Esp32s3::take_duties`] and [`Esp32s3::take_trains`] the
-    /// records, and [`Esp32s3::sample`] takes the pads' voltages at `at` before the chip runs on.
+    /// with a net, an RMT transmission or a Wi-Fi frame. [`Esp32s3::drive`] gives the new
+    /// drives, [`Esp32s3::take_transfers`], [`Esp32s3::take_duties`] and
+    /// [`Esp32s3::take_trains`] the records, `take_aired` the frame, and [`Esp32s3::sample`]
+    /// takes the pads' voltages at `at` before the chip runs on.
     Change {
         at: Tick,
         image: bool,
@@ -387,6 +388,30 @@ impl Esp32s3 {
         self.soc.use_radio();
     }
 
+    /// Whether the chip was built with its Wi-Fi radio.
+    pub fn has_radio(&self) -> bool {
+        self.soc.radio().is_some()
+    }
+
+    /// The channel the radio is tuned to, 1 to 14, or `None` before its RF PLL first started
+    /// on a channel's centre or on a chip without it.
+    pub fn tuned(&self) -> Option<u8> {
+        self.soc.radio().and_then(wifi::Radio::tuned)
+    }
+
+    /// The frame whose end the last `Change` halt with `record` reported, once.
+    pub(crate) fn take_aired(&mut self) -> Option<wifi::Frame> {
+        self.soc.radio_mut().and_then(wifi::Radio::take_aired)
+    }
+
+    /// Whether any station acknowledged the frame that ended at the last halt. The chip takes it
+    /// there before it runs on.
+    pub fn acked(&mut self, ack: orbe_model::air::Ack) {
+        if let Some(radio) = self.soc.radio_mut() {
+            radio.acked(ack);
+        }
+    }
+
     /// Gives each ADC conversion the chip reported a `sample` halt for the code at its pad's
     /// voltage: `volts` of a GPIO that [`adc_pad`] names, against `GND`.
     pub fn sample(&mut self, volts: impl Fn(u8) -> f64) {
@@ -473,10 +498,12 @@ impl Esp32s3 {
                 .trains
                 .get(self.reported_trains)
                 .map(|train| Tick(train.end.0 + 1));
+            let frame = self.soc.radio().and_then(wifi::Radio::end);
             let until = [
                 Some(Tick(limit.0 + 1)),
                 due,
                 spi,
+                frame,
                 ledc.map(|at| Tick(at.0 + 1)),
                 i2c.map(|at| Tick(at.0 + 1)),
                 rmt,
@@ -764,7 +791,12 @@ impl Esp32s3 {
             .get(self.reported_trains)
             .map(|train| train.end)
             .filter(|&end| end <= self.now());
-        let record = [transfer, duty, train].into_iter().flatten().min();
+        let frame = self
+            .soc
+            .radio()
+            .and_then(wifi::Radio::end)
+            .filter(|&end| end <= self.now());
+        let record = [transfer, duty, train, frame].into_iter().flatten().min();
         let change = [self.changed, record, self.sampled]
             .into_iter()
             .flatten()
@@ -825,6 +857,9 @@ impl Esp32s3 {
                     self.reported_duties += unreported.iter().take_while(|d| d.at == at).count();
                     let unreported = &self.trains[self.reported_trains..];
                     self.reported_trains += unreported.iter().take_while(|t| t.end == at).count();
+                    if let Some(radio) = self.soc.radio_mut() {
+                        radio.report(at);
+                    }
                 }
             }
             Halt::Moved(at) => {

@@ -500,12 +500,13 @@ impl Core {
         }
     }
 
-    /// Whether it is a station on the air. No chip is one yet: an ESP32-S3 built with its radio
-    /// keeps the radio's registers but puts nothing on the air.
+    /// Whether it is a station on the air: the network, and a chip with a radio, such as an
+    /// ESP32-S3 built with its radio.
     pub(crate) fn radio(&self) -> bool {
         match self {
             Core::Net(_) => true,
-            Core::Device(_) | Core::Mcu(_) => false,
+            Core::Mcu(mcu) => mcu.radio(),
+            Core::Device(_) => false,
             #[cfg(test)]
             Core::Script(core) => core.radio(),
         }
@@ -515,7 +516,8 @@ impl Core {
     fn tuned(&self) -> Option<Channel> {
         match self {
             Core::Net(net) => net.tuned(),
-            Core::Device(_) | Core::Mcu(_) => unreachable!("only a station listens"),
+            Core::Mcu(mcu) => mcu.tuned(),
+            Core::Device(_) => unreachable!("only a station listens"),
             #[cfg(test)]
             Core::Script(core) => core.tuned(),
         }
@@ -525,7 +527,8 @@ impl Core {
     fn aired(&self) -> Option<&AirFrame> {
         match self {
             Core::Net(net) => net.aired(),
-            Core::Device(_) | Core::Mcu(_) => unreachable!("only a station airs"),
+            Core::Mcu(mcu) => mcu.aired(),
+            Core::Device(_) => unreachable!("only a station airs"),
             #[cfg(test)]
             Core::Script(core) => core.aired(),
         }
@@ -535,7 +538,8 @@ impl Core {
     fn drop_aired(&mut self) {
         match self {
             Core::Net(net) => net.drop_aired(),
-            Core::Device(_) | Core::Mcu(_) => unreachable!("only a station airs"),
+            Core::Mcu(mcu) => mcu.drop_aired(),
+            Core::Device(_) => unreachable!("only a station airs"),
             #[cfg(test)]
             Core::Script(core) => core.drop_aired(),
         }
@@ -546,7 +550,8 @@ impl Core {
     fn hear(&mut self, at: Time, frame: &AirFrame, signal: Heard) -> Ack {
         match self {
             Core::Net(net) => net.hear(at, frame, signal),
-            Core::Device(_) | Core::Mcu(_) => unreachable!("only a station hears"),
+            Core::Mcu(mcu) => mcu.hear(at, frame, signal),
+            Core::Device(_) => unreachable!("only a station hears"),
             #[cfg(test)]
             Core::Script(core) => core.hear(at, frame),
         }
@@ -556,7 +561,8 @@ impl Core {
     fn acked(&mut self, at: Time, ack: Ack) {
         match self {
             Core::Net(net) => net.acked(at, ack),
-            Core::Device(_) | Core::Mcu(_) => unreachable!("only a station airs"),
+            Core::Mcu(mcu) => mcu.acked(at, ack),
+            Core::Device(_) => unreachable!("only a station airs"),
             #[cfg(test)]
             Core::Script(core) => core.acked(at, ack),
         }
@@ -1427,7 +1433,17 @@ impl Actives {
             core.drop_aired();
             core.acked(at, ack);
         }
+        #[cfg(test)]
+        if let Some(air) = &mut self.air {
+            air.log.extend(frames);
+        }
         true
+    }
+
+    /// Each frame a landing handed on, with its sender's slot.
+    #[cfg(test)]
+    pub(crate) fn aired(&self) -> &[(usize, AirFrame)] {
+        self.air.as_ref().map_or(&[], |air| &air.log)
     }
 
     /// The run ends at `at`, where every stop up to `at` has landed. Each pulse target takes the

@@ -26,6 +26,7 @@ A chip is its state. `Mcu` needs `Clone`, and a copy is a checkpoint. The engine
 | `take_sent(sent)` | Hands over each record it sent at the stop `run_until` last returned with `record` set. |
 | `answered(at, miso)` | The bytes the targets answered on MISO to the one record of the stop at `at` that reads, `0xFF` where none answered. It comes before the chip runs past `at`. Does nothing by default. |
 | `in_flight(ahead, at)` | The records it started by `at` and has not ended, where the run ends at `at`. `ahead` is its copy run on from there. Empty by default. |
+| `radio()` | Whether it has a radio, which makes it a station on the air for its whole run. `false` by default. |
 | `tuned()` | The channel its radio listens on now, or `None` while its RF is off. `None` by default. |
 | `take_aired(aired)` | Hands over the frame it put on the air that ended at the stop `run_until` last returned with `record` set, if one did. A radio sends one frame at a time. Sends none by default. |
 | `hear(at, frame, signal)` | Another station's frame on its channel, which ended at `at`, heard at `signal`. Returns whether it acknowledges it. What it causes comes at least 1 ps later, at a stop. `Ack::None` by default. |
@@ -50,7 +51,7 @@ A chip says which of its outputs a record went out on, as an index in its drives
 
 ## The air
 
-A chip with a radio is a station. It puts frames on the air with `take_aired`, listens on the channel `tuned()` names, hears other stations' frames with `hear`, and learns with `acked` whether its own were acknowledged. The types are `orbe_model::air`'s, as [model.md](model.md#the-air) says. Every chip keeps the defaults, which have no radio. The engine owns the air, as [engine.md](engine.md#the-air) says, and calls them only on a station, which no chip is yet.
+A chip with a radio is a station. It puts frames on the air with `take_aired`, listens on the channel `tuned()` names, hears other stations' frames with `hear`, and learns with `acked` whether its own were acknowledged. The types are `orbe_model::air`'s, as [model.md](model.md#the-air) says. Every chip keeps the defaults, which have no radio. The engine owns the air, as [engine.md](engine.md#the-air) says, and calls them only on a station: a chip whose `radio()` is `true`, which an `esp32s3` built with its radio is, as [esp32s3.md](esp32s3.md#the-wi-fi-radio) says.
 
 ## Faults and notes
 

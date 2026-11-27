@@ -1,21 +1,27 @@
 //! An ESP32-S3 in a netlist with a network is built with its radio. The stock Arduino station
 //! sketch then gets through `esp_wifi_init` and `esp_wifi_start`, which `WiFi.mode(WIFI_STA)`
-//! runs, with no diagnostic. Without the network the same app stops at the radio, as before.
+//! runs, with no diagnostic, and its scan puts a probe request on the air on each channel.
+//! Without the network the same app stops at the radio, as before.
 
 use std::sync::Arc;
 
 use orbe_mcu::Setting;
+use orbe_model::Time;
+use orbe_model::air::{AirFrame, Rate};
 
 use super::active::run_active;
+use super::fixtures::open;
+use crate::active::Core;
 use crate::blob::Blobs;
 use crate::diagnostic::Diagnostic;
 use crate::netlist::Netlist;
+use crate::session::BUDGET;
 
 const MS: u64 = 1_000_000_000;
 
-/// The DevKitC-1 module's supply and the stock station app, run for 100 ms, with `network`
+/// The DevKitC-1 module's supply and the stock station app, run for `stop_ms`, with `network`
 /// after the parts.
-fn station(network: &str) -> Netlist {
+fn station(network: &str, stop_ms: u64) -> Netlist {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let rom = std::fs::read(root.join("parts/esp32s3-qfn56/esp32s3_rev0_rom.elf")).unwrap();
     let fixture = root.join("packages/scene/tests/fixtures/esp32s3-stock-station");
@@ -58,7 +64,7 @@ fn station(network: &str) -> Netlist {
                                    "high": {{ "value": 0.75, "unit": "1" }} }} }}
           ]{network}
         }}"#,
-        stop = 100 * MS,
+        stop = stop_ms * MS,
         r = ohm(17.0),
         pull = ohm(45e3),
         leak = ohm(66e6),
@@ -86,11 +92,13 @@ fn uart0(netlist: &Netlist) -> (String, Vec<Diagnostic>) {
     (text, diagnostics)
 }
 
+/// The WPA2 network "orbe" on channel 6.
+const NETWORK: &str = r#", "network": { "ssid": "orbe", "bssid": "02:6f:72:62:65:01",
+    "channel": 6, "passphrase": "orbe-password", "epoch_s": 1773480360 }"#;
+
 #[test]
 fn with_the_network_the_stock_station_starts_its_radio_with_no_diagnostic() {
-    let network = r#", "network": { "ssid": "orbe", "bssid": "02:6f:72:62:65:01", "channel": 6,
-        "passphrase": "orbe-password", "epoch_s": 1773480360 }"#;
-    let (text, diagnostics) = uart0(&station(network));
+    let (text, diagnostics) = uart0(&station(NETWORK, 100));
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     // `WiFi.mode(WIFI_STA)` returns true only when `esp_wifi_init` and `esp_wifi_start` do.
     assert!(text.contains("ready\r\nmode 1\n"), "UART0 output:\n{text}");
@@ -98,7 +106,7 @@ fn with_the_network_the_stock_station_starts_its_radio_with_no_diagnostic() {
 
 #[test]
 fn without_the_network_the_stock_station_stops_at_the_radio() {
-    let (text, diagnostics) = uart0(&station(""));
+    let (text, diagnostics) = uart0(&station("", 100));
     assert!(text.contains("ready"), "UART0 output:\n{text}");
     assert!(!text.contains("mode"), "UART0 output:\n{text}");
     assert!(
@@ -112,4 +120,92 @@ fn without_the_network_the_stock_station_stops_at_the_radio() {
         ),
         "{diagnostics:?}"
     );
+}
+
+const BROADCAST: [u8; 6] = [0xff; 6];
+/// The station's MAC, the chip's base MAC as the model's eFuse holds it.
+const STA: [u8; 6] = [0x02, 0, 0, 0, 0, 0x01];
+
+/// The Information Elements of a Management frame's body, each its ID and its bytes.
+fn elements(mut body: &[u8]) -> Vec<(u8, &[u8])> {
+    let mut found = Vec::new();
+    while let [id, len, rest @ ..] = body {
+        let (bytes, next) = rest.split_at(usize::from(*len));
+        found.push((*id, bytes));
+        body = next;
+    }
+    found
+}
+
+/// The stock station's `WiFi.scanNetworks()` sends a probe request on each channel it scans, and
+/// the network on channel 6 hears its own and answers it. Each probe is a wildcard Probe Request
+/// from the station's MAC to everyone, at 1 Mb/s, on the channel the chip tuned to and named in
+/// its DS Parameter Set. The default country, "01", has channels 1 to 11 (IDF v5.5.5,
+/// `esp_wifi.h`, `esp_wifi_set_country`), so the scan probes those, once each, 100 ms apart.
+#[test]
+fn the_stock_stations_scan_probes_each_channel_and_the_network_answers_on_its_own() {
+    let netlist = station(NETWORK, 1100);
+    let mut session = open(&netlist, Vec::new(), BUDGET);
+    session.advance_to(Time::from_ps(1100 * MS));
+    assert!(
+        session.diagnostics().is_empty(),
+        "{:?}",
+        session.diagnostics()
+    );
+
+    let chip = (session.actives.cores().iter())
+        .position(|core| matches!(core, Core::Mcu(_)))
+        .expect("the chip");
+    let mut sent: Vec<&AirFrame> = Vec::new();
+    let mut answers: Vec<&AirFrame> = Vec::new();
+    for (sender, frame) in session.actives.aired() {
+        // A landing run again after a rewind hands its frame on again.
+        let seen = |frames: &[&AirFrame]| frames.iter().any(|f| f.end == frame.end);
+        match *sender {
+            k if k == chip && !seen(&sent) => sent.push(frame),
+            k if k != chip && frame.mpdu[4..10] == STA && !seen(&answers) => answers.push(frame),
+            _ => {}
+        }
+    }
+
+    let channels: Vec<u8> = sent.iter().map(|frame| frame.channel.number()).collect();
+    assert_eq!(channels, (1..=11).collect::<Vec<u8>>());
+    for frame in &sent {
+        let mpdu = &frame.mpdu;
+        let channel = frame.channel.number();
+        // Frame Control: a Management frame of subtype 4, Probe Request (9.2.4.1.3).
+        assert_eq!(mpdu[..2], [0x40, 0x00], "channel {channel}");
+        assert_eq!(mpdu[4..10], BROADCAST, "DA, channel {channel}");
+        assert_eq!(mpdu[10..16], STA, "SA, channel {channel}");
+        assert_eq!(mpdu[16..22], BROADCAST, "BSSID, channel {channel}");
+        let elements = elements(&mpdu[24..]);
+        // The wildcard SSID first (9.3.3.9), and the DS Parameter Set names the channel.
+        assert_eq!(elements[0], (0, &[][..]), "channel {channel}");
+        assert!(elements.contains(&(3, &[channel][..])), "channel {channel}");
+        assert_eq!(frame.rate, Rate::Dsss1);
+        // Its airtime with the FCS, to the chip's next 480 MHz tick.
+        let airtime = frame.end.as_ps() - frame.start.as_ps();
+        let want = Rate::Dsss1.airtime(mpdu.len() + 4);
+        assert!(
+            (want..want + 2_084).contains(&airtime),
+            "{airtime} for {want}"
+        );
+    }
+    let starts: Vec<u64> = sent.iter().map(|frame| frame.start.as_ps() / MS).collect();
+    assert!(
+        starts
+            .windows(2)
+            .all(|pair| (100..=101).contains(&(pair[1] - pair[0]))),
+        "{starts:?}"
+    );
+
+    // The network heard only the probe on its own channel, and answered it with a Probe
+    // Response DIFS after it ended.
+    let probe = sent[5];
+    let [answer] = answers[..] else {
+        panic!("{answers:?}");
+    };
+    assert_eq!(answer.channel.number(), 6);
+    assert_eq!(answer.mpdu[..2], [0x50, 0x00]);
+    assert!(answer.start > probe.end, "{answer:?} after {probe:?}");
 }
