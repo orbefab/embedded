@@ -625,6 +625,8 @@ pub enum Diagnostic {
     RatingSupplyLow(SupplyExcursion),
     /// A linear regulator was held at its current limit and its output sagged.
     RegulatorCurrentLimit(CurrentLimitExcursion),
+    /// The world's temperature left a part's operating temperature range.
+    RatingTemperature(TemperatureExcursion),
 }
 
 /// Which record kind [`Diagnostic::ChipLinkUnsupported`] could not route faithfully.
@@ -719,6 +721,24 @@ pub struct SupplyExcursion {
     pub over_ps: Option<u64>,
 }
 
+/// One part's world temperature outside its operating range, merged over the whole run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TemperatureExcursion {
+    /// `#<part>`.
+    pub part: Ref,
+    /// The sheet's operating range, in degC.
+    pub low: f64,
+    pub high: f64,
+    /// The world's temperature where it was farthest outside the range, in degC.
+    pub peak: f64,
+    /// When the world reached `peak`.
+    pub peak_at: Time,
+    /// When the world first left the range.
+    pub first: Time,
+    /// Total time outside the range. `None` for an operating point, which has no duration.
+    pub over_ps: Option<u64>,
+}
+
 /// One linear regulator held at its current limit with its output pulled below regulation,
 /// merged over the whole run.
 #[derive(Clone, Debug, PartialEq)]
@@ -793,6 +813,7 @@ impl Diagnostic {
             Diagnostic::RatingVoltage(_) => "rating.voltage",
             Diagnostic::RatingSupplyLow(_) => "rating.supply_low",
             Diagnostic::RegulatorCurrentLimit(_) => "regulator.current_limit",
+            Diagnostic::RatingTemperature(_) => "rating.temperature",
         }
     }
 
@@ -809,7 +830,8 @@ impl Diagnostic {
             | Diagnostic::RatingPower(_)
             | Diagnostic::RatingVoltage(_)
             | Diagnostic::RatingSupplyLow(_)
-            | Diagnostic::RegulatorCurrentLimit(_) => Severity::Warning,
+            | Diagnostic::RegulatorCurrentLimit(_)
+            | Diagnostic::RatingTemperature(_) => Severity::Warning,
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
             | Diagnostic::NetlistName { .. }
@@ -884,6 +906,7 @@ impl Diagnostic {
             Diagnostic::RatingVoltage(excursion) => Some(excursion.first),
             Diagnostic::RatingSupplyLow(excursion) => Some(excursion.first),
             Diagnostic::RegulatorCurrentLimit(excursion) => Some(excursion.first),
+            Diagnostic::RatingTemperature(excursion) => Some(excursion.first),
             Diagnostic::NetlistSyntax { .. }
             | Diagnostic::NetlistVersion { .. }
             | Diagnostic::NetlistName { .. }
@@ -957,6 +980,7 @@ impl Diagnostic {
             Diagnostic::RatingVoltage(excursion) => vec![excursion.pin.clone()],
             Diagnostic::RatingSupplyLow(excursion) => vec![excursion.pin.clone()],
             Diagnostic::RegulatorCurrentLimit(excursion) => vec![excursion.pin.clone()],
+            Diagnostic::RatingTemperature(excursion) => vec![excursion.part.clone()],
         }
     }
 
@@ -2008,6 +2032,7 @@ impl Diagnostic {
             Diagnostic::RatingVoltage(excursion) => outside_window(excursion, namer),
             Diagnostic::RatingSupplyLow(excursion) => supply_low(excursion, namer),
             Diagnostic::RegulatorCurrentLimit(excursion) => regulator_limit(excursion, namer),
+            Diagnostic::RatingTemperature(excursion) => outside_temperature(excursion, namer),
         }
     }
 
@@ -2294,6 +2319,15 @@ impl Diagnostic {
                     "voltage": excursion.voltage,
                 })
             }
+            Diagnostic::RatingTemperature(excursion) => {
+                serde_json::json!({
+                    "high": excursion.high,
+                    "low": excursion.low,
+                    "over_ps": excursion.over_ps,
+                    "peak": excursion.peak,
+                    "peak_ps": excursion.peak_at,
+                })
+            }
         }
     }
 }
@@ -2498,6 +2532,17 @@ fn outside_window(excursion: &VoltageExcursion, namer: &dyn Fn(&Ref) -> String) 
         "{pin} reaches {} V{over_ground}, outside {window}{}",
         significant_text(*peak),
         for_time(*over_ps)
+    )
+}
+
+fn outside_temperature(excursion: &TemperatureExcursion, namer: &dyn Fn(&Ref) -> String) -> String {
+    format!(
+        "{} sits at {} degC, outside its {} degC to {} degC operating temperature{}",
+        namer(&excursion.part),
+        significant_text(excursion.peak),
+        significant_text(excursion.low),
+        significant_text(excursion.high),
+        for_time(excursion.over_ps)
     )
 }
 

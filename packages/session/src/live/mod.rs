@@ -634,21 +634,20 @@ impl Open {
         })
     }
 
-    /// The engine's diagnostics, the fault, and each rating the probe is over that the engine
-    /// has not yet found on an accepted step. A rating over now is the probe's, not the last
-    /// accepted step's.
+    /// The engine's diagnostics, the fault, and each rating through the probe. A rating the
+    /// engine found on an accepted step is the probe's copy, so the time it is still over runs
+    /// to now, not to the last accepted step. A rating over now is the probe's too.
     fn findings(&self, probe: &Probe) -> Vec<EngineDiagnostic> {
         let mut found = self.engine.diagnostics();
+        let over = self.engine.over_ratings(probe);
+        let probed: BTreeSet<Key> = over.iter().map(key).collect();
         // The probe's `rating.supply_low` comes with the ratings over now.
         found.retain(|diagnostic| {
-            !diagnostic.over_now() && !matches!(diagnostic, EngineDiagnostic::RatingSupplyLow(_))
+            !diagnostic.over_now()
+                && !matches!(diagnostic, EngineDiagnostic::RatingSupplyLow(_))
+                && !probed.contains(&key(diagnostic))
         });
-        let known: BTreeSet<Key> = found.iter().map(key).collect();
-        for over in self.engine.over_ratings(probe) {
-            if !known.contains(&key(&over)) {
-                found.push(over);
-            }
-        }
+        found.extend(over);
         found.extend(self.engine.fault().cloned());
         found.retain(|diagnostic| match diagnostic {
             EngineDiagnostic::NetFloating {

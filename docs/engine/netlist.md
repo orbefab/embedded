@@ -1347,7 +1347,7 @@ A read sends the last measurement, and the end of each reply starts the next one
 
 A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
 
-A `dht22` has no `ratings` object and no `i`, `v`, or `p`. Its logic signal is `DATA`. It joins `DATA` to `GND` through the stage its drive stamps. `VCC` draws no current, so it needs another DC path.
+A `dht22`'s `ratings` object is optional, with an optional `supply_min` on `VCC` and an optional `temperature` range. `parts/dht22` carries -40 to 80 degC, the measuring range of the AM2302 Technical Manual's table 3 (page 2), whose note 1 limits the working scope to the same range. The sheet gives no narrower range for its accuracy, only figure 3's error curve over it. Past either end the part reads that end, which the sheet does not specify, and warns [`rating.temperature`](diagnostics.md#ratingtemperature). A `dht22` has no `i`, `v`, or `p`. Its logic signal is `DATA`. It joins `DATA` to `GND` through the stage its drive stamps. `VCC` draws no current, so it needs another DC path.
 
 ### BMP280
 
@@ -1364,6 +1364,8 @@ It reads the netlist's `temperature` and `pressure`, which the netlist's `world`
 A break is `netlist.value` with the dotted field, and a wrong unit is `netlist.unit` with the same field. `input_threshold.low` must be at most `input_threshold.high`. Above it is rule `above_high` on `low`.
 
 `ratings.supply_voltage` is the ceiling on `VDD` and `VDDIO` over `GND`. `ratings.pin_margin` is how far any pin but `GND` may sit below `GND`, and how far `CSB`, `SDI`, `SCK` and `SDO` may sit above `VDDIO`. A pin exactly on the edge is inside. Table 3 gives 4.25 V and 0.3 V. Past either, the pin warns [`rating.voltage`](diagnostics.md#ratingvoltage).
+
+`ratings.temperature` is the operating range the world's temperature is read against. `parts/bmp280` carries Table 2's operational range, -40 to 85 °C (page 7). Table 2's full accuracy range is 0 to 65 °C, and the sheet's minimums and maximums hold over it. The model reads the world exactly inside the whole operational range. Past it the part keeps answering, reads the nearer end, which the sheet does not specify, and warns [`rating.temperature`](diagnostics.md#ratingtemperature).
 
 `VDD` draws the Table 2 typical into `GND`: 0.1 µA asleep, 0.2 µA in the standby of normal mode, 325 µA while temperature is measured and 720 µA while pressure is measured. The part runs while `VDD` is at or above 1.71 V and `VDDIO` at or above 1.2 V, the Table 2 minimums. Below either it is off: it draws nothing, leaves `SDI` released, and starts from reset when the supply comes back. Above the 3.6 V operating maximum, and with `CSB`, `SDI`, `SCK` or `SDO` past `VDDIO` + 0.3 V, it keeps answering, as a real part mostly does, and the ratings warn. A `bmp280` has no `i`, `v`, or `p`. Its logic signals are `SCK`, `SDI`, `CSB` and `SDO`. It joins `SDI` to `GND` through the stage its drive stamps. `VDDIO` draws no current of its own, so it needs another DC path. The draw on `VDD` is a current, so a net reached only through it still floats.
 
@@ -1535,7 +1537,7 @@ A blob the document names that no folder has, a name whose every file hashes to 
 
 ## Ratings
 
-A rating bounds the stress on a part. Every key of a kind's `ratings` object is required, except a resistor's `voltage`, a diode or LED's `reverse_voltage`, an op-amp's and an analog temperature sensor's keys, and `supply_min` (`io_supply_min` on `bmp280`), which may be left out. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `esp32s3`, `ssd1306`, `hd44780`, `hd44780_i2c`, `ws2812`, `max7219`, `op_amp`, `analog_temp_sensor`, `dht22`, `sg90`, `ne555`, `cst816`, `st77916`, `voltage_source`, `capacitor`, `potentiometer` and `switch`, where it is optional.
+A rating bounds the stress on a part. Every key of a kind's `ratings` object is required, except a resistor's `voltage`, a diode or LED's `reverse_voltage`, an op-amp's and an analog temperature sensor's keys, `supply_min` (`io_supply_min` on `bmp280`), and `temperature` on `dht22` and `bmp280`, which may be left out. Each value is a value object, or `null` for a part that is deliberately unrated. The `ratings` object is required on every kind but `atmega328p`, `esp32s3`, `ssd1306`, `hd44780`, `hd44780_i2c`, `ws2812`, `max7219`, `op_amp`, `dht22`, `sg90`, `ne555`, `cst816`, `st77916`, `voltage_source`, `capacitor`, `potentiometer` and `switch`, where it is optional.
 
 | Kind | Keys | Checked quantity |
 | --- | --- | --- |
@@ -1553,14 +1555,15 @@ A rating bounds the stress on a part. Every key of a kind's `ratings` object is 
 | `analog_temp_sensor` | optional `supply_min`, `supply_max`, `supply_voltage` | `vs` over `gnd`, named `#<part>.pin.vs` |
 | `atmega328p` | `pin_current`, `supply_current`, `rail_margin`, `reset_voltage`, `supply_voltage`, optional `supply_min` | each port pin's current, the current through `VCC` and `GND_8`, and each pin's voltage over `GND_8`, each named `#<part>.pin.<pin>` |
 | `esp32s3` | `rail_margin`, `supply_voltage`, optional `supply_min` | `VCC` and each wired GPIO's voltage over `GND`, each named `#<part>.pin.<pin>` |
-| `bmp280` | `supply_voltage`, `pin_margin`, optional `supply_min`, `io_supply_min` | `VDD`, `VDDIO`, `CSB`, `SDI`, `SCK` and `SDO` voltage over `GND`, each named `#<part>.pin.<pin>` |
+| `bmp280` | `supply_voltage`, `pin_margin`, optional `supply_min`, `io_supply_min`, `temperature` | `VDD`, `VDDIO`, `CSB`, `SDI`, `SCK` and `SDO` voltage over `GND`, each named `#<part>.pin.<pin>`, and the world's temperature, named `#<part>` |
 | `ssd1306` | `rail_margin`, `supply_voltage`, optional `supply_min` | `VDD`, `SCL`, `SDA` and `RES` voltage over `VSS`, each named `#<part>.pin.<pin>` |
 | `hd44780` | `rail_margin`, `supply_voltage` | `VDD`, `RS`, `RW`, `E` and `D0` to `D7` voltage over `VSS`, each named `#<part>.pin.<pin>` |
 | `hd44780_i2c` | `rail_margin`, `supply_voltage`, optional `supply_min` | `VCC`, `SCL` and `SDA` voltage over `GND`, each named `#<part>.pin.<pin>` |
 | `ws2812` | `rail_margin`, `supply_voltage`, optional `supply_min` | `VCC` and `DIN` voltage over `GND`, each named `#<part>.pin.<pin>` |
 | `hc595` | `pin_current`, `supply_current`, `input_margin`, `output_margin`, optional `supply_min` | each of `QA`–`QH` and `QHp`, the current through `VCC` and `GND`, and each input and output voltage over `GND`, each named `#<part>.pin.<pin>` |
 | `max7219` | `rail_margin`, `supply_voltage`, `input_voltage`, `supply_current`, optional `supply_min` | the current through `VCC` and `GND`, `VCC`, `DIN`, `CLK` and `LOAD` voltage over `GND`, and `DOUT` and `ISET` within `rail_margin` of the rails, each named `#<part>.pin.<pin>` |
-| `dht22`, `sg90`, `cst816`, `st77916` | optional `supply_min` | `VCC` over `GND`, named `#<part>.pin.VCC` |
+| `dht22` | optional `supply_min`, `temperature` | `VCC` over `GND`, named `#<part>.pin.VCC`, and the world's temperature, named `#<part>` |
+| `sg90`, `cst816`, `st77916` | optional `supply_min` | `VCC` over `GND`, named `#<part>.pin.VCC` |
 | `ne555` | optional `supply_min` | `vcc` over `gnd`, named `#<part>.pin.vcc` |
 | `current_source`, `inductor`, `relay`, `spi_replay`, `pulses_replay` | none | |
 
@@ -1572,6 +1575,8 @@ A `current`, `power`, `pin_current` or `supply_current` value object may also ca
 
 `current`, `pin_current` and `supply_current` are in `A`. `power` is in `W`. `rail_margin`, `reset_voltage`, `supply_voltage`, `supply_min`, `io_supply_min` and `reverse_voltage` are in `V`. A rating must be greater than 0, except a capacitor's `reverse_voltage`, which may be 0. A reverse rating of 0 warns on any reverse voltage, and a pin exactly at pin `b` is inside. A missing key, an unknown key, and a missing `ratings` object where it is required are `netlist.syntax`. A wrong unit is `netlist.unit` with field `ratings.<key>`, such as `ratings.current`. A value of 0 or below is `netlist.value` with the same field, except a `reverse_voltage` of 0. A negative `reverse_voltage` is `netlist.value` with rule `non_negative`.
 
+`temperature` is an operating range, `{ "min", "max" }`, each in `degC` and either sign. A wrong unit is `netlist.unit` with field `ratings.temperature.min` or `ratings.temperature.max`, and a `min` above `max` is `netlist.value` rule `above_high` on `ratings.temperature.min`. The run reads the world's `temperature` schedule against it, not a row: each level holds from its change, the level at t = 0 holds from 0, and a level exactly on an end is inside, compared rounded to 3 significant digits. Only the time the part is powered counts. Outside warns [`rating.temperature`](diagnostics.md#ratingtemperature) once per part, and the part keeps running.
+
 ```json
 "ratings": { "power": { "value": 0.25, "unit": "W" } }
 ```
@@ -1582,7 +1587,7 @@ A resistor may also carry `voltage`, either as a single positive value object in
 "voltage": { "min": { "value": 3.0, "unit": "V" }, "max": { "value": 5.0, "unit": "V" } }
 ```
 
-The run compares the magnitude of each rated quantity with its rating, each rated pin's voltage with its window, and each chip's supply pin with its `supply_min` (and `bmp280`'s `VDDIO` with `io_supply_min`). A supply at or below 0.1 V over ground is treated as unpowered and stays silent; strictly above 0.1 V and below the minimum warns `rating.supply_low`. A peak rating is compared with each sample. A sustained rating is compared through its filter, which steps exactly over each held sample, `y = x + (y - x) e^(-dt / tau)`. A pulse much shorter than `tau` counts by its share of it, a PWM load by its period's average once the filter settles, and a load held over the rating crosses after `tau ln(x / (x - rating))` for `mean`. Each filter starts at 0 and takes the first step after t = 0, and the operating point at t = 0 is no sample. A value and its rating are compared rounded to 3 significant digits. Going over is a warning, `rating.current`, `rating.power`, `rating.voltage` or `rating.supply_low`, in [diagnostics.md](diagnostics.md). A sustained rating with no `peak` whose latest value is over it before its filter crosses is listed as [over now](diagnostics.md#over-now).
+The run compares the magnitude of each rated quantity with its rating, each rated pin's voltage with its window, and each chip's supply pin with its `supply_min` (and `bmp280`'s `VDDIO` with `io_supply_min`). A supply at or below 0.1 V over ground is treated as unpowered and stays silent; strictly above 0.1 V and below the minimum warns `rating.supply_low`. A peak rating is compared with each sample. A sustained rating is compared through its filter, which steps exactly over each held sample, `y = x + (y - x) e^(-dt / tau)`. A pulse much shorter than `tau` counts by its share of it, a PWM load by its period's average once the filter settles, and a load held over the rating crosses after `tau ln(x / (x - rating))` for `mean`. Each filter starts at 0 and takes the first step after t = 0, and the operating point at t = 0 is no sample. A value and its rating are compared rounded to 3 significant digits. Going over is a warning, `rating.current`, `rating.power`, `rating.voltage`, `rating.supply_low` or `rating.temperature`, in [diagnostics.md](diagnostics.md). A sustained rating with no `peak` whose latest value is over it before its filter crosses is listed as [over now](diagnostics.md#over-now).
 
 ## Sign rules
 

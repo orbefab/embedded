@@ -936,7 +936,10 @@ fn shown_message(code: &str, json: &Value) -> String {
     {
         return text;
     }
-    if matches!(code, "rating.voltage" | "rating.supply_low") {
+    if matches!(
+        code,
+        "rating.voltage" | "rating.supply_low" | "rating.temperature"
+    ) {
         return with_over(message, json);
     }
     if code == "regulator.current_limit"

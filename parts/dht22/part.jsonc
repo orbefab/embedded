@@ -30,6 +30,10 @@
       },
       "ratings": {
         "supply_min": { "value": 3.3, "unit": "V", "source": { "datasheet": { "doc": "Aosong AM2302 product manual v1.1", "at": "operating supply voltage VDD 3.3 V to 5.5 V", "basis": "min" } } },
+        "temperature": {
+          "min": { "value": -40.0, "unit": "degC", "source": { "datasheet": { "doc": "Aosong AM2302 Technical Manual", "at": "page 2, table 3, temperature measuring range -40 to 80 °C, and note 1, the working scope is limited to -40 to 80 °C", "basis": "min" } } },
+          "max": { "value": 80.0, "unit": "degC", "source": { "datasheet": { "doc": "Aosong AM2302 Technical Manual", "at": "page 2, table 3, temperature measuring range -40 to 80 °C, and note 1, the working scope is limited to -40 to 80 °C", "basis": "max" } } },
+        },
       },
       "pins": { "VCC": "VDD", "DATA": "DATA", "GND": "GND" },
     },
@@ -43,7 +47,7 @@
   "not_simulated": [
     { "what": "accuracy", "why": "A read is the world's value rounded to 0.1. The sheet allows ±2 %RH (±5 at most) and ±0.5 °C." },
     { "what": "response time", "why": "A measurement reads the world at its time. The sheet takes about 5 s to follow a humidity step and 10 s for temperature, to 63 %." },
-    { "what": "range", "why": "Temperature reads -40 to 80 °C, the sheet's range; the scene's temperature past it reads the nearer end." },
+    { "what": "range", "why": "Temperature reads -40 to 80 °C, the sheet's measuring range (table 3); the scene's temperature past it reads the nearer end and warns rating.temperature. The sheet does not say what the part reads out there, or whether it is damaged." },
     { "what": "supply", "why": "The sensor answers at any supply. The sheet asks for 3.3 to 5.5 V, and the levels and pull-up above are its 5 V values." },
     { "what": "timing spread", "why": "Every reply has the sheet's typical times: 80 us response low and high, 50 us bit lows, 26 us and 70 us highs, 50 us last low, 30 us after the start." },
   ],

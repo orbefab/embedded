@@ -965,7 +965,8 @@ fn many_random_melodies_read_only_the_notes_played() {
 
 #[test]
 fn a_drive_under_3_v_counts_until_its_last_pulse_ends() {
-    // D8 drives the coil through 220 ohm. `cut` plays 440 Hz from 20 ms to 180 ms.
+    // D8 drives the coil through 220 ohm. `cut` plays 440 Hz from 20 ms to 180 ms, and the
+    // `khz` tone after it starts at 260 ms.
     let mut live = opened(
         "drive",
         r#""r1": { "type": "resistor-axial", "resistance": "220" },
@@ -981,6 +982,7 @@ fn a_drive_under_3_v_counts_until_its_last_pulse_ends() {
         (155_000_000_000..=161_000_000_000).contains(&over),
         "160 ms of tone counted {over} ps"
     );
-    assert!(run(&mut live, "step 30ms").ok());
+    // A snapshot counts a pulse still sounding up to it, so this one ends in the rest.
+    assert!(run(&mut live, "step 20ms").ok());
     assert_eq!(drive_over_ps(&mut live) - before, over, "the rest counted");
 }
