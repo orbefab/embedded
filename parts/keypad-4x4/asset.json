@@ -2,12 +2,12 @@
   "part": "keypad-4x4",
   "source": {
     "script": "model.py",
-    "sha256": "46379bd1ff799d7d70432cba1fe8f99af6ed38eeb73a6036c8519c6e4c40e072",
+    "sha256": "823fd84e1163ded7bde8b4dd106fba3c2321b655426b667ade3bbfaf1b47920a",
     "bytes": 4778
   },
   "files": {
     "keypad-4x4.glb": {
-      "sha256": "039cbdcf3c519058a60ebdacd94a40aa955bae37b04f2a170d9f6a9d85b38c1f",
+      "sha256": "991fb07909912a633290be3559ff3d8a2017d66aeddfb8465a6cd0a1a820af2d",
       "bytes": 114384
     },
     "keypad-4x4.anchors.json": {

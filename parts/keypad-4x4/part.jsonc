@@ -1,8 +1,10 @@
 // 4x4 matrix membrane keypad (Parallax #27899 / Adafruit 3844).
-// 16 momentary membrane switches wired in a 4x4 column/row matrix (C1..C4 on pins 1..4,
-// R1..R4 on pins 5..8 left-to-right with the ribbon at the bottom, per Parallax #27899 v1.2 p2
-// and the Adafruit 3844 learn pinout figure) on a 1x8 2.54 mm header. No series diodes:
-// holding three keys at three corners of a rectangle ghosts the fourth corner, as on a real matrix.
+// 16 momentary membrane switches wired in a 4x4 row/column matrix (R1..R4 on pins 1..4,
+// C1..C4 on pins 5..8 left-to-right with keys facing up and the ribbon at the bottom, per
+// Handson Technology Data Specs p1 and Parallax #27899 v1.2 Figure 1, where Parallax numbers
+// its pins right-to-left so its pin 8 is R1 and its pin 1 is C4) on a 1x8 2.54 mm header.
+// No series diodes: holding three keys at three corners of a rectangle ghosts the fourth
+// corner, as on a real matrix.
 // Press keys from the CLI as `@<id>.k1` .. `@<id>.k9`, `@<id>.k0`, `@<id>.ka` .. `@<id>.kd`,
 // `@<id>.kstar` and `@<id>.khash`, or click any key cap in the 3D viewer.
 {
@@ -10,7 +12,7 @@
   "part": "keypad-4x4",
   "version": "0.1.0",
   "title": "4x4 membrane matrix keypad",
-  "summary": "16-key 4x4 membrane keypad (0-9, A-D, *, #) on a 1x8 header (C1..C4, R1..R4). Press keys as @<id>.k1..k9, k0, ka..kd, kstar, khash or click in 3D.",
+  "summary": "16-key 4x4 membrane keypad (0-9, A-D, *, #) on a 1x8 header (R1..R4, C1..C4). Press keys as @<id>.k1..k9, k0, ka..kd, kstar, khash or click in 3D.",
   "tags": ["keypad", "matrix", "4x4", "keyboard", "membrane", "buttons", "button", "switch", "switches", "input"],
   "license": "MIT OR Apache-2.0",
   "docs": {
@@ -89,7 +91,12 @@
     "khash": { "at": [7.75, -26.85, 1.0] },
     "kd": { "at": [23.25, -26.85, 1.0] },
   },
-  "pins": { "C1": [1], "C2": [2], "C3": [3], "C4": [4], "R1": [5], "R2": [6], "R3": [7], "R4": [8] },
+  // Physical lead order left-to-right with keys up (position 1 is leftmost, at -X in model.py):
+  // Handson Technology 4x4 Matrix Membrane Keypad Data Specs p1 ("up and facing you, from left
+  // to right, the 1st 4 pins are the row pins and the last 4 pins are the column pins") and
+  // Parallax #27899 v1.2 Figure 1 (numbers the tail right-to-left 8..1, so Parallax pin 8 is
+  // R1, pin 5 is R4, pin 4 is C1, and Parallax pin 1 is our C4).
+  "pins": { "R1": [1], "R2": [2], "R3": [3], "R4": [4], "C1": [5], "C2": [6], "C3": [7], "C4": [8] },
   "not_simulated": [
     {
       "what": "operating force and tactile snap",

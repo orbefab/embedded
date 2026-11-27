@@ -1,6 +1,6 @@
 # 4x4 membrane keypad on a Nano
 
-A 4x4 membrane matrix keypad (`keypad-4x4`) is wired to an Arduino Nano: columns `C1` to `C4` (header pins 1 to 4) on `D11` to `D8`, and rows `R1` to `R4` (header pins 5 to 8) on `D5` to `D2`.
+A 4x4 membrane matrix keypad (`keypad-4x4`) is wired to an Arduino Nano: rows `R1` to `R4` (header pins 1 to 4) on `D11` to `D8`, and columns `C1` to `C4` (header pins 5 to 8) on `D5` to `D2`.
 
 The sketch runs the stock Arduino `Keypad` library (3.1.1), prints `ready` at 115200 baud, prints `key=<char>` whenever a key is pressed, and lights the Nano's `L` LED while a key is held.
 
