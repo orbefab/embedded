@@ -1,9 +1,11 @@
-//! What a device model is written against: time, pins, the records chips send each other, and
-//! the `Device` trait with its role traits.
+//! What a device model is written against: time, pins, the records chips send each other, the
+//! frames radios put on the air, and the `Device` trait with its role traits.
 //!
 //! Unstable, 0.x. [docs/engine/model.md](../../../docs/engine/model.md) says what a device
 //! implements and what is still to come.
 
+/// The air: its own module, since its [`air::Ack`] is not an I2C [`Ack`].
+pub mod air;
 mod device;
 mod pages;
 mod pins;
