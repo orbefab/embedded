@@ -53,6 +53,17 @@ const DEVICE_SHARE: f64 = 3e-6;
 /// every step the floor saves there. A 1 us window took 7% more steps.
 const ANSWER_PS: u64 = 5_000_000;
 
+/// The share of its range an edge has to move a device capacitance by, at the slope it changed
+/// held for [`ANSWER_PS`], for the capacitance to answer it. A chip's edge also moves every
+/// capacitance on its rail by a hair, and a circuit that times itself on that rail would then be
+/// held to its charge on nearly every step. The 100 pF ring on an NE555's 5 V rail behind
+/// 10 mohm moves at most 5.1e-4 of its range at an edge, and held to its charge after them it
+/// left ngspice 1.8 times as far in 5 ms. A 2N2222 base 1 kohm from a Nano's pin moves at
+/// least 6.4 times its range. At this share the ring stays 200 times under it, and a BSS138
+/// shifter keeps all but 2% of the steps the floor saves. At 1 it kept all but 8%, since its
+/// unused channels, which only ripple with the bus, move 0.1 to 1 of their small ranges.
+const ANSWER_SHARE: f64 = 0.1;
+
 /// A capacitor or an inductor. A capacitor's state is the voltage across it, and its slope
 /// times its capacitance is its current. An inductor's state is its current, and its slope times
 /// its inductance is the voltage across it.
@@ -160,6 +171,16 @@ impl Store {
     fn slope_moved(&self, step: &Solution, held: &Solution) -> bool {
         (self.flow(step) - self.flow(held)).abs()
             > self.flow_resolved(step).max(self.flow_resolved(held))
+    }
+
+    /// Whether a device capacitance answers the edge between `step` and its restart solve
+    /// `held`: the edge moved its slope, and at the change held for `ANSWER_PS` it would move
+    /// `ANSWER_SHARE` of `range` or more.
+    fn answers(&self, step: &Solution, held: &Solution, range: f64) -> bool {
+        let change = (self.slope(held) - self.slope(step)).abs();
+        self.charge > 0.0
+            && self.slope_moved(step, held)
+            && change * seconds(ANSWER_PS) >= ANSWER_SHARE * range
     }
 }
 
@@ -354,8 +375,8 @@ impl Ranges {
     }
 
     /// After a chip's or a core's edge at `at`, whose restart solve `held` follows the step's
-    /// end `step`: each device capacitance whose slope the edge moved answers it, and is held to
-    /// its charge floor for `ANSWER_PS`.
+    /// end `step`: each device capacitance that answers it is held to its charge floor for
+    /// `ANSWER_PS`.
     pub(crate) fn answer(
         &self,
         stores: &Stores,
@@ -369,9 +390,9 @@ impl Ranges {
             until: stores
                 .stores
                 .iter()
-                .zip(&self.until)
+                .zip(self.spans.iter().zip(&self.until))
                 .map(
-                    |(store, &until)| match store.charge > 0.0 && store.slope_moved(step, held) {
+                    |(store, (&(lo, hi), &until))| match store.answers(step, held, hi - lo) {
                         true => until.max(end),
                         false => until,
                     },
@@ -636,11 +657,12 @@ mod tests {
         assert_eq!(cap(21e-12, CHGTOL).floor(3.3, false), 2.0 * VNTOL);
     }
 
-    /// A device's capacitance whose slope a chip's or a core's edge moved answers it for
-    /// `ANSWER_PS`. One whose slope stayed and a capacitor part do not, and an edge that moves
+    /// A device's capacitance whose slope a chip's or a core's edge moved, by enough to move
+    /// `ANSWER_SHARE` of its range in `ANSWER_PS`, answers it for `ANSWER_PS`. One whose slope
+    /// stayed, one the edge only nudged and a capacitor part do not, and an edge that moves
     /// nothing leaves each answer as it was.
     #[test]
-    fn a_device_s_capacitance_answers_the_edge_that_moved_its_slope() {
+    fn a_device_s_capacitance_answers_the_edge_that_moved_it() {
         let cap = |branch: usize, charge: f64| Store {
             ends: [Node::Row(0), Node::Ground],
             branch,
@@ -650,17 +672,22 @@ mod tests {
             part: 0,
         };
         let stores = Stores {
-            stores: vec![cap(1, CHGTOL), cap(2, CHGTOL), cap(3, 0.0)],
+            stores: vec![cap(1, CHGTOL), cap(2, CHGTOL), cap(3, 0.0), cap(4, CHGTOL)],
         };
-        let step = Solution::from(vec![1.0, 0.0, 1e-6, 0.0]);
-        let held = Solution::from(vec![1.0, 1e-6, 1e-6, 1e-6]);
+        // The fourth's 1 nA is over Newton's tolerance, and moves 1 pF 5 mV in 5 us.
+        let step = Solution::from(vec![1.0, 0.0, 1e-6, 0.0, 0.0]);
+        let held = Solution::from(vec![1.0, 1e-6, 1e-6, 1e-6, 1e-9]);
         let at = Time::from_ps(7_000);
-        let ranges = Ranges::of(vec![(0.0, 3.3); 3]).answer(&stores, &step, &held, at);
-        assert_eq!(ranges.until, [7_000 + ANSWER_PS, 0, 0]);
+        let ranges = Ranges::of(vec![(0.0, 3.3); 4]).answer(&stores, &step, &held, at);
+        assert_eq!(ranges.until, [7_000 + ANSWER_PS, 0, 0, 0]);
         let later = ranges.answer(&stores, &held, &held, Time::from_ps(9_000));
         assert_eq!(later.until, ranges.until);
         let again = ranges.answer(&stores, &step, &held, Time::from_ps(9_000));
-        assert_eq!(again.until, [9_000 + ANSWER_PS, 0, 0]);
+        assert_eq!(again.until, [9_000 + ANSWER_PS, 0, 0, 0]);
+        // 5 mV is over a tenth of a 40 mV range.
+        let small = Ranges::of(vec![(0.0, 3.3), (0.0, 3.3), (0.0, 3.3), (1.0, 1.04)]);
+        let nudged = small.answer(&stores, &step, &held, at);
+        assert_eq!(nudged.until, [7_000 + ANSWER_PS, 0, 0, 7_000 + ANSWER_PS]);
     }
 
     /// The time the fastest store takes to move its tolerance at its slope.
