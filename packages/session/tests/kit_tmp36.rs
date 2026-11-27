@@ -166,11 +166,16 @@ fn tmp36_supply_range_warns_operating_above_5v5_abs_max_above_7v_and_no_invented
         );
     }
 
-    // Unpowered (0 V) with 10k load: 0 V output, 0 A draw, quiet.
-    let (vout, iin, diags) = run_bench(0.0, 25.0, Some("10k"));
-    assert!(vout.abs() < 1e-6, "unpowered vout={vout}");
-    assert!(iin.abs() < 1e-9, "unpowered iin={iin}");
-    assert!(diags.is_empty(), "unpowered warned: {diags:?}");
+    // Unpowered (at or below the 0.1 V floor) with 10k load: 0 V output, 0 A draw, quiet.
+    for supply in [0.0, 0.05, 0.1] {
+        let (vout, iin, diags) = run_bench(supply, 25.0, Some("10k"));
+        assert!(vout.abs() < 1e-12, "supply={supply} unpowered vout={vout}");
+        assert!(iin.abs() < 1e-12, "supply={supply} unpowered iin={iin}");
+        assert!(
+            diags.is_empty(),
+            "supply={supply} unpowered warned: {diags:?}"
+        );
+    }
 
     // Below operating supply (1.2 V < 2.7 V) at 100 C (target 1.5 V): clamps to VS and warns.
     let (vout, _, diags) = run_bench(1.2, 100.0, None);
@@ -220,9 +225,10 @@ fn tmp36_supply_range_warns_operating_above_5v5_abs_max_above_7v_and_no_invented
         "must not invent -0.3 V floor not in Rev. H: {msg:?}"
     );
 
-    // Reversed supply (-5.0 V): Rev. H states no reverse supply rating; output stays 0 V, no invented warning.
-    let (vout, _, diags) = run_bench(-5.0, 25.0, None);
-    assert!(vout.abs() < 1e-6, "reversed vout={vout}");
+    // Reversed supply (-5.0 V): Rev. H states no reverse supply rating; output stays 0 V, 0 A draw, no invented warning.
+    let (vout, iin, diags) = run_bench(-5.0, 25.0, Some("10k"));
+    assert!(vout.abs() < 1e-12, "reversed vout={vout}");
+    assert!(iin.abs() < 1e-12, "reversed iin={iin}");
     assert!(
         diags.is_empty(),
         "reversed supply must not emit an invented rating warning: {diags:?}"
@@ -263,5 +269,17 @@ fn tmp36_part_text_cites_max_short_circuit_current_and_reversed_supply() {
     assert!(
         text.contains("reversed supply"),
         "not_simulated should document reversed supply"
+    );
+    assert!(
+        text.contains("−105°C ≤ TA ≤ +125°C"),
+        "load-regulation citation should quote Rev. H Table 1's printed '−105°C ≤ TA ≤ +125°C'"
+    );
+    assert!(
+        !text.contains("ISY (ON) < 50 uA"),
+        "supply-current citation should cite Table 1's 50 µA Max cell rather than 'ISY (ON) < 50 uA'"
+    );
+    assert!(
+        text.contains("50 µA") && text.contains("Max"),
+        "supply-current citation should cite 50 µA as the Table 1 Max"
     );
 }

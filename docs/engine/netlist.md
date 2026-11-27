@@ -534,7 +534,7 @@ The law cannot match the page 7 legacy ripple rejection of 45 dB at 1000 Hz, the
 
 `kind` is `analog_temp_sensor`. Pins are `vs`, `vout` and `gnd`.
 
-Its open-circuit output voltage follows `output_voltage` (a fixed value in `V` or a world-driven curve such as `linear` over `temperature`), smoothly clamped between `0` and `V(vs) - V(gnd)` and gated by a smooth supply ramp over `0` to `0.2 V`, in series with `output_resistance` (a fixed value in `ohm` or a world-driven curve such as `step` over `temperature`). While powered it draws `quiescent_current` from `vs` to `gnd`, plus any current sourced out of `vout`; current sunk into `vout` returns to `gnd`. When unpowered (`V(vs) - V(gnd) <= 0`), the output sits at `0 V` over `gnd` and the supply draws nothing. `vs` and `vout` each have a DC path to `gnd`. Its observed quantities are `iin` (entering `vs`), `iout` (entering `vout`), and `p`.
+Its open-circuit output voltage follows `output_voltage` (a fixed value in `V` or a world-driven curve such as `linear` over `temperature`), smoothly clamped between `0` and `V(vs) - V(gnd)` and gated by a smooth supply ramp from the `0.1 V` unpowered floor to `0.3 V`, in series with `output_resistance` (a fixed value in `ohm` or a world-driven curve such as `step` over `temperature`). While powered it draws `quiescent_current` from `vs` to `gnd`, plus any current sourced out of `vout`; current sunk into `vout` returns to `gnd`. When unpowered (`V(vs) - V(gnd) <= 0.1 V`), the output sits at `0 V` over `gnd` and the supply draws nothing. `vs` and `vout` each have a DC path to `gnd`. Its observed quantities are `iin` (entering `vs`), `iout` (entering `vout`), and `p`.
 
 | Field | Unit | Rule |
 | --- | --- | --- |

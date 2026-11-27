@@ -80,7 +80,7 @@
           "source": {
             "datasheet": {
               "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
-              "at": "Table 1, p3, Load Regulation temperature split between -40 to +105 C and +105 to +125 C rows",
+              "at": "Table 1, p3, Load Regulation split between -40°C ≤ TA ≤ +105°C and printed '−105°C ≤ TA ≤ +125°C' (read as +105 to +125 C because the row above ends at +105 C)",
               "basis": "nominal",
             },
           },
@@ -99,7 +99,7 @@
           "unit": "ohm",
           "source": {
             "closed_form": {
-              "note": "Analog Devices TMP35/TMP36/TMP37 Rev. H Table 1, p3: Load Regulation (0 to 50 uA, +105 to +125 C) 25 mC/uA typ * 10 mV/C = 250 ohm",
+              "note": "Analog Devices TMP35/TMP36/TMP37 Rev. H Table 1, p3: Load Regulation (0 to 50 uA, printed '−105°C ≤ TA ≤ +125°C', read as +105 to +125 C because the row above ends at +105 C) 25 mC/uA typ * 10 mV/C = 250 ohm",
             },
           },
         },
@@ -111,7 +111,7 @@
       "source": {
         "datasheet": {
           "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
-          "at": "Table 1, p3, Supply Current (Unloaded) ISY (ON) < 50 uA",
+          "at": "Table 1, p3, Supply Current (Unloaded) Max = 50 µA",
           "basis": "max",
         },
       },
@@ -164,7 +164,7 @@
     {
       "what": "reversed supply",
       "pins": ["VS", "GND"],
-      "why": "Analog Devices Rev. H Table 2 states no reverse supply voltage rating. With VS below GND the sensor outputs 0 V and emits no rating warning.",
+      "why": "Analog Devices Rev. H Table 2 states no reverse supply voltage rating. With VS below GND the sensor outputs 0 V, draws 0 A, and emits no rating warning.",
     },
     {
       "what": "self-heating and thermal response time",

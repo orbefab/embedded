@@ -5,7 +5,8 @@
 //! and `V(vs) - V(gnd)`, in series with `output_resistance` (a fixed value or a world-driven
 //! curve). While powered it draws `quiescent_current` from `vs` to `gnd`, plus any current
 //! sourced out of `vout`; current sunk into `vout` returns to `gnd`. When unpowered
-//! (`V(vs) - V(gnd) <= 0`), the output sits at `0 V` over `gnd` and the supply draws nothing.
+//! (`V(vs) - V(gnd) <= 0.1 V`, matching [`crate::ratings::SUPPLY_UNPOWERED_V`]), the output sits
+//! at `0 V` over `gnd` and the supply draws nothing.
 //!
 //! A powered supply below `ratings.supply_min` keeps working (with the output still clamped to
 //! `vs`) and warns `rating.supply_low`, as every chip's minimum does. A supply above
@@ -25,6 +26,7 @@ use crate::netlist::json::{
 };
 use crate::netlist::{Conduction, Kind, NetId, Rating, Schedule, Value, broken_positive};
 use crate::newton::{RELTOL, Side, VNTOL};
+use crate::ratings::SUPPLY_UNPOWERED_V;
 use crate::world::json::{FieldRule, WireParam, resolve_param};
 use crate::world::{Param, Quantity as WorldQuantity};
 
@@ -48,7 +50,8 @@ impl AnalogTempSensor {
     pub const PINS: [&'static str; 3] = ["vs", "vout", "gnd"];
 }
 
-/// Supply ramp width over which the sensor turns on from 0 to full drive, in volts.
+/// Supply ramp width above [`SUPPLY_UNPOWERED_V`] over which the sensor turns on from 0 to full
+/// drive, in volts.
 const V_ON: f64 = 0.2;
 /// Smooth clamp knee at 0 V and `V(vs) - V(gnd)`, in volts.
 const KNEE_V: f64 = 1e-3;
@@ -231,7 +234,7 @@ fn evaluate(iq: f64, vt: f64, ro: f64, i: f64, vs: f64) -> Law {
     let v_hi = v_pos - KNEE_V * softplus(u);
     let dv_hi_dvs = sigmoid(u);
 
-    let x = vs / V_ON;
+    let x = (vs - SUPPLY_UNPOWERED_V) / V_ON;
     let (h, hp) = step(x);
     let dh_dvs = hp / V_ON;
 
@@ -242,10 +245,9 @@ fn evaluate(iq: f64, vt: f64, ro: f64, i: f64, vs: f64) -> Law {
     let dvo_di = -ro;
     let dvo_dvs = dv_oc_dvs;
 
-    // Quiescent supply current: 0 at vs = 0, iq for vs >= V_ON, passive ohmic load for vs < 0.
-    let (hoff, hpoff) = step(-x);
-    let ig = iq * h + iq * x * hoff;
-    let dig_dvs = iq * dh_dvs + (iq / V_ON) * hoff - (iq * vs / (V_ON * V_ON)) * hpoff;
+    // Quiescent supply current: 0 at or below SUPPLY_UNPOWERED_V, iq for vs >= SUPPLY_UNPOWERED_V + V_ON.
+    let ig = iq * h;
+    let dig_dvs = iq * dh_dvs;
 
     // Sourced output current (i > 0) draws from vs; sunk current (i < 0) returns to gnd.
     let s = sigmoid(i / SPLIT_A);
@@ -474,7 +476,9 @@ mod tests {
         let eps_i = 1e-9;
         for &ro in &[60.0, 250.0] {
             for &vt in &[-0.05, 0.0, 0.1, 0.75, 1.75] {
-                for &vs in &[-1.0, -0.1, 0.0, 0.05, 0.1, 0.15, 0.25, 0.75, 2.0, 5.0] {
+                for &vs in &[
+                    -5.0, -1.0, -0.1, 0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.75, 2.0, 5.0,
+                ] {
                     for &i in &[-2e-4, -1e-6, 0.0, 1e-6, 2e-4] {
                         let law = evaluate(iq, vt, ro, i, vs);
                         let dv_plus = evaluate(iq, vt, ro, i, vs + eps_v);
@@ -577,18 +581,179 @@ mod tests {
 
     #[test]
     fn unpowered_gives_zero_output_zero_draw_and_no_warning() {
-        let netlist = netlist::parse(tmp36_netlist(0.0, 25.0, Some(10_000.0)).as_bytes()).unwrap();
+        for supply in [-5.0, 0.0, 0.05, crate::ratings::SUPPLY_UNPOWERED_V] {
+            let netlist =
+                netlist::parse(tmp36_netlist(supply, 25.0, Some(10_000.0)).as_bytes()).unwrap();
+            let results = crate::simulate(&netlist);
+            assert!(
+                results.diagnostics().is_empty(),
+                "supply={supply} warned: {:?}",
+                results.diagnostics()
+            );
+            let op = op_of(&results);
+            let vout = op.values[&"#net.vout".parse::<Ref>().unwrap()].get();
+            let iin = op.values[&"#u1.iin".parse::<Ref>().unwrap()].get();
+            let iout = op.values[&"#u1.iout".parse::<Ref>().unwrap()].get();
+            assert!(vout.abs() < 1e-12, "supply={supply} vout={vout}");
+            assert!(iin.abs() < 1e-12, "supply={supply} iin={iin}");
+            assert!(iout.abs() < 1e-12, "supply={supply} iout={iout}");
+        }
+    }
+
+    #[test]
+    fn slow_supply_ramp_through_unpowered_floor_solves_cleanly() {
+        let json = r#"{
+          "version": 1,
+          "seed": 0,
+          "analysis": {
+            "transient": {
+              "stop_ps": 15000000000,
+              "max_step_ps": 100000000,
+              "grid_ps": 100000000
+            }
+          },
+          "ground": "gnd",
+          "nets": ["gnd", "vsrc", "vs", "vout"],
+          "world": { "temperature": { "value": 25.0, "unit": "degC" } },
+          "parts": [
+            {
+              "name": "v1",
+              "kind": "voltage_source",
+              "pins": { "p": "vsrc", "n": "gnd" },
+              "voltage": {
+                "kind": "step",
+                "initial": { "value": -0.2, "unit": "V" },
+                "final": { "value": 5.0, "unit": "V" },
+                "at_ps": 500000000
+              }
+            },
+            {
+              "name": "rs",
+              "kind": "resistor",
+              "pins": { "a": "vsrc", "b": "vs" },
+              "resistance": { "value": 1000.0, "unit": "ohm" },
+              "ratings": { "power": null }
+            },
+            {
+              "name": "cs",
+              "kind": "capacitor",
+              "pins": { "a": "vs", "b": "gnd" },
+              "capacitance": { "value": 1e-5, "unit": "F" },
+              "initial": { "value": -0.2, "unit": "V" }
+            },
+            {
+              "name": "rl",
+              "kind": "resistor",
+              "pins": { "a": "vout", "b": "gnd" },
+              "resistance": { "value": 10000.0, "unit": "ohm" },
+              "ratings": { "power": null }
+            },
+            {
+              "name": "u1",
+              "kind": "analog_temp_sensor",
+              "pins": { "vs": "vs", "vout": "vout", "gnd": "gnd" },
+              "output_voltage": {
+                "kind": "world",
+                "quantity": "temperature",
+                "curve": {
+                  "kind": "linear",
+                  "x0": { "value": 25.0, "unit": "degC" },
+                  "y0": { "value": 0.75, "unit": "V" },
+                  "x1": { "value": 125.0, "unit": "degC" },
+                  "y1": { "value": 1.75, "unit": "V" }
+                }
+              },
+              "output_resistance": {
+                "kind": "world",
+                "quantity": "temperature",
+                "curve": {
+                  "kind": "step",
+                  "x": { "value": 105.0, "unit": "degC" },
+                  "below": { "value": 60.0, "unit": "ohm" },
+                  "above": { "value": 250.0, "unit": "ohm" }
+                }
+              },
+              "quiescent_current": { "value": 5e-5, "unit": "A" },
+              "ratings": {
+                "supply_min": { "value": 2.7, "unit": "V" },
+                "supply_max": { "value": 5.5, "unit": "V" },
+                "supply_voltage": { "value": 7.0, "unit": "V" }
+              }
+            }
+          ]
+        }"#;
+        let netlist = netlist::parse(json.as_bytes()).unwrap();
         let results = crate::simulate(&netlist);
         assert!(
             results.diagnostics().is_empty(),
-            "unpowered warned: {:?}",
+            "clean supply ramp should solve with no warnings: {:?}",
             results.diagnostics()
         );
-        let op = op_of(&results);
-        let vout = op.values[&"#net.vout".parse::<Ref>().unwrap()].get();
-        let iin = op.values[&"#u1.iin".parse::<Ref>().unwrap()].get();
-        assert!(vout.abs() < 1e-9, "vout={vout}");
-        assert!(iin.abs() < 1e-12, "iin={iin}");
+        let tr = results.trace().expect("expected transient trace");
+        let col = |name: &str| {
+            let target: Ref = name.parse().unwrap();
+            let idx = tr.columns().iter().position(|c| c == &target).unwrap();
+            tr.column(idx)
+        };
+        let vs_vals = col("#net.vs");
+        let vout_vals = col("#net.vout");
+        let iin_vals = col("#u1.iin");
+        let iout_vals = col("#u1.iout");
+
+        let mut saw_negative = 0;
+        let mut saw_positive_unpowered = 0;
+        let mut saw_ramping = 0;
+        let mut saw_powered = 0;
+        let mut prev_vout = 0.0f64;
+
+        for idx in 0..tr.rows() {
+            let vs = vs_vals[idx];
+            let vout = vout_vals[idx];
+            let iin = iin_vals[idx];
+            let iout = iout_vals[idx];
+            assert!(
+                vout >= prev_vout - 1e-9,
+                "non-monotonic vout during ramp: {prev_vout} -> {vout} at vs={vs}"
+            );
+            prev_vout = vout;
+
+            if vs <= 0.0 {
+                saw_negative += 1;
+            } else if vs <= crate::ratings::SUPPLY_UNPOWERED_V {
+                saw_positive_unpowered += 1;
+            } else if vs < crate::ratings::SUPPLY_UNPOWERED_V + V_ON {
+                saw_ramping += 1;
+            } else if vs >= 2.7 {
+                saw_powered += 1;
+            }
+
+            if vs <= crate::ratings::SUPPLY_UNPOWERED_V {
+                assert!(vout.abs() < 1e-12, "vs={vs}: vout={vout}");
+                assert!(iin.abs() < 1e-12, "vs={vs}: iin={iin}");
+                assert!(iout.abs() < 1e-12, "vs={vs}: iout={iout}");
+            }
+        }
+
+        assert!(saw_negative > 0, "ramp never started below 0 V");
+        assert!(
+            saw_positive_unpowered > 0,
+            "ramp never sampled (0, SUPPLY_UNPOWERED_V]"
+        );
+        assert!(saw_ramping > 0, "ramp never sampled turn-on window");
+        assert!(saw_powered > 0, "ramp never reached operating supply");
+
+        let last = tr.rows() - 1;
+        let expected_vout = 0.75 * 10_000.0 / 10_060.0;
+        let final_vout = vout_vals[last];
+        let final_iin = iin_vals[last];
+        assert!(
+            (final_vout - expected_vout).abs() < 1e-5,
+            "final vout={final_vout}, want {expected_vout}"
+        );
+        assert!(
+            (final_iin - (50e-6 + expected_vout / 10_000.0)).abs() < 1e-7,
+            "final iin={final_iin}"
+        );
     }
 
     #[test]
@@ -654,12 +819,14 @@ mod tests {
         assert!(text.contains("outside its 7 V ceiling"), "{msg}");
         assert!(!text.contains("-0.3"), "{msg}");
 
-        // Reversed supply: 0 V output and no invented floor warning.
+        // Reversed supply: 0 V output, 0 A supply draw, and no invented floor warning.
         let rev = netlist::parse(tmp36_netlist(-5.0, 25.0, None).as_bytes()).unwrap();
         let results = crate::simulate(&rev);
         let op = op_of(&results);
         let vout = op.values[&"#net.vout".parse::<Ref>().unwrap()].get();
-        assert!(vout.abs() < 1e-9, "reversed vout={vout}");
+        let iin = op.values[&"#u1.iin".parse::<Ref>().unwrap()].get();
+        assert!(vout.abs() < 1e-12, "reversed vout={vout}");
+        assert!(iin.abs() < 1e-12, "reversed iin={iin}");
         assert!(
             results.diagnostics().is_empty(),
             "reversed warned: {:?}",
