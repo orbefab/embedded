@@ -32,6 +32,8 @@ export const MOMENT_OF: Readonly<Record<string, Partial<Moment>>> = {
   // LiquidCrystal_I2C's init keeps the glass dark until about 1.08 s, and both lines are written
   // by 1.12 s.
   "nano-lcd1602-i2c": { atMs: 1200 },
+  // MD_Parola scrolls "ORBE" to the centre of the 32 x 8 display at 600 ms.
+  "nano-max7219-scroll": { atMs: 600 },
   // The LED lights only while the button is down.
   "nano-button-led": { press: "@btn1" },
   "uno-button-led": { press: "@btn1" },

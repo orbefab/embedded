@@ -12,6 +12,8 @@
 //!
 //! The registers come from IDF's `soc/esp32s3/include/soc/hwcrypto_reg.h` and `hal/sha_ll.h`.
 
+use orbe_crypto::sha1;
+
 use crate::crypto::sha as math;
 
 use super::spi2::Setting;
@@ -182,11 +184,11 @@ impl Sha {
         match self.mode {
             SHA1 => {
                 let mut state = if first {
-                    math::SHA1_IV
+                    sha1::IV
                 } else {
                     std::array::from_fn(|i| self.h[i].swap_bytes())
                 };
-                math::compress1(&mut state, bytes);
+                sha1::compress(&mut state, bytes);
                 for (dst, val) in self.h[..5].iter_mut().zip(state) {
                     *dst = val.swap_bytes();
                 }

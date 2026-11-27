@@ -1,0 +1,46 @@
+{
+  "part": "max7219-matrix-8x8",
+  "source": {
+    "script": "model.py",
+    "sha256": "b6bed8893ffa43bd7854049a1efad7a658f8a06914461a68ce6075f950f7a862",
+    "bytes": 1368
+  },
+  "files": {
+    "max7219-matrix-8x8.glb": {
+      "sha256": "57a83cd66de7ba334587f070638b6e89039a85e1dbf2b9e0d926595dfce355ea",
+      "bytes": 22208
+    }
+  },
+  "box": {
+    "min": [-25, -16.000001, 2.54],
+    "max": [25, 16.000001, 4.14]
+  },
+  "kept_nodes": [],
+  "draw_calls": 1,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 0,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "pcb",
+      "z_mm": 2.54
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 1,
+      "primitives_out": 1
+    },
+    "composition": {
+      "children": 6,
+      "lowest_node": "c_bulk/(unnamed)",
+      "z_mm": 0.905,
+      "draw_calls": 32
+    }
+  }
+}

@@ -509,7 +509,7 @@ impl Session {
         // The t = 0 row is no rating sample. A capacitor held at `initial` draws what its hold
         // takes there, which no part carries. The first accepted step is the first sample.
         let ratings = Ratings::new(&circuit.netlist, &circuit.actives, &columns, Timing::Run);
-        let inputs = Inputs::new(&circuit.netlist, &circuit.actives);
+        let inputs = Inputs::new(&circuit.netlist, &circuit.actives, &columns);
         let record = rows
             .map(|rows| Record::start(transient, &columns, rows, &row, &signals, &logic))
             .transpose()
@@ -1204,6 +1204,7 @@ impl Session {
             .sample(landing.at, &landing.row, self.actives.cores());
         self.inputs.sample(
             landing.at,
+            &landing.row,
             &self.circuit.netlist,
             &self.circuit.actives,
             self.actives.cores(),

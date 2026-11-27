@@ -143,7 +143,7 @@ impl Registers {
                 self.com_pins,
                 self.charge_pump,
             ]
-            .map(u16::from),
+            .map(u32::from),
         )
     }
 }

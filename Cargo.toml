@@ -10,6 +10,8 @@ members = [
   "packages/engine/device-check",
   "packages/model",
   "packages/mcu",
+  "packages/net",
+  "packages/crypto",
   "packages/scratch",
   "packages/cores/*",
   "packages/socs/*",
@@ -29,6 +31,7 @@ orbe-session = { path = "packages/session" }
 orbe-engine = { path = "packages/engine" }
 orbe-model = { path = "packages/model" }
 orbe-mcu = { path = "packages/mcu" }
+orbe-crypto = { path = "packages/crypto" }
 orbe-xtensa = { path = "packages/cores/xtensa" }
 orbe-avr = { path = "packages/cores/avr" }
 orbe-microchip = { path = "packages/socs/microchip" }
@@ -64,8 +67,8 @@ object = { version = "=0.40.0", default-features = false, features = ["read_core
 unsafe_code = "forbid"
 
 # The chip models run firmware instruction by instruction, so builds without optimisation still
-# optimise the solver, the cores and the chips. Adding a part hashes the built-in catalog on
-# this path, so `sha2` is optimised too.
+# optimise the solver, the cores, the chips and the crypto they run. Adding a part hashes the
+# built-in catalog on this path, so `sha2` is optimised too.
 [profile.dev.package.orbe-engine]
 opt-level = 3
 
@@ -79,6 +82,9 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.orbe-espressif]
+opt-level = 3
+
+[profile.dev.package.orbe-crypto]
 opt-level = 3
 
 [profile.dev.package.sha2]

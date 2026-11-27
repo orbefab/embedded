@@ -171,6 +171,9 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
             "led-5mm-rgb-cc",
             "led-5mm-white",
             "led-5mm-yellow",
+            "max7219-8x8",
+            "max7219-matrix-4in1",
+            "max7219-matrix-8x8",
             "neopixel-ring-16",
             "neopixel-stick-8",
             "sk68xxmini-hs",
@@ -556,6 +559,36 @@ fn starter_kit_thermistor_and_batteries_show_ratings_and_match_search() {
         ("AA", "battery-aa-4x"),
         ("6 volt", "battery-aa-4x"),
         ("double a", "battery-aa-4x"),
+    ] {
+        let hits = search(&parts_dir(), query);
+        assert!(
+            hits.iter().any(|card| card.name == want),
+            "query `{query}` missed `{want}`"
+        );
+    }
+}
+
+#[test]
+fn max7219_modules_show_pins_and_match_search() {
+    for id in ["max7219-matrix-8x8", "max7219-matrix-4in1"] {
+        let module = card(&parts_dir(), id).unwrap();
+        let pins: Vec<&str> = module.pins.iter().map(|p| p.name.as_str()).collect();
+        for want in ["VCC", "GND", "DIN", "CS", "CLK", "DOUT"] {
+            assert!(pins.contains(&want), "{id} missing pin {want}: {pins:?}");
+        }
+        assert_eq!(module.license, "MIT OR Apache-2.0");
+    }
+    for (query, want) in [
+        ("max7219", "max7219-matrix-8x8"),
+        ("max7219", "max7219-matrix-4in1"),
+        ("led matrix", "max7219-matrix-8x8"),
+        ("led matrix", "max7219-matrix-4in1"),
+        ("dot matrix", "max7219-matrix-8x8"),
+        ("dot matrix", "max7219-matrix-4in1"),
+        ("8x8", "max7219-matrix-8x8"),
+        ("8x8", "max7219-matrix-4in1"),
+        ("fc-16", "max7219-matrix-8x8"),
+        ("fc-16", "max7219-matrix-4in1"),
     ] {
         let hits = search(&parts_dir(), query);
         assert!(

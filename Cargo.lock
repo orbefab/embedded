@@ -766,6 +766,10 @@ name = "orbe-avr"
 version = "0.3.1"
 
 [[package]]
+name = "orbe-crypto"
+version = "0.3.1"
+
+[[package]]
 name = "orbe-device-check"
 version = "0.3.1"
 dependencies = [
@@ -797,6 +801,7 @@ name = "orbe-espressif"
 version = "0.3.1"
 dependencies = [
  "object",
+ "orbe-crypto",
  "orbe-mcu",
  "orbe-model",
  "orbe-xtensa",
@@ -825,6 +830,13 @@ version = "0.3.1"
 dependencies = [
  "serde",
  "sha2",
+]
+
+[[package]]
+name = "orbe-net"
+version = "0.3.1"
+dependencies = [
+ "orbe-model",
 ]
 
 [[package]]
