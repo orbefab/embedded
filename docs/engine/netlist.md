@@ -87,7 +87,7 @@ The world is the room the circuit sits in. Its quantities are a closed table, ex
 
 | Quantity | Unit | Range | A scene's default |
 | --- | --- | --- | --- |
-| `temperature` | `degC` | -55 to 150 | 25 |
+| `temperature` | `degC` | -40 to 125 | 25 |
 | `humidity` | `%RH` | 0 to 100 | 50 |
 | `light` | `lx` | 0 to 100000 | 300 |
 | `pressure` | `Pa` | 30000 to 110000 | 101325 |
@@ -113,7 +113,7 @@ A part whose device reads the world, such as a [`dht22`](#dht22), reads each qua
 
 ### World-driven fields
 
-A part field that the world drives holds `{"kind": "world", "quantity": ..., "curve": ...}` in place of its value object. The field then has a value on each interval of the quantity's schedule: the curve at the quantity's value there. Its changes are the quantity's changes. A resistor's `resistance` is the one such field so far.
+A part field that the world drives holds `{"kind": "world", "quantity": ..., "curve": ...}` in place of its value object. The field then has a value on each interval of the quantity's schedule: the curve at the quantity's value there. Its changes are the quantity's changes. A resistor's `resistance` and an `analog_temp_sensor`'s `output_voltage` and `output_resistance` are such fields.
 
 ```json
 "resistance": {
@@ -129,7 +129,7 @@ A part field that the world drives holds `{"kind": "world", "quantity": ..., "cu
 }
 ```
 
-A curve reads the quantity's value `w`. `x`, `x0` and `x1` are in the quantity's unit, and `y`, `y0`, `y1` and `max` in the field's.
+A curve reads the quantity's value `w`. `x`, `x0` and `x1` are in the quantity's unit, and `y`, `y0`, `y1`, `max`, `below` and `above` in the field's.
 
 | `kind` | Value | Fields | For |
 | --- | --- | --- | --- |
@@ -137,8 +137,9 @@ A curve reads the quantity's value `w`. `x`, `x0` and `x1` are in the quantity's
 | `beta` | `y * exp(beta * (1 / (w + 273.15) - 1 / (x + 273.15)))` | `x`, `y`, `beta` in `K` | an NTC thermistor's B equation, on `temperature` only |
 | `steinhart_hart` | `y * exp(a + b / T + c / T^2 + d / T^3)` with `T = w + 273.15` | `y`, `a` in `1`, `b` in `K`, `c` in `K^2`, `d` in `K^3` | an NTC thermistor's extended Steinhart-Hart curve, on `temperature` only |
 | `linear` | the line through `(x0, y0)` and `(x1, y1)` | `x0`, `y0`, `x1`, `y1` | a sensor with a linear output, such as an LM35's 10 mV per degC |
+| `step` | `below` for `w <= x`, `above` for `w > x` | `x`, `below`, `above` | a parameter tabulated over two contiguous ranges, such as the TMP36's load regulation below and above 105 degC |
 
-Each curve is monotonic in `w` over the range of a quantity it may read, except `steinhart_hart`, which may have interior extrema. A `beta` or `linear` curve is monotonic for every `w` it may read. A `power` curve is monotonic only where `w / x` is not negative, so it reads only a quantity whose range does not go below 0, `light`, `humidity` or `pressure`. At `w` 0 a negative exponent makes `y * (w / x)^exponent` infinite, and the curve is `max` there, the dark resistance of a light-dependent resistor. Any other value above `max` is `max` too. A value that is not a number is never capped. Parse checks the field's own rule at both ends of the quantity's range (and at any interior stationary point of a `steinhart_hart` curve), so every value a schedule or a session can set keeps it. An end that breaks it is `netlist.value` on field `<field>.curve at <end> <unit>`, such as `resistance.curve at 0.0 lx`, with the field's rule, or rule `finite` when the curve is not finite there, such as a `power` curve with `y` 0 and a negative exponent at 0 lx. A `power` curve on `temperature` is `netlist.world` with rule `non_negative` on field `<field>.curve.kind`. A quantity the netlist does not declare is `netlist.world` with rule `undeclared` on field `<field>.quantity`, and a name the table lacks is rule `unknown` there. A `beta` or `steinhart_hart` curve on another quantity is `netlist.world` with rule `temperature` on field `<field>.curve.kind`. A `power` curve's `x` at or below 0 is `netlist.value` with rule `positive`. A `linear` curve whose `x1` equals its `x0` is `netlist.value` with rule `distinct`. A unit that is not the one the table above names is `netlist.unit` on field `<field>.curve.<name>`. An unknown `kind`, a missing field and an unknown field are `netlist.syntax`.
+Each curve is monotonic in `w` over the range of a quantity it may read, except `steinhart_hart`, which may have interior extrema. A `beta`, `linear` or `step` curve is monotonic for every `w` it may read. A `power` curve is monotonic only where `w / x` is not negative, so it reads only a quantity whose range does not go below 0, `light`, `humidity` or `pressure`. At `w` 0 a negative exponent makes `y * (w / x)^exponent` infinite, and the curve is `max` there, the dark resistance of a light-dependent resistor. Any other value above `max` is `max` too. A value that is not a number is never capped. Parse checks the field's own rule at both ends of the quantity's range (and at any interior stationary point of a `steinhart_hart` curve), so every value a schedule or a session can set keeps it. An end that breaks it is `netlist.value` on field `<field>.curve at <end> <unit>`, such as `resistance.curve at 0.0 lx`, with the field's rule, or rule `finite` when the curve is not finite there, such as a `power` curve with `y` 0 and a negative exponent at 0 lx. A `power` curve on `temperature` is `netlist.world` with rule `non_negative` on field `<field>.curve.kind`. A quantity the netlist does not declare is `netlist.world` with rule `undeclared` on field `<field>.quantity`, and a name the table lacks is rule `unknown` there. A `beta` or `steinhart_hart` curve on another quantity is `netlist.world` with rule `temperature` on field `<field>.curve.kind`. A `power` curve's `x` at or below 0 is `netlist.value` with rule `positive`. A `step` curve's `x` outside its quantity's range is `netlist.value` with rule `range`. A `linear` curve whose `x1` equals its `x0` is `netlist.value` with rule `distinct`. A unit that is not the one the table above names is `netlist.unit` on field `<field>.curve.<name>`. An unknown `kind`, a missing field and an unknown field are `netlist.syntax`.
 
 ## Names
 
@@ -515,16 +516,15 @@ The law cannot match the page 7 legacy ripple rejection of 45 dB at 1000 Hz, the
 
 `kind` is `analog_temp_sensor`. Pins are `vs`, `vout` and `gnd`.
 
-Its open-circuit output voltage follows `output_voltage` (a fixed value in `V` or a world-driven curve such as `linear` over `temperature`), smoothly clamped between `0` and `V(vs) - V(gnd)` and gated by a smooth supply ramp over `0` to `0.2 V`, in series with `output_resistance`. While powered it draws `quiescent_current` from `vs` to `gnd`, plus any current sourced out of `vout`; current sunk into `vout` returns to `gnd`. When unpowered (`V(vs) - V(gnd) <= 0`), the output sits at `0 V` over `gnd` and the supply draws nothing. `vs` and `vout` each have a DC path to `gnd`. Its observed quantities are `iin` (entering `vs`), `iout` (entering `vout`), and `p`.
+Its open-circuit output voltage follows `output_voltage` (a fixed value in `V` or a world-driven curve such as `linear` over `temperature`), smoothly clamped between `0` and `V(vs) - V(gnd)` and gated by a smooth supply ramp over `0` to `0.2 V`, in series with `output_resistance` (a fixed value in `ohm` or a world-driven curve such as `step` over `temperature`). While powered it draws `quiescent_current` from `vs` to `gnd`, plus any current sourced out of `vout`; current sunk into `vout` returns to `gnd`. When unpowered (`V(vs) - V(gnd) <= 0`), the output sits at `0 V` over `gnd` and the supply draws nothing. `vs` and `vout` each have a DC path to `gnd`. Its observed quantities are `iin` (entering `vs`), `iout` (entering `vout`), and `p`.
 
 | Field | Unit | Rule |
 | --- | --- | --- |
 | `output_voltage` | `V` | value or world curve, finite over range |
-| `output_resistance` | `ohm` | positive, finite reciprocal |
+| `output_resistance` | `ohm` | value or world curve, positive with finite reciprocal over range |
 | `quiescent_current` | `A` | non-negative |
-| `min_supply` | `V` | positive |
 
-`ratings` is optional. When present it may hold `supply_voltage`, a positive value in `V` (absolute maximum `V(vs) - V(gnd)`), and `temperature`, `{ "min", "max" }` in `degC` with `min <= max`. While powered (`V(vs) - V(gnd) >= 0.1 V`), operating below `min_supply` keeps working (clamped to `vs`) and warns [`rating.voltage`](diagnostics.md#ratingvoltage), and a world temperature outside `ratings.temperature` keeps working and warns [`rating.temperature`](diagnostics.md#ratingtemperature). `vs` below -0.3 V or above `ratings.supply_voltage` over `gnd` warns [`rating.voltage`](diagnostics.md#ratingvoltage).
+`ratings` is optional. When present it may hold `operating_supply`, `{ "min", "max" }` of positive values in `V` with `min < max`, and `supply_voltage`, a positive value in `V` (absolute maximum `V(vs) - V(gnd)` ceiling). While powered (`V(vs) - V(gnd) >= 0.1 V`), operating below `operating_supply.min` keeps working (clamped to `vs`) and warns [`rating.voltage`](diagnostics.md#ratingvoltage); operating above `operating_supply.max` keeps working and warns [`rating.voltage`](diagnostics.md#ratingvoltage). Exceeding `ratings.supply_voltage` keeps working and warns [`rating.voltage`](diagnostics.md#ratingvoltage) past the ceiling.
 
 ### Op-amp
 

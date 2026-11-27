@@ -641,9 +641,9 @@ fn tmp36_shows_ratings_pins_and_matches_search() {
     assert_eq!(tmp.real.maker.as_deref(), Some("Analog Devices"));
     assert_eq!(tmp.real.number.as_deref(), Some("TMP36GT9Z"));
     for (name, value) in [
+        ("operating_supply.min", 2.7),
+        ("operating_supply.max", 5.5),
         ("supply_voltage", 7.0),
-        ("temperature.min", -40.0),
-        ("temperature.max", 125.0),
     ] {
         assert!(
             tmp.ratings

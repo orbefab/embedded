@@ -70,11 +70,38 @@
       },
     },
     "output_resistance": {
-      "value": 60.0,
-      "unit": "ohm",
-      "source": {
-        "closed_form": {
-          "note": "Analog Devices TMP35/TMP36/TMP37 Rev. H Table 1, p3: Load Regulation (0 to 50 uA, -40 to 105 C) 6 mC/uA typ * 10 mV/C = 60 ohm",
+      "kind": "world",
+      "quantity": "temperature",
+      "curve": {
+        "kind": "step",
+        "x": {
+          "value": 105.0,
+          "unit": "degC",
+          "source": {
+            "datasheet": {
+              "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
+              "at": "Table 1, p3, Load Regulation temperature split between -40 to +105 C and +105 to +125 C rows",
+              "basis": "nominal",
+            },
+          },
+        },
+        "below": {
+          "value": 60.0,
+          "unit": "ohm",
+          "source": {
+            "closed_form": {
+              "note": "Analog Devices TMP35/TMP36/TMP37 Rev. H Table 1, p3: Load Regulation (0 to 50 uA, -40 to +105 C) 6 mC/uA typ * 10 mV/C = 60 ohm",
+            },
+          },
+        },
+        "above": {
+          "value": 250.0,
+          "unit": "ohm",
+          "source": {
+            "closed_form": {
+              "note": "Analog Devices TMP35/TMP36/TMP37 Rev. H Table 1, p3: Load Regulation (0 to 50 uA, +105 to +125 C) 25 mC/uA typ * 10 mV/C = 250 ohm",
+            },
+          },
         },
       },
     },
@@ -89,18 +116,31 @@
         },
       },
     },
-    "min_supply": {
-      "value": 2.7,
-      "unit": "V",
-      "source": {
-        "datasheet": {
-          "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
-          "at": "Table 1, p3, Operating Supply Voltage Range = 2.7 V to 5.5 V",
-          "basis": "min",
+    "ratings": {
+      "operating_supply": {
+        "min": {
+          "value": 2.7,
+          "unit": "V",
+          "source": {
+            "datasheet": {
+              "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
+              "at": "Table 1, p3, Operating Supply Voltage Range = 2.7 V to 5.5 V",
+              "basis": "min",
+            },
+          },
+        },
+        "max": {
+          "value": 5.5,
+          "unit": "V",
+          "source": {
+            "datasheet": {
+              "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
+              "at": "Table 1, p3, Operating Supply Voltage Range = 2.7 V to 5.5 V",
+              "basis": "max",
+            },
+          },
         },
       },
-    },
-    "ratings": {
       "supply_voltage": {
         "value": 7.0,
         "unit": "V",
@@ -109,30 +149,6 @@
             "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
             "at": "Table 2, p4, Absolute Maximum Ratings, Supply Voltage = 7 V",
             "basis": "absolute_max",
-          },
-        },
-      },
-      "temperature": {
-        "min": {
-          "value": -40.0,
-          "unit": "degC",
-          "source": {
-            "datasheet": {
-              "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
-              "at": "Table 1, p3, Specified Temperature Range = -40 C to +125 C",
-              "basis": "min",
-            },
-          },
-        },
-        "max": {
-          "value": 125.0,
-          "unit": "degC",
-          "source": {
-            "datasheet": {
-              "doc": "Analog Devices TMP35/TMP36/TMP37 Datasheet (Rev. H)",
-              "at": "Table 1, p3, Specified Temperature Range = -40 C to +125 C",
-              "basis": "max",
-            },
           },
         },
       },
@@ -145,7 +161,12 @@
     },
     {
       "what": "short-circuit current limit and capacitive load stability",
-      "why": "The output stage is modelled as a 60 ohm source clamped to [0, VS]. Table 1's 250 uA typical short-circuit current limit and capacitive-load ringing above 10 nF are not modelled.",
+      "why": "The output stage is modelled as a 60 ohm source up to 105 C (250 ohm above 105 C) clamped to [0, VS]. Table 1's 250 uA maximum short-circuit current limit (Note 2, guaranteed but not tested) and capacitive-load ringing above 10 nF are not modelled.",
+    },
+    {
+      "what": "reversed supply",
+      "pins": ["VS", "GND"],
+      "why": "Analog Devices Rev. H Table 2 states no reverse supply voltage rating. With VS below GND the sensor outputs 0 V and emits no rating warning.",
     },
     {
       "what": "self-heating and thermal response time",

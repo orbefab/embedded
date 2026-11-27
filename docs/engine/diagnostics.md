@@ -15,7 +15,7 @@ A diagnostic is one JSON object. The fields are written in this order.
 
 The run sorts diagnostics by `t_ps`, then `code`, then `refs`, then the JSON bytes of the whole object. A `null` time sorts before a number, so every input finding precedes a solver finding.
 
-A session's `diagnostics()` returns the warnings found so far, and once the session ends they are that list's. While it runs, a `Pulses` record still in flight is not yet counted, as [engine.md](engine.md#sessions) says. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `rating.voltage`, `rating.temperature`, `regulator.current_limit`, `chip.protocol`, `chip.link_miswired`, `chip.floating_input`, `chip.unmodeled_register` and `chip.restart`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
+A session's `diagnostics()` returns the warnings found so far, and once the session ends they are that list's. While it runs, a `Pulses` record still in flight is not yet counted, as [engine.md](engine.md#sessions) says. The folder's warnings are `net.floating`, `trace.row_interpolated`, `rating.current`, `rating.power`, `rating.voltage`, `regulator.current_limit`, `chip.protocol`, `chip.link_miswired`, `chip.floating_input`, `chip.unmodeled_register` and `chip.restart`. `diagnostics()` returns all but `trace.row_interpolated`. It leaves out `trace.row_interpolated`, because that warning names a grid row whose probe failed twice, and only a recorded trace defines those rows. An open session has no grid. The accepted steps do not depend on the grid, and neither do the warnings `diagnostics()` returns. Every other code on this page is an error. The error that ends a run is `fault` on the session, and `diagnostics()` does not return it. [engine.md](engine.md#sessions) says when the samples are taken.
 
 A run whose diagnostics are all warnings still writes the operating point. A run with an error writes the observations it reached, as [run-folder.md](run-folder.md#observationsjson) says. That is `{}` when nothing solved, as at t = 0. A transient keeps its grid rows before the error, and its last accepted step is the last row. Its observations end there. A warning found before that error is kept, including a rating sampled on any accepted step before it.
 
@@ -821,19 +821,7 @@ A capacitor with `ratings.reverse_voltage` uses the same code on pin `a`. The fl
 
 A `linear_regulator` uses the same code on pin `in`. The floor is -0.3 V over pin `gnd`, and there is no ceiling. The message calls `gnd` the chip's ground. A voltage exactly on -0.3 V is inside. The model has no diode from `out` to `in`, so a reversed input stays at the voltage the circuit drives and the warning is what names it.
 
-An `analog_temp_sensor` checks `vs` over `gnd` against `[-0.3 V, ratings.supply_voltage]` using the same code, and while powered (`V(vs) - V(gnd) >= 0.1 V`) below `min_supply` emits `#<part>.pin.vs reaches {peak} V over the chip's ground, below its {low} V minimum operating supply`.
-
-## rating.temperature
-
-Severity `warning`. Refs is the part, `#<part>`. `t_ps` is the first time the part was powered outside its rated temperature range, 0 for the operating point.
-
-The message is:
-
-```text
-{part} reaches {peak} degC, outside its {low} degC to {high} degC operating temperature for {over_ps} ps
-```
-
-Each temperature in the message is rounded to 3 significant digits. ` for {over_ps} ps` is left out for an operating point, and while `over_ps` is 0. `data` holds `high`, `low`, `over_ps`, `peak`, and `peak_ps`, unrounded. An `analog_temp_sensor` with `ratings.temperature` checks `world.temperature` while powered (`V(vs) - V(gnd) >= 0.1 V`) and keeps working outside the range.
+An `analog_temp_sensor` checks `vs` over `gnd` using the same code. When `ratings.operating_supply` is set, operating while powered (`V(vs) - V(gnd) >= 0.1 V`) below `min` emits `#<part>.pin.vs reaches {peak} V over the chip's ground, below its {low} V minimum operating supply`, and above `max` (up to `ratings.supply_voltage`, when set) emits `#<part>.pin.vs reaches {peak} V over the chip's ground, above its {high} V maximum operating supply`. When `ratings.supply_voltage` is set, exceeding it emits `#<part>.pin.vs reaches {peak} V over the chip's ground, outside its {high} V ceiling`.
 
 ## regulator.current_limit
 

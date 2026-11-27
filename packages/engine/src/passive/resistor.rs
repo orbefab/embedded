@@ -11,7 +11,7 @@ use crate::netlist::json::{ParseCtx, PinMap, resolve_pins, resolve_rating};
 use crate::netlist::{Conduction, Kind, NetId, broken_positive};
 use crate::newton::Side;
 use crate::world::json::{FieldRule, WireParam, resolve_param};
-use crate::world::{Driven, Param};
+use crate::world::{Param, Quantity as WorldQuantity};
 
 /// A sounding drive that leaves the coil quiet for longer than this has stopped. It is the
 /// half-cycle of 31 Hz, the lowest note an Uno or Nano plays with `tone()`, plus the most a note
@@ -193,8 +193,12 @@ impl Kind for Resistor {
     fn conduction(&self) -> Conduction {
         Conduction::Limits
     }
-    fn driven_mut(&mut self) -> Option<&mut Driven> {
-        self.resistance.driven_mut()
+    fn follow_world(
+        &mut self,
+        quantity: WorldQuantity,
+        schedule: &crate::netlist::Schedule<Value>,
+    ) {
+        self.resistance.follow_world(quantity, schedule);
     }
 }
 

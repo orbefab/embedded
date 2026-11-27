@@ -78,6 +78,11 @@ enum WireCurve {
         x1: WireValue,
         y1: WireValue,
     },
+    Step {
+        x: WireValue,
+        below: WireValue,
+        above: WireValue,
+    },
 }
 
 impl<'de> Deserialize<'de> for WireParam {
@@ -375,6 +380,26 @@ fn resolve_curve(
                 y0: y0?,
                 x1: x1?,
                 y1: y1?,
+            })
+        }
+        WireCurve::Step { x, below, above } => {
+            let x_number = x.value.get();
+            let x = value("x", quantity.unit(), x);
+            let below = value("below", unit, below);
+            let above = value("above", unit, above);
+            if !quantity.holds(x_number) {
+                out.push(Diagnostic::NetlistValue {
+                    part: part.clone(),
+                    field: at("x"),
+                    value: x_number,
+                    rule: ValueRule::Range,
+                });
+                return None;
+            }
+            Some(Curve::Step {
+                x: x?,
+                below: below?,
+                above: above?,
             })
         }
     }

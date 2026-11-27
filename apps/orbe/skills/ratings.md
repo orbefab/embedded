@@ -39,6 +39,6 @@ Right after `step --until @led1 lit` the pin is already high and `i` is about 12
 | `scene.covered_hole` | A wire end or seated lead sits in a hole another part's body covers. Move the wire to a clear hole in that strip, or move a part. |
 | `scene.overlap` | Two placed parts overlap in space. Move one in `layout` so their bodies clear. |
 
-`warning[rating.current]`, `rating.power`, `rating.voltage` or `rating.temperature` means a part or pin passed its datasheet rating; `regulator.current_limit` means a load asked a linear regulator past its limit so its output sagged. Fix the circuit. `chip.floating_input` names an undriven input (see `arduino`).
+`warning[rating.current]`, `rating.power` or `rating.voltage` means a part or pin passed its datasheet rating; `regulator.current_limit` means a load asked a linear regulator past its limit so its output sagged. Fix the circuit. `chip.floating_input` names an undriven input (see `arduino`).
 
 Reverse voltage warns past 1 V on aluminum electrolytics and 2.4 V on tantalums. Regulator inputs warn below -0.3 V or past their max (35 V on LM7805); op-amp supplies warn past their max. Reversed 9 V on Nano VIN warns `#nano__regulator.pin.in (nano.VIN)`. A series 1N4007 holds it near 0 V; 9 V forwards makes 5 V. Rail tantalums stay out and back-feed is blocked, so USB-only VIN stays near 0.

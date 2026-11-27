@@ -15,7 +15,7 @@ A scene is JSONC: JSON plus `//` comments and trailing commas.
 
 | Quantity | Unit | Range | Default |
 | --- | --- | --- | --- |
-| `temperature` | degC | -55 to 150 | 25 |
+| `temperature` | degC | -40 to 125 | 25 |
 | `humidity` | %RH | 0 to 100 | 50 |
 | `light` | lx | 0 to 100000 | 300 |
 | `pressure` | Pa | 30000 to 110000 | 101325 |

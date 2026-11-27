@@ -30,8 +30,8 @@ const ROWS: [Row; 4] = [
     Row {
         name: "temperature",
         unit: "degC",
-        min: -55.0,
-        max: 150.0,
+        min: -40.0,
+        max: 125.0,
         default: 25.0,
     },
     Row {

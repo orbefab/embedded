@@ -2835,16 +2835,15 @@ fn decode_body(
         }
         if kind == "resistor"
             && let Some(curve) = node.get("resistance").and_then(|r| r.get("curve"))
-            && let Some(prop) = curve
-                .props()
-                .unwrap_or_default()
-                .iter()
-                .find(|prop| prop.key == "kind" && prop.value.str() == Some("steinhart_hart"))
+            && let Some(prop) = curve.props().unwrap_or_default().iter().find(|prop| {
+                prop.key == "kind" && matches!(prop.value.str(), Some("steinhart_hart" | "step"))
+            })
         {
+            let curve_kind = prop.value.str().unwrap_or("steinhart_hart");
             gate(
                 out,
                 kind,
-                "resistance.curve.steinhart_hart",
+                &format!("resistance.curve.{curve_kind}"),
                 prop.value.span,
                 CURVE_FORMAT,
                 format,

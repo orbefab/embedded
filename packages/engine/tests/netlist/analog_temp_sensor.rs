@@ -1,6 +1,7 @@
 use orbe_engine::diagnostic::{Diagnostic, ValueRule};
 use orbe_engine::name::Quantity;
 use orbe_engine::netlist::{Model, parse};
+use orbe_engine::world::{Curve, Param};
 
 fn doc(part_body: &str, world: &str) -> String {
     format!(
@@ -39,15 +40,23 @@ const VALID_BODY: &str = r#"
       "y1": { "value": 1.75, "unit": "V" }
     }
   },
-  "output_resistance": { "value": 60.0, "unit": "ohm" },
-  "quiescent_current": { "value": 5e-5, "unit": "A" },
-  "min_supply": { "value": 2.7, "unit": "V" },
-  "ratings": {
-    "supply_voltage": { "value": 7.0, "unit": "V" },
-    "temperature": {
-      "min": { "value": -40.0, "unit": "degC" },
-      "max": { "value": 125.0, "unit": "degC" }
+  "output_resistance": {
+    "kind": "world",
+    "quantity": "temperature",
+    "curve": {
+      "kind": "step",
+      "x": { "value": 105.0, "unit": "degC" },
+      "below": { "value": 60.0, "unit": "ohm" },
+      "above": { "value": 250.0, "unit": "ohm" }
     }
+  },
+  "quiescent_current": { "value": 5e-5, "unit": "A" },
+  "ratings": {
+    "operating_supply": {
+      "min": { "value": 2.7, "unit": "V" },
+      "max": { "value": 5.5, "unit": "V" }
+    },
+    "supply_voltage": { "value": 7.0, "unit": "V" }
   }
 "#;
 
@@ -67,20 +76,21 @@ fn valid_analog_temp_sensor_parses_pins_quantities_and_ratings() {
     let Model::AnalogTempSensor(sensor) = &part.model else {
         panic!("expected AnalogTempSensor");
     };
-    assert_eq!(sensor.output_resistance.si.get(), 60.0);
+    let Param::World(driven) = &sensor.output_resistance else {
+        panic!("expected world-driven output_resistance");
+    };
+    assert!(matches!(driven.curve, Curve::Step { .. }));
     assert_eq!(sensor.quiescent_current.si.get(), 5e-5);
-    assert_eq!(sensor.min_supply.si.get(), 2.7);
+    assert_eq!(sensor.operating_supply, Some((2.7, 5.5)));
     assert_eq!(sensor.max_supply.as_ref().unwrap().si.get(), 7.0);
-    assert_eq!(sensor.temperature, Some((-40.0, 125.0)));
 }
 
 #[test]
-fn ratings_are_optional_and_fixed_output_voltage_works() {
+fn ratings_are_optional_and_fixed_output_voltage_and_resistance_work() {
     let body = r#"
       "output_voltage": { "value": 0.75, "unit": "V" },
       "output_resistance": { "value": 60.0, "unit": "ohm" },
-      "quiescent_current": { "value": 0.0, "unit": "A" },
-      "min_supply": { "value": 2.7, "unit": "V" }
+      "quiescent_current": { "value": 0.0, "unit": "A" }
     "#;
     let netlist = parse(doc(body, "").as_bytes()).unwrap();
     let Model::AnalogTempSensor(sensor) = &netlist
@@ -92,18 +102,26 @@ fn ratings_are_optional_and_fixed_output_voltage_works() {
     else {
         panic!("expected AnalogTempSensor");
     };
+    assert_eq!(sensor.output_resistance.fixed().unwrap().si.get(), 60.0);
+    assert_eq!(sensor.operating_supply, None);
     assert_eq!(sensor.max_supply, None);
-    assert_eq!(sensor.temperature, None);
 }
 
 #[test]
 fn bad_units_and_values_are_rejected() {
-    let bad = VALID_BODY
-        .replace(r#""unit": "ohm""#, r#""unit": "V""#)
-        .replace("5e-5", "-1e-5")
-        .replace("2.7", "0.0")
-        .replace("7.0", "-7.0");
-    let found = parse(doc(&bad, WORLD_TEMP).as_bytes()).unwrap_err();
+    let bad = r#"
+      "output_voltage": { "value": 0.75, "unit": "V" },
+      "output_resistance": { "value": 60.0, "unit": "V" },
+      "quiescent_current": { "value": -1e-5, "unit": "A" },
+      "ratings": {
+        "operating_supply": {
+          "min": { "value": 0.0, "unit": "V" },
+          "max": { "value": 5.5, "unit": "V" }
+        },
+        "supply_voltage": { "value": -7.0, "unit": "V" }
+      }
+    "#;
+    let found = parse(doc(bad, "").as_bytes()).unwrap_err();
     let codes: Vec<_> = found.iter().map(Diagnostic::code).collect();
     assert_eq!(
         codes,
@@ -115,16 +133,16 @@ fn bad_units_and_values_are_rejected() {
         ]
     );
 
-    let inverted_temp = VALID_BODY
-        .replace("-40.0", "130.0")
-        .replace(r#""max": { "value": 125.0"#, r#""max": { "value": 20.0"#);
-    let found = parse(doc(&inverted_temp, WORLD_TEMP).as_bytes()).unwrap_err();
+    let inverted_supply = VALID_BODY
+        .replace(r#""min": { "value": 2.7"#, r#""min": { "value": 6.0"#)
+        .replace(r#""max": { "value": 5.5"#, r#""max": { "value": 2.7"#);
+    let found = parse(doc(&inverted_supply, WORLD_TEMP).as_bytes()).unwrap_err();
     assert!(found.iter().any(|d| matches!(
         d,
         Diagnostic::NetlistValue {
             field,
             rule: ValueRule::AboveHigh,
             ..
-        } if field == "ratings.temperature.min"
+        } if field == "ratings.operating_supply.min"
     )));
 }

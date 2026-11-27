@@ -10,8 +10,7 @@ use crate::chip::regulator::{
     LIMIT_HOLD_PS, LIMIT_KNEE_FRACTION, LIMIT_SAG_FRACTION, MIN_CHARGE_RATE, STALL_PS, limit_drop,
 };
 use crate::diagnostic::{
-    CurrentLimitExcursion, Diagnostic, Excursion, TemperatureExcursion, VoltageExcursion,
-    exceeds_rounded, significant,
+    CurrentLimitExcursion, Diagnostic, Excursion, VoltageExcursion, exceeds_rounded, significant,
 };
 use crate::finite::Finite;
 use crate::name::{Name, Quantity, Ref};
@@ -60,8 +59,8 @@ pub(crate) struct Ratings {
     drives: Vec<CoilDrive>,
     /// A powered analog part's minimum operating supply voltage.
     supply_floors: Vec<SupplyFloor>,
-    /// A powered part's specified operating temperature range.
-    temperatures: Vec<TemperatureRange>,
+    /// A powered analog part's maximum operating supply voltage.
+    supply_ceilings: Vec<SupplyCeiling>,
     chips: Vec<Gauge>,
     last: Option<Time>,
     /// The last sample was a step that restarted, so the next sample holds back to it.
@@ -301,19 +300,18 @@ struct SupplyFloor {
 }
 
 #[derive(Clone)]
-struct TemperatureRange {
-    part: Ref,
-    temp: usize,
+struct SupplyCeiling {
+    pin: Ref,
     vs: usize,
     gnd: usize,
-    unpowered_v: f64,
-    min: f64,
     max: f64,
-    min_rounded: f64,
     max_rounded: f64,
+    /// Absolute maximum supply ceiling, rounded. When `v` exceeds it, the abs-max `Window` warns
+    /// instead so a steady over-voltage does not emit two `rating.voltage` warnings.
+    abs_max_rounded: Option<f64>,
     worst: f64,
     over: bool,
-    excursion: Option<TemperatureExcursion>,
+    excursion: Option<VoltageExcursion>,
 }
 
 #[derive(Clone)]
@@ -714,8 +712,7 @@ impl Ratings {
             }
         }
         let mut supply_floors = Vec::new();
-        let mut temperatures = Vec::new();
-        let temp_column = columns.index(&Ref::World(crate::world::Quantity::Temperature));
+        let mut supply_ceilings = Vec::new();
         for (_, part) in netlist.parts() {
             let Model::AnalogTempSensor(sensor) = &part.model else {
                 continue;
@@ -723,41 +720,40 @@ impl Ratings {
             let vs = columns.net(sensor.pins[0]);
             let gnd = columns.net(sensor.pins[2]);
             let pin = Ref::Pin(part.name.clone(), Name::new("vs").expect("a pin name"));
-            windows.push(Window {
-                pin: pin.clone(),
-                column: vs,
-                vcc: gnd,
-                gnd,
-                below: Some(crate::chip::analog_temp_sensor::SUPPLY_FLOOR_V),
-                above: sensor
-                    .max_supply
-                    .as_ref()
-                    .map(|max| Ceiling::Fixed(max.si.get())),
-                worst: 0.0,
-                over: false,
-                excursion: None,
-            });
-            supply_floors.push(SupplyFloor {
-                pin,
-                vs,
-                gnd,
-                min: sensor.min_supply.si.get(),
-                unpowered_v: crate::chip::analog_temp_sensor::UNPOWERED_V,
-                worst: 0.0,
-                over: false,
-                excursion: None,
-            });
-            if let (Some((min, max)), Some(temp)) = (sensor.temperature, temp_column) {
-                temperatures.push(TemperatureRange {
-                    part: Ref::Part(part.name.clone()),
-                    temp,
+            if let Some(max) = &sensor.max_supply {
+                windows.push(Window {
+                    pin: pin.clone(),
+                    column: vs,
+                    vcc: gnd,
+                    gnd,
+                    below: None,
+                    above: Some(Ceiling::Fixed(max.si.get())),
+                    worst: 0.0,
+                    over: false,
+                    excursion: None,
+                });
+            }
+            if let Some((min, max)) = sensor.operating_supply {
+                supply_floors.push(SupplyFloor {
+                    pin: pin.clone(),
                     vs,
                     gnd,
-                    unpowered_v: crate::chip::analog_temp_sensor::UNPOWERED_V,
                     min,
+                    unpowered_v: crate::chip::analog_temp_sensor::UNPOWERED_V,
+                    worst: 0.0,
+                    over: false,
+                    excursion: None,
+                });
+                supply_ceilings.push(SupplyCeiling {
+                    pin,
+                    vs,
+                    gnd,
                     max,
-                    min_rounded: significant(min),
                     max_rounded: significant(max),
+                    abs_max_rounded: sensor
+                        .max_supply
+                        .as_ref()
+                        .map(|abs| significant(abs.si.get())),
                     worst: 0.0,
                     over: false,
                     excursion: None,
@@ -771,7 +767,7 @@ impl Ratings {
             limits,
             drives,
             supply_floors,
-            temperatures,
+            supply_ceilings,
             chips,
             last: None,
             restarted: false,
@@ -1092,43 +1088,39 @@ impl Ratings {
                 Some(_) => {}
             }
         }
-        for range in &mut self.temperatures {
+        for ceiling in &mut self.supply_ceilings {
             elapsed(
-                range.over,
-                range.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
+                ceiling.over,
+                ceiling.excursion.as_mut().and_then(|e| e.over_ps.as_mut()),
                 self.last,
             );
-            let vs = row[range.vs].get() - row[range.gnd].get();
-            let temp = row[range.temp].get();
-            let powered = vs >= range.unpowered_v;
-            let rounded = significant(temp);
-            let below = powered && rounded < range.min_rounded;
-            let above = powered && rounded > range.max_rounded;
-            range.over = below || above;
-            if !range.over {
+            let v = row[ceiling.vs].get() - row[ceiling.gnd].get();
+            let over_operating = exceeds_rounded(v, ceiling.max_rounded);
+            let over_abs = ceiling
+                .abs_max_rounded
+                .is_some_and(|abs| exceeds_rounded(v, abs));
+            ceiling.over = over_operating && !over_abs;
+            if !ceiling.over {
                 continue;
             }
-            let past = if below {
-                range.min - temp
-            } else {
-                temp - range.max
-            };
-            match &mut range.excursion {
+            let past = v - ceiling.max;
+            match &mut ceiling.excursion {
                 None => {
-                    range.worst = past;
-                    range.excursion = Some(TemperatureExcursion {
-                        part: range.part.clone(),
-                        low: range.min,
-                        high: range.max,
-                        peak: temp,
+                    ceiling.worst = past;
+                    ceiling.excursion = Some(VoltageExcursion {
+                        pin: ceiling.pin.clone(),
+                        low: None,
+                        high: Some(ceiling.max),
+                        peak: v,
                         peak_at: at,
                         first: at,
                         over_ps: self.timing.over_ps(),
+                        operating: true,
                     });
                 }
-                Some(excursion) if past > range.worst => {
-                    range.worst = past;
-                    excursion.peak = temp;
+                Some(excursion) if past > ceiling.worst => {
+                    ceiling.worst = past;
+                    excursion.peak = v;
                     excursion.peak_at = at;
                 }
                 Some(_) => {}
@@ -1164,16 +1156,16 @@ impl Ratings {
             .supply_floors
             .iter()
             .filter_map(|floor| Some(Diagnostic::RatingVoltage(floor.excursion.clone()?)));
-        let temperatures = self
-            .temperatures
+        let ceilings = self
+            .supply_ceilings
             .iter()
-            .filter_map(|range| Some(Diagnostic::RatingTemperature(range.excursion.clone()?)));
+            .filter_map(|ceiling| Some(Diagnostic::RatingVoltage(ceiling.excursion.clone()?)));
         currents
             .chain(voltages)
             .chain(limits)
             .chain(drives)
             .chain(floors)
-            .chain(temperatures)
+            .chain(ceilings)
             .collect()
     }
 
@@ -1252,7 +1244,7 @@ impl Ratings {
             || self.limits.iter().any(|l| l.excursion.is_some())
             || self.drives.iter().any(|d| d.excursion.is_some())
             || self.supply_floors.iter().any(|f| f.excursion.is_some())
-            || self.temperatures.iter().any(|t| t.excursion.is_some())
+            || self.supply_ceilings.iter().any(|c| c.excursion.is_some())
         {
             return false;
         }
@@ -1298,15 +1290,15 @@ impl Ratings {
             let v = row[floor.vs].get() - row[floor.gnd].get();
             !(v >= floor.unpowered_v && exceeds_rounded(floor.min, significant(v)))
         });
-        let temperatures = self.temperatures.iter().all(|range| {
-            let vs = row[range.vs].get() - row[range.gnd].get();
-            if vs < range.unpowered_v {
-                return true;
-            }
-            let rounded = significant(row[range.temp].get());
-            rounded >= range.min_rounded && rounded <= range.max_rounded
+        let ceilings = self.supply_ceilings.iter().all(|ceiling| {
+            let v = row[ceiling.vs].get() - row[ceiling.gnd].get();
+            let over_operating = exceeds_rounded(v, ceiling.max_rounded);
+            let over_abs = ceiling
+                .abs_max_rounded
+                .is_some_and(|abs| exceeds_rounded(v, abs));
+            !(over_operating && !over_abs)
         });
-        watches && windows && limits && drives && floors && temperatures
+        watches && windows && limits && drives && floors && ceilings
     }
 }
 
