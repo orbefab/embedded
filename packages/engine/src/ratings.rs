@@ -644,6 +644,23 @@ impl Ratings {
                         });
                     }
                 }
+                Model::Switch(switch) => {
+                    if let Some(max) = &switch.max_voltage {
+                        let limit = max.si.get();
+                        let ground = columns.net(switch.pins[1]);
+                        windows.push(Window {
+                            pin: Ref::Quantity(part.name.clone(), Quantity::V),
+                            column: columns.net(switch.pins[0]),
+                            vcc: ground,
+                            gnd: ground,
+                            below: Some(limit),
+                            above: Some(Ceiling::Fixed(limit)),
+                            worst: 0.0,
+                            over: false,
+                            excursion: None,
+                        });
+                    }
+                }
                 Model::Resistor(resistor) => {
                     if let Some(max) = &resistor.max_voltage {
                         let limit = max.si.get();

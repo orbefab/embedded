@@ -295,7 +295,7 @@ fn the_catalog_esp32s3_parts_build_with_the_rom_and_the_app_examples() {
     assert!(paths.contains(&"partition-table.bin"), "{paths:?}");
     for (id, version) in [
         ("esp32s3-wroom-1-n16r8", "0.2.2"),
-        ("esp32s3-devkitc-1", "0.2.2"),
+        ("esp32s3-devkitc-1", "0.2.3"),
     ] {
         let item = record(&registry.output, &format!("{id}@{version}"));
         for file in item["files"].as_array().unwrap() {

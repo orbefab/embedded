@@ -240,7 +240,7 @@ export function headedSession(): { ok: boolean; url: string | null; error: unkno
   return JSON.parse(readFileSync(HEADED_SESSION, "utf8"));
 }
 
-export type BlockKind = "battery" | "button" | "digit" | "fade" | "joystick" | "lcd" | "light" | "matrix" | "pixels" | "relay" | "rgb" | "rgbled" | "ring" | "screen" | "serial" | "servo" | "shift" | "temperature" | "tone";
+export type BlockKind = "battery" | "button" | "digit" | "fade" | "joystick" | "keypad" | "lcd" | "light" | "matrix" | "pixels" | "relay" | "rgb" | "rgbled" | "ring" | "screen" | "serial" | "servo" | "shift" | "temperature" | "tone";
 
 export interface RepoBlock {
   id: string;
@@ -273,6 +273,7 @@ export function blockKind(scene: string, id: string): BlockKind {
   if (/"type"\s*:\s*"neopixel-ring-16"/.test(code)) return "ring";
   if (/"type"\s*:\s*"neopixel-stick-8"/.test(code)) return "pixels";
   if (/"type"\s*:\s*"joystick-ky023"/.test(code)) return "joystick";
+  if (/"type"\s*:\s*"keypad-4x4"/.test(code)) return "keypad";
   if (/"type"\s*:\s*"led-5mm-rgb-cc"/.test(code) || /"type"\s*:\s*"led-5mm-rgb-ca"/.test(code)) return "rgbled";
   if (/"type"\s*:\s*"oled-ssd1306-128x64"/.test(code)) return "screen";
   if (/"type"\s*:\s*"lcd1602-i2c"/.test(code)) return "lcd";
@@ -295,6 +296,7 @@ const READY_NODES: Record<BlockKind, readonly (readonly [string, string?])[]> = 
   digit: [["@disp", "seg-a"]],
   fade: [["@led1", "body"]],
   joystick: [["@joy.sw", "plunger"], ["@joy.x", "rotor"]],
+  keypad: [["@pad.k1", "cap"], ["@pad.k5", "cap"], ["@pad.khash", "cap"]],
   lcd: [["@lcd.display", "glass"]],
   light: [["@led1", "body"]],
   matrix: [["@matrix", "glass"]],
@@ -728,6 +730,30 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
     }
     await page.mouse.up();
     await expect(strip, `${block.id} released`).toContainText(/x=921 y=51[12] btn=0\s*$/, { timeout: 30_000 });
+    return;
+  }
+  if (block.kind === "keypad") {
+    const strip = page.locator(SERIAL);
+    await expect(strip, `${block.id} ready`).toContainText(/ready/, { timeout: 30_000 });
+    const k1 = await pointOn(page, "@pad.k1", "cap", canvas);
+    await page.mouse.move(k1.x, k1.y);
+    await page.mouse.down();
+    await expect(strip, `${block.id} k1`).toContainText(/key=1/, { timeout: 30_000 });
+    await page.mouse.up();
+    const k5 = await pointOn(page, "@pad.k5", "cap", canvas);
+    await page.mouse.move(k5.x, k5.y);
+    await page.mouse.down();
+    await expect(strip, `${block.id} k5`).toContainText(/key=5/, { timeout: 30_000 });
+    if (shotName !== null) {
+      await page.locator("canvas").scrollIntoViewIfNeeded();
+      await shot(page, shotName);
+    }
+    await page.mouse.up();
+    const khash = await pointOn(page, "@pad.khash", "cap", canvas);
+    await page.mouse.move(khash.x, khash.y);
+    await page.mouse.down();
+    await expect(strip, `${block.id} khash`).toContainText(/key=#/, { timeout: 30_000 });
+    await page.mouse.up();
     return;
   }
   if (block.kind === "pixels" || block.kind === "ring") {

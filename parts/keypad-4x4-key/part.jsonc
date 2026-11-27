@@ -1,0 +1,122 @@
+// Unlisted single membrane dome key inside keypad-4x4.
+// Electrical limits from Parallax #27899 v1.2 (24 VDC, 30 mA), Adafruit 3844 (<100 ohm contact),
+// and Handson Technology 4x4 Matrix Membrane Keypad Data Specs (100 Mohm insulation, <= 5 ms bounce).
+{
+  "format": 7,
+  "part": "keypad-4x4-key",
+  "version": "0.1.0",
+  "title": "4x4 membrane keypad key (internal)",
+  "summary": "Unlisted momentary membrane dome switch forming one key of a 4x4 matrix keypad. Clicking the key cap on the page or running `press` closes contacts a and b.",
+  "tags": ["switch", "button", "keypad", "membrane", "internal"],
+  "license": "MIT OR Apache-2.0",
+  "docs": {
+    "Parallax 4x4 Matrix Membrane Keypad (#27899), v1.2": "https://cdn.sparkfun.com/assets/f/f/a/5/0/DS-16038.pdf",
+    "Adafruit 4x4 Matrix Keypad, product 3844": "https://www.adafruit.com/product/3844",
+    "Handson Technology 4x4 Matrix Membrane Keypad Data Specs": "https://www.handsontec.com/dataspecs/4x4%20keypad.pdf",
+  },
+  "real": {
+    "generic": true,
+    "maker": "Parallax",
+    "number": "27899",
+    "datasheet": "Parallax 4x4 Matrix Membrane Keypad (#27899), v1.2",
+  },
+  "pins": { "a": [1], "b": [2] },
+  "params": {
+    "color": {
+      "default": "blue",
+      "choices": {
+        "blue": { "tint": "#1d65b8" },
+        "red": { "tint": "#c82829" },
+      },
+    },
+    "bounce": { "unit": "s", "default": null, "sets": "/bounce/window" },
+    "max_bounces": { "unit": "1", "default": 2, "sets": "/bounce/max_bounces" },
+  },
+  "model": {
+    "kind": "switch",
+    "on_resistance": {
+      "value": 100.0,
+      "unit": "ohm",
+      "source": {
+        "datasheet": {
+          "doc": "Adafruit 4x4 Matrix Keypad, product 3844",
+          "at": "Technical Details: Contact Resistance: <100 ohm",
+          "basis": "max",
+        },
+      },
+    },
+    "off_resistance": {
+      "value": 1e8,
+      "unit": "ohm",
+      "source": {
+        "datasheet": {
+          "doc": "Handson Technology 4x4 Matrix Membrane Keypad Data Specs",
+          "at": "p1 Brief Data: Insulation Resistance: 100Mohm @ 100V",
+          "basis": "min",
+        },
+      },
+    },
+    "initial": "open",
+    "events": [],
+    "bounce": null,
+    "ratings": {
+      "current": {
+        "value": 0.03,
+        "unit": "A",
+        "source": {
+          "datasheet": {
+            "doc": "Parallax 4x4 Matrix Membrane Keypad (#27899), v1.2",
+            "at": "p1 Key Specifications: Maximum Rating: 24 VDC, 30 mA",
+            "basis": "absolute_max",
+          },
+        },
+      },
+      "voltage": {
+        "value": 24.0,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "Parallax 4x4 Matrix Membrane Keypad (#27899), v1.2",
+            "at": "p1 Key Specifications: Maximum Rating: 24 VDC, 30 mA",
+            "basis": "absolute_max",
+          },
+        },
+      },
+    },
+  },
+  "controls": { "press": { "input": "contact", "joint": "key" } },
+  "joints": {
+    "key": {
+      "node": "cap",
+      "slide": [0, 0, -1],
+      "range": {
+        "value": 0.3,
+        "unit": "mm",
+        "source": {
+          "closed_form": {
+            "note": "Typical tactile membrane dome travel (0.3 mm); none of the cited sheets prints key travel.",
+          },
+        },
+      },
+    },
+  },
+  "view": {
+    "tint": [{ "node": "cap", "by": "color" }],
+  },
+  "facts": {
+    "bounce_time": {
+      "value": 5,
+      "unit": "ms",
+      "source": {
+        "datasheet": {
+          "doc": "Handson Technology 4x4 Matrix Membrane Keypad Data Specs",
+          "at": "p1 Brief Data: Bounce time: <= 5 ms",
+          "basis": "max",
+        },
+      },
+    },
+  },
+  "not_simulated": [
+    { "what": "operating force", "why": "Adafruit 3844 specifies 160 to 180 g actuation force; a press is a contact change and force is not modelled." },
+  ],
+}

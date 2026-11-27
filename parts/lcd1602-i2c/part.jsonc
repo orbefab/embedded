@@ -6,10 +6,10 @@
 {
   "format": 6,
   "part": "lcd1602-i2c",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "title": "LCD display module, 16 x 2 blue, HD44780 + PCF8574 I2C",
   "summary": "Blue 16 x 2 character LCD module with a PCF8574 I2C backpack at address 0x27 and a 4-pin right-angle header. LiquidCrystal_I2C drives it.",
-  "tags": ["lcd", "1602", "16x2", "hd44780", "pcf8574", "display", "screen", "i2c", "backpack"],
+  "tags": ["lcd", "1602", "16x2", "hd44780", "hd44780-i2c", "liquidcrystal", "character-lcd", "pcf8574", "display", "screen", "i2c", "backpack"],
   "license": "MIT OR Apache-2.0",
   "docs": {
     "Hitachi HD44780U (ADE-207-272)": "https://www.sparkfun.com/datasheets/LCD/HD44780.pdf",

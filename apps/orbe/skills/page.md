@@ -24,7 +24,7 @@ When you can see the page, check that no wire runs through a part and that parts
 
 ## A knob
 
-`set` turns a knob while the session runs. It changes only a param `orbe part` says `set` changes, inside its range. The next `step` solves with it, so the wiper's voltage and the sketch's `analogRead` move. `orbe get @pot1.position` reads it. `position` is the share of the track from `a` to the wiper, and clockwise moves the wiper toward `b`. On a `joystick-ky023`, move its axes with `set @joy.x.position` and `set @joy.y.position` (or the page's sliders), and click the thumbstick cap or call `press @joy.sw` for the push button.
+`set` turns a knob while the session runs. It changes only a param `orbe part` says `set` changes, inside its range. The next `step` solves with it, so the wiper's voltage and the sketch's `analogRead` move. `orbe get @pot1.position` reads it. `position` is the share of the track from `a` to the wiper, and clockwise moves the wiper toward `b`. On a `joystick-ky023`, move its axes with `set @joy.x.position` and `set @joy.y.position` (or the page's sliders), and click the thumbstick cap or call `press @joy.sw` for the push button. On a `keypad-4x4`, click any key cap or call `press @pad.k1` (and `k2..k9`, `k0`, `ka..kd`, `kstar`, `khash`).
 
 This wiper feeds A0, and D13 lights over half scale.
 

@@ -1,0 +1,50 @@
+{
+  "part": "keypad-4x4",
+  "source": {
+    "script": "model.py",
+    "sha256": "823fd84e1163ded7bde8b4dd106fba3c2321b655426b667ade3bbfaf1b47920a",
+    "bytes": 4778
+  },
+  "files": {
+    "keypad-4x4.glb": {
+      "sha256": "991fb07909912a633290be3559ff3d8a2017d66aeddfb8465a6cd0a1a820af2d",
+      "bytes": 114384
+    },
+    "keypad-4x4.anchors.json": {
+      "sha256": "dc7239a630e863b35b8232060e92443280a5339b044842fb3d2ef71aa25a2903",
+      "bytes": 1075
+    }
+  },
+  "box": {
+    "min": [-34.499999, -60.54, 0],
+    "max": [34.499999, 37.999999, 2.54]
+  },
+  "kept_nodes": ["housing-1", "housing-2", "housing-3", "housing-4", "housing-5", "housing-6", "housing-7", "housing-8", "pin-1", "pin-2", "pin-3", "pin-4", "pin-5", "pin-6", "pin-7", "pin-8"],
+  "draw_calls": 20,
+  "checks": {
+    "frame": {
+      "root_rotation": [-0.707107, 0, 0, 0.707107]
+    },
+    "anchors": {
+      "anchors": 8,
+      "largest_miss_mm": 0
+    },
+    "seating": {
+      "lowest_node": "ribbon",
+      "z_mm": 0
+    },
+    "names": {
+      "nodes": []
+    },
+    "merge": {
+      "primitives_in": 44,
+      "primitives_out": 20
+    },
+    "composition": {
+      "children": 16,
+      "lowest_node": "ribbon",
+      "z_mm": 0,
+      "draw_calls": 52
+    }
+  }
+}

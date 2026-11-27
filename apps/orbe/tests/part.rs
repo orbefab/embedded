@@ -408,7 +408,10 @@ fn search_lists_switches_and_boards_before_summary_matches() {
     let (code, stdout, stderr) = orbe(&["search", "board"]);
     assert_eq!(code, 0, "{stderr}");
     let names = names_of(&stdout);
-    assert_eq!(&names[..2], ["nano-board", "uno-board"]);
+    assert_eq!(
+        &names[..3],
+        ["esp32s3-devkitc-1", "nano-board", "uno-board"]
+    );
 }
 
 #[test]

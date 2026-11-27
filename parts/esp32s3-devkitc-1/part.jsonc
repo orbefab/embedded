@@ -23,10 +23,10 @@
 {
   "format": 6,
   "part": "esp32s3-devkitc-1",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "title": "ESP32-S3-DevKitC-1 v1.1",
   "summary": "ESP32-S3-DevKitC-1 v1.1 with the N16R8 module. Two 1x22 headers, USB-UART on U0RXD, and the addressable RGB LED on GPIO38.",
-  "tags": ["microcontroller", "esp32-s3", "usb"],
+  "tags": ["microcontroller", "esp32-s3", "usb", "esp32", "esp32s3", "devkit", "board"],
   "license": "MIT OR Apache-2.0",
   "docs": {
     "SCH_ESP32-S3-DevKitC-1_V1.1_20221130": "https://dl.espressif.com/dl/schematics/SCH_ESP32-S3-DevKitC-1_V1.1_20221130.pdf",

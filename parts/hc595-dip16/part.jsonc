@@ -3,10 +3,10 @@
 {
   "format": 5,
   "part": "hc595-dip16",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "title": "74HC595 8-bit shift register (DIP-16)",
   "summary": "8-bit serial-in, parallel-out shift register in a DIP-16. Three pins from a microcontroller drive eight outputs, and it chains to more registers.",
-  "tags": ["74hc595", "shift-register", "output", "through-hole", "dip"],
+  "tags": ["74hc595", "595", "shift-register", "sipo", "latch", "serial", "output", "through-hole", "dip"],
   "license": "MIT OR Apache-2.0",
   "docs": {
     "TI SNx4HC595 datasheet, SCLS041J": "https://www.ti.com/lit/ds/symlink/sn74hc595.pdf"

@@ -679,40 +679,70 @@ fn rank_row(row: &Row, words: &[String], joined: &str) -> Option<u8> {
     if !row.listed {
         return None;
     }
-    let mut haystack = format!(
-        "{}\n{}\n{}\n{}\n{}",
-        row.name,
-        row.title,
-        row.maker.as_deref().unwrap_or(""),
-        row.number.as_deref().unwrap_or(""),
-        row.description.as_deref().unwrap_or("")
-    )
-    .to_lowercase();
-    if let Some(categories) = &row.categories {
-        for category in categories {
-            haystack.push('\n');
-            haystack.push_str(&category.to_lowercase());
-        }
+    let maker = row.maker.as_deref().unwrap_or("");
+    let number = row.number.as_deref().unwrap_or("");
+    let description = row.description.as_deref().unwrap_or("");
+    let cats = row.categories.as_deref().unwrap_or(&[]);
+    let mut fields: Vec<&str> = Vec::with_capacity(5 + cats.len());
+    fields.extend_from_slice(&[&row.name, &row.title, maker, number, description]);
+    for category in cats {
+        fields.push(category);
     }
-    if !words.iter().all(|word| haystack.contains(word)) {
+    let haystack = fields.join("\n").to_lowercase();
+    let title_words = words_of(&row.title);
+    let name_words = words_of(&row.name);
+    let mut norm_tokens: Vec<String> = Vec::new();
+    for field in &fields {
+        norm_tokens.extend(hyphen_tokens(field));
+    }
+    norm_tokens.push(compact(&row.name));
+    norm_tokens.push(compact(maker));
+    norm_tokens.push(compact(number));
+    for category in cats {
+        norm_tokens.push(compact(category));
+        norm_tokens.extend(words_of(category));
+    }
+    norm_tokens.extend(name_words.iter().cloned());
+    norm_tokens.extend(title_words.iter().cloned());
+    norm_tokens.extend(pairs_of(&title_words));
+    norm_tokens.extend(pairs_of(&name_words));
+    let matches = words.iter().all(|word| {
+        if haystack.contains(word) {
+            return true;
+        }
+        let c = compact(word);
+        !c.is_empty() && norm_tokens.iter().any(|tok| tok.starts_with(&c))
+    });
+    if !matches {
         return None;
     }
+    let cid = compact(&row.name);
+    let cjoined = compact(joined);
     if row.name.eq_ignore_ascii_case(joined)
         || words.iter().any(|word| row.name.eq_ignore_ascii_case(word))
+        || (!cjoined.is_empty() && cid == cjoined)
+        || words.iter().any(|word| {
+            let c = compact(word);
+            !c.is_empty() && c == cid
+        })
     {
         return Some(0);
     }
-    let mut whole = words_of(&row.name);
-    whole.extend(words_of(&row.title));
-    if let Some(categories) = &row.categories {
-        for category in categories {
-            whole.extend(words_of(category));
-        }
+    let mut whole = name_words.clone();
+    whole.extend(title_words.iter().cloned());
+    for category in cats {
+        whole.extend(words_of(category));
+        whole.push(compact(category));
     }
-    if words
-        .iter()
-        .all(|word| whole.iter().any(|have| have == word))
-    {
+    whole.extend(pairs_of(&title_words));
+    whole.extend(pairs_of(&name_words));
+    if words.iter().all(|word| {
+        if whole.iter().any(|have| have == word) {
+            return true;
+        }
+        let c = compact(word);
+        !c.is_empty() && whole.iter().any(|have| have == &c)
+    }) {
         Some(1)
     } else {
         Some(2)
@@ -723,6 +753,28 @@ fn words_of(text: &str) -> Vec<String> {
     text.split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|word| !word.is_empty())
         .map(|word| word.to_lowercase())
+        .collect()
+}
+
+fn compact(text: &str) -> String {
+    text.chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+fn hyphen_tokens(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+        .filter(|tok| tok.contains('-') || tok.contains('_'))
+        .map(compact)
+        .filter(|tok| !tok.is_empty())
+        .collect()
+}
+
+fn pairs_of(words: &[String]) -> Vec<String> {
+    words
+        .windows(2)
+        .map(|pair| format!("{}{}", pair[0], pair[1]))
         .collect()
 }
 

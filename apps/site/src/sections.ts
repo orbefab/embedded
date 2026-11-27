@@ -98,6 +98,7 @@ export const PART_SECTION_BY_ID: Readonly<Record<string, PartSection>> = {
   "breadboard-400": "Breadboards and switches",
   "breadboard-830": "Breadboards and switches",
   "joystick-ky023": "Breadboards and switches",
+  "keypad-4x4": "Breadboards and switches",
   "tactile-switch-6mm": "Breadboards and switches",
   "tactile-switch-ntc013": "Breadboards and switches",
   "tactile-switch-smd": "Breadboards and switches",

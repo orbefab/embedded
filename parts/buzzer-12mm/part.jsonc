@@ -3,10 +3,10 @@
 {
   "format": 6,
   "part": "buzzer-12mm",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "title": "12 mm magnetic buzzer",
   "summary": "Externally driven 12 mm magnetic buzzer, Same Sky CEM-1203(42), with a 42 ohm coil for 3 V to 5 V. It sounds the note of the wave that drives it.",
-  "tags": ["buzzer", "sound", "transducer", "passive", "through-hole", "tone"],
+  "tags": ["buzzer", "sound", "speaker", "beeper", "alarm", "transducer", "passive", "through-hole", "tone"],
   "license": "MIT OR Apache-2.0",
   "docs": {
     "Same Sky CEM-1203(42), rev 1.05, 2025-01-29": "https://www.sameskydevices.com/product/resource/cem-1203-42-.pdf",

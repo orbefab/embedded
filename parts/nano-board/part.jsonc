@@ -5,10 +5,10 @@
 {
   "format": 5,
   "part": "nano-board",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "title": "Nano (CH340 clone)",
   "summary": "Nano-compatible board: an ATmega328P at 16 MHz and a CH340G USB-serial chip on 18 x 43.2 mm, with 30 pins on two rows that plug into a breadboard.",
-  "tags": ["board", "microcontroller", "avr", "atmega328p", "usb"],
+  "tags": ["board", "microcontroller", "avr", "atmega328p", "usb", "arduino", "nano"],
   "license": "MIT OR Apache-2.0",
   "docs": {
     "Arduino Nano A000005 datasheet": "https://docs.arduino.cc/resources/datasheets/A000005-datasheet.pdf",

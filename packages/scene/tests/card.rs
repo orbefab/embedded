@@ -207,10 +207,12 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
     let switches = search(&parts_dir(), "switch");
     let names: Vec<&str> = switches.iter().map(|card| card.name.as_str()).collect();
     assert_eq!(
-        &names[..11],
+        &names[..13],
         [
             "joystick-ky023",
             "joystick-ky023-switch",
+            "keypad-4x4",
+            "keypad-4x4-key",
             "nmos-irf520-to220",
             "npn-2n2222-to92",
             "npn-l8050-sot23",
@@ -226,11 +228,14 @@ fn search_ranks_an_exact_id_then_whole_words_then_the_rest() {
         .iter()
         .position(|name| *name == "diode-cd1206")
         .unwrap();
-    assert!(diode > 10, "{names:?}");
+    assert!(diode > 12, "{names:?}");
 
     let boards = search(&parts_dir(), "board");
     let names: Vec<&str> = boards.iter().map(|card| card.name.as_str()).collect();
-    assert_eq!(&names[..2], ["nano-board", "uno-board"]);
+    assert_eq!(
+        &names[..3],
+        ["esp32s3-devkitc-1", "nano-board", "uno-board"]
+    );
     let diode = names
         .iter()
         .position(|name| *name == "diode-1n4007")
@@ -664,4 +669,87 @@ fn starter_kit_rgb_ring_and_joystick_show_ratings_and_match_search() {
             "query `{query}` missed `{want}`"
         );
     }
+}
+
+#[test]
+fn keypad_and_search_aliases_show_ratings_and_normalize_separators() {
+    let pad = card(&parts_dir(), "keypad-4x4").unwrap();
+    let pin_names: Vec<&str> = pad.pins.iter().map(|pin| pin.name.as_str()).collect();
+    assert_eq!(pin_names, ["R1", "R2", "R3", "R4", "C1", "C2", "C3", "C4"]);
+    assert!(pad.uses.contains_key("keypad-4x4-key"));
+    assert!(
+        pad.ratings
+            .iter()
+            .any(|r| r.name == "current" && r.value == Some(0.03) && !r.characterized),
+        "keypad-4x4 ratings: {:?}",
+        pad.ratings
+    );
+    assert!(
+        pad.ratings
+            .iter()
+            .any(|r| r.name == "voltage" && r.value == Some(24.0) && !r.characterized),
+        "keypad-4x4 ratings: {:?}",
+        pad.ratings
+    );
+
+    for (query, want) in [
+        ("keypad", "keypad-4x4"),
+        ("4x4", "keypad-4x4"),
+        ("membrane", "keypad-4x4"),
+        ("ws2812b", "neopixel-stick-8"),
+        ("sk6812", "neopixel-stick-8"),
+        ("arduino", "uno-board"),
+        ("arduino", "nano-board"),
+        ("pushbutton", "tactile-switch-6mm"),
+        ("push-button", "tactile-switch-6mm"),
+        ("opamp", "lm358-dip8"),
+        ("op-amp", "lm358-dip8"),
+        ("comparator", "lm358-dip8"),
+        ("photocell", "ldr-5mm"),
+        ("barometer", "gy-bmp280"),
+        ("altimeter", "bmp280"),
+        ("thermometer", "dht22"),
+        ("thermometer", "gy-bmp280"),
+        ("hygrometer", "dht22"),
+        ("pot", "potentiometer-wh148"),
+        ("dial", "potentiometer-wh148"),
+        ("speaker", "buzzer-12mm"),
+        ("beeper", "buzzer-12mm"),
+        ("595", "hc595-dip16"),
+        ("shiftregister", "hc595-dip16"),
+        ("dc-jack", "barrel-jack-dc21"),
+        ("dcjack", "barrel-jack-dc21"),
+        ("liquidcrystal", "lcd1602-i2c"),
+        ("7seg", "display-7seg-cc"),
+        ("7-seg", "display-7seg-cc"),
+        ("ky023", "joystick-ky023"),
+        ("esp32", "esp32s3-devkitc-1"),
+        ("esp32s3", "esp32s3-devkitc-1"),
+        ("board", "esp32s3-devkitc-1"),
+    ] {
+        let hits = search(&parts_dir(), query);
+        assert!(
+            hits.iter().any(|card| card.name == want),
+            "query `{query}` missed `{want}` (got: {:?})",
+            hits.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+    }
+    // Honest negatives: BMP280 has no humidity and magnetic buzzer is not piezo.
+    assert!(
+        !search(&parts_dir(), "bme280")
+            .iter()
+            .any(|c| c.name == "gy-bmp280" || c.name == "bmp280")
+    );
+    assert!(
+        !search(&parts_dir(), "piezo")
+            .iter()
+            .any(|c| c.name == "buzzer-12mm")
+    );
+    // Normalization must not glue across a space boundary to create false substring hits
+    // (for example "common anode" must not match "nano").
+    assert!(
+        !search(&parts_dir(), "nano")
+            .iter()
+            .any(|c| c.name == "display-7seg-ca" || c.name == "led-5mm-rgb-ca")
+    );
 }

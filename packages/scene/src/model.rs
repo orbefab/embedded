@@ -31,7 +31,7 @@ const SCENE_KEYS: &[&str] = &[
 /// `ratings` on `esp32s3`, `ssd1306`, `hd44780_i2c` and `ws2812`. Format 7 is format 6 plus
 /// `steinhart_hart` world curves, a resistor's single-value maximum `ratings.voltage`,
 /// `characterized` on a rating, `ratings.reverse_voltage` on `diode` and `led`, and `ratings` on
-/// `potentiometer`.
+/// `potentiometer` and `switch`.
 pub const PART_FORMATS: &[u32] = &[1, 2, 3, 4, 5, 6, 7];
 /// Scene `format` values this binary reads.
 pub const SCENE_FORMATS: &[u32] = &[1];
@@ -51,7 +51,7 @@ const BASIS_FORMAT: u32 = 5;
 const VOLTAGE_FORMAT: u32 = 6;
 /// The oldest part format that carries `steinhart_hart` world curves, single-value resistor
 /// maximum `ratings.voltage`, `characterized` ratings, `diode`/`led` `ratings.reverse_voltage`,
-/// and `potentiometer` `ratings` (refused by orbe 0.3.1).
+/// and `potentiometer`/`switch` `ratings` (refused by orbe 0.3.1).
 const CURVE_FORMAT: u32 = 7;
 /// The oldest part format whose readings take `"of": "angle"`.
 const ANGLE_FORMAT: u32 = 6;
@@ -2867,7 +2867,7 @@ fn decode_body(
                 format,
             );
         }
-        if kind == "potentiometer"
+        if matches!(kind, "potentiometer" | "switch")
             && let Some(prop) = node
                 .props()
                 .unwrap_or_default()
