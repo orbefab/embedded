@@ -145,7 +145,6 @@ declare global {
     orbeGlowSpan?: { min: number; max: number };
     orbeGlowTimer?: number;
     orbeTurnSpan?: { min: number; max: number };
-    orbeTurnTimer?: number;
     lastPointer?: number;
   }
 }
@@ -561,40 +560,47 @@ async function showDigit(page: Page, block: RepoBlock, shotName: string | null):
 
 /** A one-time sweep would be over and holding by this simulated time. */
 const SWEEP_LATE_S = 2;
-/** nano-servo-sweep moves the shaft about 68° per simulated second, back and forth without end. */
-const SWEEP_WATCH_S = 1.5;
+/** Degrees the horn must span past SWEEP_LATE_S to prove it is still turning. */
+const SWEEP_SPAN_DEG = 20;
 
 /**
- * nano-servo-sweep sweeps the horn from one end to the other and back, forever. From 2 s of
- * simulated time on, the horn's turn from its rest is sampled while the page plays, and it must
- * span tens of degrees. servo-sg90's horn node has no rotation of its own, and the viewer draws
- * it at the 90° centre until a frame says otherwise, so its turn from rest is 90° minus the angle.
+ * Servo Blocks keep turning the horn past 2 s of simulated time, whether slowly like
+ * nano-servo-sweep (~68°/s) or between stops like nano-aa-pack (0° and 180°). Wait until
+ * simulated time is past 2 s and at least one frame has posed the horn there, then sample
+ * the signed turn around its -Z joint axis on every animation frame until the span exceeds
+ * 20°. Measuring the signed angle keeps opposite stops (such as -85.7° and +90°) 175.7° apart
+ * instead of folding them onto 85.7° and 90°, and waiting on rendered frames avoids missing
+ * motion when SwiftShader draws only a few frames per simulated second.
  */
 async function showServo(page: Page, block: RepoBlock, start: number): Promise<void> {
   const from = Math.max(start, SWEEP_LATE_S);
   await waitSimulatedPast(page, from);
   await page.evaluate(() => {
     window.orbeTurnSpan = undefined;
-    const sample = () => {
-      const q = window.orbeViewer.get().scene.getObjectByName("@servo")?.getObjectByName("horn")?.quaternion;
-      if (q === undefined) return;
-      const turn = (2 * Math.acos(Math.min(1, Math.abs(q.w))) * 180) / Math.PI;
-      const span = window.orbeTurnSpan ?? { min: turn, max: turn };
-      span.min = Math.min(span.min, turn);
-      span.max = Math.max(span.max, turn);
-      window.orbeTurnSpan = span;
-    };
-    sample();
-    window.orbeTurnTimer = window.setInterval(sample, 50);
+    return new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done())));
   });
   try {
-    await waitSimulatedPast(page, from + SWEEP_WATCH_S);
-  } finally {
-    await page.evaluate(() => window.clearInterval(window.orbeTurnTimer));
+    await page.waitForFunction(
+      (need) => {
+        const q = window.orbeViewer.get().scene.getObjectByName("@servo")?.getObjectByName("horn")?.quaternion;
+        if (q === undefined) return false;
+        const sign = q.w < 0 ? -1 : 1;
+        const turn = (2 * Math.atan2(-q.z * sign, q.w * sign) * 180) / Math.PI;
+        const span = window.orbeTurnSpan ?? { min: turn, max: turn };
+        span.min = Math.min(span.min, turn);
+        span.max = Math.max(span.max, turn);
+        window.orbeTurnSpan = span;
+        return span.max - span.min > need;
+      },
+      SWEEP_SPAN_DEG,
+      { timeout: 30_000 },
+    );
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("Timeout")) throw error;
   }
   const span = await page.evaluate(() => window.orbeTurnSpan ?? null);
   expect(span, `${block.id} horn`).not.toBeNull();
-  expect((span?.max ?? 0) - (span?.min ?? 0), `${block.id} horn turned ${span?.min}° to ${span?.max}° from centre`).toBeGreaterThan(20);
+  expect((span?.max ?? 0) - (span?.min ?? 0), `${block.id} horn turned ${span?.min}° to ${span?.max}° from centre`).toBeGreaterThan(SWEEP_SPAN_DEG);
 }
 
 /** Play, require simulated time to move, and check the behaviour the scene declares. */
