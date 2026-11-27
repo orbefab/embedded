@@ -4,6 +4,7 @@
 use orbe_model::air::{Ofdm, Rate};
 
 pub(crate) const US: u64 = 1_000_000;
+const MS: u64 = 1000 * US;
 
 /// aSIFSTime of the ERP PHY, 10 us (clause 18).
 pub(crate) const SIFS: u64 = 10 * US;
@@ -21,6 +22,14 @@ pub(crate) const BEACON_INTERVAL_TU: u16 = 100;
 pub(crate) const BEACON_INTERVAL: u64 = BEACON_INTERVAL_TU as u64 * TU;
 /// Every beacon is a DTIM, as with the access point in Wireshark's `wpa-Induction.pcap`.
 pub(crate) const DTIM_PERIOD: u8 = 1;
+
+/// When the access point sends an EAPOL-Key message again that has no answer: 100 ms after its
+/// first send and 1 s after each later one. After its fourth send it gives up. These are
+/// hostapd's defaults, `eapol_key_timeout_first`, `eapol_key_timeout_subseq` and
+/// `wpa_pairwise_update_count`.
+pub(crate) const EAPOL_FIRST: u64 = 100 * MS;
+pub(crate) const EAPOL_NEXT: u64 = 1000 * MS;
+pub(crate) const EAPOL_SENDS: u8 = 4;
 
 /// The rate the access point sends every frame at, 1 Mb/s with the long preamble.
 pub(crate) const RATE: Rate = Rate::Dsss1;

@@ -5,33 +5,41 @@
 //! [`tuned`](Network::tuned), [`take_aired`](Network::take_aired), [`hear`](Network::hear) and
 //! [`acked`](Network::acked), with the types of [`orbe_model::air`]. Its access point beacons,
 //! answers probes, authenticates with Open System, associates with an AID, deauthenticates,
-//! declines ADDBA, holds frames for a station in power save, and goes down and up. Its RSNE
-//! advertises WPA2-PSK, whose handshake is not here yet. Frames follow IEEE 802.11-2020.
+//! declines ADDBA, holds frames for a station in power save, and goes down and up. Under
+//! WPA2-PSK it runs the 4-way handshake as the authenticator, then takes the station's Data
+//! frames under CCMP-128 with a replay check. It does neither WPA3-SAE nor PMF, and refuses a
+//! station that asks for them with their status codes. Frames follow IEEE 802.11-2020.
 //!
 //! It is its state: [`Clone`] is a checkpoint. What a scene sets is a [`Config`] behind an
 //! [`Arc`], which every copy shares, and the rest is small. Its inputs are times and frames,
 //! so equal networks given equal calls stay equal, and a run split at any limit is the same
-//! run. Nothing in the engine builds one yet.
+//! run. Its nonces and keys come from a fixed seed, so they too are the same on every run.
+//! Nothing in the engine builds one yet.
 //!
 //! It sends every frame at 1 Mb/s, DIFS after the medium goes idle, with no random backoff. A
 //! frame no station acknowledges is not sent again, and makes a [`Event::Lost`] row. It holds
-//! no group frames for a station in power save, and it is neither HT nor QoS.
+//! no group frames for a station in power save, and it is neither HT nor QoS. What it takes from
+//! a station past the handshake goes nowhere yet.
 
+mod ccmp;
 mod element;
 mod frame;
 mod row;
+mod rsn;
 mod timing;
 
 use std::collections::VecDeque;
 use std::fmt;
 use std::sync::Arc;
 
+use orbe_crypto::prf::prf;
 use orbe_model::air::{Ack, AirFrame, Channel, Signal};
 use orbe_model::{Stop, Time};
 
 pub use row::{By, Event, Row};
 
 use frame::Header;
+use rsn::Ptk;
 use timing::{DIFS, RATE};
 
 /// `ps` picoseconds after `at`.
@@ -61,12 +69,13 @@ impl fmt::Display for Mac {
 
 /// What the access point asks of a station that associates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Security {
+pub enum Security<'a> {
     /// No RSNE: any station associates.
     Open,
     /// An RSNE with CCMP-128 and the PSK AKM. A station associates when its own RSNE asks for
-    /// them.
-    Wpa2Psk,
+    /// them, and gets its keys when it knows the passphrase: 8 to 63 ASCII characters from
+    /// space to `~` (J.4.1).
+    Wpa2Psk { passphrase: &'a str },
 }
 
 /// The access point a scene sets. Every copy of a network shares it.
@@ -75,19 +84,99 @@ pub struct Config {
     ssid: Box<[u8]>,
     bssid: Mac,
     channel: Channel,
-    security: Security,
+    /// Its keys under WPA2-PSK.
+    psk: Option<Psk>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Psk {
+    /// The PMK, from the passphrase and the SSID.
+    pmk: [u8; 32],
+    /// The RSNE's body.
+    rsne: Box<[u8]>,
+    gtk: Box<[u8]>,
+    gtk_index: u8,
+    /// The last PN sent under the GTK. It sends no group Data frame yet, so it stays put.
+    gtk_pn: u64,
+    /// Where the key counter starts (12.7.5). Its values are the ANonces and the Key IVs.
+    counter: [u8; 32],
+}
+
+/// The seed of the key counter and the GTK, in place of the random number of 12.7.5.
+const SEED: [u8; 32] = *b"orbe-net: the fixed network seed";
 
 impl Config {
     /// An access point named `ssid`, 1 to 32 octets, at `bssid`, an individual address, on
-    /// `channel`. `None` for any other SSID or BSSID.
+    /// `channel`. `None` for any other SSID or BSSID, or a passphrase out of range.
     pub fn new(ssid: &[u8], bssid: Mac, channel: Channel, security: Security) -> Option<Config> {
-        (matches!(ssid.len(), 1..=32) && !bssid.is_group()).then(|| Config {
+        if !matches!(ssid.len(), 1..=32) || bssid.is_group() {
+            return None;
+        }
+        let psk = match security {
+            Security::Open => None,
+            Security::Wpa2Psk { passphrase } => {
+                let printable = passphrase.bytes().all(|b| (0x20..=0x7e).contains(&b));
+                if !matches!(passphrase.len(), 8..=63) || !printable {
+                    return None;
+                }
+                // The key counter starts at PRF-256(seed, "Init Counter", AA || Time), with a
+                // Time of 0 (12.7.5). Its first value is the GNonce of the GTK, which is
+                // PRF-128(GMK, "Group key expansion", AA || GNonce), with the seed as the GMK
+                // (12.7.1.4).
+                let mut counter = [0; 32];
+                prf(
+                    &SEED,
+                    b"Init Counter",
+                    &[&bssid.0[..], &[0; 8]].concat(),
+                    &mut counter,
+                );
+                let mut gtk = [0; 16];
+                prf(
+                    &SEED,
+                    b"Group key expansion",
+                    &[&bssid.0[..], &counter].concat(),
+                    &mut gtk,
+                );
+                rsn::increment(&mut counter);
+                Some(Psk {
+                    pmk: rsn::pmk(passphrase.as_bytes(), ssid),
+                    rsne: element::RSN_PSK.into(),
+                    gtk: gtk.into(),
+                    gtk_index: 1,
+                    gtk_pn: 0,
+                    counter,
+                })
+            }
+        };
+        Some(Config {
             ssid: ssid.into(),
             bssid,
             channel,
-            security,
+            psk,
         })
+    }
+
+    /// The key counter starting at `counter`, whose first value is the first ANonce.
+    #[cfg(feature = "replay")]
+    pub fn with_counter(mut self, counter: [u8; 32]) -> Config {
+        if let Some(psk) = &mut self.psk {
+            psk.counter = counter;
+        }
+        self
+    }
+
+    /// The RSNE body `rsne`, whose group cipher a station must ask for, and the GTK `gtk` with
+    /// Key ID `index`, last sent with PN `pn`. The access point still takes only CCMP-128 Data
+    /// frames from a station, and sends no group Data frame.
+    #[cfg(feature = "replay")]
+    pub fn with_group(mut self, rsne: &[u8], gtk: &[u8], index: u8, pn: u64) -> Config {
+        if let Some(psk) = &mut self.psk {
+            psk.rsne = rsne.into();
+            psk.gtk = gtk.into();
+            psk.gtk_index = index;
+            psk.gtk_pn = pn;
+        }
+        self
     }
 }
 
@@ -101,6 +190,7 @@ const HELD: usize = 8;
 // Status codes (9.4.1.9, Table 9-50).
 const SUCCESS: u16 = 0;
 const UNSPECIFIED_FAILURE: u16 = 1;
+/// What an access point answers an SAE Authentication with when it does not do WPA3-SAE.
 const UNSUPPORTED_AUTH_ALGORITHM: u16 = 13;
 const AUTH_OUT_OF_SEQUENCE: u16 = 14;
 const AP_FULL: u16 = 17;
@@ -110,6 +200,8 @@ const REQUEST_DECLINED: u16 = 37;
 const LEAVING: u16 = 3;
 const CLASS2_FROM_NONAUTH: u16 = 6;
 const CLASS3_FROM_NONASSOC: u16 = 7;
+const FOURWAY_HANDSHAKE_TIMEOUT: u16 = 15;
+const IE_IN_4WAY_DIFFERS: u16 = 17;
 
 /// The Open System Authentication Algorithm Number (9.4.1.1).
 const OPEN_SYSTEM: u16 = 0;
@@ -143,10 +235,15 @@ struct State {
     airing: Option<(AirFrame, Option<Mac>)>,
     /// The frame that ended at the last stop, until [`Network::take_aired`].
     aired: Option<AirFrame>,
+    /// The key counter's next value (12.7.5).
+    counter: [u8; 32],
     /// The end of its last individually addressed frame, and its station, until
     /// [`Network::acked`].
     awaiting: Option<(Time, Mac)>,
     rows: Vec<Row>,
+    /// Each MSDU it took from a station, for a test that replays a capture.
+    #[cfg(feature = "replay")]
+    delivered: Vec<(Mac, Vec<u8>)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,6 +263,59 @@ struct Station {
     dozing: bool,
     /// The frames the access point holds for it while it dozes, oldest first.
     held: VecDeque<Arc<[u8]>>,
+    /// Its RSNA under WPA2-PSK, from its association.
+    rsna: Option<Rsna>,
+}
+
+impl Station {
+    /// Forgets its association.
+    fn unassociate(&mut self) {
+        self.aid = None;
+        self.dozing = false;
+        self.held.clear();
+        self.rsna = None;
+    }
+}
+
+/// A station's 4-way handshake with the access point as the authenticator (12.7.6), then its
+/// keys.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Rsna {
+    /// The body of the RSNE of its (Re)Association Request, which message 2 must repeat.
+    rsne: Box<[u8]>,
+    anonce: [u8; 32],
+    /// The Key Replay Counter of the next EAPOL-Key frame to it.
+    replay: u64,
+    /// The Key Replay Counter of the first send of the message it is sending now. A reply may
+    /// answer any of its sends.
+    first: u64,
+    /// How many times it has sent that message.
+    sent: u8,
+    /// When it sends it again, or gives up.
+    deadline: Time,
+    phase: Phase,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Phase {
+    /// Sending message 1, waiting for message 2.
+    Message1,
+    /// Sending message 3 under the PTK message 2 gave, waiting for message 4.
+    Message3(Ptk),
+    /// Done: the TK, and the last PN of each replay counter.
+    Keyed {
+        tk: [u8; 16],
+        pn: [u64; ccmp::COUNTERS],
+    },
+}
+
+impl Rsna {
+    fn timeout(&self) -> Option<Time> {
+        match self.phase {
+            Phase::Keyed { .. } => None,
+            _ => Some(self.deadline),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -190,7 +340,6 @@ enum Out {
 impl Network {
     pub fn new(config: Config) -> Network {
         Network {
-            config: Arc::new(config),
             state: State {
                 reached: Time::ZERO,
                 power: Power::Up,
@@ -201,9 +350,13 @@ impl Network {
                 queue: VecDeque::new(),
                 airing: None,
                 aired: None,
+                counter: config.psk.as_ref().map_or([0; 32], |psk| psk.counter),
                 awaiting: None,
                 rows: Vec::new(),
+                #[cfg(feature = "replay")]
+                delivered: Vec::new(),
             },
+            config: Arc::new(config),
         }
     }
 
@@ -214,7 +367,11 @@ impl Network {
         let limit = limit.max(self.state.reached);
         loop {
             if let Some((frame, _)) = &self.state.airing {
-                if frame.end > limit {
+                let end = frame.end;
+                if self.time_out(end.min(limit)) {
+                    continue;
+                }
+                if end > limit {
                     break;
                 }
                 return Some(self.end_airing());
@@ -262,7 +419,7 @@ impl Network {
             && (h.addr1 == bssid || h.addr1 == Mac::BROADCAST)
             && !h.addr2.is_group()
         {
-            self.receive(at, &h, &frame.mpdu[h.body..]);
+            self.receive(at, &h, &frame.mpdu);
         }
         if acks { Ack::Acked } else { Ack::None }
     }
@@ -308,6 +465,15 @@ impl Network {
         self.state.rows.drain(..).for_each(&mut row);
     }
 
+    /// Hands over each MSDU it took from a station past the controlled port, from its LLC
+    /// header on, in order.
+    #[cfg(feature = "replay")]
+    pub fn take_delivered(&mut self, mut delivered: impl FnMut(Mac, Vec<u8>)) {
+        for (sta, msdu) in self.state.delivered.drain(..) {
+            delivered(sta, msdu);
+        }
+    }
+
     fn row(&mut self, at: Time, event: Event) {
         self.state.rows.push(Row { at, event });
     }
@@ -338,7 +504,8 @@ impl Network {
 
     /// Puts its next frame on the air, if it starts by `limit`: a beacon at its target time,
     /// first on a tie, or the frame at the head of the queue. A frame to a station that dozes
-    /// goes to that station's held frames instead. Returns whether it did either.
+    /// goes to that station's held frames instead. A handshake that times out by then goes
+    /// first. Returns whether it did any of these.
     fn start_next(&mut self, limit: Time) -> bool {
         let s = &self.state;
         let beacon = (s.power == Power::Up).then(|| s.tbtt.max(s.idle));
@@ -347,8 +514,11 @@ impl Network {
             (Some(b), Some(q)) if q < b => q,
             (Some(b), _) => b,
             (None, Some(q)) => q,
-            (None, None) => return false,
+            (None, None) => Time::from_ps(u64::MAX),
         };
+        if self.time_out(start.min(limit)) {
+            return true;
+        }
         if start > limit {
             return false;
         }
@@ -434,6 +604,20 @@ impl Network {
         self.queue(at, to, Out::Mpdu(mpdu.into()), None);
     }
 
+    /// A Data frame from the DS to `sta`, of body `msdu` (9.3.2.1).
+    fn send_data(&mut self, at: Time, sta: Mac, msdu: &[u8]) {
+        let mut mpdu = frame::header(
+            frame::DATA,
+            0,
+            frame::FROM_DS,
+            timing::duration_us(),
+            sta,
+            self.config.bssid,
+        );
+        mpdu.extend(msdu);
+        self.queue(at, sta, Out::Mpdu(mpdu.into()), None);
+    }
+
     fn send_deauth(&mut self, at: Time, sta: Mac, reason: u16, deauth: bool) {
         let (subtype, event) = if deauth {
             (
@@ -478,18 +662,14 @@ impl Network {
     fn bss_tail(&self, out: &mut Vec<u8>) {
         element::push(out, element::ERP, &[0]);
         element::push(out, element::EXTENDED_RATES, &element::EXTENDED);
-        if self.config.security == Security::Wpa2Psk {
-            element::push(out, element::RSN, &element::RSN_PSK);
+        if let Some(psk) = &self.config.psk {
+            element::push(out, element::RSN, &psk.rsne);
         }
     }
 
     /// Capability Information (9.4.1.4): ESS, Short Slot Time, and Privacy under WPA2-PSK.
     fn capability(&self) -> u16 {
-        let privacy = if self.config.security == Security::Wpa2Psk {
-            1 << 4
-        } else {
-            0
-        };
+        let privacy = if self.config.psk.is_some() { 1 << 4 } else { 0 };
         1 | privacy | 1 << 10
     }
 
@@ -530,8 +710,9 @@ impl Network {
         mpdu
     }
 
-    /// A frame to its BSSID, or a group frame, from station `h.addr2`, whose body is `body`.
-    fn receive(&mut self, at: Time, h: &Header, body: &[u8]) {
+    /// A frame to its BSSID, or a group frame, from station `h.addr2`.
+    fn receive(&mut self, at: Time, h: &Header, mpdu: &[u8]) {
+        let body = &mpdu[h.body..];
         let sta = h.addr2;
         let bssid = self.config.bssid;
         let to_us = h.addr1 == bssid;
@@ -542,7 +723,7 @@ impl Network {
                 }
             }
             (frame::MANAGEMENT, _) if !to_us || h.addr3 != Some(bssid) => {}
-            // A protected management frame needs keys the access point does not have yet.
+            // The access point does not do PMF, so it drops a protected management frame.
             (frame::MANAGEMENT, _) if h.flags & frame::PROTECTED != 0 => {}
             (frame::MANAGEMENT, frame::AUTH) => self.authenticate(at, sta, body),
             (frame::MANAGEMENT, frame::ASSOC_REQUEST) => self.associate(at, sta, body, false),
@@ -552,9 +733,7 @@ impl Network {
                 if let Some(station) = self.station(sta)
                     && station.aid.is_some()
                 {
-                    station.aid = None;
-                    station.dozing = false;
-                    station.held.clear();
+                    station.unassociate();
                     self.row(
                         at,
                         Event::Disassoc {
@@ -586,7 +765,9 @@ impl Network {
             (frame::DATA, _)
                 if to_us && h.flags & (frame::TO_DS | frame::FROM_DS) == frame::TO_DS =>
             {
-                self.class3(at, sta);
+                if self.class3(at, sta) && h.subtype & frame::NO_DATA == 0 {
+                    self.data(at, h, mpdu);
+                }
             }
             (frame::CONTROL, frame::PS_POLL) if to_us && self.class3(at, sta) => {
                 self.poll(at, sta, h.duration & 0x3fff);
@@ -625,15 +806,14 @@ impl Network {
         };
         if status == SUCCESS {
             if let Some(station) = self.station(sta) {
-                station.aid = None;
-                station.dozing = false;
-                station.held.clear();
+                station.unassociate();
             } else if self.state.stations.len() < MAX_STATIONS {
                 self.state.stations.push(Station {
                     mac: sta,
                     aid: None,
                     dozing: false,
                     held: VecDeque::new(),
+                    rsna: None,
                 });
             } else {
                 status = AP_FULL;
@@ -649,8 +829,9 @@ impl Network {
 
     /// An Association or Reassociation Request (9.3.3.5, 9.3.3.7) from an authenticated
     /// station (11.3.5.3). Its SSID must be the access point's, and under WPA2-PSK its RSNE
-    /// must ask for CCMP-128 and PSK. The station keeps its AID, or takes the lowest free one.
-    /// A station that has not authenticated gets a Deauthentication, reason 6 (11.3.3).
+    /// must ask for CCMP-128 and PSK, and the 4-way handshake starts. The station keeps its
+    /// AID, or takes the lowest free one. A station that has not authenticated gets a
+    /// Deauthentication, reason 6 (11.3.3).
     fn associate(&mut self, at: Time, sta: Mac, body: &[u8], reassoc: bool) {
         // Capability Information and Listen Interval, then the current AP's address in a
         // Reassociation Request.
@@ -662,11 +843,12 @@ impl Network {
             return;
         }
         let ssid = element::find(elements, element::SSID);
+        let rsne = element::find(elements, element::RSN);
         let status = if ssid != Some(&self.config.ssid) {
             UNSPECIFIED_FAILURE
-        } else if self.config.security == Security::Wpa2Psk {
-            match element::find(elements, element::RSN) {
-                Some(rsne) => element::check_rsne(rsne).err().unwrap_or(SUCCESS),
+        } else if let Some(psk) = &self.config.psk {
+            match rsne {
+                Some(rsne) => (element::check_rsne(rsne, &psk.rsne[2..6]).err()).unwrap_or(SUCCESS),
                 None => element::INVALID_ELEMENT,
             }
         } else {
@@ -686,6 +868,7 @@ impl Network {
             None
         };
         station.dozing = false;
+        station.rsna = None;
         // Capability Information, Status Code, and the AID with its two top bits set (9.4.1.8),
         // then the rates (9.3.3.6).
         let mut reply = Vec::with_capacity(24);
@@ -701,6 +884,200 @@ impl Network {
         };
         self.send(at, subtype, sta, &reply);
         self.row(at, Event::Assoc { sta, status, aid });
+        if let (Some(_), Some(rsne), Some(_)) = (&self.config.psk, rsne, aid) {
+            let anonce = self.take_nonce();
+            self.station(sta).expect("an associated station").rsna = Some(Rsna {
+                rsne: rsne.into(),
+                anonce,
+                replay: 0,
+                first: 0,
+                sent: 0,
+                deadline: at,
+                phase: Phase::Message1,
+            });
+            self.send_key(at, sta);
+        }
+    }
+
+    /// The key counter's next value, which it then moves on.
+    fn take_nonce(&mut self) -> [u8; 32] {
+        let nonce = self.state.counter;
+        rsn::increment(&mut self.state.counter);
+        nonce
+    }
+
+    /// Sends `sta` the message its handshake is at, and sets when that times out.
+    fn send_key(&mut self, at: Time, sta: Mac) {
+        let config = Arc::clone(&self.config);
+        let Some(psk) = &config.psk else {
+            return;
+        };
+        // The Key IV of message 3 is the low 16 octets of the key counter (12.7.2).
+        let message_3 = matches!(
+            self.station(sta).and_then(|station| station.rsna.as_ref()),
+            Some(Rsna {
+                phase: Phase::Message3(_),
+                ..
+            })
+        );
+        let iv = if message_3 {
+            self.take_nonce()[16..].try_into().expect("16 octets")
+        } else {
+            [0; 16]
+        };
+        let Some(rsna) = self.station(sta).and_then(|station| station.rsna.as_mut()) else {
+            return;
+        };
+        let replay = rsna.replay;
+        rsna.replay += 1;
+        if rsna.sent == 0 {
+            rsna.first = replay;
+        }
+        rsna.sent += 1;
+        let wait = if rsna.sent == 1 {
+            timing::EAPOL_FIRST
+        } else {
+            timing::EAPOL_NEXT
+        };
+        rsna.deadline = after(at, wait);
+        let msdu = match &rsna.phase {
+            Phase::Message1 => rsn::message_1(
+                replay,
+                &rsna.anonce,
+                &rsn::pmkid(&psk.pmk, config.bssid, sta),
+            ),
+            Phase::Message3(ptk) => {
+                let group = rsn::Group {
+                    rsne: &psk.rsne,
+                    gtk: &psk.gtk,
+                    index: psk.gtk_index,
+                    pn: psk.gtk_pn,
+                };
+                rsn::message_3(ptk, replay, &rsna.anonce, iv, &group)
+            }
+            Phase::Keyed { .. } => return,
+        };
+        self.send_data(at, sta, &msdu);
+    }
+
+    /// Times out the first handshake whose deadline is the earliest, if it is by `until`: it
+    /// sends its message again, or after the last send it deauthenticates the station with
+    /// reason 15. Returns whether one timed out.
+    fn time_out(&mut self, until: Time) -> bool {
+        let Some((at, sta)) = (self.state.stations.iter())
+            .filter_map(|station| Some((station.rsna.as_ref()?.timeout()?, station.mac)))
+            .min_by_key(|&(at, _)| at)
+            .filter(|&(at, _)| at <= until)
+        else {
+            return false;
+        };
+        let sent = self
+            .station(sta)
+            .and_then(|s| s.rsna.as_ref())
+            .map(|r| r.sent);
+        if sent >= Some(timing::EAPOL_SENDS) {
+            self.state.stations.retain(|station| station.mac != sta);
+            self.send_deauth(at, sta, FOURWAY_HANDSHAKE_TIMEOUT, true);
+        } else {
+            self.send_key(at, sta);
+        }
+        true
+    }
+
+    /// An EAPOL frame from an associated station (12.7.6). Message 2 must answer a send of
+    /// message 1, carry a MIC under the PTK its SNonce gives, and repeat the station's RSNE, or
+    /// the station is deauthenticated with reason 17. Message 4 must answer a send of message
+    /// 3 and carry a MIC. Any other frame, or one whose MIC fails, is dropped, so a station with
+    /// the wrong passphrase times out.
+    fn eapol(&mut self, at: Time, sta: Mac, eapol: &[u8]) {
+        let config = Arc::clone(&self.config);
+        let (Some(psk), Some(key)) = (&config.psk, rsn::Key::parse(eapol)) else {
+            return;
+        };
+        let Some(rsna) = self.station(sta).and_then(|station| station.rsna.as_mut()) else {
+            return;
+        };
+        if !(rsna.first..rsna.replay).contains(&key.replay) {
+            return;
+        }
+        match &rsna.phase {
+            Phase::Message1 if key.info == rsn::MESSAGE_2 => {
+                let ptk = Ptk::derive(&psk.pmk, config.bssid, sta, &rsna.anonce, key.nonce);
+                if !key.mic_ok(&ptk.kck) {
+                    return;
+                }
+                if element::find(key.data, element::RSN) != Some(&rsna.rsne) {
+                    self.state.stations.retain(|station| station.mac != sta);
+                    self.send_deauth(at, sta, IE_IN_4WAY_DIFFERS, true);
+                    return;
+                }
+                rsna.phase = Phase::Message3(ptk);
+                rsna.sent = 0;
+                self.send_key(at, sta);
+            }
+            Phase::Message3(ptk) if key.info == rsn::MESSAGE_4 => {
+                if !key.mic_ok(&ptk.kck) {
+                    return;
+                }
+                let tk = ptk.tk;
+                rsna.phase = Phase::Keyed {
+                    tk,
+                    pn: [0; ccmp::COUNTERS],
+                };
+                self.row(at, Event::Handshake { sta });
+            }
+            _ => {}
+        }
+    }
+
+    /// A Data frame with a body from an associated station. Under WPA2-PSK, a protected frame
+    /// is opened with the station's TK and dropped unless its PN is past the last of its replay
+    /// counter (12.5.3.4.4). EAPOL goes to the handshake. The rest passes the controlled port
+    /// when the network is open and the frame is not protected, or the network is WPA2-PSK and
+    /// it is.
+    fn data(&mut self, at: Time, h: &Header, mpdu: &[u8]) {
+        let sta = h.addr2;
+        let protected = h.flags & frame::PROTECTED != 0;
+        let Some(station) = self.station(sta) else {
+            return;
+        };
+        let msdu = if protected {
+            let Some(Rsna {
+                phase: Phase::Keyed { tk, pn },
+                ..
+            }) = &mut station.rsna
+            else {
+                return;
+            };
+            let Some(opened) = ccmp::open(tk, 0, mpdu, h.body) else {
+                return;
+            };
+            if opened.pn <= pn[opened.counter] {
+                return;
+            }
+            pn[opened.counter] = opened.pn;
+            opened.plaintext
+        } else {
+            mpdu[h.body..].to_vec()
+        };
+        let eapol =
+            (msdu.strip_prefix(&rsn::LLC_SNAP)).and_then(|rest| rest.strip_prefix(&rsn::EAPOL));
+        if let Some(eapol) = eapol {
+            if !protected {
+                self.eapol(at, sta, eapol);
+            }
+        } else if protected == self.config.psk.is_some() {
+            self.deliver(sta, msdu);
+        }
+    }
+
+    /// An MSDU from an associated station past the controlled port. The subnet is not here yet,
+    /// so it goes nowhere, except to a test that replays a capture.
+    fn deliver(&mut self, sta: Mac, msdu: Vec<u8>) {
+        #[cfg(feature = "replay")]
+        self.state.delivered.push((sta, msdu));
+        #[cfg(not(feature = "replay"))]
+        let _ = (sta, msdu);
     }
 
     /// Whether `sta` is associated, so it may send a Class 3 frame. A station that is not gets

@@ -6,7 +6,6 @@
 mod common;
 
 use common::{Air, STA, Script, capture, elements, hex, ms, network};
-use orbe_net::Security;
 
 /// `frame` without the vendor element the capture's access point puts at its end.
 fn without_vendor(frame: &str) -> Vec<u8> {
@@ -31,7 +30,7 @@ fn answers(frames: &[Vec<u8>]) -> Air {
     }
     let mut air = Air::new(script);
     air.run_through(
-        &mut network(Security::Wpa2Psk),
+        &mut network(common::WPA2),
         ms(10.0 * (frames.len() + 1) as f64),
     );
     air
@@ -133,5 +132,7 @@ fn the_station_s_disassociation_ends_its_association() {
             r#"{{"t_ps":30000000000,"event":"disassoc","sta":"{STA}","reason":8,"by":"station"}}"#
         )
     );
-    assert_eq!(air.sent().len(), 2);
+    // The Authentication, the Association Response and message 1 of the handshake. Nothing
+    // answers the Disassociation.
+    assert_eq!(air.sent().len(), 3);
 }

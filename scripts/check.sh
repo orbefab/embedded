@@ -10,7 +10,8 @@
 # `rust` is the Rust tests through cargo-nextest, except the engine tests marked `full tier`.
 # `orbe-avr` and `orbe-microchip` are in that workspace run.
 # `full` runs the microchip tests once, in their `port-skip-check` build, instead of in the
-# workspace run.
+# workspace run, and first fetches the capture orbe-net's WPA2-PSK replay test reads, which
+# skips without it.
 # `viewer` runs `check-viewer.sh`, `check-viewer-e2e.sh`, `check-block.sh` and `check-headed.sh`.
 # `web` runs `viewer`, then `site-port.test.sh`, `check-site.sh` and `check-engines.sh`,
 # each once.
@@ -179,6 +180,8 @@ engine_python() {
 }
 
 full() {
+  # The WPA2-PSK replay test in orbe-net reads a capture the repo does not commit.
+  packages/engine/scripts/blobs.sh --induction >/dev/null
   # The microchip tests run once, with the port skip check built in.
   fast_all --exclude orbe-microchip
   engine_microchip

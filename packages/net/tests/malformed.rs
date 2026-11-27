@@ -3,10 +3,10 @@
 
 mod common;
 
-use common::{Air, BSSID, Rng, from_station, hex, ms, network, session};
+use common::{ANONCE, Air, BSSID, Rng, Supplicant, from_station, hex, keyed_network, ms, session};
 use orbe_model::Time;
 use orbe_model::air::{AirFrame, Mcs, Rate};
-use orbe_net::{Network, Security};
+use orbe_net::Network;
 
 /// Every frame the tests send, from the station and from the capture.
 fn frames() -> Vec<Vec<u8>> {
@@ -33,6 +33,17 @@ fn frames() -> Vec<Vec<u8>> {
     ] {
         frames.push(hex(frame));
     }
+    // The handshake and the Data frames after it, with a key data of every element the access
+    // point reads, and Data frames under the wrong key.
+    let sta = Supplicant::new(common::PASSPHRASE);
+    frames.push(sta.message_2(&ANONCE, 0, &common::RSN_PSK));
+    frames.push(sta.message_4(&ANONCE, 1));
+    frames.push(sta.data(&ANONCE, 9, b"data"));
+    frames.push(Supplicant::new("not the passphrase").data(&ANONCE, 10, b"data"));
+    let mut qos = sta.data(&ANONCE, 11, b"qos");
+    qos[0] = 0x88;
+    qos.splice(24..24, [5, 0]);
+    frames.push(qos);
     // A Reassociation Request: the Association Request with the current AP's address.
     let mut reassoc = common::assoc_ccmp();
     reassoc[0] = 0x20;
@@ -45,7 +56,7 @@ fn frames() -> Vec<Vec<u8>> {
 fn states() -> Vec<(Network, Time)> {
     let (script, until) = session();
     let mut air = Air::new(script);
-    let mut net = network(Security::Wpa2Psk);
+    let mut net = keyed_network();
     let mut states = vec![(net.clone(), Time::ZERO)];
     let mut at = Time::ZERO;
     while at < until {

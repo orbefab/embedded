@@ -14,6 +14,11 @@ use orbe_net::{Config, Mac, Network, Security};
 pub const BSSID: Mac = Mac([0x00, 0x0c, 0x41, 0x82, 0xb2, 0x55]);
 pub const STA: Mac = Mac([0x00, 0x0d, 0x93, 0x82, 0x36, 0x3a]);
 pub const SSID: &[u8] = b"Coherer";
+/// The capture's passphrase.
+pub const PASSPHRASE: &str = "Induction";
+pub const WPA2: Security<'static> = Security::Wpa2Psk {
+    passphrase: PASSPHRASE,
+};
 
 pub const SIGNAL: Signal = Signal {
     rssi_dbm: -40,
@@ -374,14 +379,21 @@ pub fn by(sta: Mac, mut frame: Vec<u8>) -> Vec<u8> {
     frame
 }
 
-/// A station's session with the access point: it probes, joins, has an ADDBA Request
-/// declined, dozes with a frame held for it and polls for it, wakes, leaves and joins again.
-/// Then the access point goes down and comes up, and the station's next frame is refused.
+/// A station's session with the [`keyed_network`]: it probes, joins, runs the 4-way handshake
+/// and sends Data frames under CCMP, one of them again, has an ADDBA Request declined, dozes
+/// with a frame held for it and polls for it, wakes, leaves and joins again, which starts
+/// another handshake. Then the access point goes down and comes up, and the station's next
+/// frame is refused.
 pub fn session() -> (Script, Time) {
+    let sta = Supplicant::new(PASSPHRASE);
     let script = Script::default()
         .send(ms(10.0), hex(capture::PROBE_58))
         .send(ms(20.0), hex(capture::AUTH_78))
         .send(ms(30.0), assoc_ccmp())
+        .send(ms(33.0), sta.message_2(&ANONCE, 0, &RSN_PSK))
+        .send(ms(37.0), sta.message_4(&ANONCE, 1))
+        .send(ms(38.0), sta.data(&ANONCE, 1, b"one"))
+        .send(ms(39.0), sta.data(&ANONCE, 1, b"one"))
         .send(ms(40.0), addba(1, 0, false))
         .send(ms(50.0), null(true))
         .doze(ms(50.5), ms(59.5))
@@ -398,4 +410,131 @@ pub fn session() -> (Script, Time) {
         .up(ms(500.0), true)
         .send(ms(520.0), null(false));
     (script, ms(700.0))
+}
+
+/// The key counter the tests' networks start at, so a station knows the ANonce of message 1.
+pub const ANONCE: [u8; 32] = [0xa5; 32];
+
+/// The access point of the capture under WPA2-PSK, its key counter at [`ANONCE`].
+pub fn keyed_network() -> Network {
+    Network::new(
+        Config::new(SSID, BSSID, channel(), WPA2)
+            .unwrap()
+            .with_counter(ANONCE),
+    )
+}
+
+/// The ANonce plus one, the Key IV of the first message 3.
+pub fn anonce_plus(n: u8) -> [u8; 32] {
+    let mut nonce = ANONCE;
+    nonce[31] += n;
+    nonce
+}
+
+/// A station's side of WPA2-PSK, written apart from the network's: it answers messages 1 and 3
+/// from its passphrase, and seals its Data frames under CCMP-128 (IEEE 802.11-2020 12.7.6,
+/// 12.5.3).
+pub struct Supplicant {
+    pmk: [u8; 32],
+    pub snonce: [u8; 32],
+}
+
+/// The Key Information of message 2 and of message 4.
+const KEY_2: u16 = 0x010a;
+const KEY_4: u16 = 0x030a;
+
+impl Supplicant {
+    pub fn new(passphrase: &str) -> Supplicant {
+        let mut pmk = [0; 32];
+        orbe_crypto::pbkdf2::pbkdf2_sha1(passphrase.as_bytes(), SSID, 4096, &mut pmk);
+        Supplicant {
+            pmk,
+            snonce: [0x5a; 32],
+        }
+    }
+
+    /// The KCK, the KEK and the TK under `anonce`.
+    pub fn ptk(&self, anonce: &[u8; 32]) -> [u8; 48] {
+        let mut data = Vec::new();
+        data.extend(BSSID.0.min(STA.0));
+        data.extend(BSSID.0.max(STA.0));
+        data.extend((*anonce).min(self.snonce));
+        data.extend((*anonce).max(self.snonce));
+        let mut ptk = [0; 48];
+        orbe_crypto::prf::prf(&self.pmk, b"Pairwise key expansion", &data, &mut ptk);
+        ptk
+    }
+
+    fn key(
+        &self,
+        anonce: &[u8; 32],
+        info: u16,
+        replay: u64,
+        nonce: [u8; 32],
+        data: &[u8],
+    ) -> Vec<u8> {
+        let mut eapol = vec![1, 3];
+        eapol.extend(((95 + data.len()) as u16).to_be_bytes());
+        eapol.push(2);
+        eapol.extend(info.to_be_bytes());
+        eapol.extend(0u16.to_be_bytes());
+        eapol.extend(replay.to_be_bytes());
+        eapol.extend(nonce);
+        eapol.extend([0; 16 + 8 + 8 + 16]);
+        eapol.extend((data.len() as u16).to_be_bytes());
+        eapol.extend(data);
+        let mic = orbe_crypto::hmac::hmac_sha1(&self.ptk(anonce)[..16], &eapol);
+        eapol[81..97].copy_from_slice(&mic[..16]);
+        let mut f = vec![0x08, 0x01, 0x3a, 0x01];
+        f.extend(BSSID.0);
+        f.extend(STA.0);
+        f.extend(BSSID.0);
+        f.extend([0, 0]);
+        f.extend(hex("aaaa03000000888e"));
+        f.extend(eapol);
+        f
+    }
+
+    /// Message 2 answering message 1 with Key Replay Counter `replay`, with the RSNE body
+    /// `rsne`.
+    pub fn message_2(&self, anonce: &[u8; 32], replay: u64, rsne: &[u8]) -> Vec<u8> {
+        let mut data = vec![48, rsne.len() as u8];
+        data.extend(rsne);
+        self.key(anonce, KEY_2, replay, self.snonce, &data)
+    }
+
+    pub fn message_4(&self, anonce: &[u8; 32], replay: u64) -> Vec<u8> {
+        self.key(anonce, KEY_4, replay, [0; 32], &[])
+    }
+
+    /// A Data frame to the DS of `payload` after LLC/SNAP and EtherType IPv4, sealed with PN
+    /// `pn`.
+    pub fn data(&self, anonce: &[u8; 32], pn: u64, payload: &[u8]) -> Vec<u8> {
+        let mut f = vec![0x08, 0x41, 0x3a, 0x01];
+        f.extend(BSSID.0);
+        f.extend(STA.0);
+        f.extend(Mac::BROADCAST.0);
+        f.extend([0x10, 0]);
+        let mut aad = vec![0x08, 0x41];
+        aad.extend(&f[4..22]);
+        aad.extend([0, 0]);
+        let p = pn.to_be_bytes();
+        let mut nonce = vec![0];
+        nonce.extend(STA.0);
+        nonce.extend(&p[2..]);
+        f.extend([p[7], p[6], 0, 0x20, p[5], p[4], p[3], p[2]]);
+        let mut msdu = hex("aaaa030000000800");
+        msdu.extend(payload);
+        let tk = orbe_crypto::aes::AesKey::new(&self.ptk(anonce)[32..]).unwrap();
+        f.extend(orbe_crypto::ccm::seal(&tk, &nonce, &aad, &msdu, 8));
+        f
+    }
+}
+
+/// The EAPOL-Key frames the network sent, as their EAPOL frames.
+pub fn eapol_sent(air: &Air) -> Vec<Vec<u8>> {
+    (air.sent().into_iter())
+        .filter(|f| f.mpdu[0] == 0x08 && f.mpdu.get(24..32) == Some(&hex("aaaa03000000888e")))
+        .map(|f| f.mpdu[32..].to_vec())
+        .collect()
 }

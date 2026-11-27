@@ -26,6 +26,8 @@ pub(crate) const PS_POLL: u8 = 10;
 pub(crate) const NULL: u8 = 4;
 /// The bit of a data subtype that makes it a QoS Data frame, with a QoS Control field.
 const QOS: u8 = 8;
+/// The bit of a data subtype whose frame has no body, as a Null frame.
+pub(crate) const NO_DATA: u8 = 4;
 
 // The flags, the second octet of Frame Control (9.2.4.1).
 pub(crate) const TO_DS: u8 = 0x01;

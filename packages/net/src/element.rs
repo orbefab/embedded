@@ -19,7 +19,7 @@ pub(crate) const EXTENDED: [u8; 4] = [0x0c, 0x12, 0x18, 0x60];
 
 // RSNE cipher and AKM suites, OUI 00-0F-AC (9.4.2.24.2, 9.4.2.24.3).
 const OUI: [u8; 3] = [0x00, 0x0f, 0xac];
-const CCMP: [u8; 4] = [0x00, 0x0f, 0xac, 4];
+pub(crate) const CCMP: [u8; 4] = [0x00, 0x0f, 0xac, 4];
 const PSK: [u8; 4] = [0x00, 0x0f, 0xac, 2];
 /// The AKM an RSNE without an AKM list means, IEEE 802.1X (9.4.2.24.1).
 const IEEE8021X: [u8; 4] = [0x00, 0x0f, 0xac, 1];
@@ -40,6 +40,10 @@ const INVALID_GROUP_CIPHER: u16 = 41;
 const INVALID_PAIRWISE_CIPHER: u16 = 42;
 const INVALID_AKMP: u16 = 43;
 const UNSUPPORTED_RSNE_VERSION: u16 = 44;
+const ROBUST_MANAGEMENT_POLICY_VIOLATION: u16 = 31;
+
+/// The MFPR bit of RSN Capabilities (9.4.2.24.4): the station requires PMF.
+const MFPR: u8 = 1 << 6;
 
 pub(crate) fn push(out: &mut Vec<u8>, id: u8, body: &[u8]) {
     out.push(id);
@@ -90,10 +94,11 @@ pub(crate) fn find(body: &[u8], id: u8) -> Option<&[u8]> {
         .map(|(_, contents)| contents)
 }
 
-/// Whether a station's RSNE asks for what the access point offers: CCMP-128 as the group and
-/// a pairwise cipher, and the PSK AKM. A field the RSNE leaves off takes its default, CCMP-128
-/// for the ciphers and IEEE 802.1X for the AKM (9.4.2.24.1). A refusal is its status code.
-pub(crate) fn check_rsne(rsne: &[u8]) -> Result<(), u16> {
+/// Whether a station's RSNE asks for what the access point offers: its `group` cipher, CCMP-128
+/// as a pairwise cipher, and the PSK AKM, without requiring PMF, which the access point does not
+/// do (12.6.3). A field the RSNE leaves off takes its default, CCMP-128 for the ciphers and IEEE
+/// 802.1X for the AKM (9.4.2.24.1). A refusal is its status code.
+pub(crate) fn check_rsne(rsne: &[u8], group: &[u8]) -> Result<(), u16> {
     let mut at = 0;
     let mut take = |n: usize| -> Result<Option<&[u8]>, u16> {
         if at == rsne.len() {
@@ -107,8 +112,7 @@ pub(crate) fn check_rsne(rsne: &[u8]) -> Result<(), u16> {
     if version != [1, 0] {
         return Err(UNSUPPORTED_RSNE_VERSION);
     }
-    let group = take(4)?.unwrap_or(&CCMP);
-    if group != CCMP {
+    if take(4)?.unwrap_or(&CCMP) != group {
         return Err(INVALID_GROUP_CIPHER);
     }
     let mut list = |default: [u8; 4], wanted: [u8; 4], refused: u16| -> Result<(), u16> {
@@ -127,7 +131,13 @@ pub(crate) fn check_rsne(rsne: &[u8]) -> Result<(), u16> {
         if found { Ok(()) } else { Err(refused) }
     };
     list(CCMP, CCMP, INVALID_PAIRWISE_CIPHER)?;
-    list(IEEE8021X, PSK, INVALID_AKMP)
+    list(IEEE8021X, PSK, INVALID_AKMP)?;
+    match take(2)? {
+        Some(capabilities) if capabilities[0] & MFPR != 0 => {
+            Err(ROBUST_MANAGEMENT_POLICY_VIOLATION)
+        }
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -161,24 +171,40 @@ mod tests {
     // Wireshark's wpa-Induction.pcap, frame 82: the station's RSNE asks for a TKIP group key.
     #[test]
     fn an_rsne_is_checked_against_ccmp_and_psk() {
-        assert_eq!(check_rsne(&RSN_PSK), Ok(()));
+        assert_eq!(check_rsne(&RSN_PSK, &CCMP), Ok(()));
         let tkip_group = [
             1, 0, 0, 0x0f, 0xac, 2, 1, 0, 0, 0x0f, 0xac, 4, 1, 0, 0, 0x0f, 0xac, 2, 0, 0,
         ];
-        assert_eq!(check_rsne(&tkip_group), Err(INVALID_GROUP_CIPHER));
+        assert_eq!(check_rsne(&tkip_group, &CCMP), Err(INVALID_GROUP_CIPHER));
         let mut tkip_pairwise = RSN_PSK;
         tkip_pairwise[11] = 2;
-        assert_eq!(check_rsne(&tkip_pairwise), Err(INVALID_PAIRWISE_CIPHER));
+        assert_eq!(
+            check_rsne(&tkip_pairwise, &CCMP),
+            Err(INVALID_PAIRWISE_CIPHER)
+        );
         let mut eap = RSN_PSK;
         eap[17] = 1;
-        assert_eq!(check_rsne(&eap), Err(INVALID_AKMP));
-        assert_eq!(check_rsne(&[2, 0]), Err(UNSUPPORTED_RSNE_VERSION));
-        assert_eq!(check_rsne(&[]), Err(INVALID_ELEMENT));
+        assert_eq!(check_rsne(&eap, &CCMP), Err(INVALID_AKMP));
+        assert_eq!(check_rsne(&[2, 0], &CCMP), Err(UNSUPPORTED_RSNE_VERSION));
+        assert_eq!(check_rsne(&[], &CCMP), Err(INVALID_ELEMENT));
         // Version alone: CCMP-128 ciphers and the IEEE 802.1X AKM.
-        assert_eq!(check_rsne(&[1, 0]), Err(INVALID_AKMP));
-        assert_eq!(check_rsne(&RSN_PSK[..16]), Err(INVALID_ELEMENT));
+        assert_eq!(check_rsne(&[1, 0], &CCMP), Err(INVALID_AKMP));
+        assert_eq!(check_rsne(&RSN_PSK[..16], &CCMP), Err(INVALID_ELEMENT));
         // Without RSN Capabilities.
-        assert_eq!(check_rsne(&RSN_PSK[..18]), Ok(()));
+        assert_eq!(check_rsne(&RSN_PSK[..18], &CCMP), Ok(()));
+        // A TKIP group key, when the access point offers it.
+        assert_eq!(check_rsne(&tkip_group, &tkip_group[2..6]), Ok(()));
+        // PMF capable is fine; PMF required is refused, and so is a cut RSN Capabilities.
+        let mut mfpc = RSN_PSK;
+        mfpc[18] = 0x80;
+        assert_eq!(check_rsne(&mfpc, &CCMP), Ok(()));
+        let mut mfpr = RSN_PSK;
+        mfpr[18] = 0xc0;
+        assert_eq!(
+            check_rsne(&mfpr, &CCMP),
+            Err(ROBUST_MANAGEMENT_POLICY_VIOLATION)
+        );
+        assert_eq!(check_rsne(&RSN_PSK[..19], &CCMP), Err(INVALID_ELEMENT));
     }
 
     #[test]

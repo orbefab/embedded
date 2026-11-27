@@ -9,6 +9,16 @@ publish.workspace = true
 
 [dependencies]
 orbe-model.workspace = true
+orbe-crypto.workspace = true
+
+[features]
+# Lets a test replay a capture: a `Config` takes the capture's nonce counter and group key, and
+# the network keeps each MSDU it took from a station. Only this crate's own tests turn it on.
+replay = []
+
+[dev-dependencies]
+orbe-net = { path = ".", features = ["replay"] }
+orbe-crypto.workspace = true
 
 [lints]
 workspace = true
