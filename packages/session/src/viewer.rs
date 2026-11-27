@@ -143,13 +143,15 @@ pub(crate) struct FrameMessage<'a> {
 }
 
 /// What a screen's glass shows: `width` by `height` pixels, rows top to bottom and each row
-/// left to right, red, green, blue and alpha a byte each, in base64.
+/// left to right, red, green, blue and alpha a byte each, in base64, and whether any pixel
+/// reads lit under the engine's display rule.
 #[derive(Serialize)]
 #[cfg_attr(test, derive(schemars::JsonSchema))]
 pub(crate) struct ScreenImage {
     width: u16,
     height: u16,
     rgba: String,
+    lit: bool,
 }
 
 impl ScreenImage {
@@ -158,6 +160,7 @@ impl ScreenImage {
             width: glass.width,
             height: glass.height,
             rgba: base64(&glass.rgba),
+            lit: orbe_engine::display::has_lit(glass.kind, &glass.rgba),
         }
     }
 }
@@ -717,6 +720,7 @@ mod tests {
     #[test]
     fn a_screen_arrives_on_the_first_frame_and_again_only_when_its_glass_changes() {
         let glass = |byte: u8| Glass {
+            kind: "ssd1306",
             width: 1,
             height: 2,
             rgba: vec![byte; 8],
@@ -729,7 +733,7 @@ mod tests {
         let frame = feed.frame(first.clone(), "", None).unwrap();
         assert_eq!(
             frame["screens"],
-            json!([{ "width": 1, "height": 2, "rgba": "AAAAAAAAAAA=" }])
+            json!([{ "width": 1, "height": 2, "rgba": "AAAAAAAAAAA=", "lit": false }])
         );
         let later = Sample {
             t_ps: 1,
@@ -744,6 +748,7 @@ mod tests {
         };
         let frame = feed.frame(changed, "", None).unwrap();
         assert_eq!(frame["screens"][0]["rgba"], "//////////8=");
+        assert_eq!(frame["screens"][0]["lit"], true);
         assert!(paused().screens.is_empty());
         let bare = Feed::default().frame(paused(), "", None).unwrap();
         assert!(bare.get("screens").is_none(), "{bare}");

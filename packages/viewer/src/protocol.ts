@@ -153,9 +153,11 @@ export type SceneMessage = View & {
 };
 
 /** What a screen's glass shows: `width` by `height` pixels, rows top to bottom and each row left
- * to right, red, green, blue and alpha a byte each, in base64. */
+ * to right, red, green, blue and alpha a byte each, in base64, and whether any pixel reads lit
+ * under the engine's display rule. */
 export interface ScreenImage {
   readonly height: number;
+  readonly lit: boolean;
   readonly rgba: string;
   readonly width: number;
 }

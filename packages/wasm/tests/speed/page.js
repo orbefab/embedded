@@ -13,22 +13,9 @@ const RUN_LIMIT_MS = 120_000;
 
 const fromBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 
-/** Whether any screen glass in `screens` has an opaque lit pixel: full scale on any channel, or
- * red at 128 or more. Dark glass and an empty backlit LCD stay below 255 on every channel and
- * below 128 in red. Lit OLED, LCD and RGB565 pixels hit 255; a lit MAX7219 dot below full
- * intensity is red from 130 up. */
+/** Whether any screen glass in `screens` has a lit pixel, under the engine's own display rule. */
 function screenDrawn(screens) {
-  if (!Array.isArray(screens)) return false;
-  for (const screen of screens) {
-    if (screen === null) continue;
-    const rgba = fromBase64(screen.rgba);
-    for (let k = 0; k < rgba.length; k += 4) {
-      if (rgba[k + 3] === 255 && (rgba[k] >= 128 || rgba[k + 1] === 255 || rgba[k + 2] === 255)) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return Array.isArray(screens) && screens.some((screen) => screen !== null && screen.lit === true);
 }
 
 async function blockFiles(block) {
@@ -57,7 +44,7 @@ async function start(where, receive) {
   return (data) => queueMicrotask(() => deliver({ data }));
 }
 
-window.speed = async ({ block, where, warmMs, simMs, profile }) => {
+window.speed = async ({ block, where, warmMs, simMs, maxSpanWallMs = null, profile }) => {
   const files = await blockFiles(block);
   const warmPs = warmMs * 1e9;
   const endPs = (warmMs + simMs) * 1e9;
@@ -98,12 +85,9 @@ window.speed = async ({ block, where, warmMs, simMs, profile }) => {
         return;
       }
       if (message.type !== "frame") return;
-      if (where === "worker" && firstPictureMs === null && hasScreen && screenDrawn(message.screens)) {
-        firstPictureMs = realNow() - startAt;
-      }
       if (!playing) return;
       if (message.state !== "playing") return abort(new Error(`${block} is ${message.state} at ${message.t_ps} ps`));
-      if (where === "worker" && firstPictureMs === null && !hasScreen) {
+      if (where === "worker" && firstPictureMs === null && (!hasScreen || screenDrawn(message.screens))) {
         firstPictureMs = realNow() - startAt;
       }
       if (rate === null) {
@@ -114,8 +98,8 @@ window.speed = async ({ block, where, warmMs, simMs, profile }) => {
           }
         } else {
           ticks += 1;
-          if (message.t_ps >= endPs) {
-            const wallMs = realNow() - from.at;
+          const wallMs = realNow() - from.at;
+          if (message.t_ps >= endPs || (maxSpanWallMs !== null && wallMs >= maxSpanWallMs)) {
             if (profile) console.profileEnd("speed");
             rate = { wallMs, simMs: (message.t_ps - from.ps) / 1e9, ticks };
           }

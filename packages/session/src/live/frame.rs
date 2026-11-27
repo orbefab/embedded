@@ -178,6 +178,7 @@ pub struct Sample {
 /// top to bottom and each row left to right.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Glass {
+    pub kind: &'static str,
     pub width: u16,
     pub height: u16,
     pub rgba: Vec<u8>,
@@ -440,6 +441,7 @@ impl Open {
                         .expect("a part with a reading of screen is a display");
                     let panel = display.panel();
                     Glass {
+                        kind: panel.kind,
                         width: panel.width,
                         height: panel.height,
                         rgba: display.pixels(),
