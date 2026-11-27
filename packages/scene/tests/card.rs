@@ -642,7 +642,7 @@ fn starter_kit_rgb_ring_and_joystick_show_ratings_and_match_search() {
 fn keypad_and_search_aliases_show_ratings_and_normalize_separators() {
     let pad = card(&parts_dir(), "keypad-4x4").unwrap();
     let pin_names: Vec<&str> = pad.pins.iter().map(|pin| pin.name.as_str()).collect();
-    assert_eq!(pin_names, ["R1", "R2", "R3", "R4", "C1", "C2", "C3", "C4"]);
+    assert_eq!(pin_names, ["C1", "C2", "C3", "C4", "R1", "R2", "R3", "R4"]);
     assert!(pad.uses.contains_key("keypad-4x4-key"));
     assert!(
         pad.ratings

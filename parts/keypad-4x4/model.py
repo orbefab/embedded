@@ -8,7 +8,7 @@ thick, with a 4x4 grid of white-framed key cells and bold white legends
 (`keypad-4x4-key`) sits at z = 1.0 mm in the lower portion of the cell so the
 legend stays unobstructed and clicking the keycap always targets that child switch.
 A 21.6 x 14.0 mm shortened ribbon tail exits the -Y edge to a 1x8 2.54 mm header
-with pins pointing along -Y: leads 1..4 = R1..R4, leads 5..8 = C1..C4 left to right.
+with pins pointing along -Y: leads 1..4 = C1..C4, leads 5..8 = R1..R4 left to right.
 """
 
 import sys
@@ -51,7 +51,7 @@ PIN_W = 0.64
 PIN_Z = HDR_H / 2.0  # 1.27 mm
 PIN_TIP_Y = RIBBON_Y1 - HDR_D - 6.0  # -60.54 mm
 PIN_BACK_Y = RIBBON_Y1 + 0.5
-PIN_LABELS = ("R1", "R2", "R3", "R4", "C1", "C2", "C3", "C4")
+PIN_LABELS = ("C1", "C2", "C3", "C4", "R1", "R2", "R3", "R4")
 
 _PAD = plastic("#1A1C20", roughness=0.58)
 _RIBBON = plastic("#252830", roughness=0.52)
@@ -62,7 +62,7 @@ _TIN = tin()
 
 
 def _pin_x(lead):
-    # Lead 1 (-X) = R1 .. Lead 4 = R4, Lead 5 = C1 .. Lead 8 (+X) = C4
+    # Lead 1 (-X) = C1 .. Lead 4 = C4, Lead 5 = R1 .. Lead 8 (+X) = R4
     return (lead - 4.5) * PITCH
 
 

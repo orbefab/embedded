@@ -10,10 +10,10 @@ char keys[ROWS][COLS] = {
   {'*', '0', '#', 'D'}
 };
 
-// Wired to R1..R4 (PORTB: D11..D8) and C1..C4 (PORTD: D5..D2) on keypad-4x4.
-// Keeping rows and columns on separate AVR ports avoids reading hi-Z columns via PINx.
-byte rowPins[ROWS] = {11, 10, 9, 8};
-byte colPins[COLS] = {5, 4, 3, 2};
+// Wired to C1..C4 (PORTB: D11..D8, header pins 1..4) and R1..R4 (PORTD: D5..D2, header pins 5..8)
+// on keypad-4x4. Keeping rows and columns on separate AVR ports avoids reading hi-Z columns via PINx.
+byte rowPins[ROWS] = {5, 4, 3, 2};
+byte colPins[COLS] = {11, 10, 9, 8};
 
 Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
 

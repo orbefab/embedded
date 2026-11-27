@@ -242,14 +242,14 @@ fn keypad_viewer_channels_expose_all_16_keys_and_accept_clicks() {
             "pad": { "type": "keypad-4x4" },
         },
         "wires": [
-            ["nano.D11", "pad.R1"],
-            ["nano.D10", "pad.R2"],
-            ["nano.D9", "pad.R3"],
-            ["nano.D8", "pad.R4"],
-            ["nano.D5", "pad.C1"],
-            ["nano.D4", "pad.C2"],
-            ["nano.D3", "pad.C3"],
-            ["nano.D2", "pad.C4"],
+            ["nano.D11", "pad.C1"],
+            ["nano.D10", "pad.C2"],
+            ["nano.D9", "pad.C3"],
+            ["nano.D8", "pad.C4"],
+            ["nano.D5", "pad.R1"],
+            ["nano.D4", "pad.R2"],
+            ["nano.D3", "pad.R3"],
+            ["nano.D2", "pad.R4"],
         ],
     });
     let mut live = open_scene(scene, vec![("build/keypad.ino.hex".into(), hex)]);
@@ -301,6 +301,23 @@ fn keypad_viewer_channels_expose_all_16_keys_and_accept_clicks() {
     );
     assert!(r2.ok(), "{}", r2.text());
     run(&mut live, "step 30ms");
+
+    // Non-diagonal keys k2 (R1-C2) and k4 (R2-C1) verify the header pinout (1..4 = C1..C4,
+    // 5..8 = R1..R4) is not transposed when wired by header pin number per the sheet.
+    run(&mut live, "press @pad.k2");
+    run(
+        &mut live,
+        "step --until serial contains \"key=2\" --timeout 100ms",
+    );
+    run(&mut live, "release @pad.k2");
+    run(&mut live, "step 40ms");
+    run(&mut live, "press @pad.k4");
+    run(
+        &mut live,
+        "step --until serial contains \"key=4\" --timeout 100ms",
+    );
+    run(&mut live, "release @pad.k4");
+    run(&mut live, "step 40ms");
     run(&mut live, "expect no diagnostics");
 
     // Bounce param forwards from keypad-4x4 to child keys (5 ms window).
