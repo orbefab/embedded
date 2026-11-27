@@ -605,45 +605,80 @@ impl Ratings {
             });
         }
         for (_, part) in netlist.parts() {
-            let Model::Resistor(resistor) = &part.model else {
-                continue;
-            };
-            if let Some(max) = &resistor.max_voltage {
-                let limit = max.si.get();
-                let ground = columns.net(resistor.pins[1]);
-                windows.push(Window {
-                    pin: Ref::Quantity(part.name.clone(), Quantity::V),
-                    column: columns.net(resistor.pins[0]),
-                    vcc: ground,
-                    gnd: ground,
-                    below: Some(limit),
-                    above: Some(Ceiling::Fixed(limit)),
-                    worst: 0.0,
-                    over: false,
-                    excursion: None,
-                });
+            match &part.model {
+                Model::Diode(junction) | Model::Led(junction) => {
+                    if let Some(limit) = &junction.reverse_voltage {
+                        let ground = columns.net(junction.pins[1]);
+                        windows.push(Window {
+                            pin: Ref::Quantity(part.name.clone(), Quantity::V),
+                            column: columns.net(junction.pins[0]),
+                            vcc: ground,
+                            gnd: ground,
+                            below: Some(limit.si.get()),
+                            above: None,
+                            worst: 0.0,
+                            over: false,
+                            excursion: None,
+                        });
+                    }
+                }
+                Model::Potentiometer(pot) => {
+                    if let Some(max) = &pot.max_voltage {
+                        let limit = max.si.get();
+                        let ground = columns.net(pot.pins[0]);
+                        windows.push(Window {
+                            pin: Ref::Quantity(part.name.clone(), Quantity::V),
+                            column: columns.net(pot.pins[2]),
+                            vcc: ground,
+                            gnd: ground,
+                            below: Some(limit),
+                            above: Some(Ceiling::Fixed(limit)),
+                            worst: 0.0,
+                            over: false,
+                            excursion: None,
+                        });
+                    }
+                }
+                Model::Resistor(resistor) => {
+                    if let Some(max) = &resistor.max_voltage {
+                        let limit = max.si.get();
+                        let ground = columns.net(resistor.pins[1]);
+                        windows.push(Window {
+                            pin: Ref::Quantity(part.name.clone(), Quantity::V),
+                            column: columns.net(resistor.pins[0]),
+                            vcc: ground,
+                            gnd: ground,
+                            below: Some(limit),
+                            above: Some(Ceiling::Fixed(limit)),
+                            worst: 0.0,
+                            over: false,
+                            excursion: None,
+                        });
+                    }
+                    let Some((min, max)) = resistor.operating else {
+                        continue;
+                    };
+                    let quantity = Ref::Quantity(part.name.clone(), Quantity::V);
+                    let column = columns
+                        .index(&quantity)
+                        .expect("a resistor's voltage is a column");
+                    drives.push(CoilDrive {
+                        quantity,
+                        column,
+                        min,
+                        max,
+                        max_rounded: significant(max),
+                        peak: 0.0,
+                        pulse_from: None,
+                        loud_at: None,
+                        over: false,
+                        counted_to: Time::ZERO,
+                        worst: 0.0,
+                        excursion: None,
+                    });
+                }
+                _ => {}
             }
-            let Some((min, max)) = resistor.operating else {
-                continue;
-            };
-            let quantity = Ref::Quantity(part.name.clone(), Quantity::V);
-            let column = columns
-                .index(&quantity)
-                .expect("a resistor's voltage is a column");
-            drives.push(CoilDrive {
-                quantity,
-                column,
-                min,
-                max,
-                max_rounded: significant(max),
-                peak: 0.0,
-                pulse_from: None,
-                loud_at: None,
-                over: false,
-                counted_to: Time::ZERO,
-                worst: 0.0,
-                excursion: None,
-            });
         }
         Ratings {
             timing,

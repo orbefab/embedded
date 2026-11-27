@@ -569,10 +569,13 @@ fn starter_kit_rgb_ring_and_joystick_show_ratings_and_match_search() {
         for (name, value) in [
             ("red.current", 0.03),
             ("red.power", 0.075),
+            ("red.reverse_voltage", 5.0),
             ("green.current", 0.025),
             ("green.power", 0.1025),
+            ("green.reverse_voltage", 5.0),
             ("blue.current", 0.03),
             ("blue.power", 0.12),
+            ("blue.reverse_voltage", 5.0),
         ] {
             assert!(
                 rgb.ratings
@@ -604,6 +607,13 @@ fn starter_kit_rgb_ring_and_joystick_show_ratings_and_match_search() {
     assert!(joy.uses.contains_key("joystick-ky023-switch"));
     assert!(joy.params.iter().any(|p| p.name == "x" && p.live));
     assert!(joy.params.iter().any(|p| p.name == "y" && p.live));
+    assert!(
+        joy.ratings
+            .iter()
+            .any(|r| r.name == "voltage" && r.value == Some(5.0) && !r.characterized),
+        "joystick-ky023 ratings: {:?}",
+        joy.ratings
+    );
 
     for (query, want) in [
         ("rgb led", "led-5mm-rgb-cc"),

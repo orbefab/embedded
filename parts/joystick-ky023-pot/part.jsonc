@@ -1,6 +1,6 @@
 // Unlisted 10 kohm linear axis potentiometer inside joystick-ky023.
 {
-  "format": 4,
+  "format": 7,
   "part": "joystick-ky023-pot",
   "version": "0.1.0",
   "title": "KY-023 axis potentiometer, 10 kohm (internal)",
@@ -31,12 +31,25 @@
         },
       },
     },
+    "ratings": {
+      "voltage": {
+        "value": 5.0,
+        "unit": "V",
+        "source": {
+          "datasheet": {
+            "doc": "Joy-IT COM-KY023JM Joystick Module Datasheet",
+            "at": "p1 Operating Voltage: 3.3 V - 5 V",
+            "basis": "max",
+          },
+        },
+      },
+    },
   },
   "joints": {
     "rotor": { "node": "rotor", "turn": [0, 1, 0], "range": { "value": 60, "unit": "deg" }, "by": "position" },
   },
   "not_simulated": [
-    { "what": "power rating", "why": "The engine's potentiometer has no rating, so it never warns." },
+    { "what": "power and low-supply ratings", "why": "Supply voltage past 5 V warns `rating.voltage`; the 3.3 V lower bound needs the low-supply warning, and track power is not modelled." },
     { "what": "spring return to center", "why": "The axis holds the last position set via `set` or the viewer slider instead of springing back to 0.5." },
   ],
 }

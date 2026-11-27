@@ -226,6 +226,177 @@ fn rgb_led_cc_and_ca_forward_curves_and_wrong_polarity_match_bench() {
 }
 
 #[test]
+fn rgb_led_pulse_power_reverse_voltage_and_dc_overload_match_sheet() {
+    let pulse_source = |amps: f64| {
+        format!(
+            r#"{{
+              "format": 4,
+              "part": "test-pulse-i",
+              "version": "0.1.0",
+              "title": "Test pulsed current source",
+              "license": "MIT OR Apache-2.0",
+              "pins": {{ "pos": [1], "neg": [2] }},
+              "model": {{
+                "kind": "current_source",
+                "pins": {{ "p": "pos", "n": "neg" }},
+                "current": {{
+                  "kind": "pulse",
+                  "initial": {{ "value": 0.0, "unit": "A", "source": "user" }},
+                  "pulsed": {{ "value": {amps}, "unit": "A", "source": "user" }},
+                  "delay_ps": 100000000,
+                  "width_ps": 100000000,
+                  "period_ps": 1000000000
+                }}
+              }}
+            }}"#
+        )
+    };
+    let dc_isource = r#"{
+      "format": 4,
+      "part": "test-dc-i",
+      "version": "0.1.0",
+      "title": "Test DC current source",
+      "license": "MIT OR Apache-2.0",
+      "pins": { "pos": [1], "neg": [2] },
+      "params": { "current": { "unit": "A", "required": true, "sets": "/current" } },
+      "model": { "kind": "current_source", "pins": { "p": "pos", "n": "neg" } }
+    }"#;
+
+    // 1. Kingbright Note 1 (1/10 duty, 0.1 ms pulse, 1 ms period): 150 mA green/blue and 200 mA
+    //    red stay quiet on both current and power, on both CC and CA.
+    for (part, pin, amps) in [
+        ("led-5mm-rgb-cc", "G", 0.15),
+        ("led-5mm-rgb-cc", "B", 0.15),
+        ("led-5mm-rgb-cc", "R", 0.20),
+        ("led-5mm-rgb-ca", "G", 0.15),
+        ("led-5mm-rgb-ca", "B", 0.15),
+        ("led-5mm-rgb-ca", "R", 0.20),
+    ] {
+        let wires = if part == "led-5mm-rgb-cc" {
+            json!([["src.pos", format!("rgb.{pin}")], ["rgb.COM", "src.neg"]])
+        } else {
+            json!([["src.pos", "rgb.COM"], [format!("rgb.{pin}"), "src.neg"]])
+        };
+        let scene = json!({
+            "format": 1,
+            "parts": {
+                "src": { "type": "./pulse_i.jsonc" },
+                "rgb": { "type": part },
+            },
+            "wires": wires,
+            "ground": "src.neg",
+        });
+        let mut live = open_scene(
+            scene,
+            vec![("pulse_i.jsonc".into(), pulse_source(amps).into_bytes())],
+        );
+        run(&mut live, "step 20ms");
+        run(&mut live, "expect no diagnostics");
+    }
+
+    // 2. 151 mA pulse on green/blue exceeds the 150 mA peak current rating and warns rating.current.
+    for pin in ["G", "B"] {
+        let scene = json!({
+            "format": 1,
+            "parts": {
+                "src": { "type": "./pulse_i.jsonc" },
+                "rgb": { "type": "led-5mm-rgb-cc" },
+            },
+            "wires": [["src.pos", format!("rgb.{pin}")], ["rgb.COM", "src.neg"]],
+            "ground": "src.neg",
+        });
+        let mut live = open_scene(
+            scene,
+            vec![("pulse_i.jsonc".into(), pulse_source(0.151).into_bytes())],
+        );
+        run(&mut live, "step 5ms");
+        let diags = run(&mut live, "snapshot").json()["data"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert!(
+            diags.iter().any(|d| d["code"] == "rating.current"),
+            "expected rating.current at 151 mA on {pin}, got {diags:?}"
+        );
+    }
+
+    // 3. Green at 30 mA DC draws ~0.107 W (> 0.1025 W rating) and warns rating.power and rating.current.
+    let dc_over = json!({
+        "format": 1,
+        "parts": {
+            "src": { "type": "./dc_i.jsonc", "current": "30mA" },
+            "rgb": { "type": "led-5mm-rgb-cc" },
+        },
+        "wires": [["src.pos", "rgb.G"], ["rgb.COM", "src.neg"]],
+        "ground": "src.neg",
+    });
+    let mut live = open_scene(
+        dc_over,
+        vec![("dc_i.jsonc".into(), dc_isource.as_bytes().to_vec())],
+    );
+    run(&mut live, "step 40ms");
+    let diags = run(&mut live, "snapshot").json()["data"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(
+        diags.iter().any(|d| d["code"] == "rating.power"),
+        "expected rating.power at 30 mA DC green, got {diags:?}"
+    );
+    assert!(
+        diags.iter().any(|d| d["code"] == "rating.current"),
+        "expected rating.current at 30 mA DC green, got {diags:?}"
+    );
+
+    // 4. Reverse voltage past 5 V (CA wired as CC at 6 V, and CC wired as CA at 6 V) warns
+    //    rating.voltage; at 5 V reverse it stays quiet.
+    for (part, volts, expect_warn) in [
+        ("led-5mm-rgb-ca", "6", true),
+        ("led-5mm-rgb-ca", "5", false),
+        ("led-5mm-rgb-cc", "6", true),
+        ("led-5mm-rgb-cc", "5", false),
+    ] {
+        let wires = if part == "led-5mm-rgb-ca" {
+            json!([["v1.pos", "rr.a"], ["rr.b", "rgb.R"], ["rgb.COM", "v1.neg"]])
+        } else {
+            json!([["v1.pos", "rgb.COM"], ["rgb.R", "rr.a"], ["rr.b", "v1.neg"]])
+        };
+        let scene = json!({
+            "format": 1,
+            "parts": {
+                "v1": { "type": "./source.jsonc", "voltage": volts },
+                "rr": { "type": "resistor-axial", "resistance": "150" },
+                "rgb": { "type": part },
+            },
+            "wires": wires,
+            "ground": "v1.neg",
+        });
+        let mut live = open_scene(scene, vec![]);
+        run(&mut live, "step 10ms");
+        run(&mut live, "expect @rgb.red off");
+        let diags = run(&mut live, "snapshot").json()["data"]["diagnostics"]
+            .as_array()
+            .unwrap()
+            .clone();
+        if expect_warn {
+            assert!(
+                diags.iter().any(|d| d["code"] == "rating.voltage"
+                    && d["message"]
+                        .as_str()
+                        .unwrap_or("")
+                        .contains("#rgb__red.v (rgb.red) reaches -6 V, outside its -5 V floor")),
+                "{part} at {volts} V: expected rating.voltage, got {diags:?}"
+            );
+        } else {
+            assert!(
+                diags.is_empty(),
+                "{part} at {volts} V: expected quiet, got {diags:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn neopixel_ring_16_full_white_current_matches_ws2812b_sheet_and_unpowered_does_nothing() {
     // 1. Powered from an external 5 V supply, all 16 chained pixels latch rgb(255,255,255)
     //    and draw 16 * (0.6 mA idle + 3 * 12 mA) = 585.6 mA (WS2812B-V5 p3).
@@ -415,4 +586,52 @@ fn joystick_ky023_axes_button_viewer_controls_and_unpowered_behavior() {
     run(&mut live, "step 10ms");
     assert!(number(&mut live, "@joy.VRX").abs() < 1e-6);
     assert!(number(&mut live, "@joy.VRY").abs() < 1e-6);
+
+    // Over-voltage on VCC (9 V > 5 V operating max from Joy-IT COM-KY023JM p1): warns rating.voltage.
+    let overvolt = json!({
+        "format": 1,
+        "parts": {
+            "v1": { "type": "./source.jsonc", "voltage": "9" },
+            "joy": { "type": "joystick-ky023" },
+        },
+        "wires": [
+            ["v1.pos", "joy.VCC"],
+            ["v1.neg", "joy.GND"],
+        ],
+        "ground": "v1.neg",
+    });
+    let mut live = open_scene(overvolt, vec![]);
+    run(&mut live, "step 10ms");
+    assert!((number(&mut live, "@joy.VRX") - 4.5).abs() < 1e-3);
+    let diags = run(&mut live, "snapshot").json()["data"]["diagnostics"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(
+        diags.iter().any(|d| d["code"] == "rating.voltage"
+            && d["message"]
+                .as_str()
+                .unwrap_or("")
+                .contains("reaches 9 V, outside its -5 V to 5 V rating")),
+        "expected rating.voltage at 9 V on joystick VCC, got {diags:?}"
+    );
+
+    // Within 3.3 V to 5 V operating range: stays quiet.
+    for volts in ["3.3", "5"] {
+        let ok = json!({
+            "format": 1,
+            "parts": {
+                "v1": { "type": "./source.jsonc", "voltage": volts },
+                "joy": { "type": "joystick-ky023" },
+            },
+            "wires": [
+                ["v1.pos", "joy.VCC"],
+                ["v1.neg", "joy.GND"],
+            ],
+            "ground": "v1.neg",
+        });
+        let mut live = open_scene(ok, vec![]);
+        run(&mut live, "step 10ms");
+        run(&mut live, "expect no diagnostics");
+    }
 }

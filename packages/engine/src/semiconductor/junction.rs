@@ -4,8 +4,9 @@ use crate::netlist::NetId;
 use crate::netlist::Rating;
 use crate::netlist::Value;
 use crate::netlist::json::PinMap;
-use crate::netlist::json::WireJunctionRatings;
+use crate::netlist::json::WireRating;
 use crate::netlist::json::WireValue;
+use crate::netlist::json::resolve_limit;
 use crate::netlist::json::resolve_pins;
 use crate::netlist::json::resolve_rating;
 use crate::netlist::json::resolve_value;
@@ -359,6 +360,70 @@ mod tests {
         )
         .unwrap()
     }
+
+    #[test]
+    fn reverse_voltage_warns_past_the_limit_and_stays_quiet_at_the_edge_or_forward() {
+        let circuit = |volts: f64, reverse: &str| {
+            format!(
+                r#"{{
+                  "version": 1,
+                  "seed": 0,
+                  "analysis": {{ "op": {{}} }},
+                  "ground": "gnd",
+                  "nets": ["gnd", "n"],
+                  "parts": [
+                    {{ "name": "v1", "kind": "voltage_source", "pins": {{ "p": "n", "n": "gnd" }},
+                      "voltage": {{ "value": {volts}, "unit": "V" }} }},
+                    {{ "name": "d1", "kind": "led", "pins": {{ "anode": "n", "cathode": "gnd" }},
+                      "saturation_current": {{ "value": 5.262e-20, "unit": "A" }},
+                      "emission_coefficient": {{ "value": 1.793, "unit": "1" }},
+                      "series_resistance": {{ "value": 1.607, "unit": "ohm" }},
+                      "ratings": {{ "current": null, "power": null{reverse} }} }}
+                  ]
+                }}"#
+            )
+        };
+        let warnings = |json: &str| {
+            crate::simulate(&crate::netlist::parse(json.as_bytes()).unwrap())
+                .diagnostics()
+                .iter()
+                .map(|d| serde_json::to_string(d).unwrap())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let rated = r#", "reverse_voltage": { "value": 5.0, "unit": "V" }"#;
+        let past = warnings(&circuit(-6.0, rated));
+        assert!(past.contains("rating.voltage"), "{past}");
+        assert!(
+            past.contains("#d1.v reaches -6 V, outside its -5 V floor"),
+            "{past}"
+        );
+        assert!(!past.contains("chip's ground"), "{past}");
+        assert!(!warnings(&circuit(-5.0, rated)).contains("rating.voltage"));
+        assert!(!warnings(&circuit(2.0, rated)).contains("rating.voltage"));
+        assert!(!warnings(&circuit(-6.0, "")).contains("rating.voltage"));
+        assert!(
+            !warnings(&circuit(-6.0, r#", "reverse_voltage": null"#)).contains("rating.voltage")
+        );
+        let err = crate::netlist::parse(
+            circuit(
+                -6.0,
+                r#", "reverse_voltage": { "value": 0.0, "unit": "V" }"#,
+            )
+            .as_bytes(),
+        )
+        .expect_err("zero reverse_voltage is refused on a junction");
+        assert!(
+            err.iter().any(|d| matches!(
+                d,
+                crate::diagnostic::Diagnostic::NetlistValue {
+                    rule: crate::diagnostic::ValueRule::Positive,
+                    ..
+                }
+            )),
+            "{err:?}"
+        );
+    }
 }
 
 /// A Shockley junction in series with a resistance, at 298.15 K with no temperature scaling.
@@ -378,6 +443,9 @@ pub struct Junction {
     pub max_current: Option<Rating>,
     /// Watt, greater than 0. `None` is an explicit `"power": null`.
     pub max_power: Option<Rating>,
+    /// Volt, greater than 0. `V(anode) - V(cathode)` below minus this warns `rating.voltage`.
+    /// `None` when omitted or an explicit `"reverse_voltage": null`.
+    pub reverse_voltage: Option<Value>,
     /// The junction's law, made from `saturation_current` and `emission_coefficient`.
     law: Shockley,
 }
@@ -444,13 +512,25 @@ pub fn junction_scale(emission: f64, saturation: f64) -> Result<JunctionScale, J
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct WireDiodeRatings {
+    #[serde(deserialize_with = "Option::deserialize")]
+    current: Option<WireRating>,
+    #[serde(deserialize_with = "Option::deserialize")]
+    power: Option<WireRating>,
+    /// Absent on a diode or LED that rates no reverse voltage.
+    #[serde(default)]
+    reverse_voltage: Option<WireValue>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct WireJunction {
     pub(crate) name: String,
     pins: PinMap,
     saturation_current: WireValue,
     emission_coefficient: WireValue,
     series_resistance: WireValue,
-    ratings: WireJunctionRatings,
+    ratings: WireDiodeRatings,
 }
 
 pub(crate) fn resolve_junction(ctx: ParseCtx<'_>, wire: WireJunction) -> Option<Junction> {
@@ -489,6 +569,13 @@ pub(crate) fn resolve_junction(ctx: ParseCtx<'_>, wire: WireJunction) -> Option<
     let ratings = wire.ratings;
     let max_current = resolve_rating(part_ref, "ratings.current", "A", ratings.current, out);
     let max_power = resolve_rating(part_ref, "ratings.power", "W", ratings.power, out);
+    let reverse_voltage = resolve_limit(
+        part_ref,
+        "ratings.reverse_voltage",
+        "V",
+        ratings.reverse_voltage,
+        out,
+    );
     if let (Some(is), Some(n)) = (&is, &n)
         && let Err(fault) = junction_scale(n.si.get(), is.si.get())
     {
@@ -509,6 +596,7 @@ pub(crate) fn resolve_junction(ctx: ParseCtx<'_>, wire: WireJunction) -> Option<
         series_resistance: rs?,
         max_current: max_current?,
         max_power: max_power?,
+        reverse_voltage: reverse_voltage?,
         law,
     })
 }

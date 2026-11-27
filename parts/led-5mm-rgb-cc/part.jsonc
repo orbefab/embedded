@@ -3,7 +3,7 @@
 // 1 = Red anode (R), 2 = Common cathode (COM, longest), 3 = Blue anode (B), 4 = Green anode (G).
 // Read each colour die in a session as @<id>.red, @<id>.green and @<id>.blue.
 {
-  "format": 5,
+  "format": 7,
   "part": "led-5mm-rgb-cc",
   "version": "0.1.0",
   "title": "5 mm RGB LED, common cathode",
@@ -103,11 +103,11 @@
             "sustained": {
               "average": "mean",
               "tau": {
-                "value": 0.001,
+                "value": 0.0102,
                 "unit": "s",
                 "source": {
                   "closed_form": {
-                    "note": "One 1 ms cycle of the p2 Note 1 1/10 duty, 0.1 ms pulse condition, so rated 0.1 ms pulses stay within the 75 mW mean while a DC overload warns within 2 ms.",
+                    "note": "The sheet gives no pulse rating for power, so this is the 10.2 ms default, five periods of a 490 Hz PWM.",
                   },
                 },
               },
@@ -117,6 +117,17 @@
             "datasheet": {
               "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
               "at": "p2 ABSOLUTE MAXIMUM RATINGS at Ta = 25 C, Power Dissipation PD, Hyper Red = 75 mW",
+              "basis": "absolute_max",
+            },
+          },
+        },
+        "reverse_voltage": {
+          "value": 5.0,
+          "unit": "V",
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+              "at": "p2 ABSOLUTE MAXIMUM RATINGS at Ta = 25 C, Reverse Voltage VR, Hyper Red = 5 V",
               "basis": "absolute_max",
             },
           },
@@ -203,11 +214,11 @@
             "sustained": {
               "average": "mean",
               "tau": {
-                "value": 0.001,
+                "value": 0.0102,
                 "unit": "s",
                 "source": {
                   "closed_form": {
-                    "note": "One 1 ms cycle of the p2 Note 1 1/10 duty, 0.1 ms pulse condition.",
+                    "note": "The sheet gives no pulse rating for power, so this is the 10.2 ms default, five periods of a 490 Hz PWM.",
                   },
                 },
               },
@@ -217,6 +228,17 @@
             "datasheet": {
               "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
               "at": "p2 ABSOLUTE MAXIMUM RATINGS at Ta = 25 C, Power Dissipation PD, Green = 102.5 mW",
+              "basis": "absolute_max",
+            },
+          },
+        },
+        "reverse_voltage": {
+          "value": 5.0,
+          "unit": "V",
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+              "at": "p2 ABSOLUTE MAXIMUM RATINGS at Ta = 25 C, Reverse Voltage VR, Green = 5 V",
               "basis": "absolute_max",
             },
           },
@@ -303,11 +325,11 @@
             "sustained": {
               "average": "mean",
               "tau": {
-                "value": 0.001,
+                "value": 0.0102,
                 "unit": "s",
                 "source": {
                   "closed_form": {
-                    "note": "One 1 ms cycle of the p2 Note 1 1/10 duty, 0.1 ms pulse condition.",
+                    "note": "The sheet gives no pulse rating for power, so this is the 10.2 ms default, five periods of a 490 Hz PWM.",
                   },
                 },
               },
@@ -317,6 +339,17 @@
             "datasheet": {
               "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
               "at": "p2 ABSOLUTE MAXIMUM RATINGS at Ta = 25 C, Power Dissipation PD, Blue = 120 mW",
+              "basis": "absolute_max",
+            },
+          },
+        },
+        "reverse_voltage": {
+          "value": 5.0,
+          "unit": "V",
+          "source": {
+            "datasheet": {
+              "doc": "Kingbright WP154A4SUREQBFZGW, Spec No DSAJ8688, Rev V.12A",
+              "at": "p2 ABSOLUTE MAXIMUM RATINGS at Ta = 25 C, Reverse Voltage VR, Blue = 5 V",
               "basis": "absolute_max",
             },
           },
@@ -387,7 +420,7 @@
     },
     {
       "what": "reverse breakdown",
-      "why": "The engine's LED has no breakdown voltage. Page 2 rates VR = 5 V max on each die.",
+      "why": "The engine's LED does not conduct in reverse breakdown; `rating.voltage` warns when reverse voltage passes the p2 VR = 5 V absolute maximum on any die.",
     },
   ],
 }

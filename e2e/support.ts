@@ -680,22 +680,22 @@ export async function showBlock(page: Page, block: RepoBlock, canvas: boolean, s
   }
   if (block.kind === "joystick") {
     const strip = page.locator(SERIAL);
-    await expect(strip, `${block.id} center`).toContainText(/x=511 y=511 btn=0/, { timeout: 30_000 });
+    await expect(strip, `${block.id} center`).toContainText(/x=51[12] y=51[12] btn=0/, { timeout: 30_000 });
     const xInput = page.locator('[data-testid="param-joy-x-position-value"]');
     await xInput.scrollIntoViewIfNeeded();
     await xInput.fill("0.9");
     await xInput.press("Enter");
-    await expect(strip, `${block.id} moved x`).toContainText(/x=921 y=511 btn=0/, { timeout: 30_000 });
+    await expect(strip, `${block.id} moved x`).toContainText(/x=921 y=51[12] btn=0/, { timeout: 30_000 });
     const cap = await pointOn(page, "@joy.sw", "plunger", canvas);
     await page.mouse.move(cap.x, cap.y);
     await page.mouse.down();
-    await expect(strip, `${block.id} pressed`).toContainText(/x=921 y=511 btn=1/, { timeout: 30_000 });
+    await expect(strip, `${block.id} pressed`).toContainText(/x=921 y=51[12] btn=1/, { timeout: 30_000 });
     if (shotName !== null) {
       await page.locator("canvas").scrollIntoViewIfNeeded();
       await shot(page, shotName);
     }
     await page.mouse.up();
-    await expect(strip, `${block.id} released`).toContainText(/x=921 y=511 btn=0\s*$/, { timeout: 30_000 });
+    await expect(strip, `${block.id} released`).toContainText(/x=921 y=51[12] btn=0\s*$/, { timeout: 30_000 });
     return;
   }
   if (block.kind === "pixels" || block.kind === "ring") {

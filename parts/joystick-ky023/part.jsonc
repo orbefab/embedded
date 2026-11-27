@@ -51,8 +51,8 @@
   "pins": { "GND": [1], "VCC": [2], "VRX": [3], "VRY": [4], "SW": [5] },
   "not_simulated": [
     {
-      "what": "operating voltage and power ratings",
-      "why": "Joy-IT COM-KY023JM p1 specifies 3.3 V to 5 V operating voltage. The engine's potentiometer and switch have no electrical ratings, so over-voltage or over-power on VCC or SW does not warn.",
+      "what": "under-voltage and power ratings",
+      "why": "Joy-IT COM-KY023JM p1 specifies 3.3 V to 5 V operating voltage. VCC past 5 V warns `rating.voltage` across the axis potentiometers; the 3.3 V low-supply floor needs the low-supply warning (not yet in this engine), and track power and switch contact ratings are not modelled.",
     },
     {
       "what": "spring return and stick tilt",
