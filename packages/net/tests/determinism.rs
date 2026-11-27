@@ -1,15 +1,20 @@
 //! A network is its state. A run split at any limits is the same run, and a copy taken
-//! anywhere in an exchange runs on as the network it copied would have.
+//! anywhere in an exchange runs on as the network it copied would have. Both hold for the
+//! access point's session and for the subnet's exchanges.
 
 mod common;
 
-use common::{Air, Rng, Seen, keyed_network, ms, session};
+use common::{Air, Rng, Script, Seen, keyed_network, ms, session, subnet_session};
 use orbe_model::Time;
 use orbe_net::Network;
 
-/// The session run in one go, with no limit but the script's own times.
-fn whole() -> (Air, Network) {
-    let (script, until) = session();
+/// The access point's session, and the subnet's.
+fn sessions() -> [(Script, Time); 2] {
+    [session(), subnet_session()]
+}
+
+/// A session run in one go, with no limit but the script's own times.
+fn whole((script, until): (Script, Time)) -> (Air, Network) {
     let mut air = Air::new(script);
     let mut net = keyed_network();
     air.run_through(&mut net, until);
@@ -30,7 +35,7 @@ fn random_limit(rng: &mut Rng, from: Time, to: Time) -> Option<Time> {
 
 #[test]
 fn the_session_reaches_every_part_of_the_access_point() {
-    let (air, mut net) = whole();
+    let (air, mut net) = whole(session());
     let rows = air.rows_seen().join("\n");
     for event in [
         "auth",
@@ -57,18 +62,31 @@ fn the_session_reaches_every_part_of_the_access_point() {
 }
 
 #[test]
+fn the_subnet_session_reaches_every_service() {
+    let (air, _) = whole(subnet_session());
+    let rows = air.rows_seen().join("\n");
+    for event in ["handshake", "dhcp_ack", "dns", "sntp", "nxdomain"] {
+        assert!(
+            rows.contains(&format!(r#""event":"{event}""#)),
+            "{event} in\n{rows}"
+        );
+    }
+}
+
+#[test]
 fn a_run_split_at_random_limits_is_the_same_run() {
-    let (want, want_net) = whole();
-    for seed in 1..=64u64 {
-        let (script, until) = session();
-        let mut air = Air::new(script);
-        let mut net = keyed_network();
-        let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
-        air.run(&mut net, until, &mut |from, to| {
-            random_limit(&mut rng, from, to)
-        });
-        assert_eq!(air.seen, want.seen, "seed {seed}");
-        assert_eq!(net, want_net, "seed {seed}");
+    for (script, until) in sessions() {
+        let (want, want_net) = whole((script.clone(), until));
+        for seed in 1..=64u64 {
+            let mut air = Air::new(script.clone());
+            let mut net = keyed_network();
+            let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+            air.run(&mut net, until, &mut |from, to| {
+                random_limit(&mut rng, from, to)
+            });
+            assert_eq!(air.seen, want.seen, "seed {seed}");
+            assert_eq!(net, want_net, "seed {seed}");
+        }
     }
 }
 
@@ -94,8 +112,13 @@ fn cuts(air: &Air) -> Vec<Time> {
 
 #[test]
 fn a_copy_taken_mid_exchange_runs_on_as_the_network_would() {
-    let (want, want_net) = whole();
-    let (script, until) = session();
+    for (script, until) in sessions() {
+        copies_run_on(script, until);
+    }
+}
+
+fn copies_run_on(script: Script, until: Time) {
+    let (want, want_net) = whole((script.clone(), until));
     for cut in cuts(&want) {
         let mut air = Air::new(script.clone());
         let mut net = keyed_network();

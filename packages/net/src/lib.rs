@@ -7,8 +7,13 @@
 //! answers probes, authenticates with Open System, associates with an AID, deauthenticates,
 //! declines ADDBA, holds frames for a station in power save, and goes down and up. Under
 //! WPA2-PSK it runs the 4-way handshake as the authenticator, then takes the station's Data
-//! frames under CCMP-128 with a replay check. It does neither WPA3-SAE nor PMF, and refuses a
-//! station that asks for them with their status codes. Frames follow IEEE 802.11-2020.
+//! frames under CCMP-128 with a replay check, and seals its own. It does neither WPA3-SAE nor
+//! PMF, and refuses a station that asks for them with their status codes. Frames follow IEEE
+//! 802.11-2020.
+//!
+//! Behind it is a [`Subnet`] with one router at the access point's BSSID, which answers ARP
+//! for its address, leases addresses over DHCP, answers pings, and serves DNS for a fixed list
+//! of names and SNTP from the network's clock. It answers each request at the time it lands.
 //!
 //! It is its state: [`Clone`] is a checkpoint. What a scene sets is a [`Config`] behind an
 //! [`Arc`], which every copy shares, and the rest is small. Its inputs are times and frames,
@@ -18,14 +23,16 @@
 //!
 //! It sends every frame at 1 Mb/s, DIFS after the medium goes idle, with no random backoff. A
 //! frame no station acknowledges is not sent again, and makes a [`Event::Lost`] row. It holds
-//! no group frames for a station in power save, and it is neither HT nor QoS. What it takes from
-//! a station past the handshake goes nowhere yet.
+//! no group frames for a station in power save, and it is neither HT nor QoS. It sends no group
+//! Data frame, so an answer to a station's broadcast goes to that station alone, and it does not
+//! pass frames between stations.
 
 mod ccmp;
 mod element;
 mod frame;
 mod row;
 mod rsn;
+mod subnet;
 mod timing;
 
 use std::collections::VecDeque;
@@ -37,6 +44,7 @@ use orbe_model::air::{Ack, AirFrame, Channel, Signal};
 use orbe_model::{Stop, Time};
 
 pub use row::{By, Event, Row};
+pub use subnet::Subnet;
 
 use frame::Header;
 use rsn::Ptk;
@@ -86,6 +94,7 @@ pub struct Config {
     channel: Channel,
     /// Its keys under WPA2-PSK.
     psk: Option<Psk>,
+    subnet: Subnet,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,7 +116,8 @@ const SEED: [u8; 32] = *b"orbe-net: the fixed network seed";
 
 impl Config {
     /// An access point named `ssid`, 1 to 32 octets, at `bssid`, an individual address, on
-    /// `channel`. `None` for any other SSID or BSSID, or a passphrase out of range.
+    /// `channel`, with the default [`Subnet`]. `None` for any other SSID or BSSID, or a
+    /// passphrase out of range.
     pub fn new(ssid: &[u8], bssid: Mac, channel: Channel, security: Security) -> Option<Config> {
         if !matches!(ssid.len(), 1..=32) || bssid.is_group() {
             return None;
@@ -153,6 +163,16 @@ impl Config {
             bssid,
             channel,
             psk,
+            subnet: Subnet::default(),
+        })
+    }
+
+    /// The access point with `subnet` behind it. `None` when the subnet's mask is not
+    /// contiguous, or its leases are not host addresses of its subnet apart from the router's.
+    pub fn with_subnet(mut self, subnet: Subnet) -> Option<Config> {
+        subnet.is_valid().then(|| {
+            self.subnet = subnet;
+            self
         })
     }
 
@@ -241,6 +261,9 @@ struct State {
     /// [`Network::acked`].
     awaiting: Option<(Time, Mac)>,
     rows: Vec<Row>,
+    /// The station each DHCP lease went to, in the order of the leases. A station keeps its
+    /// lease for good.
+    leased: Vec<Mac>,
     /// Each MSDU it took from a station, for a test that replays a capture.
     #[cfg(feature = "replay")]
     delivered: Vec<(Mac, Vec<u8>)>,
@@ -302,10 +325,11 @@ enum Phase {
     Message1,
     /// Sending message 3 under the PTK message 2 gave, waiting for message 4.
     Message3(Ptk),
-    /// Done: the TK, and the last PN of each replay counter.
+    /// Done: the TK, the last PN of each replay counter, and the last PN it sent.
     Keyed {
         tk: [u8; 16],
         pn: [u64; ccmp::COUNTERS],
+        sent: u64,
     },
 }
 
@@ -353,6 +377,7 @@ impl Network {
                 counter: config.psk.as_ref().map_or([0; 32], |psk| psk.counter),
                 awaiting: None,
                 rows: Vec::new(),
+                leased: Vec::new(),
                 #[cfg(feature = "replay")]
                 delivered: Vec::new(),
             },
@@ -550,8 +575,31 @@ impl Network {
         if pending.polled == Some(true) {
             mpdu[1] |= frame::MORE_DATA;
         }
+        if mpdu[0] >> 2 & 3 == frame::DATA && mpdu[1] & frame::PROTECTED != 0 {
+            match self.seal(&mpdu) {
+                Some(sealed) => mpdu = sealed,
+                None => return true,
+            }
+        }
         self.air(start, mpdu, pending.to);
         true
+    }
+
+    /// The Data frame `mpdu`, Protected set over its plaintext body, sealed under CCMP-128 with
+    /// its station's TK and next PN, as it goes on the air, so its PNs rise in the order the
+    /// station hears them. `None` when the station no longer holds keys, and the frame is
+    /// dropped.
+    fn seal(&mut self, mpdu: &[u8]) -> Option<Vec<u8>> {
+        let sta = Mac(mpdu[4..10].try_into().expect("an address"));
+        let Some(Rsna {
+            phase: Phase::Keyed { tk, sent, .. },
+            ..
+        }) = &mut self.station(sta)?.rsna
+        else {
+            return None;
+        };
+        *sent += 1;
+        Some(ccmp::seal(tk, 0, *sent, &mpdu[..24], &mpdu[24..]))
     }
 
     fn air(&mut self, start: Time, mut mpdu: Vec<u8>, to: Option<Mac>) {
@@ -604,12 +652,14 @@ impl Network {
         self.queue(at, to, Out::Mpdu(mpdu.into()), None);
     }
 
-    /// A Data frame from the DS to `sta`, of body `msdu` (9.3.2.1).
-    fn send_data(&mut self, at: Time, sta: Mac, msdu: &[u8]) {
+    /// A Data frame from the DS to `sta`, of body `msdu` (9.3.2.1). With `protect`, it is sealed
+    /// under CCMP-128 as it goes on the air.
+    fn send_data(&mut self, at: Time, sta: Mac, msdu: &[u8], protect: bool) {
+        let protected = if protect { frame::PROTECTED } else { 0 };
         let mut mpdu = frame::header(
             frame::DATA,
             0,
-            frame::FROM_DS,
+            frame::FROM_DS | protected,
             timing::duration_us(),
             sta,
             self.config.bssid,
@@ -957,7 +1007,7 @@ impl Network {
             }
             Phase::Keyed { .. } => return,
         };
-        self.send_data(at, sta, &msdu);
+        self.send_data(at, sta, &msdu, false);
     }
 
     /// Times out the first handshake whose deadline is the earliest, if it is by `until`: it
@@ -1023,6 +1073,7 @@ impl Network {
                 rsna.phase = Phase::Keyed {
                     tk,
                     pn: [0; ccmp::COUNTERS],
+                    sent: 0,
                 };
                 self.row(at, Event::Handshake { sta });
             }
@@ -1043,7 +1094,7 @@ impl Network {
         };
         let msdu = if protected {
             let Some(Rsna {
-                phase: Phase::Keyed { tk, pn },
+                phase: Phase::Keyed { tk, pn, .. },
                 ..
             }) = &mut station.rsna
             else {
@@ -1066,18 +1117,34 @@ impl Network {
             if !protected {
                 self.eapol(at, sta, eapol);
             }
-        } else if protected == self.config.psk.is_some() {
-            self.deliver(sta, msdu);
+        } else if protected == self.config.psk.is_some()
+            && let Some(da) = h.addr3
+        {
+            self.deliver(at, sta, da, msdu);
         }
     }
 
-    /// An MSDU from an associated station past the controlled port. The subnet is not here yet,
-    /// so it goes nowhere, except to a test that replays a capture.
-    fn deliver(&mut self, sta: Mac, msdu: Vec<u8>) {
+    /// An MSDU from an associated station to `da` past the controlled port, which goes to the
+    /// subnet. The router's answer goes back at once, under CCMP-128 on a WPA2-PSK network.
+    fn deliver(&mut self, at: Time, sta: Mac, da: Mac, msdu: Vec<u8>) {
+        let config = Arc::clone(&self.config);
+        let answer = subnet::answer(
+            &config.subnet,
+            &mut self.state.leased,
+            config.bssid,
+            at,
+            sta,
+            da,
+            &msdu,
+        );
         #[cfg(feature = "replay")]
         self.state.delivered.push((sta, msdu));
-        #[cfg(not(feature = "replay"))]
-        let _ = (sta, msdu);
+        if let Some(answer) = answer {
+            self.send_data(at, sta, &answer.msdu, config.psk.is_some());
+            if let Some(event) = answer.event {
+                self.row(at, event);
+            }
+        }
     }
 
     /// Whether `sta` is associated, so it may send a Class 3 frame. A station that is not gets

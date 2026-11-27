@@ -2,6 +2,8 @@
 
 #![allow(dead_code)]
 
+pub mod lan;
+
 use std::sync::Arc;
 
 use orbe_model::Time;
@@ -510,10 +512,17 @@ impl Supplicant {
     /// A Data frame to the DS of `payload` after LLC/SNAP and EtherType IPv4, sealed with PN
     /// `pn`.
     pub fn data(&self, anonce: &[u8; 32], pn: u64, payload: &[u8]) -> Vec<u8> {
+        let mut msdu = hex("aaaa030000000800");
+        msdu.extend(payload);
+        self.sealed(anonce, pn, Mac::BROADCAST, &msdu)
+    }
+
+    /// A Data frame to the DS for `da` of `msdu`, from its LLC header on, sealed with PN `pn`.
+    pub fn sealed(&self, anonce: &[u8; 32], pn: u64, da: Mac, msdu: &[u8]) -> Vec<u8> {
         let mut f = vec![0x08, 0x41, 0x3a, 0x01];
         f.extend(BSSID.0);
         f.extend(STA.0);
-        f.extend(Mac::BROADCAST.0);
+        f.extend(da.0);
         f.extend([0x10, 0]);
         let mut aad = vec![0x08, 0x41];
         aad.extend(&f[4..22]);
@@ -523,12 +532,110 @@ impl Supplicant {
         nonce.extend(STA.0);
         nonce.extend(&p[2..]);
         f.extend([p[7], p[6], 0, 0x20, p[5], p[4], p[3], p[2]]);
-        let mut msdu = hex("aaaa030000000800");
-        msdu.extend(payload);
         let tk = orbe_crypto::aes::AesKey::new(&self.ptk(anonce)[32..]).unwrap();
-        f.extend(orbe_crypto::ccm::seal(&tk, &nonce, &aad, &msdu, 8));
+        f.extend(orbe_crypto::ccm::seal(&tk, &nonce, &aad, msdu, 8));
         f
     }
+
+    /// The PN and the MSDU of a protected Data frame from the DS, under the TK of `anonce`, or
+    /// `None` when its MIC fails.
+    pub fn open(&self, anonce: &[u8; 32], mpdu: &[u8]) -> Option<(u64, Vec<u8>)> {
+        assert_eq!(mpdu[..2], [0x08, 0x42]);
+        let c = &mpdu[24..32];
+        let pn = u64::from_le_bytes([c[0], c[1], c[4], c[5], c[6], c[7], 0, 0]);
+        let mut aad = vec![0x08, 0x42 & !0x38];
+        aad.extend(&mpdu[4..22]);
+        aad.extend([mpdu[22] & 0x0f, 0]);
+        let mut nonce = vec![0];
+        nonce.extend(&mpdu[10..16]);
+        nonce.extend(&pn.to_be_bytes()[2..]);
+        let tk = orbe_crypto::aes::AesKey::new(&self.ptk(anonce)[32..]).unwrap();
+        let msdu = orbe_crypto::ccm::open(&tk, &nonce, &aad, &mpdu[32..], 8)?;
+        Some((pn, msdu))
+    }
+}
+
+/// A Data frame to the DS for `da` of `msdu`, from its LLC header on, in the clear, from
+/// station `sta`.
+pub fn clear(sta: Mac, da: Mac, msdu: &[u8]) -> Vec<u8> {
+    let mut f = vec![0x08, 0x01, 0x3a, 0x01];
+    f.extend(BSSID.0);
+    f.extend(sta.0);
+    f.extend(da.0);
+    f.extend([0x10, 0]);
+    f.extend(msdu);
+    f
+}
+
+/// The Data frames from the DS that carry a body, past the EAPOL ones, and when each started.
+pub fn data_sent(air: &Air) -> Vec<&AirFrame> {
+    (air.sent().into_iter())
+        .filter(|f| f.mpdu[0] == 0x08 && f.mpdu[1] & 0x02 != 0)
+        .filter(|f| f.mpdu.get(24..32) != Some(&hex("aaaa03000000888e")))
+        .collect()
+}
+
+/// When the station of [`subnet_session`] sends each request.
+pub mod at {
+    pub const DISCOVER: f64 = 50.0;
+    pub const REQUEST: f64 = 60.0;
+    pub const PROBE: f64 = 70.0;
+    pub const ARP: f64 = 80.0;
+    pub const DNS: f64 = 90.0;
+    pub const SNTP: f64 = 100.0;
+    pub const PING: f64 = 110.0;
+    pub const NXDOMAIN: f64 = 115.0;
+}
+
+/// The station's requests after it joins, as lwIP sends them, each an MSDU and the address it
+/// goes to: it asks for a lease, probes the address, finds the router, looks up a time server,
+/// asks it the time, pings the router and looks up a name the network does not serve.
+pub fn requests() -> Vec<(f64, Mac, Vec<u8>)> {
+    use lan::*;
+    vec![
+        (
+            at::DISCOVER,
+            Mac::BROADCAST,
+            dhcp(DISCOVER, [0; 4], None, None),
+        ),
+        (
+            at::REQUEST,
+            Mac::BROADCAST,
+            dhcp(REQUEST, [0; 4], Some(LEASE), Some(ROUTER)),
+        ),
+        (at::PROBE, Mac::BROADCAST, arp_request([0; 4], LEASE)),
+        (at::ARP, Mac::BROADCAST, arp_request(LEASE, ROUTER)),
+        (at::DNS, BSSID, dns_query(0x4e21, "pool.ntp.org", 1)),
+        (at::SNTP, BSSID, ntp_request(NTP_SENT)),
+        (at::PING, BSSID, ping(0x0101, 7, b"orbe ping")),
+        (at::NXDOMAIN, BSSID, dns_query(0x4e22, "pool.ntp.orq", 1)),
+    ]
+}
+
+/// The station's session on the [`keyed_network`]: it joins and runs the 4-way handshake,
+/// then sends the [`requests`] under CCMP.
+pub fn subnet_session() -> (Script, Time) {
+    let sta = Supplicant::new(PASSPHRASE);
+    let mut script = Script::default()
+        .send(ms(10.0), auth(0, 1))
+        .send(ms(20.0), assoc_ccmp())
+        .send(ms(30.0), sta.message_2(&ANONCE, 0, &RSN_PSK))
+        .send(ms(40.0), sta.message_4(&ANONCE, 1));
+    for (pn, (at, da, msdu)) in (1..).zip(requests()) {
+        script = script.send(ms(at), sta.sealed(&ANONCE, pn, da, &msdu));
+    }
+    (script, ms(130.0))
+}
+
+/// The same on an open network, in the clear.
+pub fn open_subnet_session() -> (Script, Time) {
+    let mut script = Script::default()
+        .send(ms(10.0), auth(0, 1))
+        .send(ms(20.0), assoc(SSID, None));
+    for (at, da, msdu) in requests() {
+        script = script.send(ms(at), clear(STA, da, &msdu));
+    }
+    (script, ms(130.0))
 }
 
 /// The EAPOL-Key frames the network sent, as their EAPOL frames.

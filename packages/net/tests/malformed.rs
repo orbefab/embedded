@@ -1,12 +1,16 @@
 //! No frame on the air panics the network: every cut of every frame it reads, and frames
-//! corrupted at random, heard in every state the session reaches.
+//! corrupted at random, heard in every state the sessions reach. On the open network the
+//! subnet's requests reach its parsers however they are cut or corrupted.
 
 mod common;
 
-use common::{ANONCE, Air, BSSID, Rng, Supplicant, from_station, hex, keyed_network, ms, session};
+use common::{
+    ANONCE, Air, BSSID, Rng, STA, Supplicant, clear, from_station, hex, keyed_network, ms, network,
+    open_subnet_session, requests, session, subnet_session,
+};
 use orbe_model::Time;
 use orbe_model::air::{AirFrame, Mcs, Rate};
-use orbe_net::Network;
+use orbe_net::{Network, Security};
 
 /// Every frame the tests send, from the station and from the capture.
 fn frames() -> Vec<Vec<u8>> {
@@ -49,20 +53,30 @@ fn frames() -> Vec<Vec<u8>> {
     reassoc[0] = 0x20;
     reassoc.splice(28..28, BSSID.0);
     frames.push(reassoc);
+    // The subnet's requests, under CCMP and in the clear.
+    for (pn, (_, da, msdu)) in (100..).zip(requests()) {
+        frames.push(sta.sealed(&ANONCE, pn, da, &msdu));
+        frames.push(clear(STA, da, &msdu));
+    }
     frames
 }
 
-/// The network at each of the session's steps, so frames land on every state it reaches.
+/// The network at each of the sessions' steps, so frames land on every state they reach.
 fn states() -> Vec<(Network, Time)> {
-    let (script, until) = session();
-    let mut air = Air::new(script);
-    let mut net = keyed_network();
-    let mut states = vec![(net.clone(), Time::ZERO)];
-    let mut at = Time::ZERO;
-    while at < until {
-        at = Time::from_ps(at.as_ps() + 5_000_000_000);
-        air.run_through(&mut net, at);
-        states.push((net.clone(), at));
+    let mut states = Vec::new();
+    for ((script, until), mut net) in [
+        (session(), keyed_network()),
+        (subnet_session(), keyed_network()),
+        (open_subnet_session(), network(Security::Open)),
+    ] {
+        let mut air = Air::new(script);
+        states.push((net.clone(), Time::ZERO));
+        let mut at = Time::ZERO;
+        while at < until {
+            at = Time::from_ps(at.as_ps() + 5_000_000_000);
+            air.run_through(&mut net, at);
+            states.push((net.clone(), at));
+        }
     }
     states
 }

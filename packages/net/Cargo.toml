@@ -1,6 +1,6 @@
 [package]
 name = "orbe-net"
-description = "The closed-world network a radio chip's frames reach: an access point on the air."
+description = "The closed-world network a radio chip's frames reach: an access point on the air and the subnet behind it."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
