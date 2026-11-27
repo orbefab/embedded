@@ -20,6 +20,7 @@ pub mod timestamp;
 pub mod trace;
 
 mod active;
+mod air;
 pub mod chip;
 pub mod device;
 mod element;

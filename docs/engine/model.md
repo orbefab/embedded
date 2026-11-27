@@ -100,7 +100,7 @@ A replay is a part that plays recorded transactions onto its pins: `spi_replay` 
 
 ## The air
 
-`orbe_model::air` holds what radio stations trade on the air. A station is a chip whose radio implements the air calls in [mcu.md](mcu.md#the-air). Nothing calls them yet.
+`orbe_model::air` holds what radio stations trade on the air. A station is a chip whose radio implements the air calls in [mcu.md](mcu.md#the-air), or the netlist's network. The engine routes frames between them, as [engine.md](engine.md#the-air) says.
 
 - `Channel` is a 2.4 GHz channel, 1 to 14, 20 MHz wide.
 - `Rate` is the rate a frame goes at: 1 Mb/s DSSS, 2 Mb/s DSSS and 5.5 or 11 Mb/s CCK each with a long or short `Preamble`, ERP-OFDM 6 to 54 Mb/s, or HT-mixed MCS 0 to 7 at 20 MHz with the 800 ns guard interval.
