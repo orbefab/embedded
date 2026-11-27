@@ -117,6 +117,30 @@
             "basis": "min"
           }
         }
+      },
+      "temperature": {
+        "min": {
+          "value": -40.0,
+          "unit": "degC",
+          "source": {
+            "datasheet": {
+              "doc": "BST-BMP280-DS001-26",
+              "at": "Table 2 (page 7), operating temperature range TA, operational, -40 to +85 °C",
+              "basis": "min"
+            }
+          }
+        },
+        "max": {
+          "value": 85.0,
+          "unit": "degC",
+          "source": {
+            "datasheet": {
+              "doc": "BST-BMP280-DS001-26",
+              "at": "Table 2 (page 7), operating temperature range TA, operational, -40 to +85 °C",
+              "basis": "max"
+            }
+          }
+        }
       }
     }
   },
@@ -139,7 +163,11 @@
     },
     {
       "what": "accuracy",
-      "why": "A compensated read is the world's value, clamped to -40 to 85 °C and 300 to 1100 hPa, then quantized by the 20-bit sample and the integer formulas. The sheet allows ±1.0 °C from 0 to 65 °C and ±1 hPa absolute."
+      "why": "A compensated read is the world's value, clamped to -40 to 85 °C and 300 to 1100 hPa, then quantized by the 20-bit sample and the integer formulas. The sheet allows ±1.0 °C from 0 to 65 °C, its full accuracy range (Table 2), and ±1 hPa absolute."
+    },
+    {
+      "what": "temperature past the operating range",
+      "why": "Below -40 °C or above 85 °C (Table 2, operational) the part keeps answering, reads the nearer end, and rating.temperature warns. The sheet states no reading out there; a real part may drift or fail."
     }
   ]
 }

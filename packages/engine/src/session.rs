@@ -515,6 +515,7 @@ impl Session {
         // power-down from t = 0 is recognized as a power cycle.
         let mut ratings = Ratings::new(&circuit.netlist, &circuit.actives, &columns, Timing::Run);
         ratings.seed_supplies(&row);
+        ratings.seed_temperatures(&row, circuit.netlist.world());
         let inputs = Inputs::new(&circuit.netlist, &circuit.actives, &columns);
         let record = rows
             .map(|rows| Record::start(transient, &columns, rows, &row, &signals, &logic))
@@ -629,15 +630,20 @@ impl Session {
     /// `rating.current` or `rating.power` follows for each rated quantity that has gone
     /// over, and one for each sustained rating over now at the last accepted step, so a run
     /// that stops before a held overload crosses its filter still names it. Its `t_ps` is the
-    /// first accepted step over. `peak` and `peak_ps` run through the
-    /// last accepted step. `over_ps` runs through that step, not to `now`. A step that is over
-    /// adds its time when the next step is accepted, so a quantity first over on the last
-    /// accepted step reads 0. The fault that ends a run is [`Self::fault`].
+    /// first accepted step over. One `rating.temperature` follows for each part whose operating
+    /// temperature the world's schedule has left while the part was powered, by the last
+    /// accepted step. `peak` and `peak_ps` run through the last accepted step. `over_ps` runs through that step, not to `now`. A
+    /// step that is over adds its time when the next step is accepted, so a quantity first over
+    /// on the last accepted step reads 0. The fault that ends a run is [`Self::fault`].
     /// `trace.row_interpolated` is absent. It names a grid row, and only a recorded trace
     /// has those rows.
     pub fn diagnostics(&self) -> Vec<Diagnostic> {
         let mut found = self.warnings.clone();
         found.extend(self.ratings.now(None));
+        found.extend(
+            self.ratings
+                .temperatures(self.circuit.netlist.world(), None),
+        );
         found.extend_from_slice(self.inputs.findings());
         found.extend(self.actives.warnings(&self.circuit, self.accepted()));
         crate::run_folder::sort_diagnostics(&mut found);
@@ -649,7 +655,9 @@ impl Session {
     /// the drive the cores now hold, and it is not kept. At an accepted step the warnings are
     /// that step's. At t = 0 the only accepted row is the operating point, which is no
     /// sample, so the warnings are those of the step after it, the first sample. A session
-    /// that faulted there has none.
+    /// that faulted there has none. A warning's `over_ps` runs through the probe, so a
+    /// quantity still over there counts its time up to it. Each `rating.temperature` follows,
+    /// through the probe after the last accepted step and through that step otherwise.
     pub fn over_ratings(&self, probe: &Probe<'_>) -> Vec<Diagnostic> {
         let (point, first) = self.rating_probe(probe);
         let mut found = self.ratings.now(point);
@@ -662,6 +670,13 @@ impl Session {
                 }
             }
         }
+        let after = match &self.state {
+            State::Running { accepted, .. } if probe.at() > accepted.at => {
+                Some((probe.at(), probe.values()))
+            }
+            _ => None,
+        };
+        found.extend(self.ratings.temperatures(self.world(), after));
         found
     }
 
@@ -910,6 +925,10 @@ impl Session {
         };
         diagnostics.extend(self.warnings);
         diagnostics.extend(self.ratings.now(None));
+        diagnostics.extend(
+            self.ratings
+                .temperatures(self.circuit.netlist.world(), None),
+        );
         diagnostics.extend_from_slice(self.inputs.findings());
         diagnostics.extend(self.actives.warnings(&self.circuit, at));
         let (mut observations, mut trace) =
@@ -1239,6 +1258,8 @@ impl Session {
             return self.ended(accepted.at, accepted.row, End::Fault(fault));
         }
         // The landing was solved with the drive the cores hold until `land` below.
+        self.ratings
+            .sample_temperatures(landing.at, &landing.row, self.circuit.netlist.world());
         self.ratings
             .sample(landing.at, &landing.row, self.actives.cores());
         self.inputs.sample(

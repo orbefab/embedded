@@ -5,6 +5,7 @@ use std::fmt;
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
+pub(crate) mod temperature;
 pub(crate) mod threshold;
 pub(crate) mod waveform;
 
