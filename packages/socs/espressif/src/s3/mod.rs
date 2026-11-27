@@ -46,6 +46,7 @@ mod gdma;
 mod gpio;
 mod i2c;
 mod image;
+mod keys;
 mod ledc;
 mod matrix;
 mod pcnt;
