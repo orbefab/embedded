@@ -55,6 +55,10 @@ impl Default for SerialFrame {
 /// Oscillator assumed until [`Cpu::set_clock_hz`]. Baud in hertz uses it.
 pub const DEFAULT_CLOCK_HZ: u32 = 16_000_000;
 
+/// `VPOT` falling and rising, in millivolts: Table 29-11's typical power-on reset thresholds,
+/// 1.3 V and 1.4 V (page 314).
+const POWER_ON_WINDOW_MV: (u16, u16) = (1_300, 1_400);
+
 /// Host byte stream. A new host stream is a variant here, not a method on [`Cpu`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Channel {
@@ -115,6 +119,12 @@ pub struct Cpu {
     /// The host's own reading of `VCC` against the brown-out window, from
     /// [`Self::set_brown_out`]: `true` below it. `None` reads `vcc_mv`.
     bod_low: Option<bool>,
+    /// The power-on reset holds the chip: `VCC` fell through `VPOT` and has not risen through
+    /// it since (§11.3).
+    por_held: bool,
+    /// The host's own reading of `VCC` against `VPOT`, from [`Self::set_power_on_reset`]:
+    /// `true` below it. `None` reads `vcc_mv`.
+    por_low: Option<bool>,
     /// What the boot section holds. It runs from the reset vector while `BOOTRST` is
     /// programmed.
     bootloader: Bootloader,
@@ -140,6 +150,8 @@ clone_fields!(Cpu {
     reset_held,
     bod_held,
     bod_low,
+    por_held,
+    por_low,
     bootloader,
     booting
 });
@@ -177,6 +189,8 @@ impl Cpu {
             reset_held: false,
             bod_held: false,
             bod_low: None,
+            por_held: false,
+            por_low: None,
             bootloader: Bootloader::None,
             booting: None,
         }
@@ -219,11 +233,17 @@ impl Cpu {
 
     /// Hold the chip in reset. Ports return to their reset state immediately
     /// (§11.1). [`Self::release_reset`] starts the time-out.
+    /// While the power-on reset holds the chip, a low `RESET` is no reset of its own: the power-on
+    /// reset clears `EXTRF` for as long as it lasts (§11.9.1), and `RESET` low then holds the chip
+    /// past it, as an external reset, once `VCC` rises through `VPOT` (Figure 11-3).
     pub fn pull_reset(&mut self) {
         if self.reset_held {
             return;
         }
         self.reset_held = true;
+        if self.por_held {
+            return;
+        }
         self.perform_reset(ResetKind::External, ResetWhen::Hold);
     }
 
@@ -234,7 +254,7 @@ impl Cpu {
             return;
         }
         self.reset_held = false;
-        if !self.bod_held {
+        if !self.bod_held && !self.por_held {
             self.begin_reset_delay();
         }
     }
@@ -272,9 +292,12 @@ impl Cpu {
     /// Supply voltage. The default is 5.0 V. Below the fuse `BODLEVEL` the
     /// chip holds in reset (§11.5). Thresholds use Table 29-12's typical
     /// `VBOT` and Table 29-11's 50 mV hysteresis.
+    /// Below `VPOT` the power-on reset holds it, as [`Self::set_power_on_reset`] says.
     pub fn set_vcc(&mut self, volts: f32) {
         self.vcc_mv = (f64::from(volts) * 1000.0).round() as i32;
+        self.por_low = None;
         self.bod_low = None;
+        self.consider_por();
         self.consider_bod();
     }
 
@@ -808,6 +831,7 @@ impl Cpu {
         let bod_low = self.bod_low;
         let reset_held = self.reset_held;
         let bod_held = self.bod_held;
+        let (por_held, por_low) = (self.por_held, self.por_low);
         let wdrs = self.core.wdr_executions();
         let epochs = self.bus.epochs();
         let program = self.core.program();
@@ -828,6 +852,8 @@ impl Cpu {
         self.bod_low = bod_low;
         self.reset_held = reset_held;
         self.bod_held = bod_held;
+        self.por_held = por_held;
+        self.por_low = por_low;
         self.host_serial = host;
         if asks {
             self.bus.ask_for_samples();
@@ -881,7 +907,61 @@ impl Cpu {
         }
     }
 
+    /// The power-on reset is active whenever `VCC` is below `VPOT`, and holds the chip from
+    /// there without delay (§11.3). It sets `PORF` and clears the other flags (§11.9.1), so a
+    /// `RESET` that read low only because the chip had no supply, or a brown-out on the way
+    /// down, leaves no flag.
+    fn consider_por(&mut self) {
+        let below = self.por_low.or_else(|| {
+            let (low, high) = POWER_ON_WINDOW_MV;
+            match self.vcc_mv {
+                mv if mv < i32::from(low) => Some(true),
+                mv if mv > i32::from(high) => Some(false),
+                _ => None,
+            }
+        });
+        match (self.por_held, below) {
+            (false, Some(true)) => {
+                self.por_held = true;
+                self.perform_reset(ResetKind::PowerOn, ResetWhen::Hold);
+                self.bod_held = false;
+            }
+            (true, Some(false)) => {
+                self.por_held = false;
+                self.leave_power_on_reset();
+            }
+            _ => {}
+        }
+    }
+
+    /// `VCC` rose through `VPOT`. A reset source still active here is a reset of its own and
+    /// sets its flag (§11.2, §11.9.1): `RESET` below its threshold holds the chip as an
+    /// external reset (Figure 11-3), and `VCC` short of `VBOT+` with brown-out on holds it as a
+    /// brown-out reset, which ends only at `VBOT+` (§11.5). With neither, the delay counter
+    /// starts here (§11.3, Figure 11-2).
+    fn leave_power_on_reset(&mut self) {
+        let mut flags = self.bus.mcusr();
+        if self.reset_held {
+            flags |= EXTRF;
+        }
+        let brown_out = self
+            .bus
+            .bod_window()
+            .is_some_and(|window| self.below_bod(window) != Some(false));
+        if brown_out {
+            self.bod_held = true;
+            flags |= BORF;
+        }
+        self.bus.set_mcusr(flags);
+        if !self.reset_held && !brown_out {
+            self.begin_reset_delay();
+        }
+    }
+
     fn consider_bod(&mut self) {
+        if self.por_held {
+            return;
+        }
         if self.core.is_sleeping() && self.bus.bod_off_in_sleep() {
             return;
         }

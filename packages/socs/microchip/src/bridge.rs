@@ -205,22 +205,26 @@ impl Mcu for Bridge {
         &self.image
     }
 
-    /// Held while `RESET` is low or `VCC` is under the brown-out window, from the cycle the
-    /// timeline stops at for it.
+    /// Held while `VCC` is under `VPOT` or the brown-out window or `RESET` is low, from the
+    /// cycle the timeline stops at for it.
     fn held(&self) -> bool {
         self.timeline.held()
     }
 
     /// The port pins' levels in [`PORT_PINS`] order, then `VCC` above the brown-out window
-    /// when the fuses enable it.
+    /// when the fuses enable it, then `VCC` above `VPOT`. Each comes after the pins, so a
+    /// `RESET` that reads low because `VCC` fell to 0 V is already low when the power-on reset
+    /// clears its flag.
     fn input(&mut self, _at: Time, levels: &[bool]) {
+        let brown_out = self.cpu().brown_out_window().is_some();
         for (k, &level) in levels.iter().enumerate() {
             if self.levels.get(k) == Some(&level) {
                 continue;
             }
             match DIE.get(k) {
                 Some(&pin) => self.timeline.set_pad(pin, level),
-                None => self.timeline.set_brown_out(!level),
+                None if brown_out && k == DIE.len() => self.timeline.set_brown_out(!level),
+                None => self.timeline.set_power_on_reset(!level),
             }
         }
         self.levels = levels.to_vec();

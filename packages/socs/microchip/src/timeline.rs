@@ -141,7 +141,8 @@ impl Timeline {
         &self.drives
     }
 
-    /// Whether a reset, from `RESET` or brown-out, holds the chip at the cycle it reached.
+    /// Whether a reset, from power-on, `RESET` or brown-out, holds the chip at the cycle it
+    /// reached.
     pub fn held(&self) -> bool {
         self.held
     }
@@ -178,6 +179,12 @@ impl Timeline {
     /// `VCC` below the brown-out window, from where it reached on. See [`Cpu::set_brown_out`].
     pub fn set_brown_out(&mut self, low: bool) {
         self.cpu.set_brown_out(low);
+        self.collect_input();
+    }
+
+    /// `VCC` below `VPOT`, from where it reached on. See [`Cpu::set_power_on_reset`].
+    pub fn set_power_on_reset(&mut self, low: bool) {
+        self.cpu.set_power_on_reset(low);
         self.collect_input();
     }
 

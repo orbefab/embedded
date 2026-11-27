@@ -183,3 +183,110 @@ fn a_byte_on_rxd_during_the_wait_ends_the_run_at_getch() {
     ));
     assert_eq!(cpu.peek(MCUSR) & WDRF, 0);
 }
+
+const PORF: u8 = 1 << 0;
+const EXTRF: u8 = 1 << 1;
+const BORF: u8 = 1 << 2;
+
+/// A chip fused as a Uno's but without `BOOTRST`, so the image's first `NOP` is the first fetch,
+/// with brown-out at `BODLEVEL` 101 when `brown_out`, started at power-on with `VCC` at 0 V. At
+/// 0 V `RESET` reads low, since its pull-up has nothing to pull to, and brown-out reads low.
+fn from_0_v(brown_out: bool) -> Cpu {
+    let mut cpu = Cpu::new();
+    cpu.set_fuses(0xFF, 0xDF, if brown_out { 0xFD } else { 0xFF });
+    cpu.load_words(&[NOP; 4]);
+    cpu.power_on();
+    cpu.set_power_on_reset(true);
+    cpu.pull_reset();
+    cpu.set_brown_out(true);
+    cpu
+}
+
+/// The power-on reset clears `EXTRF` while it lasts (§11.9.1), and `RESET` reads high once its
+/// pull-up has a supply, so a start from 0 V is no external reset. With brown-out on, `VCC`
+/// between `VPOT` and `VBOT+` is a brown-out reset (§11.2), which sets `BORF` and holds the
+/// chip until `VBOT+` (§11.5). The start from reset runs from there.
+#[test]
+fn a_start_from_0_v_sets_porf_and_borf_and_runs_from_vbot() {
+    let mut cpu = from_0_v(true);
+    cpu.run_until(1_000);
+    cpu.release_reset();
+    cpu.run_until(2_000);
+    cpu.set_power_on_reset(false);
+    cpu.run_until(3_000);
+    assert!(cpu.in_reset(), "brown-out holds the chip past VPOT");
+    cpu.set_brown_out(false);
+    assert_eq!(first_fetch(&mut cpu), 3_000 + START);
+    assert_eq!(cpu.peek(MCUSR) & 0x0F, PORF | BORF);
+}
+
+/// With brown-out off, only the power-on reset holds the chip on the way up, and the start from
+/// reset runs from `VPOT` rising (§11.3, Figure 11-2).
+#[test]
+fn a_start_from_0_v_without_brown_out_sets_porf_and_runs_from_vpot() {
+    let mut cpu = from_0_v(false);
+    cpu.run_until(1_000);
+    cpu.release_reset();
+    cpu.run_until(2_000);
+    cpu.set_power_on_reset(false);
+    assert_eq!(first_fetch(&mut cpu), 2_000 + START);
+    assert_eq!(cpu.peek(MCUSR) & 0x0F, PORF);
+}
+
+/// `RESET` held low by the circuit past `VPOT` extends the start externally (Figure 11-3): that
+/// is an external reset, so `EXTRF` is set, and the start from reset runs from the release.
+#[test]
+fn reset_held_low_past_vpot_sets_extrf_and_runs_from_its_release() {
+    let mut cpu = from_0_v(true);
+    cpu.run_until(1_000);
+    cpu.set_brown_out(false);
+    cpu.set_power_on_reset(false);
+    cpu.run_until(2_000);
+    assert!(cpu.in_reset(), "RESET holds the chip past VPOT");
+    cpu.release_reset();
+    assert_eq!(first_fetch(&mut cpu), 2_000 + START);
+    assert_eq!(cpu.peek(MCUSR) & 0x0F, PORF | EXTRF);
+}
+
+/// From a running chip: a dip under `VBOT-` that stays over `VPOT` sets `BORF` and keeps
+/// `PORF`. A dip under `VPOT` is a power-on reset, which leaves `PORF` alone, even with
+/// `RESET` read low at 0 V and brown-out tripped on the way down. A press of `RESET` adds
+/// `EXTRF`.
+#[test]
+fn each_reset_on_a_running_chip_sets_its_own_flag() {
+    let mut cpu = from_0_v(true);
+    cpu.release_reset();
+    cpu.set_brown_out(false);
+    cpu.set_power_on_reset(false);
+    cpu.run_until(START + 1_000);
+    assert_eq!(cpu.peek(MCUSR) & 0x0F, PORF);
+
+    cpu.set_brown_out(true);
+    cpu.run_until(START + 2_000);
+    cpu.set_brown_out(false);
+    let recovery = cpu.cycles();
+    assert_eq!(first_fetch(&mut cpu), recovery + START);
+    assert_eq!(cpu.peek(MCUSR) & 0x0F, PORF | BORF, "brown-out");
+
+    let at = cpu.cycles() + 1_000;
+    cpu.run_until(at);
+    cpu.pull_reset();
+    cpu.set_brown_out(true);
+    cpu.set_power_on_reset(true);
+    cpu.run_until(at + 1_000);
+    cpu.release_reset();
+    cpu.set_power_on_reset(false);
+    cpu.run_until(at + 2_000);
+    cpu.set_brown_out(false);
+    let recovery = cpu.cycles();
+    assert_eq!(first_fetch(&mut cpu), recovery + START);
+    assert_eq!(cpu.peek(MCUSR) & 0x0F, PORF | BORF, "power cycle to 0 V");
+
+    let at = cpu.cycles() + 1_000;
+    cpu.run_until(at);
+    cpu.pull_reset();
+    cpu.run_until(at + 1_000);
+    cpu.release_reset();
+    assert_eq!(first_fetch(&mut cpu), at + 1_000 + START);
+    assert_eq!(cpu.peek(MCUSR) & 0x0F, PORF | BORF | EXTRF, "RESET press");
+}

@@ -121,17 +121,24 @@ pub(crate) fn chip(part: PartId, mcu: &Atmega328p) -> Chip {
         .enumerate()
         .map(|(n, &k)| (Atmega328p::PINS[k], n))
         .collect();
+    let supply = |millivolts: u16| Signal {
+        terms: vec![(vcc, 1.0), (gnd, -1.0)],
+        offset: f64::from(millivolts) / 1000.0,
+    };
     if let Some((below, above)) = bridge.cpu().brown_out_window() {
         signals.push((Atmega328p::PINS[VCC], watches.len()));
-        let supply = |millivolts: u16| Signal {
-            terms: vec![(vcc, 1.0), (gnd, -1.0)],
-            offset: f64::from(millivolts) / 1000.0,
-        };
         watches.push(Watch {
             rise: supply(above),
             fall: supply(below),
         });
     }
+    // The power-on reset's comparator, `VCC` against `VPOT` (Table 29-11). It has no signal:
+    // below it the chip is held whatever its pins read, which `#net.vcc` shows.
+    let (below, above) = bridge.cpu().power_on_window();
+    watches.push(Watch {
+        rise: supply(above),
+        fall: supply(below),
+    });
     signals.sort_unstable();
 
     // ADC0 to ADC5 are `PC0` to `PC5`. A part without `ADC6` or `ADC7`, as the DIP is, reads
