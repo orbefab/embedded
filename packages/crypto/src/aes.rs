@@ -1,6 +1,6 @@
-//! Chip-agnostic AES block cipher (FIPS 197) and block modes (NIST SP 800-38A).
+//! The AES block cipher (FIPS 197) and its block modes (NIST SP 800-38A).
 //!
-//! Supports AES-128, AES-192 (for classic ESP32 reuse) and AES-256, plus ECB, CBC, OFB, CTR
+//! AES-128, AES-192 (for the classic ESP32's accelerator) and AES-256, plus ECB, CBC, OFB, CTR
 //! (32-bit and 128-bit counter increment), CFB8 and CFB128.
 
 /// Forward AES S-box (FIPS 197 §5.1.1).
@@ -48,7 +48,7 @@ const RCON: [u8; 10] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1b, 0x
 
 /// Block cipher mode of operation (NIST SP 800-38A).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BlockMode {
+pub enum BlockMode {
     Ecb,
     Cbc,
     Ofb,
@@ -59,7 +59,7 @@ pub(crate) enum BlockMode {
 
 /// Expanded AES key schedule for 128-, 192- or 256-bit keys.
 #[derive(Clone, Debug)]
-pub(crate) struct AesKey {
+pub struct AesKey {
     /// Round keys, `rounds + 1` blocks of 16 bytes (max 15 for AES-256).
     round_keys: [[u8; 16]; 15],
     rounds: usize,
@@ -67,7 +67,7 @@ pub(crate) struct AesKey {
 
 impl AesKey {
     /// Expands a 16-, 24- or 32-byte key into its round keys per FIPS 197 §5.2.
-    pub(crate) fn new(key: &[u8]) -> Option<AesKey> {
+    pub fn new(key: &[u8]) -> Option<AesKey> {
         let (nk, rounds) = match key.len() {
             16 => (4, 10),
             24 => (6, 12),
@@ -105,7 +105,7 @@ impl AesKey {
     }
 
     /// Encrypts one 16-byte block per FIPS 197 §5.1.
-    pub(crate) fn encrypt_block(&self, input: &[u8; 16]) -> [u8; 16] {
+    pub fn encrypt_block(&self, input: &[u8; 16]) -> [u8; 16] {
         let mut s = *input;
         add_round_key(&mut s, &self.round_keys[0]);
         for r in 1..self.rounds {
@@ -121,7 +121,7 @@ impl AesKey {
     }
 
     /// Decrypts one 16-byte block per FIPS 197 §5.3.
-    pub(crate) fn decrypt_block(&self, input: &[u8; 16]) -> [u8; 16] {
+    pub fn decrypt_block(&self, input: &[u8; 16]) -> [u8; 16] {
         let mut s = *input;
         add_round_key(&mut s, &self.round_keys[self.rounds]);
         for r in (1..self.rounds).rev() {
@@ -136,23 +136,35 @@ impl AesKey {
         s
     }
 
-    /// Transforms a whole number of 16-byte blocks in `mode`, updating `iv` in place.
+    /// Transforms `input` in `mode`, updating `iv` in place.
     ///
     /// `encrypt` selects encryption vs decryption for ECB, CBC, CFB8 and CFB128; OFB and CTR
     /// always apply the forward cipher regardless of `encrypt`.
-    pub(crate) fn transform(
+    ///
+    /// # Panics
+    ///
+    /// When `input` is not a whole number of 16-byte blocks in any mode other than
+    /// [`BlockMode::Cfb8`].
+    pub fn transform(
         &self,
         mode: BlockMode,
         encrypt: bool,
         iv: &mut [u8; 16],
         input: &[u8],
     ) -> Vec<u8> {
-        let (blocks, remainder) = input.as_chunks::<16>();
-        debug_assert!(remainder.is_empty());
         let mut out = Vec::with_capacity(input.len());
+        let whole_blocks = || {
+            let (blocks, remainder) = input.as_chunks::<16>();
+            assert!(
+                remainder.is_empty(),
+                "AES {mode:?} expects whole 16-byte blocks, got {} bytes",
+                input.len()
+            );
+            blocks
+        };
         match mode {
             BlockMode::Ecb => {
-                for block in blocks {
+                for block in whole_blocks() {
                     let result = if encrypt {
                         self.encrypt_block(block)
                     } else {
@@ -162,7 +174,7 @@ impl AesKey {
                 }
             }
             BlockMode::Cbc => {
-                for block in blocks {
+                for block in whole_blocks() {
                     if encrypt {
                         let xored = xor_block(block, iv);
                         let cipher = self.encrypt_block(&xored);
@@ -176,14 +188,14 @@ impl AesKey {
                 }
             }
             BlockMode::Ofb => {
-                for block in blocks {
+                for block in whole_blocks() {
                     let stream = self.encrypt_block(iv);
                     *iv = stream;
                     out.extend_from_slice(&xor_block(block, &stream));
                 }
             }
             BlockMode::Ctr { inc128 } => {
-                for block in blocks {
+                for block in whole_blocks() {
                     let stream = self.encrypt_block(iv);
                     out.extend_from_slice(&xor_block(block, &stream));
                     increment_counter(iv, inc128);
@@ -199,7 +211,7 @@ impl AesKey {
                 }
             }
             BlockMode::Cfb128 => {
-                for block in blocks {
+                for block in whole_blocks() {
                     let stream = self.encrypt_block(iv);
                     let produced = xor_block(block, &stream);
                     *iv = if encrypt { produced } else { *block };
@@ -316,200 +328,5 @@ fn inv_mix_columns(s: &mut [u8; 16]) {
         col[1] = gf_mul(a0, 0x09) ^ gf_mul(a1, 0x0e) ^ gf_mul(a2, 0x0b) ^ gf_mul(a3, 0x0d);
         col[2] = gf_mul(a0, 0x0d) ^ gf_mul(a1, 0x09) ^ gf_mul(a2, 0x0e) ^ gf_mul(a3, 0x0b);
         col[3] = gf_mul(a0, 0x0b) ^ gf_mul(a1, 0x0d) ^ gf_mul(a2, 0x09) ^ gf_mul(a3, 0x0e);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn decode(s: &str) -> Vec<u8> {
-        assert_eq!(s.len() % 2, 0);
-        (0..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
-            .collect()
-    }
-
-    fn decode16(s: &str) -> [u8; 16] {
-        decode(s).try_into().unwrap()
-    }
-
-    /// Official FIPS 197 Appendix C test vectors for AES-128, AES-192 and AES-256.
-    #[test]
-    fn fips_197_appendix_c_vectors() {
-        let pt = decode16("00112233445566778899aabbccddeeff");
-        let cases = [
-            (
-                "000102030405060708090a0b0c0d0e0f",
-                "69c4e0d86a7b0430d8cdb78070b4c55a",
-            ),
-            (
-                "000102030405060708090a0b0c0d0e0f1011121314151617",
-                "dda97ca4864cdfe06eaf70a0ec0d7191",
-            ),
-            (
-                "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
-                "8ea2b7ca516745bfeafc49904b496089",
-            ),
-        ];
-        for (key_hex, ct_hex) in cases {
-            let key = AesKey::new(&decode(key_hex)).unwrap();
-            let ct = decode16(ct_hex);
-            assert_eq!(key.encrypt_block(&pt), ct, "encrypt {key_hex}");
-            assert_eq!(key.decrypt_block(&ct), pt, "decrypt {key_hex}");
-        }
-    }
-
-    /// Official NIST SP 800-38A Appendix F test vectors for ECB, CBC, CFB128, CFB8, OFB and CTR.
-    #[test]
-    fn sp_800_38a_block_modes() {
-        let key128 = AesKey::new(&decode("2b7e151628aed2a6abf7158809cf4f3c")).unwrap();
-        let key256 = AesKey::new(&decode(
-            "603deb1015ca71be2b73aef0857d77811f352c073b6108d72d9810a30914dff4",
-        ))
-        .unwrap();
-        let pt = decode(
-            "6bc1bee22e409f96e93d7e117393172a\
-             ae2d8a571e03ac9c9eb76fac45af8e51\
-             30c81c46a35ce411e5fbc1191a0a52ef\
-             f69f2445df4f9b17ad2b417be66c3710",
-        );
-        let iv0 = decode16("000102030405060708090a0b0c0d0e0f");
-
-        // F.1.1 ECB-AES128
-        let ecb128 = decode(
-            "3ad77bb40d7a3660a89ecaf32466ef97\
-             f5d3d58503b9699de785895a96fdbaaf\
-             43b1cd7f598ece23881b00e3ed030688\
-             7b0c785e27e8ad3f8223207104725dd4",
-        );
-        let mut iv = [0; 16];
-        assert_eq!(key128.transform(BlockMode::Ecb, true, &mut iv, &pt), ecb128);
-        assert_eq!(
-            key128.transform(BlockMode::Ecb, false, &mut iv, &ecb128),
-            pt
-        );
-
-        // F.1.5 ECB-AES256
-        let ecb256 = decode(
-            "f3eed1bdb5d2a03c064b5a7e3db181f8\
-             591ccb10d410ed26dc5ba74a31362870\
-             b6ed21b99ca6f4f9f153e7b1beafed1d\
-             23304b7a39f9f3ff067d8d8f9e24ecc7",
-        );
-        assert_eq!(key256.transform(BlockMode::Ecb, true, &mut iv, &pt), ecb256);
-        assert_eq!(
-            key256.transform(BlockMode::Ecb, false, &mut iv, &ecb256),
-            pt
-        );
-
-        // F.2.1 CBC-AES128
-        let cbc128 = decode(
-            "7649abac8119b246cee98e9b12e9197d\
-             5086cb9b507219ee95db113a917678b2\
-             73bed6b8e3c1743b7116e69e22229516\
-             3ff1caa1681fac09120eca307586e1a7",
-        );
-        let mut iv = iv0;
-        assert_eq!(key128.transform(BlockMode::Cbc, true, &mut iv, &pt), cbc128);
-        assert_eq!(iv, cbc128[48..64]);
-        let mut iv = iv0;
-        assert_eq!(
-            key128.transform(BlockMode::Cbc, false, &mut iv, &cbc128),
-            pt
-        );
-        assert_eq!(iv, cbc128[48..64]);
-
-        // F.2.5 CBC-AES256
-        let cbc256 = decode(
-            "f58c4c04d6e5f1ba779eabfb5f7bfbd6\
-             9cfc4e967edb808d679f777bc6702c7d\
-             39f23369a9d9bacfa530e26304231461\
-             b2eb05e2c39be9fcda6c19078c6a9d1b",
-        );
-        let mut iv = iv0;
-        assert_eq!(key256.transform(BlockMode::Cbc, true, &mut iv, &pt), cbc256);
-        let mut iv = iv0;
-        assert_eq!(
-            key256.transform(BlockMode::Cbc, false, &mut iv, &cbc256),
-            pt
-        );
-
-        // F.3.13 CFB128-AES128
-        let cfb128 = decode(
-            "3b3fd92eb72dad20333449f8e83cfb4a\
-             c8a64537a0b3a93fcde3cdad9f1ce58b\
-             26751f67a3cbb140b1808cf187a4f4df\
-             c04b05357c5d1c0eeac4c66f9ff7f2e6",
-        );
-        let mut iv = iv0;
-        assert_eq!(
-            key128.transform(BlockMode::Cfb128, true, &mut iv, &pt),
-            cfb128
-        );
-        let mut iv = iv0;
-        assert_eq!(
-            key128.transform(BlockMode::Cfb128, false, &mut iv, &cfb128),
-            pt
-        );
-
-        // F.3.7 CFB8-AES128 (first 16 bytes; SP 800-38A lists the first 18 bytes)
-        let cfb8_pt = &pt[..16];
-        let cfb8_ct = decode("3b79424c9c0dd436bace9e0ed4586a4f");
-        let mut iv = iv0;
-        assert_eq!(
-            key128.transform(BlockMode::Cfb8, true, &mut iv, cfb8_pt),
-            cfb8_ct
-        );
-        let mut iv = iv0;
-        assert_eq!(
-            key128.transform(BlockMode::Cfb8, false, &mut iv, &cfb8_ct),
-            cfb8_pt
-        );
-
-        // F.4.1 OFB-AES128
-        let ofb128 = decode(
-            "3b3fd92eb72dad20333449f8e83cfb4a\
-             7789508d16918f03f53c52dac54ed825\
-             9740051e9c5fecf64344f7a82260edcc\
-             304c6528f659c77866a510d9c1d6ae5e",
-        );
-        let mut iv = iv0;
-        assert_eq!(key128.transform(BlockMode::Ofb, true, &mut iv, &pt), ofb128);
-        let mut iv = iv0;
-        assert_eq!(
-            key128.transform(BlockMode::Ofb, false, &mut iv, &ofb128),
-            pt
-        );
-
-        // F.5.1 CTR-AES128
-        let ctr_iv = decode16("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
-        let ctr128 = decode(
-            "874d6191b620e3261bef6864990db6ce\
-             9806f66b7970fdff8617187bb9fffdff\
-             5ae4df3edbd5d35e5b4f09020db03eab\
-             1e031dda2fbe03d1792170a0f3009cee",
-        );
-        let mut iv = ctr_iv;
-        assert_eq!(
-            key128.transform(BlockMode::Ctr { inc128: false }, true, &mut iv, &pt),
-            ctr128
-        );
-        assert_eq!(iv, decode16("f0f1f2f3f4f5f6f7f8f9fafbfcfdff03"));
-        let mut iv = ctr_iv;
-        assert_eq!(
-            key128.transform(BlockMode::Ctr { inc128: false }, false, &mut iv, &ctr128),
-            pt
-        );
-
-        // Verify INC32 wraps only the low 32 bits while INC128 carries into the upper 96 bits.
-        let wrap_iv = decode16("000000000000000000000000ffffffff");
-        let mut iv32 = wrap_iv;
-        key128.transform(BlockMode::Ctr { inc128: false }, true, &mut iv32, &[0; 16]);
-        assert_eq!(iv32, decode16("00000000000000000000000000000000"));
-        let mut iv128 = wrap_iv;
-        key128.transform(BlockMode::Ctr { inc128: true }, true, &mut iv128, &[0; 16]);
-        assert_eq!(iv128, decode16("00000000000000000000000100000000"));
     }
 }

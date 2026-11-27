@@ -1,20 +1,11 @@
-//! Chip-agnostic SHA compression functions and initial hash values per FIPS 180-4.
+//! Chip-agnostic SHA-2 compression functions and initial hash values per FIPS 180-4.
 //!
-//! Supports SHA-1 (160-bit), SHA-224, SHA-256, SHA-384, SHA-512, SHA-512/224, SHA-512/256 and
-//! SHA-512/t. SHA-224/256 and SHA-384/512 delegate block compression to `sha2`'s `compress256`
-//! and `compress512`; SHA-1 compression is implemented directly from FIPS 180-4 §6.1.
+//! Supports SHA-224, SHA-256, SHA-384, SHA-512, SHA-512/224, SHA-512/256 and SHA-512/t, which
+//! delegate block compression to `sha2`'s `compress256` and `compress512`. SHA-1 is
+//! `orbe_crypto::sha1`.
 
 use sha2::digest::generic_array::GenericArray;
 use sha2::{compress256, compress512};
-
-/// Initial hash value for SHA-1 (FIPS 180-4 §5.3.1).
-pub(crate) const SHA1_IV: [u32; 5] = [
-    0x6745_2301,
-    0xefcd_ab89,
-    0x98ba_dcfe,
-    0x1032_5476,
-    0xc3d2_e1f0,
-];
 
 /// Initial hash value for SHA-224 (FIPS 180-4 §5.3.2).
 pub(crate) const SHA224_IV: [u32; 8] = [
@@ -88,48 +79,6 @@ pub(crate) const SHA512_256_IV: [u64; 8] = [
     0x0eb7_2ddc_81c5_2ca2,
 ];
 
-/// Compresses one or more 64-byte blocks with SHA-1 (FIPS 180-4 §6.1.2).
-pub(crate) fn compress1(state: &mut [u32; 5], bytes: &[u8]) {
-    let (blocks, remainder) = bytes.as_chunks::<64>();
-    debug_assert!(remainder.is_empty());
-    for block in blocks {
-        let mut w = [0u32; 80];
-        for (dst, chunk) in w[..16].iter_mut().zip(block.as_chunks::<4>().0) {
-            *dst = u32::from_be_bytes(*chunk);
-        }
-        for i in 16..80 {
-            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
-        }
-
-        let [mut a, mut b, mut c, mut d, mut e] = *state;
-        for (i, &wi) in w.iter().enumerate() {
-            let (f, k) = match i {
-                0..20 => ((b & c) | (!b & d), 0x5a82_7999u32),
-                20..40 => (b ^ c ^ d, 0x6ed9_eba1u32),
-                40..60 => ((b & c) | (b & d) | (c & d), 0x8f1b_bcdcu32),
-                _ => (b ^ c ^ d, 0xca62_c1d6u32),
-            };
-            let temp = a
-                .rotate_left(5)
-                .wrapping_add(f)
-                .wrapping_add(e)
-                .wrapping_add(k)
-                .wrapping_add(wi);
-            e = d;
-            d = c;
-            c = b.rotate_left(30);
-            b = a;
-            a = temp;
-        }
-
-        state[0] = state[0].wrapping_add(a);
-        state[1] = state[1].wrapping_add(b);
-        state[2] = state[2].wrapping_add(c);
-        state[3] = state[3].wrapping_add(d);
-        state[4] = state[4].wrapping_add(e);
-    }
-}
-
 /// Compresses one or more 64-byte blocks with the SHA-256 core (SHA-224 and SHA-256).
 pub(crate) fn compress_256(state: &mut [u32; 8], bytes: &[u8]) {
     let (chunks, remainder) = bytes.as_chunks::<64>();
@@ -196,12 +145,6 @@ mod tests {
         out
     }
 
-    fn sha1(msg: &[u8]) -> Vec<u8> {
-        let mut s = SHA1_IV;
-        compress1(&mut s, &pad64(msg));
-        s.iter().flat_map(|w| w.to_be_bytes()).collect()
-    }
-
     fn sha224(msg: &[u8]) -> Vec<u8> {
         let mut s = SHA224_IV;
         compress_256(&mut s, &pad64(msg));
@@ -224,22 +167,6 @@ mod tests {
         let mut s = SHA512_IV;
         compress_512(&mut s, &pad128(msg));
         s.iter().flat_map(|w| w.to_be_bytes()).collect()
-    }
-
-    /// Official FIPS 180-4 / NIST CAVP test vectors for SHA-1.
-    #[test]
-    fn sha1_matches_fips_180_4_vectors() {
-        assert_eq!(hex(&sha1(b"")), "da39a3ee5e6b4b0d3255bfef95601890afd80709");
-        assert_eq!(
-            hex(&sha1(b"abc")),
-            "a9993e364706816aba3e25717850c26c9cd0d89d"
-        );
-        assert_eq!(
-            hex(&sha1(
-                b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
-            )),
-            "84983e441c3bd26ebaae4aa1f95129e5e54670f1"
-        );
     }
 
     /// Official FIPS 180-4 test vectors for SHA-224 and SHA-256.

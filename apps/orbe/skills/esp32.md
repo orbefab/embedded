@@ -67,7 +67,7 @@ Load `orbe skills get boards` for `esp32s3-devkitc-1` pinouts, pin functions, su
 
 ## The chip
 
-- `setup()` starts about 9 ms after t = 0. `millis()`, `delay()` and the timers use simulated time.
+- `setup()` starts about 9 ms after t = 0. `millis()`, `delay()` and the timers use simulated time. A `loop()` that polls `millis()` without sleeping keeps the CPU busy and runs slower than real time; end it with `delay(1)` when 1 ms of jitter is fine.
 - `Serial` reaches `serial`, on UART0 by default or over USB Serial/JTAG with `CDCOnBoot=cdc` in the FQBN (arduino-esp32 3.3.x and 4.0.x). USB Serial/JTAG claims GPIO19 and GPIO20 and pulls GPIO20 up through its D+ pull-up until `pinMode` or `gpio_config` clears `USB_PAD_ENABLE`, which also detaches the USB console.
 - The model runs the pins, the one-shot ADC, the internal temperature sensor, PCNT, LEDC, RMT channel 0, SPI2, SPI3, I2C0 and I2C1 as masters, UART0 to UART2, the timers and both cores.
 - `driver/pulse_cnt.h` and `ESP32Encoder` run on all four PCNT units (two channels each) from real pin edges through the GPIO matrix, including quadrature counting, the APB glitch filter, limits, thresholds and interrupts.
